@@ -19,7 +19,8 @@ local function hex(addr, n)
   return table.concat(out, ' ')
 end
 local function snapshot(label, record)
-  local parts = {label, 'mute=' .. hex('eldenring.exe+CBBF25', 3), 'party=' .. hex('eldenring.exe+9F9441', 2)}
+  local parts = {label, 'mute=' .. hex('eldenring.exe+CBBF25', 3), 'party=' .. hex('eldenring.exe+9F9441', 2),
+    'seamless-capture=' .. hex('ersc.dll+92D81', 6), 'seamless-playback=' .. hex('ersc.dll+A5921', 6)}
   for i = 0, record.Count - 1 do
     local child = record.Child[i]
     parts[#parts + 1] = string.format('[%s]=%s', child.Description, tostring(child.Value))

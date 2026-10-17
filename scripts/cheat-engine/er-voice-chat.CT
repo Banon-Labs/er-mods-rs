@@ -22,19 +22,36 @@
        eldenring.exe+CBBF25  xor bl,1 -> xor bl,bl   per-player mute decision
        eldenring.exe+9F9441  jz       -> nop nop     party "can voice chat" check (HUD icon)
 
+  3. Seamless Co-op's own voice chat is switched on. Seamless 2.0.1 does not use the game's
+     voice path: it reads the mic through ISteamUser and plays through Wwise itself, and both
+     halves first test bit 8 of a flags byte that ships clear (0xd3). The two jumps that skip
+     voice when that bit is clear become nops:
+       ersc.dll+92D81  capture  (GetAvailableVoice / GetVoice / DecompressVoice)
+       ersc.dll+A5921  playback setup (Wwise audio inputs)
+     Measured live with the world open: bit clear, 0 mic reads; bit set, 6810 bytes read.
+
   Every player who should hear and be heard needs the entry ticked: muting is decided on
   the listener's machine, and a player with voice off sends nothing.
 
-  The asserts refuse any build but 1.17.1. Unticking restores every byte and value. }
+  The asserts refuse any game build but 1.17.1 and any Seamless build but 2.0.1. Unticking
+  restores every byte and value. }
 [ENABLE]
 assert(eldenring.exe+CBBF1B, 84 41 40 0F 95 C3 EB 02 32 DB 80 F3 01)
 assert(eldenring.exe+9F943E, 84 41 40 74 22)
+assert(ersc.dll+92D7A, F6 86 81 02 00 00 08 0F 84 03 0A 00 00)
+assert(ersc.dll+A591A, F6 80 81 02 00 00 08 0F 84 9E 04 00 00)
 
 eldenring.exe+CBBF25:
   db 30 DB 90
 
 eldenring.exe+9F9441:
   db 90 90
+
+ersc.dll+92D81:
+  db 66 0F 1F 44 00 00
+
+ersc.dll+A5921:
+  db 66 0F 1F 44 00 00
 
 {$lua}
 if syntaxcheck then return end
@@ -62,6 +79,12 @@ eldenring.exe+CBBF25:
 
 eldenring.exe+9F9441:
   db 74 22
+
+ersc.dll+92D81:
+  db 0F 84 03 0A 00 00
+
+ersc.dll+A5921:
+  db 0F 84 9E 04 00 00
 
 {$lua}
 if syntaxcheck then return end
