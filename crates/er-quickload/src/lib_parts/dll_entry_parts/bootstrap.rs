@@ -111,8 +111,15 @@ pub unsafe extern "C" fn er_quickload_request_build_url(url: *const std::ffi::c_
     if url.is_null() {
         return 0;
     }
-    // Safety: the caller passes a NUL-terminated string.
-    let Ok(text) = unsafe { std::ffi::CStr::from_ptr(url) }.to_str() else {
+    // The caller is another process's agent, so the pointer is foreign: read it through
+    // `safe_read_cstr`, which fails closed on an unmapped page instead of walking off it.
+    let Some(bytes) = (unsafe { er_game_base::mem::safe_read_cstr(url as usize, 4096) }) else {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export refused an unreadable link pointer"
+        ));
+        return 0;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
         append_autoload_debug(format_args!(
             "system-quit-build-url: export refused a link that is not UTF-8"
         ));
@@ -154,8 +161,12 @@ pub unsafe extern "C" fn er_quickload_request_build_document(path: *const std::f
     if path.is_null() {
         return 0;
     }
-    // Safety: the caller passes a NUL-terminated string.
-    let Ok(text) = unsafe { std::ffi::CStr::from_ptr(path) }.to_str() else {
+    // The caller is another process's agent, so the pointer is foreign: read it through
+    // `safe_read_cstr`, which fails closed on an unmapped page instead of walking off it.
+    let Some(bytes) = (unsafe { er_game_base::mem::safe_read_cstr(path as usize, 4096) }) else {
+        return 0;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
         return 0;
     };
     if export::phase() != export::Phase::Idle && export::export_latch_is_stale() {

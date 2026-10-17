@@ -81,12 +81,12 @@ sys.path.insert(0, str(HERE))
 
 # The repo's sleepless waits: inotify on a directory, and a pidfd wait as the bounded fallback.
 import er_run_lib  # noqa: E402
+from er_artifact_env import ARTIFACT_ENV, artifact_env  # noqa: E402
 REPO = HERE.parent
 HOME = pathlib.Path.home()
 STEAM = HOME / ".local/share/Steam"
 GAME_DIR = STEAM / "steamapps/common/ELDEN RING/Game"
 CONFIG = GAME_DIR / "er-quickload.toml"
-AUTOLOAD_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
 SHOTS_ROOT = pathlib.Path(os.environ.get("ER_PORTRAIT_SHOTS", HOME / ".cache/er-portrait-shots"))
 PLANNER_SCRIPTS = pathlib.Path(
     os.environ.get("ER_NPC_PLANNER_SCRIPTS", REPO / ".worktrees/pr-npc-planner/scripts")
@@ -382,7 +382,11 @@ class Game:
         self.frida = frida
         self.watch = module("er_frida_watch", HERE / "er-frida-watch.py")
         self.run_lib = er_run_lib
-        self.log = LogFollower(AUTOLOAD_LOG)
+        # Every launch writes the DLL's logs here rather than into the game directory, where the
+        # next launch of anything would rotate them away.
+        self.artifacts = SHOTS_ROOT / "runs" / time.strftime("%Y%m%d-%H%M%S")
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+        self.log = LogFollower(self.artifacts / ARTIFACT_ENV["ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH"])
         self.session = None
         self.pid = None
         self.current = None  # the build name the character in the world was last imported as
@@ -406,7 +410,7 @@ class Game:
         subprocess.run([sys.executable, str(HERE / "er-teardown.py"), "--reason=portrait-batch-relaunch"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=SUBPROCESS_SECONDS)
         self.log.mark()
-        env = dict(os.environ, ME3_PROFILE=ME3_PROFILE)
+        env = dict(os.environ, ME3_PROFILE=ME3_PROFILE, **artifact_env(self.artifacts))
         launch_log = (SHOTS_ROOT / "launch.log").open("ab")
         subprocess.Popen(["bash", str(LAUNCHER)], env=env, stdout=launch_log, stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, start_new_session=True)
