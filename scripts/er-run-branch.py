@@ -826,6 +826,8 @@ def launch(args) -> int:
         gen_args.append("--vanilla")
     if args.disable_arxan:
         gen_args.append("--disable-arxan")
+    for package in args.asset_package:
+        gen_args += ["--asset-package", package]
     # The decoded identity is reported to the generator, not configured by it: `render_sidecar`
     # writes it as comments only. The sidecar must never carry `save_file` or `slot`, because the
     # game-directory toml owns both and a second channel fights it.
@@ -1635,6 +1637,14 @@ def main() -> int:
         "it the closure refuses the harness, which is the correct default.",
     )
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
+    parser.add_argument(
+        "--asset-package",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="an me3 asset package folder (game-data layout: asset/, map/, ...) to load beside "
+        "the DLLs, repeatable. Restaged files show on an in-game area reload.",
+    )
     parser.add_argument(
         "--without",
         dest="dropped",
