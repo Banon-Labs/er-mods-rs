@@ -419,18 +419,33 @@ shell_payloads_deep(text) := deep if {
 # cut a `; git push origin main` on the opener line lost its command position for every
 # guard. A shell named on the opener line (`cat <<'EOF' | bash`) reads the body as a
 # program, so that body stays raw as well.
+#
+# A quoted tag (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) makes the body literal: nothing in it
+# expands, so a backtick or a `$(` there is prose, and it is blanked with the anchors.
+# Until 2026-10-16 it was not, so `scannable` gave up on the whole text and a commit
+# message quoting `echo $(cargo build 2>&1) | grep error` was refused as a build piped
+# into grep. An unquoted tag's body does expand, so one carrying `$(` or a backtick is
+# left unread and the text stays raw.
 heredoc_body_blanked(text) := out if {
 	parts := split(text, "<<")
 	count(parts) == 2
 	not regex.match(shell_heredoc_reader_pattern, parts[0])
-	tag := heredoc_tag(parts[1])
-	segments := split(parts[1], concat("", ["\n", tag]))
+	opener := heredoc_opener(parts[1])
+	out := heredoc_body_by_lines(parts[0], parts[1], opener)
+}
+
+heredoc_body_by_lines(before, after_marker, opener) := out if {
+	segments := split(after_marker, concat("", ["\n", opener.tag]))
 	count(segments) == 2
 	lines := split(segments[0], "\n")
-	opener := lines[0]
-	not opener_line_feeds_a_shell(opener)
+	opener_line := lines[0]
+	not opener_line_feeds_a_shell(opener_line)
 	body := concat("\n", array.slice(lines, 1, count(lines)))
-	out := concat("", [parts[0], "<<", opener, " ", blanked_anchors(body), " ", tag, segments[1]])
+	heredoc_body_readable(opener, body)
+	out := concat("", [
+		before, "<<", opener_line, " ",
+		literal_body_blanked(opener, blanked_anchors(body)), " ", opener.tag, segments[1],
+	])
 }
 
 opener_line_feeds_a_shell(opener) if {
@@ -438,14 +453,137 @@ opener_line_feeds_a_shell(opener) if {
 	heredoc_shell_name(word)
 }
 
-heredoc_tag(after_marker) := tag if {
-	matched := regex.find_all_string_submatch_n(`^-?[ \t]*["']?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
-	tag := matched[0][1]
+# The opener of a heredoc, read from the text after `<<`: the whole opener token, the
+# quote that makes the body literal (empty for a bare tag), and the tag. One regex per
+# text, the same one `heredoc_tag` used to run. No copy of the text after the token is
+# taken here: on a long body every copy is linear memory the wasm module never frees
+# within an evaluation, which is how a long command runs it out (bd er-effects-rs-xktj).
+heredoc_opener(after_marker) := opener if {
+	matched := regex.find_all_string_submatch_n(`^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
+	m := matched[0]
+	opener := {"full": m[0], "quote": m[1], "tag": m[2]}
+}
+
+heredoc_tag(after_marker) := heredoc_opener(after_marker).tag
+
+heredoc_body_readable(opener, _) if opener.quote != ""
+
+heredoc_body_readable(opener, body) if {
+	opener.quote == ""
+	not carries_substitution(body)
+}
+
+literal_body_blanked(opener, body) := body if opener.quote == ""
+
+literal_body_blanked(opener, body) := replace(replace(body, "`", " "), "$", " ") if opener.quote != ""
+
+# ---------------------------------------------------------------------------
+# A literal heredoc body as the engine delivers it (2026-10-16)
+#
+# `heredoc_body_by_lines` finds the body by the newline in front of its terminator, and
+# the engine has turned that newline into a space by the time a policy runs (measured
+# with `--debug-files`; `scripts/test-cupcake-delivered-shape.py` keeps the measurement).
+# So in production the body arrives welded between the opener and the terminator:
+#
+#     git commit -F - <<'EOF' fix: quote `echo $(cargo build 2>&1) | grep error` EOF
+#
+# Here the body is found by its terminator word instead: the first word after the opener
+# that is the tag standing alone, or the tag followed by the `;` the hook shim writes for
+# the newline after it. Where the opener's own line ends cannot be recovered, so this
+# blanks only what made the text unreadable -- backticks, `$`, parentheses, quotes -- and
+# keeps `;`, `&` and `|`, so a separator on the opener line (`<<'EOF' ; git push origin
+# main`) still opens a command.
+#
+# It reads only a quoted tag's body that carries a substitution, which is the one shape
+# that otherwise drops the whole text back to raw. Everything else is left exactly as it
+# was. Because the substitution characters on the opener line would be blanked as well,
+# the text in front of the first one must hold none of `;`, `&`, `|`, `<`, `>` and at
+# least two words: a redirect target or a statement after the opener keeps the text raw.
+# The residue, stated: two or more plain operands after the opener on its own line and
+# then a substitution (`cat <<'EOF' a b $(cmd)`) are read as body.
+#
+# The order of the steps is the memory budget. The cheap refusals -- tag quoted, a
+# substitution present, the text in front of it prose -- read only the opener's
+# neighbourhood, so a long document that fails them costs nothing more. Only then is the
+# text split, and on the terminator marker rather than into words, so the split makes a
+# handful of pieces rather than one string per word.
+heredoc_body_by_terminator(before, after_marker, opener) := out if {
+	opener.quote != ""
+	start := count(opener.full)
+	first := first_substitution_index(after_marker)
+	first > start
+	heredoc_body_prefix_is_prose(substring(after_marker, start, first - start))
+	marker := concat("", [" ", opener.tag])
+	pieces := split(replace(after_marker, "\n", " "), marker)
+	closes := [k |
+		some k, piece in pieces
+		k > 0
+		terminator_follows(piece)
+	]
+	count(closes) > 0
+	tag_at := count(concat(marker, array.slice(pieces, 0, min(closes)))) + 1
+	tag_at > first
+	after_tag := substring(after_marker, tag_at + count(opener.tag), -1)
+	out := concat("", [
+		before, "<<", opener.full, welded_body_blanked(substring(after_marker, start, tag_at - start)),
+		opener.tag, terminator_separator(after_tag), after_tag,
+	])
+}
+
+# What may follow a terminator word in the delivered text: nothing, the space before the
+# next line, or the separator the hook shim wrote for that newline.
+terminator_follows(piece) if piece == ""
+
+terminator_follows(piece) if substring(piece, 0, 1) in {" ", ";", "&", "|", ")"}
+
+# A terminator stands alone on its line, so whatever follows it starts a new command. The
+# hook shim writes that boundary as `; `; a text that reaches the engine without the shim
+# has lost it with the newline, so it is put back here.
+terminator_separator(after_tag) := "" if after_tag == ""
+
+terminator_separator(after_tag) := "" if substring(after_tag, 0, 1) in {";", "&", "|", ")"}
+
+terminator_separator(after_tag) := " ;" if {
+	after_tag != ""
+	not substring(after_tag, 0, 1) in {";", "&", "|", ")"}
+}
+
+first_substitution_index(text) := min([i |
+	some i in [indexof(text, "$("), indexof(text, "`")]
+	i >= 0
+])
+
+heredoc_body_prefix_is_prose(prefix) if {
+	count([c |
+		some c in [";", "&", "|", "<", ">"]
+		contains(prefix, c)
+	]) == 0
+	count([word |
+		some word in split(replace(prefix, "\n", " "), " ")
+		word != ""
+	]) >= 2
+}
+
+welded_body_blanked(body) := out if {
+	no_sub := replace(replace(body, "`", " "), "$", " ")
+	no_paren := replace(replace(no_sub, "(", " "), ")", " ")
+	no_quote := replace(replace(no_paren, "'", " "), `"`, " ")
+	out := replace(replace(no_quote, "\n", " "), "\r", " ")
 }
 
 heredoc_resolved(text) := out if {
-	out := heredoc_body_blanked(text)
+	parts := split(text, "<<")
+	count(parts) == 2
+	not regex.match(shell_heredoc_reader_pattern, parts[0])
+	opener := heredoc_opener(parts[1])
+	out := heredoc_body_read(parts[0], parts[1], opener)
 } else := text
+
+heredoc_body_read(before, after_marker, opener) := out if {
+	out := heredoc_body_by_lines(before, after_marker, opener)
+} else := out if {
+	out := heredoc_body_by_terminator(before, after_marker, opener)
+}
 
 # Blank the OUTER quote style's spans first, then the INNER style's spans in what
 # survives. Parity is checked per phase, and the second phase's parity is read
@@ -476,11 +614,17 @@ blank_spans(text, outer, inner) := out if {
 # which is what reads `echo 'don"t' ; ...` correctly. Neither can open a hole:
 # each still requires its own balanced parity, and a text that satisfies neither
 # keeps its raw form.
+#
+# `scannable` runs once and both orders read its result: it carries the heredoc read, and
+# calling it per order doubled that work on every text that fails the first order.
 operands_blanked(text) := out if {
 	resolved := scannable(text)
+	out := spans_blanked_either_order(resolved)
+}
+
+spans_blanked_either_order(resolved) := out if {
 	out := blank_spans(resolved, `"`, "'")
 } else := out if {
-	resolved := scannable(text)
 	out := blank_spans(resolved, "'", `"`)
 }
 
@@ -955,7 +1099,7 @@ heredoc_open_tag(word) := tag if {
 	not startswith(word, "<<<")
 	parts := split(word, "<<")
 	count(parts) == 2
-	unquoted := replace(replace(word_lines(parts[1])[0], "'", ""), `"`, "")
+	unquoted := replace(replace(replace(word_lines(parts[1])[0], "'", ""), `"`, ""), `\`, "")
 	tag := trim_prefix(unquoted, "-")
 	tag != ""
 }

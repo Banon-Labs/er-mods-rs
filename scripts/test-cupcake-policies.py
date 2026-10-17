@@ -1586,6 +1586,40 @@ def main() -> int:
             "cargo tree -i serde | grep serde",
             True,
         ),
+        # 2026-10-16: a quoted-tag heredoc body is literal, so a message quoting a build piped
+        # into grep inside a substitution builds nothing. The engine delivers the body with its
+        # newlines turned into spaces, which is the shape these exercise; the `; ` after the
+        # terminator is the one scripts/cupcake-hook.sh writes.
+        PolicyCase(
+            "allow-heredoc-message-quoting-a-substitution-build",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(cargo build 2>&1) | grep error` in docs\nEOF",
+            True,
+        ),
+        PolicyCase(
+            "deny-build-grep-after-a-substitution-heredoc-body",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF; "
+            "cargo build -p er-quickload 2>&1 | grep error",
+            False,
+            "as its EXIT CODE",
+        ),
+        PolicyCase(
+            "deny-push-after-a-backtick-heredoc-body",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF; git push origin main",
+            False,
+            "The agent does not push",
+        ),
+        PolicyCase(
+            "deny-push-after-a-backtick-heredoc-body-without-the-shim",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF\ngit push origin main",
+            False,
+            "The agent does not push",
+        ),
+        PolicyCase(
+            "deny-push-on-a-heredoc-opener-line",
+            "cat > target/msg.txt <<'EOF' ; git push origin main\nfix: quote `x` in docs\nEOF",
+            False,
+            "The agent does not push",
+        ),
         PolicyCase(
             "deny-pgrep-then-proton-start-protected-launch",
             "pgrep -x start_protected_game.exe >/dev/null; proton run /tmp/start_protected_game.exe",

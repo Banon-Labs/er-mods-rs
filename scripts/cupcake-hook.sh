@@ -118,13 +118,38 @@ KNOWN_MODES = {"default", "plan", "acceptEdits", "bypassPermissions"}
 # identical so this shim and the policies read the same text the same way.
 ANCHORS = set("\n\r;&|()'\"")
 
+# Substitution characters, blanked in a data heredoc's body (not its opener line) before
+# the substitution refusal below reads the text.
+BODY_SUBSTITUTION = set("`$")
+
 # commands.rego's shell_heredoc_reader_pattern, verbatim. Rego's regex.match is an
 # unanchored search, so re.search is the faithful translation.
 SHELL_HEREDOC_READER = re.compile(
-    r"""(?i)(^|[ \t;&|(])(command[ \t]+)?(([^ \t;&|()'"]*/)?(ba|z|k|da|a)?sh|eval|source|\.)([ \t]+-{1,2}[a-z][a-z0-9-]*)*[ \t]*$"""
+    r"""(?i)(^|[ \t;&|(])(command[ \t]+)?(([^ \t;&|()'"]*/)?(ba|z|k|da|a|fi|c|tc)?sh|eval|source|\.)([ \t]+-{1,2}[a-z][a-z0-9-]*)*[ \t]*$"""
 )
-# commands.rego's heredoc_tag pattern, verbatim (anchored there, so re.match here).
-HEREDOC_TAG = re.compile(r"""^-?[ \t]*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""")
+# commands.rego's heredoc_opener pattern, verbatim (anchored there, so re.match here).
+# Group 1 is the quote that makes the body literal -- `'`, `"` or the backslash of
+# `<<\EOF` -- and is None for a bare tag; group 2 is the tag.
+HEREDOC_TAG = re.compile(r"""^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?""")
+
+# commands.rego's heredoc_shell_name: the programs that read a heredoc body as a program.
+HEREDOC_SHELL_NAMES = {"sh", "bash", "zsh", "ksh", "dash", "ash", "fish", "csh", "tcsh", "eval", "source", "."}
+
+
+def heredoc_shell_name(word):
+    if word in HEREDOC_SHELL_NAMES:
+        return True
+    return any(word.endswith("/" + name) for name in HEREDOC_SHELL_NAMES if name not in {"eval", "source", "."})
+
+
+def opener_line_feeds_a_shell(opener_tail):
+    """commands.rego's opener_line_feeds_a_shell: a shell anywhere on the opener's line.
+
+    `cat <<'EOF' | bash` hands the body to a shell, so the body is a program.
+    """
+    for separator in ";&|(":
+        opener_tail = opener_tail.replace(separator, " ")
+    return any(heredoc_shell_name(word) for word in opener_tail.split(" ") if word)
 
 UNRESOLVABLE = "unresolvable"
 SHELL_READ = "shell"
@@ -152,7 +177,19 @@ def heredoc_region(text):
         closes the shell-read-heredoc case pinned as known-open in
         scripts/test-cupcake-policies.py.
 
-    Returns (start, end) for a data body, SHELL_READ, UNRESOLVABLE, or NO_HEREDOC.
+      * a backtick or a `$(` in a data body does not stop the caller's scan, and the third
+        element of the result says where the body begins (the line after the opener) so
+        the opener's own line is still checked. Until 2026-10-16 a backtick there made the
+        caller give up, so the newline after the terminator was never turned into `; `
+        and a statement behind it -- a push, a build piped into grep -- arrived with no
+        command position (measured through this shim and through `cupcake eval`). The
+        body of a quoted tag (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is literal; a bare tag's
+        expands, and commands.rego keeps that one raw. Here the two are the same on
+        purpose: this function only decides which newlines become `; `, and finding the
+        terminator can only add one.
+
+    Returns (start, end, body_start) for a data body, SHELL_READ, UNRESOLVABLE, or
+    NO_HEREDOC.
     """
     parts = text.split("<<")
     if len(parts) == 1:
@@ -172,16 +209,20 @@ def heredoc_region(text):
         # commands.rego does with the same input, and it is the one UNRESOLVABLE-shaped case
         # where carrying on cannot put a heredoc body at risk.
         return NO_HEREDOC
-    tag = matched.group(1)
+    tag = matched.group(2)
     terminator = "\n" + tag
     if after.count(terminator) != 1:
         # A body whose terminator never appears, or appears more than once (a line of the
         # body starting with the tag). The body is multi-line and cannot be located, so this
         # stops rather than guess where it ends.
         return UNRESOLVABLE
+    opener_end = after.index("\n")
+    if opener_line_feeds_a_shell(after[matched.end():opener_end]):
+        return SHELL_READ
     start = len(before) + 2
     end = start + after.index(terminator) + 1  # through the newline that closes the body
-    return (start, end)
+    body_start = start + opener_end + 1
+    return (start, end, body_start)
 
 
 def mask_escaped_quotes(work):
@@ -258,10 +299,15 @@ def rewrite_command(command):
         # invent a boundary inside a documentation heredoc.
         return None
     if isinstance(region, tuple):
-        start, end = region
+        start, end, body_start = region
         for i in range(start, end):
             quoted[i] = True
             if work[i] in ANCHORS:
+                work[i] = " "
+        # The body's own substitutions do not stop the scan. The opener's own line is not
+        # part of the body, so a `$(` or backtick there still does.
+        for i in range(body_start, end):
+            if work[i] in BODY_SUBSTITUTION:
                 work[i] = " "
     # NO_HEREDOC and SHELL_READ both fall through with nothing marked: there is either no
     # body, or the body is a program whose line breaks are boundaries like any other.

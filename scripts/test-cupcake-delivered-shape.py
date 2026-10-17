@@ -537,8 +537,9 @@ def check_dead_logic_inventory() -> list[str]:
             f"says it cannot.\n  {blanked!r}"
         )
     findings.append(
-        "commands.heredoc_body_blanked / heredoc_tag / heredoc_resolved: DEAD for the "
-        "delivered shape (need \"\\n\" + tag); heredoc_resolved silently falls through to the raw text"
+        "commands.heredoc_body_blanked: DEAD for the delivered shape (need \"\\n\" + tag); "
+        "heredoc_resolved reads a delivered body only through heredoc_body_by_terminator, which "
+        "takes a quoted tag's body that carries a substitution, and otherwise falls through to the raw text"
     )
 
     # (c) Every command-position anchor in the git guards offers `\n` as an

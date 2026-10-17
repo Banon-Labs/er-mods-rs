@@ -457,3 +457,24 @@ test_builds_around_a_substitution_are_still_denied if {
 	denied(`python3 scripts/check-comment-caps.py $(git diff --name-only | grep -E '\.rs$') 2>&1 | grep -c caps`)
 	denied(`files=$(git ls-files | grep -E '\.rs$'); python3 scripts/check-comment-caps.py $files 2>&1 | grep -v OK`)
 }
+
+# A commit message written through a quoted-tag heredoc is literal, so quoting the pipeline above
+# in it builds nothing. Refused until 2026-10-16, raw and as the engine delivers it (newlines turned
+# into spaces). A build after the terminator still denies.
+quoted_pipeline_message := "fix: quote `echo $(cargo build 2>&1) | grep error` in the docs"
+
+test_commit_message_quoting_a_substitution_build_is_allowed if {
+	not denied(concat("", ["git commit -F - <<'EOF'\n", quoted_pipeline_message, "\nEOF"]))
+	not denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF"]))
+	not denied(concat("", ["git commit -F - <<\\EOF ", quoted_pipeline_message, " EOF"]))
+}
+
+test_build_after_a_literal_heredoc_is_still_denied if {
+	denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF; cargo build 2>&1 | grep error"]))
+	denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF cargo build 2>&1 | grep error"]))
+	denied(concat("", ["git commit -F - <<'EOF'\n", quoted_pipeline_message, "\nEOF\ncargo build 2>&1 | grep error"]))
+}
+
+test_unquoted_heredoc_body_substitution_build_is_still_denied if {
+	denied(concat("", ["cat > f <<EOF ", quoted_pipeline_message, " EOF"]))
+}

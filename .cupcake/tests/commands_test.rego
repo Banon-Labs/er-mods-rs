@@ -603,3 +603,97 @@ test_executed_texts_see_one_line_across_a_continuation if {
 	not contains(t, "\n")
 	contains(t, "-p x")
 }
+
+# --- a literal heredoc body carrying a substitution (2026-10-16) --------------
+#
+# A quoted tag makes the body literal, so its backticks and `$(` are prose. Both the
+# raw spelling (newlines intact, as `opa test` sees it) and the delivered one (newlines
+# turned into spaces by the engine) are read.
+
+build_into_grep := concat(" ", ["echo", "$(cargo", "build", "2>&1)", "|", "grep", "error"])
+
+quoted_body := concat("", ["fix: quote `", build_into_grep, "`"])
+
+# Every text the decomposition reads for `cmd`, joined, so a test can ask whether a
+# character survived in any of them.
+all_texts(cmd) := concat(" || ", [t | some t in commands.executed_texts(cmd)])
+
+test_quoted_heredoc_body_substitution_is_blanked_by_lines if {
+	texts := all_texts(concat("", ["git commit -F - <<'EOF'\n", quoted_body, "\nEOF"]))
+	not contains(texts, "`")
+	not contains(texts, "$(")
+}
+
+test_quoted_heredoc_body_substitution_is_blanked_as_delivered if {
+	texts := all_texts(concat("", ["git commit -F - <<'EOF' ", quoted_body, " EOF"]))
+	not contains(texts, "`")
+	not contains(texts, "$(")
+}
+
+test_double_quoted_and_backslash_tags_are_literal if {
+	every opener in [`<<"EOF"`, `<<\EOF`] {
+		not contains(all_texts(concat("", ["git commit -F - ", opener, " ", quoted_body, " EOF"])), "`")
+		not contains(all_texts(concat("", ["git commit -F - ", opener, "\n", quoted_body, "\nEOF"])), "`")
+	}
+}
+
+test_backslash_tag_is_read if {
+	opener := commands.heredoc_opener(`\EOF rest`)
+	opener.tag == "EOF"
+	opener.quote == `\`
+	opener.full == `\EOF`
+}
+
+test_backslash_tag_opens_a_data_span if {
+	commands.heredoc_open_tag(`<<\EOF`) == "EOF"
+}
+
+# The `; ` the hook shim writes for the newline after the terminator still opens a
+# command, and the body in front of it is blanked.
+test_statement_after_a_delivered_terminator_keeps_its_position if {
+	some t in commands.executed_texts(concat("", ["git commit -F - <<'EOF' the body `x` here EOF; ", push_main]))
+	contains(t, concat("", ["EOF; ", push_main]))
+	not contains(t, "`")
+}
+
+test_unquoted_heredoc_body_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["cat > f <<EOF\n", quoted_body, "\nEOF"]),
+		concat("", ["cat > f <<EOF ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+test_shell_fed_heredoc_body_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["cat <<'EOF' | bash\n", quoted_body, "\nEOF"]),
+		concat("", ["cat <<'EOF' | bash ", quoted_body, " EOF"]),
+		concat("", ["bash <<'EOF' ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+# A statement or a redirect on the opener line ahead of the first substitution keeps the
+# delivered text raw, so a substitution there is still read as one.
+test_opener_line_statement_before_a_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["git commit -F - <<'EOF' ; ", push_main, " ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' > \"$(mktemp)\" ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' && echo $(rm -rf x) ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' `rm -rf x` ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+test_opener_line_separator_survives_by_lines if {
+	some t in commands.executed_texts(concat("", ["git commit -F - <<'EOF' ; ", push_main, "\n", quoted_body, "\nEOF"]))
+	contains(t, concat("", ["; ", push_main]))
+}
+
+# A body that mentions the tag as a word ends early; what follows stays raw.
+test_tag_word_inside_the_body_ends_it_early if {
+	contains(all_texts(concat("", ["git commit -F - <<'EOF' a b `x` EOF c `y` EOF"])), "`")
+}

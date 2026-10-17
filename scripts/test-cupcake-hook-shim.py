@@ -270,11 +270,42 @@ REWRITE_CASES = [
         "git commit -F - <<'EOF'\nmessage body\nEOF\ngit push origin main",
         "git commit -F - <<'EOF'\nmessage body\nEOF; git push origin main",
     ),
+    # A backtick or `$(` in a data body does not stop the read (2026-10-16). Before, the
+    # backtick handed the whole command over unchanged, and the line after the terminator
+    # arrived with no separator. Quoted, backslash and bare tags alike: finding the
+    # terminator can only add a separator.
+    RewriteCase(
+        "backtick-in-quoted-heredoc-body-then-line-separated",
+        "git commit -F - <<'EOF'\nquote `echo $(date)` here\nEOF\ngit push origin main",
+        "git commit -F - <<'EOF'\nquote `echo $(date)` here\nEOF; git push origin main",
+    ),
+    RewriteCase(
+        "backslash-tag-heredoc-then-line-separated",
+        "git commit -F - <<\\EOF\nquote `x` here\nEOF\ngit push origin main",
+        "git commit -F - <<\\EOF\nquote `x` here\nEOF; git push origin main",
+    ),
+    RewriteCase(
+        "backtick-in-bare-tag-heredoc-body-then-line-separated",
+        "cat > f <<EOF\nstamp `date`\nEOF\ngit push origin main",
+        "cat > f <<EOF\nstamp `date`\nEOF; git push origin main",
+    ),
+    # The opener's own line is not body: a substitution there still hands the command over.
+    RewriteCase(
+        "substitution-on-heredoc-opener-line-passthrough",
+        "cat <<'EOF' > `mktemp`\nbody\nEOF\necho two",
+        "cat <<'EOF' > `mktemp`\nbody\nEOF\necho two",
+    ),
     # A heredoc a shell reads is a program, so its lines are commands.
     RewriteCase(
         "shell-read-heredoc-separated",
         "bash <<'EOF'\ngit push origin main\nEOF",
         "bash <<'EOF'; git push origin main; EOF",
+    ),
+    # So is one piped to a shell from the opener's line.
+    RewriteCase(
+        "heredoc-piped-to-a-shell-separated",
+        "cat <<'EOF' | bash\ngit push origin main\nEOF",
+        "cat <<'EOF' | bash; git push origin main; EOF",
     ),
     # A trailing backslash joins two lines. It is not a boundary and must not become `;`.
     RewriteCase(
@@ -462,6 +493,39 @@ DECISION_CASES = [
         "deny",
         "the body is data, but the line after the terminator is command text again",
     ),
+    # The holes measured 2026-10-16: a backtick in a heredoc body hid the line after the
+    # terminator from every guard. `cat >` rather than `git commit -F -` so no commit-gating
+    # policy can supply the deny these are about.
+    DecisionCase(
+        "deny-push-after-backtick-heredoc-body",
+        "cat > docs/msg.txt <<'EOF'\nquote `echo $(date)` here\nEOF\ngit push origin main",
+        "deny",
+        "the push follows the terminator; a backtick in the body used to make the shim give up",
+    ),
+    DecisionCase(
+        "deny-build-grep-after-backtick-heredoc-body",
+        "cat > docs/msg.txt <<'EOF'\nquote `x` here\nEOF\ncargo build -p er-quickload 2>&1 | grep error",
+        "deny",
+        "the same hole, with the build piped into grep after the terminator",
+    ),
+    DecisionCase(
+        "deny-push-after-backslash-tag-heredoc-body",
+        "cat > docs/msg.txt <<\\EOF\nquote `x` here\nEOF\ngit push origin main",
+        "deny",
+        "`<<\\EOF` is a quoted tag too",
+    ),
+    DecisionCase(
+        "deny-push-on-the-heredoc-opener-line",
+        "cat > docs/msg.txt <<'EOF' ; git push origin main\nquote `x` here\nEOF",
+        "deny",
+        "a separator on the opener line keeps the statement after it a command",
+    ),
+    DecisionCase(
+        "allow-message-quoting-a-substitution-build",
+        "git commit -F - <<'EOF'\nfix: quote `echo $(cargo build 2>&1) | grep error` in docs\nEOF",
+        "allow",
+        "a quoted-tag body is literal; this commit message was refused as a build piped into grep",
+    ),
     DecisionCase(
         "deny-two-line-push-inside-double-quoted-bash-c",
         'bash -c "echo hi\ngit push origin main"',
@@ -576,9 +640,13 @@ def check_decisions() -> list[str]:
 # one child session, each classified by the agent that hit it as a guard blocking artifact
 # writes, when what had actually happened is that no guard answered at all.
 #
-# 300,000 bytes is about twice the 127,735 the ceiling survives on this policy set (measured
-# 2026-09-22), so this stays a genuine abort if the engine gets more efficient, and the guard
-# keeps its meaning if it does not.
+# 300,000 bytes is about twice the 127,735 the ceiling survived on the policy set of 2026-09-22,
+# so this stays a genuine abort if the engine gets more efficient, and the guard keeps its
+# meaning if it does not. Re-measured 2026-10-16 by bisecting this exact line through the shim:
+# the last passing length is 80,038 bytes both before and after the literal-heredoc reader in
+# commands.rego, because this body's first backtick has fewer than two words in front of it and
+# the reader refuses before it splits. A body the reader does take (a prose line with a
+# backtick in it) passes up to 78,421 bytes, against 81,963 before.
 ABORTING_COMMAND = "cat > handoffs/audit.md <<'EOF'\n" + (
     "- `crates/er-x/src/f.rs`: the 'host' & \"invader\" pair | one line of an audit\n" * 3600
 ) + "EOF"
