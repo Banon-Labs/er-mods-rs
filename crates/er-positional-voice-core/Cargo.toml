@@ -8,6 +8,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+er-game-base = { path = "../er-game-base" }
 
 [lints]
 workspace = true

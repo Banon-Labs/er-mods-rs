@@ -20,17 +20,8 @@
 //!   in [`PROPS`], 3D emitter positioning with attenuation, game-defined aux sends on.
 //! - Play and Stop actions on that sound, and the events `Play_VoiceChat` / `Stop_VoiceChat`.
 
-/// FNV-1 32 of the lowercase name: how Wwise turns a name into an id.
-pub const fn fnv1_32(name: &[u8]) -> u32 {
-    let mut h: u32 = 0x811C_9DC5;
-    let mut i = 0;
-    while i < name.len() {
-        h = h.wrapping_mul(0x0100_0193);
-        h ^= name[i].to_ascii_lowercase() as u32;
-        i += 1;
-    }
-    h
-}
+// How Wwise turns a name into an id: FNV-1 32 of the lowercase name.
+use er_game_base::fnv1a::fnv1_32_ascii_lowercase as wwise_id;
 
 pub const BANK_VERSION: u32 = 135;
 pub const LANGUAGE_SFX: u32 = 0x1770_5D3E;
@@ -45,13 +36,13 @@ pub const OUTPUT_BUS: u32 = 0x6F00_5C01;
 /// Wwise whether this revision is the one loaded and reload only when it is not.
 pub const REVISION: u32 = 2;
 
-pub const BANK_ID: u32 = fnv1_32(b"er_voicechat");
-pub const SOUND_ID: u32 = fnv1_32(b"er_voicechat_audio_input_sound_r2");
-pub const SOURCE_ID: u32 = fnv1_32(b"er_voicechat_audio_input_source");
-pub const PLAY_ACTION_ID: u32 = fnv1_32(b"er_voicechat_play_action");
-pub const STOP_ACTION_ID: u32 = fnv1_32(b"er_voicechat_stop_action");
-pub const PLAY_EVENT_ID: u32 = fnv1_32(b"Play_VoiceChat");
-pub const STOP_EVENT_ID: u32 = fnv1_32(b"Stop_VoiceChat");
+pub const BANK_ID: u32 = wwise_id(b"er_voicechat");
+pub const SOUND_ID: u32 = wwise_id(b"er_voicechat_audio_input_sound_r2");
+pub const SOURCE_ID: u32 = wwise_id(b"er_voicechat_audio_input_source");
+pub const PLAY_ACTION_ID: u32 = wwise_id(b"er_voicechat_play_action");
+pub const STOP_ACTION_ID: u32 = wwise_id(b"er_voicechat_stop_action");
+pub const PLAY_EVENT_ID: u32 = wwise_id(b"Play_VoiceChat");
+pub const STOP_EVENT_ID: u32 = wwise_id(b"Stop_VoiceChat");
 
 /// The event names the DLL hands `MOAudioInputObject::Init`, NUL-terminated.
 pub const PLAY_EVENT_NAME: &[u8] = b"Play_VoiceChat\0";
@@ -288,15 +279,7 @@ pub fn build() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fnv1a_64(bytes: &[u8]) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        h
-    }
+    use er_game_base::fnv1a::fnv1a64 as fnv1a_64;
 
     #[test]
     fn ids_match_seamless_and_the_table() {

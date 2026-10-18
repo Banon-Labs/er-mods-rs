@@ -3232,6 +3232,9 @@ dependencies = [
 [[package]]
 name = "er-positional-voice-core"
 version = "0.1.0"
+dependencies = [
+ "er-game-base",
+]
 
 [[package]]
 name = "er-profile-summary-core"

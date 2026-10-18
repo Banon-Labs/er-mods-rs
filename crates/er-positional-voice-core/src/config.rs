@@ -13,12 +13,11 @@ use crate::gain::DEFAULT_GAIN;
 pub const FILE_NAME: &str = "er-positional-voice.toml";
 
 /// What the DLL writes when the file is absent, so the keys are discoverable.
-pub const DEFAULT_TEXT: &str = "\
-# Volume applied to every voice (1 = as received). 8 is about +18 dB.
+pub const DEFAULT_TEXT: &str = r#"# Volume applied to every voice (1 = as received). 8 is about +18 dB.
 gain = 8.0
 # Play your own microphone at your own character, to test alone.
 loopback = false
-";
+"#;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
