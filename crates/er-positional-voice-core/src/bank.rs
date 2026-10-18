@@ -20,9 +20,6 @@
 //!   in [`PROPS`], 3D emitter positioning with attenuation, game-defined aux sends on.
 //! - Play and Stop actions on that sound, and the events `Play_VoiceChat` / `Stop_VoiceChat`.
 
-// How Wwise turns a name into an id: FNV-1 32 of the lowercase name.
-use er_game_base::fnv1a::fnv1_32_ascii_lowercase as wwise_id;
-
 pub const BANK_VERSION: u32 = 135;
 pub const LANGUAGE_SFX: u32 = 0x1770_5D3E;
 pub const PROJECT_ID: u32 = 0x772;
@@ -36,13 +33,16 @@ pub const OUTPUT_BUS: u32 = 0x6F00_5C01;
 /// Wwise whether this revision is the one loaded and reload only when it is not.
 pub const REVISION: u32 = 2;
 
-pub const BANK_ID: u32 = wwise_id(b"er_voicechat");
-pub const SOUND_ID: u32 = wwise_id(b"er_voicechat_audio_input_sound_r2");
-pub const SOURCE_ID: u32 = wwise_id(b"er_voicechat_audio_input_source");
-pub const PLAY_ACTION_ID: u32 = wwise_id(b"er_voicechat_play_action");
-pub const STOP_ACTION_ID: u32 = wwise_id(b"er_voicechat_stop_action");
-pub const PLAY_EVENT_ID: u32 = wwise_id(b"Play_VoiceChat");
-pub const STOP_EVENT_ID: u32 = wwise_id(b"Stop_VoiceChat");
+// Wwise ids: FNV-1 32 of the lowercase name. Written as literals so the address ledger
+// (`scripts/rva_symbols.py`) can read them; `ids_are_the_wwise_hash_of_their_names` derives each
+// one from its name.
+pub const BANK_ID: u32 = 0x279B_79E9; // er_voicechat
+pub const SOUND_ID: u32 = 0x1B18_0742; // er_voicechat_audio_input_sound_r2
+pub const SOURCE_ID: u32 = 0x01F6_7A25; // er_voicechat_audio_input_source
+pub const PLAY_ACTION_ID: u32 = 0xF6EC_50A3; // er_voicechat_play_action
+pub const STOP_ACTION_ID: u32 = 0xDCCC_8AB1; // er_voicechat_stop_action
+pub const PLAY_EVENT_ID: u32 = 0xFDF5_AFAA; // Play_VoiceChat
+pub const STOP_EVENT_ID: u32 = 0xD072_BE04; // Stop_VoiceChat
 
 /// The event names the DLL hands `MOAudioInputObject::Init`, NUL-terminated.
 pub const PLAY_EVENT_NAME: &[u8] = b"Play_VoiceChat\0";
@@ -280,6 +280,18 @@ pub fn build() -> Vec<u8> {
 mod tests {
     use super::*;
     use er_game_base::fnv1a::fnv1a64 as fnv1a_64;
+
+    #[test]
+    fn ids_are_the_wwise_hash_of_their_names() {
+        use er_game_base::fnv1a::fnv1_32_ascii_lowercase as wwise_id;
+        assert_eq!(BANK_ID, wwise_id(b"er_voicechat"));
+        assert_eq!(SOUND_ID, wwise_id(b"er_voicechat_audio_input_sound_r2"));
+        assert_eq!(SOURCE_ID, wwise_id(b"er_voicechat_audio_input_source"));
+        assert_eq!(PLAY_ACTION_ID, wwise_id(b"er_voicechat_play_action"));
+        assert_eq!(STOP_ACTION_ID, wwise_id(b"er_voicechat_stop_action"));
+        assert_eq!(PLAY_EVENT_ID, wwise_id(b"Play_VoiceChat"));
+        assert_eq!(STOP_EVENT_ID, wwise_id(b"Stop_VoiceChat"));
+    }
 
     #[test]
     fn ids_match_seamless_and_the_table() {

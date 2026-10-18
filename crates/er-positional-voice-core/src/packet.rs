@@ -6,7 +6,9 @@
 /// `ERPV`: Elden Ring positional voice.
 pub const MAGIC: [u8; 4] = *b"ERPV";
 pub const VERSION: u8 = 1;
-pub const HEADER_LEN: usize = MAGIC.len() + 1;
+/// The magic and the version byte.
+pub const HEADER_LEN: usize = 5;
+const _: () = assert!(HEADER_LEN == MAGIC.len() + 1);
 
 /// The largest chunk sent or accepted. `GetVoice` returns well under a kilobyte per poll; this
 /// bounds what a peer can make the decoder chew on.
