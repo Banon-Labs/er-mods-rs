@@ -2465,6 +2465,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
 
+# er-positional-voice-core holds every decision the voice DLL makes without the game: the Wwise
+# bank it builds (pinned to the length and FNV-1a 64 of the bank the proven table loads, and to
+# the game's own attenuation curves when the local extraction is present), the voice packet, the
+# volume scaling, the voice-slot table and the byte signatures it checks before calling anything.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-positional-voice-core
+
 # er-hotkey-conflicts is almost entirely host-testable, and deliberately so: its product is a
 # warning that names modules, and the ways it can be wrong -- attributing a call to the wrong DLL,
 # conflating a whole-keyboard read with a specific key, decoding the game's binding table onto the
