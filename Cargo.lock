@@ -3219,6 +3219,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-positional-voice"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-positional-voice-core",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-positional-voice-core"
+version = "0.1.0"
+
+[[package]]
 name = "er-profile-summary-core"
 version = "0.1.0"
 dependencies = [

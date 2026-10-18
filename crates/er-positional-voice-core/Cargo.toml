@@ -1,0 +1,13 @@
+# What the positional voice DLL decides without the game: the Wwise bank it loads, the packet it
+# sends a voice frame in, the volume it applies, which peers get a voice slot, and the bytes it
+# checks the game for before calling anything. Proven by `cargo test` on Linux.
+[package]
+name = "er-positional-voice-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

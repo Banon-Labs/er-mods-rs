@@ -1175,7 +1175,12 @@ and ride modules, GameDataMan's remote slot states and the CSBulletManager list,
 param questions from SoloParamRepository after checking every holder is loaded. It draws as a \
 guest of the overlay host when one exists, and hosts only when nothing else does, so the process \
 keeps one Present hook either way."""
-"er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
+"er-positional-voice" = """Co-loadable with everything: it installs no detour, patches no game \
+code and touches nothing in ersc.dll. Its own thread calls the Steam flat API (ISteamUser voice, \
+ISteamNetworkingMessages on its own channel). A FrameBegin game task reads CSSessionManager's \
+players and WorldChrMan, loads one Wwise bank of its own, and makes, places and feeds its own \
+MOAudioInputObjects through the game's functions."""
+"er-invasion-path" ="""Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
 (FUN_140bddfe0 / FUN_140bdec90 / FUN_140bdf610, the same request ring CS::CSAiFunc uses) -- and \

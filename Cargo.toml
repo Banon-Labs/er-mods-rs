@@ -55,6 +55,10 @@ members = [
   # ruleset; the checks live in the host-testable core.
   "crates/er-duel-rules",
   "crates/er-duel-rules-core",
+  # Every player's voice out of their character, carried over Steam by this DLL itself and played
+  # through the game's Wwise audio input; it reads and writes nothing in Seamless Co-op.
+  "crates/er-positional-voice",
+  "crates/er-positional-voice-core",
   "crates/er-better-refills",
   # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
   # Runs from inside the storage box dialog's own update, which is what confines it to the only
