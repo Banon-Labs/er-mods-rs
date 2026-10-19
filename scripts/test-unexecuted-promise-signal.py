@@ -52,6 +52,30 @@ THE_PRESENT_CONTINUOUS_INSTANCE = (
     "I'm closing it rather than pushing an empty merge commit to make an empty PR green"
 )
 
+# The pair from 2026-10-19, verbatim. THE_UNHANDED_PROMISE halted; THE_BURIED_HANDOFF is the rewrite,
+# which kept the promising sentence and walked through on "the next step is yours".
+THE_UNHANDED_PROMISE = (
+    "`75a188c0` is still not pushed. I've now run a clean build of `75a188c0` (no uncommitted changes "
+    "in it), and its runtime proof passes.\n\n"
+    "Your last authorization was used up by the refused push. Reply "
+    "`authorize 75a188c04fa6f0cbb6da3e6968d3dd8c4f3205e1` and I'll close the game and push from that "
+    "clean checkout."
+)
+BURIED_BEFORE = (
+    "`75a188c0` is still not pushed, and the next step is yours. The push guard only accepts an "
+    "`authorize <sha>` reply typed after the last push attempt, and your previous one was used up by "
+    "the attempt the pre-push hook refused."
+)
+BURIED_SENTENCE = (
+    "Reply `authorize 75a188c04fa6f0cbb6da3e6968d3dd8c4f3205e1` and I'll close the game and push from "
+    "the clean checkout at `/home/banon/projects/er-mods-rs/.worktrees/push-75a188c0`."
+)
+BURIED_AFTER = (
+    "That checkout now passes the pre-push evidence check. PR #547's CI is still failing at "
+    "`stage / product`."
+)
+THE_BURIED_HANDOFF = f"{BURIED_BEFORE} {BURIED_SENTENCE} {BURIED_AFTER}"
+
 
 def user(text: str) -> dict:
     return {"type": "user", "message": {"content": text}}
@@ -857,10 +881,62 @@ def main() -> int:
         "a present-continuous commitment contingent on the user must not fire",
     )
 
+    # The 2026-10-19 pair, verbatim. The first closing message halted; the rewrite kept the promising
+    # sentence word for word and put "the next step is yours" ahead of a paragraph of explanation,
+    # which matched the hand-off exemption and walked through. The user's reading of both: the one
+    # sentence that mattered, buried between characters of prose that did not.
+    expect(
+        "buried-handoff-the-rewrite-that-walked-through",
+        [user("authorize 75a188c0"), assistant_text(THE_BURIED_HANDOFF)],
+        lambda out: out.startswith("BURIED:") and "Reply `authorize" in out and "and I'll close the game" in out,
+        "a hand-off behind a paragraph must fire BURIED and quote the whole ask, backticks and all",
+    )
+    expect(
+        "buried-handoff-counts-the-prose-on-both-sides",
+        [user("authorize 75a188c0"), assistant_text(THE_BURIED_HANDOFF)],
+        lambda out: out.split(":")[1:3] == [str(len(BURIED_BEFORE)), str(len(BURIED_AFTER))],
+        "before/after must be the characters of prose ahead of and behind the promising sentence",
+    )
+    expect(
+        "first-message-of-the-pair-is-buried-too",
+        [user("authorize 75a188c0"), assistant_text(THE_UNHANDED_PROMISE)],
+        lambda out: out.startswith("BURIED:") and out.split(":")[1] != "0",
+        "the first message asked for the reply too, after two sentences, and must fire BURIED",
+    )
+    expect(
+        "false-positive-refused-let-me",
+        [
+            user("Push it."),
+            assistant_text(
+                "The `feat/er-cel-shade` push still hasn't happened, and the guard won't let me retry it."
+            ),
+        ],
+        silent,
+        "'won't let me <verb>' reports a refusal; it is not the agent committing to the verb",
+    )
+    expect(
+        "agent-narrating-its-own-reply-is-not-a-handoff",
+        [user("What now?"), assistant_text("I posted the summary. I'll reply to the reviewer's comment next.")],
+        fires,
+        "'reply' inside the agent's own sentence is not an ask of the user",
+    )
+    expect(
+        "handoff-that-leads-is-clean",
+        [
+            user("authorize 75a188c0"),
+            assistant_text(
+                "Reply `authorize 75a188c04fa6f0cbb6da3e6968d3dd8c4f3205e1` and I'll close the game and "
+                "push from the clean checkout. Your last authorization was spent on the refused push."
+            ),
+        ],
+        silent,
+        "the same hand-off as the message's first sentence is the shape the halt asks for",
+    )
+
     if FAILURES:
         print(f"unexecuted-promise signal: {len(FAILURES)} FAILED: {', '.join(FAILURES)}")
         return 1
-    print("unexecuted-promise signal tests passed (64 cases)")
+    print("unexecuted-promise signal tests passed (70 cases)")
     return 0
 
 
