@@ -38,6 +38,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.nat
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_admission_with_defence.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_ask_without_receiver.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_authorize_without_run_stamp.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_deferred_evidence_read.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_described_next_step.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt

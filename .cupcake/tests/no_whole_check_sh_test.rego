@@ -346,3 +346,60 @@ test_deny_noexec_set_option_in_an_interactive_shell if {
 test_allow_script_named_to_a_gate_behind_a_python_flag if {
 	allowed("python3 -O scripts/check-comment-caps.py scripts/check.sh")
 }
+
+# --- the path named as an operand, never run (2026-10-19) --------------------
+# `git apply --exclude=scripts/check.sh <patch>` was refused as a run of the suite. Every
+# one of these names the script as an argument to a program that only reads it.
+operand_commands := [
+	"git apply --exclude=scripts/check.sh /tmp/x.patch",
+	"git apply --exclude=scripts/check.sh --exclude=.cupcake/x /tmp/x.patch",
+	"cd /home/banon/projects/er-mods-rs && git apply --exclude=scripts/check.sh /tmp/x.patch",
+	"git -C /home/banon/projects/er-mods-rs apply --exclude scripts/check.sh p.patch",
+	"git add scripts/check.sh",
+	"git diff -- scripts/check.sh",
+	"git log --oneline -- scripts/check.sh",
+	"git show HEAD:scripts/check.sh",
+	"git checkout -- scripts/check.sh",
+	"cat scripts/check.sh",
+	"sed -n 1,40p scripts/check.sh",
+	"head -50 scripts/check.sh",
+	"python3 -c \"print(open('scripts/check.sh').read())\"",
+	"wc -l scripts/check.sh | tail -1",
+	# The two commands actually refused, verbatim. In the second the assignment
+	# `X="--exclude=scripts/check.sh` is the first word of its statement.
+	`cd /home/banon/projects/er-mods-rs; P=/tmp/claude-1000/x/scratchpad/run-stamp.patch; git apply --check --exclude=scripts/check.sh --exclude=docs/ci-gate-portability.tsv "$P" && git apply --exclude=scripts/check.sh --exclude=docs/ci-gate-portability.tsv "$P" && echo applied; git status --short | grep -E 'authorize|run_stamp'`,
+	`cd /home/banon/projects/er-mods-rs; P=/tmp/x/run-stamp.patch; X="--exclude=scripts/check.sh --exclude=docs/ci-gate-portability.tsv --exclude=AGENTS.md"; git apply --check $X "$P" && git apply $X "$P" && echo applied; git diff 0084cd40^ d013d88e -- AGENTS.md scripts/check.sh docs/ci-gate-portability.tsv`,
+	"X=scripts/check.sh; git add $X",
+	"EXCLUDES='--exclude=a --exclude=scripts/check.sh'; git apply $EXCLUDES p.patch",
+]
+
+test_allow_script_named_as_an_operand if {
+	every command in operand_commands {
+		allowed(command)
+	}
+}
+
+# The executing spellings stay denied, including behind each separator.
+executing_commands := [
+	"./scripts/check.sh",
+	"/home/banon/projects/er-mods-rs/scripts/check.sh --stage lint",
+	"exec bash scripts/check.sh",
+	"exec scripts/check.sh",
+	"source scripts/check.sh",
+	". scripts/check.sh",
+	"git apply --exclude=scripts/check.sh p.patch && bash scripts/check.sh",
+	"git apply p.patch; ./scripts/check.sh",
+	"git status | bash scripts/check.sh",
+	"git status || scripts/check.sh",
+	"git apply --exclude=scripts/check.sh p.patch & bash scripts/check.sh",
+	"git status\nbash scripts/check.sh",
+	"P=/tmp/x.patch bash scripts/check.sh",
+	"P=/tmp/x.patch scripts/check.sh --stage lint",
+	"X=1 ./scripts/check.sh",
+]
+
+test_deny_every_executing_spelling if {
+	every command in executing_commands {
+		denied(command)
+	}
+}

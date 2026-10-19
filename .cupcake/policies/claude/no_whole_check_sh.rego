@@ -77,6 +77,19 @@ check_script_word(word) if endswith(word, "check.sh")
 runs_check_sh if {
 	some text in executed_texts
 	words := commands.command_slot_words(text)
+	runs_check_sh_in(words)
+}
+
+# A newline ends a statement as `;` does: `git status<newline>bash scripts/check.sh`
+# ran the suite and was allowed until 2026-10-19. The words split on spaces alone are
+# still judged, because the heredoc spans are read from the lines inside a word.
+runs_check_sh if {
+	some text in executed_texts
+	words := commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; "))
+	runs_check_sh_in(words)
+}
+
+runs_check_sh_in(words) if {
 	spans := commands.data_heredoc_spans(words)
 	some index, word in words
 	check_script_word(word)
@@ -85,6 +98,7 @@ runs_check_sh if {
 	# through the word list, and a body that names the script on every line would pay
 	# for that walk once per mention.
 	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
 	commands.word_in_command_slot(words, index)
 	not read_without_executing(words, index)
 }
