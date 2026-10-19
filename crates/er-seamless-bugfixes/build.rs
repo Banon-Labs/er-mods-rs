@@ -11,7 +11,7 @@ mod prologue_build {
 }
 
 use iced_x86::Register;
-use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem};
+use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem, rex_push};
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
@@ -26,6 +26,8 @@ const APPLY_VA: u64 = 0x1404fa8e0;
 /// `FUN_140d3d5f0(out, platformKind)` -- the `LoadBalancerParam` row lookup that `DLPanic`s when
 /// `SoloParamRepository` is null. See `guards::null_param_repository`.
 const LOAD_BALANCER_PARAM_VA: u64 = 0x140d3d5f0;
+/// `void CS::MapItemManImpl::GiveItems(...)`. See `guards::null_main_player`.
+const GIVE_ITEMS_VA: u64 = 0x1405605b0;
 /// The SEH frame marker the prologue stores; named so the assembled `MOV` is not a bare literal.
 const SEH_FRAME_UNINITIALISED: i32 = -2;
 /// The leak assertion inside `CS::CSFreeListMemorySystem`'s shutdown, at the `CMP` that decides
@@ -113,6 +115,32 @@ fn main() {
             }) as prologue_build::Assemble,
         )],
         "generated_null_param_repository_prologues.rs",
+    );
+
+    generate(
+        &[(
+            PrologueSpec {
+                name: "GIVE_ITEMS_PROLOGUE",
+                doc: "1.16.2 prologue of `CS::MapItemManImpl::GiveItems`:\n\
+                      `PUSH RBP; PUSH RSI; PUSH RDI; PUSH R12; PUSH R13`.",
+                visibility: "pub(crate)",
+                shape: Shape::Slice,
+                image: Image::EldenRing,
+                va: GIVE_ITEMS_VA,
+                take: 0,
+                pin: &[0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55],
+            },
+            (|asm| {
+                use iced_x86::code_asm::*;
+                rex_push(asm, rbp)?;
+                asm.push(rsi)?;
+                asm.push(rdi)?;
+                asm.push(r12)?;
+                asm.push(r13)?;
+                Ok(())
+            }) as prologue_build::Assemble,
+        )],
+        "generated_null_main_player_prologues.rs",
     );
 
     generate(
