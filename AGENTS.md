@@ -435,11 +435,37 @@ agent-facing** disassembly. For **in-process, runtime** x86-64 decoding *inside 
 DLL* (instruction-length stepping for the INT3 single-step engine, function-prologue
 validation, byte-pattern confirmation), use the **`iced-x86`** crate -- it is now a
 direct dependency of the root `er-quickload` crate (pure-Rust, decoder-only feature
-set, zero cross-compile overhead under cargo-xwin; it was already present
-transitively via `ilhook`). Do **not** hard-code instruction byte lengths or
+set, zero cross-compile overhead under cargo-xwin). Do **not** hard-code instruction byte lengths or
 prologue byte sequences in new code when `iced-x86` can decode them, and do **not**
 add a second disassembler (e.g. capstone/zydis) **into the DLL / in-process Rust** --
 `iced-x86` already covers in-process needs and avoids a C cross-compile burden.
+
+### Hooking the middle of a function: `ilhook` (user directive 2026-10-19)
+
+MinHook (`er-hook`) patches function **entries** only, and
+`er_game_base::game_build::resolve_detour_address` refuses mid-function addresses on purpose. When
+a fault or decision sits partway through a function whose other work must still happen, do not
+settle for an entry guard that skips the whole function: use **`ilhook`'s jmp-ret hook**.
+
+- It writes a 14-byte absolute jump at any instruction boundary, relocates the instructions it
+  covers into a trampoline, hands the routine every register as a mutable `Registers` block, and
+  jumps to whatever address the routine returns. Return `ori_func_ptr` to run the moved
+  instructions unchanged; return a join point the function already has to take that branch, with
+  your register edits applied.
+- Pure Rust on `iced-x86`, builds on the Linux host too (so routines get host unit tests), no C.
+- The worked example is `crates/er-seamless-bugfixes/src/mid_hooks/` (2026-10-19): two hooks inside
+  `CS::MapItemManImpl::GiveItems` that divert to the function's own "no storage chest" and "someone
+  else's item" branches when there is no local player. It replaced an entry guard that lost the
+  item. `mid_hooks/mod.rs` states the rules: resume only on an existing branch and set every
+  register it reads; pin the whole 14+-byte moved window and the resume target by bytes generated
+  in `build.rs`; check that no branch in the function lands inside the window; resolve both
+  addresses with `resolve_call_site_rva` (function entry plus offset), never as detours.
+- The routine type is `unsafe extern "win64" fn(*mut Registers, ori_func_ptr: usize, user_data:
+  usize) -> usize`. Install with `Hooker::new(addr, HookType::JmpToRet(routine),
+  CallbackOption::None, 0, HookFlags::empty()).hook()` and keep the returned `HookPoint` alive
+  (dropping it unhooks).
+- Not for a whole-function detour (keep MinHook there) and not for a one-instruction removal the
+  function already skips (that is a one-byte patch, see `er-seamless-bugfixes/src/patches/`).
 
 #### Offline Python decoding (`capstone`)
 
