@@ -60,6 +60,7 @@ windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
+  "Win32_System_Threading",
 ] }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint

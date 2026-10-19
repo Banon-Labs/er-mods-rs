@@ -702,7 +702,7 @@ pub(super) fn owner_among(candidates: &[usize]) -> Option<(usize, usize)> {
 #[cfg(windows)]
 pub(super) fn cached_owner_from_item_handler_closure(
     base: usize,
-    abi: &ersc::Abi,
+    abi: &'static ersc::Abi,
 ) -> Option<(usize, usize)> {
     let at = NEEDLE_CLOSURE.load(Ordering::SeqCst);
     if at != 0 {
@@ -735,18 +735,48 @@ pub(super) fn cached_owner_from_item_handler_closure(
         }
         // The object moved or died. Drop it and let the paced walk find it again.
         NEEDLE_CLOSURE.store(0, Ordering::SeqCst);
-        NEEDLE_CALLS.store(0, Ordering::SeqCst);
     }
-    // Seamless registers its item handler some way into a run, so the first calls of a process
-    // legitimately find nothing -- on run br-20260917-024652-20b0 the needle matched zero for the
-    // first fifty-odd passes and then one, for the rest of the run. So the walk cannot be
-    // once-only, and it equally cannot be every call. It gets one attempt per
-    // `NEEDLE_WALK_EVERY_CALLS`, until it succeeds and the cache takes over.
-    let attempt = NEEDLE_CALLS.fetch_add(1, Ordering::SeqCst);
-    if !attempt.is_multiple_of(NEEDLE_WALK_EVERY_CALLS) {
-        return None;
+    // A miss never walks here. This runs on the game thread, and the walk crosses every committed
+    // private page of the process: measured 2026-10-19 on a Seamless + er_invasion_warp boot, the
+    // three walks before Seamless registered its handler froze the game thread for 0.12 s, 0.75 s
+    // and 1.8 s, growing with the heap, all of it during the black window before the title. The
+    // walk goes to its own thread instead and fills the cache this function reads.
+    request_needle_walk(base, abi);
+    None
+}
+
+/// Start the needle walker unless one is already running.
+///
+/// Seamless registers its item handler some way into a run, so the first walks of a process
+/// legitimately find nothing -- on run br-20260917-024652-20b0 the needle matched zero for the
+/// first fifty-odd passes and then one, for the rest of the run. The walker therefore repeats, one
+/// pass per [`NEEDLE_WALK_INTERVAL`], until a pass fills the cache, and then exits. A later miss,
+/// after the cached chain stops resolving, starts a new one.
+#[cfg(windows)]
+fn request_needle_walk(base: usize, abi: &'static ersc::Abi) {
+    if NEEDLE_WALK_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
     }
-    owner_from_item_handler_closure(base, abi)
+    let spawned = std::thread::Builder::new()
+        .name("er-invasion-warp-needle-walk".to_owned())
+        .spawn(move || {
+            // Seamless registering its handler raises no event this DLL can observe without
+            // hooking ersc.dll, so the retry is paced by the clock. The wait is the sweeper's own
+            // timed condvar wait: nothing synchronizes on it, it only spaces the passes.
+            let (lock, pace) = &NEEDLE_WALK_PACE;
+            while owner_from_item_handler_closure(base, abi).is_none() {
+                let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _ = pace
+                    .wait_timeout(guard, NEEDLE_WALK_INTERVAL)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            NEEDLE_WALK_RUNNING.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        // Left to the next call rather than retried here: a process that cannot spawn a thread
+        // degrades to "no session", never to a walk on the game thread.
+        NEEDLE_WALK_RUNNING.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Host-side stub. The needle walk is a Windows memory walk and has no meaning off the target.
@@ -1192,14 +1222,18 @@ static NEEDLE_CLOSURE: AtomicUsize = AtomicUsize::new(0);
 static NEEDLE_SESSION: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static NEEDLE_OWNER: AtomicUsize = AtomicUsize::new(0);
-/// How many times the cached resolver has been asked while it had no answer.
+/// Whether a needle walker thread is alive, so a miss on every tick starts at most one.
 #[cfg(windows)]
-static NEEDLE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// One walk per this many unanswered calls. The walk is the whole committed private address space;
-/// the resolver is called several times a second, and Seamless registers its handler within the
-/// first minute of a run, so a few walks a minute finds it without the game noticing.
+static NEEDLE_WALK_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Pause between needle passes while Seamless has not registered its handler yet. The old in-tick
+/// pacing, one walk per 256 resolver calls at roughly three calls a frame, came to about one walk a
+/// second; this keeps that rate on a thread the game does not wait for.
 #[cfg(windows)]
-const NEEDLE_WALK_EVERY_CALLS: usize = 256;
+const NEEDLE_WALK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// What the needle walker waits on between passes. Never notified; see [`request_needle_walk`].
+#[cfg(windows)]
+static NEEDLE_WALK_PACE: (std::sync::Mutex<()>, std::sync::Condvar) =
+    (std::sync::Mutex::new(()), std::sync::Condvar::new());
 
 #[cfg(windows)]
 static CACHED_SLOT: AtomicUsize = AtomicUsize::new(0);
