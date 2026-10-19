@@ -94,6 +94,7 @@ runs_lint if {
 	some index, word in words
 	lint_candidate(words, index, word)
 	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
 	in_command_slot(words, index)
 }
 
