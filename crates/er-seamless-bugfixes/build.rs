@@ -33,6 +33,11 @@ const GIVE_ITEMS_STORAGE_OVERFLOW_LOAD: u64 = 0x1d9;
 const GIVE_ITEMS_STORAGE_ABSENT_JOIN: u64 = 0x2f3;
 const GIVE_ITEMS_PICKUP_LOG_LOAD: u64 = 0x34a;
 const GIVE_ITEMS_PICKUP_NOT_MINE: u64 = 0x3c1;
+/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+const STORAGE_OVERFLOW_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_OVERFLOW_LOAD;
+const STORAGE_ABSENT_JOIN_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_ABSENT_JOIN;
+const PICKUP_LOG_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_LOG_LOAD;
+const PICKUP_NOT_MINE_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_NOT_MINE;
 /// `WorldChrManImp+0x1e508`, the local `PlayerIns`.
 const WORLD_CHR_MAN_MAIN_PLAYER: i64 = 0x1e508;
 /// `ChrIns` vtable slot `+0x168`, `GetPlayerGameData`.
@@ -133,13 +138,15 @@ fn main() {
         0x48, 0x8b, 0x89, 0x08, 0xe5, 0x01, 0x00, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x68, 0x01, 0x00,
         0x00,
     ];
-    let main_player_load: prologue_build::Assemble = |asm| {
+    fn main_player_load(
+        asm: &mut iced_x86::code_asm::CodeAssembler,
+    ) -> Result<(), iced_x86::IcedError> {
         use iced_x86::code_asm::*;
         mov_r64_mem(asm, Register::RCX, Register::RCX, WORLD_CHR_MAN_MAIN_PLAYER)?;
         mov_r64_mem_base(asm, Register::RAX, Register::RCX)?;
         asm.call(qword_ptr(rax + CHR_INS_GET_PLAYER_GAME_DATA_SLOT))?;
         Ok(())
-    };
+    }
     generate(
         &[
             (
@@ -150,11 +157,11 @@ fn main() {
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
                     image: Image::EldenRing,
-                    va: GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_OVERFLOW_LOAD,
+                    va: STORAGE_OVERFLOW_LOAD_VA,
                     take: 0,
                     pin: MAIN_PLAYER_LOAD_PIN,
                 },
-                main_player_load,
+                main_player_load as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
@@ -164,11 +171,11 @@ fn main() {
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
                     image: Image::EldenRing,
-                    va: GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_LOG_LOAD,
+                    va: PICKUP_LOG_LOAD_VA,
                     take: 0,
                     pin: MAIN_PLAYER_LOAD_PIN,
                 },
-                main_player_load,
+                main_player_load as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
@@ -178,7 +185,7 @@ fn main() {
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
                     image: Image::EldenRing,
-                    va: GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_ABSENT_JOIN,
+                    va: STORAGE_ABSENT_JOIN_VA,
                     take: 0,
                     pin: &[0x8b, 0x74, 0x24, 0x34],
                 },
@@ -196,7 +203,7 @@ fn main() {
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
                     image: Image::EldenRing,
-                    va: GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_NOT_MINE,
+                    va: PICKUP_NOT_MINE_VA,
                     take: 0,
                     pin: &[0x83, 0xe7, 0xfe],
                 },
