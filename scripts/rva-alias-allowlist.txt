@@ -70,6 +70,7 @@
 0x2610c0    exempt:role-alias         # PLAYER_GAME_DATA_COPY_CHR_NAME_RVA, PLAYER_GAME_DATA_COPY_CHR_NAME_VA  || er-player-name-filter: build.rs VA assembles PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE from the image; src RVA is the detour target it guards.
 0x4f9940    exempt:role-alias         # HAS_SPECIAL_EFFECT_ID_RVA, HAS_SPECIAL_EFFECT_ID_VA  || er-seamless-bugfixes: build.rs VA assembles HAS_SPECIAL_EFFECT_ID_PROLOGUE (incl. the in-window JZ target); src RVA is the guarded detour.
 0x4fa8e0    exempt:role-alias         # APPLY_RVA, APPLY_VA  || er-seamless-bugfixes: build.rs VA assembles APPLY_PROLOGUE; src RVA is the tail-jump detour on CS::SpecialEffect::Apply.
+0x5605b0    exempt:role-alias         # GIVE_ITEMS_RVA, GIVE_ITEMS_VA  || er-seamless-bugfixes: build.rs VA assembles GIVE_ITEMS_PROLOGUE; src RVA is the null-main-player guard on CS::MapItemManImpl::GiveItems.
 0x67b570    exempt:role-alias         # SAVE_DISPATCH_SYSTEM_RVA, SAVE_DISPATCH_SYSTEM_VA  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_SYSTEM_SIG; the runtime side is ALREADY centralised in er-game-base and re-derived at lib.rs:783.
 0x67b940    exempt:role-alias         # SAVE_DISPATCH_COMBINED_RVA, SAVE_DISPATCH_COMBINED_VA  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_COMBINED_SIG; runtime side centralised in er-game-base/src/rva.rs:28.
 0x67dc00    exempt:role-alias         # SAVE_SERIALIZE_CHAR_RVA, SAVE_SERIALIZE_CHAR_VA  || er-save-suppress: build.rs VA assembles SAVE_SERIALIZE_CHAR_SIG; src RVA is the observed call target.

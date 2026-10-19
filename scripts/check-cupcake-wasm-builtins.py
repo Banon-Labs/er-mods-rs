@@ -78,6 +78,7 @@ PROBES: dict[str, str] = {
     "startswith": 'cond:startswith("abc", "a")',
     "strings.replace_n": 'str:strings.replace_n({"a": "x", "b": "y"}, "ab")',
     "substring": 'str:substring("abcdef", 1, 3)',
+    "to_number": 'str:format_int(to_number("42"), 10)',
     "trim": 'str:trim("xxaxx", "x")',
     "trim_left": 'str:trim_left("xxa", "x")',
     "trim_prefix": 'str:trim_prefix("Pa", "P")',
