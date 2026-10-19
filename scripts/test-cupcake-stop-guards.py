@@ -58,6 +58,9 @@ class Case:
     # bare reason string with no [rule_id] prefix.
     expect_halt_text: str | None
     why: str
+    # Extra environment for the hook, as (name, value) pairs. For a signal whose verdict comes from
+    # outside the transcript, so the case pins that verdict instead of reading this machine's.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 CASES = [
@@ -605,6 +608,22 @@ CASES = [
         "only the local first-person-cause check in the policy lets it through. It must NOT halt",
     ),
     Case(
+        "authorize_without_run_stamp.jsonl",
+        "no run has stamped that commit",
+        "the 2026-10-16 shape: a commit to a crate, then 'reply `authorize <sha>`' while the "
+        "runtime-evidence gate refuses that sha -- the push would be denied for want of a run "
+        "stamp the agent could have produced itself. The evidence verdict is pinned to exit 1",
+        (("CUPCAKE_AUTHORIZE_EVIDENCE_CHECK", "false"),),
+    ),
+    Case(
+        "authorize_without_run_stamp.jsonl",
+        None,
+        "the same message with the evidence verdict pinned to exit 0 (a DLL log names the sha, or "
+        "the commits change no crate) -- must NOT halt, or asking for a push that will go through "
+        "is punished identically to asking for one that will not",
+        (("CUPCAKE_AUTHORIZE_EVIDENCE_CHECK", "true"),),
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
@@ -747,7 +766,9 @@ def stderr_tail(stderr: str, limit: int = 1200) -> str:
     return f"\n      cupcake stderr: {tail!r}" if tail else ""
 
 
-def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> HookResult | str:
+def run_hook(
+    fixture_name: str, event_name: str, argv: list[str], extra_env: tuple[tuple[str, str], ...] = ()
+) -> HookResult | str:
     """Drive one fixture through the real hook until an evaluation runs every signal it asked for.
 
     Returns the first complete evaluation, or a failure message string. A failure message names
@@ -755,7 +776,7 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> HookResult 
     cupcake's deadline still fails this test -- as itself, not disguised as an inert guard."""
     last: HookResult | str = "no attempt ran"
     for attempt in range(1, ATTEMPTS + 1):
-        last = run_hook_once(fixture_name, event_name, argv)
+        last = run_hook_once(fixture_name, event_name, argv, extra_env)
         if isinstance(last, str) or not last.dropped:
             return last
         print(
@@ -771,7 +792,9 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> HookResult 
     )
 
 
-def run_hook_once(fixture_name: str, event_name: str, argv: list[str]) -> HookResult | str:
+def run_hook_once(
+    fixture_name: str, event_name: str, argv: list[str], extra_env: tuple[tuple[str, str], ...] = ()
+) -> HookResult | str:
     """One real cupcake hook invocation. Returns a HookResult, or a failure message string."""
     fixture = FIXTURES / fixture_name
     if not fixture.is_file():
@@ -789,6 +812,10 @@ def run_hook_once(fixture_name: str, event_name: str, argv: list[str]) -> HookRe
         )
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
+        # A stub left in the caller's environment would decide the authorize-run-stamp verdict
+        # for every case; only a case that names one gets one.
+        env.pop("CUPCAKE_AUTHORIZE_EVIDENCE_CHECK", None)
+        env.update(dict(extra_env))
         payload = {
             "session_id": f"stop-guard-{fixture_name}",
             "transcript_path": str(tdir / "session.jsonl"),
@@ -819,7 +846,7 @@ def run_hook_once(fixture_name: str, event_name: str, argv: list[str]) -> HookRe
 
 def run_case(case: Case, argv: list[str]) -> str | None:
     """Returns None on pass, or a failure message."""
-    outcome = run_hook(case.fixture, "Stop", argv)
+    outcome = run_hook(case.fixture, "Stop", argv, case.env)
     if isinstance(outcome, str):
         return outcome
     decision, raw, err = outcome.decision, outcome.raw, stderr_tail(outcome.stderr)

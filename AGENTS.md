@@ -635,6 +635,22 @@ run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
    `.cupcake/state/push-authorizations.jsonl`. When the guard denies a push it names the branch
    and the exact phrase to ask for. `.cupcake/policies/claude/transcript_write_guard.rego` keeps
    the transcript the authorization is read from out of the agent's reach.
+
+   **The phrase waits for a run of that exact tip.** Hand the user `authorize <sha>` only after a
+   DLL built at that commit has run in the game and written its log, which is the evidence
+   `scripts/check-runtime-evidence.sh` reads. A branch whose commits change `crates/` is refused
+   at push time by the pre-push hook and by `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE` until a log
+   carries `build git=<tip>`, so an authorization asked for earlier is spent on a push that fails
+   (user, 2026-10-16: "I knew it needed a run stamp to push. I was hoping you would figure it out
+   (again) prior to asking me to authorize a push"; and 2026-10-19: "to authorize a push, you must
+   have runtime evidence"). Before asking, run `bash scripts/check-runtime-evidence.sh <full tip
+   sha>` from that checkout. If it exits 1, build the changed shells at the tip
+   (`bash scripts/er-build-dlls.sh <package>`, in the background), launch them
+   (`python3 scripts/er-run-branch.py --with <package>`), let the DLL write its log, and check
+   again. A push that changes no crate needs no run. The Stop hook enforces this:
+   `.cupcake/policies/claude/no_authorize_without_run_stamp.rego` over the
+   `last_assistant_authorize_without_run_stamp` signal halts a closing message that asks for
+   `authorize <sha>` while that check exits 1, and allows when it cannot measure.
 5. **Clean up** - Clear stashes
 6. **Verify** - All changes committed, and the unpushed branches named
 7. **Hand off** - Provide context for next session / review path

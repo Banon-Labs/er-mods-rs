@@ -37,6 +37,18 @@ signals:
     command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/live_er_run.sh"'
     timeout_seconds: 8
 
+  # Does the closing message ask for `authorize <sha>` on a commit the runtime-evidence gate will
+  # refuse? Read by no_authorize_without_run_stamp on Stop. Registered here rather than left to
+  # discovery because the refusing answer is the slow one: check-runtime-evidence.sh tries to
+  # carry every older run forward before it says no, about 4 s on 2026-10-16, and cupcake drops a
+  # discovered signal at 5 s (the drop is an allow). The script caps its own evidence run at 25 s.
+  # Measured 2026-10-16 against cupcake 0.5.2: an entry here with the name of a script in
+  # signals/ replaces the discovered one and carries this timeout, and signals run concurrently,
+  # so only a turn whose closer names `authorize <sha>` waits for it.
+  last_assistant_authorize_without_run_stamp:
+    command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/last_assistant_authorize_without_run_stamp.sh"'
+    timeout_seconds: 30
+
   origin_main_oids:
     command: 'if [ -n "${CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE:-}" ]; then printf "%s" "$CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"; else local_oid="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"; remote_oid="$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | cut -f1)"; printf "%s %s" "$local_oid" "$remote_oid"; fi'
     timeout_seconds: 8

@@ -17,6 +17,8 @@ package cupcake.policies.claude.gh_pr_title_conventional
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 # A commit subject is gated locally by a hook; the PR title was not gated anywhere.
 #
 # 2026-09-09: PR #421 opened with the title "Cancel a local invasion that lands in the wrong
@@ -156,7 +158,130 @@ quoted_or_escaped(word) if contains(word, "'")
 
 quoted_or_escaped(word) if contains(word, `\`)
 
-token_lists0 := {tokens(command)}
+# Heredoc bodies are cut out before anything is tokenized.
+#
+# 2026-10-19: this refused a valid title, reporting `title : fix`, for
+#
+#     cat > /tmp/x.md <<'EOF'
+#     ... didn't ... (`on`) ...
+#     EOF
+#     cd ...; timeout 25 gh pr create ... --title 'fix(er-cel-shade): start with cel shading off'
+#
+# The tokenizer knows nothing of heredocs, so the apostrophe in `didn't` opened a single-quoted
+# word that ran to the title's own opening quote. That left `fix` as a bare word and `(` as an
+# operator, and `fix` was judged as the title. The shell reads a heredoc body as data, never as
+# words, so the body is cut out: everything after a `<<WORD` / `<<'WORD'` / `<<"WORD"` /
+# `<<-WORD` / `<< WORD` opener up to and including the first line that is `WORD` alone. The
+# opener's `<<` goes with it, so the next pass finds the next heredoc.
+#
+# The body cannot be found by splitting the command into lines, which was the first draft. The
+# engine replaces every newline it thinks is unquoted with a space before a policy runs, and on
+# the refused command it delivered (measured with `cupcake eval`, not inferred)
+#
+#     cat > /tmp/x.md <<'EOF' ## Summary The shader didn't start off ...\nEOF\ncd ...
+#
+# -- the newlines before the apostrophe gone, the ones after it kept. So the command is split on
+# spaces, which rejoins exactly, and each word is read as its lines, which is how
+# commands.data_heredoc_spans finds a terminator glued to its neighbours (`default.\nEOF\ncd`).
+# Either shape of the terminator line is found: a word of its own, or a line inside a word.
+#
+# Residue, on the side of judging more: an opener with no terminator removes nothing, so a stray
+# `<<` cannot swallow the rest of a command; a body a shell reads (`bash <<'EOF'`) is a program
+# and is kept; `cat <<'EOF' | bash` is not recognised as one, because with the newline gone the
+# opener's line cannot be told from the body; a body line that is the tag alone ends the body
+# early. A `<<<` here-string is not an opener. Three heredocs are cut, the depth the nesting
+# below reads.
+#
+# Written in `indexof`/`split`/`trim` and no new pattern: see the note on a regex added to a
+# cupcake rule crashing the WASM runtime in git_block_main_push.rego.
+lines_of(word) := split(replace(word, "\r", "\n"), "\n")
+
+# The tag a word opens a heredoc with, read from the text after its first `<<`. Empty when the
+# tag is the next word (`<< 'EOF'`).
+opener_tag_text(word) := tag_text(lines_of(substring(word, indexof(word, "<<") + 2, -1))[0]) if {
+	contains(word, "<<")
+	not contains(word, "<<<")
+}
+
+tag_text(s) := trim_prefix(trim_prefix(replace(replace(s, "'", ""), `"`, ""), "-"), `\`)
+
+# `[open, tag word, tag]` for a word that opens a heredoc no shell reads.
+heredoc_opener(words, o) := [o, o, tag] if {
+	tag := opener_tag_text(words[o])
+	tag != ""
+	not shell_reads(words, o)
+} else := [o, o + 1, tag] if {
+	opener_tag_text(words[o]) == ""
+	o + 1 < count(words)
+	tag := tag_text(lines_of(words[o + 1])[0])
+	tag != ""
+	not shell_reads(words, o)
+}
+
+# A shell among the words of the simple command that opens the heredoc.
+shell_reads(words, o) if {
+	starts := [s | some i, w in words; i < o; separator_word(w); s := i + 1]
+	start := max(array.concat(starts, [0]))
+	some i, w in words
+	i >= start
+	i < o
+	commands.heredoc_shell_name(w)
+}
+
+separator_word(w) if contains(w, ";")
+
+separator_word(w) if contains(w, "&")
+
+separator_word(w) if contains(w, "|")
+
+separator_word(w) if contains(w, "(")
+
+separator_word(w) if contains(w, "\n")
+
+# Line `li` of word `c` comes after the tag word's own first line.
+past_opener(c, _, e) if c > e
+
+past_opener(c, li, e) if {
+	c == e
+	li > 0
+}
+
+heredoc_cut(text) := out if {
+	contains(text, "<<")
+	words := split(text, " ")
+	openers := [o | some o, w in words; contains(w, "<<")]
+	count(openers) > 0
+	opener := heredoc_opener(words, min(openers))
+	e := opener[1]
+	tag := opener[2]
+	closes := [c |
+		some c, w in words
+		c >= e
+		some li, l in lines_of(w)
+		past_opener(c, li, e)
+		trim(l, " \t") == tag
+	]
+	count(closes) > 0
+	c := min(closes)
+	close_lines := lines_of(words[c])
+	li := min([i | some i, l in close_lines; past_opener(c, i, e); trim(l, " \t") == tag])
+	head := array.concat(array.slice(words, 0, e), [lines_of(words[e])[0]])
+	out := concat("", [
+		replace(concat(" ", head), "<<", " "),
+		"\n",
+		concat("\n", array.slice(close_lines, li + 1, count(close_lines))),
+		" ",
+		concat(" ", array.slice(words, c + 1, count(words))),
+	])
+}
+
+heredoc_cut_or_same(text) := out if {
+	out := heredoc_cut(text)
+} else := text
+
+unheredoc_command := heredoc_cut_or_same(heredoc_cut_or_same(heredoc_cut_or_same(command)))
+
+token_lists0 := {tokens(unheredoc_command)}
 
 token_lists1 := nested_token_lists(token_lists0)
 
