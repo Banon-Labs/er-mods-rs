@@ -1593,6 +1593,11 @@ opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$re
 python3 "$repo_root/scripts/test-push-authorization-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_any_push.rego" "$repo_root/.cupcake/tests/git_block_any_push_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/transcript_write_guard.rego" "$repo_root/.cupcake/tests/transcript_write_guard_test.rego"
+# The commit and lint gates (user directive 2026-10-17): no commit without the user's
+# `authorize commit`, and no lint or formatter except between that reply and its commit.
+python3 "$repo_root/scripts/test-commit-authorization-signal.py"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"

@@ -569,7 +569,8 @@ Handling rule:
 - **Default: parallel background subagent.** If the issue does NOT interfere with your current task,
   dispatch a background subagent to fix it (make the gate green, remove the violation) while you keep
   working on your original objective. It is a real deliverable, not a footnote -- see it through to a
-  clean state and a commit, same as any other work.
+  clean state, left uncommitted for the main session to commit after the user's `authorize commit`
+  (a subagent never commits or lints; see "Commits And Lints Wait For The User's `authorize commit`").
 - **Blocker: do it first.** If the issue interferes with or blocks your current task (a gate you must
   pass to commit/validate, a broken dependency you need, a failure that makes your own proof
   untrustworthy), it is a blocker: fix it BEFORE the original task, not in parallel.
@@ -586,30 +587,67 @@ The pre-authorization is standing, so you do not need to ask before fixing a pre
 fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
 main work.
 
-## Commit Timing (user directive 2026-07-17, REVISED 2026-07-21)
+## Commits And Lints Wait For The User's `authorize commit` (user directive 2026-10-17)
 
-Commit **after a runtime validation run COMPLETES, and only if the changes are worth keeping** -- i.e.
-the completed run showed the change is good/useful, or the tree state is genuinely worth preserving as
-evidence. Do **NOT** commit before or during a run (do not commit a fix just because a run was launched),
-and do **NOT** commit changes a completed run showed are not worth keeping (revert or fix them instead).
-Otherwise do NOT commit and do NOT ask about committing -- keep working; a completed, worth-keeping run
-is the commit trigger. (Superseded the old "commit immediately after launching, pass or fail" behavior,
-which committed premature/unvalidated fixes.)
+The user's words: "Lets have a subagent policy to never run lints or formatting or perform
+formatting ourselves until we are just about to commit, and only commit when authorized instead of
+what your agent just did which is tank my FPS with a commit to a worktree when the files wouldn't
+be lost anyway because we are in a virgin worktree in a persistent drive."
 
-Same discipline for **`bd remember`**: record a memory **after** a step, and **only if the finding is
-worth keeping** (validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or
-run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
+What happened: a subagent committed in a gitignored worktree on a persistent drive. The commit
+preserved nothing the worktree was not already keeping, and its hooks ran the check suite while the
+user was playing a game.
+
+The rule:
+
+- **A subagent never commits and never runs a lint or formatter.** Not in the main tree, not in a
+  worktree, not with `git -C`, whatever the conversation says. It leaves its changes uncommitted
+  where it made them and reports the paths; uncommitted files in a worktree on this drive are not
+  at risk.
+- **The main session commits only after the user's own reply `authorize commit`** -- that message
+  and nothing else, typed by the user. One reply pays for one commit. Ask for it when the work is
+  ready to keep; do not commit on a timer, after a runtime run, or to "preserve" anything.
+- **Lints and formatters run only between that reply and the commit it pays for**: `cargo fmt`,
+  `cargo clippy`, `rustfmt`, `shellcheck`, `ruff`, `black`, `prettier` and their kin,
+  `scripts/check-comment-caps.py` (with or without `--fix`), `scripts/check-no-lossy-utf8.py`, and any
+  `--fix` sweep. Never format files by hand to satisfy a formatter either. Tests are not lints and
+  stay allowed at any time: `cargo test -p <crate>`, `opa test`, a gate's `--selftest`, and running
+  a script to produce data. `scripts/check.sh` stays refused outright (`no_whole_check_sh`).
+- **The commit is one plain command**: `git [-C <dir>] commit -F <file>` or
+  `git commit -m '<single-quoted message>'`, with nothing chained to it -- no `git add -A &&`, no
+  heredoc, no `$(...)`. Stage in a separate command first.
+
+Enforced by `.cupcake/policies/claude/git_commit_authorization.rego` and
+`.cupcake/policies/claude/no_lint_before_commit.rego` over the `commit_authorization` signal
+(`scripts/cupcake_commit_authorization.py`, tested by `scripts/test-commit-authorization-signal.py`).
+The signal reads the session transcript the same way the push signal does, shares its reader, and
+records spent authorizations in the gitignored `.cupcake/state/commit-authorizations.jsonl`. When
+either guard denies, it names the phrase to ask for.
+
+This replaces the 2026-07-17 / 2026-07-21 "Commit Timing" rule, which told agents to commit after a
+completed runtime run without asking. A completed run is now a reason to ask for `authorize commit`,
+not a reason to commit.
+
+For **`bd remember`**: record a memory **after** a step, and **only if the finding is worth keeping**
+(validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or run. The bd
+memory commit-immediately-after-runtime-validation-2026-07-17 describes the replaced commit rule and
+no longer governs commits.
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is complete when it is committed, gated and reported; it does not have to be pushed. Never push to `main`.
+**When ending a work session**, you MUST complete ALL steps below. Work is complete when it is tested and reported, and committed only if the user replied `authorize commit`; it does not have to be pushed. Never push to `main`.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
+2. **Run tests and builds** (if code changed) - Lints and formatters wait for step 4
 3. **Update issue status** - Close finished work, update in-progress items
-4. **Commit, and leave the branch local unless the user authorizes the push.** The agent does not
+4. **Commit only on the user's `authorize commit`, and leave the branch local unless the user
+   authorizes the push.** A subagent never commits and never lints. The main session asks the user
+   for `authorize commit` when the work is ready to keep; after that reply, and only then, it runs
+   the lints and formatters the change touches, then makes the one plain commit the reply pays for
+   (see "Commits And Lints Wait For The User's `authorize commit`"). Without that reply, leave the
+   changes uncommitted and say which files they are. The agent does not
    push on its own initiative -- user directive 2026-09-17: *"I stopped the monitor, because quite
    frankly you should NEVER be pushing."* Not a tag, not a deletion, not main, not a force, not
    through a `Monitor`, and not because a CI-state hook reports a failing job. A CI report is
@@ -652,13 +690,17 @@ run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
    `last_assistant_authorize_without_run_stamp` signal halts a closing message that asks for
    `authorize <sha>` while that check exits 1, and allows when it cannot measure.
 5. **Clean up** - Clear stashes
-6. **Verify** - All changes committed, and the unpushed branches named
+6. **Verify** - Uncommitted changes named by path, any authorized commit made, and the unpushed
+   branches named
 7. **Hand off** - Provide context for next session / review path
 
 **CRITICAL RULES:**
+- Never commit without the user's exact `authorize commit` reply, one commit per reply; never run a
+  lint or formatter outside that window; a subagent does neither
 - Never push without the user's exact `authorize <sha>` reply for that branch's tip, one push per
   reply, and never ask a peer session or a subagent to push on your behalf
-- Work is complete when it is committed, gated and reported; publishing it is the user's call
+- Work is complete when it is tested and reported; committing waits for `authorize commit`, and
+  publishing it is the user's call
 - Naming an unpushed branch is not the banned "ready to push when you are" hedge -- the hedge
   offers work you could do, and this is work you may not do without their reply. State it as a
   fact, give the `authorize <full sha>` phrase for the branch, and move on
@@ -755,17 +797,19 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 # exists to prevent (bd subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02,
 # bd never-tell-a-worktree-subagent-to-run-check-sh-2026-09-10).
 #
-# Give a worktree subagent the SCOPED list instead, naming its crates and the
-# gates its edit actually touches:
+# A subagent never lints, formats or commits (user directive 2026-10-17; refused by
+# `no_lint_before_commit` and `git_commit_authorization`). Give a worktree subagent
+# tests only, naming its crates and the checks its edit actually touches:
 #   cargo test -p <crate>
-#   cargo clippy -p <crate> --all-targets          # `cargo test` never invokes clippy, and
-#                                                  # the workspace denies warnings
-#   cargo fmt -p <crate> -- --check
-#   python3 scripts/check-comment-caps.py <files it touched>
-#   python3 scripts/check-no-lossy-utf8.py
 #   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
 #   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
 #   python3 scripts/check-stages.py --selftest     # whenever a scripts/*.py gate is added
+#   python3 scripts/check-comment-caps.py --selftest   # selftests are tests, not lints
+# The lints -- `cargo clippy -p <crate> --all-targets` (`cargo test` never invokes clippy,
+# and the workspace denies warnings), `cargo fmt -p <crate> -- --check`,
+# `python3 scripts/check-comment-caps.py <files>`, `python3 scripts/check-no-lossy-utf8.py`
+# -- are the main session's, run only after the user replies `authorize commit` and
+# before the commit that reply pays for.
 # THE MODE MATTERS AS MUCH AS THE NAME. check.sh runs most gates twice -- `--selftest` first,
 # then the gate itself -- and the selftest is the half that proves the gate can still fail.
 # Running only the plain form passes while a gate is broken. Both halves of PR #456's red CI
@@ -865,7 +909,8 @@ no such record, so those scripts will refuse it -- correctly, since nothing prov
     backticks cannot rescue them because the assertion is a substring match. So they are recorded
     in the baseline: deliberate, in the diff, reviewable. Everything else must be at zero -- a
     file with no entry may not have a single shouted word, and a file that drops below its number
-    must record that too, so nothing reads as owing more than it does. Re-sweep with
+    must record that too, so nothing reads as owing more than it does. Re-sweep (main session
+    only, after the user's `authorize commit`) with
     `scripts/check-comment-caps.py --fix <path>` and then read the diff: `--fix` lowercases, and
     a shouted word is occasionally load-bearing and wants a rewritten sentence, a pair of
     backticks, or a baseline entry instead.

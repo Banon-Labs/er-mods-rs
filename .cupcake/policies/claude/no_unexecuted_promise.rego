@@ -57,17 +57,54 @@ halt contains decision if {
 }
 
 reason_for(p) := msg if {
-	msg := concat("", ["You ended the turn on a promise nothing is going to keep: '", p, "'. No tool call executed it, no background task or shell is carrying it, and you did not tell the user the ball is theirs -- so that work evaporates and they have to notice and re-ask. Pick one, now, before stopping: (a) EXECUTE IT in this turn with the tool call that does it; (b) START IT as a background task (a backgrounded Bash or a subagent) so something real is carrying it; or (c) REWRITE the sentence to say plainly that the user must re-initiate it AND why you cannot -- name the blocker. Deleting the promise and staying silent is not an option: if the work matters, say who does it next."])
+	kind == "BURIED"
+	msg := concat("", [
+		"Your closing message, as the user reads it: ", skeleton(p),
+		" The user reads from the first word and stops when it stops being worth it, so the one sentence they have to act on came after ",
+		format_int(counts.before, 10),
+		" characters of explanation they did not need. A phrase that hands them the next step was there, which is the only reason this is not the plain unkept-promise halt -- but it does not help if the reader never gets to it, and adding a phrase like that in front of the same paragraph is how this shape got through before. Fix the shape, not the wording: make that sentence the FIRST sentence of the message, cut the prose around it to at most one short line of why, and drop any 'and I'll ...' tail if the user's reply is what starts that work anyway.",
+	])
 }
+
+reason_for(p) := msg if {
+	kind == "PROMISE"
+	msg := concat("", [
+		"You ended the turn on a promise nothing is going to keep. Your closing message, as the user reads it: ", skeleton(p),
+		" No tool call executed it, no background task or shell is carrying it, and you did not tell the user the ball is theirs -- so that work evaporates and they have to notice and re-ask. Pick one, now, before stopping: (a) EXECUTE IT in this turn with the tool call that does it; (b) START IT as a background task (a backgrounded Bash or a subagent) so something real is carrying it; or (c) REWRITE it so the user knows they must re-initiate it: make that ask the FIRST sentence of the message and name the blocker -- an ask after a paragraph of explanation halts as BURIED. Deleting the promise and staying silent is not an option: if the work matters, say who does it next.",
+	])
+}
+
+# `<N characters of prose> '<sentence>' <M characters of prose>`, with an empty side left out. This is
+# the user's own rendering of the failure (2026-10-19): the message reduced to the one sentence that
+# mattered and the size of what surrounded it.
+skeleton(p) := concat("", [side(counts.before, "<", "> "), "'", p, "'", side(counts.after, " <", ">")])
+
+side(n, open, close) := "" if n == 0
+
+side(n, open, close) := concat("", [open, format_int(n, 10), " characters of prose", close]) if n > 0
+
+kind := "BURIED" if startswith(raw, "BURIED:")
+
+else := "PROMISE"
+
+# The signal writes `<KIND>:<before>:<after>:<sentence>`. A bare `PROMISE:<sentence>` (an older
+# signal, or a crafted one) still halts, with both counts at zero.
+body := trim_prefix(trim_prefix(raw, "BURIED:"), "PROMISE:")
+
+parts := regex.find_all_string_submatch_n(`^(\d+):(\d+):([\s\S]*)$`, body, 1)
+
+counts := {"before": to_number(parts[0][1]), "after": to_number(parts[0][2])} if {
+	count(parts) == 1
+} else := {"before": 0, "after": 0}
 
 # Parse the tagged signal into the offending clause. Untagged-but-non-empty falls back to the raw
 # value so a bare/crafted signal still halts. Empty -> phrase undefined -> no halt.
 phrase := p if {
-	startswith(raw, "PROMISE:")
-	p := trim(trim_prefix(raw, "PROMISE:"), " \t\r\n")
+	count(parts) == 1
+	p := trim(parts[0][3], " \t\r\n")
 } else := p if {
 	raw != ""
-	p := raw
+	p := trim(body, " \t\r\n")
 }
 
 raw := trim(matched_phrase, " \t\r\n")

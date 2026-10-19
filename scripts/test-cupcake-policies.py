@@ -31,9 +31,43 @@ class PolicyCase:
     # `CUPCAKE_CURRENT_BRANCH_OVERRIDE`. Frozen dataclasses cannot hold a dict as a default, so
     # it arrives as pairs.
     extra_env: tuple[tuple[str, str], ...] = ()
+    # Whether the fixture conversation ends on the user's `authorize commit`. `None` decides from
+    # the command: one that names a commit or a lint gets the authorization, so a case written
+    # about some other guard's reading of a commit message or a `shellcheck` call is still about
+    # that guard. The cases about the commit and lint gates themselves say `False`.
+    commit_authorization: bool | None = None
+    # Text that must not appear in the output: a case denied by one guard can still assert that a
+    # different guard stayed quiet, since cupcake lists every denial it collects.
+    absent_text: str | None = None
 
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
+
+# The commit and lint gates (user directive 2026-10-17) read the conversation, so a case that
+# needs them open gets a real fixture transcript ending on the user's `authorize commit`, and the
+# spends it causes are recorded here rather than in this checkout's `.cupcake/state`.
+_COMMIT_AUTH_DIR = Path(tempfile.mkdtemp(prefix="cupcake-policy-regression-commit-auth-"))
+atexit.register(shutil.rmtree, _COMMIT_AUTH_DIR, True)
+COMMIT_AUTH_STATE = _COMMIT_AUTH_DIR / "commit-authorizations.jsonl"
+COMMIT_AUTH_TRIGGERS = ("commit", "fmt", "clippy", "shellcheck", "ruff", "black", "prettier",
+                        "eslint", "comment-caps", "lossy-utf8", "check.sh", "--fix")
+
+
+def commit_auth_transcript(name: str, tool_name: str, tool_input: dict[str, object]) -> tuple[Path, str]:
+    """A transcript whose last typed prompt is `authorize commit`, ending at this tool call."""
+    tool_use_id = f"toolu_regression_{name}"
+    prompt_uuid, call_uuid = f"{name}-prompt", f"{name}-call"
+    entries = [
+        {"type": "user", "uuid": prompt_uuid, "parentUuid": None, "isSidechain": False,
+         "origin": {"kind": "human"}, "promptSource": "typed",
+         "message": {"role": "user", "content": "authorize commit"}},
+        {"type": "assistant", "uuid": call_uuid, "parentUuid": prompt_uuid, "isSidechain": False,
+         "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": tool_use_id, "name": tool_name, "input": tool_input}]}},
+    ]
+    path = _COMMIT_AUTH_DIR / f"{name}.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    return path, tool_use_id
 
 # Subprocess safety caps. Both were padding -- 60s and 120s guesses that had never been
 # checked against how long the work takes -- and both now sit under the repo's 30s hard cap
@@ -206,9 +240,17 @@ def run_case(case: PolicyCase) -> None:
         "tool_input": tool_input,
         "signals": {"current_branch": "feature/policy-regression\n"},
     }
+    authorize = case.commit_authorization
+    if authorize is None:
+        authorize = any(word in case.command for word in COMMIT_AUTH_TRIGGERS)
+    if authorize:
+        path, tool_use_id = commit_auth_transcript(case.name, case.tool_name, tool_input)
+        event["transcript_path"] = str(path)
+        event["tool_use_id"] = tool_use_id
     if case.extra_event:
         event.update(case.extra_event)
     env = {**os.environ}
+    env["CUPCAKE_COMMIT_AUTHORIZATION_STATE"] = str(COMMIT_AUTH_STATE)
     # CI checks out detached commits, making `git branch --show-current` empty.
     # Policy-regression allow-cases should model a normal feature branch by default, but
     # cases that explicitly set or remove the current_branch signal must control the
@@ -296,6 +338,8 @@ def run_case(case: PolicyCase) -> None:
         )
     if case.expected_text and case.expected_text not in output:
         raise AssertionError(f"{case.name}: missing {case.expected_text!r}\n{output}")
+    if case.absent_text and case.absent_text in output:
+        raise AssertionError(f"{case.name}: unexpected {case.absent_text!r}\n{output}")
 
 
 # Rego unit suites that had a test file and no runner. scripts/check.sh
@@ -703,6 +747,57 @@ def main() -> int:
     run_runtime_evidence_signal_checks()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
+        # Commit and lint gates (user directive 2026-10-17): closed without the user's
+        # `authorize commit`, open with it. scripts/test-commit-authorization-signal.py has the
+        # transcript cases; these pin the wiring through the whole rulebook.
+        PolicyCase(
+            "deny-commit-without-authorization",
+            "git commit -m 'feat: x'",
+            False,
+            "ask the user to reply with exactly: `authorize commit`",
+            commit_authorization=False,
+        ),
+        PolicyCase(
+            "deny-worktree-commit-without-authorization",
+            "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m 'x'",
+            False,
+            "`authorize commit`",
+            commit_authorization=False,
+        ),
+        PolicyCase("allow-commit-with-authorization", "git commit -m 'feat: x'", True),
+        PolicyCase(
+            "deny-chained-commit-with-authorization",
+            "git add -A && git commit -m 'feat: x'",
+            False,
+            "does not commit without",
+        ),
+        PolicyCase(
+            "deny-cargo-fmt-without-authorization",
+            "cargo fmt -p er-quickload",
+            False,
+            "Lints and formatters run only when the user is about to commit",
+            commit_authorization=False,
+        ),
+        PolicyCase(
+            "deny-comment-caps-fix-without-authorization",
+            "python3 scripts/check-comment-caps.py --fix crates/er-quickload/src/lib.rs",
+            False,
+            "Lints and formatters run only when the user is about to commit",
+            commit_authorization=False,
+        ),
+        PolicyCase("allow-cargo-fmt-with-authorization", "cargo fmt -p er-quickload -- --check", True),
+        PolicyCase(
+            "allow-comment-caps-selftest-without-authorization",
+            "python3 scripts/check-comment-caps.py --selftest",
+            True,
+            commit_authorization=False,
+        ),
+        PolicyCase(
+            "allow-cargo-test-without-authorization",
+            "cargo test -p er-soulsformats",
+            True,
+            commit_authorization=False,
+        ),
         # no_grep_for_build_errors through the live engine: a grep over `ls` output in another
         # statement from a script named er-builds-* is not a build adjudicated by grep (2026-10-01),
         # while the cargo-grep that created the policy still is.
@@ -1628,15 +1723,22 @@ def main() -> int:
         # guard by writing the message to a file). The live engine collapses
         # heredoc newlines to spaces, so these must run end-to-end here, not
         # only under `opa test`.
+        #
+        # Since 2026-10-17 a heredoc or substituted commit message can never be
+        # authorized (the commit gate admits one plain `git commit` only), so the
+        # heredoc cases below are denied by that gate, and assert instead that
+        # the pgrep guard adds no denial of its own.
         PolicyCase(
-            "allow-git-commit-heredoc-message-mentioning-pgrep",
+            "commit-gate-denies-heredoc-message-mentioning-pgrep-pgrep-guard-quiet",
             "git commit -F - <<'EOF'\n"
             "preflight: stop probing the process table by name\n\n"
             "The preflight called pgrep -x steam directly, which false-negatives\n"
             "on this WSL2 + Windows-Steam box. It now sources\n"
             "scripts/steam-running.sh and calls steam_running instead.\n"
             "EOF",
-            True,
+            False,
+            "does not commit without",
+            absent_text="blocked a manual pgrep",
         ),
         PolicyCase(
             "allow-git-commit-dash-m-message-mentioning-pgrep",
@@ -1645,12 +1747,14 @@ def main() -> int:
             True,
         ),
         PolicyCase(
-            "allow-git-commit-cat-heredoc-substitution-mentioning-pgrep",
+            "commit-gate-denies-cat-heredoc-substitution-mentioning-pgrep-pgrep-guard-quiet",
             "git add -A && git commit -m \"$(cat <<'EOF'\n"
             "guard: stop calling pgrep -x steam in the runtime preflight\n\n"
             "scripts/steam-running.sh is the sanctioned WSL-aware check.\n"
             'EOF\n)"',
-            True,
+            False,
+            "does not commit without",
+            absent_text="blocked a manual pgrep",
         ),
         # ... and the message carve-out must never launder an executing probe.
         PolicyCase(
@@ -1957,19 +2061,25 @@ def main() -> int:
         # git commit message text may mention ersc.dll (2026-07-07 false
         # positive: a quoted -m body mentioning ersc.dll plus prose marker
         # substrings like "stage"/"target" was denied by the raw fallback).
+        # The `git add -A &&` and heredoc forms can no longer be authorized
+        # (2026-10-17 commit gate), so the first is the plain commit it would be
+        # today and the second asserts the bundling guard stays quiet beside the
+        # commit gate's denial.
         PolicyCase(
             "allow-git-commit-message-mentioning-ersc-dll",
-            'git add -A && git commit -m "loader precedence: a resident'
+            'git commit -am "loader precedence: a resident'
             ' ersc.dll wins over the env hint; never stage it into target/"',
             True,
         ),
         PolicyCase(
-            "allow-git-commit-heredoc-message-mentioning-ersc-dll",
+            "commit-gate-denies-heredoc-message-mentioning-ersc-dll-bundling-guard-quiet",
             'git add -A && git commit -m "$(cat <<\'EOF\'\n'
             "guard: document that a resident ersc.dll wins over the env hint\n\n"
             "The bundling rule still blocks staging ersc.dll into release artifacts.\n"
             'EOF\n)"',
-            True,
+            False,
+            "does not commit without",
+            absent_text="Seamless Co-op DLL bundling",
         ),
         PolicyCase(
             "deny-cp-seamless-ersc-dll-to-dist",
@@ -2732,8 +2842,16 @@ def main() -> int:
     max_workers = min(12, permitted, max(1, len(cases)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(run_case, case): case for case in cases}
+        # Every failing case is reported, not only the first to finish: a rule change that moves
+        # several verdicts at once should be read as one list.
+        failures = []
         for future in as_completed(futures):
-            future.result()
+            try:
+                future.result()
+            except AssertionError as exc:
+                failures.append(str(exc))
+    if failures:
+        raise AssertionError(f"{len(failures)} policy case(s) failed:\n\n" + "\n\n".join(sorted(failures)))
     print("cupcake policy regression tests passed")
     return 0
 

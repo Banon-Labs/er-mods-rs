@@ -314,7 +314,7 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
     if not holders:
         raise Refused(f"this tool call was still not in the transcript {LOCATE_DEADLINE_SECONDS:g} s "
                       "after the check began, so its conversation cannot be read; run the same "
-                      "push again")
+                      "command again")
     # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
     # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
     # were taken as the start it would carry its own forged parent onto the chain.
