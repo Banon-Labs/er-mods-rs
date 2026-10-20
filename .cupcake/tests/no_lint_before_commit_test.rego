@@ -135,3 +135,48 @@ test_non_lint_commands_are_untouched if {
 		allows_unauthorized(command)
 	}
 }
+
+# A lint script named as an operand is not a lint run (2026-10-19): `git apply
+# --exclude=scripts/check.sh <patch>` was refused as if it ran the suite.
+operand_lint_paths := [
+	"git apply --exclude=scripts/check.sh /tmp/x.patch",
+	"cd /home/banon/projects/er-mods-rs && git apply --exclude=scripts/check.sh /tmp/x.patch",
+	"git -C /x apply --exclude scripts/check.sh --exclude scripts/check-comment-caps.py p.patch",
+	"git add scripts/check.sh scripts/act-check.sh",
+	"git diff -- scripts/check-no-lossy-utf8.py",
+	"git show HEAD:scripts/check.sh",
+	"cat scripts/check.sh",
+	"sed -n 1,40p scripts/check-comment-caps.py",
+	"python3 -c \"print(open('scripts/check.sh').read())\"",
+	# The command actually refused, verbatim: the assignment is the first word of its
+	# statement and its last path part is `check.sh`.
+	`cd /home/banon/projects/er-mods-rs; P=/tmp/x/run-stamp.patch; X="--exclude=scripts/check.sh --exclude=docs/ci-gate-portability.tsv --exclude=AGENTS.md"; git apply --check $X "$P" && git apply $X "$P" && echo applied`,
+	"X=scripts/check-comment-caps.py; git add $X",
+	"EXCLUDES='--exclude=a --exclude=scripts/check.sh'; git apply $EXCLUDES p.patch",
+]
+
+test_lint_script_named_as_an_operand_is_untouched if {
+	every command in operand_lint_paths {
+		allows_unauthorized(command)
+	}
+}
+
+executing_lint_paths := [
+	"./scripts/check.sh",
+	"exec bash scripts/check.sh",
+	"source scripts/check.sh",
+	". scripts/check.sh",
+	"git apply --exclude=scripts/check.sh p.patch && bash scripts/check.sh",
+	"git apply p.patch; ./scripts/check.sh --stage lint",
+	"git status | bash scripts/act-check.sh",
+	"git status || python3 scripts/check-comment-caps.py x.rs",
+	"git status\nbash scripts/check.sh",
+	"P=/tmp/x.patch bash scripts/check.sh",
+	"OUT=/tmp/x cargo fmt -p x",
+]
+
+test_executing_lint_script_denies if {
+	every command in executing_lint_paths {
+		denies(command)
+	}
+}

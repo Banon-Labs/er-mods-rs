@@ -124,6 +124,10 @@ halt contains decision if {
 	some path in guard_layer_paths
 	segment_names_guard_path(segment, path)
 
+	# A throwaway copy of the guard tree is not the guard layer. See
+	# segment_names_only_scratch_copies below for what counts as one.
+	not segment_names_only_scratch_copies(segment, path)
+
 	decision := {
 		"rule_id": "CLAUDE-GUARD-LAYER-DESTRUCTIVE",
 		"reason": concat("", [
@@ -188,4 +192,110 @@ segment_names_guard_path(segment, path) if {
 		`([[:space:]"')/:;,&*]|$)`,
 	])
 	regex.match(pattern, segment)
+}
+
+# Scratch copies of the guard tree (2026-10-19). The rule used to deny any path
+# that merely contained `.cupcake` as a component, so deleting a throwaway copy
+# was refused as if it were the live layer -- measured on
+# `rm -rf /tmp/claude-1000/<session>/scratchpad/p2/.cupcake` and on
+# `rm -rf <repo>/target/gh-title-scratch`, a test tree holding one. Copying the
+# tree aside is how guard changes are developed safely (a compile error in the
+# live tree locks every session out), so the copies have to be removable.
+#
+# A segment is exempt only when every token that names the guard path is a
+# scratch copy. One live token anywhere in the segment still denies, so
+# `mv /tmp/x/.cupcake .cupcake` -- replacing the live layer from a copy -- is
+# caught by its second operand. The reading fails closed: a segment whose
+# regex match finds no token here is not exempt.
+#
+# A token is a scratch copy when, read as a path:
+#   * it starts at `/tmp/` or `/var/tmp/` (the session scratchpad lives under
+#     `/tmp/claude-<uid>/`), or
+#   * a `target/` directory comes before its first guard-path component:
+#     `target/...`, `./target/...`, `<abs>/target/...`, or the repo's own
+#     `$CLAUDE_PROJECT_DIR/target/...`;
+#   * and it holds nothing that could walk back out: no `..`, and no variable,
+#     substitution, brace expansion or `~` past the one leading
+#     `$CLAUDE_PROJECT_DIR` allowed above. `target/../.cupcake` denies.
+#
+# Everything else still denies: a bare or `./` relative spelling, the absolute
+# repo root, `$CLAUDE_PROJECT_DIR/.cupcake`, `~/.cupcake`, `$HOME/.cupcake`, and
+# any worktree's `.cupcake` (`.worktrees/x/.cupcake`,
+# `.claude/worktrees/agent-x/.cupcake`), because a worktree's guard tree is
+# live for a session running in it.
+#
+# Known gaps, stated rather than hidden: a symlink under `/tmp/` or `target/`
+# that points at the live tree is not visible to a policy engine, and a
+# relative `.cupcake` deleted after `cd /tmp/...` is still denied (a false
+# positive, the safe direction).
+#
+# No new regex. Tokens are cut with strings.replace_n/split and read with
+# contains/indexof/substring, every one of them proven in the wasm runtime by
+# scripts/check-cupcake-wasm-builtins.py; a new regex.match call site is what
+# crashed the wasm regex cache before (bd
+# cupcake-wasm-regex-cache-reuse-oob-2026-09-16).
+segment_names_only_scratch_copies(segment, path) if {
+	tokens := [t | some t in guard_path_tokens(segment, path)]
+	count(tokens) > 0
+	every t in tokens {
+		scratch_copy_token(t, path)
+	}
+}
+
+# Separators that end a path operand. `(`, `)`, `$`, backtick and braces are
+# deliberately kept inside the token so scratch_copy_token can refuse them.
+token_separators := {
+	"\"": " ", "'": " ", "=": " ", ":": " ", ";": " ", ",": " ",
+	"&": " ", "|": " ", "<": " ", ">": " ", "\t": " ", "\n": " ", "\r": " ",
+}
+
+guard_path_tokens(segment, path) := {t |
+	some t in split(strings.replace_n(token_separators, segment), " ")
+	token_names_guard_path(t, path)
+}
+
+# The token with every component boundary spelled `/` and a `/` at both ends,
+# so `/<path>/` can be found with a plain substring test. `(`, `)` and `*` are
+# the other boundaries segment_names_guard_path accepts.
+slashed_token(token) := concat("", [
+	"/",
+	strings.replace_n({"(": "/", ")": "/", "*": "/"}, token),
+	"/",
+])
+
+slashed_path(path) := concat("", ["/", path, "/"])
+
+token_names_guard_path(token, path) if {
+	contains(slashed_token(token), slashed_path(path))
+}
+
+project_dir_prefixes := ["$claude_project_dir/", "${claude_project_dir}/"]
+
+# The token with the one allowed leading variable resolved to a placeholder
+# root, so the rest of the reading can treat it as an absolute path.
+resolved_token(token) := concat("", ["/claude-project-dir/", substring(token, count(prefix), -1)]) if {
+	some prefix in project_dir_prefixes
+	startswith(token, prefix)
+} else := token
+
+scratch_unsafe_fragments := ["..", "$", "`", "{", "}", "(", ")", "~", "\\"]
+
+scratch_copy_token(token, path) if {
+	resolved := resolved_token(token)
+	every fragment in scratch_unsafe_fragments {
+		not contains(resolved, fragment)
+	}
+	scratch_root(resolved, path)
+}
+
+scratch_root(resolved, _) if startswith(resolved, "/tmp/")
+
+scratch_root(resolved, _) if startswith(resolved, "/var/tmp/")
+
+# `target/` must come before the first guard-path component, so a `target`
+# directory inside the live tree (`.cupcake/target/.cupcake`) is not a root.
+scratch_root(resolved, path) if {
+	slashed := slashed_token(resolved)
+	before := substring(slashed, 0, indexof(slashed, slashed_path(path)))
+	contains(concat("", [before, "/"]), "/target/")
 }

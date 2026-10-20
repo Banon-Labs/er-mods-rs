@@ -28,7 +28,6 @@
 
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 
-pub(crate) mod null_main_player;
 pub(crate) mod null_param_repository;
 pub(crate) mod null_special_effect;
 
@@ -72,7 +71,6 @@ pub(crate) static REGISTRY: &[Guard] = &[
     null_special_effect::HAS_SPECIAL_EFFECT_ID_GUARD,
     null_special_effect::APPLY_GUARD,
     null_param_repository::LOAD_BALANCER_PARAM_GUARD,
-    null_main_player::GIVE_ITEMS_GUARD,
 ];
 
 /// Define a naked stub that returns early when the first integer argument (`rcx` under Win64) is
