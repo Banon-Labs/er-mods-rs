@@ -377,11 +377,6 @@ if [[ $need_gate_tree -eq 1 ]]; then
 	mkdir -p "$(dirname -- "$gate_tree")"
 	if command -v flock >/dev/null 2>&1; then
 		exec 8>"$gate_tree.lock"
-		# Queue behind another push gating in the same tree, as check.sh queues on its own lock.
-		if ! flock -n 8; then
-			printf 'pre-push: waiting for the push already gating in %s.\n' "$gate_tree" >&2
-			flock 8 || true
-		fi
 		if ! flock -n 8; then
 			printf 'pre-push: REFUSED -- another push is already gating a commit in %s.\n' "$gate_tree" >&2
 			printf '  Wait for that push and read its result; this one would re-pin the same tree\n' >&2
