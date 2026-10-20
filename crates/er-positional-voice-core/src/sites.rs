@@ -33,6 +33,12 @@ pub struct Site {
     pub bytes: [u8; 8],
     /// First eight bytes at the carried offset on 2.7.2.0.
     pub bytes_1172: [u8; 8],
+    /// How many of the eight bytes identify the site. An Arxan stub entry is a five-byte
+    /// `jmp rel32`; the bytes after an unconditional jump are filler, and on 2.7.2.0 the running
+    /// process has different filler there than the de-Arxan'd image (`GetPositioningInfo`: live
+    /// `c8 aa ce`, image `48 8d 65`, the `jmp` itself identical). The `jmp` names its target, so it
+    /// is the whole identity.
+    pub len: usize,
 }
 
 impl Site {
@@ -43,6 +49,11 @@ impl Site {
             Build::V1172 => self.bytes_1172,
         }
     }
+
+    /// Whether `got` is this site on `build`, comparing only the identifying bytes.
+    pub fn matches(&self, build: Build, got: &[u8; 8]) -> bool {
+        got[..self.len] == self.expected(build)[..self.len]
+    }
 }
 
 const fn site(name: &'static str, rva: usize, bytes: [u8; 8]) -> Site {
@@ -51,6 +62,7 @@ const fn site(name: &'static str, rva: usize, bytes: [u8; 8]) -> Site {
         rva,
         bytes,
         bytes_1172: bytes,
+        len: 8,
     }
 }
 
@@ -61,6 +73,24 @@ const fn site_moved(name: &'static str, rva: usize, bytes: [u8; 8], bytes_1172: 
         rva,
         bytes,
         bytes_1172,
+        len: 8,
+    }
+}
+
+/// An Arxan stub entry: compared on its five-byte `jmp rel32` only (see [`Site::len`]).
+const fn site_arxan_jmp(
+    name: &'static str,
+    rva: usize,
+    bytes: [u8; 8],
+    bytes_1172: [u8; 8],
+) -> Site {
+    assert!(bytes[0] == 0xE9 && bytes_1172[0] == 0xE9);
+    Site {
+        name,
+        rva,
+        bytes,
+        bytes_1172,
+        len: 5,
     }
 }
 
@@ -170,25 +200,25 @@ pub const SITES: [Site; 18] = [
         MO_AUDIO_INPUT_STOP,
         [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B],
     ),
-    site_moved(
+    site_arxan_jmp(
         "AK LoadBankMemoryCopy",
         AK_LOAD_BANK_MEMORY_COPY,
         [0xE9, 0x60, 0xF5, 0xB9, 0xFF, 0xF3, 0x44, 0x0F],
         [0xE9, 0x77, 0x36, 0x19, 0xFE, 0x48, 0x8B, 0x8A],
     ),
-    site_moved(
+    site_arxan_jmp(
         "AK GetEventIDFromPlayingID",
         AK_GET_EVENT_ID_FROM_PLAYING_ID,
         [0xE9, 0x80, 0x43, 0x23, 0xFE, 0x90, 0x2C, 0xE9],
         [0xE9, 0xC4, 0xFA, 0x8A, 0xFE, 0xCC, 0x0F, 0xB7],
     ),
-    site_moved(
+    site_arxan_jmp(
         "AK GetPositioningInfo",
         AK_GET_POSITIONING_INFO,
         [0xE9, 0x85, 0xB5, 0xA1, 0xFE, 0x48, 0x83, 0xC4],
         [0xE9, 0x0F, 0xDC, 0x98, 0xFE, 0x48, 0x8D, 0x65],
     ),
-    site_moved(
+    site_arxan_jmp(
         "AK UnloadBank",
         AK_UNLOAD_BANK,
         [0xE9, 0x0A, 0xCC, 0x9F, 0xFE, 0x4C, 0x8B, 0x4C],
@@ -210,7 +240,7 @@ pub fn first_mismatch(
 ) -> Option<(&'static Site, Option<[u8; 8]>)> {
     SITES.iter().find_map(|s| {
         let got = read(s.rva);
-        (got != Some(s.expected(build))).then_some((s, got))
+        (!got.is_some_and(|g| s.matches(build, &g))).then_some((s, got))
     })
 }
 
@@ -225,6 +255,36 @@ mod tests {
                 .find(|s| s.rva == rva)
                 .map(|s| s.expected(build))
         }
+    }
+
+    /// The live 2.7.2.0 process has `e9 0f dc 98 fe c8 aa ce` at `GetPositioningInfo`: the
+    /// image's `jmp` and different filler after it. That is the same stub entry.
+    #[test]
+    fn an_arxan_stub_matches_on_its_jmp_alone() {
+        let live = [0xE9, 0x0F, 0xDC, 0x98, 0xFE, 0xC8, 0xAA, 0xCE];
+        let mut real = image(Build::V1172);
+        assert!(
+            first_mismatch(Build::V1172, |rva| if rva == AK_GET_POSITIONING_INFO {
+                Some(live)
+            } else {
+                real(rva)
+            })
+            .is_none()
+        );
+        // A different jump target is a different stub.
+        let mut real = image(Build::V1172);
+        let other = [0xE9, 0x10, 0xDC, 0x98, 0xFE, 0x48, 0x8D, 0x65];
+        assert_eq!(
+            first_mismatch(Build::V1172, |rva| if rva == AK_GET_POSITIONING_INFO {
+                Some(other)
+            } else {
+                real(rva)
+            })
+            .unwrap()
+            .0
+            .rva,
+            AK_GET_POSITIONING_INFO
+        );
     }
 
     #[test]

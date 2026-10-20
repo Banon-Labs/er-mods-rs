@@ -41,8 +41,40 @@ use crate::possess::layout::FILE_VERSION_1170;
 
 /// `WorldChrManImp`.
 pub(crate) mod world_chr_man {
-    /// `WorldChrManImp.chrCam`. Cross-checked against `offset_of!(WorldChrMan, chr_cam)`.
+    use er_game_base::game_build::{
+        FileVersion, MAPPED_FILE_VERSION, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172,
+        SUPPORTED_FILE_VERSION,
+    };
+
+    /// `WorldChrManImp.chrCam` on 1.16.2, 1.17.0 and 1.17.1. Cross-checked against
+    /// `offset_of!(WorldChrMan, chr_cam)`, which models this layout.
     pub(crate) const CHR_CAM: usize = 0x1ece0;
+
+    /// `WorldChrManImp.chrCam` on 2.7.2.0, where it is `+0x10` further on.
+    ///
+    /// 2.7.2.0 inserted two qwords at `+0x1e5f0` (the new spEffect sync queue and its partner
+    /// object), so every member from there on moved `+0x10`. Measured in both de-Arxan'd images:
+    /// the `WorldChrManImp` allocation in `_Common_Initialize` went `mov ecx,0x1f3e0` (1.17.1
+    /// `0x140aeedd2`) to `mov ecx,0x1f3f0` (2.7.2.0 `0x140aef292`), and the 92-byte chrCam reader
+    /// this module's doc cites loads `[rax+0x1ece0]` at 1.17.1 `0x1404a71ae` and `[rax+0x1ecf0]`
+    /// at 2.7.2.0 `0x1404a728e`. The fromsoftware-rs `WorldChrMan.chr_cam` field still sits at the
+    /// old offset, so on 2.7.2.0 the typed field must not be read.
+    pub(crate) const CHR_CAM_1172: usize = 0x1ecf0;
+
+    /// `chrCam` for `version`, or `None` on a build nobody measured.
+    #[must_use]
+    pub(crate) fn chr_cam(version: FileVersion) -> Option<usize> {
+        match version {
+            v if v == SUPPORTED_FILE_VERSION
+                || v == MAPPED_FILE_VERSION
+                || v == MAPPED_FILE_VERSION_1171 =>
+            {
+                Some(CHR_CAM)
+            }
+            v if v == MAPPED_FILE_VERSION_1172 => Some(CHR_CAM_1172),
+            _ => None,
+        }
+    }
 }
 
 /// `ChrCam`, the object `WorldChrMan.chrCam` points at.
@@ -157,9 +189,13 @@ pub(crate) struct Offsets {
 /// The measured offsets, or `None`.
 #[must_use]
 pub(crate) fn offsets(version: Option<FileVersion>) -> Option<Offsets> {
-    let measured = matches!(version?, v if v == SUPPORTED_FILE_VERSION || v == FILE_VERSION_1170);
-    measured.then_some(Offsets {
-        chr_cam: world_chr_man::CHR_CAM,
+    let version = version?;
+    let measured = version == SUPPORTED_FILE_VERSION || version == FILE_VERSION_1170;
+    if !measured {
+        return None;
+    }
+    Some(Offsets {
+        chr_cam: world_chr_man::chr_cam(version)?,
         ex_follow_cam: chr_cam::EX_FOLLOW_CAM,
         lock_cam_param_override: chr_ex_follow_cam::LOCK_CAM_PARAM_OVERRIDE,
         resolved_lock_cam_param: chr_ex_follow_cam::RESOLVED_LOCK_CAM_PARAM,
@@ -194,6 +230,36 @@ mod tests {
         );
         // The host, where there is no game image at all.
         assert_eq!(offsets(None), None);
+    }
+
+    /// `chrCam` moved `+0x10` on 2.7.2.0 and nowhere else; an unmeasured build has no answer.
+    #[test]
+    fn chr_cam_moves_on_1172_only() {
+        use er_game_base::game_build::{
+            MAPPED_FILE_VERSION, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172,
+        };
+        assert_eq!(
+            world_chr_man::chr_cam(SUPPORTED_FILE_VERSION),
+            Some(0x1ece0)
+        );
+        assert_eq!(world_chr_man::chr_cam(MAPPED_FILE_VERSION), Some(0x1ece0));
+        assert_eq!(
+            world_chr_man::chr_cam(MAPPED_FILE_VERSION_1171),
+            Some(0x1ece0)
+        );
+        assert_eq!(
+            world_chr_man::chr_cam(MAPPED_FILE_VERSION_1172),
+            Some(0x1ecf0)
+        );
+        assert_eq!(
+            world_chr_man::chr_cam(FileVersion {
+                major: 2,
+                minor: 8,
+                build: 0,
+                revision: 0,
+            }),
+            None
+        );
     }
 
     /// The override slot and the mirror are adjacent `i32`s and must not be confused: writing the
