@@ -197,13 +197,42 @@ def _clip_ref(row):
     return int(cat), int(anim)
 
 
+def animated_category(w, anim):
+    """The TAE category the right hand plays `anim` from, by the EXE's own rule, or None.
+
+    `FUN_1403f1d40` (`VERIFIED` 1.16.2, unmoved in 1.17.1) tries `spAtkcategory`, then
+    `wepmotionCategory`, then for the right hand `a023`, and takes the first for which
+    `FUN_1403c4b80` holds: the anim's `HvkAnimTaeBinding` has a non-null `hkaAnimationBinding`
+    (+0x8), so a havok clip is bound, not merely a TAE entry present. `motion_category` reads
+    "bound" as "the TAE has an entry", which differs on an empty placeholder entry: a026 (colossal
+    swords) has entries 030080..030091 with no events and no clip (no `a026_0300xx.hkx` in the
+    anibnd, no import), so the EXE falls through to a023's. A clip counts as bound here when its
+    HKX is unpacked, directly, through `ImportsHKX`, or through an import entry
+    (`resolve_events`)."""
+    sp = w.get('spAtkcategory') or 0
+    for cat in ([sp] if sp else []) + [w['wepmotionCategory'], ATK.RIGHT_HAND_FALLBACK_CATEGORY]:
+        if not ATK._bound(cat, anim):
+            continue
+        src_cat, src_anim, _ = _events(cat, anim)
+        if ATK.clip_length(cat, anim) or ATK.clip_length(src_cat, src_anim):
+            return cat
+    return None
+
+
 def substart_lead(w):
     """Frames the right hand's SubStart clip plays before W_AttackRightLight2 (EzState flag 0, else
     the clip's end), the shortest of its four clips (which one plays is picked by SpEffects
-    135-138 from the first clip's TAE, not traced here; the shortest is the optimistic bound)."""
+    135-138 from the first clip's TAE, not traced here; the shortest is the optimistic bound).
+
+    Each clip is read from the category the EXE plays it from (`animated_category`): most weapon
+    categories carry none of the four, so the right hand's a023 fallback plays them. Reading only
+    the weapon's own categories left 200 of the RL 140-160 pool's 312 weapon-grips with no
+    SubStart, so no follow-up after their R2s and movement attacks (`follow_key`)."""
     best = None
     for anim in SUBSTART_ANIMS:
-        cat = ATK.motion_category(w, anim, right_hand_fallback=False)
+        cat = animated_category(w, anim)
+        if cat is None:
+            continue
         _, _, events = _events(cat, anim)
         if events is None:
             continue
@@ -441,17 +470,14 @@ class Model:
             if a is None:
                 continue
             ready = a['cancel_frame'].get('r1')
-            if key.startswith('r1_'):
-                b = rr.get(f'r1_{int(key[3:]) + 1}')
-                lk = b and self.link(a, b, ready, 0.0, 'r1 (4/115)')
-            elif key == 'jump_r1':
-                b = rr.get('r1_2')
-                lk = b and self.link(a, b, ready, 0.0, 'r1 (4/115)')
-            elif key in SUBSTART_OPENERS:
-                b = rr.get('r1_2')
-                lk = b and sub is not None and self.link(a, b, ready, float(sub), 'r1 via SubStart')
-            else:
-                lk = None
+            fk = follow_key(key)
+            lk = None
+            if fk:
+                b = rr.get(fk[0])
+                if fk[1]:
+                    lk = b and sub is not None and self.link(a, b, ready, float(sub), 'r1 via SubStart')
+                else:
+                    lk = b and self.link(a, b, ready, 0.0, 'r1 (4/115)')
             if lk:
                 out.append(lk)
             if key == 'r2_1' and rr.get('r2_2') and rr['r2_2'].get('release_lead_in') is not None:
@@ -460,6 +486,81 @@ class Model:
                 if lk:
                     out.append(lk)
         return out
+
+
+def follow_key(key):
+    """(next slot, via SubStart) of the R1 the HKS plays after attack `key` (no `2h_` prefix),
+    `Model.same_links`' rule: R1 #n -> #n+1 and jump R1 -> R1 #2 direct, the movement attacks and
+    R2s -> R1 #2 through the SubStart clip (`substart_lead`). None for any other attack."""
+    if key.startswith('r1_') and key[3:].isdigit():
+        return f'r1_{int(key[3:]) + 1}', False
+    if key == 'jump_r1':
+        return 'r1_2', False
+    if key in SUBSTART_OPENERS:
+        return 'r1_2', True
+    return None
+
+
+# ------------------------------------------------------------------------------------ stagger
+#
+# A poise break hands the side that broke the other its follow-up (user, 2026-10-19: "being broken
+# should cost what the opponent can do with it"). The victim plays the stagger the breaking hit's
+# damage level picks and can first act at its escape frame (`Model.verdict_side` on a break: the
+# earlier of the DamageCount 1 roll gate and the guard). A follow-up hit lands when it comes before
+# that frame, as a true combo does (`VERDICT_P`: a tie at even odds), and when the victim, pushed by
+# the hit's `knockbackDist`, is still inside its reach (`follow_reaches`, the `reach_check` rule on
+# a straight line). Used by `er-mechanics-ash-interrupt.simulate` for every cast and string, and by
+# `er-mechanics-exchange.follow_up` for the exchange and neutral contests.
+
+
+def break_follow_p(gap, escape):
+    """Landing chance of a follow-up `gap` frames after the breaking hit against a stagger whose
+    escape is `escape` frames: 1 before it, 0.5 on it, 0 after it or with no stagger (None or 0)."""
+    if not escape:
+        return 0.0
+    return VERDICT_P.get('true' if gap < escape else 'tie' if gap == escape else '', 0.0)
+
+
+def follow_reaches(push_m, reach_m, strike_m=2.5):
+    """Whether a victim struck `strike_m` ahead and pushed `push_m` farther is still inside a
+    follow-up of world reach `reach_m` (never taken shorter than the strike distance itself)."""
+    return strike_m + (push_m or 0.0) <= max(strike_m, reach_m or 0.0) + 1e-9
+
+
+#: Stagger counts `Stagger` gives an escape for: the DamageCount gates `FA.reaction` reads (a fourth
+#: break and later all take the fourth's).
+STAGGER_COUNTS = (1, 2, 3, 4)
+
+
+class Stagger:
+    """{AtkParam row: {'level', 'escape', 'escapes', 'push', 'hitstop'}}: the stagger a break by
+    that hit puts a player in and its knockback in metres and hitstop in frames (`Model.link`'s
+    `knockbackDist`, `hitStopTime`). `escape` is `Model.verdict_side`'s on a first break, the
+    earlier of the DamageCount 1 roll gate and the guard; `escapes` the same for each of
+    `STAGGER_COUNTS` (a stagger that restarts on a later break uses the next gate,
+    frame-advantage.md section 5). 0 when the level does not lock him."""
+
+    def __init__(self, regulation=None):
+        self.model = Model(regulation, mirror=None)
+        self._memo = {}
+
+    def __call__(self, atk_row):
+        if atk_row not in self._memo:
+            m = self.model
+            try:
+                level = FA.reaction_level(m.fa, atk_row, True)
+                react = m.react(level)
+            except KeyError:
+                level, react = None, None
+            escapes = []
+            for c in STAGGER_COUNTS:
+                gates = [] if not react or not react['locks'] else [
+                    v for v in (react['roll'].get(c), react['guard']) if v is not None]
+                escapes.append(float(min(gates) + m.delay) if gates else 0.0)
+            knock, stop = m.push.get(atk_row, (0.0, 0.0))
+            self._memo[atk_row] = {'level': level, 'escape': escapes[0], 'escapes': escapes,
+                                   'push': float(knock or 0.0), 'hitstop': round((stop or 0.0) * FPS, 1)}
+        return self._memo[atk_row]
 
 
 # ------------------------------------------------------------------------------------ ranking
@@ -635,26 +736,93 @@ def _roll():
     return _ROLL
 
 
+#: What `_geometry` keeps on disk, and the sources its numbers come from (`er-mechanics-weapon-embed`
+#: `REACH_SOURCES`, the same reach measurement): a change to any of them names a new file.
+GEO_VERSION = 1
+GEO_SOURCES = ('er-mechanics-reach.py', 'er-mechanics-attacks.py', 'er-hkx-pose.py', 'er-param-read.py',
+               'er-tae-event-scan.py')
+_GEO_DISK = {}
+
+
+def _geo_disk():
+    """{'path', 'rows', 'dirty'}: the measured rows of `_geometry` from earlier processes, keyed
+    '<weapon>|<slot>|<anim>', each [contact_centre_m, lunge, half arc, hkx category, hkx anim] or
+    None. Measuring them is about 0.05 s a row and a sweep over every weapon's openers (the
+    gear-synergy board's roll cover) reads some 4800 of them, 2026-10-19."""
+    if not _GEO_DISK:
+        import atexit
+        import hashlib
+        h = hashlib.sha256(str(GEO_VERSION).encode())
+        for name in GEO_SOURCES:
+            h.update(Path(HERE, name).read_bytes())
+        path = CACHE / f'combo-geometry-{h.hexdigest()[:16]}.json'
+        try:
+            rows = json.loads(path.read_text())
+        except (OSError, ValueError):
+            rows = {}
+        _GEO_DISK.update(path=path, rows=rows, dirty=False)
+        atexit.register(_geo_save)
+    return _GEO_DISK
+
+
+def _geo_save():
+    """Write the rows measured in this process, merged over what another process wrote since."""
+    g = _GEO_DISK
+    if not g.get('dirty'):
+        return
+    try:
+        rows = json.loads(g['path'].read_text())
+    except (OSError, ValueError):
+        rows = {}
+    rows.update(g['rows'])
+    try:
+        g['path'].parent.mkdir(parents=True, exist_ok=True)
+        tmp = g['path'].with_suffix(f'.{os.getpid()}.tmp')
+        tmp.write_text(json.dumps(rows))
+        os.replace(tmp, g['path'])
+        g['dirty'] = False
+    except OSError:
+        pass
+
+
 def _geometry(wid, row, rc):
     """(contact_centre_m, lunge to the hit, half effective arc in degrees, clip root motion at a
-    real frame), cached; None when the reach or pose module cannot measure the row."""
+    real frame), cached in the process and on disk (`_geo_disk`); None when the reach or pose
+    module cannot measure the row."""
     key = (wid, row['slot'], row['anim'])
     if key not in _GEO:
         R = reach_module()
         pose = R._pose_module()
-        cat, anim = _clip_ref(row)
+        disk = _geo_disk()
+        dkey = f"{wid}|{row['slot']}|{row['anim']}"
+        if dkey in disk['rows']:
+            rec = disk['rows'][dkey]
+        else:
+            cat, anim = _clip_ref(row)
+            rec, keep = None, True
+            try:
+                r = R.attack_reach(rc, wid, row['slot'], row['label'], row['judge'], anim, 'one', clip=(cat, anim))
+                if pose is not None and r and r.get('contact_centre_m') is not None:
+                    hc, ha = R.hkx_source(cat, anim)
+                    arc = r.get('coverage_arc_eff_deg')
+                    rec = [r['contact_centre_m'], r.get('root_motion_to_hit_m') or 0.0,
+                           180.0 if arc is None else arc / 2.0, hc, ha]
+            except OSError:                       # a file that could not be read this time: not kept
+                keep = False
+            except (KeyError, ValueError, IndexError, TypeError):
+                pass
+            if keep and pose is not None:
+                disk['rows'][dkey] = rec
+                disk['dirty'] = True
         out = None
-        try:
-            r = R.attack_reach(rc, wid, row['slot'], row['label'], row['judge'], anim, 'one', clip=(cat, anim))
-            if pose is not None and r and r.get('contact_centre_m') is not None:
-                hc, ha = R.hkx_source(cat, anim)
+        if rec is not None and pose is not None:
+            hc, ha = rec[3], rec[4]
+            try:
                 pose.root_motion(hc, ha, 0.0)
-                arc = r.get('coverage_arc_eff_deg')
-                out = (r['contact_centre_m'], r.get('root_motion_to_hit_m') or 0.0,
-                       180.0 if arc is None else arc / 2.0,
+                out = (rec[0], rec[1], rec[2],
                        lambda t, hc=hc, ha=ha: -pose.root_motion(hc, ha, max(0.0, t) / FPS)[2])
-        except (KeyError, ValueError, IndexError, TypeError, OSError):
-            out = None
+            except (KeyError, ValueError, IndexError, TypeError, OSError):
+                out = None
         _GEO[key] = out
     return _GEO[key]
 
@@ -1028,8 +1196,30 @@ def selftest():
     check('gap 24 against middle escape 25 is true, 25 tie, 26 roll-out-able',
           [model.verdict_side(fake_a, g, True)['verdict'] for g in (24, 25, 26)],
           ['true', 'tie', 'roll-out-able'], 'rule')
-    # 4. The ranking hook: a colossal sword's one-handed rolling R1 gets the axe's L1 put first.
+    # The stagger helpers the interrupt and exchange models charge a break with.
+    st = Stagger()
+    s = st(run['atk_row'])
+    check('Stagger: the Halberd running R1 breaks into middle, escape 25/10/5/0 on breaks 1-4, '
+          'its verdict_side escape first',
+          (s['level'], s['escapes'], s['escape']), (2, [25.0, 10.0, 5.0, 0.0], 25.0), 'regulation + TAE')
+    check('break_follow_p: 24 / 25 / 26 frames against escape 25 land 1 / 0.5 / 0; no stagger 0',
+          [break_follow_p(g, 25.0) for g in (24, 25, 26)] + [break_follow_p(1, 0.0)], [1.0, 0.5, 0.0, 0.0], 'rule')
+    check('follow_reaches: pushed 0.6 m from 2.5 m, a 3.2 m reach covers him, 3.0 m does not',
+          (follow_reaches(0.6, 3.2), follow_reaches(0.6, 3.0)), (True, False), 'rule')
+    check('follow_key: R1 #n -> #n+1, jump R1 -> R1 #2, run R1 and R2 -> R1 #2 via SubStart, jump R2 none',
+          [follow_key(k) for k in ('r1_3', 'jump_r1', 'run_r1', 'r2_2', 'jump_r2')],
+          [('r1_4', False), ('r1_2', False), ('r1_2', True), ('r1_2', True), None], 'HKS (COMMUNITY)')
+    # SubStart's clips resolve as the EXE resolves them (`animated_category`): a026's empty
+    # 030080..030091 entries have no clip, so a colossal sword plays a023's; a Claymore (a025)
+    # binds 030091 itself and a Halberd (a038) 030081, the rest from a023; a dagger (a020) has none.
     gs = reg.find_weapon('Greatsword')
+    clay, hal_, dag = reg.find_weapon('Claymore'), reg.find_weapon('Halberd'), reg.find_weapon('Dagger')
+    check('SubStart clips: colossal sword and dagger from a023, Claymore 030091 from a025, Halberd 030081 from a038',
+          [[animated_category(reg.weapon[w], a) for a in SUBSTART_ANIMS] for w in (gs, clay, hal_, dag)]
+          + [[substart_lead(reg.weapon[w]) is not None for w in (gs, clay, hal_, dag)]],
+          [[23] * 4, [23, 23, 23, 25], [23, 38, 23, 23], [23] * 4, [True] * 4],
+          'FUN_1403f1d40 / FUN_1403c4b80 + TAE + anibnd')
+    # 4. The ranking hook: a colossal sword's one-handed rolling R1 gets the axe's L1 put first.
     slots = {'roll_r1': {'dmg': 100.0, 'next': 40, 'roll': 40, 'stagger': 1.0, 'combos': []}}
     got = paired_slots(model, gs, axe, slots, lambda row: {'dmg': 50.0, 'next': 22, 'roll': 24})
     c = (got.get('roll_r1', {}).get('combos') or [{}])[0]

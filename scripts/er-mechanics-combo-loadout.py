@@ -43,16 +43,25 @@ After Status, with no landmark before them (`--shields`, `--ranged`, both on wit
    its shield infused against the job's element. With `--parry`, a dagger, fist or other
    non-shield parry tool replaces the melee copy when it answers the corpus's openings better
    (`parry_tool_copy`).
-6. Ranged: one copy per viable pick of `data/ranged-picks.toml` the build wields, with its own
-   skill or its assigned ash (`er-mechanics-shields-ranged.ranged_plan`), and the four equipped
+6. Ranged: one copy per viable ranged weapon the build wields, viable by the measured ranged
+   score (`er-mechanics-shields-ranged.ranged_plan`; `data/ranged-picks.toml` keeps only the
+   user's loadout rules), with its own skill or its assigned ash, and the four equipped
    ammunition names (`ammo`).
 
 Last, the greatbow page (`FALL_CANCEL_NOTE`): a whole page of the ranged plan's greatbow, the one
 the build wields best, inserted at the page boundary nearest the middle of the finished plan.
 
-Equip sets: the cross-class `COMBOS`, right hand 1-3 = the first three copies of the right weapon's
-row, left hand 1-3 = the left weapon's; then, with `--shields`, the first combo's right hand with
-the block shield in left hand 1.
+Equip sets: the `COMBO_SETS` measured pairs (`derive_combos`: the best main hands across classes,
+each in the play mode it scores best in -- two-handed alone, one-handed with an off hand plus any
+measured cross-hand link, powerstance, or a paired weapon two-handed), then one covering set per
+melee weapon the plan holds that no such pair already is the best set of (`cover_sets`), its best
+partner added to the plan when the plan lacks it. Every set's copies sit in one block, each weapon
+beside its partners (`arrange_sets`); the Endure swap is every set's second right hand. With
+`--shields`, the first combo's right hand with the block shield in left hand 1.
+
+`--affinity` (the sweeps' pinned affinity) keeps an off-affinity copy only when its primary damage
+stat is the pinned affinity's (`AffinityRule`); the crit row's weapon is the swept weapon with the
+highest one-handed riposte plus backstab (`rank_crit`) unless `--crit-weapon` names one.
 
 Writes {"slots": [...], "sets": [...], "ammo": {...}} for `planner-ash-loadout-upload.py --plan`.
 """
@@ -60,9 +69,11 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import hashlib
 import html
 import importlib.util
+import inspect
 import json
 import math
 import os
@@ -72,10 +83,16 @@ import time
 import tomllib
 import unicodedata
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 BLACKLIST = HERE.parent / "data" / "ash-blacklist.toml"
 PREFS = HERE.parent / "data" / "ash-preferences.toml"
+#: `--exclude`: what the build may not hold at all, from a JSON file of {"weapons": [...],
+#: "ashes": [...], "ash_affinity": [[ash, affinity], ...]}. `er-weapon-build.py --fight duel`
+#: writes it from the ladder bans (`er-builds-ladder.py`), so a banned weapon or skill is gone
+#: before anything is ranked rather than found in the finished build.
+EXCLUDE = {"weapons": set(), "ashes": set(), "ash_affinity": set(), "rows": []}
 ROW, PAGE = 5, 30
 #: Frames per second of every frame count in a sweep row (TimeAct frames).
 FPS = 30.0
@@ -88,6 +105,9 @@ NORM_RANK = 10
 PAIR_UTILITY = 1
 STATUS_AFFINITIES = ("Blood", "Cold", "Poison")
 STATS = ("str", "dex", "int", "fth", "arc")
+#: `EquipParamWeapon` requirement field per stat key, for `one_handed`.
+REQUIREMENT_FIELDS = {"str": "properStrength", "dex": "properAgility", "int": "properMagic",
+                      "fth": "properFaith", "arc": "properLuck"}
 CORRECT = {"str": "correctStrength", "dex": "correctAgility", "int": "correctMagic", "fth": "correctFaith",
            "arc": "correctLuck"}
 #: A grab page's damaging ash: hyperarmor from this frame or sooner, first hit by this frame.
@@ -177,8 +197,10 @@ CLASS = {1: "Dagger", 3: "Straight Sword", 5: "Greatsword", 7: "Colossal Sword",
          24: "Flail", 25: "Spear", 28: "Great Spear", 29: "Halberd", 31: "Reaper", 35: "Fist",
          37: "Claw", 39: "Whip", 41: "Colossal Weapon", 90: "Thrusting Shield", 92: "Backhand Blade",
          93: "Light Greatsword", 94: "Great Katana", 95: "Beast Claw"}
-COMBOS = [("Greataxe", "Greataxe"), ("Axe", "Halberd"), ("Dagger", "Halberd"),
-          ("Thrusting Sword", "Halberd"), ("Heavy Thrusting Sword", "Halberd"), ("Reaper", "Dagger")]
+#: Equip sets drawn by `derive_combos`, the count the hand-listed class pairs had. The pairs
+#: themselves are measured, not listed (user, 2026-10-18: no hand-listed picks where an objective,
+#: measured score can decide).
+COMBO_SETS = 6
 #: Reach an ash adds beyond the carrier's own R1 #1 (user, 2026-10-09: "Model that next", after
 #: Storm Blade's 18.7 m counted the same on a 2.9 m hatchet as on a 4 m halberd). `reach_w` =
 #: 1 + `REACH_GAIN_K` x max(0, ln(ash reach / weapon R1 #1 world reach)). The logarithm makes each
@@ -218,10 +240,15 @@ AFFINITY_STATUS = {"Blood": "bleed", "Cold": "frost", "Poison": "poison"}
 #: 2026-10-17: "I don't think we need hoarfrost stomp on a build that has more than 50% weapons
 #: with frost"). `drop_redundant_status` replaces each such copy in place.
 OWN_STATUS_SHARE = 0.5
-#: The crit row (`--crit-weapon`): one row of this weapon on the affinity whose riposte plus
-#: backstab, damage and the status the crit's hits build, is highest at the build's stats (user,
-#: 2026-10-17: "we must have a row of misericordes with the best infusion for its crit").
-CRIT_WEAPON = "Misericorde"
+#: The crit row: one row of a weapon on the affinity whose riposte plus backstab, damage and the
+#: status the crit's hits build, is highest at the build's stats (user, 2026-10-17: "we must have a
+#: row of misericordes with the best infusion for its crit"). The weapon is no longer Misericorde
+#: by name but the swept weapon with the highest such crit (`rank_crit`; user, 2026-10-18: no
+#: hand-listed picks where an objective, measured score can decide). `--crit-weapon` overrides it.
+#: Only these grips are ranked: the crit row is swapped to after a parry and used at once, and a
+#: copy that must be two-handed first costs an input the swap does not expect (the rule
+#: `one_handed` applies to grab blocks, user, 2026-10-18).
+CRIT_GRIPS = ("1H",)
 BUFF_CACHE = Path.home() / ".cache/er-build-planner/ash-buff-value.json"
 #: Multihit weapons (user, 2026-10-12): "we don't want to include ashes on it that slow the user
 #: down significantly unless they are also multihit", where "Multihit is defined by how quickly it
@@ -445,31 +472,1228 @@ def ash_own_status(rows, stats, cache_path):
     return {ash: set(cache[key(x)]) for ash, x in first.items()}
 
 
-def crit_affinities(weapon, stats):
+def _class_roles():
+    """The `er-mechanics-class-roles.py` module, loaded once."""
+    cr = sys.modules.get("er_mechanics_class_roles")
+    if cr is None:
+        spec = importlib.util.spec_from_file_location("er_mechanics_class_roles", HERE / "er-mechanics-class-roles.py")
+        cr = importlib.util.module_from_spec(spec)
+        sys.modules["er_mechanics_class_roles"] = cr
+        spec.loader.exec_module(cr)
+    return cr
+
+
+_CRIT = {}
+
+
+def _crit_ctx():
+    """(crit-affinity module, embedding, crit tables, reference defender, {weapon name: base id}),
+    loaded once."""
+    if not _CRIT:
+        spec = importlib.util.spec_from_file_location("er_mechanics_crit_affinity",
+                                                      HERE / "er-mechanics-crit-affinity.py")
+        CA = sys.modules.get("er_mechanics_crit_affinity")
+        if CA is None:
+            CA = importlib.util.module_from_spec(spec)
+            sys.modules["er_mechanics_crit_affinity"] = CA
+            spec.loader.exec_module(CA)
+        e = CA.SS.embed()
+        t = CA.CR.load_tables()
+        ids = {}
+        for i in CA.CW.weapon_ids(e):
+            ids.setdefault(e.art.names[i], i)
+        _CRIT.update(CA=CA, e=e, t=t, d=CA.CR.reference_defender(t), ids=ids)
+    return _CRIT["CA"], _CRIT["e"], _CRIT["t"], _CRIT["d"], _CRIT["ids"]
+
+
+def crit_affinities(weapon, stats, grips=("1H", "2H"), allowed=lambda weapon, affinity, grip: True):
     """[(affinity, riposte, backstab)] for `weapon` at `stats`, best first: each crit's total
     (`er-mechanics-crit-affinity.rows_for`: damage through `er-mechanics-crits.reference_defender`
-    plus the status HP of the crit's hits), the better grip per affinity. An affinity whose
-    requirements the stats miss is not listed. The crit multiplier skips status build-up
+    plus the status HP of the crit's hits), the better of `grips` per affinity. An affinity whose
+    requirements the stats miss is not listed, nor one `allowed(weapon, affinity, grip)` refuses
+    (`AffinityRule`). The crit multiplier skips status build-up
     (crits.md section 2, `VERIFIED`); that a crit hit still builds the weapon's status at one R1
     hit's worth per hit is that module's model (`INFERRED`: the crit AtkParam is taken through the
     same hit slots 5..7 as any swing)."""
-    spec = importlib.util.spec_from_file_location("er_mechanics_crit_affinity", HERE / "er-mechanics-crit-affinity.py")
-    CA = sys.modules.get("er_mechanics_crit_affinity")
-    if CA is None:
-        CA = importlib.util.module_from_spec(spec)
-        sys.modules["er_mechanics_crit_affinity"] = CA
-        spec.loader.exec_module(CA)
-    e = CA.SS.embed()
-    t = CA.CR.load_tables()
-    base = next((i for i in CA.CW.weapon_ids(e) if e.art.names[i] == weapon), None)
+    CA, e, t, d, ids = _crit_ctx()
+    base = ids.get(weapon)
     if base is None:
         return []
     best = {}
-    for r in CA.rows_for(t, e, CA.CR.reference_defender(t), base, stats):
+    for r in CA.rows_for(t, e, d, base, stats):
+        if r["grip"] not in grips or not allowed(weapon, r["affinity"], r["grip"]):
+            continue
         v = (r["riposte"]["total"], r["backstab"]["total"])
         if sum(v) > sum(best.get(r["affinity"], (0, 0))):
             best[r["affinity"]] = v
     return sorted(((a, *v) for a, v in best.items()), key=lambda r: -(r[1] + r[2]))
+
+
+def rank_crit(by_weapon):
+    """[(riposte + backstab, weapon, [(affinity, riposte, backstab)])] best first, from
+    {weapon: `crit_affinities` result}; a weapon with no wieldable affinity is left out. Ties go
+    to the weapon name, so the order does not depend on the dict's."""
+    out = [(r[0][1] + r[0][2], w, r) for w, r in by_weapon.items() if r]
+    return sorted(out, key=lambda x: (-x[0], x[1]))
+
+
+def stat_scaling(AR, tables, weapon, affinity, level, stats, two_handed):
+    """{stat: attack rating that stat adds} for one weapon, affinity, level and grip: each element's
+    base x (influence x stat multiplier - 1), summed over the elements. `er-mechanics-ar
+    .element_multiplier` combines one element's stats as 1 + the sum of those terms when every
+    requirement is met, so these add up to `attack_rating`'s scaling total; the base part of the
+    attack rating belongs to no stat. Status build-up is not attack rating and is left out, so a
+    Blood copy's arcane bleed does not count toward its damage stat."""
+    wep = tables.weapons[tables.find_weapon(weapon, affinity)]
+    reinf = tables.reinforce[wep["reinforceTypeId"] + level]
+    aecp = tables.aecp.get(wep["attackElementCorrectId"], {})
+    two = two_handed or wep["wepType"] in AR.ALWAYS_TWO_HANDED_WEP_TYPES
+    if wep.get("isDualBlade"):
+        two = False
+    out = dict.fromkeys(AR.STATS, 0.0)
+    for _, suf, bfield, rfield, gfield in AR.ELEMENTS:
+        base = wep[bfield] * reinf[rfield]
+        if not base:
+            continue
+        for s in AR.STATS:
+            aname, cfield, rf, pf = AR.STAT_FIELDS[s]
+            if not aecp.get(f"is{aname}Correct_by{suf}"):
+                continue
+            over = aecp.get(f"overwrite{aname}CorrectRate_by{suf}", -1)
+            infl = aecp.get(f"Influence{aname}CorrectRate_by{suf}", 100) * 0.01
+            rate = (over if over >= 0 else wep[cfield]) * reinf[rf]
+            m = AR.stat_multiplier(tables, wep[pf], stats.get(s, 0), rate, wep[gfield],
+                                   AR.TWO_HAND_STR_MULT if two and s == "str" else 1.0)
+            out[s] += base * (infl * m - 1.0)
+    return out
+
+
+def primary_stat(scaling):
+    """The stat that adds the most attack rating (`stat_scaling`), or None when none adds any."""
+    s, v = max(scaling.items(), key=lambda kv: kv[1], default=(None, 0.0))
+    return s if v > 0 else None
+
+
+class AffinityRule:
+    """Which copies a build pinned to one affinity (`--affinity`) may hold. User, 2026-10-18: "A
+    heavy build having blood copies is fine, as long as the bleed weapon has STR as its primary
+    damage stat since that's what heavy is based off of, same for poison, or madness, or sleep."
+
+    The primary damage stat belongs to the infusion, not to the weapon (user, 2026-10-18: "With
+    each status weapon type, they have a primary damage dealing stat, that's all I meant with the
+    heavy vs other infusion thing"). It is measured, not listed (`affinity_primaries`). A copy of an
+    infusable weapon on another affinity is kept only when that affinity's primary stat is the
+    pinned affinity's. A weapon with no row on the pinned affinity (a somber weapon) is not
+    infusable to it (`infusable`), and every copy of it is kept, as is a copy on an affinity with no
+    measured primary stat. With no pinned affinity, everything is kept."""
+
+    def __init__(self, pinned, primaries=None, infusable=lambda weapon: True):
+        self.pinned, self.primaries, self.infusable = pinned, primaries or {}, infusable
+        self.dropped = collections.Counter()
+
+    def ok(self, weapon, affinity, grip=None):
+        if not self.pinned or affinity == self.pinned or not self.infusable(weapon):
+            return True
+        want, got = self.primaries.get(self.pinned), self.primaries.get(affinity)
+        return want is None or got is None or got == want
+
+    def ok_any(self, weapon, affinity):
+        """`ok` for picks that name no grip; the rule does not depend on the grip."""
+        return self.ok(weapon, affinity)
+
+    def keep(self, x):
+        """`ok` for a sweep row, counting what it drops per (weapon, affinity)."""
+        good = self.ok(x["weapon"], x.get("affinity", "Standard"))
+        if not good:
+            self.dropped[x["weapon"], x.get("affinity", "Standard")] += 1
+        return good
+
+
+def affinity_primaries(AR, tables, weapons, stats, upgrade=25, scaling=stat_scaling):
+    """({affinity: primary damage stat}, {affinity: {stat: attack rating summed over weapons}}).
+
+    For each affinity, the attack rating each stat adds (`stat_scaling`, one-handed, top upgrade
+    capped at `upgrade`) is summed over every weapon in `weapons` that has a row on it, and the stat
+    with the most is the affinity's. Every damage stat is set to the build's highest one, so the
+    affinity's own scaling (its reinforce rates and attack-element flags) decides, not where the
+    build put its points: at the build's own STR 43 / DEX 16 a Keen copy would read as STR. A weapon
+    whose requirements that spread misses on an affinity is left out of that affinity's sum."""
+    flat = dict.fromkeys(AR.STATS, max(stats[k] for k in AR.STATS))
+    tot = {}
+    for aff in AR.AFFINITIES:
+        acc = dict.fromkeys(AR.STATS, 0.0)
+        n = 0
+        for w in weapons:
+            try:
+                wep = tables.weapons[tables.find_weapon(w, aff)]
+            except (SystemExit, KeyError):
+                continue
+            if any(wep[AR.STAT_FIELDS[s][3]] > flat[s] for s in AR.STATS):
+                continue
+            level = min(upgrade, tables.max_level(wep["reinforceTypeId"]))
+            for s, v in scaling(AR, tables, w, aff, level, flat, False).items():
+                acc[s] += v
+            n += 1
+        if n:
+            tot[aff] = acc
+    return {aff: primary_stat(v) for aff, v in tot.items() if primary_stat(v)}, tot
+
+
+class WeightCost:
+    """What carrying a weight of weapons costs the build, from `er-weapon-build.weight_cost`'s
+    table (`--weight-cost`): `joint_pick`'s best damage x EHP with that weight on the medium-roll
+    budget, over the table's best. Linear between the table's points; 0 past its last point, the
+    first weight at which no armor set reaches the poise floor at medium roll."""
+
+    def __init__(self, table: dict):
+        self.ws, self.vs = list(table["weights"]), list(table["value"])
+
+    def __call__(self, w: float) -> float:
+        ws, vs = self.ws, self.vs
+        if not ws or w > ws[-1] + 1e-9:
+            return 0.0
+        if w <= ws[0]:
+            return vs[0]
+        i = next(i for i in range(1, len(ws)) if ws[i] >= w - 1e-9)
+        t = (w - ws[i - 1]) / (ws[i] - ws[i - 1])
+        return vs[i - 1] + t * (vs[i] - vs[i - 1])
+
+
+def derive_combos(roles, cr, weights, off_weights, usable, n=COMBO_SETS, aff_ok=lambda weapon, affinity: True,
+                  weight=None, cost=None, carry=0.0, floor=0.0, speed=None, k=0.0, ps=None, cross=None):
+    """The equip sets' (main class, off class, main weapon, off weapon) pairs, with a log line each.
+
+    A set is played in one mode and is worth the best mode it can be played in (user, 2026-10-19:
+    two-handing puts the left weapon on your back, so L1 no longer throws it). Each main hand is
+    scored per grip (`MainHand`, from the roles' `by_grip`, `er-mechanics-class-roles
+    .main_hand_entry`), and each off-hand candidate names the grip its mode holds the main hand in
+    (`OffHand.grip`):
+
+    - two-handed alone (`OffHand.alone`): the main hand's 2H score, no off-hand term, the left
+      hand empty and its weight not carried;
+    - one-handed with an off hand: the main hand's 1H score + the off hand's L1 score + the
+      cross-hand term, `TRUE_COMBO_BONUS` x the landing chance of the best measured link between
+      the main hand's R1/R2 and the off hand's L1, either way (`cross`, a `CrossHand`; nothing
+      where the frame data measures no link);
+    - powerstance: the main hand's 1H score + the dual moveset's score;
+    - a paired weapon two-handed (`OffHand.two_hand`, not alone): its 2H score + its paired
+      moveset's.
+
+    Without per-grip features (roles written before 2026-10-19) a main hand has one score for
+    every mode and no two-handed-alone candidate, as before.
+
+    User, 2026-10-18: no hand-listed picks where an objective, measured score can decide. Each
+    class's `main_hand` and `offhand` pick (`er-mechanics-class-roles.py`) is scored again over
+    every class's candidates at once, the way `er-weapon-build.class_leads` does, so classes
+    compare on one scale: the main hand with `cr.FEATURES` and `[class_pick_weights]` (`weights`),
+    the off hand with `cr.OFFHAND_FEATURES` and `[offhand_pick_weights]` (`off_weights`). A pick
+    keeps the affinity it won its class on when `aff_ok` allows it, else takes its best allowed
+    one. The `n` best main hands each take the off hand that maximises main score + off score,
+    any class, its own included (a powerstance), and without `ps` never the main hand's own weapon.
+    The sum separates, so every set takes the same off hand unless
+    that off hand is a set's own main weapon (user, 2026-10-18: "we don't need a variety of
+    weapons if a good one exists"). `usable(weapon)` limits both hands to weapons the plan has
+    rows for.
+
+    With `cost` (a `WeightCost`) and `weight(weapon)`, the sets pay for what they weigh. The stats
+    are bought for the heaviest set the plan holds (`er-weapon-build.heaviest_set`), so a set's
+    weight costs nothing below the heaviest one and everything above it: the choice is a weight
+    cap W, and at each cap the `n` best pairs whose weight fits under it, one per main hand. A set
+    weighs its two hands plus `carry` (the Endure swap every set also holds), and `floor` is the
+    heaviest set outside these pairs (a `--focus` set), which the stats already pay for. The cap
+    chosen maximises mean pair score x `cost(heaviest)`. Both factors are ratios to a best: the
+    pair score is a weighted share of the pool's best features, and `cost` is damage x EHP over its
+    best, which is hits-to-kill traded against hits-to-die (`er-weapon-build.joint_pick`). So the
+    product treats one per cent of pair score as worth one per cent of the duel exchange, the
+    same exchange rate `joint_pick` itself uses between damage and HP, and no weight is set by
+    hand. Without `cost` the sets are drawn as above, weight unseen.
+
+    With `speed` (a `SetSpeed`), a set is worth its pair score x (1 + `k` x C_set), C_set the
+    punish coverage of the fastest attack the set throws from neutral (user, 2026-10-18:
+    "implement the speed weighting"; `_set_value`). Every main hand then takes the off hand that
+    maximises that value, and the `n` sets are the best `n` by it, one per main hand: the plan's
+    value is a sum over sets, so taking the largest gain one at a time is taking the largest `n`.
+    A slow main hand can buy back its coverage with a fast off hand, so the sets stop sharing
+    one off hand where a faster pairing covers more.
+
+    With `ps` (a `PowerstanceOffs`), a pair that can powerstance (`can_powerstance`) is scored on
+    what its L1 then throws, the dual moveset, not on the off hand's own L1 chain, which the
+    behaviour script no longer plays for that pair (user, 2026-10-19: generated builds never
+    powerstanced because the dual chain was never scored). Every main hand also takes any weapon
+    that powerstances with it as an off-hand candidate, not only its class's off-hand pick
+    (`hand_scores`), a second copy of its own weapon included (two Broadswords): the plan then
+    holds both copies, and the weight cap counts the weapon's weight twice. A paired main hand
+    (`PowerstanceOffs.paired`) never takes a second copy; it is offered itself two-handed, one copy,
+    scored on its same-weapon dual record (`PowerstanceOffs.two_hand`), and such a set's off
+    weapon is None (`combo_pair`)."""
+    sv = _set_value(speed, k)
+    if cost is not None and weight is not None:
+        return _weighed_combos(hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps, cross), n, weight,
+                               cost, carry, floor, sv)
+    mains, offs_for = hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps, cross)
+    picks = []
+    for m in mains if speed is not None else mains[:n]:
+        got = best_pair([(m, o) for o in offs_for(m)], lambda m, o: sv(m, o)[0])
+        if got:
+            o = got[2]
+            picks.append((sv(m, o), m, o))
+    if speed is not None:
+        picks = sorted(picks, key=lambda p: (-p[0][0], p[1][1]))[:n]
+    pairs = [combo_pair(m, o) for _, m, o in picks]
+    log = [combo_line(m, o, speed_note(v)) for v, m, o in picks]
+    return pairs, log
+
+
+def _set_value(speed, k):
+    """`sv(main, off)` -> (value, s_set, C_set): the pair score, times 1 + `k` x C_set when `speed`
+    (a `SetSpeed`) is given (`derive_combos`). The pair score is `set_score`, the set's own mode."""
+    def sv(m, o):
+        if speed is None:
+            return set_score(m, o), None, None
+        s, c = speed(m, o)
+        return set_score(m, o) * (1.0 + k * c), s, c
+    return sv
+
+
+def main_score(m, o):
+    """The main hand's score in the grip `o`'s mode holds it in (`OffHand.grip`): its own grip's
+    score when the roles give one per grip (`MainHand`), else its one score."""
+    if isinstance(m, MainHand) and m.grips is not None:
+        return m.grips[getattr(o, "grip", "1H")]
+    return m[0]
+
+
+def set_score(m, o):
+    """One set's pair score in its mode (`derive_combos`): the better hand per feature over the
+    options that mode plays (`SetScorer`: the main hand in that mode's grip, and the off hand's L1,
+    dual or paired moveset where the mode has one), plus the cross-hand term (`OffHand.cross`,
+    one-handed with a plain off hand only, a measured link and so real extra value). No set is
+    credited a two-handed main hand and an off-hand L1: two-handed alone has no off-hand option,
+    and a one-handed set takes the main hand's 1H features. Hands whose features share nothing
+    (no `SetScorer`) sum: main score in the mode's grip + off score (0 alone) + cross term."""
+    sc = getattr(m, "scorer", None)
+    if sc is not None:
+        return round(sc.pair(m, o, m.bonus) + getattr(o, "cross", 0.0), 4)
+    return main_score(m, o) + o[0] + getattr(o, "cross", 0.0)
+
+
+def speed_note(v):
+    """The `combo_line` suffix of one set's speed term, empty without one."""
+    _, s, c = v
+    return "" if c is None else f", s_set {s if s is not None else 'none'}, C_set {c:.3f}, value {v[0]:.4f}"
+
+
+class SetSpeed:
+    """`speed(main, off)` -> (s_set, C_set) for `derive_combos`, hands as `hand_scores` gives them:
+    s_set the first hit frame of the soonest attack the set throws from neutral -- the main hand's
+    R1 #1 (`r1_startup`), and the off hand's L1 #1 (`l1_startup`, present only when its L1 is an
+    attack) or, for a powerstance (a pair the embedding has a `powerstance` record for), the dual
+    chain's first attack `dual_1` -- and C_set its `PunishCoverage`. The main hand's R1 #1 is the
+    grip the set's mode holds it in (`OffHand.grip`, `by_grip`), and a two-handed-alone set
+    (`OffHand.alone`) throws nothing from the left hand."""
+
+    def __init__(self, roles, cover, powerstance=()):
+        self.roles, self.cover = roles, cover
+        self.dual = {}
+        for p in powerstance:
+            s = (p.get("slots") or {}).get("dual_1") or {}
+            if s.get("startup") is not None:
+                key = (p["right"], p["left"])
+                self.dual[key] = min(self.dual.get(key, s["startup"]), s["startup"])
+
+    def _feat(self, weapon, hand, affinity, f, grip=None):
+        h = (self.roles.get("weapons") or {}).get(weapon, {}).get(hand) or {}
+        a = (h.get("by_affinity") or {}).get(affinity) or {}
+        return (((a.get("by_grip") or {}).get(grip) if grip else None) or a.get("features") or {}).get(f)
+
+    def __call__(self, m, o):
+        _, mc, mw, ma = m
+        _, oc, ow, oa = o
+        # A pair with a powerstance record throws the dual chain on L1; `derive_combos` only pairs
+        # such a main hand with that off hand as a powerstance. Two-handed alone, L1 throws nothing.
+        if getattr(o, "alone", False):
+            off = None
+        else:
+            off = self.dual[mw, ow] if (mw, ow) in self.dual else self._feat(ow, "offhand", oa, "l1_startup")
+        main = self._feat(mw, "main_hand", ma, "r1_startup", getattr(o, "grip", None))
+        starts = [x for x in (main, off) if x is not None]
+        s = min(starts) if starts else None
+        return s, (self.cover(s) if s is not None else 0.0)
+
+
+def combo_pair(m, o):
+    """One equip set as `derive_combos` returns it: (main class, off class, main weapon, off weapon),
+    the off weapon None when the main hand is two-handed (`OffHand.two_hand`, a paired moveset or
+    alone): the left hand holds nothing, so the plan carries no second copy and no left weapon."""
+    if getattr(o, "two_hand", False):
+        return (m[1], o[1], m[2], None)
+    return (m[1], o[1], m[2], o[2])
+
+
+def combo_line(m, o, extra=""):
+    (_, mc, mw, ma), (os_, oc, ow, oa) = m, o
+    ms, total = main_score(m, o), set_score(m, o)
+    g = getattr(o, "grip", "1H")
+    if getattr(o, "alone", False):
+        return (f"{ma} {mw} ({mc}, main 2H {ms:.4f}) two-handed alone, one copy, no left weapon = {total:.4f}{extra}"
+                f" (two-handed: L1 no longer throws a left weapon, so no off-hand term; its weight counted once)")
+    if getattr(o, "two_hand", False):
+        return (f"{ma} {mw} ({mc}, main {g} {ms:.4f}) two-handed, one copy (off {os_:.4f}) = {total:.4f}{extra}"
+                f" (two-handed: the off-hand score is its paired moveset, the same-weapon dual record at "
+                f"{oa}/{oa}; its weight counted once, no second copy)")
+    cross = getattr(o, "cross", 0.0)
+    if cross:
+        extra = f", cross-hand {o.cross_link} +{cross:.4f}{extra}"
+    if getattr(o, "ps", False):
+        note = (f" (powerstance: the off-hand score is the dual moveset at its recorded affinities "
+                f"{o.right_aff}/{oa}, L1 string and movement L1s; no block cost on either side)")
+    elif mc == oc:
+        note = " (same class, no powerstance record: the off-hand score is its L1 chain)"
+    else:
+        note = ""
+    if mw == ow:
+        note += " (two copies of one weapon, its weight counted twice)"
+    grip = f"{g} " if isinstance(m, MainHand) and m.grips is not None else ""
+    if getattr(m, "scorer", None) is not None:
+        note += " (per feature the better hand of the two, not their sum)"
+    return f"{ma} {mw} ({mc}, main {grip}{ms:.4f}) + {oa} {ow} ({oc}, off {os_:.4f}) = {total:.4f}{extra}{note}"
+
+
+def second_copy(slots, rs, start=None, length=0):
+    """The slot for a set's left hand when it is a second copy of the right hand's weapon (slot
+    `rs`): the best-valued other slot of that weapon in its row (`start`, `length`), else anywhere
+    in the plan, preferring the right hand's affinity; None when the plan holds one copy only. One
+    slot cannot be worn in both hands: the upload writes one hand per slot and set
+    (`planner-ash-loadout-upload.upload_with_sets`)."""
+    w, aff = slots[rs]["weapon"], slots[rs]["affinity"]
+    row = range(start, start + length) if start is not None else range(0)
+    for scope in (row, range(len(slots))):
+        got = [i for i in scope if i != rs and i < len(slots) and slots[i]["weapon"] == w]
+        if got:
+            return max(got, key=lambda i: (slots[i]["affinity"] == aff, slots[i].get("value", 0)))
+    return None
+
+
+def _weighed_combos(hands, n, weight, cost, carry, floor, sv=None):
+    """`derive_combos` with the weight cap: see its doc. `hands` is `hand_scores`'s (main hands,
+    off hands per main hand); `sv` is its `_set_value` (the pair score when absent); a pick's
+    score is the set's value, speed term included."""
+    mains, offs_for = hands
+    wt = {}
+    sv = sv or _set_value(None, 0.0)
+    notes = {}
+
+    def pw(m, o):
+        for w in (m[2], o[2]):
+            if w not in wt:
+                wt[w] = weight(w)
+        # Two-handed, the set wears one copy (`OffHand.two_hand`).
+        return wt[m[2]] + (0.0 if getattr(o, "two_hand", False) else wt[o[2]]) + carry
+
+    def at_cap(cap):
+        picks = []
+        for m in mains:
+            got = best_pair([(m, o) for o in offs_for(m) if pw(m, o) <= cap + 1e-9], lambda m, o: sv(m, o)[0])
+            if got:
+                o = got[2]
+                v = sv(m, o)
+                notes[m, o] = speed_note(v)
+                picks.append((v[0], m, o))
+        return sorted(picks, key=lambda p: (-p[0], p[1][1]))[:n]
+
+    caps = sorted({round(pw(m, o), 3) for m in mains for o in offs_for(m)})
+    best, widest = None, None
+    for cap in caps:
+        picks = at_cap(cap)
+        if not picks:
+            continue
+        heavy = max(floor, max(pw(m, o) for _, m, o in picks))
+        mean = sum(s for s, _, _ in picks) / n
+        c = {"cap": cap, "picks": picks, "heavy": heavy, "mean": mean, "mult": cost(heavy),
+             "value": mean * cost(heavy)}
+        widest = c
+        if best is None or c["value"] > best["value"] + 1e-12:
+            best = c
+    if best is None:
+        return [], []
+    pairs = [combo_pair(m, o) for _, m, o in best["picks"]]
+    log = [combo_line(m, o, f", weight {pw(m, o):g}{notes.get((m, o), '')}") for _, m, o in best["picks"]]
+
+    def summary(c):
+        return (f"heaviest set {c['heavy']:g} (cost x{c['mult']:.3f}), mean set value {c['mean']:.4f}, "
+                f"value {c['value']:.4f}")
+    log.append(f"weight cap {best['cap']:g}: {summary(best)}; every set weighs its two hands + {carry:g} "
+               f"(Endure swap), the stats already pay for {floor:g}")
+    if widest is not best:
+        log.append(f"without the weight cost (cap {widest['cap']:g}): {summary(widest)}, "
+                   f"{100 * (widest['value'] / best['value'] - 1):+.1f}%")
+    return pairs, log
+
+
+class OffHand(tuple):
+    """One off-hand candidate, (score, class, weapon, affinity) as `hand_scores` gives it, with its
+    features and, for a powerstance, `ps` set and the right hand's recorded affinity."""
+
+    def __new__(cls, t, feats, ps=False, right_aff=None, two_hand=False, alone=False, cross=0.0, cross_link=None,
+                measure=None, cross_max=0.0):
+        o = super().__new__(cls, t)
+        o.feats, o.ps, o.right_aff = feats, ps, right_aff
+        #: The main hand two-handed: a paired weapon's one copy playing its paired moveset
+        #: (`PowerstanceOffs.two_hand`), or (`alone`) any weapon two-handed with no off-hand term.
+        #: Its weapon is the main hand's, worn once, left hand empty.
+        o.two_hand = two_hand or alone
+        o.alone = alone
+        #: The grip the set holds the main hand in: two-handed for both kinds above, else one-handed
+        #: (a plain off hand or a powerstance).
+        o.grip = "2H" if o.two_hand else "1H"
+        #: The cross-hand term of a one-handed set (`hand_scores`, `CrossHand`) and its link,
+        #: measured on first use by `measure()` -> (term, link) or None, and at most `cross_max`.
+        o._cross, o.cross_link = (None if measure else cross), cross_link
+        o.measure, o.cross_max = measure, (cross_max if measure else cross)
+        return o
+
+    @property
+    def cross(self):
+        if self._cross is None:
+            got = self.measure()
+            self._cross, self.cross_link = got if got else (0.0, None)
+        return self._cross
+
+    @property
+    def measured(self):
+        return self._cross is not None
+
+    def at(self, cross):
+        """This candidate with its cross-hand term fixed at `cross` (`best_pair`'s bounds)."""
+        return OffHand(tuple(self), self.feats, self.ps, self.right_aff, self.two_hand and not self.alone,
+                       self.alone, cross, self.cross_link)
+
+
+def best_pair(pairs, value):
+    """(value, main, off) of the (main, off) in `pairs` with the highest (`value`, off class), or
+    None. An off hand whose cross-hand term is not measured yet (`OffHand.measured`) is bounded by
+    its value at 0 and at `cross_max` first, and measured only while that bound can still win, so a
+    sweep over every pair (`cover_sets`) measures the few links that can change the answer."""
+    rows = []
+    for m, o in pairs:
+        if getattr(o, "measured", True):
+            v = value(m, o)
+            rows.append((v, m, o))
+        else:
+            rows.append((value(m, o.at(o.cross_max)), m, o))
+    rows.sort(key=lambda r: -r[0])
+    best = None
+    for hi, m, o in rows:
+        if best is not None and hi < best[0] - 1e-12:
+            break
+        v = value(m, o)
+        if best is None or (v, o[1]) > (best[0], best[2][1]):
+            best = (v, m, o)
+    return best
+
+
+class MainHand(tuple):
+    """One main-hand candidate, (score, class, weapon, affinity) as `hand_scores` gives it, the
+    score the better of its grips', with `grips` {grip: score} over the grips it is wieldable in
+    when the roles carry per-grip features (`by_grip`), else None: one score for every mode."""
+
+    def __new__(cls, t, grips=None, feats=None):
+        m = super().__new__(cls, t)
+        m.grips = grips
+        #: {grip: features}, or {None: features} without per-grip roles; the `SetScorer` and
+        #: `TRUE_COMBO_BONUS` `hand_scores` values its sets with, None where the hands share no
+        #: feature.
+        m.feats, m.scorer, m.bonus = feats or {}, None, 0.0
+        return m
+
+
+class PowerstanceOffs:
+    """The embedding's powerstance records as off-hand candidates (`derive_combos`).
+
+    `records` is the embedding's `powerstance` list: one record per (right, left) weapon pair, each
+    weapon at one recorded affinity, both hands' hits counted. A record is a candidate when it is
+    wieldable and `can(right, left)` (`er-mechanics-powerstance-guard.can_powerstance`, the
+    behaviour script's `IsEnableDualWielding`) holds. A weapon with itself is a candidate (Broadsword
+    with Broadsword, most of the game's powerstances): the plan carries a second copy for the left
+    hand (`second_copy`). Its features are `er-mechanics-class-roles.powerstance_features`
+    and `pool` holds every candidate's, for the off-hand normalisation. `class_of(weapon, default)`
+    names the left weapon's class (a katana's Wakizashi is not a katana).
+
+    A paired weapon (`paired`) is never its own powerstance: `can` refuses the pair, so no second
+    copy is carried. Its same-weapon record at one affinity on both hands is what the one copy
+    plays two-handed (bd `paired-weapons-2h-is-powerstance-and-atkattribute-252-253-2026-10-19`:
+    the 2H clips hit on the powerstance clips' frames), and is kept in `two_hand`
+    {(weapon, affinity): features} as the main hand's two-handed off-hand term (`hand_scores`)."""
+
+    def __init__(self, records, can, cr, class_of=lambda weapon, default: default, paired=lambda weapon: False,
+                 trades=None):
+        self._can_fn, self._can = can, {}
+        #: `paired(weapon)`: two-handed, it plays its paired moveset (`two_hand_is_pair`).
+        self.paired = paired
+        self.by_right = collections.defaultdict(list)
+        self.two_hand = {}
+        self.pool = []
+        self.unmeasured = tuple(getattr(cr, "POWERSTANCE_UNMEASURED", ()))
+        # The dual strings' interrupt multipliers `er-mechanics-class-roles.py` wrote
+        # (`powerstance_trades`, keyed by `powerstance_key`), so a powerstance off hand is valued
+        # against the pool's answers as a plain L1 one is.
+        trades = trades or {}
+        for p in records:
+            if not p.get("wieldable"):
+                continue
+            self_2h = (p["right"] == p["left"] and p["right_affinity"] == p["left_affinity"]
+                       and paired(p["right"]))
+            if not self_2h and not self.can(p["right"], p["left"]):
+                continue
+            f = (cr.powerstance_features(p, trades.get(cr.powerstance_key(p))) if trades
+                 else cr.powerstance_features(p))
+            if f and self_2h:
+                self.pool.append(f)
+                self.two_hand[p["right"], p["right_affinity"]] = f
+            elif f:
+                self.pool.append(f)
+                self.by_right[p["right"]].append((p["left"], p["left_affinity"], p["right_affinity"], f,
+                                                  class_of(p["left"], p["class"])))
+
+    def can(self, right, left):
+        if (right, left) not in self._can:
+            self._can[right, left] = bool(self._can_fn(right, left))
+        return self._can[right, left]
+
+
+def powerstance_offs(records, tables, roles, cr):
+    """`PowerstanceOffs` over the embedding's records, `can_powerstance` read from the regulation
+    rows (`tables`), the left weapon's class from `roles`."""
+    spec = importlib.util.spec_from_file_location("er_mechanics_powerstance_guard",
+                                                  HERE / "er-mechanics-powerstance-guard.py")
+    PG = sys.modules.get(spec.name)
+    if PG is None:
+        PG = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = PG
+        spec.loader.exec_module(PG)
+    reg = type("Reg", (), {"weapon": tables.weapons})()
+
+    def paired(weapon):
+        """Two-handed, `weapon` plays its paired moveset with both hands (`isDualBlade` and
+        `bothHandEquipable`, `er-mechanics-weapon-embed.two_hand_is_pair`)."""
+        try:
+            row = tables.weapons[tables.find_weapon(weapon, "Standard")]
+        except (KeyError, SystemExit):
+            return False
+        return bool(row.get("isDualBlade") and row.get("bothHandEquipable"))
+
+    def can(right, left):
+        # A second copy of a paired weapon adds a slot and nothing else: two-handed, the one copy
+        # already swings both hands.
+        if right == left and paired(right):
+            return False
+        try:
+            r, lw = tables.find_weapon(right, "Standard"), tables.find_weapon(left, "Standard")
+        except (KeyError, SystemExit):                  # a name the regulation does not have
+            return False
+        # The rule compares the hands' `wepmotionCategory` (and `spAtkcategory`), not `wepType`:
+        # env 225 `GetEquipWeaponCategory` returns the PlayerIns+0x630 per-hand array, filled from
+        # EquipParamWeapon+0xe7 (`FUN_1403beae0`, 1.16.2; the same read at 0x1403beaf0 in 1.17.1).
+        # A row without the field is a loader that dropped it, never "cannot powerstance": raise.
+        for w in (r, lw):
+            if tables.weapons[w].get("wepmotionCategory") is None:
+                raise KeyError(f"weapon row {w} has no wepmotionCategory, so IsEnableDualWielding cannot be read")
+        return PG.can_powerstance(reg, r, lw)
+
+    def class_of(w, default):
+        return ((roles.get("weapons") or {}).get(w) or {}).get("class") or default
+    return PowerstanceOffs(records, can, cr, class_of, paired, roles.get("powerstance_trades"))
+
+
+#: The off-hand L1 string feature that measures what each main-hand feature measures, so a set is
+#: valued by the better hand per feature (`SetScorer`). `ar`, `ash_value` and `crit` are the main
+#: hand's alone: L1 throws no skill, no crit and has no AR of its own in `cr.OFFHAND_FEATURES`.
+SHARED_FEATURES = {"r1_startup": "l1_startup", "r1_recovery": "l1_recovery", "r1_reach": "l1_reach",
+                   "r1_chain_dps": "l1_chain_dps", "stamina": "l1_stamina", "parry_cost": "l1_parry_cost",
+                   "pb_cost": "l1_pb_cost"}
+#: Shared features measured in one unit on both hands, so both are normalised over one pool:
+#: frames to the first hit (as punish coverage where the main hand carries `r1_cover`), frames from
+#: the hit to the roll cancel, metres, stamina per 100 HP (`er-mechanics-class-roles.stamina_per_hp`
+#: on both). `r1_chain_dps` is motion value per second (`er-mechanics-weapon-embed.summarise`
+#: `mv_per_sec_full_chain`) and `l1_chain_dps` HP per second (`_left_features`), so each of those is
+#: a share of its own hand's pool.
+SAME_UNIT = {"r1_startup", "r1_recovery", "r1_reach", "stamina"}
+
+
+class SetScorer:
+    """One set's value as the better hand per feature (user, 2026-10-19), not main score + off score.
+
+    The options a set can play are its mode's: two-handed alone, the main hand's 2H features only;
+    one-handed with an off hand, its 1H features and the off hand's L1 (or, powerstanced, the dual
+    moveset's); a paired weapon two-handed, its 2H features and its paired moveset's. So no set
+    takes 2H AR and an off-hand L1 at once. For each feature the set takes the better option's
+    share of the pool's best, and the shares are weighted and summed with `[class_pick_weights]`
+    over the same total `norm_score` divides by, so a set with no off hand scores as its main hand.
+
+    - A shared feature (`SHARED_FEATURES`) is the better of the two hands. `SAME_UNIT` ones share one
+      pool; frames to the first hit are compared as punish coverage, an L1's frames read off the
+      main hands' own (frames, `r1_cover`) pairs (`cover_of`).
+    - The L1 out of movement (`cr.MOVE_FEATURES`) shares its string analogue's weight in the split
+      `cr.offhand_weights` gives the off hand (string and movement, equal halves). The main hand's
+      own movement R1s are not in the roles, so each stands in at its R1 string's share: a set is
+      never credited for an off hand's movement attack beyond what its main hand's string already
+      scores, and a set with no off hand scores exactly its main hand.
+    - A block cost is the smaller of the two hands' penalty. The main hand's cost reads as
+      `norm_score` reads it (none is 0); an off hand that does not measure it (a powerstance,
+      `cr.POWERSTANCE_UNMEASURED`) is no option there.
+    - An off-hand feature with no main-hand counterpart (`l1_status`) counts only in a mode with
+      an off hand, at its `[offhand_pick_weights]` share of that table's total, rescaled to this one.
+    - `ar`, `ash_value` and `crit` are the main hand's in the mode's grip."""
+
+    def __init__(self, cr, weights, off_weights, main_pool, off_pool, main_dicts):
+        self.lower = set(getattr(cr, "LOWER_BETTER", ()))
+        self.pen = dict(getattr(cr, "PENALTIES", {}))
+        self.main_pool, self.off_pool = main_pool, off_pool
+        cov = {}
+        for d in main_dicts:
+            if d.get("r1_startup") is not None and d.get("r1_cover") is not None:
+                cov.setdefault(d["r1_startup"], d["r1_cover"])
+        self.cover_table = dict(sorted(cov.items()))
+        offs = tuple(cr.OFFHAND_FEATURES)
+        analogue = getattr(cr, "MOVE_ANALOGUE", {})
+        fams = getattr(cr, "MOVE_FAMILIES", ())
+        unit = cr.offhand_weights({g: 1.0 for g in analogue.values()}) if analogue else {}
+        self.total = sum(weights.get(f, 0.0) for f in cr.FEATURES if f not in self.pen)
+        #: (weight, main feature, off feature or None)
+        self.roles, self.penalties, covered = [], [], set()
+        for f in cr.FEATURES:
+            g = SHARED_FEATURES.get(f)
+            g = g if g in offs else None
+            covered.add(g)
+            w = weights.get(f, 0.0)
+            if f in self.pen:
+                self.penalties.append((w, f, g))
+                continue
+            x = next((k for k, l1 in analogue.items() if l1 == g), None) if g else None
+            if x is None:
+                self.roles.append((w, f, g))
+                continue
+            self.roles.append((w * unit.get(g, 0.0), f, g))
+            for fam in fams:
+                mf = f"l1_{fam}_{x}"
+                if mf in offs:
+                    covered.add(mf)
+                    self.roles.append((w * unit.get(mf, 0.0), f, mf))
+        ow = cr.offhand_weights(off_weights)
+        off_total = sum(ow.get(g, 0.0) for g in offs if g not in self.pen)
+        self.off_only = [(ow.get(g, 0.0) * self.total / off_total, g) for g in offs
+                         if off_total and g not in covered and g not in self.pen]
+        self._best, self._cache = {}, {}
+        #: Whether a main hand with no crit bonus has the crit weight score its reach
+        #: (`cr.norm_score`): only while reach is itself a scored feature. Over the duel spread
+        #: the roles take the `r1_reach` weight off (`cr.spread_weights`), the strings crediting
+        #: reach already, so the crit weight then leaves that set's total instead.
+        self.reach_fill = weights.get("r1_reach", 0.0) > 0
+        self.crit_w = sum(w for w, f, _ in self.roles if f == "crit")
+
+    def cover_of(self, frames):
+        """Punish coverage of an attack whose first hit lands on `frames`: the main hands' own
+        coverage at that frame count, else at the nearest pooled count above it (a lower bound,
+        coverage falls with frames), else at the slowest pooled one."""
+        if frames is None or not self.cover_table:
+            return None
+        if frames in self.cover_table:
+            return self.cover_table[frames]
+        above = [k for k in self.cover_table if k >= frames]
+        return self.cover_table[min(above) if above else max(self.cover_table)]
+
+    def _value(self, d, f, main):
+        """(value, lower is better) of feature `f` of one hand's features `d` in the space it is
+        compared in: punish coverage for frames to a first hit when the main hands carry it."""
+        startup = (f == "r1_startup") if main else (f == "l1_startup" or f.endswith("_startup"))
+        if startup and self.cover_table:
+            if main and d.get("r1_cover") is not None:
+                return d["r1_cover"], False
+            return self.cover_of(d.get(f)), False
+        return d.get(f), f in self.lower
+
+    def _pool_best(self, f, g, same):
+        """The best value of main feature `f` (with `g` None) or off feature `g`, over the main
+        pool, the off pool, or both (`same`)."""
+        key = (f, g, same)
+        if key not in self._best:
+            vals, lower = [], False
+            if g is None or same:
+                for p in self.main_pool:
+                    v, lower = self._value(p, f, True)
+                    vals.append(v)
+            if g is not None:
+                for p in self.off_pool:
+                    v, lower = self._value(p, g, False)
+                    vals.append(v)
+            vals = [v for v in vals if v]
+            self._best[key] = (min(vals) if lower else max(vals)) if vals else None
+        return self._best[key]
+
+    def _share(self, d, f, g, main):
+        same = f in SAME_UNIT
+        x, lower = self._value(d, f if main else g, main)
+        best = self._pool_best(f, None if main and not same else g, same)
+        if not x or not best:
+            return 0.0
+        return best / x if lower else x / best
+
+    def value(self, fm, fo=None, ash=None):
+        """The set's value from the main hand's features `fm` in its grip and the off hand's `fo`
+        (None two-handed alone). `ash`, when given, is the set's `ash_value` share in place of the
+        main hand's (`ash_share`)."""
+        s = 0.0
+        for w, f, g in self.roles:
+            if not w:
+                continue
+            if f == "ash_value" and ash is not None:
+                s += w * ash
+                continue
+            if f == "crit" and fm.get("crit") is None:
+                # `norm_score`: a weapon with no crit bonus has the crit weight score its reach,
+                # while reach is scored (`reach_fill`); otherwise the weight leaves the total.
+                if not self.reach_fill:
+                    continue
+                best = self._pool_best("r1_reach", None, False)
+                x = fm.get("r1_reach")
+                s += w * (x / best if x and best else 0.0)
+                continue
+            got = self._share(fm, f, g, True)
+            if fo is not None and g is not None:
+                got = max(got, self._share(fo, f, g, False))
+            s += w * got
+        if fo is not None:
+            for w, g in self.off_only:
+                if w:
+                    x, lower = self._value(fo, g, False)
+                    best = self._pool_best(None, g, False)
+                    s += w * ((best / x if lower else x / best) if x and best else 0.0)
+        for w, f, g in self.penalties:
+            scale = [p.get(self.pen[f]) for p in self.main_pool if p.get(self.pen[f])]
+            x = fm.get(f)
+            cost = w * x / max(scale) if x and scale else 0.0
+            if fo is not None and g is not None and fo.get(g) is not None:
+                oscale = [p.get(self.pen[g]) for p in self.off_pool if p.get(self.pen[g])]
+                if oscale:
+                    cost = min(cost, w * fo[g] / max(oscale))
+            s -= cost
+        total = self.total - (self.crit_w if not self.reach_fill and fm.get("crit") is None else 0.0)
+        return s / total if total else 0.0
+
+    def pair(self, m, o, bonus=0.0):
+        """`value` of main hand `m` (a `MainHand`) in `o`'s mode, plus the main hand's own
+        `TRUE_COMBO_BONUS` in that grip, rounded as `hand_scores` rounds."""
+        grip = getattr(o, "grip", "1H")
+        key = (m[2], m[3], grip, o[2], o[3], getattr(o, "ps", False), getattr(o, "right_aff", None),
+               getattr(o, "two_hand", False), getattr(o, "alone", False))
+        if key not in self._cache:
+            fm = m.feats.get(grip) if grip in m.feats else m.feats.get(None) or {}
+            fo = None if getattr(o, "alone", False) else (getattr(o, "feats", None) or None)
+            self._cache[key] = round(self.value(fm, fo, self.ash_share(m, o, grip)) + bonus * fm.get("true_combo", 0), 4)
+        return self._cache[key]
+
+    def ash_share(self, m, o, grip):
+        """The set's ash term over a duel's distance bands (`ASH_BANDS`, `band_set_value`), as a
+        share of the best single carrier's, or None (the roles' `ash_value`, main hand alone) when
+        the main hand has no bands. User, 2026-10-19: "and far away, storm blade beats unsheathe":
+        a set holding Unsheathe and Storm Blade presses each where it is better.
+
+        Which hand L2 casts is c0000.hks `GetSwordArtInfo` (`HKS_SHIELD_ARTS`). The main hand's
+        ash is its row in the set's grip and the off hand's its two-handed row: two-handing the
+        left weapon casts its skill, through the same `SWORDARTS_REQUEST_RIGHT_NORMAL` request a
+        right-hand two-handed cast sends (`GetSwordArtsRequestNew` lines 722-730), so the 2H row
+        stands for it with the grip change on its clock (`add_grip_change`). One-handed, an off
+        hand whose skill is a shield art takes L2 itself (its 1H row, else its 2H row), and one
+        with a bow skill blocks it; either way the main hand's ash is then only its two-handed
+        row. Not for a set whose left hand is the main weapon itself (`two_hand`) or empty
+        (`alone`)."""
+        if not ASH_BANDS:
+            return None
+        main = ASH_BANDS.get((m[2], m[3], grip))
+        if main is None:
+            return None
+        held = [main]
+        if not getattr(o, "two_hand", False) and o[2] is not None:
+            off = ASH_BANDS.get((o[2], o[3], "2H"))
+            left = ASH_BAND_LEFT_L2.get((o[2], o[3], "1H")) or ASH_BAND_LEFT_L2.get((o[2], o[3], "2H"))
+            if grip == "1H" and left:
+                held = [b for b in (ASH_BANDS.get((m[2], m[3], "2H")),) if b is not None]
+                if left == "shield":
+                    off = ASH_BANDS.get((o[2], o[3], "1H")) or off
+            if off is not None:
+                held.append(off)
+        if "_band_best" not in self.__dict__:
+            AI = _ai()
+            self._band_best = max((AI.band_set_value([b]) for b in ASH_BANDS.values()), default=0.0)
+        return _ai().band_set_value(held) / self._band_best if self._band_best > 0 else None
+
+
+def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=None, all_mains=False,
+                grip_ok=None):
+    """(main hands, `offs_for`) for `derive_combos`: main hands [(score, class, weapon, affinity)]
+    best first, one per class, each a `MainHand` scored per grip when the roles carry `by_grip`,
+    and `offs_for(main)` the off hands that main hand can take, each an `OffHand` naming the grip
+    its mode holds the main hand in, best first. With per-grip roles a main hand wieldable
+    two-handed is also offered alone (`OffHand.alone`, no off-hand term), and with `cross` (a
+    `CrossHand`) a plain off hand carries the cross-hand term of its pair (`OffHand.cross`,
+    `TRUE_COMBO_BONUS` x the link's landing chance). With `all_mains` every weapon with main-hand
+    features is a main hand, not one pick per class (`cover_sets`: every weapon its own best set).
+    `grip_ok(weapon, affinity, grip)` refuses a main hand's grip, by default a grip `--exclude`
+    bans (`grip_excluded`, the ladder's `ROW_BANS`: Stone Club two-handed): the grip is dropped
+    from its `grips`, and a main hand left with none is no candidate.
+
+    The off hands are every class's off-hand pick (the main hand's own weapon only with `ps`, as
+    a second copy), scored with
+    `cr.OFFHAND_FEATURES` and `[offhand_pick_weights]` spread over the movement families
+    (`cr.offhand_weights`). With `ps` (a `PowerstanceOffs`), an off hand that can powerstance with
+    the main hand is dropped from those, because its L1 chain is not what L1 throws beside that main
+    hand, and every powerstance record for the main hand's weapon is a candidate instead, scored
+    on the dual moveset (`cr.powerstance_features`). The off-hand pool the scores normalise over
+    holds every L1 candidate and every powerstance candidate. A powerstance record has no block
+    cost (`cr.POWERSTANCE_UNMEASURED`), so for a main hand with powerstance candidates every off
+    hand it is offered, L1 ones included, is scored with those features left out: the two kinds
+    compare on what both measure rather than on an invented cost."""
+    if grip_ok is None:
+        def grip_ok(weapon, affinity, grip):
+            return not grip_excluded(weapon, affinity, grip)
+
+    def hand(h, use, wts, extra_pool=()):
+        pool = [v["features"] for rw in roles["weapons"].values()
+                for v in ((rw.get(h) or {}).get("by_affinity") or {}).values()] + list(extra_pool)
+        out = []
+        picks = sorted(roles["classes"].items())
+        if h == "offhand" or all_mains:
+            # Every wieldable weapon's L1, not one pick per class: each class's off-hand pick was
+            # made in its own class's pool, where dividing by that class's best flips rankings
+            # (measured 2026-10-19: Bloodhound Claws 0.9765 over Raptor Talons 0.9702 inside the
+            # claws, Raptor 0.6666 over Bloodhound 0.6641 across every class, the pool the sets
+            # use).
+            # No affinity named: every affinity `aff_ok` admits is scored and the best kept. The
+            # class is the weapon's own, else the class whose pick names it.
+            cls_of = {p["weapon"]: c for c, r in roles["classes"].items()
+                      for p in (r.get("main_hand"), r.get("offhand")) if p}
+            picks = [(rw.get("class") or cls_of.get(w) or "Other", {h: {"weapon": w, "affinity": None}})
+                     for w, rw in sorted(roles["weapons"].items()) if (rw.get(h) or {}).get("by_affinity")]
+        for c, r in picks:
+            p = r.get(h)
+            if not p or not usable(p["weapon"]):
+                continue
+            by = ((roles["weapons"].get(p["weapon"]) or {}).get(h) or {}).get("by_affinity") or {}
+            if p["affinity"] in by and aff_ok(p["weapon"], p["affinity"]):
+                affs = [p["affinity"]]
+            else:
+                affs = [a for a in by if aff_ok(p["weapon"], a)]
+            # A main hand with a measured true combo gets the class pick's `TRUE_COMBO_BONUS`
+            # here too (`true_combo` on its features, per grip on `by_grip`).
+            bonus = getattr(cr, "TRUE_COMBO_BONUS", 0.0) if h == "main_hand" else 0.0
+
+            def one(f):
+                return round(cr.norm_score(f, pool, use, wts) + bonus * f.get("true_combo", 0), 4)
+            if h == "main_hand":
+                # Per grip when the roles give it (`MainHand`): the main hand's score is the better
+                # grip's, each mode then takes its own grip's (`main_score`). The pool stays the
+                # best-of features, whose per-feature best is the per-grip vectors' best.
+                scored = []
+                for a in sorted(affs):
+                    bg = by[a].get("by_grip")
+                    grips = {g: one(f) for g, f in bg.items() if grip_ok(p["weapon"], a, g)} if bg else None
+                    if bg and not grips:
+                        continue
+                    scored.append((max(grips.values()) if grips else one(by[a]["features"]), a, grips))
+                if scored:
+                    s, a, grips = max(scored, key=lambda t: (t[0], t[1]))
+                    bg = by[a].get("by_grip")
+                    out.append(MainHand((s, c, p["weapon"], a), grips,
+                                        feats=dict(bg) if bg else {None: by[a]["features"]}))
+                continue
+            scored = [(one(by[a]["features"]), a) for a in sorted(affs)]
+            if scored:
+                s, a = max(scored)
+                out.append(OffHand((s, c, p["weapon"], a), by[a]["features"]))
+        return sorted(out, key=lambda x: (-x[0], x[1])), pool
+
+    mains, main_pool = hand("main_hand", cr.FEATURES, weights)
+    ow = cr.offhand_weights(off_weights)
+    offs, off_pool = hand("offhand", cr.OFFHAND_FEATURES, ow, ps.pool if ps else ())
+    # A set is valued by the better hand per feature (`SetScorer`, `set_score`) wherever the two
+    # hands' features measure something in common; hands that share none (the selftest's one-feature
+    # stand-ins) sum, which is the same rule over disjoint features.
+    if any(SHARED_FEATURES.get(f) in cr.OFFHAND_FEATURES for f in cr.FEATURES):
+        main_dicts = [d for rw in roles["weapons"].values()
+                      for v in ((rw.get("main_hand") or {}).get("by_affinity") or {}).values()
+                      for d in (v["features"], *(v.get("by_grip") or {}).values())]
+        scorer = SetScorer(cr, weights, off_weights, main_pool, off_pool, main_dicts)
+        for m in mains:
+            m.scorer, m.bonus = scorer, getattr(cr, "TRUE_COMBO_BONUS", 0.0)
+    shared = tuple(f for f in cr.OFFHAND_FEATURES if f not in (ps.unmeasured if ps else ()))
+    cache = {}
+
+    def offs_for(m):
+        if m not in cache:
+            mw = m[2]
+            # With `ps`, a second copy of the main weapon is a candidate too: the plan then holds
+            # two copies, the set wears one in each hand (`second_copy`) and pays for both in the
+            # weight cap. Without `ps` the pair cannot be told apart from a powerstance, so the
+            # main weapon stays out of its own off hand as before.
+            # A second copy of a paired main hand is never offered: two-handed, the one copy
+            # already swings both hands (`powerstance_offs.paired`).
+            plain = [o for o in offs if ((ps and not ps.paired(mw)) or o[2] != mw)
+                     and not (ps and ps.can(mw, o[2]))]
+            # The records with the main hand on its own affinity, where the embedding has one for that
+            # left weapon (`er-mechanics-weapon-embed.powerstance_affinities`), else that weapon's
+            # others, so the right hand's hits are counted at the affinity the set carries.
+            recs = [x for x in (ps.by_right.get(mw, ()) if ps else ())
+                    if usable(x[0]) and aff_ok(x[0], x[1]) and aff_ok(mw, x[2])]
+            own = {x[0] for x in recs if x[2] == m[3]}
+            dual = [x for x in recs if x[2] == m[3] or x[0] not in own]
+            # A paired main hand two-handed: its one copy plays the paired moveset, measured by its
+            # same-weapon record on the main hand's own affinity (`PowerstanceOffs.two_hand`). It
+            # competes with the off hands on the same features; worn once, so `_weighed_combos`
+            # counts its weight once. The true combo stays in the main hand's score only: the
+            # two-handed features carry none (`cr.powerstance_features`).
+            th = ps.two_hand.get((mw, m[3])) if ps and ps.paired(mw) else None
+            # The grips the main hand is wieldable in (`MainHand.grips`); without per-grip roles
+            # every mode is open, as before. A one-handed mode needs the 1H grip, a two-handed one
+            # the 2H grip (a semi-wieldable weapon, its STR met two-handed only, has no 1H mode).
+            grips = getattr(m, "grips", None)
+            one_h = grips is None or "1H" in grips
+            two_h = grips is None or "2H" in grips
+            if not one_h:
+                plain, dual = [], []
+            th = th if two_h else None
+            if dual or th:
+                plain = [OffHand((round(cr.norm_score(o.feats, off_pool, shared, ow), 4), *o[1:]), o.feats)
+                         for o in plain]
+                plain += [OffHand((round(cr.norm_score(f, off_pool, shared, ow), 4), c, left, laff), f,
+                                  ps=True, right_aff=raff) for left, laff, raff, f, c in dual]
+            if cross is not None:
+                # The cross-hand term, one-handed with a plain off hand only: L1 throws the left
+                # weapon's own attack there, and nowhere else (`CrossHand`).
+                plain = [with_cross(o, mw) if not o.ps else o for o in plain]
+            if th:
+                plain.append(OffHand((round(cr.norm_score(th, off_pool, shared, ow), 4), m[1], mw, m[3]), th,
+                                     right_aff=m[3], two_hand=True))
+            elif grips is not None and "2H" in grips:
+                # Two-handed alone: the main hand's 2H grip and moveset, the left hand empty, no
+                # off-hand term (user, 2026-10-19). A paired weapon's two-handed mode is its paired
+                # moveset (`th`) instead, when the embedding records one.
+                plain.append(OffHand((0.0, m[1], mw, m[3]), {}, alone=True))
+            cache[m] = sorted(plain, key=lambda x: (-x[0], x[1], x[2]))
+        return cache[m]
+
+    bonus = getattr(cr, "TRUE_COMBO_BONUS", 0.0)
+
+    def with_cross(o, mw):
+        # Measured on first use (`OffHand.cross`): `best_pair` asks only where it can matter.
+        def measure(right=mw, left=o[2]):
+            got = cross(right, left)
+            if not got or not got[0]:
+                return None
+            return round(bonus * got[0], 4), f"{got[1]} p {got[0]:.2f}"
+        return OffHand(tuple(o), o.feats, ps=o.ps, right_aff=o.right_aff, measure=measure, cross_max=bonus)
+
+    return mains, offs_for
+
+
+#: The main hand's attacks a cross-hand link may open from: its standing R1s and R2s (user,
+#: 2026-10-19: "true combos / catches between the main's R1/R2 and the off-hand's L1 (and back)").
+CROSS_OPENERS = ("r1_", "r2_")
+CROSS_HAND_CACHE = Path.home() / ".cache" / "er-build-planner" / "cross-hand.json"
+#: Part of every `CROSS_HAND_CACHE` key: change it when `cross_land` or the link model changes.
+CROSS_HAND_MODEL = "cross-land-1"
+
+
+def _combo():
+    key = "er_mechanics_combo"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-combo.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[key] = m
+        spec.loader.exec_module(m)
+    return sys.modules[key]
+
+
+def cross_land(links, land):
+    """(p, "first->next") of the best cross-hand link in `links` (`er-mechanics-combo.Model
+    .cross_links`): a main-hand R1/R2 (`CROSS_OPENERS`) into the off hand's L1 #1, or an off-hand L1
+    into R1 #1. `p` is its landing chance `land(link, stagger)` (`er-mechanics-combo.link_land`: a
+    true link 1, a tie 0.5, on the poise-broken side weighted by the corpus share the first hit
+    breaks, else by whether it breaks the median victim). None when none lands."""
+    best = None
+    for lk in links:
+        f, nx = lk["first"], lk["next"]
+        if not ((f.startswith(CROSS_OPENERS) and nx == "left_1") or (f.startswith("left_") and nx == "r1_1")):
+            continue
+        st = lk.get("stagger")
+        p = land(lk, float(bool(lk.get("breaks_victim"))) if st is None else st)
+        if p > 0 and (best is None or p > best[0]):
+            best = (round(p, 4), f"{f}->{nx}")
+    return best
+
+
+class CrossHand:
+    """`cross(right, left)` -> (landing chance, link) or None, the cross-hand term's measurement for
+    `hand_scores`: `er-mechanics-combo.Model.cross_links` with `right` one-handed and `left`'s
+    off-hand L1, read by `cross_land`. Only where L1 plays the left weapon's own attack
+    (`left_mode` 'offhand'): a powerstance pair throws the dual chain and is scored on it, a shield
+    guards. The stagger shares are the mirror's builds `POOL_RL_WINDOW` either side of `rl`. Cached
+    per (`CROSS_HAND_MODEL`, rl, right, left) in `path`."""
+
+    def __init__(self, rl, mirror, path=CROSS_HAND_CACHE, model=None, module=None):
+        self.rl, self.mirror, self.path = rl, mirror, path
+        self.model, self.C = model, module
+        self.cache = json.loads(path.read_text()) if path and path.exists() else {}
+        self.new = 0
+
+    def __call__(self, right, left):
+        k = f"{CROSS_HAND_MODEL}|{self.rl}|{right}|{left}"
+        if k not in self.cache:
+            self.cache[k] = self._measure(right, left)
+            self.new += 1
+        got = self.cache[k]
+        return tuple(got) if got else None
+
+    def _measure(self, right, left):
+        C = self.C = self.C or _combo()
+        if self.model is None:
+            self.model = C.Model(rl=self.rl, window=_class_roles().POOL_RL_WINDOW, mirror=self.mirror)
+        reg = self.model.reg
+        try:
+            r, lw = reg.find_weapon(right), reg.find_weapon(left)
+        except SystemExit:                              # a name the regulation does not have
+            return None
+        if C.left_mode(reg, r, lw) != "offhand":
+            return None
+        try:
+            links = self.model.cross_links(r, lw)
+        except Exception:                               # weapon rows the attack module cannot read
+            return None
+        got = cross_land(links, C.link_land)
+        return list(got) if got else None
+
+    def save(self):
+        if self.path and self.new:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self.cache), encoding="utf-8")
+
+
+def set_weapons(m, o):
+    """The weapons one set wears, right hand first: one for a two-handed set (`OffHand.two_hand`),
+    else the main and the off weapon (the same weapon twice for two copies)."""
+    return (m[2],) if getattr(o, "two_hand", False) else (m[2], o[2])
+
+
+def cover_sets(hands, weapons, value, fallback=None):
+    """Every weapon of `weapons` its best equip set (user, 2026-10-19: every melee weapon in the plan
+    in at least one set): the best by `value(main, off)` over every set that holds it, as the main
+    hand in any mode `offs_for` offers it (two-handed alone or paired, one-handed with an off hand,
+    powerstanced) or as another main hand's off hand or powerstance partner. `hands` is
+    `hand_scores(..., all_mains=True)`, so the partner may be any usable weapon, held by the plan or
+    not. A weapon whose every set is worth 0 (past the weight table) takes the best by `fallback`.
+
+    Returns ({weapon: (value, main, off)}, sets) with sets [(value, main, off, covers)], best first:
+    one entry per distinct set, `covers` the weapons it is the best set of, so two weapons that are
+    each other's best partner share one set."""
+    mains, offs_for = hands
+    by_w = {m[2]: m for m in mains}
+    as_left = collections.defaultdict(list)
+    for m in mains:
+        for o in offs_for(m):
+            if not o.two_hand and o[2] != m[2]:
+                as_left[o[2]].append((m, o))
+    best = {}
+    for w in weapons:
+        pairs = ([(by_w[w], o) for o in offs_for(by_w[w])] if w in by_w else []) + as_left.get(w, [])
+        got = best_pair(pairs, value)
+        if got and got[0] <= 0 and fallback is not None:
+            got = best_pair(pairs, fallback)
+        if got:
+            best[w] = got
+    sets = {}
+    for w, (v, m, o) in best.items():
+        k = (m[2], m[3], o.two_hand and o.alone, set_weapons(m, o), None if o.two_hand else o[3], o.ps)
+        sets.setdefault(k, [v, m, o, []])[3].append(w)
+    return best, sorted((tuple(s) for s in sets.values()), key=lambda s: (-s[0], s[1][2]))
+
+
+#: The farthest apart, in slots, `arrange_sets` lets the two copies of one set sit before it gives
+#: the set a copy of its own beside the other weapon: one row's width, so both are on screen at
+#: once wherever the row breaks.
+SET_NEAR = ROW - 1
+
+
+def arrange_sets(sets, near=SET_NEAR):
+    """Acquisition order for the equip sets' copies (user, 2026-10-19: a weapon in k sets sits next to
+    its k partners). `sets` is [(right,) or (right, left)] weapon names; returns (order, at): `order`
+    the weapons in slot order, one copy each where it can serve every set it is in, and `at` per
+    set the positions in `order` of its copies, right hand first.
+
+    A placement over the set graph (weapons nodes, two-weapon sets edges) that keeps partners close:
+    per connected part, its most-connected weapon first, then repeatedly the unplaced weapon with
+    the most links into the line so far, put on whichever end leaves its links shorter. A hub with
+    four partners ends in the middle with two on each side (1 and 2 slots away). A set left more
+    than `near` apart gets a second copy of its more-connected weapon (the hub that could not sit
+    beside every partner) on the far partner's outer side, the only case that adds a copy, so every
+    set ends within `near`."""
+    adj = collections.defaultdict(collections.Counter)
+    nodes = []
+    for s in sets:
+        for w in s:
+            if w not in nodes:
+                nodes.append(w)
+        if len(s) == 2 and s[0] != s[1]:
+            adj[s[0]][s[1]] += 1
+            adj[s[1]][s[0]] += 1
+    rank = {w: i for i, w in enumerate(nodes)}
+    line_all, left = [], list(nodes)
+    while left:
+        hub = max(left, key=lambda w: (len(adj[w]), -rank[w]))
+        line = [hub]
+        left.remove(hub)
+        while True:
+            on = set(line)
+            cands = [w for w in left if any(p in on for p in adj[w])]
+            if not cands:
+                break
+            w = max(cands, key=lambda w: (sum(n for p, n in adj[w].items() if p in on), -len(adj[w]), -rank[w]))
+            pos = {x: i for i, x in enumerate(line)}
+            nb = [(pos[p], n) for p, n in adj[w].items() if p in pos]
+            front = sum(n * (i + 1) for i, n in nb)
+            back = sum(n * (len(line) - i) for i, n in nb)
+            if front < back:
+                line.insert(0, w)
+            else:
+                line.append(w)
+            left.remove(w)
+        line_all += line
+    # Tokens, so a second copy of a weapon is its own position.
+    order = [[w] for w in line_all]
+    first = {w: t for t in reversed(order) for w in t}
+    refs = []
+    for s in sets:
+        if len(s) == 2 and s[0] == s[1]:
+            # Two copies of one weapon (a powerstance on itself): the second copy beside the first.
+            dup = [s[0]]
+            order.insert(next(i for i, t in enumerate(order) if t is first[s[0]]) + 1, dup)
+            refs.append([first[s[0]], dup])
+        else:
+            refs.append([first[w] for w in s])
+    for _ in range(2 * len(sets) + 1):
+        pos = {id(t): i for i, t in enumerate(order)}
+        far = [(abs(pos[id(r[0])] - pos[id(r[1])]), k) for k, r in enumerate(refs) if len(r) == 2]
+        far = [f for f in far if f[0] > near]
+        if not far:
+            break
+        _, k = max(far)
+        a_, b_ = refs[k]
+        # The more-connected weapon (the hub that could not sit beside every partner) gets a copy
+        # beside the far one, on its outer side, so no other set is split by it.
+        move, keep = (a_, b_) if len(adj[a_[0]]) >= len(adj[b_[0]]) else (b_, a_)
+        dup = [move[0]]
+        order.insert(pos[id(keep)] + (1 if pos[id(keep)] > pos[id(move)] else 0), dup)
+        refs[k] = [dup if t is move else t for t in refs[k]]
+    pos = {id(t): i for i, t in enumerate(order)}
+    return [t[0] for t in order], [tuple(pos[id(t)] for t in r) for r in refs]
 
 
 def crit_copies(weapon, affinity, pool, mountable, note):
@@ -477,7 +1701,9 @@ def crit_copies(weapon, affinity, pool, mountable, note):
     each its best copy by `norm` made on `affinity` whatever affinity the sweep valued it on. The
     row is the best `ROW` of them with one step or buff at most, as a class pair's row is drawn
     (`PAIR_UTILITY`), damaging ones first."""
-    ok = [x for x in pool if x["weapon"] == weapon and mountable(x["ash"])]
+    # A damaging copy valued at nothing is not a pick (`pair_pool`).
+    ok = [x for x in pool if x["weapon"] == weapon and mountable(x["ash"])
+          and (x["cat"] == "utility" or x["norm"] > 0)]
     cands, seen = [], set()
     for x in sorted(ok, key=lambda x: -x["norm"]):
         if x["ash"] not in seen:
@@ -543,7 +1769,8 @@ def set_ranged_status(rows, r1, stats, cache_path):
     stats_key = ",".join(f"{k}{stats[k]}" for k in STATS)
 
     def key(x):
-        return f"{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}|{r1.get((x['weapon'], x['grip']))}|{stats_key}|{MIST_DWELL_S}"
+        return (f"{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}|{r1.get((x['weapon'], x['grip']))}|{stats_key}|"
+                f"{MIST_DWELL_S}{A.variant_key(x)}")
 
     todo = [x for x in rows if x["cat"] != "utility" and key(x) not in cache]
     tab = None
@@ -564,9 +1791,10 @@ def set_ranged_status(rows, r1, stats, cache_path):
         grip = "both" if x["grip"] == "2H" else "one"
         # The bullets a cast fires depend on the weapon only through its behavior variation and
         # the opening its class plays (`er-mechanics-ashes.resolve_judge`, `_opening`).
-        ek = (sid, t.reg.weapon[wid]["behaviorVariationId"], A.weapon_diff_category(t, sid, wid, grip), level)
+        ek = (sid, t.reg.weapon[wid]["behaviorVariationId"], A.weapon_diff_category(t, sid, wid, grip), level,
+              x.get("stance"))
         if ek not in events:
-            prof = A.skill_profile(t, sid, wid, level, grip)
+            prof = A.skill_profile(t, sid, wid, level, grip, x.get("stance"))
             anim = A.main_anim(prof)
             evs = prof["anims"].get(anim, prof["anims"].get(str(anim), []))
             events[ek] = [(e["frames"][0], e["bullet"]) for e in evs if e["kind"] == "bullet" and e.get("bullet")]
@@ -637,6 +1865,21 @@ def _table_mod():
     return T
 
 
+def drop_no_pvp_utility(rows):
+    """Rows of skills with no hits that do nothing to a player (`er-mechanics-ash-table.pvp_utility`),
+    left out here too so a sweep made before that rule cannot bring one back."""
+    T = _table_mod()
+    names = {x["ash"] for x in rows if x["cat"] == "utility" and not x.get("buff")}
+    if not names:
+        return rows
+    t = T.A.AshTables()
+    sids = skill_ids(t, names)
+    bad = {n for n in names if n in sids and not T.pvp_utility(n, t.arts[sids[n]]["swordArtsTypeNew"], None)}
+    if bad:
+        print(f"no PvP effect, dropped: {', '.join(sorted(bad))}", file=sys.stderr)
+    return [x for x in rows if not (x["ash"] in bad and x["cat"] == "utility" and not x.get("buff"))]
+
+
 def skill_ids(t, names):
     """{ash name: SwordArtsParam id} the way the sweep resolves a name (`find_arts`). A name to id
     map built over every row is wrong for the 12 names two rows share: Spinning Slash is 103 and
@@ -650,30 +1893,59 @@ def skill_ids(t, names):
     return out
 
 
-def set_buff_values(rows, stats, cache_path):
+def chain_net(opp, poise, distance=None):
+    """`er-mechanics-ash-table.Table.chain_net` from the interrupt model: a chain's hits
+    [(frame, poise dealt, HP)] and hyperarmor windows go through
+    `er-mechanics-ash-interrupt.simulate` against the pool `opp` at my `poise`, with the clock
+    ending at the chain's roll cancel, and the chain nets the HP of the hits it lands less what his
+    replies take, the measure `er-mechanics-ash-interrupt.multiplier` uses. The two sides start
+    `distance` apart (default the strike distance, `INFERRED`: the buff's window is fought up
+    close, the string's opener already in range)."""
+    AI = _ai()
+    D = AI.EXCHANGE_DISTANCE_M if distance is None else distance
+    memo = {}
+
+    def net(hits, windows, end):
+        k = json.dumps([[[round(f, 1), round(q, 2)] for f, q, _ in hits], [list(w) for w in windows], round(end, 1)])
+        if k not in memo:
+            memo[k] = AI.simulate(opp, [(f, q) for f, q, _ in hits], windows, D, end, poise)
+        r = memo[k]
+        return sum(p * h for p, (_, _, h) in zip(r["p"], hits)) - r["taken"]
+    return net
+
+
+def set_buff_values(rows, stats, cache_path, armor=None):
     """Value the buff of every row of a sweep made before `er-mechanics-ash-table.BUFF_MODEL`
-    existed, so no re-sweep is needed: the hits the row's clock holds are re-read
-    (`Table.r1_slots`, through `buff_hits`) and `Table.buff_gain` adds the buff's damage on that
-    carrier, folded in by `apply_buff`. A row that already carries `buff` (a newer sweep) is left
-    as it is, and so is a step. Run before `add_grip_change`: the clock it divides by is the
-    cast's.
+    existed, or under an older one (`unapply_buff` takes that one out first), so no re-sweep is
+    needed: the hits the row's clock holds are re-read (`Table.r1_slots`, through `buff_hits`) and
+    `Table.buff_gain` adds the buff's damage on that carrier, folded in by `apply_buff`. A row
+    that already carries the current model's `buff` is left as it is, and so is a step. Run before
+    `add_grip_change`: the clock it divides by is the cast's.
+
+    A heavy-special buff (War Cry) weighs its window's R1 chain against the R2 it swaps in through
+    `chain_net`, at the poise of `armor` (the build's protectors; `DEFAULT_ARMOR` without them).
 
     Which ashes buff is read once per ash on its first carrier (`er-mechanics-ashes.skill_buffs`
     on that weapon's opening); only those ashes' rows are re-read. A utility row's follow-up is
     recomputed too, and a row more than 1 HP off the sweep's is counted and reported: it means the
-    sweep was made at other stats than `stats`. Cached per row and stats in `cache_path`."""
+    sweep was made at other stats than `stats`. Cached per row, stats and armor in `cache_path`."""
     T = _table_mod()
-    stats_key = ",".join(f"{k}{stats[k]}" for k in STATS)
+    armor = armor or DEFAULT_ARMOR
+    stats_key = ",".join(f"{k}{stats[k]}" for k in STATS) + "|" + ",".join(armor)
 
     def key(x):
         return (f"{T.BUFF_MODEL}|{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}|{x.get('follow_up')}|"
-                f"{(x.get('string') or {}).get('r1s')}|{T.string_scored(x)}|{stats_key}")
+                f"{(x.get('string') or {}).get('r1s')}|{T.string_scored(x)}|{stats_key}{T.A.variant_key(x)}")
 
     cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    for x in rows:
+        if (x.get("buff") or {}).get("model") not in (None, T.BUFF_MODEL):
+            T.unapply_buff(x)
     todo = [x for x in rows if "buff" not in x]
     miss = [x for x in todo if key(x) not in cache]
     if miss:
-        tab = T.Table(miss[0]["weapon"], miss[0]["affinity"], stats, DEFAULT_ARMOR, True)
+        tab = T.Table(miss[0]["weapon"], miss[0]["affinity"], stats, armor, True)
+        tab.chain_net = chain_net(_ai().Opponent(), round(tab.armor * 1000))
         A, t = T.A, tab.t
         sids = skill_ids(t, {x["ash"] for x in miss})
         buffs = {}
@@ -714,7 +1986,7 @@ def set_buff_values(rows, stats, cache_path):
                     continue
                 if x["cat"] == "utility" and abs(bh[1]["dmg"] - x["dmg"]) > 1:
                     off += 1
-                prof = A.skill_profile(t, sids[x["ash"]], tab.wid, tab.level, two)
+                prof = A.skill_profile(t, sids[x["ash"]], tab.wid, tab.level, two, x.get("stance"))
                 cache[key(x)] = tab.buff_gain(sids[x["ash"]], prof, two, ctx, *bh)
             if n and n % 50 == 0:
                 print(f"  {n}/{len(groups)} weapons", file=sys.stderr, flush=True)
@@ -887,7 +2159,7 @@ def set_lead_in(rows, stats):
         for x in old:
             if x["ash"] != ash:
                 continue
-            prof = T.A.skill_profile(t, sid, t.find_weapon(x["weapon"]), 0, x["grip"])
+            prof = T.A.skill_profile(t, sid, t.find_weapon(x["weapon"]), 0, x["grip"], x.get("stance"))
             lead = T.A.lead_in(t, sid, prof)
             if lead:
                 shift_cast(x, lead)
@@ -913,7 +2185,7 @@ def set_multihit_weights(rows, stats, cache_path):
 
     def akey(x):
         lead = f"|lead{x['lead']:g}" if x.get("lead") else ""
-        return f"ash|{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}{lead}"
+        return f"ash|{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}{lead}{T.A.variant_key(x)}"
 
     weapons = sorted({x["weapon"] for x in dmg})
     todo_w = [w for w in weapons if f"weapon|{w}" not in cache]
@@ -956,8 +2228,9 @@ def set_multihit_weights(rows, stats, cache_path):
             sid, two = sids.get(x["ash"]), x["grip"] == "2H"
             got = {"gain": 0, "period": None}
             if sid is not None:
-                hits = T.S.AshScorer(tab.lev, tab.weapon, tab.affinity, sid, two, tab.defender, None).hits(stats)
-                prof = T.A.skill_profile(tab.t, sid, tab.wid, tab.level, two)
+                hits = T.S.AshScorer(tab.lev, tab.weapon, tab.affinity, sid, two, tab.defender, None,
+                                     x.get("stance")).hits(stats)
+                prof = T.A.skill_profile(tab.t, sid, tab.wid, tab.level, two, x.get("stance"))
                 clip = tab.gates(sid, prof)
                 gates = clip["gates"] if clip else {}
                 period = gates.get("r1")
@@ -1013,8 +2286,23 @@ PIERCE_CACHE = Path.home() / ".cache/er-build-planner/ash-pierce-share.json"
 PARTNER_ROWS = 1
 #: A powerstance partner is good enough when its score is within this share of the best one's.
 PARTNER_SLACK = 0.03
-#: Classes whose weapons want an off-hand partner: the `COMBOS` pairs of two classes, Halberd's.
-OFFHAND_PARTNERS = {"Halberd": tuple(rc for rc, lc in COMBOS if lc == "Halberd" and rc != lc)}
+#: Weapons that want an off-hand partner: {left weapon: right weapons} of the measured equip sets
+#: (`derive_combos`, `offhand_partners`), filled in by `main` once the sets are known. Keyed by
+#: weapon, not class: measured 2026-10-19, the one set Star Fist + Bloodhound Claws keyed by class
+#: made every claw in the plan, Raptor Talons included, want a Star Fist beside it, a pair nothing
+#: had measured.
+OFFHAND_PARTNERS = {}
+
+
+def offhand_partners(combos):
+    """{left weapon: right weapons} of `combos` (`derive_combos`'s sets): the left weapon of a set
+    wants that set's right weapon near it. A set two-handed (no left weapon) or on two copies of one
+    weapon names no partner."""
+    out = {}
+    for _, _, right, left in combos:
+        if left is not None and left != right:
+            out[left] = tuple(dict.fromkeys(out.get(left, ()) + (right,)))
+    return out
 
 
 class Partners:
@@ -1026,7 +2314,9 @@ class Partners:
       (`er-mechanics-powerstance-guard.can_powerstance`), scored by the embedding's chain damage per
       second for the pair times the pierce counter bonus (`PIERCE_COUNTER`, `COUNTER_SHARE`) on the
       share of the pair's hits thrown by a pierce weapon (`EquipParamWeapon.atkAttribute` 2).
-    - A weapon of an `OFFHAND_PARTNERS` class wants a weapon of one of its partner classes."""
+    - A weapon `OFFHAND_PARTNERS` names (the left weapon of a measured set) wants that set's right
+      weapon, unless it is paired (`isDualBlade` and `bothHandEquipable`): two-handed, a paired
+      weapon already plays its own dual moveset and needs no off-hand partner."""
 
     def __init__(self, embed_doc, tables):
         spec = importlib.util.spec_from_file_location("er_mechanics_grip_modes", HERE / "er-mechanics-grip-modes.py")
@@ -1056,6 +2346,11 @@ class Partners:
     def pierce(self, w):
         return self.row(w).get("atkAttribute") == 2
 
+    def paired(self, w):
+        """Two-handed, `w` plays its paired moveset (`powerstance_offs.paired`)."""
+        row = self.row(w)
+        return bool(row.get("isDualBlade") and row.get("bothHandEquipable"))
+
     def pierce_factor(self, p):
         hands = [h for k, s in p["slots"].items() if k.startswith("dual_") and k[5:].isdigit()
                  for h in s.get("hands") or ()]
@@ -1066,7 +2361,7 @@ class Partners:
     def need(self, w, aff):
         """"powerstance", "offhand" or None."""
         if (w, aff) not in self._need:
-            kind = "offhand" if self.cls(w) in OFFHAND_PARTNERS else None
+            kind = "offhand" if w in OFFHAND_PARTNERS and not self.paired(w) else None
             if kind is None:
                 for b in [aff] + [p for p in self.GM.ps_affinities(self.e, w) if p != aff]:
                     m = self.GM.modes(self.e, w, b)
@@ -1089,13 +2384,13 @@ class Partners:
     def ok(self, w, aff, p):
         kind = self.need(w, aff)
         if kind == "offhand":
-            return self.cls(p) in OFFHAND_PARTNERS[self.cls(w)]
+            return p in OFFHAND_PARTNERS[w]
         sc = self.scores(w, aff)
         return p in sc and sc[p] >= (1 - PARTNER_SLACK) * max(sc.values())
 
 
 def pierce_key(x):
-    return f"{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}"
+    return f"{x['weapon']}|{x['affinity']}|{x['ash']}|{x['grip']}{_table_mod().A.variant_key(x)}"
 
 
 _PIERCE_W = {}
@@ -1117,7 +2412,7 @@ def _pierce_work(item):
         sid, share = sids.get(x["ash"]), None
         if sid is not None:
             hits = T.S.AshScorer(tab.lev, tab.weapon, tab.affinity, sid, x["grip"] == "2H",
-                                 tab.defender, None).hits(stats)
+                                 tab.defender, None, x.get("stance")).hits(stats)
             total = T.A.pvp_damage(tab.t, tab.wid, hits, tab.defender, T.S.OPT.DEF)
             pierce = sum(h["pvp_damage_total"] for h in hits if h["phys_type"] == "pierce")
             share = round(pierce / total, 4) if total else 0.0
@@ -1148,10 +2443,14 @@ def set_pierce_weights(rows, stats, cache_path, jobs=6):
               file=sys.stderr, flush=True)
         _PIERCE_W["stats"] = stats
         cache_path.parent.mkdir(parents=True, exist_ok=True)
+        # Largest chunk first, so the rows done, not the chunks, say how much is left.
+        rows_total, rows_done = len({pierce_key(x) for x in todo}), 0
         with ctx.Pool(jobs, initializer=AI._worker_init, initargs=(workers, ctx.Value("i", 0))) as pool:
             for n, res in enumerate(pool.imap_unordered(_pierce_work, chunks), 1):
                 cache.update(res)
-                print(f"  {n}/{len(chunks)} weapon affinities", file=sys.stderr, flush=True)
+                rows_done += len(res)
+                print(f"  {n}/{len(chunks)} weapon affinities, {rows_done}/{rows_total} rows",
+                      file=sys.stderr, flush=True)
                 if n % 20 == 0 or n == len(chunks):
                     cache_path.write_text(json.dumps(cache))
     for x in dmg:
@@ -1166,6 +2465,7 @@ def weigh(rows, a, r1, build_stats, report=False, stages=None):
     status proc. Each pass starts a stage of `stages` (`Stages`)."""
     pb = bool(getattr(a, "perfect_block", None) and a.perfect_block_weight)
     stage = stages or (lambda name: None)
+    got = None
     if a.interrupt_weight or a.whiff_weight or pb:
         # The perfect-block term reads the same cast profiles, so it computes them when the
         # interrupt and whiff weights are both off.
@@ -1173,9 +2473,12 @@ def weigh(rows, a, r1, build_stats, report=False, stages=None):
         got = interrupt_weights(rows, a)
         if a.whiff_weight:
             stage("whiff")
-            whiff_weights(rows, got, getattr(a, "interrupt_cache", None))
+            whiff_weights(rows, got, getattr(a, "interrupt_cache", None), getattr(a, "interrupt_jobs", 6))
             if report:
                 whiff_report(rows)
+    # Self-damage and the full-HP gear it switches off (`set_self_costs`), in the whiff stage's
+    # time: they read the same profiles for the share of casts that reach the effect.
+    set_self_costs(rows, getattr(a, "build", None), got if a.interrupt_weight else None, report)
     stage("area")
     set_area_weights(rows)
     stage("landing")
@@ -1200,6 +2503,8 @@ def weigh(rows, a, r1, build_stats, report=False, stages=None):
             pb_report(rows)
     if report:
         ranged_report(rows)
+    set_by_distance(rows)
+    return got
 
 
 def _sr():
@@ -1371,7 +2676,11 @@ def shield_copies(a, build, main_w, main_aff, r1, build_stats):
                 f"cuts {cuts}" + (f"; {o['net_hp']:.0f} HP per opening, catch {o['catch']:.2f}" if o else ""))
         copies.append({"weapon": p["weapon"], "ash": x["ash"], "affinity": p["affinity"], "cat": "utility",
                        "grip": "1H", "value": o["net_hp"] if o else 0.0, "norm": 0.0, "area": 0.0,
-                       "status_hp": {}, "note": f"{x['job']}: {note}"})
+                       "status_hp": {}, "note": f"{x['job']}: {note}",
+                       # For `icon_saved_hp`: the share of a corpus opening the raised shield
+                       # stops, without the repel-punish credit, and the parry's HP over that block.
+                       "guard_base": float(p["_v"]["base"].mean()) if "_v" in p else p["guard"],
+                       "net_hp": o["net_hp"] if o else 0.0})
         print(f"Shields: {x['job']}: {p['affinity']} {p['weapon']} {x['ash']}, {note}", file=sys.stderr)
     tool = parry_tool_copy(a.parry, picks) if a.parry else None
     if tool:
@@ -1413,6 +2722,93 @@ def ranged_copies(build, build_stats, main_reach):
     return copies, ammo
 
 
+#: The fight model icon-shield rows are valued over (user, 2026-10-18: "weighted by value based
+#: on the potential length of invasions being an hour"): `er-mechanics-buffs.FIGHT_KINDS`.
+ICON_FIGHT = "invasion"
+
+
+def _buffs():
+    key = "er_mechanics_buffs"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-buffs.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[key] = m
+        spec.loader.exec_module(m)
+    return sys.modules[key]
+
+
+def icon_saved_hp(c):
+    """HP one Shields-row copy saves per corpus opening against no shield: the share of the
+    opening its raised guard stops (`guard_base`, `ShieldModel.guard` without the repel-punish
+    credit) times the opening's mean HP on me (`opening_hp`), plus a parry copy's `net_hp`, which
+    is measured over a block of the same opening (`ShieldModel.ash_options`)."""
+    return c["guard_base"] * c["opening_hp"] + max(0.0, c.get("net_hp", 0.0))
+
+
+def fight_hold_hp(kind=ICON_FIGHT):
+    """`defense(hp_saved)` and `offense(dps)`: HP per fight of holding one copy, the mean over
+    `er-mechanics-buffs.fight_kind_points(kind)` (invasion: 10 s to 1 h, log-spaced).
+
+        defense  attackers x f / ENGAGEMENT_SECONDS x (1 - FIGHT_WIN_SHARE) x hp_saved
+        offense  min(dps x f x FIGHT_WIN_SHARE, targets x (hp + CORPUS_CRIMSON x FLASK_HEAL_HP x FLASK_ETA))
+
+    Every constant is `er-mechanics-buffs`'s, with its own label there: each attacker gets an
+    engagement every `ENGAGEMENT_SECONDS` and lands its opening in the share of them I lose, and
+    my damage is only worth what the hosts' HP bars and their flasks hold (`hp`: `fight_hits`'
+    corpus median max HP). So offense stops growing once the hosts are dead and defense does not,
+    which is what an hour-long invasion does to a shield.
+
+    `INFERRED`: a copy is valued as if it were the one held for the whole fight. Nothing measures
+    what share of a fight a given inventory copy spends in hand; the share is the same unknown on
+    both sides of a comparison, so it cancels and is not a constant here."""
+    B = _buffs()
+    k = B.FIGHT_KINDS[kind]
+    fs = tuple(B.fight_kind_points(kind))
+    hp = inspect.signature(B.fight_hits).parameters["hp"].default
+    kill = k["targets"] * (hp + B.CORPUS_CRIMSON * B.FLASK_HEAL_HP * B.FLASK_ETA)
+    win = B.FIGHT_WIN_SHARE
+
+    def defense(saved):
+        return statistics.fmean(k["attackers"] * f / B.ENGAGEMENT_SECONDS * (1.0 - win) * saved for f in fs)
+
+    def offense(dps):
+        return statistics.fmean(min(dps * f * win, kill) for f in fs)
+    return SimpleNamespace(points=fs, kill=kill, attackers=k["attackers"], defense=defense, offense=offense)
+
+
+def icon_shield_plan(slots, pool, cap, protected, hold):
+    """[{k, copy, icon_hp, rows, row, slot, row_hp, placed}]: up to `cap` icon-shield rows, one per
+    even share of the plan's whole rows. Share k offers `pool[k % len(pool)]` (`icon_hp`, its
+    `hold.defense`) against the share's cheapest displaceable row: no slot `protected`, and no
+    weapon whose last copies it holds. A row is worth its best copy's `hold.offense`, since one copy
+    is held at a time; `slot` is that copy. `placed` when the shield is worth more, and then the
+    row's weapons no longer count toward later shares' last-copy rule. `row` None: the share has
+    no displaceable row."""
+    nrows = len(slots) // ROW
+    cap = min(cap, nrows)
+    count = collections.Counter(s["weapon"] for s in slots)
+    out = []
+    for k in range(cap):
+        c = pool[k % len(pool)]
+        d = {"k": k, "copy": c, "icon_hp": hold.defense(icon_saved_hp(c)),
+             "rows": (k * nrows // cap, (k + 1) * nrows // cap), "row": None, "placed": False}
+        cands = []
+        for r in range(*d["rows"]):
+            idx = range(r * ROW, (r + 1) * ROW)
+            here = collections.Counter(slots[i]["weapon"] for i in idx)
+            if any(protected(i) for i in idx) or any(count[w] <= n for w, n in here.items()):
+                continue
+            best = max(idx, key=lambda i: slots[i]["value"])
+            cands.append((hold.offense(slots[best]["value"]), r, best, here))
+        if cands:
+            row_hp, r, best, here = min(cands, key=lambda e: e[:2])
+            d.update(row=r, slot=best, row_hp=row_hp, placed=d["icon_hp"] > row_hp)
+            if d["placed"]:
+                count -= here
+        out.append(d)
+    return out
+
+
 def value(x):
     """`raw_value` times the interrupt multiplier (`er-mechanics-ash-interrupt.multiplier`, set as
     `imult` by `--interrupt-weight`): the share of the cast still delivered, net of the HP taken
@@ -1425,12 +2821,188 @@ def value(x):
     mixture with the other replies to first order. Times `mh_w` (`set_multihit_weights`): what a
     cast that feeds the successive-hit counter slower than its weapon's own strings gives up. Times
     `buff_w` (`set_buff_weights`) on a buff: what it adds here against its best carrier. Times
-    `pierce_w` (`set_pierce_weights`): the pierce counter-hit bonus on the cast's pierce share."""
+    `pierce_w` (`set_pierce_weights`): the pierce counter-hit bonus on the cast's pierce share.
+
+    `wmult` is the reply's `net`, below 0 when his punish outweighs the cast, and `combined`
+    floors only the mix. When the reply comes from the escape geometry (`whiff['geometry']`), it
+    already measured which of this carrier's hits land on a defender who rolls or strafes from
+    the ash's own engagement distance, so `area_w` and `reach_w` (`reactive_proxy`), the landing
+    proxies `raw_value` applies, are taken back off that half: they scale the interrupt half
+    only, and a hit the geometry says misses is not credited again by a wide sweep or a long reach.
+
+    Less `self_cost['share']` of `raw_value` (`set_self_costs`): the HP a self-damaging cast takes
+    from its user and the full-HP gear it switches off, over the HP the row delivers. It is paid
+    whatever the opponent does, so no reply weight scales it; the result is floored at 0.
+
+    Times `stance_w` (`merge_stance_buttons`) on a stance skill whose buttons were joined: what
+    pressing the better button per duel distance band adds over this row's button alone."""
     m = x.get("imult", 1.0)
     if "wmult" in x:
-        m = _whiff().combined(m, x["wmult"])
-    return (raw_value(x) * m * x.get("pmult", 1.0) * x.get("bmult", 1.0) * x.get("mh_w", 1.0)
+        m = _whiff().combined(m, x["wmult"] / reactive_proxy(x))
+    v = value_base(x) * m
+    share = (x.get("self_cost") or {}).get("share", 0.0)
+    v = max(0.0, v - raw_value(x) / spread_proxy(x) * share) if share else v
+    return v * x.get("stance_w", 1.0)
+
+
+def value_base(x):
+    """`value` before the reply multiplier: `raw_value` (less `spread_proxy`) times the parry,
+    perfect-block, multihit, buff and pierce weights."""
+    return (raw_value(x) / spread_proxy(x) * x.get("pmult", 1.0) * x.get("bmult", 1.0) * x.get("mh_w", 1.0)
             * x.get("buff_w", 1.0) * x.get("pierce_w", 1.0))
+
+
+def set_by_distance(rows):
+    """`by_distance` on every row valued over the duel's distance spread (`imult_by`, set by
+    `interrupt_weights`): [[node, credited time, m, value], ...] per band of the wave the cast
+    reaches, `m` the reply multiplier of the cast thrown at that band alone (`combined` of that
+    band's interrupt multiplier and whiff `net`, as `value` mixes the whole-duel ones, floored at 0
+    per band since the player presses it only where it is worth it) and `value` = `value_base` x m.
+    A set holding two ashes is then valued per band on the better of them (`band_set_value`,
+    `SetScorer.pair`). A row whose perfect-block term was measured per band (`bmult_by`,
+    `er-mechanics-perfect-block.AshSide.row`) takes that band's `bmult` in place of the whole
+    duel's."""
+    W = _whiff()
+    for x in rows:
+        if not x.get("imult_by"):
+            continue
+        net_by = {p[3]: p[2] for p in ((x.get("whiff") or {}).get("spread") or ()) if len(p) > 3}
+        bm_by = dict(map(tuple, x.get("bmult_by") or ()))
+        base, proxy = value_base(x), reactive_proxy(x)
+        bm = x.get("bmult", 1.0)
+        out = []
+        for node, c, im in x["imult_by"]:
+            m = W.combined(im, net_by.get(node, 1.0) / proxy) if "wmult" in x else im
+            b = base / bm * bm_by[node] if node in bm_by and bm > 0 else base
+            out.append([node, c, round(m, 4), round(b * m, 2)])
+        x["by_distance"] = out
+
+
+def merge_stance_buttons(rows):
+    """`rows` with each stance skill's button rows joined into one (user, 2026-10-19: "Is it
+    unsheathe R1, R2 or both?"). The sweep keeps one row per button the stance hands over on
+    (`er-mechanics-ash-table`, `variant`, `stance`: Unsheathe's R1 slash 040060 and R2 slash
+    040070), and the player picks the button after the L2 press, so the ash is worth the better
+    button wherever the cast is thrown, not one button's whole-duel value.
+
+    The distance band is the cast-time situation the model tells apart (`set_by_distance`); the
+    interrupt and whiff replies are the opponent's answer after the press and are already mixed
+    per band. So with bands, the kept row's `by_distance` holds every button's bands and
+    `band_set_value` takes the better per band, a nested credited time included (a longer-reaching
+    button takes only the time beyond the shorter one's reach where it is worse). The kept row is
+    the button whose bands are worth most alone, `stance_w` is the joined bands' worth over its
+    own, which `value` multiplies in, and `stance_by_band` records [node, button pressed there].
+    Without bands (no `--arena-m`, one fixed distance), there is one situation, so the kept row is
+    the better button by `value` and nothing is added. `stance_buttons` lists the joined buttons."""
+    AI = _ai()
+    groups = collections.defaultdict(list)
+    for x in rows:
+        if x.get("stance"):
+            groups[(x["weapon"], x["affinity"], x["ash"], x["grip"])].append(x)
+    drop = set()
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        banded = all(x.get("by_distance") for x in g)
+        best = (max(g, key=lambda x: (AI.band_set_value([x["by_distance"]]), value(x))) if banded
+                else max(g, key=value))
+        drop.update(id(x) for x in g if x is not best)
+        best["stance_buttons"] = sorted(x["stance"] for x in g)
+        if not banded:
+            continue
+        own = AI.band_set_value([best["by_distance"]])
+        both = AI.band_set_value([x["by_distance"] for x in g])
+        pick = {}
+        for x in g:
+            for b in x["by_distance"]:
+                if b[-1] > pick.get(b[0], (-1.0, None))[0]:
+                    pick[b[0]] = (b[-1], x["stance"])
+        best["stance_by_band"] = [[n, pick[n][1]] for n in sorted(pick)]
+        best["by_distance"] = sorted((b for x in g for b in x["by_distance"]), key=lambda b: (b[0], -b[-1]))
+        best["stance_w"] = round(both / own, 4) if own > 0 else 1.0
+    return [x for x in rows if id(x) not in drop]
+
+
+#: {(weapon, affinity, grip): `by_distance` of that carrier's best-valued damaging row}, filled by
+#: `main` after the rows are weighed (`ash_bands`), read by `SetScorer.pair`. Empty outside a duel.
+ASH_BANDS: dict = {}
+
+#: Which hand L2 casts, from c0000.hks (1.17.1) `GetSwordArtInfo` (debug lines 569-598).
+#: Two-handed (`c_Style` >= `HAND_LEFT_BOTH`), the held weapon's skill: `env(326, hand)` with hand
+#: `HAND_RIGHT` for `HAND_RIGHT_BOTH`, `HAND_LEFT` for `HAND_LEFT_BOTH`. One-handed, the left
+#: weapon's skill when `IsShieldArts` or `IsArrowStanceArts` holds for it, else the right
+#: weapon's -- powerstance included, the function has no pair case. `IsEnableSwordArts` (601-624)
+#: then refuses a left-hand one-handed skill unless `IsShieldArts` holds, so a bow skill on the
+#: left blocks L2 one-handed. The ids are `SwordArtsParam.swordArtsTypeNew` (`IsShieldArts` lines
+#: 664-668, `IsArrowStanceArts` 682-685); the 29 rows the shield list names are exactly the ones
+#: with `isGrayoutLeftHand` 0, the menu's mirror of the same rule.
+HKS_SHIELD_ARTS = frozenset(range(90, 100)) | frozenset(
+    {17, 71, 151, 152, 195, 196, 197, 201, 202, 207, 211, 322, 324, 334, 348, 352, 354, 355, 359, 399})
+HKS_ARROW_STANCE_ARTS = frozenset({100, 101, 102, 103, 104, 105, 106, 107, 108, 169, 337, 357, 371})
+#: {(weapon, affinity, grip): "shield" | "arrow"} for an `ASH_BANDS` carrier whose best row's skill
+#: is one L2 takes from the left hand one-handed (`HKS_SHIELD_ARTS`) or that blocks L2 there
+#: (`HKS_ARROW_STANCE_ARTS`), filled with `ASH_BANDS`.
+ASH_BAND_LEFT_L2: dict = {}
+
+
+def _ash_band_rows(rows) -> dict:
+    best = {}
+    for x in rows:
+        if x["cat"] != "utility" and x.get("by_distance"):
+            k = (x["weapon"], x["affinity"], x["grip"])
+            if k not in best or value(x) > value(best[k]):
+                best[k] = x
+    return best
+
+
+def ash_bands(rows) -> dict:
+    """{(weapon, affinity, grip): by_distance} of each carrier's best row by `value`."""
+    return {k: x["by_distance"] for k, x in _ash_band_rows(rows).items()}
+
+
+def left_l2_kind(type_new):
+    """"shield" when L2 one-handed casts this skill from the left hand, "arrow" when it there
+    blocks L2, else None (`HKS_SHIELD_ARTS`, `HKS_ARROW_STANCE_ARTS`)."""
+    if type_new in HKS_SHIELD_ARTS:
+        return "shield"
+    if type_new in HKS_ARROW_STANCE_ARTS:
+        return "arrow"
+    return None
+
+
+def ash_band_left_l2(rows, type_new_of) -> dict:
+    """`ASH_BAND_LEFT_L2` for `rows`, `type_new_of(ash name)` giving its `swordArtsTypeNew`."""
+    out = {}
+    for k, x in _ash_band_rows(rows).items():
+        kind = left_l2_kind(type_new_of(x["ash"]))
+        if kind:
+            out[k] = kind
+    return out
+
+
+def reactive_proxy(x):
+    """`area_w` x `reach_w` when the whiff reply measured landing from geometry, else 1 (`value`).
+    A row valued over the duel's distances has `reach_w` off both halves already (`spread_proxy`),
+    so only `area_w` is taken off here."""
+    if not (x.get("whiff") or {}).get("geometry"):
+        return 1.0
+    p = x.get("area_w", 1.0) * (1.0 if x.get("spread") else x.get("reach_w", 1.0))
+    return p if p > 0 else 1.0
+
+
+def spread_proxy(x):
+    """`reach_w` x `land_w` on a row valued over the duel's distance spread (`x['spread']`, set by
+    `interrupt_weights`), else 1. Both are proxies for what range is worth: `reach_w` credits reach
+    beyond the carrier's R1 and the ash's longest carrier, `land_w` the share landed at
+    1.5-3.0 m. The spread measures it instead, from the hits that touch him at each distance the
+    duel holds him at (`er-mechanics-ash-interrupt.Rows.spread_profile`) on both the interrupt and
+    the whiff half, so `value` and `interrupt_weights` take them back off rather than count range
+    twice. `area_w` (sweep width) stays on the interrupt half: the standing touch test there is
+    straight ahead and does not measure width."""
+    if not x.get("spread"):
+        return 1.0
+    p = x.get("reach_w", 1.0) * x.get("land_w", 1.0)
+    return p if p > 0 else 1.0
 
 
 #: Interrupt profiles, keyed by sweep row (`er-mechanics-ash-interrupt.profiles`).
@@ -1439,7 +3011,7 @@ INTERRUPT_CACHE = Path.home() / ".cache/er-build-planner/ash-interrupt.json"
 #: draws its bar and its estimate from them, weighing each by `STAGE_TIMES` from the last run.
 STAGES = ("rows", "interrupt", "whiff", "area", "landing", "reach", "ranged status", "multihit", "pierce",
           "parry", "perfect block", "own status", "rank", "layout", "crit", "shields", "ranged", "fun and sets",
-          "partners", "redundant status", "write")
+          "partners", "set coverage", "redundant status", "write")
 STAGE_TIMES = Path.home() / ".cache/er-build-planner/loadout-stage-times.json"
 
 
@@ -1496,7 +3068,18 @@ def _whiff():
     return sys.modules[key]
 
 
-def whiff_weights(rows, got, cache_path=None):
+#: (whiff module, opponents, interrupt profiles) for `_whiff_one`, set before the workers fork.
+_WHIFF_JOB = None
+
+
+def _whiff_one(job):
+    """One row's whiff simulation, `job` = (its interrupt profile key, its grip change)."""
+    W, opp, got = _WHIFF_JOB
+    rk, grip_change = job
+    return W.from_profile(opp, got.get(rk), grip_change)
+
+
+def whiff_weights(rows, got, cache_path=None, jobs=1):
     """Set `wmult` and `whiff` on every damaging row from its interrupt profile in `got`
     (module docstring of `er-mechanics-ash-whiff.py`). A two-handed row's grip change counts as
     telegraph: the opponent sees the swap start `grip_change` frames before the cast."""
@@ -1515,17 +3098,51 @@ def whiff_weights(rows, got, cache_path=None):
     todo = [x for x in rows if x["cat"] != "utility"]
     print(f"whiff: {len(todo)} rows, {sum(1 for x in todo if _whiff_key(AI, x) in memo)} cached",
           file=sys.stderr, flush=True)
+    # The uncached rows are independent simulations, so they run on `jobs` forked workers.
+    need = {}
+    for x in todo:
+        key = _whiff_key(AI, x)
+        if key not in memo and key not in need:
+            need[key] = (AI.row_key(x), x.get("grip_change", 0.0))
+    if need:
+        global _WHIFF_JOB
+        _WHIFF_JOB = (W, opp, got)
+        keys = list(need)
+        n = max(1, min(jobs, len(keys)))
+        if n > 1:
+            import multiprocessing as mp
+            with mp.get_context("fork").Pool(n) as pool:
+                out = pool.imap(_whiff_one, [need[k] for k in keys], chunksize=16)
+                for i, (k, w) in enumerate(zip(keys, out), 1):
+                    memo[k] = w
+                    if i % 500 == 0 or i == len(keys):
+                        print(f"  {i}/{len(keys)} rows simulated on {n} workers", file=sys.stderr, flush=True)
+        else:
+            for k in keys:
+                memo[k] = _whiff_one(need[k])
+        _WHIFF_JOB = None
     for i, x in enumerate(todo, 1):
         key = _whiff_key(AI, x)
-        if key not in memo:
-            memo[key] = W.from_profile(opp, got.get(AI.row_key(x)), x.get("grip_change", 0.0))
         w = memo[key]
         # A step or buff, or a row with no profile, has no whiff to punish and keeps `imult` alone.
         if w:
-            x["wmult"] = W.multiplier(w)
-            x["whiff"] = {k: round(v, 3) for k, v in w.items()}
+            x["wmult"] = W.net(w)
+            x["whiff"] = {k: round(v, 3) if isinstance(v, float) else v for k, v in w.items()}
         if i % 500 == 0 or i == len(todo):
             print(f"  {i}/{len(todo)} rows", file=sys.stderr, flush=True)
+    # A cast with no hit has nothing to roll: the waiting reply punishes it outright
+    # (`er-mechanics-self-damage.cast_punish`). Not memoised: the punish is charged against
+    # `delivered_hp`, which the buff stage sets after the sweep, and a few hundred rows take seconds.
+    casts, geo = cast_ashes(rows), {}
+    cast_rows = [x for x in rows if x["cat"] == "utility" and x["ash"] in casts]
+    print(f"whiff: {len(cast_rows)} no-hit casts punished outright", file=sys.stderr, flush=True)
+    for x in cast_rows:
+        prof = got.get(AI.row_key(x))
+        if not prof or "error" in prof or prof.get("hits") or delivered_hp(x) <= 0:
+            continue
+        w = cast_whiff(x, prof, opp, geo)
+        x["wmult"] = W.net(w)
+        x["whiff"] = {k: round(v, 3) if isinstance(v, float) else v for k, v in w.items()}
     if path:
         path.write_text(json.dumps({"settings": settings, "rows": memo}))
 
@@ -1545,8 +3162,191 @@ def whiff_report(rows, n=10):
         ha = x.get("ha") or {}
         print(f"whiff: {x['ash']} ({x['affinity']} {x['weapon']} {x['grip']}): T f{w['T'] + lead:g}, "
               f"gate f{w['gate'] + lead:g}, HA start {('f%g' % ha['start']) if ha else '-'}, "
-              f"p_dodge {w['p_dodge']:.2f}, punish {w['punish_hp']:.0f} HP, trade {w['trade']:.2f}, "
+              f"p_dodge {w['p_dodge']:.2f}, strafe {w.get('strafe', 0.0):.2f}, skill {w.get('skill', 0.0):.2f} "
+              f"({w.get('skill_top') or '-'}), punish {w['punish_hp']:.0f} HP, "
+              f"backstab {w.get('backstab', 0.0):.2f}, trade {w['trade']:.2f}, "
               f"wmult {x['wmult']:.2f}", file=sys.stderr)
+
+
+_SELF = {}
+
+
+def _self_mod():
+    key = "er_mechanics_self_damage"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-self-damage.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[key] = m
+        spec.loader.exec_module(m)
+    return sys.modules[key]
+
+
+def _self_tables():
+    """(ash-table module, `AshTables`), read once for the self-cost and cast terms."""
+    if "t" not in _SELF:
+        T = _table_mod()
+        _SELF["t"] = (T, T.A.AshTables())
+    return _SELF["t"]
+
+
+def cast_ashes(rows) -> set:
+    """Names of the no-hit skills among `rows` that are casts the opponent can punish
+    (`er-mechanics-self-damage.cast_punish`): every utility row's skill but a step
+    (`ROLLING_ARTS`, invincible and moving away) and a `NO_HIT_KEEP` skill (valued by its own
+    model)."""
+    names = {x["ash"] for x in rows if x["cat"] == "utility" and x.get("ash")}
+    if not names:
+        return set()
+    T, t = _self_tables()
+    sids = skill_ids(t, names)
+    return {n for n, s in sids.items()
+            if t.arts[s]["swordArtsTypeNew"] not in T.ROLLING_ARTS and n not in T.NO_HIT_KEEP}
+
+
+def delivered_hp(x) -> float:
+    """HP the row's own clock delivers: the cast's (a utility row's: the follow-up's) damage, or
+    the string's when the row is scored on it, plus what its buff adds (`apply_buff`)."""
+    T = _table_mod()
+    st = x.get("string") or {}
+    base = st.get("dmg") if T.string_scored(x) and st.get("dmg") else x.get("dmg") or 0.0
+    return float(base) + float((x.get("buff") or {}).get("added") or 0.0)
+
+
+def build_armor(build_path):
+    """The protectors the `--build` planner JSON wears (the interrupt model's armor), or None."""
+    if not build_path:
+        return None
+    b = json.loads(Path(build_path).read_text())
+    return [s["name"] for p in ("arms", "body", "legs", "head")
+            for s in (b.get("protectors") or {}).get(p, {}).get("slots", []) if s.get("equipSet")] or None
+
+
+def build_wear(build_path):
+    """(max HP, worn talismans) of the `--build` planner JSON; the interrupt model's fallback HP
+    and no talismans without one."""
+    max_hp, worn = 2292.5, []
+    if build_path:
+        b = json.loads(Path(build_path).read_text())
+        max_hp = (b.get("computed") or {}).get("maxHealth") or max_hp
+        worn = [s["name"] for s in (b.get("talismans") or {}).get("slots", []) if s.get("equipSet")]
+    return max_hp, worn
+
+
+def set_self_costs(rows, build_path=None, got=None, report=False, wear=None):
+    """`self_cost` on every row of a skill that hurts its user (`er-mechanics-self-damage`): `hp`
+    the HP its own SpEffects take (`self_damage`, at the build's max HP), `gear_hp` what the worn
+    full- or high-HP talisman rows stop saving and adding once it has (`gated_loss`), `spent` the
+    talismans it leaves worth nothing, and `share` = (`hp` + `gear_hp`) x `land` / the HP the row
+    delivers (`delivered_hp`), which `value` takes off. `land` is the share of casts that reach the
+    effect: the interrupt profile's `fx` in the attack-into reply, every cast in the waiting one
+    (`er-mechanics-ash-whiff.DODGE_SHARE`); 1 without profiles. A skill whose SpEffects take
+    nothing gets no `self_cost`, so its value is unchanged. `wear` (max HP, worn talismans)
+    stands in for `build_path`."""
+    SD = _self_mod()
+    T, t = _self_tables()
+    names = {x["ash"] for x in rows if x.get("ash")}
+    sids = skill_ids(t, names)
+    hurt = {n for n, s in sids.items() if SD.skill_hurts_user(t, s)}
+    if not hurt:
+        return
+    max_hp, worn = wear or build_wear(build_path)
+    gated = SD.hp_gated_rows(_sib_talismans().Talismans(), worn) if worn else []
+    hit, win = _ai().B_HIT_HP, _buffs().FIGHT_WIN_SHARE
+    share_w = _whiff().DODGE_SHARE if got else None
+    AI = _ai() if got else None
+    A, memo, best = T.A, {}, {}
+    for x in rows:
+        if x.get("ash") not in hurt:
+            continue
+        k = (x["ash"], x["weapon"], x["grip"], x.get("stance"))
+        if k not in memo:
+            prof = A.skill_profile(t, sids[x["ash"]], t.find_weapon(x["weapon"]), 0, x["grip"], x.get("stance"))
+            memo[k] = SD.self_damage(t.speffect, prof["anims"].get(A.main_anim(prof), []), max_hp)
+        sd = memo[k]
+        if not sd["hp"]:
+            continue
+        loss = SD.gated_loss(sd["hp"], max_hp, gated, hit, win)
+        land = 1.0
+        if got:
+            r = got.get(AI.row_key(x)) or {}
+            fx = (r.get("fx") or [1.0])[0] if not r.get("error") else 1.0
+            land = (1.0 - share_w) * fx + share_w
+        full = delivered_hp(x)
+        cost = (sd["hp"] + loss["hp"]) * land
+        x["self_cost"] = {"hp": sd["hp"], "gear_hp": loss["hp"], "rows": [r["id"] for r in sd["rows"]],
+                          "gear": [r for r in loss["rows"] if r["lost"] > 0], "spent": SD.spent_talismans(loss),
+                          "max_hp": max_hp, "land": round(land, 3), "full": round(full, 1),
+                          "share": round(cost / full, 4) if full > 0 else 1.0}
+        if x["ash"] not in best or full > best[x["ash"]]["self_cost"]["full"]:
+            best[x["ash"]] = x
+    if report:
+        for n, x in sorted(best.items()):
+            c = x["self_cost"]
+            print(f"self cost: {n} ({x['affinity']} {x['weapon']} {x['grip']}): takes {c['hp']:.0f} of {max_hp:g} HP, "
+                  f"switches off {c['gear_hp']:.0f} HP of {', '.join(g['name'] for g in c['gear']) or 'no gear'}, "
+                  f"x land {c['land']:.2f} against {c['full']:.0f} HP delivered: share {c['share']:.2f}", file=sys.stderr)
+
+
+def _sib_talismans():
+    key = "er_mechanics_talismans"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-talismans.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules[key] = m
+        spec.loader.exec_module(m)
+    return sys.modules[key]
+
+
+def cast_whiff(x, prof, opp, cache):
+    """`er-mechanics-self-damage.cast_punish` of one cast row from its interrupt profile `prof`:
+    the chase to my back is `circle` on the skill's own clip (`chase_frames`), my roll gate the
+    opening's roll cancel (`er-mechanics-disengage.clip`) on the cast clock. `cache` keeps the
+    geometry per skill, opening (`weapon_diff_category`: the clip a weapon class plays), grip and
+    distance, and whether the skill blocks a backstab per skill, so the carriers of one opening
+    share one `circle`.
+
+    A profile valued over the duel's distances (`prof['spread']`) is punished at each of them,
+    his run in from there, and the results are weighted by the distance's share of the duel."""
+    SD, W, AI = _self_mod(), _whiff(), _ai()
+    T, t = _self_tables()
+    A = T.A
+    sid, wid = t.find_arts(x["ash"]), t.find_weapon(x["weapon"])
+    k = (sid, A.weapon_diff_category(t, sid, wid, "both" if x["grip"] == "2H" else "one"), x["grip"], x.get("stance"))
+    bs = AI._backstab()
+    if k not in cache:
+        p = A.skill_profile(t, sid, wid, 0, x["grip"], x.get("stance"))
+        main = A.main_anim(p)
+        cat = A.SKILL_TAE_BASE + t.arts[sid]["swordArtsTypeNew"]
+        clip = T._disengage().clip(cat, int(main)) if main is not None else None
+        roll = ((clip or {}).get("gates") or {}).get("roll")
+        roll_gate = roll + A.lead_in(t, sid, p) if roll is not None else prof["gate"]
+        if "limits" not in _SELF:
+            _SELF["limits"] = bs.throw_limits()
+        circle = bs.circle(t, wid, sid, max(roll_gate, prof["gate"]) + 30.0, _SELF["limits"])
+        if ("blocks", sid) not in cache:
+            cache["blocks", sid] = bool(bs.skill_blocks_backstab(t, sid))
+        cache[k] = (circle, roll_gate, cache["blocks", sid])
+    circle, roll_gate, blocks = cache[k]
+    fx = (prof.get("fx_frames") or [None])[0]
+    spread = [(q["D"], q["w"]) for q in prof.get("spread") or ()] or [(prof["D"], 1.0)]
+    out = None
+    for D, w in spread:
+        chase = SD.chase_frames(bs, t, wid, sid, D, opp.k, max(roll_gate, prof["gate"]) + 30.0, _SELF["limits"],
+                                circle=circle)
+        # The buff is lost only to a reply that stops the cast before `fx`, the frame its TAE
+        # applies the buff SpEffect (`cast_punish`); what it adds is `apply_buff`'s `added`.
+        r = SD.cast_punish(opp, prof["windows"], prof["gate"], D, delivered_hp(x),
+                           x.get("grip_change", 0.0), chase, roll_gate, blocks, W.backstab_hp(), fx,
+                           buff_hp=float((x.get("buff") or {}).get("added") or 0.0), poise=prof.get("poise"))
+        if len(spread) == 1:
+            return r
+        fixed = ("T", "lead", "gate", "full")
+        if out is None:
+            out = {key: (0.0 if isinstance(v, float) and key not in fixed else v) for key, v in r.items()}
+        for key, v in r.items():
+            if isinstance(v, float) and key not in fixed:
+                out[key] += w * v
+    return out
 
 
 def ranged_report(rows, n=12):
@@ -1584,16 +3384,33 @@ def interrupt_weights(rows, a):
     # The simulated opponent answers the cast, whose hits `profiles` re-derives cast-relative, so it
     # gets the cast-relative `gate` and `last` of a two-handed row (`add_grip_change`), not the
     # swap-inclusive ones.
+    # A duel (`--arena-m`, its starting separation) values each cast over the duel's distance
+    # spread rather than at the ash's own ideal spacing (`er-mechanics-ash-interrupt.duel_spread`).
     got = AI.profiles([{**x, **x["cast"]} if "cast" in x else x for x in rows], a.interrupt_cache, stats, armor, max_hp, a.interrupt_poise, None, a.interrupt_jobs,
-                      log=lambda m: print(m, file=sys.stderr, flush=True), throttled=a.throttle)
+                      log=lambda m: print(m, file=sys.stderr, flush=True), throttled=a.throttle,
+                      arena_m=getattr(a, "arena_m", None))
     errors = 0
+    casts = cast_ashes(rows) if a.interrupt_weight else set()
     for x in rows:
         r = got.get(AI.row_key(x))
         if not r or "error" in r:
             errors += 1
             r = None
+        if r and r.get("spread") and r["hits"]:
+            # Valued over the duel's distances: which hits reach at each is measured (`spread_proxy`).
+            # Per band the interrupt multiplier of the cast thrown there alone, for `set_by_distance`:
+            # [node, credited time, multiplier at that distance].
+            x["spread"] = True
+            base = raw_value(x) / spread_proxy(x)
+            x["imult_by"] = [[q["node"], q["w"], round(AI.multiplier({"hits": r["hits"], "sim": q["sim"]}, base), 4)]
+                             for q in r["spread"] if q["reach"]]
         if a.interrupt_weight:
-            x["imult"] = AI.multiplier(r, raw_value(x))
+            x["imult"] = AI.multiplier(r, raw_value(x) / spread_proxy(x))
+            # A cast with no hit (`cast_ashes`) is worth the share of casts that reach the effect,
+            # less his hits through it (`taken`) over what the row delivers, as a damaging cast is.
+            full = delivered_hp(x) if r and not r["hits"] and x["ash"] in casts else 0.0
+            if full > 0:
+                x["imult"] = max(0.0, x["imult"] - r["sim"]["taken"] / full)
     if errors:
         print(f"interrupt: {errors} rows without a profile kept at 1.0", file=sys.stderr)
     return got
@@ -1654,6 +3471,36 @@ def mobility_weapons(path):
                 seen.add(name)
                 count[name] += 1
     return [w for w, _ in count.most_common()]
+
+
+def category_refs(rows):
+    """{category: the value `norm` divides by} over `rows` (each with "cat", "ash" and "value").
+
+    Each ash counts once, at its best copy, and only above 0: the interrupt weight floors many
+    ashes at 0, and on the STR 80 build only 4 bullet ashes were left above it, so the 10th best
+    was 0, the scale fell back to 1 and Flaming Strike's `norm` was 382 -- no `CLASS_ASH_PENALTY`
+    could hold it to `CLASS_ASH_CAP`, and it went on 17 class rows.
+
+    The scale is the category's `NORM_RANK`th best ash, not its best: a single status outlier
+    (Blood Spinning Slash on a Great Katana) would otherwise squash every other copy of its
+    category. But no higher above it than the pooled ashes' best sits above the pooled
+    `NORM_RANK`th best, `spread`: every value is the same unit (damage plus status per second,
+    `raw_value`), so a category may not give its best ash more `norm` than the whole pool would.
+    Without that bound the cap held unequally (heavy-kit RL 125, 2026-10-19): the utility
+    category's 10th best ash was worth 28 and War Cry's best copy 226, so its `norm` reached 8.2
+    against 2.1 for the best damaging ash, and `CLASS_ASH_PENALTY` (1 per carrier past the cap) let it onto
+    8 class rows."""
+    per = {c: {} for c in CATEGORIES}
+    for x in rows:
+        d = per.setdefault(x["cat"], {})
+        d[x["ash"]] = max(d.get(x["ash"], 0.0), x["value"])
+
+    def kth(vals):
+        return vals[min(NORM_RANK, len(vals)) - 1]
+    best = {c: sorted((v for v in d.values() if v > 0), reverse=True) for c, d in per.items()}
+    pooled = sorted((v for vals in best.values() for v in vals), reverse=True)
+    spread = pooled[0] / kth(pooled) if pooled else 1.0
+    return {c: max(kth(vals), vals[0] / spread) if vals else 1.0 for c, vals in best.items()}
 
 
 def spread_ashes(weapons, cands, per_weapon, cap, penalty, uncapped=frozenset()):
@@ -1720,15 +3567,65 @@ def spread_ashes(weapons, cands, per_weapon, cap, penalty, uncapped=frozenset())
     return out
 
 
+def out_of_arena(x, arena_m) -> bool:
+    """Whether a camouflage copy (`er-mechanics-ash-table.CAMOUFLAGE_SKILLS`) hides its wearer only
+    farther away than the fight's players ever get (`arena_m`): Assassin's Gambit hides past 17 m,
+    and a duel arena is 16.9 m (user, 2026-10-18), so it does nothing in a duel."""
+    if arena_m is None:
+        return False
+    T = _table_mod()
+    h = x.get("hidden_beyond_m")
+    if h is None and x["ash"] in T.CAMOUFLAGE_SKILLS:      # a sweep cached before the field existed
+        h = T.camouflage_m(T.CAMOUFLAGE_SKILLS[x["ash"]])
+    return h is not None and h > arena_m
+
+
+def excluded(x) -> bool:
+    """Whether `--exclude` (`EXCLUDE`) rules out this copy: its weapon, its skill, the skill on
+    this affinity, or the weapon in this grip (and affinity, when the rule names one)."""
+    aff = x.get("affinity", "Standard")
+    return (x["weapon"] in EXCLUDE["weapons"] or x.get("ash") in EXCLUDE["ashes"]
+            or (x.get("ash"), aff) in EXCLUDE["ash_affinity"]
+            or grip_excluded(x["weapon"], aff, x.get("grip")))
+
+
+def grip_excluded(weapon, affinity, grip) -> bool:
+    """Whether `--exclude`'s "rows" ban `weapon` held in `grip` ("1H"/"2H") on `affinity`."""
+    return any(weapon == w and grip == g and a in (None, affinity) for w, a, g in EXCLUDE["rows"])
+
+
+def ladder_exclude():
+    """The duel ladder's `--exclude` (`er-weapon-build.loadout_exclude` over `er-builds-ladder.py`,
+    no talismans), the one `er-weapon-build.py --fight duel` writes."""
+    spec = importlib.util.spec_from_file_location("er_weapon_build", HERE / "er-weapon-build.py")
+    wb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wb)
+    return wb.loadout_exclude(wb.ladder_bans(), [])
+
+
+def set_exclude(got):
+    """Fill `EXCLUDE` from an `--exclude` document."""
+    EXCLUDE.update(weapons=set(got.get("weapons", ())), ashes=set(got.get("ashes", ())),
+                   ash_affinity={tuple(p) for p in got.get("ash_affinity", ())},
+                   rows=[tuple(r) for r in got.get("rows", ())])
+
+
 def off_stat(x):
     """True when the copy's bullet takes under `OFF_STAT_SHARE` of its damage from the build's
     stats: it scales with a stat the build does not have (Glintstone Pebble at INT 10 is 8 of 266),
-    so on this build it is a weak fixed-damage cast. Ashes in `OFF_STAT_KEEP` are kept regardless."""
+    so on this build it is a weak fixed-damage cast. Ashes in `OFF_STAT_KEEP` are kept regardless.
+
+    A bullet with no stat term at all (every stat 0: the weapon's affinity corrects that element
+    by no stat, `er-mechanics-ash-table.Table.sources` with `terms` None) scales with nothing a
+    build could add, so it is not off-stat and is kept: Lightning Slash, Beast's Roar and
+    Thunderbolt on a Heavy weapon were dropped while scoring 413-452 on Heavy Wakizashi
+    (heavy-kit-f4bae4c4, 2026-10-19). `fits_build` keeps a non-scaling copy for the same reason."""
     b = (x.get("contrib") or {}).get("bullet")
     if not b or x["ash"] in OFF_STAT_KEEP:
         return False
     total = sum(b.values())
-    return bool(total) and sum(b[k] for k in ("str", "dex", "int", "fth", "arc")) / total < OFF_STAT_SHARE
+    stat = sum(b[k] for k in ("str", "dex", "int", "fth", "arc"))
+    return bool(total) and stat > 0 and stat / total < OFF_STAT_SHARE
 
 
 def primary_stats(build):
@@ -1852,12 +3749,15 @@ def bloodhound_carriers(roles, by_weapon):
                   key=lambda w: -ws[w]["moveset_score"])
 
 
-def grab_copies(best, by_weapon, mobility, bloodhound=()):
+def grab_copies(best, by_weapon, mobility, bloodhound=(), usable=lambda x: True):
     """The copies that get whole pages: Waves of Darkness on its hyperarmor carrier, Bloodhound's
     Step on `bloodhound`'s first weapon (the best whole-arsenal moveset), each other
     `MOBILITY_ASHES` ash on the weapon public builds most often put it on, then every ash whose
     hyperarmor starts by `GRAB_HA_START` and that lands by `GRAB_FIRST_HIT`, earliest hyperarmor
-    first, each on its best-scoring carrier."""
+    first, each on its best-scoring carrier. Only copies `usable` passes (`one_handed`) are
+    considered."""
+    best = {k: x for k, x in best.items() if usable(x)}
+    by_weapon = collections.defaultdict(list, {w: [x for x in xs if usable(x)] for w, xs in by_weapon.items()})
     out = []
 
     def top(xs):
@@ -1905,6 +3805,131 @@ def selftest() -> int:
         bad += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name}: {got!r}" + ("" if ok else f" (want {want!r})"))
 
+    un = {"weapon": "Uchigatana", "affinity": "Keen", "ash": "Unsheathe", "grip": "1H"}
+    check("pierce_key: a stance row's button is part of the key (Unsheathe R1 vs R2), a plain row's unchanged",
+          [pierce_key({**un, "stance": "r1"}), pierce_key({**un, "stance": "r2"}), pierce_key(un)],
+          ["Uchigatana|Keen|Unsheathe|1H|stance r1", "Uchigatana|Keen|Unsheathe|1H|stance r2",
+           "Uchigatana|Keen|Unsheathe|1H"])
+
+    # Every `stage("...")` this file calls is in `STAGES`, which `Stages.__call__` indexes: a missing
+    # one crashed the heavy-kit run at its 20th stage (2026-10-19, "set coverage").
+    import re as _re
+    called = set(_re.findall(r'\bstage\("([a-z][a-z ]*)"\)', Path(__file__).read_text()))
+    check("STAGES: every stage the loadout calls is listed", sorted(called - set(STAGES)), [])
+
+    # `_whiff_one` on forked workers returns what the serial loop does, in order.
+    global _WHIFF_JOB
+    import types
+    fake_w = types.SimpleNamespace(from_profile=lambda opp, prof, gc: {"p": prof, "gc": gc, "opp": opp})
+    _WHIFF_JOB = (fake_w, "opp", {"a": 1, "b": 2})
+    jobs_in = [("a", 0.0), ("b", 7.5), ("c", 0.0)]
+    import multiprocessing as mp
+    with mp.get_context("fork").Pool(2) as pool:
+        par = list(pool.imap(_whiff_one, jobs_in, chunksize=1))
+    check("whiff: forked workers match the serial simulation", par, [_whiff_one(j) for j in jobs_in])
+    _WHIFF_JOB = None
+
+    # `off_stat`: a bullet with a stat term the build lacks is dropped; one with no stat term is not.
+    check("off_stat: a bullet scaling 8 of 266 with INT on an INT 10 build is off-stat",
+          off_stat({"ash": "Glintstone Pebble", "contrib": {"bullet": {
+              "fixed": 60, "weapon level": 198, "str": 0, "dex": 0, "int": 8, "fth": 0, "arc": 0}}}), True)
+    check("off_stat: Lightning Slash's Heavy Wakizashi bullet (fixed 80, weapon level 240, no stat) is kept",
+          off_stat({"ash": "Lightning Slash", "contrib": {
+              "blade": {"fixed": 58, "weapon level": 95, "str": 156, "dex": 0, "int": 0, "fth": 0, "arc": 0},
+              "bullet": {"fixed": 80, "weapon level": 240, "str": 0, "dex": 0, "int": 0, "fth": 0, "arc": 0}}}),
+          False)
+    # The whiff reply measured from geometry is not scaled again by the landing proxies: score 100
+    # x area_w 2 x reach_w 1.5 is 300 on the interrupt half (x 0.8) and 100 on the reply (x -0.4),
+    # 0.5 x 240 - 0.5 x 40 = 100. A reply without geometry keeps both proxies on both halves.
+    wx = {"score": 100, "dmg": 100, "cat": "melee", "area_w": 2.0, "reach_w": 1.5, "imult": 0.8,
+          "wmult": -0.4, "whiff": {"geometry": 1.0}}
+    check("value: area_w and reach_w scale the interrupt half only when the whiff reply is measured",
+          round(value(wx), 6), 100.0)
+    check("value: without geometry the proxies stay on both halves",
+          round(value({**wx, "whiff": {}}), 6), 60.0)
+    check("value: a punish larger than the interrupt half floors the row at 0",
+          value({**wx, "wmult": -3.0}), 0.0)
+    # Valued over the duel's distances, range is measured on both halves, so reach_w (and land_w)
+    # come off both: the interrupt half is 100 x area_w 2 = 200 (x 0.8), the reply 100 (x -0.4),
+    # 0.5 x 160 - 0.5 x 40 = 60, and land_w 0.5 changes nothing.
+    check("value: over the duel spread reach_w and land_w come off both halves, area_w off the reply only",
+          [round(value({**wx, "spread": True}), 6), round(value({**wx, "spread": True, "land_w": 0.5}), 6)],
+          [60.0, 60.0])
+
+    # `category_refs` (heavy-kit RL 125, 2026-10-19): the damaging ashes' values as that run had
+    # them (best 476, 10th 225) and a utility category whose 10th best is 28 under War Cry's 226.
+    # The utility scale is raised until War Cry's `norm` is no further above it than the pool's best
+    # is above the pool's 10th; the damaging scale keeps its own 10th best.
+    dmg_vals = [476, 406, 347, 344, 340, 270, 236, 230, 201, 225, 164, 158]
+    util_vals = [226, 49, 45, 40, 38, 35, 33, 31, 30, 28, 14]
+    crows = ([{"cat": "non-bullet", "ash": f"D{i}", "value": v} for i, v in enumerate(dmg_vals)]
+             + [{"cat": "utility", "ash": "War Cry" if i == 0 else f"U{i}", "value": v} for i, v in enumerate(util_vals)])
+    cref = category_refs(crows)
+    pooled = sorted(dmg_vals + util_vals, reverse=True)
+    check("category_refs: the damaging scale is its 10th best; the utility scale holds War Cry to the "
+          "pool's best-over-10th spread",
+          (round(cref["non-bullet"], 6), round(226 / cref["utility"], 4), cref["bullet"]),
+          (225, round(pooled[0] / pooled[NORM_RANK - 1], 4), 1.0))
+    # The cap then binds War Cry as it binds a damaging ash. Ten weapons, two slots each, each with
+    # two damaging ashes of its own (norm 1.0 and 0.9 on the damaging scale) and War Cry (a copy
+    # worth 200): on the old scale (utility 10th best, 28) War Cry's 7.1 pays the rising penalty
+    # past `CLASS_ASH_CAP` on 9 weapons; on the bounded scale (1.87) a fourth carrier would gain 0.97
+    # over the weapon's own 0.9 ash and pay 1, so it stays at the cap.
+    def carriers(util_ref):
+        ws = [f"W{i}" for i in range(10)]
+        cands = {}
+        for w in ws:
+            cands[w, f"A{w}"] = {"weapon": w, "ash": f"A{w}", "cat": "non-bullet", "norm": 1.0}
+            cands[w, f"B{w}"] = {"weapon": w, "ash": f"B{w}", "cat": "non-bullet", "norm": 0.9}
+            cands[w, "War Cry"] = {"weapon": w, "ash": "War Cry", "cat": "utility", "norm": 200 / util_ref}
+        got = spread_ashes(ws, cands, 2, CLASS_ASH_CAP, CLASS_ASH_PENALTY)
+        return sum(any(x["ash"] == "War Cry" for x in xs) for xs in got.values())
+    check("category_refs: War Cry carriers on the old utility scale vs the bounded one",
+          (carriers(28.0), carriers(cref["utility"])), (9, CLASS_ASH_CAP))
+
+    # Self-damage (`set_self_costs`), read from the regulation: Seppuku on Estoc 2H as the
+    # heavy-kit sweep has it, at the heavy kit's 2594 max HP.
+    def util(ash, dmg, score, last, added):
+        return {"ash": ash, "weapon": "Estoc", "affinity": "Heavy", "grip": "2H", "cat": "utility", "dmg": dmg,
+                "dps": score, "score": score, "last": last, "first": last - 10, "string": None, "quick": True,
+                "follow_up": "roll_r1", "gate": 121.0, "area": 0.0, "status_hp": {}, "imult": 1.0,
+                "buff": {"added": added, "share": round(added / last * FPS / score, 4), "status_hp": {}}}
+    sep, cry = util("Seppuku", 257, 62, 139.0, 33.1), util("War Cry", 257, 70, 80.0, 60.0)
+    plain = {k: value(x) for k, x in (("sep", sep), ("cry", cry))}
+    set_self_costs([sep, cry], wear=(2594, []))
+    check("self cost: Seppuku takes 15% of max HP plus 100 from its user",
+          sep["self_cost"]["hp"], round(0.15 * 2594 + 100, 1))
+    check("self cost: Seppuku is worth less than with no self-damage term", value(sep) < plain["sep"], True)
+    check("self cost: a buff that does not hurt its user (War Cry) is unaffected",
+          ("self_cost" in cry, value(cry)), (False, plain["cry"]))
+    # `chain_net` on a one-row pool: his 200-poise hit lands at f5 (no approach at 2.5 m) on a
+    # 100-poise me. My hits at f3 and f20 for 100 HP each: the first lands, the second is lost to
+    # the break, and his hit takes `B_HIT_HP`. Hyperarmor +200 over f0-30 holds it: both land.
+    import numpy as np
+    from types import SimpleNamespace
+    toy = SimpleNamespace(P=np.array([1000.0]), offs=np.array([0.0]), w=np.array([1.0]), reach=np.array([3.0]),
+                          k=7.5, t=np.array([[5.0]]), q=np.array([[200.0]]), m=np.array([[True]]),
+                          win=np.array([[[-1.0]], [[-1.0]], [[0.0]], [[1.0]], [[0.0]]]),
+                          inv=np.array([[[-1.0]], [[-1.0]]]))
+    net = chain_net(toy, 100.0)
+    bh = _ai().B_HIT_HP
+    check("chain_net: a hit that breaks me cancels my later hits and takes B_HIT_HP",
+          round(net([(3.0, 10.0, 100.0), (20.0, 10.0, 100.0)], [], 40.0), 3), round(100.0 - bh, 3))
+    check("chain_net: hyperarmor that holds his hit keeps both of mine",
+          round(net([(3.0, 10.0, 100.0), (20.0, 10.0, 100.0)], [(0.0, 30.0, 200.0, 1.0, 0.0, 1.0)], 40.0), 3),
+          round(200.0 - bh, 3))
+    worn = ["Ritual Shield Talisman", "Crimson Amber Medallion +3"]
+    # A follow-up big enough that the cast alone keeps some value, so the gear's part shows.
+    sep2, cry2 = util("Seppuku", 2000, 450, 139.0, 33.1), util("War Cry", 257, 70, 80.0, 60.0)
+    set_self_costs([sep2, cry2], wear=(2594, worn))
+    alone = util("Seppuku", 2000, 450, 139.0, 33.1)
+    set_self_costs([alone], wear=(2594, []))
+    check("self cost: beside Seppuku, Ritual Shield's full-HP row is switched off and named spent",
+          (sep2["self_cost"]["gear_hp"] > 0, sep2["self_cost"]["spent"]), (True, ["Ritual Shield Talisman"]))
+    check("self cost: the switched-off talisman makes the cast cost more than it does alone",
+          value(sep2) < value(alone), True)
+    check("self cost: a non-damaging buff leaves a full-HP talisman alone", "self_cost" in cry2, False)
+
     def mk(w, aff, ash, cat="bullet", norm=1.0, theme="Classes", grab=False):
         return {"weapon": w, "affinity": aff, "ash": ash, "skill": ash, "cat": cat, "norm": norm,
                 "theme": theme, "row": 0, "grab": grab}
@@ -1945,6 +3970,12 @@ def selftest() -> int:
     lm = [mk("Axe", "Cold", "Hoarfrost Stomp", theme="Landmark: x", grab=True) for _ in range(ROW)]
     drop_redundant_status(lm, own, traits, lambda s: pool[s["weapon"]], make_slot)
     check("a landmark block stays one copy repeated", {s["ash"] for s in lm}, {"Storm Blade"})
+    gam = {"ash": "Assassin's Gambit", "hidden_beyond_m": 17.0}
+    check("arena: Gambit (hidden past 17 m) out of a 16.9 m duel, kept with no bound or at 20 m, "
+          "an ungated camouflage and a plain ash kept",
+          [out_of_arena(gam, 16.9), out_of_arena(gam, None), out_of_arena(gam, 20.0),
+           out_of_arena({"ash": "x", "hidden_beyond_m": 0.0}, 16.9), out_of_arena({"ash": "Quickstep"}, 16.9)],
+          [True, False, False, False, False])
     cpool = [mk("Misericorde", "Cold", n, c, v) for n, c, v in
              (("Quickstep", "utility", 5.0), ("Endure", "utility", 4.0), ("Storm Blade", "bullet", 3.0),
               ("Storm Blade", "bullet", 2.9), ("Bloody Slash", "non-bullet", 2.0), ("Lion's Claw", "non-bullet", 1.0),
@@ -1955,13 +3986,752 @@ def selftest() -> int:
           sorted((n, "Fire") for n in ("Quickstep", "Storm Blade", "Lion's Claw", "Wild Strikes", "Glintblade Phalanx")))
     check("crit row: damaging copies first", [x["cat"] for x in row][-1], "utility")
     check("crit candidates: every distinct mountable ash", len(cands), 7)
+
+    # `derive_combos`: one feature per hand, scored as its share of the pool's best.
+    cr = type("CR", (), {"FEATURES": ("m",), "OFFHAND_FEATURES": ("o",),
+                         "offhand_weights": staticmethod(dict),
+                         "norm_score": staticmethod(lambda f, pool, use, w: f[use[0]] / max(p[use[0]] for p in pool))})
+
+    def hands(m, o):
+        return {"main_hand": {"by_affinity": {a: {"features": {"m": v}} for a, v in m.items()}},
+                "offhand": {"by_affinity": {a: {"features": {"o": v}} for a, v in o.items()}}}
+    roles = {"weapons": {"Axe A": hands({"Heavy": 9, "Blood": 10}, {"Heavy": 1}),
+                         "Dagger D": hands({"Heavy": 8}, {"Blood": 10, "Heavy": 7}),
+                         "Halberd H": hands({"Heavy": 5}, {"Heavy": 6}),
+                         "Club C": hands({"Heavy": 7}, {"Heavy": 2})},
+             "classes": {"Axe": {"main_hand": {"weapon": "Axe A", "affinity": "Blood"},
+                                 "offhand": {"weapon": "Axe A", "affinity": "Heavy"}},
+                         "Dagger": {"main_hand": {"weapon": "Dagger D", "affinity": "Heavy"},
+                                    "offhand": {"weapon": "Dagger D", "affinity": "Blood"}},
+                         "Halberd": {"main_hand": {"weapon": "Halberd H", "affinity": "Heavy"},
+                                     "offhand": {"weapon": "Halberd H", "affinity": "Heavy"}},
+                         "Hammer": {"main_hand": {"weapon": "Club C", "affinity": "Heavy"},
+                                    "offhand": {"weapon": "Club C", "affinity": "Heavy"}}}}
+    pairs, plog = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=3)
+    check("combos: the best main hands across classes, each with the best off hand but its own weapon",
+          pairs, [("Axe", "Dagger", "Axe A", "Dagger D"), ("Dagger", "Halberd", "Dagger D", "Halberd H"),
+                  ("Hammer", "Dagger", "Club C", "Dagger D")])
+    pairs, plog = derive_combos(roles, cr, {}, {}, usable=lambda w: w != "Halberd H", n=2,
+                                aff_ok=lambda w, aff: aff != "Blood")
+    check("combos: a refused pick affinity falls back to the weapon's best allowed one, unusable weapons drop out",
+          (pairs, plog[0].split(" (")[0]),
+          ([("Axe", "Dagger", "Axe A", "Dagger D"), ("Dagger", "Hammer", "Dagger D", "Club C")], "Heavy Axe A"))
+    roles["classes"]["Dagger"]["offhand"] = {"weapon": "Dagger E", "affinity": "Blood"}
+    roles["weapons"]["Dagger E"] = hands({"Heavy": 1}, {"Blood": 10})
+    pairs, plog = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2)
+    check("combos: with no powerstance records a class's own off hand is scored on its L1 chain, and says so",
+          (pairs[1], "no powerstance record" in plog[1]), (("Dagger", "Dagger", "Dagger D", "Dagger E"), True))
+
+    # Powerstance (`PowerstanceOffs`): the real class-roles scoring over two daggers and a halberd.
+    # Dagger E's own L1 chain is weak, but Dagger D + Dagger E powerstance, and their dual moveset
+    # (both hands' hits) beats the halberd's L1 on every family; the halberd's longer L1 reach is
+    # not counted against a powerstance that has none. Halberd H cannot powerstance with a dagger.
+    rcr = _class_roles()
+
+    def l1rec(su, dmg, reach):
+        s = {"startup": su, "roll_after_hit": 6, "damage": dmg, "next_cancel": 12, "hits": 1, "stamina": 10}
+        return {"affinity": "Heavy", "summary": {"recovery": 6.0, "stamina": 10.0, "first_reach": reach},
+                "slots": {"left_1": s, "left_2": dict(s)}}
+
+    def psrec(right, left, su, dmg, wieldable=True, raff="Heavy"):
+        # The dagger's own reach: the embedding measures each dual attack's reach since 2026-10-19,
+        # and `l1_reach` is compared on both kinds of off hand.
+        s = {"startup": su, "roll_after_hit": 5, "damage": dmg, "next_cancel": 12, "hits": 2, "stamina": 16,
+             "reach": 2.0}
+        return {"right": right, "right_affinity": raff, "left": left, "left_affinity": "Heavy",
+                "class": "Dagger", "wieldable": wieldable, "summary": {"recovery": 5.0, "stamina": 16.0},
+                "slots": {"dual_1": s, "dual_2": dict(s), "dual_dash": dict(s), "dual_roll": dict(s),
+                          "dual_bstep": dict(s), "dual_crouch": dict(s)}}
+
+    def rhands(m, l1):
+        return {"main_hand": {"by_affinity": {"Heavy": {"features": {"ar": m}}}},
+                "offhand": {"by_affinity": {"Heavy": {"features": rcr.offhand_features(l1)}}}}
+    proles = {"weapons": {"Dagger D": {**rhands(10, l1rec(10, 50.0, 2.0)), "class": "Dagger"},
+                          "Dagger E": {**rhands(9, l1rec(10, 40.0, 2.0)), "class": "Dagger"},
+                          "Halberd H": {**rhands(8, l1rec(14, 120.0, 4.0)), "class": "Halberd"}},
+              "classes": {"Dagger": {"main_hand": {"weapon": "Dagger D", "affinity": "Heavy"},
+                                     "offhand": {"weapon": "Dagger E", "affinity": "Heavy"}},
+                          "Halberd": {"main_hand": {"weapon": "Halberd H", "affinity": "Heavy"},
+                                      "offhand": {"weapon": "Halberd H", "affinity": "Heavy"}}}}
+    owts = {"l1_startup": 0.25, "l1_recovery": 0.2, "l1_reach": 0.2, "l1_chain_dps": 0.25, "l1_stamina": 0.1}
+    # A set takes the better hand per feature (`SetScorer`) at the main table's weights, so the
+    # shared features carry weight there too; these main hands measure only `ar`, and every other
+    # feature is the off hand's.
+    mwts = {"ar": 1.0, **{m_: owts[o_] for m_, o_ in SHARED_FEATURES.items() if o_ in owts}}
+
+    def can(r, l):
+        return r.startswith("Dagger") and l.startswith("Dagger")
+    pso = PowerstanceOffs([psrec("Dagger D", "Dagger E", 9, 150.0), psrec("Dagger D", "Dagger D", 9, 120.0),
+                           psrec("Dagger E", "Dagger D", 9, 150.0, wieldable=False),
+                           psrec("Halberd H", "Dagger D", 9, 999.0),
+                           psrec("Dagger D", "Dagger E", 9, 999.0, raff="Blood")],
+                          can, rcr, lambda w, d: proles["weapons"][w]["class"])
+    check("powerstance: candidates are wieldable IsEnableDualWielding records, a weapon with itself included",
+          ({r: [x[0] for x in v] for r, v in pso.by_right.items()}, len(pso.pool)),
+          ({"Dagger D": ["Dagger E", "Dagger D", "Dagger E"]}, 3))
+    mains, offs_for = hand_scores(proles, rcr, {"ar": 1.0}, owts, lambda w: True, lambda w, a: True, pso)
+    dm = next(m for m in mains if m[2] == "Dagger D")
+    hm = next(m for m in mains if m[2] == "Halberd H")
+    dofs = offs_for(dm)
+    check("powerstance: a pair that powerstances is offered as the dual moveset, never as its L1 chain, "
+          "on the record with the main hand's own affinity (Heavy, not the stronger Blood one), "
+          "and a second copy of the main weapon is offered as its own powerstance",
+          sorted((o[2], o.ps, o.right_aff) for o in dofs),
+          [("Dagger D", True, "Heavy"), ("Dagger E", True, "Heavy"), ("Halberd H", False, None)])
+    halb = next(o for o in dofs if o[2] == "Halberd H")
+    check("powerstance: block costs left out on both kinds beside a powerstance main hand",
+          halb[0], round(rcr.norm_score(halb.feats, [p for p in [proles["weapons"][w]["offhand"]["by_affinity"]
+                                                                  ["Heavy"]["features"] for w in proles["weapons"]]]
+                                        + pso.pool, [f for f in rcr.OFFHAND_FEATURES
+                                                     if f not in rcr.POWERSTANCE_UNMEASURED],
+                                        rcr.offhand_weights(owts)), 4))
+    check("powerstance: a main hand with no powerstance candidate keeps reach, and a second copy that "
+          "cannot powerstance is offered on its own L1 chain; every weapon's L1 is a candidate",
+          sorted((o[2], o.ps, "l1_reach" in o.feats) for o in offs_for(hm)),
+          [("Dagger D", False, True), ("Dagger E", False, True), ("Halberd H", False, True)])
+    pairs, plog = derive_combos(proles, rcr, mwts, owts, usable=lambda w: True, n=2, ps=pso)
+    check("powerstance: the dagger set powerstances, logged as the dual moveset",
+          (pairs[0], "powerstance: the off-hand score is the dual moveset" in plog[0]),
+          (("Dagger", "Dagger", "Dagger D", "Dagger E"), True))
+    pairs, _ = derive_combos(proles, rcr, mwts, owts, usable=lambda w: True, n=2)
+    check("powerstance: without the records the dagger takes the halberd's stronger L1 chain",
+          pairs[0], ("Dagger", "Halberd", "Dagger D", "Halberd H"))
+    # Two copies of one weapon: Dagger D with itself is the strongest powerstance; the set wears two
+    # copies and pays for 2 x 2 weight.
+    self_ps = PowerstanceOffs([psrec("Dagger D", "Dagger D", 9, 300.0)], can, rcr,
+                              lambda w, d: proles["weapons"][w]["class"])
+    pairs, plog = derive_combos(proles, rcr, mwts, owts, usable=lambda w: True, n=1, ps=self_ps,
+                                weight={"Dagger D": 2.0, "Dagger E": 1.0, "Halberd H": 6.0}.get,
+                                cost=WeightCost({"weights": [0, 40], "value": [1.0, 1.0]}))
+    check("powerstance: a second copy of the main weapon makes the set, its weight counted twice",
+          (pairs[0], ", weight 4 (" in plog[0], "two copies" in plog[0]),
+          (("Dagger", "Dagger", "Dagger D", "Dagger D"), True, True))
+    # The dual strings' interrupt multipliers from the roles (`powerstance_trades`): the record's
+    # string and movement attacks are scaled by them, a record with none is left as it was.
+    rec = psrec("Dagger D", "Dagger E", 9, 150.0)
+    half = {"mult": 0.5, "poise_hit": 40.0}
+    tr_ps = PowerstanceOffs([rec], can, rcr, lambda w, d: proles["weapons"][w]["class"],
+                            trades={rcr.powerstance_key(rec): {"chain": half, "dash": half}})
+    plain_ps = PowerstanceOffs([rec], can, rcr, lambda w, d: proles["weapons"][w]["class"],
+                               trades={"other|key": {"chain": half}})
+    f, g = tr_ps.pool[0], plain_ps.pool[0]
+    check("powerstance trades: the dual string and the dash attack scaled, the roll attack and an "
+          "unmatched record not",
+          (f["l1_chain_dps"], f["l1_dash_damage"], f["l1_roll_damage"], f["l1_trade"], "l1_trade" in g),
+          (round(g["l1_chain_dps"] * 0.5, 1), round(g["l1_dash_damage"] * 0.5, 1), g["l1_roll_damage"], 0.5, False))
+    cs = [{"weapon": w, "affinity": a, "value": v} for w, a, v in
+          (("Dagger D", "Heavy", 5), ("Dagger D", "Blood", 9), ("Dagger D", "Heavy", 3), ("Club C", "Heavy", 1),
+           ("Dagger D", "Heavy", 8))]
+    check("second copy: the right hand's affinity first, then value, within the row before the plan; "
+          "none when the plan holds one copy",
+          [second_copy(cs, 0, 0, 4), second_copy(cs, 0, 0, 1), second_copy(cs, 3, 3, 1)], [2, 4, None])
+
+    # A paired main hand (Raptor Talons: `isDualBlade` and `bothHandEquipable`) two-handed: its one
+    # copy plays the paired moveset, scored on its same-weapon record at the main hand's affinity,
+    # against the real powerstance off hand (Claw B) on the same features. Measured 2026-10-19:
+    # without it, Raptor + Bloodhound Claws won because Raptor two-handed scored 0 off hand.
+    paired_ws = {"Claw R", "Claw B"}
+
+    def claw_roles(tc=0):
+        r = {"weapons": {"Claw R": {**rhands(10, l1rec(10, 50.0, 2.0)), "class": "Claw"},
+                         "Claw B": {**rhands(8, l1rec(10, 40.0, 2.0)), "class": "Claw"}},
+             "classes": {"Claw": {"main_hand": {"weapon": "Claw R", "affinity": "Heavy"},
+                                  "offhand": {"weapon": "Claw B", "affinity": "Heavy"}}}}
+        r["weapons"]["Claw R"]["main_hand"]["by_affinity"]["Heavy"]["features"]["true_combo"] = tc
+        return r
+
+    def claw_ps(self_dmg):
+        return PowerstanceOffs([psrec("Claw R", "Claw R", 9, self_dmg), psrec("Claw R", "Claw B", 9, 150.0),
+                                psrec("Claw R", "Claw R", 9, 999.0, raff="Blood")],
+                               lambda r, l: not (r == l and r in paired_ws), rcr, lambda w, d: "Claw",
+                               paired=lambda w: w in paired_ws)
+    cps = claw_ps(300.0)
+    check("two-handed: a paired weapon's same-weapon record on one affinity is its two-handed term, never "
+          "a powerstance; a record across two affinities is neither",
+          (sorted(cps.two_hand), {r: [x[0] for x in v] for r, v in cps.by_right.items()}),
+          ([("Claw R", "Heavy")], {"Claw R": ["Claw B"]}))
+    cmains, coffs_for = hand_scores(claw_roles(), rcr, {"ar": 1.0}, owts, lambda w: True, lambda w, a: True, cps)
+    cm = next(m for m in cmains if m[2] == "Claw R")
+    coffs = coffs_for(cm)
+    check("two-handed: the paired main hand is offered itself two-handed beside the real powerstance, "
+          "and no second copy",
+          sorted((o[2], o.ps, o.two_hand) for o in coffs), [("Claw B", True, False), ("Claw R", False, True)])
+    cw = {"Claw R": 2.0, "Claw B": 1.5}.get
+    pairs, plog = derive_combos(claw_roles(), rcr, mwts, owts, usable=lambda w: True, n=1, ps=cps,
+                                weight=cw, cost=WeightCost({"weights": [0, 40], "value": [1.0, 1.0]}))
+    check("two-handed: a stronger paired moveset wins the set, one copy, weight counted once, no off weapon",
+          (pairs[0], ", weight 2 (" in plog[0], "two-handed, one copy" in plog[0], "two copies" in plog[0]),
+          (("Claw", "Claw", "Claw R", None), True, True, False))
+    pairs, _ = derive_combos(claw_roles(), rcr, mwts, owts, usable=lambda w: True, n=1, ps=claw_ps(40.0),
+                             weight=cw, cost=WeightCost({"weights": [0, 40], "value": [1.0, 1.0]}))
+    check("two-handed: a weaker paired moveset loses to the powerstance on the same features",
+          pairs[0], ("Claw", "Claw", "Claw R", "Claw B"))
+    bonus = getattr(rcr, "TRUE_COMBO_BONUS", 0.0)
+    tm, toffs_for = hand_scores(claw_roles(1), rcr, {"ar": 1.0}, owts, lambda w: True, lambda w, a: True, cps)
+    tcm = next(m for m in tm if m[2] == "Claw R")
+    t2h = next(o for o in toffs_for(tcm) if o.two_hand)
+    c2h = next(o for o in coffs if o.two_hand)
+    check("two-handed: the true combo counts once, on the main hand, not again on the two-handed term",
+          (round(tcm[0] - cm[0], 4), t2h[0] == c2h[0], "true_combo" in t2h.feats), (round(bonus, 4), True, False))
+
+    # Play modes (user, 2026-10-19: two-handing puts the left weapon on your back). Main hands
+    # scored per grip (`by_grip`), shares of the pool's best m = 10 (Ref R, not usable); off hands
+    # shares of the best o = 10. The bonus is the roles' own `TRUE_COMBO_BONUS`.
+    gcr = type("CR", (), {"FEATURES": ("m",), "OFFHAND_FEATURES": ("o",), "offhand_weights": staticmethod(dict),
+                          "TRUE_COMBO_BONUS": rcr.TRUE_COMBO_BONUS,
+                          "norm_score": staticmethod(lambda f, pool, use, w: f[use[0]] / max(p[use[0]] for p in pool))})
+
+    def gh(cls, grips=None, o=None, su=None, osu=None):
+        su = su or {}
+        mh = {"Heavy": {"features": {"m": max(grips.values()), "r1_startup": min(su.values(), default=None)},
+                        "by_grip": {g: {"m": v, "r1_startup": su.get(g)} for g, v in grips.items()}}} if grips else {}
+        return {"class": cls, "main_hand": {"by_affinity": mh},
+                "offhand": {"by_affinity": {"Heavy": {"features": {"o": o, "l1_startup": osu}}} if o else {}}}
+
+    def groles(*mains):
+        ws = {"Ref R": gh("Ref", {"1H": 10, "2H": 10}, o=10), "Knife K": gh("Dagger", o=3, osu=9),
+              "Club C": gh("Hammer", o=3.4)}
+        ws.update(mains)
+        return {"weapons": ws, "classes": {v["class"]: {"main_hand": {"weapon": w, "affinity": "Heavy"}}
+                                           for w, v in ws.items() if v["main_hand"]["by_affinity"]}}
+    usable = lambda w: w != "Ref R"   # noqa: E731
+    # A STR main hand: 2H 0.9 alone beats 1H 0.4 + the best off hand 0.34; the old sum would have
+    # credited 0.9 + 0.34.
+    str_roles = groles(("Great G", gh("Greataxe", {"1H": 4, "2H": 9}, su={"1H": 12, "2H": 14})))
+    pairs, glog = derive_combos(str_roles, gcr, {}, {}, usable=usable, n=1)
+    check("modes: a STR main hand whose 2H beats 1H + off hand is played two-handed alone, no left weapon",
+          (pairs, "two-handed alone" in glog[0], glog[0].split(" = ")[1][:6]),
+          ([("Greataxe", "Greataxe", "Great G", None)], True, "0.9000"))
+    pairs, glog = derive_combos(str_roles, gcr, {}, {}, usable=usable, n=1, weight={"Great G": 10.0, "Knife K": 2.0,
+                                "Club C": 4.0}.get, cost=WeightCost({"weights": [0, 40], "value": [1.0, 1.0]}))
+    check("modes: two-handed alone weighs the main hand only",
+          (pairs[0][3], ", weight 10 (" in glog[0]), (None, True))
+    # A main hand whose 1H R1 true-combos into Knife K's L1 (frame data, `CrossHand`): 2H 0.75 alone
+    # beats 1H 0.4 + Club 0.34 = 0.74, but 1H + Knife 0.3 + the cross term 0.25 x 1.0 wins, over the
+    # stronger Club L1.
+    bk_roles = groles(("Halberd B", gh("Halberd", {"1H": 4, "2H": 7.5})))
+    pairs, _ = derive_combos(bk_roles, gcr, {}, {}, usable=usable, n=1)
+    check("modes: with no cross-hand link the halberd is two-handed alone", pairs,
+          [("Halberd", "Halberd", "Halberd B", None)])
+    xh = {("Halberd B", "Knife K"): (1.0, "r1_1->left_1")}
+    pairs, glog = derive_combos(bk_roles, gcr, {}, {}, usable=usable, n=1, cross=lambda r, l: xh.get((r, l)))
+    check("modes: a 1H R1 that true-combos into the off hand's L1 is played one-handed with it, the term logged",
+          (pairs, "cross-hand r1_1->left_1 p 1.00 +0.2500" in glog[0], "main 1H 0.4000" in glog[0]),
+          ([("Halberd", "Dagger", "Halberd B", "Knife K")], True, True))
+    # No set is credited a two-handed main hand and an off-hand term: every candidate's set score is
+    # its own grip's main score plus, one-handed only, the off hand and the cross term.
+    audit = []
+    for rl_ in (str_roles, bk_roles):
+        ms, of = hand_scores(rl_, gcr, {}, {}, usable, lambda w, a: True, cross=lambda r, l: xh.get((r, l)))
+        for m in ms:
+            for o in of(m):
+                if o.grip == "2H":
+                    audit.append(o.alone and o[0] == 0.0 and o.cross == 0.0 and set_score(m, o) == m.grips["2H"])
+                else:
+                    audit.append(not o.two_hand and set_score(m, o) == m.grips["1H"] + o[0] + o.cross)
+    check("modes: no set credited both a 2H main hand and an off-hand or cross term", (len(audit), all(audit)),
+          (6, True))
+    # Semi-wieldable (STR met two-handed only): no one-handed mode at all.
+    semi = groles(("Colossal X", gh("Colossal", {"2H": 8})))
+    ms, of = hand_scores(semi, gcr, {}, {}, usable, lambda w, a: True)
+    check("modes: a main hand wieldable two-handed only is offered alone, never with an off hand",
+          [(o[2], o.alone) for o in of(next(m for m in ms if m[2] == "Colossal X"))], [("Colossal X", True)])
+    # The ladder's bans (`--exclude`, `ladder_exclude`) reach the sets: measured 2026-10-19, the
+    # mode report passed every weapon as usable and listed Dueling Shield, Idus Sword and Sword
+    # Lance. A banned weapon is in neither hand; a grip ban (Stone Club 2H) drops that grip only.
+    saved = {k: (set(v) if isinstance(v, set) else list(v)) for k, v in EXCLUDE.items()}
+    set_exclude({"weapons": ["Knife K"], "rows": [["Great G", None, "2H"]]})
+    try:
+        ms, of = hand_scores(str_roles, gcr, {}, {}, lambda w: usable(w) and w not in EXCLUDE["weapons"],
+                             lambda w, a: True)
+        gm = next(m for m in ms if m[2] == "Great G")
+        got = (sorted(gm.grips), sorted({o[2] for m in ms for o in of(m)}), any(m[2] == "Knife K" for m in ms),
+               any(o.alone for o in of(gm)))
+    finally:
+        EXCLUDE.update(saved)
+    check("ladder bans: a banned weapon is in neither hand, a banned grip is no mode",
+          got, (["1H"], ["Club C"], False, False))
+    check("ladder bans: the duel exclusion holds the weapons the mode report used to list",
+          {"Dueling Shield", "Idus Sword", "Sword Lance"} <= set(ladder_exclude()["weapons"]), True)
+    # `powerstance_offs.can` on the regulation the sets load (`er-mechanics-ar.Tables`): the pair
+    # rule reads `wepmotionCategory`, so Pickaxe (great hammer by `wepType`, motion 32) pairs with
+    # Rusted Anchor (greataxe, motion 32) and not with Great Stars (great hammer, motion 35); only
+    # these two records are offered. A table whose rows lack the field raises instead of quietly
+    # refusing every powerstance.
+    spec = importlib.util.spec_from_file_location("er_mechanics_ar", HERE / "er-mechanics-ar.py")
+    ARm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ARm)
+    at = ARm.Tables(None)
+    precs = [{"right": r, "left": l, "right_affinity": "Heavy", "left_affinity": "Heavy", "wieldable": True,
+              "class": "Great Hammer"} for r, l in (("Pickaxe", "Rusted Anchor"), ("Pickaxe", "Great Stars"),
+                                                     ("Rusted Anchor", "Pickaxe"))]
+    pcr = SimpleNamespace(powerstance_features=lambda p, t=None: {"ar": 1.0}, POWERSTANCE_UNMEASURED=())
+    pso_real = powerstance_offs(precs, at, {}, pcr)
+    check("powerstance: Pickaxe pairs with Rusted Anchor both ways and never with Great Stars",
+          ({r: [x[0] for x in v] for r, v in pso_real.by_right.items()}, pso_real.can("Pickaxe", "Great Stars")),
+          ({"Pickaxe": ["Rusted Anchor"], "Rusted Anchor": ["Pickaxe"]}, False))
+    stripped = SimpleNamespace(weapons={k: {f: v for f, v in row.items() if f != "wepmotionCategory"}
+                                        for k, row in at.weapons.items()}, find_weapon=at.find_weapon)
+    try:
+        powerstance_offs(precs[:1], stripped, {}, pcr)
+        raised = False
+    except KeyError:
+        raised = True
+    check("powerstance: a loader without wepmotionCategory raises rather than refusing every pair", raised, True)
+    # The speed term reads the mode's grip: alone, R1 #1 two-handed (f14) and nothing from L1;
+    # one-handed with Knife K, its L1 #1 at f9.
+    gs = SetSpeed(str_roles, lambda s: s)
+    gm = next(m for m in hand_scores(str_roles, gcr, {}, {}, usable, lambda w, a: True)[0] if m[2] == "Great G")
+    gof = hand_scores(str_roles, gcr, {}, {}, usable, lambda w, a: True)[1](gm)
+    check("modes: the speed term takes the 2H R1 alone, the soonest of 1H R1 and L1 with an off hand",
+          (gs(gm, next(o for o in gof if o.alone))[0], gs(gm, next(o for o in gof if o[2] == "Knife K"))[0]), (14, 9))
+    # `cross_land`: the best link between R1/R2 and L1 #1 either way, by landing chance; a running
+    # R1 and the off hand's own L1 string are not cross-hand links.
+    C = _combo()
+
+    def lk(first, nxt, verdict, stagger=1.0):
+        return {"first": first, "next": nxt, "stagger": stagger, "breaks_victim": True,
+                "on_break": {"verdict": verdict}, "on_intact": {"verdict": "blocked by poise"}}
+    check("cross_land: a true R1 -> L1 over a tie, movement and L1 -> L1 links ignored, none when nothing lands",
+          [cross_land([lk("r1_2", "left_1", "tie"), lk("r1_1", "left_1", "true", 0.86),
+                       lk("run_r1", "left_1", "true"), lk("left_1", "left_2", "true")], C.link_land),
+           cross_land([lk("left_1", "r1_1", "true", 0.13)], C.link_land),
+           cross_land([lk("r1_1", "left_1", "roll-out-able"), lk("run_r1", "left_1", "true")], C.link_land)],
+          [(0.86, "r1_1->left_1"), (0.13, "left_1->r1_1"), None])
+
+    # Set coverage (`cover_sets`): every weapon its best set, as main hand or as off hand.
+    def cover(rl_, ws, xf=None):
+        hs = hand_scores(rl_, gcr, {}, {}, usable, lambda w, a: True, cross=xf, all_mains=True)
+        return cover_sets(hs, ws, lambda m, o: set_score(m, o))
+    best_g, cov_g = cover(str_roles, ["Great G", "Knife K", "Club C"])
+    check("cover: every plan weapon is in some set",
+          sorted(w for *_, covers in cov_g for w in covers), ["Club C", "Great G", "Knife K"])
+    check("cover: a weapon whose best set is two-handed gets a set to itself",
+          [(set_weapons(m, o), o.alone, covers) for _, m, o, covers in cov_g if "Great G" in covers],
+          [(("Great G",), True, ["Great G"])])
+    check("cover: an off-hand-only weapon takes its best main hand one-handed",
+          [set_weapons(m, o) for _, m, o, covers in cov_g if "Knife K" in covers], [("Great G", "Knife K")])
+    _, cov_b = cover(bk_roles, ["Halberd B", "Knife K", "Club C"], lambda r, l: xh.get((r, l)))
+    check("cover: two weapons that are each other's best partner share one set",
+          [(set_weapons(m, o), sorted(covers)) for _, m, o, covers in cov_b],
+          [(("Halberd B", "Knife K"), ["Halberd B", "Knife K"]), (("Halberd B", "Club C"), ["Club C"])])
+
+    # Better hand per feature (`SetScorer`, user 2026-10-19), on the real class-roles features. A STR
+    # main hand: 2H AR 150, reach 3.2, R1 string 100 MV/s; 1H AR 100, reach 3.0, string 80. Knife
+    # K's L1 string is the off-hand pool's best, its reach 2.0. Weights ar 0.5, reach 0.25, string
+    # 0.25 (half on the string, half on the movement R1s, `offhand_weights`'s split). Alone: 1.0.
+    # One-handed with K: AR 100/150 x 0.5 (1H AR, never 2H's), reach 3.0/3.2 x 0.25 (the 1H R1 over
+    # K's L1), string 1.0 x 0.125 (K's over the 1H's 0.8), movement 1.0 x 0.125 (a plain off hand's
+    # movement L1 is its L1 #1, the pool's best, over the 1H string standing in for the main hand's
+    # unmeasured movement R1s at 0.8) = 0.8177, so 2H wins, where the old sum credited 1H + all of K.
+    def sh(cls, grips=None, l1=None):
+        mh = ({"Heavy": {"features": {f: max(g[f] for g in grips.values()) for f in ("ar", "r1_reach", "r1_chain_dps")},
+                         "by_grip": grips}} if grips else {})
+        return {"class": cls, "main_hand": {"by_affinity": mh},
+                "offhand": {"by_affinity": {"Heavy": {"features": rcr.offhand_features(l1)}} if l1 else {}}}
+    s_roles = {"weapons": {"Great G": sh("Greataxe", {"1H": {"ar": 100, "r1_reach": 3.0, "r1_chain_dps": 80},
+                                                      "2H": {"ar": 150, "r1_reach": 3.2, "r1_chain_dps": 100}}),
+                           "Knife K": sh("Dagger", l1=l1rec(10, 50.0, 2.0)),
+                           "Club C": sh("Hammer", l1=l1rec(14, 30.0, 2.5)),
+                           "Wand W": sh("Staff", l1=l1rec(30, 1.0, 1.0))},
+               "classes": {"Greataxe": {"main_hand": {"weapon": "Great G", "affinity": "Heavy"}}}}
+    swts = {"ar": 0.5, "r1_reach": 0.25, "r1_chain_dps": 0.25}
+    sms, sof = hand_scores(s_roles, rcr, swts, owts, lambda w: True, lambda w, a: True)
+    sg = next(m for m in sms if m[2] == "Great G")
+    so = {(o[2], o.alone): o for o in sof(sg)}
+    check("per feature: alone is the 2H main hand's own score; one-handed takes the 1H AR, the better "
+          "reach, K's string and K's movement L1; the old sum would have been over 1.0",
+          (set_score(sg, so["Great G", True]), set_score(sg, so["Knife K", False]),
+           round(sg.grips["1H"] + so["Knife K", False][0], 4) > 1.0), (1.0, 0.8177, True))
+    check("per feature: an off hand no better on any feature adds nothing to the 1H main hand",
+          (set_score(sg, so["Wand W", False]), sg.grips["1H"]), (sg.grips["1H"], 0.7677))
+    pairs, slog = derive_combos(s_roles, rcr, swts, owts, usable=lambda w: True, n=1)
+    check("per feature: a STR main hand whose off hands only improve a few features two-hands",
+          (pairs, "two-handed alone" in slog[0]), ([("Greataxe", "Greataxe", "Great G", None)], True))
+    sx = {("Great G", "Knife K"): (1.0, "r1_1->left_1")}
+    pairs, slog = derive_combos(s_roles, rcr, swts, owts, usable=lambda w: True, n=1,
+                                cross=lambda r, l: sx.get((r, l)))
+    check("per feature: a measured R1 -> L1 true combo stays an additive bonus and wins one-handed "
+          "(0.8177 + 0.25 over 1.0)",
+          (pairs, "= 1.0677, cross-hand r1_1->left_1" in slog[0], "not their sum" in slog[0]),
+          ([("Greataxe", "Dagger", "Great G", "Knife K")], True, True))
+    audit = []
+    for o in hand_scores(s_roles, rcr, swts, owts, lambda w: True, lambda w, a: True,
+                         cross=lambda r, l: sx.get((r, l)))[1](sg):
+        if o.alone:
+            audit.append(set_score(sg, o) == round(sg.scorer.value(sg.feats["2H"]), 4))
+        else:
+            v = set_score(sg, o) - o.cross
+            audit.append(round(sg.scorer.value(sg.feats["1H"]), 4) - 1e-9 <= v
+                         <= sg.grips["1H"] + o[0] + 1e-9)
+    check("per feature: alone scores the 2H features with no off option; one-handed is at least the 1H "
+          "main hand alone and at most the old sum", (len(audit), all(audit)), (4, True))
+    # Block costs: the smaller penalty of the two hands; an off hand that does not measure it (a
+    # powerstance) is no option, so it neither zeroes nor adds the main hand's cost.
+    pc = SetScorer(rcr, {"ar": 1.0, "parry_cost": 1.0}, owts, [{"ar": 100, "parry_cost": 50}],
+                   [{"l1_hit": 100, "l1_parry_cost": 10}], [])
+    fm = {"ar": 100, "parry_cost": 50}
+    check("per feature: block cost the smaller measured penalty, an unmeasured off hand no option",
+          [round(pc.value(fm), 4), round(pc.value(fm, {"l1_hit": 100, "l1_parry_cost": 10}), 4),
+           round(pc.value(fm, {"l1_hit": 100, "l1_parry_cost": None}), 4)], [0.5, 0.9, 0.5])
+    # Reach over the duel spread (`cr.spread_weights`): the roles write `r1_reach` at 0 and the
+    # crit gap stops scoring reach in its place; at a fixed distance it still does.
+    rw = {"ar": 1.0, "r1_reach": 1.0, "crit": 1.0}
+    rpool = [{"ar": 100, "r1_reach": 4.0, "crit": 150}, {"ar": 100, "r1_reach": 2.0}]
+    fixed_s = SetScorer(rcr, rw, owts, rpool, [{"l1_hit": 1.0}], [])
+    spread_s = SetScorer(rcr, rcr.spread_weights(rw, {"nodes": [(2.0, 1.0)]}), owts, rpool, [{"l1_hit": 1.0}], [])
+    check("reach over the spread: r1_reach and the crit gap's reach both off; at a fixed distance both on",
+          [round(fixed_s.value(rpool[1]), 4), round(spread_s.value(rpool[1]), 4),
+           round(spread_s.value({"ar": 100, "r1_reach": 4.0}), 4)], [0.6667, 1.0, 1.0])
+    # The ash term over a duel's distance bands (`ASH_BANDS`, `SetScorer.ash_share`): a close ash
+    # (Unsheathe-like, 100 a band where it reaches, its reach ending inside the 4.38 m band) and a
+    # far ash (Storm Blade-like, 40 at every band). The set holding both presses the close one up
+    # close and the far one beyond: 18.7 + 40 x 0.813 = 51.2 against the far ash's 40 alone, its
+    # 40 again with two copies, and the close ash's 18.7.
+    duel_w = [0.018, 0.119, 0.186, 0.144, 0.136, 0.133, 0.132, 0.132]
+    nodes = [0.95, 2.16, 4.38, 7.28, 10.42, 13.32, 15.54, 16.75]
+    close = [[0.95, 0.018, 1.0, 100.0], [2.16, 0.119, 1.0, 100.0], [4.38, 0.05, 1.0, 100.0]]
+    far = [[d, w, 1.0, 40.0] for d, w in zip(nodes, duel_w)]
+    saved = dict(ASH_BANDS)
+    ASH_BANDS.clear()
+    ASH_BANDS.update({("Uchi U", "Heavy", "1H"): close, ("Waki W", "Heavy", "1H"): far,
+                      ("Waki W", "Heavy", "2H"): far})
+    try:
+        bs = SetScorer(rcr, {"ash_value": 1.0}, owts, [{"ash_value": 1.0}], [{"l1_hit": 1.0}], [])
+        uchi = MainHand((0.0, "Katana", "Uchi U", "Heavy"), grips={"1H": 0.0}, feats={"1H": {"ash_value": 1.0}})
+        waki = MainHand((0.0, "Katana", "Waki W", "Heavy"), grips={"1H": 0.0}, feats={"1H": {"ash_value": 1.0}})
+        off_waki = OffHand((0.0, "Katana", "Waki W", "Heavy"), {"l1_hit": 1.0})
+        off_none = OffHand((0.0, "Staff", "Wand W", "Heavy"), {"l1_hit": 1.0})
+        got = [bs.pair(uchi, off_waki), bs.pair(uchi, off_none), bs.pair(waki, off_none), bs.pair(waki, off_waki)]
+        # Which hand L2 casts (c0000.hks `GetSwordArtInfo`): a left-hand shield art (Parry 92)
+        # takes L2 one-handed, a left-hand bow skill (Barrage 101) blocks it, and then the main
+        # hand's ash is its 2H row only (30 a band here, against 40 one-handed).
+        far2 = [[d, w, 1.0, 30.0] for d, w in zip(nodes, duel_w)]
+        ASH_BANDS.update({("Waki W", "Heavy", "2H"): far2, ("Para P", "Heavy", "1H"): close,
+                          ("Bow B", "Heavy", "2H"): close})
+        rows_l2 = [{"cat": "melee", "weapon": "Para P", "affinity": "Heavy", "grip": "1H", "ash": "Parry-like",
+                    "by_distance": close, "score": 1, "dmg": 1},
+                   {"cat": "melee", "weapon": "Bow B", "affinity": "Heavy", "grip": "2H", "ash": "Barrage-like",
+                    "by_distance": close, "score": 1, "dmg": 1},
+                   {"cat": "melee", "weapon": "Waki W", "affinity": "Heavy", "grip": "2H", "ash": "Unsheathe-like",
+                    "by_distance": far2, "score": 1, "dmg": 1}]
+        kinds = {"Parry-like": 92, "Barrage-like": 101, "Unsheathe-like": 14}
+        saved_l2 = dict(ASH_BAND_LEFT_L2)
+        ASH_BAND_LEFT_L2.clear()
+        ASH_BAND_LEFT_L2.update(ash_band_left_l2(rows_l2, kinds.get))
+        l2_kinds = dict(ASH_BAND_LEFT_L2)
+        bs2 = SetScorer(rcr, {"ash_value": 1.0}, owts, [{"ash_value": 1.0}], [{"l1_hit": 1.0}], [])
+        off_para = OffHand((0.0, "Dagger", "Para P", "Heavy"), {"l1_hit": 1.0})
+        off_bow = OffHand((0.0, "Bow", "Bow B", "Heavy"), {"l1_hit": 1.0})
+        got_l2 = [bs2.pair(waki, off_para), bs2.pair(waki, off_bow), bs2.pair(uchi, off_bow),
+                  bs2.pair(waki, off_none)]
+        ASH_BAND_LEFT_L2.clear()
+        ASH_BAND_LEFT_L2.update(saved_l2)
+    finally:
+        ASH_BANDS.clear()
+        ASH_BANDS.update(saved)
+    check("L2 hand: SwordArtsParam.swordArtsTypeNew of Parry, Barrage and Unsheathe",
+          [left_l2_kind(92), left_l2_kind(101), left_l2_kind(14)], ["shield", "arrow", None])
+    check("L2 hand: a shield art or bow skill on the left takes L2 one-handed, so the main hand's ash "
+          "is its 2H row; the shield art casts from its 1H row; an off hand with neither leaves the main's 1H ash",
+          (l2_kinds, [round(g, 4) for g in got_l2]),
+          ({("Para P", "Heavy", "1H"): "shield", ("Bow B", "Heavy", "2H"): "arrow"},
+           # (18.7 + 30 x 0.813) / 40 = 1.07725, which the float sum rounds up
+           [1.0773, 1.0773, round(18.7 / 40, 4), 1.0]))
+    # `set_by_distance`: per band the two replies mixed as `value` mixes them, times `value_base`.
+    bx = {"score": 100, "dmg": 100, "cat": "melee", "spread": True, "wmult": 0.0, "whiff": {"geometry": 1.0,
+          "spread": [[1.0, 0.2, -0.2, 0.95], [2.0, 0.3, 0.4, 2.16]]}, "imult_by": [[0.95, 0.2, 0.8], [2.16, 0.3, 0.6]]}
+    set_by_distance([bx])
+    check("duel bands: each band's multiplier mixes that band's interrupt and whiff replies",
+          bx["by_distance"], [[0.95, 0.2, 0.3, 30.0], [2.16, 0.3, 0.5, 50.0]])
+    # A perfect block measured per band (`bmult_by`): each band takes its own `bmult`, not the
+    # whole duel's 0.9.
+    bb = {**bx, "bmult": 0.9, "bmult_by": [[0.95, 0.8], [2.16, 1.0]]}
+    set_by_distance([bb])
+    check("duel bands: a per-band perfect-block multiplier replaces the duel's in its band",
+          bb["by_distance"], [[0.95, 0.2, 0.3, 24.0], [2.16, 0.3, 0.5, 50.0]])
+    # `merge_stance_buttons`: a stance skill's R1 and R2 rows on one carrier are joined. R1 is worth
+    # 100 at 0.95 m and 20 at 2.16 m (its reach ends there), R2 50 at both and reaches on into the
+    # 4.38 m band. Per band the better button: 0.95 m R1 (100 x 0.018), 2.16 m R2 (50 x 0.119),
+    # 4.38 m R2 (50 x 0.05) = 10.25, against R2's 9.35 alone (kept, the better alone) and R1's 4.18.
+    def stance_row(button, bands, score):
+        return {"weapon": "Uchi U", "affinity": "Heavy", "ash": "Stance-like", "grip": "1H", "cat": "non-bullet",
+                "stance": button, "variant": f"stance {button.upper()}", "score": score, "dmg": score,
+                "by_distance": bands}
+    sr1 = stance_row("r1", [[0.95, 0.018, 1.0, 100.0], [2.16, 0.119, 1.0, 20.0]], 60)
+    sr2 = stance_row("r2", [[0.95, 0.018, 1.0, 50.0], [2.16, 0.119, 1.0, 50.0], [4.38, 0.05, 1.0, 50.0]], 50)
+    lone = {**stance_row("r1", [[0.95, 0.018, 1.0, 10.0]], 10), "weapon": "Other O"}
+    joined = merge_stance_buttons([sr1, sr2, lone])
+    j = next(x for x in joined if x["weapon"] == "Uchi U")
+    AIm = _ai()
+    check("stance buttons: R1 and R2 rows join into one row that presses the better button per band",
+          (len(joined), j["stance"], j["stance_buttons"], j["stance_by_band"],
+           round(AIm.band_set_value([j["by_distance"]]), 3), j["stance_w"], "stance_w" in lone),
+          (2, "r2", ["r1", "r2"], [[0.95, "r1"], [2.16, "r2"], [4.38, "r2"]], 10.25,
+           round(10.25 / 9.35, 4), False))
+    check("stance buttons: the joined row's value is its own button's times stance_w",
+          round(value(j), 4), round(value({**j, "stance_w": 1.0}) * round(10.25 / 9.35, 4), 4))
+    # No bands (one fixed distance, no situation to choose by): the better button by `value`.
+    nb1 = {**stance_row("r1", None, 60)}
+    nb2 = {**stance_row("r2", None, 50)}
+    nj = merge_stance_buttons([nb1, nb2])
+    check("stance buttons: without bands the better button by value is kept and nothing is added",
+          (len(nj), nj[0]["stance"], "stance_w" in nj[0]), (1, "r1", False))
+    check("duel bands: a close ash and a far ash in one set beat either alone and two copies of the far one",
+          (got[0] > max(got[1:]), got[2] == got[3], [round(g, 4) for g in got]),
+          (True, True, [round((18.7 + 40 * (1 - 0.018 - 0.119 - 0.05)) / 40, 4), round(18.7 / 40, 4), 1.0, 1.0]))
+
+    # `arrange_sets`: a hub in four sets sits in the middle, one copy, each partner 1 or 2 slots
+    # away; with ten partners the line cannot hold them all within `SET_NEAR`, so the farthest get a
+    # second hub copy beside them, and every set ends within `SET_NEAR`.
+    order, at = arrange_sets([("H", p) for p in "ABCD"])
+    check("arrange: a hub with 4 partners is next to all 4, one copy of it",
+          (order.count("H"), sorted(abs(i - j) for i, j in at)), (1, [1, 1, 2, 2]))
+    order, at = arrange_sets([("H", p) for p in "abcdefghij"] + [("a", "b"), ("X",), ("Y", "Y")])
+    check("arrange: every set within SET_NEAR, a second hub copy only where the line runs out, two copies "
+          "of one weapon side by side, a one-weapon set placed",
+          (max(abs(r[0] - r[1]) for r in at if len(r) == 2) <= SET_NEAR, order.count("H"),
+           abs(at[-1][0] - at[-1][1]), order[at[-2][0]], all(order[i] == w for r, s in zip(at, [("H", p) for p in "abcdefghij"])
+                                                               for i, w in zip(r, s))),
+          (True, 3, 1, "X", True))
+
+    # Off-hand partners (`offhand_partners`, `Partners.need`): keyed by the measured sets' weapons.
+    # A claw that is not a set's left weapon wants nothing, nor does a paired left weapon.
+    check("partners: the left weapon of a measured set wants its right weapon; two-handed and two-copy "
+          "sets name none",
+          offhand_partners([("Fist", "Claw", "Star Fist", "Bloodhound Claws"), ("Axe", "Dagger", "Hand Axe", "Dagger D"),
+                            ("Claw", "Claw", "Raptor Talons", None), ("Dagger", "Dagger", "Dagger E", "Dagger E")]),
+          {"Bloodhound Claws": ("Star Fist",), "Dagger D": ("Hand Axe",)})
+    prow = {"Raptor Talons": {"isDualBlade": 1, "bothHandEquipable": 1}, "Bloodhound Claws":
+            {"isDualBlade": 1, "bothHandEquipable": 1}, "Star Fist": {"isDualBlade": 1, "bothHandEquipable": 1},
+            "Hand Axe": {}, "Dagger D": {}, "Club C": {}}
+    P = Partners.__new__(Partners)
+    P.tables = type("T", (), {"weapons": prow, "find_weapon": staticmethod(lambda w, a: w)})()
+    P.GM = type("GM", (), {"ps_affinities": staticmethod(lambda e, w: []), "modes": staticmethod(lambda e, w, a: {})})
+    P.e, P._need, P._scores = {}, {}, {}
+    saved = dict(OFFHAND_PARTNERS)
+    OFFHAND_PARTNERS.clear()
+    OFFHAND_PARTNERS.update(offhand_partners([("Fist", "Claw", "Star Fist", "Bloodhound Claws"),
+                                              ("Axe", "Dagger", "Hand Axe", "Dagger D")]))
+    check("partners: a claw outside the set and a paired left weapon want no off-hand partner; a plain "
+          "left weapon wants only its set's right weapon",
+          [P.need("Raptor Talons", "Heavy"), P.need("Bloodhound Claws", "Heavy"), P.need("Dagger D", "Heavy"),
+           P.ok("Dagger D", "Heavy", "Hand Axe"), P.ok("Dagger D", "Heavy", "Club C")],
+          [None, None, "offhand", True, False])
+    OFFHAND_PARTNERS.clear()
+    OFFHAND_PARTNERS.update(saved)
+
+    # `WeightCost`: linear between the table's points, 0 past its last.
+    wc = WeightCost({"weights": [0, 10, 20], "value": [1.0, 0.9, 0.5]})
+    check("weight cost: interpolated, 0 past the table", [wc(0), wc(5), wc(15), wc(20), wc(20.5)],
+          [1.0, 0.95, 0.7, 0.5, 0.0])
+    # The weight cap: Axe A (weight 20) leads the main hands, and Dagger D (weight 2) is the best
+    # off hand. A steep cost past 10 drops the heavy axe for the light pairs under 8; a flat one
+    # keeps it.
+    roles["classes"]["Dagger"]["offhand"] = {"weapon": "Dagger D", "affinity": "Blood"}
+    # Every weapon's L1 is an off-hand candidate, not only the class picks, so the Dagger E added
+    # above leaves the roles with its class pick.
+    roles["weapons"].pop("Dagger E", None)
+    wts = {"Axe A": 20.0, "Dagger D": 2.0, "Halberd H": 6.0, "Club C": 3.0, "Dagger E": 1.0}
+    steep = WeightCost({"weights": [0, 10, 25, 40], "value": [1.0, 1.0, 0.5, 0.4]})
+    flat = WeightCost({"weights": [0, 40], "value": [1.0, 1.0]})
+    pairs, plog = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2, weight=wts.get, cost=steep)
+    check("combos: a heavy main hand is left out when its weight costs more than its score adds",
+          [p[2] for p in pairs], ["Club C", "Halberd H"])
+    check("combos: the weight cap is logged with what dropping the cost would change",
+          (plog[-2].startswith("weight cap 8:"), plog[-1].startswith("without the weight cost")), (True, True))
+    pairs, _ = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2, weight=wts.get, cost=flat)
+    check("combos: with no cost to weight the best pairs lead whatever they weigh",
+          [p[2] for p in pairs], ["Axe A", "Club C"])
+    pairs, _ = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2, weight=wts.get, cost=steep, floor=25.0)
+    check("combos: weight the stats already pay for (a focus set) costs a pair nothing more",
+          [p[2] for p in pairs], ["Axe A", "Club C"])
+
+    # The speed term (`SetSpeed`, `_set_value`): a slow main hand (R1 #1 at f20) and a quick one
+    # (f10); a strong slow off hand (L1 #1 at f22) and a weaker fast one (f9). Coverage 1 at f10 or
+    # sooner, 0 at f20, k 0.5. Without the term both sets share the strong off hand; with it the
+    # slow main hand takes the fast off hand (1.8 x 1.5 = 2.7 over 2.0) and the quick one keeps
+    # the strong one (1.6 x 1.5 = 2.4 over 1.4 x 1.5).
+    def sp(m=None, o=None, m_su=None, o_su=None):
+        return {"main_hand": {"by_affinity": {"Heavy": {"features": {"m": m, "r1_startup": m_su}}} if m else {}},
+                "offhand": {"by_affinity": {"Heavy": {"features": {"o": o, "l1_startup": o_su}}} if o else {}}}
+    sroles = {"weapons": {"Slow S": sp(m=10, m_su=20), "Quick Q": sp(m=6, m_su=10),
+                          "Big B": sp(o=10, o_su=22), "Knife K": sp(o=8, o_su=9)},
+              "classes": {"Greatsword": {"main_hand": {"weapon": "Slow S", "affinity": "Heavy"}},
+                          "Dagger": {"main_hand": {"weapon": "Quick Q", "affinity": "Heavy"}},
+                          "Hammer": {"offhand": {"weapon": "Big B", "affinity": "Heavy"}},
+                          "Knife": {"offhand": {"weapon": "Knife K", "affinity": "Heavy"}}}}
+    speed = SetSpeed(sroles, lambda s: min(1.0, max(0.0, (20 - s) / 10)),
+                     [{"right": "Quick Q", "left": "Quick R", "slots": {"dual_1": {"startup": 8}}}])
+    pairs, _ = derive_combos(sroles, cr, {}, {}, usable=lambda w: True, n=2)
+    check("speed: without the term every set takes the strongest off hand",
+          [(p[2], p[3]) for p in pairs], [("Slow S", "Big B"), ("Quick Q", "Big B")])
+    pairs, slog = derive_combos(sroles, cr, {}, {}, usable=lambda w: True, n=2, speed=speed, k=0.5)
+    check("speed: a slow main hand buys its coverage back with a fast off hand",
+          [(p[2], p[3]) for p in pairs], [("Slow S", "Knife K"), ("Quick Q", "Big B")])
+    check("speed: each set's s_set and C_set logged", slog[0].endswith("s_set 9, C_set 1.000, value 2.7000"), True)
+    pairs, wlog = derive_combos(sroles, cr, {}, {}, usable=lambda w: True, n=2, speed=speed, k=0.5,
+                                weight=lambda w: 1.0, cost=flat)
+    check("speed: the weight-capped path scores sets by the same value",
+          ([(p[2], p[3]) for p in pairs], "s_set 9" in wlog[0]), ([("Slow S", "Knife K"), ("Quick Q", "Big B")], True))
+    check("speed: a powerstance's off hand throws dual_1, a slow set covers nothing",
+          [speed((1, "Dagger", "Quick Q", "Heavy"), (1, "Dagger", "Quick R", "Heavy")),
+           speed((1, "Greatsword", "Slow S", "Heavy"), (1, "Hammer", "Big B", "Heavy"))],
+          [(8, 1.0), (20, 0.0)])
+
+    # `affinity_primaries`: summed over weapons with every stat at the build's highest; a weapon the
+    # flat spread does not wield, or with no row on an affinity, is left out of that sum.
+    fake = {("Axe A", "Heavy"): {"str": 200, "dex": 20}, ("Axe A", "Keen"): {"str": 60, "dex": 70},
+            ("Axe A", "Blood"): {"str": 90, "dex": 30}, ("Axe A", "Sleep"): {"str": 10, "dex": 0},
+            ("Katana K", "Heavy"): {"str": 150, "dex": 40}, ("Katana K", "Keen"): {"str": 40, "dex": 120},
+            ("Katana K", "Blood"): {"str": 60, "dex": 80}, ("Katana K", "Sleep"): {"str": 10, "dex": 90},
+            ("Big B", "Keen"): {"str": 900, "dex": 0}}
+    req = {"Big B": 99}
+    stat_fields = {s: (None, None, None, f"need_{s}") for s in ("str", "dex")}
+    FAR = type("AR", (), {"STATS": ("str", "dex"), "AFFINITIES": ["Heavy", "Keen", "Blood", "Sleep", "Fire"],
+                          "STAT_FIELDS": stat_fields})
+
+    class Tab:
+        def __init__(self):
+            self.weapons = {k: {"reinforceTypeId": 0, "need_str": req.get(k[0], 0), "need_dex": 0} for k in fake}
+
+        def find_weapon(self, w, aff):
+            if (w, aff) not in fake:
+                raise SystemExit("no row")
+            return w, aff
+
+        def max_level(self, _):
+            return 25
+    seen = []
+
+    def fake_scaling(AR, t, w, aff, lv, st, two):
+        seen.append(st["dex"])
+        return fake[w, aff]
+    prim, tot = affinity_primaries(FAR, Tab(), ["Axe A", "Katana K", "Big B"], {"str": 43, "dex": 16}, 25, fake_scaling)
+    check("affinity primaries: measured per infusion over the weapons, at a flat spread, unwieldable rows left out",
+          (prim, tot["Blood"], set(seen)),
+          ({"Heavy": "str", "Keen": "dex", "Blood": "str", "Sleep": "dex"}, {"str": 150.0, "dex": 110.0}, {43}))
+    prim = {"Heavy": "str", "Blood": "str", "Poison": "str", "Cold": "dex", "Keen": "dex"}
+    rule = AffinityRule("Heavy", prim, infusable=lambda w: w != "Somber S")
+    check("affinity rule: an off-affinity copy kept only when its infusion's primary stat is the pinned one's",
+          [rule.ok(w, aff) for w, aff in (("Axe A", "Heavy"), ("Axe A", "Blood"), ("Katana K", "Poison"),
+                                         ("Katana K", "Cold"), ("Katana K", "Keen"), ("Somber S", "Standard"),
+                                         ("Axe A", "Occult"))],
+          [True, True, True, False, False, True, True])
+    check("affinity rule: no pinned affinity keeps everything",
+          AffinityRule(None).ok("Katana K", "Cold"), True)
+    check("affinity rule: drops counted per weapon and affinity",
+          ([x["weapon"] for x in [{"weapon": "Katana K", "affinity": "Cold", "grip": "2H"},
+                                  {"weapon": "Axe A", "affinity": "Blood", "grip": "1H"}] if rule.keep(x)],
+           dict(rule.dropped)), (["Axe A"], {("Katana K", "Cold"): 1}))
+    check("primary stat: none when nothing scales", primary_stat({"str": 0.0, "dex": 0.0}), None)
+
+    # `stat_scaling` against `er-mechanics-ar.attack_rating` on the real regulation, when present.
+    try:
+        spec = importlib.util.spec_from_file_location("er_mechanics_ar", HERE / "er-mechanics-ar.py")
+        AR = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(AR)
+        tab = AR.Tables(None)
+    except (SystemExit, OSError, KeyError) as e:
+        print(f"skip stat_scaling vs attack_rating: no regulation ({e})")
+    else:
+        st = {"str": 43, "dex": 16, "int": 7, "fth": 8, "arc": 9}
+        got = []
+        for w, aff, two in (("Uchigatana", "Heavy", False), ("Uchigatana", "Cold", True),
+                            ("Uchigatana", "Blood", False), ("Misericorde", "Keen", False)):
+            sc = stat_scaling(AR, tab, w, aff, 25, st, two)
+            r = AR.attack_rating(tab, w, aff, 25, st, two)
+            got.append((round(sum(sc.values()), 3) == round(sum(d["scaling"] for d in r["damage"].values()), 3),
+                        primary_stat(sc)))
+        check("stat_scaling: per-stat parts add up to attack_rating's scaling; Heavy is STR, Keen DEX at STR 43 DEX 16",
+              got, [(True, "str"), (True, "str"), (True, "str"), (True, "dex")])
+
+    check("crit rank: best riposte + backstab first, a weapon with no wieldable affinity left out",
+          [w for _, w, _ in rank_crit({"Misericorde": [("Keen", 300, 420)], "Club": [("Heavy", 500, 300)],
+                                       "Rapier": [], "Dagger": [("Heavy", 350, 350)]})],
+          ["Club", "Misericorde", "Dagger"])
+
+    # Icon shields: three rows, one per share. Row 0 is a page (protected), row 1 can go (Axe and
+    # Club both have copies in row 0), row 2 holds every Solo copy (the last-copy rule).
+    hold = fight_hold_hp("invasion")
+
+    def vs(w, v, theme="Classes"):
+        return dict(mk(w, "Standard", "x", theme=theme), value=v)
+    islots = ([vs("Axe", 900, "Page: Axe"), vs("Axe", 900, "Page: Axe"), vs("Club", 900, "Page: Axe"),
+               vs("Club", 900, "Page: Axe"), vs("Axe", 900, "Page: Axe")]
+              + [vs("Axe", 120), vs("Axe", 80), vs("Club", 100), vs("Club", 60), vs("Club", 40)]
+              + [vs("Solo", 10)] * ROW)
+
+    def prot(i):
+        return islots[i]["theme"].startswith("Page")
+    big = {"weapon": "Shield", "affinity": "Heavy", "ash": "No Skill", "guard_base": 0.7, "opening_hp": 400.0,
+           "net_hp": 0.0}
+    got = icon_shield_plan(islots, [big], 3, prot, hold)
+    check("icon shields: a page and a weapon's last copies are never displaced; the free row goes to a "
+          "0.7-guard shield, valued against its best copy (Axe 120/s)",
+          [(d["row"], d["placed"], d.get("slot")) for d in got], [(None, False, None), (1, True, 5), (None, False, None)])
+    check("icon shields: the shield's value is 0.7 x 400 HP saved per opening over the invasion model",
+          round(got[1]["icon_hp"]), round(hold.defense(280.0)))
+    tiny = dict(big, guard_base=0.001, opening_hp=10.0)
+    check("icon shields: a shield worth less than the row it would displace is not placed",
+          [(d["row"], d["placed"]) for d in icon_shield_plan(islots, [tiny], 3, prot, hold)],
+          [(None, False), (1, False), (None, False)])
+    check("icon shields: the hour-long tail decides it -- offense stops at the hosts' HP and flasks, defense "
+          "keeps growing (the invasion's engaged attackers)",
+          (hold.points[0], hold.points[-1], hold.offense(1e9) == hold.kill, hold.attackers,
+           hold.defense(1.0) > hold.defense(0.5)),
+          (10.0, 3600.0, True, _buffs().FIGHT_KINDS["invasion"]["attackers"], True))
     print("selftest:", "FAIL" if bad else "ok")
     return 1 if bad else 0
+
+
+def mode_report(roles_path, all_mains=False, use_cross=True, ladder=True):
+    """Each main hand's best set and its mode on one roles file (`er-mechanics-class-roles.py
+    --json`), at its own weights and `[offhand_pick_weights]`, the cross-hand term read from
+    `CROSS_HAND_CACHE` only (the rl with the most entries; an unmeasured link is none) and named
+    with its link. No powerstance records. With `ladder` (the default) the duel ladder's bans
+    apply as they do to a `--fight duel` build (`ladder_exclude`): a banned weapon is in neither
+    hand and a banned grip is no mode; without it every weapon is usable. Prints one line per main
+    hand and the count played two-handed alone."""
+    cr = _class_roles()
+    if ladder:
+        set_exclude(ladder_exclude())
+        print(f"ladder bans: {len(EXCLUDE['weapons'])} weapons, {len(EXCLUDE['rows'])} grip bans")
+    roles = json.loads(Path(roles_path).read_text())
+    prefs = tomllib.loads(PREFS.read_text())
+    cache = json.loads(CROSS_HAND_CACHE.read_text()) if CROSS_HAND_CACHE.exists() else {}
+    by = collections.defaultdict(dict)
+    for k, v in cache.items():
+        model, rl, r, l = k.split("|", 3)
+        if model == CROSS_HAND_MODEL:
+            by[rl][r, l] = v
+    xs = by[max(by, key=lambda x: len(by[x]))] if by and use_cross else {}
+    cross = (lambda r, l: tuple(xs[r, l]) if xs.get((r, l)) else None) if use_cross else None
+    mains, offs_for = hand_scores(roles, cr, roles.get("weights") or cr.pick_weights(EXCLUDE["ashes"]),
+                                  roles.get("off_weights") or prefs["offhand_pick_weights"],
+                                  lambda w: w not in EXCLUDE["weapons"],
+                                  lambda w, a: True, cross=cross, all_mains=all_mains)
+    alone_n = 0
+    for m in mains:
+        v, _, o = best_pair([(m, o) for o in offs_for(m)], set_score)
+        solo = next((x for x in offs_for(m) if x.alone), None)
+        alone_n += o.alone
+        mode = ("2H alone" if o.alone else "2H paired" if o.two_hand
+                else f"1H + {o[2]}" + (" (powerstance)" if o.ps else ""))
+        print(f"{m[3]} {m[2]}: {mode} {v:.4f} (2H alone {'-' if solo is None else f'{set_score(m, solo):.4f}'}, "
+              f"cross {getattr(o, 'cross', 0.0):.4f}" + (f" {o.cross_link}" if getattr(o, "cross_link", None) else "")
+              + ")")
+    print(f"{alone_n} of {len(mains)} main hands two-handed alone")
+    return 0
 
 
 def main() -> int:
     if sys.argv[1:] == ["--selftest"]:
         return selftest()
+    if sys.argv[1:2] == ["--mode-report"]:
+        # `--mode-report <roles.json> [all] [nocross] [noladder]`: `mode_report`.
+        return mode_report(sys.argv[2], "all" in sys.argv[3:], "nocross" not in sys.argv[3:],
+                           "noladder" not in sys.argv[3:])
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("rows", type=Path, nargs="+", help="one or more er-mechanics-ash-table.py --json sweeps")
     ap.add_argument("--out", type=Path, required=True)
@@ -2000,6 +4770,8 @@ def main() -> int:
                     help="successive-counter rates of weapons and ash casts (`set_multihit_weights`)")
     ap.add_argument("--pierce-cache", type=Path, default=PIERCE_CACHE,
                     help="pierce share of each ash cast's PvP damage (`set_pierce_weights`)")
+    ap.add_argument("--cross-hand-cache", type=Path, default=CROSS_HAND_CACHE,
+                    help="each (right, left) pair's best cross-hand link and landing chance (`CrossHand`)")
     ap.add_argument("--focus", action="append", default=[], metavar="WEAPON[:AFFINITY]",
                     help="the weapon the build is made around: a row of its best ashes after Quick, "
                          "and the first equip set (repeatable)")
@@ -2015,8 +4787,8 @@ def main() -> int:
                          "carries at medium roll, er-mechanics-shields-ranged.py) and an equip set with the "
                          "best of them in the first Combos weapon's left hand")
     ap.add_argument("--ranged", action=argparse.BooleanOptionalAction, default=True,
-                    help="with --build: a Ranged row (the viable picks of data/ranged-picks.toml the build "
-                         "wields) and the four equipped ammunition names")
+                    help="with --build: a Ranged row (the ranged weapons the build wields that the "
+                         "measured ranged score keeps, er-mechanics-shields-ranged.ranged_plan) and the four equipped ammunition names")
     ap.add_argument("--parry", type=Path,
                     help="er-mechanics-parry.py --json output: weighs each damaging copy by the riposte the "
                          "corpus's parriers land on it (`pmult`), and adds a non-shield parry tool to the Shields "
@@ -2031,13 +4803,37 @@ def main() -> int:
                     help="with --perfect-block: apply `bmult` (default on)")
     ap.add_argument("--interrupt-poise", type=float, help="my poise (default: the worn armor's)")
     ap.add_argument("--interrupt-jobs", type=int, default=6)
-    ap.add_argument("--crit-weapon", default=CRIT_WEAPON,
-                    help="weapon of the crit row, on its best riposte and backstab affinity ('' for none)")
+    ap.add_argument("--crit-weapon", default=None,
+                    help="weapon of the crit row, on its best riposte and backstab affinity ('' for none; "
+                         "default: the swept weapon with the highest one-handed crit, `rank_crit`)")
+    ap.add_argument("--affinity",
+                    help="the affinity the build is pinned to (the sweeps' --affinity): a copy on another "
+                         "affinity is kept only when its primary damage stat is the pinned one's (`AffinityRule`)")
     ap.add_argument("--rank-terms", type=Path,
                     help="write each ash's best-value copy and the terms its `value` multiplies (JSON)")
     ap.add_argument("--throttle", action=argparse.BooleanOptionalAction, default=True,
                     help="stay off CPU 0 and under 90%% of any other core (er-mechanics-ash-interrupt.throttle)")
+    ap.add_argument("--icon-shields", type=int, default=0,
+                    help="at most this many rows of one Shields-row shield repeated, spread through the pages "
+                         "as markers, each placed only where it beats the row it displaces over the invasion "
+                         "fight model (`icon_shield_plan`)")
+    ap.add_argument("--weight-cost", type=Path,
+                    help="er-weapon-build.py's carried weight -> damage x EHP table (`WeightCost`); the "
+                         "equip-set pairs then pay for their weight (`derive_combos`)")
+    ap.add_argument("--arena-m", type=float, default=None,
+                    help="the farthest two players get apart in this fight, m: a camouflage ash that "
+                         "only hides past it gets no row (`out_of_arena`); default no bound")
+    ap.add_argument("--weigh-only", action="store_true",
+                    help="stop after the rows are weighed: print each `--terms-weapon` row's value per "
+                         "stance button and joined (`merge_stance_buttons`) and its duel bands; --out is "
+                         "not written")
+    ap.add_argument("--exclude", type=Path,
+                    help="JSON of weapons, ashes and [ash, affinity] pairs the build may not hold (`EXCLUDE`)")
     a = ap.parse_args()
+    if a.exclude:
+        set_exclude(json.loads(a.exclude.read_text()))
+        print(f"exclude: {len(EXCLUDE['weapons'])} weapons, {len(EXCLUDE['ashes'])} ashes, "
+              f"{len(EXCLUDE['ash_affinity'])} ash-on-affinity pairs ({a.exclude})", file=sys.stderr)
     if a.throttle:
         _ai().throttle(_ai().allowed_cpus()[:1])
     stage = Stages(a.stage_times)
@@ -2046,12 +4842,14 @@ def main() -> int:
     # entry was added from bringing it back.
     blacklist = tomllib.loads(BLACKLIST.read_text())
     # Several sweeps (the build's Keen sweep, a Lightning sweep of the role winners, ...) are one
-    # pool; a (weapon, affinity, ash, grip) row two sweeps both have is kept once.
+    # pool; a (weapon, affinity, ash, grip) row two sweeps both have is kept once, a stance skill's
+    # once per button (`variant`) until `merge_stance_buttons` joins them.
     seen, rows = set(), []
     for path in a.rows:
         for x in json.loads(path.read_text()):
-            k = (x["weapon"], x.get("affinity", "Standard"), x["ash"], x["grip"])
-            if k not in seen and x["ash"] not in blacklist and not off_stat(x):
+            k = (x["weapon"], x.get("affinity", "Standard"), x["ash"], x["grip"], x.get("variant"))
+            if k not in seen and x["ash"] not in blacklist and not off_stat(x) and not excluded(x) \
+                    and not out_of_arena(x, a.arena_m):
                 seen.add(k)
                 x.setdefault("affinity", "Standard")
                 rows.append(x)
@@ -2059,10 +4857,39 @@ def main() -> int:
     # made before that is valued here, on the cast's clock, so before the grip change.
     build_stats = ({k: json.loads(a.build.read_text())["stats"][k] for k in STATS} if a.build
                    else {"str": 18, "dex": 80, "int": 7, "fth": 8, "arc": 9})
+    spec = importlib.util.spec_from_file_location("er_mechanics_ar", HERE / "er-mechanics-ar.py")
+    AR = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(AR)
+    tables = AR.Tables(None)
+    # `--affinity`: off-affinity copies whose primary damage stat is not the pinned affinity's go
+    # before anything is weighed (`AffinityRule`, user 2026-10-18).
+    aff_rule = AffinityRule(None)
+    if a.affinity:
+        prim, prim_tot = affinity_primaries(AR, tables, sorted({x["weapon"] for x in rows}), build_stats, a.upgrade)
+        print("affinity primary stats (attack rating each stat adds, summed over the swept weapons, every "
+              "stat at the build's highest): " + "; ".join(
+                  f"{aff} {s.upper()} ({', '.join(f'{k} {v:.0f}' for k, v in sorted(prim_tot[aff].items(), key=lambda kv: -kv[1]) if v > 0)})"
+                  for aff, s in prim.items()), file=sys.stderr)
+
+        def infusable(w):
+            try:
+                tables.find_weapon(w, a.affinity)
+                return True
+            except (SystemExit, KeyError):
+                return False
+        aff_rule = AffinityRule(a.affinity, prim, functools.lru_cache(None)(infusable))
+        rows = [x for x in rows if aff_rule.keep(x)]
+        gone = collections.defaultdict(list)
+        for (w, aff), k in sorted(aff_rule.dropped.items()):
+            gone[aff].append(w)
+        print(f"affinity {a.affinity}: primary stat rule dropped {sum(aff_rule.dropped.values())} rows: "
+              + ("; ".join(f"{aff} on {len(ws)} weapons ({', '.join(ws[:6])}{', ...' if len(ws) > 6 else ''})"
+                           for aff, ws in sorted(gone.items())) or "none"), file=sys.stderr)
     set_lead_in(rows, build_stats)
-    set_buff_values(rows, build_stats, a.buff_cache)
+    set_buff_values(rows, build_stats, a.buff_cache, build_armor(a.build))
     set_buff_weights(rows)
     buff_report(rows)
+    rows = drop_no_pvp_utility(rows)
     # A "2H" copy is two-handed after the swap before its skill can start (`GRIP_CHANGE_FRAMES`);
     # every rule below (carrier limits, interrupt weights, dominance, rank cut, grabs) sees that.
     for x in rows:
@@ -2077,7 +4904,51 @@ def main() -> int:
               f"(first hit <= f{last_first}, reach > {min_reach} m)", file=sys.stderr)
     r1 = r1_reaches(json.loads(a.roles.read_text()) if a.roles else None, a.embed)
     traits = weapon_traits(a.embed)
-    weigh(rows, a, r1, build_stats, report=True, stages=stage)
+    got = weigh(rows, a, r1, build_stats, report=True, stages=stage)
+    AIb = _ai()
+    for w in a.terms_weapon if a.weigh_only else ():
+        for x in (x for x in rows if x["weapon"] == w):
+            print(f"button {x['affinity']} {w} {x['grip']} {x['ash']} {x.get('variant') or '-'}: value "
+                  f"{value(x):.1f}, duel bands {AIb.band_set_value([x['by_distance']]) if x.get('by_distance') else 0:.2f}"
+                  f" {x.get('by_distance')}")
+            # The perfect-block term over the duel's bands against the fixed `REACH_SHARE` distance.
+            prof = (got or {}).get(AIb.row_key(x))
+            if "bmult" in x and prof and "side" in _PB:
+                y = dict(x)
+                _PB["side"].row(y, {k: v for k, v in prof.items() if k != "spread"}, x["score"], status_rate(x))
+                print(f"perfect block {x['affinity']} {w} {x['grip']} {x['ash']} {x.get('variant') or '-'}: bmult "
+                      f"{x['bmult']:.4f} over the bands {x.get('bmult_by')}, {y['bmult']:.4f} at the fixed "
+                      f"{prof.get('D')} m")
+    rows = merge_stance_buttons(rows)
+    for w in a.terms_weapon if a.weigh_only else ():
+        for x in (x for x in rows if x["weapon"] == w):
+            print(f"joined {x['affinity']} {w} {x['grip']} {x['ash']}: value {value(x):.1f} (kept button "
+                  f"{(x.get('stance') or '-').upper()} alone {value({**x, 'stance_w': 1.0}):.1f}), duel bands "
+                  f"{AIb.band_set_value([x['by_distance']]) if x.get('by_distance') else 0:.2f}, "
+                  f"stance_w {x.get('stance_w', 1.0)}, per band {x.get('stance_by_band')}")
+    if a.weigh_only:
+        return 0
+    for x in rows:
+        if x.get("stance_buttons"):
+            print(f"stance buttons: {x['affinity']} {x['weapon']} {x['grip']} {x['ash']}: "
+                  f"{'/'.join(b.upper() for b in x['stance_buttons'])}, kept {x['stance'].upper()}, x{x.get('stance_w', 1.0)}"
+                  + (f", per band {' '.join(f'{n:g} m {b.upper()}' for n, b in x['stance_by_band'])}"
+                     if x.get("stance_by_band") else ""), file=sys.stderr)
+    # A duel's sets value their ashes per distance band (`SetScorer.ash_share`).
+    ASH_BANDS.clear()
+    ASH_BANDS.update(ash_bands(rows))
+    ASH_BAND_LEFT_L2.clear()
+    if ASH_BANDS:
+        arts_t = _table_mod().A.AshTables()
+        sids = skill_ids(arts_t, {x["ash"] for x in rows})
+        ASH_BAND_LEFT_L2.update(ash_band_left_l2(
+            rows, lambda n: arts_t.arts[sids[n]]["swordArtsTypeNew"] if n in sids else None))
+        if ASH_BAND_LEFT_L2:
+            print(f"Combos: {len(ASH_BAND_LEFT_L2)} carriers' skills take L2 from the left hand "
+                  f"one-handed (c0000.hks GetSwordArtInfo): {sorted(ASH_BAND_LEFT_L2.items())}",
+                  file=sys.stderr)
+        print(f"Combos: {len(ASH_BANDS)} carriers valued per duel distance band for the sets' ash term",
+              file=sys.stderr)
     stage("own status")
     own_status = ash_own_status(rows, build_stats, a.ranged_cache)
     print("own status: " + (", ".join(f"{n} {'/'.join(sorted(v))}" for n, v in sorted(own_status.items()) if v)
@@ -2089,7 +4960,8 @@ def main() -> int:
                   f"{raw_value(x):.0f} x imult {x.get('imult', 1.0):.3f} wmult {x.get('wmult')} "
                   f"mh_w {x.get('mh_w', 1.0):.3f} (counter {x.get('counter_rate')}/s, rank "
                   f"{x.get('multihit_rank')}) pierce_w {x.get('pierce_w', 1.0):.3f} buff_w "
-                  f"{x.get('buff_w', 1.0):.3f} reach_w {x.get('reach_w', 1.0):.3f}", file=sys.stderr)
+                  f"{x.get('buff_w', 1.0):.3f} reach_w {x.get('reach_w', 1.0):.3f} stance_w "
+                  f"{x.get('stance_w', 1.0):.3f}", file=sys.stderr)
     # Every Endure copy the sweeps hold, before any weapon is dropped for not being a role pick.
     endure_rows = [x for x in rows if x["ash"] == "Endure"]
     beaten = dominated(rows) | dominated_buffs(rows)
@@ -2114,12 +4986,13 @@ def main() -> int:
             "pierce_share": x.get("pierce_share"), "pierce_w": x.get("pierce_w", 1.0), "dmg": x["dmg"],
             "first": x["first"], "reach": ash_reach(x), "area": x.get("area"),
             "ha_start": ha(x).get("start"), "ha_poise": ha(x).get("poise"),
+            "reactive_proxy": reactive_proxy(x), "whiff": x.get("whiff"), "self_cost": x.get("self_cost"),
             "string": x.get("string")} for n, x in top.items()}, indent=1))
     cut_rows = [x for x in rows if x["ash"] in cut]
     rows = [x for x in rows if x["ash"] not in cut]
-    # The crit weapon's copies before the role filter below, which drops a weapon no class role
-    # picked.
-    crit_pool = [x for x in rows if x["weapon"] == a.crit_weapon] if a.crit_weapon else []
+    # The crit weapon's copies come from the rows before the role filter below, which drops a
+    # weapon no class role picked; the weapon itself is chosen in the crit stage (`rank_crit`).
+    crit_src = rows
     stage("layout")
     roles = json.loads(a.roles.read_text()) if a.roles else None
     if roles and a.build:
@@ -2142,32 +5015,12 @@ def main() -> int:
     for x in rows + near_rows:
         x.setdefault("affinity", "Standard")
         x["value"] = value(x)
-    # The scale per category is its `NORM_RANK`th best ash, not its best: a single status outlier
-    # (Blood Spinning Slash on a Great Katana) would otherwise squash every other copy of its
-    # category under the steps and buffs.
-    ref = {}
-    for c in CATEGORIES:
-        per_ash = {}
-        for x in rows:
-            if x["cat"] == c:
-                per_ash[x["ash"]] = max(per_ash.get(x["ash"], 0.0), x["value"])
-        # Positive values only: the interrupt weight floors many ashes at 0, and on the STR 80 build
-        # only 4 bullet ashes were left above it, so the 10th best was 0, the scale fell back to 1
-        # and Flaming Strike's `norm` was 382 -- no `CLASS_ASH_PENALTY` could hold it to
-        # `CLASS_ASH_CAP`, and it went on 17 class rows.
-        vals = sorted((v for v in per_ash.values() if v > 0), reverse=True)
-        ref[c] = vals[min(NORM_RANK, len(vals)) - 1] if vals else 1.0
+    ref = category_refs(rows)
+    print("norm scale per category (`category_refs`): " + ", ".join(f"{c} {v:.1f}" for c, v in ref.items()),
+          file=sys.stderr)
     for x in rows + near_rows:
         x["norm"] = x["value"] / ref[x["cat"]]
-    for x in crit_pool:
-        x.setdefault("affinity", "Standard")
-        x["value"] = value(x)
-        x["norm"] = x["value"] / ref[x["cat"]]
 
-    spec = importlib.util.spec_from_file_location("er_mechanics_ar", HERE / "er-mechanics-ar.py")
-    AR = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(AR)
-    tables = AR.Tables(None)
     primary = primary_stats(json.loads(a.build.read_text()))
     # A weapon with a true combo (class-roles `true_combos`) is kept in AOE and Fun whatever its
     # stats (user, 2026-10-08: Sword of Night is pure DEX "but it still might one shot").
@@ -2236,6 +5089,11 @@ def main() -> int:
                 p = r.get(h)
                 if p:
                     role_aff[p["weapon"]] = p["affinity"]
+        # A pick's affinity that `--affinity` rules out (`AffinityRule`) leaves the weapon's row
+        # to the affinities the rule kept.
+        for w in [w for w, aff in role_aff.items() if not aff_rule.ok_any(w, aff)]:
+            print(f"role affinity: {role_aff.pop(w)} {w} dropped by the {a.affinity} primary stat rule",
+                  file=sys.stderr)
 
     def class_copies(w):
         mine = [x for x in by_weapon[w] if x["affinity"] == role_aff.get(w, x["affinity"])]
@@ -2246,7 +5104,10 @@ def main() -> int:
     def pair_pool(w):
         own = class_copies(w)
         util = top_distinct([x for x in own if x["cat"] == "utility"], PAIR_UTILITY)
-        return [x for x in own if x["cat"] != "utility"] + util
+        # A damaging copy valued at nothing (its multipliers took it to 0, Impaling Thrust on a
+        # claw by `mh_w`) is not a pick: before 2026-10-19 such zeros filled slots on ties, in
+        # sweep order.
+        return [x for x in own if x["cat"] != "utility" and x["norm"] > 0] + util
 
     keen = collections.defaultdict(list)
     for w in by_weapon:
@@ -2349,20 +5210,70 @@ def main() -> int:
 
     # Sections, each a handful of one-row weapons picked by role (modelled on the user's
     # ?b=819726f64648b6: ~15 real weapons, the quick one in slot 0, landmark blocks between groups).
+    # The equip-set pairs are measured (`derive_combos`, user 2026-10-18), not the six class pairs
+    # this list used to name; without `--roles` there is nothing to measure them on.
     combos, combo_ws = [], []
-    for rc, lc in COMBOS:
-        r, l = kept.get(rc, []), kept.get(lc, [])
-        if rc == lc and len(r) >= 2:
-            pair = (r[0], r[1])
-        elif rc != lc and r and l:
-            # The left-hand weapon is the off-hand class's `offhand` pick, judged on its own L1
-            # chain, when the sweep has rows for it; otherwise that class's first kept weapon.
-            off = ((roles or {}).get("classes", {}).get(lc, {}).get("offhand") or {}).get("weapon")
-            pair = (r[0], off if off in by_weapon else l[0])
-        else:
-            continue
-        combos.append((rc, lc, *pair))
-        combo_ws += [w for w in pair if w not in combo_ws]
+    if roles:
+        cr = _class_roles()
+        prefs = tomllib.loads(cr.PREFS.read_text())
+        weighed = {}
+        if a.weight_cost:
+            def std_weight(w):
+                return tables.weapons[tables.find_weapon(w, "Standard")]["weight"]
+            # The Endure swap every set holds (`endure_swap`, chosen later): the copy it takes when
+            # every set stays at medium roll, the best-valued one up to `ENDURE_MAX_WEIGHT`.
+            swaps = sorted(((value(x), std_weight(x["weapon"])) for x in endure_rows
+                            if std_weight(x["weapon"]) <= ENDURE_MAX_WEIGHT), reverse=True)
+            # A `--focus` set (the focus weapon and its class's off-hand pick) is in the plan
+            # whatever the pairs are, so its weight is paid for already.
+            focus_w = 0.0
+            for spec in a.focus:
+                fw = spec.partition(":")[0]
+                fc = CLASS.get(tables.weapons[tables.find_weapon(fw, "Standard")]["wepType"], "Other")
+                off = ((((roles.get("classes") or {}).get(fc) or {}).get("offhand")) or {}).get("weapon")
+                focus_w = max(focus_w, std_weight(fw) + (std_weight(off) if off and off in by_weapon else 0.0))
+            weighed = {"weight": std_weight, "cost": WeightCost(json.loads(a.weight_cost.read_text())),
+                       "carry": swaps[0][1] if swaps else 0.0, "floor": focus_w + (swaps[0][1] if swaps else 0.0)}
+        # The speed term (`SetSpeed`): each set's fastest neutral attack against the PvP corpus's
+        # openings (`er-mechanics-class-roles.PunishCoverage`, the same openings `r1_cover` is read
+        # on); without `--embed` there are no frames and no term.
+        if a.embed:
+            emb_doc = json.loads(a.embed.read_text())
+            cover = cr.PunishCoverage(emb_doc)
+            weighed.update(speed=SetSpeed(roles, cover, emb_doc.get("powerstance") or ()), k=cr.punish_k())
+            print(f"Combos: speed term k {weighed['k']} (REACT_SHARE, INFERRED) x punish coverage over "
+                  f"{cover.n_builds} corpus builds, {len(cover.w)} openings", file=sys.stderr)
+            # A pair that can powerstance is scored on its dual moveset (`PowerstanceOffs`).
+            weighed["ps"] = powerstance_offs(emb_doc.get("powerstance") or (), tables, roles, cr)
+            print(f"Combos: {len(weighed['ps'].pool)} powerstance candidates (wieldable, IsEnableDualWielding) "
+                  f"in the off-hand pool", file=sys.stderr)
+            del emb_doc
+        # Each set is scored in the mode it is played in (`derive_combos`): roles without per-grip
+        # main-hand features (written before 2026-10-19) cannot tell a two-handed set from a
+        # one-handed one, and every set is then scored as before.
+        if not any(v.get("by_grip") for rw in roles["weapons"].values()
+                   for v in (((rw.get("main_hand") or {}).get("by_affinity")) or {}).values()):
+            print("Combos: WARNING the roles carry no per-grip main-hand features (`by_grip`); every set is "
+                  "scored on its best grip with an off hand, two-handed alone is never offered -- rerun "
+                  "er-mechanics-class-roles.py", file=sys.stderr)
+        # The cross-hand term (`CrossHand`): the build's RL sets the stagger corpus.
+        if a.build:
+            weighed["cross"] = CrossHand(cr.build_rl(json.loads(a.build.read_text())), a.mirror, a.cross_hand_cache)
+        combos, combo_log = derive_combos(roles, cr, roles.get("weights") or cr.pick_weights(EXCLUDE["ashes"]),
+                                          roles.get("off_weights") or prefs["offhand_pick_weights"],
+                                          usable=lambda w: w in by_weapon, aff_ok=aff_rule.ok_any, **weighed)
+        if weighed.get("cross") is not None:
+            weighed["cross"].save()
+            print(f"Combos: cross-hand links measured for {weighed['cross'].new} new pairs (TRUE_COMBO_BONUS "
+                  f"x landing chance, R1/R2 into L1 #1 and back; {a.cross_hand_cache})", file=sys.stderr)
+        for line in combo_log:
+            print(f"Combos: {line}", file=sys.stderr)
+    else:
+        print("Combos: no --roles, so no measured pairs and no equip sets from them", file=sys.stderr)
+    for rc, lc, rw, lw in combos:
+        combo_ws += [w for w in (rw, lw) if w is not None and w not in combo_ws]
+    OFFHAND_PARTNERS.clear()
+    OFFHAND_PARTNERS.update(offhand_partners(combos))
     pair_row_of = dict(pair_rows)
     # (theme, candidate rows best first, how many). A weapon holds one row, so a section skips a
     # weapon an earlier one already placed and takes its next candidate; a combo weapon is the
@@ -2393,7 +5304,18 @@ def main() -> int:
     # Landmarks: one copy repeated `LANDMARK` times between sections (user, 2026-10-08: "quickly
     # pick up a very important weapon like one with quick activation, or activation and hyperarmor
     # kick in"). The steps are already in slot 0's row, so they are not landmarks.
-    grabs = [x for x in grab_copies(best, by_weapon, mob) if x["ash"] not in MOBILITY_ASHES]
+    def one_handed(x):
+        """Whether a copy can be swapped to and used at once: its skill row is one-handed and the
+        build meets every requirement one-handed. A block of repeats exists to be grabbed and used
+        straight away, and a copy that must be two-handed first costs an extra input the swap does
+        not expect, so it is a failed swap (user, 2026-10-18, of Waves of Darkness and Stormcaller
+        pages)."""
+        if x["grip"] != "1H":
+            return False
+        r = tables.weapons[tables.find_weapon(x["weapon"], x.get("affinity", "Standard"))]
+        return all(r[f] <= build_stats[k] for k, f in REQUIREMENT_FIELDS.items())
+
+    grabs = [x for x in grab_copies(best, by_weapon, mob, usable=one_handed) if x["ash"] not in MOBILITY_ASHES]
     print("landmarks:", ", ".join(f"{x['affinity']} {x['weapon']} {x['ash']}" for x in grabs[:len(sections) - 1]))
 
     def slot(x, w, theme, r):
@@ -2407,7 +5329,9 @@ def main() -> int:
                 "affinity": x["affinity"], "upgrade": min(a.upgrade, top),
                 "theme": theme, "row": r, "cat": x["cat"], "grip": x["grip"],
                 "value": round(x["value"]), "norm": round(x["norm"], 2), "area": x["area"],
-                "status_hp": x.get("status_hp") or {}, "grab": theme.startswith("Landmark")}
+                "status_hp": x.get("status_hp") or {}, "grab": theme.startswith("Landmark"),
+                # Read by `er-weapon-build.py`: a full-HP talisman this copy leaves worth nothing.
+                **({"self_cost": x["self_cost"]} if x.get("self_cost") else {})}
 
     slots, row_start, layout = [], {}, []
 
@@ -2623,7 +5547,7 @@ def main() -> int:
     # `--landmark` copies, more than either section holds.
     build = json.loads(a.build.read_text()) if a.build else None
     main_w = combos[0][2] if combos else None
-    extra_sets, ammo, greatbow = [], {}, None
+    extra_sets, ammo, greatbow, icon_pool = [], {}, None, []
 
     def place_row(theme, copies, pad=True):
         """`copies` from the current slot, topped up to whole rows with copies of the first unless
@@ -2640,13 +5564,40 @@ def main() -> int:
 
     stage("crit")
     crit_cands = []
-    if a.crit_weapon:
-        ranked = crit_affinities(a.crit_weapon, build_stats)
+    # The crit row is swapped to after a parry, so a ruleset that leaves no parry skill legal
+    # (`er-mechanics-class-roles.parry_share` of `--exclude`'s ashes) has no use for it.
+    share = _class_roles().parry_share(EXCLUDE["ashes"])
+    if a.crit_weapon is None and not share:
+        print("Crit: no row, the ruleset leaves no parry skill legal", file=sys.stderr)
+        crit_order, crit_grips = [], CRIT_GRIPS
+    elif a.crit_weapon is None:
+        # The swept weapon with the highest one-handed riposte plus backstab (`rank_crit`,
+        # `CRIT_GRIPS`) on an affinity `--affinity` allows, rather than Misericorde by name (user,
+        # 2026-10-18). A weapon whose copies cannot mount any swept ash has no row to give, so the
+        # next one is taken.
+        crit_ws = sorted({x["weapon"] for x in crit_src if not excluded(x)})
+        crit_rank = rank_crit({w: crit_affinities(w, build_stats, CRIT_GRIPS, aff_rule.ok) for w in crit_ws})
+        print("Crit: one-handed riposte + backstab, best per weapon: "
+              + ", ".join(f"{w} {r[0][0]} {s:.0f}" for s, w, r in crit_rank[:8]), file=sys.stderr)
+        crit_order = [w for _, w, _ in crit_rank]
+        crit_grips = CRIT_GRIPS
+    else:
+        crit_order = [a.crit_weapon] if a.crit_weapon else []
+        crit_grips = ("1H", "2H")
+    crit_t = None
+    for crit_weapon in crit_order:
+        a.crit_weapon = crit_weapon
+        crit_pool = [x for x in crit_src if x["weapon"] == crit_weapon]
+        for x in crit_pool:
+            x.setdefault("affinity", "Standard")
+            x["value"] = value(x)
+            x["norm"] = x["value"] / ref[x["cat"]]
+        ranked = crit_affinities(a.crit_weapon, build_stats, crit_grips, aff_rule.ok)
         print(f"Crit: {a.crit_weapon} riposte + backstab per affinity: "
               + (", ".join(f"{aff} {rp:.0f}+{bs:.0f}" for aff, rp, bs in ranked) or "none wieldable"), file=sys.stderr)
         if ranked:
             aff, rp, bs = ranked[0]
-            t = _table_mod().A.AshTables()
+            t = crit_t = crit_t or _table_mod().A.AshTables()
             gems, wid = t.ash_gems(), t.find_weapon(a.crit_weapon)
             top = tables.max_level(t.reg.weapon[wid]["reinforceTypeId"])
 
@@ -2662,15 +5613,20 @@ def main() -> int:
                 place_row(f"Crit ({aff} {a.crit_weapon}, the affinity with the best riposte and backstab)", row)
                 print(f"Crit: {aff} {a.crit_weapon}: " + ", ".join(f"{x['ash']} {x['value']:.0f}" for x in row),
                       file=sys.stderr)
-            else:
-                print(f"Crit: no {a.crit_weapon} copy in the sweeps mounts on {aff}", file=sys.stderr)
+                break
+            print(f"Crit: no {a.crit_weapon} copy in the sweeps mounts on {aff}", file=sys.stderr)
 
     stage("shields")
     if a.shields and build and main_w:
         rs = row_start["Combos", main_w]
         main_aff = slots[rs]["affinity"]
         copies, picks, summary = shield_copies(a, build, main_w, main_aff, r1, build_stats)
-        if copies:
+        copies = [c for c in copies if not excluded(c)]
+        picks = {j: p for j, p in picks.items() if any(c["weapon"] == p["weapon"] for c in copies)}
+        if copies and picks:
+            # Shields only (a non-shield parry tool has no `guard_base`), each with the corpus's
+            # mean opening HP on me (`ShieldModel.summary`) for `icon_saved_hp`.
+            icon_pool = [dict(c, opening_hp=summary["opening_hp_mean"]) for c in copies if "guard_base" in c]
             start = place_row("Shields (a medium No Skill shield, most block per weight; a parry shield per "
                               "job, infused for it)", copies, pad=not a.ranged)
             best = picks.get("block") or max(picks.values(), key=lambda p: p["guard"])
@@ -2682,6 +5638,7 @@ def main() -> int:
     if a.ranged and build:
         main_reach = r1.get((main_w, "1H")) if main_w else None
         copies, ammo = ranged_copies(build, build_stats, main_reach)
+        copies = [c for c in copies if not excluded(c)]
         if copies:
             place_row("Ranged (the viable picks, each with its own skill or assigned ash; the seal)", copies)
         greatbow = next((c for c in copies if c["note"].startswith("greatbow:")), None)
@@ -2701,6 +5658,15 @@ def main() -> int:
             # `--fun-skip-held`: a weapon already somewhere above gets no extra copy for its fun
             # mechanic.
             if a.fun_skip_held and w in held_ws:
+                continue
+            # The roles' picks are not sweep rows, so `--exclude` is applied to them here too.
+            if excluded(p):
+                print(f"Fun: skipped {aff} {w} ({p['label']}): excluded", file=sys.stderr)
+                continue
+            # And `--affinity` (`AffinityRule`), for the same reason.
+            if not aff_rule.ok(w, aff, p["grip"] if p.get("grip") in ("1H", "2H") else "1H"):
+                print(f"Fun: skipped {aff} {w} ({p['label']}): the {aff} primary damage stat is not "
+                      f"{a.affinity}'s", file=sys.stderr)
                 continue
             ok, own = fun_fits(p)
             if not ok:
@@ -2737,9 +5703,10 @@ def main() -> int:
             slots.append(s)
         del fun_slots[:n]
 
-    storm = max((x for x in rows if x["ash"] == "Stormcaller"), key=value, default=None)
-    endure_w = next((w for w in mob if any(x["ash"] == "Endure" for x in by_weapon[w])), None)
-    endure = max((x for x in by_weapon.get(endure_w, []) if x["ash"] == "Endure"),
+    # Page copies are grabbed like landmarks, so they must be usable one-handed too (`one_handed`).
+    storm = max((x for x in rows if x["ash"] == "Stormcaller" and one_handed(x)), key=value, default=None)
+    endure_w = next((w for w in mob if any(x["ash"] == "Endure" and one_handed(x) for x in by_weapon[w])), None)
+    endure = max((x for x in by_weapon.get(endure_w, []) if x["ash"] == "Endure" and one_handed(x)),
                  key=lambda x: x["norm"], default=None)
     if storm and endure:
         emit_fun(min((-len(slots)) % PAGE, len(fun_slots)))
@@ -2806,9 +5773,25 @@ def main() -> int:
         ls = next((i for (t, w), i in row_start.items() if w == off), None) if off else None
         sets.append({"name": f"Focus: {copies[0]['affinity']} {fw}" + (f" + {off}" if ls is not None else ""),
                      "right": [rs], "left": [ls] if ls is not None else []})
+    combo_sets = []          # the `derive_combos` sets, for `arrange_sets` at the set coverage stage
     for rc, lc, right, left_w in combos:
-        rs, ls = row_start["Combos", right], row_start["Combos", left_w]
-        sets.append({"name": f"{rc} + {lc}: {right} + {left_w}", "right": [rs], "left": [ls]})
+        rs = row_start["Combos", right]
+        if left_w is None:
+            # Two-handed, one copy (`combo_pair`): the left hand holds nothing, whether the weapon
+            # plays a paired moveset or is two-handed alone.
+            sets.append({"name": f"{rc}: {right} two-handed", "right": [rs], "left": [], "grip": "2H"})
+            combo_sets.append(sets[-1])
+            continue
+        ls = row_start["Combos", left_w]
+        if left_w == right:
+            # Two copies of one weapon (`derive_combos`): the left hand wears another slot of it.
+            ls = second_copy(slots, rs, rs, ROW)
+            if ls is None:
+                print(f"Set {rc} + {lc}: {right} x2 dropped, the plan holds one copy of {right}", file=sys.stderr)
+                continue
+        # One-handed with an off hand or powerstanced: the right hand is held one-handed.
+        sets.append({"name": f"{rc} + {lc}: {right} + {left_w}", "right": [rs], "left": [ls], "grip": "1H"})
+        combo_sets.append(sets[-1])
     sets += extra_sets
     swap = endure_swap(sets)
     if swap:
@@ -2896,6 +5879,62 @@ def main() -> int:
     elif a.ranged and build:
         print("Greatbow page: none, the ranged plan holds no greatbow the build wields", file=sys.stderr)
 
+    def displace_protected(i, in_set):
+        """A slot nothing may overwrite: an equip set's copy, a landmark or page, a shield, icon
+        shield or ranged pick, a Quick row (kept for mobility) or a partner copy. Shared by the icon
+        shields and `Partners`; the last-copy rule is each caller's."""
+        t = slots[i]["theme"]
+        return bool(i in in_set or slots[i].get("grab") or slots[i].get("partner")
+                    or t.startswith(("Page", "Landmark", "Shields", "Icon shields", "Ranged", "Quick")))
+
+    # Icon shields (user, 2026-10-18: "for the invader build... we want 1-3 rows of icon shields
+    # interspersed in the pages"; then "including icon shields as rows shouldn't be just up to me,
+    # it should also be weighted by value based on the potential length of invasions being an
+    # hour"). Up to `--icon-shields` rows, one per even share of the plan, each a Shields-row shield
+    # repeated over the cheapest displaceable row of its share, and only while the shield is worth
+    # more over the invasion model than that row (`icon_shield_plan`, `fight_hold_hp`).
+    if a.icon_shields and icon_pool:
+        hold = fight_hold_hp(ICON_FIGHT)
+        in_set = {i for s in sets for hand in ("right", "left") for i in s[hand]}
+        plan_ = icon_shield_plan(slots, icon_pool, a.icon_shields, lambda i: displace_protected(i, in_set), hold)
+        print(f"Icon shields: {ICON_FIGHT} model, {len(hold.points)} lengths {hold.points[0]:.0f}..{hold.points[-1]:.0f} s, "
+              f"{hold.attackers} attackers, offense capped at {hold.kill:.0f} HP (the hosts' HP and flasks)",
+              file=sys.stderr)
+        placed_at = []
+        for d in plan_:
+            c = d["copy"]
+            what = (f"{c['affinity']} {c['weapon']} {c['ash']}: {icon_saved_hp(c):.0f} HP saved per opening "
+                    f"-> {d['icon_hp']:.0f} HP per fight")
+            if d["row"] is None:
+                print(f"Icon shields: share {d['k'] + 1}: none, {what}; no displaceable row in rows "
+                      f"{d['rows'][0] + 1}..{d['rows'][1]}", file=sys.stderr)
+                continue
+            g = slots[d["slot"]]
+            vs = (f"{g['affinity']} {g['weapon']} {g['skill']} {g['value']}/s -> {d['row_hp']:.0f} HP per fight "
+                  f"(best copy of page {d['row'] // (PAGE // ROW) + 1} row {d['row'] % (PAGE // ROW) + 1}, {g['theme']})")
+            if not d["placed"]:
+                print(f"Icon shields: share {d['k'] + 1}: none, {what} <= {vs}", file=sys.stderr)
+                continue
+            at, theme = d["row"] * ROW, f"Icon shields: {c['weapon']}"
+            for j in range(at, at + ROW):
+                s = slot(c, c["weapon"], theme, d["row"])
+                s["note"] = c.get("note", "")
+                slots[j] = s
+            # The section the row was taken from carries on after it as "(continued)".
+            cur = max((e for e in layout if e[1] <= at), key=lambda e: e[1], default=None)
+            layout = [e for e in layout if e[1] != at]
+            if cur and at + ROW < len(slots) and not any(st == at + ROW for _, st in layout):
+                base = cur[0].split(" (continued)")[0]
+                layout.append((base if cur[1] == at else base + " (continued)", at + ROW))
+            layout.append((theme, at))
+            layout.sort(key=lambda e: e[1])
+            placed_at.append(at)
+            print(f"Icon shields: share {d['k'] + 1}: placed, {what} > {vs}", file=sys.stderr)
+        print(f"Icon shields: {len(placed_at)} of at most {a.icon_shields} rows, at slots {sorted(placed_at)}",
+              file=sys.stderr)
+    elif a.icon_shields:
+        print("Icon shields: none, the plan has no Shields row to take them from", file=sys.stderr)
+
     # Partners (`Partners`): a weapon that performs best with another beside it gets that other
     # within `PARTNER_ROWS` rows. When none is there, the partner's best copy takes the lowest-value
     # slot of the weapon's row that is not an equip set's, a landmark or page, a shield or ranged
@@ -2906,15 +5945,13 @@ def main() -> int:
         in_set = {i for s in sets for hand in ("right", "left") for i in s[hand]}
 
         def fixed_slot(i):
-            t = slots[i]["theme"]
             # A partner copy placed by this pass stays, and neither it nor the Quick rows (steps and
             # Endure, kept for mobility) are given partners of their own.
-            return (i in in_set or slots[i].get("grab") or slots[i].get("partner")
-                    or t.startswith(("Page", "Landmark", "Shields", "Ranged", "Quick")))
+            return displace_protected(i, in_set)
 
         def partner_copy(w, aff, kind):
             if kind == "offhand":
-                ws = [right for rc, lc, right, _ in combos if lc == P.cls(w) and rc != lc]
+                ws = list(OFFHAND_PARTNERS.get(w, ()))
                 cands = [x for p in ws for x in by_weapon.get(p, ())]
             else:
                 sc = P.scores(w, aff)
@@ -2969,6 +6006,116 @@ def main() -> int:
             print(f"Partner: {m}", file=sys.stderr)
         for m in missing:
             print(f"Partner: none for {m}", file=sys.stderr)
+
+    # Set coverage (user, 2026-10-19): every melee weapon in the plan is in at least one equip set,
+    # its best one (`cover_sets`), and the sets' copies are laid out together so each weapon sits
+    # beside its partners (`arrange_sets`). The planner caps neither the number of sets nor of
+    # copies (its set editor pushes a new set unconditionally; only a set name must be under 48
+    # characters), so a weapon's best partner the plan does not hold is added, one copy.
+    stage("set coverage")
+    if roles and (combo_sets or any(s["weapon"] in roles["weapons"] for s in slots)):
+        def melee(w):
+            try:
+                c = CLASS.get(tables.weapons[tables.find_weapon(w, "Standard")]["wepType"])
+            except (KeyError, SystemExit):
+                return False
+            rw = roles["weapons"].get(w) or {}
+            return c is not None and any((rw.get(h) or {}).get("by_affinity") for h in ("main_hand", "offhand"))
+        held_before = {s["weapon"] for s in slots}
+        plan_ws = list(dict.fromkeys(s["weapon"] for s in slots if melee(s["weapon"])))
+        sv_ = _set_value(weighed.get("speed"), weighed.get("k", 0.0))
+        cost_, wfn, carry_ = weighed.get("cost"), weighed.get("weight"), weighed.get("carry", 0.0)
+
+        def set_weight(m, o):
+            return sum(wfn(w) for w in set_weapons(m, o)) + carry_
+        # The stats are bought for the heaviest `derive_combos` set (or the focus set); a covering
+        # set heavier than that pays `WeightCost` for the difference, as `_weighed_combos` does.
+        heavy = (max([weighed.get("floor", 0.0)] + [sum(wfn(w) for w in (rw, lw) if w) + carry_
+                                                     for _, _, rw, lw in combos]) if cost_ else 0.0)
+        base = cost_(heavy) if cost_ else 1.0
+
+        def set_value(m, o):
+            v = sv_(m, o)[0]
+            return v * cost_(max(heavy, set_weight(m, o))) / base if cost_ and base > 0 else v
+        hands_all = hand_scores(roles, cr, roles.get("weights") or cr.pick_weights(EXCLUDE["ashes"]),
+                                roles.get("off_weights") or prefs["offhand_pick_weights"],
+                                lambda w: w in by_weapon, aff_rule.ok_any,
+                                weighed.get("ps"), weighed.get("cross"), all_mains=True)
+        best_of, cov = cover_sets(hands_all, plan_ws, set_value, fallback=lambda m, o: sv_(m, o)[0])
+        if weighed.get("cross") is not None:
+            weighed["cross"].save()
+        for w in plan_ws:
+            if w not in best_of:
+                print(f"Set coverage: {w} has no set (no usable partner or grip)", file=sys.stderr)
+        # Nodes are (weapon, affinity): a set was scored at its hands' affinities.
+        combo_nodes = [tuple((slots[i]["weapon"], slots[i]["affinity"]) for i in s["right"][:1] + s["left"][:1])
+                       for s in combo_sets]
+        new_sets, covers_of = [], {}
+        for v, m, o, covers in cov:
+            nodes = ((m[2], m[3]),) if o.two_hand else ((m[2], m[3]), (o[2], o[3]))
+            same = next((k for k, n in enumerate(combo_nodes) if tuple(w for w, _ in n) == set_weapons(m, o)), None)
+            if same is not None:
+                covers_of.setdefault(same, []).extend(covers)
+                continue
+            new_sets.append((nodes, v, m, o, covers))
+        order, at = arrange_sets(combo_nodes + [n for n, *_ in new_sets])
+
+        def as_slot(x, w):
+            # A sweep row outside the ranked pool carries no `norm` or `area` (as the Fill rows).
+            x = dict(x, affinity=x.get("affinity", "Standard"), value=value(x))
+            x.setdefault("norm", 0.0)
+            x.setdefault("area", 0.0)
+            return slot(x, w, "", 0)
+
+        def copy_of(w, aff):
+            have = [s for s in slots if s["weapon"] == w and s["affinity"] == aff and s.get("cat") != "utility"]
+            if have:
+                return dict(max(have, key=lambda s: s.get("value") or 0))
+            rows_ = [x for x in by_weapon.get(w, []) if x.get("affinity", "Standard") == aff and not excluded(x)]
+            rows_ = [x for x in rows_ if x["cat"] != "utility"] or rows_
+            if rows_:
+                return as_slot(max(rows_, key=value), w)
+            any_ = [x for x in by_weapon.get(w, []) if not excluded(x)] or by_weapon[w]
+            print(f"Set coverage: no {aff} {w} copy, taking its best other affinity", file=sys.stderr)
+            return as_slot(max(any_, key=value), w)
+        theme = "Sets (each weapon beside its equip-set partners)"
+        layout.append((theme, len(slots)))
+        start = len(slots)
+        for w, aff in order:
+            s = copy_of(w, aff)
+            s.update(theme=theme, row=len(slots) // ROW, note="equip-set copy")
+            s.pop("partner", None)
+            slots.append(s)
+        pad = -len(slots) % ROW
+        for _ in range(pad):
+            s = dict(slots[start])
+            s.update(row=len(slots) // ROW, note="padding to a whole row")
+            slots.append(s)
+        swap_refs = next((s["right"][1:] for s in combo_sets if len(s["right"]) > 1), [])
+        for k, s in enumerate(combo_sets):
+            s["right"][0] = start + at[k][0]
+            if len(at[k]) > 1:
+                s["left"] = [start + at[k][1]]
+            s["covers"] = covers_of.get(k, [])
+        for k, (nodes, v, m, o, covers) in enumerate(new_sets):
+            pos = at[len(combo_sets) + k]
+            mode = ("two-handed alone" if o.alone else "two-handed, paired moveset" if o.two_hand
+                    else "powerstance" if o.ps else "one-handed with an off hand")
+            sets.append({"name": f"{m[2]} two-handed" if o.two_hand else f"{m[2]} + {o[2]}",
+                         "right": [start + pos[0]] + swap_refs, "left": [start + p for p in pos[1:]],
+                         "grip": o.grip, "mode": mode, "cover": True, "covers": covers, "value": round(v, 4),
+                         **({"weight": round(set_weight(m, o), 1)} if cost_ else {})})
+        added = sorted({w for w, _ in order} - held_before)
+        print(f"Set coverage: {len(plan_ws)} melee weapons, {len(best_of)} covered by {len(cov)} best sets "
+              f"({len(cov) - len(new_sets)} of them `derive_combos` sets); {len(new_sets)} sets added, "
+              f"{len(order)} set copies + {pad} padding in rows {start // ROW + 1}..{len(slots) // ROW}, "
+              f"{len(order) - len(set(order))} second copies, {len(added)} weapons new to the plan"
+              + (f": {', '.join(added)}" if added else ""), file=sys.stderr)
+        for s in combo_sets + sets[len(sets) - len(new_sets):]:
+            idx = s["right"][:1] + s["left"]
+            d = abs(idx[0] - idx[1]) if len(idx) > 1 else 0
+            print(f"Set {s['name']} ({s.get('mode') or s.get('grip')}): slots {', '.join(map(str, idx))}, "
+                  f"{d} apart; best set of {', '.join(s.get('covers') or []) or 'none'}", file=sys.stderr)
 
     # Last before writing, so a partner copy placed above is held to the same rule.
     stage("redundant status")

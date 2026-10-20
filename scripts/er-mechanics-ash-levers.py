@@ -39,11 +39,13 @@ class Levers:
         self.t = A.AshTables()
         self.ar_tables = None
 
-    def cast(self, weapon, affinity, sid, stats, two_handed):
+    def cast(self, weapon, affinity, sid, stats, two_handed, stance=None):
+        """(total attack, hits, context) of one cast; `stance` is the button a stance skill hands
+        over on (`er-mechanics-ashes.skill_profile`)."""
         ctx = A.WeaponContext(weapon, affinity, level=None, stats=stats, two_handed=two_handed,
                               ar_tables=self.ar_tables)
         self.ar_tables = ctx.tables
-        hits = A.skill_hits(self.t, self.t.find_weapon(weapon), sid, ctx, ctx.level)
+        hits = A.skill_hits(self.t, self.t.find_weapon(weapon), sid, ctx, ctx.level, stance=stance)
         return sum(sum(h['attack'].values()) * h.get('count', 1) for h in hits), hits, ctx
 
     def run(self, weapon, skill, affinities, stats, step, two_handed):

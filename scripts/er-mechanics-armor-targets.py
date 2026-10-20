@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What poise and which absorption to aim for, from what the RL window's PvP builds hit with.
 
-    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,vit=41,str=80,dex=20,int=7,fth=8,arc=9 \\
+    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,end=41,str=80,dex=20,int=7,fth=8,arc=9 \\
         --talismans "Two Fingers Heirloom,Great-Jar's Arsenal,Bull-Goat's Talisman,Two-Handed Sword Talisman" \\
         --budget 46.4 --budget 52.0 --weapons "Executioner's Greataxe|both,Halberd|one"
 
@@ -85,6 +85,7 @@ INT = _sibling("er-mechanics-interrupt")
 ATK = INT.ATK
 EXCH = INT.EXCH
 EMBED = _sibling("er-builds-embed")
+RES = _sibling("er-mechanics-resources")
 
 #: Absorption columns, in the order reported. `standard` is the armor's neutral column.
 TYPES = ("slash", "strike", "pierce", "standard", "magic", "fire", "lightning", "holy")
@@ -100,6 +101,7 @@ FAMILY_JUDGES = {"r1": [0], "r2": [100], "move": [120, 125, 130, 140], "jump": [
 RANGED_TYPES = {50, 51, 53, 55, 56, 57, 61}
 REGULAR_MAX = 25
 
+#: `vit` is the planner's spelling of Endurance, still taken on the command line.
 STAT_ALIAS = {"vit": "end"}
 
 
@@ -145,6 +147,7 @@ def damage_mix(builds: list[dict], my_defense: dict, ar_tables, reg) -> dict:
     """Damage reaching absorption per type, summed over the builds (module docstring, item 1)."""
     total = defaultdict(float)
     per_build = []
+    attacks = []
     why = Counter()
     memo = {}
     for b in builds:
@@ -202,12 +205,46 @@ def damage_mix(builds: list[dict], my_defense: dict, ar_tables, reg) -> dict:
                     if key == "none":
                         continue
                     got[key] += wgt * d
+                    if atk > 0 and key in TYPES:
+                        attacks.append((wgt, ELEMENTS.index(el), TYPES.index(key), atk))
         for k, v in got.items():
             total[k] += v
         per_build.append({"weapon": name, "aff": aff, "two": two, "hit": sum(got.values()), "by": dict(got)})
     tot = sum(total.values()) or 1.0
+    n = max(1, len(per_build))
+    arr = np.array(attacks, dtype=float).reshape(-1, 4)
     return {"share": {t: total.get(t, 0.0) / tot for t in TYPES}, "builds": len(per_build), "dropped": dict(why),
-            "mean_hit": tot / max(1, len(per_build)), "per_build": per_build}
+            "mean_hit": tot / n, "per_build": per_build,
+            # Every pool attack before flat defense, so `pool_hit` can price another defense
+            # without recomputing attack ratings: weight per build, element, absorption type, attack.
+            "attacks": {"w": arr[:, 0] / n, "el": arr[:, 1].astype(int), "key": arr[:, 2].astype(int),
+                        "atk": arr[:, 3]}}
+
+
+def defense_curve_np(attack, defense):
+    """`DEF.defense_curve` over an array of attacks against one defense."""
+    attack = np.asarray(attack, dtype=float)
+    r = attack / defense if defense > 0 else np.full_like(attack, DEF._R_HI)
+    lo = np.where(r <= DEF._R_LO, DEF._P_LO,
+                  DEF._P_LO + (DEF._P_ONE - DEF._P_LO) / (DEF._R_ONE - DEF._R_LO) ** 2 * (r - DEF._R_LO) ** 2)
+    mid = DEF._P_MID + (DEF._P_ONE - DEF._P_MID) / (DEF._R_ONE - DEF._R_MID) ** 2 * (r - DEF._R_MID) ** 2
+    hi = DEF._P_HI + (DEF._P_MID - DEF._P_HI) / (DEF._R_MID - DEF._R_HI) ** 2 * (r - DEF._R_HI) ** 2
+    pct = np.where(r < DEF._R_ONE, lo, np.where(r <= DEF._R_MID, mid, np.where(r < DEF._R_HI, hi, DEF._P_HI)))
+    out = (1.0 - pct / 100.0) * attack
+    return np.where(np.abs(attack) <= DEF._EPS, 0.0, out)
+
+
+def pool_hit(attacks: dict, defense: dict, cut: dict) -> float:
+    """The mean damage one pool attack deals a defender with flat `defense` per element and armor
+    `cut` per absorption type (`TYPES`): what `damage_mix` sums, absorption applied."""
+    if not len(attacks["atk"]):
+        return 0.0
+    left = np.zeros(len(attacks["atk"]))
+    for i, el in enumerate(ELEMENTS):
+        m = attacks["el"] == i
+        left[m] = defense_curve_np(attacks["atk"][m], defense[el])
+    per_type = np.bincount(attacks["key"], weights=attacks["w"] * left, minlength=len(TYPES))
+    return float(sum(per_type[i] * cut[t] for i, t in enumerate(TYPES)))
 
 
 # --------------------------------------------------------------------------------------------
@@ -273,11 +310,14 @@ def stopped_curve(rows, weapons, delays, entries, specs, grid, openers=("r1", "r
 # --------------------------------------------------------------------------------------------
 # 3. armor frontier
 
-def armor_candidates(t) -> dict:
-    """Per slot (0 head, 1 body, 2 arms, 3 legs): named pieces, one row per name, plus none."""
+def armor_candidates(t, exclude=()) -> dict:
+    """Per slot (0 head, 1 body, 2 arms, 3 legs): named pieces, one row per name, plus none.
+    Pieces named in `exclude` (a duel's ladder bans) are left out."""
     out = {c: [{"name": "-", "weight": 0.0, "poise": 0.0, "cut": {k: 1.0 for k in TYPES}}] for c in range(4)}
     names = DEF.PR.row_names("EquipParamProtector")
     for rid in t.prot_by_name.values():
+        if names[rid] in exclude:
+            continue
         r = t.protector[rid]
         c = r["protectorCategory"]
         out[c].append({"id": rid, "name": names[rid], "weight": r["weight"], "poise": r["toughnessCorrectRate"] * 1000.0,
@@ -319,6 +359,10 @@ class Frontier:
 
     def pick(self, budget: float, poise_min: float):
         wb = min(self.W - 1, int(math.floor(budget / self.step + 1e-9)))
+        # A budget below zero fits no set; without this the slice below counts from the end and
+        # hands back the best set at any weight.
+        if wb < 0:
+            return None
         pb = max(0, int(math.ceil(poise_min - 1e-9)))
         if pb > self.pmax:
             return None
@@ -342,36 +386,90 @@ def kept(pieces, share) -> float:
     return sum(share[k] * math.prod(p["cut"][k] for p in pieces) for k in TYPES)
 
 
+def hp_pieces(cands: dict, hp_of) -> dict:
+    """{name: slot} of the pieces in `cands` (`armor_candidates`) that change max HP: `hp_of(names)`
+    is the max HP with those pieces worn, and a piece counts when wearing it alone differs from
+    wearing nothing. Read from the params rather than listed: on 1.17.1 these are Imp Head (Lion),
+    whose SpEffect 6533000 adds 2 Vigor, and Crimson Hood's 1."""
+    bare = hp_of(())
+    return {p["name"]: c for c, ps in cands.items() for p in ps if p["name"] != "-" and hp_of((p["name"],)) != bare}
+
+
 class ArmorModel:
     """What `main` reads for one stat block, kept so a caller can ask for sets at many budgets: the
     window's damage mix against this build's defense, its talismans' poise divisor and weight, and
-    the melee poise floor. `er-weapon-build.py` uses it to find the Endurance that fits a set."""
+    the melee poise floor. `er-weapon-build.py` uses it to choose Vigor, Endurance and the set
+    together (`ehp`).
+
+    A piece that changes max HP (`hp_pieces`) is kept out of the frontier and offered through
+    `pick(..., wear=name)` instead, because the frontier scores absorption only and would never
+    see its HP. Wearing Imp Head (Lion) means not swapping it while HP is above the max it would
+    leave (user, 2026-10-18: "58 vigor with imp lion head (no swaps until HP is low) or 60 vigor and
+    any swaps except imp lion any time"), so a set carrying it is one set for the whole fight."""
 
     #: The heaviest budget the frontier is built for; four of the heaviest pieces weigh about 70.
     MAX_BUDGET = 90.0
 
-    def __init__(self, stats: dict, talismans=(), great_rune=None, rl: int = 150, window: int = 10):
+    def __init__(self, stats: dict, talismans=(), great_rune=None, rl: int = 150, window: int = 10, exclude=()):
         self.t = DEF.Tables()
+        self.res = RES.Model()
+        self.talismans, self.great_rune = list(talismans), great_rune
         st = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
         me = DEF.defender(self.t, st, (), list(talismans), great_rune, pvp=True)
         self.tcut = me["toughness_cut"]
         self.talisman_weight = sum(self.t.talisman_row(n)["weight"] for n in talismans)
         lo, hi = rl - window, rl + window
-        self.share = damage_mix(corpus_builds(lo, hi), me["defense"], AR.Tables(), ATK.Regulation(None))["share"]
+        mix = damage_mix(corpus_builds(lo, hi), me["defense"], AR.Tables(), ATK.Regulation(None))
+        self.share, self.attacks = mix["share"], mix["attacks"]
         self.melee_floor, self.anchors = melee_poise_floor(pool_rows(lo, hi)[0], ATK.Regulation(None))
-        self.frontier = Frontier(armor_candidates(self.t), self.share, self.MAX_BUDGET)
+        cands = armor_candidates(self.t, set(exclude))
+        self.hp_pieces = hp_pieces(cands, lambda names: self.hp(stats, names))
+        self.cands = {c: [p for p in ps if p["name"] not in self.hp_pieces] for c, ps in cands.items()}
+        self.worn = {name: next(p for p in cands[c] if p["name"] == name) for name, c in self.hp_pieces.items()}
+        self.frontier = Frontier(self.cands, self.share, self.MAX_BUDGET)
+        self._forced = {}
 
-    def pick(self, budget: float, armor_poise: float) -> dict | None:
+    def _frontier(self, wear):
+        if wear is None:
+            return self.frontier
+        if wear not in self._forced:
+            c = self.hp_pieces[wear]
+            self._forced[wear] = Frontier({**self.cands, c: [self.worn[wear]]}, self.share, self.MAX_BUDGET)
+        return self._forced[wear]
+
+    def pick(self, budget: float, armor_poise: float, wear: str | None = None) -> dict | None:
         """The set within `budget` that keeps least damage with at least `armor_poise` of the
         armor's own poise (no talisman divisor: the user's floor is 89 without Bull-Goat's), or
-        None when none fits."""
-        pieces = self.frontier.pick(budget, armor_poise)
+        None when none fits. `wear` (one of `hp_pieces`) is in the set; without it no HP piece is."""
+        pieces = self._frontier(wear).pick(budget, armor_poise)
         if not pieces:
             return None
         return {"pieces": [p["name"] for p in pieces], "weight": round(sum(p["weight"] for p in pieces), 1),
                 "armor_poise": round(sum(p["poise"] for p in pieces), 1),
                 "menu_poise": round(sum(p["poise"] for p in pieces) / self.tcut, 1),
-                "kept": round(kept(pieces, self.share), 4)}
+                "kept": round(kept(pieces, self.share), 4),
+                "cut": {t: math.prod(p["cut"][t] for p in pieces) for t in TYPES}, "wear": wear}
+
+    def hp(self, stats: dict, armor=()) -> int:
+        """Max HP at `stats` with `armor` worn and this model's talismans and great rune
+        (`er-mechanics-resources`, curve 100)."""
+        st = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
+        return self.res.resources(st, self.talismans, [n for n in armor if n != "-"], self.great_rune)["max_hp"]
+
+    def hit(self, stats: dict, pick: dict) -> float:
+        """The mean damage one of the window's pool attacks deals at `stats` wearing `pick`: flat
+        defense from the stats the gear leaves (the stat SpEffects of the armor, talismans and great
+        rune included), then the set's absorption (`pool_hit`)."""
+        st = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
+        me = DEF.defender(self.t, st, [n for n in pick["pieces"] if n != "-"], self.talismans, self.great_rune,
+                          pvp=True)
+        return pool_hit(self.attacks, me["defense"], pick["cut"])
+
+    def ehp(self, stats: dict, pick: dict) -> dict:
+        """{hp, hit, ehp}: max HP, the mean pool hit taken, and their ratio, the pool hits it takes
+        to die from full HP."""
+        hp, hit = self.hp(stats, pick["pieces"]), self.hit(stats, pick)
+        return {"hp": hp, "hit": round(hit, 2), "ehp": hp / hit if hit > 0 else math.inf}
 
 
 # --------------------------------------------------------------------------------------------
@@ -455,9 +553,40 @@ def buff_table(t, share: dict, builds: list[dict]) -> list[dict]:
 
 # --------------------------------------------------------------------------------------------
 
+def selftest() -> int:
+    ok = True
+
+    def check(cond, msg):
+        nonlocal ok
+        print(("ok   " if cond else "FAIL ") + msg)
+        ok = ok and bool(cond)
+
+    atk = [0.0, 30.0, 100.0, 180.0, 500.0, 2000.0]
+    check(np.allclose(defense_curve_np(atk, 120.0), [DEF.defense_curve(x, 120.0) for x in atk]),
+          "defense_curve_np matches defense_curve on every branch of the curve")
+    attacks = {"w": np.array([0.5, 0.5, 0.25]), "el": np.array([0, 0, 2]),
+               "key": np.array([TYPES.index("slash"), TYPES.index("strike"), TYPES.index("fire")]),
+               "atk": np.array([300.0, 300.0, 200.0])}
+    defense = {el: 100.0 for el in ELEMENTS}
+    cut = {t: 1.0 for t in TYPES}
+    bare = pool_hit(attacks, defense, cut)
+    want = 0.5 * DEF.defense_curve(300.0, 100.0) * 2 + 0.25 * DEF.defense_curve(200.0, 100.0)
+    check(abs(bare - want) < 1e-9, "pool_hit sums each attack's weight times what flat defense leaves")
+    check(abs(pool_hit(attacks, defense, dict(cut, slash=0.5)) - (bare - 0.25 * DEF.defense_curve(300.0, 100.0)))
+          < 1e-9, "pool_hit applies each absorption type's cut to the attacks filed under it only")
+    check(pool_hit(attacks, dict(defense, physical=200.0), cut) < bare, "more physical defense, less damage per hit")
+    cands = {0: [{"name": "-"}, {"name": "Lion"}, {"name": "Helm"}], 1: [{"name": "-"}, {"name": "Coat"}]}
+    check(hp_pieces(cands, lambda names: 1900 + 29 * ("Lion" in names)) == {"Lion": 0},
+          "hp_pieces keeps the pieces whose wearing changes max HP, with their slot")
+    print("selftest", "passed" if ok else "FAILED")
+    return 0 if ok else 1
+
+
 def main() -> int:
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stats", required=True, help="planner keys: vig,mnd,vit,str,dex,int,fth,arc")
+    ap.add_argument("--stats", required=True, help="vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)")
     ap.add_argument("--talismans", default="")
     ap.add_argument("--great-rune")
     ap.add_argument("--rl", type=int, default=150)
@@ -474,6 +603,7 @@ def main() -> int:
     ap.add_argument("--wet", type=int, action="append", default=[],
                     help="defender SpEffect active for the whole fight, e.g. 4600 (Wet (Rain)); repeatable")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--selftest", action="store_true", help="check the EHP helpers and exit (needs no --stats)")
     a = ap.parse_args()
 
     stats = {STAT_ALIAS.get(k, k): v for k, v in parse_stats(a.stats).items()}
@@ -603,7 +733,8 @@ def main() -> int:
               f"{dur:>5}  worst {b['worst'][0][:3]} x{b['worst'][1]:.2f}  {b['builds']:>4} builds ({100 * b['share']:.1f}%)")
 
     if a.json:
-        a.json.write_text(json.dumps({"share": share, "mix": {k: v for k, v in mix.items() if k != "per_build"},
+        a.json.write_text(json.dumps({"share": share, "mix": {k: v for k, v in mix.items()
+                                                              if k not in ("per_build", "attacks")},
                                       "poise": pc, "stopped": stopped, "frontier": frontier,
                                       "melee_poise_floor": {"poise": melee_floor, "anchors": anchors},
                                       "defense": me["defense"], "toughness_cut": tcut, "buffs": buffs}, indent=1))

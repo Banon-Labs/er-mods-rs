@@ -1176,8 +1176,12 @@ def earlier_result(wid: int, cache: Path) -> dict | None:
 # --------------------------------------------------------------------------------------------
 # Remote shards
 
-#: Where the shards run by default: a machine reached over SSH that shares this user and home
-#: directory, so every path a shard opens or records is the same on both. `local` keeps them here.
+#: Where the shards run by default: a machine reached over SSH as this user, whose home directory
+#: has the same path (`remote_python` refuses one that differs), so every path a shard opens or
+#: records is spelled the same on both. The files are not shared: zerk's /home is its own btrfs and
+#: its checkout a plain copy (measured 2026-10-19), which is why `run_remote_shards` copies the
+#: scripts, the data files and the cache there first and the cache back after. `local` keeps them
+#: here. `er-weapon-build.py --host` runs on the same machine through these helpers.
 DEFAULT_HOST = os.environ.get("ER_R3_BOARDS_HOST", "zerk")
 #: The remote interpreter: a venv beside the board cache, so numpy is installed there once and
 #: nothing is added to the host's system Python.

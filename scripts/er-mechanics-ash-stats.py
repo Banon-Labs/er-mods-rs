@@ -58,16 +58,18 @@ RL = 150
 class AshScorer(OPT.Scorer):
     """`er-builds-optimize.Scorer` whose score is one cast of a skill after PvP defense."""
 
-    def __init__(self, levers, weapon, affinity, sid, two_handed, defender, grease):
+    def __init__(self, levers, weapon, affinity, sid, two_handed, defender, grease, stance=None):
         self.levers, self.weapon, self.affinity, self.sid = levers, weapon, affinity, sid
         self.two_handed, self.defender, self.grease = two_handed, defender, grease
+        #: The button a stance skill hands over on (`er-mechanics-ashes.skill_profile`).
+        self.stance = stance
         self.wid = levers.t.find_weapon(weapon)
         self.cache = {}
         self.cap = OPT.stat_caps(levers.ar_tables, weapon, affinity)
 
     def hits(self, st):
         _, hits, _ = self.levers.cast(self.weapon, self.affinity, self.sid,
-                                      {k: st[k] for k in DAMAGE_STATS}, self.two_handed)
+                                      {k: st[k] for k in DAMAGE_STATS}, self.two_handed, self.stance)
         if self.grease:
             el, flat = self.grease
             for h in hits:

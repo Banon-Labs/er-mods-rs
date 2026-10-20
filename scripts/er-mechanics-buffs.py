@@ -76,7 +76,7 @@ PVE_DEF = {e: f'defEnemyDmgCorrectRate_{_PVP_EL[e]}' for e in ELEMENTS}
 CUT = {'magic': 'magicDamageCutRate', 'fire': 'fireDamageCutRate',
        'lightning': 'thunderDamageCutRate', 'holy': 'darkDamageCutRate'}
 CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
-STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
+STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
 # Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo
@@ -174,16 +174,53 @@ def fight_points(lo=FIGHT_SECONDS_RANGE[0], hi=FIGHT_SECONDS_RANGE[1], step=FIGH
 FIGHT_SECONDS = fight_points()
 #: Fight models (user, 2026-10-14). `duel` is the fight above: one opponent, 3 to 5 minutes.
 #: `invasion` extends it to the current invasion meta and is the default for a generated build:
-#: the invader is hit by three hosts, who cannot hit each other, and by up to two co-invaders
-#: ("co-invaders can literally make it feel like a 5v1"), so five attackers; it has the three
+#: the invader is hit by the hosts, who cannot hit each other, and by the co-invaders
+#: ("co-invaders can literally make it feel like a 5v1"), the head counts below; it has the
 #: hosts' HP bars and their flasks to get through; an encounter lasts "anywhere between 10 seconds
 #: to 1 hour". How the lengths are spread over that range is not known: the points are spaced
 #: evenly in log time (`INFERRED`), so half the weight lies under two minutes and every tenfold
 #: length counts alike, where an even linear spread would let the hour-long ones decide.
-FIGHT_KINDS = {
-    'duel': {'seconds': FIGHT_SECONDS_RANGE, 'log': False, 'attackers': 1, 'targets': 1, 'role': 'host'},
-    'invasion': {'seconds': (10.0, 3600.0), 'log': True, 'attackers': 5, 'targets': 3, 'role': 'invader'},
+#: Head counts (user, 2026-10-19): an invasion has 1 to 12 hosts and 0 to 11 other invaders. How
+#: often each world count occurs is not known, so every count in a range is taken as equally
+#: likely (`INFERRED`) for `targets`, the hosts whose HP bars the invaders get through.
+#:
+#: Who fights whom is a different number (user, 2026-10-19): "even if 12 hosts are in the world,
+#: the chances that 11 invaders are fighting a single host is very rare. Its most likely that a
+#: host/invader will be engaged with 1 player, less likely they will be engaged with 2, less with
+#: 3, once they get over 3, the chances of them dying from multiple opponents is very high". So a
+#: player engaged with k opponents at once is weighted `ENGAGED_RATIO` ** (k - 1), k from 1 up to
+#: the largest opposing head count, and `fight_kind` derives from that:
+#: - `attackers`: the mean k, the opponents hitting one player at once;
+#: - `pressure`: the same mean seen from the target's side, how little room the target has to back
+#:   off and bolus (`er-mechanics-status.sequence_hp`). A duel is 1 for both.
+#: The ratio is `INFERRED`; measuring it needs, per landed hit in real invasions, how many
+#: opponents were attacking the one hit.
+ENGAGED_RATIO = 0.5
+FIGHT_KINDS_RAW = {
+    'duel': {'seconds': FIGHT_SECONDS_RANGE, 'log': False, 'hosts': (1, 1), 'invaders': (0, 0), 'role': 'host'},
+    'invasion': {'seconds': (10.0, 3600.0), 'log': True, 'hosts': (1, 12), 'invaders': (0, 11), 'role': 'invader'},
 }
+
+
+def engaged(max_k, ratio=ENGAGED_RATIO):
+    """[(k, weight)]: the chance a player is fighting k opponents at once, k = 1..`max_k`, each
+    step `ratio` as likely as the one before (`ENGAGED_RATIO`)."""
+    w = [ratio ** (k - 1) for k in range(1, max_k + 1)]
+    return [(k, x / sum(w)) for k, x in zip(range(1, max_k + 1), w)]
+
+
+def fight_kind(raw):
+    """One `FIGHT_KINDS_RAW` entry with `targets` (the mean host count), `engaged`, and
+    `attackers` and `pressure` (the mean opponents fighting one player at once) derived."""
+    hosts = range(raw['hosts'][0], raw['hosts'][1] + 1)
+    # The most opponents one player can face: every host against an invader, every invader
+    # (that one included) against a host.
+    dist = engaged(max(raw['hosts'][1], raw['invaders'][1] + 1))
+    mean_k = sum(k * w for k, w in dist)
+    return dict(raw, targets=sum(hosts) / len(hosts), engaged=dist, attackers=mean_k, pressure=mean_k)
+
+
+FIGHT_KINDS = {k: fight_kind(v) for k, v in FIGHT_KINDS_RAW.items()}
 DEFAULT_FIGHT = 'invasion'
 
 

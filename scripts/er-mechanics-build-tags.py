@@ -79,7 +79,10 @@ VOCABULARY = GAMEMODE + PLAYSTYLE + ARCHETYPES + DLC_TAGS
 SOTE, TARNISHED = "DLC: SotE", "DLC: Tarnished"
 
 DAMAGE_STATS = ("str", "dex", "int", "fth", "arc")
-STAT_TAG = {"str": "Strength", "dex": "Dexterity", "int": "Intelligence", "fth": "Faith", "arc": "Arcane"}
+#: The planner document spells Endurance `vit`. This module names it `end` and translates where it
+#: reads or writes a document's `stats`.
+PLANNER_KEY = {"end": "vit"}
+STAT_TAG ={"str": "Strength", "dex": "Dexterity", "int": "Intelligence", "fth": "Faith", "arc": "Arcane"}
 #: `inferBuildArchetype` reads the stats only from RL 80 up to, not including, 180.
 ARCHETYPE_RL = (80, 180)
 #: The highest stat counts at most this much against the others.
@@ -254,7 +257,7 @@ def final_stats(doc: dict, tables: Tables) -> dict:
     great rune and (with `conditions.crystalTears`) the crystal tears add, capped at 99 and
     left at 0 when the stat is 0; STR x 1.5, truncated, when `is2h`."""
     st = doc.get("stats") or {}
-    base = {k: int(st.get(k) or 0) for k in ("vig", "mnd", "vit") + DAMAGE_STATS}
+    base = {k: int(st.get(PLANNER_KEY.get(k, k)) or 0) for k in ("vig", "mnd", "end") + DAMAGE_STATS}
     prot = doc.get("protectors") or {}
     armor = [n for part in PROTECTOR_PARTS for n in _equipped(prot.get(part))]
     extra = []
@@ -392,10 +395,13 @@ def tags(doc: dict, tables: Tables | None = None) -> list[str]:
 
 
 def parse_stats(text: str) -> dict:
+    """`vig=..,end=..,...` as a planner document's `stats`: `end` (or `vit`) is written as the
+    planner's `vit`."""
     st = {k.strip(): int(v) for k, v in (p.split("=") for p in text.split(",") if p.strip())}
+    st = {PLANNER_KEY.get(k, k): v for k, v in st.items()}
     if "rl" not in st:
         # The game's level: the eight attributes' sum less 79.
-        st["rl"] = sum(st.get(k, 0) for k in ("vig", "mnd", "vit") + DAMAGE_STATS) - 79
+        st["rl"] = sum(st.get(PLANNER_KEY.get(k, k), 0) for k in ("vig", "mnd", "end") + DAMAGE_STATS) - 79
     return st
 
 
@@ -440,7 +446,7 @@ def corpus(path: Path = CORPUS, show: int = 0, tables: Tables | None = None) -> 
 # ---- selftest ---------------------------------------------------------------------------------
 
 def _doc(stats, **kw):
-    d = {"stats": dict(stats, rl=parse_stats(",".join(f"{k}={v}" for k, v in stats.items()))["rl"]),
+    d = {"stats": parse_stats(",".join(f"{k}={v}" for k, v in stats.items())),
          "is2h": False, "isPvE": False, "characterClass": "Vagabond", "greatRune": None,
          "inventory": {"slots": []}, "talismans": {"slots": []}, "spells": {"slots": []},
          "protectors": {p: {"slots": []} for p in PROTECTOR_PARTS},
@@ -459,11 +465,11 @@ def selftest() -> int:
             fails.append(label)
 
     tab = default_tables()
-    base = {"vig": 56, "mnd": 8, "vit": 43, "str": 18, "dex": 80, "int": 7, "fth": 8, "arc": 9}
+    base = {"vig": 56, "mnd": 8, "end": 43, "str": 18, "dex": 80, "int": 7, "fth": 8, "arc": 9}
     knife = [{"name": "Dagger", "infusion": "Keen", "equipIndex": 0}]
-    check("RL from the attributes", parse_stats("vig=58,mnd=8,vit=38,str=20,dex=22,int=7,fth=8,arc=68")["rl"], 150)
+    check("RL from the attributes", parse_stats("vig=58,mnd=8,end=38,str=20,dex=22,int=7,fth=8,arc=68")["rl"], 150)
     check("DEX 80 at RL 150 is Dexterity", tags(_doc(base, inventory={"slots": knife}), tab), ["Dexterity"])
-    arc = {"vig": 58, "mnd": 8, "vit": 38, "str": 20, "dex": 22, "int": 7, "fth": 8, "arc": 68}
+    arc = {"vig": 58, "mnd": 8, "end": 38, "str": 20, "dex": 22, "int": 7, "fth": 8, "arc": 68}
     check("ARC 68 over DEX 22 is Arcane", tags(_doc(arc, inventory={"slots": knife}), tab), ["Arcane"])
     q = dict(base, str=45, dex=60, vig=40)
     check("STR 45 / DEX 60 is Quality (second at least half the first)", stat_archetype(q, 150), "Quality")
@@ -495,7 +501,7 @@ def selftest() -> int:
     check("a staff in the first left-hand slot adds Caster", tags(int_doc, tab), ["Intelligence", "Caster"])
     check("a staff in the third slot does not",
           caster(_doc(base, inventory={"slots": [dict(staff[0], equipIndex=5)]}), tab), False)
-    low = _doc({"vig": 10, "mnd": 10, "vit": 10, "str": 10, "dex": 10, "int": 10, "fth": 10, "arc": 10},
+    low = _doc({"vig": 10, "mnd": 10, "end": 10, "str": 10, "dex": 10, "int": 10, "fth": 10, "arc": 10},
                inventory={"slots": [{"name": "Uchigatana", "infusion": "Keen"}]})
     check("at RL 1 the inventory's scaling decides: a Keen Uchigatana is Dexterity", tags(low, tab), ["Dexterity"])
     check("a Heavy Claymore is Strength", scaling_archetype(
@@ -531,7 +537,7 @@ def selftest() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("build", nargs="?", type=Path, help="a planner build document (.json)")
-    ap.add_argument("--stats", help="replace the document's stats: vig=..,mnd=..,vit=..,str=..,dex=..,int=..,"
+    ap.add_argument("--stats", help="replace the document's stats: vig=..,mnd=..,end=..,str=..,dex=..,int=..,"
                                     "fth=..,arc=.. (rl from their sum unless given)")
     ap.add_argument("--corpus", nargs="?", const=CORPUS, type=Path,
                     help=f"report agreement with the tags of the scraped builds (default {CORPUS})")

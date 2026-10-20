@@ -86,9 +86,9 @@ DEF = _sibling("er-mechanics-defense")
 RES = _sibling("er-mechanics-resources")
 EMBED = _sibling("er-builds-embed")
 
-# Planner stat keys; `vit` is Endurance there and in er-mechanics-resources.
-STATS = ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc")
-SURVIVAL = ("vig", "mnd", "vit")
+# Attribute keys. The planner spells Endurance `vit`; `EMBED.from_planner` translates at the corpus read.
+STATS = ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc")
+SURVIVAL = ("vig", "mnd", "end")
 DAMAGE_STATS = ("str", "dex", "int", "fth", "arc")
 #: The survival stats whose floor follows the build's own damage stats, and the stats each one
 #: follows. Measured on the RL 140-160 PvP corpus on 2026-10-14 (1094 builds): Mind correlates with
@@ -96,7 +96,7 @@ DAMAGE_STATS = ("str", "dex", "int", "fth", "arc")
 #: (|r| at most 0.14). Mind by max(INT, FTH): 12 or less, p25/median/p75 10/10/10 (317 builds);
 #: 40 or more, 15/20/25 (379). The user's rule, 2026-10-14:
 #: "MND correlates to FAI and INT generally. END to STR and DEX generally"
-CONDITIONED = {"mnd": ("int", "fth"), "vit": ("str", "dex")}
+CONDITIONED = {"mnd": ("int", "fth"), "end": ("str", "dex")}
 #: Conditioned stats measured as levels above the build's starting class rather than as the stat:
 #: absolute Mind mixes class bases (Heavy Knight 8 to Astrologer 15), and what a build that does not
 #: cast does is leave it where its class started -- 81% of the 308 PvP builds above with INT and FTH
@@ -178,7 +178,7 @@ def load_profile(build: dict) -> dict | None:
     tal = [s["name"] for s in EMBED.equipped((build.get("talismans") or {}).get("slots"),
                                              EMBED.active_set(build, "talismans"))]
     effects, _ = model.speffects_for(tal, armor, build.get("greatRune"))
-    bonus = sum(int(e[RES.STAT_FIELDS["vit"]]) for e in effects)
+    bonus = sum(int(e[RES.STAT_FIELDS["end"]]) for e in effects)
     return {"rest": rest, "rate": model.rate(effects, "equipWeightChangeRate"), "end_bonus": bonus}
 
 
@@ -218,7 +218,7 @@ def corpus_rows(mirror: Path, rl_lo: int, rl_hi: int) -> list[dict]:
             continue
         load = load_profile(b)
         if load is not None:
-            load["end"] = st["vit"]  # the build's own Endurance, for `weight_charge`'s fit share
+            load["end"] = st["end"]  # the build's own Endurance, for `weight_charge`'s fit share
         out.append({"stats": st, "cls": b.get("characterClass"), "tokens": EMBED.tokens(b),
                     "computed": b.get("computed") or {},
                     "pvp": is_pvp(b), "archetype": archetype(st), "load": load})
@@ -307,7 +307,7 @@ def spend_floored(start: dict, rl: int, scorer, pool: list[dict] | None = None,
             return None
         scorer.floor = dict(floor)
         st, left = spend(dict(floor), points, scorer)
-        for k in ("vig", "vit", "mnd"):
+        for k in ("vig", "end", "mnd"):
             add = min(left, STAT_CAP - st[k])
             st[k] += add
             left -= add
@@ -444,10 +444,10 @@ def sweep_floor(weapon_id: int, affinity: str, level: int, two: bool, need: dict
     arch = candidate_archetype(t, weapon_id, affinity, level, two, need)
     fl = dict(_SWEEP["floors"][rl][arch])
     if _SWEEP.get("pools"):
-        fl.update(mnd=0, vit=0)
+        fl.update(mnd=0, end=0)
     if _SWEEP.get("roll") == "medium":
         weight = t.weapons[weapon_id + AR.AFFINITIES.index(affinity) * 100]["weight"]
-        fl["vit"] = max(fl["vit"], medium_roll_end(weight, _SWEEP["other_load"][rl][arch]))
+        fl["end"] = max(fl["end"], medium_roll_end(weight, _SWEEP["other_load"][rl][arch]))
     return fl
 
 
@@ -704,10 +704,10 @@ def weapon_best(tables, rows, weapon, rl, two_handed=False, objective="damage", 
     fl, n_peers, scope = floors(rows, weapon, min_peers, source, arch)
     pool, pool_scope = conditioning_pool(rows, source)
     # Mind and Endurance follow the spread (`spend_floored`); what is left of them here is a minimum.
-    fl.update(mnd=0, vit=0)
+    fl.update(mnd=0, end=0)
     roll_end = 0
     if roll == "medium":
-        roll_end = fl["vit"] = medium_roll_end(tables.weapons[base_id]["weight"],
+        roll_end = fl["end"] = medium_roll_end(tables.weapons[base_id]["weight"],
                                                load_pool(rows, source, arch, min_peers))
     fl.update(pins or {})
     dfn = bracket_defender(rows)
@@ -844,7 +844,7 @@ def _walk_snapshots(tables, weapon_id, aff, level, two, floor, need, rls, defend
         # A look-ahead step can land a few points short of this RL when no stat gains; top up
         # survival so every snapshot sits exactly at its RL.
         gap = rl - (sum(st.values()) - LEVEL_OFFSET)
-        for k in ("vig", "vit", "mnd"):
+        for k in ("vig", "end", "mnd"):
             add = min(gap, STAT_CAP - st[k])
             st[k] += add
             gap -= add
@@ -973,10 +973,13 @@ def _grease_one(job):
         for rl in rls:
             fl = sweep_floor(weapon_id, aff, level, two, need, rl)
             by_floor.setdefault(tuple(sorted(fl.items())), []).append(rl)
-        greases = [(el, amount) for el in GREASE_ELEMENTS] if aff in buff else []
+        greases = [(el, amount) for el in GREASE_ELEMENTS] if aff in buff and amount else []
         # The original sweep tries a buffable affinity greased only; a fixed-affinity weapon is
-        # also tried without, since it may have no ungreasable affinity to fall back on.
-        if aff not in buff or kind != "greasable":
+        # also tried without, since it may have no ungreasable affinity to fall back on. With no
+        # grease (`--grease none`, amount None: a duel, whose ladder bans every damage grease)
+        # every affinity is tried ungreased, Standard, Heavy, Keen and Quality included, so
+        # `elemental` is the best ungreased build over all of them.
+        if aff not in buff or kind != "greasable" or not amount:
             greases = [None] + greases
         for floor_key, group in by_floor.items():
             for g in greases:
@@ -996,7 +999,7 @@ def _grease_one(job):
         # The weight charge of the configuration `er-builds-pvp.build_for` picks (highest damage).
         win = max((c for c in (e, b, q) if c), key=lambda c: c[0])
         row["weight"] = _row_weight_charge(t, weapon_id, win[1], level, two, needs[win[1]], rl, dfn,
-                                           (win[2], amount) if win[2] else None, win[3]["vit"])
+                                           (win[2], amount) if win[2] else None, win[3]["end"])
         rows.append(row)
     return rows
 
@@ -1015,11 +1018,11 @@ def _row_weight_charge(t, weapon_id, aff, level, two, need, rl, dfn, grease, end
 
     def dmg_at(e):
         # Endurance is the variable here, so only Mind follows the spread.
-        snap = _snapshots(t, weapon_id, aff, level, two, dict(base, vit=e), need, [rl], dfn, "damage", grease,
-                          pinned=("vit",))
+        snap = _snapshots(t, weapon_id, aff, level, two, dict(base, end=e), need, [rl], dfn, "damage", grease,
+                          pinned=("end",))
         return snap[rl][1] if rl in snap else None
 
-    wc = weight_charge(weight, pool, base["vit"], dmg_at, end_row)
+    wc = weight_charge(weight, pool, base["end"], dmg_at, end_row)
     if wc:
         wc["archetype"] = arch
     return wc
@@ -1131,9 +1134,9 @@ def selftest() -> int:
         pool = load_pool(rows, "pvp", "str", 15)
         fl = floors(rows, "", 15, "pvp", "str")[0]
         w = {n: tables.weapons[tables.find_weapon(n)]["weight"] for n in ("Giant-Crusher", "Greatsword")}
-        fit = {n: weight_charge(w[n], pool, fl["vit"], lin)["fit"] for n in w}
+        fit = {n: weight_charge(w[n], pool, fl["end"], lin)["fit"] for n in w}
         check(w["Giant-Crusher"] > w["Greatsword"] and fit["Giant-Crusher"] < fit["Greatsword"],
-              f"STR PvP RL 140-160 ({len(pool)} kits, END floor {fl['vit']}): fit at own END "
+              f"STR PvP RL 140-160 ({len(pool)} kits, END floor {fl['end']}): fit at own END "
               f"Giant-Crusher {fit['Giant-Crusher']:.2f} < Greatsword {fit['Greatsword']:.2f}")
         # Mind and Endurance follow the spread (`CONDITIONED`).
         cpool, _ = conditioning_pool(rows, "pvp")
@@ -1145,13 +1148,29 @@ def selftest() -> int:
               f"{hk['mnd']}); a FTH 60 one does ({cc['mnd']})")
         heavy = conditioned_floors(cpool, dict(hk, str=66, dex=15), hk)
         light = conditioned_floors(cpool, dict(hk, str=12, dex=40), hk)
-        check(heavy["vit"] > light["vit"],
-              f"a STR 66 spread floors Endurance higher ({heavy['vit']}) than a DEX 40 one ({light['vit']})")
+        check(heavy["end"] > light["end"],
+              f"a STR 66 spread floors Endurance higher ({heavy['end']}) than a DEX 40 one ({light['end']})")
         # One fixed-affinity weapon through the sweep job, one RL, floors conditioned.
         dfn = bracket_defender(rows)
         f2, l2 = sweep_corpus_stats({150: rows}, [150], 15, "pvp")
         _SWEEP.update(tables=tables, rls=[150], defender=dfn, amount=GREASES["dlc-drawstring"], floors=f2,
                       other_load=l2, roll="medium", real=real, weight_charge=True, pools={150: cpool})
+        # With no grease (a duel's sweep) a greasable weapon's buffable affinities are scored
+        # ungreased too: Giant-Crusher's best is Heavy (516 at RL 150, 2026-10-19), which the
+        # greased sweep's `elemental` never sees (its best ungreasable is Fire, 477).
+        import time
+        _SWEEP.update(amount=None, weight_charge=False)
+        t0 = time.time()
+        plain = (_grease_one((tables.find_weapon("Giant-Crusher"), False)) or [{}])[0]
+        took = time.time() - t0
+        _SWEEP.update(amount=GREASES["dlc-drawstring"])
+        old = (_grease_one((tables.find_weapon("Giant-Crusher"), False)) or [{}])[0]
+        pe, oe = plain.get("elemental") or {}, old.get("elemental") or {}
+        check(plain.get("greased") is None and plain.get("quality") is None and pe.get("aff") == "Heavy"
+              and pe.get("dmg", 0) > oe.get("dmg", 0) and oe.get("aff") not in ("Heavy", "Standard", "Keen", "Quality"),
+              f"no-grease sweep: Giant-Crusher's ungreased best is {pe.get('aff')} {pe.get('dmg', 0):.0f}, above the "
+              f"greased sweep's ungreasable {oe.get('aff')} {oe.get('dmg', 0):.0f} ({took:.1f}s for one weapon and grip)")
+        _SWEEP.update(amount=GREASES["dlc-drawstring"], weight_charge=True)
         out = _grease_one((tables.find_weapon("Bloodhound's Fang"), True))
         r = out[0] if out else {}
         check(r.get("kind") == "unique" and r.get("elemental") and r["elemental"]["aff"] == "Standard"
@@ -1171,7 +1190,7 @@ def selftest() -> int:
         got = spend_floored(dict(start2), 150, Scorer(tables, "Claymore", "Heavy", lvl, False, "damage", dfn), cpool)
         check(got is not None and sum(got[0].values()) - LEVEL_OFFSET == 150
               and all(got[0][k] >= got[1][k] >= start2[k] for k in SURVIVAL)
-              and got[1]["mnd"] == hk["mnd"] and got[1]["vit"] > hk["vit"],
+              and got[1]["mnd"] == hk["mnd"] and got[1]["end"] > hk["end"],
               f"spend_floored: a Heavy Claymore at RL 150 meets the floors it reports, Mind at the class "
               f"base and Endurance raised ({got[1] if got else None})")
         check(bool(r.get("greased")) == greasable(tables, "Bloodhound's Fang", "Standard"),
@@ -1234,10 +1253,14 @@ def main() -> int:
         rows_by_rl = {rl: corpus_rows(a.mirror, rl - a.window, rl + a.window) for rl in rls}
         dfn = bracket_defender(corpus_rows(a.mirror, lo - a.window, hi + a.window))
         grips = {"1h": [False], "2h": [True], "both": [False, True]}[a.grip]
-        amount = GREASES[a.grease]
+        amount = GREASES.get(a.grease)  # None for `none`: every affinity ungreased (`_grease_one`)
         out = a.out or sweep_cache("grease", a.grease, lo, hi, a.every_class)
         res = grease_sweep(tables, rows_by_rl, rls, grips, a.jobs, amount, dfn, out, a.min_peers,
                            a.floors, a.roll, not a.no_weight_charge, a.every_class)
+        if amount is None:
+            print(f"grease sweep RL {lo}-{hi}, grips {a.grip}, no grease: {len(res)} rows "
+                  f"({len({r['weapon'] for r in res})} weapons) in {out}")
+            return 0
         from collections import Counter
         kinds = Counter(r.get("kind", "greasable") for r in res)
         print("rows by kind: " + ", ".join(f"{k} {v} ({len({r['weapon'] for r in res if r.get('kind') == k})} weapons)"
@@ -1247,7 +1270,9 @@ def main() -> int:
             fs = sorted(w["factor"] for w in wcs)
             print(f"  weight charge factor over {len(fs)} rows: min {fs[0]:.3f}, median {fs[len(fs) // 2]:.3f}, "
                   f"max {fs[-1]:.3f}")
-        res = [r for r in res if r.get("kind", "greasable") == "greasable"]
+        # A row the stats cannot fill on one side (no ungreasable affinity, or no greased one,
+        # within the RL: seen at RL 125) has nothing to compare, so the summary leaves it out.
+        res = [r for r in res if r.get("kind", "greasable") == "greasable" and r["greased"] and r["elemental"]]
         n = len(res)
         win = [r for r in res if r["greased"]["dmg"] > r["elemental"]["dmg"]]
         qwin = [r for r in res if r["quality"] and r["quality"]["dmg"] > r["elemental"]["dmg"]]
@@ -1317,7 +1342,7 @@ def main() -> int:
     pins = {}
     for kv in a.floor:
         k, v = kv.split("=")
-        pins[{"end": "vit", "endurance": "vit", "vigor": "vig", "mind": "mnd"}.get(k, k)] = int(v)
+        pins[{"vit": "end", "endurance": "end", "vigor": "vig", "mind": "mnd"}.get(k, k)] = int(v)
     tier = None if a.grease == "none" else a.grease
     wb = weapon_best(tables, rows, a.weapon, a.rl, a.two_handed, a.objective, pins, a.affinity, a.min_peers,
                      a.floors, a.roll, tier)
@@ -1333,7 +1358,7 @@ def main() -> int:
     print(f"{a.weapon}, RL {a.rl}, {grip}, objective {a.objective}")
     bf = best["floors"]
     print(f"floors: VIG {bf['vig']} from {scope}; "
-          + ", ".join(f"{'END' if k == 'vit' else k.upper()} {bf[k]}" + (" (--floor)" if k in pinned else "")
+          + ", ".join(f"{k.upper()} {bf[k]}" + (" (--floor)" if k in pinned else "")
                       for k in CONDITIONED)
           + f" from the {pool_scope} nearest this spread in INT/FTH and STR/DEX{roll_note}")
     print(f"defender: median of {dfn['n']} builds at RL {a.rl - a.window}-{a.rl + a.window}: defense " +
@@ -1343,7 +1368,7 @@ def main() -> int:
     gtxt = f" with {GREASE_NAMES[tier][best['grease'][0]]} (+{best['grease'][1]} {best['grease'][0]})" \
         if best.get("grease") else ""
     print(f"best: {best['affinity']} +{best['level']}{gtxt}, start as {best['class']}")
-    print("  " + "  ".join(f"{('END' if k == 'vit' else k.upper())} {st[k]}" for k in STATS) +
+    print("  " + "  ".join(f"{k.upper()} {st[k]}" for k in STATS) +
           f"   (RL {sum(st.values()) - LEVEL_OFFSET})")
     ar = best["ar"]
     by = best["by_element"]
@@ -1368,7 +1393,7 @@ def main() -> int:
             s2 = r2["stats"]
             g2 = f"+{r2['grease'][0]}" if r2.get("grease") else ""
             print(f"  {r2['score']:7.1f}  {(r2['affinity'] + g2):<20} {r2['class']:<12} " +
-                  " ".join(f"{('END' if k == 'vit' else k.upper())} {s2[k]}" for k in STATS))
+                  " ".join(f"{k.upper()} {s2[k]}" for k in STATS))
             shown += 1
     g = gear(a.weapon, best["affinity"], a.model, a.n)
     if g:

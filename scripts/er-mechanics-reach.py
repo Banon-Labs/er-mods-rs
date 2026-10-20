@@ -23,11 +23,15 @@ turn about Y, so every position is carried through the bone chain (`flver_bone_t
 
 Body dummies (`MEASURED` c0000.flver, lookup `INFERRED`): a hit shape whose unprefixed dummy ids
 are not on the weapon model, or whose source is the body, is read off the player model and
-follows that dummy's attach bone. Dane's Footwork's kicks are such shapes (R_Foot, R_Knee).
-Rigged weapon models (`weapon_attached`): the claws' and fist-hands' hit dummies attach to player
-skeleton bones and are placed the same way; whips' and flails' attach to the model's own bones,
-whose animation is not decoded, so those rows get no world reach (`world_reach_error`) and the
-PvP score uses the class fallback (`class_fallback`).
+follows that dummy's attach bone. Dane's Footwork's kicks are such shapes (R_Foot, R_Knee). Only
+when the weapon model is unpacked: without it every id is "absent from it", and c0000 carries
+100/110/120 too. Rigged weapon models (`weapon_attached`): the claws' and fist-hands' hit dummies
+attach to player skeleton bones and are placed the same way; whips', flails' and a few others'
+attach to the model's own bones, which the weapon's own anibnd (`WP_A_<model>-anibnd-wanibnd`:
+`Skeleton.hkx` and clips named like the player's) animates. Those dummies are carried by the
+weapon skeleton's pose at the same clip time (`weapon_rig_pose`), then ride the weapon bone like
+a grip dummy. The weapon plays the clip of the player's id (`MEASURED` file lists), else its
+looping `a999_000000` (`WEAPON_DEFAULT_CLIP`, `INFERRED`).
 
     weapon reach = max over the hit shapes' dummy points of |point| + radius   (from the grip)
 
@@ -339,6 +343,89 @@ def weapon_attached(model_id):
     return _ATTACH_CACHE[model_id]
 
 
+#: Clip id offset of a weapon model's own clip when the weapon is held in the left hand
+#: (`MEASURED` file lists: every whip anibnd's a043_434xxx set mirrors its a043_034xxx set one for
+#: one, 434000..434572 against 034000..034572; the engine's choice was not traced, `INFERRED`).
+WEAPON_CLIP_LEFT_OFFSET = 400000
+#: The clip a weapon model's own rig plays when its anibnd has none for the player's clip: the
+#: clip the rigged weapon anibnds share (`MEASURED`: the Nox Flowing Sword, Nox Flowing Hammer
+#: and Ringed Finger anibnds hold only it and their skill clips). That the engine falls back to it
+#: is `INFERRED`: the Nox weapons' is a one-frame pose with the blade gathered in (0.96 m and
+#: 0.72 m from the grip) while their FLVER bind lays it out for the skill (2.07 m, 3.04 m). It is
+#: read at the player clip's time modulo its length.
+WEAPON_DEFAULT_CLIP = (999, 0)
+_RIG = {}
+
+
+def weapon_anibnd_dirs(model_id):
+    """The unpacked `WP_A_<model>-anibnd-wanibnd` folders of the model's right and left partsbnds."""
+    weapon_flver_path(model_id)
+    out = []
+    for name in (f'wp_a_{model_id:04d}-partsbnd-dcx', f'wp_a_{model_id:04d}_l-partsbnd-dcx'):
+        d = _PARTS_INDEX.get(name)
+        a = d and os.path.join(d, f'WP_A_{model_id:04d}-anibnd-wanibnd')
+        if a and os.path.isdir(a):
+            out.append(a)
+    return out
+
+
+def _anibnd_file(dirs, name):
+    """`name` in the first of `dirs` that holds it, the case ignored (`Skeleton.hkx` and
+    `skeleton.hkx` both occur), or None."""
+    for d in dirs:
+        for f in os.listdir(d):
+            if f.lower() == name.lower():
+                return os.path.join(d, f)
+    return None
+
+
+def weapon_rig(model_id):
+    """{'skeleton', 'bind': {bone: (bind model position, rotation)}, 'dirs'} of a weapon model's
+    own Havok skeleton, or None when its anibnd is not unpacked or has no skeleton."""
+    if model_id not in _RIG:
+        pose = _pose_module()
+        dirs = weapon_anibnd_dirs(model_id)
+        path = _anibnd_file(dirs, 'skeleton.hkx') if dirs and pose is not None else None
+        rig = None
+        if path:
+            sk = pose.load_skeleton(path)
+            model = pose._forward_kinematics(sk, list(sk.bind))
+            rig = {'skeleton': sk, 'dirs': dirs,
+                   'bind': {n: (m[0], m[1]) for n, m in zip(sk.names, model)}}
+        _RIG[model_id] = rig
+    return _RIG[model_id]
+
+
+def weapon_clip(model_id, category, anim, hand='right'):
+    """(decoded clip, its name, looping) the weapon model's own rig plays while the player plays
+    `a<category>_<anim>`: the same id (plus `WEAPON_CLIP_LEFT_OFFSET` in the left hand, when the
+    anibnd has that clip), else `WEAPON_DEFAULT_CLIP`, else None."""
+    rig = weapon_rig(model_id)
+    if rig is None:
+        return None
+    ids = [(category, anim + WEAPON_CLIP_LEFT_OFFSET)] if hand == 'left' else []
+    ids += [(category, anim), WEAPON_DEFAULT_CLIP]
+    for c, a in ids:
+        key = (model_id, c, a)
+        if key not in _RIG:
+            path = _anibnd_file(rig['dirs'], f'a{c:03d}_{a:06d}.hkx')
+            _RIG[key] = _pose_module().load_animation_file(path) if path else None
+        if _RIG[key] is not None:
+            return _RIG[key], f'a{c:03d}_{a:06d}', (c, a) == WEAPON_DEFAULT_CLIP
+    return None
+
+
+def weapon_rig_pose(model_id, clip, t, looping):
+    """{bone: (position, rotation)} of the weapon's own skeleton in weapon-model space at clip
+    time `t` (wrapped when `looping`)."""
+    pose = _pose_module()
+    sk = weapon_rig(model_id)['skeleton']
+    if looping and clip.duration > 0:
+        t = t % clip.duration
+    model = pose._forward_kinematics(sk, pose._local_pose(sk, clip, t))
+    return {n: (m[0], m[1]) for n, m in zip(sk.names, model)}
+
+
 #: The player body model. Its dummies carry the hit shapes of attacks that are not on the weapon
 #: model: Dane's Footwork (a246) kicks use c0000 dummies 5 (attach bone R_Foot), 930 (R_Knee) and
 #: 240 (attach -1), while its weapon model wp_a_1370 has only dummies 400 and 401.
@@ -362,8 +449,9 @@ def rigged_shape_points(shape, attached, skeleton_names):
     """How a weapon-source shape whose dummies attach to bones of the weapon model is placed:
     ('body', points) when every dummy attaches to a bone the player skeleton also has (the claws:
     the model is a copy of the player rig, so the dummy rides that bone like a body dummy),
-    ('unposed', bone names) when one attaches to a bone of the model's own (whips: that bone is
-    animated by the weapon's anibnd, which is not decoded), else None (a grip-space dummy)."""
+    ('unposed', bone names, points) when one attaches to a bone of the model's own (whips: that
+    bone is animated by the weapon's own anibnd, placed by `weapon_rig_pose`), else None (a
+    grip-space dummy)."""
     points, own = [], []
     for dmy in shape['dmy']:
         local = dmy % 1000 if dmy >= 10000 else dmy
@@ -371,11 +459,10 @@ def rigged_shape_points(shape, attached, skeleton_names):
         if not entries or entries[0][1] is None:
             return None
         p, bone, bind = entries[0]
-        if bone in skeleton_names:
-            points.append((p, bone, bind))
-        else:
+        points.append((p, bone, bind))
+        if bone not in skeleton_names:
             own.append(bone)
-    return ('unposed', own) if own else ('body', points)
+    return ('unposed', own, points) if own else ('body', points)
 
 
 def body_shape_points(shape, source, weapon_dummies_):
@@ -611,10 +698,23 @@ TAE_MINI_IMPORTS_HKX, TAE_HKX_SOURCE_OFFSET = 0x19, 0x1c
 _IMPORTS, _HKX_SOURCES = {}, {}
 
 
-def hkx_source(category, anim):
-    """(category, anim) of the HKX clip a TAE entry plays; itself unless it imports one."""
-    tae_imports(category)
-    return _HKX_SOURCES[category].get(anim, (category, anim))
+def hkx_source(category, anim, depth=4):
+    """(category, anim) of the HKX clip a TAE entry plays; itself unless it imports one.
+
+    An `ImportOtherAnim` entry that carries events of its own still plays its source's clip when
+    no clip of its own id exists (`MEASURED` over every player TAE: of 1238 import entries, 1152
+    have only the source's clip on disk, 15 both, 1 only their own, 70 neither). Dancing Blade of
+    Ranah's a257_030000 is one: it imports a156_030000 and there is no a257 clip at all."""
+    for _ in range(depth):
+        imports = tae_imports(category)
+        src = _HKX_SOURCES[category].get(anim)
+        if src is not None:
+            return src
+        nxt = imports.get(anim)
+        if nxt is None or ATK.hkx_path(category, anim) is not None:
+            return category, anim
+        category, anim = nxt
+    return category, anim
 
 
 def tae_imports(category):
@@ -672,7 +772,7 @@ def _clip(reg, weapon_id, slot, anim, grip):
 TAE_PC_BEHAVIOR, PC_BEHAVIOR_WEAPON_FLAG = 307, 8
 
 
-def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand='right'):
+def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand='right', only_judges=None):
     """One attack slot, or None when the weapon has no such attack.
 
     `clip` = (TAE category, anim id) reads that TimeAct entry instead of the slot's motion
@@ -682,7 +782,11 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand=
     `hand` = 'left' is the off-hand L1 (`er-mechanics-powerstance-guard.OFFHAND_SLOTS`): its
     judges carry Source 0, the reference hand, which is the left weapon in those states, so a
     plain weapon dummy rides `L_Weapon` (`INFERRED`: the AtkParam dummies of judges 400..450 have
-    no 11xxx prefix, checked on a030/a172 035000)."""
+    no 11xxx prefix, checked on a030/a172 035000).
+
+    `only_judges` (a set) keeps only those judges of the clip: a powerstance clip mixes both
+    hands' hits, and each hand's are measured with its own weapon's model
+    (`er-mechanics-weapon-embed.Embedder.dual_reach`)."""
     reg = rc.reg
     nums = ATK.attack_numbers(reg, weapon_id, judge)
     if nums is None:
@@ -715,6 +819,8 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand=
             j = struct.unpack_from('<i', e.params, 8)[0]
             state_info = struct.unpack_from('<H', e.params, ATTACK_STATE_INFO_OFFSET)[0]
             judges.append((j, (e.start, e.end), state_info))
+    if only_judges is not None:
+        judges = [x for x in judges if x[0] in only_judges]
     seen = set()
     for j, window, state_info in judges:
         n = ATK.attack_numbers(reg, weapon_id, j)
@@ -742,15 +848,18 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand=
             rigged = rigged_shape_points(shape, attached, skeleton) if src == 'weapon' else None
             ext = shape_extent(shape, dummies) if src == 'weapon' and \
                 (rigged is None or rigged[0] == 'unposed') else None
+            # A weapon shape is looked for on the body only when the weapon model is on disk: with
+            # no model every id is "absent from it", and c0000 carries 100/110/120 too.
             body = rigged[1] if rigged and rigged[0] == 'body' else \
-                (body_shape_points(shape, src, dummies) if ext is None and rigged is None else None)
+                (body_shape_points(shape, src, dummies)
+                 if ext is None and rigged is None and (src == 'body' or dm) else None)
             hitboxes.append({'judge': j, 'atk_row': n['atk_row'], 'source': src, 'hand': hand,
                              'state_info': state_info, 'damaging': damaging, **shape,
                              **({'extent_m': ext['extent'], 'blade_m': ext['blade'],
                                  'points': ext['points']} if ext else {'extent_m': None}),
                              **({'body_points': body} if body else {}),
-                             **({'unposed_bones': rigged[1]} if rigged and rigged[0] == 'unposed'
-                                else {})})
+                             **({'unposed_bones': rigged[1], 'rig_points': rigged[2], 'rig_model': model}
+                                if rigged and rigged[0] == 'unposed' else {})})
     reaches = [h['extent_m'] for h in hitboxes
                if h.get('extent_m') is not None and h['damaging'] and not h['state_info']]
     out = {
@@ -805,6 +914,36 @@ def weapon_length(rc, weapon_id):
     ext = [shape_extent(s, dm[0]) for s in hit_shapes(row)]
     ext = [e['extent'] for e in ext if e]
     return max(ext) if ext else None
+
+
+#: TAE 2 BulletBehavior (`COMMUNITY` WitchyBND ER template): the attack fires a bullet.
+TAE_BULLET_BEHAVIOR = 2
+
+
+def r1_reach(rc, weapon_id, grip='one'):
+    """(world reach m, reason, inherent) of the weapon's R1 #1 in `grip` ('one' or 'both'), the
+    attack `er-mechanics-weapon-embed` reads `r1_reach` from.
+
+    With a reach the reason is None. Without one the reason is read off the data, and `inherent`
+    says whether no measurement could supply it: the weapon has no R1 #1, or its TAE has no
+    damaging AttackBehavior window (a bow's or a catalyst's R1 fires a bullet, TAE 2). A reach
+    lost for any other reason (a model or clip not unpacked, a dummy on no model) is not
+    inherent: it is a gap in the measurement."""
+    slot, label, judge, anim, _ = ATK.SLOTS_ONE_HAND[0]
+    if grip == 'both':
+        slot, label = '2h_' + slot, '2H ' + label
+        judge, anim = judge + ATK.TWO_HAND_JUDGE_OFFSET, anim + ATK.TWO_HAND_ANIM_OFFSET
+    r = attack_reach(rc, weapon_id, slot, label, judge, anim, grip)
+    if r is None:
+        return None, f'no {label}: no AtkParam row behind behavior judge {judge}, or no TAE entry', True
+    if r.get('world_reach_m') is not None:
+        return r['world_reach_m'], None, False
+    if not r['hit_windows']:
+        _, _, events, _ = _clip(rc.reg, weapon_id, slot, anim, grip)
+        if any(e.type == TAE_BULLET_BEHAVIOR for e in events or ()):
+            return None, f'{label} {r["anim"]} fires a bullet (TAE 2) and has no damaging TAE 1 hitbox', True
+        return None, f'{label} {r["anim"]} has no damaging TAE 1 AttackBehavior window', True
+    return None, r.get('world_reach_error') or f'{label} {r["anim"]}: no hit shape was placed', False
 
 
 def weapon_reach(rc, weapon_id, grip='one'):
@@ -963,25 +1102,52 @@ def _qconj(q):
     return (-q[0], -q[1], -q[2], q[3])
 
 
-def _shape_world_points(h, model, root, bind):
+def _carry(p, bone_bind, bone_now):
+    """`p`, a bind-pose position riding a bone, carried by (bone now) x (bone at bind)^-1."""
+    b_origin, b_q = bone_bind
+    local = _qrot(_qconj(b_q), tuple(p[i] - b_origin[i] for i in range(3)))
+    origin, q = bone_now
+    off = _qrot(q, local)
+    return tuple(origin[i] + off[i] for i in range(3))
+
+
+def _shape_left(h):
+    return h.get('hand') == 'left' or any(d // 1000 == DMY_PREFIX_LEFT for d in h['dmy'])
+
+
+def _shape_world_points(h, model, root, bind, rig_pose=None):
     """(end points, far end, anchor) of one hit shape in model space with root motion, or None.
 
     A weapon shape rides the hand's weapon bone (`WEAPON_TO_BONE`); `far` is the end farthest
-    from the grip and `anchor` the grip. A body shape's dummy follows its attach bone: bind
-    position carried by (bone now) x (bone at bind)^-1; an attach of -1 rides the root motion
-    (`INFERRED`: the dummy is fixed in the character's model space). `far` is the DmyPoly1 end,
-    and `anchor` is that end too."""
-    if h.get('points'):
-        left = h.get('hand') == 'left' or any(d // 1000 == DMY_PREFIX_LEFT for d in h['dmy'])
-        bone = 'L_Weapon' if left else 'R_Weapon'
+    from the grip and `anchor` the grip. A shape on the weapon model's own bones (`rig_points`)
+    is first carried by those bones' pose in `rig_pose` (`weapon_rig_pose`, weapon-model space),
+    the same way a body dummy follows its bone, then rides the weapon bone like a grip dummy. A
+    body shape's dummy follows its attach bone: bind position carried by (bone now) x (bone at
+    bind)^-1; an attach of -1 rides the root motion (`INFERRED`: the dummy is fixed in the
+    character's model space). `far` is the DmyPoly1 end, and `anchor` is that end too."""
+    pts = h.get('points')
+    if h.get('rig_points'):
+        rig = weapon_rig(h['rig_model'])
+        if rig_pose is None or rig is None:
+            return None
+        pts = []
+        for p, bone, flver_bind in h['rig_points']:
+            if bone not in rig['bind'] or bone not in rig_pose:
+                return None
+            b_origin = rig['bind'][bone][0]
+            if max(abs(b_origin[i] - flver_bind[i]) for i in range(3)) > BODY_BIND_TOLERANCE_M:
+                return None
+            pts.append(_carry(p, rig['bind'][bone], rig_pose[bone]))
+    if pts:
+        bone = 'L_Weapon' if _shape_left(h) else 'R_Weapon'
         origin, q = model[bone]
 
         def place(p):
             off = _qrot(q, tuple(c * s for c, s in zip(p, WEAPON_TO_BONE)))
             return tuple(origin[i] + off[i] for i in range(3))
 
-        far = max(h['points'], key=lambda p: sum(c * c for c in p))
-        return [place(p) for p in h['points']], place(far), origin
+        far = max(pts, key=lambda p: sum(c * c for c in p))
+        return [place(p) for p in pts], place(far), origin
     ends = []
     for p, bone, flver_bind in h['body_points']:
         if bone is None:
@@ -1016,13 +1182,20 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
         return None
     by_judge = {}
     live = {j for _, _, j in hit_windows}
+    rig_clips = {}
     for h in hitboxes:
         if not h['damaging'] or h['state_info']:
             continue
-        if h.get('unposed_bones') and h['judge'] in live:
+        if h.get('rig_points') and h['judge'] in live:
             # A partial placement would drop the part of the weapon that reaches farthest.
-            return {'world_reach_error': 'hit dummies ride the weapon model own bones '
-                    f"{sorted(set(h['unposed_bones']))} (its anibnd is not decoded)"}
+            hand = 'left' if _shape_left(h) else 'right'
+            key = (h['rig_model'], hand)
+            if key not in rig_clips:
+                rig_clips[key] = weapon_clip(h['rig_model'], category, anim, hand)
+            if rig_clips[key] is None:
+                return {'world_reach_error': 'hit dummies ride the weapon model own bones '
+                        f"{sorted(set(h['unposed_bones']))} and wp_a_{h['rig_model']:04d} has no "
+                        'unpacked anibnd skeleton and clip'}
         if (h['source'] == 'weapon' and h.get('points')) or h.get('body_points'):
             by_judge.setdefault(h['judge'], []).append(h)
     best = None
@@ -1042,9 +1215,17 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
                 t = (start + (end - start) * k / n) / TAE_FPS
                 model = pose.bone_model_transforms(category, anim, t, with_root_motion=True)
                 root = pose.root_motion(category, anim, t)
+                rig_poses = {key: weapon_rig_pose(key[0], c[0], t, c[2])
+                             for key, c in rig_clips.items() if c is not None}
                 for h in shapes:
-                    placed = _shape_world_points(h, model, root, bind)
+                    rig_pose = rig_poses.get((h['rig_model'], 'left' if _shape_left(h) else 'right')) \
+                        if h.get('rig_points') else None
+                    placed = _shape_world_points(h, model, root, bind, rig_pose)
                     if placed is None:
+                        if h.get('rig_points'):
+                            return {'world_reach_error': 'hit dummies ride the weapon model own bones '
+                                    f"{sorted(set(h['unposed_bones']))}, absent from or off the bind "
+                                    f"pose of wp_a_{h['rig_model']:04d}'s anibnd skeleton"}
                         continue
                     ends, far, anchor = placed
                     for w in ends:
@@ -1062,6 +1243,12 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
     except (OSError, ValueError, KeyError) as err:
         return {'world_reach_error': str(err)}
     if best is None:
+        lost = sorted({d for h in hitboxes if h['damaging'] and not h['state_info'] and h['judge'] in live
+                       and h['source'] == 'weapon' and not h.get('points') and not h.get('body_points')
+                       for d in h['dmy']})
+        if lost:
+            return {'world_reach_error': f'hit dummies {lost} are on no unpacked model (the weapon '
+                    'model is not in the parts tree, or lacks them)'}
         return None
     first = min(w[0] for w in hit_windows) / TAE_FPS
     lunge = -pose.root_motion(category, anim, first)[2]
@@ -1079,6 +1266,9 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
     extra.update(sweep_coverage(samples))
     extra['front_contact_t'] = front_contact_times(samples)
     extra['window_points'] = window_points(samples)
+    if rig_clips:
+        extra['weapon_rig_clips'] = {f'wp_a_{m:04d} {hand}': c[1] + (' (looped default)' if c[2] else '')
+                                     for (m, hand), c in rig_clips.items()}
     return {
         **extra,
         'world_reach_m': round(forward, 3),
@@ -1927,9 +2117,26 @@ def selftest():
                   2.5 in (bc['r1_1'].get('front_contact_frame_real') or {}), True,
                   'MEASURED a062_030000 (grip-space placement put the claw at floor level, 1 m aside)')
         whip = {r['slot']: r for r in weapon_reach(rc, rc.reg.find_weapon('Whip'), 'one')}
-        check('Whip R1 #1 is left unposed (dummies on the whip model own bones)',
-              (whip['r1_1'].get('world_reach_m'), 'own bones' in whip['r1_1'].get('world_reach_error', '')),
-              (None, True), 'wp_a_1200.flver AttachBoneIndex -> Born* bones')
+        rig = weapon_rig(1200)
+        if rig is None:
+            skips.append('whip rig: wp_a_1200 anibnd not unpacked')
+        else:
+            fl = read_flver(weapon_flver_path(1200))
+            off = max(max(abs(a - b) for a, b in zip(flver_bone_to_model(fl, i, (0.0, 0.0, 0.0)),
+                                                     rig['bind'][n['name']][0]))
+                      for i, n in enumerate(fl['bones']) if n['name'] in rig['bind'])
+            check('Whip skeleton.hkx bind pose = wp_a_1200.flver bones within 1 mm', off < 1e-3, True,
+                  'wp_a_1200 anibnd Skeleton.hkx vs FLVER bone table (independent files)')
+            check('Whip R1 #1 posed by the whip own clip, reaching past grip-space length + lunge',
+                  (whip['r1_1'].get('weapon_rig_clips'),
+                   whip['r1_1']['world_reach_m'] > whip['r1_1']['weapon_reach_m']
+                   + whip['r1_1']['root_motion_to_hit_m']),
+                  ({'wp_a_1200 right': 'a043_030000'}, True),
+                  'wp_a_1200 a043_030000.hkx (Born* bones stretch past the bind length)')
+        ranah = r1_reach(rc, rc.reg.find_weapon('Dancing Blade of Ranah'), 'one')
+        check('a257_030000 (an import entry with events, no clip of its own) plays a156_030000',
+              (hkx_source(257, 30000), ranah[0] is not None), ((156, 30000), True),
+              'TAE a257 mini-header ImportOtherAnim 156030000; no a257 clip unpacked')
 
     # 3. TAE: event fields as named by the community template (authored apart from this tool).
     if os.path.exists(TAE_TEMPLATE_ER):

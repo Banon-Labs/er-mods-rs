@@ -4,9 +4,9 @@ installed regulation lets a player use in a multiplayer session, by the repo's o
 and recast rules.
 
     python3 scripts/er-mechanics-pouch.py "Poleblade of the Bud" --affinity Standard \\
-        --stats vig=58,mnd=8,vit=38,str=20,dex=22,int=7,fth=8,arc=68
+        --stats vig=58,mnd=8,end=38,str=20,dex=22,int=7,fth=8,arc=68
     python3 scripts/er-mechanics-pouch.py Greatsword --affinity Heavy \\
-        --stats vig=58,mnd=15,vit=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
+        --stats vig=58,mnd=15,end=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
     python3 scripts/er-mechanics-pouch.py ... --base ~/.cache/er-build-planner/weapon-builds/<dir>/base.json
     python3 scripts/er-mechanics-pouch.py --selftest
 
@@ -94,8 +94,9 @@ which only holds when the fight is even. Here the denominator is `L`, the HP the
 engagement with no kit, so the score is, to first order, the damage the build deals before it
 dies: D is offense x HP / (attackers x incoming), a cut share lengthens the life by the same
 share at any attacker count, and a flat heal offsets heal / L of the drain. In the default
-invasion model (`er-mechanics-buffs.FIGHT_KINDS`: five attackers, three hosts' HP bars, 10 s to
-1 h) a percentage cut is worth what it is in a duel and a flat heal a fifth of it.
+invasion model (`er-mechanics-buffs.FIGHT_KINDS`: about two opponents at once, 6.5 hosts' HP bars
+on average, 10 s to 1 h) a percentage cut is worth what it is in a duel and a flat heal about half
+of it.
 
     score = buffed x (L + cut + heal) / L x time factor
 
@@ -752,7 +753,7 @@ class Pouch:
                 fams[fam] = got
         slots = [(1.0 / len(fams) / len(got), {el: a[MV_KEY[el]] for el in ELEMENTS}, a['phys_type'],
                   self.by_point.get(a['atk_row'], 100) / 100.0) for got in fams.values() for a in got]
-        me = DEF.defender(self.def_t, {('end' if k == 'vit' else k): v for k, v in stats.items()}, list(armor),
+        me = DEF.defender(self.def_t, {STAT_ALIAS.get(k, k): v for k, v in stats.items()}, list(armor),
                           list(talismans), great_rune, pvp=True)
         mix = AT.damage_mix(self.pvp_builds, me['defense'], t, self.reg)
         absorb = {}
@@ -1228,14 +1229,20 @@ def roles_of(tags):
 def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw):
     """Tools, spells, grease and flask split for one build (module docstring).
 
-    `stats` are planner keys (`vit` is Endurance). Keywords: `rl` (default from the stats),
+    `stats` are attribute keys (`vig`, `end`, ...). Keywords: `rl` (default from the stats),
     `window` 10, `talismans`, `great_rune`, `armor` (four piece names; else the window's median
     absorption), `base` (a planner build: its tears and great rune are fixed in every kit, its flask
     positions and total are kept), `fixed` (resolve keys held in every kit, instead of the base's),
     `skill` (SwordArtsParam id; default the weapon's own), `tool_slots`, `memory_slots`,
     `flask_total`, `physick` (keep the physick flask; default when the base carries a tear),
-    `win`, `regulation`, `pouch` (a `Pouch` to reuse)."""
-    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
+    `win`, `regulation`, `pouch` (a `Pouch` to reuse), `exclude` (`exclude(name, kind)` true for a
+    good or spell never picked, kind 'consumable' or 'spell': a duel's ladder bans), `buff_ban`
+    (`buff_ban(name, kind)` true for a weapon buff, a grease or buff spell, the build's weapon setup
+    may not carry: the ladder's grease and buff restrictions on the focus weapon's grip and its
+    off hand, asked only of candidates whose rows buff the weapon), `assumed_tier` (the grease tier
+    the stats were optimized with, `ASSUMED_TIER` by default, None when they assume no grease: the
+    `grease_tier` verdict compares the pick against it)."""
+    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
     p = kw.get('pouch') or model(rl, kw.get('window', 10), kw.get('regulation'), kw.get('fight', B.DEFAULT_FIGHT))
     base = kw.get('base')
     fixed = kw.get('fixed')
@@ -1260,7 +1267,10 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
     # item is to reach (`layout`) and do not cap the kit; `tool_slots` caps it only when passed.
     tool_slots = kw.get('tool_slots')
     tool_slots = None if tool_slots is None else tool_slots - len(keep)
-    cands = p.candidates(ctx)
+    exclude = kw.get('exclude') or (lambda name, kind: False)
+    buff_ban = kw.get('buff_ban') or (lambda name, kind: False)
+    cands = [c for c in p.candidates(ctx) if not exclude(p.cands[c]['name'], p.cands[c]['kind'])
+             and not (p.cands[c]['weapon_buff'] and buff_ban(p.cands[c]['name'], p.cands[c]['kind']))]
     slot_len = {k: (p.magic.get(p.cands[k]['goods']) or {}).get('slotLength', 1)
                 for k in cands if p.cands[k]['kind'] == 'spell'}
 
@@ -1293,13 +1303,15 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
         if src in tools and r['spCategory'] in B.WEAPON_BUFF_CATS and p._attack(sid, ctx['two'])['entries']:
             grease = p.cands[src]['name']
     tiers = {n: t for t, by_el in p.OPT.GREASE_NAMES.items() for n in by_el.values()}
+    assumed = kw.get('assumed_tier', ASSUMED_TIER)
     if not ctx['enhance']:
-        verdict = {'tier': None, 'assumed': ASSUMED_TIER, 'holds': None,
+        verdict = {'tier': None, 'assumed': assumed, 'holds': None,
                    'why': f"{weapon} {affinity} has isEnhance 0: no grease can be used on it"}
     else:
         tier = tiers.get(grease)
-        verdict = {'tier': tier, 'assumed': ASSUMED_TIER, 'holds': tier == ASSUMED_TIER,
-                   'why': f"picked {grease or 'no grease'}" + (f" ({tier})" if tier else '')}
+        verdict = {'tier': tier, 'assumed': assumed, 'holds': tier == assumed,
+                   'why': f"picked {grease or 'no grease'}" + (f" ({tier})" if tier else '')
+                   + ('' if assumed else '; the stats assume no grease')}
     plan = p.fp_plan(ctx, list(fixed) + kit)
     fp_need, fp_parts = plan['need'], plan['sources']
     crimson, cerulean = plan['crimson'], plan['cerulean']
@@ -1327,8 +1339,9 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
     menu = [p.cands[k]['name'] for k in tools if 'instant' not in p.cands[k] and not p.cands[k].get('cures')
             and p._limit(k, kit)[0] <= 1]
     names = [n for n in names if n not in menu]
-    pots = p.pots(ctx, kit) if kw.get('pots', True) else []
-    boluses = p.bolus_fill(kit) if kw.get('boluses', True) else []
+    pots = [x for x in p.pots(ctx, kit) if not exclude(x['name'], 'consumable')] if kw.get('pots', True) else []
+    boluses = ([x for x in p.bolus_fill(kit) if not exclude(x['name'], 'consumable')]
+               if kw.get('boluses', True) else [])
     extra = [x['name'] for x in pots] + [x['name'] for x in boluses]
     layout_rows = layout(names, keep, positions, uses=uses, slow=slow, extra=extra)
     layout_rows += [{'name': n, 'equipIndex': None, 'order': len(layout_rows) + i} for i, n in enumerate(menu)]
@@ -1382,11 +1395,15 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
 
 
 # -- CLI -----------------------------------------------------------------------------------------
+#: `vit` is the planner's spelling of Endurance, still taken for `end`.
+STAT_ALIAS = {'vit': 'end'}
+
+
 def parse_stats(s):
     out = {}
     for part in s.split(','):
         k, v = part.split('=')
-        out[k.strip().lower()] = int(v)
+        out[STAT_ALIAS.get(k.strip().lower(), k.strip().lower())] = int(v)
     return out
 
 
@@ -1530,9 +1547,10 @@ def selftest():
           (['Y', 'X'], ['A', 'Y', 'X'], ['A']))
     # Real regulation.
     p = model(150, 10)
-    check('the default fight is the invasion: 5 attackers, 3 hosts, 10 s to 1 h',
+    inv = B.FIGHT_KINDS['invasion']
+    check('the default fight is the invasion: its engaged attackers, 6.5 hosts, 10 s to 1 h',
           (p.fight['kind'], p.fight['attackers'], p.fight['targets'], p.fight['seconds']),
-          ('invasion', 5, 3, [10, 3600]))
+          ('invasion', inv['attackers'], 6.5, [10, 3600]))
     try:
         _real(p, check)
     except Exception as ex:  # a missing row is a failure, not a crash
@@ -1582,7 +1600,7 @@ def _real(p, check):
            any(c['name'] in ('Rock Heart', 'Priestess Heart') for c in p.cands.values())), (True, False))
     check('Boiled Crab is a candidate', 'consumable:Boiled Crab' in p.cands, True)
     check('a grease needs isEnhance', p.cands['consumable:Drawstring Royal Magic Grease']['needs_enhance'], True)
-    st = {'vig': 58, 'mnd': 8, 'vit': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
+    st = {'vig': 58, 'mnd': 8, 'end': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
     ctx = p.context('Poleblade of the Bud', 'Standard', 10, st)
     p.m.fp_bar = ctx['fp_bar']
     check('Poleblade of the Bud takes no grease (isEnhance 0)', ctx['enhance'], False)
@@ -1660,7 +1678,7 @@ def _real(p, check):
           {'invader': 0.5, 'host': 0.5})
     check('roles from tags: host when none names one', roles_of(['Dexterity']), {'host': 1.0})
     # Greasable: Heavy Greatsword at a STR spread; a Fire one takes none.
-    gs = {'vig': 58, 'mnd': 10, 'vit': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
+    gs = {'vig': 58, 'mnd': 10, 'end': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
     cg = p.context('Greatsword', 'Heavy', 25, gs)
     check('Heavy Greatsword is buffable', cg['enhance'], True)
     cf = p.context('Greatsword', 'Fire', 25, gs)
@@ -1670,6 +1688,19 @@ def _real(p, check):
     check('a grease raises the hit through its flat add', one['offense'] > 1.0, True)
     two = p.evaluate(cg, ['consumable:Drawstring Golden Grease', 'consumable:Golden Grease'])
     check('two greases: one right-hand entry, the later one', two['live'], {'consumable:Golden Grease'})
+    # A duel (`er-weapon-build.py --fight duel`) passes the ladder's `tool_ban` as `exclude`: no
+    # grease it leaves is a scored candidate, so no banned grease is assumed (the 2026-10-19 upload
+    # refused Drawstring Dragonbolt Grease).
+    ladder = _mod('er_builds_ladder', 'er-builds-ladder.py')
+    left = [p.cands[k]['name'] for k in p.candidates(cg)
+            if p.cands[k]['weapon_buff'] and p.cands[k]['kind'] == 'consumable' and not ladder.tool_ban(p.cands[k]['name'])]
+    check('duel: no grease candidate survives the ladder bans', left, [])
+    duel = pick('Greatsword', 'Heavy', 25, gs, pouch=p, pots=False, boluses=False, assumed_tier=None,
+                exclude=lambda n, kind: (ladder.spell_ban if kind == 'spell' else ladder.tool_ban)(n))
+    check('duel pick: no grease, and the verdict assumes none', (duel['grease'], duel['grease_tier']['assumed'],
+                                                                 duel['grease_tier']['holds']), (None, None, True))
+    check('duel pick: no banned tool', [t['name'] for t in duel['tools'] if ladder.tool_ban(t['name'])
+                                        and 'Crimson' not in t['name']], [])
     # A seal opens incantations; requirements are read from the regulation.
     cs = p.context('Greatsword', 'Heavy', 25, dict(gs, fth=25), plan_weapons=['Finger Seal'])
     spells = [k for k in p.candidates(cs) if p.cands[k]['kind'] == 'spell']
@@ -1688,7 +1719,7 @@ def main():
     ap.add_argument('weapon', nargs='?')
     ap.add_argument('--affinity', default='Standard')
     ap.add_argument('--level', type=int, help='weapon level (default its max)')
-    ap.add_argument('--stats', help='planner keys: vig,mnd,vit,str,dex,int,fth,arc')
+    ap.add_argument('--stats', help='vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)')
     ap.add_argument('--plan-weapons', default='', help='comma list of the other weapons the build holds')
     ap.add_argument('--two-handed', action='store_true')
     ap.add_argument('--talismans', default='')

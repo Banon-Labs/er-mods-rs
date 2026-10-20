@@ -4,9 +4,13 @@
 # was made with, then upload it.
 #
 #   bash scripts/er-mechanics-build-pipeline.sh --prefix bleed --class Hero \
-#       --stats vig=56,mnd=9,vit=41,str=54,dex=9,int=7,fth=8,arc=45 --affinity Blood \
+#       --stats vig=56,mnd=9,end=41,str=54,dex=9,int=7,fth=8,arc=45 --affinity Blood \
 #       --name "Bleed Warped Axe RL150" [--focus "Warped Axe:Blood"] [--gear gear.json] [--update <planner id>] [--dir <dir>]
 #       [--no-upload]    # stop once <prefix>-plan.json is written
+#       [--jobs N]       # pool workers (default: nproc less 2)
+#       [--exclude bans.json]   # weapons and skills the loadout may not pick (combo-loadout --exclude)
+#       [--weight-cost cost.json]   # carried weight -> damage x EHP (er-weapon-build.py weight_cost),
+#                                   # which the loadout's equip sets pay for their weight against
 #
 # Steps, each skipped when its output exists and is newer than its inputs (delete a file to redo
 # it):
@@ -34,7 +38,7 @@ set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 BASE_ID=188e74da444029
 DIR=""
-PREFIX="" CLASS="" STATS="" AFFINITY="Heavy" NAME="" GEAR="" UPDATE="" JOBS=6 BASE_JSON="" FOCUS="" NO_UPLOAD=""
+PREFIX="" CLASS="" STATS="" AFFINITY="Heavy" NAME="" GEAR="" UPDATE="" JOBS="" BASE_JSON="" FOCUS="" NO_UPLOAD="" EXCLUDE="" ICON_SHIELDS="" WEIGHT_COST="" ARENA_M="" FIGHT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix) PREFIX=$2; shift 2 ;;
@@ -50,9 +54,21 @@ while [ $# -gt 0 ]; do
         --base-json) BASE_JSON=$2; shift 2 ;;
         --jobs) JOBS=$2; shift 2 ;;
         --no-upload) NO_UPLOAD=1; shift ;;
+        --exclude) EXCLUDE=$2; shift 2 ;;
+        --icon-shields) ICON_SHIELDS=$2; shift 2 ;;
+        --weight-cost) WEIGHT_COST=$2; shift 2 ;;
+        --arena-m) ARENA_M=$2; shift 2 ;;
+        --fight) FIGHT=$2; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+# `er-weapon-build.py` always passes --jobs: the cores its grant leaves on the machine the pass
+# runs on (`pipeline_jobs`), a --host run's included. Run by hand, the default is the cores this
+# process may use less the boards' two spare ones (`SPARE_CORES` in gen-r3-weapon-boards.py).
+if [ -z "$JOBS" ]; then
+    JOBS=$(( $(nproc) - 2 ))
+    [ "$JOBS" -ge 1 ] || JOBS=1
+fi
 for v in PREFIX CLASS STATS NAME DIR BASE_JSON; do
     [ -n "${!v}" ] || { echo "--$(echo "$v" | tr 'A-Z_' 'a-z-') is required" >&2; exit 2; }
 done
@@ -73,9 +89,10 @@ if ! fresh "$B" "$BASE_JSON" ${GEAR:+"$GEAR"}; then
     # `computed` is the planner's cache of what the stats give; the loadout and the shield pass read
     # max HP, stamina and equip load from it, so it is recomputed for the new stats with
     # `er-mechanics-resources.Model` (which reproduces the planner's numbers) rather than kept stale.
+    # The planner document spells Endurance `vit`, so `end=` is written under that key.
     jq --arg c "$CLASS" --arg n "$NAME" --arg s "$STATS" '
         .characterClass = $c | .name = $n
-        | .stats += ($s | split(",") | map(split("=") | {(.[0]): (.[1] | tonumber)}) | add)' \
+        | .stats += ($s | split(",") | map(split("=") | {(if .[0] == "end" then "vit" else .[0] end): (.[1] | tonumber)}) | add)' \
         "$BASE_JSON" | python3 -c "
 import importlib.util, json, sys
 def load(name, path):
@@ -90,7 +107,7 @@ if sys.argv[1]:   # the armor and talismans the upload will equip, so equip load
 worn = lambda slots: [s['name'] for s in slots or [] if s.get('equipSet') or s.get('equipIndex') is not None]
 tal = worn((b.get('talismans') or {}).get('slots'))
 arm = [n for p in (b.get('protectors') or {}).values() for n in worn(p.get('slots'))]
-r = R.Model().resources(b['stats'], tal, arm, b.get('greatRune'))
+r = R.Model().resources(R.from_planner(b['stats']), tal, arm, b.get('greatRune'))
 b['computed'] = dict(b.get('computed') or {}, maxHealth=r['max_hp'], maxFP=int(r['max_fp']),
                      maxStamina=r['max_stamina'], maxEquipLoad=r['max_equip_load'])
 json.dump(b, sys.stdout)" "$GEAR" > "$B"
@@ -98,7 +115,7 @@ fi
 
 if ! fresh "$P-embed0.json" "$B"; then
     step "2 embedding without ash rows"
-    python3 scripts/er-mechanics-weapon-embed.py --build "$B" --out "$P-embed0.json" > "$P-embed0.log" 2>&1
+    python3 scripts/er-mechanics-weapon-embed.py ${FIGHT:+--fight "$FIGHT"} --build "$B" --out "$P-embed0.json" > "$P-embed0.log" 2>&1
 fi
 if ! fresh "$P-wieldable.txt" "$P-embed0.json"; then
     step "3 wieldable weapons"
@@ -111,10 +128,10 @@ T=scripts/er-mechanics-ash-table.py
 # holds are this build's, which for `er-weapon-build.py` is an empty inventory, not the base's.
 if ! fresh "$P-main.json" "$P-wieldable.txt" || ! fresh "$P-fixed.json" "$B"; then
     step "4 ash sweeps: $AFFINITY over the wieldable weapons, and the fixed-skill weapons"
-    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --only-extra \
+    python3 $T ${FIGHT:+--fight "$FIGHT"} --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --only-extra \
         --jobs "$JOBS" --extra-weapons "$(cat "$P-wieldable.txt")" --json "$P-main.json" --out "$P-main.html" \
         > "$P-main.log" 2>&1 &
-    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-fixed \
+    python3 $T ${FIGHT:+--fight "$FIGHT"} --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-fixed \
         --json "$P-fixed.json" --out "$P-fixed.html" > "$P-fixed.log" 2>&1 &
     wait
 fi
@@ -125,28 +142,36 @@ import json, sys
 w = open(sys.argv[1]).read().strip().split(',')
 swept = {x['weapon'] for f in sys.argv[2:] for x in json.load(open(f))}
 print(','.join(x for x in w if x not in swept))" "$P-wieldable.txt" "$P-main.json" "$P-fixed.json")
-    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --jobs "$JOBS" \
+    python3 $T ${FIGHT:+--fight "$FIGHT"} --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --jobs "$JOBS" \
         --extra-weapons "$MISS" --json "$P-inbuild.json" --out "$P-inbuild.html" > "$P-inbuild.log" 2>&1
 fi
 
 if ! fresh "$P-embed.json" "$P-main.json" "$P-inbuild.json" "$P-fixed.json"; then
     step "6 embedding with ash rows"
-    python3 scripts/er-mechanics-weapon-embed.py --build "$B" --ash-rows "$P-main.json" "$P-inbuild.json" \
+    python3 scripts/er-mechanics-weapon-embed.py ${FIGHT:+--fight "$FIGHT"} --build "$B" --ash-rows "$P-main.json" "$P-inbuild.json" \
         "$P-fixed.json" --out "$P-embed.json" > "$P-embed.log" 2>&1
 fi
 if ! fresh "$P-true-combos.jsonl" "$P-wieldable.txt"; then
     step "7a true combos"
     python3 scripts/er-mechanics-true-combo-sweep.py "$P-wieldable.txt" > "$P-true-combos.jsonl" 2> "$P-true-combos.err"
 fi
-if ! fresh "$P-pb.json" "$P-embed.json"; then
+# The script is an input: a duel costs each weapon attack over the distance spread (`--arena-m`),
+# and a file written before that costs it at one fixed distance.
+if ! fresh "$P-pb.json" "$P-embed.json" scripts/er-mechanics-perfect-block.py; then
     step "7b perfect block"
     python3 scripts/er-mechanics-perfect-block.py --build "$B" --weapons-from "$P-embed.json" --json "$P-pb.json" \
-        > "$P-pb.log" 2>&1
+        ${ARENA_M:+--arena-m "$ARENA_M"} > "$P-pb.log" 2>&1
 fi
-if ! fresh "$P-roles.json" "$P-embed.json" "$P-true-combos.jsonl" "$P-pb.json"; then
+# The script is an input too: the roles' shape changes with it (per-grip main-hand features,
+# `by_grip`, 2026-10-19), and a roles file written before that scores every set the old way.
+# The strings are valued by `er-mechanics-ash-interrupt.ChainTrades`, over a duel's distance spread
+# with `--arena-m`, so that script is an input too.
+if ! fresh "$P-roles.json" "$P-embed.json" "$P-true-combos.jsonl" "$P-pb.json" scripts/er-mechanics-class-roles.py \
+        scripts/er-mechanics-ash-interrupt.py; then
     step "7c class roles"
     python3 scripts/er-mechanics-class-roles.py "$B" --embed "$P-embed.json" --combos "$P-true-combos.jsonl" \
-        --perfect-block "$P-pb.json" --out "$P-roles.json" > "$P-roles.out" 2>&1
+        --perfect-block "$P-pb.json" ${EXCLUDE:+--exclude "$EXCLUDE"} ${ARENA_M:+--arena-m "$ARENA_M"} \
+        --out "$P-roles.json" > "$P-roles.out" 2>&1
 fi
 
 if ! fresh "$P-status.json" "$P-roles.json"; then
@@ -164,7 +189,7 @@ for v in r['classes'].values():
 print(','.join(sorted(miss)))" "$P-roles.json" "$P-main.json" "$P-inbuild.json" "$P-fixed.json")
     echo "status weapons: ${W:-none}"
     if [ -n "$W" ]; then
-        python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-extra \
+        python3 $T ${FIGHT:+--fight "$FIGHT"} --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-extra \
             --extra-weapons "$W" --status-weapons "$W" --json "$P-status.json" --out "$P-status.html" > "$P-status.log" 2>&1
     else
         echo "[]" > "$P-status.json"
@@ -180,9 +205,12 @@ python3 scripts/er-mechanics-combo-loadout.py "$P-main.json" "$P-inbuild.json" "
     --roles "$P-roles.json" --build "$B" --embed "$P-embed.json" --perfect-block "$P-pb.json" \
     --ranged-cache "$P-ash-ranged.json" --interrupt-cache "$P-ash-interrupt.json" \
     --counter-cache "$DIR/counter.json" --pierce-cache "$P-pierce.json" --buff-cache "$P-buff.json" \
-    --landing-cache "$P-landing.json" \
+    --landing-cache "$P-landing.json" --affinity "$AFFINITY" \
     --interrupt-jobs "$JOBS" --out "$P-plan.json" --html "$P-pages.html" --collapse-twins --landmark 15 \
-    --fun-skip-held --rank-terms "$P-rank-terms.json" ${FOCUS:+--focus "$FOCUS"} > "$P-loadout.log" 2>&1
+    --fun-skip-held --rank-terms "$P-rank-terms.json" ${FOCUS:+--focus "$FOCUS"} ${EXCLUDE:+--exclude "$EXCLUDE"} \
+    ${ICON_SHIELDS:+--icon-shields "$ICON_SHIELDS"} ${WEIGHT_COST:+--weight-cost "$WEIGHT_COST"} \
+    ${ARENA_M:+--arena-m "$ARENA_M"} \
+    > "$P-loadout.log" 2>&1
 
 if [ -n "$NO_UPLOAD" ]; then
     # `er-weapon-build.py` prices the plan's equip sets before it lets anything upload.

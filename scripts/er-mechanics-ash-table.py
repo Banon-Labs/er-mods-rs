@@ -151,8 +151,30 @@ STEP_FOLLOW_UP_SLOTS = ("roll_r1",)
 #: hand), one live entry per hand, so two of them never stack and a grease displaces them;
 #: Golden Vow is 160 and stacks with them (`er-mechanics-buffs.stack`). Not valued: the
 #: damage-taken cuts (Golden Vow 0.985, Braggart's Roar 0.9), `staminaAttackRate` (guard
-#: stamina damage), poise rates, and the roars' own charged R2s.
-BUFF_MODEL = "buff-v2"
+#: stamina damage) and poise rates.
+#:
+#: buff-v3 (user, 2026-10-19: "War Cry changes the R2"): while a `HEAVY_SPECIAL_SPEFFECTS` row is
+#: on, the R2 is the skill's own heavy (`Table.special_r2`), so a timed buff's window is the
+#: better of the buffed R1 chain and that R2 string, each on its own frames and hits
+#: (`Table.special_string`), against the plain R1 chain. Interrupt enters through
+#: `Table.chain_net` when the caller supplies one (`er-mechanics-combo-loadout.set_buff_values`
+#: does, from `er-mechanics-ash-interrupt.simulate`); the sweep alone compares raw HP a second.
+BUFF_MODEL = "buff-v3"
+#: SpEffects whose presence swaps the R2 events for the skill's heavy special, with the
+#: `AttackRightHeavySpecialType` each writes (`VERIFIED`, c0000.hks `ExecAttack` heavy branch,
+#: docs/er-mechanics/chainsaw/fallback-test-plan.md section 6): Barbaric Roar 1681/1686, War Cry
+#: 1811/1816, 1716, 1721 and 102101. War Cry's TAE event 331 adds 1810, which links to 1811.
+HEAVY_SPECIAL_SPEFFECTS = {1681: 0, 1686: 0, 1716: 0, 1721: 0, 102101: 0, 1811: 1, 1816: 1}
+#: One-handed (Start #1, End #1, Start #2, End #2) clips per special type; two-handed + 2000.
+#: Start #1 is `VERIFIED` (`AttackRightHeavySpecial1Start_CMSG` 030600, `...Warrior1Start_CMSG`
+#: 030620). The End and #2 ids are `INFERRED` from the numbering of the plain heavy (030500 Start,
+#: 030505 End, 030510/030515 #2) and from the clips' TAE: each Start carries the release SpEffect
+#: 100280 (War Cry's at f11) and its slow multi-hit swing, each End one hit and a
+#: roll cancel (Stone Club a033_030625: judge 3981, MV 135, hit f15, hyperarmor f0-25).
+HEAVY_SPECIAL_ANIMS = {0: (30600, 30605, 30610, 30615), 1: (30620, 30625, 30630, 30635)}
+#: The plain R2's clips in the same order (`er-mechanics-attacks.SLOTS_ONE_HAND`: Heavy1Start
+#: 030500, Heavy1End 030505, Heavy2Start 030510, Heavy2End 030515).
+PLAIN_HEAVY_ANIMS = (30500, 30505, 30510, 30515)
 #: The engagement window a timed buff is valued over, in s: `er-mechanics-buffs.ENGAGEMENT_SECONDS`
 #: (5 s, `INFERRED` there, the status module's engagement spacing), restated so a change there is
 #: seen here.
@@ -160,8 +182,62 @@ BUFF_WINDOW_S = 5.0
 #: `swordArtsTypeNew` values `IsRollingArts` accepts (Quickstep 155, Bloodhound's Step 156,
 #: Raging Beast 273, Blind Spot 276, Dynastic Sickleplay 313).
 ROLLING_ARTS = (155, 156, 273, 276, 313)
+#: Skills that deal no damage, are not a step and add no buff the buff model measures, and still
+#: do something to a player. Every other skill like that does nothing in PvP and gets no row
+#: (`pvp_utility`): user, 2026-10-18, after White Shadow's Lure, which only draws enemy attention,
+#: was picked into a duel build as a fast "utility" ash on the strength of the R1 after it.
+NO_HIT_KEEP = {
+    "Parry": "deflects a hit; valued by the parry model (er-mechanics-parry.py), not as a buff",
+    "Lifesteal Fist": "a grab whose hit and heal are not timed as hits here, so it reads as no-hit",
+}
+#: Skills whose effect is camouflage, with the SpEffect rows that carry it. The link is recorded,
+#: not read: Assassin's Gambit's TAE applies only 1765 (a 0.1 s, 35 HP cost), and 1766/1767 come
+#: from outside the events `skill_profile` reads. The distance it hides you at is read from the
+#: rows' `SpEffectVfxParam` (`camouflage_m`), so the loadout can drop it from a fight whose arena
+#: never gets that far apart (`er-mechanics-combo-loadout.py --arena-m`).
+CAMOUFLAGE_SKILLS = {"Assassin's Gambit": (1767,)}
+
+
+def pvp_utility(name, art_type, buff) -> bool:
+    """Whether a skill with no hits of its own is worth a row: a step (`ROLLING_ARTS`), a buff
+    with a measured gain, a `NO_HIT_KEEP` skill, or a `CAMOUFLAGE_SKILLS` one."""
+    return art_type in ROLLING_ARTS or bool(buff) or name in NO_HIT_KEEP or name in CAMOUFLAGE_SKILLS
+
+
+_VFX = {}
+
+
+def camouflage_m(sids, vfx=None, sp=None):
+    """The distance in m past which SpEffects `sids` hide their wearer fully: each row's
+    `SpEffectVfxParam` `useCamouflage` with the far end of its fade band (`camouflageBeginDist` /
+    `camouflageEndDist`, Assassin's Gambit 17 / 12), 0.0 for a band of -1 (hidden at any
+    distance), the nearest over the rows; None when no row camouflages."""
+    if vfx is None or sp is None:
+        if not _VFX:
+            B = _buffs_mod()
+            files = B.PR.load(None)
+
+            def rows(stem, fields):
+                return {r["id"]: r for r in B.PR.rows(B.PR.param_bytes(files, stem), fields)[0]}
+            _VFX["sp"] = rows("SpEffectParam", {"vfxId"})
+            _VFX["vfx"] = rows("SpEffectVfxParam", {"useCamouflage", "camouflageBeginDist", "camouflageEndDist"})
+        vfx, sp = _VFX["vfx"], _VFX["sp"]
+    out = []
+    for s in sids:
+        v = vfx.get((sp.get(s) or {}).get("vfxId"))
+        if v and v["useCamouflage"]:
+            far = max(v["camouflageBeginDist"], v["camouflageEndDist"])
+            out.append(0.0 if far < 0 else float(far))
+    return min(out) if out else None
+
+
 #: The proc target: 60 VIG at RL150 (user, 2026-10-08), resistances the RL150 PvP corpus median.
 TARGET_HP = 1900
+#: Fight model status is valued in (`er-mechanics-buffs.FIGHT_KINDS`, `--fight`): its `pressure`,
+#: the opponents on the target at once, limits the target's room to back off and bolus
+#: (`er-mechanics-status.sequence_hp`). Set by `main` before the sweep forks its workers; None is
+#: `er-mechanics-buffs.DEFAULT_FIGHT`.
+FIGHT = None
 #: Grid cell for the hit-area union, metres.
 AREA_CELL_M = 0.25
 
@@ -197,6 +273,15 @@ def string_scored(x):
     ash), so its clock ends at the string's last roll cancel instead of at `last`."""
     st = x.get("string")
     return bool(x["cat"] != "utility" and x.get("quick") and st and x["score"] == st["dps"])
+
+
+def ha_windows(tae, shift=0.0):
+    """The hyperarmor windows of one `er-mechanics-attacks.tae_details` record moved by `shift`, as
+    `er-mechanics-ash-interrupt.simulate` takes them: bonus in menu units
+    (`er-mechanics-exchange.POISE_MENU` 10), no floor (`INFERRED`)."""
+    return [(shift + h["frames"][0], shift + h["frames"][1], h["poise_bonus"] * 10.0,
+             h.get("pvp_poise_damage_taken") or 1.0, 0.0, h.get("pvp_hp_damage_taken") or 1.0)
+            for h in tae.get("hyperarmor") or []]
 
 
 def buff_hits(x, slots):
@@ -252,6 +337,30 @@ def apply_buff(x, gain):
     return x
 
 
+def unapply_buff(x):
+    """Take `apply_buff` back out of a row, so a sweep valued under an older `BUFF_MODEL` can be
+    valued again: its `rate` off the clock it went into and its build-up off `status_hp`. The
+    figures `apply_buff` rounded can come back 1 off."""
+    gain = x.pop("buff", None)
+    if not gain:
+        return x
+    rate = gain.get("rate") or 0.0
+    if rate:
+        st = x.get("string")
+        if string_scored(x):
+            x["string"] = dict(st, dps=round(st["dps"] - rate))
+            x["score"] = x["string"]["dps"]
+        else:
+            x["dps"] = round(x["dps"] - rate)
+            x["score"] = round(x["score"] - rate)
+    if gain.get("status_hp"):
+        st = dict(x.get("status_hp") or {})
+        for k, v in gain["status_hp"].items():
+            st[k] = st.get(k, 0) - v
+        x["status_hp"] = {k: v for k, v in st.items() if v}
+    return x
+
+
 _DEFENDER = []
 
 
@@ -290,6 +399,10 @@ class Table:
         self._travel = {}
         self._status = None
         self._buff = None
+        #: `chain_net(hits, windows, gate)` -> HP the chain nets against the opponent's replies,
+        #: `hits` [(frame, poise dealt, HP)] and `windows` as `er-mechanics-ash-interrupt.simulate`
+        #: takes them; None compares raw HP (`special_string`).
+        self.chain_net = None
 
     def set_weapon(self, weapon, affinity=None):
         self.weapon = weapon
@@ -356,6 +469,111 @@ class Table:
             t += s["r1"]
         return best
 
+    # ---- the R2 a heavy-special buff swaps in (`HEAVY_SPECIAL_SPEFFECTS`)
+
+    def special_clip(self, anim):
+        """(hits [(frame, attack row)], `tae_details`) of one heavy-special clip on this weapon, or
+        None when it opens no damaging hit. Every judge the clip's TAE opens (not SpEffect-gated)
+        with motion value counts, each window that opens a hit record once (Stone Club a033_030620:
+        judges 3982 and 3983 are MV 0, 3980 MV 175 at f67), on real frames from the clip start."""
+        atk_mod = sys.modules[type(self.t.reg).__module__]
+        reg = self.t.reg
+        cat = atk_mod.motion_category(reg.weapon[self.wid], anim, right_hand_fallback=False)
+        _, _, events = atk_mod.resolve_events(cat, anim)
+        if events is None:
+            return None
+        judges = list(dict.fromkeys(
+            int.from_bytes(e.params[8:12], "little", signed=True) for e in events
+            if e.type == atk_mod.TAE_ATTACK_BEHAVIOR
+            and not int.from_bytes(e.params[atk_mod.ATTACK_STATE_GATE_OFFSET:atk_mod.ATTACK_STATE_GATE_OFFSET + 2],
+                                   "little")))
+        hits, tae = [], None
+        for j in judges:
+            n = atk_mod.attack_numbers(reg, self.wid, j, self.level)
+            if not n or not n["can_hit_enemy"] or n["mv_phys"] + n["mv_mag"] + n["mv_fire"] + n["mv_light"] \
+                    + n["mv_holy"] <= 0:
+                continue
+            d = atk_mod.tae_details(reg, self.wid, anim, j, cat)
+            if not d or not d["hit_windows"]:
+                continue
+            tae = tae or d
+            row = {**n, "own_sweep_hits": 1}
+            hits += [(wd["frames"][0], row) for wd in d["hit_window_detail"] if wd["hits"]]
+        return (sorted(hits, key=lambda h: h[0]), tae) if hits else None
+
+    def special_r2(self, kind, two):
+        """{slot: {"hits" [(frame, attack row)], "r2", "roll", "windows"}} of heavy-special type
+        `kind` on this weapon and grip (None: the plain R2, `PLAIN_HEAVY_ANIMS`), frames from the
+        R2 press. `r2_1` / `r2_2`: the Start clip up
+        to its release SpEffect (`er-mechanics-attacks.release_lead_in`, released at the earliest
+        frame, `INFERRED` as for the plain R2), then the End clip; `r2_1c`: Start #1 held through
+        (charged). `windows` are the clip's hyperarmor as `er-mechanics-ash-interrupt.simulate`
+        takes them, bonus in menu units (`er-mechanics-exchange.POISE_MENU` 10) and no floor
+        (`INFERRED`)."""
+        atk_mod = sys.modules[type(self.t.reg).__module__]
+        w = self.t.reg.weapon[self.wid]
+        ids = [a + (2000 if two else 0) for a in (PLAIN_HEAVY_ANIMS if kind is None else HEAVY_SPECIAL_ANIMS[kind])]
+
+        def slot(got, lead):
+            hits, tae = got
+            c = tae["cancel_frame"] or {}
+            wins = ha_windows(tae, lead)
+            return {"hits": [(lead + f, a) for f, a in hits], "lead": lead,
+                    "r2": lead + c["r2"] if c.get("r2") is not None else None,
+                    "roll": lead + c["dodge"] if c.get("dodge") is not None else None, "windows": wins}
+
+        out = {}
+        for key, start, end in (("r2_1", ids[0], ids[1]), ("r2_2", ids[2], ids[3])):
+            lead = atk_mod.release_lead_in(w, start)
+            got = self.special_clip(end)
+            if lead is not None and got is not None:
+                out[key] = slot(got, float(lead[0]))
+        got = self.special_clip(ids[0])
+        if got is not None:
+            out["r2_1c"] = slot(got, 0.0)
+        return {k: v for k, v in out.items() if v["roll"] is not None}
+
+    def hit_poise(self, attack):
+        """PvP poise damage of one hit in menu units: `poise_damage` x 10 x its
+        `FinalDamageRateParam.saRate` (`er-mechanics-exchange`'s expression)."""
+        fid = self.t.atk_extra.get(attack["atk_row"], {}).get("finalDamageRateId", -1)
+        sa = (self.t.final_rate.get(fid) or {}).get("saRate", 1.0) if fid is not None and fid >= 0 else 1.0
+        return attack["poise_damage"] * 10.0 * sa
+
+    def chain_rate(self, hits, end, windows, hp):
+        """HP a second of a chain: `hits` [(frame, attack row)] each worth `hp(attack row)`, from
+        the press to the roll cancel `end`, netted against the opponent through `chain_net`
+        when one is set."""
+        vals = [hp(a) for _, a in hits]
+        if self.chain_net is not None:
+            net = self.chain_net([(f, self.hit_poise(a), v) for (f, a), v in zip(hits, vals)], windows, end)
+        else:
+            net = sum(vals)
+        return net / (end / FPS) if end else 0.0
+
+    def special_string(self, sp, hp):
+        """Best (HP a second, label, end frame) of the heavy-special R2s `sp` (`special_r2`): R2 #1
+        alone, R2 #1 then R2 #2 pressed at #1's R2 cancel (`INFERRED`: buffered, as the R1
+        strings are), or the charged R2 #1; each to its last roll cancel. None without one."""
+        cands = []
+        a = sp.get("r2_1")
+        if a:
+            cands.append(("R2", a["hits"], a["roll"], a["windows"]))
+            b = sp.get("r2_2")
+            if b and a["r2"] is not None:
+                t = a["r2"]
+                cands.append(("R2 x2", a["hits"] + [(t + f, x) for f, x in b["hits"]], t + b["roll"],
+                              a["windows"] + [(t + s, t + e, *r) for s, e, *r in b["windows"]]))
+        c = sp.get("r2_1c")
+        if c:
+            cands.append(("charged R2", c["hits"], c["roll"], c["windows"]))
+        best = None
+        for label, hits, end, wins in cands:
+            r = self.chain_rate(hits, end, wins, hp)
+            if best is None or r > best[0]:
+                best = (r, label, end)
+        return best
+
     def gates(self, sid, prof):
         D = _disengage()
         cat = A.SKILL_TAE_BASE + self.t.arts[sid]["swordArtsTypeNew"]
@@ -415,8 +633,13 @@ class Table:
         if self._status is None:
             ST = _status_mod()
             st = ST.Tables(ar_tables=self.art)
-            d = ST.corpus_defender(ST.corpus_rows(rl=150))
+            rows = ST.corpus_rows(rl=150)
+            d = ST.corpus_defender(rows)
             d["hp"] = TARGET_HP
+            # The corpus as defenders, for `buildup_hp`'s engagement model, under `FIGHT`'s pressure.
+            d["dfs"] = ST.Defenders(st, rows)
+            B = _buffs_mod()
+            d["pressure"] = B.FIGHT_KINDS[FIGHT or B.DEFAULT_FIGHT]["pressure"]
             self._status = (ST, st, d)
         return self._status
 
@@ -454,26 +677,42 @@ class Table:
         return out, first
 
     def status_hp(self, two, hits, string_slots):
-        """{status: HP} the cast's hits plus the string's R1s are worth against the 60 VIG target,
-        each hit's build-up spread linearly over the gauge (`er-mechanics-status.status_per_hit`
-        `hp_per_hit`), per hit as `hit_buildup` reads it."""
+        """{status: HP} the cast's hits plus the string's R1s are worth as one engagement that
+        lands them all, per hit as `hit_buildup` reads it (`buildup_hp`)."""
+        ws, build, first, seq = self.status_seq(two, hits, string_slots)
+        return self.buildup_hp(ws, build, first, seq)
+
+    def status_seq(self, two, hits, string_slots):
+        """(weapon status, {status: total build-up}, {status: first row that built it}, [{status:
+        build-up} per landed hit, in order]) of the cast's hits plus the string's R1s."""
         ST, st, d = self.status_tables()
         ws = ST.weapon_status(st, self.weapon, self.affinity, self.level, self.stats, two)
-        build, first = {}, {}
+        build, first, seq = {}, {}, []
         for atk_row, n, bullet in ([(h["atk_row"], h.get("count", 1), h.get("bullet")) for h in hits]
                                    + [(s["attack"]["atk_row"], max(1, len(s["attack"].get("hit_windows") or [])),
                                        None) for s in string_slots]):
             b, f = self.hit_buildup(st, ws, atk_row, bullet)
+            seq += [b] * n
             for name, v in b.items():
                 build[name] = build.get(name, 0) + v * n
                 first.setdefault(name, f[name])
-        return self.buildup_hp(ws, build, first)
+        return ws, build, first, seq
 
-    def buildup_hp(self, ws, build, first):
-        """{status: HP} of the build-up `build` ({status: amount}) against the 60 VIG target, the
-        proc row being the weapon's own for that status, else `first[status]`, the first row that
-        built it."""
+    def buildup_hp(self, ws, build, first, seq=None):
+        """{status: HP} of the build-up `build` ({status: amount}), landed as the hits `seq`
+        ({status: amount} each; one hit carrying all of `build` when omitted), the proc row being
+        the weapon's own for that status, else `first[status]`, the first row that built it.
+
+        With the corpus defenders this is `er-mechanics-status.sequence_hp`: a proc counts only
+        when the gauge empties, carriers of the bolus clear it after every engagement and
+        everyone else keeps it minus the refill, so build-up short of a proc is worth only what
+        the non-carriers accumulate. User, 2026-10-19: "If it takes 10 hits with a bleed weapon to
+        build up bleed, that's 10 hits with a lower damage dealing weapon that may never proc
+        bleed". Without them (an old shim) it is the linear model below."""
         ST, st, d = self.status_tables()
+        if d.get("dfs") is not None:
+            hp = ST.sequence_hp(st, ws, seq or [build], first, d["dfs"], pressure=d.get("pressure", 1.0))
+            return {k: round(v) for k, v in hp.items() if round(v)}
         out = {}
         for name, b in build.items():
             resist = d["resist"][next(s[7] for s in ST.STATUSES if s[0] == name)]
@@ -619,6 +858,12 @@ class Table:
             else:
                 covered = list(first_hits) + run
                 weights = [1.0] * len(first_hits) + [window_s / run_s if run_s else 0.0] * len(run)
+            special = next((HEAVY_SPECIAL_SPEFFECTS[i] for i in ids if i in HEAVY_SPECIAL_SPEFFECTS), None)
+            sp = self.special_r2(special, two) if kind == "timed" and special is not None and sc else {}
+            if sp:
+                # The window's R1 chain is weighed as a whole instead, against the R2 string the
+                # buff swaps in (`BUFF_MODEL` buff-v3).
+                covered, weights = covered[:len(first_hits)], weights[:len(first_hits)]
             added = 0.0
             for slot, w in zip(covered, weights):
                 if w:
@@ -626,6 +871,38 @@ class Table:
                     added += add * w
                     for k, v in status.items():
                         build[k] = build.get(k, 0) + v * w
+            spec_out = None
+            if sp:
+                hits, wins, t = [], [], 0.0
+                for s in run:
+                    hits.append((t + s["hit"], s["attack"]))
+                    wins += ha_windows(s["attack"], t)
+                    t += s["r1"] or 0.0
+                cache = {}
+
+                def hp(attack, buffed=True):
+                    k = (attack["atk_row"], buffed)
+                    if k not in cache:
+                        a, _, _, p = gain(ids, {"attack": attack})
+                        cache[k] = p + a if buffed else p
+                    return cache[k]
+
+                plain_r1 = self.chain_rate(hits, sc[3], wins, lambda x: hp(x, False))
+                plain_r2 = self.special_string(self.special_r2(None, two), lambda x: hp(x, False))
+                buffed_r1 = self.chain_rate(hits, sc[3], wins, hp)
+                r2 = self.special_string(sp, hp)
+                # Without the buff the window plays the better of the plain R1 chain and the plain
+                # R2, with it the better of the buffed R1 chain and the swapped-in R2; a string
+                # that nets less than nothing is not thrown (`INFERRED`), so each side is at least 0.
+                base = max(0.0, plain_r1, plain_r2[0] if plain_r2 else 0.0)
+                top = max(0.0, buffed_r1, r2[0] if r2 else 0.0)
+                added += window_s * max(0.0, top - base)
+                spec_out = {"type": special, "r2": r2[1] if r2 else None, "r2_end": r2[2] if r2 else None,
+                            "r2_rate": round(r2[0], 1) if r2 else None, "r1_rate": round(buffed_r1, 1),
+                            "plain_rate": round(plain_r1, 1),
+                            "plain_r2_rate": round(plain_r2[0], 1) if plain_r2 else None,
+                            "netted": self.chain_net is not None,
+                            "window": "R2" if r2 and r2[0] > buffed_r1 else "R1"}
             rep_add, used, _, plain = gain(ids, rep)
             if not used:
                 continue
@@ -638,6 +915,8 @@ class Table:
                                                                  else sum(weights), 2),
                            window_s=round(window_s, 2), per_hit=round(rep_add, 1),
                            mult=round((plain + rep_add) / plain, 4) if plain else 1.0)
+                if spec_out:
+                    out["special"] = spec_out
             out["added"] += added
         out["added"] = round(out["added"], 1)
         out["status_hp"] = self.buildup_hp(ws, build, first) if build else {}
@@ -743,8 +1022,8 @@ class Table:
                 out[s] += part * v
         return out
 
-    def hyperarmor(self, sid, two=False):
-        p = A.skill_profile(self.t, sid, self.wid, self.level, two)
+    def hyperarmor(self, sid, two=False, stance=None):
+        p = A.skill_profile(self.t, sid, self.wid, self.level, two, stance)
         an = p["anims"]
         key = A.main_anim(p)
         ha = [e for e in an.get(key, an.get(str(key), [])) if e["kind"] == "hyperarmor"]
@@ -778,109 +1057,122 @@ class Table:
                 if name in self.blacklist or (not fixed and (self.classes.get(sid, 0) < 2
                                                              or sid not in self.obtainable)):
                     continue
-                sc = S.AshScorer(self.lev, self.weapon, self.affinity, sid, two, self.defender, None)
-                hits = sc.hits(self.stats)
-                prof = A.skill_profile(self.t, sid, self.wid, self.level, two)
-                clip = self.gates(sid, prof)
-                gate = clip["gates"]["r1"] if clip else None
-                if A.untimed_hits(prof, hits):
-                    self.untimed[name] += 1
-                    continue
-                # Frames are cast-relative: a cast that plays a clip before its opening
-                # (`A.lead_in`) adds it to the opening's hits and gate.
-                lead = A.lead_in(self.t, sid, prof)
-                if lead:
+                # A stance skill is swept once per button its stance hands over on (Unsheathe's
+                # R1 slash 040060 and R2 slash 040070), each with the stance entry in front
+                # (`A.lead_in`), one row per button (`variant`, `stance`): the player picks the
+                # button at cast time, so the loadout values the ash on both
+                # (`er-mechanics-combo-loadout.merge_stance_buttons`).
+                stances = A.skill_profile(self.t, sid, self.wid, self.level, two)["stance_buttons"] or [None]
+                for stance in stances:
+                    sc = S.AshScorer(self.lev, self.weapon, self.affinity, sid, two, self.defender, None, stance)
+                    hits = sc.hits(self.stats)
+                    prof = A.skill_profile(self.t, sid, self.wid, self.level, two, stance)
+                    clip = self.gates(sid, prof)
+                    gate = clip["gates"]["r1"] if clip else None
+                    if A.untimed_hits(prof, hits):
+                        self.untimed[name] += 1
+                        continue
+                    # Frames are cast-relative: a cast that plays a clip before its opening
+                    # (`A.lead_in`) adds it to the opening's hits and gate.
+                    lead = A.lead_in(self.t, sid, prof)
+                    if lead:
+                        for h in hits:
+                            h["frame"] = round(h["frame"] + lead, 1)
+                        gate = round(gate + lead, 1) if gate is not None else None
+                    if not hits:
+                        # A step or buff: scored by the follow-up out of it (`FOLLOW_UP_SLOTS`).
+                        if gate is None:
+                            continue
+                        step = self.t.arts[sid]["swordArtsTypeNew"] in ROLLING_ARTS
+                        allowed = STEP_FOLLOW_UP_SLOTS if step else FOLLOW_UP_SLOTS
+                        fu = [s for s in slots if s["slot"] in allowed and s["roll"] is not None]
+                        if not fu:
+                            continue
+                        f = min(fu, key=lambda s: s["hit"])
+                        land, roll = round(gate + f["hit"], 1), round(gate + f["roll"], 1)
+                        ha = self.hyperarmor(sid, two, stance)
+                        out.append({"ash": name, "weapon": self.weapon, "affinity": self.affinity, "reach": None,
+                                    "melee_reach": None, "grip": "2H" if two else "1H", "cat": "utility",
+                                    "dmg": round(f["dmg"]), "dps": round(f["dmg"] / (roll / FPS)),
+                                    "first": land, "last": roll, "follow_up": f["slot"], "gate": gate,
+                                    "ha": ha, "ha_r1s": int(ha["poise"] // LONGSWORD_R1_POISE) if ha else 0,
+                                    "covers": False, "chain": prof["fp_cost"].get("R2", -1) != -1,
+                                    "quick": quick, "score": round(f["dmg"] / (roll / FPS)), "area": 0.0,
+                                    "string": None, "status_hp": self.status_hp(two, [], [f]), "contrib": {},
+                                    **A.stance_row(prof)})
+                        if lead:
+                            out[-1]["lead"] = lead
+                        # A buff adds what it buffs on this carrier (`BUFF_MODEL`).
+                        if not step:
+                            apply_buff(out[-1], self.buff_gain(sid, prof, two, ctx, *buff_hits(out[-1], slots)))
+                        if not pvp_utility(name, self.t.arts[sid]["swordArtsTypeNew"], out[-1].get("buff")):
+                            out.pop()
+                        elif name in CAMOUFLAGE_SKILLS:
+                            out[-1]["hidden_beyond_m"] = camouflage_m(CAMOUFLAGE_SKILLS[name])
+                        continue
+                    A.pvp_damage(self.t, self.wid, hits, self.defender, OPT.DEF)
+                    bullets = [h for h in hits if h["kind"] == "bullet"]
+                    if name in MELEE_BULLET:
+                        cat, scored = "melee bullet", hits
+                    elif not bullets:
+                        cat, scored = "non-bullet", hits
+                    else:
+                        scored = [h for h in bullets if self.travel(h["root_bullet"]) > MIN_TRAVEL_M]
+                        cat = "bullet"
+                        if not scored:
+                            # Bullets that never leave the blade's reach make a melee cast, scored on
+                            # every hit: Romina's Purification's blooms travel 1.03 m beside its two
+                            # swings, and dropping the cast left Poleblade of the Bud with no row.
+                            if not any(h["kind"] == "melee" for h in hits):
+                                continue
+                            cat, scored = "non-bullet", hits
+                    dmg = A.pvp_damage(self.t, self.wid, scored, self.defender, OPT.DEF)
+                    A.pvp_damage(self.t, self.wid, hits, self.defender, OPT.DEF)
+                    first, last = min(h["frame"] for h in scored), max(h["frame"] for h in scored)
+                    contrib = {}
                     for h in hits:
-                        h["frame"] = round(h["frame"] + lead, 1)
-                    gate = round(gate + lead, 1) if gate is not None else None
-                if not hits:
-                    # A step or buff: scored by the follow-up out of it (`FOLLOW_UP_SLOTS`).
-                    if gate is None:
-                        continue
-                    step = self.t.arts[sid]["swordArtsTypeNew"] in ROLLING_ARTS
-                    allowed = STEP_FOLLOW_UP_SLOTS if step else FOLLOW_UP_SLOTS
-                    fu = [s for s in slots if s["slot"] in allowed and s["roll"] is not None]
-                    if not fu:
-                        continue
-                    f = min(fu, key=lambda s: s["hit"])
-                    land, roll = round(gate + f["hit"], 1), round(gate + f["roll"], 1)
-                    ha = self.hyperarmor(sid, two)
-                    out.append({"ash": name, "weapon": self.weapon, "affinity": self.affinity, "reach": None,
-                                "melee_reach": None, "grip": "2H" if two else "1H", "cat": "utility",
-                                "dmg": round(f["dmg"]), "dps": round(f["dmg"] / (roll / FPS)),
-                                "first": land, "last": roll, "follow_up": f["slot"], "gate": gate,
+                        if h["kind"] == "bullet" and cat == "bullet" and h not in scored:
+                            continue
+                        src = self.sources(ctx, ctx0, h)
+                        atk = sum(src.values())
+                        g = contrib.setdefault("bullet" if h["kind"] == "bullet" else "blade", dict.fromkeys(SOURCES, 0.0))
+                        for k, v in src.items():
+                            g[k] += h["pvp_damage_total"] * v / atk if atk else 0.0
+                    ha = self.hyperarmor(sid, two, stance)
+                    spans =[r for r in (self.reach(root) for root in {h["root_bullet"] for h in scored
+                                                                       if h["kind"] == "bullet"}) if r]
+                    reach = (round(min(r[0] for r in spans), 1), round(max(r[1] for r in spans), 1)) if spans else None
+                    mr = self.melee_reach(sid, hits)
+                    dps = round(dmg / (last / FPS)) if last else round(dmg)
+                    # The string counts every hit of the cast, the blade too: it all lands in a string.
+                    all_dmg = sum(h["pvp_damage_total"] for h in hits)
+                    all_last = max(h["frame"] for h in hits)
+                    # An R1 pressed before the cast's last hit would cut it off (a held skill's loop
+                    # opens R1 at frame 0), so the string starts no earlier than that hit.
+                    st = self.string(max(gate, all_last), slots, all_dmg, all_last) if gate is not None else None
+                    used = []
+                    if st:
+                        used = [s for s in slots if s["slot"] in R1_SLOTS][:st[1]]
+                    out.append({"ash": name, "weapon": self.weapon, "affinity": self.affinity, "reach": reach,
+                                "melee_reach": mr if cat != "bullet" else None, "grip": "2H" if two else "1H",
+                                "cat": cat, "dmg": round(dmg), "dps": dps, "first": first, "last": last,
                                 "ha": ha, "ha_r1s": int(ha["poise"] // LONGSWORD_R1_POISE) if ha else 0,
-                                "covers": False, "chain": prof["fp_cost"].get("R2", -1) != -1,
-                                "quick": quick, "score": round(f["dmg"] / (roll / FPS)), "area": 0.0,
-                                "string": None, "status_hp": self.status_hp(two, [], [f]), "contrib": {}})
+                                "covers": bool(ha) and ha["start"] <= first and ha["end"] >= last,
+                                "chain": prof["fp_cost"].get("R2", -1) != -1, "gate": gate, "quick": quick,
+                                "string": ({"dps": round(st[0]), "r1s": st[1], "dmg": round(st[2]), "end": st[3]}
+                                           if st else None),
+                                "score": round(st[0]) if quick and st else dps,
+                                "area": self.area(hits, scored, cat, mr),
+                                "status_hp": self.status_hp(two, hits, used),
+                                "contrib": {g: {k: round(v) for k, v in d.items()} for g, d in contrib.items()},
+                                **A.stance_row(prof)})
                     if lead:
                         out[-1]["lead"] = lead
-                    # A buff adds what it buffs on this carrier (`BUFF_MODEL`).
-                    if not step:
-                        apply_buff(out[-1], self.buff_gain(sid, prof, two, ctx, *buff_hits(out[-1], slots)))
-                    continue
-                A.pvp_damage(self.t, self.wid, hits, self.defender, OPT.DEF)
-                bullets = [h for h in hits if h["kind"] == "bullet"]
-                if name in MELEE_BULLET:
-                    cat, scored = "melee bullet", hits
-                elif not bullets:
-                    cat, scored = "non-bullet", hits
-                else:
-                    scored = [h for h in bullets if self.travel(h["root_bullet"]) > MIN_TRAVEL_M]
-                    cat = "bullet"
-                    if not scored:
-                        # Bullets that never leave the blade's reach make a melee cast, scored on
-                        # every hit: Romina's Purification's blooms travel 1.03 m beside its two
-                        # swings, and dropping the cast left Poleblade of the Bud with no row.
-                        if not any(h["kind"] == "melee" for h in hits):
-                            continue
-                        cat, scored = "non-bullet", hits
-                dmg = A.pvp_damage(self.t, self.wid, scored, self.defender, OPT.DEF)
-                A.pvp_damage(self.t, self.wid, hits, self.defender, OPT.DEF)
-                first, last = min(h["frame"] for h in scored), max(h["frame"] for h in scored)
-                contrib = {}
-                for h in hits:
-                    if h["kind"] == "bullet" and cat == "bullet" and h not in scored:
-                        continue
-                    src = self.sources(ctx, ctx0, h)
-                    atk = sum(src.values())
-                    g = contrib.setdefault("bullet" if h["kind"] == "bullet" else "blade", dict.fromkeys(SOURCES, 0.0))
-                    for k, v in src.items():
-                        g[k] += h["pvp_damage_total"] * v / atk if atk else 0.0
-                ha = self.hyperarmor(sid, two)
-                spans =[r for r in (self.reach(root) for root in {h["root_bullet"] for h in scored
-                                                                   if h["kind"] == "bullet"}) if r]
-                reach = (round(min(r[0] for r in spans), 1), round(max(r[1] for r in spans), 1)) if spans else None
-                mr = self.melee_reach(sid, hits)
-                dps = round(dmg / (last / FPS)) if last else round(dmg)
-                # The string counts every hit of the cast, the blade too: it all lands in a string.
-                all_dmg = sum(h["pvp_damage_total"] for h in hits)
-                all_last = max(h["frame"] for h in hits)
-                # An R1 pressed before the cast's last hit would cut it off (a held skill's loop
-                # opens R1 at frame 0), so the string starts no earlier than that hit.
-                st = self.string(max(gate, all_last), slots, all_dmg, all_last) if gate is not None else None
-                used = []
-                if st:
-                    used = [s for s in slots if s["slot"] in R1_SLOTS][:st[1]]
-                out.append({"ash": name, "weapon": self.weapon, "affinity": self.affinity, "reach": reach,
-                            "melee_reach": mr if cat != "bullet" else None, "grip": "2H" if two else "1H",
-                            "cat": cat, "dmg": round(dmg), "dps": dps, "first": first, "last": last,
-                            "ha": ha, "ha_r1s": int(ha["poise"] // LONGSWORD_R1_POISE) if ha else 0,
-                            "covers": bool(ha) and ha["start"] <= first and ha["end"] >= last,
-                            "chain": prof["fp_cost"].get("R2", -1) != -1, "gate": gate, "quick": quick,
-                            "string": ({"dps": round(st[0]), "r1s": st[1], "dmg": round(st[2]), "end": st[3]}
-                                       if st else None),
-                            "score": round(st[0]) if quick and st else dps,
-                            "area": self.area(hits, scored, cat, mr),
-                            "status_hp": self.status_hp(two, hits, used),
-                            "contrib": {g: {k: round(v) for k, v in d.items()} for g, d in contrib.items()}})
-                if lead:
-                    out[-1]["lead"] = lead
-                # A damaging ash that also buffs its user (Cragblade) adds what the buff adds to
-                # the hits after the cast (`BUFF_MODEL`).
-                bh = buff_hits(out[-1], slots)
-                if bh:
-                    apply_buff(out[-1], self.buff_gain(sid, prof, two, ctx, *bh))
+                    # A damaging ash that also buffs its user (Cragblade) adds what the buff adds to
+                    # the hits after the cast (`BUFF_MODEL`).
+                    bh = buff_hits(out[-1], slots)
+                    if bh:
+                        apply_buff(out[-1], self.buff_gain(sid, prof, two, ctx, *bh))
         return out
 
 
@@ -960,6 +1252,8 @@ def render(rows, title, subtitle, blacklist, dropped):
                  "melee bullet": "; ".join(p for p in (blade and f"blade {blade}", bullet and f"bullet {bullet}")
                                            if p), "utility": ""}[x["cat"]]
         name = f"<b>{html.escape(x['ash'])}</b>"
+        if x.get("variant"):
+            name += f" <small>{html.escape(x['variant'])}</small>"
         if multi:
             name += f"<br><small>{html.escape(x['weapon'])}</small>"
         return ([name, reach, x["grip"], x["dps"], x["dmg"], x["first"], x["last"],
@@ -1044,6 +1338,8 @@ def selftest() -> int:
     hb = tab.hit_buildup(st, ws, tab.t.bullet[hoar]["atkId_Bullet"], hoar)[0]
     check(f"Hoarfrost bullet {hoar} own frost 1800 (+ weapon frost at scale 0)", hb.get("frost"), 70)
     buff_selftest(check)
+    check("camouflage_m: Gambit 1767 hides past 17 m, Unseen Form 1467000 at any distance, its cost row 1765 none",
+          [camouflage_m((1767,)), camouflage_m((1467000,)), camouflage_m((1765,))], [17.0, 0.0, None])
     # Wild Strikes plays a610_040050 (32 frames, hyperarmor from f10) before its loop 040051.
     ws_sid = tab.t.find_arts("Wild Strikes")
     ws_prof = A.skill_profile(tab.t, ws_sid, tab.wid, tab.level, False)
@@ -1052,6 +1348,17 @@ def selftest() -> int:
     check("Sword Dance lead-in", A.lead_in(tab.t, tab.t.find_arts("Sword Dance"),
                                            A.skill_profile(tab.t, tab.t.find_arts("Sword Dance"), tab.wid,
                                                            tab.level, False)), 0.0)
+    # Unsheathe is L2 into 040050, then R1 (cancel f8) -> 040060 hitting at clip f13, or R2
+    # (cancel f6) -> 040070 hitting at f15. Both are swept, one row per button.
+    tab.set_weapon("Uchigatana", "Keen")
+    keep = tab.blacklist
+    tab.blacklist = {tab.t.arts_name(s) for s in tab.t.arts} - {"Unsheathe"}
+    un = [x for x in tab.rows([False]) if x["ash"] == "Unsheathe"]
+    tab.blacklist = keep
+    want = {"stance R1 040060": ("r1", 8.0, 21.0), "stance R2 040070": ("r2", 6.0, 21.0)}
+    check("Unsheathe sweep rows: one per button, each with its own lead-in and first hit (8 + 13 / 6 + 15)",
+          sorted((x.get("variant"), (x.get("stance"), x.get("lead"), x["first"]) == want.get(x.get("variant")))
+                 for x in un), [(v, True) for v in sorted(want)])
     return 1 if fails else 0
 
 
@@ -1112,6 +1419,48 @@ def buff_selftest(check):
     apply_buff(x, {"added": 90.0, "status_hp": {}})
     check("apply_buff: added HP over the 2 s clock joins score", (x["score"], x["dmg"], x["buff"]["share"]),
           (195, 300, round(45 / 195, 4)))
+    unapply_buff(x)
+    check("unapply_buff: the row is back to its plain clock", (x["score"], x["dps"], "buff" in x), (150, 150, False))
+    # War Cry's R2 (`HEAVY_SPECIAL_ANIMS` type 1): Stone Club a033_030620 released at f11, then
+    # 030625's judge 3981 (MV 135) at f15 with hyperarmor f0-25; 030620 held is judge 3980 (MV 175).
+    sp = tab.special_r2(1, False)
+    check("special_r2: War Cry's R2 is the 030620 release at f11, then 030625's hit at f15",
+          (sp["r2_1"]["lead"], sp["r2_1"]["hits"][0][0], sp["r2_1"]["hits"][0][1]["mv_phys"],
+           sp["r2_1"]["windows"][0][:2]), (11.0, 26.0, 135, (11.0, 36.0)))
+    check("special_r2: the charged R2 is 030620's one damaging judge (3982/3983 are MV 0)",
+          [h[1]["mv_phys"] for h in sp["r2_1c"]["hits"]], [175])
+    check("Barbaric Roar's R2 is another clip (type 0)", tab.special_r2(0, False)["r2_1"]["hits"][0][1]["atk_row"]
+          != sp["r2_1"]["hits"][0][1]["atk_row"], True)
+    check("War Cry records its R2 against the R1 chain", sorted(w["special"]), sorted(
+        ["type", "r2", "r2_end", "r2_rate", "r1_rate", "plain_rate", "plain_r2_rate", "netted", "window"]))
+    pr = tab.special_r2(None, False)
+    check("special_r2(None): the plain R2 is 030500 released at f10, then 030505's hit at f12",
+          (pr["r2_1"]["lead"], pr["r2_1"]["hits"][0][0], pr["r2_1"]["hits"][0][1]["mv_phys"]), (10.0, 22.0, 125))
+    check("Golden Vow swaps no R2", "special" in gain("Golden Vow"), False)
+    # The net decides the window: one that stops every hit at f26 or later leaves no R2 (its first
+    # hit lands at f26), one that stops every chain without hyperarmor leaves no R1 chain.
+    tab.chain_net = lambda hits, wins, end: sum(h for f, _, h in hits)
+    raw = gain("War Cry")
+    tab.chain_net = lambda hits, wins, end: sum(h for f, _, h in hits if f < 26)
+    early = gain("War Cry")["special"]
+    tab.chain_net = lambda hits, wins, end: sum(h for f, _, h in hits) if wins else 0.0
+    armored = gain("War Cry")["special"]
+    tab.chain_net = None
+    check("chain_net: a pass-through net is the raw model", raw["added"], w["added"])
+    check("chain_net: a net that stops the R2 leaves the R1 window, one that stops the R1s the R2",
+          (early["netted"], early["window"], early["r2_rate"], armored["window"], armored["plain_rate"]),
+          (True, "R1", 0.0, "R2", 0.0))
+    # On a 2H Executioner's Greataxe the buffed R2 string outpaces the buffed R1 chain.
+    tab.set_weapon("Executioner's Greataxe", "Heavy")
+    ctx2, _ = tab.contexts(True)
+    slots2 = tab.r1_slots(True, ctx2)
+    r1b = next(s for s in slots2 if s["slot"] == "r1_1")
+    sid = tab.t.find_arts("War Cry")
+    g2 = tab.buff_gain(sid, A.skill_profile(tab.t, sid, tab.wid, tab.level, True), True, ctx2, [r1b], r1b, 2.0,
+                       [s for s in slots2 if s["slot"] in R1_SLOTS])
+    check("War Cry on a 2H Executioner's Greataxe: the window is the R2 string",
+          (g2["special"]["window"], g2["special"]["r2_rate"] > g2["special"]["r1_rate"]), ("R2", True))
+    tab.set_weapon("Stone Club", "Heavy")
 
 
 #: What a sweep worker reads: the table and the sweep's options, set before the workers fork.
@@ -1152,6 +1501,7 @@ def _sweep_all(todo, jobs):
 
 
 def main() -> int:
+    global FIGHT
     if "--selftest" in sys.argv[1:]:
         return selftest()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -1187,7 +1537,10 @@ def main() -> int:
                     help="with --build or --build-file: sweep the weapons in this many forked workers, each "
                          "throttled like the interrupt pass (er-mechanics-ash-interrupt.throttle); the rows "
                          "come back in sweep order, so the table is the one a single process writes")
+    ap.add_argument("--fight", choices=("duel", "invasion"),
+                    help="fight model status is valued in (er-mechanics-buffs FIGHT_KINDS pressure)")
     a = ap.parse_args()
+    FIGHT = a.fight
     stats = {k: int(v) for k, v in (p.split("=") for p in a.stats.split(","))}
     armor = [n.strip() for n in a.armor.split(",") if n.strip()]
     grips = {"1H": (False,), "2H": (True,), "both": (False, True)}[a.grip]

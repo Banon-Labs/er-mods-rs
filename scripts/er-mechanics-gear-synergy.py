@@ -1181,7 +1181,9 @@ def _cover_partners(d, wid, side, top):
     c = combo_model()
     cm, m = c['mod'], c['model']
     reg = m.reg
-    rc = c.setdefault('rc', cm.reach_module().Reach())
+    if 'rc' not in c:                     # about 4 s to build; `setdefault` built one every call
+        c['rc'] = cm.reach_module().Reach()
+    rc = c['rc']
     pool = c['lefts'] if side == 'left' else c['weapons']
     found = []
     for o in pool:
@@ -1216,9 +1218,20 @@ def _cover_partners(d, wid, side, top):
     return {'pairs': len(found), 'of': len(pool), 'best': out[:top]}
 
 
+_CROSS = {}
+
+
 def cross_hand(d, wid, top=3):
     """Both directions of the cross-hand link for one weapon: as the right hand ('offhands') and,
-    when its own L1 is an off-hand attack, as the left ('mains'). None for a weapon with neither."""
+    when its own L1 is an off-hand attack, as the left ('mains'). None for a weapon with neither.
+    Kept per (weapon, top) for the process: each call sweeps every weapon twice over, and `rank`
+    asks again for every gate and setup variant of the same weapon."""
+    if (wid, top) not in _CROSS:
+        _CROSS[(wid, top)] = _cross_hand(d, wid, top)
+    return _CROSS[(wid, top)]
+
+
+def _cross_hand(d, wid, top):
     c = combo_model()
     if wid not in c['model'].reg.weapon:
         return None
@@ -1238,10 +1251,18 @@ def cross_hand(d, wid, top=3):
     return parts
 
 
+_BUILT = {}
+
+
 def build():
-    d = AFF.Data()
-    tables = AR.Tables()
-    return d, Population(d, tables), Gear(d), tables
+    """(Data, Population, Gear, AR tables), built once per process: the selftest's
+    `main_text_runs` goes through `main`, which would otherwise rebuild all four (about a minute
+    each time, 2026-10-19)."""
+    if not _BUILT:
+        d = AFF.Data()
+        tables = AR.Tables()
+        _BUILT['v'] = (d, Population(d, tables), Gear(d), tables)
+    return _BUILT['v']
 
 
 def main_text_runs(weapon):
@@ -1416,7 +1437,7 @@ def selftest():
     assert all(r['net_benefit'] > BENEFIT_FLOOR for r in shotel['gear'] + lance_g['gear'])
     # Powerstance partner: at a Heavy STR build a Broadsword out-damages a Longsword, so the
     # Longsword's row names it; nothing in its class beats an Uchigatana, which keeps its copy.
-    str_build = {'affinity': 'Heavy', 'stats': {'vig': 60, 'mnd': 15, 'vit': 30, 'str': 80, 'dex': 18,
+    str_build = {'affinity': 'Heavy', 'stats': {'vig': 60, 'mnd': 15, 'end': 30, 'str': 80, 'dex': 18,
                                                 'int': 9, 'fth': 9, 'arc': 7}}
     ls = powerstance(d, d.find_weapon('Longsword'), str_build)
     assert ls['heading'] == 'Broadsword' and ls['text'].startswith(

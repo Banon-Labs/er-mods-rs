@@ -733,40 +733,124 @@ def anim_actions(t, weapon_id, events, level=0):
     return out
 
 
-def skill_profile(t, sword_arts_id, weapon_id, level=0, grip='one'):
+def skill_profile(t, sword_arts_id, weapon_id, level=0, grip='one', stance=None):
     """Everything the skill does on this weapon, per animation, plus a classification and the
     animation this weapon and grip open with (`opening`, read by `main_anim`). Cached on the
-    tables per (skill, weapon, level, grip); callers treat the result as read-only."""
+    tables per (skill, weapon, level, grip, stance); callers treat the result as read-only.
+
+    `stance` ('r1' / 'r2') picks which attack a stance skill's entry hands over to
+    (`stance_buttons`); None is the attack its first FP-charging clip is, and a button the skill
+    does not offer is ignored."""
     two = is_two_handed(grip)
-    key = (sword_arts_id, weapon_id, level, two)
+    key = (sword_arts_id, weapon_id, level, two, stance)
     if key not in t._profiles:
         base_key = (sword_arts_id, weapon_id, level)
         if base_key not in t._profiles:
             t._profiles[base_key] = _skill_profile(t, sword_arts_id, weapon_id, level)
         base = t._profiles[base_key]
-        t._profiles[key] = {**base, **_opening(t, base, sword_arts_id, weapon_id, two)}
+        t._profiles[key] = {**base, **_opening(t, base, sword_arts_id, weapon_id, two, stance)}
     return t._profiles[key]
 
 
-def _opening(t, prof, sword_arts_id, weapon_id, two):
+#: The stance states' fixed clips (`BEH`, docs/er-mechanics/chainsaw/affected-class.md):
+#: `W_DrawStanceRightStart` plays 040050; from its loop or itself, `W_DrawStanceRightAttackLight`
+#: (R1) plays 040060 and `W_DrawStanceRightAttackHeavy` (R2) 040070 (`ArtsStanceCommonFunction`,
+#: HKS line 11547). The skill is in the stance from the L2 press and hands over on the button's
+#: press, which the TimeAct's cancel windows on 040050 admit (`anim_recovery`).
+STANCE_START = 40050
+STANCE_ATTACK = {'r1': 40060, 'r2': 40070}
+
+
+def stance_buttons(prof):
+    """[(button, attack clip)] a stance skill's entry hands over to: `STANCE_START` is in its
+    TimeAct and neither it nor its loop (`STANCE_START + 1`, when present) hits or charges FP,
+    and each `STANCE_ATTACK` clip present, not a without-FP copy, charges FP or hits. Empty for
+    any other skill. Unsheathe: [('r1', 40060), ('r2', 40070)]; a bow skill's single 040060
+    shot: [('r1', 40060)]. Wild Strikes is left out: its loop 040051 is the attack (an attack
+    stance, `lead_in`), and its 040060 / 040070 finish that loop."""
+    an = prof['anims']
+    entry = an.get(STANCE_START)
+    if entry is None or any(x['kind'] in ('melee', 'bullet', 'fp')
+                            for x in entry + an.get(STANCE_START + 1, [])):
+        return []
+    return [(b, a) for b, a in STANCE_ATTACK.items()
+            if an.get(a) and a not in prof['no_fp_anims']
+            and any(x['kind'] in ('melee', 'bullet', 'fp') for x in an[a])]
+
+
+def _opening(t, prof, sword_arts_id, weapon_id, two, stance=None):
     """The opening and follow-up animation ids for this weapon and grip.
 
     The index-0 opening is the first animation that charges FP. When that is 040000 the skill
     enters `SwordArtsOneShot`, which plays `ONE_SHOT_VARIANT[diff category]` instead
     (Spinning Slash: 040000 on a straight sword, 040200 on a greatsword, 040300 on a halberd,
     042400 on a twinblade). A variant the skill TimeAct lacks is reported and the index-0
-    animation kept: the graph would fall back to `a000_<id>` or another skill's clip there."""
+    animation kept: the graph would fall back to `a000_<id>` or another skill's clip there.
+
+    A stance skill (`stance_buttons`) is cast L2 into `STANCE_START` and then a button:
+    `stance_entry` and `stance_button` say which, `opening` is that button's attack clip and
+    `stance_buttons` lists every button the stance offers. The default button is the one whose
+    attack is the index-0 opening, else R1: Moon-and-Fire Stance's lowest FP clip is its
+    follow-up 040010 (`SwordArtsOneShotComboEnd`, reached from 040060 by R1 in f35-50), which the
+    index-0 rule took as its opening."""
     generic = prof['fp_anims'][0] if prof['fp_anims'] else next(iter(prof['anims']), None)
     cat = weapon_diff_category(t, sword_arts_id, weapon_id, two)
     out = {'grip': 'both' if two else 'one', 'diff_category': cat, 'generic_opening': generic,
-           'opening': generic, 'one_shot': generic == 40000, 'variant_missing': None}
+           'opening': generic, 'one_shot': generic == 40000, 'variant_missing': None,
+           'stance_entry': None, 'stance_button': None, 'stance_buttons': []}
     if generic == 40000 and cat in ONE_SHOT_VARIANT:
         want = ONE_SHOT_VARIANT[cat]
         if want in prof['anims']:
             out['opening'] = want
         else:
             out['variant_missing'] = want
+    offered = dict(stance_buttons(prof))
+    if offered:
+        button = stance if stance in offered else next((b for b, a in offered.items() if a == generic),
+                                                         next(iter(offered)))
+        out.update(opening=offered[button], stance_entry=STANCE_START, stance_button=button,
+                   stance_buttons=list(offered))
     return out
+
+
+def stance_label(prof):
+    """'stance R2 040070' for a stance cast (`_opening`), else None: the variant name a sweep row
+    and a skill option carry."""
+    b = prof.get('stance_button')
+    return f"stance {b.upper()} {prof['opening']:06d}" if b else None
+
+
+def stance_row(prof):
+    """{'variant', 'stance'} a sweep row of a stance cast carries, {} for any other cast. Code
+    that re-reads a row's cast passes `row.get('stance')` back to `skill_profile`, and caches keyed
+    on a row add `variant_key`."""
+    return {'variant': stance_label(prof), 'stance': prof['stance_button']} if prof.get('stance_button') else {}
+
+
+def variant_key(x):
+    """'|stance r2' for a row or option cast through a stance button, '' otherwise: the cache-key
+    suffix that keeps two variants of one (weapon, affinity, ash, grip) apart."""
+    return f"|stance {x['stance']}" if x.get('stance') else ''
+
+
+def stance_fp(t, sword_arts_id, button):
+    """FP of a stance cast that hands over on `button`: the L2 column (0 or -1 on these skills)
+    plus the button's (Unsheathe R1 10, R2 15; SwordArtsParam `useMagicPoint_*`)."""
+    row = t.arts[sword_arts_id]
+    return max(0, row['useMagicPoint_L2']) + max(0, row[f'useMagicPoint_{button.upper()}'])
+
+
+def stance_windup(t, sword_arts_id, prof):
+    """Real frames from the L2 press to the stance attack's start: `STANCE_START`'s earliest
+    cancel for the button that plays it (`anim_recovery`), else its clip length. 0 when the
+    profile is not a stance cast. Unsheathe on an Uchigatana: R1 at f8, R2 at f6."""
+    if prof.get('stance_entry') is None:
+        return 0.0
+    rec = anim_recovery(t, prof['weapon_id'], sword_arts_id, prof['stance_entry'])
+    if rec.get(prof['stance_button']) is not None:
+        return float(rec[prof['stance_button']])
+    clip = ATK.clip_length(SKILL_TAE_BASE + t.arts[sword_arts_id]['swordArtsTypeNew'], prof['stance_entry'])
+    return float(ATK.real_frame(clip[0])) if clip else 0.0
 
 
 def lead_in(t, sword_arts_id, prof):
@@ -779,7 +863,13 @@ def lead_in(t, sword_arts_id, prof):
     32 frames with no hit and its first R1 cancel at f19, then the loop a610_040051 with hits at
     f5 and f24 whose R1 and roll cancels open at f0. Scored from the loop alone, the cast hit at f5
     and cost nothing before it (2026-10-12). That the loop starts at the clip's end and not at its
-    f19 flag is the HKS reading, not a measurement."""
+    f19 flag is the HKS reading, not a measurement.
+
+    A stance cast (`stance_windup`) plays `STANCE_START` first and leaves it on the press of the
+    button whose attack is `main_anim`, at that button's earliest cancel: Unsheathe's 040050
+    hands over to the R1 slash 040060 at f8 and the R2 slash 040070 at f6."""
+    if prof.get('stance_entry') is not None:
+        return stance_windup(t, sword_arts_id, prof)
     op = main_anim(prof)
     anims = {int(a) for a in prof['anims']}
     if op is None or op % 10 != 1 or op - 1 not in anims or op - 1 in {int(a) for a in prof['fp_anims']}:
@@ -803,10 +893,12 @@ def untimed_hits(prof, hits):
 
 def lead_in_hyperarmor(prof):
     """The hyperarmor events of the clip `lead_in` counts, in cast frames (Wild Strikes'
-    a610_040050: f10 to f35, running into the loop's own f0 to f41)."""
+    a610_040050: f10 to f35, running into the loop's own f0 to f41; a stance cast's
+    `STANCE_START`)."""
     op = main_anim(prof)
     an = prof['anims']
-    return [e for e in an.get(op - 1, an.get(str(op - 1), [])) if e['kind'] == 'hyperarmor'] if op else []
+    pre = prof.get('stance_entry') or (op - 1 if op else None)
+    return [e for e in an.get(pre, an.get(str(pre), [])) if e['kind'] == 'hyperarmor'] if pre else []
 
 
 def lead_in_ha_start(prof, start):
@@ -816,8 +908,11 @@ def lead_in_ha_start(prof, start):
 
 def followup_anim(prof, step):
     """The animation a follow-up press plays: `opening + step`, except after a one-shot opening,
-    where `SwordArtsOneShotComboCategory` picks 040010 / 040020 plus the category's offset."""
-    if not prof.get('one_shot'):
+    where `SwordArtsOneShotComboCategory` picks 040010 / 040020 plus the category's offset. A stance
+    attack's follow-up window opens the same `SwordArtsOneShotComboEnd` states (Moon-and-Fire
+    Stance 040060: 100054 f35-50 -> 040010), read the same way (`INFERRED`: the category a stance
+    leaves is not traced; its only carrier is one weapon class)."""
+    if not prof.get('one_shot') and not prof.get('stance_button'):
         return prof['opening'] + step
     table = COMBO_VARIANT if step == 10 else COMBO2_VARIANT
     return 40000 + step + table.get(prof.get('diff_category'), 0)
@@ -972,13 +1067,14 @@ def ctx_grip(ctx):
     return 'both' if getattr(ctx, 'two_handed', False) else 'one'
 
 
-def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None):
+def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None, stance=None):
     """Every damaging hit of one skill animation, with its attack per element before defense.
 
     This is the function a PvP ranking calls. `weapon_id` is the base id (behaviorVariationId and
     saWeaponDamage are the same across affinities); `ctx` is a `WeaponContext` for the weapon as
-    built (affinity, level, stats, grip)."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx))
+    built (affinity, level, stats, grip); `stance` the button a stance cast hands over on
+    (`skill_profile`)."""
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx), stance)
     anim = anim if anim is not None else main_anim(prof)
     out = []
 
@@ -1048,12 +1144,15 @@ PHYS_TYPE = {0: 'slash', 1: 'strike', 2: 'pierce', 3: 'standard'}
 
 
 def phys_type(t, weapon_id, atk_row):
-    """AtkParam.atkAttribute; 252/253 defer to the weapon's pair (`INFERRED`, as er-builds-pvp)."""
+    """AtkParam.atkAttribute; 253 takes the weapon's `atkAttribute`, 252 its `atkAttribute2`
+    (`VERIFIED`, `er-mechanics-attacks.WEAPON_ATTRIBUTE_REF`: 1.17.1 0x1406869ad-0x1406869ca,
+    `cmp cl,0xfd` -> +0x104, `cmp cl,0xfc` -> +0x191). This read them swapped until 2026-10-19,
+    so a claw's Impaling Thrust (252, the claw's pierce) was scored as slash."""
     attr = t.reg.atk.get(atk_row, {}).get('atkAttribute', 3)
     w = t.reg.weapon[weapon_id]
-    if attr == 252:
+    if attr == 253:
         attr = w['atkAttribute']
-    elif attr == 253:
+    elif attr == 252:
         attr = w['atkAttribute2']
     return PHYS_TYPE.get(attr, 'standard')
 
@@ -1409,27 +1508,34 @@ def skill_commit(t, weapon_id, sword_arts_id, prof, hits):
     Read on the animation that holds the last hit. When that is not the opening (Stamp's attack
     040010 after the stance 040000, Ground Slam's landing after the leap) the opening's first
     R1/R2 cancel is added as a lead-in, or its clip length when it has none (`INFERRED`: the
-    behavior script's hand-over frame is not traced)."""
+    behavior script's hand-over frame is not traced).
+
+    A stance cast (`_opening` `stance_entry`) adds its entry clip the same way, at the earliest
+    cancel of the one button that plays the opening (`stance_windup`): Unsheathe's R1 slash
+    hits at 8 + 13, its R2 slash at 6 + 15. The press is the attacker's to time, so the defender
+    reads the attack from it (`cue`)."""
     opening = main_anim(prof)
     last = hits[-1].get('anim', opening) if hits else opening
     after = max((h['frame'] for h in hits if h.get('anim', opening) == last), default=0) / TAE_FPS
     rec = anim_recovery(t, weapon_id, sword_arts_id, last, after)
     cat = SKILL_TAE_BASE + t.arts[sword_arts_id]['swordArtsTypeNew']
 
-    def handover(anim):
+    def handover(anim, button=None):
         # (frames, whether the hand-over happens by itself). A leap hands over when it lands,
         # which the behavior script decides; the landing can only come once the falling hitbox is
         # live, the last hitbox window to open (Gold Breaker's 040000 no-damage hitbox f70-135;
         # Ground Slam's body hitbox 500 f49-135, after the take-off box 504 at f23). Its start is
         # the hand-over (`INFERRED`: the earliest landing, on flat ground). Otherwise the first
-        # R1/R2 cancel, a press the player times, else the clip length.
+        # R1/R2 cancel (`button`'s alone when one is named), a press the player times, else the
+        # clip length.
         boxes = [x['frames'][0] for x in prof['anims'].get(anim, [])
-                 if x['kind'] in ('melee', 'no-damage hitbox', 'body hitbox')]
+                 if x['kind'] in ('melee', 'no-damage hitbox', 'body hitbox')] if button is None else []
         events = (skill_tae(t, sword_arts_id) or {}).get(anim)
         if boxes and events:
             return ATK.real_frame(ATK.clip_to_real(events)(max(boxes) / TAE_FPS)), True
         o = anim_recovery(t, weapon_id, sword_arts_id, anim)
-        cands = [v for v in (o.get('r1'), o.get('r2')) if v]
+        cands = ([o[button]] if o.get(button) is not None else []) if button else \
+            [v for v in (o.get('r1'), o.get('r2')) if v]
         if cands:
             return min(cands), False
         clip = ATK.clip_length(cat, anim)
@@ -1450,10 +1556,17 @@ def skill_commit(t, weapon_id, sword_arts_id, prof, hits):
             x['kind'] in ('melee', 'bullet') for x in prof['anims'][entry]) and entry != last:
         windup = handover(entry)[0]
         lead += windup
+    elif prof.get('stance_entry') is not None and prof['stance_entry'] not in (opening, last):
+        # A stance: L2 into `STANCE_START`, which may sit in another ten-block (Unsheathe's
+        # 040050 before 040060 / 040070), left on the opening's own button.
+        windup = handover(prof['stance_entry'], prof['stance_button'])[0]
+        lead += windup
+    stance = windup > 0 and prof.get('stance_entry') is not None
     # Where the first hit's animation starts, and where the defender can first read its timing
-    # (section 16): the skill's start, unless a press the attacker times hands over to it.
+    # (section 16): the skill's start, unless a press the attacker times hands over to it (the
+    # follow-up's, or a stance's button).
     first_offset = windup + (hand[0] if first != opening else 0.0)
-    cue = first_offset if first != opening and not hand[1] else 0.0
+    cue = first_offset if (first != opening and not hand[1]) or stance else 0.0
     roll, nxt = rec.get('dodge'), rec.get('r1')
     events = (skill_tae(t, sword_arts_id) or {}).get(last) or []
     hit_real = ATK.real_frame(ATK.clip_to_real(events)(after)) + lead if events else None
@@ -1486,15 +1599,16 @@ def skill_fp(t, sword_arts_id):
     return l2 if l2 > 0 else max(row[f'useMagicPoint_{h}'] for h in ('L1', 'L2', 'R1', 'R2'))
 
 
-def skill_followups(t, sword_arts_id, weapon_id, level=0, grip='one'):
+def skill_followups(t, sword_arts_id, weapon_id, level=0, grip='one', stance=None):
     """The follow-ups a skill's opening offers (section 16): per TAE event 66 carrying a
     `FOLLOW_UP_SPEFFECTS` id, the button, the follow-up animation and the real frames of the
     opening between which that press starts it (where the SpEffect window, the button's input
     window and its cancel window overlap, attacks.md section 4). Flaming Strike on a Lance: 100050
     f30-44, R2 input 87 from f21, R2 cancel 116 f30-35 then 4 from f35, so R2 at f30-44 plays
     040010, the melee swing that applies the fire buff. On a weapon whose diff category moves the
-    opening, the follow-up moves with it (`followup_anim`)."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level, grip)
+    opening, the follow-up moves with it (`followup_anim`). `stance` reads a stance skill's attack
+    for that button (`skill_profile`); each entry names it as `stance`."""
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, grip, stance)
     opening = main_anim(prof)
     events = (skill_tae(t, sword_arts_id) or {}).get(opening) or []
     if not events:
@@ -1519,23 +1633,31 @@ def skill_followups(t, sword_arts_id, weapon_id, level=0, grip='one'):
             continue
         out.append({'anim': anim, 'button': button, 'speffect': sp,
                     'first': ATK.real_frame(to_real(min(a for a, _ in pairs))),
-                    'last': ATK.real_frame(to_real(max(b for _, b in pairs)))})
+                    'last': ATK.real_frame(to_real(max(b for _, b in pairs))),
+                    'stance': prof.get('stance_button')})
     return out
 
 
 def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_module=None,
-                 damage_fn=None, poises=None, follow=None):
+                 damage_fn=None, poises=None, follow=None, stance=None):
     """One skill on one weapon as built: its damage, commitment, stagger share, FP and the buff
     SpEffects it puts on its user.
 
     With `follow` (one `skill_followups` entry) the option is the opening and then that follow-up,
     pressed at its first frame: both animations' hits, the follow-up's recovery, the FP of both
-    presses, and `parts` so each is landed and reacted to on its own (section 16)."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx))
-    hits = skill_hits(t, weapon_id, sword_arts_id, ctx, level)
+    presses, and `parts` so each is landed and reacted to on its own (section 16).
+
+    With `stance` ('r1' / 'r2', one of the profile's `stance_buttons`) a stance skill is cast
+    into that button's attack: its hits, its recovery, its own FP (`stance_fp`) and the stance
+    entry in front (`skill_commit`). `variant` names it ('stance R2 040070')."""
+    if follow is not None and follow.get('stance'):
+        stance = follow['stance']
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx), stance)
+    hits = skill_hits(t, weapon_id, sword_arts_id, ctx, level, stance=stance)
     commit = skill_commit(t, weapon_id, sword_arts_id, prof, hits) if hits else {}
     parts = [{'hits': hits, 'offset': commit.get('first_offset') or 0.0, 'cue': commit.get('cue') or 0.0}]
-    fp = skill_fp(t, sword_arts_id)
+    fp = stance_fp(t, sword_arts_id, prof['stance_button']) if prof.get('stance_button') \
+        else skill_fp(t, sword_arts_id)
     buffs = [s['id'] for s in skill_buffs(t, prof) if s.get('effect') == 'buff']
     if follow is not None:
         more = skill_hits(t, weapon_id, sword_arts_id, ctx, level, anim=follow['anim'])
@@ -1573,7 +1695,9 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
             'fp_anims': prof['fp_anims'], 'last_atk_row': hits[-1]['atk_row'] if hits else None,
             'parryable': skill_parryable(t, sword_arts_id, {h.get('anim') for h in hits}) if hits else None,
             'hit_rows': hits, 'buff_roots': buffs, 'parts': parts,
-            'variant': f"then {follow['button'].upper()} {follow['anim']:06d}" if follow else None}
+            'variant': ' '.join(v for v in (stance_label(prof), follow and
+                                             f"then {follow['button'].upper()} {follow['anim']:06d}") if v)
+            or None, 'stance': prof.get('stance_button')}
 
 
 # Bullet flight (ashes-of-war.md section 15). The per-frame rule and the child hand-over are
@@ -3321,20 +3445,37 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
     """The options of one skill for `skill_term`: the skill as it opens, then (section 16) the
     opening plus each follow-up press it offers. Each is scored with neutral reach and coverage
     (`_slot` keeps the slot dict for the reach pass). The first carries the buff option when the
-    skill buffs its user in any paid animation, its follow-ups included."""
+    skill buffs its user in any paid animation, its follow-ups included.
+
+    A stance skill (`stance_buttons`) is one option per button its stance hands over on, the
+    first of them carrying the follow-ups and the buff: Unsheathe's R1 slash and its R2 slash,
+    each with its own FP, hits and recovery."""
     try:
+        stances = skill_profile(t, sid, weapon_id, level, ctx_grip(ctx))['stance_buttons'] or [None]
         base = _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, engagements, score_fn,
                                      defender, def_module, damage_fn, poises, slot_extra_fn, engagement,
-                                     opponents)
+                                     opponents, stance=stances[0])
     except (SystemExit, KeyError, StopIteration, TypeError) as exc:
         return [{'sword_arts_id': sid, 'name': t.arts_name(sid), 'error': str(exc)}]
     out = [base]
-    follows = []
+    for b in stances[1:]:
+        try:
+            v = _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, engagements, score_fn,
+                                      defender, def_module, damage_fn, poises, slot_extra_fn, engagement,
+                                      opponents, stance=b)
+        except (SystemExit, KeyError, StopIteration, TypeError):
+            v = None
+        if v is not None and (v.get('score') is not None or v.get('utility')):
+            out.append(v)
+    follows, pressed = [], []
     try:
-        follows = skill_followups(t, sid, weapon_id, level, ctx_grip(ctx)) if follow_ups or buff_fn else []
+        # `follows` (the first stance's, which the buff reads) and every stance's (`pressed`).
+        pressed = [f for b in stances for f in skill_followups(t, sid, weapon_id, level, ctx_grip(ctx), b)] \
+            if follow_ups or buff_fn else []
+        follows = [f for f in pressed if f['stance'] == stances[0]]
     except (SystemExit, KeyError, StopIteration, TypeError):
-        follows = []
-    for f in follows if follow_ups else []:
+        follows, pressed = [], []
+    for f in pressed if follow_ups else []:
         try:
             v = _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, engagements, score_fn,
                                       defender, def_module, damage_fn, poises, slot_extra_fn, engagement,
@@ -3370,10 +3511,10 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
 
 def _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, engagements, score_fn,
                           defender, def_module, damage_fn, poises, slot_extra_fn, engagement, opponents,
-                          follow=None):
-    """One variant of `_skill_option_scored` (`skill_option` with `follow`), or None when the
-    follow-up has no hit."""
-    o = skill_option(t, weapon_id, sid, ctx, level, defender, def_module, damage_fn, poises, follow)
+                          follow=None, stance=None):
+    """One variant of `_skill_option_scored` (`skill_option` with `follow` or `stance`), or None
+    when the follow-up has no hit."""
+    o = skill_option(t, weapon_id, sid, ctx, level, defender, def_module, damage_fn, poises, follow, stance)
     if o is None:
         return None
     uses = fp_uses(fp_bar, o['fp'])
@@ -3421,6 +3562,12 @@ def print_profile(t, prof, level):
           f"(diff category {prof.get('diff_category')}, GetSwordArtsDiffCategory)"
           + (f"; variant {prof['variant_missing']:06d} is not in the TimeAct"
              if prof.get('variant_missing') else ''))
+    if prof.get('stance_buttons'):
+        legs = []
+        for b in prof['stance_buttons']:
+            pb = skill_profile(t, prof['sword_arts_id'], prof['weapon_id'], level, prof.get('grip'), b)
+            legs.append(f"{b.upper()} -> {pb['opening']:06d} from f{lead_in(t, prof['sword_arts_id'], pb):g}")
+        print(f"  a stance: L2 into {prof['stance_entry']:06d}, then " + ', '.join(legs))
     print('  Every animation of the skill TimeAct is listed; the other variants are what other '
           'weapon classes and grips play. An id 5 above another without an fp line is its '
           'without-FP copy.')
@@ -4463,6 +4610,51 @@ def selftest():
               'FP 4 + 10, the 1775/1777 buff roots',
               ([p['cue'] for p in fo['parts']], fo['fp'], sorted(fo['buff_roots'])),
               ([0.0, 30], 14, [1775, 1777]), 'SwordArtsParam 214 useMagicPoint_L2/R2; TAE a663 040010')
+        # A stance: L2 into 040050 (no hit, no FP), then R1 -> 040060 or R2 -> 040070.
+        uchi, unsh = t.find_weapon('Uchigatana'), t.find_arts('Unsheathe')
+        uctx = WeaponContext('Uchigatana', 'Keen', 25, {'str': 20, 'dex': 60}, False)
+        check('Unsheathe: 040050 hands over on R1 at f8 and on R2 at f6 (its TimeAct cancels)',
+              [(b, A_lead) for b in ('r1', 'r2')
+               for A_lead in [lead_in(t, unsh, skill_profile(t, unsh, uchi, 0, 'one', b))]],
+              [('r1', 8.0), ('r2', 6.0)], 'TAE a614 040050 JumpTable R1 / R2 cancels')
+        uo = {b: skill_option(t, uchi, unsh, uctx, 25, damage_fn=lambda a, p, f: 100.0, stance=b) for b in ('r1', 'r2')}
+        check('Unsheathe R1: the 040060 slash (clip f13) hits 8 + 13 real frames from the L2 press, 10 FP; '
+              'R2: the 040070 slash (clip f15) at 6 + 15, 15 FP; each read from its press',
+              {b: (o['variant'], o['first_offset'], o['hit_windows'][0][0], o['fp'], o['cue'])
+               for b, o in uo.items()},
+              {'r1': ('stance R1 040060', 8.0, 21.0, 10, 8.0), 'r2': ('stance R2 040070', 6.0, 21.0, 15, 6.0)},
+              'TAE a614 040050/040060/040070; SwordArtsParam 114 useMagicPoint_R1/R2; BEH W_DrawStanceRightAttack*')
+        uterm = skill_term(t, uchi, [(unsh, 1.0)], uctx, 25, 0.0, damage_fn=lambda a, p, f: 100.0)
+        check('Unsheathe is two options in the sweep, one per button, and the better is taken',
+              (sorted(o['variant'] for o in uterm['available']),
+               uterm['best']['variant'] == max(uterm['available'], key=lambda o: o['score'])['variant']),
+              (['stance R1 040060', 'stance R2 040070'], True), 'skill_term pool, _skill_option_scored')
+        stances = {}
+        for s in sorted(t.arts):
+            w = next((w for w in sorted(t.reg.weapon) if w % 10000 == 0 and t.reg.weapon[w]['swordArtsParamId'] == s),
+                     None) or _probe_weapon(t, s, t.ash_gems().get(s))
+            if w is not None:
+                bs = skill_profile(t, s, w, 0, 'one')['stance_buttons']
+                if bs:
+                    stances[t.arts_name(s)] = bs
+        check('the stance skills, read from the TimeActs: an entry 040050 and loop with no hit or FP, attacks on '
+              'R1 040060 / R2 040070 (one shot for the bows)',
+              stances,
+              {**{n: ['r1', 'r2'] for n in ('Unsheathe', 'Square Off', 'Night-and-Flame Stance', 'Transient Moonlight',
+                                             'Overhead Stance', 'Wing Stance', 'Moon-and-Fire Stance')},
+               **{n: ['r1'] for n in ('Through and Through', 'Barrage', 'Mighty Shot', 'Enchanted Shot', 'Sky Shot',
+                                      'Rain of Arrows', "Igon's Drake Hunt", 'Repeating Fire', 'Fan Shot',
+                                      'Rancor Shot')}},
+              'TAE a6xx 040050/040051/040060/040070; docs/er-mechanics/chainsaw/affected-class.md IsStanceArts')
+        mf = t.find_arts('Moon-and-Fire Stance')
+        rtb = t.find_weapon("Rellana's Twin Blades")
+        check('Moon-and-Fire Stance opens with its stance attack 040060, not its R1 follow-up 040010 '
+              '(100054 f35-50 of 040060)',
+              (main_anim(skill_profile(t, mf, rtb)), [(f['button'], f['anim'], f['first']) for f in skill_followups(t, mf, rtb)]),
+              (40060, [('r1', 40010, 35)]), 'TAE a918 040060 event 66 100054; BEH SwordArtsOneShotComboEnd')
+        check('Wild Strikes is not a stance cast (its loop 040051 hits): lead-in still the 040050 clip',
+              (skill_profile(t, wild, claymore)['stance_buttons'], lead_in(t, wild, pw)), ([], 32.0),
+              'TAE a610 040051 hits')
         roar = t.find_arts("Braggart's Roar")
         check("Braggart's Roar lasts 60 s (root 1860 cycles 1861)", _buff_duration(t, 1860), 60.0,
               'REGULATION SpEffect 1861 effectEndurance')

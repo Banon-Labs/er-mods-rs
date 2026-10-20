@@ -29,6 +29,9 @@ FRACTION = re.compile(r"^(\d+)/(\d+)$")
 #: A sub-phase's own counter inside a step's log, e.g. the loadout's "  40/166 weapons", and the
 #: "name: ..." line that names the phase it counts.
 COUNTER = re.compile(r"^\s*(\d+)/(\d+)\s+\w+")
+#: The rows a pool counter line carries beside its chunks (`  12/143 weapons, 900/8640 rows`). Its
+#: chunks run largest first, so the rows, not the chunks, are the share of the work done.
+ROWS = re.compile(r"\b(\d+)/(\d+) rows\b")
 PHASE = re.compile(r"^(?!warning)([a-z][\w -]{1,30}): ")
 #: The loadout's stages (`er-mechanics-combo-loadout.Stages`): the plan once, each stage with the
 #: seconds it took the last time it ran (null when it never has), then a line as each one starts.
@@ -138,6 +141,7 @@ def stage_progress(lines: list[str], el: float) -> dict | None:
         elif m := STAGE.match(line):
             cur, sub, latest = (int(m[1]), int(m[2]), m[3], int(m[4])), None, None
         elif cur and (c := COUNTER.match(line)):
+            c = ROWS.search(line) or c
             sub = (int(c[1]), int(c[2]), line.strip())
         elif cur and line.strip() and not WARN.search(line):
             latest = line.strip()
@@ -284,6 +288,11 @@ def selftest() -> int:
     sp = stage_progress([plan, "stage 2/3: whiff (10s in)", "opponent pool: rebuilding"], 140.0)
     check(sp["frac"] < 110 / 120 and "over the 1m40s it took last time" in sp["detail"]
           and "opponent pool: rebuilding" in sp["detail"], "a stage past its last time says so and shows its latest line")
+    # Largest chunk first: 2 of 4 weapons done is 600 of 800 rows, three quarters of the work.
+    sp = stage_progress([plan, "stage 2/3: whiff (10s in)", "  2/4 weapons, 600/800 rows"], 40.0)
+    check(abs(sp["frac"] - (10 + 75) / 120) < 1e-9 and abs(sp["left"] - (10 + 10)) < 1e-9
+          and "2/4 weapons" in sp["detail"],
+          "a counter line's rows, not its chunks, set the stage's share and its rate")
     sp = stage_progress(['stages: [["rows", null], ["whiff", null]]', "stage 2/2: whiff (3s in)"], 5.0)
     check(abs(sp["frac"] - 0.5) < 1e-9 and sp["left"] is None, "with no timings each stage is one of N, nothing left estimated")
     print(f"{len(fails)} failed")

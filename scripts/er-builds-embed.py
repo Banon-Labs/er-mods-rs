@@ -55,7 +55,32 @@ import numpy as np
 
 CACHE = Path.home() / ".cache/er-build-planner"
 API = "https://er-inventory-api.nyasu.business"
-ATTRS = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"]  # planner keys; `vit` is Endurance
+ATTRS = ["vig", "mnd", "end", "str", "dex", "int", "fth", "arc"]
+# The planner's JSON spells Endurance `vit`. Corpus readers translate through these at that
+# boundary, so every other script names the attribute `end`.
+PLANNER_KEY = {"end": "vit"}
+FROM_PLANNER = {v: k for k, v in PLANNER_KEY.items()}
+
+
+def from_planner(st: dict) -> dict:
+    """A planner `stats` object with its keys in this repo's spelling (`vit` -> `end`)."""
+    return {FROM_PLANNER.get(k, k): v for k, v in st.items()}
+
+
+def to_planner(st: dict) -> dict:
+    """The inverse of `from_planner`, for stats written back into a planner document."""
+    return {PLANNER_KEY.get(k, k): v for k, v in st.items()}
+
+
+def rekey(obj):
+    """`obj` with every attribute dict in it (one holding `vig`) translated by `from_planner`.
+    For JSON this repo wrote before it spelled Endurance `end`: sweep caches, weapon-build plans."""
+    if isinstance(obj, list):
+        return [rekey(x) for x in obj]
+    if isinstance(obj, dict):
+        out = {k: rekey(v) for k, v in obj.items()}
+        return from_planner(out) if "vig" in out and "vit" in out else out
+    return obj
 LEVEL_OFFSET = 79  # RL = sum of the eight attributes - 79
 KINDS = {"w": "armament", "wa": "armament|affinity", "ld": "loadout", "aow": "ash of war", "t": "talisman",
          "s": "spell", "a": "armor", "gr": "great rune", "ct": "crystal tear"}
@@ -142,7 +167,7 @@ def tokens(build: dict) -> list[str]:
 
 
 def stats_of(build: dict) -> dict | None:
-    st = build.get("stats") or {}
+    st = from_planner(build.get("stats") or {})
     try:
         return {"rl": int(st["rl"]), **{k: int(st[k]) for k in ATTRS}}
     except (KeyError, TypeError, ValueError):

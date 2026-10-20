@@ -312,6 +312,23 @@ class Model:
         w["n_T"] = sum(1 for h in hits if h[0] <= T and h[2] + h[3] > 0)
         return w
 
+    def case_over(self, hits, windows, gate, parts, poise):
+        """`case` over a duel's distances `parts` [(distance, credited time)] (`er-mechanics-ash-
+        interrupt.reach_parts`): each number of the outcome is the mean over the distances the
+        attack is thrown at, weighted by the duel's time at each. The attack is thrown only where it
+        reaches, so a distance it does not reach is no part of it, and the result is per attack
+        thrown, as the fixed-distance `case` is. None when it reaches nowhere."""
+        got = [(w, self.case(hits, windows, gate, D, poise)) for D, w in parts if w > 0]
+        got = [(w, c) for w, c in got if c]
+        tot = sum(w for w, _ in got)
+        if not tot:
+            return None
+        out = dict(got[0][1])
+        for k, v in out.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in ("v_T", "n_T", "full"):
+                out[k] = sum(w * c[k] for w, c in got) / tot
+        return out
+
 
 # ---------------------------------------------------------------------------------------------
 # ash rows (combo-loadout)
@@ -347,16 +364,17 @@ class AshSide:
                 self._split[key] = {"physical": 1.0}
         return self._split[key]
 
-    def first_hit(self, ash, weapon, grip):
-        """{'atk_row', 'kind', 'wid'} of the cast's first hit, or None."""
-        key = (ash, weapon, grip)
+    def first_hit(self, ash, weapon, grip, stance=None):
+        """{'atk_row', 'kind', 'wid'} of the cast's first hit, or None. `stance` is a stance row's
+        button (Unsheathe's R1 slash and R2 slash are different attacks)."""
+        key = (ash, weapon, grip, stance)
         if key not in self._first:
             out = None
             try:
                 A = AS()
                 sid = self.ids[ash]
                 wid = self.t.find_weapon(weapon)
-                prof = A.skill_profile(self.t, sid, wid, 0, "both" if grip == "2H" else "one")
+                prof = A.skill_profile(self.t, sid, wid, 0, "both" if grip == "2H" else "one", stance)
                 acts = [x for x in prof["anims"].get(A.main_anim(prof), []) if x["kind"] in ("melee", "bullet")]
                 if acts:
                     f = min(acts, key=lambda x: x["frames"][0])
@@ -374,17 +392,40 @@ class AshSide:
         hits = [tuple(h) for h in prof["hits"]]
         T = min(h[0] for h in hits)
         P = self.m.p(T + lead)
-        fh = self.first_hit(x["ash"], x["weapon"], x["grip"])
+        fh = self.first_hit(x["ash"], x["weapon"], x["grip"], x.get("stance"))
         gcc, lvl = 1.0, None
         if fh and fh["atk_row"] is not None:
             hit = {"atk_row": fh["atk_row"], "weapon": fh["wid"]}
             gcc = self.g.guard_cut_cancel(self.reg, hit)
             lvl = self.g.guarded_damage_level(self.reg, hit)
         chip = self.m.guards.pass_share(self.split(x["weapon"], x["affinity"], x["grip"]), None, gcc)
-        w = self.m.case(hits, prof.get("windows") or [], prof["gate"], prof["D"], prof["poise"])
         status = {**(x.get("status_hp") or {}), **(x.get("status_only") or {})}
         k = burst_share(status)
-        bmult, kept = ash_mult(P, w, chip, score, srate, k)
+        parts = [q for q in prof.get("spread") or () if q.get("reach") and any(q.get("touch") or ())]
+        if parts:
+            # Over a duel's distances (`er-mechanics-ash-interrupt.Rows.spread_profile`): at each
+            # distance the cast reaches, the hits that touch him there are the ones he can perfect
+            # block and the punish closes from there. `bmult_by` per band for `set_by_distance`;
+            # `bmult` is their mean weighted by the duel's time, the cast thrown only where it reaches.
+            by, tot = [], 0.0
+            for q in parts:
+                hq = [h for h, t in zip(hits, q["touch"]) if t]
+                Pq = self.m.p(min(h[0] for h in hq) + lead)
+                wq = self.m.case(hq, prof.get("windows") or [], prof["gate"], q["D"], prof["poise"])
+                bq, kq = ash_mult(Pq, wq, chip, score, srate, k)
+                by.append((q["node"], q["w"], bq, kq, Pq, wq))
+                tot += q["w"]
+            bmult = sum(w_ * b for _, w_, b, *_ in by) / tot
+            kept = sum(w_ * kq for _, w_, _, kq, *_ in by) / tot
+            P = sum(w_ * Pq for _, w_, _, _, Pq, _ in by) / tot
+            cases = [(w_, wq) for _, w_, _, _, _, wq in by if wq]
+            ct = sum(w_ for w_, _ in cases)
+            w = ({key: sum(w_ * c[key] for w_, c in cases) / ct for key in ("punish_hp", "stopped", "trade", "late", "full", "v_T")}
+                 if ct else None)
+            x["bmult_by"] = [[n, round(b, 4)] for n, _, b, *_ in by]
+        else:
+            w = self.m.case(hits, prof.get("windows") or [], prof["gate"], prof["D"], prof["poise"])
+            bmult, kept = ash_mult(P, w, chip, score, srate, k)
         x["bmult"] = bmult
         info = {"P": round(P, 4), "T": round(T + lead, 1), "chip": round(chip, 3), "kept": round(kept, 3),
                 "burst": round(k, 3)}
@@ -417,9 +458,12 @@ def ha_windows(hyper):
 class WeaponSide:
     """Per weapon, grip and affinity: the HP per attack thrown the perfect blockers take off."""
 
-    def __init__(self, model, poise):
+    def __init__(self, model, poise, spread=None):
         self.m = model
         self.poise = poise
+        #: A duel's distance spread (`er-mechanics-ash-interrupt.duel_spread`): each attack is
+        #: costed over the distances its reach covers (`Model.case_over`), not at `REACH_SHARE`.
+        self.spread = spread
         pm = PM()
         self.pm, self.ct = pm, pm._ct()
         self.g = G()
@@ -489,8 +533,12 @@ class WeaponSide:
             if ns and s.get("next_cancel") is not None and ns.get("startup") is not None:
                 hits.append((float(s["next_cancel"] + ns["startup"]), 0.0, 0.0, 0.0))
             gate = s.get("roll_cancel") or max(f for f in fr["hits"])
-            D = REACH_SHARE * (s.get("reach") or 0.0)
-            self._case[key] = self.m.case(sorted(hits), fr["windows"], gate, D, self.poise)
+            reach = s.get("reach") or 0.0
+            if self.spread and reach:
+                parts = [(d, w) for d, w, _ in W().AI.reach_parts(self.spread, reach)]
+                self._case[key] = self.m.case_over(sorted(hits), fr["windows"], gate, parts, self.poise)
+            else:
+                self._case[key] = self.m.case(sorted(hits), fr["windows"], gate, REACH_SHARE * reach, self.poise)
         return self._case[key]
 
     def record_cost(self, rec):
@@ -597,6 +645,9 @@ def main() -> int:
     ap.add_argument("--mirror", type=Path)
     ap.add_argument("--json", type=Path)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--arena-m", type=float,
+                    help="a duel's starting separation, m: each weapon attack is costed over the duel's "
+                         "distance spread where its reach covers (`er-mechanics-ash-interrupt.duel_spread`)")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
@@ -618,7 +669,11 @@ def main() -> int:
             ap.error("--weapons-from needs --build (armor poise)")
         poise = build_poise(json.loads(a.build.read_text()))
         print(f"my armor poise {poise}")
-        ws = WeaponSide(m, poise)
+        AI = W().AI
+        spread = AI.duel_spread_for(a.arena_m) if a.arena_m else None
+        if spread:
+            print("duel spread: " + ", ".join(f"{n[0]:g} m x{n[1]:.3f}" for n in spread["nodes"]))
+        ws = WeaponSide(m, poise, spread)
         out["weapons"] = ws.weapons(json.loads(a.weapons_from.read_text()))
         top = sorted(((v["1H"]["cost"], n) for n, v in out["weapons"].items() if v.get("1H")), reverse=True)
         print("highest 1H perfect-block cost per attack: " + ", ".join(f"{n} {c:.1f}" for c, n in top[:8]))
@@ -686,6 +741,18 @@ def selftest() -> int:
     ha = m.case([(20.0, 50.0, 100.0, 0.0), (40.0, 50.0, 80.0, 0.0)], [(30.0, 45.0, 100.0, 1.0, 0.0, 1.0)],
                 100.0, 2.5, 40.0)
     check("hyperarmor at his first hit trades: my later hit still lands", ha["trade"] == 1.0 and ha["late"] == 80.0)
+    # Over a duel's distances (`case_over`): from 6 m his run-in delays the punish past my second
+    # hit at f40, which stops it; at 2.5 m it does not. The mix weighs each by the duel's time
+    # there, and a distance the attack is not thrown at (weight 0) is no part of it.
+    far = m.case([(20.0, 50.0, 100.0, 0.0), (40.0, 50.0, 80.0, 0.0)], [], 100.0, 6.0, 40.0)
+    mix = m.case_over([(20.0, 50.0, 100.0, 0.0), (40.0, 50.0, 80.0, 0.0)], [], 100.0,
+                      [(2.5, 0.3), (6.0, 0.1), (9.0, 0.0)], 40.0)
+    check("over the duel's distances: the punish closes from each, weighted by the time there",
+          far["stopped"] > slow["stopped"]
+          and abs(mix["stopped"] - (0.3 * slow["stopped"] + 0.1 * far["stopped"]) / 0.4) < 1e-9
+          and abs(mix["punish_hp"] - (0.3 * slow["punish_hp"] + 0.1 * far["punish_hp"]) / 0.4) < 1e-9
+          and mix["v_T"] == slow["v_T"] and m.case_over([(20.0, 50.0, 100.0, 0.0)], [], 100.0, [], 40.0) is None,
+          (round(slow["stopped"], 3), round(far["stopped"], 3), round(mix["stopped"], 3)))
 
     check("burst kept, damage over time dropped", (burst_share({"bleed": 100}), burst_share({"poison": 50}),
                                                     burst_share({"bleed": 30, "poison": 10}), burst_share({}))

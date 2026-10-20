@@ -53,7 +53,7 @@ AR = OPT.AR
 CARD = _mod('er_mechanics_weapon_card', 'er-mechanics-weapon-card.py')
 STATS = ('str', 'dex', 'int', 'fth', 'arc')
 LABEL = {'str': 'STR', 'dex': 'DEX', 'int': 'INT', 'fth': 'FTH', 'arc': 'ARC', 'vig': 'VIG', 'mnd': 'MND',
-         'vit': 'END'}
+         'end': 'END'}
 TIER = 'dlc-drawstring'
 RANK_RL = 150
 RL_SWEEP = tuple(range(60, 201, 10))
@@ -95,7 +95,7 @@ class Builder:
         # in `fl` is a minimum, Endurance's the medium-roll requirement.
         self.pool, _ = OPT.conditioning_pool(rows, 'pvp')
         fl['mnd'] = 0
-        fl['vit'] = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
+        fl['end'] = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
                                         OPT.load_pool(rows, 'pvp', arch, min_peers))
         return fl, OPT.bracket_defender(rows)
 
@@ -128,20 +128,27 @@ def rl_spans(b, rls=RL_SWEEP):
     return spans
 
 
-def sweep_path(rl=RANK_RL):
-    return OPT.sweep_cache('grease', TIER, rl, rl, every_class=True)
+def sweep_path(rl=RANK_RL, tier=TIER):
+    """The every-class sweep's file at `rl` for grease `tier` (`OPT.GREASES` key, or 'none': every
+    affinity ungreased, what a duel reads since its ladder bans every damage grease)."""
+    return OPT.sweep_cache('grease', tier, rl, rl, every_class=True)
 
 
-def load_sweep(rl=RANK_RL):
-    """The every-class grease sweep at `rl`. It takes minutes, so it is built by its own command
-    rather than from here."""
-    path = sweep_path(rl)
+def sweep_command(rl=RANK_RL, tier=TIER, jobs=16):
+    """The command that writes `sweep_path(rl, tier)`."""
+    return ['python3', os.path.join(HERE, 'er-builds-optimize.py'), '--grease-sweep', f'{rl}-{rl}', '--grip', '1h',
+            '--jobs', str(jobs), '--no-weight-charge', '--every-class', '--grease', tier]
+
+
+def load_sweep(rl=RANK_RL, tier=TIER):
+    """The every-class grease sweep at `rl` for grease `tier`. It takes minutes, so it is built by
+    its own command (`sweep_command`) rather than from here."""
+    path = sweep_path(rl, tier)
     if not path.exists():
-        raise SystemExit(f"no RL {rl} sweep at {path}; build it with:\n  python3 "
-                         f"{os.path.join(HERE, 'er-builds-optimize.py')} --grease-sweep {rl}-{rl} --grip 1h "
-                         f"--jobs 16 --no-weight-charge --every-class")
+        raise SystemExit(f"no RL {rl} sweep at {path}; build it with:\n  " + ' '.join(sweep_command(rl, tier)))
     with open(path) as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+        # A sweep written before Endurance was spelled `end` carries `vit`; `rekey` translates it.
+        return [OPT.EMBED.rekey(json.loads(line)) for line in fh if line.strip()]
 
 
 def sweep_best(tables, row):

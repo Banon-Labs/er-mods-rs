@@ -29,7 +29,13 @@ Powerstance and off-hand:
   `GetEquipWeaponSpecialCategoryNumber` (env 345 = `EquipParamWeapon.spAtkcategory`, `VERIFIED`)
   104 pairs only with another 104; a katana also pairs with a 104 in the left hand. The HKS enum
   values 20..52 equal `wepmotionCategory` (dagger 20, straight sword 23, colossal sword 26,
-  colossal weapon 31); that env 225 returns `wepmotionCategory` is `INFERRED`.
+  colossal weapon 31), and env 225 returns `wepmotionCategory` (`VERIFIED` 2026-10-19): `HksEnv`
+  0x140410820 sends 225 through jump table 0x1404133a4 (index env - 0xdf) to 0x140410e05, a
+  call to ChrIns vtable slot 0x248, which on `PlayerIns` (vtable 0x142a7cb40) is 0x1406568b0:
+  the int at index `hand` of the 12-byte array PlayerIns+0x630 points to. `FUN_1404d0eb0` fills
+  slots 0 and 1 from `FUN_1403beae0`, which reads `EquipParamWeapon+0xe7`, `wepmotionCategory`
+  (1.16.2; in 1.17.1 the same read is at 0x1403beaf0). So the Pickaxe (`wepType` 23, great
+  hammer) powerstances with greataxes: its motion category is 32.
 
 Blocking (1.16.2 code, `VERIFIED` unless marked):
 
@@ -618,7 +624,9 @@ def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pv
 #: this module without a cycle. The selftest checks both select the same builds.
 PVP_TAGS = {'Invasions', 'Duels', 'Co-op/Gank', '2v2', 'Ladder', 'Fishing'}
 LEVEL_OFFSET = 79
-ATTRS = ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')
+ATTRS = ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')
+#: The planner's JSON spells Endurance `vit`; `blocker_corpus` reads it under that key.
+PLANNER_KEY = {'end': 'vit'}
 ELEMENTS = ('physical', 'magic', 'fire', 'lightning', 'holy')
 #: Planner `computed.absorption` key per damage type (as `er-builds-pvp.ABSORB_KEY`).
 ABSORB_KEY = {'slash': 'slash', 'strike': 'strike', 'pierce': 'pierce', 'standard': 'physical',
@@ -684,7 +692,7 @@ def blocker_corpus(mirror=None, rl_lo=140, rl_hi=160):
             b = json.loads(line)['build']
             st = b.get('stats') or {}
             try:
-                st = {'rl': int(st['rl']), **{k: int(st[k]) for k in ATTRS}}
+                st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
             except (KeyError, TypeError, ValueError):
                 continue
             if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):
@@ -1544,6 +1552,15 @@ def selftest():
           'COMMUNITY: colossal swords powerstance')
     check('Greatsword + Giant-Crusher powerstance', can_powerstance(reg, 4000000, 23110000),
           False, 'COMMUNITY: no cross-category powerstance')
+    # The category is `wepmotionCategory`, not the menu class `wepType` (env 225, module
+    # docstring): the Pickaxe is a great hammer by `wepType` (23) with the greataxe moveset
+    # (`wepmotionCategory` 32), so it pairs with the Rusted Anchor, a greataxe (19, 32), and not
+    # with Great Stars, a great hammer on 35.
+    pick, anchor, stars = (reg.find_weapon(n) for n in ('Pickaxe', 'Rusted Anchor', 'Great Stars'))
+    check('Pickaxe powerstances with Rusted Anchor (motion 32 both), not with Great Stars (wepType 23 both)',
+          ([(reg.weapon[w]['wepType'], reg.weapon[w]['wepmotionCategory']) for w in (pick, anchor, stars)],
+           can_powerstance(reg, pick, anchor), can_powerstance(reg, anchor, pick), can_powerstance(reg, pick, stars)),
+          ([(23, 32), (19, 32), (23, 35)], True, True, False), 'VERIFIED regulation + env 225')
 
     # 7. Direction checks with no outside number behind them: a colossal R1 into a medium shield
     #    costs more stamina than a straight-sword R1 into a greatshield, and only the lighter

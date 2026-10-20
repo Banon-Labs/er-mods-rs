@@ -32,7 +32,7 @@ def main() -> int:
     seen, rows = set(), []
     for p in a.rows:
         for x in json.loads(p.read_text()):
-            k = (x["weapon"], x.get("affinity", "Keen"), x["ash"], x["grip"])
+            k = (x["weapon"], x.get("affinity", "Keen"), x["ash"], x["grip"], x.get("variant"))
             if k not in seen and x["ash"] not in bl and not CL.off_stat(x):
                 seen.add(k)
                 x.setdefault("affinity", "Keen")
