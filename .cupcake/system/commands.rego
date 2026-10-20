@@ -295,7 +295,11 @@ odd_span_blanked(index, text) := text if {
 	index % 2 == 0
 }
 
-odd_span_blanked(index, text) := blanked_anchors(text) if {
+# A backtick in a quoted span is blanked here and not in blanked_anchors, which heredoc bodies
+# share: a backtick in an unquoted heredoc body still runs, so it must stay visible to
+# substitution_free. A quoted span only reaches this point once substitution_free has proved
+# every backtick in the text sits inside single quotes.
+odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 	index % 2 == 1
 }
 
@@ -469,10 +473,48 @@ operands_blanked(text) := out if {
 
 scannable(text) := stripped if {
 	resolved := heredoc_resolved(text)
-	not contains(resolved, "$(")
-	not contains(resolved, "`")
+	substitution_free(resolved)
 	stripped := escaped_quotes_stripped(resolved)
 }
+
+# No command substitution the shell would run. A text with no backtick and no `$(` at
+# all passes as before. A text with either passes only when every one of them sits
+# inside a single-quoted span, where the shell reads it as a literal character.
+#
+# Until 2026-10-19 any backtick anywhere sent the whole text back to its raw form, so
+# a `bd comments add <id> '... `mid hooks: 3/3 ARMED` ... companions; scripts/frida/
+# npc-summons-tag-check.js ...' 2>&1 | grep -v hint` kept the `;` inside its quoted
+# body, the `scripts/*-check.js` after it took command position, and
+# no_grep_for_build_errors denied a comment as a build piped into grep. Markdown
+# backticks in quoted prose are the common case, not the exotic one.
+#
+# The test is one left-to-right tokenisation in a single regex, not a quote-parity
+# split, because parity is fooled by an apostrophe inside double quotes pairing with a
+# real quote later and would call an unquoted backtick quoted. Tokens: an ordinary
+# character, a backslash escape, a `$` not opening `(`, a whole single-quoted span, or
+# a whole double-quoted span (optionally `$"..."`) containing no backtick and no `$(`.
+# Anything else, `$'...'` included, fails to match and keeps the raw text. A heredoc
+# is excluded outright: inside an unquoted heredoc body a single quote is literal and
+# a backtick in it still runs.
+substitution_free(text) if {
+	not contains(text, "$(")
+	not contains(text, "`")
+}
+
+substitution_free(text) if {
+	not contains(text, "<<")
+	regex.match(substitution_only_in_single_quotes_pattern, text)
+}
+
+substitution_only_in_single_quotes_pattern := concat("", [
+	`^(`,
+	"[^'\"\\\\`$]",
+	`|\\(.|\n)`,
+	"|\\$([^('\"\\\\`]|$)",
+	`|'[^']*'`,
+	"|\\$?\"([^\"\\\\`$]|\\\\(.|\\n)|\\$([^(\"\\\\`]|$))*\"",
+	`)*$`,
+])
 
 scan_text(text) := out if {
 	out := operands_blanked(text)
