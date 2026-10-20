@@ -3435,6 +3435,7 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "iced-x86",
+ "ilhook",
 ]
 
 [[package]]

@@ -283,6 +283,137 @@ test_allow_delete_of_a_stale_agent_worktree if {
 	not denied_bash(concat(" ", [rm_rf, ".claude/worktrees/agent-a0a7d0da7a1ffa8ff"]))
 }
 
+# ---------------------------------------------------------------------------
+# SCRATCH COPIES (2026-10-19): a throwaway copy of the guard tree is not the
+# guard layer. Both measured false positives are pinned first.
+# ---------------------------------------------------------------------------
+
+scratchpad := "/tmp/claude-1000/-home-banon-projects-er-mods-rs/7651b6f8/scratchpad"
+
+test_allow_delete_of_a_scratchpad_copy if {
+	not denied_bash(concat(" ", [rm_rf, concat("", [scratchpad, "/p2/", cup])]))
+}
+
+test_allow_delete_of_a_file_inside_a_scratchpad_copy if {
+	not denied_bash(concat(" ", ["rm", "-f", concat("", [scratchpad, "/p2/", cup, "/policies/claude/x.rego"])]))
+}
+
+test_allow_delete_of_a_copy_under_tmp if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/x/", cup])]))
+}
+
+test_allow_delete_of_a_copy_under_var_tmp if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["/var/tmp/x/", cup])]))
+}
+
+test_allow_delete_of_a_copy_under_absolute_target if {
+	not denied_bash(concat(" ", [rm_rf, concat("", [repo, "/target/gh-title-scratch/", cup])]))
+}
+
+test_allow_delete_of_a_copy_under_relative_target if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["target/guard-dev/", cup])]))
+}
+
+test_allow_delete_of_a_copy_under_dot_slash_target if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["./target/guard-dev/", cup, "/tests"])]))
+}
+
+test_allow_delete_of_a_copy_under_project_dir_target if {
+	not denied_bash(concat("", [rm_rf, " \"$CLAUDE_PROJECT_DIR/target/x/", cup, "\""]))
+}
+
+test_allow_quoted_scratch_copy if {
+	not denied_bash(concat("", [rm_rf, " '/tmp/x/", cup, "'"]))
+}
+
+test_allow_find_delete_in_a_scratch_copy if {
+	not denied_bash(concat(" ", ["find", concat("", ["/tmp/x/", cup]), "-name", "'*.rego'", "-delete"]))
+}
+
+test_allow_delete_of_a_scratch_hooks_copy if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/x/", hooks])]))
+}
+
+test_allow_two_scratch_copies_in_one_command if {
+	not denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/a/", cup]), concat("", ["target/b/", cup])]))
+}
+
+# The live layer is still the live layer when a scratch copy is beside it.
+test_deny_scratch_copy_beside_the_live_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/a/", cup]), cup]))
+}
+
+test_deny_live_tree_named_before_a_scratch_copy if {
+	denied_bash(concat(" ", [rm_rf, cup, concat("", ["/tmp/a/", cup])]))
+}
+
+test_deny_replacing_the_live_tree_from_a_scratch_copy if {
+	denied_bash(concat(" ", ["mv", concat("", ["/tmp/x/", cup]), cup]))
+}
+
+# Path traversal out of a scratch root.
+test_deny_traversal_out_of_relative_target if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["target/../", cup])]))
+}
+
+test_deny_traversal_out_of_absolute_target if {
+	denied_bash(concat(" ", [rm_rf, concat("", [repo, "/target/x/../../", cup])]))
+}
+
+test_deny_traversal_out_of_tmp if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/../", repo, "/", cup])]))
+}
+
+test_deny_variable_inside_a_scratch_root if {
+	denied_bash(concat("", [rm_rf, " \"/tmp/$x/", cup, "\""]))
+}
+
+test_deny_command_substitution_before_target if {
+	denied_bash(concat("", [rm_rf, " \"$(pwd)/target/", cup, "\""]))
+}
+
+test_deny_brace_expansion_in_a_scratch_root if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["/tmp/{..,x}/", cup])]))
+}
+
+# A `target` directory inside the live tree is not a scratch root.
+test_deny_target_directory_inside_the_live_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", [cup, "/target/", cup])]))
+}
+
+# The other live spellings stay denied.
+test_deny_project_dir_live_tree if {
+	denied_bash(concat("", [rm_rf, " \"$CLAUDE_PROJECT_DIR/", cup, "\""]))
+}
+
+test_deny_dot_slash_live_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["./", cup])]))
+}
+
+test_deny_home_tilde_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["~/", cup])]))
+}
+
+test_deny_home_variable_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", ["$HOME/", cup])]))
+}
+
+test_deny_hidden_worktree_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", [".worktrees/pr-x/", cup])]))
+}
+
+test_deny_agent_worktree_tree if {
+	denied_bash(concat(" ", [rm_rf, concat("", [repo, "/.claude/worktrees/agent-a1/", cup])]))
+}
+
+test_deny_scratch_copy_inside_a_bash_wrapper_still_reads_live if {
+	denied_bash(concat("", ["bash -c '", concat(" ", [rm_rf, cup]), " /tmp/x'"]))
+}
+
+test_allow_scratch_copy_inside_a_bash_wrapper if {
+	not denied_bash(concat("", ["bash -c '", concat(" ", [rm_rf, concat("", ["/tmp/x/", cup])]), "'"]))
+}
+
 # DOCUMENTED GAP, pinned so it stays a known fact rather than folklore: chmod is
 # not in the verb set, because `chmod +x` on a new signal script is ordinary
 # authoring and the disarming form cannot be told from it without parsing mode
