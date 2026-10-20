@@ -1316,14 +1316,20 @@ pub fn flush_proof() {
     if frames.is_empty() && !fresh {
         return;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true);
-    if fresh {
-        options.write(true).truncate(true);
+    let opened = if fresh {
+        // The previous run's file is set aside first, so a later append in this process cannot
+        // set aside the lines written here.
+        er_game_base::log::begin_fresh_run(&path);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .ok()
     } else {
-        options.append(true);
-    }
-    let Ok(mut file) = options.open(&path) else {
+        er_game_base::log::open_fresh_run_append(&path)
+    };
+    let Some(mut file) = opened else {
         return;
     };
     if file.metadata().map_or(0, |m| m.len()) > PROOF_FILE_LIMIT {

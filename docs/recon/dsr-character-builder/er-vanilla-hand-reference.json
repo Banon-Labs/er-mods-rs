@@ -1,0 +1,108 @@
+{
+ "R_layout": [
+  [
+   "0x2",
+   0
+  ],
+  [
+   "0x11",
+   3
+  ],
+  [
+   "0x11",
+   6
+  ],
+  [
+   "0x11",
+   6
+  ],
+  [
+   "0x11",
+   2
+  ],
+  [
+   "0x13",
+   1
+  ],
+  [
+   "0x13",
+   10
+  ],
+  [
+   "0x16",
+   5
+  ],
+  [
+   "0x15",
+   5
+  ],
+  [
+   "0x13",
+   5
+  ]
+ ],
+ "R_palm_vertices": 897,
+ "R_tip_vertices": 287,
+ "R_bind_palm_centroid_to_weapon_m": 0.039,
+ "R_bind_tip_to_weapon_m": 0.097,
+ "R_bind_min_vertex_to_weapon_m": 0.005,
+ "R_idle_max_palm_centroid_to_weapon_m": 0.006,
+ "R_idle_frame0_tip_to_weapon_m": 0.035,
+ "R_r1_max_palm_centroid_to_weapon_m": 0.042,
+ "R_r1_frame0_tip_to_weapon_m": 0.097,
+ "R_run_r1_max_palm_centroid_to_weapon_m": 0.041,
+ "R_run_r1_frame0_tip_to_weapon_m": 0.098,
+ "L_layout": [
+  [
+   "0x2",
+   0
+  ],
+  [
+   "0x11",
+   3
+  ],
+  [
+   "0x11",
+   6
+  ],
+  [
+   "0x11",
+   6
+  ],
+  [
+   "0x11",
+   2
+  ],
+  [
+   "0x13",
+   1
+  ],
+  [
+   "0x13",
+   10
+  ],
+  [
+   "0x16",
+   5
+  ],
+  [
+   "0x15",
+   5
+  ],
+  [
+   "0x13",
+   5
+  ]
+ ],
+ "L_palm_vertices": 907,
+ "L_tip_vertices": 293,
+ "L_bind_palm_centroid_to_weapon_m": 0.039,
+ "L_bind_tip_to_weapon_m": 0.097,
+ "L_bind_min_vertex_to_weapon_m": 0.005,
+ "L_idle_max_palm_centroid_to_weapon_m": 0.012,
+ "L_idle_frame0_tip_to_weapon_m": 0.037,
+ "L_r1_max_palm_centroid_to_weapon_m": 0.046,
+ "L_r1_frame0_tip_to_weapon_m": 0.102,
+ "L_run_r1_max_palm_centroid_to_weapon_m": 0.046,
+ "L_run_r1_frame0_tip_to_weapon_m": 0.097
+}

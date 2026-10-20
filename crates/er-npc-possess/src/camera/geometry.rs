@@ -255,7 +255,8 @@ pub(crate) enum Refusal {
     RowMissing(u32),
     /// `LockCamParam` row 0 is gone, so there is no vanilla base to copy the untouched fields from.
     BaseRowMissing,
-    /// `WorldChrMan+0x1ece0 chrCam` or `ChrCam+0x60 chrExFollowCam` did not resolve.
+    /// `WorldChrMan.chrCam` (`+0x1ece0`, `+0x1ecf0` on 2.7.2.0) or `ChrCam+0x60 chrExFollowCam`
+    /// did not resolve.
     NoFollowCam,
     /// `ChrExFollowCam+0x468` would not take the write.
     WriteFailed,
@@ -291,8 +292,7 @@ impl Refusal {
                     .to_owned()
             }
             Self::NoFollowCam => {
-                "WorldChrMan+0x1ece0 chrCam or ChrCam+0x60 chrExFollowCam did not resolve"
-                    .to_owned()
+                "WorldChrMan.chrCam or ChrCam+0x60 chrExFollowCam did not resolve".to_owned()
             }
             Self::WriteFailed => "ChrExFollowCam+0x468 would not take the write".to_owned(),
         }

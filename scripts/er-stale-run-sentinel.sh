@@ -697,14 +697,136 @@ def workspace_metadata():
         return None, "cargo-metadata-unparseable"
 
 
+def crate_map(profiles):
+    """The workspace crate map: (meta, why, pkg_dir, cdylibs, build_scripts).
+
+    `meta` is None when cargo metadata could not be read, and `pkg_dir`/`build_scripts` then come
+    from a filesystem walk. Nothing here depends on the live profile.
+    """
+    meta, why = workspace_metadata()
+    pkg_dir = {}
+    cdylibs = {}
+    build_scripts = {}
+    if meta is not None:
+        for pkg in meta.get("packages", []):
+            name = pkg.get("name")
+            manifest = pkg.get("manifest_path")
+            if not name or not manifest:
+                emit("TEARDOWN", "fallback-crate-map-unavailable", "package without name/manifest", profiles)
+            pkg_dir[name] = os.path.realpath(os.path.dirname(manifest))
+            cdylibs[name] = {
+                t.get("name")
+                for t in pkg.get("targets", [])
+                if "cdylib" in (t.get("crate_types") or [])
+            }
+            build_scripts[name] = [
+                t["src_path"]
+                for t in pkg.get("targets", [])
+                if "custom-build" in (t.get("kind") or []) and t.get("src_path")
+            ]
+        if not pkg_dir:
+            emit("TEARDOWN", "fallback-crate-map-unavailable", "no workspace packages", profiles)
+    else:
+        pkg_dir = package_dirs_from_fs()
+        build_scripts = {n: [os.path.join(d, "build.rs")] for n, d in pkg_dir.items()}
+    return meta, why, pkg_dir, cdylibs, build_scripts
+
+
+def owner_of(target, pkg_dir):
+    """Deepest owning crate, so a nested crate is attributed to itself rather than its parent."""
+    owner = None
+    owner_dir = ""
+    for name, d in pkg_dir.items():
+        if target == d or target.startswith(d + os.sep):
+            if len(d) > len(owner_dir):
+                owner, owner_dir = name, d
+    return owner
+
+
+def answer_if_inert(target, owner, meta, why, pkg_dir, build_scripts, profiles):
+    """Emit SKIP for a path no build reads; otherwise return the crates whose build reads it.
+
+    The question needs the crate map and never the live profile: a path no build reads cannot
+    stale any DLL, whatever loaded it. So it is asked before every branch that reasons about the
+    profile, including the one that cannot discover a profile at all.
+
+    On 2026-09-21 writing docs/recon/boot-timing-2026-09-21.tsv tore down the run those
+    measurements came from under `fallback-no-workspace-dll-loaded`, a branch that had nothing to
+    say about the path (bd er-effects-rs-kvqp). On 2026-10-17 a game running without me3 put every
+    edit under `fallback-profile-undiscoverable`, scripts/ and docs/ included, so the PreToolUse
+    guard refused edits its own refusal text promised stay open mid-run.
+
+    Inert means "no build reads it", which is checked, not assumed. Until 2026-10-03 docs/ was
+    skipped wholesale while `er-game-base/build.rs` compiles `docs/recon/rva-map-*.tsv` into every
+    product DLL and `er-invasion-warp-core` embeds `docs/invasion-warp-*.{md,toml}` with
+    `include_str!`. The same day AGENTS.md, which no build reads, tore down a live run under
+    `fallback-unclassified`. A prose file outside every crate is inert by the same test.
+    """
+    inert_top = inert_top_level_of(target)
+    if owner is not None or (inert_top is None and not is_doc_file(target)):
+        return set()
+    files, dirs = build_readers(pkg_dir, build_scripts)
+    readers = readers_of(target, files, dirs)
+    if readers:
+        if meta is None:
+            emit(
+                "TEARDOWN",
+                "fallback-crate-map-unavailable",
+                f"build input of {','.join(sorted(readers))}; crate map unavailable: {why}",
+                profiles,
+            )
+        return readers
+    if inert_top is not None:
+        if meta is None:
+            emit("SKIP", "inert-directory",
+                 f"{inert_top}/ compiles into no DLL (crate map unavailable: {why})", profiles)
+        # If a workspace crate has moved under this directory it is no longer inert and must not
+        # be skipped wholesale.
+        crate_under = [
+            n for n, d in pkg_dir.items()
+            if d == os.path.join(REPO_ROOT, inert_top)
+            or d.startswith(os.path.join(REPO_ROOT, inert_top) + os.sep)
+        ]
+        if crate_under:
+            emit(
+                "TEARDOWN",
+                "fallback-inert-dir-holds-crates",
+                f"{inert_top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
+                profiles,
+            )
+        emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL", profiles)
+    emit(
+        "SKIP",
+        "inert-documentation",
+        f"{os.path.relpath(target, REPO_ROOT)} is prose outside every crate and no build reads it",
+        profiles,
+    )
+
+
+# A lone explicit profile argument of this form stands in for a discovery that found no readable
+# profile: `undiscoverable=game-live-without-me3` is what /proc yields for a game started without
+# me3. It lets the selftest, and scripts/test-live-er-run-signal.py through
+# LIVE_ER_RUN_PROFILES_OVERRIDE (which splits on `:`, hence the `=`), prove that case with no game
+# running.
+UNDISCOVERABLE_PREFIX = "undiscoverable="
+
+
 def main():
     target = os.path.realpath(TARGET)
 
     if MODE == "explicit":
-        profiles, why = EXPLICIT_PROFILES, None
+        if len(EXPLICIT_PROFILES) == 1 and EXPLICIT_PROFILES[0].startswith(UNDISCOVERABLE_PREFIX):
+            profiles, why = None, EXPLICIT_PROFILES[0][len(UNDISCOVERABLE_PREFIX):]
+        else:
+            profiles, why = EXPLICIT_PROFILES, None
     else:
         profiles, why = discover_profiles()
     if profiles is None:
+        # The loaded DLL set is unknown, but whether any build reads this path is not, and a path
+        # no build reads stales nothing whatever loaded it. `closure` mode has no path to ask about.
+        if MODE != "closure":
+            meta, meta_why, pkg_dir, _, build_scripts = crate_map([])
+            answer_if_inert(target, owner_of(target, pkg_dir), meta, meta_why, pkg_dir, build_scripts, [])
         emit("TEARDOWN", "fallback-profile-undiscoverable", why or "unknown", [])
     if not profiles:
         # Nothing live. `check` never reaches here (it short-circuits on an empty process list);
@@ -731,39 +853,7 @@ def main():
             sys.exit(0)
         emit("SKIP", "no-natives-in-profile", "live profile loads no native DLL at all", profiles)
 
-    # Which inert top-level directory this path is under, if any, and whether it is prose. Both
-    # are pure string work, so the branches below can answer for them before any of them can
-    # fall back to a teardown.
-    inert_top = inert_top_level_of(target)
-    doc_like = is_doc_file(target)
-
-    meta, why = workspace_metadata()
-
-    pkg_dir = {}
-    cdylibs = {}
-    build_scripts = {}
-    if meta is not None:
-        for pkg in meta.get("packages", []):
-            name = pkg.get("name")
-            manifest = pkg.get("manifest_path")
-            if not name or not manifest:
-                emit("TEARDOWN", "fallback-crate-map-unavailable", "package without name/manifest", profiles)
-            pkg_dir[name] = os.path.realpath(os.path.dirname(manifest))
-            cdylibs[name] = {
-                t.get("name")
-                for t in pkg.get("targets", [])
-                if "cdylib" in (t.get("crate_types") or [])
-            }
-            build_scripts[name] = [
-                t["src_path"]
-                for t in pkg.get("targets", [])
-                if "custom-build" in (t.get("kind") or []) and t.get("src_path")
-            ]
-        if not pkg_dir:
-            emit("TEARDOWN", "fallback-crate-map-unavailable", "no workspace packages", profiles)
-    else:
-        pkg_dir = package_dirs_from_fs()
-        build_scripts = {n: [os.path.join(d, "build.rs")] for n, d in pkg_dir.items()}
+    meta, why, pkg_dir, cdylibs, build_scripts = crate_map(profiles)
 
     # Drop every native another checkout built. A stem stays if any profile path for it is this
     # tree's or of unknown origin, so a DLL is only excused when every copy loaded is shown to
@@ -799,62 +889,11 @@ def main():
             )
     stems = own_stems
 
-    # Deepest owning crate wins, so a nested crate is attributed to itself rather than its parent.
-    owner = None
-    owner_dir = ""
-    for name, d in pkg_dir.items():
-        if target == d or target.startswith(d + os.sep):
-            if len(d) > len(owner_dir):
-                owner, owner_dir = name, d
+    owner = owner_of(target, pkg_dir)
 
-    # The inert answer, asked before any branch that reasons about the live profile. On
-    # 2026-09-21 writing docs/recon/boot-timing-2026-09-21.tsv tore down the run those
-    # measurements came from under `fallback-no-workspace-dll-loaded`, a branch that had nothing
-    # to say about the path (bd er-effects-rs-kvqp).
-    #
-    # Inert means "no build reads it", which is checked, not assumed. Until 2026-10-03 docs/ was
-    # skipped wholesale while `er-game-base/build.rs` compiles `docs/recon/rva-map-*.tsv` into
-    # every product DLL and `er-invasion-warp-core` embeds `docs/invasion-warp-*.{md,toml}` with
-    # `include_str!`. The same day AGENTS.md, which no build reads, tore down a live run under
-    # `fallback-unclassified` while the Rust-edit guard's refusal text promised docs stay
-    # editable mid-run. A prose file outside every crate is now inert by the same test.
-    readers = set()
-    if owner is None and (inert_top is not None or doc_like):
-        files, dirs = build_readers(pkg_dir, build_scripts)
-        readers = readers_of(target, files, dirs)
-        if not readers:
-            if inert_top is not None:
-                if meta is None:
-                    emit("SKIP", "inert-directory",
-                         f"{inert_top}/ compiles into no DLL (crate map unavailable: {why})", profiles)
-                # If a workspace crate has moved under this directory it is no longer inert and
-                # must not be skipped wholesale.
-                crate_under = [
-                    n for n, d in pkg_dir.items()
-                    if d == os.path.join(REPO_ROOT, inert_top)
-                    or d.startswith(os.path.join(REPO_ROOT, inert_top) + os.sep)
-                ]
-                if crate_under:
-                    emit(
-                        "TEARDOWN",
-                        "fallback-inert-dir-holds-crates",
-                        f"{inert_top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
-                        profiles,
-                    )
-                emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL", profiles)
-            emit(
-                "SKIP",
-                "inert-documentation",
-                f"{os.path.relpath(target, REPO_ROOT)} is prose outside every crate and no build reads it",
-                profiles,
-            )
-        if meta is None:
-            emit(
-                "TEARDOWN",
-                "fallback-crate-map-unavailable",
-                f"build input of {','.join(sorted(readers))}; crate map unavailable: {why}",
-                profiles,
-            )
+    # The inert answer, asked before any branch that reasons about the live profile -- see
+    # `answer_if_inert` for the teardowns this ordering prevents.
+    readers = answer_if_inert(target, owner, meta, why, pkg_dir, build_scripts, profiles)
 
     if meta is None:
         emit("TEARDOWN", "fallback-crate-map-unavailable", why, profiles)
@@ -1369,6 +1408,18 @@ TOML
   # measurements came from.
   expect_verdict "$REPO_ROOT/docs/recon/boot-timing.tsv" SKIP "docs/ under a foreign-DLL profile" "$otherprof"
   expect_verdict "$REPO_ROOT/scripts/er-launch-gate.py" SKIP "scripts/ under a foreign-DLL profile" "$otherprof"
+  # A game started without me3 leaves no profile to read. Measured 2026-10-17: that put every
+  # edit under `fallback-profile-undiscoverable`, scripts/ and docs/ included, so the PreToolUse
+  # guard refused edits its own refusal text promised stay open. Whether a build reads a path
+  # does not depend on the profile, so it still answers first; only the rest fails safe.
+  local nome3="undiscoverable=game-live-without-me3"
+  expect_branch "$REPO_ROOT/scripts/er-launch-gate.py" inert-directory "scripts/ with a game live without me3" "$nome3"
+  expect_branch "$REPO_ROOT/docs/foo.md" inert-directory "docs prose with a game live without me3" "$nome3"
+  expect_branch "$REPO_ROOT/AGENTS.md" inert-documentation "AGENTS.md with a game live without me3" "$nome3"
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" fallback-profile-undiscoverable \
+    "crate source with a game live without me3" "$nome3"
+  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" fallback-profile-undiscoverable \
+    "docs/recon TSV a build.rs reads, without me3" "$nome3"
   expect_verdict "$REPO_ROOT/.beads/issues.jsonl" SKIP ".beads/ issue data"
   expect_verdict "$REPO_ROOT/.github/workflows/ci.yml" SKIP ".github/ workflow file"
   expect_verdict "$REPO_ROOT/.claude/settings.json" SKIP ".claude/ settings"

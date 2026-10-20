@@ -295,7 +295,11 @@ odd_span_blanked(index, text) := text if {
 	index % 2 == 0
 }
 
-odd_span_blanked(index, text) := blanked_anchors(text) if {
+# A backtick in a quoted span is blanked here and not in blanked_anchors, which heredoc bodies
+# share: a backtick in an unquoted heredoc body still runs, so it must stay visible to
+# substitution_free. A quoted span only reaches this point once substitution_free has proved
+# every backtick in the text sits inside single quotes.
+odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 	index % 2 == 1
 }
 
@@ -469,10 +473,48 @@ operands_blanked(text) := out if {
 
 scannable(text) := stripped if {
 	resolved := heredoc_resolved(text)
-	not contains(resolved, "$(")
-	not contains(resolved, "`")
+	substitution_free(resolved)
 	stripped := escaped_quotes_stripped(resolved)
 }
+
+# No command substitution the shell would run. A text with no backtick and no `$(` at
+# all passes as before. A text with either passes only when every one of them sits
+# inside a single-quoted span, where the shell reads it as a literal character.
+#
+# Until 2026-10-19 any backtick anywhere sent the whole text back to its raw form, so
+# a `bd comments add <id> '... `mid hooks: 3/3 ARMED` ... companions; scripts/frida/
+# npc-summons-tag-check.js ...' 2>&1 | grep -v hint` kept the `;` inside its quoted
+# body, the `scripts/*-check.js` after it took command position, and
+# no_grep_for_build_errors denied a comment as a build piped into grep. Markdown
+# backticks in quoted prose are the common case, not the exotic one.
+#
+# The test is one left-to-right tokenisation in a single regex, not a quote-parity
+# split, because parity is fooled by an apostrophe inside double quotes pairing with a
+# real quote later and would call an unquoted backtick quoted. Tokens: an ordinary
+# character, a backslash escape, a `$` not opening `(`, a whole single-quoted span, or
+# a whole double-quoted span (optionally `$"..."`) containing no backtick and no `$(`.
+# Anything else, `$'...'` included, fails to match and keeps the raw text. A heredoc
+# is excluded outright: inside an unquoted heredoc body a single quote is literal and
+# a backtick in it still runs.
+substitution_free(text) if {
+	not contains(text, "$(")
+	not contains(text, "`")
+}
+
+substitution_free(text) if {
+	not contains(text, "<<")
+	regex.match(substitution_only_in_single_quotes_pattern, text)
+}
+
+substitution_only_in_single_quotes_pattern := concat("", [
+	`^(`,
+	"[^'\"\\\\`$]",
+	`|\\(.|\n)`,
+	"|\\$([^('\"\\\\`]|$)",
+	`|'[^']*'`,
+	"|\\$?\"([^\"\\\\`$]|\\\\(.|\\n)|\\$([^(\"\\\\`]|$))*\"",
+	`)*$`,
+])
 
 scan_text(text) := out if {
 	out := operands_blanked(text)
@@ -667,6 +709,77 @@ command_slot_wrapper(word) if {
 	not contains(word, "/")
 }
 
+# A real `NAME=value` assignment prefix, whose value may be a path: `P=/tmp/x.patch bash
+# scripts/check.sh` runs the script, and was allowed until 2026-10-19 because the rule
+# above stops at the `/`. Judged by the shape of the name, which `--out=/some/path`
+# does not have.
+command_slot_wrapper(word) if assignment_word(word)
+
+# `source x` and `. x` run `x` in the current shell.
+command_slot_wrapper(word) if word in {"source", "."}
+
+# PUBLIC. A shell assignment, `NAME=value`: the name is letters, digits and underscores
+# and does not start with a digit. Token arithmetic, not a regex, for the reason in this
+# package's header.
+assignment_word(word) if {
+	contains(word, "=")
+	name := split(word, "=")[0]
+	name != ""
+	count([c |
+		some c in split(name, "")
+		not identifier_char(c)
+	]) == 0
+	not digit_char(substring(name, 0, 1))
+}
+
+identifier_char(c) if digit_char(c)
+
+identifier_char("_")
+
+# A fixed letter set rather than a case comparison: `upper` has no probe in
+# scripts/check-cupcake-wasm-builtins.py, and an unprobed builtin can return undefined
+# under the engine's wasm runtime and silence the rule.
+identifier_char(c) if contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", c)
+
+# The quote an assignment opens and leaves open in its own word: `X="--a` opens `"`,
+# whose value runs on into the next words until one ends with that quote. Word
+# splitting here is on spaces, so `X="--exclude=scripts/check.sh --exclude=x"` reaches
+# the slot test as several words, and before 2026-10-19 the first of them was judged as
+# the program of its statement.
+open_assignment_quote(word) := q if {
+	assignment_word(word)
+	value := substring(word, indexof(word, "=") + 1, -1)
+	some q in {"\"", "'"}
+	startswith(value, q)
+	count(split(value, q)) == 2
+}
+
+# PUBLIC. The word at `i` is part of the quoted value of an assignment earlier in the
+# same command, so it is data, never a program.
+assignment_value_word(words, i) if {
+	start := command_slot_start(words, i)
+	some j, opener in words
+	j >= start
+	j < i
+	q := open_assignment_quote(opener)
+	count([k |
+		some k, w in words
+		k > j
+		k < i
+		endswith(w, q)
+	]) == 0
+}
+
+# PUBLIC. A word that cannot be the program of its command whatever stands before it:
+# an option (`--exclude=scripts/check.sh`), an assignment (`X=scripts/check.sh`), or a
+# word inside an assignment's quoted value. `git apply --exclude=scripts/check.sh` was
+# refused as a run of the suite on 2026-10-19 through the last of these.
+operand_shaped(words, i) if startswith(trim_left(words[i], "\"'"), "-")
+
+operand_shaped(words, i) if assignment_word(trim_left(words[i], "\"'"))
+
+operand_shaped(words, i) if assignment_value_word(words, i)
+
 # The index just past the nearest separator before `index`, or 0 when there is
 # none: where the command containing `index` begins.
 command_slot_start(words, index) := start if {
@@ -686,6 +799,10 @@ command_slot_start(words, index) := start if {
 command_slot_wrapper_at(words, i) if {
 	command_slot_wrapper(words[i])
 }
+
+# The rest of a quoted assignment value stands aside with the assignment it belongs to:
+# `X="a b" bash scripts/check.sh` still runs the script.
+command_slot_wrapper_at(words, i) if assignment_value_word(words, i)
 
 command_slot_wrapper_at(words, i) if {
 	words[i] == "run"

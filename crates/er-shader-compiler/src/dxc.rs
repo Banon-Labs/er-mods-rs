@@ -36,7 +36,7 @@
 //! Measured under Proton's `wine` with the pinned 1.9.2609 build before this existed (design
 //! section 2, "The Windows compiler"): both are created with `S_OK`.
 
-use core::ffi::{CStr, c_char, c_void};
+use core::ffi::{c_char, c_void};
 use core::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -478,12 +478,16 @@ unsafe fn take_dxc_string(raw: *mut c_char) -> Option<String> {
     if raw.is_null() {
         return None;
     }
-    // SAFETY: the caller vouches for a NUL-terminated string.
-    let text = escape_utf8(unsafe { CStr::from_ptr(raw) }.to_bytes());
+    // SAFETY: a fault-safe read of the string the caller vouches for.
+    let bytes = unsafe { er_game_base::mem::safe_read_cstr(raw as usize, DXC_STRING_BYTES) };
     // SAFETY: allocated with `CoTaskMemAlloc` and owned by us.
     unsafe { CoTaskMemFree(Some(raw.cast_const().cast::<c_void>())) };
-    Some(text)
+    Some(escape_utf8(&bytes?))
 }
+
+/// The longest version string read back from DXC, terminator included. A commit hash or a custom
+/// version string is tens of bytes; one with no terminator this far in is refused.
+const DXC_STRING_BYTES: usize = 4096;
 
 /// One output of a result, or `None` when the result does not have it.
 fn output<T: Interface>(

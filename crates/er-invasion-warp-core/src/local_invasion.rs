@@ -154,6 +154,12 @@ pub struct LocalInvasionConfig {
     /// stay silent, because Seamless retries roughly every 20 seconds and the same wrong place
     /// recurs constantly.
     pub reject_notice: bool,
+    /// Start a new search by itself after this DLL cancels or loses one.
+    ///
+    /// On by default. The restart is a call into Seamless Co-op's own invade action, the function
+    /// its Lynchpin item runs, so it is a switch rather than a fixed behaviour: with it off the DLL
+    /// still refuses and cancels matches, and the player starts the next search with the item.
+    pub auto_reinvade: bool,
     /// Install the three Steam-matchmaking detours.
     ///
     /// On by default -- location publishing, hunt mode and the pool filter all need them. It is
@@ -275,6 +281,8 @@ impl Default for LocalInvasionConfig {
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.
             reject_notice: false,
+            // ON: a rejected match restarts the search, which is what the filter is for.
+            auto_reinvade: true,
             // ON: location publishing and hunt mode both need these detours.
             steam_hooks: true,
             // Off by default, on measured evidence rather than caution. These two detours are the

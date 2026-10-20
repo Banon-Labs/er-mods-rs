@@ -1487,8 +1487,15 @@ pub(crate) fn players_in_world() -> Vec<netdamage::Seen> {
 /// `None` means the build is unmeasured or the read faulted, which the ledger reports as such
 /// rather than as an absence of packets.
 pub(crate) fn last_received_damage_packet() -> Option<netdamage::ReceivedPacket> {
-    let rva = layout::packet15_receive_rva(game_file_version())?;
-    let base = er_game_base::mem::game_module_base().ok()? + rva as usize;
+    // 1.16.2 and 1.17.0 have their own measured rvas; anything else is the 1.17.1 rva carried to
+    // the running build, which refuses on a build the carry does not reach.
+    let base = match layout::packet15_receive_rva(game_file_version()) {
+        Some(rva) => er_game_base::mem::game_module_base().ok()? + rva as usize,
+        None => er_game_base::mem::game_rva_measured_on(
+            packet15_receive::BUFFER_RVA_1171 as usize,
+            er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+        )?,
+    };
     // Handles are two `u32`s side by side; read them as one `usize` so a partial read is a miss
     // rather than half a handle. `safe_read_usize` is `ReadProcessMemory`, so an address that has
     // somehow gone bad answers `None` instead of raising.

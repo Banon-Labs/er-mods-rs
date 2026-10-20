@@ -114,7 +114,7 @@ pub const MESSAGE_GAP: f32 = 4.0;
 /// How far a note is set in under the message it explains.
 pub const NOTE_INDENT: f32 = 18.0;
 /// The wave under an error's name, below the baseline: CSS's `text-underline-offset`.
-pub const WAVE_OFFSET: f32 = 3.0;
+pub const WAVE_DROP: f32 = 3.0;
 /// How far above a message line's bottom a link's underline sits.
 pub const LINK_UNDERLINE: f32 = 2.0;
 /// Dear ImGui's cursor blink: a period, and the part of it the cursor shows.
@@ -610,7 +610,7 @@ mod process {
     use super::{
         ACTION_GAP, DIAGNOSTIC_LINES, GUTTER_PAD_RIGHT, LINK_UNDERLINE, MESSAGE_GAP,
         MIN_EDITOR_LINES, NOTE_INDENT, PATH_GAP, POLL_PERIOD, SAVE_DELAY, STATUS_GAP, Syntax,
-        WAVE_OFFSET, action_state, after_location, blink_on, elide_front, first_error, follow,
+        WAVE_DROP, action_state, after_location, blink_on, elide_front, first_error, follow,
         game_relative, highlight, jump_target, line_ranges, location, popup_origin, popup_shows,
         to_editor, to_file, visible_rows, wrap,
     };
@@ -1653,7 +1653,7 @@ mod process {
                     self.text.get(line.start..span.end),
                 )
             {
-                let y = page.row_top(row, m) + m.lead + m.baseline + theme::px(WAVE_OFFSET);
+                let y = page.row_top(row, m) + m.lead + m.baseline + theme::px(WAVE_DROP);
                 paint.with_clip([min[0], min[1]], [right, max[1]], || {
                     paint.wave(
                         left + m.width(before),

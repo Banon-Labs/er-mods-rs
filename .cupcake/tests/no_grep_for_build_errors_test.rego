@@ -342,3 +342,36 @@ test_cargo_alias_subcommand_is_denied if {
 test_listing_then_real_build_grep_is_denied if {
 	denied("pgrep -af cargo | grep -v pgrep; cargo build -p er-quickload 2>&1 | grep error")
 }
+
+# --- quoted prose with markdown backticks (2026-10-19) -----------------------------------------
+
+# The refused command, verbatim. Its single-quoted body carries markdown backticks and a `;`
+# followed by `scripts/frida/npc-summons-tag-check.js`. A backtick anywhere used to keep the whole
+# text raw, so that quoted `;` made the `-check.js` path a command and the grep after `bd` read as
+# grepping a build. Nothing here builds: the grep filters bd's git-hint stderr.
+bd_comment_with_backticks := concat("", [
+	"$HOME/.local/bin/bd comments add er-effects-rs-7xbs.3 'Runtime proof 2026-10-19, run br-20261019-230233-2a60 (1.17.1, uncommitted worktree feat/npc-summons-tag-mid-hooks): ",
+	"`mid hooks: 3/3 ARMED` + `tags: voice-chat lookup detoured`. Mimic Tear +10 summoned 4 companions; scripts/frida/npc-summons-tag-check.js (read-only) verdict companions=4 inFriendlyList=4 friendlyColour=4 inEnemyList=0 ok=True. ",
+	"Added a companion-hit detector (friendly-row HP drop): 11 hits observed, inEnemyList 0 on every one. Game kept running.' 2>&1 | grep -v -E 'hint|ignored|issues.jsonl' | tail -1",
+])
+
+test_bd_comment_with_backticked_prose_is_allowed if {
+	not denied(bd_comment_with_backticks)
+}
+
+test_backticked_build_in_quoted_prose_is_allowed if {
+	not denied("bd remember --key k 'ran `cargo check | grep error` once; scripts/check.sh is the gate' 2>&1 | grep -v hint")
+}
+
+# A backtick the shell would run still keeps the text raw and still denies.
+test_unquoted_backtick_build_is_still_denied if {
+	denied("echo `cargo build 2>&1 | grep error`")
+}
+
+test_backtick_in_double_quotes_is_still_denied if {
+	denied("echo \"`cargo build 2>&1 | grep error`\"")
+}
+
+test_real_build_after_backticked_quoted_prose_is_still_denied if {
+	denied("echo 'see `x`'; cargo build 2>&1 | grep error")
+}

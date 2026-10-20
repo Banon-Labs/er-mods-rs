@@ -349,7 +349,8 @@ pub struct Settings {
     pub panel_width: f32,
     pub code_width: f32,
     /// Cel on: the knobs below, and the stock cel layers' `enabled` in the project, which the
-    /// Look tab's checkbox sets with it.
+    /// Look tab's checkbox sets with it. Off until the player ticks the box: the mod loads
+    /// showing the game's own picture.
     pub enabled: bool,
     /// The preset the look was last taken from. Informational: the look may have been edited
     /// since, and is saved in full under `[look]` either way.
@@ -383,7 +384,7 @@ impl Default for Settings {
             dock: Dock::Right,
             panel_width: DEFAULT_PANEL_WIDTH,
             code_width: DEFAULT_CODE_WIDTH,
-            enabled: true,
+            enabled: false,
             preset: DEFAULT_PRESET.to_owned(),
             look: preset.as_ref().map_or_else(Look::vanilla, |p| p.look),
             presets: Vec::new(),
@@ -876,7 +877,7 @@ mod tests {
         let text = "enabled = maybe\n[look]\noutline_ink = lots\nsaturation = 1.5\nnonsense\n";
         let (read, warnings) = parse(text);
         assert_eq!(warnings.len(), 3, "{warnings:?}");
-        assert!(read.enabled);
+        assert!(!read.enabled);
         assert_eq!(read.moved.0[layer_knob::SATURATION], 1.5);
         assert_eq!(
             read.look.0[knob::OUTLINE_INK],

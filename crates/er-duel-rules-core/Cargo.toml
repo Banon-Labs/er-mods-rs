@@ -1,0 +1,13 @@
+# The duel ruleset as checks over what the game shows of every player in a session, kept apart
+# from the DLL so every decision -- which grip a ban needs, the equip-load ratio, when a popup
+# fires and when it may fire again -- is proven by `cargo test` on Linux instead of by a launch.
+[package]
+name = "er-duel-rules-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

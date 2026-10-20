@@ -3,8 +3,11 @@
 //! what lets them stand in for the part the game asks for. Moved from
 //! `scripts/route_a_mushroom_hide_flver_faces.rs`.
 
-use super::{Flver, index_range};
-use crate::error::Result;
+use super::{Flver, index_range, parse_u32_list};
+use crate::{
+    bytes::slice,
+    error::{Error, Result},
+};
 
 /// How many face sets were emptied, and how many indices that zeroed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,4 +29,45 @@ pub fn hide_all_face_sets(bytes: &mut [u8]) -> Result<HideReport> {
         report.indices += face_set.index_count;
     }
     Ok(report)
+}
+
+/// Where a face set header keeps its index count.
+const FACE_SET_INDEX_COUNT: usize = 0x08;
+
+/// Give every face set of `meshes` no indices at all, so a reader finds no triangles in them and
+/// drops them, returning how many face sets that emptied. Unlike [`hide_all_face_sets`] this is
+/// for a source model the builder reads, not a file the game draws: the indices stay where they
+/// are, but nothing counts them.
+pub fn hide_meshes(bytes: &mut [u8], meshes: &[usize]) -> Result<usize> {
+    let flver = Flver::parse(bytes)?;
+    let mut emptied = 0;
+    for &index in meshes {
+        let mesh = flver
+            .meshes
+            .get(index)
+            .ok_or_else(|| Error::new(format!("the model has no mesh {index}")))?;
+        for face_set in parse_u32_list(bytes, mesh.face_set_offset, mesh.face_set_count)? {
+            let at = flver.face_set_table_offset(face_set as usize) + FACE_SET_INDEX_COUNT;
+            slice(bytes, at, 4)?;
+            bytes[at..at + 4].fill(0);
+            emptied += 1;
+        }
+    }
+    Ok(emptied)
+}
+
+/// Zero every vertex of a FLVER whose faces are already hidden, returning how many bytes that
+/// cleared. Nothing reads them to draw once every index is 0, and zeroes are what Kraken
+/// compresses to nearly nothing: the vertices are most of a hair part's size, and the hidden
+/// face and hair parts are most of the package.
+pub fn blank_vertex_buffers(bytes: &mut [u8]) -> Result<usize> {
+    let flver = Flver::parse(bytes)?;
+    let mut cleared = 0;
+    for buffer in &flver.vertex_buffers {
+        let start = flver.header.data_offset + buffer.buffer_offset;
+        slice(bytes, start, buffer.buffer_length)?;
+        bytes[start..start + buffer.buffer_length].fill(0);
+        cleared += buffer.buffer_length;
+    }
+    Ok(cleared)
 }

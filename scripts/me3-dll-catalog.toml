@@ -235,6 +235,22 @@ category = "quality-of-life"
 audience = "player"
 default = false
 
+[er-duel-rules]
+label = "Duel ruleset referee"
+blurb = "A popup names the player and the rule whenever anyone in the session breaks the competitive duel ruleset: gear, tears, buffs, heals, skills, spells. Reads only; changes nothing."
+category = "multiplayer"
+audience = "player"
+default = false
+
+[er-positional-voice]
+label = "Positional voice chat"
+blurb = "Every player's voice comes out of their character, fading with distance and echoing in caves, over Steam voice. Everyone in the session needs it."
+category = "multiplayer"
+audience = "player"
+default = false
+needs_seamless = true
+config = "er-positional-voice.toml"
+
 [er-npc-summons]
 label = "NPC duels and custom Mimic Tear"
 blurb = "The Duelist's Furled Finger lets you pick an NPC and place a red sign that summons them to fight you, offline too. The Mimic Tear Ashes summon up to four companions you configure instead of the mimic."

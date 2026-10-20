@@ -65,6 +65,12 @@ EXEMPT: dict[str, str] = {
         "first write of the process and `open_fresh_run_append` is the appending opener every "
         "other crate routes through"
     ),
+    "crates/er-duel-rules/src/breaks.rs": (
+        "er-duel-rules-breaks.txt is the duel referee's record of every rule break, which a player "
+        "reads back after a session (user directive 2026-10-16: they all get sent to a text file); "
+        "it is kept across runs on purpose and each line carries its own date. The run log beside "
+        "it, er-duel-rules.log, goes through `open_fresh_run_append` like every other"
+    ),
 }
 
 
@@ -175,6 +181,13 @@ def selftest() -> int:
         root = Path(tmp)
         (root / "crates" / "er-game-base" / "src").mkdir(parents=True, exist_ok=True)
         (root / "crates" / "er-game-base" / "src" / "log.rs").write_text(helper_source)
+        # Every other exempt file holds the one appender it is exempt for, so the synthetic tree
+        # has no stale exemption of its own and each case sees only what it adds.
+        for name in EXEMPT:
+            if name != "crates/er-game-base/src/log.rs":
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("fn keep(p: &Path) { OpenOptions::new().append(true).open(p); }\n")
         for name, body in sources.items():
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)

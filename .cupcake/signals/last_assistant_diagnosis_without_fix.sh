@@ -785,7 +785,13 @@ DEFERRAL_PATTERNS = {
                        r"(?:check|read|do|run|try|look|measure|inspect|take)\b",
     # "the next step halves it to five" -- a plan in the present tense, with no copula for the
     # described-next-step signal to anchor on.
-    "the_next_step": r"\bthe\s+next\s+(?:step|pass|round|bisect|halving|narrowing)\b",
+    #
+    # The phrase has to head a clause, so a word must follow it. Measured 2026-10-19: a table row
+    # reporting a finished change -- "now counts as handing you the next step | same file" -- fired
+    # here, because the bare phrase matched as the object of "handing". Nothing follows it there but
+    # a cell bar. "the next step is yours" hands the step over and is left out the same way.
+    "the_next_step": r"\bthe\s+next\s+(?:step|pass|round|bisect|halving|narrowing)\b"
+                     r"(?=\s+(?!is\s+(?:yours|on\s+you|the\s+user)\b)[a-z])",
     # "I will back out once this test says which side the bug is on." The noun list deliberately
     # excludes run, build and launch: those are what `FUTURE_EVIDENCE_RE` calls evidence that does
     # not exist yet, and a pattern whose own exemption contradicts it is worse than no pattern.

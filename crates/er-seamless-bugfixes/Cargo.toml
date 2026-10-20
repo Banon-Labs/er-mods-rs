@@ -16,6 +16,10 @@ crate-type = ["cdylib"]
 # already knows how to take. See `src/guards/mod.rs` for the rules a new guard must satisfy.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# Mid-function hooks: a jump at any instruction boundary whose routine reads and writes the
+# registers and returns where execution resumes. MinHook only patches function entries. See
+# `src/mid_hooks/mod.rs`. Not windows-only: it builds on the host, so the routines' unit tests run.
+ilhook = "2.3"
 
 # Assembles the guarded functions' expected prologues from NAMED instructions in `build.rs`,
 # so a hand-typed byte can never disarm a guard. See `build-support/prologue_build.rs`.

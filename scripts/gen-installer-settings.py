@@ -88,6 +88,9 @@ SOURCES: dict[str, dict] = {
         "literal": ("crates/er-quickload/src/config.rs", "boilerplate_config"),
         "substitute": {"picker_block": PICKER_BLOCK},
     },
+    "er-positional-voice.toml": {
+        "literal": ("crates/er-positional-voice-core/src/config.rs", "DEFAULT_TEXT"),
+    },
     "er-quit-menu.toml": {"computed": True},
     "er-invasion-warp.toml": {"computed": True},
 }

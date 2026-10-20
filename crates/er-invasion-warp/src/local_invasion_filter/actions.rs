@@ -572,6 +572,37 @@ fn invade_action_callable(abi: &ersc::Abi) -> bool {
     false
 }
 
+/// Queue the restart of a search this DLL cancelled or lost, unless `auto_reinvade` is off.
+///
+/// Every automatic restart goes through here and none through `arm_invade_request`, which is the
+/// player's own search. With the key off the loop is disarmed instead, so the next search is the
+/// player's to start and `drive_pending_reinvade` never calls Seamless's invade action for one.
+/// Returns whether a restart was queued.
+pub(super) fn rearm_reinvade(arm_search: bool) -> bool {
+    let enabled = super::current_config_snapshot()
+        .map(|config| config.auto_reinvade)
+        .unwrap_or(true);
+    if !enabled {
+        AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
+        PENDING_REINVADE.store(false, Ordering::SeqCst);
+        if !REINVADE_OFF_SAID.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "local-invasion: auto_reinvade = false -- the search is not restarted, so Seamless's \
+                 invade action is not called; the player starts the next search with the item."
+            ));
+        }
+        return false;
+    }
+    if arm_search {
+        AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    }
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    true
+}
+
+/// Said-once latch for [`rearm_reinvade`] declining.
+static REINVADE_OFF_SAID: AtomicBool = AtomicBool::new(false);
+
 /// Fire the queued re-invade once the session is genuinely idle.
 ///
 /// Disarms before calling, so a session that fails to leave idle costs one extra invade at most
@@ -860,10 +891,12 @@ pub(super) fn arm_self_recovery(session: SeamlessSession) {
     // still happens -- `PENDING_REINVADE` is set either way -- but nothing is counted, the ladder
     // does not move, and the player is not told a place was tried when none was.
     if !ATTEMPT_DRIVEN.swap(false, Ordering::SeqCst) {
-        PENDING_REINVADE.store(true, Ordering::SeqCst);
+        rearm_reinvade(false);
         return;
     }
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    if !rearm_reinvade(false) {
+        return;
+    }
     // The attempt at this place found nobody, so the next one asks somewhere else -- and says so.
     // This is the only thing that moves the ladder now. It used to move inside the Steam
     // query detour, which does not fire while Seamless is searching, so the ring stood still and
@@ -995,7 +1028,7 @@ pub(super) fn cancel_stalled_attempt_inner(
     drop(_call);
     note_state_after_our_action(session, what);
     if AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
-        PENDING_REINVADE.store(true, Ordering::SeqCst);
+        rearm_reinvade(false);
     }
     let count = STALL_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
     crate::standalone_log(format_args!(
@@ -1390,8 +1423,13 @@ pub(super) fn cancel_match(reason: RejectReason) -> bool {
         ));
         return true;
     }
-    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    if !rearm_reinvade(true) {
+        crate::standalone_log(format_args!(
+            "local-invasion: cancelled rejected match (#{fired}) -- session returns to idle and \
+             stays there, because auto_reinvade is off."
+        ));
+        return true;
+    }
     crate::standalone_log(format_args!(
         "local-invasion: cancelled rejected match (#{fired}) -- session returns to idle and the \
          search restarts automatically. Press Cancel search yourself, or open Seamless's own menu, \

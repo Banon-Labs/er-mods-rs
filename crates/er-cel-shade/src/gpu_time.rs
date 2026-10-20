@@ -734,12 +734,17 @@ mod process {
         if !running() {
             return None;
         }
+        // `slot_of` is the present modulo `SLOTS`, so the index is always inside the ring.
         let slot = slot_of(present);
-        let state = SLOT_STATE.get(slot)?;
-        let mut current = state.load(Ordering::Acquire);
+        let mut current = SLOT_STATE[slot].load(Ordering::Acquire);
         let number = loop {
             let (next, number) = claim(current, present)?;
-            match state.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
+            match SLOT_STATE[slot].compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
                 Ok(_) => break number,
                 Err(seen) => current = seen,
             }
@@ -755,8 +760,9 @@ mod process {
 
     /// A span was begun at query `query` with tag `tag`.
     pub fn note_begin(query: u32, tag: u8) {
-        if let Some(slot) = TAGS.get(query as usize / 2) {
-            slot.store(tag, Ordering::Release);
+        let span = query as usize / 2;
+        if span < SPANS {
+            TAGS[span].store(tag, Ordering::Release);
         }
         SPANS_BEGUN.fetch_add(1, Ordering::Relaxed);
     }

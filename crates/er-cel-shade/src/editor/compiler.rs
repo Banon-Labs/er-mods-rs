@@ -957,6 +957,9 @@ mod process {
     /// `CreateProcessW` suspended with no window, into the job, then resumed, told to load the
     /// compiler at `dxcompiler`. The game's error mode is inherited, which is never louder than
     /// the default, until the helper's `main` sets its own.
+    ///
+    /// Thread suspension: none of the game's. `ResumeThread` here only starts the main thread of
+    /// the helper process this function just created with `CREATE_SUSPENDED`, in another process.
     fn spawn(exe: &Path, dxcompiler: &Path) -> Result<Spawned, String> {
         let (child_stdin, our_stdin) = pipe(true)?;
         let (our_stdout, child_stdout) = pipe(false)?;
