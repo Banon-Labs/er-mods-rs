@@ -54,6 +54,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.no_
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexplained_running_tasks.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_untailed_long_run.halt
 
 # Deny decisions.
 all_denials contains decision if some decision in data.cupcake.policies.bash_elden_ring_launch_guard.deny

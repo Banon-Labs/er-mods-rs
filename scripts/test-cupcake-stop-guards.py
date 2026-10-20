@@ -580,6 +580,19 @@ CASES = [
         "it is still needed -- must NOT halt",
     ),
     Case(
+        "untailed_long_run.jsonl",
+        "opened no kitty tab tailing its real output",
+        "the 2026-10-19 shape: `gen-r3-weapon-boards.py --jobs 3` backgrounded for half an hour "
+        "and no kitty-tail-task.py call after it, although AGENTS.md and the tail-build-task skill "
+        "both said to open one",
+    ),
+    Case(
+        "untailed_long_run_tailed.jsonl",
+        None,
+        "the same regeneration followed by `kitty-tail-task.py --boards`, which tails the shard "
+        "logs where its progress goes -- must NOT halt",
+    ),
+    Case(
         "inline_user_command.jsonl",
         "hands the user a command as an inline shell block",
         "the 2026-10-13 shape: a commit, then the push the agent may not run handed over as a "
