@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,985 |
+| all `experiments/**` | 76 | 41,996 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -287,7 +287,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,063 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 79 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
-| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 966 | Scaleform resource and profile-table families | D2 and R24 |
+| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 971 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,228 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,213 | Scaleform resource, title, and product families | R22 and R24 |
@@ -302,7 +302,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,329 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/save_picker/save_picker_menu.rs` | 81 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/loading_cover/title_visual_hooks.rs` | 635 | split out of `profile_rows_system_quit_menu.rs`: the title's logo/PAB/native-menu hides and the `ErCharStats` row-populate. Owner is the loading-cover family, not the rows | R19 |
-| `startup_hooks/loading_cover/profile_render_drive.rs` | 860 | split out of `save_swap_profile_table.rs`: `force_profile_render_tick` and the three hooks that keep the offscreen target alive. Owner is the portrait family | R19 |
+| `startup_hooks/loading_cover/profile_render_drive.rs` | 866 | split out of `save_swap_profile_table.rs`: `force_profile_render_tick` and the three hooks that keep the offscreen target alive. Owner is the portrait family | R19 |
 | `startup_hooks/diagnostics/scaleform_handler_hooks.rs` | 81 | split out of `system_quit_dialog_handlers.rs`: the handler ctor/dtor live-set, installed by `system_quit_ownership_repro.rs` beside it | R19 |
 | `startup_hooks/save_picker/save_picker_path_editor.rs` | 10 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 566 | product profile renderer and quit swap families | R18-R19 |
