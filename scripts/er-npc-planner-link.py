@@ -72,7 +72,8 @@ PLANNER_VERSION = "3.12.2"
 CLASS_ROWS = range(3000, 3010)
 #: Rune level of a character whose eight attributes sum to `ATTRIBUTE_BASE + level`.
 ATTRIBUTE_BASE = 79
-#: The planner's attribute keys, in `er-npc-chara-init.ATTRIBUTES` order.
+#: The planner's attribute keys, in `er-npc-chara-init.ATTRIBUTES` order. Its wire format spells
+#: Endurance `vit`, so the planner document this script writes keeps that key.
 STAT_KEYS = ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc")
 #: EquipParamWeapon ids carry the affinity in the hundreds: 33930800 is 33930000 Magic.
 AFFINITIES = ("Standard", "Heavy", "Keen", "Quality", "Fire", "Flame Art", "Lightning", "Sacred",

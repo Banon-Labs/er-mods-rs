@@ -4,9 +4,9 @@ installed regulation lets a player use in a multiplayer session, by the repo's o
 and recast rules.
 
     python3 scripts/er-mechanics-pouch.py "Poleblade of the Bud" --affinity Standard \\
-        --stats vig=58,mnd=8,vit=38,str=20,dex=22,int=7,fth=8,arc=68
+        --stats vig=58,mnd=8,end=38,str=20,dex=22,int=7,fth=8,arc=68
     python3 scripts/er-mechanics-pouch.py Greatsword --affinity Heavy \\
-        --stats vig=58,mnd=15,vit=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
+        --stats vig=58,mnd=15,end=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
     python3 scripts/er-mechanics-pouch.py ... --base ~/.cache/er-build-planner/weapon-builds/<dir>/base.json
     python3 scripts/er-mechanics-pouch.py --selftest
 
@@ -752,7 +752,7 @@ class Pouch:
                 fams[fam] = got
         slots = [(1.0 / len(fams) / len(got), {el: a[MV_KEY[el]] for el in ELEMENTS}, a['phys_type'],
                   self.by_point.get(a['atk_row'], 100) / 100.0) for got in fams.values() for a in got]
-        me = DEF.defender(self.def_t, {('end' if k == 'vit' else k): v for k, v in stats.items()}, list(armor),
+        me = DEF.defender(self.def_t, {STAT_ALIAS.get(k, k): v for k, v in stats.items()}, list(armor),
                           list(talismans), great_rune, pvp=True)
         mix = AT.damage_mix(self.pvp_builds, me['defense'], t, self.reg)
         absorb = {}
@@ -1228,14 +1228,14 @@ def roles_of(tags):
 def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw):
     """Tools, spells, grease and flask split for one build (module docstring).
 
-    `stats` are planner keys (`vit` is Endurance). Keywords: `rl` (default from the stats),
+    `stats` are attribute keys (`vig`, `end`, ...). Keywords: `rl` (default from the stats),
     `window` 10, `talismans`, `great_rune`, `armor` (four piece names; else the window's median
     absorption), `base` (a planner build: its tears and great rune are fixed in every kit, its flask
     positions and total are kept), `fixed` (resolve keys held in every kit, instead of the base's),
     `skill` (SwordArtsParam id; default the weapon's own), `tool_slots`, `memory_slots`,
     `flask_total`, `physick` (keep the physick flask; default when the base carries a tear),
     `win`, `regulation`, `pouch` (a `Pouch` to reuse)."""
-    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
+    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
     p = kw.get('pouch') or model(rl, kw.get('window', 10), kw.get('regulation'), kw.get('fight', B.DEFAULT_FIGHT))
     base = kw.get('base')
     fixed = kw.get('fixed')
@@ -1382,11 +1382,15 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
 
 
 # -- CLI -----------------------------------------------------------------------------------------
+#: `vit` is the planner's spelling of Endurance, still taken for `end`.
+STAT_ALIAS = {'vit': 'end'}
+
+
 def parse_stats(s):
     out = {}
     for part in s.split(','):
         k, v = part.split('=')
-        out[k.strip().lower()] = int(v)
+        out[STAT_ALIAS.get(k.strip().lower(), k.strip().lower())] = int(v)
     return out
 
 
@@ -1582,7 +1586,7 @@ def _real(p, check):
            any(c['name'] in ('Rock Heart', 'Priestess Heart') for c in p.cands.values())), (True, False))
     check('Boiled Crab is a candidate', 'consumable:Boiled Crab' in p.cands, True)
     check('a grease needs isEnhance', p.cands['consumable:Drawstring Royal Magic Grease']['needs_enhance'], True)
-    st = {'vig': 58, 'mnd': 8, 'vit': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
+    st = {'vig': 58, 'mnd': 8, 'end': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
     ctx = p.context('Poleblade of the Bud', 'Standard', 10, st)
     p.m.fp_bar = ctx['fp_bar']
     check('Poleblade of the Bud takes no grease (isEnhance 0)', ctx['enhance'], False)
@@ -1660,7 +1664,7 @@ def _real(p, check):
           {'invader': 0.5, 'host': 0.5})
     check('roles from tags: host when none names one', roles_of(['Dexterity']), {'host': 1.0})
     # Greasable: Heavy Greatsword at a STR spread; a Fire one takes none.
-    gs = {'vig': 58, 'mnd': 10, 'vit': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
+    gs = {'vig': 58, 'mnd': 10, 'end': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
     cg = p.context('Greatsword', 'Heavy', 25, gs)
     check('Heavy Greatsword is buffable', cg['enhance'], True)
     cf = p.context('Greatsword', 'Fire', 25, gs)
@@ -1688,7 +1692,7 @@ def main():
     ap.add_argument('weapon', nargs='?')
     ap.add_argument('--affinity', default='Standard')
     ap.add_argument('--level', type=int, help='weapon level (default its max)')
-    ap.add_argument('--stats', help='planner keys: vig,mnd,vit,str,dex,int,fth,arc')
+    ap.add_argument('--stats', help='vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)')
     ap.add_argument('--plan-weapons', default='', help='comma list of the other weapons the build holds')
     ap.add_argument('--two-handed', action='store_true')
     ap.add_argument('--talismans', default='')

@@ -224,6 +224,20 @@ pub const STARTING_STATS: &[(u8, [u8; 8])] = &[
 /// not its Vigor. Getting that pairing wrong is the other half of the same failure.
 pub const ATTRIBUTE_KEYS: [&str; 8] = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"];
 
+/// The game's own short name for each attribute, index for index with [`ATTRIBUTE_KEYS`]: what a
+/// log line shows, so the planner's `vit` reads as the `END` the Status screen calls it.
+pub const ATTRIBUTE_NAMES: [&str; 8] = ["VIG", "MND", "END", "STR", "DEX", "INT", "FTH", "ARC"];
+
+/// The [`ATTRIBUTE_NAMES`] entry for a planner key, or the key itself when it is not one of the
+/// eight.
+#[must_use]
+pub fn attribute_name(key: &str) -> &str {
+    ATTRIBUTE_KEYS
+        .iter()
+        .position(|candidate| *candidate == key)
+        .map_or(key, |index| ATTRIBUTE_NAMES[index])
+}
+
 /// The base attributes an archetype starts with -- the game's per-attribute floor for that class.
 ///
 /// Indexed by [`ATTRIBUTE_KEYS`]. `None` means the same thing it means in
@@ -402,6 +416,8 @@ mod tests {
         assert_eq!(at("vig"), 15);
         assert_eq!(at("mnd"), 10);
         assert_eq!(at("vit"), 11, "the planner spells Endurance `vit`");
+        assert_eq!(attribute_name("vit"), "END", "logged as the game names it");
+        assert_eq!(attribute_name("rl"), "rl");
         assert_eq!(at("str"), 14);
         assert_eq!(at("dex"), 13);
         assert_eq!(at("int"), 9);

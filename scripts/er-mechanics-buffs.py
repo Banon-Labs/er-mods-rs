@@ -76,7 +76,7 @@ PVE_DEF = {e: f'defEnemyDmgCorrectRate_{_PVP_EL[e]}' for e in ELEMENTS}
 CUT = {'magic': 'magicDamageCutRate', 'fire': 'fireDamageCutRate',
        'lightning': 'thunderDamageCutRate', 'holy': 'darkDamageCutRate'}
 CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
-STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
+STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
 # Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo

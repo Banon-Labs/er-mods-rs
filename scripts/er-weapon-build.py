@@ -376,8 +376,8 @@ def slug(name: str) -> str:
 
 
 def stats_text(stats: dict, rl: int) -> str:
-    """The pipeline's `--stats`: planner keys, `vit` being Endurance, and the RL they sum to."""
-    return ",".join(f"{k}={stats[k]}" for k in ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc")) + f",rl={rl}"
+    """The pipeline's `--stats`: the eight attributes and the RL they sum to."""
+    return ",".join(f"{k}={stats[k]}" for k in ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc")) + f",rl={rl}"
 
 
 def fill_talismans(ranked: list[str], fallback: list[str], group_of, slots: int = TALISMAN_SLOTS) -> list[str]:
@@ -603,8 +603,9 @@ def main() -> int:
     pins = {}
     for kv in filter(None, a.pin.split(",")):
         k, _, v = kv.partition("=")
-        if k not in ("vig", "mnd", "vit", *REQUIREMENT_FIELDS) or not v.isdigit():
-            ap.error(f"--pin takes vig,mnd,vit,{','.join(REQUIREMENT_FIELDS)} as key=value, not {kv!r}")
+        k = {"vit": "end"}.get(k, k)  # the planner's spelling of Endurance, still taken
+        if k not in ("vig", "mnd", "end", *REQUIREMENT_FIELDS) or not v.isdigit():
+            ap.error(f"--pin takes vig,mnd,end,{','.join(REQUIREMENT_FIELDS)} as key=value, not {kv!r}")
         pins[k] = int(v)
 
     armor_mod = _mod("er_mechanics_armor_targets", "er-mechanics-armor-targets.py")
@@ -693,7 +694,7 @@ def main() -> int:
 
     def budget_at(stats, armor, carried):
         def at(end):
-            load = model.resources(dict(stats, vit=end), talismans, (), rune_on)["max_equip_load"]
+            load = model.resources(dict(stats, end=end), talismans, (), rune_on)["max_equip_load"]
             return opt.MEDIUM_ROLL_MAX * load - carried - armor.talisman_weight
         return at
 
@@ -708,21 +709,21 @@ def main() -> int:
             armor = armor_mod.ArmorModel(spread["stats"], talismans, rune_on, a.rl, a.window)
             if floor is None:
                 floor = 0 if caster else armor.melee_floor
-            fit = first_fit(spread["stats"]["vit"], opt.STAT_CAP, budget_at(spread["stats"], armor, carried),
+            fit = first_fit(spread["stats"]["end"], opt.STAT_CAP, budget_at(spread["stats"], armor, carried),
                             lambda b: armor.pick(b, floor))
             if fit is None:
                 sys.exit(f"no armor reaches {floor} poise at medium roll with {what} at any Endurance")
             end, chosen = fit
-            if end != spread["stats"]["vit"]:
-                say(f"Endurance {spread['stats']['vit']} -> {BOLD}{end}{RESET}: the lightest {floor}-poise set "
+            if end != spread["stats"]["end"]:
+                say(f"Endurance {spread['stats']['end']} -> {BOLD}{end}{RESET}: the lightest {floor}-poise set "
                     f"needs it for medium roll", " ", YELLOW)
-                spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={**pins, "vit": end})
+                spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={**pins, "end": end})
                 if spread is None and pins:
                     # The `--pin` block plus the raised Endurance is past the RL, so the pinned
                     # stats give way and are chosen again around the Endurance the armor needs.
                     say(f"--pin {a.pin} no longer fits at RL {a.rl} with Endurance {end}; choosing the stats "
                         f"again without it", " ", YELLOW)
-                    spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={"vit": end})
+                    spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={"end": end})
                 if spread is None:
                     sys.exit(f"no class reaches RL {a.rl} with Endurance {end} and {a.weapon}'s requirements")
                 show(spread)
@@ -878,8 +879,8 @@ def selftest() -> int:
     check(len(fitted) == 7 and fitted[0] == "head" and ANSI.sub("", fitted[-1]).startswith("step 19")
           and max(len(ANSI.sub("", f)) for f in fitted) == 19,
           "fit_frame keeps the header and the last lines within the screen, each cut to one column short")
-    st = {"vig": 58, "mnd": 8, "vit": 31, "str": 15, "dex": 22, "int": 7, "fth": 8, "arc": 80}
-    check(stats_text(st, 150) == "vig=58,mnd=8,vit=31,str=15,dex=22,int=7,fth=8,arc=80,rl=150",
+    st = {"vig": 58, "mnd": 8, "end": 31, "str": 15, "dex": 22, "int": 7, "fth": 8, "arc": 80}
+    check(stats_text(st, 150) == "vig=58,mnd=8,end=31,str=15,dex=22,int=7,fth=8,arc=80,rl=150",
           "stats_text spells the planner keys in the pipeline's order and adds the RL")
     groups = {"A": 1, "A+1": 1, "B": 2, "C": None, "D": 3, "E": None}
 
