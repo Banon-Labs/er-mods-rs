@@ -3425,6 +3425,8 @@ dependencies = [
  "er-gfx",
  "er-hook",
  "er-telemetry-core",
+ "iced-x86",
+ "ilhook",
 ]
 
 [[package]]
