@@ -23,6 +23,7 @@
 0x7ad810    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
 0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
 0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
+0x9aa680    exempt:role-alias         # PROFILE_RENDERER_REFRESH_RVA, PROFILE_RENDERER_REFRESH_VA  || er-quit-menu-core: build.rs VA assembles the refresh's latch-check and next-slot windows for the profile-table mid hook; the er-loading-portrait-core RVA is the containing function the runtime resolves.
 0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
 0xb0d960    exempt:role-alias         # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
 0xd7f850    exempt:role-alias         # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SC  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
