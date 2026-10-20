@@ -129,6 +129,20 @@ class Chain:
         return self._add({"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}]}})
 
+    def refused(self, tool_use_id: str, kind: str = "permission-rule", on_chain: bool = True) -> dict:
+        """The result Claude Code writes for a call it refused before running it (measured 2026-10-20)."""
+        text = ("PreToolUse:Bash hook error: This push carries changes under crates/ that have "
+                "never run.")
+        return self._add({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": text, "is_error": True, "tool_use_id": tool_use_id}]},
+            "toolUseResult": "Error: " + text, "toolDenialKind": kind}, on_chain=on_chain)
+
+    def failed(self, tool_use_id: str) -> dict:
+        """A call that ran and exited non-zero: an error result with no denial kind."""
+        return self._add({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "Exit code 1\nerror: failed to push some refs",
+             "is_error": True, "tool_use_id": tool_use_id}]}})
+
     def notification(self, text: str) -> dict:
         return self._add({"type": "user", "origin": {"kind": "task-notification"},
                           "promptSource": "system", "message": {"role": "user", "content": text}})
@@ -309,6 +323,74 @@ def main() -> int:
         c.use("toolu_r3", PUSH)
         expect("a fresh authorization message re-arms", sb.run(c, "toolu_r3", PUSH), "AUTHORIZED")
 
+        # --- a push another policy denied never ran, so it spends nothing (2026-10-20) ----------
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_d1", PUSH)
+        expect("the first call takes the authorization", sb.run(c, "toolu_d1", PUSH), "AUTHORIZED")
+        c.refused("toolu_d1")
+        c.say("The runtime-evidence guard refused it; building and running first.")
+        c.use("toolu_d2", PUSH)
+        expect("a push denied by another policy leaves the authorization usable",
+               sb.run(c, "toolu_d2", PUSH), "AUTHORIZED")
+        records = [json.loads(l) for l in (sb.root / ".cupcake" / "state" /
+                                           "push-authorizations.jsonl").read_text().splitlines()]
+        check("the takeover is recorded with the call it replaces",
+              records[-1].get("tool_use_id") == "toolu_d2" and records[-1].get("replaces") == "toolu_d1",
+              repr(records[-1]))
+        expect("the denied call evaluated again cannot take it back",
+               sb.run(c, "toolu_d1", PUSH), "DENIED", "moved on")
+        c.result("toolu_d2", "Command running in background with ID: b1")
+        c.use("toolu_d3", PUSH)
+        expect("a second push after one that ran is refused",
+               sb.run(c, "toolu_d3", PUSH), "DENIED", "already spent")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_u1", PUSH)
+        sb.run(c, "toolu_u1", PUSH)
+        c.refused("toolu_u1", kind="user-rejected")
+        c.use("toolu_u2", PUSH)
+        expect("a push the user rejected at the prompt leaves it usable",
+               sb.run(c, "toolu_u2", PUSH), "AUTHORIZED")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_k1", PUSH)
+        sb.run(c, "toolu_k1", PUSH)
+        c.refused("toolu_k1", kind="cancelled")
+        c.use("toolu_k2", PUSH)
+        expect("an interrupted push may have run, so it keeps the authorization",
+               sb.run(c, "toolu_k2", PUSH), "DENIED", "already spent")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_e1x", PUSH)
+        sb.run(c, "toolu_e1x", PUSH)
+        c.failed("toolu_e1x")
+        c.use("toolu_e2x", PUSH)
+        expect("a push that ran and failed (pre-push hook) spent it",
+               sb.run(c, "toolu_e2x", PUSH), "DENIED", "already spent")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_p1", PUSH)
+        c.use("toolu_p2", PUSH)
+        first, second = sb.run(c, "toolu_p1", PUSH), sb.run(c, "toolu_p2", PUSH)
+        expect("of two parallel pushes the first takes it", first, "AUTHORIZED")
+        expect("the parallel second is refused while the first's outcome is unknown",
+               second, "DENIED", "not in the transcript yet")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_fd1", PUSH)
+        sb.run(c, "toolu_fd1", PUSH)
+        c.refused("toolu_fd1", on_chain=False)   # appended by someone other than Claude Code
+        c.result("toolu_fd1", "Command running in background with ID: b2")
+        c.use("toolu_fd2", PUSH)
+        expect("a refusal appended off the chain does not re-arm",
+               sb.run(c, "toolu_fd2", PUSH), "DENIED", "already spent")
+
         # --- the authorization is somewhere other than the user's typed reply -------------------
         c = Chain()
         c.human("go on")
@@ -481,6 +563,15 @@ def end_to_end(sb: Sandbox) -> None:
     authorized.result("toolu_e1", "pushed")
     rc, out = verdict(authorized, "toolu_e1b")
     check("cupcake denies a second push on the same message", "already spent" in out, f"rc={rc} {out[:400]}")
+    refused = Chain()
+    refused.human(f"authorize {sb.tip}")
+    rc, out = verdict(refused, "toolu_e5")
+    check("cupcake allows the authorized push before another policy denies it",
+          rc == 0 and "BLOCK-ANY-PUSH" not in out, f"rc={rc} {out[:400]}")
+    refused.refused("toolu_e5")
+    rc, out = verdict(refused, "toolu_e5b")
+    check("cupcake allows the retry of a push another policy denied",
+          rc == 0 and "BLOCK-ANY-PUSH" not in out and '"deny"' not in out, f"rc={rc} {out[:400]}")
     unauthorized = Chain()
     unauthorized.human("push it")
     rc, out = verdict(unauthorized, "toolu_e2")
