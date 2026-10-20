@@ -88,6 +88,22 @@ def _pool_width(requested: int) -> int:
     return max(1, min(requested, permitted))
 
 
+def _run_bounded(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run` under a 25 second cap, retried once when the cap is hit.
+
+    One cupcake evaluation takes a second or two, but these calls run from wide pools, and while
+    another check suite loads the machine one of them can wait in the run queue long enough to
+    reach the cap (measured in a pre-push on 2026-10-20: a shim call timed out at 25s while the
+    same test passed alone). One retry absorbs that without raising the cap past the 30 second
+    limit in scripts/check-no-timeouts.py. A second timeout still raises, so a real hang in the
+    engine or in a signal stays red.
+    """
+    try:
+        return subprocess.run(args, timeout=25, **kwargs)
+    except subprocess.TimeoutExpired:
+        return subprocess.run(args, timeout=25, **kwargs)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CUPCAKE_DIR = REPO_ROOT / ".cupcake"
 PROTECTED_PATHS_TEST = CUPCAKE_DIR / "tests" / "protected_paths_test.rego"
@@ -174,7 +190,7 @@ def eval_event(event: dict) -> dict:
     debug_dir = tempfile.mkdtemp(prefix="cupcake-delivered-shape-")
     env = {**os.environ, **BASE_ENV}
     try:
-        result = subprocess.run(
+        result = _run_bounded(
             [
                 "cupcake", "eval", "--harness", "claude", "--strict",
                 "--log-level", "error", "--debug-files", "--debug-dir", debug_dir,
@@ -184,7 +200,6 @@ def eval_event(event: dict) -> dict:
             text=True,
             capture_output=True,
             check=False,
-            timeout=25,
             env=env,
         )
         traces = sorted(glob.glob(os.path.join(debug_dir, "*.txt")))
@@ -242,14 +257,13 @@ def eval_through_shim(command: str, permission_mode: str = "default") -> dict:
     event = bash_event(command)
     event["permission_mode"] = permission_mode
     env = {**os.environ, **BASE_ENV}
-    result = subprocess.run(
+    result = _run_bounded(
         ["bash", str(HOOK_SHIM)],
         cwd=REPO_ROOT,
         input=json.dumps(event),
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env=env,
     )
     body = {}
@@ -946,7 +960,7 @@ EXPECTED_ENABLED_BUILTINS = {"git_pre_check", "protected_paths", "git_block_no_v
 
 
 def _enabled_builtins() -> set[str]:
-    result = subprocess.run(
+    result = _run_bounded(
         ["cupcake", "eval", "--harness", "claude", "--log-level", "info",
          "--policy-dir", str(CUPCAKE_DIR)],
         cwd=REPO_ROOT,
@@ -954,7 +968,6 @@ def _enabled_builtins() -> set[str]:
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env={**os.environ, **BASE_ENV},
     )
     match = re.search(r"Enabled builtins: \[([^\]]*)\]", result.stdout + result.stderr)
@@ -978,7 +991,7 @@ def _write_verdict(policy_dir: Path, file_path: str) -> bool:
         "tool_input": {"file_path": file_path, "content": "package probe"},
         "signals": {},
     }
-    result = subprocess.run(
+    result = _run_bounded(
         ["cupcake", "eval", "--harness", "claude", "--log-level", "error",
          "--policy-dir", str(policy_dir)],
         cwd=REPO_ROOT,
@@ -986,7 +999,6 @@ def _write_verdict(policy_dir: Path, file_path: str) -> bool:
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env={**os.environ, **BASE_ENV},
     )
     body = {}
