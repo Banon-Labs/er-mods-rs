@@ -62,6 +62,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// The 42 bytes there disassemble to the two-term predicate this module's header describes, ending
 /// in the `mov al,1` tail at `+0x23` and the bare `ret` at `+0x22`.
+///
+/// A 1.17.1 rva, so it reaches the running build through
+/// `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`. On 2.7.2.0 it carries to `0x9135b0`, the
+/// one hit of the same masked pattern in `eldenring-deobf-1.17.2.bin`, inside a `.pdata` entry of
+/// the same `0x2a` length.
 const MULTIPLAYER_ROW_ENABLED_RVA: u32 = 0x91_3100;
 
 /// Trampoline to the original predicate, or the next handler in the union chain.
@@ -129,10 +134,20 @@ pub unsafe fn install() -> bool {
         return true;
     }
 
-    // `game_rva_for_hook` rather than `base + rva`: the address above is already a 1.17 one, and
-    // the single resolve belongs to the hook API, which refuses an address this build cannot map
-    // as `HOOK REFUSED` instead of detouring whatever now occupies those bytes.
-    let Ok(entry) = er_game_base::mem::game_rva_for_hook(MULTIPLAYER_ROW_ENABLED_RVA) else {
+    // The address above is a 1.17.1 one, and the runtime-derived hook API below translates
+    // nothing, so it is carried here. Until 2.7.2.0 this was `game_rva_for_hook`, plain
+    // `base + rva`, which put 2.7.2.0's detour `0x4b0` short of the function.
+    let Some(entry) = er_game_base::mem::game_rva_measured_on(
+        MULTIPLAYER_ROW_ENABLED_RVA as usize,
+        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    ) else {
+        if REFUSAL_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "multiplayer-row: enable predicate has no carry from 1.17.1 to {} -- the row stays \
+                 greyed",
+                er_game_base::game_build::describe_build()
+            ));
+        }
         return false;
     };
     // SAFETY: a four-argument handler on the union's four-argument dispatcher, over a target that

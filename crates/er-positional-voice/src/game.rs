@@ -11,6 +11,9 @@
 use std::ffi::c_void;
 
 use eldenring::cs::{CSSessionManager, GameDataMan, WorldChrMan};
+use er_game_base::game_build::{
+    MAPPED_FILE_VERSION_1172, carry_1171_rva, describe_build, game_file_version,
+};
 use er_positional_voice_core::{
     bank, sites,
     slots::{Lookup, PlayStep, SlotState, Slots},
@@ -24,18 +27,50 @@ pub(crate) struct Game {
     base: usize,
 }
 
-/// Why the game cannot be used: a site's bytes differ from 1.17.1.
+/// Which build's bytes the sites are compared against: 2.7.2.0 when that is running, else 1.17.1.
+/// Any other build fails the check anyway, because `carry_1171_rva` refuses every offset on it.
+fn running_build() -> sites::Build {
+    if game_file_version() == Some(MAPPED_FILE_VERSION_1172) {
+        sites::Build::V1172
+    } else {
+        sites::Build::V1171
+    }
+}
+
+/// Why the game cannot be used: a site or global does not carry to the running build, or a site's
+/// bytes differ from that build's.
+///
+/// The offsets in `sites` were measured on 1.17.1 and are carried by
+/// [`carry_1171_rva`]: unchanged on 1.17.1, moved segment by segment on 2.7.2.0, refused on
+/// anything else.
 pub(crate) fn check_sites(base: usize) -> Result<(), String> {
-    let mismatch = sites::first_mismatch(|rva| {
+    if let Some((name, rva)) = sites::GLOBALS
+        .iter()
+        .find(|(_, rva)| carry_1171_rva(*rva).is_none())
+    {
+        return Err(format!(
+            "the 1.17.1 {name} global (eldenring.exe+{rva:X}) has no carry to {}",
+            describe_build()
+        ));
+    }
+    let build = running_build();
+    let mismatch = sites::first_mismatch(build, |rva| {
+        let carried = carry_1171_rva(rva)?;
         let mut out = [0u8; 8];
         // SAFETY: `read_bytes` fails closed on an unmapped address.
-        unsafe { er_game_base::mem::read_bytes(base + rva, &mut out) }.then_some(out)
+        unsafe { er_game_base::mem::read_bytes(base + carried, &mut out) }.then_some(out)
     });
     match mismatch {
         None => Ok(()),
         Some((site, got)) => Err(format!(
-            "eldenring.exe+{:X} ({}) reads {:02X?}, expected {:02X?}: this is not Elden Ring 1.17.1",
-            site.rva, site.name, got, site.bytes
+            "1.17.1 eldenring.exe+{:X} ({}), carried to {:X?}, reads {:02X?}, expected {:02X?} \
+             for {build:?}: {}",
+            site.rva,
+            site.name,
+            carry_1171_rva(site.rva),
+            got,
+            site.expected(build),
+            describe_build()
         )),
     }
 }
@@ -45,21 +80,33 @@ impl Game {
         Self { base }
     }
 
-    /// A game function by offset, typed by the caller.
+    /// Where a 1.17.1 offset from `sites` is on the running build.
+    ///
+    /// [`check_sites`] refused the game unless every site and global carried, and `Game` is only
+    /// built after it passed, so the `0` is never handed out for an offset from `sites`.
+    fn at(&self, rva: usize) -> usize {
+        carry_1171_rva(rva).map_or(0, |carried| self.base + carried)
+    }
+
+    /// A game function by its 1.17.1 offset, typed by the caller.
     ///
     /// # Safety
     ///
     /// `F` must be the function's real signature; [`check_sites`] passed for this base.
     unsafe fn f<F: Copy>(&self, rva: usize) -> F {
-        let addr = self.base + rva;
+        let addr = self.at(rva);
         debug_assert_eq!(size_of::<F>(), size_of::<usize>());
         // SAFETY: as the caller promises.
         unsafe { std::mem::transmute_copy(&addr) }
     }
 
     fn read_usize(&self, rva: usize) -> usize {
+        let addr = self.at(rva);
+        if addr == 0 {
+            return 0;
+        }
         // SAFETY: fails closed.
-        unsafe { er_game_base::mem::safe_read_usize(self.base + rva) }.unwrap_or(0)
+        unsafe { er_game_base::mem::safe_read_usize(addr) }.unwrap_or(0)
     }
 }
 

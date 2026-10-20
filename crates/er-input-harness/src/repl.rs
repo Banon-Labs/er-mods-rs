@@ -177,7 +177,23 @@ const HOLD_POLL_INTERVAL_FRAMES: u64 = 10;
 
 /// Release an expired hold and report the grid cells afterwards. Returns whether a hold is still
 /// down, so the caller knows the input edge has not finished yet.
-fn advance_hold(base: usize) -> bool {
+/// Every `CS::GridControl` instance in memory, found by its vtable: `(vtable, hits, capped)`.
+/// None at all when the vtable has no carry to the running build, rather than a scan for an
+/// address that means nothing there.
+fn grid_instances(max_hits: usize) -> (usize, Vec<usize>, bool) {
+    let Some(vtable) = crate::game_mem::grid_control_vtable() else {
+        harness_log!(
+            "repl: GridControl vtable (1.17.1 rva 0x{GRID_CONTROL_VTABLE_RVA_1170:x}) has no carry \
+             to {}; no grid read",
+            er_game_base::game_build::describe_build()
+        );
+        return (0, Vec::new(), false);
+    };
+    let (hits, capped) = scan_for_qword(vtable, max_hits);
+    (vtable, hits, capped)
+}
+
+fn advance_hold(_base: usize) -> bool {
     let mut guard = match HOLD.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
@@ -204,8 +220,7 @@ fn advance_hold(base: usize) -> bool {
     drop(guard);
     // The release is the half that commits a menu action, so the cells are read after it rather
     // than while the key is still down.
-    let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
-    let (hits, _) = scan_for_qword(vtable, DEFAULT_MAX_HITS);
+    let (_, hits, _) = grid_instances(DEFAULT_MAX_HITS);
     for hit in &hits {
         let selected = unsafe { read_usize(hit + GRID_CONTROL_SELECTED_D4_OFFSET) }
             .map_or(-1, |v| (v & 0xffff_ffff) as i32);
@@ -454,7 +469,7 @@ impl Sweep {
 
 /// Advance an in-flight sweep by one point. Returns whether a sweep is still running, which is what
 /// lets the poll interval drop only while one is active.
-fn advance_sweep(base: usize) -> bool {
+fn advance_sweep(_base: usize) -> bool {
     let mut guard = match SWEEP.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
@@ -469,8 +484,7 @@ fn advance_sweep(base: usize) -> bool {
     };
     crate::pad_inject::write_menu_pointer(x, y);
     crate::key_inject::hold_cursor(x, y);
-    let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
-    let (hits, _) = scan_for_qword(vtable, DEFAULT_MAX_HITS);
+    let (_, hits, _) = grid_instances(DEFAULT_MAX_HITS);
     let cells: Vec<(usize, i32)> = hits
         .iter()
         .map(|hit| {
@@ -637,8 +651,7 @@ fn run_command(base: usize, line: &str) {
             }
         }
         Some("grid") => {
-            let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
-            let (hits, capped) = scan_for_qword(vtable, DEFAULT_MAX_HITS);
+            let (vtable, hits, capped) = grid_instances(DEFAULT_MAX_HITS);
             harness_log!(
                 "repl: grid vtable=0x{vtable:x} -> {} instance(s){}",
                 hits.len(),
@@ -668,8 +681,7 @@ fn run_command(base: usize, line: &str) {
             // Report the cell in the same command. A separate read would race the game's own
             // hit-test and the pointer's decay back to whatever the device reports, which is how a
             // pointer write gets scored as ineffective when it actually worked for one frame.
-            let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
-            let (hits, _) = scan_for_qword(vtable, DEFAULT_MAX_HITS);
+            let (_, hits, _) = grid_instances(DEFAULT_MAX_HITS);
             for hit in &hits {
                 let selected = unsafe { read_usize(hit + GRID_CONTROL_SELECTED_D4_OFFSET) }
                     .map_or(-1, |v| (v & 0xffff_ffff) as i32);
