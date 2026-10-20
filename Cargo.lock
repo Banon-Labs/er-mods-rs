@@ -3174,6 +3174,7 @@ dependencies = [
  "fromsoftware-shared",
  "hudhook",
  "iced-x86",
+ "ilhook",
  "windows 0.62.2",
 ]
 
