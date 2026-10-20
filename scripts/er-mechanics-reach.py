@@ -672,12 +672,17 @@ def _clip(reg, weapon_id, slot, anim, grip):
 TAE_PC_BEHAVIOR, PC_BEHAVIOR_WEAPON_FLAG = 307, 8
 
 
-def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None):
+def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand='right'):
     """One attack slot, or None when the weapon has no such attack.
 
     `clip` = (TAE category, anim id) reads that TimeAct entry instead of the slot's motion
     category: a skill's `a<600 + swordArtsTypeNew>` animation (`skill_reach`). Its hitboxes then
-    also include event 307 judges with flag 8."""
+    also include event 307 judges with flag 8.
+
+    `hand` = 'left' is the off-hand L1 (`er-mechanics-powerstance-guard.OFFHAND_SLOTS`): its
+    judges carry Source 0, the reference hand, which is the left weapon in those states, so a
+    plain weapon dummy rides `L_Weapon` (`INFERRED`: the AtkParam dummies of judges 400..450 have
+    no 11xxx prefix, checked on a030/a172 035000)."""
     reg = rc.reg
     nums = ATK.attack_numbers(reg, weapon_id, judge)
     if nums is None:
@@ -739,7 +744,7 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None):
                 (rigged is None or rigged[0] == 'unposed') else None
             body = rigged[1] if rigged and rigged[0] == 'body' else \
                 (body_shape_points(shape, src, dummies) if ext is None and rigged is None else None)
-            hitboxes.append({'judge': j, 'atk_row': n['atk_row'], 'source': src,
+            hitboxes.append({'judge': j, 'atk_row': n['atk_row'], 'source': src, 'hand': hand,
                              'state_info': state_info, 'damaging': damaging, **shape,
                              **({'extent_m': ext['extent'], 'blade_m': ext['blade'],
                                  'points': ext['points']} if ext else {'extent_m': None}),
@@ -967,7 +972,8 @@ def _shape_world_points(h, model, root, bind):
     (`INFERRED`: the dummy is fixed in the character's model space). `far` is the DmyPoly1 end,
     and `anchor` is that end too."""
     if h.get('points'):
-        bone = 'L_Weapon' if any(d // 1000 == DMY_PREFIX_LEFT for d in h['dmy']) else 'R_Weapon'
+        left = h.get('hand') == 'left' or any(d // 1000 == DMY_PREFIX_LEFT for d in h['dmy'])
+        bone = 'L_Weapon' if left else 'R_Weapon'
         origin, q = model[bone]
 
         def place(p):
@@ -1355,11 +1361,91 @@ def swing_shape(samples, min_range=SWING_MIN_RANGE_M):
     }
 
 
+#: Height of the rows the meridional section of `blade_sweep` is rasterised in (m).
+BLADE_ROW_M = 0.02
+
+
+def _meridional_moment(spheres, row=BLADE_ROW_M):
+    """(first moment about the vertical axis in m^3, area in m^2) of the union of `spheres`
+    [(rho, y, radius)] in the meridional half-plane (rho = horizontal distance from the axis).
+
+    A ball of radius r whose centre is rho from the axis covers, at height y, horizontal
+    distances rho - s .. rho + s from it, s = sqrt(r^2 - (y - yc)^2): in the (rho, y) half-plane
+    it is a disc of radius r. The union is rasterised in rows of `row`; each row's merged
+    intervals [a, b] contribute (b^2 - a^2) / 2 * row to the moment, b - a to the area."""
+    rows = {}
+    for rho, y, r in spheres:
+        for j in range(math.floor((y - r) / row), math.ceil((y + r) / row) + 1):
+            dy = (j + 0.5) * row - y
+            if abs(dy) >= r:
+                continue
+            s = math.sqrt(r * r - dy * dy)
+            rows.setdefault(j, []).append((max(0.0, rho - s), rho + s))
+    moment = area = 0.0
+    for spans in rows.values():
+        for a, b in _merge(spans):
+            moment += (b * b - a * a) / 2 * row
+            area += (b - a) * row
+    return moment, area
+
+
+def blade_sweep(samples):
+    """Swept volume of the hit shapes, each sampled step weighted by the angle it turns through.
+
+    Axis: the vertical line through the attacker's root at that instant (root translation taken
+    out, its yaw kept, so a spin that turns the whole body counts). At each sample time every
+    live shape's spheres (`_capsule_points`, radius from AtkParam) are put in the meridional
+    half-plane (rho, y), and their union's first moment M_k = integral of rho drho dy is taken.
+    The step's angle dphi_k is the azimuth change about that axis, to the next sample, of the far
+    end of the shape that reaches farthest from the axis. Then
+
+        blade_swept_volume_m3 = sum_k |dphi_k| * M_k
+
+    which is Pappus's theorem per step: a region of the half-plane turned through dphi about the
+    axis sweeps dphi times its first moment. So width counts (a capsule of radius r is a band 2r
+    tall in the section, and a wider band farther out weighs more), and every degree counts only
+    as much blade as was actually there when the blade turned through it. A thrust or a slam that
+    does not turn about the attacker adds almost nothing; a blade that swings back over the same
+    azimuth is counted again (the angle is the weight, not the union).
+
+    Also `blade_swept_deg` (sum of |dphi|) and `blade_section_m2` (section area averaged over the
+    swept angle, i.e. how much blade turned)."""
+    by_t, tracks = {}, {}
+    for s in samples:
+        root = s['root']
+        by_t.setdefault(s['t'], []).extend(
+            (math.hypot(p[0] - root[0], p[2] - root[2]), p[1] - root[1], s['radius']) for p in s['points'])
+        far = s['far']
+        tracks.setdefault((s['judge'], s['win'], s['shape']), []).append(
+            (s['t'], far[0] - root[0], far[2] - root[2]))
+    step = {}
+    for track in tracks.values():
+        track.sort()
+        for (t, x0, z0), (_, x1, z1) in zip(track, track[1:]):
+            rho = math.hypot(x0, z0)
+            dphi = abs((_azimuth(x1, z1) - _azimuth(x0, z0) + 180) % 360 - 180)
+            if t not in step or rho > step[t][0]:
+                step[t] = (rho, dphi)
+    volume = swept = section = 0.0
+    for t, spheres in by_t.items():
+        dphi = step.get(t, (0.0, 0.0))[1]
+        if not dphi:
+            continue
+        moment, area = _meridional_moment(spheres)
+        volume += math.radians(dphi) * moment
+        swept += dphi
+        section += dphi * area
+    return {'blade_swept_volume_m3': round(volume, 3), 'blade_swept_deg': round(swept, 1),
+            'blade_section_m2': round(section / swept, 3) if swept else 0.0}
+
+
 def sweep_coverage(samples):
-    """Footprint and swing-shape columns of one attack (see `footprint` and `swing_shape`)."""
+    """Footprint, swing-shape and blade-sweep columns of one attack (see `footprint`,
+    `swing_shape` and `blade_sweep`)."""
     if not samples:
         return {}
     out = swing_shape(samples)
+    out.update(blade_sweep(samples))
     profile = defender_profile('idle')
     if profile:
         fp = footprint(samples, profile)
@@ -1438,6 +1524,7 @@ SUMMARY_KEEP = ('weapon_reach_m', 'world_reach_m', 'root_motion_to_hit_m', 'firs
                 'turn_lockin_frames_unlocked',
                 'sweep_area_m2', 'sweep_mean_width_m', 'sweep_arc_deg', 'sweep_row_arc_deg',
                 'swing_shape', 'hit_height_min_m', 'hit_height_max_m',
+                'blade_swept_volume_m3', 'blade_swept_deg', 'blade_section_m2',
                 'coverage_factor', 'coverage_arc_eff_deg', 'coverage_turn_deg')
 _SKILL = {}
 
@@ -1757,6 +1844,18 @@ def selftest():
               'COMMUNITY: Smithbox Param Annotations ATK_PARAM_ST')
     except OSError as err:
         skips.append(f'Smithbox enums: {err}')
+    # 1b. Pappus: a ball of radius r centred rho > r from the axis has meridional moment
+    # rho * pi r^2, and a quarter turn of it sweeps (pi / 2) * rho * pi r^2.
+    m, a = _meridional_moment([(2.0, 1.0, 0.3)])
+    check('meridional moment of one ball within 1%', abs(m / (2.0 * math.pi * 0.09) - 1) < 0.01, True,
+          'Pappus centroid theorem')
+    check('two coincident balls are one (union, not sum)',
+          _meridional_moment([(2.0, 1.0, 0.3)] * 2)[0] == m, True, 'union by row merge')
+    quarter = blade_sweep([{'t': k / 10, 'judge': 0, 'win': 0, 'shape': 0, 'radius': 0.3,
+                            'root': (0.0, 0.0, 0.0, 0.0), 'points': [p], 'far': p}
+                           for k, p in enumerate([(0.0, 1.0, -2.0), (-2.0, 1.0, 0.0)])])
+    check('a quarter turn sweeps pi / 2 x moment', abs(quarter['blade_swept_volume_m3'] - math.pi / 2 * m) < 2e-3,
+          True, 'Pappus centroid theorem')
     uchi = rc.atk_shape[900000]
     check('Uchigatana R1 hit1 (120, -1) reads as a sphere',
           [s['shape'] for s in hit_shapes(uchi)], ['capsule', 'sphere'], 'regulation AtkParam_Pc 900000')

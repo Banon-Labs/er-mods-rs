@@ -31,12 +31,24 @@ impl FailedRedirectPicker {
         }
     }
 
-    /// True exactly once, on the first failed open of a primary save container.
-    pub fn should_arm(&self, open_failed: bool, path: &[u16]) -> bool {
-        if !open_failed || !is_primary_save_file_path(path) {
+    /// True exactly once, on the first failed open of a primary save container before any world
+    /// has loaded.
+    ///
+    /// `in_world_seen` refuses the arm without spending it. Once a world has loaded from the
+    /// accepted save, "the save you picked did not load" is false by construction, and a failed
+    /// redirected open after that point is something else -- a stat of another account's folder
+    /// (2026-10-13), or a hiccup on the network share the stage lives on. Arming then suppressed
+    /// the title menu and would have denied world entry to the save that had just loaded.
+    pub fn should_arm(&self, open_failed: bool, path: &[u16], in_world_seen: bool) -> bool {
+        if in_world_seen || !Self::counts(open_failed, path) {
             return false;
         }
         self.armed.swap(1, Ordering::SeqCst) == 0
+    }
+
+    /// True when this open is one [`Self::should_arm`] would arm on, before a world loads.
+    pub fn counts(open_failed: bool, path: &[u16]) -> bool {
+        open_failed && is_primary_save_file_path(path)
     }
 
     /// Whether this picker has already armed. A semaphore for telemetry.

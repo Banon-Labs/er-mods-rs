@@ -310,7 +310,13 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     ids = weapon_ids()
     sa = SaRates()
     profiles, memo, rows, offhand = {}, {}, [], {}
-    for b in builds:
+    # A rebuild reads every pool weapon's attacks (2m41s on 2026-10-14) inside a caller's quiet
+    # stretch; the counter is what `er-mechanics-pipeline-watch.py` shows for it.
+    print(f"opponent pool: rebuilding RL {rl_lo}-{rl_hi} from {len(builds)} builds ({path.name} is stale "
+          "or missing)", file=sys.stderr, flush=True)
+    for i, b in enumerate(builds, 1):
+        if i % 200 == 0 or i == len(builds):
+            print(f"  {i}/{len(builds)} builds", file=sys.stderr, flush=True)
         chosen = None
         for name in b["right"]:
             if name not in ids:

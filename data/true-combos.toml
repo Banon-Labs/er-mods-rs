@@ -1,0 +1,9 @@
+# True combos the R1/R2 frame-advantage sweep (`scripts/er-mechanics-frame-advantage.py`) cannot
+# see -- a skill into an attack, a charged skill's follow-up -- recorded from the user. A weapon here
+# gets the same class-pick bonus as a measured combo (`scripts/er-mechanics-class-roles.py`,
+# `TRUE_COMBO_BONUS`) and is kept in the AOE and Fun sections whatever its stats.
+
+[[combo]]
+weapon = "Sword of Night"
+string = "charged Witching Hour Slash -> R2"
+source = "user, 2026-10-08: \"If you charge up its ash of war, the R2 is a multi hit true combo that probably kills someone\""

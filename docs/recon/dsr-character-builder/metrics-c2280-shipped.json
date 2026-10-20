@@ -1,0 +1,33 @@
+{
+ "what": "c2280 shipped fit (rust-shoulder)",
+ "vertices": 1108,
+ "triangles": 1708,
+ "bind_bad_edges_vs_source_x_scale": 612,
+ "bind_inside_out": 0,
+ "idle_bad_edges_vs_source_x_scale": 796,
+ "idle_inside_out": 0,
+ "idle_arm_buried": 82,
+ "arm_vertices": 595,
+ "idle_L_tip_to_weapon_m": 0.06,
+ "idle_R_tip_to_weapon_m": 0.056,
+ "idle_leg_gap_m": 0.079,
+ "seam_edges": 150,
+ "idle_worst_frame_bad_edges": 126,
+ "idle_worst_seam_bad_edges": 4,
+ "idle_max_palm_to_weapon_m": {
+  "L": 0.012,
+  "R": 0.013
+ },
+ "r1_worst_frame_bad_edges": 560,
+ "r1_worst_seam_bad_edges": 51,
+ "r1_max_palm_to_weapon_m": {
+  "L": 0.018,
+  "R": 0.021
+ },
+ "run_r1_worst_frame_bad_edges": 534,
+ "run_r1_worst_seam_bad_edges": 57,
+ "run_r1_max_palm_to_weapon_m": {
+  "L": 0.025,
+  "R": 0.025
+ }
+}

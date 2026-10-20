@@ -235,6 +235,22 @@ category = "quality-of-life"
 audience = "player"
 default = false
 
+[er-duel-rules]
+label = "Duel ruleset referee"
+blurb = "A popup names the player and the rule whenever anyone in the session breaks the competitive duel ruleset: gear, tears, buffs, heals, skills, spells. Reads only; changes nothing."
+category = "multiplayer"
+audience = "player"
+default = false
+
+[er-positional-voice]
+label = "Positional voice chat"
+blurb = "Every player's voice comes out of their character, fading with distance and echoing in caves, over Steam voice. Everyone in the session needs it."
+category = "multiplayer"
+audience = "player"
+default = false
+needs_seamless = true
+config = "er-positional-voice.toml"
+
 [er-npc-summons]
 label = "NPC duels and custom Mimic Tear"
 blurb = "The Duelist's Furled Finger lets you pick an NPC and place a red sign that summons them to fight you, offline too. The Mimic Tear Ashes summon up to four companions you configure instead of the mimic."
@@ -250,9 +266,17 @@ category = "cosmetic"
 audience = "player"
 default = false
 
+[er-cel-shade]
+label = "Cel shading"
+blurb = "A Wind Waker cartoon look: hard bands of light, inked outlines, flat painted colour. F6 in game opens a menu of presets and live sliders, saved to er-cel-shade.toml."
+category = "cosmetic"
+audience = "player"
+default = false
+caution = "changes how every scene looks"
+
 [mushroom-man-runtime]
 label = "Mushroom Man"
-blurb = "Replaces a helmet's rows so your character wears the mushroom head. A visible costume change to gear you may already be wearing."
+blurb = "Turns your character into the Mushroom Man from Dark Souls, armour hidden. The model is built from your own Dark Souls Remastered: run mushroom-man-builder.exe once before installing this."
 category = "cosmetic"
 audience = "player"
 default = false

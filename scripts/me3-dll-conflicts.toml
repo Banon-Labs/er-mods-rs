@@ -602,6 +602,114 @@ itself they are one, and both handlers are union-registered, so they chain eithe
 evidence = """crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput` -> `arm(.., \
 hook_xinput_get_state, &XINPUT_GET_STATE_ORIG, ..)`; crates/er-npc-summons/src/pad.rs."""
 
+[[shared]]
+a = "er-npc-summons"
+b = "er-cel-shade"
+target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+mechanism = "hook-union"
+handler_a = "menu_has_mouse_union"
+handler_b = "menu_has_mouse_union"
+reason = """Both DLLs answer the game's "a menu has the mouse" predicate with true while their own \
+panel is open -- the duel picker, the cel-shading menu -- which is what makes the game show and \
+free the cursor and stop turning the camera with the mouse. Each asks the next handler otherwise, \
+so either panel open is enough and neither closes the other's. Both register through \
+`er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
+1.17.1 prologue, so one MinHook instance owns the entry and the two handlers chain."""
+evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-cel-shade/src/input.rs \
+`install_cursor`; both prologues generated from the same spec in each crate's build.rs."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-cel-shade"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """er-cel-shade takes every key from the game while its settings menu is open, so typing \
+a preset name does not walk the character, through the same `er-dinput-suppress-core` handler \
+er-npc-summons uses, registered through `register_shared_hook_with_budget`; it chains on the \
+union every other shell on this slot uses. A key held when the menu closes stays blanked until it \
+is released."""
+evidence = """crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`, armed \
+from crates/er-cel-shade/src/input.rs `try_install_dinput`."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-cel-shade"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-cel-shade row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-enemynpc-effects"
+b = "er-cel-shade"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-cel-shade row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-cel-shade"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "hook_get_device_state"
+handler_b = "keyboard_get_state_hook"
+reason = """See the er-quickload / er-cel-shade row on this slot. While the menu is open \
+er-hotkey-conflicts sees every key already blanked, which is the read the game gets."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-cel-shade"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "keyboard_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """The same `er-dinput-suppress-core` handler linked into both DLLs, each with its own \
+taken-key set, chained on one union: either DLL taking a key blanks it."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-quickload"
+b = "er-cel-shade"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state_detour"
+handler_b = "xinput_get_state"
+reason = """er-cel-shade centres the sticks, releases the triggers and clears every button of pad \
+0 while its settings menu is open, keeping a button cleared after close until it is released. It \
+follows the forwarding thunk exactly as er-npc-summons does and registers through \
+`register_shared_hook_with_budget`, so it chains on er-quickload's union like the other two."""
+evidence = """crates/er-cel-shade/src/input.rs `try_install_pad` \
+`register_shared_hook_with_budget(target, xinput_get_state, &PAD_ORIG, 1, 0)`."""
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-cel-shade"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "picker_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = "See the er-quickload / er-cel-shade row on this function: both handlers chain on one union."
+evidence = "crates/er-npc-summons/src/pad.rs; crates/er-cel-shade/src/input.rs `try_install_pad`."
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-cel-shade"
+target = "xinput1_x.dll!XInputGetState (the export itself, where there is no forwarding thunk)"
+mechanism = "hook-union"
+handler_a = "hook_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = """The same shape as the er-hotkey-conflicts / er-npc-summons row: two prologues under \
+Wine, one where the export is the function itself, union-registered on both sides either way."""
+evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-cel-shade/src/input.rs."
+
 [[conflict]]
 a = "er-quickload"
 b = "er-reload-trace"
@@ -634,6 +742,22 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace entry)"
 # whole point is that the code being harmless is not the question.
 # ---------------------------------------------------------------------------
 [opt_in_only]
+"er-cel-shade" = """Changes how every frame looks -- it posterizes the lighting and the finished \
+picture -- so a run that did not ask for it would be judged on a picture it was never meant to \
+produce. Its D3D12 detours are `D3D12CreateDevice` and, through the device it returns, \
+`CreateRootSignature`, `CreateGraphicsPipelineState`, `CreateComputePipelineState`, \
+`CreatePipelineState`, `CreatePipelineLibrary`, the library's three loaders and \
+`SetGraphicsRootSignature` on direct lists and bundles. No other shell here detours any of those \
+-- hudhook only creates a throwaway device to read vtables. Every root signature the game creates \
+gets one parameter appended (a root CBV at `b0, space42`), which also changes every pipeline's \
+cache key, so the first session with it loaded rebuilds the pipeline cache once.
+
+Its settings menu (F6) joins the shared imgui overlay and, while open, takes the game's input \
+through the shared unions: the keyboard `GetDeviceState`, `XInputGetState` and the 1.17.1 \
+menu-has-the-mouse predicate, each recorded as a [[shared]] row. It writes no game memory.
+
+Load it only when the look is the point: `--with er-cel-shade`."""
+
 # `er-save-game-row` and `er-quit-load-character` were listed here until 2026-09-20 and are gone:
 # both merged into `er-quit-menu`, whose row set is a line in `er-quit-menu.toml`. A profile that
 # wants one of those row sets and nothing else writes it there rather than picking a different DLL.
@@ -704,7 +828,9 @@ owner of the player's inventory the way `er-build-import` is. No other shell hoo
 prologues. Since 2026-10-06 it also detours, bare and alone on each prologue: \
 `ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
 `0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
-only on the AI state). Since 2026-10-07, for brains that call `brain_void()`, also bare and alone: \
+only on the AI state); since 2026-10-07 `CalculateDamage2` `0x1404483b0` (observes every landed \
+hit to tell the brains when the squad or the player was hit; it always calls the original). Since \
+2026-10-07, for brains that call `brain_void()`, also bare and alone: \
 `UpdateFromManipulator` `0x140407c60` (the void tech press), the attack create-or-reuse \
 `0x1404428f0` (jump takeoff and landing) and `SpawnBullet` `0x1403a2ca0` (the spawn and its \
 double); and through the union: the 1.17.1 menu-has-the-mouse predicate \
@@ -717,8 +843,9 @@ dependency closure: `--with er-npc-summons`."""
 [compatible]
 "er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its whole \
-effect is three one-byte stores into `.text`, from its own install thread, after which the thread \
-exits and nothing here runs again for the session. Neither failure mode this table exists to \
+effect is three one-byte stores into `.text`, made (and undone, when an option is switched back \
+off) from a `FrameBegin` game task that otherwise only re-reads its own config file about once a \
+second. Neither failure mode this table exists to \
 catch can arise -- no second MinHook instance can overwrite a trampoline it never installed, and \
 no D3D12 Present/compositor is touched.
 
@@ -1041,7 +1168,19 @@ that owns it by walking the world's ChrSets (the same walk er-npc-possess and \
 er-enemynpc-effects make), and reads its data, super armor, resist and SpEffect state. It draws \
 as a guest of the overlay host when one exists (er-build-watermark), and hosts only when nothing \
 else does, so the process keeps one Present hook either way."""
-"er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
+"er-duel-rules" = """Co-loadable with everything: it installs no detour and writes no game \
+memory. A FrameBegin game task walks WorldChrMan's player ChrSet, reads each player's \
+PlayerGameData (level, attributes, ChrAsm, physick tears), SpEffect list, TimeAct queue, data \
+and ride modules, GameDataMan's remote slot states and the CSBulletManager list, and answers its \
+param questions from SoloParamRepository after checking every holder is loaded. It draws as a \
+guest of the overlay host when one exists, and hosts only when nothing else does, so the process \
+keeps one Present hook either way."""
+"er-positional-voice" = """Co-loadable with everything: it installs no detour, patches no game \
+code and touches nothing in ersc.dll. Its own thread calls the Steam flat API (ISteamUser voice, \
+ISteamNetworkingMessages on its own channel). A FrameBegin game task reads CSSessionManager's \
+players and WorldChrMan, loads one Wwise bank of its own, and makes, places and feeds its own \
+MOAudioInputObjects through the game's functions."""
+"er-invasion-path" ="""Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
 (FUN_140bddfe0 / FUN_140bdec90 / FUN_140bdf610, the same request ring CS::CSAiFunc uses) -- and \

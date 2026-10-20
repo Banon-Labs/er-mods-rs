@@ -202,7 +202,22 @@ pub(crate) unsafe fn own_load_continue_retry_deferred(n: u64) {
     }
     let base = OWN_LOAD_CONTINUE_DEFER_BASE.load(Ordering::SeqCst);
     let owner = OWN_LOAD_CONTINUE_DEFER_OWNER.load(Ordering::SeqCst);
-    let c30 = OWN_LOAD_CONTINUE_DEFER_C30.load(Ordering::SeqCst) as i32;
+    let deferred_c30 = OWN_LOAD_CONTINUE_DEFER_C30.load(Ordering::SeqCst) as i32;
+    // Judge the live map, not the one recorded when the commit was held. `continue_confirm` copies
+    // the live `GameMan+0xc30` into the title owner, so a title that restarted during the hold and
+    // reset it to the m10 default would stream the character into the wrong map if the guard below
+    // were handed the stale value. The live read makes the guard refuse that case instead.
+    let gm = crate::constants::game_man_ptr_or_null();
+    let c30 = if gm > TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET)
+    } else {
+        GAME_MAN_C30_UNSET
+    };
+    if c30 != deferred_c30 {
+        append_autoload_debug(format_args!(
+            "own-load-continue: deferred commit retry sees c30=0x{c30:x}, held at 0x{deferred_c30:x} -- judging the live value (#{n})"
+        ));
+    }
     let fp_level = OWN_LOAD_CONTINUE_DEFER_LEVEL.load(Ordering::SeqCst) as u32;
     let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
     let (fp_real, _live_level, _name_len) = unsafe { char_fingerprint(base) };

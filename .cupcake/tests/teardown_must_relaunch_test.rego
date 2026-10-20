@@ -111,6 +111,57 @@ test_allow_teardown_alone_after_measurement_with_hook_normalized_cd if {
 	)
 }
 
+# --- a standalone teardown that declares the run invalid is ALLOWED ------------
+#
+# AGENTS.md obliges the agent to stop an agent-launched run that has become invalid, and such a
+# run has produced no measurement, so the evidence gate cannot be the condition. Refused
+# 2026-10-07 on the build-import run whose import never applied.
+
+test_allow_invalid_run_teardown_without_evidence if {
+	not denied("python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-build-import-did-not-apply")
+}
+
+test_allow_invalid_run_teardown_with_output_trim if {
+	not denied("python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-build-import-did-not-apply 2>&1 | tail -3")
+}
+
+test_allow_invalid_run_teardown_with_leading_cd if {
+	not denied("cd /home/banon/projects/er-mods-rs; python3 scripts/er-teardown.py --reason=invalid-run-wrong-build > /dev/null 2>&1")
+}
+
+# The exact refused command, without the declaration, still needs evidence.
+test_deny_undeclared_reason_without_evidence if {
+	denied("python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=build-import-did-not-apply 2>&1 | tail -3")
+}
+
+test_deny_invalid_run_teardown_then_build if {
+	denied("python3 scripts/er-teardown.py --reason=invalid-run-wrong-build; cargo build")
+}
+
+test_deny_invalid_run_teardown_and_then_build if {
+	denied("python3 scripts/er-teardown.py --reason=invalid-run-wrong-build && bash scripts/er-build-dlls.sh er-save-game-row")
+}
+
+test_deny_invalid_run_teardown_piped_into_work if {
+	denied("python3 scripts/er-teardown.py --reason=invalid-run-wrong-build | xargs cargo build")
+}
+
+test_deny_invalid_run_teardown_then_tail_of_a_file if {
+	denied("python3 scripts/er-teardown.py --reason=invalid-run-wrong-build; tail -3 run.log")
+}
+
+test_deny_invalid_run_multi_word_reason if {
+	denied(`python3 scripts/er-teardown.py --reason="invalid-run-import did not apply"`)
+}
+
+test_deny_invalid_run_space_separated_reason if {
+	denied("python3 scripts/er-teardown.py --reason invalid-run-wrong-build")
+}
+
+test_deny_empty_invalid_run_token if {
+	denied("python3 scripts/er-teardown.py --reason=invalid-run-")
+}
+
 test_deny_teardown_with_a_reason_then_more_work if {
 	denied("python3 scripts/er-teardown.py --reason measured; bash scripts/er-build-dlls.sh er-save-game-row")
 }

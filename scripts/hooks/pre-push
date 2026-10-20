@@ -4,6 +4,15 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+
+# On a terminal the suite is followed live (the live fan-out in scripts/check.sh), so this hook's
+# own preamble shrinks to what someone watching needs: one line per decision rather than one per
+# input or per stage. Piped, logged, or under a test, every line prints as before, and
+# ER_CHECK_LIVE=0 turns both halves off.
+live_tty=0
+if [[ -t 2 && ${ER_CHECK_LIVE:-1} != 0 && ${TERM:-dumb} != dumb ]]; then
+	live_tty=1
+fi
 cd "$repo_root"
 
 # GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
@@ -39,12 +48,23 @@ unset $(git rev-parse --local-env-vars)
 # Before this, `git-pre-push-block-main.sh` drained stdin and anything after it got nothing.
 pushed=$(cat)
 
-# `%s\n`, NOT `%s`. `$(cat)` strips the trailing newline, and a `while read` loop drops a final
-# unterminated line -- so replaying with `printf '%s'` handed the main-push guard an empty read
-# on every single-ref push and it blocked nothing. Measured 2026-08-31; the guard now also
-# tolerates the unterminated shape, and both halves are covered by
-# scripts/test-git-pre-push-block-main.sh.
-printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
+# A trailing newline, which `$(cat)` strips: a `while read` loop drops a final unterminated line,
+# so replaying the bare text handed the main-push guard an empty read on every single-ref push and
+# it blocked nothing. Measured 2026-08-31; the guard now also tolerates the unterminated shape, and
+# both halves are covered by scripts/test-git-pre-push-block-main.sh. The here-string adds it.
+#
+# A here-string and not `printf '%s\n' "$pushed" | bash ...` (bd er-effects-rs-5hyb). A pipe races
+# the writer against the reader: a guard that exits without reading its stdin -- the fixtures'
+# stubs do, and so would a guard that stopped reading early -- can close the read end before the
+# forked printf writes, and under `set -o pipefail` that failure ends this hook. The suite's gates
+# run at SCHED_IDLE, where the order flips often enough to see, so it surfaced only inside real
+# pushes: test-pre-push-gates-pushed-ref.sh and test-pre-push-dirty-tree.sh went red on
+#     scripts/hooks/pre-push: line 56: printf: write error: Broken pipe
+# (exit 1 with SIGPIPE inherited ignored, 141 without) -- measured 2026-10-13 at SCHED_IDLE beside
+# a SCHED_IDLE load on the same cores: pushed-ref 3 of 20 runs, dirty-tree 4 of 100, while every
+# standalone rerun passed. bash writes a here-string into its pipe, or into a temporary file when
+# it is larger than the pipe buffer, before the guard starts, so there is no write left to fail.
+bash scripts/git-pre-push-block-main.sh "$@" <<<"$pushed"
 
 # What this push actually sends, read off git's ref list rather than off the checkout.
 #
@@ -365,7 +385,7 @@ fi
 # Callers check the return status rather than relying on `set -e`: these run on the left of `||`,
 # where bash switches errexit off inside the function body.
 link_root_inputs() {
-	local rel src candidate
+	local rel src candidate linked=0
 	while IFS= read -r rel; do
 		[[ -n $rel && ! -e $gate_tree/$rel ]] || continue
 		src=""
@@ -377,8 +397,12 @@ link_root_inputs() {
 		done
 		[[ -n $src ]] || continue
 		mkdir -p "$(dirname -- "$gate_tree/$rel")" && ln -sfn "$src" "$gate_tree/$rel" || return 1
-		printf 'pre-push: linked gitignored input %s -> %s\n' "$rel" "$src" >&2
+		linked=$((linked + 1))
+		[[ $live_tty -eq 1 ]] || printf 'pre-push: linked gitignored input %s -> %s\n' "$rel" "$src" >&2
 	done < <(python3 scripts/ci-gate-portability.py --root-inputs 2>/dev/null || true)
+	if [[ $live_tty -eq 1 && $linked -gt 0 ]]; then
+		printf 'pre-push: linked %d gitignored input(s) into the gate tree\n' "$linked" >&2
+	fi
 }
 
 pin_gate_tree() { # pin_gate_tree <sha>
@@ -390,9 +414,32 @@ pin_gate_tree() { # pin_gate_tree <sha>
 	link_root_inputs
 }
 
+# Each tip keeps its own stage logs (2026-10-08). check.sh writes every stage's log and verdict to
+# one fixed directory, `${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-stages`, and clears it when it
+# starts. With one run per pushed tip, the second tip's run deleted the first tip's logs before
+# anyone could read them. Measured on a 12-branch push that day: check-oracle-singleton-globals.py
+# went red on the second tip, and by the time the push ended addresses.log held the twelfth tip's
+# green run -- the failure's own output was gone, and the check passed every time it was rerun.
+#
+# So each tip gets its own result directory, keyed by its full sha, and check.sh is pointed at it
+# through ER_CHECK_RESULT_DIR -- the knob it already has for exactly this. The paths check.sh prints
+# ("per-stage logs: ...") then name the directory that holds that tip's logs, and nothing a later
+# tip does can touch them. Directories older than a week are pruned so the tmpfs does not fill.
+# ER_PRE_PUSH_LOG_DIR moves the whole tree, which is how the hook's own test keeps out of it.
+pre_push_log_root=${ER_PRE_PUSH_LOG_DIR:-${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-pre-push}
+if [[ -d $pre_push_log_root ]]; then
+	find "$pre_push_log_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf -- {} + 2>/dev/null || true
+fi
+
 run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 	local sha=$1 tree=$repo_root rev_argv=() stage_report scope_stages all_stages scope_csv
 	[[ -n $sha ]] && rev_argv=(--rev "$sha")
+	# Exported for this tip only: the next call to run_suite replaces it with that tip's directory.
+	# No sha (git sent no ref list) means one run, so check.sh's own default is left alone.
+	if [[ -n $sha ]]; then
+		export ER_CHECK_RESULT_DIR="$pre_push_log_root/$sha"
+		printf 'pre-push: stage logs for %s are kept in %s\n' "${sha:0:12}" "$ER_CHECK_RESULT_DIR" >&2
+	fi
 	if [[ -n $sha && $sha != "$head_sha" ]]; then
 		printf 'pre-push: %s is not this checkout'"'"'s HEAD (%s), so the suite runs on it in\n' \
 			"${sha:0:12}" "${head_sha:0:12}" >&2
@@ -411,7 +458,13 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 	stage_report=$(mktemp)
 	mapfile -t scope_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages-for-diff \
 		"${rev_argv[@]}" 2>"$stage_report" || true)
-	cat "$stage_report" >&2
+	# Live, the per-stage table (its rows are the indented lines) gives way to its headline; the
+	# stages it left out are named again, with "not a pass", by check.sh's one-line summary.
+	if [[ $live_tty -eq 1 ]]; then
+		awk '!/^  /' "$stage_report" >&2
+	else
+		cat "$stage_report" >&2
+	fi
 	rm -f "$stage_report"
 	mapfile -t all_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages 2>/dev/null || true)
 
@@ -420,24 +473,77 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 			printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
 		fi
 		printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+		last_scope=all
 		(cd "$tree" && bash scripts/check.sh)
 		return
 	fi
 
 	printf -v scope_csv '%s,' "${scope_stages[@]}"
-	printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
-		"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
-	printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
-	printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
+	if [[ $live_tty -eq 1 ]]; then
+		printf 'pre-push: running %d of %d stage(s) for this push: %s (all of them: ER_SCOPE_ALL=1 git push)\n' \
+			"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
+	else
+		printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
+			"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
+		printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
+		printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
+	fi
+	last_scope=${scope_csv%,}
 	(cd "$tree" && ER_CHECK_STAGES="${scope_csv%,}" bash scripts/check.sh)
 }
 
+# A tip that already passed is not run again (2026-10-12). One red tip refuses the whole push, so
+# every tip stays unpushed and the next attempt used to re-run all of them. Measured that day: a
+# 14-tip push spent about two hours, 13 tips green and one red on an intermittent self-test, and a
+# retry would have spent the two hours again to re-learn 13 answers it already had.
+#
+# A green run leaves a marker named by the tip's full sha, holding the stages that ran (`all` for
+# the whole suite). The sha fixes every tracked byte the run read, the gate scripts included. What
+# it cannot see is outside git: the gitignored game images, the toolchain, origin's main. So
+# markers expire after ER_PRE_PUSH_GREEN_TTL_HOURS (default 24), ER_PRE_PUSH_NO_CACHE=1 ignores
+# them, and ER_SCOPE_ALL=1 accepts only a marker from a whole-suite run. They live under the
+# repository's git directory, so a fixture repository in a self-test never sees this checkout's.
+green_dir=${ER_PRE_PUSH_GREEN_DIR:-$(git rev-parse --path-format=absolute --git-common-dir)/er-pre-push-green}
+green_ttl_min=$((${ER_PRE_PUSH_GREEN_TTL_HOURS:-24} * 60))
+if [[ -d $green_dir ]]; then
+	find "$green_dir" -mindepth 1 -maxdepth 1 -type f -mmin +"$green_ttl_min" -delete 2>/dev/null || true
+fi
+
+tip_already_green() { # tip_already_green <sha>
+	local marker=$green_dir/$1 scope
+	[[ ${ER_PRE_PUSH_NO_CACHE:-0} != 1 && -f $marker ]] || return 1
+	scope=$(<"$marker")
+	[[ ${ER_SCOPE_ALL:-0} != 1 || $scope == all ]] || return 1
+	printf 'pre-push: %s CACHED -- green in this checkout %dm ago (stages: %s); not run again.\n' \
+		"${1:0:12}" "$((($(date +%s) - $(stat -c %Y "$marker")) / 60))" "$scope" >&2
+	printf '          ER_PRE_PUSH_NO_CACHE=1 git push runs it again.\n' >&2
+}
+
 suite_failed=0
+failed_tips=()
 if [[ ${#pushed_shas[@]} -eq 0 ]]; then
 	run_suite "" || suite_failed=1
 else
 	for sha in "${pushed_shas[@]}"; do
-		run_suite "$sha" || suite_failed=1
+		tip_already_green "$sha" && continue
+		last_scope=""
+		if run_suite "$sha"; then
+			if [[ -n $last_scope ]] && mkdir -p "$green_dir"; then
+				printf '%s\n' "$last_scope" >"$green_dir/$sha"
+			fi
+		else
+			suite_failed=1
+			failed_tips+=("$sha")
+		fi
+	done
+fi
+# Repeated at the very end, because on a many-tip push the red tip's own report has scrolled far
+# above the last tip's green one.
+if [[ ${#failed_tips[@]} -gt 0 && ${#pushed_shas[@]} -gt 1 ]]; then
+	printf '\npre-push: %d of %d pushed tip(s) failed the suite; their logs are kept here:\n' \
+		"${#failed_tips[@]}" "${#pushed_shas[@]}" >&2
+	for sha in "${failed_tips[@]}"; do
+		printf '  %s  %s/\n' "${sha:0:12}" "$pre_push_log_root/$sha" >&2
 	done
 fi
 exit "$suite_failed"

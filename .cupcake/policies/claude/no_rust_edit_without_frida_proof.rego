@@ -127,6 +127,32 @@ proven if {
 	proven_for(file_path)
 }
 
+proven if {
+	conflict_resolution
+}
+
+# Resolving a conflict of a stopped rebase, merge, cherry-pick or revert. It combines changes that
+# are each already committed, so there is no new behaviour for an instrument to measure, and the
+# measurement those commits needed was spent when they were made.
+#
+# Measured 2026-10-07: `git rebase --onto feat/npc-summons-lab-facts d23bb905 HEAD` stopped on
+# `crates/er-npc-summons/src/addr.rs`, and the Edit deleting the conflict markers was refused with
+# `UNPROVEN spent-by-commit` -- a refusal to replay work that had already passed this gate.
+#
+# The judgement is the reader's, from git and not from the edit: an operation stopped in the
+# checkout holding the file, and unmerged index stages for that very file. What is enforced here
+# is that the verdict names the path being judged, so it cannot open a different file, and that
+# only the single-path write tools are admitted -- a Bash command names its targets in free text
+# and keeps the ordinary rule.
+conflict_resolution if {
+	tool_name in {"Edit", "Write", "MultiEdit"}
+	startswith(evidence, "CONFLICT-RESOLUTION ")
+	verdict := trim_right(evidence, "\r\n")
+	matches := regex.find_all_string_submatch_n(`^CONFLICT-RESOLUTION op=(?:rebase|merge|cherry-pick|revert) path=([^\n]+)$`, verdict, 1)
+	count(matches) == 1
+	matches[0][1] == file_path
+}
+
 proven_for(_) if {
 	startswith(evidence, "PROVEN")
 	not telemetry_verdict

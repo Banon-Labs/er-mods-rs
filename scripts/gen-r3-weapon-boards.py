@@ -53,6 +53,15 @@ loaded modules, not listed by hand), and the module's header records the sha256 
 of its own Rust body. A changed source or a hand-edited body makes the file stale. A data file is
 not part of any commit: one that is absent (a machine with no game install) or that differs here
 (the sweep was re-run from another checkout) is named by `--check` and does not fail it.
+
+Memory
+------
+`--jobs` is a request. Each host, the remote one and then this one, runs as many shards as fit its
+`MemAvailable` after a 4 GiB reserve for its desktop, at 3 GiB a shard, and never more than its
+cores less two (`grant_shards`). A remote shard runs at nice 10 and first in line for the kernel's
+OOM killer, and where `systemd-run --user` can make a scope there, in one capped at 3 GiB with no
+swap that the kernel kills whole at the cap. A shard writes a weapon's result only once the weapon
+is done, so a killed shard's unfinished weapons are computed by the local pass.
 """
 
 from __future__ import annotations
@@ -64,6 +73,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -940,13 +950,24 @@ def resolve_display(p: str) -> Path:
     return q if q.is_absolute() else REPO_ROOT / q
 
 
-def run_shard(shard: int, of: int, cache: Path, subset: Path | None = None) -> int:
-    opened: set = set()
-    record_opened(opened)
+def selected_weapons(subset: Path | None) -> list[tuple[int, str, dict, str]]:
+    """`weapon_list`'s weapons, only those in `subset` (a `--build` run's ids) when there is one."""
     keep, _ = weapon_list()
     if subset is not None:
         ids = set(json.loads(subset.read_text()))
         keep = [w for w in keep if w[0] in ids]
+    return keep
+
+
+def pending_weapons(cache: Path, subset: Path | None) -> int:
+    """How many of the selected weapons have no result in `cache` yet."""
+    return sum(not (cache / f"{w[0]}.json").exists() for w in selected_weapons(subset))
+
+
+def run_shard(shard: int, of: int, cache: Path, subset: Path | None = None) -> int:
+    opened: set = set()
+    record_opened(opened)
+    keep = selected_weapons(subset)
     mine = [w for i, w in enumerate(keep) if i % of == shard]
     # The first weapon of every class first, then the second of each, so a reader of a run still
     # in progress sees every class early.
@@ -1165,6 +1186,178 @@ SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
 SSH_PROBE_SECONDS = 20
 #: A result that failed because the host lacked a file: recomputed here rather than kept.
 MISSING_FILE_MARKERS = ("FileNotFoundError", "No such file or directory")
+#: A result that failed because the host ran short of memory: the weapon is not at fault, so it is
+#: recomputed here too.
+MEMORY_FAILURE_MARKERS = ("MemoryError",)
+
+# How many shards a host is given, and how each one is held to its share.
+#
+# Measured 2026-10-13: `--jobs 6` on zerk (12 cores, 15 GiB, 8 GiB of it already in zram) set the
+# kernel's OOM killer off twice. At 13:15:03 it took the Hyprland session; at 13:38:28 forty
+# processes, pipewire, dbus-broker, Steam and the GitHub Actions runner among them. A shard is one
+# Python process that forks a pool of one worker per core for the infusion section
+# (`er-builds-optimize.optimize`), so six shards were six pools on twelve cores.
+
+GIB = 1 << 30
+#: One shard's budget, its pool included. The largest of those six shards reached 2.9 GB resident
+#: and the rest about 0.5 GB; which one grows is not known before it starts, so each is sized for
+#: the largest.
+SHARD_MEMORY_BYTES = 3 * GIB
+#: Memory kept for the host's own session. `MemAvailable` is read once, before hours of work, and
+#: the session goes on allocating: a compositor and a browser grow with every window, Steam
+#: updates, the Actions runner starts jobs of its own. `MemAvailable` also counts the page cache the
+#: desktop reads its own files from as free, so spending all of it leaves the session paging. A
+#: quarter of zerk's 15 GiB covers that.
+DESKTOP_RESERVE_BYTES = 4 * GIB
+#: Cores no shard is given, so input and audio still get a core when every pool is busy.
+SPARE_CORES = 2
+SHARD_NICE = 10
+#: The kernel's OOM killer scores a process by its size plus this; 1000 makes a shard its first
+#: choice whatever the session's processes weigh. A process may raise its own score unprivileged.
+SHARD_OOM_SCORE_ADJ = 1000
+#: What a remote shard's wrapper exits with when systemd recorded its scope as killed at the cap.
+OOM_EXIT = 86
+#: `systemd-run` properties of a shard's scope. No swap, so the cap is resident memory and a shard
+#: cannot push the session's pages into zram; `OOMPolicy=kill` sets `memory.oom.group`, so the
+#: kernel kills the whole shard at once. Killing one pool worker instead would leave
+#: `multiprocessing.Pool.map` waiting for a result that never comes, or let the shard record that
+#: weapon as failed.
+SCOPE_PROPERTIES = f"-p MemoryMax={SHARD_MEMORY_BYTES} -p MemorySwapMax=0 -p OOMPolicy=kill"
+#: Prints `MemAvailable` and the usable core count. Run under `sh`, since the remote login shell
+#: may be fish.
+CAPACITY_PROBE = "grep '^MemAvailable:' /proc/meminfo; nproc"
+
+
+def meminfo_available(text: str) -> int | None:
+    """`MemAvailable` in bytes from `/proc/meminfo` text, or None when it has no such line."""
+    m = re.search(r"^MemAvailable:\s+(\d+) kB$", text, re.M)
+    return int(m[1]) * 1024 if m else None
+
+
+def parse_capacity(text: str) -> tuple[int, int] | None:
+    """(available bytes, cores) from `CAPACITY_PROBE`'s output."""
+    lines = text.strip().splitlines()
+    available = meminfo_available(text)
+    if available is None or not lines or not lines[-1].strip().isdigit():
+        return None
+    return available, int(lines[-1])
+
+
+def grant_shards(requested: int, available: int, cores: int) -> tuple[int, str]:
+    """(shards granted, why): what fits in `available` once the desktop reserve is set aside, at
+    `SHARD_MEMORY_BYTES` each, and never more than `cores - SPARE_CORES`. Zero when not one fits."""
+    by_memory = max(0, (available - DESKTOP_RESERVE_BYTES) // SHARD_MEMORY_BYTES)
+    by_cores = max(0, cores - SPARE_CORES)
+    granted = max(0, min(requested, by_memory, by_cores))
+    why = (f"{available / GIB:.1f} GiB available less a {DESKTOP_RESERVE_BYTES // GIB} GiB desktop reserve "
+           f"fits {by_memory} at {SHARD_MEMORY_BYTES // GIB} GiB each, and {cores} cores less "
+           f"{SPARE_CORES} allow {by_cores}")
+    return granted, why
+
+
+def plan_shards(where: str, requested: int, capacity: tuple[int, int] | None,
+                failure: str = "") -> tuple[int, str]:
+    """(shards to run, the line that says so). `--jobs` is a request: the host's memory and cores
+    decide. A host whose capacity could not be read gets what was requested, with a warning."""
+    if capacity is None:
+        return requested, f"{where}: warning: {failure}; running the {requested} requested shard(s) uncapped"
+    granted, why = grant_shards(requested, *capacity)
+    return granted, f"{where}: --jobs {requested} requested, {granted} granted: {why}"
+
+
+def local_capacity() -> tuple[tuple[int, int] | None, str]:
+    """(this machine's (available bytes, cores), or None and why it could not be read)."""
+    try:
+        available = meminfo_available(Path("/proc/meminfo").read_text())
+    except OSError as e:
+        return None, f"cannot read /proc/meminfo ({e})"
+    if available is None:
+        return None, "/proc/meminfo has no MemAvailable line"
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    return (available, cores), ""
+
+
+def remote_capacity(host: str) -> tuple[tuple[int, int] | None, str]:
+    """(`host`'s (available bytes, cores), or None and why it could not be read)."""
+    try:
+        got = _ssh(host, "sh -c " + shlex.quote(CAPACITY_PROBE))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"could not read {host}'s free memory ({type(e).__name__})"
+    capacity = parse_capacity(got.stdout) if got.returncode == 0 else None
+    if capacity is None:
+        return None, f"could not read {host}'s free memory: {(got.stderr or got.stdout).strip()[:200]!r}"
+    return capacity, ""
+
+
+def scope_probe_script(unit: str) -> str:
+    """A scope made the way a shard's is, printing the `memory.max` the kernel was given for it."""
+    return (f"systemd-run --user --scope --quiet --unit={unit} {SCOPE_PROPERTIES} "
+            "sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'")
+
+
+def remote_scope_works(host: str) -> tuple[bool, str]:
+    """(whether `host`'s user manager caps a shard's memory, the line that says how shards run).
+    Asked once per run, by making a scope the way a shard's is made: the user manager may be
+    absent over SSH, or not delegated the memory controller, so the cap would be a property nothing
+    enforces. Measured on zerk on 2026-10-13: every transient scope and service was refused ("Unit
+    ... not found") while `/run/user/1000`, where the manager writes them, was full."""
+    unit = f"r3-boards-probe-{os.getpid()}.scope"
+    try:
+        got = _ssh(host, "sh -c " + shlex.quote(scope_probe_script(unit)))
+        answer = got.stdout.strip() if got.returncode == 0 else (got.stderr.strip() or f"exit {got.returncode}")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        answer = type(e).__name__
+    if answer == str(SHARD_MEMORY_BYTES):
+        return True, (f"remote {host}: each shard runs in a systemd user scope capped at "
+                      f"{SHARD_MEMORY_BYTES // GIB} GiB with no swap, killed whole at the cap, at nice {SHARD_NICE}")
+    # Without the scope nothing kills a shard whole: a pool worker the kernel kills leaves
+    # `Pool.map` waiting on it (measured on Python 3.14.7), so that shard never exits.
+    return False, (f"remote {host}: warning: systemd-run --user does not cap memory there ({answer[:200]!r}); "
+                   f"shards run at nice {SHARD_NICE} and oom_score_adj {SHARD_OOM_SCORE_ADJ} only, and a shard "
+                   "whose pool worker the kernel kills waits on it forever")
+
+
+def shard_script(argv: list[str], unit: str | None) -> str:
+    """The POSIX shell one remote shard runs under: first in line for the kernel's OOM killer, at
+    nice `SHARD_NICE`, and with a `unit` in its own capped scope. It prints the shard's exit to the
+    shard's log and exits with it, or with `OOM_EXIT` when systemd recorded the scope as killed at
+    its cap."""
+    run = f"nice -n {SHARD_NICE} " + " ".join(shlex.quote(a) for a in argv)
+    head = [f"cd {shlex.quote(str(REPO_ROOT))} || exit 1", f"echo {SHARD_OOM_SCORE_ADJ} > /proc/self/oom_score_adj"]
+    if unit is None:
+        return "; ".join(head + [run, "rc=$?", 'echo "shard exit $rc"', "exit $rc"])
+    return "; ".join(head + [
+        f"systemd-run --user --scope --quiet --unit={unit} {SCOPE_PROPERTIES} {run}", "rc=$?",
+        f"r=$(systemctl --user show -p Result --value {unit} 2>/dev/null)",
+        f"systemctl --user reset-failed {unit} 2>/dev/null",
+        'echo "shard exit $rc, scope result ${r:-gone}"',
+        f'[ "$r" = oom-kill ] && exit {OOM_EXIT}', "exit $rc"])
+
+
+def shard_outcome(rc: int, scoped: bool) -> str | None:
+    """What happened to a remote shard that exited `rc`, or None when it finished."""
+    if rc == 0:
+        return None
+    if rc == OOM_EXIT:
+        return f"was killed at its {SHARD_MEMORY_BYTES // GIB} GiB memory cap"
+    if rc == 128 + 9:
+        return ("was killed by SIGKILL" if scoped else
+                "was killed by SIGKILL, most likely by the kernel's OOM killer, which prefers shards")
+    if rc == 255:
+        return "exited 255, the status ssh gives a dropped connection"
+    return f"exited {rc}"
+
+
+def recompute_reason(result: dict) -> str | None:
+    """Why a remote result is to be recomputed here rather than kept, or None to keep it."""
+    why = result.get("why", "")
+    if result.get("ok"):
+        return None
+    if any(m in why for m in MISSING_FILE_MARKERS):
+        return "needed a file the host lacks"
+    if any(m in why for m in MEMORY_FAILURE_MARKERS):
+        return "ran out of memory there"
+    return None
 
 
 def _ssh(host: str, command: str) -> subprocess.CompletedProcess:
@@ -1181,7 +1374,6 @@ def _run_to_exit(argv: list[str]) -> subprocess.CompletedProcess:
 
 def remote_python(host: str) -> tuple[str | None, str]:
     """The host's interpreter for the shards, or None and why the host cannot take them."""
-    import shlex
     try:
         probe = _ssh(host, 'printf %s "$HOME"')
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -1200,7 +1392,7 @@ def remote_python(host: str) -> tuple[str | None, str]:
         return None, f"{host}: {e}"
     if got.returncode != 0 or not got.stdout:
         return None, f"{host} has no Python with numpy: {got.stderr.strip()[:200]}"
-    return shlex.quote(got.stdout.replace("~", str(Path.home()), 1)), ""
+    return got.stdout.replace("~", str(Path.home()), 1), ""
 
 
 def data_manifest(cache: Path) -> list[Path]:
@@ -1215,6 +1407,10 @@ def data_manifest(cache: Path) -> list[Path]:
                 found.add(resolve_display(parts[2]))
     for f in cache.glob("opened-*.json"):
         found |= {Path(p) for p in json.loads(f.read_text()) if not p.startswith(str(REPO_ROOT) + "/")}
+    # The RL 150 sweep's name carries the code's cache tag (`er-builds-optimize.sweep_cache`), so
+    # after a rename the last generation's record names the old file and every remote shard stops
+    # at "no RL 150 sweep" (2026-10-14, the `-cond-floors` rename): name the one this code reads.
+    found.add(Path(_mod("er_mechanics_infusions", "er-mechanics-infusions.py").sweep_path()))
     # The archive headers `er-item-name.py` stats (never opens) to decide whether its text cache is
     # current; without them on the host every shard warns that the game item text is stale.
     game_dir = Path(os.environ.get("ER_GAME_DIR", Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"))
@@ -1229,11 +1425,13 @@ def rsync(args: list[str], mode: tuple = ("-a",)) -> None:
         raise SystemExit(f"rsync {' '.join(args[-2:])} failed: {run.stderr.strip()[:400]}")
 
 
-def run_remote_shards(host: str, py: str, jobs: int, cache: Path, subset: Path | None) -> int:
+def run_remote_shards(host: str, py: str, jobs: int, cache: Path, subset: Path | None,
+                      scoped: bool = False) -> int:
     """Copy the scripts, the data and the cache to `host`, run the shards there with each one's
-    output appended to the local `shard-<i>.log`, and copy the cache back. Returns the number of
-    shards that failed."""
-    import shlex
+    output appended to the local `shard-<i>.log`, and copy the cache back. `scoped` runs each in
+    its own memory-capped systemd scope (`remote_scope_works`). Returns the number of shards that
+    failed. A shard writes a weapon's result only once the weapon is done, so the weapons a killed
+    shard had not finished have none, and the local pass computes them."""
     print(f"remote {host}: copying scripts, data and cache", flush=True)
     rsync(["--delete", f"{REPO_ROOT / 'scripts'}/", f"{host}:{REPO_ROOT / 'scripts'}/"])
     with tempfile.NamedTemporaryFile("w", suffix=".files", delete=False) as listing:
@@ -1247,24 +1445,29 @@ def run_remote_shards(host: str, py: str, jobs: int, cache: Path, subset: Path |
     rsync([f"{cache}/", f"{host}:{cache}/"])
     procs = []
     for i in range(jobs):
-        cmd = (f"cd {shlex.quote(str(REPO_ROOT))} && exec {py} scripts/gen-r3-weapon-boards.py "
-               f"--shard {i} --of {jobs} --cache {shlex.quote(str(cache))}"
-               + (f" --subset {shlex.quote(str(subset))}" if subset else ""))
+        argv = [py, "scripts/gen-r3-weapon-boards.py", "--shard", str(i), "--of", str(jobs),
+                "--cache", str(cache)] + (["--subset", str(subset)] if subset else [])
+        unit = f"r3-boards-{os.getpid()}-{i}.scope" if scoped else None
         log = open(cache / f"shard-{i}.log", "a")
         log.write(f"remote {host}: shard {i}\n")
         log.flush()
+        cmd = "sh -c " + shlex.quote(shard_script(argv, unit))
         procs.append((subprocess.Popen(SSH + [host, cmd], stdout=log, stderr=subprocess.STDOUT), log))
     failed = 0
-    for p, log in procs:
-        failed += p.wait() != 0
+    for i, (p, log) in enumerate(procs):
+        outcome = shard_outcome(p.wait(), scoped)
         log.close()
+        if outcome:
+            failed += 1
+            print(f"remote {host}: shard {i} {outcome}; the weapons it had not finished are left to the "
+                  f"local pass (see {cache}/shard-{i}.log)", flush=True)
     rsync([f"{host}:{cache}/", f"{cache}/"])
     for f in cache.glob("*.json"):
         if f.name.startswith(("opened-", "subset")):
             continue
-        got = json.loads(f.read_text())
-        if not got.get("ok") and any(m in got.get("why", "") for m in MISSING_FILE_MARKERS):
-            print(f"remote {host}: {f.stem} needed a file the host lacks; recomputing it here", flush=True)
+        reason = recompute_reason(json.loads(f.read_text()))
+        if reason:
+            print(f"remote {host}: {f.stem} {reason}; recomputing it here", flush=True)
             f.unlink()
     print(f"remote {host}: done, {failed} shard(s) failed", flush=True)
     return failed
@@ -1276,7 +1479,8 @@ def generate(jobs: int, partial: bool = False, build: str | None = None,
     the rest as not generated yet, so a run that is still going can be looked at in game. `build`
     computes only that build's weapons and takes every other board from `earlier_result`. `host`
     runs the shards on another machine first (`run_remote_shards`); the local pass after it then
-    computes only what the host did not."""
+    computes only what the host did not. `jobs` is a request: each host runs as many shards as
+    `plan_shards` grants from its own free memory and cores."""
     key = cache_key()
     cache = CACHE_ROOT / key
     cache.mkdir(parents=True, exist_ok=True)
@@ -1291,12 +1495,35 @@ def generate(jobs: int, partial: bool = False, build: str | None = None,
         py, why = remote_python(host)
         if py is None:
             print(f"remote: {why}; computing here", flush=True)
-        elif run_remote_shards(host, py, jobs, cache, subset):
-            print(f"remote {host}: a shard failed; the local pass computes what is missing", flush=True)
+        else:
+            capacity, failure = remote_capacity(host)
+            granted, line = plan_shards(f"remote {host}", jobs, capacity, failure)
+            print(line, flush=True)
+            if not granted:
+                print(f"remote {host}: no room for one shard; computing here", flush=True)
+            else:
+                scoped, how = remote_scope_works(host)
+                print(how, flush=True)
+                if run_remote_shards(host, py, granted, cache, subset, scoped):
+                    print(f"remote {host}: a shard failed; the local pass computes what is missing", flush=True)
+    local_jobs = 0
+    if not partial:
+        capacity, failure = local_capacity()
+        local_jobs, line = plan_shards("local", jobs, capacity, failure)
+        print(line, flush=True)
+        if not local_jobs:
+            left = pending_weapons(cache, subset)
+            if left:
+                print(f"local: {left} weapon(s) left to compute and no room for one shard here; free memory "
+                      "and run again", file=sys.stderr)
+                return 1
+            # A shard that computes nothing still records the inputs its cached weapons were read from.
+            local_jobs = 1
+            print("local: nothing left to compute, so one shard runs to record the inputs", flush=True)
     procs = []
-    for i in range(0 if partial else jobs):
+    for i in range(local_jobs):
         log = open(cache / f"shard-{i}.log", "a")
-        procs.append((subprocess.Popen([sys.executable, __file__, "--shard", str(i), "--of", str(jobs),
+        procs.append((subprocess.Popen([sys.executable, __file__, "--shard", str(i), "--of", str(local_jobs),
                                         "--cache", str(cache)] + (["--subset", str(subset)] if subset else []),
                                        stdout=log, stderr=subprocess.STDOUT), log))
     failed = 0
@@ -1587,8 +1814,63 @@ def selftest() -> int:
     assert render_body([(1, {"icon_id": 2, "class": "C", "name": "N", "rule": "R", "unique_intro": "U",
                              "unique": [], "infusions_intro": "I", "infusions": [], "speed": [], "gear": []})]
                        ).count("\n    (1, Board {") == 1
-    print("selftest ok: unique, gear, crit and speed rows match the Misericorde board; staleness detected")
+    shard_selftest()
+    print("selftest ok: unique, gear, crit and speed rows match the Misericorde board; staleness detected; "
+          "shard grants match zerk's numbers")
     return 0
+
+
+#: Bound on each `sh` the selftest runs: a syntax check, and one wrapper around a process that exits.
+SH_SELFTEST_SECONDS = 10
+
+
+def shard_selftest() -> None:
+    """The shard grant on fake capacities, zerk's of 2026-10-13 among them, and the wrapper a
+    remote shard runs under."""
+    zerk = "MemTotal:       15728640 kB\nMemFree:          401204 kB\nMemAvailable:    7340032 kB\n"
+    assert meminfo_available(zerk) == 7 * GIB and meminfo_available("MemTotal: 1 kB\n") is None
+    assert parse_capacity("MemAvailable:    7340032 kB\n12\n") == (7 * GIB, 12)
+    assert parse_capacity("12\n") is None and parse_capacity("MemAvailable: 7340032 kB\n") is None
+    # zerk: 15 GiB, about 7 available, 12 cores, 6 requested.
+    granted, line = plan_shards("remote zerk", 6, parse_capacity(zerk + "12\n"))
+    assert granted == 1, line
+    assert line == ("remote zerk: --jobs 6 requested, 1 granted: 7.0 GiB available less a 4 GiB desktop "
+                    "reserve fits 1 at 3 GiB each, and 12 cores less 2 allow 10"), line
+    assert grant_shards(6, int(7.9 * GIB), 12)[0] == 1
+    assert grant_shards(6, int(6.9 * GIB), 12)[0] == 0          # not one fits beside the reserve
+    assert grant_shards(6, 2 * GIB, 12)[0] == 0                 # less than the reserve itself
+    assert grant_shards(6, 15 * GIB, 12)[0] == 3                # zerk with nothing else running
+    assert grant_shards(6, 46 * GIB, 16)[0] == 6                # the request binds
+    assert grant_shards(20, 64 * GIB, 16)[0] == 14              # the cores bind
+    assert grant_shards(3, 64 * GIB, 2)[0] == 0
+    assert plan_shards("local", 6, None, "cannot read /proc/meminfo") == (
+        6, "local: warning: cannot read /proc/meminfo; running the 6 requested shard(s) uncapped")
+
+    argv = ["/home/u/venv/bin/python", "scripts/gen-r3-weapon-boards.py", "--shard", "0", "--of", "1",
+            "--cache", "/c d"]
+    scoped = shard_script(argv, "r3-boards-1-0.scope")
+    assert (f"systemd-run --user --scope --quiet --unit=r3-boards-1-0.scope -p MemoryMax={3 * GIB} "
+            "-p MemorySwapMax=0 -p OOMPolicy=kill nice -n 10 /home/u/venv/bin/python "
+            "scripts/gen-r3-weapon-boards.py --shard 0 --of 1 --cache '/c d'; rc=$?") in scoped, scoped
+    assert f'[ "$r" = oom-kill ] && exit {OOM_EXIT}; exit $rc' in scoped, scoped
+    assert "; echo 1000 > /proc/self/oom_score_adj; " in scoped, scoped
+    plain = shard_script(argv, None)
+    assert "systemd-run" not in plain and "; nice -n 10 /home/u/venv/bin/python " in plain, plain
+    for script in (scoped, plain, scope_probe_script("r3-boards-probe-1.scope"), CAPACITY_PROBE):
+        syntax = subprocess.run(["sh", "-n", "-c", script], capture_output=True, text=True,
+                                timeout=SH_SELFTEST_SECONDS, check=False)
+        assert syntax.returncode == 0, (script, syntax.stderr)
+    # The plain wrapper passes the shard's exit status through and says it in the log.
+    ran = subprocess.run(["sh", "-c", shard_script(["python3", "-c", "raise SystemExit(3)"], None)],
+                         capture_output=True, text=True, timeout=SH_SELFTEST_SECONDS, check=False)
+    assert ran.returncode == 3 and ran.stdout == "shard exit 3\n", (ran.returncode, ran.stdout, ran.stderr)
+    assert shard_outcome(0, True) is None
+    assert shard_outcome(OOM_EXIT, True) == "was killed at its 3 GiB memory cap"
+    assert shard_outcome(137, False).endswith("by the kernel's OOM killer, which prefers shards")
+    assert shard_outcome(255, True).startswith("exited 255") and shard_outcome(1, True) == "exited 1"
+    assert recompute_reason({"ok": False, "why": "MemoryError: "}) == "ran out of memory there"
+    assert recompute_reason({"ok": False, "why": "FileNotFoundError: [Errno 2] x"}) == "needed a file the host lacks"
+    assert recompute_reason({"ok": False, "why": "KeyError: 3"}) is None and recompute_reason({"ok": True}) is None
 
 
 def main() -> int:
@@ -1596,7 +1878,10 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="exit 1 when the generated file is stale")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--only", metavar="WEAPON", help="print one weapon's board as Rust")
-    ap.add_argument("--jobs", type=int, default=3, help="weapons computed at once (each also uses every core)")
+    ap.add_argument("--jobs", type=int, default=3,
+                    help="shards requested (each also uses every core); each host grants what fits its "
+                         f"free memory, less a {DESKTOP_RESERVE_BYTES // GIB} GiB reserve, at "
+                         f"{SHARD_MEMORY_BYTES // GIB} GiB a shard, and its cores less {SPARE_CORES}")
     ap.add_argument("--partial", action="store_true",
                     help="render only the weapons already in the cache, computing nothing")
     ap.add_argument("--build", metavar="URL",

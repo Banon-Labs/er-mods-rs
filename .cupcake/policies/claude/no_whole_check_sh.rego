@@ -77,6 +77,19 @@ check_script_word(word) if endswith(word, "check.sh")
 runs_check_sh if {
 	some text in executed_texts
 	words := commands.command_slot_words(text)
+	runs_check_sh_in(words)
+}
+
+# A newline ends a statement as `;` does: `git status<newline>bash scripts/check.sh`
+# ran the suite and was allowed until 2026-10-19. The words split on spaces alone are
+# still judged, because the heredoc spans are read from the lines inside a word.
+runs_check_sh if {
+	some text in executed_texts
+	words := commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; "))
+	runs_check_sh_in(words)
+}
+
+runs_check_sh_in(words) if {
 	spans := commands.data_heredoc_spans(words)
 	some index, word in words
 	check_script_word(word)
@@ -85,7 +98,102 @@ runs_check_sh if {
 	# through the word list, and a body that names the script on every line would pay
 	# for that walk once per mention.
 	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
 	commands.word_in_command_slot(words, index)
+	not read_without_executing(words, index)
+}
+
+# A shell handed `-n` reads the script and executes none of it: `man bash` documents the
+# flag as "Read commands but do not execute them. This may be used to check a shell script
+# for syntax errors", and `-o noexec` as "Same as -n". `bash -n scripts/check.sh` is a
+# syntax check, and it was denied on 2026-10-13 as a run of the suite.
+#
+# The exemption is narrow on purpose. The shell must be the nearest one before the script
+# in the same command, and every word between them must be one of that shell's own options,
+# so `nice -n 10 bash scripts/check.sh` and `sudo -n bash scripts/check.sh` still deny: the
+# `-n` there belongs to the wrapper. Anything this cannot read as an option -- a `+n` that
+# switches the flag back off, a word it does not recognise -- leaves the deny standing.
+# Each mention of the script is judged on its own, so a syntax check chained in front of a
+# real run does not excuse the run.
+read_without_executing(words, index) if {
+	start := commands.command_slot_start(words, index)
+	shells := [position |
+		some position, word in words
+		position >= start
+		position < index
+		noexec_shell(word)
+	]
+	count(shells) > 0
+	options := array.slice(words, max(shells) + 1, index)
+	every position, _ in options {
+		shell_option_word(options, position)
+	}
+	some position, _ in options
+	noexec_option(options, position)
+	not interactive_option(options)
+}
+
+# The shells whose `-n` is documented as no-exec. A path is judged by its last part, so
+# `/bin/bash` and `/usr/bin/env bash` read the same as `bash`.
+noexec_shell(word) if {
+	parts := split(word, "/")
+	parts[count(parts) - 1] in {"sh", "bash", "zsh", "ksh", "mksh", "dash", "ash"}
+}
+
+# A cluster of single-letter options, `-n` or `-xn`, as against a long `--norc`.
+short_option_cluster(word) if {
+	startswith(word, "-")
+	not startswith(word, "--")
+	word != "-"
+}
+
+# The options that take the next word as their value: `-o name` (and a cluster ending in
+# it, `-eo name`), `-O shopt_name`, and the two long options that name a file.
+valued_option(word) if {
+	short_option_cluster(word)
+	endswith(word, "o")
+}
+
+valued_option(word) if {
+	short_option_cluster(word)
+	endswith(word, "O")
+}
+
+valued_option(word) if word in {"--rcfile", "--init-file"}
+
+option_value(options, position) if {
+	position > 0
+	valued_option(options[position - 1])
+}
+
+shell_option_word(options, position) if startswith(options[position], "-")
+
+shell_option_word(options, position) if option_value(options, position)
+
+noexec_option(options, position) if {
+	short_option_cluster(options[position])
+	contains(options[position], "n")
+	not option_value(options, position)
+}
+
+# The long spelling is zsh's (`man zsh`: options "may also be specified by name in GNU long
+# option style", with dashes in the name ignored). Bash's manual lists no such long option,
+# so there it is an invalid option rather than a way to run the script.
+noexec_option(options, position) if options[position] in {"--noexec", "--no-exec"}
+
+noexec_option(options, position) if {
+	options[position] == "noexec"
+	position > 0
+	short_option_cluster(options[position - 1])
+	endswith(options[position - 1], "o")
+}
+
+# The same manual page says `-n` "is ignored by interactive shells", and `-i` makes one.
+interactive_option(options) if {
+	some position, word in options
+	short_option_cluster(word)
+	contains(word, "i")
+	not option_value(options, position)
 }
 
 # A heredoc body no shell reads is prose (2026-09-22): a pull-request body written with
@@ -101,7 +209,7 @@ deny contains decision if {
 
 	decision := {
 		"rule_id": "ER-EFFECTS-NO-CHECK-SH",
-		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific gate your edit touched instead, by its own path -- and in the MODE check.sh runs it, which is where this list used to mislead: `cargo test -p <crate>` AND `cargo clippy -p <crate> --all-targets` (the workspace denies warnings, and `cargo test` never invokes clippy), `cargo fmt -p <crate> -- --check`, and `python3 scripts/check-<gate>.py --selftest` BEFORE `python3 scripts/check-<gate>.py` (most gates have both, check.sh runs both, and a gate that passes on your tree can still have a broken selftest). Touching a scripts/*.py gate also means `python3 scripts/check-stages.py --selftest`, which proves every path a gate reads is declared by its stage. Naming them is your work, and it is seconds.",
+		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific tests your edit touched instead, by their own path: `cargo test -p <crate>`, and `python3 scripts/check-<gate>.py --selftest` (a gate that passes on your tree can still have a broken selftest). Touching a scripts/*.py gate also means `python3 scripts/check-stages.py --selftest`, which proves every path a gate reads is declared by its stage. The lints -- `cargo clippy -p <crate> --all-targets` (the workspace denies warnings, and `cargo test` never invokes clippy), `cargo fmt -p <crate> -- --check`, `scripts/check-comment-caps.py` and `scripts/check-no-lossy-utf8.py` -- wait until the user replies `authorize commit` (user directive 2026-10-17), and a subagent never runs them. Naming them is your work, and it is seconds.",
 		"severity": "HIGH",
 	}
 }

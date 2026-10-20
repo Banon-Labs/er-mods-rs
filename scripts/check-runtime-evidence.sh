@@ -118,7 +118,13 @@ carried_forward() { # carried_forward <run build sha> <tip>
 	[ -n "$changed" ] || return 1
 	# Every changed path must be under one of the safe roots. `grep -qv` finds the first that is
 	# not, so its failure is what proves the diff is confined.
-	! printf '%s\n' "$changed" | grep -qv '^\(\.github/\|\.cupcake/\|scripts/\)'
+	#
+	# A here-string, never `printf ... | grep -q`. `-q` exits at its first match, so a `printf` still
+	# writing a long list hits a closed pipe. Under `pipefail` that write error becomes the pipeline's
+	# status and the `!` turns it into "confined": a diff with a crate in it carried forward, and
+	# the only visible trace was `printf: write error: Broken pipe` in the push log (git runs the
+	# hook with SIGPIPE ignored, so the write fails loudly instead of killing the subshell).
+	! grep -qv '^\(\.github/\|\.cupcake/\|scripts/\)' <<<"$changed"
 }
 
 selftest() {
@@ -217,25 +223,6 @@ selftest() {
 		expect 1 "a run does NOT carry forward across a change cargo compiles" \
 			carried_forward "$other_sha" "$tip_sha"
 
-		# The cupcake signal keeps its own copy of that decision, in python inside a heredoc, and
-		# the plumbing that hands it the candidate list is easy to break in silence: a pipe into a
-		# heredoc is swallowed, and the copy then answers `MISSING` having seen no candidates at all.
-		# That is SC2259, caught by the linter on the way in. So the copy is driven here, over
-		# the same fixture commits, because two enforcement points that disagree about one push
-		# teach the next agent to ignore whichever is louder.
-		local signal="$repo_root/.cupcake/signals/runtime_evidence_for_head.sh"
-		if [ -f "$signal" ]; then
-			sed -n "/<<'PY'/,/^PY\$/p" "$signal" | sed '1d;$d' >"$tmp/carry.py"
-			signal_carries() { # signal_carries <tip> <candidate sha>
-				[ "$(python3 "$tmp/carry.py" "$1" "$repo_root" "candidate $2 br-x/er-a.log")" = OK ]
-			}
-			expect 0 "the signal's copy carries forward from the same run" \
-				signal_carries "$tip_sha" "$ran_sha"
-			expect 1 "the signal's copy refuses across a change cargo compiles" \
-				signal_carries "$tip_sha" "$other_sha"
-			expect 1 "the signal's copy refuses when it was handed no candidates" \
-				signal_carries "$tip_sha" ""
-		fi
 		# The `.github/` case, which the scope tool alone answers wrongly for this question: it
 		# widens to everything on a workflow edit, so a commit touching only check.yml was told
 		# to rebuild and relaunch the game to prove a `curl` flag.
@@ -273,10 +260,11 @@ selftest() {
 		local deleted_paths kept_paths
 		deleted_paths="$(git -C "$del" show --name-only --diff-filter=d --format= HEAD)"
 		kept_paths="$(git -C "$del" show --name-only --format= HEAD)"
-		expect 0 "a crates/ deletion leaves no path the gate would ask a run to prove" \
-			bash -c '! printf "%s\n" "$1" | grep -q "^crates/"' _ "$deleted_paths"
+		names_a_crate() { grep -q '^crates/' <<<"$1"; }
+		expect 1 "a crates/ deletion leaves no path the gate would ask a run to prove" \
+			names_a_crate "$deleted_paths"
 		expect 0 "without the filter the same commit does look like changed game code" \
-			bash -c 'printf "%s\n" "$1" | grep -q "^crates/"' _ "$kept_paths"
+			names_a_crate "$kept_paths"
 	else
 		printf '  skip  deletion (a throwaway repository could not be created)\n'
 	fi
@@ -324,6 +312,197 @@ selftest() {
 		printf '  skip  pushed-sha judging (a throwaway repository could not be created)\n'
 	fi
 
+	# A long diff, read the way the pre-push hook reads it. git runs the hook with SIGPIPE ignored,
+	# and the piped `printf "$changed" | grep -q` this file used to have then wrote into a pipe
+	# `grep` had already closed. Past the pipe buffer the write failed, `pipefail` made that failure
+	# the pipeline's status, and the `!` in front read it as the opposite verdict. Measured
+	# 2026-10-13 with 8000 paths under crates/: the piped form carried the diff forward, allowed the
+	# push without reading evidence, and printed `printf: write error: Broken pipe` on the way.
+	# Built with plumbing, one blob under every path, so the fixture writes no files to disk.
+	local many="$tmp/many-paths"
+	mkdir -p "$many"
+	(
+		cd "$many" || exit 1
+		git init -q -b base . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'seed\n' >seed
+		git add seed && git commit -qm "the base" --no-verify
+		blob="$(git hash-object -w seed)"
+		for heavy in crate:crates/er-many/src script:scripts/many; do
+			git read-tree base
+			for ((i = 1; i <= 8000; i++)); do
+				printf '100644 blob %s\t%s/file-%05d.rs\n' "$blob" "${heavy#*:}" "$i"
+			done | git update-index --index-info
+			git branch "${heavy%%:*}-heavy" \
+				"$(git commit-tree -p base -m "${heavy#*:}" "$(git write-tree)")"
+		done
+	) >/dev/null 2>&1
+	if git -C "$many" rev-parse --verify --quiet crate-heavy >/dev/null 2>&1 &&
+		git -C "$many" rev-parse --verify --quiet script-heavy >/dev/null 2>&1; then
+		# expect_piped <wanted rc> <empty|no-broken-pipe> <description> <command...>
+		# Runs the command in the fixture with SIGPIPE ignored, as git runs the hook, and judges its
+		# stderr as well as its status: `empty` wants nothing at all, `no-broken-pipe` admits the
+		# refusal text the push judge prints but not a write error.
+		expect_piped() {
+			local wanted="$1" stderr_rule="$2" description="$3" err got
+			shift 3
+			err="$(
+				cd "$many" || exit 1
+				trap '' PIPE
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$tmp/nobuild" ER_GAME_DIR="$tmp/nogame" "$@" 2>&1 >/dev/null
+			)"
+			got=$?
+			local stderr_ok=1
+			case "$stderr_rule" in
+			empty) [ -z "$err" ] || stderr_ok=0 ;;
+			no-broken-pipe) ! grep -q 'Broken pipe' <<<"$err" || stderr_ok=0 ;;
+			esac
+			if [ "$got" = "$wanted" ] && [ "$stderr_ok" -eq 1 ]; then
+				printf '  ok    %s\n' "$description"
+			else
+				printf '  FAIL  %s (wanted rc %s, got %s; stderr: %s)\n' \
+					"$description" "$wanted" "$got" "$(head -1 <<<"$err")"
+				failures=$((failures + 1))
+			fi
+		}
+		expect_piped 1 empty "8000 changed paths under crates/ do not carry forward, silently" \
+			carried_forward base crate-heavy
+		expect_piped 0 empty "8000 changed paths under scripts/ still carry forward, silently" \
+			carried_forward base script-heavy
+		expect_piped 1 no-broken-pipe "a pushed sha with 8000 crate paths is refused" \
+			bash "$repo_root/scripts/check-runtime-evidence.sh" crate-heavy
+	else
+		printf '  skip  long diff (a throwaway repository could not be created)\n'
+	fi
+
+	# 2026-10-19, against this repository's own history: the push the cupcake signal refused and
+	# this script accepted. The newest logs are another branch's tip (`90f5bcf6`) and an unrelated
+	# commit (`1a4b82ed`); the run that proves the branch is an older directory holding `f8716805`,
+	# and the two commits from there to the tip `581fb93f` touch only docs/ and scripts/. The capped
+	# scan the signal used to read stops after the two newest build shas, so it never saw the run
+	# that carries forward. Skipped once the tip is in origin/main, because the push then changes no
+	# crate and both answers below would be a trivial allow.
+	local x_tip=581fb93f x_ran=f8716805 x_other=90f5bcf6 x_third=1a4b82ed
+	local x_have=1 x_sha
+	for x_sha in "$x_tip" "$x_ran" "$x_other" "$x_third"; do
+		git cat-file -e "$x_sha^{commit}" 2>/dev/null || x_have=0
+	done
+	if [ "$x_have" -eq 1 ] &&
+		git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1 &&
+		grep -q '^crates/' <<<"$(git diff --name-only --diff-filter=d "refs/remotes/origin/main...$x_tip" 2>/dev/null)"; then
+		local x="$tmp/cross-branch"
+		mkdir -p "$x/runs/br-20261020-000550-3548" "$x/runs/br-20261020-010000-aaaa" \
+			"$x/runs/br-20261020-020000-bbbb" "$x/game"
+		x_log() { # x_log <sha> <file> <age>
+			printf 'build git=%s module=er_quickload.dll base=0x1 pe=0x2 (t)\nmore\n' \
+				"$(git rev-parse "$1")" >"$2"
+			touch -d "$3" "$2" 2>/dev/null || true
+		}
+		x_log "$x_ran" "$x/runs/br-20261020-000550-3548/er-quickload-autoload-debug.log" '-3 hours'
+		x_log "$x_third" "$x/runs/br-20261020-010000-aaaa/er-quickload-autoload-debug.log" '-2 hours'
+		x_log "$x_other" "$x/runs/br-20261020-020000-bbbb/er-quickload-autoload-debug.log" '-1 hour'
+		x_log "$x_other" "$x/game/er-quickload-autoload-debug.log" 'now'
+		mkdir -p "$x/runs-without"
+		cp -rf "$x/runs/br-20261020-010000-aaaa" "$x/runs/br-20261020-020000-bbbb" "$x/runs-without/"
+		judge_cross() { # judge_cross <run root>
+			(
+				cd "$repo_root" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$1" ER_GAME_DIR="$x/game" \
+					bash "$repo_root/scripts/check-runtime-evidence.sh" "$x_tip"
+			)
+		}
+		capped_sees_ran() { # the scan the signal used to read, uncapped only by --exhaustive
+			ER_ME3_RUN_ROOT="$x/runs" ER_GAME_DIR="$x/game" \
+				python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$x_tip" </dev/null |
+				grep -q "^candidate $(git rev-parse "$x_ran") "
+		}
+		expect 1 "the capped scan never reaches the older run that proves the ancestor" \
+			capped_sees_ran
+		expect 0 "an older run proving an ancestor carries past newer logs from another branch" \
+			judge_cross "$x/runs"
+		expect 1 "without that older run the same push is refused" \
+			judge_cross "$x/runs-without"
+	else
+		printf '  skip  cross-branch carry-forward (the fixture commits are not in this clone, or are merged)\n'
+	fi
+
+	# The cupcake signal's verdict on a push must be this script's. It calls this script now rather
+	# than carrying a copy, and this drives the signal end to end on the same shape as the case
+	# above, in a throwaway repository: newest logs from another branch, the run that proves the
+	# branch in an older directory, and only scripts/ commits between that run and the tip.
+	local signal="$repo_root/.cupcake/signals/runtime_evidence_for_head.sh"
+	local sg="$tmp/signal-agrees"
+	mkdir -p "$sg/repo/crates/er-thing" "$sg/repo/scripts" "$sg/game"
+	(
+		cd "$sg/repo" || exit 1
+		git init -q -b main . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'fn a() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "the base" --no-verify
+		git update-ref refs/remotes/origin/main HEAD
+		git checkout -q -b other
+		printf 'fn b() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "another branch's game code" --no-verify
+		printf 'fn c() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "another branch's tip" --no-verify
+		git checkout -q -b mine main
+		printf 'fn d() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "game code that ran" --no-verify
+		printf 'echo 1\n' >scripts/one.sh
+		git add -A && git commit -qm "a script" --no-verify
+		printf 'echo 2\n' >scripts/two.sh
+		git add -A && git commit -qm "another script" --no-verify
+	) >/dev/null 2>&1
+	if [ -f "$signal" ] && git -C "$sg/repo" rev-parse --verify --quiet mine >/dev/null 2>&1; then
+		sg_log() { # sg_log <rev> <file> <age>
+			mkdir -p "$(dirname "$2")"
+			printf 'build git=%s module=er_quickload.dll base=0x1 pe=0x2 (t)\n' \
+				"$(git -C "$sg/repo" rev-parse "$1")" >"$2"
+			touch -d "$3" "$2" 2>/dev/null || true
+		}
+		sg_log mine~2 "$sg/runs/br-1-older/er-quickload-autoload-debug.log" '-3 hours'
+		sg_log other~1 "$sg/runs/br-2-newer/er-quickload-autoload-debug.log" '-2 hours'
+		sg_log other "$sg/runs/br-3-newest/er-quickload-autoload-debug.log" '-1 hour'
+		sg_log other "$sg/game/er-quickload-autoload-debug.log" 'now'
+		mkdir -p "$sg/runs-without"
+		cp -rf "$sg/runs/br-2-newer" "$sg/runs/br-3-newest" "$sg/runs-without/"
+		signal_says() { # signal_says <word> <run root> <command>
+			local got
+			got="$(
+				cd "$sg/repo" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE
+				printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"}}' "$3" |
+					ER_ME3_RUN_ROOT="$2" ER_GAME_DIR="$sg/game" bash "$signal"
+			)"
+			[ "$got" = "$1" ]
+		}
+		judge_sg() { # judge_sg <run root>
+			(
+				cd "$sg/repo" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$1" ER_GAME_DIR="$sg/game" bash "$repo_root/scripts/check-runtime-evidence.sh"
+			)
+		}
+		expect 0 "this script carries the older run past another branch's newer logs" \
+			judge_sg "$sg/runs"
+		expect 0 "the signal agrees: OK on the push" \
+			signal_says OK "$sg/runs" "git push origin mine"
+		expect 1 "this script refuses once the older run is gone" \
+			judge_sg "$sg/runs-without"
+		expect 0 "the signal agrees: MISSING on the same push" \
+			signal_says MISSING "$sg/runs-without" "git push origin mine"
+		expect 0 "a command that is not a push gets no verdict from the signal" \
+			signal_says UNKNOWN "$sg/runs-without" "cargo test -p er-thing"
+	else
+		printf '  skip  signal agreement (a throwaway repository could not be created)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -361,7 +540,9 @@ judge_tip() {
 	else
 		changed="$(git show --name-only --diff-filter=d --format= "$tip" 2>/dev/null)"
 	fi
-	if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
+	# A here-string for the reason given in `carried_forward`: piped, a long diff whose first path is
+	# under crates/ made this condition true and allowed the push without reading any evidence.
+	if ! grep -q '^crates/' <<<"$changed"; then
 		return 0
 	fi
 
@@ -419,8 +600,8 @@ judge_tip() {
 		printf '  this one -- neither under the run root nor in the game directory, both of which\n'
 		printf '  were read. Build it, launch it, and let the DLL write:\n'
 		printf '\n'
-		printf '    bash scripts/er-build-dlls.sh --all\n'
-		printf '    python3 scripts/er-run-branch.py --save <save>:<slot>\n'
+		printf '    bash scripts/er-build-dlls.sh <package>\n'
+		printf '    python3 scripts/er-run-branch.py --with <package>\n'
 		printf '\n'
 		printf '  A launcher run counts too -- its logs land in the game directory rather than the\n'
 		printf '  run root. Commit before you build: the sha is stamped at build time, so building\n'

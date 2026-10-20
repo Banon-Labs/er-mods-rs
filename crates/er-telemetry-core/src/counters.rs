@@ -1451,6 +1451,14 @@ pub static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// 1 while the load-error screen owns the cover (`er_save_picker_core::load_error`).
+pub static LOAD_ERROR_SCREEN_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Times the load-error screen has been raised this process.
+pub static LOAD_ERROR_SCREEN_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Frames the load-error screen was rasterised into the cover.
+pub static LOAD_ERROR_SCREEN_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Close presses the host refused, because a save write was in flight.
+pub static LOAD_ERROR_SCREEN_EXIT_REFUSED: AtomicUsize = AtomicUsize::new(0);
 /// Consecutive ticks the product autoload has read an empty-like profile for its Continue slot.
 /// Reset by a single real read, so it measures an unbroken window rather than uptime; past
 /// `er_title_flow::boot_hold::EMPTY_PROFILE_ESCALATE_TICKS` the autoload rejects its own save

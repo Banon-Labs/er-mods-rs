@@ -67,6 +67,7 @@ Usage:
     python3 scripts/er-mechanics-attacks.py --selftest
 """
 import argparse
+import functools
 import importlib.util
 import json
 import math
@@ -581,12 +582,14 @@ def hkx_path(category, anim):
     return _HKX_INDEX.get(f'a{category:03d}_{anim:06d}.hkx')
 
 
+@functools.cache
 def hkx_duration(path):
     """(duration seconds, numFrames, frameDuration) of a spline-compressed clip, or None.
 
     The object is found by its own consistency: `(numFrames - 1) * frameDuration ==
     duration` and `blockDuration * blockInverseDuration == 1`. A file with no such object
-    (or more than one) returns None rather than a guess.
+    (or more than one) returns None rather than a guess. Kept per path: the scan reads the whole
+    file, and an embedding asked 65,199 times (102 of its 693 s, measured 2026-10-14).
     """
     with open(path, 'rb') as handle:
         b = handle.read()

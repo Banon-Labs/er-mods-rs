@@ -114,6 +114,8 @@ HKS_DECOMPILE = os.environ.get('ER_C0000_HKS', os.path.expanduser(
 def _load(name, filename):
     spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, filename))
     module = importlib.util.module_from_spec(spec)
+    # Registered first: a dataclass (`er-hks-disasm.Instr`) looks its own module up by name.
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -142,6 +144,7 @@ DUAL_SLOTS = [
     ('dual_jump', 'jump L1', 34570, 'Jump_LandAttack_Dual'),
 ]
 DUAL_JUDGES = range(800, 900)
+ROLL_DUAL_ANIM = 34300
 #: (key, label, judge, animation, state), `TAE`. 035000 is played by both `AttackLeftLight1`
 #: and `AttackLeftHeavy1`; 035010..035050 only by `AttackLeftHeavy2..6`.
 OFFHAND_SLOTS = [
@@ -157,17 +160,24 @@ OFFHAND_SLOTS = [
 #: same `UpdateFromManipulator` pairing attacks.md section 4 verified for R1).
 L1_INPUT_IDS, L1_CANCEL_IDS = (9, 87), (16, 117)
 
-#: `IsEnableDualWielding` categories (`COMMUNITY` HKS decompile, `LUA/Enums.txt` values):
-#: short sword 20, claw 22, straight sword 23, twinblade 24, large sword 25, extra-large sword
-#: 26, rapier 27, curved sword 28, katana 29, axe 30, extra-large axe/hammer 31, large axe 32,
-#: hammer 33, flail 34, large hammer 35, spear 36, large spear 37, halberd 38, large rapier 39,
-#: large curved sword 40, fist 42, whip 43, large scythe 50 and the unnamed 53, 55..59.
+#: `IsEnableDualWielding` categories (`VERIFIED`: the compiled `c0000.hks`, every
+#: `WEAPON_CATEGORY_*` global the function compares, valued from `common_define.hks`;
+#: `hks_dual_categories`): short sword 20, claw 22, straight sword 23, twinblade 24, large sword
+#: 25, extra-large sword 26, rapier 27, curved sword 28, katana 29, axe 30, extra-large axe/hammer
+#: 31, large axe 32, hammer 33, flail 34, large hammer 35, spear 36, large spear 37, halberd 38,
+#: large rapier 39, large curved sword 40, fist 42, whip 43, large scythe 50, throwing dagger 53,
+#: hand-to-hand arts 55, perfume bottle 56, dueling shield 57, backhand blade 58, light greatsword
+#: 60, great katana 61, beast claw 62. The Smithbox decompile this used to come from had 59 in
+#: place of 60-62, so no light greatsword, great katana or beast claw powerstanced here.
 POWERSTANCE_CATEGORIES = frozenset(
     {20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 43,
-     50, 53, 55, 56, 57, 58, 59})
-CATEGORY_SHORT_SWORD, CATEGORY_KATANA = 20, 29
+     50, 53, 55, 56, 57, 58, 60, 61, 62})
+CATEGORY_SHORT_SWORD, CATEGORY_RAPIER, CATEGORY_KATANA = 20, 27, 29
 #: `spAtkcategory` 104: only the Wakizashi in 1.17.1 (`VERIFIED` regulation).
 SPECIAL_CATEGORY_WAKIZASHI = 104
+#: `spAtkcategory` 262, the other special case `IsEnableDualWielding` tests (`VERIFIED` bytecode):
+#: a short sword with it pairs only with another, and a rapier pairs with it.
+SPECIAL_CATEGORY_262 = 262
 
 #: `EquipParamWeapon.wepType` of shields (`VERIFIED` regulation: Buckler-class 65, Kite/Brass/
 #: Heater 67, every towershield/greatshield 69).
@@ -390,8 +400,14 @@ def powerstance_rows(reg, right, left, level=0):
     def hand(source):
         return left if source == SOURCE_LEFT else right
 
+    # A crouch L1 the behavior script refuses (`IsUseStealthAttack(TRUE)` false, every category
+    # outside `DUAL_STEALTH_ATTACK_CATEGORIES`) plays the rolling L1: c0000.hks sends
+    # `W_AttackRightLightStealth` to `W_AttackDualRolling` then, and those TAEs have no 034310.
+    stealth = ATK.uses_dual_stealth_attack(reg.weapon[right])
+    slots = [(key, label, ROLL_DUAL_ANIM if key == 'dual_crouch' and not stealth else anim, state)
+             for key, label, anim, state in DUAL_SLOTS]
     rows = [_slot_row(reg, key, label, anim, state, anims, category, hand, level,
-                      lambda j: j in DUAL_JUDGES) for key, label, anim, state in DUAL_SLOTS]
+                      lambda j: j in DUAL_JUDGES) for key, label, anim, state in slots]
     return [r for r in rows if r]
 
 
@@ -413,9 +429,13 @@ def can_powerstance(reg, right, left, two_handing=False):
     rk, lk = a['wepmotionCategory'], b['wepmotionCategory']
     rs, ls = a.get('spAtkcategory'), b.get('spAtkcategory')
     if rk == CATEGORY_SHORT_SWORD:
-        if rs == SPECIAL_CATEGORY_WAKIZASHI:
-            return ls == SPECIAL_CATEGORY_WAKIZASHI
-        return lk == CATEGORY_SHORT_SWORD and ls != SPECIAL_CATEGORY_WAKIZASHI
+        for sp in (SPECIAL_CATEGORY_WAKIZASHI, SPECIAL_CATEGORY_262):
+            if rs == sp:
+                return ls == sp
+        return (lk == CATEGORY_SHORT_SWORD
+                and ls not in (SPECIAL_CATEGORY_WAKIZASHI, SPECIAL_CATEGORY_262))
+    if rk == CATEGORY_RAPIER:
+        return lk == CATEGORY_RAPIER or ls == SPECIAL_CATEGORY_262
     if rk == CATEGORY_KATANA:
         return lk == CATEGORY_KATANA or ls == SPECIAL_CATEGORY_WAKIZASHI
     return rk in POWERSTANCE_CATEGORIES and lk == rk
@@ -1432,23 +1452,23 @@ def corpus_main(a):
     return 0
 
 
-def _hks_dual_categories(path):
-    """Categories `IsEnableDualWielding` accepts, read from the decompiled HKS text."""
+def hks_dual_categories():
+    """Categories `IsEnableDualWielding` accepts, read from the compiled `c0000.hks`: every
+    `WEAPON_CATEGORY_*` global the function loads is a category it pairs with itself (its branches
+    are `right == X and left == X`, plus the special cases in `can_powerstance`), valued from
+    `common_define.hks`. None when either compiled script is absent."""
     import re
-    text = open(path, encoding='utf-8', errors='replace').read()
-    start = text.find('function IsEnableDualWielding')
-    body = text[start:text.find('\nend', start)]
-    enums_path = os.path.join(os.path.dirname(path), 'LUA', 'Enums.txt')
-    enums = {}
-    if os.path.exists(enums_path):
-        enums = {n: int(v) for n, v in re.findall(
-            r'(WEAPON_CATEGORY_\w+)\s*=\s*(\d+)', open(enums_path, encoding='utf-8').read())}
-    names = set(re.findall(r'rightKind == (WEAPON_CATEGORY_\w+)', body))
-    out = set()
-    for n in names:
-        unnamed = re.fullmatch(r'WEAPON_CATEGORY_CAT(\d+)', n)
-        out.add(int(unnamed.group(1)) if unnamed else enums.get(n))
-    return out
+    dis = _load('er_hks_disasm', 'er-hks-disasm.py')
+    tab = _load('er_hks_weapon_category_table', 'er-hks-weapon-category-table.py')
+    if not (os.path.exists(dis.DEFAULT_FILE) and os.path.exists(tab.DEFAULT_HKS)):
+        return None
+    main = dis.parse_file(dis.DEFAULT_FILE)[3]
+    dis.name_functions(main)
+    f = next(f for f in dis.walk(main) if f.name == 'IsEnableDualWielding')
+    names = {n for pc in range(len(f.instrs))
+             for n in re.findall(r"'(WEAPON_CATEGORY_\w+)'", dis.disasm_line(f, pc))}
+    cats = tab.extract(tab.DEFAULT_HKS)['categories']
+    return {cats[n] for n in names}
 
 
 def selftest():
@@ -1487,12 +1507,15 @@ def selftest():
     check('dagger off-hand L1 #1 row name', names.get('left_1'),
           'Default - Dagger - Left 1H Light #1', 'COMMUNITY: Smithbox AtkParam_Pc row names')
 
-    # 4. The HKS decompile's category list against POWERSTANCE_CATEGORIES.
-    if os.path.exists(HKS_DECOMPILE):
-        check('IsEnableDualWielding categories', _hks_dual_categories(HKS_DECOMPILE),
-              set(POWERSTANCE_CATEGORIES), 'COMMUNITY: Smithbox c0000.hks + LUA/Enums.txt')
+    # 4. The compiled behavior script's category list against POWERSTANCE_CATEGORIES.
+    got = hks_dual_categories()
+    if got is not None:
+        check('IsEnableDualWielding categories', got, set(POWERSTANCE_CATEGORIES),
+              'VERIFIED: c0000.hks bytecode + common_define.hks')
+        check('Milady + Milady powerstance', can_powerstance(reg, 67500000, 67500000), True,
+              'VERIFIED: light greatsword 60 in IsEnableDualWielding')
     else:
-        skips.append('HKS decompile absent: ' + HKS_DECOMPILE)
+        skips.append('compiled c0000.hks or common_define.hks absent')
 
     # 5. EXE constants of the guard formulas, read out of the 1.16.2 flat image.
     img = ATK.DEOBF_1162

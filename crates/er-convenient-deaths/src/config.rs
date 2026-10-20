@@ -1,23 +1,30 @@
-//! The DLL-adjacent config that decides which patches run.
+//! The game-directory config that decides which patches are in force.
 //!
-//! Three booleans, read once at startup. It is deliberately not a general TOML parser: the whole
-//! grammar is `key = true` / `key = false`, which keeps the crate free of a parser dependency and
-//! keeps this file host-testable without a game.
+//! Three booleans, re-read while the game runs. It is deliberately not a general TOML parser: the
+//! whole grammar is `key = true` / `key = false`, which keeps the crate free of a parser dependency
+//! and keeps this file host-testable without a game.
+//!
+//! # Where it lives
+//!
+//! `er-convenient-deaths.toml` in the game directory, beside `er-convenient-deaths.log` and the
+//! other `er-*.toml` files. It used to sit beside this DLL under the DLL's own name. The only
+//! reason the code gave for that was not to guess a directory when the DLL's own path was unknown;
+//! the game directory is resolved the same way the log already is, so nothing is lost by moving.
 //!
 //! # Why every patch is off until asked for
 //!
 //! Loading a DLL is normally this workspace's enable switch -- a `[[natives]]` entry is the
 //! toggle. That does not fit here, because the three patches are not one feature: keeping every
 //! rune you have ever earned is a different decision from shortening a fade-out, and a player who
-//! wants the second has no way to decline the first if presence enables both. They are also
-//! applied once, at startup, and cannot be undone within the session. So presence gets the DLL,
-//! and the file gets the three decisions.
+//! wants the second has no way to decline the first if presence enables both. So presence gets the
+//! DLL, and the file gets the three decisions -- each of which can be changed, and undone, while
+//! the game runs.
 
-/// What the file is called, relative to the loaded DLL. Written on first run if absent.
-pub(crate) const CONFIG_EXTENSION: &str = "toml";
+/// The file's name, in the game directory. Written on first run if absent.
+pub(crate) const CONFIG_FILE_NAME: &str = "er-convenient-deaths.toml";
 
 /// Which patches the player asked for.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Config {
     enabled: Vec<String>,
 }
@@ -28,7 +35,8 @@ impl Config {
         self.enabled.iter().any(|found| found == key)
     }
 
-    /// How many keys were switched on, for the install log's one-line summary.
+    /// How many keys were switched on. Only the tests ask: the runtime diffs configs instead.
+    #[cfg(test)]
     pub(crate) fn enabled_count(&self) -> usize {
         self.enabled.len()
     }
@@ -37,8 +45,8 @@ impl Config {
 /// Parse the config.
 ///
 /// Unknown keys are ignored rather than rejected: this file is edited by hand, and a typo that
-/// silently disables one patch is a better outcome than one that refuses to load the rest. The
-/// install log names every patch it did not apply and why, so a typo is visible there.
+/// silently disables one patch is a better outcome than one that refuses to load the rest. Every
+/// reload logs each option's state, so a typo shows up there as an option that stayed off.
 pub(crate) fn parse(contents: &str) -> Config {
     let mut enabled = Vec::new();
     for line in contents.lines() {
@@ -58,10 +66,15 @@ pub(crate) fn boilerplate(keys: &[(&str, &str)]) -> String {
     let mut out = String::from(
         "# er-convenient-deaths\n\
          #\n\
-         # Every option below is OFF. Each one rewrites a single byte of the game's own code at\n\
-         # startup, so a change here needs a restart -- and each is applied only if the bytes at\n\
-         # its address are the ones it was measured against, which is why a game update turns a\n\
-         # patch off rather than breaking it.\n\
+         # Every option below is OFF. Each one rewrites a single byte of the game's own code.\n\
+         #\n\
+         # Changes apply live, with no restart: this file is re-read about once a second while\n\
+         # the game runs. Setting an option to true patches its byte in; setting it back to\n\
+         # false puts the game's original byte back. er-convenient-deaths.log beside this file\n\
+         # records each change.\n\
+         #\n\
+         # Each option is applied only if the bytes at its address are the ones it was measured\n\
+         # against, which is why a game update turns a patch off rather than breaking it.\n\
          #\n\
          # These are single-player conveniences. They change what dying costs, so do not expect\n\
          # them to be welcome in someone else's session.\n\
@@ -116,6 +129,15 @@ mod tests {
             assert!(written.contains(key), "{key} missing from the default file");
             assert!(written.contains(effect), "{key}'s effect line is missing");
         }
+    }
+
+    /// The header is what a player reads before editing, and it used to say a change needed a
+    /// restart. It must now say the opposite, and never both.
+    #[test]
+    fn the_boilerplate_says_changes_apply_live() {
+        let written = boilerplate(&[]);
+        assert!(written.contains("Changes apply live"));
+        assert!(!written.contains("needs a restart"));
     }
 
     #[test]

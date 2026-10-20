@@ -295,7 +295,11 @@ odd_span_blanked(index, text) := text if {
 	index % 2 == 0
 }
 
-odd_span_blanked(index, text) := blanked_anchors(text) if {
+# A backtick in a quoted span is blanked here and not in blanked_anchors, which heredoc bodies
+# share: a backtick in an unquoted heredoc body still runs, so it must stay visible to
+# substitution_free. A quoted span only reaches this point once substitution_free has proved
+# every backtick in the text sits inside single quotes.
+odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 	index % 2 == 1
 }
 
@@ -630,10 +634,48 @@ spans_blanked_either_order(resolved) := out if {
 
 scannable(text) := stripped if {
 	resolved := heredoc_resolved(text)
-	not contains(resolved, "$(")
-	not contains(resolved, "`")
+	substitution_free(resolved)
 	stripped := escaped_quotes_stripped(resolved)
 }
+
+# No command substitution the shell would run. A text with no backtick and no `$(` at
+# all passes as before. A text with either passes only when every one of them sits
+# inside a single-quoted span, where the shell reads it as a literal character.
+#
+# Until 2026-10-19 any backtick anywhere sent the whole text back to its raw form, so
+# a `bd comments add <id> '... `mid hooks: 3/3 ARMED` ... companions; scripts/frida/
+# npc-summons-tag-check.js ...' 2>&1 | grep -v hint` kept the `;` inside its quoted
+# body, the `scripts/*-check.js` after it took command position, and
+# no_grep_for_build_errors denied a comment as a build piped into grep. Markdown
+# backticks in quoted prose are the common case, not the exotic one.
+#
+# The test is one left-to-right tokenisation in a single regex, not a quote-parity
+# split, because parity is fooled by an apostrophe inside double quotes pairing with a
+# real quote later and would call an unquoted backtick quoted. Tokens: an ordinary
+# character, a backslash escape, a `$` not opening `(`, a whole single-quoted span, or
+# a whole double-quoted span (optionally `$"..."`) containing no backtick and no `$(`.
+# Anything else, `$'...'` included, fails to match and keeps the raw text. A heredoc
+# is excluded outright: inside an unquoted heredoc body a single quote is literal and
+# a backtick in it still runs.
+substitution_free(text) if {
+	not contains(text, "$(")
+	not contains(text, "`")
+}
+
+substitution_free(text) if {
+	not contains(text, "<<")
+	regex.match(substitution_only_in_single_quotes_pattern, text)
+}
+
+substitution_only_in_single_quotes_pattern := concat("", [
+	`^(`,
+	"[^'\"\\\\`$]",
+	`|\\(.|\n)`,
+	"|\\$([^('\"\\\\`]|$)",
+	`|'[^']*'`,
+	"|\\$?\"([^\"\\\\`$]|\\\\(.|\\n)|\\$([^(\"\\\\`]|$))*\"",
+	`)*$`,
+])
 
 scan_text(text) := out if {
 	out := operands_blanked(text)
@@ -644,9 +686,10 @@ scan_text(text) := out if {
 # ---------------------------------------------------------------------------
 # SINGLE QUOTES BESIDE A SUBSTITUTION (2026-10-15)
 #
-# `scannable` above gives up on any text carrying `$(` or a backtick, which is right for double
-# quotes -- a substitution inside them runs -- and wrong for single quotes, which nothing inside can
-# escape. Giving up kept the whole text raw, so a regex in single quotes stood in command position.
+# `scannable` above gives up on any text carrying `$(` or a backtick outside single quotes, which
+# is right for the substitution itself -- it runs -- and wrong for the single-quoted spans beside
+# it, which nothing inside can escape. Giving up kept the whole text raw, so a regex in single
+# quotes stood in command position.
 # Measured 2026-10-15: `F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)` was
 # refused by `no_grep_for_build_errors` as a build piped into grep, because the `(` in front of
 # `go` was read as a subshell and `go` as the Go toolchain.
@@ -907,22 +950,82 @@ digit_char(c) if c in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 # The `/` test was there so `--out=/some/path` would not count as an assignment. The name
 # test keeps that (`--out` is not a name, and the `-` rule above already reads it as an
 # option), and a path that merely contains `=` (`dir/a=b`) is still read as the program.
-command_slot_wrapper(word) if shell_assignment_word(word)
+#
+# `P=/tmp/x.patch bash scripts/check.sh` runs the script too, and was allowed until
+# 2026-10-19 through the same `/` test.
+command_slot_wrapper(word) if assignment_word(word)
 
-# Token arithmetic rather than `regex.match`, for the reason the command-slot header
-# above records: this runs once per word of every command.
-shell_assignment_word(word) if {
-	cut := indexof(word, "=")
-	cut > 0
-	name := substring(word, 0, cut)
-	not digit_char(substring(name, 0, 1))
+# PUBLIC. The same test under the name the frida-proof policy reads; both branches of
+# the 2026-10 history wrote it, and one body serves both.
+shell_assignment_word(word) if assignment_word(word)
+
+# PUBLIC. The characters of a shell name, for policies that cut a name out of a longer word.
+shell_name_chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+
+# `source x` and `. x` run `x` in the current shell.
+command_slot_wrapper(word) if word in {"source", "."}
+
+# PUBLIC. A shell assignment, `NAME=value`: the name is letters, digits and underscores
+# and does not start with a digit. Token arithmetic, not a regex, for the reason in this
+# package's header.
+assignment_word(word) if {
+	contains(word, "=")
+	name := split(word, "=")[0]
+	name != ""
 	count([c |
 		some c in split(name, "")
-		not contains(shell_name_chars, c)
+		not identifier_char(c)
+	]) == 0
+	not digit_char(substring(name, 0, 1))
+}
+
+identifier_char(c) if digit_char(c)
+
+identifier_char("_")
+
+# A fixed letter set rather than a case comparison: `upper` has no probe in
+# scripts/check-cupcake-wasm-builtins.py, and an unprobed builtin can return undefined
+# under the engine's wasm runtime and silence the rule.
+identifier_char(c) if contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", c)
+
+# The quote an assignment opens and leaves open in its own word: `X="--a` opens `"`,
+# whose value runs on into the next words until one ends with that quote. Word
+# splitting here is on spaces, so `X="--exclude=scripts/check.sh --exclude=x"` reaches
+# the slot test as several words, and before 2026-10-19 the first of them was judged as
+# the program of its statement.
+open_assignment_quote(word) := q if {
+	assignment_word(word)
+	value := substring(word, indexof(word, "=") + 1, -1)
+	some q in {"\"", "'"}
+	startswith(value, q)
+	count(split(value, q)) == 2
+}
+
+# PUBLIC. The word at `i` is part of the quoted value of an assignment earlier in the
+# same command, so it is data, never a program.
+assignment_value_word(words, i) if {
+	start := command_slot_start(words, i)
+	some j, opener in words
+	j >= start
+	j < i
+	q := open_assignment_quote(opener)
+	count([k |
+		some k, w in words
+		k > j
+		k < i
+		endswith(w, q)
 	]) == 0
 }
 
-shell_name_chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+# PUBLIC. A word that cannot be the program of its command whatever stands before it:
+# an option (`--exclude=scripts/check.sh`), an assignment (`X=scripts/check.sh`), or a
+# word inside an assignment's quoted value. `git apply --exclude=scripts/check.sh` was
+# refused as a run of the suite on 2026-10-19 through the last of these.
+operand_shaped(words, i) if startswith(trim_left(words[i], "\"'"), "-")
+
+operand_shaped(words, i) if assignment_word(trim_left(words[i], "\"'"))
+
+operand_shaped(words, i) if assignment_value_word(words, i)
 
 # The index just past the nearest separator before `index`, or 0 when there is
 # none: where the command containing `index` begins.
@@ -944,6 +1047,10 @@ command_slot_wrapper_at(words, i) if {
 	command_slot_wrapper(words[i])
 }
 
+# The rest of a quoted assignment value stands aside with the assignment it belongs to:
+# `X="a b" bash scripts/check.sh` still runs the script.
+command_slot_wrapper_at(words, i) if assignment_value_word(words, i)
+
 command_slot_wrapper_at(words, i) if {
 	words[i] == "run"
 	words[i - 1] == "uv"
@@ -951,6 +1058,55 @@ command_slot_wrapper_at(words, i) if {
 
 command_slot_wrapper_at(words, i) if {
 	words[i - 1] == "--with"
+}
+
+# A shell's options stand in front of its script the way its `-` flags already do, in the
+# two shapes the per-word rule cannot read: a `+` option, which switches a flag off
+# (`bash +x x`), and the value of an option that takes one (`bash -o pipefail x`,
+# `bash -euo pipefail x`, `bash -O extglob x`, `bash --rcfile /dev/null x`). Measured
+# 2026-10-13 against `no_whole_check_sh`: each of those spellings ran `scripts/check.sh` and
+# was allowed, because the option's value was read as the program and the script as its
+# operand.
+#
+# Only behind a shell earlier in the same command, so `python3 -O x.py` keeps its meaning:
+# there `-O` takes no value and `x.py` is what runs.
+command_slot_wrapper_at(words, i) if {
+	startswith(words[i], "+")
+	shell_earlier_in_command(words, i)
+}
+
+command_slot_wrapper_at(words, i) if {
+	i > 0
+	shell_valued_option(words[i - 1])
+	shell_earlier_in_command(words, i - 1)
+}
+
+# `-o name` and `-O name`, alone or ending a short cluster (`-euo name`), their `+` forms,
+# and the two long options that name a file.
+shell_valued_option(word) if {
+	some prefix in {"-", "+"}
+	startswith(word, prefix)
+	not startswith(word, "--")
+	some suffix in {"o", "O"}
+	endswith(word, suffix)
+}
+
+shell_valued_option(word) if word in {"--rcfile", "--init-file"}
+
+shell_earlier_in_command(words, i) if {
+	start := command_slot_start(words, i)
+	some j, word in words
+	j >= start
+	j < i
+	shell_program(word)
+}
+
+# PUBLIC. A word naming a shell program, by itself or as a path: `bash`, `/usr/bin/bash`.
+# The same shells `heredoc_shell_name` lists, without the three words that read a program
+# without being one.
+shell_program(word) if {
+	parts := split(word, "/")
+	parts[count(parts) - 1] in {"sh", "bash", "zsh", "ksh", "mksh", "dash", "ash", "fish", "csh", "tcsh"}
 }
 
 # PUBLIC. True when every word from the start of this command up to `index` is a

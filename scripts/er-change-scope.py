@@ -234,6 +234,15 @@ def _blob(spec: str) -> str:
     return out.stdout
 
 
+def _commit_exists(sha: str) -> bool:
+    out = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
+        capture_output=True,
+        timeout=GIT_TIMEOUT_SECONDS,
+    )
+    return out.returncode == 0
+
+
 def crate_of(path: str) -> str | None:
     parts = Path(path).parts
     return parts[1] if len(parts) >= 2 and parts[0] == "crates" else None
@@ -242,16 +251,11 @@ def crate_of(path: str) -> str | None:
 # --- the scope -----------------------------------------------------------------------------
 
 
-def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str, ...] = ()) -> dict:
-    """The whole answer. Raises ScopeError when the caller must fail open.
-
-    `fetch` defaults to false, unlike er-dll-closure.py, and that is a deliberate difference:
-    this runs on every push and inside check.sh, where a network round trip is a cost nobody
-    asked for. A stale `origin/main` widens the diff (an older base has more changed paths),
-    which selects more work -- the safe direction. CI does not need it either: actions/checkout
-    with fetch-depth 0 has already fetched.
-    """
-    dll = closure_module()
+def _changed_paths(
+    dll, base_ref: str, fetch: bool, revs: tuple[str, ...]
+) -> tuple[str, str, list[str]]:
+    """The merge base the prose check compares against, the head it resolved, and every path
+    the diff changes."""
     merge_base, head = dll.resolve_base(base_ref, fetch)
 
     if revs:
@@ -265,9 +269,45 @@ def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str,
                 for line in dll.git("diff", "--name-only", rev_base, rev).splitlines()
                 if line.strip()
             )
-        changed_paths = sorted(changed)
-    else:
-        changed_paths = dll.changed_paths(merge_base)
+        return merge_base, head, sorted(changed)
+    return merge_base, head, dll.changed_paths(merge_base)
+
+
+def shows_cargo_work(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str, ...] = ()) -> bool:
+    """True as soon as one changed build input proves to be code rather than prose.
+
+    A shortcut for `--rust-touched`, and only ever toward "cargo work required". `compute()` reads
+    every build input twice through `git show` before it answers, so a base many commits behind
+    the tip spends seconds proving what its first code path already settles. Measured 2026-10-16:
+    5.6 s for one 1963-path diff, and 37 to 47 s for `check-runtime-evidence.sh` to try the 23
+    runs it could carry forward to one tip, which put a no-evidence answer past the deadline of
+    any hook that asks it. This walk stops at the first path that is code.
+
+    False means only that no such path turned up. The caller then asks `compute()`, so the exit 3
+    that forgives a diff is still decided there and nowhere else, over the same paths and the same
+    merge base.
+    """
+    dll = closure_module()
+    merge_base, _head, changed_paths = _changed_paths(dll, base_ref, fetch, revs)
+    scanner = comment_scanner()
+    rev = revs[-1] if revs else None
+    return any(
+        is_build_input(path) and not prose_only_paths([path], merge_base, rev, scanner)
+        for path in changed_paths
+    )
+
+
+def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str, ...] = ()) -> dict:
+    """The whole answer. Raises ScopeError when the caller must fail open.
+
+    `fetch` defaults to false, unlike er-dll-closure.py, and that is a deliberate difference:
+    this runs on every push and inside check.sh, where a network round trip is a cost nobody
+    asked for. A stale `origin/main` widens the diff (an older base has more changed paths),
+    which selects more work -- the safe direction. CI does not need it either: actions/checkout
+    with fetch-depth 0 has already fetched.
+    """
+    dll = closure_module()
+    merge_base, head, changed_paths = _changed_paths(dll, base_ref, fetch, revs)
 
     pairs = dll.shipped_pairs()
     artifact_of = dict(pairs)
@@ -569,6 +609,22 @@ def selftest() -> int:
         "a path with no base version fails closed and stays a build input",
     )
 
+    # --- the --rust-touched shortcut agrees with compute() ----------------------------------
+    # The same three commits scripts/check-runtime-evidence.sh carries forward across: policy
+    # and hook only on top of 466e3dd4, a crate change between 392b4b3c and the tip. Skipped
+    # when a shallow clone does not hold them.
+    pairs = (("392b4b3c", "63525d77", True), ("466e3dd4", "63525d77", False))
+    if all(_commit_exists(sha) for base, tip, _ in pairs for sha in (base, tip)):
+        for base, tip, wanted in pairs:
+            fast = shows_cargo_work(base, revs=(tip,))
+            full = compute(base, revs=(tip,))["rust_touched"]
+            check(
+                fast == wanted and full == wanted,
+                f"{base}..{tip}: the shortcut says {fast}, compute() says {full}, wanted {wanted}",
+            )
+    else:
+        print("  skip the shortcut over this repository's history (commits not in this clone)")
+
     # --- Anti-drift 1: no build script reads anything the predicate waves through ----------
     literals = _build_script_paths()
     check(len(literals) >= 4, f"build scripts name {len(literals)} real repo path(s) to audit")
@@ -701,6 +757,13 @@ def main() -> int:
 
     if args.selftest:
         return selftest()
+
+    if args.rust_touched:
+        try:
+            if shows_cargo_work(args.base, fetch=args.fetch, revs=tuple(args.revs)):
+                return EXIT_OK
+        except Exception:  # noqa: BLE001 -- compute() below answers, and fails open, as before
+            pass
 
     try:
         scope = compute(args.base, fetch=args.fetch, revs=tuple(args.revs))

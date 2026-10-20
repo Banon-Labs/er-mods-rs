@@ -697,3 +697,95 @@ test_opener_line_separator_survives_by_lines if {
 test_tag_word_inside_the_body_ends_it_early if {
 	contains(all_texts(concat("", ["git commit -F - <<'EOF' a b `x` EOF c `y` EOF"])), "`")
 }
+
+# --- a shell's options stand in front of its script ---------------------------
+# The script is the last word of each case, and the question is whether it is what runs.
+script_in_command_slot(text) if {
+	words := commands.command_slot_words(text)
+	commands.word_in_command_slot(words, count(words) - 1)
+}
+
+test_script_after_a_shell_option_value_is_in_the_slot if {
+	script_in_command_slot("bash -o pipefail x.sh")
+}
+
+test_script_after_a_clustered_option_value_is_in_the_slot if {
+	script_in_command_slot("bash -euo pipefail x.sh")
+}
+
+test_script_after_a_shopt_value_is_in_the_slot if {
+	script_in_command_slot("bash -O extglob x.sh")
+}
+
+test_script_after_an_rcfile_is_in_the_slot if {
+	script_in_command_slot("bash --rcfile /dev/null x.sh")
+}
+
+test_script_after_a_plus_option_is_in_the_slot if {
+	script_in_command_slot("bash +x x.sh")
+}
+
+test_script_after_a_shell_option_behind_a_wrapper_is_in_the_slot if {
+	script_in_command_slot("timeout 30 /usr/bin/bash -o pipefail x.sh")
+}
+
+# `-O` to python takes no value, so the word after it is the program and the next is
+# its operand.
+test_operand_after_a_python_flag_is_not_in_the_slot if {
+	not script_in_command_slot("python3 -O tool.py x.sh")
+}
+
+# A shell named only in an earlier command does not make this command's option a shell's.
+# `nice -o` is not a real option; it is here so the wrapper chain reaches the value and
+# nothing but the scope of the shell test decides the case.
+test_option_value_after_a_separator_is_not_a_shells if {
+	script_in_command_slot("nice -o x.sh")
+	not script_in_command_slot("bash a.sh; nice -o out x.sh")
+}
+
+test_shell_program_by_name_and_by_path if {
+	commands.shell_program("bash")
+	commands.shell_program("/usr/bin/zsh")
+	not commands.shell_program("check.sh")
+	not commands.shell_program("bashrc")
+}
+
+# --- command substitution only counts where the shell runs it (2026-10-19) --------------------
+
+# A backtick or `$(` inside single quotes is a literal character, so the text is neutralised as
+# usual and quoted prose loses its separators and its backticks.
+test_backtick_in_single_quotes_is_neutralised if {
+	commands.executed_texts("bd note 'a `b`; c'") == {"bd note 'a  b   c'"}
+}
+
+test_dollar_paren_in_single_quotes_is_neutralised if {
+	commands.executed_texts("echo 'x $(y); z'") == {"echo 'x $ y   z'"}
+}
+
+# A substitution the shell would run keeps the text raw.
+test_unquoted_backtick_keeps_raw_text if {
+	commands.executed_texts("echo `a; b`") == {"echo `a; b`"}
+}
+
+test_backtick_in_double_quotes_keeps_raw_text if {
+	commands.executed_texts("echo \"`a; b`\" 'c'") == {"echo \"`a; b`\" 'c'"}
+}
+
+# Quote parity alone would pair the apostrophe inside the first double-quoted span with a real
+# quote later and call this unquoted backtick quoted. The tokenising match does not.
+test_apostrophe_in_double_quotes_cannot_hide_a_backtick if {
+	text := "echo \"'\" 'a' `x; y` 'b' \"'\""
+	commands.executed_texts(text) == {text}
+}
+
+# Inside an unquoted heredoc body a single quote is literal and a backtick still runs.
+test_heredoc_with_backtick_keeps_raw_text if {
+	text := "cat > f <<EOF\n'`x; y`'\nEOF"
+	commands.executed_texts(text) == {text}
+}
+
+# `$'...'` is not modelled, so it keeps the raw text.
+test_ansi_c_quote_with_backtick_keeps_raw_text if {
+	text := "echo $'a' `x; y`"
+	commands.executed_texts(text) == {text}
+}

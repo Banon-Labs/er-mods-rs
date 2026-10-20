@@ -241,10 +241,18 @@ def main() -> int:
     print("singleton first, so it surfaces as an unattributed rust_panic with no")
     print("message in any log. Regenerate the bundle rather than catching it:")
     print()
-    print("    cargo build --release -p binary-mapper --target x86_64-unknown-linux-gnu")
-    print("    ./target/x86_64-unknown-linux-gnu/release/binary-mapper map \\")
-    print(f"        --profile crates/eldenring/mapper-profile.toml \\")
-    print(f"        --exe '{args.exe}' --output rust")
+    # `windows-future` does not build for a Linux target, so the generator is
+    # cross-compiled and run under wine (docs/er-1.17-migration.md).
+    sibling = args.sibling.resolve()
+    exe = args.exe.resolve()
+    wine_path = lambda p: "Z:" + str(p).replace("/", "\\")
+    print(f"    cd '{sibling}'")
+    print("    cargo xwin build --release -p binary-mapper --target x86_64-pc-windows-msvc")
+    print("    WINEDEBUG=-all wine target/x86_64-pc-windows-msvc/release/binary-mapper.exe map \\")
+    print(f"        --profile '{wine_path(sibling / 'crates/eldenring/mapper-profile.toml')}' \\")
+    print(f"        --exe '{wine_path(exe)}' --output rust")
+    print()
+    print("Then check every field for 0: a pattern that misses is recorded as 0 silently.")
     return 1
 
 

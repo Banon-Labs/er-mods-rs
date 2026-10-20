@@ -10,18 +10,23 @@
 //! # Shape
 //!
 //! A `[[natives]]` entry, enabled by presence, with no dependency on the product DLL. It installs
-//! no detour and spawns no recurring task: it waits for the game module, writes at most three
-//! bytes, logs what happened, and its thread exits. Nothing here runs again for the rest of the
-//! session.
+//! no detour. It waits for the game module, writes the all-off default config if there is none,
+//! and registers one `FrameBegin` game task that re-reads `er-convenient-deaths.toml` in the game
+//! directory about once a second (`er_hotkey_config::HotFile`, which compares the text and does no
+//! I/O between reads). Each edit is diffed against the previous config (`src/reload.rs`): an option
+//! turned on has its byte written, an option turned off has the original byte -- saved when the
+//! patch went in -- written back. Both happen on the game's task thread at frame begin, the same
+//! thread and the same point every other `FrameBegin` task in this workspace uses.
 //!
 //! # What the log is worth
 //!
-//! `PATCHED` means the byte was written and read back as the intended value. That is a weaker
-//! claim than a hook's call counter: the instruction a patch redirects around never runs, so
-//! nothing can count it. Evidence that a patch *did* anything has to come from playing -- dying
-//! and still having your runes. What the log can prove is the negative, and it does so loudly:
-//! `REFUSED` (the containing function has no mapping on this build) and `DISARMED` (the address
-//! resolved, but the bytes there are not the measured ones) both mean the game is untouched.
+//! `PATCHED` means the byte was written and read back as the intended value, and `RESTORED` the
+//! same for the original. That is a weaker claim than a hook's call counter: the instruction a
+//! patch redirects around never runs, so nothing can count it. Evidence that a patch *did*
+//! anything has to come from playing -- dying and still having your runes. What the log can prove
+//! is the negative, and it does so loudly: `REFUSED` (the containing function has no mapping on
+//! this build) and `DISARMED` (the address resolved, but the bytes there are not the measured
+//! ones) both mean the game is untouched.
 
 // The install path is `cfg(windows)`: on the host there is no game to patch, so the registry
 // rows and the logging they feed have no caller. That is a cfg artifact, not dead code -- and
@@ -30,6 +35,7 @@
 
 pub(crate) mod config;
 pub(crate) mod patches;
+pub(crate) mod reload;
 
 use std::{
     fmt,
@@ -48,28 +54,54 @@ const LOG_FILE_NAME: &str = "er-convenient-deaths.log";
 
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
+/// The game directory, or the working directory when it cannot be resolved -- the same fallback
+/// the log has always used, so the config and the log cannot end up in different places.
+fn game_directory() -> PathBuf {
+    game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+}
+
+fn log_message(args: fmt::Arguments<'_>) {
+    let path = game_directory().join(LOG_FILE_NAME);
     let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     append_line(&path, format_args!("[{seq:06}] {args}"));
 }
 
-/// What happened to one patch.
+/// The config path in a given game directory.
+fn config_path_in(game_directory: &Path) -> PathBuf {
+    game_directory.join(config::CONFIG_FILE_NAME)
+}
+
+/// What happened to one patch that was asked for.
 ///
-/// Four outcomes, not two. Collapsing "the player did not ask for this" into the same bucket as
-/// "the bytes were wrong" would make a config typo read exactly like a game update.
+/// Three outcomes, not two. A refusal (no address on this build) and a disarm (an address, but not
+/// the measured bytes) have different causes and different fixes, so they are logged apart.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     /// The byte was written and read back as intended.
     Patched,
-    /// The config did not switch this one on. The game is untouched.
-    NotRequested,
     /// No mapping for the containing function on the running build. Nothing read, nothing written.
     Refused,
     /// The address resolved but the bytes there are not the measured ones. Nothing written.
     Disarmed,
+}
+
+impl Outcome {
+    /// The word the transition log line ends on.
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Patched => "patched",
+            Self::Refused => "REFUSED, game untouched",
+            Self::Disarmed => "DISARMED, game untouched",
+        }
+    }
+}
+
+/// A patch that is in force: where its byte is, and what was there before.
+#[derive(Clone, Copy)]
+struct Live {
+    target: usize,
+    original: u8,
 }
 
 #[cfg(windows)]
@@ -78,7 +110,7 @@ enum Outcome {
 ///
 /// Called by the Windows loader. Do not call directly.
 pub unsafe extern "system" fn DllMain(
-    module: *mut core::ffi::c_void,
+    _module: *mut core::ffi::c_void,
     reason: u32,
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
@@ -89,8 +121,7 @@ pub unsafe extern "system" fn DllMain(
         // the module and nothing else.
         er_game_base::panic_report::report_panics_to("er-convenient-deaths", log_message);
         er_hook::set_hook_logger(log_message);
-        let path = windows_runtime::module_path(module);
-        START.call_once(move || spawn_install_task(path));
+        START.call_once(spawn_install_task);
     }
     DLL_MAIN_SUCCESS
 }
@@ -104,45 +135,6 @@ pub extern "C" fn er_convenient_deaths_host_stub() -> i32 {
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
 
-#[cfg(windows)]
-mod windows_runtime {
-    use std::path::PathBuf;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetModuleFileNameW(module: *mut core::ffi::c_void, filename: *mut u16, size: u32)
-        -> u32;
-    }
-
-    /// Full path of this DLL, which is what the config sits beside.
-    ///
-    /// `None` rather than a guess: a config read from the wrong directory would silently apply
-    /// somebody else's settings, and the install log says so instead.
-    pub(super) fn module_path(module: *mut core::ffi::c_void) -> Option<PathBuf> {
-        let mut buffer = [0_u16; 1024];
-        // SAFETY: `buffer` is a live array of `buffer.len()` `u16`s, which is exactly the
-        // capacity being declared to the call.
-        let length = unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) }
-            as usize;
-        if length == 0 || length >= buffer.len() {
-            return None;
-        }
-        String::from_utf16(&buffer[..length])
-            .ok()
-            .map(PathBuf::from)
-    }
-}
-
-/// The config path for a loaded module: same name, `.toml` extension.
-fn config_path_for_module(module_path: &Path) -> Option<PathBuf> {
-    let stem = module_path.file_stem()?;
-    Some(
-        module_path
-            .with_file_name(stem)
-            .with_extension(config::CONFIG_EXTENSION),
-    )
-}
-
 /// Every patch's key and effect, in registry order, for the file written on first run.
 fn documented_keys() -> Vec<(&'static str, &'static str)> {
     REGISTRY
@@ -151,61 +143,66 @@ fn documented_keys() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Read the config, writing the default file first if there is none.
-fn load_config(path: &Path) -> config::Config {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => {
-            log_message(format_args!("config: read '{}'", path.display()));
-            config::parse(&contents)
-        }
+/// Every patch's config key, in registry order, for [`reload::transitions`].
+fn registry_keys() -> Vec<&'static str> {
+    REGISTRY.iter().map(|patch| patch.config_key).collect()
+}
+
+/// Write the all-off default config if there is none. Nothing is parsed here: the game task's
+/// first poll reads whatever is on disk, this file or the player's.
+fn ensure_config_exists(path: &Path) {
+    match std::fs::metadata(path) {
+        Ok(_) => log_message(format_args!(
+            "config: '{}' exists; it is re-read about once a second while the game runs",
+            path.display()
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let written = config::boilerplate(&documented_keys());
-            match std::fs::write(path, &written) {
+            match std::fs::write(path, config::boilerplate(&documented_keys())) {
                 Ok(()) => log_message(format_args!(
                     "config: none found, wrote the default to '{}' with every option OFF -- edit \
-                     it and restart to enable one",
+                     it while the game runs to enable one; changes apply live",
                     path.display()
                 )),
                 Err(error) => log_message(format_args!(
                     "config: none found and '{}' could not be written ({error}); every option \
-                     stays off",
+                     stays off until a file appears there",
                     path.display()
                 )),
             }
-            config::parse(&written)
         }
-        Err(error) => {
-            log_message(format_args!(
-                "config: '{}' is unreadable ({error}); every option stays off",
-                path.display()
-            ));
-            config::Config::default()
-        }
+        Err(error) => log_message(format_args!(
+            "config: '{}' could not be inspected ({error}); polling it anyway",
+            path.display()
+        )),
     }
 }
 
-/// Installation runs off the loader thread: it waits on the game module, which does not belong
-/// under the loader lock.
+/// What the game task carries between frames.
 #[cfg(windows)]
-fn spawn_install_task(module_path: Option<PathBuf>) {
+struct TaskState {
+    hot: er_hotkey_config::HotFile,
+    keys: Vec<&'static str>,
+    /// The config the last reload applied. Starts all off, so the first read applies whatever the
+    /// file enables.
+    config: config::Config,
+    base: usize,
+    /// One slot per registry row, `Some` while that patch's byte is ours.
+    live: Vec<Option<Live>>,
+}
+
+/// Installation runs off the loader thread: it waits on the game module and the task scheduler,
+/// neither of which belongs under the loader lock.
+#[cfg(windows)]
+fn spawn_install_task() {
+    use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
+    use eldenring::fd4::FD4TaskData;
+    use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+
     let _ = std::thread::Builder::new()
         .name("er-convenient-deaths".to_owned())
         .spawn(move || {
-            let Some(config_path) = module_path.as_deref().and_then(config_path_for_module) else {
-                log_message(format_args!(
-                    "install: this DLL's own path is unknown, so the config beside it cannot be \
-                     found; nothing patched"
-                ));
-                return;
-            };
-            let config = load_config(&config_path);
-            if config.enabled_count() == 0 {
-                log_message(format_args!(
-                    "install: no option is enabled in '{}'; the game is untouched",
-                    config_path.display()
-                ));
-                return;
-            }
+            let config_path = config_path_in(&game_directory());
+            ensure_config_exists(&config_path);
             let mut attempts = 0_u64;
             // Bounded on purpose: an unbounded `loop { yield_now() }` in two other shells starved
             // the wineserver and hung a whole boot. See er_game_base::wait.
@@ -228,43 +225,116 @@ fn spawn_install_task(module_path: Option<PathBuf>) {
                 ));
                 return;
             };
-            install_patches(base, &config);
+            // Bounded for the same reason as the wait above.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                log_message(format_args!(
+                    "install: CSTaskImp never appeared; nothing patched, the config is not watched"
+                ));
+                return;
+            };
+            let mut state = TaskState {
+                hot: er_hotkey_config::HotFile::new(config_path),
+                keys: registry_keys(),
+                config: config::Config::default(),
+                base,
+                live: vec![None; REGISTRY.len()],
+            };
+            log_message(format_args!(
+                "install: watching '{}' from a FrameBegin task. {}",
+                state.hot.path().display(),
+                er_game_base::game_build::describe_build()
+            ));
+            task.run_recurring(
+                move |_data: &FD4TaskData| tick(&mut state),
+                CSTaskGroupIndex::FrameBegin,
+            );
         });
 }
 
+/// One frame. Costs one integer comparison except on the frame a read is due.
 #[cfg(windows)]
-fn install_patches(base: usize, config: &config::Config) {
-    let mut patched = 0_usize;
-    let mut skipped = 0_usize;
-    let mut refused = 0_usize;
-    let mut disarmed = 0_usize;
-    for patch in REGISTRY {
-        match apply_patch(patch, base, config) {
-            Outcome::Patched => patched += 1,
-            Outcome::NotRequested => skipped += 1,
-            Outcome::Refused => refused += 1,
-            Outcome::Disarmed => disarmed += 1,
+fn tick(state: &mut TaskState) {
+    let Some(change) = state.hot.poll() else {
+        return;
+    };
+    match &change {
+        er_hotkey_config::FileChange::Text(_) => log_message(format_args!(
+            "config: read '{}'",
+            state.hot.path().display()
+        )),
+        er_hotkey_config::FileChange::Missing => log_message(format_args!(
+            "config: '{}' is gone or unreadable; every option is off until it is back",
+            state.hot.path().display()
+        )),
+    }
+    let new = reload::config_for(&change);
+    for transition in reload::transitions(&state.keys, &state.config, &new) {
+        let Some(index) = REGISTRY
+            .iter()
+            .position(|patch| patch.config_key == transition.key)
+        else {
+            continue;
+        };
+        let patch = &REGISTRY[index];
+        match transition.action {
+            reload::Action::Apply => {
+                let (outcome, live) = apply_patch(patch, state.base);
+                if live.is_some() {
+                    state.live[index] = live;
+                }
+                log_transition(patch.config_key, false, outcome.word());
+            }
+            reload::Action::Restore => {
+                let word = match state.live[index].take() {
+                    Some(live) => restore_patch(patch, live),
+                    None => "nothing to restore, it was never patched",
+                };
+                log_transition(patch.config_key, true, word);
+            }
         }
     }
+    state.config = new;
+    log_in_force(&state.live);
+}
+
+/// `config: keep_runes_on_death OFF -> ON, patched`.
+fn log_transition(key: &str, was_on: bool, result: &str) {
     log_message(format_args!(
-        "install complete: {patched}/{} PATCHED, {skipped} not requested, {refused} REFUSED (no \
-         address on the running build), {disarmed} DISARMED (address resolved, bytes there are \
-         not the measured ones). {}",
-        REGISTRY.len(),
-        er_game_base::game_build::describe_build()
+        "config: {key} {} -> {}, {result}",
+        reload::state_word(was_on),
+        reload::state_word(!was_on)
     ));
 }
 
+/// One line naming every patch and whether its byte is ours right now.
+fn log_in_force(live: &[Option<Live>]) {
+    let summary = REGISTRY
+        .iter()
+        .zip(live)
+        .map(|(patch, slot)| {
+            format!(
+                "{} {}",
+                patch.config_key,
+                if slot.is_some() {
+                    "patched"
+                } else {
+                    "original"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    log_message(format_args!("config: in force -- {summary}"));
+}
+
 /// Resolve the window, verify it, write the one byte, and read it back.
+///
+/// Returns the byte's address and the original it replaced when the patch is in force, which is
+/// what a later restore writes back.
 #[cfg(windows)]
-fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
-    if !config.is_enabled(patch.config_key) {
-        log_message(format_args!(
-            "skipping {} -- '{} = true' is not set",
-            patch.name, patch.config_key
-        ));
-        return Outcome::NotRequested;
-    }
+fn apply_patch(patch: &Patch, base: usize) -> (Outcome, Option<Live>) {
     // `resolve_call_site_rva`, not `resolve_detour_address`. The detour resolver answers "may
     // MinHook overwrite five bytes at this function entry", and this is not that question: this
     // address is a single byte inside a function, read and then written. Resolving the enclosing
@@ -279,7 +349,7 @@ fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
     .map(|rva| base + rva) else {
         log_message(format_args!(
             "REFUSED {} (1.16.2 window rva 0x{:x} = fn 0x{:x} + 0x{:x}): no mapping for the \
-             CONTAINING function on the running build -- {}. Nothing read, nothing written. This \
+             containing function on the running build -- {}. Nothing read, nothing written. This \
              is a missing mapping, not a stale signature.",
             patch.name,
             patch.rva(),
@@ -287,10 +357,10 @@ fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
             patch.offset_in_function,
             er_game_base::game_build::describe_build()
         ));
-        return Outcome::Refused;
+        return (Outcome::Refused, None);
     };
     if !code_window_matches(patch.name, window, patch.expected_window) {
-        return Outcome::Disarmed;
+        return (Outcome::Disarmed, None);
     }
     let target = patch.target(window);
     let Some(replaced) = patch.replaced() else {
@@ -300,7 +370,7 @@ fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
             patch.offset,
             patch.expected_window.len(),
         ));
-        return Outcome::Disarmed;
+        return (Outcome::Disarmed, None);
     };
     // SAFETY: `target` is inside the game image. `patch.target(window)` is an offset into the
     // window `code_window_matches` just verified byte-for-byte, at the address the resolver gave
@@ -311,27 +381,25 @@ fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
             "DISARMED {} @0x{target:x}: VirtualProtect refused the write",
             patch.name
         ));
-        return Outcome::Disarmed;
+        return (Outcome::Disarmed, None);
     }
     // A successful write is not proof the byte landed -- another mod can own the same address --
     // so the value is read back before anything claims to be applied.
-    let mut readback = [0_u8; 1];
-    // SAFETY: same one verified byte that was just written, read through the same primitive.
-    if !unsafe { er_game_base::mem::read_bytes(target, &mut readback) } {
+    let Some(readback) = read_code_byte(target) else {
         log_message(format_args!(
             "DISARMED {} @0x{target:x}: the byte was written but could not be read back, so \
              nothing here can say what is at that address",
             patch.name
         ));
-        return Outcome::Disarmed;
-    }
-    if readback[0] != patch.replacement {
+        return (Outcome::Disarmed, None);
+    };
+    if readback != patch.replacement {
         log_message(format_args!(
             "DISARMED {} @0x{target:x}: wrote 0x{:02x} over 0x{replaced:02x} but read back \
-             0x{:02x} -- something else owns this byte",
-            patch.name, patch.replacement, readback[0],
+             0x{readback:02x} -- something else owns this byte",
+            patch.name, patch.replacement,
         ));
-        return Outcome::Disarmed;
+        return (Outcome::Disarmed, None);
     }
     patch.applied.store(true, Ordering::SeqCst);
     log_message(format_args!(
@@ -342,7 +410,85 @@ fn apply_patch(patch: &Patch, base: usize, config: &config::Config) -> Outcome {
         effect = patch.effect,
         rationale = patch.rationale,
     ));
-    Outcome::Patched
+    (
+        Outcome::Patched,
+        Some(Live {
+            target,
+            original: replaced,
+        }),
+    )
+}
+
+/// Put the original byte back, if the byte there is still the one this DLL wrote.
+///
+/// Returns the word the transition log line ends on. The patch is no longer ours afterwards
+/// whatever happens: either the original is back, or something else has rewritten the byte and
+/// owns it now.
+#[cfg(windows)]
+fn restore_patch(patch: &Patch, live: Live) -> &'static str {
+    let Live { target, original } = live;
+    patch.applied.store(false, Ordering::SeqCst);
+    let Some(current) = read_code_byte(target) else {
+        log_message(format_args!(
+            "NOT RESTORED {} @0x{target:x}: the byte could not be read, so nothing was written",
+            patch.name
+        ));
+        return "NOT RESTORED, byte unreadable";
+    };
+    match reload::check_restore(current, patch.replacement, original) {
+        reload::RestoreCheck::AlreadyOriginal => {
+            log_message(format_args!(
+                "RESTORED {} @0x{target:x}: already 0x{original:02x}, nothing written",
+                patch.name
+            ));
+            return "restored (it already was)";
+        }
+        reload::RestoreCheck::Foreign => {
+            log_message(format_args!(
+                "NOT RESTORED {} @0x{target:x}: reads 0x{current:02x}, which is neither the \
+                 0x{:02x} this DLL wrote nor the original 0x{original:02x} -- something else \
+                 rewrote it after this DLL did, so it is left alone",
+                patch.name, patch.replacement,
+            ));
+            return "NOT RESTORED, another writer owns the byte";
+        }
+        reload::RestoreCheck::Restore => {}
+    }
+    // SAFETY: `target` is the byte this DLL patched earlier in the session, inside a window that
+    // was verified byte-for-byte before that write, and it was just read back as this DLL's own
+    // replacement -- so it is mapped game code, and writing `original` returns it to the exact
+    // instruction it was measured as.
+    if !unsafe { er_hook::write_code_byte(target, original) } {
+        log_message(format_args!(
+            "NOT RESTORED {} @0x{target:x}: VirtualProtect refused the write",
+            patch.name
+        ));
+        return "NOT RESTORED, VirtualProtect refused";
+    }
+    match read_code_byte(target) {
+        Some(readback) if readback == original => {
+            log_message(format_args!(
+                "RESTORED {} @0x{target:x}: 0x{:02x} -> 0x{original:02x}",
+                patch.name, patch.replacement
+            ));
+            "restored"
+        }
+        readback => {
+            log_message(format_args!(
+                "NOT RESTORED {} @0x{target:x}: wrote 0x{original:02x} but read back {readback:02x?}",
+                patch.name
+            ));
+            "NOT RESTORED, readback mismatch"
+        }
+    }
+}
+
+/// Read one byte of game code through the same primitive the window check uses.
+#[cfg(windows)]
+fn read_code_byte(address: usize) -> Option<u8> {
+    let mut byte = [0_u8; 1];
+    // SAFETY: `read_bytes` reports rather than faults on an unreadable address.
+    unsafe { er_game_base::mem::read_bytes(address, &mut byte) }.then_some(byte[0])
 }
 
 /// Read the window and compare it against the bytes this patch was measured against.
@@ -383,16 +529,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_config_sits_beside_the_dll_under_the_dll_name() {
-        let path = config_path_for_module(Path::new("/mods/er_convenient_deaths.dll"))
-            .expect("a path with a stem yields a config path");
-        assert_eq!(path, Path::new("/mods/er_convenient_deaths.toml"));
-    }
-
-    /// A directory has no file stem, and guessing one would read somebody else's config.
-    #[test]
-    fn a_path_with_no_stem_yields_no_config_path() {
-        assert_eq!(config_path_for_module(Path::new("/")), None);
+    fn the_config_sits_in_the_game_directory_under_the_log_s_name() {
+        let path = config_path_in(Path::new("/game"));
+        assert_eq!(path, Path::new("/game/er-convenient-deaths.toml"));
+        assert_eq!(
+            path.file_stem(),
+            Path::new(LOG_FILE_NAME).file_stem(),
+            "the config and the log should be findable as a pair"
+        );
     }
 
     /// The file written on first run has to document every patch, or the only way to find an
@@ -424,6 +568,32 @@ mod tests {
                 config.is_enabled(patch.config_key),
                 "{} cannot be switched on by its own key",
                 patch.name
+            );
+        }
+    }
+
+    /// The keys the reload diff walks are the registry's, so every patch can be both applied and
+    /// restored from the file.
+    #[test]
+    fn every_registry_key_can_be_applied_and_restored() {
+        let keys = registry_keys();
+        assert_eq!(keys.len(), REGISTRY.len());
+        let off = config::Config::default();
+        for patch in REGISTRY {
+            let on = config::parse(&format!("{} = true\n", patch.config_key));
+            assert_eq!(
+                reload::transitions(&keys, &off, &on),
+                vec![reload::Transition {
+                    key: patch.config_key,
+                    action: reload::Action::Apply
+                }]
+            );
+            assert_eq!(
+                reload::transitions(&keys, &on, &off),
+                vec![reload::Transition {
+                    key: patch.config_key,
+                    action: reload::Action::Restore
+                }]
             );
         }
     }

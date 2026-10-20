@@ -1967,4 +1967,28 @@ pub const CONFIGS: &[ConfigFile] = &[
             },
         ],
     },
+    ConfigFile {
+        file: "er-positional-voice.toml",
+        default_text: "# Volume applied to every voice (1 = as received). 8 is about +18 dB.\ngain = 8.0\n# Play your own microphone at your own character, to test alone.\nloopback = false\n",
+        settings: &[
+            Setting {
+                key: "gain",
+                table: "",
+                default: "8.0",
+                kind: Kind::Float,
+                choices: &[],
+                optional: false,
+                prose: &["# Volume applied to every voice (1 = as received). 8 is about +18 dB."],
+            },
+            Setting {
+                key: "loopback",
+                table: "",
+                default: "false",
+                kind: Kind::Bool,
+                choices: &[],
+                optional: false,
+                prose: &["# Play your own microphone at your own character, to test alone."],
+            },
+        ],
+    },
 ];

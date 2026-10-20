@@ -38,18 +38,23 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.nat
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_admission_with_defence.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_ask_without_receiver.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_authorize_without_run_stamp.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_deferred_evidence_read.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_described_next_step.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_explanation_instead_of_correction.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_fix_claim_without_runtime_evidence.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_future_tense_commitment.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_inline_user_command.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_narrated_action.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_proof_without_observation.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_restating_user_own_rule.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_stall_on_friction.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexplained_running_tasks.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_untailed_long_run.halt
 
 # Deny decisions.
 all_denials contains decision if some decision in data.cupcake.policies.bash_elden_ring_launch_guard.deny
@@ -68,16 +73,19 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.g
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_detached_push.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_commit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_push.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_commit_authorization.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_fresh_origin_main.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_runtime_evidence.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.monitor_rate_limit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_lint_before_commit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_whole_check_sh.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_scoped_cargo.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.transcript_write_guard.deny
 
 # Block and ask decisions. No current project policy exports these, but keep the shape stable.
 

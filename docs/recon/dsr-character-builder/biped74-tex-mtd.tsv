@@ -1,0 +1,74 @@
+c1200	D	c1200	C_Leather[DSB]_Alp_Spec.mtd;C_Leather[DSB]_Spec.mtd
+c1201	D	c1201	C_Leather[DSB]_Alp_Spec.mtd;C_Leather[DSB]_Spec.mtd
+c1202	D	c1202	C_DullLeather[DSB]_Alp_Spec.mtd;C_DullLeather[DSB]_Spec.mtd;C_Wet[DSB]_Spec.mtd;P_Metal[DSB]_Spec.mtd
+c1203	D	c1203	C_Leather[DSB]_Alp_Spec.mtd;C_Leather[DSB]_Spec.mtd
+c2060	B	c2060	C_Wet[DSB].mtd;C_Wet[DSB]_Edge.mtd;C_Wet[DSB]_Spec.mtd;P_Metal[DSB].mtd
+c2210	n		
+c2230	C	c2239	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Wet[DSB].mtd;P_DullLeather[DSB].mtd;P_Wet[DSB].mtd
+c2231	C	c2231	C_2231_Body[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Fire_DullLeather[DSB].mtd;P_DullLeather[DSB].mtd;P_Wet[DSB].mtd
+c2232	C	c2239	C_2231_Body[DSB].mtd;C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Wet[DSB].mtd
+c2239	n		
+c2240	B	c2240	C_Leather[DSB].mtd;C_Leather[DSB]_Edge.mtd;C_Wet[DSB].mtd;P_Metal[DSB].mtd
+c2250	C	c2250	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Alp.mtd;C_Leather[DSB]_Alp.mtd;C_RoughCloth[DSB].mtd
+c2320	D	c2320	C_2320_Metal[DSB].mtd
+c2360	C	c2360	C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd
+c2370	B		C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;P_Metal[DSB].mtd;P_Metal[DSB]_Edge.mtd
+c2380	C	c2380	C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd
+c2500	A	c2509	C[D].mtd;C_DullLeatherUnShine[DSB].mtd;C_DullLeatherUnShine[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c2510	A	c2519	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c2511	A	c2519	Ps_Wander_Ghost.mtd
+c2519	n		
+c2520	A	c2520	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Leather[DSB].mtd;P_Metal[DSB].mtd
+c2530	A	c2530	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd
+c2540	A	c2540	C_DullLeatherUnShine[DSB].mtd;C_DullLeatherUnShine[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c2550	A	c2550	C_DullLeatherUnShine[DSB].mtd;C_DullLeatherUnShine[DSB]_Edge.mtd;C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_DullLeather[DSB].mtd;P_Metal[DSB].mtd
+c2560	B	c2560	C_DullLeatherUnShine[DSB].mtd;C_DullLeatherUnShine[DSB]_Edge.mtd;C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_DullLeather[DSB].mtd;P_Metal[DSB].mtd
+c2570	B	c2570	C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd
+c2590	B	c2590	C_Leather[DSB].mtd;C_Leather[DSB]_Edge.mtd
+c2591	B	c2590	C_Leather[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c2600	B	c2600	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Alp.mtd;C_DullLeather[DSB]_Edge.mtd
+c2640	B	c2640	C_DullLeather[DSBT].mtd;C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd
+c2650	A	c2650	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd
+c2660	B	c2660	C_DullLeather[DSB]_Edge_Spec.mtd;C_DullLeather[DSB]_Spec.mtd;C_Leather[DSB].mtd;C_Metal[DSB].mtd
+c2670	B	c2670	C_2680_Ghost[DSB]_Add_Depth_Edge.mtd;C_2680_Ghost[DSB]__Add_Depth.mtd
+c2680	B	c2680	C_2680_Ghost[DSB]_Add_Depth_Edge.mtd;C_2680_Ghost[DSB]__Add_Depth.mtd
+c2690	C	c2690	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Leather[DSB].mtd;C_Metal[DSB].mtd
+c2710	B	c2710	C_2710_Metal[DSB].mtd
+c2711	C	c2711	C_2711_Metal[DSB]_Spec.mtd;C_Metal[DSB]_Alp_Spec.mtd;P_DullLeather[DSB].mtd;P_DullLeather[DSB]_Edge.mtd;P_Leather[DSB]_Alp.mtd;P_Leather[DSB]_Edge.mtd;P_Metal[DSB].mtd;P_Metal[DSB]_Edge.mtd;Ps_Body[DSB].mtd;Ps_Hair[DS].mtd;Ps_Hair[DS]_Alp.mtd
+c2730	C	c2730	C_DullLeather[DSB]_Alp.mtd;C_Wet[DSB].mtd;P_Metal[DSB].mtd;Ps_Body[DSB].mtd
+c2780	D	c2780	C_DullLeather[DSB].mtd;C_Leather[DSB]_Edge.mtd;C_Wet[DSB].mtd
+c2800	A	c2800	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_DullLeather[DSB].mtd
+c2810	B	c2819	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Wet[DSB].mtd
+c2811	B	c2811,c2819	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;P_DullLeather[DSB].mtd
+c2819	n		
+c2820	A	c2820	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd
+c2840	A	c2509,c2840	C[D].mtd;C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;P_DullLeather[DSB].mtd;P_Wet[DSB].mtd
+c2860	C	c2869	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;M[DB][M].mtd;M_4Stone[DSB].mtd;P_Leather[DSB].mtd
+c2861	C	c2869	Ps_Wander_Ghost.mtd
+c2870	C	c2870	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;P_Metal[DSB].mtd
+c2900	B	c2909	C_DullLeather[DSB].mtd;P_Metal[DSB].mtd
+c2910	C	c2909	C_DullLeather[DSB].mtd
+c2920	B	c2929	C_DullLeather[DSB].mtd;C_Metal[DSB].mtd;P_DullLeather[DSB]_Edge.mtd;P_Leather[DS].mtd
+c2921	B	c2929	Ps_Wander_Ghost.mtd
+c2929	n		
+c2930	B	c2930	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd
+c2940	D	c2909	C_DullLeather[DSB].mtd
+c2950	D	c2950	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd
+c3110	D	c3110	C_Metal[DSB].mtd
+c3210	B	c3210,c3220	C_Wet[DSB].mtd
+c3450	C	c3450	C_Leather[DSB].mtd;C_Leather[DSB]_Alp.mtd
+c4090	B	c4099	C_DullLeather[DSB]_Edge.mtd;C_Leather[DSB].mtd;C_Leather[DSB]_Edge.mtd;C_Metal[DSB].mtd
+c4091	B	c4090,c4091	C_Leather[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c4095	B	c4099	Ps_Wander_Ghost.mtd
+c4100	C		C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_DullLeather[DSB].mtd;P_DullLeather[DSB]_Edge.mtd;P_Leather[DSB].mtd;P_Leather[DSB]_Edge.mtd;P_Metal[DSB].mtd;P_Wet[DSB].mtd
+c4110	C	c4119	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Leather[DSB].mtd;C_Metal[DSB].mtd;P_DullLeather[DSB].mtd;P_DullLeather[DSB]_Edge.mtd;P_Leather[DSB].mtd;P_Leather[DSB]_Alp.mtd;P_Leather[DSB]_Edge.mtd;P_Metal[DSB].mtd;Ps_Body[DSB].mtd
+c4115	C	c4119	Ps_Wander_Ghost.mtd
+c4119	n		
+c4120	C		P_DullLeather[DSB].mtd;P_DullLeather[DSB]_Edge.mtd;P_Leather[DSB].mtd
+c4520	D	c4520	C_Leather[DSB].mtd;C_Leather[DSB]_Alp.mtd;C_Metal[DSB].mtd
+c5210	D	c5210	C_Leather[DSB].mtd;C_Leather[DSB]_Alp.mtd;C_Metal[DSB].mtd
+c5270	B	c5270	C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c5271	C	c5270	C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;C_Metal[DSB]_Edge.mtd;P_DullLeather[DSB]_Edge.mtd;P_Metal[DSB].mtd
+c5300	C	c5300	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Edge.mtd;C_Metal[DSB].mtd;P_Metal[DSB].mtd
+c5370	B	c5370	C_5370_DullLeather[DSB]_Edge.mtd;C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Alp.mtd;C_DullLeather[DSB]_Edge.mtd;C_Leather[DSB].mtd;C_Metal[DSB].mtd;P_Leather[DSB].mtd;P_Metal[DSB].mtd
+c5390	D	c5390	C_DullLeather[DSB].mtd;C_DullLeather[DSB]_Alp.mtd;C_DullLeather[DSB]_Edge.mtd

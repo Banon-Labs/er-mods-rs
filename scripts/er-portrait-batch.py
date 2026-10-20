@@ -151,7 +151,7 @@ PUBLIC = 8
 NUMBERED = re.compile(r"\(\d+\)\s*$")
 APPLIED = re.compile(r'import applied to the live character -- build="((?:[^"\\]|\\.)*)" (.*?); every count')
 RERENDERED = "profile-portrait: slot 0 re-rendered"
-IMPORT_FAILED = ("the queued import FAILED", "boot import of the configured `build_url` REFUSED", "export REFUSED")
+IMPORT_FAILED = ("the queued import FAILED", "configured `build_url` refused at session start", "export REFUSED")
 GAME_START_SECONDS = 120
 BOOT_SECONDS = 300
 # Ten times the longest silence in a healthy boot's log.

@@ -17,6 +17,8 @@ package cupcake.policies.claude.gh_pr_title_conventional
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 # A commit subject is gated locally by a hook; the PR title was not gated anywhere.
 #
 # 2026-09-09: PR #421 opened with the title "Cancel a local invasion that lands in the wrong
@@ -26,7 +28,7 @@ import rego.v1
 # `scripts/hooks/commit-msg`, so the type was written correctly fifteen times in a row on the
 # same branch and then omitted at the one place nothing was checking.
 #
-# The pattern here is a deliberate SUBSET of the python checker: the type list and the
+# The pattern here is a deliberate subset of the python checker: the type list and the
 # `<type>[(scope)][!]: <description>` shape, which is what the failure was. Length limits,
 # trailing punctuation and mood are left to the gate that owns them -- this is a cheap pre-flight
 # at the moment the title is typed, not a second implementation to drift against the first.
@@ -34,26 +36,292 @@ import rego.v1
 
 command := object.get(input.tool_input, "command", "")
 
-# `gh pr create` and `gh pr edit`, the two commands that set a title.
+# A cheap pre-filter over the raw text, so the tokenizer below only runs on commands that
+# mention `gh pr create` or `gh pr edit`, the two commands that set a title. It is deliberately
+# loose -- a quote, a slash or a parenthesis may stand before `gh` -- because the decision is made
+# on the tokens, not here.
 gh_pr_title_command if {
-	regex.match(`(^|[[:space:];|&('"\x60])gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)`, command)
+	regex.match(`(^|[[:space:];|&('"\x60/])gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:];|&)'"\x60]|$)`, command)
 }
 
-# The title as typed, from either quoting style or bare. Only the first `--title` is read: a
-# second one would be a different command's, and this guard is about the one being written.
-# Three partial rules rather than one list, because a list literal holding an undefined value is
-# itself undefined: with `[title_double, title_single, title_bare]` a single-quoted title made the
-# whole set vanish and the guard fell silent. A partial set contributes only the arms that match.
-titles contains found[1] if {
-	found := regex.find_all_string_submatch_n(`--title[[:space:]]+"([^"]*)"`, command, 1)[0]
+# Whose `--title` is it.
+#
+# 2026-10-13: this refused
+#
+#     python3 scripts/kitty-user-command.py --title 'push python-write guard fix' --why '...' \
+#         -- 'git ... push ... && gh pr create ... --title "fix(cupcake): admit ...; close ..." ...'
+#
+# naming `push python-write guard fix` -- the kitty tab's title, an argument to a different
+# program. The old rule took the first `--title` of each quoting style anywhere in the command,
+# so the single-quoted tab title won and the real, valid PR title was never read.
+#
+# A title now has to belong to the `gh pr create` / `gh pr edit` invocation itself: the words
+# after `gh pr <verb>` up to the end of that simple command. The command is split into shell
+# words -- quote-aware, so the `;` inside the PR title above does not end the command -- and each
+# quoted word is unquoted and split again, because a `gh pr create` handed to another program
+# as one quoted argument (`bash -c '...'`, the kitty helper's `-- '...'`) still runs and is still
+# judged. Three levels of that nesting are read; `bash -c "ssh h 'gh pr create ...'"` is two.
+
+# One shell word -- double-quoted, single-quoted, backslash-escaped and bare runs glued together,
+# as in `--title="a b"` -- or one control operator. Whitespace between words matches nothing and
+# is skipped. A backslash-newline is an escaped character inside a word, which is what keeps a
+# line continuation from reading as a command separator.
+token_pattern := `(?:"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[\s\S]|[^\s;|&()<>"'\\\x60])+|&&|\|\||[;|&()\x60\n]`
+
+# The pieces of one word, for unquoting it.
+piece_pattern := `"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[\s\S]|[^"'\\]+`
+
+operator_tokens := {"&&", "||", ";", "|", "&", "(", ")", "`", "\n"}
+
+# `regex.find_all_string_submatch_n` rather than `regex.find_n`: Cupcake's WASM runtime does not
+# implement `regex.find_n`, so it returns undefined there and the guard falls silent while
+# `opa test` passes (`scripts/check-cupcake-wasm-builtins.py` names it). Neither pattern has a
+# capture group, so element 0 of each match is the whole match.
+tokens(text) := [m[0] | some m in regex.find_all_string_submatch_n(token_pattern, text, -1)]
+
+# What the shell hands the program for this word.
+word_value(word) := concat("", [piece_literal(m[0]) | some m in regex.find_all_string_submatch_n(piece_pattern, word, -1)])
+
+piece_literal(p) := out if {
+	startswith(p, `"`)
+	out := double_quoted_literal(substring(p, 1, count(p) - 2))
+} else := out if {
+	startswith(p, "'")
+	out := substring(p, 1, count(p) - 2)
+} else := out if {
+	startswith(p, `\`)
+	out := substring(p, 1, -1)
+} else := p
+
+# Inside double quotes a backslash escapes only `"`, `\`, `$` and the backtick. Escaped
+# backslash pairs are parked first so `\\"` is not read as an escaped quote. `regex.replace` is
+# not used because the WASM runtime does not implement it.
+double_quoted_literal(s) := out if {
+	parked := replace(s, `\\`, backslash_marker)
+	unescaped := replace(replace(replace(parked, `\"`, `"`), `\$`, "$"), "\\`", "`")
+	out := replace(unescaped, backslash_marker, `\`)
 }
 
-titles contains found[1] if {
-	found := regex.find_all_string_submatch_n(`--title[[:space:]]+'([^']*)'`, command, 1)[0]
+backslash_marker := "__gh_pr_title_escaped_backslash__"
+
+# Memory is the constraint here, not speed. Cupcake runs every policy in one WASM module with a
+# bounded heap (10 MB by default, 100 MB under `scripts/cupcake-hook.sh`), and an allocation that
+# does not fit aborts the whole evaluation, which the hook reports as a refusal of the command.
+# So each text is tokenized once, and a word is unquoted only when it can matter: a candidate for
+# nesting, or a title value. The command words themselves (`gh`, `pr`, `create`, `--title`) are
+# compared as typed, so a quoted `"gh"` or `"--title"` is not recognised -- the old rule did not
+# see those either.
+
+# Token lists for the quoted words of these lists that could hold a `gh pr` command. Plain
+# substring tests pick the candidates before anything is unquoted. A word that is itself an
+# argument of `gh pr create` / `gh pr edit` is data gh never runs -- a `--body` that quotes an
+# example command is the usual one -- so it is not read as a command.
+nested_token_lists(lists) := {tokens(word_value(word)) |
+	some toks in lists
+	some k, word in toks
+	nesting_candidate(word)
+	not inside_gh_arguments(toks, k)
 }
 
-titles contains found[1] if {
-	found := regex.find_all_string_submatch_n(`--title[[:space:]]+([^-"'[:space:]][^[:space:];|&]*)`, command, 1)[0]
+# The `[start, end)` index ranges of the arguments of every `gh pr create` / `gh pr edit` in
+# `toks`: the words after `gh pr <verb>` up to the end of that simple command.
+gh_segments(toks) := {[i + 3, segment_end(toks, i + 3)] |
+	some i
+	gh_word(toks[i])
+	toks[i + 1] == "pr"
+	toks[i + 2] in {"create", "edit"}
+}
+
+inside_gh_arguments(toks, k) if {
+	some seg in gh_segments(toks)
+	k >= seg[0]
+	k < seg[1]
+}
+
+nesting_candidate(word) if {
+	contains(word, "gh")
+	contains(word, "pr")
+	contains(word, "create")
+	quoted_or_escaped(word)
+}
+
+nesting_candidate(word) if {
+	contains(word, "gh")
+	contains(word, "pr")
+	contains(word, "edit")
+	quoted_or_escaped(word)
+}
+
+quoted_or_escaped(word) if contains(word, `"`)
+
+quoted_or_escaped(word) if contains(word, "'")
+
+quoted_or_escaped(word) if contains(word, `\`)
+
+# Heredoc bodies are cut out before anything is tokenized.
+#
+# 2026-10-19: this refused a valid title, reporting `title : fix`, for
+#
+#     cat > /tmp/x.md <<'EOF'
+#     ... didn't ... (`on`) ...
+#     EOF
+#     cd ...; timeout 25 gh pr create ... --title 'fix(er-cel-shade): start with cel shading off'
+#
+# The tokenizer knows nothing of heredocs, so the apostrophe in `didn't` opened a single-quoted
+# word that ran to the title's own opening quote. That left `fix` as a bare word and `(` as an
+# operator, and `fix` was judged as the title. The shell reads a heredoc body as data, never as
+# words, so the body is cut out: everything after a `<<WORD` / `<<'WORD'` / `<<"WORD"` /
+# `<<-WORD` / `<< WORD` opener up to and including the first line that is `WORD` alone. The
+# opener's `<<` goes with it, so the next pass finds the next heredoc.
+#
+# The body cannot be found by splitting the command into lines, which was the first draft. The
+# engine replaces every newline it thinks is unquoted with a space before a policy runs, and on
+# the refused command it delivered (measured with `cupcake eval`, not inferred)
+#
+#     cat > /tmp/x.md <<'EOF' ## Summary The shader didn't start off ...\nEOF\ncd ...
+#
+# -- the newlines before the apostrophe gone, the ones after it kept. So the command is split on
+# spaces, which rejoins exactly, and each word is read as its lines, which is how
+# commands.data_heredoc_spans finds a terminator glued to its neighbours (`default.\nEOF\ncd`).
+# Either shape of the terminator line is found: a word of its own, or a line inside a word.
+#
+# Residue, on the side of judging more: an opener with no terminator removes nothing, so a stray
+# `<<` cannot swallow the rest of a command; a body a shell reads (`bash <<'EOF'`) is a program
+# and is kept; `cat <<'EOF' | bash` is not recognised as one, because with the newline gone the
+# opener's line cannot be told from the body; a body line that is the tag alone ends the body
+# early. A `<<<` here-string is not an opener. Three heredocs are cut, the depth the nesting
+# below reads.
+#
+# Written in `indexof`/`split`/`trim` and no new pattern: see the note on a regex added to a
+# cupcake rule crashing the WASM runtime in git_block_main_push.rego.
+lines_of(word) := split(replace(word, "\r", "\n"), "\n")
+
+# The tag a word opens a heredoc with, read from the text after its first `<<`. Empty when the
+# tag is the next word (`<< 'EOF'`).
+opener_tag_text(word) := tag_text(lines_of(substring(word, indexof(word, "<<") + 2, -1))[0]) if {
+	contains(word, "<<")
+	not contains(word, "<<<")
+}
+
+tag_text(s) := trim_prefix(trim_prefix(replace(replace(s, "'", ""), `"`, ""), "-"), `\`)
+
+# `[open, tag word, tag]` for a word that opens a heredoc no shell reads.
+heredoc_opener(words, o) := [o, o, tag] if {
+	tag := opener_tag_text(words[o])
+	tag != ""
+	not shell_reads(words, o)
+} else := [o, o + 1, tag] if {
+	opener_tag_text(words[o]) == ""
+	o + 1 < count(words)
+	tag := tag_text(lines_of(words[o + 1])[0])
+	tag != ""
+	not shell_reads(words, o)
+}
+
+# A shell among the words of the simple command that opens the heredoc.
+shell_reads(words, o) if {
+	starts := [s | some i, w in words; i < o; separator_word(w); s := i + 1]
+	start := max(array.concat(starts, [0]))
+	some i, w in words
+	i >= start
+	i < o
+	commands.heredoc_shell_name(w)
+}
+
+separator_word(w) if contains(w, ";")
+
+separator_word(w) if contains(w, "&")
+
+separator_word(w) if contains(w, "|")
+
+separator_word(w) if contains(w, "(")
+
+separator_word(w) if contains(w, "\n")
+
+# Line `li` of word `c` comes after the tag word's own first line.
+past_opener(c, _, e) if c > e
+
+past_opener(c, li, e) if {
+	c == e
+	li > 0
+}
+
+heredoc_cut(text) := out if {
+	contains(text, "<<")
+	words := split(text, " ")
+	openers := [o | some o, w in words; contains(w, "<<")]
+	count(openers) > 0
+	opener := heredoc_opener(words, min(openers))
+	e := opener[1]
+	tag := opener[2]
+	closes := [c |
+		some c, w in words
+		c >= e
+		some li, l in lines_of(w)
+		past_opener(c, li, e)
+		trim(l, " \t") == tag
+	]
+	count(closes) > 0
+	c := min(closes)
+	close_lines := lines_of(words[c])
+	li := min([i | some i, l in close_lines; past_opener(c, i, e); trim(l, " \t") == tag])
+	head := array.concat(array.slice(words, 0, e), [lines_of(words[e])[0]])
+	out := concat("", [
+		replace(concat(" ", head), "<<", " "),
+		"\n",
+		concat("\n", array.slice(close_lines, li + 1, count(close_lines))),
+		" ",
+		concat(" ", array.slice(words, c + 1, count(words))),
+	])
+}
+
+heredoc_cut_or_same(text) := out if {
+	out := heredoc_cut(text)
+} else := text
+
+unheredoc_command := heredoc_cut_or_same(heredoc_cut_or_same(heredoc_cut_or_same(command)))
+
+token_lists0 := {tokens(unheredoc_command)}
+
+token_lists1 := nested_token_lists(token_lists0)
+
+token_lists2 := nested_token_lists(token_lists1)
+
+token_lists3 := nested_token_lists(token_lists2)
+
+token_lists := ((token_lists0 | token_lists1) | token_lists2) | token_lists3
+
+gh_word(w) if w == "gh"
+
+gh_word(w) if endswith(w, "/gh")
+
+# Index just past the last word of the simple command that starts at `start`.
+segment_end(toks, start) := min({k | some k; toks[k]; k >= start; toks[k] in operator_tokens} | {count(toks)})
+
+# The title a word at `j` sets, if it is a title flag with its value inside the segment.
+title_at(toks, j, end) := word_value(toks[j + 1]) if {
+	toks[j] in {"--title", "-t"}
+	j + 1 < end
+}
+
+title_at(toks, j, _) := substring(word_value(toks[j]), 8, -1) if startswith(toks[j], "--title=")
+
+title_at(toks, j, _) := substring(word_value(toks[j]), 3, -1) if startswith(toks[j], "-t=")
+
+title_flag(w) if w in {"--title", "-t"}
+
+title_flag(w) if startswith(w, "--title=")
+
+title_flag(w) if startswith(w, "-t=")
+
+# One title per `gh pr create` / `gh pr edit` invocation: the last title flag in it, which is
+# the one gh keeps when the flag is repeated.
+titles contains title if {
+	some toks in token_lists
+	some seg in gh_segments(toks)
+	flags := {j | some j; toks[j]; j >= seg[0]; j < seg[1]; title_flag(toks[j])}
+	count(flags) > 0
+	title := title_at(toks, max(flags), seg[1])
 }
 
 # The Conventional Commits shape the CI job requires, and the same type list its error message
@@ -62,7 +330,8 @@ conventional(subject) if {
 	regex.match(`^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)\n]+\))?!?: .+`, subject)
 }
 
-offending_title := t if {
+offending_titles contains t if {
+	gh_pr_title_command
 	some t in titles
 	not conventional(t)
 }
@@ -70,8 +339,7 @@ offending_title := t if {
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
-	gh_pr_title_command
-	subject := offending_title
+	some subject in offending_titles
 
 	decision := {
 		"rule_id": "ER-EFFECTS-PR-TITLE-CONVENTIONAL",

@@ -54,6 +54,19 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 
 [local_invasion]
 
+# AUTO RE-INVADE -- what this calls inside Seamless Co-op.
+#
+# When this DLL cancels a match (wrong place, stalled, or a join that died), it starts the next
+# search itself by calling Seamless Co-op's own invade action: the function at ersc.dll+0x25850 in
+# Seamless Co-op v2.0.1, called as invade(owner, 0, 1, 1) on a thread of this DLL, where `owner`
+# is Seamless's object that holds its session, found by reading Seamless's memory. It is the action
+# behind the invade option of Seamless's own invasion menu. Nothing in ersc.dll is changed by the
+# call.
+#
+# Set false and this DLL never calls it: matches are still refused and cancelled, and you start the
+# next search yourself with the item.
+auto_reinvade = true
+
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
 
@@ -408,6 +421,13 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
+            "auto_reinvade" => match parse_bool(value) {
+                Some(v) => config.auto_reinvade = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("auto_reinvade must be true or false, got {value:?}"),
+                }),
+            },
             "search_by_location" => match parse_bool(value) {
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
@@ -581,6 +601,9 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             // nothing said. Any key the writer does not name is a key the writer destroys.
             "reject_notice" => {
                 out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
+            }
+            "auto_reinvade" => {
+                out.push_str(&format!("auto_reinvade = {}\n", config.auto_reinvade));
             }
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));

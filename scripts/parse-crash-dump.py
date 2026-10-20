@@ -178,6 +178,17 @@ def main() -> int:
     ap.add_argument("--out", help="also write the trace to <out>/crash-trace.txt")
     ap.add_argument("--max-frames", type=int, default=40, help="max module-resolved stack frames")
     ap.add_argument("--selftest", action="store_true", help="prove the unknown-stream shim holds")
+    ap.add_argument(
+        "--all-threads",
+        action="store_true",
+        help="scan every thread's stack, not just the crashing one (a hang dump has no crashing thread)",
+    )
+    ap.add_argument(
+        "--thread-filter",
+        action="append",
+        default=[],
+        help="with --all-threads, print only threads whose rip or frames name this module (repeatable)",
+    )
     args = ap.parse_args()
 
     if args.selftest:
@@ -280,6 +291,40 @@ def main() -> int:
         if st is not None:
             stack_lo = int(st.StartOfMemoryRange)
             stack_hi = stack_lo + int(getattr(st, "DataSize", 0) or 0)
+
+    def scan(lo: int, hi: int, limit: int) -> list[str]:
+        found: list[str] = []
+        last = None
+        addr = lo
+        while addr + 8 <= hi and len(found) < limit:
+            try:
+                reader.move(addr)
+                qb = reader.read(8)
+            except Exception:  # noqa: BLE001 - unmapped stack slot; keep scanning
+                addr += 8
+                continue
+            if qb and len(qb) == 8:
+                m = _module_for(int.from_bytes(qb, "little"), modules)
+                if m and m != last:
+                    found.append(f"{m[0]}+0x{m[1]:x}")
+                    last = m
+            addr += 8
+        return found
+
+    if args.all_threads and reader is not None and mf.threads:
+        out("")
+        out("## every thread (rip, then module-resolved stack words)")
+        for t in mf.threads.threads:
+            st = getattr(t, "Stack", None)
+            ctx = getattr(t, "ContextObject", None)
+            rip = int(getattr(ctx, "Rip", 0) or 0) if ctx is not None else 0
+            frames = []
+            if st is not None:
+                lo = int(st.StartOfMemoryRange)
+                frames = scan(lo, lo + int(getattr(st, "DataSize", 0) or 0), args.max_frames)
+            line = f"   tid={int(t.ThreadId)} rip={_fmt_addr(rip, modules)} :: " + " ".join(frames)
+            if not args.thread_filter or any(f in line for f in args.thread_filter):
+                out(line)
 
     if reader is not None and stack_lo is not None and stack_hi and stack_hi > stack_lo:
         frames = 0

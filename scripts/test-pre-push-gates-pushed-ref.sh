@@ -40,6 +40,7 @@ git_clean=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR g
 fixture="$tmp/fixture"
 gate="$fixture/.worktrees/pre-push-gate"
 log="$tmp/suite.log"
+logs="$tmp/pre-push-logs"
 "${git_clean[@]}" init -q -b work "$fixture"
 "${git_clean[@]}" -C "$fixture" config user.email selftest@example.invalid
 "${git_clean[@]}" -C "$fixture" config user.name selftest
@@ -66,11 +67,20 @@ import sys
 # A narrowed selection, so the hook takes its ER_CHECK_STAGES branch.
 print("\n".join(["lint", "policy"] if "--stages" in sys.argv else ["lint"]))
 PY
+# The stub also behaves like the real check.sh towards its result directory: it clears the stage
+# logs it finds there and writes its own, so a hook that hands every tip the same directory loses
+# the earlier tip's log exactly the way the real one did.
 cat >"$fixture/scripts/check.sh" <<'SH'
 #!/usr/bin/env bash
-printf 'tree=%s head=%s which=%s stages=%s input=%s\n' \
+printf 'tree=%s head=%s which=%s stages=%s input=%s results=%s\n' \
 	"$(pwd -P)" "$(git rev-parse HEAD)" "$(cat which.txt)" "${ER_CHECK_STAGES:-}" \
-	"$(cat game-image.bin 2>/dev/null || echo absent)" >>"$PRE_PUSH_GATES_TEST_LOG"
+	"$(cat game-image.bin 2>/dev/null || echo absent)" "${ER_CHECK_RESULT_DIR:-}" \
+	>>"$PRE_PUSH_GATES_TEST_LOG"
+if [[ -n ${ER_CHECK_RESULT_DIR:-} ]]; then
+	mkdir -p "$ER_CHECK_RESULT_DIR"
+	rm -f "$ER_CHECK_RESULT_DIR"/*.log
+	printf 'stage log of %s\n' "$(cat which.txt)" >"$ER_CHECK_RESULT_DIR/addresses.log"
+fi
 exit "$(cat verdict.txt)"
 SH
 printf 'game-image.bin\n.worktrees/\n' >"$fixture/.gitignore"
@@ -98,7 +108,7 @@ run_hook() { # run_hook <ref line>... -- one push through the hook, as git drive
 	(
 		cd "$fixture" || exit 99
 		printf '%s\n' "$@" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-			PRE_PUSH_GATES_TEST_LOG="$log" bash "$hook_under_test" origin \
+			PRE_PUSH_GATES_TEST_LOG="$log" ER_PRE_PUSH_LOG_DIR="$logs" ER_PRE_PUSH_NO_CACHE=1 bash "$hook_under_test" origin \
 			https://example.invalid/fixture.git >"$tmp/out" 2>"$tmp/err"
 	)
 	status=$?
@@ -187,6 +197,27 @@ if [[ $rec_a == *"tree=$fixture "* && $rec_b == *"tree=$gate "* && $status -ne 0
 	ok "a two-ref push gates A in place and B in the worktree, and B's failure fails the push"
 else
 	bad "a two-ref push was not gated per tip: status $status, $(cat "$log")"
+fi
+
+# --- ...and each tip's stage logs survive the next tip's run --------------------------------
+#
+# The defect, measured 2026-10-08: every tip's check.sh wrote to the one shared result directory,
+# so a red tip's logs were deleted by the next tip's run before anyone read them.
+if [[ $rec_a == *"results=$logs/$sha_a"* && $rec_b == *"results=$logs/$sha_b"* ]]; then
+	ok "each tip's suite is handed its own result directory, keyed by its sha"
+else
+	bad "the tips were not given per-sha result directories: $(cat "$log")"
+fi
+if [[ $(cat "$logs/$sha_a/addresses.log" 2>/dev/null) == "stage log of A" &&
+	$(cat "$logs/$sha_b/addresses.log" 2>/dev/null) == "stage log of B" ]]; then
+	ok "both tips' stage logs are still on disk after the push"
+else
+	bad "a tip's stage log was lost to a later tip: $(ls -R "$logs" 2>&1)"
+fi
+if grep -q "$logs/$sha_b/" "$tmp/err" && ! grep -q "  ${sha_a:0:12}  $logs/" "$tmp/err"; then
+	ok "the closing summary names the failing tip's log directory, and only that one"
+else
+	bad "the closing summary did not name B's logs alone: $(tail -5 "$tmp/err")"
 fi
 
 # --- the gate worktree's lock -------------------------------------------------------------

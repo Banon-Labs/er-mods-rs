@@ -1611,15 +1611,28 @@ pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> 
 /// `observe_path` always runs first so the product can learn the active SteamID even when no redirect
 /// root is active. `ensure_staged_path` runs only after the path is known to redirect, preserving the
 /// old behavior that staging does not fire for non-Roaming/non-EldenRing paths or missing roots.
+///
+/// Only the active account's folder is redirected. `account_is_active` is asked about the SteamID
+/// folder a path names and answers true for the active account, or when the active account is not
+/// known yet. Any other account's folder passes through to the real `%APPDATA%` file. The stage is
+/// filled for the active account alone, so mapping another account's path into it named a file that
+/// could not exist: on 2026-10-13 a stat of a second account's folder failed inside the stage and
+/// armed the "picked save did not load" picker in the middle of a session.
 pub fn redirect_wide_save_path_with_side_effects(
     path: &[u16],
     root_wide: Option<&[u16]>,
     observe_path: impl FnOnce(&[u16]),
+    account_is_active: impl FnOnce(u64) -> bool,
     ensure_staged_path: impl FnOnce(&[u16]),
 ) -> Option<Vec<u16>> {
     observe_path(path);
     let root_wide = root_wide?;
     let redirected = redirect_wide_roaming_eldenring_path(path, root_wide)?;
+    if let Some(steam_id) = steam_id64_from_wide_save_path(path)
+        && !account_is_active(steam_id)
+    {
+        return None;
+    }
     ensure_staged_path(path);
     Some(redirected)
 }
@@ -1870,6 +1883,26 @@ mod tests {
         out
     }
 
+    /// A test's scratch directory, deleted with everything in it when the guard drops.
+    ///
+    /// Dropping runs on a panic as well as on a pass, so a failing assertion cleans up too. It
+    /// derefs to `Path`, so `dir.join(..)` and `Some(&dir)` read as they would on a `PathBuf`.
+    struct ScratchDir(PathBuf);
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
     /// The pid is what makes these tests independent of each other's runs. `std::env::temp_dir()`
@@ -1887,14 +1920,19 @@ mod tests {
     /// `MissingOrNotFile` for one it had already deleted, and `scratch dir must be creatable:
     /// AlreadyExists` when two processes raced the `create_dir_all`. Nothing in the product was
     /// wrong either time. With the pid in the name, eight of eight are green.
-    fn scratch_dir(tag: &str) -> PathBuf {
+    ///
+    /// The returned guard deletes the directory when the test ends, because the pid makes every
+    /// run's directory a new one: nothing used to remove them, each run left the 28 MB container
+    /// `validation_rejects_wrong_size_or_non_bnd4_files` writes behind, and by 2026-10-16 189 of
+    /// them had helped fill the host `/tmp` until a check run failed with `No space left on device`.
+    fn scratch_dir(tag: &str) -> ScratchDir {
         let dir = std::env::temp_dir().join(format!(
             "er-save-redirect-{tag}-p{pid}",
             pid = std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
-        dir
+        ScratchDir(dir)
     }
 
     #[test]
@@ -2320,22 +2358,40 @@ mod tests {
         let config = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
 
         // A healthy run fails exactly this open, and must not be interrupted by a picker.
-        assert!(!picker.should_arm(true, &config));
+        assert!(!picker.should_arm(true, &config, false));
         // A missing backup is ordinary on a first boot.
-        assert!(!picker.should_arm(true, &backup));
+        assert!(!picker.should_arm(true, &backup, false));
         // An open that succeeded says nothing.
-        assert!(!picker.should_arm(false, &primary));
+        assert!(!picker.should_arm(false, &primary, false));
         assert!(!picker.armed());
 
         assert!(
-            picker.should_arm(true, &primary),
+            picker.should_arm(true, &primary, false),
             "the first real failure arms"
         );
         assert!(picker.armed());
         // The detour runs millions of times; every later call must be silent.
         for _ in 0..10_000 {
-            assert!(!picker.should_arm(true, &primary));
+            assert!(!picker.should_arm(true, &primary, false));
         }
+    }
+
+    /// Once a world has loaded, a failed primary open is not "the picked save did not load".
+    #[test]
+    fn failed_redirect_picker_never_arms_after_a_world_has_loaded() {
+        let picker = FailedRedirectPicker::new();
+        let primary =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        assert!(FailedRedirectPicker::counts(true, &primary));
+        assert!(!picker.should_arm(true, &primary, true));
+        assert!(
+            !picker.armed(),
+            "a refusal in world does not spend the one-shot"
+        );
+        assert!(
+            picker.should_arm(true, &primary, false),
+            "before a world loads the same failure still arms once"
+        );
     }
 
     #[test]
@@ -2454,11 +2510,56 @@ mod tests {
             &source,
             Some(&root),
             |_| events.borrow_mut().push("observe"),
+            |_| true,
             |_| events.borrow_mut().push("ensure"),
         )
         .unwrap();
         assert_eq!(&*events.borrow(), &["observe", "ensure"]);
         assert_eq!(redirected.last(), Some(&0));
+    }
+
+    #[test]
+    fn only_the_active_accounts_folder_is_redirected() {
+        const ACTIVE: u64 = 76_561_197_960_265_729;
+        const OTHER: u64 = 76_561_198_001_067_436;
+        let root = wide_path(r"Z:\tmp\stage");
+        let redirect = |path: &str| {
+            let events = std::cell::RefCell::new(Vec::new());
+            let out = redirect_wide_save_path_with_side_effects(
+                &wide_path(path),
+                Some(&root),
+                |_| events.borrow_mut().push("observe"),
+                |id| id == ACTIVE,
+                |_| events.borrow_mut().push("ensure"),
+            );
+            (out, events.into_inner())
+        };
+
+        let (out, events) = redirect(&format!(
+            r"C:\Users\x\AppData\Roaming\EldenRing\{ACTIVE}\ER0000.sl2"
+        ));
+        assert!(
+            out.is_some(),
+            "the active account's save maps into the stage"
+        );
+        assert_eq!(events, ["observe", "ensure"]);
+
+        let (out, events) = redirect(&format!(
+            r"C:\Users\x\AppData\Roaming\EldenRing\{OTHER}\ER0000.sl2"
+        ));
+        assert_eq!(out, None, "another account's save opens its real file");
+        assert_eq!(events, ["observe"], "and nothing is staged for it");
+
+        let (out, events) = redirect(&format!(r"C:\Users\x\AppData\Roaming\EldenRing\{OTHER}"));
+        assert_eq!(out, None, "another account's folder is not mapped either");
+        assert_eq!(events, ["observe"]);
+
+        let (out, events) = redirect(r"C:\Users\x\AppData\Roaming\EldenRing");
+        assert!(
+            out.is_some(),
+            "a path naming no account still maps to the stage root"
+        );
+        assert_eq!(events, ["observe", "ensure"]);
     }
 
     #[test]
@@ -2471,6 +2572,7 @@ mod tests {
                 &non_save,
                 Some(&root),
                 |_| events.borrow_mut().push("observe"),
+                |_| true,
                 |_| events.borrow_mut().push("ensure"),
             ),
             None
@@ -2483,6 +2585,7 @@ mod tests {
                 &non_save,
                 None,
                 |_| events.borrow_mut().push("observe"),
+                |_| true,
                 |_| events.borrow_mut().push("ensure"),
             ),
             None
@@ -2653,7 +2756,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let root = std::env::temp_dir().join(unique);
+        let root = ScratchDir(std::env::temp_dir().join(unique));
         let steam_id = 76561197960265729_u64;
         let sl2 = root
             .join("EldenRing")
@@ -2711,8 +2814,6 @@ mod tests {
                 bytes: None
             }
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2760,7 +2861,9 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let file = std::env::temp_dir().join(unique);
+        let dir = ScratchDir(std::env::temp_dir().join(unique));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let file = dir.join("ER0000.sl2");
         std::fs::write(&file, b"save").unwrap();
         assert!(!save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
@@ -2769,16 +2872,15 @@ mod tests {
         assert!(save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
         // Restoring write permission on the throwaway temp file this test created, so the
-        // `remove_file` below succeeds. Deliberately not narrowed to owner-write: the value under
-        // test is `save_file_is_readonly`, and the repo rule that the live game-owned save must stay
-        // writable makes "clear the readonly bit" the exact semantics to exercise here.
+        // guard's `remove_dir_all` can delete it. Deliberately not narrowed to owner-write: the
+        // value under test is `save_file_is_readonly`, and the repo rule that the live game-owned
+        // save must stay writable makes "clear the readonly bit" the exact semantics to exercise.
         #[allow(
             clippy::permissions_set_readonly_false,
-            reason = "test-local temp file: clearing the readonly bit is the behaviour under test and the file is deleted on the next line"
+            reason = "test-local temp file: clearing the readonly bit is the behaviour under test and the file is deleted when its scratch directory guard drops"
         )]
         perms.set_readonly(false);
         std::fs::set_permissions(&file, perms).unwrap();
-        let _ = std::fs::remove_file(&file);
     }
 
     #[test]

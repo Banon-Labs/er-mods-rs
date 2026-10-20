@@ -43,6 +43,35 @@ pub fn game_module_base() -> Result<usize, String> {
     Ok(module as usize)
 }
 
+/// Where an rva measured on `measured_on` is in the running image, or `None`.
+///
+/// For an address read straight off one build's image instead of carried from 1.16.2 through the
+/// address map -- a 1.16.2 rva goes through [`game_rva`] or the hook APIs. The version is the
+/// build the constant was measured on, written at the call site so a reader knows which image to
+/// check it against:
+///
+/// * `measured_on` is the running build: the rva as given;
+/// * measured on 1.17.1 while 2.7.2.0 runs: the segment carry of
+///   [`crate::game_build::carry_1171_rva`], `None` where it refuses;
+/// * anything else: `None`. Nothing carries backwards, and a 1.17.0 measurement is spelled as its
+///   1.17.1 value first (`scripts/map-rvas-1170-to-1171.py`).
+///
+/// The caller still checks the bytes at the answer before it calls or hooks it.
+pub fn game_rva_measured_on(
+    rva: usize,
+    measured_on: crate::game_build::FileVersion,
+) -> Option<usize> {
+    let running = crate::game_build::game_file_version()?;
+    let carried = if running == measured_on {
+        rva
+    } else if measured_on == crate::game_build::MAPPED_FILE_VERSION_1171 {
+        crate::game_build::carry_1171_rva(rva)?
+    } else {
+        return None;
+    };
+    Some(game_module_base().ok()? + carried)
+}
+
 /// `game_module_base() + rva`, resolved for the running build.
 ///
 /// Every RVA in this workspace is a 1.16.2 RVA. On a build that moved the code, this returns the

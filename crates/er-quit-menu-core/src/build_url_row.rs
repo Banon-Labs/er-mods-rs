@@ -18,16 +18,9 @@
 //! # Where the URL comes from
 //!
 //! The row opens a link field ([`build_url_editor`]) pre-filled from the clipboard, and imports
-//! what the player accepts. An accepted link is written back to `build_url` in the game-directory
-//! `er-quickload.toml`.
-//!
-//! # The boot import
-//!
-//! `build_url` is also imported once per process without a press, the way the standalone
-//! `er-build-import` shell does it -- and that shell cannot be loaded beside this DLL, so without
-//! this the key did nothing in a product profile. The request is made on the first tick; the runtime
-//! fetches straight away and holds the apply until the character is in the world, so it lands on
-//! whichever character the session loads first.
+//! what the player accepts. `build_url` in the game-directory `er-quickload.toml` is also imported
+//! on its own once per session ([`request_configured_import`]), and an accepted link is written
+//! back to it so the next session starts from the last build that worked.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -57,9 +50,6 @@ static AWAITING_SUBMIT_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// Ticks run at all, so the session baseline is emitted exactly once.
 static IMPORT_TICKS: AtomicUsize = AtomicUsize::new(0);
-
-/// Set once the boot import has been asked for, so it is asked for once per process.
-static BOOT_IMPORT_ASKED: AtomicUsize = AtomicUsize::new(0);
 
 /// What a row press did. Every variant is reported to the debug log and counted, because "the row
 /// did nothing" and "the row started an import" look identical on screen until the character
@@ -185,29 +175,30 @@ fn report_session_baseline() {
         return;
     }
     crate::arm::append_build_row_oracle_line("build-url-session-start");
+    request_configured_import();
 }
 
-/// Ask the runtime, once per process, to import the configured `build_url`.
+/// Queue the game-directory `build_url`, once per session, so setting that one line is enough.
 ///
-/// `request_configured` marks the request as the unprompted kind, which the runtime refuses to apply
-/// onto a character created this session -- so a fresh character is never overwritten by a key the
-/// player set for another one.
-fn request_boot_import() {
-    if BOOT_IMPORT_ASKED.swap(1, Ordering::SeqCst) != 0 {
-        return;
-    }
+/// Until 2026-10-07 only the standalone `er-build-import` shell did this, and that shell cannot be
+/// loaded beside the product (both own `er-build-import-runtime`'s statics). So with the product
+/// loaded a configured `build_url` imported nothing until someone pressed the row, which is not
+/// what the config file promises. The runtime's own guards still apply: the build only lands once
+/// the character is in the world, and a configured request refuses a character created this
+/// session.
+fn request_configured_import() {
     match er_build_import_runtime::request_configured() {
         Ok(true) => {
             SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-build-url: boot import of the configured `build_url` STARTED; it applies once the character is in the world"
+                "system-quit-build-url: configured `build_url` queued at session start; it applies once the character is in the world"
             ));
         }
         Ok(false) => {}
         Err(err) => {
             SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-build-url: boot import of the configured `build_url` REFUSED ({err})"
+                "system-quit-build-url: configured `build_url` refused at session start: {err}"
             ));
         }
     }
@@ -286,7 +277,6 @@ pub unsafe fn system_quit_build_import_tick() {
     // neither touches the game: behind the import's early return, the watchdog would sit behind the
     // very thing it watches.
     report_session_baseline();
-    request_boot_import();
     report_awaiting_submit();
     drain_build_import_failure();
     // Safety: the caller's contract (FrameBegin game task) carries through.

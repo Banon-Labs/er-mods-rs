@@ -36,8 +36,7 @@
 //!   camera-override re-assert the driver already does for `WorldChrManDbg+0xb8`.
 
 use eldenring::cs::{
-    CSPersCam, ChrCam, LockCamParam, NpcParam, RideParam, SoloParam, SoloParamRepository,
-    WorldChrMan,
+    CSPersCam, LockCamParam, NpcParam, RideParam, SoloParam, SoloParamRepository, WorldChrMan,
 };
 use eldenring::param::LOCK_CAM_PARAM_ST;
 use er_game_base::game_build::game_file_version;
@@ -418,12 +417,14 @@ fn restore_row(row: u32, original: LOCK_CAM_PARAM_ST) -> bool {
 
 /// `WorldChrMan.chrCam -> +0x60 chrExFollowCam`, or `None` when either link has not come up.
 fn follow_cam(offsets: Offsets) -> Option<usize> {
-    // Safety: `instance()` yields a reference only when the singleton is populated; the field read
-    // below goes through the typed pointer the crate models, and the one raw read after it is
-    // fault-tolerant.
+    // Safety: `instance()` yields a reference only when the singleton is populated, and both raw
+    // reads after it are fault-tolerant. `chrCam` is read at the per-build offset rather than
+    // through the crate's typed `chr_cam` field, because 2.7.2.0 moved it `+0x10` and the crate
+    // still models the earlier layout (see `layout::world_chr_man::CHR_CAM_1172`).
     let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
-    let chr_cam: *const ChrCam = world_chr_man.chr_cam?.as_ptr();
-    let follow = unsafe { safe_read_usize(chr_cam as usize + offsets.ex_follow_cam) }?;
+    let base = core::ptr::from_ref(world_chr_man) as usize;
+    let chr_cam = unsafe { safe_read_usize(base + offsets.chr_cam) }.filter(|&p| p != 0)?;
+    let follow = unsafe { safe_read_usize(chr_cam + offsets.ex_follow_cam) }?;
     // A follow camera that is not a plausible heap pointer means the ChrCam is half-constructed;
     // `+0x468` on a bad base is a write into whatever happens to be there.
     unsafe { er_game_base::mem::is_heap_aligned_ptr(follow) }.then_some(follow)

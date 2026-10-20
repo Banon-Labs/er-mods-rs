@@ -536,6 +536,49 @@ def main() -> int:
         "a long message while a moved-to-background Bash is still running must flag",
     )
 
+    # (22b) 2026-10-19: a foreground Bash whose output quotes the launch phrases -- here, `sed` printing
+    # BACKGROUND_LAUNCH_RE out of cupcake_turn_scan.py -- is a finished call, not a launch. It was booked
+    # as "Bash moved to the background", and every later long message halted as a verbose pause.
+    expect(
+        "verbose-long-after-output-quoting-launch-phrases-is-clean",
+        [
+            user("Read the scanner."),
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "tool_use", "id": "toolu_sed", "name": "Bash",
+                                         "input": {"command": "sed -n 350,370p scripts/cupcake_turn_scan.py"}}]},
+            },
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_sed", "content":
+                    "BACKGROUND_LAUNCH_RE = re.compile(\n    r\"async agent launched|agentId:\"\n"
+                    "    r\"|command running in background|running in background with id\"\n"
+                    "    r\"|moved to the background\"\n    r\"|you will be notified when it completes\","}]},
+            },
+            assistant_text(report),
+        ],
+        lambda o: not o.startswith("VERBOSEPAUSE:"),
+        "output that merely quotes the harness's launch phrases is not a running job",
+    )
+
+    # (22c) 2026-10-19: a closing report that describes a fixed bug in words -- "booked as a job still
+    # running" -- with nothing live and a notification-opened turn. It describes; it does not wait.
+    expect(
+        "verbose-long-report-describing-still-running-is-clean",
+        [user(notification("toolu_h", "bh8")),
+         assistant_text(report + " The scanner booked that call as a job still running, so every "
+                        "later turn looked like a job still running.")],
+        lambda o: not o.startswith("VERBOSEPAUSE:"),
+        "'a job still running' in a description is not a claim that something is running now",
+    )
+    expect(
+        "verbose-long-present-tense-still-compiling-flags",
+        [user(notification("toolu_h", "bh8")),
+         assistant_text(report + " The build is still compiling.")],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "'<it> is still compiling' remains a pause",
+    )
+
     # (23) Control: a refused TaskStop (wrong id) leaves the task live.
     expect(
         "verbose-long-failed-taskstop-still-live",
@@ -567,7 +610,7 @@ def main() -> int:
         "a TaskStop that errored must not count as ending the task",
     )
 
-    print("idle-hold signal tests passed (23 cases)")
+    print("idle-hold signal tests passed (26 cases)")
     return 0
 
 

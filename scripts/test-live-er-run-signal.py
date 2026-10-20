@@ -47,6 +47,17 @@ FOREIGN_CASES = [
     ("docs/recon/rva-map-1162-to-1170.data.tsv", True, False, "build-read doc, DLL built by another tree"),
 ]
 
+# A game running without me3 leaves no profile to read. Measured 2026-10-17: the sentinel answered
+# `fallback-profile-undiscoverable` for every path before asking whether any build reads it, so
+# this policy refused edits to scripts/ and docs/ that its own refusal text promises stay open.
+UNDISCOVERABLE = "undiscoverable=game-live-without-me3"
+UNDISCOVERABLE_CASES = [
+    ("scripts/er-stale-run-sentinel.sh", True, False, "host-side script, game live without me3"),
+    ("docs/foo.md", True, False, "docs prose, game live without me3"),
+    ("crates/er-game-base/src/mem.rs", True, True, "crate source, game live without me3"),
+    ("docs/recon/rva-map-1162-to-1170.data.tsv", True, True, "build-read doc, game live without me3"),
+]
+
 
 def run_signal(event: dict, profiles: str) -> str:
     env = dict(os.environ, LIVE_ER_RUN_PROFILES_OVERRIDE=profiles)
@@ -89,7 +100,11 @@ def main() -> int:
             'profileVersion = "v1"\n\n[[natives]]\n'
             f'path = "{tree_b}/target/x86_64-pc-windows-msvc/release/er_r3_view.dll"\n'
         )
-        runs = [(c, profile) for c in CASES] + [(c, foreign) for c in FOREIGN_CASES]
+        runs = (
+            [(c, profile) for c in CASES]
+            + [(c, foreign) for c in FOREIGN_CASES]
+            + [(c, UNDISCOVERABLE) for c in UNDISCOVERABLE_CASES]
+        )
         for (rel, live, want_deny, why), prof in runs:
             event = {
                 "hook_event_name": "PreToolUse",

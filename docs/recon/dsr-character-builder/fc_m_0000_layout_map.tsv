@@ -1,0 +1,22 @@
+start	end	region	count	entry_size	notes
+0x000000	0x000080	header	1	0x80	version 0x2001A; 0x0C dataOffset=0x1FDB0; 0x10 dataLength=0x19E260; 0x14 dummies=0; 0x18 materials=42; 0x1C bones=389; 0x20 meshes=42; 0x24 vertexBuffers=42; 0x28/0x34 AABB min/max (-0.685,-0.0026,-0.160)/(0.685,1.716,0.133); 0x40 faces in non-motion-blur face sets=45821; 0x44 faces in all face sets=91670; 0x48 vertexIndexSize=0 (per face set); 0x49 unicode=1; 0x50 faceSets=242; 0x54 layouts=4; 0x58 textures=249; 0x5D=2; 0x68=4
+0x000080	0x000080	dummies	0	0x40	none
+0x000080	0x0005C0	materials	42	0x20	name,mtd(matxml path),texCount,texIndex,flags,gxOffset,unk18,0; 0-14 P[FC_M_0000]_Body.matxml (gx 0x15090), 15-28 _Hair.matxml, 29-41 _Hair_Plane2.matxml (gx 0x150F4)
+0x0005C0	0x00C840	bones	389	0x80	core skeleton bones all at index <=170 (Spine 0, L_UpperArm 5, Neck 53, Head 54, Pelvis 59, L_Thigh 60, L_Foot 67, R_Foot 77, Master 163, RootPos 170)
+0x00C840	0x00D020	meshes	42	0x30	all dyn=1, mesh bone list empty (vertex bone bytes index the global table), 6 face sets each (4 or 2 for meshes 29,31,32,40), 1 vertex buffer each
+0x00D020	0x00EE60	face_sets	242	0x20	flags(0=LOD0,0x01000000 LOD1,0x02000000 LOD2,|0x80000000 motion blur),strip=0,cull(1 body/hair, 0 hair_plane),unk06,indexCount,indexOffset(data-rel),indexByteLength,0,indexSize=16,0
+0x00EE60	0x00F3A0	vertex_buffers	42	0x20	bufferIndex=0,layout,vertexSize,vertexCount,0,0,byteLength,byteOffset(data-rel); meshes 0-14 layout 2 (52 B), 15-41 layout 3 (40 B)
+0x00F3A0	0x00F3E0	buffer_layouts	4	0x10	memberCount,0,0,memberOffset
+0x00F3E0	0x011300	textures	249	0x20	path offset (all empty strings), type offset (sampler name e.g. P_ChrCustomize_Skin__snp_Texture2D_3_AlbedoMap), scale, zeros
+0x011300	0x011320	skeleton_set_header	1	0x20	0x2001A only: u16 baseCount=389, u16 allCount=389, u32 baseOffset=0x11320, u32 allOffset=0x12B70, 16 zero bytes (Andre: SkeletonSet BaseSkeleton/AllSkeletons)
+0x011320	0x012B70	skeleton_set_base	389	0x10	parent,child,nextSibling,prevSibling (i16 each) + 8 zero bytes
+0x012B70	0x0143C0	skeleton_set_all	389	0x10	same shape
+0x0143C0	0x014618	layout_members	30	0x14	unk00,structOffset,type,semantic,index (layouts 0..3: 8,5,10,7 members)
+0x014620	0x014C08	mesh_bounding_boxes	42	0x24	NOT min/max: half-extents vec3, rotation vec3 (Euler), center vec3 (mesh 13: half 0.1585,0.0553,0.1358 rot -0.0095,0,0 centre 0,0.0533,-0.0243 vs measured AABB centre 0,0.0531,-0.0241 half 0.1585,0.0557,0.1357)
+0x014C10	0x014FD8	mesh_face_set_index_lists	42	4*n	u32 face set indices per mesh (mesh bone lists are empty and point here too)
+0x014FE0	0x015088	mesh_vertex_buffer_index_lists	42	4	u32
+0x015090	0x015140	gx_lists	2	var	GX00/GX15/... items terminated by 0x7FFFFFFF; Body at 0x15090, Hair at 0x150F4
+0x015140	0x01C9D4	strings_materials_textures	-	utf16	per material: name, mtd path, then its texture path/type strings
+0x01C9E0	0x01FDAE	strings_bones	389	utf16	bone names; region padded to 0x1FDB0
+0x01FDB0	0x1BE010	data	284 spans	-	per mesh in mesh order: each face set's u16 indices (pad 16) then the mesh's vertex buffer (pad 16); spans tile the section with gaps <=14 bytes; ends exactly at EOF (no trailing bytes)
+0x094750	0x0B1600	mesh13_data	-	-	file offsets (= 0x1FDB0 + data-relative 0x749A0..0x91850: face sets 78-83 (LOD0 7494 idx, LOD1 2034, LOD2 576, MB twins same counts) then vb13 1500 x 52 B at 0x7E7A0

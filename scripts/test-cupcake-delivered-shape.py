@@ -57,6 +57,7 @@ Run with --selftest to prove the detector still catches the original defect.
 
 from __future__ import annotations
 
+import atexit
 import glob
 import json
 import os
@@ -110,11 +111,34 @@ DEV_NULL = "/dev/" + "null"
 # the cases below exercise.
 CHECK_SUITE = "scripts/" + "check" + ".sh"
 
+# The commit gate (user directive 2026-10-17) reads the conversation and records spends. A case
+# that commits is given a conversation ending on the user's `authorize commit`, and its spend is
+# kept here rather than in this checkout's `.cupcake/state`.
+COMMIT_AUTH_DIR = Path(tempfile.mkdtemp(prefix="cupcake-delivered-shape-commit-auth-"))
+atexit.register(shutil.rmtree, COMMIT_AUTH_DIR, True)
+
 BASE_ENV = {
     "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/delivered-shape",
     "CUPCAKE_WORKTREE_BRANCHES_OVERRIDE": "",
     "CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE": "a" * 40 + " " + "a" * 40,
+    "CUPCAKE_COMMIT_AUTHORIZATION_STATE": str(COMMIT_AUTH_DIR / "commit-authorizations.jsonl"),
 }
+
+
+def commit_authorized(name: str, command: str) -> dict:
+    """Event fields for a conversation whose last typed prompt is `authorize commit`."""
+    tool_use_id = f"toolu_delivered_{name}"
+    entries = [
+        {"type": "user", "uuid": f"{name}-prompt", "parentUuid": None, "isSidechain": False,
+         "origin": {"kind": "human"}, "promptSource": "typed",
+         "message": {"role": "user", "content": "authorize commit"}},
+        {"type": "assistant", "uuid": f"{name}-call", "parentUuid": f"{name}-prompt",
+         "isSidechain": False, "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}]}},
+    ]
+    path = COMMIT_AUTH_DIR / f"{name}.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    return {"transcript_path": str(path), "tool_use_id": tool_use_id}
 
 
 class Failure(Exception):
@@ -435,7 +459,8 @@ def check_case_table() -> list[str]:
     ]
 
     def measure(case):
-        return case, eval_bash(case["command"])
+        extra = commit_authorized(case["name"], case["command"]) if "git commit" in case["command"] else {}
+        return case, eval_bash(case["command"], **extra)
 
     with ThreadPoolExecutor(max_workers=_pool_width(12)) as pool:
         measured = list(pool.map(measure, cases))
@@ -1068,9 +1093,12 @@ GUARD_LAYER_CASES = [
     ("deleting the git hooks directory", f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}", False),
     # ---- must be ALLOWED: this layer has to stay maintainable -----------------
     ("running the policy suite", f"opa test {CUPCAKE_DIR_TOKEN}/", True),
+    # Was `git commit -F /tmp/msg.txt -- <path>` until 2026-10-17, when every commit began to need
+    # the user's `authorize commit` (git_commit_authorization). Staging the same path keeps what
+    # this case is about: a git command naming the guard layer as an operand is maintenance.
     (
-        "committing a policy change by explicit path",
-        f"git commit -F /tmp/msg.txt -- {CUPCAKE_DIR_TOKEN}/rulebook.yml",
+        "staging a policy change by explicit path",
+        f"git add -- {CUPCAKE_DIR_TOKEN}/rulebook.yml",
         True,
     ),
     (

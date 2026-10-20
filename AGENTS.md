@@ -2,12 +2,75 @@
 
 This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
+## A command for the user goes into a kitty tab, never into the reply (user directive 2026-10-13)
+
+When the agent wants the user to run a command, it does not paste a bash block into its
+message. It opens one kitty tab per command block, focused, with the command typed in but not
+submitted, under a `#` comment block that says why it should be run:
+
+```bash
+python3 scripts/kitty-user-command.py --title 'push loading PR' \
+    --why 'The agent may not push; this publishes fix/load-character-from-file.' \
+    -- 'git -C /home/banon/projects/er-mods-rs/.worktrees/pr-x push -u origin fix/x'
+```
+
+The reply then says in prose which tabs it opened and what each one does. The helper wraps
+the command as `bash -c '...'` because the tabs run fish, and it finds kitty through
+`$KITTY_LISTEN_ON` because `kitty.conf` uses a random port (`listen_on tcp:127.0.0.1:0`).
+`--dry-run` shows what it would send; `--selftest` proves the quoting in bash and fish;
+`--live-selftest` sends that quoting through a real fish tab and checks what fish ran. Run the
+live one after touching the helper: on 2026-10-13 the offline test passed while keystroke-typed
+text reached fish mangled, which is why everything now goes in as a bracketed paste. The same day
+two handed-over tabs came up as bare prompts, because the text was sent before fish drew its first
+prompt and its startup ate it; the helper now waits for kitty's `at_prompt` and exits non-zero
+unless the comments and the command are on screen, so a tab it reports is a tab with the command
+in it.
+A long command goes in a file passed as `--command-file <path>`: a `git push && gh pr
+create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
+The Stop hook refuses a closing message that carries a shell code block.
+
+## Every push gets a kitty tab that follows it (user request 2026-10-19)
+
+An authorized `git push` runs in the background, because the pre-push hook runs the whole check
+suite. Right after starting it, open a tab that shows it to the user:
+
+```bash
+python3 scripts/kitty-tail-push.py --log <the push task's output file> --title 'push <branch>'
+```
+
+The tab follows the log with `tail --pid` on the newest `git push` process (or `--pid <n>`), so it
+lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
+output, waits 5 seconds, and closes. `--selftest` covers the verdict and the tab script's quoting.
+Close Elden Ring before pushing: check.sh refuses while it runs.
+
+## A long background build is tailed in a kitty tab (user directive 2026-10-19)
+
+When the agent starts a long background build -- a duel or invasion build from
+`scripts/er-weapon-build.py`, or any other pipeline run the user will want to follow -- it opens a
+kitty tab that tails the task's output until the task's process exits, and closes 5 seconds
+later. The agent opens it itself, in the same turn the task starts; the user runs nothing:
+
+```bash
+python3 scripts/kitty-tail-task.py --title 'duel build' \
+    --file <task output file> --match er-weapon-build.py --match '--fight duel'
+```
+
+The tab opens with `--keep-focus`, refuses when the match names no process or several, and is the
+user's view only: the agent still reads the outcome from the task's completion and its files. The
+`tail-build-task` skill carries the details. A board regeneration (`gen-r3-weapon-boards.py`) writes
+its progress to per-shard logs, so its tab is `python3 scripts/kitty-tail-task.py --boards --title
+boards --file <task output file>`, which follows those. The Stop guard
+`.cupcake/policies/claude/no_untailed_long_run.rego` halts a turn that backgrounded a run from its
+signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
+such a tab.
+
 ## A command written for the user is spelled absolutely
 
 Every command example in this file, and in every Cupcake block message, is written
 repo-relative because the agent's shell is already in the repo root. **A command the
-user will read is a different artifact and must carry the full path**, because their
-shell is somewhere else and `python3 scripts/er-teardown.py` names nothing there:
+user will read is a different artifact and must carry the full path** -- inside the kitty
+tab above as much as anywhere -- because their shell is somewhere else and
+`python3 scripts/er-teardown.py` names nothing there:
 
 ```bash
 python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py    # hand the user THIS
@@ -185,7 +248,7 @@ Standing user order (2026-07-17): do not stop or yield merely because the proper
 
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
-If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why.
+If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why. The teardown guard (`teardown_must_relaunch.rego`) admits this stop without a measurement only in this form, as the whole command: `python3 scripts/er-teardown.py --reason=invalid-run-<one-token-why>` (a trailing `| tail -<n>` / `| head -<n>` is allowed; chained work and multi-word reasons are still refused).
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
@@ -363,7 +426,13 @@ pointer paths into session state. It is XML: entries are `<Description>"name"</D
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
 
 - **A 1.17 GHIDRA DUMP NOW EXISTS AND IS SERVED ON `localhost:8767` (2026-08-30).** This supersedes every "there is no Ghidra project for 1.17, read the flat image directly" instruction anywhere in this file, in `bd`, or in an agent brief. Bring it up with `bash scripts/ghidra/mcp-up-1170.sh` (project `$HOME/ghidra_maporch/proj1170`, program `ermaporch1170`, imported from `/home/banon/pc_eldenring_runtime.1.17.0.exe.gzf` via `scripts/ghidra/import-runtime-gzf.sh`). **1.16.2 stays up on :8765 at the same time** -- that is the point, because "where did this function go" is a two-image question. Do **not** use :8766; it is an unrelated live `DarkSoulsII.exe` daemon and taking it collides with a user session. **The 1.17 shift is ZERO**, measured: `getFunctionByAddress("14074a970")` returns a function whose entry *is* `14074a970`, the address byte-proven out of `eldenring-deobf-1.17.bin`. So dump VA == deobf VA on 1.17.0 -- but **that dump is 1.17.0 and the installed game is 1.17.1**, so an address :8767 hands you is a RUNTIME address only below rva `0xafefe9`; at or above it the running game has that function `0x70` higher. Put it through `scripts/map-rvas-1170-to-1171.py` before using it against the live process. **BUT IT HAS NO NAMES**: the 1.17 dump carries zero curated symbols (`searchFunctionsByName` totalCount, 1.16.2 vs 1.17 -- Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0). Everything is `FUN_<addr>`. **Names, types and RTTI live only on 1.16.2 and must still be carried across by pairing** -- the 1.17 dump gives you STRUCTURE, not semantics. That structure is still the prize, because unlike `.pdata` it is not blind to leaves: `.pdata` declares nothing for 5.55 MB of `.text` across 146,715 holes, while Ghidra's analysis finds 366,673 functions in 1.17 against 367,183 in 1.16.2 -- so both call graphs are now available and pairing can use call-graph topology instead of byte signatures.
-- **THE INSTALLED GAME IS 1.17.1 SINCE 2026-09-08; THE 1.16.2 DUMP IS STILL THE ONLY *NAMED* ONE.** Read `docs/er-1.17-migration.md` before trusting any address in this file. `eldenring.exe` is PE FileVersion **2.7.1.0**. The step from 2.7.0.0 is ONE CONSTANT and needs no signature hunt: one function at rva `0xafeea0` grew by `0x70`, so **every function entry at or above `0xafefe9` moved `+0x70` and everything below it did not move at all** -- read exhaustively out of both de-Arxan'd images' `.pdata`, all 174,389 entries above the boundary, none left over. Nothing outside the primary `.text` moved: the section table is identical, so `.rdata` vtables and `.data` globals keep their addresses, and the shift MUST be bounded to `.text` or it moves all of them. Carry an address with `scripts/map-rvas-1170-to-1171.py` (`--selftest` re-derives the model), and see `eldenring-deobf-1.17.1.bin`. So every RVA below, every `bd` memory that carries one, and every symbol the MCP returns describes the PREVIOUS build. `er-hook` refuses to install a game-image detour on an unrecognised build rather than corrupt it, so a stale address now shows up as a `HOOK REFUSED` log line instead of a crash. A **de-Arxan'd image exists for each 1.17 build**: `eldenring-deobf-1.17.bin` is 1.17.0 and `eldenring-deobf-1.17.1.bin` is the INSTALLED 1.17.1 (both generated by `scripts/dearxan-deobfuscate.rs`; the 1.17.0 one was verified byte-identical to live memory at three known sites, and 1.17.1 decrypted 1347 regions from 1597 stubs, the same shape, so no new obfuscation technique); `eldenring-deobf.bin` is still 1.16.2 on purpose, because the prologue-generating build scripts and their gates are ground-truthed against it. To carry a 1.16.2 address forward, use `scripts/map-rvas-1162-to-1170.py` (masks displacements and immediates, so it survives the struct-offset drift that defeats `dump-deobf-shift.py`) and then READ the 1.17 function before hooking it.
+- **The installed game is 2.7.2.0 since 2026-10-20.** It moved code in dozens of runs and moved `.rdata`
+  and `.data`, so it is carried by a segment table rather than a constant:
+  `scripts/map-rvas-1171-to-1172.py <addr>` carries a 1.17.1 address (`--selftest` re-derives the
+  table from `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`), and
+  `er_game_base::game_build::carry_1171_rva` does it at runtime. Read the first section of
+  `docs/er-1.17-migration.md`. The 1.17.1 paragraph below still describes the step before it.
+- **THE INSTALLED GAME WAS 1.17.1 FROM 2026-09-08; THE 1.16.2 DUMP IS STILL THE ONLY *NAMED* ONE.** Read `docs/er-1.17-migration.md` before trusting any address in this file. `eldenring.exe` is PE FileVersion **2.7.1.0**. The step from 2.7.0.0 is ONE CONSTANT and needs no signature hunt: one function at rva `0xafeea0` grew by `0x70`, so **every function entry at or above `0xafefe9` moved `+0x70` and everything below it did not move at all** -- read exhaustively out of both de-Arxan'd images' `.pdata`, all 174,389 entries above the boundary, none left over. Nothing outside the primary `.text` moved: the section table is identical, so `.rdata` vtables and `.data` globals keep their addresses, and the shift MUST be bounded to `.text` or it moves all of them. Carry an address with `scripts/map-rvas-1170-to-1171.py` (`--selftest` re-derives the model), and see `eldenring-deobf-1.17.1.bin`. So every RVA below, every `bd` memory that carries one, and every symbol the MCP returns describes the PREVIOUS build. `er-hook` refuses to install a game-image detour on an unrecognised build rather than corrupt it, so a stale address now shows up as a `HOOK REFUSED` log line instead of a crash. A **de-Arxan'd image exists for each 1.17 build**: `eldenring-deobf-1.17.bin` is 1.17.0 and `eldenring-deobf-1.17.1.bin` is the INSTALLED 1.17.1 (both generated by `scripts/dearxan-deobfuscate.rs`; the 1.17.0 one was verified byte-identical to live memory at three known sites, and 1.17.1 decrypted 1347 regions from 1597 stubs, the same shape, so no new obfuscation technique); `eldenring-deobf.bin` is still 1.16.2 on purpose, because the prologue-generating build scripts and their gates are ground-truthed against it. To carry a 1.16.2 address forward, use `scripts/map-rvas-1162-to-1170.py` (masks displacements and immediates, so it survives the struct-offset drift that defeats `dump-deobf-shift.py`) and then READ the 1.17 function before hooking it.
   - **An rva in `crates/er-game-base/src/rva.rs` is 1.16.2 BY DESIGN and is translated at use. It is not stale. Do not "fix" one.** `er_game_base::mem::game_data_addr` carries it to the running build through `game_build::resolve_game_address` against `docs/recon/rva-map-1162-to-1170.data.tsv`. Computing `game_base + <rva from that file>` by hand skips that layer and lands on whatever now occupies the 1.16.2 slot -- RTTI strings, an image pointer, a zero -- which looks exactly like a rotten constant and is merely an untranslated one. This has now cost two sessions one day apart: bd `rva-rs-worldchrman-and-fieldarea-globals-are-stale-1162-2026-09-18` for `WORLD_CHR_MAN_GLOBAL_RVA` via Frida, and 2026-09-19 for `CS_PC_KEY_CONFIG_SINGLETON_RVA` via `/proc/<pid>/mem`, where `0x143d5dea8` reads `00 00 00 00 ... .?AVMTIn` while the map's recorded `0x3d61f08` is the live singleton. The check before filing any such constant is one command, and it answers outright: `grep <rva> docs/recon/rva-map-1162-to-117*.tsv`. A Frida agent wanting the live address should either map it first or take it from the 1.17.1 disassembly.
 - **THE NAMED DUMP IS 1.16.2, AND ITS `.gzf` NO LONGER EXISTS ON THIS MACHINE.** The named dump MUST be 1.16.2, NOT 1.16.1 (a 1.16.1 dump gives drifted addresses that crash-hook -- see bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`). It survives ONLY as the already-imported project `ermaporch1162` @ `$HOME/ghidra_maporch/proj1162`, served on :8765. **Do not go looking for `pc_eldenring_runtime.1.16.2.exe.gzf`** -- this line used to name it at `/mnt/c/Users/choza/...`, a WSL2 path that does not exist here: there is no `/mnt/c` at all, and `/mnt/win-c` is an empty unmounted point, so a search there returns nothing and reads as "the dump is missing" rather than "you looked on a machine that is gone". Verified 2026-08-31: the only `.gzf` files under `$HOME` are `pc_eldenring_runtime.1.16.1.exe.gzf` (1.5 GB, in `projects/reverse/ghidra-projects/`) and `pc_eldenring_runtime.1.17.0.exe.gzf` (4.1 GB). Losing `proj1162` loses the only named ELDEN RING image this workspace has; it cannot be re-imported from anything local. It **requires Ghidra 12.1.2** (x86 language V4.7+ -- 12.1 fails, bd `1162-gzf-needs-ghidra-1212-not-121-2026-07-20`). The 12.1.2 install lives at `$HOME/tools/ghidra_12.1.2_PUBLIC`; the previously-documented `/mnt/d/ghidra/ghidra_12.1.2_PUBLIC` **no longer exists** (`/mnt/d` is unmounted), so set `GHIDRA_INSTALL_DIR` or rely on `scripts/ghidra/mcp-up-1162.sh`, which resolves env-first then falls back through `$HOME/tools` -> `/mnt/d` -> `/opt`.
 - **The MCP daemon on `localhost:8765` serves 1.16.2.** Bring it up / validate with `bash scripts/ghidra/mcp-up-1162.sh` (pins 12.1.2 + `ermaporch1162`). Query lock-free with `python3 scripts/ghidra/mcp_query.py <method>` -- daemon methods are **camelCase**: `getContext`, `getDecompiledCode`, `decompileFunctionByName`, `disassembleFunction`, `getFunctionByAddress`, `getXrefsTo/From`, `searchFunctionsByName`, `getStructure`, ... (NOT snake_case `get_program_info`). The Pi `ghidra` MCP bridge forwards to :8765, so its tools also serve 1.16.2. To switch the daemon: `scripts/ghidra/mcp-ghidra-daemon.sh stop` (frees :8765) then `mcp-up-1162.sh`.
@@ -407,11 +476,37 @@ agent-facing** disassembly. For **in-process, runtime** x86-64 decoding *inside 
 DLL* (instruction-length stepping for the INT3 single-step engine, function-prologue
 validation, byte-pattern confirmation), use the **`iced-x86`** crate -- it is now a
 direct dependency of the root `er-quickload` crate (pure-Rust, decoder-only feature
-set, zero cross-compile overhead under cargo-xwin; it was already present
-transitively via `ilhook`). Do **not** hard-code instruction byte lengths or
+set, zero cross-compile overhead under cargo-xwin). Do **not** hard-code instruction byte lengths or
 prologue byte sequences in new code when `iced-x86` can decode them, and do **not**
 add a second disassembler (e.g. capstone/zydis) **into the DLL / in-process Rust** --
 `iced-x86` already covers in-process needs and avoids a C cross-compile burden.
+
+### Hooking the middle of a function: `ilhook` (user directive 2026-10-19)
+
+MinHook (`er-hook`) patches function **entries** only, and
+`er_game_base::game_build::resolve_detour_address` refuses mid-function addresses on purpose. When
+a fault or decision sits partway through a function whose other work must still happen, do not
+settle for an entry guard that skips the whole function: use **`ilhook`'s jmp-ret hook**.
+
+- It writes a 14-byte absolute jump at any instruction boundary, relocates the instructions it
+  covers into a trampoline, hands the routine every register as a mutable `Registers` block, and
+  jumps to whatever address the routine returns. Return `ori_func_ptr` to run the moved
+  instructions unchanged; return a join point the function already has to take that branch, with
+  your register edits applied.
+- Pure Rust on `iced-x86`, builds on the Linux host too (so routines get host unit tests), no C.
+- The worked example is `crates/er-seamless-bugfixes/src/mid_hooks/` (2026-10-19): two hooks inside
+  `CS::MapItemManImpl::GiveItems` that divert to the function's own "no storage chest" and "someone
+  else's item" branches when there is no local player. It replaced an entry guard that lost the
+  item. `mid_hooks/mod.rs` states the rules: resume only on an existing branch and set every
+  register it reads; pin the whole 14+-byte moved window and the resume target by bytes generated
+  in `build.rs`; check that no branch in the function lands inside the window; resolve both
+  addresses with `resolve_call_site_rva` (function entry plus offset), never as detours.
+- The routine type is `unsafe extern "win64" fn(*mut Registers, ori_func_ptr: usize, user_data:
+  usize) -> usize`. Install with `Hooker::new(addr, HookType::JmpToRet(routine),
+  CallbackOption::None, 0, HookFlags::empty()).hook()` and keep the returned `HookPoint` alive
+  (dropping it unhooks).
+- Not for a whole-function detour (keep MinHook there) and not for a one-instruction removal the
+  function already skips (that is a one-byte patch, see `er-seamless-bugfixes/src/patches/`).
 
 #### Offline Python decoding (`capstone`)
 
@@ -500,6 +595,15 @@ Enforced by `.cupcake/policies/claude/no_ask_without_receiver.rego` over
 `.cupcake/signals/last_assistant_ask_without_receiver.sh`, tested by
 `scripts/test-ask-without-receiver-signal.py` and `scripts/test-cupcake-stop-guards.py`.
 
+A monitor or loop that is no longer needed is stopped first, before anything else (user directive
+2026-10-07: "any time you have a monitor that runs after you don't need it, the first thing you
+should do is stop it"). A turn may not end while a background Bash or Monitor task this session
+started is still running, unless the closing message names that task id in a sentence saying why it
+is still needed. Still running means no finished notification, no Monitor expiry and no TaskStop for
+it in the transcript. Enforced by `.cupcake/policies/claude/no_unexplained_running_tasks.rego` over
+`.cupcake/signals/last_assistant_unexplained_running_tasks.sh`, tested by
+`scripts/test-unexplained-running-tasks-signal.py` and `scripts/test-cupcake-stop-guards.py`.
+
 ## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
@@ -532,7 +636,8 @@ Handling rule:
 - **Default: parallel background subagent.** If the issue does NOT interfere with your current task,
   dispatch a background subagent to fix it (make the gate green, remove the violation) while you keep
   working on your original objective. It is a real deliverable, not a footnote -- see it through to a
-  clean state and a commit, same as any other work.
+  clean state, left uncommitted for the main session to commit after the user's `authorize commit`
+  (a subagent never commits or lints; see "Commits And Lints Wait For The User's `authorize commit`").
 - **Blocker: do it first.** If the issue interferes with or blocks your current task (a gate you must
   pass to commit/validate, a broken dependency you need, a failure that makes your own proof
   untrustworthy), it is a blocker: fix it BEFORE the original task, not in parallel.
@@ -549,46 +654,125 @@ The pre-authorization is standing, so you do not need to ask before fixing a pre
 fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
 main work.
 
-## Commit Timing (user directive 2026-07-17, REVISED 2026-07-21)
+## Commits And Lints Wait For The User's `authorize commit` (user directive 2026-10-17)
 
-Commit **after a runtime validation run COMPLETES, and only if the changes are worth keeping** -- i.e.
-the completed run showed the change is good/useful, or the tree state is genuinely worth preserving as
-evidence. Do **NOT** commit before or during a run (do not commit a fix just because a run was launched),
-and do **NOT** commit changes a completed run showed are not worth keeping (revert or fix them instead).
-Otherwise do NOT commit and do NOT ask about committing -- keep working; a completed, worth-keeping run
-is the commit trigger. (Superseded the old "commit immediately after launching, pass or fail" behavior,
-which committed premature/unvalidated fixes.)
+The user's words: "Lets have a subagent policy to never run lints or formatting or perform
+formatting ourselves until we are just about to commit, and only commit when authorized instead of
+what your agent just did which is tank my FPS with a commit to a worktree when the files wouldn't
+be lost anyway because we are in a virgin worktree in a persistent drive."
 
-Same discipline for **`bd remember`**: record a memory **after** a step, and **only if the finding is
-worth keeping** (validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or
-run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
+What happened: a subagent committed in a gitignored worktree on a persistent drive. The commit
+preserved nothing the worktree was not already keeping, and its hooks ran the check suite while the
+user was playing a game.
+
+The rule:
+
+- **A subagent never commits and never runs a lint or formatter.** Not in the main tree, not in a
+  worktree, not with `git -C`, whatever the conversation says. It leaves its changes uncommitted
+  where it made them and reports the paths; uncommitted files in a worktree on this drive are not
+  at risk.
+- **The main session commits only after the user's own reply `authorize commit`** -- that message
+  and nothing else, typed by the user. One reply pays for one commit. Ask for it when the work is
+  ready to keep; do not commit on a timer, after a runtime run, or to "preserve" anything.
+- **Lints and formatters run only between that reply and the commit it pays for**: `cargo fmt`,
+  `cargo clippy`, `rustfmt`, `shellcheck`, `ruff`, `black`, `prettier` and their kin,
+  `scripts/check-comment-caps.py` (with or without `--fix`), `scripts/check-no-lossy-utf8.py`, and any
+  `--fix` sweep. Never format files by hand to satisfy a formatter either. Tests are not lints and
+  stay allowed at any time: `cargo test -p <crate>`, `opa test`, a gate's `--selftest`, and running
+  a script to produce data. `scripts/check.sh` stays refused outright (`no_whole_check_sh`).
+- **The commit is one plain command**: `git [-C <dir>] commit -F <file>` or
+  `git commit -m '<single-quoted message>'`, with nothing chained to it -- no `git add -A &&`, no
+  heredoc, no `$(...)`. Stage in a separate command first.
+
+Enforced by `.cupcake/policies/claude/git_commit_authorization.rego` and
+`.cupcake/policies/claude/no_lint_before_commit.rego` over the `commit_authorization` signal
+(`scripts/cupcake_commit_authorization.py`, tested by `scripts/test-commit-authorization-signal.py`).
+The signal reads the session transcript the same way the push signal does, shares its reader, and
+records spent authorizations in the gitignored `.cupcake/state/commit-authorizations.jsonl`. When
+either guard denies, it names the phrase to ask for.
+
+This replaces the 2026-07-17 / 2026-07-21 "Commit Timing" rule, which told agents to commit after a
+completed runtime run without asking. A completed run is now a reason to ask for `authorize commit`,
+not a reason to commit.
+
+For **`bd remember`**: record a memory **after** a step, and **only if the finding is worth keeping**
+(validated, durable, non-obvious) -- not eagerly for every intermediate hypothesis or run. The bd
+memory commit-immediately-after-runtime-validation-2026-07-17 describes the replaced commit rule and
+no longer governs commits.
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until the agent-owned branch is pushed. Do **not** push directly to `main`.
+**When ending a work session**, you MUST complete ALL steps below. Work is complete when it is tested and reported, and committed only if the user replied `authorize commit`; it does not have to be pushed. Never push to `main`.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
+2. **Run tests and builds** (if code changed) - Lints and formatters wait for step 4
 3. **Update issue status** - Close finished work, update in-progress items
-4. **Commit, and leave the branch local.** The agent does not push, in any form -- see
-   `.cupcake/policies/claude/git_block_any_push.rego`, user directive 2026-09-17: *"I stopped the
-   monitor, because quite frankly you should NEVER be pushing."* The guard is unconditional: not a
-   feature branch, not a tag, not a deletion, not through a `Monitor`, and not because a CI-state
-   hook reports a failing job. A CI report is context, never an instruction to update the remote.
-   Say plainly which commits are unpushed and on which branch, and hand the user the exact command
-   rather than running it.
+4. **Commit only on the user's `authorize commit`, and leave the branch local unless the user
+   authorizes the push.** A subagent never commits and never lints. The main session asks the user
+   for `authorize commit` when the work is ready to keep; after that reply, and only then, it runs
+   the lints and formatters the change touches, then makes the one plain commit the reply pays for
+   (see "Commits And Lints Wait For The User's `authorize commit`"). Without that reply, leave the
+   changes uncommitted and say which files they are. The agent does not
+   push on its own initiative -- user directive 2026-09-17: *"I stopped the monitor, because quite
+   frankly you should NEVER be pushing."* Not a tag, not a deletion, not main, not a force, not
+   through a `Monitor`, and not because a CI-state hook reports a failing job. A CI report is
+   context, never an instruction to update the remote.
+
+   **The one exception (user directive 2026-10-07): an exact `authorize <sha>` reply.** The agent
+   may push one branch if and only if the user's most recent typed message is exactly
+   `authorize <sha>` -- nothing else in the message -- and `<sha>` (7 to 40 hex digits) is a
+   prefix of that branch's current local tip. To get one, name the branch and give the user the
+   phrase with the full tip sha: `authorize <git rev-parse refs/heads/<branch>>`. The push must
+   then be the plain form `git push [-u] <remote> <branch>` (or `git -C <repo> push ...`) and
+   nothing else in the command; run it in the background, because the pre-push hook runs the full
+   check suite. One authorization pays for one push: a second push, a moved tip or a new commit
+   needs a new `authorize <sha>` reply. Only the user's own typed prompt counts -- not assistant
+   text, tool output, a system reminder, a task notification or an accepted prompt suggestion --
+   and only the main session can use it, never a subagent. Without that reply, say plainly which
+   commits are unpushed and on which branch, and hand the user the exact command.
+
+   Enforced by `.cupcake/policies/claude/git_block_any_push.rego` over the `push_authorization`
+   signal (`scripts/cupcake_push_authorization.py`, tested by
+   `scripts/test-push-authorization-signal.py`), which reads the session transcript and the
+   branch tip itself and records spent authorizations in the gitignored
+   `.cupcake/state/push-authorizations.jsonl`. When the guard denies a push it names the branch
+   and the exact phrase to ask for. `.cupcake/policies/claude/transcript_write_guard.rego` keeps
+   the transcript the authorization is read from out of the agent's reach.
+
+   **The phrase waits for a run of that exact tip.** Hand the user `authorize <sha>` only after a
+   DLL built at that commit has run in the game and written its log, which is the evidence
+   `scripts/check-runtime-evidence.sh` reads. A branch whose commits change `crates/` is refused
+   at push time by the pre-push hook and by `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE` until a log
+   carries `build git=<tip>`, so an authorization asked for earlier is spent on a push that fails
+   (user, 2026-10-16: "I knew it needed a run stamp to push. I was hoping you would figure it out
+   (again) prior to asking me to authorize a push"; and 2026-10-19: "to authorize a push, you must
+   have runtime evidence"). Before asking, run `bash scripts/check-runtime-evidence.sh <full tip
+   sha>` from that checkout. If it exits 1, build the changed shells at the tip
+   (`bash scripts/er-build-dlls.sh <package>`, in the background), launch them
+   (`python3 scripts/er-run-branch.py --with <package>`), let the DLL write its log, and check
+   again. A push that changes no crate needs no run. The Stop hook enforces this:
+   `.cupcake/policies/claude/no_authorize_without_run_stamp.rego` over the
+   `last_assistant_authorize_without_run_stamp` signal halts a closing message that asks for
+   `authorize <sha>` while that check exits 1, and allows when it cannot measure.
 5. **Clean up** - Clear stashes
-6. **Verify** - All changes committed, and the unpushed branches named
+6. **Verify** - Uncommitted changes named by path, any authorized commit made, and the unpushed
+   branches named
 7. **Hand off** - Provide context for next session / review path
 
 **CRITICAL RULES:**
-- NEVER push, and never ask a peer session or a subagent to push on your behalf
-- Work is complete when it is committed, gated and reported; publishing it is the user's call
+- Never commit without the user's exact `authorize commit` reply, one commit per reply; never run a
+  lint or formatter outside that window; a subagent does neither
+- Never push without the user's exact `authorize <sha>` reply for that branch's tip, one push per
+  reply, and never ask a peer session or a subagent to push on your behalf
+- Work is complete when it is tested and reported; committing waits for `authorize commit`, and
+  publishing it is the user's call
 - Naming an unpushed branch is not the banned "ready to push when you are" hedge -- the hedge
-  offers work you could do, and this is work you may not do. State it as a fact and move on
-- Opening a pull request needs the branch on the remote, so an agent cannot open one either
+  offers work you could do, and this is work you may not do without their reply. State it as a
+  fact, give the `authorize <full sha>` phrase for the branch, and move on
+- Opening a pull request needs the branch on the remote, so an agent can open one only after an
+  authorized push of that branch
 <!-- END BEADS INTEGRATION -->
 
 ## Runtime-Affecting Refactor Feasibility
@@ -680,17 +864,19 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 # exists to prevent (bd subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02,
 # bd never-tell-a-worktree-subagent-to-run-check-sh-2026-09-10).
 #
-# Give a worktree subagent the SCOPED list instead, naming its crates and the
-# gates its edit actually touches:
+# A subagent never lints, formats or commits (user directive 2026-10-17; refused by
+# `no_lint_before_commit` and `git_commit_authorization`). Give a worktree subagent
+# tests only, naming its crates and the checks its edit actually touches:
 #   cargo test -p <crate>
-#   cargo clippy -p <crate> --all-targets          # `cargo test` never invokes clippy, and
-#                                                  # the workspace denies warnings
-#   cargo fmt -p <crate> -- --check
-#   python3 scripts/check-comment-caps.py <files it touched>
-#   python3 scripts/check-no-lossy-utf8.py
 #   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
 #   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
 #   python3 scripts/check-stages.py --selftest     # whenever a scripts/*.py gate is added
+#   python3 scripts/check-comment-caps.py --selftest   # selftests are tests, not lints
+# The lints -- `cargo clippy -p <crate> --all-targets` (`cargo test` never invokes clippy,
+# and the workspace denies warnings), `cargo fmt -p <crate> -- --check`,
+# `python3 scripts/check-comment-caps.py <files>`, `python3 scripts/check-no-lossy-utf8.py`
+# -- are the main session's, run only after the user replies `authorize commit` and
+# before the commit that reply pays for.
 # THE MODE MATTERS AS MUCH AS THE NAME. check.sh runs most gates twice -- `--selftest` first,
 # then the gate itself -- and the selftest is the half that proves the gate can still fail.
 # Running only the plain form passes while a gate is broken. Both halves of PR #456's red CI
@@ -790,7 +976,8 @@ no such record, so those scripts will refuse it -- correctly, since nothing prov
     backticks cannot rescue them because the assertion is a substring match. So they are recorded
     in the baseline: deliberate, in the diff, reviewable. Everything else must be at zero -- a
     file with no entry may not have a single shouted word, and a file that drops below its number
-    must record that too, so nothing reads as owing more than it does. Re-sweep with
+    must record that too, so nothing reads as owing more than it does. Re-sweep (main session
+    only, after the user's `authorize commit`) with
     `scripts/check-comment-caps.py --fix <path>` and then read the diff: `--fix` lowercases, and
     a shouted word is occasionally load-bearing and wants a rewritten sentence, a pair of
     backticks, or a baseline entry instead.

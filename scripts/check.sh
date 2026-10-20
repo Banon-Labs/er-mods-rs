@@ -456,6 +456,44 @@ declare -A _check_ran_at=()
 _check_ran=0
 _check_reached_end=0
 
+# --- Progress for the live fan-out ---------------------------------------------------------
+# A stage child started by `_check_fanout_live` finds the parent's pipe on ER_CHECK_PROGRESS_FD and
+# reports each of its own steps there as the step starts, so the parent can keep one line saying
+# which step every running stage is on and how far the whole run has got. The pushes of 2026-10-13
+# printed six stage verdicts and then nothing for the nine minutes `addresses` took, and the user
+# could not tell a slow stage from a hung one.
+#
+# The variable comes off the environment at once. Steps inherit the environment, and a step that
+# runs check.sh itself -- scripts/test-check-sh-accumulates.py drives synthetic suites -- would
+# otherwise report its fixture's steps into the parent's line as if they were this stage's.
+#
+# Only this stage's own step rows count, keyed by the line the DEBUG trap reports: the trap also
+# fires for the rows of other stages (the shim refuses those afterwards) and for a `command -v`
+# guard inside an `if`, and counting either would run the numerator past the denominator.
+_check_progress_fd=${ER_CHECK_PROGRESS_FD:-}
+unset ER_CHECK_PROGRESS_FD
+declare -A _check_reached_at=()
+declare -A _check_row_at=()
+for _check_row in ${_check_step_rows[@]+"${_check_step_rows[@]}"}; do
+	_check_row_line=${_check_row%%:*}
+	[[ -n $_check_row_line && -z ${_check_stage_out[$_check_row_line]:-} ]] && _check_row_at[$_check_row_line]=1
+done
+unset _check_row _check_row_line
+_check_progress_total=${#_check_row_at[@]}
+
+# One line to the parent per step reached: `step <stage> <reached> <total> <command text>`. Written
+# to an inherited pipe, so there is no open to block on. If the parent has gone -- the push was
+# interrupted, its terminal closed -- the write raises SIGPIPE and this stage ends at its next step
+# instead of running on orphaned and holding the gate lock nobody will read.
+_check_report_progress() {
+	[[ -n ${_check_row_at[$1]:-} && -z ${_check_reached_at[$1]:-} ]] || return 0
+	_check_reached_at[$1]=1
+	local text=${2//$'\t'/ }
+	text=${text//$'\n'/ }
+	printf 'step\t%s\t%s\t%s\t%s\n' "${_check_stage:-all}" "${#_check_reached_at[@]}" \
+		"$_check_progress_total" "$text" 2>/dev/null 1>&"$_check_progress_fd" || true
+}
+
 _check_note_failure() {
 	local status="$1" line="$2" cmd="${_check_step_cmd[$2]:-$3}"
 	# Three outcomes, not two. 124 is GNU `timeout` reporting its deadline; >=128 is death by
@@ -509,6 +547,7 @@ _check_count_step() {
 		case "$2" in
 		python3\ * | bash\ * | cargo\ * | shellcheck\ * | rustfmt\ * | opa\ * | cupcake\ * | command\ *)
 			_check_ran_at[$1]=1
+			[[ -n ${_check_progress_fd:-} ]] && _check_report_progress "$1" "$2"
 			;;
 		esac
 	fi
@@ -945,17 +984,30 @@ _check_fanout() {
 	# green-with-holes, it is never printed as `passed`, and the closing lines count how many steps
 	# this run left without a verdict. The reason text is the same vocabulary
 	# scripts/er-change-scope.py uses for the steps it skips.
-	local stage_name
+	#
+	# On a terminal the stages are followed live (see _check_fanout_live), and the stubs collapse
+	# into one line that still names every stage left out and still says it is not a pass.
+	local stage_name live=0 unselected=()
+	if [[ -t 2 && ${ER_CHECK_LIVE:-1} != 0 && ${TERM:-dumb} != dumb ]]; then
+		live=1
+	fi
 	for stage_name in "${stages[@]}"; do
 		if ! printf '%s\n' "${selected[@]}" | grep -qxF -- "$stage_name"; then
 			command python3 "$repo_root/scripts/check-stages.py" \
 				--result-stub "$stage_name" --state SKIPPED \
 				--reason "NOT SELECTED FOR THIS DIFF -- no changed path matches this stage's inputs" \
 				>"$dir/$stage_name.tsv"
-			printf '>>> stage %-14s NOT SELECTED -- it did NOT run, and that is not a pass\n' \
-				"$stage_name" >&2
+			if [[ $live -eq 1 ]]; then
+				unselected+=("$stage_name")
+			else
+				printf '>>> stage %-14s NOT SELECTED -- it did NOT run, and that is not a pass\n' \
+					"$stage_name" >&2
+			fi
 		fi
 	done
+	if [[ ${#unselected[@]} -gt 0 ]]; then
+		printf '>>> not selected for this diff, so NOT run and NOT passed: %s\n' "${unselected[*]}" >&2
+	fi
 
 	# Where a green stage records that it was green for a given set of inputs. Opt-in
 	# (ER_CHECK_CACHE=1) rather than default, and the reason is soundness rather than caution: a
@@ -967,7 +1019,7 @@ _check_fanout() {
 	# exists and says what it is doing.
 	local cache_dir="${ER_CHECK_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/er-mods-rs/check-stages}"
 
-	local started=0
+	local queue=()
 	for stage in "${selected[@]}"; do
 		if [[ ${ER_CHECK_CACHE:-0} == 1 ]]; then
 			local digest marker
@@ -983,15 +1035,22 @@ _check_fanout() {
 				continue
 			fi
 		fi
-		# Throttle to ER_CHECK_JOBS concurrent stages. `wait -n` returns when any one child exits,
-		# which is what keeps the window full rather than draining it between batches.
-		while [[ $(jobs -rp | wc -l) -ge $_check_jobs ]]; do
-			wait -n || true
-		done
-		_check_run_stage "$stage" "$dir" "$cache_dir" &
-		started=$((started + 1))
+		queue+=("$stage")
 	done
-	wait
+	local started=${#queue[@]}
+	if [[ $live -eq 1 ]] && _check_fanout_live "$dir" "$cache_dir" ${queue[@]+"${queue[@]}"}; then
+		:
+	else
+		for stage in ${queue[@]+"${queue[@]}"}; do
+			# Throttle to ER_CHECK_JOBS concurrent stages. `wait -n` returns when any one child
+			# exits, which is what keeps the window full rather than draining it between batches.
+			while [[ $(jobs -rp | wc -l) -ge $_check_jobs ]]; do
+				wait -n || true
+			done
+			_check_run_stage "$stage" "$dir" "$cache_dir" &
+		done
+		wait
+	fi
 
 	if [[ $started -eq 0 && $cached -eq 0 ]]; then
 		echo "check.sh: REFUSED -- no stage was selected to run." >&2
@@ -1042,8 +1101,142 @@ _check_run_stage() {
 	else
 		verdict="RED (exit $rc)"
 	fi
-	printf '>>> stage %-14s %-14s %4ss   %s\n' "$stage" "$verdict" "$secs" "$dir/$stage.log" >&2
+	# Live, the parent owns the terminal line and prints the verdict itself; this child only tells
+	# it the stage is over. Interleaving a full line into the parent's redrawn one would tear both.
+	if [[ -n ${ER_CHECK_PROGRESS_FD:-} ]]; then
+		printf 'done\t%s\t%s\t%s\t%s\n' "$stage" "$verdict" "$secs" "$dir/$stage.log" \
+			2>/dev/null 1>&"$ER_CHECK_PROGRESS_FD" || true
+	else
+		printf '>>> stage %-14s %-14s %4ss   %s\n' "$stage" "$verdict" "$secs" "$dir/$stage.log" >&2
+	fi
 	return $rc
+}
+
+# The fan-out on a terminal: the same stages, launched the same way, plus one line that is redrawn
+# each time any stage reaches a step:
+#
+#     [2/7 stages  180/277 steps  3:41]  policy 41/58 test-cupcake-policies.py  |  addresses 12/61 ...
+#
+# It is driven by events, never by a clock. Each stage child writes a line to a pipe this process
+# holds as each of its steps starts, and a `done` line when it ends; this process blocks reading
+# that pipe and redraws on every line. So the line moves exactly when the run does, and a line
+# that stops moving is a step that is still running -- the step it names.
+#
+# Returns 1 only when the pipe cannot be set up, before any stage has started, so the caller can
+# fall back to the plain fan-out without launching anything twice. Once stages are running it
+# returns 0, and if reading the pipe ever fails it stops drawing and waits for the stages instead.
+declare -A _check_live_total=() _check_live_reached=() _check_live_step=()
+_check_live_order=()
+_check_live_done=0
+_check_live_cols=120
+
+# `python3 "$repo_root/scripts/audit-1170-readiness.py" --selftest` -> `audit-1170-readiness.py --selftest`.
+_check_live_short() {
+	local text=$1
+	text=${text//\"/}
+	text=${text//\$repo_root\/scripts\//}
+	text=${text//\$repo_root\//}
+	text=${text#command }
+	text=${text#python3 }
+	text=${text#bash }
+	printf '%s' "$text"
+}
+
+_check_live_draw() {
+	local stage line seen=0 grand=0 parts=()
+	for stage in "${_check_live_order[@]}"; do
+		seen=$((seen + ${_check_live_reached[$stage]:-0}))
+		grand=$((grand + ${_check_live_total[$stage]:-0}))
+		if [[ -n ${_check_live_step[$stage]+set} ]]; then
+			parts+=("$stage ${_check_live_reached[$stage]:-0}/${_check_live_total[$stage]:-?} ${_check_live_step[$stage]}")
+		fi
+	done
+	printf -v line '[%d/%d stages  %d/%d steps  %d:%02d]' "$_check_live_done" "${#_check_live_order[@]}" \
+		"$seen" "$grand" $((SECONDS / 60)) $((SECONDS % 60))
+	for stage in ${parts[@]+"${parts[@]}"}; do
+		line+="  |  $stage"
+	done
+	printf '\r\033[K%s' "${line:0:_check_live_cols-1}" >&2
+}
+
+_check_fanout_live() {
+	local dir=$1 cache_dir=$2
+	shift 2
+	local queue=("$@") fifo fd wfd next=0 active=0 kind stage a b c count name
+	fifo="$dir/.live.$$"
+	rm -f "$fifo"
+	mkfifo "$fifo" 2>/dev/null || return 1
+	# Two descriptors on one pipe. This process reads through `fd`, opened read-write so the open
+	# does not wait for a writer and the pipe never reports end-of-file while it is held. The stages
+	# get `wfd`, write-only, and `fd` is closed in each of them at launch: a stage holding a read end
+	# would keep the pipe alive after this process died, so its writes would neither fail nor stop.
+	# The name is removed at once; the descriptors are what is shared.
+	if ! exec {fd}<>"$fifo"; then
+		rm -f "$fifo"
+		return 1
+	fi
+	if ! exec {wfd}>"$fifo"; then
+		exec {fd}<&-
+		rm -f "$fifo"
+		return 1
+	fi
+	rm -f "$fifo"
+
+	# Denominators before any stage has spoken, from the same table the stages are cut from. A
+	# stage's own first event replaces its number with the one it counted for itself.
+	while read -r count name; do
+		[[ $count =~ ^[0-9]+$ ]] && _check_live_total[$name]=$count
+	done < <(command python3 "$repo_root/scripts/check-stages.py" --counts 2>/dev/null || true)
+	local size
+	size=$(stty size 2>/dev/null </dev/tty || true)
+	[[ ${size##* } =~ ^[0-9]+$ ]] && _check_live_cols=${size##* }
+
+	_check_live_order=(${queue[@]+"${queue[@]}"})
+	export ER_CHECK_PROGRESS_FD=$wfd
+	while [[ $_check_live_done -lt ${#queue[@]} ]]; do
+		while [[ $active -lt $_check_jobs && $next -lt ${#queue[@]} ]]; do
+			stage=${queue[next]}
+			next=$((next + 1))
+			active=$((active + 1))
+			_check_live_step[$stage]="starting"
+			_check_run_stage "$stage" "$dir" "$cache_dir" {fd}<&- &
+		done
+		_check_live_draw
+		if ! IFS=$'\t' read -r -u "$fd" kind stage a b c; then
+			printf '\r\033[K>>> check.sh: lost the progress pipe; waiting for the stages without it.\n' >&2
+			break
+		fi
+		case $kind in
+		step)
+			# A line from anything this process did not start is ignored rather than drawn.
+			[[ -n ${_check_live_step[$stage]+set} ]] || continue
+			_check_live_reached[$stage]=$a
+			[[ $b =~ ^[0-9]+$ ]] && _check_live_total[$stage]=$b
+			_check_live_step[$stage]=$(_check_live_short "$c")
+			;;
+		done)
+			[[ -n ${_check_live_step[$stage]+set} ]] || continue
+			printf '\r\033[K>>> stage %-14s %-14s %4ss   %s\n' "$stage" "$a" "$b" "$c" >&2
+			unset "_check_live_step[$stage]"
+			_check_live_reached[$stage]=${_check_live_total[$stage]:-0}
+			_check_live_done=$((_check_live_done + 1))
+			active=$((active - 1))
+			;;
+		esac
+	done
+	printf '\r\033[K' >&2
+	unset ER_CHECK_PROGRESS_FD
+	# Only after a lost pipe: whatever had not started yet still runs, the plain way.
+	while [[ $next -lt ${#queue[@]} ]]; do
+		while [[ $(jobs -rp | wc -l) -ge $_check_jobs ]]; do
+			wait -n || true
+		done
+		_check_run_stage "${queue[next]}" "$dir" "$cache_dir" {fd}<&- {wfd}>&- &
+		next=$((next + 1))
+	done
+	wait
+	exec {fd}<&- {wfd}>&-
+	return 0
 }
 
 if [[ -z $_check_stage ]]; then
@@ -1069,6 +1262,9 @@ python3 "$repo_root/scripts/audit-selftest-vacuity.py" --selftest
 # over synthetic suites, and its own non-vacuity control deletes the ERR trap and requires the
 # cases to go red.
 python3 "$repo_root/scripts/test-check-sh-accumulates.py"
+# ...and the live fan-out's progress pipe: it must always end, keep every stage's verdict, and count
+# each stage's own steps once. Lifted from this file and driven over fake stages, like the above.
+python3 "$repo_root/scripts/test-check-sh-live.py"
 # ...and the other half of "did this suite actually check anything": which of its steps could not
 # run on the machine it ran on. `.github/workflows/check.yml` ran 9 gates while this file ran 224,
 # and nothing said so, because the workflow's step list is hand-written and drifted. The CI set is
@@ -1121,6 +1317,9 @@ bash "$repo_root/scripts/test-pre-push-dirty-tree.sh"
 # typed in. On 2026-10-05 a push of one branch from a checkout on another went red on a crate the
 # pushed branch does not contain. See the header of scripts/test-pre-push-gates-pushed-ref.sh.
 bash "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
+# A tip already green in this checkout is not re-run by the next push; a red, expired or forced one
+# is. See the header of scripts/test-pre-push-green-cache.sh.
+bash "$repo_root/scripts/test-pre-push-green-cache.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
 # branch that had never moved was pushed over PR #448 and took two commits off it. See the header
@@ -1351,6 +1550,10 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 # trusted on its own say-so.
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py" --selftest
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
+# A policy the hand-written dispatcher in .cupcake/system/evaluate.rego does not name is compiled,
+# routed, unit-tested and never read by the live hook (measured 2026-10-07 on two policies).
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py" --selftest
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py"
 # Second gate: drive real transcripts through the real hook commands out of .claude/settings.json
 # and assert the halt actually comes back -- plus a clean turn that must still be allowed, because a
 # guard that halts everything wedges every session just as badly as one that halts nothing. It also
@@ -1364,6 +1567,10 @@ python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
 # this suite green throughout. scripts/cupcake-hook.sh normalises the mode and pins the log level;
 # this proves a denial still denies through it.
 python3 "$repo_root/scripts/test-cupcake-hook-shim.py"
+# A policy file that does not compile refuses every tool call, so the agent cannot run its own
+# fix: the hook must hand it the exact unlock command and hold Stop until the closing message is
+# that command alone (user directive 2026-10-19). Runs a throwaway copy of .cupcake, never the live one.
+python3 "$repo_root/scripts/test-cupcake-hook-engine-failure.py"
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
@@ -1376,8 +1583,26 @@ python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
+python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
+python3 "$repo_root/scripts/test-untailed-long-run-signal.py"
+python3 "$repo_root/scripts/test-inline-user-command-signal.py"
+python3 "$repo_root/scripts/test-authorize-run-stamp-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
 opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$repo_root/.cupcake/tests/no_ask_without_receiver_test.rego"
+# The push escape hatch (user directive 2026-10-07): the signal against fixture transcripts and a
+# throwaway repository, then the policy, then the guard that keeps transcripts unwritten.
+python3 "$repo_root/scripts/test-push-authorization-signal.py"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_any_push.rego" "$repo_root/.cupcake/tests/git_block_any_push_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/transcript_write_guard.rego" "$repo_root/.cupcake/tests/transcript_write_guard_test.rego"
+# The commit and lint gates (user directive 2026-10-17): no commit without the user's
+# `authorize commit`, and no lint or formatter except between that reply and its commit.
+python3 "$repo_root/scripts/test-commit-authorization-signal.py"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
@@ -1425,7 +1650,7 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/block_compositor_input_injection.rego" "$repo_root/.cupcake/tests/block_compositor_input_injection_test.rego"
-opa test "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # And the half `opa test` cannot reach. A green policy suite does not mean production-allowed or
@@ -1482,6 +1707,11 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # load-bearing and wants a rewritten sentence rather than a lowercase letter.
 python3 "$repo_root/scripts/check-comment-caps.py" --selftest
 python3 "$repo_root/scripts/check-comment-caps.py"
+# The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
+# lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
+# stock AI). Selftest first, so the scanner is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-ai-lua-dialect.py" --selftest
+python3 "$repo_root/scripts/check-ai-lua-dialect.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
 # 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null
 # `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
@@ -2145,6 +2375,7 @@ shellcheck "$repo_root/scripts/check-committed-compiles.sh"
 shellcheck "$repo_root/scripts/lib/cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/lib/pinned-worktree.sh"
 shellcheck "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
+shellcheck "$repo_root/scripts/test-pre-push-green-cache.sh"
 shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
@@ -2247,6 +2478,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
 
+# er-positional-voice-core holds every decision the voice DLL makes without the game: the Wwise
+# bank it builds (pinned to the length and FNV-1a 64 of the bank the proven table loads, and to
+# the game's own attenuation curves when the local extraction is present), the voice packet, the
+# volume scaling, the voice-slot table and the byte signatures it checks before calling anything.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-positional-voice-core
+
 # er-hotkey-conflicts is almost entirely host-testable, and deliberately so: its product is a
 # warning that names modules, and the ways it can be wrong -- attributing a call to the wrong DLL,
 # conflating a whole-keyboard read with a specific key, decoding the game's binding table onto the
@@ -2260,6 +2497,17 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 # bars a target gets, the immune-status filter, build-up as resistance minus gauge, and the
 # stale-handle rejection that keeps it from reading a freed character.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-target-bars --lib
+
+# er-duel-rules keeps every ruleset decision host-testable in its core: which grip a ban needs,
+# the hand a weapon buff sits on, the equip-load ratio, the per-round blue flask count and when a
+# popup may fire again. The ban table it reads is generated from the installed game, and the
+# generator's --check refuses a table that no longer matches it (skipping without a game).
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-duel-rules-core
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --selftest
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --check
+# The shareable Frida agent (scripts/frida/er-duel-rules.js) carries a JS port of the same rules;
+# its tests are the core's cases, run under node, so the two cannot drift apart unnoticed.
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --test-agent
 
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed nothing ran them: the workspace
@@ -2276,6 +2524,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 # two directions that matter, that a click outside a panel still reaches the game and that a
 # 256-byte DIK table arriving through a shared vtable is left untouched.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
+
+# er-cel-shade's host half: the settings file parser and its presets, the root-signature budget
+# arithmetic that decides whether the look parameter fits, the pipeline-stream walker, and the
+# check that the HLSL cbuffer declares the knobs in the order the menu writes them. A wrong
+# answer from any of those is silent in game -- a pass left vanilla, or a slider moving the wrong
+# float -- so they run here rather than waiting for someone to notice the picture.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
@@ -2365,6 +2620,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 # entity id and the CharaInitParam dressing table. Pure logic with no `cfg(windows)`, so it runs on
 # the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons-core --lib
+
+# er-npc-summons: the brains' facts -- lift detection, the world-geometry tree walk, stuck and
+# hit classification. The game reads sit behind `GameMem`, which the tests fake, so they run on
+# the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons --lib
 
 # er-allow-hostile-actions: its address constants and the stateInfo it refuses. No `cfg(windows)`
 # in the tests, so they run on the host.
@@ -2585,7 +2845,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 # their machine; local/CI parity is the whole reason this file exists.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
-	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults
+	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults \
+	-p mushroom-man-builder
+# mushroom-man-builder's unit tests (archive keys, BND3/BND4, DCX, FLVER export, patch and
+# rebuild, TPF layout) build their inputs in memory, so they need neither game installed. Its
+# corpus tests -- the c2280 parity fingerprints and the rebuild writer's golden numbers -- read
+# the two games' files from MMB_ER_CORPUS_ROOT and MMB_DSR_DIR and print a `SKIP` line when
+# those are absent, so a runner passes them without asserting anything. No count is written
+# here: the last one ("46") had drifted to 40 before anyone read it.
+#
 # er-installer is here rather than in a batch of its own because it is host-only by
 # construction: the conflict rules, the picker state machine, the screen layout and the profile
 # writer are all decidable without a game, a Windows target or a terminal. What its tests are
@@ -2603,6 +2871,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # other half when it is not, so the suite is correct either way rather than silently covering
 # one path. scripts/build-installer-release.py is what proves a release build carries all 31,
 # by running `--selfcheck` against the binary it is about to ship.
+
+# The census of every Dark Souls Remastered chrbnd that mushroom-man-builder's character table
+# was chosen from. Its real run reads the DSR install and so never runs here; the selftest builds
+# two chrbnds in a temp directory (zlib DCX, BND3, a two-mesh FLVER with one mesh on a weapon
+# bone, a TPF, and one binder with no FLVER) and checks every column the census fills.
+python3 "$repo_root/scripts/dsr-chr-census.py" --selftest
 # The two things `scripts/check-er-flver.sh` covered that nothing else did (moved here 2026-08-31,
 # and that script deleted). It was gate-shaped, ran nowhere, and could not have gated anywhere: it
 # had `set -u` but no `set -e`, piped every command into `tail`, and ended on an unconditional
@@ -2703,6 +2977,12 @@ python3 "$repo_root/scripts/check-me3-dll-catalog.py"
 python3 "$repo_root/scripts/check-quit-row-flow-overlap.py" --selftest
 python3 "$repo_root/scripts/check-quit-row-flow-overlap.py"
 
+# The comparison that says a Mushroom Man package is unchanged. The manifests it compares come
+# from `mushroom-man-builder hash-package`, which needs the game's Oodle and so runs under wine,
+# never here; what runs here is the comparison itself, over synthetic manifests: a moved entry, a
+# repack, an added or missing file, an exception that covers it and one that matches nothing.
+python3 "$repo_root/scripts/mushroom-package-manifest.py" --selftest
+
 # ...and that the Rust the installer actually links still says what those two tables say. The
 # catalog is compiled in rather than parsed at runtime, so drift here is an installer shipping
 # a mod list from whenever it was last generated.
@@ -2724,10 +3004,24 @@ python3 "$repo_root/scripts/gen-installer-settings.py" --check
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
 
+# The planner's own item spellings, which the loadout uploader resolves every name against before
+# it uploads (the stored name is the icon URL, and `Misericorde` has no full-size icon). Offline:
+# the selftest parses a fixture of the bundle's item literals, it does not fetch the site.
+python3 "$repo_root/scripts/planner-item-names.py" --selftest
+
+# The mushroom-man-builder fit probe, which scores a builder export against the gates the
+# approved c2280 build sets. The selftest builds its FLVERs, export directory and skeleton in
+# memory and reads no game file; scoring a real export needs both games and runs by hand.
+python3 "$repo_root/scripts/dsr-er-fit-probe.py" --selftest
+
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
 # deny list nobody exercises is a deny list that stopped matching years ago.
 python3 "$repo_root/scripts/build-installer-release.py" --selftest
+
+# The release page's per-DLL staging and its use-case table: a DLL with no catalog category would
+# drop out of the table, and one with no provenance sidecar would publish untied to its source.
+python3 "$repo_root/scripts/release-assets.py" --selftest
 
 # ...and the table only helps if it still matches the code. This scans every cdylib for the hook
 # targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]

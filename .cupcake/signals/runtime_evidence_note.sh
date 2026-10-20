@@ -59,8 +59,10 @@ if [ ! -t 0 ]; then
   event="$(cat)"
 fi
 
+# Here-strings rather than pipes into `grep -q`, for the reason in the sibling signal's matching
+# comment: on a long input the piped form inverted the test.
 target_dir=""
-if printf '%s' "$event" | grep -q 'push'; then
+if grep -q 'push' <<<"$event"; then
   push_repo="$(printf '%s' "$event" |
     python3 "$repo_root/scripts/cupcake_push_target_repo.py" 2>/dev/null)"
   case "$push_repo" in
@@ -97,7 +99,7 @@ fi
 # Only code that ends up inside the game can be proven by a run. A push that moves docs, scripts or
 # policies has nothing to demonstrate and must not be blocked -- a guard that fires on everything is
 # one the next agent learns to override by reflex.
-if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
+if ! grep -q '^crates/' <<<"$changed"; then
   printf 'no crate under crates/ changed since origin/main'
   exit 0
 fi

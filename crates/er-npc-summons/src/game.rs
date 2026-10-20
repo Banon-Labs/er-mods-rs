@@ -585,3 +585,21 @@ pub(crate) fn unsummon(chr: usize) -> Result<(), String> {
     unsafe { call(manager, chr) };
     Ok(())
 }
+
+type AddInventoryEquipFn = unsafe extern "system" fn(usize, *const u32, u32, u8, u8) -> i32;
+
+/// Grant `quantity` of an item through `EquipGameData::AddInventoryEquip(egd, {handle, item id},
+/// quantity, 1, 1)`, the call the lab's food and heal restock used. Game thread only.
+pub(crate) fn add_inventory_equip(
+    egd: usize,
+    handle: u32,
+    item: u32,
+    quantity: u32,
+) -> Result<i32, String> {
+    // SAFETY: the signature the lab called it with (`scripts/frida/spawn-npc.js` `ADD_BY_HANDLE`).
+    let call: AddInventoryEquipFn =
+        unsafe { native(addr::ADD_INVENTORY_EQUIP, "ADD_INVENTORY_EQUIP") }?;
+    // The lab handed it a 16-byte buffer: the handle, then the item id.
+    let buffer = [handle, item, 0, 0];
+    Ok(unsafe { call(egd, buffer.as_ptr(), quantity, 1, 1) })
+}
