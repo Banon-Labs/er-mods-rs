@@ -24,7 +24,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_game_base::game_build::{MAPPED_FILE_VERSION_1171, game_file_version};
+use er_game_base::game_build::{carry_1171_rva, game_file_version};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::UnionFn;
 
@@ -67,20 +67,21 @@ pub(crate) fn forced() -> usize {
 /// Install the detour on 1.17.1. Any other build, or other bytes at the address, leaves the
 /// cursor and camera to the game and says so.
 pub(crate) fn install() {
-    if game_file_version() != Some(MAPPED_FILE_VERSION_1171) {
+    // Measured on 1.17.1 and carried from there, not from 1.16.2: `game_rva` has no ledger row
+    // for this function because 1.17 changed its body. The opening bytes are compared below
+    // before anything is hooked.
+    let Some(rva) = carry_1171_rva(MENU_HAS_MOUSE_1171_RVA) else {
         summons_log(format_args!(
-            "cursor: not 1.17.1 ({:?}); the picker gets no free cursor in the world",
+            "cursor: no carry of the 1.17.1 menu-mouse predicate to {:?}; the picker gets no free \
+             cursor in the world",
             game_file_version()
         ));
         return;
-    }
+    };
     let Ok(base) = game_module_base() else {
         return;
     };
-    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
-    // the opening bytes are compared below before anything is hooked. `game_rva` has no ledger
-    // row for this function because 1.17 changed its body.
-    let entry = base + MENU_HAS_MOUSE_1171_RVA;
+    let entry = base + rva;
     let mut bytes = [0u8; MENU_HAS_MOUSE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };

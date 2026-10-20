@@ -32,7 +32,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use er_game_base::game_build::{MAPPED_FILE_VERSION_1171, game_file_version};
+use er_game_base::game_build::{carry_1171_rva, game_file_version};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
@@ -121,8 +121,8 @@ type ParamDbUpdateFn = unsafe extern "system" fn(usize, f32, u32);
 
 /// The trampoline to the game's own `GXParamDB::Update`.
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
-/// The game module's base, for the rendering system's global.
-static BASE: AtomicUsize = AtomicUsize::new(0);
+/// Where the rendering system's global is in the running module, carried from 1.17.1.
+static RENDERING_SYSTEM: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 struct State {
@@ -140,18 +140,24 @@ fn refuse(why: &'static str) {
 /// Detour `GXParamDB::Update`. Called from the Sky tab's install thread once the game's task
 /// scheduler exists, so the game's code is in place.
 pub fn install() {
-    if game_file_version() != Some(MAPPED_FILE_VERSION_1171) {
-        refuse("not 1.17.1");
+    // Measured on 1.17.1 and carried from there: `game_rva`'s 1.16.2 ledger has no row for
+    // either. The opening bytes are compared below before anything is hooked.
+    let (Some(update_rva), Some(rendering_rva)) = (
+        carry_1171_rva(PARAM_DB_UPDATE_1171_RVA),
+        carry_1171_rva(RENDERING_SYSTEM_1171_RVA),
+    ) else {
+        log(format_args!(
+            "sun: no carry of the 1.17.1 addresses to {:?}",
+            game_file_version()
+        ));
+        refuse("no carry of the 1.17.1 addresses to this build");
         return;
-    }
+    };
     let Ok(base) = game_module_base() else {
         refuse("no game module");
         return;
     };
-    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
-    // the opening bytes are compared below before anything is hooked, so the 1.17.1 rva is the
-    // right one by construction and `game_rva`'s 1.16.2 ledger has nothing to add.
-    let entry = base + PARAM_DB_UPDATE_1171_RVA;
+    let entry = base + update_rva;
     let mut bytes = [0u8; PARAM_DB_UPDATE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
@@ -164,7 +170,7 @@ pub fn install() {
         refuse("GXParamDB::Update does not open as expected");
         return;
     }
-    BASE.store(base, Ordering::Release);
+    RENDERING_SYSTEM.store(base + rendering_rva, Ordering::Release);
     // SAFETY: MinHook's own initialisation; a second call reports it already ran.
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
@@ -174,7 +180,7 @@ pub fn install() {
             return;
         }
     }
-    // SAFETY: a 1.17.1 entry derived from the running module whose opening bytes were just
+    // SAFETY: a 1.17.1 entry carried to the running module whose opening bytes were just
     // checked, and a detour with its exact signature.
     let hook = match unsafe {
         MhHook::new_following_arxan(entry as *mut c_void, param_db_update as *mut c_void)
@@ -227,7 +233,7 @@ fn after_update() {
     };
     let holds = &mut state.holds;
     holds.begin();
-    let rendering = read_usize(BASE.load(Ordering::Acquire) + RENDERING_SYSTEM_1171_RVA);
+    let rendering = read_usize(RENDERING_SYSTEM.load(Ordering::Acquire));
     if let Some(rendering) = rendering.filter(|p| *p != 0) {
         let environment = rendering + ENVIRONMENT;
         light_sets(environment, &sun, holds, &mut seen);

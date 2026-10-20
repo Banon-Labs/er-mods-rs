@@ -1,17 +1,24 @@
 //! FLVER2 tables, read in place: the header, bones, meshes, face sets, vertex buffers and buffer
 //! layouts that both Dark Souls Remastered's c2280 and Elden Ring's donor parts are made of.
 //!
-//! Nothing here rebuilds a FLVER. The donor is patched in place -- vertices and indices
-//! overwritten inside the buffers it already has -- so the only structure needed is where each
-//! table and buffer sits. Moved here from `scripts/route_a_mushroom_{export,patch_donor,
-//! hide_flver_faces}.rs`, which each carried their own copy of these parsers.
+//! Nothing here writes a whole FLVER. The donor is either patched in place -- vertices and
+//! indices overwritten inside the buffers it already has ([`patch`]) -- or has its data section
+//! laid out again behind an unchanged header region ([`rebuild`]), so the only structure needed
+//! is where each table and buffer sits. Moved here from `scripts/route_a_mushroom_{export,
+//! patch_donor,hide_flver_faces}.rs`, which each carried their own copy of these parsers.
 
-pub mod export;
 pub mod hide;
+pub mod mtd;
 pub mod patch;
+pub mod rebuild;
+pub mod skeleton;
+pub mod source;
+#[cfg(test)]
+mod synthetic;
+pub mod verify;
 
 use crate::{
-    bytes::{f32_le, i16_le, slice, u8_at, u32_le, utf16z},
+    bytes::{byte_string_z, f32_le, i16_le, slice, u8_at, u16_le, u32_le, utf16z},
     error::{Error, Result},
 };
 
@@ -24,6 +31,7 @@ const FACE_SET_SIZE: usize = 0x20;
 const VERTEX_BUFFER_SIZE: usize = 0x20;
 const BUFFER_LAYOUT_SIZE: usize = 0x10;
 const LAYOUT_MEMBER_SIZE: usize = 0x14;
+const TEXTURE_SIZE: usize = 0x20;
 /// FLVER versions from this one on store UVs at 1/2048, older ones at 1/1024.
 const UV_FACTOR_2048_VERSION: u32 = 0x2000F;
 
@@ -55,6 +63,7 @@ pub struct Header {
     pub vertex_index_size: u32,
     pub face_set_count: usize,
     pub buffer_layout_count: usize,
+    pub texture_count: usize,
 }
 
 impl Header {
@@ -131,6 +140,49 @@ impl Bone {
 
 /// Where each bone's joint sits in the bind pose, in model space.
 pub fn bind_positions(bones: &[Bone]) -> Result<Vec<Vec3>> {
+    Ok(bind_frames(bones)?
+        .into_iter()
+        .map(|frame| frame.origin)
+        .collect())
+}
+
+/// A bone's joint and axes in the bind pose, in model space. `axes[0]` is the bone's own X, the
+/// direction both a 3ds Max Biped and Elden Ring's skeleton point a limb bone along, toward its
+/// child; the axes carry the bone's scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Frame {
+    pub origin: Vec3,
+    pub axes: [Vec3; 3],
+}
+
+impl Frame {
+    fn from_matrix(m: &Mat4) -> Self {
+        let row = |r: [f32; 4]| Vec3 {
+            x: r[0],
+            y: r[1],
+            z: r[2],
+        };
+        Self {
+            origin: row(m[3]),
+            axes: [row(m[0]), row(m[1]), row(m[2])],
+        }
+    }
+
+    fn matrix(&self) -> Mat4 {
+        let row = |v: Vec3, w: f32| [v.x, v.y, v.z, w];
+        [
+            row(self.axes[0], 0.0),
+            row(self.axes[1], 0.0),
+            row(self.axes[2], 0.0),
+            row(self.origin, 1.0),
+        ]
+    }
+}
+
+/// Every bone's [`Frame`] in the bind pose. A bone with no parent keeps its own local transform,
+/// which for a Nub or a weapon bone is an offset from the bone it belongs to rather than a place:
+/// [`compose_unparented`] puts those where they go.
+pub fn bind_frames(bones: &[Bone]) -> Result<Vec<Frame>> {
     bones
         .iter()
         .map(|bone| {
@@ -138,8 +190,7 @@ pub fn bind_positions(bones: &[Bone]) -> Result<Vec<Vec3>> {
             let mut parent = bone.parent_index;
             for _ in 0..bones.len() {
                 let Ok(index) = usize::try_from(parent) else {
-                    let [x, y, z, _] = world[3];
-                    return Ok(Vec3 { x, y, z });
+                    return Ok(Frame::from_matrix(&world));
                 };
                 let up = bones
                     .get(index)
@@ -150,6 +201,17 @@ pub fn bind_positions(bones: &[Bone]) -> Result<Vec<Vec3>> {
             Err(Error::new(format!("bone {} has a parent cycle", bone.name)))
         })
         .collect()
+}
+
+/// Bone `child`, stored with no parent, placed on bone `owner` as if it were its child. Elden
+/// Ring keeps `R_Weapon` and `L_Weapon` this way, a local offset with parent -1, and a Biped keeps
+/// its Nubs so: composed onto the hand, `R_Weapon` lands where the player skeleton (`c0000.hkx`)
+/// has it.
+pub fn compose_unparented(bones: &[Bone], frames: &[Frame], child: usize, owner: usize) -> Frame {
+    Frame::from_matrix(&mat_mul(
+        &bones[child].local_transform(),
+        &frames[owner].matrix(),
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,9 +231,27 @@ pub struct Mesh {
 pub struct FaceSet {
     pub flags: u32,
     pub triangle_strip: bool,
+    pub cull_backfaces: bool,
+    pub unk06: u16,
     pub index_count: usize,
     pub index_offset: usize,
+    /// The indices' length in bytes, `index_count` times the index width.
+    pub byte_length: usize,
     pub index_size: u32,
+}
+
+/// The face set flag bit that marks a motion-blur copy of a LOD's face set.
+pub const FACE_SET_MOTION_BLUR: u32 = 0x8000_0000;
+
+impl FaceSet {
+    /// 0, 1 or 2: which distance this face set draws at (flags bits 24 and 25).
+    pub fn lod(&self) -> usize {
+        ((self.flags >> 24) & 3) as usize
+    }
+
+    pub fn is_motion_blur(&self) -> bool {
+        self.flags & FACE_SET_MOTION_BLUR != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -200,8 +280,11 @@ pub struct LayoutMember {
 /// Where every table of one FLVER sits, plus the tables themselves.
 pub struct Flver {
     pub header: Header,
+    pub material_table: usize,
     pub mesh_table: usize,
     pub face_set_table: usize,
+    pub vertex_buffer_table: usize,
+    pub texture_table: usize,
     pub bones: Vec<Bone>,
     pub meshes: Vec<Mesh>,
     pub face_sets: Vec<FaceSet>,
@@ -212,12 +295,13 @@ pub struct Flver {
 impl Flver {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let header = parse_header(bytes)?;
-        let bone_table =
-            HEADER_SIZE + DUMMY_SIZE * header.dummy_count + MATERIAL_SIZE * header.material_count;
+        let material_table = HEADER_SIZE + DUMMY_SIZE * header.dummy_count;
+        let bone_table = material_table + MATERIAL_SIZE * header.material_count;
         let mesh_table = bone_table + BONE_SIZE * header.bone_count;
         let face_set_table = mesh_table + MESH_SIZE * header.mesh_count;
         let vertex_buffer_table = face_set_table + FACE_SET_SIZE * header.face_set_count;
         let layout_table = vertex_buffer_table + VERTEX_BUFFER_SIZE * header.vertex_buffer_count;
+        let texture_table = layout_table + BUFFER_LAYOUT_SIZE * header.buffer_layout_count;
         Ok(Self {
             bones: parse_bones(bytes, bone_table, header.bone_count)?,
             meshes: parse_meshes(bytes, mesh_table, header.mesh_count)?,
@@ -228,8 +312,11 @@ impl Flver {
                 header.vertex_buffer_count,
             )?,
             layouts: parse_layouts(bytes, layout_table, header.buffer_layout_count)?,
+            material_table,
             mesh_table,
             face_set_table,
+            vertex_buffer_table,
+            texture_table,
             header,
         })
     }
@@ -240,6 +327,10 @@ impl Flver {
 
     pub fn face_set_table_offset(&self, face_set_index: usize) -> usize {
         self.face_set_table + face_set_index * FACE_SET_SIZE
+    }
+
+    pub fn vertex_buffer_table_offset(&self, vertex_buffer_index: usize) -> usize {
+        self.vertex_buffer_table + vertex_buffer_index * VERTEX_BUFFER_SIZE
     }
 
     /// The index size a face set actually uses: its own, or the header's when it records none.
@@ -270,6 +361,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<Header> {
         vertex_index_size: u32::from(u8_at(bytes, 0x48)?),
         face_set_count: u32_le(bytes, 0x50)? as usize,
         buffer_layout_count: u32_le(bytes, 0x54)? as usize,
+        texture_count: u32_le(bytes, 0x58)? as usize,
     })
 }
 
@@ -328,8 +420,11 @@ fn parse_face_sets(bytes: &[u8], offset: usize, count: usize) -> Result<Vec<Face
             Ok(FaceSet {
                 flags: u32_le(bytes, off)?,
                 triangle_strip: u8_at(bytes, off + 4)? != 0,
+                cull_backfaces: u8_at(bytes, off + 5)? != 0,
+                unk06: u16_le(bytes, off + 6)?,
                 index_count: u32_le(bytes, off + 8)? as usize,
                 index_offset: u32_le(bytes, off + 0x0C)? as usize,
+                byte_length: u32_le(bytes, off + 0x10)? as usize,
                 index_size: u32_le(bytes, off + 0x18)?,
             })
         })
@@ -372,6 +467,58 @@ pub fn parse_layout_members(bytes: &[u8], layout: Layout) -> Result<Vec<LayoutMe
                 format_id: u32_le(bytes, off + 0x08)?,
                 semantic_id: u32_le(bytes, off + 0x0C)?,
                 index: u32_le(bytes, off + 0x10)?,
+            })
+        })
+        .collect()
+}
+
+/// One material: its name, its MTD (or matxml) path, and the run of the texture table it uses.
+#[derive(Clone, Debug)]
+pub struct Material {
+    pub name: String,
+    pub mtd: String,
+    pub texture_count: usize,
+    pub texture_index: usize,
+}
+
+/// One texture table entry: the file it names, and the shader sampler it feeds. Elden Ring's
+/// player parts leave the path empty and let the material's matbin name the file.
+#[derive(Clone, Debug)]
+pub struct Texture {
+    pub path: String,
+    pub sampler: String,
+}
+
+/// A header-region string: UTF-16 when the header's unicode flag (0x49) is set, else bytes.
+fn header_string(bytes: &[u8], offset: usize) -> Result<String> {
+    if u8_at(bytes, 0x49)? != 0 {
+        utf16z(bytes, offset)
+    } else {
+        byte_string_z(bytes, offset)
+    }
+}
+
+pub fn parse_materials(bytes: &[u8], flver: &Flver) -> Result<Vec<Material>> {
+    (0..flver.header.material_count)
+        .map(|i| {
+            let off = flver.material_table + i * MATERIAL_SIZE;
+            Ok(Material {
+                name: header_string(bytes, u32_le(bytes, off)? as usize)?,
+                mtd: header_string(bytes, u32_le(bytes, off + 0x04)? as usize)?,
+                texture_count: u32_le(bytes, off + 0x08)? as usize,
+                texture_index: u32_le(bytes, off + 0x0C)? as usize,
+            })
+        })
+        .collect()
+}
+
+pub fn parse_textures(bytes: &[u8], flver: &Flver) -> Result<Vec<Texture>> {
+    (0..flver.header.texture_count)
+        .map(|i| {
+            let off = flver.texture_table + i * TEXTURE_SIZE;
+            Ok(Texture {
+                path: header_string(bytes, u32_le(bytes, off)? as usize)?,
+                sampler: header_string(bytes, u32_le(bytes, off + 0x04)? as usize)?,
             })
         })
         .collect()
@@ -467,6 +614,47 @@ mod tests {
         let positions = bind_positions(&bones).unwrap();
         let child = positions[1];
         assert!(child.x.abs() < 1e-6 && (child.y - 2.0).abs() < 1e-6 && child.z.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_bone_with_no_parent_composes_onto_its_owner() {
+        // The owner is turned a quarter about Z, so the child's 0.1 m along local X points up,
+        // and the child's own axes turn with it.
+        let bones = [
+            bone(
+                -1,
+                Vec3 {
+                    x: 0.5,
+                    y: 1.0,
+                    z: 0.0,
+                },
+                Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: std::f32::consts::FRAC_PI_2,
+                },
+            ),
+            bone(
+                -1,
+                Vec3 {
+                    x: 0.1,
+                    y: 0.0,
+                    z: 0.02,
+                },
+                Vec3::default(),
+            ),
+        ];
+        let frames = bind_frames(&bones).unwrap();
+        // Unparented, its bind is only its offset.
+        assert!((frames[1].origin.x - 0.1).abs() < 1e-6);
+        let placed = compose_unparented(&bones, &frames, 1, 0);
+        let close = |a: Vec3, b: [f32; 3]| {
+            (a.x - b[0]).abs() < 1e-6 && (a.y - b[1]).abs() < 1e-6 && (a.z - b[2]).abs() < 1e-6
+        };
+        assert!(close(placed.origin, [0.5, 1.1, 0.02]), "{placed:?}");
+        assert!(close(placed.axes[0], [0.0, 1.0, 0.0]), "{placed:?}");
+        assert!(close(placed.axes[1], [-1.0, 0.0, 0.0]), "{placed:?}");
+        assert_eq!(bind_positions(&bones).unwrap()[0], frames[0].origin);
     }
 
     #[test]

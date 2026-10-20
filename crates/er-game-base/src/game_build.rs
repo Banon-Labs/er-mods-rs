@@ -56,9 +56,31 @@ pub const MAPPED_FILE_VERSION_1171: FileVersion = FileVersion {
     revision: 0,
 };
 
-/// End of the primary `.text`, as an rva. Both 1.17 builds put the section table in the same
-/// place, so this bound is the same on either of them.
+/// `FileVersion` of the build Steam installed on 2026-10-20.
+pub const MAPPED_FILE_VERSION_1172: FileVersion = FileVersion {
+    major: 2,
+    minor: 7,
+    build: 2,
+    revision: 0,
+};
+
+/// End of the primary `.text`, as an rva. 1.17.0 and 1.17.1 put the section table in the same
+/// place, so this bound is the same on either of them. 2.7.2.0 moved it, which its own segment
+/// table carries.
 const TEXT_RVA_END: u32 = 0x29a5800;
+
+/// How the map's 1.17.0 destinations reach the running build.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Carry {
+    /// 1.17.0 itself: the destinations are already right.
+    Identity,
+    /// 1.17.1: `.text` at or above [`CARRY_1171_BOUNDARY_RVA`] moved [`CARRY_1171_SHIFT`].
+    To1171,
+    /// 2.7.2.0: the 1.17.1 carry, then [`CARRY_1171_TO_1172`]'s segments. An rva in no segment
+    /// sits in or beside code that changed, and is refused.
+    To1172,
+}
 
 /// The lowest rva that 1.17.1 moved. Below it the two 1.17 builds hold the same code at the same
 /// address; at or above it a function entry sits [`CARRY_1171_SHIFT`] bytes higher.
@@ -878,14 +900,64 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
 /// `scripts/map-rvas-1170-to-1171.py`, whose selftest asserts it: all 174,389 function entries
 /// above the boundary map at `+0x70`, with none left over and none needing a signature match.
 ///
-/// A `shift` of zero is the identity, which is what 1.17.0 itself takes.
+/// [`Carry::Identity`] is what 1.17.0 itself takes.
+///
+/// 2.7.2.0 is not one constant. Code moved in dozens of runs with different deltas, the section
+/// table moved, and `.rdata`/`.data` drift piecewise, so the step from 1.17.1 is a segment table
+/// derived from both de-Arxan'd images by `scripts/map-rvas-1171-to-1172.py` (text from `.pdata`
+/// pairs, data from the rip-relative operands of carried code). `None` is an rva no segment
+/// covers: in a function that changed, or between two data regions that moved apart.
 #[cfg_attr(not(windows), allow(dead_code))]
-const fn carry_mapped_rva(rva: u32, shift: u32) -> u32 {
-    if rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END {
-        rva + shift
-    } else {
-        rva
+// The bounds stay in comparison position: `scripts/rva_role.py` proves they are thresholds rather
+// than game addresses from the fact that every use of them is a comparison.
+#[allow(clippy::manual_range_contains)]
+fn carry_mapped_rva(rva: u32, carry: Carry) -> Option<u32> {
+    let to_1171 = |rva: u32| {
+        if rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END {
+            rva + CARRY_1171_SHIFT
+        } else {
+            rva
+        }
+    };
+    match carry {
+        Carry::Identity => Some(rva),
+        Carry::To1171 => Some(to_1171(rva)),
+        Carry::To1172 => carry_1171_to_1172(to_1171(rva)),
     }
+}
+
+/// An rva measured on 1.17.1, where the running build has it.
+///
+/// For code that was read straight off `eldenring-deobf-1.17.1.bin` rather than carried from
+/// 1.16.2 through the map: the identity on 1.17.1, the segment carry on 2.7.2.0, and `None` on
+/// any other build or where the carry refuses. The caller still checks the bytes at the answer
+/// before hooking it.
+#[cfg(windows)]
+pub fn carry_1171_rva(rva: usize) -> Option<usize> {
+    let running = game_file_version()?;
+    let rva = u32::try_from(rva).ok()?;
+    if running == MAPPED_FILE_VERSION_1171 {
+        Some(rva as usize)
+    } else if running == MAPPED_FILE_VERSION_1172 {
+        carry_1171_to_1172(rva).map(|r| r as usize)
+    } else {
+        None
+    }
+}
+
+/// Host builds have no running game.
+#[cfg(not(windows))]
+pub fn carry_1171_rva(rva: usize) -> Option<usize> {
+    let _ = rva;
+    None
+}
+
+/// One 1.17.1 rva onto 2.7.2.0, or `None` outside every segment.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn carry_1171_to_1172(rva: u32) -> Option<u32> {
+    let at = CARRY_1171_TO_1172.partition_point(|(lo, _, _)| *lo <= rva);
+    let (lo, hi, delta) = *CARRY_1171_TO_1172.get(at.checked_sub(1)?)?;
+    (lo <= rva && rva < hi).then(|| rva.wrapping_add_signed(delta))
 }
 
 /// How far to carry the map's destinations for the running build, or `None` when this is a build
@@ -897,12 +969,14 @@ const fn carry_mapped_rva(rva: u32, shift: u32) -> u32 {
 /// inside 1.17.1 code for every address that moved -- roughly half of them -- with nothing in the
 /// log to say so, because from the table's point of view the translation had succeeded.
 #[cfg(windows)]
-fn carry_shift_for_running_build() -> Option<u32> {
+fn carry_shift_for_running_build() -> Option<Carry> {
     let running = game_file_version()?;
     if running == MAPPED_FILE_VERSION {
-        Some(0)
+        Some(Carry::Identity)
     } else if running == MAPPED_FILE_VERSION_1171 {
-        Some(CARRY_1171_SHIFT)
+        Some(Carry::To1171)
+    } else if running == MAPPED_FILE_VERSION_1172 {
+        Some(Carry::To1172)
     } else {
         None
     }
@@ -916,7 +990,7 @@ static UNMEASURED_BUILD_ANNOUNCED: core::sync::atomic::AtomicBool =
 
 /// [`carry_shift_for_running_build`], saying so in the log the first time it refuses.
 #[cfg(windows)]
-fn carry_shift_or_refuse(what: core::fmt::Arguments<'_>) -> Option<u32> {
+fn carry_shift_or_refuse(what: core::fmt::Arguments<'_>) -> Option<Carry> {
     if let Some(shift) = carry_shift_for_running_build() {
         return Some(shift);
     }
@@ -928,9 +1002,10 @@ fn carry_shift_or_refuse(what: core::fmt::Arguments<'_>) -> Option<u32> {
         // with nothing to map and misreport the cause as missing coverage.
         address_log(format_args!(
             "ADDRESS MAP NOT CARRIED (first asked by {what}): {} -- the map's destinations were \
-             read on {MAPPED_FILE_VERSION} and are carried to {MAPPED_FILE_VERSION_1171}; this \
-             build is neither, so every game address is refused rather than translated onto a \
-             build nobody has read. Carrying it forward is `scripts/map-rvas-1170-to-1171.py`",
+             read on {MAPPED_FILE_VERSION} and are carried to {MAPPED_FILE_VERSION_1171} and \
+             {MAPPED_FILE_VERSION_1172}; this build is none of them, so every game address is \
+             refused rather than translated onto a build nobody has read. The last carry was \
+             derived by `scripts/map-rvas-1171-to-1172.py`",
             describe_build()
         ));
     }
@@ -946,13 +1021,13 @@ fn carry_shift_or_refuse(what: core::fmt::Arguments<'_>) -> Option<u32> {
 /// carried destination, and asking whether it equals an uncarried one answers no for every row
 /// that moved. A `shift` of zero is the identity, which is what 1.17.0 takes.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn already_translated_in(table: &[(u32, u32)], rva: u32, shift: u32) -> bool {
+fn already_translated_in(table: &[(u32, u32)], rva: u32, shift: Carry) -> bool {
     let is_destination = table
         .iter()
-        .any(|(from, moved)| carry_mapped_rva(*moved, shift) == rva && *from != rva);
+        .any(|(from, moved)| carry_mapped_rva(*moved, shift) == Some(rva) && *from != rva);
     let is_source_of_a_move = table
         .iter()
-        .any(|(from, moved)| *from == rva && carry_mapped_rva(*moved, shift) != rva);
+        .any(|(from, moved)| *from == rva && carry_mapped_rva(*moved, shift) != Some(rva));
     is_destination && !is_source_of_a_move
 }
 
@@ -986,14 +1061,16 @@ enum TableAnswer {
 /// source column: that is a 1.16.2 rva, and 1.16.2 is not a build this function's `shift` says
 /// anything about.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn table_answer(table: &[(u32, u32)], rva: u32, shift: u32) -> TableAnswer {
+fn table_answer(table: &[(u32, u32)], rva: u32, shift: Carry) -> TableAnswer {
     if already_translated_in(table, rva, shift) {
         return TableAnswer::AlreadyTranslated;
     }
+    // A row whose destination the carry refuses is no answer on this build: that function sits in
+    // or beside code the patch changed, so it is unmapped here rather than carried blind.
     match table.iter().position(|(from, _)| *from == rva) {
-        Some(row) => TableAnswer::MovedTo {
-            row,
-            to: carry_mapped_rva(table[row].1, shift),
+        Some(row) => match carry_mapped_rva(table[row].1, shift) {
+            Some(to) => TableAnswer::MovedTo { row, to },
+            None => TableAnswer::Unmapped,
         },
         None => TableAnswer::Unmapped,
     }
@@ -1197,11 +1274,11 @@ pub fn resolve_call_site_band(
 
 /// Does `rva` have any mapping? Used only to word a refusal accurately; logs nothing.
 #[cfg(windows)]
-fn resolve_on_running_build_quiet(rva: u32, shift: u32) -> Option<u32> {
+fn resolve_on_running_build_quiet(rva: u32, shift: Carry) -> Option<u32> {
     VERIFIED_1162_TO_1170
         .iter()
         .find(|(from, _)| *from == rva)
-        .map(|(_, moved)| carry_mapped_rva(*moved, shift))
+        .and_then(|(_, moved)| carry_mapped_rva(*moved, shift))
 }
 
 /// How many verified translations this build carries. Read by the product's startup line so a log
@@ -1263,9 +1340,45 @@ mod tests {
         refusal_slot, refusal_totals, table_answer,
     };
     use super::{
-        CARRY_1171_BOUNDARY_RVA, CARRY_1171_SHIFT, TEXT_RVA_END, already_translated_in,
-        carry_mapped_rva,
+        CARRY_1171_BOUNDARY_RVA, CARRY_1171_SHIFT, CARRY_1171_TO_1172, Carry, TEXT_RVA_END,
+        already_translated_in, carry_mapped_rva,
     };
+
+    /// The 2.7.2.0 segment table is sorted, disjoint, and carries what upstream's own bundle
+    /// generator found for the same builds.
+    ///
+    /// The pairs below are `fromsoftware-rs` RVA-bundle fields, generated independently by its
+    /// binary-mapper from AOB patterns and RTTI on each installed exe (2.7.1.0 and 2.7.2.0). The
+    /// segment table was derived from `.pdata` and rip-relative operands and knows nothing of them,
+    /// so agreement here is two methods with no shared assumption.
+    #[test]
+    fn the_1172_carry_agrees_with_the_independently_generated_bundle() {
+        assert!(
+            CARRY_1171_TO_1172.len() > 20,
+            "the segment table looks unpopulated"
+        );
+        for pair in CARRY_1171_TO_1172.windows(2) {
+            assert!(
+                pair[0].0 < pair[0].1 && pair[0].1 <= pair[1].0,
+                "segments {:x?} and {:x?} overlap or are unsorted",
+                pair[0],
+                pair[1]
+            );
+        }
+        // (field, 2.7.1.0 rva, 2.7.2.0 rva). The 1.17.1 rva goes in, so the 1.17.0 -> 1.17.1 step
+        // is skipped by going through `carry_1171_to_1172` directly.
+        const BUNDLE: [(&str, u32, u32); 2] = [
+            ("game_data_man", 0x3d61f98, 0x3d64fb8),
+            ("title_step_state_table", 0x3d755f0, 0x3d78610),
+        ];
+        for (field, old, new) in BUNDLE {
+            assert_eq!(
+                super::carry_1171_to_1172(old),
+                Some(new),
+                "{field}: {old:#x} should carry to {new:#x}"
+            );
+        }
+    }
 
     /// The 1.17.0 to 1.17.1 carry, at each edge of the one range it applies to.
     ///
@@ -1285,19 +1398,20 @@ mod tests {
     #[test]
     fn the_carry_moves_text_above_the_boundary_and_nothing_else() {
         let shift = CARRY_1171_SHIFT;
+        let to = Carry::To1171;
         const { assert!(0xafefe8 < CARRY_1171_BOUNDARY_RVA && 0xafefe9 >= CARRY_1171_BOUNDARY_RVA) };
         const { assert!(0x29a57ff < TEXT_RVA_END && 0x29a5800 >= TEXT_RVA_END) };
 
-        assert_eq!(carry_mapped_rva(0xafefe8, shift), 0xafefe8);
-        assert_eq!(carry_mapped_rva(0xafefe9, shift), 0xafefe9 + shift);
-        assert_eq!(carry_mapped_rva(0x29a57ff, shift), 0x29a57ff + shift);
+        assert_eq!(carry_mapped_rva(0xafefe8, to), Some(0xafefe8));
+        assert_eq!(carry_mapped_rva(0xafefe9, to), Some(0xafefe9 + shift));
+        assert_eq!(carry_mapped_rva(0x29a57ff, to), Some(0x29a57ff + shift));
         // `.rdata` and `.data`, which did not move.
-        assert_eq!(carry_mapped_rva(0x29a5800, shift), 0x29a5800);
-        assert_eq!(carry_mapped_rva(0x2bdd9b8, shift), 0x2bdd9b8);
-        assert_eq!(carry_mapped_rva(0x3d89700, shift), 0x3d89700);
+        assert_eq!(carry_mapped_rva(0x29a5800, to), Some(0x29a5800));
+        assert_eq!(carry_mapped_rva(0x2bdd9b8, to), Some(0x2bdd9b8));
+        assert_eq!(carry_mapped_rva(0x3d89700, to), Some(0x3d89700));
         // 1.17.0 takes the identity.
         for rva in [0x1000, 0xafefe9, 0x29a57ff, 0x2bdd9b8] {
-            assert_eq!(carry_mapped_rva(rva, 0), rva);
+            assert_eq!(carry_mapped_rva(rva, Carry::Identity), Some(rva));
         }
     }
 
@@ -1311,31 +1425,25 @@ mod tests {
         // One row below the boundary (does not move) and one above it (does).
         const TABLE: [(u32, u32); 2] = [(0x2000, 0x3000), (0x2001, 0xb00000)];
         let shift = CARRY_1171_SHIFT;
+        let to = Carry::To1171;
 
         assert_eq!(
-            table_answer(&TABLE, 0x2001, shift),
+            table_answer(&TABLE, 0x2001, to),
             TableAnswer::MovedTo {
                 row: 1,
                 to: 0xb00000 + shift
             }
         );
-        assert!(already_translated_in(&TABLE, 0xb00000 + shift, shift));
+        assert!(already_translated_in(&TABLE, 0xb00000 + shift, to));
         // The uncarried destination is not the answer on this build, and claiming it is already
         // translated would hand back a 1.17.0 address as if it were right.
-        assert!(!already_translated_in(&TABLE, 0xb00000, shift));
+        assert!(!already_translated_in(&TABLE, 0xb00000, to));
         // A row that did not move reads the same on either build.
-        assert!(already_translated_in(&TABLE, 0x3000, shift));
-        assert!(already_translated_in(&TABLE, 0x3000, 0));
-        // Unchanged behaviour at shift 0.
+        assert!(already_translated_in(&TABLE, 0x3000, to));
+        assert!(already_translated_in(&TABLE, 0x3000, Carry::Identity));
+        // Unchanged behaviour on 1.17.0.
         assert_eq!(
-            table_answer(&TABLE, 0x2001, 0),
-            TableAnswer::MovedTo {
-                row: 1,
-                to: 0xb00000
-            }
-        );
-        assert_eq!(
-            table_answer(&TABLE, 0x2001, 0),
+            table_answer(&TABLE, 0x2001, Carry::Identity),
             TableAnswer::MovedTo {
                 row: 1,
                 to: 0xb00000
@@ -1353,7 +1461,7 @@ mod tests {
             assert!(table.len() >= MIN_EXPECTED_ROWS, "{name} looks unpopulated");
             let moved = table
                 .iter()
-                .filter(|(_, to)| carry_mapped_rva(*to, CARRY_1171_SHIFT) != *to)
+                .filter(|(_, to)| carry_mapped_rva(*to, Carry::To1171) != Some(*to))
                 .count();
             assert!(
                 moved > 0,
@@ -1361,13 +1469,23 @@ mod tests {
                  table whose addresses span the whole image"
             );
             for (from, to) in table {
-                let carried = carry_mapped_rva(*to, CARRY_1171_SHIFT);
+                let carried = carry_mapped_rva(*to, Carry::To1171).unwrap();
                 assert!(
                     carried >= *to && carried - *to <= CARRY_1171_SHIFT,
                     "{name}: {from:#x} -> {to:#x} carried to {carried:#x}, which is not the \
                      identity nor a single {CARRY_1171_SHIFT:#x} step"
                 );
             }
+            // 2.7.2.0 refuses some destinations, and must carry the large majority.
+            let carried_1172 = table
+                .iter()
+                .filter(|(_, to)| carry_mapped_rva(*to, Carry::To1172).is_some())
+                .count();
+            assert!(
+                carried_1172 * 10 >= table.len() * 9,
+                "{name}: only {carried_1172} of {} destinations carry to 2.7.2.0",
+                table.len()
+            );
         }
     }
 
@@ -1453,40 +1571,40 @@ mod tests {
         ];
 
         assert_eq!(
-            table_answer(&TABLE, 0xa, 0),
+            table_answer(&TABLE, 0xa, Carry::Identity),
             TableAnswer::MovedTo { row: 0, to: 0xb },
             "a plain source must translate, and from its OWN row"
         );
         assert_eq!(
-            table_answer(&TABLE, 0xb, 0),
+            table_answer(&TABLE, 0xb, Carry::Identity),
             TableAnswer::MovedTo { row: 1, to: 0xc },
             "an address that is BOTH a destination and a source must be answered as a source; \
              AlreadyTranslated here drops the second row silently, which is the whole hazard"
         );
         assert_eq!(
-            table_answer(&TABLE, 0xc, 0),
+            table_answer(&TABLE, 0xc, Carry::Identity),
             TableAnswer::AlreadyTranslated,
             "a destination that nothing else sources is what the shortcut is FOR: a second \
              resolve of it must hand it back, not refuse it"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x20, 0),
+            table_answer(&TABLE, 0x20, Carry::Identity),
             TableAnswer::MovedTo { row: 2, to: 0x20 },
             "a row that did not move still answers from the table"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x30, 0),
+            table_answer(&TABLE, 0x30, Carry::Identity),
             TableAnswer::AlreadyTranslated,
             "the shortcut may claim a source only when its answer is the row's own destination"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x31, 0),
+            table_answer(&TABLE, 0x31, Carry::Identity),
             TableAnswer::MovedTo { row: 4, to: 0x30 },
             "a source whose destination did not move is still a source, answered by row 4 rather \
              than by row 3, which merely shares its destination"
         );
         assert_eq!(
-            table_answer(&TABLE, 0x99, 0),
+            table_answer(&TABLE, 0x99, Carry::Identity),
             TableAnswer::Unmapped,
             "an address no row names must be refused, not guessed at"
         );
@@ -1547,7 +1665,9 @@ mod tests {
         let unrecognised: Vec<u32> = pure
             .iter()
             .copied()
-            .filter(|moved| super::already_translated_in(&VERIFIED_1162_TO_1170, *moved, 0))
+            .filter(|moved| {
+                super::already_translated_in(&VERIFIED_1162_TO_1170, *moved, Carry::Identity)
+            })
             .count()
             .eq(&pure.len())
             .then(Vec::new)
@@ -1555,7 +1675,11 @@ mod tests {
                 pure.iter()
                     .copied()
                     .filter(|moved| {
-                        !super::already_translated_in(&VERIFIED_1162_TO_1170, *moved, 0)
+                        !super::already_translated_in(
+                            &VERIFIED_1162_TO_1170,
+                            *moved,
+                            Carry::Identity,
+                        )
                     })
                     .collect()
             });
@@ -1988,7 +2112,7 @@ mod tests {
         assert_table_is_populated(table, name);
         let wrong: Vec<(u32, u32, TableAnswer)> = table
             .iter()
-            .map(|&(from, moved)| (from, moved, table_answer(table, from, 0)))
+            .map(|&(from, moved)| (from, moved, table_answer(table, from, Carry::Identity)))
             .filter(|&(from, moved, answer)| match answer {
                 // The shortcut may claim a source only when the address it hands back is what the
                 // row would have returned. That is the rows that did not move, and only them.

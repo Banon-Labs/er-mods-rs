@@ -26,7 +26,7 @@
 //! both openings stretched fewer edges in a swing (464 in an R1 against about 560), and left a
 //! visible line where the arm met the body; the user asked for the shoulder to blend in.
 //!
-//! Measured with `scripts/mushroom-arm-fit-probe.py`, which skins the result the way the game
+//! Measured with `scripts/dsr-er-fit-probe.py`, which skins the result the way the game
 //! does. The weapon bone stays within 0.03 m of the palm, the digit tips close from 0.10 m to
 //! 0.06 m of it in the idle, the leg trunks come no closer than 0.079 m in the idle (0.031 m
 //! unspread), and no triangle is inside out before animation or in the idle.
@@ -34,24 +34,17 @@
 //! [`SourceMesh::to_obj`] / [`SourceMesh::to_weights_tsv`] still emit the text the old
 //! `scripts/route_a_mushroom_export.rs` wrote, for comparison and for the Blender authoring path.
 
-use std::fmt::Write as _;
-
 use super::{
-    Flver, Vec2, Vec3, bind_positions, parse_face_set_indices, parse_layout_members,
-    parse_u32_list, read_vec3,
+    Carried, Export, MapRole, Placement, SourceMesh, SourceRow, SourceVertex, UP, WEIGHT_FLOOR,
+    WeightRow, add, arc_rotation, dominant_bone, dot, mul, normalized, place_all, rotate,
+    smoothstep, sub,
 };
 use crate::{
-    bytes::{i16_le, u8_at, u16_le},
     error::{Error, Result},
-};
-
-const PRIMITIVE_RESTART_U16: u32 = 0xFFFF;
-/// Weights at or below this are noise in the source skin and are dropped.
-const WEIGHT_FLOOR: f32 = 0.0001;
-const UP: Vec3 = Vec3 {
-    x: 0.0,
-    y: 1.0,
-    z: 0.0,
+    flver::{
+        Flver, Vec3, bind_positions,
+        source::{self, DsrVertex},
+    },
 };
 
 /// How c2280 is fitted to Elden Ring's body.
@@ -334,49 +327,66 @@ fn arm_piece<'a>(name: &str, left: &'a ArmFit, right: &'a ArmFit) -> Option<(&'a
     Some((arm, piece))
 }
 
-/// 0 at or below 0, 1 at or above 1, and a smooth ramp between.
-fn smoothstep(x: f32) -> f32 {
-    let t = x.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SourceVertex {
-    pub position: Vec3,
-    pub normal: Vec3,
-    pub uv: Vec2,
-}
-
-/// One weight of one vertex, against an Elden Ring bone name.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WeightRow {
-    pub vertex: usize,
-    pub target_bone: String,
-    pub weight: f32,
-}
-
-/// What the donor patcher consumes: final positions, triangles and Elden Ring bone weights.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SourceMesh {
-    pub vertices: Vec<SourceVertex>,
-    pub triangles: Vec<[u32; 3]>,
-    pub weights: Vec<WeightRow>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct DsrVertex {
-    position: Vec3,
-    normal: Vec3,
-    uv: Vec2,
-    bone_indices: [u16; 4],
-    bone_weights: [f32; 4],
-}
-
 struct DsrMesh {
     bone_names: Vec<String>,
     mesh_bone_indices: Vec<u32>,
     vertices: Vec<DsrVertex>,
     triangles: Vec<[u32; 3]>,
+}
+
+/// c2280's body and arm fits, each bone of its mesh carrying a vertex by one of them.
+struct MushroomPlacement<'a> {
+    mesh: &'a DsrMesh,
+    body_fit: BodyFit,
+    left: ArmFit,
+    right: ArmFit,
+    knee: f32,
+    ankle: f32,
+    params: FitParams,
+}
+
+impl MushroomPlacement<'_> {
+    fn piece_of(&self, slot: usize, vertex: &DsrVertex) -> Option<(&ArmFit, usize)> {
+        source_bone_name(self.mesh, vertex.bone_indices[slot])
+            .and_then(|name| arm_piece(name, &self.left, &self.right))
+    }
+}
+
+impl Placement for MushroomPlacement<'_> {
+    fn rest(&self, vertex: &DsrVertex) -> (Vec3, Vec3) {
+        (
+            self.body_fit.place(vertex.position),
+            self.body_fit.normal(vertex.position, vertex.normal),
+        )
+    }
+
+    fn carry(
+        &self,
+        vertex: &DsrVertex,
+        slot: usize,
+        (body, body_normal): (Vec3, Vec3),
+    ) -> Result<Carried> {
+        let (at, normal, target) = match self.piece_of(slot, vertex) {
+            Some((arm, piece)) => (
+                arm.place(piece, vertex.position, self.params),
+                arm.pieces[piece].normal(vertex.normal),
+                arm.targets[piece],
+            ),
+            None => (
+                body,
+                body_normal,
+                source_bone_name(self.mesh, vertex.bone_indices[slot])
+                    .map_or("<missing>", |name| {
+                        body_target(name, body.y, self.knee, self.ankle)
+                    }),
+            ),
+        };
+        Ok(Carried {
+            at,
+            normal,
+            targets: vec![(target.to_owned(), 1.0)],
+        })
+    }
 }
 
 /// c2280's FLVER bytes, fitted to the bind skeleton of `donor` (Elden Ring's `FC_M_0000.flver`).
@@ -440,10 +450,14 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
             params,
         )
     };
-    let (left, right) = (arm("L")?, arm("R")?);
-    let piece_of = |slot: usize, vertex: &DsrVertex| {
-        source_bone_name(&mesh, vertex.bone_indices[slot])
-            .and_then(|name| arm_piece(name, &left, &right))
+    let fit = MushroomPlacement {
+        mesh: &mesh,
+        body_fit,
+        left: arm("L")?,
+        right: arm("R")?,
+        knee,
+        ankle,
+        params,
     };
 
     // A vertex belongs to the body, and blends with the shoulder, when the arm's bones hold less
@@ -457,7 +471,7 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
                 let weight = vertex.bone_weights[slot];
                 if weight > WEIGHT_FLOOR {
                     total += weight;
-                    if piece_of(slot, vertex).is_some() {
+                    if fit.piece_of(slot, vertex).is_some() {
                         arm_weight += weight;
                     }
                 }
@@ -466,60 +480,15 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
         })
         .collect();
 
-    let mut vertices = Vec::with_capacity(mesh.vertices.len());
-    let mut weights = Vec::new();
-    for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
-        let body = body_fit.place(vertex.position);
-        let body_normal = body_fit.normal(vertex.position, vertex.normal);
-        let mut placed = Vec3::default();
-        let mut normal = Vec3::default();
-        let mut total = 0.0;
-        for slot in 0..4 {
-            let weight = vertex.bone_weights[slot];
-            let piece = piece_of(slot, vertex);
-            if weight <= WEIGHT_FLOOR {
-                continue;
-            }
-            let (at, turned, target) = match piece {
-                Some((arm, piece)) => (
-                    arm.place(piece, vertex.position, params),
-                    arm.pieces[piece].normal(vertex.normal),
-                    arm.targets[piece],
-                ),
-                None => (
-                    body,
-                    body_normal,
-                    source_bone_name(&mesh, vertex.bone_indices[slot])
-                        .map_or("<missing>", |name| body_target(name, body.y, knee, ankle)),
-                ),
-            };
-            placed = add(placed, mul(at, weight));
-            normal = add(normal, mul(normalized(turned).unwrap_or(turned), weight));
-            total += weight;
-            weights.push(WeightRow {
-                vertex: vertex_index,
-                target_bone: target.to_owned(),
-                weight,
-            });
-        }
-        vertices.push(SourceVertex {
-            position: if total > 0.0 {
-                mul(placed, 1.0 / total)
-            } else {
-                body
-            },
-            normal: normalized(normal)
-                .or_else(|| normalized(body_normal))
-                .unwrap_or(vertex.normal),
-            uv: vertex.uv,
-        });
-    }
-
+    let (vertices, mut weights) = place_all(&fit, &mesh.vertices)?;
     blend_shoulders(
         &mut weights,
         &vertices,
         &on_arm,
-        [(left.socket, "L_UpperArm"), (right.socket, "R_UpperArm")],
+        [
+            (fit.left.socket, "L_UpperArm"),
+            (fit.right.socket, "R_UpperArm"),
+        ],
         params.shoulder_blend,
     );
     Ok(SourceMesh {
@@ -527,6 +496,77 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
         triangles: mesh.triangles,
         weights,
     })
+}
+
+/// [`export_c2280`] with what the fit probe reads beside it. The export is the source's whole
+/// first buffer in order, so export vertex `i` is mesh 0's vertex `i`.
+pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: FitParams) -> Result<Export> {
+    let mesh = export_c2280(flver, donor, params)?;
+    let source = source::parse(flver)?;
+    let first = source.meshes.first().ok_or("FLVER has no meshes")?;
+    if first.vertices.len() != mesh.vertices.len() {
+        return Err(Error::new(format!(
+            "the export has {} vertices, {id}'s first mesh {}",
+            mesh.vertices.len(),
+            first.vertices.len()
+        )));
+    }
+    let source_map = first
+        .vertices
+        .iter()
+        .enumerate()
+        .map(|(index, vertex)| {
+            let bone = dominant_bone(
+                vertex.bone_indices.map(|slot| first.bone(slot)),
+                vertex.bone_weights,
+            );
+            let name = source.bones.get(bone).map_or("", |bone| bone.name.as_str());
+            SourceRow {
+                mesh: 0,
+                vertex: index,
+                bone: name.to_owned(),
+                role: source_role(name),
+            }
+        })
+        .collect();
+    let number = |value: f32| value.to_string();
+    Ok(Export {
+        character: id,
+        mesh,
+        scale: params.scale,
+        params: vec![
+            ("scale", number(params.scale)),
+            ("arm_lean", number(params.arm_lean)),
+            ("foot_spread", number(params.foot_spread)),
+            ("shoulder_blend", number(params.shoulder_blend)),
+        ],
+        stretch: Vec::new(),
+        grip_anchor: None,
+        source_map,
+        strip: None,
+    })
+}
+
+/// What a c2280 bone is, for the source map: `XArmDigitN2` is a digit's last segment.
+fn source_role(name: &str) -> MapRole {
+    if let Some(rest) = name
+        .strip_prefix("LArm")
+        .or_else(|| name.strip_prefix("RArm"))
+    {
+        return match rest {
+            "1" | "2" => MapRole::Arm,
+            "Palm" => MapRole::Hand,
+            _ if rest.starts_with("Digit") && rest.ends_with('2') => MapRole::FingerTip,
+            _ if rest.starts_with("Digit") => MapRole::Finger,
+            _ => MapRole::Other,
+        };
+    }
+    match name {
+        "LLeg1" | "RLeg1" => MapRole::Leg,
+        "Pelvis" | "Neck" | "Head" => MapRole::Trunk,
+        _ if name.starts_with("Spine") => MapRole::Trunk,
+        _ => MapRole::Other,
+    }
 }
 
 /// Give every body vertex near a shoulder socket a share of that side's upper arm: half at the
@@ -600,187 +640,26 @@ fn source_bone_name(mesh: &DsrMesh, mesh_bone_slot: u16) -> Option<&str> {
     mesh.bone_names.get(global).map(String::as_str)
 }
 
+/// The first mesh with its whole first buffer -- LOD1/LOD2-only vertices included, as c2280's
+/// export has always carried them -- and its LOD0 triangles.
 fn parse_first_lod0_mesh(bytes: &[u8]) -> Result<DsrMesh> {
-    let flver = Flver::parse(bytes)?;
-    let mesh = *flver.meshes.first().ok_or("FLVER has no meshes")?;
-    let mesh_bone_indices = parse_u32_list(bytes, mesh.bone_offset, mesh.bone_count)?;
-    let vertex_buffer_indices =
-        parse_u32_list(bytes, mesh.vertex_buffer_offset, mesh.vertex_buffer_count)?;
-    let first_vb = *vertex_buffer_indices
-        .first()
-        .ok_or("mesh has no vertex buffers")? as usize;
-    let vertex_buffer = *flver
-        .vertex_buffers
-        .get(first_vb)
-        .ok_or("mesh vertex buffer index out of range")?;
-    let layout = *flver
-        .layouts
-        .get(vertex_buffer.layout_index)
-        .ok_or("vertex buffer layout index out of range")?;
-    let members = parse_layout_members(bytes, layout)?;
-
-    let buffer_start = flver.header.data_offset + vertex_buffer.buffer_offset;
-    let buffer = crate::bytes::slice(bytes, buffer_start, vertex_buffer.buffer_length)?;
-    let uv_factor = flver.header.uv_factor();
-    let mut vertices = vec![DsrVertex::default(); vertex_buffer.vertex_count];
-    for (index, vertex) in vertices.iter_mut().enumerate() {
-        let start = index * vertex_buffer.vertex_size;
-        for member in &members {
-            let off = start + member.struct_offset;
-            match (member.semantic_id, member.format_id, member.index) {
-                (0, 0x02, _) => vertex.position = read_vec3(buffer, off)?,
-                (1, 0x1A, _) | (1, 0x16, _) => {
-                    for i in 0..4 {
-                        vertex.bone_weights[i] = f32::from(i16_le(buffer, off + i * 2)?) / 32767.0;
-                    }
-                }
-                (1, 0x13, _) => {
-                    for i in 0..4 {
-                        vertex.bone_weights[i] = f32::from(u8_at(buffer, off + i)?) / 255.0;
-                    }
-                }
-                (2, 0x11, _) | (2, 0x24, _) => {
-                    for i in 0..4 {
-                        vertex.bone_indices[i] = u16::from(u8_at(buffer, off + i)?);
-                    }
-                }
-                (2, 0x18, _) => {
-                    for i in 0..4 {
-                        vertex.bone_indices[i] = u16_le(buffer, off + i * 2)?;
-                    }
-                }
-                // Byte normals are stored biased, (byte - 127) / 127: read as signed bytes,
-                // c2280's normals come out at unit length for 441 of 1108 vertices, biased for
-                // all of them.
-                (3, 0x10, _) | (3, 0x11, _) | (3, 0x13, _) | (3, 0x2F, _) => {
-                    let unbias = |at: usize| -> Result<f32> {
-                        Ok((f32::from(u8_at(buffer, at)?) - 127.0) / 127.0)
-                    };
-                    vertex.normal = Vec3 {
-                        x: unbias(off)?,
-                        y: unbias(off + 1)?,
-                        z: unbias(off + 2)?,
-                    };
-                }
-                (5, 0x15, 0)
-                | (5, 0x12, 0)
-                | (5, 0x10, 0)
-                | (5, 0x11, 0)
-                | (5, 0x13, 0)
-                | (5, 0x16, 0)
-                | (5, 0x2E, 0) => {
-                    vertex.uv = Vec2 {
-                        x: f32::from(i16_le(buffer, off)?) / uv_factor,
-                        y: f32::from(i16_le(buffer, off + 2)?) / uv_factor,
-                    };
-                }
-                // Tangents, colours and secondary UVs are not carried into the donor.
-                _ => {}
-            }
-        }
+    let source = source::parse(bytes)?;
+    let bone_names = source.bones.iter().map(|bone| bone.name.clone()).collect();
+    let mesh = source
+        .meshes
+        .into_iter()
+        .next()
+        .ok_or("FLVER has no meshes")?;
+    let [triangles, ..] = mesh.lods;
+    if triangles.is_empty() {
+        return Err("no LOD0 face set (flags == 0) found".into());
     }
-
-    let face_set_indices = parse_u32_list(bytes, mesh.face_set_offset, mesh.face_set_count)?;
-    let lod0 = face_set_indices
-        .iter()
-        .filter_map(|&index| flver.face_sets.get(index as usize))
-        .find(|face_set| face_set.flags == 0)
-        .ok_or("no LOD0 face set (flags == 0) found")?;
-    let indices = parse_face_set_indices(bytes, &flver, lod0)?;
-
     Ok(DsrMesh {
-        bone_names: flver.bones.iter().map(|bone| bone.name.clone()).collect(),
-        mesh_bone_indices,
-        vertices,
-        triangles: triangulate(lod0.triangle_strip, &indices),
+        bone_names,
+        mesh_bone_indices: mesh.palette,
+        vertices: mesh.vertices,
+        triangles,
     })
-}
-
-fn triangulate(triangle_strip: bool, indices: &[u32]) -> Vec<[u32; 3]> {
-    if !triangle_strip {
-        return indices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .copied()
-            .filter(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0])
-            .collect();
-    }
-    let mut triangles = Vec::new();
-    let mut flip = false;
-    for window in indices.windows(3) {
-        let [a, b, c] = [window[0], window[1], window[2]];
-        if a == PRIMITIVE_RESTART_U16 || b == PRIMITIVE_RESTART_U16 || c == PRIMITIVE_RESTART_U16 {
-            flip = false;
-            continue;
-        }
-        if a != b && b != c && c != a {
-            triangles.push(if flip { [c, b, a] } else { [a, b, c] });
-        }
-        flip = !flip;
-    }
-    triangles
-}
-
-fn add(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3 {
-        x: a.x + b.x,
-        y: a.y + b.y,
-        z: a.z + b.z,
-    }
-}
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3 {
-        x: a.x - b.x,
-        y: a.y - b.y,
-        z: a.z - b.z,
-    }
-}
-
-fn mul(a: Vec3, k: f32) -> Vec3 {
-    Vec3 {
-        x: a.x * k,
-        y: a.y * k,
-        z: a.z * k,
-    }
-}
-
-fn dot(a: Vec3, b: Vec3) -> f32 {
-    a.x * b.x + a.y * b.y + a.z * b.z
-}
-
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    Vec3 {
-        x: a.y * b.z - a.z * b.y,
-        y: a.z * b.x - a.x * b.z,
-        z: a.x * b.y - a.y * b.x,
-    }
-}
-
-fn normalized(a: Vec3) -> Option<Vec3> {
-    let length = dot(a, a).sqrt();
-    (length > f32::EPSILON).then(|| mul(a, 1.0 / length))
-}
-
-/// The shortest rotation taking unit vector `from` onto unit vector `to`, as a quaternion.
-fn arc_rotation(from: Vec3, to: Vec3) -> [f32; 4] {
-    let axis = cross(from, to);
-    let w = 1.0 + dot(from, to);
-    let length = (dot(axis, axis) + w * w).sqrt();
-    [
-        axis.x / length,
-        axis.y / length,
-        axis.z / length,
-        w / length,
-    ]
-}
-
-fn rotate(q: [f32; 4], v: Vec3) -> Vec3 {
-    let [x, y, z, w] = q;
-    let u = Vec3 { x, y, z };
-    let t = mul(cross(u, v), 2.0);
-    add(add(v, mul(t, w)), cross(u, t))
 }
 
 /// The Elden Ring bone for a weight on one of c2280's body or leg bones (the arms are
@@ -810,205 +689,9 @@ fn body_target(source: &str, y: f32, knee: f32, ankle: f32) -> &'static str {
     }
 }
 
-impl SourceMesh {
-    /// The OBJ the old exporter wrote (geometry lines only; its comment header is dropped).
-    pub fn to_obj(&self) -> String {
-        let mut out = String::new();
-        for vertex in &self.vertices {
-            let p = vertex.position;
-            let _ = writeln!(out, "v {:.9} {:.9} {:.9}", p.x, p.y, p.z);
-        }
-        for vertex in &self.vertices {
-            let _ = writeln!(out, "vt {:.9} {:.9}", vertex.uv.x, vertex.uv.y);
-        }
-        for vertex in &self.vertices {
-            let n = vertex.normal;
-            let _ = writeln!(out, "vn {:.9} {:.9} {:.9}", n.x, n.y, n.z);
-        }
-        for tri in &self.triangles {
-            let _ = writeln!(
-                out,
-                "f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}",
-                tri[0] + 1,
-                tri[1] + 1,
-                tri[2] + 1
-            );
-        }
-        out
-    }
-
-    /// The weight TSV's two columns the patcher reads, under the old header.
-    pub fn to_weights_tsv(&self) -> String {
-        let mut out = String::from(
-            "vertex\tslot\tsource_mesh_bone_slot\tsource_global_bone_index\tsource_bone\ter_target_bone\tweight\n",
-        );
-        for row in &self.weights {
-            let _ = writeln!(
-                out,
-                "{}\t-\t-\t-\t-\t{}\t{:.9}",
-                row.vertex, row.target_bone, row.weight
-            );
-        }
-        out
-    }
-
-    /// An OBJ (with `v`, `vt`, `vn` counts equal, one per vertex) and a weight TSV, as the
-    /// Blender authoring export and the old Route A exporter both write them.
-    pub fn from_obj_and_weights(obj: &str, weights_tsv: &str) -> Result<Self> {
-        let mut positions = Vec::new();
-        let mut normals = Vec::new();
-        let mut uvs = Vec::new();
-        let mut triangles = Vec::new();
-        for line in obj.lines() {
-            let mut parts = line.split_whitespace();
-            let tag = parts.next();
-            let mut float = |label: &str| -> Result<f32> {
-                parts
-                    .next()
-                    .ok_or_else(|| Error::new(format!("OBJ line missing {label}: {line}")))?
-                    .parse()
-                    .map_err(|_| Error::new(format!("OBJ {label} is not a number: {line}")))
-            };
-            match tag {
-                Some("v") => {
-                    positions.push(Vec3 {
-                        x: float("x")?,
-                        y: float("y")?,
-                        z: float("z")?,
-                    });
-                }
-                Some("vn") => {
-                    normals.push(Vec3 {
-                        x: float("x")?,
-                        y: float("y")?,
-                        z: float("z")?,
-                    });
-                }
-                Some("vt") => {
-                    uvs.push(Vec2 {
-                        x: float("u")?,
-                        y: float("v")?,
-                    });
-                }
-                Some("f") => {
-                    let corners: Vec<u32> = line
-                        .split_whitespace()
-                        .skip(1)
-                        .map(|token| {
-                            token
-                                .split('/')
-                                .next()
-                                .and_then(|index| index.parse::<u32>().ok())
-                                .and_then(|index| index.checked_sub(1))
-                                .ok_or_else(|| Error::new(format!("bad OBJ face: {line}")))
-                        })
-                        .collect::<Result<_>>()?;
-                    if corners.len() != 3 {
-                        return Err(Error::new(format!("OBJ face is not a triangle: {line}")));
-                    }
-                    triangles.push([corners[0], corners[1], corners[2]]);
-                }
-                _ => {}
-            }
-        }
-        if positions.is_empty() || positions.len() != normals.len() || positions.len() != uvs.len()
-        {
-            return Err(Error::new(format!(
-                "OBJ needs matching v/vn/vt counts, got v={} vn={} vt={}",
-                positions.len(),
-                normals.len(),
-                uvs.len()
-            )));
-        }
-        let vertices = positions
-            .into_iter()
-            .zip(normals)
-            .zip(uvs)
-            .map(|((position, normal), uv)| SourceVertex {
-                position,
-                normal,
-                uv,
-            })
-            .collect();
-
-        let mut weights = Vec::new();
-        for (line_index, line) in weights_tsv.lines().enumerate() {
-            if line_index == 0 || line.trim().is_empty() {
-                continue;
-            }
-            let cols: Vec<&str> = line.split('\t').collect();
-            if cols.len() < 7 {
-                return Err(Error::new(format!(
-                    "weight TSV line {} has {} columns, needs 7: {line}",
-                    line_index + 1,
-                    cols.len()
-                )));
-            }
-            weights.push(WeightRow {
-                vertex: cols[0]
-                    .parse()
-                    .map_err(|_| Error::new(format!("bad vertex index: {line}")))?,
-                target_bone: cols[5].to_owned(),
-                weight: cols[6]
-                    .parse()
-                    .map_err(|_| Error::new(format!("bad weight: {line}")))?,
-            });
-        }
-        Ok(Self {
-            vertices,
-            triangles,
-            weights,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn triangle_lists_drop_degenerate_triangles() {
-        assert_eq!(triangulate(false, &[0, 1, 2, 3, 3, 4]), vec![[0, 1, 2]]);
-    }
-
-    #[test]
-    fn triangle_strips_alternate_winding_and_reset_at_restart() {
-        assert_eq!(
-            triangulate(true, &[0, 1, 2, 3, 0xFFFF, 4, 5, 6]),
-            vec![[0, 1, 2], [3, 2, 1], [4, 5, 6]]
-        );
-    }
-
-    #[test]
-    fn obj_and_weights_round_trip_through_the_text_the_scripts_wrote() {
-        let mesh = SourceMesh {
-            vertices: vec![
-                SourceVertex {
-                    position: Vec3 {
-                        x: 0.5,
-                        y: 1.0,
-                        z: -0.25
-                    },
-                    normal: Vec3 {
-                        x: 0.0,
-                        y: 1.0,
-                        z: 0.0
-                    },
-                    uv: Vec2 { x: 0.125, y: 0.75 },
-                };
-                3
-            ],
-            triangles: vec![[0, 1, 2]],
-            weights: vec![WeightRow {
-                vertex: 2,
-                target_bone: "L_Hand".to_owned(),
-                weight: 0.5,
-            }],
-        };
-        let back =
-            SourceMesh::from_obj_and_weights(&mesh.to_obj(), &mesh.to_weights_tsv()).unwrap();
-        assert_eq!(back, mesh);
-    }
 
     fn v(x: f32, y: f32, z: f32) -> Vec3 {
         Vec3 { x, y, z }
@@ -1045,13 +728,6 @@ mod tests {
         assert!(body.place(v(-0.1, 0.0, 0.0)).x < -0.1 * params.scale - 0.07);
         assert!(body.place(v(0.0, 0.0, 0.0)).x.abs() < 1e-6);
         assert!(BodyFit::new([0.7, 0.3, 0.2], [0.97, 1.391], params).is_err());
-    }
-
-    #[test]
-    fn the_shortest_arc_takes_one_direction_onto_the_other() {
-        let from = normalized(v(1.0, -0.4, 0.1)).unwrap();
-        let to = normalized(v(0.7, -0.7, 0.05)).unwrap();
-        assert!(close(rotate(arc_rotation(from, to), from), to));
     }
 
     fn distance(a: Vec3, b: Vec3) -> f32 {
@@ -1156,6 +832,19 @@ mod tests {
         assert_eq!(piece("RArmDigit32"), Some(5));
         assert_eq!(piece("LLeg1"), None);
         assert_eq!(piece("Spine3"), None);
+    }
+
+    #[test]
+    fn c2280_bones_take_the_probe_roles_its_tips_were_measured_by() {
+        assert_eq!(source_role("LArmDigit12"), MapRole::FingerTip);
+        assert_eq!(source_role("RArmDigit32"), MapRole::FingerTip);
+        assert_eq!(source_role("LArmDigit21"), MapRole::Finger);
+        assert_eq!(source_role("RArmPalm"), MapRole::Hand);
+        assert_eq!(source_role("LArm2"), MapRole::Arm);
+        assert_eq!(source_role("RLeg1"), MapRole::Leg);
+        assert_eq!(source_role("Spine3"), MapRole::Trunk);
+        assert_eq!(source_role("Head"), MapRole::Trunk);
+        assert_eq!(source_role("master"), MapRole::Other);
     }
 
     #[test]

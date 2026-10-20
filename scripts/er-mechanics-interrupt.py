@@ -1062,7 +1062,8 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--out", type=Path)
     ap.add_argument("--top", type=int, default=20)
-    ap.add_argument("--sweep", type=Path, default=CACHE / "grease-sweep-dlc-drawstring-150-200.jsonl")
+    # `er-builds-optimize.sweep_cache("grease", "dlc-drawstring", 150, 200)`.
+    ap.add_argument("--sweep", type=Path, default=CACHE / "grease-sweep-dlc-drawstring-150-200-cond-floors.jsonl")
     ap.add_argument("--rl", type=int, default=150)
     a = ap.parse_args()
     if a.selftest:

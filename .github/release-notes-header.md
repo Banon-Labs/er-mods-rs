@@ -9,6 +9,7 @@ Some pairs of mods destroy each other when loaded together, usually by one of th
 nothing rather than by crashing. The installer knows which pairs those are and refuses them as you
 tick, naming the one to drop.
 
-The individual `.dll` files below are for people who assemble their own `.me3` profiles by hand.
-The `.provenance.json` sidecars record which source tree each one was built from, and every file
-here is attested -- `gh attestation verify <file> --repo Banon-Labs/er-mods-rs`.
+The individual `.dll` files are for people who assemble their own `.me3` profiles by hand; the
+table below sorts them by what they are for. `provenance.json` records which source tree each one
+was built from, and every file here is attested -- `gh attestation verify <file> --repo
+Banon-Labs/er-mods-rs`.

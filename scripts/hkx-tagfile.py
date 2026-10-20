@@ -19,9 +19,13 @@ def _packed(b, o):
         return ((b0 & 0x3F) << 8) | b[o + 1], o + 2
     if b0 & 0x20 == 0:                      # 110xxxxx
         return ((b0 & 0x1F) << 16) | (b[o + 1] << 8) | b[o + 2], o + 3
-    if b0 & 0x10 == 0:                      # 1110xxxx
-        return ((b0 & 0x0F) << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3], o + 4
-    return struct.unpack_from('>I', b, o + 1)[0], o + 5
+    if b0 & 0x08 == 0:                      # 11100xxx
+        return ((b0 & 0x07) << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3], o + 4
+    if b0 & 0x10 == 0:                      # 11101xxx, e.g. hkHandle's 0x7fffffff
+        return ((b0 & 0x07) << 32) | struct.unpack_from('>I', b, o + 1)[0], o + 5
+    if b0 & 0x08 == 0:                      # 11110xxx
+        return ((b0 & 0x07) << 56) | int.from_bytes(b[o + 1:o + 8], 'big'), o + 8
+    return struct.unpack_from('>Q', b, o + 1)[0], o + 9
 
 
 class Type:
@@ -115,7 +119,8 @@ class Tagfile:
                 _, o = _packed(self.d, o)
             if f & 0x20:
                 nm, o = _packed(self.d, o)
-                for _ in range(nm):
+                # hkPropertyId in a cloth hkx stores 0x30001: the count is the low 16 bits.
+                for _ in range(nm & 0xFFFF):
                     ni, o = _packed(self.d, o)
                     mf, o = _packed(self.d, o)
                     bo, o = _packed(self.d, o)
@@ -203,13 +208,12 @@ class Tagfile:
         mm = self.member_map(item['type'])
         boff, mt = mm[member]
         base = item['off'] + boff
-        n = struct.unpack_from('<I', self.d, self.data_off + base + 8)[0]
-        if n == 0:
-            return []
+        # The field holds only the body's item index; the body item carries the count.
         arr_item = self.ptch.get(base)
         if arr_item is None:
             return []
         ai = self.items[arr_item]
+        n = ai['count']
         out = []
         for k in range(n):
             p = self.ptch.get(ai['off'] + k * 8)

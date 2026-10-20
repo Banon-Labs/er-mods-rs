@@ -1,0 +1,75 @@
+chr	tier	geom_verts	head_y	pelvis_y	pelvis_scale_to_er	torso_lean_deg	upperarm_deg_below_h	max_core_dev_from_c2650_m	flags
+c1200	D(non-humanoid posture or broken rig)	5160	0.442	0.698	0.72	95	44.3	1.679	orphan:L Clavicle,torso-horizontal,arms-not-T(44deg)
+c1201	D(non-humanoid posture or broken rig)	5295	0.294	0.490	0.51	98	60.9	1.535	orphan:L Clavicle,torso-horizontal,arms-not-T(61deg)
+c1202	D(non-humanoid posture or broken rig)	29964	1.596	2.094	2.16	95	44.3	4.523	torso-horizontal,arms-not-T(44deg)
+c1203	D(non-humanoid posture or broken rig)	5295	0.294	0.490	0.51	98	60.9	1.535	orphan:L Clavicle,torso-horizontal,arms-not-T(61deg)
+c2060	B(humanoid, other proportions)	6099	1.826	1.113	1.15	6	0.3	0.445	
+c2210	none(no geometry)	0	2.376	1.395	1.44	178	-89.2	2.825	orphan:L Clavicle,orphan:L UpperArm,torso-horizontal,toe+Z,arms-not-T(-89deg)
+c2230	C(giant)	25056	5.741	3.232	3.33	34	6.3	4.535	torso-hunched
+c2231	C(giant)	25059	5.741	3.232	3.33	34	6.3	4.535	torso-hunched
+c2232	C(giant)	25156	4.936	2.803	2.89	34	6.3	3.687	torso-hunched
+c2239	none(no geometry)	0	5.741	3.232	3.33	34	6.3	4.535	orphan:L Clavicle,orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot,torso-hunched
+c2240	B(humanoid, other proportions)	14581	2.557	1.436	1.48	3	1.9	1.015	
+c2250	C(giant)	35879	4.054	2.543	2.62	14	1.9	3.060	
+c2320	D(non-humanoid posture or broken rig)	25937	6.086	3.750	3.87	177	3.3	5.225	torso-horizontal
+c2360	C(giant)	13729	4.356	2.255	2.32	0	1.8	2.807	
+c2370	B(humanoid, other proportions)	29139	2.037	1.249	1.29	0	-0.7	0.490	
+c2380	C(giant)	18484	2.920	1.856	1.91	4	-0.0	1.401	
+c2500	A-(c2650 rig, small offsets)	4371	1.555	0.945	0.97	1	-0.2	0.030	
+c2510	A-(c2650 rig, small offsets)	3660	1.555	0.945	0.97	1	-0.2	0.030	
+c2511	A-(c2650 rig, small offsets)	3390	1.555	0.945	0.97	1	-0.2	0.030	
+c2519	none(no geometry)	0	1.555	0.945	0.97	1	-0.2	0.030	orphan:L Clavicle,orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot
+c2520	A-(c2650 rig, small offsets)	7103	1.495	0.945	0.97	1	-0.2	0.070	
+c2530	A-(c2650 rig, small offsets)	4206	1.555	0.945	0.97	1	-0.2	0.030	
+c2540	A-(c2650 rig, small offsets)	4200	1.555	0.945	0.97	1	-0.2	0.030	
+c2550	A-(c2650 rig, small offsets)	5778	1.560	0.949	0.98	3	0.4	0.062	
+c2560	B(humanoid, other proportions)	6929	1.691	1.137	1.17	1	-0.1	0.209	
+c2570	B(humanoid, other proportions)	18484	2.213	1.419	1.46	1	0.5	1.435	orphan:L Clavicle
+c2590	B(humanoid, other proportions)	17736	1.780	1.115	1.15	2	2.7	0.241	
+c2591	B(humanoid, other proportions)	10905	1.780	1.115	1.15	2	2.7	0.240	
+c2600	B(humanoid, other proportions)	6190	0.960	0.586	0.60	0	-0.1	0.596	
+c2640	B(humanoid, other proportions)	10458	1.807	0.918	0.95	5	-0.0	0.345	
+c2650	A(c2650 rig)	3957	1.553	0.945	0.97	1	-0.2	0.000	
+c2660	B(humanoid, other proportions)	5650	1.786	1.001	1.03	1	-0.1	0.390	
+c2670	B(humanoid, other proportions)	7542	1.700	0.916	0.94	5	-0.1	0.478	orphan:L Foot,unweighted:L Thigh,unweighted:L Calf,toe+Z
+c2680	B(humanoid, other proportions)	7113	1.618	0.945	0.97	1	-0.1	1.169	orphan:L Thigh,orphan:L Calf,orphan:L Foot,unweighted:L Thigh,unweighted:L Calf,toe+Z
+c2690	C(giant)	4703	3.437	1.343	1.38	5	1.4	1.894	
+c2710	B(humanoid, other proportions)	14486	2.392	1.178	1.21	6	8.5	1.022	
+c2711	C(giant)	31824	3.007	1.472	1.52	5	8.5	1.645	
+c2730	C(giant)	87355	4.307	2.357	2.43	3	-0.4	2.756	
+c2780	D(non-humanoid posture or broken rig)	7707	-	2.184	2.25	5	-45.9	2.910	missing:Head,arms-not-T(-46deg)
+c2800	A-(c2650 rig, small offsets)	9231	1.555	0.945	0.97	1	-0.2	0.030	
+c2810	B(humanoid, other proportions)	9192	2.095	1.089	1.12	1	2.0	0.557	
+c2811	B(humanoid, other proportions)	9334	2.616	1.361	1.40	1	2.0	1.078	
+c2819	none(no geometry)	0	2.095	1.089	1.12	1	2.0	0.557	orphan:L Clavicle,orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot
+c2820	A-(c2650 rig, small offsets)	3978	1.555	0.945	0.97	1	-0.2	0.030	
+c2840	A-(c2650 rig, small offsets)	6070	1.555	0.945	0.97	1	-0.2	0.030	
+c2860	C(giant)	47501	7.242	3.625	3.74	2	-0.9	6.146	
+c2861	C(giant)	46152	7.242	3.625	3.74	2	-0.9	6.146	
+c2870	C(giant)	33010	3.721	2.188	2.26	4	3.3	2.514	
+c2900	B(humanoid, other proportions)	4951	1.849	1.122	1.16	5	-0.8	0.306	
+c2910	C(giant)	4008	3.107	1.908	1.97	4	-0.8	1.567	
+c2920	B(humanoid, other proportions)	6334	1.940	1.078	1.11	8	-1.2	0.506	
+c2921	B(humanoid, other proportions)	6367	1.940	1.078	1.11	8	-1.2	0.506	
+c2929	none(no geometry)	0	1.940	1.078	1.11	8	-1.2	0.506	orphan:L Clavicle,orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot
+c2930	B(humanoid, other proportions)	6652	1.849	1.122	1.16	5	-0.8	0.418	
+c2940	D(non-humanoid posture or broken rig)	1864	0.632	0.350	0.36	1	-0.3	0.978	missing:L Clavicle/R UpperArm/R Hand/R Foot,orphan:L Thigh,L_Clavicle(underscore),R-side-suffix-01
+c2950	D(non-humanoid posture or broken rig)	3877	0.596	0.548	0.56	88	4.3	2.754	torso-horizontal,toe+Z
+c3110	D(non-humanoid posture or broken rig)	5397	0.126	0.126	0.13	90	46.5	1.544	torso-horizontal,arms-not-T(46deg)
+c3210	B(humanoid, other proportions)	7962	1.703	1.030	1.06	3	0.5	1.448	orphan:L Clavicle
+c3450	C(giant)	71465	7.844	0.866	0.89	20	-0.3	6.514	torso-hunched
+c4090	B(humanoid, other proportions)	14998	1.780	1.115	1.15	2	2.7	0.240	
+c4091	B(humanoid, other proportions)	10905	1.780	1.115	1.15	2	2.7	0.240	
+c4095	B(humanoid, other proportions)	15028	1.780	1.115	1.15	2	2.7	0.240	
+c4100	C(giant)	38949	2.874	1.724	1.78	0	-0.7	1.324	
+c4110	C(giant)	61481	7.129	3.625	3.74	4	-1.3	5.712	
+c4115	C(giant)	55810	7.129	3.625	3.74	4	-1.3	5.712	
+c4119	none(no geometry)	0	7.129	3.625	3.74	4	-1.3	5.712	orphan:L Clavicle,orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot
+c4120	C(giant)	21316	2.920	1.856	1.91	4	-0.0	1.401	
+c4520	D(non-humanoid posture or broken rig)	22360	1.489	1.332	1.37	89	62.8	1.469	HorseLink,torso-horizontal,arms-not-T(63deg)
+c5210	D(non-humanoid posture or broken rig)	41819	4.494	4.019	4.14	89	62.8	4.073	HorseLink,torso-horizontal,arms-not-T(63deg)
+c5270	B(humanoid, other proportions)	24315	2.427	1.480	1.53	0	-0.7	0.894	
+c5271	C(giant)	27449	4.855	2.961	3.05	0	-0.7	3.350	
+c5300	C(giant)	26549	2.706	1.756	1.81	4	5.8	1.155	
+c5370	B(humanoid, other proportions)	33437	2.248	1.359	1.40	0	-0.7	0.715	
+c5390	D(non-humanoid posture or broken rig)	35688	7.209	4.801	4.95	1	-0.0	5.656	orphan:L Thigh,orphan:L UpperArm,orphan:L Calf,orphan:L Foot,unweighted:L Thigh,unweighted:L Calf,unweighted:L UpperArm

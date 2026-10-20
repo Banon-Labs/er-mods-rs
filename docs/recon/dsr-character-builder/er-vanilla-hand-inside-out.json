@@ -1,0 +1,32 @@
+{
+ "R": {
+  "triangles": 1558,
+  "idle_inside_out": 48,
+  "where": {
+   "R_Finger4+R_Finger41": 7,
+   "R_Finger3+R_Finger31": 7,
+   "R_Finger2+R_Finger21": 6,
+   "R_Finger1+R_Finger11": 6,
+   "R_Finger1+R_Hand": 5,
+   "R_Finger4+R_Hand": 4,
+   "R_Finger2+R_Hand": 4,
+   "R_Finger11+R_Finger12": 3
+  },
+  "idle_bad_edges_vs_bind": 258
+ },
+ "L": {
+  "triangles": 1558,
+  "idle_inside_out": 43,
+  "where": {
+   "L_Finger4+L_Finger41": 6,
+   "L_Finger2+L_Finger21": 6,
+   "L_Finger3+L_Finger31": 5,
+   "L_Finger1+L_Hand": 5,
+   "L_Finger1+L_Finger11": 5,
+   "L_Finger4+L_Hand": 4,
+   "L_Finger2+L_Hand": 4,
+   "L_Finger11+L_Finger12": 3
+  },
+  "idle_bad_edges_vs_bind": 258
+ }
+}

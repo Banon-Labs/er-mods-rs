@@ -214,6 +214,13 @@ Category map for the buffs in section 5 (VERIFIED, params):
     (Mohg, `stateInfo 441`) is the only 609+10g row that is live, so that rune is Mohg's
     (INFERRED).
   - Other roles, cooperators included, get nothing.
+  - **Who counts as the host (VERIFIED, both images, 2026-10-14).** The host branch is
+    `CharacterTypeProperties::IsHostLike(GetCharacterType(chr))` (`0x1404c7c30` 1.16.2,
+    `0x1404c85c0` 1.17.1), a byte at `+7` of a 23-entry, 20-byte static table (rva `0x3b17c00`
+    1.16.2, `0x3b1bc00` 1.17.1). Exactly two entries are set in both builds: `ChrType` 0 `Local`
+    and 8 `GrayPhantom` (`fromsoftware-rs` `chr_ins.rs` names). An invader's own character is
+    `BloodyFinger` 15 or `Recusant` 16 (`docs/plans/invasion-warp-item-gating.md`), so it takes
+    the `IsInvasionType` branch: Morgott's HP x1.25 (row 620) is not applied while invading.
 - **Duration.** The rows have `effectEndurance -1`, so no timer. `runeArcActive` is cleared by
   `FUN_14025e1e0` when `PlayerGameData+0x100` is set. That this is death is INFERRED; the setter
   was not traced.

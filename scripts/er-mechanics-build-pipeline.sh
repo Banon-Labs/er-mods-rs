@@ -6,6 +6,7 @@
 #   bash scripts/er-mechanics-build-pipeline.sh --prefix bleed --class Hero \
 #       --stats vig=56,mnd=9,vit=41,str=54,dex=9,int=7,fth=8,arc=45 --affinity Blood \
 #       --name "Bleed Warped Axe RL150" [--focus "Warped Axe:Blood"] [--gear gear.json] [--update <planner id>] [--dir <dir>]
+#       [--no-upload]    # stop once <prefix>-plan.json is written
 #
 # Steps, each skipped when its output exists and is newer than its inputs (delete a file to redo
 # it):
@@ -22,13 +23,18 @@
 #  10. upload                   planner-ash-loadout-upload.py (new build, or --update <id>)
 #
 # The interrupt cache is per stat block and is the slow step (about 17,000 profiles from empty);
-# it and the pierce pass run under the throttle (`--interrupt-jobs`).
+# it and the pierce pass run under the throttle (`--interrupt-jobs`), and so do the step 4 and 5
+# sweeps (`--jobs`, 11.5 minutes in one process on 2026-10-14). The simulations behind the
+# interrupt profiles and the embeddings' world reaches do not depend on stats, so they are kept
+# across stat blocks in the planner cache (`interrupt-sims/`, `embed-reach-<hash>.json`), and so
+# does the multihit counter rate, one `counter.json` per --dir (two stat blocks' files agreed on all
+# 621 rows they shared, 2026-10-14).
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 BASE_ID=188e74da444029
 DIR=""
-PREFIX="" CLASS="" STATS="" AFFINITY="Heavy" NAME="" GEAR="" UPDATE="" JOBS=6 BASE_JSON="" FOCUS=""
+PREFIX="" CLASS="" STATS="" AFFINITY="Heavy" NAME="" GEAR="" UPDATE="" JOBS=6 BASE_JSON="" FOCUS="" NO_UPLOAD=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix) PREFIX=$2; shift 2 ;;
@@ -43,6 +49,7 @@ while [ $# -gt 0 ]; do
         --base) BASE_ID=$2; shift 2 ;;
         --base-json) BASE_JSON=$2; shift 2 ;;
         --jobs) JOBS=$2; shift 2 ;;
+        --no-upload) NO_UPLOAD=1; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -60,7 +67,8 @@ fresh() {  # `fresh out in...`: the output exists and is newer than every input
 }
 
 B="$P-planner-build.json"
-if ! fresh "$B" "$BASE_JSON"; then
+# The gear file is an input too: its armor and talismans set the equip load `computed` holds.
+if ! fresh "$B" "$BASE_JSON" ${GEAR:+"$GEAR"}; then
     step "1 build file"
     # `computed` is the planner's cache of what the stats give; the loadout and the shield pass read
     # max HP, stamina and equip load from it, so it is recomputed for the new stats with
@@ -99,11 +107,14 @@ fi
 echo "wieldable: $(tr ',' '\n' < "$P-wieldable.txt" | wc -l)"
 
 T=scripts/er-mechanics-ash-table.py
+# The sweeps read the build file of step 1, not the base's planner id: the weapons a build already
+# holds are this build's, which for `er-weapon-build.py` is an empty inventory, not the base's.
 if ! fresh "$P-main.json" "$P-wieldable.txt" || ! fresh "$P-fixed.json" "$B"; then
     step "4 ash sweeps: $AFFINITY over the wieldable weapons, and the fixed-skill weapons"
-    python3 $T --build "$BASE_ID" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --only-extra \
-        --extra-weapons "$(cat "$P-wieldable.txt")" --json "$P-main.json" --out "$P-main.html" > "$P-main.log" 2>&1 &
-    python3 $T --build "$BASE_ID" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-fixed \
+    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --only-extra \
+        --jobs "$JOBS" --extra-weapons "$(cat "$P-wieldable.txt")" --json "$P-main.json" --out "$P-main.html" \
+        > "$P-main.log" 2>&1 &
+    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-fixed \
         --json "$P-fixed.json" --out "$P-fixed.html" > "$P-fixed.log" 2>&1 &
     wait
 fi
@@ -114,7 +125,7 @@ import json, sys
 w = open(sys.argv[1]).read().strip().split(',')
 swept = {x['weapon'] for f in sys.argv[2:] for x in json.load(open(f))}
 print(','.join(x for x in w if x not in swept))" "$P-wieldable.txt" "$P-main.json" "$P-fixed.json")
-    python3 $T --build "$BASE_ID" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" \
+    python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --variants --stats "$DMG" --jobs "$JOBS" \
         --extra-weapons "$MISS" --json "$P-inbuild.json" --out "$P-inbuild.html" > "$P-inbuild.log" 2>&1
 fi
 
@@ -153,7 +164,7 @@ for v in r['classes'].values():
 print(','.join(sorted(miss)))" "$P-roles.json" "$P-main.json" "$P-inbuild.json" "$P-fixed.json")
     echo "status weapons: ${W:-none}"
     if [ -n "$W" ]; then
-        python3 $T --build "$BASE_ID" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-extra \
+        python3 $T --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-extra \
             --extra-weapons "$W" --status-weapons "$W" --json "$P-status.json" --out "$P-status.html" > "$P-status.log" 2>&1
     else
         echo "[]" > "$P-status.json"
@@ -168,11 +179,17 @@ step "9 loadout"
 python3 scripts/er-mechanics-combo-loadout.py "$P-main.json" "$P-inbuild.json" "$P-fixed.json" "$P-status.json" \
     --roles "$P-roles.json" --build "$B" --embed "$P-embed.json" --perfect-block "$P-pb.json" \
     --ranged-cache "$P-ash-ranged.json" --interrupt-cache "$P-ash-interrupt.json" \
-    --counter-cache "$P-counter.json" --pierce-cache "$P-pierce.json" --buff-cache "$P-buff.json" \
+    --counter-cache "$DIR/counter.json" --pierce-cache "$P-pierce.json" --buff-cache "$P-buff.json" \
     --landing-cache "$P-landing.json" \
     --interrupt-jobs "$JOBS" --out "$P-plan.json" --html "$P-pages.html" --collapse-twins --landmark 15 \
     --fun-skip-held --rank-terms "$P-rank-terms.json" ${FOCUS:+--focus "$FOCUS"} > "$P-loadout.log" 2>&1
 
+if [ -n "$NO_UPLOAD" ]; then
+    # `er-weapon-build.py` prices the plan's equip sets before it lets anything upload.
+    # The id is `done` so er-mechanics-pipeline-watch.py marks the run finished.
+    step "done (plan written, upload skipped) $P-plan.json"
+    exit 0
+fi
 step "10 upload"
 STATS_UP=$(echo "$STATS" | tr -d ' ')
 ARGS=(--base "$BASE_ID" --plan "$P-plan.json" --class "$CLASS" --stats "$STATS_UP" --name "$NAME")

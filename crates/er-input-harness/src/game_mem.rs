@@ -801,7 +801,21 @@ const MENU_WINDOW_SCAN_QWORDS: usize = 0x400;
 /// top window is IngameTop, the `+0x1870` read yields nothing usable, and the function returned
 /// `None` before scanning a single slot. Measured on br-20260905-170715-2300, which logged
 /// "no GridControl found in the top menu window" at nav frames 0, 120 and 240.
+///
+/// `.rdata` did not move between 1.17.0 and 1.17.1, so this is also the 1.17.1 rva, and it reaches
+/// the running build through [`grid_control_vtable`]. 2.7.2.0 moved `.rdata`: the carry puts it at
+/// `0x2a96528`, whose `-8` qword reaches a CompleteObjectLocator naming `.?AVGridControl@CS@@`,
+/// and whose first slots are the carries of 1.17.1's (`0x735100` -> `0x7355b0`, ...).
 pub(crate) const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
+
+/// `CS::GridControl`'s vtable in the running image, or `None` on a build the 1.17.1 carry does not
+/// reach.
+pub(crate) fn grid_control_vtable() -> Option<usize> {
+    er_game_base::mem::game_rva_measured_on(
+        GRID_CONTROL_VTABLE_RVA_1170,
+        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    )
+}
 
 /// Find a `CS::GridControl` inside the top menu window and report `(offset_in_window, selected_cell)`.
 pub fn pause_menu_grid() -> Option<(usize, i32)> {
@@ -809,7 +823,7 @@ pub fn pause_menu_grid() -> Option<(usize, i32)> {
     if window == 0 {
         return None;
     }
-    let grid_vtable = game_base()? + GRID_CONTROL_VTABLE_RVA_1170;
+    let grid_vtable = grid_control_vtable()?;
     for slot in 0..MENU_WINDOW_SCAN_QWORDS {
         let offset = slot * 8;
         let Some(candidate) =

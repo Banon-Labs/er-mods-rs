@@ -109,6 +109,14 @@ ALLOW = "allow"
 
 CASES = [
     ("nothing backgrounded", [user("go"), say(REPORT)], ALLOW),
+    # 2026-10-19: a foreground grep that printed test fixtures quoting launch acknowledgements booked
+    # their ids (bx1, bd12ab) as tasks this session started.
+    ("output quoting a launch acknowledgement is not a launch",
+     [user("go"),
+      use("g1", "Bash", {"command": "grep -rn 'running in background' scripts/"}),
+      result("g1", 'scripts/test-x.py:374: "content": "Command running in background with ID: bx1",\n'
+                   'scripts/test-y.py:171: "content": "Command running in background with ID: bd12ab. "'),
+      say(REPORT)], ALLOW),
     ("the 2026-10-07 shape: copier and waiter left running, report ignores them",
      [user("go"), *COPIER, *MOVED, say(REPORT)], HALT),
     ("running task not mentioned", [user("go"), *COPIER, say(REPORT)], HALT),

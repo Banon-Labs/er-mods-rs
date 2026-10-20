@@ -12,6 +12,19 @@ name = "er_scaleform_hooks"
 er-game-base = { path = "../er-game-base" }
 er-gfx = { path = "../er-gfx" }
 er-telemetry-core = { path = "../er-telemetry-core" }
+# Mid-function hook for the descriptor-ring advance: a jump at an instruction boundary whose
+# routine reads and writes the registers and returns where execution resumes. MinHook only patches
+# function entries. See `src/descriptor_guard.rs`. Not windows-only: it builds on the host, so the
+# routine's unit tests run.
+ilhook = "2.3"
+
+# Assembles the mid hook's checked windows from named instructions in `build.rs`, so a hand-typed
+# byte can never disarm it. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }

@@ -114,9 +114,10 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(install_tip_suppression_hook);
         });
     }
-    // er-effects-rs-y22i: Always-on Scaleform descriptor-heap null guard (native-Windows crash
-    // 0xec95d1). Not feature-gated -- it is a crash guard, a transparent passthrough when the null
-    // never occurs. Installed at attach so it is live before the first loading-screen composite.
+    // er-effects-rs-y22i: Always-on Scaleform descriptor-ring guard (native-Windows crash
+    // 0xec95d1), a mid hook on the advance's page-roll branch (er-effects-rs-7xbs.1). Not
+    // feature-gated -- it is a crash guard, a transparent passthrough when the null never occurs.
+    // Installed at attach so it is live before the first loading-screen composite.
     START_SCALEFORM_GUARD.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-scaleform-guard".to_owned())

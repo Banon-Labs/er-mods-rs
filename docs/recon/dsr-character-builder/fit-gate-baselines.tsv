@@ -1,0 +1,15 @@
+metric	c2280_shipped_b2f3e059	c2280_cut_b711b14a	vanilla_er_FC_M_0000	c2650_frame_fingers	c2650_rigid_fingers	c2650_thumb_rigid	c2650_thumb_rigid+calfcloth_to_Thigh_Skirt	c2650_thumb_rigid+calfcloth_to_Thigh	proposed_gate
+vertices/triangles	1108/1708	1108/1704	-	1790/2456	1790/2456	1790/2456	1790/2456	1790/2456	-
+bind_inside_out	0	0	-	14 (all thumb root)	0	0	-	-	0
+idle_inside_out (all)	0	-	48 R / 43 L hand (all finger creases)	9	18	9 (6 finger crease, 3 armpit)	9	9	0 outside hand/finger triangles; finger-crease count <= vanilla per hand
+idle worst-frame edges >1.5x/<0.67x vs fitted bind	126 (2.5% of 5124)	108	258 per hand at idle frame 0	88	184	100 (1.4% of 7368)	135	109	<= 2.5% of edges
+R1 a020_030000 worst-frame bad edges	560 (10.9%)	452	-	453	451	451 (6.1%)	463	465	<= 10.9% of edges
+running R1 a020_030200 worst-frame bad edges	534 (10.4%)	448	-	482	482	482 (6.5%)	546	510	<= 10.4% of edges
+arm-to-body seam bad edges idle/R1/runR1	4/51/57 of 150	0 (cut)	-	13/77/103 of 282	13/77/103	13/77/103	-	-	report only
+idle arm vertices buried (bbox heuristic)	82/595 (13.8%)	80/569	122/2956 (4.1%) body meshes 0-13	85/685 (12.4%)	85/685	85/685	-	-	<= 14%
+idle mean digit tip to weapon bone m (L/R)	0.060/0.056	0.060/0.056	0.037/0.035	0.044/0.040	0.048/0.043	0.049/0.044	-	-	<= 0.06
+palm centroid to weapon bone, max over clip m: idle (L/R)	0.012/0.013	0.01/0.01	0.012/0.006	0.017/0.013	0.022/0.015	0.027/0.021	-	-	<= max(0.03, vanilla+0.01)
+palm centroid to weapon bone, max: R1 (L/R)	0.018/0.021	0.02/0.02	0.046/0.042	0.044/0.042	0.035/0.030	0.052/0.048	-	-	report only (R1 clips carry 0 finger tracks)
+palm centroid to weapon bone, max: running R1 (L/R)	0.025/0.025	0.03/0.03	0.046/0.041	0.044/0.042	0.034/0.031	0.052/0.049	-	-	report only
+source grip anchor mapped to ER R_Weapon at bind m	n/a (no weapon bone)	n/a	0	0.022	0.022	0.022	0.022	0.022	<= 0.03
+idle min gap between leg trunks below 0.3 m	0.079 (0.031 unspread)	0.031	-	0.244 (source bind 0.080)	-	-	-	-	>= source bind gap

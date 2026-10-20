@@ -87,6 +87,12 @@ B_HIT_HP = EXCH.OPPONENT_HP_FALLBACK
 MAX_MY_HITS = 12
 STAMP_SOURCES = ("er-mechanics-ash-interrupt.py", "er-mechanics-interrupt.py", "er-mechanics-neutral.py",
                  "er-mechanics-ash-table.py", "er-mechanics-ashes.py")
+#: Simulations kept across stat blocks, one file per code stamp, opponent pool and armor poise.
+#: `simulate` reads my hits' frames and poise, never their damage, so a stat block that keeps a
+#: row's timing reuses its simulation: 130 of a cold row's 231 ms (measured 2026-10-14).
+SIMS_DIR = CACHE / "interrupt-sims"
+#: A file of another stamp is deleted once it has gone this long unwritten.
+SIMS_STALE_S = 86400.0
 
 
 def stamp() -> str:
@@ -123,6 +129,14 @@ class Opponent:
         self.w = rows.d_w
         self.offs = reaction_frames(points)
         self.k = NEU.frames_per_metre()
+
+    def fingerprint(self) -> str:
+        """A hash of every array `simulate` reads, so a kept simulation never outlives its pool."""
+        h = hashlib.sha256()
+        for a in (self.P, self.reach, self.t, self.q, self.m, self.win, self.inv, self.w, self.offs,
+                  np.float64(self.k)):
+            h.update(np.ascontiguousarray(a).tobytes())
+        return h.hexdigest()[:16]
 
     def contact_delay(self, weapon: str, grip: str) -> float:
         g = "both" if grip == "2H" else "one"
@@ -338,12 +352,41 @@ class Rows:
             else:
                 reach = (x.get("melee_reach") or [0])[0]
             distance = REACH_SHARE * reach if reach else EXCHANGE_DISTANCE_M
-        key = (tuple((h[0], h[1]) for h in hits), tuple(windows), round(distance, 2), round(gate, 1),
-               tuple(fx), poise)
+        key = sim_key(hits, windows, distance, gate, fx, poise)
         if key not in self._memo:
             self._memo[key] = simulate(self.opp, [(h[0], h[1]) for h in hits], windows, distance, gate, poise, fx)
         return {"hits": hits, "windows": windows, "fx_frames": fx, "gate": gate, "D": round(distance, 2),
                 "poise": poise, "sim": self._memo[key], "fx": self._memo[key]["fx"]}
+
+
+def sim_key(hits, windows, distance: float, gate: float, fx, poise) -> str:
+    """The memo key of one `simulate` call, as JSON text: my hits' frames and poise, my windows,
+    the distance, the gate, the effect frames and my poise."""
+    return json.dumps([[[h[0], h[1]] for h in hits], [list(w) for w in windows], round(distance, 2),
+                       round(gate, 1), list(fx), poise])
+
+
+def _read_sims(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_sims(path: Path, sims: dict) -> None:
+    """Replace `path` whole, so a run reading it meanwhile never sees half a file, and delete the
+    files of other stamps nothing has written for `SIMS_STALE_S`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(sims))
+    os.replace(tmp, path)
+    now, mine = time.time(), path.name.split("-", 1)[0]
+    for f in path.parent.glob("*.json"):
+        try:
+            if not f.name.startswith(f"{mine}-") and now - f.stat().st_mtime > SIMS_STALE_S:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def row_key(x) -> str:
@@ -427,6 +470,9 @@ def profiles(xs: list, cache_path: Path, stats: dict, armor: list, max_hp: float
         opp = Opponent()
         rows = Rows(opp, stats, armor, max_hp)
         p = rows.armor_poise() if poise is None else poise
+        sims_path = SIMS_DIR / f"{settings['stamp']}-{opp.fingerprint()}-poise{p:g}.json"
+        rows._memo = _read_sims(sims_path)
+        log(f"interrupt: {len(rows._memo)} simulations kept from other stat blocks ({sims_path})")
         _W.update(rows=rows, poise=p, distance=distance)
         # One chunk per weapon, affinities together: the casts of one weapon share their timing, so
         # the simulation memo serves every affinity after the first.
@@ -448,10 +494,15 @@ def profiles(xs: list, cache_path: Path, stats: dict, armor: list, max_hp: float
         with ctx.Pool(jobs, initializer=init, initargs=args) as pool:
             for res in pool.imap_unordered(_work, chunks):
                 have.update(res)
+                for r in res.values():
+                    if "sim" in r:
+                        rows._memo[sim_key(r["hits"], r["windows"], r["D"], r["gate"], r["fx_frames"],
+                                           r["poise"])] = r["sim"]
                 done += 1
+                log(f"  {done}/{len(chunks)} weapons")
                 if done % 10 == 0 or done == len(chunks):
-                    log(f"  {done}/{len(chunks)} weapons")
                     cache_path.write_text(json.dumps({"settings": settings, "rows": have}))
+                    _write_sims(sims_path, rows._memo)
     return have
 
 
@@ -502,6 +553,22 @@ def selftest() -> int:
     check(abs(r["approach"] - 7.5) < 1e-9 and r["p"] == [1.0], "B out of reach approaches first")
     prof = {"hits": [(10.0, 0.0, 100.0, 0.0)], "sim": {"p": [1.0], "taken": 388.0, "saved": 30.0}}
     check(abs(multiplier(prof, 300.0) - max(0.0, (100 - 388 + 300) / 100)) < 1e-9, "multiplier formula")
+    # The key a profile is stored under is the one rebuilt from the profile it returned, and damage
+    # (the stat-dependent part) is not in it.
+    hits, wins = [(20.004, 100.0, 300.0, 0.0)], [(0.0, 30.0, 100.0, 1.0, 0.0, 1.0)]
+    k = sim_key(hits, wins, 2.4567, 40.04, [], 89)
+    check(k == sim_key([[20.004, 100.0, 999.0, 5.0]], [list(wins[0])], round(2.4567, 2), 40.04, [], 89),
+          "a profile's simulation key survives JSON and ignores damage")
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        mine, old, other = (Path(d) / f"{s}-fp-poise89.json" for s in ("aaaa", "bbbb", "cccc"))
+        _write_sims(old, {"x": 1})
+        _write_sims(other, {"y": 2})
+        os.utime(old, (time.time() - 2 * SIMS_STALE_S,) * 2)
+        _write_sims(mine, {k: {"p": [1.0]}})
+        check(_read_sims(mine) == {k: {"p": [1.0]}} and not old.exists() and other.exists()
+              and _read_sims(Path(d) / "absent.json") == {},
+              "kept simulations round-trip and only another stamp's stale file is deleted")
     print(f"{len(fails)} failed")
     return 1 if fails else 0
 
