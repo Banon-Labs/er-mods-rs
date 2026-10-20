@@ -188,9 +188,15 @@ phrase = find_idle_phrase(scrubbed)
 # Three ways a turn can be a pause. Events alone are not enough: a turn can narrate work in flight
 # that the transcript cannot see (a subagent compiling, a gate running elsewhere), and that turn does
 # owe a terse blocked-note. What none of these match is a plain answer.
+#
+# "still running" counts only as a present-tense claim: "<it> is still compiling", or a sentence that
+# opens "Still running". Measured 2026-10-19: a closing report describing a fixed bug -- "booked as
+# a job still running", "look like a job still running" -- halted as a verbose pause with nothing
+# live, because the bare phrase matched inside a description of what the scanner used to get wrong.
 PENDING_WORK_RE = re.compile(
-    r"\b(?:still (?:running|compiling|building|going|underway|in flight)"
-    r"|while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"
+    r"(?:(?:\b(?:is|are)|['’](?:s|re))\s+still|(?:^|[.!?]\s+)still)\s+"
+    r"(?:running|compiling|building|going|underway|in flight)\b"
+    r"|\b(?:while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"
     r"|once (?:it|that|they|the \w+) (?:lands|land|finishes|finish|completes|complete|returns|return|is done|are done)"
     r"|when (?:it|that|they) (?:lands|land|finishes|finish|completes|complete|returns|return)"
     r"|pick (?:this|it) back up"

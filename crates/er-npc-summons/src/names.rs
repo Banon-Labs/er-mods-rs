@@ -12,8 +12,9 @@
 //! the config, not by the number of summons.
 //!
 //! Who calls `GetChrName` (1.16.2): `UpdateEnemyTags`, the summon and red-hunter network messages,
-//! `SendHome` and `SendInvadingPhantomsHome`. Overhead plates for spirit summons are built by code
-//! that would need mid-function hooks, which `er-hook` refuses, so companions get no plate.
+//! `SendHome`, `SendInvadingPhantomsHome`, and the friendly tag producer `FUN_140777380`. That
+//! producer only builds rows for party members; [`crate::mid_hooks::tag_list`] gives the
+//! companions rows of their own with `ilhook` mid hooks, and their names there come from here.
 
 #![cfg(windows)]
 
@@ -170,9 +171,8 @@ pub(crate) fn install() {
         // SAFETY: applies the queued enable.
         Ok(_hook) => match unsafe { er_hook::MH_ApplyQueued() } {
             er_hook::MH_STATUS::MH_OK => summons_log(format_args!(
-                "names: GetChrName detoured; the duel NPC and companions are named in the HUD and \
-                 network messages that read it. Overhead plates for companions are not drawn: \
-                 they need mid-function hooks"
+                "names: GetChrName detoured; the duel NPC and companions are named in the HUD, \
+                 the network messages and the companions' overhead plates that read it"
             )),
             status => summons_log(format_args!("names: MH_ApplyQueued failed: {status:?}")),
         },

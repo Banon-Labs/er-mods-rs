@@ -13,6 +13,8 @@ use crate::{
 };
 
 const BND3_MAGIC: &[u8; 4] = b"BND3";
+const BHF3_MAGIC: &[u8; 4] = b"BHF3";
+const BDF3_MAGIC: &[u8; 4] = b"BDF3";
 const BND4_MAGIC: &[u8; 4] = b"BND4";
 const BND4_HEADER_SIZE: u64 = 0x40;
 const BND3_FILE_HEADERS: usize = 0x20;
@@ -81,17 +83,33 @@ pub fn file_name(name: &str) -> &str {
 
 /// The files of a `BND3`, which this tool only ever reads.
 pub fn read_bnd3(bytes: &[u8]) -> Result<Vec<BinderFile>> {
-    if slice(bytes, 0, 4)? != BND3_MAGIC {
-        return Err(Error::new("not a BND3 binder"));
+    read_binder3(bytes, BND3_MAGIC, bytes)
+}
+
+/// The files of a split `BXF3` binder: the `BHF3` header (`c2320.chrtpfbhd`, inside the chrbnd)
+/// and the `BDF3` data beside it (`chr/c2320.chrtpfbdt`). The header is laid out as a BND3's,
+/// with every data offset counted from the start of the data file.
+pub fn read_bxf3(bhd: &[u8], bdt: &[u8]) -> Result<Vec<BinderFile>> {
+    if slice(bdt, 0, 4)? != BDF3_MAGIC {
+        return Err(Error::new("not a BDF3 binder data file"));
+    }
+    read_binder3(bhd, BHF3_MAGIC, bdt)
+}
+
+/// A BND3-shaped header (`BND3` or `BHF3`, by `magic`) whose entries' data is in `data`.
+fn read_binder3(bytes: &[u8], magic: &[u8; 4], data: &[u8]) -> Result<Vec<BinderFile>> {
+    let kind = if magic == BHF3_MAGIC { "BHF3" } else { "BND3" };
+    if slice(bytes, 0, 4)? != magic {
+        return Err(Error::new(format!("not a {kind} binder")));
     }
     let bit_big_endian = u8_at(bytes, 0x0E)? != 0;
     let format = decode_format(u8_at(bytes, 0x0C)?, bit_big_endian);
     if u8_at(bytes, 0x0D)? != 0 || format.big_endian() {
-        return Err(Error::new(
-            "big-endian BND3 is a console binder, not DSR PC",
-        ));
+        return Err(Error::new(format!(
+            "big-endian {kind} is a console binder, not DSR PC"
+        )));
     }
-    let file_count = usize::try_from(i32_le(bytes, 0x10)?).context("BND3 file count")?;
+    let file_count = usize::try_from(i32_le(bytes, 0x10)?).context(format!("{kind} file count"))?;
     let mut cursor = BND3_FILE_HEADERS;
     let mut files = Vec::with_capacity(file_count);
     for _ in 0..file_count {
@@ -124,7 +142,7 @@ pub fn read_bnd3(bytes: &[u8]) -> Result<Vec<BinderFile>> {
             flags,
             id,
             name,
-            data: slice(bytes, data_offset, compressed_size)?.to_vec(),
+            data: slice(data, data_offset, compressed_size)?.to_vec(),
         });
     }
     Ok(files)
@@ -460,6 +478,67 @@ mod tests {
         );
         assert_eq!(file_name("a/b.tpf"), "b.tpf");
         assert_eq!(file_name("bare"), "bare");
+    }
+
+    /// A BND3-shaped header with DSR's format byte (0x74, stored bit-reversed: IDs, names and
+    /// compression), its entries' data at `offsets`.
+    fn binder3_header(magic: &[u8; 4], files: &[(&str, usize, usize)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(magic);
+        out.extend_from_slice(b"07D7R6\0\0");
+        out.extend_from_slice(&[0x74, 0, 0, 0]);
+        out.extend_from_slice(&(files.len() as i32).to_le_bytes());
+        out.extend_from_slice(&[0; 12]);
+        let mut name_at = BND3_FILE_HEADERS + 0x18 * files.len();
+        for (index, (name, offset, size)) in files.iter().enumerate() {
+            out.extend_from_slice(&[0x40, 0, 0, 0]);
+            out.extend_from_slice(&(*size as i32).to_le_bytes());
+            out.extend_from_slice(&(*offset as u32).to_le_bytes());
+            out.extend_from_slice(&(index as i32).to_le_bytes());
+            out.extend_from_slice(&(name_at as u32).to_le_bytes());
+            out.extend_from_slice(&(*size as i32).to_le_bytes());
+            name_at += name.len() + 1;
+        }
+        for (name, _, _) in files {
+            out.extend_from_slice(name.as_bytes());
+            out.push(0);
+        }
+        out
+    }
+
+    #[test]
+    fn a_split_binder_reads_its_data_out_of_the_data_file() {
+        let mut bdt = b"BDF307D7R6\0\0\0\0\0\0".to_vec();
+        assert_eq!(bdt.len(), 0x10);
+        let first = bdt.len();
+        bdt.extend_from_slice(b"first texture");
+        let second = bdt.len();
+        bdt.extend_from_slice(b"second");
+        let bhd = binder3_header(
+            BHF3_MAGIC,
+            &[
+                (r"\c2320\c2320.tpf.dcx", first, 13),
+                (r"\c2320\c2320_n.tpf.dcx", second, 6),
+            ],
+        );
+        let files = read_bxf3(&bhd, &bdt).unwrap();
+        let read: Vec<(&str, &[u8], i32)> = files
+            .iter()
+            .map(|file| (file_name(&file.name), file.data.as_slice(), file.id))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("c2320.tpf.dcx", b"first texture".as_slice(), 0),
+                ("c2320_n.tpf.dcx", b"second".as_slice(), 1)
+            ]
+        );
+        // The header alone is no BND3, and data that is not a BDF3 is refused.
+        assert!(read_bnd3(&bhd).is_err());
+        assert!(read_bxf3(&bhd, b"BND3 not data").is_err());
+        // Read as a BND3, the same header layout carries its data itself.
+        let bnd = binder3_header(BND3_MAGIC, &[("x.tpf", 0, 4)]);
+        assert_eq!(read_bnd3(&bnd).unwrap()[0].data, b"BND3");
     }
 
     #[test]

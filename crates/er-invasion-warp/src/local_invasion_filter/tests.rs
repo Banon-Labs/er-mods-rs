@@ -832,9 +832,9 @@ fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
          dead attempt from a successful invasion, both of which sit at idle"
     );
     let armed_at = recovery.find("AUTO_SEARCH_ARMED").expect("checked above");
-    let invade_at = recovery.find("PENDING_REINVADE.store(true");
+    let invade_at = recovery.find("rearm_reinvade(");
     assert!(
-        invade_at.is_none_or(|at| armed_at < at),
+        invade_at.is_some_and(|at| armed_at < at),
         "the armed check must come BEFORE arming a restart, or a kept match restarts once \
          before the guard is consulted"
     );
@@ -962,7 +962,7 @@ fn the_recovery_loop_probes_the_invade_action_before_re_arming() {
         .find("invade_action_callable")
         .expect("the re-arm is gated on the action being callable");
     let arm = recovery
-        .find("PENDING_REINVADE.store(true")
+        .find("rearm_reinvade(")
         .expect("the re-arm sets the pending flag");
     assert!(
         probe < arm,
@@ -1899,7 +1899,7 @@ fn the_players_own_cancel_does_not_restart_the_search() {
         "the player's own stop must be told apart from a rejected destination by name -- the \
          reason is already a parameter, and ignoring it is the whole defect",
     );
-    let armed_at = body.find("AUTO_SEARCH_ARMED.store(true").expect(
+    let armed_at = body.find("rearm_reinvade(true)").expect(
         "a rejected destination must still continue the hunt: cancelling a match this filter \
          declined is the hunt, and removing that would end it on the first rejection",
     );

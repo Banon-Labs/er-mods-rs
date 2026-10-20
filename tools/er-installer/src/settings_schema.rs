@@ -1968,6 +1968,30 @@ pub const CONFIGS: &[ConfigFile] = &[
         ],
     },
     ConfigFile {
+        file: "er-positional-voice.toml",
+        default_text: "# Volume applied to every voice (1 = as received). 8 is about +18 dB.\ngain = 8.0\n# Play your own microphone at your own character, to test alone.\nloopback = false\n",
+        settings: &[
+            Setting {
+                key: "gain",
+                table: "",
+                default: "8.0",
+                kind: Kind::Float,
+                choices: &[],
+                optional: false,
+                prose: &["# Volume applied to every voice (1 = as received). 8 is about +18 dB."],
+            },
+            Setting {
+                key: "loopback",
+                table: "",
+                default: "false",
+                kind: Kind::Bool,
+                choices: &[],
+                optional: false,
+                prose: &["# Play your own microphone at your own character, to test alone."],
+            },
+        ],
+    },
+    ConfigFile {
         file: "er-render-scale.toml",
         default_text: "# er-render-scale settings. The in-game menu rewrites the divisor line when you move the\n# slider; everything else in this file is left as you wrote it.\n\n# The key that opens and closes the render scale menu: a name such as \"F5\", \"ctrl+F5\",\n# \"]\" or \"KP_Plus\". Escape also closes it.\nmenu_key = \"F5\"\n\n# The 3D scene is drawn at the screen's size divided by this, and the UI stays at the\n# screen's size. 1 is native. The menu offers only the values that divide the screen into\n# whole pixels (at 3840x2160: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 and 60); any other\n# value here is kept but draws at native until the screen allows it.\ndivisor = 1\n",
         settings: &[

@@ -47,6 +47,7 @@ EXEMPT = {
     # this repo's own vocabulary
     "re",  # reverse engineering
     "ring", "elden",  # the game's name
+    "ii", "iii",  # the numerals of Dark Souls II and III, which the character builder reads
     "safety", "note", "todo", "fixme", "hack", "xxx", "panic",  # comment tags
 }
 

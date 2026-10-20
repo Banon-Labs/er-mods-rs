@@ -12,9 +12,12 @@ inline bash block. It goes into its own kitty tab, focused, typed in but not sub
 
 What lands in the tab, in order:
 
-  * each `--why` line, prefixed `# ` and submitted -- the interactive tabs run fish, where a line
-    starting with `#` is a comment, so submitting it runs nothing and leaves the reason on screen;
-  * the command, wrapped as `bash -c '<command>'` and left unsubmitted at the prompt.
+  * each `--why` line, prefixed `# ` -- the interactive tabs run fish, where a line starting with
+    `#` is a comment, so it runs nothing and leaves the reason on screen;
+  * the command, wrapped as `bash -c '<command>'`.
+
+Both go in as one paste and nothing is submitted: the whole block waits at the prompt until the
+user presses enter.
 
 The wrap is there because the tabs run fish and the commands are written in bash: `$(...)`,
 `&&` chains and `VAR=value cmd` all mean something different, or nothing, to fish. The quoting is
@@ -72,18 +75,23 @@ def comment_lines(why: list[str]) -> list[str]:
     return lines
 
 
-def paste_into(listener: str, match: str, comments: list[str], prompt_text: str) -> None:
-    """Paste each comment and submit it, then paste the command and leave it at the prompt.
+def pasted_block(comments: list[str], prompt_text: str) -> str:
+    """The comments and the command as one block, comments first, nothing submitted."""
+    return "\n".join([*comments, prompt_text])
 
-    Everything goes in as a bracketed paste. Sent as keystrokes instead, the text passes through
-    fish's line editor one key at a time, and the `'"'"'` quoting did not survive it: measured
-    2026-10-13 with `--live-selftest`, the typed form ran nothing while the pasted form printed
-    its arguments exactly. The two tabs opened before this fix carried the typed form.
+
+def paste_into(listener: str, match: str, comments: list[str], prompt_text: str) -> None:
+    """Paste the comments and the command as a single block and leave it at the prompt.
+
+    One bracketed paste, so nothing can arrive out of order. fish keeps a pasted newline in the
+    buffer instead of running it, and when the user presses enter the `#` lines are comments and
+    the last line runs. Measured 2026-10-15: each comment used to be pasted and submitted on its
+    own, with the next paste sent before fish had redrawn its prompt, and a tab came up as
+    `bash -c '...'# <second comment>` -- the second comment landed after the command's closing
+    quote. Keystrokes are no better: on 2026-10-13 the typed form lost the `'"'"'` quoting.
     """
-    for line in comments:
-        kitty(listener, "send-text", f"--match={match}", "--bracketed-paste=enable", "--stdin", stdin=line)
-        kitty(listener, "send-text", f"--match={match}", "--stdin", stdin="\r")
-    kitty(listener, "send-text", f"--match={match}", "--bracketed-paste=enable", "--stdin", stdin=prompt_text)
+    block = pasted_block(comments, prompt_text)
+    kitty(listener, "send-text", f"--match={match}", "--bracketed-paste=enable", "--stdin", stdin=block)
 
 
 def kitty(listener: str, *argv: str, stdin: str | None = None) -> str:
@@ -149,11 +157,15 @@ def without_whitespace(text: str) -> str:
 
 
 def pasted_landed(listener: str, match: str, comments: list[str], prompt_text: str) -> bool:
-    """Compared without whitespace: a command longer than the window reads back split across
-    lines, so a 359-character command came back as `--body` and `-file` on two lines and failed
-    a plain substring test."""
+    """The whole block, in order, on screen.
+
+    Compared without whitespace: a command longer than the window reads back split across lines,
+    so a 359-character command came back as `--body` and `-file` on two lines and failed a plain
+    substring test. Compared as one string rather than line by line, because the line-by-line
+    check passed on 2026-10-15 for a tab whose second comment sat after the command.
+    """
     screen = without_whitespace(screen_text(listener, match))
-    return all(without_whitespace(line) in screen for line in [*comments, prompt_text])
+    return without_whitespace(pasted_block(comments, prompt_text)) in screen
 
 
 def paste_and_confirm(listener: str, match: str, comments: list[str], prompt_text: str) -> None:
@@ -197,6 +209,9 @@ def live_selftest() -> int:
     match = launch_ready_tab(listener, "quote-probe", "/tmp", keep_focus=True)
     try:
         paste_and_confirm(listener, match, comments, wrap(probe, raw=False))
+        # The block must still be waiting at the prompt: a pasted newline that ran the buffer
+        # early would hand the user a command that had already gone.
+        ran_early = "[done]" in screen_text(listener, match).splitlines()
         kitty(listener, "send-text", f"--match={match}", "--stdin", stdin="\r")
         poll(
             "the probe to finish",
@@ -208,8 +223,11 @@ def live_selftest() -> int:
         kitty(listener, "close-window", f"--match={match}")
     got = "".join(f"{line}\n" for line in screen.splitlines() if re.fullmatch(r"\[[^\]]*\]", line))
     comments_shown = "# why it's run" in screen and "# second line" in screen
-    ok = got == expected and comments_shown
-    print(f"{'ok  ' if ok else 'FAIL'} fish executed -> {got!r}; comments shown={comments_shown}")
+    ok = got == expected and comments_shown and not ran_early
+    print(
+        f"{'ok  ' if ok else 'FAIL'} fish executed -> {got!r}; comments shown={comments_shown}; "
+        f"ran before enter={ran_early}"
+    )
     print("live selftest:", "PASS" if ok else "FAILED")
     return 0 if ok else 1
 

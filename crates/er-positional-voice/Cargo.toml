@@ -1,0 +1,32 @@
+# Every player's voice comes out of their character. This DLL carries the voice itself, over the
+# Steam API the game already loads, and plays it through the game's own Wwise audio input at each
+# player's position. It reads and writes nothing in Seamless Co-op: no hooks, no data, no calls.
+#
+# Standalone shell: its own `[[natives]]` entry, no product dependency, no detours. A FrameBegin
+# game task places and feeds the voices; one thread of its own captures, sends and receives.
+[package]
+name = "er-positional-voice"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_positional_voice"
+crate-type = ["cdylib"]
+
+[dependencies]
+er-positional-voice-core = { path = "../er-positional-voice-core" }
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+] }
+
+[lints]
+workspace = true

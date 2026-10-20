@@ -35,6 +35,10 @@ const START_MULTIPLAY_PROCEDURE: u32 = 0x0065_87b0;
 /// verified ledger). The hook API audits a runtime-derived entry against the running image's own
 /// function table, so it takes the 1.17 address, as `er-invasion-warp` does; the 1.16.2 one is
 /// refused with `MH_ERROR_UNSUPPORTED_FUNCTION`.
+///
+/// Being a 1.17.1 address, it reaches the running build through `game_rva_measured_on`, which no
+/// runtime-derived hook API does for it. On 2.7.2.0 it carries to `0x68f310`, where the first 24
+/// bytes and the `.pdata` length (`0x169c`) are 1.17.1's (`scripts/compare-carry-bytes-1172.py`).
 const CAN_USE_GOODS: u32 = 0x0068_ee60;
 
 /// `MultiplayType` of the Duelist's Furled Finger.
@@ -186,7 +190,17 @@ pub(crate) fn install() {
         }
         Err(why) => summons_log(format_args!("finger: no game module: {why}")),
     }
-    match game_rva_for_hook(CAN_USE_GOODS) {
+    let can_use_goods = er_game_base::mem::game_rva_measured_on(
+        CAN_USE_GOODS as usize,
+        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    )
+    .ok_or_else(|| {
+        format!(
+            "the 1.17.1 CanUseGoods has no carry to {}",
+            er_game_base::game_build::describe_build()
+        )
+    });
+    match can_use_goods {
         // SAFETY: a seven-argument handler on the seven-argument target; the handler calls the
         // slot through `UnionFn7`.
         Ok(entry) => match unsafe {
@@ -204,6 +218,8 @@ pub(crate) fn install() {
                  greyed"
             )),
         },
-        Err(why) => summons_log(format_args!("finger: no game module: {why}")),
+        Err(why) => summons_log(format_args!(
+            "finger: CanUseGoods not hooked ({why}); offline the finger stays greyed"
+        )),
     }
 }

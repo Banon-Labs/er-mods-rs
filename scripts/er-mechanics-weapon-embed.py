@@ -66,8 +66,10 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import importlib.util
 import json
+import os
 import sys
 import time
 import types
@@ -123,6 +125,20 @@ LEFT_HAND_FALLBACK_CATEGORY = 48
 #: 2026-10-08 over 2346 options: physical-FTH 3.6%, physical-INT 2.9%, Deadly Poison 0.6%, while
 #: each elemental infusion's own route is 7-17%, physical-ARC 23% and bleed about a quarter.
 FUN_MAX_SHARE = 0.05
+#: The code that measures a world reach. Reach is geometry and animation, the same at every stat
+#: block, and it was 551 of a 693 s embedding (measured 2026-10-14), so reaches are kept across
+#: runs in a file named for a hash of this code (`default_reach_cache`).
+REACH_SOURCES = ("er-mechanics-weapon-embed.py", "er-mechanics-reach.py", "er-mechanics-attacks.py",
+                 "er-hkx-pose.py", "er-param-read.py", "er-tae-event-scan.py")
+#: The reach file is rewritten at most this often while weapons are measured, and once at the end.
+REACH_SAVE_S = 10.0
+
+
+def default_reach_cache() -> Path:
+    h = hashlib.sha256()
+    for n in REACH_SOURCES:
+        h.update((HERE / n).read_bytes())
+    return OPT.CACHE / f"embed-reach-{h.hexdigest()[:16]}.json"
 
 
 def stats_key(stats):
@@ -179,7 +195,11 @@ class Embed:
         self.status_target = d
         self.reach_path = reach_cache
         self.reach_on = reach
-        self.reach = json.loads(reach_cache.read_text()) if reach_cache and reach_cache.exists() else {}
+        try:
+            self.reach = json.loads(reach_cache.read_text()) if reach_cache else {}
+        except (OSError, ValueError):
+            self.reach = {}
+        self._reach_saved, self._reach_dirty = time.time(), False
         self.base = [w for w in sorted(self.art.weapons) if w % 10000 == 0 and self.art.names.get(w)
                      and not self.art.names[w].startswith("[") and self.art.weapons[w]["wepType"] in COMBO.CLASS]
         self._moves = {}
@@ -196,9 +216,20 @@ class Embed:
                 except Exception as e:  # a rigged model (whip, flail) has no world reach
                     print(f"{name} {grip}: no reach ({e!r})", file=sys.stderr)
             self.reach[name] = out
-            if self.reach_path:
-                self.reach_path.write_text(json.dumps(self.reach))
+            self.save_reach()
         return self.reach.get(name, {})
+
+    def save_reach(self, force=False):
+        """Write the reaches to `reach_path` whole (a run reading it meanwhile never sees half a
+        file), at most every `REACH_SAVE_S` unless `force`."""
+        self._reach_dirty = True
+        if not self.reach_path or (not force and time.time() - self._reach_saved < REACH_SAVE_S):
+            return
+        self.reach_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.reach_path.with_name(f"{self.reach_path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(self.reach))
+        os.replace(tmp, self.reach_path)
+        self._reach_saved, self._reach_dirty = time.time(), False
 
     def left_reach(self, wid, key, judge, anim, cat):
         """World reach (m) of one off-hand L1 slot, the weapon held in the left hand, or None.
@@ -220,8 +251,7 @@ class Embed:
             except Exception as e:  # a rigged model (whip, flail) has no world reach
                 print(f"{name} {key}: no reach ({e!r})", file=sys.stderr)
                 cached[key] = None
-            if self.reach_path:
-                self.reach_path.write_text(json.dumps(self.reach))
+            self.save_reach()
         return cached.get(key)
 
     def moveset(self, wid):
@@ -674,6 +704,8 @@ def build(a, stats):
             except Exception as ex:
                 print(f"ash {x['ash']} on {x['weapon']}: {ex!r}", file=sys.stderr)
         print(f"ash vectors {len(ashes)} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    if e._reach_dirty:
+        e.save_reach(force=True)
     return {"stats": stats, "stats_key": stats_key(stats), "fun_max_share": FUN_MAX_SHARE,
             "options": n_opts,
             "mechanics": {k: {"share": round(v, 5), "label": labels.get(k)} for k, v in sorted(share.items())},
@@ -726,7 +758,9 @@ def main() -> int:
     ap.add_argument("--ash-rows", type=Path, nargs="+",
                     help="er-mechanics-ash-table.py --json sweeps at this stat block; a row two share is kept once")
     ap.add_argument("--out", type=Path)
-    ap.add_argument("--reach-cache", type=Path)
+    ap.add_argument("--reach-cache", type=Path,
+                    help="world reaches kept across runs (default: embed-reach-<code hash>.json in the "
+                         "planner cache, shared by every stat block)")
     ap.add_argument("--no-reach", action="store_true")
     ap.add_argument("--no-powerstance", action="store_true")
     ap.add_argument("--weapons", help="comma-separated weapon names: embed only these (mechanic shares stay game-wide)")
@@ -742,6 +776,8 @@ def main() -> int:
         stats = {k: bs[k] for k in AR.STATS}
     if a.stats:
         stats.update({k: int(v) for k, v in (p.split("=") for p in a.stats.split(","))})
+    if a.reach_cache is None and not a.no_reach:
+        a.reach_cache = default_reach_cache()
     out = build(a, stats)
     a.out.write_text(json.dumps(out, separators=(",", ":")))
     c = collections.Counter(r["grip"] for r in out["weapons"])

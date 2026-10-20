@@ -91,6 +91,9 @@ SOURCES: dict[str, dict] = {
     "er-render-scale.toml": {
         "literal": ("crates/er-render-scale/src/settings.rs", "DEFAULT_CONFIG_TOML"),
     },
+    "er-positional-voice.toml": {
+        "literal": ("crates/er-positional-voice-core/src/config.rs", "DEFAULT_TEXT"),
+    },
     "er-quit-menu.toml": {"computed": True},
     "er-invasion-warp.toml": {"computed": True},
 }

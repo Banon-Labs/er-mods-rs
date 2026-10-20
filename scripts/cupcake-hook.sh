@@ -94,8 +94,15 @@
 #    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
 #    present but empty still contributes nothing and still reports success here.
 #
-# stdout, stdin and the exit code are passed through untouched: the exit code is how cupcake
-# denies an action, so swallowing it would disable the guards just as thoroughly as bug 1.
+# 6. A cupcake that cannot run is invisible to the agent (bd er-effects-rs-rafi). The engine
+#    exits 1 with an empty stdout when it cannot start -- a full /tmp on 2026-10-16 -- and
+#    Claude Code shows a hook's non-0, non-2 exit to the user alone. Every guard was off and
+#    the agent was not told. run_cupcake now answers such a run through the channel each event
+#    delivers to the agent; scripts/lib/cupcake-non-verdict.sh holds the rule.
+#
+# stdin is passed through untouched, and so are a verdict's stdout and exit code: cupcake denies
+# through JSON on stdout at exit 0, so swallowing it would disable the guards as thoroughly as
+# bug 1. Only a run that produced no verdict (bugs 5 and 6) is replaced.
 set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -377,15 +384,59 @@ evaluation_aborted() {
 	grep -qE 'OPA policy aborted execution|Policy evaluation failed' "$1"
 }
 
-# The deny that replaces a non-verdict. Carries `systemMessage` as well as the PreToolUse
-# decision, because this hook also fires on PostToolUse, SessionStart, UserPromptSubmit
-# and Stop, where `permissionDecision` is ignored and the failure would otherwise be
-# silent again.
-abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is NOT an allow -- every guard was silent -- so the command is refused instead. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
+# The cause carried by the reply that replaces a non-verdict; cupcake_non_verdict adds what
+# it means for the event at hand. No `"` or `\` anywhere in it, so it needs no JSON escaping.
+abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is not an allow -- every guard was silent. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
+
+# A cupcake run with no verdict is answered in a form the agent receives, not the exit status
+# Claude Code only shows the user (bd er-effects-rs-rafi). Without the library the old pass-through
+# stands, which is no worse than before it existed.
+if [ -r "$repo_root/scripts/lib/cupcake-non-verdict.sh" ]; then
+	# shellcheck source=lib/cupcake-non-verdict.sh
+	# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+	. "$repo_root/scripts/lib/cupcake-non-verdict.sh"
+fi
+
+# A policy file that does not compile (2026-10-19): every tool call is refused, so the agent cannot
+# run the fix and the user has to. scripts/cupcake_engine_unlock.py names the one command that
+# restores the broken files; this reply hands it to the agent, and on Stop it holds the turn open
+# until the closing message is that command and nothing else -- user directive the same day: "don't
+# emit any text except for the command you want me to run. Without any other text at all around the
+# message". Unlike the plain non-verdict, the Stop block does not let `stop_hook_active` through:
+# the agent can always satisfy it, and a prose-wrapped command is the failure this exists for.
+# Returns 1 (the caller falls back to cupcake_non_verdict) when the command cannot go into the JSON
+# as-is, or when the library is missing.
+cupcake_unlock_reply() {
+	local rc=$1 cause=$2 unlock=$3 name="" notice
+	declare -F cupcake_non_verdict >/dev/null || return 1
+	case $unlock in *'"'* | *'\'*) return 1 ;; esac
+	if [[ $raw_event =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"([A-Za-z]+)\" ]]; then
+		name=${BASH_REMATCH[1]}
+	fi
+	notice="$(cupcake_engine_failure_notice "$rc" "$cause") A policy file does not compile, so every tool call is refused and you cannot fix it yourself: the user has to run the unlock command. The unlock command is: $unlock -- Your closing message must be exactly that command and nothing else: no words before or after it, no explanation, no heading. The Stop hook refuses any other closing message while the engine is broken."
+	case $name in
+	Stop | SubagentStop)
+		if printf '%s' "$raw_event" | python3 "$repo_root/scripts/cupcake_engine_unlock.py" stop-ok "$unlock" 2>/dev/null; then
+			printf '{"systemMessage": "cupcake-hook: the policy engine is broken; run the command above to unlock it."}'
+		else
+			printf '{"systemMessage": "cupcake-hook: %s", "decision": "block", "reason": "cupcake-hook: %s"}' \
+				"$notice" "$notice"
+		fi
+		;;
+	*)
+		cupcake_non_verdict "$raw_event" "$notice"
+		;;
+	esac
+	return 0
+}
 
 run_cupcake() {
 	local err_file out rc
-	err_file="$(mktemp "${TMPDIR:-/tmp}/cupcake-hook-stderr.XXXXXX")"
+	if declare -F cupcake_scratch_file >/dev/null; then
+		err_file=$(cupcake_scratch_file) || err_file=""
+	else
+		err_file=$(mktemp "${TMPDIR:-/tmp}/cupcake-hook-stderr.XXXXXX" 2>/dev/null) || err_file=""
+	fi
 	# `rc=$?` rather than `${PIPESTATUS[1]}`: the pipeline runs inside a command
 	# substitution, so it is a subshell and PIPESTATUS in this shell describes the
 	# assignment itself. `$?` of it is the exit status of the substitution, which is
@@ -395,19 +446,37 @@ run_cupcake() {
 		--log-level error \
 		--wasm-max-memory "$CUPCAKE_WASM_MAX_MEMORY" \
 		--policy-dir "$repo_root/.cupcake" \
-		"$@" 2>"$err_file")"
+		"$@" 2>"${err_file:-/dev/null}")"
 	rc=$?
-	cat "$err_file" >&2
-	if evaluation_aborted "$err_file"; then
+	[ -n "$err_file" ] && cat "$err_file" >&2
+	if ! declare -F cupcake_non_verdict >/dev/null; then
+		[ -n "$err_file" ] && rm -f "$err_file"
+		printf '%s' "$out"
+		return "$rc"
+	fi
+	if [ -n "$err_file" ] && evaluation_aborted "$err_file"; then
 		rm -f "$err_file"
-		# No `"` anywhere in the notice, so it needs no JSON escaping and no python: a
-		# second interpreter here would be one more thing that can fail in the path
-		# whose whole job is to not fail open.
-		printf '{"systemMessage": "cupcake-hook: %s", "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}}' \
-			"$abort_notice" "$abort_notice"
+		cupcake_non_verdict "$raw_event" "$abort_notice"
 		return 0
 	fi
-	rm -f "$err_file"
+	# A verdict is exit 0 with JSON on stdout -- a deny included, measured 2026-10-16 against
+	# 0.5.2. Exit 2 is Claude Code's own blocking channel and already reaches the agent, so it
+	# passes through. Anything else means the engine never ran the policies.
+	if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+		local cause unlock=""
+		cause=$(cupcake_failure_cause "$err_file")
+		if [ -n "$err_file" ] && [ -r "$repo_root/scripts/cupcake_engine_unlock.py" ] && command -v python3 >/dev/null 2>&1; then
+			unlock=$(python3 "$repo_root/scripts/cupcake_engine_unlock.py" command \
+				"$repo_root" "$cupcake_global_root" "$err_file" 2>/dev/null) || unlock=""
+		fi
+		[ -n "$err_file" ] && rm -f "$err_file"
+		if [ -n "$unlock" ] && cupcake_unlock_reply "$rc" "$cause" "$unlock"; then
+			return 0
+		fi
+		cupcake_non_verdict "$raw_event" "$(cupcake_engine_failure_notice "$rc" "$cause")"
+		return 0
+	fi
+	[ -n "$err_file" ] && rm -f "$err_file"
 	printf '%s' "$out"
 	return "$rc"
 }

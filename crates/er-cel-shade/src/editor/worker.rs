@@ -133,8 +133,10 @@ pub const RECENT_TIMINGS: usize = 64;
 /// The serial bits of a variant id: `editor::variant_id` keeps the kind above them.
 pub const SERIAL_MASK: u32 = 0x00ff_ffff;
 
-/// The port stages, for arrays indexed by `Stage as usize`.
-pub const STAGES: usize = Stage::ALL.len();
+/// The port stages, for arrays indexed by `Stage as usize`. Written out rather than taken from
+/// `Stage::ALL.len()` so `scripts/rva_symbols.py` can read it; the assert keeps the two equal.
+pub const STAGES: usize = 3;
+const _: () = assert!(STAGES == Stage::ALL.len());
 
 /// The builds waiting per port stage (design 7.7): one may be in flight, one may wait behind it,
 /// and a newer edit replaces the one waiting.

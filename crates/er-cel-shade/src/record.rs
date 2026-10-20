@@ -546,7 +546,10 @@ impl PipelineRecord {
         if name.is_null() {
             return std::ptr::null();
         }
-        // SAFETY: the caller's contract: a NUL-terminated string.
+        // SAFETY: the caller's contract: a NUL-terminated string. It is a `SemanticName` of a
+        // description D3D12 has just accepted, in the game's creation call that has not returned
+        // yet, so the runtime has already read it as a C string.
+        // Foreign pointer: the game's, read by D3D12 as a C string in this same call (see above).
         let owned = unsafe { CStr::from_ptr(name) }.to_owned();
         let at = owned.as_ptr();
         self.names.push(owned);
@@ -1029,6 +1032,7 @@ mod tests {
     }
 
     fn name_at(pointer: *const c_char) -> String {
+        // Foreign pointer: ours, a `CString` the record under test copied the name into.
         unsafe { CStr::from_ptr(pointer) }
             .to_str()
             .expect("UTF-8")

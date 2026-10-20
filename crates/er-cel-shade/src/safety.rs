@@ -172,16 +172,21 @@ pub const KNOB_STAGES: [Stage; KNOB_COUNT] = [
     Stage::Tonemap,  // saturation
 ];
 
-/// Every stage's bit.
-pub const ALL_STAGES: u32 = {
+/// Every stage's bit. Written out so `scripts/rva_symbols.py` can read it; the assert keeps it the
+/// union of [`Stage::ALL`]'s bits.
+pub const ALL_STAGES: u32 = 0b111;
+const _: () = assert!(ALL_STAGES == stage_bits(&Stage::ALL));
+
+/// The union of `stages`' bits.
+const fn stage_bits(stages: &[Stage]) -> u32 {
     let mut bits = 0;
     let mut at = 0;
-    while at < Stage::ALL.len() {
-        bits |= Stage::ALL[at].bit();
+    while at < stages.len() {
+        bits |= stages[at].bit();
         at += 1;
     }
     bits
-};
+}
 
 /// The stages with content under this look: each stage one of whose knobs is away from its off
 /// value, compared after [`Look::clamped`], which is what the shaders see. A disabled look has

@@ -160,6 +160,47 @@ pub(crate) const GET_CHR_NAME: u32 = 0x0075_f750;
 /// `0x140763490`).
 pub(crate) const MENU_STRING_RAW: usize = 0x0;
 
+/// The per-player overhead tag list and the enemy damage bar, for the companions
+/// ([`crate::mid_hooks::tag_list`]). Static RE in bd
+/// `npc-summons-in-friendly-tag-list-via-producer-probes-1171-2026-10-06`,
+/// `npc-summon-tag-name-colour-is-rolenamecolor-1171-2026-10-06` and
+/// `npc-summon-enemy-damage-tag-producer-1171-2026-10-06`; prototyped in
+/// `scripts/frida/spawn-npc.js` (`tagHooks`).
+pub(crate) mod tags {
+    /// `FUN_140777380`, the producer that rebuilds the seven `ChrFriendlyTagEntry` rows at
+    /// `CSFeManImp+0x5c60` every frame (1.17.1 `0x140778200`). Mid hooks only, so `usize`.
+    pub(crate) const FRIENDLY_TAG_PRODUCER: usize = 0x77_7380;
+    /// `test r15d,r15d; js <empty>; cmp r15d,[rsp+0x50]`, the per-slot member test.
+    pub(crate) const SLOT_TEST: usize = 0x2f8;
+    /// The instruction after `GetFieldInsHandleByMemberIndex(pmi, [rbp-0x78], r15d)` returns.
+    pub(crate) const SLOT_HANDLE_READY: usize = 0x31c;
+    /// `mov [rsp+0x33],al` after `GetRoleNameColor(&lookup, ChrIns* r15)`.
+    pub(crate) const COLOUR_STORE: usize = 0x607;
+    /// `[rsp+0x50]`: the party's member count, `PartyMemberInfo+0x14`.
+    pub(crate) const MEMBER_COUNT_LOCAL: u64 = 0x50;
+    /// `[rbp-0x78]`: the `FieldInsHandle` the slot resolves through `GetChrInsFromHandle`.
+    pub(crate) const SLOT_HANDLE_LOCAL: u64 = 0x78;
+    /// Rows in the list.
+    pub(crate) const SLOTS: i32 = 7;
+    /// `RoleParam.roleNameColor` for a friend (host, white phantoms, summoned NPCs); hostile is 2.
+    pub(crate) const FRIENDLY_NAME_COLOUR: u8 = 1;
+    /// `CSChrDamageModule::UpdateUI` (1.17.1 `0x1404497e0`). Mid hooks only, so `usize`.
+    pub(crate) const DAMAGE_UPDATE_UI: usize = 0x44_9280;
+    /// `cmp [rsp+0x31],r12b`, the first test that can send a hit character's bar to the enemy
+    /// tag list (`CSFeManImp+0x59f0`) through `SetEntityHealthBarDamage` at `+0x363`.
+    pub(crate) const ENEMY_BAR_TEST: usize = 0x26e;
+    /// `test bpl,bpl`: the tail the enemy-bar call (`+0x363; jmp +0x375`) and the no-bar
+    /// branches share.
+    pub(crate) const ENEMY_BAR_TAIL: usize = 0x375;
+    /// `CSChrDamageModule+0x8`: the owning `ChrIns*`. `RDI` holds the module for the whole of
+    /// `UpdateUI` (`mov rdi,rcx` at `+0x2e`, restored only by the epilogue).
+    pub(crate) const DAMAGE_MODULE_OWNER: u64 = 0x8;
+    /// Detour: the voice-chat lookup `(this, u32* out, PlayerIns*)`, which reads `PlayerIns+0x6b8`
+    /// without a null check once it is past its own `test r8,r8` (1.17.0 `0x140cbbbe0`, 1.17.1
+    /// `0x140cbbc50`).
+    pub(crate) const VOICE_CHAT_LOOKUP: u32 = 0x00cb_a510;
+}
+
 /// Lua 5.0.2 API of the AI state (bd `ai-lua-state-and-loader-1171-static-2026-10-05`).
 pub(crate) mod lua {
     /// Detour: `lua_pcall(L, nargs, nresults, errfunc) -> int` (1.17.1 `0x142026970`).

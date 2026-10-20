@@ -1407,6 +1407,10 @@ def data_manifest(cache: Path) -> list[Path]:
                 found.add(resolve_display(parts[2]))
     for f in cache.glob("opened-*.json"):
         found |= {Path(p) for p in json.loads(f.read_text()) if not p.startswith(str(REPO_ROOT) + "/")}
+    # The RL 150 sweep's name carries the code's cache tag (`er-builds-optimize.sweep_cache`), so
+    # after a rename the last generation's record names the old file and every remote shard stops
+    # at "no RL 150 sweep" (2026-10-14, the `-cond-floors` rename): name the one this code reads.
+    found.add(Path(_mod("er_mechanics_infusions", "er-mechanics-infusions.py").sweep_path()))
     # The archive headers `er-item-name.py` stats (never opens) to decide whether its text cache is
     # current; without them on the host every shard warns that the game item text is stale.
     game_dir = Path(os.environ.get("ER_GAME_DIR", Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"))

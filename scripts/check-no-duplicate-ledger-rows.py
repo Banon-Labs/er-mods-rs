@@ -77,6 +77,10 @@ BASE = 0x140000000
 CURATED = "curated"  # one row per source, full stop
 GENERATED = "generated"  # one row per declaring name, so repeats are expected
 SINGLE_COLUMN = "single-column"  # `quarantined()` reads column 0 only; a repeat is inert
+# `kind, old_lo, old_hi, delta` ranges, not source -> destination pairs. Their overlap rule is
+# "sorted and disjoint", enforced by `map-rvas-1171-to-1172.py --selftest` and the er-game-base
+# test `the_1172_carry_agrees_with_the_independently_generated_bundle`.
+SEGMENTS = "segments"
 
 # Keyed on BASENAME, because build.rs spells the paths relative to its own crate dir.
 LEDGER_KIND = {
@@ -85,6 +89,7 @@ LEDGER_KIND = {
     "rva-map-1162-to-1170.needed-verified.tsv": GENERATED,
     "rva-map-1162-to-1170.data.tsv": GENERATED,
     "rva-1170-quarantine.tsv": SINGLE_COLUMN,
+    "carry-1171-to-1172.tsv": SEGMENTS,
 }
 
 # `const NAME: &str = "../../docs/recon/whatever.tsv";` in build.rs.
@@ -168,7 +173,7 @@ def check_ledgers(ledgers: list[tuple[str, str, str]]) -> tuple[list[str], dict]
     by_source_globally: dict[int, dict[str, set[int]]] = collections.defaultdict(dict)
 
     for const_name, path, kind in ledgers:
-        if kind == SINGLE_COLUMN:
+        if kind in (SINGLE_COLUMN, SEGMENTS):
             continue
         rows = read_rows(path)
         stats["rows"] += len(rows)

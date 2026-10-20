@@ -94,7 +94,9 @@ const WORKER_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 /// One telemetry document, as of now.
 #[cfg(windows)]
 fn snapshot(serial: u64) -> report::Report {
-    use er_game_base::game_build::{MAPPED_FILE_VERSION_1171, game_file_version};
+    use er_game_base::game_build::{
+        MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, game_file_version,
+    };
     let readings = drs::read();
     let hook = drs::hook_state();
     let view = report::view(drs::selected(), drs::applied(), &readings);
@@ -106,7 +108,11 @@ fn snapshot(serial: u64) -> report::Report {
                 u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
             }),
         serial,
-        game_build_ok: game_file_version() == Some(MAPPED_FILE_VERSION_1171),
+        // The builds `carry_1171_rva` reaches: 1.17.1 itself and 2.7.2.0.
+        game_build_ok: matches!(
+            game_file_version(),
+            Some(v) if v == MAPPED_FILE_VERSION_1171 || v == MAPPED_FILE_VERSION_1172
+        ),
         hook,
         readings,
         view,

@@ -223,3 +223,123 @@ test_the_allow_cases_are_not_vacuous if {
 	not denied(`gh pr create --title "feat: a typed subject"`)
 	denied(`gh pr create --title "an untyped subject"`)
 }
+
+# --- the title is read whole (2026-10-19) -------------------------------------
+#
+# A valid single-quoted scoped title was refused as `title : fix`: an apostrophe in a preceding
+# heredoc body opened a quote that ran to the title's own opening quote. These pin the exact
+# title extracted, not only the verdict, so a truncation shows even where it happens to pass.
+
+titles_of(cmd) := t if {
+	t := guard.titles with input as bash_event(cmd)
+}
+
+cel_title := "fix(er-cel-shade): start with cel shading off"
+
+pr_tail := `cd /home/banon/projects/er-mods-rs/.worktrees/er-shaders; timeout 25 gh pr create --draft --base main --head feat/er-cel-shade --title 'fix(er-cel-shade): start with cel shading off' --body-file /tmp/x.md`
+
+test_a_single_quoted_scoped_title_is_read_whole if {
+	titles_of(`gh pr create --draft --title 'fix(er-cel-shade): start with cel shading off'`) == {cel_title}
+}
+
+test_a_double_quoted_scoped_title_is_read_whole if {
+	titles_of(`gh pr create --draft --title "fix(er-cel-shade): start with cel shading off"`) == {cel_title}
+}
+
+test_an_equals_form_scoped_title_is_read_whole if {
+	titles_of(`gh pr create --draft --title='fix(er-cel-shade): start with cel shading off'`) == {cel_title}
+	titles_of(`gh pr create --draft --title="fix(er-cel-shade): start with cel shading off"`) == {cel_title}
+}
+
+test_a_title_after_timeout_is_read_whole if {
+	titles_of(pr_tail) == {cel_title}
+	not denied(pr_tail)
+}
+
+# The refused command as typed: a heredoc whose body holds an apostrophe, backticks and
+# parentheses, then the `gh pr create`.
+refused_as_typed := concat("\n", [
+	`cat > /tmp/x.md <<'EOF'`,
+	"## Summary",
+	"The shader didn't start off (it was `on`), so this flips the default.",
+	"EOF",
+	pr_tail,
+])
+
+# The same command as the engine delivered it to the policy (measured through
+# scripts/cupcake-hook.sh and `cupcake eval`): the newlines before the apostrophe became spaces.
+refused_as_delivered := concat("", [
+	`cat > /tmp/x.md <<'EOF' ## Summary The shader didn't start off (it was `,
+	"`on`), so this flips the default.\nEOF\n",
+	pr_tail,
+])
+
+test_a_title_after_a_heredoc_with_an_apostrophe_is_read_whole if {
+	titles_of(refused_as_typed) == {cel_title}
+	not denied(refused_as_typed)
+}
+
+test_a_title_after_a_heredoc_is_read_whole_in_the_delivered_shape if {
+	titles_of(refused_as_delivered) == {cel_title}
+	not denied(refused_as_delivered)
+}
+
+test_every_heredoc_opener_spelling_is_cut if {
+	every opener in [`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, `<< 'EOF'`, `<< EOF`, `<<\EOF`] {
+		titles_of(concat("\n", [
+			concat(" ", ["cat > /tmp/x.md", opener]),
+			"it's (odd",
+			"EOF",
+			`gh pr create --title 'fix(er-cel-shade): start with cel shading off'`,
+		])) == {cel_title}
+	}
+}
+
+test_two_heredocs_are_both_cut if {
+	cmd := concat("\n", [
+		`cat > /tmp/a.md <<'EOF'`, "it's one", "EOF",
+		`cat > /tmp/b.md <<'END'`, "it's (two", "END",
+		pr_tail,
+	])
+	titles_of(cmd) == {cel_title}
+}
+
+test_a_bad_title_after_a_heredoc_is_still_denied if {
+	denied(concat("\n", [`cat > /tmp/x.md <<'EOF'`, "don't", "EOF", `gh pr create --title 'no type here'`]))
+}
+
+# A heredoc body is data. An untyped example command inside one is not judged.
+test_an_untyped_example_inside_a_heredoc_body_is_not_judged if {
+	cmd := concat("\n", [
+		`cat > /tmp/x.md <<'EOF'`,
+		`refused: gh pr create --title 'push it'`,
+		"EOF",
+		`gh pr create --title "fix: read the right title" --body-file /tmp/x.md`,
+	])
+	not denied(cmd)
+}
+
+# A body a shell reads is a program, so a `gh pr create` in it is still judged.
+test_a_shell_read_heredoc_body_is_still_judged if {
+	denied(concat("\n", [`bash <<'EOF'`, `gh pr create --title 'no type here'`, "EOF"]))
+}
+
+# The `--body "$(cat <<'EOF' ... EOF )"` spelling, apostrophe in the body.
+test_a_command_substitution_heredoc_body_is_cut if {
+	cmd := concat("\n", [
+		`gh pr create --title 'fix(er-cel-shade): start with cel shading off' --body "$(cat <<'EOF'`,
+		"It's (finally) `off`.",
+		"EOF",
+		`)"`,
+	])
+	titles_of(cmd) == {cel_title}
+}
+
+# A `<<` with no terminating line removes nothing, so it cannot hide a later invocation.
+test_an_unterminated_heredoc_marker_hides_nothing if {
+	denied(concat("\n", [`echo "a << b"`, `gh pr create --title untyped`]))
+}
+
+test_a_here_string_is_not_an_opener if {
+	denied(concat("\n", [`cat <<<EOF`, "EOF", `gh pr create --title untyped`]))
+}

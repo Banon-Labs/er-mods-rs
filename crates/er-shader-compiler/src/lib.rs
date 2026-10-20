@@ -80,21 +80,25 @@ pub const DIAGNOSTICS_LIMIT: usize = 1 << 20;
 
 /// FNV-1a 64 over this crate's sources, which is what [`build_id`] names. The DLL links this
 /// library and the helper is built from it, so the two agree exactly when they were built from
-/// the same sources.
-pub const BUILD_HASH: u64 = {
+/// the same sources. A function rather than a `u64` constant, because `scripts/rva_symbols.py`
+/// cannot evaluate a hash and an unread 64-bit constant blocks its every "nothing claims this
+/// address" proof.
+#[must_use]
+pub const fn build_hash() -> u64 {
     let mut hash = FNV1A64_OFFSET_BASIS;
     hash = fnv1a64_extend(hash, include_bytes!("lib.rs"));
     hash = fnv1a64_extend(hash, include_bytes!("protocol.rs"));
     hash = fnv1a64_extend(hash, include_bytes!("dxc.rs"));
     fnv1a64_extend(hash, include_bytes!("main.rs"))
-};
+}
 
-/// The build id a [`Handshake`] carries: the crate version and [`BUILD_HASH`].
+/// The build id a [`Handshake`] carries: the crate version and [`build_hash`].
 #[must_use]
 pub fn build_id() -> String {
     format!(
-        "er-shader-compiler {} {BUILD_HASH:016x}",
-        env!("CARGO_PKG_VERSION")
+        "er-shader-compiler {} {:016x}",
+        env!("CARGO_PKG_VERSION"),
+        build_hash()
     )
 }
 
@@ -744,7 +748,7 @@ mod tests {
             check_handshake(&stale),
             Err(HandshakeRefusal::Build { .. })
         ));
-        assert!(build_id().ends_with(&format!("{BUILD_HASH:016x}")));
+        assert!(build_id().ends_with(&format!("{:016x}", build_hash())));
     }
 
     #[test]

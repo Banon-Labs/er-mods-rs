@@ -60,12 +60,15 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import html
 import importlib.util
 import json
 import math
+import os
 import statistics
 import sys
+import time
 import tomllib
 import unicodedata
 from pathlib import Path
@@ -208,6 +211,17 @@ MIST_DWELL_S = 1.0
 #: A bullet whose path spans less than this is a cloud that stays where it was made, in m.
 STATIONARY_M = 0.5
 RANGED_CACHE = Path.home() / ".cache/er-build-planner/ash-ranged-status.json"
+#: The status each status affinity adds to a weapon's hits.
+AFFINITY_STATUS = {"Blood": "bleed", "Cold": "frost", "Poison": "poison"}
+#: An ash whose own bullets build a status is dropped once more than this share of the plan's weapon
+#: copies already build that status from the weapon itself, by affinity or innately (user,
+#: 2026-10-17: "I don't think we need hoarfrost stomp on a build that has more than 50% weapons
+#: with frost"). `drop_redundant_status` replaces each such copy in place.
+OWN_STATUS_SHARE = 0.5
+#: The crit row (`--crit-weapon`): one row of this weapon on the affinity whose riposte plus
+#: backstab, damage and the status the crit's hits build, is highest at the build's stats (user,
+#: 2026-10-17: "we must have a row of misericordes with the best infusion for its crit").
+CRIT_WEAPON = "Misericorde"
 BUFF_CACHE = Path.home() / ".cache/er-build-planner/ash-buff-value.json"
 #: Multihit weapons (user, 2026-10-12): "we don't want to include ashes on it that slow the user
 #: down significantly unless they are also multihit", where "Multihit is defined by how quickly it
@@ -317,6 +331,168 @@ def weapon_traits(embed):
                 t["innate"] |= {n for n, v in (s.get("status_hp") or {}).items() if v}
     return {w: {"anims": frozenset(t["anims"]), "innate": t["innate"], "infusable": len(t["affs"]) > 1}
             for w, t in out.items()}
+
+
+def carried_status(s, traits):
+    """The statuses a copy builds from the weapon itself: its affinity's and its innate ones."""
+    own = {AFFINITY_STATUS[s["affinity"]]} if s["affinity"] in AFFINITY_STATUS else set()
+    return own | set((traits.get(s["weapon"]) or {}).get("innate") or ())
+
+
+def status_shares(slots, traits):
+    """({status: share of the plan's weapon copies that carry it}, copies). Every slot is a weapon
+    the inventory holds, a landmark's repeats included; fun and padding slots are left out. On the
+    Warped Axe Cold plan (2026-10-17) frost is 52.3% of slots against 48.5% of distinct (weapon,
+    affinity, ash) copies, so the measure decides the verdict there; slots is what the inventory
+    shows."""
+    copies = [s for s in slots if s["cat"] not in ("junk", "fun")]
+    count = collections.Counter(st for s in copies for st in carried_status(s, traits))
+    return {k: v / len(copies) for k, v in count.items()} if copies else {}, len(copies)
+
+
+def drop_redundant_status(slots, own, traits, pool_of, make_slot, share=OWN_STATUS_SHARE):
+    """Replace in place every copy whose ash builds a status (`own`, `ash_own_status`) that more
+    than `share` of the plan's copies already carry (`status_shares`). The replacement is the same
+    weapon's best other copy by `norm`, of the same kind (a step or buff for a step or buff), on
+    the copy's own affinity when the pool has one, with an ash its five-slot row does not hold yet;
+    failing that, any kind, then an ash the row already holds.
+    A landmark or page block takes one replacement for all its slots, so it stays one copy repeated.
+    `pool_of(slot)` lists the copies that may take the slot. Slot indices do not move, so the equip sets keep pointing at the same slots.
+
+    Returns (shares, {status: [ashes dropped]}, [log lines])."""
+    shares, _ = status_shares(slots, traits)
+    full = {k for k, v in shares.items() if v > share}
+    redundant = {ash: sorted(sts & full) for ash, sts in own.items() if sts & full}
+    dropped, log, block = collections.defaultdict(set), [], {}
+    for i, s in enumerate(slots):
+        ash = s.get("skill")
+        if ash not in redundant:
+            continue
+        grab = s.get("grab") or s["theme"].startswith(("Landmark", "Page"))
+        bk = (s["theme"], s["weapon"], s["affinity"], ash)
+        if grab and bk in block:
+            x = block[bk]
+        else:
+            r0 = i // ROW * ROW
+            taken = set() if grab else {t.get("skill") for t in slots[r0:r0 + ROW]}
+            util = s["cat"] == "utility"
+            ok = [x for x in pool_of(s) if x["ash"] not in redundant]
+            # Loosened in turn when a weapon's pool runs short: another kind (a step for a bullet),
+            # then an ash the row already holds, a short row repeating a copy as `place_classes` does.
+            tiers = ([x for x in ok if x["ash"] not in taken and (x["cat"] == "utility") == util],
+                     [x for x in ok if x["ash"] not in taken], ok)
+            cands = next((c for c in tiers if c), [])
+            x = max(cands, key=lambda x: (x["affinity"] == s["affinity"], x["norm"]), default=None)
+            if grab:
+                block[bk] = x
+        for st in redundant[ash]:
+            dropped[st].add(ash)
+        if x is None:
+            log.append(f"kept {s['affinity']} {s['weapon']} {ash} at slot {i}: no other copy of the weapon")
+            continue
+        new = make_slot(x, s["weapon"], s["theme"], s["row"])
+        for k in ("note", "partner", "grab"):
+            if k in s:
+                new[k] = s[k]
+        slots[i] = new
+        log.append(f"slot {i}: {s['affinity']} {s['weapon']} {ash} -> {x['affinity']} {x['ash']} "
+                   f"(frees {', '.join(redundant[ash])})")
+    return shares, {k: sorted(v) for k, v in dropped.items()}, log
+
+
+def ash_own_status(rows, stats, cache_path):
+    """{ash: statuses its own bullets build}, whatever the carrier: every bullet node of every
+    animation of the cast (`er-mechanics-ashes.fly_tree`, as `set_ranged_status` walks them), read
+    with `Table.hit_buildup` against the carrier's status rows emptied, so only the Bullet rows' own
+    `spEffectId0..4` count (hit slots 0..4; Hoarfrost Stomp's 1800/1801 carry no
+    `isUseStatusAilmentAtkPowerCorrect`, `VERIFIED` in that docstring). A Cold carrier's frost riding
+    a bullet is the weapon's, not the ash's, and is not counted. An ash with no bullet builds no
+    status of its own here: a blade ash's own AtkParam status rows are not read. One carrier per ash
+    (the first damaging row): a bullet's own rows do not depend on the weapon (`INFERRED`: the
+    carrier only picks the opening animation). Cached in `cache_path` under `own|` keys."""
+    first = {}
+    for x in rows:
+        if x["cat"] != "utility":
+            first.setdefault(x["ash"], x)
+    key = lambda x: f"own|{x['ash']}|{x['weapon']}|{x['affinity']}|{x['grip']}"
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    todo = [x for x in first.values() if key(x) not in cache]
+    if todo:
+        T = _table_mod()
+        A = T.A
+        tab = T.Table(todo[0]["weapon"], todo[0]["affinity"], stats, DEFAULT_ARMOR, True)
+        ST, st, _ = tab.status_tables()
+        t = tab.t
+        sids = skill_ids(t, {x["ash"] for x in todo})
+        print(f"own status: {len(todo)} ashes to read", file=sys.stderr, flush=True)
+        for x in todo:
+            got, sid = set(), sids.get(x["ash"])
+            if sid is not None:
+                wid = t.find_weapon(x["weapon"])
+                level = tab.art.max_level(t.reg.weapon[wid]["reinforceTypeId"])
+                two = x["grip"] == "2H"
+                prof = A.skill_profile(t, sid, wid, level, "both" if two else "one")
+                ws = dict(ST.weapon_status(st, x["weapon"], x["affinity"], level, stats, two), sources=[])
+                for evs in prof["anims"].values():
+                    for e in evs:
+                        if e["kind"] == "bullet" and e.get("bullet"):
+                            for node, *_ in A.fly_tree(t, e["bullet"]):
+                                b, _ = tab.hit_buildup(st, ws, node["atk_row"], node["bullet"])
+                                got |= {k for k, v in b.items() if v}
+            cache[key(x)] = sorted(got)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache))
+    return {ash: set(cache[key(x)]) for ash, x in first.items()}
+
+
+def crit_affinities(weapon, stats):
+    """[(affinity, riposte, backstab)] for `weapon` at `stats`, best first: each crit's total
+    (`er-mechanics-crit-affinity.rows_for`: damage through `er-mechanics-crits.reference_defender`
+    plus the status HP of the crit's hits), the better grip per affinity. An affinity whose
+    requirements the stats miss is not listed. The crit multiplier skips status build-up
+    (crits.md section 2, `VERIFIED`); that a crit hit still builds the weapon's status at one R1
+    hit's worth per hit is that module's model (`INFERRED`: the crit AtkParam is taken through the
+    same hit slots 5..7 as any swing)."""
+    spec = importlib.util.spec_from_file_location("er_mechanics_crit_affinity", HERE / "er-mechanics-crit-affinity.py")
+    CA = sys.modules.get("er_mechanics_crit_affinity")
+    if CA is None:
+        CA = importlib.util.module_from_spec(spec)
+        sys.modules["er_mechanics_crit_affinity"] = CA
+        spec.loader.exec_module(CA)
+    e = CA.SS.embed()
+    t = CA.CR.load_tables()
+    base = next((i for i in CA.CW.weapon_ids(e) if e.art.names[i] == weapon), None)
+    if base is None:
+        return []
+    best = {}
+    for r in CA.rows_for(t, e, CA.CR.reference_defender(t), base, stats):
+        v = (r["riposte"]["total"], r["backstab"]["total"])
+        if sum(v) > sum(best.get(r["affinity"], (0, 0))):
+            best[r["affinity"]] = v
+    return sorted(((a, *v) for a, v in best.items()), key=lambda r: -(r[1] + r[2]))
+
+
+def crit_copies(weapon, affinity, pool, mountable, note):
+    """(row, every candidate): `weapon`'s distinct ashes that mount on `affinity` (`mountable(ash)`),
+    each its best copy by `norm` made on `affinity` whatever affinity the sweep valued it on. The
+    row is the best `ROW` of them with one step or buff at most, as a class pair's row is drawn
+    (`PAIR_UTILITY`), damaging ones first."""
+    ok = [x for x in pool if x["weapon"] == weapon and mountable(x["ash"])]
+    cands, seen = [], set()
+    for x in sorted(ok, key=lambda x: -x["norm"]):
+        if x["ash"] not in seen:
+            seen.add(x["ash"])
+            cands.append(dict(x, affinity=affinity, note=f"{note}; ash valued on the {x['affinity']} sweep"
+                              if x["affinity"] != affinity else note))
+    row, util = [], 0
+    for x in cands:
+        if x["cat"] == "utility" and util >= PAIR_UTILITY:
+            continue
+        util += x["cat"] == "utility"
+        row.append(x)
+        if len(row) == ROW:
+            break
+    return sorted(row, key=lambda x: (CATEGORIES.index(x["cat"]), -x["norm"])), cands
 
 
 def set_reach_weights(rows, r1):
@@ -439,7 +615,7 @@ def set_ranged_status(rows, r1, stats, cache_path):
             out["status_only"] = hp
         cache[key(x)] = out
         if n and n % 500 == 0:
-            print(f"ranged status: {n} of {len(todo)}", file=sys.stderr, flush=True)
+            print(f"  {n}/{len(todo)} rows", file=sys.stderr, flush=True)
     if todo:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache))
@@ -541,7 +717,7 @@ def set_buff_values(rows, stats, cache_path):
                 prof = A.skill_profile(t, sids[x["ash"]], tab.wid, tab.level, two)
                 cache[key(x)] = tab.buff_gain(sids[x["ash"]], prof, two, ctx, *bh)
             if n and n % 50 == 0:
-                print(f"buff values: {n} of {len(groups)} weapons", file=sys.stderr, flush=True)
+                print(f"  {n}/{len(groups)} weapons", file=sys.stderr, flush=True)
         if off:
             print(f"buff values: {off} utility rows' follow-up differs from the sweep by more than 1 HP "
                   f"(sweep stats are not {stats_key}?)", file=sys.stderr)
@@ -752,18 +928,29 @@ def set_multihit_weights(rows, stats, cache_path):
         d = TA.Data()
         succ = d.triggers[MULTIHIT_TALISMAN]["kinds"]["successive"]
         print(f"multihit: {len(todo_w)} weapons, {len(todo_a)} rows to read", file=sys.stderr, flush=True)
-    for w in todo_w:
+    by_wa = collections.defaultdict(list)
+    for x in todo_a:
+        by_wa[x["weapon"], x["affinity"]].append(x)
+    units = len(todo_w) + len(by_wa)
+    for i, w in enumerate(todo_w, 1):
+        if i % 10 == 0 or i == len(todo_w):
+            print(f"  {i}/{units} weapons, then weapon affinities", file=sys.stderr, flush=True)
         f = TA.successive_features(TA.weapon_profile(d, d.find_weapon(w)), succ)
         grips = [f[g] for g in TA.GRIPS if g in f]
         times = [g["cold_start_first_threshold"]["seconds"][0] for g in grips
                  if (g.get("cold_start_first_threshold") or {}).get("seconds")]
         cache[f"weapon|{w}"] = {"rate": max((g["gain_per_s"] or 0.0 for g in grips), default=0.0),
                                 "trigger_s": min(times, default=None)}
-    by_wa = collections.defaultdict(list)
-    for x in todo_a:
-        by_wa[x["weapon"], x["affinity"]].append(x)
+    tab = None
     for n, ((w, aff), xs) in enumerate(sorted(by_wa.items())):
-        tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+        if n % 10 == 9 or n == len(by_wa) - 1:
+            print(f"  {len(todo_w) + n + 1}/{units} weapons, then weapon affinities", file=sys.stderr, flush=True)
+        # One table, switched per weapon: a new one decodes the regulation again, 7 s each and 349
+        # of them in a build's pass (measured 2026-10-14).
+        if tab is None:
+            tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+        else:
+            tab.set_weapon(w, aff)
         sids = skill_ids(tab.t, {x["ash"] for x in xs})
         for x in xs:
             sid, two = sids.get(x["ash"]), x["grip"] == "2H"
@@ -918,7 +1105,12 @@ def _pierce_work(item):
     """{pierce_key: share} for one (weapon, affinity)'s rows, in a forked worker."""
     (w, aff), xs = item
     T, stats = _table_mod(), _PIERCE_W["stats"]
-    tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+    # One table per worker, switched per weapon (see `set_multihit_weights`).
+    tab = _PIERCE_W.get("tab")
+    if tab is None:
+        tab = _PIERCE_W["tab"] = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+    else:
+        tab.set_weapon(w, aff)
     sids = skill_ids(tab.t, {x["ash"] for x in xs})
     out = {}
     for x in xs:
@@ -959,8 +1151,8 @@ def set_pierce_weights(rows, stats, cache_path, jobs=6):
         with ctx.Pool(jobs, initializer=AI._worker_init, initargs=(workers, ctx.Value("i", 0))) as pool:
             for n, res in enumerate(pool.imap_unordered(_pierce_work, chunks), 1):
                 cache.update(res)
+                print(f"  {n}/{len(chunks)} weapon affinities", file=sys.stderr, flush=True)
                 if n % 20 == 0 or n == len(chunks):
-                    print(f"  pierce: {n}/{len(chunks)}", file=sys.stderr, flush=True)
                     cache_path.write_text(json.dumps(cache))
     for x in dmg:
         share = cache.get(pierce_key(x)) or 0.0
@@ -968,30 +1160,41 @@ def set_pierce_weights(rows, stats, cache_path, jobs=6):
         x["pierce_w"] = 1.0 + share * (PIERCE_COUNTER - 1.0) * COUNTER_SHARE
 
 
-def weigh(rows, a, r1, build_stats, report=False):
+def weigh(rows, a, r1, build_stats, report=False, stages=None):
     """Every per-row weight `value` reads, in the pool's order: the interrupt and whiff
     multipliers (`--interrupt-weight`, `--whiff-weight`), `area_w`, `reach_w` and the ranged
-    status proc. The pool and the shield sweep both go through it."""
+    status proc. Each pass starts a stage of `stages` (`Stages`)."""
     pb = bool(getattr(a, "perfect_block", None) and a.perfect_block_weight)
+    stage = stages or (lambda name: None)
     if a.interrupt_weight or a.whiff_weight or pb:
         # The perfect-block term reads the same cast profiles, so it computes them when the
         # interrupt and whiff weights are both off.
+        stage("interrupt")
         got = interrupt_weights(rows, a)
         if a.whiff_weight:
-            whiff_weights(rows, got)
+            stage("whiff")
+            whiff_weights(rows, got, getattr(a, "interrupt_cache", None))
             if report:
                 whiff_report(rows)
+    stage("area")
     set_area_weights(rows)
+    stage("landing")
     set_landing_weights(rows, build_stats, getattr(a, "landing_cache", None))
+    stage("reach")
     set_reach_weights(rows, r1)
+    stage("ranged status")
     set_ranged_status(rows, r1, build_stats, a.ranged_cache)
+    stage("multihit")
     set_multihit_weights(rows, build_stats, a.counter_cache)
+    stage("pierce")
     set_pierce_weights(rows, build_stats, getattr(a, "pierce_cache", PIERCE_CACHE), getattr(a, "interrupt_jobs", 6))
     if a.parry and a.parry_weight:
+        stage("parry")
         parry_weights(rows, a.parry)
         if report:
             parry_report(rows)
     if pb:
+        stage("perfect block")
         pb_weights(rows, got, a.perfect_block, build_stats)
         if report:
             pb_report(rows)
@@ -1232,6 +1435,44 @@ def value(x):
 
 #: Interrupt profiles, keyed by sweep row (`er-mechanics-ash-interrupt.profiles`).
 INTERRUPT_CACHE = Path.home() / ".cache/er-build-planner/ash-interrupt.json"
+#: The run's stages in order. `Stages` prints them for `er-mechanics-pipeline-watch.py`, which
+#: draws its bar and its estimate from them, weighing each by `STAGE_TIMES` from the last run.
+STAGES = ("rows", "interrupt", "whiff", "area", "landing", "reach", "ranged status", "multihit", "pierce",
+          "parry", "perfect block", "own status", "rank", "layout", "crit", "shields", "ranged", "fun and sets",
+          "partners", "redundant status", "write")
+STAGE_TIMES = Path.home() / ".cache/er-build-planner/loadout-stage-times.json"
+
+
+class Stages:
+    """Prints `stages: [[name, seconds last time], ...]` once, then `stage k/N: name (Ns in)` as
+    each stage starts, and on `finish` records how long each one took. A stage a run skips (parry
+    with no parry file) keeps the time it took the last time it ran."""
+
+    def __init__(self, path: Path | None = STAGE_TIMES):
+        self.path, self.t0, self.cur, self.took = path, time.monotonic(), None, {}
+        try:
+            self.last = json.loads(path.read_text()) if path else {}
+        except (OSError, ValueError):
+            self.last = {}
+        print("stages: " + json.dumps([[n, self.last.get(n)] for n in STAGES]), file=sys.stderr, flush=True)
+
+    def __call__(self, name: str) -> None:
+        now = time.monotonic()
+        if self.cur:
+            self.took[self.cur[0]] = round(now - self.cur[1], 1)
+        self.cur = (name, now)
+        print(f"stage {STAGES.index(name) + 1}/{len(STAGES)}: {name} ({now - self.t0:.0f}s in)",
+              file=sys.stderr, flush=True)
+
+    def finish(self) -> None:
+        if self.cur:
+            self.took[self.cur[0]] = round(time.monotonic() - self.cur[1], 1)
+            self.cur = None
+        if self.path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps({**self.last, **self.took}))
+            os.replace(tmp, self.path)
 DEFAULT_ARMOR = ["Verdigris Gauntlets", "Verdigris Armor", "Verdigris Greaves"]
 
 
@@ -1255,19 +1496,42 @@ def _whiff():
     return sys.modules[key]
 
 
-def whiff_weights(rows, got):
+def whiff_weights(rows, got, cache_path=None):
     """Set `wmult` and `whiff` on every damaging row from its interrupt profile in `got`
     (module docstring of `er-mechanics-ash-whiff.py`). A two-handed row's grip change counts as
     telegraph: the opponent sees the swap start `grip_change` frames before the cast."""
-    W = _whiff()
-    opp = _ai().Opponent()
-    for x in rows:
-        r = got.get(_ai().row_key(x))
-        w = W.from_profile(opp, r, x.get("grip_change", 0.0)) if x["cat"] != "utility" else None
+    W, AI = _whiff(), _ai()
+    opp = W.distinct(AI.Opponent())
+    # Each row is a numpy simulation of the opponents' roll and punish (about 0.02 s over the
+    # distinct moves, 13,000 rows a build), so the results are kept beside the interrupt cache, valid while its settings and the
+    # whiff module are the ones they came from.
+    memo, path, settings = {}, None, None
+    if cache_path and Path(cache_path).exists():
+        path = Path(f"{cache_path}.whiff.json")
+        settings = {**json.loads(Path(cache_path).read_text()).get("settings", {}),
+                    "whiff": hashlib.sha256((HERE / "er-mechanics-ash-whiff.py").read_bytes()).hexdigest()[:16]}
+        doc = json.loads(path.read_text()) if path.exists() else {}
+        memo = doc.get("rows", {}) if doc.get("settings") == settings else {}
+    todo = [x for x in rows if x["cat"] != "utility"]
+    print(f"whiff: {len(todo)} rows, {sum(1 for x in todo if _whiff_key(AI, x) in memo)} cached",
+          file=sys.stderr, flush=True)
+    for i, x in enumerate(todo, 1):
+        key = _whiff_key(AI, x)
+        if key not in memo:
+            memo[key] = W.from_profile(opp, got.get(AI.row_key(x)), x.get("grip_change", 0.0))
+        w = memo[key]
         # A step or buff, or a row with no profile, has no whiff to punish and keeps `imult` alone.
         if w:
             x["wmult"] = W.multiplier(w)
             x["whiff"] = {k: round(v, 3) for k, v in w.items()}
+        if i % 500 == 0 or i == len(todo):
+            print(f"  {i}/{len(todo)} rows", file=sys.stderr, flush=True)
+    if path:
+        path.write_text(json.dumps({"settings": settings, "rows": memo}))
+
+
+def _whiff_key(AI, x):
+    return f"{AI.row_key(x)}|grip{x.get('grip_change', 0.0):g}"
 
 
 def whiff_report(rows, n=10):
@@ -1631,7 +1895,73 @@ def grab_copies(best, by_weapon, mobility, bloodhound=()):
     return out
 
 
+def selftest() -> int:
+    """The redundant-status and crit-row rules on hand-made slots."""
+    bad = 0
+
+    def check(name, got, want):
+        nonlocal bad
+        ok = got == want
+        bad += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name}: {got!r}" + ("" if ok else f" (want {want!r})"))
+
+    def mk(w, aff, ash, cat="bullet", norm=1.0, theme="Classes", grab=False):
+        return {"weapon": w, "affinity": aff, "ash": ash, "skill": ash, "cat": cat, "norm": norm,
+                "theme": theme, "row": 0, "grab": grab}
+
+    def make_slot(x, w, theme, r):
+        return mk(w, x["affinity"], x["ash"], x["cat"], x["norm"], theme)
+    traits = {"Icerind Hatchet": {"innate": {"frost"}}}
+    # 3 of 5 copies carry frost (two Cold, one innate): 60% > 50%, so Hoarfrost Stomp goes.
+    slots = [mk("Axe", "Cold", "Hoarfrost Stomp"), mk("Axe", "Cold", "Storm Blade"),
+             mk("Icerind Hatchet", "Standard", "Hoarfrost Stomp"), mk("Club", "Heavy", "Endure", "utility"),
+             mk("Club", "Heavy", "Bloody Slash")]
+    check("frost share over slots", round(status_shares(slots, traits)[0]["frost"], 2), 0.6)
+    check("frost share: fun and padding slots left out",
+          round(status_shares(slots + [mk("Axe", "Cold", "x", "fun")], traits)[0]["frost"], 2), 0.6)
+    pool = {"Axe": [mk("Axe", "Cold", "Hoarfrost Stomp", norm=2.0), mk("Axe", "Cold", "Storm Blade", norm=1.5),
+                    mk("Axe", "Blood", "Lion's Claw", "non-bullet", 1.4), mk("Axe", "Cold", "Lion's Claw", "non-bullet", 1.2),
+                    mk("Axe", "Cold", "Quickstep", "utility", 3.0)],
+            "Icerind Hatchet": [mk("Icerind Hatchet", "Standard", "Hoarfrost Stomp")]}
+    own = {"Hoarfrost Stomp": {"frost"}, "Bloody Slash": {"bleed"}, "Storm Blade": set()}
+    s1 = [dict(s) for s in slots]
+    shares, dropped, log = drop_redundant_status(s1, own, traits, lambda s: pool.get(s["weapon"], []), make_slot)
+    check("dropped: Hoarfrost Stomp for frost, Bloody Slash kept (bleed 0%)", dropped, {"frost": ["Hoarfrost Stomp"]})
+    check("replacement: same affinity over a higher-norm other affinity, no step for a bullet, not a row repeat",
+          (s1[0]["affinity"], s1[0]["ash"]), ("Cold", "Lion's Claw"))
+    check("no other copy: kept and reported", (s1[2]["ash"], log[-1].startswith("kept")), ("Hoarfrost Stomp", True))
+    short = {"Axe": [mk("Axe", "Cold", "Hoarfrost Stomp"), mk("Axe", "Cold", "Storm Blade"),
+                     mk("Axe", "Cold", "Quickstep", "utility")]}
+    s3 = [mk("Axe", "Cold", "Hoarfrost Stomp"), mk("Axe", "Cold", "Storm Blade")] + [mk("Icerind Hatchet", "Standard", "x")] * 3
+    drop_redundant_status(s3, own, traits, lambda s: short.get(s["weapon"], []), make_slot)
+    check("short pool: another kind before a repeat", s3[0]["ash"], "Quickstep")
+    s4 = [mk("Axe", "Cold", "Hoarfrost Stomp"), mk("Axe", "Cold", "Storm Blade"), mk("Axe", "Cold", "Quickstep", "utility"),
+          mk("Icerind Hatchet", "Standard", "x"), mk("Icerind Hatchet", "Standard", "y")]
+    drop_redundant_status(s4, own, traits, lambda s: short.get(s["weapon"], []), make_slot)
+    check("short pool: a repeat of the row's best last", s4[0]["ash"], "Storm Blade")
+    s2 = [dict(s) for s in slots[:2]] + [mk("Club", "Heavy", n) for n in ("Wild Strikes", "Endure", "Stamp (Sweep)")]
+    check("at 40% frost nothing is dropped", drop_redundant_status(s2, own, traits, lambda s: pool[s["weapon"]],
+                                                                   make_slot)[1], {})
+    lm = [mk("Axe", "Cold", "Hoarfrost Stomp", theme="Landmark: x", grab=True) for _ in range(ROW)]
+    drop_redundant_status(lm, own, traits, lambda s: pool[s["weapon"]], make_slot)
+    check("a landmark block stays one copy repeated", {s["ash"] for s in lm}, {"Storm Blade"})
+    cpool = [mk("Misericorde", "Cold", n, c, v) for n, c, v in
+             (("Quickstep", "utility", 5.0), ("Endure", "utility", 4.0), ("Storm Blade", "bullet", 3.0),
+              ("Storm Blade", "bullet", 2.9), ("Bloody Slash", "non-bullet", 2.0), ("Lion's Claw", "non-bullet", 1.0),
+              ("Wild Strikes", "non-bullet", 0.9), ("Glintblade Phalanx", "bullet", 0.8), ("Repeating Thrust", "non-bullet", 0.7))]
+    row, cands = crit_copies("Misericorde", "Fire", cpool, lambda n: n != "Bloody Slash", "crit")
+    check("crit row: five distinct mountable ashes on the crit affinity, one step at most",
+          sorted((x["ash"], x["affinity"]) for x in row),
+          sorted((n, "Fire") for n in ("Quickstep", "Storm Blade", "Lion's Claw", "Wild Strikes", "Glintblade Phalanx")))
+    check("crit row: damaging copies first", [x["cat"] for x in row][-1], "utility")
+    check("crit candidates: every distinct mountable ash", len(cands), 7)
+    print("selftest:", "FAIL" if bad else "ok")
+    return 1 if bad else 0
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--selftest"]:
+        return selftest()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("rows", type=Path, nargs="+", help="one or more er-mechanics-ash-table.py --json sweeps")
     ap.add_argument("--out", type=Path, required=True)
@@ -1664,6 +1994,8 @@ def main() -> int:
                     help="er-mechanics-weapon-embed.py output: each weapon's R1 #1 reach per grip for `reach_w` "
                          "(default: the roles' reach, the longer grip's)")
     ap.add_argument("--ranged-cache", type=Path, default=RANGED_CACHE)
+    ap.add_argument("--stage-times", type=Path, default=STAGE_TIMES,
+                    help="each stage's duration, read for the watcher's estimate and written at the end")
     ap.add_argument("--counter-cache", type=Path, default=COUNTER_CACHE,
                     help="successive-counter rates of weapons and ash casts (`set_multihit_weights`)")
     ap.add_argument("--pierce-cache", type=Path, default=PIERCE_CACHE,
@@ -1699,6 +2031,8 @@ def main() -> int:
                     help="with --perfect-block: apply `bmult` (default on)")
     ap.add_argument("--interrupt-poise", type=float, help="my poise (default: the worn armor's)")
     ap.add_argument("--interrupt-jobs", type=int, default=6)
+    ap.add_argument("--crit-weapon", default=CRIT_WEAPON,
+                    help="weapon of the crit row, on its best riposte and backstab affinity ('' for none)")
     ap.add_argument("--rank-terms", type=Path,
                     help="write each ash's best-value copy and the terms its `value` multiplies (JSON)")
     ap.add_argument("--throttle", action=argparse.BooleanOptionalAction, default=True,
@@ -1706,6 +2040,8 @@ def main() -> int:
     a = ap.parse_args()
     if a.throttle:
         _ai().throttle(_ai().allowed_cpus()[:1])
+    stage = Stages(a.stage_times)
+    stage("rows")
     # The sweep already drops blacklisted ashes; reading the list again keeps a sweep made before an
     # entry was added from bringing it back.
     blacklist = tomllib.loads(BLACKLIST.read_text())
@@ -1741,7 +2077,12 @@ def main() -> int:
               f"(first hit <= f{last_first}, reach > {min_reach} m)", file=sys.stderr)
     r1 = r1_reaches(json.loads(a.roles.read_text()) if a.roles else None, a.embed)
     traits = weapon_traits(a.embed)
-    weigh(rows, a, r1, build_stats, report=True)
+    weigh(rows, a, r1, build_stats, report=True, stages=stage)
+    stage("own status")
+    own_status = ash_own_status(rows, build_stats, a.ranged_cache)
+    print("own status: " + (", ".join(f"{n} {'/'.join(sorted(v))}" for n, v in sorted(own_status.items()) if v)
+                            or "no ash builds a status of its own"), file=sys.stderr)
+    stage("rank")
     for w in a.terms_weapon:
         for x in sorted((x for x in rows if x["weapon"] == w), key=lambda x: -value(x)):
             print(f"terms {w}: {x['affinity']} {x['grip']} {x['ash']}: value {value(x):.0f} = raw "
@@ -1776,6 +2117,10 @@ def main() -> int:
             "string": x.get("string")} for n, x in top.items()}, indent=1))
     cut_rows = [x for x in rows if x["ash"] in cut]
     rows = [x for x in rows if x["ash"] not in cut]
+    # The crit weapon's copies before the role filter below, which drops a weapon no class role
+    # picked.
+    crit_pool = [x for x in rows if x["weapon"] == a.crit_weapon] if a.crit_weapon else []
+    stage("layout")
     roles = json.loads(a.roles.read_text()) if a.roles else None
     if roles and a.build:
         keep = {unicodedata.normalize("NFKD", s["name"]).encode("ascii", "ignore").decode()
@@ -1813,6 +2158,10 @@ def main() -> int:
         vals = sorted((v for v in per_ash.values() if v > 0), reverse=True)
         ref[c] = vals[min(NORM_RANK, len(vals)) - 1] if vals else 1.0
     for x in rows + near_rows:
+        x["norm"] = x["value"] / ref[x["cat"]]
+    for x in crit_pool:
+        x.setdefault("affinity", "Standard")
+        x["value"] = value(x)
         x["norm"] = x["value"] / ref[x["cat"]]
 
     spec = importlib.util.spec_from_file_location("er_mechanics_ar", HERE / "er-mechanics-ar.py")
@@ -2289,6 +2638,34 @@ def main() -> int:
             slots.append(s)
         return start
 
+    stage("crit")
+    crit_cands = []
+    if a.crit_weapon:
+        ranked = crit_affinities(a.crit_weapon, build_stats)
+        print(f"Crit: {a.crit_weapon} riposte + backstab per affinity: "
+              + (", ".join(f"{aff} {rp:.0f}+{bs:.0f}" for aff, rp, bs in ranked) or "none wieldable"), file=sys.stderr)
+        if ranked:
+            aff, rp, bs = ranked[0]
+            t = _table_mod().A.AshTables()
+            gems, wid = t.ash_gems(), t.find_weapon(a.crit_weapon)
+            top = tables.max_level(t.reg.weapon[wid]["reinforceTypeId"])
+
+            def mountable(ash):
+                try:
+                    gem = gems.get(t.find_arts(ash))
+                except (SystemExit, KeyError):
+                    return False
+                return gem is not None and t.can_mount(wid, gem, AR.AFFINITIES.index(aff), top)[0]
+            row, crit_cands = crit_copies(a.crit_weapon, aff, crit_pool, mountable,
+                                          f"crit: {aff} riposte {rp:.0f}, backstab {bs:.0f}")
+            if row:
+                place_row(f"Crit ({aff} {a.crit_weapon}, the affinity with the best riposte and backstab)", row)
+                print(f"Crit: {aff} {a.crit_weapon}: " + ", ".join(f"{x['ash']} {x['value']:.0f}" for x in row),
+                      file=sys.stderr)
+            else:
+                print(f"Crit: no {a.crit_weapon} copy in the sweeps mounts on {aff}", file=sys.stderr)
+
+    stage("shields")
     if a.shields and build and main_w:
         rs = row_start["Combos", main_w]
         main_aff = slots[rs]["affinity"]
@@ -2301,6 +2678,7 @@ def main() -> int:
             extra_sets.append({"name": f"Shield: {main_w} + {best['weapon']}", "right": [rs],
                                "left": [start + k]})
             print(f"Shields: corpus {summary}", file=sys.stderr)
+    stage("ranged")
     if a.ranged and build:
         main_reach = r1.get((main_w, "1H")) if main_w else None
         copies, ammo = ranged_copies(build, build_stats, main_reach)
@@ -2308,6 +2686,7 @@ def main() -> int:
             place_row("Ranged (the viable picks, each with its own skill or assigned ash; the seal)", copies)
         greatbow = next((c for c in copies if c["note"].startswith("greatbow:")), None)
 
+    stage("fun and sets")
     # Fun: each class's fun picks (`er-mechanics-class-roles.py`: a mechanic few weapon, affinity
     # and ash options in the whole game have, carried by the class's strongest wieldable vector),
     # one copy each, class by class, rarest first, skipping a copy already placed above (user,
@@ -2521,6 +2900,7 @@ def main() -> int:
     # within `PARTNER_ROWS` rows. When none is there, the partner's best copy takes the lowest-value
     # slot of the weapon's row that is not an equip set's, a landmark or page, a shield or ranged
     # pick, or the last copy of its weapon.
+    stage("partners")
     if a.embed:
         P = Partners(json.loads(a.embed.read_text()), tables)
         in_set = {i for s in sets for hand in ("right", "left") for i in s[hand]}
@@ -2590,6 +2970,24 @@ def main() -> int:
         for m in missing:
             print(f"Partner: none for {m}", file=sys.stderr)
 
+    # Last before writing, so a partner copy placed above is held to the same rule.
+    stage("redundant status")
+    crit_theme = next((t for t, _ in layout if t.startswith("Crit")), None)
+
+    def pool_of(s):
+        if s["theme"] == crit_theme:
+            return crit_cands
+        return by_weapon.get(s["weapon"], []) + near_by_weapon.get(s["weapon"], [])
+    shares, dropped, log = drop_redundant_status(slots, own_status, traits, pool_of, slot)
+    print("status shares of the weapon copies: " + ", ".join(f"{k} {v:.1%}" for k, v in sorted(shares.items())),
+          file=sys.stderr)
+    for st_name, ashes in sorted(dropped.items()):
+        print(f"dropped for {st_name} (over {OWN_STATUS_SHARE:.0%} of copies carry it): {', '.join(ashes)}",
+              file=sys.stderr)
+    for line in log:
+        print(f"  {line}", file=sys.stderr)
+
+    stage("write")
     a.out.write_text(json.dumps({"slots": slots, "sets": sets, **({"ammo": ammo} if ammo else {})}, indent=1))
     print(f"{len(slots)} slots, {len(slots) // ROW} rows, {-(-len(slots) // PAGE)} pages, {len(sets)} equip sets -> {a.out}")
     if ammo:
@@ -2601,6 +2999,7 @@ def main() -> int:
     if a.html:
         a.html.write_text(render(slots, layout))
         print(a.html)
+    stage.finish()
     return 0
 
 

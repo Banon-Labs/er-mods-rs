@@ -354,11 +354,19 @@ RECENT_TURNS = 10
 # `<task-notification>`. Treating that immediate acknowledgement as the result is what makes a guard
 # think a running job has finished -- measured on a real transcript, where "Command running in
 # background with ID: ..." was read as completion and the still-running job stopped covering the turn.
+#
+# The acknowledgement is the whole result and it opens with the harness's sentence, so the phrase has
+# to be found there and not anywhere in the text. Measured 2026-10-19: a foreground `sed` printing
+# this very regex out of this file returned output containing "moved to the background", was booked
+# as a Bash still running, and kept every later turn "blocked on a background task" -- the verbose-
+# pause guard then halted a closing message with nothing running at all. An acknowledgement opens
+# with "Command ..." (backgrounded, timed out, or backgrounded by the user) or "Async agent ...".
 BACKGROUND_LAUNCH_RE = re.compile(
-    r"async agent launched|agentId:"
-    r"|command running in background|running in background with id"
-    r"|moved to the background"
-    r"|you will be notified when it completes",
+    r"\A\s*(?=(?:command|async\s+agent)\b)[^\n]{0,200}?"
+    r"(?:async agent launched|agentId:"
+    r"|running in background|running in background with id"
+    r"|moved to the background|manually backgrounded"
+    r"|you will be notified when it completes)",
     re.IGNORECASE,
 )
 
@@ -612,9 +620,14 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
 # ID: bx1"), a foreground Bash the harness moved after its timeout ("moved to the background (ID:
 # bx1)"), one the user backgrounded by hand ("manually backgrounded by user with ID: bx1"), and a
 # Monitor ("Monitor started (task bm1, ...").
+#
+# Anchored to the start of the result for the reason BACKGROUND_LAUNCH_RE is: on 2026-10-19 a grep
+# that printed test fixtures ("... Command running in background with ID: bx1 ...") booked bx1 and
+# bd12ab as tasks this session started, and the Stop hook demanded they be stopped or explained.
 RUNNING_TASK_LAUNCH_RE = re.compile(
-    r"(?:running in background|moved to the background|backgrounded by user)[^\n]*?\bID:\s*([A-Za-z0-9_-]+)"
-    r"|\bmonitor\s+started\s*\(\s*task\s+([A-Za-z0-9_-]+)",
+    r"\A\s*(?:(?=command\b)[^\n]*?(?:running in background|moved to the background|backgrounded by user)"
+    r"[^\n]*?\bID:\s*([A-Za-z0-9_-]+)"
+    r"|monitor\s+started\s*\(\s*task\s+([A-Za-z0-9_-]+))",
     re.IGNORECASE,
 )
 

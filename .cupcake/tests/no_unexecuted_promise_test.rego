@@ -69,6 +69,35 @@ test_halt_is_high_severity if {
 	d.severity == "HIGH"
 }
 
+# The signal's counted form renders the message the way the user reads it: the sentence, with the
+# size of the prose on either side.
+test_reason_renders_the_skeleton if {
+	halts := guard.halt with input as stop_event("PROMISE:120:45:I'll re-run the gate.")
+	some d in halts
+	contains(d.reason, "<120 characters of prose> 'I'll re-run the gate.' <45 characters of prose>")
+	not contains(d.reason, "120:45")
+}
+
+# A side with no prose is left out instead of rendered as "<0 characters of prose>".
+test_skeleton_omits_an_empty_side if {
+	halts := guard.halt with input as stop_event("PROMISE:0:30:I'll re-run the gate.")
+	some d in halts
+	contains(d.reason, "'I'll re-run the gate.' <30 characters of prose>")
+	not contains(d.reason, "<0 characters")
+}
+
+# The 2026-10-19 shape: a handoff the reader reaches only after a paragraph. It halts under the same
+# rule, and the correction is about moving the ask, not about finding a phrase the regex accepts.
+test_buried_handoff_halts_and_says_move_it_first if {
+	halts := guard.halt with input as stop_event("BURIED:212:96:Reply authorize 75a188c0 and I'll close the game and push from the clean checkout.")
+	"ER-EFFECTS-NO-UNEXECUTED-PROMISE" in rule_ids(halts)
+	some d in halts
+	contains(d.reason, "<212 characters of prose> 'Reply authorize 75a188c0 and I'll close the game and push from the clean checkout.' <96 characters of prose>")
+	contains(d.reason, "FIRST sentence")
+	contains(d.reason, "after 212 characters")
+	not contains(d.reason, "EXECUTE IT")
+}
+
 # Clean turn (the signal found no violation, or found one of the four exemptions) -> no halt.
 test_no_halt_on_clean_turn if {
 	halts := guard.halt with input as stop_event("")

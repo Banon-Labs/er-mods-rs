@@ -25,7 +25,12 @@
 #      inspecting can be up for an hour, and the promise is deferred behind it, not carried by it;
 #   4. the message does not hand the obligation to the user -- no question, no blocker statement, no
 #      "once you've X", no "I'll need you to Y", no "next session".
-# Emitted as  PROMISE:<the offending clause>  ; empty when the turn is clean.
+# Emitted as  PROMISE:<before>:<after>:<the offending sentence>  ; empty when the turn is clean.
+#
+# A fifth verdict, BURIED:<before>:<after>:<sentence>, is the handoff that the reader never reaches:
+# fact 4 holds, but the promising sentence is not the message's first sentence. <before> and <after>
+# are the characters of prose on either side of it, which the halt renders back to the agent so it
+# sees its message the way the user reads it.
 #
 # Biased hard toward not firing, on purpose. A guard that cries wolf gets ignored, which is worse than
 # no guard. Three deliberate narrowings:
@@ -72,9 +77,17 @@ final = turn.blocks[idx][1]
 # Strip fenced code, inline-backticked spans and double-quoted spans before prose matching, so
 # quoting the ban does not count as committing it. Single quotes are left alone: the phrases
 # themselves contain apostrophes (I'll / I'm).
-scrubbed = re.sub(r"```.*?```", " ", final, flags=re.DOTALL)
-scrubbed = re.sub(r"`[^`]*`", " ", scrubbed)
-scrubbed = re.sub(r'"[^"]*"', " ", scrubbed)
+#
+# The blanking keeps every offset, so a position found in `scrubbed` is the same position in `final`.
+# That is what lets the halt quote the sentence as the agent wrote it -- `authorize <sha>` and all --
+# and measure how much prose sits on either side of it.
+def blank(m):
+    return re.sub(r"[^\n]", " ", m.group(0))
+
+
+scrubbed = re.sub(r"```.*?```", blank, final, flags=re.DOTALL)
+scrubbed = re.sub(r"`[^`]*`", blank, scrubbed)
+scrubbed = re.sub(r'"[^"]*"', blank, scrubbed)
 
 # --- (1) first-person future commitment --------------------------------------------------------
 # The openers an assistant actually uses to commit itself. "let's" is deliberately absent: it
@@ -203,13 +216,28 @@ def committed_verb(tail):
     return None
 
 
-def clause(text, start):
-    """The offending sentence, collapsed and clipped, for quoting back at the agent."""
+def sentence_span(text, at):
+    """Start and end of the sentence holding offset `at`, found in the scrubbed text.
+
+    The start matters as much as the end. A promise is often the second half of an ask --
+    "Reply `authorize <sha>` and I'll push" -- and quoting from the opener alone hands the agent
+    "I'll push", which hides the half that made it a handoff.
+    """
+    start = 0
+    for m in re.finditer(r"[.!?\n]", text[:at]):
+        start = m.end()
+    while start < at and text[start].isspace():
+        start += 1
     end = len(text)
-    for m in re.finditer(r"[.!?\n]", text[start:]):
-        end = start + m.start() + 1
+    for m in re.finditer(r"[.!?\n]", text[at:]):
+        end = at + m.start() + 1
         break
-    return " ".join(text[start:end].split())[:110]
+    return start, end
+
+
+def clause(start, end):
+    """The offending sentence as written, collapsed and clipped, for quoting back at the agent."""
+    return " ".join(final[start:end].split())[:160]
 
 
 # The last committing sentence, not the first. Which one fires is unchanged either way -- any one of
@@ -220,12 +248,31 @@ def clause(text, start):
 # message ("why I'm not guessing | I'm re-running it with..."), which is a worse instruction to hand
 # back. Broadening the opener set makes an early incidental match likelier; taking the last one
 # cancels that out.
+# "let me" is only an opener when the agent is the one speaking it. "the guard won't let me retry it"
+# reports a refusal and promises nothing; it fired on a real turn, found by the false-positive audit on
+# 2026-10-19. A negated or third-party "let" in front is that shape.
+REFUSED_LET_RE = re.compile(
+    r"(?:\b(?:not|never|won['’]?t|wouldn['’]?t|doesn['’]?t|didn['’]?t|can['’]?t|cannot|couldn['’]?t"
+    r"|refuses?\s+to|refused\s+to)\s+)$",
+    re.IGNORECASE,
+)
+
 promise = None
 for m in OPENER_RE.finditer(scrubbed):
+    if m.group(0).lower().startswith("let") and REFUSED_LET_RE.search(scrubbed[max(0, m.start() - 30):m.start()]):
+        continue
     if committed_verb(scrubbed[m.end():m.end() + 120]):
-        promise = clause(scrubbed, m.start())
+        span = sentence_span(scrubbed, m.start())
+        promise = clause(*span)
 if not promise:
     sys.exit(0)
+
+# How much prose surrounds the promising sentence. The halt renders the message back to the agent as
+# `<before characters of prose> '<sentence>' <after characters of prose>`, which is how the user reads
+# it: from the first word, giving up when it stops being worth it. Counted on the written message, so
+# a backticked command counts as the characters the reader has to get through.
+before = len(final[:span[0]].strip())
+after = len(final[span[1]:].strip())
 
 # --- (4) the obligation was handed to the user -------------------------------------------------
 # A question, a stated blocker, a dependency on something the user must do, or an explicit
@@ -244,6 +291,10 @@ HANDOFF_RE = re.compile(
     r"|\byou\s+(?:need|have)\s+to\b"
     r"|\bneed\s+you\s+to\b|\bneed\s+the\s+user\s+to\b"
     r"|\blet\s+me\s+know\b|\btell\s+me\b|\bping\s+me\b|\bcome\s+back\s+to\s+me\b"
+    # An imperative reply request -- "Reply `authorize <sha>` and I'll push" -- is the plainest
+    # hand-off there is, and the regex missed it until 2026-10-19. Sentence-initial only, so the
+    # agent narrating its own "reply" (a SendMessage, a PR comment) is not read as an ask.
+    r"|(?:^|[.!?\n]\s*)reply\b"
     r"|\byour\s+call\b|\bsay\s+the\s+word\b|\bup\s+to\s+you\b"
     r"|\bre-?initiate\b|\bre-?ask\b|\bask\s+me\s+again\b|\bask\s+again\b"
     r"|\bnext\s+(?:session|turn|time)\b|\bfollow-?up\s+turn\b"
@@ -252,7 +303,23 @@ HANDOFF_RE = re.compile(
     r"|\bneeds?\s+(?:you|your)\b",
     re.IGNORECASE,
 )
+#
+# A handoff only counts when the reader reaches it. Measured 2026-10-19: a turn closed on "Reply
+# `authorize <sha>` and I'll close the game and push", the guard fired, and the rewrite that got
+# through kept that sentence word for word and added "the next step is yours" in front of a paragraph
+# of explanation. The handoff phrase matched and the ask was still buried behind ~200 characters
+# of prose, with more after it. So a handoff exempts the promise only when the promising sentence is
+# the message's first sentence. Otherwise the verdict is `BURIED`, which tells the agent to move the
+# ask to the front rather than to find a phrase this regex accepts.
+#
+# Only an ask can be buried. Several exemptions are not asks at all -- "next time I'll wire it before
+# the scan" is a lesson, and it stays exempt wherever it sits -- so `BURIED` needs the promising sentence
+# itself to address the user: a reply request, a question, or a "you".
+USER_ASK_RE = re.compile(r"(?:^|[.!?\n]\s*)reply\b|\?|\byou(?:r|['’]\w+)?\b", re.IGNORECASE)
 if HANDOFF_RE.search(scrubbed) or scan.blocked_on_user(scrubbed):
+    if before == 0 or not USER_ASK_RE.search(scrubbed[span[0]:span[1]]):
+        sys.exit(0)
+    sys.stdout.write(f"BURIED:{before}:{after}:{promise}")
     sys.exit(0)
 
 # --- (3) something is already carrying it ------------------------------------------------------
@@ -274,5 +341,5 @@ live = scan.live_background_work(events)
 if live and (live.watcher or WAITS_ON_RESULT_RE.search(scrubbed)):
     sys.exit(0)
 
-sys.stdout.write("PROMISE:" + promise)
+sys.stdout.write(f"PROMISE:{before}:{after}:{promise}")
 PY

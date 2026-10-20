@@ -181,7 +181,14 @@ def pool_reaches(pool_raw: dict, cache: bool = True) -> dict:
     ids = ex.weapon_ids()
     reg = atk_mod.Regulation(None)
     out = {}
-    for key in sorted(pool_raw["profiles"]):
+    keys = sorted(pool_raw["profiles"])
+    # A rebuild is minutes of reach measuring (2.5 on 2026-10-14) inside a caller's quiet stretch;
+    # the counter is what `er-mechanics-pipeline-watch.py` shows for it.
+    print(f"opponent pool reaches: measuring {len(keys)} weapons ({path.name} is stale or missing)",
+          file=sys.stderr, flush=True)
+    for i, key in enumerate(keys, 1):
+        if i % 10 == 0 or i == len(keys):
+            print(f"  {i}/{len(keys)} pool weapons", file=sys.stderr, flush=True)
         name, grip = key.rsplit("|", 1)
         wid = ids.get(name)
         if wid is None:

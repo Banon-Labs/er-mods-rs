@@ -173,10 +173,11 @@ fn write_loading_screen_live_oracles(
         "oracle_tip_advance_suppressed_hits",
         KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.load(Ordering::SeqCst),
     );
-    // `scaleform_desc_guard_installed` = the descriptor-heap null-guard detour is live;
-    // `scaleform_desc_provider_null_hits` = advances we skipped because the provider was null
-    // (the exact condition that AVs at deobf 0x140ec95d1 / rva 0xec95d1). A non-zero hit count is
-    // direct evidence the guard caught the crash condition. (er-effects-rs-y22i.)
+    // `scaleform_desc_guard_installed` = the descriptor-ring page-roll mid hook is armed;
+    // `scaleform_desc_provider_null_hits` = page rolls it diverted because the ring had no current
+    // page (the exact condition that AVs at deobf 0x140ec95d1 / rva 0xec95d1). Fast-path advances
+    // are not counted: they never read the page and run unchanged. A non-zero count is direct
+    // evidence the hook caught the crash condition. (er-effects-rs-y22i, er-effects-rs-7xbs.1.)
     push_json_usize(
         body,
         "oracle_scaleform_desc_guard_installed",

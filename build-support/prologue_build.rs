@@ -317,7 +317,9 @@ impl Image {
     fn bytes_at(self, image: &[u8], va: u64, len: usize) -> Option<Vec<u8>> {
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => usize::try_from(rva).ok()?,
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
+                usize::try_from(rva).ok()?
+            }
             Self::Ersc201 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
         };
         image
@@ -359,7 +361,9 @@ impl Image {
         // would abort a build script over a file this repo does not control.
         let ranges: Vec<(usize, usize, u64)> = match self {
             // Flat: file offset == RVA for every section, so one range covers the image.
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => vec![(0, image.len(), 0)],
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
+                vec![(0, image.len(), 0)]
+            }
             Self::Ersc201 => pe_sections(image)
                 .into_iter()
                 .filter(|section| {

@@ -1,0 +1,10 @@
+Andre.SoulsFormats FLVER2 (Smithbox binary install ~/.local/share/smithbox/app, .NETCoreApp v9.0, run natively on dotnet 10.0.12) against FC_M_0000.flver:
+read: version 0x2001A meshes 42 materials 42 nodes 389 layouts 4 gxlists 2
+mesh13: vertices 1500, face sets 00000000:7494,01000000:2034,02000000:576,80000000:7494,81000000:2034,82000000:576
+roundtrip FLVER2.Write(FLVER2.Read(donor)): 1826832 bytes, identical except header 0x40..0x42 (From writes 45821 = faces in non-motion-blur face sets, Andre writes 91670 = all faces)
+grown13 (mesh 13 forced to 2607 vertices, LOD0/1/2 = 3267/1977/652 triangles, MB twins equal): 1914768 bytes; dataOffset unchanged 0x1FDB0; dataLength 0x1B39E0
+header-region bytes changed by growing: header 0x10, 0x40, 0x44; face sets 78-83 (+0x08 count, +0x10 byte length); face sets 79-241 (+0x0C offset); vb13 (+0x0C count, +0x18 length, +0x1C offset); vb14-41 (+0x1C offset). Nothing else in 0x0..0x1FDB0 changed.
+fs78 offset 0x749A0 (unchanged), fs84 offset 0x91850 -> 0xA6FD0; vb13 = (0,2,52,2607,0,0,135564,548416)
+Oracle source: tools/flver-andre-oracle (`probe` mode; first run from the investigation scratchpad); outputs roundtrip.flver, grown13.flver (game-derived, scratch only)
+odd-tail probe (grown13 plus one 40-byte vertex on mesh 41, so the last buffer ends off 16): file 1914816 bytes, dataLength 0x1B3A10 (= 0x1B39E0 + 40 rounded up to 16), dataOffset+dataLength = file length: the writer pads the data section's tail to 16 and counts the pad in dataLength.
+data layout model (checked by script against both the donor and grown13, 0 mismatches): for each mesh in mesh-table order, each face set in the mesh's face-set list order at the next 16-byte boundary (byteLength = count*2), then the mesh's vertex buffer at the next 16-byte boundary (byteLength = count*vertexSize); dataLength = end rounded up to 16.

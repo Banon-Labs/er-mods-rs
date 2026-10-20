@@ -30,6 +30,12 @@ aes = "0.8"
 er-tpf = { path = "../../crates/er-tpf" }
 miniz_oxide = "0.8"
 num-bigint = "0.4"
+# `hash-package` and the parity tests fingerprint package files and binder entries.
+sha2 = "0.10"
+
+[dev-dependencies]
+# A second, independent FLVER parser for the rebuild writer's output.
+er-flver = { path = "../../crates/er-flver" }
 
 [lints]
 workspace = true

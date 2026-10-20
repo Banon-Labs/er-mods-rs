@@ -72,6 +72,9 @@
 0x142025160	0x142026f60	IDENTICAL-LEAF	1.000	26	hand-derived 2026-10-06: lua_settop(L, idx); 1.17.1 0x142026fd0	NEITHER-ENTRY	LEAF:0x54/0x54
 0x1420260c0	0x142027ec0	BYTE-IDENTICAL	1.000	36	hand-derived 2026-10-06: luaL_loadbuffer(L, buf, size, name); 1.17.1 0x142027f30	BOTH-ENTRIES	PDATA:0x24/0x24
 0x142025390	0x142027190	BYTE-IDENTICAL	1.000	126	hand-derived 2026-10-06: lua_tostring(L, idx); 1.17.1 0x142027200	BOTH-ENTRIES	PDATA:0x7e/0x7e
+0x140777380	0x140778200	IDENTICAL-WHOLE	1.000	762	hand-derived 2026-10-19 (verify-rva-map-1170.py --map of this one pair): FUN_140777380, the friendly tag producer (CSFeManImp+0x5c60 ChrFriendlyTagEntry[7]); er-npc-summons mid hooks at +0x2f8 and +0x607, resume +0x31c. Below 0xafefe9	BOTH-ENTRIES	PDATA:0xd71/0xd71
+0x140449280	0x1404497e0	IDENTICAL-WHOLE	1.000	311	hand-derived 2026-10-19 (verify-rva-map-1170.py --map of this one pair): CS::CSChrDamageModule::UpdateUI; er-npc-summons mid hook at +0x26e, resume +0x375. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x542/0x542
+0x140cba510	0x140cbbbe0	IDENTICAL-WHOLE	1.000	93	hand-derived 2026-10-19 (verify-rva-map-1170.py --map of this one pair): CSSessionManager voice-chat lookup (this, u32* out, PlayerIns*); er-npc-summons entry detour. 1.17.1 0x140cbbc50 (+0x70 above 0xafefe9)	BOTH-ENTRIES	PDATA:0x15c/0x15c
 0x1404bb580	0x1404bbaa0	IDENTICAL-WHOLE	1.000	62	hand-derived 2026-10-06: CS::SummonBuddyManager::RemoveChrIns; +0x520 region. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x11c/0x11c
 0x1404c21d0	0x1404c26f0	BYTE-IDENTICAL	1.000	79	hand-derived 2026-10-06: FUN_1404c21d0(manager+0xe8, handle), the summon warp-tracking removal. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x4f/0x4f
 0x140507c80	0x140508a50	BYTE-IDENTICAL	1.000	27	hand-derived 2026-10-06: CS::WorldChrManImp::GetChrInsFromHandle(WorldChrManImp*, FieldInsHandle*) -> ChrIns*; +0xdd0 region, same 9-instruction body. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x1b/0x1b

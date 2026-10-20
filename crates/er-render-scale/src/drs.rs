@@ -33,7 +33,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::game_build::{MAPPED_FILE_VERSION_1171, game_file_version};
+use er_game_base::game_build::{carry_1171_rva, game_file_version};
 use er_game_base::mem::{
     game_data_addr, game_module_base, read_bytes, safe_read_f32, safe_read_u8, safe_read_usize,
 };
@@ -300,12 +300,14 @@ pub fn install() -> Result<(), String> {
     if INSTALLED.load(Ordering::Acquire) {
         return Ok(());
     }
-    if game_file_version() != Some(MAPPED_FILE_VERSION_1171) {
+    // Measured on 1.17.1 and carried from there by the segment table; the opening bytes are
+    // compared below before anything is hooked.
+    let Some(rva) = carry_1171_rva(DRS_UPDATE_1171_RVA) else {
         return refuse(format!(
-            "the game is {:?}, and the update was measured on 1.17.1 only",
+            "the game is {:?}, and the update measured on 1.17.1 has no carry to it",
             game_file_version()
         ));
-    }
+    };
     let base = match game_module_base() {
         Ok(base) => base,
         Err(error) => return refuse(error),
@@ -329,9 +331,7 @@ pub fn install() -> Result<(), String> {
     }
     GXRS_GLOBAL.store(gxrs_global, Ordering::Release);
     CTX_GLOBAL.store(ctx_global, Ordering::Release);
-    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
-    // the opening bytes are compared below before anything is hooked.
-    let entry = base + DRS_UPDATE_1171_RVA;
+    let entry = base + rva;
     let mut bytes = [0u8; DRS_UPDATE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
