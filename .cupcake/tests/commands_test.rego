@@ -533,3 +533,43 @@ test_shell_program_by_name_and_by_path if {
 	not commands.shell_program("check.sh")
 	not commands.shell_program("bashrc")
 }
+
+# --- command substitution only counts where the shell runs it (2026-10-19) --------------------
+
+# A backtick or `$(` inside single quotes is a literal character, so the text is neutralised as
+# usual and quoted prose loses its separators and its backticks.
+test_backtick_in_single_quotes_is_neutralised if {
+	commands.executed_texts("bd note 'a `b`; c'") == {"bd note 'a  b   c'"}
+}
+
+test_dollar_paren_in_single_quotes_is_neutralised if {
+	commands.executed_texts("echo 'x $(y); z'") == {"echo 'x $ y   z'"}
+}
+
+# A substitution the shell would run keeps the text raw.
+test_unquoted_backtick_keeps_raw_text if {
+	commands.executed_texts("echo `a; b`") == {"echo `a; b`"}
+}
+
+test_backtick_in_double_quotes_keeps_raw_text if {
+	commands.executed_texts("echo \"`a; b`\" 'c'") == {"echo \"`a; b`\" 'c'"}
+}
+
+# Quote parity alone would pair the apostrophe inside the first double-quoted span with a real
+# quote later and call this unquoted backtick quoted. The tokenising match does not.
+test_apostrophe_in_double_quotes_cannot_hide_a_backtick if {
+	text := "echo \"'\" 'a' `x; y` 'b' \"'\""
+	commands.executed_texts(text) == {text}
+}
+
+# Inside an unquoted heredoc body a single quote is literal and a backtick still runs.
+test_heredoc_with_backtick_keeps_raw_text if {
+	text := "cat > f <<EOF\n'`x; y`'\nEOF"
+	commands.executed_texts(text) == {text}
+}
+
+# `$'...'` is not modelled, so it keeps the raw text.
+test_ansi_c_quote_with_backtick_keeps_raw_text if {
+	text := "echo $'a' `x; y`"
+	commands.executed_texts(text) == {text}
+}

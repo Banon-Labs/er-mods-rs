@@ -29,6 +29,41 @@ A long command goes in a file passed as `--command-file <path>`: a `git push && 
 create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
 The Stop hook refuses a closing message that carries a shell code block.
 
+## Every push gets a kitty tab that follows it (user request 2026-10-19)
+
+An authorized `git push` runs in the background, because the pre-push hook runs the whole check
+suite. Right after starting it, open a tab that shows it to the user:
+
+```bash
+python3 scripts/kitty-tail-push.py --log <the push task's output file> --title 'push <branch>'
+```
+
+The tab follows the log with `tail --pid` on the newest `git push` process (or `--pid <n>`), so it
+lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
+output, waits 5 seconds, and closes. `--selftest` covers the verdict and the tab script's quoting.
+Close Elden Ring before pushing: check.sh refuses while it runs.
+
+## A long background build is tailed in a kitty tab (user directive 2026-10-19)
+
+When the agent starts a long background build -- a duel or invasion build from
+`scripts/er-weapon-build.py`, or any other pipeline run the user will want to follow -- it opens a
+kitty tab that tails the task's output until the task's process exits, and closes 5 seconds
+later. The agent opens it itself, in the same turn the task starts; the user runs nothing:
+
+```bash
+python3 scripts/kitty-tail-task.py --title 'duel build' \
+    --file <task output file> --match er-weapon-build.py --match '--fight duel'
+```
+
+The tab opens with `--keep-focus`, refuses when the match names no process or several, and is the
+user's view only: the agent still reads the outcome from the task's completion and its files. The
+`tail-build-task` skill carries the details. A board regeneration (`gen-r3-weapon-boards.py`) writes
+its progress to per-shard logs, so its tab is `python3 scripts/kitty-tail-task.py --boards --title
+boards --file <task output file>`, which follows those. The Stop guard
+`.cupcake/policies/claude/no_untailed_long_run.rego` halts a turn that backgrounded a run from its
+signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
+such a tab.
+
 ## A command written for the user is spelled absolutely
 
 Every command example in this file, and in every Cupcake block message, is written

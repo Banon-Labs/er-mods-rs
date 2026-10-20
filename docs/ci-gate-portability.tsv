@@ -310,6 +310,7 @@ portable	-	test-ask-without-receiver-signal.py	source/AST/text analysis only	pol
 portable	-	test-push-authorization-signal.py	fixture transcripts and a throwaway git repo; the cupcake end-to-end case skips when cupcake is absent	policy
 portable	-	test-commit-authorization-signal.py	fixture transcripts in a temp dir; the cupcake end-to-end cases skip when cupcake is absent	policy
 portable	-	test-unexplained-running-tasks-signal.py	source/AST/text analysis only	policy
+portable	-	test-untailed-long-run-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-inline-user-command-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-authorize-run-stamp-signal.py	a throwaway git repo with fixture run-root and game-dir logs, plus this checkout's own HEAD and worktree list; no game, no network	policy
 portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy
