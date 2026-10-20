@@ -103,8 +103,8 @@ pub(crate) fn publish(handles: &[u64]) {
     if n < COUNT.load(Ordering::Acquire) {
         COUNT.store(n, Ordering::Release);
     }
-    for (slot, handle) in HANDLES.iter().zip(handles) {
-        slot.store(*handle, Ordering::Release);
+    for (k, handle) in handles.iter().take(n).enumerate() {
+        HANDLES[k].store(*handle, Ordering::Release);
     }
     COUNT.store(n, Ordering::Release);
 }

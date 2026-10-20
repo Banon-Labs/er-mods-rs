@@ -23,6 +23,9 @@
 0x7ad810    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
 0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
 0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
+0x449280    exempt:role-alias         # DAMAGE_UPDATE_UI, DAMAGE_UPDATE_UI_VA  || er-npc-summons: build.rs VA assembles CSChrDamageModule::UpdateUI's enemy-bar window and shared tail; src addr.rs RVA is the containing function the mid hook resolves.
+0x777380    exempt:role-alias         # FRIENDLY_TAG_PRODUCER, FRIENDLY_TAG_PRODUCER_VA  || er-npc-summons: build.rs VA assembles the friendly tag producer's slot, colour and resume windows; src addr.rs RVA is the containing function the mid hooks resolve.
+0x3d65f88   exempt:role-alias         # WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_GLOBAL_VA  || er-npc-summons: build.rs VA is only the RIP operand of the MOV RCX,[WorldChrMan] it assembles to pin the tag-slot resume window; the runtime side stays centralised in er-game-base.
 0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
 0xb0d960    exempt:role-alias         # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
 0xd7f850    exempt:role-alias         # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SC  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
