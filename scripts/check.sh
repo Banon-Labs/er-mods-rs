@@ -265,6 +265,17 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 			exec 9<>"$_check_lock" || true
 		fi
 	fi
+	# A push waits its turn instead of refusing (user directive 2026-10-20: "whenever you need to
+	# push, you need to push with a command that waits until the lock is no longer held"). The
+	# pre-push hook sets ER_CHECK_WAIT_LOCK=1, so an authorized push that lands while another
+	# session's suite or DLL build holds the lock queues behind it rather than spending the
+	# authorization on a refusal. A live holder still gets the run it started; this one starts
+	# when it ends.
+	if [[ ${ER_CHECK_WAIT_LOCK:-} == 1 ]] && ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		echo "check.sh: waiting for $_check_lock (held by ${_holder:-an unrecorded pid}) before running." >&2
+		flock $_check_lock_mode 9
+	fi
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
 		_holder_what="no pid recorded"

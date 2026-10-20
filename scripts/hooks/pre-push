@@ -15,6 +15,10 @@ if [[ -t 2 && ${ER_CHECK_LIVE:-1} != 0 && ${TERM:-dumb} != dumb ]]; then
 fi
 cd "$repo_root"
 
+# A push queues on check.sh's machine-wide lock instead of being refused by it (see the
+# ER_CHECK_WAIT_LOCK block in scripts/check.sh). Exported, so the gate tree's check.sh sees it.
+export ER_CHECK_WAIT_LOCK=1
+
 # GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
 #
 # Measured with scripts/measure-git-hook-env.sh on git 2.55.0. From the MAIN checkout a pre-push
@@ -373,6 +377,11 @@ if [[ $need_gate_tree -eq 1 ]]; then
 	mkdir -p "$(dirname -- "$gate_tree")"
 	if command -v flock >/dev/null 2>&1; then
 		exec 8>"$gate_tree.lock"
+		# Queue behind another push gating in the same tree, as check.sh queues on its own lock.
+		if ! flock -n 8; then
+			printf 'pre-push: waiting for the push already gating in %s.\n' "$gate_tree" >&2
+			flock 8 || true
+		fi
 		if ! flock -n 8; then
 			printf 'pre-push: REFUSED -- another push is already gating a commit in %s.\n' "$gate_tree" >&2
 			printf '  Wait for that push and read its result; this one would re-pin the same tree\n' >&2
