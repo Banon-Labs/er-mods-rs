@@ -58,6 +58,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 ///
 /// Its sense is inverted against its name: both callers refuse when it returns false, so true means
 /// "breaking in is permitted in this region".
+///
+/// A 1.17.1 rva, carried with `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`. On 2.7.2.0 it
+/// is `0xa61e40`: a `.pdata` entry of the same `0x1e` length whose bytes differ only in its two
+/// call displacements, and both callers above carry (`0x657dc0` -> `0x658270`, `0x50a99b` ->
+/// `0x50ac1b`) to a `call` that lands on it.
 const IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA: u32 = 0xa6_1980;
 
 /// Trampoline to the original predicate, or the next handler in the union chain.
@@ -136,8 +141,17 @@ pub unsafe fn install() -> bool {
     if INSTALLED.load(Ordering::SeqCst) != 0 {
         return true;
     }
-    let Ok(entry) = er_game_base::mem::game_rva_for_hook(IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA)
-    else {
+    // Carried, not `game_rva_for_hook`: that is plain `base + rva`, and the runtime-derived hook
+    // API below translates nothing, so on 2.7.2.0 the detour would land `0x4c0` short.
+    let Some(entry) = er_game_base::mem::game_rva_measured_on(
+        IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA as usize,
+        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    ) else {
+        crate::standalone_log(format_args!(
+            "break-in region: IsBreakInLimitedByEventFlagId has no carry from 1.17.1 to {} -- \
+             zones vanilla flags non-pvp stay non-pvp",
+            er_game_base::game_build::describe_build()
+        ));
         return false;
     };
     // SAFETY: a four-argument dispatcher on a one-argument target, which is the established shape

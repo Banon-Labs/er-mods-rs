@@ -1161,6 +1161,13 @@ pub(crate) mod packet15_receive {
     /// Buffer base, 1.17 (`0x143d6a040`). The four fields moved as one block, delta `+0x4070`,
     /// which is why they are one base and fixed offsets rather than four constants per build.
     pub(crate) const BUFFER_RVA_1170: u32 = 0x03d6_a040;
+    /// Buffer base, 1.17.1: the same rva, because 1.17.1 moved no `.data`. Later builds reach it
+    /// through `er_game_base::mem::game_rva_measured_on`; on 2.7.2.0 it carries to `0x3d6d060`,
+    /// and the pump's five references to the buffer and its handle/damage fields in 1.17.1
+    /// (`0x50f48b`, `0x50f498`, `0x50f4a5`, `0x50f4b6`, `0x50f586`) carry to instructions in
+    /// 2.7.2.0 that reach exactly `0x3d6d060 + {0, 0x120, 0x128, 0x130}`, so the field offsets
+    /// below hold there too.
+    pub(crate) const BUFFER_RVA_1171: u32 = BUFFER_RVA_1170;
     /// The attacker's `P2PEntityHandle` (`blockId`, `chrSelector`), 8 bytes.
     pub(crate) const DEALER_HANDLE: usize = 0x120;
     /// The victim's `P2PEntityHandle`, 8 bytes. On a packet aimed at us this is our handle.
