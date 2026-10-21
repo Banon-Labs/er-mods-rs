@@ -129,6 +129,7 @@ def audit(path: str, home: str) -> tuple[int, list[tuple[int, str]]]:
         fixture.write_text("\n".join(chunk) + "\n", encoding="utf-8")
         proc = subprocess.run(
             ["bash", str(SIGNAL)],
+            input=json.dumps({"transcript_path": str(fixture)}),
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -169,7 +170,7 @@ def audit_fast(path: str, code: object, scan) -> tuple[int, list[tuple[int, str]
                 continue
             if isinstance(ev, dict):
                 events.append(ev)
-        scan.latest_transcript = lambda *a, **k: str(path)
+        scan.hook_transcript = lambda *a, **k: str(path)
         scan.load_events = lambda *a, **k: events
         captured = io.StringIO()
         real_stdout = sys.stdout

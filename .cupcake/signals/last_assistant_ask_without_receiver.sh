@@ -16,7 +16,7 @@
 # going to read, and the next turn would have started from the user saying "done".
 #
 # What counts as a receiver, read from the transcript (the Stop hook's `transcript_path`, which
-# cupcake hands to every signal on stdin; latest_transcript is the fallback):
+# cupcake hands to every signal on stdin, and nothing else -- see cupcake_turn_scan.hook_transcript):
 #   * a Monitor tool_use whose result said "Monitor started", with no finished
 #     `<task-notification>` for it and no TaskStop naming its task since;
 #   * a `run_in_background` Bash whose command waits for something and then exits -- an
@@ -50,15 +50,7 @@ try:
 except Exception:
     sys.exit(0)
 
-path = None
-try:
-    event = json.loads(os.environ.get("CUPCAKE_SIGNAL_EVENT") or "{}")
-    cand = event.get("transcript_path") if isinstance(event, dict) else None
-    if isinstance(cand, str) and os.path.isfile(cand):
-        path = cand
-except ValueError:
-    pass
-path = path or scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 

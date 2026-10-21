@@ -236,6 +236,46 @@ halt contains decision if {
 	}
 }
 
+# Enforcement: block turn-end when the closing prose admits a defect was left unfixed and the turn
+# wrote nothing. Same rule id as the diagnosis arm, because it is the same defect said outright.
+halt contains decision if {
+	input.hook_event_name == "Stop"
+	some clause in [admitted_unfixed]
+	decision := {
+		"rule_id": "ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX",
+		"reason": admitted_reason_for(clause),
+		"severity": "HIGH",
+	}
+}
+
+# Enforcement: block turn-end when the closing prose states a claim and admits it was not checked,
+# where the check needs no run.
+halt contains decision if {
+	input.hook_event_name == "Stop"
+	some clause in [unchecked_claim]
+	decision := {
+		"rule_id": "ER-EFFECTS-NO-UNCHECKED-CLAIM",
+		"reason": unchecked_reason_for(clause),
+		"severity": "HIGH",
+	}
+}
+
+admitted_reason_for(clause) := msg if {
+	msg := concat("", [
+		"You ended the turn saying a defect was left unfixed ('",
+		clause,
+		"') and changed no file. Answering the question does not discharge that: you said yourself the work is owed. Make the edit now. If it genuinely cannot be made yet, say in one line what blocks it.",
+	])
+}
+
+unchecked_reason_for(clause) := msg if {
+	msg := concat("", [
+		"You ended the turn on a claim you said you had not checked ('",
+		clause,
+		"'). The data that settles it is on disk, so the check is one lookup away: do it now, then state the result as fact or drop the claim. Defer only when the check needs a run or the live game, and then say which.",
+	])
+}
+
 reason_for(clause) := msg if {
 	msg := concat("", [
 		"You ended the turn naming a defect ('",
@@ -311,6 +351,32 @@ offending := clause if {
 	field("asked") == "0"
 	field("blocked") == "0"
 }
+
+# `asked` is deliberately not read: the 2026-10-18 instance answered a question and closed "I
+# haven't fixed either". `nofix` is the narrow exemption -- the prompt forbade the change.
+# Yields to `offending`, so a message both arms recognise halts once.
+admitted_unfixed := clause if {
+	clause := field("unfixed")
+	clause != ""
+	not offending
+	edited == "0"
+	committed == "0"
+	blocked == "0"
+	nofix == "0"
+}
+
+# Not gated on `edited`: a claim is unchecked whether or not some file changed.
+unchecked_claim := clause if {
+	clause := field("unchecked")
+	clause != ""
+	blocked == "0"
+	userneed == "0"
+	future == "0"
+}
+
+nofix := value if {
+	value := field("nofix")
+} else := "0"
 
 promissory := clause if {
 	clause := field("promise")

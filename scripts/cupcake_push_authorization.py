@@ -13,6 +13,8 @@ push at all:
 
     `AUTHORIZED <branch> <tip sha> <message uuid>`
     `DENIED     <branch or -> <tip sha or -> <reason>`
+    `TEARDOWN_AUTHORIZED <branch> <tip sha> <message uuid>`   for an `er-teardown.py
+                                                            --reason=push-*` command (`decide_teardown`)
 
 The policy lifts its deny only on `AUTHORIZED`, so a crash, a timeout or empty output keeps every
 push denied. Every check below fails closed.
@@ -30,8 +32,9 @@ at this tool call, and nothing else:
    entry holds the pending `tool_use_id` is refused too (no id repeats among the 24,298 tool calls
    in the 80 newest transcripts and subagent transcripts in this project, measured 2026-10-14).
    The tool call's own line can land after this reader has started (see `LOCATE_DEADLINE_SECONDS`),
-   so a missing line is looked for again in what gets appended, for a bounded time, and denies
-   when it never arrives.
+   so a missing line is looked for again in what gets appended, for a bounded time. In the main
+   session it is not written until the hook has returned, so when it never arrives the chain is
+   walked from its newest entry instead, under the same rules (`prompt_at_head`).
 2. A genuine prompt is a `type: user` entry with `origin.kind == "human"` and `promptSource` of
    `typed` or `queued`, not `isMeta`, not `isCompactSummary`, not a sidechain, whose content is a
    string or text blocks only. Measured over every transcript in this project: tool results,
@@ -51,7 +54,9 @@ at this tool call, and nothing else:
    more than one hook may evaluate the same event; it is still the same push.
 
 What this cannot stop, stated plainly: the transcript is a file owned by the same user the agent's
-shell runs as. Appending to it achieves nothing (point 1), and
+shell runs as. Appending to it achieves nothing while the tool call's own line is the anchor
+(point 1); when the line has not landed and the chain is read from its head, an appended entry
+would be read as the head, and
 `.cupcake/policies/claude/transcript_write_guard.rego` refuses the direct ways of rewriting it, but
 an agent determined to rewrite the file in place by some other program could. Deleting the state
 file re-arms a spent authorization; it cannot create one.
@@ -91,10 +96,11 @@ SHELL_META = set(";&|<>()`$\n\r\\*?[]{}~!#")
 # line lands there is one read of the appended bytes, the chain walk and the spend.
 #
 # Against the lag it has to cover: in a subagent transcript every tool_use line landed 0.10-0.11 s
-# after its own `timestamp` (14 calls), while in the busy main session that was refused it had not
-# landed when a reader that answered within 1.06 s looked for it (see `last_prompt`). 3 s is about
-# thirty times the first and nearly three times the second.
-LOCATE_DEADLINE_SECONDS = 3.0
+# after its own `timestamp` (14 calls). In the main session the line is not written until the
+# PreToolUse hook has returned (measured 2026-10-18, see `prompt_at_head`), so no wait finds it
+# there, and a full 3 s wait only delayed every denial. 1 s is ten times the subagent lag; after it
+# the chain is read from its head instead (`prompt_for_call`).
+LOCATE_DEADLINE_SECONDS = 1.0
 
 # inotify(7) constants from <sys/inotify.h> (x86-64 Linux).
 IN_MODIFY = 0x00000002
@@ -344,6 +350,64 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
     raise Refused("no message typed by the user precedes this tool call")
 
 
+def prompt_at_head(path: str) -> tuple[str, str]:
+    """(uuid, text) of the last genuine prompt on the chain ending at the newest main-chain entry.
+
+    Used when the pending tool call's own line is not in the transcript. Measured 2026-10-18 on
+    Claude Code 2.1.281, main session, 8.6 MB transcript: a command run as `ls -l <transcript>`
+    saw the file end at byte 8603381, the end of the entry before the turn's assistant message;
+    that message and the `ls` call's own `tool_use` line were written only after the tool had run,
+    so after every PreToolUse hook for it had returned. Six authorized commits in a row were then
+    refused with "still not in the transcript 3 s after the check began": the line could not land
+    while the hook was waiting for it.
+
+    What is on disk at that moment is the conversation up to the turn's start, and the pending call
+    descends from its newest main-chain entry. So the chain is walked back from there with the
+    rules of `last_prompt`: only an entry `prompt_text` accepts counts, a compaction summary ends
+    the walk, and a repeated uuid refuses. What this path gives up is the anchor's unguessable
+    tool-call id, so an entry appended by someone other than Claude Code would be read as the head;
+    `transcript_write_guard.rego` is what keeps the agent from appending one.
+    """
+    transcript = Transcript(path)
+    transcript.refresh()
+    entries = transcript.entries()
+    by_uuid: dict[str, dict] = {}
+    for e in entries:
+        uid = e.get("uuid")
+        if isinstance(uid, str):
+            if uid in by_uuid:
+                raise Refused("the transcript repeats an entry uuid, so it cannot be trusted")
+            by_uuid[uid] = e
+    node = next((e for e in reversed(entries)
+                 if isinstance(e.get("uuid"), str) and not e.get("isSidechain")), None)
+    seen: set[str] = set()
+    while node is not None:
+        uid = node["uuid"]
+        if uid in seen:
+            break
+        seen.add(uid)
+        text = prompt_text(node)
+        if text is not None:
+            return uid, text
+        if node.get("type") == "user" and node.get("isCompactSummary"):
+            break
+        parent = node.get("parentUuid")
+        node = by_uuid.get(parent) if isinstance(parent, str) else None
+    raise Refused("no message typed by the user precedes this tool call")
+
+
+def prompt_for_call(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]:
+    """The prompt this tool call answers: from its own line when that lands by `deadline`, else
+    from the chain's head (`prompt_at_head`). Every refusal other than the line being missing --
+    a duplicated tool call, a repeated uuid, no prompt -- stands."""
+    try:
+        return last_prompt(path, tool_use_id, deadline)
+    except Refused as r:
+        if "not in the transcript" not in r.reason:
+            raise
+    return prompt_at_head(path)
+
+
 # --- one push per authorization ----------------------------------------------------------------
 
 def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str) -> bool:
@@ -374,10 +438,82 @@ def branch_tip(repo: str, branch: str) -> str | None:
     return tip if tip and re.fullmatch(r"[0-9a-f]{40}", tip) else None
 
 
+# --- the teardown a push needs -------------------------------------------------------------------
+#
+# `git_no_push_while_game_live.rego` refuses a push while Elden Ring runs, and
+# `teardown_must_relaunch.rego` refuses a teardown that does not relaunch. On 2026-10-19 the user had
+# already typed `authorize <sha>` and the agent could neither push nor close the game, so the
+# authorization could not be used. A whole-command `er-teardown.py --reason=push-<token>` is admitted
+# by that policy on a `TEARDOWN_AUTHORIZED` line from here. The line says what an `AUTHORIZED` push
+# line says about the user's message -- it is exactly `authorize <sha>`, the sha is the tip of a
+# local branch other than main/master, and it has not paid for a push yet -- without naming a push
+# command and without spending it. The verdict word differs from `AUTHORIZED` on purpose: the push
+# guard lifts its deny only on that exact word, so this line can never let a push through.
+TEARDOWN_SCRIPT = "er-teardown.py"
+PUSH_TEARDOWN_REASON = "--reason=push-"
+
+
+def is_push_teardown(command: str) -> bool:
+    return TEARDOWN_SCRIPT in command and PUSH_TEARDOWN_REASON in command
+
+
+def authorized_branch(repo: str, sha: str) -> tuple[str, str] | None:
+    """(branch, tip) of a local branch other than main/master whose tip starts with `sha`."""
+    out = git(["for-each-ref", "--format=%(objectname) %(refname:short)", "refs/heads"], repo)
+    if out is None:
+        return None
+    for line in sorted(out.splitlines()):
+        tip, _, branch = line.partition(" ")
+        if branch and branch not in PROTECTED_BRANCHES and tip.startswith(sha):
+            return branch, tip
+    return None
+
+
+def already_spent(message_uuid: str) -> bool:
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and rec.get("message_uuid") == message_uuid:
+                    return True
+    except FileNotFoundError:
+        return False
+    return False
+
+
+def decide_teardown(event: dict, started: float) -> None:
+    if event.get("agent_id"):
+        raise Refused("only the main session can act on the user's authorization, never a subagent")
+    repo = event.get("cwd") if isinstance(event.get("cwd"), str) else os.getcwd()
+    path, tool_use_id = event.get("transcript_path"), event.get("tool_use_id")
+    if not isinstance(path, str) or not os.path.isfile(path):
+        raise Refused("the session transcript is not readable")
+    if not isinstance(tool_use_id, str) or not tool_use_id:
+        raise Refused("the event names no tool call")
+    message_uuid, text = prompt_for_call(path, tool_use_id, started + LOCATE_DEADLINE_SECONDS)
+    m = AUTH_RE.fullmatch(text.strip())
+    if m is None:
+        raise Refused("the user's last message is not an authorization")
+    found = authorized_branch(repo, m.group(1).lower())
+    if found is None:
+        raise Refused(f"the user authorized {m.group(1)}, which is not the tip of a local branch "
+                      f"other than main/master in {repo}")
+    branch, tip = found
+    if already_spent(message_uuid):
+        raise Refused("that authorization was already spent on a push", branch, tip)
+    emit("TEARDOWN_AUTHORIZED", branch, tip, message_uuid)
+
+
 def decide(event: dict, started: float) -> None:
     tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
     command = tool_input.get("command") if isinstance(tool_input.get("command"), str) else ""
     if "push" not in command:
+        return
+    if is_push_teardown(command):
+        decide_teardown(event, started)
         return
     if event.get("agent_id"):
         raise Refused("only the main session can push on the user's authorization, never a subagent")
@@ -392,7 +528,7 @@ def decide(event: dict, started: float) -> None:
     if not isinstance(tool_use_id, str) or not tool_use_id:
         raise Refused("the event names no tool call", branch, tip)
     try:
-        message_uuid, text = last_prompt(path, tool_use_id, started + LOCATE_DEADLINE_SECONDS)
+        message_uuid, text = prompt_for_call(path, tool_use_id, started + LOCATE_DEADLINE_SECONDS)
     except Refused as r:
         raise Refused(r.reason, branch, tip)
     # Read the tip again: the transcript step may have waited seconds, and the tip compared with

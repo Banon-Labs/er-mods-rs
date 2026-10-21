@@ -71,6 +71,12 @@
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT
+# The hook event on stdin names this session's transcript; see cupcake_turn_scan.hook_transcript.
+CUPCAKE_SIGNAL_EVENT=""
+if [ ! -t 0 ]; then
+	CUPCAKE_SIGNAL_EVENT="$(timeout 2 cat 2>/dev/null || true)"
+fi
+export CUPCAKE_SIGNAL_EVENT
 python3 - <<'PY' 2>/dev/null || true
 import os, re, sys
 
@@ -80,7 +86,7 @@ try:
 except Exception:
     sys.exit(0)  # fail open: a missing helper must never wedge a session
 
-path = scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 events = scan.load_events(path)
@@ -820,6 +826,74 @@ if runs:
             deferral = quote(sentence)
             break
 
+# --- (2f) the admitted-unfixed closer and the unchecked claim (2026-10-18) ----------------------
+# The closing message the user reported as "Multiple rego violations uncaught in this response",
+# abridged: "As far as I know a parry always needs a parry skill ... I haven't checked that against
+# the skill data yet. [table] The crit and pairing problems both mean the score credits value that
+# was never measured. I haven't fixed either." No tool call in that turn wrote a file.
+#
+# Why the diagnosis arm missed it, measured with scripts/test-diagnosis-signal.py: `DIAGNOSIS_RE`
+# wants a determiner directly before a singular defect noun, and "the crit and pairing problems" has
+# two words between them and the plural, so the signal emitted nothing at all. And had it matched,
+# the user's prompt carried a question mark, so the deliberately broad `asked` exemption would have
+# cleared it anyway.
+#
+# Widening the defect-noun pattern would not have been the right repair: it is the explanation arm,
+# and `asked` exempts explanations on purpose. What this message did that an explanation does not is
+# say, in the first person, that the defect was left unfixed. That admission is its own fact, and it
+# is not exempt for answering a question -- the agent itself has said work is owed.
+#
+#   unfixed   -- the closing prose admits a named defect was not fixed ("I haven't fixed either",
+#                "still unfixed", "neither is fixed").
+#   unchecked -- the closing prose states a claim and admits it was not checked ("as far as I know",
+#                "I haven't checked/verified that", "I have not confirmed"), in a sentence that does
+#                not tie the check to a run, a launch or the live game. A check that needs a run is
+#                evidence that does not exist yet; a check against data on disk is a lookup that was
+#                skipped.
+#   nofix     -- the user's prompt told the agent not to change anything ("don't fix", "just
+#                explain"), which is the one case where reporting an unfixed defect is the request.
+UNFIXED_RE = re.compile(
+    r"\b(?:i|we)\s+(?:haven'?t|have\s+not|hadn'?t|did\s+not|didn'?t)\s+(?:yet\s+)?"
+    r"(?:fixed|fix|corrected|correct|addressed|address|patched|patch|repaired|repair)\s+"
+    r"(?:either|both|any|it|them|that|this|those|these|the|one|neither|yet)\b"
+    r"|\b(?:still|remains?|left|stays?)\s+unfixed\b"
+    r"|\bneither\s+(?:is|was|has\s+been|one\s+is)\s+(?:yet\s+)?fixed\b"
+    r"|\b(?:is|are)\s+(?:still\s+)?not\s+(?:yet\s+)?fixed\b"
+    r"|\bnot\s+fixed\s+yet\b",
+    re.IGNORECASE,
+)
+
+UNCHECKED_RE = re.compile(
+    r"\bas\s+far\s+as\s+i\s+(?:know|can\s+tell|recall|remember)\b"
+    r"|\b(?:i|we)\s+(?:haven'?t|have\s+not|did\s+not|didn'?t)\s+(?:yet\s+)?"
+    r"(?:checked|check|verified|verify|confirmed|confirm|looked\s+it\s+up|looked\s+that\s+up)\b"
+    r"|\bwithout\s+(?:having\s+)?(?:checked|checking|verifying|looking\s+it\s+up)\b"
+    r"|\bnot\s+(?:yet\s+)?(?:checked|verified)\s+(?:that|this|it)\s+against\b",
+    re.IGNORECASE,
+)
+
+# A check that only a run can make. Same sentence only: "I haven't verified it in game; that needs a
+# live run" is a plan waiting on evidence, and it must stay speakable after a build.
+UNCHECKED_RUNTIME_RE = re.compile(
+    r"\bin[- ]game\b|\bruntime\b|\blive\b|\blaunch(?:ed|ing)?\b|\brun(?:ning)?\s+(?:it|the\s+game)\b"
+    r"|\bon\s+hardware\b|\bthe\s+next\s+run\b|\ba\s+(?:live\s+)?run\b|\bon\s+ci\b|\bin\s+ci\b"
+    # Measured by scripts/audit-diagnosis-signal-false-positives.py --rule=unchecked: "I haven't
+    # confirmed that voice still gets captured, though, because that only happens with loopback on
+    # or a peer in the session" names a condition only a multiplayer run produces.
+    r"|\bpeers?\b|\bonly\s+(?:happens|occurs|fires|shows\s+up)\b",
+    re.IGNORECASE,
+)
+
+unfixed = ""
+unchecked = ""
+if runs:
+    closing_unf = scrub(runs[-1])
+    for sentence in closing_sentences(closing_unf):
+        if not unfixed and UNFIXED_RE.search(sentence):
+            unfixed = quote(sentence)
+        if not unchecked and UNCHECKED_RE.search(sentence) and not UNCHECKED_RUNTIME_RE.search(sentence):
+            unchecked = quote(sentence)
+
 # --- (3) the user asked ------------------------------------------------------------------------
 # `split_turns` keeps only blocks, not the prompt that opened the turn, so the prompt is recovered
 # here the same way the stall signal recovers it: the last real user prompt in the transcript.
@@ -852,6 +926,17 @@ asked = bool(re.search(r"\?", prompt)) or bool(
     )
 )
 
+# The prompt asked for a report and forbade the change. Narrow on purpose: a bare question is not
+# this, because the 2026-10-18 instance answered a question and still owed the fix.
+nofix = bool(re.search(
+    r"\b(?:don'?t|do\s+not|without)\s+(?:fix|fixing|change|changing|edit|editing|touch|touching)\b"
+    r"|\bjust\s+(?:explain|tell\s+me|report|list|describe)\b"
+    r"|\bno\s+(?:edits|changes|fixes)\b"
+    r"|\bread[- ]only\b",
+    prompt,
+    re.IGNORECASE,
+))
+
 
 # --- (4) a genuine blocker ---------------------------------------------------------------------
 BLOCKER_RE = re.compile(
@@ -877,13 +962,15 @@ try:
 except Exception:
     carried = False
 
-if not hit and not promise and not handback and not unread and not deferral:
+if not hit and not promise and not handback and not unread and not deferral and not unfixed \
+        and not unchecked:
     sys.exit(0)
 
 print(
     "DIAGFACTS|diagnosis={}|fixed={}|asked={}|blocked={}|promise={}|edited={}"
     "|handback={}|handbackkind={}|userneed={}|didwork={}|extblocked={}|carried={}"
-    "|unread={}|consulted={}|future={}|deferral={}|committed={}".format(
+    "|unread={}|consulted={}|future={}|deferral={}|committed={}"
+    "|unfixed={}|unchecked={}|nofix={}".format(
         hit or "",
         int(fixed),
         int(asked),
@@ -901,6 +988,9 @@ print(
         int(future),
         deferral,
         int(committed),
+        unfixed,
+        unchecked,
+        int(nofix),
     )
 )
 PY

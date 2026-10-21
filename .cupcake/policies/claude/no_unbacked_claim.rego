@@ -23,6 +23,10 @@
 #       2. its object is a REPO ARTIFACT -- a path-like token or gate/check/hook/policy/test/guard;
 #       3. NOTHING IN THE TURN WROTE A FILE: no Edit/Write/NotebookEdit, and no Bash call carrying a
 #          write construct. `bd remember` is explicitly not a write -- it is the substitution.
+#       4. no path the claim names is accounted for. Since 2026-10-19 a path written by a
+#          Write/Edit/Bash call anywhere earlier in the session, or shown to exist in this turn by a
+#          Read, ls, stat or test -e, backs a claim naming it; the turn-only view had refused a
+#          closer naming a script a Write created one turn earlier.
 #
 #     BIASED HARD TOWARD NOT FIRING: only the closing block is scanned, quoted/backticked/fenced
 #     spans are stripped, and an honest confession of absence ("no gate exists", "I have not built
@@ -58,7 +62,7 @@ halt contains decision if {
 }
 
 reason_for(p) := msg if {
-	msg := concat("", ["You are ending the turn claiming an artifact exists that you did not create: '", p, "'. No Edit, no Write, and no Bash call in this turn wrote a file -- a `bd remember` is not a build, it is the substitution this guard exists to catch. Pick one, now: (a) ACTUALLY CREATE IT in this turn, then say so; or (b) REWRITE the sentence to state plainly that it does NOT exist, what you did instead, and what it would take -- an honest 'no gate exists, I have not built it' passes this guard by design. Describing a thing in the same breath as claiming it is the failure; the user cannot see your tool calls and will read the claim as delivery."])
+	msg := concat("", ["You are ending the turn claiming an artifact exists that you did not create: '", p, "'. No Edit, no Write, and no Bash call in this turn wrote a file, and no path the claim names was written earlier in this session or shown to exist by a Read, ls, stat or test -e in this turn -- a `bd remember` is not a build, it is the substitution this guard exists to catch. Pick one, now: (a) ACTUALLY CREATE IT in this turn, then say so; or (b) REWRITE the sentence to state plainly that it does NOT exist, what you did instead, and what it would take -- an honest 'no gate exists, I have not built it' passes this guard by design. Describing a thing in the same breath as claiming it is the failure; the user cannot see your tool calls and will read the claim as delivery."])
 }
 
 phrase := p if {

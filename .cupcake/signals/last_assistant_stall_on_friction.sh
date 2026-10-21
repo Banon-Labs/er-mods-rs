@@ -49,15 +49,25 @@
 # matched raw -- how they quote things is their business. Fail-open (empty output) on any error so a
 # transcript hiccup cannot wedge the session.
 set -uo pipefail
+CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
+export CUPCAKE_SIGNAL_REPO_ROOT
+# The hook event on stdin names this session's transcript; see cupcake_turn_scan.hook_transcript.
+CUPCAKE_SIGNAL_EVENT=""
+if [ ! -t 0 ]; then
+	CUPCAKE_SIGNAL_EVENT="$(timeout 2 cat 2>/dev/null || true)"
+fi
+export CUPCAKE_SIGNAL_EVENT
 python3 - <<'PY' 2>/dev/null || true
-import glob, json, os, re, sys
+import json, os, re, sys
 
-cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-key = cwd.replace("/", "-")
-tdir = os.path.join(os.path.expanduser("~/.claude/projects"), key)
-files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")),
-               key=lambda p: os.path.getmtime(p), reverse=True)
-if not files:
+sys.path.insert(0, os.path.join(os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", "."), "scripts"))
+try:
+    import cupcake_turn_scan as scan
+except Exception:
+    sys.exit(0)
+
+transcript = scan.hook_transcript()
+if not transcript:
     sys.exit(0)
 
 
@@ -114,7 +124,7 @@ def assistant_has_action(ev):
 # rewritten and every continuation stays inside the same turn.
 turns = [{"prompt": "", "text": [], "closing": [], "acted": False}]
 try:
-    with open(files[0], encoding="utf-8", errors="replace") as fh:
+    with open(transcript, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
                 ev = json.loads(line)

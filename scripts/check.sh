@@ -1533,6 +1533,7 @@ if [[ -z $_check_stage || -z $_check_cupcake_stage || $_check_stage == "$_check_
 	}
 fi
 cupcake validate --log-level error
+python3 "$repo_root/scripts/test-cupcake-policies.py" --selftest
 python3 "$repo_root/scripts/test-cupcake-policies.py"
 # Every cupcake guard in this REPO was partly or wholly inert until 2026-08-22, and the suite was
 # green the whole time. `cupcake eval` does not run policies in the OPA interpreter -- it compiles
@@ -1567,6 +1568,10 @@ python3 "$repo_root/scripts/check-cupcake-dispatcher.py"
 # this suite green throughout. scripts/cupcake-hook.sh normalises the mode and pins the log level;
 # this proves a denial still denies through it.
 python3 "$repo_root/scripts/test-cupcake-hook-shim.py"
+# A policy file that does not compile refuses every tool call, so the agent cannot run its own
+# fix: the hook must hand it the exact unlock command and hold Stop until the closing message is
+# that command alone (user directive 2026-10-19). Runs a throwaway copy of .cupcake, never the live one.
+python3 "$repo_root/scripts/test-cupcake-hook-engine-failure.py"
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
@@ -1579,8 +1584,11 @@ python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
+python3 "$repo_root/scripts/test-unbacked-claim-signal.py"
 python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
+python3 "$repo_root/scripts/test-untailed-long-run-signal.py"
 python3 "$repo_root/scripts/test-inline-user-command-signal.py"
+python3 "$repo_root/scripts/test-authorize-run-stamp-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
 opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$repo_root/.cupcake/tests/no_ask_without_receiver_test.rego"
 # The push escape hatch (user directive 2026-10-07): the signal against fixture transcripts and a
@@ -1594,7 +1602,9 @@ python3 "$repo_root/scripts/test-commit-authorization-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
@@ -1642,7 +1652,7 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/block_compositor_input_injection.rego" "$repo_root/.cupcake/tests/block_compositor_input_injection_test.rego"
-opa test "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # And the half `opa test` cannot reach. A green policy suite does not mean production-allowed or

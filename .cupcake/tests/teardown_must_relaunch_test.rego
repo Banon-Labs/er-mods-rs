@@ -162,6 +162,79 @@ test_deny_empty_invalid_run_token if {
 	denied("python3 scripts/er-teardown.py --reason=invalid-run-")
 }
 
+# --- closing the game for an authorized push ---------------------------------
+#
+# Refused 2026-10-19 with the user's `authorize <sha>` already typed: the push guard would not push
+# while the game ran, and this guard would not close it. The `push_authorization` signal answers
+# `TEARDOWN_AUTHORIZED` only for a live, unspent authorization of a local branch tip.
+
+PUSH_TEARDOWN := "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-requires-game-closed"
+
+LIVE_AUTH := "TEARDOWN_AUTHORIZED\tfeat/x\t0123456789abcdef0123456789abcdef01234567\tmsg-uuid"
+
+denied_with_push_signal(cmd, value) if {
+	denials := guard.deny with input as object.union(bash_event(cmd), {"signals": {"push_authorization": value}})
+	RULE in rule_ids(denials)
+}
+
+test_allow_push_teardown_with_live_authorization if {
+	not denied_with_push_signal(PUSH_TEARDOWN, LIVE_AUTH)
+}
+
+test_allow_push_teardown_with_live_authorization_as_signal_object if {
+	not denied_with_push_signal(PUSH_TEARDOWN, {"output": LIVE_AUTH})
+}
+
+test_allow_push_teardown_with_live_authorization_and_output_trim if {
+	not denied_with_push_signal(concat("", [PUSH_TEARDOWN, " 2>&1 | tail -3"]), LIVE_AUTH)
+}
+
+test_deny_push_teardown_without_signal if {
+	denied(PUSH_TEARDOWN)
+}
+
+test_deny_push_teardown_when_signal_denies if {
+	denied_with_push_signal(PUSH_TEARDOWN, "DENIED\t-\t-\tthe user's last message is not an authorization")
+}
+
+test_deny_push_teardown_when_authorization_spent if {
+	denied_with_push_signal(PUSH_TEARDOWN, "DENIED\tfeat/x\t0123456789abcdef0123456789abcdef01234567\tthat authorization was already spent on a push")
+}
+
+# The push verdict is not the teardown verdict: only the teardown reader's line admits this form.
+test_deny_push_teardown_on_a_push_verdict if {
+	denied_with_push_signal(PUSH_TEARDOWN, "AUTHORIZED\tfeat/x\t0123456789abcdef0123456789abcdef01234567\tmsg-uuid")
+}
+
+test_deny_push_teardown_with_truncated_signal if {
+	denied_with_push_signal(PUSH_TEARDOWN, "TEARDOWN_AUTHORIZED\tfeat/x")
+}
+
+test_deny_authorized_teardown_with_other_reason if {
+	denied_with_push_signal("python3 scripts/er-teardown.py --reason=cleanup", LIVE_AUTH)
+}
+
+test_deny_authorized_push_teardown_then_build if {
+	denied_with_push_signal("python3 scripts/er-teardown.py --reason=push-x; cargo build", LIVE_AUTH)
+}
+
+test_deny_authorized_push_teardown_and_then_push if {
+	denied_with_push_signal("python3 scripts/er-teardown.py --reason=push-x && git push origin feat/x", LIVE_AUTH)
+}
+
+test_deny_authorized_empty_push_token if {
+	denied_with_push_signal("python3 scripts/er-teardown.py --reason=push-", LIVE_AUTH)
+}
+
+test_deny_authorized_multi_word_push_reason if {
+	denied_with_push_signal(`python3 scripts/er-teardown.py --reason="push-needs the game closed"`, LIVE_AUTH)
+}
+
+test_deny_message_names_push_form if {
+	some d in guard.deny with input as bash_event(PUSH_TEARDOWN)
+	contains(d.reason, "--reason=push-<one-token-why>")
+}
+
 test_deny_teardown_with_a_reason_then_more_work if {
 	denied("python3 scripts/er-teardown.py --reason measured; bash scripts/er-build-dlls.sh er-save-game-row")
 }

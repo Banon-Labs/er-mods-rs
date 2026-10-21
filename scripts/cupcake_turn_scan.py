@@ -8,7 +8,8 @@ they drift, and then two guards disagree about the same turn. This module is the
 both import it, so a fix to the peek-command list or the blocked-on-user phrasing lands in both at once.
 
 What lives here (and nowhere else):
-  * transcript discovery         -- `latest_transcript`
+  * transcript discovery         -- `hook_transcript`: the hook event's own transcript, never the
+                                    newest file in the project directory
   * turn bucketing               -- `split_turns`; a turn is bounded by real user prompts, and a
                                     tool-result carrier "user" event does not split one
   * substantive work vs peeking  -- `bash_is_status_peek`, `Turn.work`
@@ -27,7 +28,6 @@ missing/renamed file can never wedge a session.
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -36,17 +36,42 @@ from dataclasses import dataclass, field
 
 # --- transcript discovery ---------------------------------------------------------------------
 
-def latest_transcript(project_dir: str | None = None) -> str | None:
-    """Newest session transcript for the project, or None. Mirrors Claude Code's own key scheme:
-    ~/.claude/projects/<cwd-with-slashes-replaced-by-dashes>/*.jsonl."""
-    cwd = project_dir or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    tdir = os.path.join(os.path.expanduser("~/.claude/projects"), cwd.replace("/", "-"))
-    files = sorted(
-        glob.glob(os.path.join(tdir, "*.jsonl")),
-        key=lambda p: os.path.getmtime(p),
-        reverse=True,
-    )
-    return files[0] if files else None
+def hook_transcript(raw_event: str | None = None) -> str | None:
+    """The transcript of the session whose hook is running, or None.
+
+    Taken only from the hook event cupcake writes to the signal's stdin, which each signal stashes
+    in `CUPCAKE_SIGNAL_EVENT` before its python runs: the event's `transcript_path`, else
+    `<session_id>.jsonl` in the project's transcript directory. Nothing else.
+
+    This replaced `latest_transcript`, which returned the newest `*.jsonl` by mtime in the project
+    directory. With two sessions open in the same repo that is whichever one wrote last, so a Stop
+    guard judged the other session's closing message. Measured 2026-10-20: session f159d78f was
+    halted by `no_unexecuted_promise` quoting "I'm building the er-seamless-bugfixes DLL at that
+    commit ...", a sentence that exists only in the concurrent session bd9e64a1. No event, an
+    unparseable one, or one naming no transcript that exists returns None, and every signal treats
+    None as "say nothing": a guard that cannot tell whose turn it is must not halt anyone's.
+    """
+    raw = os.environ.get("CUPCAKE_SIGNAL_EVENT", "") if raw_event is None else raw_event
+    if not raw or not raw.strip():
+        return None
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    cand = event.get("transcript_path")
+    if isinstance(cand, str) and cand and os.path.isfile(cand):
+        return cand
+    sid = event.get("session_id")
+    if isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+        cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+        cwd = cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+        tdir = os.path.join(os.path.expanduser("~/.claude/projects"), cwd.replace("/", "-"))
+        cand = os.path.join(tdir, f"{sid}.jsonl")
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def load_events(path: str) -> list[dict]:

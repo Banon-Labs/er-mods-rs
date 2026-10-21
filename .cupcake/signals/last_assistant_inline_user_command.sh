@@ -48,15 +48,7 @@ try:
 except Exception:
     sys.exit(0)
 
-path = None
-try:
-    event = json.loads(os.environ.get("CUPCAKE_SIGNAL_EVENT") or "{}")
-    cand = event.get("transcript_path") if isinstance(event, dict) else None
-    if isinstance(cand, str) and os.path.isfile(cand):
-        path = cand
-except ValueError:
-    pass
-path = path or scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 

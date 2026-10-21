@@ -20,13 +20,14 @@
 #     in the same command makes the failure mode unreachable: the worst outcome
 #     becomes a restarted game rather than no game.
 #
-#     Two standalone forms are excused: one after a proven measurement, and one whose
+#     Three standalone forms are excused: one after a proven measurement, one whose
 #     `--reason=invalid-run-<token>` declares the run invalid, which AGENTS.md obliges the
-#     agent to stop.
+#     agent to stop, and one whose `--reason=push-<token>` closes the game for a push the
+#     user has authorized with a live, unspent `authorize <sha>`.
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
-#     required_signals: ["frida_evidence"]
+#     required_signals: ["frida_evidence", "push_authorization"]
 package cupcake.policies.claude.teardown_must_relaunch
 
 import rego.v1
@@ -262,9 +263,58 @@ teardown_alone_declaring_invalid_run if {
 }
 
 declares_invalid_run(segment) if {
+	declares_reason(segment, invalid_run_reason_prefix)
+}
+
+declares_reason(segment, prefix) if {
 	some tok in split(norm_command_for(segment), " ")
-	startswith(tok, invalid_run_reason_prefix)
-	count(tok) > count(invalid_run_reason_prefix)
+	startswith(tok, prefix)
+	count(tok) > count(prefix)
+}
+
+# A standalone teardown that closes the game for a push the user has authorized. Refused 2026-10-19
+# on `er-teardown.py --reason=push-requires-game-closed`: the user had typed `authorize <sha>`,
+# `git_no_push_while_game_live` refused the push while the game ran, and this guard refused closing
+# it, so the authorization could not be spent at all.
+#
+# The admission rides on the `push_authorization` signal, the same reader `git_block_any_push`
+# trusts. For a command naming `er-teardown.py` and `--reason=push-` it prints
+# `TEARDOWN_AUTHORIZED <branch> <tip> <message uuid>` only when the user's last typed message is
+# exactly `authorize <sha>`, that sha is the tip of a local branch other than main/master, and the
+# message has not yet paid for a push; it spends nothing. Any other line, or none, keeps the deny.
+# The shape is as narrow as the invalid-run form: one teardown segment, a one-token reason, and at
+# most a trailing output trim.
+push_reason_prefix := "--reason=push-"
+
+push_signal_value := v if {
+	v := signals.push_authorization
+	is_string(v)
+} else := v if {
+	v := signals.push_authorization.output
+	is_string(v)
+} else := ""
+
+push_signal_fields := split(trim(push_signal_value, " \r\n"), "\t")
+
+push_teardown_authorized if {
+	push_signal_fields[0] == "TEARDOWN_AUTHORIZED"
+	count(push_signal_fields) == 4
+}
+
+teardown_alone_for_authorized_push if {
+	push_teardown_authorized
+	segments := [segment |
+		some segment in standalone_segments_for(tool_command())
+		norm_command_for(segment) != ""
+	]
+	non_cd := [segment |
+		some segment in segments
+		not cd_segment(segment)
+		not output_trim_segment(segment)
+	]
+	count(non_cd) == 1
+	teardown_segment_alone(non_cd[0])
+	declares_reason(non_cd[0], push_reason_prefix)
 }
 
 # `tail -3`, `head -15`: exactly two words, the second a dash and digits. Spelled without a regex
@@ -349,7 +399,7 @@ reason_value_at(words, i) if {
 	words[i - 1] == "--reason"
 }
 
-block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status`, `--help` and `-h` are read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nA run that has become INVALID needs no measurement, and stopping it is an obligation, not an option: AGENTS.md (\"Elden Ring Runtime Probe Hygiene\") says that when structured evidence shows a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's question, the agent must stop the agent-launched run before continuing implementation. Declare it in the reason, as the whole command (a trailing `| tail -<n>` or `| head -<n>` is allowed):\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
+block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status`, `--help` and `-h` are read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nA run that has become INVALID needs no measurement, and stopping it is an obligation, not an option: AGENTS.md (\"Elden Ring Runtime Probe Hygiene\") says that when structured evidence shows a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's question, the agent must stop the agent-launched run before continuing implementation. Declare it in the reason, as the whole command (a trailing `| tail -<n>` or `| head -<n>` is allowed):\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-<one-token-why>\n\nA push needs the game closed (`git_no_push_while_game_live` refuses it otherwise). When the user's last typed message is exactly `authorize <sha>`, that sha is the tip of a local branch other than main/master, and it has not been spent on a push yet, the `push_authorization` signal admits this whole-command form (same trailing trim allowed); without that live authorization it is denied like any other bare teardown:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
@@ -357,6 +407,7 @@ deny contains decision if {
 	killing_teardown
 	not teardown_alone_after_measurement
 	not teardown_alone_declaring_invalid_run
+	not teardown_alone_for_authorized_push
 	not relaunches
 
 	decision := {

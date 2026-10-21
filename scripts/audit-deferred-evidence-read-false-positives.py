@@ -103,6 +103,9 @@ def would_halt(out: str) -> bool:
 def run_signal(script: Path, home: str) -> str:
     proc = subprocess.run(
         ["bash", str(script)],
+        input=json.dumps({"transcript_path": str(
+            Path(home) / ".claude" / "projects" / FAKE_PROJECT.replace("/", "-") / "session.jsonl"
+        )}),
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

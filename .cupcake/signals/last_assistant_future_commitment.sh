@@ -81,6 +81,12 @@
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT
+# The hook event on stdin names this session's transcript; see cupcake_turn_scan.hook_transcript.
+CUPCAKE_SIGNAL_EVENT=""
+if [ ! -t 0 ]; then
+	CUPCAKE_SIGNAL_EVENT="$(timeout 2 cat 2>/dev/null || true)"
+fi
+export CUPCAKE_SIGNAL_EVENT
 python3 - <<'PY' 2>/dev/null || true
 import os, sys
 
@@ -91,7 +97,7 @@ try:
 except Exception:
     sys.exit(0)  # fail open: a missing helper must never wedge a session
 
-path = scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 events = scan.load_events(path)
