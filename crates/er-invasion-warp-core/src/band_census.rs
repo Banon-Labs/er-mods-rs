@@ -31,11 +31,17 @@ use std::collections::BTreeSet;
 use crate::invade_difficulty::{MAX_LEVEL_BAND, MAX_WEAPON_BAND};
 
 /// Level bands Seamless publishes: 0 to [`MAX_LEVEL_BAND`].
-pub const LEVEL_BANDS: usize = MAX_LEVEL_BAND as usize + 1;
+pub const LEVEL_BANDS: usize = 9;
 /// Weapon bands Seamless publishes: 0 to [`MAX_WEAPON_BAND`].
-pub const WEAPON_BANDS: usize = MAX_WEAPON_BAND as usize + 1;
+pub const WEAPON_BANDS: usize = 4;
 /// Every band pair.
-pub const BAND_COUNT: usize = LEVEL_BANDS * WEAPON_BANDS;
+pub const BAND_COUNT: usize = 36;
+
+// Written as literals so `scripts/rva_symbols.py` can evaluate them; the compiler keeps them tied
+// to the thresholds they count.
+const _: () = assert!(LEVEL_BANDS == MAX_LEVEL_BAND as usize + 1);
+const _: () = assert!(WEAPON_BANDS == MAX_WEAPON_BAND as usize + 1);
+const _: () = assert!(BAND_COUNT == LEVEL_BANDS * WEAPON_BANDS);
 
 /// The most lobbies one lobby list returns, whatever the count filter asks for.
 pub const STEAM_RESULT_CAP: usize = 50;
