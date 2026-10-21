@@ -424,7 +424,7 @@ test_real_builds_beside_a_substitution_are_still_denied if {
 # filters git's list of changed paths, the gate reads that list as arguments and is piped nowhere,
 # and its verdict is read from `exit=$?`.
 test_the_2026_10_15_comment_caps_file_list_is_allowed if {
-	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E '^(crates/er-cel-shade|crates/er-shader-compiler|scripts)/' | while read f; do [ -f "$f" ] && echo "$f"; done ); echo "$files" | wc -l; python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
+	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E '^(crates/er-cel-shade|crates/er-compiler-fixture|scripts)/' | while read f; do [ -f "$f" ] && echo "$f"; done ); echo "$files" | wc -l; python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
 }
 
 # The same list handed to the gate directly. The pipeline that starts at the gate used to walk
@@ -440,7 +440,7 @@ test_gate_taking_a_filtered_path_list_as_arguments_is_allowed if {
 # A double-quoted path pattern stays raw beside a substitution, so `(scripts/check` inside it read
 # as a subshell running a repo check script. A `(` glued to a word or a `^` opens nothing.
 test_double_quoted_path_pattern_in_a_substitution_is_allowed if {
-	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E "^(crates/er-cel-shade|crates/er-shader-compiler|scripts)/" | while read f; do [ -f "$f" ] && echo "$f"; done ); python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
+	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E "^(crates/er-cel-shade|crates/er-compiler-fixture|scripts)/" | while read f; do [ -f "$f" ] && echo "$f"; done ); python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
 	not denied(`files=$(git diff --name-only | grep -E "^(scripts/check|crates)/" | grep -v target); python3 scripts/check-comment-caps.py $files`)
 }
 

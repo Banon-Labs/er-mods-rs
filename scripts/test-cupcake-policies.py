@@ -822,7 +822,7 @@ def main() -> int:
         PolicyCase(
             "allow-gate-reading-a-git-path-list-filtered-in-a-substitution",
             "files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) "
-            "| sort -u | grep -E '^(crates/er-shade-fixture|crates/er-shader-compiler|scripts)/' "
+            "| sort -u | grep -E '^(crates/er-shade-fixture|crates/er-compiler-fixture|scripts)/' "
             "| while read f; do [ -f \"$f\" ] && echo \"$f\"; done ); echo \"$files\" | wc -l; "
             "python3 scripts/check-comment-caps.py $files; echo \"exit=$?\"",
             True,
