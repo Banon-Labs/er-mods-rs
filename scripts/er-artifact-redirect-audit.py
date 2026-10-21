@@ -166,6 +166,8 @@ NO_ROTATION_KNOB_ARTIFACTS = frozenset(
         # `er-cel-shade/src/exports.rs` replaces it once a second through
         # `er_hotkey_config::write_atomic`, a write-tmp-then-rename.
         "er-cel-shade-telemetry.json",
+        # `er-render-scale/src/lib.rs` replaces it once a second the same way.
+        "er-render-scale-telemetry.json",
     }
 )
 
