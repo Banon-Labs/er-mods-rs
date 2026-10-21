@@ -76,7 +76,7 @@ def best_for(base_id: int) -> dict | None:
             cls_level, base = model.class_base(cls)
             st = {k: max(base[k], need.get(k, 0)) for k in OPT.STATS}
             st["vig"] = max(st["vig"], _W["vig"])
-            st["vit"] = max(st["vit"], _W["end"])
+            st["end"] = max(st["end"], _W["end"])
             points = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
             if points < 0 or rl < cls_level:
                 continue

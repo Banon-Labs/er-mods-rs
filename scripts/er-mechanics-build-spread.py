@@ -56,7 +56,7 @@ def spreads(rl: int, vig: int, end: int, step: int, spend=SPEND) -> tuple[list[t
     k1, k2, k3 = spend
     for cls in RES.CLASS_ROWS:
         _, base = model.class_base(cls)
-        st = dict(base, vig=max(base["vig"], vig), vit=max(base["vit"], end))
+        st = dict(base, vig=max(base["vig"], vig), end=max(base["end"], end))
         free = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
         if free < 0:
             continue
@@ -167,7 +167,7 @@ def analyse(path: Path, breadth_loss: float, show: int) -> int:
         col = per_weapon[:, i]
         best = [weapons[j] for j in np.argsort(-col)[:3]]
         return (f"{core} {bleed_core[i]:6.1f}  breadth {breadth[i]:.3f}  {cls:12s} "
-                + " ".join(f"{k.upper()} {full[k]}" for k in ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"))
+                + " ".join(f"{k.upper()} {full[k]}" for k in ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc"))
                 + "  | " + ", ".join(names[w] for w in best))
 
     print(f"RL {rl}, VIG {vig}, END {end}: {len(tuples)} spreads, {len(score)} options, "

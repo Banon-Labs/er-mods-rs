@@ -395,6 +395,7 @@ class Corpus:
         self.stats = {k: build["stats"][k] for k in STATS}
         self.stamina = float(build["computed"]["maxStamina"])
         self.armor, self.talismans = sr.worn(build)
+        # `build` is a planner document, whose JSON spells Endurance `vit`.
         self.me = cr.DEF.defender(self.ct.defense, {"vig": build["stats"]["vig"], "mnd": build["stats"]["mnd"],
                                                     "end": build["stats"]["vit"], **self.stats},
                                   armor=self.armor, talismans=self.talismans, pvp=True, strict=False)
