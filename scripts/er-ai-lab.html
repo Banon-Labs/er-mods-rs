@@ -60,6 +60,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--line
   <span class="stat">you hp <b id="php">-</b></span>
   <button id="god">god mode</button>
   <button id="respawn">respawn npc</button>
+  <button id="respawn-duelists" title="spawn-npc.js config from scripts/frida/ai-lua/duelists.json, gear from its planner link">respawn duelists</button>
   <button id="despawn">despawn</button>
   <span class="stat">plans <b id="nplan">0</b> acts <b id="nact">0</b></span>
 </header>
@@ -426,6 +427,7 @@ $('save').onclick = saveFile;
 $('revert').onclick = () => { if (!dirty || confirm('Discard unsaved edits?')) loadFile(); };
 $('god').onclick = () => api('POST', '/api/god', { on: !god });
 $('respawn').onclick = () => api('POST', '/api/respawn', {});
+$('respawn-duelists').onclick = () => api('POST', '/api/respawn', { preset: 'duelists' });
 $('despawn').onclick = () => api('POST', '/api/despawn', {});
 $('pause').onclick = (ev) => { paused = !paused; ev.target.classList.toggle('on', paused); if (!paused) log.scrollTop = log.scrollHeight; };
 $('clear').onclick = () => { log.innerHTML = ''; };

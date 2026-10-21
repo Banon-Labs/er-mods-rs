@@ -56,14 +56,18 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const WORLD_GEOM_MAN = va('0x143d6dc18');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
+// 2.7.2.0 addresses. The 1.17.1 ones named above were carried with
+// scripts/map-rvas-1171-to-1172.py, except set enable, which no carried segment covers: its
+// first 20 bytes occur once in eldenring-deobf-1.17.2.bin, at 0x1406c9c10. The other three
+// functions' first 16 bytes match across both images.
+const WORLD_CHR_MAN = va('0x143d6d018');
+const WORLD_GEOM_MAN = va('0x143d70c38');
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0');
 
-const setEnable = new NativeFunction(va('0x1406c9760'), 'void', ['pointer', 'uint32']);
-const setCollision = new NativeFunction(va('0x1405e6770'), 'void', ['pointer', 'uint32']);
+const setEnable = new NativeFunction(va('0x1406c9c10'), 'void', ['pointer', 'uint32']);
+const setCollision = new NativeFunction(va('0x1405e6c20'), 'void', ['pointer', 'uint32']);
 const initSpawnRequest = new NativeFunction(va('0x1401db5f0'), 'void', ['pointer', 'uint32']);
-const spawnGeometry = new NativeFunction(va('0x1406a5ed0'), 'pointer', ['pointer', 'pointer']);
+const spawnGeometry = new NativeFunction(va('0x1406a6380'), 'pointer', ['pointer', 'pointer']);
 
 const CMD_PATH = 'Z:\\home\\banon\\projects\\er-mods-rs\\target\\geom-lab\\cmd.json';
 const POLL_FRAMES = 15;
@@ -260,8 +264,14 @@ let keptAnchor = null;        // the anchor GeomIns they were placed against, as
 // the view widening) are caught too. Kept sweeps are saved beside the command file so a hot
 // reload of this agent does not drop them.
 const SWEEPS_PATH = CMD_PATH.replace(/cmd\.json$/, 'sweeps.json');
+// `--config-json '{"noSweeps": true}'` leaves the saved sweeps alone: none are loaded or replayed,
+// and a `sweep` command does not rewrite the file, so work in another part of the map does not
+// inherit a restoration experiment's hidden parts.
+const NO_SWEEPS = !!((globalThis.__ER_FRIDA_CONFIG || {}).noSweeps);
 let sweeps = [];
-try { sweeps = JSON.parse(File.readAllText(SWEEPS_PATH)); } catch (e) { /* none yet */ }
+if (!NO_SWEEPS) {
+  try { sweeps = JSON.parse(File.readAllText(SWEEPS_PATH)); } catch (e) { /* none yet */ }
+}
 
 function allBlocks() {
   const out = [];
@@ -307,10 +317,27 @@ function sweepOnce(cmd) {
   return { hiddenNow: hiddenNow, perBlock: perBlock };
 }
 
+// A block whose geom vector is unchanged since the last replay has nothing new to hide, so the
+// replay only rescans blocks that streamed in or were rebuilt. Rescanning every block every tick
+// read every GeomIns in the world under the player's update and dropped a frame each time
+// (measured 2026-10-21 with 11 kept sweeps and ~3,400 hidden parts).
+const sweptBlocks = new Map();   // block id -> "first:last:sweep count" when last swept
 function runSweeps() {
-  for (const cmd of sweeps) {
-    const r = sweepOnce(cmd);
-    if (r.hiddenNow > 0) emit('sweep', { match: cmd.match, kept: true, hiddenNow: r.hiddenNow, perBlock: r.perBlock });
+  if (sweeps.length === 0) return;
+  const changed = [];
+  for (const b of allBlocks()) {
+    let key;
+    try { key = b.data.add(0x290).readPointer() + ':' + b.data.add(0x298).readPointer() + ':' + sweeps.length; } catch (e) { continue; }
+    if (sweptBlocks.get(b.id) === key) continue;
+    sweptBlocks.set(b.id, key);
+    changed.push(b.id);
+  }
+  for (const id of changed) {
+    for (const cmd of sweeps) {
+      if (cmd.block !== undefined && (parseInt(cmd.block) >>> 0) !== id) continue;
+      const r = sweepOnce(Object.assign({}, cmd, { block: id }));
+      if (r.hiddenNow > 0) emit('sweep', { match: cmd.match, kept: true, hiddenNow: r.hiddenNow, perBlock: r.perBlock });
+    }
   }
 }
 
@@ -358,12 +385,16 @@ function apply(geom, enable, draw, collision) {
   if (collision) setCollision(proxyFor(geom), enable ? 1 : 0);
 }
 
-function spawnAt(data, asset, pos, rot, scale) {
+// `sfx`, when a number, is the placement's AssetSfxParamRelativeID (request +0xa4, -1 after init):
+// the game then attaches AssetModelSfxParam row modelId*1000 + sfx itself, which is how a placed
+// brazier gets its fire and light (bd asset-model-sfx-lights-spawned-geom-2720-2026-10-21).
+function spawnAt(data, asset, pos, rot, scale, sfx) {
   const req = Memory.alloc(0x100);
   initSpawnRequest(req, 5);
   for (let i = 0; i < 0x20; i++) req.add(i * 2).writeU16(i < asset.length ? asset.charCodeAt(i) : 0);
   const at = [pos[0], pos[1], pos[2], rot[0], rot[1], rot[2], scale[0], scale[1], scale[2]];
   at.forEach((v, i) => req.add(0x70 + i * 4).writeFloat(v));
+  if (typeof sfx === 'number') req.add(0xa4).writeS32(sfx);
   const geom = spawnGeometry(data, req);
   if (!geom.isNull()) spawned.push(geom);
   return geom;
@@ -412,7 +443,7 @@ function run(cmd, player) {
     }
     // Padded to a fixed length: writeAllText here does not truncate a longer old file (measured
     // 2026-10-17, a shorter list left the old tail behind and the file stopped parsing).
-    try { File.writeAllText(SWEEPS_PATH, JSON.stringify(sweeps).padEnd(65536)); } catch (e) { emit('error', { op: 'sweep', error: 'save: ' + e.message }); }
+    if (!NO_SWEEPS) try { File.writeAllText(SWEEPS_PATH, JSON.stringify(sweeps).padEnd(65536)); } catch (e) { emit('error', { op: 'sweep', error: 'save: ' + e.message }); }
     return;
   }
   if (cmd.op === 'state') {
@@ -511,6 +542,109 @@ function run(cmd, player) {
   if (cmd.op === 'batch') {
     // Several commands in one seq, each run as if sent alone (and kept alone, with `keep`).
     for (const sub of cmd.cmds) run(sub, player);
+    return;
+  }
+  if (cmd.op === 'polygon') {
+    // An arena wall ring: `verts` [[x, z], ...] in metres around the player, in the block's own
+    // frame, are the inner corners; each edge gets one AEG099_002 invisible wall scaled to the
+    // edge's length, `thick` metres thick (default 0.6) and pushed outward so its inner face sits
+    // on the edge. `diamond: [a, b]` is shorthand for corners at +-a/2 on x and +-b/2 on z.
+    // Positions come from PlayerIns+0x6c0 block_position (the engine's own block-local copy, bd
+    // er-local-warp-no-reload-1171-2026-10-17), not the physics position, whose origin floats.
+    // `centreOf: <regex>` with `block: <id>` centres it on the parts that match instead: x and z
+    // at their mean MSB position, y at the lowest one (the footing), in that block's frame.
+    let bp;
+    let target = data;
+    if (cmd.centreOf) {
+      target = blockData(parseInt(cmd.block) >>> 0);
+      if (target === null) { emit('error', { op: 'polygon', error: 'block ' + cmd.block + ' not loaded' }); return; }
+      const re = new RegExp(cmd.centreOf);
+      const ps = geomsOf(target).filter((g) => re.test(partName(g) || '')).map((g) => vec3(g.add(0x48).readPointer().add(MSB_POS)));
+      if (ps.length === 0) { emit('error', { op: 'polygon', error: 'no part matches ' + cmd.centreOf }); return; }
+      bp = [ps.reduce((s, p) => s + p[0], 0) / ps.length, Math.min.apply(null, ps.map((p) => p[1])), ps.reduce((s, p) => s + p[2], 0) / ps.length];
+      emit('centre', { parts: ps.length, centre: round(bp), ySpan: round([Math.min.apply(null, ps.map((p) => p[1])), Math.max.apply(null, ps.map((p) => p[1]))]) });
+    } else {
+      bp = vec3(player.add(0x6c0));
+      const bpBlock = player.add(0x6d0).readU32() >>> 0;
+      if (bpBlock !== me.block) { emit('error', { op: 'polygon', error: 'block_position block ' + hex(bpBlock) + ' != player block ' + hex(me.block) }); return; }
+    }
+    const verts = cmd.diamond
+      ? [[cmd.diamond[0] / 2, 0], [0, cmd.diamond[1] / 2], [-cmd.diamond[0] / 2, 0], [0, -cmd.diamond[1] / 2]]
+      : cmd.verts;
+    const W = 14.925;
+    const thick = cmd.thick || 0.6;
+    const sink = cmd.sink === undefined ? 1 : cmd.sink;
+    const walls = [];
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i];
+      const b = verts[(i + 1) % verts.length];
+      const ex = b[0] - a[0];
+      const ez = b[1] - a[1];
+      const len = Math.hypot(ex, ez);
+      // Outward normal: away from the polygon's centroid (the player).
+      let nx = ez / len;
+      let nz = -ex / len;
+      const mx = (a[0] + b[0]) / 2;
+      const mz = (a[1] + b[1]) / 2;
+      if (nx * mx + nz * mz < 0) { nx = -nx; nz = -nz; }
+      // The wall's model x axis lands on world (cos yaw, -sin yaw), the convention `place` uses.
+      const yaw = Math.atan2(-ez, ex);
+      const pos = [bp[0] + mx + nx * thick / 2, bp[1] - sink, bp[2] + mz + nz * thick / 2];
+      const scale = [(len + thick) / W, cmd.height ? cmd.height / 8.333 : 1, thick / 0.13];
+      const geom = cmd.visualOnly ? NULL : spawnAt(target, 'AEG099_002', pos, [0, yaw, 0], scale);
+      const wall = { len: Math.round(len * 100) / 100, at: round(pos), yaw: Math.round(yaw * 1000) / 1000, ok: cmd.visualOnly ? null : !geom.isNull(), ptr: geom.toString() };
+      // `visual: <model>` with `visualBox: {size: [w, h, t], min: [x, y, z]}` (its FLVER bounds,
+      // scripts/er-asset-slab-census.py) draws that model over the collider: scaled so its box is
+      // the wall's box, and moved so its box's bottom centre lands where the collider's is.
+      // Collision is turned off on it, so the invisible wall stays the only thing you hit.
+      if (cmd.visual) {
+        const vb = cmd.visualBox;
+        const hgt = cmd.height || 8.333;
+        const vs = [(len + thick) / vb.size[0], hgt / vb.size[1], thick / vb.size[2]];
+        const c = [(vb.min[0] + vb.size[0] / 2) * vs[0], vb.min[1] * vs[1], (vb.min[2] + vb.size[2] / 2) * vs[2]];
+        const cy = Math.cos(yaw);
+        const sy = Math.sin(yaw);
+        const vpos = [pos[0] - (c[0] * cy + c[2] * sy), pos[1] - c[1], pos[2] - (-c[0] * sy + c[2] * cy)];
+        const v = spawnAt(target, cmd.visual, vpos, [0, yaw, 0], vs);
+        if (!v.isNull()) setCollision(proxyFor(v), 0);
+        wall.visual = { ok: !v.isNull(), at: round(vpos), scale: round(vs), ptr: v.toString() };
+      }
+      walls.push(wall);
+    }
+    emit('polygon', { block: cmd.centreOf ? cmd.block : hex(me.block), centre: round(bp), physics: round(me.pos), walls: walls });
+    return;
+  }
+  if (cmd.op === 'spawnlist') {
+    // {block, items: [{asset, pos, rot, scale, collision?, tag?}]}: spawn each item at a transform
+    // already worked out on the host (scripts/er-arena-build.py), in that block's own frame.
+    // `collision: false` turns the item's collision off, for a model drawn over an invisible
+    // AEG099_002 collider. `sfx` is the item's AssetSfxParamRelativeID (see spawnAt). Every item's
+    // pointer and instance name are reported for teardown.
+    const target = blockData(parseInt(cmd.block) >>> 0);
+    if (target === null) { emit('error', { op: 'spawnlist', error: 'block ' + cmd.block + ' not loaded' }); return; }
+    const out = [];
+    if (cmd.items.some((it) => typeof it.sfx === 'number')) sfxWatchUntil = Date.now() + 20000;
+    for (const it of cmd.items) {
+      const g = spawnAt(target, it.asset, it.pos, it.rot, it.scale, it.sfx);
+      if (!g.isNull() && it.collision === false) setCollision(proxyFor(g), 0);
+      out.push({ tag: it.tag, ok: !g.isNull(), ptr: g.toString(), name: g.isNull() ? null : partName(g) });
+    }
+    emit('spawnlist', { block: cmd.block, spawned: out.filter((r) => r.ok).length, items: out });
+    return;
+  }
+  if (cmd.op === 'collision') {
+    // {ptrs: [...], enable}: collision only, on spawned instances named by pointer (a polygon's
+    // `walls[].ptr`), each checked to still be the asset it was before anything is called on it.
+    const out = [];
+    for (const s of cmd.ptrs) {
+      const g = ptr(s);
+      let name = null;
+      try { name = partName(g); } catch (e) { /* freed */ }
+      if (cmd.name && name !== cmd.name) { out.push({ ptr: s, skipped: 'name is ' + name }); continue; }
+      setCollision(proxyFor(g), cmd.enable ? 1 : 0);
+      out.push({ ptr: s, name: name, collision: !!cmd.enable });
+    }
+    emit('collision', { changed: out });
     return;
   }
   if (cmd.op === 'boxes') {
@@ -631,8 +765,10 @@ function run(cmd, player) {
   } else if (cmd.op === 'unspawn') {
     // Spawned instances are not in the block's geom vector, so `toggle` cannot reach them; hide
     // them through this agent's own list instead (lost on a reload in place).
+    // Given `ptrs`, only those: the list below would otherwise take everything spawned since the
+    // last reload with them.
     const gone = [];
-    for (const g of spawned) {
+    for (const g of cmd.ptrs ? [] : spawned) {
       const name = partName(g);
       if (match && !(name && match.test(name))) continue;
       apply(g, !!cmd.enable, true, true);
@@ -640,11 +776,14 @@ function run(cmd, player) {
     }
     // A reload empties that list, so earlier spawns are also accepted by pointer (from the log),
     // each checked against its expected part name before anything is called on it.
+    // `asset` instead of `name` accepts any instance of that model (a spawn's instance number is
+    // not in every log line that carries its pointer).
     for (const entry of cmd.ptrs || []) {
       const g = ptr(entry.ptr);
       let name = null;
       try { name = partName(g); } catch (e) { /* freed */ }
-      if (name !== entry.name) { gone.push({ ptr: entry.ptr, skipped: 'name is ' + name }); continue; }
+      const ok = entry.name ? name === entry.name : !!(entry.asset && name && name.indexOf(entry.asset + '_') === 0);
+      if (!ok) { gone.push({ ptr: entry.ptr, skipped: 'name is ' + name }); continue; }
       apply(g, !!cmd.enable, true, true);
       gone.push(name);
     }
@@ -765,6 +904,7 @@ function run(cmd, player) {
 }
 
 let frame = 0;
+let sfxWatchUntil = 0;
 // A reload in place must not replay the command already on disk (a swap would spawn twice).
 let lastSeq = null;
 try { lastSeq = JSON.parse(File.readAllText(CMD_PATH)).seq; } catch (e) { /* no file yet */ }
@@ -785,5 +925,15 @@ const hook = Interceptor.attach(PRE_BEHAVIOR_SAFE, {
   },
 });
 
+// The oracle for `sfx`: CS::GeomModelSfxSlot's fill (2.7.2.0 0x140696f50, 1.16.2 0x140695c50 by
+// way of FUN_140692ea0; rcx slot, edx AssetModelSfxParam row) runs for every asset whose placement
+// selects a row. Reported for 20 s after a spawnlist that asked for one (sfxWatchUntil), so
+// streaming map assets do not flood the log.
+const sfxFill = Interceptor.attach(va('0x140696f50'), {
+  onEnter (args) {
+    if (Date.now() < sfxWatchUntil) emit('sfxslot', { slot: args[0].toString(), row: args[1].toInt32() });
+  },
+});
+
 emit('ready', { cmd: CMD_PATH });
-rpc.exports = { dispose () { hook.detach(); } };
+rpc.exports = { dispose () { hook.detach(); sfxFill.detach(); } };

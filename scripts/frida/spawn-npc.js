@@ -11,7 +11,7 @@
 // spawn a second one while the first is alive. Measured 2026-10-05: before this guard, every save
 // spawned another, and three of them killed the level-9 test character.
 //
-// Why not SpawnDynamicChr (0x140507d00), which this agent used first. Its only retail caller,
+// Why not SpawnDynamicChr (1.17.1 0x140507d00 -> 2.7.2.0 0x140507f80), which this agent used first. Its only retail caller,
 // CSTalkDynamicChrCtrl, always passes charaInitParam -1, so the game never builds a human through
 // it. Driven with a CharaInitParam it did build a moving PlayerIns once, but later spawns were freed
 // within seconds and the next one crashed the renderer 0.3 s after creation (game+0xb7256d, model
@@ -22,18 +22,34 @@
 // and registration in the manager's summon groups keyed by the owner's character event id, which
 // is what RemoveSummonsByOwnerEventId tears down through RemoveChrIns.
 //
-// Addresses, 1.17.1, each read out of eldenring-deobf-1.17.1.bin (all below the 0xafefe9 shift
-// boundary, so 1.17.0 == 1.17.1; names from the 1.16.2 dump on :8765):
-//   SummonBuddyManager::CreateSummonChr 0x1404baea0 (1.16.2 0x1404ba980): its body loads FieldArea
-//       [0x143d6d248]+0x18 and calls GetWorldBlockInfoByBlockId 0x14066ac40, then
-//       GetBlockCenterInPhysicsSpace 0x140662320, as the 1.16.2 decompile does
-//   WorldChrMan +0x1e538 summonBuddyManager       getter 0x140508960 `mov rax,[rcx+0x1e538]; ret`
-//   ChrIns::GetBlockIdOrigin 0x1403f0490          +0x38, or +0x3c when that is -1
-//   WorldBlockInfo +0x70 block centre              GetBlockCenterInPhysicsSpace 0x140662320
-//   PlayerIns::CharacterEventId 0x140657230       [PlayerIns+0x580]+0x8 (PlayerGameData)
-//   CSFeManImp::UpdatePlayerComponents 0x140773900, the main-thread HUD pass, used as the frame tick
-//   WorldChrMan global 0x143d69ff8, main player at +0x1e508
+// Addresses are for the installed game, FileVersion 2.7.2.0 (1.17.2). Each was measured on 1.17.1
+// (2.7.1.0) out of eldenring-deobf-1.17.1.bin, carried with scripts/map-rvas-1171-to-1172.py and
+// checked against eldenring-deobf-1.17.2.bin with scripts/verify-carry-1171-to-1172.py: every
+// function called or hooked here decodes to the same instructions in both images (branch and
+// rip-relative targets compared through the carry table), every mid-function hook point is an
+// instruction boundary at the same offset of a function whose bytes all match, and the
+// rip-relative readers of every global carry onto readers of its new address. Comments give both,
+// "1.17.1 -> 2.7.2.0"; names are from the 1.16.2 dump on :8765.
+//   SummonBuddyManager::CreateSummonChr 0x1404baea0 -> 0x1404baf80 (1.16.2 0x1404ba980): its body
+//       loads FieldArea [0x143d6d248 -> 0x143d70268]+0x18 and calls GetWorldBlockInfoByBlockId
+//       0x14066ac40 -> 0x14066b0f0, then GetBlockCenterInPhysicsSpace 0x140662320 -> 0x1406627d0
+//   WorldChrMan +0x1e538 summonBuddyManager       getter 0x140508960 -> 0x140508be0 `mov rax,[rcx+0x1e538]; ret`
+//   ChrIns::GetBlockIdOrigin 0x1403f0490 (unmoved) +0x38, or +0x3c when that is -1
+//   WorldBlockInfo +0x70 block centre              GetBlockCenterInPhysicsSpace 0x140662320 -> 0x1406627d0
+//   PlayerIns::CharacterEventId 0x140657230 -> 0x1406576e0, [PlayerIns+0x580]+0x8 (PlayerGameData)
+//   CSFeManImp::UpdatePlayerComponents 0x140773900 -> 0x140773db0, the main-thread HUD pass, used as
+//       the frame tick
+//   WorldChrMan global 0x143d69ff8 -> 0x143d6d018, main player at +0x1e508
 //   ChrIns +0x190 modules -> +0x68 physics -> +0x70 position, +0x60 interpolated orientation (quat)
+//
+// Struct offsets on 2.7.2.0. WorldChrMan grew by 0x10 between +0x1e5e8 and +0x1e5f0: every field
+// from +0x1e5f0 up moved +0x10 (SpawnDynamicChr's [rdi+0x1e610] is [rdi+0x1e620] now, RemoveChrIns's
+// +0x1e630/+0x1e638 are +0x1e640/+0x1e648). The WorldChrMan fields read here, +0x1ded8 (chr sets),
+// +0x1e508, +0x1e524, +0x1e538 and +0x1e5e0, sit below that and keep their offsets in every
+// instruction that reads them. The constructors of ChrIns, PlayerIns, EnemyIns, PlayerGameData,
+// EquipGameData, EquipInventoryData, ChrAsm, AiIns, CSTargetingSystem, CSFeManImp,
+// CSWorldGeomManImp, SummonBuddyManager and the physics, data, time-act, resist and throw modules
+// all carry with every byte equal, so the offsets they lay out did not move.
 //
 // Argument values copy the retail caller, SummonBuddyManager::BuddyGenerator (1.16.2 0x1404bbf9c):
 // the owner's event id and steam id, the spawn block id, a FieldInsHandle of all 0xff / -1 (which
@@ -43,7 +59,16 @@
 // Position: with a known block, CreateSummonChr places the character at block centre + pos, so pos
 // is passed block-relative.
 //
-// Not yet run against a live game.
+// Explicit placement, cfg.at: a list of spots, one per summon in creation order (0 is `spawned`,
+// 1.. the extras), each {block, pos: [x, y, z], yaw?, team?}. `team` puts that summon on its own
+// team (see applyTeam), so two duelists can be made enemies. `pos` is in the block's own frame, the frame
+// MSB parts, PlayerIns+0x6c0 block_position and geom-lab.js spawnAt use; the game's own
+// ConvertBlockCoordsToPhysicsCoords turns it into physics space. The summon is created at that
+// physics point (block-relative to the player's block, as every spawn here is), and on the same
+// frame warped onto it with the warp the sign join uses (see placeAt and spawn). cfg.count is
+// raised to the number of spots. Without cfg.at the summons go in front of the player as before.
+//
+// Not yet run against a live 2.7.2.0 game.
 'use strict';
 
 const cfg = Object.assign({
@@ -67,6 +92,13 @@ const cfg = Object.assign({
     // How many of her to summon. The first is `spawned`; the rest are `extras`, summoned one per
     // frame after it, EXTRA_SPACING m to the side, with the same gear, face and heals.
     count: 2,
+    // Fixed spots instead of in front of the player, one per summon in creation order (see the
+    // header): [{block: "0x3c2a2400", pos: [x, y, z], yaw: radians}, ...], pos in the block's own
+    // frame. yaw is the angle CreateSummonChr and the warp take. Left out, each spot faces the mean
+    // of the other spots, or the player when it is the only one, by the rule spawn() uses to face
+    // the player: atan2(dx, dz) + pi for the direction (dx, dz) toward the target. Only the summon
+    // path places this way.
+    at: null,
 }, globalThis.__ER_FRIDA_CONFIG || {});
 
 // Which path, measured 2026-10-05 on one session each:
@@ -118,7 +150,9 @@ function spawnDynamic(pose) {
     model.add(REQ.MODEL_FLAGS).writeU8(0);
     model.add(REQ.MODEL_BUFFER).writeUtf16String(name);
     if (spawnDynamicChr === null) {
-        spawnDynamicChr = new NativeFunction(va('0x140507d00'), 'pointer', ['pointer', 'pointer']);
+        // 1.17.1 0x140507d00 -> 2.7.2.0 0x140507f80: same instructions, with the function's own
+        // WorldChrMan +0x1e610 read now +0x1e620 (the struct grew, see the header).
+        spawnDynamicChr = new NativeFunction(va('0x140507f80'), 'pointer', ['pointer', 'pointer']);
     }
     const chr = spawnDynamicChr(pose.wcm, req);
     return { chr: chr, at: at, block: null, center: null, ownerEventId: null };
@@ -128,10 +162,11 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const CREATE_SUMMON_CHR = new NativeFunction(va('0x1404baea0'), 'pointer', [
+// 1.17.1 0x1404baea0 -> 2.7.2.0 0x1404baf80
+const CREATE_SUMMON_CHR = new NativeFunction(va('0x1404baf80'), 'pointer', [
     'pointer', // SummonBuddyManager*
-    'pointer', // int* creatorEventId (0x140657230: PlayerGameData +0x8)
-    'pointer', // int64* creatorSteamId (0x140657160 of the player)
+    'pointer', // int* creatorEventId (0x1406576e0: PlayerGameData +0x8)
+    'pointer', // int64* creatorSteamId (0x140657610 of the player)
     'pointer', // BlockId* spawnBlockId
     'uint32',  // param_5 (BuddyGenerator passes its entry's field 0x4)
     'pointer', // FieldInsHandle*
@@ -148,10 +183,10 @@ const CREATE_SUMMON_CHR = new NativeFunction(va('0x1404baea0'), 'pointer', [
     'bool',    // fromNetwork
     'bool',    // hasMoghGreatRune
 ]);
-const GET_BLOCK_INFO = new NativeFunction(va('0x14066ac40'), 'pointer', ['pointer', 'pointer']);
-const FRAME_TICK = va('0x140773900');
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const FIELD_AREA = va('0x143d6d248');
+const GET_BLOCK_INFO = new NativeFunction(va('0x14066b0f0'), 'pointer', ['pointer', 'pointer']);   // 0x14066ac40 -> 0x14066b0f0
+const FRAME_TICK = va('0x140773db0');          // 0x140773900 -> 0x140773db0
+const WORLD_CHR_MAN = va('0x143d6d018');       // 0x143d69ff8 -> 0x143d6d018
+const FIELD_AREA = va('0x143d70268');          // 0x143d6d248 -> 0x143d70268
 const MAIN_PLAYER = 0x1e508;
 const SUMMON_BUDDY_MANAGER = 0x1e538;
 const FIELD_AREA_WORLD_INFO = 0x18;
@@ -223,6 +258,13 @@ function applyTeam(chr) {
         // cfg.summonTeam overrides that locally (6 is the team every enemy measured has); a peer's
         // copy still takes the creator's team from the summon packet.
         if (cfg.summonTeam !== null && cfg.summonTeam !== undefined) want = cfg.summonTeam;
+        // A cfg.at spot's own `team` wins over both, so two duelists can stand on opposing teams
+        // (CS::ChrIns::CanTargetTeamType accepts only an opposing pair, so two summons left on the
+        // player's team never target each other).
+        const extra = extras.findIndex((c) => c.equals(chr));
+        const index = spawned !== null && chr.equals(spawned) ? 0 : extra >= 0 ? extra + 1 : -1;
+        const spot = index >= 0 && Array.isArray(cfg.at) ? cfg.at[index] : undefined;
+        if (spot && typeof spot.team === 'number') want = spot.team;
     }
     if (want !== before) {
         t.writeU8(want);
@@ -231,22 +273,108 @@ function applyTeam(chr) {
     return want;
 }
 
+// Arena duels on the Colosseum teams. No team pair in the stock tables is hostile both ways while
+// neither targets the player (team 1), measured over the whole matrix (bd
+// team-relation-matrix-duel-pair-2720-2026-10-21). Teams 72..76 are the Colosseum's free-for-all
+// teams (CSQuickMatchingCtrl's team list) and no NpcParam, RoleParam or SpEffect row uses them, so a
+// cfg.at spot on one of them gets three cells set to the Neutral relation: target[t][1] (the AI
+// never picks the player), damage[t][1] (a stray swing does not land on the player) and target[1][t]
+// (the player's lock-on and the AI notify path). target[72][73] and the rest stay Enemy.
+//
+// Tables, 2.7.2.0 (identical cell for cell on 1.16.2 and 1.17.1): 79 x 79 pointers, row = the actor,
+// read by CS::ChrIns::CanTargetTeamType 0x14051b8b0 (1.16.2 0x14051a810, `imul ...,0x4f`). Target
+// table 0x143b2b3f0, damage table 0x143b1f0e0; each cell points at one of four stateless
+// singletons, Friend 0x143b1f0b8, Enemy 0x143b1f0c0, Rival 0x143b1f0c8, Neutral 0x143b1f0d0. A cell
+// is written only while it holds one of the four, and every write is put back by restoreRelations
+// (dispose, and before a respawn re-patches).
+const TEAM_TABLES = { target: va('0x143b2b3f0'), damage: va('0x143b1f0e0') };
+const RELATION = {
+    friend: va('0x143b1f0b8'), enemy: va('0x143b1f0c0'), rival: va('0x143b1f0c8'), neutral: va('0x143b1f0d0'),
+};
+const TEAM_COUNT = 79;
+const ARENA_TEAMS = [72, 73, 74, 75, 76];
+const PLAYER_TEAM = 1;
+const relationRestore = [];
+
+function relationCell(table, actor, subject) {
+    return TEAM_TABLES[table].add((actor * TEAM_COUNT + subject) * 8);
+}
+
+function setRelation(table, actor, subject, to) {
+    const cell = relationCell(table, actor, subject);
+    const before = cell.readPointer();
+    if (!Object.values(RELATION).some((r) => r.equals(before))) {
+        emit('relation-refused', { table, actor, subject, holds: before.toString() });
+        return;
+    }
+    if (before.equals(RELATION[to])) return;
+    relationRestore.push({ cell, before });
+    cell.writePointer(RELATION[to]);
+    emit('relation', { table, actor, subject, to });
+}
+
+function restoreRelations() {
+    while (relationRestore.length > 0) {
+        const r = relationRestore.pop();
+        r.cell.writePointer(r.before);
+    }
+}
+
+function patchArenaTeams() {
+    restoreRelations();
+    const teams = new Set((Array.isArray(cfg.at) ? cfg.at : []).map((s) => s && s.team)
+        .filter((t) => ARENA_TEAMS.includes(t)));
+    for (const t of teams) {
+        setRelation('target', t, PLAYER_TEAM, 'neutral');
+        setRelation('damage', t, PLAYER_TEAM, 'neutral');
+        setRelation('target', PLAYER_TEAM, t, 'neutral');
+    }
+}
+
+// The fight switch, cfg.fight (the arena lever drives it through the `fight` export). Off holds every
+// summon with the game's own per-character debug flags, ChrIns +0x538 bit 0x10 no-attack and bit
+// 0x20 no-move, which ComManipulator's AI update tests (2.7.2.0 `test byte [rax+0x538],0x10` at
+// 0x1403d0008 and 0x1403d0141, `,0x20` at 0x1403d0537; the field was +0x530 on 1.16.2, bd
+// chrctrl-updateai-chrmanipulator-override-is-the-possession-seam-2026-09-01). On clears both. Unset
+// (null) leaves the flags alone. Only these two bits are touched.
+const DEBUG_FLAGS = 0x538;
+const HOLD_FLAGS = 0x30;
+
+function applyFight(chr) {
+    if (cfg.fight === null || cfg.fight === undefined) return null;
+    const f = chr.add(DEBUG_FLAGS);
+    const before = f.readU8();
+    const want = cfg.fight ? before & ~HOLD_FLAGS : before | HOLD_FLAGS;
+    if (want !== before) {
+        f.writeU8(want);
+        emit('fight', { chr: chr.toString(), on: !!cfg.fight, from: before, to: want });
+    }
+    return !!cfg.fight;
+}
+
 // ChrIns +0x90 initial position (HavokPosition, physics space) is the AI's POINT_INITIAL, its home:
 // measured 2026-10-05, writing his own physics position there took GetDist(POINT_INITIAL) from
 // 44.97 to 0.69. Measured the same day, twice: whenever his home is far from him (52 m from his
 // spawn point, past Moongrum's maxBackhomeDist of 45; or 12 m away after the home was moved onto
 // the player) none of his Lua runs at all -- the engine walks him home itself, here into a wall.
 // cfg.home picks where the home is, rewritten every heartbeat:
-//   'spawn'   where he was created (homeSpawned), the game's own behaviour
+//   'spawn'   where he was created (homes), the game's own behaviour
 //   'self'    wherever he stands, so he is always home and his Lua always decides
 //   'player'  the player's position (kept for the record: it starves his Lua, as above)
+//
+// Each summon keeps its own creation point as 'spawn' home. They used to share the first one's,
+// which put an extra's home wherever `spawned` stood: harmless 1.5 m to the side, but two duelists
+// on spots 15 m apart would have one of them 15 m from home, past the 12 m measured above.
 const INITIAL_POS = 0x90;
-let homeSpawned = null;
+const homes = new Map();
+// setHome's point, when given: the 'spawn' home of every summon.
+let homeSet = null;
 
 function applyHome(chr, playerPos) {
     const h = chr.add(INITIAL_POS);
-    if (homeSpawned === null) homeSpawned = [h.readFloat(), h.add(4).readFloat(), h.add(8).readFloat()];
-    let want = homeSpawned;
+    const key = chr.toString();
+    if (!homes.has(key)) homes.set(key, [h.readFloat(), h.add(4).readFloat(), h.add(8).readFloat()]);
+    let want = homeSet !== null ? homeSet : homes.get(key);
     if (cfg.home === 'player' && playerPos) want = playerPos;
     if (cfg.home === 'self') {
         const physics = physicsOf(chr);
@@ -272,9 +400,13 @@ const CHR_ASM_PTR = 0x638;
 const PGD_CHR_ASM = 0x31c;
 const CHR_ASM_PARAM_IDS = 0x7c;
 // ChrAsmSlot order: the weapon slots interleave left and right (0 = WeaponLeft1, 1 = WeaponRight1).
+// Talismans are Accessory1..4, 17..20 (fromsoftware-rs ChrAsmSlot). Writing their param ids puts
+// the talisman in the slot; whether its passive effect follows without the game's own equip call is
+// not measured.
 const EQUIP_SLOT = {
     left1: 0, right1: 1, left2: 2, right2: 3, left3: 4, right3: 5,
     head: 12, chest: 13, hands: 14, legs: 15,
+    talisman1: 17, talisman2: 18, talisman3: 19, talisman4: 20,
 };
 let equipApplied = null;
 
@@ -282,12 +414,13 @@ let equipApplied = null;
 // the param id: measured 2026-10-05 on Moonrithyll, after right1's param id was rewritten to
 // Bloodfiend's Arm, ai:GetArtsID still answered 5550 (Tremendous Phalanx) and the gaitem her ChrAsm
 // named still held 4690000, her CharaInitParam sword, with no gem. The gaitem is minted the way the
-// chainsaw driver's grant mints one (0x140672b30 into a 16-byte handle buffer, gem -1 for none) and
-// its handle written into ChrAsm gaitem_handles (+0x24, one u32 per ChrAsmSlot). The handle buffer
-// is never released, so the gaitem keeps its reference for as long as she lives.
+// chainsaw driver's grant mints one (1.17.1 0x140672b30 -> 2.7.2.0 0x140672fe0, into a 16-byte
+// handle buffer, gem -1 for none) and its handle written into ChrAsm gaitem_handles (+0x24, one u32
+// per ChrAsmSlot). The handle buffer is never released, so the gaitem keeps its reference for as
+// long as she lives. CSGaitem global 0x143d6d900 -> 0x143d70920.
 const CHR_ASM_GAITEM = 0x24;
-const CSGAITEM = va('0x143d6d900');
-const MINT_WEAPON = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'pointer', 'int', 'int']);
+const CSGAITEM = va('0x143d70920');
+const MINT_WEAPON = new NativeFunction(va('0x140672fe0'), 'pointer', ['pointer', 'pointer', 'int', 'int']);
 const minted = new Map();
 
 function mintKey(chr, slot, piece) {
@@ -403,30 +536,32 @@ function applyEquip(chr, canMint, index) {
 }
 
 // The build's face: a planner `faceData` blob is the game's own 288-byte face buffer (magic FACE,
-// version 4), applied with CS::PlayerGameData::CopyFaceDataFromBuffer (1.17.1 0x140261010:
-// add rcx,0x760; jmp FaceData::CopyFromBuffer), the call er-build-import-runtime face.rs uses on
-// the player. An NPC's PlayerGameData holds the same face block (+0x768, filled from FaceParam by
-// the CharaInitParam apply), so the same call works on her. Static reading, by a research pass
-// on 2026-10-05; called once at creation, since every accepted call makes the model re-apply it.
+// version 4), applied with CS::PlayerGameData::CopyFaceDataFromBuffer (1.17.1 0x140261010,
+// unmoved in 2.7.2.0: add rcx,0x760; jmp FaceData::CopyFromBuffer), the call
+// er-build-import-runtime face.rs uses on the player. An NPC's PlayerGameData holds the same face
+// block (+0x768, filled from FaceParam by the CharaInitParam apply), so the same call works on her.
+// Static reading, by a research pass on 2026-10-05; called once at creation, since every accepted
+// call makes the model re-apply it.
 const COPY_FACE = new NativeFunction(va('0x140261010'), 'void', ['pointer', 'pointer']);
-const SUMMON_NET_ENABLED = new NativeFunction(va('0x1404b7710'), 'bool', []);
+const SUMMON_NET_ENABLED = new NativeFunction(va('0x1404b77f0'), 'bool', []);   // 0x1404b7710 -> 0x1404b77f0
 
-// The spirit-summon network calls, 1.17.1, read out of BuddyGenerator 0x1404bbdd0 (bd
-// buddy-summon-broadcast-path-1171-2026-10-05).
-const PLAYER_STEAM_ID = new NativeFunction(va('0x140657160'), 'pointer', ['pointer', 'pointer']);
-const PLAYER_EVENT_ID = new NativeFunction(va('0x140657230'), 'pointer', ['pointer', 'pointer']);
-const P2P_HANDLE_OF = new NativeFunction(va('0x14037c670'), 'pointer', ['pointer', 'pointer']);
-const P2P_HANDLE_DROP = new NativeFunction(va('0x1404dc280'), 'void', ['pointer']);
-const SET_LOCAL_CONTROL = new NativeFunction(va('0x1404df5c0'), 'void', ['pointer', 'pointer', 'uint8']);
-const INIT_CHR_OWNED = new NativeFunction(va('0x1404deac0'), 'void', ['pointer', 'pointer', 'uint32']);
-const SUMMON_SYNC_FLAGS = new NativeFunction(va('0x1403f59b0'), 'void', ['pointer', 'uint32']);
-const BUDDY_PACKET_INIT = new NativeFunction(va('0x140ca68b0'), 'void', ['pointer']);
-const BUDDY_PACKET_FLAG = new NativeFunction(va('0x140ca8490'), 'void', ['pointer', 'uint8']);
-const BROADCAST_BUDDY_SUMMON = new NativeFunction(va('0x140ca00f0'), 'void', ['pointer', 'pointer']);
-// NotifyBuddyUnsummon(SummonBuddyManager*, FieldInsHandle*): the AI's own unsummon. Deferred: the
-// manager's post-physics update unlinks the group entry, removes the character and broadcasts
-// packet 79, which is the order RemoveChrIns alone gets wrong.
-const NOTIFY_BUDDY_UNSUMMON = new NativeFunction(va('0x1404b84b0'), 'void', ['pointer', 'pointer']);
+// The spirit-summon network calls, read out of BuddyGenerator 1.17.1 0x1404bbdd0 -> 2.7.2.0
+// 0x1404bbeb0 (bd buddy-summon-broadcast-path-1171-2026-10-05). 1.17.1 -> 2.7.2.0 on each line.
+const PLAYER_STEAM_ID = new NativeFunction(va('0x140657610'), 'pointer', ['pointer', 'pointer']);      // 0x140657160
+const PLAYER_EVENT_ID = new NativeFunction(va('0x1406576e0'), 'pointer', ['pointer', 'pointer']);      // 0x140657230
+const P2P_HANDLE_OF = new NativeFunction(va('0x14037c670'), 'pointer', ['pointer', 'pointer']);        // unmoved
+const P2P_HANDLE_DROP = new NativeFunction(va('0x1404dc360'), 'void', ['pointer']);                    // 0x1404dc280
+const SET_LOCAL_CONTROL = new NativeFunction(va('0x1404df6a0'), 'void', ['pointer', 'pointer', 'uint8']);   // 0x1404df5c0
+const INIT_CHR_OWNED = new NativeFunction(va('0x1404deba0'), 'void', ['pointer', 'pointer', 'uint32']);  // 0x1404deac0
+const SUMMON_SYNC_FLAGS = new NativeFunction(va('0x1403f59b0'), 'void', ['pointer', 'uint32']);       // unmoved
+const BUDDY_PACKET_INIT = new NativeFunction(va('0x140ca7ec0'), 'void', ['pointer']);                  // 0x140ca68b0
+const BUDDY_PACKET_FLAG = new NativeFunction(va('0x140ca9aa0'), 'void', ['pointer', 'uint8']);         // 0x140ca8490
+const BROADCAST_BUDDY_SUMMON = new NativeFunction(va('0x140ca1030'), 'void', ['pointer', 'pointer']);  // 0x140ca00f0
+// NotifyBuddyUnsummon(SummonBuddyManager*, FieldInsHandle*), 1.17.1 0x1404b84b0 -> 2.7.2.0
+// 0x1404b8590: the AI's own unsummon. Deferred: the manager's post-physics update unlinks the
+// group entry, removes the character and broadcasts packet 79, which is the order RemoveChrIns
+// alone gets wrong.
+const NOTIFY_BUDDY_UNSUMMON = new NativeFunction(va('0x1404b8590'), 'void', ['pointer', 'pointer']);
 const NET_CHR_SYNC = 0x1e5e0;
 const CHR_CREATOR_STEAM_ID = 0x218;
 const SUMMON_ARG5 = 0xffffffff;
@@ -439,14 +574,14 @@ const BUDDY_PACKET = {
 const FACE_BLOCK = 0x768;
 
 // A summon's displayed name. Every name plate and lock-on tag gets its text from
-// GetChrName(MenuString* out, ChrIns* chr, bool decorate), 1.16.2 0x14075f750 = 1.17.x 0x1407605a0
-// (bd npc-overhead-name-source-getchrname-1171-2026-10-06). For an NPC it is NpcParam's nameId,
+// GetChrName(MenuString* out, ChrIns* chr, bool decorate), 1.16.2 0x14075f750 = 1.17.1 0x1407605a0
+// -> 2.7.2.0 0x140760a50 (bd npc-overhead-name-source-getchrname-1171-2026-10-06). For an NPC it is NpcParam's nameId,
 // never PlayerGameData character_name: writing that changed nothing on screen. The hook below
 // points the returned MenuString's rawString (+0) at a buffer of ours for each named summon; the
 // MenuString destructor frees only its own heap buffer, so the buffer just has to stay alive.
 // A name's buffer is never freed (a tag may hold the pointer past the call); only the ChrIns ->
 // name map is cleared, on respawn, since ChrIns addresses are reused.
-const GET_CHR_NAME = va('0x1407605a0');
+const GET_CHR_NAME = va('0x140760a50');
 const nameTexts = new Map();
 const nameplates = new Map();
 
@@ -463,12 +598,12 @@ function applyName(chr, index) {
 
 // The summon sidebar (spirit-ash panel) has one name label for the whole panel and no text per
 // bar (bd spirit-ash-hud-panel-name-is-one-label-1171-2026-10-06). Its per-frame producer,
-// 0x140771a20 (CSFeManImp*), fills CSFeManImp +0x4d58 visible (u8), +0x4da0 the label MenuString,
-// +0x4dd8 the bar count and +0x4de0 the bars (stride 0x18, ChrIns handle first), and takes the
-// label from the summoning goods, which our summons never had, so it is blank. After it runs, the
-// label's rawString is pointed at our names joined in bar order; the label setter 0x140736200 uses
-// rawString when it is set.
-const FE_BUDDY_PANEL = va('0x140771a20');
+// 1.17.1 0x140771a20 -> 2.7.2.0 0x140771ed0 (CSFeManImp*), fills CSFeManImp +0x4d58 visible (u8),
+// +0x4da0 the label MenuString, +0x4dd8 the bar count and +0x4de0 the bars (stride 0x18, ChrIns
+// handle first), and takes the label from the summoning goods, which our summons never had, so it
+// is blank. After it runs, the label's rawString is pointed at our names joined in bar order; the
+// label setter 0x140736200 -> 0x1407366b0 uses rawString when it is set.
+const FE_BUDDY_PANEL = va('0x140771ed0');
 const namesByHandle = new Map();
 const panelTexts = new Map();
 let panelSeen = null;
@@ -577,7 +712,8 @@ const HEAL_ITEM = 0x40000000 | 50201;
 // 0xb000c419 for 50201).
 const HEAL_HANDLE = 0xb0000000 | 50201;
 // The inventory add the chainsaw driver's grant uses: (EquipGameData*, handle buffer, quantity,
-// u8, u8). Game thread only, so a missing entry is queued for the frame tick.
+// u8, u8), 0x140246480, unmoved in 2.7.2.0. Game thread only, so a missing entry is queued for the
+// frame tick.
 const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']);
 let pendingHealAdd = null;
 
@@ -627,13 +763,13 @@ const FOODS = [
 ];
 
 // EquipParamWeapon isEnhance for the weapon in a summon's right hand, read from the live param
-// table the way scripts/frida/goods-row-live.js walks EquipParamGoods: SoloParamRepository (1.17
-// .data rva 0x3d85f58) -> holder index 0 is EquipParamWeapon -> PARAM blob, rows at +0x40 with a
+// table the way scripts/frida/goods-row-live.js walks EquipParamGoods: SoloParamRepository (.data,
+// 1.17.1 rva 0x3d85f58 -> 2.7.2.0 0x3d88f78) -> holder index 0 is EquipParamWeapon -> PARAM blob, rows at +0x40 with a
 // 24-byte stride. The row is the param id with the upgrade level dropped ((id / 100) * 100, as
 // fromsoftware-rs solo_param_repository.rs looks it up); isEnhance is +0x106 bit 7
 // (EQUIP_PARAM_WEAPON_ST bits_106). Regulation 1.17.1: Keen Parrying Dagger 1, Keen Flail 1,
 // Staff of the Avatar 0.
-const SOLO_PARAM_REPOSITORY = va('0x143d85f58');
+const SOLO_PARAM_REPOSITORY = va('0x143d88f78');
 const WEAPON_IS_ENHANCE = 0x106;
 const enhanceOf = new Map();
 
@@ -1010,12 +1146,72 @@ function playerPose() {
     }
 }
 
-// `side` moves the spot sideways from straight ahead, in metres, for the extras.
-function spawn(pose, side) {
+// cfg.at, block-local to physics: ConvertBlockCoordsToPhysicsCoords(FloatVector* out,
+// FloatVector* local, BlockId*) -> bool (1.16.2 0x14061e120; 1.17.1 0x14061ef70 -> 2.7.2.0
+// 0x14061f420, the call signs-to-player.js makes). For an overworld block (m60, m61) it adds the
+// WorldGridAreaInfo origin of the block, for any other the block's GetBlockCenterInPhysicsSpace,
+// and it returns false when the block is not loaded.
+const BLOCK_TO_PHYSICS = new NativeFunction(va('0x14061f420'), 'uint8', ['pointer', 'pointer', 'pointer']);
+// The warp a sign join puts a summoned NPC in place with (1.16.2 0x1403fa3a0, called from the join
+// at 1.16.2 0x1406fe410; 1.17.1 0x1403fa5d0 -> 2.7.2.0 0x1403fa660): (ChrIns*, FloatVector4*
+// physics position, FloatVector4* rotation). It hands both to ChrCtrl's warp request and flags the
+// character; the join passes the position with w = 1 and the rotation as {x, y, z, 1}, the
+// sign's own rotation vector. bd red-sign-other-map-npc-combat-live-1171-2026-10-06 parked a
+// summon-path spawn with it on its creation frame.
+const WARP_CHR = new NativeFunction(va('0x1403fa660'), 'void', ['pointer', 'pointer', 'pointer']);
+
+function blockIdOf(b) {
+    return (typeof b === 'string' ? parseInt(b, 16) : b) >>> 0;
+}
+
+// The physics position of cfg.at spot `s`, or {why}.
+function spotPhysics(s) {
+    const out = Memory.alloc(16);
+    const local = Memory.alloc(16);
+    const block = Memory.alloc(4);
+    block.writeU32(blockIdOf(s.block));
+    [s.pos[0], s.pos[1], s.pos[2], 0].forEach((v, i) => local.add(i * 4).writeFloat(v));
+    if (!BLOCK_TO_PHYSICS(out, local, block)) return { why: 'block 0x' + blockIdOf(s.block).toString(16) + ' is not loaded' };
+    return { pos: [out.readFloat(), out.add(4).readFloat(), out.add(8).readFloat()] };
+}
+
+// Where summon `index` goes when cfg.at names a spot for it: {spot, pos (physics), yaw}, {why}, or
+// null for the placement in front of the player.
+function placeAt(index, pose) {
+    if (!Array.isArray(cfg.at) || index >= cfg.at.length) return null;
+    const spot = cfg.at[index];
+    const here = spotPhysics(spot);
+    if (here.why !== undefined) return here;
+    let yaw = spot.yaw;
+    if (typeof yaw !== 'number') {
+        const others = cfg.at.filter((o, i) => i !== index).map((o) => spotPhysics(o).pos).filter((p) => p !== undefined);
+        const t = others.length > 0
+            ? [others.reduce((a, p) => a + p[0], 0) / others.length, others.reduce((a, p) => a + p[2], 0) / others.length]
+            : [pose.pos[0], pose.pos[2]];
+        yaw = Math.atan2(t[0] - here.pos[0], t[1] - here.pos[2]) + Math.PI;
+    }
+    return { spot, pos: here.pos, yaw };
+}
+
+// How many summons the config asks for: cfg.count, or one per cfg.at spot when there are more.
+function summonCount() {
+    return Math.max(cfg.count || 1, Array.isArray(cfg.at) ? cfg.at.length : 0);
+}
+
+// `side` moves the spot sideways from straight ahead, in metres, for the extras. `index` is the
+// summon's place (0 is `spawned`); when cfg.at has a spot for it, that spot wins.
+function spawn(pose, side, index) {
     const manager = pose.wcm.add(SUMMON_BUDDY_MANAGER).readPointer();
     if (manager.isNull()) return { why: 'no SummonBuddyManager' };
+    const place = placeAt(index || 0, pose);
+    if (place !== null && place.why !== undefined) return { why: place.why };
 
-    // The player's own block, the way ChrIns::GetBlockIdOrigin reads it.
+    // The player's own block, the way ChrIns::GetBlockIdOrigin reads it, for a cfg.at spot too:
+    // CreateSummonChr (1.16.2 decompile) places an overworld spawn at the centre of the main
+    // player's origin block plus pos plus the grid step from that block to the spawn block, and any
+    // other at the spawn block's centre plus pos. With the player's block as spawn block both reduce
+    // to its centre plus pos, which is what `local` below is measured from. The spot's own block
+    // only feeds the block-local to physics conversion in placeAt.
     let blockId = pose.player.add(CHR_BLOCK_ID).readU32();
     if (blockId === 0xffffffff) blockId = pose.player.add(CHR_BLOCK_ID_FALLBACK).readU32();
     const block = Memory.alloc(4);
@@ -1027,18 +1223,21 @@ function spawn(pose, side) {
 
     // Ahead along the facing; height copied, the way intent::ahead_of places a spawn.
     const s = side || 0;
-    const at = [
+    const at = place !== null ? place.pos : [
         pose.pos[0] - cfg.distance * Math.sin(pose.yaw) + s * Math.cos(pose.yaw),
         pose.pos[1],
         pose.pos[2] - cfg.distance * Math.cos(pose.yaw) - s * Math.sin(pose.yaw),
     ];
+    // CreateSummonChr adds this block's centre (GetBlockCenterInPhysicsSpace) back, so this lands
+    // on `at` whichever origin the physics position came from.
     const local = Memory.alloc(16);
     [at[0] - center[0], at[1] - center[1], at[2] - center[2], 0].forEach((v, i) => local.add(i * 4).writeFloat(v));
 
     const gameData = pose.player.add(PLAYER_GAME_DATA).readPointer();
     if (gameData.isNull()) return { why: 'player has no PlayerGameData' };
-    // The creator ids BuddyGenerator passes (1.17.1 0x1404bc420..0x1404bc4b6): rdx is the player's
-    // PlayerGameData +0x8 event id from 0x140657230, r8 its steam id from 0x140657160.
+    // The creator ids BuddyGenerator passes (1.17.1 0x1404bc420..0x1404bc4b6 -> 2.7.2.0
+    // 0x1404bc500..0x1404bc596): rdx is the player's PlayerGameData +0x8 event id from 0x1406576e0,
+    // r8 its steam id from 0x140657610.
     // Frida frees a Memory.alloc block when its own JS object is collected, so these hold it.
     const steamId = Memory.alloc(8);
     const eventId = Memory.alloc(4);
@@ -1047,22 +1246,34 @@ function spawn(pose, side) {
     const handle = Memory.alloc(8);
     handle.writeU32(0xffffffff);
     handle.add(4).writeS32(-1);
-    const yaw = pose.yaw + Math.PI;
+    const yaw = place !== null ? place.yaw : pose.yaw + Math.PI;
 
     const chr = CREATE_SUMMON_CHR(manager, eventId, steamId, block, SUMMON_ARG5, handle,
         cfg.npcParam, cfg.think, cfg.charaInit, local, yaw,
         // Frida's 'bool' argument type takes integers; a JS boolean raises "expected an integer".
         1, 0, 0xffffffff, 0xffffffff, 0, 0, 0);
+    // A placed summon is also warped onto its spot on its creation frame, as the sign join puts a
+    // summoned NPC in place.
+    let warped = null;
+    if (!chr.isNull() && place !== null) {
+        const pos = Memory.alloc(16);
+        const rot = Memory.alloc(16);
+        [at[0], at[1], at[2], 1].forEach((v, i) => pos.add(i * 4).writeFloat(v));
+        [0, yaw, 0, 1].forEach((v, i) => rot.add(i * 4).writeFloat(v));
+        WARP_CHR(chr, pos, rot);
+        warped = { physics: at, yaw };
+    }
     let net = null;
     if (!chr.isNull() && cfg.net !== false) net = announceSummon(chr, blockId, local, yaw);
     return {
         chr: chr, at: at, block: '0x' + blockId.toString(16), center: center,
         ownerEventId: eventId.readS32(), steamId: steamId.readU64().toString(16), net: net,
+        spot: place !== null ? place.spot : null, warped,
     };
 }
 
 // What BuddyGenerator does after CreateSummonChr when spirit summons are networked (1.17.1
-// 0x1404bc4cd..0x1404bc69b): take local control of the summon's net sync, then broadcast packet 78,
+// 0x1404bc4cd..0x1404bc69b -> 2.7.2.0 0x1404bc5ad..0x1404bc77b): take local control of the summon's net sync, then broadcast packet 78,
 // whose receiver (CreateBuddyFromPacket) makes every peer create the same summon. The gate is
 // IsSpiritSummmonNetworkingEnabled, true under Seamless with allow_summons = 1 (measured
 // 2026-10-05); the peer applies it again before it creates anything.
@@ -1100,8 +1311,10 @@ function announceSummon(chr, blockId, local, yaw) {
 }
 
 // Who removes the spawn. WorldChrManImp::RemoveChrIns(WorldChrManImp*, ChrIns*) is the despawn
-// entry (bd er-spawn-dynamic-chr-safe-entry-and-enedat-drift-2026-09-02; 1.17.1 0x14050b340).
-const REMOVE_CHR_INS = va('0x14050b340');
+// entry (bd er-spawn-dynamic-chr-safe-entry-and-enedat-drift-2026-09-02; 1.17.1 0x14050b340 ->
+// 2.7.2.0 0x14050b5c0, the same instructions with its own WorldChrMan +0x1e630/+0x1e638 reads now
+// +0x1e640/+0x1e648).
+const REMOVE_CHR_INS = va('0x14050b5c0');
 const removeHook = Interceptor.attach(REMOVE_CHR_INS, {
     onEnter(args) {
         if (spawned === null || !args[1].equals(spawned)) return;
@@ -1116,17 +1329,18 @@ const removeHook = Interceptor.attach(REMOVE_CHR_INS, {
 });
 
 // What one of the spawn's hits does, for the AI's kill prediction (mods/kill_confirm.lua). Every hit
-// is computed by CalculateDamage2 (1.17.1 0x140448910, 1.16.2 0x1404483b0; the hook
-// chainsaw-driver.js measured live): the attacker is argument 1, the victim [argument 0 + 0x8], and
+// is computed by CalculateDamage2 (1.17.1 0x140448910 -> 2.7.2.0 0x1404489f0, 1.16.2 0x1404483b0;
+// the hook chainsaw-driver.js measured live): the attacker is argument 1, the victim [argument 0 + 0x8], and
 // on return the HP the hit takes off is the damage info's (argument 2) +0x228. The fact sent is the
 // weakest of her last SWING_KEEP hits, so a kill is predicted only when even that one would do it.
 // Quiet: it updates LAB_WORLD without making her replan, since it changes on every hit.
-const CALC_DAMAGE2 = va('0x140448910');
+const CALC_DAMAGE2 = va('0x1404489f0');
 const DAMAGE_HP = 0x228;
 const SWING_KEEP = 5;
 const swings = [];
 const damageInfo = {};
-const GET_CHR_FROM_HANDLE = new NativeFunction(va('0x140508a50'), 'pointer', ['pointer', 'pointer']);
+// GetChrInsFromHandle(WorldChrMan*, handle*), 1.17.1 0x140508a50 -> 2.7.2.0 0x140508cd0.
+const GET_CHR_FROM_HANDLE = new NativeFunction(va('0x140508cd0'), 'pointer', ['pointer', 'pointer']);
 
 function throwState(chr) {
     try {
@@ -1259,9 +1473,10 @@ const damageHook = Interceptor.attach(CALC_DAMAGE2.readU8() === 0xe9 ? CALC_DAMA
 // set by SummonBuddyManager::RequestWarp, which is called from HksAct -- the character's own
 // behaviour script asks to be warped out. So requests naming our spawn are dropped here.
 //   RequestWarp(SummonBuddyManager*, FieldInsHandle*)  1.16.2 0x1404b7e40 -> 1.17.1 0x1404b8360
-//   (functions map, and a 24-byte prologue match unique in eldenring-deobf-1.17.1.bin)
+//   (functions map, and a 24-byte prologue match unique in eldenring-deobf-1.17.1.bin) -> 2.7.2.0
+//   0x1404b8440
 //   ChrIns+0x8 fieldInsHandle, the field RequestWarp compares against.
-const REQUEST_WARP = va('0x1404b8360');
+const REQUEST_WARP = va('0x1404b8440');
 const requestWarpOriginal = new NativeFunction(REQUEST_WARP, 'void', ['pointer', 'pointer']);
 let warpsDropped = 0;
 Interceptor.replace(REQUEST_WARP, new NativeCallback(function (manager, handle) {
@@ -1279,12 +1494,12 @@ Interceptor.replace(REQUEST_WARP, new NativeCallback(function (manager, handle) 
     requestWarpOriginal(manager, handle);
 }, 'void', ['pointer', 'pointer']));
 
-// SummonBuddyManager::DespawnAll (1.17.1 0x1404b8160) broadcasts packet 0x50 and dismisses every
+// SummonBuddyManager::DespawnAll (1.17.1 0x1404b8160 -> 2.7.2.0 0x1404b8240) broadcasts packet 0x50 and dismisses every
 // summon; statically the post-physics update calls it whenever no summon area is in range. Measured
 // 2026-10-05: it fired every frame from 3.9 s after a summon-path spawn, and the post-physics
 // disappear pass removed her 1.3 s later. So while she is the live summon it is dropped, which
 // also keeps the dismiss packet from reaching peers.
-const DESPAWN_ALL = va('0x1404b8160');
+const DESPAWN_ALL = va('0x1404b8240');
 const despawnAllOriginal = new NativeFunction(DESPAWN_ALL, 'void', ['pointer']);
 let despawnAlls = 0;
 Interceptor.replace(DESPAWN_ALL, new NativeCallback(function (manager) {
@@ -1314,7 +1529,8 @@ let spawnedAt = 0;
 const STABLE_MS = 5000;
 let stableSince = null;
 
-// The summons after the first (cfg.count), how many are still to come, and those to unsummon.
+// The summons after the first (cfg.count, or one per cfg.at spot), how many are still to come, and
+// those to unsummon.
 const EXTRA_SPACING = 1.5;
 let extras = [];
 let extrasWanted = 0;
@@ -1341,7 +1557,7 @@ if (previous !== null && isAlive(previous).alive) {
         spawned = previous;
         spawnedAt = Date.now();
         done = true;
-        if (spawnedPath === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1 - extras.length);
+        if (spawnedPath === 'summon') extrasWanted = Math.max(0, summonCount() - 1 - extras.length);
         emit('adopted', { chr: previous.toString(), extras: extras.length, extrasWanted });
     }
 } else if (despawnedEarlier()) {
@@ -1494,7 +1710,8 @@ function squadChrs() {
 }
 
 // Turtles summoned natively by the Mimic Tear Ashes (mimic-tear-turtles.js swaps the params inside
-// BuddyGenerator 0x1404bbdd0). Kept out of `spawned`/`extras` so the game's own dismissal, FP cost
+// BuddyGenerator, 1.17.1 0x1404bbdd0 -> 2.7.2.0 0x1404bbeb0, whose created bodies come out of
+// CreateSummonChr 0x1404baf80). Kept out of `spawned`/`extras` so the game's own dismissal, FP cost
 // and one-summon rule still apply; here they are only dressed and counted as squad. The Nth body
 // a request creates is dressed as turtle N.
 const MIMIC_TRIGGER = 207000;
@@ -1512,7 +1729,7 @@ function mimicTeam(chr) {
 let mimics = [];
 let mimicTid = null;
 let mimicIndex = 0;
-Interceptor.attach(va('0x1404bbdd0'), {
+Interceptor.attach(va('0x1404bbeb0'), {
     onEnter(args) {
         const request = args[0].add(0x20).readS32();
         if (request < 0 || Math.floor(request / 100) * 100 !== MIMIC_TRIGGER) return;
@@ -1527,7 +1744,7 @@ Interceptor.attach(va('0x1404bbdd0'), {
         emit('mimic-squad', { chrs: mimics.map(String) });
     },
 });
-Interceptor.attach(va('0x1404baea0'), {
+Interceptor.attach(va('0x1404baf80'), {
     onLeave(ret) {
         if (this.threadId !== mimicTid || ret.isNull()) return;
         // `ret` is live and reads whatever rax holds later, so keep a copy.
@@ -2026,18 +2243,20 @@ function veilCheck() {
 
 // One group per summon in the per-player tag list, the one co-op phantoms get, each with its own
 // name and HP bar (bd npc-summons-in-friendly-tag-list-via-producer-probes-1171-2026-10-06). Its
-// producer 0x140778200 rebuilds all 7 entries (CSFeManImp +0x5c60, stride 0xb0) every frame, slot
+// producer 0x140778200 -> 0x1407786b0 rebuilds all 7 entries (CSFeManImp +0x5c60, stride 0xb0) every frame, slot
 // i from GetFieldInsHandleByMemberIndex(i) resolved to a ChrIns, HP from that ChrIns and the name
 // from GetChrName -- so nameHook above names them. Nothing is added to PartyMemberInfo: AddMember
 // is real party state (player limit, red/white counts, join notice) and a risk to Seamless's sync.
 // Instead two probes inside the producer raise its member count by our summons and hand slots
 // real..real+n-1 our handles (ChrIns +0x8), and the voice-chat lookup it calls, which reads
 // PlayerIns +0x6b8 without a null check, is told "no player" for them. All three sites
-// byte-checked in eldenring-deobf-1.17.1.bin; no branch lands inside the probed bytes.
-const TAG_COUNT = va('0x140778292');      // mov [rsp+0x50],eax; eax = players in the world
-const TAG_HANDLE = va('0x14077851c');     // after the handle call; r15d = index, [rbp-0x78] = handle
-const TAG_VOICE = va('0x140cbbc50');      // (.., .., PlayerIns*); returns 0 when r8 is null
-const CS_FE_MAN = va('0x143d6f8f0');
+// byte-checked in eldenring-deobf-1.17.1.bin; no branch lands inside the probed bytes. On 2.7.2.0
+// the producer and the voice lookup carry with every byte equal, so the probe points sit at the
+// same offsets with the same registers. 1.17.1 -> 2.7.2.0 on each line.
+const TAG_COUNT = va('0x140778742');      // 0x140778292: mov [rsp+0x50],eax; eax = players in the world
+const TAG_HANDLE = va('0x1407789cc');     // 0x14077851c: after the handle call; r15d = index, [rbp-0x78] = handle
+const TAG_VOICE = va('0x140cbd340');      // 0x140cbbc50: (.., .., PlayerIns*); returns 0 when r8 is null
+const CS_FE_MAN = va('0x143d72910');      // 0x143d6f8f0
 let tagHandles = [];
 let tagReal = 0;
 let tagSeen = null;
@@ -2069,9 +2288,10 @@ const tagHooks = [
 // Their names drew red: the tag colour is RoleParam.roleNameColor of row vowType*10000 + chrType,
 // and our summons are chrType 5 (Npc), whose row says 2 (hostile); the host, white phantoms and
 // summoned NPCs say 1 (bd npc-summon-tag-name-colour-is-rolenamecolor-1171-2026-10-06). The
-// producer calls GetRoleNameColor at 0x140778802 with the ChrIns in r15 and stores al at
-// 0x140778807 (mov [rsp+0x33],al); for ours, al becomes 1 there. No game state is written.
-const TAG_COLOUR = va('0x140778807');
+// producer calls GetRoleNameColor at 0x140778802 -> 0x140778cb2 with the ChrIns in r15 and stores
+// al at 0x140778807 -> 0x140778cb7 (mov [rsp+0x33],al); for ours, al becomes 1 there. No game state
+// is written.
+const TAG_COLOUR = va('0x140778cb7');
 tagHooks.push(Interceptor.attach(TAG_COLOUR, function () {
     if (tagHandles.length === 0) return;
     const chr = this.context.r15;
@@ -2079,11 +2299,13 @@ tagHooks.push(Interceptor.attach(TAG_COLOUR, function () {
 }));
 
 // A second, red name and HP bar showed over them when hit: the enemy tag list (CSFeManImp
-// +0x59f0, 8 x 0x40), which CSChrDamageModule::UpdateUI 0x1404497e0 feeds through
-// SetEntityHealthBarDamage at 0x140449b43 (bd npc-summon-enemy-damage-tag-producer-1171-2026-10-06).
-// At 0x140449a4e, r12 = 1 makes the next jnz go to 0x140449b55, past that call; rdi is the damage
-// module, whose owner ChrIns is at +0x8. Nothing after reads r12 on that path.
-const ENEMY_BAR_SKIP = va('0x140449a4e');
+// +0x59f0, 8 x 0x40), which CSChrDamageModule::UpdateUI 0x1404497e0 -> 0x1404498c0 feeds through
+// SetEntityHealthBarDamage at 0x140449b43 -> 0x140449c23 (bd
+// npc-summon-enemy-damage-tag-producer-1171-2026-10-06). At 0x140449a4e -> 0x140449b2e, r12 = 1
+// makes the next jnz go to 0x140449b55 -> 0x140449c35, past that call; rdi is the damage module,
+// whose owner ChrIns is at +0x8. Nothing after reads r12 on that path. UpdateUI carries with every
+// byte equal, so all of this holds on 2.7.2.0 at the new addresses.
+const ENEMY_BAR_SKIP = va('0x140449b2e');
 tagHooks.push(Interceptor.attach(ENEMY_BAR_SKIP, function () {
     if (tagHandles.length === 0) return;
     const owner = this.context.rdi.add(8).readPointer();
@@ -2185,21 +2407,26 @@ function statusCheck() {
 }
 
 // Reload the current map in place, as the map events' area reload does: TriggerAreaReload(false),
-// 1.16.2 0x1405f2890 = 1.17.x 0x1405f36e0 (bytes match). With false it also runs the event-flag
-// manager's reload pass first. Requested by the reloadArea RPC and run here, on the game's frame.
-const TRIGGER_AREA_RELOAD = new NativeFunction(va('0x1405f36e0'), 'void', ['uint8']);
+// 1.16.2 0x1405f2890 = 1.17.1 0x1405f36e0 (bytes match) -> 2.7.2.0 0x1405f3b90. With false it also
+// runs the event-flag manager's reload pass first. Requested by the reloadArea RPC and run here, on
+// the game's frame.
+const TRIGGER_AREA_RELOAD = new NativeFunction(va('0x1405f3b90'), 'void', ['uint8']);
 let reloadPending = false;
 
 // A grace rest's world reset without the grace: ResetWorld() (1.16.2 0x1405f35c0 = 1.17.1
-// 0x1405f4410) drops the saved records of dead map characters and sets WorldChrMan +0x1e524 to 1,
-// and the engine then despawns, respawns and restarts the map events over the next frames. The
-// rest then clears world-time +0xec and refills flasks (BonfirelikeRecovery) and items from the
-// chest. See bd grace-rest-recipe-1171-2026-10-06. Requested by the graceRest RPC.
-const GR_WORLD_CHR_MAN = va('0x143d69ff8');
-const GR_CS_EVENT_MAN = va('0x143d6c768');
-const GR_RESET_WORLD = new NativeFunction(va('0x1405f4410'), 'void', []);
-const GR_RECOVERY = new NativeFunction(va('0x1405f4170'), 'void', []);
-const GR_REPLENISH = new NativeFunction(va('0x14024dff0'), 'void', []);
+// 0x1405f4410 -> 2.7.2.0 0x1405f48c0) drops the saved records of dead map characters and sets
+// WorldChrMan +0x1e524 to 1, and the engine then despawns, respawns and restarts the map events
+// over the next frames. The rest then clears world-time +0xec and refills flasks
+// (BonfirelikeRecovery) and items from the chest. See bd grace-rest-recipe-1171-2026-10-06.
+// Requested by the graceRest RPC. ResetWorld's bytes all match; its one rip-relative operand the
+// carry table refuses (1.17.1 0x143d5edc0) reads 0x143d61de0 in 2.7.2.0, where 937 of the 1346
+// 1.17.1 references to it also land, and it is the game's own operand, not one this agent passes.
+// 1.17.1 -> 2.7.2.0 on each line.
+const GR_WORLD_CHR_MAN = va('0x143d6d018');   // 0x143d69ff8
+const GR_CS_EVENT_MAN = va('0x143d6f788');    // 0x143d6c768
+const GR_RESET_WORLD = new NativeFunction(va('0x1405f48c0'), 'void', []);   // 0x1405f4410
+const GR_RECOVERY = new NativeFunction(va('0x1405f4620'), 'void', []);      // 0x1405f4170
+const GR_REPLENISH = new NativeFunction(va('0x14024dff0'), 'void', []);     // unmoved
 const WCM_MAIN_PLAYER = 0x1e508;
 const WCM_RESPAWN_STATE = 0x1e524;
 let gracePending = false;
@@ -2331,22 +2558,27 @@ const hook = Interceptor.attach(FRAME_TICK, {
                 }
             }
         }
-        // One extra per frame once the first is up, each EXTRA_SPACING m further to the side.
+        // One extra per frame once the first is up, each EXTRA_SPACING m further to the side, or on
+        // its cfg.at spot.
         if (extrasWanted > 0 && spawned !== null && isAlive(spawned).alive) {
             extrasWanted -= 1;
             try {
                 const pose = playerPose();
                 if (pose.why === undefined) {
                     const n = extras.length + 1;
-                    const r = spawn(pose, (n % 2 === 1 ? 1 : -1) * EXTRA_SPACING * Math.ceil(n / 2));
+                    const r = spawn(pose, (n % 2 === 1 ? 1 : -1) * EXTRA_SPACING * Math.ceil(n / 2), n);
                     if (r.why !== undefined) {
                         emit('spawn-refused', { why: r.why, extra: true });
                     } else if (!r.chr.isNull()) {
                         extras.push(r.chr);
                         rememberExtras();
                         mimicTeam(r.chr);
+                        // A cfg.at spot's own team, and the fight switch, from the creation frame.
+                        applyTeam(r.chr);
+                        applyFight(r.chr);
                         dressNew(r.chr, n);
-                        emit('spawned', { chr: r.chr.toString(), extra: n, at: r.at, path: 'summon', net: r.net });
+                        emit('spawned', { chr: r.chr.toString(), extra: n, at: r.at, block: r.block, spot: r.spot,
+                            warped: r.warped, path: 'summon', net: r.net });
                     }
                 }
             } catch (e) {
@@ -2389,7 +2621,7 @@ const hook = Interceptor.attach(FRAME_TICK, {
         if (now - stableSince < STABLE_MS) return;
         done = true;
         try {
-            const r = cfg.path === 'summon' ? spawn(pose) : spawnDynamic(pose);
+            const r = cfg.path === 'summon' ? spawn(pose, 0, 0) : spawnDynamic(pose);
             if (r.why !== undefined) {
                 emit('spawn-refused', { why: r.why });
                 return;
@@ -2397,7 +2629,9 @@ const hook = Interceptor.attach(FRAME_TICK, {
             if (!r.chr.isNull()) {
                 spawned = r.chr;
                 teamSpawned = null;
-                homeSpawned = null;
+                // ChrIns addresses are reused, so a home kept for an old one must not carry over.
+                homes.clear();
+                homeSet = null;
                 equipApplied = null;
                 spawnedAt = Date.now();
                 spawnedPath = cfg.path;
@@ -2405,13 +2639,14 @@ const hook = Interceptor.attach(FRAME_TICK, {
                 // Same frame as creation, ahead of the first part load. The team too: the summon is
                 // created on team 6 and attacked the player until the later pass fixed it.
                 applyTeam(r.chr);
+                applyFight(r.chr);
                 dressNew(r.chr, 0);
-                if (cfg.path === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1);
+                if (cfg.path === 'summon') extrasWanted = Math.max(0, summonCount() - 1);
             }
             emit(r.chr.isNull() ? 'spawn-null' : 'spawned', {
                 chr: r.chr.toString(), npcParam: cfg.npcParam, think: cfg.think, charaInit: cfg.charaInit,
                 at: r.at, block: r.block, center: r.center, ownerEventId: r.ownerEventId, player: pose.pos,
-                path: cfg.path, steamId: r.steamId, net: r.net,
+                path: cfg.path, steamId: r.steamId, net: r.net, spot: r.spot, warped: r.warped,
             });
         } catch (e) {
             emit('spawn-fault', { error: e.message });
@@ -2448,6 +2683,7 @@ function heartbeat() {
                 pos: p === null ? null : [p.readFloat(), p.add(4).readFloat(), p.add(8).readFloat()],
                 npcHp: state.alive ? hpOf(spawned) : null,
                 team: state.alive ? applyTeam(spawned) : null,
+                fight: state.alive ? applyFight(spawned) : null,
                 home: state.alive ? applyHome(spawned, pose.pos) : null,
                 equip: state.alive && cfg.dress !== false ? applyEquip(spawned, false, 0) : null,
                 chrType: state.alive ? spawned.add(CHR_TYPE).readS32() : null,
@@ -2461,7 +2697,7 @@ function heartbeat() {
             if (!isAlive(c).alive) return { chr: c.toString(), alive: false };
             applyName(c, i + 1);
             tendFood(c);
-            return { chr: c.toString(), alive: true, hp: hpOf(c), team: applyTeam(c),
+            return { chr: c.toString(), alive: true, hp: hpOf(c), team: applyTeam(c), fight: applyFight(c),
                 home: applyHome(c, pose.pos), equip: cfg.dress !== false && applyEquip(c, false, i + 1) !== null };
         } catch (e) {
             return { chr: c.toString(), error: e.message };
@@ -2475,17 +2711,18 @@ function heartbeat() {
 //
 // What the player stands on: physics module +0x240, a field-ins handle (1.16.2 FUN_1403ff330, the
 // per-frame ground update, hands the asset it resolves to UpdateFallDamageByGeomIns; same code at
-// 1.17.1 0x1403ff620), with +0x92 standing on solid ground. The low dword's top nibble is the kind:
+// 1.17.1 0x1403ff620 -> 2.7.2.0 0x1403ff6b0), with +0x92 standing on solid ground. The low dword's top nibble is the kind:
 // 0 map collision, 6 an asset, 8 an asset's collision part. Measured 2026-10-05 in Raya Lucaria:
 // on a lift 0x0e000000_61201a26 (kind 6), stepping off 0x0e000000_01200041 (kind 0).
 //
 // Which assets are lifts: argument 3 of the common EMEVD lift events 90005500/90005501 (and the
 // 9000550x variants), 63 entity ids across the base game, read out of the extracted event files
 // (bd lift-detection-ground-handle-1171-2026-10-05). Their live handles come from CSWorldGeomMan
-// (global 0x143d6dc18): +0x20 a std::map of loaded map blocks (node: +0x19 nil flag, +0x20 map id,
-// +0x28 block data), and in each block data +0x340 a std::map of entity id (+0x20) -> handle (+0x28)
-// (1.17.1 0x1406d38f0, 0x1406a76d0). Matched on the handle's index (low 20 bits) and block (high
-// dword), which holds for both kind 6 and kind 8.
+// (global 1.17.1 0x143d6dc18 -> 2.7.2.0 0x143d70c38): +0x20 a std::map of loaded map blocks (node:
+// +0x19 nil flag, +0x20 map id, +0x28 block data), and in each block data +0x340 a std::map of
+// entity id (+0x20) -> handle (+0x28) (1.17.1 0x1406d38f0, 0x1406a76d0 -> 2.7.2.0 0x1406d3da0,
+// 0x1406a7b80). Matched on the handle's index (low 20 bits) and block (high dword), which holds for
+// both kind 6 and kind 8.
 const LIFT_ENTITY_IDS = new Set([
     10001510, 10001515, 10001520, 11001510, 11001515, 11001520, 11001525, 11001530, 11001535, 11001610,
     11051525, 11051530, 11051535, 11051610, 12011510, 12011515, 12011520, 12011525, 12021520, 12021525,
@@ -2495,7 +2732,7 @@ const LIFT_ENTITY_IDS = new Set([
     20011535, 21001510, 21001515, 21001520, 21001525, 21001530, 21001535, 21011510, 21011515, 21011520,
     21011525, 21011530, 21021510,
 ]);
-const WORLD_GEOM_MAN = va('0x143d6dc18');
+const WORLD_GEOM_MAN = va('0x143d70c38');
 const PHYS_GROUND_HANDLE = 0x240;
 const PHYS_STANDING = 0x92;
 const LIFT_REFRESH_MS = 3000;
@@ -2629,6 +2866,7 @@ rpc.exports = {
         // game+0x4c2b5c reading a null ChrIns +0x190, under the SummonBuddyManager update at
         // game+0x4b8b7e, which still held its summon-group entry).
         if (overrides) Object.assign(cfg, overrides);
+        patchArenaTeams();
         if (spawned !== null && isAlive(spawned).alive) {
             pendingRemove = spawned;
             pendingRemovePath = spawnedPath;
@@ -2702,13 +2940,14 @@ rpc.exports = {
         const raw = out.readPointer();
         return raw.isNull() ? null : raw.readUtf16String();
     },
-    // Event flags (bd great-jar-sign-flags-1171-2026-10-06): CSEventFlagMan* at 0x143d6c4b8,
-    // GetEventFlag(man, id) 0x1405fa250, SetEventFlag(man, u32* id, state, caller, netSync)
-    // 0x1405d2f60. netSync 0, since the sync list is not safe from this thread. `state` null reads.
+    // Event flags (bd great-jar-sign-flags-1171-2026-10-06): CSEventFlagMan* at 1.17.1 0x143d6c4b8 ->
+    // 2.7.2.0 0x143d6f4d8, GetEventFlag(man, id) 0x1405fa250 -> 0x1405fa700, SetEventFlag(man, u32*
+    // id, state, caller, netSync) 0x1405d2f60 -> 0x1405d3410. netSync 0, since the sync list is not
+    // safe from this thread. `state` null reads.
     eventFlags(ids, state) {
-        const man = va('0x143d6c4b8').readPointer();
-        const get = new NativeFunction(va('0x1405fa250'), 'int', ['pointer', 'uint32']);
-        const set = new NativeFunction(va('0x1405d2f60'), 'void', ['pointer', 'pointer', 'uint8', 'pointer', 'uint8']);
+        const man = va('0x143d6f4d8').readPointer();
+        const get = new NativeFunction(va('0x1405fa700'), 'int', ['pointer', 'uint32']);
+        const set = new NativeFunction(va('0x1405d3410'), 'void', ['pointer', 'pointer', 'uint8', 'pointer', 'uint8']);
         const id = Memory.alloc(4);
         const out = {};
         for (const f of ids) {
@@ -2774,7 +3013,7 @@ rpc.exports = {
         return { inv: inv.toString(), capacity: inv.add(0xc).readU32(), len, entries: out };
     },
     // Her lock-on target (PlayerIns +0x6b0 handle, resolved by the engine's GetChrInsFromHandle
-    // 0x140508a50, as scripts/frida/target-bars-probe.js does for the player) with its hp, animation
+    // GET_CHR_FROM_HANDLE, as scripts/frida/target-bars-probe.js does for the player) with its hp, animation
     // and throw module (modules +0x88 -> node +0x10; the node's u32s 0x58..0x7c are dumped because
     // the ThrowNodeState offset is not pinned).
     peekTarget() {
@@ -2834,7 +3073,7 @@ rpc.exports = {
     },
     // A CSGaitem entry by handle: its item id and, for a weapon, its gem handle and the gem's item.
     peekGaitem(handle) {
-        const imp = va('0x143d6d900').readPointer();
+        const imp = CSGAITEM.readPointer();
         const entry = (h) => {
             const ins = imp.add(8 + (h & 0xffff) * 8).readPointer();
             if (ins.isNull()) return null;
@@ -2893,17 +3132,25 @@ rpc.exports = {
         return { onLift: onLift, liftError: liftError, handles: Object.fromEntries(liftHandles),
             refreshedMsAgo: Date.now() - liftRefreshedAt };
     },
-    // Replace the remembered spawn home with [x, y, z] ('spawn' then means this point).
+    // Replace every summon's remembered spawn home with [x, y, z] ('spawn' then means this point);
+    // null goes back to each one's own creation point.
     setHome(xyz) {
         if (spawned === null || !isAlive(spawned).alive) return null;
-        homeSpawned = xyz;
-        return homeSpawned;
+        homeSet = Array.isArray(xyz) ? xyz : null;
+        return homeSet;
     },
     // The team applyTeam pins a summon-path spawn to (null: the player's), without respawning; a
     // red-sign join (scripts/frida/signs-to-player.js) puts the spawn on 16 and needs it kept there.
     setSummonTeam(t) {
         cfg.summonTeam = t === null || t === undefined || t < 0 ? null : t;
         return cfg.summonTeam;
+    },
+    // The fight switch (see applyFight): true lets every summon fight, false holds them, null stops
+    // touching the flags. Applied to every live summon now, not at the next heartbeat.
+    fight(on) {
+        cfg.fight = on === null || on === undefined ? null : !!on;
+        return [spawned].concat(extras).filter((c) => c !== null && isAlive(c).alive)
+            .map((c) => ({ chr: c.toString(), fight: applyFight(c) }));
     },
     // What the AI mods asked for (_lab.lua lab_team / lab_home), applied on the next heartbeat.
     // team null or negative restores the team it spawned with; home is 'spawn', 'self' or 'player'.
@@ -2960,5 +3207,7 @@ rpc.exports = {
         for (const h of tagHooks) h.detach();
         Interceptor.revert(REQUEST_WARP);
         Interceptor.revert(DESPAWN_ALL);
+        restoreRelations();
     },
 };
+patchArenaTeams();

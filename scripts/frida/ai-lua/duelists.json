@@ -1,0 +1,17 @@
+{
+  "_about": "Edit this, not mods/duelists.lua. scripts/er-duelist-gear.py dresses the duelists from `build` (a planner ?b= link or id) and writes mods/duelists.lua; scripts/er-ai-lab.py runs it at start and before every respawn. `think` is the NpcThinkParam the duelists run (Moonrithyll's) and `summons` how many get gear keys, think.0 .. think.N-1. `respawn` is the spawn-npc.js config the lab's respawn-duelists button passes: Moonrithyll's NpcParam, think and CharaInitParam rows, one `at` spot per duelist on the geom-lab arena's start markers, each on its own Colosseum team (72 and 73 fight each other and never the player), and fight false so they spawn held until fight(true) or the in-game lever releases them.",
+  "build": "https://er-build-planner.nyasu.business/?b=bbbf0b83524d9f",
+  "think": 524320000,
+  "summons": 2,
+  "respawn": {
+    "npcParam": 524320082,
+    "think": 524320000,
+    "charaInit": 2024320,
+    "replace": true,
+    "fight": false,
+    "at": [
+      {"block": "0x3c2a2400", "pos": [-36.33, 93.65, 79.07], "team": 72},
+      {"block": "0x3c2a2400", "pos": [-51.33, 93.65, 79.07], "team": 73}
+    ]
+  }
+}

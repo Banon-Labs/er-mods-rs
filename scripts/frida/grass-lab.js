@@ -2,12 +2,13 @@
 // like.
 //
 // How Elden Ring places grass (1.16.2 dump :8765 names, offsets byte-checked in
-// eldenring-deobf-1.17.1.bin):
+// eldenring-deobf-1.17.1.bin and again in eldenring-deobf-1.17.2.bin for 2.7.2.0):
 //
 //   Each map piece's mapbnd carries a `.grass` file: a triangle mesh whose vertices hold six
 //   densities, one per grass slot (SoulsFormats GRASS: vertex = position + float[6]).
 //   The slot -> GrassTypeParam row id table is the MSB part's grass config, six u32:
 //     CS::CSMsbParts::GetGrassType(CSMsbParts*, slot)  1.16.2 0x140ced5b0, 1.17.1 0x140ceecf0
+//                                                      -> 2.7.2.0 0x140cf03e0
 //       CSMsbParts +0x18 MsbPart*, MsbPart +0x80 grass config*, config +slot*4 the row id
 //     reached from CSGrassMapPart_Geom (owner +0x100, CSMsbParts at +0x30) and
 //     CSGrassMapPart_Map (owner +0x100, MapInsData +0x18 msbPartsMap).
@@ -24,9 +25,26 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const MSB_GET_GRASS_TYPE = va('0x140ceecf0');
-// 1.17 .data rva, same value goods-row-live.js uses.
-const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d85f58;
+// Every address below is 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. Each
+// code address is a function byte-identical across the two builds apart from relocated operands
+// (GetGrassType's jump table moves with it), and each global has the same readers in both. The
+// offsets this file walks read unchanged in byte-identical 2.7.2.0 code: CSMsbParts +0x18, part
+// +0x80 and slot*4 in GetGrassType; CSGrassManager +0x4d0, +0x5d0 and +0x7c8 in its constructor
+// (0x140b971e0); CSGrassMapPart +0x18 and +0x20 in its constructor (0x140ba06b0) and Init, +0x100
+// in the _Geom constructor (0x140ba0850); owner +0x30 (_Geom) and +0x18 then +0x8 (_Map) in the two
+// GetGrassType thunks (0x140ba1780, 0x140ba17a0 -> 0x14071aad0); the geometry map's head +0x20,
+// key +0x20 and value +0x28 in GetGrassMapPartByFieldInsPtr (0x140b9c9a0); the buffer's vector
+// pairs +0x20 to +0x88 in its clear (0x140b88e00); the param repository's +0x80/+0x88 stride 0x48
+// in GetParamResCap (0x140d500f0, still 0xc2 params) and +0x80 -> +0x80 -> +0x0a in
+// GetParamResCapRowCount (0x140d36070). GrassTypeParam is still index 0x3f: all 216 carried
+// GetParamResCap call sites pass the same index in both builds; 64 and 65 (_Lv1, _Lv2) have no
+// call site with an immediate index, and rest on 0x3f and 0x42 being unchanged. Not confirmed in
+// game code: the grass resource map head at manager +0x4d0 +0x28, a resource's name strings at
+// +0x98, +0xe8 and +0x138, and the vertex/face/volume strides, which come from the .grass format.
+const MSB_GET_GRASS_TYPE = va('0x140cf03e0'); // 1.17.1 0x140ceecf0
+// .data rva, 1.17.1 0x3d85f58 -> 2.7.2.0 0x3d88f78 (933 of 961 readers carry onto it; the rest
+// are in code Arxan re-mutates per build).
+const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d88f78;
 const CMD_PATH = 'Z:\\home\\banon\\projects\\er-mods-rs\\target\\grass-lab\\cmd.json';
 
 // GRASS_TYPE_PARAM_ST, from the Smithbox paramdef via scripts/er-paramdef-offsets.py.
@@ -118,12 +136,16 @@ const hook = Interceptor.attach(MSB_GET_GRASS_TYPE, {
   },
 });
 
-// CSGrassManager, taken from the first Grass_BatchUpdate (1.16.2 0x140b97f40, 1.17.1 0x140b99660,
-// prologue byte-identical). +0x7c8 Vector<CSGrassMapPart*> (start +0x8, end +0x10).
+// CSGrassManager, taken from the first Grass_BatchUpdate (1.16.2 0x140b97f40, 1.17.1 0x140b99660
+// -> 2.7.2.0 0x140b99b20, whole function byte-identical). +0x7c8 Vector<CSGrassMapPart*> (start
+// +0x8, end +0x10).
 // CSGrassMapPart: +0x18 grass buffer, +0x20 u32[6] the slot -> row ids cached by
-// CSGrassMapPart::Init (1.16.2 0x140b9fc30, 1.17.1 0x140ba12e0) from GetGrassType, +0x100 owner.
+// CSGrassMapPart::Init (1.16.2 0x140b9fc30, 1.17.1 0x140ba1350 -> 2.7.2.0 0x140ba1810) from
+// GetGrassType, +0x100 owner. This line used to give Init as 1.17.1 0x140ba12e0, which is the _Map
+// part's GetGrassType thunk (2.7.2.0 0x140ba17a0); Init is the one that opens
+// `lea r14, [rdi+0x20]` after calling GetGrassResourceManager.
 let grassMan = null;
-const batchHook = Interceptor.attach(va('0x140b99660'), {
+const batchHook = Interceptor.attach(va('0x140b99b20'), {
   onEnter (args) { if (grassMan === null) grassMan = args[0]; },
 });
 
@@ -441,9 +463,10 @@ function run(cmd) {
 // The command file is read on the game's own frame, as geom-lab.js does: CS::ChrIns::PreBehaviorSafe
 // runs once per character per frame, so filtering on the local player gives one call a frame, and
 // every POLL_FRAMES-th one reads the file. Commands then run on the game thread between frames, the
-// same thread that owns the grass parts and param rows they touch.
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
+// same thread that owns the grass parts and param rows they touch. WorldChrMan 0x143d69ff8 ->
+// 0x143d6d018 and the hook 0x140401f30 -> 0x140401fc0, as in scripts/frida/arena-extents.js.
+const WORLD_CHR_MAN = va('0x143d6d018');
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0');
 const POLL_FRAMES = 15;
 let frame = 0;
 let lastSeq = null;

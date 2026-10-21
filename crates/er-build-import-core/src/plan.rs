@@ -188,7 +188,8 @@ pub struct Grant {
     /// the same armament at `upgrade: 25` would be nonsense the planner cannot produce.
     ///
     /// Which mapping to apply is therefore decided here, at the source of the number, and applied
-    /// in the runtime, which is the only side that can measure whether an armament is somber.
+    /// where the armament's reinforce rows can be read: the runtime measures them live, and a host
+    /// tool passes what the regulation file says to [`game_level`].
     pub upgrade_is_character_default: bool,
     /// Ash of war as a gem item id ([`GEM_ITEM_CATEGORY`] `| EquipParamGem row`), or
     /// [`NO_SKILL`].
@@ -436,6 +437,41 @@ pub fn regular_level_for_somber(somber: u16) -> u16 {
     found
 }
 
+/// The game level an armament ends up at, given whether it is somber.
+///
+/// The two scales described on [`Grant::upgrade_is_character_default`] meet here: a per-slot
+/// `upgrade` is already the game's level and is only capped, while the character-wide
+/// `weaponUpgrade` is in regular levels for every armament and is mapped through
+/// [`somber_level_for_regular`] first when the armament is somber. The cap is the most the
+/// armament can take, [`MAX_SOMBER_LEVEL`] or [`MAX_REGULAR_LEVEL`].
+///
+/// The runtime answers the same question without this function, because it can measure an
+/// armament's reinforce rows in the live param table (`ReinforceLevels::game_level_for` in
+/// `er-build-import-runtime`). A caller with no game -- a host tool reading the regulation file --
+/// says what that measurement found through [`crate::catalog::Entry::somber`] instead.
+///
+/// ```
+/// use er_build_import_core::plan::game_level;
+/// // `weaponUpgrade: 25` on a somber armament is +10, on a regular one +25.
+/// assert_eq!(game_level(25, true, true), 10);
+/// assert_eq!(game_level(25, true, false), 25);
+/// // A per-slot `upgrade` is the game's own number, so it is only capped.
+/// assert_eq!(game_level(7, false, true), 7);
+/// assert_eq!(game_level(25, false, true), 10);
+/// ```
+#[must_use]
+pub fn game_level(requested: u16, is_character_default: bool, somber: bool) -> u16 {
+    if !somber {
+        return requested.min(MAX_REGULAR_LEVEL);
+    }
+    let level = if is_character_default {
+        somber_level_for_regular(requested)
+    } else {
+        requested
+    };
+    level.min(MAX_SOMBER_LEVEL)
+}
+
 /// The block an armament id's affinity offset occupies; the base row is always a multiple of it.
 pub const ARMAMENT_ID_BLOCK: u32 = 10_000;
 /// Step between consecutive affinities inside that block.
@@ -597,24 +633,47 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
 
 /// Grant an armament, applying affinity, upgrade level and ash of war.
 fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Plan) {
+    if let Some(grant) = armament_grant(doc, catalog, slot, &mut out.unresolved) {
+        out.grants.push(grant);
+    }
+}
+
+/// The grant for one armament row of the build: affinity folded into the id, the upgrade level
+/// with its provenance, and the ash of war as a gem item id.
+///
+/// `None` when the armament itself cannot be resolved -- its name is not in the catalog, or its
+/// affinity is not one the game has -- and the reason is pushed to `unresolved`. An ash that does
+/// not resolve still yields the grant, carrying [`NO_SKILL`], with the ash pushed to `unresolved`:
+/// the weapon is still the weapon the build asked for.
+///
+/// Public so a caller that dresses a character from the equip plan rather than granting the whole
+/// inventory (`crate::gear`) computes level and ash for the worn armament exactly as the grant
+/// list does.
+pub fn armament_grant(
+    doc: &BuildDoc,
+    catalog: &dyn Catalog,
+    slot: &Slot,
+    unresolved: &mut Vec<Unresolved>,
+) -> Option<Grant> {
     let Some(found) = catalog.lookup(Kind::Weapon, &slot.name) else {
-        out.unresolved.push(Unresolved {
+        unresolved.push(Unresolved {
             kind: Kind::Weapon,
             name: slot.name.clone(),
         });
-        return;
+        return None;
     };
     let Some(offset) = infusion_offset(slot.infusion.as_deref()) else {
-        out.unresolved.push(Unresolved {
+        unresolved.push(Unresolved {
             kind: Kind::Weapon,
             name: format!("{} (unknown affinity {:?})", slot.name, slot.infusion),
         });
-        return;
+        return None;
     };
 
     // The number is carried forward with its provenance rather than resolved here: whether it
     // needs the somber mapping depends on where it came from, and whether the armament is somber
-    // is something only the runtime can measure (see `Grant::upgrade_is_character_default`).
+    // is measured from param rows this crate does not hold -- live by the runtime, from the
+    // regulation file by a host tool (see `Grant::upgrade_is_character_default` and `game_level`).
     let (reinforce_lv, upgrade_is_character_default) = match slot.upgrade {
         Some(level) => (level, false),
         None => (doc.weapon_upgrade, true),
@@ -629,7 +688,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         match catalog.lookup(Kind::AshOfWar, art) {
             Some(ash) => weapon_skill = GEM_ITEM_CATEGORY | ash.param_id(),
             None => {
-                out.unresolved.push(Unresolved {
+                unresolved.push(Unresolved {
                     kind: Kind::AshOfWar,
                     name: art.to_owned(),
                 });
@@ -637,7 +696,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         }
     }
 
-    out.grants.push(Grant {
+    Some(Grant {
         item_id: found.full_item_id + offset,
         // An armament's id already carries affinity and upgrade, so a shared name means genuinely
         // distinct rows; they are offset the same way to stay comparable with `item_id`.
@@ -653,7 +712,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         label: slot.name.clone(),
         pot_group: found.pot_group,
         armament: true,
-    });
+    })
 }
 
 /// Grant a non-armament item, which carries no affinity, upgrade or skill.

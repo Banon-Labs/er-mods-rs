@@ -7,19 +7,31 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-ai-lab.py
 //
-// Static chain, 1.17.1 (all read from eldenring-deobf-1.17.1.bin; names from the 1.16.2 dump):
-//   CSWorldAiManager global   0x143d66548  (1.16.2 0x143d624e8; 11 callers of the getter agree)
-//   ->+0x6938 CSAiLua          getter `mov rax,[rcx+0x6938]; ret` at 0x14037c140, unique in the image
-//   ->+0xb8   DLLuaDetail<50>  CSAiLua ctor 0x1403713d0 reads it; registers it with the retail-stubbed
-//                              CSLuaConsoleServer under the name "AI"
-//   ->+0x28   lua_State*       DLLuaDetail load wrapper (1.17.0 0x142020890) passes [this+0x28]
-//   luaL_loadbuffer 0x142027f30  called by luaB_loadstring 0x14202c5e0 (base lib table 0x1430eb1a0);
+// Static chain, read on 1.17.1 (eldenring-deobf-1.17.1.bin; names from the 1.16.2 dump) and carried
+// to the installed 2.7.2.0 (1.17.2) with scripts/map-rvas-1171-to-1172.py, written "1.17.1 ->
+// 2.7.2.0". scripts/verify-carry-1171-to-1172.py decodes every function below to the same
+// instructions in both de-Arxan'd images, branch and rip-relative targets compared through the carry
+// table, and finds 897 of the 907 rip-relative references to the CSWorldAiManager global carried
+// onto references of its new address (the other 10 sit in gap code after a ret).
+//   CSWorldAiManager global   0x143d66548 -> 0x143d69568  (1.16.2 0x143d624e8; 11 callers of the
+//                              getter agree)
+//   ->+0x6938 CSAiLua          getter `mov rax,[rcx+0x6938]; ret` at 0x14037c140 (unmoved, same
+//                              bytes), unique in the image
+//   ->+0xb8   DLLuaDetail<50>  CSAiLua ctor 0x1403713d0 (unmoved, same bytes) reads it; registers it
+//                              with the retail-stubbed CSLuaConsoleServer under the name "AI"
+//   ->+0x28   lua_State*       DLLuaDetail load wrapper (1.17.0 0x142020890 = 1.17.1 0x142020900 ->
+//                              2.7.2.0 0x142021ff0) passes [this+0x28]
+//   luaL_loadbuffer 0x142027f30 -> 0x142029620  called by luaB_loadstring 0x14202c5e0 -> 0x14202dcd0
+//                                (base lib table 0x1430eb1a0 -> 0x1430ed460, carried by the table's
+//                                data segments only: no rip-relative reference to check it by);
 //                                1.16.2 dump names it luaL_loadbuffer
-//   lua_pcall       0x142026970  called by luaB_pcall 0x14202c820 with (L, n-1, -1, 0)
+//   lua_pcall       0x142026970 -> 0x142028060  called by luaB_pcall 0x14202c820 -> 0x14202df10
+//                                with (L, n-1, -1, 0)
 //   lua_State: +0x10 top, +0x18 base, 16-byte TValue {int tt; pad; void *value}
-//   luaB_print      0x14202bd60  base lib entry "print"; lua_gettop 0x1420265d0, lua_tostring
-//                                0x142027200 (both called by it); luaopen_base 0x14202cb90 pushes
-//                                _VERSION "Lua 5.0.2"
+//   luaB_print      0x14202bd60 -> 0x14202d450  base lib entry "print"; lua_gettop 0x1420265d0 ->
+//                                0x142027cc0, lua_tostring 0x142027200 -> 0x1420288f0 (both called
+//                                by it); luaopen_base 0x14202cb90 -> 0x14202e280 pushes _VERSION
+//                                "Lua 5.0.2"
 //
 // Behaviour logging rides on the game's own print: a script line `print("HOTLOG", kind, ...)`
 // reaches the luaB_print hook below, which reads the arguments and sends them as one event. Other
@@ -48,16 +60,17 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const WORLD_AI_MAN = va('0x143d66548');
-const LUAL_LOADBUFFER = new NativeFunction(va('0x142027f30'), 'int', ['pointer', 'pointer', 'size_t', 'pointer']);
-const LUA_PCALL_ADDR = va('0x142026970');
+// 2.7.2.0 addresses; the 1.17.1 one each was carried from is on its line.
+const WORLD_AI_MAN = va('0x143d69568');                                                                 // 0x143d66548
+const LUAL_LOADBUFFER = new NativeFunction(va('0x142029620'), 'int', ['pointer', 'pointer', 'size_t', 'pointer']);   // 0x142027f30
+const LUA_PCALL_ADDR = va('0x142028060');                                                               // 0x142026970
 const LUA_PCALL = new NativeFunction(LUA_PCALL_ADDR, 'int', ['pointer', 'int', 'int', 'int']);
 
-const LUAB_PRINT = va('0x14202bd60');
-const LUA_GETTOP = new NativeFunction(va('0x1420265d0'), 'int', ['pointer']);
+const LUAB_PRINT = va('0x14202d450');                                                                   // 0x14202bd60
+const LUA_GETTOP = new NativeFunction(va('0x142027cc0'), 'int', ['pointer']);                          // 0x1420265d0
 // lua_settop: luaB_print calls it as lua_pop(L, 1), i.e. (L, -2), after each argument.
-const LUA_SETTOP = new NativeFunction(va('0x142026fd0'), 'void', ['pointer', 'int']);
-const LUA_TOSTRING = new NativeFunction(va('0x142027200'), 'pointer', ['pointer', 'int']);
+const LUA_SETTOP = new NativeFunction(va('0x1420286c0'), 'void', ['pointer', 'int']);                  // 0x142026fd0
+const LUA_TOSTRING = new NativeFunction(va('0x1420288f0'), 'pointer', ['pointer', 'int']);             // 0x142027200
 
 const LUA_TSTRING = 4;
 const TSTRING_DATA = 0x18;
@@ -388,9 +401,10 @@ Interceptor.attach(LUAB_PRINT, {
 });
 
 // A hook that never fires has told us nothing, so say so instead of staying quiet. Driven by the
-// game's frame tick (1.17.1 0x140773900, the one spawn-npc.js uses), which runs whether or not any
-// AI does: every HEARTBEAT_MS of frames it reports the counters and fails evals no AI pcall took.
-const FRAME_TICK = va('0x140773900');
+// game's frame tick (1.17.1 0x140773900 -> 2.7.2.0 0x140773db0, the one spawn-npc.js uses), which
+// runs whether or not any AI does: every HEARTBEAT_MS of frames it reports the counters and fails
+// evals no AI pcall took.
+const FRAME_TICK = va('0x140773db0');
 const HEARTBEAT_MS = 5000;
 const EVAL_EXPIRE_MS = 5000;
 let heartbeatAt = 0;
