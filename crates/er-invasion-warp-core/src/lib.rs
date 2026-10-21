@@ -67,6 +67,10 @@ pub use host::*;
 
 pub mod aip;
 pub mod attempt_verdict;
+/// How many hosts this player could invade per matchmaking band, and how often new ones appear.
+/// Not re-exported: its `Answer`, `Query` and `View` are names other modules here would collide
+/// with.
+pub mod band_census;
 pub mod band_ladder;
 /// How far above their own bracket the far half of `Both near and far` asks. Not re-exported at
 /// the crate root: its `MAX_LEVEL_BAND` and `MAX_WEAPON_BAND` are ceilings on Seamless's own band

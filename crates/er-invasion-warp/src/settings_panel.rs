@@ -413,6 +413,8 @@ fn build_view() -> SettingsView {
         ("unmark_key", config.unmark_key),
         ("enable_toggle_key", config.enable_toggle_key),
         ("settings_key", config.settings_key),
+        ("band_census_key", config.band_census_key),
+        ("band_census_view_key", config.band_census_view_key),
     ] {
         rows.push(SettingRow {
             key,
