@@ -132,6 +132,9 @@ REDRAW_SECONDS = 2.0
 #: Columns of the in-place bar line a redirected run writes (`Ticker`): `$COLUMNS`, else the 80
 #: `shutil` assumes for a stream that is not a terminal, so the line fits any terminal that wide.
 BAR_COLUMNS = shutil.get_terminal_size().columns
+#: Cells of the bar in that line: room for the stage, its time in, its counter and the counter's age
+#: after it at 80 columns (`redundant status 1m02s 300/400, no progress for 14m` is 51).
+BAR_LINE_WIDTH = 10
 _LOG = []
 
 
@@ -189,10 +192,15 @@ class Progress:
         #: the last run's time while they are known: a step that was cached last time and computes
         #: from empty now would otherwise hold the time left still for as long as it runs.
         self.left = None
+        #: The phase's running step or stage has no time to go on (never timed, no counter): what
+        #: is left is then `rest_known` seconds plus an unknown share, shown as `~30s+?`, never as
+        #: the seconds a weight of one would claim.
+        self.unknown, self.rest_known = False, 0.0
         self.passes = 0
 
     def start(self, key):
         self.key, self.t0, self.part, self.left = key, time.monotonic(), None, None
+        self.unknown, self.rest_known = False, 0.0
         self.passes += key == "pass"
 
     def stop(self):
@@ -211,30 +219,43 @@ class Progress:
             exp = el + self.left
         frac = (el / exp if self.left is not None else self.part if self.part is not None
                 else min(0.99, el / exp)) if exp else 0.0
-        now_left = max(0.0, exp * (1 - frac))
+        now_left = self.rest_known if self.unknown else max(0.0, exp * (1 - frac))
         later = sum(self.expected[k] for k in keys[n:] if k != "upload" or not NO_UPLOAD[0])
         done = self.spent + el
         total = done + now_left + later
         what = dict(PHASES)[self.key] + (f" {self.passes} of at most {MAX_ROUNDS}" if self.key == "pass" else "")
         return {"n": n, "what": what, "frac": frac, "el": el, "exp": exp,
-                "run": done / total if total else 0.0, "left": total - done}
+                "run": done / total if total else 0.0, "left": total - done, "unknown": self.unknown}
+
+    @staticmethod
+    def left_text(x: dict) -> str:
+        """`~45s`, or with an unknown share `~30s+?` (`?` alone when nothing else is left)."""
+        if not x["unknown"]:
+            return f"~{clock(x['left'])}"
+        return f"~{clock(x['left'])}+?" if x["left"] >= 1 else "?"
 
     def line(self) -> str:
         if self.key is None:
             return ""
         x = self.numbers()
+        exp = "?" if x["unknown"] else f"~{clock(x['exp'])}"
         return (f"{BOLD}[{x['n']}/{len(PHASES)}] {x['what']}{RESET}  {GREEN}{100 * x['frac']:.0f}%{RESET} of it, "
-                f"{clock(x['el'])} of ~{clock(x['exp'])}  {GREY}|{RESET}  run {GREEN}~{100 * x['run']:.0f}%{RESET}, "
-                f"~{clock(x['left'])} left")
+                f"{clock(x['el'])} of {exp}  {GREY}|{RESET}  run {GREEN}~{100 * x['run']:.0f}%{RESET}, "
+                f"{self.left_text(x)} left")
 
-    def bar_line(self, bar, detail: str = "") -> str:
+    def bar_line(self, bar, detail: str = "", pulse: str = "") -> str:
         """One short line for a run whose output is a file shown in a terminal, redrawn in place
-        with a carriage return: the run's bar first, so cutting it to the screen keeps the bar."""
+        with a carriage return: the run's bar first, so cutting it to the screen keeps the bar.
+        `pulse` (`er-mechanics-pipeline-watch.pulse_text`: the running stage's counter and how long
+        ago it last moved) comes straight after the bar and the bar is `BAR_LINE_WIDTH` wide, so
+        both fit in the 80 columns a redirected run is cut to: they are what tells a live pass
+        from a stalled one."""
         if self.key is None:
             return ""
         x = self.numbers()
-        return (f"{bar(x['run'])} {GREEN}{100 * x['run']:.0f}%{RESET} ~{clock(x['left'])} left  "
-                f"{BOLD}[{x['n']}/{len(PHASES)}] {x['what']}{RESET} {100 * x['frac']:.0f}%"
+        return (f"{bar(x['run'], BAR_LINE_WIDTH)} {GREEN}{100 * x['run']:.0f}%{RESET} {self.left_text(x)} left  "
+                + (f"{pulse}  " if pulse else "")
+                + f"{BOLD}[{x['n']}/{len(PHASES)}] {x['what']}{RESET} {100 * x['frac']:.0f}%"
                 + (f"  {GREY}|{RESET}  {detail}" if detail else ""))
 
 
@@ -250,6 +271,8 @@ class Ticker:
         self.paused = False
         #: Off a terminal: what the running pass is on (`run_pass`), shown after the bar.
         self.detail = ""
+        #: Off a terminal: the running stage's counter and its age (`pulse_text`), after the bar.
+        self.pulse = ""
         self.bar = None
         self.stopped = threading.Event()
         threading.Thread(target=self._run, daemon=True).start()
@@ -266,7 +289,7 @@ class Ticker:
                 # and never wraps (a wrapped line is not returned to by a carriage return).
                 with _OUT:
                     out = getattr(sys.stdout, "real", sys.stdout)
-                    out.write("\r\033[K" + fit_frame(PROGRESS.bar_line(self.bar, self.detail),
+                    out.write("\r\033[K" + fit_frame(PROGRESS.bar_line(self.bar, self.detail, self.pulse),
                                                      BAR_COLUMNS, 2))
                     out.flush()
                     self.shown = True
@@ -435,6 +458,13 @@ def update_pass(lines, read_loadout, plan: list[str], hist: dict, now: dt.dateti
     if sp and sid in plan:
         PROGRESS.part = step_share(plan, hist, sid, sp["frac"])
     PROGRESS.left = pass_left(plan, hist, sid, sp["left"]) if sp else None
+    # No time to go on for the running stage (never timed, no counter) or the running step (no
+    # history while other steps have one): the pass's time left is what the later stages and steps
+    # are known to take plus an unknown share, never the seconds a weight of one would claim.
+    PROGRESS.unknown = PROGRESS.left is None and (sp is not None or (bool(hist) and sid in plan and sid not in hist))
+    later = plan[plan.index(sid) + 1:] if sid in plan else []
+    PROGRESS.rest_known = (((sp["stage_left"] or 0.0) + sp["later_known"]) if sp else 0.0) + sum(
+        hist.get(s, 0.0) for s in later)
     return n, sid, loadout, sp
 
 
@@ -466,6 +496,20 @@ def stream_line(lines, loadout_lines, plan: list[str], labels: dict, stage_re) -
     return line
 
 
+def pass_pulse(watch, pulse, step: dict | None, sp: dict | None, p: Path, now: dt.datetime,
+               el: float | None = None, unit: bool = True) -> str:
+    """The running stage (or step) and how long it has been in it (`el`, the step's seconds,
+    outside the loadout), its counter and the counter's age, for the bar line
+    (`er-mechanics-pipeline-watch.pulse_text`): `interrupt 30s 2492/8215 rows, last step 31s ago`,
+    red `no progress for 14m` once the counter has stopped for many of its own gaps; without `unit`
+    the counter's word is left out, for the 80-column bar line. Every loadout stage and every long
+    step writes a counter (`er-mechanics-pipeline-watch.stage_counters`)."""
+    if step is None:
+        return ""
+    text = watch.pulse_text(pulse, step, p, sp if step["kind"] == "stages" else None, now.timestamp(), el, unit)
+    return text if COLOR else ANSI.sub("", text)
+
+
 def run_pass(cmd: list[str], d: Path, prefix: str, watch) -> int:
     """Run one pipeline pass with its output in `<prefix>-pipeline.log`, the file
     `er-mechanics-pipeline-watch.py` reads, and redraw that tool's live view in place (a progress
@@ -475,6 +519,10 @@ def run_pass(cmd: list[str], d: Path, prefix: str, watch) -> int:
     hist = STEP_HISTORY
     plan = [s["id"] for s in watch.steps(d / prefix) if s["id"] != "10"]
     labels = {s["id"]: s["label"] for s in watch.steps(d / prefix)}
+    by_id = {s["id"]: s for s in watch.steps(d / prefix)}
+    # Measured here, where the logs are: a `--host` run computes the line on the host and the
+    # local end only streams it, so the age is the host's own and no clock crosses machines.
+    pulse = watch.Pulse(REDRAW_SECONDS)
 
     def read_loadout():
         return watch.read_lines(d / f"{prefix}-loadout.log")
@@ -500,10 +548,16 @@ def run_pass(cmd: list[str], d: Path, prefix: str, watch) -> int:
                 # loadout stage as a line of its own. The pass otherwise looked frozen for its
                 # whole length (user, 2026-10-19).
                 lines = watch.read_lines(log)
-                _, sid, loadout, sp = update_pass(lines, read_loadout, plan, hist, dt.datetime.now(), watch)
+                now = dt.datetime.now()
+                _, sid, loadout, sp = update_pass(lines, read_loadout, plan, hist, now, watch)
                 line = stream_line(lines, loadout, plan, labels, watch.STAGE)
+                # The counter's word left out: the bar line is cut to 80 columns, and the age after
+                # the counter is the part that must survive the cut.
+                beat = pass_pulse(watch, pulse, by_id.get(sid), sp, d / prefix, now, stage_elapsed(lines, now),
+                                  unit=False)
                 if TICKER:
                     TICKER.bar = watch.bar
+                    TICKER.pulse = beat
                     TICKER.detail = line + (f" {100 * sp['frac']:.0f}%" if sp else "")
                 if line and line != streamed:
                     streamed = line
@@ -511,9 +565,11 @@ def run_pass(cmd: list[str], d: Path, prefix: str, watch) -> int:
                 continue
             if TTY:
                 now = dt.datetime.now()
-                n, sid, _, _ = update_pass(watch.read_lines(log), read_loadout, plan, hist, now, watch)
-                head = PROGRESS.line() + (f"  {GREY}|{RESET}  step {n} of {len(plan)}: {labels.get(sid, sid)}"
-                                          if n else "")
+                lines = watch.read_lines(log)
+                n, sid, _, sp = update_pass(lines, read_loadout, plan, hist, now, watch)
+                beat = pass_pulse(watch, pulse, by_id.get(sid), sp, d / prefix, now, stage_elapsed(lines, now))
+                head = PROGRESS.line() + (f"  {GREY}|{RESET}  {beat}" if beat else "") + (
+                    f"  {GREY}|{RESET}  step {n} of {len(plan)}: {labels.get(sid, sid)}" if n else "")
                 size = shutil.get_terminal_size()
                 text = fit_frame(head + "\n" + watch.frame(d, prefix, now), size.columns, size.lines)
                 with _OUT:
@@ -524,6 +580,7 @@ def run_pass(cmd: list[str], d: Path, prefix: str, watch) -> int:
     if TICKER:
         TICKER.paused = False
         TICKER.detail = ""
+        TICKER.pulse = ""
     text = watch.frame(d, prefix, dt.datetime.now())
     if drawn:
         sys.stdout.write(f"\033[{drawn}F\033[J")
@@ -610,7 +667,10 @@ def joint_pick(vigs, ends, damage_at, options_at, survive, cache: dict | None = 
     {vig, end, damage, spread, stats, option, hp, hit, ehp, value}, or None where nothing fits.
 
     `cache` ({vig + end: damage_at result}) is shared between calls that differ only in what the
-    armor budget carries (`weight_cost`): the damage stats do not see the weapons' weight."""
+    armor budget carries (`weight_cost`): the damage stats do not see the weapons' weight. It also
+    keeps `survive`'s answers under ("survive", vig, end, pieces): the stats are the cached spread's
+    with that Vigor and Endurance, and a set's absorption is its pieces', so the carried weight only
+    changes which sets are offered, never what one is worth."""
     dmg = {} if cache is None else cache
     best, free, by_wear = None, None, {}
     for e in ends:
@@ -628,7 +688,10 @@ def joint_pick(vigs, ends, damage_at, options_at, survive, cache: dict | None = 
                 continue  # points no damage stat wanted went to survival, so the split is not free
             st = dict(sp["stats"], vig=v, end=e)
             for o in opts:
-                hp, hit = survive(st, o)
+                sk = ("survive", v, e, tuple(o["pieces"]))
+                if sk not in dmg:
+                    dmg[sk] = survive(st, o)
+                hp, hit = dmg[sk]
                 c = {"vig": v, "end": e, "damage": d, "spread": sp, "stats": st, "option": o, "hp": hp,
                      "hit": hit, "ehp": hp / hit, "value": d * hp / hit}
                 if free is None or c["value"] > free["value"]:
@@ -755,7 +818,13 @@ class KitScorer:
         self.cap, self.floor = {}, {}
 
     def score(self, st: dict) -> float:
-        return self.focus.score(st) / self.focus_best + self.kit.value(st)
+        # Of the damage stats alone (`opt.Scorer` and `Kit` read nothing else), so memoised on
+        # them: `spend` asks for the same blocks over and over from every Vigor and Endurance.
+        key = tuple(st[k] for k in self.kit.stats)
+        memo = self.__dict__.setdefault("_memo", {})
+        if key not in memo:
+            memo[key] = self.focus.score(st) / self.focus_best + self.kit.value(st)
+        return memo[key]
 
 
 class AffinityKit:
@@ -796,7 +865,15 @@ class AffinityKit:
         return out
 
     def score(self, st: dict) -> float:
-        return sum(s for s, _ in self.hits(st).values()) / len(self.classes) + self.kit.value(st)
+        # Of the damage stats alone (each `opt.Scorer`, `usable`'s requirements and `Kit` read
+        # nothing else), so memoised on them: `joint_pick` respreads once per Vigor + Endurance and
+        # every `spend` walks the same damage-stat blocks, 45% of a dry run's time before
+        # (2026-10-20 heavy kit).
+        key = tuple(st[k] for k in self.kit.stats)
+        memo = self.__dict__.setdefault("_memo", {})
+        if key not in memo:
+            memo[key] = sum(s for s, _ in self.hits(st).values()) / len(self.classes) + self.kit.value(st)
+        return memo[key]
 
     def lead(self, st: dict) -> tuple[str, int]:
         """The hardest-hitting usable weapon at `st` and its level: what talismans, tears and the
@@ -806,10 +883,25 @@ class AffinityKit:
         return (best[1], best[2]) if best else (None, 0)
 
 
+_RES_MODELS = {}
+
+
+def res_model(opt):
+    """One `er-mechanics-resources.Model` per resources module, built on first use. Building one
+    reads its five params out of the regulation, and `joint_pick` asks for a spread (`respread`)
+    once per Vigor + Endurance and carried weight: on the 2026-10-20 heavy kit that rebuilt it for
+    about a quarter of the dry run's time. A built model is never written to ("every query is pure
+    arithmetic after that")."""
+    key = id(opt.RES)
+    if key not in _RES_MODELS:
+        _RES_MODELS[key] = opt.RES.Model()
+    return _RES_MODELS[key]
+
+
 def affinity_spread(opt, rl: int, search: dict, scorer: AffinityKit, pins=None, classes=None) -> dict | None:
     """`kit_spread` for a build made around no weapon: the spread, over every starting class (or
     `classes`), that maximises `AffinityKit` from `search`'s floors (with `pins` fixed)."""
-    model = opt.RES.Model()
+    model = res_model(opt)
     floor = dict(search["floors"], **(pins or {}))
     top = None
     for cls in classes or opt.RES.CLASS_ROWS:
@@ -839,7 +931,7 @@ def kit_spread(opt, tables, weapon: str, two_handed: bool, rl: int, search: dict
     focus weapon at `search`'s best affinity, grease and level, its requirements met, and
     `search`'s floors (with `pins` fixed)."""
     best = search["results"][0]
-    model = opt.RES.Model()
+    model = res_model(opt)
     focus = opt.Scorer(tables, weapon, best["affinity"], best["level"], two_handed, "damage", search["defender"],
                        best["grease"])
     need = opt.requirements(tables, weapon, best["affinity"], best["level"], two_handed)
@@ -1974,9 +2066,20 @@ def main() -> int:
 
     fixed = {k: v for k, v in pins.items() if k not in ("vig", "end")}
 
+    armor_models = {}
+
+    def armor_model(stats):
+        """`ArmorModel` at `stats` with the talismans and rune worn now, built once per such
+        block: about 10 s each (2026-10-20), and every pass asks for its stats twice (the armor,
+        then the weight cost). Nothing it holds is written but its own caches."""
+        key = (tuple(sorted(stats.items())), tuple(talismans), rune_on, tuple(sorted(no_armor)))
+        if key not in armor_models:
+            armor_models[key] = armor_mod.ArmorModel(stats, talismans, rune_on, a.rl, a.window, exclude=no_armor)
+        return armor_models[key]
+
     def armor_for(spread):
         nonlocal floor
-        armor = armor_mod.ArmorModel(spread["stats"], talismans, rune_on, a.rl, a.window, exclude=no_armor)
+        armor = armor_model(spread["stats"])
         if floor is None:
             floor = 0 if caster else armor.melee_floor
         return armor
@@ -2089,7 +2192,7 @@ def main() -> int:
                 sys.exit(f"no class reaches RL {a.rl} with Vigor {v}, Endurance {e} and {title}'s requirements")
             if new["stats"] != spread["stats"]:
                 show(new)
-                armor = armor_mod.ArmorModel(new["stats"], talismans, rune_on, a.rl, a.window, exclude=no_armor)
+                armor = armor_model(new["stats"])
             spread = new
             chosen = armor.pick(budget_at(spread["stats"], armor, carried)(e), floor, wear)
             if chosen is None:
@@ -2560,10 +2663,89 @@ def selftest() -> int:
           == 37.0, "pass_left adds the later steps' history, and gives up when one has none")
     PROGRESS.start("pass")
     PROGRESS.part = 0.5
-    bl = ANSI.sub("", PROGRESS.bar_line(lambda f: f"<{f:.2f}>", "step 9 of 12: loadout"))
-    PROGRESS.stop()
+    bl = ANSI.sub("", PROGRESS.bar_line(lambda f, w: f"<{f:.2f}>", "step 9 of 12: loadout"))
     check(bl.startswith("<") and "pass" in bl and "50%" in bl and bl.endswith("step 9 of 12: loadout"),
           "bar_line leads with the run's bar and ends with what the pass is on")
+    # The line as the user's 80-column tail shows it, mid-interrupt: the counter and its age must
+    # survive the cut, so they come straight after the bar.
+    beat = "interrupt 2492/8215 rows, last step 31s ago"
+    bl = PROGRESS.bar_line(watch.bar, "step 12 of 12: loadout, stage 3/5: interrupt 38%", beat)
+    cut = ANSI.sub("", fit_frame(bl, 80, 2))
+    check(beat in cut and len(cut) <= 79, f"bar_line keeps the counter and its age inside 80 columns ({cut})")
+    stalled = "interrupt 2492/8215 rows, \033[31mno progress for 14m\033[0m"
+    cut = ANSI.sub("", fit_frame(PROGRESS.bar_line(watch.bar, "x", stalled), 80, 2))
+    check("no progress for 14m" in cut and len(cut) <= 79, f"a stalled counter's mark fits too ({cut})")
+    PROGRESS.stop()
+    # pass_pulse over a real loadout log, advanced across polls: the age runs from the advance.
+    with tempfile.TemporaryDirectory() as tmp:
+        pfx = Path(tmp) / "t"
+        log9 = Path(f"{pfx}-loadout.log")
+        step9 = next(s for s in watch.steps(pfx) if s["id"] == "9")
+        pu = watch.Pulse(REDRAW_SECONDS)
+        t0 = dt.datetime(2026, 10, 20, 12, 0, 0)
+        beats = []
+        for i, sec in enumerate((0, 10, 20, 30, 40)):
+            body = stages + [f"  {20 + i}/143 weapons, {2492 + 100 * i}/8215 rows", "warning: x"]
+            log9.write_text("\n".join(body) + "\n", encoding="utf-8")
+            now_i = t0 + dt.timedelta(seconds=sec)
+            beats.append(pass_pulse(watch, pu, step9, watch.stage_progress(body, 40.0), pfx, now_i))
+        live = ANSI.sub("", pass_pulse(watch, pu, step9, watch.stage_progress(body, 40.0), pfx,
+                                       t0 + dt.timedelta(seconds=71)))
+        dead = ANSI.sub("", pass_pulse(watch, pu, step9, watch.stage_progress(body, 40.0), pfx,
+                                       t0 + dt.timedelta(seconds=40 + 14 * 60)))
+        check(beats[-1].startswith("interrupt 30s 2892/8215 rows, last step 0s ago")
+              and live == "interrupt 30s 2892/8215 rows, last step 31s ago",
+              f"pass_pulse shows the interrupt stage, its time in, its rows and the age of its last advance ({live})")
+        check(dead == "interrupt 30s 2892/8215 rows, no progress for 14m",
+              f"pass_pulse marks a counter quiet for many median gaps ({dead})")
+        check(pass_pulse(watch, pu, None, None, pfx, t0) == "", "pass_pulse is empty before a step")
+
+        # The 2026-10-20 run: "set coverage" never timed, no counter, the bar at `100% ~45s left`
+        # for five minutes. Now its share is `?` until the stage's counter gives it one.
+        quiet = ['stages: [["rows", 10], ["partners", 3], ["set coverage", null], ["write", 4]]',
+                 "stage 1/4: rows (0s in)", "stage 2/4: partners (10s in)", "stage 3/4: set coverage (13s in)"]
+        log9.write_text("\n".join(quiet) + "\n", encoding="utf-8")
+        os.utime(log9, (t0.timestamp(), t0.timestamp()))
+        head_q = ["== 12:00:00 1 build file", "== 12:00:00 9 loadout"]
+        PROGRESS.start("pass")
+        now_q = dt.datetime.combine(dt.date.today(), dt.time(12, 5, 43))
+        _, sid_q, _, sp_q = update_pass(head_q, lambda: quiet, plan9, hist9, now_q, watch)
+        x = PROGRESS.numbers()
+        bl = ANSI.sub("", PROGRESS.bar_line(lambda f, w: "<bar>", ""))
+        check(PROGRESS.unknown and x["unknown"] and "+? left" in bl and "~45s left" not in bl
+              and abs(PROGRESS.rest_known - 4.0) < 1e-9,
+              f"a stage with no history and no counter leaves its share as ?, not seconds ({bl})")
+        PROGRESS.stop()
+        PROGRESS.start("pass")
+        update_pass(head, lambda: stages + ["  13/143 weapons, 4320/8640 rows"], plan9, hist9,
+                    dt.datetime.combine(dt.date.today(), dt.time(12, 30, 0)), watch)
+        check(not PROGRESS.unknown and "?" not in ANSI.sub("", PROGRESS.bar_line(lambda f, w: "<bar>", "")),
+              "a stage with a counter keeps its seconds")
+        PROGRESS.stop()
+        # The same stage with its counter (`stage_counters` holds every stage to one): the bar line
+        # shows the stage, its time in, its count and the count's age, inside 80 columns.
+        pq = watch.Pulse(REDRAW_SECONDS)
+        t_q = t0
+        for i in range(150):
+            el = (t_q - t0).total_seconds() + 30.0
+            body = quiet + [f"  {i + 1}/400 weapons"]
+            log9.write_text("\n".join(body) + "\n", encoding="utf-8")
+            beat_q = pass_pulse(watch, pq, step9, watch.stage_progress(body, el), pfx, t_q, unit=False)
+            t_q += dt.timedelta(seconds=REDRAW_SECONDS)
+        # Then the counter stops: past many of its gaps the red mark, which must fit as well.
+        t_dead = t_q + dt.timedelta(minutes=14)
+        dead_q = pass_pulse(watch, pq, step9, watch.stage_progress(body, (t_dead - t0).total_seconds() + 30.0),
+                            pfx, t_dead, unit=False)
+        PROGRESS.start("pass")
+        update_pass(head_q, lambda: body, plan9, hist9, now_q, watch)
+        bl_q = ANSI.sub("", fit_frame(PROGRESS.bar_line(watch.bar, "step 2 of 2: loadout", beat_q), 80, 2))
+        bl_d = ANSI.sub("", fit_frame(PROGRESS.bar_line(watch.bar, "step 2 of 2: loadout", dead_q), 80, 2))
+        PROGRESS.stop()
+        print(f"     counted: {bl_q}\n     stopped: {bl_d}")
+        check("set coverage 5m15s 150/400, last step 0s ago" in bl_q and len(bl_q) <= 79,
+              f"a counted stage shows its name, time in it, count and the count's age in 80 columns ({bl_q})")
+        check("set coverage 19m17s 150/400, no progress for 14m" in bl_d and len(bl_d) <= 79,
+              f"a stopped counter's red mark fits in 80 columns too ({bl_d})")
     frame = "\n".join(["head"] + [f"\033[32mstep {i} " + "x" * 30 + "\033[0m" for i in range(20)])
     fitted = fit_frame(frame, 20, 8).splitlines()
     check(len(fitted) == 7 and fitted[0] == "head" and ANSI.sub("", fitted[-1]).startswith("step 19")
@@ -2716,10 +2898,14 @@ def selftest() -> int:
         return 1.0 - 0.01 * (v + e - 90), {"stats": {"vig": v, "end": e, "str": 200 - v - e}}
 
     def options_at(e):
+        # `pieces` names what `survive` reads (the HP piece and the absorption), as a real set's
+        # pieces fix both, so the survive memo under them is sound for the toy too.
         if e < 40:
-            return [{"floored": False, "wear": None, "kept": 0.70, "armor_poise": 60}]
-        return [{"floored": True, "wear": None, "kept": 0.66 - 0.002 * (e - 40), "armor_poise": 89},
-                {"floored": True, "wear": "Lion", "kept": 0.68 - 0.002 * (e - 40), "armor_poise": 89}]
+            opts = [{"floored": False, "wear": None, "kept": 0.70, "armor_poise": 60}]
+        else:
+            opts = [{"floored": True, "wear": None, "kept": 0.66 - 0.002 * (e - 40), "armor_poise": 89},
+                    {"floored": True, "wear": "Lion", "kept": 0.68 - 0.002 * (e - 40), "armor_poise": 89}]
+        return [{**o, "pieces": [o["wear"] or "-", f"kept {o['kept']!r}"]} for o in opts]
 
     def hp(v):
         return 1900 - 20 * (60 - v) if v <= 60 else 1900 + 5 * (v - 60)
@@ -2752,6 +2938,21 @@ def selftest() -> int:
     n1 = len(calls)
     joint_pick(range(55, 60), range(38, 42), counted, options_at, survive, shared)
     check(n1 > 0 and len(calls) == n1, "joint_pick asks damage_at nothing a shared cache already holds")
+    # The survive memo: a shared cache asks `survive` once per (Vigor, Endurance, pieces), and a
+    # call through it chooses exactly what a call with no cache does.
+    asked = []
+
+    def survive_counted(st, o):
+        asked.append((st["vig"], st["end"], tuple(o["pieces"])))
+        return survive(st, o)
+    shared = {}
+    first = joint_pick(range(50, 66), range(30, 46), damage_at, options_at, survive_counted, shared)
+    n2 = len(asked)
+    again = joint_pick(range(50, 66), range(30, 46), damage_at, options_at, survive_counted, shared)
+    plain = joint_pick(range(50, 66), range(30, 46), damage_at, options_at, survive)
+    check(n2 == len(set(asked)) > 0 and len(asked) == n2 and first == again == plain,
+          "joint_pick asks survive once per Vigor, Endurance and pieces through a shared cache, and chooses "
+          "what it chooses without one")
     wc = weight_cost([0, 1, 2, 3, 4, 5], lambda w: {0: None, 1: 4.0, 2: 5.0, 3: 2.5, 4: None, 5: 1.0}[w])
     check(wc["weights"] == [0, 1, 2, 3] and wc["value"] == [0.0, 0.8, 1.0, 0.5] and wc["raw"][2] == 5.0,
           "weight_cost: each weight over the best, 0 where nothing fits, and the walk stops at the first "

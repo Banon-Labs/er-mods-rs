@@ -69,14 +69,17 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import functools
 import hashlib
 import html
 import importlib.util
 import inspect
+import io
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import time
@@ -86,6 +89,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
+
+
+def _progress():
+    """The `er-mechanics-progress.py` module (`Count`, `counted`: a stage's `  i/N <unit>` lines), loaded once."""
+    key = "er_mechanics_progress"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-progress.py")
+        sys.modules[key] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[key])
+    return sys.modules[key]
+
+
+Count, counted = _progress().Count, _progress().counted
 BLACKLIST = HERE.parent / "data" / "ash-blacklist.toml"
 PREFS = HERE.parent / "data" / "ash-preferences.toml"
 #: `--exclude`: what the build may not hold at all, from a JSON file of {"weapons": [...],
@@ -391,7 +407,7 @@ def drop_redundant_status(slots, own, traits, pool_of, make_slot, share=OWN_STAT
     full = {k for k, v in shares.items() if v > share}
     redundant = {ash: sorted(sts & full) for ash, sts in own.items() if sts & full}
     dropped, log, block = collections.defaultdict(set), [], {}
-    for i, s in enumerate(slots):
+    for i, s in counted(list(enumerate(slots)), "slots"):
         ash = s.get("skill")
         if ash not in redundant:
             continue
@@ -452,7 +468,7 @@ def ash_own_status(rows, stats, cache_path):
         t = tab.t
         sids = skill_ids(t, {x["ash"] for x in todo})
         print(f"own status: {len(todo)} ashes to read", file=sys.stderr, flush=True)
-        for x in todo:
+        for x in counted(todo, "ashes"):
             got, sid = set(), sids.get(x["ash"])
             if sid is not None:
                 wid = t.find_weapon(x["weapon"])
@@ -660,7 +676,8 @@ class WeightCost:
 
 
 def derive_combos(roles, cr, weights, off_weights, usable, n=COMBO_SETS, aff_ok=lambda weapon, affinity: True,
-                  weight=None, cost=None, carry=0.0, floor=0.0, speed=None, k=0.0, ps=None, cross=None):
+                  weight=None, cost=None, carry=0.0, floor=0.0, speed=None, k=0.0, ps=None, cross=None,
+                  progress=False):
     """The equip sets' (main class, off class, main weapon, off weapon) pairs, with a log line each.
 
     A set is played in one mode and is worth the best mode it can be played in (user, 2026-10-19:
@@ -725,14 +742,21 @@ def derive_combos(roles, cr, weights, off_weights, usable, n=COMBO_SETS, aff_ok=
     holds both copies, and the weight cap counts the weapon's weight twice. A paired main hand
     (`PowerstanceOffs.paired`) never takes a second copy; it is offered itself two-handed, one copy,
     scored on its same-weapon dual record (`PowerstanceOffs.two_hand`), and such a set's off
-    weapon is None (`combo_pair`)."""
+    weapon is None (`combo_pair`).
+
+    With `progress` the slow walks print their counters (`Count`): the candidate hands scored
+    (`hands`), then each main hand's off hands (`mains`), then the weight caps tried (`caps`)."""
     sv = _set_value(speed, k)
+    count = Count(sum(hand_picks(roles)), "hands") if progress else None
+    hands = hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps, cross, count=count)
     if cost is not None and weight is not None:
-        return _weighed_combos(hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps, cross), n, weight,
-                               cost, carry, floor, sv)
-    mains, offs_for = hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps, cross)
+        return _weighed_combos(hands, n, weight, cost, carry, floor, sv, progress)
+    mains, offs_for = hands
+    walk = mains if speed is not None else mains[:n]
+    tick = Count(len(walk), "mains") if progress else (lambda: None)
     picks = []
-    for m in mains if speed is not None else mains[:n]:
+    for m in walk:
+        tick()
         got = best_pair([(m, o) for o in offs_for(m)], lambda m, o: sv(m, o)[0])
         if got:
             o = got[2]
@@ -874,10 +898,11 @@ def second_copy(slots, rs, start=None, length=0):
     return None
 
 
-def _weighed_combos(hands, n, weight, cost, carry, floor, sv=None):
+def _weighed_combos(hands, n, weight, cost, carry, floor, sv=None, progress=False):
     """`derive_combos` with the weight cap: see its doc. `hands` is `hand_scores`'s (main hands,
     off hands per main hand); `sv` is its `_set_value` (the pair score when absent); a pick's
-    score is the set's value, speed term included."""
+    score is the set's value, speed term included. With `progress`, counters (`Count`) over the
+    main hands whose off hands are scored, then over the caps tried."""
     mains, offs_for = hands
     wt = {}
     sv = sv or _set_value(None, 0.0)
@@ -901,9 +926,17 @@ def _weighed_combos(hands, n, weight, cost, carry, floor, sv=None):
                 picks.append((v[0], m, o))
         return sorted(picks, key=lambda p: (-p[0], p[1][1]))[:n]
 
-    caps = sorted({round(pw(m, o), 3) for m in mains for o in offs_for(m)})
+    tick = Count(len(mains), "mains") if progress else (lambda: None)
+    weights_seen = set()
+    for m in mains:
+        # The first `offs_for(m)` scores every off hand against the pool; later calls are cached.
+        weights_seen |= {round(pw(m, o), 3) for o in offs_for(m)}
+        tick()
+    caps = sorted(weights_seen)
+    tick = Count(len(caps), "caps") if progress else (lambda: None)
     best, widest = None, None
     for cap in caps:
+        tick()
         picks = at_cap(cap)
         if not picks:
             continue
@@ -1230,6 +1263,16 @@ class SetScorer:
             self._best[key] = (min(vals) if lower else max(vals)) if vals else None
         return self._best[key]
 
+    def _pen_max(self, off, k):
+        """The greatest truthy value of a penalty's paired feature `k` over the off pool (`off`)
+        or the main pool, None where there is none: read once, where `value` read the 26,000-record
+        off pool again for every set it scored."""
+        key = ("pen", off, k)
+        if key not in self._best:
+            vals = [p.get(k) for p in (self.off_pool if off else self.main_pool) if p.get(k)]
+            self._best[key] = max(vals) if vals else None
+        return self._best[key]
+
     def _share(self, d, f, g, main):
         same = f in SAME_UNIT
         x, lower = self._value(d, f if main else g, main)
@@ -1269,13 +1312,13 @@ class SetScorer:
                     best = self._pool_best(None, g, False)
                     s += w * ((best / x if lower else x / best) if x and best else 0.0)
         for w, f, g in self.penalties:
-            scale = [p.get(self.pen[f]) for p in self.main_pool if p.get(self.pen[f])]
+            scale = self._pen_max(False, self.pen[f])
             x = fm.get(f)
-            cost = w * x / max(scale) if x and scale else 0.0
+            cost = w * x / scale if x and scale is not None else 0.0
             if fo is not None and g is not None and fo.get(g) is not None:
-                oscale = [p.get(self.pen[g]) for p in self.off_pool if p.get(self.pen[g])]
-                if oscale:
-                    cost = min(cost, w * fo[g] / max(oscale))
+                oscale = self._pen_max(True, self.pen[g])
+                if oscale is not None:
+                    cost = min(cost, w * fo[g] / oscale)
             s -= cost
         total = self.total - (self.crit_w if not self.reach_fill and fm.get("crit") is None else 0.0)
         return s / total if total else 0.0
@@ -1328,8 +1371,26 @@ class SetScorer:
         return _ai().band_set_value(held) / self._band_best if self._band_best > 0 else None
 
 
+def hand_picks(roles, all_mains=False) -> tuple[int, int]:
+    """How many candidates `hand_scores` walks, (main hands, off hands): one main hand per class,
+    or with `all_mains` every weapon with main-hand features, and every weapon with off-hand
+    features. Their sum is its `count`'s total."""
+    def having(h):
+        return sum(1 for rw in roles["weapons"].values() if (rw.get(h) or {}).get("by_affinity"))
+    return (having("main_hand") if all_mains else len(roles["classes"])), having("offhand")
+
+
+def pool_scorer(cr, pool):
+    """`(feats, use, weights) -> cr.norm_score(feats, pool, use, weights)`, the pool's extremes read
+    once (`er-mechanics-class-roles.PoolScales`) where `cr` has them; a selftest stand-in may not."""
+    if hasattr(cr, "PoolScales"):
+        scales = cr.PoolScales(pool)
+        return lambda f, use, w: cr.norm_score(f, pool, use, w, scales=scales)
+    return lambda f, use, w: cr.norm_score(f, pool, use, w)
+
+
 def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=None, all_mains=False,
-                grip_ok=None):
+                grip_ok=None, count=None):
     """(main hands, `offs_for`) for `derive_combos`: main hands [(score, class, weapon, affinity)]
     best first, one per class, each a `MainHand` scored per grip when the roles carry `by_grip`,
     and `offs_for(main)` the off hands that main hand can take, each an `OffHand` naming the grip
@@ -1352,7 +1413,10 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
     holds every L1 candidate and every powerstance candidate. A powerstance record has no block
     cost (`cr.POWERSTANCE_UNMEASURED`), so for a main hand with powerstance candidates every off
     hand it is offered, L1 ones included, is scored with those features left out: the two kinds
-    compare on what both measure rather than on an invented cost."""
+    compare on what both measure rather than on an invented cost.
+
+    `count` (a `Count`, or any callable) is called once per candidate walked, the sum of
+    `hand_picks`: each one is scored against the whole pool, so the walk is the slow part."""
     if grip_ok is None:
         def grip_ok(weapon, affinity, grip):
             return not grip_excluded(weapon, affinity, grip)
@@ -1360,6 +1424,7 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
     def hand(h, use, wts, extra_pool=()):
         pool = [v["features"] for rw in roles["weapons"].values()
                 for v in ((rw.get(h) or {}).get("by_affinity") or {}).values()] + list(extra_pool)
+        norm = pool_scorer(cr, pool)
         out = []
         picks = sorted(roles["classes"].items())
         if h == "offhand" or all_mains:
@@ -1375,6 +1440,8 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
             picks = [(rw.get("class") or cls_of.get(w) or "Other", {h: {"weapon": w, "affinity": None}})
                      for w, rw in sorted(roles["weapons"].items()) if (rw.get(h) or {}).get("by_affinity")]
         for c, r in picks:
+            if count is not None:
+                count()
             p = r.get(h)
             if not p or not usable(p["weapon"]):
                 continue
@@ -1388,7 +1455,7 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
             bonus = getattr(cr, "TRUE_COMBO_BONUS", 0.0) if h == "main_hand" else 0.0
 
             def one(f):
-                return round(cr.norm_score(f, pool, use, wts) + bonus * f.get("true_combo", 0), 4)
+                return round(norm(f, use, wts) + bonus * f.get("true_combo", 0), 4)
             if h == "main_hand":
                 # Per grip when the roles give it (`MainHand`): the main hand's score is the better
                 # grip's, each mode then takes its own grip's (`main_score`). The pool stays the
@@ -1426,6 +1493,7 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
         for m in mains:
             m.scorer, m.bonus = scorer, getattr(cr, "TRUE_COMBO_BONUS", 0.0)
     shared = tuple(f for f in cr.OFFHAND_FEATURES if f not in (ps.unmeasured if ps else ()))
+    off_norm = pool_scorer(cr, off_pool)
     cache = {}
 
     def offs_for(m):
@@ -1462,16 +1530,16 @@ def hand_scores(roles, cr, weights, off_weights, usable, aff_ok, ps=None, cross=
                 plain, dual = [], []
             th = th if two_h else None
             if dual or th:
-                plain = [OffHand((round(cr.norm_score(o.feats, off_pool, shared, ow), 4), *o[1:]), o.feats)
+                plain = [OffHand((round(off_norm(o.feats, shared, ow), 4), *o[1:]), o.feats)
                          for o in plain]
-                plain += [OffHand((round(cr.norm_score(f, off_pool, shared, ow), 4), c, left, laff), f,
+                plain += [OffHand((round(off_norm(f, shared, ow), 4), c, left, laff), f,
                                   ps=True, right_aff=raff) for left, laff, raff, f, c in dual]
             if cross is not None:
                 # The cross-hand term, one-handed with a plain off hand only: L1 throws the left
                 # weapon's own attack there, and nowhere else (`CrossHand`).
                 plain = [with_cross(o, mw) if not o.ps else o for o in plain]
             if th:
-                plain.append(OffHand((round(cr.norm_score(th, off_pool, shared, ow), 4), m[1], mw, m[3]), th,
+                plain.append(OffHand((round(off_norm(th, shared, ow), 4), m[1], mw, m[3]), th,
                                      right_aff=m[3], two_hand=True))
             elif grips is not None and "2H" in grips:
                 # Two-handed alone: the main hand's 2H grip and moveset, the left hand empty, no
@@ -1583,7 +1651,7 @@ def set_weapons(m, o):
     return (m[2],) if getattr(o, "two_hand", False) else (m[2], o[2])
 
 
-def cover_sets(hands, weapons, value, fallback=None):
+def cover_sets(hands, weapons, value, fallback=None, count=None):
     """Every weapon of `weapons` its best equip set (user, 2026-10-19: every melee weapon in the plan
     in at least one set): the best by `value(main, off)` over every set that holds it, as the main
     hand in any mode `offs_for` offers it (two-handed alone or paired, one-handed with an off hand,
@@ -1593,16 +1661,22 @@ def cover_sets(hands, weapons, value, fallback=None):
 
     Returns ({weapon: (value, main, off)}, sets) with sets [(value, main, off, covers)], best first:
     one entry per distinct set, `covers` the weapons it is the best set of, so two weapons that are
-    each other's best partner share one set."""
+    each other's best partner share one set.
+
+    `count` is called once per main hand (scoring its every off hand, `offs_for`, the slow part)
+    and once per weapon covered."""
     mains, offs_for = hands
+    tick = count or (lambda: None)
     by_w = {m[2]: m for m in mains}
     as_left = collections.defaultdict(list)
     for m in mains:
         for o in offs_for(m):
             if not o.two_hand and o[2] != m[2]:
                 as_left[o[2]].append((m, o))
+        tick()
     best = {}
     for w in weapons:
+        tick()
         pairs = ([(by_w[w], o) for o in offs_for(by_w[w])] if w in by_w else []) + as_left.get(w, [])
         got = best_pair(pairs, value)
         if got and got[0] <= 0 and fallback is not None:
@@ -1735,7 +1809,7 @@ def set_reach_weights(rows, r1):
     for x in rows:
         if x["cat"] != "utility":
             best[x["ash"]] = max(best[x["ash"]], ash_reach(x))
-    for x in rows:
+    for x in counted(rows, "rows"):
         w, a = r1.get((x["weapon"], x["grip"])), ash_reach(x)
         if x["cat"] != "utility" and w and a:
             x["reach_w"] = 1 + REACH_GAIN_K * (max(0.0, math.log(a / w)) + math.log(a / best[x["ash"]]))
@@ -1781,7 +1855,7 @@ def set_ranged_status(rows, r1, stats, cache_path):
         sids = skill_ids(t, {x["ash"] for x in todo})
         events, ws_cache, fires = {}, {}, {}
         print(f"ranged status: {len(todo)} rows to read", file=sys.stderr, flush=True)
-    for n, x in enumerate(todo):
+    for x in counted(todo, "rows"):
         sid = sids.get(x["ash"])
         if sid is None or fires.get(sid) is False:
             cache[key(x)] = {}
@@ -1842,8 +1916,6 @@ def set_ranged_status(rows, r1, stats, cache_path):
         if hp:
             out["status_only"] = hp
         cache[key(x)] = out
-        if n and n % 500 == 0:
-            print(f"  {n}/{len(todo)} rows", file=sys.stderr, flush=True)
     if todo:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache))
@@ -1971,7 +2043,7 @@ def set_buff_values(rows, stats, cache_path, armor=None):
         for x in miss:
             groups[(x["weapon"], x["affinity"])].append(x)
         off = 0
-        for n, ((w, aff), xs) in enumerate(sorted(groups.items())):
+        for (w, aff), xs in counted(sorted(groups.items()), "weapons"):
             tab.set_weapon(w, aff)
             reads = {}
             for x in xs:
@@ -1988,8 +2060,6 @@ def set_buff_values(rows, stats, cache_path, armor=None):
                     off += 1
                 prof = A.skill_profile(t, sids[x["ash"]], tab.wid, tab.level, two, x.get("stance"))
                 cache[key(x)] = tab.buff_gain(sids[x["ash"]], prof, two, ctx, *bh)
-            if n and n % 50 == 0:
-                print(f"  {n}/{len(groups)} weapons", file=sys.stderr, flush=True)
         if off:
             print(f"buff values: {off} utility rows' follow-up differs from the sweep by more than 1 HP "
                   f"(sweep stats are not {stats_key}?)", file=sys.stderr)
@@ -2054,7 +2124,7 @@ def set_area_weights(rows):
         if x["cat"] != "utility" and x.get("area"):
             by_ash[x["ash"]].append(x["area"])
     med = {a: statistics.median(v) for a, v in by_ash.items()}
-    for x in rows:
+    for x in counted(rows, "rows"):
         share = blade_share(x) if x["cat"] != "utility" else 0.0
         if share and x.get("area") and med.get(x["ash"]):
             x["area_w"] = 1 + share * (x["area"] / med[x["ash"]] - 1)
@@ -2079,7 +2149,7 @@ def set_landing_weights(rows, stats, cache_path):
     LAND = sys.modules[name]
     cache = json.loads(Path(cache_path).read_text())
     got = {}
-    for x in rows:
+    for x in counted(rows, "rows"):
         v = cache.get(LAND.key(x["weapon"], x["affinity"], x["grip"], x["ash"], stats))
         if v and v.get("share") is not None:
             got[id(x)] = v["share"]
@@ -2149,7 +2219,7 @@ def set_lead_in(rows, stats):
     first, n = {}, 0
     for x in old:
         first.setdefault(x["ash"], x)
-    for ash, x0 in first.items():
+    for ash, x0 in counted(list(first.items()), "ashes"):
         try:
             sid = t.find_arts(ash)
         except (SystemExit, KeyError):
@@ -2547,7 +2617,7 @@ def parry_weights(rows, path):
         _PARRY["atk"] = {}
     s, t, ids, cache = _PARRY["summary"], _PARRY["t"], _PARRY["ids"], _PARRY["atk"]
     misses = 0
-    for x in rows:
+    for x in counted(rows, "rows"):
         if x["cat"] == "utility" or not x.get("dmg"):
             continue
         sid = ids.get(x["ash"])
@@ -2604,7 +2674,7 @@ def pb_weights(rows, got, path, build_stats):
         model = PB.Model(PB.Guards.from_summary(s), opp=_ai().Opponent(), use=s["attempt"])
         _PB["side"] = PB.AshSide(model, build_stats)
     side = _PB["side"]
-    for x in rows:
+    for x in counted(rows, "rows"):
         if x["cat"] == "utility" or not x.get("dmg"):
             continue
         srate = status_rate(x)
@@ -3045,6 +3115,8 @@ class Stages:
             tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
             tmp.write_text(json.dumps({**self.last, **self.took}))
             os.replace(tmp, self.path)
+
+
 DEFAULT_ARMOR = ["Verdigris Gauntlets", "Verdigris Armor", "Verdigris Greaves"]
 
 
@@ -3107,29 +3179,42 @@ def whiff_weights(rows, got, cache_path=None, jobs=1):
     if need:
         global _WHIFF_JOB
         _WHIFF_JOB = (W, opp, got)
-        keys = list(need)
-        n = max(1, min(jobs, len(keys)))
+        # Rows that share their plans (`er-mechanics-ash-whiff._plans`: one weapon's affinities)
+        # are one job, which takes their duel distances one at a time across the rows
+        # (`from_spreads`), so each plan is computed once (`whiff_groups`). The results go into the
+        # memo in the order before, so the cache file is the same too.
+        groups = whiff_groups(list(need), need, got)
+        # Each worker pins itself to a core of its own (`_worker_init`). A plain pool inherits the
+        # caller's affinity, and a throttled caller is pinned to one CPU: on 2026-10-20 ten whiff
+        # workers shared CPU 1 at 10% each for hours.
+        cpus = AI.allowed_cpus()
+        workers = cpus[1:] or cpus
+        n = max(1, min(jobs, len(groups), len(workers)))
+        done = {}
         if n > 1:
             import multiprocessing as mp
-            with mp.get_context("fork").Pool(n) as pool:
-                out = pool.imap(_whiff_one, [need[k] for k in keys], chunksize=16)
-                for i, (k, w) in enumerate(zip(keys, out), 1):
-                    memo[k] = w
-                    if i % 500 == 0 or i == len(keys):
-                        print(f"  {i}/{len(keys)} rows simulated on {n} workers", file=sys.stderr, flush=True)
+            ctx = mp.get_context("fork")
+            with ctx.Pool(n, initializer=AI._worker_init, initargs=(workers, ctx.Value("i", 0))) as pool:
+                out = pool.imap(_whiff_group, [[need[k] for k in g] for g in groups], chunksize=8)
+                tick = Count(len(need), f"rows simulated on {n} workers")
+                for g, ws in zip(groups, out):
+                    done.update(zip(g, ws))
+                    tick(len(g))
         else:
-            for k in keys:
-                memo[k] = _whiff_one(need[k])
+            tick = Count(len(need), "rows simulated")
+            for g in groups:
+                done.update(zip(g, _whiff_group([need[k] for k in g])))
+                tick(len(g))
+        for k in need:
+            memo[k] = done[k]
         _WHIFF_JOB = None
-    for i, x in enumerate(todo, 1):
+    for x in counted(todo, "rows"):
         key = _whiff_key(AI, x)
         w = memo[key]
         # A step or buff, or a row with no profile, has no whiff to punish and keeps `imult` alone.
         if w:
             x["wmult"] = W.net(w)
             x["whiff"] = {k: round(v, 3) if isinstance(v, float) else v for k, v in w.items()}
-        if i % 500 == 0 or i == len(todo):
-            print(f"  {i}/{len(todo)} rows", file=sys.stderr, flush=True)
     # A cast with no hit has nothing to roll: the waiting reply punishes it outright
     # (`er-mechanics-self-damage.cast_punish`). Not memoised: the punish is charged against
     # `delivered_hp`, which the buff stage sets after the sweep, and a few hundred rows take seconds.
@@ -3145,6 +3230,39 @@ def whiff_weights(rows, got, cache_path=None, jobs=1):
         x["whiff"] = {k: round(v, 3) if isinstance(v, float) else v for k, v in w.items()}
     if path:
         path.write_text(json.dumps({"settings": settings, "rows": memo}))
+
+
+def whiff_plan_key(prof, grip_change):
+    """What `er-mechanics-ash-whiff._plans` keys a row's plans on, as far as the profile says: its
+    escape tables (one per distance of a duel spread), windows, gate and poise, and the grip
+    change it is led by. Only `whiff_groups` reads it, to put rows that share their plans together;
+    a key that groups too little or too much changes the speed, never a result."""
+    if not prof or "error" in prof:
+        return None
+    esc = tuple(q.get("escape") for q in prof["spread"]) if prof.get("spread") else (prof.get("escape"),)
+    return esc, json.dumps(prof.get("windows")), prof.get("gate"), prof.get("poise"), grip_change
+
+
+def whiff_groups(keys, need, got):
+    """`keys` as lists of the rows of one `whiff_plan_key`, in the order of each list's first
+    row. The rows of one weapon's affinities share their plans and sat a whole ash list apart, so
+    a worker's plan memo held none of them by the next: measured on the 2026-10-19 heavy-kit
+    cache (fixed distance), 6747 of 6752 plans computed row by row, 4873 grouped."""
+    groups, alone = {}, 0
+    for k in keys:
+        rk, grip_change = need[k]
+        pk = whiff_plan_key(got.get(rk), grip_change)
+        if pk is None:
+            pk, alone = ("alone", alone), alone + 1
+        groups.setdefault(pk, []).append(k)
+    return list(groups.values())
+
+
+def _whiff_group(jobs):
+    """The whiff simulations of rows that share one grip change, `jobs` [(profile key, grip
+    change)], each what `_whiff_one` returns for it (`er-mechanics-ash-whiff.from_spreads`)."""
+    W, opp, got = _WHIFF_JOB
+    return W.from_spreads(opp, [got.get(rk) for rk, _ in jobs], jobs[0][1])
 
 
 def _whiff_key(AI, x):
@@ -3679,7 +3797,7 @@ def dominated(rows):
                 _reach(x) or 0, -x["first"], ha.get("poise", 0), -ha.get("start", 999))
 
     out = {}
-    for b, bk in by.items():
+    for b, bk in counted(list(by.items()), "ashes"):
         for a, ak in by.items():
             if a == b or b in out or not bk.keys() <= ak.keys():
                 continue
@@ -3707,7 +3825,7 @@ def dominated_buffs(rows):
         return x["score"], -x["first"], -x.get("gate", 0.0)
 
     out = {}
-    for b, bk in by.items():
+    for b, bk in counted(list(by.items()), "ashes"):
         for a, ak in by.items():
             if a == b or b in out or not bk.keys() <= ak.keys():
                 continue
@@ -3828,6 +3946,14 @@ def selftest() -> int:
         par = list(pool.imap(_whiff_one, jobs_in, chunksize=1))
     check("whiff: forked workers match the serial simulation", par, [_whiff_one(j) for j in jobs_in])
     _WHIFF_JOB = None
+    # `whiff_groups`: the rows of one plan key together, in the order of each group's first row; a
+    # row with no profile is a group of its own.
+    sp = lambda esc: {"spread": [{"escape": e} for e in esc], "windows": [], "gate": 50.0, "poise": 89}
+    got_ = {"a|Heavy": sp(["e1", "e2"]), "b": sp(["e9"]), "a|Blood": sp(["e1", "e2"])}
+    need_ = {"k1": ("a|Heavy", 0.0), "k2": ("b", 0.0), "k3": ("a|Blood", 0.0), "k4": ("a|Blood", 7.0),
+             "k5": ("gone", 0.0), "k6": ("gone", 0.0)}
+    check("whiff_groups: one plan key a group, grip change part of the key, no profile alone",
+          whiff_groups(list(need_), need_, got_), [["k1", "k3"], ["k2"], ["k4"], ["k5"], ["k6"]])
 
     # `off_stat`: a bullet with a stat term the build lacks is dropped; one with no stat term is not.
     check("off_stat: a bullet scaling 8 of 266 with INT on an INT 10 build is off-stat",
@@ -4315,6 +4441,29 @@ def selftest() -> int:
     check("cover: two weapons that are each other's best partner share one set",
           [(set_weapons(m, o), sorted(covers)) for _, m, o, covers in cov_b],
           [(("Halberd B", "Knife K"), ["Halberd B", "Knife K"]), (("Halberd B", "Club C"), ["Club C"])])
+    # The set coverage stage's counter: every candidate hand, every main hand's off hands, every
+    # weapon covered, with the candidates that are no main hand skipped past, so it ends at N/N.
+    ws_g = ["Great G", "Knife K", "Club C"]
+    n_main, n_off = hand_picks(str_roles, all_mains=True)
+    err = io.StringIO()
+    cnt = Count(n_main + n_off + n_main + len(ws_g), "weapons", out=err)
+    hs = hand_scores(str_roles, gcr, {}, {}, usable, lambda w, a: True, all_mains=True, count=cnt)
+    cnt.skip(n_main - len(hs[0]))
+    best_c, cov_c = cover_sets(hs, ws_g, lambda m, o: set_score(m, o), count=cnt)
+    check("cover: counted, same sets, ending at N/N",
+          (cov_c == cov_g, cnt.i == cnt.total > 0, err.getvalue().splitlines()[-1] == f"  {cnt.total}/{cnt.total} weapons"),
+          (True, True, True))
+    # `Count` itself: the first item and the last always print, the rest at most once per
+    # `COUNT_SECONDS` of its clock.
+    clk = [0.0]
+    err = io.StringIO()
+    cnt = Count(10, "weapons", clock=lambda: clk[0], out=err)
+    for i in range(9):
+        clk[0] = i * 0.5
+        cnt()
+    cnt.skip(1)
+    check("Count: first, one per COUNT_SECONDS, last; lines in the watcher's counter format",
+          err.getvalue().splitlines(), ["  1/10 weapons", "  5/10 weapons", "  9/10 weapons", "  10/10 weapons"])
 
     # Better hand per feature (`SetScorer`, user 2026-10-19), on the real class-roles features. A STR
     # main hand: 2H AR 150, reach 3.2, R1 string 100 MV/s; 1H AR 100, reach 3.0, string 80. Knife
@@ -4546,6 +4695,19 @@ def selftest() -> int:
     pairs, _ = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2, weight=wts.get, cost=steep, floor=25.0)
     check("combos: weight the stats already pay for (a focus set) costs a pair nothing more",
           [p[2] for p in pairs], ["Axe A", "Club C"])
+    # The layout stage's counters (`derive_combos(progress=True)`): the hands scored, the main
+    # hands' off hands, the caps tried, each ending at N/N, in the watcher's counter format.
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        pairs_p, _ = derive_combos(roles, cr, {}, {}, usable=lambda w: True, n=2, weight=wts.get, cost=steep,
+                                   progress=True)
+    got = [x.strip() for x in err.getvalue().splitlines()]
+    units = [x.split()[1] for x in got]
+    ends = {u: x for x, u in zip(got, units)}
+    check("combos progress: same picks, counters over hands, mains and caps, each finished",
+          ([p[2] for p in pairs_p], list(dict.fromkeys(units)),
+           all(re.fullmatch(r"(\d+)/\1 \w+", ends[u]) for u in ends)),
+          (["Club C", "Halberd H"], ["hands", "mains", "caps"], True))
 
     # The speed term (`SetSpeed`, `_set_value`): a slow main hand (R1 #1 at f20) and a quick one
     # (f10); a strong slow off hand (L1 #1 at f22) and a weaker fast one (f9). Coverage 1 at f10 or
@@ -4838,6 +5000,9 @@ def main() -> int:
         _ai().throttle(_ai().allowed_cpus()[:1])
     stage = Stages(a.stage_times)
     stage("rows")
+    # The stage's counter, one step per whole-pool pass: each takes seconds with no item worth
+    # counting (the sweep files, the embedding read twice), and a pass that computes counts its own.
+    rows_step = Count(len(a.rows) + 7, "steps")
     # The sweep already drops blacklisted ashes; reading the list again keeps a sweep made before an
     # entry was added from bringing it back.
     blacklist = tomllib.loads(BLACKLIST.read_text())
@@ -4853,6 +5018,7 @@ def main() -> int:
                 seen.add(k)
                 x.setdefault("affinity", "Standard")
                 rows.append(x)
+        rows_step()
     # A buff is worth what it adds on its carrier (`er-mechanics-ash-table.BUFF_MODEL`); a sweep
     # made before that is valued here, on the cast's clock, so before the grip change.
     build_stats = ({k: json.loads(a.build.read_text())["stats"][k] for k in STATS} if a.build
@@ -4885,10 +5051,14 @@ def main() -> int:
         print(f"affinity {a.affinity}: primary stat rule dropped {sum(aff_rule.dropped.values())} rows: "
               + ("; ".join(f"{aff} on {len(ws)} weapons ({', '.join(ws[:6])}{', ...' if len(ws) > 6 else ''})"
                            for aff, ws in sorted(gone.items())) or "none"), file=sys.stderr)
+    rows_step()
     set_lead_in(rows, build_stats)
+    rows_step()
     set_buff_values(rows, build_stats, a.buff_cache, build_armor(a.build))
+    rows_step()
     set_buff_weights(rows)
     buff_report(rows)
+    rows_step()
     rows = drop_no_pvp_utility(rows)
     # A "2H" copy is two-handed after the swap before its skill can start (`GRIP_CHANGE_FRAMES`);
     # every rule below (carrier limits, interrupt weights, dominance, rank cut, grabs) sees that.
@@ -4902,8 +5072,11 @@ def main() -> int:
                 or x["first"] <= last_first and (x.get("melee_reach") or [0])[0] > min_reach]
         print(f"{ash}: kept {sum(x['ash'] == ash for x in rows)} of {before} carriers "
               f"(first hit <= f{last_first}, reach > {min_reach} m)", file=sys.stderr)
+    rows_step()
     r1 = r1_reaches(json.loads(a.roles.read_text()) if a.roles else None, a.embed)
+    rows_step()
     traits = weapon_traits(a.embed)
+    rows_step()
     got = weigh(rows, a, r1, build_stats, report=True, stages=stage)
     AIb = _ai()
     for w in a.terms_weapon if a.weigh_only else ():
@@ -5261,7 +5434,8 @@ def main() -> int:
             weighed["cross"] = CrossHand(cr.build_rl(json.loads(a.build.read_text())), a.mirror, a.cross_hand_cache)
         combos, combo_log = derive_combos(roles, cr, roles.get("weights") or cr.pick_weights(EXCLUDE["ashes"]),
                                           roles.get("off_weights") or prefs["offhand_pick_weights"],
-                                          usable=lambda w: w in by_weapon, aff_ok=aff_rule.ok_any, **weighed)
+                                          usable=lambda w: w in by_weapon, aff_ok=aff_rule.ok_any, progress=True,
+                                          **weighed)
         if weighed.get("cross") is not None:
             weighed["cross"].save()
             print(f"Combos: cross-hand links measured for {weighed['cross'].new} new pairs (TRUE_COMBO_BONUS "
@@ -5576,7 +5750,8 @@ def main() -> int:
         # 2026-10-18). A weapon whose copies cannot mount any swept ash has no row to give, so the
         # next one is taken.
         crit_ws = sorted({x["weapon"] for x in crit_src if not excluded(x)})
-        crit_rank = rank_crit({w: crit_affinities(w, build_stats, CRIT_GRIPS, aff_rule.ok) for w in crit_ws})
+        crit_rank = rank_crit({w: crit_affinities(w, build_stats, CRIT_GRIPS, aff_rule.ok)
+                               for w in counted(crit_ws, "weapons")})
         print("Crit: one-handed riposte + backstab, best per weapon: "
               + ", ".join(f"{w} {r[0][0]} {s:.0f}" for s, w, r in crit_rank[:8]), file=sys.stderr)
         crit_order = [w for _, w, _ in crit_rank]
@@ -5653,7 +5828,7 @@ def main() -> int:
     if roles:
         placed = {(s["weapon"], s["affinity"], s.get("skill")) for s in slots}
         held_ws = {s["weapon"] for s in slots}
-        for p in fun_picks:
+        for p in counted(fun_picks, "picks"):
             w, aff = p["weapon"], p["affinity"]
             # `--fun-skip-held`: a weapon already somewhere above gets no extra copy for its fun
             # mechanic.
@@ -5969,7 +6144,7 @@ def main() -> int:
             return max(mine, key=lambda x: x["norm"])
 
         moved, missing = [], []
-        for i in range(len(slots)):
+        for i in counted(range(len(slots)), "slots"):
             s = slots[i]
             if fixed_slot(i):
                 continue
@@ -6037,11 +6212,17 @@ def main() -> int:
         def set_value(m, o):
             v = sv_(m, o)[0]
             return v * cost_(max(heavy, set_weight(m, o))) / base if cost_ and base > 0 else v
+        # The stage's counter: every candidate hand scored, then every main hand's off hands, then
+        # every plan weapon covered; a candidate that is no main hand (unusable, no grip) is
+        # skipped past so the counter ends at N/N.
+        n_main, n_off = hand_picks(roles, all_mains=True)
+        count = Count(n_main + n_off + n_main + len(plan_ws), "weapons")
         hands_all = hand_scores(roles, cr, roles.get("weights") or cr.pick_weights(EXCLUDE["ashes"]),
                                 roles.get("off_weights") or prefs["offhand_pick_weights"],
                                 lambda w: w in by_weapon, aff_rule.ok_any,
-                                weighed.get("ps"), weighed.get("cross"), all_mains=True)
-        best_of, cov = cover_sets(hands_all, plan_ws, set_value, fallback=lambda m, o: sv_(m, o)[0])
+                                weighed.get("ps"), weighed.get("cross"), all_mains=True, count=count)
+        count.skip(n_main - len(hands_all[0]))
+        best_of, cov = cover_sets(hands_all, plan_ws, set_value, fallback=lambda m, o: sv_(m, o)[0], count=count)
         if weighed.get("cross") is not None:
             weighed["cross"].save()
         for w in plan_ws:
@@ -6162,7 +6343,7 @@ def render(slots, layout):
            "fastest R1 out of them; a buff adds what it adds to the hits it covers on that weapon) with status "
            "HP added; norm = value / best of its category. Colours: blue bullet, "
            "orange non-bullet, purple melee bullet, green step/buff, grey padding.</p>"]
-    for p in range(0, len(slots), PAGE):
+    for p in counted(range(0, len(slots), PAGE), "pages"):
         out.append(f"<h3>Page {p // PAGE + 1}</h3><table>")
         for r in range(p, min(p + PAGE, len(slots)), ROW):
             if r in starts:

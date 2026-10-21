@@ -863,73 +863,255 @@ def powerstance_affinities(same, best, right_roles, left_roles):
     return out
 
 
+#: Runs of neighbouring items each `pooled` worker takes, about: few enough that a run shares its
+#: weapons' caches, enough that a slow run does not leave the other workers idle at the end.
+POOL_RUNS = 8
+#: What the pool workers read (`_weapon_work`, `_pair_work`, `_ash_work`), set before they fork:
+#: the `Embed`, the mechanic shares and, in a worker, the reaches it has already handed back.
+_JOB = {}
+
+
+def _reach_news(e):
+    """{reach key: entries} this worker measured since its last call. A worker writes no reach file
+    (`_worker_start` clears its `reach_path`); `pooled` merges these into the caller's, which the
+    caller writes, so the file has one writer."""
+    seen = _JOB.setdefault("seen", {})
+    out = {}
+    for k, v in e.reach.items():
+        if seen.get(k) != v:
+            out[k] = seen[k] = dict(v) if isinstance(v, dict) else v
+    return out
+
+
+def _weapon_work(b):
+    """([(record, (affinity, 1H damage) when its 1H record is wieldable)], reaches measured): one
+    base weapon on every affinity, the records in the order one process appends them."""
+    e, share = _JOB["e"], _JOB["share"]
+    out = []
+    for aff in OPT.affinities(e.art, b):
+        try:
+            vec = e.weapon_vector(b, aff)
+        except Exception as ex:  # keep the sweep going; the failure is recorded
+            print(f"{e.art.names[b]} {aff}: {ex!r}", file=sys.stderr)
+            continue
+        mechs = list(e.option_mechanics(b, aff))
+        fun, m = fun_of(mechs, share)
+        one = vec["1H"]
+        best = (aff, one["damage"] or 0) if one["wieldable"] else None
+        for grip, rec in vec.items():
+            rec["mechanics"] = mechs
+            rec["fun"], rec["fun_mechanic"] = fun, m
+            out.append((rec, best if grip == "1H" else None))
+    return out, _reach_news(e)
+
+
+def _pair_work(job):
+    """([(record, on a role affinity pair)], reaches measured): one powerstance pair on each of
+    its affinity pairs."""
+    e = _JOB["e"]
+    r, l, affs, best = job
+    out = []
+    for ra, la in affs:
+        try:
+            rec = e.powerstance(r, ra, l, la)
+        except Exception as ex:
+            print(f"powerstance {e.art.names[r]} {ra} + {e.art.names[l]} {la}: {ex!r}", file=sys.stderr)
+            continue
+        if rec:
+            out.append((rec, (ra, la) != best))
+    return out, _reach_news(e)
+
+
+def _ash_work(x):
+    """(ash vector or None, reaches measured) of one ash-table row."""
+    e = _JOB["e"]
+    try:
+        rec = e.ash_vector(x, _JOB["share"])
+    except Exception as ex:
+        print(f"ash {x['ash']} on {x['weapon']}: {ex!r}", file=sys.stderr)
+        rec = None
+    return rec, _reach_news(e)
+
+
+def _worker_start(cores, counter):
+    """A pool worker: a core of its own (`er-mechanics-ash-interrupt._worker_init`) and no reach file."""
+    COMBO._ai()._worker_init(cores, counter)
+    e = _JOB["e"]
+    e.reach_path = None
+    _JOB["seen"] = {k: dict(v) if isinstance(v, dict) else v for k, v in e.reach.items()}
+
+
+def pooled(e, fn, items, jobs):
+    """`fn` over `items`, results in the order of `items`, on `jobs` forked workers each pinned to
+    a core of its own, as the loadout's pools are (`er-mechanics-ash-interrupt._worker_init`).
+    `fn` returns (result, reaches measured); the reaches go into `e.reach` here and its file is
+    written by this process alone. `jobs` 1 runs in this process. A result is the one the serial
+    loop computes: the caches an `Embed` keeps per item (`_moves`, `_ps_rows`, the reaches) hold
+    the same values whichever process fills them."""
+    AI = COMBO._ai()
+    cpus = AI.allowed_cpus()
+    workers = cpus[1:] or cpus
+    n = max(1, min(jobs, len(items), len(workers)))
+    # The first item here either way: whatever it reads on first use (tables, the status target's
+    # defenders) the forked workers then inherit instead of each reading it again.
+    for x in items[:1] if n > 1 else items:
+        yield fn(x)[0]
+    if n <= 1:
+        return
+    import multiprocessing as mp
+    ctx = mp.get_context("fork")
+    # The status sequence memo shared by the workers (`er-mechanics-status.share_seq_memo`): the
+    # pairs repeat the build-up sequences one process would have simulated once.
+    ST.share_seq_memo(ctx)
+    # Neighbouring items share their weapons (the pairs run right weapon by right weapon), so each
+    # worker takes runs of them and reads a weapon's animations and moveset once rather than once
+    # per pair: `POOL_RUNS` runs a worker.
+    rest = items[1:]
+    chunk = max(1, len(rest) // (n * POOL_RUNS))
+    with ctx.Pool(n, initializer=_worker_start, initargs=(workers, ctx.Value("i", 0))) as pool:
+        for res, news in pool.imap(fn, rest, chunksize=chunk):
+            for k, v in news.items():
+                if isinstance(v, dict):
+                    e.reach.setdefault(k, {}).update(v)
+                else:
+                    e.reach[k] = v
+            if news:
+                e.save_reach()
+            yield res
+
+
+#: The arguments an embedding reused by `--reuse` must have been made with, besides its stats.
+REUSE_ARGS = ("weapons", "no_reach", "no_powerstance", "fight")
+
+
+def stamp_path(out: Path) -> Path:
+    """The file beside an embedding naming the code, stats and arguments that made it (`reusable`)."""
+    return out.with_name(out.name + ".stamp.json")
+
+
+def code_stamp() -> dict:
+    """{file name: sha256} of every module of this directory the process has loaded: the code
+    behind an embedding's weapon and powerstance records."""
+    out = {}
+    for m in list(sys.modules.values()):
+        f = getattr(m, "__file__", None)
+        if f and Path(f).resolve().parent == HERE:
+            out[Path(f).name] = hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    return dict(sorted(out.items()))
+
+
+def stamp_doc(a, stats, code) -> dict:
+    return {"stats": stats_key(stats), "args": {k: getattr(a, k, None) for k in REUSE_ARGS}, "code": code}
+
+
+def reuse_refusal(a, stats, doc) -> str | None:
+    """Why a stamp `doc` (`stamp_doc`) does not vouch for an embedding at `stats` made with `a`,
+    or None when it does: the same stats, the same `REUSE_ARGS`, and every module it names
+    unchanged on disk."""
+    if not doc or not doc.get("code"):
+        return "no code recorded"
+    want = stamp_doc(a, stats, None)
+    if doc.get("stats") != want["stats"]:
+        return f"stats {doc.get('stats')}"
+    if doc.get("args") != want["args"]:
+        return f"arguments {doc.get('args')}"
+    stale = [f for f, h in doc["code"].items()
+             if not (HERE / f).exists() or hashlib.sha256((HERE / f).read_bytes()).hexdigest() != h]
+    return f"changed code {', '.join(stale)}" if stale else None
+
+
+def reusable(a, stats, path: Path):
+    """The embedding at `path` when its stamp (`stamp_path`) vouches for it (`reuse_refusal`), else
+    None with the reason on stderr. The pipeline's step 6 reuses step 2's: the two runs differ only
+    in `--ash-rows`, which nothing but the ash vectors reads, so the weapon and powerstance records
+    are the ones step 6 would compute again (equal in both files of the 2026-10-19 heavy-kit pass,
+    37 MB and 112 MB of JSON, and about 90 s of step 6's 108)."""
+    try:
+        doc = json.loads(stamp_path(path).read_text())
+    except (OSError, ValueError):
+        doc = None
+    why = reuse_refusal(a, stats, doc)
+    if why:
+        print(f"reuse: not {path} ({why}); computing every record", file=sys.stderr, flush=True)
+        return None
+    return json.loads(path.read_text())
+
+
 def build(a, stats):
     t0 = time.time()
     e = Embed(stats, a.reach_cache, not a.no_reach)
     print(f"tables {time.time() - t0:.1f}s", file=sys.stderr, flush=True)
     share, labels, n_opts = e.shares()
     print(f"mechanics over {n_opts} options {time.time() - t0:.1f}s", file=sys.stderr, flush=True)
-    weapons, best_aff, by_base = [], {}, collections.defaultdict(list)
+    jobs = getattr(a, "jobs", 1) or 1
+    # Read once here rather than once in every forked worker.
+    e.sa()
+    _JOB.update(e=e, share=share)
     only = {w.strip() for w in a.weapons.split(",")} if a.weapons else None
-    todo = [b for b in e.base if not only or e.art.names[b] in only]
-    for i, b in enumerate(todo):
-        for aff in OPT.affinities(e.art, b):
-            try:
-                vec = e.weapon_vector(b, aff)
-            except Exception as ex:  # keep the sweep going; the failure is recorded
-                print(f"{e.art.names[b]} {aff}: {ex!r}", file=sys.stderr)
-                continue
-            mechs = list(e.option_mechanics(b, aff))
-            fun, m = fun_of(mechs, share)
-            for grip, rec in vec.items():
-                rec["mechanics"] = mechs
-                rec["fun"], rec["fun_mechanic"] = fun, m
-                weapons.append(rec)
-                by_base[b].append(rec)
-            one = vec["1H"]
-            if one["wieldable"] and (b not in best_aff or (one["damage"] or 0) > best_aff[b][1]):
-                best_aff[b] = (aff, one["damage"] or 0)
-        print(f"[{i + 1}/{len(todo)}] {e.art.names[b]} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
-    pstance = []
-    if not a.no_powerstance:
-        cand = [(r, l) for r in todo for l in todo if PG.can_powerstance(e.pg, r, l)]
-        role = {b: role_affinities_1h(recs) for b, recs in by_base.items()}
-        n_extra = 0
-        for r, l in cand:
-            raff = best_aff.get(r, (OPT.affinities(e.art, r)[0],))[0]
-            laff = best_aff.get(l, (OPT.affinities(e.art, l)[0],))[0]
-            for ra, la in powerstance_affinities(r == l, (raff, laff), role.get(r, ()), role.get(l, ())):
-                try:
-                    rec = e.powerstance(r, ra, l, la)
-                except Exception as ex:
-                    print(f"powerstance {e.art.names[r]} {ra} + {e.art.names[l]} {la}: {ex!r}", file=sys.stderr)
-                    continue
-                if rec:
-                    pstance.append(rec)
-                    n_extra += (ra, la) != (raff, laff)
-        print(f"powerstance {len(pstance)} records over {len(cand)} pairs ({len(pstance) - n_extra} on the "
-              f"best-damage affinities, {n_extra} more on the role affinities) {time.time() - t0:.0f}s",
-              file=sys.stderr, flush=True)
+    base = reusable(a, stats, a.reuse) if getattr(a, "reuse", None) else None
+    if base is not None:
+        weapons, pstance = base["weapons"], base["powerstance"]
+        print(f"reuse: {len(weapons)} weapon and {len(pstance)} powerstance records from {a.reuse} "
+              f"{time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    else:
+        weapons, pstance = build_weapons(a, e, only, jobs, t0)
     ashes = []
     seen = set()
     for path in a.ash_rows or ():
+        todo = []
         for x in json.loads(path.read_text()):
             # A stance skill's buttons are rows of their own (`variant`); each is a vector.
             k = (x["weapon"], x.get("affinity", "Keen"), x["ash"], x["grip"], x.get("variant"))
             if (only and x["weapon"] not in only) or k in seen:
                 continue
             seen.add(k)
-            try:
-                ashes.append(e.ash_vector(x, share))
-            except Exception as ex:
-                print(f"ash {x['ash']} on {x['weapon']}: {ex!r}", file=sys.stderr)
+            todo.append(x)
+        ashes += [v for v in pooled(e, _ash_work, todo, jobs) if v is not None]
         print(f"ash vectors {len(ashes)} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    ST.release_seq_memo()
     if e._reach_dirty:
         e.save_reach(force=True)
     return {"stats": stats, "stats_key": stats_key(stats), "fun_max_share": FUN_MAX_SHARE,
             "options": n_opts,
             "mechanics": {k: {"share": round(v, 5), "label": labels.get(k)} for k, v in sorted(share.items())},
             "weapons": weapons, "powerstance": pstance, "ashes": ashes}
+
+
+def build_weapons(a, e, only, jobs, t0):
+    """(weapon records, powerstance records): every base weapon on every affinity, then every
+    powerstance pair, on `jobs` workers (`pooled`), in the order one process makes them."""
+    weapons, best_aff, by_base = [], {}, collections.defaultdict(list)
+    todo = [b for b in e.base if not only or e.art.names[b] in only]
+    for i, (b, recs) in enumerate(zip(todo, pooled(e, _weapon_work, todo, jobs))):
+        for rec, one in recs:
+            weapons.append(rec)
+            by_base[b].append(rec)
+            if one and (b not in best_aff or one[1] > best_aff[b][1]):
+                best_aff[b] = one
+        print(f"[{i + 1}/{len(todo)}] {e.art.names[b]} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    pstance = []
+    if not a.no_powerstance:
+        cand = [(r, l) for r in todo for l in todo if PG.can_powerstance(e.pg, r, l)]
+        role = {b: role_affinities_1h(recs) for b, recs in by_base.items()}
+        jobs_in = []
+        for r, l in cand:
+            raff = best_aff.get(r, (OPT.affinities(e.art, r)[0],))[0]
+            laff = best_aff.get(l, (OPT.affinities(e.art, l)[0],))[0]
+            jobs_in.append((r, l, powerstance_affinities(r == l, (raff, laff), role.get(r, ()), role.get(l, ())),
+                            (raff, laff)))
+        n_extra = 0
+        # Minutes with no `[i/N]` line otherwise (3m17s on 2026-10-19): `  i/N pairs` on stderr.
+        progress = _load("er_mechanics_progress", "er-mechanics-progress.py")
+        tick = progress.Count(len(jobs_in), "pairs")
+        for recs in pooled(e, _pair_work, jobs_in, jobs):
+            for rec, extra in recs:
+                pstance.append(rec)
+                n_extra += extra
+            tick()
+        print(f"powerstance {len(pstance)} records over {len(cand)} pairs ({len(pstance) - n_extra} on the "
+              f"best-damage affinities, {n_extra} more on the role affinities) {time.time() - t0:.0f}s",
+              file=sys.stderr, flush=True)
+    return weapons, pstance
 
 
 def same_moves(a, b, keys=("anim", "startup", "active", "last_hit", "roll_cancel", "next_cancel",
@@ -1050,6 +1232,37 @@ def selftest():
     print(f"{'ok' if good else 'FAIL'}: Venomous Fang fun {ff} ({fm}, share {share.get(fm)}) > "
           f"Keen Scimitar fun {pf_} ({pm}, share {share.get(pm)})")
     ok &= bool(good)
+    # `pooled`: forked workers hand back what one process computes, in the order of the items.
+    _JOB.update(e=e, share=share)
+    # Dagger first, in this process; Uchigatana's build-up sequences are none of its own.
+    few = [dag, e.art.find_weapon("Uchigatana", "Standard"), sham, scim]
+    serial = list(pooled(e, _weapon_work, few, 1))
+    ST._SEQ.clear()
+    forked = list(pooled(e, _weapon_work, few, 3))
+    memo = ST._SEQ
+    shared = (len(memo.shared), len(memo.local)) if isinstance(memo, ST.SharedMemo) else None
+    ST.release_seq_memo()
+    # The workers' sequences reach the shared memo: it holds more than this process computed.
+    good = (json.dumps(serial) == json.dumps(forked) and len(serial) == len(few) and bool(shared)
+            and shared[0] > shared[1])
+    print(f"{'ok' if good else 'FAIL'}: pooled weapon records on 3 workers equal one process's, in order, "
+          f"through a status memo they share (shared, this process's: {shared})")
+    ok &= good
+    # `reuse_refusal`: a stamp vouches only for the same stats, arguments and unchanged modules.
+    args = argparse.Namespace(weapons=None, no_reach=False, no_powerstance=False, fight="duel")
+    code = code_stamp()
+    doc = stamp_doc(args, DEFAULT_STATS, code)
+    other = dict(DEFAULT_STATS, str=DEFAULT_STATS["str"] + 1)
+    got = (reuse_refusal(args, DEFAULT_STATS, doc),
+           reuse_refusal(args, other, doc) is not None,
+           reuse_refusal(argparse.Namespace(**{**vars(args), "fight": "invasion"}), DEFAULT_STATS, doc) is not None,
+           reuse_refusal(args, DEFAULT_STATS, {**doc, "code": {**code, Path(__file__).name: "0" * 64}}),
+           reuse_refusal(args, DEFAULT_STATS, {**doc, "code": {}}), reuse_refusal(args, DEFAULT_STATS, None),
+           Path(__file__).name in code and "er-mechanics-ash-table.py" in code)
+    good = (got[0] is None and got[1] and got[2] and got[3] == f"changed code {Path(__file__).name}"
+            and got[4] == got[5] == "no code recorded" and got[6])
+    print(f"{'ok' if good else 'FAIL'}: reuse stamp refuses other stats, arguments and code {got}")
+    ok &= good
     print("selftest", "ok" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -1069,6 +1282,12 @@ def main() -> int:
     ap.add_argument("--weapons", help="comma-separated weapon names: embed only these (mechanic shares stay game-wide)")
     ap.add_argument("--fight", choices=("duel", "invasion"),
                     help="fight model status is valued in (er-mechanics-buffs FIGHT_KINDS pressure)")
+    ap.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)),
+                    help="pool workers for the weapons, powerstance pairs and ashes (`pooled`; at most the "
+                         "allowed cores less one; 1: in this process)")
+    ap.add_argument("--reuse", type=Path,
+                    help="an embedding of the same stats whose stamp (`<file>.stamp.json`) names this code: "
+                         "its weapon and powerstance records are taken as they are and only the ashes made")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     AT.FIGHT = a.fight
@@ -1085,7 +1304,11 @@ def main() -> int:
     if a.reach_cache is None and not a.no_reach:
         a.reach_cache = default_reach_cache()
     out = build(a, stats)
+    # The old stamp goes first and the new one comes after the embedding, so a stamp never vouches
+    # for a file that was not written whole.
+    stamp_path(a.out).unlink(missing_ok=True)
     a.out.write_text(json.dumps(out, separators=(",", ":")))
+    stamp_path(a.out).write_text(json.dumps(stamp_doc(a, stats, code_stamp()), indent=1))
     c = collections.Counter(r["grip"] for r in out["weapons"])
     print(f"weapon vectors {len(out['weapons'])} ({dict(c)}), powerstance {len(out['powerstance'])}, "
           f"ash {len(out['ashes'])} -> {a.out}")

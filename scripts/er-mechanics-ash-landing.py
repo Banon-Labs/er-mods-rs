@@ -50,7 +50,10 @@ def _setup(rl, window, stats):
     D = _load("er_mechanics_defense", "er-mechanics-defense.py")
     OPT = _load("er_builds_optimize", "er-builds-optimize.py")
     rows = A.corpus_slots(os.path.join(A.CACHE, "builds.jsonl"), rl - window, rl + window, "pvp")
-    _W.update(A=A, D=D, t=A.AshTables(), stats=stats,
+    # One set of attack-rating tables for every carrier: a `WeaponContext` given none reads the
+    # params again, 3.2 s of a carrier's 3.8 s (measured 2026-10-20). Nothing writes to them.
+    art = A._load("er_mechanics_ar", "er-mechanics-ar.py").Tables(None)
+    _W.update(A=A, D=D, t=A.AshTables(), stats=stats, art=art,
               defender=OPT.bracket_defender([{"computed": r["computed"]} for r in rows]),
               poises=[p for p in ((r["computed"].get("poise") or {}).get("original") for r in rows) if p is not None])
 
@@ -60,7 +63,7 @@ def _job(job):
     A, t = _W["A"], _W["t"]
     try:
         wid = t.find_weapon(weapon)
-        ctx = A.WeaponContext(weapon, affinity, None, _W["stats"], grip == "2H")
+        ctx = A.WeaponContext(weapon, affinity, None, _W["stats"], grip == "2H", ar_tables=_W["art"])
         sid = t.find_arts(skill)
         hits = A.skill_hits(t, wid, sid, ctx, ctx.level)
         A.pvp_damage(t, wid, hits, _W["defender"], _W["D"])

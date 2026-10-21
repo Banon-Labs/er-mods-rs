@@ -234,17 +234,25 @@ def defense_curve_np(attack, defense):
     return np.where(np.abs(attack) <= DEF._EPS, 0.0, out)
 
 
-def pool_hit(attacks: dict, defense: dict, cut: dict) -> float:
+def pool_hit(attacks: dict, defense: dict, cut: dict, per_type=None) -> float:
     """The mean damage one pool attack deals a defender with flat `defense` per element and armor
-    `cut` per absorption type (`TYPES`): what `damage_mix` sums, absorption applied."""
+    `cut` per absorption type (`TYPES`): what `damage_mix` sums, absorption applied. `per_type`,
+    `pool_per_type(attacks, defense)` when the caller already has it (`ArmorModel.hit`)."""
     if not len(attacks["atk"]):
         return 0.0
+    if per_type is None:
+        per_type = pool_per_type(attacks, defense)
+    return float(sum(per_type[i] * cut[t] for i, t in enumerate(TYPES)))
+
+
+def pool_per_type(attacks: dict, defense: dict):
+    """The pool's attacks after flat `defense`, summed per absorption type: the part of `pool_hit`
+    no armor set changes."""
     left = np.zeros(len(attacks["atk"]))
     for i, el in enumerate(ELEMENTS):
         m = attacks["el"] == i
         left[m] = defense_curve_np(attacks["atk"][m], defense[el])
-    per_type = np.bincount(attacks["key"], weights=attacks["w"] * left, minlength=len(TYPES))
-    return float(sum(per_type[i] * cut[t] for i, t in enumerate(TYPES)))
+    return np.bincount(attacks["key"], weights=attacks["w"] * left, minlength=len(TYPES))
 
 
 # --------------------------------------------------------------------------------------------
@@ -463,7 +471,14 @@ class ArmorModel:
         st = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
         me = DEF.defender(self.t, st, [n for n in pick["pieces"] if n != "-"], self.talismans, self.great_rune,
                           pvp=True)
-        return pool_hit(self.attacks, me["defense"], pick["cut"])
+        # The pool after flat defense depends on the defense alone, which the many sets one stat
+        # block is weighed with mostly share: kept per defense, where it was 42% of a dry run's
+        # time recomputed per set (`er-weapon-build.weight_cost`, 2026-10-20).
+        key = tuple(me["defense"][el] for el in ELEMENTS)
+        memo = self.__dict__.setdefault("_per_type", {})
+        if key not in memo:
+            memo[key] = pool_per_type(self.attacks, me["defense"])
+        return pool_hit(self.attacks, me["defense"], pick["cut"], memo[key])
 
     def ehp(self, stats: dict, pick: dict) -> dict:
         """{hp, hit, ehp}: max HP, the mean pool hit taken, and their ratio, the pool hits it takes
@@ -575,7 +590,11 @@ def selftest() -> int:
     check(abs(pool_hit(attacks, defense, dict(cut, slash=0.5)) - (bare - 0.25 * DEF.defense_curve(300.0, 100.0)))
           < 1e-9, "pool_hit applies each absorption type's cut to the attacks filed under it only")
     check(pool_hit(attacks, dict(defense, physical=200.0), cut) < bare, "more physical defense, less damage per hit")
-    cands = {0: [{"name": "-"}, {"name": "Lion"}, {"name": "Helm"}], 1: [{"name": "-"}, {"name": "Coat"}]}
+    # `ArmorModel.hit` keeps `pool_per_type` per defense and hands it to `pool_hit`: the same float.
+    half = dict(cut, slash=0.5, fire=0.8)
+    check(pool_hit(attacks, defense, half, pool_per_type(attacks, defense)) == pool_hit(attacks, defense, half),
+          "pool_hit through a kept per-type sum is pool_hit")
+    cands ={0: [{"name": "-"}, {"name": "Lion"}, {"name": "Helm"}], 1: [{"name": "-"}, {"name": "Coat"}]}
     check(hp_pieces(cands, lambda names: 1900 + 29 * ("Lion" in names)) == {"Lion": 0},
           "hp_pieces keeps the pieces whose wearing changes max HP, with their slot")
     print("selftest", "passed" if ok else "FAILED")

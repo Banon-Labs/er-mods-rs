@@ -672,27 +672,67 @@ def from_spread(opp, prof: dict, lead: float = 0.0, roll=(ROLL_IFRAMES, ROLL_REA
     (`Rows.spread_profile`): it adds nothing, so `net` is the in-range time share x the reply's
     value over the in-range distances."""
     v = np.array([h[2] + h[3] for h in prof["hits"]], float)
-    full = float(v.sum())
-    if full <= 0:
+    if float(v.sum()) <= 0:
         return None
-    store = None
+    return _spread_sum(prof, [_spread_at(opp, prof, q, lead, roll) for q in prof["spread"]], lead)
+
+
+def from_spreads(opp, profs, lead: float = 0.0, roll=(ROLL_IFRAMES, ROLL_READY)) -> list:
+    """[`from_profile` of each of `profs`], the spread ones taken distance by distance across all
+    of them: rows whose casts share their escape tables (one weapon's affinities) then share each
+    distance's plans (`_plans`), which a row at a time would compute again once its eight or so
+    distances had pushed the first ones out of `PLAN_MEMO_SIZE`. Each `whiff` is the call
+    `from_spread` makes and each row's distances are summed in their own order, so every result
+    is the one `from_profile` returns."""
+    out = [None] * len(profs)
+    spread = []
+    for i, prof in enumerate(profs):
+        if not prof or "error" in prof or not prof.get("hits"):
+            continue
+        if not prof.get("spread"):
+            out[i] = from_profile(opp, prof, lead, roll)
+        elif float(np.array([h[2] + h[3] for h in prof["hits"]], float).sum()) > 0:
+            spread.append(i)
+    at = {i: [None] * len(profs[i]["spread"]) for i in spread}
+    for j in range(max((len(profs[i]["spread"]) for i in spread), default=0)):
+        for i in spread:
+            if j < len(at[i]):
+                at[i][j] = _spread_at(opp, profs[i], profs[i]["spread"][j], lead, roll)
+    for i in spread:
+        out[i] = _spread_sum(profs[i], at[i], lead)
+    return out
+
+
+#: Not a reply: `_spread_at` of a distance the player never casts at (`reach` False).
+_UNREACHED = object()
+
+
+def _spread_at(opp, prof, q, lead, roll):
+    """(`whiff` at the spread distance `q`, whether it had an escape table), or `_UNREACHED`."""
+    if not q.get("reach", any(q["touch"])):
+        return _UNREACHED
+    esc = None
+    if q.get("escape"):
+        esc = (prof.get("_escapes") or {}).get(q["escape"]) or AI.escape_store().get(q["escape"])
+    if esc is not None and esc.get("T") is not None:
+        return whiff(opp, prof["hits"], prof["windows"], prof["gate"], q["D"], prof["poise"], lead, roll,
+                     escape=esc, bs_hp=backstab_hp(), memo_key=q["escape"]), True
+    mine = [h for h, t in zip(prof["hits"], q["touch"]) if t]
+    return whiff(opp, mine, prof["windows"], prof["gate"], q["D"], prof["poise"], lead, roll), False
+
+
+def _spread_sum(prof, results, lead) -> dict:
+    """`from_spread`'s sum of its distances' `_spread_at` results, in the spread's order."""
+    v = np.array([h[2] + h[3] for h in prof["hits"]], float)
+    full = float(v.sum())
     acc = {k: 0.0 for k in SPREAD_SUMMED}
     parts, T, used, geo = [], None, {}, True
-    for q in prof["spread"]:
-        if not q.get("reach", any(q["touch"])):
+    for q, got in zip(prof["spread"], results):
+        if got is _UNREACHED:
             continue
         w = q["w"]
-        esc = None
-        if q.get("escape"):
-            store = store if store is not None else AI.escape_store()
-            esc = (prof.get("_escapes") or {}).get(q["escape"]) or store.get(q["escape"])
-        if esc is not None and esc.get("T") is not None:
-            r = whiff(opp, prof["hits"], prof["windows"], prof["gate"], q["D"], prof["poise"], lead, roll,
-                      escape=esc, bs_hp=backstab_hp(), memo_key=q["escape"])
-        else:
-            geo = False
-            mine = [h for h, t in zip(prof["hits"], q["touch"]) if t]
-            r = whiff(opp, mine, prof["windows"], prof["gate"], q["D"], prof["poise"], lead, roll)
+        r, moving = got
+        geo = geo and moving
         if r is None:
             continue
         T = r["T"] if T is None else min(T, r["T"])
@@ -786,6 +826,15 @@ def selftest() -> int:
           "over the spread the reply is the in-range time share x its value there; out of range it is never thrown")
     none = {**sp, "share": 0.0, "spread": [{**q, "touch": [False], "reach": False} for q in sp["spread"]]}
     check(net(from_profile(f, none, roll=(13.0, 20.0))) == 0.0, "an ash that reaches nowhere on the wave replies 0")
+    # `from_spreads`: rows taken distance by distance give each row what `from_profile` gives it.
+    two = {**sp, "hits": [(20.0, 50.0, 100.0, 0.0), (30.0, 50.0, 60.0, 0.0)],
+           "spread": [{**sp["spread"][0], "touch": [True, False]}, {**sp["spread"][1], "D": 4.0, "w": 0.5,
+                                                                    "touch": [True, True], "reach": True},
+                      {**sp["spread"][1]}]}
+    flat = {"hits": hit, "windows": [], "gate": 50.0, "poise": 40.0, "D": 2.0}
+    rows = [sp, none, two, flat, None, {"error": "x"}, {**sp, "hits": []}]
+    check(from_spreads(f, rows, 7.0, roll=(13.0, 20.0)) == [from_profile(f, p, 7.0, roll=(13.0, 20.0)) for p in rows],
+          "from_spreads gives every row, spread or not, what from_profile gives it")
     moving_selftest(check, f)
     try:
         check(measured_roll() == (ROLL_IFRAMES, ROLL_READY), "roll constants match the measured TAE")
@@ -999,6 +1048,22 @@ def moving_selftest(check, f) -> None:
     turn_roll, turn_both = run(table(30.0, 100.0)), run(table(30.0, 100.0, strafe=True))
     check(turn_both["out"] <= turn_roll["out"] + 1e-9 and turn_both["out"] > -1000.0,
           f"tracking that turns keeps a strafer in the cast: {turn_roll['out']:.1f} -> {turn_both['out']:.1f}")
+    # `from_spreads` on moving rows: two casts with the same escape tables at each distance (one
+    # weapon's affinities) and different damage share each distance's plans and get what
+    # `from_profile` gives each alone.
+    escs = {"locked": table(0.0, 100.0), "turning": table(30.0, 100.0, strafe=True)}
+    spread = [{"D": 3.0, "w": 0.6, "touch": [True] * 3, "reach": True, "escape": "locked"},
+              {"D": 3.0, "w": 0.4, "touch": [True] * 3, "reach": True, "escape": "turning"}]
+
+    def cast(dmg):
+        return {"hits": [(t, 50.0, dmg, 0.0) for t, *_ in hits], "windows": [], "gate": 100.0, "poise": 40.0,
+                "D": 3.0, "share": 1.0, "spread": spread, "_escapes": escs}
+    rows = [cast(100.0), cast(140.0), cast(60.0)]
+    _PLANS.clear()
+    alone = [from_profile(f, p, 2.0) for p in rows]
+    _PLANS.clear()
+    check(from_spreads(f, rows, 2.0) == alone and alone[0]["geometry"] == 1.0,
+          "from_spreads on moving rows sharing their escape tables gives each what from_profile does")
     # The backstep (`er-mechanics-ash-interrupt.backstep_motion` shape: no i-frames, 2.5 m straight
     # back by f10, R1 from f14). Alone it escapes the locked cast by distance for the fast quantile
     # and is no skill; beside the rolls it is one more free entry, compared with them per reply.

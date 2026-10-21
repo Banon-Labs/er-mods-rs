@@ -188,6 +188,11 @@ def resources_mod():
     return _load("er_mechanics_resources", "er-mechanics-resources.py")
 
 
+def counted(items, unit):
+    """`er-mechanics-progress.counted`: the loop's `  i/N <unit>` lines on stderr."""
+    return _load("er_mechanics_progress", "er-mechanics-progress.py").counted(items, unit)
+
+
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
@@ -276,7 +281,7 @@ class ShieldModel:
         ar_cache, atk_cache = {}, {}
         keys, self.uhits = {}, []
         idx, weights, hp, attacks = [], [], [], []
-        for b, h in zip(builds, opening):
+        for b, h in counted(list(zip(builds, opening)), "openings"):
             if h is None:
                 continue
             wid = h["weapon"]
@@ -374,7 +379,11 @@ class ShieldModel:
         cache = self.__dict__.setdefault("_fits", {})
         if shield_weight not in cache:
             R = resources_mod()
-            m = self.__dict__.setdefault("_resources", R.Model())
+            # Built once: a `setdefault` default is built on every call, and a `Model` reads five
+            # params (14.6 s of a loadout's shields stage, 2026-10-20).
+            if "_resources" not in self.__dict__:
+                self._resources = R.Model()
+            m = self._resources
             cap = float(self.build["computed"]["maxEquipLoad"])
             without = m.burden([self.main_weight], self.armor, self.talismans)
             with_ = m.burden([self.main_weight, shield_weight], self.armor, self.talismans)
@@ -388,7 +397,7 @@ class ShieldModel:
         out = []
         pa = phys_affinity(self.stats)
         self._affs = {}
-        for name, wid, wt, ok, affs in candidates(self.reg, self.art, self.stats, SHIELD_TYPES):
+        for name, wid, wt, ok, affs in counted(candidates(self.reg, self.art, self.stats, SHIELD_TYPES), "shields"):
             if not ok:
                 continue
             self._affs[name] = (wt, affs)
@@ -953,7 +962,7 @@ class RangedModel:
         """Per wieldable ranged weapon (of the names in `only`, when given): its best shot (best
         ammunition), its best skill and `value` (module docstring)."""
         out = []
-        for name, wid, wt, ok, _ in candidates(self.t.reg, self.art, self.stats, RANGED_TYPES):
+        for name, wid, wt, ok, _ in counted(candidates(self.t.reg, self.art, self.stats, RANGED_TYPES), "bows"):
             if only is not None and name not in only:
                 continue
             if not ok:

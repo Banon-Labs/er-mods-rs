@@ -398,6 +398,16 @@ def _ai():
     return sys.modules[key]
 
 
+def _progress():
+    """`er-mechanics-progress.py`: a loop's `  i/N <unit>` lines, the counter the pipeline's bar reads."""
+    key = "er_mechanics_progress"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, HERE / "er-mechanics-progress.py")
+        sys.modules[key] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[key])
+    return sys.modules[key]
+
+
 #: RL either side of the build's own that the opponent pool is drawn from: the window every
 #: `er-mechanics-exchange.opponent_pool` caller in these scripts uses (`--window 10`).
 POOL_RL_WINDOW = 10
@@ -779,9 +789,28 @@ def spread_weights(weights, spread) -> dict:
     return {**weights, **{f: 0.0 for f in REACH_FEATURES if f in weights}}
 
 
-def norm_score(feats, pool, use, weights):
+class PoolScales:
+    """The extremes `norm_score` divides by, read off `pool` once per feature: (least, greatest) of
+    its truthy values, None where it has none. A caller that scores many features dicts against
+    one pool passes one of these (`scales`) instead of having every call walk the pool again: the
+    loadout's off-hand pool holds about 26,000 powerstance records, and walking it per candidate
+    was half the loadout's main process (py-spy, 2026-10-20). The pool must not change while it is
+    in use."""
+
+    def __init__(self, pool):
+        self.pool, self._ext = pool, {}
+
+    def ext(self, g):
+        if g not in self._ext:
+            vals = [y for y in (p.get(g) for p in self.pool) if y]
+            self._ext[g] = (min(vals), max(vals)) if vals else None
+        return self._ext[g]
+
+
+def norm_score(feats, pool, use, weights, scales=None):
     """Weighted score of `feats` with each feature normalised to the best of `pool` (lower-is-better
-    ones as best / value), less each `PENALTIES` cost, plus each `BONUSES` gain. A weapon with no
+    ones as best / value), less each `PENALTIES` cost, plus each `BONUSES` gain. `scales`, a
+    `PoolScales` of `pool`, reads the pool's extremes once for many calls. A weapon with no
     crit bonus has the crit weight score reach instead, while reach is a scored feature: with the
     `r1_reach` weight at 0 (`spread_weights`, the duel spread credits reach inside the strings)
     the crit weight leaves that weapon's total, so reach is not scored there under another name.
@@ -789,6 +818,7 @@ def norm_score(feats, pool, use, weights):
     better) over the pool's best when the features carry it, so the frames count as the openings
     they punish rather than in a straight line; features written before it fall back to
     best / value."""
+    ext = (scales or PoolScales(pool)).ext
     reach_fill = weights.get("r1_reach", 0.0) > 0
     gap = "crit" in use and feats.get("crit") is None and not reach_fill
     tot = sum(weights.get(f, 0.0) for f in use
@@ -799,23 +829,23 @@ def norm_score(feats, pool, use, weights):
             continue
         if f in PENALTIES:
             x = feats.get(f)
-            scale = [y for y in (p.get(PENALTIES[f]) for p in pool) if y]
+            scale = ext(PENALTIES[f])
             if x and scale:
-                s -= weights.get(f, 0.0) * x / max(scale)
+                s -= weights.get(f, 0.0) * x / scale[1]
             continue
         if f in BONUSES:
             x = feats.get(f)
-            scale = [y for y in (p.get(BONUSES[f]) for p in pool) if y]
+            scale = ext(BONUSES[f])
             if x and scale and BONUSES[f] in use:
-                s += weights.get(BONUSES[f], 0.0) * x / max(scale)
+                s += weights.get(BONUSES[f], 0.0) * x / scale[1]
             continue
         g = "r1_reach" if f == "crit" and feats.get("crit") is None else f
         if g == "r1_startup" and "r1_cover" in feats:
             g = "r1_cover"
         x = feats.get(g)
-        vals = [y for y in (p.get(g) for p in pool) if y]
+        vals = ext(g)
         if x and vals:
-            s += weights.get(f, 0.0) * ((min(vals) / x) if g in LOWER_BETTER else (x / max(vals)))
+            s += weights.get(f, 0.0) * ((vals[0] / x) if g in LOWER_BETTER else (x / vals[1]))
     return s / tot if tot else 0.0
 
 
@@ -1055,6 +1085,40 @@ def selftest() -> int:
               "spread: the crit gap leaves the total instead of scoring reach under the crit weight"),
              (round(norm_score(near, [near, far], use, wts), 4), round((0.3 + 0.2 * 2.5 / 4 + 0.3 + 0.2 * 2.5 / 4), 4),
               "fixed distance: the crit gap still scores reach")]
+    # `PoolScales`: scoring through a pool's extremes read once is scoring through the pool, for a
+    # higher-better, a lower-better, a penalty, a bonus, the crit fallback, `r1_cover` and a feature
+    # nobody carries.
+    pool = [{"ar": 300.0, "r1_startup": 14, "r1_cover": 0.4, "pb_cost": 2.0, "feint_hp": 5.0, "r1_reach": 3.0},
+            {"ar": 200.0, "r1_startup": 11, "pb_cost": 0.0, "feint_hp": 0.0, "crit": 300.0},
+            {"ar": 0.0, "r1_startup": 18, "r1_cover": 0.2, "pb_cost": 1.5, "r1_reach": 4.0}]
+    use_ = ("ar", "r1_startup", "pb_cost", "feint_hp", "crit", "stamina")
+    wts_ = {"ar": 0.4, "r1_startup": 0.2, "pb_cost": 0.3, "feint_hp": 0.1, "crit": 0.2, "stamina": 0.1, "r1_reach": 0.1}
+    sc = PoolScales(pool)
+
+    def walked(feats, pool, use, weights):
+        """`norm_score` as it was before `PoolScales`, walking the pool per feature."""
+        gap = "crit" in use and feats.get("crit") is None and not weights.get("r1_reach", 0.0) > 0
+        tot = sum(weights.get(f, 0.0) for f in use if f not in PENALTIES and f not in BONUSES
+                  and not (gap and f == "crit"))
+        s = 0.0
+        for f in use:
+            if gap and f == "crit":
+                continue
+            if f in PENALTIES or f in BONUSES:
+                k = PENALTIES.get(f) or BONUSES[f]
+                x, scale = feats.get(f), [y for y in (p.get(k) for p in pool) if y]
+                if x and scale and (f in PENALTIES or k in use):
+                    s += (-weights.get(f, 0.0) if f in PENALTIES else weights.get(k, 0.0)) * x / max(scale)
+                continue
+            g = "r1_reach" if f == "crit" and feats.get("crit") is None else f
+            g = "r1_cover" if g == "r1_startup" and "r1_cover" in feats else g
+            x, vals = feats.get(g), [y for y in (p.get(g) for p in pool) if y]
+            if x and vals:
+                s += weights.get(f, 0.0) * ((min(vals) / x) if g in LOWER_BETTER else (x / max(vals)))
+        return s / tot if tot else 0.0
+    rows += [([norm_score(f, pool, use_, w, scales=sc) for f in pool + [{}] for w in (wts_, {"ar": 1.0})],
+              [walked(f, pool, use_, w) for f in pool + [{}] for w in (wts_, {"ar": 1.0})],
+              "PoolScales: the pool's extremes read once score every features dict as walking the pool does")]
     for got, want, what in rows:
         ok &= got == want
         print(f"{'ok  ' if got == want else 'FAIL'} {what}: {got!r}" + ("" if got == want else f" != {want!r}"))
@@ -1178,7 +1242,7 @@ def main() -> int:
         ashes[x["weapon"]].append(x)
 
     weapons = {}
-    for w, rs in recs.items():
+    for w, rs in _progress().counted(list(recs.items()), "weapons"):
         right = [r for r in rs if r["grip"] in RIGHT_GRIPS]
         ok = [r for r in right if r["wieldable"] and grip_ok(r)]
         grips = sorted({r["grip"] for r in ok})

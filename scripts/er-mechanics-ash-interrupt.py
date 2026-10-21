@@ -4,6 +4,7 @@
     python3 scripts/er-mechanics-ash-interrupt.py --skill "Blood Tax" --weapon "Dueling Shield" \
         --affinity Keen --grip 1H --distance 2.5 --poise 88       # one cast, printed per hit
     python3 scripts/er-mechanics-ash-interrupt.py --selftest
+    python3 scripts/er-mechanics-ash-interrupt.py --stamp-deps    # regenerate STAMP_DEPS (code stamp)
 
 Used by `er-mechanics-combo-loadout.py --interrupt-weight` (the default): each sweep row's value is
 multiplied by `multiplier()`, the expected delivered net value over the undisturbed value. No new
@@ -125,7 +126,9 @@ the opponent standing at `D`:
 from __future__ import annotations
 
 import argparse
+import ast
 import atexit
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -397,9 +400,6 @@ REACT_POINTS = 41
 B_HIT_HP = EXCH.OPPONENT_HP_FALLBACK
 #: Hits of mine simulated, earliest first.
 MAX_MY_HITS = 12
-STAMP_SOURCES = ("er-mechanics-ash-interrupt.py", "er-mechanics-interrupt.py", "er-mechanics-neutral.py",
-                 "er-mechanics-ash-table.py", "er-mechanics-ashes.py", "er-mechanics-reach.py",
-                 "er-mechanics-backstab.py", "er-mechanics-combo.py", "er-mechanics-frame-advantage.py")
 #: The break model, in the profile cache's settings (`profiles`), so a cache made before B's
 #: follow-up out of a stagger was charged (`simulate`, the stagger section) is recomputed. 1: none;
 #: 2: the follow-up charged, 2026-10-19.
@@ -450,11 +450,677 @@ SIMS_DIR = CACHE / "interrupt-sims"
 SIMS_STALE_S = 86400.0
 
 
-def stamp() -> str:
-    h = hashlib.sha256()
-    for n in STAMP_SOURCES:
-        h.update((HERE / n).read_bytes())
-    return h.hexdigest()[:16]
+# --------------------------------------------------------------------------------------------
+# the code stamp
+#
+# Every kept file (the profile cache's settings, `ESCAPE_DIR`, `STAGGER_DIR`, `SIMS_DIR`) carries
+# a stamp of the code that computed it, so a change to that code recomputes it. The stamp covers
+# the code the computation runs, not whole files: each function, method or class named in
+# `STAMP_DEPS` as its syntax tree with comments and docstrings dropped (`_stamp_units`), plus the
+# module-level statements (the constants) of every script named there. An edit to a comment, a
+# docstring, a selftest or a function the profiles never call leaves the stamp as it was; an edit
+# to code they run changes it. Until 2026-10-20 it hashed nine whole scripts, so any edit to any of
+# them re-simulated every profile (2274 s locally) and the class-roles strings (6-12 min).
+#
+# Two scopes. `stamp("sim")` keys the kept simulations (`SIMS_DIR`, the ash rows' and
+# `ChainTrades`' alike): a simulation depends on `simulate`, what it calls and the opponent's
+# arrays, and the arrays enter its file name by `Opponent.fingerprint`. `stamp()` keys the rest
+# (profiles, escape tables, stagger sides) over `STAMP_DEPS`, which holds every sim dependency too.
+# The profile cache's settings also carry the opponent's fingerprint (`profiles`): the pool and
+# sequence caches it is built from are kept by their own scripts, keyed on their own stamps, and a
+# warm one runs none of the code that made it, so their data stands in for their code.
+#
+# The lists are written out and checked by `stamp_selftest`, not trusted: (1) a traced run of real
+# rows (`stamp_trace`, `STAMP_TRACE_ROWS`: every function under scripts/ that runs must be
+# stamped, with this script's own caches pointed at an empty directory so nothing is skipped by a
+# warm read), and (2) a static walk (`stamp_closure`: a bare name of a function or class of the
+# same script, a `self.`/`cls.` method of the same class, or a sibling module's function reached
+# through a module-level alias, named by a stamped unit must be stamped too), which covers the
+# branches the traced rows do not take but a name reaches. A call through a value (`A.skill_tae`
+# with `A` a parameter, `self.TAB.A`) only the trace sees. `--stamp-deps` prints both lists
+# regenerated from the two, to paste here when the selftest names a missing unit.
+
+#: Units of this script whose code `stamp_trace` and `stamp_closure` do not count: the stamp's
+#: own machinery, which runs during a traced profile only because the profile asks for its stamp.
+STAMP_TOOLING = ("stamp", "_stamp_units", "_strip_strings", "_is_main_guard", "_binds_only", "_unit_text",
+                 "_stamp_guard", "stamp_trace")
+#: This script's file name, the one `STAMP_TOOLING` names units of.
+SELF_SCRIPT = Path(__file__).name
+#: Module-level names of this script left out of its stamped module-level statements: the stamp's
+#: own lists and state, which no profile reads (a unit added to a list is stamped by its code).
+STAMP_TOOLING_GLOBALS = ("STAMP_TOOLING", "SELF_SCRIPT", "STAMP_TOOLING_GLOBALS", "STAMP_DEPS", "STAMP_SIM_DEPS",
+                         "STAMP_TRACE_ROWS", "_UNITS", "_STAMPS", "_GUARD", "_FUNCS")
+
+#: Script -> units whose code the kept profiles, escape tables and stagger sides are computed by
+#: (`stamp()`). A unit is a top-level function or class, or `Class.method` (with the class's own
+#: statements); the module-level statements of every script listed are stamped as well.
+STAMP_DEPS: dict[str, tuple[str, ...]] = {
+    'er-builds-embed.py': (
+        'active_set', 'equipped', 'from_planner', 'loadout', 'loadout_token', 'slot_pos', 'stats_of', 'tokens'
+    ),
+    'er-builds-ladder.py': (
+        'ash_ban', 'ids', 'table'
+    ),
+    'er-builds-optimize.py': (
+        'Scorer.__init__', '_sibling', '_weights', 'archetype', 'bracket_defender', 'corpus_rows', 'is_pvp',
+        'load_profile', 'other_load', 'stat_caps'
+    ),
+    'er-hks-weapon-category-table.py': (
+        'Reader.__init__', 'Reader.i32', 'Reader.take', 'Reader.u32', 'Reader.u64', 'Reader.u8',
+        'Table.__init__', 'Table.as_list', 'Unknown.__init__', 'decode', 'parse_main_function',
+        'run_main_chunk'
+    ),
+    'er-hkx-pose.py': (
+        'Animation.__init__', 'Animation.local_tracks', 'Animation.root_motion', 'RagdollBody.__init__',
+        'Skeleton.__init__', 'Tagfile.__init__', 'Tagfile._inherit', 'Tagfile.item', 'Tagfile.members',
+        'Tagfile.objects', 'Tagfile.read', 'Tagfile.type_name', '_Curve.__init__', '_Curve.at',
+        '_Packed.__init__', '_Packed.next', '_align', '_attacks_module', '_basis', '_compendium_types',
+        '_consumed', '_decode_block', '_find_span', '_forward_kinematics', '_local_pose', '_parse_types',
+        '_place', '_qmul', '_qnorm', '_qrot', '_quat', '_quat_threecomp40', '_quat_threecomp48',
+        '_read_rotation', '_read_vector', '_section_map', '_sections', '_yaw_quat', 'bone_model_transforms',
+        'hkx_path', 'load_animation', 'load_animation_file', 'load_ragdoll', 'load_skeleton', 'pose_model',
+        'ragdoll_capsules', 'root_motion'
+    ),
+    'er-item-name.py': (
+        'archive_stamp', 'cache_state', 'game_names', 'is_placeholder', 'load', 'read_fmg'
+    ),
+    'er-mechanics-ar-export.py': (
+        '_load',
+    ),
+    'er-mechanics-ar.py': (
+        'Tables.__init__', 'Tables._ids_named', 'Tables.find_weapon', 'Tables.max_level', 'attack_rating',
+        'calc_correct', 'element_multiplier', 'normalise_stats', 'soft_caps', 'stat_multiplier'
+    ),
+    'er-mechanics-ash-interrupt.py': (
+        'ChainTrades.__init__', 'ChainTrades._sim', 'Opponent.__init__', 'Opponent.contact_delay',
+        'Rows.__init__', 'Rows._cast', 'Rows._sim', 'Rows._track', 'Rows.armor_poise', 'Rows.cast',
+        'Rows.escape', 'Rows.profile', 'Rows.roll_gate', 'Rows.set_movers', 'Rows.spread_profile',
+        '_backstab', '_combo', '_enc', '_heal', '_read_sims', '_rot', '_sib', '_stagger_of', '_window_step',
+        '_wrap', '_write_sims', 'arcsine_cdf', 'backstep_motion', 'carried_states', 'cast_track',
+        'clip_motion', 'clip_track', 'contact_m', 'covered_cells', 'duel_spread', 'escape_reason',
+        'escape_table', 'first_touches', 'headed', 'heading', 'ladder_banned', 'play', 'poise_carries',
+        'pool_melee_m', 'reaction_frames', 'sim_key', 'simulate', 'skill_moves', 'spread_nodes',
+        'spread_weights', 'stagger_arrays', 'stagger_side', 'strafe_table', 'turn_back', 'wave_cdf',
+        'wave_mass', 'wave_mean', 'with_read', 'with_stagger'
+    ),
+    'er-mechanics-ash-levers.py': (
+        'Levers.__init__', 'Levers.cast', '_load'
+    ),
+    'er-mechanics-ash-stats.py': (
+        'AshScorer.__init__', 'AshScorer.hits', '_mod'
+    ),
+    'er-mechanics-ash-table.py': (
+        'Table.__init__', 'Table._armor', 'Table.set_weapon', 'Table.travel', '_disengage', '_sibling',
+        'window_defender'
+    ),
+    'er-mechanics-ashes.py': (
+        '<class>Opponents', 'AshTables.__init__', 'AshTables._mode', 'AshTables.arts_name',
+        'AshTables.effect_kind', 'AshTables.find_arts', 'AshTables.find_weapon', 'AshTables.fp_cost',
+        'AshTables.is_buff', 'AshTables.marker_ids', 'AshTables.speffect_summary', 'WeaponContext.__init__',
+        'WeaponContext.multiplier', '_bullet_damages_self', '_frames', '_hit_contacts', '_hit_contacts_raw',
+        '_jt8_unconditional', '_load', '_opening', '_pose', '_skill_profile', '_unit', 'anim_actions',
+        'anim_recovery', 'bullet_buffs', 'bullet_damages', 'bullet_flight', 'bullet_harms', 'bullet_tree',
+        'contact_geometry', 'ctx_grip', 'diff_category', 'evasion_motion', 'fly_tree', 'hit_attack',
+        'improves', 'is_two_handed', 'lead_in', 'lead_in_hyperarmor', 'main_anim', 'no_fp_twins', 'phys_type',
+        'plain', 'pvp_damage', 'resolve_judge', 'roll_motion', 'skill_hits', 'skill_profile', 'skill_tae',
+        'stance_buttons', 'stance_windup', 'sword_arts_categories', 'weapon_diff_category'
+    ),
+    'er-mechanics-attacks.py': (
+        'Regulation.__init__', 'Regulation.find_weapon', 'Regulation.resolve_behavior_id', '_bound',
+        '_early_interval', '_first_open', '_load', '_reach', '_tidy', 'attack_numbers', 'clip_frame',
+        'clip_length', 'clip_to_real', 'hit_records', 'hkx_duration', 'hkx_path', 'motion_category',
+        'real_frame', 'recovery_details', 'recovery_windows', 'release_lead_in', 'resolve_events',
+        'resolve_phys_type', 'slot_animation', 'tae_animations', 'tae_details', 'uses_stealth_attack',
+        'weapon_attacks'
+    ),
+    'er-mechanics-backstab.py': (
+        '_mod', 'skill_blocks_backstab', 'throw_limits'
+    ),
+    'er-mechanics-buffs.py': (
+        '<class>Buffs', '_effect_fields', '_fights', '_implied_spells', '_mod', '_names', '_offensive',
+        '_pairs', '_t_context', '_t_expected', '_t_regen', '_t_rows', '_t_sources', '_t_stacking',
+        'ar_stat_ratio', 'build_regen', 'drinks_needed', 'engaged', 'f32', 'fight_hits', 'fight_kind',
+        'fight_mix', 'fight_points', 'hits_mean', 'recast_plan', 'recast_points', 'sustain_factor',
+        'tag_shares'
+    ),
+    'er-mechanics-combo.py': (
+        '<class>_ArCache', 'Model.__init__', 'Model.react', 'Stagger.__call__', 'Stagger.__init__', '_events',
+        '_load', 'animated_category', 'follow_key', 'pvp_module', 'substart_lead'
+    ),
+    'er-mechanics-crits.py': (
+        'Tables.__init__', '_load'
+    ),
+    'er-mechanics-defense.py': (
+        '<class>Tables', 'damage', 'defense_curve', 'f32'
+    ),
+    'er-mechanics-disengage.py': (
+        '<class>Paired', '_atk', '_mod', '_reach', '_sibling', 'clip', 'first_open', 'windows'
+    ),
+    'er-mechanics-exchange.py': (
+        '<class>Pool', '<class>RegenProfile', 'SaRates.__call__', 'SaRates.__init__', '_combo',
+        '_corpus_builds', '_fallback_delay', '_has_contact', '_reach_module', '_right_hand', '_sibling',
+        '_source_stamp', 'attack_profile', 'first_hit', 'follow_up', 'hyper_windows', 'is_pvp',
+        'opponent_pool', 'plain_name', 'stamina_total', 'strike_frame', 'weapon_ids'
+    ),
+    'er-mechanics-frame-advantage.py': (
+        'Tables.__init__', '_frame', '_load', 'clip_timing', 'common_tae', 'ezstate_windows', 'hit_level',
+        'reaction', 'reaction_level', 'remap'
+    ),
+    'er-mechanics-infusions.py': (
+        '<class>Builder', '_mod'
+    ),
+    'er-mechanics-interrupt.py': (
+        'Delays.__call__', 'Delays.__init__', 'PoolRows.__init__', '_a00', '_hits_array', '_mod',
+        '_pad_invuln', '_pad_windows', '_sibling', '_slot_member', '_source_stamp', 'chip_states',
+        'entry_table', 'iframes', 'jump_entry', 'load_cache', 'poise_reset_seconds', 'resolve',
+        'seq_cache_path'
+    ),
+    'er-mechanics-jump.py': (
+        '_atk', '_jump_events', '_mod', '_windows', 'takeoff'
+    ),
+    'er-mechanics-neutral.py': (
+        '_mod', '_sibling', '_tool', 'arrival', 'dodge_tools', 'frames_per_metre', 'locomotion',
+        'pool_reaches', 'tool_from_motion'
+    ),
+    'er-mechanics-reach.py': (
+        'Reach.__init__', '_anibnd_file', '_azimuth', '_body_frame', '_capsule_points', '_carry', '_clip',
+        '_clip_time_before', '_flver_string', '_frame', '_hkx_bind', '_load', '_merge', '_meridional_moment',
+        '_pose_module', '_qconj', '_qrot', '_root_peak_forward', '_rot_axis', '_shape_left',
+        '_shape_world_points', '_turn_integral', '_turn_lockin', 'attached_dummies', 'attack_reach',
+        'blade_sweep', 'body_dummies', 'body_shape_points', 'contact_centre_distance', 'contact_disc_radius',
+        'coverage_factor', 'defender_capsules', 'defender_hurtbox', 'defender_profile', 'dummy_positions',
+        'flver_bone_to_model', 'footprint', 'front_contact_times', 'hit_shapes', 'hkx_source', 'read_flver',
+        'real_seconds', 'resolve_clip', 'rigged_shape_points', 'shape_extent', 'skill_reach', 'speed_at',
+        'speed_windows', 'sweep_coverage', 'swing_shape', 'tae_imports', 'turn_details', 'turn_rate_at',
+        'turn_windows', 'weapon_anibnd_dirs', 'weapon_attached', 'weapon_clip', 'weapon_dummies',
+        'weapon_flver_path', 'weapon_rig', 'weapon_rig_pose', 'window_points', 'world_reach'
+    ),
+    'er-mechanics-resources.py': (
+        'Model.__init__', 'Model._by_name', 'Model.burden', 'Model.rate', 'Model.speffects_for', 'f32'
+    ),
+    'er-mechanics-weapon-card.py': (
+        '_mod',
+    ),
+    'er-param-read.py': (
+        '_index_defs', '_item_name', '_smithbox_names', 'layout', 'load', 'param_bytes', 'param_type_of',
+        'paramdef', 'row_names', 'row_stride', 'rows'
+    ),
+    'er-tae-event-scan.py': (
+        '<class>BadTae', '_i32', '_i64', 'parse'
+    ),
+    'regulation-params.py': (
+        '<class>ZstdUnavailable', 'bnd4_entries', 'dcx_unpack', 'decrypt', 'require_zstd'
+    ),
+}
+#: Script -> units the kept simulations are computed by (`stamp("sim")`).
+STAMP_SIM_DEPS: dict[str, tuple[str, ...]] = {
+    'er-mechanics-ash-interrupt.py': (
+        'ChainTrades.__init__', 'ChainTrades._sim', 'Rows._sim', '_combo', '_read_sims', '_sib',
+        '_stagger_of', '_window_step', 'carried_states', 'poise_carries', 'sim_key', 'simulate'
+    ),
+    'er-mechanics-attacks.py': (
+        '_load',
+    ),
+    'er-mechanics-exchange.py': (
+        '_sibling',
+    ),
+    'er-mechanics-interrupt.py': (
+        '_mod', '_sibling', 'chip_states', 'poise_reset_seconds'
+    ),
+    'er-mechanics-neutral.py': (
+        '_mod', '_sibling', '_tool', 'arrival', 'dodge_tools', 'frames_per_metre', 'locomotion',
+        'tool_from_motion'
+    ),
+    'er-param-read.py': (
+        '_index_defs', 'layout', 'load', 'param_bytes', 'param_type_of', 'paramdef', 'row_stride', 'rows'
+    ),
+}
+
+_UNITS: dict = {}
+_STAMPS: dict = {}
+
+
+def _strip_strings(tree) -> None:
+    """Drop every statement of `tree` that is a bare string: docstrings, and string literals used
+    as comments. They do not run, so an edit to one must not move the stamp. A body left empty
+    gets a `pass`."""
+    for node in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(node, field, None)
+            if not (isinstance(body, list) and body and isinstance(body[0], ast.stmt)):
+                continue
+            kept = [s for s in body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)
+                                            and isinstance(s.value.value, str))]
+            setattr(node, field, kept or [ast.Pass()])
+
+
+def _is_main_guard(s) -> bool:
+    """Whether module-level statement `s` is `if __name__ == "__main__":`, which does not run when
+    the script is loaded as a module, so it is no part of the stamped module-level statements."""
+    t = getattr(s, "test", None) if isinstance(s, ast.If) else None
+    return (isinstance(t, ast.Compare) and isinstance(t.left, ast.Name) and t.left.id == "__name__"
+            and len(t.comparators) == 1 and isinstance(t.comparators[0], ast.Constant)
+            and t.comparators[0].value == "__main__")
+
+
+def _binds_only(s, names) -> bool:
+    """Whether module-level statement `s` is an assignment whose every target is one of `names`."""
+    if isinstance(s, ast.Assign):
+        targets = s.targets
+    elif isinstance(s, ast.AnnAssign):
+        targets = [s.target]
+    else:
+        return False
+    return all(isinstance(t, ast.Name) and t.id in names for t in targets)
+
+
+def _stamp_units(name: str, root: Path | None = None) -> dict:
+    """{unit: (text, nodes)} of script `name` under `root` (`HERE`): `<module>` its module-level
+    statements, each top-level function and class and each method (`Class.method`) its tree, and
+    `<class>Class` a class's own statements without its methods. `text` is `ast.dump` with
+    docstrings dropped (`_strip_strings`) and no line numbers, so comments, docstrings and moved
+    lines leave it unchanged. Kept per file path and content."""
+    path = (root or HERE) / name
+    data = path.read_bytes()
+    key = (str(path), hashlib.sha1(data).hexdigest())
+    if key not in _UNITS:
+        tree = ast.parse(data, str(path))
+        _strip_strings(tree)
+        units, top = {}, []
+
+        def put(q, nodes):
+            old = units.get(q, ("", []))
+            units[q] = (old[0] + "".join(ast.dump(n) for n in nodes), old[1] + list(nodes))
+
+        for s in tree.body:
+            if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                put(s.name, [s])
+            elif isinstance(s, ast.ClassDef):
+                put(s.name, [s])
+                own = [*s.bases, *s.keywords, *s.decorator_list]
+                for b in s.body:
+                    if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        put(f"{s.name}.{b.name}", [b])
+                    else:
+                        own.append(b)
+                put(f"<class>{s.name}", own)
+            elif not _is_main_guard(s) and not (name == SELF_SCRIPT and _binds_only(s, STAMP_TOOLING_GLOBALS)):
+                top.append(s)
+        put("<module>", top)
+        _UNITS[key] = units
+    return _UNITS[key]
+
+
+def _unit_text(name: str, unit: str, root: Path | None = None) -> str:
+    """The stamped text of `unit` of script `name`: a method's with its class's own statements."""
+    u = _stamp_units(name, root)
+    if unit not in u:
+        raise KeyError(f"stamp: {name} has no {unit!r} (renamed? update STAMP_DEPS: --stamp-deps)")
+    cls = f"<class>{unit.split('.')[0]}" if "." in unit else None
+    return (u[cls][0] if cls else "") + u[unit][0]
+
+
+def stamp(scope: str = "profile", deps: dict | None = None, root: Path | None = None) -> str:
+    """The code stamp (section above) of `scope` 'profile' (`STAMP_DEPS`) or 'sim'
+    (`STAMP_SIM_DEPS`), or of `deps` read under `root`. Kept per process while no listed file's
+    content changes."""
+    deps = deps if deps is not None else STAMP_SIM_DEPS if scope == "sim" else STAMP_DEPS
+    root = root or HERE
+    files = [(name, hashlib.sha1((root / name).read_bytes()).hexdigest()) for name in sorted(deps)]
+    key = (scope, str(root), tuple(files), repr(sorted((k, tuple(v)) for k, v in deps.items())))
+    if key not in _STAMPS:
+        h = hashlib.sha256(scope.encode())
+        for name in sorted(deps):
+            h.update(f"\0{name}\0".encode())
+            h.update(_stamp_units(name, root)["<module>"][0].encode())
+            for unit in sorted(deps[name]):
+                h.update(f"\0{unit}\0".encode())
+                h.update(_unit_text(name, unit, root).encode())
+        _STAMPS[key] = h.hexdigest()[:16]
+    return _STAMPS[key]
+
+
+def _unit_of(name: str, qualname: str) -> str:
+    """The unit (`_stamp_units`) a code object of script `name` with `co_qualname` belongs to: a
+    nested function or comprehension its enclosing top-level function or method, a class body or
+    class-level lambda its class's own statements, module-level code `<module>`."""
+    q = qualname.split(".<locals>", 1)[0]
+    parts = q.split(".")
+    if parts[0].startswith("<"):
+        return "<module>"
+    if len(parts) > 1 and parts[1].startswith("<"):
+        return f"<class>{parts[0]}"
+    if len(parts) == 1 and f"<class>{parts[0]}" in _stamp_units(name):
+        return f"<class>{parts[0]}"
+    return ".".join(parts[:2])
+
+
+def stamp_covers(deps: dict, name: str, unit: str) -> bool:
+    """Whether `deps` stamps `unit` of script `name`: listed itself, its class listed whole, or (a
+    class's own statements) any method of it listed. Module-level statements are stamped with any
+    listed script."""
+    have = deps.get(name)
+    if have is None:
+        return False
+    if unit == "<module>" or unit in have:
+        return True
+    if unit.startswith("<class>"):
+        cls = unit[len("<class>"):]
+        return any(u == cls or u.startswith(cls + ".") for u in have)
+    return "." in unit and unit.split(".")[0] in have
+
+
+def _script_modules() -> dict:
+    """{script file name: [loaded module objects]} of the sibling scripts in `sys.modules` (one
+    script can be loaded twice: `_backstab` keeps its own copies)."""
+    out = {}
+    for m in list(sys.modules.values()):
+        f = getattr(m, "__file__", None)
+        if f and Path(f).resolve().parent == HERE:
+            out.setdefault(Path(f).name, []).append(m)
+    return out
+
+
+_FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _scope_names(fn) -> set:
+    """The names local to function `fn`: its parameters and every name its own body binds
+    (assignment, loop and `with` targets, `except ... as`, imports, nested `def`/`class`),
+    less those it declares `global` or `nonlocal`. Nested functions' bodies are their own."""
+    a = fn.args
+    names = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}
+    glob = set()
+    todo = list(fn.body) if isinstance(fn.body, list) else [fn.body]
+    while todo:
+        n = todo.pop()
+        if isinstance(n, (ast.Global, ast.Nonlocal)):
+            glob |= set(n.names)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(n.name)
+        elif isinstance(n, ast.Lambda):
+            pass
+        else:
+            if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+                names.add(n.id)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                names.add(n.name)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                names |= {(x.asname or x.name).split(".")[0] for x in n.names}
+            elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+                names.add(n.name)
+            todo.extend(ast.iter_child_nodes(n))
+    return names - glob
+
+
+def _code_refs(node, scope: frozenset = frozenset()):
+    """(expression, local names) for every global name load (`ast.Name` not local where it
+    stands) and every attribute access in `node`, scope by scope (`_scope_names`). Annotations are
+    skipped: an annotation names a type and runs none of its code, so `opp: Opponent` on
+    `simulate` does not make `Opponent.__init__` a dependency of it."""
+    todo = [(node, scope)]
+    while todo:
+        n, sc = todo.pop()
+        if isinstance(n, _FUNCS):
+            a = n.args
+            todo += [(d, sc) for d in (*a.defaults, *(d for d in a.kw_defaults if d))]
+            if not isinstance(n, ast.Lambda):
+                todo += [(d, sc) for d in n.decorator_list]
+            inner = sc | _scope_names(n)
+            todo += [(b, inner) for b in (n.body if isinstance(n.body, list) else [n.body])]
+            continue
+        if isinstance(n, ast.Name):
+            if isinstance(n.ctx, ast.Load) and n.id not in sc:
+                yield n, sc
+            continue
+        if isinstance(n, ast.Attribute):
+            yield n, sc
+        for field, value in ast.iter_fields(n):
+            if field in ("annotation", "returns", "type_params"):
+                continue
+            if isinstance(value, ast.AST):
+                todo.append((value, sc))
+            elif isinstance(value, list):
+                todo += [(v, sc) for v in value if isinstance(v, ast.AST)]
+
+
+def stamp_closure(deps: dict, why: dict | None = None) -> dict:
+    """`deps` plus every unit a stamped unit names statically (section above), to a fixpoint:
+    bare names of the same script's functions and classes (a class by its own statements and
+    `__init__`), `self.x`/`cls.x` of a method of the same class, and `ALIAS.x` / `ALIAS.SUB.x`
+    where `ALIAS` is a module-level name bound to a sibling script's module (resolved on the
+    modules loaded now, `_script_modules`); a constant reached that way stamps that script's
+    module-level statements. Units in `STAMP_TOOLING` are left out. `why`, when given, is filled
+    with {(script, unit): (script, unit) that named it}."""
+    mods = _script_modules()
+    out = {k: set(v) for k, v in deps.items()}
+    todo = [(n, u) for n, us in deps.items() for u in us] + [(n, "<module>") for n in deps]
+    why = {} if why is None else why
+    src = [None]
+
+    def file_of(m):
+        f = getattr(m, "__file__", None)
+        return Path(f).name if f and Path(f).resolve().parent == HERE else None
+
+    def add(name, unit):
+        if name == SELF_SCRIPT and unit in STAMP_TOOLING:
+            return
+        if name not in out:
+            out[name] = set()
+            todo.append((name, "<module>"))
+            why.setdefault((name, "<module>"), src[0])
+        if unit is None or stamp_covers({name: tuple(out[name])}, name, unit):
+            return
+        out[name].add(unit)
+        todo.append((name, unit))
+        why.setdefault((name, unit), src[0])
+
+    while todo:
+        name, unit = todo.pop()
+        src[0] = (name, unit)
+        units = _stamp_units(name)
+        if unit not in units:
+            continue
+        g = {}
+        for m in mods.get(name, []):
+            g.update({k: v for k, v in vars(m).items() if isinstance(v, type(sys))})
+        cls = unit.split(".")[0] if "." in unit else None
+        nodes = list(units[unit][1]) + (list(units.get(f"<class>{cls}", ("", []))[1]) if cls else [])
+
+        def resolve(e, sc):
+            """The sibling module an expression names, or None."""
+            if isinstance(e, ast.Name):
+                m = None if e.id in sc else g.get(e.id)
+                return m if m is not None and file_of(m) else None
+            if isinstance(e, ast.Attribute):
+                m = resolve(e.value, sc)
+                sub = getattr(m, e.attr, None) if m is not None else None
+                return sub if isinstance(sub, type(sys)) and file_of(sub) else None
+            return None
+
+        for n in nodes:
+            for e, sc in _code_refs(n):
+                if isinstance(e, ast.Name):
+                    if e.id in units and not e.id.startswith("<"):
+                        if f"<class>{e.id}" in units:
+                            add(name, f"<class>{e.id}")
+                            if f"{e.id}.__init__" in units:
+                                add(name, f"{e.id}.__init__")
+                        else:
+                            add(name, e.id)
+                elif isinstance(e, ast.Attribute):
+                    if cls and isinstance(e.value, ast.Name) and e.value.id in ("self", "cls"):
+                        if f"{cls}.{e.attr}" in units:
+                            add(name, f"{cls}.{e.attr}")
+                        continue
+                    m = resolve(e.value, sc)
+                    if m is None:
+                        continue
+                    other = file_of(m)
+                    ou = _stamp_units(other)
+                    if e.attr in ou and f"<class>{e.attr}" in ou:
+                        add(other, f"<class>{e.attr}")
+                        if f"{e.attr}.__init__" in ou:
+                            add(other, f"{e.attr}.__init__")
+                    elif e.attr in ou:
+                        add(other, e.attr)
+                    else:
+                        add(other, None)
+    return {k: tuple(sorted(u for u in v if not u.startswith("<class>")
+                            or not any(w.startswith(u[len("<class>"):] + ".") for w in v)))
+            for k, v in sorted(out.items())}
+
+
+#: The rows `stamp_trace` profiles: a melee ash with a stance button (Unsheathe), a two-handed
+#: melee ash, a bullet ash and a buff, so the hit, bullet, utility, stance and grip branches of
+#: `Rows._cast` and `simulate` all run.
+STAMP_TRACE_ROWS = (
+    {"ash": "Unsheathe", "weapon": "Uchigatana", "affinity": "Keen", "grip": "1H", "cat": "non-bullet",
+     "gate": None, "melee_reach": [4.1], "reach": None, "last": 0, "stance": "r1"},
+    {"ash": "Lion's Claw", "weapon": "Claymore", "affinity": "Heavy", "grip": "2H", "cat": "non-bullet",
+     "gate": None, "melee_reach": None, "reach": None, "last": 0},
+    {"ash": "Glintblade Phalanx", "weapon": "Longsword", "affinity": "Magic", "grip": "1H", "cat": "bullet",
+     "gate": None, "melee_reach": None, "reach": [0, 8.0], "last": 0},
+    {"ash": "Determination", "weapon": "Longsword", "affinity": "Standard", "grip": "1H", "cat": "utility",
+     "gate": None, "melee_reach": None, "reach": None, "last": 40},
+)
+
+_GUARD: dict = {}
+
+
+def _stamp_guard(event, args) -> None:
+    """Audit hook of `stamp_trace`: once armed, refuse any write, rename or delete under `CACHE`,
+    so a traced run (a selftest) leaves the planner's cache as it found it. Stays armed for the
+    rest of the process, which covers writes a module defers to exit."""
+    root = _GUARD.get("root")
+    if root is None:
+        return
+    paths, write = [], False
+    if event == "open":
+        path, mode, flags = (list(args) + [None, None, None])[:3]
+        paths = [path]
+        write = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (
+            mode is None and isinstance(flags, int) and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)))
+    elif event in ("os.rename", "os.remove", "os.rmdir", "os.utime", "os.truncate", "os.mkdir", "shutil.rmtree"):
+        paths, write = list(args[:2]), True
+    if not write:
+        return
+    for p in paths:
+        if isinstance(p, (str, bytes, os.PathLike)) and os.path.abspath(os.fsdecode(p)).startswith(root):
+            _GUARD["refused"].append(f"{event} {os.fsdecode(p)}")
+            raise PermissionError(f"stamp_trace: a traced run does not write the planner cache ({os.fsdecode(p)})")
+
+
+def stamp_trace(rows=STAMP_TRACE_ROWS, log=print) -> dict:
+    """{'profile': {(script, unit)}, 'sim': {(script, unit)}, 'refused': [...], 'errors': [...]}:
+    the units under scripts/ whose code runs while an opponent is built and `rows` are profiled
+    over a duel spread and at a fixed distance ('profile'), and while one cast's hits are
+    simulated by `Rows._sim` and `ChainTrades._sim`, poise carried and not ('sim'). Measured with
+    `sys.monitoring` (each code object reported once). This script's caches point at an empty
+    directory for the run, so every profile is computed, and no write under `CACHE` happens
+    (`_stamp_guard`)."""
+    import tempfile
+    g = globals()
+    if "refused" not in _GUARD:
+        sys.addaudithook(_stamp_guard)
+        _GUARD["refused"] = []
+    _GUARD["root"] = os.path.abspath(CACHE)
+    mon = sys.monitoring
+    tool = next(i for i in range(6) if mon.get_tool(i) is None)
+    mon.use_tool_id(tool, "stamp-trace")
+    seen = {"profile": set(), "sim": set()}
+    cur = {"set": seen["profile"]}
+    prefix = str(HERE) + os.sep
+
+    def start(code, offset):
+        f = code.co_filename
+        if f.startswith(prefix):
+            cur["set"].add((Path(f).name, code.co_qualname))
+        return mon.DISABLE
+
+    saved = {k: g[k] for k in ("SIMS_DIR", "ESCAPE_DIR", "STAGGER_DIR")}
+    saved_esc = dict(_ESC)
+    errors = []
+    with tempfile.TemporaryDirectory() as d:
+        g.update(SIMS_DIR=Path(d) / "sims", ESCAPE_DIR=Path(d) / "esc", STAGGER_DIR=Path(d) / "stag")
+        _ESC.clear()
+        mon.register_callback(tool, mon.events.PY_START, start)
+        mon.set_events(tool, mon.events.PY_START)
+        try:
+            opp = with_read(Opponent())
+            rows_ = Rows(opp, {"str": 18, "dex": 80, "int": 7, "fth": 8, "arc": 9},
+                         ["Verdigris Gauntlets", "Verdigris Armor", "Verdigris Greaves"], 2292.5,
+                         carry=poise_carries())
+            rows_.set_movers(list(rows))
+            poise = rows_.armor_poise()
+            spread = duel_spread(20.0, pool_melee_m(opp))
+            casts = []
+            for x in rows:
+                for kw in ({"spread": spread}, {"distance": 2.5}):
+                    r = rows_.profile(x, poise, **kw)
+                    if r.get("escape_error"):
+                        errors.append(f"{x['ash']}: {r['escape_error']}")
+                casts.append(rows_.cast(x))
+            mon.restart_events()
+            cur["set"] = seen["sim"]
+            for carry in (False, True):
+                for hits, windows, fx, gate in casts:
+                    if not hits:
+                        continue
+                    rows_.carry, rows_._memo = carry, {}
+                    rows_._sim(hits, windows, 2.5, gate, fx, poise)
+                    ChainTrades(opp, poise, carry)._sim(hits, windows, gate, 2.5)
+        finally:
+            mon.set_events(tool, 0)
+            mon.register_callback(tool, mon.events.PY_START, None)
+            mon.free_tool_id(tool)
+            g.update(saved)
+            _ESC.clear()
+            _ESC.update(saved_esc)
+    # Logged only now: `log` is the caller's code, and inside the traced run it would count.
+    log(f"stamp trace: {len(rows)} rows profiled")
+    out = {k: {(n, _unit_of(n, q)) for n, q in v} for k, v in seen.items()}
+    out = {k: {(n, u) for n, u in v if not (n == SELF_SCRIPT and u in STAMP_TOOLING)} for k, v in out.items()}
+    return {**out, "refused": list(_GUARD["refused"]), "errors": errors}
+
+
+def deps_literal(label: str, d: dict, width: int = 110) -> str:
+    """`d` {script: units} as the Python source of `label`, one script per entry, wrapped."""
+    import textwrap
+    out = [f"{label}: dict[str, tuple[str, ...]] = {{"]
+    for n, us in d.items():
+        body = ", ".join(repr(u) for u in us) + ("," if len(us) == 1 else "")
+        out.append(f"    {n!r}: (")
+        out += textwrap.wrap(body, width, initial_indent=" " * 8, subsequent_indent=" " * 8,
+                             break_long_words=False, break_on_hyphens=False)
+        out.append("    ),")
+    out.append("}")
+    return "\n".join(out)
+
+
+def stamp_deps_report(log=print) -> int:
+    """`--stamp-deps`: the two lists regenerated (traced units, then `stamp_closure`), printed as
+    the literals to paste over `STAMP_DEPS` and `STAMP_SIM_DEPS`."""
+    t = stamp_trace(log=log)
+
+    def lists(units):
+        d = {}
+        for n, u in units:
+            if u != "<module>":
+                d.setdefault(n, set()).add(u)
+            else:
+                d.setdefault(n, set())
+        return stamp_closure({k: tuple(v) for k, v in d.items()})
+
+    sim = lists(t["sim"])
+    prof = lists(t["profile"] | {(n, u) for n, us in sim.items() for u in us} | {(n, "<module>") for n in sim})
+    for label, d in (("STAMP_DEPS", prof), ("STAMP_SIM_DEPS", sim)):
+        print(deps_literal(label, d))
+    log(f"stamp deps: traced {len(t['profile'])} profile / {len(t['sim'])} sim units; after the static walk "
+        f"profile {sum(map(len, prof.values()))} units in {len(prof)} scripts, "
+        f"sim {sum(map(len, sim.values()))} in {len(sim)}; refused writes {t['refused']}; "
+        f"escape errors {t['errors']}")
+    return 0
 
 
 def reaction_frames(points: int = REACT_POINTS, median: float = AS.REACTION_MEDIAN_S) -> np.ndarray:
@@ -987,7 +1653,8 @@ class ChainTrades:
             o = np.argsort(opp.P)
             poise = float(opp.P[o][np.searchsorted(np.cumsum(opp.w[o]), 0.5 * opp.w.sum())])
         carry = poise_carries() if carry is None else carry
-        path = SIMS_DIR / f"{stamp()}-{opp.fingerprint()}-chain-poise{poise:g}-{'carried' if carry else 'fresh'}.json"
+        path = (SIMS_DIR / f"{stamp('sim')}-{opp.fingerprint()}-chain-poise{poise:g}-"
+                f"{'carried' if carry else 'fresh'}.json")
         spread = duel_spread_for(arena_m) if arena_m else None
         return cls(opp, poise, carry, path, spread)
 
@@ -1912,6 +2579,28 @@ def throttle(cpus) -> None:
     atexit.register(signal.setitimer, signal.ITIMER_PROF, 0)
 
 
+@contextlib.contextmanager
+def caller_throttled(cpu: int):
+    """`throttle` this process to `cpu` for the length of a pool, then give back the CPUs, policy
+    and timer it had. Left pinned, every pool forked after it inherited the one CPU: on 2026-10-20
+    combo-loadout's whiff stage put its ten workers on CPU 1 after this pass and ran at 10% each."""
+    aff = os.sched_getaffinity(0)
+    policy, param = os.sched_getscheduler(0), os.sched_getparam(0)
+    handler = signal.getsignal(signal.SIGPROF)
+    throttle([cpu])
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_PROF, 0)
+        signal.signal(signal.SIGPROF, handler)
+        os.sched_setaffinity(0, aff)
+        try:
+            os.sched_setscheduler(0, policy, param)
+        except PermissionError:
+            # Leaving `SCHED_IDLE` needs `RLIMIT_NICE` headroom; staying idle costs only priority.
+            pass
+
+
 _W = {}
 
 
@@ -1955,9 +2644,13 @@ def profiles(xs: list, cache_path: Path, stats: dict, armor: list, max_hp: float
     # `carried_states`), as it answers the R1, L1 and dual strings (`ChainTrades`).
     opp = with_read(Opponent()) if arena_m else None
     spread = duel_spread_for(arena_m, opp) if arena_m and distance is None else None
+    # The opponent's arrays are part of the settings (`Opponent.fingerprint`, about 1 s warm): the
+    # pool and sequence caches it is read from are kept by their own scripts, so their code is not
+    # in this script's stamp (the code stamp section) and their data stands in for it.
+    opp = opp or with_read(Opponent())
     settings = {"stamp": stamp(), "stats": stats, "armor": armor, "max_hp": max_hp, "poise": poise,
                 "distance": distance, "points": REACT_POINTS, "read": AS.REACT_SHARE, "carried": poise_carries(),
-                "spread": spread, "stagger": STAGGER_MODEL}
+                "spread": spread, "stagger": STAGGER_MODEL, "pool": opp.fingerprint()}
     if spread:
         log("interrupt: duel distance spread " + ", ".join(f"{n[0]:g} m x{n[1]:.3f}" for n in spread["nodes"]))
     doc = json.loads(cache_path.read_text()) if cache_path.exists() else {}
@@ -1966,14 +2659,13 @@ def profiles(xs: list, cache_path: Path, stats: dict, armor: list, max_hp: float
     log(f"interrupt: {len(have)} cached, {len(todo)} to compute -> {cache_path}")
     if todo:
         import multiprocessing as mp
-        opp = opp or with_read(Opponent())
         rows = Rows(opp, stats, armor, max_hp, carry=settings["carried"])
         moves = rows.set_movers(xs)
         log(f"interrupt: {len(moves)} movement skills the defender may escape with: "
             + ", ".join(f"{m['name']} ({m['far']} m, ready f{m['ready']:g})" for m in moves))
         p = rows.armor_poise() if poise is None else poise
         tag = "-carried" if rows.carry else ""
-        sims_path = SIMS_DIR / f"{settings['stamp']}-{opp.fingerprint()}-poise{p:g}{tag}.json"
+        sims_path = SIMS_DIR / f"{stamp('sim')}-{settings['pool']}-poise{p:g}{tag}.json"
         rows._memo = _read_sims(sims_path)
         log(f"interrupt: {len(rows._memo)} simulations kept from other stat blocks ({sims_path})")
         esc_path = escape_path(settings["stamp"])
@@ -1991,15 +2683,16 @@ def profiles(xs: list, cache_path: Path, stats: dict, armor: list, max_hp: float
         done, rows_done = 0, 0
         ctx = mp.get_context("fork")
         init, args = None, ()
+        caller = contextlib.ExitStack()
         if throttled:
             cpus = allowed_cpus()
-            throttle(cpus[:1])
+            caller.enter_context(caller_throttled(cpus[0]))
             workers = cpus[1:] or cpus
             jobs = max(1, min(jobs, len(workers)))
             init, args = _worker_init, (workers, ctx.Value("i", 0))
             log(f"interrupt: throttled, caller on CPU {cpus[0]}, {jobs} workers on CPUs {workers[:jobs]}, "
                 f"{THROTTLE_SHARE:.0%} each")
-        with ctx.Pool(jobs, initializer=init, initargs=args) as pool:
+        with caller, ctx.Pool(jobs, initializer=init, initargs=args) as pool:
             for res in pool.imap_unordered(_work, chunks):
                 for r in res.values():
                     if "_escape" in r:
@@ -2032,6 +2725,9 @@ def selftest() -> int:
         if not cond:
             fails.append(msg)
 
+    # First, so its traced run starts from a fresh process: the checks after it fill the sibling
+    # modules' in-process memos, and a memo hit runs none of the code it saves.
+    stamp_selftest(check)
     un = {"weapon": "Uchigatana", "affinity": "Keen", "ash": "Unsheathe", "grip": "1H"}
     keys = [row_key({**un, "lead": 8.0, "stance": "r1"}), row_key({**un, "lead": 8.0, "stance": "r2"}), row_key(un)]
     check(len(set(keys)) == 3 and keys[2] == "Uchigatana|Keen|Unsheathe|1H",
@@ -2129,6 +2825,126 @@ def selftest() -> int:
     stagger_pool_selftest(check)
     print(f"{len(fails)} failed")
     return 1 if fails else 0
+
+
+def stamp_selftest(check, trace: bool = True) -> None:
+    """The code stamp (section "the code stamp"), on a copy of the stamped scripts: comments,
+    docstrings, moved lines and edits to functions no profile runs leave both stamps; an edit to a
+    function a profile runs, to one a simulation runs, in this script or a sibling, or to a
+    module-level constant moves the stamps that depend on it. With `trace`, every unit a traced run
+    of real rows reaches (`stamp_trace`) is stamped, the static walk (`stamp_closure`) adds nothing
+    to either list, and the check fails when a reached unit is taken off a list."""
+    import shutil
+    import tempfile
+    scopes = ("profile", "sim")
+    intr = "er-mechanics-interrupt.py"
+
+    def find(tree, qual):
+        node = tree
+        for part in qual.split("."):
+            node = next(n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                        and n.name == part)
+        return node
+
+    def first_line(tree, qual):
+        """(line index, indent) of the first statement of `qual` after its docstring."""
+        fn = find(tree, qual)
+        doc = ast.get_docstring(fn) is not None
+        s = fn.body[1 if doc else 0]
+        line = min([s.lineno] + [d.lineno for d in getattr(s, "decorator_list", [])])
+        return line - 1, " " * s.col_offset
+
+    def insert(qual, text):
+        def how(lines, tree):
+            i, ind = first_line(tree, qual)
+            lines.insert(i, f"{ind}{text}\n")
+        return how
+
+    def reword_docstring(qual):
+        def how(lines, tree):
+            i = find(tree, qual).body[0].lineno - 1
+            lines[i] = lines[i].replace('"""', '"""Reworded by the stamp selftest. ', 1)
+        return how
+
+    def blank_lines(lines, tree):
+        lines[1:1] = ["\n"] * 3
+
+    def constant(name, new):
+        def how(lines, tree):
+            i = next(k for k, l in enumerate(lines) if l.startswith(f"{name} = "))
+            lines[i] = f"{name} = {new}\n"
+        return how
+
+    # Traced first, in as fresh a process as the selftest has: it also loads the sibling modules
+    # the static walk below resolves aliases on.
+    t = stamp_trace(log=lambda s: None) if trace else None
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        for n in STAMP_DEPS:
+            shutil.copyfile(HERE / n, root / n)
+        base = {s: stamp(s, root=root) for s in scopes}
+        check(base == {s: stamp(s) for s in scopes} and base["profile"] != base["sim"],
+              f"a copy of the stamped scripts stamps as they do: {base}")
+
+        def edited(name, how):
+            p = root / name
+            text = p.read_text()
+            lines = text.splitlines(keepends=True)
+            how(lines, ast.parse(text))
+            p.write_text("".join(lines))
+            try:
+                return {s: stamp(s, root=root) for s in scopes}
+            finally:
+                p.write_text(text)
+
+        unrelated = [(SELF_SCRIPT, "stagger_report"), (SELF_SCRIPT, "selftest"), (SELF_SCRIPT, "resim_report"),
+                     (intr, "chip_report")]
+        check(not any(stamp_covers(STAMP_DEPS, n, u) for n, u in unrelated),
+              f"the unrelated functions edited below are on no stamp list: {unrelated}")
+        same = [
+            ("a comment in simulate", SELF_SCRIPT, insert("simulate", "# a comment the stamp selftest adds")),
+            ("simulate's docstring reworded", SELF_SCRIPT, reword_docstring("simulate")),
+            ("Rows._cast's docstring reworded", SELF_SCRIPT, reword_docstring("Rows._cast")),
+            ("three blank lines at the top, every line moved", SELF_SCRIPT, blank_lines),
+            ("a comment in er-mechanics-interrupt.chip_states", intr, insert("chip_states", "# selftest")),
+            *((f"an edit to the unrelated {n.removesuffix('.py')}.{u}", n, insert(u, "_stamp_selftest = None"))
+              for n, u in unrelated),
+        ]
+        for label, name, how in same:
+            got = edited(name, how)
+            check(got == base, f"stamp unchanged by {label}")
+        moved = [
+            ("an edit inside simulate", SELF_SCRIPT, insert("simulate", "_stamp_selftest = None"), {"profile", "sim"}),
+            ("an edit inside Rows._cast", SELF_SCRIPT, insert("Rows._cast", "_stamp_selftest = None"), {"profile"}),
+            ("an edit inside er-mechanics-interrupt.chip_states", intr,
+             insert("chip_states", "_stamp_selftest = None"), {"profile", "sim"}),
+            ("an edit inside er-mechanics-ashes.skill_profile", "er-mechanics-ashes.py",
+             insert("skill_profile", "_stamp_selftest = None"), {"profile"}),
+            ("MAX_MY_HITS 12 -> 13", SELF_SCRIPT, constant("MAX_MY_HITS", 13), {"profile", "sim"}),
+        ]
+        for label, name, how, want in moved:
+            got = edited(name, how)
+            changed = {s for s in scopes if got[s] != base[s]}
+            check(changed == want, f"{label} moves the {' and '.join(sorted(want))} stamp"
+                  f"{'s' if len(want) > 1 else ''} (moved: {sorted(changed) or 'none'})")
+    for scope, deps in (("profile", STAMP_DEPS), ("sim", STAMP_SIM_DEPS)):
+        grown = stamp_closure(deps)
+        extra = sorted(f"{n}:{u}" for n, us in grown.items() for u in us if not stamp_covers(deps, n, u))
+        extra += sorted(n for n in grown if n not in deps)
+        check(not extra, f"the static walk adds nothing to the {scope} list" + (f": {extra}" if extra else ""))
+    loose = sorted(f"{n}:{u}" for n, us in STAMP_SIM_DEPS.items() for u in us if not stamp_covers(STAMP_DEPS, n, u))
+    check(not loose, "every sim unit is on the profile list" + (f": {loose}" if loose else ""))
+    if t is None:
+        return
+    for scope, deps in (("profile", STAMP_DEPS), ("sim", STAMP_SIM_DEPS)):
+        missing = sorted(f"{n}:{u}" for n, u in t[scope] if not stamp_covers(deps, n, u))
+        check(len(t[scope]) > 10 and not missing,
+              f"every unit a traced {scope} run reaches is stamped ({len(t[scope])} traced)"
+              + (f"; missing {missing} (regenerate with --stamp-deps)" if missing else ""))
+    pruned = {**STAMP_SIM_DEPS, SELF_SCRIPT: tuple(u for u in STAMP_SIM_DEPS[SELF_SCRIPT] if u != "simulate")}
+    check(any(n == SELF_SCRIPT and u == "simulate" and not stamp_covers(pruned, n, u) for n, u in t["sim"]),
+          "the trace check fails a list with simulate taken off it")
+    check(not t["refused"], f"the traced run wrote nothing under the planner cache (refused: {t['refused']})")
 
 
 def stagger_selftest(check, f) -> None:
@@ -2681,6 +3497,9 @@ def resim_report(cache_path: Path, rows_path: Path, top: int = 15, jobs: int = 8
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--stamp-deps", action="store_true",
+                    help="trace a few real profiles and print STAMP_DEPS / STAMP_SIM_DEPS regenerated "
+                         "(`stamp_deps_report`)")
     ap.add_argument("--skill")
     ap.add_argument("--weapon")
     ap.add_argument("--affinity", default="Keen")
@@ -2704,6 +3523,8 @@ def main() -> int:
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.stamp_deps:
+        return stamp_deps_report(log=lambda s: print(s, file=sys.stderr))
     if a.stagger_report:
         return stagger_report(Opponent())
     if a.resim:

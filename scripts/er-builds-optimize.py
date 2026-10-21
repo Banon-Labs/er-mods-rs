@@ -485,7 +485,10 @@ def stat_caps(tables, weapon, affinity, level=None) -> dict:
     key = (weapon, affinity, level)
     if key not in _CAPS:
         if tables is None:                    # a caller whose tables load lazily (ash levers)
-            tables = _CAPS.setdefault("_tables", AR.Tables(None))
+            # Built once: a `setdefault` default is built on every call, a full param read.
+            if "_tables" not in _CAPS:
+                _CAPS["_tables"] = AR.Tables(None)
+            tables = _CAPS["_tables"]
         caps = {k: STAT_CAP for k in DAMAGE_STATS}
         try:
             caps.update(AR.soft_caps(tables, weapon, affinity, level))

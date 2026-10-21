@@ -115,7 +115,8 @@ fi
 
 if ! fresh "$P-embed0.json" "$B"; then
     step "2 embedding without ash rows"
-    python3 scripts/er-mechanics-weapon-embed.py ${FIGHT:+--fight "$FIGHT"} --build "$B" --out "$P-embed0.json" > "$P-embed0.log" 2>&1
+    python3 scripts/er-mechanics-weapon-embed.py ${FIGHT:+--fight "$FIGHT"} --build "$B" --jobs "$JOBS" \
+        --out "$P-embed0.json" > "$P-embed0.log" 2>&1
 fi
 if ! fresh "$P-wieldable.txt" "$P-embed0.json"; then
     step "3 wieldable weapons"
@@ -146,10 +147,12 @@ print(','.join(x for x in w if x not in swept))" "$P-wieldable.txt" "$P-main.jso
         --extra-weapons "$MISS" --json "$P-inbuild.json" --out "$P-inbuild.html" > "$P-inbuild.log" 2>&1
 fi
 
-if ! fresh "$P-embed.json" "$P-main.json" "$P-inbuild.json" "$P-fixed.json"; then
+# Step 2's weapon and powerstance records are this step's too (only the ash rows differ), so they
+# are taken from it when its stamp names this code (`er-mechanics-weapon-embed.reusable`).
+if ! fresh "$P-embed.json" "$P-main.json" "$P-inbuild.json" "$P-fixed.json" "$P-embed0.json"; then
     step "6 embedding with ash rows"
     python3 scripts/er-mechanics-weapon-embed.py ${FIGHT:+--fight "$FIGHT"} --build "$B" --ash-rows "$P-main.json" "$P-inbuild.json" \
-        "$P-fixed.json" --out "$P-embed.json" > "$P-embed.log" 2>&1
+        "$P-fixed.json" --reuse "$P-embed0.json" --jobs "$JOBS" --out "$P-embed.json" > "$P-embed.log" 2>&1
 fi
 if ! fresh "$P-true-combos.jsonl" "$P-wieldable.txt"; then
     step "7a true combos"
@@ -160,7 +163,7 @@ fi
 if ! fresh "$P-pb.json" "$P-embed.json" scripts/er-mechanics-perfect-block.py; then
     step "7b perfect block"
     python3 scripts/er-mechanics-perfect-block.py --build "$B" --weapons-from "$P-embed.json" --json "$P-pb.json" \
-        ${ARENA_M:+--arena-m "$ARENA_M"} > "$P-pb.log" 2>&1
+        ${ARENA_M:+--arena-m "$ARENA_M"} --jobs "$JOBS" > "$P-pb.log" 2>&1
 fi
 # The script is an input too: the roles' shape changes with it (per-grip main-hand features,
 # `by_grip`, 2026-10-19), and a roles file written before that scores every set the old way.
@@ -190,7 +193,8 @@ print(','.join(sorted(miss)))" "$P-roles.json" "$P-main.json" "$P-inbuild.json" 
     echo "status weapons: ${W:-none}"
     if [ -n "$W" ]; then
         python3 $T ${FIGHT:+--fight "$FIGHT"} --build-file "$B" --affinity "$AFFINITY" --grip both --stats "$DMG" --only-extra \
-            --extra-weapons "$W" --status-weapons "$W" --json "$P-status.json" --out "$P-status.html" > "$P-status.log" 2>&1
+            --extra-weapons "$W" --status-weapons "$W" --jobs "$JOBS" --json "$P-status.json" --out "$P-status.html" \
+            > "$P-status.log" 2>&1
     else
         echo "[]" > "$P-status.json"
     fi

@@ -584,35 +584,71 @@ class WeaponSide:
                 slots[slot] = info
         return {"cost": round(cost, 2), "p": round(p, 4), "stopped": round(stopped, 3), "slots": slots}
 
-    def weapons(self, emb, log=None):
+    def weapon(self, name, recs, log):
+        """One weapon's entry of `weapons` from its records `recs`, in the embedding's order."""
+        ent = {"by_affinity": {}}
+        best = {}
+        for r in recs:
+            try:
+                c = self.record_cost(r)
+            except (KeyError, SystemExit, TypeError, ValueError, ZeroDivisionError) as e:
+                log(f"perfect block: {name} {r['affinity']} {r['grip']}: {e!r}")
+                continue
+            if not c:
+                continue
+            ent["by_affinity"].setdefault(r["affinity"], {})[r["grip"]] = {k_: c[k_] for k_ in ("cost", "p", "stopped")}
+            if r["grip"] not in best or (r.get("damage") or 0) > best[r["grip"]][0]:
+                best[r["grip"]] = ((r.get("damage") or 0), dict(c, affinity=r["affinity"]))
+        for g, (_, c) in best.items():
+            ent[g] = c
+        return ent
+
+    def weapons(self, emb, log=None, jobs=1):
         """{weapon: {grip: cost at the best-damage affinity, 'by_affinity': {aff: {grip: cost}}}}
-        over the embedding's wieldable records."""
+        over the embedding's wieldable records. `jobs` > 1: the weapons on forked workers, each
+        pinned to a core of its own (`er-mechanics-ash-interrupt._worker_init`). A weapon's records
+        all go to one worker, so the per-weapon caches (`frames`, `slot_case`) fill from the same
+        record they do in one process, and the entries are the same."""
         log = log or (lambda m: print(m, file=sys.stderr, flush=True))
         by = collections.defaultdict(list)
         for r in emb["weapons"]:
             if r["wieldable"] and r.get("kind", "weapon") == "weapon":
                 by[r["weapon"]].append(r)
         out = {}
-        for k, (name, recs) in enumerate(sorted(by.items())):
-            ent = {"by_affinity": {}}
-            best = {}
-            for r in recs:
-                try:
-                    c = self.record_cost(r)
-                except (KeyError, SystemExit, TypeError, ValueError, ZeroDivisionError) as e:
-                    log(f"perfect block: {name} {r['affinity']} {r['grip']}: {e!r}")
-                    continue
-                if not c:
-                    continue
-                ent["by_affinity"].setdefault(r["affinity"], {})[r["grip"]] = {k_: c[k_] for k_ in ("cost", "p", "stopped")}
-                if r["grip"] not in best or (r.get("damage") or 0) > best[r["grip"]][0]:
-                    best[r["grip"]] = ((r.get("damage") or 0), dict(c, affinity=r["affinity"]))
-            for g, (_, c) in best.items():
-                ent[g] = c
-            out[name] = ent
-            if k % 50 == 0:
-                log(f"perfect block weapons: {k} of {len(by)}")
+        # `  i/N weapons` on stderr (`er-mechanics-progress.Count`), the line the pipeline's bar reads.
+        tick = _load("er_mechanics_progress", "er-mechanics-progress.py").Count(len(by), "weapons")
+        items = sorted(by.items())
+        AI = W().AI
+        cpus = AI.allowed_cpus()
+        workers = cpus[1:] or cpus
+        n = max(1, min(jobs, len(items), len(workers)))
+        # The first weapon here either way: it reads the opponent pool and the tables the rest share,
+        # which forked workers then inherit instead of each reading them again.
+        for name, recs in items[:1] if n > 1 else items:
+            out[name] = self.weapon(name, recs, log)
+            tick()
+        if n <= 1:
+            return out
+        import multiprocessing as mp
+        ctx = mp.get_context("fork")
+        _SIDE.update(side=self, log=log)
+        try:
+            with ctx.Pool(n, initializer=AI._worker_init, initargs=(workers, ctx.Value("i", 0))) as pool:
+                for (name, _), ent in zip(items[1:], pool.imap(_weapon_job, items[1:])):
+                    out[name] = ent
+                    tick()
+        finally:
+            _SIDE.clear()
         return out
+
+
+#: The `WeaponSide` and log `_weapon_job` reads in a forked worker.
+_SIDE = {}
+
+
+def _weapon_job(item):
+    name, recs = item
+    return _SIDE["side"].weapon(name, recs, _SIDE["log"])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -648,6 +684,8 @@ def main() -> int:
     ap.add_argument("--arena-m", type=float,
                     help="a duel's starting separation, m: each weapon attack is costed over the duel's "
                          "distance spread where its reach covers (`er-mechanics-ash-interrupt.duel_spread`)")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="workers for --weapons-from, one weapon at a time each (`WeaponSide.weapons`)")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
@@ -674,7 +712,7 @@ def main() -> int:
         if spread:
             print("duel spread: " + ", ".join(f"{n[0]:g} m x{n[1]:.3f}" for n in spread["nodes"]))
         ws = WeaponSide(m, poise, spread)
-        out["weapons"] = ws.weapons(json.loads(a.weapons_from.read_text()))
+        out["weapons"] = ws.weapons(json.loads(a.weapons_from.read_text()), jobs=a.jobs)
         top = sorted(((v["1H"]["cost"], n) for n, v in out["weapons"].items() if v.get("1H")), reverse=True)
         print("highest 1H perfect-block cost per attack: " + ", ".join(f"{n} {c:.1f}" for c, n in top[:8]))
         print("lowest: " + ", ".join(f"{n} {c:.1f}" for c, n in top[-8:]))

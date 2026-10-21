@@ -1021,6 +1021,61 @@ def sequence_hp(t, ws, seq, first_of, dfs, gaps=None, engagements=None, eng_s=EN
 _SEQ = {}
 
 
+class SharedMemo:
+    """A memo dict seen by every forked worker of a pool: a lookup reads this process's copy
+    first, then `shared` (a `multiprocessing.Manager` dict), and a write goes to both. It stands
+    in for `_SEQ` while a pool runs (`share_seq_memo`): each worker on a memo of its own simulated
+    the sequences the others already had, about nine times one process's work over the weapon
+    embedding's powerstance pairs (py-spy, 2026-10-20). A `_SEQ` key holds `id(dfs)`, which a
+    forked worker shares with its parent, and a value is what any process computes for its key."""
+
+    def __init__(self, shared, local=None):
+        self.shared, self.local = shared, dict(local or {})
+
+    def __contains__(self, key):
+        if key in self.local:
+            return True
+        try:
+            self.local[key] = self.shared[key]
+        except KeyError:
+            return False
+        return True
+
+    def __getitem__(self, key):
+        return self.local[key] if key in self.local else self.shared[key]
+
+    def __setitem__(self, key, value):
+        self.local[key] = value
+        self.shared[key] = value
+
+    def clear(self):
+        self.local.clear()
+        self.shared.clear()
+
+
+_SHARED = {}
+
+
+def share_seq_memo(ctx) -> None:
+    """Put a `SharedMemo` seeded with this process's `_SEQ` in its place, before a pool of `ctx`
+    forks; the pools forked after it share it too. `release_seq_memo` takes it down."""
+    global _SEQ
+    if isinstance(_SEQ, SharedMemo):
+        return
+    _SHARED["manager"] = manager = ctx.Manager()
+    _SEQ = SharedMemo(manager.dict(_SEQ), _SEQ)
+
+
+def release_seq_memo() -> None:
+    """`_SEQ` back to a plain dict of what this process has seen, and the manager stopped."""
+    global _SEQ
+    if isinstance(_SEQ, SharedMemo):
+        _SEQ = dict(_SEQ.local)
+    manager = _SHARED.pop("manager", None)
+    if manager is not None:
+        manager.shutdown()
+
+
 def exultation_uptime(t, talisman, status, gap=None):
     """(er-mechanics-talismans `active` key, share of this slot's hits inside the buff) for an
     exultation the attacker wears: procs per hit * hits that land within the buff's
