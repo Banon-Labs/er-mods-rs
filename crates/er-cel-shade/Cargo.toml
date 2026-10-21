@@ -31,6 +31,9 @@ er-shader-compiler = { path = "../er-shader-compiler" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
+# `CSTaskImp`, for the Sky tab's `FrameBegin` task that sets and locks the time and the weather.
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # The one-imgui-host-per-process arbitration: the menu draws as a guest of whichever overlay shell
 # hosts, and hosts only when none does, so exactly one `Present` hook exists in the process.
 er-build-watermark-core = { path = "../er-build-watermark-core" }

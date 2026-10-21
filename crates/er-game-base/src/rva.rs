@@ -829,3 +829,24 @@ pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
 /// import; `er-invasion-warp` calls it to find which slot holds an invasion finger. Neither
 /// depends on the other, so the shared floor they both already depend on is this crate.
 pub const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;
+
+/// `g_GxDrawContext`, the `GxDrawContext*` global (1.16.2 `0x1447ef360`, 1.17 `0x1447f33e0` by the
+/// data map, 1178/1178 references).
+///
+/// Its fields carry the output size the scene is drawn for (`+0x3c8`, `+0xefc`), the viewport the
+/// view setup actually used as a ratio of it (`+0xed0`), the dynamic resolution percentage
+/// (`+0xedc`), and at `*(+0xf30)+0xd344` the game's own GPU time in milliseconds. See bd
+/// `er-dynamic-resolution-chain-static-2026-10-15`.
+///
+/// Declared here, where `scripts/check-rva-alias-drift.py` asks a cross-cutting global to live,
+/// and where er-render-scale reads it from. The older literals in er-loading-portrait-core
+/// (`GX_DRAW_CONTEXT_RVA`), er-title-flow (`TitleSessionRva::GxDrawContextSingleton`) and
+/// er-input-harness are the `todo:centralize-global-rva` row of `scripts/rva-alias-allowlist.txt`.
+pub const GX_DRAW_CONTEXT_GLOBAL_RVA: usize = 0x47ef360;
+
+/// `GXRenderingSystem*`, the global whose `+0x13a70` points at the dynamic resolution controller's
+/// config and whose `+0x13a78` byte gates the mip LOD bias the view setup applies at a reduced
+/// scale (1.16.2 `0x1447ef728`, 1.17.x `0x1447f37a8`; `.data` does not move between 1.17.0 and
+/// 1.17.1). Carried to 1.17 by `scripts/map-data-rvas-1162-to-1170.py`. See bd
+/// `er-dynamic-resolution-chain-static-2026-10-15`; read by er-render-scale.
+pub const GX_RENDERING_SYSTEM_GLOBAL_RVA: usize = 0x47ef728;

@@ -265,6 +265,17 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 			exec 9<>"$_check_lock" || true
 		fi
 	fi
+	# A push waits its turn instead of refusing (user directive 2026-10-20: "whenever you need to
+	# push, you need to push with a command that waits until the lock is no longer held"). The
+	# pre-push hook sets ER_CHECK_WAIT_LOCK=1, so an authorized push that lands while another
+	# session's suite or DLL build holds the lock queues behind it rather than spending the
+	# authorization on a refusal. A live holder still gets the run it started; this one starts
+	# when it ends.
+	if [[ ${ER_CHECK_WAIT_LOCK:-} == 1 ]] && ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		echo "check.sh: waiting for $_check_lock (held by ${_holder:-an unrecorded pid}) before running." >&2
+		flock $_check_lock_mode 9
+	fi
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
 		_holder_what="no pid recorded"
@@ -2554,6 +2565,17 @@ python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
 # vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle that moves a token,
 # or a capture step that changes, would otherwise leave it judging the game against stale colours.
 python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
+
+# er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what
+# the dynamic resolution update is told for each, how the drawn size comes back out of the
+# viewport ratio, the settings file and the telemetry document -- and the two crates its menu
+# shares with er-cel-shade's, the design system and the input capture. A wrong divisor list or a
+# plan that never restores is silent in game, a soft picture nobody can name, so they run here.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-render-scale -p er-overlay-theme -p er-overlay-input
+
+# The render-scale probe checker holds its copies of the telemetry name, the schema and the
+# viewport snap to the Rust, and proves each `--expect` mode can still fail.
+python3 "$repo_root/scripts/check-render-scale-probe.py" --selftest
 
 # The cel ports the DLL embeds: every committed blob must be a signed shader model 6.0 pixel
 # shader, because native D3D12 refuses unsigned DXIL that vkd3d-proton accepts, so a stale or

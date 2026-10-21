@@ -1,0 +1,33 @@
+# The look every in-game panel in this workspace shares: the color and size tokens, the four
+# vendored typefaces (IBM Plex Sans in three weights and JetBrains Mono, OFL, under `fonts/`), and
+# the helpers a panel draws with. It was er-cel-shade's `menu/theme.rs`; it moved here when
+# er-render-scale's panel needed the same look, so there is one copy.
+#
+# Host-buildable: the tokens, the font arithmetic, the layout helpers and the per-frame record are
+# pure and proven by `cargo test` on Linux. Only the drawing half needs hudhook and the overlay
+# host, and it is `cfg(windows)`.
+[package]
+name = "er-overlay-theme"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_overlay_theme"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+# The fonts go into whichever module hosts the process's imgui context, through its exports.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+# Pinned to the same hudhook every other overlay shell carries: the `ui` pointer crosses a DLL
+# boundary and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+
+# The glyph ranges and request limits the host enforces, for the test that every face the panel
+# asks for is one the host accepts.
+[dev-dependencies]
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+
+[lints]
+workspace = true
