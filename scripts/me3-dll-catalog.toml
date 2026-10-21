@@ -229,7 +229,7 @@ default = false
 
 [er-target-bars]
 label = "Target stance and status bars"
-blurb = "Colour-coded bars under your locked-on target's HP bar: stance, stamina and FP where the target has them, and each status ailment as it builds up or procs."
+blurb = "Color-coded bars under your locked-on target's HP bar: stance, stamina and FP where the target has them, and each status ailment as it builds up or procs."
 category = "quality-of-life"
 audience = "player"
 default = false
@@ -267,7 +267,7 @@ default = false
 
 [er-cel-shade]
 label = "Cel shading"
-blurb = "Cartoon shading: banded light, inked outlines, flattened surface colour and stepped brightness. F6 opens presets and live sliders."
+blurb = "Cartoon shading: banded light, inked outlines, flattened surface color and stepped brightness. F6 opens presets and live sliders."
 category = "cosmetic"
 audience = "player"
 default = false
