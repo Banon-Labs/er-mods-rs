@@ -34,8 +34,6 @@ import rego.v1
 # The pattern is spelled `colo[u]r` so this file carries none of what it counts.
 banned_re := `(?i)colo[u]r`
 
-quoted_span_re := `"[^"\n]*"`
-
 tool_input := object.get(input, "tool_input", {})
 
 file_path := object.get(tool_input, "file_path", object.get(tool_input, "path", ""))
@@ -74,7 +72,15 @@ edit_pairs contains {"old": object.get(edit, "old_string", ""), "new": object.ge
 	some edit in object.get(tool_input, "edits", [])
 }
 
-occurrences(text) := count(regex.find_n(banned_re, regex.replace(text, quoted_span_re, ""), -1))
+# Splitting each line on `"` leaves the text outside quotes at the even indexes. This stands in for
+# a `regex.replace` of the quoted spans, and `find_all_string_submatch_n` for `regex.find_n`:
+# Cupcake's WASM runtime executes neither of those two.
+occurrences(text) := count([m |
+	some line in split(text, "\n")
+	some i, piece in split(line, "\"")
+	i % 2 == 0
+	some m in regex.find_all_string_submatch_n(banned_re, piece, -1)
+])
 
 # The gate skips `Cargo.lock`, which cargo writes and nobody edits by hand.
 skipped_file if endswith(file_path, "Cargo.lock")

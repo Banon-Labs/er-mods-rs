@@ -598,6 +598,231 @@ test_deny_the_sed_loop_when_telemetry_licensed_a_different_crate if {
 	denied(bash_event("sed -i 's/a/b/' crates/er-title-flow/src/lib.rs", PROVEN_TELEMETRY))
 }
 
+# --- a destination the shell computes (2026-10-15) -----------------------------
+#
+# A subagent wrote two crate sources with `sed ... > $W/lib.rs`, `W` holding
+# `.worktrees/er-render-scale/crates/er-overlay-theme/src`. The rule only read a literal
+# `crates/` in the written word, so it never saw either write.
+
+THEME_SRC := "/home/banon/projects/er-mods-rs/.worktrees/er-render-scale/crates/er-overlay-theme/src"
+
+bash_event_in(cmd, signal, cwd) := object.union(bash_event(cmd, signal), {"cwd": cwd})
+
+reason_of(event) := reason if {
+	some decision in guard.deny with input as event
+	decision.rule_id == RULE
+	reason := decision.reason
+}
+
+# The measured shape: the variable assigned from a literal in the same command, so the
+# guard can follow it to the crate.
+test_deny_the_sed_into_a_variable_directory_that_was_measured if {
+	denied(bash_event(
+		concat("", ["W=", THEME_SRC, "; sed 's/old/new/' $W/lib.rs.orig > $W/lib.rs"]),
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_the_followed_variable_is_named_as_the_target if {
+	reason := reason_of(bash_event(
+		concat("", ["W=", THEME_SRC, "; sed 's/old/new/' /tmp/lib.rs > $W/lib.rs"]),
+		UNPROVEN_NOTHING,
+	))
+	contains(reason, "crates/er-overlay-theme/src/lib.rs")
+}
+
+test_deny_a_relative_or_quoted_assignment_followed_the_same_way if {
+	denied(bash_event(
+		"W=.worktrees/er-render-scale/crates/er-overlay-theme/src; sed 's/a/b/' /tmp/x > $W/lib.rs",
+		UNPROVEN_NOTHING,
+	))
+	denied(bash_event(
+		`W=".worktrees/er-render-scale/crates/er-overlay-theme/src"; sed 's/a/b/' /tmp/x > "${W}/lib.rs"`,
+		UNPROVEN_NOTHING,
+	))
+}
+
+# A variable the command never assigns: the guard cannot see where it lands, the command
+# names a Rust file, so it refuses.
+test_deny_a_redirect_into_an_unassigned_variable if {
+	denied(bash_event("sed 's/a/b/' /tmp/x > $W/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("echo 'pub fn x() {}' >>$W/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("sed 's/a/b/' /tmp/x 1>$W/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_the_unresolved_refusal_says_what_it_could_not_follow if {
+	reason := reason_of(bash_event("sed 's/a/b/' /tmp/x > $W/lib.rs", UNPROVEN_NOTHING))
+	contains(reason, "Unresolved destination: $W/lib.rs")
+	contains(reason, "Spell the destination as a literal path")
+}
+
+test_deny_an_assignment_from_a_substitution if {
+	denied(bash_event(
+		`W=$(git rev-parse --show-toplevel)/crates/er-overlay-theme/src; sed 's/a/b/' /tmp/x > "$W/lib.rs"`,
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_deny_every_writer_aimed_through_a_variable if {
+	denied(bash_event(`sed -i 's/a/b/' "${W}/lib.rs"`, UNPROVEN_NOTHING))
+	denied(bash_event("cat /tmp/x | tee $W/lib.rs >/dev/null", UNPROVEN_NOTHING))
+	denied(bash_event("cp -f /tmp/x.rs $W/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event(`mv /tmp/x.rs "$W/lib.rs"`, UNPROVEN_NOTHING))
+	denied(bash_event("install -m644 /tmp/x.rs $W/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("perl -pi -e 's/a/b/' $W/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("git checkout -- $W/lib.rs", UNPROVEN_NOTHING))
+}
+
+# The whole path in the variable: no `.rs` in the written word, so the command naming
+# `crates` elsewhere is what makes it a refusal.
+test_deny_a_variable_holding_the_whole_path if {
+	denied(bash_event("F=$(ls crates/er-x/src/*.rs | head -1); sed -i 's/a/b/' $F", UNPROVEN_NOTHING))
+	denied(bash_event("for f in crates/er-x/src/lib.rs crates/er-x/src/config.rs; do sed -i 's/a/b/' $f; done", UNPROVEN_NOTHING))
+}
+
+test_deny_a_backtick_destination if {
+	denied(bash_event("sed -i 's/a/b/' `git ls-files crates/er-overlay-theme | head -1`", UNPROVEN_NOTHING))
+}
+
+# The same writes inside a command that carries a substitution, which the shared
+# decomposition reads differently.
+test_deny_an_indirect_write_beside_a_substitution if {
+	denied(bash_event("x=$(date); sed -i 's/a/b/' $W/lib.rs", UNPROVEN_NOTHING))
+}
+
+# A directory the command moves into first.
+test_deny_a_relative_write_after_a_cd_into_a_crate if {
+	denied(bash_event("cd crates/er-overlay-theme/src && sed -i 's/a/b/' lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event(concat("", ["cd ", THEME_SRC, " && cat > lib.rs <<'EOF'\npub fn x() {}\nEOF"]), UNPROVEN_NOTHING))
+	denied(bash_event("(cd crates/er-overlay-theme/src && sed -i 's/a/b/' lib.rs)", UNPROVEN_NOTHING))
+	denied(bash_event("pushd crates/er-overlay-theme && sed -i 's/a/b/' src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_a_relative_write_after_a_cd_the_guard_cannot_follow if {
+	denied(bash_event("cd $W && sed -i 's/a/b/' lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("cd - && sed -i 's/a/b/' lib.rs", UNPROVEN_NOTHING))
+}
+
+# The session's working directory persists between Bash calls, so a `cd` in an earlier call
+# puts every relative path inside the crate.
+test_deny_a_relative_write_from_a_working_directory_inside_a_crate if {
+	denied(bash_event_in("sed -i 's/a/b/' lib.rs", UNPROVEN_NOTHING, THEME_SRC))
+}
+
+test_deny_git_dash_c_spellings if {
+	denied(bash_event("git -C crates/er-overlay-theme checkout -- src/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event(
+		"git -C /home/banon/projects/er-mods-rs checkout -- crates/er-overlay-theme/src/lib.rs",
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_deny_a_copy_into_a_crate_directory if {
+	denied(bash_event("cp /tmp/lib.rs crates/er-overlay-theme/src/", UNPROVEN_NOTHING))
+	denied(bash_event("cp -t crates/er-overlay-theme/src /tmp/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("install -m 644 /tmp/lib.rs crates/er-overlay-theme/src", UNPROVEN_NOTHING))
+}
+
+# A move removes its source.
+test_deny_moving_a_crate_source_away if {
+	denied(bash_event("mv crates/er-overlay-theme/src/lib.rs /tmp/", UNPROVEN_NOTHING))
+}
+
+test_deny_paths_fed_through_xargs_or_find if {
+	denied(bash_event("find crates -name '*.rs' | xargs sed -i 's/a/b/'", UNPROVEN_NOTHING))
+	denied(bash_event("git ls-files crates | xargs -I {} sed -i 's/a/b/' {}", UNPROVEN_NOTHING))
+	denied(bash_event("find crates -name '*.rs' -exec sed -i 's/a/b/' {} +", UNPROVEN_NOTHING))
+	denied(bash_event("find crates -name '*.rs.orig' -delete", UNPROVEN_NOTHING))
+}
+
+# Two literal spellings that slipped before for reasons of their own: a closing quote on the
+# path, and the `-pi` cluster perl is usually written with.
+test_deny_a_quoted_literal_crate_path if {
+	denied(bash_event(`sed -i 's/a/b/' "crates/er-x/src/lib.rs"`, UNPROVEN_NOTHING))
+}
+
+test_deny_perl_pi if {
+	denied(bash_event("perl -pi -e 's/a/b/' crates/er-x/src/lib.rs", UNPROVEN_NOTHING))
+	denied(bash_event("perl -i.bak -pe 's/a/b/' crates/er-x/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+# Telemetry licenses one crate; a destination nobody can locate is not in it.
+test_deny_an_unresolved_write_on_a_telemetry_verdict if {
+	denied(bash_event("sed 's/a/b/' /tmp/x > $W/lib.rs", PROVEN_TELEMETRY))
+}
+
+test_allow_an_unresolved_write_on_a_frida_verdict if {
+	not denied(bash_event("sed 's/a/b/' /tmp/x > $W/lib.rs", PROVEN))
+}
+
+# --- and the computed destinations that must stay allowed -----------------------
+
+test_allow_cargo_output_to_a_scratchpad_log if {
+	not denied(bash_event(
+		"cargo build -p er-quickload > /tmp/claude-1000/-home-banon-projects-er-mods-rs/x/scratchpad/build.log 2>&1",
+		UNPROVEN_NOTHING,
+	))
+	not denied(bash_event("cargo build -p er-quickload > $S/build.log 2>&1", UNPROVEN_NOTHING))
+	not denied(bash_event(
+		"S=/tmp/claude-1000/x/scratchpad; cargo check --manifest-path crates/er-quickload/Cargo.toml > $S/check.log 2>&1; echo exit=$?",
+		UNPROVEN_NOTHING,
+	))
+	not denied(bash_event(
+		`cargo test --manifest-path crates/er-x/Cargo.toml 2>&1 | tee "$SCRATCH/test.log"`,
+		UNPROVEN_NOTHING,
+	))
+}
+
+# An extensionless log is followed to its literal assignment.
+test_allow_a_variable_assigned_a_literal_outside_crates if {
+	not denied(bash_event(
+		`LOG=/tmp/x/check; cargo test --manifest-path crates/er-x/Cargo.toml > "$LOG" 2>&1`,
+		UNPROVEN_NOTHING,
+	))
+	not denied(bash_event("S=/tmp/scratch; cp crates/er-x/src/lib.rs $S/before.rs", UNPROVEN_NOTHING))
+	not denied(bash_event("cat crates/er-x/src/lib.rs > $HOME/notes.rs", UNPROVEN_NOTHING))
+}
+
+# A computed destination in a command that names no crate and no Rust file.
+test_allow_an_unresolved_log_in_a_command_naming_no_rust if {
+	not denied(bash_event(`cargo test -p er-x 2>&1 | tee "$LOG"`, UNPROVEN_NOTHING))
+	not denied(bash_event("find target -name '*.d' -delete", UNPROVEN_NOTHING))
+}
+
+# A `$` in an editor's script is a regex anchor or a value, not a destination.
+test_allow_an_editor_script_with_a_dollar if {
+	not denied(bash_event(`sed -i "s/$OLD/$NEW/" scripts/x.py; ls crates/`, UNPROVEN_NOTHING))
+	not denied(bash_event("sed -i 's/foo$/bar/' scripts/x.py; ls crates/", UNPROVEN_NOTHING))
+	not denied(bash_event(`sed -n "s/$A/x/p" crates/er-x/src/lib.rs`, UNPROVEN_NOTHING))
+}
+
+# Prose quoting the very shape this refuses.
+test_allow_a_commit_message_quoting_the_shape if {
+	not denied(bash_event(
+		`git commit -m "fix(cupcake): the subagent ran sed ... > $W/lib.rs and tee $W/lib.rs into crates/"`,
+		UNPROVEN_NOTHING,
+	))
+	not denied(bash_event(
+		`bd remember --key k 'a write such as cp /tmp/x.rs $W/lib.rs slipped past the crates/ gate'`,
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_allow_reads_that_carry_indirection if {
+	not denied(bash_event("for f in $(git ls-files 'crates/**/*.rs'); do wc -l $f; done > $S/counts.txt", UNPROVEN_NOTHING))
+	not denied(bash_event(`F=$(git diff --name-only | grep -E '\.(go|rs)$'); echo $F`, UNPROVEN_NOTHING))
+	not denied(bash_event("x=$(date); cp crates/er-x/src/lib.rs /tmp/y.rs", UNPROVEN_NOTHING))
+	not denied(bash_event("git -C /home/banon/projects/er-mods-rs diff -- crates/er-x/src/lib.rs", UNPROVEN_NOTHING))
+	not denied(bash_event("perl -MList::Util=min -ne 'print' crates/er-x/src/lib.rs", UNPROVEN_NOTHING))
+	not denied(bash_event("cp crates/er-x/src/lib.rs /tmp/backup/", UNPROVEN_NOTHING))
+}
+
+test_allow_a_relative_write_after_a_cd_outside_crates if {
+	not denied(bash_event("cd /tmp/x && cat > a.rs <<'EOF'\nfn main() {}\nEOF", UNPROVEN_NOTHING))
+	not denied(bash_event("cd crates/er-x && cargo build > build.log 2>&1", UNPROVEN_NOTHING))
+	not denied(bash_event_in("sed -i 's/a/b/' build-support/x.rs", UNPROVEN_NOTHING, "/home/banon/projects/er-mods-rs"))
+}
+
 # --- resolving a conflict of a stopped rebase/merge ---------------------------
 #
 # Measured 2026-10-07: a `git rebase --onto` stopped on a conflict in

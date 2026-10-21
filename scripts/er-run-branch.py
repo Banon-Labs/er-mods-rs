@@ -176,9 +176,81 @@ def run_script(script: str, *args: str) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def companion_artifacts(packages: list[str]) -> list[tuple[str, str]]:
+    """`(package, file)` of every executable a shell in `packages` spawns beside it.
+
+    `scripts/me3-dll-list.py --companions` names them: today `er-shader-compiler.exe`, which
+    er_cel_shade.dll starts as the shader editor's compiler. A launch verifies their provenance as
+    it verifies the DLLs', because a helper left from an earlier build fails the DLL's build-id
+    handshake and leaves the editor with no compiler -- evidence for code that is not the code
+    under test, the same as a stale DLL.
+    """
+    code, out, err = run_script("me3-dll-list.py", "--companions")
+    if code != 0:
+        raise RuntimeError(f"me3-dll-list.py --companions failed: {err.strip() or out.strip()}")
+    wanted = set(packages)
+    found: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        shell, _, rest = line.strip().partition(":")
+        package, _, artifact = rest.partition(":")
+        if shell in wanted and package and artifact and (package, artifact) not in found:
+            found.append((package, artifact))
+    return found
+
+
 # A booting Elden Ring took 17 X11 client slots before the server cut it off mid-boot, so it
 # wants more than that. This is the refusal threshold, not the game's measured appetite.
 X11_CLIENTS_REQUIRED = 40
+
+
+# Where a fetched file is also looked for besides the shell's own directory, relative to the game
+# directory: er_cel_shade.dll looks for dxcompiler.dll beside itself and then in
+# `<Game>/er-shader-editor/compiler/` (`search_directories` in
+# crates/er-cel-shade/src/editor/compiler.rs).
+FETCHED_ALSO_AT = {"dxcompiler.dll": Path("er-shader-editor") / "compiler"}
+
+
+def fetched_files(packages: list[str]) -> list[tuple[str, str, str]]:
+    """`(shell, file, fetch script)` of every file a shell in `packages` needs beside it that
+    nothing here builds: `scripts/me3-dll-list.py --fetched`, today er_cel_shade.dll's
+    dxcompiler.dll, which `er-build-dlls.sh` fetches after building the shell."""
+    code, out, err = run_script("me3-dll-list.py", "--fetched")
+    if code != 0:
+        raise RuntimeError(f"me3-dll-list.py --fetched failed: {err.strip() or out.strip()}")
+    wanted = set(packages)
+    found: list[tuple[str, str, str]] = []
+    for line in out.splitlines():
+        shell, _, rest = line.strip().partition(":")
+        artifact, _, script = rest.partition(":")
+        if shell in wanted and artifact and script:
+            found.append((shell, artifact, script))
+    return found
+
+
+def missing_fetched(packages: list[str]) -> list[str]:
+    """Why each fetched file of `packages` is not where its shell will look, one line each: the
+    fetch script's own `--check --require` verdict beside the DLL, where `er-build-dlls.sh` puts
+    it, and then at its `FETCHED_ALSO_AT` place in the game directory. Empty when every one is
+    the pinned file in one of them."""
+    problems: list[str] = []
+    for shell, artifact, script in fetched_files(packages):
+        places = [target_dir()]
+        also = FETCHED_ALSO_AT.get(artifact)
+        if also is not None:
+            places.append(game_dir() / also)
+        verdicts = []
+        for place in places:
+            code, out, err = run_script(script, "--check", "--require", "--dest", str(place))
+            if code == 0:
+                break
+            verdicts.append((err or out).strip())
+        else:
+            problems.append(
+                f"{shell} has no {artifact} it can load ({len(places)} places looked at):\n"
+                + "\n".join(verdicts)
+                + f"\n  Fetch it: python3 {SCRIPTS / script} --dest {target_dir()}"
+            )
+    return problems
 
 
 def steam_running() -> bool:
@@ -687,12 +759,33 @@ def preflight(args) -> tuple[dict, dict | None]:
         )
         if code != 0:
             stale.append((err or out).strip())
+    # The executables those DLLs spawn, which `er-build-dlls.sh` builds and attests with them.
+    for package, artifact in companion_artifacts(closure["packages"]):
+        code, out, err = run_script(
+            "er-dll-provenance.py",
+            "verify",
+            "--package",
+            package,
+            "--artifact",
+            str(target_dir() / artifact),
+        )
+        if code != 0:
+            stale.append((err or out).strip())
     if stale:
         raise RuntimeError(
             "REFUSING TO LAUNCH -- staged DLLs do not match this source tree:\n"
             + "\n".join(stale)
             + "\n\nRebuild them:  scripts/er-build-dlls.sh "
             + " ".join(closure["packages"])
+        )
+    # The files those DLLs need that nothing here builds, which `er-build-dlls.sh` fetches with
+    # them. Without one the DLL loads and cannot do its job -- the shader editor says "no
+    # compiler" and compiles nothing -- so the launch is refused instead.
+    missing = missing_fetched(closure["packages"])
+    if missing:
+        raise RuntimeError(
+            "REFUSING TO LAUNCH -- a DLL in this profile is missing a file it needs:\n"
+            + "\n".join(missing)
         )
 
     return closure, resolve_configured_save()
@@ -1127,6 +1220,36 @@ def selftest() -> int:
         "the sidecar path is parsed and normalises to the staged path",
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
+
+    # A shell's companion executable is verified with it: er_cel_shade.dll's compiler helper.
+    check(
+        companion_artifacts(["er-cel-shade"]) == [("er-shader-compiler", "er-shader-compiler.exe")],
+        "the shader editor's compiler helper is verified with er_cel_shade.dll",
+    )
+    check(
+        companion_artifacts(["er-quickload", "er-crash-logging"]) == [],
+        "a shell with no companion adds nothing to verify",
+    )
+
+    # ...and its fetched compiler is required with it, where the DLL itself looks for it.
+    check(
+        fetched_files(["er-cel-shade"]) == [("er-cel-shade", "dxcompiler.dll", "fetch-dxcompiler.py")],
+        "er_cel_shade.dll's dxcompiler.dll is required with it",
+    )
+    check(
+        fetched_files(["er-quickload", "er-crash-logging"]) == [],
+        "a shell with no fetched file requires nothing",
+    )
+    check(
+        all((SCRIPTS / script).is_file() for _, _, script in fetched_files(["er-cel-shade"])),
+        "the fetch script a shell names exists",
+    )
+    check(
+        FETCHED_ALSO_AT["dxcompiler.dll"].as_posix() == "er-shader-editor/compiler"
+        and '"compiler"'
+        in (REPO_ROOT / "crates/er-cel-shade/src/editor/compiler.rs").read_text(encoding="utf-8"),
+        "the game-directory place matches where er_cel_shade.dll looks (COMPILER_DIRECTORY)",
+    )
 
     # The silent no-op this refusal closes, measured on br-20260911-163835-032f: the mode was
     # accepted, the marker files were written, and the harness was excluded by the closure, so the

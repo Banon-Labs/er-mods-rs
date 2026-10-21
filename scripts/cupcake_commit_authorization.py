@@ -160,24 +160,47 @@ def spent_by(message_uuid: str) -> str | None:
     return None
 
 
-def spend(message_uuid: str, tool_use_id: str) -> bool:
-    """Record the spend; False when this message already paid for a different tool call."""
+def spend(message_uuid: str, tool_use_id: str,
+          ran=lambda _tool_use_id: True) -> str | None:
+    """Record the spend; None when this commit may go, else the reason it may not.
+
+    The same rule as `cupcake_push_authorization.spend`, for the same reason: the spend lands at
+    PreToolUse, so a commit that another policy then denies used to burn the user's `authorize
+    commit` (2026-10-20, the gap the push fix left open). The last record for a message names the
+    call holding it, and a different call takes it over only when `ran(holder)` is False -- Claude
+    Code recorded the holder as refused before it ran. A holder that ran, even into a failing git
+    hook, or whose outcome is not known yet, keeps it.
+    """
     path = state_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a+", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.seek(0)
+        holders: list[str] = []
         for line in fh:
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
             if isinstance(rec, dict) and rec.get("message_uuid") == message_uuid:
-                return rec.get("tool_use_id") == tool_use_id
+                holders.append(rec.get("tool_use_id"))
+        record = {"message_uuid": message_uuid, "tool_use_id": tool_use_id, "at": time.time()}
+        if holders:
+            holder = holders[-1]
+            if holder == tool_use_id:
+                return None  # the same call evaluated again, by a second hook
+            if tool_use_id in holders:
+                return "that `authorize commit` has moved on from this tool call to a later one"
+            outcome = ran(holder) if isinstance(holder, str) else True
+            if outcome is None:
+                return ("that `authorize commit` is held by another commit whose outcome is not "
+                        "in the transcript yet")
+            if outcome:
+                return "that `authorize commit` was already spent on another commit"
+            record["replaces"] = holder
         fh.seek(0, os.SEEK_END)
-        fh.write(json.dumps({"message_uuid": message_uuid, "tool_use_id": tool_use_id,
-                             "at": time.time()}) + "\n")
-        return True
+        fh.write(json.dumps(record) + "\n")
+        return None
 
 
 # --- the decision ------------------------------------------------------------------------------
@@ -211,9 +234,10 @@ def decide(event: dict, started: float) -> tuple[str, str, str] | None:
         return commit_denied, "DENIED", "the session transcript is not readable"
     if not isinstance(tool_use_id, str) or not tool_use_id:
         return commit_denied, "DENIED", "the event names no tool call"
+    chain: list[dict] = []
     try:
-        message_uuid, text = shared.last_prompt(path, tool_use_id,
-                                                started + shared.LOCATE_DEADLINE_SECONDS)
+        message_uuid, text, chain = shared.prompt_and_chain(
+            path, tool_use_id, started + shared.LOCATE_DEADLINE_SECONDS)
     except shared.Refused as r:
         # A lint changes nothing, so it does not need the chain walk a commit needs: when the
         # call's own line has not landed yet (measured 2026-10-17: five authorized lint runs in a
@@ -238,8 +262,10 @@ def decide(event: dict, started: float) -> tuple[str, str, str] | None:
         parse_commit(command.strip())
     except Refused as r:
         return "DENIED", lint, str(r)
-    if not spend(message_uuid, tool_use_id):
-        return "DENIED", "DENIED", "that `authorize commit` was already spent on another commit"
+    refusal = spend(message_uuid, tool_use_id,
+                    ran=lambda holder: shared.call_outcome(chain, holder))
+    if refusal is not None:
+        return "DENIED", "DENIED", refusal
     return "AUTHORIZED", lint, message_uuid
 
 

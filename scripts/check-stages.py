@@ -258,6 +258,11 @@ STAGES: tuple[Stage, ...] = (
             ".auto/*",
             "crates/**/*",
             "data/*",
+            # `er-shader-ab-proof.py --selftest` holds the Frida agent it loads into the game,
+            # `scripts/frida/shader-editor-stats.js`, to the DLL's `StatsV1` layout and runs it
+            # under node. It names the file through a path join the literal scan cannot read, so
+            # a push that edits only the agent has to select this stage through this line.
+            "scripts/frida/*",
             # `scripts/er_run_lib.py` carries the `WorldChrMan` global its world-read witness walks,
             # and reads this row back to prove the 1.16.2 to 1.17.0 hop that produced it. A push
             # that regenerates the map moves the provenance of a constant this stage gates on, so

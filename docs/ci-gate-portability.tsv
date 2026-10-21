@@ -312,12 +312,22 @@ portable	-	test-ask-without-receiver-signal.py	source/AST/text analysis only	pol
 portable	-	test-push-authorization-signal.py	fixture transcripts and a throwaway git repo; the cupcake end-to-end case skips when cupcake is absent	policy
 portable	-	test-commit-authorization-signal.py	fixture transcripts in a temp dir; the cupcake end-to-end cases skip when cupcake is absent	policy
 portable	-	test-unexplained-running-tasks-signal.py	source/AST/text analysis only	policy
+portable	-	test-untailed-long-run-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-inline-user-command-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-authorize-run-stamp-signal.py	a throwaway git repo with fixture run-root and game-dir logs, plus this checkout's own HEAD and worktree list; no game, no network	policy
 portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools
+portable	-	check-shader-editor-probe.py --selftest	synthetic telemetry documents and the er-cel-shade sources only	runtime-tools
+portable	-	er-shader-ab-proof.py --selftest	synthetic images, the Frida agent and the er-cel-shade sources; the node and ImageMagick cases print that they were skipped where those tools are absent	runtime-tools
+portable	-	check-shader-panel-look.py --selftest	synthetic telemetry, pictures built in Python, the er-cel-shade sources and vendored fonts; the rendered-panel half prints that it was skipped where Pillow is not importable, and its ImageMagick pipelines where magick is absent	runtime-tools
+portable	-	build-cel-shaders.py --selftest	synthetic containers built and signed in Python; needs neither dxc nor the dump	product
+partial	dxc,vkd3d-dump	build-cel-shaders.py --check	still proves every committed blob is a signed shader model 6.0 pixel shader with no root signature; prints that the staleness comparison (no dxc) and the linkage against the game's originals (no dump) were skipped	product
+portable	-	fetch-dxcompiler.py --selftest	synthetic zips with their own pins, written under a temp dir; no network; also asserts the checkout tracks no compiler file and ignores a fetched one	product
+portable	-	fetch-dxcompiler.py --check	git ls-files and git check-ignore only; with nothing fetched it says so and the tracking and ignore assertions still run	product
+portable	-	check-dll-imports.py --selftest	synthetic PE files built in memory by the script; needs no DLL and no toolchain	product
+partial	build-artifact	check-dll-imports.py	still runs the synthetic PE cases; prints that the import table of er_cel_shade.dll was not read when none is built	cargo-build
 blocked	game-install	er-duel-rules-gen.py --selftest	one line: SKIP (no game data). The ban table is read out of the installed regulation and item text, which a runner does not have	product
 blocked	game-install	er-duel-rules-gen.py --check	one line: SKIP (no game data). Whether tables.rs still matches the game is a question about the installed game	product
 portable	-	er-duel-rules-gen.py --test-agent	the Frida agent and the Cheat Engine port carry their own tables; node and lua run the rule tests and the rules-file editor's selftest with no game data (the lua half prints SKIP without a lua 5.3+)	product

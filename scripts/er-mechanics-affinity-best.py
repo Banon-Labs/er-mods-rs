@@ -73,7 +73,7 @@ def main() -> int:
         ar = " ".join(f"{k[:4]} {v}" for k, v in r["ar"].items())
         stt = " ".join(f"{k} {v}" for k, v in r["status"].items())
         print(f"{r['score']:6.1f}  {r['name'][:34]:<34} {r['lean'].upper():<4} {r['class']:<12} "
-              + " ".join(f"{st[k]:>3}" for k in ("vig", "mnd", "vit", *DAMAGE_STATS)) + f"  {ar} | {stt}")
+              + " ".join(f"{st[k]:>3}" for k in ("vig", "mnd", "end", *DAMAGE_STATS)) + f"  {ar} | {stt}")
     for r in rows:
         if "error" in r:
             print(f"skipped {r['name']}: {r['error']}", file=sys.stderr)

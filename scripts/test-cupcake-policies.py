@@ -813,6 +813,33 @@ def main() -> int:
             False,
             "A build reports success or failure ONCE",
         ),
+        # 2026-10-15: a grep filtering git's path list inside a substitution, which a gate then
+        # reads as arguments, is not a grep over the gate's output. Live because the substitution
+        # token and the quote reading beside it are regexes the wasm runtime runs, not `opa test`.
+        # The measured command named `crates/er-cel-shade`; the fixture names a crate that does not
+        # exist, because check-stages.py reads a real crate path in this file as an input of the
+        # policy stage.
+        PolicyCase(
+            "allow-gate-reading-a-git-path-list-filtered-in-a-substitution",
+            "files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) "
+            "| sort -u | grep -E '^(crates/er-shade-fixture|crates/er-shader-compiler|scripts)/' "
+            "| while read f; do [ -f \"$f\" ] && echo \"$f\"; done ); echo \"$files\" | wc -l; "
+            "python3 scripts/check-comment-caps.py $files; echo \"exit=$?\"",
+            True,
+        ),
+        PolicyCase(
+            "allow-gate-taking-a-filtered-git-path-list-as-arguments",
+            "python3 scripts/check-comment-caps.py "
+            "$(git diff --name-only 72ef6a9b | grep -E '^(crates/er-shade-fixture|scripts)/'); "
+            "echo \"exit=$?\"",
+            True,
+        ),
+        PolicyCase(
+            "deny-build-in-a-substitution-whose-output-is-grepped",
+            "echo $(cargo build 2>&1) | grep error",
+            False,
+            "A build reports success or failure ONCE",
+        ),
         PolicyCase(
             "allow-local-shell-vars-before-commands-with-coarse-ast",
             "run_id=$(date +%Y%m%d-%H%M%S)\n"
@@ -1851,6 +1878,40 @@ def main() -> int:
             "cargo tree -i serde | grep serde",
             True,
         ),
+        # 2026-10-16: a quoted-tag heredoc body is literal, so a message quoting a build piped
+        # into grep inside a substitution builds nothing. The engine delivers the body with its
+        # newlines turned into spaces, which is the shape these exercise; the `; ` after the
+        # terminator is the one scripts/cupcake-hook.sh writes.
+        PolicyCase(
+            "allow-heredoc-message-quoting-a-substitution-build",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(cargo build 2>&1) | grep error` in docs\nEOF",
+            True,
+        ),
+        PolicyCase(
+            "deny-build-grep-after-a-substitution-heredoc-body",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF; "
+            "cargo build -p er-quickload 2>&1 | grep error",
+            False,
+            "as its EXIT CODE",
+        ),
+        PolicyCase(
+            "deny-push-after-a-backtick-heredoc-body",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF; git push origin main",
+            False,
+            "The agent does not push",
+        ),
+        PolicyCase(
+            "deny-push-after-a-backtick-heredoc-body-without-the-shim",
+            "cat > target/msg.txt <<'EOF'\nfix: quote `echo $(date)` in docs\nEOF\ngit push origin main",
+            False,
+            "The agent does not push",
+        ),
+        PolicyCase(
+            "deny-push-on-a-heredoc-opener-line",
+            "cat > target/msg.txt <<'EOF' ; git push origin main\nfix: quote `x` in docs\nEOF",
+            False,
+            "The agent does not push",
+        ),
         PolicyCase(
             "deny-pgrep-then-proton-start-protected-launch",
             "pgrep -x start_protected_game.exe >/dev/null; proton run /tmp/start_protected_game.exe",
@@ -2515,6 +2576,27 @@ def main() -> int:
             'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
             True,
         ),
+        # `cap_parallel_fanout`, live for the same reason: its reading of a quoted `bash -c`
+        # payload inside a `systemd-run` scope goes through the shared decomposition, which is
+        # where the wasm runtime and `opa test` have disagreed before. The first case is the
+        # fan-out measured 2026-10-15 before systemd-oomd killed the kitty terminal scope; the
+        # second is the capped form the deny message offers; the third names the first in prose.
+        PolicyCase(
+            "fanout-guard-denies-the-measured-xargs-run",
+            "ls work/*/orig.ll | xargs -n 200 -P 8 python3 $P/pos_slice.py",
+            False,
+            "fan-out of more than 4 parallel workers",
+        ),
+        PolicyCase(
+            "fanout-guard-allows-a-memory-capped-scope",
+            'systemd-run --user --scope -p MemoryMax=8G -- bash -c "ls work/*/orig.ll | xargs -n 200 -P 12 python3 x.py"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-naming-the-fanout",
+            'git commit -m "guard: ls work/*/orig.ll | xargs -P 8 python3 pos_slice.py took the terminal down"',
+            True,
+        ),
     ])
 
     # --- payload versus command (bd er-effects-rs-ak3q, bd er-effects-rs-if5l) -------------
@@ -2616,6 +2698,21 @@ def main() -> int:
             "python3 scripts/er-teardown.py --help; python3 scripts/er-teardown.py; cargo build",
             False,
             "teardown that does not relaunch",
+        ),
+        # The command refused on 2026-10-15. The deny came from `.worktrees/er-sky/.cupcake`,
+        # which the global hook evaluates when the session's shell sits in that worktree (it
+        # passes no `--policy-dir`), and that branch lacks the name test for `NAME=/path`. This
+        # tree's rulebook allows it; run through the compiled engine because that test is
+        # `indexof`/`substring`/`split` arithmetic the WASM build has to agree with.
+        PolicyCase(
+            "allow-teardown-then-scratchpad-profile-user-launcher",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1;"
+            " ME3_PROFILE=/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
+            "e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun.me3"
+            " /home/banon/Elden/launch.sh -o"
+            " > /tmp/claude-1000/-home-banon-projects-er-mods-rs/"
+            "e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun-launch.log 2>&1",
+            True,
         ),
         PolicyCase(
             "deny-inline-python-file-write",

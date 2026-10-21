@@ -183,6 +183,28 @@ def provenance_path(artifact: Path) -> Path:
     return artifact.with_name(artifact.name + ".provenance.json")
 
 
+def pe_timestamp(artifact: Path) -> int | None:
+    """The `COFF TimeDateStamp`: the link identity a loaded shell prints on its `build` line.
+
+    Recorded so that a run's log can be tied to this record by the stamp alone. Without it the
+    tie has to go through the file on disk, and a relink after the run -- a bare `cargo` build,
+    which writes no record -- breaks it even when the record still describes the binary that ran.
+    Measured 2026-10-15 on `er_render_scale.dll`: run at `0x6ad13150`, relinked nine minutes later
+    to `0x6ad13385`, record untouched.
+    """
+    try:
+        with artifact.open("rb") as handle:
+            head = handle.read(0x400)
+    except OSError:
+        return None
+    if len(head) < 0x40 or head[:2] != b"MZ":
+        return None
+    offset = int.from_bytes(head[0x3C:0x40], "little")
+    if offset + 12 > len(head) or head[offset : offset + 4] != b"PE\0\0":
+        return None
+    return int.from_bytes(head[offset + 8 : offset + 12], "little")
+
+
 def build_record(package: str, artifact: Path) -> dict:
     if not artifact.is_file():
         raise ProvenanceError(f"artifact does not exist: {artifact}")
@@ -205,6 +227,7 @@ def build_record(package: str, artifact: Path) -> dict:
         "external_deps": external,
         "fingerprint": fingerprint_of(artifact),
         "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "pe_timestamp": pe_timestamp(artifact),
         "git_sha": git("rev-parse", "HEAD").strip(),
         "git_dirty": bool(git("status", "--porcelain").strip()),
         # Which checkout built this. `scripts/er-stale-run-sentinel.sh` reads it to tell a DLL
@@ -370,6 +393,11 @@ def selftest() -> int:
 
             record_path = provenance_path(copy)
             record = json.loads(record_path.read_text(encoding="utf-8"))
+            check(
+                isinstance(record.get("pe_timestamp"), int)
+                and record["pe_timestamp"] == pe_timestamp(copy),
+                "the record carries the artifact's pe stamp, which ties it to a run's log",
+            )
 
             record_path.write_text(
                 json.dumps({**record, "source_sha": "0" * 64}), encoding="utf-8"

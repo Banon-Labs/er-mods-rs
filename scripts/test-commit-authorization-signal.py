@@ -151,6 +151,39 @@ def main() -> int:
         c.use("toolu_s6", COMMIT)
         expect("a fresh `authorize commit` re-arms", sb.run(c, "toolu_s6", COMMIT), "AUTHORIZED", None)
 
+        # --- a commit another policy refused does not spend it (2026-10-20) ----------------------
+        c = Chain()
+        c.human(AUTH)
+        c.use("toolu_d1", COMMIT)
+        denied_first = sb.run(c, "toolu_d1", COMMIT)
+        c.refused("toolu_d1")
+        c.use("toolu_d2", COMMIT)
+        retry = sb.run(c, "toolu_d2", COMMIT)
+        c.result("toolu_d2", "committed")
+        c.use("toolu_d3", COMMIT)
+        after_retry = sb.run(c, "toolu_d3", COMMIT)
+        expect("the commit a later policy will refuse is authorized here", denied_first, "AUTHORIZED", None)
+        expect("a retry after a refused commit takes the authorization over", retry, "AUTHORIZED", None)
+        expect("a commit after the retry ran is denied", after_retry, "DENIED", "DENIED", "already spent")
+
+        c = Chain()
+        c.human(AUTH)
+        c.use("toolu_f1", COMMIT)
+        sb.run(c, "toolu_f1", COMMIT)
+        c.failed("toolu_f1")
+        c.use("toolu_f2", COMMIT)
+        expect("a commit that ran into a failing git hook keeps it spent",
+               sb.run(c, "toolu_f2", COMMIT), "DENIED", "DENIED", "already spent")
+
+        c = Chain()
+        c.human(AUTH)
+        c.use("toolu_c1", COMMIT)
+        sb.run(c, "toolu_c1", COMMIT)
+        c.refused("toolu_c1", kind="cancelled")
+        c.use("toolu_c2", COMMIT)
+        expect("an interrupted commit keeps it spent",
+               sb.run(c, "toolu_c2", COMMIT), "DENIED", "DENIED", "already spent")
+
         # --- the message is not exactly the phrase ----------------------------------------------
         for i, reply in enumerate([f"{AUTH} please", f"ok {AUTH}", "Authorize commit", "authorize commits",
                                    "authorize", "authorize 0123abcd", f"{AUTH}\nand push", "commit"]):

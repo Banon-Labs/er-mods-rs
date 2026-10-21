@@ -49,8 +49,30 @@ contains. A fifth requirement keeps the accept honest about scope -- every crate
 changes must be inside the closure of some accepted dirty log, so the evidence covers the code
 being pushed rather than merely coexisting with it.
 
+When a log naming another commit is still evidence
+--------------------------------------------------
+The repo's rule is to commit after a run shows a change is worth keeping. That run's shells are
+built from the parent plus the uncommitted change, so every one of them says
+`build git=<parent>+dirty`, and the commit made afterwards is never the sha on any log. Measured
+2026-10-15: a push of `dfc0a9f9` was refused because the newest log said `72ef6a9b+dirty`,
+although `er-dll-provenance.py verify` reported the shells that ran fresh at `dfc0a9f9`. Read by
+sha alone, the rule demanded a second launch for every commit.
+
+So a log is also accepted when the binary that wrote it was built from exactly the source the
+pushed commit holds:
+
+  1. an artifact whose `PE` timestamp equals the log's is found in the pushed checkout's
+     `target/` (or this checkout's), so it is the binary that ran;
+  2. the provenance record beside it describes that file -- its `artifact_sha256` is the file's;
+  3. the record's `source_sha` equals the same hash computed over the files the commit itself
+     holds for the record's closure (`git ls-tree` and `git cat-file`, not the working tree).
+
+A build that compiled anything the commit does not contain -- an untracked file, an edit made
+after the commit or left out of it -- hashes differently and is refused. The scope requirement
+above applies here too.
+
 Usage:
-    python3 scripts/er-runtime-evidence.py --head <sha> [--exhaustive] < changed-paths
+    python3 scripts/er-runtime-evidence.py --head <sha> [--repo <checkout>] [--exhaustive] < changed-paths
     python3 scripts/er-runtime-evidence.py --selftest
 
 Reads the pushed diff's paths on stdin, one per line; without them no dirty log can be
@@ -69,7 +91,9 @@ which callers treat as "allow" -- a check that cannot see must not invent a verd
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -78,6 +102,11 @@ import subprocess
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# The checkout being pushed, when it is not this one. `--repo` sets it; the signals pass the
+# working tree `scripts/cupcake_push_target_repo.py` resolved, because a worktree builds into its
+# own `target/` and that is where the binary that ran is.
+PUSH_REPO: list[pathlib.Path] = [REPO_ROOT]
 
 BUILD_LINE = re.compile(
     r"^build git=(?P<sha>[0-9a-f]+)(?P<dirty>\+dirty)?"
@@ -403,6 +432,233 @@ def dirty_build_is_committed(entry: Entry) -> tuple[list[str] | None, str]:
 
 
 # ------------------------------------------------------------------------------------------
+# The provenance proof: a log naming another commit whose binary holds this commit's source
+# ------------------------------------------------------------------------------------------
+
+
+def git_in(repo: pathlib.Path, *args: str, stdin: bytes | None = None) -> bytes | None:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            input=stdin,
+            capture_output=True,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def artifact_candidates(module: str) -> list[pathlib.Path]:
+    """Where the binary that wrote a log may sit: the pushed checkout's build, then this one's."""
+    target = os.environ.get("ER_BUILD_TARGET", "x86_64-pc-windows-msvc")
+    found: list[pathlib.Path] = []
+    for root in (PUSH_REPO[0], REPO_ROOT):
+        candidate = root / "target" / target / "release" / module
+        if candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def eligible_source(path: str) -> bool:
+    """`er-dll-provenance.py`'s own filter, so the two hashes are over the same files."""
+    try:
+        provenance = load_script("er_dll_provenance", "er-dll-provenance.py")
+        return provenance.provenance_eligible_source(path)
+    except Exception:  # noqa: BLE001 -- without the filter the hashes cannot be compared
+        return False
+
+
+_TREE_HASHES: dict[tuple[str, tuple[str, ...]], str | None] = {}
+
+
+def tree_source_sha(commit: str, members: list[str]) -> str | None:
+    """`er-dll-provenance.py`'s `source_sha`, computed over the files `commit` holds.
+
+    That hash is taken from a working tree at build time: each file's repo-relative path, a NUL
+    and the sha256 of its bytes, in the order `sorted()` puts the file `Path`s in. This reads the
+    same files out of the commit instead, so equal hashes mean the build compiled exactly what
+    the commit contains. A file the build compiled that the commit lacks -- untracked, or edited
+    after -- makes them differ.
+    """
+    key = (commit, tuple(members))
+    if key in _TREE_HASHES:
+        return _TREE_HASHES[key]
+    answer = None
+    repo = PUSH_REPO[0]
+    listing = git_in(
+        repo, "ls-tree", "-r", "-z", "--full-tree", commit, "--", *[f"crates/{m}" for m in members]
+    )
+    if listing is not None:
+        blobs: dict[str, str] = {}
+        for record in listing.decode("utf-8", "surrogateescape").split("\0"):
+            if not record:
+                continue
+            meta, _, path = record.partition("\t")
+            fields = meta.split()
+            if len(fields) == 3 and fields[1] == "blob" and eligible_source(path):
+                blobs[path] = fields[2]
+        answer = hash_blobs(repo, blobs)
+    _TREE_HASHES[key] = answer
+    return answer
+
+
+def hash_blobs(repo: pathlib.Path, blobs: dict[str, str]) -> str | None:
+    """The provenance digest over `{path: blob id}`, reading every blob in one `git` process."""
+    ordered = sorted(REPO_ROOT / path for path in blobs)
+    names = [path.relative_to(REPO_ROOT).as_posix() for path in ordered]
+    request = "".join(f"{blobs[name]}\n" for name in names).encode()
+    out = git_in(repo, "cat-file", "--batch", stdin=request)
+    if out is None:
+        return None
+    digest = hashlib.sha256()
+    cursor = 0
+    for name in names:
+        header_end = out.find(b"\n", cursor)
+        if header_end < 0:
+            return None
+        header = out[cursor:header_end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            return None
+        size = int(header[2])
+        body = out[header_end + 1 : header_end + 1 + size]
+        cursor = header_end + 1 + size + 1
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(body).digest())
+    return digest.hexdigest()
+
+
+def built_from_head_source(
+    entry: Entry, head: str, wanted: set[str]
+) -> tuple[list[str] | None, str]:
+    """Prove the binary that wrote this log was built from exactly the source `head` holds.
+
+    Returns `(closure, "")` when it holds and `(None, reason)` when it does not. The cheap facts
+    come first -- this runs inside a signal on every Bash call -- and the two hashes last.
+    """
+    if not entry.module or entry.module.startswith("<") or entry.pe is None:
+        return None, "its log names no module or carries no pe stamp"
+
+    # The record that describes the binary that ran. One that carries the run's own pe stamp says
+    # so by itself, whatever has been linked over the file since. An older record carries no stamp,
+    # and is tied to the run through the file beside it instead, which must still carry the stamp
+    # and still be the file the record hashed.
+    artifact = None
+    record: dict | None = None
+    stamped = False
+    for candidate in artifact_candidates(entry.module):
+        found = read_record(candidate)
+        if found is not None and found.get("pe_timestamp") == entry.pe:
+            artifact, record, stamped = candidate, found, True
+            break
+        if (
+            artifact is None
+            and found is not None
+            and found.get("pe_timestamp") is None
+            and candidate.is_file()
+            and pe_timestamp(candidate) == entry.pe
+        ):
+            artifact, record = candidate, found
+    if artifact is None or record is None:
+        return None, f"no build of {entry.module} with a provenance record carries the pe stamp that run reported"
+    # The package is the record's own, not this checkout's shell list: a worktree being pushed can
+    # carry a shell this checkout has never heard of. Measured 2026-10-15 on `er_render_scale.dll`.
+    # The record still has to name a package the module belongs to and a closure that contains it.
+    package = record.get("package")
+    members = record.get("closure")
+    if (
+        not isinstance(package, str)
+        or not isinstance(members, list)
+        or package not in members
+        or record.get("artifact", entry.module) != entry.module
+        or not isinstance(record.get("source_sha"), str)
+    ):
+        return None, f"the provenance record beside {entry.module} does not describe it"
+    if wanted and not wanted.intersection(members):
+        return None, f"{entry.module} compiles none of the crates this push changes"
+
+    cache = proof_cache(head, artifact)
+    if cache is not None:
+        try:
+            remembered = json.loads(cache.read_text(encoding="utf-8"))
+            if remembered.get("ok"):
+                return members, ""
+            return None, str(remembered.get("why", "it did not prove out"))
+        except (OSError, ValueError):
+            pass
+    why = artifact_matches_head(entry, head, artifact, record, members, package, stamped)
+    if cache is not None:
+        try:
+            cache.write_text(json.dumps({"ok": not why, "why": why}), encoding="utf-8")
+        except OSError:
+            pass
+    return (None, why) if why else (members, "")
+
+
+def read_record(artifact: pathlib.Path) -> dict | None:
+    try:
+        found = json.loads(
+            artifact.with_name(artifact.name + ".provenance.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def artifact_matches_head(
+    entry: Entry,
+    head: str,
+    artifact: pathlib.Path,
+    record: dict,
+    members: list[str],
+    package: str,
+    stamped: bool,
+) -> str:
+    """The hashes. Empty when the record describes the run's binary and `head`'s source."""
+    if not stamped:
+        try:
+            on_disk = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        except OSError:
+            return f"{entry.module} could not be read"
+        if record.get("artifact_sha256") != on_disk:
+            return f"{entry.module} is not the file its provenance record describes"
+    at_head = tree_source_sha(head, members)
+    if at_head is None:
+        return f"the source {head} holds for {package} could not be read"
+    if record["source_sha"] != at_head:
+        return (
+            f"{entry.module} was built from source that differs from what {head} holds "
+            f"(recorded {record['source_sha'][:12]}, the commit hashes to {at_head[:12]})"
+        )
+    return ""
+
+
+def proof_cache(head: str, artifact: pathlib.Path) -> pathlib.Path | None:
+    """Where one artifact's answer for one commit is kept between Bash calls.
+
+    Keyed by the commit, the artifact's path, size and mtime, and its record's mtime, so a
+    rebuild or a rewritten record is a new key rather than a stale answer.
+    """
+    record = artifact.with_name(artifact.name + ".provenance.json")
+    try:
+        stat, record_stat = artifact.stat(), record.stat()
+    except OSError:
+        return None
+    key = "|".join(
+        [head, str(artifact), str(stat.st_size), str(stat.st_mtime_ns), str(record_stat.st_mtime_ns)]
+    )
+    directory = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-evidence"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return directory / f"provenance-{hashlib.sha256(key.encode()).hexdigest()[:32]}.json"
+
+
+# ------------------------------------------------------------------------------------------
 # The scan
 # ------------------------------------------------------------------------------------------
 
@@ -453,7 +709,51 @@ def scan(head: str, changed: list[str], exhaustive: bool) -> tuple[int, list[str
             f"match {first.where} {first.sha}",
         ]
 
-    lines = [f"note {no_match_note(head, entries, proven, wanted, covered, refusals)}"]
+    # Then any log, whatever commit it names, whose binary was built from the source this commit
+    # holds -- the run that came before the commit it justified. Stops as soon as the push is
+    # covered, because every attempt past the cheap checks hashes an artifact.
+    built: list[Entry] = []
+    provenance_refusals: dict[tuple[str, int | None], str] = {}
+    if wanted:
+        for entry in entries:
+            if wanted.issubset(covered):
+                break
+            key = (entry.module, entry.pe)
+            if key in provenance_refusals or any(
+                (other.module, other.pe) == key for other in proven + built
+            ):
+                continue
+            members, why = built_from_head_source(entry, head, wanted)
+            if members is None:
+                provenance_refusals[key] = why
+                continue
+            built.append(entry)
+            covered.update(members)
+
+    if built and wanted.issubset(covered):
+        first = built[0]
+        return EXIT_MATCH, [
+            f"note {first.described()} was built at {first.sha[:8]}"
+            f"{' with uncommitted work' if first.dirty else ''} from exactly the source {head} "
+            "holds, by its provenance record, and ran",
+            f"match {first.where} {first.sha}",
+        ]
+
+    note = no_match_note(head, entries, proven, wanted, covered, refusals)
+    if built:
+        missing = sorted(wanted - covered)
+        note = (
+            f"{note}; {len(built)} shell(s) that ran hold {head}'s own source by their provenance "
+            f"records, but {', '.join(missing[:4])}{' and more' if len(missing) > 4 else ''} "
+            "is compiled into none that can be tied to a run -- the binary that ran has been "
+            "relinked since, or was never built with a provenance record"
+        )
+    elif entries and not proven:
+        newest = entries[0]
+        why = provenance_refusals.get((newest.module, newest.pe))
+        if why:
+            note = f"{note}; nor does its provenance prove it: {why}"
+    lines = [f"note {note}"]
     emitted: set[str] = set()
     for entry in entries:
         if entry.dirty or entry.sha in emitted:
@@ -699,6 +999,8 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
             globals()["dirty_crate_names"],
         ) = saved
 
+    selftest_provenance(check)
+
     # The pe reader against a real artifact, when one is built: the fake above proves the
     # comparison, not the parser.
     real = artifact_dir() / "er_crash_logging.dll"
@@ -712,6 +1014,180 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
     return 0 if failures == 0 else 1
 
 
+def selftest_provenance(check) -> None:  # noqa: C901 -- one scenario, told in order
+    """A run built at the parent with the change uncommitted, then the change committed.
+
+    The record's `source_sha` is made by `er-dll-provenance.py` itself, over a scratch working
+    tree, so `tree_source_sha` is checked against the hash it exists to reproduce rather than
+    against its own output. Failures are counted through `check`.
+    """
+    import tempfile
+
+    provenance = load_script("er_dll_provenance", "er-dll-provenance.py")
+    saved_env = {name: os.environ.get(name) for name in ("ER_ME3_RUN_ROOT", "ER_GAME_DIR", "XDG_RUNTIME_DIR")}
+    saved = (globals()["package_for"], globals()["pe_timestamp"], PUSH_REPO[0], provenance.REPO_ROOT)
+    _TREE_HASHES.clear()
+    try:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = pathlib.Path(raw)
+            repo = tmp / "repo"
+            crate = repo / "crates" / "er-x"
+            (crate / "src").mkdir(parents=True)
+
+            def git_run(*args: str) -> str:
+                return subprocess.run(
+                    ["git", *args], cwd=repo, check=True, capture_output=True, text=True, timeout=30
+                ).stdout.strip()
+
+            git_run("init", "-q")
+            git_run("config", "user.email", "selftest@example.invalid")
+            git_run("config", "user.name", "selftest")
+            (crate / "Cargo.toml").write_text('[package]\nname = "er-x"\n', encoding="utf-8")
+            (crate / "src" / "lib.rs").write_text("pub fn a() {}\n", encoding="utf-8")
+            git_run("add", "-A")
+            git_run("commit", "-q", "-m", "parent")
+            parent = git_run("rev-parse", "HEAD")
+
+            # The run: built from the parent with the change still uncommitted.
+            (crate / "src" / "lib.rs").write_text("pub fn a() {}\npub fn b() {}\n", encoding="utf-8")
+            provenance.REPO_ROOT = repo
+            built_sha, _count = provenance.source_sha(["er-x"])
+            provenance.REPO_ROOT = saved[3]
+            # ...and the commit the run justified.
+            git_run("commit", "-q", "-a", "-m", "the change that ran")
+            tip = git_run("rev-parse", "HEAD")
+
+            release = repo / "target" / "x86_64-pc-windows-msvc" / "release"
+            release.mkdir(parents=True)
+            dll = release / "er_x.dll"
+            dll.write_bytes(b"MZ not really a pe, the stamp is faked below")
+            record_path = release / "er_x.dll.provenance.json"
+
+            def write_record(
+                source: str, artifact_sha: str | None = None, pe: int | None = None
+            ) -> None:
+                fields = {
+                    "package": "er-x",
+                    "closure": ["er-x"],
+                    "source_sha": source,
+                    "artifact_sha256": artifact_sha or hashlib.sha256(dll.read_bytes()).hexdigest(),
+                }
+                if pe is not None:
+                    fields["pe_timestamp"] = pe
+                record_path.write_text(json.dumps(fields), encoding="utf-8")
+
+            game = tmp / "game"
+            game.mkdir()
+            os.environ["ER_ME3_RUN_ROOT"] = str(tmp / "absent")
+            os.environ["ER_GAME_DIR"] = str(game)
+            os.environ["XDG_RUNTIME_DIR"] = str(tmp / "runtime")
+            PUSH_REPO[0] = repo
+            globals()["package_for"] = lambda module: "er-x"
+            globals()["pe_timestamp"] = lambda artifact: 0x6A000010
+            changed = ["crates/er-x/src/lib.rs"]
+
+            check(
+                tree_source_sha(tip, ["er-x"]) == built_sha,
+                "the commit's tree hashes to what er-dll-provenance.py recorded for the same files",
+            )
+
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH and any("no log" in line for line in lines),
+                "with no log at all the push is refused",
+            )
+
+            (game / "er-x.log").write_text(
+                f"build git={parent[:12]}+dirty module=er_x.dll base=0x1 pe=0x6a000010 (t)\n",
+                encoding="utf-8",
+            )
+            write_record(built_sha)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_MATCH and any("provenance" in line for line in lines),
+                "a parent+dirty log whose binary holds the commit's source proves the commit ran",
+            )
+
+            # A build that carried an edit the commit does not: same parent, same stamp.
+            (crate / "src" / "lib.rs").write_text(
+                "pub fn a() {}\npub fn b() {}\npub fn c() {}\n", encoding="utf-8"
+            )
+            provenance.REPO_ROOT = repo
+            other_sha, _count = provenance.source_sha(["er-x"])
+            provenance.REPO_ROOT = saved[3]
+            write_record(other_sha)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH and any("differs from what" in line for line in lines),
+                "a parent+dirty log built from source the commit does not hold is refused",
+            )
+
+            write_record(built_sha, artifact_sha="0" * 64)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH and any("is not the file" in line for line in lines),
+                "a record that does not describe the artifact on disk proves nothing",
+            )
+
+            write_record(built_sha)
+            code, lines = scan(tip, ["crates/er-y/src/lib.rs"], exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH,
+                "a matching build that compiles none of the changed crates does not cover the push",
+            )
+
+            globals()["pe_timestamp"] = lambda artifact: 0x11111111
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH and any("pe stamp" in line for line in lines),
+                "an artifact relinked since the run is not the binary that ran",
+            )
+
+            # A record that carries the run's own stamp describes the binary that ran by itself,
+            # whatever has been linked over the file since -- the 2026-10-15 case, a bare cargo
+            # relink nine minutes after the run that wrote no record.
+            write_record(built_sha, artifact_sha="0" * 64, pe=0x6A000010)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_MATCH,
+                "a record stamped with the run's pe proves the run although the file was relinked",
+            )
+            write_record(other_sha, artifact_sha="0" * 64, pe=0x6A000010)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH and any("differs from what" in line for line in lines),
+                "a record stamped with the run's pe but other source is refused",
+            )
+            write_record(built_sha, pe=0x22222222)
+            code, lines = scan(tip, changed, exhaustive=True)
+            check(
+                code == EXIT_NO_MATCH,
+                "a record stamped by a later build does not speak for the run",
+            )
+    finally:
+        globals()["package_for"], globals()["pe_timestamp"], PUSH_REPO[0], provenance.REPO_ROOT = saved
+        _TREE_HASHES.clear()
+        for name, value in saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    # The same hash over this repository, when a small closure is clean here: the commit's tree
+    # and the working tree must agree, which pins `tree_source_sha` to the real file layout.
+    members = closure_members("er-crash-logging")
+    head = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--", *[f"crates/{m}" for m in members or []])
+    if members and head and status == "":
+        working, _count = provenance.source_sha(members)
+        check(
+            tree_source_sha(head.strip(), members) == working,
+            "a clean closure hashes the same from HEAD's tree as from the working tree",
+        )
+    else:
+        print("  skip  er-crash-logging's closure is not clean here -- real-tree hash not compared")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Runtime evidence for a commit.")
     parser.add_argument("--head", help="the commit to look for")
@@ -720,6 +1196,12 @@ def main() -> int:
         action="store_true",
         help="read every run directory rather than stopping at the newest few",
     )
+    parser.add_argument(
+        "--repo",
+        type=pathlib.Path,
+        help="the checkout being pushed, when it is not this one; its target/ holds the "
+        "binaries that ran",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -727,6 +1209,8 @@ def main() -> int:
         return selftest()
     if not args.head:
         parser.error("--head is required")
+    if args.repo is not None:
+        PUSH_REPO[0] = args.repo.resolve()
 
     changed = []
     if not sys.stdin.isatty():

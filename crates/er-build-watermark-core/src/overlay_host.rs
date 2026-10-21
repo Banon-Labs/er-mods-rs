@@ -205,8 +205,15 @@ pub fn designate_host() {
     let _ = hudhook::set_before_frame_hook(apply_pending);
 }
 
-/// hudhook's before-frame hook: fonts into the atlas, then pixels into textures.
+/// Whether the shared context has been given the system clipboard.
+static CLIPBOARD_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// hudhook's before-frame hook: the clipboard once, then fonts into the atlas, then pixels into
+/// textures.
 fn apply_pending(ctx: &mut hudhook::imgui::Context, render: &mut dyn hudhook::RenderContext) {
+    if !CLIPBOARD_INSTALLED.swap(true, Ordering::SeqCst) {
+        ctx.set_clipboard_backend(crate::clipboard::Win32Clipboard);
+    }
     apply_pending_fonts(ctx);
     apply_pending_textures(render);
 }

@@ -12,7 +12,7 @@ land where the game's do.
 
   python3 scripts/er-mechanics-resources.py --selftest
   python3 scripts/er-mechanics-resources.py --corpus [--show 20]
-  python3 scripts/er-mechanics-resources.py --stats vig=40,mnd=20,vit=30,str=20,dex=20,int=9,fth=9,arc=9 \\
+  python3 scripts/er-mechanics-resources.py --stats vig=40,mnd=20,end=30,str=20,dex=20,int=9,fth=9,arc=9 \\
       --talisman "Erdtree's Favor +2" --armor "Fire Knight Helm" --great-rune "Radahn's Great Rune"
   python3 scripts/er-mechanics-resources.py --tables
 """
@@ -46,10 +46,19 @@ WEIGHT_HEAVY = 0.699999988079071
 WEIGHT_MEDIUM = 0.30000001192092896
 WEIGHT_TYPES = {0: 'super light', 1: 'light', 2: 'medium', 3: 'heavy', 4: 'overloaded'}
 
-STAT_KEYS = ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')
+STAT_KEYS = ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')
+# The planner's JSON spells Endurance `vit`; translated where a planner document is read, and
+# still taken by `--stats` so older command lines keep working.
+STAT_ALIASES = {'vit': 'end'}
+
+
+def from_planner(st):
+    """A planner `stats` object with its keys in this module's spelling (`vit` -> `end`)."""
+    return {STAT_ALIASES.get(k, k): v for k, v in st.items()}
+
 # SpEffectParam field per attribute, in `CollectStatBuffs` 0x1404f3fd0 order. `addVitalityStatus`
 # is also summed there but feeds the unused fifth slot, so it is left out.
-STAT_FIELDS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
+STAT_FIELDS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
                'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
                'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
 RATE_FIELDS = ('maxHpRate', 'maxMpRate', 'maxStaminaRate', 'equipWeightChangeRate')
@@ -192,7 +201,9 @@ class Model:
 
     @staticmethod
     def effective_stats(base, effects):
-        """`CalculateStatus` 0x1407c3670: base + summed add*Status, capped at 99 (no lower clamp)."""
+        """`CalculateStatus` 0x1407c3670: base + summed add*Status, capped at 99 (no lower clamp).
+        `base` may spell Endurance the planner's way (`vit`): callers pass planner stats as well."""
+        base = from_planner(base)
         out = {}
         for k in STAT_KEYS:
             add = sum(int(e[STAT_FIELDS[k]]) for e in effects)
@@ -205,8 +216,8 @@ class Model:
         eff = self.effective_stats(base, effects)
         hp_base = int(self.calc_correct(GRAPH_HP, eff['vig']))
         fp_base = int(self.calc_correct(GRAPH_FP, eff['mnd']))
-        st_base = int(self.calc_correct(GRAPH_STAMINA, eff['vit']))
-        load_base = self.calc_correct(GRAPH_EQUIP_LOAD, eff['vit'])
+        st_base = int(self.calc_correct(GRAPH_STAMINA, eff['end']))
+        load_base = self.calc_correct(GRAPH_EQUIP_LOAD, eff['end'])
         hp_rate = self.rate(effects, 'maxHpRate')
         fp_rate = self.rate(effects, 'maxMpRate')
         st_rate = self.rate(effects, 'maxStaminaRate')
@@ -334,7 +345,7 @@ def corpus(model, path=CORPUS, show=10):
     for line in open(path, encoding='utf-8'):
         rec = json.loads(line)
         b = rec['build']
-        st, comp = b.get('stats') or {}, b.get('computed') or {}
+        st, comp = from_planner(b.get('stats') or {}), b.get('computed') or {}
         if not all(isinstance(st.get(k), int) and st.get(k) > 0 for k in STAT_KEYS):
             continue
         if isinstance(st.get('rl'), int):
@@ -472,7 +483,7 @@ def main():
     ap.add_argument('--corpus', nargs='?', const=CORPUS)
     ap.add_argument('--show', type=int, default=10)
     ap.add_argument('--tables', action='store_true', help='print HP/FP/stamina/load/cost for 1..99')
-    ap.add_argument('--stats', help='vig=..,mnd=..,vit=..,str=..,dex=..,int=..,fth=..,arc=..')
+    ap.add_argument('--stats', help='vig=..,mnd=..,end=..,str=..,dex=..,int=..,fth=..,arc=..')
     ap.add_argument('--talisman', action='append', default=[])
     ap.add_argument('--armor', action='append', default=[])
     ap.add_argument('--great-rune')
@@ -495,7 +506,7 @@ def main():
         base = dict.fromkeys(STAT_KEYS, 10)
         for kv in a.stats.split(','):
             k, v = kv.split('=')
-            base[k.strip()] = int(v)
+            base[STAT_ALIASES.get(k.strip(), k.strip())] = int(v)
         res = model.resources(base, a.talisman, a.armor, a.great_rune)
         res['rl'] = sum(base[k] for k in STAT_KEYS) - 79
         res['runes_to_next'] = model.runes_to_next(res['rl'])

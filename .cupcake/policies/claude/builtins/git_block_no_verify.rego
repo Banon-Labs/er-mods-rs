@@ -62,10 +62,75 @@ contains_git_no_verify(cmd) if {
 	# inside the actual git-commit command segment. A later command like
 	# `| sed -n ...` must not make `git commit -h | sed -n` look like a
 	# no-verify commit.
-	regex.match(git_commit_short_no_verify_pattern, cmd)
+	some segment in commands.shell_segments(cmd)
+	contains(segment, "commit")
+	words := [word | some word in split(replace(segment, "\t", " "), " "); word != ""]
+	some flag in commit_arguments(words)
+	short_no_verify_flag(flag)
 }
 
-git_commit_short_no_verify_pattern := `(?m)(^|[;&|]\s*|\n)\s*git(\s+(?:-C|-c)\s+\S+|\s+--git-dir=\S+|\s+--work-tree=\S+|\s+--namespace=\S+)*\s+commit(\s+[^;&|\n]*)?\s+-[a-z]*n[a-z]*(\s|$|[;&|])`
+# The arguments of `git commit` run to the end of its segment -- `;`, `&`, `|` or a newline,
+# as `commands.shell_segments` cuts them -- or to a heredoc opener, after which the delivered
+# command carries the message body, which is stdin and not arguments. `-n` is `--no-verify`
+# for `commit` only: for `push` it is `--dry-run`, and for `merge` and `rebase` it is
+# `--no-stat`, so those three are matched on the long spelling alone.
+#
+# Refused 2026-10-15 although nothing in it skipped a hook:
+#
+#     git commit -q -F - <<'EOF' > log 2>&1; echo exit=$?; tail -n 12 log; ...
+#
+# with a message carrying one apostrophe. The fault was mostly not here:
+# `commands.heredoc_body_blanked` blanked the opener line's tail along with the body, so the `;`
+# in front of `tail` was gone before this ran, and that function keeps the tail now. What was
+# here is the regex this replaced, which ran from `commit` across the blanked body as well, so a
+# message line such as "pass -n to tail" read as the flag. Words stop at the `<<`.
+#
+# Words rather than a pattern also takes one regex call site out of every Bash evaluation, which
+# is the remedy bd `cupcake-wasm-regex-cache-reuse-oob-2026-09-16` records for the wasm runtime's
+# regex cache.
+commit_arguments(words) := array.slice(words, commit + 1, end) if {
+	git := git_word_index(words)
+	commit := git_subcommand_index(words, git)
+	words[commit] == "commit"
+	ends := [i | some i, word in words; i > commit; startswith(word, "<<")]
+	end := min(array.concat(ends, [count(words)]))
+}
+
+# `git` in command position: every word before it is a wrapper (`env X=1`, `sudo`, `(`).
+git_word_index(words) := index if {
+	indexes := [i |
+		some i, word in array.slice(words, 0, 16)
+		trim_left(word, "(") in {"git", "/usr/bin/git", "/bin/git"}
+	]
+	count(indexes) > 0
+	index := min(indexes)
+	count([j |
+		some j, _ in words
+		j < index
+		not commands.command_slot_wrapper_at(words, j)
+	]) == 0
+}
+
+# The first word after `git` that is neither an option nor the argument of one. The command is
+# lowercased by the caller, so `-C <dir>` arrives as `-c <dir>`.
+git_subcommand_index(words, git) := min(indexes) if {
+	indexes := [j |
+		some j, word in words
+		j > git
+		not startswith(word, "-")
+		not words[j - 1] in {"-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+	]
+	count(indexes) > 0
+}
+
+# `-n`, or a cluster of single-letter flags carrying it: `-qn`, `-nm`.
+short_no_verify_flag(word) if {
+	startswith(word, "-")
+	not startswith(word, "--")
+	letters := substring(trim_right(word, ")"), 1, count(word))
+	contains(letters, "n")
+	count([c | some c in split(letters, ""); not contains("abcdefghijklmnopqrstuvwxyz", c)]) == 0
+}
 
 contains_git_no_verify(cmd) if {
 	# Check for git push with --no-verify

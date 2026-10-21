@@ -2164,7 +2164,8 @@ def main() -> int:
             ap.error("--aggregate wants standout:W or openers:A")
         MOVESET.AGGREGATE = (kind, float(x))
 
-    rows = [json.loads(line) for line in a.sweep.open()]
+    # A sweep written before Endurance was spelled `end` carries `vit`; `rekey` translates it.
+    rows = [OPT.EMBED.rekey(json.loads(line)) for line in a.sweep.open()]
     wanted = {w.strip().lower() for w in (a.weapon or "").split(",") if w.strip()}
     rows = [r for r in rows if r["rl"] == a.rl and (not wanted or r["weapon"].lower() in wanted)
             and not (a.one_handed and r["two"])]
@@ -2294,7 +2295,7 @@ def main() -> int:
             for kv in (a.build_stats or "").split(","):
                 if "=" in kv:
                     k, v = kv.split("=")
-                    stats[k.strip()] = int(v)
+                    stats[OPT.EMBED.FROM_PLANNER.get(k.strip(), k.strip())] = int(v)
             grease = a.build_grease if a.build_grease not in (None, "none") else None
             b = {"dmg": b["dmg"], "aff": a.build_aff, "grease": grease, "stats": stats}
         f_weight = (row.get("weight") or {}).get("factor", 1.0)

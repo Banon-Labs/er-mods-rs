@@ -440,9 +440,10 @@ fn install() {
     }
     let config = load_config();
     voice_log(format_args!(
-        "attach: game base {base:#x}, all {} sites match 1.17.1; gain {} loopback {}; nothing in \
-         ersc.dll is touched",
+        "attach: game base {base:#x}, all {} sites carried from 1.17.1 and matched on {}; gain {} \
+         loopback {}; nothing in ersc.dll is touched",
         er_positional_voice_core::sites::SITES.len(),
+        er_game_base::game_build::describe_build(),
         config.gain,
         config.loopback
     ));

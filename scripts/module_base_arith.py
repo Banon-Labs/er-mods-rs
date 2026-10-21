@@ -141,6 +141,9 @@ RUNTIME_DERIVED_MARKS = (
     "read_bytes(",
     "resolve_",
     "game_rva",
+    # `er_game_base::game_build::carry_1171_rva`: an rva measured on 1.17.1, already carried to
+    # the running build (and refused with None when it cannot be).
+    "carry_1171_rva",
     "trampoline",
     "GetProcAddress",
 )

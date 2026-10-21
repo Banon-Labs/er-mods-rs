@@ -343,7 +343,16 @@ pub fn imgui_wnd_proc_impl<T: RenderEngine>(
             let y = hiwordi(lparam as u32) as f32;
             io.add_mouse_pos_event([x, y]);
         },
-        WM_CHAR => io.add_input_character(char::from_u32(wparam as u32).unwrap()),
+        // LOCAL PATCH (er-mods-rs): `WM_CHAR` carries one UTF-16 code unit, and half of a
+        // surrogate pair (an emoji, some IME input) is not a `char`, so upstream's
+        // `char::from_u32(..).unwrap()` panicked inside the game's window procedure -- an abort,
+        // not a caught error. Dear ImGui's UTF-16 entry point holds a high surrogate until its low
+        // half arrives and drops an unpaired one.
+        WM_CHAR => {
+            use imgui::internal::RawCast;
+            // SAFETY: `Io` is imgui-rs's layout-checked view of `ImGuiIO` for this context.
+            unsafe { imgui::sys::ImGuiIO_AddInputCharacterUTF16(io.raw_mut(), wparam as u16) };
+        },
         WM_SIZE => {
             pipeline.resize(loword(lparam as u32) as u32, hiword(lparam as u32) as u32);
         },
