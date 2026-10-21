@@ -210,14 +210,9 @@ pub fn adopt_reading(read: &Project, ours: &Project, sent: &[Project], save_wait
     read != ours && !sent.contains(read) && !save_waiting
 }
 
-/// A row's status light (design 9): green live, amber compiling, red error, grey off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Light {
-    Live,
-    Busy,
-    Error,
-    Off,
-}
+/// A row's status light (design 9): green live, amber compiling, red error, grey off. The theme's,
+/// which every panel's lights share.
+pub use super::theme::Light;
 
 /// The light and the short text at the end of `layer`'s row, from the worker's `state` for it.
 #[must_use]
@@ -266,7 +261,7 @@ pub fn shown_path(file: &str) -> String {
 
 /// The bounds a mask gets when it is picked from the Mask combo.
 #[must_use]
-pub const fn default_bounds(kind: MaskKind) -> [f32; 4] {
+pub const fn default_bounds(kind: MaskKind) -> mask::MaskBounds {
     match kind {
         MaskKind::Depth => [0.0, 30.0, 0.0, 0.0],
         MaskKind::Facing => [0.0, 0.3, 0.0, 0.0],
@@ -417,7 +412,7 @@ mod process {
     use std::sync::atomic::Ordering;
     use std::time::Instant;
 
-    use hudhook::imgui::{StyleColor, Ui};
+    use hudhook::imgui::Ui;
 
     use super::super::code::{CodeState, SAVE_DELAY};
     use super::super::files::{self, Job, Reply, Source, Written};
@@ -1013,7 +1008,7 @@ mod process {
                     }],
                 );
             }
-            paint.dot([at[0] + pad + dot * 0.5, middle], theme::light_colour(lamp));
+            paint.dot([at[0] + pad + dot * 0.5, middle], theme::light_color(lamp));
 
             let (state_font, state_colour) = state_style(lamp, selected);
             let mut right = max[0] - pad - theme::text_width(ui, state_font, &state);
@@ -1476,12 +1471,7 @@ mod process {
             {
                 let _mono = theme::font(ui, Font::Mono);
                 let _padding = theme::frame(ui, SELECTOR_TEXT_HEIGHT, theme::FRAME_PAD_X);
-                let _field = [
-                    StyleColor::FrameBg,
-                    StyleColor::FrameBgHovered,
-                    StyleColor::FrameBgActive,
-                ]
-                .map(|slot| ui.push_style_color(slot, theme::CODE_BG));
+                let _field = theme::field_fill(ui, theme::CODE_BG);
                 ui.set_next_item_width(ui.content_region_avail()[0]);
                 ui.input_text("##as-text", &mut text)
                     .enter_returns_true(true)
@@ -1712,7 +1702,7 @@ mod process {
             let paint = theme::painter(ui);
             paint.dot(
                 [right - words_width - gap - dot * 0.5, middle],
-                theme::light_colour(vertex_light(status.vertex_state)),
+                theme::light_color(vertex_light(status.vertex_state)),
             );
             theme::with_font(ui, Font::Small, || {
                 let small = ui.text_line_height();
@@ -1745,7 +1735,7 @@ mod process {
         let paint = theme::painter(ui);
         paint.dot(
             [at[0] + dot * 0.5, middle],
-            theme::light_colour(vertex_light(state)),
+            theme::light_color(vertex_light(state)),
         );
         let x = at[0] + dot + gap;
         let shown = fit_text(ui, Font::Label, words, (at[0] + width - x).max(0.0));
@@ -1778,7 +1768,7 @@ mod process {
         let line = theme::line_height(ui, Font::Body);
         paint.dot(
             [at[0] + t.px(theme::DOT_SIZE) * 0.5, top + line * 0.5],
-            theme::light_colour(lamp),
+            theme::light_color(lamp),
         );
         ui.set_cursor_screen_pos([at[0] + footer_indent(), top]);
         let colour = if quiet {

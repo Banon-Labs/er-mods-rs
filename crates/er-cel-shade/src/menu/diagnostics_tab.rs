@@ -579,7 +579,7 @@ mod process {
     use crate::gpu_time::{self, Counters};
     use crate::probe::{self, RegionRecord};
     use crate::replace::PortKind;
-    use crate::{graveyard, hooks, input, look_binding, params, safety, table};
+    use crate::{graveyard, hooks, look_binding, params, safety, table};
 
     /// The mockup's gaps at 1080p, beside the theme's 14 between sections: 6 from a heading to
     /// what it heads, 4 between a table's rows and 10 between its columns, 14 between the root
@@ -1264,6 +1264,7 @@ mod process {
             panic_entry.cell.pieces[1].1 = theme::ERROR_TEXT;
         }
         let micros = |counter: &AtomicU64| duration_text(read(counter) as f64 * 1.0e3);
+        let input = er_overlay_input::counters();
         let entries = [
             Entry::new(
                 "Code edits: ",
@@ -1297,8 +1298,8 @@ mod process {
                 "Cursor freed: ",
                 Some(format!(
                     "{}{}",
-                    input::CURSOR_FORCED.load(Ordering::Relaxed),
-                    if input::CURSOR_HOOKED.load(Ordering::Relaxed) {
+                    input.cursor_forced,
+                    if input.cursor_hooked {
                         ""
                     } else {
                         ", not hooked"
@@ -1307,16 +1308,10 @@ mod process {
             ),
             Entry::new(
                 "Mouse reads blanked: ",
-                Some(er_dinput_suppress_core::suppressed_mouse_reads().to_string()),
+                Some(input.mouse_reads_blanked.to_string()),
             ),
-            Entry::new(
-                "Key reads blanked: ",
-                Some(er_dinput_suppress_core::suppressed_keys().to_string()),
-            ),
-            Entry::new(
-                "Pad reads blanked: ",
-                Some(input::PAD_SUPPRESSED.load(Ordering::Relaxed).to_string()),
-            ),
+            Entry::new("Key reads blanked: ", Some(input.keys_blanked.to_string())),
+            Entry::new("Pad reads blanked: ", Some(input.pad_zeroed.to_string())),
         ];
         pairs(ui, &entries);
     }

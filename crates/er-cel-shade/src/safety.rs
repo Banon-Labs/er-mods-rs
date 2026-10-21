@@ -956,9 +956,12 @@ mod tests {
             include_str!("menu/hunt_tab.rs"),
             include_str!("menu/layers_tab.rs"),
             include_str!("menu/look_tab.rs"),
-            include_str!("menu/theme.rs"),
+            include_str!("menu/panel_record.rs"),
             include_str!("menu/widgets.rs"),
             include_str!("settings.rs"),
+            // The look the panel draws in, which lives in the shared theme crate.
+            include_str!("../../er-overlay-theme/src/lib.rs"),
+            include_str!("../../er-overlay-theme/src/draw.rs"),
         ] {
             assert!(source.is_ascii());
         }

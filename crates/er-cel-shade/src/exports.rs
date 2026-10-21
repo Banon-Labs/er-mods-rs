@@ -26,7 +26,7 @@
 //! port's GPU time a frame, last and mean, with its stage's total (`gpu_time`, null while the
 //! timer is off; [`crate::gpu_time`] says what the number means), the diagnostic counters, the
 //! Shaders panel's last frame -- where its header, toolbar, nav and named parts landed in screen
-//! pixels, its dock, scale and fonts ([`PanelSnapshot`]) -- and the decoded probe -- every written
+//! pixels, its dock, scale and fonts ([`FrameRecord`]) -- and the decoded probe -- every written
 //! region's header, its frame age and its samples -- as one JSON object ([`render_telemetry`]) to
 //! `redirected_artifact_path("ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH", "er-cel-shade-telemetry.json")`,
 //! replacing the file atomically, so a reader never sees half of one. The variable is an output
@@ -41,7 +41,8 @@ use std::time::Duration;
 
 use crate::cmdlist::{self, SAMPLE_EVERY, Timing};
 use crate::gpu_time::{self, Counters, Report};
-use crate::menu::theme::{Face, PanelSnapshot, RECT_NAMES};
+use crate::menu::panel_record::{PanelLabels, RECT_NAMES, ReferenceSnapshot};
+use crate::menu::theme::{Face, FrameRecord};
 use crate::probe::{self, Region, RegionRecord};
 use crate::replace::{PortKind, Stage};
 use crate::safety::ModeSetting;
@@ -246,7 +247,7 @@ pub struct Telemetry<'a> {
     /// Named counters for diagnostics, in the order given.
     pub counters: Vec<(&'static str, u64)>,
     /// The Shaders panel's last frame, `None` before it ever drew.
-    pub panel: Option<PanelSnapshot>,
+    pub panel: Option<FrameRecord>,
     /// The ports' GPU time and the timer's counts, `None` while the timer is off.
     pub gpu: Option<(Report, Counters)>,
     /// The probe as read at `stats.presents`.
@@ -483,7 +484,8 @@ fn render_gpu(out: &mut String, report: &Report, counters: &Counters) {
 /// column (open, its search field focused, its stage, its query's length and the entries it kept
 /// of all it has), and each part drawn that frame under its [`RECT_NAMES`] name as `[x, y, width,
 /// height]` in screen pixels. A part not drawn that frame is left out.
-fn render_panel(out: &mut String, panel: &PanelSnapshot) {
+fn render_panel(out: &mut String, panel: &FrameRecord) {
+    let labels = PanelLabels::read(panel);
     let _ = write!(
         out,
         "{{\n    \"draws\": {}, \"present\": {}, \"open\": {}, \"collapsed\": {}, \
@@ -492,10 +494,10 @@ fn render_panel(out: &mut String, panel: &PanelSnapshot) {
         panel.present,
         panel.open,
         panel.collapsed,
-        panel.dock,
-        panel.tab,
-        panel.code_view,
-        panel.sub
+        labels.dock,
+        labels.tab,
+        labels.code_view,
+        labels.sub
     );
     number(out, panel.scale);
     out.push_str(", \"font_scale\": ");
@@ -522,7 +524,7 @@ fn render_panel(out: &mut String, panel: &PanelSnapshot) {
             fonts.granted[at]
         );
     }
-    let reference = &panel.reference;
+    let reference = ReferenceSnapshot::read(panel);
     let _ = write!(
         out,
         "], \"in_use\": {}}},\n    \"reference\": {{\"open\": {}, \"searching\": {}, \"stage\": \
@@ -892,7 +894,7 @@ mod process {
                 .map(|timing| cmdlist::HOOK_PREEMPTED[timing as usize].load(Ordering::Relaxed)),
             timer_floor_ns: floor,
             counters,
-            panel: menu::theme::panel_snapshot(),
+            panel: menu::theme::last_record(),
             gpu: gpu_time::report().map(|report| (report, gpu_time::Counters::read())),
             regions: &regions,
             members: crate::vertex::telemetry_json(),
@@ -1332,28 +1334,37 @@ mod tests {
 
     #[test]
     fn the_telemetry_carries_the_panels_last_frame() {
-        let mut panel = PanelSnapshot {
+        let mut panel = FrameRecord {
             draws: 42,
             present: 100,
             open: true,
-            dock: "right",
-            tab: "layers",
-            sub: "parameters",
             scale: 1.0,
             font_scale: f32::NAN,
             display: [1920.0, 1080.0],
-            ..PanelSnapshot::default()
+            rects: vec![None; RECT_NAMES.len()],
+            ..FrameRecord::default()
         };
+        PanelLabels {
+            dock: "right",
+            tab: "layers",
+            sub: "parameters",
+            code_view: false,
+        }
+        .store(&mut panel);
         panel.fonts.requested = true;
         panel.fonts.request_scale = 1.0;
-        panel.fonts.handles = [5, 6, 0, 8];
-        panel.fonts.granted = [true, true, false, true];
+        panel.fonts.handles = [5, 6, 0, 8, 9, 10];
+        panel.fonts.granted = [true, true, false, true, true, true];
         panel.fonts.in_use = true;
-        panel.reference.open = true;
-        panel.reference.stage = "tonemap_post";
-        panel.reference.query_chars = 5;
-        panel.reference.shown = 3;
-        panel.reference.total = 286;
+        ReferenceSnapshot {
+            open: true,
+            stage: "tonemap_post",
+            query_chars: 5,
+            shown: 3,
+            total: 286,
+            ..ReferenceSnapshot::default()
+        }
+        .store(&mut panel);
         let at = |name: &str| RECT_NAMES.iter().position(|known| *known == name);
         if let Some(header) = at("header") {
             panel.rects[header] = Some([1460.0, 0.0, 460.0, 33.0]);
@@ -1394,7 +1405,7 @@ mod tests {
         }
         // A frame with no parts drawn, and no frame at all, are both valid JSON.
         let empty = Telemetry {
-            panel: Some(PanelSnapshot::default()),
+            panel: Some(FrameRecord::default()),
             ..telemetry_with(&[])
         };
         let text = render_telemetry(&empty);

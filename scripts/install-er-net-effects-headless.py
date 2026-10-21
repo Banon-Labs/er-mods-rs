@@ -26,7 +26,8 @@ DEFAULT_CONFIG_TEXT = """# er-net-effects standalone DLL configuration.
 # Generated/updated by scripts/install-er-net-effects-headless.py.
 # There is no network_sync setting: effects always sync, and the peer-safe list
 # compiled into the DLL decides which ones may reach another player.
-overlay_visible_on_start = true
+# The selector bar starts hidden; Alt+0, Alt+Numpad0 or Alt+Insert shows/hides it.
+overlay_visible_on_start = false
 hotkeys_file = '.er-net-effects-hotkeys.json'
 selected_effect_file = '.er-net-effects-setting.txt'
 selected_catalog_file = '.er-net-effects-catalog-setting.txt'

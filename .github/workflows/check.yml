@@ -60,7 +60,7 @@ env:
   # KEEPING `2.6.2.0`/`2.6.2.1`. Do not advance this to upstream `main`
   # without re-verifying: `acb2a19` DELETES `rva_ww_270.rs` and rewrites
   # `rva_ww.rs`/`rva_jp.rs` as 1.17-only, dropping 1.16.2 support entirely.
-  FROMSOFTWARE_RS_REV: 16d266146bcc7e896ac0d9a2c020e0d4c07baf52
+  FROMSOFTWARE_RS_REV: 4612952a71bfbd123445c805c0c7145e66e80229
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON. This step used to clone
   # vswarte/fromsoftware-rs unconditionally, and from 2026-08-30 18:31 that made
   # this whole workflow dead: `1027d24` and its parent `4284a05` (the ones that

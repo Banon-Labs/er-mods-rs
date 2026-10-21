@@ -264,7 +264,7 @@ fn draw_panel(ui: &Ui, key_name: &str) {
     let Some(_window) = begun else {
         return;
     };
-    ui.set_window_font_scale(t.font_scale);
+    theme::apply_font_scale(ui);
     let _body = theme::font(ui, Font::Body);
     let _style = theme::panel_style(ui);
     let pos = ui.window_pos();

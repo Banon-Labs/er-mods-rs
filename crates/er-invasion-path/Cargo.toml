@@ -14,7 +14,7 @@ publish = false
 name = "er_invasion_path"
 crate-type = ["cdylib"]
 
-# Host-buildable half: the config parser, the projection math, the colour ramp and the arrow
+# Host-buildable half: the config parser, the projection math, the color ramp and the arrow
 # geometry are all pure `f32`/text and are proven by `cargo test` on Linux rather than by
 # launching a game and squinting at a line.
 [dependencies]
@@ -29,6 +29,9 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # The one-imgui-host-per-process arbitration. This DLL hosts the overlay if it loads first and
 # draws as a GUEST otherwise; either way exactly one `Present` hook exists in the process.
 er-build-watermark-core = { path = "../er-build-watermark-core" }
+# The look every overlay in this workspace shares: the routes are drawn with its foreground
+# painter. Their colors are the per-player hues `geometry::path_color` generates, not tokens.
+er-overlay-theme = { path = "../er-overlay-theme" }
 hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",

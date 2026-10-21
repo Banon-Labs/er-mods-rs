@@ -6,7 +6,8 @@
 Two things, and nothing is looked at by a person:
 
 * The telemetry file er-cel-shade writes once a second (`src/exports.rs`). Its `panel` object is
-  the panel's last frame (`src/menu/theme.rs`, `PanelSnapshot`): whether it is open or collapsed,
+  the panel's last frame (`er-overlay-theme`'s `FrameRecord`, with the panel's own part names,
+  labels and reference column in `src/menu/panel_record.rs`): whether it is open or collapsed,
   its dock, tab, scale and display size, the fonts the overlay host built for it, and where each
   named part landed as `[x, y, width, height]` in Dear ImGui's display pixels.
 * One capture of the game window by `scripts/capture-er-window.py`. It shrinks the window to fit
@@ -129,16 +130,19 @@ import er_run_lib  # noqa: E402
 PROBE_CHECKER = SCRIPTS / "check-shader-editor-probe.py"
 CAPTURE_SCRIPT = SCRIPTS / "capture-er-window.py"
 CRATE = REPO / "crates" / "er-cel-shade"
-THEME_RS = CRATE / "src" / "menu" / "theme.rs"
-MENU_RS = CRATE / "src" / "menu" / "mod.rs"
+# The look is the shared theme crate's: its tokens, its sizes and its vendored faces.
+THEME_CRATE = REPO / "crates" / "er-overlay-theme"
+THEME_RS = THEME_CRATE / "src" / "lib.rs"
+PANEL_RECORD_RS = CRATE / "src" / "menu" / "panel_record.rs"
 EXPORTS_RS = CRATE / "src" / "exports.rs"
-FONTS = CRATE / "fonts"
+FONTS = THEME_CRATE / "fonts"
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_INCONCLUSIVE = 2
 
-# The design tokens, as `theme.rs` writes them; the selftest reads that file and holds these to it.
+# The design tokens, as the theme's `lib.rs` writes them; the selftest reads that file and holds
+# these to it.
 TOKENS = {
     "HEADER_BG": 0x1A1C21,
     "TAB_BG": 0x1A1C21,
@@ -154,14 +158,14 @@ TOKENS = {
     "INPUT_ACTIVE_BG": 0x2A2F3A,
     "COMPLETION_BG": 0x17181D,
 }
-# The panel background's alpha, `menu::BACKGROUND_ALPHA`.
+# The panel background's alpha, `theme::BACKGROUND_ALPHA`.
 BACKGROUND_ALPHA = 0.94
 # What a control whose phase has not come keeps of its colours, `theme::UNAVAILABLE_ALPHA`.
 UNAVAILABLE_ALPHA = 0.5
 # How far the panel window's font scale may be from 1 before its glyphs count as scaled.
 FONT_SCALE_TOLERANCE = 0.02
 
-# Sizes at 1080p, as `theme.rs` writes them (held by the selftest): the header bar, the section
+# Sizes at 1080p, as the theme writes them (held by the selftest): the header bar, the section
 # nav's top padding and tab height, and a tab's top corner radius.
 HEADER_HEIGHT = 32.0
 NAV_PAD_TOP = 8.0
@@ -1436,15 +1440,16 @@ def selftest() -> int:
 
     # The copies are the Rust's, read from the sources rather than trusted.
     theme_rs = THEME_RS.read_text(encoding="utf-8")
-    menu_rs = MENU_RS.read_text(encoding="utf-8")
+    panel_record_rs = PANEL_RECORD_RS.read_text(encoding="utf-8")
     exports_rs = EXPORTS_RS.read_text(encoding="utf-8")
     for name, value in TOKENS.items():
-        check(f"{name} is theme.rs's #{value:06X}", rust_colour(theme_rs, name) == value)
+        check(f"{name} is the theme's #{value:06X}", rust_colour(theme_rs, name) == value)
     check(
-        "BACKGROUND_ALPHA is mod.rs's", rust_float(menu_rs, "BACKGROUND_ALPHA") == BACKGROUND_ALPHA
+        "BACKGROUND_ALPHA is the theme's",
+        rust_float(theme_rs, "BACKGROUND_ALPHA") == BACKGROUND_ALPHA,
     )
     check(
-        "UNAVAILABLE_ALPHA is theme.rs's",
+        "UNAVAILABLE_ALPHA is the theme's",
         rust_float(theme_rs, "UNAVAILABLE_ALPHA") == UNAVAILABLE_ALPHA,
     )
     check(
@@ -1455,15 +1460,17 @@ def selftest() -> int:
             for name in [part.token, *(state for _, state in part.states)]
         ),
     )
-    check("HEADER_HEIGHT is theme.rs's", rust_float(theme_rs, "HEADER_HEIGHT") == HEADER_HEIGHT)
-    check("NAV_TAB_HEIGHT is theme.rs's", rust_float(theme_rs, "NAV_TAB_HEIGHT") == NAV_TAB_HEIGHT)
-    check("TAB_RADIUS is theme.rs's", rust_float(theme_rs, "TAB_RADIUS") == TAB_RADIUS)
+    check("HEADER_HEIGHT is the theme's", rust_float(theme_rs, "HEADER_HEIGHT") == HEADER_HEIGHT)
+    check(
+        "NAV_TAB_HEIGHT is the theme's", rust_float(theme_rs, "NAV_TAB_HEIGHT") == NAV_TAB_HEIGHT
+    )
+    check("TAB_RADIUS is the theme's", rust_float(theme_rs, "TAB_RADIUS") == TAB_RADIUS)
     nav_pad = rust_pair(theme_rs, "NAV_PAD")
-    check("the nav's top padding is theme.rs's", nav_pad is not None and nav_pad[1] == NAV_PAD_TOP)
-    names = re.search(r"pub const RECT_NAMES: \[&str; \d+\] = \[([^\]]*)\]", theme_rs)
+    check("the nav's top padding is the theme's", nav_pad is not None and nav_pad[1] == NAV_PAD_TOP)
+    names = re.search(r"pub const RECT_NAMES: \[&str; \d+\] = \[([^\]]*)\]", panel_record_rs)
     rect_names = set(re.findall(r'"(\w+)"', names.group(1))) if names else set()
     check(
-        "every part is placed in a rect theme.rs registers",
+        "every part is placed in a rect panel_record.rs declares",
         all(part.rect in rect_names for part in PARTS),
     )
     render_panel = exports_rs[exports_rs.find("fn render_panel") :]

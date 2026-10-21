@@ -1006,5 +1006,15 @@ no such record, so those scripts will refuse it -- correctly, since nothing prov
   `.cupcake/policies/claude/edit_color_spelling_guard.rego` refuses an edit that adds one outside a
   double-quoted span; it does not judge `Write`, whose previous count it cannot see.
 - **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
+- **Every in-game overlay draws with `crates/er-overlay-theme`** (user directive 2026-10-16: one
+  look across every hudhook DLL, now and for every new one). A crate that draws with imgui --
+  or takes the host's `Ui` through `adopt_frame` -- depends on the theme and writes no color,
+  font size or style push of its own: it enters a frame theme the way `er-render-scale`'s
+  `draw_ui` does, asks the host for the theme's faces, begins windows with `window_style` /
+  `apply_font_scale` / `panel_style`, and draws with the tokens and helpers. A color the theme
+  lacks is added to the theme under a name. Never size text against an assumed 13px face: the
+  host's default face is whatever the hosting DLL built. `scripts/check-overlay-theme.py` in
+  `check.sh` enforces it; `scripts/overlay-theme.baseline.json` records what was not yet ported
+  and may only shrink, so a new crate starts at zero.
 - Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
 - The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.

@@ -1,13 +1,23 @@
+//! The "ER NET EFFECTS" bar, drawn in the shared overlay theme (`er-overlay-theme`) on the
+//! foreground draw list of the process's one imgui overlay.
+//!
+//! The bar is always drawn as a guest: of another module's host, or of this module's own when it
+//! hosts, so every frame it draws in carries the theme's fonts out of the host's atlas
+//! (`er_overlay_theme::frame_fonts`). Until those are built it draws in the host's default font.
+
 use std::{
     ffi::c_void,
-    sync::Mutex,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use er_build_watermark_core::overlay_host::{
+    OVERLAY_ABI_TAG, OverlayFrame, adopt_frame, register_guest,
+};
+use er_overlay_theme::{self as theme, Font, FrameFonts, Painter, Theme};
 use hudhook::{
-    ImguiRenderLoop, MessageFilter, RenderContext,
+    ImguiRenderLoop, RenderContext,
     hooks::dx12::ImguiDx12Hooks,
-    imgui::{Context, DrawListMut, FontConfig, FontSource, Io, MouseButton, Ui},
+    imgui::{Context, Ui},
 };
 
 use crate::{
@@ -15,54 +25,45 @@ use crate::{
     effects::effect_selector_text,
     input_suppression,
     log::net_effects_log,
-    overlay_layout::{PANEL_PADDING, PANEL_ROUNDING, Rect, panel_layout, rect_contains},
+    overlay_layout::{PANEL_ROUNDING, Rect, panel_layout},
 };
 
 static HUDHOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_RENDER_HITS: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_VISIBLE_HITS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_COLLAPSED: AtomicBool = AtomicBool::new(START_COLLAPSED);
-static OVERLAY_TOGGLE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_TOGGLE_KEYS: AtomicUsize = AtomicUsize::new(0);
-/// The button the last frame committed to, shared rather than owned by the render-loop struct.
-///
-/// When this module is a guest there is no `NetEffectsOverlay` instance -- the host owns the only
-/// render loop -- so the state the draw needs between frames cannot live in `self`.
-static TOGGLE_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
-/// The bar starts minimized to its button and stays out of the way until it is asked for.
-const START_COLLAPSED: bool = true;
-
-/// imgui's default font rasterizes at 13px. The bar is read at a glance while playing, from
-/// further away than a desktop app, so it asks for 25% more.
-const OVERLAY_FONT_SIZE_PX: f32 = 13.0 * 1.25;
+/// A shown bar is the full effect list (user request 2026-10-21: no click to expand). Whether it
+/// is drawn at all is the show/hide key's job; only the driver's `collapse` command minimizes it.
+const START_COLLAPSED: bool = false;
 
 const OVERLAY_TITLE: &str = "ER NET EFFECTS";
-/// Shown while collapsed: click to maximize.
-const EXPAND_MARK: &str = "[+]";
-/// Shown while expanded: click to minimize.
-const COLLAPSE_MARK: &str = "[-]";
 
-const PANEL_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.68];
-const BUTTON_HOVER_COLOR: [f32; 4] = [1.0, 1.0, 1.0, 0.14];
-const BUTTON_BORDER_COLOR: [f32; 4] = [0.62, 0.58, 0.48, 0.75];
-const BUTTON_BORDER_HOVER_COLOR: [f32; 4] = [0.98, 0.92, 0.72, 1.0];
-const TITLE_COLOR: [f32; 4] = [0.95, 0.90, 0.78, 1.0];
-const LINE_COLOR: [f32; 4] = [0.96, 0.94, 0.88, 1.0];
+/// The title: the theme's title face.
+const TITLE_FONT: Font = Font::Strong;
+/// The effect lines under the title: the theme's body text, 16.9 pixels high at 1080p. The bar
+/// drew its own default face at 16.25 before it had the theme -- 25% over Dear ImGui's 13, to be
+/// read at a glance while playing -- so the body size keeps it as legible.
+const LINE_FONT: Font = Font::Body;
 
-/// Draw the bar into a host module's frame.
+/// Draw the bar into a host's frame: another module's, or this module's own when it hosts.
 ///
 /// # Safety
 ///
-/// `ui` is a live `&Ui` supplied by the overlay host for the duration of this call.
-unsafe extern "C" fn guest_draw(frame: *const er_build_watermark_core::overlay_host::OverlayFrame) {
+/// `frame` is the pointer the overlay host passes for the duration of this call.
+unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     // Adopt the host's imgui context and allocators before touching `ui`. Without this the
     // context global in this DLL is null and `ui.io()` faults on the first field read.
     // SAFETY: `frame` is the pointer the host just handed us, live for this call.
-    let Some(ui) = (unsafe { er_build_watermark_core::overlay_host::adopt_frame(frame) }) else {
+    let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    draw_bar(ui);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    draw_bar(ui, ui_scale, &fonts);
 }
 
 /// Put the bar on screen, hosting the imgui context or joining whoever already does.
@@ -137,6 +138,15 @@ pub(crate) fn install_present_overlay_hook(hmodule_raw: usize) {
                 "present-overlay: hudhook dx12 overlay installed (this module HOSTS the imgui \
                  context; the watermark and any other overlay draw through it)"
             ));
+            // The bar is a guest of its own host, so it reads the theme's fonts out of the same
+            // frame every other guest gets; the render loop has no frame of its own to read them
+            // from.
+            if !register_guest(OVERLAY_ABI_TAG, guest_draw) {
+                net_effects_log(format_args!(
+                    "present-overlay: this module hosts the overlay but its own bar was not \
+                     accepted as a guest, so the bar is not drawn"
+                ));
+            }
         }
         Err(error) => {
             HUDHOOK_INSTALLED.store(0, Ordering::SeqCst);
@@ -153,11 +163,6 @@ pub(crate) fn overlay_collapsed() -> bool {
     OVERLAY_COLLAPSED.load(Ordering::Relaxed)
 }
 
-/// How many times the player has clicked the minimize/maximize button.
-pub(crate) fn overlay_toggle_clicks() -> usize {
-    OVERLAY_TOGGLE_CLICKS.load(Ordering::Relaxed)
-}
-
 /// How many times the bar was expanded or minimized from the keyboard or a driver command.
 ///
 /// Emitted beside the click count rather than folded into it, because the two answer different
@@ -168,23 +173,16 @@ pub(crate) fn overlay_toggle_keys() -> usize {
     OVERLAY_TOGGLE_KEYS.load(Ordering::Relaxed)
 }
 
-/// Expand the bar, or minimize it back -- the keyboard's half of the `[+]` button.
+/// Expand the bar -- the expand key. It no longer minimizes: a shown bar is always the list.
 ///
 /// Lives here rather than in `effects` because `OVERLAY_COLLAPSED` is read by the render thread
 /// every frame and is deliberately the one place the collapsed state lives; mirroring it into the
 /// game-thread state would lag the render loop by a frame (see `effects::selector_input_state`).
-pub(crate) fn toggle_collapsed_by_key() -> bool {
-    let now_collapsed = !OVERLAY_COLLAPSED.fetch_xor(true, Ordering::Relaxed);
+pub(crate) fn expand_by_key() {
     OVERLAY_TOGGLE_KEYS.fetch_add(1, Ordering::Relaxed);
-    net_effects_log(format_args!(
-        "present-overlay: bar {} by key",
-        if now_collapsed {
-            "minimized"
-        } else {
-            "maximized"
-        }
-    ));
-    now_collapsed
+    if OVERLAY_COLLAPSED.swap(false, Ordering::Relaxed) {
+        net_effects_log(format_args!("present-overlay: bar maximized by key"));
+    }
 }
 
 /// Put the bar into an explicit state, for the `er-net-effects-command.txt` driver.
@@ -209,45 +207,29 @@ struct NetEffectsOverlay;
 
 impl ImguiRenderLoop for NetEffectsOverlay {
     fn initialize<'a>(&'a mut self, ctx: &mut Context, _render_context: &'a mut dyn RenderContext) {
-        // Runs before the atlas is built, and this is the first font added, so it becomes the
-        // default one every `add_text` below draws with.
-        ctx.fonts().add_font(&[FontSource::DefaultFontData {
-            config: Some(FontConfig {
-                size_pixels: OVERLAY_FONT_SIZE_PX,
-                ..FontConfig::default()
-            }),
-        }]);
+        // The default face every host gives its atlas, at one size, so the face a guest falls
+        // back to does not depend on which module won the overlay. The bar itself draws in the
+        // theme's faces once they are built.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
         net_effects_log(format_args!(
-            "present-overlay: default font sized {OVERLAY_FONT_SIZE_PX}px"
+            "present-overlay: default font sized {font_px}px"
         ));
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        draw_bar(ui);
         // This module hosts the context, so every other overlay in the process draws here or
-        // nowhere. Dispatched after our own bar so the watermark stays on top of it.
+        // nowhere -- the bar among them, registered as a guest of this host. The watermark is
+        // drawn after the guests so it stays on top of them.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
         er_build_watermark_core::draw_rows(ui, net_effects_log);
     }
-
-    /// Keep the click that hits our own button away from the game.
-    ///
-    /// Elden Ring reads the mouse through DirectInput, which never touches this window procedure,
-    /// so this alone does not stop the click becoming an attack -- `input_suppression` blanks the
-    /// left button in the DirectInput state for that. This closes the legacy-message half of the
-    /// same hole, and only while the pointer is inside the button.
-    fn message_filter(&self, io: &Io) -> MessageFilter {
-        match TOGGLE_RECT.lock().ok().and_then(|rect| *rect) {
-            Some(rect) if rect_contains(rect, io.mouse_pos) => MessageFilter::InputMouse,
-            _ => MessageFilter::empty(),
-        }
-    }
 }
 
-/// Draw the bar. The only drawing path, taken identically whether this module hosts the imgui
-/// context or is a guest inside another module's render loop -- so the two cannot drift and a
-/// bug can never be "only in the guest case".
-fn draw_bar(ui: &Ui) {
+/// Draw the bar, at `ui_scale` (the frame's display height over 1080) in the theme `fonts` the
+/// host has built. The only drawing path, reached through `guest_draw` whether this module hosts
+/// the imgui context or is a guest inside another module's render loop -- so the two cannot
+/// drift and a bug can never be "only in the guest case".
+fn draw_bar(ui: &Ui, ui_scale: f32, fonts: &FrameFonts) {
     // Counted here, not in the host `render()`, because the guest path does not go through it.
     // Keeping the counters on the host path made `hudhook_render_count` read 0 for a bar that was
     // drawing perfectly well as a guest -- an oracle that reports the old bug's exact signature
@@ -286,26 +268,28 @@ fn draw_bar(ui: &Ui) {
         ));
     }
 
-    let collapsed = OVERLAY_COLLAPSED.load(Ordering::Relaxed);
-    let toggle = draw_foreground_selector(ui, display, &selector_text, collapsed);
-    let hovered = rect_contains(toggle, ui.io().mouse_pos);
-    if hovered && ui.is_mouse_clicked(MouseButton::Left) {
-        let now_collapsed = !collapsed;
-        OVERLAY_COLLAPSED.store(now_collapsed, Ordering::Relaxed);
-        OVERLAY_TOGGLE_CLICKS.fetch_add(1, Ordering::Relaxed);
+    let scale = theme::panel_scale(ui_scale);
+    // Asked once, the first frame the bar is on screen, by when the game has its display. The
+    // host builds them before its next frame; this frame draws in its default font.
+    if let Some(handles) = theme::request_fonts(scale) {
         net_effects_log(format_args!(
-            "present-overlay: bar {} by mouse click",
-            if now_collapsed {
-                "minimized"
-            } else {
-                "maximized"
-            }
+            "present-overlay: theme fonts handed to the overlay host at scale {scale}: handles \
+             {handles:?} (a 0 is a face the host refused; a handle another panel holds is \
+             shared)"
         ));
     }
-    if let Ok(mut rect) = TOGGLE_RECT.lock() {
-        *rect = Some(toggle);
-    }
-    input_suppression::set_pointer_over_overlay(hovered);
+    let _theme = theme::enter(Theme::new(
+        scale,
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
+    ));
+
+    let collapsed = OVERLAY_COLLAPSED.load(Ordering::Relaxed);
+    draw_foreground_selector(ui, display, &selector_text, collapsed);
+    // Nothing on the bar takes a click, so no click is kept from the game.
+    input_suppression::set_pointer_over_overlay(false);
 }
 
 /// Closes the render window however `draw_bar` leaves -- including its early return when the
@@ -320,112 +304,64 @@ impl Drop for RenderExitGuard {
 
 /// The bar is off screen: it owns no pointer, so it may not swallow a click.
 fn forget_button() {
-    if let Ok(mut rect) = TOGGLE_RECT.lock() {
-        *rect = None;
-    }
     input_suppression::set_pointer_over_overlay(false);
 }
 
-/// Draw the bar and return the rectangle that minimizes/maximizes it.
-fn draw_foreground_selector(
-    ui: &Ui,
-    display: [f32; 2],
-    selector_text: &str,
-    collapsed: bool,
-) -> Rect {
-    let row_height = ui.current_font_size();
+/// Draw the bar: the title, then the effect lines unless the driver collapsed it.
+fn draw_foreground_selector(ui: &Ui, display: [f32; 2], selector_text: &str, collapsed: bool) {
+    let t = theme::current();
+    // The title and the lines share a 13-pixel em, so one row height fits both.
+    let row_height = theme::line_height(ui, LINE_FONT).max(theme::line_height(ui, TITLE_FONT));
     let lines = if collapsed {
         Vec::new()
     } else {
         selector_lines(selector_text)
     };
-    let mark = if collapsed {
-        EXPAND_MARK
-    } else {
-        COLLAPSE_MARK
-    };
-    let mark_width = ui.calc_text_size(mark)[0];
-    // The header always reserves room for the marker, so the panel does not resize when the
-    // `[+]` and `[-]` glyphs differ in width.
-    let header_width = ui.calc_text_size(OVERLAY_TITLE)[0] + PANEL_PADDING + mark_width;
+    let header_width = theme::text_width(ui, TITLE_FONT, OVERLAY_TITLE);
     let content_width = lines.iter().fold(header_width, |widest, line| {
-        widest.max(ui.calc_text_size(line)[0])
+        widest.max(theme::text_width(ui, LINE_FONT, line))
     });
-    let layout = panel_layout(display, content_width, row_height, lines.len() + 1);
-    let hovered = rect_contains(layout.toggle, ui.io().mouse_pos);
+    let layout = panel_layout(display, content_width, row_height, lines.len() + 1, t.scale);
 
-    let draw_list = ui.get_foreground_draw_list();
-    draw_list
-        .add_rect(
-            [layout.panel[0], layout.panel[1]],
-            [layout.panel[2], layout.panel[3]],
-            PANEL_COLOR,
-        )
-        .filled(true)
-        .rounding(PANEL_ROUNDING)
-        .build();
-    if hovered {
-        draw_list
-            .add_rect(
-                [layout.toggle[0], layout.toggle[1]],
-                [layout.toggle[2], layout.toggle[3]],
-                BUTTON_HOVER_COLOR,
-            )
-            .filled(true)
-            .rounding(PANEL_ROUNDING)
-            .build();
-    }
-    // Outlined in both states: an unmarked region nobody knows is clickable is not a button.
-    draw_list
-        .add_rect(
-            [layout.toggle[0], layout.toggle[1]],
-            [layout.toggle[2], layout.toggle[3]],
-            if hovered {
-                BUTTON_BORDER_HOVER_COLOR
-            } else {
-                BUTTON_BORDER_COLOR
-            },
-        )
-        .filled(false)
-        .rounding(PANEL_ROUNDING)
-        .build();
+    let paint = theme::foreground_painter(ui);
+    let radius = t.px(PANEL_ROUNDING);
+    let [panel_min, panel_max] = corners(layout.panel);
+    paint.fill(panel_min, panel_max, theme::HUD_PANEL_BG, radius);
 
     draw_shadowed_text(
-        &draw_list,
+        ui,
+        &paint,
+        TITLE_FONT,
         [layout.text_x, layout.first_row_y],
-        TITLE_COLOR,
         OVERLAY_TITLE,
-    );
-    draw_shadowed_text(
-        &draw_list,
-        [layout.inner_right - mark_width, layout.first_row_y],
-        TITLE_COLOR,
-        mark,
     );
     for (index, line) in lines.iter().enumerate() {
         draw_shadowed_text(
-            &draw_list,
+            ui,
+            &paint,
+            LINE_FONT,
             [
                 layout.text_x,
                 layout.first_row_y + layout.row_advance * (index as f32 + 1.0),
             ],
-            LINE_COLOR,
             line,
         );
     }
-
-    layout.toggle
 }
 
-fn draw_shadowed_text(
-    draw_list: &DrawListMut<'_>,
-    pos: [f32; 2],
-    color: [f32; 4],
-    text: impl AsRef<str>,
-) {
-    let text = text.as_ref();
-    draw_list.add_text([pos[0] + 1.0, pos[1] + 1.0], [0.0, 0.0, 0.0, 1.0], text);
-    draw_list.add_text(pos, color, text);
+/// A rectangle's top-left and bottom-right corners, as the theme's painter takes them.
+fn corners(rect: Rect) -> [[f32; 2]; 2] {
+    [[rect[0], rect[1]], [rect[2], rect[3]]]
+}
+
+/// `text` in `which` with its top-left at `at`, over the theme's shadow one rule's width down and
+/// to the right, so it reads over a bright world.
+fn draw_shadowed_text(ui: &Ui, paint: &Painter<'_>, which: Font, at: [f32; 2], text: &str) {
+    let offset = theme::current().stroke();
+    theme::with_font(ui, which, || {
+        paint.text([at[0] + offset, at[1] + offset], theme::TEXT_SHADOW, text);
+        paint.text(at, theme::TEXT, text);
+    });
 }
 
 fn selector_lines(text: &str) -> Vec<String> {

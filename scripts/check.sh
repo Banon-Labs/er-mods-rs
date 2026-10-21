@@ -1728,6 +1728,13 @@ python3 "$repo_root/scripts/check-comment-caps.py"
 # the half that proves a growth, a new file and a silent improvement each still go red.
 python3 "$repo_root/scripts/check-color-spelling.py" --selftest
 python3 "$repo_root/scripts/check-color-spelling.py"
+
+# Every in-game overlay draws with crates/er-overlay-theme: a crate that uses imgui depends on it
+# and writes no color, font size or style push of its own. scripts/overlay-theme.baseline.json
+# holds what had not been ported when the gate was written; it may only shrink, and a crate
+# missing from it must be at zero, so a new DLL is held to the theme from its first commit.
+python3 "$repo_root/scripts/check-overlay-theme.py" --selftest
+python3 "$repo_root/scripts/check-overlay-theme.py"
 # The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
 # lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
 # stock AI). Selftest first, so the scanner is never trusted on its own say-so.
@@ -2561,9 +2568,10 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
 python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
 # The Shaders panel's pixel oracle holds its copies of the design tokens, the part names and the
-# panel telemetry's keys to theme.rs, mod.rs and exports.rs, and renders the mockup's panel in the
-# vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle that moves a token,
-# or a capture step that changes, would otherwise leave it judging the game against stale colours.
+# panel telemetry's keys to er-overlay-theme, panel_record.rs and exports.rs, and renders the
+# mockup's panel in the vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle
+# that moves a token, or a capture step that changes, would otherwise leave it judging the game
+# against stale colours.
 python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
 
 # er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what

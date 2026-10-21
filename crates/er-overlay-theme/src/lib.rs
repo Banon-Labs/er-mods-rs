@@ -28,7 +28,9 @@
 //!
 //! IBM Plex Sans in three weights and JetBrains Mono, vendored unmodified with their OFL texts
 //! under `fonts/`, are handed to the overlay host once ([`FONT_FILES`], [`Face::sizes`]) at the
-//! sizes a panel uses times its scale: four requests of the sixteen a process may make. A CSS
+//! sizes a panel uses times its scale, plus Regular and SemiBold again at the larger sizes of an
+//! overlay that fills the screen (the `Board*` fonts): six requests of the sixteen a process may
+//! make, shared by every overlay that asks for the same ones. A CSS
 //! font size is the em, and Dear ImGui sizes a font by ascender minus descender, so each em is
 //! multiplied by the face's `hhea` line ratio first ([`line_ratio`]); that also makes Dear ImGui's
 //! line height the browser's `normal`. The host builds them into its atlas on a later frame. Until
@@ -250,6 +252,33 @@ pub const COMPLETION_TEXT: [f32; 4] = rgb(0xDCD8CF);
 /// A row's tag and detail, the count of the rest, and the selected item's signatures and hint.
 pub const COMPLETION_QUIET: [f32; 4] = rgb(0xA7A39A);
 
+// The HUD: what an overlay draws straight on the world rather than in a panel. The mockups have
+// none, so each is named for what it shows and was carried over from the overlay that drew it
+// before the theme held every color.
+
+/// A translucent backing for lines drawn on the world without a window, so they read over snow.
+pub const HUD_PANEL_BG: [f32; 4] = rgba(0x000000, 0.68);
+/// The one-pixel shadow under text drawn on the world.
+pub const TEXT_SHADOW: [f32; 4] = rgb(0x000000);
+/// A stance bar's fill: gold, as the game's own poise break flashes.
+pub const BAR_STANCE: [f32; 4] = rgb(0xD9B34D);
+/// A stamina bar's fill: the game's stamina green.
+pub const BAR_STAMINA: [f32; 4] = rgb(0x40A640);
+/// An FP bar's fill: the game's FP blue.
+pub const BAR_FP: [f32; 4] = rgb(0x3366D9);
+/// The empty part of a bar.
+pub const BAR_TRACK: [f32; 4] = rgba(0x0D0D0D, 0.75);
+/// The outline around the bar the player is acting on.
+pub const BAR_ACTIVE_OUTLINE: [f32; 4] = rgba(0xFFFFFF, 0.9);
+/// A status ailment's build-up gauge, each in the hue the game gives that ailment.
+pub const STATUS_POISON: [f32; 4] = rgb(0x8CBF40);
+pub const STATUS_SCARLET_ROT: [f32; 4] = rgb(0xD95926);
+pub const STATUS_BLOOD_LOSS: [f32; 4] = rgb(0xBF141F);
+pub const STATUS_DEATH_BLIGHT: [f32; 4] = rgb(0x8C8099);
+pub const STATUS_FROSTBITE: [f32; 4] = rgb(0x8CD9F2);
+pub const STATUS_SLEEP: [f32; 4] = rgb(0x998CE6);
+pub const STATUS_MADNESS: [f32; 4] = rgb(0xF2B326);
+
 // Sizes, in pixels at 1080p.
 
 /// The header bar, its padding and the gap between its items.
@@ -405,15 +434,17 @@ pub fn shown(label: &str) -> &str {
     label.split("##").next().unwrap_or(label)
 }
 
-/// The vendored font files, in [`Face::ALL`] order.
-pub static FONT_FILES: [&[u8]; Face::COUNT] = [
+/// The vendored font files: Plex Sans Regular, Medium and SemiBold, then JetBrains Mono. The
+/// display faces reuse the Regular and SemiBold files ([`Face::file`]).
+pub static FONT_FILES: [&[u8]; 4] = [
     include_bytes!("../fonts/IBMPlexSans-Regular.ttf"),
     include_bytes!("../fonts/IBMPlexSans-Medium.ttf"),
     include_bytes!("../fonts/IBMPlexSans-SemiBold.ttf"),
     include_bytes!("../fonts/JetBrainsMono-Regular.ttf"),
 ];
 
-/// The four typefaces a panel asks the host for, in the order it asks.
+/// The typefaces a panel asks the host for, in the order it asks: each is one request of a file
+/// at a set of sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Face {
     /// IBM Plex Sans Regular: body text, labels, inactive tabs.
@@ -424,11 +455,23 @@ pub enum Face {
     SemiBold,
     /// JetBrains Mono Regular: values, paths, timings, key chips and code.
     Mono,
+    /// IBM Plex Sans Regular at a board's sizes: the text of an overlay that fills the screen
+    /// rather than a panel, such as er-r3-view's board.
+    DisplayRegular,
+    /// IBM Plex Sans SemiBold at a board's sizes: its keys, headings and title.
+    DisplayStrong,
 }
 
 impl Face {
-    pub const COUNT: usize = 4;
-    pub const ALL: [Self; Self::COUNT] = [Self::Regular, Self::Medium, Self::SemiBold, Self::Mono];
+    pub const COUNT: usize = 6;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Regular,
+        Self::Medium,
+        Self::SemiBold,
+        Self::Mono,
+        Self::DisplayRegular,
+        Self::DisplayStrong,
+    ];
 
     /// The em sizes, at 1080p, a panel asks for in this face: every size a [`Font`] in it uses.
     #[must_use]
@@ -438,6 +481,8 @@ impl Face {
             Self::Medium => &[12.0, 13.0],
             Self::SemiBold => &[11.0, 13.0],
             Self::Mono => &[11.0, 12.0],
+            Self::DisplayRegular => &[15.0, 16.0, 20.0],
+            Self::DisplayStrong => &[20.0, 27.0, 47.0],
         }
     }
 
@@ -449,13 +494,20 @@ impl Face {
             Self::Medium => "plex_sans_medium",
             Self::SemiBold => "plex_sans_semibold",
             Self::Mono => "jetbrains_mono_regular",
+            Self::DisplayRegular => "plex_sans_regular_display",
+            Self::DisplayStrong => "plex_sans_semibold_display",
         }
     }
 
     /// The face's TrueType bytes.
     #[must_use]
     pub fn file(self) -> &'static [u8] {
-        FONT_FILES[self as usize]
+        FONT_FILES[match self {
+            Self::Regular | Self::DisplayRegular => 0,
+            Self::Medium => 1,
+            Self::SemiBold | Self::DisplayStrong => 2,
+            Self::Mono => 3,
+        }]
     }
 }
 
@@ -483,6 +535,18 @@ pub enum Font {
     Mono,
     /// JetBrains Mono 11: paths, timings and key chips.
     MonoSmall,
+    /// A board's running text, on an overlay that fills the screen: Plex Sans 15.
+    BoardBody,
+    /// A board's larger running text: Plex Sans 16.
+    BoardBodyLarge,
+    /// A board's row keys: Plex Sans 20.
+    BoardKey,
+    /// A board's emphasised keys and values: Plex Sans 20 SemiBold.
+    BoardStrong,
+    /// A board's section headings: Plex Sans 27 SemiBold.
+    BoardHeading,
+    /// A board's title: Plex Sans 47 SemiBold.
+    BoardTitle,
 }
 
 impl Font {
@@ -494,6 +558,8 @@ impl Font {
             Self::Medium | Self::MediumLabel => Face::Medium,
             Self::Strong | Self::Heading => Face::SemiBold,
             Self::Mono | Self::MonoSmall => Face::Mono,
+            Self::BoardBody | Self::BoardBodyLarge | Self::BoardKey => Face::DisplayRegular,
+            Self::BoardStrong | Self::BoardHeading | Self::BoardTitle => Face::DisplayStrong,
         }
     }
 
@@ -504,6 +570,11 @@ impl Font {
             Self::Body | Self::Medium | Self::Strong => 13.0,
             Self::Label | Self::MediumLabel | Self::Mono => 12.0,
             Self::Small | Self::Heading | Self::MonoSmall => 11.0,
+            Self::BoardBody => 15.0,
+            Self::BoardBodyLarge => 16.0,
+            Self::BoardKey | Self::BoardStrong => 20.0,
+            Self::BoardHeading => 27.0,
+            Self::BoardTitle => 47.0,
         }
     }
 }
@@ -572,9 +643,13 @@ pub fn pixel_size(face: Face, em: f32) -> f32 {
 pub fn request_sizes(face: Face, scale: f32) -> Vec<f32> {
     face.sizes()
         .iter()
-        .map(|&em| pixel_size(face, em) * scale)
+        .map(|&em| (pixel_size(face, em) * scale).min(MAX_REQUEST_PX))
         .collect()
 }
+
+/// The largest size the overlay host builds a font at (`font_request::MAX_SIZE_PX`), so a board's
+/// title on an 8K display asks for the most the host gives rather than being refused outright.
+pub const MAX_REQUEST_PX: f32 = 200.0;
 
 /// The panel window's font scale. With the panel's fonts in use, the display's scale over the
 /// scale they were built at (`request_scale`), 1 until the display changes size; without them, the
@@ -1066,6 +1141,8 @@ pub struct FrameRecord {
     pub labels: Vec<(&'static str, &'static str)>,
     /// The same for yes-or-no facts.
     pub flags: Vec<(&'static str, bool)>,
+    /// The same for counts: er-cel-shade's reference column's entries, for one.
+    pub counts: Vec<(&'static str, u64)>,
     /// Each part in [`rect_names`] order, as `[x, y, width, height]` in screen pixels; `None` for
     /// a part not drawn this frame.
     pub rects: Vec<Option<[f32; 4]>>,
@@ -1104,6 +1181,23 @@ impl FrameRecord {
     #[must_use]
     pub fn flag(&self, key: &str) -> Option<bool> {
         self.flags
+            .iter()
+            .find(|(known, _)| *known == key)
+            .map(|(_, value)| *value)
+    }
+
+    /// Set the count `key`, replacing an earlier value.
+    pub fn set_count(&mut self, key: &'static str, value: u64) {
+        match self.counts.iter_mut().find(|(known, _)| *known == key) {
+            Some(slot) => slot.1 = value,
+            None => self.counts.push((key, value)),
+        }
+    }
+
+    /// The count `key`, if set.
+    #[must_use]
+    pub fn count(&self, key: &str) -> Option<u64> {
+        self.counts
             .iter()
             .find(|(known, _)| *known == key)
             .map(|(_, value)| *value)
@@ -1186,14 +1280,15 @@ mod draw;
 
 #[cfg(windows)]
 pub use draw::{
-    FontScope, FrameFonts, Painter, PanelStyle, Row, WindowStyle, badge, button, button_width,
-    card, checkbox, chip, combo, content, danger_toggle_button, default_font_px, divider, dot,
-    dots_button, fit_text, font, fonts_requested, footer, foreground_painter, frame, frame_fonts,
-    gap, icon_button, item_rect, kbd, kbd_size, last_track, light_dot, line_height, mono,
-    mono_quiet, note, painter, panel_style, primary_button, quiet, region, register_item,
-    request_fonts, rule, secondary, secondary_button, section_heading, spaced_text, spacing, spans,
-    spans_width, square_toggle, tab_strip, text, text_width, text_wrapped, toggle_button, tooltip,
-    unavailable, unavailable_button, vertical_label, window_style, with_font,
+    ClearField, FontScope, FrameFonts, Painter, PanelStyle, Row, WindowStyle, apply_font_scale,
+    badge, button, button_width, card, checkbox, chip, clear_field, combo, content,
+    danger_toggle_button, default_font_px, divider, dot, dots_button, field_fill, fit_text, font,
+    fonts_requested, footer, foreground_painter, frame, frame_fonts, gap, global_font_scale,
+    icon_button, item_rect, kbd, kbd_size, last_track, light_dot, line_height, mono, mono_quiet,
+    note, painter, panel_style, primary_button, quiet, region, register_item, request_fonts, rule,
+    secondary, secondary_button, section_heading, spaced_text, spacing, spans, spans_width,
+    square_toggle, tab_strip, text, text_width, text_wrapped, toggle_button, tooltip, unavailable,
+    unavailable_button, vertical_label, window_style, with_font,
 };
 
 #[cfg(test)]
@@ -1250,9 +1345,12 @@ mod tests {
 
     #[test]
     fn the_host_accepts_every_request_a_panel_makes() {
-        // Four requests of the process's sixteen, leaving the rest to the other overlays.
-        const { assert!(Face::COUNT <= MAX_FONT_REQUESTS / 4) };
+        // Six requests of the process's sixteen. Every themed overlay asks for the same ones and
+        // the host shares identical requests, so they cost six however many DLLs draw, and
+        // scripts/check-overlay-theme.py keeps any overlay from asking for a font of its own.
+        const { assert!(Face::COUNT <= MAX_FONT_REQUESTS / 2) };
         const { assert!(MAX_FACE_SIZES <= MAX_SIZES_PER_FONT) };
+        assert_eq!(MAX_REQUEST_PX, font_request::MAX_SIZE_PX);
         for face in Face::ALL {
             assert!(face.sizes().len() <= MAX_FACE_SIZES);
             for scale in [MIN_SCALE, 1.0, 2.0, 4.0] {
@@ -1313,7 +1411,8 @@ mod tests {
 
     #[test]
     fn a_refused_face_falls_back_to_the_regular_one() {
-        let only_regular = [true, false, false, false];
+        let mut only_regular = [false; Face::COUNT];
+        only_regular[Face::Regular as usize] = true;
         assert_eq!(
             font_slot(Font::Heading, only_regular),
             Some((Face::Regular, 0))
@@ -1328,7 +1427,9 @@ mod tests {
         );
         assert_eq!(font_slot(Font::Body, [false; Face::COUNT]), None);
         // Without the regular face the panel uses none of its fonts.
-        let theme = Theme::new(1.0, no_fonts(), [false, true, true, true], Some(1.0), 13.0);
+        let mut all_but_regular = [true; Face::COUNT];
+        all_but_regular[Face::Regular as usize] = false;
+        let theme = Theme::new(1.0, no_fonts(), all_but_regular, Some(1.0), 13.0);
         assert!(!theme.custom_fonts());
         assert_eq!(theme.font_ptr(Font::Mono), None);
     }
@@ -1440,6 +1541,8 @@ mod tests {
             snapshot.set_label("dock", "left");
             snapshot.set_label("dock", "right");
             snapshot.set_flag("code_view", true);
+            snapshot.set_count("shown", 3);
+            snapshot.set_count("shown", 286);
         });
         publish_record();
         let Some(snapshot) = last_record() else {
@@ -1454,6 +1557,9 @@ mod tests {
         assert_eq!(snapshot.label("dock"), Some("right"));
         assert_eq!(snapshot.labels.len(), 1);
         assert_eq!(snapshot.flag("code_view"), Some(true));
+        assert_eq!(snapshot.count("shown"), Some(286));
+        assert_eq!(snapshot.counts.len(), 1);
+        assert_eq!(snapshot.count("total"), None);
         let named: Vec<_> = snapshot.named_rects().map(|(name, _)| name).collect();
         assert_eq!(named, NAMES);
         // The next frame forgets the parts, not the state.

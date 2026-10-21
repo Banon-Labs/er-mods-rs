@@ -75,8 +75,6 @@ pub mod vertex;
 #[cfg(windows)]
 mod hooks;
 #[cfg(windows)]
-mod input;
-#[cfg(windows)]
 mod overlay;
 
 #[cfg(windows)]
@@ -212,7 +210,7 @@ pub unsafe extern "system" fn DllMain(
             let _ = std::thread::Builder::new()
                 .name("er-cel-shade-install".to_owned())
                 .spawn(move || {
-                    input::install_cursor();
+                    er_overlay_input::install_cursor(log);
                     overlay::install(module_base);
                 });
         });

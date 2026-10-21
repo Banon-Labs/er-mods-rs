@@ -596,7 +596,7 @@ mod process {
 
     use hudhook::imgui::{
         ImColor32, InputTextCallbackHandler, InputTextMultilineCallback, Key, MouseCursor,
-        StyleColor, StyleVar, TextCallbackData, Ui, WindowFlags, WindowHoveredFlags, sys,
+        TextCallbackData, Ui, WindowFlags, WindowHoveredFlags, sys,
     };
 
     use super::super::files::{self, Job, Reply, Written};
@@ -921,8 +921,6 @@ mod process {
         stretched: f32,
         /// A space's width, for the sliver a selected line break shows.
         space: f32,
-        /// The code area's font scale: the panel window's, which its text is the size of.
-        window_scale: f32,
     }
 
     impl Metrics {
@@ -939,8 +937,10 @@ mod process {
             // SAFETY: an atlas font, live for the frame; atlas fonts are never freed.
             let (own, font_scale, ascent) =
                 unsafe { ((*font).FontSize, (*font).Scale, (*font).Ascent) };
+            // The code area's font scale: the panel window's, which its text is the size of
+            // (`theme::apply_font_scale`).
             let window_scale = t.font_scale;
-            let global = ui.io().font_global_scale;
+            let global = theme::global_font_scale(ui);
             // Dear ImGui's size for a window this font is pushed in, one level under a window
             // scaled `window_scale` (`SetCurrentFont`, `CalcFontSize`).
             let size = (global * own * font_scale).max(1.0) * window_scale;
@@ -960,7 +960,6 @@ mod process {
                 pad: theme::CODE_PAD.map(|pad| t.px(pad).round()),
                 stretched,
                 space: 0.0,
-                window_scale,
             };
             metrics.space = metrics.width(" ");
             Some(metrics)
@@ -1584,7 +1583,8 @@ mod process {
             else {
                 return rows;
             };
-            ui.set_window_font_scale(m.window_scale);
+            // The panel window's font scale, which the code's metrics were worked out at.
+            theme::apply_font_scale(ui);
             self.scroll_sideways(ui, m, size[0]);
             let edited = self.draw_field(ui, min, size, m);
 
@@ -1772,16 +1772,7 @@ mod process {
             let mut accepted = None;
             let mut inserted = None;
             let edited = {
-                let _look = [
-                    ui.push_style_var(StyleVar::FramePadding(m.pad)),
-                    ui.push_style_var(StyleVar::FrameBorderSize(0.0)),
-                    ui.push_style_var(StyleVar::FrameRounding(0.0)),
-                ];
-                let _clear = [
-                    ui.push_style_color(StyleColor::FrameBg, theme::CLEAR),
-                    ui.push_style_color(StyleColor::Text, theme::CLEAR),
-                    ui.push_style_color(StyleColor::TextSelectedBg, theme::CLEAR),
-                ];
+                let _look = theme::clear_field(ui, m.pad);
                 let _font = StretchedFont::push(ui, &mut stretched);
                 ui.input_text_multiline(FIELD, &mut self.text, field)
                     .allow_tab_input(true)
