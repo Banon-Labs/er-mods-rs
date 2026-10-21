@@ -396,7 +396,7 @@ fn name_row(ui: &Ui, index: usize, name: &str, selected: bool) -> bool {
     let height = t.px(theme::STACK_ROW_HEIGHT).round();
     let clicked = ui.invisible_button(format!("##duel-row-{index}"), [width, height]);
     let paint = theme::painter(ui);
-    let (font, colour) = if selected {
+    let (font, color) = if selected {
         paint.fill(
             at,
             [at[0] + width, at[1] + height],
@@ -414,7 +414,7 @@ fn name_row(ui: &Ui, index: usize, name: &str, selected: bool) -> bool {
                 at[0] + t.px(theme::STACK_ROW_PAD_X).round(),
                 at[1] + ((height - line) * 0.5).round(),
             ],
-            colour,
+            color,
             name,
         );
     });

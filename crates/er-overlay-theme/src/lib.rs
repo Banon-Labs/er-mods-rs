@@ -254,7 +254,7 @@ pub const COMPLETION_QUIET: [f32; 4] = rgb(0xA7A39A);
 
 // The HUD: what an overlay draws straight on the world rather than in a panel. The mockups have
 // none, so each is named for what it shows and was carried over from the overlay that drew it
-// before the theme held every colour.
+// before the theme held every color.
 
 /// A translucent backing for lines drawn on the world without a window, so they read over snow.
 pub const HUD_PANEL_BG: [f32; 4] = rgba(0x000000, 0.68);

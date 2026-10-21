@@ -5,7 +5,7 @@
 //! (see [`crate::layout`]), so they follow the game's bar as it moves and disappear whenever the
 //! game hides it.
 //!
-//! Its colours are `er-overlay-theme`'s HUD tokens. It draws no text and no window, and every size
+//! Its colors are `er-overlay-theme`'s HUD tokens. It draws no text and no window, and every size
 //! is in the HUD movie's stage pixels ([`StageTransform`]) rather than the theme's 1080p ones, so
 //! it enters no frame theme. The theme's painters draw on a window's list or the foreground one;
 //! the bars stay on the background list, under every other overlay's panel.
@@ -51,7 +51,7 @@ static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Frames this module has drawn bars into.
 static DRAWS: AtomicUsize = AtomicUsize::new(0);
-/// Frames drawn with the game's bar art rather than flat colour.
+/// Frames drawn with the game's bar art rather than flat color.
 static ART_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Frames dispatched to this module at all, drawn or not.
 static FRAMES: AtomicUsize = AtomicUsize::new(0);

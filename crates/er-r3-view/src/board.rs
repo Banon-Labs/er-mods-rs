@@ -4,7 +4,7 @@
 //! Positions and gaps are the canvas's own, in its 1440 x 1200 frame, stretched edge to edge:
 //! across by the screen's width, down by its height, so the columns keep their place beside the
 //! game's item list at every resolution. Type is the theme's: each kind of text is set in the
-//! theme [`Font`] nearest its canvas size, at the panel's scale, and its colour is a theme token.
+//! theme [`Font`] nearest its canvas size, at the panel's scale, and its color is a theme token.
 //! What depends on a size of type -- a key's text centred on its line, a gear icon as tall as two
 //! lines -- is measured from the theme font's line height, not from the canvas size.
 //!
@@ -172,9 +172,9 @@ impl Pen<'_> {
         theme::line_height(self.ui, font) / self.ky
     }
 
-    /// Draws `s` at canvas `(x, y)` in `font` and `colour`, wrapping at canvas `right`; returns the
+    /// Draws `s` at canvas `(x, y)` in `font` and `color`, wrapping at canvas `right`; returns the
     /// canvas y below it.
-    fn text(&self, x: f32, y: f32, right: f32, font: Font, colour: [f32; 4], s: &str) -> f32 {
+    fn text(&self, x: f32, y: f32, right: f32, font: Font, color: [f32; 4], s: &str) -> f32 {
         let ui = self.ui;
         if self.measure_only {
             // The drawn text sizes its item by `CalcTextSize` at this font, scale and wrap width.
@@ -186,7 +186,7 @@ impl Pen<'_> {
         }
         ui.set_cursor_pos([x * self.kx, y * self.ky]);
         let _wrap = ui.push_text_wrap_pos_with_pos(right * self.kx);
-        theme::text_wrapped(ui, font, colour, s);
+        theme::text_wrapped(ui, font, color, s);
         (ui.item_rect_max()[1] - ui.window_pos()[1]) / self.ky
     }
 

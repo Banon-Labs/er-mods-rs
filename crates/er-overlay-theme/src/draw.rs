@@ -648,7 +648,7 @@ pub fn frame(ui: &Ui, height: f32, pad_x: f32) -> StyleStackToken<'_> {
 }
 
 /// Fields, combos and Dear ImGui's drag boxes filled with `fill` whether or not the mouse is over
-/// them or they are being edited, until dropped: a field set into a surface of another colour, as
+/// them or they are being edited, until dropped: a field set into a surface of another color, as
 /// the selector's text field is into the code area's [`CODE_BG`].
 pub fn field_fill(ui: &Ui, fill: [f32; 4]) -> [ColorStackToken<'_>; 3] {
     [
@@ -664,7 +664,7 @@ pub fn field_fill(ui: &Ui, fill: [f32; 4]) -> [ColorStackToken<'_>; 3] {
 /// field and draws the text itself, under it, on the window's draw list. Drop it after the field.
 pub struct ClearField<'ui> {
     _vars: [StyleStackToken<'ui>; 3],
-    _colours: [ColorStackToken<'ui>; 3],
+    _colors: [ColorStackToken<'ui>; 3],
 }
 
 /// See [`ClearField`].
@@ -675,7 +675,7 @@ pub fn clear_field(ui: &Ui, pad: [f32; 2]) -> ClearField<'_> {
             ui.push_style_var(StyleVar::FrameBorderSize(0.0)),
             ui.push_style_var(StyleVar::FrameRounding(0.0)),
         ],
-        _colours: [
+        _colors: [
             ui.push_style_color(StyleColor::FrameBg, CLEAR),
             ui.push_style_color(StyleColor::Text, CLEAR),
             ui.push_style_color(StyleColor::TextSelectedBg, CLEAR),

@@ -32,7 +32,6 @@ static HUDHOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_RENDER_HITS: AtomicUsize = AtomicUsize::new(0);
 static HUDHOOK_VISIBLE_HITS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_COLLAPSED: AtomicBool = AtomicBool::new(START_COLLAPSED);
-static OVERLAY_TOGGLE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_TOGGLE_KEYS: AtomicUsize = AtomicUsize::new(0);
 
 /// A shown bar is the full effect list (user request 2026-10-21: no click to expand). Whether it
@@ -162,12 +161,6 @@ pub(crate) fn install_present_overlay_hook(hmodule_raw: usize) {
 /// Is the bar currently minimized to its single button?
 pub(crate) fn overlay_collapsed() -> bool {
     OVERLAY_COLLAPSED.load(Ordering::Relaxed)
-}
-
-/// How many times the player clicked the minimize/maximize button. The button is gone, so this
-/// stays 0; it is kept so the telemetry file keeps its keys.
-pub(crate) fn overlay_toggle_clicks() -> usize {
-    OVERLAY_TOGGLE_CLICKS.load(Ordering::Relaxed)
 }
 
 /// How many times the bar was expanded or minimized from the keyboard or a driver command.
