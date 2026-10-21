@@ -26,6 +26,8 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # The one-imgui-host-per-process arbitration: this DLL draws as a guest when another module hosts
 # and hosts only when nothing else does, so the process keeps exactly one `Present` hook.
 er-build-watermark-core = { path = "../er-build-watermark-core" }
+# The look every in-game panel shares: colors, faces and the window style.
+er-overlay-theme = { path = "../er-overlay-theme" }
 hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",

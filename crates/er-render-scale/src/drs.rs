@@ -335,10 +335,18 @@ pub fn install() -> Result<(), String> {
     let mut bytes = [0u8; DRS_UPDATE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
-    // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
-    let matches = read
-        && (bytes == DRS_UPDATE_1171_PROLOGUE
-            || (bytes[0] == 0xe9 && bytes[5..] == DRS_UPDATE_1171_PROLOGUE[5..]));
+    // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match under
+    // the mask, which skips the stack cookie's RIP-relative displacement. That field re-encodes
+    // whenever `.data` moves against `.text`: on 1.17.2 the update moved `+0x16f0` and the cookie
+    // `+0x3010`, so the same `mov rax,[rip+..]` now reads `73 1d 13 02` where 1.17.1 read
+    // `53 04 13 02`.
+    let masked_eq = |from: usize| {
+        (from..bytes.len()).all(|i| {
+            bytes[i] & DRS_UPDATE_1171_PROLOGUE_MASK[i]
+                == DRS_UPDATE_1171_PROLOGUE[i] & DRS_UPDATE_1171_PROLOGUE_MASK[i]
+        })
+    };
+    let matches = read && (masked_eq(0) || (bytes[0] == 0xe9 && masked_eq(5)));
     if !matches {
         BYTES_PENDING.store(true, Ordering::Release);
         return refuse(format!(

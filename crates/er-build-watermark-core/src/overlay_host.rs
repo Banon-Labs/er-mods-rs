@@ -51,7 +51,8 @@
 //! or if it never builds, both answer with the default font. A request identical to an earlier
 //! one -- the same bytes at the same sizes, which is what two panels on `er-overlay-theme` send at
 //! one display scale -- gets the earlier handle and spends none of the process's requests
-//! ([`add_font_v1`]).
+//! ([`add_font_v1`]). The default font itself is added by [`add_host_default_font`], the same in
+//! every host, so the face a guest falls back to does not depend on which module won.
 //!
 //! # Textures
 //!
@@ -219,6 +220,31 @@ fn apply_pending(ctx: &mut hudhook::imgui::Context, render: &mut dyn hudhook::Re
     }
     apply_pending_fonts(ctx);
     apply_pending_textures(render);
+}
+
+/// Give a host's atlas its default font: Dear ImGui's own face at
+/// [`crate::layout::FONT_SIZE_PX`]. Returns that size, for the caller's log.
+///
+/// Every module that hosts the render loop calls this first thing in its `initialize`, before the
+/// atlas is built, so this is the first font in the atlas and therefore the default one. It is
+/// one function because the default face is what every guest draws in until its own fonts are
+/// built -- and forever, if the host refuses them -- so a host that sized it its own way changed
+/// every guest's text by winning the overlay. Until 2026-10-16 er-net-effects built it at 16.25
+/// pixels and the watermark at 27, and er-duel-rules' menu, scaled for a 13-pixel face, drew
+/// 62-pixel text on the watermark's.
+///
+/// The size is the watermark's because its rows are drawn in the default face and advanced by
+/// that size. A dedicated size rather than the 13-pixel face scaled up: scaled, it is blurry.
+pub fn add_host_default_font(ctx: &mut hudhook::imgui::Context) -> f32 {
+    use hudhook::imgui::{FontConfig, FontSource};
+
+    ctx.fonts().add_font(&[FontSource::DefaultFontData {
+        config: Some(FontConfig {
+            size_pixels: crate::layout::FONT_SIZE_PX,
+            ..FontConfig::default()
+        }),
+    }]);
+    crate::layout::FONT_SIZE_PX
 }
 
 /// Confirm the render loop is really installed. Called after `apply()` returns `Ok`.

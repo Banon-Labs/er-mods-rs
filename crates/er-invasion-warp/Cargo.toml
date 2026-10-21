@@ -49,6 +49,9 @@ fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # only if it loads before every other overlay shell and draws as a GUEST otherwise -- which is
 # the case in every profile a player uses -- so exactly one `Present` hook exists in the process.
 er-build-watermark-core = { path = "../er-build-watermark-core" }
+# The look every overlay in this workspace shares: the settings panel is drawn in its window and
+# panel styles, its faces and its helpers, as the render-scale panel is.
+er-overlay-theme = { path = "../er-overlay-theme" }
 # Blanking the DirectInput left button while the panel owns the pointer. A guest owns no
 # `MessageFilter`, and ELDEN RING reads the mouse through DirectInput anyway, so this is what
 # stops a click on the panel also being a weapon swing.

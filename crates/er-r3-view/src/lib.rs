@@ -38,7 +38,8 @@
 //!
 //! A guest of the process's overlay host draws the board (`board.rs`) on the game's own frame. A separate top-level
 //! window cannot be transparent under Wine here: a colour key and per-pixel alpha both left a black
-//! screen over the game.
+//! screen over the game. It draws in the workspace's shared look (`er-overlay-theme`): the theme's
+//! colours, and its faces, handed to the host the first time the board is shown.
 //!
 //! The weapon's icon is the game's own: `item_icon.rs` looks it up on the menu thread, copies it
 //! out of the BC7 icon atlas on a thread of its own, and hands the decoded pixels to the overlay
@@ -50,8 +51,6 @@ mod board;
 mod imp;
 #[cfg(windows)]
 mod item_icon;
-#[cfg(windows)]
-mod menu_font;
 // Off Windows only its tests use it.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod scroll;

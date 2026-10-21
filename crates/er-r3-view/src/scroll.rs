@@ -1,13 +1,14 @@
 //! The timing of a board section taller than the screen leaves it: held at the top, carried down at
 //! a reading pace, held at the bottom, carried back up, and round again.
 //!
-//! Lengths are canvas units, the board's own space, in which type sizes are set too, so the pace
-//! reads the same at every resolution. Kept free of imgui so the host can test it.
+//! Lengths are canvas units, the board's own space, stretched to the screen's height as the
+//! theme's type is scaled by it, so the pace reads the same at every resolution. Kept free of imgui
+//! so the host can test it.
 
 /// How long the section holds still at either end, in seconds.
 pub const SCROLL_PAUSE_S: f32 = 2.0;
-/// How fast the section moves between the ends, in canvas units a second: about one and a half
-/// lines of gear text, 32 px a second on a 1080-high screen.
+/// How fast the section moves between the ends, in canvas units a second: 32 px a second on a
+/// 1080-high screen, about two lines of gear text.
 pub const SCROLL_SPEED: f32 = 36.0;
 
 /// How far down the content is scrolled `t` seconds into the cycle, for content `content_h` tall

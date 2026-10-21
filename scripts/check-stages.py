@@ -171,6 +171,8 @@ STAGES: tuple[Stage, ...] = (
             "**/*.js",
             "**/*.lua",
             "**/*.rego",
+            "crates/er-overlay-theme/**/*",
+            "scripts/overlay-theme.baseline.json",
             "scripts/frida/ai-lua/**/*",
         ),
     ),

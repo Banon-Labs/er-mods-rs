@@ -552,6 +552,14 @@ pub fn window_style(ui: &Ui) -> WindowStyle<'_> {
     }
 }
 
+/// Scale the current window's text by the frame's font scale: 1 when the host built the panel's
+/// faces at the display's scale, else the factor that carries the host's default face, whatever
+/// size that host built it, to the panel's text size. Call it first thing inside a top-level
+/// window; a child window multiplies its parent's scale, and [`region`] sets each child's own.
+pub fn apply_font_scale(ui: &Ui) {
+    ui.set_window_font_scale(current().font_scale);
+}
+
 /// The style Dear ImGui's own widgets take inside the panel, for as long as it lives: frames 24
 /// high in the current font with 8 a side, the tokens' colors, rounding 3, a 12-pixel slider
 /// grab, 1-pixel borders. Push it after the panel's font.
@@ -637,6 +645,49 @@ pub fn frame(ui: &Ui, height: f32, pad_x: f32) -> StyleStackToken<'_> {
     let t = current();
     let y = frame_padding_y(t.px(height).round(), ui.current_font_size());
     ui.push_style_var(StyleVar::FramePadding([t.px(pad_x), y]))
+}
+
+/// Fields, combos and Dear ImGui's drag boxes filled with `fill` whether or not the mouse is over
+/// them or they are being edited, until dropped: a field set into a surface of another colour, as
+/// the selector's text field is into the code area's [`CODE_BG`].
+pub fn field_fill(ui: &Ui, fill: [f32; 4]) -> [ColorStackToken<'_>; 3] {
+    [
+        StyleColor::FrameBg,
+        StyleColor::FrameBgHovered,
+        StyleColor::FrameBgActive,
+    ]
+    .map(|slot| ui.push_style_color(slot, fill))
+}
+
+/// The style of a text field that something else draws: no frame, border or rounding, its text
+/// and its selection clear, and `pad` screen pixels inside it. The code editor types into such a
+/// field and draws the text itself, under it, on the window's draw list. Drop it after the field.
+pub struct ClearField<'ui> {
+    _vars: [StyleStackToken<'ui>; 3],
+    _colours: [ColorStackToken<'ui>; 3],
+}
+
+/// See [`ClearField`].
+pub fn clear_field(ui: &Ui, pad: [f32; 2]) -> ClearField<'_> {
+    ClearField {
+        _vars: [
+            ui.push_style_var(StyleVar::FramePadding(pad)),
+            ui.push_style_var(StyleVar::FrameBorderSize(0.0)),
+            ui.push_style_var(StyleVar::FrameRounding(0.0)),
+        ],
+        _colours: [
+            ui.push_style_color(StyleColor::FrameBg, CLEAR),
+            ui.push_style_color(StyleColor::Text, CLEAR),
+            ui.push_style_color(StyleColor::TextSelectedBg, CLEAR),
+        ],
+    }
+}
+
+/// Dear ImGui's global font scale, which every font size it works out is multiplied by: for a
+/// panel that sizes a copy of a font itself, as the code editor stretches its mono font's lines.
+#[must_use]
+pub fn global_font_scale(ui: &Ui) -> f32 {
+    ui.io().font_global_scale
 }
 
 /// The last item's rectangle, `[x, y, width, height]` in screen pixels.

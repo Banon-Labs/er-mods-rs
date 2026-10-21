@@ -27,6 +27,10 @@ er-invasion-warp-core = { path = "../er-invasion-warp-core" }
 # Key names, the reload decision, and the pad-chord type. Host-buildable, so the config and
 # binding logic stay covered by `cargo test`.
 er-hotkey-config = { path = "../er-hotkey-config" }
+# The look the creature list and the attack-set panel draw in, shared with every other in-game
+# panel: colors, sizes at 1080p, the fonts handed to the overlay host. Host-buildable; only its
+# drawing half is `cfg(windows)`.
+er-overlay-theme = { path = "../er-overlay-theme" }
 
 [target.'cfg(windows)'.dependencies]
 # The MinHook wrapper, for the crate's ONE detour: CSFeManImp::UpdatePlayerComponents, which is

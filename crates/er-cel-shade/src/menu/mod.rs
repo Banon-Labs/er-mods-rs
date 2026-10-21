@@ -26,9 +26,10 @@
 //!
 //! # Look
 //!
-//! Every colour, size, font and drawing helper is [`theme`]'s. The panel runs on Dear ImGui's
-//! widgets wherever their styled form is the mockup's, and draws the rest -- the bars, rules, tabs,
-//! buttons, key chips, lights, chevrons -- on the draw list. Its fonts are IBM Plex Sans and
+//! Every colour, size, font and drawing helper is [`theme`]'s: `er-overlay-theme`, the look every
+//! in-game panel in this workspace shares. The panel runs on Dear ImGui's widgets wherever their
+//! styled form is the mockup's, and draws the rest -- the bars, rules, tabs, buttons, key chips,
+//! lights, chevrons -- on the draw list. Its fonts are IBM Plex Sans and
 //! JetBrains Mono, asked of the overlay host once, the first time the panel is drawn; until the
 //! host has built them it draws in the host's default font as before.
 //!
@@ -86,7 +87,8 @@
 //! and the entries written from it, the files it wrote, parameter and stack edits, caught panics
 //! and its own time per frame. The worker writes them into the telemetry file with the rest, and
 //! with them the last frame's record of where the panel's parts landed on the screen and of the
-//! reference column ([`theme::PanelSnapshot`]).
+//! reference column ([`theme::FrameRecord`], with the panel's own part names, labels and reference
+//! column in [`panel_record`]).
 
 pub mod code;
 pub mod diagnostics_tab;
@@ -95,11 +97,14 @@ pub mod hunt_tab;
 pub mod layers_tab;
 #[cfg(windows)]
 mod look_tab;
+pub mod panel_record;
 pub mod reference_panel;
 #[cfg(windows)]
 mod sky_tab;
-pub mod theme;
 pub mod widgets;
+
+/// The look, shared with every other in-game panel in this workspace.
+pub use er_overlay_theme as theme;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -111,10 +116,6 @@ pub const STRIP_WIDTH: f32 = 40.0;
 pub const EDGE_GRAB: f32 = 6.0;
 /// The most of the screen's width the panel takes, whatever its saved width.
 pub const MAX_SCREEN_SHARE: f32 = 0.8;
-/// The panel's background opacity: the frame shows faintly through it.
-pub const BACKGROUND_ALPHA: f32 = 0.94;
-/// The smallest display scale the layout follows; below it the panel stops shrinking.
-pub const MIN_SCALE: f32 = 0.75;
 /// A probe region whose header was written within this many presents counts as live.
 pub const PROBE_LIVE_PRESENTS: u32 = diagnostics_tab::PROBE_LIVE_PRESENTS;
 /// Presents between two reads of the probe for the toolbar's chip.
@@ -163,17 +164,6 @@ pub fn telemetry_counters() -> [(&'static str, u64); 13] {
         ("editor_ui_us_last", read(&UI_US_LAST)),
         ("editor_ui_us_max", read(&UI_US_MAX)),
     ]
-}
-
-/// The factor the layout is scaled by: the display's height over 1080, from the overlay frame,
-/// no smaller than [`MIN_SCALE`]. A scale that is not a number is 1.
-#[must_use]
-pub fn panel_scale(ui_scale: f32) -> f32 {
-    if ui_scale.is_finite() && ui_scale > 0.0 {
-        ui_scale.max(MIN_SCALE)
-    } else {
-        1.0
-    }
 }
 
 /// A rectangle on the screen, in pixels.
@@ -279,7 +269,7 @@ mod process {
 
     use er_hotkey_config::keys::{MODIFIER_ALT, MODIFIER_CTRL, MODIFIER_SHIFT};
     use er_hotkey_config::{Chord, chord_name, parse_chord};
-    use hudhook::imgui::{Condition, MouseCursor, StyleVar, Ui, WindowFlags};
+    use hudhook::imgui::{Condition, MouseCursor, Ui, WindowFlags};
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_OEM_3, VK_SHIFT, VK_TAB,
@@ -289,12 +279,14 @@ mod process {
     use super::diagnostics_tab::{self, compiler_chip, hook_ms_per_frame};
     use super::hunt_tab;
     use super::layers_tab::Editor;
+    use super::panel_record::{self, PanelLabels};
     use super::theme::{
         self, ButtonKind, ButtonSize, Font, FontState, FrameFonts, Icon, Span, Strip, Theme,
+        panel_scale,
     };
     use super::{
         Momentary, PROBE_CHIP_PERIOD, PROBE_LIVE_PRESENTS, PanelRect, STRIP_WIDTH, UI_PANICS,
-        UI_US_LAST, UI_US_MAX, content_box, docked_rect, edge_rect, panel_scale, width_from_edge,
+        UI_US_LAST, UI_US_MAX, content_box, docked_rect, edge_rect, width_from_edge,
     };
     use crate::cmdlist::{self, SAMPLE_EVERY, Timing};
     use crate::editor::cel;
@@ -306,7 +298,7 @@ mod process {
         self, DEFAULT_MENU_KEY, Dock, LayerLook, Look, Preset, Settings, builtin_presets,
         render_ports,
     };
-    use crate::{exports, gpu_time, graveyard, input, log, params, table};
+    use crate::{exports, gpu_time, graveyard, log, params, table};
 
     /// Presents a status message stays under the toolbar, about ten seconds at 60 frames a
     /// second; the Save button's tooltip keeps the last one after that.
@@ -631,7 +623,7 @@ mod process {
 
     fn set_open(open: bool) {
         if OPEN.swap(open, Ordering::AcqRel) != open {
-            input::set_taking(open);
+            er_overlay_input::set_taking(open);
             log(format_args!(
                 "menu {}",
                 if open { "opened" } else { "closed" }
@@ -911,7 +903,7 @@ mod process {
                 let begun = window.begin();
                 drop(window_style);
                 if let Some(_window) = begun {
-                    ui.set_window_font_scale(theme::current().font_scale);
+                    theme::apply_font_scale(ui);
                     let _body = theme::font(ui, Font::Body);
                     let _style = theme::panel_style(ui);
                     self.draw_panel(ui, dock, status);
@@ -1561,9 +1553,9 @@ mod process {
             if !usable {
                 return;
             }
-            let padding = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
-            let minimum = ui.push_style_var(StyleVar::WindowMinSize([1.0, 1.0]));
-            let border = ui.push_style_var(StyleVar::WindowBorderSize(0.0));
+            // The panel window's style: no padding, border or minimum size. Its background is
+            // never drawn, the window having none.
+            let window_style = theme::window_style(ui);
             let window = ui
                 .window("##shaders-edge")
                 .flags(
@@ -1577,9 +1569,7 @@ mod process {
                 .position(edge.pos, Condition::Always)
                 .size(edge.size, Condition::Always)
                 .begin();
-            drop(border);
-            drop(minimum);
-            drop(padding);
+            drop(window_style);
             let Some(_window) = window else {
                 return;
             };
@@ -1665,7 +1655,7 @@ mod process {
     /// Each frame ends by publishing what the panel drew where ([`theme::publish_record`]).
     pub fn draw_ui(ui: &Ui, ui_scale: f32, fonts: &FrameFonts) {
         static ARMED: AtomicBool = AtomicBool::new(false);
-        theme::begin_record();
+        panel_record::begin_frame();
         if HIDDEN.load(Ordering::Acquire) {
             theme::record(|record| record.open = false);
             theme::publish_record();
@@ -1674,8 +1664,8 @@ mod process {
         let started = Instant::now();
         if !ARMED.load(Ordering::Relaxed) {
             // Retried each frame until DirectInput and XInput are loaded; cheap once both are.
-            let dinput = input::try_install_dinput();
-            let pad = input::try_install_pad();
+            let dinput = er_overlay_input::try_install_dinput(log);
+            let pad = er_overlay_input::try_install_pad(log);
             ARMED.store(dinput && pad, Ordering::Relaxed);
         }
         let scale = panel_scale(ui_scale);
@@ -1706,7 +1696,14 @@ mod process {
             // Asked once, the first time the panel is seen: the display is the one the game
             // settled on by then, and a session that never opens the panel asks for nothing.
             // The host's default font is drawn with until they are built, this frame included.
-            theme::request_fonts(scale);
+            if let Some(handles) = theme::request_fonts(scale) {
+                log(format_args!(
+                    "panel fonts: Plex Sans regular, medium and semibold and JetBrains Mono \
+                     handed to the overlay host at scale {scale}: handles {handles:?}. A 0 is a \
+                     face the host refused, drawn in the regular face, and without the regular \
+                     face the panel keeps the host's default font"
+                ));
+            }
             let status = worker::status();
             menu.draw(ui, &status);
         }
@@ -1715,14 +1712,17 @@ mod process {
             record.present = params::presents();
             record.open = open;
             record.collapsed = menu.collapsed;
-            record.dock = menu.live.dock.key();
-            record.tab = menu.tab.key();
-            record.sub = if menu.tab == Tab::Layers {
-                menu.layers.sub_key()
-            } else {
-                ""
-            };
-            record.code_view = menu.code_view();
+            PanelLabels {
+                dock: menu.live.dock.key(),
+                tab: menu.tab.key(),
+                sub: if menu.tab == Tab::Layers {
+                    menu.layers.sub_key()
+                } else {
+                    ""
+                },
+                code_view: menu.code_view(),
+            }
+            .store(record);
             record.scale = scale;
             record.font_scale = frame_theme.font_scale;
             record.display = ui.io().display_size;
@@ -1790,6 +1790,7 @@ mod process {
 
 #[cfg(test)]
 mod tests {
+    use super::theme::{MIN_SCALE, panel_scale};
     use super::*;
     use crate::settings::{DEFAULT_CODE_WIDTH, DEFAULT_PANEL_WIDTH, MAX_PANEL_WIDTH};
     use er_build_watermark_core::font_request::GLYPH_RANGES;

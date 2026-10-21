@@ -1264,20 +1264,11 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         // cursor keys may act sees this tick's collapsed state rather than last tick's. An
         // expand whose arrow keys only wake up on the following tick is a key that "sometimes"
         // does nothing.
-        let collapsed = if expand_toggles % 2 == 1 {
-            present_overlay::toggle_collapsed_by_key()
-        } else {
-            present_overlay::overlay_collapsed()
-        };
-        if !collapsed {
-            // Expanding a bar the player has hidden would draw nothing and read as a dead key.
-            // Only the expand direction touches visibility: minimizing is not a request to hide.
-            state.effect_selector_visible = true;
-        }
-        state.last_driver_command = Some(format!(
-            "effect-selector: {}",
-            if collapsed { "minimized" } else { "expanded" }
-        ));
+        // The key only expands now -- a shown bar is always the list -- and it shows a hidden
+        // bar, because expanding one that is not drawn would read as a dead key.
+        present_overlay::expand_by_key();
+        state.effect_selector_visible = true;
+        state.last_driver_command = Some("effect-selector: expanded".to_owned());
         EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(expand_toggles, Ordering::SeqCst);
     }
     STACKED_EFFECT_COUNT.store(

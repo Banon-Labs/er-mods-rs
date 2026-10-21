@@ -360,7 +360,7 @@ mod process {
             let line = ui.text_line_height();
             theme::painter(ui).text(
                 [at[0], at[1] + (height - line) * 0.5],
-                SliderRow::PARAMETER.label_colour,
+                SliderRow::PARAMETER.label_color,
                 &words,
             );
             Self {
