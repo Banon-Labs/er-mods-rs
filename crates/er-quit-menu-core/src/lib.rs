@@ -55,6 +55,9 @@ pub use host::*;
 // `05_010_ProfileSelect` chrome, whose tests run on the host. Its two siblings in `er-quickload`
 // and `er-quit-rows` sit outside their own windows halves for the same reason.
 pub mod profile_select_chrome_gate;
+// The ilhook mid hook inside the profile-renderer refresh. Outside the `#[cfg(windows)]` modules so
+// its routine's tests run on the host; the installer itself is game-target only.
+pub mod profile_table_mid_hook;
 // The save decode that lets a product-less shell fill the rows the chrome makes room for, so the
 // gate above answers yes instead of turning the styling off.
 pub mod standalone_character_rows;

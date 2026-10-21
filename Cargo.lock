@@ -3344,6 +3344,7 @@ dependencies = [
  "er-title-flow",
  "fromsoftware-shared",
  "iced-x86",
+ "ilhook",
  "windows 0.62.2",
 ]
 

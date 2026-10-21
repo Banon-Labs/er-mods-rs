@@ -19,8 +19,11 @@
 //!
 //! * every slot valid -- latch [`PROFILE_TABLE_WAS_POPULATED`] (proof the engine and `ResMan` are
 //!   up) and let the refresh run;
-//! * any slot null -- skip the refresh entirely for this call, which is the only way to stop it
-//!   dereferencing the null it is about to read.
+//! * any slot null, with [`crate::profile_table_mid_hook`] armed -- log the table and let the
+//!   refresh run: the mid hook at the refresh's first read of a slot skips each null slot through
+//!   the loop's own next-slot join, so the valid slots keep their portrait requests;
+//! * any slot null, mid hook not armed -- skip the refresh entirely for this call, the fallback
+//!   that still stops it dereferencing the null it is about to read.
 //!
 //! There used to be a third answer between those two: an all-null table re-ran the native table
 //! setup [`er_loading_portrait_core::PROFILE_TABLE_BUILDER_RVA`] and rescanned, so the refresh
@@ -36,8 +39,11 @@
 //! existed. This crate installs it through [`er_hook::register_union_hook`], which its own
 //! `Cargo.toml` requires of every detour it owns. The two never share a process --
 //! `scripts/me3-dll-conflicts.toml` records the pair as a duplicate owner -- so the product's
-//! installer is left exactly as it is rather than converted, and the body below is the single copy
-//! of the decision both run.
+//! installer is left as it is rather than converted. The product's detour
+//! (`profile_select_table_diag_hook` in `er-quickload`) is its own copy of this decision, not a call
+//! of the body below. Both installers arm the one mid hook through
+//! [`crate::profile_table_mid_hook::install_profile_table_mid_hook`], which installs once per
+//! process, and both detours stop skipping once it is armed.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -119,7 +125,8 @@ unsafe fn scan_table(base: usize) -> TableScan {
     }
 }
 
-/// Whether the native refresh may run. `false` means skip it: a slot it is about to read is null.
+/// Whether the native refresh may run. `false` means skip it: a slot it is about to read is null
+/// and [`crate::profile_table_mid_hook`] is not armed to skip that slot alone.
 ///
 /// Split from the detour so both installers share one decision and neither can drift from it.
 ///
@@ -224,6 +231,19 @@ pub unsafe fn profile_table_guard_body() -> bool {
             ));
         }
     }
+    // With the mid hook armed the refresh runs on a degraded table: each null slot takes the
+    // loop's own next-slot join at the slot's first read, and the valid slots keep their requests.
+    // That is the precision this guard could not offer from the entry.
+    if null_mask != 0 && crate::profile_table_mid_hook::profile_table_mid_hook_armed() {
+        let skip_key = ((caller_rva & 0xffffff) << 10) | null_mask as usize;
+        if PROFILE_SELECT_TABLE_GUARD_SKIP_LAST.swap(skip_key, Ordering::SeqCst) != skip_key {
+            append_crash_log(format_args!(
+                "PROFILESELECT-TABLE-GUARD PASS: null/invalid renderer slots (null_mask=0x{null_mask:x}, valid_mask=0x{valid_mask:x}) -- running the native refresh; the mid hook skips only the null slots (diverted so far: {}) (er-effects-rs-j3r)",
+                crate::profile_table_mid_hook::profile_table_mid_hook_diverted()
+            ));
+        }
+        return true;
+    }
     if null_mask != 0 {
         let n = PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         let skip_key = ((caller_rva & 0xffffff) << 10) | null_mask as usize;
@@ -262,6 +282,17 @@ pub unsafe fn profile_table_guard_body() -> bool {
 pub unsafe fn ensure_profile_table_ready(base: usize) -> bool {
     let scan = unsafe { scan_table(base) };
     if scan.null_mask == 0 {
+        return true;
+    }
+    if scan.null_mask != PROFILE_TABLE_ALL_SLOTS_MASK
+        && crate::profile_table_mid_hook::profile_table_mid_hook_armed()
+    {
+        // Partly populated, and the mid hook skips each null slot at its first read, so the
+        // refresh draws the live slots and faults on none.
+        append_autoload_debug(format_args!(
+            "profileselect-table-guard: renderer table is partly populated (null_mask=0x{:x}); safe to open, the refresh mid hook skips the null slots and draws the rest",
+            scan.null_mask
+        ));
         return true;
     }
     if scan.null_mask != PROFILE_TABLE_ALL_SLOTS_MASK {
@@ -368,8 +399,12 @@ pub unsafe fn install_profile_table_guard() -> bool {
         )
     } {
         Ok(()) => {
+            // The precise half: skip a null slot alone instead of the whole refresh. Failing to arm
+            // it leaves the entry skip in charge, which is still safe, so it does not fail this.
+            let mid_hook =
+                unsafe { crate::profile_table_mid_hook::install_profile_table_mid_hook() };
             append_autoload_debug(format_args!(
-                "profileselect-table-guard: registered the native profile refresh 0x{addr:x} on the union; an empty renderer table is rebuilt and a still-degraded one skips the refresh"
+                "profileselect-table-guard: registered the native profile refresh 0x{addr:x} on the union; mid_hook_armed={mid_hook} (armed: a null slot is skipped alone; not armed: a degraded table skips the whole refresh)"
             ));
             true
         }

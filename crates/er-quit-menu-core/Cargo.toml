@@ -63,6 +63,11 @@ er-build-import-core = { path = "../er-build-import-core" }
 # `02_040_optionsetting` grid the rows are cells of, and the `02_990` link field. Pure-Rust and
 # host-testable, so it comes in on both targets -- the backdrop attestation is a host test.
 er-gfx = { path = "../er-gfx" }
+# The mid-function hook inside the profile-renderer refresh: a jump at an instruction boundary
+# whose routine reads the registers and returns where execution resumes. MinHook only patches
+# function entries. See `profile_table_mid_hook`. Not windows-only: it builds on the host, so the
+# routine's unit tests run there.
+ilhook = "2.3"
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
