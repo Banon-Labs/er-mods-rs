@@ -89,6 +89,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _progress():
@@ -3580,9 +3582,9 @@ def mobility_weapons(path):
     count = collections.Counter()
     if not path.exists():
         return []
-    for line in path.open():
+    for row in er_corpus.iter_rows(path):
         seen = set()
-        for s in ((json.loads(line).get("build") or {}).get("inventory") or {}).get("slots", []):
+        for s in ((row.get("build") or {}).get("inventory") or {}).get("slots", []):
             # The planner spells it "Miséricorde"; the sweep's names are ASCII.
             name = unicodedata.normalize("NFKD", s["name"]).encode("ascii", "ignore").decode()
             if s.get("weaponArt") in MOBILITY_ASHES and name not in seen:

@@ -71,6 +71,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = Path.home() / ".cache/er-build-planner"
 
 
@@ -209,8 +211,8 @@ def other_load(build: dict) -> float | None:
 
 def corpus_rows(mirror: Path, rl_lo: int, rl_hi: int) -> list[dict]:
     out = []
-    for line in mirror.read_text().splitlines():
-        b = json.loads(line)["build"]
+    for row in er_corpus.iter_rows(mirror):
+        b = row["build"]
         st = EMBED.stats_of(b)
         if st is None or not rl_lo <= st["rl"] <= rl_hi:
             continue

@@ -63,6 +63,8 @@ import types
 import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _load(name, filename):
@@ -1254,40 +1256,38 @@ def corpus_slots(mirror, rl_lo, rl_hi, kind):
     `skill_pairings`); PvE builds dropped."""
     embed = _load('er_builds_embed', 'er-builds-embed.py')
     out, seen = [], set()
-    with open(mirror) as fh:
-        for line in fh:
-            row = json.loads(line)
-            b = row['build']
-            st = embed.stats_of(b)
-            if st is None or not rl_lo <= st['rl'] <= rl_hi:
-                continue
-            tags = set(b.get('tags') or [])
-            if b.get('isPvE') or 'PvE' in tags:
-                continue
-            if kind == 'tag' and 'Strength' not in tags:
-                continue
-            if kind == 'pvp' and not (b.get('isPvE') is False or tags & PVP_TAGS):
-                continue
-            if kind == 'pvptag' and not ('Strength' in tags and tags & PVP_TAGS):
-                continue
-            if kind == 'str60' and st['str'] < 60:
-                continue
-            if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
-                continue
-            key = (row.get('user'), tuple(embed.tokens(b)))
-            if key in seen:
-                continue
-            seen.add(key)
-            active = embed.active_set(b, 'weapons')
-            slots = []
-            for s in (b.get('inventory') or {}).get('slots') or []:
-                es = s.get('equipSet')
-                pos = (es[active] if active < len(es) else None) if isinstance(es, list) \
-                    else s.get('equipIndex')
-                if pos is not None and s.get('name'):
-                    slots.append({**s, 'pos': pos, 'name': plain(s['name'])})
-            out.append({'stats': st, 'is2h': bool(b.get('is2h')), 'slots': slots,
-                        'computed': b.get('computed') or {}})
+    for row in er_corpus.iter_rows(mirror):
+        b = row['build']
+        st = embed.stats_of(b)
+        if st is None or not rl_lo <= st['rl'] <= rl_hi:
+            continue
+        tags = set(b.get('tags') or [])
+        if b.get('isPvE') or 'PvE' in tags:
+            continue
+        if kind == 'tag' and 'Strength' not in tags:
+            continue
+        if kind == 'pvp' and not (b.get('isPvE') is False or tags & PVP_TAGS):
+            continue
+        if kind == 'pvptag' and not ('Strength' in tags and tags & PVP_TAGS):
+            continue
+        if kind == 'str60' and st['str'] < 60:
+            continue
+        if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
+            continue
+        key = (row.get('user'), tuple(embed.tokens(b)))
+        if key in seen:
+            continue
+        seen.add(key)
+        active = embed.active_set(b, 'weapons')
+        slots = []
+        for s in (b.get('inventory') or {}).get('slots') or []:
+            es = s.get('equipSet')
+            pos = (es[active] if active < len(es) else None) if isinstance(es, list) \
+                else s.get('equipIndex')
+            if pos is not None and s.get('name'):
+                slots.append({**s, 'pos': pos, 'name': plain(s['name'])})
+        out.append({'stats': st, 'is2h': bool(b.get('is2h')), 'slots': slots,
+                    'computed': b.get('computed') or {}})
     return out
 
 

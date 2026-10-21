@@ -110,6 +110,8 @@ import unicodedata
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = os.path.expanduser('~/.cache/er-build-planner')
 #: Smithbox's decompiled player behavior script, used only as a `COMMUNITY` cross-check.
 HKS_DECOMPILE = os.environ.get('ER_C0000_HKS', os.path.expanduser(
@@ -687,22 +689,21 @@ def is_pvp(build):
 def blocker_corpus(mirror=None, rl_lo=140, rl_hi=160):
     """The builds `er-builds-pvp.pvp_corpus` keeps (same filter, same order), whole build dicts."""
     out = []
-    with open(mirror or os.path.join(CACHE, 'builds.jsonl')) as handle:
-        for line in handle:
-            b = json.loads(line)['build']
-            st = b.get('stats') or {}
-            try:
-                st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):
-                continue
-            if sum(st[k] for k in ATTRS) - LEVEL_OFFSET != st['rl']:
-                continue
-            c = b.get('computed') or {}
-            if not c.get('defenses') or not c.get('absorption'):
-                continue
-            out.append(b)
+    for row in er_corpus.iter_rows(mirror or os.path.join(CACHE, 'builds.jsonl')):
+        b = row['build']
+        st = b.get('stats') or {}
+        try:
+            st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):
+            continue
+        if sum(st[k] for k in ATTRS) - LEVEL_OFFSET != st['rl']:
+            continue
+        c = b.get('computed') or {}
+        if not c.get('defenses') or not c.get('absorption'):
+            continue
+        out.append(b)
     return out
 
 
@@ -1195,37 +1196,35 @@ def adoption(rl_lo=1, rl_hi=713, kind='pvptag'):
         if n and wid % 10000 == 0 and n not in by_name:
             by_name[n] = wid
     seen, builds, unknown = set(), [], collections.Counter()
-    with open(os.path.join(CACHE, 'builds.jsonl')) as handle:
-        for line in handle:
-            row = json.loads(line)
-            b = row['build']
-            st = embed.stats_of(b)
-            if st is None or not rl_lo <= st['rl'] <= rl_hi:
+    for row in er_corpus.iter_rows(os.path.join(CACHE, 'builds.jsonl')):
+        b = row['build']
+        st = embed.stats_of(b)
+        if st is None or not rl_lo <= st['rl'] <= rl_hi:
+            continue
+        tags = set(b.get('tags') or [])
+        if b.get('isPvE') or 'PvE' in tags:
+            continue
+        if kind == 'pvptag' and not ('Strength' in tags and tags & gap.PVP_TAGS):
+            continue
+        if kind == 'tag' and 'Strength' not in tags:
+            continue
+        if kind == 'str60' and st['str'] < 60:
+            continue
+        if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
+            continue
+        key = (row.get('user'), tuple(embed.tokens(b)))
+        if key in seen:
+            continue
+        seen.add(key)
+        pos = {}
+        for p, s in gap.slots_at((b.get('inventory') or {}).get('slots'),
+                                 embed.active_set(b, 'weapons')):
+            wid = by_name.get(s['name'])
+            if wid is None:
+                unknown[s['name']] += 1
                 continue
-            tags = set(b.get('tags') or [])
-            if b.get('isPvE') or 'PvE' in tags:
-                continue
-            if kind == 'pvptag' and not ('Strength' in tags and tags & gap.PVP_TAGS):
-                continue
-            if kind == 'tag' and 'Strength' not in tags:
-                continue
-            if kind == 'str60' and st['str'] < 60:
-                continue
-            if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
-                continue
-            key = (row.get('user'), tuple(embed.tokens(b)))
-            if key in seen:
-                continue
-            seen.add(key)
-            pos = {}
-            for p, s in gap.slots_at((b.get('inventory') or {}).get('slots'),
-                                     embed.active_set(b, 'weapons')):
-                wid = by_name.get(s['name'])
-                if wid is None:
-                    unknown[s['name']] += 1
-                    continue
-                pos[p] = wid
-            builds.append({'pos': pos, 'user': row.get('user')})
+            pos[p] = wid
+        builds.append({'pos': pos, 'user': row.get('user')})
     c = collections.Counter()
     users = collections.defaultdict(set)
     shield_names, pair_names, left_names = (collections.Counter() for _ in range(3))

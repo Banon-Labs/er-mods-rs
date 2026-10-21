@@ -1906,6 +1906,10 @@ def main() -> int:
         write_if_changed(base_path, json.dumps(base, indent=1))
 
     rows = opt.corpus_rows(opt.CACHE / "builds.jsonl", a.rl - a.window, a.rl + a.window)
+    dated = opt.er_corpus.floor_counts(opt.CACHE / "builds.jsonl")
+    say(f"corpus: {len(rows)} builds in RL {a.rl - a.window}-{a.rl + a.window}, out of {dated['kept']} mirror rows "
+        f"saved since {dated['since']}; the post-DLC floor dropped {dated['dropped']} of "
+        f"{dated['kept'] + dated['dropped']}", " ", GREY)
     # A duel's stats assume no banned grease anywhere: not in the kit, the heads or a search.
     sweep_keys, grease_tier, sweep_tier = fight_grease(a.fight)
     if not inf.sweep_path(a.rl, sweep_tier).exists():

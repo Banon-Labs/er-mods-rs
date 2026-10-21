@@ -203,7 +203,7 @@ def backstab_hp() -> float | None:
     try:
         crits = AI._sib("er-mechanics-crits")
         st = os.stat(crits.CORPUS)
-        key = f"{key}-{st.st_size}-{int(st.st_mtime)}"
+        key = f"{key}-{st.st_size}-{int(st.st_mtime)}-since{crits.er_corpus.CORPUS_SINCE}"
         doc = json.loads(BACKSTAB_CACHE.read_text()) if BACKSTAB_CACHE.exists() else {}
         if doc.get("key") == key:
             hp = doc["hp"]

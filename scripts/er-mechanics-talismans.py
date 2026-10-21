@@ -88,6 +88,8 @@ defender_modifiers() returns
 import argparse, collections, importlib.util, json, os, re, struct, sys, xml.etree.ElementTree as ET
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _mod(name, fname):
@@ -888,8 +890,7 @@ def corpus_counts(rl_lo=140, rl_hi=160):
     totals = collections.Counter()
     for kind in gap.FILTERS:
         seen = set()
-        for line in open(path):
-            row = json.loads(line)
+        for row in er_corpus.iter_rows(path):
             b = row['build']
             st = emb.stats_of(b)
             if st is None or not rl_lo <= st['rl'] <= rl_hi:

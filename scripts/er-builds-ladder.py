@@ -15,7 +15,11 @@ name-level break, not a certified legal build.
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = (ROOT / 'crates/er-duel-rules-core/src/tables.rs').read_text()
@@ -356,17 +360,18 @@ def version_key(x):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--since', default='2026-06-01', help='updatedAt floor (ISO date)')
+    ap.add_argument('--since', default='2026-06-01', help='updatedAt floor (ISO date), never below er_corpus.CORPUS_SINCE')
     ap.add_argument('--top', type=int, default=30)
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    # A stricter --since stays; a looser one is raised to the corpus floor.
+    a.since = er_corpus.floor(a.since)
     out = []
-    for line in MIRROR.open():
-        r = json.loads(line)
+    for r in er_corpus.iter_rows(MIRROR, a.since):
         b = r['build']
-        if b.get('isPvE') or (r['updatedAt'] or '') < a.since:
+        if b.get('isPvE'):
             continue
         v = check(b)
         out.append((len(v), r['updatedAt'], r['id'], b.get('version'), b.get('name'), b.get('tags') or [], v))

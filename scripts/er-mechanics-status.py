@@ -58,6 +58,8 @@ import argparse, collections, importlib.util, json, math, os, statistics, struct
 from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _sibling(name):
@@ -447,8 +449,8 @@ def is_pvp(build):
 def corpus_rows(path=CORPUS, rl=150, window=10, pvp_only=True):
     """Corpus builds of RL rl +- window whose stats add up: stats, resistances, max HP, weapons."""
     out = []
-    for line in Path(path).read_text().splitlines():
-        b = json.loads(line)['build']
+    for row in er_corpus.iter_rows(path):
+        b = row['build']
         # The planner's JSON spells Endurance `vit`; rows carry it as `end`.
         st = {('end' if k == 'vit' else k): v for k, v in (b.get('stats') or {}).items()}
         if not all(isinstance(st.get(k), int) for k in ATTRS + ('rl',)):

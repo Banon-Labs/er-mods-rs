@@ -53,6 +53,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _load(name):
@@ -85,8 +86,7 @@ def corpus(mirror: Path, lo: int, hi: int) -> list[dict]:
     right-hand and left-hand weapon names (plain), and the load numbers the fit test needs."""
     weapon_w, _, plain = OPT._weights()
     out, seen = [], set()
-    for line in mirror.open():
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(mirror):
         b = row["build"]
         if not PVP.is_pvp(b):
             continue

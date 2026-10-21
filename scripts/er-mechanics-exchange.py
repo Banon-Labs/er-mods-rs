@@ -75,6 +75,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = Path.home() / ".cache/er-build-planner"
 
 
@@ -316,8 +318,7 @@ def _reach_module():
 
 def _corpus_builds(mirror: Path, rl_lo: int, rl_hi: int) -> tuple[list[dict], Counter]:
     out, seen, why = [], set(), Counter()
-    for line in mirror.open():
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(mirror):
         b = row["build"]
         st = EMBED.stats_of(b)
         if st is None or not rl_lo <= st["rl"] <= rl_hi or not is_pvp(b):
@@ -341,7 +342,7 @@ def _corpus_builds(mirror: Path, rl_lo: int, rl_hi: int) -> tuple[list[dict], Co
 #: 2026-09-29: `er-mechanics-reach.py` changed its `front_contact_frame_real` between two
 #: ranking runs, and the pool cached before the change kept the old frames while the scored
 #: slots read the new ones (676 of 13303 slots got a different `f_exchange`).
-POOL_SOURCES = ("er-mechanics-exchange.py", "er-mechanics-reach.py", "er-mechanics-attacks.py")
+POOL_SOURCES = ("er-mechanics-exchange.py", "er-mechanics-reach.py", "er-mechanics-attacks.py", "er_corpus.py")
 
 
 def _source_stamp() -> str:
@@ -358,10 +359,11 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     Returns {'profiles': {'<weapon>|<1h|2h>': attack_profile}, 'builds': [[profile key, menu
     poise]], 'poise': sorted corpus menu poise, 'bar': median max stamina, 'ref_per_bar': pool
     median R1s per bar, 'offhand': {profile key: {left weapon or '-': builds}}, 'dropped':
-    reasons}. Cached beside the mirror, keyed on its size and
-    mtime."""
+    reasons}. Cached beside the mirror, keyed on its size and mtime and the corpus floor
+    (`er_corpus.CORPUS_SINCE`)."""
     st = mirror.stat()
-    stamp = [POOL_VERSION, st.st_size, int(st.st_mtime), rl_lo, rl_hi, OPPONENT_SLOT, _source_stamp()]
+    stamp = [POOL_VERSION, st.st_size, int(st.st_mtime), er_corpus.CORPUS_SINCE, rl_lo, rl_hi, OPPONENT_SLOT,
+             _source_stamp()]
     # The stamp is in the name too, so checkouts of different sources (a worktree beside the main
     # tree, an A/B against a ref) keep their own file instead of rebuilding each other's.
     path = CACHE / f"exchange-pool-{rl_lo}-{rl_hi}-{stamp[-1]}.json"

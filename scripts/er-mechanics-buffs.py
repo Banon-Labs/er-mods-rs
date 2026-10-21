@@ -36,6 +36,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _mod(name, fname):
@@ -1259,8 +1261,8 @@ def corpus(m, path=CORPUS, rl=(140, 160)):
     """How often each buff source appears in STR PvP builds (tag Strength, PvP by `isPvE` false or
     a PvP tag), level window inclusive."""
     counts, n = {}, 0
-    for line in open(path, encoding='utf-8'):
-        b = json.loads(line)['build']
+    for row in er_corpus.iter_rows(path):
+        b = row['build']
         tags = b.get('tags') or []
         st = b.get('stats') or {}
         lvl = st.get('rl')
@@ -1309,8 +1311,7 @@ def corpus_kits(m, path=CORPUS, rl=(140, 160), archetype='Strength', order='offe
     one that fits the side being modelled (`INFERRED`). `roles` spreads the build over
     `ROLE_BY_TAG` of its tags, host when it has none."""
     kits = []
-    for line in open(path, encoding='utf-8'):
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(path):
         b = row['build']
         tags = b.get('tags') or []
         lvl = (b.get('stats') or {}).get('rl')
@@ -1384,8 +1385,8 @@ def corpus_regen(m, path=CORPUS, rl=(140, 160)):
     """Every PvP build of the window (the `corpus_kits` defender filter) as
     {'build', 'hp' (computed max HP), 'live', 'rows'} (`build_regen`)."""
     out = []
-    for line in open(path, encoding='utf-8'):
-        b = json.loads(line)['build']
+    for row in er_corpus.iter_rows(path):
+        b = row['build']
         tags = b.get('tags') or []
         lvl = (b.get('stats') or {}).get('rl')
         if b.get('isPvE') is True or not isinstance(lvl, int) or not rl[0] <= lvl <= rl[1]:

@@ -25,6 +25,8 @@ import struct
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 _spec = importlib.util.spec_from_file_location('er_param_read', os.path.join(_HERE, 'er-param-read.py'))
 PR = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(PR)
@@ -342,8 +344,7 @@ def corpus(model, path=CORPUS, show=10):
         return 'other'
 
     unknown_names = {}
-    for line in open(path, encoding='utf-8'):
-        rec = json.loads(line)
+    for rec in er_corpus.iter_rows(path):
         b = rec['build']
         st, comp = from_planner(b.get('stats') or {}), b.get('computed') or {}
         if not all(isinstance(st.get(k), int) and st.get(k) > 0 for k in STAT_KEYS):
