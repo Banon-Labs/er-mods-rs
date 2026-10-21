@@ -53,7 +53,7 @@ AR = OPT.AR
 CARD = _mod('er_mechanics_weapon_card', 'er-mechanics-weapon-card.py')
 STATS = ('str', 'dex', 'int', 'fth', 'arc')
 LABEL = {'str': 'STR', 'dex': 'DEX', 'int': 'INT', 'fth': 'FTH', 'arc': 'ARC', 'vig': 'VIG', 'mnd': 'MND',
-         'vit': 'END'}
+         'end': 'END'}
 TIER = 'dlc-drawstring'
 RANK_RL = 150
 RL_SWEEP = tuple(range(60, 201, 10))
@@ -95,7 +95,7 @@ class Builder:
         # in `fl` is a minimum, Endurance's the medium-roll requirement.
         self.pool, _ = OPT.conditioning_pool(rows, 'pvp')
         fl['mnd'] = 0
-        fl['vit'] = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
+        fl['end'] = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
                                         OPT.load_pool(rows, 'pvp', arch, min_peers))
         return fl, OPT.bracket_defender(rows)
 
@@ -141,7 +141,8 @@ def load_sweep(rl=RANK_RL):
                          f"{os.path.join(HERE, 'er-builds-optimize.py')} --grease-sweep {rl}-{rl} --grip 1h "
                          f"--jobs 16 --no-weight-charge --every-class")
     with open(path) as fh:
-        return [json.loads(line) for line in fh if line.strip()]
+        # A sweep written before Endurance was spelled `end` carries `vit`; `rekey` translates it.
+        return [OPT.EMBED.rekey(json.loads(line)) for line in fh if line.strip()]
 
 
 def sweep_best(tables, row):

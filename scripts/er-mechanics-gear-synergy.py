@@ -1416,7 +1416,7 @@ def selftest():
     assert all(r['net_benefit'] > BENEFIT_FLOOR for r in shotel['gear'] + lance_g['gear'])
     # Powerstance partner: at a Heavy STR build a Broadsword out-damages a Longsword, so the
     # Longsword's row names it; nothing in its class beats an Uchigatana, which keeps its copy.
-    str_build = {'affinity': 'Heavy', 'stats': {'vig': 60, 'mnd': 15, 'vit': 30, 'str': 80, 'dex': 18,
+    str_build = {'affinity': 'Heavy', 'stats': {'vig': 60, 'mnd': 15, 'end': 30, 'str': 80, 'dex': 18,
                                                 'int': 9, 'fth': 9, 'arc': 7}}
     ls = powerstance(d, d.find_weapon('Longsword'), str_build)
     assert ls['heading'] == 'Broadsword' and ls['text'].startswith(
