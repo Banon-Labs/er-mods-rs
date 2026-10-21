@@ -24,6 +24,9 @@ er-game-base = { path = "../er-game-base" }
 # re-tabulated: a second copy of that table is a drift trap, and a warning that says `0x76`
 # instead of `F7` makes the reader do the lookup this crate exists to save them.
 er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+# The parser the shipped defaults in `declared.rs` are spelled for, so the table is checked against
+# the same reading of "F5" or "ctrl+alt+c" the shells themselves use.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

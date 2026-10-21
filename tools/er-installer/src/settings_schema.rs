@@ -1991,4 +1991,36 @@ pub const CONFIGS: &[ConfigFile] = &[
             },
         ],
     },
+    ConfigFile {
+        file: "er-render-scale.toml",
+        default_text: "# er-render-scale settings. The in-game menu rewrites the divisor line when you move the\n# slider; everything else in this file is left as you wrote it.\n\n# The key that opens and closes the render scale menu: a name such as \"F5\", \"ctrl+F5\",\n# \"]\" or \"KP_Plus\". Escape also closes it.\nmenu_key = \"F5\"\n\n# The 3D scene is drawn at the screen's size divided by this, and the UI stays at the\n# screen's size. 1 is native. The menu offers only the values that divide the screen into\n# whole pixels (at 3840x2160: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 and 60); any other\n# value here is kept but draws at native until the screen allows it.\ndivisor = 1\n",
+        settings: &[
+            Setting {
+                key: "menu_key",
+                table: "",
+                default: "\"F5\"",
+                kind: Kind::Text,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# The key that opens and closes the render scale menu: a name such as \"F5\", \"ctrl+F5\",",
+                    "# \"]\" or \"KP_Plus\". Escape also closes it.",
+                ],
+            },
+            Setting {
+                key: "divisor",
+                table: "",
+                default: "1",
+                kind: Kind::Int,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# The 3D scene is drawn at the screen's size divided by this, and the UI stays at the",
+                    "# screen's size. 1 is native. The menu offers only the values that divide the screen into",
+                    "# whole pixels (at 3840x2160: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 and 60); any other",
+                    "# value here is kept but draws at native until the screen allows it.",
+                ],
+            },
+        ],
+    },
 ];
