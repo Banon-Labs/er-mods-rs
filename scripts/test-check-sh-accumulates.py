@@ -33,7 +33,8 @@ What it checks
 8. Non-VACUITY: with the ERR trap deleted from the lifted preamble, case 2 must fail. Without
    this, a preamble that had quietly stopped recording would still pass every case above.
 9. the preamble's own lock, from both sides: a run carrying the re-entrancy marker still executes
-   its steps, and a run without one is still refused while the lock is held.
+   its steps, a run without one is still refused while the lock is held, and a push-mode run
+   (`ER_CHECK_WAIT_LOCK=1`, set by the pre-push hook) waits for the holder and then runs.
 
 Every fixture below runs against a lock file of this test's own making, never the machine-wide
 one. It is the same distinction the marker in check.sh draws -- these children are this run's
@@ -50,6 +51,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -308,6 +311,20 @@ def main() -> int:
                 check(
                     rc == 2 and not marker_printed(out),
                     "a second run with no marker is still refused while the lock is held",
+                )
+                # A push sets ER_CHECK_WAIT_LOCK=1 and queues instead of being refused: the run
+                # must block while the holder lives and execute once it lets go.
+                releaser = threading.Timer(1.0, lambda: fcntl.flock(fd, fcntl.LOCK_UN))
+                releaser.start()
+                waiting = dict(separate, ER_CHECK_WAIT_LOCK="1")
+                started = time.monotonic()
+                rc, out = run_fixture(
+                    f"{PASSING}\n{MARKER}\n{END}", env=waiting, lock_dir=lock_dir
+                )
+                releaser.join()
+                check(
+                    rc == 0 and marker_printed(out) and time.monotonic() - started >= 0.9,
+                    "a push-mode run waits for the holder, then runs",
                 )
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
