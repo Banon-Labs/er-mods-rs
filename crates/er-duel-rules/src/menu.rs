@@ -46,7 +46,8 @@ use crate::settings::{self, DEFAULT_BREAKS_KEY, DEFAULT_MENU_KEY};
 const SEARCH_LIMIT: usize = 300;
 /// The menu is laid out for a 1080-line screen and scaled from there.
 const REFERENCE_HEIGHT: f32 = 1080.0;
-const FONT_SCALE_AT_1080: f32 = 1.15;
+/// Text height on a 1080-line screen, the body size the other overlay panels draw at.
+const TEXT_PX_AT_1080: f32 = 13.0;
 
 const TITLE: [f32; 4] = [1.0, 0.27, 0.22, 1.0];
 const MUTED: [f32; 4] = [0.62, 0.60, 0.55, 1.0];
@@ -274,7 +275,9 @@ pub fn draw_ui(ui: &Ui) {
     let mut slot = STATE.lock().unwrap_or_else(PoisonError::into_inner);
     let state = slot.get_or_insert_with(MenuState::new);
     let display = ui.io().display_size;
-    let scale = FONT_SCALE_AT_1080 * (display[1] / REFERENCE_HEIGHT).max(1.0);
+    let scale = (display[1] / REFERENCE_HEIGHT).max(1.0);
+    let host_px = host_font_px();
+    let font_scale = TEXT_PX_AT_1080 * scale / host_px;
     let mut open = true;
     ui.window("Duel rules##er-duel-rules-menu")
         .size([780.0 * scale, 640.0 * scale], Condition::FirstUseEver)
@@ -286,7 +289,8 @@ pub fn draw_ui(ui: &Ui) {
         .collapsible(false)
         .opened(&mut open)
         .build(|| {
-            ui.set_window_font_scale(scale);
+            // Child windows draw at this scale times their own, so they set none of their own.
+            ui.set_window_font_scale(font_scale);
             draw_window(ui, state, scale);
         });
     if !open {
@@ -294,9 +298,28 @@ pub fn draw_ui(ui: &Ui) {
     }
     if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
         rules_log(format_args!(
-            "menu: first drawn, display {}x{}, font scale {scale:.2}",
+            "menu: first drawn, display {}x{}, layout scale {scale:.2}, host font {host_px}px, \
+             font scale {font_scale:.2}",
             display[0], display[1]
         ));
+    }
+}
+
+/// The pixel height the overlay host built its default font at. It depends on which module won
+/// the overlay: the build-watermark host builds 27px, er-net-effects 16.25px. So the menu's font
+/// scale is measured from it, not assumed from imgui's 13px face.
+fn host_font_px() -> f32 {
+    // SAFETY: called inside a frame the host opened, so the context has a current font.
+    let font = unsafe { hudhook::imgui::sys::igGetFont() };
+    if font.is_null() {
+        return TEXT_PX_AT_1080;
+    }
+    // SAFETY: a live atlas font; atlas fonts live as long as the context.
+    let px = unsafe { (*font).FontSize };
+    if px.is_finite() && px > 0.0 {
+        px
+    } else {
+        TEXT_PX_AT_1080
     }
 }
 
@@ -372,7 +395,6 @@ fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
     ui.input_text("Find a rule", &mut state.filter).build();
     let needle = state.filter.to_lowercase();
     ui.child_window("##rules").border(true).build(|| {
-        ui.set_window_font_scale(scale);
         for rule in Rule::ALL {
             let text = rule.text_with(rules);
             if !needle.is_empty() && !text.to_lowercase().contains(&needle) {
@@ -409,7 +431,6 @@ fn bans_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
     let mut edit = None;
     let mut delete = None;
     ui.child_window("##bans").border(true).build(|| {
-        ui.set_window_font_scale(scale);
         for (i, ban) in rules.bans.iter().enumerate() {
             let _id = ui.push_id_usize(i);
             let mut on = ban.on;
@@ -468,7 +489,6 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
         .size([0.0, rows * 22.0 * scale])
         .border(true)
         .build(|| {
-            ui.set_window_font_scale(scale);
             if ed.draft.all.is_empty() {
                 ui.text_disabled("Search below and add something.");
             }
@@ -517,7 +537,6 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
         .size([0.0, 7.0 * 22.0 * scale])
         .border(true)
         .build(|| {
-            ui.set_window_font_scale(scale);
             if ed.hits.is_empty() {
                 ui.text_disabled(if ed.search.trim().is_empty() {
                     "Type part of a name, or pick a list to look in."
