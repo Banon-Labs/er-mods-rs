@@ -2855,6 +2855,7 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "er-hotkey-config",
+ "er-shader-compiler",
  "hudhook",
  "iced-x86",
  "windows 0.62.2",
@@ -3438,6 +3439,14 @@ dependencies = [
  "er-hook",
  "iced-x86",
  "ilhook",
+]
+
+[[package]]
+name = "er-shader-compiler"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "windows 0.62.2",
 ]
 
 [[package]]

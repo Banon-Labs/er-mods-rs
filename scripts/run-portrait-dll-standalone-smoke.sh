@@ -106,6 +106,7 @@ export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ART_DIR/er-crash-breadcrumb-
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ART_DIR/er-crash-modules.txt"
 export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ART_DIR/er-focus-input.log"
 export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ART_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH="$ART_DIR/er-cel-shade-telemetry.json"
 export ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ART_DIR/er-build-import.log"
 
 LAUNCH_EPOCH="$(date +%s)"

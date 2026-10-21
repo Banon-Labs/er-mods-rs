@@ -114,6 +114,14 @@ third_party/*.ct
 # transformed game data -- see the game-derived-binaries rule in AGENTS.md.
 docs/recon/speffect-vfx-rows.json
 
+# Microsoft's DirectX Shader Compiler, fetched onto this machine by scripts/fetch-dxcompiler.py for
+# the shader editor's compiler. Never committed and never bundled: the scope of the LICENSE-MS.txt
+# in its release zip is unresolved (docs/plans/er-shader-editor.md, section 15). Unanchored,
+# because `--dest` can put it anywhere; `fetch-dxcompiler.py --check` holds these rules.
+dxcompiler.dll
+dxil.dll
+dxc_*.zip
+
 # Spent push and commit authorizations, written by the push_authorization and
 # commit_authorization cupcake signals
 # (scripts/cupcake_push_authorization.py, scripts/cupcake_commit_authorization.py).
