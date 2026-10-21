@@ -1,6 +1,6 @@
 //! The look every in-game panel in this workspace shares, from the Shaders panel's mockups (the
 //! Claude Design canvas er-cel-shade's restyle followed, design 9 of
-//! `docs/plans/er-shader-editor.md`): the colours, the sizes, the four typefaces a panel asks the
+//! `docs/plans/er-shader-editor.md`): the colors, the sizes, the four typefaces a panel asks the
 //! overlay host for, and the helpers every panel draws with.
 //!
 //! # One copy
@@ -18,10 +18,10 @@
 //!
 //! # Tokens
 //!
-//! Every colour is a `const` here, as Dear ImGui's RGBA floats written from the mockups' hex
-//! through [`rgb`]; no other file of a panel writes a colour literal. Every size is in pixels at
+//! Every color is a `const` here, as Dear ImGui's RGBA floats written from the mockups' hex
+//! through [`rgb`]; no other file of a panel writes a color literal. Every size is in pixels at
 //! 1080p, as the mockups give it, and is multiplied by the panel's scale ([`px`]) where it is
-//! drawn. The few colours the mockups never show -- a hovered secondary button, a pressed toggle
+//! drawn. The few colors the mockups never show -- a hovered secondary button, a pressed toggle
 //! Dear ImGui draws itself -- are derived from the token beside them and say so.
 //!
 //! # Fonts
@@ -94,7 +94,7 @@ pub const fn rgb(hex: u32) -> [f32; 4] {
     rgba(hex, 1.0)
 }
 
-/// Nothing: a colour that draws nothing.
+/// Nothing: a color that draws nothing.
 pub const CLEAR: [f32; 4] = [0.0; 4];
 
 // The panel's frame.
@@ -133,7 +133,7 @@ pub const ERROR_TEXT: [f32; 4] = rgb(0xF2A39D);
 pub const OK_TEXT: [f32; 4] = rgb(0x8FD6A1);
 /// A warning; derived: the mockups show none, so it is the busy light's amber.
 pub const WARNING_TEXT: [f32; 4] = DOT_BUSY;
-/// The red, green and blue labels beside a colour's fields.
+/// The red, green and blue labels beside a color's fields.
 pub const CHANNEL_R: [f32; 4] = rgb(0xE5847C);
 pub const CHANNEL_G: [f32; 4] = rgb(0x7CCB8F);
 pub const CHANNEL_B: [f32; 4] = rgb(0x8FB8F0);
@@ -353,7 +353,7 @@ pub const FOOTER_GAP: f32 = 4.0;
 /// A tooltip's lines wrap at this width, this far apart.
 pub const TOOLTIP_WRAP: f32 = 360.0;
 pub const TOOLTIP_GAP: f32 = 4.0;
-/// How much of its colours a control keeps while its feature has not arrived: the Selector's
+/// How much of its colors a control keeps while its feature has not arrived: the Selector's
 /// family and pick buttons, Measure cost, the Hunt tab's filter. The mockups never show one.
 pub const UNAVAILABLE_ALPHA: f32 = 0.5;
 /// The smallest display scale a panel's layout follows; below it the panel stops shrinking.
@@ -388,9 +388,9 @@ pub enum Light {
     Off,
 }
 
-/// The colour a [`Light`] shows.
+/// The color a [`Light`] shows.
 #[must_use]
-pub const fn light_colour(light: Light) -> [f32; 4] {
+pub const fn light_color(light: Light) -> [f32; 4] {
     match light {
         Light::Live => DOT_LIVE,
         Light::Busy => DOT_BUSY,
@@ -827,11 +827,11 @@ impl CardStyle {
     };
 }
 
-/// A slider row's columns, at 1080p: the label's width and colour, the value's width, the gaps.
+/// A slider row's columns, at 1080p: the label's width and color, the value's width, the gaps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SliderRow {
     pub label_width: f32,
-    pub label_colour: [f32; 4],
+    pub label_color: [f32; 4],
     pub value_width: f32,
     pub gap: f32,
 }
@@ -840,21 +840,21 @@ impl SliderRow {
     /// A parameter: Strength 0.60.
     pub const PARAMETER: Self = Self {
         label_width: 70.0,
-        label_colour: TEXT_SECONDARY,
+        label_color: TEXT_SECONDARY,
         value_width: 36.0,
         gap: 8.0,
     };
     /// A layer's Opacity.
     pub const OPACITY: Self = Self {
         label_width: 60.0,
-        label_colour: TEXT_QUIET,
+        label_color: TEXT_QUIET,
         value_width: 36.0,
         gap: 10.0,
     };
     /// The selector's Feather.
     pub const FEATHER: Self = Self {
         label_width: 60.0,
-        label_colour: TEXT_QUIET,
+        label_color: TEXT_QUIET,
         value_width: 40.0,
         gap: 8.0,
     };
@@ -1214,7 +1214,7 @@ mod tests {
         assert_eq!(TAB_ACTIVE_BG, SELECTED_ROW_BG);
         assert_eq!(PRIMARY_BG, ACCENT);
         assert_eq!(INPUT_BORDER, CARD_BORDER);
-        assert_eq!(light_colour(Light::Error), DOT_ERROR);
+        assert_eq!(light_color(Light::Error), DOT_ERROR);
     }
 
     #[test]

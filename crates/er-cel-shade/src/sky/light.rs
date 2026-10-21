@@ -4,7 +4,7 @@
 //! `GXParamDB::Update(this, f32 time, u32)` runs once a frame, always on one render thread, and
 //! blends every gparam field for the time of day and the weather into the param instances. The
 //! jobs that run after it derive the sun's direction from its angles and the ambient from the
-//! hemisphere colours, then pack both for the GPU, so a field written as the function returns is
+//! hemisphere colors, then pack both for the GPU, so a field written as the function returns is
 //! the one the frame draws with. That is the order `scripts/frida/sun-control.js` proved live
 //! (bd `er-sky-gparam-override-frida-proven-1171-2026-10-15`, and for the shadow cone
 //! `er-rt-shadow-cone-radius-soft-shadows-user-verified-1171-2026-10-15`).
@@ -74,12 +74,12 @@ const RAY_TRACING: Group = Group {
 const LIGHT_SET_SIZE: usize = 0x300;
 const LIGHT_SET_BANK: usize = 0x294;
 const SUN: usize = 0x40;
-/// `DirLight0`'s colours' alphas (its intensity) and its angle pair, radians.
+/// `DirLight0`'s colors' alphas (its intensity) and its angle pair, radians.
 const SUN_DIFFUSE_ALPHA: usize = SUN + 0x1c;
 const SUN_SPECULAR_ALPHA: usize = SUN + 0x2c;
 const SUN_PITCH: usize = SUN + 0x30;
 const SUN_YAW: usize = SUN + 0x34;
-/// The hemisphere colours' alphas: the sky light from above and below.
+/// The hemisphere colors' alphas: the sky light from above and below.
 const HEMI_UP_ALPHA: usize = 0x1e0 + 0xc;
 const HEMI_DOWN_ALPHA: usize = 0x1f0 + 0xc;
 

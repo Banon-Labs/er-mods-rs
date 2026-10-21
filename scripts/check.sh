@@ -1657,6 +1657,9 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # nobody can make -- and the live half runs in test-cupcake-policies.py, because an opa-green
 # policy that cupcake's WASM runtime cannot execute returns nothing and reads as a clean turn.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
+# The write-time half of the color-spelling ratchet: it refuses an Edit that adds the British
+# spelling outside a quoted span, and never judges a Write, whose previous count it cannot see.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_color_spelling_guard.rego" "$repo_root/.cupcake/tests/edit_color_spelling_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
@@ -1718,6 +1721,13 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # load-bearing and wants a rewritten sentence rather than a lowercase letter.
 python3 "$repo_root/scripts/check-comment-caps.py" --selftest
 python3 "$repo_root/scripts/check-comment-caps.py"
+# This repo writes `color`. The British spelling is a ratchet over every tracked text file
+# (user request 2026-10-20): scripts/color-spelling.baseline.json holds each file's count, a file
+# may not rise above it, a file with no entry may not have one, and a file that falls below it
+# must lower the baseline in the same diff (`--write-baseline`). Selftest first, because it is
+# the half that proves a growth, a new file and a silent improvement each still go red.
+python3 "$repo_root/scripts/check-color-spelling.py" --selftest
+python3 "$repo_root/scripts/check-color-spelling.py"
 # The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
 # lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
 # stock AI). Selftest first, so the scanner is never trusted on its own say-so.

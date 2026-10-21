@@ -10,7 +10,7 @@
 //! locks and the Sun section in `er-cel-shade.toml`, so the next start holds the same sky.
 //!
 //! Set in the Look tab's language: sections 14 apart under quiet uppercase headings, the
-//! Parameters mockup's slider rows, notes in the quiet colour.
+//! Parameters mockup's slider rows, notes in the quiet color.
 
 use hudhook::imgui::Ui;
 

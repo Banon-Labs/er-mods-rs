@@ -4,7 +4,7 @@
 // Where it writes (bd er-gparam-sun-lighting-pipeline-1171-2026-10-15): GXParamDB::Update
 // 0x141a4e7a0 writes every gparam field's time-of-day and weather blend into the param instances;
 // the per-manager jobs that run after it turn LightSet angles into directions and hemisphere
-// colours into ambient. So an instance field written as that function returns is what those jobs
+// colors into ambient. So an instance field written as that function returns is what those jobs
 // and the GPU pack read. LightSet instances hang off GXRenderingSystem [0x1447f37a8] +0xc500 (the
 // environment manager, inline) +0x28 (LightSet manager) +0x320 (list: bank -> list: id -> instance).
 //
@@ -16,7 +16,7 @@
 //   pitch, yaw     degrees; the sun's angle (pitch -90 is straight down from overhead)
 //   sun            multiplier on DirLight0's intensity (DiffColor.a and SpecColor.a)
 //   fill           multiplier on DirLight1's intensity
-//   ambient        multiplier on the hemisphere colours' intensity (Hemi Up/Down .a)
+//   ambient        multiplier on the hemisphere colors' intensity (Hemi Up/Down .a)
 //   sharpness      DirLight0 Sharpness, absolute
 //   cone           RayTracing DirLightShadow ConeRadius, absolute (the game's is 0.005): the sun's
 //                  size as ray-traced shadows see it, so a wider cone gives softer shadow edges
@@ -87,8 +87,8 @@ function apply(sets) {
     }
     if (CFG.sharpness !== null) sun.add(0x40).writeFloat(CFG.sharpness);
     if (CFG.white) {
-      for (const colour of [0x10, 0x20]) {
-        for (const channel of [0, 4, 8]) sun.add(colour + channel).writeFloat(1.0);
+      for (const color of [0x10, 0x20]) {
+        for (const channel of [0, 4, 8]) sun.add(color + channel).writeFloat(1.0);
       }
     }
     if (CFG.fill !== null) {
@@ -102,8 +102,8 @@ function apply(sets) {
       const fill = inst.add(DIR(1));
       fill.add(0x30).writeFloat(sun.add(0x30).readFloat());
       fill.add(0x34).writeFloat(sun.add(0x34).readFloat());
-      for (const colour of [0x10, 0x20]) {
-        for (const channel of [0, 4, 8]) fill.add(colour + channel).writeFloat(sun.add(colour + channel).readFloat());
+      for (const color of [0x10, 0x20]) {
+        for (const channel of [0, 4, 8]) fill.add(color + channel).writeFloat(sun.add(color + channel).readFloat());
       }
       fill.add(0x1c).writeFloat(CFG.unshadowed);
       fill.add(0x2c).writeFloat(CFG.unshadowed * 0.5);

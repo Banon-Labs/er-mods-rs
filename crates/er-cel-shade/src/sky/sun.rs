@@ -12,8 +12,8 @@
 //! function returns is the field the frame draws with.
 //!
 //! The sun is `DirLight0` of every `GXLightSet` instance (the moon at night): an angle pair the
-//! direction is derived from, and an intensity in its colours' alpha. The sky light is the
-//! hemisphere colours' alpha. Exposure is the tone map's first field. The soft shadows are the
+//! direction is derived from, and an intensity in its colors' alpha. The sky light is the
+//! hemisphere colors' alpha. Exposure is the tone map's first field. The soft shadows are the
 //! ray-traced shadows' cone: rays toward the sun spread over a cone of this radius, which is the
 //! sun's apparent size, so a larger cone gives a wider penumbra. The game's own is 0.005 rad
 //! (0.29 degrees) and 0.05 rad looked right live; it does nothing with ray tracing off.
