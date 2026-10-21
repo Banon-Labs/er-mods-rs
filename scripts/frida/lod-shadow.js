@@ -3,7 +3,16 @@
 // 2026-10-17), so the tables stay vanilla and the game is handed a private copy of the rows instead.
 //
 // Where the rows are consumed (static RE, 1.16.2 :8765 names, 1.17.1 addresses byte-checked in
-// eldenring-deobf-1.17.1.bin):
+// eldenring-deobf-1.17.1.bin). The agent runs on 2.7.2.0: each 1.17.1 address below was carried
+// with scripts/map-rvas-1171-to-1172.py, and each function is byte-identical in
+// eldenring-deobf-1.17.2.bin apart from relocated operands, so the param indices 0x42 and 0x44 and
+// both prologues are unchanged. 1.17.1 -> 2.7.2.0: GetPartsDrawParam 0x140d44790 -> 0x140d45e80,
+// LookupGrassLodRangeParam 0x140d3c6a0 -> 0x140d3dd90, resource builder 0x140ba1b50 ->
+// 0x140ba2010, resource creation 0x140b8f8d0 -> 0x140b8fd90, RendMan 0x143d7f130 -> 0x143d82150
+// (its readers still walk +0x10 then +0x730), SoloParamRepository 0x143d85f58 -> 0x143d88f78.
+// CSGrassManager +0x4d0 is confirmed by GetGrassResourceManager (2.7.2.0 0x140b9ca50); the map head
+// at +0x28 of it and the LOD floats at resource +0x08 have no 2.7.2.0 witness beyond the
+// byte-identical builder.
 //   GetPartsDrawParam(out, id)          1.17.1 0x140d44790 (1.16.2 0x140d42f40), the only caller of
 //                                       GetParamResCap(0x44) in the image. Writes {id, row*} to out;
 //                                       callers keep the row pointer (CSModelDispEntity +0x278) and
@@ -16,7 +25,8 @@
 //                                       [r0, r0+p0, r1, r1+p1, r2, r2+p2] at resource +0x08 once,
 //                                       when a grass type is first requested.
 //   grass resource creation             1.17.1 0x140b8f8d0 (1.16.2 0x140b8e1b0), args[2] = resource.
-//   existing grass resources            [eldenring+0x3d7f130] RendMan +0x10 StageRend +0x730
+//   existing grass resources            [eldenring+0x3d82150] (1.17.1 +0x3d7f130) RendMan +0x10
+//                                       StageRend +0x730
 //                                       CSGrassManager +0x4d0 CSGrassResourceManager +0x28 map head,
 //                                       node +0x28 resource; LOD floats at resource +0x08..+0x1f.
 //
@@ -35,11 +45,11 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const GET_PARTS_DRAW_PARAM = va('0x140d44790');
-const LOOKUP_GRASS_LOD_RANGE = va('0x140d3c6a0');
-const GRASS_RESOURCE_CREATE = va('0x140b8f8d0');
-const RENDMAN_GLOBAL_RVA = 0x3d7f130;
-const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d85f58;
+const GET_PARTS_DRAW_PARAM = va('0x140d45e80'); // 1.17.1 0x140d44790
+const LOOKUP_GRASS_LOD_RANGE = va('0x140d3dd90'); // 1.17.1 0x140d3c6a0
+const GRASS_RESOURCE_CREATE = va('0x140b8fd90'); // 1.17.1 0x140b8f8d0
+const RENDMAN_GLOBAL_RVA = 0x3d82150; // 1.17.1 0x3d7f130
+const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d88f78; // 1.17.1 0x3d85f58
 const PLAN_PATH = 'Z:\\home\\banon\\projects\\er-mods-rs\\target\\lod-shadow\\plan.json';
 // The two getters share their generated prologue; a different build refuses rather than hooks.
 const GETTER_PROLOGUE = '40574883ec4048c7442420feffffff48';
@@ -58,7 +68,7 @@ for (const [name, at, want] of [['GetPartsDrawParam', GET_PARTS_DRAW_PARAM, GETT
   ['LookupGrassLodRangeParam', LOOKUP_GRASS_LOD_RANGE, GETTER_PROLOGUE],
   ['grass resource create', GRASS_RESOURCE_CREATE, CREATE_PROLOGUE]]) {
   const have = hex(at, want.length / 2);
-  if (have !== want) throw new Error(name + ' prologue ' + have + ' != ' + want + ': not 1.17.1, refusing to hook');
+  if (have !== want) throw new Error(name + ' prologue ' + have + ' != ' + want + ': not 2.7.2.0, refusing to hook');
 }
 
 const k32 = Process.getModuleByName('kernel32.dll');

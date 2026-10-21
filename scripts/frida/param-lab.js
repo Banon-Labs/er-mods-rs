@@ -18,7 +18,15 @@
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
-const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d85f58;
+// 2.7.2.0 .data rva, carried from 1.17.1 0x3d85f58 with scripts/map-rvas-1171-to-1172.py (933 of
+// its 961 readers carry onto it; the rest are in code Arxan re-mutates per build). The repository
+// layout is unchanged in eldenring-deobf-1.17.2.bin: GetParamResCap (0x140d500f0) still bounds the
+// index at 0xc2 params and reads +0x80 + index * 0x48 and +0x88, GetParamResCapRowCount
+// (0x140d36070) still walks +0x80 -> +0x80 -> +0x0a, and all 216 carried GetParamResCap call sites
+// pass the same index in both builds (0x3f, 0x42 and 0x44 among them, and indices up to 0xc0).
+// 93, 100 and 123 have no call site with an immediate index to compare, so those three rest on the
+// unchanged count and the unchanged indices around them.
+const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d88f78;
 // Host-side path the watcher forwards from; reported in `ready` so a reader knows where to write.
 const CMD_FILE = 'target/param-lab/cmd.json';
 const SIZES = { u8: 1, s8: 1, u16: 2, s16: 2, u32: 4, s32: 4, f32: 4 };
