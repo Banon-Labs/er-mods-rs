@@ -1,6 +1,9 @@
 // Does one extra call of the profile-renderer table builder leave a title whose portraits cannot
 // draw? That is the only thing this repo does to that table which the game does not.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this is the experiment
 //
 // The user's own A/B, 2026-09-19: a quit-to-title after visiting the in-game Save Game menu drew
@@ -33,9 +36,9 @@
 // repeat the previous generation's names the mechanism outright rather than merely implicating it.
 'use strict';
 
-const BUILDER_RVA = 0x9b05f0;
-const REFRESH_RVA = 0x9ab820;
-const RENDERER_TABLE_RVA = 0x3d71940;
+const BUILDER_RVA = 0x9b0aa0; // 1.17.1 0x9b05f0
+const REFRESH_RVA = 0x9abcd0; // 1.17.1 0x9ab820
+const RENDERER_TABLE_RVA = 0x3d74960; // 1.17.1 0x3d71940
 const OFFSCREEN_REND_OFFSET = 0xa8;
 const SLOT_COUNT = 10;
 

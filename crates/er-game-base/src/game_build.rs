@@ -1380,6 +1380,33 @@ mod tests {
         }
     }
 
+    /// The keyboard key-id to DirectInput scancode table reaches every build it was read on.
+    ///
+    /// er-hotkey-conflicts reads it at its 1.16.2 rva through `game_rva`, and until 2026-10-21 the
+    /// data map withheld it: its two readers are leaves with no `.pdata` entry, so the vote saw one
+    /// usable reference and listed it as unused. Every 1.17 build then refused the address and the
+    /// crate checked no keyboard binding at all. The row is now carried by a bracket+shape rescue
+    /// in `scripts/map-data-rvas-1162-to-1170.py`, and a refresh that drops it again fails here
+    /// rather than in the game. The expected addresses are where the table's 0x240 bytes occur,
+    /// once, in each de-Arxan'd image, and where both of each image's `lea` readers point.
+    #[test]
+    fn the_keyboard_scancode_table_is_carried_to_every_measured_build() {
+        let source = 0x3c4_49a0;
+        for (build, carry, expected) in [
+            ("1.17.0", Carry::Identity, 0x3c4_8a00),
+            ("1.17.1", Carry::To1171, 0x3c4_8a00),
+            ("2.7.2.0", Carry::To1172, 0x3c4_ba10),
+        ] {
+            match table_answer(&VERIFIED_1162_TO_1170, source, carry) {
+                TableAnswer::MovedTo { to, .. } => assert_eq!(
+                    to, expected,
+                    "{build}: {source:#x} reached {to:#x}, the table is at {expected:#x}"
+                ),
+                other => panic!("{build}: {source:#x} is {other:?}, the table is at {expected:#x}"),
+            }
+        }
+    }
+
     /// The 1.17.0 to 1.17.1 carry, at each edge of the one range it applies to.
     ///
     /// The bound that matters is the upper one. Every `.rdata` vtable and `.data` global this

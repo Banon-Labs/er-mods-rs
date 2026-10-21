@@ -11,15 +11,17 @@
 //      same call. That is the crash the tester hit; both hooks should divert, and the DLL logs
 //      `DIVERTED` lines. If the pointer never reads null, that is measured too.
 //
-// Offsets are 1.17.1. Golden Runes are the only thing it gives, once per phase.
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The offsets
+// into GiveItems are unchanged: its whole body (0x56d bytes) is the same in both images apart from
+// rel32/rip displacements. Golden Runes are the only thing it gives, once per phase.
 'use strict';
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
-const WORLD_CHR_MAN = 0x3d69ff8;
+const WORLD_CHR_MAN = 0x3d6d018; // 1.17.1 0x3d69ff8
 const MAIN_PLAYER = 0x1e508;
-const PACKET_RECEIVE = 0x560eb0;
-const GIVE_ITEMS = 0x561400;
+const PACKET_RECEIVE = 0x561360; // 1.17.1 0x560eb0
+const GIVE_ITEMS = 0x5618b0; // 1.17.1 0x561400
 const GOODS_CATEGORY = 0x40000000;
 // Run 2 (2026-10-19): one Golden Rune [2], which fits, so only the pickup-log branch is reached;
 // run 1 gave 150 Golden Rune [1] at the 99 cap and reached only the storage branch.
@@ -90,11 +92,11 @@ for (const [name, off, read] of [
 // the only give left is the one made while the local player is null.
 // The loading screen is started here rather than waited for (user, 2026-10-19: "trigger a warp to
 // get a loading screen yourself so you can time it exactly"): the game's own
-// TriggerAreaReload(false), 1.17.1 0x1405f36e0, called once from the frame tick as
-// scripts/frida/area-reload.js does. The give then fires on the first PacketReceive or frame tick
-// that sees mainPlayerIns null, with the MapItemManImpl PacketReceive was last handed.
-const FRAME_TICK = 0x773900;
-const TRIGGER_AREA_RELOAD = 0x5f36e0;
+// TriggerAreaReload(false), 1.17.1 0x1405f36e0 -> 2.7.2.0 0x1405f3b90, called once from the frame
+// tick as scripts/frida/area-reload.js does. The give then fires on the first PacketReceive or
+// frame tick that sees mainPlayerIns null, with the MapItemManImpl PacketReceive was last handed.
+const FRAME_TICK = 0x773db0; // 1.17.1 0x773900
+const TRIGGER_AREA_RELOAD = 0x5f3b90; // 1.17.1 0x5f36e0
 const triggerAreaReload = new NativeFunction(at(TRIGGER_AREA_RELOAD), 'void', ['uint8'], 'win64');
 
 // Measured 2026-10-19: TriggerAreaReload(false) swaps mainPlayerIns (0x30340080 -> 0x3034f080)

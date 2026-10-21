@@ -57,7 +57,7 @@ Interceptor.attach(steam.base.add(0x8ac80), {
 // The goods bytes the comparison turns on, read at capture time. A preimage recorded without them
 // cannot be placed in either arm of the experiment afterwards, which is exactly how the previous
 // comparison became ambiguous -- the number was right and nothing said which condition produced it.
-const REPO_RVA = 0x3d85f58, GOODS_INDEX = 3, GOODS = [102, 111, 112];
+const REPO_RVA = 0x3d88f78, GOODS_INDEX = 3, GOODS = [102, 111, 112]; // 1.17.1 0x3d85f58
 const game = Process.findModuleByName('eldenring.exe');
 const goodsAt = (function () {
   const repo = game.base.add(REPO_RVA).readPointer();

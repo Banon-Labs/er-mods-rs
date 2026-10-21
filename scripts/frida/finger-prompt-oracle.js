@@ -1,5 +1,8 @@
 // Is the Festering Bloody Finger ON right now, and therefore which prompt will using it raise?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The discriminator, measured 2026-09-16
 //
 // SpEffect **541** is the item's active state. In one run its presence went with the raiser
@@ -17,7 +20,7 @@
 // confirmed blind -- which is how a press meant for `Both near and far` toggled the item instead.
 // The other candidates are no better: `ChrIns+0x160` is a queue that never self-clears, and
 // `ChrIns+0x168` counts TAE 65 consumes. None of the three reports a toggle.
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const MAIN_PLAYER = 0x1e508;
 const CHR_INS_SPECIAL_EFFECT = 0x178;
 const SPECIAL_EFFECT_HEAD = 0x08;

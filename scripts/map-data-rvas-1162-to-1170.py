@@ -790,6 +790,22 @@ REFSITE_RESCUED = {
     # (`MOV RAX,[0x143b48ff0]; CALL RAX` at 0x140e8d52a, its only reference), not a Steam interface
     # object, and not read by the save-dir builder at all.
     0x3B48FF0: (0x3B4D050, "STEAM_ID_ACCESSOR_CALL_SLOT_RVA", "bracket"),
+    # The `CS_KEYBOARD_KEY` -> DirectInput scancode table er-hotkey-conflicts reads: 0x90 i32s,
+    # indexed by `keyId - 0x46`. Two `lea rax, [rip+d]` reach it in each image -- 1.16.2 0x1f6d100
+    # and 0x1f6d610, 1.17 0x1f6ef00 and 0x1f6f410 -- inside the key-state getter and setter
+    # (0x1f6d0f0 and 0x1f6d600 in 1.16.2). Both are leaves with no `.pdata` entry, so the vote
+    # attributes them to the function before them, only one decodes through, and the single
+    # unopposed 0x3c48a00 is withheld; on every 1.17 build er-hotkey-conflicts then logged
+    # `ADDRESS REFUSED` for it and checked no keyboard binding at all.
+    #   Bracket -- 6 anchors within +-0x400 all move +0x4060.
+    #   Shape   -- the masked `lea` reaches the source twice in 1.16.2 and the candidate twice
+    #              in 1.17, and both 1.17 sites are those two functions' own reads.
+    # Not re-derived here, because `unique` reads strings only: the table's 0x240 bytes (all 144
+    # values distinct) occur exactly once in each of the four images, at 0x3c449a0 (1.16.2),
+    # 0x3c48a00 (1.17.0 and 1.17.1) and 0x3c4ba10 (2.7.2.0), which is also where each image's two
+    # readers point and where `carry-1171-to-1172.tsv` puts 0x3c48a00 (data segment, +0x3010).
+    #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3c449a0 --confirm 0x3c48a00
+    0x3C449A0: (0x3C48A00, "KEYBOARD_KEY_TO_DIK_GLOBAL_RVA", "bracket+shape"),
     0x3D61DC0: (0x3D65E20, "NAV_COST_TABLE_RVA", "bracket"),
     # Slots 6 and 10 of the `TitleStep` step table, which `own_stepper_patch_once` writes our
     # handler into. Each has exactly one reference -- the store that fills it -- so the vote alone

@@ -9,10 +9,14 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const FRAME_TICK = va('0x140773900');
-const WORLD_CHR_MAN = va('0x143d69ff8');
+// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: each function body
+// matches between eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin with its rip-relative
+// and branch operands carried, and each global is what its 2.7.2.0 readers load.
+const FRAME_TICK = va('0x140773db0');       // frame tick 0x140773900 -> 0x140773db0
+const WORLD_CHR_MAN = va('0x143d6d018');    // WorldChrMan 0x143d69ff8 -> 0x143d6d018
 const MAIN_PLAYER = 0x1e508;
-const CS_EVENT_MAN = va('0x143d6c768');
+const CS_EVENT_MAN = va('0x143d6f788');     // CSEventMan 0x143d6c768 -> 0x143d6f788
+// GetPhysicsPosition 0x1403f0e20, the same address in both builds.
 const GET_PHYSICS_POS = new NativeFunction(va('0x1403f0e20'), 'void', ['pointer', 'pointer']);
 const SIGN = { POS: 0x14, BLOCK: 0x10, NPC: 0x234 };
 

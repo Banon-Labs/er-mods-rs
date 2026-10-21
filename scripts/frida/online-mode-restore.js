@@ -1,5 +1,8 @@
 // Put back the two online predicates er_quickload stubs, live, without a rebuild.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Both are patched to `xor eax,eax; ret` at DllMain so the autoload reaches the title with no
 // login attempt. The product restores the first one once a player exists; the second has never
 // been restored, and it is the one that greys out the multiplayer menu, the message rows and the
@@ -12,8 +15,8 @@
 const STUB = [0x31, 0xc0, 0xc3];
 
 const SITES = [
-  { name: 'IsOnlineMode', rva: 0x67ae80, original: [0x48, 0x8b, 0x05] },
-  { name: 'Menu_IsEnableOnlineMode', rva: 0xe58180, original: [0x40, 0x53, 0x48] },
+  { name: 'IsOnlineMode', rva: 0x67b330, original: [0x48, 0x8b, 0x05] }, // 1.17.1 0x67ae80
+  { name: 'Menu_IsEnableOnlineMode', rva: 0xe59870, original: [0x40, 0x53, 0x48] }, // 1.17.1 0xe58180
 ];
 
 function hex(ptr, n) {

@@ -18,7 +18,7 @@ Files:
 - `er-duel-rules.lua` -- the referee's source. `python3 scripts/er-duel-rules-gen.py --write` fills its data block from the installed game and rebuilds the table around it; `lua scripts/test-er-duel-rules-ce.lua` runs its rules with no game.
 - `er-duel-rules-ce.py`, `er-duel-rules-autotest.lua`, `er-duel-rules-ui-autotest.lua` -- start Windows Cheat Engine 7.5 beside a running game on Linux/Proton (inside the game's pressure-vessel namespaces, as `scripts/er-frida-up.py` does for frida-server); `--autotest` also ticks the entry with no hands, and `--ui-test` drives the ban editor and Rules window, logs the result to `~/.cache/er-ce/ui-test/ui-autotest.log` and closes.
 
-On Windows: start Elden Ring with EAC off, open the table, tick `Duel rules referee (Elden Ring 1.17.1)`. The entry attaches to `eldenring.exe` itself if Cheat Engine has not. It refuses any other game build, and it places one hook (after `SpecialEffect::Apply`'s inner apply, `eldenring.exe+4FB79E`) so an effect that lasts a single frame is still seen; unticking restores the original bytes. Closing Cheat Engine without unticking leaves the hook running harmlessly, and the next tick adopts it.
+On Windows: start Elden Ring with EAC off, open the table, tick `Duel rules referee (Elden Ring 1.17.2)`. The entry attaches to `eldenring.exe` itself if Cheat Engine has not. It refuses any other game build, and it places one hook (after `SpecialEffect::Apply`'s inner apply, `eldenring.exe+4FB87E` on 2.7.2.0) so an effect that lasts a single frame is still seen; unticking restores the original bytes. Closing Cheat Engine without unticking leaves the hook running harmlessly, and the next tick adopts it.
 
 ### Your own rules
 

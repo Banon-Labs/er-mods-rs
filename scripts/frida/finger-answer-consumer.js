@@ -1,5 +1,8 @@
 // What does the vanilla finger's bounds prompt hand back, and what does the game do with it?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The chain, read out of the 1.17.0 image
 //
 //   FUN_1407c2ae0   the per-tick state machine on the goods dialog; `dialog+0x10` is the step
@@ -11,9 +14,9 @@
 // So `vtable[0x88]` is the one function the finger's answer reaches, and the row the player chose
 // arrives in the second out-parameter.  Both are recorded here because the detour needs the row to
 // decide between our own nearby filter and Seamless's invade, and needs the virtual to replace.
-const CONSUMER_START = ptr('0x1407c2e10');
-const CONSUMER_CANCEL = ptr('0x1407c2ec0');
-const POPUP_RESULT = ptr('0x1407ee550');
+const CONSUMER_START = ptr('0x1407c32c0'); // 1.17.1 0x1407c2e10
+const CONSUMER_CANCEL = ptr('0x1407c3370'); // 1.17.1 0x1407c2ec0
+const POPUP_RESULT = ptr('0x1407eea00'); // 1.17.1 0x1407ee550
 const CONFIRM_VSLOT = 0x88;
 
 function follow (address) {

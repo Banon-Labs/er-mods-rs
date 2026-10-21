@@ -1,5 +1,8 @@
 // What the player's `Back` press actually enqueues, on the object the bounds popup queries.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The one value this run is for
 //
 // The invasion-bounds popup ("Attempting to invade another world.") cannot be closed by the
@@ -65,7 +68,7 @@
 const RVA = {
   // The step-2 handler: called once a frame while the bounds popup is on screen. The gate for
   // every walk below, so nothing is read while the dialog is not up.
-  startInvasion: 0x7c2c50,
+  startInvasion: 0x7c3100, // 1.17.1 0x7c2c50
   // Predicate B. Its `rcx` is the owner whose `+0x178` this dialog's `dl` is computed from.
   backPredicate: 0x3f4e10,
   // Predicate A, hooked for its return value alone: if the flag bit ever rises on a press, the

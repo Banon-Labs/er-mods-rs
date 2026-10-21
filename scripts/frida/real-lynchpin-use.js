@@ -1,5 +1,8 @@
 // What runs when a HUMAN uses the Challenger's Lynchpin, against what runs when we drive it.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why the return address is the whole point
 //
 // A driven Lynchpin use plays the animation and latches `ChrIns+0x160`, and Seamless's popup never
@@ -12,8 +15,8 @@
 // only way to name its entry point is to catch a read of the Lynchpin's row during a real use and
 // look at WHO asked. A return address inside `ersc.dll` names Seamless's hook; one inside
 // `eldenring.exe` says the game asked and Seamless is listening somewhere else entirely.
-const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3b5b0');
-const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140e9e4f0');
+const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3cca0'); // 1.17.1 0x140d3b5b0
+const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea1a50'); // 1.16.2 0x140e9e4f0, 1.17.1 0x140ea0360
 const CHALLENGERS_LYNCHPIN = 0x407fde63 >>> 0;
 const LYNCHPIN_GOODS_ID = 0x7fde63;
 const ERSC_MATCHMAKING_SLOT = 0x21b610;

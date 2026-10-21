@@ -107,6 +107,23 @@ def steam_root() -> pathlib.Path:
 
 
 def prefix() -> pathlib.Path:
+    """The running game's own `WINEPREFIX`, else Steam's prefix for app 1245620.
+
+    A game started through a non-Steam shortcut runs in that shortcut's prefix: Better
+    Multiplayer's launcher puts it in `compatdata/4102643056`. A server started in the 1245620
+    prefix then talks to a wineserver with no `eldenring.exe` in it (measured 2026-10-21).
+    """
+    pid = game_pid()
+    if pid is not None:
+        try:
+            environ = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except OSError:
+            environ = []
+        for entry in environ:
+            if entry.startswith(b"WINEPREFIX="):
+                found = pathlib.Path(entry[len(b"WINEPREFIX="):].decode("utf-8", "strict"))
+                if found.is_dir():
+                    return found
     return steam_root() / "steamapps/compatdata" / STEAM_APP_ID / "pfx"
 
 
@@ -723,7 +740,7 @@ def selftest() -> int:
             # through `er_run_lib`, and what must not come back is a second definition of it.
             # Assembled from pieces, or the needle would be in its own haystack.
             ("WORLD_CHR_MAN" + "_GLOBAL_RVA = ") not in source
-            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D69FF8") in shared,
+            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D6D018") in shared,
         ),
     ]
     failed = 0
@@ -740,6 +757,16 @@ def selftest() -> int:
         failed += 0 if hop else 1
     print(
         f"  ....  the second hop is `.data`, which 1.17.1 did not move: "
+        f"0x{er_run_lib.GAME_PREFERRED_IMAGE_BASE + er_run_lib.WORLD_CHR_MAN_GLOBAL_RVA_1171:x}"
+    )
+    hop, hop_detail = er_run_lib.recorded_1171_to_1172_hop()
+    if hop is None:
+        print(f"  ....  the 1.17.1 to 2.7.2.0 hop went unchecked -- {hop_detail}")
+    else:
+        print(f"  {'ok  ' if hop else 'FAIL'}  the table still carries the third hop -- {hop_detail}")
+        failed += 0 if hop else 1
+    print(
+        f"  ....  the walk reads "
         f"0x{er_run_lib.GAME_PREFERRED_IMAGE_BASE + er_run_lib.WORLD_CHR_MAN_GLOBAL_RVA:x} "
         f"+0x{er_run_lib.WORLD_CHR_MAN_MAIN_PLAYER_OFFSET:x}"
     )

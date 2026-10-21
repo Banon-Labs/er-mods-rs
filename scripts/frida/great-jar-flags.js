@@ -1,4 +1,4 @@
-// Great Jar trial (north Caelid, m60_47_41_00) event flags on ER 1.17.1: read them, and clear the
+// Great Jar trial (north Caelid, m60_47_41_00) event flags on ER 2.7.2.0: read them, and clear the
 // ones that stop the three Knight of the Great Jar summon signs from being placed again.
 //
 // Where the ids come from (bd great-jar-sign-flags-1171-2026-10-06): m60_47_41_00.emevd event
@@ -10,14 +10,18 @@
 // reload (rest at a grace), because the knights stay dead until then.
 const GJ = (() => {
   const base = Process.getModuleByName('eldenring.exe').base;
-  const EVENT_FLAG_MAN = base.add(0x3d6c4b8);          // CSEventFlagMan* global (1.16.2 0x143d68448)
-  const GET_RVA = 0x5fa250, SET_RVA = 0x5d2f60;
-  // Prologue checks, read out of eldenring-deobf-1.17.1.bin.
+  // Carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. CSEventFlagMan* global
+  // 0x143d6c4b8 -> 0x143d6f4d8 (1.16.2 0x143d68448), confirmed by its 2.7.2.0 readers;
+  // GetEventFlag 0x1405fa250 -> 0x1405fa700 and SetEventFlag 0x1405d2f60 -> 0x1405d3410, both
+  // bodies matching between the two de-Arxan'd images.
+  const EVENT_FLAG_MAN = base.add(0x3d6f4d8);
+  const GET_RVA = 0x5fa700, SET_RVA = 0x5d3410;
+  // Prologue checks: the same bytes in eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin.
   const want = { [GET_RVA]: '448b411c448bda33d2', [SET_RVA]: '48895c240848897424' };
   for (const [rva, hex] of Object.entries(want)) {
     const got = Array.from(new Uint8Array(base.add(Number(rva)).readByteArray(hex.length / 2)))
       .map((b) => b.toString(16).padStart(2, '0')).join('');
-    // An e9 detour over the first 5 bytes is accepted: live 1.17.1 GetEventFlag is already hooked.
+    // An e9 detour over the first 5 bytes is accepted: live 1.17.1 GetEventFlag was already hooked.
     const ok = got === hex || (got.startsWith('e9') && got.slice(10) === hex.slice(10));
     if (!ok) throw new Error(`prologue mismatch at +0x${Number(rva).toString(16)}: ${got}`);
   }
@@ -50,7 +54,7 @@ const GJ = (() => {
   function reset() {
     const m = man(), id = Memory.alloc(4), before = read();
     // netSync 0: no append to the manager's sync list from a foreign thread. With state 0 the call
-    // reduces to the bit clear in SetEventFlagBit (0x1405faa40).
+    // reduces to the bit clear in SetEventFlagBit (0x1405faa40 -> 0x1405faef0).
     for (const k of CLEAR) { id.writeU32(FLAGS[k]); setFlag(m, id, 0, NULL, 0); }
     return { before, after: read() };
   }

@@ -1,6 +1,7 @@
 // Live proof for er-npc-summons: give each Mimic Tear companion its build's face on the frame it is
-// created, through CS::PlayerGameData::CopyFaceDataFromBuffer (1.17.1 0x140261010), the call
-// spawn-npc.js applyFace and er-build-import-runtime face.rs use. Before the DLL does it in Rust.
+// created, through CS::PlayerGameData::CopyFaceDataFromBuffer (1.17.1 0x140261010, unmoved in
+// 2.7.2.0), the call spawn-npc.js applyFace and er-build-import-runtime face.rs use. Before the DLL
+// does it in Rust.
 //
 // The faces are turtles.lua's three blobs (the game's 288-byte face buffer, magic FACE, version
 // 4); they differ only in the blindfold colour. Companions are created in slot order, one
@@ -12,7 +13,12 @@
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 
-const CREATE_SUMMON_CHR = va('0x1404baea0');
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; both bodies
+// match eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands.
+// CreateSummonChr 0x1404baea0 -> 0x1404baf80.
+const CREATE_SUMMON_CHR = va('0x1404baf80');
+// CopyFaceDataFromBuffer 0x140261010 -> 0x140261010: `add rcx, 0x760; jmp 0x140252f40` in both, and
+// the jump target is the same function at the same address.
 const COPY_FACE = new NativeFunction(va('0x140261010'), 'void', ['pointer', 'pointer']);
 const PLAYER_GAME_DATA = 0x580;
 const FACE_BLOCK = 0x768;

@@ -4,34 +4,42 @@
 // # The choke point
 //
 // 1.16.2 `FUN_1404fd090(SpecialEffect*, int id, FloatVector4*, FieldInsHandle, char,
-// float lifeReductionRate, byte, byte)` -> 1.17.1 `0x1404fde60`. It is the only caller of
+// float lifeReductionRate, byte, byte)` -> 1.17.1 `0x1404fde60` -> 2.7.2.0 `0x1404fdf40`. It is the
+// only caller of
 // `NewSpecialEffectEntry` (1.16.2 `0x1404fb5f0`), and its three callers are every way an entry is
 // added: `CS::SpecialEffect::Apply` (1.16.2 `0x1404fa8e0`, reached from apply-with-source
 // `0x1403fade0` and three event/menu wrappers) and the two direct wrappers `0x1404f6e30` /
 // `0x1404f6e90`. A negative id takes its first branch (`test edx,edx; js`) straight to `return -1`
 // with no side effect, so the refusal rewrites `args[1]` to -1 and lets the game refuse it itself.
 //
-// # Layout used (1.17.1, read from `HasSpecialEffectWithStateInfo` at `0x1404fa370`)
+// # Layout used (1.17.1, read from `HasSpecialEffectWithStateInfo` at `0x1404fa370`, 2.7.2.0
+// `0x1404fa450`)
 //
 //   SpecialEffect: +0x08 entry head, +0x10 owner ChrIns*
 //   entry:         +0x00 SP_EFFECT_PARAM_ST*, +0x08 param id, +0x30 next
 //   SP_EFFECT_PARAM_ST: +0x156 stateInfo (u16)
-//   WorldChrMan global 0x143d69ff8, +0x1e508 main player; ChrIns +0x178 SpecialEffect*
+//   WorldChrMan global 1.17.1 0x143d69ff8 -> 2.7.2.0 0x143d6d018, +0x1e508 main player;
+//   ChrIns +0x178 SpecialEffect*
 //
 // The self-test runs once, on the game thread, from the first return of the player's
-// PadManipulator update (`0x1403daa90`): apply 9621 to the player through apply-with-source
-// (`0x1403fb010`), confirm the hook refused it and no state-457 entry exists, then apply a short
-// unrelated row (392, five seconds) and confirm that one did land.
+// PadManipulator update (`0x1403daa90`, unmoved in 2.7.2.0): apply 9621 to the player through
+// apply-with-source (1.17.1 `0x1403fb010` -> 2.7.2.0 `0x1403fb0a0`), confirm the hook refused it and
+// no state-457 entry exists, then apply a short unrelated row (392, five seconds) and confirm that
+// one did land.
+//
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The EXPECTED
+// prologues below are unchanged: each was read at its 2.7.2.0 address in
+// `eldenring-deobf-1.17.2.bin`.
 
 const game = Process.getModuleByName('eldenring.exe');
 const base = game.base;
 
-const ADD_ENTRY = base.add(0x4fde60);
-const APPLY_WITH_SOURCE = base.add(0x3fb010);
-const GET_SPEFFECT_PARAM = base.add(0xd523a0);
-const REMOVE_BY_ID = base.add(0x4f7680);
-const PAD_UPDATE = base.add(0x3daa90);
-const WORLD_CHR_MAN = base.add(0x3d69ff8);
+const ADD_ENTRY = base.add(0x4fdf40); // 1.17.1 0x4fde60
+const APPLY_WITH_SOURCE = base.add(0x3fb0a0); // 1.17.1 0x3fb010
+const GET_SPEFFECT_PARAM = base.add(0xd53a90); // 1.17.1 0xd523a0
+const REMOVE_BY_ID = base.add(0x4f7760); // 1.17.1 0x4f7680
+const PAD_UPDATE = base.add(0x3daa90); // unmoved
+const WORLD_CHR_MAN = base.add(0x3d6d018); // 1.17.1 0x3d69ff8
 
 const MAIN_PLAYER_OFFSET = 0x1e508;
 const CHR_SPECIAL_EFFECT_OFFSET = 0x178;

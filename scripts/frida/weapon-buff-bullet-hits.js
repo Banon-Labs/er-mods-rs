@@ -11,12 +11,13 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/weapon-buff-bullet-hits.js
 //
-// Addresses are 1.17.1 and below the 0xafefe9 shift boundary, so 1.17.0 == 1.17.1. Mapped from
-// 1.16.2 with scripts/map-rvas-1162-to-1170.py and read on :8767:
-//   CalculateDamage2      1.16.2 0x1404483b0 -> 0x140448910
-//   buff reader call site 1.16.2 0x140448dd5 -> 0x140449335 (CALL 0x1404f7fb0)
-//   FUN_1404f71e0         1.16.2 0x1404f71e0 -> 0x1404f7fb0 (returns atkOccurrenceSpEffectId or -1)
-//   FUN_1403e8c90         1.16.2 0x1403e8c90 -> 0x1403e8e70 (apply SpEffect id to victim)
+// Addresses are 2.7.2.0. Mapped from 1.16.2 to 1.17.1 with scripts/map-rvas-1162-to-1170.py and
+// read on :8767 (below the 0xafefe9 shift boundary, so 1.17.0 == 1.17.1), then to 2.7.2.0 with
+// scripts/map-rvas-1171-to-1172.py; each opens with the same bytes in both images:
+//   CalculateDamage2      1.16.2 0x1404483b0 -> 0x140448910 -> 0x1404489f0
+//   buff reader call site 1.16.2 0x140448dd5 -> 0x140449335 -> 0x140449415 (CALL 0x1404f8090)
+//   FUN_1404f71e0         1.16.2 0x1404f71e0 -> 0x1404f7fb0 -> 0x1404f8090 (returns atkOccurrenceSpEffectId or -1)
+//   FUN_1403e8c90         1.16.2 0x1403e8c90 -> 0x1403e8e70 -> 0x1403e8e70 (apply SpEffect id to victim)
 // AttackDamageInfo fields (1.16.2 struct, the 1.17 disassembly reads the same +0x13c/+0x140/+0x228):
 //   +0x40 attackParamId, +0x10c bulletId, +0xda hit context byte, +0x13c / +0x140 status scale,
 //   +0x228 damage, +0x267 bit 3 skips the whole SpEffect block.
@@ -26,8 +27,8 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
-const CALC_DAMAGE2 = game.base.add(ptr('0x140448910').sub(BASE));
-const BUFF_READER = game.base.add(ptr('0x1404f7fb0').sub(BASE));
+const CALC_DAMAGE2 = game.base.add(ptr('0x1404489f0').sub(BASE));
+const BUFF_READER = game.base.add(ptr('0x1404f8090').sub(BASE));
 const APPLY_SP = game.base.add(ptr('0x1403e8e70').sub(BASE));
 
 // Hits on the bullets in question. Everything else is counted but not logged line by line.
@@ -109,10 +110,11 @@ const FIX = false;
 // atkOccurrenceSpEffectId -> hand of every stateInfo 152/153 row with wepParamChange 1/5 (R) or
 // 2/6 (L), from the 1.17.1 regulation; ids shared by both hands are left out.
 const ON_HIT_HAND = {"1511": "R", "1521": "R", "1756": "R", "1759": "L", "3141": "R", "3143": "R", "3145": "L", "3147": "L", "3151": "R", "3153": "R", "3155": "L", "3157": "L", "3176": "R", "3178": "R", "3180": "L", "3182": "L", "3191": "R", "3193": "R", "3195": "L", "3197": "L", "3311": "R", "3313": "R", "3315": "L", "3317": "L", "102311": "R", "102313": "R", "102315": "L", "102317": "L", "1449001": "R", "1626001": "R", "1632001": "R", "1723001": "R"};
-// PlayerIns::GetEquipmentEntryParamId, 1.16.2 0x140656960 -> 1.17.1 0x1406577b0 (read: slot
-// -6..11, else -1; reads PlayerIns+0x638), and the main player at WorldChrMan +0x1e508.
-const GET_EQUIP = new NativeFunction(game.base.add(ptr('0x1406577b0').sub(BASE)), 'int', ['pointer', 'int']);
-const WORLD_CHR_MAN = game.base.add(0x3d69ff8);
+// PlayerIns::GetEquipmentEntryParamId, 1.16.2 0x140656960 -> 1.17.1 0x1406577b0 -> 2.7.2.0
+// 0x140657c60 (read: slot -6..11, else -1; reads PlayerIns+0x638), and the main player at
+// WorldChrMan (1.17.1 0x143d69ff8 -> 2.7.2.0 0x143d6d018) +0x1e508.
+const GET_EQUIP = new NativeFunction(game.base.add(ptr('0x140657c60').sub(BASE)), 'int', ['pointer', 'int']);
+const WORLD_CHR_MAN = game.base.add(0x3d6d018);
 
 function mainPlayer() {
     try {

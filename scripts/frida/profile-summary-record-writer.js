@@ -1,5 +1,8 @@
 // Who writes CS::ProfileSummary's records during a System > Quit character switch?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `picked-summary` in er-profile-summary-core says, every time it re-asserts, that "something else
 // writes these records after we do (the game's own boot ProfileSummary read is the known one)". That
 // sentence has been in the log for weeks and names no function. This agent names one or clears it.
@@ -25,7 +28,7 @@
 // 1.17 addresses. `.text` below rva 0xafefe9 is unmoved on 1.17.1, so these need no further step.
 const UPDATE_RECORD_FROM_LIVE_PLAYER_RVA = 0x262280;
 // `.data` globals keep their 1.16.2 addresses across 1.17: the section table is identical.
-const GAME_DATA_MAN_GLOBAL_RVA = 0x3d5df38;
+const GAME_DATA_MAN_GLOBAL_RVA = 0x3d64fb8; // 1.16.2 0x3d5df38, 1.17.1 0x3d61f98
 const GAME_DATA_MAN_PROFILE_SUMMARY_OFFSET = 0x78;
 const PROFILE_SUMMARY_RECORD_BASE = 0x18;
 const PROFILE_SUMMARY_RECORD_STRIDE = 0x2a0;

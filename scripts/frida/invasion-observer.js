@@ -1,5 +1,8 @@
 // Watch an invasion happen: the query going out, the session walking its states, the lobby joining.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What this is the oracle for
 //
 // A redirect that sets Seamless's session to 0x0e has changed a field, and a field we wrote is not
@@ -19,8 +22,8 @@
 const SESSION_STATE = 0x150;
 const OWNER_SESSION = 0x58;
 const OSM_FROM_R14 = 0x120;
-const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea0360');
-const SESSION_MANAGER_GLOBAL_RVA = 0x3d7a4d0;
+const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea1a50'); // 1.17.1 0x140ea0360
+const SESSION_MANAGER_GLOBAL_RVA = 0x3d81560; // 1.16.2 0x3d7a4d0, 1.17.1 0x3d7e540
 const LOBBY_STATE_OFFSET = 0x0c;
 const LOBBY_STATE_NAMES = ['None', 'Creating', 'CreateFailed', 'Host',
                            'Joining', 'JoinFailed', 'Client', 'Closing'];

@@ -3,6 +3,9 @@
 // tick so the call runs on the game thread; the hook does nothing after that and goes when the
 // script is unloaded.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 //   3160  [Item] Fire Grease - Right, spCategory 162, 60 s: on Unarmed (isEnhance 0) it is the
 //         end state of a buff transfer.
 //   3505  Crimson Crystal Tear's heal, duration 0: gone before any reader samples the list, so
@@ -13,9 +16,9 @@ const IDS = [3160, 3505];
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
-const WORLD_CHR_MAN = 0x3d69ff8;
+const WORLD_CHR_MAN = 0x3d6d018; // 1.17.1 0x3d69ff8
 const MAIN_PLAYER = 0x1e508;
-const FRAME_TICK = 0x773900;
+const FRAME_TICK = 0x773db0; // 1.17.1 0x773900
 /// `CS::ChrIns::ApplySpEffect(chr, uint id, bool shouldNotSync) -> bool`.
 const applySpEffect = new NativeFunction(at(0x3e8dc0), 'bool', ['pointer', 'uint32', 'bool']);
 

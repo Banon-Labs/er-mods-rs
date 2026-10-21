@@ -1,5 +1,8 @@
 // With er-r3-view loaded: does R3 still reach the step from view 3, and which windows stay drawn?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Read-only. Two hooks:
 //   `apply` (1.17 rva `0x975890`), which er-r3-view's step calls with the new mode -- one message
 //   per R3 press that reached the step, so a press from view 3 that never arrives is a missing
@@ -10,9 +13,9 @@
 // each R3 press at the pad, so "pressed but the step never ran" is visible as such.
 'use strict';
 
-const APPLY_RVA = 0x975890;
-const RUN_RVA = 0x7ae040;
-const POLL_RVA = 0x1f6d940;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
+const POLL_RVA = 0x1f6f030; // 1.17.1 0x1f6d940
 const JOB_WINDOW = 0x130;
 const PROXY_OFFSETS = [0x120, 0x188, 0x230, 0x3b8];
 

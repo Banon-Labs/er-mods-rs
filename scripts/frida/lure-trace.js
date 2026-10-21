@@ -5,30 +5,34 @@
 //   lure    bullet 20003309 (the smoke a Piquebone arrow leaves where it lands: 4.0 s, radius 15 m,
 //           AtkParam_Pc 0 "Impact: Oppose", rain-of-arrows-seppuku.md) spawned at the player's feet
 //           every `every` frames for `lureFrames` frames, owned by the player. The spawn copies the
-//           game's own debug spawner 1.17.1 0x1403a6d70 [1.16.2 0x1403a6d60]: BulletSpawnData ctor
-//           0x14038c580 [0x14038c570], owner handle +0x0, bullet id +0x14, flags +0x44 |= 1, position
-//           +0x80, CSBulletManager::SpawnBullet 0x1403a2cb0 [0x1403a2ca0] (manager, int *out, data,
-//           int *err; *out -1 = refused), dtor 0x14038d020 [0x14038d010]. GLOBAL_CSBulletManager is
-//           0x143d667a8 [0x143d62748], read from the store after its ctor call in _Common_Initialize.
+//           game's own debug spawner 1.17.1 0x1403a6d70 (unmoved in 2.7.2.0) [1.16.2 0x1403a6d60]:
+//           BulletSpawnData ctor 0x14038c580 [0x14038c570], owner handle +0x0, bullet id +0x14,
+//           flags +0x44 |= 1, position +0x80, CSBulletManager::SpawnBullet 0x1403a2cb0 [0x1403a2ca0]
+//           (manager, int *out, data, int *err; *out -1 = refused), dtor 0x14038d020 [0x14038d010]
+//           -- the ctor, SpawnBullet and dtor are also unmoved in 2.7.2.0. GLOBAL_CSBulletManager is
+//           1.17.1 0x143d667a8 -> 2.7.2.0 0x143d697c8 [0x143d62748], read from the store after its
+//           ctor call in _Common_Initialize.
 //   sustain the player and every character within `radius` m are kept at full HP; the others also get
-//           the data module's no-death bit (+0x19b bit 0, tested by 0x1404379d0), cleared on dispose.
+//           the data module's no-death bit (+0x19b bit 0, tested by 1.17.1 0x1404379d0 -> 2.7.2.0
+//           0x140437a60), cleared on dispose.
 //   trace   each character within `radius` m: its position every frame (`vtrace`, capped), and every
-//           player hit on it from CalculateDamage2 0x140448910 [0x1404483b0] with the victim's
-//           position at that moment. A smoke hit has atk 0, which shows the smoke spawned where the
-//           enemies are.
+//           player hit on it from CalculateDamage2 1.17.1 0x140448910 -> 2.7.2.0 0x1404489f0
+//           [0x1404483b0] with the victim's position at that moment. A smoke hit has atk 0, which
+//           shows the smoke spawned where the enemies are.
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 const cfg = Object.assign({ bullet: 20003309, every: 240, lureFrames: 36000, radius: 20, traceMax: 400000 }, globalThis.__ER_FRIDA_CONFIG || {});
 
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const BULLET_MAN = va('0x143d667a8');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
-const CALC_DAMAGE2 = va('0x140448910');
-const SPAWN_DATA_CTOR = new NativeFunction(va('0x14038c580'), 'pointer', ['pointer']);
-const SPAWN_DATA_DTOR = new NativeFunction(va('0x14038d020'), 'void', ['pointer']);
-const SPAWN_BULLET = new NativeFunction(va('0x1403a2cb0'), 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);
+const WORLD_CHR_MAN = va('0x143d6d018'); // 1.17.1 0x143d69ff8
+const BULLET_MAN = va('0x143d697c8'); // 1.17.1 0x143d667a8
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0'); // 1.17.1 0x140401f30
+const CALC_DAMAGE2 = va('0x1404489f0'); // 1.17.1 0x140448910
+const SPAWN_DATA_CTOR = new NativeFunction(va('0x14038c580'), 'pointer', ['pointer']); // unmoved
+const SPAWN_DATA_DTOR = new NativeFunction(va('0x14038d020'), 'void', ['pointer']); // unmoved
+const SPAWN_BULLET = new NativeFunction(va('0x1403a2cb0'), 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']); // unmoved
 
 const S = { frame: 0, spawns: 0, refused: 0, lastSpawn: -1e9, traced: 0, hits: 0, noDead: {}, err: null };
 const DATA = Memory.alloc(0x200);

@@ -30,15 +30,21 @@ M.CATALOG = {affinities = {{"Standard", 0}, {"Heavy", 100}, {"Keen", 200}, {"Qua
 
 local T, PARAM_FIELDS = M.T, M.PARAM_FIELDS
 
--- The build this script is pinned to; every RVA and offset below was measured against it.
-M.BUILD = { label = 'ELDEN RING 1.17.1 (eldenring.exe 2.7.1.0)', timeDateStamp = 0x6a96b418 }
+-- The build this script is pinned to; every RVA and offset below holds on it. 1.17.1 was
+-- 0x6a96b418; 0x6aabf7e7 is the stamp of the installed 2.7.2.0 eldenring.exe and of
+-- eldenring-deobf-1.17.2.bin.
+M.BUILD = { label = 'ELDEN RING 1.17.2 (eldenring.exe 2.7.2.0)', timeDateStamp = 0x6aabf7e7 }
 
+-- Singleton pointers, `.data` RVAs on 2.7.2.0, the same values as scripts/frida/er-duel-rules.js.
+-- Each was measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py; the 2.7.2.0
+-- readers of each one load the carried address (as many readers as on 1.17.1, worldChrMan six
+-- more, and the sampled 1.17.1 readers found once in 2.7.2.0 by masked bytes all target it there).
 M.RVA = {
-    gameDataMan = 0x3d61f98,
-    worldChrMan = 0x3d69ff8,
-    soloParamRepository = 0x3d85f58,
-    bulletManager = 0x3d667a8,
-    flipper = 0x458db58,
+    gameDataMan = 0x3d64fb8,            -- 0x3d61f98 -> 0x3d64fb8
+    worldChrMan = 0x3d6d018,            -- 0x3d69ff8 -> 0x3d6d018
+    soloParamRepository = 0x3d88f78,    -- 0x3d85f58 -> 0x3d88f78
+    bulletManager = 0x3d697c8,          -- 0x3d667a8 -> 0x3d697c8
+    flipper = 0x4590b78,                -- 0x458db58 -> 0x4590b78
 }
 
 local OFF = {

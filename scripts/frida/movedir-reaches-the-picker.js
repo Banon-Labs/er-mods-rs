@@ -1,5 +1,8 @@
 // Does the engine resolve a LEFT/RIGHT the player is pressing, while our drive strip does nothing?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The question
 //
 // The save picker's drive strip switches drives on a mouse click and never on a direction. Measured
@@ -31,7 +34,7 @@
 // reading what the engine just decided.
 'use strict';
 
-const MOVE_DIR_MODE2_RVA = 0x758a90;
+const MOVE_DIR_MODE2_RVA = 0x758f40; // 1.17.1 0x758a90
 
 const game = Process.findModuleByName('eldenring.exe');
 if (game === null) {

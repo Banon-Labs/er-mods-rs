@@ -6,12 +6,20 @@
 // t = 2 atan2(y, w) faces world (-sin t, -cos t), measured 2026-10-12). Sampled every 20 player
 // frames from the player's own behavior update: sent while the player moves, and once when they
 // have stood still for 80 frames.
+//
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked
+// against eldenring-deobf-1.17.2.bin: WorldChrMan 0x143d69ff8 -> 0x143d6d018 (its readers agree,
+// and as many of them go on to read +0x1e508 in each build), the pre-behavior hook 0x140401f30 ->
+// 0x140401fc0 (whole function byte-identical). The offsets read unchanged in 2.7.2.0 game code:
+// +0x30/+0x3c in ChrIns::GetBlockId 0x1403f0470 and GetBlockIdOrigin 0x1403f0490, +0x190 and +0x68
+// in IsStandingOnSolidGround 0x1403f4040, +0x70 and +0x60 in the physics accessors 0x14045e9d0 and
+// 0x14045ed80.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
+const WORLD_CHR_MAN = va('0x143d6d018');
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0');
 
 let frame = 0;
 let last = null;

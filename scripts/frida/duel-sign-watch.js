@@ -1,5 +1,5 @@
 // Who writes SosSignData+0x30, the byte CreateSignSfx reads to decide whether a sign's effect is
-// shown (1.17.1 `cmp byte ptr [rsi+0x30],0` at 0x1406fed53)? The only static writer found on
+// shown (`cmp byte ptr [rsi+0x30],0` at 1.17.1 0x1406fed53, 2.7.2.0 0x1406ff203)? The only static writer found on
 // 1.16.2 is TestNetStep::STEP_Update's sign update, which does not run in a normal session.
 //
 // Arms one hardware write watchpoint, on the thread that runs the frame tick, over +0x30 of the
@@ -12,8 +12,10 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const FRAME_TICK = va('0x140773900');
-const CS_EVENT_MAN = va('0x143d6c768');
+// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: the frame tick's
+// body matches between the two de-Arxan'd images, and the global is what its 2.7.2.0 readers load.
+const FRAME_TICK = va('0x140773db0');       // frame tick 0x140773900 -> 0x140773db0
+const CS_EVENT_MAN = va('0x143d6f788');     // CSEventMan 0x143d6c768 -> 0x143d6f788
 const SIGN_NPC = 35000;
 const SLOT = 0;
 

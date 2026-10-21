@@ -5,10 +5,10 @@
 // blocked from the first step to the last and handed back afterwards.
 //
 // Config: { steps: [...], sustain: true }. Steps run in order, one per game frame unless they wait:
-//   { grant: item, gem? }      weapon into the inventory (mint 0x140672b30, add 0x140246480,
-//                              release 0x1406832d0), skipped when already carried
+//   { grant: item, gem? }      weapon into the inventory (mint, add, release; addresses below),
+//                              skipped when already carried
 //   { equip: item, hand: 'R'|'L' }  into the active slot of that hand, natively
-//                              (EquipItemToChrAsmSlot 0x140788ab0 with a MenuGaitem, as the driver)
+//                              (EquipItemToChrAsmSlot with a MenuGaitem, as the driver)
 //   { press: ['R1','R2','L1','L2','JUMP'], frames }  request bits held that many frames, then released
 //   { move: m, frames, hold?, dir?, sprint?, untilClip? }  walk forward at speed level m (0.5 walk,
 //                              1 run) for that many frames, holding the listed request bits meanwhile;
@@ -19,36 +19,54 @@
 //   { untilClip: 'a000_0042', frames }  wait for a clip by name prefix (here any landing), at most
 //                              `frames`; the landing clips are a000_004200/4210/4220, 4290 the low one
 //   { savePos: true } / { restorePos: true }  remember the player's position, write it back
-// Request bits are CSChrActionRequestModule +0x10 on entry to UpdateFromManipulator 0x140408190
-// (bit n = HKS ACTION_ARM n: R1 0, R2 1, L1 2, L2 3). `sustain` (default on) keeps the player at full
-// HP with the data module's no-death bit, and Darkness (SpEffect 1653000, applied from the player
-// with 0x1403fb010) on every other character within 12 m every 60 frames.
-// Clips: every TimeAct the CustomManualSelectorGenerator writer 0x1419bb530 stores at node+0xec.
+// Request bits are CSChrActionRequestModule +0x10 on entry to UpdateFromManipulator (bit n = HKS
+// ACTION_ARM n: R1 0, R2 1, L1 2, L2 3). `sustain` (default on) keeps the player at full HP with
+// the data module's no-death bit, and Darkness (SpEffect 1653000, applied from the player with
+// APPLY_SPEFFECT_FROM) on every other character within 12 m every 60 frames.
+// Clips: every TimeAct the CustomManualSelectorGenerator writer CMSG_SET_TAE stores at node+0xec.
+//
+// Addresses are 2.7.2.0, measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py; each
+// is written `1.17.1 -> 2.7.2.0`. Every function's body matches eldenring-deobf-1.17.2.bin apart
+// from rip-relative and branch operands, and each global was checked through its readers (the same
+// instruction at the carried place reads the carried address).
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 const cfg = Object.assign({ steps: [], sustain: true }, globalThis.__ER_FRIDA_CONFIG || {});
 
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const GAME_DATA_MAN = va('0x143d61f98');
-const GLOBAL_CSGAITEM = va('0x143d6d900');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
-const UPDATE_FROM_MANIPULATOR = va('0x140408190');
-const CMSG_SET_TAE = va('0x1419bb530');
-const GET_EQUIP = new NativeFunction(va('0x1406577b0'), 'int', ['pointer', 'int']);
+// WorldChrManImp grew 0x10 bytes past +0x1e5e8 in 2.7.2.0; main_player +0x1e508 is below that,
+// and 456 of its 469 1.17.1 readers are unchanged at their carried place (the rest are refused by
+// the carry or decode differently, none with another displacement).
+const WORLD_CHR_MAN = va('0x143d6d018');           // 0x143d69ff8 -> 0x143d6d018
+const GAME_DATA_MAN = va('0x143d64fb8');           // 0x143d61f98 -> 0x143d64fb8
+const GLOBAL_CSGAITEM = va('0x143d70920');         // 0x143d6d900 -> 0x143d70920
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0');       // 0x140401f30 -> 0x140401fc0
+const UPDATE_FROM_MANIPULATOR = va('0x140408220'); // 0x140408190 -> 0x140408220
+const CMSG_SET_TAE = va('0x1419bcc20');            // 0x1419bb530 -> 0x1419bcc20
+// 0x1406577b0 -> 0x140657c60
+const GET_EQUIP = new NativeFunction(va('0x140657c60'), 'int', ['pointer', 'int']);
+// 0x140247b30, unmoved
 const GET_INV = new NativeFunction(va('0x140247b30'), 'pointer', ['pointer']);
+// 0x14024c560, unmoved
 const GET_IDX = new NativeFunction(va('0x14024c560'), 'int', ['pointer', 'pointer']);
+// 0x1402470e0, unmoved
 const GET_PARAM_IN_SLOT = new NativeFunction(va('0x1402470e0'), 'int', ['pointer', 'int']);
-const EQUIP = new NativeFunction(va('0x140788ab0'), 'void', ['int', 'pointer']);
-const MINT = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'pointer', 'int', 'int']);
+// EquipItemToChrAsmSlot 0x140788ab0 -> 0x140788f60
+const EQUIP = new NativeFunction(va('0x140788f60'), 'void', ['int', 'pointer']);
+// mint 0x140672b30 -> 0x140672fe0
+const MINT = new NativeFunction(va('0x140672fe0'), 'pointer', ['pointer', 'pointer', 'int', 'int']);
+// add 0x140246480, unmoved
 const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']);
-const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']);
+// release 0x1406832d0 -> 0x140683780
+const HANDLE_DTOR = new NativeFunction(va('0x140683780'), 'void', ['pointer']);
 // CSChrActionRequestModule::IsMoveCancelPossible (1.16.2 0x140407720, byte-matched at 1.17.1
-// 0x140407c50): the input queue's answer when queue mode is on, else `taeCancels` (+0x100) bits 1
-// and 2 set with bit 11 clear. `HksEnv` serves env 2000 (IsMoveCancelPossible) with it, argument 1.
-const IS_MOVE_CANCEL_POSSIBLE = new NativeFunction(va('0x140407c50'), 'uint8', ['pointer', 'int']);
-const APPLY_SPEFFECT_FROM =new NativeFunction(va('0x1403fb010'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
+// 0x140407c50, carried to 2.7.2.0 0x140407ce0 with the same body): the input queue's answer when
+// queue mode is on, else `taeCancels` (+0x100) bits 1 and 2 set with bit 11 clear. `HksEnv` serves
+// env 2000 (IsMoveCancelPossible) with it, argument 1.
+const IS_MOVE_CANCEL_POSSIBLE = new NativeFunction(va('0x140407ce0'), 'uint8', ['pointer', 'int']);
+// 0x1403fb010 -> 0x1403fb0a0
+const APPLY_SPEFFECT_FROM =new NativeFunction(va('0x1403fb0a0'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
 // JUMP is HKS ACTION_ARM_CHANGE_STYLE (6): ExecJump starts a jump on env(ActionRequest, 6), the
 // player's jump button, or env 700 (IsAIJumpRequested) for an AI. ACTION is ACTION_ARM_ACTION (4):
 // held with R1 it is the two-hand input `ExecWeaponChange` reads (`env(ActionDuration, 4) > 0`);

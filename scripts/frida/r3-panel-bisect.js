@@ -1,5 +1,8 @@
 // Bisect the center panel: each entry into view 3 fades ONE group of the objects still drawn there.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `r3-panel-survey.js` found 128 `SceneObjProxy` objects drawn in view 3 (visible, alpha > 0), almost
 // all of them drawn in views 0-2 too, so state alone cannot name the center panel. The player can:
 // entry N into view 3 fades only group N (alpha 0) and the next R3 press restores exactly those, so
@@ -12,8 +15,8 @@
 // Runs on the menu thread, a frame after the three-pane `apply` (1.17 rva `0x975890`).
 'use strict';
 
-const APPLY_RVA = 0x975890;
-const RUN_RVA = 0x7ae040;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const MODE_TO_PARTS = 0x8f8;
 const WINDOW_SCAN_BYTES = 0x2000;

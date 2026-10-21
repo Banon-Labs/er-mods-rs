@@ -1,5 +1,8 @@
 // Use an item the way a player does: cycle the quick-slot cursor onto it, then press use.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this replaces every synthetic drive
 //
 // The previous drives wrote `menuGaitemUseState` by hand and answered
@@ -15,9 +18,9 @@
 //
 // The game's own getter is the oracle for where the cursor is, so the cycle is closed-loop rather
 // than a guess at how many presses are needed.
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const MAIN_PLAYER = 0x1e508;
-const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x140657410');
+const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x1406578c0'); // 1.17.1 0x140657410
 const CHR_INS_QUEUED_USE_ITEM = 0x160;
 // The TAE event 65 consume count. It is a COUNTER and does not self-clear, so a reading only means
 // something as a delta across the press.

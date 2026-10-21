@@ -3,7 +3,7 @@
   <CheatEntries>
     <CheatEntry>
       <ID>0</ID>
-      <Description>"Duel rules referee (Elden Ring 1.17.1)"</Description>
+      <Description>"Duel rules referee (Elden Ring 1.17.2)"</Description>
       <Color>0080FF</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript><![CDATA[[ENABLE]
@@ -42,15 +42,21 @@ M.CATALOG = {affinities = {{"Standard", 0}, {"Heavy", 100}, {"Keen", 200}, {"Qua
 
 local T, PARAM_FIELDS = M.T, M.PARAM_FIELDS
 
--- The build this script is pinned to; every RVA and offset below was measured against it.
-M.BUILD = { label = 'ELDEN RING 1.17.1 (eldenring.exe 2.7.1.0)', timeDateStamp = 0x6a96b418 }
+-- The build this script is pinned to; every RVA and offset below holds on it. 1.17.1 was
+-- 0x6a96b418; 0x6aabf7e7 is the stamp of the installed 2.7.2.0 eldenring.exe and of
+-- eldenring-deobf-1.17.2.bin.
+M.BUILD = { label = 'ELDEN RING 1.17.2 (eldenring.exe 2.7.2.0)', timeDateStamp = 0x6aabf7e7 }
 
+-- Singleton pointers, `.data` RVAs on 2.7.2.0, the same values as scripts/frida/er-duel-rules.js.
+-- Each was measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py; the 2.7.2.0
+-- readers of each one load the carried address (as many readers as on 1.17.1, worldChrMan six
+-- more, and the sampled 1.17.1 readers found once in 2.7.2.0 by masked bytes all target it there).
 M.RVA = {
-    gameDataMan = 0x3d61f98,
-    worldChrMan = 0x3d69ff8,
-    soloParamRepository = 0x3d85f58,
-    bulletManager = 0x3d667a8,
-    flipper = 0x458db58,
+    gameDataMan = 0x3d64fb8,            -- 0x3d61f98 -> 0x3d64fb8
+    worldChrMan = 0x3d6d018,            -- 0x3d69ff8 -> 0x3d6d018
+    soloParamRepository = 0x3d88f78,    -- 0x3d85f58 -> 0x3d88f78
+    bulletManager = 0x3d697c8,          -- 0x3d667a8 -> 0x3d697c8
+    flipper = 0x4590b78,                -- 0x458db58 -> 0x4590b78
 }
 
 local OFF = {
@@ -2701,7 +2707,7 @@ if getOpenedProcessID() == 0 or getAddressSafe('eldenring.exe') == nil then
 end
 -- A hook an earlier Cheat Engine left behind (closed without unticking) is adopted rather than
 -- refused, so the entry can be ticked again without restarting the game.
-local leftover = ER_DUEL_RULES.preflight(0x4FB79E, '48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04')
+local leftover = ER_DUEL_RULES.preflight(0x4FB87E, '48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04')
 ER_DUEL_RULES_ADOPTED = leftover ~= nil
 if leftover ~= nil then
   unregisterSymbol('duel_apply_ring')
@@ -2710,9 +2716,9 @@ end
 ER_DUEL_RULES_RUNNING = ER_DUEL_RULES.start()
 if leftover ~= nil then return '' end
 return [==[
-assert(eldenring.exe+4FB79E,48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04)
-alloc(duel_apply_cave,$100,eldenring.exe+4FB79E)
-alloc(duel_apply_ring,$1010,eldenring.exe+4FB79E)
+assert(eldenring.exe+4FB87E,48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04)
+alloc(duel_apply_cave,$100,eldenring.exe+4FB87E)
+alloc(duel_apply_ring,$1010,eldenring.exe+4FB87E)
 label(duel_apply_skip)
 registersymbol(duel_apply_ring)
 
@@ -2737,9 +2743,9 @@ duel_apply_skip:
   test eax,eax
   cmovns edi,eax
   mov eax,edi
-  jmp eldenring.exe+4FB7B3
+  jmp eldenring.exe+4FB893
 
-eldenring.exe+4FB79E:
+eldenring.exe+4FB87E:
   jmp duel_apply_cave
 ]==]
 {$asm}
@@ -2750,7 +2756,7 @@ if syntaxcheck then return end
 if ER_DUEL_RULES and ER_DUEL_RULES_RUNNING then ER_DUEL_RULES.stop(ER_DUEL_RULES_RUNNING) end
 ER_DUEL_RULES_RUNNING = nil
 local restore = [==[
-eldenring.exe+4FB79E:
+eldenring.exe+4FB87E:
   db 48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04
 ]==]
 -- An adopted hook's memory belongs to no allocation of this script; it stays, unused.

@@ -1,5 +1,8 @@
 // Why the title's Load Game portraits are blank after a visit to the Save Game menu.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What the game does, read out of the 1.16.2 dump (`FUN_1409aa680`, 1.17 `+0x9ab820`)
 //
 //     ps = CS::GameDataMan::GetProfileSummary();
@@ -59,9 +62,9 @@
 // page protection change.
 'use strict';
 
-const REFRESH_RVA = 0x9ab820;
-const GAME_DATA_MAN_GLOBAL_RVA = 0x3d61f98;
-const RENDERER_TABLE_RVA = 0x3d71940;
+const REFRESH_RVA = 0x9abcd0; // 1.17.1 0x9ab820
+const GAME_DATA_MAN_GLOBAL_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
+const RENDERER_TABLE_RVA = 0x3d74960; // 1.17.1 0x3d71940
 const PROFILE_SUMMARY_OFFSET = 0x78;
 const SLOT_STATES_OFFSET = 0x8;
 const RECORD_BASE_OFFSET = 0x18;

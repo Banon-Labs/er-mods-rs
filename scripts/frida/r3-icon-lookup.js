@@ -1,6 +1,9 @@
 // Resolve Misericorde's item icon (`MENU_ItemIcon_10003`) the way the menu does, and walk from it
 // toward the GPU texture, so er-r3-view's board can copy the icon into the overlay.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Once, on the first `MenuWindowJob::Run` (1.17.1 rva 0x7ae040) of the item list's window -- the
 // menu thread, the thread the repository lookup inserts on -- this calls the Scaleform texture
 // repository's lookup (1.17.1 rva 0xd65c00, 1.16.2 0xd63e50) on the repository global (1.17.1 rva
@@ -10,9 +13,9 @@
 // is what confirms them on 1.17.1.
 'use strict';
 
-const RUN_RVA = 0x7ae040;
-const LOOKUP_RVA = 0xd65c00;
-const REPO_GLOBAL_RVA = 0x3d86580;
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
+const LOOKUP_RVA = 0xd672f0; // 1.17.1 0xd65c00
+const REPO_GLOBAL_RVA = 0x3d895a0; // 1.17.1 0x3d86580
 const JOB_WINDOW = 0x130;
 const TARGET = '.?AVGaitemSelectDialog@CS@@';
 const ICON = 'MENU_ItemIcon_10003';

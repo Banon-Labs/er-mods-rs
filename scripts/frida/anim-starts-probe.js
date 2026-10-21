@@ -2,11 +2,14 @@
 // the roll animations rather than on equip load alone.
 // Read-only: one hook on the game's frame tick, the same one er-duel-rules.js uses, reading the
 // TimeAct ring that file reads (offsets from there, measured on 1.17.1).
+//
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
 'use strict';
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
-const WORLD_CHR_MAN = 0x3d69ff8;
+const WORLD_CHR_MAN = 0x3d6d018; // 1.17.1 0x3d69ff8
 const MAIN_PLAYER = 0x1e508;
 const CHR_MODULES = 0x190;
 const MOD_TIME_ACT = 0x18;
@@ -15,7 +18,7 @@ const ENTRY = 0x10;
 const COUNT = 10;
 const PLAY_TIME = 0x4;
 const WRITE_IDX = 0xc0;
-const FRAME_TICK = 0x773900;
+const FRAME_TICK = 0x773db0; // 1.17.1 0x773900
 
 // The watcher buffers console output, so every start also goes straight to a file beside the game.
 const out = new File(game.path.replace(/[^\\/]*$/, '') + 'anim-starts-probe.log', 'a');

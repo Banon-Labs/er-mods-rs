@@ -3,6 +3,9 @@
 // MenuWindowJob::Run on the menu thread -- the same call er-r3-view makes in production for item
 // icons (crates/er-r3-view/src/item_icon.rs). No write, no watchpoint, no MemoryAccessMonitor.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // 1.17.1 addresses (bd item-icon-runtime-chain-1171-2026-10-02):
 //   Scaleform texture repository global   rva 0x3d86580
 //   lookup(repo, out**, wchar* name)       rva 0xd65c00
@@ -19,8 +22,8 @@
 'use strict';
 
 const base = Process.getModuleByName('eldenring.exe').base;
-const REPO = base.add(0x3d86580);
-const lookup = new NativeFunction(base.add(0xd65c00), 'pointer', ['pointer', 'pointer', 'pointer']);
+const REPO = base.add(0x3d895a0); // 1.17.1 0x3d86580
+const lookup = new NativeFunction(base.add(0xd672f0), 'pointer', ['pointer', 'pointer', 'pointer']); // 1.17.1 0xd65c00
 const NAMES = [
   'MENU_FL_Red', 'MENU_FL_HP_Base', 'MENU_FL_Yellow', 'MENU_Bar_Loss', 'MENU_FL_BarEdge',
   'MENU_FL_BarDeco', 'MENU_FL_BarDeco_L', 'MENU_FL_BarDeco_Boss',
@@ -71,7 +74,7 @@ function describe (name) {
   return info;
 }
 
-Interceptor.attach(base.add(0x7ae040), {
+Interceptor.attach(base.add(0x7ae4f0), { // 1.17.1 0x7ae040
   onEnter () {
     menuCalls += 1;
     const tid = Process.getCurrentThreadId();
@@ -86,7 +89,7 @@ Interceptor.attach(base.add(0x7ae040), {
   },
 });
 
-Interceptor.attach(base.add(0x7170b0), {
+Interceptor.attach(base.add(0x717560), { // 1.17.1 0x7170b0
   onEnter () {
     lockCalls += 1;
     const tid = Process.getCurrentThreadId();

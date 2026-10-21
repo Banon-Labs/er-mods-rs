@@ -1,6 +1,9 @@
 // A native detector for the vanilla invasion-bounds popup, so its appearance stops being something
 // the user has to report.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why three sites and why each is followed
 //
 // Measured live on 1.17.1: the popup ("Attempting to invade another world. / Select the bounds for
@@ -15,9 +18,9 @@
 // stub is overwritten rather than installed, which reads as "the function never ran". That is the
 // same trap the Wine XInput thunk set, and the same fix: follow it.
 const SITES = {
-  dispatcher: ptr('0x1407c3930'),
-  raiser: ptr('0x1407c3310'),
-  startInvasion: ptr('0x1407c1dd0'),
+  dispatcher: ptr('0x1407c3de0'), // 1.17.1 0x1407c3930
+  raiser: ptr('0x1407c37c0'), // 1.17.1 0x1407c3310
+  startInvasion: ptr('0x1407c3100'), // 1.16.2 0x1407c1dd0, 1.17.1 0x1407c2c50
 };
 // The two-option bounds prompt. Recorded so a yes/no prompt (kind=1) reaching the same raiser is
 // not mistaken for it.

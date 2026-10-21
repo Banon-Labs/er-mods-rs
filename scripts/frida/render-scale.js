@@ -1,9 +1,14 @@
 // Forces Elden Ring's own dynamic resolution to a fixed scene scale while the UI stays native.
 //
 // The chain is in bd `er-dynamic-resolution-chain-static-2026-10-15` (issue er-effects-rs-6tu5).
-// The per-frame update at 1.17.1 0x141b2e9b0 takes the controller config in rcx: it returns the
-// current scale unchanged when the enable byte (+0x00) is 0, and otherwise clamps it to
-// [+0x1c, +0x20] before the setter writes GxDrawContext+0xedc. So pinning min and max to one
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: the update
+// and its caller (the view setup, which loads the config from GXRenderingSystem+0x13a70 and reads
+// +0x13a78) match the 1.17.1 functions once rip-relative and branch operands are masked, and every
+// masked target carries to the new operand, the two globals below included.
+//
+// The per-frame update at 0x141b2e9b0 -> 0x141b300a0 takes the controller config in rcx: it
+// returns the current scale unchanged when the enable byte (+0x00) is 0, and otherwise clamps it
+// to [+0x1c, +0x20] before the setter writes GxDrawContext+0xedc. So pinning min and max to one
 // value, with the enable byte set and the load-balancer coupling (+0x01) cleared, holds the scene
 // at that scale. The update runs every frame, which makes it the clock for re-asserting the
 // writes after a CSGraphics init or a render-mode change puts LoadBalancerParam's row back.
@@ -23,11 +28,12 @@ const VIEWPORT_SNAP_PX = 4;
 const REPORT_EVERY_FRAMES = 120;
 
 const IMAGE_BASE = 0x140000000;
-const GXRS_GLOBAL = 0x1447f37a8;
-const GX_DRAW_CONTEXT_GLOBAL = 0x1447f33e0;
-const DRS_UPDATE = 0x141b2e9b0;
-// From eldenring-deobf-1.17.1.bin; ends in `cmp byte ptr [rcx], 0`, the enable-byte read.
-const DRS_UPDATE_PROLOGUE = '40 53 48 83 ec 40 48 8b 05 53 04 13 02 48 33 c4 48 89 44 24 38 80 39 00';
+const GXRS_GLOBAL = 0x1447f67c8; // 0x1447f37a8 -> 0x1447f67c8
+const GX_DRAW_CONTEXT_GLOBAL = 0x1447f6400; // 0x1447f33e0 -> 0x1447f6400
+const DRS_UPDATE = 0x141b300a0; // 0x141b2e9b0 -> 0x141b300a0
+// From eldenring-deobf-1.17.2.bin; ends in `cmp byte ptr [rcx], 0`, the enable-byte read. Only the
+// security-cookie load's displacement differs from 1.17.1 (`53 04 13 02` -> `73 1d 13 02`).
+const DRS_UPDATE_PROLOGUE = '40 53 48 83 ec 40 48 8b 05 73 1d 13 02 48 33 c4 48 89 44 24 38 80 39 00';
 
 const GXRS_DRS_CONFIG = 0x13a70;
 const GXRS_LOD_BIAS_GATE = 0x13a78;
@@ -83,8 +89,8 @@ function readings (drs, gxrs, ctx) {
 
 const live = hex(at(DRS_UPDATE), 24);
 if (live !== DRS_UPDATE_PROLOGUE) {
-  send({ kind: 'refused', line: 'DRS update prologue differs from 1.17.1: ' + live });
-  throw new Error('render-scale: not the 1.17.1 DRS update');
+  send({ kind: 'refused', line: 'DRS update prologue differs from 2.7.2.0: ' + live });
+  throw new Error('render-scale: not the 2.7.2.0 DRS update');
 }
 
 const gxrs = at(GXRS_GLOBAL).readPointer();

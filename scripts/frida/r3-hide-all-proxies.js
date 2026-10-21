@@ -1,5 +1,8 @@
 // Prototype: in view 3, fade every SceneObjProxy of the item list to alpha 0, not just four.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // er-r3-view fades the four `CS::MenuWindow` proxies of `GaitemSelectDialog` (+0x120, +0x188,
 // +0x230, +0x3b8) and sets detail level 0, which left two of the menu's three panels drawn. The rest
 // live as further `SceneObjProxy` members, embedded either in the window or in the
@@ -12,8 +15,8 @@
 // thread, so the Scaleform calls are on the thread that owns them.
 'use strict';
 
-const APPLY_RVA = 0x975890;
-const RUN_RVA = 0x7ae040;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const MODE_TO_PARTS = 0x8f8; // apply's list is parts+0x8f8
 const WINDOW_SCAN_BYTES = 0x2000;

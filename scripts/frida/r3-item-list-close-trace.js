@@ -1,6 +1,9 @@
 // Which `GaitemSelectDialog` methods run when B closes the item list, and how long `Run` keeps
 // pumping the window after that.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // er-r3-view hides its board once the item list's `MenuWindowJob::Run` (1.17.1 rva 0x7ae040) has
 // gone quiet, and the player sees it go later than the game's own panels. This hooks every
 // virtual method of the item list's window and reports calls on that window that are rare (the
@@ -9,7 +12,7 @@
 // `Run` stops, the next `Run` of any other window sends the item list's last pump time.
 'use strict';
 
-const RUN_RVA = 0x7ae040;
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const TARGET = '.?AVGaitemSelectDialog@CS@@';
 const MAX_SLOTS = 120;

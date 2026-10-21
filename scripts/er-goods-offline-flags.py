@@ -29,7 +29,7 @@ import struct
 import sys
 
 # `SoloParamRepository`, whose pointer the image holds at this rva. Read live on 1.17.1.
-PARAM_REPOSITORY_RVA = 0x3D85F58
+PARAM_REPOSITORY_RVA = 0x3D88F78  # 1.17.1 0x3D85F58
 # `EquipParamGoods` is the fourth table in the repository's array of 9-qword descriptors.
 GOODS_TABLE_INDEX = 3
 DESCRIPTOR_QWORDS = 9

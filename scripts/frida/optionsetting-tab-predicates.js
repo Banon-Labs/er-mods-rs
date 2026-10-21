@@ -1,5 +1,8 @@
 // Why does an injected tab-left never reach the OptionSetting pager?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The question
 //
 // `er-input-harness`'s `TabToQuit` phase writes `inputmgr+0x90+0x30` (menu-event tab-left) and
@@ -37,10 +40,10 @@
 
 'use strict';
 
-const SETTING_TAB_CONTROL_UPDATE = ptr('0x1409680d0');
-const GRID_CONTROL_UPDATE = ptr('0x14073a140');
-const CURSOR_LIVE_GATE = ptr('0x140758ea0');
-const MENU_INPUT_PREDICATE = ptr('0x14075e7c0');
+const SETTING_TAB_CONTROL_UPDATE = ptr('0x140968580'); // 1.17.1 0x1409680d0
+const GRID_CONTROL_UPDATE = ptr('0x14073a5f0'); // 1.17.1 0x14073a140
+const CURSOR_LIVE_GATE = ptr('0x140759350'); // 1.17.1 0x140758ea0
+const MENU_INPUT_PREDICATE = ptr('0x14075ec70'); // 1.17.1 0x14075e7c0
 
 // About 28 percent of function entries on this build open with an Arxan healing stub, and a hook
 // on the stub never fires.

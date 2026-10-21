@@ -166,7 +166,9 @@ pub unsafe fn install_profile_table_mid_hook() -> bool {
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return fail();
     };
-    let resolve = |offset: usize| {
+    // Named `at_offset`, not `resolve`: `scripts/check-native-call-rva-coverage.py` reads every
+    // `resolve(` argument as a game address, and these are offsets into the refresh.
+    let at_offset = |offset: usize| {
         er_game_base::game_build::resolve_call_site_rva(
             PROFILE_RENDERER_REFRESH_FUNCTION_RVA,
             offset,
@@ -175,8 +177,8 @@ pub unsafe fn install_profile_table_mid_hook() -> bool {
         .map(|rva| base + rva)
     };
     let (Some(site), Some(resume)) = (
-        resolve(PROFILE_RENDERER_REFRESH_LATCH_CHECK),
-        resolve(PROFILE_RENDERER_REFRESH_NEXT_SLOT),
+        at_offset(PROFILE_RENDERER_REFRESH_LATCH_CHECK),
+        at_offset(PROFILE_RENDERER_REFRESH_NEXT_SLOT),
     ) else {
         append_autoload_debug(format_args!(
             "profileselect-table-midhook: REFUSED {name} (fn 0x{PROFILE_RENDERER_REFRESH_FUNCTION_RVA:x} + 0x{PROFILE_RENDERER_REFRESH_LATCH_CHECK:x}, resume + 0x{PROFILE_RENDERER_REFRESH_NEXT_SLOT:x}): no mapping for the refresh on the running build -- {}. Nothing read, nothing written; the entry guard still skips a degraded refresh whole.",

@@ -1,5 +1,8 @@
 // Measure the three predicates `can_use_goods_gate.rs` now consults, against a live player.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The gate stopped forcing `CanUseGoods` to 1 unconditionally and started keeping a refusal that
 // came from `CanUseBreakInItem` or `HasNonNPCPhantoms`. Two things about that are unproven from
 // the images alone:
@@ -19,16 +22,16 @@
 'use strict';
 
 const RVA = {
-  canUseGoods: 0x68ee60,
-  canUseBreakInItem: 0x657d50,
-  getPartyMemberInfo: 0x67b120,
-  hasNonNpcPhantoms: 0x9fa6a0,
+  canUseGoods: 0x68f310, // 1.17.1 0x68ee60
+  canUseBreakInItem: 0x658200, // 1.17.1 0x657d50
+  getPartyMemberInfo: 0x67b5d0, // 1.17.1 0x67b120
+  hasNonNpcPhantoms: 0x9fab60, // 1.17.1 0x9fa6a0
   // Not +0xe50 like its neighbours. `CanUseBreakInItem` on 1.17.1 calls `CanStartBreakIn` at
   // 0x14050a950 where 1.16.2 calls 0x140509b80, so this region moved +0xdd0; `CanStartMultiplay`
   // sits 0x100 past `CanStartBreakIn` in both builds, and 0x14050aa50 is byte-identical to the
   // 1.16.2 function for its first 0x1c bytes.
-  canStartMultiplay: 0x50aa50,
-  worldChrManGlobal: 0x3d69ff8, // read straight off the 1.17.1 disassembly
+  canStartMultiplay: 0x50acd0, // 1.17.1 0x50aa50
+  worldChrManGlobal: 0x3d6d018, // read straight off the 1.17.1 disassembly (1.17.1 0x3d69ff8)
 };
 
 const WORLD_CHR_MAN_MAIN_PLAYER_INS = 0x1e508;

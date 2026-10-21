@@ -1,5 +1,8 @@
 // Measure the world map's "Multiplayer Status Display" row against the running build.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Three claims are read out of the 1.16.2 Ghidra dump and carried to 1.17.1 by
 // scripts/map-rvas-1162-to-1170.py. This agent is what turns them from candidates into
 // observations, because a mapped address is a candidate and nothing more:
@@ -17,13 +20,13 @@
 
 'use strict';
 
-const RVA_SETTER = 0x888570;
-const RVA_BUILDER = 0x9c7980;
+const RVA_SETTER = 0x888a20; // 1.17.1 0x888570
+const RVA_BUILDER = 0x9c7e30; // 1.17.1 0x9c7980
 
 // CS_MENU_MAN_GLOBAL_RVA, 1.16.2 0x3d6b7b0 carried to 0x3d6f820 by
 // docs/recon/rva-map-1162-to-1170.data.tsv (846/846). It names a .data global, and the
 // 1.17.0 -> 1.17.1 +0x70 step is bounded to .text, so this address is the same on both.
-const RVA_MENU_MAN_GLOBAL = 0x3d6f820;
+const RVA_MENU_MAN_GLOBAL = 0x3d72840; // 1.17.1 0x3d6f820
 const MENU_MAN_POPUP_MENU_OFFSET = 0x80;   // CSMenuManImp -> CSPopupMenu*
 const POPUP_MENU_VIEW_MODEL_OFFSET = 0x250; // CSPopupMenu -> WorldMapViewModel*
 

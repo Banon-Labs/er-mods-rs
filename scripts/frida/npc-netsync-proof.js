@@ -1,6 +1,9 @@
 // Combined host/peer proof agent for possessed map-npc native sync through Seamless.
 // It is loaded once per process by `scripts/er-frida-watch.py --role ... --pid ...`.
 // The watcher prepends `__ER_FRIDA_EXPECTED` and aborts if the Windows pid is wrong.
+//
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
 
 const SCHEMA = 'npc_netsync_proof.v1';
 const ROLE = (globalThis.__ER_FRIDA_EXPECTED && globalThis.__ER_FRIDA_EXPECTED.role) || 'unknown';
@@ -181,19 +184,19 @@ for (const mod of [game, ersc, lsteam, steamApi]) {
 
 const HOOKS = [
   { name: 'com68_publish', family: 'native', tag: 'native.com68.enter', va: '0x1403cec10', bytes16: '488bc455488d68a14881ec0001000048' },
-  { name: 'pkt4_send', family: 'native', tag: 'native.pkt4.send', va: '0x1404e2c10', bytes16: '4055565741544155415641574883ec50' },
-  { name: 'pkt4_recv', family: 'native', tag: 'native.pkt4.recv', va: '0x1404e2990', bytes16: '488bc4554154415541564157488bec48' },
-  { name: 'pkt46_send', family: 'native', tag: 'native.pkt46.send', va: '0x1404e0a30', bytes16: '40574883ec60488bf9488b0d00db8903' },
-  { name: 'pkt46_recv', family: 'native', tag: 'native.pkt46.recv', va: '0x1404e0790', bytes16: '488bc4565741564881ecc001000048c7' },
-  { name: 'behavior_subapply', family: 'native', tag: 'native.pkt46.apply', va: '0x140422d50', bytes16: '405556574154415541564157488bec48' },
+  { name: 'pkt4_send', family: 'native', tag: 'native.pkt4.send', va: '0x1404e2cf0', bytes16: '4055565741544155415641574883ec50' }, // 1.17.1 0x1404e2c10
+  { name: 'pkt4_recv', family: 'native', tag: 'native.pkt4.recv', va: '0x1404e2a70', bytes16: '488bc4554154415541564157488bec48' }, // 1.17.1 0x1404e2990
+  { name: 'pkt46_send', family: 'native', tag: 'native.pkt46.send', va: '0x1404e0b10', bytes16: '40574883ec60488bf9488b0d400a8a03' }, // 1.17.1 0x1404e0a30
+  { name: 'pkt46_recv', family: 'native', tag: 'native.pkt46.recv', va: '0x1404e0870', bytes16: '488bc4565741564881ecc001000048c7' }, // 1.17.1 0x1404e0790
+  { name: 'behavior_subapply', family: 'native', tag: 'native.pkt46.apply', va: '0x140422de0', bytes16: '405556574154415541564157488bec48' }, // 1.17.1 0x140422d50
   { name: 'netai_direct', family: 'native', tag: 'native.netai.direct', va: '0x1403d37e0', bytes16: '40555657488bec4883ec4048c745e0fe' },
   { name: 'netai_tick', family: 'native', tag: 'native.netai.tick', va: '0x1403d3b10', bytes16: '488bc455488d68b84881ec4001000048' },
-  { name: 'owner_lookup', family: 'native', tag: 'native.owner_lookup.enter', va: '0x140508ed0', bytes16: '4c894424185556574883ec4048c74424' },
-  { name: 'bit8_setter', family: 'native', tag: 'native.bit8_setter.enter', va: '0x1404de740', bytes16: '4889742410574883ec20488bf9488bf2' },
-  { name: 'packet20_dequeue', family: 'native', tag: 'native.packet20.recv', va: '0x140c9b7d0', bytes16: '40574883ec5048c7442430feffffff48' },
-  { name: 'damage_apply', family: 'native', tag: 'native.damage.apply', va: '0x14044d100', bytes16: '405356574881ecd002000048c7442438' },
-  { name: 'slot21_sender', family: 'native', tag: 'native.damage.slot21_send', va: '0x14044d3a0', bytes16: '40574881ec6001000048c7442420feff' },
-  { name: 'lower_hit_send', family: 'native', tag: 'native.damage.lower_send', va: '0x140c9fcc0', bytes16: '40534883ec4048c7442430feffffff49' },
+  { name: 'owner_lookup', family: 'native', tag: 'native.owner_lookup.enter', va: '0x140509150', bytes16: '4c894424185556574883ec4048c74424' }, // 1.17.1 0x140508ed0
+  { name: 'bit8_setter', family: 'native', tag: 'native.bit8_setter.enter', va: '0x1404de820', bytes16: '4889742410574883ec20488bf9488bf2' }, // 1.17.1 0x1404de740
+  { name: 'packet20_dequeue', family: 'native', tag: 'native.packet20.recv', va: '0x140c9c0e0', bytes16: '40574883ec5048c7442430feffffff48' }, // 1.17.1 0x140c9b7d0
+  { name: 'damage_apply', family: 'native', tag: 'native.damage.apply', va: '0x14044d1e0', bytes16: '405356574881ecd002000048c7442438' }, // 1.17.1 0x14044d100
+  { name: 'slot21_sender', family: 'native', tag: 'native.damage.slot21_send', va: '0x14044d480', bytes16: '40574881ec6001000048c7442420feff' }, // 1.17.1 0x14044d3a0
+  { name: 'lower_hit_send', family: 'native', tag: 'native.damage.lower_send', va: '0x140ca0b30', bytes16: '40534883ec4048c7442430feffffff49' }, // 1.17.1 0x140c9fcc0
 ];
 
 function bytecheck(rec) {

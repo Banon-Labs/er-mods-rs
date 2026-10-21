@@ -1,5 +1,8 @@
 // Prove the normal path of er-seamless-bugfixes' two GiveItems mid hooks (2026-10-19).
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Each ilhook jmp-ret hook moves `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]` into a
 // trampoline and, with a local player present, runs them there and jumps back to the instruction
 // after the 16-byte window. This agent hooks that instruction at both sites, so a hit means the
@@ -10,7 +13,7 @@
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
-const GIVE_ITEMS = 0x561400;
+const GIVE_ITEMS = 0x5618b0; // 1.17.1 0x561400
 const STORAGE_AFTER_WINDOW = GIVE_ITEMS + 0x1d9 + 16; // MOV R15,RAX
 const PICKUP_LOG_AFTER_WINDOW = GIVE_ITEMS + 0x34a + 16; // MOV RBX,RAX
 

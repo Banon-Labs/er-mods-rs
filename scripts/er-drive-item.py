@@ -61,11 +61,11 @@ def selftest() -> int:
     """The agent has to carry the addresses and exports this driver calls."""
     text = AGENT.read_text(encoding="utf-8")
     for needed in (
-        "0x143d6f820",  # CSMenuMan on 1.17.1
-        "0x140657410",  # GetSelectedQuickSlotItemId on 1.17.1
+        "0x143d72840",  # CSMenuMan on 2.7.2.0 (1.17.1 0x143d6f820)
+        "0x1406578c0",  # GetSelectedQuickSlotItemId on 2.7.2.0 (1.17.1 0x140657410)
         "0x14024c560",  # GetItemInventoryIdx, which takes a pointer to the tagged id, never the id itself
-        "0x143d61f98",  # GameDataMan on 1.17.1, the root of the equip inventory chain
-        "0x140d3b5b0",  # EquipParamGoods::GetEntry
+        "0x143d64fb8",  # GameDataMan on 2.7.2.0, the root of the equip inventory chain (1.17.1 0x143d61f98)
+        "0x140d3cca0",  # EquipParamGoods::GetEntry (1.17.1 0x140d3b5b0)
     ):
         assert needed in text, f"the agent must carry {needed}"
     # The session-role refusal, asserted structurally so it cannot be deleted quietly. `ready()`
@@ -87,7 +87,7 @@ def selftest() -> int:
     assert "findModuleByName('er_invasion_warp" not in text, (
         "the agent must not resolve the module under test"
     )
-    print("selftest ok -- agent carries the 1.17.1 addresses, exports the four calls, no timers")
+    print("selftest ok -- agent carries the 2.7.2.0 addresses, exports the four calls, no timers")
     return 0
 
 

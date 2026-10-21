@@ -3,29 +3,30 @@
 // or injects input.
 //
 //   grant   config `grant: [{ item, gem }]` puts weapons into the inventory on the first player
-//           frame, skipped when already carried (the chainsaw driver's grant op: mint 0x140672b30,
-//           add by handle 0x140246480, release 0x1406832d0; CSGaitem global 0x143d6d900).
-//   clips   every TimeAct the CustomManualSelectorGenerator writer 0x1419bb530 [0x1419b96c0]
-//           stores, categories minCat..maxCat (default all, so weapon clips a0xx-a2xx show too)
-//           at node+0xec (a<category>_<anim>), with the frame,
+//           frame, skipped when already carried (the chainsaw driver's grant op, 2.7.2.0: mint
+//           0x140672fe0, add by handle 0x140246480, release 0x140683780; CSGaitem global 0x143d70920).
+//   clips   every TimeAct the CustomManualSelectorGenerator writer (1.17.1 0x1419bb530 -> 2.7.2.0
+//           0x1419bcc20) [0x1419b96c0] stores, categories minCat..maxCat (default all, so weapon
+//           clips a0xx-a2xx show too) at node+0xec (a<category>_<anim>), with the frame,
 //           the right-hand weapon and FP. Repeats of the same clip on consecutive frames are folded.
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 const cfg = Object.assign({ grant: [], minCat: 0, maxCat: 999, fpMax: null }, globalThis.__ER_FRIDA_CONFIG || {});
 
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const GAME_DATA_MAN = va('0x143d61f98');
-const GLOBAL_CSGAITEM = va('0x143d6d900');
-const PRE_BEHAVIOR_SAFE = va('0x140401f30');
-const CMSG_SET_TAE = va('0x1419bb530');
-const GET_EQUIP = new NativeFunction(va('0x1406577b0'), 'int', ['pointer', 'int']);
-const GET_INV = new NativeFunction(va('0x140247b30'), 'pointer', ['pointer']);
-const GET_IDX = new NativeFunction(va('0x14024c560'), 'int', ['pointer', 'pointer']);
-const MINT = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'pointer', 'int', 'int']);
-const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']);
-const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']);
+const WORLD_CHR_MAN = va('0x143d6d018'); // 1.17.1 0x143d69ff8
+const GAME_DATA_MAN = va('0x143d64fb8'); // 1.17.1 0x143d61f98
+const GLOBAL_CSGAITEM = va('0x143d70920'); // 1.17.1 0x143d6d900
+const PRE_BEHAVIOR_SAFE = va('0x140401fc0'); // 1.17.1 0x140401f30
+const CMSG_SET_TAE = va('0x1419bcc20'); // 1.17.1 0x1419bb530
+const GET_EQUIP = new NativeFunction(va('0x140657c60'), 'int', ['pointer', 'int']); // 1.17.1 0x1406577b0
+const GET_INV = new NativeFunction(va('0x140247b30'), 'pointer', ['pointer']); // unmoved
+const GET_IDX = new NativeFunction(va('0x14024c560'), 'int', ['pointer', 'pointer']); // unmoved
+const MINT = new NativeFunction(va('0x140672fe0'), 'pointer', ['pointer', 'pointer', 'int', 'int']); // 1.17.1 0x140672b30
+const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // unmoved
+const HANDLE_DTOR = new NativeFunction(va('0x140683780'), 'void', ['pointer']); // 1.17.1 0x1406832d0
 
 const S = { frame: 0, granted: false, last: null, lastFrame: -10, clips: 0 };
 

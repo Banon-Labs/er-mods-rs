@@ -15,14 +15,17 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/chainsaw-probe.js
 //
-// Addresses are 1.17.1. All are below the 0xafefe9 shift boundary, so 1.17.0 == 1.17.1; mapped from
-// the named 1.16.2 dump with scripts/map-rvas-1162-to-1170.py (signatures from :8765):
-//   CalculateDamage2           1.16.2 0x1404483b0 -> 0x140448910
-//   EquipItemToChrAsmSlot      1.16.2 0x140787c30 -> 0x140788ab0  (ChrAsmSlot, MenuGaitem*)
-//   weapon switch FUN_14042cf80 1.16.2 0x14042cf80 -> 0x14042d4d0
-//   SetChrAsmEquipmentState    1.16.2 0x140426520 -> 0x140426a70  (CSChrTaeAnimEvent*, TaeAnimEventParams*)
-//   BroadCastEquipmentChange   1.16.2 0x140658c90 -> 0x140659ae0  (PlayerIns*)
-//   GetEquipmentEntryParamId   1.16.2 0x140656960 -> 0x1406577b0  (PlayerIns*, slot -6..11)
+// Addresses are 2.7.2.0. Mapped from the named 1.16.2 dump to 1.17.1 with
+// scripts/map-rvas-1162-to-1170.py (signatures from :8765; all below the 0xafefe9 shift boundary,
+// so 1.17.0 == 1.17.1), then to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py. Each function opens
+// with the same bytes in the 1.17.1 and 2.7.2.0 images (rel32/rip displacements masked):
+//   CalculateDamage2           1.16.2 0x1404483b0 -> 0x140448910 -> 0x1404489f0
+//   EquipItemToChrAsmSlot      1.16.2 0x140787c30 -> 0x140788ab0 -> 0x140788f60  (ChrAsmSlot, MenuGaitem*)
+//   weapon switch FUN_14042cf80 1.16.2 0x14042cf80 -> 0x14042d4d0 -> 0x14042d560
+//   SetChrAsmEquipmentState    1.16.2 0x140426520 -> 0x140426a70 -> 0x140426b00  (CSChrTaeAnimEvent*, TaeAnimEventParams*)
+//   BroadCastEquipmentChange   1.16.2 0x140658c90 -> 0x140659ae0 -> 0x140659f90  (PlayerIns*)
+//   GetEquipmentEntryParamId   1.16.2 0x140656960 -> 0x1406577b0 -> 0x140657c60  (PlayerIns*, slot -6..11)
+//   WorldChrMan                1.17.1 0x143d69ff8 -> 0x143d6d018
 //
 // Uses only Interceptor (no watchpoints), so a detach or reload leaves nothing behind.
 'use strict';
@@ -31,21 +34,21 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const CALC_DAMAGE2 = va('0x140448910');
-const EQUIP_TO_SLOT = va('0x140788ab0');
-const WEAPON_SWITCH = va('0x14042d4d0');
-const SET_EQUIP_STATE = va('0x140426a70');
-const BROADCAST_EQUIP = va('0x140659ae0');
-const GET_EQUIP = new NativeFunction(va('0x1406577b0'), 'int', ['pointer', 'int']);
-const WORLD_CHR_MAN = game.base.add(0x3d69ff8);
+const CALC_DAMAGE2 = va('0x1404489f0');
+const EQUIP_TO_SLOT = va('0x140788f60');
+const WEAPON_SWITCH = va('0x14042d560');
+const SET_EQUIP_STATE = va('0x140426b00');
+const BROADCAST_EQUIP = va('0x140659f90');
+const GET_EQUIP = new NativeFunction(va('0x140657c60'), 'int', ['pointer', 'int']);
+const WORLD_CHR_MAN = game.base.add(0x3d6d018);
 
 // Hooks the static notes name later: the equipment-change gate, the reader of the active skill,
 // the useMagicPoint read. Each entry: { name, va: '0x14...', args: <count to log> }.
 // From docs/er-mechanics/chainsaw/damage-and-fp.md: the reservation (behaviour act 2016, cast
 // number and hand) and the charge (TimeAct event 330) of a skill's FP.
 const EXTRA = [
-    { name: 'UpdateActiveAowFpStats', va: '0x140480070', args: 3 },  // 1.16.2 0x14047fb10
-    { name: 'ConsumeFp', va: '0x14047fba0', args: 2 },               // 1.16.2 0x14047f640
+    { name: 'UpdateActiveAowFpStats', va: '0x140480150', args: 3 },  // 1.17.1 0x140480070, 1.16.2 0x14047fb10
+    { name: 'ConsumeFp', va: '0x14047fc80', args: 2 },               // 1.17.1 0x14047fba0, 1.16.2 0x14047f640
 ];
 
 function mainPlayer() {
@@ -147,9 +150,10 @@ hooks.push(Interceptor.attach(BROADCAST_EQUIP, {
 }));
 
 // The equipment-change gate (docs/er-mechanics/chainsaw/equip-gate.md): CSPlayerMenuCtrl slot
-// +0x108, 1.17.1 0x1407c1fb0 [1.16.2 0x1407c1130]. allowed = (f & 1) && !(f & 0x10) &&
-// ((CSChrActionFlagModule+0x10 & 1) || (f & 6)). RCX is CSChrMenuFlags*, f at +0x8 (= CSPlayerMenuCtrl+0x20).
-const EQUIP_GATE = va('0x1407c1fb0');
+// +0x108, 1.17.1 0x1407c1fb0 -> 2.7.2.0 0x1407c2460 [1.16.2 0x1407c1130]. allowed = (f & 1) &&
+// !(f & 0x10) && ((CSChrActionFlagModule+0x10 & 1) || (f & 6)). RCX is CSChrMenuFlags*, f at +0x8
+// (= CSPlayerMenuCtrl+0x20).
+const EQUIP_GATE = va('0x1407c2460');
 hooks.push(Interceptor.attach(EQUIP_GATE, {
     onEnter(args) {
         try { this.f = args[0].add(0x8).readU32(); } catch (e) { this.f = null; }

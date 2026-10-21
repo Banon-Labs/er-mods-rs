@@ -1,5 +1,8 @@
 // What does the live `EquipParamGoods` row for a vanilla invasion item look like?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this and not another predicate
 //
 // `CS::PlayerIns::CanUseBreakInItem` returns 1 while the Use row is greyed in front of the user,
@@ -29,7 +32,7 @@
 // destination comes from docs/recon/rva-map-1162-to-1170.data.tsv, which the DLL resolves through
 // at runtime; a hand-written agent has to carry the translated value itself. `.data` did not move
 // again between 1.17.0 and 1.17.1 -- only `.text` took the `+0x70` -- so this is the live address.
-const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d85f58;
+const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d88f78; // 1.17.1 0x3d85f58
 const EQUIP_PARAM_GOODS_INDEX = 3;
 
 const HOLDER_ARRAY_OFFSET = 0x80;

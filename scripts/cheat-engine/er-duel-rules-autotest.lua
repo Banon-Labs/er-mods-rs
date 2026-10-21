@@ -11,7 +11,7 @@ local function note(line)
   if f then f:write(os.date('%Y-%m-%d %H:%M:%S  ') .. line .. '\n'); f:close() end
 end
 
-local ENTRY = 'Duel rules referee (Elden Ring 1.17.1)'
+local ENTRY = 'Duel rules referee (Elden Ring 1.17.2)'
 local tries = 0
 local timer = createTimer(nil, false)
 timer.Interval = 2000

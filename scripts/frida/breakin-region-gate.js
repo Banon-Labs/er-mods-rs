@@ -1,6 +1,9 @@
 // Which term refuses the invasion fingers in a zone the vanilla game calls non-pvp, and can the
 // refusal be lifted without touching anything else?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `CS::PlayerIns::CanUseBreakInItem` is the term `crates/er-invasion-warp/src/can_use_goods_gate.rs`
 // deliberately keeps: when it says no, that module hands the engine's refusal back and the fingers
 // stay greyed. Read out of `eldenring-deobf-1.17.1.bin`, its whole body is three calls:
@@ -56,10 +59,10 @@ const game = Process.findModuleByName('eldenring.exe');
 // Every address below is an rva into `eldenring.exe`, read off the disassembly quoted above. All
 // are under the `0xafefe9` boundary, so 1.17.0 and 1.17.1 agree and no mapping step applies.
 const RVA = {
-  isBreakInLimitedByEventFlagId: 0xa61980,
-  canUseBreakInItem: 0x657d50,
-  isInSafePosRange: 0x65f6a0,
-  canStartBreakIn: 0x50a950,
+  isBreakInLimitedByEventFlagId: 0xa61e40, // 1.17.1 0xa61980
+  canUseBreakInItem: 0x658200, // 1.17.1 0x657d50
+  isInSafePosRange: 0x65fb50, // 1.17.1 0x65f6a0
+  canStartBreakIn: 0x50abd0, // 1.17.1 0x50a950
 };
 
 const out = {
@@ -200,9 +203,9 @@ Interceptor.attach(followStub(game.base.add(RVA.canUseBreakInItem)).address, {
 // `WorldChrMan` and `0x3d691d8` for `FieldArea`, each exactly `0x4070` below what 1.17.1 loads at
 // these two call sites, so those constants are 1.16.2 addresses. Both are printed below so the
 // disagreement is measured here rather than argued about.
-const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d69ff8;
+const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d6d018; // 1.17.1 0x3d69ff8
 const WORLD_CHR_MAN_GLOBAL_RVA_FROM_RVA_RS = 0x3d65f88;
-const FIELD_AREA_GLOBAL_RVA = 0x3d6d248;
+const FIELD_AREA_GLOBAL_RVA = 0x3d70268; // 1.17.1 0x3d6d248
 const WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1e508;
 const PLAYER_INS_PLAY_REGION_ID_OFFSET = 0x6e8;
 const FIELD_AREA_PLAY_REGION_PARAM_ID_OFFSET = 0xe8;

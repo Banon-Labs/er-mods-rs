@@ -238,7 +238,8 @@ pub(crate) struct Framing {
 pub(crate) enum Refusal {
     /// `[camera].enabled = false`.
     Disabled,
-    /// The running build is neither 1.16.2 nor 1.17, so no offset table applies.
+    /// The running build is not one of 1.16.2, 1.17.0, 1.17.1 or 2.7.2.0, so no offset table
+    /// applies.
     UnmeasuredBuild,
     /// `CSChrPhysicsModule+0x340` did not read, or read as zero/NaN.
     NoHeight,
@@ -268,8 +269,8 @@ impl Refusal {
         match self {
             Self::Disabled => "[camera].enabled is false".to_owned(),
             Self::UnmeasuredBuild => {
-                "this build is neither 1.16.2 nor 1.17, and the camera offsets were only measured \
-                 on those two"
+                "this build is not 1.16.2, 1.17.0, 1.17.1 or 2.7.2.0, and the camera offsets were \
+                 only measured on those four"
                     .to_owned()
             }
             Self::NoHeight => {

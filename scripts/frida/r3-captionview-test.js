@@ -1,5 +1,8 @@
 // Does hiding `CaptionView` (the button-guide bar) stop R3 from reaching the item list?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // er-r3-view's view 3 clears `Visible` on `CaptionView`'s proxies, and from view 3 no R3 press has
 // ever reached the step: the item list's R3 handler (a vtable slot, e.g. 1.17 `FUN_1408f5170`, which
 // calls the step unconditionally) is simply not invoked. If the press is routed through the guide
@@ -7,11 +10,11 @@
 // visible again right after the step, on the menu thread, and changes nothing else.
 'use strict';
 
-const APPLY_RVA = 0x975890;
-const RUN_RVA = 0x7ae040;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const PROXY_OFFSETS = [0x120, 0x188, 0x230, 0x3b8];
-const R3_HANDLERS = [0x8f5170, 0x8f5260, 0x8f5510];
+const R3_HANDLERS = [0x8f5620, 0x8f5710, 0x8f59c0]; // 1.17.1 0x8f5170; 1.17.1 0x8f5260; 1.17.1 0x8f5510
 
 const mod = Process.findModuleByName('eldenring.exe');
 const lo = mod.base;
@@ -81,7 +84,7 @@ for (const rva of R3_HANDLERS) {
 // The press at the pad (`DLUID::PadDevice::Poll`, 1.17.1 rva `0x1f6d940`, `device+0x890`,
 // `XINPUT_GAMEPAD_RIGHT_THUMB` 0x80), so a press that reaches no handler is visible as one.
 const lastButtons = new Map();
-Interceptor.attach(lo.add(0x1f6d940), {
+Interceptor.attach(lo.add(0x1f6f030), { // 1.17.1 0x1f6d940
   onEnter (args) { this.d = args[0]; },
   onLeave () {
     try {

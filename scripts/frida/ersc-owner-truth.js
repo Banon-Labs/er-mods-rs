@@ -1,5 +1,8 @@
 // What does ersc's `show` actually hand over, and what did our DLL resolve instead?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // One question only: the menu object and session at the instant Seamless builds its option menu,
 // printed beside the pointer `er_invasion_warp` picked by scanning. No writes, no replacements.
 'use strict';
@@ -8,7 +11,7 @@ const ERSC_SHOW_RVA = 0x241a0;
 const ERSC_INVADE_RVA = 0x25850;
 const SESSION_AT_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;
-const OPEN_DIALOG_RVA = 0xea0360;
+const OPEN_DIALOG_RVA = 0xea1a50; // 1.17.1 0xea0360
 
 const ersc = Process.findModuleByName('ersc.dll');
 const game = Process.enumerateModules()[0];

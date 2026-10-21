@@ -1,6 +1,9 @@
 // Un-grey the Multiplayer row on the Escape menu under Seamless, by answering the one predicate
 // that row asks. Writes no param byte, so the Seamless `lobby_key` preimage cannot move.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Which function decides it
 //
 // The Escape menu is `CS::MainTopDialog::CreateExecJob` (1.16.2 `0x14090e9d0`), which fills a
@@ -48,10 +51,10 @@
 // 1.17.0 and 1.17.1 put it at the same address. The bytes there are
 // `48 83 ec 28 e8 77 7d d6 ff 84 c0 75 16 e8 0e 80 d6 ff 48 8b c8 e8 d6 74 0e 00 84 c0 75 05
 //  48 83 c4 28 c3 b0 01 48 83 c4 28 c3`.
-const MULTIPLAYER_ROW_ENABLED = '0x140913100';
+const MULTIPLAYER_ROW_ENABLED = '0x1409135b0'; // 1.17.1 0x140913100
 // `GameMan`, from the one `mov rax,[rip+d]` inside `IsInOnlineMode`. The module base measured on
 // this machine is 0x140000000, so the image address is the live address.
-const GAME_MAN = '0x143d6d988';
+const GAME_MAN = '0x143d709a8'; // 1.17.1 0x143d6d988
 
 // Where a `jmp rel32` at `address` lands. Kept apart from the memory read so the selftest can
 // check the arithmetic with no process to read -- a sign error here hooks a plausible wrong

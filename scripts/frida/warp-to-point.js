@@ -5,37 +5,43 @@
 // our destination substituted -- replayed here so a target can be chosen while the game is
 // already running, with no rebuild and no relaunch.
 //
-// Every address is 1.17.1, carried from the 1.16.2 constants in `warp.rs` through
+// The addresses were 1.17.1, carried from the 1.16.2 constants in `warp.rs` through
 // `docs/recon/rva-map-1162-to-1170.verified.tsv` and `scripts/map-rvas-1170-to-1171.py`, then
 // byte-checked against `eldenring-deobf-1.17.1.bin`. The prologues confirm the semantics rather
 // than merely the location: `SET_EXPLICIT_SPAWN` opens `movaps xmm0,[rcx]` then
 // `movups [rax+0xc90],xmm0`, and `GET_EXPLICIT_SPAWN_FLAG` is `movzx eax,byte [rax+0xcb0]` --
 // the two offsets the reverse-engineering notes name.
 //
+// They are now 2.7.2.0 (1.17.1 -> 2.7.2.0 beside each), carried with
+// `scripts/map-rvas-1171-to-1172.py`. Every function is byte-identical in
+// `eldenring-deobf-1.17.2.bin` apart from relocated call and data operands, and both globals have
+// the same readers in both builds (session manager 3143 of 3147, the rest Arxan stubs).
+//
 // The whole sequence runs inside a one-shot `Interceptor` on `CS::CSFeManImp::UpdatePlayerComponents`,
 // the per-frame heads-up-display pass, so it executes on the game's own main thread rather than on
 // a Frida thread. Calling `WarpNextStageKick_` off-thread would race the stage machine.
 
 const RVA = {
-  updatePlayerComponents: 0x773900,
-  setupMapReentry: 0xcb1370,
-  sessionManagerGlobal: 0x3d7e540,
-  setDisableMapEnterAnim: 0x67b6a0,
-  setMoveMapStepBlockId: 0x67ba20,
-  setExplicitSpawn: 0x67b970,
-  setInitialAreaEntityId: 0x67ba00,
-  getExplicitSpawnFlag: 0x67b010,
-  getExplicitSpawn: 0x67a0f0,
-  warpNextStageKick: 0x5f89c0,
-  getCurrentMapId: 0x5efe00,
-  chrInsGetPhysicsPosition: 0x3f0e20,
-  convertBlockCoordsToPhysics: 0x61ef70,
-  worldChrManGlobal: 0x3d69ff8,
+  updatePlayerComponents: 0x773db0, // 1.17.1 0x773900
+  setupMapReentry: 0xcb2a60, // 1.17.1 0xcb1370
+  sessionManagerGlobal: 0x3d81560, // 1.17.1 0x3d7e540
+  setDisableMapEnterAnim: 0x67bb50, // 1.17.1 0x67b6a0
+  setMoveMapStepBlockId: 0x67bed0, // 1.17.1 0x67ba20
+  setExplicitSpawn: 0x67be20, // 1.17.1 0x67b970
+  setInitialAreaEntityId: 0x67beb0, // 1.17.1 0x67ba00
+  getExplicitSpawnFlag: 0x67b4c0, // 1.17.1 0x67b010
+  getExplicitSpawn: 0x67a5a0, // 1.17.1 0x67a0f0
+  warpNextStageKick: 0x5f8e70, // 1.17.1 0x5f89c0
+  getCurrentMapId: 0x5f02b0, // 1.17.1 0x5efe00
+  chrInsGetPhysicsPosition: 0x3f0e20, // 1.17.1 0x3f0e20, unmoved
+  convertBlockCoordsToPhysics: 0x61f420, // 1.17.1 0x61ef70
+  worldChrManGlobal: 0x3d6d018, // 1.17.1 0x3d69ff8
 };
 
 // `WorldChrMan.main_player`. The global and this offset are one instruction pair in the
-// de-Arxan'd image (`mov rax,[rip+0x3baf365]; mov r13,[rax+0x1e508]`), which is why they are
-// quoted together rather than looked up separately.
+// de-Arxan'd image (`mov rax,[rip+disp]; mov r13,[rax+0x1e508]`), which is why they are quoted
+// together rather than looked up separately. 2.7.2.0 keeps it: `UpdatePlayerComponents` reads
+// `[r12+0x1e508]` in both builds.
 const MAIN_PLAYER_OFFSET = 0x1e508;
 
 // The walk to the player's vitals, all cross-checked in
@@ -45,6 +51,9 @@ const MAIN_PLAYER_OFFSET = 0x1e508;
 //   container + 0x68          -> CSChrPhysicsModule, + 0x70 position, + 0x92 standingOnSolidGround
 // `hp` is proven by `CSChrDataModule::GetHpRate` reading `[+0x138] / [+0x13c]`, and the solid-ground
 // byte is the field `ChrIns::IsStandingOnSolidGround` itself reads, so neither is a heuristic.
+// Same in 2.7.2.0: GetHpRate 0x1404377c0 -> 0x140437850 and IsStandingOnSolidGround 0x1403f4040
+// (unmoved, +0x190 -> +0x68 -> +0x92) are byte-identical, `ChrCtrl::SetScaleSize` still takes the
+// data module as `modules[0]`, and the position accessor still reads `+0x70`.
 const MODULES_OFFSET = 0x190;
 const MODULE_DATA = 0x00;
 const MODULE_PHYSICS = 0x68;
@@ -55,7 +64,9 @@ const PHYSICS_ON_SOLID_GROUND = 0x92;
 
 // `SetupMapReentry` runs only from `protocolState == InGame`, and its own first statement writes
 // `WaitReentryToMap`, so the gate is self-latching: a second warp issued before the engine has
-// driven the session back sees 7 and skips it. That is expected, not a failure.
+// driven the session back sees 7 and skips it. That is expected, not a failure. 2.7.2.0 keeps both
+// numbers: `SetupMapReentry` still opens `mov dword [rcx+0x10], 7`, and `TriggerAreaReload` still
+// gates its call on `cmp dword [rcx+0x10], 6`; both functions are byte-identical.
 const PROTOCOL_STATE_OFFSET = 0x10;
 const PROTOCOL_STATE_IN_GAME = 6;
 const SPAWN_FLAG_ARMED = 1;

@@ -1,5 +1,5 @@
 // Experiment: does setting SosSignData+0x30 to 1 and re-running CreateSignSfx make the duel sign
-// visible? +0x30 is the byte CreateSignSfx tests (1.17.1 0x1406fed53) before it builds the effect;
+// visible? +0x30 is the byte CreateSignSfx tests (1.17.1 0x1406fed53, 2.7.2.0 0x1406ff203) before it builds the effect;
 // the only static writer is TestNetStep's sign update, which does not run in a normal session, and
 // the DLL's sign keyed to entity 35000 reads 0 with no effect drawn (2026-10-06).
 //
@@ -12,9 +12,13 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const FRAME_TICK = va('0x140773900');
-const CS_EVENT_MAN = va('0x143d6c768');
-const CREATE_SIGN_SFX = new NativeFunction(va('0x1406febe0'), 'void', ['pointer', 'pointer']);
+// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: each function body
+// matches between eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin with its rip-relative
+// and branch operands carried, and the global is what its 2.7.2.0 readers load.
+const FRAME_TICK = va('0x140773db0');       // frame tick 0x140773900 -> 0x140773db0
+const CS_EVENT_MAN = va('0x143d6f788');     // CSEventMan 0x143d6c768 -> 0x143d6f788
+// CreateSignSfx 0x1406febe0 -> 0x1406ff090
+const CREATE_SIGN_SFX = new NativeFunction(va('0x1406ff090'), 'void', ['pointer', 'pointer']);
 const SIGN_NPC = 35000;
 
 function signMan() {

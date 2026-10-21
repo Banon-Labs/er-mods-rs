@@ -1,5 +1,8 @@
 // Which button did the player press in the invasion-bounds popup?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `FUN_1407c2ab0` is the goods popup dispatcher: it switches on the item's `opmeMenuType` and,
 // for the invasion fingers, raises either the bounds prompt or the cancel prompt through
 // `FUN_1407c2490(ctrl, a, b, messageId, 4, kind)`:
@@ -9,8 +12,8 @@
 //
 // The buttons themselves are 20000015 `Nearby only` and 20000016 `Both near and far`. This logs
 // the raiser's arguments so the prompt is confirmed live, rather than inferred from a decompile.
-const DISPATCH_RVA = 0x7c3930; // 1.17, unique 41B signature, +0xe80 from 1.16.2 0x1407c2ab0
-const RAISE_RVA = 0x7c3310; // 1.17, unique 26B signature, +0xe80 from 1.16.2 0x1407c2490
+const DISPATCH_RVA = 0x7c3de0; // 1.17, unique 41B signature, +0xe80 from 1.16.2 0x1407c2ab0 (1.17.1 0x7c3930)
+const RAISE_RVA = 0x7c37c0; // 1.17, unique 26B signature, +0xe80 from 1.16.2 0x1407c2490 (1.17.1 0x7c3310)
 
 const MESSAGES = {
   0x1312d0a: 'bounds prompt (Select the bounds for the attempt)',

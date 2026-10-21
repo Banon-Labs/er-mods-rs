@@ -1,6 +1,9 @@
 // Issue the Steam lobby query ourselves, shaped the way Seamless shapes its own, and read back
 // what comes home.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this exists rather than another observer
 //
 // Every attempt so far has tried to watch Seamless search. That has now failed with a working
@@ -38,7 +41,7 @@
 // across with `scripts/map-rvas-1162-to-1170.py` (unique, 44 byte signature) and then read rather
 // than trusted: the mapped entry opens `mov [rcx], 0xffffffff`, the sentinel this getter writes
 // into its out-parameter before it resolves anything, which is the shape and not a coincidence.
-const GET_CURRENT_MAP_ID_RVA = 0x5efe00;
+const GET_CURRENT_MAP_ID_RVA = 0x5f02b0; // 1.17.1 0x5efe00
 
 // Our own advertisement key, from `lobby_publish::LOBBY_MAP_KEY`.
 const LOBBY_MAP_KEY = 'er_invasion_warp_map';

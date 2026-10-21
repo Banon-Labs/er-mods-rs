@@ -1,5 +1,8 @@
 // Make a vanilla invasion finger run Seamless's Challenger's Lynchpin action.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The finger and the Lynchpin end in the same place -- `ersc+0x25850`, which reads `[rcx+0x58]` as
 // the session and touches `rcx` nowhere else -- so the only thing the vanilla item is missing is
 // somebody to make that call on its behalf. This is that somebody, in Frida, with no DLL loaded.
@@ -24,12 +27,12 @@ const STATE_IDLE = 0x01;
 const STATE_SEARCHING = 0x0e;
 
 // The popup the fingers open, from `er_invasion_warp.dll`'s own log on this build.
-const OPEN_CHOICES = ptr('0x140e9e4f0');
+const OPEN_CHOICES = ptr('0x140ea1a50'); // 1.16.2 0x140e9e4f0, 1.17.1 0x140ea0360
 
 // `WorldChrMan -> main player -> ChrIns+0x164`, the id of the goods use in flight. Category
 // `0x40000000` over the param row; the field is residue when no use is running, so it is masked
 // and range-checked rather than trusted.
-const GLOBAL_WORLD_CHR_MAN = ptr('0x143d69ff8');
+const GLOBAL_WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const WORLD_CHR_MAN_MAIN_PLAYER = 0x1e508;
 const CHR_INS_CONFIRMED_USED_GOODS = 0x164;
 const ITEM_CATEGORY_MASK = 0xf0000000;
@@ -44,7 +47,7 @@ const FINGERS = { 102: 'Bloody Finger', 111: 'Festering Bloody Finger', 112: 'Re
 // recorded in `docs/recon/rva-map-1162-to-1170.verified.tsv` as `IDENTICAL-WHOLE`; that row also
 // notes this exact address was already called live through Frida and returned correct rows for
 // five ids, including the two `ersc.dll` synthesises at runtime.
-const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3b5b0');
+const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3cca0'); // 1.17.1 0x140d3b5b0
 // `disableOffline` in `EquipParamGoods`. `CanUseGoods` refuses the use action when this bit is set
 // and the game's own online flag is clear, which is exactly the state Seamless leaves the player in.
 const GOODS_FLAGS_OFFSET = 0x48;

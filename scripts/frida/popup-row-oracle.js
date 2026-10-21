@@ -1,5 +1,8 @@
 // Which row of a two-option popup is highlighted RIGHT NOW, before anything is confirmed.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Where it lives
 //
 // `FUN_1407ee550(owner, &result, &row)` -- the function the goods dialog reads its answer out of --
@@ -14,7 +17,7 @@
 //
 // The two rows of the invasion-bounds prompt are laid out LEFT/RIGHT -- D-pad down does nothing on
 // it -- so the press to move is `0x0008`, and the proof it moved is this reading, not the press.
-const CS_MENU_MAN = ptr('0x143d6f820');
+const CS_MENU_MAN = ptr('0x143d72840'); // 1.17.1 0x143d6f820
 const POPUP_STATE = 0x80;
 const POPUP_RESULT = 0x1a0;
 const POPUP_ROW = 0x1a4;

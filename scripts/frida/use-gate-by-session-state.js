@@ -1,5 +1,8 @@
 // Is item use refused while a Seamless search is in flight?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // User ground truth, 2026-09-16: "I cannot press my square button to activate an item while we are
 // searching or until I reach the host's world." Square is the use-item binding. If that is the
 // rule, then every `queued but not consumed` run this repo recorded was a use refused at the gate
@@ -16,9 +19,9 @@
 // on any driven Lynchpin press so far (bd use-animation-path-never-entered-controlled-counters).
 const USE_ANIM_RVA = 0x3f0030;
 // TAE event 65, `ConsumeCurrentGoods` -- the consume itself.
-const CONSUME_RVA = 0x42ca40;
+const CONSUME_RVA = 0x42cad0; // 1.17.1 0x42ca40
 // The control. Extraordinarily hot (~1M calls in 7s), so it is counted and never logged from.
-const GOODS_GET_ENTRY_RVA = 0xd3b5b0;
+const GOODS_GET_ENTRY_RVA = 0xd3cca0; // 1.17.1 0xd3b5b0
 
 const ERSC_ITEM_HANDLER_RVA = 0x92820;
 const NEXT_OBJECT_OFFSET = 0x58;

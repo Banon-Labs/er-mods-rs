@@ -41,8 +41,8 @@ FORBIDDEN = "start_protected_game.exe"
 def pause_for(seconds: float) -> None:
     threading.Event().wait(max(float(seconds), 0.0))
 
-RENDERER_TABLE_RVA = 0x3D6D8D0
-VTABLE_RVA = 0x2B80128
+RENDERER_TABLE_RVA = 0x3D74960  # 1.16.2 0x3D6D8D0, 1.17.1 0x3d71940
+VTABLE_RVA = 0x2B852C8  # 1.16.2 0x2B80128, 1.17.1 0x2b831d8
 SLOT_COUNT = 10
 
 OFF_READY_754 = 0x754

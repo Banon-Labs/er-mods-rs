@@ -1,5 +1,8 @@
 // Make the vanilla invasion fingers usable under Seamless by answering `CanUseGoods` itself.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why the entry address is not the function
 //
 // `CanUseGoods` is at 1.17 `0x14068ee60` and Arxan STUBS it in the live process: the first five
@@ -20,7 +23,7 @@
 // enough because the online flag alone refuses the item. Answering the function's RETURN VALUE
 // settles all four at once, and it is a diagnostic: it proves usability is the only thing in the
 // way, without deciding how the product should open the gate.
-const CAN_USE_GOODS = ptr('0x14068ee60');
+const CAN_USE_GOODS = ptr('0x14068f310'); // 1.17.1 0x14068ee60
 // The three invasion fingers, from the decompile's own branch: `uVar31 == 0x66 || uVar31 - 0x6f < 2`.
 const FINGERS = new Set([0x66, 0x6f, 0x70]);
 
@@ -36,7 +39,7 @@ const FINGERS = new Set([0x66, 0x6f, 0x70]);
 //
 // Both constants are the ones `er-invasion-warp-core` already pins for this build:
 // `er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA` and `warp::SESSION_LOBBY_STATE_OFFSET`.
-const SESSION_MANAGER_GLOBAL_RVA = 0x3d7a4d0;
+const SESSION_MANAGER_GLOBAL_RVA = 0x3d81560; // 1.16.2 0x3d7a4d0, 1.17.1 0x3d7e540
 const LOBBY_STATE_OFFSET = 0x0c;
 const LOBBY_STATE_CLIENT = 6;
 const LOBBY_STATE_NAMES = ['None', 'Creating', 'CreateFailed', 'Host',

@@ -9,13 +9,14 @@
 //! # The two computed fields, and where they come from
 //!
 //! `UpdatePlayerComponents` does not read `maxRecoverableHp` or `hpMax` out of the data module --
-//! it calls for them. Both callees are two-instruction leaves, byte-identical in 1.16.2 and 1.17,
-//! so this crate performs the loads instead of resolving two more game addresses:
+//! it calls for them. Both callees are two-instruction leaves, byte-identical in 1.16.2, 1.17
+//! (1.17.0 and 1.17.1 share the address) and 2.7.2.0, so this crate performs the loads instead of
+//! resolving two more game addresses:
 //!
-//! | callee | 1.16.2 | 1.17 | whole body |
-//! |---|---|---|---|
-//! | `GetMaxRecoverableHp` | `0x140437280` | `0x1404377e0` | `cvttss2si eax,[rcx+0x160]` ; `add eax,[rcx+0x138]` ; `ret` |
-//! | `GethpMaxUncapped` | `0x1404372c0` | `0x140437820` | `mov eax,[rcx+0x140]` ; `ret` |
+//! | callee | 1.16.2 | 1.17 | 2.7.2.0 | whole body |
+//! |---|---|---|---|---|
+//! | `GetMaxRecoverableHp` | `0x140437280` | `0x1404377e0` | `0x140437870` | `cvttss2si eax,[rcx+0x160]` ; `add eax,[rcx+0x138]` ; `ret` |
+//! | `GethpMaxUncapped` | `0x1404372c0` | `0x140437820` | `0x1404378b0` | `mov eax,[rcx+0x140]` ; `ret` |
 //!
 //! That keeps the mod's address budget where layer 3 left it: one resolved function, and it is
 //! not one of these.

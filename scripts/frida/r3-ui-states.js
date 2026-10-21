@@ -2,18 +2,23 @@
 //
 // `CSMenuManImp.ui_states` (fromsoftware-rs `menu_man.rs`): 0x46 bytes at `CSMenuMan+0x90`, one per
 // UI element, bit 0 "created", bit 1 "visible". `DetailStatusViewParts`' detail-level setter
-// (1.17 `0x140999750`) writes its own entry there, so the panels of this menu should be entries too.
-// On every three-pane `apply` (1.17 rva `0x975890`, count 3) this sends the visible set
-// `SETTLE_FRAMES` menu frames later, after the view has settled. Frames are counted off
-// `MenuWindowJob::Run` (1.17 rva `0x7ae040`): a frame ends when a job already pumped in it is pumped
-// again. Read-only.
+// (1.17 `0x140999750`, 2.7.2.0 `0x140999c00`) writes its own entry there, so the panels of this
+// menu should be entries too. On every three-pane `apply` (1.17 rva `0x975890`, 2.7.2.0 `0x975d40`,
+// count 3) this sends the visible set `SETTLE_FRAMES` menu frames later, after the view has
+// settled. Frames are counted off `MenuWindowJob::Run` (1.17 rva `0x7ae040`, 2.7.2.0 `0x7ae4f0`): a
+// frame ends when a job already pumped in it is pumped again. Read-only.
+//
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
 'use strict';
 
-const CS_MENU_MAN = ptr('0x143d6f820'); // 1.17.0 global, below 0xafefe9 so the same on 1.17.1
+// 1.17.0/1.17.1 global 0x143d6f820 -> 2.7.2.0 0x143d72840 (960 readers in the 1.17.1 image read
+// the carried address at their 2.7.2.0 place). Absolute, so it assumes the image loads at
+// 0x140000000, as it did before.
+const CS_MENU_MAN = ptr('0x143d72840');
 const UI_STATES = 0x90;
 const UI_STATE_COUNT = 0x46;
-const APPLY_RVA = 0x975890;
-const MENU_WINDOW_JOB_RUN_RVA = 0x7ae040;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const MENU_WINDOW_JOB_RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const SETTLE_FRAMES = 15;
 
 const mod = Process.findModuleByName('eldenring.exe');

@@ -491,7 +491,7 @@ rpc.exports = {
     // READ-ONLY. The call is not blocked and nothing is written -- this observes whether the filter
     // is possible, it does not implement one.
     const gameBase = Process.enumerateModules()[0].base;
-    const joinAddr = gameBase.add(0x6fb520);
+    const joinAddr = gameBase.add(0x6fc820); // 1.16.2 0x6fb520, 1.17.1 0x6fc370
     const JOIN_PROLOGUE = '405348 81ec80000000'.replace(/ /g, '');
     let joinPro = '';
     try {
@@ -510,7 +510,7 @@ rpc.exports = {
             }
           } catch (e) { /* unreadable */ }
           try {
-            const gm = gameBase.add(0x3d69918).readPointer();
+            const gm = gameBase.add(0x3d709a8).readPointer(); // 1.16.2 0x3d69918, 1.17.1 0x3d6d988
             rec.gmBefore = '0x' + gm.add(0xac8).readU32().toString(16);
             this.gm = gm;
           } catch (e) { /* no GameMan yet */ }

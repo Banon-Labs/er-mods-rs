@@ -1,5 +1,8 @@
 // Every SpEffect id currently on the local player.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The chain is the game's own, read out of `CS::ChrIns::HasSpecialEffectId` at `0x1404fad30`:
 //
 //   container = [ChrIns + 0x178]
@@ -11,7 +14,7 @@
 // toggle, and neither `ChrIns+0x160` (a queue that never self-clears) nor `ChrIns+0x168` (a TAE 65
 // consume counter) reports a toggle's state.  An id that appears when the item is on and goes when
 // it is off names the state directly, with no inference.
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const MAIN_PLAYER = 0x1e508;
 const CHR_INS_SPECIAL_EFFECT = 0x178;
 const SPECIAL_EFFECT_HEAD = 0x08;

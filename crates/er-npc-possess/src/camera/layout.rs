@@ -28,6 +28,30 @@
 //!   same three-instruction chain sits at 1.17 `0x1403efe50 -> 0x14045e590` with the same `0x340`.
 //!   Its neighbour `0x1403efe60 -> 0x14045e5a0` reads `0x344`, the radius.
 //!
+//! # 1.17.1 and 2.7.2.0
+//!
+//! Re-read on 2026-10-21 out of `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`.
+//! Every site below except the two physics leaves sits in a carry segment of delta zero, so each
+//! instruction is at the same address in both images; the leaves moved `+0xe0`. Each range was
+//! compared instruction for instruction with rip-relative displacements masked and every call and
+//! branch target checked against the carry:
+//!
+//! | offset | site, 1.17.1 = 2.7.2.0 | instruction in both |
+//! |---|---|---|
+//! | `ChrCam+0x60` | `0x1403b12b4`, `0x1403b1359`, `0x1403b137d`, `0x1403b145b` in `ChrCam::Update` (0x1c0 bytes, 107 instructions agree) | `mov rcx,[rdi+0x60]` |
+//! | `ChrExFollowCam+0x468` | `0x1403b7668` in `ApplyZoomLerp` (0x180 bytes, 86 agree) | `mov eax,[rbx+0x468]` |
+//! | `ChrExFollowCam+0x460` | `0x1403b76da`, same range | `mov [rbx+0x460],edx` |
+//! | `ChrExFollowCam+0x150/+0x154` | `0x1403b62f8` / `0x1403b62e4` in `ChrExFollowCam::Update` | `movss xmm1,[rsi+0x150]` / `movss xmm1,[rsi+0x154]` |
+//! | `CSChrPhysicsModule+0x340` | `0x1403efe50` -> `jmp`, leaf 1.17.1 `0x14045e590` / 2.7.2.0 `0x14045e670` | `mov rax,[rcx+0x190]` ; `mov rcx,[rax+0x68]` ; leaf `movss xmm0,[rcx+0x340]` ; `ret` |
+//! | `CSChrPhysicsModule+0x344` | `0x1403efe60` -> `jmp`, leaf 1.17.1 `0x14045e5a0` / 2.7.2.0 `0x14045e680` | same chain, leaf `movss xmm0,[rcx+0x344]` ; `ret` |
+//!
+//! The `jmp` in each physics accessor lands on the leaf named in its own image, and the leaf is
+//! the carried 1.17.1 one. The "nothing writes `+0x468`" claim holds on 2.7.2.0 as well: across
+//! every `.pdata` function starting in `0x1403b0000..0x1403c0000`, each image has exactly one
+//! instruction with displacement `0x468`, the load at `0x1403b7668`. The ctor's `+0x464|+0x468`
+//! qword store is at `0x1403b3b93` in both, and `FUN_1403b1140`'s `+0x464` store at `0x1403b5950`.
+//! `chrCam` is the one field that moved, and [`world_chr_man::CHR_CAM_1172`] carries that.
+//!
 //! Identical on both is not the same as identical forever, which is why this module still gates:
 //! a third build gets `None`, the camera is left alone, and the derived file says
 //! `unmeasured-build` rather than the mod writing a float into whatever now lives at `+0x468`.
@@ -35,7 +59,9 @@
 // Pure arithmetic; ungated so its tests run on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use er_game_base::game_build::{FileVersion, SUPPORTED_FILE_VERSION};
+use er_game_base::game_build::{
+    FileVersion, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, SUPPORTED_FILE_VERSION,
+};
 
 use crate::possess::layout::FILE_VERSION_1170;
 
@@ -190,7 +216,10 @@ pub(crate) struct Offsets {
 #[must_use]
 pub(crate) fn offsets(version: Option<FileVersion>) -> Option<Offsets> {
     let version = version?;
-    let measured = version == SUPPORTED_FILE_VERSION || version == FILE_VERSION_1170;
+    let measured = version == SUPPORTED_FILE_VERSION
+        || version == FILE_VERSION_1170
+        || version == MAPPED_FILE_VERSION_1171
+        || version == MAPPED_FILE_VERSION_1172;
     if !measured {
         return None;
     }
@@ -210,13 +239,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn both_measured_builds_answer_and_nothing_else_does() {
+    fn the_measured_builds_answer_and_nothing_else_does() {
         assert!(offsets(Some(SUPPORTED_FILE_VERSION)).is_some(), "1.16.2");
         assert!(offsets(Some(FILE_VERSION_1170)).is_some(), "1.17");
         assert_eq!(
             offsets(Some(SUPPORTED_FILE_VERSION)),
             offsets(Some(FILE_VERSION_1170)),
             "byte-proven identical on both; a divergence belongs in the table, not here"
+        );
+        assert_eq!(
+            offsets(Some(MAPPED_FILE_VERSION_1171)),
+            offsets(Some(FILE_VERSION_1170)),
+            "1.17.1 is instruction-identical to 1.17.0 at every camera site"
+        );
+        // 2.7.2.0 differs from 1.17.1 in `chrCam` alone.
+        let on_1172 = offsets(Some(MAPPED_FILE_VERSION_1172)).expect("2.7.2.0 is measured");
+        assert_eq!(
+            on_1172,
+            Offsets {
+                chr_cam: world_chr_man::CHR_CAM_1172,
+                ..offsets(Some(MAPPED_FILE_VERSION_1171)).expect("1.17.1 is measured")
+            }
         );
         assert_eq!(
             offsets(Some(FileVersion {

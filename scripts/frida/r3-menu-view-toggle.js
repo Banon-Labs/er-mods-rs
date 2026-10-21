@@ -1,5 +1,8 @@
 // Which field of the open item-select menu does an R3 press change?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The player reports R3 cycling the item list between three views. This takes a snapshot of every
 // open menu window's first `SNAPSHOT_BYTES` when R3 rises at the pad and another `SETTLE_POLLS`
 // polls later, and reports each dword that changed. A field that steps through three values across
@@ -12,10 +15,10 @@
 //   window, gives the live window objects.
 'use strict';
 
-const POLL_RVA = 0x1f6d940;
+const POLL_RVA = 0x1f6f030; // 1.17.1 0x1f6d940
 const DEVICE_BUTTONS_OFFSET = 0x890;
 const RIGHT_THUMB = 0x0080;
-const MENU_WINDOW_JOB_RUN_RVA = 0x7ae040;
+const MENU_WINDOW_JOB_RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const MENU_WINDOW_JOB_WINDOW_OFFSET = 0x130;
 const SNAPSHOT_BYTES = 0x1000;
 const SETTLE_POLLS = 20;
@@ -76,7 +79,7 @@ Interceptor.attach(follow(lo.add(MENU_WINDOW_JOB_RUN_RVA)), {
 // The windows themselves did not change on 19 presses, so the view mode lives in an object they
 // point to, or in a global the menu reads (the mode survives closing the menu). Snapshot one level
 // of heap children of each window, plus `GameDataMan` and its children.
-const GAME_DATA_MAN_RVA = 0x3d61f98;
+const GAME_DATA_MAN_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 const CHILD_BYTES = 0x800;
 
 function addRegion (out, p, name, size) {

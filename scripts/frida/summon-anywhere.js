@@ -1,6 +1,9 @@
 // Let the local player summon Spirit Ashes anywhere, so the duel-rules referee's Spirit Ashes rule
 // can be seen live on a character with no Rebirth Monument in reach.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // What vanilla needs, read out of the 1.16.2 dump (`CS::SummonBuddyManager`):
 //
 // - `SummonGoodsState(mgr, goodsId)` answers `Use` only when the player carries a SpEffect with
@@ -25,15 +28,15 @@
 
 const GAME = 'eldenring.exe';
 
-const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d69ff8;
+const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d6d018; // 1.17.1 0x3d69ff8
 const WCM_MAIN_PLAYER = 0x1e508;
 
 /// `CS::SummonBuddyManager::SummonGoodsState(mgr, int goodsId) -> BuddyGoodsState`.
-const SUMMON_GOODS_STATE_RVA = 0x4b72f0;
+const SUMMON_GOODS_STATE_RVA = 0x4b73d0; // 1.17.1 0x4b72f0
 /// `CS::SummonBuddyManager::CheckActivateRanges(mgr)`.
-const CHECK_ACTIVATE_RANGES_RVA = 0x4bd870;
+const CHECK_ACTIVATE_RANGES_RVA = 0x4bd950; // 1.17.1 0x4bd870
 /// `SummonBuddyManager::MainPlayerHasAliveSummon(mgr) -> bool`.
-const MAIN_PLAYER_HAS_ALIVE_SUMMON_RVA = 0x4b7b10;
+const MAIN_PLAYER_HAS_ALIVE_SUMMON_RVA = 0x4b7bf0; // 1.17.1 0x4b7b10
 /// `CS::ChrIns::ApplySpEffect(chr, uint id, bool shouldNotSync) -> bool`.
 const APPLY_SPEFFECT_RVA = 0x3e8dc0;
 

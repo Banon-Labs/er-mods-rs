@@ -41,7 +41,7 @@ REGULATION = pathlib.Path(
 
 
 VERIFY = """
-const REPO_RVA = 0x3d85f58, GOODS_INDEX = 3, GOODS = [102, 111, 112];
+const REPO_RVA = 0x3d88f78, GOODS_INDEX = 3, GOODS = [102, 111, 112]; // 1.17.1 0x3d85f58
 const game = Process.findModuleByName('eldenring.exe');
 const repo = game.base.add(REPO_RVA).readPointer();
 const cap = repo.add(0x88 + GOODS_INDEX * 9 * 8).readPointer();

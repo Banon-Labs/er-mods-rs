@@ -473,7 +473,7 @@ const INFO_FIELDS = [
 //   +0xacc multiplayJoinTargetBlockPos  <- SetMultiplayJoinData only (the server-pushed coordinate)
 //   +0xaf0 npcInvadeTargetEntryPoint    <- ReqInvadeNPCWorld only; join path zeroes it
 // Polling +0xaa0 is how ersc's effect is observed WITHOUT hooking a Themida-protected page.
-const GAME_MAN_PTR_VA = '0x143d69918';
+const GAME_MAN_PTR_VA = '0x143d709a8'; // 1.16.2 0x143d69918, 1.17.1 0x143d6d988
 const LAST_LOAD_POSITION_OFFSET = 0xaa0;
 const TARGET_MAP_ID_OFFSET = 0xac8;
 const JOIN_TARGET_POS_OFFSET = 0xacc;
@@ -523,7 +523,7 @@ const WRITERS = [
 //   +0x1e bool         shouldUseRapidReentry  +0x20 FnVector<byte> lobbyData (begin/end/cap)
 //   +0x38 byte         settings               +0x39 byte stage
 //   +0x3a wchar_t[32]  password
-const JOIN_DATA_FN = { name: 'SetMultiplayJoinData', va: '0x1406fb520',
+const JOIN_DATA_FN = { name: 'SetMultiplayJoinData', va: '0x1406fc820', // 1.16.2 0x1406fb520, 1.17.1 0x1406fc370
                        prologue: '40534881ec8000000048c7442428feff' };
 const JOIN_DATA_LEN = 0x80;
 
@@ -794,6 +794,16 @@ def main() -> int:
 
     if args.selftest:
         return _selftest()
+
+    # Carried to 2.7.2.0 by `scripts/frida-carry-1172.py` on 2026-10-21. The agent's addresses are
+    # 1.16.2 values, and only `GAME_MAN_PTR_VA` and `SetMultiplayJoinData` have recorded 1.16.2 ->
+    # 1.17 rows (`docs/recon/rva-map-1162-to-1170*.tsv`), so only those two moved. The rest have
+    # none, and the live path stops here rather than hook a guess.
+    raise SystemExit(
+        "frida-carry-1172: not verified on 2.7.2.0: 0x1409fafe0 (ReqInvadeNPCWorld), "
+        "0x14067acf0 (SetTargetMapId), 0x14067ad00 (SetNPCInvadeTargetEntryPoint), "
+        "0x14067ad10 (SetMultiplayJoinTargetBlockPos), and every CALLERS body range"
+    )
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if os.path.abspath(args.out).startswith(repo):

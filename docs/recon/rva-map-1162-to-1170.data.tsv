@@ -81,6 +81,7 @@
 0x3b39470	0x3b3d480	PROFILE_ANIM_NULL_HANDLE_RVA	4/4
 0x3b39848	0x3b3d858	PROFILE_OFFSCREEN_SIZE_TABLE_RVA	1/1 bracket
 0x3b48ff0	0x3b4d050	STEAM_ID_ACCESSOR_CALL_SLOT_RVA	1/1 bracket
+0x3c449a0	0x3c48a00	KEYBOARD_KEY_TO_DIK_GLOBAL_RVA	1/1 bracket+shape
 0x3d5b078	0x3d5f0d8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1306	12/12
 0x3d5b088	0x3d5f0e8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1309	0/0 bracket+shape
 0x3d5b0f8	0x3d5f158	CSFILE_SINGLETON_RVA	1246/1249
@@ -170,7 +171,11 @@
 # COL_SELF_RVA_OFFSET	0x14	no usable reference
 # GRID_CONTROL_VTABLE_RVA_1170	0x2a94438	no usable reference
 # TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA	0x2b268c8	no usable reference
-# KEYBOARD_KEY_TO_DIK_GLOBAL_RVA	0x3c449a0	WEAK (one reference of 1), winner 1/1
 # BUFFER_RVA_1170	0x3d6a040	no usable reference
+# WORLD_AREA_TIME_1171_RVA	0x3d6d368	no usable reference
+# TIME_FROZEN_1171_RVA	0x3d6d370	no usable reference
+# WORLD_AREA_WEATHER_1171_RVA	0x3d6d3f0	no usable reference
+# SESSION_MANAGER_1171_RVA	0x3d7e540	WEAK (one reference of 1), winner 1/1
 # GAME_TEXT_RVA_LIMIT	0x4000000	no usable reference
+# RENDERING_SYSTEM_1171_RVA	0x47f37a8	no usable reference
 # SW_BP_RVA_LIMIT	0x5000000	no usable reference

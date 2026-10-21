@@ -19,10 +19,10 @@ sys.path.insert(0, str(HERE))
 
 from er_pad_frames import Pad  # noqa: E402
 
-SESSION_MANAGER = 0x143D7E540
+SESSION_MANAGER = 0x143D81560  # 1.17.1 0x143D7E540
 HOOK = """
 const steam = Process.findModuleByName('lsteamclient.dll');
-const SESSION = ptr('0x143d7e540');
+const SESSION = ptr('0x143d81560'); // 1.17.1 0x143d7e540
 function str (p) { try { return p.isNull() ? null : p.readUtf8String(); } catch (e) { return '?'; } }
 if (steam !== null) {
   Interceptor.attach(steam.base.add(0x8ac80), {

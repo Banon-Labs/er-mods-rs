@@ -6,7 +6,8 @@
 //!
 //! # What is hooked, and why it is the right seam
 //!
-//! `CS::CSFeManImp::UpdatePlayerComponents` -- 1.16.2 `0x140772a80`, 1.17 `0x140773900` -- is the
+//! `CS::CSFeManImp::UpdatePlayerComponents` -- 1.16.2 `0x140772a80`, 1.17 `0x140773900`, 2.7.2.0
+//! `0x140773db0` -- is the
 //! per-frame pass that fills the HUD's `FrontEndViewValues` from the local player. It reads the
 //! raw `WorldChrManImp+0x1e508` exactly once, into `r12`, and carries it through all 1,366
 //! instructions; `WorldChrManDbg+0xb8 camOverrideChrIns` (which is how possession moves the
@@ -99,6 +100,12 @@ const _: () = {
 /// `48 8b c4 55 56 57 41 54 41 55 41 56 41 57 48 8d a8 a8 fd ff ff` is byte-identical in both
 /// images and its first five bytes are a clean rel32-free detour window. Extended to 51 bytes it
 /// matches uniquely in each image, at exactly these two addresses.
+///
+/// 1.17.1 keeps `0x773900` (it is below the `0xafefe9` boundary), and `er-game-base` carries that
+/// to `0x773db0` on 2.7.2.0 through `docs/recon/carry-1171-to-1172.tsv`. That destination is a
+/// `.pdata` start in `eldenring-deobf-1.17.2.bin` with the same `0x16c2` length, the same 21-byte
+/// prologue, and the same 1,366 instructions once rip-relative displacements are masked; see
+/// `crate::hud::layout` for the site table.
 const UPDATE_PLAYER_COMPONENTS_RVA: u32 = 0x0077_2a80;
 
 /// MinHook's trampoline back to the real function.
@@ -214,9 +221,10 @@ pub(crate) fn install(enabled: bool) -> Install {
     let Some(layout) = Layout::for_build(game_file_version()) else {
         possess_log(format_args!(
             "hud: no measured FrontEndViewValues/CSChrDataModule offsets for {} -- the HP/FP/\
-             stamina retarget is DISABLED and no detour was installed. The offsets are the same \
-             on 1.16.2 and 1.17, but ChrIns grew 8 bytes at +0x3b8 on 1.17 with its size \
-             unchanged, so a stale offset on this game reads the neighbouring field instead of \
+             stamina retarget is DISABLED and no detour was installed. The offsets were measured \
+             on 1.16.2, 1.17.0, 1.17.1 and 2.7.2.0 and on no other build. ChrIns grew 8 bytes at \
+             +0x3b8 on 1.17 with its size unchanged, so a stale offset on a new build can read \
+             the neighbouring field instead of \
              faulting -- there is nothing to notice at runtime, which is why this refuses rather \
              than reuses",
             describe_build()

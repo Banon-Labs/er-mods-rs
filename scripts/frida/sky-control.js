@@ -1,23 +1,31 @@
 // Sets and locks the time of day and the weather through the game's own calls, and reports the
 // clock and weather state twice a second, as the prototype for the Sky tab (er-effects-rs-pjyh).
 //
+// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give with
+// scripts/map-rvas-1171-to-1172.py and written old -> new below. Each function's bytes match the
+// 1.17.1 one once rip-relative and branch operands are masked, every masked target carrying to the
+// new operand; each global is the carried target of those same readers.
+//
 // Config ({} reports only; edit CFG below and save to apply again, the watcher reloads in place):
-//   hour, minute, second   RequestTime(WorldAreaTime, h, m, s) 0x1406442a0 once per load of this
-//                          script and again whenever WorldAreaTime is rebuilt (each area load)
-//   freeze                 true/false through SetTimeFrozen 0x1405f6240, the EMEVD "freeze time"
-//                          flag 0x143d6d370; set then freeze pins the hour
+//   hour, minute, second   RequestTime(WorldAreaTime, h, m, s) 0x1406442a0 -> 0x140644750 once per
+//                          load of this script and again whenever WorldAreaTime is rebuilt (each
+//                          area load)
+//   freeze                 true/false through SetTimeFrozen 0x1405f6240 -> 0x1405f66f0, the EMEVD
+//                          "freeze time" flag 0x143d6d370 -> 0x143d70390; set then freeze pins the
+//                          hour
 //   speed                  game seconds per real second, written to WorldAreaTime +0x38 and +0x34
 //                          (vanilla 600? the report prints the live value)
 //   weather                internal WeatherParam type (0 default, 1 cloudless, 10 flat clouds,
 //                          11 puffy clouds, 20 rain, 21 rainy clouds, 30 windy rain, 31 windy fog,
 //                          40 snow, 41 heavy snow, 50 fog, 51 heavy fog, 52 rainy heavy fog,
 //                          60 windy puffy clouds, 81 snowy heavy fog, 82 scattered rain), asked
-//                          for through SetWeatherType 0x1405ecb30 with lifespan -1 (never expires)
-//                          and immediate
+//                          for through SetWeatherType 0x1405ecb30 -> 0x1405ecfe0 with lifespan -1
+//                          (never expires) and immediate
 //   lockWeather            asks again whenever the current type (+0x2a) drifts from `weather`
 //
 // Both requests are made from inside the game's own per-frame updates (WorldAreaTimeImp::Update
-// 0x140644a10, WorldAreaWeather::Update 0x1406489d0), so they run on the thread that owns them.
+// 0x140644a10 -> 0x140644ec0, WorldAreaWeather::Update 0x1406489d0 -> 0x140648e80), so they run on
+// the thread that owns them.
 // Static map: bd er-time-of-day-worldareatime-1171-2026-10-15, er-weather-worldareaweather-1171-2026-10-15.
 'use strict';
 
@@ -28,15 +36,15 @@ const CFG = Object.assign(
   globalThis.__ER_FRIDA_CONFIG || {},
 );
 
-const WAT_GLOBAL = va('0x143d6d368');
-const TIME_FROZEN = va('0x143d6d370');
-const TIME_STOP_PRIVATE = va('0x143d6d371');
-const WEATHER_GLOBAL = va('0x143d6d3f0');
-const WAT_UPDATE = va('0x140644a10');
-const WEATHER_UPDATE = va('0x1406489d0');
-const REQUEST_TIME = new NativeFunction(va('0x1406442a0'), 'void', ['pointer', 'uint32', 'uint32', 'uint32']);
-const SET_TIME_FROZEN = new NativeFunction(va('0x1405f6240'), 'void', ['uint8']);
-const SET_WEATHER_TYPE = new NativeFunction(va('0x1405ecb30'), 'void', ['int16', 'float', 'uint8']);
+const WAT_GLOBAL = va('0x143d70388'); // WorldAreaTime* 0x143d6d368 -> 0x143d70388
+const TIME_FROZEN = va('0x143d70390'); // 0x143d6d370 -> 0x143d70390
+const TIME_STOP_PRIVATE = va('0x143d70391'); // 0x143d6d371 -> 0x143d70391
+const WEATHER_GLOBAL = va('0x143d70410'); // WorldAreaWeather* 0x143d6d3f0 -> 0x143d70410
+const WAT_UPDATE = va('0x140644ec0'); // 0x140644a10 -> 0x140644ec0
+const WEATHER_UPDATE = va('0x140648e80'); // 0x1406489d0 -> 0x140648e80
+const REQUEST_TIME = new NativeFunction(va('0x140644750'), 'void', ['pointer', 'uint32', 'uint32', 'uint32']); // 0x1406442a0 -> 0x140644750
+const SET_TIME_FROZEN = new NativeFunction(va('0x1405f66f0'), 'void', ['uint8']); // 0x1405f6240 -> 0x1405f66f0
+const SET_WEATHER_TYPE = new NativeFunction(va('0x1405ecfe0'), 'void', ['int16', 'float', 'uint8']); // 0x1405ecb30 -> 0x1405ecfe0
 
 const S = { wat: ptr(0), weather: ptr(0), timeDone: false, weatherAsks: 0, speedWas: null, frozeIt: false, lastReport: 0, frames: 0 };
 

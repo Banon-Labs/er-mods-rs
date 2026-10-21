@@ -1,12 +1,15 @@
 // How often `MenuWindowJob::Run` (1.17.1 rva 0x7ae040) runs the item list's window while it is open.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // er-r3-view keeps its board up until the item list has gone `ITEM_LIST_GONE_MS` without a Run,
 // which the player sees as a one-second delay after B. A shorter draw-side cutoff is safe only if
 // it is several times the longest gap between Runs while the list is open; this sends that gap.
 // One message per 120 item-list Runs, from inside the hook, so nothing here runs on a timer.
 'use strict';
 
-const RUN_RVA = 0x7ae040;
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const TARGET = '.?AVGaitemSelectDialog@CS@@';
 const BATCH = 120;
