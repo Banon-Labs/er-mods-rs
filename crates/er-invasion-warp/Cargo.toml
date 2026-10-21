@@ -33,6 +33,10 @@ er-game-base = { path = "../er-game-base" }
 # tests against the extraction corpus, so only the load-time swap needs the game.
 er-gfx = { path = "../er-gfx" }
 
+# The band census file is written with this crate's atomic write, the same one every settings file
+# in the workspace goes through. Host-buildable.
+er-hotkey-config = { path = "../er-hotkey-config" }
+
 [target.'cfg(windows)'.dependencies.er-hook]
 # The shared MinHook union. Every detour this DLL installs MUST go through it: two MinHook
 # instances patching one prologue corrupt each other's trampolines, and er_quickload.dll may be
@@ -56,6 +60,9 @@ er-overlay-theme = { path = "../er-overlay-theme" }
 # `MessageFilter`, and ELDEN RING reads the mouse through DirectInput anyway, so this is what
 # stops a click on the panel also being a weapon swing.
 er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
+# The band census panel's input: the free cursor, still camera and taken keyboard, mouse and pad
+# a menu gets while it is open.
+er-overlay-input = { path = "../er-overlay-input" }
 # Pinned to the SAME hudhook every other overlay shell carries -- the `ui` pointer crosses a DLL
 # boundary and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
 hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
