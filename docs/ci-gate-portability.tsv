@@ -253,7 +253,8 @@ portable	-	gen-installer-catalog.py --check	source/AST/text analysis only	produc
 portable	-	gen-installer-settings.py --selftest	source/AST/text analysis only	product
 portable	-	gen-installer-settings.py --check	source/AST/text analysis only	product
 portable	-	gen-r3-weapon-boards.py --selftest	text rules on inline fixtures; reads no game data	product
-partial	game-install	gen-r3-weapon-boards.py --check	body and repository sources still compared; prints which data files (regulation.bin, the planner cache) it could not compare	product
+portable	-	check-r3-weapon-boards.py --selftest	selection over fixed path lists, one ref that does not resolve, and a stacked branch in a throwaway git repository	product
+partial	game-install	check-r3-weapon-boards.py	body and repository sources still compared; prints which data files (regulation.bin, the planner cache) it could not compare; blocks only a diff touching crates/er-r3-view/ or the generator, and blocks when the diff cannot be resolved (no origin/main)	product
 portable	-	planner-item-names.py --selftest	parses a fixture of the planner bundle's item literals; fetches nothing	product
 portable	-	dsr-er-fit-probe.py --selftest	builds its FLVERs, export directory and skeleton in memory; reads no game file	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product

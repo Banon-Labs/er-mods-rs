@@ -593,6 +593,35 @@ def stages_for_paths(paths: list[str]) -> Selection:
     return Selection(chosen, reasons, tuple(sorted(unmatched)), select_all_reason)
 
 
+# --- which gates may fail a run only when the diff touches what they ship? --------------------
+# A stage is selected by what its gates read. A few gates read far more than they ship: the R3
+# weapon boards are the content of the er-r3-view DLL, and their staleness check hashes ~3000
+# inputs, every mechanics script among them. Blocking on that read set made any edit to any
+# mechanics script -- a speed refactor with byte-identical output included -- red until hours of
+# board regeneration were committed (user, 2026-10-21). So such a gate still runs wherever its stage
+# runs, and still reports, but it fails the run only when a changed path matches what it ships.
+#
+# The paths come from `changed_paths_for`, the same diff the stage selection reads: the working
+# tree against `merge-base(origin/main, HEAD)`. check.sh runs pre-push in a tree pinned to the
+# pushed tip and in CI on the pull request's merge commit, so that is the pushed change in both.
+# An empty diff (a push to main) touches nothing, so it does not block: the change that touched the
+# shipping paths already had to pass on its own branch.
+BLOCKING_SCOPES: dict[str, tuple[str, ...]] = {
+    "r3-weapon-boards": ("crates/er-r3-view/**/*", "scripts/gen-r3-weapon-boards.py"),
+}
+
+
+def blocks_for_paths(scope: str, paths: list[str]) -> tuple[bool, str]:
+    """(whether the named gate fails the run for this diff, and why)."""
+    globs = BLOCKING_SCOPES[scope]
+    matchers = [glob_to_regex(p) for p in globs]
+    hit = sorted(p for p in paths if any(m.match(p) for m in matchers))
+    if hit:
+        more = f" (+{len(hit) - 3} more)" if len(hit) > 3 else ""
+        return True, f"this diff changes what it ships: {', '.join(hit[:3])}{more}"
+    return False, f"this diff changes none of {', '.join(globs)}"
+
+
 # --- are those globs honest about what the stage reads? ---------------------------------------
 # Selection is only as good as the `inputs` declaration, and a declaration nothing measures is the
 # hand-written list this file was created to abolish. Two readings of the tree keep it honest, and
@@ -1067,6 +1096,35 @@ def selection_selftest() -> int:
         os.environ.pop("ER_SCOPE_ALL", None)
         if scope_all is not None:
             os.environ["ER_SCOPE_ALL"] = scope_all
+
+    # --- a path-scoped gate blocks only on the paths it ships, over the real table -----------
+    for paths, want, label in (
+        (["scripts/er-mechanics-combo-loadout.py"], False, "a mechanics-script-only diff"),
+        (["scripts/er-mechanics-combo-loadout.py", "data/ash-preferences.toml"], False,
+         "a mechanics script plus data"),
+        ([], False, "an empty diff (a push to main)"),
+        (["crates/er-r3-view/src/lib.rs"], True, "an er-r3-view source change"),
+        (["crates/er-r3-view/src/weapon_boards.inputs"], True, "a change to the recorded inputs"),
+        (["scripts/er-mechanics-ar.py", "scripts/gen-r3-weapon-boards.py"], True,
+         "a change to the board generator"),
+        (["crates/er-r3-viewer/src/lib.rs"], False, "a crate whose name only starts the same"),
+    ):
+        got, why = blocks_for_paths("r3-weapon-boards", paths)
+        case(
+            f"{label} {'blocks' if want else 'does not block'} on stale R3 weapon boards",
+            got is want and bool(why),
+            f"blocks={got} why={why}",
+        )
+    product = stage_inputs("product")
+    unclaimed = [
+        g for g in BLOCKING_SCOPES["r3-weapon-boards"]
+        if not any(glob_to_regex(p).match(g.replace("**/*", "x")) for p in product)
+    ]
+    case(
+        "the product stage, which runs the board check, is selected by every path that can block it",
+        not unclaimed,
+        str(unclaimed),
+    )
 
     # --- and the real table declares what its own gates read ---------------------------------
     problems = coverage_problems()
