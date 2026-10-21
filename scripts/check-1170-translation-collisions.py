@@ -63,6 +63,23 @@ construction, and both answers are the same address, so a second resolve is idem
 22 such rows and flagging them would bury the three that matter. Nor is `A -> B` where the only
 row keyed by B is `B -> B`: the second resolve returns B, which is the right answer.
 
+The carry changes the collision set (2026-10-20)
+------------------------------------------------
+The tables hold 1.17.0 destinations, and the runtime does not hand those out as they are. On every
+build it supports it first carries a destination to the running build (`carry_mapped_rva` in
+`game_build.rs`): the identity on 1.17.0, `+0x70` for `.text` above the boundary on 1.17.1, and on
+2.7.2.0 that plus the segment table in `docs/recon/carry-1171-to-1172.tsv`. A second resolve then
+looks the carried address up as a 1.16.2 source. So whether `A -> B` and some row keyed `B'` collide
+depends on the build: on 2.7.2.0 `0x679510 -> 0x67a360` carries to `0x67a810`, which is the 1.16.2
+source of a different row, while on 1.17.0 nothing is keyed `0x67a360`. A gate that only looked at
+1.17.0 destinations would miss every collision a carry creates and report ones a carry removes.
+
+So the scan runs once per carry the runtime supports, each reproduced from `game_build.rs` (the
+`Carry` variants, the 1.17.1 boundary/shift/`.text` end, and the arms of `carry_mapped_rva`) and from
+the tsv, and each collision names the builds it exists on. A row whose carry refuses (an rva in no
+segment) is unmapped on that build, so it neither starts a collision nor completes one: the second
+resolve is refused, loudly.
+
 Is a collision always fatal?
 ----------------------------
 No -- and the gate fails anyway, on purpose. A collision is inert while every address is resolved
@@ -133,6 +150,7 @@ Usage
 """
 
 import argparse
+import bisect
 import glob
 import os
 import re
@@ -154,6 +172,16 @@ BUILD_RS = os.path.join(ROOT, "crates", "er-game-base", "build.rs")
 BASELINE = os.path.join(ROOT, "scripts", "1170-translation-collisions.baseline.tsv")
 BASE = 0x140000000
 
+# The carry table constant in build.rs. It is not a pair table: it moves the pair tables'
+# destinations onto the running build, so it is read by `carry_model` rather than by `emit`.
+CARRY_TABLE = "CARRY_1171_TO_1172_TSV"
+
+# The `Carry` variants in game_build.rs, in order, and the build each one serves -- the mapping
+# `carry_shift_for_running_build` makes. The variant names are read from the source and must match
+# this list exactly; a new variant is a build this gate has not modelled, and it refuses.
+BUILDS = (("Identity", "1.17.0"), ("To1171", "1.17.1"), ("To1172", "2.7.2.0"))
+IDENTITY_BUILD = BUILDS[0][1]
+
 # The table constants in `build.rs` and the job each one does in `emit_address_map`. Parsing tells
 # us where the files are; this says what they mean, which is structure and cannot be read off a
 # string literal. A constant that appears in build.rs and is not here (and is not inert) stops the
@@ -165,6 +193,7 @@ ROLES = {
     "FUNCTION_MAP": "signature pairs; CALL map, unless VERIFIED_MAP already keys the source",
     "DATA_MAP": "globals carried by reference; CALL map, unless the source is already known",
     "QUARANTINE": "sources held back from both maps",
+    CARRY_TABLE: "carry; 1.17.1 -> 2.7.2.0 segments applied to both maps' destinations on 2.7.2.0",
 }
 
 CALL = "CALL"
@@ -186,11 +215,11 @@ class Refuse(Exception):
 # --------------------------------------------------------------------------------------------
 
 
-def _one(pattern, text, what, flags=0):
+def _one(pattern, text, what, flags=0, source=BUILD_RS):
     found = re.search(pattern, text, flags)
     if not found:
         raise Refuse(
-            f"cannot read {what} out of {BUILD_RS}.\n"
+            f"cannot read {what} out of {source}.\n"
             f"  Its shape changed and this gate's model of it is now guesswork. Fix the pattern\n"
             f"  ({pattern!r}) rather than letting the gate report a collision count derived from\n"
             f"  rules that are no longer the build's."
@@ -231,13 +260,16 @@ def build_rules(path=BUILD_RS):
     body = _one(
         r"fn detourable_pairs\(.*?\n\}\n", text, "the detourable_pairs body", re.S
     ).group(0)
+    paths = {
+        name: os.path.normpath(os.path.join(os.path.dirname(path), declared[name]))
+        for name in ROLES
+    }
     return {
-        "paths": {
-            name: os.path.normpath(
-                os.path.join(os.path.dirname(path), declared[name])
-            )
-            for name in ROLES
-        },
+        "paths": paths,
+        "game_build": os.path.join(os.path.dirname(path), "src", "game_build.rs"),
+        "carry": carry_model(
+            os.path.join(os.path.dirname(path), "src", "game_build.rs"), paths[CARRY_TABLE]
+        ),
         "inert": sorted(inert),
         "min_insns": int(_one(r"MIN_VERIFIED_INSNS: u32 = (\d+)", text, "the insn floor").group(1)),
         "exhaustive": tuple(
@@ -312,6 +344,131 @@ def build_rules(path=BUILD_RS):
             _one(r'fields\[(\d+)\] != "[A-Z-]+"', text, "the refuted-verdict column").group(1)
         ),
     }
+
+
+# --------------------------------------------------------------------------------------------
+# Reproducing carry_mapped_rva
+# --------------------------------------------------------------------------------------------
+
+
+def _hex(text, what, source):
+    try:
+        return int(text, 16)
+    except ValueError:
+        raise Refuse(f"{source}: {what} is not hex: {text!r}") from None
+
+
+def carry_model(game_build_path, segments_path):
+    """Every carry `game_build.rs` applies to a destination, read from the source that applies it.
+
+    The constants and the three match arms are matched literally, so a change to how a carry is
+    composed (a new variant, a different order of the two steps, a bound that is no longer
+    `.text`) stops the gate instead of leaving it modelling yesterday's runtime.
+    """
+    try:
+        with open(game_build_path, encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        raise Refuse(f"{game_build_path} is missing, so the carries cannot be modelled") from None
+
+    def one(pattern, what, flags=0):
+        return _one(pattern, text, what, flags, source=game_build_path)
+
+    enum = one(r"enum Carry \{(.*?)\n\}", "the Carry enum", re.S).group(1)
+    variants = re.findall(r"^\s*(\w+),\s*$", enum, re.M)
+    if variants != [name for name, _ in BUILDS]:
+        raise Refuse(
+            f"{game_build_path}: `enum Carry` has variants {variants}, and this gate models "
+            f"{[name for name, _ in BUILDS]}.\n  A carry this gate does not model is a build whose "
+            "collisions it cannot see. Add it to BUILDS and to `carry_fn`."
+        )
+    one(r"Carry::Identity => Some\(rva\),", "the Identity arm of carry_mapped_rva")
+    one(r"Carry::To1171 => Some\(to_1171\(rva\)\),", "the To1171 arm of carry_mapped_rva")
+    one(
+        r"Carry::To1172 => carry_1171_to_1172\(to_1171\(rva\)\),",
+        "the To1172 arm of carry_mapped_rva",
+    )
+    one(
+        r"if rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END \{\s*rva \+ CARRY_1171_SHIFT",
+        "the 1.17.1 step's bounds",
+    )
+    one(
+        r"\(lo <= rva && rva < hi\)\.then\(\|\| rva\.wrapping_add_signed\(delta\)\)",
+        "the segment lookup in carry_1171_to_1172",
+    )
+
+    def const(name):
+        return _hex(
+            one(rf"const {name}: u32 = (0x[0-9a-fA-F_]+);", name).group(1).replace("_", ""),
+            name,
+            game_build_path,
+        )
+
+    segments = []
+    try:
+        with open(segments_path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        raise Refuse(f"{segments_path} is missing; build.rs would fail on it too") from None
+    for number, line in enumerate(lines, 1):
+        if line.startswith("#") or not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) != 4:
+            raise Refuse(f"{segments_path}:{number}: malformed row {line!r}")
+        delta = fields[3]
+        magnitude = _hex(delta.lstrip("+-"), "a delta", segments_path)
+        segments.append(
+            (
+                _hex(fields[1], "old_lo", segments_path),
+                _hex(fields[2], "old_hi", segments_path),
+                -magnitude if delta.startswith("-") else magnitude,
+            )
+        )
+    if not segments:
+        raise Refuse(f"{segments_path} has no rows; build.rs would fail on it too")
+    segments.sort()
+    return {
+        "boundary": const("CARRY_1171_BOUNDARY_RVA"),
+        "shift": const("CARRY_1171_SHIFT"),
+        "text_end": const("TEXT_RVA_END"),
+        "segments": segments,
+        "starts": [lo for lo, _, _ in segments],
+    }
+
+
+def carry_fn(model, variant):
+    """`carry_mapped_rva(_, variant)` as a callable: an rva, or None where the carry refuses."""
+
+    def to_1171(rva):
+        if model["boundary"] <= rva < model["text_end"]:
+            return rva + model["shift"]
+        return rva
+
+    def to_1172(rva):
+        # `partition_point(|lo| lo <= rva)` then the row before it -- the same lookup as the Rust.
+        at = bisect.bisect_right(model["starts"], rva)
+        if at == 0:
+            return None
+        lo, hi, delta = model["segments"][at - 1]
+        return rva + delta if lo <= rva < hi else None
+
+    if variant == "Identity":
+        return lambda rva: rva
+    if variant == "To1171":
+        return to_1171
+    if variant == "To1172":
+        return lambda rva: to_1172(to_1171(rva))
+    raise Refuse(f"no carry is modelled for variant {variant!r}")
+
+
+def carries(rules):
+    """`{build: carry}` for every build the runtime carries the map to."""
+    return {build: carry_fn(rules["carry"], variant) for variant, build in BUILDS}
+
+
+def identity_carries():
+    return {IDENTITY_BUILD: lambda rva: rva}
 
 
 # --------------------------------------------------------------------------------------------
@@ -485,13 +642,19 @@ def emit(rules):
 
 
 class Collision:
-    """`first -> address` and `address -> second`, both real moves."""
+    """`first -> address` and `address -> second`, both real moves on the running build.
 
-    __slots__ = ("first", "address", "second", "routes", "rows")
+    `address` and `second` are running-build rvas: the carried destinations. `address` is also a
+    1.16.2 rva, which is the whole defect -- it is row B's source.
+    """
+
+    __slots__ = ("first", "address", "second", "routes", "builds", "carries", "rows")
 
     def __init__(self, first, address, second):
         self.first, self.address, self.second = first, address, second
         self.routes = set()
+        self.builds = set()
+        self.carries = {}
         self.rows = {}
 
     def key(self):
@@ -501,31 +664,55 @@ class Collision:
         return f"0x{self.first:x} -> 0x{self.address:x} -> 0x{self.second:x}"
 
 
-def collisions(tables):
-    """Every double-resolve triple, over every ordered pair of tables a caller might use.
+def build_order(builds):
+    order = [build for _, build in BUILDS]
+    return sorted(builds, key=lambda b: order.index(b) if b in order else len(order))
+
+
+def collisions(tables, carry_by_build=None):
+    """Every double-resolve triple, over every ordered pair of tables and every carried build.
 
     Both orders and both tables, because the resolvers are separate functions over separate
     tables: `resolve_game_address` reads the call map and `resolve_detour_address` the detour
     map. The path that bit resolved through one and then the other, so checking each table
     against itself would have missed it.
+
+    Every build, because the runtime carries a destination before handing it out, and a second
+    resolve looks the carried address up as a 1.16.2 source. `carry_by_build` defaults to the
+    identity alone, which is 1.17.0.
+
+    What the runtime does, step by step, on a build whose carry is `carry`:
+      * first resolve of `row.src`: `carry(row.dst)`, or a refusal if the carry refuses;
+      * a row whose carried destination equals its source did not move on this build, so a second
+        resolve of it is idempotent;
+      * second resolve of `landed`: `already_translated_in` declines because `landed` is the
+        source of a move, so the table answers `carry(onward.dst)` -- or refuses, loudly, when
+        that carry refuses. Only a non-refused answer different from `landed` is a misroute.
     """
+    carry_by_build = carry_by_build or identity_carries()
     found = {}
-    for first_name, first_rows in tables.items():
-        for second_name, second_rows in tables.items():
-            second = {row.src: row for row in second_rows}
-            for row in first_rows:
-                if row.src == row.dst:
-                    continue  # did not move: resolution is idempotent here
-                onward = second.get(row.dst)
-                if onward is None or onward.src == onward.dst:
-                    continue  # nothing keyed by the destination, or it is an identity row
-                collision = found.setdefault(
-                    (row.src, row.dst, onward.dst),
-                    Collision(row.src, row.dst, onward.dst),
-                )
-                collision.routes.add(f"{first_name}>{second_name}")
-                collision.rows.setdefault("first", row)
-                collision.rows.setdefault("second", onward)
+    for build, carry in carry_by_build.items():
+        for first_name, first_rows in tables.items():
+            for second_name, second_rows in tables.items():
+                second = {row.src: row for row in second_rows}
+                for row in first_rows:
+                    landed = carry(row.dst)
+                    if landed is None or landed == row.src:
+                        continue  # refused, or did not move on this build: nothing to re-resolve
+                    onward = second.get(landed)
+                    if onward is None:
+                        continue  # nothing keyed by the destination
+                    beyond = carry(onward.dst)
+                    if beyond is None or beyond == landed:
+                        continue  # refused loudly, or an identity row on this build
+                    collision = found.setdefault(
+                        (row.src, landed, beyond), Collision(row.src, landed, beyond)
+                    )
+                    collision.routes.add(f"{first_name}>{second_name}")
+                    collision.builds.add(build)
+                    collision.carries.setdefault(build, carry)
+                    collision.rows.setdefault("first", row)
+                    collision.rows.setdefault("second", onward)
     return sorted(found.values(), key=lambda c: c.key())
 
 
@@ -575,6 +762,8 @@ def _already_translated_in(pairs, rva):
     is not itself the source of a move.
     """
     is_destination = any(dst == rva and src != rva for src, dst in pairs)
+    # `dst` is the carried destination and is None where the carry refuses; the Rust compares
+    # `carry_mapped_rva(..) != Some(rva)`, which a refusal satisfies, so None counts as a move.
     is_source_of_a_move = any(src == rva and dst != rva for src, dst in pairs)
     return is_destination and not is_source_of_a_move
 
@@ -585,7 +774,7 @@ SILENT = "HANDED BACK UNTRANSLATED"  # `already_translated_in` claims it; no log
 STILL_MAPPED = "STILL TRANSLATED"  # another row keys the same source
 
 
-def deletion_failure_mode(tables, collision):
+def deletion_failure_mode(tables, collision, carry=None):
     """`{table: (kind, address)}` -- what asking for the collision address gets after row B goes.
 
     This is the question the old "AT ZERO COST" sentence assumed an answer to. Deleting a row is
@@ -598,19 +787,26 @@ def deletion_failure_mode(tables, collision):
     So the gate computes the failure mode instead of assuming it, and prints it beside any
     suggestion to delete. `LOUD` would make a deletion recoverable from a log; `SILENT` means a
     wrong deletion looks exactly like the collision it replaced.
+
+    `carry` is the build's carry (identity when omitted): the runtime compares carried
+    destinations, so the pairs are carried before the question is asked.
     """
+    carry = carry or (lambda rva: rva)
     out = {}
     for name, rows in tables.items():
         pairs = [
-            (row.src, row.dst)
+            (row.src, carry(row.dst))
             for row in rows
-            if not (row.src == collision.address and row.dst == collision.second)
+            if not (row.src == collision.address and carry(row.dst) == collision.second)
         ]
         if _already_translated_in(pairs, collision.address):
             out[name] = (SILENT, collision.address)
             continue
-        onward = next((dst for src, dst in pairs if src == collision.address), None)
-        out[name] = (STILL_MAPPED, onward) if onward is not None else (LOUD, None)
+        keyed = [dst for src, dst in pairs if src == collision.address]
+        if keyed and keyed[0] is not None:
+            out[name] = (STILL_MAPPED, keyed[0])
+        else:
+            out[name] = (LOUD, None)  # no row, or a row whose carry refuses: `Unmapped`
     return out
 
 
@@ -628,7 +824,7 @@ def read_baseline(path=BASELINE):
             if line.startswith("#") or not line.strip():
                 continue
             fields = line.rstrip("\n").split("\t")
-            if len(fields) < 4:
+            if len(fields) < 5:
                 continue
             try:
                 key = (int(fields[0], 16), int(fields[1], 16), int(fields[2], 16))
@@ -636,7 +832,8 @@ def read_baseline(path=BASELINE):
                 continue
             out[key] = {
                 "routes": {r for r in fields[3].split(",") if r},
-                "note": fields[4] if len(fields) > 4 else "",
+                "builds": {b for b in fields[4].split(",") if b},
+                "note": fields[5] if len(fields) > 5 else "",
             }
     return out
 
@@ -699,6 +896,7 @@ def baseline_line(collision, note):
             f"0x{collision.address:x}",
             f"0x{collision.second:x}",
             ",".join(sorted(collision.routes)),
+            ",".join(build_order(collision.builds)),
             note,
         ]
     )
@@ -770,7 +968,7 @@ def newest_generated(rules):
     if not candidates:
         return None, "no cargo-generated map under target/"
     newest = max(candidates, key=os.path.getmtime)
-    inputs = [BUILD_RS] + list(rules["paths"].values())
+    inputs = [BUILD_RS, rules["game_build"]] + list(rules["paths"].values())
     freshest_input = max(
         (os.path.getmtime(p) for p in inputs if os.path.exists(p)), default=0
     )
@@ -792,28 +990,43 @@ def describe(collision, out, tables=None):
     sentence sound like a finished argument.
     """
     first, second = collision.rows["first"], collision.rows["second"]
-    print(f"\n  COLLISION at 0x{collision.address:x}   ({', '.join(sorted(collision.routes))})", file=out)
+    builds = build_order(collision.builds) or [IDENTITY_BUILD]
     print(
-        f"    row A  0x{first.src:x} -> 0x{first.dst:x}"
+        f"\n  COLLISION at 0x{collision.address:x}   ({', '.join(sorted(collision.routes))})"
+        f"   on {', '.join(builds)}",
+        file=out,
+    )
+
+    def carried(row):
+        moves = [
+            f"0x{landing:x} on {build}"
+            for build in builds
+            for landing in [collision.carries.get(build, lambda rva: rva)(row.dst)]
+            if landing is not None and landing != row.dst
+        ]
+        return f" (1.17.0; carried to {', '.join(moves)})" if moves else ""
+
+    print(
+        f"    row A  0x{first.src:x} -> 0x{first.dst:x}{carried(first)}"
         f"   {first.where()}   {first.note or '(no constant recorded)'}",
         file=out,
     )
     print(
-        f"    row B  0x{second.src:x} -> 0x{second.dst:x}"
+        f"    row B  0x{second.src:x} -> 0x{second.dst:x}{carried(second)}"
         f"   {second.where()}   {second.note or '(no constant recorded)'}",
         file=out,
     )
     print(
         f"    Row A's DESTINATION 0x{collision.address:x} is row B's SOURCE. Resolving\n"
         f"    0x{first.src:x} once gives 0x{collision.address:x}, which is correct. Resolving that\n"
-        f"    result again gives 0x{second.dst:x} -- a different function, returned with no error,\n"
+        f"    result again gives 0x{collision.second:x} -- a different function, returned with no error,\n"
         f"    no refusal and no log line, because from a bare address the table cannot tell a\n"
         f"    destination from a source.",
         file=out,
     )
     if f"{CALL}>{DETOUR}" in collision.routes or f"{DETOUR}>{DETOUR}" in collision.routes:
         print(
-            f"    A detour taken on 0x{second.dst:x} writes five bytes into that unrelated body.",
+            f"    A detour taken on 0x{collision.second:x} writes five bytes into that unrelated body.",
             file=out,
         )
     self_refusal = f"refused at runtime 0x{second.src:x}"
@@ -876,7 +1089,12 @@ def describe(collision, out, tables=None):
                 file=out,
             )
         else:
-            outcomes = deletion_failure_mode(tables, collision)
+            outcomes = {}
+            for build in builds:
+                for name, outcome in deletion_failure_mode(
+                    tables, collision, collision.carries.get(build)
+                ).items():
+                    outcomes[f"{build} {name}"] = outcome
             summary = ", ".join(
                 f"{name} map: {kind}" + (f" -> 0x{landing:x}" if landing is not None else "")
                 for name, (kind, landing) in sorted(outcomes.items())
@@ -980,6 +1198,7 @@ const NEEDED_VERIFIED_MAP: &str = "recon/needed-verified.tsv";
 const FUNCTION_MAP: &str = "recon/needed.tsv";
 const DATA_MAP: &str = "recon/data.tsv";
 const QUARANTINE: &str = "recon/quarantine.tsv";
+const CARRY_1171_TO_1172_TSV: &str = "recon/carry.tsv";
 const MIN_VERIFIED_INSNS: u32 = {floor};
 const EXHAUSTIVE_VERDICTS: [&str; 2] = [{exhaustive}];
 const PATCH_SITE_VERDICTS: [&str; 1] = [{patch_site}];
@@ -1004,6 +1223,42 @@ fn detourable_pairs(path: &Path) -> Vec<(u32, u32)> {{
 
 VERDICT_HEADER = "# 1.16.2 VA\t1.17 VA\tverdict\tratio\tinsns\thow\tentry\textent\n"
 
+# The parts of game_build.rs the carry model reads, in the shapes the real file spells them.
+SYNTHETIC_GAME_BUILD_RS = '''
+const TEXT_RVA_END: u32 = {text_end};
+enum Carry {{
+    /// 1.17.0 itself.
+    Identity,
+    /// 1.17.1.
+    To1171,
+    /// 2.7.2.0.
+    To1172,{extra_variant}
+}}
+const CARRY_1171_BOUNDARY_RVA: u32 = {boundary};
+const CARRY_1171_SHIFT: u32 = {shift};
+fn carry_mapped_rva(rva: u32, carry: Carry) -> Option<u32> {{
+    let to_1171 = |rva: u32| {{
+        if rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END {{
+            rva + CARRY_1171_SHIFT
+        }} else {{
+            rva
+        }}
+    }};
+    match carry {{
+        Carry::Identity => Some(rva),
+        Carry::To1171 => Some(to_1171(rva)),
+        Carry::To1172 => carry_1171_to_1172(to_1171(rva)),
+    }}
+}}
+fn carry_1171_to_1172(rva: u32) -> Option<u32> {{
+    (lo <= rva && rva < hi).then(|| rva.wrapping_add_signed(delta))
+}}
+'''
+
+# One segment covering the whole synthetic space at +0, so an ordinary fixture behaves on 2.7.2.0
+# exactly as on 1.17.0 and every existing control keeps meaning what it says.
+IDENTITY_SEGMENTS = "text\t0x0\t0x1000000\t+0x0\n"
+
 
 def _write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1020,9 +1275,24 @@ def _synthetic_tree(
     patch_site='"PATCH-SITE-IDENTICAL"',
     callable_only='"IDENTICAL-LEAF-NOPATCH"',
     verified_rows=(),
+    segments=IDENTITY_SEGMENTS,
+    boundary="0x800000",
+    shift="0x70",
+    text_end="0x900000",
+    extra_variant="",
 ):
-    """A whole miniature of what build.rs reads, so the gate is driven end to end offline."""
+    """A whole miniature of what build.rs reads, so the gate is driven end to end offline.
+
+    The default 1.17.1 boundary sits above every fixture address, so 1.17.1 is the identity there
+    too unless a test moves it.
+    """
     build = os.path.join(scratch, "crate", "build.rs")
+    _write(
+        os.path.join(scratch, "crate", "src", "game_build.rs"),
+        SYNTHETIC_GAME_BUILD_RS.format(
+            text_end=text_end, boundary=boundary, shift=shift, extra_variant=extra_variant
+        ),
+    )
     _write(
         build,
         SYNTHETIC_BUILD_RS.format(
@@ -1039,6 +1309,7 @@ def _synthetic_tree(
     _write(os.path.join(recon, "needed.tsv"), "# 1.16.2 RVA\t1.17 RVA\tconstant\n")
     _write(os.path.join(recon, "data.tsv"), "# 1.16.2 RVA\t1.17 RVA\tconstant\n")
     _write(os.path.join(recon, "quarantine.tsv"), "# held back\n")
+    _write(os.path.join(recon, "carry.tsv"), "# kind\told_lo\told_hi\tdelta\n" + segments)
     return build
 
 
@@ -1221,6 +1492,96 @@ def selftest():
         try:
             build_rules(build)
             check("a moved build.rs refuses", "no refusal", "Refuse")
+        except Refuse:
+            pass
+
+        # The carry. `A -> 0x2000` and `0x2100 -> 0x3000` share nothing on 1.17.0, but 2.7.2.0
+        # moves 0x2000 to 0x2100 -- row B's source -- so resolving A twice there lands on B's
+        # carried destination. This is the 0x679510 -> 0x67a360 -> carried 0x67a810 shape, and a
+        # gate that only read 1.17.0 destinations passes it.
+        build = _synthetic_tree(
+            os.path.join(scratch, "carry-made"),
+            [_verdict(0x1000, 0x2000), _verdict(0x2100, 0x3000)],
+            segments="text\t0x0\t0x1000000\t+0x100\n",
+        )
+        rules = build_rules(build)
+        check("1.17.0 alone sees nothing", collisions(emit(rules)), [])
+        made = collisions(emit(rules), carries(rules))
+        check(
+            "a carry-induced collision is caught, in carried coordinates",
+            [c.key() for c in made],
+            [(0x1000, 0x2100, 0x3100)],
+        )
+        check(
+            "...and is reported on the build that carries it, only",
+            sorted(made[0].builds) if made else "nothing found",
+            ["2.7.2.0"],
+        )
+
+        # The 1.17.1 step is read too. Raise the boundary above B's source and A's destination
+        # crosses it while B's source does not: 0x2000 + 0x100 = 0x2100.
+        build = _synthetic_tree(
+            os.path.join(scratch, "carry-1171"),
+            [_verdict(0x1000, 0x2000), _verdict(0x2100, 0x3000)],
+            boundary="0x2000",
+            shift="0x100",
+            text_end="0x900000",
+            segments="text\t0x0\t0x1000000\t+0x0\n",
+        )
+        rules = build_rules(build)
+        check(
+            "the 1.17.1 shift is read from game_build.rs, and creates the collision on 1.17.1 and 2.7.2.0",
+            [(c.key(), sorted(c.builds)) for c in collisions(emit(rules), carries(rules))],
+            [((0x1000, 0x2100, 0x3100), ["1.17.1", "2.7.2.0"])],
+        )
+
+        # The converse: a carry can remove a collision. A -> B -> C on 1.17.0, and 2.7.2.0 moves
+        # B away from every source, so the collision exists on 1.17.0 and 1.17.1 only.
+        build = _synthetic_tree(
+            os.path.join(scratch, "carry-removed"),
+            [_verdict(0x1000, 0x2000), _verdict(0x2000, 0x3000)],
+            segments="text\t0x0\t0x1000000\t+0x40\n",
+        )
+        rules = build_rules(build)
+        check(
+            "a carry that moves B off every source removes the collision on that build",
+            [(c.key(), sorted(c.builds)) for c in collisions(emit(rules), carries(rules))],
+            [((0x1000, 0x2000, 0x3000), ["1.17.0", "1.17.1"])],
+        )
+
+        # A refused carry is loud, not a misroute. B's destination sits in no segment, so the
+        # second resolve on 2.7.2.0 is `Unmapped` and the collision does not exist there.
+        build = _synthetic_tree(
+            os.path.join(scratch, "carry-refused"),
+            [_verdict(0x1000, 0x2000), _verdict(0x2100, 0x3000)],
+            segments="text\t0x0\t0x2f00\t+0x100\n",
+        )
+        rules = build_rules(build)
+        check(
+            "a second resolve the carry refuses is not a collision",
+            collisions(emit(rules), carries(rules)),
+            [],
+        )
+
+        # A Carry variant this gate does not model must refuse, not be skipped: it is a build the
+        # runtime resolves for whose collisions nobody looked.
+        build = _synthetic_tree(
+            os.path.join(scratch, "carry-new-build"),
+            [],
+            extra_variant="\n    /// 2.7.3.0.\n    To1173,",
+        )
+        try:
+            build_rules(build)
+            check("an unmodelled Carry variant refuses", "no refusal", "Refuse")
+        except Refuse as refusal:
+            check("...and the refusal names it", "To1173" in str(refusal), True)
+
+        # And the carry table itself must exist; build.rs panics without it, so must this.
+        build = _synthetic_tree(os.path.join(scratch, "carry-missing"), [])
+        os.remove(os.path.join(scratch, "carry-missing", "crate", "recon", "carry.tsv"))
+        try:
+            build_rules(build)
+            check("a missing carry table refuses", "no refusal", "Refuse")
         except Refuse:
             pass
 
@@ -1564,6 +1925,18 @@ def selftest():
             set(rules["callable_only"]) & (set(rules["exhaustive"]) | set(rules["patch_site"])),
             set(),
         )
+        # The real carries, at the edges game_build.rs's own tests pin.
+        real = carries(rules)
+        check(
+            "the real 1.17.1 carry moves .text at the boundary and not below it",
+            (real["1.17.1"](0xAFEFE8), real["1.17.1"](0xAFEFE9), real["1.17.1"](0x29A5800)),
+            (0xAFEFE8, 0xAFEFE9 + 0x70, 0x29A5800),
+        )
+        check(
+            "the real 2.7.2.0 carry puts 1.16.2 0x679510's destination on 0x67a810",
+            real["2.7.2.0"](0x67A360),
+            0x67A810,
+        )
     except Refuse as refusal:
         failures.append(f"the real build.rs no longer parses: {refusal}")
 
@@ -1596,10 +1969,16 @@ def main():
         return 2
 
     tables = emit(rules)
+    carry_by_build = carries(rules)
     print(
         f"crates/er-game-base/build.rs: CALL {len(tables[CALL])} rows, "
         f"DETOUR {len(tables[DETOUR])} rows"
         + (f" (inert, not read: {', '.join(rules['inert'])})" if rules["inert"] else "")
+    )
+    print(
+        f"  scanned under every carry game_build.rs supports: {', '.join(carry_by_build)} "
+        f"({len(rules['carry']['segments'])} 2.7.2.0 segments from "
+        f"{shown(rules['paths'][CARRY_TABLE])})"
     )
 
     # Cross-check the model against a table cargo really wrote, when a fresh one exists. A
@@ -1618,7 +1997,10 @@ def main():
             # Routes count, not just the triples: which table carries a collision decides whether
             # it can misplace a detour, and it is what the baseline's escalation check compares.
             def fingerprint(rows):
-                return [(c.key(), sorted(c.routes)) for c in collisions(rows)]
+                return [
+                    (c.key(), sorted(c.routes), sorted(c.builds))
+                    for c in collisions(rows, carry_by_build)
+                ]
 
             same_verdict = fingerprint(shadow) == fingerprint(tables)
             print(
@@ -1638,26 +2020,39 @@ def main():
     elif why_not:
         print(f"  generated-map cross-check skipped: {why_not}")
 
-    found = collisions(tables)
+    found = collisions(tables, carry_by_build)
     baseline = read_baseline()
     known, novel, escalated = [], [], []
     for collision in found:
         recorded = baseline.get(collision.key())
         if recorded is None or args.strict:
             novel.append(collision)
-        elif collision.routes - recorded["routes"]:
+        elif collision.routes - recorded["routes"] or collision.builds - recorded["builds"]:
             escalated.append((collision, recorded))
         else:
             known.append(collision)
     stale = [key for key in baseline if key not in {c.key() for c in found}]
+    # A recorded collision that has left a build it was recorded on. Not a failure -- the hazard
+    # shrank -- but the baseline now overstates it, so it is named rather than left to drift.
+    receded = [
+        (c, baseline[c.key()]["builds"] - c.builds)
+        for c in known
+        if baseline[c.key()]["builds"] - c.builds
+    ]
 
     if known:
         print(f"\n{len(known)} KNOWN collision(s), recorded in {os.path.relpath(BASELINE, ROOT)} and NOT fixed:")
         for collision in known:
             note = baseline[collision.key()]["note"]
-            print(f"  {collision.label()}   {note}")
+            print(f"  {collision.label()}   on {', '.join(build_order(collision.builds))}   {note}")
             if args.list:
                 describe(collision, sys.stdout, tables)
+
+    for collision, gone in receded:
+        print(
+            f"\nBASELINE OVERSTATES {collision.label()}: recorded on "
+            f"{', '.join(build_order(gone))} as well, where it no longer exists. Narrow its builds column."
+        )
 
     if stale:
         print(f"\nBASELINE STALE -- {len(stale)} recorded collision(s) no longer exist. Delete from")
@@ -1680,15 +2075,18 @@ def main():
                 file=sys.stderr,
             )
             if COSTLESS_CLAIM.search(note):
-                for name, (kind, landing) in sorted(
-                    deletion_failure_mode(tables, collision).items()
-                ):
-                    where = f" -> 0x{landing:x}" if landing is not None else ""
-                    print(
-                        f"    ...and on the {name} map a later request for "
-                        f"0x{collision.address:x} after that deletion would be {kind}{where}.",
-                        file=sys.stderr,
-                    )
+                for build in build_order(collision.builds) or [IDENTITY_BUILD]:
+                    for name, (kind, landing) in sorted(
+                        deletion_failure_mode(
+                            tables, collision, collision.carries.get(build)
+                        ).items()
+                    ):
+                        where = f" -> 0x{landing:x}" if landing is not None else ""
+                        print(
+                            f"    ...and on the {build} {name} map a later request for "
+                            f"0x{collision.address:x} after that deletion would be {kind}{where}.",
+                            file=sys.stderr,
+                        )
                 continue
             if claims is None:
                 print("    ...and the symbol resolver could not run to check it.", file=sys.stderr)
@@ -1723,10 +2121,15 @@ def main():
     for collision, recorded in escalated:
         print(
             f"\nESCALATED: the known collision {collision.label()} now also applies to "
-            + ", ".join(sorted(collision.routes - recorded["routes"]))
-            + f"\n  (it was recorded as {','.join(sorted(recorded['routes']))}). A collision that "
+            + ", ".join(
+                sorted(collision.routes - recorded["routes"])
+                + build_order(collision.builds - recorded["builds"])
+            )
+            + f"\n  (it was recorded as {','.join(sorted(recorded['routes']))} on "
+            f"{','.join(build_order(recorded['builds']))}). A collision that "
             "reaches the DETOUR map is\n  no longer only a wrong call target: MinHook writes five "
-            "bytes at the wrong address.",
+            "bytes at the wrong address, and one that reaches a new build is live wherever that "
+            "build runs.",
             file=sys.stderr,
         )
         describe(collision, sys.stderr, tables)

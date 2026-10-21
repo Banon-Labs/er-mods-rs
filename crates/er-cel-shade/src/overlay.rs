@@ -1,8 +1,23 @@
 //! Joining the process's one imgui overlay, hosting it only if nothing else does, the way
 //! `er-npc-summons` does: two `Hudhook::apply()` calls in one process double-hook `Present` and the
 //! second renders nothing, which is why `er_build_watermark_core::overlay_host` exists.
+//!
+//! # A panic in the panel
+//!
+//! [`guest_draw`] is `extern "C"`, so a panic unwinding out of it would abort the game. The
+//! Shaders panel is drawn inside `catch_unwind`: imgui-rs's tokens end its windows as the panic
+//! unwinds, and after one the panel is hidden for the session (`menu::hide_for_session`). The
+//! per-present staging and publishing run after it in a `catch_unwind` of their own, so the look
+//! and the layers keep drawing whatever became of the panel.
+//!
+//! # Fonts
+//!
+//! The panel's fonts live in the host's atlas, whichever module hosts, so each frame the guest
+//! reads out of the frame the host passed which of them are built (`menu::theme::frame_fonts`)
+//! and hands that to the panel. Until they are, the panel draws in the host's default font.
 
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use er_build_watermark_core::overlay_host::{
@@ -21,7 +36,26 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    crate::menu::draw(ui);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { crate::menu::theme::frame_fonts(frame) };
+    if catch_unwind(AssertUnwindSafe(|| {
+        crate::menu::draw_ui(ui, ui_scale, &fonts);
+    }))
+    .is_err()
+    {
+        crate::menu::hide_for_session();
+    }
+    static END_FAILED: AtomicBool = AtomicBool::new(false);
+    if catch_unwind(AssertUnwindSafe(|| crate::menu::end_frame(ui))).is_err()
+        && !END_FAILED.swap(true, Ordering::Relaxed)
+    {
+        log(format_args!(
+            "overlay: a panic while staging the frame's parameters; logged once, the panic hook \
+             has where"
+        ));
+    }
 }
 
 struct CelShadeOverlay;
@@ -65,7 +99,11 @@ pub fn install(hmodule_raw: usize) {
         er_build_watermark_core::OverlayClaim::NoWindow => {
             INSTALLED.store(false, Ordering::SeqCst);
             log(format_args!(
-                "overlay: no game window, so the menu cannot be drawn"
+                "overlay: no game window, so nothing runs once a present: no menu, the saved look \
+                 cannot change live, and the present count the probe's clock runs on stays 0. \
+                 The light bands and outlines still draw with the saved look; layers, the cel \
+                 layers among them, do not, because their parameters are published once a \
+                 present."
             ));
             return;
         }
@@ -86,7 +124,13 @@ pub fn install(hmodule_raw: usize) {
         }
         Err(error) => {
             INSTALLED.store(false, Ordering::SeqCst);
-            log(format_args!("overlay: hudhook install failed: {error:?}"));
+            log(format_args!(
+                "overlay: hudhook install failed ({error:?}), so nothing runs once a present: no \
+                 menu, the saved look cannot change live, and the present count the probe's \
+                 clock runs on stays 0. The light bands and outlines still draw with the saved \
+                 look; layers, the cel layers among them, do not, because their parameters are \
+                 published once a present."
+            ));
         }
     }
 }

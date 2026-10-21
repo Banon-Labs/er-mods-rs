@@ -136,6 +136,9 @@ members = [
   "crates/er-build-watermark",
   # Cel shading: swaps the deferred-lighting pixel shaders at D3D12 pipeline creation.
   "crates/er-cel-shade",
+  # The shader editor's compiler: the pipe protocol er-cel-shade speaks, and
+  # `er-shader-compiler.exe`, the helper that runs dxcompiler.dll out of the game's process.
+  "crates/er-shader-compiler",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
   # Which mods in this profile are fighting over the same key, and does the game already use it.
@@ -242,5 +245,10 @@ all = { level = "deny", priority = -1 }
 # `Pipeline::new` returns `Err(E_HANDLE)` when the window cannot be sized, which puts the failure
 # down hudhook's own "pipeline not initialised" path. 0.9.2 is the latest published version, so
 # there is nothing to upgrade to instead.
+#
+# A second patch, in `renderer/input.rs`: upstream turned every `WM_CHAR` into a `char` with
+# `char::from_u32(..).unwrap()`, and a UTF-16 surrogate half -- any emoji typed into an overlay
+# text field -- is not one, so typing it aborted the game from inside its window procedure. The
+# patch hands the code unit to `ImGuiIO_AddInputCharacterUTF16`, which pairs the halves itself.
 [patch.crates-io]
 hudhook = { path = "third_party/hudhook" }

@@ -3,9 +3,9 @@
 regulation has, by what each does for that build.
 
     python3 scripts/er-mechanics-rune-tears.py "Poleblade of the Bud" --affinity Standard \\
-        --stats vig=58,mnd=8,vit=38,str=20,dex=22,int=7,fth=8,arc=68
+        --stats vig=58,mnd=8,end=38,str=20,dex=22,int=7,fth=8,arc=68
     python3 scripts/er-mechanics-rune-tears.py Uchigatana --affinity Keen --two-handed \\
-        --stats vig=50,mnd=10,vit=30,str=18,dex=60,int=9,fth=9,arc=12 --fight duel --role host --json
+        --stats vig=50,mnd=10,end=30,str=18,dex=60,int=9,fth=9,arc=12 --fight duel --role host --json
     python3 scripts/er-mechanics-rune-tears.py --selftest
 
 The pool is read, never listed: every `EquipParamGoods` row with `goodsType` 15 (great runes) or
@@ -91,6 +91,8 @@ TEAR_SLOTS = 2
 #: `stats` sum minus this is the rune level (`er-builds-optimize.LEVEL_OFFSET`).
 LEVEL_OFFSET = 79
 DAMAGE_STATS = ('str', 'dex', 'int', 'fth', 'arc')
+#: `vit` is the planner's spelling of Endurance, still taken for `end`.
+STAT_ALIAS = {'vit': 'end'}
 ELEMENTS = ('physical', 'magic', 'fire', 'lightning', 'holy')
 #: `er-mechanics-armor-targets.TYPES`: the incoming-damage shares are keyed by these.
 DAMAGE_TYPES = ('slash', 'strike', 'pierce', 'standard', 'magic', 'fire', 'lightning', 'holy')
@@ -347,7 +349,7 @@ class Build:
         self.sched, self.sched_info = ctx.schedule(fight)
         self.attackers = attackers or B.FIGHT_KINDS[fight]['attackers']
         self.weapon, self.affinity, self.level, self.two_handed = weapon, affinity, level, two_handed
-        self.stats = dict(stats)
+        self.stats = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
         self.talismans, self.armor = tuple(talismans), tuple(armor)
         self.grease = grease
         self.defender = defender or ctx.defender()
@@ -366,7 +368,7 @@ class Build:
         self.mean_hit0 = base['mean_hit']
 
     def _def_stats(self):
-        return {('end' if k == 'vit' else k): v for k, v in self.stats.items()}
+        return dict(self.stats)
 
     def rating(self, adds, rate_adds):
         """({element: AR}, {status: build-up}) with attribute `adds` rounded to whole points and
@@ -698,7 +700,7 @@ def pick(weapon, affinity, level, stats, two_handed=False, role=None, fight=B.DE
     `top` (kits kept in `scores`), `mirror`. Returns `great_rune`, `crystal_tears`, `scores`
     (best kits with their terms), `runes` and `tears` (each item alone, with what is not valued),
     `unvalued`, `role`, `rule`."""
-    rl = kw.get('rl') or sum(stats[k] for k in ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')) - LEVEL_OFFSET
+    rl = kw.get('rl') or sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - LEVEL_OFFSET
     ctx = kw.get('context') or Context(rl, kw.get('window', 10), kw.get('mirror', CORPUS))
     weights = resolve_role(default_role(fight) if role is None else role, ctx.roles)
     b = Build(ctx, weapon, affinity, level, stats, two_handed, kw.get('talismans', ()), kw.get('armor', ()),
@@ -809,7 +811,7 @@ def _parse_stats(s):
     out = {}
     for part in s.split(','):
         k, v = part.split('=')
-        out[k.strip().lower()] = int(v)
+        out[STAT_ALIAS.get(k.strip().lower(), k.strip().lower())] = int(v)
     return out
 
 
@@ -818,7 +820,7 @@ def main():
     ap.add_argument('weapon', nargs='?')
     ap.add_argument('--affinity', default='Standard')
     ap.add_argument('--level', type=int, help='upgrade level (default the weapon\'s highest)')
-    ap.add_argument('--stats', help='planner keys: vig,mnd,vit,str,dex,int,fth,arc')
+    ap.add_argument('--stats', help='vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)')
     ap.add_argument('--two-handed', action='store_true')
     ap.add_argument('--fight', default=B.DEFAULT_FIGHT, choices=tuple(B.FIGHT_KINDS))
     ap.add_argument('--role', choices=('corpus',) + ROLES,
@@ -834,7 +836,7 @@ def main():
     if not a.weapon or not a.stats:
         ap.error('name a weapon and --stats')
     stats = _parse_stats(a.stats)
-    rl = sum(stats[k] for k in ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')) - LEVEL_OFFSET
+    rl = sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - LEVEL_OFFSET
     ctx = Context(rl, a.window)
     level = a.level
     if level is None:
@@ -911,7 +913,7 @@ def selftest():
         check(f'{n} is in the pool', n in names, True)
     ctx = Context(150, 10)
     b = Build(ctx, 'Poleblade of the Bud', 'Standard', 10,
-              {'vig': 58, 'mnd': 8, 'vit': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68})
+              {'vig': 58, 'mnd': 8, 'end': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68})
     ar = B.ar_stat_ratio('Poleblade of the Bud', 'Standard', 10, {k: b.stats[k] for k in DAMAGE_STATS}, False,
                          ctx.tables)({'str': 5, 'dex': 5, 'arc': 5})
     mine = b.rating({'str': 5, 'dex': 5, 'arc': 5}, {})[0]

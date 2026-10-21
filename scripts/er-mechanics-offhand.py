@@ -112,7 +112,7 @@ def corpus(mirror: Path, lo: int, hi: int) -> list[dict]:
         load = None
         if prof is not None and None not in rw and None not in lw:
             load = {**prof, "total": prof["rest"] + (max(rw) if rw else 0.0), "left_max": max(lw, default=0.0)}
-        out.append({"stats": {k: st[k] for k in DAMAGE_STATS}, "end": st["vit"], "right": right, "left": left,
+        out.append({"stats": {k: st[k] for k in DAMAGE_STATS}, "end": st["end"], "right": right, "left": left,
                     "load": load, "cls": b.get("characterClass")})
     return out
 

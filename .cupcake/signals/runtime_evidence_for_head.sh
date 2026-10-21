@@ -20,9 +20,9 @@
 #   `MISSING`    no run did. This is the case that denies.
 #   `NOTRUNTIME` the commits about to be pushed touch no crate that ships in a DLL, so there is
 #                nothing for a run to prove. Never denies.
-#   `UNKNOWN`    the signal could not measure (no git, no log directory, unreadable). Never denies:
-#                a guard that cannot see must not invent a verdict, and the pre-push hook plus
-#                CI still stand behind it.
+#   `UNKNOWN`    the signal could not measure (no git, no log directory, unreadable, too slow), or
+#                the command is not a push. Never denies: a guard that cannot see must not invent
+#                a verdict, and the pre-push hook plus CI still stand behind it.
 #
 # One word with no fields, because the parsing is easier to selftest in bash than in rego, and the
 # prose belongs to the sibling signal `runtime_evidence_note`, which the policy interpolates but
@@ -51,10 +51,20 @@
 # running -- newer file, older code -- which is the exact failure being guarded, made inside the
 # guard.
 #
-# Safe to run on every Bash call, and measured rather than asserted: ~0.1s warm, ~1.2s the first
-# time a new tip is seen, no network. It writes nothing but its own memo under `XDG_RUNTIME_DIR`.
-# The version that read the whole run root and walked the reverse-dependency graph once per log
-# line took over 45 seconds, which one gate then paid 176 times.
+# The verdict on a push is the verdict of `scripts/check-runtime-evidence.sh`, the script the
+# pre-push hook runs, called here rather than copied. Until 2026-10-19 this file kept its own
+# carry-forward in a heredoc over a capped scan -- the newest two build shas only, on the theory
+# that an older sha reaches the tip across strictly more commits. That holds on one branch and
+# fails across several: the newest logs were another branch's tip (`90f5bcf6`), the run proving
+# this branch's ancestor (`f8716805`, two docs/scripts-only commits under the tip `581fb93f`) sat
+# in an older run directory past the cap, and this answered `MISSING` for a push the pre-push hook
+# then accepted. One script deciding for both is how they stop disagreeing.
+#
+# Cost: a Bash call that is not a push answers before any evidence is read, so the warm path is
+# still three git reads. A push pays the pre-push script's exhaustive scan, ~0.1s when a log names
+# the tip and a few seconds when every older run has to be tried for carry-forward; the rulebook
+# registers this signal with a 30 s timeout for that case, because a discovered signal is dropped
+# at 5 s and a dropped signal is an allow.
 set -uo pipefail
 
 # The regression tests drive the policy through this, the same way the branch guards use
@@ -135,141 +145,51 @@ if ! grep -q '^crates/' <<<"$changed"; then
   exit 0
 fi
 
-# The changed paths go in on stdin because the scan needs them: a `+dirty` log is only accepted
-# when the shell that wrote it compiles every crate this push changes.
-evidence="$(printf '%s\n' "$changed" |
-  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null)"
+# Nothing is being pushed, so there is nothing to judge, and the exhaustive scan below is not paid
+# on every Bash call. The policy reads this verdict only for a push. A run with no event at all is
+# someone at a terminal asking, and gets the full answer.
+if [ -n "$event" ] && ! grep -q 'push' <<<"$event"; then
+  printf 'UNKNOWN'
+  exit 0
+fi
+
+# The verdict is `scripts/check-runtime-evidence.sh`'s, run the way `scripts/hooks/pre-push` runs
+# it: from the top of the working tree being pushed, that tree's own copy of the script, with the
+# variables that pin a repository unset. See the header for the disagreement this replaced.
+toplevel="$(git_at rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -n "$toplevel" ] || exit 0
+checker="$toplevel/scripts/check-runtime-evidence.sh"
+[ -f "$checker" ] || checker="$repo_root/scripts/check-runtime-evidence.sh"
+[ -f "$checker" ] || exit 0
+
+# 25 s, inside the 30 s the rulebook gives this signal, so a slow scan comes back as `UNKNOWN`
+# from here rather than as a dropped signal.
+report="$(
+  cd "$toplevel" || exit 2
+  # shellcheck disable=SC2046 # word splitting is the point: one variable name per word
+  unset $(git rev-parse --local-env-vars 2>/dev/null)
+  timeout 25 bash "$checker" "$head_sha" 2>&1 >/dev/null
+)"
 status=$?
 
 case "$status" in
 0)
-  printf 'OK'
-  exit 0
+  # Every allow the pre-push script has, told apart by the line it prints for each. A crate change
+  # it does not count -- a deletion, under its `--diff-filter=d` -- prints nothing at all.
+  if [ -z "$report" ]; then
+    printf 'NOTRUNTIME'
+  elif grep -q 'unmeasurable' <<<"$report"; then
+    printf 'UNKNOWN'
+  else
+    printf 'OK'
+  fi
   ;;
-2)
-  printf 'UNKNOWN'
-  exit 0
+1)
+  printf 'MISSING'
   ;;
-1) ;;
 *)
-  # The scanner itself failed. That is not a verdict.
+  # A timeout, or the script itself failed. That is not a verdict.
   printf 'UNKNOWN'
-  exit 0
   ;;
 esac
-
-# No log names this commit, but a run may still have executed the same code. The tip proves out
-# when it adds nothing cargo would compile on top of a sha that ran -- otherwise this guard demands
-# a rebuild and a relaunch to publish a shell script, and a guard that fires on everything is one
-# the next agent overrides by reflex.
-#
-# scripts/er-change-scope.py answers it, the same reverse-dependency walk the compile gate uses:
-# `--rust-touched` exits 3 for "provably no cargo work required" and 0 otherwise, and it fails open
-# on a git failure, an unresolvable base, or any build input outside a single crate directory. So it
-# can only forgive a diff that provably cannot change a DLL. It agrees with
-# scripts/check-runtime-evidence.sh by construction: two enforcement points that answer differently
-# about one push teach the next agent to ignore whichever is louder.
-#
-# Deduplicated and capped by the scanner, which the pre-push copy does not need to be. This signal
-# runs on every single Bash tool call, and every attempt is a whole reverse-dependency walk: the
-# first version tried one per matching log line, and the run root here holds hundreds of them across
-# a dozen builds. It took over 45 seconds to answer, on a signal whose header promises three git
-# reads and a stat. The newest builds are the only ones a live branch can carry forward from anyway
-# -- an older sha reaches the tip across strictly more commits, so if the newest cannot forgive the
-# diff, an older one cannot either.
-# Memoised, because one gate charges this signal 176 times. `scripts/test-cupcake-policies.py`
-# drives that many `cupcake eval` spawns and every one of them runs every signal, so a walk that
-# costs half a second lands as minutes on the suite. The answer is a pure function of the two
-# commit shas -- `--rev` reads the commit, not the working tree -- so it is safe to keep, and it is
-# keyed by both shas so it cannot be served for a different pair.
-# The candidate lines go in as an argument rather than on stdin: the heredoc below is itself the
-# program, so a pipe into it would be swallowed (shellcheck SC2259) and every carry-forward would
-# quietly find no candidates at all.
-#
-# No `-C` down here, and that is not an oversight. Everything below is driven by the two shas, and
-# `cupcake_push_target_repo.py` only ever names a working tree of this same repository -- one
-# object store, shared by every working tree of it -- so `git diff <built>..<tip>` reads the same
-# commits from either directory. The reads that could not be answered from here are the ones that
-# depend on which tree is checked out (`HEAD`, and the diff against `origin/main`), and those are
-# the ones that moved.
-python3 - "$head_sha" "$repo_root" "$evidence" <<'PY'
-import os
-import pathlib
-import subprocess
-import sys
-
-head_sha = sys.argv[1]
-repo_root = pathlib.Path(sys.argv[2])
-
-candidates = []
-for line in sys.argv[3].splitlines():
-    parts = line.split()
-    if len(parts) >= 2 and parts[0] == "candidate" and parts[1] not in candidates:
-        candidates.append(parts[1])
-
-cache_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-evidence"
-try:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-except OSError:
-    cache_dir = None
-
-
-# The roots a diff may be confined to and still carry forward, kept identical to
-# scripts/check-runtime-evidence.sh. `er-change-scope.py` treats `.github/` as a build input and
-# widens to everything, which is right for "what must CI re-run" and wrong for "could this change
-# the DLL" -- a workflow file cannot end up inside one. All nine build scripts in the workspace
-# were read for the paths they open and the processes they spawn, and none reaches any of these
-# three; the only `Command::new` in any of them is `git`. `docs/` is deliberately absent, because
-# `crates/er-game-base/build.rs` reads `docs/recon/*.tsv`.
-SAFE_ROOTS = (".github/", ".cupcake/", "scripts/")
-
-
-def confined_to_safe_roots(built):
-    diff = subprocess.run(
-        ["git", "diff", "--name-only", f"{built}..{head_sha}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if diff.returncode != 0:
-        return False
-    paths = [line for line in diff.stdout.splitlines() if line]
-    return bool(paths) and all(p.startswith(SAFE_ROOTS) for p in paths)
-
-
-def adds_no_cargo_work(built):
-    cached = cache_dir / f"{head_sha}-{built}" if cache_dir else None
-    if cached is not None:
-        try:
-            return cached.read_text() == "3"
-        except OSError:
-            pass
-    probe = subprocess.run(
-        [
-            "python3",
-            str(repo_root / "scripts" / "er-change-scope.py"),
-            "--rust-touched",
-            "--base",
-            built,
-            "--rev",
-            head_sha,
-        ],
-        capture_output=True,
-        check=False,
-    )
-    verdict = probe.returncode == 3 or confined_to_safe_roots(built)
-    if cached is not None:
-        try:
-            cached.write_text("3" if verdict else "0")
-        except OSError:
-            pass
-    return verdict
-
-
-for built in candidates:
-    if adds_no_cargo_work(built):
-        print("OK", end="")
-        raise SystemExit(0)
-
-print("MISSING", end="")
-PY
+exit 0

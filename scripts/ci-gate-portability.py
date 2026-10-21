@@ -147,6 +147,26 @@ DEP_PROBES = {
     "uv": lambda root: shutil.which("uv") is not None,
     # Lua 5.1 compiler, for the syntax half of check-ai-lua-dialect.py.
     "luac5.1": lambda root: shutil.which("luac5.1") is not None,
+    # DXC, for the half of `build-cel-shaders.py --check` that recompiles the shader ports and
+    # compares them with the committed blobs. Found where that script looks: `$DXC`, else the
+    # layout `er-shaderlab setup` installs.
+    "dxc": lambda root: any(
+        Path(candidate).is_file()
+        for candidate in (os.environ.get("DXC"), Path.home() / "tools/dxc/bin/dxc")
+        if candidate
+    ),
+    # The vkd3d-proton shader dump the game's original passes are read from, for the half of
+    # `build-cel-shaders.py --check` that proves each port links like its original. Game-derived,
+    # so never committed; found where that script looks: `$ER_VKD3D_DUMP_ROOT`, else under the
+    # nearest directory from the checkout upward that has it.
+    "vkd3d-dump": lambda root: (
+        Path(os.environ["ER_VKD3D_DUMP_ROOT"]).is_dir()
+        if os.environ.get("ER_VKD3D_DUMP_ROOT")
+        else any(
+            (base / ".worktrees/er-shaders/target/vkd3d-dump/run1/spv").is_dir()
+            for base in (root.resolve(), *root.resolve().parents)
+        )
+    ),
     # A usable `origin/main` baseline -- the ref and a merge base with head. Both halves are load
     # bearing and were learned the hard way: fetching the ref alone left `git merge-base
     # origin/main head` still failing on a shallow clone, and er-dll-closure.py --selftest then

@@ -215,6 +215,38 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	fi
 	echo "[check-rust-build] recorded provenance for $(( ${#me3_shells[@]} + 1 )) artifacts"
 
+	# The executables a shell spawns beside it (scripts/me3-dll-list.py `COMPANIONS`) -- today the
+	# shader editor's compiler helper, er-shader-compiler.exe. The shell link above never builds
+	# one: cargo does not build a dependency's [[bin]], so -p er-cel-shade compiles the helper's
+	# crate as a library only, and the helper's `cfg(windows)` main.rs would be linked by no gate.
+	# Linked and attested here like the shells, so a launch can verify it as it verifies the DLL.
+	companion_pkg_args=()
+	companion_files=()
+	companion_pkgs=()
+	while IFS=: read -r _shell companion file; do
+		companion_pkg_args+=(-p "$companion")
+		companion_pkgs+=("$companion")
+		companion_files+=("$file")
+	done < <(python3 "$repo_root/scripts/me3-dll-list.py" --companions)
+	if [[ ${#companion_pkgs[@]} -gt 0 ]]; then
+		echo "[check-rust-build] cargo xwin build --release ${#companion_pkgs[@]} companion(s) --target $target (LINK)"
+		cargo xwin build --release "${companion_pkg_args[@]}" \
+			--manifest-path "$repo_root/Cargo.toml" --target "$target"
+		for i in "${!companion_pkgs[@]}"; do
+			companion_file="$repo_root/target/$target/release/${companion_files[$i]}"
+			if [[ ! -f "$companion_file" ]]; then
+				echo "[check-rust-build] FAIL: companion did not link: $companion_file (package ${companion_pkgs[$i]})" >&2
+				exit 1
+			fi
+			python3 "$repo_root/scripts/er-dll-provenance.py" write \
+				--package "${companion_pkgs[$i]}" --artifact "$companion_file" >/dev/null || {
+				echo "[check-rust-build] FAIL: could not record provenance for $companion_file" >&2
+				exit 1
+			}
+		done
+		echo "[check-rust-build] linked and attested ${#companion_pkgs[@]} companion(s)"
+	fi
+
 	# The installer, built the way a release builds it: carrying every shell just linked above.
 	# This is the only place in the suite where that combination exists, which is why it lives
 	# here rather than in a gate of its own -- `tools/er-installer/build.rs` needs the DLLs to
@@ -255,8 +287,8 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	#
 	# `scripts/check-lint-parity.py` asserts the configuration; this asserts the code.
 	echo "[check-rust-build] cargo xwin clippy --all-targets (lint parity with ../fromsoftware-rs)"
-	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-quickload --all-targets \
-		--manifest-path "$repo_root/Cargo.toml" --target "$target"
+	cargo xwin clippy --release "${shell_pkg_args[@]}" "${companion_pkg_args[@]}" -p er-quickload \
+		--all-targets --manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# Feature matrix. `er-quit-menu-core` takes `er-save-picker-core` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface without the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above

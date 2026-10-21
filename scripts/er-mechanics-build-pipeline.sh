@@ -4,7 +4,7 @@
 # was made with, then upload it.
 #
 #   bash scripts/er-mechanics-build-pipeline.sh --prefix bleed --class Hero \
-#       --stats vig=56,mnd=9,vit=41,str=54,dex=9,int=7,fth=8,arc=45 --affinity Blood \
+#       --stats vig=56,mnd=9,end=41,str=54,dex=9,int=7,fth=8,arc=45 --affinity Blood \
 #       --name "Bleed Warped Axe RL150" [--focus "Warped Axe:Blood"] [--gear gear.json] [--update <planner id>] [--dir <dir>]
 #       [--no-upload]    # stop once <prefix>-plan.json is written
 #
@@ -73,9 +73,10 @@ if ! fresh "$B" "$BASE_JSON" ${GEAR:+"$GEAR"}; then
     # `computed` is the planner's cache of what the stats give; the loadout and the shield pass read
     # max HP, stamina and equip load from it, so it is recomputed for the new stats with
     # `er-mechanics-resources.Model` (which reproduces the planner's numbers) rather than kept stale.
+    # The planner document spells Endurance `vit`, so `end=` is written under that key.
     jq --arg c "$CLASS" --arg n "$NAME" --arg s "$STATS" '
         .characterClass = $c | .name = $n
-        | .stats += ($s | split(",") | map(split("=") | {(.[0]): (.[1] | tonumber)}) | add)' \
+        | .stats += ($s | split(",") | map(split("=") | {(if .[0] == "end" then "vit" else .[0] end): (.[1] | tonumber)}) | add)' \
         "$BASE_JSON" | python3 -c "
 import importlib.util, json, sys
 def load(name, path):
@@ -90,7 +91,7 @@ if sys.argv[1]:   # the armor and talismans the upload will equip, so equip load
 worn = lambda slots: [s['name'] for s in slots or [] if s.get('equipSet') or s.get('equipIndex') is not None]
 tal = worn((b.get('talismans') or {}).get('slots'))
 arm = [n for p in (b.get('protectors') or {}).values() for n in worn(p.get('slots'))]
-r = R.Model().resources(b['stats'], tal, arm, b.get('greatRune'))
+r = R.Model().resources(R.from_planner(b['stats']), tal, arm, b.get('greatRune'))
 b['computed'] = dict(b.get('computed') or {}, maxHealth=r['max_hp'], maxFP=int(r['max_fp']),
                      maxStamina=r['max_stamina'], maxEquipLoad=r['max_equip_load'])
 json.dump(b, sys.stdout)" "$GEAR" > "$B"

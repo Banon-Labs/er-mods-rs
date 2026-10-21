@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,996 |
+| all `experiments/**` | 76 | 42,012 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -259,7 +259,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle.rs` | 25 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 116 | product install ordering | `STAY` |
 | `lifecycle/task_tick.rs` | 449 | product recurring-task scheduling | `STAY` |
-| `lifecycle/title_visual_startup.rs` | 156 | product startup arming/order | R22 |
+| `lifecycle/title_visual_startup.rs` | 157 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
 | `menu_diag/menu_observation.rs` | 822 | product menu observation | D4 |
@@ -288,7 +288,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/mod.rs` | 79 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 971 | Scaleform resource and profile-table families | D2 and R24 |
-| `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
+| `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 54 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,228 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,213 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 830 | title message-box and Scaleform families | R22 and R24 |

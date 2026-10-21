@@ -66,6 +66,7 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub(crate) mod guards;
+pub(crate) mod mid_hooks;
 pub(crate) mod patches;
 
 use std::{
@@ -167,6 +168,7 @@ fn spawn_install_task() {
             GAME_BASE.store(base, Ordering::SeqCst);
             install_guards(base);
             install_patches(base);
+            install_mid_hooks(base);
         });
 }
 
@@ -500,6 +502,120 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
         patch.rationale
     ));
     Outcome::Armed
+}
+
+/// Install every mid hook in the registry.
+///
+/// Both addresses of a hook are offsets into a function, so both go through
+/// `resolve_call_site_rva`, and both windows are checked before anything is written. The resume
+/// address is published before the hook goes live: the routine reads it on its first call.
+#[cfg(windows)]
+fn install_mid_hooks(base: usize) {
+    log_message(format_args!(
+        "attach: {} mid hook(s); game base 0x{base:x}. Each diverts one instruction to a branch \
+         its own function already has, and otherwise runs the moved instructions unchanged.",
+        mid_hooks::REGISTRY.len()
+    ));
+    let (mut armed, mut refused, mut disarmed) = (0_usize, 0_usize, 0_usize);
+    for hook in mid_hooks::REGISTRY {
+        match install_mid_hook(hook, base) {
+            Outcome::Armed => armed += 1,
+            Outcome::Refused => refused += 1,
+            Outcome::Disarmed => disarmed += 1,
+        }
+    }
+    log_message(format_args!(
+        "mid hook complete: {armed}/{} mid hook(s) ARMED, {refused} REFUSED (no address on the \
+         running build), {disarmed} DISARMED (address resolved, bytes there are not the verified \
+         ones)",
+        mid_hooks::REGISTRY.len()
+    ));
+    if armed > 0 {
+        spawn_mid_hook_telemetry_task();
+    }
+}
+
+#[cfg(windows)]
+fn install_mid_hook(hook: &mid_hooks::MidHook, base: usize) -> Outcome {
+    use ilhook::x64::{CallbackOption, HookFlags, HookType, Hooker};
+
+    let resolve = |offset: usize| {
+        er_game_base::game_build::resolve_call_site_rva(hook.function_rva, offset, hook.name)
+            .map(|rva| base + rva)
+    };
+    let (Some(site), Some(resume)) = (resolve(hook.hook_offset), resolve(hook.resume_offset))
+    else {
+        log_message(format_args!(
+            "REFUSED {} (fn 0x{:x} + 0x{:x}, resume + 0x{:x}): no mapping for the containing \
+             function on the running build -- {}. Nothing read, nothing written.",
+            hook.name,
+            hook.function_rva,
+            hook.hook_offset,
+            hook.resume_offset,
+            er_game_base::game_build::describe_build()
+        ));
+        return Outcome::Refused;
+    };
+    let drift = "this address was already resolved for the running build, so the likeliest cause \
+                 is that another mod rewrote these bytes; the other is that the mapping is wrong";
+    if !code_window_matches(hook.name, site, hook.expected_window, drift)
+        || !code_window_matches(hook.name, resume, hook.expected_resume, drift)
+    {
+        return Outcome::Disarmed;
+    }
+    hook.resume.store(resume, Ordering::Release);
+    let hooker = Hooker::new(
+        site,
+        HookType::JmpToRet(hook.routine),
+        CallbackOption::None,
+        0,
+        HookFlags::empty(),
+    );
+    match unsafe { hooker.hook() } {
+        Ok(point) => {
+            // The hook lives as long as the process; dropping the point would unhook it.
+            core::mem::forget(point);
+            log_message(format_args!(
+                "ARMED {} @0x{site:x} (resume 0x{resume:x}; 1.16.2 fn 0x{:x} + 0x{:x}): {}",
+                hook.name, hook.function_rva, hook.hook_offset, hook.rationale
+            ));
+            Outcome::Armed
+        }
+        Err(err) => {
+            hook.resume.store(0, Ordering::Release);
+            log_message(format_args!(
+                "DISARMED {} @0x{site:x}: ilhook refused the hook: {err}",
+                hook.name
+            ));
+            Outcome::Disarmed
+        }
+    }
+}
+
+/// Report each mid hook's diversion count whenever it changes. A count that stays zero means the
+/// run never met the bug, not that the hook works.
+#[cfg(windows)]
+fn spawn_mid_hook_telemetry_task() {
+    let _ = std::thread::Builder::new()
+        .name("er-seamless-bugfixes-mid-hooks".to_owned())
+        .spawn(|| {
+            let mut reported = vec![0_u64; mid_hooks::REGISTRY.len()];
+            loop {
+                unsafe { Sleep(TELEMETRY_POLL_MS) };
+                for (index, hook) in mid_hooks::REGISTRY.iter().enumerate() {
+                    let diverted = hook.diverted.load(Ordering::Relaxed);
+                    if diverted != reported[index] {
+                        log_message(format_args!(
+                            "DIVERTED {} mid_hook_diverted_total={diverted} (+{}) -- no local \
+                             player; the game would have faulted here",
+                            hook.name,
+                            diverted.saturating_sub(reported[index]),
+                        ));
+                        reported[index] = diverted;
+                    }
+                }
+            }
+        });
 }
 
 /// Report any guard group that came up partly armed.

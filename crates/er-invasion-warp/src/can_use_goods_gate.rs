@@ -64,10 +64,21 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(windows)]
+use er_game_base::{game_build::MAPPED_FILE_VERSION_1171, mem::game_rva_measured_on};
+
 /// `CS::CanUseGoods` on 1.17. Carried from 1.16.2 `0x14068e010` with
 /// `scripts/map-rvas-1162-to-1170.py` (delta `+0xe50`, unique 43-byte signature) and recorded in
 /// `docs/recon/rva-map-1162-to-1170.verified.tsv`. Below the `0xafefe9` boundary, so 1.17.0 and
 /// 1.17.1 agree.
+///
+/// All four functions in this module are 1.17.1 rvas and reach the running build through
+/// `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`, never a 1.16.2 resolver. On 2.7.2.0
+/// they carry to `0x68f310`, `0x658200`, `0x67b5d0` and `0x9fab60`, measured with `scripts/compare-carry-bytes-1172.py`: three hold the
+/// same 24 opening bytes and the same `.pdata` length, and `GetPartyMemberInfo` differs only in
+/// its rip displacement, which reaches `GLOBAL_GameMan`'s own carry (`0x3d6d988` -> `0x3d709a8`).
+/// `CanUseGoods`' two calls to the others (`0x68effc`, `0x68f004`) carry to `0x68f4ac` and
+/// `0x68f4b4`, which call `0x67b5d0` and `0x9fab60`.
 const CAN_USE_GOODS_RVA: usize = 0x68_ee60;
 
 /// The three `EquipParamGoods` rows Seamless greys out, from the decompile's own branch:
@@ -236,7 +247,7 @@ fn can_use_break_in_item(player: usize) -> Option<bool> {
     if world_chr_man == 0 {
         return None;
     }
-    let entry = er_game_base::mem::game_rva_for_hook(CAN_USE_BREAK_IN_ITEM_RVA).ok()?;
+    let entry = game_rva_measured_on(CAN_USE_BREAK_IN_ITEM_RVA as usize, MAPPED_FILE_VERSION_1171)?;
     // SAFETY: a one-argument predicate at an address this build mapped, called on the game thread
     // the engine already calls it from. It reads three fields and calls two further predicates; it
     // writes nothing and cannot re-enter `CanUseGoods`.
@@ -257,8 +268,12 @@ fn can_use_break_in_item(_player: usize) -> Option<bool> {
 /// a zero return is taken as unreadable rather than passed on.
 #[cfg(windows)]
 fn world_has_other_players() -> Option<bool> {
-    let get_info = er_game_base::mem::game_rva_for_hook(GET_PARTY_MEMBER_INFO_RVA).ok()?;
-    let has_phantoms = er_game_base::mem::game_rva_for_hook(PARTY_HAS_NON_NPC_PHANTOMS_RVA).ok()?;
+    let get_info =
+        game_rva_measured_on(GET_PARTY_MEMBER_INFO_RVA as usize, MAPPED_FILE_VERSION_1171)?;
+    let has_phantoms = game_rva_measured_on(
+        PARTY_HAS_NON_NPC_PHANTOMS_RVA as usize,
+        MAPPED_FILE_VERSION_1171,
+    )?;
     // SAFETY: a nullary getter at an address this build mapped, on the game thread the engine
     // calls it from. It reads one field of a singleton and writes nothing.
     let info = unsafe { core::mem::transmute::<usize, GetPartyMemberInfoFn>(get_info)() };
@@ -421,21 +436,19 @@ pub unsafe fn install() -> bool {
         return true;
     }
 
-    // `game_rva_for_hook`, not `base + rva`, and not `game_rva` either.
-    //
-    // Raw arithmetic is what `check-stale-rva-calls.py` and `audit-1170-gate-bypass.py` both flag
-    // here, and they are right to: `CAN_USE_GOODS_RVA` is a 1.16.2 address and nothing in
-    // `base + rva` asks whether it still means anything on the running build. It happens to be
-    // correct on 1.17.1 -- run br-20260917-031812-b399 logged `CanUseGoods @0x14068ee60 answered`
-    // -- which is evidence about today's build, not about the next one, and the failure would be
-    // silent.
-    //
-    // The hook helper and not `game_rva` because the address is about to be handed to
-    // `register_union_hook7_runtime_derived`, which owns the single resolve. A second one is not
-    // merely redundant: `game_rva_for_hook`'s own doc records three detours installed on the wrong
-    // function that way, with no error and no log line. An address this build cannot map is
-    // refused inside the hook API instead, as `HOOK REFUSED`.
-    let Ok(entry) = er_game_base::mem::game_rva_for_hook(CAN_USE_GOODS_RVA as u32) else {
+    // `CAN_USE_GOODS_RVA` is the 1.17 address, not a 1.16.2 one, so no 1.16.2 resolver may
+    // touch it: `register_union_hook7_runtime_derived` translates nothing and only checks the
+    // running image's `.pdata` around the entry. Until 2.7.2.0 this went through
+    // `game_rva_for_hook`, which is plain `base + rva` -- right on 1.17.1 (run
+    // br-20260917-031812-b399 logged `CanUseGoods @0x14068ee60 answered`) and a detour into the
+    // middle of other code on 2.7.2.0. The 1.17.1 carry moves it, and refuses on any build it
+    // does not reach.
+    let Some(entry) = game_rva_measured_on(CAN_USE_GOODS_RVA, MAPPED_FILE_VERSION_1171) else {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: CanUseGoods has no carry from 1.17.1 to {} -- the fingers stay \
+             greyed",
+            er_game_base::game_build::describe_build()
+        ));
         return false;
     };
     // SAFETY: a seven-argument handler on a seven-argument target; `ORIG_CAN_USE_GOODS` is the

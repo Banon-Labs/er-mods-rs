@@ -1584,6 +1584,7 @@ python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
 python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
+python3 "$repo_root/scripts/test-untailed-long-run-signal.py"
 python3 "$repo_root/scripts/test-inline-user-command-signal.py"
 python3 "$repo_root/scripts/test-authorize-run-stamp-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
@@ -1599,6 +1600,7 @@ python3 "$repo_root/scripts/test-commit-authorization-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
@@ -2530,6 +2532,44 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
 # float -- so they run here rather than waiting for someone to notice the picture.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 
+# The shader editor's proof tools hold their copies of the DLL's layouts to the Rust, and nothing
+# else does: the probe checker reads the probe geometry, port kinds, stage bits, telemetry name,
+# schema and hook timings out of the sources, and the A/B proof holds the Frida agent's `StatsV1`
+# layout and exports to `exports.rs`. Without these an edit to `StatsV1`, `probe.rs` or
+# `replace.rs` passes the suite while the agent or the checker reads the wrong offsets in game.
+python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
+python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
+# The Shaders panel's pixel oracle holds its copies of the design tokens, the part names and the
+# panel telemetry's keys to theme.rs, mod.rs and exports.rs, and renders the mockup's panel in the
+# vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle that moves a token,
+# or a capture step that changes, would otherwise leave it judging the game against stale colours.
+python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
+
+# The cel ports the DLL embeds: every committed blob must be a signed shader model 6.0 pixel
+# shader, because native D3D12 refuses unsigned DXIL that vkd3d-proton accepts, so a stale or
+# unsigned blob passes every Linux run and fails on Windows. With dxc it also proves the blobs are
+# what the HLSL compiles to, and with the vkd3d dump that each links like the game's original.
+python3 "$repo_root/scripts/build-cel-shaders.py" --selftest
+python3 "$repo_root/scripts/build-cel-shaders.py" --check
+
+# The shader editor's compiler: the pipe protocol er-cel-shade and `er-shader-compiler.exe` speak,
+# the dxc argument list, the oldest dxcompiler accepted and the handshake that refuses a helper
+# from another build. A frame both sides read differently fails in game as a dead or confused
+# helper, with nothing on screen to say why.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-shader-compiler
+
+# dxcompiler.dll is Microsoft's and is fetched, never committed: nothing named like it or its
+# release zip may be tracked, `.gitignore` must keep a fetched copy out wherever it lands, and a
+# fetched copy beside the built DLL must be the pinned release's.
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --selftest
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --check
+
+# ...and er_cel_shade.dll must load where dxcompiler.dll is absent, so it may never import it:
+# the `windows` crate's `DxcCreateInstance` is a link-time import, and one call to it would add
+# one silently. The import-table reader's own cases here; the built DLL itself is read below,
+# once check-rust-build.sh has linked it.
+python3 "$repo_root/scripts/check-dll-imports.py" --selftest
+
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
@@ -3125,6 +3165,10 @@ bash "$repo_root/scripts/check-rust-build.sh"
 # DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
 # people to read past it. Above the link this step is a property of the checkout, not of the code.
 bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+
+# The linked er_cel_shade.dll imports neither dxcompiler.dll nor dxil.dll (see the selftest's
+# step above): read off the import and delay-load tables of the DLL check-rust-build.sh just made.
+python3 "$repo_root/scripts/check-dll-imports.py"
 
 # Does the committed state compile -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is

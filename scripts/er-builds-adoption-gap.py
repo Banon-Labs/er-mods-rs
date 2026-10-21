@@ -202,7 +202,7 @@ def describe(kind, rs, why, weapon, sweep):
         print(f'stay at medium roll after swapping the heaviest right-hand weapon for {cand}: {fit}/{tot}')
     print('armor-only weight', pct(r['armor_load'] for r in rs), '| max equip load', pct(r['max_load'] for r in rs))
     print('unresolved names:', collections.Counter(u for r in rs for u in r['unknown']).most_common(4))
-    print('poise', pct(r['poise'] for r in rs), '| endurance', pct(r['st']['vit'] for r in rs),
+    print('poise', pct(r['poise'] for r in rs), '| endurance', pct(r['st']['end'] for r in rs),
           '| max stamina', pct(r['stamina'] for r in rs), '| STR', pct(r['st']['str'] for r in rs))
     print('is2h', dict(collections.Counter(r['is2h'] for r in rs)), '| year',
           sorted(collections.Counter(r['date'][:4] for r in rs).items()))

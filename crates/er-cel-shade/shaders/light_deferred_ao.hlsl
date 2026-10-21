@@ -5,22 +5,40 @@
 //
 // Every register, the `cbLightAccParam` layout and the I/O signature are copied from the original
 // container's reflection (`dxc -dumpbin`), and the body follows its decompiled SPIR-V line for
-// line, so with every knob in `cel_look.hlsli` at its off value this is the vanilla pass. No root
-// signature is declared here: the game passes its own (with `CelLook` appended by the DLL) when
-// it creates the pipeline.
+// line, so with every knob in `cel_look.hlsli` at its off value and no layers this is the vanilla
+// pass. No root signature is declared here: the DLL creates this variant with the game pipeline's
+// own, which carries the editor's space42 parameters (`editor_abi.hlsli`) appended.
 //
 // With `cel_light_band_stops` above 0, the diffuse output is posterized: its Rec. 709 luminance
 // is rounded to whole steps of that many exposure stops and all three channels are scaled by one
 // factor, so hue survives and the bands sit where the eye sees them at any exposure. The diffuse
 // buffer at this point already holds the sun, the tiled point and spot lights and the ambient
 // term, which is why this one pass reaches every light in the scene.
+//
+// The bands and the outlines below are the cel look's two effects that stayed in a port when the
+// rest became layers (design 17). The outline inks the specular output as well as the diffuse,
+// and a Lighting layer's colour is the diffuse light alone; and the bands run before the outline,
+// while a layer runs after everything this file does, so a band layer would band the inked light
+// instead of inking the banded light.
+//
+// The diffuse light after cel is the Lighting stage's colour: the user's Lighting layers run on it
+// last, and the probe's AO region records it before and after them, with the view depth in metres
+// that the layers' Depth mask compares, or -1 on the sky (`er_probe_lighting_aux`).
 
 #include "cel_look.hlsli"
+#include "stage_ctx.hlsli"
 
+// The light-accumulation constants, `cbLightAccParam`, laid out as the game's own pass declares
+// them.
 cbuffer cbLightAccParam : register(b0)
 {
+    // From the clip position to view space: `mul(float4(clip.xy, depth, 1), g_InvProjMatrix)`,
+    // then divided by its `.w`.
     column_major float4x4 g_InvProjMatrix;
+    // World space to view space: `mul(normal, (float3x3)g_ViewMatrix)` turns a world normal.
     column_major float4x3 g_ViewMatrix;
+    // The rest are the game's constants for the pass, by its own names. The port reads only the
+    // `g_ssr*` ones, in the SSR variant.
     float4 g_ScreenSize;
     column_major float4x4 g_CameraMatrix;
     float4 g_specPowerParam;
@@ -47,18 +65,30 @@ cbuffer cbLightAccParam : register(b0)
     float4 g_ViewportSize;
 };
 
+// Linear filtering, wrapping at the edges.
 SamplerState SS_WrapLinear : register(s8);
+// Linear filtering, clamped at the edges.
 SamplerState SS_ClampLinear : register(s9);
+// The screen's shadow and occlusion: the pass multiplies in `min(.x, .y)`, read at `uv` with
+// `SS_WrapLinear`.
 Texture2D<float4> g_ShadowTexture : register(t32);
+// G-buffer 0: the world-space normal in `.xyz`, stored as `normal * 0.5 + 0.5`.
 Texture2D<float4> g_GBuffer0Texture : register(t0);
+// The ambient BRDF table, read at `(n dot v, gbuffer1.y)`.
 Texture2D<float4> g_AmbientBRDFTexture : register(t39);
 #ifdef CEL_SSR
+// The screen-space reflection, which the SSR variant of the pass binds.
 Texture2D<float4> g_RLRTexture : register(t44);
 #endif
+// The depth buffer: `.x` is the raw depth `ctx.depth` holds.
 Texture2D<float4> g_DepthTexture : register(t1);
+// G-buffer 1: `.x` is the metalness, `.y` the ambient BRDF table's second coordinate.
 Texture2D<float4> g_GBuffer1Texture : register(t3);
+// G-buffer 2: the base colour in `.rgb`.
 Texture2D<float4> g_GBuffer2Texture : register(t4);
+// The diffuse light before occlusion: the stage's colour starts as it times the occlusion.
 Texture2D<float4> g_IrradianceTexture : register(t6);
+// The specular light before occlusion.
 Texture2D<float4> g_SpecularAccTexture : register(t7);
 
 struct PsIn
@@ -74,6 +104,8 @@ struct PsOut
     float4 specular : SV_Target1;
 };
 
+// The light bands: `colour` with its Rec. 709 luminance rounded to whole steps of `stops`
+// exposure stops, its hue kept.
 float3 posterize(float3 colour, float stops)
 {
     float luma = max(dot(colour, float3(0.2126, 0.7152, 0.0722)), 1e-6);
@@ -91,6 +123,7 @@ float inverse_depth(int2 texel, float2 clip)
     return view.w / view.z;
 }
 
+// The world-space normal at a texel, from G-buffer 0.
 float3 normal_at(int2 texel)
 {
     return normalize(g_GBuffer0Texture.Load(int3(texel, 0)).xyz * 2.0 - 1.0);
@@ -123,6 +156,8 @@ float outline(int2 texel, float2 clip, float3 normal)
     float crease = saturate((1.0 - facing - cel_outline_crease) * 4.0);
     return max(silhouette, crease);
 }
+
+#include "editor_layers.hlsli"
 
 PsOut ps_main(PsIn input)
 {
@@ -172,7 +207,45 @@ PsOut ps_main(PsIn input)
         diffuse *= ink;
         specular_out *= ink;
     }
-    output.diffuse = float4(diffuse, 1.0);
+
+    LightingCtx ctx;
+    ctx.px = uint2(input.position.xy);
+    ctx.uv = input.uv;
+    ctx.depth = depth;
+    ctx.view_pos = view.xyz / view.w;
+    ctx.normal = normal;
+    ctx.view_normal = view_normal;
+    ctx.gbuffer1 = gbuffer1;
+    ctx.gbuffer2 = gbuffer2;
+    ctx.specular = specular_out;
+    ctx.occlusion = occlusion;
+    float3 lit = er_stage_lighting(diffuse, ctx);
+
+    // The grid is laid over the depth buffer, the texture this pass reads at `SV_Position`.
+    uint width, height;
+    g_DepthTexture.GetDimensions(width, height);
+    er_probe_record(ER_PROBE_AO_HEADER, ER_PROBE_AO_SAMPLES, ctx.px, uint2(width, height), diffuse,
+                    lit, er_probe_lighting_aux(ctx));
+
+    // The vertex proof (`docs/plans/er-shader-editor-vertex.md`, section 7.7): where the depth
+    // buffer says a surface is, whether the G-buffer's normal belongs to that surface, and the
+    // shadow on it. The depth buffer's own normal is taken from the view position's derivatives,
+    // here in uniform control flow, before the branch on the mode.
+    float3 depth_normal = cross(ddx(ctx.view_pos), ddy(ctx.view_pos));
+    if (er_vertex_proof())
+    {
+        float extent = length(depth_normal);
+        float agreement = 2.0;
+        if (extent > 0.0 && all(isfinite(depth_normal)) && all(isfinite(view_normal)))
+        {
+            agreement = abs(dot(normalize(view_normal), depth_normal / extent));
+        }
+        er_probe_vertex_record(ctx.px, uint2(width, height),
+                               asfloat(er_probe_lighting_aux(ctx)), agreement, occlusion,
+                               dot(irradiance.rgb, ER_MASK_LUMA_WEIGHTS));
+    }
+
+    output.diffuse = float4(lit, 1.0);
     output.specular = float4(specular_out, 1.0);
     return output;
 }

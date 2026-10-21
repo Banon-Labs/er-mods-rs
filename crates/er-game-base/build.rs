@@ -612,6 +612,62 @@ fn assert_patch_sites_acknowledged(root_dir: &str) {
     }
 }
 
+/// The 1.17.1 to 2.7.2.0 carry, derived from both de-Arxan'd images by
+/// `scripts/map-rvas-1171-to-1172.py --write`. Each row is `kind, old_lo, old_hi, delta`.
+const CARRY_1171_TO_1172_TSV: &str = "../../docs/recon/carry-1171-to-1172.tsv";
+
+/// `CARRY_1171_TO_1172` as Rust: text and data rows merged, sorted by start.
+///
+/// A missing or empty file is a build failure rather than an empty table, because an empty table
+/// refuses every address on 2.7.2.0 and reads, in a log, exactly like a real refusal.
+fn carry_1171_to_1172(root_dir: &str) -> String {
+    let path = Path::new(root_dir).join(CARRY_1171_TO_1172_TSV);
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}; regenerate it", path.display()));
+    let mut rows: Vec<(u32, u32, i64)> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert!(
+            fields.len() == 4,
+            "{}: malformed row {line:?}",
+            path.display()
+        );
+        let hex = |s: &str| u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap();
+        let delta = fields[3];
+        let magnitude = i64::from_str_radix(
+            delta
+                .trim_start_matches(['+', '-'])
+                .trim_start_matches("0x"),
+            16,
+        )
+        .unwrap();
+        rows.push((
+            hex(fields[1]),
+            hex(fields[2]),
+            if delta.starts_with('-') {
+                -magnitude
+            } else {
+                magnitude
+            },
+        ));
+    }
+    assert!(!rows.is_empty(), "{} has no rows", path.display());
+    rows.sort_unstable();
+    let mut out = format!(
+        "#[allow(dead_code)]\npub(crate) const CARRY_1171_TO_1172: [(u32, u32, i32); {}] = [\n",
+        rows.len()
+    );
+    for (lo, hi, delta) in rows {
+        out.push_str(&format!("    ({lo:#x}, {hi:#x}, {delta}),\n"));
+    }
+    out.push_str("];\n");
+    out
+}
+
 /// Emit the translation table `er-hook` consults when the running build is not 1.16.2.
 fn emit_address_map(root_dir: &str) {
     assert_patch_sites_acknowledged(root_dir);
@@ -769,6 +825,7 @@ fn emit_address_map(root_dir: &str) {
         out.push_str(&format!("    ({old:#x}, {new:#x}),\n"));
     }
     out.push_str("];\n");
+    out.push_str(&carry_1171_to_1172(root_dir));
     let out_dir = env::var("OUT_DIR").unwrap();
     std::fs::write(Path::new(&out_dir).join("address_map_1170.rs"), out).unwrap();
 }

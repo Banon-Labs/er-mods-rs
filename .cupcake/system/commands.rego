@@ -295,7 +295,11 @@ odd_span_blanked(index, text) := text if {
 	index % 2 == 0
 }
 
-odd_span_blanked(index, text) := blanked_anchors(text) if {
+# A backtick in a quoted span is blanked here and not in blanked_anchors, which heredoc bodies
+# share: a backtick in an unquoted heredoc body still runs, so it must stay visible to
+# substitution_free. A quoted span only reaches this point once substitution_free has proved
+# every backtick in the text sits inside single quotes.
+odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 	index % 2 == 1
 }
 
@@ -411,24 +415,179 @@ shell_payloads_deep(text) := deep if {
 # Heredoc bodies are DATA for the command reading them, so their contents get
 # the same treatment as a quoted operand -- unless a shell is what reads them,
 # in which case the body stays raw (fail closed) and its separators keep working.
+#
+# The body starts on the line after the opener. The rest of the opener's own line is
+# code -- `git commit -F - <<'EOF' > log 2>&1; tail -n 12 log` -- and until 2026-10-15
+# it was blanked with the body, so its separators vanished. Measured that day: the
+# `tail -n` above was read as `git commit -n` by `git_block_no_verify`, and by the same
+# cut a `; git push origin main` on the opener line lost its command position for every
+# guard. A shell named on the opener line (`cat <<'EOF' | bash`) reads the body as a
+# program, so that body stays raw as well.
+#
+# A quoted tag (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) makes the body literal: nothing in it
+# expands, so a backtick or a `$(` there is prose, and it is blanked with the anchors.
+# Until 2026-10-16 it was not, so `scannable` gave up on the whole text and a commit
+# message quoting `echo $(cargo build 2>&1) | grep error` was refused as a build piped
+# into grep. An unquoted tag's body does expand, so one carrying `$(` or a backtick is
+# left unread and the text stays raw.
 heredoc_body_blanked(text) := out if {
 	parts := split(text, "<<")
 	count(parts) == 2
 	not regex.match(shell_heredoc_reader_pattern, parts[0])
-	tag := heredoc_tag(parts[1])
-	segments := split(parts[1], concat("", ["\n", tag]))
-	count(segments) == 2
-	out := concat("", [parts[0], " ", blanked_anchors(segments[0]), " ", tag, segments[1]])
+	opener := heredoc_opener(parts[1])
+	out := heredoc_body_by_lines(parts[0], parts[1], opener)
 }
 
-heredoc_tag(after_marker) := tag if {
-	matched := regex.find_all_string_submatch_n(`^-?[ \t]*["']?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
-	tag := matched[0][1]
+heredoc_body_by_lines(before, after_marker, opener) := out if {
+	segments := split(after_marker, concat("", ["\n", opener.tag]))
+	count(segments) == 2
+	lines := split(segments[0], "\n")
+	opener_line := lines[0]
+	not opener_line_feeds_a_shell(opener_line)
+	body := concat("\n", array.slice(lines, 1, count(lines)))
+	heredoc_body_readable(opener, body)
+	out := concat("", [
+		before, "<<", opener_line, " ",
+		literal_body_blanked(opener, blanked_anchors(body)), " ", opener.tag, segments[1],
+	])
+}
+
+opener_line_feeds_a_shell(opener) if {
+	some word in command_slot_words(opener)
+	heredoc_shell_name(word)
+}
+
+# The opener of a heredoc, read from the text after `<<`: the whole opener token, the
+# quote that makes the body literal (empty for a bare tag), and the tag. One regex per
+# text, the same one `heredoc_tag` used to run. No copy of the text after the token is
+# taken here: on a long body every copy is linear memory the wasm module never frees
+# within an evaluation, which is how a long command runs it out (bd er-effects-rs-xktj).
+heredoc_opener(after_marker) := opener if {
+	matched := regex.find_all_string_submatch_n(`^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
+	m := matched[0]
+	opener := {"full": m[0], "quote": m[1], "tag": m[2]}
+}
+
+heredoc_tag(after_marker) := heredoc_opener(after_marker).tag
+
+heredoc_body_readable(opener, _) if opener.quote != ""
+
+heredoc_body_readable(opener, body) if {
+	opener.quote == ""
+	not carries_substitution(body)
+}
+
+literal_body_blanked(opener, body) := body if opener.quote == ""
+
+literal_body_blanked(opener, body) := replace(replace(body, "`", " "), "$", " ") if opener.quote != ""
+
+# ---------------------------------------------------------------------------
+# A literal heredoc body as the engine delivers it (2026-10-16)
+#
+# `heredoc_body_by_lines` finds the body by the newline in front of its terminator, and
+# the engine has turned that newline into a space by the time a policy runs (measured
+# with `--debug-files`; `scripts/test-cupcake-delivered-shape.py` keeps the measurement).
+# So in production the body arrives welded between the opener and the terminator:
+#
+#     git commit -F - <<'EOF' fix: quote `echo $(cargo build 2>&1) | grep error` EOF
+#
+# Here the body is found by its terminator word instead: the first word after the opener
+# that is the tag standing alone, or the tag followed by the `;` the hook shim writes for
+# the newline after it. Where the opener's own line ends cannot be recovered, so this
+# blanks only what made the text unreadable -- backticks, `$`, parentheses, quotes -- and
+# keeps `;`, `&` and `|`, so a separator on the opener line (`<<'EOF' ; git push origin
+# main`) still opens a command.
+#
+# It reads only a quoted tag's body that carries a substitution, which is the one shape
+# that otherwise drops the whole text back to raw. Everything else is left exactly as it
+# was. Because the substitution characters on the opener line would be blanked as well,
+# the text in front of the first one must hold none of `;`, `&`, `|`, `<`, `>` and at
+# least two words: a redirect target or a statement after the opener keeps the text raw.
+# The residue, stated: two or more plain operands after the opener on its own line and
+# then a substitution (`cat <<'EOF' a b $(cmd)`) are read as body.
+#
+# The order of the steps is the memory budget. The cheap refusals -- tag quoted, a
+# substitution present, the text in front of it prose -- read only the opener's
+# neighbourhood, so a long document that fails them costs nothing more. Only then is the
+# text split, and on the terminator marker rather than into words, so the split makes a
+# handful of pieces rather than one string per word.
+heredoc_body_by_terminator(before, after_marker, opener) := out if {
+	opener.quote != ""
+	start := count(opener.full)
+	first := first_substitution_index(after_marker)
+	first > start
+	heredoc_body_prefix_is_prose(substring(after_marker, start, first - start))
+	marker := concat("", [" ", opener.tag])
+	pieces := split(replace(after_marker, "\n", " "), marker)
+	closes := [k |
+		some k, piece in pieces
+		k > 0
+		terminator_follows(piece)
+	]
+	count(closes) > 0
+	tag_at := count(concat(marker, array.slice(pieces, 0, min(closes)))) + 1
+	tag_at > first
+	after_tag := substring(after_marker, tag_at + count(opener.tag), -1)
+	out := concat("", [
+		before, "<<", opener.full, welded_body_blanked(substring(after_marker, start, tag_at - start)),
+		opener.tag, terminator_separator(after_tag), after_tag,
+	])
+}
+
+# What may follow a terminator word in the delivered text: nothing, the space before the
+# next line, or the separator the hook shim wrote for that newline.
+terminator_follows(piece) if piece == ""
+
+terminator_follows(piece) if substring(piece, 0, 1) in {" ", ";", "&", "|", ")"}
+
+# A terminator stands alone on its line, so whatever follows it starts a new command. The
+# hook shim writes that boundary as `; `; a text that reaches the engine without the shim
+# has lost it with the newline, so it is put back here.
+terminator_separator(after_tag) := "" if after_tag == ""
+
+terminator_separator(after_tag) := "" if substring(after_tag, 0, 1) in {";", "&", "|", ")"}
+
+terminator_separator(after_tag) := " ;" if {
+	after_tag != ""
+	not substring(after_tag, 0, 1) in {";", "&", "|", ")"}
+}
+
+first_substitution_index(text) := min([i |
+	some i in [indexof(text, "$("), indexof(text, "`")]
+	i >= 0
+])
+
+heredoc_body_prefix_is_prose(prefix) if {
+	count([c |
+		some c in [";", "&", "|", "<", ">"]
+		contains(prefix, c)
+	]) == 0
+	count([word |
+		some word in split(replace(prefix, "\n", " "), " ")
+		word != ""
+	]) >= 2
+}
+
+welded_body_blanked(body) := out if {
+	no_sub := replace(replace(body, "`", " "), "$", " ")
+	no_paren := replace(replace(no_sub, "(", " "), ")", " ")
+	no_quote := replace(replace(no_paren, "'", " "), `"`, " ")
+	out := replace(replace(no_quote, "\n", " "), "\r", " ")
 }
 
 heredoc_resolved(text) := out if {
-	out := heredoc_body_blanked(text)
+	parts := split(text, "<<")
+	count(parts) == 2
+	not regex.match(shell_heredoc_reader_pattern, parts[0])
+	opener := heredoc_opener(parts[1])
+	out := heredoc_body_read(parts[0], parts[1], opener)
 } else := text
+
+heredoc_body_read(before, after_marker, opener) := out if {
+	out := heredoc_body_by_lines(before, after_marker, opener)
+} else := out if {
+	out := heredoc_body_by_terminator(before, after_marker, opener)
+}
 
 # Blank the OUTER quote style's spans first, then the INNER style's spans in what
 # survives. Parity is checked per phase, and the second phase's parity is read
@@ -459,24 +618,138 @@ blank_spans(text, outer, inner) := out if {
 # which is what reads `echo 'don"t' ; ...` correctly. Neither can open a hole:
 # each still requires its own balanced parity, and a text that satisfies neither
 # keeps its raw form.
+#
+# `scannable` runs once and both orders read its result: it carries the heredoc read, and
+# calling it per order doubled that work on every text that fails the first order.
 operands_blanked(text) := out if {
 	resolved := scannable(text)
+	out := spans_blanked_either_order(resolved)
+}
+
+spans_blanked_either_order(resolved) := out if {
 	out := blank_spans(resolved, `"`, "'")
 } else := out if {
-	resolved := scannable(text)
 	out := blank_spans(resolved, "'", `"`)
 }
 
 scannable(text) := stripped if {
 	resolved := heredoc_resolved(text)
-	not contains(resolved, "$(")
-	not contains(resolved, "`")
+	substitution_free(resolved)
 	stripped := escaped_quotes_stripped(resolved)
 }
 
+# No command substitution the shell would run. A text with no backtick and no `$(` at
+# all passes as before. A text with either passes only when every one of them sits
+# inside a single-quoted span, where the shell reads it as a literal character.
+#
+# Until 2026-10-19 any backtick anywhere sent the whole text back to its raw form, so
+# a `bd comments add <id> '... `mid hooks: 3/3 ARMED` ... companions; scripts/frida/
+# npc-summons-tag-check.js ...' 2>&1 | grep -v hint` kept the `;` inside its quoted
+# body, the `scripts/*-check.js` after it took command position, and
+# no_grep_for_build_errors denied a comment as a build piped into grep. Markdown
+# backticks in quoted prose are the common case, not the exotic one.
+#
+# The test is one left-to-right tokenisation in a single regex, not a quote-parity
+# split, because parity is fooled by an apostrophe inside double quotes pairing with a
+# real quote later and would call an unquoted backtick quoted. Tokens: an ordinary
+# character, a backslash escape, a `$` not opening `(`, a whole single-quoted span, or
+# a whole double-quoted span (optionally `$"..."`) containing no backtick and no `$(`.
+# Anything else, `$'...'` included, fails to match and keeps the raw text. A heredoc
+# is excluded outright: inside an unquoted heredoc body a single quote is literal and
+# a backtick in it still runs.
+substitution_free(text) if {
+	not contains(text, "$(")
+	not contains(text, "`")
+}
+
+substitution_free(text) if {
+	not contains(text, "<<")
+	regex.match(substitution_only_in_single_quotes_pattern, text)
+}
+
+substitution_only_in_single_quotes_pattern := concat("", [
+	`^(`,
+	"[^'\"\\\\`$]",
+	`|\\(.|\n)`,
+	"|\\$([^('\"\\\\`]|$)",
+	`|'[^']*'`,
+	"|\\$?\"([^\"\\\\`$]|\\\\(.|\\n)|\\$([^(\"\\\\`]|$))*\"",
+	`)*$`,
+])
+
 scan_text(text) := out if {
 	out := operands_blanked(text)
+} else := out if {
+	out := substitution_single_quotes_blanked(text)
 } else := text
+
+# ---------------------------------------------------------------------------
+# SINGLE QUOTES BESIDE A SUBSTITUTION (2026-10-15)
+#
+# `scannable` above gives up on any text carrying `$(` or a backtick outside single quotes, which
+# is right for the substitution itself -- it runs -- and wrong for the single-quoted spans beside
+# it, which nothing inside can escape. Giving up kept the whole text raw, so a regex in single
+# quotes stood in command position.
+# Measured 2026-10-15: `F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)` was
+# refused by `no_grep_for_build_errors` as a build piped into grep, because the `(` in front of
+# `go` was read as a subshell and `go` as the Go toolchain.
+#
+# So such a text keeps everything raw except the single-quoted spans, whose anchors are blanked as
+# they are everywhere else. Double-quoted spans stay raw, substitutions included. The reading is a
+# left-to-right lexer done without a loop: every `'` is taken as a delimiter, and that is accepted
+# only when no `'` falls inside a double-quoted span. The count of `"` outside single quotes must
+# be even before every opening `'`, and since that holds at each one in turn, it is the same as
+# every stretch between single-quoted spans holding an even number of `"` -- a linear check. A `'`
+# inside double quotes is literal in bash unless a substitution inside them reopens quoting, and
+# this cannot tell those apart, so either one leaves the text raw.
+#
+# Everything this cannot read leaves the text raw, which is what it was before:
+#   * a heredoc, whose body may be literal or expanded and whose apostrophes are prose;
+#   * `\'` once `\\` is set aside, because inside single quotes the backslash is literal and the
+#     quote closes the span, so deleting the pair the way `escaped_quotes_stripped` does would move
+#     every span after it;
+#   * an unbalanced quote of either style;
+#   * a word that opens a comment outside single quotes, because an apostrophe in a comment is not
+#     a quote and the newline that ends the comment is a space by the time a policy sees it.
+substitution_single_quotes_blanked(text) := out if {
+	carries_substitution(text)
+	not contains(text, "<<")
+	parked := replace(text, `\\`, escaped_backslash_marker)
+	not contains(parked, `\'`)
+	parts := split(replace(parked, `\"`, ""), "'")
+	count(parts) > 1
+	count(parts) % 2 == 1
+	every i, part in parts {
+		single_quote_reading_holds(i, part)
+	}
+	blanked := concat("'", [span |
+		some i, part in parts
+		span := odd_span_blanked(i, part)
+	])
+	out := replace(blanked, escaped_backslash_marker, `\\`)
+}
+
+carries_substitution(text) if contains(text, "$(")
+
+carries_substitution(text) if contains(text, "`")
+
+# Inside a single-quoted span nothing needs checking.
+single_quote_reading_holds(i, _) if i % 2 == 1
+
+# Outside one, the stretch must close every double quote it opens, so the next `'` is not inside
+# one, and must not open a comment.
+single_quote_reading_holds(i, part) if {
+	i % 2 == 0
+	count(split(part, `"`)) % 2 == 1
+	not opens_comment(i, part)
+}
+
+opens_comment(0, part) if startswith(part, "#")
+
+opens_comment(_, part) if {
+	some lead in [" #", "\t#", "\n#", ";#", "&#", "|#", "(#"]
+	contains(part, lead)
+}
 
 # Quoted spans DELETED rather than neutralised, for unanchored substring tests.
 quotes_removed(text) := out if {
@@ -660,18 +933,34 @@ command_slot_wrapper(word) if {
 
 digit_char(c) if c in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
-# `VAR=value`, which is a prefix to a command rather than a command. Excludes a
-# path-looking operand so `--out=/some/path` is not read as an assignment.
-command_slot_wrapper(word) if {
-	contains(word, "=")
-	not contains(word, "/")
-}
-
-# A real `NAME=value` assignment prefix, whose value may be a path: `P=/tmp/x.patch bash
-# scripts/check.sh` runs the script, and was allowed until 2026-10-19 because the rule
-# above stops at the `/`. Judged by the shape of the name, which `--out=/some/path`
-# does not have.
+# `VAR=value`, which is a prefix to a command rather than a command. The test is the
+# shell's own: the text before the first `=` is a name (`[A-Za-z_][A-Za-z0-9_]*`), and
+# the value after it is anything, a path included.
+#
+# This used to be "contains `=` and no `/`", and the `/` half refused every
+# path-valued assignment. Measured 2026-10-14: `teardown_must_relaunch` denied
+# `er-teardown.py ...; ME3_PROFILE=/tmp/x/p.me3 /home/banon/Elden/launch.sh -o` as a
+# teardown that does not relaunch, because `ME3_PROFILE=/tmp/...` stood in the slot and
+# the launcher behind it was read as an operand. The same word hid the program behind it
+# from every deny-on-match guard, so those got stricter, measured the same day against
+# the previous rule: `FOO=/x python3 scripts/er-teardown.py; cargo build`,
+# `CARGO_TARGET_DIR=/tmp/t cargo build`, `PYTHONPATH=/x python3 -c "open('f','w')..."`
+# and `TMPDIR=/tmp/x bash scripts/check.sh` were each allowed before and are denied now.
+#
+# The `/` test was there so `--out=/some/path` would not count as an assignment. The name
+# test keeps that (`--out` is not a name, and the `-` rule above already reads it as an
+# option), and a path that merely contains `=` (`dir/a=b`) is still read as the program.
+#
+# `P=/tmp/x.patch bash scripts/check.sh` runs the script too, and was allowed until
+# 2026-10-19 through the same `/` test.
 command_slot_wrapper(word) if assignment_word(word)
+
+# PUBLIC. The same test under the name the frida-proof policy reads; both branches of
+# the 2026-10 history wrote it, and one body serves both.
+shell_assignment_word(word) if assignment_word(word)
+
+# PUBLIC. The characters of a shell name, for policies that cut a name out of a longer word.
+shell_name_chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 
 # `source x` and `. x` run `x` in the current shell.
 command_slot_wrapper(word) if word in {"source", "."}
@@ -966,7 +1255,7 @@ heredoc_open_tag(word) := tag if {
 	not startswith(word, "<<<")
 	parts := split(word, "<<")
 	count(parts) == 2
-	unquoted := replace(replace(word_lines(parts[1])[0], "'", ""), `"`, "")
+	unquoted := replace(replace(replace(word_lines(parts[1])[0], "'", ""), `"`, ""), `\`, "")
 	tag := trim_prefix(unquoted, "-")
 	tag != ""
 }

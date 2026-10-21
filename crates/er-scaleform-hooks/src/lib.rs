@@ -8,12 +8,13 @@
 //! R23 establishes only this ownership and dependency boundary. Hook implementations
 //! remain in their current owners until their individual R24 moves and runtime proofs.
 
-#[cfg(windows)]
+// The mid hook's routine and windows build on the host so their unit tests run; only the
+// installer that uses them is windows-only.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod descriptor_guard;
 mod host;
 
 #[cfg(windows)]
-pub use descriptor_guard::{
-    DescriptorGuardInstall, DescriptorGuardInstallError, install_scaleform_descriptor_guard,
-};
+pub use descriptor_guard::install_scaleform_descriptor_guard;
+pub use descriptor_guard::{DescriptorGuardInstall, DescriptorGuardInstallError};
 pub use host::{NamedChildBindEvent, ScaleformHooksHost, install_host};
