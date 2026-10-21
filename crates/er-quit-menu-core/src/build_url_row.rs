@@ -188,13 +188,19 @@ fn report_session_baseline() {
 /// session.
 fn request_configured_import() {
     match er_build_import_runtime::request_configured() {
-        Ok(true) => append_autoload_debug(format_args!(
-            "system-quit-build-url: configured `build_url` queued at session start; it applies once the character is in the world"
-        )),
+        Ok(true) => {
+            SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: configured `build_url` queued at session start; it applies once the character is in the world"
+            ));
+        }
         Ok(false) => {}
-        Err(err) => append_autoload_debug(format_args!(
-            "system-quit-build-url: configured `build_url` refused at session start: {err}"
-        )),
+        Err(err) => {
+            SYSTEM_QUIT_LOAD_BUILD_URL_REFUSED_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-build-url: configured `build_url` refused at session start: {err}"
+            ));
+        }
     }
 }
 
