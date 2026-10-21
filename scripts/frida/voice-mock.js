@@ -168,13 +168,14 @@ if (change.equals(ptr('-1'))) {
   emit('error', { message: 'no change notification on ' + CMD_DIR + '; create that folder and reload the agent' });
 }
 
-// The game's frame tick (1.17.1 0x140773900, CSFeManImp::UpdatePlayerComponents, the main-thread
-// HUD pass spawn-npc.js uses) carries two jobs: picking up a command whose notification has fired,
-// and feeding the clip when Seamless has stopped calling the setup function (it may only run while
+// The game's frame tick (1.17.1 0x140773900 -> 2.7.2.0 0x140773db0, carried with
+// scripts/map-rvas-1171-to-1172.py; CSFeManImp::UpdatePlayerComponents, the main-thread HUD pass
+// spawn-npc.js uses) carries two jobs: picking up a command whose notification has fired, and
+// feeding the clip when Seamless has stopped calling the setup function (it may only run while
 // voice is active). The pump keeps real time from Date.now(), so a frame of 16 or 33 ms only
 // changes how many 20 ms voice frames each call sends; `said` reports which caller carried the clip.
 const game = Process.findModuleByName('eldenring.exe');
-const FRAME_TICK = game.base.add(ptr('0x140773900').sub(ptr('0x140000000')));
+const FRAME_TICK = game.base.add(ptr('0x140773db0').sub(ptr('0x140000000')));
 hooks.push(Interceptor.attach(FRAME_TICK, {
   onEnter () {
     if (change !== null && waitForSingleObject(change, 0) === WAIT_OBJECT_0) {

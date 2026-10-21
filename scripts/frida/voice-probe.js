@@ -4,10 +4,10 @@
 // ISteamUser's vtable, so the hooks go on the vtable targets, found by reading which slot each
 // flat export `SteamAPI_ISteamUser_<name>` jumps through.
 // Reports per function calls and bytes, plus the calling module+offset of the first caller seen.
-// A report goes out on the game's frame tick (1.17.1 0x140773900, CSFeManImp::UpdatePlayerComponents,
-// the main-thread HUD pass spawn-npc.js uses) when a hooked call has changed the counts since the
-// last report and that report is at least REPORT_MS old: a quiet session sends nothing, a busy one
-// is not flooded.
+// A report goes out on the game's frame tick (1.17.1 0x140773900 -> 2.7.2.0 0x140773db0,
+// CSFeManImp::UpdatePlayerComponents, the main-thread HUD pass spawn-npc.js uses) when a hooked
+// call has changed the counts since the last report and that report is at least REPORT_MS old: a
+// quiet session sends nothing, a busy one is not flooded.
 'use strict';
 
 const steamApi = Process.findModuleByName('steam_api64.dll');
@@ -101,7 +101,8 @@ for (const name of NAMES) {
 send({ kind: 'ready', user: user.toString(), slots: Object.fromEntries(Object.entries(stats).map(([k, v]) => [k, v.slot])) });
 
 const game = Process.findModuleByName('eldenring.exe');
-const FRAME_TICK = game.base.add(ptr('0x140773900').sub(ptr('0x140000000')));
+// 2.7.2.0, carried from 1.17.1 0x140773900 with scripts/map-rvas-1171-to-1172.py.
+const FRAME_TICK = game.base.add(ptr('0x140773db0').sub(ptr('0x140000000')));
 const REPORT_MS = 2000;
 let reportedAt = 0;
 hooks.push(Interceptor.attach(FRAME_TICK, {
