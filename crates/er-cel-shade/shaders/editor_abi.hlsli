@@ -28,9 +28,11 @@ cbuffer EditorParams : register(b0, space42)
 
 #define ER_P_REGISTERS 1024
 
-// er_p[0..2]: the cel knobs, `Look::gpu_block` in `src/settings.rs`.
+// er_p[0..1]: the cel knobs the AO port still reads, `Look::gpu_block` in `src/settings.rs`: five
+// floats, then padding. er_p[1].yzw and er_p[2] held the four knobs that are stock layers now
+// (`src/editor/cel.rs`); they stay unused rather than move the registers after them.
 #define ER_P_CEL 0
-#define ER_P_CEL_REGISTERS 3
+#define ER_P_CEL_REGISTERS 2
 
 // One name per knob, in `KNOBS` order: knob i is register i / 4, component i % 4, which is how
 // `Look::gpu_block` packs them. Every knob at its `off` value is the game's own picture. A host
@@ -40,10 +42,6 @@ cbuffer EditorParams : register(b0, space42)
 #define cel_outline_width (er_p[0].z)
 #define cel_outline_depth (er_p[0].w)
 #define cel_outline_crease (er_p[1].x)
-#define cel_paint_radius (er_p[1].y)
-#define cel_colour_levels (er_p[1].z)
-#define cel_screen_levels (er_p[1].w)
-#define cel_saturation (er_p[2].x)
 
 // er_p[3]: (time in seconds, asfloat(frame), display width, display height). The frame is the
 // present count, starting at 1; probe headers and samples carry it.
@@ -55,6 +53,13 @@ cbuffer EditorParams : register(b0, space42)
 // er_p[5..31]: selector configuration (P2, P3).
 #define ER_P_SELECTOR 5
 #define ER_P_SELECTOR_REGISTERS 27
+
+// er_p[32]: (the previous present's time, asfloat(previous frame), asfloat(vertex proof mode), 0).
+// Written at each publish from the block published before it, so it holds the time the previous
+// frame's command lists read: a velocity pass gives its previous position the vertex layers at
+// that time (`docs/plans/er-shader-editor-vertex.md`, section 5). A vertex proof mode other than
+// 0 makes the AO port write the vertex proof region below.
+#define ER_P_PREVIOUS 32
 
 // er_p[64..191]: capsule anchors, two registers each (P4).
 #define ER_P_CAPSULES 64
@@ -101,8 +106,9 @@ RWByteAddressBuffer er_mask_plane : register(u0, space42);
 
 // 64 samples per region on an 8x8 grid, 32 bytes each: float3 pre, uint frame, float3 post, and
 // one more word -- the depth bits at AO and albedo, the mask word at tonemap. "pre" is the colour
-// after the game's maths and cel, "post" after the layers. A sample counts only when its frame
-// equals its region header's.
+// the port computed before its stage's layers -- the game's maths, and at AO the light bands and
+// outlines the port still draws -- and "post" the colour after every layer, the cel layers
+// included. A sample counts only when its frame equals its region header's.
 #define ER_PROBE_AO_SAMPLES 0x0100
 #define ER_PROBE_ALBEDO_SAMPLES 0x0900
 #define ER_PROBE_TONEMAP_SAMPLES 0x1100
@@ -116,5 +122,20 @@ RWByteAddressBuffer er_mask_plane : register(u0, space42);
 
 // The pick record (P4).
 #define ER_PROBE_PICK 0x1900
+
+// The vertex proof region (`docs/plans/er-shader-editor-vertex.md`, section 7.7): one record of
+// 16 bytes per AO grid point, written by the AO port while the vertex proof mode
+// (`er_p[ER_P_PREVIOUS].z`) is not 0. The view depth in metres, or -1 on the sky; the agreement
+// `abs(dot)` of the G-buffer's view normal with the normal the depth buffer itself implies,
+// `normalize(cross(ddx(view_pos), ddy(view_pos)))`, or 2 where that is not finite; the occlusion
+// and shadow term the pass multiplies in, as a half float in the low 16 bits, with the diffuse
+// light's luminance before it as a half float in the high 16; and the frame. Ends at the end of
+// the probe.
+#define ER_PROBE_VERTEX_SAMPLES 0x1C00
+#define ER_PROBE_VERTEX_SAMPLE_BYTES 16
+#define ER_PROBE_VERTEX_DEPTH 0
+#define ER_PROBE_VERTEX_NORMAL_DOT 4
+#define ER_PROBE_VERTEX_SHADOW 8
+#define ER_PROBE_VERTEX_FRAME 12
 
 #endif // EDITOR_ABI_HLSLI

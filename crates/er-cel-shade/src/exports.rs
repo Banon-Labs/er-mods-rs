@@ -22,9 +22,12 @@
 //!
 //! # Telemetry
 //!
-//! Once a second the worker writes the stats, the root-signature ladder, the hook timings, the
-//! diagnostic counters and the decoded probe -- every written region's header, its frame age and
-//! its samples -- as one JSON object ([`render_telemetry`]) to
+//! Once a second the worker writes the stats, the root-signature ladder, the hook timings, each
+//! port's GPU time a frame, last and mean, with its stage's total (`gpu_time`, null while the
+//! timer is off; [`crate::gpu_time`] says what the number means), the diagnostic counters, the
+//! Shaders panel's last frame -- where its header, toolbar, nav and named parts landed in screen
+//! pixels, its dock, scale and fonts ([`PanelSnapshot`]) -- and the decoded probe -- every written
+//! region's header, its frame age and its samples -- as one JSON object ([`render_telemetry`]) to
 //! `redirected_artifact_path("ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH", "er-cel-shade-telemetry.json")`,
 //! replacing the file atomically, so a reader never sees half of one. The variable is an output
 //! redirect for launchers, like every other `ER_QUICKLOAD_*_PATH`, and changes no behaviour.
@@ -37,8 +40,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use crate::cmdlist::{self, SAMPLE_EVERY, Timing};
+use crate::gpu_time::{self, Counters, Report};
+use crate::menu::theme::{Face, PanelSnapshot, RECT_NAMES};
 use crate::probe::{self, Region, RegionRecord};
-use crate::replace::PortKind;
+use crate::replace::{PortKind, Stage};
 use crate::safety::ModeSetting;
 
 /// What `er_shader_editor_stats_v1` writes. `repr(C)` with no padding: every field is listed in
@@ -240,8 +245,15 @@ pub struct Telemetry<'a> {
     pub timer_floor_ns: u64,
     /// Named counters for diagnostics, in the order given.
     pub counters: Vec<(&'static str, u64)>,
+    /// The Shaders panel's last frame, `None` before it ever drew.
+    pub panel: Option<PanelSnapshot>,
+    /// The ports' GPU time and the timer's counts, `None` while the timer is off.
+    pub gpu: Option<(Report, Counters)>,
     /// The probe as read at `stats.presents`.
     pub regions: &'a [RegionRecord],
+    /// Members rendered elsewhere, each ending in a comma and a newline: the vertex stage's and
+    /// gate V0.R1's (`crate::vertex`). Empty on the host.
+    pub members: String,
 }
 
 /// A JSON number for `value`, or `null` for a NaN or an infinity, which JSON cannot spell.
@@ -362,12 +374,27 @@ pub fn render_telemetry(telemetry: &Telemetry<'_>) -> String {
     // samples times this; `scripts/check-shader-editor-probe.py --expect cost` reads it.
     let _ = writeln!(out, "  \"hook_sample_every\": {SAMPLE_EVERY},");
 
+    out.push_str("  \"gpu_time\": ");
+    match &telemetry.gpu {
+        Some((report, counters)) => render_gpu(&mut out, report, counters),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\n");
+
     out.push_str("  \"counters\": {");
     for (at, (name, value)) in telemetry.counters.iter().enumerate() {
         out.push_str(if at == 0 { "\n" } else { ",\n" });
         let _ = write!(out, "    \"{name}\": {value}");
     }
     out.push_str("\n  },\n");
+    out.push_str(&telemetry.members);
+
+    out.push_str("  \"panel\": ");
+    match &telemetry.panel {
+        Some(panel) => render_panel(&mut out, panel),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\n");
 
     let _ = writeln!(out, "  \"probe\": {{\n    \"present\": {present},");
     out.push_str("    \"regions\": [");
@@ -377,6 +404,153 @@ pub fn render_telemetry(telemetry: &Telemetry<'_>) -> String {
     }
     out.push_str("\n    ]\n  }\n}\n");
     out
+}
+
+/// Microseconds as the telemetry writes them, to the nanosecond, or `null` while unknown.
+fn micros(out: &mut String, value: Option<f64>) {
+    match value.filter(|value| value.is_finite()) {
+        Some(value) => {
+            let _ = write!(out, "{value:.3}");
+        }
+        None => out.push_str("null"),
+    }
+}
+
+/// The ports' GPU time as a JSON object: the rate, what was lost, and per port kind and per stage
+/// the last known frame's microseconds and the mean over the history.
+/// `scripts/check-shader-editor-probe.py --expect gpu-cost` reads it.
+fn render_gpu(out: &mut String, report: &Report, counters: &Counters) {
+    let frame = report
+        .last
+        .map_or_else(|| "null".to_owned(), |frame| frame.stamp.to_string());
+    let _ = write!(
+        out,
+        "{{\n    \"frequency_hz\": {}, \"source\": \"{}\", \"read_lag_presents\": {}, \
+         \"budget_us\": {}, \"history_frames\": {},\n    \"frame\": {frame}, \"frames\": {}, \
+         \"unknown_frames\": {}, \"mean_frames\": {},\n    \"spans_begun\": {}, \"spans_dropped\": \
+         {}, \"chunks\": {}, \"resolves\": {}, \"late\": {}, \"refused\": {},\n    \"ports\": [",
+        report.frequency,
+        report.source.name(),
+        gpu_time::READ_LAG_PRESENTS,
+        gpu_time::PORT_BUDGET_US,
+        gpu_time::HISTORY_FRAMES,
+        report.frames,
+        report.unknown_frames,
+        report.history,
+        counters.begun,
+        counters.dropped,
+        counters.chunks,
+        counters.resolves,
+        report.late,
+        report.refused,
+    );
+    for (at, kind) in PortKind::ALL.into_iter().enumerate() {
+        out.push_str(if at == 0 { "\n" } else { ",\n" });
+        let ticks = report.last.map_or(0, |frame| frame.ticks(kind));
+        let _ = write!(
+            out,
+            "      {{\"kind\": \"{}\", \"index\": {}, \"us_last\": ",
+            kind.key(),
+            kind as u8
+        );
+        micros(out, report.last_us(kind));
+        out.push_str(", \"us_mean\": ");
+        micros(out, report.mean_us(kind));
+        let _ = write!(
+            out,
+            ", \"spans_last\": {}, \"bound_last\": \"{}\", \"ticks_last\": {ticks}}}",
+            report.spans_last(kind),
+            report.bound_last(kind).name()
+        );
+    }
+    out.push_str("\n    ],\n    \"stages\": [");
+    for (at, stage) in Stage::ALL.into_iter().enumerate() {
+        out.push_str(if at == 0 { "\n" } else { ",\n" });
+        let _ = write!(
+            out,
+            "      {{\"stage\": \"{}\", \"us_last\": ",
+            stage.name()
+        );
+        micros(out, report.stage_last_us(stage));
+        out.push_str(", \"us_mean\": ");
+        micros(out, report.stage_mean_us(stage));
+        out.push('}');
+    }
+    out.push_str("\n    ]\n  }");
+}
+
+/// The panel's last frame as a JSON object: its state, its fonts, the Code sub-tab's reference
+/// column (open, its search field focused, its stage, its query's length and the entries it kept
+/// of all it has), and each part drawn that frame under its [`RECT_NAMES`] name as `[x, y, width,
+/// height]` in screen pixels. A part not drawn that frame is left out.
+fn render_panel(out: &mut String, panel: &PanelSnapshot) {
+    let _ = write!(
+        out,
+        "{{\n    \"draws\": {}, \"present\": {}, \"open\": {}, \"collapsed\": {}, \
+         \"dock\": \"{}\", \"tab\": \"{}\", \"code_view\": {}, \"sub\": \"{}\",\n    \"scale\": ",
+        panel.draws,
+        panel.present,
+        panel.open,
+        panel.collapsed,
+        panel.dock,
+        panel.tab,
+        panel.code_view,
+        panel.sub
+    );
+    number(out, panel.scale);
+    out.push_str(", \"font_scale\": ");
+    number(out, panel.font_scale);
+    out.push_str(", \"display\": ");
+    floats(out, &panel.display);
+    let fonts = &panel.fonts;
+    let _ = write!(
+        out,
+        ",\n    \"fonts\": {{\"requested\": {}, \"request_scale\": ",
+        fonts.requested
+    );
+    number(out, fonts.request_scale);
+    out.push_str(", \"faces\": [");
+    for (at, face) in Face::ALL.into_iter().enumerate() {
+        if at != 0 {
+            out.push_str(", ");
+        }
+        let _ = write!(
+            out,
+            "{{\"name\": \"{}\", \"handle\": {}, \"granted\": {}}}",
+            face.name(),
+            fonts.handles[at],
+            fonts.granted[at]
+        );
+    }
+    let reference = &panel.reference;
+    let _ = write!(
+        out,
+        "], \"in_use\": {}}},\n    \"reference\": {{\"open\": {}, \"searching\": {}, \"stage\": \
+         \"{}\", \"query_chars\": {}, \"shown\": {}, \"total\": {}}},\n    \"rects\": {{",
+        fonts.in_use,
+        reference.open,
+        reference.searching,
+        reference.stage,
+        reference.query_chars,
+        reference.shown,
+        reference.total
+    );
+    let mut first = true;
+    for (name, rect) in RECT_NAMES.iter().zip(&panel.rects) {
+        let Some(rect) = rect else {
+            continue;
+        };
+        out.push_str(if first { "\n" } else { ",\n" });
+        first = false;
+        let _ = write!(out, "      \"{name}\": ");
+        floats(out, rect);
+    }
+    out.push_str(if first { "}" } else { "\n    }" });
+    let _ = write!(
+        out,
+        ",\n    \"rects_refused\": {}\n  }}",
+        panel.rects_refused
+    );
 }
 
 fn render_region(out: &mut String, record: &RegionRecord, present: u64) {
@@ -449,7 +623,7 @@ mod process {
     use crate::replace::PortKind;
     use crate::safety::{self, ModeSetting};
     use crate::settings::render_ports;
-    use crate::{graveyard, hooks, log, menu, params, record, table};
+    use crate::{gpu_time, graveyard, hooks, log, menu, params, record, table};
 
     /// Port records kept and the bytes they own, as the worker last counted them.
     pub static RECORDS: AtomicUsize = AtomicUsize::new(0);
@@ -718,10 +892,14 @@ mod process {
                 .map(|timing| cmdlist::HOOK_PREEMPTED[timing as usize].load(Ordering::Relaxed)),
             timer_floor_ns: floor,
             counters,
+            panel: menu::theme::panel_snapshot(),
+            gpu: gpu_time::report().map(|report| (report, gpu_time::Counters::read())),
             regions: &regions,
+            members: crate::vertex::telemetry_json(),
         };
         write_telemetry(&render_telemetry(&telemetry));
         log_stats(&telemetry, now);
+        crate::vertex::flush_proof();
     }
 
     fn write_telemetry(text: &str) {
@@ -801,13 +979,23 @@ mod process {
                     )
             })
             .collect();
+        // Each port kind's mean GPU microseconds a frame, `-` while unknown.
+        let gpu_us: Vec<String> = PortKind::ALL
+            .into_iter()
+            .map(|kind| {
+                telemetry
+                    .gpu
+                    .and_then(|(report, _)| report.mean_us(kind))
+                    .map_or_else(|| "-".to_owned(), |us| format!("{us:.0}"))
+            })
+            .collect();
         log(format_args!(
             "stats: presents={} mode={} vanilla={} stages={:#05b} ports_off=`{}` \
              unfaithful=`{}` variants={} refused={} left_vanilla={} ports_ready={:?} \
              redirects={} redirected_binds={} passthrough_port_binds={} set_pso_calls={} \
              hook_ns_per_call={per_call} list_slot_misses={} probe_barriers={} probe_copies={} \
-             probe_copies_skipped={} probe_frame_age=[{}] graveyard={} leaked={} \
-             game_psos_released={} create_ms_last={:.2}",
+             probe_copies_skipped={} probe_frame_age=[{}] gpu_us_mean=[{}] graveyard={} \
+             leaked={} game_psos_released={} create_ms_last={:.2}",
             stats.presents,
             ModeSetting::decode(stats.mode).map_or_else(|| "unknown".to_owned(), setting_name),
             stats.vanilla,
@@ -827,6 +1015,7 @@ mod process {
             counter(telemetry, "probe_copies"),
             counter(telemetry, "probe_copies_skipped"),
             ages.join(","),
+            gpu_us.join(","),
             stats.graveyard_len,
             stats.leaked,
             stats.game_psos_released,
@@ -1071,8 +1260,148 @@ mod tests {
             hook_preempted: [2, 0, 0, 0, 0],
             timer_floor_ns: 20,
             counters: vec![("variants", 4), ("rewrites_refused", 0)],
+            panel: None,
+            gpu: None,
             regions,
+            members: "  \"r1\": {\"lists\": 3, \"frames\": 1},\n".to_owned(),
         }
+    }
+
+    #[test]
+    fn the_telemetry_carries_each_ports_gpu_time() {
+        use crate::gpu_time::{ReadSpan, Reader, Source, tag};
+        let mut reader = Reader::new();
+        let span = |kind: PortKind, variant: bool, begin: u64, ticks: u64| ReadSpan {
+            tag: tag(kind, variant),
+            begin,
+            end: begin + ticks,
+        };
+        // 1 GHz: the tonemap variant twice, 300 us and 112.5 us; AO's own pipeline, 1.6 ms.
+        reader.read(
+            41,
+            [
+                span(PortKind::Tonemap, true, 10, 300_000),
+                span(PortKind::Tonemap, true, 900_000, 112_500),
+                span(PortKind::Ao, false, 2_000_000, 1_600_000),
+            ],
+            1_000_000_000,
+            Source::GameQueue,
+        );
+        let counters = Counters {
+            begun: 9,
+            dropped: 1,
+            chunks: 4,
+            resolves: 3,
+        };
+        let telemetry = Telemetry {
+            gpu: Some((*reader.report(), counters)),
+            ..telemetry_with(&[])
+        };
+        let text = render_telemetry(&telemetry);
+        let rest = json_value(text.as_bytes()).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        assert!(rest.trim_ascii().is_empty());
+        for needle in [
+            "\"gpu_time\": {\n    \"frequency_hz\": 1000000000, \"source\": \"game_direct_queue\", \
+             \"read_lag_presents\": 5, \"budget_us\": 1500, \"history_frames\": 32",
+            "\"frame\": 41, \"frames\": 1, \"unknown_frames\": 0, \"mean_frames\": 1",
+            "\"spans_begun\": 9, \"spans_dropped\": 1, \"chunks\": 4, \"resolves\": 3, \"late\": 0, \
+             \"refused\": 0",
+            "{\"kind\": \"tonemap\", \"index\": 3, \"us_last\": 412.500, \"us_mean\": 412.500, \
+             \"spans_last\": 2, \"bound_last\": \"variant\", \"ticks_last\": 412500}",
+            "{\"kind\": \"ao\", \"index\": 0, \"us_last\": 1600.000, \"us_mean\": 1600.000, \
+             \"spans_last\": 1, \"bound_last\": \"game\"",
+            "{\"kind\": \"cmb_albedo\", \"index\": 2, \"us_last\": 0.000, \"us_mean\": 0.000, \
+             \"spans_last\": 0, \"bound_last\": \"none\"",
+            "{\"stage\": \"lighting\", \"us_last\": 1600.000, \"us_mean\": 1600.000}",
+            "{\"stage\": \"tonemap\", \"us_last\": 412.500",
+        ] {
+            assert!(text.contains(needle), "missing {needle}\n{text}");
+        }
+        // Without a rate every figure is null, and with the timer off the object is.
+        let unrated = Telemetry {
+            gpu: Some((*Reader::new().report(), Counters::default())),
+            ..telemetry_with(&[])
+        };
+        let text = render_telemetry(&unrated);
+        assert!(json_value(text.as_bytes()).is_ok(), "{text}");
+        assert!(text.contains("\"frame\": null"));
+        assert!(text.contains("\"us_last\": null, \"us_mean\": null"));
+        let text = render_telemetry(&telemetry_with(&[]));
+        assert!(text.contains("\"gpu_time\": null,"));
+    }
+
+    #[test]
+    fn the_telemetry_carries_the_panels_last_frame() {
+        let mut panel = PanelSnapshot {
+            draws: 42,
+            present: 100,
+            open: true,
+            dock: "right",
+            tab: "layers",
+            sub: "parameters",
+            scale: 1.0,
+            font_scale: f32::NAN,
+            display: [1920.0, 1080.0],
+            ..PanelSnapshot::default()
+        };
+        panel.fonts.requested = true;
+        panel.fonts.request_scale = 1.0;
+        panel.fonts.handles = [5, 6, 0, 8];
+        panel.fonts.granted = [true, true, false, true];
+        panel.fonts.in_use = true;
+        panel.reference.open = true;
+        panel.reference.stage = "tonemap_post";
+        panel.reference.query_chars = 5;
+        panel.reference.shown = 3;
+        panel.reference.total = 286;
+        let at = |name: &str| RECT_NAMES.iter().position(|known| *known == name);
+        if let Some(header) = at("header") {
+            panel.rects[header] = Some([1460.0, 0.0, 460.0, 33.0]);
+        }
+        if let Some(reference) = at("reference_panel") {
+            panel.rects[reference] = Some([1610.0, 300.0, 296.0, 520.0]);
+        }
+        if let Some(nav) = at("nav_active") {
+            panel.rects[nav] = Some([1470.5, 134.0, 64.0, 28.0]);
+        }
+        let telemetry = Telemetry {
+            panel: Some(panel),
+            ..telemetry_with(&[])
+        };
+        let text = render_telemetry(&telemetry);
+        let rest = json_value(text.as_bytes()).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        assert!(
+            rest.trim_ascii().is_empty(),
+            "trailing text after the object"
+        );
+        for needle in [
+            "\"panel\": {\n    \"draws\": 42, \"present\": 100, \"open\": true, \"collapsed\": \
+             false, \"dock\": \"right\", \"tab\": \"layers\", \"code_view\": false, \"sub\": \
+             \"parameters\"",
+            "\"font_scale\": null",
+            "\"request_scale\": 1, \"faces\": [",
+            "\"display\": [1920, 1080]",
+            "{\"name\": \"plex_sans_semibold\", \"handle\": 0, \"granted\": false}",
+            "\"in_use\": true",
+            "\"reference\": {\"open\": true, \"searching\": false, \"stage\": \"tonemap_post\", \
+             \"query_chars\": 5, \"shown\": 3, \"total\": 286}",
+            "\"reference_panel\": [1610, 300, 296, 520]",
+            "\"header\": [1460, 0, 460, 33]",
+            "\"nav_active\": [1470.5, 134, 64, 28]",
+            "\"rects_refused\": 0",
+        ] {
+            assert!(text.contains(needle), "missing {needle}\n{text}");
+        }
+        // A frame with no parts drawn, and no frame at all, are both valid JSON.
+        let empty = Telemetry {
+            panel: Some(PanelSnapshot::default()),
+            ..telemetry_with(&[])
+        };
+        let text = render_telemetry(&empty);
+        assert!(json_value(text.as_bytes()).is_ok(), "{text}");
+        assert!(text.contains("\"rects\": {}"));
+        let text = render_telemetry(&telemetry_with(&[]));
+        assert!(text.contains("\"panel\": null,"));
     }
 
     #[test]

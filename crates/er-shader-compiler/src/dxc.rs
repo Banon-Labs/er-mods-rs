@@ -26,14 +26,26 @@
 //! include handler: the editor expands every `#include` before the source gets here, so an
 //! `#include` that reaches dxc is an error rather than a read of some file. The answer carries
 //! `DXC_OUT_OBJECT` and `DXC_OUT_ERRORS` as dxc wrote them.
+//!
+//! # Patching vertex shaders
+//!
+//! [`Patcher`] is the [`crate::patch::Dxil`] the vertex patch runs on: `IDxcCompiler::Disassemble`,
+//! `IDxcAssembler::AssembleToContainer` and `IDxcValidator::Validate` with
+//! `DxcValidatorFlags_InPlaceEdit`, which signs the container. The two are created at load beside
+//! the compiler; a build that refuses either still compiles, and answers every patch with why.
+//! Measured under Proton's `wine` with the pinned 1.9.2609 build before this existed (design
+//! section 2, "The Windows compiler"): both are created with `S_OK`.
 
 use core::ffi::{c_char, c_void};
 use core::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use windows::Win32::Graphics::Direct3D::Dxc::{
-    CLSID_DxcCompiler, CLSID_DxcUtils, DXC_CP_UTF8, DXC_OUT_ERRORS, DXC_OUT_KIND, DXC_OUT_OBJECT,
-    DxcBuffer, IDxcBlob, IDxcBlobUtf8, IDxcCompiler3, IDxcIncludeHandler, IDxcResult, IDxcUtils,
+    CLSID_DxcAssembler, CLSID_DxcCompiler, CLSID_DxcUtils, CLSID_DxcValidator, DXC_CP_ACP,
+    DXC_CP_UTF8, DXC_OUT_ERRORS, DXC_OUT_KIND, DXC_OUT_OBJECT, DxcBuffer,
+    DxcValidatorFlags_InPlaceEdit, IDxcAssembler, IDxcBlob, IDxcBlobUtf8, IDxcCompiler,
+    IDxcCompiler3, IDxcIncludeHandler, IDxcOperationResult, IDxcResult, IDxcUtils, IDxcValidator,
     IDxcVersionInfo, IDxcVersionInfo2, IDxcVersionInfo3,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -42,7 +54,8 @@ use windows::Win32::System::LibraryLoader::{
 };
 use windows::core::{GUID, HRESULT, HSTRING, Interface, PCWSTR, s};
 
-use crate::protocol::{Request, Response};
+use crate::patch::{AssembleError, Assembled, Dxil};
+use crate::protocol::{PatchRequest, PatchResponse, Request, Response};
 use crate::{Backend, DxcVersion, escape_utf8};
 
 /// `DxcCreateInstance` as dxcapi.h declares it.
@@ -99,11 +112,142 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
-/// A loaded dxcompiler: the compiler, its utilities and its version.
+/// A loaded dxcompiler: the compiler, its utilities, its version, and the vertex patcher when the
+/// build made one.
 pub struct Dxc {
     compiler: IDxcCompiler3,
     utils: IDxcUtils,
     version: DxcVersion,
+    patcher: Result<Patcher, String>,
+}
+
+/// What the vertex patch needs from dxcompiler beyond the compiler: the disassembler of
+/// `IDxcCompiler`, the assembler and the validator.
+pub struct Patcher {
+    utils: IDxcUtils,
+    compiler: IDxcCompiler,
+    assembler: IDxcAssembler,
+    validator: IDxcValidator,
+}
+
+impl Patcher {
+    /// The patcher from the compiler's own objects, `create` being its `DxcCreateInstance`.
+    ///
+    /// # Safety
+    ///
+    /// `create` must be a live `DxcCreateInstance`.
+    unsafe fn new(
+        create: CreateInstance,
+        utils: &IDxcUtils,
+        compiler: &IDxcCompiler3,
+    ) -> Result<Self, String> {
+        let legacy: IDxcCompiler = compiler
+            .cast()
+            .map_err(|error| format!("IDxcCompiler: {error}"))?;
+        // SAFETY: the caller vouches for `create`.
+        let assembler: IDxcAssembler = unsafe { instance(create, &CLSID_DxcAssembler) }
+            .map_err(|error| format!("DxcCreateInstance(CLSID_DxcAssembler): {error}"))?;
+        // SAFETY: as above.
+        let validator: IDxcValidator = unsafe { instance(create, &CLSID_DxcValidator) }
+            .map_err(|error| format!("DxcCreateInstance(CLSID_DxcValidator): {error}"))?;
+        Ok(Self {
+            utils: utils.clone(),
+            compiler: legacy,
+            assembler,
+            validator,
+        })
+    }
+
+    /// A blob holding a copy of `data`: UTF-8 text, or bytes with no encoding.
+    fn blob(&self, data: &[u8], utf8: bool) -> Result<IDxcBlob, String> {
+        let size = u32::try_from(data.len()).map_err(|_| format!("{} bytes", data.len()))?;
+        let page = if utf8 { DXC_CP_UTF8 } else { DXC_CP_ACP };
+        // SAFETY: `data` outlives the call, which copies it.
+        let blob = unsafe { self.utils.CreateBlob(data.as_ptr().cast(), size, page) }
+            .map_err(|error| format!("CreateBlob: {error}"))?;
+        blob.cast::<IDxcBlob>().map_err(|error| error.to_string())
+    }
+}
+
+/// The error text of an operation result, as dxc wrote it.
+fn error_text(result: &IDxcOperationResult) -> String {
+    // SAFETY: a query on a live result.
+    let buffer = match unsafe { result.GetErrorBuffer() } {
+        Ok(buffer) => buffer,
+        Err(error) => return error.to_string(),
+    };
+    let blob = match buffer.cast::<IDxcBlob>() {
+        Ok(blob) => blob,
+        Err(error) => return error.to_string(),
+    };
+    // SAFETY: the blob owns its bytes for as long as it lives.
+    let bytes = unsafe { blob_bytes(&blob) };
+    let end = bytes.iter().rposition(|b| *b != 0).map_or(0, |at| at + 1);
+    escape_utf8(&bytes[..end])
+}
+
+impl Dxil for Patcher {
+    fn disassemble(&mut self, container: &[u8]) -> Result<String, String> {
+        let blob = self.blob(container, false)?;
+        // SAFETY: a live blob.
+        let text = unsafe { self.compiler.Disassemble(&blob) }
+            .map_err(|error| format!("Disassemble: {error}"))?;
+        let text = text.cast::<IDxcBlob>().map_err(|error| error.to_string())?;
+        // SAFETY: the blob owns its bytes for as long as it lives.
+        let raw = unsafe { blob_bytes(&text) };
+        let end = raw.iter().rposition(|b| *b != 0).map_or(0, |at| at + 1);
+        String::from_utf8(raw[..end].to_vec())
+            .map_err(|_| "the disassembly is not UTF-8".to_owned())
+    }
+
+    fn assemble(&mut self, text: &str) -> Result<Assembled, AssembleError> {
+        let blob = self
+            .blob(text.as_bytes(), true)
+            .map_err(AssembleError::Assemble)?;
+        let started = Instant::now();
+        // SAFETY: a live blob.
+        let result = unsafe { self.assembler.AssembleToContainer(&blob) }
+            .map_err(|error| AssembleError::Assemble(format!("AssembleToContainer: {error}")))?;
+        // SAFETY: a live result.
+        let status = unsafe { result.GetStatus() }
+            .map_err(|error| AssembleError::Assemble(error.to_string()))?;
+        let assemble_ms = started.elapsed().as_secs_f32() * 1000.0;
+        if status.is_err() {
+            return Err(AssembleError::Assemble(format!(
+                "0x{:08x}: {}",
+                status.0 as u32,
+                error_text(&result)
+            )));
+        }
+        // SAFETY: the status says there is a result.
+        let container = unsafe { result.GetResult() }
+            .map_err(|error| AssembleError::Assemble(error.to_string()))?;
+        let started = Instant::now();
+        // SAFETY: a live blob, edited in place, which is what signs it.
+        let checked = unsafe {
+            self.validator
+                .Validate(&container, DxcValidatorFlags_InPlaceEdit)
+        }
+        .map_err(|error| AssembleError::Validate(format!("Validate: {error}")))?;
+        // SAFETY: a live result.
+        let status = unsafe { checked.GetStatus() }
+            .map_err(|error| AssembleError::Validate(error.to_string()))?;
+        let validate_ms = started.elapsed().as_secs_f32() * 1000.0;
+        if status.is_err() {
+            return Err(AssembleError::Validate(format!(
+                "0x{:08x}: {}",
+                status.0 as u32,
+                error_text(&checked)
+            )));
+        }
+        // SAFETY: the blob owns its bytes for as long as it lives.
+        let container = unsafe { blob_bytes(&container) };
+        Ok(Assembled {
+            container,
+            assemble_ms,
+            validate_ms,
+        })
+    }
 }
 
 // SAFETY: DXC's objects belong to no apartment: `DxcCreateInstance` needs no `CoInitialize`, and
@@ -154,16 +298,41 @@ impl Dxc {
         if !version.meets_minimum() {
             return Err(LoadError::TooOld(version));
         }
+        // SAFETY: `create` is the module's own `DxcCreateInstance`.
+        let patcher = unsafe { Patcher::new(create, &utils, &compiler) };
         Ok(Self {
             compiler,
             utils,
             version,
+            patcher,
         })
     }
 
     #[must_use]
     pub fn version(&self) -> &DxcVersion {
         &self.version
+    }
+
+    /// Why this build cannot patch vertex shaders, or `None` when it can.
+    #[must_use]
+    pub fn patcher_error(&self) -> Option<&str> {
+        self.patcher.as_ref().err().map(String::as_str)
+    }
+
+    /// Patch the vertex shaders of `request` ([`crate::patch::patch_vertex`]).
+    #[must_use]
+    pub fn patch_vertex(&mut self, request: &PatchRequest) -> PatchResponse {
+        let version = self.version.to_string();
+        match &mut self.patcher {
+            Ok(patcher) => crate::patch::patch_vertex(patcher, request, &version),
+            Err(why) => PatchResponse::refused_all(
+                request,
+                false,
+                "no_patcher",
+                &format!("dxcompiler cannot patch: {why}"),
+                version,
+            ),
+        }
     }
 
     /// The utilities object, for whatever later needs one (reflection, container parts).
@@ -244,6 +413,10 @@ impl Backend for Dxc {
 
     fn compile(&mut self, request: &Request) -> Response {
         Dxc::compile(self, request)
+    }
+
+    fn patch_vertex(&mut self, request: &PatchRequest) -> PatchResponse {
+        Dxc::patch_vertex(self, request)
     }
 }
 

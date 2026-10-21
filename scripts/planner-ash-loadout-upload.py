@@ -68,7 +68,7 @@ def main() -> int:
     ap.add_argument("--plan", type=pathlib.Path, required=True)
     ap.add_argument("--combo", action="append", default=[], help="RIGHT+LEFT weapon names, repeatable")
     ap.add_argument("--upgrade", type=int, default=25)
-    ap.add_argument("--stats", help="override the base build's attributes, e.g. str=80,dex=20,vit=41")
+    ap.add_argument("--stats", help="override the base build's attributes, e.g. str=80,dex=20,end=41")
     ap.add_argument("--class", dest="character_class",
                     help="override the base build's starting class (the planner's `characterClass`, e.g. Hero)")
     ap.add_argument("--name")
@@ -295,7 +295,9 @@ def publish(a, slots, set_names, ammo=None):
     if a.gear:
         apply_gear(doc, json.loads(a.gear.read_text()))
     if a.stats:
-        doc["stats"].update({k: int(v) for k, v in (p.split("=") for p in a.stats.split(","))})
+        # The planner document spells Endurance `vit`, so `end=` is written under that key.
+        doc["stats"].update({("vit" if k == "end" else k): int(v)
+                             for k, v in (p.split("=") for p in a.stats.split(","))})
         doc.pop("computed", None)
     if a.character_class:
         doc["characterClass"] = a.character_class

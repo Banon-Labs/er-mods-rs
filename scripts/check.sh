@@ -2539,6 +2539,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 # `replace.rs` passes the suite while the agent or the checker reads the wrong offsets in game.
 python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
 python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
+# The Shaders panel's pixel oracle holds its copies of the design tokens, the part names and the
+# panel telemetry's keys to theme.rs, mod.rs and exports.rs, and renders the mockup's panel in the
+# vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle that moves a token,
+# or a capture step that changes, would otherwise leave it judging the game against stale colours.
+python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
 
 # er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what
 # the dynamic resolution update is told for each, how the drawn size comes back out of the

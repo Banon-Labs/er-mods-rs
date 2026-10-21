@@ -14,11 +14,16 @@
 //!
 //! A payload opens with a four-byte tag naming its message. Its fields follow in a fixed order:
 //! integers little-endian, booleans as one byte that is 0 or 1, and strings and byte strings as a
-//! `u32` length and the bytes, strings in UTF-8. Three messages exist:
+//! `u32` length and the bytes, strings in UTF-8. Five messages exist:
 //!
 //! - [`Request`] (`REQ1`), from the DLL: compile a source, answer the handshake, or abort;
 //! - [`Response`] (`RSP1`), from the helper: the answer to a compile;
-//! - [`Handshake`] (`HSK1`), from the helper: the answer to a handshake request.
+//! - [`Handshake`] (`HSK1`), from the helper: the answer to a handshake request;
+//! - [`PatchRequest`] (`PVQ1`), from the DLL: splice a vertex carrier into game vertex shaders
+//!   (design `docs/plans/er-shader-editor-vertex.md`, section 7.3);
+//! - [`PatchResponse`] (`PVA1`), from the helper: a patched container, or why not, per shader.
+//!
+//! The helper reads both requests from one stream; [`Incoming::decode`] picks one by its tag.
 //!
 //! Decoding is strict. An unknown tag or op, a string that is not UTF-8, a length that runs past
 //! the payload and bytes left over after the last field are all an `Err`, because a payload that
@@ -32,8 +37,9 @@ use std::io::{self, Read, Write};
 pub const MAX_FRAME_BYTES: usize = 4 << 20;
 
 /// The version of this format. The helper reports it in its [`Handshake`]; the DLL refuses a
-/// helper that reports another ([`crate::check_handshake`]). 2 added [`Handshake::dxcompiler`].
-pub const PROTOCOL_VERSION: u32 = 2;
+/// helper that reports another ([`crate::check_handshake`]). 2 added [`Handshake::dxcompiler`], 3
+/// the vertex patch messages.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The bytes of a frame's length prefix.
 const LENGTH_BYTES: usize = 4;
@@ -185,6 +191,8 @@ pub enum ProtocolError {
     NotUtf8(&'static str),
     /// This boolean field is neither 0 nor 1.
     NotABool(&'static str, u8),
+    /// This field holds a value its type does not have.
+    OutOfRange(&'static str, u32),
     /// This many bytes follow the last field.
     TrailingBytes(usize),
     /// The pipe itself failed.
@@ -211,6 +219,7 @@ impl fmt::Display for ProtocolError {
             Self::UnknownOp(op) => write!(f, "unknown request op {op}"),
             Self::NotUtf8(what) => write!(f, "{what} is not UTF-8"),
             Self::NotABool(what, byte) => write!(f, "{what} is {byte}, neither 0 nor 1"),
+            Self::OutOfRange(what, value) => write!(f, "{what} is {value}, which it cannot be"),
             Self::TrailingBytes(count) => write!(f, "{count} bytes follow the last field"),
             Self::Io { kind, message } => write!(f, "pipe error ({kind:?}): {message}"),
         }
@@ -369,6 +378,10 @@ impl Encoder {
         self.0.push(u8::from(value));
     }
 
+    fn byte(&mut self, value: u8) {
+        self.0.push(value);
+    }
+
     fn bytes(&mut self, value: &[u8], what: &'static str) -> Result<(), ProtocolError> {
         self.u32(frame_len(value.len(), what)?);
         self.0.extend_from_slice(value);
@@ -515,6 +528,289 @@ impl Message for Handshake {
             dxcompiler: input.string("the compiler's path")?,
         })
     }
+}
+
+/// A request from the DLL to splice a vertex carrier into game vertex shaders
+/// ([`crate::patch::patch_vertex`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatchRequest {
+    /// Chosen by the DLL; the answer carries it back.
+    pub id: u64,
+    /// The carrier: the vertex layers compiled as a `vs_6_0` container.
+    pub carrier: Vec<u8>,
+    /// Give a velocity pass's previous position the layers at the previous time.
+    pub previous: bool,
+    /// The game's vertex shader containers, each patched on its own.
+    pub items: Vec<Vec<u8>>,
+}
+
+/// How the second, previous-time instance went for one shader ([`crate::vsplice::PreviousOutcome`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PreviousKind {
+    /// Not a velocity pass, or the request did not ask.
+    None = 0,
+    /// The previous position is moved at the previous time.
+    Applied = 1,
+    /// A velocity pass whose previous position could not be given the previous time: its motion
+    /// vectors carry the camera's motion only.
+    Skipped = 2,
+}
+
+impl PreviousKind {
+    fn from_u8(value: u8) -> Result<Self, ProtocolError> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Applied),
+            2 => Ok(Self::Skipped),
+            other => Err(ProtocolError::OutOfRange(
+                "the previous outcome",
+                u32::from(other),
+            )),
+        }
+    }
+}
+
+/// What became of one shader of a [`PatchRequest`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatchItem {
+    /// The container was patched, assembled, validated and passed residual identity.
+    pub ok: bool,
+    /// The patched container, signed by the validator; empty when `ok` is false.
+    pub blob: Vec<u8>,
+    /// Empty when `ok`; else one word: a [`crate::vsplice::Refusal::class`], or `disassemble`,
+    /// `assemble`, `validate`, `residual`, `no_patcher`.
+    pub class: String,
+    /// Why, in a sentence, when `ok` is false; the splice's previous-time note otherwise.
+    pub detail: String,
+    /// The DXIL element id of `POSITION0`.
+    pub position_element: u32,
+    /// Instructions added, and cloned for the previous position.
+    pub inserted: u32,
+    pub cloned: u32,
+    pub blocks_added: u32,
+    pub previous: PreviousKind,
+    /// The output element the previous position goes to, when [`PreviousKind::Applied`].
+    pub previous_element: u32,
+    /// FNV-1a 64 of instance 0's code with the game's names replaced: equal in every shader the
+    /// same carrier went into.
+    pub instance0_hash: u64,
+    /// Milliseconds of each step: disassemble, splice, assemble, validate, residual.
+    pub ms: [f32; 5],
+}
+
+impl PatchItem {
+    /// A shader that was not patched, for `class` and `detail`.
+    #[must_use]
+    pub fn refused(class: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            blob: Vec::new(),
+            class: class.into(),
+            detail: detail.into(),
+            position_element: 0,
+            inserted: 0,
+            cloned: 0,
+            blocks_added: 0,
+            previous: PreviousKind::None,
+            previous_element: 0,
+            instance0_hash: 0,
+            ms: [0.0; 5],
+        }
+    }
+}
+
+/// The helper's answer to a [`PatchRequest`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatchResponse {
+    pub id: u64,
+    /// The carrier passed `vsplice::check_carrier`. When it did not, every item is refused.
+    pub carrier_ok: bool,
+    /// Why the carrier was refused; empty when it was not.
+    pub carrier_detail: String,
+    /// The compiler that answered, as [`crate::DxcVersion`] prints it; empty with none.
+    pub dxc_version: String,
+    /// One per item of the request, in its order.
+    pub items: Vec<PatchItem>,
+}
+
+impl PatchResponse {
+    /// An answer refusing every item of `request` for one reason.
+    #[must_use]
+    pub fn refused_all(
+        request: &PatchRequest,
+        carrier_ok: bool,
+        class: &str,
+        detail: &str,
+        dxc_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: request.id,
+            carrier_ok,
+            carrier_detail: if carrier_ok {
+                String::new()
+            } else {
+                detail.to_owned()
+            },
+            dxc_version: dxc_version.into(),
+            items: request
+                .items
+                .iter()
+                .map(|_| PatchItem::refused(class, detail))
+                .collect(),
+        }
+    }
+}
+
+impl Message for PatchRequest {
+    const TAG: [u8; 4] = *b"PVQ1";
+
+    fn encode_fields(&self, out: &mut Encoder) -> Result<(), ProtocolError> {
+        out.u64(self.id);
+        out.bytes(&self.carrier, "the carrier")?;
+        out.bool(self.previous);
+        out.u32(frame_len(self.items.len(), "the item list")?);
+        for item in &self.items {
+            out.bytes(item, "a vertex shader")?;
+        }
+        Ok(())
+    }
+
+    fn decode_fields(input: &mut Decoder<'_>) -> Result<Self, ProtocolError> {
+        let id = input.u64("the request id")?;
+        let carrier = input.bytes("the carrier")?.to_vec();
+        let previous = input.bool("the previous flag")?;
+        let count = input.u32("the item count")?;
+        // Grown one at a time, so a corrupt count costs a `Truncated`, not an allocation.
+        let mut items = Vec::new();
+        for _ in 0..count {
+            items.push(input.bytes("a vertex shader")?.to_vec());
+        }
+        Ok(Self {
+            id,
+            carrier,
+            previous,
+            items,
+        })
+    }
+}
+
+impl Message for PatchResponse {
+    const TAG: [u8; 4] = *b"PVA1";
+
+    fn encode_fields(&self, out: &mut Encoder) -> Result<(), ProtocolError> {
+        out.u64(self.id);
+        out.bool(self.carrier_ok);
+        out.str(&self.carrier_detail, "the carrier's refusal")?;
+        out.str(&self.dxc_version, "the compiler version")?;
+        out.u32(frame_len(self.items.len(), "the item list")?);
+        for item in &self.items {
+            out.bool(item.ok);
+            out.bytes(&item.blob, "a patched shader")?;
+            out.str(&item.class, "a refusal class")?;
+            out.str(&item.detail, "a refusal")?;
+            out.u32(item.position_element);
+            out.u32(item.inserted);
+            out.u32(item.cloned);
+            out.u32(item.blocks_added);
+            out.byte(item.previous as u8);
+            out.u32(item.previous_element);
+            out.u64(item.instance0_hash);
+            for ms in item.ms {
+                out.u32(ms.to_bits());
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_fields(input: &mut Decoder<'_>) -> Result<Self, ProtocolError> {
+        let id = input.u64("the response id")?;
+        let carrier_ok = input.bool("the carrier flag")?;
+        let carrier_detail = input.string("the carrier's refusal")?;
+        let dxc_version = input.string("the compiler version")?;
+        let count = input.u32("the item count")?;
+        let mut items = Vec::new();
+        for _ in 0..count {
+            let ok = input.bool("an item's ok flag")?;
+            let blob = input.bytes("a patched shader")?.to_vec();
+            let class = input.string("a refusal class")?;
+            let detail = input.string("a refusal")?;
+            let position_element = input.u32("the position element")?;
+            let inserted = input.u32("the instructions inserted")?;
+            let cloned = input.u32("the instructions cloned")?;
+            let blocks_added = input.u32("the blocks added")?;
+            let previous = PreviousKind::from_u8(input.array::<1>("the previous outcome")?[0])?;
+            let previous_element = input.u32("the previous element")?;
+            let instance0_hash = input.u64("the instance hash")?;
+            let mut ms = [0.0_f32; 5];
+            for slot in &mut ms {
+                *slot = f32::from_bits(input.u32("a step's milliseconds")?);
+            }
+            items.push(PatchItem {
+                ok,
+                blob,
+                class,
+                detail,
+                position_element,
+                inserted,
+                cloned,
+                blocks_added,
+                previous,
+                previous_element,
+                instance0_hash,
+                ms,
+            });
+        }
+        Ok(Self {
+            id,
+            carrier_ok,
+            carrier_detail,
+            dxc_version,
+            items,
+        })
+    }
+}
+
+/// A request the helper read: either message the DLL sends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Incoming {
+    Request(Request),
+    Patch(PatchRequest),
+}
+
+impl Incoming {
+    /// A payload as whichever request its tag names.
+    ///
+    /// # Errors
+    ///
+    /// A tag that is neither request's, or the decoding error of the one it names.
+    pub fn decode(payload: &[u8]) -> Result<Self, ProtocolError> {
+        match payload.get(..4) {
+            Some(tag) if tag == PatchRequest::TAG => PatchRequest::decode(payload).map(Self::Patch),
+            _ => Request::decode(payload).map(Self::Request),
+        }
+    }
+
+    /// The request's id.
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        match self {
+            Self::Request(request) => request.id,
+            Self::Patch(patch) => patch.id,
+        }
+    }
+}
+
+/// Read one frame and decode it as either request, or `None` when the stream ended cleanly
+/// between frames.
+///
+/// # Errors
+///
+/// As [`read_frame`] and [`Incoming::decode`].
+pub fn receive_incoming(input: &mut impl Read) -> Result<Option<Incoming>, ProtocolError> {
+    read_frame(input)?
+        .map(|payload| Incoming::decode(&payload))
+        .transpose()
 }
 
 #[cfg(test)]
@@ -737,6 +1033,133 @@ mod tests {
             Request::decode(&payload),
             Err(ProtocolError::Truncated("a define name"))
         );
+    }
+
+    fn patch_request() -> PatchRequest {
+        PatchRequest {
+            id: 11,
+            carrier: b"DXBC carrier".to_vec(),
+            previous: true,
+            items: vec![
+                b"DXBC game vs one".to_vec(),
+                Vec::new(),
+                b"DXBC two".to_vec(),
+            ],
+        }
+    }
+
+    fn patch_response() -> PatchResponse {
+        let mut applied = PatchItem::refused("", "");
+        applied.ok = true;
+        applied.blob = b"DXBC patched".to_vec();
+        applied.position_element = 2;
+        applied.inserted = 31;
+        applied.cloned = 14;
+        applied.blocks_added = 2;
+        applied.previous = PreviousKind::Applied;
+        applied.previous_element = 5;
+        applied.instance0_hash = 0x0123_4567_89ab_cdef;
+        applied.ms = [0.5, 0.25, 1.0, 2.0, f32::INFINITY];
+        PatchResponse {
+            id: 11,
+            carrier_ok: true,
+            carrier_detail: String::new(),
+            dxc_version: "1.9 (1.9.2609.5)".to_owned(),
+            items: vec![
+                applied,
+                PatchItem::refused("no_position", "no POSITION0 input"),
+                PatchItem::refused("residual", "line 9 differs"),
+            ],
+        }
+    }
+
+    #[test]
+    fn the_patch_messages_round_trip_and_share_the_request_stream() {
+        let mut stream = Vec::new();
+        send(&mut stream, &Request::handshake(10)).unwrap();
+        send(&mut stream, &patch_request()).unwrap();
+        send(&mut stream, &patch_response()).unwrap();
+        let mut input = stream.as_slice();
+        assert_eq!(
+            receive_incoming(&mut input),
+            Ok(Some(Incoming::Request(Request::handshake(10))))
+        );
+        let read = receive_incoming(&mut input).unwrap().unwrap();
+        assert_eq!(read.id(), 11);
+        assert_eq!(read, Incoming::Patch(patch_request()));
+        // A response is neither request.
+        let response: PatchResponse = receive(&mut input).unwrap().unwrap();
+        assert_eq!(response, patch_response());
+        assert_eq!(receive_incoming(&mut input), Ok(None));
+        let payload = patch_response().encode().unwrap();
+        assert!(matches!(
+            Incoming::decode(&payload),
+            Err(ProtocolError::WrongMessage { .. })
+        ));
+    }
+
+    #[test]
+    fn a_patch_payload_cut_anywhere_is_refused() {
+        for payload in [
+            patch_request().encode().unwrap(),
+            patch_response().encode().unwrap(),
+        ] {
+            for cut in 0..payload.len() {
+                let request = PatchRequest::decode(&payload[..cut]);
+                let response = PatchResponse::decode(&payload[..cut]);
+                assert!(request.is_err() && response.is_err(), "cut {cut}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_previous_outcome_is_refused() {
+        let mut payload = patch_response().encode().unwrap();
+        // The first item's previous byte: after the tag, id, flag, two empty-or-short strings,
+        // the count, the flag, the blob, the two strings and four u32s.
+        let response = patch_response();
+        let item = &response.items[0];
+        let at = 4
+            + 8
+            + 1
+            + 4
+            + response.carrier_detail.len()
+            + 4
+            + response.dxc_version.len()
+            + 4
+            + 1
+            + 4
+            + item.blob.len()
+            + 4
+            + item.class.len()
+            + 4
+            + item.detail.len()
+            + 16;
+        assert_eq!(payload[at], PreviousKind::Applied as u8);
+        payload[at] = 3;
+        assert_eq!(
+            PatchResponse::decode(&payload),
+            Err(ProtocolError::OutOfRange("the previous outcome", 3))
+        );
+    }
+
+    #[test]
+    fn refusing_every_item_keeps_the_count_and_the_reason() {
+        let request = patch_request();
+        let refused = PatchResponse::refused_all(&request, false, "carrier_operation", "waves", "");
+        assert_eq!(refused.id, request.id);
+        assert!(!refused.carrier_ok);
+        assert_eq!(refused.carrier_detail, "waves");
+        assert_eq!(refused.items.len(), request.items.len());
+        assert!(
+            refused
+                .items
+                .iter()
+                .all(|item| !item.ok && item.class == "carrier_operation" && item.blob.is_empty())
+        );
+        let accepted = PatchResponse::refused_all(&request, true, "too_large", "big", "1.9");
+        assert!(accepted.carrier_ok && accepted.carrier_detail.is_empty());
+        assert!(accepted.items.iter().all(|item| item.detail == "big"));
     }
 
     #[test]

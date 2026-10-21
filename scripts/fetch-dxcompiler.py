@@ -22,19 +22,29 @@ is fetched onto this machine from the official release and nothing else:
 `--check` is the gate. It asserts that no copy of dxcompiler.dll, dxil.dll or a DXC release zip
 is tracked by git and that `.gitignore` keeps one out wherever it lands, and, when a copy has been
 fetched to `--dest`, that it is the pinned file with its licence beside it. Without a fetched copy
-it says so and checks the rest.
+it says so and checks the rest; with `--require` a missing copy fails it too, which is how
+`scripts/er-build-dlls.sh` and `scripts/er-run-branch.py` hold er_cel_shade.dll to having its
+compiler beside it.
 
 Usage:
     python3 scripts/fetch-dxcompiler.py                 # fetch to the default --dest
     python3 scripts/fetch-dxcompiler.py --zip <file>    # from a copy of the release zip on disk
     python3 scripts/fetch-dxcompiler.py --dest <dir>    # e.g. <Game>/er-shader-editor/compiler/
     python3 scripts/fetch-dxcompiler.py --check
+    python3 scripts/fetch-dxcompiler.py --check --require --dest <dir>
     python3 scripts/fetch-dxcompiler.py --selftest
 
 The default `--dest` is `target/x86_64-pc-windows-msvc/release/` in this checkout, beside the
 `er_cel_shade.dll` and `er-shader-compiler.exe` that `scripts/er-build-dlls.sh er-cel-shade`
-builds there. Fetching is skipped when
-`--dest` already holds the pinned files. The download is 32 MB with a per-read timeout of
+builds there; that script runs this one after every build of er-cel-shade, so a fresh checkout
+or worktree gets its copy from the build. Fetching is skipped when `--dest` already holds the
+pinned files.
+
+The pinned files are also kept in a cache outside every checkout, `--cache`, by default
+`$XDG_CACHE_HOME/er-mods-rs/dxcompiler/<release tag>/` (`~/.cache` without it), and a fetch takes
+them from there when they are there and still hash to their pins, so each new worktree is one
+copy and not a 32 MB download. The cache is checked exactly as `--dest` is, so a file changed in
+it is fetched again, never copied. Otherwise the download is 32 MB with a per-read timeout of
 `READ_TIMEOUT_SECONDS`; run it in the background where a shell caps a call at 30 s.
 """
 
@@ -64,6 +74,12 @@ RELEASE_URL = ("https://github.com/microsoft/DirectXShaderCompiler/releases/down
                "v1.9.2609/dxc_2026_09_29.zip")
 RELEASE_SHA256 = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
 RELEASE_BYTES = 32_287_592
+
+
+def default_cache() -> Path:
+    """The cache outside every checkout: `$XDG_CACHE_HOME/er-mods-rs/dxcompiler/<tag>/`."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "er-mods-rs" / "dxcompiler" / RELEASE_TAG
 
 # What is taken out of the zip, by member name with `/` separators (the zip itself uses `\`), and
 # the name and digest it is written under.
@@ -160,6 +176,42 @@ def install(files: dict[str, bytes], dest: Path) -> None:
         os.replace(partial, dest / name)
 
 
+def read_pinned(source: Path, pins: Pins) -> dict[str, bytes]:
+    """The pinned files in `source` by name, each refused unless it still hashes to its pin: read
+    once and checked as read, so what is installed is what was checked."""
+    files = {}
+    for _, name, digest in pins.members:
+        data = (source / name).read_bytes()
+        if sha256(data) != digest:
+            raise Refused(f"{source / name} hashes to {sha256(data)}, not the pinned {digest}")
+        files[name] = data
+    return files
+
+
+def fetch_into(dest: Path, cache: Path | None, archive, pins: Pins) -> str:
+    """Make `dest` hold the pinned files: as they are when it does, from `cache` when the cache
+    holds them, else extracted from `archive()`, the release zip's bytes, and kept in `cache` too
+    when there is one. Returns where they came from: `present`, `cache` or `release`. A cache that
+    cannot be written is reported and does not stop the fetch."""
+    if problems_at(dest, pins) == []:
+        return "present"
+    if cache is not None and problems_at(cache, pins) == []:
+        try:
+            install(read_pinned(cache, pins), dest)
+            return "cache"
+        except (OSError, Refused) as error:
+            print(f"fetch-dxcompiler: the cache at {cache} did not serve: {error}",
+                  file=sys.stderr)
+    files = extract(archive(), pins)
+    if cache is not None:
+        try:
+            install(files, cache)
+        except OSError as error:
+            print(f"fetch-dxcompiler: could not keep a copy in {cache}: {error}", file=sys.stderr)
+    install(files, dest)
+    return "release"
+
+
 def problems_at(dest: Path, pins: Pins) -> list[str] | None:
     """What is wrong with the fetched files in `dest`, or None when nothing was fetched there."""
     present = [(name, digest) for _, name, digest in pins.members if (dest / name).is_file()]
@@ -214,7 +266,14 @@ def not_ignored(probes: tuple[str, ...]) -> list[str]:
     return misses
 
 
-def check(dest: Path) -> int:
+def missing_problem(dest: Path) -> str:
+    """What `--check --require` says when nothing was fetched to `dest`."""
+    return (f"no {DLL_NAME} at {dest}, so er_cel_shade.dll there has no compiler: fetch it with "
+            f"`python3 {REPO / 'scripts' / 'fetch-dxcompiler.py'} --dest {dest}`, or build "
+            f"er-cel-shade with `{REPO / 'scripts' / 'er-build-dlls.sh'}`, which fetches it")
+
+
+def check(dest: Path, require: bool = False) -> int:
     failures = []
     tracked = never_tracked(tracked_paths())
     if tracked:
@@ -227,7 +286,9 @@ def check(dest: Path) -> int:
     else:
         print(f"fetch-dxcompiler: .gitignore keeps a fetched copy out ({len(IGNORE_PROBES)} paths)")
     problems = problems_at(dest, PINS)
-    if problems is None:
+    if problems is None and require:
+        failures.append(missing_problem(dest))
+    elif problems is None:
         print(f"fetch-dxcompiler: nothing fetched at {dest}; no fetched copy to compare")
     elif problems:
         failures.extend(problems)
@@ -238,23 +299,24 @@ def check(dest: Path) -> int:
     return 1 if failures else 0
 
 
-def fetch(dest: Path, zip_path: Path | None) -> int:
-    if problems_at(dest, PINS) == []:
-        print(f"fetch-dxcompiler: {dest / DLL_NAME} is already the pinned {RELEASE_TAG} build")
-        return 0
-    try:
+def fetch(dest: Path, zip_path: Path | None, cache: Path | None) -> int:
+    def archive() -> bytes:
         if zip_path is not None:
-            archive = zip_path.read_bytes()
-        else:
-            print(f"fetch-dxcompiler: downloading {RELEASE_URL}")
-            archive = download(RELEASE_URL, RELEASE_BYTES)
-        files = extract(archive, PINS)
-    except Refused as refusal:
+            return zip_path.read_bytes()
+        print(f"fetch-dxcompiler: downloading {RELEASE_URL}")
+        return download(RELEASE_URL, RELEASE_BYTES)
+
+    try:
+        came_from = fetch_into(dest, cache, archive, PINS)
+    except (Refused, OSError) as refusal:
         print(f"fetch-dxcompiler: refused: {refusal}", file=sys.stderr)
         return 1
-    install(files, dest)
-    for name in files:
-        print(f"fetch-dxcompiler: wrote {dest / name}")
+    if came_from == "present":
+        print(f"fetch-dxcompiler: {dest / DLL_NAME} is already the pinned {RELEASE_TAG} build")
+        return 0
+    source = f"the cache at {cache}" if came_from == "cache" else f"the {RELEASE_TAG} release"
+    for _, name, _ in PINS.members:
+        print(f"fetch-dxcompiler: wrote {dest / name} from {source}")
     return 0
 
 
@@ -323,6 +385,44 @@ def selftest() -> int:
         if missing and "missing" not in missing[0]:
             failures.append(f"a missing licence: reported as {missing[0]!r}")
 
+        # The cache: the first fetch downloads and keeps a copy, the next worktree copies it, a
+        # destination already current is left alone, and a changed cache is fetched past.
+        downloads = []
+
+        def archive() -> bytes:
+            downloads.append(1)
+            return good
+
+        cache = Path(tmp) / "cache"
+        first, second = Path(tmp) / "first", Path(tmp) / "second"
+        expect("a first fetch downloads", fetch_into(first, cache, archive, pins), "release")
+        expect("it keeps a copy in the cache", problems_at(cache, pins), [])
+        expect("the next checkout copies the cache", fetch_into(second, cache, archive, pins),
+               "cache")
+        expect("what the cache gave is the pinned files", problems_at(second, pins), [])
+        expect("a current destination is left alone", fetch_into(second, cache, archive, pins),
+               "present")
+        expect("one download for three fetches", len(downloads), 1)
+        (cache / DLL_NAME).write_bytes(b"MZ tampered")
+        third = Path(tmp) / "third"
+        expect("a changed cache is fetched past", fetch_into(third, cache, archive, pins),
+               "release")
+        expect("and the cache is mended", problems_at(cache, pins), [])
+        expect("no cache at all still fetches", fetch_into(Path(tmp) / "fourth", None, archive,
+                                                          pins), "release")
+        tampered = Path(tmp) / "tampered"
+        install(extract(good, pins), tampered)
+        (tampered / DLL_NAME).write_bytes(b"MZ another compiler")
+        refused("a cached file changed between the check and the read",
+                lambda: read_pinned(tampered, pins), "not the pinned")
+
+        # `--require` makes nothing fetched a failure, and names how to fetch it.
+        empty = Path(tmp) / "empty"
+        expect("nothing fetched", problems_at(empty, pins), None)
+        said = missing_problem(empty)
+        if str(empty) not in said or "fetch-dxcompiler.py --dest" not in said:
+            failures.append(f"--require's message does not say how to fetch: {said!r}")
+
     expect("never-tracked names", never_tracked([
         "target/x/dxcompiler.dll", "a/Dxcompiler.DLL", "third_party/dxil.dll", "dxc_2026_09_29.zip",
         "docs/dxcompiler.md", "dxcompiler.dll.txt", "crates/x/src/dxc.rs", "scripts/fetch-dxcompiler.py",
@@ -350,15 +450,23 @@ def main() -> int:
     parser.add_argument("--dest", type=Path, default=DEFAULT_DEST,
                         help=f"where the files go (default {DEFAULT_DEST})")
     parser.add_argument("--zip", type=Path, help="a copy of the release zip already on disk")
+    parser.add_argument("--cache", type=Path, default=default_cache(),
+                        help=f"the copy kept outside every checkout (default {default_cache()})")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="neither read nor write the cache")
     parser.add_argument("--check", action="store_true",
                         help="nothing is tracked or trackable, and a fetched copy is the pinned one")
+    parser.add_argument("--require", action="store_true",
+                        help="with --check: a missing copy at --dest fails too")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
+    if args.require and not args.check:
+        parser.error("--require goes with --check")
     if args.selftest:
         return selftest()
     if args.check:
-        return check(args.dest)
-    return fetch(args.dest, args.zip)
+        return check(args.dest, args.require)
+    return fetch(args.dest, args.zip, None if args.no_cache else args.cache)
 
 
 if __name__ == "__main__":

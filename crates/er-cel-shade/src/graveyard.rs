@@ -234,6 +234,9 @@ mod process {
         Table(Box<Table>),
         /// A pipeline or a buffer that command lists the GPU has not finished may still name.
         Com(OwnedCom),
+        /// Every pipeline one publish retired, released together as one grave, so the
+        /// [`super::CAPACITY`] counts publishes rather than pipelines.
+        Batch(Vec<OwnedCom>),
     }
 
     static GRAVEYARD: Mutex<Graveyard<Corpse>> = Mutex::new(Graveyard::new());
@@ -319,7 +322,14 @@ mod process {
             note(&yard);
             released
         };
-        RELEASED.fetch_add(released.len() as u64, Ordering::Relaxed);
+        let objects: usize = released
+            .iter()
+            .map(|corpse| match corpse {
+                Corpse::Batch(batch) => batch.len(),
+                Corpse::Table(_) | Corpse::Com(_) => 1,
+            })
+            .sum();
+        RELEASED.fetch_add(objects as u64, Ordering::Relaxed);
         // Dropped here, outside the lock: each `Com` drop calls into the driver.
         drop(released);
     }
@@ -420,6 +430,20 @@ mod tests {
         assert_eq!(ids, (1..=CAPACITY).collect::<Vec<_>>());
         drop(released);
         assert_eq!(drops.get(), CAPACITY);
+    }
+
+    #[test]
+    fn a_publish_that_retires_thousands_of_pipelines_takes_one_grave() {
+        // What a vertex code edit retires at once in run1: every variant of every live group.
+        let mut yard: Graveyard<Vec<usize>> = Graveyard::new();
+        for publish in 0..CAPACITY {
+            yard.retire((0..8_429).map(|n| n + publish).collect(), 0, 0);
+        }
+        assert_eq!(yard.len(), CAPACITY);
+        assert_eq!(yard.leaked(), 0);
+        let released = yard.collect(presents(30, 1_000));
+        assert_eq!(released.len(), CAPACITY);
+        assert!(released.iter().all(|batch| batch.len() == 8_429));
     }
 
     #[test]

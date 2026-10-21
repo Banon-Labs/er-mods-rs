@@ -38,7 +38,7 @@ use std::sync::{Arc, Weak};
 use crate::replace::{
     POINTER_FREE_SUBOBJECTS, Payload, SHADER_SUBOBJECTS, SUBOBJECT_CACHED_PSO,
     SUBOBJECT_INPUT_LAYOUT, SUBOBJECT_PS, SUBOBJECT_ROOT_SIGNATURE, SUBOBJECT_STREAM_OUTPUT,
-    SUBOBJECT_VIEW_INSTANCING, Subobject, Walk, fnv1_64, subobjects,
+    SUBOBJECT_VIEW_INSTANCING, SUBOBJECT_VS, Subobject, Walk, fnv1_64, subobjects,
 };
 
 /// `D3D12_SHADER_BYTECODE`.
@@ -311,6 +311,10 @@ pub struct PipelineRecord {
     /// Byte offset of the first pixel shader subobject's payload.
     ps_offset: Option<usize>,
     ps: Option<Arc<[u8]>>,
+    /// The same for the first vertex shader subobject: what a vertex variant replaces
+    /// (`docs/plans/er-shader-editor-vertex.md`, section 7.1).
+    vs_offset: Option<usize>,
+    vs: Option<Arc<[u8]>>,
     // What the stream's pointers aim at. Boxed slices and C strings keep their heap addresses when
     // the record moves, and none of them is changed after the copy.
     shaders: Vec<Arc<[u8]>>,
@@ -363,6 +367,8 @@ impl PipelineRecord {
             root_signature: 0,
             ps_offset: None,
             ps: None,
+            vs_offset: None,
+            vs: None,
             shaders: Vec::new(),
             input_layouts: Vec::new(),
             so_declarations: Vec::new(),
@@ -391,6 +397,9 @@ impl PipelineRecord {
                 if ty == SUBOBJECT_PS && record.ps_offset.is_none() {
                     record.ps_offset = Some(at);
                     record.ps = owned;
+                } else if ty == SUBOBJECT_VS && record.vs_offset.is_none() {
+                    record.vs_offset = Some(at);
+                    record.vs = owned;
                 }
                 record.write(at, copied);
             } else if ty == SUBOBJECT_ROOT_SIGNATURE {
@@ -459,6 +468,47 @@ impl PipelineRecord {
         self.ps.as_deref()
     }
 
+    /// Byte offset of the vertex shader subobject's payload, if the stream has one.
+    #[must_use]
+    pub fn vs_offset(&self) -> Option<usize> {
+        self.vs_offset
+    }
+
+    /// The game's vertex shader bytes, as the record holds them.
+    #[must_use]
+    pub fn vs(&self) -> Option<&[u8]> {
+        self.vs.as_deref()
+    }
+
+    /// The game's vertex shader bytes, shared: the store holds each distinct shader once.
+    #[must_use]
+    pub fn vs_shared(&self) -> Option<Arc<[u8]>> {
+        self.vs.clone()
+    }
+
+    /// Stream-output declarations the stream asks for: 0 when it has no `STREAM_OUTPUT`
+    /// subobject or an empty one.
+    #[must_use]
+    pub fn stream_output_entries(&self) -> u32 {
+        self.subobjects
+            .iter()
+            .filter(|subobject| subobject.ty == SUBOBJECT_STREAM_OUTPUT)
+            .map(|subobject| self.read::<StreamOutputDesc>(subobject.offset).entries)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Views the stream instances over: 0 when it has no `VIEW_INSTANCING` subobject.
+    #[must_use]
+    pub fn view_instance_count(&self) -> u32 {
+        self.subobjects
+            .iter()
+            .filter(|subobject| subobject.ty == SUBOBJECT_VIEW_INSTANCING)
+            .map(|subobject| self.read::<ViewInstancingDesc>(subobject.offset).count)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Bytes this record holds beyond its own fields; shader bytes shared with other records are
     /// counted in each.
     #[must_use]
@@ -484,11 +534,26 @@ impl PipelineRecord {
     /// stream has no pixel shader subobject.
     #[must_use]
     pub fn with_ps<'a>(&'a self, ps: &'a [u8]) -> Option<SerializedStream<'a>> {
-        let at = self.ps_offset?;
+        self.with_shader_at(self.ps_offset?, ps)
+    }
+
+    /// The stream with its vertex shader replaced by `vs`, for a vertex variant's creation
+    /// (`docs/plans/er-shader-editor-vertex.md`, section 7.1). `None` when the stream has no
+    /// vertex shader subobject.
+    #[must_use]
+    pub fn with_vs<'a>(&'a self, vs: &'a [u8]) -> Option<SerializedStream<'a>> {
+        self.with_shader_at(self.vs_offset?, vs)
+    }
+
+    /// The stream with the shader whose payload is at `at` replaced by `bytes`.
+    fn with_shader_at<'a>(&'a self, at: usize, bytes: &'a [u8]) -> Option<SerializedStream<'a>> {
+        if at + size_of::<ShaderBytecode>() > self.size {
+            return None;
+        }
         let mut words = self.stream.to_vec();
         let shader = ShaderBytecode {
-            bytecode: ps.as_ptr(),
-            length: ps.len(),
+            bytecode: bytes.as_ptr(),
+            length: bytes.len(),
         };
         // SAFETY: the walker placed this payload inside the stream, and `copy` checked its size.
         unsafe {
@@ -1297,12 +1362,44 @@ mod tests {
     }
 
     #[test]
+    fn the_vertex_shader_is_found_and_replaced_and_nothing_else_moves() {
+        let source = Source::new();
+        let (stream, at) = stream_of(&source);
+        let record = copy(&stream, &mut ShaderStore::new()).expect("copied");
+        assert_eq!(record.vs_offset(), Some(at.vs));
+        assert_eq!(record.vs(), Some(&source.vs[..]));
+        assert_eq!(record.vs_shared().as_deref(), Some(&source.vs[..]));
+        let patched = b"DXBC patched vertex shader".to_vec();
+        let serialized = record.with_vs(&patched).expect("has a vertex shader");
+        let replaced: ShaderBytecode = payload_at(serialized.bytes(), at.vs);
+        assert_eq!(
+            replaced,
+            ShaderBytecode {
+                bytecode: patched.as_ptr(),
+                length: patched.len()
+            }
+        );
+        let size = size_of::<ShaderBytecode>();
+        assert_eq!(serialized.bytes()[..at.vs], record.stream()[..at.vs]);
+        assert_eq!(
+            serialized.bytes()[at.vs + size..],
+            record.stream()[at.vs + size..]
+        );
+        // The stream the sample builds carries two stream-output declarations and one view.
+        assert_eq!(record.stream_output_entries(), 2);
+        assert_eq!(record.view_instance_count(), 1);
+    }
+
+    #[test]
     fn a_stream_with_no_pixel_shader_has_none_to_replace() {
         let mut stream = Vec::new();
         push_value(&mut stream, 14, &3_u32);
         let record = copy(&stream, &mut ShaderStore::new()).expect("copied");
         assert_eq!(record.ps_offset(), None);
         assert!(record.with_ps(b"DXBC").is_none());
+        assert!(record.with_vs(b"DXBC").is_none());
+        assert_eq!(record.stream_output_entries(), 0);
+        assert_eq!(record.view_instance_count(), 0);
     }
 
     #[test]

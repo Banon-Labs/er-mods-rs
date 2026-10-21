@@ -32,6 +32,27 @@ pub const COUNTERS: usize = 0x60;
 /// The pick record (P4).
 pub const PICK: usize = 0x1900;
 
+/// The vertex proof region (`docs/plans/er-shader-editor-vertex.md`, section 7.7): one record per
+/// AO grid point, written by the AO port while the vertex proof mode is on.
+pub const VERTEX_SAMPLES: usize = 0x1C00;
+
+/// Bytes in one vertex proof record.
+pub const VERTEX_SAMPLE_BYTES: usize = 16;
+
+/// Byte offsets inside a vertex proof record.
+pub mod vertex {
+    /// The view depth in metres, or -1 on the sky.
+    pub const DEPTH: usize = 0;
+    /// `abs(dot)` of the G-buffer's view normal with the depth buffer's own normal, or 2 where
+    /// that is not finite.
+    pub const NORMAL_DOT: usize = 4;
+    /// The occlusion term as a half float in the low 16 bits, the diffuse light's luminance as
+    /// one in the high 16.
+    pub const SHADOW: usize = 8;
+    /// The present count the AO port read when it wrote the record.
+    pub const FRAME: usize = 12;
+}
+
 /// Samples per region lie on a grid this many points wide and high.
 pub const GRID: usize = 8;
 
@@ -60,7 +81,9 @@ pub mod header {
 
 /// Byte offsets inside a sample.
 pub mod sample {
-    /// `float3`: the colour after the game's maths and cel.
+    /// `float3`: the colour the port computed before its stage's layers: the game's maths, and at
+    /// AO the light bands and outlines the port still draws. The cel layers are layers: they are
+    /// in `POST`.
     pub const PRE: usize = 0;
     /// The present count the variant read when it wrote this sample.
     pub const FRAME: usize = 12;
@@ -123,6 +146,63 @@ const _: () = assert!(Region::Albedo.samples() + REGION_SAMPLE_BYTES == Region::
 const _: () = assert!(Region::Tonemap.samples() + REGION_SAMPLE_BYTES == PICK);
 const _: () = assert!(PICK < PROBE_BYTES);
 const _: () = assert!(sample::AUX + 4 == SAMPLE_BYTES);
+const _: () = assert!(PICK < VERTEX_SAMPLES);
+const _: () = assert!(VERTEX_SAMPLES + SAMPLES * VERTEX_SAMPLE_BYTES == PROBE_BYTES);
+const _: () = assert!(vertex::FRAME + 4 == VERTEX_SAMPLE_BYTES);
+
+/// One grid point of the vertex proof region, as one present read it back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VertexSample {
+    /// Row times [`GRID`] plus column.
+    pub index: usize,
+    /// View depth in metres; negative on the sky.
+    pub depth: f32,
+    pub normal_dot: f32,
+    pub occlusion: f32,
+    pub light: f32,
+    pub frame: u32,
+}
+
+/// A half float's value: IEEE 754 binary16 in the low 16 bits of `bits`.
+#[must_use]
+pub fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let mantissa = f32::from(bits & 0x3ff);
+    match exponent {
+        0 => sign * mantissa * 2.0_f32.powi(-24),
+        0x1f if mantissa == 0.0 => sign * f32::INFINITY,
+        0x1f => f32::NAN,
+        _ => sign * (1.0 + mantissa / 1024.0) * 2.0_f32.powi(exponent - 15),
+    }
+}
+
+/// The vertex proof region of a probe copy: every grid point whose frame is not 0. Empty for a
+/// copy shorter than a probe.
+#[must_use]
+pub fn decode_vertex(probe: &[u8]) -> Vec<VertexSample> {
+    if probe.len() < PROBE_BYTES {
+        return Vec::new();
+    }
+    (0..SAMPLES)
+        .filter_map(|index| {
+            let at = VERTEX_SAMPLES + index * VERTEX_SAMPLE_BYTES;
+            let frame = word(probe, at + vertex::FRAME)?;
+            if frame == 0 {
+                return None;
+            }
+            let shadow = word(probe, at + vertex::SHADOW)?;
+            Some(VertexSample {
+                index,
+                depth: f32::from_bits(word(probe, at + vertex::DEPTH)?),
+                normal_dot: f32::from_bits(word(probe, at + vertex::NORMAL_DOT)?),
+                occlusion: half_to_f32((shadow & 0xffff) as u16),
+                light: half_to_f32((shadow >> 16) as u16),
+                frame,
+            })
+        })
+        .collect()
+}
 
 /// Slots in the readback ring.
 pub const READBACK_SLOTS: usize = 8;
@@ -421,6 +501,12 @@ mod tests {
             ("ER_PROBE_SAMPLE_POST", sample::POST),
             ("ER_PROBE_SAMPLE_AUX", sample::AUX),
             ("ER_PROBE_PICK", PICK),
+            ("ER_PROBE_VERTEX_SAMPLES", VERTEX_SAMPLES),
+            ("ER_PROBE_VERTEX_SAMPLE_BYTES", VERTEX_SAMPLE_BYTES),
+            ("ER_PROBE_VERTEX_DEPTH", vertex::DEPTH),
+            ("ER_PROBE_VERTEX_NORMAL_DOT", vertex::NORMAL_DOT),
+            ("ER_PROBE_VERTEX_SHADOW", vertex::SHADOW),
+            ("ER_PROBE_VERTEX_FRAME", vertex::FRAME),
         ];
         for (name, value) in expected {
             assert_eq!(declared.get(name), Some(&value), "{name}");
@@ -570,6 +656,38 @@ mod tests {
             assert_ne!(read_slot(present), Some(write_slot(present)));
         }
         assert_eq!(READBACK_BYTES, 64 * 1024);
+    }
+
+    #[test]
+    fn the_vertex_region_decodes_with_its_half_floats() {
+        let mut bytes = vec![0_u8; PROBE_BYTES];
+        let at = VERTEX_SAMPLES + 9 * VERTEX_SAMPLE_BYTES;
+        set_word(&mut bytes, at + vertex::DEPTH, 12.5_f32.to_bits());
+        set_word(&mut bytes, at + vertex::NORMAL_DOT, 0.75_f32.to_bits());
+        // 0.5 is 0x3800 as a half, 3.0 is 0x4200.
+        set_word(&mut bytes, at + vertex::SHADOW, 0x3800 | (0x4200 << 16));
+        set_word(&mut bytes, at + vertex::FRAME, 41);
+        let decoded = decode_vertex(&bytes);
+        assert_eq!(
+            decoded,
+            vec![VertexSample {
+                index: 9,
+                depth: 12.5,
+                normal_dot: 0.75,
+                occlusion: 0.5,
+                light: 3.0,
+                frame: 41,
+            }]
+        );
+        assert!(decode_vertex(&bytes[..PROBE_BYTES - 1]).is_empty());
+        // Every half float, through the rules HLSL's `f32tof16` writes them by.
+        assert_eq!(half_to_f32(0x3c00), 1.0);
+        assert_eq!(half_to_f32(0xc000), -2.0);
+        assert_eq!(half_to_f32(0x7bff), 65504.0);
+        assert_eq!(half_to_f32(0x0001), 2.0_f32.powi(-24));
+        assert_eq!(half_to_f32(0x7c00), f32::INFINITY);
+        assert!(half_to_f32(0x7e00).is_nan());
+        assert_eq!(half_to_f32(0), 0.0);
     }
 
     #[test]

@@ -12,11 +12,16 @@
 //! | C | `u0, space42` | root UAV | 2 | the mask plane (P2); a 4 KB dummy until then |
 //! | D | `b1, space42` | two 32-bit root constants | 2 | set only around duplicated draws (P3) |
 //!
+//! A is visible to every stage, so the vertex layers spliced into the game's vertex shaders read
+//! the same block (`docs/plans/er-shader-editor-vertex.md`, section 7.2); a root signature that
+//! does not deny the vertex shader root access records that ([`Binding::a_vertex`]), and a vertex
+//! variant is created only on one that does. B, C and D stay visible to pixel shaders alone.
+//!
 //! So this module, in three steps:
 //!
-//! 1. appends those parameters, visible to pixel shaders, to every root signature the game
-//!    creates. Appending leaves every parameter the game knows about at its index, so the game's
-//!    own `SetGraphicsRoot*` calls are unchanged;
+//! 1. appends those parameters to every root signature the game creates. Appending leaves every
+//!    parameter the game knows about at its index, so the game's own `SetGraphicsRoot*` calls are
+//!    unchanged;
 //! 2. creates the buffers behind A, B and C on the game's device, once;
 //! 3. after every `SetGraphicsRootSignature` that sets one of those root signatures, binds A, B
 //!    and C through the command list's own vtable. Setting a root signature invalidates every root
@@ -165,6 +170,9 @@ pub struct Binding {
     pub c: u8,
     /// D: the draw constants.
     pub d: u8,
+    /// A is visible to the vertex shader: appended to a root signature that does not deny the
+    /// vertex shader root access. A vertex variant needs it.
+    pub a_vertex: bool,
 }
 
 impl Binding {
@@ -175,7 +183,18 @@ impl Binding {
         b: NO_INDEX,
         c: NO_INDEX,
         d: NO_INDEX,
+        a_vertex: false,
     };
+
+    /// The same binding, saying whether the vertex shader can read A. A level that carries no A
+    /// has none to read.
+    #[must_use]
+    pub const fn with_vertex(self, readable: bool) -> Self {
+        Self {
+            a_vertex: readable && self.a != NO_INDEX,
+            ..self
+        }
+    }
 
     /// The binding of `level`'s parameters appended after the game's `first` parameters, in the
     /// order A, B, C, D. `None` when an index would not fit a root signature.
@@ -195,6 +214,7 @@ impl Binding {
             b: index(1)?,
             c: index(2)?,
             d: index(3)?,
+            a_vertex: false,
         })
     }
 
@@ -204,30 +224,39 @@ impl Binding {
         [self.a, self.b, self.c, self.d]
     }
 
-    /// One `u64`: the level in byte 0, then A, B, C and D in bytes 1 to 4.
+    /// One `u64`: the level in byte 0, then A, B, C and D in bytes 1 to 4, and in byte 5 bit 0
+    /// whether the vertex shader can read A.
     #[must_use]
     pub fn pack(self) -> u64 {
         let [a, b, c, d] = self.indexes();
-        u64::from_le_bytes([self.level as u8, a, b, c, d, 0, 0, 0])
+        u64::from_le_bytes([self.level as u8, a, b, c, d, u8::from(self.a_vertex), 0, 0])
     }
 
     /// The binding [`pack`](Self::pack) made, or `None` for any other value: an unknown level,
-    /// spare bytes set, or an index present where the level carries none or absent where it does.
+    /// spare bits set, an index present where the level carries none or absent where it does, or
+    /// a readable A where there is no A.
     #[must_use]
     pub fn unpack(value: u64) -> Option<Self> {
-        let [level, a, b, c, d, rest @ ..] = value.to_le_bytes();
-        if rest != [0; 3] {
+        let [level, a, b, c, d, flags, rest @ ..] = value.to_le_bytes();
+        if rest != [0; 2] || flags > 1 {
             return None;
         }
         let level = Level::from_u8(level)?;
-        let binding = Self { level, a, b, c, d };
+        let binding = Self {
+            level,
+            a,
+            b,
+            c,
+            d,
+            a_vertex: flags == 1,
+        };
         let carried = level.parameters() as usize;
         let consistent = binding
             .indexes()
             .iter()
             .enumerate()
             .all(|(n, index)| (n < carried) == (*index != NO_INDEX));
-        consistent.then_some(binding)
+        (consistent && (!binding.a_vertex || a != NO_INDEX)).then_some(binding)
     }
 }
 
@@ -395,8 +424,8 @@ impl std::fmt::Display for Skip {
 #[cfg(windows)]
 pub use process::{
     Augmented, BINDS, LEVELS, SET_ROOT_SIGNATURE, SKIPPED_NO_ROOM, SKIPPED_OTHER, TABLE_FULL,
-    augment, augmented_from_shader, binding, committed_buffer, ladder_counts, ladder_line,
-    log_ladder, note_skip, record, root_signature_pointer, set_mask_address,
+    VERTEX_A, augment, augmented_from_shader, binding, committed_buffer, ladder_counts,
+    ladder_line, log_ladder, note_skip, record, root_signature_pointer, set_mask_address,
     set_root_signature_hook,
 };
 
@@ -423,12 +452,13 @@ mod process {
         D3D12_ROOT_PARAMETER_TYPE_UAV, D3D12_ROOT_PARAMETER1, D3D12_ROOT_PARAMETER1_0,
         D3D12_ROOT_SIGNATURE_DESC, D3D12_ROOT_SIGNATURE_DESC1, D3D12_ROOT_SIGNATURE_DESC2,
         D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS,
+        D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS,
         D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE, D3D12_ROOT_SIGNATURE_FLAGS,
-        D3D12_SHADER_VISIBILITY_PIXEL, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-        D3D12_VERSIONED_ROOT_SIGNATURE_DESC, D3D12_VERSIONED_ROOT_SIGNATURE_DESC_0,
-        D3D12CreateVersionedRootSignatureDeserializer, D3D12SerializeVersionedRootSignature,
-        ID3D12Device, ID3D12GraphicsCommandList_Vtbl, ID3D12Resource, ID3D12RootSignature,
-        ID3D12VersionedRootSignatureDeserializer,
+        D3D12_SHADER_VISIBILITY, D3D12_SHADER_VISIBILITY_ALL, D3D12_SHADER_VISIBILITY_PIXEL,
+        D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_VERSIONED_ROOT_SIGNATURE_DESC,
+        D3D12_VERSIONED_ROOT_SIGNATURE_DESC_0, D3D12CreateVersionedRootSignatureDeserializer,
+        D3D12SerializeVersionedRootSignature, ID3D12Device, ID3D12GraphicsCommandList_Vtbl,
+        ID3D12Resource, ID3D12RootSignature, ID3D12VersionedRootSignatureDeserializer,
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC};
     use windows::core::{IUnknown, Interface};
@@ -436,7 +466,7 @@ mod process {
     use super::{Binding, Level, REGISTER_SPACE, RootSignatures, Skip, ladder, register};
     use crate::dxbc::{self, container_part};
     use crate::replace::{self, RootParameterCost, root_signature_dwords};
-    use crate::{log, params, probe};
+    use crate::{gpu_time, log, params, probe};
 
     /// Every recorded root signature's binding.
     static ROOT_SIGNATURES: RootSignatures = RootSignatures::new();
@@ -450,6 +480,8 @@ mod process {
     pub static SKIPPED_OTHER: AtomicUsize = AtomicUsize::new(0);
     /// Root signature sets the parameters were bound after.
     pub static BINDS: AtomicUsize = AtomicUsize::new(0);
+    /// Root signatures recorded with an A the vertex shader can read.
+    pub static VERTEX_A: AtomicUsize = AtomicUsize::new(0);
 
     /// GPU address C binds: the 4 KB dummy, until the mask plane exists (P2).
     static MASK_ADDRESS: AtomicU64 = AtomicU64::new(0);
@@ -518,10 +550,14 @@ mod process {
         resource.ok_or_else(|| "CreateCommittedResource returned no resource".to_owned())
     }
 
-    /// The parameter ring, the probe and its readback ring, and the mask dummy, on `device`.
+    /// The parameter ring, the probe and its readback ring, and the mask dummy, on `device`; and
+    /// the timestamp queries of the ports' GPU time, without which nothing else changes.
     unsafe fn create_resources(device: &ID3D12Device) -> Result<(), String> {
         unsafe { params::create(device) }?;
         unsafe { probe::create(device) }?;
+        if let Err(why) = unsafe { gpu_time::create(device) } {
+            log(format_args!("gpu time: off for the session: {why}"));
+        }
         let mask = unsafe {
             committed_buffer(
                 device,
@@ -582,16 +618,18 @@ mod process {
         [0, 1, 2, 3].map(|level| LEVELS[level].load(Ordering::Relaxed))
     }
 
-    /// `rs: full=.. cbv_probe=.. cbv=.. none=..`.
+    /// `rs: full=.. cbv_probe=.. cbv=.. none=.. vertex_a=..`: the last is the root signatures
+    /// whose A a vertex shader can read (`docs/plans/er-shader-editor-vertex.md`, section 9).
     #[must_use]
     pub fn ladder_line() -> String {
         let counts = ladder_counts();
         format!(
-            "rs: full={} cbv_probe={} cbv={} none={}",
+            "rs: full={} cbv_probe={} cbv={} none={} vertex_a={}",
             counts[Level::Full as usize],
             counts[Level::CbvProbe as usize],
             counts[Level::Cbv as usize],
-            counts[Level::None as usize]
+            counts[Level::None as usize],
+            VERTEX_A.load(Ordering::Relaxed)
         )
     }
 
@@ -633,16 +671,21 @@ mod process {
         let seen = LEVELS[level as usize].fetch_add(1, Ordering::Relaxed);
         if let Some(augmented) = augmented
             && level != Level::None
-            && seen < 4
         {
-            let [a, b, c, d] = augmented.binding.indexes();
-            log(format_args!(
-                "root signature 0x{root_signature:x} at level {}: {} -> {} DWORDs, parameters \
-                 a={a} b={b} c={c} d={d} (255 = absent)",
-                level.name(),
-                augmented.used,
-                augmented.used + level.dwords()
-            ));
+            if augmented.binding.a_vertex {
+                VERTEX_A.fetch_add(1, Ordering::Relaxed);
+            }
+            if seen < 4 {
+                let [a, b, c, d] = augmented.binding.indexes();
+                log(format_args!(
+                    "root signature 0x{root_signature:x} at level {}: {} -> {} DWORDs, parameters \
+                     a={a} b={b} c={c} d={d} (255 = absent), a readable by the vertex shader: {}",
+                    level.name(),
+                    augmented.used,
+                    augmented.used + level.dwords(),
+                    augmented.binding.a_vertex
+                ));
+            }
         }
         let total: usize = ladder_counts().iter().sum();
         if total.is_power_of_two() {
@@ -662,14 +705,16 @@ mod process {
         space == REGISTER_SPACE
     }
 
-    fn check_flags(flags: D3D12_ROOT_SIGNATURE_FLAGS) -> Result<(), Skip> {
+    /// Refuse a root signature the parameters cannot go into; otherwise say whether the vertex
+    /// shader may read A.
+    fn check_flags(flags: D3D12_ROOT_SIGNATURE_FLAGS) -> Result<bool, Skip> {
         if flags.0 & D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE.0 != 0 {
             return Err(Skip::Local);
         }
         if flags.0 & D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS.0 != 0 {
             return Err(Skip::DeniesPixelShaders);
         }
-        Ok(())
+        Ok(flags.0 & D3D12_ROOT_SIGNATURE_FLAG_DENY_VERTEX_SHADER_ROOT_ACCESS.0 == 0)
     }
 
     /// One parameter's cost, unless one of its register spaces is 42.
@@ -748,6 +793,16 @@ mod process {
         }
     }
 
+    /// The visibility of an appended parameter: A, the parameter block, every stage, so vertex
+    /// layers read it too; the rest the pixel shader alone.
+    fn visibility(shader_register: u32, ty: D3D12_ROOT_PARAMETER_TYPE) -> D3D12_SHADER_VISIBILITY {
+        if ty == D3D12_ROOT_PARAMETER_TYPE_CBV && shader_register == register::PARAMS_CBV {
+            D3D12_SHADER_VISIBILITY_ALL
+        } else {
+            D3D12_SHADER_VISIBILITY_PIXEL
+        }
+    }
+
     /// The parameters `level` carries, as 1.0 parameters, in the order A, B, C, D.
     fn appended_1_0(level: Level) -> Vec<D3D12_ROOT_PARAMETER> {
         let descriptor = |ty, shader_register| D3D12_ROOT_PARAMETER {
@@ -758,7 +813,7 @@ mod process {
                     RegisterSpace: REGISTER_SPACE,
                 },
             },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+            ShaderVisibility: visibility(shader_register, ty),
         };
         let constants = D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
@@ -790,7 +845,7 @@ mod process {
                     Flags: D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE,
                 },
             },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+            ShaderVisibility: visibility(shader_register, ty),
         };
         let constants = D3D12_ROOT_PARAMETER1 {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
@@ -854,10 +909,10 @@ mod process {
 
         let mut serialized: Option<ID3DBlob> = None;
         let mut errors: Option<ID3DBlob> = None;
-        let (index, level, used);
+        let (index, level, used, vertex);
         if version == D3D_ROOT_SIGNATURE_VERSION_1_0 {
             let desc = unsafe { original.Anonymous.Desc_1_0 };
-            check_flags(desc.Flags)?;
+            vertex = check_flags(desc.Flags)?;
             let params = unsafe { slice_or_empty(desc.pParameters, desc.NumParameters) };
             used = unsafe { used_1_0(params) }?;
             level = level_for(device, used)?;
@@ -880,7 +935,7 @@ mod process {
             .map_err(|e| Skip::Failed(format!("serialize 1.0: {e} {}", blob_text(&errors))))?;
         } else if version == D3D_ROOT_SIGNATURE_VERSION_1_1 {
             let desc = unsafe { original.Anonymous.Desc_1_1 };
-            check_flags(desc.Flags)?;
+            vertex = check_flags(desc.Flags)?;
             let params = unsafe { slice_or_empty(desc.pParameters, desc.NumParameters) };
             used = unsafe { used_1_1(params) }?;
             level = level_for(device, used)?;
@@ -903,7 +958,7 @@ mod process {
             .map_err(|e| Skip::Failed(format!("serialize 1.1: {e} {}", blob_text(&errors))))?;
         } else if version == D3D_ROOT_SIGNATURE_VERSION_1_2 {
             let desc = unsafe { original.Anonymous.Desc_1_2 };
-            check_flags(desc.Flags)?;
+            vertex = check_flags(desc.Flags)?;
             let params = unsafe { slice_or_empty(desc.pParameters, desc.NumParameters) };
             used = unsafe { used_1_1(params) }?;
             level = level_for(device, used)?;
@@ -937,7 +992,8 @@ mod process {
         }
         .to_vec();
         let binding = Binding::appended(level, index)
-            .ok_or_else(|| Skip::Failed(format!("parameter index {index} out of range")))?;
+            .ok_or_else(|| Skip::Failed(format!("parameter index {index} out of range")))?
+            .with_vertex(vertex);
         Ok(Augmented {
             blob: bytes,
             binding,
@@ -1037,35 +1093,39 @@ mod process {
         } else {
             binding(root_signature as usize)
         };
-        // The list's slot keeps where the parameters sit, for what later draws on it need (P3).
-        // Not from the bundle detour: a bundle has a `Close` of its own under vkd3d-proton, which
-        // is not detoured, so a slot it claimed would sit until it went stale, and the game
-        // creates no bundle allocator for a slot to be worth anything.
+        // The block this set binds, read once, so the present noted is the block's own.
+        let (block_address, block_present) = params::current_block();
+        // The list's slot keeps where the parameters sit, for what later draws on it need (P3),
+        // and the present of the block it bound, for gate V0.R1. Not from the bundle detour: a
+        // bundle has a `Close` of its own under vkd3d-proton, which is not detoured, so a slot it
+        // claimed would sit until it went stale, and the game creates no bundle allocator for a
+        // slot to be worth anything.
         if SLOT == 0 {
-            crate::cmdlist::note_root_signature(list as usize, binding.unwrap_or(Binding::NONE));
+            crate::cmdlist::note_root_signature(
+                list as usize,
+                binding.unwrap_or(Binding::NONE),
+                if binding.is_some() { block_present } else { 0 },
+            );
         }
         let Some(binding) = binding else {
             return;
         };
         // SAFETY: `list` is a live graphics command list or bundle that just set this root
         // signature; its own vtable's entries are called, and none of them is hooked.
-        unsafe { bind(list, binding) };
+        unsafe { bind(list, binding, block_address) };
         BINDS.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Bind the parameter block, the probe and the mask to the parameters `binding` carries.
+    /// Bind the parameter block at `block`, the probe and the mask to the parameters `binding`
+    /// carries.
     ///
     /// # Safety
     ///
     /// `list` must be a live graphics command list whose current root signature has `binding`.
-    unsafe fn bind(list: *mut c_void, binding: Binding) {
+    unsafe fn bind(list: *mut c_void, binding: Binding, block: u64) {
         unsafe {
             let vtable = &**(list as *const *const ID3D12GraphicsCommandList_Vtbl);
-            (vtable.SetGraphicsRootConstantBufferView)(
-                list,
-                u32::from(binding.a),
-                params::current_address(),
-            );
+            (vtable.SetGraphicsRootConstantBufferView)(list, u32::from(binding.a), block);
             if binding.level >= Level::CbvProbe {
                 (vtable.SetGraphicsRootUnorderedAccessView)(
                     list,
@@ -1156,6 +1216,7 @@ mod tests {
                 b: 37,
                 c: 38,
                 d: 39,
+                a_vertex: false,
             })
         );
         assert_eq!(
@@ -1166,6 +1227,7 @@ mod tests {
                 b: 5,
                 c: NO_INDEX,
                 d: NO_INDEX,
+                a_vertex: false,
             })
         );
         assert_eq!(
@@ -1186,8 +1248,16 @@ mod tests {
                     Some(binding),
                     "{level:?} {first}"
                 );
+                let readable = binding.with_vertex(true);
+                assert_eq!(readable.a_vertex, level != Level::None, "{level:?}");
+                assert_eq!(
+                    Binding::unpack(readable.pack()),
+                    Some(readable),
+                    "{level:?} {first}"
+                );
             }
         }
+        assert!(!Binding::NONE.with_vertex(true).a_vertex);
     }
 
     #[test]
@@ -1195,8 +1265,11 @@ mod tests {
         let full = Binding::appended(Level::Full, 36).expect("fits").pack();
         // An unknown level.
         assert_eq!(Binding::unpack((full & !0xff) | 7), None);
-        // Spare bytes set.
-        assert_eq!(Binding::unpack(full | (1 << 40)), None);
+        // Spare bytes set, and a flags byte with more than the vertex bit.
+        assert_eq!(Binding::unpack(full | (1 << 48)), None);
+        assert_eq!(Binding::unpack(full | (2 << 40)), None);
+        // A readable A is only a binding where there is an A.
+        assert_eq!(Binding::unpack(Binding::NONE.pack() | (1 << 40)), None);
         // A level that carries D without an index for it.
         assert_eq!(Binding::unpack(full | (0xff << 32)), None);
         // An index where the level carries none.

@@ -25,9 +25,10 @@
 //!
 //! # Fidelity
 //!
-//! Mode 2, [`Mode::Fidelity`], redirects every stage with every knob at its off value: the ports
-//! then run as transcriptions of the game's own passes, which is what the fidelity proof compares
-//! against vanilla (design 14, P0.1 item 5). The proof runs it one port kind at a time
+//! Mode 2, [`Mode::Fidelity`], redirects every stage with every knob at its off value, and the
+//! editor turns every layer off for it (`editor::worker::silence_layers`), the stock cel layers
+//! among them: the ports then run as transcriptions of the game's own passes, which is what the
+//! fidelity proof compares against vanilla (design 14, P0.1 item 5). The proof runs it one port kind at a time
 //! ([`ModeSetting::kinds`]), so a failure names its port, and a port that fails is marked
 //! unfaithful: the settings file keeps the mark, and outside a fidelity test that kind is bound as
 //! the game asked whatever its stage holds ([`crate::cmdlist::PORTS_OFF`]). Only a fidelity test
@@ -44,7 +45,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use crate::cmdlist::{HOOK_FAULTED, VANILLA};
-use crate::replace::{PortKind, Stage};
+use crate::replace::{PortKind, Stage, VERTEX_STAGE_BIT};
 use crate::settings::{GPU_FLOATS, KNOB_COUNT, KNOBS, Look};
 
 /// What the redirect is for, as the mode export sets it.
@@ -159,17 +160,15 @@ impl From<Mode> for ModeSetting {
 }
 
 /// The stage whose ports read each knob, in [`KNOBS`] order: the port source that names the
-/// knob's `cel_*` define. A test reads the three port sources and holds this to them.
+/// knob's `cel_*` define. A test reads the three port sources and holds this to them. Every knob
+/// left is the AO port's; the Albedo and Tonemap knobs are stock layers now, whose stages get
+/// their content through [`LAYER_STAGES`] like any layer's (`crate::editor::cel`).
 pub const KNOB_STAGES: [Stage; KNOB_COUNT] = [
     Stage::Lighting, // light_band_stops
     Stage::Lighting, // outline_ink
     Stage::Lighting, // outline_width
     Stage::Lighting, // outline_depth
     Stage::Lighting, // outline_crease
-    Stage::Albedo,   // paint_radius
-    Stage::Albedo,   // colour_levels
-    Stage::Tonemap,  // screen_levels
-    Stage::Tonemap,  // saturation
 ];
 
 /// Every stage's bit. Written out so `scripts/rva_symbols.py` can read it; the assert keeps it the
@@ -214,6 +213,15 @@ pub struct Staged {
     pub ports_off: u32,
 }
 
+/// What the vertex stage asks of a present: the proof mode, which needs the AO port bound
+/// because the AO port writes the proof, and the calibration's hold, which keeps the vertex
+/// stage off whatever its layers say (`crate::vertex::Control`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VertexSwitches {
+    pub proof: bool,
+    pub hold_off: bool,
+}
+
 /// What a present stages under `setting` for the menu's look, the ports marked `unfaithful` and
 /// the stages with a drawing editor layer, `layer_stages` ([`LAYER_STAGES`]). [`Mode::Fidelity`]
 /// redirects every stage of the kinds under test, every other kind off, and publishes
@@ -221,6 +229,10 @@ pub struct Staged {
 /// ports off. Layers give their stage content whether or not cel is enabled, because the
 /// checkbox turns cel off and not the editor. Vanilla needs nothing here: the bind hooks check
 /// [`crate::cmdlist::VANILLA`] before the stages.
+///
+/// The vertex stage's bit ([`VERTEX_STAGE_BIT`]) comes from `layer_stages` alone, unless
+/// `vertex.hold_off`; a fidelity test, which compares the ports alone, never sets it. The vertex
+/// proof gives the Lighting stage content, so its port is bound to write the proof.
 #[must_use]
 pub fn staged(
     setting: ModeSetting,
@@ -228,6 +240,7 @@ pub fn staged(
     enabled: bool,
     unfaithful: u8,
     layer_stages: u32,
+    vertex: VertexSwitches,
 ) -> Staged {
     match setting.mode {
         Mode::Fidelity => Staged {
@@ -235,11 +248,21 @@ pub fn staged(
             stages: ALL_STAGES,
             ports_off: u32::from(!setting.kinds & PortKind::ALL_BITS),
         },
-        Mode::Normal | Mode::Vanilla => Staged {
-            look: look.gpu_block(enabled),
-            stages: stages_with_content(look, enabled) | (layer_stages & ALL_STAGES),
-            ports_off: u32::from(unfaithful & PortKind::ALL_BITS),
-        },
+        Mode::Normal | Mode::Vanilla => {
+            let mut stages = stages_with_content(look, enabled)
+                | (layer_stages & (ALL_STAGES | VERTEX_STAGE_BIT));
+            if vertex.hold_off {
+                stages &= !VERTEX_STAGE_BIT;
+            }
+            if vertex.proof {
+                stages |= Stage::Lighting.bit();
+            }
+            Staged {
+                look: look.gpu_block(enabled),
+                stages,
+                ports_off: u32::from(unfaithful & PortKind::ALL_BITS),
+            }
+        }
     }
 }
 
@@ -556,7 +579,12 @@ mod tests {
         let mut derived: Vec<Vec<Stage>> = vec![Vec::new(); KNOB_COUNT];
         for (file, source, stage) in ports {
             let names = cel_names(source);
-            assert!(!names.is_empty(), "{file} reads no cel_ name");
+            // Only the AO port still reads knobs; the other two run the game's maths alone.
+            assert_eq!(
+                names.is_empty(),
+                stage != Stage::Lighting,
+                "{file}: {names:?}"
+            );
             for name in names {
                 let key = name.trim_start_matches("cel_");
                 let index = KNOBS
@@ -589,10 +617,6 @@ mod tests {
                 ("outline_width", Stage::Lighting),
                 ("outline_depth", Stage::Lighting),
                 ("outline_crease", Stage::Lighting),
-                ("paint_radius", Stage::Albedo),
-                ("colour_levels", Stage::Albedo),
-                ("screen_levels", Stage::Tonemap),
-                ("saturation", Stage::Tonemap),
             ]
         );
     }
@@ -633,29 +657,14 @@ mod tests {
             assert_eq!(stages_with_content(&look, false), 0, "{}", KNOBS[index].key);
         }
 
-        // Every subset of stages, each given content through every one of its knobs in turn.
-        for subset in 0..=ALL_STAGES {
-            for pick in 0..KNOB_COUNT {
-                let mut look = Look::vanilla();
-                for stage in Stage::ALL.into_iter().filter(|s| subset & s.bit() != 0) {
-                    // The `pick`th knob of this stage, wrapping.
-                    let knobs: Vec<usize> = (0..KNOB_COUNT)
-                        .filter(|i| KNOB_STAGES[*i] == stage)
-                        .collect();
-                    let index = knobs[pick % knobs.len()];
-                    look.0[index] = moved(index);
-                }
-                assert_eq!(stages_with_content(&look, true), subset, "{subset:#b}");
-            }
-        }
-
-        // The built-in presets, by hand: Comic ink leaves the surfaces alone, Vanilla is vanilla.
+        // The built-in presets, by hand: the knobs give Lighting alone, whatever the layers do;
+        // Painterly has outlines and no bands, Vanilla nothing.
         let expected = [
-            ("Wind Waker", 0b111),
-            ("Bright toon", 0b111),
-            ("Soft cel", 0b111),
-            ("Comic ink", 0b101),
-            ("Painterly", 0b111),
+            ("Wind Waker", 0b001),
+            ("Bright toon", 0b001),
+            ("Soft cel", 0b001),
+            ("Comic ink", 0b001),
+            ("Painterly", 0b001),
             ("Vanilla", 0),
         ];
         let presets = builtin_presets();
@@ -668,12 +677,11 @@ mod tests {
         // What the shaders see decides: a value that clamps or rounds back to off is no content,
         // and an unreadable one is the knob's minimum.
         let mut look = Look::vanilla();
-        look.0[5] = 0.4; // paint_radius rounds to 0
         look.0[2] = 0.5; // outline_width clamps to 1
         look.0[0] = f32::NAN; // light_band_stops becomes its minimum, 0
         assert_eq!(stages_with_content(&look, true), 0);
-        look.0[8] = f32::NAN; // saturation becomes 0, away from 1
-        assert_eq!(stages_with_content(&look, true), Stage::Tonemap.bit());
+        look.0[3] = f32::NAN; // outline_depth becomes 0.005, away from 0.04
+        assert_eq!(stages_with_content(&look, true), Stage::Lighting.bit());
     }
 
     #[test]
@@ -685,7 +693,14 @@ mod tests {
             for enabled in [false, true] {
                 for unfaithful in [0, PortKind::AoSsr.bit(), PortKind::ALL_BITS] {
                     for mode in Mode::ALL {
-                        let staged = staged(mode.into(), &look, enabled, unfaithful, 0);
+                        let staged = staged(
+                            mode.into(),
+                            &look,
+                            enabled,
+                            unfaithful,
+                            0,
+                            VertexSwitches::default(),
+                        );
                         match mode {
                             Mode::Fidelity => {
                                 assert_eq!(staged.stages, ALL_STAGES);
@@ -708,6 +723,7 @@ mod tests {
                             enabled,
                             unfaithful,
                             0,
+                            VertexSwitches::default(),
                         );
                         assert_eq!(one.ports_off, all & !u32::from(kind.bit()), "{kind:?}");
                         assert_eq!(one.stages, ALL_STAGES);
@@ -724,25 +740,75 @@ mod tests {
         let albedo = Stage::Albedo.bit();
         for (look, enabled, from_cel) in [
             (Look::vanilla(), true, 0),
-            (comic_ink, true, 0b101),
+            (comic_ink, true, 0b001),
             // Cel turned off leaves the layers' stages on.
             (comic_ink, false, 0),
         ] {
             for layers in [0, albedo, albedo | lighting, ALL_STAGES] {
                 for mode in [Mode::Normal, Mode::Vanilla] {
-                    let staged = staged(mode.into(), &look, enabled, 0, layers);
+                    let staged = staged(
+                        mode.into(),
+                        &look,
+                        enabled,
+                        0,
+                        layers,
+                        VertexSwitches::default(),
+                    );
                     assert_eq!(staged.stages, from_cel | layers, "{layers:#b} {mode:?}");
                     // The layers move no knob.
                     assert_eq!(staged.look, look.gpu_block(enabled));
                 }
                 // A fidelity test redirects every stage anyway.
-                let fidelity = staged(Mode::Fidelity.into(), &look, enabled, 0, layers);
+                let fidelity = staged(
+                    Mode::Fidelity.into(),
+                    &look,
+                    enabled,
+                    0,
+                    layers,
+                    VertexSwitches::default(),
+                );
                 assert_eq!(fidelity.stages, ALL_STAGES);
             }
         }
-        // Bits past the three stages are not stages.
-        let stray = staged(Mode::Normal.into(), &Look::vanilla(), true, 0, 0b1000);
+        // Bits past the three stages and the vertex stage are not stages.
+        let stray = staged(
+            Mode::Normal.into(),
+            &Look::vanilla(),
+            true,
+            0,
+            0b1_0000,
+            VertexSwitches::default(),
+        );
         assert_eq!(stray.stages, 0);
+    }
+
+    #[test]
+    fn the_vertex_stage_follows_its_layers_its_hold_and_never_a_fidelity_test() {
+        let vanilla = Look::vanilla();
+        let off = VertexSwitches::default();
+        let stage = |mode: Mode, layers: u32, vertex: VertexSwitches| {
+            staged(mode.into(), &vanilla, true, 0, layers, vertex).stages
+        };
+        assert_eq!(stage(Mode::Normal, VERTEX_STAGE_BIT, off), VERTEX_STAGE_BIT);
+        assert_eq!(
+            stage(Mode::Vanilla, VERTEX_STAGE_BIT, off),
+            VERTEX_STAGE_BIT
+        );
+        let hold = VertexSwitches {
+            proof: false,
+            hold_off: true,
+        };
+        assert_eq!(stage(Mode::Normal, VERTEX_STAGE_BIT, hold), 0);
+        // The proof binds the AO port, which writes it.
+        let proof = VertexSwitches {
+            proof: true,
+            hold_off: false,
+        };
+        assert_eq!(
+            stage(Mode::Normal, VERTEX_STAGE_BIT, proof),
+            VERTEX_STAGE_BIT | Stage::Lighting.bit()
+        );
+        assert_eq!(stage(Mode::Fidelity, VERTEX_STAGE_BIT, proof), ALL_STAGES);
     }
 
     #[test]
@@ -887,8 +953,10 @@ mod tests {
             include_str!("menu/code.rs"),
             include_str!("menu/diagnostics_tab.rs"),
             include_str!("menu/files.rs"),
+            include_str!("menu/hunt_tab.rs"),
             include_str!("menu/layers_tab.rs"),
             include_str!("menu/look_tab.rs"),
+            include_str!("menu/theme.rs"),
             include_str!("menu/widgets.rs"),
             include_str!("settings.rs"),
         ] {

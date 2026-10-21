@@ -155,7 +155,7 @@ def build(sc: StringScorer, cls: str, rl: int, vig: int, end: int, floors: dict 
     need = OPT.requirements(e.art, sc.base_id, sc.affinity, sc.level, sc.two)
     st = {k: max(base[k], need.get(k, 0), (floors or {}).get(k, 0)) for k in OPT.STATS}
     st["vig"] = max(st["vig"], vig)
-    st["vit"] = max(st["vit"], end)
+    st["end"] = max(st["end"], end)
     points = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
     if points < 0 or rl < cls_level:
         return None

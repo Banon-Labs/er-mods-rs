@@ -55,6 +55,18 @@
 //! barrier recorded at bind time would also be refused inside a render pass; the static scan of the
 //! GX backend found no `BeginRenderPass`, and the debug layer checks the sequence in gate W1.
 //!
+//! # GPU time
+//!
+//! A bind of a port's pipeline on a direct list -- its variant, or the game's own pipeline while
+//! the port is not redirected -- opens a span: a timestamp query written into the list before the
+//! bind ([`ListSlot::open`]). The list's next `SetPipelineState`, `ClearState` or `Close` writes the
+//! span's end, and `Close` resolves every span of the recording into the readback ring
+//! ([`crate::gpu_time`]). A list takes a chunk of queries at its first timed bind
+//! ([`Recording::chunk`]) and keeps it to its `Close`. Only these port binds, a few a frame, do
+//! any of that; every other bind pays one test of [`ListSlot::open`]. A vertex entry's bind is one
+//! of those others: it ends an open span like any bind and opens none, so the vertex layers have
+//! no GPU time of their own.
+//!
 //! # Cost
 //!
 //! About 1,760 `SetPipelineState` and 105 `Reset` and `Close` calls a frame go through here on 9
@@ -64,14 +76,32 @@
 //! performance counter, whatever is added to the call besides the original, into one sum per
 //! [`Timing`].
 //!
-//! [`decide`], [`stage_bit`] and [`ListSlots`] are pure and tested on the host. The Windows half
-//! holds the detours.
+//! # Vertex entries
+//!
+//! A vertex entry ([`crate::table::VERTEX_PORT`], `docs/plans/er-shader-editor-vertex.md`,
+//! section 7.5) redirects a mesh pipeline to the variant whose vertex shader carries the vertex
+//! layers. It writes no probe and owes no barrier, so it is redirected on any list, with or
+//! without a slot, while the vertex stage's bit is in [`STAGE_ACTIVE`], its pass is in
+//! [`VERTEX_PASSES`] and its group is not suspended. Every bind of a vertex entry, redirected or
+//! not, is counted per pass: those counts order the editor's builds.
+//!
+//! # Gate V0.R1
+//!
+//! Each slot also notes the present of every parameter block its recording bound
+//! (`params::current_block`, read where `look_binding` binds it). At `Close` a recording whose
+//! first and last block differ was recorded across a present, and the closes between two
+//! presents are one frame's: a frame whose lists bound more than one block is a frame whose
+//! passes may read different times ([`R1Window`]).
+//!
+//! [`decide`], [`stage_bit`], [`ListSlots`] and [`R1Window`] are pure and tested on the host. The
+//! Windows half holds the detours.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::gpu_time::{self, CHUNK_SPANS};
 use crate::look_binding::Binding;
-use crate::replace::PortKind;
-use crate::table::Entry;
+use crate::replace::{PortKind, VERTEX_STAGE_BIT};
+use crate::table::{Entry, VERTEX_PORT, flag};
 
 /// Some published table entry has a variant: without one there is nothing to redirect, and the
 /// detours return before the table lookup. Kept by [`refresh_active`].
@@ -96,6 +126,21 @@ pub static STAGE_ACTIVE: AtomicU32 = AtomicU32::new(0);
 /// in normal use the ports the fidelity test marked unfaithful, and during a fidelity test every
 /// port the test is not about (design 14, P0.1 item 5). Staged with [`STAGE_ACTIVE`].
 pub static PORTS_OFF: AtomicU32 = AtomicU32::new(0);
+
+/// The passes a vertex entry is redirected in, one `vertex::Pass::bit` each: every pass, unless
+/// the pass-mask export narrowed it for oracle S (`docs/plans/er-shader-editor-vertex.md`,
+/// section 9). Release behaviour never narrows it.
+pub static VERTEX_PASSES: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// The passes a vertex entry's [`Entry::bits`] can name; one counter each.
+pub const VERTEX_PASS_SLOTS: usize = 16;
+
+/// Binds of vertex entries per pass, redirected or not, added at each thread's timed calls.
+pub static VERTEX_BINDS: [AtomicU64; VERTEX_PASS_SLOTS] =
+    [const { AtomicU64::new(0) }; VERTEX_PASS_SLOTS];
+/// Binds that went to a vertex variant, per pass, added the same way.
+pub static VERTEX_REDIRECTS: [AtomicU64; VERTEX_PASS_SLOTS] =
+    [const { AtomicU64::new(0) }; VERTEX_PASS_SLOTS];
 
 /// One call in this many per thread is timed.
 pub const SAMPLE_EVERY: u32 = 256;
@@ -174,7 +219,9 @@ impl Detour {
 
 /// What a timed call's cost is added to. The detours that run on every recording thread, with a
 /// `Close` that records the probe copy apart from one that does not, because design 12 budgets
-/// them apart: 40 ns for a plain `Close` against 2 us for one that records the copy.
+/// them apart: 40 ns for a plain `Close` against 2 us for one that records the copy. A `Close`
+/// that resolves the GPU-time queries of a list that bound a port records work of the same kind
+/// for the same lists, and is counted with the copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Timing {
@@ -244,6 +291,8 @@ pub enum Decision {
     PortPassed { kind: PortKind },
     /// Bind the port's cel variant in its place.
     Redirect { variant: usize, kind: PortKind },
+    /// Bind the mesh pipeline's vertex variant in its place. It owes the probe nothing.
+    Vertex { variant: usize, pass: u8 },
 }
 
 impl Decision {
@@ -251,17 +300,27 @@ impl Decision {
     #[must_use]
     pub fn bound(self, game: usize) -> usize {
         match self {
-            Self::Redirect { variant, .. } => variant,
+            Self::Redirect { variant, .. } | Self::Vertex { variant, .. } => variant,
             Self::Pass | Self::PortPassed { .. } => game,
         }
     }
 
     /// The same bind with its redirect withdrawn: the port's own pipeline instead of its variant.
+    /// A vertex redirect needs nothing of the list, so it is never withdrawn.
     #[must_use]
     pub fn withdrawn(self) -> Self {
         match self {
             Self::Redirect { kind, .. } => Self::PortPassed { kind },
             other => other,
+        }
+    }
+
+    /// The variant a vertex redirect binds, which goes in whether or not the list has a slot.
+    #[must_use]
+    pub fn vertex_variant(self) -> Option<usize> {
+        match self {
+            Self::Vertex { variant, .. } => Some(variant),
+            _ => None,
         }
     }
 }
@@ -273,6 +332,10 @@ impl Decision {
 /// port and has a variant, its stage's bit in [`STAGE_ACTIVE`] (`stage_active`), and its kind's
 /// bit clear in [`PORTS_OFF`] (`ports_off`). The detours return [`Decision::Pass`] before the
 /// lookup when `active` is clear or `vanilla` set, which is the answer this gives for those too.
+///
+/// A vertex entry is redirected when it has a variant, the vertex stage's bit is in
+/// `stage_active`, its pass's bit is in `vertex_passes`, and its group is not suspended
+/// ([`flag::VERTEX_SUSPENDED`]); otherwise the game's pipeline is bound.
 #[must_use]
 pub fn decide(
     entry: Option<&Entry>,
@@ -280,6 +343,7 @@ pub fn decide(
     vanilla: bool,
     stage_active: u32,
     ports_off: u32,
+    vertex_passes: u32,
 ) -> Decision {
     if !active || vanilla {
         return Decision::Pass;
@@ -287,6 +351,22 @@ pub fn decide(
     let Some(entry) = entry else {
         return Decision::Pass;
     };
+    if entry.port == VERTEX_PORT {
+        let pass_bit = 1_u32.checked_shl(u32::from(entry.bits)).unwrap_or(0);
+        let suspended = entry.flags.load(Ordering::Relaxed) & flag::VERTEX_SUSPENDED != 0;
+        return if entry.redirect != 0
+            && stage_active & VERTEX_STAGE_BIT != 0
+            && vertex_passes & pass_bit != 0
+            && !suspended
+        {
+            Decision::Vertex {
+                variant: entry.redirect,
+                pass: entry.bits,
+            }
+        } else {
+            Decision::Pass
+        };
+    }
     // Hunt and family entries (P2, P3) carry no port; their binds are never redirected.
     let Some(kind) = PortKind::from_u8(entry.port) else {
         return Decision::Pass;
@@ -311,6 +391,47 @@ pub const LIST_SLOTS: usize = 8;
 /// released without a `Close`. A list being recorded binds on every frame it records in.
 pub const STALE_PRESENTS: u64 = 2;
 
+/// [`ListSlot::chunk`] of a recording that has timed nothing.
+pub const NO_CHUNK: u32 = u32::MAX;
+
+/// [`ListSlot::open`] of a recording with no span open.
+pub const NO_SPAN: u32 = u32::MAX;
+
+/// What a slot update may ask about the list it is for, beyond the slot itself.
+pub trait Recording {
+    /// Is the list a direct list: the one kind, among those a graphics pipeline is bound on, that
+    /// takes barriers, copies and timestamps. Asked at most once an update, and only for a port.
+    fn direct(&mut self) -> bool;
+
+    /// Are port binds timed: the timer exists ([`crate::gpu_time`]).
+    fn timing(&self) -> bool {
+        false
+    }
+
+    /// A chunk of [`CHUNK_SPANS`] spans for the list, by its first query; `None` when this
+    /// present's chunks are all out.
+    fn chunk(&mut self) -> Option<u32> {
+        None
+    }
+
+    /// Write the end of the list's open span to `query`: the list is binding another pipeline.
+    fn end(&mut self, _query: u32) {}
+
+    /// Write a new span's begin to `query`; `tag` ([`gpu_time::tag`]) says what it times.
+    fn begin(&mut self, _query: u32, _tag: u8) {}
+
+    /// A port was bound with no query to time it: no chunk left in the present, or the list's
+    /// chunk full.
+    fn dropped(&mut self) {}
+}
+
+/// A list's answer to "is it direct" alone: no timer.
+impl<F: FnMut() -> bool> Recording for F {
+    fn direct(&mut self) -> bool {
+        self()
+    }
+}
+
 /// What is remembered about one command list while it records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListSlot {
@@ -329,6 +450,17 @@ pub struct ListSlot {
     pub probe_owed: bool,
     /// The present count when the slot was last claimed or used.
     pub touched: u64,
+    /// The first query of this recording's chunk of timestamp queries, [`NO_CHUNK`] before its
+    /// first timed bind, and the spans of it begun. Its `Close` resolves them.
+    pub chunk: u32,
+    pub chunk_spans: u8,
+    /// The begin query of the span open now, [`NO_SPAN`] for none: the list's last bind was a
+    /// timed port, and its end goes to the query after.
+    pub open: u32,
+    /// The present of the first and the last parameter block this recording bound, 0 for none
+    /// (gate V0.R1).
+    pub first_block: u64,
+    pub last_block: u64,
 }
 
 impl ListSlot {
@@ -340,15 +472,75 @@ impl ListSlot {
         port_bound_kinds: 0,
         probe_owed: false,
         touched: 0,
+        chunk: NO_CHUNK,
+        chunk_spans: 0,
+        open: NO_SPAN,
+        first_block: 0,
+        last_block: 0,
     };
 
     fn stale(&self, now: u64) -> bool {
         self.list != 0 && now.saturating_sub(self.touched) >= STALE_PRESENTS
     }
+
+    /// The query the open span's end goes to, if one is open.
+    #[must_use]
+    pub const fn open_end(&self) -> Option<u32> {
+        if self.open == NO_SPAN {
+            None
+        } else {
+            Some(self.open + 1)
+        }
+    }
+
+    /// The queries this recording's `Close` resolves: the first, and how many. `None` when it
+    /// timed nothing.
+    #[must_use]
+    pub const fn pending(&self) -> Option<(u32, u32)> {
+        if self.chunk == NO_CHUNK || self.chunk_spans == 0 {
+            None
+        } else {
+            Some((self.chunk, 2 * self.chunk_spans as u32))
+        }
+    }
+
+    /// Open a span timing `kind` -- its variant bound (`variant`), or the game's own pipeline --
+    /// taking the list's chunk at its first, and have `recording` write its begin. A variant is
+    /// bound only on a direct list; for the game's pipeline `recording` is asked, unless the list
+    /// holds a chunk already.
+    ///
+    /// Out of line: a few binds a frame come here, of about 1,760.
+    #[cold]
+    #[inline(never)]
+    fn open_span(&mut self, kind: PortKind, variant: bool, recording: &mut impl Recording) {
+        if !recording.timing() {
+            return;
+        }
+        if self.chunk == NO_CHUNK {
+            if !variant && !recording.direct() {
+                return;
+            }
+            let Some(chunk) = recording.chunk() else {
+                recording.dropped();
+                return;
+            };
+            self.chunk = chunk;
+            self.chunk_spans = 0;
+        }
+        if usize::from(self.chunk_spans) >= CHUNK_SPANS {
+            recording.dropped();
+            return;
+        }
+        let query = self.chunk + 2 * u32::from(self.chunk_spans);
+        self.chunk_spans += 1;
+        self.open = query;
+        recording.begin(query, gpu_time::tag(kind, variant));
+    }
 }
 
 /// What one bind did: the pipeline that goes to the runtime, and whether the probe's barrier to
-/// unordered access has to be recorded into the list first.
+/// unordered access has to be recorded into the list first. The open span's end and the next
+/// span's begin are written through [`Recording`] before either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bind {
     pub bound: usize,
@@ -486,33 +678,65 @@ impl ListSlots {
     }
 
     /// `SetPipelineState`: the game bound `game` and `decision` says what to do with it. A redirect
-    /// goes through only in a list that already owes the probe, or one `direct` says can take the
-    /// barrier, which the caller then records before the bind. `None` for a miss, which binds
-    /// `game`.
+    /// goes through only in a list that already owes the probe, or one `recording` says is direct
+    /// and so can take the barrier, which the caller then records before the bind. The list's open
+    /// span ends here and a bind of a port opens the next, both written through `recording` before
+    /// this returns. `None` for a miss, which binds `game`.
     pub fn set_pipeline(
         &mut self,
         list: usize,
         game: usize,
         decision: Decision,
         now: u64,
-        direct: impl FnOnce() -> bool,
+        mut recording: impl Recording,
     ) -> Option<Bind> {
         let slot = self.slot_for(list, now)?;
+        if slot.open != NO_SPAN {
+            recording.end(slot.open + 1);
+            slot.open = NO_SPAN;
+        }
         let mut bind = Bind {
             bound: game,
             barrier: false,
         };
-        if let Decision::Redirect { variant, kind } = decision
-            && (slot.probe_owed || direct())
-        {
-            bind.barrier = !slot.probe_owed;
-            bind.bound = variant;
-            slot.probe_owed = true;
-            slot.port_bound_kinds |= kind.bit();
+        match decision {
+            Decision::Pass => {}
+            // A redirect refused here was refused for a list that is not direct, which takes no
+            // timestamps either.
+            Decision::Redirect { variant, kind } => {
+                if slot.probe_owed || recording.direct() {
+                    bind.barrier = !slot.probe_owed;
+                    bind.bound = variant;
+                    slot.probe_owed = true;
+                    slot.port_bound_kinds |= kind.bit();
+                    slot.open_span(kind, true, &mut recording);
+                }
+            }
+            Decision::PortPassed { kind } => slot.open_span(kind, false, &mut recording),
+            // A mesh pipeline's vertex variant writes no probe and is not a port: no barrier, and
+            // no span.
+            Decision::Vertex { variant, .. } => bind.bound = variant,
         }
         slot.game_pso = game;
         slot.bound_pso = bind.bound;
         Some(bind)
+    }
+
+    /// A list just reset or created with a port's pipeline as its initial state, whose slot
+    /// [`ListSlots::reset`] kept: open its span, as [`ListSlots::set_pipeline`] would have. False
+    /// when the list has no slot here.
+    pub fn begin_span(
+        &mut self,
+        list: usize,
+        kind: PortKind,
+        variant: bool,
+        mut recording: impl Recording,
+    ) -> bool {
+        let Some(slot) = self.index_of(list).and_then(|at| self.slots.get_mut(at)) else {
+            return false;
+        };
+        slot.open_span(kind, variant, &mut recording);
+        true
     }
 
     /// `ClearState`: [`ListSlots::set_pipeline`] for the pipeline it sets, and the root signature
@@ -523,9 +747,9 @@ impl ListSlots {
         game: usize,
         decision: Decision,
         now: u64,
-        direct: impl FnOnce() -> bool,
+        recording: impl Recording,
     ) -> Option<Bind> {
-        let bind = self.set_pipeline(list, game, decision, now, direct)?;
+        let bind = self.set_pipeline(list, game, decision, now, recording)?;
         if let Some(slot) = self.slot_for(list, now) {
             slot.binding = Binding::NONE;
         }
@@ -565,12 +789,25 @@ impl ListSlots {
         true
     }
 
-    /// `SetGraphicsRootSignature`.
-    pub fn set_root_signature(&mut self, list: usize, binding: Binding, now: u64) -> bool {
+    /// `SetGraphicsRootSignature`, which bound the parameter block published at present `block`
+    /// (0 when it bound none).
+    pub fn set_root_signature(
+        &mut self,
+        list: usize,
+        binding: Binding,
+        block: u64,
+        now: u64,
+    ) -> bool {
         let Some(slot) = self.slot_for(list, now) else {
             return false;
         };
         slot.binding = binding;
+        if block != 0 {
+            if slot.first_block == 0 {
+                slot.first_block = block;
+            }
+            slot.last_block = block;
+        }
         true
     }
 
@@ -592,14 +829,72 @@ impl ListSlots {
     }
 }
 
+/// What the lists closed between two presents bound (gate V0.R1): the lowest and highest block
+/// present any of them bound, and how many there were. Kept in atomics so every recording thread
+/// can add to it at `Close`, and taken whole by the present.
+#[derive(Debug, Default)]
+pub struct R1Window {
+    low: AtomicU64,
+    high: AtomicU64,
+    lists: AtomicU64,
+}
+
+/// What one present's [`R1Window::take`] found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct R1Frame {
+    /// Lists closed in the window that bound a block.
+    pub lists: u64,
+    /// The highest block present less the lowest: 0 when every list bound the same block.
+    pub span: u64,
+}
+
+impl R1Window {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            low: AtomicU64::new(u64::MAX),
+            high: AtomicU64::new(0),
+            lists: AtomicU64::new(0),
+        }
+    }
+
+    /// A list closed having bound blocks `first` to `last` (presents; 0 for none).
+    pub fn note(&self, first: u64, last: u64) {
+        if first == 0 || last == 0 {
+            return;
+        }
+        self.low.fetch_min(first.min(last), Ordering::AcqRel);
+        self.high.fetch_max(first.max(last), Ordering::AcqRel);
+        self.lists.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// The window so far, and a new empty one. A close that lands between the swaps is counted
+    /// in whichever window its stores reached, and may stretch the next one: an over-count of
+    /// mixed frames, never an under-count.
+    pub fn take(&self) -> R1Frame {
+        let lists = self.lists.swap(0, Ordering::AcqRel);
+        let low = self.low.swap(u64::MAX, Ordering::AcqRel);
+        let high = self.high.swap(0, Ordering::AcqRel);
+        R1Frame {
+            lists,
+            span: if lists == 0 || low > high {
+                0
+            } else {
+                high - low
+            },
+        }
+    }
+}
+
 #[cfg(windows)]
 pub use process::{
     CLEAR_STATE, CLEAR_STATE_WITH_PSO, CLOSE, CLOSES_UNMATCHED, CREATE_COMMAND_LIST,
     CREATE_LIST_WITH_PSO, HOOK_NS_SAMPLES, HOOK_NS_SUM, HOOK_PREEMPTED, LIST_SLOT_MISSES,
-    PASSTHROUGH_PORT_BINDS, PROBE_BARRIERS, PROBE_COPIES, PROBE_COPIES_SKIPPED, REDIRECTED_BINDS,
-    RESET, RESET_WITH_PSO, SET_PIPELINE_STATE, SET_PSO_CALLS, clear_state_hook, close_hook,
-    create_command_list_hook, hook_ns_totals, note_root_signature, refresh_active, reset_hook,
-    set_pipeline_state_hook, timer_floor_ns,
+    PASSTHROUGH_PORT_BINDS, PROBE_BARRIERS, PROBE_COPIES, PROBE_COPIES_SKIPPED, R1_FRAMES,
+    R1_FRAMES_MIXED, R1_LISTS, R1_LISTS_STRADDLING, R1_MAX_SPAN, REDIRECTED_BINDS, RESET,
+    RESET_WITH_PSO, SET_PIPELINE_STATE, SET_PSO_CALLS, clear_state_hook, close_hook,
+    create_command_list_hook, hook_ns_totals, note_root_signature, r1_present, refresh_active,
+    reset_hook, set_pipeline_state_hook, timer_floor_ns,
 };
 
 /// The detours, the thread-local slots and the counters.
@@ -614,8 +909,8 @@ mod process {
 
     use windows::Win32::Foundation::E_FAIL;
     use windows::Win32::Graphics::Direct3D12::{
-        D3D12_COMMAND_LIST_TYPE, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_RESOURCE_BARRIER,
-        D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        D3D12_COMMAND_LIST_TYPE, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_QUERY_TYPE_TIMESTAMP,
+        D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
         D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATES,
@@ -624,10 +919,13 @@ mod process {
     use windows::core::{GUID, HRESULT, Interface};
 
     use super::{
-        ACTIVE, Bind, Decision, Detour, ListSlot, ListSlots, PORTS_OFF, STAGE_ACTIVE, Timing,
-        VANILLA, decide, sampled, trip_vanilla,
+        ACTIVE, Bind, Decision, Detour, ListSlot, ListSlots, PORTS_OFF, R1Window, Recording,
+        STAGE_ACTIVE, Timing, VANILLA, VERTEX_BINDS, VERTEX_PASS_SLOTS, VERTEX_PASSES,
+        VERTEX_REDIRECTS, decide, sampled, trip_vanilla,
     };
+    use crate::gpu_time::{self, TIMESTAMP_BYTES};
     use crate::look_binding::Binding;
+    use crate::table::VERTEX_PORT;
     use crate::{params, probe, table};
 
     type SetPipelineStateFn = unsafe extern "system" fn(*mut c_void, *mut c_void);
@@ -686,6 +984,16 @@ mod process {
     pub static HOOK_PREEMPTED: [AtomicU64; Timing::COUNT] =
         [const { AtomicU64::new(0) }; Timing::COUNT];
 
+    /// Gate V0.R1: recordings closed that bound a block, those whose blocks differed, and the
+    /// frames the present took a window of, with how many of those bound more than one block and
+    /// the widest span seen.
+    pub static R1_LISTS: AtomicU64 = AtomicU64::new(0);
+    pub static R1_LISTS_STRADDLING: AtomicU64 = AtomicU64::new(0);
+    pub static R1_FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static R1_FRAMES_MIXED: AtomicU64 = AtomicU64::new(0);
+    pub static R1_MAX_SPAN: AtomicU64 = AtomicU64::new(0);
+    static R1_WINDOW: R1Window = R1Window::new();
+
     /// One recording thread's state.
     struct Local {
         slots: RefCell<ListSlots>,
@@ -695,6 +1003,10 @@ mod process {
         set_pso_pending: Cell<u32>,
         /// Misses not yet added to [`LIST_SLOT_MISSES`].
         misses_pending: Cell<u32>,
+        /// Vertex binds and vertex redirects per pass not yet added to [`VERTEX_BINDS`] and
+        /// [`VERTEX_REDIRECTS`].
+        vertex_pending: [Cell<u32>; VERTEX_PASS_SLOTS],
+        vertex_redirects_pending: [Cell<u32>; VERTEX_PASS_SLOTS],
     }
 
     thread_local! {
@@ -706,8 +1018,52 @@ mod process {
                 tick: Cell::new(0),
                 set_pso_pending: Cell::new(0),
                 misses_pending: Cell::new(0),
+                vertex_pending: [const { Cell::new(0) }; VERTEX_PASS_SLOTS],
+                vertex_redirects_pending: [const { Cell::new(0) }; VERTEX_PASS_SLOTS],
             }
         };
+    }
+
+    /// The present tick of gate V0.R1: the closes since the last present are one frame. Called
+    /// once per present, after the block is published.
+    pub fn r1_present() {
+        let frame = R1_WINDOW.take();
+        if frame.lists == 0 {
+            return;
+        }
+        R1_FRAMES.fetch_add(1, Ordering::Relaxed);
+        if frame.span != 0 {
+            R1_FRAMES_MIXED.fetch_add(1, Ordering::Relaxed);
+        }
+        R1_MAX_SPAN.fetch_max(frame.span, Ordering::Relaxed);
+    }
+
+    /// Count one bind of a vertex entry on this thread, and whether it went to the variant.
+    fn count_vertex(pass: u8, redirected: bool) {
+        let at = usize::from(pass).min(VERTEX_PASS_SLOTS - 1);
+        let counted = LOCAL
+            .try_with(|local| {
+                let bump = |cell: &Cell<u32>| cell.set(cell.get().wrapping_add(1));
+                bump(&local.vertex_pending[at]);
+                if redirected {
+                    bump(&local.vertex_redirects_pending[at]);
+                }
+            })
+            .is_ok();
+        if !counted {
+            VERTEX_BINDS[at].fetch_add(1, Ordering::Relaxed);
+            if redirected {
+                VERTEX_REDIRECTS[at].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Add this thread's pending vertex counts to the shared ones.
+    fn flush_vertex(local: &Local) {
+        for at in 0..VERTEX_PASS_SLOTS {
+            flush(&local.vertex_pending[at], &VERTEX_BINDS[at]);
+            flush(&local.vertex_redirects_pending[at], &VERTEX_REDIRECTS[at]);
+        }
     }
 
     /// Run a detour's own work, binding `fallback` and tripping vanilla if it panics.
@@ -752,6 +1108,7 @@ mod process {
                     }
                     flush(&local.set_pso_pending, &SET_PSO_CALLS);
                     flush(&local.misses_pending, &LIST_SLOT_MISSES);
+                    flush_vertex(local);
                     Some(Instant::now())
                 })
                 .ok()
@@ -840,26 +1197,37 @@ mod process {
     }
 
     /// The decision for one bind of `game`. Returns before the table lookup when nothing is being
-    /// redirected, which agrees with [`decide`].
+    /// redirected, which agrees with [`decide`]. A vertex entry's bind is counted here, on the
+    /// entry and per pass, whatever the decision.
     fn decision_for(game: usize) -> Decision {
         let active = ACTIVE.load(Ordering::Relaxed);
         let vanilla = VANILLA.load(Ordering::Relaxed);
         if game == 0 || !active || vanilla {
             return Decision::Pass;
         }
-        decide(
-            table::get(game),
+        let entry = table::get(game);
+        let decision = decide(
+            entry,
             active,
             vanilla,
             STAGE_ACTIVE.load(Ordering::Relaxed),
             PORTS_OFF.load(Ordering::Relaxed),
-        )
+            VERTEX_PASSES.load(Ordering::Relaxed),
+        );
+        if let Some(entry) = entry
+            && entry.port == VERTEX_PORT
+        {
+            entry.binds.fetch_add(1, Ordering::Relaxed);
+            count_vertex(entry.bits, decision.vertex_variant().is_some());
+        }
+        decision
     }
 
     /// Count one bind of `game` that `decision` was made for and `bound` went to the runtime.
+    /// Vertex binds are counted by [`decision_for`], per pass.
     fn count(decision: Decision, game: usize, bound: usize) {
         match decision {
-            Decision::Pass => {}
+            Decision::Pass | Decision::Vertex { .. } => {}
             _ if bound != game => {
                 REDIRECTED_BINDS.fetch_add(1, Ordering::Relaxed);
             }
@@ -877,9 +1245,63 @@ mod process {
         decision_for(game)
     }
 
+    /// A live list as [`ListSlots`] asks about it: whether it is direct, and a chunk of the
+    /// present's timestamp queries.
+    struct LiveList {
+        list: *mut c_void,
+        present: u64,
+    }
+
+    impl Recording for LiveList {
+        fn direct(&mut self) -> bool {
+            // SAFETY: built only around the live list a detour was called with.
+            unsafe { is_direct(self.list) }
+        }
+
+        fn timing(&self) -> bool {
+            gpu_time::running()
+        }
+
+        fn chunk(&mut self) -> Option<u32> {
+            gpu_time::chunk(self.present)
+        }
+
+        // A span is opened only on a list `direct` said is direct, and ended on the same list.
+        fn end(&mut self, query: u32) {
+            // SAFETY: the live direct list, recording.
+            unsafe { end_query(self.list, query) };
+        }
+
+        fn begin(&mut self, query: u32, tag: u8) {
+            gpu_time::note_begin(query, tag);
+            // SAFETY: as `end`.
+            unsafe { end_query(self.list, query) };
+        }
+
+        fn dropped(&mut self) {
+            gpu_time::count_dropped();
+        }
+    }
+
+    /// Write a timestamp into `list` at `query`.
+    ///
+    /// # Safety
+    ///
+    /// `list` must be a live direct command list that is recording, and the query heap must exist,
+    /// which it does wherever a span was opened.
+    unsafe fn end_query(list: *mut c_void, query: u32) {
+        let heap = gpu_time::query_heap();
+        if heap == 0 {
+            return;
+        }
+        let vtable = unsafe { vtable(list) };
+        unsafe { (vtable.EndQuery)(list, heap as *mut c_void, D3D12_QUERY_TYPE_TIMESTAMP, query) };
+    }
+
     /// The pipeline a bind sends to the runtime, once [`ListSlots::set_pipeline`] or
-    /// [`ListSlots::clear_state`] has answered: the barrier recorded first when the bind owes it,
-    /// the game's own pipeline for a miss, and the bind counted.
+    /// [`ListSlots::clear_state`] has answered, and written the open span's end and the new span's
+    /// begin: the barrier recorded first when the bind owes it, the game's own pipeline for a miss,
+    /// and the bind counted.
     ///
     /// # Safety
     ///
@@ -892,8 +1314,10 @@ mod process {
     ) -> usize {
         let Some(bind) = bind else {
             miss();
-            count(decision, game, game);
-            return game;
+            // A vertex variant needs no slot: it owes the probe nothing.
+            let bound = decision.vertex_variant().unwrap_or(game);
+            count(decision, game, bound);
+            return bound;
         };
         if bind.barrier {
             // SAFETY: the caller's contract; `direct` said the list takes barriers.
@@ -928,14 +1352,16 @@ mod process {
     /// that can add one; a publish that removes the last one leaves it set, which costs a lookup
     /// per bind and nothing else.
     pub fn refresh_active() {
-        let any = table::published().is_some_and(|published| published.redirects() != 0);
+        let any = table::published()
+            .is_some_and(|published| published.redirects() != 0 || published.vertex_entries() != 0);
         ACTIVE.store(any, Ordering::Relaxed);
     }
 
-    /// `SetGraphicsRootSignature` set a root signature with `binding` on `list`.
-    pub fn note_root_signature(list: usize, binding: Binding) {
+    /// `SetGraphicsRootSignature` set a root signature with `binding` on `list`, and bound the
+    /// parameter block published at present `block` (0 when it bound none).
+    pub fn note_root_signature(list: usize, binding: Binding, block: u64) {
         guarded(Detour::SetRootSignature, (), || {
-            let noted = with_slots(|slots| slots.set_root_signature(list, binding, now()));
+            let noted = with_slots(|slots| slots.set_root_signature(list, binding, block, now()));
             if noted != Some(true) {
                 miss();
             }
@@ -975,11 +1401,10 @@ mod process {
         let bound = guarded(Detour::SetPipelineState, game, || {
             let clock = Clock::start(Timing::SetPipelineState);
             let decision = decision_for(game);
-            // SAFETY: `list` is the live list being recorded.
+            let present = now();
+            let live = LiveList { list, present };
             let bind = with_slots(|slots| {
-                slots.set_pipeline(list as usize, game, decision, now(), || unsafe {
-                    is_direct(list)
-                })
+                slots.set_pipeline(list as usize, game, decision, present, live)
             })
             .flatten();
             let bound = unsafe { apply(list, game, decision, bind) };
@@ -1034,19 +1459,21 @@ mod process {
                     Decision::Redirect { kind, .. } => Some(kind),
                     _ => None,
                 };
-                let kept =
-                    with_slots(|slots| slots.reset(list as usize, game, bound, redirected, now()))
-                        == Some(true);
+                let present = now();
+                let kept = with_slots(|slots| {
+                    slots.reset(list as usize, game, bound, redirected, present)
+                }) == Some(true);
                 // SAFETY: `list` was just reset, so it is recording.
-                unsafe { start_recording(list, game, decision, bound, kept) };
+                unsafe { start_recording(list, game, decision, bound, kept, present) };
             });
         }
         result
     }
 
-    /// A list just started recording with `bound` as its pipeline, and `kept` says whether its
-    /// slot holds it: record the probe's barrier when `bound` is a variant, or put the game's own
-    /// pipeline back when the slot could not be kept after all. Count the bind.
+    /// A list just started recording with `bound` as its pipeline during present `present`, and
+    /// `kept` says whether its slot holds it: open the span of a port's pipeline and record the
+    /// probe's barrier when `bound` is a variant, or put the game's own pipeline back when the
+    /// slot could not be kept after all. Count the bind.
     ///
     /// # Safety
     ///
@@ -1058,19 +1485,36 @@ mod process {
         decision: Decision,
         bound: usize,
         kept: bool,
+        present: u64,
     ) {
         if !kept {
             miss();
         }
-        let redirected = bound != game;
-        if redirected && kept {
+        // Only a port's variant writes the probe; a vertex variant stays bound with or without
+        // its slot.
+        let port_redirect = bound != game && matches!(decision, Decision::Redirect { .. });
+        // A port's pipeline is timed, its variant or the game's own; a vertex variant is not.
+        let port = match decision {
+            Decision::Redirect { kind, .. } if port_redirect => Some((kind, true)),
+            Decision::PortPassed { kind } => Some((kind, false)),
+            Decision::Pass | Decision::Redirect { .. } | Decision::Vertex { .. } => None,
+        };
+        if kept && let Some((kind, variant)) = port {
+            let live = LiveList { list, present };
+            with_slots(|slots| slots.begin_span(list as usize, kind, variant, live));
+        }
+        if port_redirect && kept {
             unsafe { record_probe_barrier(list) };
-        } else if redirected {
+        } else if port_redirect {
             // Checked before the call and lost since: a variant never stays bound without its
             // barrier.
             unsafe { bind_past_the_detour(list, game) };
         }
-        count(decision, game, if kept { bound } else { game });
+        count(
+            decision,
+            game,
+            if kept || !port_redirect { bound } else { game },
+        );
     }
 
     /// `ID3D12GraphicsCommandList::ClearState`.
@@ -1083,13 +1527,11 @@ mod process {
         let bound = guarded(Detour::ClearState, game, || {
             let clock = Clock::start(Timing::ClearState);
             let decision = initial_decision(game, &CLEAR_STATE_WITH_PSO);
-            // SAFETY: `list` is the live list being recorded.
-            let bind = with_slots(|slots| {
-                slots.clear_state(list as usize, game, decision, now(), || unsafe {
-                    is_direct(list)
-                })
-            })
-            .flatten();
+            let present = now();
+            let live = LiveList { list, present };
+            let bind =
+                with_slots(|slots| slots.clear_state(list as usize, game, decision, present, live))
+                    .flatten();
             // The barrier may precede `ClearState`, which leaves resource states alone.
             let bound = unsafe { apply(list, game, decision, bind) };
             clock.stop();
@@ -1153,26 +1595,28 @@ mod process {
             let created = unsafe { *list };
             guarded(Detour::CreateCommandList, (), || match decision {
                 Decision::Redirect { kind: port, .. } => {
+                    let present = now();
                     let kept = with_slots(|slots| {
-                        slots.reset(created as usize, game, bound, Some(port), now())
+                        slots.reset(created as usize, game, bound, Some(port), present)
                     }) == Some(true);
                     // SAFETY: a direct list, created recording.
-                    unsafe { start_recording(created, game, decision, bound, kept) };
+                    unsafe { start_recording(created, game, decision, bound, kept, present) };
                 }
                 other => {
                     // A slot left at this address by a list released before its `Close` must not
                     // pass its debt to this one; any other list claims a slot at its first bind.
                     with_slots(|slots| slots.forget(created as usize));
-                    count(other, game, game);
+                    count(other, game, bound);
                 }
             });
         }
         result
     }
 
-    /// `ID3D12GraphicsCommandList::Close`: free the list's slot, and first pay the probe back when
-    /// the recording owes it: the copy into this present's readback slot and the barriers back to
-    /// `COMMON`.
+    /// `ID3D12GraphicsCommandList::Close`: free the list's slot, and first settle what the
+    /// recording owes: its open span's end and the resolve of its spans ([`settle_spans`]), then
+    /// the probe's copy into this present's readback slot and the barriers back to `COMMON`. A
+    /// `Close` that records either is timed as [`Timing::CloseProbeCopy`].
     ///
     /// # Safety
     ///
@@ -1182,18 +1626,28 @@ mod process {
         guarded(Detour::Close, (), || {
             let clock = Clock::start(Timing::Close);
             let slot = with_slots(|slots| slots.close(list as usize)).flatten();
-            let copied = match slot {
-                // SAFETY: `list` is the live list being closed, still recording.
-                Some(ListSlot {
-                    probe_owed: true, ..
-                }) => unsafe { pay_probe_back(list) },
-                Some(_) => false,
+            if let Some(closed) = slot
+                && closed.first_block != 0
+            {
+                R1_LISTS.fetch_add(1, Ordering::Relaxed);
+                if closed.first_block != closed.last_block {
+                    R1_LISTS_STRADDLING.fetch_add(1, Ordering::Relaxed);
+                }
+                R1_WINDOW.note(closed.first_block, closed.last_block);
+            }
+            let recorded = match slot {
+                Some(slot) => {
+                    // SAFETY: `list` is the live list being closed, still recording.
+                    let resolved = unsafe { settle_spans(list, &slot) };
+                    let copied = slot.probe_owed && unsafe { pay_probe_back(list) };
+                    resolved || copied
+                }
                 None => {
                     CLOSES_UNMATCHED.fetch_add(1, Ordering::Relaxed);
                     false
                 }
             };
-            clock.stop_as(if copied {
+            clock.stop_as(if recorded {
                 Timing::CloseProbeCopy
             } else {
                 Timing::Close
@@ -1205,6 +1659,44 @@ mod process {
         // SAFETY: the trampoline MinHook returned for this exact function.
         let original: CloseFn = unsafe { std::mem::transmute(original) };
         unsafe { original(list) }
+    }
+
+    /// End the recording's open span and resolve every span it began into the readback buffer,
+    /// query `q` to byte `8 q`. Returns whether a resolve was recorded.
+    ///
+    /// # Safety
+    ///
+    /// `list` must be the live list `slot` was kept for, still recording.
+    unsafe fn settle_spans(list: *mut c_void, slot: &ListSlot) -> bool {
+        if let Some(end) = slot.open_end() {
+            // A span is opened only on a direct list, so this one takes the query.
+            unsafe { end_query(list, end) };
+        }
+        let Some((first, count)) = slot.pending() else {
+            return false;
+        };
+        let heap = gpu_time::query_heap();
+        let readback = gpu_time::readback_resource();
+        // A chunk is handed out only once both exist and only to a direct list; checked again
+        // rather than trusted, since a resolve in any other list is refused.
+        if heap == 0 || readback == 0 || !unsafe { is_direct(list) } {
+            gpu_time::count_dropped();
+            return false;
+        }
+        // SAFETY: both are held for the life of the process, and the queries are this list's.
+        unsafe {
+            (vtable(list).ResolveQueryData)(
+                list,
+                heap as *mut c_void,
+                D3D12_QUERY_TYPE_TIMESTAMP,
+                first,
+                count,
+                readback as *mut c_void,
+                u64::from(first) * TIMESTAMP_BYTES as u64,
+            );
+        }
+        gpu_time::count_resolve();
+        true
     }
 
     /// A transition barrier on a resource this DLL holds. The resource is borrowed: the field is
@@ -1375,6 +1867,315 @@ mod tests {
         true
     }
 
+    /// What a timed list was told to write, in order.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Wrote {
+        End(u32),
+        Begin(u32, PortKind, bool),
+        Dropped,
+    }
+
+    /// A list with the timer running: chunks handed out from query [`Timer::FIRST`] on, every
+    /// question counted and every write kept.
+    struct Timer {
+        not_direct: bool,
+        out_of_chunks: bool,
+        next: u32,
+        chunks: u32,
+        asked: u32,
+        wrote: Vec<Wrote>,
+    }
+
+    impl Timer {
+        const FIRST: u32 = 64;
+
+        fn new() -> Self {
+            Self {
+                not_direct: false,
+                out_of_chunks: false,
+                next: Self::FIRST,
+                chunks: 0,
+                asked: 0,
+                wrote: Vec::new(),
+            }
+        }
+
+        /// The writes since the last call.
+        fn take(&mut self) -> Vec<Wrote> {
+            std::mem::take(&mut self.wrote)
+        }
+    }
+
+    impl Recording for &mut Timer {
+        fn direct(&mut self) -> bool {
+            self.asked += 1;
+            !self.not_direct
+        }
+
+        fn timing(&self) -> bool {
+            true
+        }
+
+        fn chunk(&mut self) -> Option<u32> {
+            if self.out_of_chunks {
+                return None;
+            }
+            let base = self.next;
+            self.next += gpu_time::CHUNK_QUERIES as u32;
+            self.chunks += 1;
+            Some(base)
+        }
+
+        fn end(&mut self, query: u32) {
+            self.wrote.push(Wrote::End(query));
+        }
+
+        fn begin(&mut self, query: u32, tag: u8) {
+            let (kind, variant) = gpu_time::untag(tag).expect("a span's tag names a kind");
+            self.wrote.push(Wrote::Begin(query, kind, variant));
+        }
+
+        fn dropped(&mut self) {
+            self.wrote.push(Wrote::Dropped);
+        }
+    }
+
+    #[test]
+    fn a_variant_bind_opens_a_span_and_the_next_bind_ends_it() {
+        let mut slots = ListSlots::new();
+        let mut timer = Timer::new();
+        let first = Timer::FIRST;
+        let bind = slots
+            .set_pipeline(
+                ptr(1),
+                ptr(100),
+                redirect(PortKind::Tonemap),
+                NOW,
+                &mut timer,
+            )
+            .expect("slot");
+        assert_eq!(
+            bind,
+            Bind {
+                bound: ptr(900 + PortKind::Tonemap as usize),
+                barrier: true,
+            }
+        );
+        assert_eq!(timer.take(), [Wrote::Begin(first, PortKind::Tonemap, true)]);
+        // Asked once, for the barrier; the span needed no second answer.
+        assert_eq!((timer.asked, timer.chunks), (1, 1));
+        assert!(
+            slots
+                .set_pipeline(ptr(1), ptr(101), Decision::Pass, NOW, &mut timer)
+                .is_some()
+        );
+        assert_eq!(timer.take(), [Wrote::End(first + 1)]);
+        // Ended once only.
+        assert!(
+            slots
+                .set_pipeline(ptr(1), ptr(102), Decision::Pass, NOW, &mut timer)
+                .is_some()
+        );
+        assert_eq!(timer.take(), []);
+        let closed = slots.close(ptr(1)).expect("slot");
+        assert_eq!(closed.open_end(), None);
+        assert_eq!(closed.pending(), Some((first, 2)));
+        assert_eq!(timer.chunks, 1);
+    }
+
+    #[test]
+    fn every_bind_of_a_port_on_a_list_gets_its_own_span_in_one_chunk() {
+        let mut slots = ListSlots::new();
+        let mut timer = Timer::new();
+        let first = Timer::FIRST;
+        let tonemap = redirect(PortKind::Tonemap);
+        let ao_own = Decision::PortPassed { kind: PortKind::Ao };
+        for decision in [tonemap, Decision::Pass, tonemap, ao_own] {
+            assert!(
+                slots
+                    .set_pipeline(ptr(1), ptr(7), decision, NOW, &mut timer)
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            timer.take(),
+            [
+                Wrote::Begin(first, PortKind::Tonemap, true),
+                Wrote::End(first + 1),
+                Wrote::Begin(first + 2, PortKind::Tonemap, true),
+                // A port bound straight after a port: the one span ends and the next begins.
+                Wrote::End(first + 3),
+                Wrote::Begin(first + 4, PortKind::Ao, false),
+            ]
+        );
+        // The list was known direct from its first redirect, so the game's port asked nothing.
+        assert_eq!((timer.asked, timer.chunks), (1, 1));
+        let closed = slots.close(ptr(1)).expect("slot");
+        assert_eq!(closed.open_end(), Some(first + 5));
+        assert_eq!(closed.pending(), Some((first, 6)));
+        // The next recording of the list takes a chunk of its own.
+        assert!(
+            slots
+                .set_pipeline(ptr(1), ptr(7), tonemap, NOW, &mut timer)
+                .is_some()
+        );
+        let next = first + gpu_time::CHUNK_QUERIES as u32;
+        assert_eq!(timer.take(), [Wrote::Begin(next, PortKind::Tonemap, true)]);
+        assert_eq!(timer.chunks, 2);
+    }
+
+    #[test]
+    fn the_games_port_pipeline_is_timed_only_on_a_direct_list() {
+        let mut slots = ListSlots::new();
+        let own = Decision::PortPassed {
+            kind: PortKind::CmbAlbedo,
+        };
+        let mut elsewhere = Timer {
+            not_direct: true,
+            ..Timer::new()
+        };
+        let untimed = Bind {
+            bound: ptr(5),
+            barrier: false,
+        };
+        let bind = slots
+            .set_pipeline(ptr(1), ptr(5), own, NOW, &mut elsewhere)
+            .expect("slot");
+        assert_eq!(bind, untimed);
+        assert_eq!((elsewhere.asked, elsewhere.chunks), (1, 0));
+        assert_eq!(elsewhere.take(), []);
+        // A redirect refused for a list that is not direct times nothing, and asks once.
+        let mut refused = Timer {
+            not_direct: true,
+            ..Timer::new()
+        };
+        let bind = slots
+            .set_pipeline(ptr(2), ptr(5), redirect(PortKind::Ao), NOW, &mut refused)
+            .expect("slot");
+        assert_eq!(bind, untimed);
+        assert_eq!((refused.asked, refused.chunks), (1, 0));
+        assert_eq!(refused.take(), []);
+        // On a direct list the game's pipeline asks once, then the chunk answers for the list.
+        let mut timer = Timer::new();
+        for _ in 0..2 {
+            assert_eq!(
+                slots.set_pipeline(ptr(3), ptr(5), own, NOW, &mut timer),
+                Some(untimed)
+            );
+        }
+        assert_eq!(
+            timer.take(),
+            [
+                Wrote::Begin(Timer::FIRST, PortKind::CmbAlbedo, false),
+                Wrote::End(Timer::FIRST + 1),
+                Wrote::Begin(Timer::FIRST + 2, PortKind::CmbAlbedo, false),
+            ]
+        );
+        assert_eq!((timer.asked, timer.chunks), (1, 1));
+        // A plain bind never asks and never times.
+        let mut plain = Timer::new();
+        let bind = slots
+            .set_pipeline(ptr(4), ptr(5), Decision::Pass, NOW, &mut plain)
+            .expect("slot");
+        assert_eq!(bind, untimed);
+        assert_eq!((plain.asked, plain.chunks), (0, 0));
+        assert_eq!(plain.take(), []);
+    }
+
+    #[test]
+    fn a_port_with_no_query_to_spare_is_dropped_and_no_timer_times_nothing() {
+        let mut slots = ListSlots::new();
+        let mut timer = Timer::new();
+        let tonemap = redirect(PortKind::Tonemap);
+        for at in 0..CHUNK_SPANS as u32 {
+            assert!(
+                slots
+                    .set_pipeline(ptr(1), ptr(5), tonemap, NOW, &mut timer)
+                    .is_some()
+            );
+            let begin = Wrote::Begin(Timer::FIRST + 2 * at, PortKind::Tonemap, true);
+            assert_eq!(timer.wrote.last(), Some(&begin));
+        }
+        timer.take();
+        // The chunk is full: the bind still redirects and still ends the last span.
+        let full = slots
+            .set_pipeline(ptr(1), ptr(5), tonemap, NOW, &mut timer)
+            .expect("slot");
+        assert_eq!(full.bound, ptr(900 + PortKind::Tonemap as usize));
+        assert_eq!(
+            timer.take(),
+            [
+                Wrote::End(Timer::FIRST + 2 * CHUNK_SPANS as u32 - 1),
+                Wrote::Dropped
+            ]
+        );
+        let closed = slots.close(ptr(1)).expect("slot");
+        assert_eq!(
+            closed.pending(),
+            Some((Timer::FIRST, 2 * CHUNK_SPANS as u32))
+        );
+        assert_eq!(closed.open_end(), None);
+        assert_eq!(timer.chunks, 1);
+        // No chunk left in the present.
+        let mut spent = Timer {
+            out_of_chunks: true,
+            ..Timer::new()
+        };
+        assert!(
+            slots
+                .set_pipeline(ptr(2), ptr(5), tonemap, NOW, &mut spent)
+                .is_some()
+        );
+        assert_eq!(spent.take(), [Wrote::Dropped]);
+        assert_eq!(slots.get(ptr(2)).map(ListSlot::pending), Some(None));
+        // Without the timer a port bind is simply not timed.
+        assert!(
+            slots
+                .set_pipeline(ptr(3), ptr(5), tonemap, NOW, direct)
+                .is_some()
+        );
+        let closed = slots.close(ptr(3)).expect("slot");
+        assert_eq!((closed.pending(), closed.open_end()), (None, None));
+    }
+
+    #[test]
+    fn clear_state_ends_the_span_and_a_new_recording_starts_with_none() {
+        let mut slots = ListSlots::new();
+        let mut timer = Timer::new();
+        assert!(
+            slots
+                .set_pipeline(ptr(1), ptr(5), redirect(PortKind::Ao), NOW, &mut timer)
+                .is_some()
+        );
+        timer.take();
+        assert!(
+            slots
+                .clear_state(ptr(1), 0, Decision::Pass, NOW, &mut timer)
+                .is_some()
+        );
+        assert_eq!(timer.take(), [Wrote::End(Timer::FIRST + 1)]);
+        // A recording reset with a variant as its initial pipeline opens its span through
+        // `begin_span`, once its slot was kept; the old recording's spans went with it.
+        assert!(slots.reset(ptr(1), ptr(5), ptr(905), Some(PortKind::Ao), NOW + 1));
+        assert_eq!(slots.get(ptr(1)).map(ListSlot::pending), Some(None));
+        assert!(slots.begin_span(ptr(1), PortKind::Ao, true, &mut timer));
+        let next = Timer::FIRST + gpu_time::CHUNK_QUERIES as u32;
+        assert_eq!(timer.take(), [Wrote::Begin(next, PortKind::Ao, true)]);
+        // A list with no slot here opens nothing.
+        assert!(!slots.begin_span(ptr(9), PortKind::Ao, true, &mut timer));
+        assert_eq!(timer.take(), []);
+        // A slot gone stale takes its chunk and its open span with it: the next recording ends
+        // nothing and starts with no chunk.
+        let later = NOW + 1 + STALE_PRESENTS;
+        assert!(
+            slots
+                .set_pipeline(ptr(1), ptr(5), Decision::Pass, later, &mut timer)
+                .is_some()
+        );
+        assert_eq!(timer.take(), []);
+        assert_eq!(slots.get(ptr(1)).map(ListSlot::pending), Some(None));
+    }
+
     #[test]
     fn each_port_kind_redirects_under_its_own_stage() {
         // Written out rather than derived: AO and AO with SSR light, the albedo pass, the tonemaps.
@@ -1440,7 +2241,8 @@ mod tests {
                     // Every subset of the three stages, and a bit no stage owns.
                     for stage_active in (0..8).chain([8, 8 | 7]) {
                         for &ports_off in &offs {
-                            let decision = decide(entry, active, vanilla, stage_active, ports_off);
+                            let decision =
+                                decide(entry, active, vanilla, stage_active, ports_off, u32::MAX);
                             let port = entry.and_then(|e| PortKind::from_u8(e.port));
                             let expected = match (entry, port) {
                                 _ if !active || vanilla => Decision::Pass,
@@ -1485,6 +2287,108 @@ mod tests {
         // Per kind: open gates only, the 4 of the 8 stage subsets plus `8 | 7` holding its stage,
         // and the 5 of the 7 off sets that leave the kind on (none, and the other four alone).
         assert_eq!(redirects, PortKind::COUNT * 5 * 5);
+    }
+
+    #[test]
+    fn a_vertex_entry_is_redirected_by_its_stage_pass_and_group_alone() {
+        const VELO: u8 = 4;
+        let mut builder = Builder::new();
+        // A mesh pipeline that only counts, one with its variant, and one of a suspended group.
+        assert!(builder.insert(EntrySpec {
+            port: VERTEX_PORT,
+            bits: VELO,
+            ..EntrySpec::new(ptr(1))
+        }));
+        assert!(builder.insert(EntrySpec {
+            redirect: ptr(901),
+            port: VERTEX_PORT,
+            bits: VELO,
+            ..EntrySpec::new(ptr(2))
+        }));
+        assert!(builder.insert(EntrySpec {
+            redirect: ptr(902),
+            port: VERTEX_PORT,
+            bits: VELO,
+            flags: flag::VERTEX_SUSPENDED,
+            ..EntrySpec::new(ptr(3))
+        }));
+        let table = builder.build(None);
+        assert_eq!(table.vertex_entries(), 3);
+        assert_eq!(table.redirects(), 2);
+        let open = |key: usize, stages: u32, passes: u32| {
+            decide(table.get(key), true, false, stages, 0, passes)
+        };
+        let moved = Decision::Vertex {
+            variant: ptr(901),
+            pass: VELO,
+        };
+        assert_eq!(open(ptr(2), VERTEX_STAGE_BIT, u32::MAX), moved);
+        assert_eq!(moved.bound(ptr(2)), ptr(901));
+        assert_eq!(moved.vertex_variant(), Some(ptr(901)));
+        // Never withdrawn: it owes the list nothing.
+        assert_eq!(moved.withdrawn(), moved);
+        // Counting only, suspended, the stage off, its pass masked out, vanilla: the game's own.
+        assert_eq!(open(ptr(1), VERTEX_STAGE_BIT, u32::MAX), Decision::Pass);
+        assert_eq!(open(ptr(3), VERTEX_STAGE_BIT, u32::MAX), Decision::Pass);
+        assert_eq!(open(ptr(2), 7, u32::MAX), Decision::Pass);
+        assert_eq!(open(ptr(2), VERTEX_STAGE_BIT, !(1 << VELO)), Decision::Pass);
+        assert_eq!(
+            decide(table.get(ptr(2)), true, true, VERTEX_STAGE_BIT, 0, u32::MAX),
+            Decision::Pass
+        );
+        // Suspending is an atomic `or` on the live entry, with no rebuild.
+        table
+            .get(ptr(2))
+            .expect("entry")
+            .flags
+            .fetch_or(flag::VERTEX_SUSPENDED, Ordering::Relaxed);
+        assert_eq!(open(ptr(2), VERTEX_STAGE_BIT, u32::MAX), Decision::Pass);
+    }
+
+    #[test]
+    fn a_vertex_bind_takes_its_variant_with_no_barrier_and_owes_nothing() {
+        let mut slots = ListSlots::new();
+        let vertex = Decision::Vertex {
+            variant: ptr(950),
+            pass: 0,
+        };
+        // Even on a list that cannot take barriers.
+        let bind = slots
+            .set_pipeline(ptr(1), ptr(100), vertex, NOW, || false)
+            .expect("slot");
+        assert_eq!(
+            bind,
+            Bind {
+                bound: ptr(950),
+                barrier: false
+            }
+        );
+        let slot = slots.close(ptr(1)).expect("slot");
+        assert!(!slot.probe_owed);
+        assert_eq!(slot.port_bound_kinds, 0);
+        assert_eq!((slot.game_pso, slot.bound_pso), (ptr(100), ptr(950)));
+    }
+
+    #[test]
+    fn a_recording_notes_the_first_and_last_block_it_bound() {
+        let mut slots = ListSlots::new();
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 0, NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 41, NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 41, NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 42, NOW));
+        let slot = slots.close(ptr(1)).expect("slot");
+        assert_eq!((slot.first_block, slot.last_block), (41, 42));
+        // The window the present takes: two lists on block 41, one across 41 to 43.
+        let window = R1Window::new();
+        assert_eq!(window.take(), R1Frame::default());
+        window.note(41, 41);
+        window.note(0, 0);
+        window.note(41, 41);
+        assert_eq!(window.take(), R1Frame { lists: 2, span: 0 });
+        window.note(41, 43);
+        window.note(42, 42);
+        assert_eq!(window.take(), R1Frame { lists: 2, span: 2 });
+        assert_eq!(window.take(), R1Frame::default());
     }
 
     #[test]
@@ -1543,7 +2447,7 @@ mod tests {
                 barrier: true
             }
         );
-        assert!(slots.set_root_signature(ptr(1), full_binding(), NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 0, NOW));
         // A later plain bind on the same list moves the pipeline but not what was bound before.
         let plain = slots
             .set_pipeline(ptr(1), ptr(101), Decision::Pass, NOW + 1, direct)
@@ -1565,6 +2469,7 @@ mod tests {
                 port_bound_kinds: PortKind::Tonemap.bit(),
                 probe_owed: true,
                 touched: NOW + 1,
+                ..ListSlot::EMPTY
             })
         );
         assert_eq!(slots.len(), 1);
@@ -1683,7 +2588,7 @@ mod tests {
         // Then the other lists that owe nothing, oldest first: the ninth list, used this present,
         // is passed over.
         for list in [3, 5, 7] {
-            assert!(slots.set_root_signature(ptr(100 + list), Binding::NONE, now));
+            assert!(slots.set_root_signature(ptr(100 + list), Binding::NONE, 0, now));
             assert!(slots.get(ptr(list)).is_none(), "{list}");
             assert!(slots.get(late).is_some(), "{list}");
         }
@@ -1710,7 +2615,7 @@ mod tests {
             None
         );
         assert!(!slots.reset(refused, ptr(1), ptr(1), None, now));
-        assert!(!slots.set_root_signature(refused, full_binding(), now));
+        assert!(!slots.set_root_signature(refused, full_binding(), 0, now));
         assert_eq!(slots.close(refused), None);
         assert_eq!(slots, before);
         // The lists already in it are still served, and a closed one frees a slot for the next.
@@ -1785,7 +2690,7 @@ mod tests {
                 .set_pipeline(ptr(1), ptr(1), redirect(PortKind::CmbAlbedo), NOW, direct)
                 .is_some()
         );
-        assert!(slots.set_root_signature(ptr(1), full_binding(), NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 0, NOW));
         // The list was closed and reset on another thread, and is recorded here again.
         let later = NOW + STALE_PRESENTS;
         let bind = slots
@@ -1848,7 +2753,7 @@ mod tests {
                 .set_pipeline(ptr(1), ptr(100), redirect(PortKind::Ao), NOW, direct)
                 .is_some()
         );
-        assert!(slots.set_root_signature(ptr(1), full_binding(), NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 0, NOW));
         assert!(
             slots
                 .set_pipeline(ptr(2), ptr(200), Decision::Pass, NOW, direct)
@@ -1867,6 +2772,7 @@ mod tests {
                 port_bound_kinds: 0,
                 probe_owed: false,
                 touched: NOW + 1,
+                ..ListSlot::EMPTY
             })
         );
         assert_eq!(slots.take_lost(), 1);
@@ -1914,7 +2820,7 @@ mod tests {
                 .set_pipeline(ptr(1), ptr(100), redirect(PortKind::AoSsr), NOW, direct)
                 .is_some()
         );
-        assert!(slots.set_root_signature(ptr(1), full_binding(), NOW));
+        assert!(slots.set_root_signature(ptr(1), full_binding(), 0, NOW));
         let bind = slots
             .clear_state(ptr(1), 0, Decision::Pass, NOW, direct)
             .expect("slot");
@@ -1935,6 +2841,7 @@ mod tests {
                 port_bound_kinds: PortKind::AoSsr.bit(),
                 probe_owed: true,
                 touched: NOW,
+                ..ListSlot::EMPTY
             })
         );
     }
@@ -1948,7 +2855,7 @@ mod tests {
         );
         assert!(!slots.reset(0, 0, 0, None, NOW));
         assert_eq!(slots.clear_state(0, 0, Decision::Pass, NOW, direct), None);
-        assert!(!slots.set_root_signature(0, Binding::NONE, NOW));
+        assert!(!slots.set_root_signature(0, Binding::NONE, 0, NOW));
         assert!(!slots.can_take(0, NOW));
         assert_eq!(slots.close(0), None);
         assert!(slots.get(0).is_none());

@@ -10,7 +10,9 @@
 //!
 //! The annotation parser's and the lint's findings become diagnostics too ([`Diagnostic::layer`]),
 //! and [`render`] writes them back in dxc's own form, so `diag/<id>.txt` reads back through
-//! [`parse`] whoever wrote it.
+//! [`parse`] whoever wrote it. An error about a name pasted from ReShade, D3D9 or GLSL --
+//! `no matching function for call to 'tex2D'` -- gets a note saying what to write instead
+//! ([`add_hints`]).
 
 use core::fmt;
 
@@ -186,6 +188,50 @@ pub fn attribute(diagnostics: &mut [Diagnostic], layers: &[(u32, &str)]) {
     }
 }
 
+/// Under each error about a layer that is about a name pasted from ReShade, D3D9 or GLSL, a note
+/// saying what to write instead (`complete::unavailable_for`), at the error's own place. `line_of`
+/// gives the text of a layer's 1-based line, which tells `ReShade::BackBuffer` from
+/// `ReShade::PixelSize` when the compiler quotes only `ReShade`. An error that has the note
+/// already gets no second one.
+pub fn add_hints(diagnostics: &mut [Diagnostic], line_of: impl Fn(u32, u32) -> Option<String>) {
+    for diagnostic in diagnostics {
+        let Some(layer) = diagnostic.layer else {
+            continue;
+        };
+        if diagnostic.severity != Severity::Error {
+            continue;
+        }
+        let line = line_of(layer, diagnostic.line);
+        let Some(entry) = super::complete::unavailable_for(
+            &diagnostic.message,
+            line.as_deref(),
+            diagnostic.column,
+        ) else {
+            continue;
+        };
+        let hint = entry.hint();
+        if diagnostic.notes.iter().any(|note| note.message == hint) {
+            continue;
+        }
+        diagnostic.notes.push(Diagnostic {
+            file: diagnostic.file.clone(),
+            line: diagnostic.line,
+            column: diagnostic.column,
+            severity: Severity::Note,
+            message: hint,
+            notes: Vec::new(),
+            layer: diagnostic.layer,
+        });
+    }
+}
+
+/// The text of 1-based line `line` of `text`.
+#[must_use]
+pub fn line_of(text: &str, line: u32) -> Option<String> {
+    let index = usize::try_from(line.checked_sub(1)?).ok()?;
+    text.lines().nth(index).map(str::to_owned)
+}
+
 /// The diagnostics as dxc prints them, one per line, notes under their error: what
 /// `diag/<id>.txt` holds.
 #[must_use]
@@ -273,6 +319,46 @@ error: validation errors
             parse_line("a.hlsl:1:10: fatal error: 'b.hlsli' file not found").map(|d| d.severity),
             Some(Severity::Error)
         );
+    }
+
+    #[test]
+    fn a_pasted_name_gets_a_note_saying_what_to_write_instead() {
+        let text = "float3 apply(float3 c, TonemapCtx ctx)\n{\n    c = tex2D(c.xy, ctx.uv).rgb;\n    \
+                    c *= Strenth;\n    return c;\n}\n";
+        let mut found = parse(
+            "layers/3-grade.hlsl:3:9: error: Unsupported intrinsic.\n\
+             layers/3-grade.hlsl:4:10: error: use of undeclared identifier 'Strenth'\n\
+             tonemap.hlsl:9:1: error: no matching function for call to 'tex2D'\n",
+        );
+        attribute(&mut found, &[(3, "3-grade.hlsl")]);
+        add_hints(&mut found, |id, line| {
+            assert_eq!(id, 3);
+            line_of(text, line)
+        });
+        assert_eq!(found[0].notes.len(), 1);
+        let note = &found[0].notes[0];
+        assert_eq!(
+            (note.severity, note.line, note.column, note.layer),
+            (Severity::Note, 3, Some(9), Some(3))
+        );
+        assert!(
+            note.message
+                .starts_with("`tex2D` is not available in a layer: ")
+        );
+        assert!(
+            note.message.contains("g_SourceTexture.SampleLevel"),
+            "{}",
+            note.message
+        );
+        // A typo names nothing pasted, and the editor's own code gets no hint.
+        assert!(found[1].notes.is_empty());
+        assert!(found[2].notes.is_empty());
+        // Twice is once, and the note reads back from the file it is written to.
+        add_hints(&mut found, |_, line| line_of(text, line));
+        assert_eq!(found[0].notes.len(), 1);
+        let mut back = parse(&render(&found));
+        attribute(&mut back, &[(3, "3-grade.hlsl")]);
+        assert_eq!(back, found);
     }
 
     #[test]

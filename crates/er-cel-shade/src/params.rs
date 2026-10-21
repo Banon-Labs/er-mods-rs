@@ -45,9 +45,10 @@ const _: () = assert!(BLOCK_BYTES.is_multiple_of(256));
 
 /// Register indexes into `er_p`, as `shaders/editor_abi.hlsli` declares them.
 pub mod reg {
-    /// The cel knobs, `Look::gpu_block`.
+    /// The cel knobs the AO port reads, `Look::gpu_block`. Register 2 is unused since the other
+    /// four knobs became layers.
     pub const CEL: usize = 0;
-    pub const CEL_REGISTERS: usize = 3;
+    pub const CEL_REGISTERS: usize = 2;
     /// `(time_s, asfloat(frame), display_w, display_h)`.
     pub const FRAME: usize = 3;
     /// `asfloat` of `(mask_pitch, mask_rows, reverse_z, flags)` (P2).
@@ -55,6 +56,10 @@ pub mod reg {
     /// Selector configuration (P2, P3).
     pub const SELECTOR: usize = 5;
     pub const SELECTOR_REGISTERS: usize = 27;
+    /// `(previous time_s, asfloat(previous frame), asfloat(vertex proof mode), 0)`: what a velocity
+    /// pass gives its previous position the vertex layers at, and the proof switch
+    /// (`docs/plans/er-shader-editor-vertex.md`, section 7.7).
+    pub const PREVIOUS: usize = 32;
     /// Capsule anchors, two registers each (P4).
     pub const CAPSULES: usize = 64;
     pub const CAPSULE_REGISTERS: usize = 128;
@@ -69,8 +74,9 @@ pub mod reg {
 }
 
 const _: () = assert!(reg::CEL_REGISTERS * 4 == GPU_FLOATS);
-const _: () = assert!(reg::CEL + reg::CEL_REGISTERS == reg::FRAME);
-const _: () = assert!(reg::SELECTOR + reg::SELECTOR_REGISTERS == 32);
+const _: () = assert!(reg::CEL + reg::CEL_REGISTERS <= reg::FRAME);
+const _: () = assert!(reg::SELECTOR + reg::SELECTOR_REGISTERS == reg::PREVIOUS);
+const _: () = assert!(reg::PREVIOUS < reg::CAPSULES);
 const _: () = assert!(reg::CAPSULES + reg::CAPSULE_REGISTERS == reg::LAYER_MASKS);
 const _: () = assert!(reg::LAYER_MASKS + reg::LAYER_SLOTS <= reg::LAYERS);
 const _: () = assert!(reg::LAYERS + reg::LAYER_SLOTS * reg::LAYER_REGISTERS == REGISTERS);
@@ -133,7 +139,7 @@ impl Block {
         }
     }
 
-    /// The cel knobs, `Look::gpu_block`, into `er_p[0..2]`.
+    /// The cel knobs, `Look::gpu_block`, into `er_p[0..1]`.
     pub fn set_look(&mut self, block: &[f32; GPU_FLOATS]) {
         let (registers, _) = block.as_chunks::<4>();
         for (at, register) in registers.iter().enumerate() {
@@ -141,8 +147,11 @@ impl Block {
         }
     }
 
-    /// The present's time, frame and display size into `er_p[3]`.
-    pub fn set_frame(&mut self, info: FrameInfo) {
+    /// The present's time, frame and display size into `er_p[3]`, and what `er_p[3]` held before
+    /// -- the previous present's time and frame -- into `er_p[32]` with the vertex proof mode.
+    pub fn set_frame(&mut self, info: FrameInfo, vertex_proof: u32) {
+        let [time, frame, _, _] = self.registers[reg::FRAME];
+        self.registers[reg::PREVIOUS] = [time, frame, vertex_proof, 0];
         self.registers[reg::FRAME] = [
             info.time_s.to_bits(),
             info.frame,
@@ -214,14 +223,20 @@ pub(crate) fn abi_header_register(name: &str) -> Option<String> {
         })
 }
 
+/// Presents whose published time [`time_of`] can still answer for.
+pub const TIMES_KEPT: usize = 256;
+
 #[cfg(windows)]
-pub use process::{create, current_address, presents, publish, publish_then, set_look, stage};
+pub use process::{
+    create, current_address, current_block, presents, publish, publish_then, set_look,
+    set_vertex_proof, stage, time_of, vertex_proof,
+};
 
 /// The ring buffer, the staged block, and the present count.
 #[cfg(windows)]
 mod process {
     use core::ffi::c_void;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
     use std::time::Instant;
 
@@ -231,7 +246,7 @@ mod process {
     };
     use windows::core::Interface;
 
-    use super::{BLOCK_BYTES, Block, FrameInfo, RING_BLOCKS, RING_BYTES, next_slot};
+    use super::{BLOCK_BYTES, Block, FrameInfo, RING_BLOCKS, RING_BYTES, TIMES_KEPT, next_slot};
     use crate::log;
     use crate::look_binding::committed_buffer;
     use crate::settings::GPU_FLOATS;
@@ -257,6 +272,15 @@ mod process {
     static CURRENT: AtomicU64 = AtomicU64::new(0);
     /// Presents counted by [`publish`].
     static PRESENTS: AtomicU64 = AtomicU64::new(0);
+    /// The present each ring slot was last published at, written before the slot is made
+    /// current, so a reader that found a slot current finds its present here.
+    static SLOT_PRESENT: [AtomicU64; RING_BLOCKS] = [const { AtomicU64::new(0) }; RING_BLOCKS];
+    /// The time each recent present published, as `f32` bits, by `present % TIMES_KEPT`, with the
+    /// present beside it so a slot written by a later one is told apart.
+    static TIMES: [(AtomicU64, AtomicU32); TIMES_KEPT] =
+        [const { (AtomicU64::new(0), AtomicU32::new(0)) }; TIMES_KEPT];
+    /// The vertex proof mode the next block carries in `er_p[32].z`.
+    static VERTEX_PROOF: AtomicU32 = AtomicU32::new(0);
 
     static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -351,18 +375,26 @@ mod process {
     /// carries the packing: the redirect and the parameters change on the same present.
     pub fn publish_then(display: [f32; 2], after: impl FnOnce()) -> u64 {
         let present = PRESENTS.fetch_add(1, Ordering::AcqRel) + 1;
+        let time_s = START.elapsed().as_secs_f32();
+        let (stamp, time) = &TIMES[(present % TIMES_KEPT as u64) as usize];
+        time.store(time_s.to_bits(), Ordering::Relaxed);
+        stamp.store(present, Ordering::Release);
         let mut staged = staged();
-        staged.block.set_frame(FrameInfo {
-            time_s: START.elapsed().as_secs_f32(),
-            frame: present as u32,
-            display,
-        });
+        staged.block.set_frame(
+            FrameInfo {
+                time_s,
+                frame: present as u32,
+                display,
+            },
+            VERTEX_PROOF.load(Ordering::Relaxed),
+        );
         let mapped = RING_MAPPED.load(Ordering::Acquire);
         if mapped != 0 {
             let slot = next_slot(staged.slot);
             // SAFETY: the ring is mapped for the life of the process and `slot` is inside it.
             unsafe { write_block(mapped + slot * BLOCK_BYTES, &staged.block) };
             staged.slot = slot;
+            SLOT_PRESENT[slot].store(present, Ordering::Release);
             let gpu = RING_GPU.load(Ordering::Acquire) + (slot * BLOCK_BYTES) as u64;
             CURRENT.store(gpu, Ordering::Release);
         }
@@ -374,6 +406,43 @@ mod process {
     #[must_use]
     pub fn current_address() -> u64 {
         CURRENT.load(Ordering::Acquire)
+    }
+
+    /// The block to bind now and the present it was published at: `(0, 0)` before the ring
+    /// exists. The command-list hooks note the present of every block a recording binds, which is
+    /// how a frame whose lists read different blocks is counted (gate V0.R1).
+    #[must_use]
+    pub fn current_block() -> (u64, u64) {
+        let address = CURRENT.load(Ordering::Acquire);
+        let base = RING_GPU.load(Ordering::Acquire);
+        if address == 0 || address < base {
+            return (address, 0);
+        }
+        let slot = ((address - base) / BLOCK_BYTES as u64) as usize;
+        let present = SLOT_PRESENT
+            .get(slot)
+            .map_or(0, |stamp| stamp.load(Ordering::Acquire));
+        (address, present)
+    }
+
+    /// The time present `present` published in `er_p[3].x`, while it is among the last
+    /// [`TIMES_KEPT`].
+    #[must_use]
+    pub fn time_of(present: u64) -> Option<f32> {
+        let (stamp, time) = &TIMES[(present % TIMES_KEPT as u64) as usize];
+        let bits = time.load(Ordering::Relaxed);
+        (stamp.load(Ordering::Acquire) == present && present != 0).then(|| f32::from_bits(bits))
+    }
+
+    /// Set the vertex proof mode the next block carries: 0 off, any other value on.
+    pub fn set_vertex_proof(mode: u32) -> u32 {
+        VERTEX_PROOF.swap(mode, Ordering::AcqRel)
+    }
+
+    /// The vertex proof mode the next block carries.
+    #[must_use]
+    pub fn vertex_proof() -> u32 {
+        VERTEX_PROOF.load(Ordering::Acquire)
     }
 
     /// Presents counted so far: the frame the last block carries.
@@ -399,6 +468,7 @@ mod tests {
             ("ER_P_MASK", reg::MASK),
             ("ER_P_SELECTOR", reg::SELECTOR),
             ("ER_P_SELECTOR_REGISTERS", reg::SELECTOR_REGISTERS),
+            ("ER_P_PREVIOUS", reg::PREVIOUS),
             ("ER_P_CAPSULES", reg::CAPSULES),
             ("ER_P_CAPSULE_REGISTERS", reg::CAPSULE_REGISTERS),
             ("ER_P_LAYER_MASKS", reg::LAYER_MASKS),
@@ -441,14 +511,16 @@ mod tests {
         block.set_look(&gpu);
         let bytes = block.to_le_bytes();
         assert_eq!(bytes.len(), BLOCK_BYTES);
-        // The `cel_*` names read the nine floats from byte 0, four to a register.
+        // The `cel_*` names read the five floats from byte 0, four to a register.
         for (index, value) in look.clamped().0.iter().enumerate() {
             let at = reg::CEL * 16 + index * 4;
             let word = u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
             assert_eq!(f32::from_bits(word), *value, "knob {index}");
         }
-        // Padding after the knobs, and everything after the cel registers, stays zero.
-        assert_eq!(block.register(2), Some([gpu[8].to_bits(), 0, 0, 0]));
+        // Padding after the knobs, the register the moved knobs left, and everything after the
+        // cel registers, stay zero.
+        assert_eq!(block.register(1), Some([gpu[4].to_bits(), 0, 0, 0]));
+        assert_eq!(block.register(2), Some([0; 4]));
         assert_eq!(block.register(reg::FRAME), Some([0; 4]));
         let vanilla = Look::vanilla().gpu_block(true);
         block.set_look(&vanilla);
@@ -458,11 +530,14 @@ mod tests {
     #[test]
     fn the_frame_register_carries_time_frame_and_display() {
         let mut block = Block::new();
-        block.set_frame(FrameInfo {
-            time_s: 12.5,
-            frame: 4_000_000_007,
-            display: [2560.0, 1440.0],
-        });
+        block.set_frame(
+            FrameInfo {
+                time_s: 12.5,
+                frame: 4_000_000_007,
+                display: [2560.0, 1440.0],
+            },
+            0,
+        );
         assert_eq!(
             block.register(reg::FRAME),
             Some([
@@ -472,6 +547,37 @@ mod tests {
                 1440.0_f32.to_bits()
             ])
         );
+    }
+
+    #[test]
+    fn the_previous_register_holds_the_present_before_and_the_proof_mode() {
+        let mut block = Block::new();
+        let at = |time_s: f32, frame: u32| FrameInfo {
+            time_s,
+            frame,
+            display: [1920.0, 1080.0],
+        };
+        block.set_frame(at(1.0, 60), 0);
+        block.set_frame(at(1.0166, 61), 1);
+        // er_p[32] is what er_p[3] held: the time and frame the previous present published.
+        assert_eq!(
+            block.register(reg::PREVIOUS),
+            Some([1.0_f32.to_bits(), 60, 1, 0])
+        );
+        assert_eq!(
+            block
+                .register(reg::FRAME)
+                .map(|r| (f32::from_bits(r[0]), r[1])),
+            Some((1.0166, 61))
+        );
+        block.set_frame(at(1.0333, 62), 0);
+        assert_eq!(
+            block.register(reg::PREVIOUS),
+            Some([1.0166_f32.to_bits(), 61, 0, 0])
+        );
+        // Nothing else moved.
+        assert_eq!(block.register(reg::SELECTOR), Some([0; 4]));
+        assert_eq!(block.register(reg::CAPSULES), Some([0; 4]));
     }
 
     #[test]

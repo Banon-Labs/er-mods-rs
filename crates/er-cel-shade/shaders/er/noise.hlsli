@@ -4,7 +4,9 @@
 // pass, so each of them sees the same functions.
 //
 // Everything here is a pure function of its arguments: no globals, no resources, and every loop
-// bounded by a literal.
+// bounded by a literal. In a vertex carrier, whose `vertex_ctx.hlsli` defines `ER_VERTEX_CARRIER`,
+// the octave loops go without `[loop]`: the compiler records that attribute on the loop as
+// metadata, and the helper splices no code that carries any into a game vertex shader.
 //
 // - `er_hash`, `er_hash01`: integer hashes, and the same as a float in [0, 1).
 // - `er_value_noise`: smooth value noise in [0, 1], in two and three dimensions, one lattice cell
@@ -102,7 +104,10 @@ float er_fbm(float2 p, int octaves)
     float sum = 0.0;
     float total = 0.0;
     float amplitude = 0.5;
-    [loop] for (int octave = 0; octave < ER_NOISE_MAX_OCTAVES; ++octave)
+#ifndef ER_VERTEX_CARRIER
+    [loop]
+#endif
+    for (int octave = 0; octave < ER_NOISE_MAX_OCTAVES; ++octave)
     {
         if (octave >= count)
         {
@@ -122,7 +127,10 @@ float er_fbm(float3 p, int octaves)
     float sum = 0.0;
     float total = 0.0;
     float amplitude = 0.5;
-    [loop] for (int octave = 0; octave < ER_NOISE_MAX_OCTAVES; ++octave)
+#ifndef ER_VERTEX_CARRIER
+    [loop]
+#endif
+    for (int octave = 0; octave < ER_NOISE_MAX_OCTAVES; ++octave)
     {
         if (octave >= count)
         {

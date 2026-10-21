@@ -32,8 +32,17 @@
 //! dxcompiler.dll must be 1.8.2505 or later ([`DxcVersion::meets_minimum`]): that release is the
 //! first to sign containers with its internal validator, so it needs no dxil.dll beside it, and
 //! a native D3D12 runtime refuses an unsigned container that vkd3d-proton would accept.
+//!
+//! # Vertex layers
+//!
+//! The helper also splices a vertex carrier into game vertex shaders ([`patch`], with the pure
+//! splicer in [`vsplice`]): the DLL sends the carrier and a batch of the game's containers in a
+//! [`protocol::PatchRequest`], and gets each back patched and signed, or refused with the step
+//! that refused it. The disassembler and the assembler run here, out of the game's process.
 
+pub mod patch;
 pub mod protocol;
+pub mod vsplice;
 
 #[cfg(windows)]
 pub mod dxc;
@@ -45,7 +54,10 @@ use std::path::{Path, PathBuf};
 
 use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64_extend};
 
-use protocol::{Handshake, Op, PROTOCOL_VERSION, ProtocolError, Request, Response};
+use protocol::{
+    Handshake, Incoming, MAX_FRAME_BYTES, Message, Op, PROTOCOL_VERSION, PatchRequest,
+    PatchResponse, ProtocolError, Request, Response,
+};
 
 /// The compiler's file, looked for in the DLL's search directories, and by a helper started with
 /// no [`DXCOMPILER_OPTION`] beside itself.
@@ -88,6 +100,8 @@ pub const fn build_hash() -> u64 {
     let mut hash = FNV1A64_OFFSET_BASIS;
     hash = fnv1a64_extend(hash, include_bytes!("lib.rs"));
     hash = fnv1a64_extend(hash, include_bytes!("protocol.rs"));
+    hash = fnv1a64_extend(hash, include_bytes!("patch.rs"));
+    hash = fnv1a64_extend(hash, include_bytes!("vsplice.rs"));
     hash = fnv1a64_extend(hash, include_bytes!("dxc.rs"));
     fnv1a64_extend(hash, include_bytes!("main.rs"))
 }
@@ -284,6 +298,19 @@ pub trait Backend {
 
     /// Compile one request; every failure is an answer with `ok` false, never a panic.
     fn compile(&mut self, request: &Request) -> Response;
+
+    /// Patch the vertex shaders of one request ([`patch::patch_vertex`]). A backend without the
+    /// disassembler and the assembler refuses every item with why, and the carrier too: it was
+    /// never checked, so a request of no items cannot read as a carrier accepted.
+    fn patch_vertex(&mut self, request: &PatchRequest) -> PatchResponse {
+        PatchResponse::refused_all(
+            request,
+            false,
+            "no_patcher",
+            "this compiler cannot patch vertex shaders",
+            self.dxc_version(),
+        )
+    }
 }
 
 /// The backend when no compiler loaded: every compile is answered with why.
@@ -308,6 +335,16 @@ impl Backend for NoCompiler {
 
     fn compile(&mut self, request: &Request) -> Response {
         Response::failed(request.id, format!("no compiler: {}", self.reason), "")
+    }
+
+    fn patch_vertex(&mut self, request: &PatchRequest) -> PatchResponse {
+        PatchResponse::refused_all(
+            request,
+            false,
+            "no_patcher",
+            &format!("no compiler: {}", self.reason),
+            "",
+        )
     }
 }
 
@@ -336,8 +373,15 @@ pub fn serve<B: Backend + ?Sized>(
     dxcompiler: &str,
 ) -> Result<Served, ProtocolError> {
     loop {
-        let Some(request) = protocol::receive::<Request>(input)? else {
-            return Ok(Served::Eof);
+        let request = match protocol::receive_incoming(input)? {
+            None => return Ok(Served::Eof),
+            Some(Incoming::Patch(patch)) => {
+                let mut response = backend.patch_vertex(&patch);
+                response.id = patch.id;
+                protocol::send(output, &fit_patch(response))?;
+                continue;
+            }
+            Some(Incoming::Request(request)) => request,
         };
         match request.op {
             Op::Handshake => protocol::send(
@@ -392,6 +436,31 @@ pub fn fit_frame(mut response: Response) -> Response {
         );
     }
     response
+}
+
+/// `response`, or when it is too large for one frame, the same answer with every patched container
+/// dropped and each item refused for its size. The DLL sizes its batches to fit, so this is the
+/// guard for a batch that grew past its estimate.
+#[must_use]
+pub fn fit_patch(response: PatchResponse) -> PatchResponse {
+    let size = response
+        .encode()
+        .map_or(usize::MAX, |payload| payload.len());
+    if size <= MAX_FRAME_BYTES {
+        return response;
+    }
+    let detail = format!(
+        "the patched batch is about {size} bytes, too large for one {MAX_FRAME_BYTES}-byte frame; \
+         send fewer shaders at a time"
+    );
+    PatchResponse {
+        items: response
+            .items
+            .iter()
+            .map(|_| protocol::PatchItem::refused("too_large", detail.clone()))
+            .collect(),
+        ..response
+    }
 }
 
 /// Why the DLL will not use a helper that answered its handshake.
@@ -709,6 +778,88 @@ mod tests {
         ] {
             assert!(dxcompiler_argument(&wrong).is_err(), "{wrong:?}");
         }
+    }
+
+    #[test]
+    fn a_patch_request_is_answered_in_order_with_its_id() {
+        let mut stream = stream_of(&[Request::compile(2, "a.hlsl", "first", Vec::new())]);
+        protocol::send(
+            &mut stream,
+            &PatchRequest {
+                id: 3,
+                carrier: b"DXBC".to_vec(),
+                previous: true,
+                items: vec![b"one".to_vec(), b"two".to_vec()],
+            },
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        let mut backend = Echo { asked: Vec::new() };
+        assert_eq!(
+            serve(
+                &mut stream.as_slice(),
+                &mut output,
+                &mut backend,
+                DXCOMPILER
+            ),
+            Ok(Served::Eof)
+        );
+        let mut answers = output.as_slice();
+        let compiled: Response = protocol::receive(&mut answers).unwrap().unwrap();
+        assert_eq!(compiled.id, 2);
+        // A backend with no patcher refuses every item, and says so.
+        let patched: PatchResponse = protocol::receive(&mut answers).unwrap().unwrap();
+        assert_eq!(patched.id, 3);
+        assert_eq!(patched.items.len(), 2);
+        assert!(
+            patched
+                .items
+                .iter()
+                .all(|item| !item.ok && item.class == "no_patcher")
+        );
+        let mut none = NoCompiler::new("dxcompiler.dll did not load");
+        let refused = none.patch_vertex(&PatchRequest {
+            id: 9,
+            carrier: Vec::new(),
+            previous: false,
+            items: vec![Vec::new()],
+        });
+        assert!(refused.items[0].detail.contains("did not load"));
+        // No patcher checked the carrier, so a request of no items is not an accepted carrier.
+        assert!(!patched.carrier_ok && !refused.carrier_ok);
+        assert!(refused.carrier_detail.contains("did not load"));
+    }
+
+    #[test]
+    fn a_patch_answer_too_large_for_a_frame_drops_its_containers() {
+        let mut item = protocol::PatchItem::refused("", "");
+        item.ok = true;
+        item.blob = vec![0; protocol::MAX_FRAME_BYTES / 2];
+        let response = PatchResponse {
+            id: 1,
+            carrier_ok: true,
+            carrier_detail: String::new(),
+            dxc_version: String::new(),
+            items: vec![item.clone(), item.clone(), item],
+        };
+        let fitted = fit_patch(response);
+        assert_eq!(fitted.items.len(), 3);
+        assert!(
+            fitted
+                .items
+                .iter()
+                .all(|item| !item.ok && item.class == "too_large" && item.blob.is_empty())
+        );
+        let mut stream = Vec::new();
+        protocol::send(&mut stream, &fitted).unwrap();
+        let small = PatchResponse {
+            id: 2,
+            carrier_ok: false,
+            carrier_detail: "x".to_owned(),
+            dxc_version: String::new(),
+            items: Vec::new(),
+        };
+        assert_eq!(fit_patch(small.clone()), small);
     }
 
     #[test]

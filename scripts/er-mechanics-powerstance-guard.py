@@ -618,7 +618,9 @@ def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pv
 #: this module without a cycle. The selftest checks both select the same builds.
 PVP_TAGS = {'Invasions', 'Duels', 'Co-op/Gank', '2v2', 'Ladder', 'Fishing'}
 LEVEL_OFFSET = 79
-ATTRS = ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')
+ATTRS = ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')
+#: The planner's JSON spells Endurance `vit`; `blocker_corpus` reads it under that key.
+PLANNER_KEY = {'end': 'vit'}
 ELEMENTS = ('physical', 'magic', 'fire', 'lightning', 'holy')
 #: Planner `computed.absorption` key per damage type (as `er-builds-pvp.ABSORB_KEY`).
 ABSORB_KEY = {'slash': 'slash', 'strike': 'strike', 'pierce': 'pierce', 'standard': 'physical',
@@ -684,7 +686,7 @@ def blocker_corpus(mirror=None, rl_lo=140, rl_hi=160):
             b = json.loads(line)['build']
             st = b.get('stats') or {}
             try:
-                st = {'rl': int(st['rl']), **{k: int(st[k]) for k in ATTRS}}
+                st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
             except (KeyError, TypeError, ValueError):
                 continue
             if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):

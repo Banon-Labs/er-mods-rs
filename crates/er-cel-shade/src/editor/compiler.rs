@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64_extend};
-use er_shader_compiler::protocol::{Request, Response};
+use er_shader_compiler::protocol::{PatchRequest, PatchResponse, Request, Response};
 
 /// The helper's file name.
 pub const HELPER_EXE: &str = "er-shader-compiler.exe";
@@ -78,6 +78,11 @@ pub const FIRST_START_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long one compile may take before the helper is killed. A layer compiles in 15 to 50 ms
 /// (design 7.7); a compile this slow is a compiler stuck on the source.
 pub const COMPILE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long one vertex patch request may take: a batch is at most 48 shaders at about 3.4 ms each
+/// on one core natively (`docs/plans/er-shader-editor-vertex.md`, section 8), and under Wine
+/// several times that is still far inside this.
+pub const PATCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Crashes or timeouts on one source before it is marked "crashes the compiler".
 pub const CRASH_LIMIT: u32 = 3;
@@ -167,6 +172,18 @@ pub trait Compiler {
     /// Why it did not die as asked.
     fn crash_for_selftest(&mut self) -> Result<String, String> {
         Err("only the helper process can be crashed on request".to_owned())
+    }
+
+    /// Splice a vertex carrier into game vertex shaders (`er_shader_compiler::patch`). A shader
+    /// that does not patch is an `Ok` answer refusing it; an `Err` is a request that got no answer.
+    ///
+    /// # Errors
+    ///
+    /// A [`CompileError`]; a compiler that cannot patch answers [`CompileError::Unavailable`].
+    fn patch(&mut self, _request: PatchRequest) -> Result<PatchResponse, CompileError> {
+        Err(CompileError::Unavailable(
+            "this compiler cannot patch vertex shaders".to_owned(),
+        ))
     }
 }
 
@@ -286,7 +303,8 @@ impl fmt::Display for Choice {
             ),
             Self::NoCompiler { why } => write!(
                 f,
-                "no compiler: {why}; the embedded cel ports still run and layers wait"
+                "no compiler: {why}; the embedded ports still run, with the light bands and \
+                 outlines, and layers wait, the cel layers among them"
             ),
         }
     }
@@ -676,6 +694,43 @@ impl<S: Starter> Compiler for Supervisor<S> {
     fn describe(&self) -> String {
         self.choice.to_string()
     }
+
+    /// A patch request, through the same helper and the same restarts as a compile. A crash is
+    /// counted against the carrier and the batch together, so a batch that keeps crashing is
+    /// refused rather than retried for ever; the builder then sends its shaders one at a time.
+    fn patch(&mut self, request: PatchRequest) -> Result<PatchResponse, CompileError> {
+        let mut hash = FNV1A64_OFFSET_BASIS;
+        hash = fnv1a64_extend(hash, b"patch\0");
+        hash = fnv1a64_extend(hash, &request.carrier);
+        for item in &request.items {
+            hash = fnv1a64_extend(hash, &(item.len() as u64).to_le_bytes());
+            hash = fnv1a64_extend(hash, item);
+        }
+        if self.ledger.is_poisoned(hash) {
+            return Err(CompileError::Poisoned {
+                crashes: self.ledger.crashes(hash),
+            });
+        }
+        self.ensure()?;
+        let Some(active) = self.active.as_mut() else {
+            return Err(CompileError::Unavailable(self.choice.to_string()));
+        };
+        let result = active.patch(request);
+        if let Err(error) = &result {
+            if error.is_crash() {
+                let crashes = self.ledger.note_crash(hash);
+                self.events.push(Event::Crashed {
+                    why: error.to_string(),
+                    crashes,
+                    poisoned: crashes >= CRASH_LIMIT,
+                });
+                self.replace_dead();
+            } else if matches!(error, CompileError::Protocol(_)) {
+                self.replace_dead();
+            }
+        }
+        result
+    }
 }
 
 /// The directories the compiler is looked for in, in order: this DLL's own, then
@@ -743,7 +798,7 @@ mod process {
 
     use er_shader_compiler::dxc::Dxc;
     use er_shader_compiler::protocol::{
-        self, Handshake, Message, ProtocolError, Request, Response,
+        self, Handshake, Message, PatchRequest, PatchResponse, ProtocolError, Request, Response,
     };
     use er_shader_compiler::{
         DXCOMPILER_DLL, SELFTEST_EXIT, check_handshake, escape_utf8, helper_command_line,
@@ -771,7 +826,7 @@ mod process {
 
     use super::{
         COMPILE_TIMEOUT, CompileError, Compiler, HANDSHAKE_TIMEOUT, HELPER_EXE, IN_PROCESS_WARNING,
-        StartFailure, Starter, pick_directory,
+        PATCH_TIMEOUT, StartFailure, Starter, pick_directory,
     };
     use crate::log;
 
@@ -1158,7 +1213,12 @@ mod process {
 
         /// Wait for one frame after a request.
         fn answer(&self) -> Result<Vec<u8>, CompileError> {
-            match self.frames.recv_timeout(COMPILE_TIMEOUT) {
+            self.answer_within(COMPILE_TIMEOUT)
+        }
+
+        /// Wait up to `timeout` for one frame after a request.
+        fn answer_within(&self, timeout: Duration) -> Result<Vec<u8>, CompileError> {
+            match self.frames.recv_timeout(timeout) {
                 Ok(Ok(frame)) => Ok(frame),
                 Ok(Err(why)) => Err(CompileError::Crashed(format!(
                     "{why}, {}",
@@ -1204,6 +1264,33 @@ mod process {
             if response.id != request.id {
                 return Err(CompileError::Protocol(format!(
                     "the answer is for request {}, not {}",
+                    response.id, request.id
+                )));
+            }
+            Ok(response)
+        }
+
+        fn patch(&mut self, mut request: PatchRequest) -> Result<PatchResponse, CompileError> {
+            self.next_id += 1;
+            request.id = self.next_id;
+            match protocol::send(&mut self.stdin, &request) {
+                Ok(()) => {}
+                Err(error @ ProtocolError::Oversized { .. }) => {
+                    return Err(CompileError::TooLarge(error.to_string()));
+                }
+                Err(error) => {
+                    return Err(CompileError::Crashed(format!(
+                        "writing the patch request: {error}, {}",
+                        self.exit_note()
+                    )));
+                }
+            }
+            let frame = self.answer_within(PATCH_TIMEOUT)?;
+            let response = PatchResponse::decode(&frame)
+                .map_err(|error| CompileError::Protocol(error.to_string()))?;
+            if response.id != request.id {
+                return Err(CompileError::Protocol(format!(
+                    "the patch answer is for request {}, not {}",
                     response.id, request.id
                 )));
             }
@@ -1259,6 +1346,10 @@ mod process {
     impl Compiler for InProcessCompiler {
         fn compile(&mut self, request: Request) -> Result<Response, CompileError> {
             Ok(self.dxc.compile(&request))
+        }
+
+        fn patch(&mut self, request: PatchRequest) -> Result<PatchResponse, CompileError> {
+            Ok(self.dxc.patch_vertex(&request))
         }
 
         fn describe(&self) -> String {
@@ -1335,6 +1426,66 @@ mod tests {
                 Err("not the helper".to_owned())
             }
         }
+
+        /// A patch takes the same script: an `Err` there is the patch's, an `Ok` answers every
+        /// item as patched.
+        fn patch(&mut self, request: PatchRequest) -> Result<PatchResponse, CompileError> {
+            *self.compiled.borrow_mut() += 1;
+            if let Some(Err(error)) = self.script.borrow_mut().pop_front() {
+                return Err(error);
+            }
+            let mut item = er_shader_compiler::protocol::PatchItem::refused("", "");
+            item.ok = true;
+            Ok(PatchResponse {
+                id: request.id,
+                carrier_ok: true,
+                carrier_detail: String::new(),
+                dxc_version: "1.9".to_owned(),
+                items: request.items.iter().map(|_| item.clone()).collect(),
+            })
+        }
+    }
+
+    fn patch_request(items: usize) -> PatchRequest {
+        PatchRequest {
+            id: 0,
+            carrier: b"DXBC carrier".to_vec(),
+            previous: true,
+            items: (0..items).map(|n| vec![n as u8; 8]).collect(),
+        }
+    }
+
+    #[test]
+    fn a_patch_goes_through_the_helper_and_a_crash_restarts_it() {
+        let starts = Starts::default();
+        let script = Rc::clone(&starts.script);
+        let mut supervisor = supervisor(starts);
+        let answered = supervisor.patch(patch_request(3));
+        assert_eq!(answered.map(|r| r.items.len()), Ok(3));
+        // The helper dies on a batch: restarted at once, and the batch is blamed, not the source
+        // of any compile.
+        script
+            .borrow_mut()
+            .push_back(Err(CompileError::Crashed("broken pipe".to_owned())));
+        assert!(matches!(
+            supervisor.patch(patch_request(2)),
+            Err(CompileError::Crashed(_))
+        ));
+        assert_eq!(supervisor.starter().helper_starts, 2);
+        assert!(supervisor.compile(request("fine", 1)).is_ok());
+        // Three crashes on the same batch: it is not sent again.
+        for _ in 0..2 {
+            script
+                .borrow_mut()
+                .push_back(Err(CompileError::Crashed("again".to_owned())));
+            let _ = supervisor.patch(patch_request(2));
+        }
+        assert!(matches!(
+            supervisor.patch(patch_request(2)),
+            Err(CompileError::Poisoned { crashes: 3 })
+        ));
+        // Another batch still goes.
+        assert!(supervisor.patch(patch_request(1)).is_ok());
     }
 
     fn ok(id: u64) -> Response {

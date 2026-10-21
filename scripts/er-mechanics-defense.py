@@ -322,6 +322,7 @@ def _equipped(slots):
 
 def build_inputs(b):
     st = b.get('stats') or {}
+    # A planner document: its JSON spells Endurance `vit`.
     stats = {'vig': st.get('vig', 0), 'mnd': st.get('mnd', 0), 'end': st.get('vit', 0),
              'str': st.get('str', 0), 'dex': st.get('dex', 0), 'int': st.get('int', 0),
              'fth': st.get('fth', 0), 'arc': st.get('arc', 0)}

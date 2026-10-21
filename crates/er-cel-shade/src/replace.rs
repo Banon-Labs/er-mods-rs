@@ -208,10 +208,23 @@ pub fn find(bytecode: &[u8]) -> Option<&'static Replacement> {
         .find(|r| r.original_len == bytecode.len() && fnv1_64(bytecode) == r.original_fnv1)
 }
 
+/// The bit of the vertex stage in `cmdlist::STAGE_ACTIVE`, beside the [`Stage::bit`]s: set while
+/// a vertex layer draws (`docs/plans/er-shader-editor-vertex.md`, section 7.5). Vertex is not a
+/// [`Stage`], because a stage there is a set of ports and vertex layers run in no port.
+pub const VERTEX_STAGE_BIT: u32 = 1 << 3;
+
+const _: () = assert!(VERTEX_STAGE_BIT > Stage::Tonemap.bit());
+
 /// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE`.
 pub const SUBOBJECT_ROOT_SIGNATURE: u32 = 0;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS`.
+pub const SUBOBJECT_VS: u32 = 1;
 /// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS`.
 pub const SUBOBJECT_PS: u32 = 2;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS`, `HS` and `GS`.
+pub const SUBOBJECT_DS: u32 = 3;
+pub const SUBOBJECT_HS: u32 = 4;
+pub const SUBOBJECT_GS: u32 = 5;
 /// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT`.
 pub const SUBOBJECT_STREAM_OUTPUT: u32 = 7;
 /// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT`.

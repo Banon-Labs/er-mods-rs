@@ -78,10 +78,51 @@ impl MaskKind {
         }
     }
 
+    /// The term as a selector writes it, with example bounds: the module documentation's table.
+    #[must_use]
+    pub const fn example(self) -> &'static str {
+        match self {
+            Self::Everything => "everything",
+            Self::Geometry => "geometry",
+            Self::Sky => "sky",
+            Self::Depth => "depth:0..30m",
+            Self::Facing => "facing:0..0.3",
+            Self::Luma => "luma:0.5..2",
+            Self::Rect => "rect:0,0..0.5,1",
+        }
+    }
+
+    /// What it selects, a sentence for the Code tab's reference.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Everything => "Every pixel of the stage: the selector with no mask.",
+            Self::Geometry => "Pixels a surface was drawn on, not the sky.",
+            Self::Sky => "Pixels no surface was drawn on.",
+            Self::Depth => {
+                "Surfaces whose view depth lies in the range, in metres from the camera."
+            }
+            Self::Facing => {
+                "Surfaces by how squarely they face the camera, 0 edge-on to 1 straight on."
+            }
+            Self::Luma => {
+                "Pixels whose Rec. 709 luminance, as the colour reaches the layer, lies in the range."
+            }
+            Self::Rect => {
+                "A screen rectangle from one corner to the other, 0 to 1 across and down the screen."
+            }
+        }
+    }
+
     /// Can a layer at `stage` use it? Geometry, Sky, Depth and Facing need the depth buffer and
     /// the G-buffer normal, which only the Lighting pass binds until the resolved plane of P2.
     #[must_use]
     pub const fn available_at(self, stage: LayerStage) -> bool {
+        // A vertex layer moves the whole of every mesh it selects: a screen mask means nothing
+        // before the mesh is on the screen (`docs/plans/er-shader-editor-vertex.md`, section 6).
+        if stage.is_vertex() {
+            return matches!(self, Self::Everything);
+        }
         match self {
             Self::Everything | Self::Luma | Self::Rect => true,
             Self::Geometry | Self::Sky | Self::Depth | Self::Facing => {
@@ -312,6 +353,17 @@ mod tests {
         ]);
         assert_eq!(defines, expected);
         assert!(MaskKind::ALL.iter().all(|kind| (*kind as u32) <= KIND_BITS));
+    }
+
+    #[test]
+    fn every_kinds_example_reads_back_as_that_kind() {
+        for kind in MaskKind::ALL {
+            let (mask, warnings) = parse(kind.example());
+            assert!(warnings.is_empty(), "{}: {warnings:?}", kind.example());
+            assert_eq!(mask.kind, kind);
+            assert_eq!(mask.render(), kind.example());
+            assert!(kind.description().ends_with('.'));
+        }
     }
 
     #[test]
