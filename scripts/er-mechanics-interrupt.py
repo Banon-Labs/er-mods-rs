@@ -229,16 +229,18 @@ def _slot_member(reg, sa, wid, atk, reach_row):
     hits = []
     for d in atk.get("hit_window_detail") or []:
         if d.get("sweep_hit"):
-            hits.append([d["frames"][0], atk["poise_damage"] * POISE_MENU, sa(atk["atk_row"])])
+            hits.append([d["frames"][0], atk["poise_damage"] * POISE_MENU, sa(atk["atk_row"]), atk["atk_row"]])
     for o in atk.get("other_hitboxes") or []:
         if not o.get("sweep_hit"):
             continue
         n = ATK.attack_numbers(reg, wid, o["judge"])
         if n:
-            hits.append([o["frames"][0], n["poise_damage"] * POISE_MENU, sa(n["atk_row"])])
+            hits.append([o["frames"][0], n["poise_damage"] * POISE_MENU, sa(n["atk_row"]), n["atk_row"]])
     if not hits:
         return None
-    hits.sort()
+    hits.sort(key=lambda h: h[:3])
+    # Each hit's AtkParam row, in `hits` order: the stagger a break by it plays (`resolve` `rows`).
+    atk_rows = [h.pop() for h in hits]
     w = reg.weapon[wid]
     windows = []
     for h in atk.get("hyperarmor") or []:
@@ -253,7 +255,7 @@ def _slot_member(reg, sa, wid, atk, reach_row):
     first = EXCH.first_hit(atk)
     return {"first": first, "fc": fc, "hits": hits, "windows": windows,
             "cancel": dict(atk.get("cancel_frame") or {}), "lead": atk.get("release_lead_in") or 0.0,
-            "dmg_level": atk.get("dmg_level"), "wep_type": w["wepType"]}
+            "dmg_level": atk.get("dmg_level"), "wep_type": w["wepType"], "atk_rows": atk_rows}
 
 
 def _dual_members(reg, sa, wid):
@@ -438,42 +440,66 @@ class Delays:
 def resolve(w: dict, grip: str, name: str, delays: Delays, entries: dict, sa_rate: bool = True) -> dict:
     """{opener name: sequence} of one weapon-grip. A sequence is {'hits': [(frame, poise)],
     'strike', 'windows': [(s, e, bonus, mult, floor)], 'invuln': [(s, e)], 'family', 'd1'}, all
-    frames from the input (entry included)."""
+    frames from the input (entry included).
+
+    It also carries `rows`, each hit's AtkParam row in `hits` order (None where the member does not
+    record one, `_slot_member` `atk_rows`), and `follow` [(frame, poise, row)]: the hits of the R1
+    the HKS plays once the string ends, when `w['follow']` names one for its last member
+    ({member: [next member, lead-in frames]}, `er-mechanics-combo.follow_key` with the SubStart
+    lead): pressed at that member's R1 cancel. A broken opponent is where it lands
+    (`er-mechanics-ash-interrupt.simulate`)."""
     members = w["members"]
+    follows = w.get("follow") or {}
     out = {}
+
+    def delay_of(k, m):
+        if m.get("fc") is not None:
+            return m["fc"] - m["first"]
+        if m.get("proxy") and members.get(m["proxy"], {}).get("fc") is not None:
+            p = members[m["proxy"]]
+            return p["fc"] - p["first"]
+        return delays(m["wep_type"], k if not m.get("proxy") else m["proxy"], grip)
+
+    def member_hits(m, base, delay):
+        rows = m.get("atk_rows") or [None] * len(m["hits"])
+        return [(base + f + max(delay, 0.0), poise * (sa if sa_rate else 1.0), r)
+                for (f, poise, sa), r in zip(m["hits"], rows)]
+
     for oname, family, keys, button, entry_key in OPENERS:
         if keys[0] not in members:
             continue
         entry = entries.get(entry_key, 0.0) if entry_key else 0.0
         inv = entries.get("inv_" + entry_key) if entry_key else None
         hits, windows, t0 = [], [], entry
+        last = None
         for k in keys:
             m = members.get(k)
             if m is None:
                 break
             lead = m.get("lead") or 0.0
-            if m.get("fc") is not None:
-                delay = m["fc"] - m["first"]
-            elif m.get("proxy") and members.get(m["proxy"], {}).get("fc") is not None:
-                p = members[m["proxy"]]
-                delay = p["fc"] - p["first"]
-            else:
-                delay = delays(m["wep_type"], k if not m.get("proxy") else m["proxy"], grip)
             base = t0 + lead
-            for f, poise, sa in m["hits"]:
-                hits.append((base + f + max(delay, 0.0), poise * (sa if sa_rate else 1.0)))
+            hits += member_hits(m, base, delay_of(k, m))
             for s, e, b, mult, fl in m["windows"]:
                 windows.append((base + s, base + e, b, mult, fl))
+            last = (k, m, base)
             nxt = (m.get("cancel") or {}).get(button) if button else None
             if nxt is None:
                 break
             t0 = base + nxt
         if not hits:
             continue
-        hits.sort()
-        out[oname] = {"hits": hits, "strike": hits[0][0], "windows": windows,
+        hits.sort(key=lambda h: h[:2])
+        follow = []
+        k, m, base = last
+        fl = follows.get(k)
+        ready = (m.get("cancel") or {}).get("r1")
+        if fl and ready is not None and members.get(fl[0]) is not None:
+            fm = members[fl[0]]
+            follow = sorted(member_hits(fm, base + ready + fl[1] + (fm.get("lead") or 0.0), delay_of(fl[0], fm)),
+                            key=lambda h: h[:2])
+        out[oname] = {"hits": [h[:2] for h in hits], "strike": hits[0][0], "windows": windows,
                       "invuln": [(0.0, inv)] if inv else [], "family": family, "d1": hits[0][1],
-                      "weapon": name, "grip": grip}
+                      "weapon": name, "grip": grip, "rows": [h[2] for h in hits], "follow": follow}
     return out
 
 
@@ -510,16 +536,16 @@ def _pad_invuln(seqs):
     return arr
 
 
-def chip_states(P: np.ndarray, d: np.ndarray, carried: bool) -> tuple[np.ndarray, np.ndarray]:
+def chip_states(P: np.ndarray, d: np.ndarray, carried: bool,
+                C: int = MAX_CHIP_STATES) -> tuple[np.ndarray, np.ndarray]:
     """(chip, weight) arrays of shape P.shape + (C,). Fresh: one state, 0. Carried: `j x d`,
-    `j = 0 .. ceil(P / d) - 1` equally likely, at most `MAX_CHIP_STATES` evenly spaced js
-    (`INFERRED` sampling of a longer cycle)."""
+    `j = 0 .. ceil(P / d) - 1` equally likely, at most `C` evenly spaced js (`INFERRED` sampling
+    of a longer cycle)."""
     P, d = np.broadcast_arrays(np.asarray(P, float), np.asarray(d, float))
     if not carried:
         return np.zeros(P.shape + (1,)), np.ones(P.shape + (1,))
     k = np.where(d > 0, np.ceil(np.maximum(P, 1e-9) / np.maximum(d, 1e-9)), 1.0)
     k = np.clip(k, 1, 1e6)
-    C = MAX_CHIP_STATES
     idx = np.arange(C)
     n = np.minimum(k, C)
     # j values: all of 0..k-1 when k <= C, else C evenly spaced over it.

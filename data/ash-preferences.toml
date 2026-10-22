@@ -55,6 +55,10 @@ pb_cost = 0.15       # HP per attack the corpus's perfect blockers take off (er-
 
 # Off-hand role (er-mechanics-class-roles.py `offhand`): the weapon in the left hand, judged on
 # its own L1 chain at each status affinity (user, 2026-10-08: "score each weapon twice").
+# `er-mechanics-class-roles.offhand_weights` spreads l1_startup, l1_recovery and l1_chain_dps half
+# over the L1 string and half over the L1 out of a run, roll, backstep and crouch (each family's
+# startup, recovery and damage); the totals below are unchanged by that. A powerstance pair is
+# scored on these same features from its dual moveset (`er-mechanics-combo-loadout.hand_scores`).
 [offhand_pick_weights]
 l1_startup = 0.25    # L1 #1 first hit frame, lower better
 l1_recovery = 0.20   # mean frames from each L1 hit to the roll cancel, lower better

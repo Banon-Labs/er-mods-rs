@@ -266,7 +266,8 @@ class NeutralPool:
                         opts.append((f["share"], f["opener"], {
                             "startup": float(ni["strike"]), "poise": float(ni.get("poise") or 0.0),
                             "hyper": [tuple(h) for h in ni.get("hyper") or []], "dmg": float(s["dmg"]),
-                            "reach": float(ni["reach"]), "active": float(ni.get("active") or 3.0)}))
+                            "reach": float(ni["reach"]), "active": float(ni.get("active") or 3.0),
+                            "follow": opener_follow(ex, key, f["opener"], float(ni["reach"]))}))
                 tot = sum(o[0] for o in opts)
                 if tot:
                     opts = [(w / tot, op, row) for w, op, row in opts]
@@ -275,7 +276,8 @@ class NeutralPool:
                     opts = [(1.0, ex.OPPONENT_SLOT, {
                         "startup": float(pool.startup[pk]), "poise": float(pool.poise_dealt[pk]),
                         "hyper": list(pool.hyper[pk]), "dmg": float(pool.dmg[pk]),
-                        "reach": rr.get("reach") or fb_reach, "active": rr.get("active") or fb_active})]
+                        "reach": rr.get("reach") or fb_reach, "active": rr.get("active") or fb_active,
+                        "follow": float(getattr(pool, "follow", np.zeros(len(pool.keys)))[pk])})]
                     dropped = None
                 memo[key] = (opts, dropped)
             opts, dropped = memo[key]
@@ -296,6 +298,26 @@ class NeutralPool:
         out = cls(ex.Pool.weighted(pool, keys, rows, entries), rreach, tools)
         out.cover = cover
         return out
+
+
+_FOLLOW = {}
+
+
+def opener_follow(ex, key: str, opener: str, reach: float) -> float:
+    """`er-mechanics-exchange.follow_up` of a pool profile's opener (`key` '<weapon>|1h|2h'): his
+    expected follow-up hits when it breaks me. 0 for a weapon or opener the regulation does not
+    name (a synthesized jump opener such as `jump_r1_f`)."""
+    k = (key, opener, round(reach, 3))
+    if k not in _FOLLOW:
+        if "reg" not in _FOLLOW:
+            _FOLLOW["reg"], _FOLLOW["ids"] = ex.ATK.Regulation(None), ex.weapon_ids()
+        name, grip = key.rsplit("|", 1)
+        wid = _FOLLOW["ids"].get(name)
+        try:
+            _FOLLOW[k] = ex.follow_up(_FOLLOW["reg"], wid, grip == "2h", opener, reach) if wid is not None else 0.0
+        except (KeyError, TypeError, ValueError):
+            _FOLLOW[k] = 0.0
+    return _FOLLOW[k]
 
 
 def _window_at(windows, frame):

@@ -80,6 +80,9 @@ def main() -> int:
                     help="armor and talisman sets to equip instead of the base build's, and the great rune, "
                          "tears, tools, flasks, spells and tags (see `apply_gear`, `apply_kit`)")
     ap.add_argument("--dry-run", action="store_true", help="print the inventory and sets, upload nothing")
+    ap.add_argument("--ladder", action="store_true",
+                    help="refuse to upload a build that carries anything the duel ladder bans, in any set "
+                         "(er-builds-ladder.check over every slot; the rune level is not judged)")
     a = ap.parse_args()
 
     plan = json.loads(a.plan.read_text())
@@ -237,10 +240,27 @@ def apply_gear(doc, gear):
                     lambda st: [(spelled[n], pos) for pos, n in enumerate(st["slots"]) if n])
         doc["sets"]["talismans"] = [{"name": st["name"], **({"active": True} if i == 0 else {})}
                                     for i, st in enumerate(sets)]
+    spares = (gear.get("talisman_spares") or {}).get("names") or []
+    if spares:
+        place_after(doc["talismans"]["slots"], gear["talisman_spares"]["after"], planner_spelling(spares))
+        print("talismans carried for swaps:", spares)
     for kind in ("protectors", "talismans"):
         for st in doc["sets"][kind]:
             print(f"{kind} set: {st['name']}")
     apply_kit(doc, gear)
+
+
+def place_after(inv_slots, anchor, names):
+    """Put `names` in the inventory right after `anchor`, in that order and in no equip set, so
+    swapping one into `anchor`'s slot is one press away in the game's list. An item already owned
+    is moved; `anchor` missing puts them at the end."""
+    keep = [s for s in inv_slots if fold(s["name"]) not in {fold(n) for n in names}]
+    keep.sort(key=lambda s: s.get("order", 0))
+    at = next((i + 1 for i, s in enumerate(keep) if fold(s["name"]) == fold(anchor)), len(keep))
+    out = keep[:at] + [{"name": n} for n in names] + keep[at:]
+    for i, s in enumerate(out):
+        s["order"] = i
+    inv_slots[:] = out
 
 
 def apply_kit(doc, gear):
@@ -292,6 +312,12 @@ def publish(a, slots, set_names, ammo=None):
         items["ammo"] = {**(items.get("ammo") or {}), **ammo}
         print("ammo:", items["ammo"])
     doc["sets"]["weapons"] = [{"name": n, **({"active": True} if i == 0 else {})} for i, n in enumerate(set_names)]
+    if a.ladder:
+        # The planner's ladder check counts every owned item, worn or not, so the base build's own
+        # armor and talismans go and only what `--gear` equips is owned.
+        for part in PROTECTOR_SLOTS:
+            doc["protectors"][part]["slots"] = []
+        doc["talismans"]["slots"] = []
     if a.gear:
         apply_gear(doc, json.loads(a.gear.read_text()))
     if a.stats:
@@ -311,6 +337,15 @@ def publish(a, slots, set_names, ammo=None):
         spec.loader.exec_module(tags)
         doc["tags"] = tags.tags(doc)
         print("tags:", doc["tags"])
+    if a.ladder:
+        spec = importlib.util.spec_from_file_location("er_builds_ladder", HERE / "er-builds-ladder.py")
+        ladder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ladder)
+        broken = ladder.check(doc, every=True, ladder_rl=None, params=True)
+        if broken:
+            print(f"breaks the duel ladder rules, nothing uploaded: {'; '.join(broken)}", file=sys.stderr)
+            return 1
+        print("ladder: no rule broken by name")
     if a.dry_run:
         return 0
     session = json.loads(SESSION.read_text(encoding="utf-8"))

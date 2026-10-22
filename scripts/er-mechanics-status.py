@@ -58,6 +58,8 @@ import argparse, collections, importlib.util, json, math, os, statistics, struct
 from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _sibling(name):
@@ -447,8 +449,8 @@ def is_pvp(build):
 def corpus_rows(path=CORPUS, rl=150, window=10, pvp_only=True):
     """Corpus builds of RL rl +- window whose stats add up: stats, resistances, max HP, weapons."""
     out = []
-    for line in Path(path).read_text().splitlines():
-        b = json.loads(line)['build']
+    for row in er_corpus.iter_rows(path):
+        b = row['build']
         # The planner's JSON spells Endurance `vit`; rows carry it as `end`.
         st = {('end' if k == 'vit' else k): v for k, v in (b.get('stats') or {}).items()}
         if not all(isinstance(st.get(k), int) for k in ATTRS + ('rl',)):
@@ -899,6 +901,183 @@ def status_expected(t, ws, attack, dfs, grease=None, gap=None, react=(0, 0), sta
     return out
 
 
+#: How a defender's reaction rises with the share of their gauge that is filled (`fill`, 0 empty,
+#: 1 about to proc, or a damage-over-time proc live): `fill_response` = (e^(k fill) - 1) /
+#: (e^k - 1), 0 at an empty gauge and 1 at a full one. User, 2026-10-19: "the more a user's status
+#: bar is filled, the higher chances they will play passively, try to escape, and use a bolus",
+#: and the rise is exponential. k is `INFERRED`; measuring it needs bolus presses against gauge
+#: fill from real fights.
+FILL_RESPONSE_K = 3.0
+
+
+def fill_response(fill, k=FILL_RESPONSE_K):
+    """0..1, the defender's reaction to a gauge `fill` share full (`FILL_RESPONSE_K`)."""
+    fill = min(1.0, max(0.0, fill))
+    return (math.exp(k * fill) - 1.0) / (math.exp(k) - 1.0)
+
+
+def simulate_fill(builds, gaps, resistance, recover, lock, carry, engagements, eng_s, fight_end, dot,
+                  ticks, interval, cure_s, k=FILL_RESPONSE_K, pressure=1.0):
+    """Expected (procs, credited ticks) of one defender through `engagements` engagements that
+    each land `builds` `gaps` frames apart, as `simulate`, except that what happens after an
+    engagement depends on how full the gauge is (`fill_response` r, divided by `pressure`, the
+    opponents on the defender at once, and capped at 1): with chance `carry` x r the defender
+    boluses (gauge full, a live proc cured `cure_s` later), and either way they play passively
+    for r x `eng_s` more seconds before the next engagement, which the gauge refills over. A live
+    damage-over-time proc counts as a full gauge. User, 2026-10-19: "status weapons are more
+    powerful outside of duels since multiple invaders can apply pressure"."""
+    full = float(resistance)
+    end = math.inf if fight_end is None else fight_end
+    memo = {}
+
+    def rec(e, t0, gauge, t_last, lock_until):
+        if e >= engagements or t0 > end:
+            return 0.0, 0.0
+        key = (e, round(t0, 3), round(gauge, 3), round(t_last, 3), round(lock_until, 3))
+        if key in memo:
+            return memo[key]
+        t, live = t0, []
+        for j, b in enumerate(builds):
+            if j:
+                t += gaps[j - 1] / FPS
+            gauge = min(full, gauge + recover * (t - t_last))
+            t_last = t
+            if b <= 0 or t < lock_until:
+                continue
+            if int(gauge) - b < 1:
+                gauge, lock_until = full, t + lock
+                live.append(t)
+            else:
+                gauge -= b
+        dot_live = dot and t < lock_until
+        r = min(1.0, fill_response(1.0 if dot_live else 1.0 - gauge / full, k) / max(pressure, 1e-9))
+        nxt = t0 + eng_s * (1.0 + r)
+        procs = credited = 0.0
+        for bolus, w in ((True, carry * r), (False, 1.0 - carry * r)):
+            if w <= 0.0:
+                continue
+            cure = t + cure_s if bolus else math.inf
+            c = 0
+            for tp in live:
+                if tp > end:
+                    continue
+                stop = min(tp + lock, cure, end)
+                c += min(ticks, int((stop - tp) / interval) + 1) if dot and interval > 0 else ticks
+            p, cr = rec(e + 1, nxt, full if bolus else gauge, t_last, min(lock_until, cure))
+            procs += w * (sum(tp <= end for tp in live) + p)
+            credited += w * (c + cr)
+        memo[key] = (procs, credited)
+        return memo[key]
+
+    return rec(0, 0.0, full, 0.0, -1.0)
+
+
+def sequence_hp(t, ws, seq, first_of, dfs, gaps=None, engagements=None, eng_s=ENGAGEMENT_SECONDS, pressure=1.0):
+    """{status: HP} one engagement that lands the hits `seq` ({status: int build-up} per landed
+    hit, in order, `gaps` frames apart, 0 when omitted) is worth, by the engagement model of
+    `status_expected`: a fight of `engagements` (default `dfs.fight_engagements`) such
+    engagements at least `eng_s` apart, every defender group of `dfs` run through
+    `simulate_fill`, where the fuller the gauge the likelier a carrier boluses and the longer
+    anyone stays passive while it refills. The value is the credited proc HP over the fight per
+    engagement and per defender, so a sequence whose build-up does not empty a gauge inside one
+    engagement is worth only the procs that survive those reactions, not build-up / resistance
+    of a proc. `first_of[status]` is the row that built the
+    status, used as the proc row when the weapon has none of its own."""
+    n_e = int(engagements or dfs.fight_engagements)
+    gaps = tuple(gaps or (0.0,) * max(0, len(seq) - 1))
+    end = (n_e - 1) * eng_s + sum(gaps) / FPS
+    # A carrier's cure of a live proc, as `status_expected` times it for a defender at reaction 0.
+    cure_s = (cure_ready(0) + DOT_CURE_DELAY) / FPS
+    out = {}
+    for name in sorted({k for u in seq for k, v in u.items() if v}):
+        builds = tuple(int(u.get(name, 0)) for u in seq)
+        src = proc_row_for(t, ws, name, (first_of or {}).get(name))
+        row = t.sp.get(src) if src else None
+        if not row or not dfs.groups.get(name):
+            continue
+        key = (id(dfs), name, src, builds, gaps, n_e, eng_s, pressure)
+        if key in _SEQ:
+            if _SEQ[key]:
+                out[name] = _SEQ[key]
+            continue
+        pe = proc_effect(t, src, 0.0)
+        ticks, iv = pe['ticks'], pe['interval']
+        lock = row['effectEndurance']
+        has_bolus = name in t.bolus
+        credited = 0.0
+        for r, carry, cnt, sum_hp in dfs.groups[name]:
+            per_tick = sum_hp * row['changeHpRate'] / 100.0 + cnt * row['changeHpPoint']
+            c = carry if has_bolus else 0.0
+            _, cr = simulate_fill(builds, gaps, r, t.recover[name], lock, c, n_e, eng_s, end,
+                                  ticks > 1, ticks, iv, cure_s, pressure=pressure)
+            credited += per_tick * cr
+        hp = credited / (dfs.n * n_e)
+        _SEQ[key] = hp
+        if hp:
+            out[name] = hp
+    return out
+
+
+#: `sequence_hp` per (defenders, status, proc row, build-ups, gaps, engagements, spacing,
+#: pressure): a weapon's chained slots and its grips repeat the same sequences.
+_SEQ = {}
+
+
+class SharedMemo:
+    """A memo dict seen by every forked worker of a pool: a lookup reads this process's copy
+    first, then `shared` (a `multiprocessing.Manager` dict), and a write goes to both. It stands
+    in for `_SEQ` while a pool runs (`share_seq_memo`): each worker on a memo of its own simulated
+    the sequences the others already had, about nine times one process's work over the weapon
+    embedding's powerstance pairs (py-spy, 2026-10-20). A `_SEQ` key holds `id(dfs)`, which a
+    forked worker shares with its parent, and a value is what any process computes for its key."""
+
+    def __init__(self, shared, local=None):
+        self.shared, self.local = shared, dict(local or {})
+
+    def __contains__(self, key):
+        if key in self.local:
+            return True
+        try:
+            self.local[key] = self.shared[key]
+        except KeyError:
+            return False
+        return True
+
+    def __getitem__(self, key):
+        return self.local[key] if key in self.local else self.shared[key]
+
+    def __setitem__(self, key, value):
+        self.local[key] = value
+        self.shared[key] = value
+
+    def clear(self):
+        self.local.clear()
+        self.shared.clear()
+
+
+_SHARED = {}
+
+
+def share_seq_memo(ctx) -> None:
+    """Put a `SharedMemo` seeded with this process's `_SEQ` in its place, before a pool of `ctx`
+    forks; the pools forked after it share it too. `release_seq_memo` takes it down."""
+    global _SEQ
+    if isinstance(_SEQ, SharedMemo):
+        return
+    _SHARED["manager"] = manager = ctx.Manager()
+    _SEQ = SharedMemo(manager.dict(_SEQ), _SEQ)
+
+
+def release_seq_memo() -> None:
+    """`_SEQ` back to a plain dict of what this process has seen, and the manager stopped."""
+    global _SEQ
+    if isinstance(_SEQ, SharedMemo):
+        _SEQ = dict(_SEQ.local)
+    manager = _SHARED.pop("manager", None)
+    if manager is not None:
+        manager.shutdown()
+
+
 def exultation_uptime(t, talisman, status, gap=None):
     """(er-mechanics-talismans `active` key, share of this slot's hits inside the buff) for an
     exultation the attacker wears: procs per hit * hits that land within the buff's
@@ -1297,8 +1476,47 @@ def selftest(t):
           (round(mix['hp_per_hit'], 6), mix['fight_engagements']), (round(pooled, 6), 14.75))
     check('a whole 90-tick DoT, then a new proc only once it has expired (t = 90 s)',
           simulate((400,), (), 300, 4.0, 90.0, False, 19, 5.0, 93.0, True, 90, 1.0)[:2], (2, 94))
+    # Reactions grow with gauge fill (`fill_response`): none at empty, certain at full, and an
+    # exponential, so a half-full gauge draws well under half.
+    check('fill_response 0 / 1', (fill_response(0.0), fill_response(1.0)), (0.0, 1.0))
+    check('fill_response(0.5) under 0.5', fill_response(0.5) < 0.5, True)
+    # A hit that procs alone procs every engagement whether or not a bolus follows.
+    check('a one-hit proc procs each of 5 engagements, bolus or not',
+          [round(simulate_fill((400,), (), 300, 4.0, 0.0, c, 5, 5.0, None, False, 1, 0.0, 0.0)[0], 6)
+           for c in (0.0, 1.0)], [5.0, 5.0])
+    # Build-up that needs three engagements: carrying the bolus cuts the procs, and a carrier with
+    # a nearly full gauge boluses more often than not.
+    slow = [simulate_fill((110,), (), 300, 4.0, 0.0, c, 6, 5.0, None, False, 1, 0.0, 0.0)[0]
+            for c in (0.0, 1.0)]
+    check('three engagements to proc: the bolus carrier procs less', slow[1] < slow[0], True)
+    # Two opponents at once leave a carrier less room to bolus, so the same build-up procs more.
+    pressed = simulate_fill((110,), (), 300, 4.0, 0.0, 1.0, 6, 5.0, None, False, 1, 0.0, 0.0, pressure=2.0)[0]
+    check('under pressure 2 the carrier procs more than alone', pressed > slow[1], True)
     print(f'{n - bad}/{n} passed')
     return bad == 0
+
+
+def show_sequence(t, a):
+    """`--sequence`: the weapon's base hit (no AtkParam) landed 1..N times per engagement."""
+    rows = corpus_rows(rl=a.rl, window=a.window)
+    dfs, dfn = Defenders(t, rows), corpus_defender(rows)
+    stats = dict(kv.split('=') for kv in a.stats.split(',') if kv)
+    ws = weapon_status(t, a.weapon, a.affinity, a.level, stats, a.two_handed, not a.pve)
+    hit = hit_buildup(t, ws, grease=a.grease)
+    pressure = _sibling('er-mechanics-buffs').FIGHT_KINDS[a.fight]['pressure']
+    print(f'{a.weapon} {a.affinity} +{a.level}: {len(rows)} defenders, {dfs.fight_engagements} engagements, '
+          f'{a.fight} pressure {pressure:.2f}')
+    for name, b in hit.items():
+        src = proc_row_for(t, ws, name, a.grease)
+        if not src:
+            continue
+        pe, resist = proc_effect(t, src, dfn['hp']), dfn['resist'][GROUP_OF[name]]
+        print(f'  {name}: {b}/hit vs median resistance {resist}, bolus carried '
+              f'{100 * dfs.share.get(name, 0.0):.0f}%')
+        for n in range(1, a.sequence + 1):
+            lin = pe['hp_total'] * b / resist
+            new = sequence_hp(t, ws, [{name: b}] * n, {name: src}, dfs, pressure=pressure).get(name, 0.0) / n
+            print(f'    {n} hit(s)/engagement: HP per hit linear {lin:6.1f}, engagement {new:6.1f}')
 
 
 def main():
@@ -1320,6 +1538,11 @@ def main():
     ap.add_argument('--top-n', type=int, default=25)
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--selftest', action='store_true')
+    ap.add_argument('--sequence', type=int, metavar='N',
+                    help='per status: HP per hit of 1..N base hits landed per engagement, the linear '
+                         'build-up / resistance model against `sequence_hp`')
+    ap.add_argument('--fight', choices=('duel', 'invasion'), default='duel',
+                    help='--sequence: the fight model whose pressure applies (er-mechanics-buffs FIGHT_KINDS)')
     a = ap.parse_args()
     if a.corpus:
         show_corpus(a)
@@ -1334,6 +1557,9 @@ def main():
         return 0
     if not a.weapon:
         ap.error('weapon is required unless --selftest, --corpus or --top')
+    if a.sequence:
+        show_sequence(t, a)
+        return 0
     show_weapon(t, a)
     return 0
 

@@ -53,6 +53,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
+
 CACHE = Path.home() / ".cache/er-build-planner"
 API = "https://er-inventory-api.nyasu.business"
 ATTRS = ["vig", "mnd", "end", "str", "dex", "int", "fth", "arc"]
@@ -178,8 +181,7 @@ def load_corpus(path: Path, rl_min: int, rl_max: int) -> tuple[list[dict], Count
     why: Counter = Counter()
     seen: set = set()
     out = []
-    for line in path.read_text().splitlines():
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(path):
         b = row["build"]
         st = stats_of(b)
         if st is None:

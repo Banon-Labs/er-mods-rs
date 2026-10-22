@@ -29,7 +29,13 @@ Powerstance and off-hand:
   `GetEquipWeaponSpecialCategoryNumber` (env 345 = `EquipParamWeapon.spAtkcategory`, `VERIFIED`)
   104 pairs only with another 104; a katana also pairs with a 104 in the left hand. The HKS enum
   values 20..52 equal `wepmotionCategory` (dagger 20, straight sword 23, colossal sword 26,
-  colossal weapon 31); that env 225 returns `wepmotionCategory` is `INFERRED`.
+  colossal weapon 31), and env 225 returns `wepmotionCategory` (`VERIFIED` 2026-10-19): `HksEnv`
+  0x140410820 sends 225 through jump table 0x1404133a4 (index env - 0xdf) to 0x140410e05, a
+  call to ChrIns vtable slot 0x248, which on `PlayerIns` (vtable 0x142a7cb40) is 0x1406568b0:
+  the int at index `hand` of the 12-byte array PlayerIns+0x630 points to. `FUN_1404d0eb0` fills
+  slots 0 and 1 from `FUN_1403beae0`, which reads `EquipParamWeapon+0xe7`, `wepmotionCategory`
+  (1.16.2; in 1.17.1 the same read is at 0x1403beaf0). So the Pickaxe (`wepType` 23, great
+  hammer) powerstances with greataxes: its motion category is 32.
 
 Blocking (1.16.2 code, `VERIFIED` unless marked):
 
@@ -104,6 +110,8 @@ import unicodedata
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = os.path.expanduser('~/.cache/er-build-planner')
 #: Smithbox's decompiled player behavior script, used only as a `COMMUNITY` cross-check.
 HKS_DECOMPILE = os.environ.get('ER_C0000_HKS', os.path.expanduser(
@@ -681,22 +689,21 @@ def is_pvp(build):
 def blocker_corpus(mirror=None, rl_lo=140, rl_hi=160):
     """The builds `er-builds-pvp.pvp_corpus` keeps (same filter, same order), whole build dicts."""
     out = []
-    with open(mirror or os.path.join(CACHE, 'builds.jsonl')) as handle:
-        for line in handle:
-            b = json.loads(line)['build']
-            st = b.get('stats') or {}
-            try:
-                st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):
-                continue
-            if sum(st[k] for k in ATTRS) - LEVEL_OFFSET != st['rl']:
-                continue
-            c = b.get('computed') or {}
-            if not c.get('defenses') or not c.get('absorption'):
-                continue
-            out.append(b)
+    for row in er_corpus.iter_rows(mirror or os.path.join(CACHE, 'builds.jsonl')):
+        b = row['build']
+        st = b.get('stats') or {}
+        try:
+            st = {'rl': int(st['rl']), **{k: int(st[PLANNER_KEY.get(k, k)]) for k in ATTRS}}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not rl_lo <= st['rl'] <= rl_hi or not is_pvp(b):
+            continue
+        if sum(st[k] for k in ATTRS) - LEVEL_OFFSET != st['rl']:
+            continue
+        c = b.get('computed') or {}
+        if not c.get('defenses') or not c.get('absorption'):
+            continue
+        out.append(b)
     return out
 
 
@@ -1189,37 +1196,35 @@ def adoption(rl_lo=1, rl_hi=713, kind='pvptag'):
         if n and wid % 10000 == 0 and n not in by_name:
             by_name[n] = wid
     seen, builds, unknown = set(), [], collections.Counter()
-    with open(os.path.join(CACHE, 'builds.jsonl')) as handle:
-        for line in handle:
-            row = json.loads(line)
-            b = row['build']
-            st = embed.stats_of(b)
-            if st is None or not rl_lo <= st['rl'] <= rl_hi:
+    for row in er_corpus.iter_rows(os.path.join(CACHE, 'builds.jsonl')):
+        b = row['build']
+        st = embed.stats_of(b)
+        if st is None or not rl_lo <= st['rl'] <= rl_hi:
+            continue
+        tags = set(b.get('tags') or [])
+        if b.get('isPvE') or 'PvE' in tags:
+            continue
+        if kind == 'pvptag' and not ('Strength' in tags and tags & gap.PVP_TAGS):
+            continue
+        if kind == 'tag' and 'Strength' not in tags:
+            continue
+        if kind == 'str60' and st['str'] < 60:
+            continue
+        if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
+            continue
+        key = (row.get('user'), tuple(embed.tokens(b)))
+        if key in seen:
+            continue
+        seen.add(key)
+        pos = {}
+        for p, s in gap.slots_at((b.get('inventory') or {}).get('slots'),
+                                 embed.active_set(b, 'weapons')):
+            wid = by_name.get(s['name'])
+            if wid is None:
+                unknown[s['name']] += 1
                 continue
-            tags = set(b.get('tags') or [])
-            if b.get('isPvE') or 'PvE' in tags:
-                continue
-            if kind == 'pvptag' and not ('Strength' in tags and tags & gap.PVP_TAGS):
-                continue
-            if kind == 'tag' and 'Strength' not in tags:
-                continue
-            if kind == 'str60' and st['str'] < 60:
-                continue
-            if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
-                continue
-            key = (row.get('user'), tuple(embed.tokens(b)))
-            if key in seen:
-                continue
-            seen.add(key)
-            pos = {}
-            for p, s in gap.slots_at((b.get('inventory') or {}).get('slots'),
-                                     embed.active_set(b, 'weapons')):
-                wid = by_name.get(s['name'])
-                if wid is None:
-                    unknown[s['name']] += 1
-                    continue
-                pos[p] = wid
-            builds.append({'pos': pos, 'user': row.get('user')})
+            pos[p] = wid
+        builds.append({'pos': pos, 'user': row.get('user')})
     c = collections.Counter()
     users = collections.defaultdict(set)
     shield_names, pair_names, left_names = (collections.Counter() for _ in range(3))
@@ -1546,6 +1551,15 @@ def selftest():
           'COMMUNITY: colossal swords powerstance')
     check('Greatsword + Giant-Crusher powerstance', can_powerstance(reg, 4000000, 23110000),
           False, 'COMMUNITY: no cross-category powerstance')
+    # The category is `wepmotionCategory`, not the menu class `wepType` (env 225, module
+    # docstring): the Pickaxe is a great hammer by `wepType` (23) with the greataxe moveset
+    # (`wepmotionCategory` 32), so it pairs with the Rusted Anchor, a greataxe (19, 32), and not
+    # with Great Stars, a great hammer on 35.
+    pick, anchor, stars = (reg.find_weapon(n) for n in ('Pickaxe', 'Rusted Anchor', 'Great Stars'))
+    check('Pickaxe powerstances with Rusted Anchor (motion 32 both), not with Great Stars (wepType 23 both)',
+          ([(reg.weapon[w]['wepType'], reg.weapon[w]['wepmotionCategory']) for w in (pick, anchor, stars)],
+           can_powerstance(reg, pick, anchor), can_powerstance(reg, anchor, pick), can_powerstance(reg, pick, stars)),
+          ([(23, 32), (19, 32), (23, 35)], True, True, False), 'VERIFIED regulation + env 225')
 
     # 7. Direction checks with no outside number behind them: a colossal R1 into a medium shield
     #    costs more stamina than a straight-sword R1 into a greatshield, and only the lighter

@@ -22,6 +22,8 @@ Library use:
 import argparse, importlib.util, json, math, os, struct, sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 _s = importlib.util.spec_from_file_location('er_param_read', os.path.join(_HERE, 'er-param-read.py'))
 PR = importlib.util.module_from_spec(_s)
 _s.loader.exec_module(PR)
@@ -345,71 +347,69 @@ def corpus(t, limit=None, show=20):
     total = Counter()
     bad = defaultdict(list)
     skipped = Counter()
-    with open(CORPUS) as fh:
-        for line in fh:
-            if limit and n >= limit:
-                break
-            rec = json.loads(line)
-            b = rec['build']
-            comp = b.get('computed') or {}
-            if not comp.get('defenses'):
-                skipped['no computed'] += 1
-                continue
-            stats, armor, tal, tears = build_inputs(b)
-            if not any(stats.values()):
-                skipped['no stats'] += 1
-                continue
-            tear_ids = [t.goods_speffect(x) for x in tears]
-            d = defender(t, stats, armor, tal, great_rune=b.get('greatRune'),
-                         pvp=not b.get('isPvE'), extra_speffects=[i for i in tear_ids if i],
-                         strict=False)
-            d['missing'] += [x for x, i in zip(tears, tear_ids) if not i]
-            if d['missing']:
-                skipped['unknown item name'] += 1
-                bad['names'].append((rec['id'], d['missing']))
-                continue
-            n += 1
-            for ty in TYPES:
-                for key, ours in (('defense', d['defense'][ty]), ('defense_site', d['defense_site'][ty])):
-                    total[key] += 1
-                    want = comp['defenses'].get(ty)
-                    if want == ours:
-                        agree[key] += 1
-                    elif key == 'defense_site':
-                        bad[key].append((rec['id'], ty, want, ours, d['defense'][ty], stats, tal))
-                want = (comp.get('absorption') or {}).get(ty)
-                if want is not None:
-                    total['absorption'] += 1
-                    if abs(want - d['absorption'][ty]) < 0.01:
-                        agree['absorption'] += 1
-                    else:
-                        bad['absorption'].append((rec['id'], ty, round(want, 3),
-                                                  round(d['absorption'][ty], 3), tal))
-            for g, k in RESIST_GROUPS.items():
-                want = (comp.get('resistances') or {}).get(g)
-                if want is None:
-                    continue
-                total['resist'] += 1
-                total['resist_site'] += 1
-                agree['resist_site'] += want == d['resist_site'][k]
-                if want == d['resist'][k]:
-                    agree['resist'] += 1
-                if want != d['resist_site'][k]:
-                    bad['resist_site'].append((rec['id'], g, want, d['resist_site'][k], armor, tal))
-            po = comp.get('poise') or {}
-            if 'original' in po:
-                total['poise'] += 1
-                ours = round(d['poise'], 6)
-                if abs(po['original'] - ours) < 0.01:
-                    agree['poise'] += 1
+    for rec in er_corpus.iter_rows(CORPUS):
+        if limit and n >= limit:
+            break
+        b = rec['build']
+        comp = b.get('computed') or {}
+        if not comp.get('defenses'):
+            skipped['no computed'] += 1
+            continue
+        stats, armor, tal, tears = build_inputs(b)
+        if not any(stats.values()):
+            skipped['no stats'] += 1
+            continue
+        tear_ids = [t.goods_speffect(x) for x in tears]
+        d = defender(t, stats, armor, tal, great_rune=b.get('greatRune'),
+                     pvp=not b.get('isPvE'), extra_speffects=[i for i in tear_ids if i],
+                     strict=False)
+        d['missing'] += [x for x, i in zip(tears, tear_ids) if not i]
+        if d['missing']:
+            skipped['unknown item name'] += 1
+            bad['names'].append((rec['id'], d['missing']))
+            continue
+        n += 1
+        for ty in TYPES:
+            for key, ours in (('defense', d['defense'][ty]), ('defense_site', d['defense_site'][ty])):
+                total[key] += 1
+                want = comp['defenses'].get(ty)
+                if want == ours:
+                    agree[key] += 1
+                elif key == 'defense_site':
+                    bad[key].append((rec['id'], ty, want, ours, d['defense'][ty], stats, tal))
+            want = (comp.get('absorption') or {}).get(ty)
+            if want is not None:
+                total['absorption'] += 1
+                if abs(want - d['absorption'][ty]) < 0.01:
+                    agree['absorption'] += 1
                 else:
-                    bad['poise'].append((rec['id'], po['original'], ours, armor))
-            if 'altered' in po:
-                total['poise_altered'] += 1
-                if abs(po['altered'] - d['poise_effective']) < 0.05:
-                    agree['poise_altered'] += 1
-                else:
-                    bad['poise_altered'].append((rec['id'], po['altered'], round(d['poise_effective'], 2), tal))
+                    bad['absorption'].append((rec['id'], ty, round(want, 3),
+                                              round(d['absorption'][ty], 3), tal))
+        for g, k in RESIST_GROUPS.items():
+            want = (comp.get('resistances') or {}).get(g)
+            if want is None:
+                continue
+            total['resist'] += 1
+            total['resist_site'] += 1
+            agree['resist_site'] += want == d['resist_site'][k]
+            if want == d['resist'][k]:
+                agree['resist'] += 1
+            if want != d['resist_site'][k]:
+                bad['resist_site'].append((rec['id'], g, want, d['resist_site'][k], armor, tal))
+        po = comp.get('poise') or {}
+        if 'original' in po:
+            total['poise'] += 1
+            ours = round(d['poise'], 6)
+            if abs(po['original'] - ours) < 0.01:
+                agree['poise'] += 1
+            else:
+                bad['poise'].append((rec['id'], po['original'], ours, armor))
+        if 'altered' in po:
+            total['poise_altered'] += 1
+            if abs(po['altered'] - d['poise_effective']) < 0.05:
+                agree['poise_altered'] += 1
+            else:
+                bad['poise_altered'].append((rec['id'], po['altered'], round(d['poise_effective'], 2), tal))
     print(f'builds compared: {n}; skipped: {dict(skipped)}')
     for k in ('defense', 'defense_site', 'absorption', 'resist', 'resist_site', 'poise', 'poise_altered'):
         if total[k]:

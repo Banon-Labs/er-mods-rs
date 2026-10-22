@@ -75,6 +75,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = Path.home() / ".cache/er-build-planner"
 
 
@@ -138,10 +140,24 @@ ENTRY_STAMINA = {"roll_r1": 12, "bstep_r1": 8, "jump_r1": 10, "jump_r2": 10}
 #: exchange.md section 3 prints 5, 10 and 20 s).
 FIGHT_WINDOW_S = 10.0
 
-POOL_VERSION = 5                  # 5: 'offhand', the left hand per profile
-#: Slots whose entry is a roll or backstep: their invincibility is not modelled, so their
-#: exchange is neutral. Crouch and running attacks have no invincibility (`slot_exchange`).
-INVINCIBLE_ENTRY_SLOTS = ("roll_r1", "bstep_r1")
+POOL_VERSION = 6                  # 5: 'offhand', the left hand per profile; 6: 'follow' (`follow_up`)
+#: Slots whose entry is a roll or backstep, with the `a00` entry clip whose unconditional
+#: JumpTable 8 is the entry's invincibility (`er-mechanics-interrupt.iframes`, TAE): the medium
+#: roll a000_027110 (f0-13) and the medium backstep a000_027000 (none: its f0-7 window is gated on
+#: stateInfo 473, the Fine Crucible Feather). Crouch and running attacks have no invincibility.
+INVINCIBLE_ENTRY_SLOTS = {"roll_r1": 27110, "bstep_r1": 27000}
+_ENTRY_INV: dict = {}
+
+
+def entry_iframes(slot: str) -> float:
+    """Frames from the entry's first frame that a rolling or backstep attack's entry is invincible
+    for (`INVINCIBLE_ENTRY_SLOTS`), 0 for any other slot or an entry with none."""
+    key = slot.removeprefix("2h_")
+    if key not in INVINCIBLE_ENTRY_SLOTS:
+        return 0.0
+    if key not in _ENTRY_INV:
+        _ENTRY_INV[key] = _sibling("er-mechanics-interrupt").iframes(INVINCIBLE_ENTRY_SLOTS[key]) or 0.0
+    return _ENTRY_INV[key]
 
 
 # --------------------------------------------------------------------------------------------
@@ -237,9 +253,58 @@ def attack_profile(reg, sa: SaRates, weapon_id: int, two: bool, slot: str = OPPO
     fc = reach.get("front_contact_frame_real")
     start, source = strike_frame({"startup": first_hit(atk), "front_contact": fc}, 0.0,
                                  None if _has_contact(fc) else _fallback_delay(weapon_id, key))
+    world = reach.get("world_reach_m")
+    if world is None:
+        world = _reach_module().class_fallback(weapon_id, "both" if two else "one", key).get("world_reach_m")
     return {"startup": start, "startup_source": source, "first_hit": first_hit(atk),
             "poise": atk["poise_damage"] * POISE_MENU * rate, "sa_rate": rate,
-            "hyper": hyper_windows(atk), "stamina": stamina_total(reg, weapon_id, atk)}
+            "hyper": hyper_windows(atk), "stamina": stamina_total(reg, weapon_id, atk),
+            "follow": follow_up(reg, weapon_id, two, slot, world, rows)}
+
+
+_COMBO = []
+
+
+def _combo():
+    if not _COMBO:
+        _COMBO.append(_sibling("er-mechanics-combo"))
+    return _COMBO[0]
+
+
+def follow_up(reg, weapon_id: int, two: bool, slot: str, reach: float | None, rows: list | None = None) -> float:
+    """Expected hits of the opponent's follow-up when his `slot` breaks my poise: the R1 the HKS
+    plays after it (`er-mechanics-combo.follow_key`, through SubStart for a movement attack or R2),
+    pressed at the slot's R1 cancel, landing as a true combo on that break would
+    (`er-mechanics-combo.Model.link` `on_break`: before the stagger's escape, a tie at half) and
+    only while his `reach` still covers me after the hit's knockback (`follow_reaches`). 0 when the
+    weapon has no such follow-up, or no SubStart lead is resolved for it (`substart_lead`, the
+    links `er-mechanics-combo.same_links` also leaves out). `rows` are the weapon's
+    `weapon_attacks` in that grip, read when not given."""
+    C = _combo()
+    key = slot.removeprefix("2h_")
+    fk = C.follow_key(key)
+    if fk is None:
+        return 0.0
+    if rows is None:
+        rows = ATK.weapon_attacks(reg, weapon_id, "both" if two else "one")
+    by = {r["slot"].removeprefix("2h_"): r for r in rows if r.get("hit_windows")}
+    a, b = by.get(key), by.get(fk[0])
+    if a is None or b is None or a["cancel_frame"].get("r1") is None:
+        return 0.0
+    lead = 0.0
+    if fk[1]:
+        lead = C.substart_lead(reg.weapon[weapon_id])
+        if lead is None:
+            return 0.0
+    if not _COMBO_STAGGER:
+        _COMBO_STAGGER.append(C.Stagger())
+    lk = _COMBO_STAGGER[0].model.link(a, b, a["cancel_frame"]["r1"], float(lead))
+    if not lk or not C.follow_reaches(lk["knockback_m"], reach, STRIKE_DISTANCE_M):
+        return 0.0
+    return C.link_p(lk["on_break"])
+
+
+_COMBO_STAGGER = []
 
 
 _REACH = []
@@ -253,8 +318,7 @@ def _reach_module():
 
 def _corpus_builds(mirror: Path, rl_lo: int, rl_hi: int) -> tuple[list[dict], Counter]:
     out, seen, why = [], set(), Counter()
-    for line in mirror.open():
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(mirror):
         b = row["build"]
         st = EMBED.stats_of(b)
         if st is None or not rl_lo <= st["rl"] <= rl_hi or not is_pvp(b):
@@ -278,7 +342,7 @@ def _corpus_builds(mirror: Path, rl_lo: int, rl_hi: int) -> tuple[list[dict], Co
 #: 2026-09-29: `er-mechanics-reach.py` changed its `front_contact_frame_real` between two
 #: ranking runs, and the pool cached before the change kept the old frames while the scored
 #: slots read the new ones (676 of 13303 slots got a different `f_exchange`).
-POOL_SOURCES = ("er-mechanics-exchange.py", "er-mechanics-reach.py", "er-mechanics-attacks.py")
+POOL_SOURCES = ("er-mechanics-exchange.py", "er-mechanics-reach.py", "er-mechanics-attacks.py", "er_corpus.py")
 
 
 def _source_stamp() -> str:
@@ -295,10 +359,11 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     Returns {'profiles': {'<weapon>|<1h|2h>': attack_profile}, 'builds': [[profile key, menu
     poise]], 'poise': sorted corpus menu poise, 'bar': median max stamina, 'ref_per_bar': pool
     median R1s per bar, 'offhand': {profile key: {left weapon or '-': builds}}, 'dropped':
-    reasons}. Cached beside the mirror, keyed on its size and
-    mtime."""
+    reasons}. Cached beside the mirror, keyed on its size and mtime and the corpus floor
+    (`er_corpus.CORPUS_SINCE`)."""
     st = mirror.stat()
-    stamp = [POOL_VERSION, st.st_size, int(st.st_mtime), rl_lo, rl_hi, OPPONENT_SLOT, _source_stamp()]
+    stamp = [POOL_VERSION, st.st_size, int(st.st_mtime), er_corpus.CORPUS_SINCE, rl_lo, rl_hi, OPPONENT_SLOT,
+             _source_stamp()]
     # The stamp is in the name too, so checkouts of different sources (a worktree beside the main
     # tree, an A/B against a ref) keep their own file instead of rebuilding each other's.
     path = CACHE / f"exchange-pool-{rl_lo}-{rl_hi}-{stamp[-1]}.json"
@@ -394,6 +459,8 @@ class Pool:
         self.poise_dealt = np.array([p["poise"] / (1.0 if sa_rate else p.get("sa_rate") or 1.0)
                                      for p in prof], float)
         self.hyper = [p["hyper"] for p in prof]
+        # Hits of his follow-up when his attack breaks me (`follow_up`), each worth his `dmg`.
+        self.follow = np.array([p.get("follow") or 0.0 for p in prof], float)
         self.dmg = np.full(len(self.keys), OPPONENT_HP_FALLBACK)
         self.build_prof = np.array([idx[k] for k, _ in pool["builds"]], int)
         self.build_poise = np.array([p for _, p in pool["builds"]], float)
@@ -431,6 +498,7 @@ class Pool:
         p.startup = np.array([r["startup"] for r in rows], float)
         p.poise_dealt = np.array([r["poise"] for r in rows], float)
         p.hyper = [list(r["hyper"]) for r in rows]
+        p.follow = np.array([r.get("follow") or 0.0 for r in rows], float)
         p.dmg = np.array([r["dmg"] for r in rows], float)
         p.build_prof = np.array([e[0] for e in entries], int)
         p.build_poise = np.array([e[1] for e in entries], float)
@@ -466,11 +534,16 @@ def priced_net(pool, win_b, loss_b, dmg: float) -> float:
     """The contest's net with trades priced by damage (exchange.md section 2a): per entry k,
     `hp_k = (win_k + trade_k) x dmg - (loss_k + trade_k) x D_k` over the pair's mean hit
     `(dmg + D_k) / 2`, then the pool mean. Equal hits give `win - loss` exactly; a trade is worth
-    what my hit outdamages theirs by."""
+    what my hit outdamages theirs by.
+
+    A loss also pays his follow-up out of the stagger it put me in: `loss_k x follow_k x D_k`
+    (`Pool.follow`, `follow_up`: being broken costs what he can do with it, user 2026-10-19)."""
     d_k = pool.dmg[pool.build_prof]
     win_b, loss_b = np.asarray(win_b, float), np.asarray(loss_b, float)
     trade_b = 1.0 - win_b - loss_b
-    hp = (win_b + trade_b) * dmg - (loss_b + trade_b) * d_k
+    follow = getattr(pool, "follow", None)
+    f_k = np.asarray(follow, float)[pool.build_prof] if follow is not None else 0.0
+    hp = (win_b + trade_b) * dmg - (loss_b + trade_b) * d_k - loss_b * f_k * d_k
     return pool.mean(hp / ((dmg + d_k) / 2.0))
 
 
@@ -484,11 +557,16 @@ def contest_factor(pool, win_b, loss_b, dmg: float | None) -> tuple[float, float
     return 1.0 + EXCHANGE_WEIGHT * max(-clamp, min(clamp, net)), net
 
 
-def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple], dmg: float | None = None) -> dict:
+def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple], dmg: float | None = None,
+             invuln: float = 0.0) -> dict:
     """Outcome shares of the simultaneous exchange of one attack against the pool. `dmg` is the
-    attack's own hit, read only when the pool prices trades (`Pool.trade_clamp`)."""
-    first = pool.startup > startup      # per profile: I hit first
-    second = pool.startup < startup
+    attack's own hit, read only when the pool prices trades (`Pool.trade_clamp`). `invuln`: frames
+    from the exchange's start I am invincible for (a rolling attack's entry, `entry_iframes`); an
+    opponent whose first hit lands inside them whiffs it, and my hit then lands unanswered
+    (`INFERRED`: the pool keeps only each attack's first hit, so a later hit of his is not tried)."""
+    whiff = pool.startup < invuln       # per profile: his first hit falls in my i-frames
+    first = (pool.startup > startup) | whiff     # per profile: I hit first
+    second = (pool.startup < startup) & ~whiff
     # I hit first at `startup`: the opponent's window at that frame decides.
     their = [_window_at(h, startup) for h in pool.hyper]
     their_bonus = np.array([b for b, _ in their])[pool.build_prof]
@@ -501,7 +579,8 @@ def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple],
     room = dealt - np.array([b for b, _ in mine])
     p_break_me = np.searchsorted(pool.my_poise, room, side="right") / len(pool.my_poise)
     f_b, s_b = first[pool.build_prof], second[pool.build_prof]
-    win_b, loss_b = f_b & breaks_them, np.where(s_b, p_break_me[pool.build_prof], 0.0)
+    win_b = (f_b & breaks_them) | whiff[pool.build_prof]
+    loss_b = np.where(s_b, p_break_me[pool.build_prof], 0.0)
     win, loss = pool.mean(win_b), pool.mean(loss_b)
     p_first, p_second = pool.mean(f_b), pool.mean(s_b)
     trade = 1.0 - win - loss
@@ -747,23 +826,21 @@ def slot_exchange(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: 
     `atk` is the `er-mechanics-attacks.weapon_attacks` row, `hit` the slot dict (`startup` with
     the R2 lead-in and any earlier sweep hit already applied, `poise` in menu units x saRate).
     `entry` is the frames spent before the slot's own clip (`er-builds-pvp.SCORE_ENTRY_FRAMES`).
-    A rolling or backstep attack (`INVINCIBLE_ENTRY_SLOTS`) gets a neutral exchange, because the
-    roll's invincibility frames are not modelled. A crouch or running attack has none, so it is
-    exchanged like any slot, from standing: its first hit and hyperarmor windows move by `entry`
+    Every slot is exchanged from standing: its first hit and hyperarmor windows move by `entry`
     (Giant-Crusher 2H crouch R1: first hit at frame 14, so 22 from standing, against the standing
-    R1's 17.9; `INFERRED` that the exchange starts before the crouch or sprint). Its stamina
-    factor applies either way. None when the slot has no hit frame."""
+    R1's 17.9; `INFERRED` that the exchange starts before the crouch or sprint). A rolling or
+    backstep attack's entry also carries its i-frames (`entry_iframes`, TAE): an opponent's hit
+    inside them whiffs (`exchange` `invuln`); the medium roll has 13, the backstep none. Its
+    stamina factor applies either way. None when the slot has no hit frame."""
     if hit.get("startup") is None:
         return None
     lead = atk.get("release_lead_in") or 0.0
     st = slot_stamina(pool, reg, weapon_id, atk, hit, entry)
-    if entry and atk["slot"].removeprefix("2h_") in INVINCIBLE_ENTRY_SLOTS:
-        ex = {"f_startup": 1.0, "f_hyper": 1.0, "f_exchange": 1.0, "skipped": "roll invincibility"}
-    else:
-        delay = None if _has_contact(hit.get("front_contact")) else _fallback_delay(weapon_id, atk["slot"])
-        start, source = strike_frame(hit, lead, delay)
-        ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry), hit.get("dmg"))
-        ex["strike_frame"], ex["strike_source"] = start + entry, source
+    inv = entry_iframes(atk["slot"]) if entry else 0.0
+    delay = None if _has_contact(hit.get("front_contact")) else _fallback_delay(weapon_id, atk["slot"])
+    start, source = strike_frame(hit, lead, delay)
+    ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry), hit.get("dmg"), inv)
+    ex["strike_frame"], ex["strike_source"], ex["entry_iframes"] = start + entry, source, inv
     return {**ex, **st, "factor": ex["f_exchange"] * st["f_stamina"]}
 
 
@@ -822,6 +899,16 @@ def selftest() -> int:
     big = exchange(heavy, 5.0, 100.0, [], 5000.0)
     check(big["net_hp"] > 1.0 and big["f_exchange"] == 1.0 + EXCHANGE_WEIGHT,
           f"the priced net is bounded by the clamp ({big['net_hp']:.3f} -> {big['f_exchange']})")
+    # His follow-up out of the stagger (`Pool.follow`): at frame 30 the slow build (D 600, 3/4)
+    # breaks me; a follow-up landing 1 time in 2 adds 3/4 x 1/2 x 600 to what the loss costs.
+    # Losses: fast trades (300 vs 600 -> (600 - 300)/450 x 1/4), slow loss -600 x 3/4 / 600.
+    heavy.follow = np.array([0.0, 0.0])
+    base = exchange(heavy, 30.0, 100.0, [], 600.0)
+    heavy.follow = np.array([0.0, 0.5])
+    fol = exchange(heavy, 30.0, 100.0, [], 600.0)
+    check(abs((base["net_hp"] - fol["net_hp"]) - 0.75 * 0.5 * 600.0 / 600.0) < 1e-12 and fol["loss"] == base["loss"],
+          f"priced: a loss also pays his follow-up out of the stagger ({base['net_hp']:.3f} -> {fol['net_hp']:.3f})")
+    heavy.follow = np.array([0.0, 0.0])
     heavy.trade_clamp = None
     check(exchange(heavy, 5.0, 100.0, [], 600.0)["f_exchange"] == 1.0 + EXCHANGE_WEIGHT * 0.25
           and "net_hp" not in exchange(heavy, 5.0, 100.0, [], 600.0),
@@ -940,7 +1027,18 @@ def selftest() -> int:
           f"{standing['f_startup']:.3f}; first hit {gcc_hit['startup']})")
     roll = next(r for r in ATK.weapon_attacks(reg, ids["Giant-Crusher"], "both") if r["slot"] == "2h_roll_r1")
     rex = slot_exchange(pool, reg, ids["Giant-Crusher"], roll, {"startup": first_hit(roll), "poise": 100.0}, 20.0)
-    check(rex["f_exchange"] == 1.0 and rex.get("skipped"), "a rolling attack keeps a neutral exchange")
+    bst = next(r for r in ATK.weapon_attacks(reg, ids["Giant-Crusher"], "both") if r["slot"] == "2h_bstep_r1")
+    bex = slot_exchange(pool, reg, ids["Giant-Crusher"], bst, {"startup": first_hit(bst), "poise": 100.0}, 14.0)
+    bare = exchange(pool, rex["strike_frame"], 100.0, hyper_windows(roll, 20.0))
+    check("skipped" not in rex and rex["entry_iframes"] == 13.0 and bex["entry_iframes"] == 0.0
+          and rex["win"] >= bare["win"] and rex["loss"] <= bare["loss"],
+          f"a rolling attack is exchanged with the roll's 13 i-frames (win {bare['win']:.3f} -> {rex['win']:.3f}, "
+          f"loss {bare['loss']:.3f} -> {rex['loss']:.3f}); the backstep R1 has none (TAE)")
+    # Synthetic: i-frames to f12 whiff the fast build's f10 hit, so a frame-30 attack wins against it
+    # instead of being hit first; the slow build's f20 hit still breaks me.
+    ei = exchange(syn, 30.0, 100.0, [], invuln=12.0)
+    check(abs(ei["win"] - 0.5) < 1e-9 and abs(ei["loss"] - 0.5) < 1e-9 and ei["p_first"] == 0.5,
+          f"invuln 12: the f10 hit whiffs and is a win, the f20 hit still breaks me ({ei['win']}, {ei['loss']})")
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 

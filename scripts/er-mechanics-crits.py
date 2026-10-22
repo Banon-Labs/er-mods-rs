@@ -65,6 +65,8 @@ import sys
 import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 
 
 def _load(name, filename):
@@ -746,8 +748,8 @@ def corpus_parry_share(t, path=CORPUS):
             names.setdefault(n, wid)
     parry_names = {t.sword_art_names.get(a) for a in PARRY_SWORD_ARTS}
     total, left, any_hand, by_tool = 0, 0, 0, collections.Counter()
-    for line in open(path, encoding='utf-8'):
-        b = json.loads(line)['build']
+    for row in er_corpus.iter_rows(path):
+        b = row['build']
         pvp = b.get('isPvE') is False or set(b.get('tags') or []) & PVP_TAGS
         st = b.get('stats') or {}
         if not pvp or st.get('str', 0) < max(st.get(k, 0) for k in ('dex', 'int', 'fth', 'arc')):
@@ -811,17 +813,16 @@ def window_builds(rl, window, mirror=CORPUS):
     whole (it keeps only `computed`): so `Defenders([b['computed'] for b in ...])` is its corpus."""
     P = _pvp_module()
     out = []
-    with open(mirror, encoding='utf-8') as handle:
-        for line in handle:
-            b = json.loads(line)['build']
-            st = P.EMBED.stats_of(b)
-            if st is None or not rl - window <= st['rl'] <= rl + window or not P.is_pvp(b):
-                continue
-            if sum(st[k] for k in P.EMBED.ATTRS) - P.OPT.LEVEL_OFFSET != st['rl']:
-                continue
-            c = b.get('computed') or {}
-            if c.get('defenses') and c.get('absorption'):
-                out.append(b)
+    for row in er_corpus.iter_rows(mirror):
+        b = row['build']
+        st = P.EMBED.stats_of(b)
+        if st is None or not rl - window <= st['rl'] <= rl + window or not P.is_pvp(b):
+            continue
+        if sum(st[k] for k in P.EMBED.ATTRS) - P.OPT.LEVEL_OFFSET != st['rl']:
+            continue
+        c = b.get('computed') or {}
+        if c.get('defenses') and c.get('absorption'):
+            out.append(b)
     return out
 
 
