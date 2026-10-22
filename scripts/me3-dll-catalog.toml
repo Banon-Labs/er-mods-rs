@@ -128,14 +128,10 @@ default = true
 
 [er-death-persist]
 label = "Keep transformations through death"
-blurb = "Rock Heart, Priestess Heart and Lamenter's Mask transformations come back when you respawn. Seamless Co-op invasions find no hosts while it is loaded."
+blurb = "Rock Heart, Priestess Heart and Lamenter's Mask transformations come back when you respawn."
 category = "quality-of-life"
 audience = "player"
 default = false
-# Measured twice, two days apart, and again live on the user's own save: it edits param rows,
-# Seamless fingerprints the param tables into its lobby key, and a key nobody else has matches
-# nobody. The symptom is an empty host list, which reads as "nobody is online".
-caution = "blocks Seamless matchmaking"
 
 [er-focus-input]
 label = "Input while unfocused"

@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [target.'cfg(windows)'.dependencies]
 er-game-base = { path = "../er-game-base" }
+er-hook = { path = "../er-hook" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 
