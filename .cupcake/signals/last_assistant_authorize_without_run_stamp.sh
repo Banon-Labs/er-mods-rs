@@ -67,9 +67,7 @@ try:
 except ValueError:
     pass
 
-path = event.get("transcript_path")
-if not (isinstance(path, str) and os.path.isfile(path)):
-    path = scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 

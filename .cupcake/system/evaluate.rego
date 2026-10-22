@@ -81,6 +81,7 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.m
 all_denials contains decision if some decision in data.cupcake.policies.claude.monitor_rate_limit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_lint_before_commit.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_product_work_before_tool_fix.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_whole_check_sh.deny

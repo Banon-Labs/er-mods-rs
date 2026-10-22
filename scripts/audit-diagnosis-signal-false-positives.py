@@ -216,11 +216,41 @@ def deferral_verdict(parsed: dict[str, str]) -> tuple[str, str] | None:
     return ("halt", clause)
 
 
+def unfixed_verdict(parsed: dict[str, str]) -> tuple[str, str] | None:
+    """The admitted-unfixed conjunction (2026-10-18): the closing prose said a defect was left
+    unfixed and the turn wrote nothing. `asked` is not read; `nofix` (the prompt forbade changes) is."""
+    clause = parsed.get("unfixed", "")
+    if not clause:
+        return None
+    if parsed.get("diagnosis", "") and parsed.get("asked", "0") == "0":
+        return ("yield-diagnosis", clause)
+    for key, label in (("edited", "exempt-edited"), ("committed", "exempt-committed"),
+                       ("blocked", "exempt-blocked"), ("nofix", "exempt-nofix")):
+        if parsed.get(key, "0") != "0":
+            return (label, clause)
+    return ("halt", clause)
+
+
+def unchecked_verdict(parsed: dict[str, str]) -> tuple[str, str] | None:
+    """The unchecked-claim conjunction (2026-10-18): a claim stated and admitted unchecked, where the
+    check needs no run. Not gated on `edited`."""
+    clause = parsed.get("unchecked", "")
+    if not clause:
+        return None
+    for key, label in (("blocked", "exempt-blocked"), ("userneed", "exempt-userneed"),
+                       ("future", "exempt-future")):
+        if parsed.get(key, "0") != "0":
+            return (label, clause)
+    return ("halt", clause)
+
+
 ARMS = {
     "promissory": promissory_verdict,
     "unread": unread_verdict,
     "handback": handback_verdict,
     "deferral": deferral_verdict,
+    "unfixed": unfixed_verdict,
+    "unchecked": unchecked_verdict,
 }
 
 
@@ -248,6 +278,7 @@ def audit(path: str, home: str, arms: list[str]) -> tuple[int, list[tuple[int, s
         fixture.write_text("\n".join(chunk) + "\n", encoding="utf-8")
         proc = subprocess.run(
             ["bash", str(SIGNAL)],
+            input=json.dumps({"transcript_path": str(fixture)}),
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,

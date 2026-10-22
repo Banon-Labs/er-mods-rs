@@ -61,6 +61,9 @@ class Case:
     # Extra environment for the hook, as (name, value) pairs. For a signal whose verdict comes from
     # outside the transcript, so the case pins that verdict instead of reading this machine's.
     env: tuple[tuple[str, str], ...] = ()
+    # A second session's transcript, written beside the hook's own and made newer than it. The
+    # hook event names only the fixture, so nothing in the decoy may reach a verdict.
+    decoy: str | None = None
 
 
 CASES = [
@@ -169,6 +172,13 @@ CASES = [
         None,
         "the same sentence beside the Edit that backs it -- must NOT halt, or delivering the thing "
         "and saying so is punished identically to claiming it and not delivering",
+    ),
+    Case(
+        "backed_claim_earlier_turn.jsonl",
+        None,
+        "the 2026-10-19 false positive: a Write created the script one turn earlier, a task "
+        "notification opened a new turn, an ls -l listed it, and the closer named its path -- must "
+        "NOT halt. The signal used to look only at the judged turn's writes and refused it twice",
     ),
     Case(
         "promissory_closer.jsonl",
@@ -537,6 +547,21 @@ CASES = [
         "`committed` is what keeps the true positive blocking",
     ),
     Case(
+        "unfixed_unchecked_answer.jsonl",
+        "a defect was left unfixed",
+        "the 2026-10-18 closer, verbatim: a question answered with 'As far as I know ... I haven't "
+        "checked that against the skill data yet' and 'I haven't fixed either', no file changed. "
+        "It passed every Stop guard: the diagnosis arm needs a determiner beside a singular defect "
+        "noun ('the crit and pairing problems' is neither) and exempts any prompt with a question "
+        "mark. The admission of an unfixed defect is not an explanation, so `asked` cannot clear it",
+    ),
+    Case(
+        "unfixed_answer_fixed_and_checked.jsonl",
+        None,
+        "the same question answered after the lookup and the edit, closing on the result as fact "
+        "-- must NOT halt",
+    ),
+    Case(
         "ask_without_receiver.jsonl",
         "You asked the user for something you have no receiver for",
         "the 2026-10-02 closer, verbatim: a Frida watcher backgrounded, then 'I need you to close "
@@ -641,6 +666,15 @@ CASES = [
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
     ),
+    Case(
+        "clean.jsonl",
+        None,
+        "a concurrent session in the same project ended on an unkept promise and its transcript is "
+        "the newest file there; this session's own turn is clean and must NOT halt. Measured "
+        "2026-10-20: session f159d78f was halted quoting a sentence from session bd9e64a1, because "
+        "the signals read the newest transcript in the directory instead of the hook event's",
+        decoy="unexecuted_promise.jsonl",
+    ),
 ]
 
 
@@ -660,6 +694,15 @@ UPS_CASES = [
         "wall_of_text.jsonl",
         "MEASURED: your PREVIOUS answer ran to 4 paragraphs",
         "the previous answer was four paragraphs -- the next turn is told so, before it writes",
+    ),
+    # The paragraph rule has no Stop halt on purpose (wall_of_text.rego: a Stop verdict is printed to
+    # the user and cannot unsend the answer), so the 2026-10-18 message is measured on the next prompt.
+    # This pins that it is measured at all: two prose paragraphs around a table.
+    ContextCase(
+        "unfixed_unchecked_answer.jsonl",
+        "MEASURED: your PREVIOUS answer ran to 2 paragraphs",
+        "the 2026-10-18 answer: a paragraph, a table and a closing paragraph -- the table is "
+        "structure, the two paragraphs are prose, and the next turn is told it ran to two",
     ),
     ContextCase(
         "narration_between_tools.jsonl",
@@ -780,7 +823,11 @@ def stderr_tail(stderr: str, limit: int = 1200) -> str:
 
 
 def run_hook(
-    fixture_name: str, event_name: str, argv: list[str], extra_env: tuple[tuple[str, str], ...] = ()
+    fixture_name: str,
+    event_name: str,
+    argv: list[str],
+    extra_env: tuple[tuple[str, str], ...] = (),
+    decoy: str | None = None,
 ) -> HookResult | str:
     """Drive one fixture through the real hook until an evaluation runs every signal it asked for.
 
@@ -789,7 +836,7 @@ def run_hook(
     cupcake's deadline still fails this test -- as itself, not disguised as an inert guard."""
     last: HookResult | str = "no attempt ran"
     for attempt in range(1, ATTEMPTS + 1):
-        last = run_hook_once(fixture_name, event_name, argv, extra_env)
+        last = run_hook_once(fixture_name, event_name, argv, extra_env, decoy)
         if isinstance(last, str) or not last.dropped:
             return last
         print(
@@ -806,23 +853,37 @@ def run_hook(
 
 
 def run_hook_once(
-    fixture_name: str, event_name: str, argv: list[str], extra_env: tuple[tuple[str, str], ...] = ()
+    fixture_name: str,
+    event_name: str,
+    argv: list[str],
+    extra_env: tuple[tuple[str, str], ...] = (),
+    decoy: str | None = None,
 ) -> HookResult | str:
     """One real cupcake hook invocation. Returns a HookResult, or a failure message string."""
     fixture = FIXTURES / fixture_name
     if not fixture.is_file():
         return f"missing fixture {fixture}"
+    decoy_fixture = FIXTURES / decoy if decoy else None
+    if decoy_fixture is not None and not decoy_fixture.is_file():
+        return f"missing decoy fixture {decoy_fixture}"
 
     with tempfile.TemporaryDirectory(prefix="cupcake-stop-guard-") as tmp:
-        # Signals discover the transcript via ~/.claude/projects/<cwd-with-slashes-as-dashes>/*.jsonl
-        # (scripts/cupcake_turn_scan.latest_transcript). Point home at a throwaway tree holding only
-        # this fixture, so the test never reads the live session transcript.
+        # Signals read the transcript the hook event names (scripts/cupcake_turn_scan.hook_transcript).
+        # It still lives where Claude Code puts it, ~/.claude/projects/<cwd-with-slashes-as-dashes>/,
+        # under a throwaway home so the test never reads a live session transcript.
         slug = str(REPO_ROOT).replace("/", "-")
         tdir = Path(tmp) / ".claude" / "projects" / slug
         tdir.mkdir(parents=True)
         (tdir / "session.jsonl").write_text(
             substitute_head(fixture.read_text(encoding="utf-8")), encoding="utf-8"
         )
+        if decoy_fixture is not None:
+            other = tdir / "other-session.jsonl"
+            other.write_text(
+                substitute_head(decoy_fixture.read_text(encoding="utf-8")), encoding="utf-8"
+            )
+            later = (tdir / "session.jsonl").stat().st_mtime + 60
+            os.utime(other, (later, later))
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
         # A stub left in the caller's environment would decide the authorize-run-stamp verdict
@@ -859,7 +920,7 @@ def run_hook_once(
 
 def run_case(case: Case, argv: list[str]) -> str | None:
     """Returns None on pass, or a failure message."""
-    outcome = run_hook(case.fixture, "Stop", argv, case.env)
+    outcome = run_hook(case.fixture, "Stop", argv, case.env, case.decoy)
     if isinstance(outcome, str):
         return outcome
     decision, raw, err = outcome.decision, outcome.raw, stderr_tail(outcome.stderr)

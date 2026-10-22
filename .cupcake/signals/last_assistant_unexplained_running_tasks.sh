@@ -11,7 +11,7 @@
 # finished, and were only stopped when the user complained.
 #
 # What counts as still running is `cupcake_turn_scan.running_background_tasks`, read from the
-# transcript (the Stop hook's `transcript_path`, latest_transcript as the fallback): a Bash or
+# transcript (the Stop hook's `transcript_path` and nothing else, via hook_transcript): a Bash or
 # Monitor call whose result acknowledged a background task id ("running in background with ID:",
 # "moved to the background (ID:", "backgrounded by user with ID:", "Monitor started (task ...") and
 # that has had no finished `<task-notification>`, no Monitor expiry/timeout event, no finished
@@ -38,15 +38,7 @@ try:
 except Exception:
     sys.exit(0)
 
-path = None
-try:
-    event = json.loads(os.environ.get("CUPCAKE_SIGNAL_EVENT") or "{}")
-    cand = event.get("transcript_path") if isinstance(event, dict) else None
-    if isinstance(cand, str) and os.path.isfile(cand):
-        path = cand
-except ValueError:
-    pass
-path = path or scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
 
