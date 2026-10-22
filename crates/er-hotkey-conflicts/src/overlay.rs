@@ -9,6 +9,11 @@
 //! The consequence, stated rather than hidden: loaded alone, with no watermark and no path
 //! overlay in the profile, this DLL draws nothing at all. The report is in the log either way, and
 //! the log is the primary surface.
+//!
+//! The line is drawn in `er-overlay-theme`'s look: its body face, in its warning color. The faces
+//! are handed to the host the first time there is a line to draw, at the frame's scale -- the same
+//! request every themed panel makes, so the host hands back the handles it already has when one
+//! asked first. Until they are built the line is set in the host's default font, as it always was.
 
 #![cfg(windows)]
 
@@ -16,6 +21,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use er_build_watermark_core::overlay_host::{OverlayFrame, adopt_frame, register_with_host};
+use er_overlay_theme::{self as theme, Font, Theme};
 
 use crate::log::conflict_log;
 
@@ -66,12 +72,26 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
         return;
     }
     DRAWS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let scale = theme::panel_scale(unsafe { (*frame).ui_scale });
+    // Once a session; every later call answers `None` and asks nothing of the host.
+    let _ = theme::request_fonts(scale);
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    let _theme = theme::enter(Theme::new(
+        scale,
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
+    ));
     // The foreground list, so the line sits above the game and above any window another overlay in
-    // this process happens to be drawing. Below the watermark's own corner by a couple of rows.
+    // this process happens to be drawing. Below the watermark's own corner by a couple of rows, in
+    // screen pixels as it always was.
     const ORIGIN: [f32; 2] = [12.0, 44.0];
-    const TEXT_COLOR: [f32; 4] = [1.0, 0.72, 0.30, 0.85];
-    ui.get_foreground_draw_list()
-        .add_text(ORIGIN, TEXT_COLOR, line.as_str());
+    theme::with_font(ui, Font::Body, || {
+        theme::foreground_painter(ui).text(ORIGIN, theme::WARNING_TEXT, line.as_str());
+    });
 }
 
 /// Offer this module's draw to whichever module hosts the overlay.

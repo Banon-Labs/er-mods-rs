@@ -1,30 +1,14 @@
-//! Taking the game's input while the menu is open, and giving it back.
-//!
-//! Four pieces, each the one the game actually reads:
-//!
-//! * **Cursor and camera.** The game frees and shows the cursor, and stops turning the camera with
-//!   the mouse, whenever its "a menu has the mouse" predicate answers true (1.17.1 `0x140766650`;
-//!   see `er-npc-summons/src/cursor.rs`, where it was measured live). This detour answers true
-//!   while the menu is open. It chains through `er-hook`'s union, so `er-npc-summons` hooking the
-//!   same predicate for its picker still works.
-//! * **Mouse buttons and wheel.** Read through DirectInput, so `er-dinput-suppress-core` zeroes
-//!   every mouse read while the menu is open. imgui still gets the mouse: hudhook feeds it from
-//!   the window procedure.
-//! * **Keyboard.** Every DirectInput scancode is blanked in the game's reads, so typing a preset
-//!   name does not walk the character. A key held when the menu closes stays blanked until it is
-//!   released, so the key that closed it does not also reach the game.
-//! * **Pad.** `XInputGetState` for pad 0 comes back with the sticks centred, the triggers up and
-//!   no buttons, the same "held until released" rule applying to buttons.
+//! The three hooks behind [`crate::set_taking`]: the cursor predicate, DirectInput, and XInput.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::game_build::{MAPPED_FILE_VERSION_1171, game_file_version};
+use er_game_base::game_build::{carry_1171_rva, game_file_version};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::UnionFn;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::s;
 
-use crate::log;
+use crate::{InputCounters, LogFn, PadRead, pad_after, taking};
 
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
@@ -33,41 +17,13 @@ include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 /// compared with `MENU_HAS_MOUSE_1171_PROLOGUE`.
 const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
 
-/// Is the menu taking input? Set by [`set_taking`], read by every detour here.
-static TAKING: AtomicBool = AtomicBool::new(false);
-
-/// Every DirectInput scancode but zero, which no key produces.
-const ALL_KEYS: [u8; 255] = {
-    let mut keys = [0u8; 255];
-    let mut at = 0;
-    while at < 255 {
-        keys[at] = at as u8 + 1;
-        at += 1;
-    }
-    keys
-};
-
-/// Take the game's input, or give it back.
-pub fn set_taking(taking: bool) {
-    TAKING.store(taking, Ordering::Release);
-    er_dinput_suppress_core::set_mouse_taken(taking);
-    er_dinput_suppress_core::set_keys_taken(if taking { &ALL_KEYS } else { &[] });
-    if !taking {
-        er_dinput_suppress_core::set_pointer_over_overlay(false);
-    }
-}
-
-fn taking() -> bool {
-    TAKING.load(Ordering::Acquire)
-}
-
 // The cursor predicate.
 
 static MENU_MOUSE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// Predicate calls answered for the menu.
-pub static CURSOR_FORCED: AtomicUsize = AtomicUsize::new(0);
+static CURSOR_FORCED: AtomicU64 = AtomicU64::new(0);
 /// Set once the predicate is hooked.
-pub static CURSOR_HOOKED: AtomicBool = AtomicBool::new(false);
+static CURSOR_HOOKED: AtomicBool = AtomicBool::new(false);
 
 /// The predicate, in the union's four-argument shape (it takes one).
 unsafe extern "system" fn menu_has_mouse_union(
@@ -90,23 +46,27 @@ unsafe extern "system" fn menu_has_mouse_union(
 }
 
 /// Hook the predicate on 1.17.1. Any other build, or other bytes at the address, leaves the cursor
-/// to the game and says so: the menu still opens and still takes the buttons, but the camera
-/// turns with the mouse and the cursor stays hidden.
-pub fn install_cursor() {
-    if game_file_version() != Some(MAPPED_FILE_VERSION_1171) {
+/// to the game and says so: the menu still opens and still takes the buttons, but the camera turns
+/// with the mouse and the cursor stays hidden. Returns whether the predicate is hooked.
+pub fn install_cursor(log: LogFn) -> bool {
+    if CURSOR_HOOKED.load(Ordering::Acquire) {
+        return true;
+    }
+    // Measured on 1.17.1 and carried from there, not from 1.16.2: `game_rva` has no ledger row
+    // for this function because 1.17 changed its body. The opening bytes are compared below
+    // before anything is hooked.
+    let Some(rva) = carry_1171_rva(MENU_HAS_MOUSE_1171_RVA) else {
         log(format_args!(
-            "cursor: not 1.17.1 ({:?}); the menu gets no free cursor",
+            "cursor: no carry of the 1.17.1 menu-mouse predicate to {:?}; the menu gets no free \
+             cursor",
             game_file_version()
         ));
-        return;
-    }
-    let Ok(base) = game_module_base() else {
-        return;
+        return false;
     };
-    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
-    // the opening bytes are compared below before anything is hooked. `game_rva` has no ledger
-    // row for this function because 1.17 changed its body.
-    let entry = base + MENU_HAS_MOUSE_1171_RVA;
+    let Ok(base) = game_module_base() else {
+        return false;
+    };
+    let entry = base + rva;
     let mut bytes = [0u8; MENU_HAS_MOUSE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
@@ -119,7 +79,7 @@ pub fn install_cursor() {
             "cursor: 0x{entry:x} does not open like the menu-mouse predicate ({bytes:02x?}); not \
              hooked"
         ));
-        return;
+        return false;
     }
     // SAFETY: a runtime-derived 1.17.1 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
@@ -131,38 +91,44 @@ pub fn install_cursor() {
         )
     } {
         Ok(()) => {
-            CURSOR_HOOKED.store(true, Ordering::Relaxed);
+            CURSOR_HOOKED.store(true, Ordering::Release);
             log(format_args!(
                 "cursor: menu-mouse predicate at 0x{entry:x} answered while the menu is open"
             ));
+            true
         }
-        Err(status) => log(format_args!(
-            "cursor: menu-mouse predicate at 0x{entry:x} refused: {status:?}"
-        )),
+        Err(status) => {
+            log(format_args!(
+                "cursor: menu-mouse predicate at 0x{entry:x} refused: {status:?}"
+            ));
+            false
+        }
     }
 }
 
 // DirectInput.
 
-/// Arm the keyboard and mouse blanking once `dinput8.dll` is loaded. Returns true once both are.
-pub fn try_install_dinput() -> bool {
-    static MOUSE: AtomicBool = AtomicBool::new(false);
-    static KEYBOARD: AtomicBool = AtomicBool::new(false);
-    if !MOUSE.load(Ordering::Relaxed) {
+static MOUSE_ARMED: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_ARMED: AtomicBool = AtomicBool::new(false);
+
+/// Arm the keyboard and mouse blanking once `dinput8.dll` is loaded. Returns true once both are;
+/// cheap to call every frame until then.
+pub fn try_install_dinput(log: LogFn) -> bool {
+    if !MOUSE_ARMED.load(Ordering::Relaxed) {
         // SAFETY: called off the loader lock, after the game has created its devices.
         if let Ok(addr) = unsafe { er_dinput_suppress_core::install_mouse_suppression() } {
-            MOUSE.store(true, Ordering::Relaxed);
+            MOUSE_ARMED.store(true, Ordering::Relaxed);
             log(format_args!("input: mouse blanking armed at 0x{addr:x}"));
         }
     }
-    if !KEYBOARD.load(Ordering::Relaxed) {
+    if !KEYBOARD_ARMED.load(Ordering::Relaxed) {
         // SAFETY: as above.
         if let Ok(addr) = unsafe { er_dinput_suppress_core::install_keyboard_suppression() } {
-            KEYBOARD.store(true, Ordering::Relaxed);
+            KEYBOARD_ARMED.store(true, Ordering::Relaxed);
             log(format_args!("input: keyboard blanking armed at 0x{addr:x}"));
         }
     }
-    MOUSE.load(Ordering::Relaxed) && KEYBOARD.load(Ordering::Relaxed)
+    MOUSE_ARMED.load(Ordering::Relaxed) && KEYBOARD_ARMED.load(Ordering::Relaxed)
 }
 
 // XInput.
@@ -170,13 +136,15 @@ pub fn try_install_dinput() -> bool {
 /// `XINPUT_STATE`: `u32 dwPacketNumber`, then the 12-byte `XINPUT_GAMEPAD`.
 const GAMEPAD_OFFSET: usize = 4;
 const GAMEPAD_BYTES: usize = 12;
+/// What `XInputGetState` answers for a pad that is not there.
+const ERROR_DEVICE_NOT_CONNECTED: usize = 0x48f;
 
 static PAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 static PAD_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// Buttons that were down when taken and have not been seen released since.
 static PAD_HELD: AtomicU16 = AtomicU16::new(0);
 /// Pad reads this module zeroed.
-pub static PAD_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+static PAD_ZEROED: AtomicU64 = AtomicU64::new(0);
 
 /// `XInputGetState(DWORD, XINPUT_STATE*) -> DWORD` in the union's four-argument shape.
 unsafe extern "system" fn xinput_get_state(
@@ -187,7 +155,7 @@ unsafe extern "system" fn xinput_get_state(
 ) -> usize {
     let next = PAD_ORIG.load(Ordering::Acquire);
     if next == 0 {
-        return 0x48f; // ERROR_DEVICE_NOT_CONNECTED
+        return ERROR_DEVICE_NOT_CONNECTED;
     }
     // SAFETY: the next handler or the trampoline, both `UnionFn`.
     let call: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(next) };
@@ -199,18 +167,23 @@ unsafe extern "system" fn xinput_get_state(
     let buttons_at = gamepad.cast::<u16>();
     // SAFETY: the 16-byte structure the caller passed and the chain just filled.
     let buttons = unsafe { buttons_at.read_unaligned() };
-    if taking() {
-        PAD_HELD.store(buttons, Ordering::Release);
-        // SAFETY: as above.
-        unsafe { std::ptr::write_bytes(gamepad, 0, GAMEPAD_BYTES) };
-        PAD_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-        return result;
-    }
-    let held = PAD_HELD.load(Ordering::Acquire) & buttons;
-    PAD_HELD.store(held, Ordering::Release);
-    if held != 0 {
-        // SAFETY: as above.
-        unsafe { buttons_at.write_unaligned(buttons & !held) };
+    match pad_after(taking(), buttons, PAD_HELD.load(Ordering::Acquire)) {
+        PadRead::Zeroed { held } => {
+            PAD_HELD.store(held, Ordering::Release);
+            // SAFETY: as above.
+            unsafe { std::ptr::write_bytes(gamepad, 0, GAMEPAD_BYTES) };
+            PAD_ZEROED.fetch_add(1, Ordering::Relaxed);
+        }
+        PadRead::Passed {
+            buttons: passed,
+            held,
+        } => {
+            PAD_HELD.store(held, Ordering::Release);
+            if passed != buttons {
+                // SAFETY: as above.
+                unsafe { buttons_at.write_unaligned(passed) };
+            }
+        }
     }
     result
 }
@@ -221,7 +194,7 @@ unsafe extern "system" fn xinput_get_state(
 /// thunk reports success while nothing runs (measured by `er-quickload`'s input blocker), so the
 /// jump is followed first, as `er-npc-summons/src/pad.rs` does, and both register on the function
 /// it reaches through the shared union.
-pub fn try_install_pad() -> bool {
+pub fn try_install_pad(log: LogFn) -> bool {
     if PAD_INSTALLED.load(Ordering::Relaxed) {
         return true;
     }
@@ -230,9 +203,11 @@ pub fn try_install_pad() -> bool {
         s!("xinput1_3.dll"),
         s!("xinput9_1_0.dll"),
     ] {
+        // SAFETY: a plain module lookup by name.
         let Ok(module) = (unsafe { GetModuleHandleA(name) }) else {
             continue;
         };
+        // SAFETY: an export lookup in a loaded module.
         let Some(exported) = (unsafe { GetProcAddress(module, s!("XInputGetState")) }) else {
             continue;
         };
@@ -256,4 +231,17 @@ pub fn try_install_pad() -> bool {
         return true;
     }
     false
+}
+
+/// The hooks' half of [`crate::counters`].
+pub(crate) fn counters() -> InputCounters {
+    InputCounters {
+        cursor_hooked: CURSOR_HOOKED.load(Ordering::Relaxed),
+        cursor_forced: CURSOR_FORCED.load(Ordering::Relaxed),
+        keyboard_armed: KEYBOARD_ARMED.load(Ordering::Relaxed),
+        mouse_armed: MOUSE_ARMED.load(Ordering::Relaxed),
+        pad_hooked: PAD_INSTALLED.load(Ordering::Relaxed),
+        pad_zeroed: PAD_ZEROED.load(Ordering::Relaxed),
+        ..InputCounters::default()
+    }
 }

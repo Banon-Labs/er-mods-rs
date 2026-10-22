@@ -229,6 +229,7 @@ def run(
     windows_pid: int | None = None,
     role: str = "default",
     config: dict | None = None,
+    command_file: pathlib.Path | None = None,
 ) -> int:
     # Say something immediately. An empty log used to be ambiguous between "still waiting" and
     # "hung on the first call", and on 2026-09-08 it was the second: the watcher sat mute for a
@@ -395,14 +396,49 @@ def run(
             # the default action and simply records nothing when it is terminated.
             pass
 
+        # Commands for an agent that takes them: a host tool writes `{"seq": n, "op": ...}` to the
+        # command file, inotify on its directory wakes this loop, and each new `seq` is posted to
+        # the agent as a `cmd` message, which the agent takes with `recv('cmd', ...)`. The agent
+        # never re-reads a file on a timer. The command already present at attach is old and is
+        # skipped.
+        last_seq = {"seq": None}
+
+        def read_command():
+            try:
+                cmd = json.loads(command_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            return cmd if isinstance(cmd, dict) else None
+
+        def forward_command() -> None:
+            cmd = read_command()
+            if cmd is None or cmd.get("seq") == last_seq["seq"]:
+                return
+            last_seq["seq"] = cmd.get("seq")
+            try:
+                script.post({"type": "cmd", "payload": cmd})
+            except Exception as exc:  # a script mid-reload must not end the session
+                print(f"command {cmd.get('seq')} not delivered: {exc}", flush=True)
+
+        if command_file is not None:
+            command_file.parent.mkdir(parents=True, exist_ok=True)
+            first = read_command()
+            last_seq["seq"] = first.get("seq") if first else None
+        command_dir = command_file.parent if command_file is not None else agent_path.parent
+
         # An edit to the agent is a write in its directory, so the reload is driven by inotify
         # rather than by re-stat'ing the file twice a second. The directory rather than the file:
         # an editor that saves by writing a temporary file and renaming it over the original
         # replaces the inode, and a watch pinned to the old one would go deaf at the first save.
         try:
-            with er_run_lib.DirectoryWatch(agent_path.parent) as agent_watch:
+            with (
+                er_run_lib.DirectoryWatch(agent_path.parent) as agent_watch,
+                er_run_lib.DirectoryWatch(command_dir) as command_watch,
+            ):
                 while detached["why"] is None:
                     waiting = [wake_read] + ([agent_watch.fd] if agent_watch.available else [])
+                    if command_file is not None and command_watch.available:
+                        waiting.append(command_watch.fd)
                     try:
                         ready, _, _ = select.select(waiting, [], [], WATCH_SLICE_SECONDS)
                     except OSError:
@@ -414,6 +450,8 @@ def run(
                             pass
                     if detached["why"] is not None:
                         break
+                    if command_file is not None:
+                        forward_command()
                     try:
                         current = agent_path.stat().st_mtime
                     except OSError:
@@ -471,6 +509,11 @@ def selftest() -> int:
             "DirectoryWatch(agent_path.parent)" in pathlib.Path(__file__).read_text(encoding="utf-8"),
         ),
         (
+            "commands reach the agent through inotify and script.post, not a file the agent re-reads",
+            "DirectoryWatch(command_dir)" in pathlib.Path(__file__).read_text(encoding="utf-8")
+            and 'script.post({"type": "cmd"' in pathlib.Path(__file__).read_text(encoding="utf-8"),
+        ),
+        (
             "a detach ends the watch at once, through a pipe select can wait on",
             "os.pipe()" in pathlib.Path(__file__).read_text(encoding="utf-8"),
         ),
@@ -517,6 +560,11 @@ def main() -> int:
     parser.add_argument("--pid", type=int, help="Windows pid to attach. Omitting it keeps legacy first-game behavior.")
     parser.add_argument("--role", default="default", help="Role label written into every event.")
     parser.add_argument("--config-json", help="JSON object exposed to the agent as globalThis.__ER_FRIDA_CONFIG")
+    parser.add_argument(
+        "--command-file",
+        type=pathlib.Path,
+        help="JSON file carrying a `seq`; each new seq written there is posted to the agent as a `cmd` message",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
@@ -531,7 +579,8 @@ def main() -> int:
         if not isinstance(config, dict):
             print("--config-json must be a JSON object", file=sys.stderr)
             return 1
-    return run(args.agent, args.log, endpoint=args.endpoint, windows_pid=args.pid, role=args.role, config=config)
+    return run(args.agent, args.log, endpoint=args.endpoint, windows_pid=args.pid, role=args.role, config=config,
+               command_file=args.command_file)
 
 
 if __name__ == "__main__":

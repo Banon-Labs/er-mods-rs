@@ -811,6 +811,12 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
                 "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"
             ));
         }
+        // The mid hook inside the refresh skips each null slot at its first read, so with it armed
+        // the valid slots keep their portrait requests instead of losing the whole call.
+        if null_mask != 0 && er_quit_menu_core::profile_table_mid_hook::profile_table_mid_hook_armed()
+        {
+            return true;
+        }
         if null_mask != 0 {
             let n = PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             let skip_key = ((caller_rva & 0xffffff) << 10) | null_mask as usize;

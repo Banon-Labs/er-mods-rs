@@ -18,8 +18,17 @@ er-game-base = { path = "../er-game-base" }
 er-npc-summons-core = { path = "../er-npc-summons-core" }
 # A companion's build URL is parsed by the importer's own model, never a second parser.
 er-build-import-core = { path = "../er-build-import-core" }
+# Mid-function hooks for the companions' overhead tags: a jump at any instruction boundary whose
+# routine reads and writes the registers and returns where execution resumes. MinHook only patches
+# function entries. See `src/mid_hooks/mod.rs`. Not windows-only: it builds on the host, so the
+# routines' unit tests run.
+ilhook = "2.3"
+# The look the duel picker draws in, shared with every other in-game panel: colors, sizes at
+# 1080p, the fonts handed to the overlay host. Host-buildable; only its drawing half is
+# `cfg(windows)`.
+er-overlay-theme = { path = "../er-overlay-theme" }
 
-# build.rs assembles the byte-checked prologue from named instructions.
+# build.rs assembles the byte-checked prologue and the mid-hook windows from named instructions.
 [build-dependencies]
 iced-x86 = { version = "1.21", default-features = false, features = [
   "std",
@@ -28,8 +37,8 @@ iced-x86 = { version = "1.21", default-features = false, features = [
 
 [target.'cfg(windows)'.dependencies]
 # The MinHook wrapper, for the four Mimic Tear detours (BuddyGenerator, GetBuddyList,
-# GetBuddyParam, CreateSummonChr). Each is a bare `MhHook` with a typed detour; all four addresses
-# are recorded in `scripts/me3-dll-conflicts.toml`.
+# GetBuddyParam, CreateSummonChr), and the voice-chat lookup the companions' tag rows reach. Each
+# is a bare `MhHook` with a typed detour.
 er-hook = { path = "../er-hook" }
 # Only the importer's catalog (names to item ids from the game's own tables) and its reinforce
 # level clamp. Its phase machine, fetch worker and game task are never started from this DLL, so

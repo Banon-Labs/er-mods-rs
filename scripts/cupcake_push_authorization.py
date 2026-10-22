@@ -45,10 +45,12 @@ at this tool call, and nothing else:
    shell operators, no other options, no refspec syntax (`+`, `:`), one branch, not main or master.
    The branch tip is read with `git rev-parse refs/heads/<branch>` in the target repository; the
    command text is never trusted for it. The tip must start with the authorized sha.
-5. One authorization buys one push. The message uuid is recorded in
-   `.cupcake/state/push-authorizations.jsonl` (gitignored) with the tool call that spent it. The
-   same message with a different tool call is refused. The same tool call again is allowed, because
-   more than one hook may evaluate the same event; it is still the same push.
+5. One authorization buys one push that ran. The message uuid is recorded in
+   `.cupcake/state/push-authorizations.jsonl` (gitignored) with the tool call holding it. The same
+   tool call again is allowed, because more than one hook may evaluate the same event; it is still
+   the same push. A different tool call is refused, unless the chain shows Claude Code refused the
+   holder before it ran (another policy denied it, or the user rejected it): then the new call takes
+   the authorization over and the record says which call it replaces. See `spend`.
 
 What this cannot stop, stated plainly: the transcript is a file owned by the same user the agent's
 shell runs as. Appending to it achieves nothing (point 1), and
@@ -278,6 +280,12 @@ def prompt_text(entry: dict) -> str | None:
 
 def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]:
     """(message uuid, text) of the last genuine prompt on the chain ending at this tool call."""
+    message_uuid, text, _chain = prompt_and_chain(path, tool_use_id, deadline)
+    return message_uuid, text
+
+
+def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str, str, list[dict]]:
+    """`last_prompt`, plus every entry on the chain from this tool call back to that prompt."""
     # Claude Code does not write the tool_use line before it starts the PreToolUse hook; the hook
     # and the write race. Measured 2026-10-14 on Claude Code 2.1.281 by recording when each line
     # of a subagent transcript landed: tool_use lines landed 0.10-0.11 s after their `timestamp`,
@@ -314,7 +322,7 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
     if not holders:
         raise Refused(f"this tool call was still not in the transcript {LOCATE_DEADLINE_SECONDS:g} s "
                       "after the check began, so its conversation cannot be read; run the same "
-                      "push again")
+                      "command again")
     # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
     # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
     # were taken as the start it would carry its own forged parent onto the chain.
@@ -328,15 +336,16 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
             if uid in by_uuid:
                 raise Refused("the transcript repeats an entry uuid, so it cannot be trusted")
             by_uuid[uid] = e
-    node, seen = start, set()
+    node, seen, chain = start, set(), []
     while node is not None:
         uid = node.get("uuid")
         if uid in seen:
             break
         seen.add(uid)
+        chain.append(node)
         text = prompt_text(node)
         if text is not None:
-            return uid, text
+            return uid, text, chain
         if node.get("type") == "user" and node.get("isCompactSummary"):
             break
         parent = node.get("parentUuid")
@@ -346,25 +355,85 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
 
 # --- one push per authorization ----------------------------------------------------------------
 
-def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str) -> bool:
-    """Record the spend; False when this message already paid for a different tool call."""
+# The `toolDenialKind` values Claude Code writes on the tool_result of a call it refused before
+# running it. Measured 2026-10-20 over the 30 newest transcripts in this project (553 refusals):
+# `permission-rule` (a PreToolUse hook or a permission rule denied it -- 552 of them begin
+# `PreToolUse:<tool> hook error:`, one `Permission for this command was ...`) and `user-rejected`
+# (the user answered a permission prompt with no). Both are decided before the tool starts.
+# `cancelled` is left out on purpose: it is what an interrupt writes, and an interrupt can land on a
+# push that is already running.
+NOT_RUN_DENIAL_KINDS = {"permission-rule", "user-rejected"}
+
+
+def call_outcome(chain: list[dict], tool_use_id: str) -> bool | None:
+    """Whether `tool_use_id` ran, read only from entries on this tool call's own chain.
+
+    True: it ran (it has a result that is not a refusal). False: Claude Code refused it before it
+    ran. None: it has no result on the chain yet -- still running, or issued in parallel with this
+    one -- which the caller treats as having run. Only chain entries count, so a refusal appended to
+    the transcript by anyone but Claude Code is never read (see point 1 of the module docstring).
+    """
+    if not any(holds_tool_use(e, tool_use_id) for e in chain):
+        return None
+    for e in chain:
+        if e.get("type") != "user":
+            continue
+        content = (e.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+        if not any(b.get("tool_use_id") == tool_use_id for b in results):
+            continue
+        # `toolDenialKind` belongs to the entry, so it can only describe a result that is alone.
+        refused = (len(results) == 1 and results[0].get("is_error") is True
+                   and e.get("toolDenialKind") in NOT_RUN_DENIAL_KINDS)
+        return not refused
+    return None
+
+
+def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str,
+          ran=lambda _tool_use_id: True) -> str | None:
+    """Record the spend; None when this push may go, else the reason it may not.
+
+    A spend is recorded at PreToolUse, before the push runs, so that two pushes can never both
+    hold one authorization. But a PreToolUse spend also lands for a push that another policy then
+    denies (2026-10-20: the runtime-evidence guard denied `toolu_012cvxhZQpvkTq2UtRzsQwVy` after
+    this signal had spent the user's authorization on it, and the user had to type it again). So
+    the last record for a message names the call currently holding it, and a different call may
+    take it over only when `ran(holder)` is False, meaning Claude Code recorded the holder as
+    refused before it ran. A holder that ran, or whose outcome is not known yet, keeps it: one
+    authorization still pays for exactly one push that ran.
+    """
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(STATE_FILE, "a+", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.seek(0)
+        holders: list[str] = []
         for line in fh:
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
             if isinstance(rec, dict) and rec.get("message_uuid") == message_uuid:
-                return rec.get("tool_use_id") == tool_use_id
+                holders.append(rec.get("tool_use_id"))
+        record = {"message_uuid": message_uuid, "tool_use_id": tool_use_id,
+                  "branch": branch, "tip": tip, "at": time.time()}
+        if holders:
+            holder = holders[-1]
+            if holder == tool_use_id:
+                return None  # the same call evaluated again, by a second hook
+            if tool_use_id in holders:
+                return "that authorization has moved on from this tool call to a later one"
+            outcome = ran(holder) if isinstance(holder, str) else True
+            if outcome is None:
+                return ("that authorization is held by another push whose outcome is not in the "
+                        "transcript yet")
+            if outcome:
+                return "that authorization was already spent on another push"
+            record["replaces"] = holder
         fh.seek(0, os.SEEK_END)
-        fh.write(json.dumps({
-            "message_uuid": message_uuid, "tool_use_id": tool_use_id,
-            "branch": branch, "tip": tip, "at": time.time(),
-        }) + "\n")
-        return True
+        fh.write(json.dumps(record) + "\n")
+        return None
 
 
 # --- the decision ------------------------------------------------------------------------------
@@ -392,7 +461,8 @@ def decide(event: dict, started: float) -> None:
     if not isinstance(tool_use_id, str) or not tool_use_id:
         raise Refused("the event names no tool call", branch, tip)
     try:
-        message_uuid, text = last_prompt(path, tool_use_id, started + LOCATE_DEADLINE_SECONDS)
+        message_uuid, text, chain = prompt_and_chain(path, tool_use_id,
+                                                     started + LOCATE_DEADLINE_SECONDS)
     except Refused as r:
         raise Refused(r.reason, branch, tip)
     # Read the tip again: the transcript step may have waited seconds, and the tip compared with
@@ -406,8 +476,10 @@ def decide(event: dict, started: float) -> None:
     if not tip.startswith(m.group(1).lower()):
         raise Refused(f"the user authorized {m.group(1)}, which is not the tip of `{branch}`",
                       branch, tip)
-    if not spend(message_uuid, tool_use_id, branch, tip):
-        raise Refused("that authorization was already spent on another push", branch, tip)
+    refusal = spend(message_uuid, tool_use_id, branch, tip,
+                    ran=lambda holder: call_outcome(chain, holder))
+    if refusal is not None:
+        raise Refused(refusal, branch, tip)
     emit("AUTHORIZED", branch, tip, message_uuid)
 
 

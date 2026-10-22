@@ -51,7 +51,7 @@
 #[cfg(windows)]
 pub use live::{
     Nearby, Verdict, arm, arm_sweep, clear_sweep, end_search, found_host_band, is_armed, nearby,
-    tick, verdict,
+    poll_band_query, send_band_query, sweep_is_idle, tick, verdict,
 };
 
 /// Host-side stand-ins, so the rest of the crate compiles under `cargo test` on Linux.
@@ -609,8 +609,17 @@ mod live {
             && stage != STAGE_SENT
             && crate::local_invasion_filter::session_is_idle()
         {
-            walk_the_ring_while_nothing_is_searching();
-            sweep_tick();
+            // The band census is the third asker on this interface, and the same one-in-flight
+            // rule binds it: while its query is out the sweep waits, and it sends only when the
+            // sweep has nothing to do. The sweep keeps priority, because its answer decides where
+            // a search the player started points; the census is a count they glance at.
+            if !crate::band_census::in_flight() {
+                walk_the_ring_while_nothing_is_searching();
+                sweep_tick();
+            }
+            if crate::band_census::in_flight() || sweep_is_idle() {
+                crate::band_census::tick();
+            }
         }
         hand_over_when_the_neighbourhood_is_empty();
     }
@@ -697,7 +706,7 @@ mod live {
     /// rather than being built per iteration: the filters are accumulated on the interface and
     /// consumed by `RequestLobbyList`, so anything Steam kept a pointer to has to still be there
     /// when that call runs.
-    fn send_query(filters: &[(&str, &str, i32)]) -> Option<u64> {
+    fn send_query(filters: &[(&str, &str, i32)], result_count: i32) -> Option<u64> {
         // Claimed before the first filter is written and released after the request that consumes
         // them. It also tells the hunt detour that the request about to arrive is ours, so nothing
         // is appended to a query whose filters are its entire meaning.
@@ -758,7 +767,7 @@ mod live {
                 iface,
                 DISTANCE_WORLDWIDE,
             );
-            core::mem::transmute::<usize, AddResultCountFn>(add_count)(iface, RESULT_COUNT);
+            core::mem::transmute::<usize, AddResultCountFn>(add_count)(iface, result_count);
             let add_string = core::mem::transmute::<usize, AddStringFilterFn>(add_string);
             for (key, value, comparison) in &terminated {
                 add_string(iface, key.as_ptr(), value.as_ptr(), *comparison);
@@ -817,8 +826,69 @@ mod live {
         Answer::Count(u32::from_le_bytes(payload))
     }
 
+    /// Ask for every open host in this player's pool publishing one band value, and in one
+    /// `ykssr_dlc` half of it when `dlc` names one. For the band census
+    /// (`crate::band_census`), through the same staging as every other query here, so the hunt
+    /// detour leaves it alone and Seamless's request cannot consume its filters.
+    ///
+    /// The open flag is the one every search of Seamless's carries (`AVAILABLE_KEY`), so a host
+    /// counted here is one a search of this player's could return.
+    pub fn send_band_query(band: &str, dlc: Option<&str>) -> Option<u64> {
+        let mut filters = vec![
+            (SEAMLESS_BAND_KEY, band, COMPARISON_EQUAL),
+            (AVAILABLE_KEY, "true", COMPARISON_EQUAL),
+        ];
+        if let Some(dlc) = dlc {
+            filters.push(("ykssr_dlc", dlc, COMPARISON_EQUAL));
+        }
+        send_query(
+            &filters,
+            er_invasion_warp_core::band_census::RESULT_COUNT_REQUEST,
+        )
+    }
+
+    /// Collect a band query: `None` while Steam has not answered, else the lobby ids it returned
+    /// or [`er_invasion_warp_core::band_census::Answer::Failed`].
+    #[must_use]
+    pub fn poll_band_query(call: u64) -> Option<er_invasion_warp_core::band_census::Answer> {
+        use er_invasion_warp_core::band_census::Answer as Census;
+        match poll_query(call) {
+            Answer::Pending => None,
+            Answer::Failed => Some(Census::Failed),
+            Answer::Count(matching) => Some(Census::Lobbies(lobby_ids(matching))),
+        }
+    }
+
+    /// The ids of the lobbies a finished query returned, in Steam's order.
+    fn lobby_ids(matching: u32) -> Vec<u64> {
+        let Some(iface) = matchmaking() else {
+            return Vec::new();
+        };
+        let Some(by_index) = export(GET_LOBBY_BY_INDEX) else {
+            return Vec::new();
+        };
+        // SAFETY: an export resolved by name from a module that is loaded.
+        let by_index = unsafe { core::mem::transmute::<usize, GetLobbyByIndexFn>(by_index) };
+        (0..matching)
+            .filter_map(|index| i32::try_from(index).ok())
+            // SAFETY: the index is below the count Steam reported for this very query.
+            .map(|index| unsafe { by_index(iface, index) })
+            .filter(|id| *id != 0)
+            .collect()
+    }
+
+    /// Whether the neighbourhood sweep has nothing to send or collect. The census asks only then,
+    /// so the two never have requests in flight on one interface at once.
+    #[must_use]
+    pub fn sweep_is_idle() -> bool {
+        matches!(sweep_work(), Work::Idle)
+    }
+
     fn send() {
-        let Some(call) = send_query(&[(LOBBY_MAP_KEY, EMPTY_VALUE, COMPARISON_NOT_EQUAL)]) else {
+        let Some(call) = send_query(
+            &[(LOBBY_MAP_KEY, EMPTY_VALUE, COMPARISON_NOT_EQUAL)],
+            RESULT_COUNT,
+        ) else {
             return;
         };
         CALL.store(call, Ordering::SeqCst);
@@ -1273,7 +1343,10 @@ mod live {
                 let value = crate::lobby_publish::map_value(
                     er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block),
                 );
-                match send_query(&[(LOBBY_MAP_KEY, value.as_str(), COMPARISON_EQUAL)]) {
+                match send_query(
+                    &[(LOBBY_MAP_KEY, value.as_str(), COMPARISON_EQUAL)],
+                    RESULT_COUNT,
+                ) {
                     Some(call) => {
                         with_this_sweep(generation, index, |sweep| sweep.call = Some(call));
                         Outcome::Nothing

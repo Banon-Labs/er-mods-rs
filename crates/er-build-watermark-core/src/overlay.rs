@@ -4,7 +4,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hudhook::hooks::dx12::ImguiDx12Hooks;
-use hudhook::imgui::{Context, FontConfig, FontSource, Ui};
+use hudhook::imgui::{Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
 use crate::layout;
@@ -59,19 +59,13 @@ impl WatermarkOverlay {
 
 impl ImguiRenderLoop for WatermarkOverlay {
     fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        // A dedicated font size rather than scaling the default: imgui's 13px face scaled up is
-        // blurry, and a watermark that is hard to read at 25% defeats the one state that matters.
-        ctx.fonts().add_font(&[FontSource::DefaultFontData {
-            config: Some(FontConfig {
-                size_pixels: layout::FONT_SIZE_PX,
-                ..FontConfig::default()
-            }),
-        }]);
+        // The default face every host gives its atlas, at the watermark's size: a watermark that
+        // is hard to read at 25% defeats the one state that matters.
+        let font_px = crate::overlay_host::add_host_default_font(ctx);
         self.rebuild();
         (self.log)(format_args!(
-            "build-watermark: render loop initialized, {} row(s), font {}px",
-            self.rows.len(),
-            layout::FONT_SIZE_PX
+            "build-watermark: render loop initialized, {} row(s), font {font_px}px",
+            self.rows.len()
         ));
     }
 

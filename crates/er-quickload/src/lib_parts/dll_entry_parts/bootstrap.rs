@@ -89,6 +89,96 @@ pub unsafe extern "system" fn DirectInput8Create(
     unsafe { forward(hinst, version, riid, out, outer) }
 }
 
+/// Import a build planner link into the character in the world, the way the `Load Build from URL`
+/// link field does when a player accepts one: validate it, start the import, and remember it as
+/// `build_url` so a relaunch lands on the same build.
+///
+/// For tooling that drives the importer without the menu: the portrait batch swaps one build for
+/// the next in place through this. Starting the import only spawns the fetch worker -- the game
+/// task applies it -- so any thread may call it, a Frida RPC thread included. Returns 1 when the
+/// import started and 0 when it was refused (a link that does not validate, or an import already in
+/// flight); the autoload debug log says which.
+///
+/// # Safety
+///
+/// `url` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn er_quickload_request_build_url(url: *const std::ffi::c_char) -> i32 {
+    use er_quit_menu_core::build_url_row::{
+        BuildUrlPress, persist_build_url, system_quit_start_build_import_url,
+    };
+
+    if url.is_null() {
+        return 0;
+    }
+    // The caller is another process's agent, so the pointer is foreign: read it through
+    // `safe_read_cstr`, which fails closed on an unmapped page instead of walking off it.
+    let Some(bytes) = (unsafe { er_game_base::mem::safe_read_cstr(url as usize, 4096) }) else {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export refused an unreadable link pointer"
+        ));
+        return 0;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export refused a link that is not UTF-8"
+        ));
+        return 0;
+    };
+    let url = text.trim();
+    if let Err(rejection) = er_build_import_core::validate_build_url(url) {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export REFUSED {url:?} ({})",
+            rejection.indicator()
+        ));
+        return 0;
+    }
+    let press = system_quit_start_build_import_url(url);
+    append_autoload_debug(format_args!("system-quit-build-url: export asked for {url:?} -> {press:?}"));
+    match press {
+        BuildUrlPress::Started(_) => {
+            persist_build_url(url);
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// Write the live character's planner document to `path` as JSON, without building a link.
+///
+/// The portrait batch's save mode stores each save character on the player's planner account
+/// through this. The read runs on the game task and the write on a worker, so any thread may call
+/// it; the file appears, whole, once both have run. Returns 1 when the export was latched and 0
+/// when it was refused (no path, or an export already in flight); the debug log says which.
+///
+/// # Safety
+///
+/// `path` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn er_quickload_request_build_document(path: *const std::ffi::c_char) -> i32 {
+    use er_build_import_runtime::export;
+
+    if path.is_null() {
+        return 0;
+    }
+    // The caller is another process's agent, so the pointer is foreign: read it through
+    // `safe_read_cstr`, which fails closed on an unmapped page instead of walking off it.
+    let Some(bytes) = (unsafe { er_game_base::mem::safe_read_cstr(path as usize, 4096) }) else {
+        return 0;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return 0;
+    };
+    if export::phase() != export::Phase::Idle && export::export_latch_is_stale() {
+        export::reset();
+    }
+    let latched = export::request_document(std::path::PathBuf::from(text.trim()));
+    append_autoload_debug(format_args!(
+        "system-quit-generate-link: export asked for the document at {text:?} -> {latched:?}"
+    ));
+    i32::from(latched.is_ok())
+}
+
 fn game_main_window_handle_usize() -> usize {
     game_main_window().0 as usize
 }

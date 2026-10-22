@@ -149,7 +149,6 @@ NATIVE_PROFILE_READ_PHASE
 PORTRAIT_LAST_CONFIRMED_SLOT
 PORTRAIT_SLOT_FLIP_CANDIDATE
 PORTRAIT_SLOT_FLIP_STREAK
-PRESENT
 PROFILE_SRV_DUMPED
 RENDER_FRAME_COUNT
 RETURN_DESKTOP_CONTROLLER_DIAG
@@ -166,10 +165,10 @@ SYSTEM_QUIT_TOP_RESTORE_COUNT
 TFC_DRAIN_DIALOG
 TITLE_TEXT_GFX_VALUES
 
-# WIRE-INVISIBLE -- both are er-hook TEST arrays, written inside the five-argument dispatcher's
-#          own handler as `cell.store(value, ..)` over `.iter().zip([a, b, c, d, e])`. The write
-#          never names the static, which is the one shape the shared write rule cannot see, so
-#          these are false negatives rather than dead counters: deleting either would delete the
-#          assertion that `union_dispatch5` forwards all five arguments.
+# WIRE-INVISIBLE -- an er-hook TEST array, written inside the five-argument dispatcher's own
+#          handler as `cell.store(value, ..)` over `.iter().zip([a, b, c, d, e])`. The write never
+#          names the static, which is the one shape the shared write rule cannot see, so this is a
+#          false negative rather than a dead counter: deleting it would delete the assertion that
+#          `union_dispatch5` forwards all five arguments. Its sibling `SEEN` left this list only
+#          because the census is by name and er-cel-shade's `vertex::process::SEEN` is written.
 GAME_SAW
-SEEN

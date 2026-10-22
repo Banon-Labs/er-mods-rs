@@ -37,6 +37,29 @@ signals:
     command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/live_er_run.sh"'
     timeout_seconds: 8
 
+  # Does the closing message ask for `authorize <sha>` on a commit the runtime-evidence gate will
+  # refuse? Read by no_authorize_without_run_stamp on Stop. Registered here rather than left to
+  # discovery because the refusing answer is the slow one: check-runtime-evidence.sh tries to
+  # carry every older run forward before it says no, about 4 s on 2026-10-16, and cupcake drops a
+  # discovered signal at 5 s (the drop is an allow). The script caps its own evidence run at 25 s.
+  # Measured 2026-10-16 against cupcake 0.5.2: an entry here with the name of a script in
+  # signals/ replaces the discovered one and carries this timeout, and signals run concurrently,
+  # so only a turn whose closer names `authorize <sha>` waits for it.
+  last_assistant_authorize_without_run_stamp:
+    command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/last_assistant_authorize_without_run_stamp.sh"'
+    timeout_seconds: 30
+
+  # The verdict behind ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE. On a push it runs
+  # scripts/check-runtime-evidence.sh, the pre-push hook's own script, so the two cannot disagree;
+  # the refusing answer tries every older run for carry-forward first and can take longer than the
+  # 5 s a discovered signal gets, and a dropped signal is an allow. The script caps itself at 25 s.
+  # Every other Bash call answers in three git reads. The fallback to the checkout's own top is for
+  # `cupcake eval` outside a Claude hook (scripts/test-cupcake-policies.py), where
+  # CLAUDE_PROJECT_DIR is unset and the bare spelling names `/.cupcake/...`, a failed signal.
+  runtime_evidence_for_head:
+    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/runtime_evidence_for_head.sh"'
+    timeout_seconds: 30
+
   origin_main_oids:
     command: 'if [ -n "${CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE:-}" ]; then printf "%s" "$CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"; else local_oid="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"; remote_oid="$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | cut -f1)"; printf "%s %s" "$local_oid" "$remote_oid"; fi'
     timeout_seconds: 8

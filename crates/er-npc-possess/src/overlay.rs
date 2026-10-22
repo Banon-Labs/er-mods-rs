@@ -37,15 +37,26 @@
 //!
 //! The counters are therefore split by what they actually count: [`frames`] is Present frames this
 //! module drew into, and each panel counts its own builds.
+//!
+//! # The look
+//!
+//! Both panels draw in the workspace's shared theme (`er-overlay-theme`): its window and panel
+//! styles, its colors, and its fonts, which the overlay host builds into its atlas and hands back
+//! in each frame. That is why this module draws only from [`guest_draw`], even while it hosts: the
+//! fonts and the display's scale arrive in the frame the host passes its guests, so a host that
+//! drew its own panels directly would draw them without either.
 
 #![cfg(windows)]
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_build_watermark_core::overlay_host::{OverlayFrame, adopt_frame, register_with_host};
+use er_build_watermark_core::overlay_host::{
+    OVERLAY_ABI_TAG, OverlayFrame, adopt_frame, register_guest, register_with_host,
+};
+use er_overlay_theme::{self as theme, Font, FrameFonts, Theme};
 use hudhook::hooks::dx12::ImguiDx12Hooks;
-use hudhook::imgui::{Condition, Context, StyleColor, Ui};
+use hudhook::imgui::{Condition, Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
 use crate::log::possess_log;
@@ -62,12 +73,8 @@ static INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// The DLL's own module handle, stashed by [`arm`] so the lazy install has one to hand hudhook.
 static HMODULE: AtomicUsize = AtomicUsize::new(0);
 
-/// Everything the panels draw is scaled by this. 1.5 because both are read at a desk, from a game
-/// running full-screen at whatever resolution the monitor is, and imgui's default face is sized
-/// for a windowed tool rather than for that.
-pub(crate) const FONT_SCALE: f32 = 1.5;
-
-/// Gap between the attack-set panel and the top-right corner of the screen.
+/// Gap between the attack-set panel and the top-right corner of the screen, at 1080p; scaled with
+/// the panel like everything else in it.
 const BANNER_MARGIN: f32 = 24.0;
 /// Opaque enough to read white text over a bright sky, transparent enough not to be a hole in the
 /// frame. The panel sits over gameplay for the whole possession, so this is a different judgement
@@ -77,14 +84,6 @@ const BANNER_BG_ALPHA: f32 = 0.55;
 /// id still has to be STABLE: imgui derives window identity from the label, so letting the page
 /// number into it would make every page turn a brand-new window with its own saved state.
 const BANNER_ID: &str = "###er-npc-possess-attack-sets";
-
-/// Ordinary text.
-const INK: [f32; 4] = [0.90, 0.90, 0.90, 1.0];
-/// The header of a hand whose page key just turned it. The same amber the picker's cursor uses, so
-/// "this is the thing that just changed" means one colour across both of this DLL's panels.
-const FLASH_INK: [f32; 4] = [1.0, 0.85, 0.35, 1.0];
-/// The creature id, the bucket names and the footer -- present, subordinate to the numbers.
-const DIM_INK: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
 
 pub(crate) fn frames() -> usize {
     FRAMES.load(Ordering::Relaxed)
@@ -103,11 +102,34 @@ pub(crate) fn arm(hmodule_raw: usize) {
     HMODULE.store(hmodule_raw, Ordering::SeqCst);
 }
 
-/// One frame: every panel this DLL owns, in back-to-front order.
-fn draw(ui: &Ui) {
+/// One frame: every panel this DLL owns, in back-to-front order, in the theme at the display's
+/// scale (`ui_scale`, the display's height over 1080) and in the `fonts` the host has built of
+/// the ones [`request_theme_fonts`] asked for.
+fn draw(ui: &Ui, ui_scale: f32, fonts: &FrameFonts) {
     FRAMES.fetch_add(1, Ordering::Relaxed);
+    let frame_theme = Theme::new(
+        theme::panel_scale(ui_scale),
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
+    );
+    let _theme = theme::enter(frame_theme);
     crate::picker::render::draw(ui);
     draw_banner(ui);
+}
+
+/// Hand the theme's faces to the overlay host, the first time either panel is drawn open; every
+/// later call does nothing. The host's default font is drawn with until they are built.
+pub(crate) fn request_theme_fonts() {
+    let scale = theme::current().scale;
+    if let Some(handles) = theme::request_fonts(scale) {
+        possess_log(format_args!(
+            "overlay: panel fonts: Plex Sans regular, medium and semibold and JetBrains Mono \
+             handed to the overlay host at scale {scale}: handles {handles:?}. A 0 is a face the \
+             host refused; a handle another panel already holds is that panel's fonts, shared"
+        ));
+    }
 }
 
 /// The attack-set panel, top right, for as long as something is possessed.
@@ -121,16 +143,18 @@ fn draw_banner(ui: &Ui) {
         return;
     };
     BANNER_DRAWS.fetch_add(1, Ordering::Relaxed);
+    request_theme_fonts();
+    let t = theme::current();
     let display = ui.io().display_size;
-    ui.window(BANNER_ID)
+    let margin = t.px(BANNER_MARGIN).round();
+    let window_style = theme::window_style(ui);
+    let begun = ui
+        .window(BANNER_ID)
         // Pinned to the corner, with the pivot on the panel's own top-right so the auto-sized
         // width does not have to be known in advance. `Always` rather than `FirstUseEver`
         // because this is an indicator rather than a tool: it must not be draggable off screen,
         // and it must follow a resolution change instead of being left where the old one put it.
-        .position(
-            [display[0] - BANNER_MARGIN, BANNER_MARGIN],
-            Condition::Always,
-        )
+        .position([display[0] - margin, margin], Condition::Always)
         .position_pivot([1.0, 0.0])
         .always_auto_resize(true)
         .no_decoration()
@@ -144,38 +168,55 @@ fn draw_banner(ui: &Ui) {
         // Not persisted to imgui.ini: it has a fixed place, so remembering a position for it
         // would only give a future session a chance to restore a stale one.
         .save_settings(false)
+        // The theme's panel background, let further through: the panel sits over gameplay.
         .bg_alpha(BANNER_BG_ALPHA)
-        .build(|| {
-            // Scoped to this window: `set_window_font_scale` applies to the window imgui is
-            // currently building, so it cannot leak into another shell's overlay drawing on the
-            // same frame through the shared host.
-            ui.set_window_font_scale(FONT_SCALE);
-            banner_rows(ui, &banner, flashing);
-        });
+        .begin();
+    drop(window_style);
+    let Some(_window) = begun else {
+        return;
+    };
+    theme::apply_font_scale(ui);
+    let _body = theme::font(ui, Font::Body);
+    let _style = theme::panel_style(ui);
+    // The theme's window style has no padding, so the lines are set in from the edges by hand: a
+    // group at the padding's offset, then an empty item that far past its far corner, which is
+    // what the window sizes itself to.
+    let pad = [
+        t.px(theme::CONTENT_PAD[0]).round(),
+        t.px(theme::CONTENT_PAD[1]).round(),
+    ];
+    ui.set_cursor_pos(pad);
+    ui.group(|| banner_rows(ui, &banner, flashing));
+    ui.set_cursor_screen_pos(ui.item_rect_max());
+    ui.dummy(pad);
+    let pos = ui.window_pos();
+    let size = ui.window_size();
+    theme::painter(ui).outline(pos, [pos[0] + size[0], pos[1] + size[1]], theme::RULE, 0.0);
 }
 
+/// The panel's lines, in mono: [`Banner`] lines its columns up with spaces.
 fn banner_rows(ui: &Ui, banner: &Banner, flashing: bool) {
-    tinted(ui, DIM_INK, &banner.title());
+    // The creature and the footer are present but subordinate to the hands, so they are quiet.
+    theme::text(ui, Font::Mono, theme::TEXT_QUIET, &banner.title());
     for hand in &banner.hands {
         // The highlight is the half of this feature with a deadline. The complaint was not only
         // "I cannot see which set I am on", it was "I cannot see the change happen" -- so the
-        // hand whose key was just pressed is the one that changes colour, and only for
-        // `banner::FLASH`.
+        // hand whose key was just pressed is the one that changes color, and only for
+        // `banner::FLASH`. The accent's bright half is the theme's color for what just changed.
         let hot = flashing && banner.flash == Some(hand.hand);
-        tinted(ui, if hot { FLASH_INK } else { INK }, &hand.header());
+        let color = if hot {
+            theme::ACCENT_HOVER
+        } else {
+            theme::TEXT
+        };
+        theme::text(ui, Font::Mono, color, &hand.header());
         for lead in &hand.leads {
-            tinted(ui, INK, &lead.line());
+            theme::mono(ui, &lead.line());
         }
     }
     if let Some(footer) = banner.footer() {
-        tinted(ui, DIM_INK, &footer);
+        theme::text(ui, Font::Mono, theme::TEXT_QUIET, &footer);
     }
-}
-
-fn tinted(ui: &Ui, colour: [f32; 4], text: &str) {
-    let tint = ui.push_style_color(StyleColor::Text, colour);
-    ui.text(text);
-    tint.pop();
 }
 
 /// The guest entry point: adopt the host's imgui and draw.
@@ -190,22 +231,31 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    draw(ui);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    draw(ui, ui_scale, &fonts);
 }
 
 /// This module's own render loop, used only when nothing else in the process hosts one.
 struct PossessOverlay;
 
 impl ImguiRenderLoop for PossessOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        possess_log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        possess_log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {
         // Guests first and before any early return: this module hosts the only imgui context in
-        // the process, so returning early here draws nothing for every other overlay too.
+        // the process, so returning early here draws nothing for every other overlay too. This
+        // module's own panels are one of the guests (see the module docs).
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
-        draw(ui);
         // The watermark is not a guest -- it never registers one, because its loser path assumes
         // whichever module hosts will carry its rows directly. See er-invasion-path's render loop,
         // where omitting this left a whole session with no watermark at all.
@@ -286,9 +336,18 @@ fn install() {
     {
         Ok(()) => {
             er_build_watermark_core::overlay_host::become_host();
+            // Drawn as this host's own guest, so the panels get their fonts and the display's
+            // scale out of a frame like every other guest.
+            let registered = register_guest(OVERLAY_ABI_TAG, guest_draw);
             possess_log(format_args!(
                 "overlay: hudhook dx12 overlay installed (this module HOSTS the imgui context)"
             ));
+            if !registered {
+                possess_log(format_args!(
+                    "overlay: the host refused this module's own panels as a guest; neither the \
+                     creature list nor the attack-set panel can be drawn"
+                ));
+            }
         }
         Err(error) => {
             INSTALLED.store(0, Ordering::SeqCst);

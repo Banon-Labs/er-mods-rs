@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What poise and which absorption to aim for, from what the RL window's PvP builds hit with.
 
-    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,vit=41,str=80,dex=20,int=7,fth=8,arc=9 \\
+    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,end=41,str=80,dex=20,int=7,fth=8,arc=9 \\
         --talismans "Two Fingers Heirloom,Great-Jar's Arsenal,Bull-Goat's Talisman,Two-Handed Sword Talisman" \\
         --budget 46.4 --budget 52.0 --weapons "Executioner's Greataxe|both,Halberd|one"
 
@@ -100,6 +100,7 @@ FAMILY_JUDGES = {"r1": [0], "r2": [100], "move": [120, 125, 130, 140], "jump": [
 RANGED_TYPES = {50, 51, 53, 55, 56, 57, 61}
 REGULAR_MAX = 25
 
+#: `vit` is the planner's spelling of Endurance, still taken on the command line.
 STAT_ALIAS = {"vit": "end"}
 
 
@@ -457,7 +458,7 @@ def buff_table(t, share: dict, builds: list[dict]) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stats", required=True, help="planner keys: vig,mnd,vit,str,dex,int,fth,arc")
+    ap.add_argument("--stats", required=True, help="vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)")
     ap.add_argument("--talismans", default="")
     ap.add_argument("--great-rune")
     ap.add_argument("--rl", type=int, default=150)

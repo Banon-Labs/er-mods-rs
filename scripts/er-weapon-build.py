@@ -376,8 +376,8 @@ def slug(name: str) -> str:
 
 
 def stats_text(stats: dict, rl: int) -> str:
-    """The pipeline's `--stats`: planner keys, `vit` being Endurance, and the RL they sum to."""
-    return ",".join(f"{k}={stats[k]}" for k in ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc")) + f",rl={rl}"
+    """The pipeline's `--stats`: the eight attributes and the RL they sum to."""
+    return ",".join(f"{k}={stats[k]}" for k in ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc")) + f",rl={rl}"
 
 
 def fill_talismans(ranked: list[str], fallback: list[str], group_of, slots: int = TALISMAN_SLOTS) -> list[str]:
@@ -534,10 +534,34 @@ def fetch_build(build_id: str) -> dict:
     return doc
 
 
-def pick_talismans(opt, weapon: str, affinity: str) -> list[str]:
+def spell_rule(spell: str, weapon: str, stats: dict) -> dict:
+    """`er-mechanics-cast-speed.best_loadout` for `spell`: the off-hand and talismans that most raise
+    damage x startup speed / damage taken, cast from `weapon` when it can cast the spell."""
+    cs = _mod("er_mechanics_cast_speed", "er-mechanics-cast-speed.py")
+    m = cs.CastModel()
+    sp = m.spell(spell)
+    try:
+        catalyst = weapon if m.can_cast(sp, weapon) else None
+    except KeyError:
+        catalyst = None
+    short = {k: v for k, v in sp["requires"].items() if stats.get(k, 0) < v}
+    if short:
+        say(f"{sp['name']} needs {', '.join(f'{k.upper()} {v}' for k, v in short.items())}, over these stats",
+            " ", YELLOW)
+    rule = m.best_loadout(sp, stats, catalyst, slots=TALISMAN_SLOTS)
+    say(f"{sp['name']} from {catalyst or 'no catalyst held'}: off-hand {rule['left'] or 'nothing that helps'}, "
+        f"talismans {', '.join(rule['talismans']) or 'none'}: damage x{rule['damage']:g}, "
+        f"{rule['frames_saved']:g} of {m.startup(sp, 1.0) - m.startup(sp, 0.0):g} start frames saved, "
+        f"taken x{rule['incoming']:g}")
+    return rule
+
+
+def pick_talismans(opt, weapon: str, affinity: str, first: list[str] = ()) -> list[str]:
+    """`first` (the spell rule's picks) take their slots before the weapon's own ranking."""
     syn = _mod("er_mechanics_gear_synergy", "er-mechanics-gear-synergy.py")
     d, pop, gear, tables = syn.build()
-    ranked = [r["name"] for r in syn.rank(d, pop, gear, tables, weapon, top=100)["gear"] if r["kind"] == "talisman"]
+    ranked = list(first) + [r["name"] for r in syn.rank(d, pop, gear, tables, weapon, top=100)["gear"]
+                            if r["kind"] == "talisman"]
     fallback = opt.gear(weapon, affinity, opt.CACHE / "embeddings.npz", FALLBACK_TALISMANS).get("talisman", [])
 
     def group_of(name):
@@ -562,6 +586,12 @@ def main() -> int:
     ap.add_argument("--base", default=BASE_ID, help="planner build id the face, great rune and items come from")
     ap.add_argument("--dir", type=Path, help="working directory (default under ~/.cache/er-build-planner)")
     ap.add_argument("--name", help="the uploaded build's name (default '<weapon> RL<rl>')")
+    ap.add_argument("--affinity", help="pin the weapon and the rest of the inventory to this affinity")
+    ap.add_argument("--pin", default="", help="stats held fixed, e.g. str=53,dex=21,int=33 "
+                    "(er-mechanics-build-spread.py's pick); every other point is chosen as usual")
+    ap.add_argument("--spell", action="append", default=[],
+                    help="an attack spell the build is made around (repeatable); the first one's cast-speed "
+                         "rule (er-mechanics-cast-speed.py) fills talisman slots before the weapon's ranking")
     ap.add_argument("--dry-run", action="store_true", help="choose everything and write the files, run no pipeline")
     ap.add_argument("--no-upload", action="store_true", help="run every pipeline pass, then print the upload instead")
     ap.add_argument("--selftest", action="store_true")
@@ -570,6 +600,13 @@ def main() -> int:
         return selftest()
     if not a.weapon:
         ap.error("name a weapon")
+    pins = {}
+    for kv in filter(None, a.pin.split(",")):
+        k, _, v = kv.partition("=")
+        k = {"vit": "end"}.get(k, k)  # the planner's spelling of Endurance, still taken
+        if k not in ("vig", "mnd", "end", *REQUIREMENT_FIELDS) or not v.isdigit():
+            ap.error(f"--pin takes vig,mnd,end,{','.join(REQUIREMENT_FIELDS)} as key=value, not {kv!r}")
+        pins[k] = int(v)
 
     armor_mod = _mod("er_mechanics_armor_targets", "er-mechanics-armor-targets.py")
     class_best = _mod("er_mechanics_class_best", "er-mechanics-class-best.py")
@@ -610,7 +647,8 @@ def main() -> int:
 
     with phase(f"{a.weapon}'s own best spread", "spread"):
         rows = opt.corpus_rows(opt.CACHE / "builds.jsonl", a.rl - a.window, a.rl + a.window)
-        search = opt.weapon_best(tables, rows, a.weapon, a.rl, a.two_handed)
+        search = opt.weapon_best(tables, rows, a.weapon, a.rl, a.two_handed,
+                                 affinity=[a.affinity] if a.affinity else None)
         if not search["results"]:
             sys.exit(f"no class reaches RL {a.rl} with {a.weapon}'s requirements and floors {search['floors']}")
         best = search["results"][0]
@@ -624,13 +662,17 @@ def main() -> int:
             f"{sp['semi_wieldable']} semi-wieldable of {sp['kit_weapons']}")
 
     with phase("stats for the whole kit", "kit"):
-        spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit)
+        spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins=pins or None)
         if spread is None:
             sys.exit(f"no class reaches RL {a.rl} with {a.weapon}'s requirements and floors {search['floors']}")
         show(spread)
 
     with phase("talismans (gear synergy, a few minutes)", "talismans"):
-        talismans = pick_talismans(opt, a.weapon, best["affinity"])
+        spell_picks = []
+        if a.spell:
+            rule = spell_rule(a.spell[0], a.weapon, spread["stats"])
+            spell_picks = rule["added"]
+        talismans = pick_talismans(opt, a.weapon, best["affinity"], first=spell_picks)
         say(", ".join(talismans))
 
     # Before the armor: the great rune is part of the equip load and HP the armor is fitted to.
@@ -652,7 +694,7 @@ def main() -> int:
 
     def budget_at(stats, armor, carried):
         def at(end):
-            load = model.resources(dict(stats, vit=end), talismans, (), rune_on)["max_equip_load"]
+            load = model.resources(dict(stats, end=end), talismans, (), rune_on)["max_equip_load"]
             return opt.MEDIUM_ROLL_MAX * load - carried - armor.talisman_weight
         return at
 
@@ -667,15 +709,23 @@ def main() -> int:
             armor = armor_mod.ArmorModel(spread["stats"], talismans, rune_on, a.rl, a.window)
             if floor is None:
                 floor = 0 if caster else armor.melee_floor
-            fit = first_fit(spread["stats"]["vit"], opt.STAT_CAP, budget_at(spread["stats"], armor, carried),
+            fit = first_fit(spread["stats"]["end"], opt.STAT_CAP, budget_at(spread["stats"], armor, carried),
                             lambda b: armor.pick(b, floor))
             if fit is None:
                 sys.exit(f"no armor reaches {floor} poise at medium roll with {what} at any Endurance")
             end, chosen = fit
-            if end != spread["stats"]["vit"]:
-                say(f"Endurance {spread['stats']['vit']} -> {BOLD}{end}{RESET}: the lightest {floor}-poise set "
+            if end != spread["stats"]["end"]:
+                say(f"Endurance {spread['stats']['end']} -> {BOLD}{end}{RESET}: the lightest {floor}-poise set "
                     f"needs it for medium roll", " ", YELLOW)
-                spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={"vit": end})
+                spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={**pins, "end": end})
+                if spread is None and pins:
+                    # The `--pin` block plus the raised Endurance is past the RL, so the pinned
+                    # stats give way and are chosen again around the Endurance the armor needs.
+                    say(f"--pin {a.pin} no longer fits at RL {a.rl} with Endurance {end}; choosing the stats "
+                        f"again without it", " ", YELLOW)
+                    spread = kit_spread(opt, tables, a.weapon, a.two_handed, a.rl, search, kit, pins={"end": end})
+                if spread is None:
+                    sys.exit(f"no class reaches RL {a.rl} with Endurance {end} and {a.weapon}'s requirements")
                 show(spread)
                 armor = armor_mod.ArmorModel(spread["stats"], talismans, rune_on, a.rl, a.window)
                 chosen = armor.pick(budget_at(spread["stats"], armor, carried)(end), floor)
@@ -686,6 +736,8 @@ def main() -> int:
         return spread, chosen
 
     def other_affinity(spread):
+        if a.affinity:
+            return a.affinity
         with phase("affinity for the other weapons", "affinity"):
             dmg = {k: spread["stats"][k] for k in opt.DAMAGE_STATS}
             ranked = opt.weapons_for(tables, dmg, "damage", search["defender"], opt.CACHE / "catalog.json",
@@ -774,10 +826,14 @@ def main() -> int:
                                      "items": {**base.get("items", {}), "crystalTears": tears}})
         say(f"tools {', '.join(t['name'] for t in kit_items['tools'])}; spells "
             f"{', '.join(kit_items['spells']) or 'none'}; flasks {kit_items['flasks']}")
+        say("pots " + ", ".join(f"{p['name']} x{p['capacity']} ({p['hp']:.0f} HP a throw)"
+                                for p in kit_items.get("pots", ())) + "; boluses "
+            + (", ".join(b["name"] for b in kit_items.get("boluses", ()) if b["slotted"]) or "none"))
         for left_out in kit_items.get("skipped", ()):
             say(f"left out: {left_out['count']} {left_out['category']} ({left_out['why']})", " ", GREY)
     gear = json.loads(gear_path.read_text(encoding="utf-8"))
-    gear.update(tools=kit_items["tools"], spells=kit_items["spells"], flasks=kit_items["flasks"], tags="derive")
+    gear.update(tools=kit_items["tools"], spells=list(dict.fromkeys(list(a.spell) + kit_items["spells"])),
+                flasks=kit_items["flasks"], tags="derive")
     gear_path = out / f"{prefix}-upload-gear.json"
     gear_path.write_text(json.dumps(gear, indent=1), encoding="utf-8")
     upload = ["python3", str(HERE / "planner-ash-loadout-upload.py"), "--base", a.base, "--plan", str(plan_path),
@@ -823,8 +879,8 @@ def selftest() -> int:
     check(len(fitted) == 7 and fitted[0] == "head" and ANSI.sub("", fitted[-1]).startswith("step 19")
           and max(len(ANSI.sub("", f)) for f in fitted) == 19,
           "fit_frame keeps the header and the last lines within the screen, each cut to one column short")
-    st = {"vig": 58, "mnd": 8, "vit": 31, "str": 15, "dex": 22, "int": 7, "fth": 8, "arc": 80}
-    check(stats_text(st, 150) == "vig=58,mnd=8,vit=31,str=15,dex=22,int=7,fth=8,arc=80,rl=150",
+    st = {"vig": 58, "mnd": 8, "end": 31, "str": 15, "dex": 22, "int": 7, "fth": 8, "arc": 80}
+    check(stats_text(st, 150) == "vig=58,mnd=8,end=31,str=15,dex=22,int=7,fth=8,arc=80,rl=150",
           "stats_text spells the planner keys in the pipeline's order and adds the RL")
     groups = {"A": 1, "A+1": 1, "B": 2, "C": None, "D": 3, "E": None}
 

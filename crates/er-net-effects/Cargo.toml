@@ -13,6 +13,9 @@ crate-type = ["cdylib"]
 # gate in scripts/check.sh runs them.
 [dependencies]
 er-hotkey-config = { path = "../er-hotkey-config" }
+# The look the bar draws in, shared with every other in-game overlay: its colors, its faces and
+# the scale its 1080p sizes are multiplied by.
+er-overlay-theme = { path = "../er-overlay-theme" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

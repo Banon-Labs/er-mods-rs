@@ -57,8 +57,13 @@ pub(crate) fn install_profile_select_table_diag_hook() {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             PROFILE_SELECT_TABLE_DIAG_INSTALLED.store(1, Ordering::SeqCst);
+            // The same once-per-process mid hook er-quit-menu-core's installer arms; it writes
+            // `+0x54`, past the bytes this entry detour covers.
+            let mid_hook = unsafe {
+                er_quit_menu_core::profile_table_mid_hook::install_profile_table_mid_hook()
+            };
             append_autoload_debug(format_args!(
-                "profileselect-table-diag: hooked native profile builder 0x{target:x} (read-only table-state trace)"
+                "profileselect-table-diag: hooked native profile builder 0x{target:x} (read-only table-state trace); mid_hook_armed={mid_hook}"
             ));
         }
         status => append_autoload_debug(format_args!(

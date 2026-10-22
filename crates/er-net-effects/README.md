@@ -23,10 +23,15 @@ inactive by default.
 
 In-game controls:
 
-The selector bar is **open** when all three hold: the bar is shown
-(`overlay_visible_on_start`, or toggled back with Alt+Numpad0), it is
+The bar is **hidden by default**: nothing is drawn until you press the
+show/hide key -- **Alt+0**, **Alt+Numpad0** or **Alt+Insert**, rebindable with
+`selector_show_hide_key` -- which toggles it on and off. **Alt+9** (the expand
+key) also brings a hidden bar up, already expanded. Set
+`overlay_visible_on_start = true` to have it on screen from the start.
+
+The selector bar is **open** when all three hold: the bar is shown, it is
 **expanded** rather than minimized to its `[+]` button, and a character is
-loaded. The bar ships minimized: press **Alt+9** to expand it.
+loaded. A shown bar sits minimized: press **Alt+9** to expand it.
 
 The `[+]` header is also a mouse button, and clicking it works whenever the
 pointer is free -- but while the game has the mouse the Windows pointer the

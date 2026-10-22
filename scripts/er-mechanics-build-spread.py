@@ -47,23 +47,25 @@ TOP_BLEED = 5
 _W: dict = {}
 
 
-def spreads(rl: int, vig: int, end: int, step: int) -> tuple[list[tuple], dict]:
+def spreads(rl: int, vig: int, end: int, step: int, spend=SPEND) -> tuple[list[tuple], dict]:
     """Every damage-stat tuple a class reaches at `rl` with the floors, and per tuple the classes
-    that reach it (a class's full stats)."""
+    that reach it (a class's full stats). The free points go to the three `spend` stats, the last
+    taking what the first two leave."""
     model = RES.Model()
     by_tuple: dict = {}
+    k1, k2, k3 = spend
     for cls in RES.CLASS_ROWS:
         _, base = model.class_base(cls)
-        st = dict(base, vig=max(base["vig"], vig), vit=max(base["vit"], end))
+        st = dict(base, vig=max(base["vig"], vig), end=max(base["end"], end))
         free = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
         if free < 0:
             continue
-        for s in range(base["str"], min(OPT.STAT_CAP, base["str"] + free) + 1, step):
-            for d in range(base["dex"], min(OPT.STAT_CAP, base["dex"] + free - (s - base["str"])) + 1, step):
-                a = base["arc"] + free - (s - base["str"]) - (d - base["dex"])
+        for s in range(base[k1], min(OPT.STAT_CAP, base[k1] + free) + 1, step):
+            for d in range(base[k2], min(OPT.STAT_CAP, base[k2] + free - (s - base[k1])) + 1, step):
+                a = base[k3] + free - (s - base[k1]) - (d - base[k2])
                 if a > OPT.STAT_CAP:
                     continue
-                full = dict(st, str=s, dex=d, arc=a)
+                full = dict(st, **{k1: s, k2: d, k3: a})
                 by_tuple.setdefault(tuple(full[k] for k in DMG), []).append((cls, full))
     tuples = sorted(by_tuple)
     return tuples, by_tuple
@@ -76,6 +78,8 @@ def _job(arg):
     T = np.array(tuples, dtype=np.int16)
     out = []
     for aff in OPT.affinities(e.art, base_id):
+        if _W["affinity"] and aff not in _W["affinity"]:
+            continue
         try:
             sc = SS.StringScorer(e, base_id, aff, grip)
         except (KeyError, ValueError, SystemExit):
@@ -89,15 +93,15 @@ def _job(arg):
         for i in np.flatnonzero(ok):
             p = sc.parts(dict(zip(DMG, tuples[i])))
             score[i] = p["score"]
-            bleed[i] = p["status"].get("bleed", 0.0)
+            bleed[i] = p["status"].get(_W["core"], 0.0)
         if ok.any():
             out.append((aff, score, bleed))
     return base_id, grip, out
 
 
-def score_all(rl, vig, end, step, jobs, path: Path) -> None:
-    tuples, _ = spreads(rl, vig, end, step)
-    _W["tuples"] = tuples
+def score_all(rl, vig, end, step, jobs, path: Path, spend=SPEND, affinity=(), core="bleed") -> None:
+    tuples, _ = spreads(rl, vig, end, step, spend)
+    _W.update(tuples=tuples, affinity=tuple(affinity), core=core)
     e = SS.embed()
     todo = [(i, g) for i in CW.weapon_ids(e) for g in ("1H", "2H")]
     print(f"{len(tuples)} spreads x {len(todo)} weapon-grips", flush=True)
@@ -114,7 +118,7 @@ def score_all(rl, vig, end, step, jobs, path: Path) -> None:
     np.savez_compressed(path, tuples=np.array(tuples, dtype=np.int16), score=np.array(scores),
                         bleed=np.array(bleeds), base_id=np.array([m[0] for m in meta]),
                         grip=np.array([m[1] for m in meta]), affinity=np.array([m[2] for m in meta]),
-                        params=np.array([rl, vig, end, step]))
+                        params=np.array([rl, vig, end, step]), spend=np.array(spend), core=np.array(core))
 
 
 def analyse(path: Path, breadth_loss: float, show: int) -> int:
@@ -122,6 +126,9 @@ def analyse(path: Path, breadth_loss: float, show: int) -> int:
     tuples, score, bleed = z["tuples"], z["score"], z["bleed"]
     base_id, grip, aff = z["base_id"], z["grip"], z["affinity"]
     rl, vig, end, step = (int(x) for x in z["params"])
+    # Score files written before `--spend` and `--core-status` existed are STR/DEX/ARC and bleed.
+    spend = tuple(str(x) for x in z["spend"]) if "spend" in z else SPEND
+    core = str(z["core"]) if "core" in z else "bleed"
     e = SS.embed()
     names = e.art.names
     cat = np.array([WE.COMBO.CLASS.get(e.art.weapons[int(b)]["wepType"], "Other") for b in base_id])
@@ -151,7 +158,7 @@ def analyse(path: Path, breadth_loss: float, show: int) -> int:
         if breadth[i] > widest + 1e-9:
             front.append(i)
             widest = breadth[i]
-    _, by_tuple = spreads(rl, vig, end, step)
+    _, by_tuple = spreads(rl, vig, end, step, spend)
 
     def describe(i):
         t = tuple(int(x) for x in tuples[i])
@@ -159,17 +166,17 @@ def analyse(path: Path, breadth_loss: float, show: int) -> int:
         cls, full = max(classes, key=lambda cf: cf[1]["mnd"])
         col = per_weapon[:, i]
         best = [weapons[j] for j in np.argsort(-col)[:3]]
-        return (f"bleed {bleed_core[i]:6.1f}  breadth {breadth[i]:.3f}  {cls:12s} "
-                + " ".join(f"{k.upper()} {full[k]}" for k in ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"))
+        return (f"{core} {bleed_core[i]:6.1f}  breadth {breadth[i]:.3f}  {cls:12s} "
+                + " ".join(f"{k.upper()} {full[k]}" for k in ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc"))
                 + "  | " + ", ".join(names[w] for w in best))
 
     print(f"RL {rl}, VIG {vig}, END {end}: {len(tuples)} spreads, {len(score)} options, "
-          f"{len(cats)} weapon classes; Pareto front (most bleed first):")
+          f"{len(cats)} weapon classes; Pareto front (most {core} first):")
     for i in front[:show]:
         print("  " + describe(i))
     floor = breadth.max() * (1 - breadth_loss)
     pick = max((i for i in range(len(tuples)) if breadth[i] >= floor), key=lambda i: bleed_core[i])
-    print(f"\npick (most bleed with breadth >= {floor:.3f}, {breadth_loss:.0%} under the widest):")
+    print(f"\npick (most {core} with breadth >= {floor:.3f}, {breadth_loss:.0%} under the widest):")
     print("  " + describe(pick))
     t = tuples[pick]
     print("\nper weapon class at the pick (best option, share of the class's best anywhere):")
@@ -177,9 +184,9 @@ def analyse(path: Path, breadth_loss: float, show: int) -> int:
         m = np.flatnonzero(cat == c)
         j = m[np.argmax(S[m, pick])]
         print(f"  {c:22s} {sh:5.2f}  {names[int(base_id[j])]} {aff[j]} {grip[j]} {S[j, pick]:.1f}/s")
-    print("\nbleed options at the pick:")
+    print(f"\n{core} options at the pick:")
     for k in np.argsort(-B[:, pick])[:10]:
-        print(f"  {S[k, pick]:6.1f}/s  {names[int(base_id[k])]} {aff[k]} {grip[k]}  (bleed {bleed[k, pick]:.0f} HP)")
+        print(f"  {S[k, pick]:6.1f}/s  {names[int(base_id[k])]} {aff[k]} {grip[k]}  ({core} {bleed[k, pick]:.0f} HP)")
     print("\npick stats:", dict(zip(DMG, (int(x) for x in t))))
     return 0
 
@@ -195,9 +202,15 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--breadth-loss", type=float, default=0.03)
     ap.add_argument("--show", type=int, default=25)
+    ap.add_argument("--spend", default=",".join(SPEND), help="the three stats the free points go to")
+    ap.add_argument("--affinity", action="append", default=[], help="only these affinities (repeatable)")
+    ap.add_argument("--core-status", default="bleed", help="status the core score counts: bleed, frost, ...")
     a = ap.parse_args()
+    spend = tuple(a.spend.split(","))
+    if len(spend) != 3 or not set(spend) <= set(DMG):
+        ap.error(f"--spend takes three of {','.join(DMG)}")
     if not a.analyse_only:
-        score_all(a.rl, a.vig, a.end, a.step, a.jobs, a.scores)
+        score_all(a.rl, a.vig, a.end, a.step, a.jobs, a.scores, spend, a.affinity, a.core_status)
     return analyse(a.scores, a.breadth_loss, a.show)
 
 

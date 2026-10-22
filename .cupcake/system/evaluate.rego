@@ -38,6 +38,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.nat
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_admission_with_defence.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_ask_without_receiver.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_authorize_without_run_stamp.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_deferred_evidence_read.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_described_next_step.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt
@@ -53,6 +54,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.no_
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexplained_running_tasks.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_untailed_long_run.halt
 
 # Deny decisions.
 all_denials contains decision if some decision in data.cupcake.policies.bash_elden_ring_launch_guard.deny
@@ -61,8 +63,10 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.b
 all_denials contains decision if some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.block_compositor_input_injection.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.block_manual_pgrep.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.cap_parallel_fanout.deny
 all_denials contains decision if some decision in data.cupcake.policies.builtins.claude_code_enforce_full_file_read.deny
 all_denials contains decision if some decision in data.cupcake.policies.builtins.git_block_no_verify.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.edit_color_spelling_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_comment_caps_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tmp_scripts_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.gh_pr_title_conventional.deny
@@ -70,10 +74,12 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.g
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_detached_push.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_commit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_push.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_commit_authorization.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_fresh_origin_main.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_runtime_evidence.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.monitor_rate_limit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_lint_before_commit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_whole_check_sh.deny

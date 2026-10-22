@@ -265,6 +265,17 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 			exec 9<>"$_check_lock" || true
 		fi
 	fi
+	# A push waits its turn instead of refusing (user directive 2026-10-20: "whenever you need to
+	# push, you need to push with a command that waits until the lock is no longer held"). The
+	# pre-push hook sets ER_CHECK_WAIT_LOCK=1, so an authorized push that lands while another
+	# session's suite or DLL build holds the lock queues behind it rather than spending the
+	# authorization on a refusal. A live holder still gets the run it started; this one starts
+	# when it ends.
+	if [[ ${ER_CHECK_WAIT_LOCK:-} == 1 ]] && ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		echo "check.sh: waiting for $_check_lock (held by ${_holder:-an unrecorded pid}) before running." >&2
+		flock $_check_lock_mode 9
+	fi
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
 		_holder_what="no pid recorded"
@@ -1567,6 +1578,10 @@ python3 "$repo_root/scripts/check-cupcake-dispatcher.py"
 # this suite green throughout. scripts/cupcake-hook.sh normalises the mode and pins the log level;
 # this proves a denial still denies through it.
 python3 "$repo_root/scripts/test-cupcake-hook-shim.py"
+# A policy file that does not compile refuses every tool call, so the agent cannot run its own
+# fix: the hook must hand it the exact unlock command and hold Stop until the closing message is
+# that command alone (user directive 2026-10-19). Runs a throwaway copy of .cupcake, never the live one.
+python3 "$repo_root/scripts/test-cupcake-hook-engine-failure.py"
 python3 "$repo_root/scripts/test-cupcake-stop-guards.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
@@ -1580,7 +1595,9 @@ python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
 python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
 python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
+python3 "$repo_root/scripts/test-untailed-long-run-signal.py"
 python3 "$repo_root/scripts/test-inline-user-command-signal.py"
+python3 "$repo_root/scripts/test-authorize-run-stamp-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
 opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$repo_root/.cupcake/tests/no_ask_without_receiver_test.rego"
 # The push escape hatch (user directive 2026-10-07): the signal against fixture transcripts and a
@@ -1588,8 +1605,15 @@ opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$re
 python3 "$repo_root/scripts/test-push-authorization-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_any_push.rego" "$repo_root/.cupcake/tests/git_block_any_push_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/transcript_write_guard.rego" "$repo_root/.cupcake/tests/transcript_write_guard_test.rego"
+# The commit and lint gates (user directive 2026-10-17): no commit without the user's
+# `authorize commit`, and no lint or formatter except between that reply and its commit.
+python3 "$repo_root/scripts/test-commit-authorization-signal.py"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
@@ -1633,11 +1657,14 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # nobody can make -- and the live half runs in test-cupcake-policies.py, because an opa-green
 # policy that cupcake's WASM runtime cannot execute returns nothing and reads as a clean turn.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
+# The write-time half of the color-spelling ratchet: it refuses an Edit that adds the British
+# spelling outside a quoted span, and never judges a Write, whose previous count it cannot see.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_color_spelling_guard.rego" "$repo_root/.cupcake/tests/edit_color_spelling_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/block_compositor_input_injection.rego" "$repo_root/.cupcake/tests/block_compositor_input_injection_test.rego"
-opa test "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/gh_pr_title_conventional.rego" "$repo_root/.cupcake/tests/gh_pr_title_conventional_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # And the half `opa test` cannot reach. A green policy suite does not mean production-allowed or
@@ -1694,6 +1721,20 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # load-bearing and wants a rewritten sentence rather than a lowercase letter.
 python3 "$repo_root/scripts/check-comment-caps.py" --selftest
 python3 "$repo_root/scripts/check-comment-caps.py"
+# This repo writes `color`. The British spelling is a ratchet over every tracked text file
+# (user request 2026-10-20): scripts/color-spelling.baseline.json holds each file's count, a file
+# may not rise above it, a file with no entry may not have one, and a file that falls below it
+# must lower the baseline in the same diff (`--write-baseline`). Selftest first, because it is
+# the half that proves a growth, a new file and a silent improvement each still go red.
+python3 "$repo_root/scripts/check-color-spelling.py" --selftest
+python3 "$repo_root/scripts/check-color-spelling.py"
+
+# Every in-game overlay draws with crates/er-overlay-theme: a crate that uses imgui depends on it
+# and writes no color, font size or style push of its own. scripts/overlay-theme.baseline.json
+# holds what had not been ported when the gate was written; it may only shrink, and a crate
+# missing from it must be at zero, so a new DLL is held to the theme from its first commit.
+python3 "$repo_root/scripts/check-overlay-theme.py" --selftest
+python3 "$repo_root/scripts/check-overlay-theme.py"
 # The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
 # lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
 # stock AI). Selftest first, so the scanner is never trusted on its own say-so.
@@ -2465,6 +2506,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
 
+# er-positional-voice-core holds every decision the voice DLL makes without the game: the Wwise
+# bank it builds (pinned to the length and FNV-1a 64 of the bank the proven table loads, and to
+# the game's own attenuation curves when the local extraction is present), the voice packet, the
+# volume scaling, the voice-slot table and the byte signatures it checks before calling anything.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-positional-voice-core
+
 # er-hotkey-conflicts is almost entirely host-testable, and deliberately so: its product is a
 # warning that names modules, and the ways it can be wrong -- attributing a call to the wrong DLL,
 # conflating a whole-keyboard read with a specific key, decoding the game's binding table onto the
@@ -2512,6 +2559,56 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
 # answer from any of those is silent in game -- a pass left vanilla, or a slider moving the wrong
 # float -- so they run here rather than waiting for someone to notice the picture.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
+
+# The shader editor's proof tools hold their copies of the DLL's layouts to the Rust, and nothing
+# else does: the probe checker reads the probe geometry, port kinds, stage bits, telemetry name,
+# schema and hook timings out of the sources, and the A/B proof holds the Frida agent's `StatsV1`
+# layout and exports to `exports.rs`. Without these an edit to `StatsV1`, `probe.rs` or
+# `replace.rs` passes the suite while the agent or the checker reads the wrong offsets in game.
+python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
+python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
+# The Shaders panel's pixel oracle holds its copies of the design tokens, the part names and the
+# panel telemetry's keys to er-overlay-theme, panel_record.rs and exports.rs, and renders the
+# mockup's panel in the vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle
+# that moves a token, or a capture step that changes, would otherwise leave it judging the game
+# against stale colours.
+python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
+
+# er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what
+# the dynamic resolution update is told for each, how the drawn size comes back out of the
+# viewport ratio, the settings file and the telemetry document -- and the two crates its menu
+# shares with er-cel-shade's, the design system and the input capture. A wrong divisor list or a
+# plan that never restores is silent in game, a soft picture nobody can name, so they run here.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-render-scale -p er-overlay-theme -p er-overlay-input
+
+# The render-scale probe checker holds its copies of the telemetry name, the schema and the
+# viewport snap to the Rust, and proves each `--expect` mode can still fail.
+python3 "$repo_root/scripts/check-render-scale-probe.py" --selftest
+
+# The cel ports the DLL embeds: every committed blob must be a signed shader model 6.0 pixel
+# shader, because native D3D12 refuses unsigned DXIL that vkd3d-proton accepts, so a stale or
+# unsigned blob passes every Linux run and fails on Windows. With dxc it also proves the blobs are
+# what the HLSL compiles to, and with the vkd3d dump that each links like the game's original.
+python3 "$repo_root/scripts/build-cel-shaders.py" --selftest
+python3 "$repo_root/scripts/build-cel-shaders.py" --check
+
+# The shader editor's compiler: the pipe protocol er-cel-shade and `er-shader-compiler.exe` speak,
+# the dxc argument list, the oldest dxcompiler accepted and the handshake that refuses a helper
+# from another build. A frame both sides read differently fails in game as a dead or confused
+# helper, with nothing on screen to say why.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-shader-compiler
+
+# dxcompiler.dll is Microsoft's and is fetched, never committed: nothing named like it or its
+# release zip may be tracked, `.gitignore` must keep a fetched copy out wherever it lands, and a
+# fetched copy beside the built DLL must be the pinned release's.
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --selftest
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --check
+
+# ...and er_cel_shade.dll must load where dxcompiler.dll is absent, so it may never import it:
+# the `windows` crate's `DxcCreateInstance` is a link-time import, and one call to it would add
+# one silently. The import-table reader's own cases here; the built DLL itself is read below,
+# once check-rust-build.sh has linked it.
+python3 "$repo_root/scripts/check-dll-imports.py" --selftest
 
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
@@ -3108,6 +3205,10 @@ bash "$repo_root/scripts/check-rust-build.sh"
 # DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
 # people to read past it. Above the link this step is a property of the checkout, not of the code.
 bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+
+# The linked er_cel_shade.dll imports neither dxcompiler.dll nor dxil.dll (see the selftest's
+# step above): read off the import and delay-load tables of the DLL check-rust-build.sh just made.
+python3 "$repo_root/scripts/check-dll-imports.py"
 
 # Does the committed state compile -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is

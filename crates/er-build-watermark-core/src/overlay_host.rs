@@ -48,7 +48,11 @@
 //! trial-builds them in a scratch atlas, adds them to the real one, and lets hudhook rebuild and
 //! re-upload. From then on every [`OverlayFrame`] carries the resulting `ImFont*` per handle,
 //! which a guest reads with [`frame_font`] and pushes with [`with_font`]. Until a font is built,
-//! or if it never builds, both answer with the default font.
+//! or if it never builds, both answer with the default font. A request identical to an earlier
+//! one -- the same bytes at the same sizes, which is what two panels on `er-overlay-theme` send at
+//! one display scale -- gets the earlier handle and spends none of the process's requests
+//! ([`add_font_v1`]). The default font itself is added by [`add_host_default_font`], the same in
+//! every host, so the face a guest falls back to does not depend on which module won.
 //!
 //! # Textures
 //!
@@ -205,10 +209,42 @@ pub fn designate_host() {
     let _ = hudhook::set_before_frame_hook(apply_pending);
 }
 
-/// hudhook's before-frame hook: fonts into the atlas, then pixels into textures.
+/// Whether the shared context has been given the system clipboard.
+static CLIPBOARD_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// hudhook's before-frame hook: the clipboard once, then fonts into the atlas, then pixels into
+/// textures.
 fn apply_pending(ctx: &mut hudhook::imgui::Context, render: &mut dyn hudhook::RenderContext) {
+    if !CLIPBOARD_INSTALLED.swap(true, Ordering::SeqCst) {
+        ctx.set_clipboard_backend(crate::clipboard::Win32Clipboard);
+    }
     apply_pending_fonts(ctx);
     apply_pending_textures(render);
+}
+
+/// Give a host's atlas its default font: Dear ImGui's own face at
+/// [`crate::layout::FONT_SIZE_PX`]. Returns that size, for the caller's log.
+///
+/// Every module that hosts the render loop calls this first thing in its `initialize`, before the
+/// atlas is built, so this is the first font in the atlas and therefore the default one. It is
+/// one function because the default face is what every guest draws in until its own fonts are
+/// built -- and forever, if the host refuses them -- so a host that sized it its own way changed
+/// every guest's text by winning the overlay. Until 2026-10-16 er-net-effects built it at 16.25
+/// pixels and the watermark at 27, and er-duel-rules' menu, scaled for a 13-pixel face, drew
+/// 62-pixel text on the watermark's.
+///
+/// The size is the watermark's because its rows are drawn in the default face and advanced by
+/// that size. A dedicated size rather than the 13-pixel face scaled up: scaled, it is blurry.
+pub fn add_host_default_font(ctx: &mut hudhook::imgui::Context) -> f32 {
+    use hudhook::imgui::{FontConfig, FontSource};
+
+    ctx.fonts().add_font(&[FontSource::DefaultFontData {
+        config: Some(FontConfig {
+            size_pixels: crate::layout::FONT_SIZE_PX,
+            ..FontConfig::default()
+        }),
+    }]);
+    crate::layout::FONT_SIZE_PX
 }
 
 /// Confirm the render loop is really installed. Called after `apply()` returns `Ok`.
@@ -344,6 +380,8 @@ enum FontSlotState {
 
 struct FontSlot {
     handle: u32,
+    /// What the request was, so an identical one later gets this handle back.
+    key: crate::font_request::FontRequestKey,
     state: FontSlotState,
 }
 
@@ -359,6 +397,9 @@ static FONTS_REFUSED: AtomicUsize = AtomicUsize::new(0);
 
 /// Font sets this host has put in its atlas.
 static FONTS_BUILT: AtomicUsize = AtomicUsize::new(0);
+
+/// Font requests answered with a handle an identical earlier request already holds.
+static FONTS_SHARED: AtomicUsize = AtomicUsize::new(0);
 
 struct PublishedFonts {
     sets: Vec<OverlayFontSet>,
@@ -383,11 +424,23 @@ pub fn fonts_built() -> usize {
     FONTS_BUILT.load(Ordering::Relaxed)
 }
 
+/// Font requests answered with the handle of an identical earlier request.
+pub fn fonts_shared() -> usize {
+    FONTS_SHARED.load(Ordering::Relaxed)
+}
+
 /// Accept a guest's font, if this module is the host. The body of every shell's
 /// `er_overlay_add_font_v1` export.
 ///
 /// Copies the bytes and the sizes, so the caller's buffers need only live for the call. Returns
 /// the new handle, or `0` from a module that is not the host and for any refused request.
+///
+/// A request identical to one already accepted -- the same bytes and the same sizes, compared by
+/// [`crate::font_request::request_key`] -- gets that request's handle back and spends none of the
+/// process's [`crate::font_request::MAX_FONT_REQUESTS`]: two panels on the shared theme then read
+/// one set of `ImFont*`s from one atlas entry. The answer is the same whatever became of the first
+/// request, so a face the trial build refused is refused for the second panel too, without a
+/// second build to find out.
 ///
 /// # Safety
 ///
@@ -418,9 +471,14 @@ pub unsafe fn add_font_v1(ttf: *const u8, len: usize, sizes_px: *const f32, n: u
         FONTS_REFUSED.fetch_add(1, Ordering::Relaxed);
         return 0;
     }
+    let key = crate::font_request::request_key(ttf, sizes);
     let Ok(mut fonts) = FONTS.lock() else {
         return 0;
     };
+    if let Some(existing) = fonts.iter().find(|slot| slot.key == key) {
+        FONTS_SHARED.fetch_add(1, Ordering::Relaxed);
+        return existing.handle;
+    }
     if fonts.len() >= crate::font_request::MAX_FONT_REQUESTS {
         FONTS_REFUSED.fetch_add(1, Ordering::Relaxed);
         return 0;
@@ -428,6 +486,7 @@ pub unsafe fn add_font_v1(ttf: *const u8, len: usize, sizes_px: *const f32, n: u
     let handle = fonts.len() as u32 + 1;
     fonts.push(FontSlot {
         handle,
+        key,
         state: FontSlotState::Pending {
             ttf: ttf.to_vec(),
             sizes: sizes.to_vec(),

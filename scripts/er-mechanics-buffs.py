@@ -76,7 +76,7 @@ PVE_DEF = {e: f'defEnemyDmgCorrectRate_{_PVP_EL[e]}' for e in ELEMENTS}
 CUT = {'magic': 'magicDamageCutRate', 'fire': 'fireDamageCutRate',
        'lightning': 'thunderDamageCutRate', 'holy': 'darkDamageCutRate'}
 CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
-STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
+STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
 # Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo
@@ -880,6 +880,12 @@ class Buffs:
         Otherwise `uses` x duration over the fight, at most 1."""
         r = self.sp[sid]
         d = r['effectEndurance']
+        if r['deleteCriteriaDamage'] == 1 and r['stateInfo'] not in NEXT_HIT_STATES:
+            # A defender's one-hit cut (Opaline Bubbletear 3507, Uplifting Aromatic's 503500) ends
+            # on any hit above 0 damage, and a human opponent spends it on the cheapest, fastest
+            # one they carry -- a fan dagger or throwing knife -- before anything that hurts (user,
+            # 2026-10-17). So it absorbs no hit worth counting.
+            return 0.0
         if self.one_hit(sid):
             ps = _pairs(fight_seconds, hits)
             return sum(min(1.0, uses / max(h, 1)) for _, h in ps) / len(ps)
@@ -1584,7 +1590,8 @@ def _t_expected(m, check):
     f25 = 25.0
     check('uptime: 180 s tear over a 25 s fight', m.uptime(511011, f25), 1.0)
     check('uptime: 25 s grease over a 50 s fight', m.uptime(20501411, 50.0), 0.5)
-    check('uptime: one-hit row (Uplifting 503500) covers 1 of 5 hits', m.uptime(503500), 0.2)
+    check('uptime: defender one-hit row (Uplifting 503500) is spent on a chip hit', m.uptime(503500), 0.0)
+    check('uptime: defender one-hit row (Opaline Bubbletear 3507) is spent on a chip hit', m.uptime(3507), 0.0)
     check("uptime: Royal Knight's Resolve 1701 next hit, 2 casts", m.uptime(1701, uses=2), 0.4)
     check('uptime: Thorny tier 3558 (1.5 s, refreshed) none', m.uptime(3558), 0.0)
     check('uptime: great rune row permanent', m.uptime(620), 1.0)
@@ -1679,7 +1686,7 @@ def _t_expected(m, check):
     check('20 casts need 2 cerulean drinks: 19 x 30 f + 2 x 54 f off 300 s',
           (rk['drinks'], round(rk['time_factor'], 5)), (2.0, round(1.0 - (19 * 30.0 + 2 * 54.0) / 30.0 / 300.0, 5)))
     check('a one-hit row over a schedule: the mean of 1 / hits per point',
-          round(m.uptime(503500, (180.0, 300.0), (5, 20)), 4), round((0.2 + 0.05) / 2, 4))
+          round(m.uptime(1701, (180.0, 300.0), (5, 20)), 4), round((0.2 + 0.05) / 2, 4))
 
 
 def _t_regen(m, check):

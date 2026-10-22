@@ -24,6 +24,9 @@ er-game-base = { path = "../er-game-base" }
 # re-tabulated: a second copy of that table is a drift trap, and a warning that says `0x76`
 # instead of `F7` makes the reader do the lookup this crate exists to save them.
 er-invasion-warp-core = { path = "../er-invasion-warp-core" }
+# The parser the shipped defaults in `declared.rs` are spelled for, so the table is checked against
+# the same reading of "F5" or "ctrl+alt+c" the shells themselves use.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
@@ -35,6 +38,9 @@ er-hook = { path = "../er-hook" }
 # The one-imgui-host-per-process arbitration. This DLL never hosts: a diagnostic line is not
 # worth owning the swapchain, so it registers as a GUEST or draws nothing at all.
 er-build-watermark-core = { path = "../er-build-watermark-core" }
+# The look every overlay in this workspace shares: the line is set in its body face, in its
+# warning color.
+er-overlay-theme = { path = "../er-overlay-theme" }
 hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",

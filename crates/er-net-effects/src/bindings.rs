@@ -203,14 +203,8 @@ selector_stack_remove_key = "kp_minus"
 # the bar minimized is what this DLL is for.
 selector_apply_key = "alt+quote"
 
-# Expand the bar from its ER NET EFFECTS [+] button to the full effect list, and minimize it back.
-#
-# THIS IS THE ONLY WAY IN WHILE YOU ARE PLAYING. The button also takes a left mouse click, and that
-# click works whenever the pointer is free -- but while the game has the mouse the Windows pointer
-# the overlay hit-tests against stops following your hand, so a button in the screen corner cannot
-# be reached. Measured: it was clicked ZERO times in 1,296,264 drawn frames. Before this key
-# existed a bar that ships minimized stayed minimized, and with it the four cursor keys above --
-# which require an expanded bar -- did nothing at all.
+# Show the bar. A shown bar is always the full effect list, so this is the show half of the
+# show/hide key below; it never hides or minimizes.
 selector_expand_key = "alt+9"
 
 # Show or hide the bar. Several chords, comma-separated, because this is the ONLY way back to a

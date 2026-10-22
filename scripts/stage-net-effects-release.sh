@@ -99,9 +99,9 @@ cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
 #
 # There is no network_sync setting. Effects always sync; the peer-safe list
 # compiled into the DLL decides which ones may reach another player.
-# Start with the visible selector overlay shown. Press Alt+Numpad0,
-# Alt+0, or Alt+Insert to hide/show it while in-game.
-overlay_visible_on_start = true
+# The selector overlay starts hidden. Press Alt+Numpad0, Alt+0, or
+# Alt+Insert to show/hide it while in-game; set this to true to start shown.
+overlay_visible_on_start = false
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"
 selected_catalog_file = ".er-net-effects-catalog-setting.txt"

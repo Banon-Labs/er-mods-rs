@@ -342,3 +342,172 @@ test_cargo_alias_subcommand_is_denied if {
 test_listing_then_real_build_grep_is_denied if {
 	denied("pgrep -af cargo | grep -v pgrep; cargo build -p er-quickload 2>&1 | grep error")
 }
+
+# --- 2026-10-15: a git path list filtered beside a check script --------------------------------
+#
+# The exact command denied in `.worktrees/er-shader-integrate`. The grep filters git's list of
+# changed paths out of a `( ...; ... )` subshell, and the only build verb is
+# `scripts/check-comment-caps.py` two statements later, which takes that list as arguments and is
+# piped nowhere. The compound-command rule used to accept a build anywhere in the same text.
+test_the_2026_10_15_git_path_list_filter_is_allowed if {
+	not denied(`cd /home/banon/projects/er-mods-rs/.worktrees/er-shader-integrate && F=$( (git diff --name-only; git ls-files --others --exclude-standard) | grep -vE '\.(dxil|ttf|txt|tsv)$' | sort -u | tr '\n' ' '); echo $F | wc -w; python3 scripts/check-comment-caps.py $F > /tmp/claude-1000/scratchpad/caps.log 2>&1; echo "comment-caps rc=$?"; tail -5 /tmp/claude-1000/scratchpad/caps.log`)
+}
+
+# The same shape, denied in `.worktrees/er-shader-editor` earlier the same day.
+test_the_2026_10_15_bash_c_path_list_filter_is_allowed if {
+	not denied(`cd /home/banon/projects/er-mods-rs/.worktrees/er-shader-editor && bash -c 'files=$( (git diff --name-only --diff-filter=AM HEAD; git ls-files --others --exclude-standard) | grep -E "\.(rs|py|sh|hlsl|hlsli)$"); python3 scripts/check-comment-caps.py $files' > /tmp/claude-1000/scratchpad/caps.log 2>&1; echo "caps exit=$?"`)
+}
+
+test_git_path_list_filters_are_allowed if {
+	not denied(`git diff --name-only | grep -vE '^target/'`)
+	not denied(`git -C /home/banon/projects/er-mods-rs/.worktrees/er-shader-integrate diff --name-only | grep -vE 'a|b'`)
+	not denied(`git status --short | grep -vE '^\?\?'`)
+	not denied(`git ls-files | grep -vE 'test|check'`)
+	not denied(`(git diff --name-only; git ls-files --others --exclude-standard) | grep -vE '^target/'; python3 scripts/check-comment-caps.py x.rs`)
+	not denied(`{ git diff --name-only; git status --short; } | grep -v target; cargo fmt -p er-r3-view`)
+}
+
+# A build that runs before the piped compound is not what the matcher reads either.
+test_build_before_the_piped_compound_is_allowed if {
+	not denied(`python3 scripts/check-comment-caps.py x.rs; (git diff --name-only; git status --short) | grep -vE '^target/'`)
+	not denied(`cargo check -p er-quickload; for f in $(git ls-files); do echo $f; done | grep -v target`)
+	not denied(`cargo build -p er-quickload && { git diff --name-only; git ls-files -o; } | grep -v target`)
+}
+
+# The build inside the compound whose output reaches the matcher still denies, in every spelling
+# the hook can deliver.
+test_build_inside_the_piped_compound_is_still_denied if {
+	denied(`(git diff --name-only; cargo check -p er-quickload) 2>&1 | grep -v target`)
+	denied(`x=$( (cargo build -p er-quickload; echo done) 2>&1 | grep -c error)`)
+	denied(`if cargo check -p er-quickload 2>&1; then echo ok; fi | grep error`)
+	denied(`while cargo test -p er-hook; do :; done 2>&1 | grep FAILED`)
+	denied(`case $x in a) echo; cargo build;; esac | grep error`)
+	denied("for c in a b; do\n  cargo test -p $c\ndone | grep FAILED")
+	denied("(\n  cargo build\n) 2>&1 | grep error")
+	denied("{\n  cargo build\n} 2>&1 | grep error")
+}
+
+# `scripts/cupcake-hook.sh` delivers each unquoted newline as `; `, so the multi-line compounds
+# above arrive in this form. The trailing-pipe loop was allowed before 2026-10-15: the old rule
+# split statements at the `;` the hook put after the pipe.
+test_compound_as_the_hook_delivers_it_is_denied if {
+	denied("for c in a b; do;  cargo test -p $c;  done |;  grep FAILED")
+	denied("{;  cargo build;  } 2>&1 | grep error")
+	denied("(;  cargo build;  ) | grep error")
+}
+
+# --- 2026-10-15: a build word inside a single-quoted pattern, beside a substitution -------------
+#
+# A text carrying `$(` kept its quoted spans raw, so the `(` inside `'\.(go|rs)$'` stood as a
+# subshell opener and `go` as the Go toolchain piped into the second grep. Single quotes are now
+# read in such a text too (`commands.substitution_single_quotes_blanked`).
+test_the_2026_10_15_extension_filter_is_allowed if {
+	not denied(`F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)`)
+}
+
+test_build_words_in_single_quoted_patterns_beside_a_substitution_are_allowed if {
+	not denied(`F=$(git ls-files | grep -E '(make|cargo build|npm)' | grep -v target); echo $F`)
+	not denied(`x=$(date); git commit -m 'cargo build | grep error is the habit this refuses'`)
+}
+
+# Outside the single quotes nothing changed: a build piped into grep, beside or inside a
+# substitution, still denies.
+test_real_builds_beside_a_substitution_are_still_denied if {
+	denied(`x=$(date); cargo build -p er-quickload 2>&1 | grep error`)
+	denied(`n=$(cargo check -p er-quickload 2>&1 | grep -c '^error')`)
+	denied("x=`cargo test -p er-hook 2>&1 | grep FAILED`")
+}
+
+# --- 2026-10-15: a gate's file list, filtered by grep inside a substitution ---------------------
+#
+# Denied in `.worktrees/er-shader-integrate` by that worktree's copy of this guard. The grep
+# filters git's list of changed paths, the gate reads that list as arguments and is piped nowhere,
+# and its verdict is read from `exit=$?`.
+test_the_2026_10_15_comment_caps_file_list_is_allowed if {
+	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E '^(crates/er-cel-shade|crates/er-compiler-fixture|scripts)/' | while read f; do [ -f "$f" ] && echo "$f"; done ); echo "$files" | wc -l; python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
+}
+
+# The same list handed to the gate directly. The pipeline that starts at the gate used to walk
+# into its `$(...)` argument and take the pipe inside it for the gate's own.
+test_gate_taking_a_filtered_path_list_as_arguments_is_allowed if {
+	not denied(`python3 scripts/check-comment-caps.py $(git diff --name-only 72ef6a9b | grep -E '^(crates/er-cel-shade|scripts)/'); echo "exit=$?"`)
+	not denied(`python3 scripts/check-comment-caps.py $( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E '\.(rs|py)$'); echo "exit=$?"`)
+	not denied(`python3 scripts/check-comment-caps.py $(git diff --name-only | grep -E "\.(rs|py)$"); echo "exit=$?"`)
+	not denied(`cargo fmt -p er-cel-shade -- --check $(git diff --name-only | grep '\.rs$'); echo "exit=$?"`)
+	not denied("python3 scripts/check-comment-caps.py `git ls-files -m | grep -v target`; echo \"exit=$?\"")
+}
+
+# A double-quoted path pattern stays raw beside a substitution, so `(scripts/check` inside it read
+# as a subshell running a repo check script. A `(` glued to a word or a `^` opens nothing.
+test_double_quoted_path_pattern_in_a_substitution_is_allowed if {
+	not denied(`files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) | sort -u | grep -E "^(crates/er-cel-shade|crates/er-compiler-fixture|scripts)/" | while read f; do [ -f "$f" ] && echo "$f"; done ); python3 scripts/check-comment-caps.py $files; echo "exit=$?"`)
+	not denied(`files=$(git diff --name-only | grep -E "^(scripts/check|crates)/" | grep -v target); python3 scripts/check-comment-caps.py $files`)
+}
+
+# A substitution is opaque only on the way in. A build inside one whose output reaches the outer
+# pipe, a substitution among a build's arguments, and a gate's own output piped to grep still deny.
+test_builds_around_a_substitution_are_still_denied if {
+	denied(`echo $(cargo build 2>&1) | grep error`)
+	denied("echo `cargo build 2>&1` | grep error")
+	denied(`cargo test -p $(basename $PWD) 2>&1 | grep FAILED`)
+	denied("cargo test -p `basename $PWD` 2>&1 | grep FAILED")
+	denied(`cargo build $(echo --release; echo -q) 2>&1 | grep error`)
+	denied(`cargo build 2> >(tee err.log) | grep error`)
+	denied(`cat <(cargo build 2>&1) | grep error`)
+	denied(`python3 scripts/check-comment-caps.py $(git diff --name-only | grep -E '\.rs$') 2>&1 | grep -c caps`)
+	denied(`files=$(git ls-files | grep -E '\.rs$'); python3 scripts/check-comment-caps.py $files 2>&1 | grep -v OK`)
+}
+
+# A commit message written through a quoted-tag heredoc is literal, so quoting the pipeline above
+# in it builds nothing. Refused until 2026-10-16, raw and as the engine delivers it (newlines turned
+# into spaces). A build after the terminator still denies.
+quoted_pipeline_message := "fix: quote `echo $(cargo build 2>&1) | grep error` in the docs"
+
+test_commit_message_quoting_a_substitution_build_is_allowed if {
+	not denied(concat("", ["git commit -F - <<'EOF'\n", quoted_pipeline_message, "\nEOF"]))
+	not denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF"]))
+	not denied(concat("", ["git commit -F - <<\\EOF ", quoted_pipeline_message, " EOF"]))
+}
+
+test_build_after_a_literal_heredoc_is_still_denied if {
+	denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF; cargo build 2>&1 | grep error"]))
+	denied(concat("", ["git commit -F - <<'EOF' ", quoted_pipeline_message, " EOF cargo build 2>&1 | grep error"]))
+	denied(concat("", ["git commit -F - <<'EOF'\n", quoted_pipeline_message, "\nEOF\ncargo build 2>&1 | grep error"]))
+}
+
+test_unquoted_heredoc_body_substitution_build_is_still_denied if {
+	denied(concat("", ["cat > f <<EOF ", quoted_pipeline_message, " EOF"]))
+}
+
+# --- quoted prose with markdown backticks (2026-10-19) -----------------------------------------
+
+# The refused command, verbatim. Its single-quoted body carries markdown backticks and a `;`
+# followed by `scripts/frida/npc-summons-tag-check.js`. A backtick anywhere used to keep the whole
+# text raw, so that quoted `;` made the `-check.js` path a command and the grep after `bd` read as
+# grepping a build. Nothing here builds: the grep filters bd's git-hint stderr.
+bd_comment_with_backticks := concat("", [
+	"$HOME/.local/bin/bd comments add er-effects-rs-7xbs.3 'Runtime proof 2026-10-19, run br-20261019-230233-2a60 (1.17.1, uncommitted worktree feat/npc-summons-tag-mid-hooks): ",
+	"`mid hooks: 3/3 ARMED` + `tags: voice-chat lookup detoured`. Mimic Tear +10 summoned 4 companions; scripts/frida/npc-summons-tag-check.js (read-only) verdict companions=4 inFriendlyList=4 friendlyColour=4 inEnemyList=0 ok=True. ",
+	"Added a companion-hit detector (friendly-row HP drop): 11 hits observed, inEnemyList 0 on every one. Game kept running.' 2>&1 | grep -v -E 'hint|ignored|issues.jsonl' | tail -1",
+])
+
+test_bd_comment_with_backticked_prose_is_allowed if {
+	not denied(bd_comment_with_backticks)
+}
+
+test_backticked_build_in_quoted_prose_is_allowed if {
+	not denied("bd remember --key k 'ran `cargo check | grep error` once; scripts/check.sh is the gate' 2>&1 | grep -v hint")
+}
+
+# A backtick the shell would run still keeps the text raw and still denies.
+test_unquoted_backtick_build_is_still_denied if {
+	denied("echo `cargo build 2>&1 | grep error`")
+}
+
+test_backtick_in_double_quotes_is_still_denied if {
+	denied("echo \"`cargo build 2>&1 | grep error`\"")
+}
+
+test_real_build_after_backticked_quoted_prose_is_still_denied if {
+	denied("echo 'see `x`'; cargo build 2>&1 | grep error")
+}

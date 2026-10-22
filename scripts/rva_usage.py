@@ -82,8 +82,14 @@ def _args_of_calls(text: str) -> list[str]:
     one `resolve_all` array spanning forty lines; a fixed lookahead reads part of it and reports a
     subset, which is the same silent undercount this module exists to end.
     """
-    out: list[str] = []
+    return [args for _, args in _calls_with_names(text)]
+
+
+def _calls_with_names(text: str) -> list[tuple[str, str]]:
+    """`(called name, parenthesised argument text)` for every resolver call in `text`."""
+    out: list[tuple[str, str]] = []
     for match in RESOLVERS.finditer(text):
+        name = re.sub(r"^native::|\s*\($", "", match.group(0))
         start = match.end() - 1
         depth = 0
         for index in range(start, len(text)):
@@ -93,16 +99,54 @@ def _args_of_calls(text: str) -> list[str]:
             elif char == ")":
                 depth -= 1
                 if depth == 0:
-                    out.append(text[start : index + 1])
+                    out.append((name, text[start : index + 1]))
                     break
     return out
+
+
+# `resolve_call_site_rva(FUNCTION_RVA, offset, what)` and its band twin. Only the first argument
+# is a game address; the rest are offsets into that function. A file usually wraps it in a local
+# `let resolve = |offset: usize| resolve_call_site_rva(FN_RVA, offset, ..)`, and that closure's
+# name collides with `RESOLVERS`, so its offset arguments (`EPILOGUE_JOIN` = 0x157) were priced as
+# addresses and reported as zero coverage. Measured 2026-10-21: er-scaleform-hooks and
+# er-quit-menu-core, both 0/2, both wrong for that reason.
+CALL_SITE_RESOLVER = re.compile(r"\bresolve_call_site_(?:rva|band)\s*\(")
+OFFSET_CLOSURE = re.compile(
+    r"\blet\s+(\w+)\s*=\s*\|\s*(\w+)\s*(?::[^|]*)?\|[^;]*?\bresolve_call_site_(?:rva|band)\s*\("
+    r"\s*[^,()]+,\s*(\w+)\s*[,)]"
+)
+
+
+def _offset_closures(text: str) -> set[str]:
+    """Local closures whose parameter is the in-function offset of a call-site resolver."""
+    return {m.group(1) for m in OFFSET_CLOSURE.finditer(text) if m.group(2) == m.group(3)}
+
+
+def _first_argument(args: str) -> str:
+    """The text of the first top-level argument of a parenthesised argument list."""
+    depth = 0
+    for index, char in enumerate(args):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return args[1:index]
+        elif char == "," and depth == 1:
+            return args[1:index]
+    return args[1:]
 
 
 def used_as_game_address(text: str) -> set[str]:
     """Constant names `text` hands to an address resolver."""
     names: set[str] = set()
-    for args in _args_of_calls(text):
+    offsets = _offset_closures(text)
+    for match, args in _calls_with_names(text):
+        if match in offsets:
+            continue
         names |= set(IDENT.findall(args))
+    for _, args in _balanced_args(text, CALL_SITE_RESOLVER):
+        names |= set(IDENT.findall(_first_argument(args)))
     names |= set(TRANSMUTE.findall(text))
     names |= set(FIELD_CONST.findall(text))
     return names
@@ -449,6 +493,45 @@ def selftest() -> int:
     assert "MEM_COMMIT" not in used_as_game_address(flags), (
         "a non-address constant was admitted; the value heuristic this module rejects is back"
     )
+
+    # The call-site shape: a local `resolve` closure forwards an in-function offset. The function
+    # RVA is the address; the offsets are not, and pricing them reported 0/2 for two crates.
+    call_site = (
+        "let resolve = |offset: usize| {\n"
+        "    er_game_base::game_build::resolve_call_site_rva(\n"
+        "        SCALEFORM_DESC_ADVANCE_RVA,\n"
+        "        offset,\n"
+        "        \"scaleform descriptor advance\",\n"
+        "    )\n"
+        "    .map(|rva| base + rva)\n"
+        "};\n"
+        "let (Some(site), Some(resume)) = (resolve(PAGE_ROLL_LOAD), resolve(EPILOGUE_JOIN)) else {"
+    )
+    found = used_as_game_address(call_site)
+    assert "SCALEFORM_DESC_ADVANCE_RVA" in found, (
+        f"the function RVA of a call-site resolver was not priced: {sorted(found)}"
+    )
+    assert not {"PAGE_ROLL_LOAD", "EPILOGUE_JOIN"} & found, (
+        f"in-function offsets were priced as game addresses: {sorted(found)}"
+    )
+    # Same closure name, but it forwards an address: still priced.
+    forwarding = (
+        "let resolve = |rva: usize| resolve_game_address(base + rva, \"x\");\n"
+        "let f = resolve(SOME_FUNCTION_RVA);"
+    )
+    assert "SOME_FUNCTION_RVA" in used_as_game_address(forwarding), (
+        "a closure forwarding an address was mistaken for an offset closure"
+    )
+    # Non-vacuity: with the offset-closure detector blinded the offsets come back.
+    global OFFSET_CLOSURE
+    keep_offsets = OFFSET_CLOSURE
+    try:
+        OFFSET_CLOSURE = re.compile(r"\bthis_matches_nothing_at_all\b")
+        assert "EPILOGUE_JOIN" in used_as_game_address(call_site), (
+            "blinding the offset-closure detector did not change the result; the case is vacuous"
+        )
+    finally:
+        OFFSET_CLOSURE = keep_offsets
 
     # Non-VACUITY. Blind the paren balancer to multi-line calls and the first assertion must fail.
     global RESOLVERS

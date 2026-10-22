@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use er_build_watermark_core::overlay_host::{
-    OverlayFrame, add_font, adopt_frame, frame_font, frame_texture, register_with_host_retrying,
+    OverlayFrame, adopt_frame, frame_texture, register_with_host_retrying,
 };
-use hudhook::imgui::Ui;
+use er_overlay_theme::{self as theme, Theme};
 
 use crate::board;
 
@@ -204,11 +204,6 @@ static APPLY: AtomicUsize = AtomicUsize::new(0);
 /// The running game image's base, for the icon lookup's measured addresses.
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 static SHOW_BOARD: AtomicBool = AtomicBool::new(false);
-/// The host's handle for the game's menu font, 0 until it accepted one, and the screen scale it
-/// was sized for; how many captured `font.gfx` have been tried.
-static FONT_HANDLE: AtomicU32 = AtomicU32::new(0);
-static FONT_KY_BITS: AtomicU32 = AtomicU32::new(0);
-static FONT_TRIED: AtomicUsize = AtomicUsize::new(0);
 static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 static ITEM_LIST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 static ITEM_LIST_AT_MS: AtomicUsize = AtomicUsize::new(0);
@@ -341,14 +336,6 @@ fn install() {
         )),
         Err(status) => log(format_args!(
             "MenuJob::EmitResult hook failed: {status:?}; the board leaves when Run stops"
-        )),
-    }
-    match crate::menu_font::install() {
-        Ok(route) => log(format_args!(
-            "Scaleform file open registered on the {route} union, for the menu font"
-        )),
-        Err(status) => log(format_args!(
-            "Scaleform file open hook failed: {status}; the board keeps the default font"
         )),
     }
     if register_with_host_retrying(guest_draw) {
@@ -712,63 +699,42 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    request_menu_font(ui);
     let item_list_quiet_ms = now_ms() - ITEM_LIST_AT_MS.load(Ordering::Relaxed) as u128;
-    if SHOW_BOARD.load(Ordering::Relaxed) && item_list_quiet_ms <= BOARD_GONE_MS {
-        let handle = FONT_HANDLE.load(Ordering::Relaxed);
-        let fonts = (handle != 0).then(|| board::Fonts {
-            faces: std::array::from_fn(|i| unsafe { frame_font(frame, handle, i) }),
-            ky: f32::from_bits(FONT_KY_BITS.load(Ordering::Relaxed)),
-        });
-        let board = selected_board();
-        let art = board::BoardArt {
-            gear: board
-                .gear
-                .iter()
-                .map(|g| {
-                    crate::item_icon::handle(g.icon_id)
-                        .and_then(|h| unsafe { frame_texture(frame, h) })
-                        .map(|(texture, _)| texture)
-                })
-                .collect(),
-        };
-        board::draw(ui, board, fonts.as_ref(), &art);
-    }
-}
-
-/// Hand the host the game's menu font once its `font.gfx` has been captured: converted to
-/// TrueType in memory, at every board size for this screen. Tried again only when another
-/// `font.gfx` arrives, so a refusal costs one log line, not one per frame.
-fn request_menu_font(ui: &Ui) {
-    if FONT_HANDLE.load(Ordering::Relaxed) != 0 {
+    if !SHOW_BOARD.load(Ordering::Relaxed) || item_list_quiet_ms > BOARD_GONE_MS {
         return;
     }
-    let seen = crate::menu_font::captured_count();
-    if seen == FONT_TRIED.swap(seen, Ordering::Relaxed) {
-        return;
-    }
-    let ky = ui.io().display_size[1] / board::FRAME_H;
-    for gfx in crate::menu_font::captured() {
-        let Ok(ttf) = er_gfx::ttf::menu_font_ttf(&gfx) else {
-            continue;
-        };
-        let sizes = board::SIZES.map(|px| px * ky * board::LINE_PER_EM);
-        match add_font(&ttf, &sizes) {
-            Some(handle) => {
-                FONT_KY_BITS.store(ky.to_bits(), Ordering::Relaxed);
-                FONT_HANDLE.store(handle, Ordering::Relaxed);
-                log(format_args!(
-                    "menu font handed to the overlay host: {} bytes of TrueType, handle {handle}",
-                    ttf.len()
-                ));
-            }
-            None => log(format_args!(
-                "the overlay host refused the menu font; the board keeps the default face"
-            )),
-        }
-        return;
-    }
-    log(format_args!(
-        "{seen} font.gfx captured, none holds MenuFont_01; the board keeps the default face"
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let scale = theme::panel_scale(unsafe { (*frame).ui_scale });
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    let _theme = theme::enter(Theme::new(
+        scale,
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
     ));
+    // Asked once, the first time the board is shown; the host's default font is drawn with until
+    // they are built, this frame included.
+    if let Some(handles) = theme::request_fonts(scale) {
+        log(format_args!(
+            "board fonts: the theme's faces, Plex Sans regular, medium and semibold, JetBrains \
+             Mono, and Plex Sans regular and semibold at board sizes, handed to the overlay host \
+             at scale {scale}: handles {handles:?}. A 0 is a face the host refused; a handle \
+             another panel already holds is that panel's fonts, shared"
+        ));
+    }
+    let board = selected_board();
+    let art = board::BoardArt {
+        gear: board
+            .gear
+            .iter()
+            .map(|g| {
+                crate::item_icon::handle(g.icon_id)
+                    .and_then(|h| unsafe { frame_texture(frame, h) })
+                    .map(|(texture, _)| texture)
+            })
+            .collect(),
+    };
+    board::draw(ui, board, &art);
 }

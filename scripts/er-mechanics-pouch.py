@@ -4,9 +4,9 @@ installed regulation lets a player use in a multiplayer session, by the repo's o
 and recast rules.
 
     python3 scripts/er-mechanics-pouch.py "Poleblade of the Bud" --affinity Standard \\
-        --stats vig=58,mnd=8,vit=38,str=20,dex=22,int=7,fth=8,arc=68
+        --stats vig=58,mnd=8,end=38,str=20,dex=22,int=7,fth=8,arc=68
     python3 scripts/er-mechanics-pouch.py Greatsword --affinity Heavy \\
-        --stats vig=58,mnd=15,vit=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
+        --stats vig=58,mnd=15,end=40,str=60,dex=12,int=9,fth=25,arc=9 --plan-weapons "Finger Seal"
     python3 scripts/er-mechanics-pouch.py ... --base ~/.cache/er-build-planner/weapon-builds/<dir>/base.json
     python3 scripts/er-mechanics-pouch.py --selftest
 
@@ -156,15 +156,31 @@ not traced and takes the crimson one's, buffs.md), so the drink time is the same
 is not charged. FP is not capped at the bar here: a Cerulean drink pays its full 220 and an FP item
 its full FP per use whatever the bar holds, as `flask_split` always has.
 
+**Instant heals and their cures.** A good whose one-shot rows heal (`instant_spec`: Raw Meat
+Dumpling, 50% of max HP) is scored like an extra crimson flask: each use of its stock heals that
+HP over the flask fights' engagements (`FLASK_ETA`, `crimson_share`), less what the status it procs
+on its own user costs (the dumpling's poison, 501236, over one battle), and charges its clip in the
+time factor. A bolus is a candidate only for that: it is live when it ends such a status, which
+then costs the ticks before the cure, and it is pressed once per heal (Neutralizing Boluses beside
+the dumpling, as the user's own template carries them).
+
+**The rest of the quickbar.** After the kit, `pots` takes the best pot of each pot group the kit
+holds no member of, by HP a throw on the median defender (flat attack plus each on-hit status
+row's proc, a status the focus weapon already builds up counting nothing), with the group's whole
+container count; and `bolus_fill` lists a bolus for every status some window weapon inflicts,
+most carried first. Both fill the quickbar after the picks (`layout`), the first pot taking a pouch
+position left free. An FP item that only refills (Starlight Shards) is used between engagements and
+takes the quickbar, not the pouch, and a buff the build holds one of (Gourmet Scorpion Stew,
+`maxNum` 1) is used before contact from the menu and takes no slot (user, 2026-10-17).
+
 **Left out, and reported in `skipped`.** Body transforms (a row whose `stateInfo` the paramdef labels
 `Full Body Transform VFX`): Rock Heart and Priestess Heart turn the player into an ancient dragon
 until death and are used disrobed (their GoodsCaption), so they replace the build being scored
-rather than buff it, and their damage cut belongs to the dragon, not to this armor. Status cures (a row writing negative build-up): the repo
-values status from the attacker's side only (`er-mechanics-status.status_expected` over corpus
-defenders, a bolus being a defender trait), and nothing models the procs the window's weapons land
-on this build. Thrown items and pots (a damaging bullet) and attack spells: no thrown-item or
-spell damage model (`er-mechanics-armor-targets` leaves spells out for the same reason). Instant
-heals: no model of heals beyond the flasks. Status greases: their build-up needs the weapon's
+rather than buff it, and their damage cut belongs to the dragon, not to this armor. Cure spells: only consumable cures are scored
+(above). Thrown items (a damaging bullet) and attack spells: no thrown-item or spell damage term
+in the kit score (`er-mechanics-armor-targets` leaves spells out for the same reason); pot-group
+throwables are ranked apart (`pots`). Heal spells, and heals with no one-shot row: not modeled.
+Status greases: their build-up needs the weapon's
 attack chain (`er-mechanics-status.hit_buildup`), not wired here. Effect columns no term reads:
 poise (`toughnessDamageCutRate`), `maxHpRate`, stamina, and status build-up adds on body buffs.
 The sleep Lulling Branch builds up on its own user (its cycled row 20500911, `sleepAttackPower`
@@ -215,6 +231,9 @@ FLASK_ANIM = {'crimson': 10, 'cerulean': 19}
 PHYSICK_GOODS_TYPE = 9
 SORCERY_TYPES, INCANTATION_TYPES = (5, 17), (16, 18)
 ITEM_TYPE = 0
+#: `goodsType` 11: a pot group's container (`er-mechanics-status`-adjacent census:
+#: `scripts/regulation-potgroup-census.py`, `IsRegenerativeMaterial`, `VERIFIED`).
+REGENERATIVE_MATERIAL = 11
 #: What a grease tier the stat optimizer assumes (`er-builds-optimize.weapon_best`).
 ASSUMED_TIER = 'dlc-drawstring'
 #: Who may use a good or spell, by role (`Buffs.ROLE_BY_TAG`'s roles; paramdef descriptions: a
@@ -255,11 +274,12 @@ SKIP_REASON = {
     'buffs others': 'its effect goes to someone else by its caption (BUFFS_OTHERS)',
     'body transform': 'turns the player into another body until death, worn disrobed: it replaces '
                       'the build instead of buffing it',
-    'status cure': 'no model of the procs the window lands on this build: er-mechanics-status '
-                   'values status from the attacker side only, a bolus being a defender trait',
-    'projectile': 'no thrown-item damage model (a damaging bullet)',
+    'status cure': 'a cure spell: only consumable cures are scored (against a heal\'s own status, '
+                   'and as the window\'s bolus fill)',
+    'projectile': 'no thrown-item term in the kit score (a damaging bullet); pot-group throwables '
+                  'are ranked apart, best per group (pots)',
     'attack spell': 'no spell damage model (er-mechanics-armor-targets leaves spells out too)',
-    'instant heal': 'no model of heals beyond the flasks',
+    'instant heal': 'a heal spell, or a heal with no one-shot row (instant_spec): not modeled',
     'status weapon buff': 'status build-up per hit needs the attack chain '
                           '(er-mechanics-status.hit_buildup), not wired here',
     'no PvP term': 'no row any term reads (utility, travel, multiplayer items)',
@@ -285,12 +305,16 @@ def flask_split(fp_need, fp_bar, total, per_flask=CERULEAN_FP, paid=0.0):
     return int(total) - cer, cer
 
 
-def layout(picks, flasks, base_positions=None, quick=QUICKBAR, pouch=POUCH, uses=None):
+def layout(picks, flasks, base_positions=None, quick=QUICKBAR, pouch=POUCH, uses=None, slow=(), extra=()):
     """Planner `items.tools.slots`: the flasks at the base build's positions when it has them,
     else the first free pouch positions in order; then the picks by `uses` per fight, most first
     (pick order breaking ties): the free pouch positions (the quickest to reach), then the
-    quickbar's, then no position at all. A pick with no position is still carried and used from
-    the inventory menu (module docstring), so nothing is dropped."""
+    quickbar's, then no position at all. A pick in `slow` is used between engagements and gains
+    nothing from the pouch (an FP item that only refills: user, 2026-10-17, of Starlight Shards),
+    so it takes a quickbar position. Then `extra` in order (the pots, then the boluses): a pouch
+    position still free goes to the first of them, the rest fill the quickbar and are left out
+    when it is full. A pick with no position is still carried and used from the inventory menu
+    (module docstring), so nothing is dropped."""
     pos = dict(base_positions or {})
     taken = {p for n, p in pos.items() if n in flasks}
     out = []
@@ -301,15 +325,26 @@ def layout(picks, flasks, base_positions=None, quick=QUICKBAR, pouch=POUCH, uses
             p = pouch_free.pop(0)
         out.append({'name': n, 'equipIndex': p})
     used = {s['equipIndex'] for s in out}
-    free = ([p for p in range(quick, quick + pouch) if p not in used]
-            + [p for p in range(quick) if p not in used])
+    pouch_left = [p for p in range(quick, quick + pouch) if p not in used]
+    bar_left = [p for p in range(quick) if p not in used]
     ranked = sorted(range(len(picks)), key=lambda i: (-(uses or {}).get(picks[i], 0.0), i))
     carried = []
-    for k, i in enumerate(ranked):
-        if k < len(free):
-            out.append({'name': picks[i], 'equipIndex': free[k]})
+    for i in ranked:
+        if picks[i] not in slow and pouch_left:
+            p = pouch_left.pop(0)
+        elif bar_left:
+            p = bar_left.pop(0)
+        elif pouch_left:
+            p = pouch_left.pop(0)
         else:
             carried.append({'name': picks[i], 'equipIndex': None})
+            continue
+        out.append({'name': picks[i], 'equipIndex': p})
+    for k, name in enumerate(n for n in extra if n not in picks):
+        if k == 0 and pouch_left:
+            out.append({'name': name, 'equipIndex': pouch_left.pop(0)})
+        elif bar_left:
+            out.append({'name': name, 'equipIndex': bar_left.pop(0)})
     out.sort(key=lambda s: s['equipIndex'])
     return [dict(s, order=i) for i, s in enumerate(out + carried)]
 
@@ -536,6 +571,55 @@ class Pouch:
             out += (pt + pct * fp_bar / 100.0) * (d / iv if iv > 0 else 1.0)
         return out
 
+    def instant_spec(self, rows):
+        """{'rate', 'point', 'self_status'} of a good whose rows heal its user at once, or None:
+        the one-shot rows (`motionInterval` 0 or `effectEndurance` 0) with a negative
+        `changeHpRate` / `changeHpPoint` (instant heals, module docstring), and the status rows it
+        procs on its own user, [(status, row)] by `er-mechanics-status.row_status` (Raw Meat
+        Dumpling: 501235 heals 50% of max HP and replaces itself with 501236, poison 99999 and its
+        damage columns, 90 s)."""
+        rate = point = 0.0
+        own = []
+        for sid in rows:
+            r = self.m.sp.get(sid)
+            if r is None:
+                continue
+            if (r['changeHpRate'] < 0 or r['changeHpPoint'] < 0) and (r['motionInterval'] <= 0
+                                                                       or r['effectEndurance'] <= 0):
+                rate -= min(0.0, r['changeHpRate'])
+                point -= min(0.0, r['changeHpPoint'])
+            rs = self.ST.row_status(r)
+            if rs:
+                own.append((rs[0], sid))
+        if rate <= 0 and point <= 0:
+            return None
+        return {'rate': rate, 'point': point, 'self_status': own}
+
+    def self_status_hp(self, sid, max_hp, cured):
+        """HP a status row a heal procs on its own user costs: its damage per tick (`proc_effect`'s
+        rule) over the ticks inside one battle (`er-mechanics-status.BATTLE_SECONDS`, as the ash
+        table cuts a damage-over-time proc), or, when the kit cures that status, over the bolus
+        clip's `cure_frame` plus `DOT_CURE_DELAY` (`INFERRED`: the cure is pressed as soon as the
+        heal ends)."""
+        r = self.m.sp[sid]
+        per = max_hp * r['changeHpRate'] / 100.0 + r['changeHpPoint']
+        iv, dur = r['motionInterval'], r['effectEndurance']
+        if per <= 0:
+            return 0.0
+        if iv <= 0 or dur <= 0:
+            return per
+        span = (self.ST.cure_frame() + self.ST.DOT_CURE_DELAY) / B.CAST_FPS if cured else self.ST.BATTLE_SECONDS
+        return per * max(1, int(min(dur, span) / iv))
+
+    def instant_hp(self, ctx, c, keys):
+        """Net HP one use of instant heal `c` gives this build: the heal, through `FLASK_ETA` as a
+        flask's is, less what its own status costs (`self_status_hp`), a status the kit `keys`
+        cures costing only the ticks before the cure."""
+        sp = c['instant']
+        cures = {self.cands[k]['cures'] for k in keys if k in self.cands and self.cands[k].get('cures')}
+        heal = (ctx['max_hp'] * sp['rate'] / 100.0 + sp['point']) * B.FLASK_ETA
+        return heal - sum(self.self_status_hp(sid, ctx['max_hp'], st in cures) for st, sid in sp['self_status'])
+
     def _bullet_damages(self, roots):
         seen, todo = set(), list(roots)
         while todo:
@@ -555,6 +639,13 @@ class Pouch:
         transform = {k for k, v in m.state_names.items() if v == BODY_TRANSFORM_LABEL}
         self.cands, self.unscored, seen = {}, {}, set()
         self.flask_names = {}
+        self.throwables = {}
+        # Pot capacity per `potGroupId`: the most a player can hold of the group's regenerative
+        # material (Cracked Pot 20, Ritual Pot 10, Perfume Bottle 10, Hefty Cracked Pot 10).
+        self.pot_capacity = {}
+        for gid, f in self.gflag.items():
+            if f['goodsType'] == REGENERATIVE_MATERIAL and f['potGroupId'] >= 0:
+                self.pot_capacity[f['potGroupId']] = max(self.pot_capacity.get(f['potGroupId'], 0), f['maxNum'])
         for gid, g in sorted(m.goods.items()):
             name = m.goods_name.get(gid)
             f = self.gflag.get(gid)
@@ -613,6 +704,19 @@ class Pouch:
             refs = B._goods_refs(m, gid, g)
             allrows = [i for i, _ in m._closure(refs[1], refs[2])] if refs else []
             sp = [m.sp[i] for i in allrows]
+            cure = next((cs for cs in (self.ST.cure_status(r) for r in sp) if cs), None) if kind == 'consumable' else None
+            if cure:
+                # A cure is scored only where it ends a status a kit member procs on its own
+                # user (`instant_hp`); the window's own statuses fill the quickbar (`bolus_fill`).
+                self.cands[key] = dict(c, cures=cure[0])
+                continue
+            inst = self.instant_spec(allrows) if kind == 'consumable' else None
+            if inst:
+                self.cands[key] = dict(c, instant=inst)
+                continue
+            if (kind == 'consumable' and c['pot_group'] >= 0 and refs and refs[2]
+                    and self._bullet_damages(refs[2])):
+                self.throwables[key] = dict(c, bullets=[b for b in refs[2] if b and b > 0])
             if any(r[col] < 0 for r in sp for col in B.STATUS.values()):
                 cls = 'status cure'
             elif f['isEnhance'] or any(r['spCategory'] in B.WEAPON_BUFF_CATS for r in sp):
@@ -648,7 +752,7 @@ class Pouch:
                 fams[fam] = got
         slots = [(1.0 / len(fams) / len(got), {el: a[MV_KEY[el]] for el in ELEMENTS}, a['phys_type'],
                   self.by_point.get(a['atk_row'], 100) / 100.0) for got in fams.values() for a in got]
-        me = DEF.defender(self.def_t, {('end' if k == 'vit' else k): v for k, v in stats.items()}, list(armor),
+        me = DEF.defender(self.def_t, {STAT_ALIAS.get(k, k): v for k, v in stats.items()}, list(armor),
                           list(talismans), great_rune, pvp=True)
         mix = AT.damage_mix(self.pvp_builds, me['defense'], t, self.reg)
         absorb = {}
@@ -732,13 +836,15 @@ class Pouch:
         """(uses, cast frames) of a kit source. Items of one `potGroupId` share one stock:
         `GetMaxAmountForItem` (bd consumable-quantity-is-equipparamgoods-maxnum-0x3a-2026-08-30,
         `VERIFIED`) caps a pot item by its group's free container capacity, not by its own
-        `maxNum`. The regulation does not hold the container count, so the stock is taken as the
-        members' `maxNum` (`INFERRED`) and split evenly between the kit's members of the group.
-        An item its user walks with costs no frames (standing still, module docstring)."""
+        `maxNum`. The container count is the group's material `maxNum` (`pot_capacity`: the most
+        of it a player can hold, `INFERRED` to be what a finished save holds), capped by the
+        member's own `maxNum` and split evenly between the kit's members of the group. An item
+        its user walks with costs no frames (standing still, module docstring)."""
         c = self.cands.get(key)
         if c is not None and c['kind'] == 'consumable':
             uses = max(1, int(self.gflag[c['goods']]['maxNum'] or 1))
             if c['pot_group'] >= 0:
+                uses = min(uses, self.pot_capacity.get(c['pot_group'], uses))
                 n = sum(1 for k in keys if k in self.cands and self.cands[k]['pot_group'] == c['pot_group'])
                 uses = max(1, uses // max(1, n))
             return uses, 0.0 if c['walks'] else self.m.item_cast_frames
@@ -816,6 +922,31 @@ class Pouch:
         for src, (_, cast, pts) in plans.items():
             for i, (f, n) in enumerate(pts):
                 cost[i] += n * (cast or 0.0) / B.CAST_FPS / f
+        # Instant heals: every use is drunk over the fight like a flask (`FLASK_ETA`, the flask
+        # fights' share), each at most once per landed hit, and costs its clip unless its user
+        # walks; a cure is live only when it ends a status one of them procs on its own user, and
+        # is pressed once per such use.
+        inst_hp, extra_live = 0.0, set()
+        hits_at = B._pairs(tuple(self.points), self.hits)
+        for key in keys:
+            c = self.cands.get(key)
+            if not c or 'instant' not in c:
+                continue
+            uses, cast = self._limit(key, keys)
+            per = self.instant_hp(ctx, c, keys)
+            if per <= 0:
+                continue
+            extra_live.add(key)
+            inst_hp += uses * per * self.crimson_share / ctx['engagements'] if ctx['engagements'] else 0.0
+            own = {st for st, _ in c['instant']['self_status']}
+            frames = cast
+            for k2 in keys:
+                c2 = self.cands.get(k2)
+                if c2 and c2.get('cures') in own:
+                    extra_live.add(k2)
+                    frames += self._limit(k2, keys)[1]
+            for i, (f, h) in enumerate(hits_at):
+                cost[i] += min(uses, max(1, h)) * frames / B.CAST_FPS / f
         tf = sum(max(0.0, 1.0 - c) for c in cost) / len(cost)
         pre = dict.fromkeys(ELEMENTS, 1.0)
         post = dict.fromkeys(ELEMENTS, 1.0)
@@ -849,10 +980,10 @@ class Pouch:
         offense = self.hit(ctx, pre, flat, post, ratio) / ctx['base_hit'] if ctx['base_hit'] else 1.0
         win = ctx['win']
         cut = (1.0 - win) * self.attackers * sum(ctx['incoming'][ty] * (1.0 - kept[ty]) for ty in DAMAGE_KEYS)
-        heal = heal_s * self.ST.ENGAGEMENT_SECONDS
+        heal = heal_s * self.ST.ENGAGEMENT_SECONDS + inst_hp
         flask = self.flask_hp(ctx, keys)
         out = {'score': combine(offense, cut, heal + flask, ctx['loss'], tf), 'offense': offense, 'cut_hp': cut,
-               'heal_hp': heal, 'flask_hp': flask, 'time_factor': tf, 'live': {s for _, s in live},
+               'heal_hp': heal, 'flask_hp': flask, 'time_factor': tf, 'live': {s for _, s in live} | extra_live,
                'rows': rows_used, 'recasts': {s: sum(n for _, n in p[2]) / len(p[2]) for s, p in plans.items()}}
         ctx['cache'][k] = out
         return out
@@ -946,6 +1077,121 @@ class Pouch:
         mp = (self.magic.get(self.cands[key]['goods']) or {}).get('mp', 0)
         return mp, sum(1 + n for _, n in pts) / len(pts)
 
+    # -- the quickbar's thrown pots and boluses --------------------------------------------------
+    def _status_tables(self):
+        if getattr(self, '_st', None) is None:
+            self._st = self.ST.Tables()
+        return self._st
+
+    def _ash_tables(self):
+        if self._ash is None:
+            A = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py')
+            self._ash = (A, A.AshTables())
+        return self._ash
+
+    def own_statuses(self, ctx):
+        """The statuses the focus weapon builds up itself (`er-mechanics-status.weapon_status`)."""
+        if 'own_statuses' not in ctx:
+            ws = self.ST.weapon_status(self._status_tables(), ctx['weapon'], ctx['affinity'], ctx['level'],
+                                       ctx['stats'], ctx['two'])
+            ctx['own_statuses'] = {s['status'] for s in ws['sources']}
+        return ctx['own_statuses']
+
+    def pot_hp(self, ctx, key):
+        """{'hp', 'damage', 'status'} of one throw of pot `key` on the window's median defender.
+
+        Damage: the flat attack of the bullet chain's most damaging node (`atkPhys` and the
+        elemental `atk*` columns; a pot's AtkParam scales with no attribute), through the median
+        defender's defense and absorption (`er-mechanics-defense.damage`, as `hit` takes the
+        focus weapon's). The thrown bullet and its burst are both damaging nodes on some pots (Hefty
+        Rock Pot: 370 each); only the larger is counted, whether one target takes both is not
+        traced (`INFERRED`). Status: each on-hit row's build-up over the median resistance of its
+        group times its proc HP, a damage-over-time proc cut to one battle, as
+        `er-mechanics-ash-table.Table.buildup_hp` values a skill bullet's own status; a status
+        the focus weapon already builds up is worth nothing here (the user's rule for Hoarfrost
+        Stomp on a frost build, 2026-10-17, carried to pots)."""
+        A, t = self._ash_tables()
+        st = self._status_tables()
+        hp = self.fight['median_hp']
+        own = self.own_statuses(ctx)
+        best, build = 0.0, {}
+
+        def walk(bt):
+            nonlocal best
+            if not bt:
+                return
+            flat = {el: float(bt['flat'].get(el, 0)) for el in ELEMENTS}
+            if any(flat.values()):
+                phys = self.ATK.PHYS_TYPE_NAMES.get(bt['atk_attribute'], 'standard')
+                best = max(best, sum(self.DEF.damage(flat, 100.0, self.defender, phys)['by_type'].values()))
+            for sid in bt['on_hit_speffects']:
+                rs = self.ST.row_status(st.sp.get(sid, {}))
+                if rs:
+                    build.setdefault(rs[0], (rs[1], sid))
+            for c in bt['children'].values():
+                walk(c)
+        for b in self.throwables[key]['bullets']:
+            walk(A.bullet_tree(t, b))
+        status = {}
+        for name, (b, sid) in build.items():
+            if name in own:
+                continue
+            group = next(s[7] for s in self.ST.STATUSES if s[0] == name)
+            resist = self.ST.quantiles([r['resist'][group] for r in self.st_rows], (0.5,)).get(0.5, 0.0)
+            pe = self.ST.proc_effect(st, sid, hp)
+            cut = 1.0
+            if pe['ticks'] > 1 and pe['interval'] > 0 and pe['hp_total']:
+                cut = min(pe['ticks'], int(self.ST.BATTLE_SECONDS / pe['interval'])) / pe['ticks']
+            if resist > 0:
+                status[name] = pe['hp_total'] * min(1.0, b / resist) * cut
+        return {'hp': best + sum(status.values()), 'damage': best, 'status': status}
+
+    def pots(self, ctx, kit=()):
+        """The best pot of each pot group the kit holds no member of, by HP per throw
+        (`pot_hp`), with the group's whole container count (`pot_capacity`): items of one group
+        share that count (`_limit`), and one pot's throws are worth the same whichever slot of the
+        count they take, so a second pot of the group only trades throws of the best one away."""
+        taken = {self.cands[k]['pot_group'] for k in kit if k in self.cands} - {-1}
+        best = {}
+        for key, c in self.throwables.items():
+            g = c['pot_group']
+            if g in taken or not c['roles'] & set(ctx['roles']) or g not in self.pot_capacity:
+                continue
+            v = self.pot_hp(ctx, key)
+            if v['hp'] > 0 and (g not in best or v['hp'] > best[g]['hp']):
+                best[g] = dict(v, key=key, name=c['name'], group=g, capacity=self.pot_capacity[g])
+        return sorted(best.values(), key=lambda p: -p['hp'] * p['capacity'])
+
+    def bolus_fill(self, kit=()):
+        """The boluses the window's opponents make worth carrying, most carried first: every
+        status some right-hand weapon of the window's builds builds up (`weapon_status`, the
+        weapon's own rows; greases, skills and spells are not read), ordered by the share of the
+        builds that record quick items which carry its bolus (`er-mechanics-status.bolus_share`).
+        A status no weapon of the window inflicts (death blight at RL 150: 0 of 1074 builds,
+        2026-10-17) gets no bolus. One already in `kit` is left out."""
+        st = self._status_tables()
+        if not hasattr(self, '_inflict'):
+            seen, cnt = {}, dict.fromkeys(self.ST.NAMES, 0)
+            for r in self.st_rows:
+                got = set()
+                for s in r['right']:
+                    k = (s.get('name'), self.ST.AFF_ALIASES.get(s.get('infusion'), s.get('infusion')))
+                    if k not in seen:
+                        try:
+                            seen[k] = {x['status'] for x in self.ST.weapon_status(st, k[0], k[1])['sources']}
+                        except (SystemExit, KeyError, TypeError, ValueError):
+                            seen[k] = set()
+                    got |= seen[k]
+                for n in got:
+                    cnt[n] += 1
+            self._inflict = {n: v / len(self.st_rows) for n, v in cnt.items()} if self.st_rows else {}
+        carry = self.ST.bolus_share(st, self.st_rows)
+        names = {self.cands[k]['name'] for k in kit if k in self.cands}
+        out = [{'name': st.bolus[s]['name'], 'status': s, 'carry': round(carry.get(s, 0.0), 4),
+                'inflict': round(self._inflict.get(s, 0.0), 4)}
+               for s in st.bolus if self._inflict.get(s, 0.0) > 0 and st.bolus[s]['name'] not in names]
+        return sorted(out, key=lambda b: -b['carry'])
+
 
 _POUCH = {}
 
@@ -982,14 +1228,14 @@ def roles_of(tags):
 def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw):
     """Tools, spells, grease and flask split for one build (module docstring).
 
-    `stats` are planner keys (`vit` is Endurance). Keywords: `rl` (default from the stats),
+    `stats` are attribute keys (`vig`, `end`, ...). Keywords: `rl` (default from the stats),
     `window` 10, `talismans`, `great_rune`, `armor` (four piece names; else the window's median
     absorption), `base` (a planner build: its tears and great rune are fixed in every kit, its flask
     positions and total are kept), `fixed` (resolve keys held in every kit, instead of the base's),
     `skill` (SwordArtsParam id; default the weapon's own), `tool_slots`, `memory_slots`,
     `flask_total`, `physick` (keep the physick flask; default when the base carries a tear),
     `win`, `regulation`, `pouch` (a `Pouch` to reuse)."""
-    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
+    rl = kw.get('rl') or (sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - 79)
     p = kw.get('pouch') or model(rl, kw.get('window', 10), kw.get('regulation'), kw.get('fight', B.DEFAULT_FIGHT))
     base = kw.get('base')
     fixed = kw.get('fixed')
@@ -1064,7 +1310,31 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
     names = [p.cands[k]['name'] for k in tools]
     # Uses per fight: the first use plus the recasts that keep it up.
     uses = {p.cands[k]['name']: 1.0 + final['recasts'].get(k, 0.0) for k in tools}
-    layout_rows = layout(names, keep, positions, uses=uses)
+    # An instant heal is used once per stock item, and a cure as often as the heal it follows.
+    for k in tools:
+        c = p.cands[k]
+        if 'instant' in c:
+            n = p._limit(k, kit)[0]
+            uses[c['name']] = float(n)
+            for k2 in tools:
+                if p.cands[k2].get('cures') in {s for s, _ in c['instant']['self_status']}:
+                    uses[p.cands[k2]['name']] = max(uses.get(p.cands[k2]['name'], 0.0), float(n))
+    slow = {p.cands[k]['name'] for k in tools
+            if p.cands[k]['fp_rows'] and set(p.cands[k]['rows']) <= set(p.cands[k]['fp_rows'])}
+    # A buff the build holds one of is used once, before contact, so it is used from the
+    # inventory menu as a swap-cast spell is and takes no slot (user, 2026-10-17: Raw Meat
+    # Dumpling equipped in place of Gourmet Scorpion Stew, `maxNum` 1).
+    menu = [p.cands[k]['name'] for k in tools if 'instant' not in p.cands[k] and not p.cands[k].get('cures')
+            and p._limit(k, kit)[0] <= 1]
+    names = [n for n in names if n not in menu]
+    pots = p.pots(ctx, kit) if kw.get('pots', True) else []
+    boluses = p.bolus_fill(kit) if kw.get('boluses', True) else []
+    extra = [x['name'] for x in pots] + [x['name'] for x in boluses]
+    layout_rows = layout(names, keep, positions, uses=uses, slow=slow, extra=extra)
+    layout_rows += [{'name': n, 'equipIndex': None, 'order': len(layout_rows) + i} for i, n in enumerate(menu)]
+    placed = {s['name'] for s in layout_rows if s['equipIndex'] is not None}
+    pots = [dict(x, slotted=x['name'] in placed) for x in pots]
+    boluses = [dict(x, slotted=x['name'] in placed) for x in boluses]
     skipped = []
     for cls, ns in sorted(p.unscored.items(), key=lambda kv: -len(kv[1])):
         skipped.append({'category': cls, 'count': len(ns), 'why': SKIP_REASON[cls], 'examples': ns[:5]})
@@ -1079,6 +1349,9 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
             "leaves counts as its heal over the fight's engagements; an item whose use clip lets its "
             "user walk costs no recast time.")
     return {'tools': layout_rows, 'spells': [p.cands[k]['name'] for k in spells], 'swaps': swaps,
+            'pots': [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in x.items() if k != 'status'}
+                     | {'status': {s: round(h, 1) for s, h in x['status'].items()}} for x in pots],
+            'boluses': boluses,
             'swap_catalysts': sorted({s['catalyst'] for s in swaps.values() if s.get('catalyst')}),
             'swap_talismans': sorted({s['talisman'] for s in swaps.values() if s.get('talisman')}),
             'grease': grease,
@@ -1109,11 +1382,15 @@ def pick(weapon, affinity, level, stats, plan_weapons=(), two_handed=False, **kw
 
 
 # -- CLI -----------------------------------------------------------------------------------------
+#: `vit` is the planner's spelling of Endurance, still taken for `end`.
+STAT_ALIAS = {'vit': 'end'}
+
+
 def parse_stats(s):
     out = {}
     for part in s.split(','):
         k, v = part.split('=')
-        out[k.strip().lower()] = int(v)
+        out[STAT_ALIAS.get(k.strip().lower(), k.strip().lower())] = int(v)
     return out
 
 
@@ -1139,6 +1416,14 @@ def show(got, top=25):
     for s in got['tools']:
         print(f"  {'--' if s['equipIndex'] is None else format(s['equipIndex'], '2d')}  {s['name']}"
               + ('  (carried, used from the inventory menu)' if s['equipIndex'] is None else ''))
+    print('pots (best of each pot group, the group\'s whole count):')
+    for x in got.get('pots', ()):
+        print(f"  {x['name']:<28} group {x['group']} x{x['capacity']:<3} {x['hp']:6.1f} HP a throw "
+              f"(damage {x['damage']}, status {x['status'] or '-'}){'' if x['slotted'] else '  (no slot left)'}")
+    print('boluses (statuses the window inflicts, most carried first):')
+    for x in got.get('boluses', ()):
+        print(f"  {x['name']:<22} {x['status']:<12} carried {100 * x['carry']:5.1f}%  inflicted "
+              f"{100 * x['inflict']:5.1f}%{'' if x['slotted'] else '  (no slot left)'}")
     print(f"spells: {', '.join(got['spells']) or 'none'}")
     g = got['grease_tier']
     print(f"grease: {got['grease'] or 'none'}; tier assumption {g['assumed']}: "
@@ -1204,6 +1489,12 @@ def selftest():
           [s['name'] for s in lay if s['equipIndex'] is not None and s['equipIndex'] >= 10][3:], ['x0', 'x1', 'x2'])
     check('layout: past 16 positions a pick is carried with no slot, not dropped',
           (len(lay), sum(1 for s in lay if s['equipIndex'] is None)), (23, 7))
+    lay = layout(['Shard', 'Heal'], ['C'], {}, uses={'Shard': 10, 'Heal': 3}, slow={'Shard'},
+                 extra=['Pot'] + [f'b{i}' for i in range(12)])
+    pos = {s['name']: s['equipIndex'] for s in lay}
+    check('layout: a slow pick takes the quickbar even when used most, the first extra a free pouch slot',
+          (pos['Shard'], pos['Heal'], pos['Pot']), (0, 11, 12))
+    check('layout: extras past the quickbar are left out', (pos.get('b8'), 'b9' in pos), (9, False))
     # greedy over a synthetic evaluator: A and B replace each other (the later one stays), A is
     # better; C adds; D costs more time than it gives.
     value = {'A': 0.20, 'B': 0.10, 'C': 0.05, 'D': -0.01}
@@ -1264,8 +1555,26 @@ def _real(p, check):
     check('flask names from the regulation', (p.flask_names['crimson'], p.flask_names['cerulean'],
                                               p.flask_names['physick']),
           ('Flask of Crimson Tears', 'Flask of Cerulean Tears', 'Flask of Wondrous Physick'))
-    check('a bolus is a status cure, not a candidate', 'consumable:Stanching Boluses' in p.cands, False)
-    check('Stanching Boluses filed as a status cure', 'Stanching Boluses' in p.unscored.get('status cure', []), True)
+    check('a bolus is a candidate that cures its status',
+          (p.cands['consumable:Stanching Boluses'].get('cures'), p.cands['consumable:Neutralizing Boluses'].get('cures')),
+          ('bleed', 'poison'))
+    dump = p.cands['consumable:Raw Meat Dumpling']
+    check('Raw Meat Dumpling: heals 50% of max HP at once and procs poison on its user (501236)',
+          (dump['instant']['rate'], dump['instant']['point'], dump['instant']['self_status']),
+          (50.0, 0.0, [('poison', 501236)]))
+    ctx0 = {'max_hp': 2000.0}
+    raw = p.instant_hp(ctx0, dump, [dump['key']])
+    cured = p.instant_hp(ctx0, dump, [dump['key'], 'consumable:Neutralizing Boluses'])
+    check('Raw Meat Dumpling: the poison costs less when Neutralizing Boluses cure it, never more than the heal',
+          (cured > raw, 0 < raw < 1000.0, cured <= 1000.0), (True, True, True))
+    check('pot capacity: Cracked Pot 20, Perfume Bottle 10, Ritual Pot 10, Hefty Cracked Pot 10',
+          {g: p.pot_capacity[g] for g in sorted(p.pot_capacity)}, {1: 20, 2: 10, 3: 10, 4: 10})
+    check('Freezing Pot and Fire Pot are pot throwables',
+          ('consumable:Freezing Pot' in p.throwables, 'consumable:Fire Pot' in p.throwables), (True, True))
+    boluses = p.bolus_fill()
+    check('bolus fill: no death blight (no window weapon inflicts it), bleed first',
+          ('death_blight' in {b['status'] for b in boluses}, boluses[0]['status'] if boluses else None),
+          (False, 'bleed'))
     check('a throwing knife is a projectile', 'Throwing Dagger' in p.unscored.get('projectile', []), True)
     check('a whistle is not usable in multiplayer',
           'Spectral Steed Whistle' in p.unscored.get('not usable in multiplayer', []), True)
@@ -1277,7 +1586,7 @@ def _real(p, check):
            any(c['name'] in ('Rock Heart', 'Priestess Heart') for c in p.cands.values())), (True, False))
     check('Boiled Crab is a candidate', 'consumable:Boiled Crab' in p.cands, True)
     check('a grease needs isEnhance', p.cands['consumable:Drawstring Royal Magic Grease']['needs_enhance'], True)
-    st = {'vig': 58, 'mnd': 8, 'vit': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
+    st = {'vig': 58, 'mnd': 8, 'end': 38, 'str': 20, 'dex': 22, 'int': 7, 'fth': 8, 'arc': 68}
     ctx = p.context('Poleblade of the Bud', 'Standard', 10, st)
     p.m.fp_bar = ctx['fp_bar']
     check('Poleblade of the Bud takes no grease (isEnhance 0)', ctx['enhance'], False)
@@ -1355,7 +1664,7 @@ def _real(p, check):
           {'invader': 0.5, 'host': 0.5})
     check('roles from tags: host when none names one', roles_of(['Dexterity']), {'host': 1.0})
     # Greasable: Heavy Greatsword at a STR spread; a Fire one takes none.
-    gs = {'vig': 58, 'mnd': 10, 'vit': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
+    gs = {'vig': 58, 'mnd': 10, 'end': 40, 'str': 60, 'dex': 12, 'int': 9, 'fth': 9, 'arc': 9}
     cg = p.context('Greatsword', 'Heavy', 25, gs)
     check('Heavy Greatsword is buffable', cg['enhance'], True)
     cf = p.context('Greatsword', 'Fire', 25, gs)
@@ -1383,7 +1692,7 @@ def main():
     ap.add_argument('weapon', nargs='?')
     ap.add_argument('--affinity', default='Standard')
     ap.add_argument('--level', type=int, help='weapon level (default its max)')
-    ap.add_argument('--stats', help='planner keys: vig,mnd,vit,str,dex,int,fth,arc')
+    ap.add_argument('--stats', help='vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)')
     ap.add_argument('--plan-weapons', default='', help='comma list of the other weapons the build holds')
     ap.add_argument('--two-handed', action='store_true')
     ap.add_argument('--talismans', default='')

@@ -42,6 +42,61 @@ test_allow_git_commit_then_later_sed_n if {
 	count(denials) == 0
 }
 
+# --- `-n` belongs to the command it stands in (2026-10-15) --------------------
+#
+# Refused that day: a commit through a heredoc, with `tail -n` in a later statement on the
+# opener's line and one apostrophe in the message. The opener line's tail was blanked with
+# the body, its `;` went, and the short-flag pattern ran from `commit` to `tail -n`.
+refused_2026_10_15 := concat("", [
+	"git add -A -- . ':!scripts/render-scale' && git status --short | grep -c '^[AM]' && ",
+	"git commit -q -F - <<'EOF' > log 2>&1; echo exit=$?; tail -n 12 log; git log --oneline -1\n",
+	"feat(render-scale): scale the overlay theme with the render target\n\n",
+	"The sizes were fixed pixels, so they didn't follow the render scale.\n",
+	"EOF",
+])
+
+test_allow_the_2026_10_15_heredoc_commit if {
+	count(guard.deny) == 0 with input as bash_event(refused_2026_10_15)
+}
+
+# The same command as the engine delivers it, newlines gone.
+test_allow_the_2026_10_15_heredoc_commit_on_one_line if {
+	count(guard.deny) == 0 with input as bash_event(replace(refused_2026_10_15, "\n", " "))
+}
+
+test_deny_git_commit_dash_n if {
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(guard.deny) with input as bash_event("git commit -n -m x")
+}
+
+test_deny_git_commit_clustered_qn if {
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(guard.deny) with input as bash_event("git commit -qn -m x")
+}
+
+test_allow_git_commit_then_tail_n if {
+	count(guard.deny) == 0 with input as bash_event("git commit -m x; tail -n 5 f")
+}
+
+# A message body is stdin, not arguments.
+test_allow_a_heredoc_message_that_mentions_dash_n if {
+	count(guard.deny) == 0 with input as bash_event("git commit -F - <<'EOF'\nfix: pass -n to tail\nEOF")
+	count(guard.deny) == 0 with input as bash_event("git commit -F - <<'EOF' fix: pass -n to tail EOF")
+}
+
+# Wrappers in front of git are followed, which the regex this replaced did not do.
+test_deny_dash_n_behind_a_wrapper if {
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(guard.deny) with input as bash_event("env GIT_EDITOR=true git commit -n -m x")
+}
+
+# The flag before the heredoc is still the commit's own.
+test_deny_dash_n_before_a_heredoc_message if {
+	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(guard.deny) with input as bash_event("git commit -n -F - <<'EOF'\nmsg\nEOF")
+}
+
+# `-n` is `--dry-run` for push.
+test_allow_git_push_dry_run_short if {
+	count(guard.deny) == 0 with input as bash_event("git push -n origin feat/x")
+}
+
 # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ---------------
 #
 # This policy recognises its verbs through commands.has_verb, whose
