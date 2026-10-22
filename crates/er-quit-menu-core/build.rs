@@ -99,6 +99,41 @@ const MSGBOX_DTOR_VA: u64 = 0x1407b0140;
 const MSGBOX_BUILDER_BUTTON_COUNT_OFFSET: i64 = 0x10f0;
 const MSGBOX_BUILDER_DEFAULT_INDEX_OFFSET: i64 = 0x28;
 
+/// The native profile-renderer refresh, `er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`
+/// (1.17.1 `0x1409ab820`). See `profile_table_mid_hook`.
+const PROFILE_RENDERER_REFRESH_VA: u64 = 0x1409aa680;
+/// Offsets into the refresh, identical in 1.16.2 and 1.17.1 (the body is `IDENTICAL-WHOLE`).
+const PROFILE_RENDERER_REFRESH_LATCH_CHECK: u64 = 0x54;
+const PROFILE_RENDERER_REFRESH_NEXT_SLOT: u64 = 0xce;
+/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+const PROFILE_REFRESH_LATCH_CHECK_VA: u64 =
+    PROFILE_RENDERER_REFRESH_VA + PROFILE_RENDERER_REFRESH_LATCH_CHECK;
+const PROFILE_REFRESH_NEXT_SLOT_VA: u64 =
+    PROFILE_RENDERER_REFRESH_VA + PROFILE_RENDERER_REFRESH_NEXT_SLOT;
+/// `CSMenuProfModelRend+0x754` / `+0x755`, the two request latches the refresh tests per slot.
+const PROFILE_RENDERER_REQUEST_LATCH_OFFSET: i64 = 0x754;
+const PROFILE_RENDERER_REQUEST_PENDING_OFFSET: i64 = 0x755;
+/// `+0xce` advances `RSI` one table entry and stops after this many slots.
+const PROFILE_TABLE_ENTRY_STRIDE: i32 = 8;
+const PROFILE_TABLE_SLOT_COUNT: i32 = 10;
+
+/// `+0x54`: `CMP byte [RDI+0x754],0; JNE +0xce; CMP byte [RDI+0x755],0` -- the first read of
+/// `table[slot]` and the 16 bytes the mid hook moves.
+fn profile_refresh_latch_check(asm: &mut CodeAssembler) -> Result<(), iced_x86::IcedError> {
+    asm.cmp(byte_ptr(rdi + PROFILE_RENDERER_REQUEST_LATCH_OFFSET), 0)?;
+    asm.jne(PROFILE_REFRESH_NEXT_SLOT_VA)?;
+    asm.cmp(byte_ptr(rdi + PROFILE_RENDERER_REQUEST_PENDING_OFFSET), 0)?;
+    Ok(())
+}
+
+/// `+0xce`: `INC EBX; ADD RSI,8; CMP EBX,10`, the loop's own skip-this-slot join.
+fn profile_refresh_next_slot(asm: &mut CodeAssembler) -> Result<(), iced_x86::IcedError> {
+    asm.inc(ebx)?;
+    asm.add(rsi, PROFILE_TABLE_ENTRY_STRIDE)?;
+    asm.cmp(ebx, PROFILE_TABLE_SLOT_COUNT)?;
+    Ok(())
+}
+
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
 
@@ -488,5 +523,45 @@ fn main() {
             ),
         ],
         "generated_save_flow_prologues.rs",
+    );
+
+    // The profile-renderer refresh reads `table[slot]+0x754` without testing the slot. The mid
+    // hook overwrites the three instructions starting at that read (ilhook writes up to 14 bytes),
+    // and the window is those three in full, so the bytes it moves are exactly the bytes checked.
+    generate(
+        &[
+            (
+                PrologueSpec {
+                    name: "PROFILE_REFRESH_LATCH_CHECK_WINDOW",
+                    doc: "1.16.2 profile-renderer refresh `+0x54`, the first read of `table[slot]`:\n\
+                          `CMP byte [RDI+0x754],0; JNE +0xce; CMP byte [RDI+0x755],0`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: PROFILE_REFRESH_LATCH_CHECK_VA,
+                    take: 0,
+                    pin: &[
+                        0x80, 0xbf, 0x54, 0x07, 0x00, 0x00, 0x00, 0x75, 0x71, 0x80, 0xbf, 0x55,
+                        0x07, 0x00, 0x00, 0x00,
+                    ],
+                },
+                profile_refresh_latch_check as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "PROFILE_REFRESH_NEXT_SLOT_WINDOW",
+                    doc: "1.16.2 profile-renderer refresh `+0xce`, the loop's skip-this-slot join:\n\
+                          `INC EBX; ADD RSI,8; CMP EBX,10`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: PROFILE_REFRESH_NEXT_SLOT_VA,
+                    take: 0,
+                    pin: &[0xff, 0xc3, 0x48, 0x83, 0xc6, 0x08, 0x83, 0xfb, 0x0a],
+                },
+                profile_refresh_next_slot as Assemble,
+            ),
+        ],
+        "generated_profile_table_mid_hook_windows.rs",
     );
 }

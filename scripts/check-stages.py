@@ -148,7 +148,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "lint",
         "formatting and text shape: cargo fmt, rustfmt, shellcheck, comment capitals, "
-        "lossy utf-8, markdown, file sizes",
+        "color spelling, lossy utf-8, markdown, file sizes",
         (
             "**/*.rs",
             "**/*.sh",
@@ -159,6 +159,20 @@ STAGES: tuple[Stage, ...] = (
             ".cargo/config.toml",
             "scripts/comment-caps-words.txt",
             "scripts/comment-caps.baseline.json",
+            # `check-color-spelling.py` counts every tracked text file. These are the text types
+            # beyond the ones above that carried the British spelling when it landed; a type not
+            # listed still selects every stage when it changes, through the unmatched-path rule.
+            "scripts/color-spelling.baseline.json",
+            "**/*.json",
+            "**/*.toml",
+            "**/*.txt",
+            "**/*.hlsl",
+            "**/*.hlsli",
+            "**/*.js",
+            "**/*.lua",
+            "**/*.rego",
+            "crates/er-overlay-theme/**/*",
+            "scripts/overlay-theme.baseline.json",
             "scripts/frida/ai-lua/**/*",
         ),
     ),

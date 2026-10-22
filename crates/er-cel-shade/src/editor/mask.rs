@@ -152,6 +152,9 @@ pub const MAX_FEATHER: f32 = 64.0;
 const _: () = assert!(INVERT_BIT > KIND_BITS && INVERT_BIT < 1 << FEATHER_SHIFT);
 const _: () = assert!((((MAX_FEATHER * FEATHER_STEPS) as u32) << FEATHER_SHIFT) < 1 << 24);
 
+/// A mask's bounds: a range's low and high ends in `[0]` and `[1]`; a rectangle's `x0, y0, x1, y1`.
+pub type MaskBounds = [f32; 4];
+
 /// One layer's mask.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mask {
@@ -159,8 +162,7 @@ pub struct Mask {
     pub invert: bool,
     /// Pixels over which the edge fades, 0 to [`MAX_FEATHER`].
     pub feather: f32,
-    /// A range's low and high ends in `[0]` and `[1]`; a rectangle's `x0, y0, x1, y1`.
-    pub bounds: [f32; 4],
+    pub bounds: MaskBounds,
 }
 
 impl Mask {

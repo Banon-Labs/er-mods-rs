@@ -9,6 +9,8 @@
 // Several items here are consumed only by the Windows build; the host build keeps them for tests.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+use er_overlay_theme as theme;
+
 /// Number of status gauges `CSChrResistModule` carries.
 pub const STATUS_COUNT: usize = 7;
 
@@ -90,15 +92,18 @@ impl Status {
     }
 
     /// Bar colour, close to the colour of the game's own build-up meter for the status.
+    ///
+    /// Still written here rather than taken from `er-overlay-theme`: the theme's HUD tokens cover
+    /// stance, stamina and FP, and has none for the seven statuses yet.
     pub fn color(self) -> [f32; 4] {
         match self {
-            Status::Poison => [0.55, 0.75, 0.25, 1.0],
-            Status::ScarletRot => [0.85, 0.35, 0.15, 1.0],
-            Status::BloodLoss => [0.75, 0.08, 0.12, 1.0],
-            Status::DeathBlight => [0.55, 0.50, 0.60, 1.0],
-            Status::Frostbite => [0.55, 0.85, 0.95, 1.0],
-            Status::Sleep => [0.60, 0.55, 0.90, 1.0],
-            Status::Madness => [0.95, 0.70, 0.15, 1.0],
+            Status::Poison => er_overlay_theme::STATUS_POISON,
+            Status::ScarletRot => er_overlay_theme::STATUS_SCARLET_ROT,
+            Status::BloodLoss => er_overlay_theme::STATUS_BLOOD_LOSS,
+            Status::DeathBlight => er_overlay_theme::STATUS_DEATH_BLIGHT,
+            Status::Frostbite => er_overlay_theme::STATUS_FROSTBITE,
+            Status::Sleep => er_overlay_theme::STATUS_SLEEP,
+            Status::Madness => er_overlay_theme::STATUS_MADNESS,
         }
     }
 }
@@ -280,7 +285,7 @@ pub fn panel_rows(reading: &TargetReading, active: &[bool; STATUS_COUNT]) -> Vec
             label: "Stance",
             fraction: fraction(stance.current, stance.max),
             text,
-            color: [0.85, 0.70, 0.30, 1.0],
+            color: theme::BAR_STANCE,
             active: false,
         });
     }
@@ -290,7 +295,7 @@ pub fn panel_rows(reading: &TargetReading, active: &[bool; STATUS_COUNT]) -> Vec
             label: "Stamina",
             fraction: fraction_i32(reading.stamina, reading.stamina_max),
             text: format!("{} / {}", reading.stamina.max(0), reading.stamina_max),
-            color: [0.25, 0.65, 0.25, 1.0],
+            color: theme::BAR_STAMINA,
             active: false,
         });
     }
@@ -300,7 +305,7 @@ pub fn panel_rows(reading: &TargetReading, active: &[bool; STATUS_COUNT]) -> Vec
             label: "FP",
             fraction: fraction_i32(reading.fp, reading.fp_max),
             text: format!("{} / {}", reading.fp.max(0), reading.fp_max),
-            color: [0.20, 0.40, 0.85, 1.0],
+            color: theme::BAR_FP,
             active: false,
         });
     }

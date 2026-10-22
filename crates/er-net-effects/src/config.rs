@@ -24,18 +24,19 @@ const DEFAULT_CONFIG_HEAD: &str = r#"# er-net-effects standalone DLL configurati
 # cosmetic rows, and nothing else, whenever somebody else is in your session. An
 # off switch for syncing was an off switch for that restriction, held by the one
 # person it restrains, so it is gone rather than defaulted.
-# Start with the selector overlay bar shown. Press Alt+Numpad0, Alt+0, or
-# Alt+Insert to hide/show it while in-game -- or whatever you set
-# `selector_show_hide_key` to at the bottom of this file.
+# The selector overlay bar starts hidden: nothing is drawn until you ask for it.
+# Press Alt+Numpad0, Alt+0, or Alt+Insert to show/hide it while in-game -- or
+# whatever you set `selector_show_hide_key` to at the bottom of this file. The
+# expand key (Alt+9) also shows it. Set this to true to have the bar on screen
+# from the start.
 #
-# SHOWN IS NOT OPEN. The bar starts MINIMIZED to its [+] button; click that
-# button to expand it. The DLL takes the arrow keys away from the game ONLY
-# while the bar is expanded AND a character is loaded, so with the bar
-# minimized -- or at the title screen -- every key is the game's. The keys that
-# move the selector cursor (arrows, numpad +/-) likewise wait for the expanded
-# bar; Alt+' and your own hotkeys from the hotkeys file keep firing regardless,
-# which is how this DLL is meant to be played.
-overlay_visible_on_start = true
+# A shown bar is the full effect list. The DLL takes the arrow keys away from the
+# game only while the bar is shown and a character is loaded, so with the bar
+# hidden -- or at the title screen -- every key is the game's. The keys that move
+# the selector cursor (arrows, numpad +/-) likewise wait for a shown bar; Alt+'
+# and your own hotkeys from the hotkeys file keep firing regardless, which is how
+# this DLL is meant to be played.
+overlay_visible_on_start = false
 hotkeys_file = ".er-net-effects-hotkeys.json"
 selected_effect_file = ".er-net-effects-setting.txt"
 selected_catalog_file = ".er-net-effects-catalog-setting.txt"
@@ -97,9 +98,10 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             config_path: PathBuf::from(CONFIG_FILE_NAME),
-            // Default visible because the DLL is optional and the selector UI is the primary
-            // confirmation that it loaded and is listening for keyboard control.
-            overlay_visible_on_start: true,
+            // Hidden until the show/hide key (or the expand key) is pressed, so the widget stays
+            // off screen during play. The log's `runtime-config: loaded` line is what confirms
+            // the DLL loaded, not the bar.
+            overlay_visible_on_start: false,
             hotkeys_file: PathBuf::from(".er-net-effects-hotkeys.json"),
             selected_effect_file: PathBuf::from(".er-net-effects-setting.txt"),
             selected_catalog_file: PathBuf::from(".er-net-effects-catalog-setting.txt"),

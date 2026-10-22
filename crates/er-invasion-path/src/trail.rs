@@ -3,6 +3,9 @@
 //! Ungated so `cargo test` compiles it: the pile-up this exists to prevent was a logic bug, not a
 //! game-memory one, and a windows-gated module is never built by the host test run.
 
+// Consumed only by the Windows build; the host build keeps it for tests.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use crate::geometry;
 
 /// One placed marker: where it is, and (on Windows) the handle that removes it.

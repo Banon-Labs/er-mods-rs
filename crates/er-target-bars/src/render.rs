@@ -5,6 +5,11 @@
 //! (see [`crate::layout`]), so they follow the game's bar as it moves and disappear whenever the
 //! game hides it.
 //!
+//! Its colors are `er-overlay-theme`'s HUD tokens. It draws no text and no window, and every size
+//! is in the HUD movie's stage pixels ([`StageTransform`]) rather than the theme's 1080p ones, so
+//! it enters no frame theme. The theme's painters draw on a window's list or the foreground one;
+//! the bars stay on the background list, under every other overlay's panel.
+//!
 //! This DLL never installs a second `Present` hook. If another module hosts the overlay (the
 //! build watermark, in the profile this was written for) it registers as a guest and draws through
 //! it; if nobody does, it hosts and dispatches guests itself. Two `Hudhook::apply()` calls in one
@@ -21,6 +26,7 @@ use std::time::Instant;
 use er_build_watermark_core::overlay_host::{
     OVERLAY_ABI_TAG, OverlayFrame, adopt_frame, frame_texture, register_guest, register_with_host,
 };
+use er_overlay_theme as theme;
 use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Context, DrawListMut, TextureId, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
@@ -32,9 +38,6 @@ use crate::model::{self, Row};
 /// A snapshot older than this is not drawn: the game task stopped publishing (a load, a pause),
 /// and the character it describes may be gone.
 const MAX_SNAPSHOT_AGE_MS: u64 = 500;
-
-const BAR_TRACK: [f32; 4] = [0.05, 0.05, 0.05, 0.75];
-const ACTIVE_OUTLINE: [f32; 4] = [1.0, 1.0, 1.0, 0.9];
 
 /// What the game task most recently published.
 struct Snapshot {
@@ -48,7 +51,7 @@ static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Frames this module has drawn bars into.
 static DRAWS: AtomicUsize = AtomicUsize::new(0);
-/// Frames drawn with the game's bar art rather than flat colour.
+/// Frames drawn with the game's bar art rather than flat color.
 static ART_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Frames dispatched to this module at all, drawn or not.
 static FRAMES: AtomicUsize = AtomicUsize::new(0);
@@ -176,7 +179,7 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
                 // The flat track is the full fill's rectangle, not the base's: bases overlap.
                 let track = stage.rect(copy.fill);
                 draw_list
-                    .add_rect([track[0], track[1]], [track[2], track[3]], BAR_TRACK)
+                    .add_rect([track[0], track[1]], [track[2], track[3]], theme::BAR_TRACK)
                     .filled(true)
                     .build();
                 if fill[2] > fill[0] {
@@ -189,7 +192,11 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
         }
         if row.active {
             draw_list
-                .add_rect([base[0], base[1]], [base[2], base[3]], ACTIVE_OUTLINE)
+                .add_rect(
+                    [base[0], base[1]],
+                    [base[2], base[3]],
+                    theme::BAR_ACTIVE_OUTLINE,
+                )
                 .thickness(stage.scale.max(1.0))
                 .build();
         }
@@ -241,8 +248,13 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
 struct BarsOverlay;
 
 impl ImguiRenderLoop for BarsOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        bars_log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        bars_log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {

@@ -141,6 +141,10 @@ portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subpr
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself	lint
+portable	-	check-color-spelling.py --selftest	synthetic counts plus a throwaway git repo in a temp dir; reads the committed baseline	lint
+portable	-	check-color-spelling.py	text count over git ls-files in the checkout itself	lint
+portable	-	check-overlay-theme.py --selftest	synthetic crates written under a temp dir	lint
+portable	-	check-overlay-theme.py	source text of crates/*/src and crates/*/Cargo.toml, and the baseline	lint
 partial	luac5.1	check-ai-lua-dialect.py --selftest	scanner cases and the `#` tree case still assert; prints that the luac syntax-error case was not exercised	lint
 partial	luac5.1	check-ai-lua-dialect.py	the `#` dialect scan still runs on every file; prints 'syntax half SKIPPED'	lint
 portable	-	check-no-unguarded-cstr-from-ptr.py --selftest	source/AST/text analysis only	source

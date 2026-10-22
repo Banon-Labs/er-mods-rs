@@ -1943,6 +1943,31 @@ impl MhHook {
         unsafe { Self::create(addr, hook_impl) }
     }
 
+    /// [`MhHook::new_runtime_derived`] for a game function entry Arxan may have stubbed: the
+    /// detour is written where [`detour_target_following_arxan`] says the code is, so a hook on a
+    /// stub does not catch nothing while reporting itself installed.
+    ///
+    /// This is the shape for a target the union dispatchers cannot carry -- a float argument, or
+    /// a signature the caller must keep exact -- which is why it is not
+    /// [`register_union_hook_runtime_derived_following_arxan`]. It takes the prologue alone, so
+    /// nothing else may detour the same function.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`MhHook::new_runtime_derived`]: `entry` must have been derived from the
+    /// running image, and `hook_impl` must match the target's exact signature.
+    #[cfg(windows)]
+    pub unsafe fn new_following_arxan(
+        entry: *mut c_void,
+        hook_impl: *mut c_void,
+    ) -> Result<Self, MH_STATUS> {
+        let what = format!("MhHook::new_following_arxan 0x{:x}", entry as usize);
+        let Some(target) = detour_target_following_arxan(entry as usize, &what) else {
+            return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+        };
+        unsafe { Self::create(target as *mut c_void, hook_impl) }
+    }
+
     /// The MinHook call itself, shared by both entry points so they can differ only in how `addr`
     /// was established. Duplicating these four lines is how the two would drift apart.
     ///

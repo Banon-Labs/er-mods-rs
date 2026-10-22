@@ -615,8 +615,9 @@ free the cursor and stop turning the camera with the mouse. Each asks the next h
 so either panel open is enough and neither closes the other's. Both register through \
 `er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
 1.17.1 prologue, so one MinHook instance owns the entry and the two handlers chain."""
-evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-cel-shade/src/input.rs \
-`install_cursor`; both prologues generated from the same spec in each crate's build.rs."""
+evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
+`install_cursor`, called from crates/er-cel-shade/src/lib.rs; both prologues generated from the \
+same spec, in crates/er-npc-summons/build.rs and crates/er-overlay-input/build.rs."""
 
 [[shared]]
 a = "er-quickload"
@@ -631,7 +632,8 @@ er-npc-summons uses, registered through `register_shared_hook_with_budget`; it c
 union every other shell on this slot uses. A key held when the menu closes stays blanked until it \
 is released."""
 evidence = """crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`, armed \
-from crates/er-cel-shade/src/input.rs `try_install_dinput`."""
+from crates/er-overlay-input/src/hooks.rs `try_install_dinput`, called from \
+crates/er-cel-shade/src/menu/mod.rs."""
 
 [[shared]]
 a = "er-net-effects"
@@ -686,8 +688,9 @@ reason = """er-cel-shade centres the sticks, releases the triggers and clears ev
 0 while its settings menu is open, keeping a button cleared after close until it is released. It \
 follows the forwarding thunk exactly as er-npc-summons does and registers through \
 `register_shared_hook_with_budget`, so it chains on er-quickload's union like the other two."""
-evidence = """crates/er-cel-shade/src/input.rs `try_install_pad` \
-`register_shared_hook_with_budget(target, xinput_get_state, &PAD_ORIG, 1, 0)`."""
+evidence = """crates/er-overlay-input/src/hooks.rs `try_install_pad` \
+`register_shared_hook_with_budget(target, xinput_get_state, &PAD_ORIG, 1, 0)`, called from \
+crates/er-cel-shade/src/menu/mod.rs."""
 
 [[shared]]
 a = "er-npc-summons"
@@ -697,7 +700,7 @@ mechanism = "hook-union"
 handler_a = "picker_xinput_get_state"
 handler_b = "xinput_get_state"
 reason = "See the er-quickload / er-cel-shade row on this function: both handlers chain on one union."
-evidence = "crates/er-npc-summons/src/pad.rs; crates/er-cel-shade/src/input.rs `try_install_pad`."
+evidence = "crates/er-npc-summons/src/pad.rs; crates/er-overlay-input/src/hooks.rs `try_install_pad`."
 
 [[shared]]
 a = "er-hotkey-conflicts"
@@ -708,11 +711,12 @@ handler_a = "hook_xinput_get_state"
 handler_b = "xinput_get_state"
 reason = """The same shape as the er-hotkey-conflicts / er-npc-summons row: two prologues under \
 Wine, one where the export is the function itself, union-registered on both sides either way."""
-evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-cel-shade/src/input.rs."
+evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-overlay-input/src/hooks.rs."
 
 # er-render-scale's menu takes the game's input while open through `er-overlay-input`, the crate
-# er-cel-shade's `input.rs` became: the same three handlers, registered the same way, so it shares
-# every entry er-cel-shade shares, with the same partners, and one more partner: er-cel-shade.
+# er-cel-shade's `input.rs` became and er-cel-shade now links as well: the same three handlers,
+# registered the same way, so it shares every entry er-cel-shade shares, with the same partners,
+# and one more partner: er-cel-shade.
 
 [[shared]]
 a = "er-npc-summons"
@@ -739,7 +743,7 @@ mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
 reason = "See the er-npc-summons / er-render-scale row on this predicate: three handlers, one union."
-evidence = "crates/er-cel-shade/src/input.rs `install_cursor`; crates/er-overlay-input/src/hooks.rs `install_cursor`."
+evidence = "crates/er-overlay-input/src/hooks.rs `install_cursor`, linked into both DLLs, each with its own statics."
 
 [[shared]]
 a = "er-quickload"
@@ -840,7 +844,7 @@ mechanism = "hook-union"
 handler_a = "xinput_get_state"
 handler_b = "xinput_get_state"
 reason = "See the er-quickload / er-render-scale row on this function: the handlers chain on one union."
-evidence = "crates/er-cel-shade/src/input.rs `try_install_pad`; crates/er-overlay-input/src/hooks.rs `try_install_pad`."
+evidence = "crates/er-overlay-input/src/hooks.rs `try_install_pad`, linked into both DLLs, each with its own statics."
 
 [[shared]]
 a = "er-hotkey-conflicts"
@@ -851,6 +855,175 @@ handler_a = "hook_xinput_get_state"
 handler_b = "xinput_get_state"
 reason = """The same shape as the er-hotkey-conflicts / er-cel-shade row: two prologues under Wine, \
 one where the export is the function itself, union-registered on both sides either way."""
+evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-overlay-input/src/hooks.rs."
+
+# er-invasion-warp's band census panel takes the game's input while open through `er-overlay-input`
+# too, so it shares every entry er-render-scale shares, with the same partners, and er-render-scale
+# itself. Its settings panel's DirectInput mouse blanking predates this and is the same
+# `er-dinput-suppress-core` install, so it adds no entry of its own.
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-invasion-warp"
+target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+mechanism = "hook-union"
+handler_a = "menu_has_mouse_union"
+handler_b = "menu_has_mouse_union"
+reason = """er-invasion-warp answers the game's "a menu has the mouse" predicate with true while its \
+band census panel is open, which frees the cursor and stops the camera turning, and asks the next \
+handler otherwise. Registered through `er-overlay-input`'s `install_cursor`, on the same union and \
+after the same generated 1.17.1 prologue check as every other menu here."""
+evidence = """crates/er-overlay-input/src/hooks.rs `install_cursor`, called from \
+crates/er-invasion-warp/src/lib.rs `spawn_catalog_task`."""
+
+[[shared]]
+a = "er-cel-shade"
+b = "er-invasion-warp"
+target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+mechanism = "hook-union"
+handler_a = "menu_has_mouse_union"
+handler_b = "menu_has_mouse_union"
+reason = "See the er-npc-summons / er-invasion-warp row on this predicate: one union, chained handlers."
+evidence = "crates/er-cel-shade/src/input.rs `install_cursor`; crates/er-overlay-input/src/hooks.rs `install_cursor`."
+
+[[shared]]
+a = "er-render-scale"
+b = "er-invasion-warp"
+target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+mechanism = "hook-union"
+handler_a = "menu_has_mouse_union"
+handler_b = "menu_has_mouse_union"
+reason = "Both link `er-overlay-input`: the same handler, each with its own taking flag, on one union."
+evidence = "crates/er-overlay-input/src/hooks.rs `install_cursor`, called from both shells' install threads."
+
+[[shared]]
+a = "er-quickload"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """er-invasion-warp takes every key from the game while its band census panel is open, \
+through the same `er-dinput-suppress-core` handler the other menus use, registered through \
+`register_shared_hook_with_budget`, so it chains on the union every other shell on this slot uses."""
+evidence = """crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`, armed \
+from crates/er-overlay-input/src/hooks.rs `try_install_dinput`, called from \
+crates/er-invasion-warp/src/band_panel.rs."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-invasion-warp row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-enemynpc-effects"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-invasion-warp row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "hook_get_device_state"
+handler_b = "keyboard_get_state_hook"
+reason = """See the er-quickload / er-invasion-warp row on this slot. While the panel is open \
+er-hotkey-conflicts sees every key already blanked, which is the read the game gets."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "keyboard_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """The same `er-dinput-suppress-core` handler linked into both DLLs, each with its own \
+taken-key set, chained on one union: either DLL taking a key blanks it."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-cel-shade"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "keyboard_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-npc-summons / er-invasion-warp row on this slot: one handler per DLL, one union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-render-scale"
+b = "er-invasion-warp"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "keyboard_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-npc-summons / er-invasion-warp row on this slot: one handler per DLL, one union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-quickload"
+b = "er-invasion-warp"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state_detour"
+handler_b = "xinput_get_state"
+reason = """er-invasion-warp centres the sticks, releases the triggers and clears every button of pad \
+0 while its band census panel is open, through `er-overlay-input`'s `try_install_pad`, registered \
+through `register_shared_hook_with_budget`, so it chains on er-quickload's union like the others."""
+evidence = """crates/er-overlay-input/src/hooks.rs `try_install_pad`, called from \
+crates/er-invasion-warp/src/band_panel.rs."""
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-invasion-warp"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "picker_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = "See the er-quickload / er-invasion-warp row on this function: both handlers chain on one union."
+evidence = "crates/er-npc-summons/src/pad.rs; crates/er-overlay-input/src/hooks.rs `try_install_pad`."
+
+[[shared]]
+a = "er-cel-shade"
+b = "er-invasion-warp"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state"
+handler_b = "xinput_get_state"
+reason = "See the er-quickload / er-invasion-warp row on this function: both handlers chain on one union."
+evidence = "crates/er-cel-shade/src/input.rs `try_install_pad`; crates/er-overlay-input/src/hooks.rs `try_install_pad`."
+
+[[shared]]
+a = "er-render-scale"
+b = "er-invasion-warp"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state"
+handler_b = "xinput_get_state"
+reason = "Both link `er-overlay-input`: the same handler, each with its own taking flag, on one union."
+evidence = "crates/er-overlay-input/src/hooks.rs `try_install_pad`, called from both shells' panels."
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-invasion-warp"
+target = "xinput1_x.dll!XInputGetState (the export itself, where there is no forwarding thunk)"
+mechanism = "hook-union"
+handler_a = "hook_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = """The same shape as the er-hotkey-conflicts / er-render-scale row: two prologues under \
+Wine, one where the export is the function itself, union-registered on both sides either way."""
 evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-overlay-input/src/hooks.rs."
 
 [[conflict]]
@@ -1572,46 +1745,6 @@ product, so it shares `MenuWindowJob::Run` with er-r3-view on the same terms: bo
 through `er_hook::register_shared_hook` and chain on one MinHook instance."""
 evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/src/menu_pump.rs \
 `install_quit_menu_window_run_hook`."""
-
-[[shared]]
-a = "er-quickload"
-b = "er-r3-view"
-target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
-mechanism = "hook-union"
-handler_a = "title_scaleform_file_open_observer_hook"
-handler_b = "menu_font_file_open_hook"
-reason = """Both detour the Scaleform loader's file open. er-r3-view only reads the file the chain \
-returns for `font.gfx`, to copy the game's menu font for its R3 board; it never replaces a file. \
-Both register through `er_hook::register_shared_hook` with `UnionFn` handlers that call their slot \
-first, so they chain on one MinHook instance."""
-evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
-crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs."""
-
-[[shared]]
-a = "er-armament-icons"
-b = "er-r3-view"
-target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
-mechanism = "hook-union"
-handler_a = "file_open_hook"
-handler_b = "menu_font_file_open_hook"
-reason = """Both observe the Scaleform loader's file open through `register_shared_hook` and call \
-their slot first; er-r3-view copies `font.gfx` after the chain returns and changes nothing."""
-evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
-crates/er-armament-icons/src/gfx_equip_hook.rs `file_open_hook`."""
-
-[[shared]]
-a = "er-quit-menu"
-b = "er-r3-view"
-target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
-mechanism = "hook-union"
-handler_a = "quit_menu_scaleform_file_open_hook"
-handler_b = "menu_font_file_open_hook"
-reason = """er-quit-menu serves its Quit tab movies from this file open and er-r3-view only reads \
-the returned `font.gfx`; both register through `register_shared_hook` and chain on one MinHook \
-instance, so neither displaces the other."""
-evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
-crates/er-quit-menu-core/src/gfx_swap.rs `register_shared_hook(addr, \
-quit_menu_scaleform_file_open_hook, ...)`."""
 
 [[shared]]
 a = "er-quickload"

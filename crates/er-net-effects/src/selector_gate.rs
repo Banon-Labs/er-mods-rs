@@ -10,7 +10,8 @@
 //! game never learns the key was pressed.
 //!
 //! What armed them was `NetEffectsState::effect_selector_visible`, which is seeded from the
-//! `overlay_visible_on_start` config key and defaults to true. That flag does not mean "the
+//! `overlay_visible_on_start` config key, which defaulted to true when this was written (it
+//! defaults to false now, so the bar starts hidden). That flag does not mean "the
 //! selector list is on screen". The bar is drawn by hudhook and starts collapsed
 //! (`present_overlay::START_COLLAPSED`), so a default install shows a two-word `ER NET EFFECTS [+]`
 //! header and no effect list at all -- while blanking the player's arrow keys out of every
@@ -224,13 +225,25 @@ mod tests {
         runtime_ready: true,
     };
 
-    /// The shipped default before a single click: `overlay_visible_on_start = true` meets
-    /// `START_COLLAPSED = true`.
+    /// The shipped default before a single key press: `overlay_visible_on_start = false` meets
+    /// `START_COLLAPSED = true`. Nothing is drawn until the show/hide or expand key is pressed.
     const SHIPPED_DEFAULT: SelectorInputState = SelectorInputState {
-        shown: true,
+        shown: false,
         collapsed: true,
         runtime_ready: true,
     };
+
+    /// A hidden bar must still hear the two keys that bring it up, or the shipped default would be
+    /// a widget the player can never open. Neither key is ever taken from the game.
+    #[test]
+    fn the_hidden_shipped_default_still_hears_show_hide_and_expand() {
+        let open = SHIPPED_DEFAULT.is_open();
+        assert!(!open);
+        assert!(should_handle_key(open, SelectorKey::ShowHide));
+        assert!(should_handle_key(open, SelectorKey::ExpandCollapse));
+        assert!(!should_consume_key(open, SelectorKey::ShowHide));
+        assert!(!should_consume_key(open, SelectorKey::ExpandCollapse));
+    }
 
     #[test]
     fn the_shipped_default_is_not_open() {

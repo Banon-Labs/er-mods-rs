@@ -31,6 +31,8 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+mod band_census;
+mod band_panel;
 pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
@@ -238,6 +240,10 @@ fn spawn_catalog_task() {
             // probe resolves an export out of another DLL -- none of which may happen under the
             // loader lock. Installing it from `DllMain` deadlocked the boot on 2026-09-15, with
             // the process alive and burning CPU and no window ever appearing.
+            // The band census panel frees the cursor and holds the camera while it is open, by
+            // answering the game's own "a menu has the mouse" predicate through `er-overlay-input`.
+            // Hooked here, off the loader lock, before the overlay can draw the panel.
+            er_overlay_input::install_cursor(standalone_log);
             crate::overlay::install_from_installer_thread();
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
@@ -306,6 +312,9 @@ fn spawn_catalog_task() {
                     // Read once per tick, because the config is hot-reloaded and several gates
                     // below ask it different questions.
                     let config_snapshot = crate::local_invasion_filter::current_config_snapshot();
+                    // The band census panel's keys, and its view while it is open. The renderer
+                    // reads both without touching the config or the census.
+                    crate::band_census::publish(config_snapshot.as_ref());
                     // The map hooks arm unconditionally.
                     //
                     // They used to be gated on `map_pins` in the TOML, and that key is gone: the

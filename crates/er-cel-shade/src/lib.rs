@@ -67,14 +67,13 @@ pub mod record;
 pub mod replace;
 pub mod safety;
 pub mod settings;
+pub mod sky;
 pub mod table;
 pub mod verify;
 pub mod vertex;
 
 #[cfg(windows)]
 mod hooks;
-#[cfg(windows)]
-mod input;
 #[cfg(windows)]
 mod overlay;
 
@@ -188,6 +187,8 @@ pub unsafe extern "system" fn DllMain(
             // first reads the project it writes and before the menu holds the settings it saves.
             let (settings, warnings) = menu::load_settings();
             let settings = menu::move_cel_knobs(settings);
+            // The saved locks, held from the first frame a world exists.
+            sky::with(|s| s.wanted = settings.sky.wanted_at_start());
             menu::init(settings, &warnings);
             // In `DllMain`, not on a thread: the game creates its device during start-up, and a
             // hook that lands after that sees none of the root signatures or pipelines.
@@ -202,12 +203,14 @@ pub unsafe extern "system" fn DllMain(
             spawn_worker();
             editor::worker::spawn();
             safety::spawn_panic_thread();
+            // The Sky tab's game-thread task, which waits on the game's scheduler.
+            sky::game::spawn_install();
             // The overlay and the cursor hook take locks and enumerate modules, neither of which
             // belongs under the loader lock.
             let _ = std::thread::Builder::new()
                 .name("er-cel-shade-install".to_owned())
                 .spawn(move || {
-                    input::install_cursor();
+                    er_overlay_input::install_cursor(log);
                     overlay::install(module_base);
                 });
         });

@@ -3,16 +3,16 @@
 //!
 //! # Layout
 //!
-//! A card in the completion popup's colours, [`theme::REFERENCE_SHARE`] of the sub-tab's width
-//! between [`theme::REFERENCE_MIN_WIDTH`] and [`theme::REFERENCE_WIDTH`] at 1080p, as tall as the
-//! code area ([`column_width`]). At its top the search field, a frame high in JetBrains Mono; under
-//! it a line saying which stage the list is kept to and how many entries it holds, with All
-//! stages at its right; then the list, which scrolls: a heading per group, folded with a click,
+//! A card in the completion popup's colors, [`REFERENCE_SHARE`] of the sub-tab's width between
+//! [`REFERENCE_MIN_WIDTH`] and [`REFERENCE_WIDTH`] at 1080p, as tall as the code area
+//! ([`column_width`]). At its top the search field, a frame high in JetBrains Mono; under it a
+//! line saying which stage the list is kept to and how many entries it holds, with All stages at
+//! its right; then the list, which scrolls: a heading per group, folded with a click,
 //! and under an open one its entries, each a quiet tag for its kind, its name, and its signature
 //! or value at the right. A search opens every group. An entry not at the layer's stage, shown
 //! with All stages, is dimmed and has the stages it belongs to at the right instead
 //! ([`stage_note`]), and a name pasted from elsewhere that a layer cannot use is in the error
-//! colour. Only the rows in view are drawn ([`rows_in_view`]).
+//! color. Only the rows in view are drawn ([`rows_in_view`]).
 //!
 //! # Use
 //!
@@ -30,7 +30,8 @@
 //!
 //! # Telemetry
 //!
-//! Each frame the column is drawn records it in the panel's snapshot (`theme::ReferenceSnapshot`:
+//! Each frame the column is drawn records it in the panel's frame record
+//! ([`super::panel_record::ReferenceSnapshot`]:
 //! open, its search field focused, its stage, its query's length, the entries it kept and all it
 //! has) and its rectangle as `reference_panel`, its search field as `reference_search`; the
 //! counters `editor_reference_opens` and `editor_reference_inserts` count openings and entries
@@ -38,13 +39,31 @@
 
 use std::ops::Range;
 
-use super::theme;
 use crate::editor::LayerStage;
 use crate::editor::complete::{Item, ItemKind};
 use crate::editor::reference::Row;
 
 /// The key that opens the column and puts the keyboard in its search field.
 pub const KEY: &str = "F1";
+
+// The column's sizes at 1080p, beside the code area: a card the completion popup's colors, its
+// search field a frame high, its groups' headings and entries in rows.
+
+/// The column's widest and narrowest, and the share of the sub-tab's width it takes between.
+pub const REFERENCE_WIDTH: f32 = 300.0;
+pub const REFERENCE_MIN_WIDTH: f32 = 220.0;
+pub const REFERENCE_SHARE: f32 = 0.42;
+/// Inside the card, and between its search field, its summary line and its list.
+pub const REFERENCE_PAD: [f32; 2] = [8.0, 8.0];
+pub const REFERENCE_GAP: f32 = 6.0;
+/// A group heading's row and an entry's row.
+pub const REFERENCE_HEADING_HEIGHT: f32 = 24.0;
+pub const REFERENCE_ROW_HEIGHT: f32 = 20.0;
+/// How far an entry is set in under its heading, and its kind's tag column from its name.
+pub const REFERENCE_INDENT: f32 = 14.0;
+pub const REFERENCE_TAG_GAP: f32 = 8.0;
+/// A heading's chevron: its half size.
+pub const REFERENCE_CHEVRON: f32 = 3.0;
 
 /// What the Reference button says under the mouse.
 pub const BUTTON_TIP: &str = "Everything a layer's code can use, searchable. F1 opens it with its \
@@ -54,9 +73,9 @@ pub const BUTTON_TIP: &str = "Everything a layer's code can use, searchable. F1 
 /// its share of the width, kept between its narrowest and its widest, and never more than half.
 #[must_use]
 pub fn column_width(width: f32, scale: f32) -> f32 {
-    let narrowest = theme::REFERENCE_MIN_WIDTH * scale;
-    let widest = theme::REFERENCE_WIDTH * scale;
-    (width * theme::REFERENCE_SHARE)
+    let narrowest = REFERENCE_MIN_WIDTH * scale;
+    let widest = REFERENCE_WIDTH * scale;
+    (width * REFERENCE_SHARE)
         .max(narrowest)
         .min(widest)
         .min(width * 0.5)
@@ -163,8 +182,13 @@ mod draw {
 
     use hudhook::imgui::{Key, Ui};
 
-    use super::super::theme::{self, Font, ReferenceSnapshot};
-    use super::{row_tops, rows_in_view, scroll_to, stage_note, step, summary};
+    use super::super::panel_record::ReferenceSnapshot;
+    use super::super::theme::{self, Font};
+    use super::{
+        REFERENCE_CHEVRON, REFERENCE_GAP, REFERENCE_HEADING_HEIGHT, REFERENCE_INDENT,
+        REFERENCE_PAD, REFERENCE_ROW_HEIGHT, REFERENCE_TAG_GAP, row_tops, rows_in_view, scroll_to,
+        stage_note, step, summary,
+    };
     use crate::editor::LayerStage;
     use crate::editor::complete::{Category, Item, ItemKind};
     use crate::editor::reference::{self, Row};
@@ -260,8 +284,8 @@ mod draw {
             paint.fill(at, max, theme::COMPLETION_BG, radius);
             paint.outline(at, max, theme::COMPLETION_BORDER, radius);
 
-            let pad = theme::REFERENCE_PAD.map(|pad| t.px(pad).round());
-            let gap = t.px(theme::REFERENCE_GAP).round();
+            let pad = REFERENCE_PAD.map(|pad| t.px(pad).round());
+            let gap = t.px(REFERENCE_GAP).round();
             let x = at[0] + stroke + pad[0];
             let inner = (size[0] - 2.0 * (stroke + pad[0])).max(1.0);
 
@@ -362,14 +386,15 @@ mod draw {
             let total = u32::try_from(reference::entries().len()).unwrap_or(u32::MAX);
             let searching = self.searching;
             theme::record(|record| {
-                record.reference = ReferenceSnapshot {
+                ReferenceSnapshot {
                     open: true,
                     searching,
                     stage: if self.all_stages { "" } else { stage.key() },
                     query_chars,
                     shown,
                     total,
-                };
+                }
+                .store(record);
             });
             ui.set_cursor_screen_pos(at);
             ui.dummy(size);
@@ -379,8 +404,8 @@ mod draw {
         /// The list's rows in view, inside its child window; what a click on one asks.
         fn draw_list(&mut self, ui: &Ui, rows: &[Row], stage: LayerStage) -> Option<Action> {
             let t = theme::current();
-            let heading = t.px(theme::REFERENCE_HEADING_HEIGHT).round();
-            let entry = t.px(theme::REFERENCE_ROW_HEIGHT).round();
+            let heading = t.px(REFERENCE_HEADING_HEIGHT).round();
+            let entry = t.px(REFERENCE_ROW_HEIGHT).round();
             let (tops, total) = row_tops(rows, heading, entry);
             let origin = ui.cursor_screen_pos().map(f32::round);
             let view = ui.window_size()[1];
@@ -394,8 +419,8 @@ mod draw {
             let width = ui.content_region_avail()[0].max(1.0);
             let paint = theme::painter(ui);
             let tag_width = theme::text_width(ui, Font::MonoSmall, WIDEST_TAG);
-            let indent = t.px(theme::REFERENCE_INDENT).round();
-            let tag_gap = t.px(theme::REFERENCE_TAG_GAP).round();
+            let indent = t.px(REFERENCE_INDENT).round();
+            let tag_gap = t.px(REFERENCE_TAG_GAP).round();
             let mut action = None;
             for row in rows_in_view(&tops, total, scroll, scroll + view) {
                 let Some(&top) = tops.get(row) else {
@@ -432,10 +457,10 @@ mod draw {
                         } else {
                             None
                         };
-                        if let Some(colour) = background {
-                            paint.fill(min, end, colour, 0.0);
+                        if let Some(color) = background {
+                            paint.fill(min, end, color, 0.0);
                         }
-                        let name_colour = if chosen {
+                        let name_color = if chosen {
                             theme::COMPLETION_SELECTED_TEXT
                         } else if item.kind == ItemKind::Unavailable {
                             theme::ERROR_TEXT
@@ -453,7 +478,7 @@ mod draw {
                             [left, name_x, end[0]],
                             [min[1], height],
                             item,
-                            name_colour,
+                            name_color,
                             note.as_deref(),
                         );
                         if hovered {
@@ -495,7 +520,7 @@ mod draw {
         open: bool,
     ) {
         let t = theme::current();
-        let half = t.px(theme::REFERENCE_CHEVRON);
+        let half = t.px(REFERENCE_CHEVRON);
         let centre = [min[0] + 2.0 * half + t.px(2.0), (min[1] + end[1]) * 0.5];
         let points = if open {
             [
@@ -535,7 +560,7 @@ mod draw {
         columns: [f32; 3],
         span: [f32; 2],
         item: &Item,
-        name_colour: [f32; 4],
+        name_color: [f32; 4],
         note: Option<&str>,
     ) {
         let t = theme::current();
@@ -550,7 +575,7 @@ mod draw {
             let y = (top + (height - ui.text_line_height()) * 0.5).round();
             let room = (right - name_x).max(1.0);
             let name = theme::fit_text(ui, Font::Mono, &item.name, room);
-            paint.text([name_x, y], name_colour, &name);
+            paint.text([name_x, y], name_color, &name);
             let used = ui.calc_text_size(&name)[0];
             let detail = note.unwrap_or_else(|| item.detail.lines().next().unwrap_or_default());
             let gap = t.px(theme::COMPLETION_GAP);

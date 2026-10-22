@@ -525,7 +525,8 @@ fn refresh_config() {
                  reject_notice={} auto_reinvade={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  blocks={} \
-                 excluded={} mark={} unmark={} enable_toggle={} settings={}",
+                 excluded={} mark={} unmark={} enable_toggle={} settings={} band_census={} \
+                 band_census_view={}",
                 outcome.config.enabled,
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
@@ -567,6 +568,8 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.band_census_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.band_census_view_key),
             ));
             warn_about_key_collisions(&outcome.config);
         }
@@ -596,6 +599,9 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
         ("unmark_key", config.unmark_key),
         ("enable_toggle_key", config.enable_toggle_key),
         ("settings_key", config.settings_key),
+        // The view key is left out: it is read only while the census panel is open, and that
+        // panel takes the keyboard from the game, so it shares a key with nothing that matters.
+        ("band_census_key", config.band_census_key),
     ];
     for (index, (name, key)) in bindings.iter().enumerate() {
         for (other_name, other_key) in &bindings[index + 1..] {

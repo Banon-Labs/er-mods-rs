@@ -254,6 +254,12 @@ pub struct LocalInvasionConfig {
     /// every other key, and for the same reason -- a hard-coded default is a key another mod in
     /// the profile may already own.
     pub settings_key: crate::keybind::VirtualKey,
+    /// Virtual-key code that opens and closes the band census panel: how many hosts this player
+    /// could invade in each matchmaking band, from Steam's lobby list.
+    pub band_census_key: crate::keybind::VirtualKey,
+    /// Virtual-key code that switches that panel between hosts now and new hosts per minute. Read
+    /// only while the panel is open.
+    pub band_census_view_key: crate::keybind::VirtualKey,
     /// Exact blocks the user marked with Insert. One mark is what the location search aims at.
     pub allowed_blocks: BTreeSet<u32>,
     /// Exact blocks the user excluded with Delete. An exclusion beats a mark: it stops the
@@ -309,6 +315,8 @@ impl Default for LocalInvasionConfig {
             unmark_key: crate::keybind::VK_DELETE,
             enable_toggle_key: crate::keybind::VK_F3,
             settings_key: crate::keybind::VK_F4,
+            band_census_key: crate::keybind::VK_F8,
+            band_census_view_key: crate::keybind::VK_R,
             allowed_blocks: BTreeSet::new(),
             blocked_blocks: BTreeSet::new(),
         }

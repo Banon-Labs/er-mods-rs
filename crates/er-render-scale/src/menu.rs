@@ -58,7 +58,7 @@ const BODY_HEIGHT_GUESS: f32 = 260.0;
 /// The slider row: a short label, and a value column wide enough for `3840×2160` in mono.
 const SCALE_ROW: SliderRow = SliderRow {
     label_width: 44.0,
-    label_colour: theme::TEXT_SECONDARY,
+    label_color: theme::TEXT_SECONDARY,
     value_width: 84.0,
     gap: 8.0,
 };
@@ -264,7 +264,7 @@ fn draw_panel(ui: &Ui, key_name: &str) {
     let Some(_window) = begun else {
         return;
     };
-    ui.set_window_font_scale(t.font_scale);
+    theme::apply_font_scale(ui);
     let _body = theme::font(ui, Font::Body);
     let _style = theme::panel_style(ui);
     let pos = ui.window_pos();

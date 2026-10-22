@@ -60,8 +60,13 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
 struct RenderScaleOverlay;
 
 impl ImguiRenderLoop for RenderScaleOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {

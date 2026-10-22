@@ -55,8 +55,14 @@ pub const VK_Q: VirtualKey = 0x51;
 
 /// `VK_F7` -- the historical "warp to the nearest invasion point" key, still the default.
 pub const VK_F7: VirtualKey = 0x76;
-/// `VK_F8` -- the historical "next point in the catalog's order" key, still the default.
+/// `VK_F8` -- the band census panel's default key since 2026-10-21. It was the "next point in the
+/// catalog's order" warp key until that feature went on 2026-09-15, and no shell in this workspace
+/// has shipped it since (`er-hotkey-conflicts`' `SHIPPED_DEFAULTS`).
 pub const VK_F8: VirtualKey = 0x77;
+/// `R` -- switches the band census grid between hosts now and new hosts per minute. Read only
+/// while that panel is open, and the panel takes the keyboard from the game while it is, so the
+/// letter reaches nothing else.
+pub const VK_R: VirtualKey = 0x52;
 /// `VK_F9` -- the historical "first point in another area" key, still the default.
 pub const VK_F9: VirtualKey = 0x78;
 

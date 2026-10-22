@@ -112,8 +112,8 @@ fn im(point: [f32; 2]) -> sys::ImVec2 {
     sys::ImVec2::new(point[0], point[1])
 }
 
-fn packed(colour: [f32; 4]) -> u32 {
-    ImColor32::from(colour).to_bits()
+fn packed(color: [f32; 4]) -> u32 {
+    ImColor32::from(color).to_bits()
 }
 
 fn round2(point: [f32; 2]) -> [f32; 2] {
@@ -222,7 +222,7 @@ pub fn line_height(ui: &Ui, which: Font) -> f32 {
 }
 
 /// The window's draw list, for what styles cannot do: bars, rules, dots, chips, chevrons, the
-/// gutter, a wavy underline. Every coordinate is in screen pixels. Its colours are faded by the
+/// gutter, a wavy underline. Every coordinate is in screen pixels. Its colors are faded by the
 /// style's alpha, as Dear ImGui fades its own widgets, so what it draws inside `begin_disabled`
 /// looks disabled too ([`unavailable`]).
 pub struct Painter<'ui> {
@@ -283,20 +283,20 @@ impl Drop for ClipScope {
 }
 
 impl Painter<'_> {
-    /// `colour` packed, faded by the style's alpha.
-    fn ink(&self, colour: [f32; 4]) -> u32 {
-        packed([colour[0], colour[1], colour[2], colour[3] * self.alpha])
+    /// `color` packed, faded by the style's alpha.
+    fn ink(&self, color: [f32; 4]) -> u32 {
+        packed([color[0], color[1], color[2], color[3] * self.alpha])
     }
 
     /// A filled rectangle, `radius` rounding every corner.
-    pub fn fill(&self, min: [f32; 2], max: [f32; 2], colour: [f32; 4], radius: f32) {
+    pub fn fill(&self, min: [f32; 2], max: [f32; 2], color: [f32; 4], radius: f32) {
         // SAFETY: `list` is the current window's draw list, live for the frame.
         unsafe {
             sys::ImDrawList_AddRectFilled(
                 self.list,
                 im(round2(min)),
                 im(round2(max)),
-                self.ink(colour),
+                self.ink(color),
                 radius,
                 sys::ImDrawFlags_RoundCornersAll as i32,
             );
@@ -304,14 +304,14 @@ impl Painter<'_> {
     }
 
     /// A filled rectangle rounded at the top only: a tab.
-    pub fn fill_top(&self, min: [f32; 2], max: [f32; 2], colour: [f32; 4], radius: f32) {
+    pub fn fill_top(&self, min: [f32; 2], max: [f32; 2], color: [f32; 4], radius: f32) {
         // SAFETY: as in `fill`.
         unsafe {
             sys::ImDrawList_AddRectFilled(
                 self.list,
                 im(round2(min)),
                 im(round2(max)),
-                self.ink(colour),
+                self.ink(color),
                 radius,
                 (sys::ImDrawFlags_RoundCornersTopLeft | sys::ImDrawFlags_RoundCornersTopRight)
                     as i32,
@@ -320,7 +320,7 @@ impl Painter<'_> {
     }
 
     /// A border one rule wide inside the rectangle, as CSS draws one.
-    pub fn outline(&self, min: [f32; 2], max: [f32; 2], colour: [f32; 4], radius: f32) {
+    pub fn outline(&self, min: [f32; 2], max: [f32; 2], color: [f32; 4], radius: f32) {
         // Dear ImGui already strokes half a pixel inside; the rest of the inset keeps a wider
         // stroke inside too.
         let inset = self.stroke * 0.5 - 0.5;
@@ -332,7 +332,7 @@ impl Painter<'_> {
                 self.list,
                 im([min[0] + inset, min[1] + inset]),
                 im([max[0] - inset, max[1] - inset]),
-                self.ink(colour),
+                self.ink(color),
                 radius,
                 sys::ImDrawFlags_RoundCornersAll as i32,
                 self.stroke,
@@ -341,31 +341,31 @@ impl Painter<'_> {
     }
 
     /// A rule one stroke high from `x0` to `x1`, its top at `y`.
-    pub fn hline(&self, x0: f32, x1: f32, y: f32, colour: [f32; 4]) {
-        self.fill([x0, y], [x1, y + self.stroke], colour, 0.0);
+    pub fn hline(&self, x0: f32, x1: f32, y: f32, color: [f32; 4]) {
+        self.fill([x0, y], [x1, y + self.stroke], color, 0.0);
     }
 
     /// A rule one stroke wide from `y0` to `y1`, its left at `x`.
-    pub fn vline(&self, x: f32, y0: f32, y1: f32, colour: [f32; 4]) {
-        self.fill([x, y0], [x + self.stroke, y1], colour, 0.0);
+    pub fn vline(&self, x: f32, y0: f32, y1: f32, color: [f32; 4]) {
+        self.fill([x, y0], [x + self.stroke, y1], color, 0.0);
     }
 
     /// A straight line `thickness` 1080p pixels wide.
-    pub fn line(&self, a: [f32; 2], b: [f32; 2], colour: [f32; 4], thickness: f32) {
+    pub fn line(&self, a: [f32; 2], b: [f32; 2], color: [f32; 4], thickness: f32) {
         // SAFETY: as in `fill`.
         unsafe {
             sys::ImDrawList_AddLine(
                 self.list,
                 im(a),
                 im(b),
-                self.ink(colour),
+                self.ink(color),
                 thickness * self.scale,
             );
         }
     }
 
     /// An open line through `points`, `thickness` 1080p pixels wide.
-    pub fn polyline(&self, points: &[[f32; 2]], colour: [f32; 4], thickness: f32) {
+    pub fn polyline(&self, points: &[[f32; 2]], color: [f32; 4], thickness: f32) {
         let Ok(count) = i32::try_from(points.len()) else {
             return;
         };
@@ -379,7 +379,7 @@ impl Painter<'_> {
                 self.list,
                 points.as_ptr(),
                 count,
-                self.ink(colour),
+                self.ink(color),
                 0,
                 thickness * self.scale,
             );
@@ -387,22 +387,22 @@ impl Painter<'_> {
     }
 
     /// A filled circle.
-    pub fn circle(&self, centre: [f32; 2], radius: f32, colour: [f32; 4]) {
+    pub fn circle(&self, centre: [f32; 2], radius: f32, color: [f32; 4]) {
         // SAFETY: as in `fill`; 0 segments lets Dear ImGui choose.
         unsafe {
-            sys::ImDrawList_AddCircleFilled(self.list, im(centre), radius, self.ink(colour), 0);
+            sys::ImDrawList_AddCircleFilled(self.list, im(centre), radius, self.ink(color), 0);
         }
     }
 
     /// `text` with its top-left at `at`, in the current font and size.
-    pub fn text(&self, at: [f32; 2], colour: [f32; 4], text: &str) {
+    pub fn text(&self, at: [f32; 2], color: [f32; 4], text: &str) {
         let range = text.as_bytes().as_ptr_range();
         // SAFETY: as in `fill`; the text is given by its two ends, so it needs no terminator.
         unsafe {
             sys::ImDrawList_AddText_Vec2(
                 self.list,
                 im(round2(at)),
-                self.ink(colour),
+                self.ink(color),
                 range.start.cast(),
                 range.end.cast(),
             );
@@ -413,54 +413,54 @@ impl Painter<'_> {
     /// whole pixel and sets each glyph after the first where its advances put it, so text drawn
     /// glyph by glyph -- letter-spaced, or turned -- is moved by the fraction its start lost, and
     /// its glyphs sit where one string's would.
-    fn text_exact(&self, at: [f32; 2], colour: [f32; 4], text: &str) {
+    fn text_exact(&self, at: [f32; 2], color: [f32; 4], text: &str) {
         let whole = [at[0].floor(), at[1].floor()];
         let start = self.vertex_count();
-        self.text(whole, colour, text);
+        self.text(whole, color, text);
         self.shift_from(start, [at[0] - whole[0], at[1] - whole[1]]);
     }
 
     /// A status dot centred on `centre`: the mockups' 8-pixel circle.
-    pub fn dot(&self, centre: [f32; 2], colour: [f32; 4]) {
-        self.circle(centre, DOT_SIZE * 0.5 * self.scale, colour);
+    pub fn dot(&self, centre: [f32; 2], color: [f32; 4]) {
+        self.circle(centre, DOT_SIZE * 0.5 * self.scale, color);
     }
 
     /// `icon` centred on `centre`, as the mockups' inline SVGs draw it.
-    pub fn icon(&self, centre: [f32; 2], icon: Icon, colour: [f32; 4]) {
+    pub fn icon(&self, centre: [f32; 2], icon: Icon, color: [f32; 4]) {
         let s = self.scale;
         let at = |x: f32, y: f32| [centre[0] + x * s, centre[1] + y * s];
         match icon {
             // viewBox 12: M4 2 L8 6 L4 10, stroke 1.6.
             Icon::ChevronRight => {
-                self.polyline(&[at(-2.0, -4.0), at(2.0, 0.0), at(-2.0, 4.0)], colour, 1.6);
+                self.polyline(&[at(-2.0, -4.0), at(2.0, 0.0), at(-2.0, 4.0)], color, 1.6);
             }
             Icon::ChevronLeft => {
-                self.polyline(&[at(2.0, -4.0), at(-2.0, 0.0), at(2.0, 4.0)], colour, 1.6);
+                self.polyline(&[at(2.0, -4.0), at(-2.0, 0.0), at(2.0, 4.0)], color, 1.6);
             }
             // viewBox 10: M1 1 L9 9 M9 1 L1 9, stroke 1.5.
             Icon::Close => {
-                self.line(at(-4.0, -4.0), at(4.0, 4.0), colour, 1.5);
-                self.line(at(4.0, -4.0), at(-4.0, 4.0), colour, 1.5);
+                self.line(at(-4.0, -4.0), at(4.0, 4.0), color, 1.5);
+                self.line(at(4.0, -4.0), at(-4.0, 4.0), color, 1.5);
             }
             // The same cross drawn 8 wide, stroke 1.6 of its 10.
             Icon::CloseSmall => {
-                self.line(at(-3.2, -3.2), at(3.2, 3.2), colour, 1.28);
-                self.line(at(3.2, -3.2), at(-3.2, 3.2), colour, 1.28);
+                self.line(at(-3.2, -3.2), at(3.2, 3.2), color, 1.28);
+                self.line(at(3.2, -3.2), at(-3.2, 3.2), color, 1.28);
             }
             // viewBox 12 by 4: circles at 2, 6 and 10, radius 1.3.
             Icon::Dots => {
                 for x in [-4.0, 0.0, 4.0] {
-                    self.circle(at(x, 0.0), 1.3 * s, colour);
+                    self.circle(at(x, 0.0), 1.3 * s, color);
                 }
             }
         }
     }
 
     /// The wavy underline under a token a compile error names, about the line `y`.
-    pub fn wave(&self, x0: f32, x1: f32, y: f32, colour: [f32; 4]) {
+    pub fn wave(&self, x0: f32, x1: f32, y: f32, color: [f32; 4]) {
         let s = self.scale;
         let points = wave(x0, x1, y, 1.5 * s, 6.0 * s, s.max(1.0));
-        self.polyline(&points, colour, 1.0);
+        self.polyline(&points, color, 1.0);
     }
 
     /// Run `draw` with the clip rectangle `min`..`max`, kept to what the window shows: across its
@@ -536,7 +536,7 @@ impl Painter<'_> {
 /// rounding or minimum size; the panel's background. Drop it once the window is begun.
 pub struct WindowStyle<'ui> {
     _vars: [StyleStackToken<'ui>; 4],
-    _colour: ColorStackToken<'ui>,
+    _color: ColorStackToken<'ui>,
 }
 
 /// See [`WindowStyle`].
@@ -548,16 +548,24 @@ pub fn window_style(ui: &Ui) -> WindowStyle<'_> {
             ui.push_style_var(StyleVar::WindowRounding(0.0)),
             ui.push_style_var(StyleVar::WindowMinSize([1.0, 1.0])),
         ],
-        _colour: ui.push_style_color(StyleColor::WindowBg, PANEL_BG),
+        _color: ui.push_style_color(StyleColor::WindowBg, PANEL_BG),
     }
 }
 
+/// Scale the current window's text by the frame's font scale: 1 when the host built the panel's
+/// faces at the display's scale, else the factor that carries the host's default face, whatever
+/// size that host built it, to the panel's text size. Call it first thing inside a top-level
+/// window; a child window multiplies its parent's scale, and [`region`] sets each child's own.
+pub fn apply_font_scale(ui: &Ui) {
+    ui.set_window_font_scale(current().font_scale);
+}
+
 /// The style Dear ImGui's own widgets take inside the panel, for as long as it lives: frames 24
-/// high in the current font with 8 a side, the tokens' colours, rounding 3, a 12-pixel slider
+/// high in the current font with 8 a side, the tokens' colors, rounding 3, a 12-pixel slider
 /// grab, 1-pixel borders. Push it after the panel's font.
 pub struct PanelStyle<'ui> {
     _vars: Vec<StyleStackToken<'ui>>,
-    _colours: Vec<ColorStackToken<'ui>>,
+    _colors: Vec<ColorStackToken<'ui>>,
 }
 
 /// See [`PanelStyle`].
@@ -584,7 +592,7 @@ pub fn panel_style(ui: &Ui) -> PanelStyle<'_> {
         ui.push_style_var(StyleVar::TabRounding(t.px(TAB_RADIUS))),
         ui.push_style_var(StyleVar::IndentSpacing(t.px(CONTENT_PAD[0]))),
     ];
-    let colours = [
+    let colors = [
         (StyleColor::Text, TEXT),
         (StyleColor::TextDisabled, TEXT_QUIET),
         (StyleColor::ChildBg, CLEAR),
@@ -622,11 +630,11 @@ pub fn panel_style(ui: &Ui) -> PanelStyle<'_> {
         (StyleColor::NavHighlight, ACCENT),
     ]
     .into_iter()
-    .map(|(slot, colour)| ui.push_style_color(slot, colour))
+    .map(|(slot, color)| ui.push_style_color(slot, color))
     .collect();
     PanelStyle {
         _vars: vars,
-        _colours: colours,
+        _colors: colors,
     }
 }
 
@@ -637,6 +645,49 @@ pub fn frame(ui: &Ui, height: f32, pad_x: f32) -> StyleStackToken<'_> {
     let t = current();
     let y = frame_padding_y(t.px(height).round(), ui.current_font_size());
     ui.push_style_var(StyleVar::FramePadding([t.px(pad_x), y]))
+}
+
+/// Fields, combos and Dear ImGui's drag boxes filled with `fill` whether or not the mouse is over
+/// them or they are being edited, until dropped: a field set into a surface of another color, as
+/// the selector's text field is into the code area's [`CODE_BG`].
+pub fn field_fill(ui: &Ui, fill: [f32; 4]) -> [ColorStackToken<'_>; 3] {
+    [
+        StyleColor::FrameBg,
+        StyleColor::FrameBgHovered,
+        StyleColor::FrameBgActive,
+    ]
+    .map(|slot| ui.push_style_color(slot, fill))
+}
+
+/// The style of a text field that something else draws: no frame, border or rounding, its text
+/// and its selection clear, and `pad` screen pixels inside it. The code editor types into such a
+/// field and draws the text itself, under it, on the window's draw list. Drop it after the field.
+pub struct ClearField<'ui> {
+    _vars: [StyleStackToken<'ui>; 3],
+    _colors: [ColorStackToken<'ui>; 3],
+}
+
+/// See [`ClearField`].
+pub fn clear_field(ui: &Ui, pad: [f32; 2]) -> ClearField<'_> {
+    ClearField {
+        _vars: [
+            ui.push_style_var(StyleVar::FramePadding(pad)),
+            ui.push_style_var(StyleVar::FrameBorderSize(0.0)),
+            ui.push_style_var(StyleVar::FrameRounding(0.0)),
+        ],
+        _colors: [
+            ui.push_style_color(StyleColor::FrameBg, CLEAR),
+            ui.push_style_color(StyleColor::Text, CLEAR),
+            ui.push_style_color(StyleColor::TextSelectedBg, CLEAR),
+        ],
+    }
+}
+
+/// Dear ImGui's global font scale, which every font size it works out is multiplied by: for a
+/// panel that sizes a copy of a font itself, as the code editor stretches its mono font's lines.
+#[must_use]
+pub fn global_font_scale(ui: &Ui) -> f32 {
+    ui.io().font_global_scale
 }
 
 /// The last item's rectangle, `[x, y, width, height]` in screen pixels.
@@ -652,16 +703,16 @@ pub fn register_item(ui: &Ui, name: &str) -> bool {
     register_rect(name, item_rect(ui))
 }
 
-/// One line of `text` in `which` and `colour`, as an item.
-pub fn text(ui: &Ui, which: Font, colour: [f32; 4], text: &str) {
+/// One line of `text` in `which` and `color`, as an item.
+pub fn text(ui: &Ui, which: Font, color: [f32; 4], text: &str) {
     let _font = font(ui, which);
-    ui.text_colored(colour, text);
+    ui.text_colored(color, text);
 }
 
-/// `text` in `which` and `colour`, wrapped at the content's right edge, as an item.
-pub fn text_wrapped(ui: &Ui, which: Font, colour: [f32; 4], text: &str) {
+/// `text` in `which` and `color`, wrapped at the content's right edge, as an item.
+pub fn text_wrapped(ui: &Ui, which: Font, color: [f32; 4], text: &str) {
     let _font = font(ui, which);
-    let _colour = ui.push_style_color(StyleColor::Text, colour);
+    let _color = ui.push_style_color(StyleColor::Text, color);
     ui.text_wrapped(text);
 }
 
@@ -767,7 +818,7 @@ fn advances(ui: &Ui, words: &str) -> Vec<f32> {
 /// `letter-spacing`, which Dear ImGui has no setting for. The advances are the font's own,
 /// unrounded, and each glyph is placed at its exact offset, so the spacing is the token's and even
 /// rather than half a pixel more a glyph and uneven.
-pub fn spaced_text(ui: &Ui, which: Font, colour: [f32; 4], words: &str, tracking: f32) {
+pub fn spaced_text(ui: &Ui, which: Font, color: [f32; 4], words: &str, tracking: f32) {
     let t = current();
     let _font = font(ui, which);
     let (offsets, width) = spaced(&advances(ui, words), tracking * t.px(which.em()));
@@ -775,7 +826,7 @@ pub fn spaced_text(ui: &Ui, which: Font, colour: [f32; 4], words: &str, tracking
     let paint = painter(ui);
     let mut glyph = [0_u8; 4];
     for (c, offset) in words.chars().zip(offsets) {
-        paint.text_exact([at[0] + offset, at[1]], colour, c.encode_utf8(&mut glyph));
+        paint.text_exact([at[0] + offset, at[1]], color, c.encode_utf8(&mut glyph));
     }
     ui.dummy([width.ceil().max(1.0), ui.text_line_height()]);
 }
@@ -799,7 +850,7 @@ pub fn vertical_label(
     ui: &Ui,
     top_centre: [f32; 2],
     which: Font,
-    colour: [f32; 4],
+    color: [f32; 4],
     words: &str,
     tracking: f32,
 ) -> f32 {
@@ -823,7 +874,7 @@ pub fn vertical_label(
             for (c, offset) in words.chars().zip(offsets) {
                 paint.text_exact(
                     [origin[0] + offset, origin[1]],
-                    colour,
+                    color,
                     c.encode_utf8(&mut glyph),
                 );
             }
@@ -840,7 +891,7 @@ enum Content<'a> {
     Icon(Icon),
 }
 
-/// A button's colours and font.
+/// A button's colors and font.
 #[derive(Clone, Copy)]
 struct Look {
     bg: [f32; 4],
@@ -923,8 +974,8 @@ fn framed(
     };
     let radius = t.px(FRAME_RADIUS);
     paint.fill(at, max, bg, radius);
-    if let Some(colour) = style.border {
-        paint.outline(at, max, colour, radius);
+    if let Some(color) = style.border {
+        paint.outline(at, max, color, radius);
     }
     match content {
         Content::Words(words) => {
@@ -1168,17 +1219,17 @@ pub fn spans(ui: &Ui, parts: &[Span<'_>]) {
 }
 
 /// A status dot as an item `height` pixels tall, the dot centred: the toolbar's probe light.
-pub fn dot(ui: &Ui, colour: [f32; 4], height: f32) {
+pub fn dot(ui: &Ui, color: [f32; 4], height: f32) {
     let t = current();
     let at = ui.cursor_screen_pos();
     let width = t.px(DOT_SIZE);
-    painter(ui).dot([at[0] + width * 0.5, at[1] + height * 0.5], colour);
+    painter(ui).dot([at[0] + width * 0.5, at[1] + height * 0.5], color);
     ui.dummy([width, height.max(1.0)]);
 }
 
 /// A status light as tall as a frame.
 pub fn light_dot(ui: &Ui, light: Light) {
-    dot(ui, light_colour(light), ui.frame_height());
+    dot(ui, light_color(light), ui.frame_height());
 }
 
 /// The 1-pixel rule across the whole window at the cursor: under the stack's buttons, over the
@@ -1491,17 +1542,17 @@ pub fn badge(ui: &Ui, words: &str) {
     ui.dummy([width, height]);
 }
 
-/// A combo styled as the mockups' selects: the field's colours with no separate arrow box, `width`
+/// A combo styled as the mockups' selects: the field's colors with no separate arrow box, `width`
 /// screen pixels wide. Begin its items when it returns `Some`, as with `begin_combo`.
 pub fn combo<'ui>(ui: &'ui Ui, id: &str, preview: &str, width: f32) -> Option<ComboBoxToken<'ui>> {
-    let colours = [
+    let colors = [
         ui.push_style_color(StyleColor::Button, INPUT_BG),
         ui.push_style_color(StyleColor::ButtonHovered, INPUT_HOVER_BG),
         ui.push_style_color(StyleColor::ButtonActive, INPUT_ACTIVE_BG),
     ];
     ui.set_next_item_width(width.max(1.0));
     let token = ui.begin_combo(id, preview);
-    drop(colours);
+    drop(colors);
     token
 }
 
@@ -1582,7 +1633,7 @@ impl SliderRow {
         let line = ui.text_line_height();
         paint.text(
             [at[0], at[1] + (height - line) * 0.5],
-            self.label_colour,
+            self.label_color,
             shown(label),
         );
         with_font(ui, Font::Mono, || {

@@ -23,6 +23,10 @@ er-build-import-core = { path = "../er-build-import-core" }
 # function entries. See `src/mid_hooks/mod.rs`. Not windows-only: it builds on the host, so the
 # routines' unit tests run.
 ilhook = "2.3"
+# The look the duel picker draws in, shared with every other in-game panel: colors, sizes at
+# 1080p, the fonts handed to the overlay host. Host-buildable; only its drawing half is
+# `cfg(windows)`.
+er-overlay-theme = { path = "../er-overlay-theme" }
 
 # build.rs assembles the byte-checked prologue and the mid-hook windows from named instructions.
 [build-dependencies]

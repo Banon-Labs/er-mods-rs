@@ -33,6 +33,10 @@ const CHR_DBG_FLAGS_AOB = '80 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? 32 C0 48';
 const WORLD_CHR_MAN_AOB = '48 8B 05 ?? ?? ?? ?? 48 85 C0 74 0F 48 39 88';
 const LUA_WARP_AOB = 'C3 ?? ?? ?? ?? ?? ?? 57 48 83 EC ?? 48 8B FA 44';
 const LUA_EVENT_MAN_AOB = '48 8B 05 ?? ?? ?? ?? 48 85 C0 74 ?? 41 BE 01 00 00 00 44 89 75';
+// The game's per-frame tick, the call er-duel-rules.js runs its checks in: 1.17.1 0x140773900,
+// 2.7.2.0 0x140773db0. These 32 bytes are its prologue, the same in both images and found once in
+// each, so the work below runs on the game's own thread, once a frame.
+const FRAME_TICK_AOB = '48 8B C4 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 A8 FD FF FF 48 81 EC 20 03 00 00 48 C7 45 A0';
 
 const DBG_PLAYER_NO_DEAD = 0x0;
 const DBG_HORSE_NO_DEAD = 0x1;
@@ -76,8 +80,9 @@ function rttiName (object) {
 const dbgHits = scanOne(CHR_DBG_FLAGS_AOB);
 const wcmHits = scanOne(WORLD_CHR_MAN_AOB);
 const warpHits = scanOne(LUA_WARP_AOB);
-if (dbgHits.length !== 1 || wcmHits.length !== 1 || warpHits.length !== 1) {
-  send({ kind: 'refused', line: 'pattern hits dbg=' + dbgHits.length + ' wcm=' + wcmHits.length + ' warp=' + warpHits.length });
+const tickHits = scanOne(FRAME_TICK_AOB);
+if (dbgHits.length !== 1 || wcmHits.length !== 1 || warpHits.length !== 1 || tickHits.length !== 1) {
+  send({ kind: 'refused', line: 'pattern hits dbg=' + dbgHits.length + ' wcm=' + wcmHits.length + ' warp=' + warpHits.length + ' tick=' + tickHits.length });
   throw new Error('godmode: a pattern is not unique on this build');
 }
 const chrDbgFlags = ripTarget(dbgHits[0], 2, 7);
@@ -145,7 +150,18 @@ function resistValues (resist, at) {
 
 let ticks = 0;
 let lastReport = '';
+let lastError = '';
 function tick () {
+  try {
+    step();
+  } catch (e) {
+    // A read that faults inside the game's frame is reported once, and the next frame tries again.
+    if (lastError !== String(e)) send({ kind: 'tick-error', line: String(e) });
+    lastError = String(e);
+  }
+}
+
+function step () {
   ticks += 1;
   chrDbgFlags.add(DBG_PLAYER_NO_DEAD).writeU8(GODMODE ? 1 : 0);
   chrDbgFlags.add(DBG_HORSE_NO_DEAD).writeU8(GODMODE ? 1 : 0);
@@ -174,7 +190,7 @@ function tick () {
     }
   }
   const report = 'hp ' + parts.hp + '/' + parts.maxHp + ' resist ' + current.join(',') + ' of ' + max.join(',');
-  if (ticks % 20 === 1 || report !== lastReport) {
+  if (ticks % 120 === 1 || report !== lastReport) {
     send({ kind: 'player', line: report, debugFlags: '0x' + parts.debugFlags.toString(16) });
     lastReport = report;
   }
@@ -190,12 +206,11 @@ if (WARP_TO !== null) {
   }
 }
 
-const timer = setInterval(tick, 100);
-tick();
+const ticking = Interceptor.attach(tickHits[0], { onEnter () { tick(); } });
 
 rpc.exports = {
   dispose: function () {
-    clearInterval(timer);
+    ticking.detach();
     for (const pair of originalDbg) chrDbgFlags.add(pair[0]).writeU8(pair[1]);
   }
 };

@@ -265,6 +265,17 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 			exec 9<>"$_check_lock" || true
 		fi
 	fi
+	# A push waits its turn instead of refusing (user directive 2026-10-20: "whenever you need to
+	# push, you need to push with a command that waits until the lock is no longer held"). The
+	# pre-push hook sets ER_CHECK_WAIT_LOCK=1, so an authorized push that lands while another
+	# session's suite or DLL build holds the lock queues behind it rather than spending the
+	# authorization on a refusal. A live holder still gets the run it started; this one starts
+	# when it ends.
+	if [[ ${ER_CHECK_WAIT_LOCK:-} == 1 ]] && ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		echo "check.sh: waiting for $_check_lock (held by ${_holder:-an unrecorded pid}) before running." >&2
+		flock $_check_lock_mode 9
+	fi
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
 		_holder_what="no pid recorded"
@@ -1646,6 +1657,9 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # nobody can make -- and the live half runs in test-cupcake-policies.py, because an opa-green
 # policy that cupcake's WASM runtime cannot execute returns nothing and reads as a clean turn.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
+# The write-time half of the color-spelling ratchet: it refuses an Edit that adds the British
+# spelling outside a quoted span, and never judges a Write, whose previous count it cannot see.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_color_spelling_guard.rego" "$repo_root/.cupcake/tests/edit_color_spelling_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
@@ -1707,6 +1721,20 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # load-bearing and wants a rewritten sentence rather than a lowercase letter.
 python3 "$repo_root/scripts/check-comment-caps.py" --selftest
 python3 "$repo_root/scripts/check-comment-caps.py"
+# This repo writes `color`. The British spelling is a ratchet over every tracked text file
+# (user request 2026-10-20): scripts/color-spelling.baseline.json holds each file's count, a file
+# may not rise above it, a file with no entry may not have one, and a file that falls below it
+# must lower the baseline in the same diff (`--write-baseline`). Selftest first, because it is
+# the half that proves a growth, a new file and a silent improvement each still go red.
+python3 "$repo_root/scripts/check-color-spelling.py" --selftest
+python3 "$repo_root/scripts/check-color-spelling.py"
+
+# Every in-game overlay draws with crates/er-overlay-theme: a crate that uses imgui depends on it
+# and writes no color, font size or style push of its own. scripts/overlay-theme.baseline.json
+# holds what had not been ported when the gate was written; it may only shrink, and a crate
+# missing from it must be at zero, so a new DLL is held to the theme from its first commit.
+python3 "$repo_root/scripts/check-overlay-theme.py" --selftest
+python3 "$repo_root/scripts/check-overlay-theme.py"
 # The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
 # lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
 # stock AI). Selftest first, so the scanner is never trusted on its own say-so.
@@ -2540,9 +2568,10 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
 python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
 # The Shaders panel's pixel oracle holds its copies of the design tokens, the part names and the
-# panel telemetry's keys to theme.rs, mod.rs and exports.rs, and renders the mockup's panel in the
-# vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle that moves a token,
-# or a capture step that changes, would otherwise leave it judging the game against stale colours.
+# panel telemetry's keys to er-overlay-theme, panel_record.rs and exports.rs, and renders the
+# mockup's panel in the vendored fonts through capture-er-window.py's own shrink and JPEG: a restyle
+# that moves a token, or a capture step that changes, would otherwise leave it judging the game
+# against stale colours.
 python3 "$repo_root/scripts/check-shader-panel-look.py" --selftest
 
 # er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what

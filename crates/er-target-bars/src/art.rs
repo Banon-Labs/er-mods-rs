@@ -649,6 +649,7 @@ mod gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use er_overlay_theme as theme;
 
     #[test]
     fn the_measured_rects_get_block_aligned_regions_inside_the_atlas() {
@@ -690,12 +691,14 @@ mod tests {
 
     #[test]
     fn the_tint_keeps_hue_and_saturation_and_hands_value_to_the_texture() {
-        let gold = tint([0.85, 0.70, 0.30, 1.0]);
+        let stance = theme::BAR_STANCE;
+        let gold = tint(stance);
         assert!((gold[0] - 1.0).abs() < 1e-6);
-        assert!((gold[1] / gold[2] - 0.70 / 0.30).abs() < 1e-5);
-        assert_eq!(tint([0.0, 0.0, 0.0, 0.5]), [0.0, 0.0, 0.0, 0.5]);
+        assert!((gold[1] / gold[2] - stance[1] / stance[2]).abs() < 1e-5);
+        // Black has no hue to keep: it stays black, at its own alpha.
+        assert_eq!(tint(theme::HUD_PANEL_BG), theme::HUD_PANEL_BG);
         // A texel of value 200 tinted green keeps value 200.
-        let green = tint([0.25, 0.65, 0.25, 1.0]);
+        let green = tint(theme::BAR_STAMINA);
         assert!((200.0 * green[1] - 200.0).abs() < 1e-3);
     }
 }

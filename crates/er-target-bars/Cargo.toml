@@ -20,6 +20,9 @@ crate-type = ["cdylib"]
 # on Linux rather than by launching a game.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# The look every overlay in this workspace shares. The bars' fills, their track and the active
+# outline are its HUD tokens; the tokens are pure, so the host-tested rows name them too.
+er-overlay-theme = { path = "../er-overlay-theme" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

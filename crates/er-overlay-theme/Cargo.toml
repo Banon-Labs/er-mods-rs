@@ -1,4 +1,4 @@
-# The look every in-game panel in this workspace shares: the colour and size tokens, the four
+# The look every in-game panel in this workspace shares: the color and size tokens, the four
 # vendored typefaces (IBM Plex Sans in three weights and JetBrains Mono, OFL, under `fonts/`), and
 # the helpers a panel draws with. It was er-cel-shade's `menu/theme.rs`; it moved here when
 # er-render-scale's panel needed the same look, so there is one copy.
