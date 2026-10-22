@@ -49,7 +49,8 @@ fn run(args: &[String]) -> Result<String, String> {
     };
     let rows: Vec<CatalogRow> = serde_json::from_str(&read(catalog_path)?)
         .map_err(|why| format!("parsing {catalog_path}: {why}"))?;
-    let doc = model::parse(&read(build_path)?).map_err(|why| format!("parsing {build_path}: {why}"))?;
+    let doc =
+        model::parse(&read(build_path)?).map_err(|why| format!("parsing {build_path}: {why}"))?;
     let gear = worn_gear(&doc, &catalog_from_rows(&rows));
     let output = Output {
         build: Build {

@@ -1,17 +1,23 @@
 {
-  "_about": "Edit this, not mods/duelists.lua. scripts/er-duelist-gear.py dresses the duelists from `build` (a planner ?b= link or id) and writes mods/duelists.lua; scripts/er-ai-lab.py runs it at start and before every respawn. `think` is the NpcThinkParam the duelists run (Moonrithyll's) and `summons` how many get gear keys, think.0 .. think.N-1. `respawn` is the spawn-npc.js config the lab's respawn-duelists button passes: Moonrithyll's NpcParam, think and CharaInitParam rows, one `at` spot per duelist on the geom-lab arena's start markers, each on its own Colosseum team (72 and 73 fight each other and never the player), and fight false so they spawn held until fight(true) or the in-game lever releases them.",
+  "_about": "Edit this, not mods/duelists.lua. scripts/er-duelist-gear.py dresses the duelists from `build` (a planner ?b= link or id) and writes mods/duelists.lua; scripts/er-ai-lab.py runs it at start and before every respawn. `think` is the NpcThinkParam row the duelists' bodies are spawned with (Moonrithyll's), `brains` the mods/brain_<name>.lua each think row runs ({row: name}; a single `brain` names the brain of `think` itself), and `summons` how many get gear keys, think.0 .. think.N-1. `mods` is everything the AI agent runs in a duelist lab (er-ai-lab.py --duelists): the brain and the gear, nothing else, so no other mod drives them. `agents` are Frida agents the lab loads beside them ({name: {path under scripts/frida, config}}): block-trainer.js drives the defender's guard, sprint and stick against the attacker on team `attackerTeam` (the player when absent). `respawn` is the spawn-npc.js config: Moonrithyll's NpcParam, think and CharaInitParam rows, one `at` spot per duelist on the geom-lab arena's two start markers, each on its own Colosseum team (72 and 73), fight false so they spawn held until fight(true) or the in-game lever releases them, and shell true so spawn-npc.js gives them nothing the build does not (no flasks, no food, no Ash of War swaps). Spot 0 is the defender: it is spawned on think row 524030000 (Moonrithyll's logic 10000 and battle goal 29999 under another id), so brain_block.lua runs it alone, and the trainer drives it. Spot 1 is the attacker on Moonrithyll's own row, running brain_attack.lua: it runs at the defender and swings R1 or R2, with no jump, Ash of War, weapon swap or roll. Both have `fight: true`, so neither is held (a held character takes no input, the trainer's included). For the player as the attacker instead, give spot 0 `vs: player` and drop `attackerTeam`.",
   "build": "https://er-build-planner.nyasu.business/?b=bbbf0b83524d9f",
   "think": 524320000,
+  "brains": {"524030000": "block", "524320000": "attack"},
   "summons": 2,
+  "mods": ["brain_block.lua", "brain_attack.lua", "duelists.lua"],
+  "agents": {
+    "block": {"path": "block-trainer.js", "config": {"team": 72, "attackerTeam": 73}}
+  },
   "respawn": {
     "npcParam": 524320082,
     "think": 524320000,
     "charaInit": 2024320,
     "replace": true,
     "fight": false,
+    "shell": true,
     "at": [
-      {"block": "0x3c2a2400", "pos": [-36.33, 93.65, 79.07], "team": 72},
-      {"block": "0x3c2a2400", "pos": [-51.33, 93.65, 79.07], "team": 73}
+      {"block": "0x3c2a2400", "pos": [-36.33, 93.65, 79.07], "team": 72, "think": 524030000, "fight": true},
+      {"block": "0x3c2a2400", "pos": [-51.33, 93.65, 79.07], "team": 73, "fight": true}
     ]
   }
 }

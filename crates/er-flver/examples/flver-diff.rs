@@ -38,7 +38,7 @@ fn main() {
             .entry(material.clone())
             .or_insert((0, 0, [f32::MAX; 3], [f32::MIN; 3]));
         let mut faces = String::new();
-        for tri in mesh.indices.chunks_exact(3) {
+        for tri in mesh.indices.as_chunks::<3>().0 {
             entry.1 += 1;
             if tri
                 .iter()
@@ -49,9 +49,9 @@ fn main() {
             entry.0 += 1;
             for &i in tri {
                 let p = mesh.positions[i as usize];
-                for k in 0..3 {
-                    entry.2[k] = entry.2[k].min(p[k]);
-                    entry.3[k] = entry.3[k].max(p[k]);
+                for (k, &v) in p.iter().enumerate() {
+                    entry.2[k] = entry.2[k].min(v);
+                    entry.3[k] = entry.3[k].max(v);
                 }
             }
             let _ = writeln!(

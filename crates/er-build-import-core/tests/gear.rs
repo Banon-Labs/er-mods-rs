@@ -65,11 +65,15 @@ fn gear() -> WornGear {
 }
 
 fn id(gear: &WornGear, slot: &str) -> i64 {
-    gear.slot(slot).unwrap_or_else(|| panic!("no slot {slot}")).id
+    gear.slot(slot)
+        .unwrap_or_else(|| panic!("no slot {slot}"))
+        .id
 }
 
 fn gem(gear: &WornGear, slot: &str) -> Option<u32> {
-    gear.slot(slot).unwrap_or_else(|| panic!("no slot {slot}")).gem
+    gear.slot(slot)
+        .unwrap_or_else(|| panic!("no slot {slot}"))
+        .gem
 }
 
 #[test]
@@ -94,7 +98,11 @@ fn every_slot_is_present_in_a_fixed_order() {
             "talisman4"
         ]
     );
-    let slots: Vec<i32> = gear().slots.iter().map(|piece| piece.chr_asm_slot).collect();
+    let slots: Vec<i32> = gear()
+        .slots
+        .iter()
+        .map(|piece| piece.chr_asm_slot)
+        .collect();
     assert_eq!(slots, [1, 3, 5, 0, 2, 4, 12, 13, 14, 15, 17, 18, 19, 20]);
 }
 

@@ -60,8 +60,12 @@
 // is passed block-relative.
 //
 // Explicit placement, cfg.at: a list of spots, one per summon in creation order (0 is `spawned`,
-// 1.. the extras), each {block, pos: [x, y, z], yaw?, team?}. `team` puts that summon on its own
-// team (see applyTeam), so two duelists can be made enemies. `pos` is in the block's own frame, the frame
+// 1.. the extras), each {block, pos: [x, y, z], yaw?, team?, vs?, fight?, think?}. `team` puts that summon on
+// its own team (see applyTeam), so two duelists can be made enemies; `vs: "player"` makes it the
+// player's sparring partner instead (see patchArenaTeams), and `fight` holds or releases it alone
+// (see applyFight). `think` creates that summon on its own NpcThinkParam row instead of cfg.think,
+// which is how one of two duelists gets a brain of its own (_lab.lua lab_brain goes by think row);
+// gear keys stay cfg.think's. `pos` is in the block's own frame, the frame
 // MSB parts, PlayerIns+0x6c0 block_position and geom-lab.js spawnAt use; the game's own
 // ConvertBlockCoordsToPhysicsCoords turns it into physics space. The summon is created at that
 // physics point (block-relative to the player's block, as every spawn here is), and on the same
@@ -99,6 +103,10 @@ const cfg = Object.assign({
     // the player: atan2(dx, dz) + pi for the direction (dx, dz) toward the target. Only the summon
     // path places this way.
     at: null,
+    // Empty shells (the arena duelists): nothing this agent would add on its own. The CharaInitParam
+    // row's own flask is emptied instead of topped up to `heals`, no food is stocked and no Ash of
+    // War is swapped in, so a summon carries the gear it was dressed in and nothing else.
+    shell: false,
 }, globalThis.__ER_FRIDA_CONFIG || {});
 
 // Which path, measured 2026-10-05 on one session each:
@@ -247,6 +255,13 @@ let teamSpawned = null;
 // A summon-path spawn is put on its creator's team, which is what CreateSummonChr gives it (1, the
 // player's, measured) and what a peer's copy is created with: a local 47 left a Seamless partner
 // able to hit her but not lock on to her (user report 2026-10-05).
+// The cfg.at spot a summon was placed on (0 is `spawned`, 1.. the extras), or undefined.
+function spotOf(chr) {
+    const extra = extras.findIndex((c) => c.equals(chr));
+    const index = spawned !== null && chr.equals(spawned) ? 0 : extra >= 0 ? extra + 1 : -1;
+    return index >= 0 && Array.isArray(cfg.at) ? cfg.at[index] : undefined;
+}
+
 function applyTeam(chr) {
     const t = chr.add(TEAM_TYPE);
     const before = t.readU8();
@@ -261,9 +276,7 @@ function applyTeam(chr) {
         // A cfg.at spot's own `team` wins over both, so two duelists can stand on opposing teams
         // (CS::ChrIns::CanTargetTeamType accepts only an opposing pair, so two summons left on the
         // player's team never target each other).
-        const extra = extras.findIndex((c) => c.equals(chr));
-        const index = spawned !== null && chr.equals(spawned) ? 0 : extra >= 0 ? extra + 1 : -1;
-        const spot = index >= 0 && Array.isArray(cfg.at) ? cfg.at[index] : undefined;
+        const spot = spotOf(chr);
         if (spot && typeof spot.team === 'number') want = spot.team;
     }
     if (want !== before) {
@@ -280,6 +293,11 @@ function applyTeam(chr) {
 // cfg.at spot on one of them gets three cells set to the Neutral relation: target[t][1] (the AI
 // never picks the player), damage[t][1] (a stray swing does not land on the player) and target[1][t]
 // (the player's lock-on and the AI notify path). target[72][73] and the rest stay Enemy.
+//
+// A spot with `vs: "player"` is a sparring partner for the player instead: its team keeps the stock
+// Enemy cells with team 1 both ways (it targets the player, and the player can lock on to it and
+// hit it), only damage[t][1] goes Neutral, and every cell between it and the other arena teams in
+// cfg.at goes Neutral in both tables, so the player is the only enemy it has and the others ignore it.
 //
 // Tables, 2.7.2.0 (identical cell for cell on 1.16.2 and 1.17.1): 79 x 79 pointers, row = the actor,
 // read by CS::ChrIns::CanTargetTeamType 0x14051b8b0 (1.16.2 0x14051a810, `imul ...,0x4f`). Target
@@ -322,12 +340,23 @@ function restoreRelations() {
 
 function patchArenaTeams() {
     restoreRelations();
-    const teams = new Set((Array.isArray(cfg.at) ? cfg.at : []).map((s) => s && s.team)
-        .filter((t) => ARENA_TEAMS.includes(t)));
+    const spots = (Array.isArray(cfg.at) ? cfg.at : []).filter((s) => s && ARENA_TEAMS.includes(s.team));
+    const teams = new Set(spots.map((s) => s.team));
+    const sparring = new Set(spots.filter((s) => s.vs === 'player').map((s) => s.team));
     for (const t of teams) {
-        setRelation('target', t, PLAYER_TEAM, 'neutral');
         setRelation('damage', t, PLAYER_TEAM, 'neutral');
+        if (sparring.has(t)) continue;
+        setRelation('target', t, PLAYER_TEAM, 'neutral');
         setRelation('target', PLAYER_TEAM, t, 'neutral');
+    }
+    for (const t of sparring) {
+        for (const u of teams) {
+            if (u === t) continue;
+            for (const table of ['target', 'damage']) {
+                setRelation(table, t, u, 'neutral');
+                setRelation(table, u, t, 'neutral');
+            }
+        }
     }
 }
 
@@ -336,20 +365,25 @@ function patchArenaTeams() {
 // 0x20 no-move, which ComManipulator's AI update tests (2.7.2.0 `test byte [rax+0x538],0x10` at
 // 0x1403d0008 and 0x1403d0141, `,0x20` at 0x1403d0537; the field was +0x530 on 1.16.2, bd
 // chrctrl-updateai-chrmanipulator-override-is-the-possession-seam-2026-09-01). On clears both. Unset
-// (null) leaves the flags alone. Only these two bits are touched.
+// (null) leaves the flags alone. Only these two bits are touched. A cfg.at spot's own boolean
+// `fight` wins over cfg.fight for that summon, so a sparring partner moves while the rest stay held.
+// While held, ComManipulator's update returns before CSChrActionRequestModule::UpdateFromManipulator
+// (1.16.2 FUN_1403d0090 tests debugFlags & 0x10 first), so a held summon takes no input at all.
 const DEBUG_FLAGS = 0x538;
 const HOLD_FLAGS = 0x30;
 
 function applyFight(chr) {
-    if (cfg.fight === null || cfg.fight === undefined) return null;
+    const spot = spotOf(chr);
+    const on = spot && typeof spot.fight === 'boolean' ? spot.fight : cfg.fight;
+    if (on === null || on === undefined) return null;
     const f = chr.add(DEBUG_FLAGS);
     const before = f.readU8();
-    const want = cfg.fight ? before & ~HOLD_FLAGS : before | HOLD_FLAGS;
+    const want = on ? before & ~HOLD_FLAGS : before | HOLD_FLAGS;
     if (want !== before) {
         f.writeU8(want);
-        emit('fight', { chr: chr.toString(), on: !!cfg.fight, from: before, to: want });
+        emit('fight', { chr: chr.toString(), on: !!on, from: before, to: want });
     }
-    return !!cfg.fight;
+    return !!on;
 }
 
 // ChrIns +0x90 initial position (HavokPosition, physics space) is the AI's POINT_INITIAL, its home:
@@ -852,6 +886,7 @@ function speffectIds(chr) {
 }
 
 function tendFood(chr) {
+    if (cfg.shell) return;
     for (const food of FOODS) {
         try {
             if (food.needsEnhance && !greasable(chr)) continue;
@@ -904,13 +939,15 @@ function stockFood(chr, food) {
 }
 
 function setHeals(chr) {
+    const want = cfg.shell ? 0 : cfg.heals;
     for (const e of inventoryOf(chr)) {
         if ((e.add(4).readU32() >>> 0) === (HEAL_ITEM >>> 0)) {
             const before = e.add(8).readU32();
-            if (before !== cfg.heals) e.add(8).writeU32(cfg.heals);
-            return { before, after: cfg.heals };
+            if (before !== want) e.add(8).writeU32(want);
+            return { before, after: want };
         }
     }
+    if (want === 0) return { before: 0, after: 0 };
     // Drunk to zero, the entry is gone: put it back through the game's own add.
     pendingHealAdd = { chr, qty: cfg.heals };
     return { before: 0, queued: cfg.heals };
@@ -1247,9 +1284,10 @@ function spawn(pose, side, index) {
     handle.writeU32(0xffffffff);
     handle.add(4).writeS32(-1);
     const yaw = place !== null ? place.yaw : pose.yaw + Math.PI;
+    const think = place !== null && Number.isInteger(place.spot.think) ? place.spot.think : cfg.think;
 
     const chr = CREATE_SUMMON_CHR(manager, eventId, steamId, block, SUMMON_ARG5, handle,
-        cfg.npcParam, cfg.think, cfg.charaInit, local, yaw,
+        cfg.npcParam, think, cfg.charaInit, local, yaw,
         // Frida's 'bool' argument type takes integers; a JS boolean raises "expected an integer".
         1, 0, 0xffffffff, 0xffffffff, 0, 0, 0);
     // A placed summon is also warped onto its spot on its creation frame, as the sign join puts a
@@ -1264,7 +1302,7 @@ function spawn(pose, side, index) {
         warped = { physics: at, yaw };
     }
     let net = null;
-    if (!chr.isNull() && cfg.net !== false) net = announceSummon(chr, blockId, local, yaw);
+    if (!chr.isNull() && cfg.net !== false) net = announceSummon(chr, blockId, local, yaw, think);
     return {
         chr: chr, at: at, block: '0x' + blockId.toString(16), center: center,
         ownerEventId: eventId.readS32(), steamId: steamId.readU64().toString(16), net: net,
@@ -1277,7 +1315,7 @@ function spawn(pose, side, index) {
 // whose receiver (CreateBuddyFromPacket) makes every peer create the same summon. The gate is
 // IsSpiritSummmonNetworkingEnabled, true under Seamless with allow_summons = 1 (measured
 // 2026-10-05); the peer applies it again before it creates anything.
-function announceSummon(chr, blockId, local, yaw) {
+function announceSummon(chr, blockId, local, yaw, think) {
     if (!SUMMON_NET_ENABLED()) return { sent: false, why: 'summon networking is off' };
     const netChrSync = WORLD_CHR_MAN.readPointer().add(NET_CHR_SYNC).readPointer();
     const handle = Memory.alloc(16);
@@ -1300,7 +1338,7 @@ function announceSummon(chr, blockId, local, yaw) {
     for (let i = 0; i < 3; i++) packet.add(BUDDY_PACKET.POS + i * 4).writeFloat(local.add(i * 4).readFloat());
     packet.add(BUDDY_PACKET.YAW).writeFloat(yaw);
     packet.add(BUDDY_PACKET.NPC).writeS32(cfg.npcParam);
-    packet.add(BUDDY_PACKET.THINK).writeS32(cfg.think);
+    packet.add(BUDDY_PACKET.THINK).writeS32(think);
     packet.add(BUDDY_PACKET.CHARA_INIT).writeS32(cfg.charaInit);
     packet.add(BUDDY_PACKET.BUDDY_PARAM).writeS32(-1);
     packet.add(BUDDY_PACKET.DOPING).writeS32(0);
@@ -2063,6 +2101,7 @@ function pickArt(chr, arts, st) {
 }
 
 function artPlanner() {
+    if (cfg.shell) return;
     const now = Date.now();
     if (now - artAt < ART_CHECK_MS) return;
     artAt = now;
@@ -2697,7 +2736,7 @@ function heartbeat() {
             if (!isAlive(c).alive) return { chr: c.toString(), alive: false };
             applyName(c, i + 1);
             tendFood(c);
-            return { chr: c.toString(), alive: true, hp: hpOf(c), team: applyTeam(c), fight: applyFight(c),
+            return { chr: c.toString(), alive: true, pos: posOf(c), hp: hpOf(c), team: applyTeam(c), fight: applyFight(c),
                 home: applyHome(c, pose.pos), equip: cfg.dress !== false && applyEquip(c, false, i + 1) !== null };
         } catch (e) {
             return { chr: c.toString(), error: e.message };

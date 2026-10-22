@@ -45,9 +45,9 @@ def _carry_script() -> Path:
     cand = [here]
     try:
         common = subprocess.run(["git", "-C", str(here), "rev-parse", "--git-common-dir"],
-                                capture_output=True, text=True, check=True).stdout.strip()
+                                capture_output=True, text=True, check=True, timeout=10).stdout.strip()
         cand.append((here / common).resolve().parent)
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.SubprocessError):
         pass
     for root in cand:
         p = root / "scripts" / "map-rvas-1171-to-1172.py"

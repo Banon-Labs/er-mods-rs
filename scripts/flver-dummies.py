@@ -9,7 +9,7 @@ the offline check that a model has the dummy a param row names, and where on the
     python3 scripts/flver-dummies.py --selftest
 
 Layout (SoulsFormats FLVER2 / FLVER.Dummy): a 0x80-byte header with the dummy count at 0x14,
-then 0x40-byte dummies. Per dummy: position f32x3 at 0x00, colour at 0x0C, forward f32x3 at
+then 0x40-byte dummies. Per dummy: position f32x3 at 0x00, color at 0x0C, forward f32x3 at
 0x10, reference id s16 at 0x1C, parent bone s16 at 0x1E, upward f32x3 at 0x20, attach bone s16
 at 0x2C, flag1 u8 at 0x2E, use-upward u8 at 0x2F.
 """

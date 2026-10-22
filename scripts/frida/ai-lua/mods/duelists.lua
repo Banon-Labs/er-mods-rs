@@ -5,20 +5,22 @@
 -- name     Balls
 -- revision 4
 --
--- 2 duelists on Moonrithyll's body and think row (524320000), running her
--- simulated-player brain (brain_moonrithyll.lua) with her face from moonrithyll.lua unless the
--- build has one of its own. spawn-npc.js applies a "think.N" gear key to its Nth summon only,
--- slot by slot over moonrithyll.lua's think-wide gear, so every slot is named below. The lab's
+-- 2 duelists on Moonrithyll's body (gear keys on think row 524320000), running brain_block.lua on think row 524030000; brain_attack.lua on think row 524320000.
+-- spawn-npc.js applies a "think.N" gear key to its Nth summon only, slot by slot over
+-- whatever else names the think row, so every slot is named below. The lab's
 -- "respawn duelists" button (POST /api/respawn {"preset": "duelists"}) spawns them with
--- duelists.json's `respawn` object: one per arena spot, on Colosseum
--- teams 72, 73, which fight each other and never the player,
--- held (fight false) until fight(true) or the arena lever releases them.
+-- duelists.json's `respawn` object: one per arena spot, on
+-- Colosseum teams 72 and 73, which fight each other and never the player,
+-- summon 0, 1 free to move, the rest held (fight false) until fight(true) or the arena lever releases them.
 --
 -- Gear is the build's worn set as er-build-import-core resolves it (er-worn-gear): armament
 -- ids are the affinity row plus the level, gems are EquipParamGem rows, and a slot the build
 -- leaves bare gets the engine's empty value (Unarmed, the bare armour piece, -1 for a talisman).
 -- Not carried over: attributes, the great rune, spells and the pouch.
 -- Note: the item-name cache predates the installed archives (python3 scripts/er-item-name.py --refresh); items added since are unnamed
+
+lab_brain(524030000, "block")
+lab_brain(524320000, "attack")
 
 -- Summon 0
 lab_equip("524320000.0", "right1", 21070125, 65200) -- Iron Ball, Beast's Roar

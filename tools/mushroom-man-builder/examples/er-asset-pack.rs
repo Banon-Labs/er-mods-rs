@@ -18,7 +18,7 @@
 //! draws it): `mesh <material>`, then `v px py pz nx ny nz tx ty tz tw u v` lines and
 //! `f a b c` lines with zero-based indices into that block's vertices. Every vertex is
 //! encoded over a copy of the donor mesh's first vertex, so members this tool does not
-//! compute (colour, a second UV) keep the donor's values.
+//! compute (color, a second UV) keep the donor's values.
 //!
 //! `--strip` zeroes every face set of every mesh whose material name starts with the prefix,
 //! in every FLVER of each named asset's binder: the meshes stay, drawing nothing.

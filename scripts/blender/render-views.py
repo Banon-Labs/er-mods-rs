@@ -3,7 +3,7 @@
     blender --background <scene.blend> --python scripts/blender/render-views.py -- \
         <name-regex> <out-dir> [--resolution N] [--light studio|flat|matcap] [--frame <object>]
 
-Workbench engine with texture colour, so a headless render takes seconds. Views: top
+Workbench engine with texture color, so a headless render takes seconds. Views: top
 orthographic, four orthographic sides, and four perspective three-quarter views, all framed on
 the world-space bounding box of the matched objects' meshes (children included). With
 `--frame`, the side views are square to that object's axes instead of the world's, so a

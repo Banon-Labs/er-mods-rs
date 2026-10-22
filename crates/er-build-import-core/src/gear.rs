@@ -221,8 +221,12 @@ pub fn worn_gear(doc: &BuildDoc, catalog: &dyn Catalog) -> WornGear {
         .zip(EMPTY_PROTECTOR_ITEM_IDS)
         .zip(CHR_ASM_SLOT_PROTECTOR_HEAD..)
     {
-        out.slots
-            .push(simple(slot, chr_asm_slot, item.as_ref(), i64::from(empty & ITEM_ID_ROW_MASK)));
+        out.slots.push(simple(
+            slot,
+            chr_asm_slot,
+            item.as_ref(),
+            i64::from(empty & ITEM_ID_ROW_MASK),
+        ));
     }
 
     for ((index, slot), chr_asm_slot) in TALISMAN_SLOT_NAMES

@@ -13,6 +13,13 @@ are the one way in and out and the fight stays visible. The default low wall is 
 alone cannot tell a standing jump from a running one, since both rise the same, but the logged jumps show feet above 1.0 m over 0.5-1.2 m of forward
 travel when running and only about 0.1 m when standing, so a 1.0 m wall should want a run-up.
 
+What is drawn is not what stops a body. Every wall's collider reaches `--fence` above the floor,
+the way a finished arena's invisible walls do: a knockback launch carries a character over a wall
+no jump clears, and on 2026-10-21 the user knocked a duelist out of this arena with an ash of war
+while the colliders stopped at the drawn tops. The entrance's low stretch keeps its `--wall`
+collider, since it is the way in and out. The default 6 m is not measured against a launch: it is
+five times the highest jump rise seen.
+
 With `--previous` (the spawnlist command that built what stands now) and `--log` (the geom-lab log
 with its result), the output is instead a batch that spawns only what changed and then hides what
 it replaces.
@@ -209,7 +216,8 @@ def layout(args):
         # Tagged by edge, so a change to one edge leaves the others' tags (and pieces) alone.
         piece[edge] = piece.get(edge, -1) + 1
         wall_top = floor_top + (args.wall if is_low else args.tall)
-        f = box(c, e, length, args.thick, bottom, wall_top - bottom)
+        fence_top = floor_top + (args.wall if is_low else args.fence)
+        f = box(c, e, length, args.thick, bottom, fence_top - bottom)
         items.append(collider("wall%d.%d" % (edge, piece[edge]), f, args.centre))
         # Whole copies of the segment, each stretched by length/n so they abut exactly.
         n = max(1, round(length / WALL[1][0]))
@@ -360,6 +368,21 @@ def selftest():
     # The other walls keep everyone in without hiding the view: above the highest rise seen
     # anywhere (1.30 m), below eye height.
     assert 1.3 < args.tall < 1.6, args.tall
+    # Colliders stop bodies at the fence whatever is drawn, every wall but the entrance's low
+    # stretch; the drawn walls keep their own tops.
+    floor_top = args.centre[1] + args.ground + args.floor
+    low_tag = "wall%d.1" % args.entrance
+    for it in items:
+        if not it["tag"].startswith("wall"):
+            continue
+        if it["asset"] == "AEG099_002":
+            top = it["pos"][1] + it["scale"][1] * AEG099_002[1]
+            want = args.wall if it["tag"] == low_tag else args.fence
+        else:
+            top = it["pos"][1] + (WALL[2][1] + WALL[1][1]) * it["scale"][1]
+            want = args.wall if it["tag"].startswith(low_tag + ".") else args.tall
+        assert abs(top - (floor_top + want)) < 1e-9, (it["tag"], top, want)
+    assert args.fence > 2 * 1.30, args.fence
     # Each brazier stands on both walls' centre lines at its corner, on top of the tall wall.
     for it in (it for it in items if it["tag"].startswith("light")):
         v = int(it["tag"][5:])
@@ -392,6 +415,8 @@ def parse(argv):
     p.add_argument("--floor", type=float, default=1.2, help="floor top above the ground")
     p.add_argument("--wall", type=float, default=1.0, help="entrance wall top above the floor")
     p.add_argument("--tall", type=float, default=1.4, help="every other wall's top above the floor")
+    p.add_argument("--fence", type=float, default=6.0,
+                   help="every wall collider's top above the floor, except the entrance's low stretch")
     p.add_argument("--thick", type=float, default=0.6)
     p.add_argument("--bands", type=int, default=4)
     p.add_argument("--tiles", type=int, default=4, help="floor tiles per band")

@@ -417,7 +417,7 @@ def load_smithbox(app_dir):
 
 
 def known_facts(model, materials=()):
-    """[(kind, text, source)] from KNOWN for one model id and its matbin names."""
+    """[(kind, text, source)] from `KNOWN` for one model id and its matbin names."""
     out = []
     for pattern, name, note, source, *requires in KNOWN:
         if re.fullmatch(pattern, model) and all(m in materials for m in requires):

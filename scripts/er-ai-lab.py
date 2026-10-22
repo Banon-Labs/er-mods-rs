@@ -16,8 +16,8 @@ Both agent files are reloaded in place when they change on disk, like er-frida-w
 
 The duelists' gear is regenerated from their build planner link (scripts/er-duelist-gear.py, config
 scripts/frida/ai-lua/duelists.json) at start and before every respawn, and the respawn waits, a
-few seconds at most, for the new gear to reach spawn-npc.js. `POST /api/respawn {"preset":
-"duelists"}` respawns with duelists.json's `respawn` config.
+few seconds at most, for the new gear to reach spawn-npc.js. A respawn request,
+`POST /api/respawn {"preset": "duelists"}`, respawns with duelists.json's `respawn` config.
 
 The page streams every agent message over server-sent events, edits hot.lua (saving it is the
 reload), and posts REPL code. Everything the agents send is also appended to `--log` as JSON lines.
@@ -108,9 +108,17 @@ ARG_ROLES = [
 ]
 
 
+# --duelists sets this to duelists.json's `mods`: the only mods the AI agent runs, so nothing but the
+# duelists' own brain and gear reaches them.
+ONLY_MODS: list[str] | None = None
+
+
 def mod_files() -> list[str]:
-    """Run order: the framework, then mods/*.lua by name."""
-    return [FRAMEWORK] + [f"mods/{p.name}" for p in sorted((LUA_DIR / "mods").glob("*.lua"))]
+    """Run order: the framework, then mods/*.lua by name (only ONLY_MODS when it is set)."""
+    mods = sorted((LUA_DIR / "mods").glob("*.lua"))
+    if ONLY_MODS is not None:
+        mods = [p for p in mods if p.name in ONLY_MODS]
+    return [FRAMEWORK] + [f"mods/{p.name}" for p in mods]
 
 
 def write_manifest() -> list[str]:
@@ -619,12 +627,25 @@ def main() -> int:
     parser.add_argument("--extra-agent", action="append", default=[], metavar="NAME=PATH",
                         help="load another agent in the same session (a second watcher on the process "
                              "would break these hooks), e.g. void=scripts/frida/void-trace.js")
+    parser.add_argument("--duelists", action="store_true",
+                        help="the arena duelists: spawn with duelists.json's `respawn` config instead of "
+                             "--spawn-config, run only its `mods`, and load its `agents`")
+    parser.add_argument("--agent-config", action="append", default=[], metavar="NAME=JSON",
+                        help="the cfg an --extra-agent reads as __ER_FRIDA_CONFIG, like er-frida-watch.py's "
+                             "--config-json, e.g. geom={\"noSweeps\": true}; for one of duelists.json's "
+                             "`agents` it goes on top of the config there, e.g. block={\"mode\": \"recipe\"}")
     args = parser.parse_args()
     for spec in args.extra_agent:
         name, _, path = spec.partition("=")
         if not name or not path or name in AGENTS:
             raise SystemExit(f"--extra-agent wants NAME=PATH with a new name, got {spec!r}")
         AGENTS[name] = pathlib.Path(path).resolve()
+    # Checked against the agents once duelists.json's are known too.
+    overrides = {}
+    for spec in args.agent_config:
+        name, _, text = spec.partition("=")
+        overrides[name] = json.loads(text)
+    extra_configs = {}
     args.log.parent.mkdir(parents=True, exist_ok=True)
 
     # The AI agent reads the mods this lab writes the manifest for and the gear generator writes
@@ -632,7 +653,32 @@ def main() -> int:
     # otherwise apply another tree's mods and never see this one's duelists.lua.
     ai_config = json.loads(args.ai_config)
     ai_config.setdefault("dir", wine_dir(LUA_DIR))
-    lab = Lab(args.log, args.endpoint, {"spawn": json.loads(args.spawn_config), "ai": ai_config})
+    spawn_config = json.loads(args.spawn_config)
+    if args.duelists:
+        global ONLY_MODS
+        duelists = json.loads(DUELISTS_CONFIG.read_text(encoding="utf-8"))
+        spawn_config = duelists.get("respawn") or {}
+        ONLY_MODS = list(duelists.get("mods") or [])
+        missing = [m for m in ONLY_MODS if not (LUA_DIR / "mods" / m).is_file()]
+        if missing:
+            raise SystemExit(f"{DUELISTS_CONFIG}: `mods` names files mods/ does not have: {missing}")
+        # Agents the duelists need beside spawn-npc.js and the AI agent (the block trainer), as
+        # {name: {path relative to scripts/frida, config}}; loaded like an --extra-agent.
+        for name, spec in (duelists.get("agents") or {}).items():
+            path = (LUA_DIR.parent / spec["path"]).resolve()
+            if name in AGENTS or not path.is_file():
+                raise SystemExit(f"{DUELISTS_CONFIG}: agent {name!r} is a taken name or {path} is missing")
+            AGENTS[name] = path
+            config = extra_configs.setdefault(name, dict(spec.get("config") or {}))
+            # Where the agent keeps what it learns across reloads and lab runs, spelled for the Wine side.
+            state = args.log.resolve().parent / f"{name}-learned.json"
+            config.setdefault("stateFile", "Z:" + str(state).replace("/", "\\"))
+    for name, override in overrides.items():
+        if name not in AGENTS or name in ("spawn", "ai"):
+            raise SystemExit(f"--agent-config wants NAME=JSON for an --extra-agent or a duelists.json agent, "
+                             f"got {name!r}")
+        extra_configs.setdefault(name, {}).update(override)
+    lab = Lab(args.log, args.endpoint, {"spawn": spawn_config, "ai": ai_config, **extra_configs})
     lab.corpus = args.corpus
     lab.methods = mine_methods(args.corpus) if args.corpus.is_dir() else []
     lab.reference = index_reference(args.corpus) if args.corpus.is_dir() else {}
@@ -644,7 +690,8 @@ def main() -> int:
         print(f"duelist gear: {gear.get('link')} revision {gear.get('revision')}"
               f"{' (rewritten)' if gear.get('changed') else ''}", flush=True)
     else:
-        print(f"duelist gear not refreshed, kept the last file: {gear.get('error')}", flush=True)
+        kept = "kept the last duelists.lua" if gear.get("kept") else "there is no duelists.lua yet"
+        print(f"duelist gear not refreshed ({gear.get('error')}); {kept}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(lab))
     server.daemon_threads = True
 

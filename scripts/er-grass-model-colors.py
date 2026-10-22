@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""How white (or any colour) each grass/plant model is, measured from its own albedo texels.
+"""How white (or any color) each grass/plant model is, measured from its own albedo texels.
 
-    uv run --with pillow --with texture2ddecoder python3 scripts/er-grass-model-colours.py AEG001_254 AEG098_202 ...
+    uv run --with pillow --with texture2ddecoder python3 scripts/er-grass-model-colors.py AEG001_254 AEG098_202 ...
 
 For each model: the FLVER out of the extracted geombnd is exported with the er-flver `flver-obj`
 example (built at target/debug/examples/flver-obj), the material's matbin XML names its albedo
