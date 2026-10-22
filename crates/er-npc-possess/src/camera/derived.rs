@@ -7,12 +7,12 @@
 //! # Why the camera gets a block at all
 //!
 //! "The camera did not change" has half a dozen causes -- the feature is off, the build is one
-//! nobody measured, the creature's `hitHeight` is zero, the row the player picked is referenced by
-//! their regulation -- and from the chair they are indistinguishable. Every one of them is a
-//! [`Refusal`] with a sentence next to it here. When it did change, the block prints the height it
-//! read, the row it patched, the row it copied the untouched fields from, the two numbers it
-//! wrote, and -- the part a player can actually check against what they can see -- where that puts
-//! the top of the creature on screen and how much room is above it.
+//! nobody measured, the creature's `hitHeight` is zero, the getter could not be hooked -- and from
+//! the chair they are indistinguishable. Every one of them is a [`Refusal`] with a sentence next to
+//! it here. When it did change, the block prints the height it read, the id the copy was served
+//! under, the row it copied the untouched fields from, the two numbers it set, and -- the part a
+//! player can actually check against what they can see -- where that puts the top of the creature
+//! on screen and how much room is above it.
 
 // Pure text generation; ungated so `cargo test` proves it on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -27,9 +27,10 @@ pub(crate) fn render(chr_id: u32, report: &Report) -> String {
     let _ = write!(
         out,
         "\n# THE CAMERA. Size comes from CSChrPhysicsModule+0x340 hitHeight, read off the\n\
-         # creature itself; the numbers below are written into a free LockCamParam row in\n\
-         # memory and ChrExFollowCam+0x468 is pointed at it for the length of the possession.\n\
-         # Everything is put back on release. Tune with [camera] and\n\
+         # creature itself; the numbers below go into this mod's own copy of a LockCamParam\n\
+         # row, which the game is handed under an id its table does not contain, and\n\
+         # ChrExFollowCam+0x468 is pointed at that id for the length of the possession. No\n\
+         # param row is written. Tune with [camera] and\n\
          # [chr.c{chr_id:04}].camera_distance_scale in er-npc-possess.toml.\n\
          [camera.c{chr_id:04}]\n"
     );
@@ -52,12 +53,14 @@ pub(crate) fn render(chr_id: u32, report: &Report) -> String {
 
     match report.applied {
         Some(shape) => {
-            let _ = writeln!(out, "patched_row = {}", report.row);
+            if let Some(served_id) = report.served_id {
+                let _ = writeln!(out, "served_id = {served_id}");
+            }
             if let Some(base) = report.base_row {
                 let _ = writeln!(
                     out,
-                    "# every other field in that row -- FOV, lock offset, chase rate, lock-on\n\
-                     # radii -- was copied from row {base}, whatever the camera resolved a frame\n\
+                    "# every other field of the copy -- FOV, lock offset, chase rate, lock-on\n\
+                     # radii -- came from row {base}, whatever the camera resolved a frame\n\
                      # before the possession started."
                 );
             }
@@ -108,7 +111,7 @@ mod tests {
         Report {
             hit_height: Some(12.0),
             hit_radius: Some(12.0),
-            row: 1000,
+            served_id: Some(2_000_000_000),
             base_row: Some(0),
             distance_scale: 1.0,
             applied: Some(Shape {
@@ -124,7 +127,8 @@ mod tests {
         let text = render(4500, &applied());
         assert!(text.contains("[camera.c4500]"), "{text}");
         assert!(text.contains("hit_height_m = 12"), "{text}");
-        assert!(text.contains("patched_row = 1000"), "{text}");
+        assert!(text.contains("served_id = 2000000000"), "{text}");
+        assert!(text.contains("No\n# param row is written"), "{text}");
         assert!(text.contains("cam_dist_target = 30.4"), "{text}");
         assert!(text.contains("chr_org_offset_y = 11.6"), "{text}");
         // ...and where that puts the creature, which is the form a player can check. This shape
@@ -143,31 +147,31 @@ mod tests {
             Refusal::UnmeasuredBuild,
             Refusal::NoHeight,
             Refusal::ParamsNotReady,
-            Refusal::RowInUse(1000),
-            Refusal::RowMissing(4242),
+            Refusal::NoFreeId,
             Refusal::BaseRowMissing,
+            Refusal::HookUnavailable,
             Refusal::NoFollowCam,
             Refusal::WriteFailed,
         ] {
-            let text = render(4500, &Report::refused(1000, 1.0, reason));
+            let text = render(4500, &Report::refused(1.0, reason));
             assert!(
                 text.contains(&format!("adapted = \"no: {}\"", reason.name())),
                 "{reason:?}: {text}"
             );
             assert!(text.contains(&reason.describe()), "{reason:?}: {text}");
-            assert!(!text.contains("patched_row"), "{reason:?}: {text}");
+            assert!(!text.contains("served_id"), "{reason:?}: {text}");
         }
     }
 
-    /// A row conflict has to name the row, or the player cannot tell which one to change.
+    /// A build the getter cannot be hooked on has to say so, and say where the reason is.
     #[test]
-    fn a_row_conflict_names_the_row() {
-        let text = render(4500, &Report::refused(1000, 1.0, Refusal::RowInUse(1000)));
+    fn an_unhooked_getter_points_at_the_log() {
+        let text = render(4500, &Report::refused(1.0, Refusal::HookUnavailable));
         assert!(
-            text.contains("LockCamParam row 1000 is referenced"),
+            text.contains("LookupLockCamParam could not be hooked"),
             "{text}"
         );
-        assert!(text.contains("[camera].param_row"), "{text}");
+        assert!(text.contains("er-npc-possess.log"), "{text}");
     }
 
     /// The block has to survive this crate's own TOML reader: a player who copies a line out of it
@@ -175,9 +179,9 @@ mod tests {
     #[test]
     fn the_rendered_block_parses_as_toml() {
         let doc = crate::toml::Document::parse(&render(4500, &applied()));
-        assert_eq!(doc.scalar("camera.c4500", "patched_row"), Some("1000"));
+        assert_eq!(doc.scalar("camera.c4500", "served_id"), Some("2000000000"));
         assert_eq!(doc.scalar("camera.c4500", "cam_dist_target"), Some("30.4"));
-        let refused = render(4500, &Report::refused(1000, 1.0, Refusal::Disabled));
+        let refused = render(4500, &Report::refused(1.0, Refusal::Disabled));
         let doc = crate::toml::Document::parse(&refused);
         assert_eq!(doc.scalar("camera.c4500", "adapted"), Some("no: disabled"));
     }

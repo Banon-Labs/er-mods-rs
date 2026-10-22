@@ -9,10 +9,12 @@ name = "er_npc_possess"
 crate-type = ["cdylib"]
 
 # The "become an NPC" mod: the config file, the hotkeys, the possession engine, the moveset and
-# the in-game creature picker. It claims NO GAME PROLOGUE -- the input is polled from a FrameBegin
-# game task (`GetAsyncKeyState` + `XInputGetState`), the same hook-free path `er-refill-all`
-# uses -- so it needs no hook-union row. The one hook it can install is hudhook's `Present`, on
-# the swapchain rather than the game image, and only once the picker is opened.
+# the in-game creature picker. The input is polled from a FrameBegin game task
+# (`GetAsyncKeyState` + `XInputGetState`), the same hook-free path `er-refill-all` uses. Its game
+# prologues are two: `CSFeManImp::UpdatePlayerComponents` for the HUD bars, and the `LockCamParam`
+# getter `LookupLockCamParam`, which hands the follow camera this DLL's own row copy during a
+# possession (so no resident param row is ever written). hudhook's `Present` is a swapchain slot
+# rather than a game prologue, installed only once the picker or the attack-set panel is wanted.
 #
 # Tier A only (zero external deps, host-buildable): the config parser, the reload decision, the
 # possession state machine and the engine seam are all `cargo test`-able on Linux.
@@ -32,11 +34,21 @@ er-hotkey-config = { path = "../er-hotkey-config" }
 # drawing half is `cfg(windows)`.
 er-overlay-theme = { path = "../er-overlay-theme" }
 
+# Assembles the `LockCamParam` getter's windows from named instructions in `build.rs` and
+# ground-truths them against `eldenring-deobf-1.17.1.bin`, so a hand-typed byte cannot silently
+# disarm the hook.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
 [target.'cfg(windows)'.dependencies]
-# The MinHook wrapper, for the crate's ONE detour: CSFeManImp::UpdatePlayerComponents, which is
-# what points the HP/FP/stamina bars at the possessed creature. Windows-only because it compiles
-# MinHook's C source; the HUD layer's offsets, arithmetic and report are host-testable siblings
-# that do not depend on it.
+# The MinHook wrapper, for the crate's two detours: CSFeManImp::UpdatePlayerComponents, which is
+# what points the HP/FP/stamina bars at the possessed creature (a bare `MhHook`, because it takes
+# a float), and the `LockCamParam` getter, which serves the camera's row copy (a union handler).
+# Windows-only because it compiles MinHook's C source; the offsets, arithmetic and reports are
+# host-testable siblings that do not depend on it.
 er-hook = { path = "../er-hook" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }

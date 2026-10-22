@@ -21,9 +21,9 @@
 //!   position nothing has checked. Both abnormal releases in the reference log did exactly that
 //!   and then failed the move.
 //! * **The camera's size must go back before the camera does.** While `WorldChrManDbg+0xb8` still
-//!   names the creature, `ChrExFollowCam+0x468` still names the patched `LockCamParam` row -- so
-//!   undoing them in this order shows at most one frame of the creature framed for a player, and
-//!   the other order shows one frame of the player framed for a dragon.
+//!   names the creature, `ChrExFollowCam+0x468` still names the id this mod's `LockCamParam` copy
+//!   is served under -- so undoing them in this order shows at most one frame of the creature
+//!   framed for a player, and the other order shows one frame of the player framed for a dragon.
 //! * **`ChrCtrl+0x3b0` must be cleared before anything can tear the character down.**
 //!   `ChrCtrl::Unref` compares that slot against zero and **DLPanics** when it is non-null. This
 //!   is the step that must run even when every step before it failed.
@@ -86,13 +86,12 @@ pub(crate) enum Step {
     /// being restored early: the camera steps read the creature, and the body scale this also
     /// undoes is render-only (`ChrCtrl::SetScaleSize` touches no physics field).
     RestoreBody = 3,
-    /// Put `ChrExFollowCam+0x468` and the patched `LockCamParam` row back exactly as they were.
+    /// Put `ChrExFollowCam+0x468` back exactly as it was and stop serving this mod's
+    /// `LockCamParam` copy, in that order. No param row was written, so none is restored.
     ///
-    /// Before the camera is handed back, for two reasons. The override is still pointing at the
-    /// patched row at this moment, so undoing them in this order costs at most one frame of the
-    /// creature framed with the player's parameters rather than one frame of the player framed
-    /// with a dragon's. And the row is shared game state that anything could read, unlike
-    /// `+0x468`, which nothing in the game ever touches -- so the shared thing goes back first.
+    /// Before the camera is handed back: the override is still naming the served id at this
+    /// moment, so undoing them in this order costs at most one frame of the creature framed with
+    /// the player's parameters rather than one frame of the player framed with a dragon's.
     RestoreCameraSize = 4,
     /// Clear `WorldChrManDbg+0xb8`. Camera and lock-on return to the real player.
     ClearCameraOverride = 5,
