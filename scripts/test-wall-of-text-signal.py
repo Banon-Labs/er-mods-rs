@@ -73,6 +73,7 @@ def run_signal(events: list[dict]) -> str:
                 fh.write(json.dumps(ev) + "\n")
         proc = subprocess.run(
             ["bash", str(SIGNAL)],
+            input=json.dumps({"transcript_path": str(tdir / "session.jsonl")}),
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,

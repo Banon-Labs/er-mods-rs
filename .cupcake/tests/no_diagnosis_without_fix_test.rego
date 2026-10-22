@@ -535,6 +535,85 @@ test_allow_on_a_line_from_before_the_deferral_field if {
 
 # The correction has to send the agent to the step, quote the sentence, and leave the legitimate
 # deferrals speakable.
+# --- 2026-10-18: admitted-unfixed and unchecked-claim arms ----------------------------------------
+
+unf_line(o) := concat("", [
+	"DIAGFACTS|diagnosis=", object.get(o, "diagnosis", ""),
+	"|fixed=0|asked=", object.get(o, "asked", "1"),
+	"|blocked=", object.get(o, "blocked", "0"),
+	"|promise=|edited=", object.get(o, "edited", "0"),
+	"|handback=|handbackkind=|userneed=", object.get(o, "userneed", "0"),
+	"|didwork=0|extblocked=0|carried=0|unread=|consulted=0|future=", object.get(o, "future", "0"),
+	"|deferral=|committed=", object.get(o, "committed", "0"),
+	"|unfixed=", object.get(o, "unfixed", ""),
+	"|unchecked=", object.get(o, "unchecked", ""),
+	"|nofix=", object.get(o, "nofix", "0"),
+])
+
+# The verbatim facts the signal emits for the reported message: both arms halt, and `asked=1`
+# exempts neither.
+test_halt_on_the_2026_10_18_message if {
+	line := unf_line({
+		"unfixed": "I haven't fixed either.",
+		"unchecked": "As far as I know a parry always needs a parry skill, so legal ripostes come only from stance breaks, plus backstabs.",
+	})
+	halts := guard.halt with input as stop_event(line)
+	ids := rule_ids(halts)
+	"ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX" in ids
+	"ER-EFFECTS-NO-UNCHECKED-CLAIM" in ids
+}
+
+test_allow_admitted_unfixed_when_the_turn_edited if {
+	halts := guard.halt with input as stop_event(unf_line({"unfixed": "I haven't fixed either.", "edited": "1"}))
+	count(halts) == 0
+}
+
+test_allow_admitted_unfixed_with_a_blocker if {
+	halts := guard.halt with input as stop_event(unf_line({"unfixed": "I haven't fixed it: needs sudo.", "blocked": "1"}))
+	count(halts) == 0
+}
+
+test_allow_admitted_unfixed_when_the_prompt_forbade_changes if {
+	halts := guard.halt with input as stop_event(unf_line({"unfixed": "I haven't fixed either.", "nofix": "1"}))
+	count(halts) == 0
+}
+
+test_allow_admitted_unfixed_when_committed if {
+	halts := guard.halt with input as stop_event(unf_line({"unfixed": "I haven't fixed either.", "committed": "1"}))
+	count(halts) == 0
+}
+
+# A message both the diagnosis arm and the admission recognise halts once, under the diagnosis arm.
+test_admitted_unfixed_yields_to_the_diagnosis_arm if {
+	line := unf_line({"diagnosis": "the real defect is X", "asked": "0", "unfixed": "I haven't fixed it."})
+	halts := guard.halt with input as stop_event(line)
+	count(halts) == 1
+	some d in halts
+	contains(d.reason, "naming a defect")
+}
+
+test_unchecked_halts_even_after_an_edit if {
+	halts := guard.halt with input as stop_event(unf_line({"unchecked": "I have not verified the counts.", "edited": "1"}))
+	"ER-EFFECTS-NO-UNCHECKED-CLAIM" in rule_ids(halts)
+}
+
+test_allow_unchecked_waiting_on_future_evidence if {
+	halts := guard.halt with input as stop_event(unf_line({"unchecked": "I haven't checked; once you invade the log says.", "future": "1"}))
+	count(halts) == 0
+}
+
+test_allow_unchecked_with_a_blocker if {
+	halts := guard.halt with input as stop_event(unf_line({"unchecked": "I haven't checked.", "blocked": "1"}))
+	count(halts) == 0
+}
+
+test_unchecked_reason_quotes_the_clause if {
+	halts := guard.halt with input as stop_event(unf_line({"unchecked": "As far as I know it is fine."}))
+	some d in halts
+	d.rule_id == "ER-EFFECTS-NO-UNCHECKED-CLAIM"
+	contains(d.reason, "As far as I know it is fine.")
+}
+
 test_deferral_reason_quotes_the_clause_and_demands_the_step if {
 	halts := guard.halt with input as stop_event(deferral_line({"deferral": "which is where I look next."}))
 	some d in halts

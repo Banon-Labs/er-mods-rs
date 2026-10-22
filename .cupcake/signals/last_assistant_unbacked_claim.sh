@@ -25,6 +25,13 @@
 #      carrying a write construct (redirect, tee, sed -i, heredoc-to-python, cp/mv/install, patch,
 #      git apply). A `bd remember` on its own is explicitly not a write: it is the substitution
 #      this guard exists to catch.
+#   4. The claim names no path that is otherwise accounted for. Since 2026-10-19 a claim is backed
+#      when every path its sentence names (or, for a sentence naming none, every path the closing
+#      prose names) was written by a Write/Edit/NotebookEdit or a writing Bash call anywhere
+#      earlier in the session, or was shown to exist in this turn by a successful Read or an
+#      ls/stat/test -e. The turn-only view refused "I wrote the script one turn earlier with the
+#      Write tool ... scripts/er-mechanics-set-modes-report.py" twice, after a task notification
+#      had opened a new turn and an `ls -l` in that turn had confirmed the file.
 #
 # Biased hard toward not firing, like its sibling -- a guard that cries wolf gets ignored.
 #   * only the final prose block is scanned;
@@ -60,8 +67,15 @@
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT
+# The Stop hook's event (with its `transcript_path`) arrives on stdin and is the only source; no
+# event means no verdict. The session matters now that earlier turns' writes count.
+CUPCAKE_SIGNAL_EVENT=""
+if [ ! -t 0 ]; then
+	CUPCAKE_SIGNAL_EVENT="$(timeout 2 cat 2>/dev/null || true)"
+fi
+export CUPCAKE_SIGNAL_EVENT
 python3 - <<'PY' 2>/dev/null || true
-import os, re, sys
+import json, os, re, sys
 
 sys.path.insert(0, os.path.join(os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", "."), "scripts"))
 try:
@@ -70,10 +84,11 @@ try:
 except Exception:
     sys.exit(0)  # fail open: a missing helper must never wedge a session
 
-path = scan.latest_transcript()
+path = scan.hook_transcript()
 if not path:
     sys.exit(0)
-turn = scan.last_text_turn(scan.split_turns(scan.load_events(path)))
+session = scan.load_events(path)
+turn = scan.last_text_turn(scan.split_turns(session))
 if turn is None:
     sys.exit(0)
 # The closing prose is the last contiguous text run -- consecutive text blocks with no tool call
@@ -87,7 +102,7 @@ runs = turn.text_runs
 if not runs:
     sys.exit(0)
 events = [{"message": {"content": [block for kind, block in turn.blocks if kind == "tool"]}}]
-hit = claim.offending_claim(runs[-1], events)
+hit = claim.offending_claim(runs[-1], events, session)
 if hit:
     print("UNBACKED:" + hit)
 PY

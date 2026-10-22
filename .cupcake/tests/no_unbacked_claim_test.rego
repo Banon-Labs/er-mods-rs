@@ -53,3 +53,12 @@ test_reason_quotes_the_claim if {
 	some d in halts
 	contains(d.reason, "I created scripts/foo.py.")
 }
+
+# The reason names the session-wide backing the signal accepts (2026-10-19), so an agent refused
+# for a file it wrote in an earlier turn knows that naming the path, or listing it, is enough.
+test_reason_names_session_backing if {
+	halts := guard.halt with input as stop_event("UNBACKED:I wrote the script one turn earlier.")
+	some d in halts
+	contains(d.reason, "written earlier in this session")
+	contains(d.reason, "ls, stat or test -e")
+}

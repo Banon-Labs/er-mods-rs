@@ -94,6 +94,28 @@ DEFERRALS = {
 }
 
 
+# The closing message of 2026-10-18, verbatim apart from the elided table cells. No tool call
+# edited a file in that turn. It names two defects and says neither was fixed, and it states a claim
+# and admits in the next sentence that the cheap lookup which would settle it was skipped.
+UNFIXED_PROMPT = "Is the crit value right under this ruleset? What about the Cleanrot set?"
+UNFIXED_UNCHECKED = (
+    "The ladder bans every parry skill (\"All Parries\" in the ash bans), and the 9-27 additions "
+    "ban blocking with any shield. As far as I know a parry always needs a parry skill, so legal "
+    "ripostes come only from stance breaks, plus backstabs. I haven't checked that against the "
+    "skill data yet.\n\n"
+    "| Your question | What the data says |\n"
+    "|---|---|\n"
+    "| Crit value under this ruleset | The crit score still counts parry ripostes the ruleset "
+    "rules out. It should count only stance-break ripostes and backstabs, with parries counted "
+    "only for parry skills the ruleset allows, which here is none. |\n"
+    "| Cleanrot Knight's Sword set | The off hand isn't empty. ... |\n"
+    "| Raptor Talons with Impaling Thrust | Picked on raw damage alone ... |\n"
+    "| Claw paired with another claw | That pairing isn't measured. ... |\n\n"
+    "The crit and pairing problems both mean the score credits value that was never measured. I "
+    "haven't fixed either."
+)
+
+
 def user(text: str) -> dict:
     return {"type": "user", "message": {"content": text}}
 
@@ -124,6 +146,7 @@ def run_signal(events: list[dict]) -> str:
                 fh.write(json.dumps(ev) + "\n")
         proc = subprocess.run(
             ["bash", str(SIGNAL)],
+            input=json.dumps({"transcript_path": str(tdir / "session.jsonl")}),
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -533,6 +556,91 @@ def main() -> int:
         [user("what does the guard catch"),
          assistant_text('The guard catches "Fixing both: bypass the union" and `Rebuilding and '
                         'relaunching now` as closing lines.')],
+    )
+
+    # --- the admitted-unfixed and unchecked-claim arms (2026-10-18) -------------------------------
+    # The verbatim closing message passed every Stop guard while the user was asking questions, so
+    # `asked` was 1 and the diagnosis arm was exempt, and no pattern knew "I haven't fixed either"
+    # or "As far as I know ... I haven't checked that". Both facts must come out of it.
+    expect_facts(
+        "unfixed-and-unchecked-verbatim-2026-10-18",
+        [user(UNFIXED_PROMPT), assistant_text(UNFIXED_UNCHECKED)],
+        unfixed=True,
+        unchecked=True,
+        asked="1",
+        edited="0",
+        blocked="0",
+    )
+
+    # Each half alone, so a regression names the half it broke.
+    expect_facts(
+        "unfixed-admission-alone",
+        [user("is the score right?"),
+         assistant_text("The score double-counts backstabs. I haven't fixed it.")],
+        unfixed=True,
+        unchecked=False,
+    )
+    expect_facts(
+        "unchecked-claim-alone",
+        [user("can you parry without a skill?"),
+         assistant_text("As far as I know a parry always needs a parry skill.")],
+        unchecked=True,
+        unfixed=False,
+    )
+    expect_facts(
+        "unchecked-not-verified-spelling",
+        [user("is the table right?"),
+         assistant_text("The table lists twelve weapons; I have not verified the counts against "
+                        "the param dump.")],
+        unchecked=True,
+    )
+
+    # Legitimate messages that share words with the shapes. A finished edit reported plainly, a
+    # one-line blocker, and a verification that genuinely needs a run.
+    expect_clean(
+        "unfixed-report-of-finished-edit",
+        [user("fix the crit score"),
+         assistant_tool("Edit", file_path="/repo/scripts/x.py", old_string="a", new_string="b"),
+         tool_result(),
+         assistant_text("The crit score now counts only stance-break ripostes and backstabs; the "
+                        "parry riposte term is gone and the tests pass.")],
+    )
+    expect_facts(
+        "unfixed-with-one-line-blocker",
+        [user("is the score right?"),
+         assistant_text("The score double-counts backstabs. I haven't fixed it: the fix needs sudo "
+                        "to rewrite the installed param file.")],
+        unfixed=True,
+        blocked="1",
+    )
+    expect_facts(
+        "unchecked-runtime-only-is-exempt",
+        [user("does it work?"),
+         assistant_text("The detour is rebuilt and staged. I haven't verified it in game; that "
+                        "needs a live run.")],
+        unchecked=False,
+    )
+    # From the transcript audit, verbatim: a check only a multiplayer run can make.
+    expect_facts(
+        "unchecked-peer-condition-is-exempt",
+        [user("does voice still work?"),
+         assistant_text("I haven't confirmed that voice still gets captured, though, because that "
+                        "only happens with loopback on or a peer in the session.")],
+        unchecked=False,
+    )
+    # From the same audit, verbatim: the shape the arm exists for.
+    expect_facts(
+        "unchecked-probably-does",
+        [user("does the table cover it?"),
+         assistant_text("I haven't checked it, but it probably does.")],
+        unchecked=True,
+    )
+
+    expect_facts(
+        "unfixed-past-fix-is-not-an-admission",
+        [user("what changed?"),
+         assistant_text("The crash was fixed in the last commit, and nothing else is broken.")],
+        unfixed=False,
     )
 
     if FAILURES:
