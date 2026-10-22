@@ -49,7 +49,7 @@ def main(argv: list[str]) -> int:
         source = AGENT.read_text(encoding="utf-8")
         checks = [
             ("the agent exists", AGENT.is_file()),
-            ("it hooks the answer reader", "0x1407ee550" in source),
+            ("it hooks the answer reader", "0x1407eea00" in source),  # 1.17.1 0x1407ee550
             ("it follows an Arxan stub", "function follow" in source),
             ("it reports a windowed call count", "sample:" in source),
             ("the press ladder is bounded", len(PRESS_LADDER) <= 6),

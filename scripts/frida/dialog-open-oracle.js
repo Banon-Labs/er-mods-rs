@@ -1,5 +1,8 @@
 // Is a dialog on screen? Ask the function the game polls while one is.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why a press is not an answer
 //
 // Pressing pad B and printing "dialog cleared" is a receipt for an injected button, not a reading
@@ -13,7 +16,7 @@
 
 'use strict';
 
-const POPUP_RESULT_READER = ptr('0x1407ee550');
+const POPUP_RESULT_READER = ptr('0x1407eea00'); // 1.17.1 0x1407ee550
 
 const out = { calls: 0, lastResult: null, lastRow: null, answers: 0, forced: 0 };
 

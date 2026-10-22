@@ -1,5 +1,8 @@
 // Does driving Seamless's own invade action actually make it search?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The question the near+far handoff turns on. `ersc+0x25850` is nine instructions read out of the
 // decrypted image -- lock the session, return unless the state reads idle, store 0x0e, unlock --
 // so the state write cannot itself be a search. Something consumes that state. This asks whether
@@ -394,7 +397,7 @@ rpc.exports = {
   watchHandover() {
     const game = Process.enumerateModules().find((m) => m.name.toLowerCase() === 'eldenring.exe');
     if (!game) return { ok: false, why: 'eldenring.exe not found' };
-    const target = ptr('0x140ea0360');
+    const target = ptr('0x140ea1a50'); // 1.17.1 0x140ea0360
     try {
       Interceptor.attach(target, {
         onEnter(args) {

@@ -1,5 +1,8 @@
 // Can this process tell you which matchmaking bracket the player is in, before any search?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why it has to
 //
 // The settings panel is about to offer two dropdowns of brackets with everything below the
@@ -49,7 +52,7 @@ const GAME = 'eldenring.exe';
 //   docs/recon/rva-map-1162-to-1170.data.tsv:87   0x3d5df38 -> 0x3d61f98   642/642 witnesses
 //
 // 1.17.0 to 1.17.1 moved nothing outside `.text`, so the 1.17.0 address is the running one.
-const GAME_DATA_MAN_RVA = 0x3d61f98;
+const GAME_DATA_MAN_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 const PLAYER_GAME_DATA_OFFSET = 0x08;
 const LEVEL_OFFSET = 0x68;
 const MATCHING_WEAPON_LEVEL_OFFSET = 0xe2;

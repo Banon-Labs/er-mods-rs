@@ -1,5 +1,8 @@
 // Why the vanilla invasion-bounds popup cannot be backed out of: read the one byte that decides.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The question this settles and the two answers it separates
 //
 // `CS::CSPlayerMenuCtrl::StartInvasionFromBoundsPopup` is the step-2 handler for the bounds popup
@@ -39,12 +42,12 @@
 const RVA = {
   // The step-2 handler. Runs once per frame while the popup is up, which is why everything below
   // reports on CHANGE rather than per call.
-  startInvasion: 0x7c2c50,
+  startInvasion: 0x7c3100, // 1.17.1 0x7c2c50
   // The raiser, so the log says when the popup went up instead of leaving it to be inferred.
-  raiser: 0x7c3310,
+  raiser: 0x7c37c0, // 1.17.1 0x7c3310
   // The cancel-prompt twin, present so a press that lands on the OTHER dialog is named rather
   // than counted as silence here.
-  confirmCancel: 0x7c2e10,
+  confirmCancel: 0x7c32c0, // 1.17.1 0x7c2e10
   // `CS::CSPlayerMenuCtrl`'s per-frame tick, which dispatches on the step and is what calls the
   // handler above. Added after the first live reading, which is the reason it is here: with the
   // popup on screen and Back pressed, the step-2 handler fired EXACTLY ONCE -- at the moment the
@@ -52,7 +55,7 @@ const RVA = {
   // the press" and became "is anything asking". The tick takes the same flag (`movzbl %dl,%esi`
   // at `+0x16`), so hooking it separates a press that never arrives from a press that arrives and
   // is not dispatched.
-  ctrlTick: 0x7c2ae0,
+  ctrlTick: 0x7c2f90, // 1.17.1 0x7c2ae0
   // The menu-event query, and the reason the search ended here.
   //
   // `dl` reaches the tick from `0x140661636`'s caller, which computes it out of exactly two
@@ -71,7 +74,7 @@ const RVA = {
   // nonzero. A is a single flag bit; B is this query, asked for event id `0xf`. Hooking it says
   // whether Back fires `0xf` at all, fires a DIFFERENT id, or never reaches the event source --
   // three different bugs that the `dl` reading alone cannot separate.
-  menuEventQuery: 0x4fa370,
+  menuEventQuery: 0x4fa450, // 1.17.1 0x4fa370
   // Predicate B itself, and the reason it is hooked rather than inferred.
   //
   // `0xf` turned out to be polled on MANY widget objects every frame -- the first live attempt
@@ -89,7 +92,7 @@ const BACK_EVENT_ID = 0xf;
 // `CSMenuManImp`. The popup hangs off `+0x80` and its result is `+0x1a0`, which is what the
 // handler consumes; `+0x1a4` sits beside it and is captured so a result that moves in the
 // neighbouring field is not read as no movement at all.
-const MENU_MAN_RVA = 0x3d6f820;
+const MENU_MAN_RVA = 0x3d72840; // 1.17.1 0x3d6f820
 const POPUP_OFFSET = 0x80;
 const RESULT_OFFSET = 0x1a0;
 
@@ -101,7 +104,7 @@ const base = Process.getModuleByName('eldenring.exe').base;
 // bit 0 -- the same channel `er-input-harness`'s `tap_menu_event` writes. This is a DIFFERENT
 // namespace from the 3-digit ids `0x1404fa370` answers, and it is the one the product fix has to
 // use, so the Back press has to be named in THIS bitmap rather than in that one.
-const INPUT_MANAGER_GLOBAL_RVA = 0x3d6b7b0;
+const INPUT_MANAGER_GLOBAL_RVA = 0x3d72840; // 1.16.2 0x3d6b7b0, 1.17.1 0x3d6f820
 const INPUTMGR_BITMAP_OFFSET = 0x90;
 const INPUTMGR_BITMAP_SPAN = 0x80;
 

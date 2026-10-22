@@ -1,5 +1,8 @@
 // Who actually calls `CanUseBreakInItem` on 1.17, by return address rather than by signature.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Two mapped functions have now been hooked and logged nothing while the behaviour they decide was
 // visibly happening on screen: `CanUseGoods` (0x68ee60) and the goods popup dispatcher
 // (0x7c3930). Both mappings were "unique signature" matches with prologues byte-identical to
@@ -7,7 +10,7 @@
 //
 // `CanUseBreakInItem` at 0x657d50 does fire. Its return address names its true caller, which is
 // the measurement a signature match cannot give.
-const CAN_USE_BREAK_IN_RVA = 0x657d50;
+const CAN_USE_BREAK_IN_RVA = 0x658200; // 1.17.1 0x657d50
 
 const game = Process.findModuleByName('eldenring.exe');
 const callers = new Set();
@@ -56,7 +59,7 @@ if (peek !== null) Interceptor.attach(peek, {
 // goods id, and Ghidra warns "unknown calling convention, parameter storage is locked" for this
 // function, so the id need not be in rcx. Print the first four integer registers unfiltered once
 // per distinct rcx and let the data say which one carries it.
-const CAN_USE_GOODS_RVA = 0x68ee60;
+const CAN_USE_GOODS_RVA = 0x68f310; // 1.17.1 0x68ee60
 const FINGERS = [102, 111, 112];
 const argShapes = new Set();
 console.log(`breakin-callers: attaching CanUseGoods @${game.base.add(CAN_USE_GOODS_RVA)}`);
@@ -85,8 +88,8 @@ Interceptor.attach(game.base.add(CAN_USE_GOODS_RVA), {
 //
 // These were hooked once in a separate agent and logged nothing, but that attach was never shown
 // to be live, so the silence proved nothing. Here they sit beside hooks that demonstrably fire.
-const POPUP_DISPATCH_RVA = 0x7c3930;
-const POPUP_RAISE_RVA = 0x7c3310;
+const POPUP_DISPATCH_RVA = 0x7c3de0; // 1.17.1 0x7c3930
+const POPUP_RAISE_RVA = 0x7c37c0; // 1.17.1 0x7c3310
 const MESSAGES = {
   0x1312d0a: 'bounds prompt',
   0x1312d0b: 'cancel prompt',
@@ -122,7 +125,7 @@ for (const [name, rva] of [['dispatch', POPUP_DISPATCH_RVA], ['raise', POPUP_RAI
 //
 // 1.16.2 0x140e9e4f0 -> 1.17.0 0x140ea02f0 (unique 49B signature) -> 1.17.1 0x140ea0360, the
 // `+0x70` for being at or above rva 0xafefe9. Prologue verified identical in both images.
-const OPEN_CHOICES_RVA = 0xea0360;
+const OPEN_CHOICES_RVA = 0xea1a50; // 1.17.1 0xea0360
 const choicesAt = game.base.add(OPEN_CHOICES_RVA);
 console.log(`breakin-callers: choices menu @${choicesAt}`);
 let choicesSeen = 0;
@@ -231,8 +234,8 @@ if (peek !== null) {
 //
 // 1.16.2 0x1407c1dd0 -> 1.17 0x1407c2c50 is the WEAKER of the two mappings (nearest-anchor delta,
 // 3 shape candidates), so the prologue is printed rather than assumed.
-const INVADE_START_RVA = 0x7c2c50;
-const CHOICE_GETTER_RVA = 0x7c3210;
+const INVADE_START_RVA = 0x7c3100; // 1.17.1 0x7c2c50
+const CHOICE_GETTER_RVA = 0x7c36c0; // 1.17.1 0x7c3210
 const startAt = game.base.add(INVADE_START_RVA);
 const startShape = Array.from(new Uint8Array(startAt.readByteArray(8)), (b) =>
   b.toString(16).padStart(2, '0')

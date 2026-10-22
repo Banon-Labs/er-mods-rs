@@ -1,5 +1,8 @@
 // Who asks the game to show a network message, and with which id.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The question
 //
 // A menu popped up reading `?NetworkMessage?`, which is what ELDEN RING renders when a message id
@@ -36,7 +39,7 @@
 //
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/who-shows-network-message.js
-const RVA_SHOW_NETWORK_MESSAGE = 0x76f190;
+const RVA_SHOW_NETWORK_MESSAGE = 0x76f640; // 1.17.1 0x76f190
 
 // `MenuString` is an unknown-size handle here; 0x20 bytes covers a vtable/id/category triple
 // without reading off the end of a small allocation.
@@ -144,7 +147,7 @@ Interceptor.attach(target, {
 // nearest-anchor guess with five shape candidates rather than a unique match -- so it was read
 // before being hooked: the 1.17 function at this address has the same `id < 1` guard and the same
 // `L"NetworkMessage"` literal, which is the identification the mapper could not give.
-const RVA_GET_NETWORK_MESSAGE = 0x763a70;
+const RVA_GET_NETWORK_MESSAGE = 0x763f20; // 1.17.1 0x763a70
 
 const lookup = follow(base.add(RVA_GET_NETWORK_MESSAGE));
 let lookups = 0;

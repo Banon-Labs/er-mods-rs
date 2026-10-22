@@ -13,24 +13,26 @@
 //       advance+0xa1, so it is forced only when the 14-byte ilhook jump is present at +0x8c. On
 //       return the page slot must still read null (no page was selected or allocated), the cursor
 //       must have moved by `count` (the add at +0x0b ran), the handles must be unchanged (the
-//       diversion returned through +0x157, not through the page allocator at 1.17.1 0x140ecb610,
-//       which zeroes them before it looks at the device) and the
+//       diversion returned through +0x157, not through the page allocator at 1.17.1 0x140ecb610
+//       -> 2.7.2.0 0x140eccd00, which zeroes them before it looks at the device) and the
 //       return value must be 0. The DLL counts the diversion in
 //       `oracle_scaleform_desc_provider_null_hits`, which should rise by exactly one.
 //
 // Each forced call is logged with its before/after state and a verdict, and `counts` keeps one
 // counter per branch. Calls that arrive with a null page on their own are counted, not forced.
 //
-// Offsets are 1.17.1. Nothing is written except `ring+0x38`, and only for the length of the one
-// call; the forced page-roll call leaves the real page off the free list until the next roll,
-// and its caller reuses the previous descriptor slot for one draw.
+// The address is 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; the offsets
+// into the advance are unchanged (the whole function, 0x18b bytes, is the same in both images apart
+// from rel32/rip displacements, which carry consistently). Nothing is written except `ring+0x38`, and
+// only for the length of the one call; the forced page-roll call leaves the real page off the free
+// list until the next roll, and its caller reuses the previous descriptor slot for one draw.
 'use strict';
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
 
-// 1.17.1 rva of the advance (1.16.2 0xec9530, IDENTICAL-WHOLE).
-const ADVANCE = 0xecb3a0;
+// The advance: 1.16.2 0xec9530 -> 1.17.1 0xecb3a0 -> 2.7.2.0 0xecca90.
+const ADVANCE = 0xecca90;
 const PAGE_ROLL_LOAD = 0x8c;
 const RING_CAPACITY = 0x20;
 const RING_CURSOR = 0x28;

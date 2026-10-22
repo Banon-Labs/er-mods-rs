@@ -314,7 +314,7 @@ def selftest() -> int:
             # file reads the constant through `er_run_lib`, and what must never appear is a second
             # definition of it here.
             ("WORLD_CHR_MAN" + "_GLOBAL_RVA = ") not in source
-            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D69FF8") in shared,
+            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D6D018") in shared,
         ),
         (
             "the live read opens the game's memory read-only, and injects nothing",

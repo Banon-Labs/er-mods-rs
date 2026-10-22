@@ -44,14 +44,18 @@ CE_LUA = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.lua')
 CE_TABLE = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.CT')
 LUA_BEGIN = '-- --- BEGIN GENERATED (scripts/er-duel-rules-gen.py --write) ---'
 LUA_END = '-- --- END GENERATED ---'
-# The hook sits right after SpecialEffect::Apply's inner apply call (1.17.1 0x1404fb799), where
-# EAX is the result, EBP the effect id and R14 the owner -- the values the Frida agent reads off
-# the function's arguments and return. The 17 bytes it replaces run to the `jmp` to the
-# epilogue, short of 0x1404fb7af, which the early-failure branch jumps to; nothing jumps inside
-# them (the function's whole listing on the 1.17 dump, 2026-10-16).
-CE_HOOK_RVA = 0x4fb79e
+# The hook sits right after SpecialEffect::Apply's inner apply call (1.17.1 0x1404fb799, 2.7.2.0
+# 0x1404fb879), where EAX is the result, EBP the effect id and R14 the owner -- the values the
+# Frida agent reads off the function's arguments and return. The 17 bytes it replaces run to the
+# `jmp` to the epilogue, short of 1.17.1 0x1404fb7af (2.7.2.0 0x1404fb88f), which the
+# early-failure branch jumps to; nothing jumps inside them (the function's whole listing on the
+# 1.17 dump, 2026-10-16). Both RVAs are 2.7.2.0 ones, carried from 1.17.1 with
+# scripts/map-rvas-1171-to-1172.py: hook 0x4fb79e -> 0x4fb87e, resume 0x4fb7b3 -> 0x4fb893. The
+# replaced bytes, the resume bytes and the rest of the function match between
+# eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin, branch targets carried.
+CE_HOOK_RVA = 0x4fb87e
 CE_HOOK_BYTES = '48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04'
-CE_HOOK_RESUME_RVA = 0x4fb7b3
+CE_HOOK_RESUME_RVA = 0x4fb893
 # Where each param sits in SoloParamRepository and its struct name, read from the same upstream
 # list the DLL compiles against, so the agent and the DLL cannot disagree about a slot.
 UPSTREAM_SOLO_PARAMS = os.path.join(os.path.dirname(ROOT), 'fromsoftware-rs', 'crates', 'eldenring',
@@ -1283,7 +1287,7 @@ dealloc(duel_apply_ring)
   <CheatEntries>
     <CheatEntry>
       <ID>0</ID>
-      <Description>"Duel rules referee (Elden Ring 1.17.1)"</Description>
+      <Description>"Duel rules referee (Elden Ring 1.17.2)"</Description>
       <Color>0080FF</Color>
       <VariableType>Auto Assembler Script</VariableType>
       <AssemblerScript><![CDATA[{script}]]></AssemblerScript>

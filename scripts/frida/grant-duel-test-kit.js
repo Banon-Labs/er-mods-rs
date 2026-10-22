@@ -3,6 +3,9 @@
 // missing, and Noble Sorcerer Ashes (11 FP, the cheapest summon in the regulation; Mimic Tear's
 // 660 HP is more than a low-Vigor character has).
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Granting is `grant-invasion-fingers.js`'s path: `CS::EquipGameData::AddInventoryEquipByItemId`,
 // on the game thread inside its per-frame tick, each grant proven by the quantity read
 // back rather than by the call's return value.
@@ -19,7 +22,7 @@
 
 const GAME = 'eldenring.exe';
 
-const GAME_DATA_MAN_GLOBAL_RVA = 0x3d61f98;
+const GAME_DATA_MAN_GLOBAL_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 const PLAYER_GAME_DATA_OFFSET = 0x08;
 const EQUIP_GAME_DATA_OFFSET = 0x2b0;
 
@@ -116,7 +119,7 @@ function run() {
 // rendered frame on the game thread (measured 2026-10-16: 41 fires a second against 123
 // `CSFlipper::current_frame_qpc` changes in 3 s). `PeekMessageW`, the hook
 // grant-invasion-fingers.js uses, did not fire once in 25 s on this game.
-const FRAME_TICK_RVA = 0x773900;
+const FRAME_TICK_RVA = 0x773db0; // 1.17.1 0x773900
 
 let done = false;
 Interceptor.attach(Process.findModuleByName(GAME).base.add(FRAME_TICK_RVA), {

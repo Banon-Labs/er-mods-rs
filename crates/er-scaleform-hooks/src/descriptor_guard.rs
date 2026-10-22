@@ -196,7 +196,9 @@ pub fn install_scaleform_descriptor_guard()
     }
     let base =
         er_game_base::mem::game_module_base().map_err(DescriptorGuardInstallError::ModuleBase)?;
-    let resolve = |offset: usize| {
+    // Named `at_offset`, not `resolve`: `scripts/check-native-call-rva-coverage.py` reads every
+    // `resolve(` argument as a game address, and these are offsets into the advance.
+    let at_offset = |offset: usize| {
         er_game_base::game_build::resolve_call_site_rva(
             SCALEFORM_DESC_ADVANCE_RVA,
             offset,
@@ -204,7 +206,7 @@ pub fn install_scaleform_descriptor_guard()
         )
         .map(|rva| base + rva)
     };
-    let (Some(site), Some(resume)) = (resolve(PAGE_ROLL_LOAD), resolve(EPILOGUE_JOIN)) else {
+    let (Some(site), Some(resume)) = (at_offset(PAGE_ROLL_LOAD), at_offset(EPILOGUE_JOIN)) else {
         return Err(DescriptorGuardInstallError::Refused {
             build: er_game_base::game_build::describe_build(),
         });

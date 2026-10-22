@@ -1,12 +1,18 @@
 // Overrides the sun's light after the game blends its lighting parameters each frame, and reports
 // the blended values, as the prototype for the Sky tab's Sun section (er-effects-rs-pjyh).
 //
+// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give with
+// scripts/map-rvas-1171-to-1172.py. Each code address is the entry of a function whose bytes match
+// the 1.17.1 one once rip-relative and branch operands are masked, every masked target carrying to
+// the new operand; each global is the carried target of those same readers.
+//
 // Where it writes (bd er-gparam-sun-lighting-pipeline-1171-2026-10-15): GXParamDB::Update
-// 0x141a4e7a0 writes every gparam field's time-of-day and weather blend into the param instances;
-// the per-manager jobs that run after it turn LightSet angles into directions and hemisphere
-// colors into ambient. So an instance field written as that function returns is what those jobs
-// and the GPU pack read. LightSet instances hang off GXRenderingSystem [0x1447f37a8] +0xc500 (the
-// environment manager, inline) +0x28 (LightSet manager) +0x320 (list: bank -> list: id -> instance).
+// 0x141a4e7a0 -> 0x141a4fe90 writes every gparam field's time-of-day and weather blend into the
+// param instances; the per-manager jobs that run after it turn LightSet angles into directions and
+// hemisphere colors into ambient. So an instance field written as that function returns is what
+// those jobs and the GPU pack read. LightSet instances hang off GXRenderingSystem
+// [0x1447f37a8 -> 0x1447f67c8] +0xc500 (the environment manager, inline) +0x28 (LightSet manager)
+// +0x320 (list: bank -> list: id -> instance).
 //
 // GXLightSet instance: DirLight[i] at 0x40 + i*0x60 (0 the sun or moon, 1 the fill from above):
 // +0x00 direction (derived), +0x10 DiffColor (alpha = intensity), +0x20 SpecColor, +0x30 Angle
@@ -34,8 +40,8 @@ const CFG = Object.assign(
   globalThis.__ER_FRIDA_CONFIG || {},
 );
 
-const RENDERING_SYSTEM = va('0x1447f37a8');
-const PARAM_DB_UPDATE = va('0x141a4e7a0');
+const RENDERING_SYSTEM = va('0x1447f67c8'); // GXRenderingSystem* 0x1447f37a8 -> 0x1447f67c8
+const PARAM_DB_UPDATE = va('0x141a4fe90'); // GXParamDB::Update 0x141a4e7a0 -> 0x141a4fe90
 const DIR = (i) => 0x40 + i * 0x60;
 const HEMI_UP = 0x1e0;
 const HEMI_DOWN = 0x1f0;
@@ -289,10 +295,11 @@ Interceptor.attach(PARAM_DB_UPDATE, {
 
 // The game's own overcast light is the realistic diffuse light: asking for a cloudy weather blends
 // in its weatheroutdoor gparam (softer sun, more sky light). Asked once, from the weather's own
-// update (ChangeWeather 0x140647940, lifespan -1, immediate), and ended again on unload.
-const WEATHER_UPDATE = va('0x1406489d0');
-const WEATHER_GLOBAL = va('0x143d6d3f0');
-const CHANGE_WEATHER = new NativeFunction(va('0x140647940'), 'void', ['pointer', 'int16', 'float', 'uint8']);
+// update (ChangeWeather 0x140647940 -> 0x140647df0, lifespan -1, immediate), and ended again on
+// unload.
+const WEATHER_UPDATE = va('0x140648e80'); // WorldAreaWeather::Update 0x1406489d0 -> 0x140648e80
+const WEATHER_GLOBAL = va('0x143d70410'); // WorldAreaWeather* 0x143d6d3f0 -> 0x143d70410
+const CHANGE_WEATHER = new NativeFunction(va('0x140647df0'), 'void', ['pointer', 'int16', 'float', 'uint8']);
 let weatherAsked = false;
 Interceptor.attach(WEATHER_UPDATE, {
   onEnter(args) {

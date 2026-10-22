@@ -1,5 +1,8 @@
 // Which menu binding id is "cancel", asked of the game rather than of a keyboard.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why a binding id and not a virtual key
 //
 // The bounds-popup close currently fires on `Q` or `Escape` or pad `B`, which are three constants
@@ -34,6 +37,18 @@
 //
 // Installed build 1.17.1; every rva is below `0xafefe9`, so the 1.17.0 dump, the deobf image and
 // the live process agree with no translation.
+//
+// Read back out of the images on 2026-10-21, the three binding rvas are 1.16.2 values: the `FUN_`
+// names above match the 1.16.2 named dump, not 1.17.1. In `eldenring-deobf-1.17.1.bin`
+// `0x14075d8f0` holds the qword `0x1408e4660` rather than code, `0x140758b30` is not an
+// instruction boundary, and the recorded map moves 1.16.2 `0x14075d970` to 1.17 `0x14075e7c0`
+// (`docs/recon/rva-map-1162-to-1170.verified.tsv`). Only that one has a recorded row, so it is
+// carried and the other two stop the agent.
+// Not verified on 2.7.2.0, so this agent refuses to load: 0x14075d8f0 a 1.16.2 value, and no
+// recorded 1.16.2 -> 1.17.0 row names it; 0x140758b30 a 1.16.2 value, and no recorded 1.16.2 ->
+// 1.17.0 row names it
+throw new Error('frida-carry-1172: not verified on 2.7.2.0: 0x14075d8f0 (1.16.2, bindingPressed), 0x140758b30 (1.16.2, bindingBoolean)');
+
 const RVA = {
   // (pad, bindingId) -> repeat count. The question this agent asks the game. Called, never
   // hooked: Frida answers `unable to intercept function at 000000014075D8F0` on it, which is what
@@ -51,7 +66,7 @@ const RVA = {
   // intercept function at ...`, which is what a prologue too short to hold a trampoline looks
   // like -- neither is a missing function and neither is an Arxan stub. Forwarding one call deeper
   // reaches a function big enough to hook.
-  bindingForward: 0x75d970,
+  bindingForward: 0x75ec70, // 1.16.2 0x75d970, 1.17.1 0x75e7c0
   // The boolean half, `FUN_140758b30(pad, bindingId)`. Called, never hooked, for the reason above.
   //
   // This is the capture source, and it is the second one tried. The first read the pad out of
@@ -65,7 +80,7 @@ const RVA = {
   bindingBoolean: 0x758b30,
   // The bounds popup's step-2 handler: runs once a frame while the dialog is up, on the menu
   // thread, and is where the sweep is driven from.
-  startInvasion: 0x7c2c50,
+  startInvasion: 0x7c3100, // 1.17.1 0x7c2c50
 };
 
 // The namespace the known ids sit in. `0x2c`/`0x2d` are list down/up, `0x3d` confirm, `0x30`/`0x31`

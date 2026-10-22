@@ -1,5 +1,8 @@
 // Drive a goods item by id with no DLL of ours loaded.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // This is the port the standing directive asks for: "absolutely not. You're obligated to do it
 // with Frida. The entire point is that dll has too many side effects." Every invasion experiment
 // wants `er_invasion_warp.dll` withheld, because that module is the thing under suspicion -- and
@@ -22,7 +25,7 @@
 //
 // Addresses are 1.17.1, taken from er-invasion-warp's own `ADDRESS TRANSLATED` log lines rather
 // than from a 1.16.2 constant plus arithmetic.
-const CS_MENU_MAN_GLOBAL = ptr('0x143d6f820');
+const CS_MENU_MAN_GLOBAL = ptr('0x143d72840'); // 1.17.1 0x143d6f820
 const CS_MENU_MAN_MENU_DATA = 0x8;
 const MENU_GAITEM_USE_STATE = 0x70;
 const USE_STATE = 0x8;
@@ -30,17 +33,17 @@ const USE_ITEM_ID = 0xc;
 const USE_ITEM_IDX = 0x10;
 const USE_ARG = 0x14;
 
-const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x140657410');
+const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x1406578c0'); // 1.17.1 0x140657410
 const GET_ITEM_INVENTORY_IDX = ptr('0x14024c560');
 
 // `GameMan+0xbc8` is `isInOnlineMode`. Seamless keeps it clear, and `CanUseGoods` refuses every
 // vanilla multiplayer item while it is -- so the module under test raises it for the duration of a
 // finger use and puts it back. Clearing `disableOffline` on the row is the other half of the same
 // refusal; do both, because the working drive does both.
-const GAME_MAN = ptr('0x143d6d988');
+const GAME_MAN = ptr('0x143d709a8'); // 1.17.1 0x143d6d988
 const GAME_MAN_IS_IN_ONLINE_MODE = 0xbc8;
 
-const GAME_DATA_MAN = ptr('0x143d61f98');
+const GAME_DATA_MAN = ptr('0x143d64fb8'); // 1.17.1 0x143d61f98
 const GAME_DATA_MAN_PLAYER_GAME_DATA = 0x8;
 
 // `PlayerGameData::chr_type`, asserted at `0x98` by `crates/er-game-base/src/pgd.rs`.
@@ -58,14 +61,14 @@ const CHR_TYPE_NAMES = {
 const PLAYER_GAME_DATA_EQUIP_GAME_DATA = 0x2b0;
 const EQUIP_INVENTORY_DATA = 0x158;
 
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const MAIN_PLAYER = 0x1e508;
 const CHR_INS_QUEUED_USE_ITEM = 0x160;
 
 // `EquipParamGoods::GetEntry(out, goodsId)`, out = { int paramId; int pad; row* }. Bit 5 of the
 // flags byte at row+0x48 is `disableOffline`, which is what greys the vanilla fingers out while
 // Seamless keeps the game's own online flag clear.
-const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3b5b0');
+const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3cca0'); // 1.17.1 0x140d3b5b0
 const GOODS_FLAGS = 0x48;
 const DISABLE_OFFLINE_BIT = 1 << 5;
 const GOODS_TAG = 0x40000000;

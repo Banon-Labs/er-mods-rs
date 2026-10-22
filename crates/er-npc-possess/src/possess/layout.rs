@@ -33,7 +33,9 @@
 // This module is pure arithmetic and stays ungated so its tests run on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use er_game_base::game_build::{FileVersion, SUPPORTED_FILE_VERSION};
+use er_game_base::game_build::{
+    FileVersion, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, SUPPORTED_FILE_VERSION,
+};
 
 /// ELDEN RING 1.17, PE `FileVersion` 2.7.0.0 -- the build installed on this machine since
 /// 2026-08-27. [`SUPPORTED_FILE_VERSION`] is its 1.16.2 counterpart, 2.6.2.0.
@@ -170,6 +172,22 @@ pub(crate) mod chr_ins {
     /// `ChrIns.debugFlags` on ELDEN RING 1.16.2.
     pub(crate) const DEBUG_FLAGS_1162: usize = 0x530;
     /// `ChrIns.debugFlags` on ELDEN RING 1.17. It moved; see the module docs.
+    ///
+    /// Also 1.17.1 and 2.7.2.0. Read 2026-10-21 out of `eldenring-deobf-1.17.1.bin` and
+    /// `eldenring-deobf-1.17.2.bin`: the sites sit in a carry segment of delta zero, so each is at
+    /// the same address in both, and the five functions holding them (`0x1403cff80`,
+    /// `0x1403d00a0`, `0x1403d0260`, `0x1403daa90` `PadManipulator::Tick`, `0x1403cc05d`) are
+    /// `.pdata` starts of the same length in both and agree instruction for instruction with
+    /// rip-relative displacements masked:
+    ///
+    /// | site | instruction in both |
+    /// |---|---|
+    /// | `0x1403d0008` | `test byte [rax+0x538],0x10` |
+    /// | `0x1403d0141` | `test byte [rax+0x538],0x10` |
+    /// | `0x1403daccd` | `test byte [rcx+0x538],0x10`, then `mov [rbp+0x1e4],bl` at `0x1403dad67` |
+    /// | `0x1403dad74` | `test byte [rcx+0x538],0x20`, then `mov [rbp+0x1e5],bl` at `0x1403dae12` |
+    /// | `0x1403d0537` | `test byte [rax+0x538],0x20` |
+    /// | `0x1403cc235` | `test byte [rax+0x538],0x20` |
     pub(crate) const DEBUG_FLAGS_1170: usize = 0x538;
     /// `debugFlags` bit `0x10`: the character issues no attack requests.
     ///
@@ -396,8 +414,17 @@ pub(crate) mod ene_dat {
     /// ...and the one it falls back to when that is null.
     pub(crate) const CAP_FALLBACK_1162: usize = 0x88;
     /// `EneDat`'s primary `ChrbndFileCap*` on 1.17. It moved; see the module docs.
+    ///
+    /// Also 1.17.1 and 2.7.2.0. The predicate is a 79-byte leaf with no `.pdata` record, at 1.17.1
+    /// `0x1404caf70` and 2.7.2.0 `0x1404cb050`, and its bytes are identical in both images
+    /// (2026-10-21) -- `48 8b 81 b0 00 00 00` `mov rax,[rcx+0xb0]` at `+0x0`, `48 8b 81 90 00 00
+    /// 00` `mov rax,[rcx+0x90]` at `+0x26`, and the [`super::file_cap`] reads `movzx eax,byte
+    /// [rax+0x88]` and `mov rax,[rax+0x90]` behind each. A leaf has no `.pdata` to anchor a carry,
+    /// so the identification is by its callers: the four `call`s to it in 1.17.1 (`0x1404cf72a`,
+    /// `0x1404cfa27`, `0x140651b75`, `0x140651ca4`) carry to exactly the four `call`s to
+    /// `0x1404cb050` in 2.7.2.0 (`0x1404cf80a`, `0x1404cfb07`, `0x140652025`, `0x140652154`).
     pub(crate) const CAP_PRIMARY_1170: usize = 0xb0;
-    /// ...and the 1.17 fallback.
+    /// ...and the 1.17 fallback, which 1.17.1 and 2.7.2.0 share.
     pub(crate) const CAP_FALLBACK_1170: usize = 0x90;
 }
 
@@ -1099,6 +1126,10 @@ pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> 
     match version? {
         v if v == SUPPORTED_FILE_VERSION => Some(chr_ins::DEBUG_FLAGS_1162),
         v if v == FILE_VERSION_1170 => Some(chr_ins::DEBUG_FLAGS_1170),
+        // Measured, not carried forward; see `chr_ins::DEBUG_FLAGS_1170` for the sites.
+        v if v == MAPPED_FILE_VERSION_1171 || v == MAPPED_FILE_VERSION_1172 => {
+            Some(chr_ins::DEBUG_FLAGS_1170)
+        }
         _ => None,
     }
 }
@@ -1123,7 +1154,11 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
         v if v == SUPPORTED_FILE_VERSION => {
             Some((ene_dat::CAP_PRIMARY_1162, ene_dat::CAP_FALLBACK_1162))
         }
-        v if v == FILE_VERSION_1170 => {
+        // 1.17.1 and 2.7.2.0 measured too; see `ene_dat::CAP_PRIMARY_1170` for the bytes.
+        v if v == FILE_VERSION_1170
+            || v == MAPPED_FILE_VERSION_1171
+            || v == MAPPED_FILE_VERSION_1172 =>
+        {
             Some((ene_dat::CAP_PRIMARY_1170, ene_dat::CAP_FALLBACK_1170))
         }
         _ => None,
@@ -1265,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ene_dat_cap_offsets_are_known_for_both_supported_builds_and_nothing_else() {
+    fn the_ene_dat_cap_offsets_are_known_for_the_measured_builds_and_nothing_else() {
         assert_eq!(
             ene_dat_cap_offsets(Some(SUPPORTED_FILE_VERSION)),
             Some((0xa0, 0x88)),
@@ -1275,6 +1310,16 @@ mod tests {
             ene_dat_cap_offsets(Some(FILE_VERSION_1170)),
             Some((0xb0, 0x90)),
             "1.17 -- BOTH MOVED, by +0x10"
+        );
+        assert_eq!(
+            ene_dat_cap_offsets(Some(MAPPED_FILE_VERSION_1171)),
+            Some((0xb0, 0x90)),
+            "1.17.1"
+        );
+        assert_eq!(
+            ene_dat_cap_offsets(Some(MAPPED_FILE_VERSION_1172)),
+            Some((0xb0, 0x90)),
+            "2.7.2.0"
         );
         assert_eq!(
             ene_dat_cap_offsets(Some(FileVersion {
@@ -1353,7 +1398,7 @@ mod tests {
     }
 
     #[test]
-    fn the_debug_flags_offset_is_known_for_both_supported_builds_and_nothing_else() {
+    fn the_debug_flags_offset_is_known_for_the_measured_builds_and_nothing_else() {
         assert_eq!(
             debug_flags_offset(Some(SUPPORTED_FILE_VERSION)),
             Some(0x530),
@@ -1363,6 +1408,16 @@ mod tests {
             debug_flags_offset(Some(FILE_VERSION_1170)),
             Some(0x538),
             "1.17 -- IT MOVED"
+        );
+        assert_eq!(
+            debug_flags_offset(Some(MAPPED_FILE_VERSION_1171)),
+            Some(0x538),
+            "1.17.1"
+        );
+        assert_eq!(
+            debug_flags_offset(Some(MAPPED_FILE_VERSION_1172)),
+            Some(0x538),
+            "2.7.2.0"
         );
         // A build nobody measured, and the host, where there is no game image at all.
         assert_eq!(

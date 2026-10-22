@@ -1,6 +1,8 @@
 // What happens when the player touches the duel sign: does the action button find it, does the
-// summon get queued, does the join tick run? 1.17.1 addresses, bd
-// placenpcsummonsign-position-1171-2026-10-06 and npc-sign-join-visibility-1171-2026-10-06.
+// summon get queued, does the join tick run? Measured on 1.17.1, bd
+// placenpcsummonsign-position-1171-2026-10-06 and npc-sign-join-visibility-1171-2026-10-06, and
+// carried to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py (old -> new beside each). Every body
+// matches between the two de-Arxan'd images with its rip-relative and branch operands carried.
 //
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/duel-sign-touch.js
 'use strict';
@@ -9,13 +11,14 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const GET_SIGN_BY_ACTION_BUTTON = va('0x1406fadb0');
-const QUEUE_SUMMON = va('0x1406fe520');     // copies the sign's pos/yaw into PhantomJoinData
-const JOIN_TICK = va('0x1406ff260');
-const CONVERT_TO_NPC_PHANTOM = va('0x14050c6d0');
-const CHECK_FRAME = va('0x1406f3410');
-const IS_SIGNS_PRESENT = va('0x1401d3000');
-const SIGN_TERM3 = va('0x1406fc850');
+const GET_SIGN_BY_ACTION_BUTTON = va('0x1406fb260');   // 0x1406fadb0 -> 0x1406fb260
+// Copies the sign's pos/yaw into PhantomJoinData.
+const QUEUE_SUMMON = va('0x1406fe9d0');                // 0x1406fe520 -> 0x1406fe9d0
+const JOIN_TICK = va('0x1406ff710');                   // 0x1406ff260 -> 0x1406ff710
+const CONVERT_TO_NPC_PHANTOM = va('0x14050c950');      // 0x14050c6d0 -> 0x14050c950
+const CHECK_FRAME = va('0x1406f38c0');                 // 0x1406f3410 -> 0x1406f38c0
+const IS_SIGNS_PRESENT = va('0x1401d3000');            // 0x1401d3000, did not move
+const SIGN_TERM3 = va('0x1406fcd00');                  // 0x1406fc850 -> 0x1406fcd00
 
 const hooks = [];
 const last = {};

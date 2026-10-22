@@ -1,5 +1,8 @@
 // Do the two spellings of the key-config singleton name the same object?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The disagreement
 //
 // `CS_PC_KEY_CONFIG_GLOBAL_RVA` is declared twice in this workspace with different values:
@@ -32,12 +35,12 @@
 const MODULE = 'eldenring.exe';
 
 // The literal `er-invasion-warp` carries, already spelled for 1.17.
-const LOCAL_LITERAL_RVA = 0x3d61f08;
+const LOCAL_LITERAL_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 
 // `er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA`, a 1.16.2 rva, and what
 // `docs/recon/rva-map-1162-to-1170.data.tsv` carries it to at 82 of 82 references.
 const SHARED_CONSTANT_RVA = 0x3d5dea8;
-const SHARED_CONSTANT_MAPPED_RVA = 0x3d61f08;
+const SHARED_CONSTANT_MAPPED_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 
 const CURRENT_TABLE_OFFSET = 0x440;
 const ROW_STRIDE = 0x14;

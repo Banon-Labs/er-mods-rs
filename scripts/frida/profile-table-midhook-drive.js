@@ -1,7 +1,8 @@
 // Drive er-quit-menu-core's profile-renderer refresh mid hook (er-effects-rs-7xbs.2) from inside
 // the refresh itself, on the game's own thread.
 //
-// The refresh (1.17.1 0x1409ab820) walks the ten-slot renderer table at 0x143d71940. The mid hook
+// The refresh (1.17.1 0x1409ab820 -> 2.7.2.0 0x1409abcd0) walks the ten-slot renderer table at
+// 1.17.1 0x143d71940 -> 2.7.2.0 0x143d74960. The mid hook
 // at +0x54 sends a null or non-renderer slot to the loop's own next-slot join at +0xce; the entry
 // detour has already run by then and only diagnoses once the hook is armed. Two forced states:
 //
@@ -25,13 +26,18 @@
 // Every nulled slot is restored at the epilogue and again in dispose(). No timers: phases advance
 // on refreshes only.
 //
-// Offsets are 1.17.1.
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The offsets
+// into the refresh are unchanged: its whole body (0xf8 bytes) is the same in both images apart
+// from rel32/rip displacements, and the slot reads +0x754/+0x755 are in that body.
 'use strict';
 
 const game = Process.getModuleByName('eldenring.exe');
 const at = (rva) => game.base.add(rva);
-const REFRESH = 0x9ab820;
-const TABLE = 0x3d71940;
+// 1.17.1 0x9ab820 -> 2.7.2.0 0x9abcd0.
+const REFRESH = 0x9abcd0;
+// 1.17.1 0x3d71940 -> 2.7.2.0 0x3d74960; the refresh's own `LEA RSI,[table]` at +0x22 reads it in
+// both images.
+const TABLE = 0x3d74960;
 const SLOT_COUNT = 10;
 const LATCH = 0x754;
 const PENDING = 0x755;

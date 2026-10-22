@@ -14,7 +14,7 @@ pointer-filter logic with synthetic data (no game, no sudo) -- the parts that ke
 import os, struct, sys
 
 EXE = "eldenring.exe"
-TABLE_RVA = 0x3D6D8D0
+TABLE_RVA = 0x3D74960  # 1.16.2 0x3D6D8D0, 1.17.1 0x3d71940
 OFF_OFFSCREEN, OFF_TEX_RESCAP, OFF_GX = 0xA8, 0x10, 0x78
 # Plausible user-space pointer window. Wine/Proton heaps live at 0x7fff_xxxx_xxxx, the PE at
 # 0x1_4xxx_xxxx, d3d12/dxgi modules at 0x6ffff_xxxx_xxxx -- all >= 16MB. Refcounts/packed-ints

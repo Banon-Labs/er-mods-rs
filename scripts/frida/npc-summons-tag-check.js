@@ -13,7 +13,8 @@
 //
 // Nothing is written and no behaviour changes. The one Interceptor is on FRAME_TICK, the
 // per-frame function spawn-npc.js drives its own frame from, and only paces the reads; there are
-// no timers, because a pre-commit gate refuses them in agents. Addresses are 1.17.1.
+// no timers, because a pre-commit gate refuses them in agents. Addresses are 2.7.2.0, carried from
+// 1.17.1 with scripts/map-rvas-1171-to-1172.py and written `1.17.1 -> 2.7.2.0` below.
 //
 // Proof the bd issue asks for: every companion's handle in a friendly row at or past the party's
 // member count with colour (+0x13) 1, and, after a companion is hit, no enemy row (+0x0) holding
@@ -24,11 +25,19 @@ const game = Process.getModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const FRAME_TICK = va('0x140773900');
-const CS_FE_MAN = va('0x143d6f8f0');
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const GAME_MAN = va('0x143d6d988');
+// FRAME_TICK 0x140773900 -> 0x140773db0: the whole body matches eldenring-deobf-1.17.2.bin apart
+// from rip-relative and branch operands. The globals were checked through their readers: of the
+// 1.17.1 instructions that read each one, the same instruction at the carried address reads the
+// carried global for CSFeManImp 140 of 141 readers, WorldChrMan 2506 of 2552, GameMan 341 of 344;
+// the rest are refused by the carry or decode differently in 2.7.2.0.
+const FRAME_TICK = va('0x140773db0');
+const CS_FE_MAN = va('0x143d72910');       // 0x143d6f8f0 -> 0x143d72910
+const WORLD_CHR_MAN = va('0x143d6d018');   // 0x143d69ff8 -> 0x143d6d018
+const GAME_MAN = va('0x143d709a8');        // 0x143d6d988 -> 0x143d709a8
 
+// The producer that writes the friendly rows and reads PartyMemberInfo +0x14 (0x140778200 ->
+// 0x1407786b0) and CSChrDamageModule::UpdateUI (0x1404497e0 -> 0x1404498c0) have the same bodies
+// in 2.7.2.0, so these row layouts did not move.
 const FRIENDLY_ROWS = 0x5c60;
 const FRIENDLY_ROW_SIZE = 0xb0;
 const FRIENDLY_ROW_COUNT = 7;
@@ -44,6 +53,8 @@ const ENEMY_ROW_COUNT = 8;
 const ENEMY_LOCK_ON = 0x20;
 const ENEMY_DAMAGE = 0x24;
 
+// WorldChrManImp grew 0x10 bytes past +0x1e5e8 in 2.7.2.0; +0x1e538 is below that, and the 11 of
+// its 13 1.17.1 readers that the carry accepts are unchanged at their carried place.
 const SUMMON_BUDDY_MANAGER = 0x1e538;
 const GROUP_TREE_HEAD = 0x78;
 const NODE_LEFT = 0x0;

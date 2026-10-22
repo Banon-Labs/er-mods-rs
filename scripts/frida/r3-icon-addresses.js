@@ -3,10 +3,13 @@
 // measurement: the repository global (1.16.2 0x3d82510 -> 1.17 0x3d86580) must hold an object with
 // a game vtable, and the lookup (1.16.2 0xd63e50 -> 1.17.0 0xd65b90 -> 1.17.1 0xd65c00) must start
 // with the seven-push prologue read out of eldenring-deobf-1.17.1.bin. One read at load, no hooks.
+//
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
 'use strict';
 
-const REPO_GLOBAL_RVA_1171 = 0x3d86580;
-const LOOKUP_RVA_1171 = 0xd65c00;
+const REPO_GLOBAL_RVA_1171 = 0x3d895a0; // 1.17.1 0x3d86580
+const LOOKUP_RVA_1171 = 0xd672f0; // 1.17.1 0xd65c00
 const LOOKUP_ENTRY = '40 55 56 57 41 54 41 55 41 56 41 57 48 8d 6c 24 d9 48 81 ec a0 00 00 00';
 
 const mod = Process.findModuleByName('eldenring.exe');

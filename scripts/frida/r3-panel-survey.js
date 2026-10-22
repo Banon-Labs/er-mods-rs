@@ -1,5 +1,8 @@
 // Read-only: which display objects are still drawn in view 3, against views 0-2?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The center (detail) panel shows in every view and survives er-r3-view's view 3, and fading
 // objects to find it polluted the menu state for the rest of a session, because these windows
 // outlive a menu close. So this only reads. A frame after each three-pane `apply` (1.17 rva
@@ -9,8 +12,8 @@
 // every object drawn there (visible, alpha > 0) with the views 0-2 it was also drawn in.
 'use strict';
 
-const APPLY_RVA = 0x975890;
-const RUN_RVA = 0x7ae040;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
 const MODE_TO_PARTS = 0x8f8;
 const WINDOW_SCAN_BYTES = 0x2000;

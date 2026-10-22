@@ -1,5 +1,8 @@
 // Which of `CanUseBreakInItem`'s three tests says no?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `IsOnlineMode` was never called once while the inventory was open, so the online theory is dead.
 // The real predicate is named: `CS::PlayerIns::CanUseBreakInItem`, and its whole body is
 //
@@ -33,15 +36,15 @@
 // 0xafefe9 so the 1.17.0 -> 1.17.1 `+0x70` does not apply to any of them. Each prologue is read
 // back and printed, which is what rules out a candidate that landed mid-instruction.
 const SITES = [
-  { name: 'CanUseBreakInItem', rva: 0x657d50, confidence: 'unique 38B signature' },
-  { name: 'IsInSafePosRange', rva: 0x65f6a0, confidence: '2 shape candidates' },
-  { name: 'CanStartBreakIn', rva: 0x50a950, confidence: 'WEAK -- 9 shape candidates' },
+  { name: 'CanUseBreakInItem', rva: 0x658200, confidence: 'unique 38B signature' }, // 1.17.1 0x657d50
+  { name: 'IsInSafePosRange', rva: 0x65fb50, confidence: '2 shape candidates' }, // 1.17.1 0x65f6a0
+  { name: 'CanStartBreakIn', rva: 0x50abd0, confidence: 'WEAK -- 9 shape candidates' }, // 1.17.1 0x50a950
 ];
 
 // `WorldChrMan` singleton, and the local `PlayerIns` inside it. Both from
 // crates/er-game-base/src/rva.rs, where both dereferences are null-checked because the game's own
 // code null-checks both.
-const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d65f88;
+const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d6d018; // 1.16.2 0x3d65f88, 1.17.1 0x3d69ff8
 const WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1e508;
 
 const game = Process.findModuleByName('eldenring.exe');

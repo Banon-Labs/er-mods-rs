@@ -5,22 +5,32 @@
 // Two paths, both from bd placenpcsummonsign-position-1171-2026-10-06 (1.17.1, static):
 //  - placed signs: rpc moveSigns() walks SosSignMan's sign map on the next frame, writes the
 //    player's position into each SosSignData and re-places its sfx with CreateSignSfx;
-//  - new signs: the create call 0x1406fcef0 gets the player's position in its position argument,
-//    so a sign placed after a grace rest lands at the player as well.
+//  - new signs: the create call (0x1406fcef0 -> 0x1406fd3a0) gets the player's position in its
+//    position argument, so a sign placed after a grace rest lands at the player as well.
 // The knight warps to the sign's position when it is touched, so it arrives here too.
+//
+// Every address below is the 2.7.2.0 one, carried from 1.17.1 with
+// scripts/map-rvas-1171-to-1172.py and written "old -> new" beside it. Each function body matches
+// between eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin with its rip-relative and
+// branch operands carried, and each global is what its 2.7.2.0 readers load. Addresses that only
+// appear in comments are the 1.17.1 ones the bd notes use, with the 2.7.2.0 one beside them.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const FRAME_TICK = va('0x140773900');
-const WORLD_CHR_MAN = va('0x143d69ff8');
+const FRAME_TICK = va('0x140773db0');         // frame tick 0x140773900 -> 0x140773db0
+const WORLD_CHR_MAN = va('0x143d6d018');      // WorldChrMan 0x143d69ff8 -> 0x143d6d018
 const MAIN_PLAYER = 0x1e508;
-const CS_EVENT_MAN = va('0x143d6c768');       // +0x60 CSEventSosSignCtrl, +0x48 SosSignMan
-const CREATE_NPC_SIGN = va('0x1406fcef0');    // (man, type, u32* npc, i32* flag, Vec3* pos, Vec3* angle, ...)
+// CSEventMan 0x143d6c768 -> 0x143d6f788: +0x60 CSEventSosSignCtrl, +0x48 SosSignMan
+const CS_EVENT_MAN = va('0x143d6f788');
+// 0x1406fcef0 -> 0x1406fd3a0 (man, type, u32* npc, i32* flag, Vec3* pos, Vec3* angle, ...)
+const CREATE_NPC_SIGN = va('0x1406fd3a0');
+// GetPhysicsPosition 0x1403f0e20, the same address in both builds.
 const GET_PHYSICS_POS = new NativeFunction(va('0x1403f0e20'), 'void', ['pointer', 'pointer']);
-const CREATE_SIGN_SFX = new NativeFunction(va('0x1406febe0'), 'void', ['pointer', 'pointer']);
+// CreateSignSfx 0x1406febe0 -> 0x1406ff090
+const CREATE_SIGN_SFX = new NativeFunction(va('0x1406ff090'), 'void', ['pointer', 'pointer']);
 
 const SIGN = { POS: 0x14, YAW: 0x20, NPC: 0x234 };
 const GREAT_JAR_KNIGHTS = [1047410701, 1047410702, 1047410703];
@@ -117,11 +127,12 @@ function moveNow() {
 }
 
 // Place the knights' signs ourselves, without waiting for event 1047412300: the native body of
-// EMEVD PlaceNPCSummonSign (2003[25]) 0x1406fa7f0 takes (SosSignMan*, u8 type, u32* npc,
-// u32* region, i32 summonFlag, BlockId* block, i32 dismissFlag, u8 mpRules), read from its
-// caller 0x14060b5a0. The region only feeds the position, which the create hook below replaces.
-// traps 'all' so this script's own hooks (create position, entity stand-in) fire inside the call.
-const PLACE_NPC_SIGN = new NativeFunction(va('0x1406fa7f0'), 'void',
+// EMEVD PlaceNPCSummonSign (2003[25]) 0x1406fa7f0 -> 0x1406faca0 takes (SosSignMan*, u8 type,
+// u32* npc, u32* region, i32 summonFlag, BlockId* block, i32 dismissFlag, u8 mpRules), read from
+// its caller 0x14060b5a0 -> 0x14060ba50. The region only feeds the position, which the create hook
+// below replaces. traps 'all' so this script's own hooks (create position, entity stand-in) fire
+// inside the call.
+const PLACE_NPC_SIGN = new NativeFunction(va('0x1406faca0'), 'void',
     ['pointer', 'uint8', 'pointer', 'pointer', 'int', 'pointer', 'int', 'uint8'], { traps: 'all' });
 const KNIGHT_SIGNS = [0, 1, 2].map((i) => ({
     npc: 1047410701 + i, region: 1047412201 + i, summonFlag: 1047412220 + i, dismissFlag: 1047410230 + i,
@@ -215,9 +226,9 @@ function twoPositions() {
     return { player: read(player()), yura: yura === undefined ? null : read(yura) };
 }
 
-// ConvertBlockCoordsToPhysicsCoords (1.16.2 0x14061e120, +0xe50): physics = block-local + the
-// block's origin. Local (0,0,0) gives the origin of the player's block.
-const BLOCK_TO_PHYSICS = new NativeFunction(va('0x14061ef70'), 'uint8', ['pointer', 'pointer', 'pointer']);
+// ConvertBlockCoordsToPhysicsCoords (1.16.2 0x14061e120, 1.17.1 0x14061ef70 -> 0x14061f420):
+// physics = block-local + the block's origin. Local (0,0,0) gives the origin of the player's block.
+const BLOCK_TO_PHYSICS = new NativeFunction(va('0x14061f420'), 'uint8', ['pointer', 'pointer', 'pointer']);
 function blockOrigin() {
     const out = Memory.alloc(16);
     const zero = Memory.alloc(16);
@@ -231,6 +242,7 @@ function blockOrigin() {
 // Give a joined stand-in a combat AI (bd npc-think-swap-live-1171-2026-10-06): EnableLogic sets
 // ChrCtrl+0xe8 bit 0x20, ChrIns_SetThinkParam is the body of EMEVD 2004[19]. Think 523590100 is
 // logic 10000 + battle goal 29999, the generic equipment-driven human NPC AI.
+// EnableLogic 0x1403ee260 and ChrIns_SetThinkParam 0x1402ca470 did not move.
 const ENABLE_LOGIC = new NativeFunction(va('0x1403ee260'), 'void', ['pointer', 'uint8']);
 const SET_THINK = new NativeFunction(va('0x1402ca470'), 'uint8', ['pointer', 'int']);
 const COMBAT_THINK = 523590100;
@@ -257,7 +269,8 @@ function armStandIns() {
 // knight's, borrowed: only that trial's event reads them.
 // entity 11100710: a Roundtable resident (NpcParam 523200079) already loaded there.
 const CUSTOM = { entity: 11100710, summonFlag: 1047412220, dismissFlag: 1047410230 };
-const SET_BACKREAD_DISABLED = new NativeFunction(va('0x1405f5c40'), 'void', ['pointer', 'uint8']);   // (int* entity, bool)
+// (int* entity, bool), 0x1405f5c40 -> 0x1405f60f0
+const SET_BACKREAD_DISABLED = new NativeFunction(va('0x1405f60f0'), 'void', ['pointer', 'uint8']);
 function placeCustom() {
     const man = signMan();
     const ids = Memory.alloc(16);
@@ -290,9 +303,14 @@ function dumpSigns() {
     }));
 }
 
-// The touch check GetSignByActionButtion 0x1406fadb0 accepts a sign only when 0x1406f3150(ctx,
-// sign+0x2e, 0) and 0x1406fc850(&node+0x28) both return nonzero. Log each verdict per sign once
-// it changes, to see which one rejects the custom sign.
+// The touch check GetSignByActionButtion (0x1406fadb0 -> 0x1406fb260) accepts a sign only when
+// f3150(ctx, sign+0x2e, 0) and fc850(&node+0x28) both return nonzero. Log each verdict per sign
+// once it changes, to see which one rejects the custom sign.
+// f3150: 0x1406f3150 -> 0x1406f3600. Its entry is an Arxan stub (a jmp into Arxan's code) in both
+// de-Arxan'd images, so its own bytes cannot be compared; the carry is the call target in
+// GetSignByActionButtion, whose body matches: call 0x1406f3150 at 0x1406faee5 becomes call
+// 0x1406f3600 at 0x1406fb395.
+// fc850: 0x1406fc850 -> 0x1406fcd00, body matches.
 const verdicts = {};
 const verdictHooks = [];
 function note(which, sign, ok) {
@@ -302,11 +320,11 @@ function note(which, sign, ok) {
     verdicts[key] = ok;
     emit('verdict', { which: which, npc: npc, ok: ok });
 }
-verdictHooks.push(Interceptor.attach(va('0x1406f3150'), {
+verdictHooks.push(Interceptor.attach(va('0x1406f3600'), {
     onEnter(args) { this.sign = args[1].sub(0x2e); },
     onLeave(ret) { note('f3150', this.sign, ret.toInt32() & 0xff); },
 }));
-verdictHooks.push(Interceptor.attach(va('0x1406fc850'), {
+verdictHooks.push(Interceptor.attach(va('0x1406fcd00'), {
     onEnter(args) { this.sign = args[0].readPointer(); },
     onLeave(ret) { note('fc850', this.sign, ret.toInt32() & 0xff); },
 }));
@@ -338,11 +356,14 @@ function setChrType(npc, type) {
 }
 
 // A joined NPC phantom is sent home and disabled by PartyMemberInfo::Update_PartyMemberState
-// 0x1409fcfa0 at state 3 when the host's play region forbids multiplay (Roundtable does). Clear the
-// entry's +0x1d flag, which arms that check, for the character our sign summons, every frame
-// (bd npc-sign-join-visibility-1171-2026-10-06): PartyMemberInfo [[0x143d6d988]+0xd90], 6 entries
-// at +0x28, 0x30 each, +0 handle == ChrIns+0x8, +0xc state, +0x1d restriction flag.
-const PARTY_ROOT = va('0x143d6d988');
+// (0x1409fcfa0 -> 0x1409fd460) at state 3 when the host's play region forbids multiplay
+// (Roundtable does). Clear the entry's +0x1d flag, which arms that check, for the character our
+// sign summons, every frame (bd npc-sign-join-visibility-1171-2026-10-06): PartyMemberInfo
+// [[GameMan]+0xd90], 6 entries at +0x28, 0x30 each, +0 handle == ChrIns+0x8, +0xc state, +0x1d
+// restriction flag.
+// GameMan 0x143d6d988 -> 0x143d709a8 (also fromsoftware-rs rva_ww.rs game_man 0x3d709a8).
+const GAME_MAN = va('0x143d709a8');
+const PARTY_ROOT = GAME_MAN;
 let partyLog = '';
 function keepSignNpcInParty() {
     const root = PARTY_ROOT.readPointer();
@@ -366,7 +387,9 @@ function keepSignNpcInParty() {
 }
 
 // Visibility state of the sign's NPC (bd npc-sign-join-visibility-1171-2026-10-06).
+// IsDrawn 0x1403f3930, the same address in both builds; its term fe9c0 is 0x1403fe9c0 -> 0x1403fea50.
 const IS_DRAWN = new NativeFunction(va('0x1403f3930'), 'uint8', ['pointer']);
+const IS_DRAWN_TERM_FE9C0 = new NativeFunction(va('0x1403fea50'), 'uint8', ['pointer']);
 function signNpcState() {
     const ids = Memory.alloc(4);
     ids.writeU32(OTHER_MAP.entity);
@@ -380,7 +403,7 @@ function signNpcState() {
     const terms = { b1c5_8: c.add(0x1c5).readU8() & 8, hA: h.add(0xa).readU8().toString(16), h8: h.add(8).readU8(),
         ctrlC8_24: ctrl.isNull() || ctrl.add(0xc8).readPointer().isNull() ? null : ctrl.add(0xc8).readPointer().add(0x24).readU8() & 1,
         b1ca_1: c.add(0x1ca).readU8() & 1,
-        fe9c0: new NativeFunction(va('0x1403fe9c0'), 'uint8', ['pointer'])(c) };
+        fe9c0: IS_DRAWN_TERM_FE9C0(c) };
     return { terms: terms, chr: String(c), team: c.add(0x6c).readU8(), chrType: c.add(0x68).readU8(), drawn: IS_DRAWN(c),
         disabled: c.add(0x10).readPointer().add(0xa).readU8() & 1, b1c5: c.add(0x1c5).readU8().toString(16),
         alpha: [0x238, 0x240, 0x248].map((o) => Math.round(c.add(o).readFloat() * 100) / 100),
@@ -389,7 +412,8 @@ function signNpcState() {
 
 let mode = 'list';   // what the next frame does: 'place' new signs, or 'move' placed ones
 
-const GET_CHR_BY_ENTITY = new NativeFunction(va('0x1405eefd0'), 'pointer', ['pointer', 'int', 'int']);
+// 0x1405eefd0 -> 0x1405ef480
+const GET_CHR_BY_ENTITY = new NativeFunction(va('0x1405ef480'), 'pointer', ['pointer', 'int', 'int']);
 let createIndex = 0;
 const hooks = [];
 
@@ -422,17 +446,23 @@ function placeNow() {
     moveNow();
 }
 
-// Warp the player to a block-local spot: TriggerAreaReload's (0x1405f36e0) own sequence with our
-// destination substituted (bd invasion-warp-local-warp-primitive-triggerareareload-2026-08-03,
-// addresses read out of 1.17.1 at 0x1405f3785..0x1405f3838). Coordinates go in raw: MoveMapStep
+// Warp the player to a block-local spot: TriggerAreaReload's (0x1405f36e0 -> 0x1405f3b90) own
+// sequence with our destination substituted (bd
+// invasion-warp-local-warp-primitive-triggerareareload-2026-08-03, addresses read out of 1.17.1 at
+// 0x1405f3785..0x1405f3838, 2.7.2.0 0x1405f3c35..0x1405f3ce8). Coordinates go in raw: MoveMapStep
 // converts them itself. GREAT_JAR is beside the three knights' MSB spots in m60_47_41_00.
 const GREAT_JAR = { block: 0x3c2f2900, local: [-2.7, 142.3, 91.4], yaw: 0 };
-const SESSION_MAN = va('0x143d7e540');
-const SETUP_MAP_REENTRY = new NativeFunction(va('0x140cb1370'), 'void', ['pointer', 'uint8']);
-const SET_NO_ENTER_ANIM = new NativeFunction(va('0x14067b6a0'), 'void', ['uint8']);
-const SET_MOVE_BLOCK = new NativeFunction(va('0x14067ba20'), 'void', ['pointer', 'pointer']);
-const SET_EXPLICIT_SPAWN = new NativeFunction(va('0x14067b970'), 'void', ['pointer', 'pointer']);
-const WARP_KICK = new NativeFunction(va('0x1405f89c0'), 'void', []);
+const SESSION_MAN = va('0x143d81560');                 // session global 0x143d7e540 -> 0x143d81560
+// 0x140cb1370 -> 0x140cb2a60
+const SETUP_MAP_REENTRY = new NativeFunction(va('0x140cb2a60'), 'void', ['pointer', 'uint8']);
+// 0x14067b6a0 -> 0x14067bb50
+const SET_NO_ENTER_ANIM = new NativeFunction(va('0x14067bb50'), 'void', ['uint8']);
+// 0x14067ba20 -> 0x14067bed0
+const SET_MOVE_BLOCK = new NativeFunction(va('0x14067bed0'), 'void', ['pointer', 'pointer']);
+// 0x14067b970 -> 0x14067be20; writes GameMan +0xc90, +0xca0 and sets +0xcb0 in both builds.
+const SET_EXPLICIT_SPAWN = new NativeFunction(va('0x14067be20'), 'void', ['pointer', 'pointer']);
+// 0x1405f89c0 -> 0x1405f8e70
+const WARP_KICK = new NativeFunction(va('0x1405f8e70'), 'void', []);
 const warpBuf = Memory.alloc(0x80);
 function warpTo(dest) {
     const mem = warpBuf.add(0xf).and(ptr('0xfffffffffffffff0'));   // movaps needs 16-byte alignment
@@ -449,7 +479,7 @@ function warpTo(dest) {
     SET_NO_ENTER_ANIM(1);
     SET_MOVE_BLOCK(blockOut, blockIn);
     SET_EXPLICIT_SPAWN(pos, euler);
-    const gameMan = va('0x143d6d988').readPointer();
+    const gameMan = GAME_MAN.readPointer();
     const armed = gameMan.add(0xcb0).readU8();
     if (armed !== 1) return { ok: false, why: 'explicit-spawn flag not set', armed: armed };
     WARP_KICK();
@@ -459,12 +489,15 @@ function warpTo(dest) {
 // A red sign for a character from another map. The AI lab (scripts/er-ai-lab.py, summon path)
 // spawns it with entity id 35000 and its model loaded; on the first frame it exists this parks it
 // behind the arena wall in the knights' own holding spot, then places a red sign keyed to it at
-// the arena's first NPC appearance point. Touching the sign warps it out as a red phantom
-// (0x1406ff260 -> 0x1403fa5d0), the way the knights come out. Flags are knight 1's, borrowed.
+// the arena's first NPC appearance point. Touching the sign warps it out as a red phantom (join
+// tick 0x1406ff260 -> 0x1406ff710 calling WarpChr 0x1403fa5d0 -> 0x1403fa660), the way the knights
+// come out. Flags are knight 1's, borrowed.
 const OTHER_MAP = { entity: 35000, summonFlag: 1047412220, dismissFlag: 1047410230, block: 0x3c2f2900,
     pen: [17.0, 148.4, 153.5], sign: [-1.26, 141.24, 90.6] };
-const SET_DISABLED = new NativeFunction(va('0x1403f6500'), 'void', ['pointer', 'uint8']);   // ChangeCharacterDisableState(ChrIns*, bool)
-const WARP_CHR = new NativeFunction(va('0x1403fa5d0'), 'void', ['pointer', 'pointer', 'pointer']);   // (ChrIns*, pos*, rot*)
+// ChangeCharacterDisableState(ChrIns*, bool), 0x1403f6500 -> 0x1403f6590
+const SET_DISABLED = new NativeFunction(va('0x1403f6590'), 'void', ['pointer', 'uint8']);
+// (ChrIns*, pos*, rot*), 0x1403fa5d0 -> 0x1403fa660
+const WARP_CHR = new NativeFunction(va('0x1403fa660'), 'void', ['pointer', 'pointer', 'pointer']);
 let otherMapDone = null;
 const OTHER_MAP_ARMED = true;
 function toPhysics(local) {
@@ -487,12 +520,13 @@ function otherMapSign() {
     otherMapDone = chr;
     // Already joined (red team) or already signed: a hot reload must not hide or re-sign him.
     const signed = signs(man).some((s) => !s.isNull() && s.add(SIGN.NPC).readU32() === OTHER_MAP.entity);
-    const party = va('0x143d6d988').readPointer().add(0xd90).readPointer();
+    const party = GAME_MAN.readPointer().add(0xd90).readPointer();
     let joined = false;
     for (let i = 0; !party.isNull() && i < 6; i++) if (party.add(0x28 + i * 0x30).readU64().equals(chr.add(8).readU64())) joined = true;
     if (joined) return emit('other-map', { skipped: true, joined: joined, signed: signed });
     // Hide him the way the Great Jar knights wait, with ChangeCharacterDisableState(chr, true); the
-    // sign join enables him again itself (0x14050c6d0 calls it with 0 at 0x14050c74f), bd
+    // sign join enables him again itself (0x14050c6d0 calls it with 0 at 0x14050c74f; 2.7.2.0
+    // 0x14050c950 and 0x14050c9cf), bd
     // chr-enable-setter-and-join-enable-1171-2026-10-06. No holding pen needed.
     SET_DISABLED(chr, 1);
     // The sign goes 1.5 m from where the player stands, in the player's own block.
@@ -532,7 +566,7 @@ function otherMapToPlayer() {
 
 // The six PartyMemberInfo entries as the game holds them (+0 handle, +0xc state, +0x1d restrict).
 function partyTable() {
-    const party = va('0x143d6d988').readPointer().add(0xd90).readPointer();
+    const party = GAME_MAN.readPointer().add(0xd90).readPointer();
     if (party.isNull()) return { party: null };
     const out = [];
     for (let i = 0; i < 6; i++) {
@@ -567,7 +601,7 @@ function knightRow(entity) {
     if (c.isNull()) return null;
     const h = c.add(0x10).readPointer();
     const handle = c.add(8).readU32();
-    const party = va('0x143d6d988').readPointer().add(0xd90).readPointer();
+    const party = GAME_MAN.readPointer().add(0xd90).readPointer();
     let entry = null;
     if (!party.isNull()) {
         for (let i = 0; i < 6; i++) {

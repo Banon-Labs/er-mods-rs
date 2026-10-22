@@ -1,5 +1,8 @@
 // Controller input measured in GAME FRAMES, not in seconds.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this exists
 //
 // A driver that holds a button for `time.sleep(0.4)` is guessing at how many frames the game will

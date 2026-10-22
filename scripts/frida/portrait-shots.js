@@ -26,12 +26,23 @@ const STREAM_S = cfg.stream_s === undefined ? 3 : cfg.stream_s;
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-// 1.17 data addresses; nothing outside .text moved between 1.17.0 and 1.17.1.
-const RENDERER_TABLE = va('0x143d71940');
-const RENDERER_VTABLE = va('0x142b831d8');
-// 1.17.1 code addresses, as the DLL's own translation layer logged them for FileVersion 2.7.1.0.
-const BUILD_MATRIX = new NativeFunction(va('0x140bbfad0'), 'pointer', ['pointer', 'pointer']);
-const PUSH_CAMERA = new NativeFunction(va('0x140bbbb80'), 'void', ['pointer', 'pointer']);
+// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked against
+// eldenring-deobf-1.17.2.bin. The renderer table 0x143d71940 -> 0x143d74960 has the same 8 readers
+// in both builds; the vtable 0x142b831d8 -> 0x142b852c8 still carries the RTTI name
+// `CSMenuProfModelRend`. The view-matrix builder 0x140bbfad0 -> 0x140bbff90 and the camera push
+// 0x140bbbb80 -> 0x140bbc040 are byte-identical apart from relocated operands.
+const RENDERER_TABLE = va('0x143d74960');
+const RENDERER_VTABLE = va('0x142b852c8');
+const BUILD_MATRIX = new NativeFunction(va('0x140bbff90'), 'pointer', ['pointer', 'pointer']);
+const PUSH_CAMERA = new NativeFunction(va('0x140bbc040'), 'void', ['pointer', 'pointer']);
+
+// The renderer offsets below read unchanged in 2.7.2.0 game code, each in a function that is
+// byte-identical across the two builds (1.17.1 -> 2.7.2.0): +0xa8 in the camera push; +0x9b4..+0x9cc,
+// +0x9d0, +0x9e0 and +0xa20 in the orbit-camera setter 0x140bbf7e0 -> 0x140bbfca0; +0x548, +0x33c,
+// +0x130, +0x754 and +0x778 in 0x140bb9740 -> 0x140bb9c00 and the step functions; +0x40 in
+// `SetNextStep` (vtable +0x20) 0x140bbbcc0 -> 0x140bbc180; step 6 is still `STEP_Wait_Play` in the
+// step table filled by 0x1400a75c0 (unmoved); `ChrAsm+0x7c` in the protector accessor 0x1403be960
+// (unmoved).
 
 const R_OFFSCREEN = 0xa8;
 const R_TARGET = 0x9b4;
@@ -183,6 +194,10 @@ function renderer() {
     if (!plausible(r) || !rp(r).equals(RENDERER_VTABLE)) throw new Error('no profile renderer in slot ' + SLOT);
     return r;
 }
+// Offscreen +0x48 and context +0x248 appear unchanged in the offscreen draw 0x140bb8a70 ->
+// 0x140bb8f30 (byte-identical). Facade +0x38 and bundle +0x30, +0x40 and +0x548 have no 2.7.2.0
+// witness yet. The chain is only read, and every texture it yields is checked for a D3D12 vtable
+// and a known format, so a moved field shows up as one of the errors below or in `capture`.
 function targetBundle(r) {
     const off = rp(r.add(R_OFFSCREEN));
     const facade = off && rp(off.add(0x48));

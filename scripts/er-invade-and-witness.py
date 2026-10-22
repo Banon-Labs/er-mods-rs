@@ -47,8 +47,8 @@ ROUND_FRAMES = 600
 HOOK = """
 const ersc = Process.findModuleByName('ersc.dll');
 const steam = Process.findModuleByName('lsteamclient.dll');
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
-const SESSION = ptr('0x143d7e540');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
+const SESSION = ptr('0x143d81560'); // 1.17.1 0x143d7e540
 const RET_IN_BUILDER = ersc.base.add(0xad911);
 Interceptor.attach(ersc.base.add(0xe29a0), {
   onEnter (args) {
@@ -68,7 +68,7 @@ function player () {
   const p = w.add(0x1e508).readPointer();
   return p.isNull() ? null : p;
 }
-const MENU_MAN = ptr('0x143d6f820');
+const MENU_MAN = ptr('0x143d72840'); // 1.17.1 0x143d6f820
 rpc.exports = {
   // The popup's own answer slot. `-1` is a dialog that is up and waiting; anything else is the row
   // the game took. It is the only readable statement of when a press can land, and a frame count

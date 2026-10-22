@@ -1,5 +1,8 @@
 // Which of Seamless's option actions the Dried Fingers row runs, and what it writes.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What this answers that a rebuild cannot
 //
 // The question is "which field does this rule live in", and its shape is *who wrote this*. A value
@@ -87,7 +90,7 @@ const WORLD_CHR_MAN_MAIN_PLAYER = 0x1e508;
 // Still checked at runtime rather than trusted: the pointer must read, the player behind it must
 // read, and the goods id must be a plausible param row. A wrong global reads as a refusal here
 // rather than as a confident wrong item name.
-const GLOBAL_WORLD_CHR_MAN = ptr('0x143d69ff8');
+const GLOBAL_WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 // An `ItemId` carries its category in the top nibble, and `0x40000000` is goods. The raw field
 // therefore reads `0x407fde64` for goods row `0x7fde64`, which a bare range check rejects as
 // nonsense -- this one did, and the value was written off as "a float repeated at +0x160 and
@@ -460,7 +463,7 @@ if (ersc === null) {
   //
   // `0x14068dee0` on the 1.16.2 named dump -> `0x14068ed30` (delta `+0xe50`,
   // `map-rvas-1162-to-1170.py`), unchanged into 1.17.1 as it sits below the `0xafefe9` boundary.
-  const CAN_USE_GOODS = ptr('0x14068ed30');
+  const CAN_USE_GOODS = ptr('0x14068f1e0'); // 1.17.1 0x14068ed30
   try {
     Interceptor.attach(CAN_USE_GOODS, {
       onEnter: function (args) {

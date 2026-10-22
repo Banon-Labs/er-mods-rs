@@ -1,5 +1,8 @@
 // Which menu windows are open right now, named by their RTTI class.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `MenuWindowJob::Run` is pumped once per frame for every live menu window job, and `job+0x130` is
 // the window it owns. Collecting the owners seen over one frame and naming each by the RTTI beside
 // its vtable gives the set of open windows without guessing at any bitmap index. A frame ends when a
@@ -14,7 +17,7 @@
 // Read-only: one Interceptor, reads only.
 'use strict';
 
-const MENU_WINDOW_JOB_RUN_RVA = 0x7ae040;
+const MENU_WINDOW_JOB_RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const MENU_WINDOW_JOB_WINDOW_OFFSET = 0x130;
 
 const mod = Process.findModuleByName('eldenring.exe');

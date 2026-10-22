@@ -7,40 +7,55 @@
 //
 // Standalone on purpose (scripts/frida/spawn-npc.js is owned elsewhere); it can also be pasted into
 // that agent, where `created` is what its dressing code (gear, face, names) should be fed.
-// Static RE behind it: bd mimic-tear-summon-hijack-1171-2026-10-06. Addresses are 1.17.1, read out
-// of eldenring-deobf-1.17.1.bin; the two marked `shifted` sit above 0xafefe9 and carry the +0x70.
+// Static RE behind it: bd mimic-tear-summon-hijack-1171-2026-10-06, measured on 1.17.1. The
+// addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked in
+// eldenring-deobf-1.17.2.bin: every function hooked or called here has the same body in both
+// images apart from rip-relative and branch operands, and every mid-function site named here holds
+// the same instruction. Each is written `1.17.1 -> 2.7.2.0`.
 //
-// How the native flow runs (1.17.1):
+// How the native flow runs (1.17.1 addresses, 2.7.2.0 in brackets):
 //   goods 2070NN (goodsType 8, refCategory 2, refId_default 2070NN = the SpEffect) is used;
-//   ApplyBuddySpawnSpEffect 0x1404b85b0 checks the stone range and writes mgr+0x3c stone,
-//   +0xe4 activeSummonGoodsId and +0x20 requestSummonSpEffect = 2070NN;
-//   SummonBuddyManager::Update 0x1404b86d0 removes the old summons and calls BuddyGenerator;
-//   BuddyGenerator 0x1404bbdd0 -> GetBuddyListBySpEffectId(mgr, 207000) = [20700000, 20700001]
-//   -> per row GetBuddyParam (ret 0x1404bbfa3) reads npc/think/charaInit/x/z/yaw -> spawn requests
-//   -> per request CreateSummonChr 0x1404baea0, net-sync setup, CopyAnother 0x140654610 when any
-//   request carried 20700000 (cmp at 0x1404bc384) and the chr is an NPC, packet 78 0x140ca00f0.
+//   ApplyBuddySpawnSpEffect 0x1404b85b0 [0x1404b8690] checks the stone range and writes mgr+0x3c
+//   stone, +0xe4 activeSummonGoodsId and +0x20 requestSummonSpEffect = 2070NN;
+//   SummonBuddyManager::Update 0x1404b86d0 [0x1404b87b0] removes the old summons and calls
+//   BuddyGenerator; BuddyGenerator 0x1404bbdd0 [0x1404bbeb0] -> GetBuddyListBySpEffectId(mgr,
+//   207000) = [20700000, 20700001] -> per row GetBuddyParam (ret 0x1404bbfa3 [0x1404bc083]) reads
+//   npc/think/charaInit/x/z/yaw -> spawn requests -> per request CreateSummonChr 0x1404baea0
+//   [0x1404baf80], net-sync setup, CopyAnother 0x140654610 [0x140654ac0] when any request carried
+//   20700000 (cmp at 0x1404bc384 [0x1404bc464]) and the chr is an NPC, packet 78 0x140ca00f0
+//   [0x140ca1030].
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const BUDDY_GENERATOR = va('0x1404bbdd0');   // void(SummonBuddyManager* rcx)
-const GET_BUDDY_LIST = va('0x1404bce80');    // void(mgr rcx, int spEffect edx, List<int>* r8)
-// std::list node insert the list fill uses: node*(List*, next, prev, int* value); node {+0 next,
-// +8 prev, +0x10 value}; the caller then does size++, head->prev = node, node->prev->next = node.
-const LIST_INSERT = new NativeFunction(va('0x1404b4fb0'), 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);
-const GET_BUDDY_PARAM = va('0x140d28010');   // shifted; void(BuddyParamLookup* rcx {+0 id, +8 row}, int id edx)
-const LOOP1_RET = va('0x1404bbfa3');         // BuddyGenerator's per-row GetBuddyParam call returns here
-const CREATE_SUMMON_CHR = va('0x1404baea0');
-const BROADCAST_BUDDY = va('0x140ca00f0');   // shifted; void(void*, BuddyPacketEntry* rdx)
-const SOLO_PARAM_REPOSITORY = va('0x143d85f58');
-const BUDDY_PARAM_INDEX = 128;               // GetBuddyParam passes edx 0x80 at 0x140d2807a
+// 0x1404bbdd0 -> 0x1404bbeb0: void(SummonBuddyManager* rcx)
+const BUDDY_GENERATOR = va('0x1404bbeb0');
+// 0x1404bce80 -> 0x1404bcf60: void(mgr rcx, int spEffect edx, List<int>* r8)
+const GET_BUDDY_LIST = va('0x1404bcf60');
+// std::list node insert the list fill uses (0x1404b4fb0 -> 0x1404b5090): node*(List*, next, prev,
+// int* value); node {+0 next, +8 prev, +0x10 value}; the caller then does size++, head->prev =
+// node, node->prev->next = node.
+const LIST_INSERT = new NativeFunction(va('0x1404b5090'), 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);
+// 0x140d28010 -> 0x140d29700: void(BuddyParamLookup* rcx {+0 id, +8 row}, int id edx)
+const GET_BUDDY_PARAM = va('0x140d29700');
+// 0x1404bbfa3 -> 0x1404bc083: BuddyGenerator's per-row GetBuddyParam call returns here (the
+// instruction before it is `call 0x140d29700` in 2.7.2.0).
+const LOOP1_RET = va('0x1404bc083');
+const CREATE_SUMMON_CHR = va('0x1404baf80');   // 0x1404baea0 -> 0x1404baf80
+// 0x140ca00f0 -> 0x140ca1030: void(void*, BuddyPacketEntry* rdx)
+const BROADCAST_BUDDY = va('0x140ca1030');
+// 0x143d85f58 -> 0x143d88f78 (465 of its 479 1.17.1 readers read the carried address at their
+// carried place; the rest are refused by the carry or decode differently in 2.7.2.0)
+const SOLO_PARAM_REPOSITORY = va('0x143d88f78');
+const BUDDY_PARAM_INDEX = 128;               // GetBuddyParam passes edx 0x80 at 0x140d2807a -> 0x140d2976a
 
 const MIMIC_TRIGGER = 207000;                // BuddyParam triggerSpEffectId of both Mimic Tear rows
 const HUMAN_ROW = 20700001;                  // the c0000 row (charaInit 26050, generateAnimId 60500)
 
-// BUDDY_PARAM_ST offsets (paramdef, no drift against the 1.17.1 regulation).
+// BUDDY_PARAM_ST offsets (paramdef). BuddyGenerator reads these fields and its body is unchanged in
+// 2.7.2.0.
 const ROW = { NPC: 0x08, THINK: 0x0c, X: 0x18, Z: 0x1c, YAW: 0x20, CHARA_INIT: 0x54, SAVE: 0x58 };
 
 // Turtle k and its spot around the summon point (the Lone Wolf Ashes rows 21400000..2).
@@ -55,7 +70,7 @@ function emit(kind, fields) {
 }
 
 // Row `id` of solo param `index`, as spawn-npc.js paramRow reads it (holder +0x80 count, +0x88 ptr,
-// stride 72; checked against the getter 0x140d4ea00).
+// stride 72; checked against the getter 0x140d4ea00 -> 0x140d500f0, the same instructions in both).
 function paramRow(index, id) {
     const repo = SOLO_PARAM_REPOSITORY.readPointer();
     if (repo.isNull() || repo.add(0x80 + index * 72).readS32() <= 0) return null;
@@ -90,7 +105,7 @@ function restoreRow() {
 const hooks = [];
 
 // Scope everything to a BuddyGenerator whose request is a Mimic Tear: requestSummonSpEffect at
-// mgr+0x20 (read at 0x1404bbed9) is 207000 + upgrade level.
+// mgr+0x20 (read at 0x1404bbed9 -> 0x1404bbfb9) is 207000 + upgrade level.
 hooks.push(Interceptor.attach(BUDDY_GENERATOR, {
     onEnter(args) {
         this.hijacked = false;
@@ -117,8 +132,9 @@ hooks.push(Interceptor.attach(BUDDY_GENERATOR, {
 }));
 
 // Every list node becomes HUMAN_ROW, so no request carries 20700000 and the copy-the-player branch
-// (cmpl $0x13bdb60,0x50(%rax) at 0x1404bc384 -> CopyAnother at 0x1404bc5cf) never arms; then the
-// list grows to three with the game's own insert, the sequence at 0x1404bcef0..0x1404bcf26.
+// (cmpl $0x13bdb60,0x50(%rax) at 0x1404bc384 [2.7.2.0 0x1404bc464], then CopyAnother at 0x1404bc5cf
+// [0x1404bc6af]) never arms; then the list grows to three with the game's own insert, the sequence
+// at 0x1404bcef0..0x1404bcf26 [0x1404bcfd0..0x1404bd006].
 hooks.push(Interceptor.attach(GET_BUDDY_LIST, {
     onEnter(args) {
         this.list = (this.threadId === hijackTid && args[1].toInt32() === MIMIC_TRIGGER) ? args[2] : null;
@@ -139,8 +155,9 @@ hooks.push(Interceptor.attach(GET_BUDDY_LIST, {
 }));
 
 // Each loop-1 read of HUMAN_ROW gets turtle k written into the row before BuddyGenerator copies
-// npc/think/charaInit/x/z/yaw out of it (0x1404bbfa3 onward). From there the NpcParam hit radius,
-// the navmesh-projected spot, CreateSummonChr's arguments and packet 78 all carry turtle values.
+// npc/think/charaInit/x/z/yaw out of it (0x1404bbfa3 [2.7.2.0 0x1404bc083] onward). From there the
+// NpcParam hit radius, the navmesh-projected spot, CreateSummonChr's arguments and packet 78 all
+// carry turtle values.
 hooks.push(Interceptor.attach(GET_BUDDY_PARAM, {
     onEnter(args) {
         this.res = (this.threadId === hijackTid) ? args[0] : null;

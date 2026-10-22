@@ -30,7 +30,7 @@ that cannot be a suspect is worth more than one that has to be cleared.
 
 # The chain, and where each number comes from
 
-    GameDataMan            eldenring.exe + 0x3d61f98   (1.17; see below)
+    GameDataMan            eldenring.exe + 0x3d64fb8   (2.7.2.0; see below)
       -> PlayerGameData    + 0x08
       -> EquipGameData     + 0x2b0    inline, not a pointer
          equipmentEntries  + 0x348    ChrAsmEquipEntries, ints by ChrAsmSlot
@@ -44,7 +44,9 @@ no such layer, so the 1.17 value is written here:
 
     docs/recon/rva-map-1162-to-1170.data.tsv:88   0x3d5df38 -> 0x3d61f98   642/642 witnesses
 
-1.17.0 to 1.17.1 moved nothing outside `.text`, so the 1.17.0 data address is the running one. The
+1.17.0 to 1.17.1 moved nothing outside `.text`, so the 1.17.0 data address was the running one
+until 2.7.2.0 moved `.data`: `scripts/map-rvas-1171-to-1172.py` carries it to `0x3d64fb8`, and
+`scripts/frida-carry-1172.py` checked that against the instructions that read it in both images. The
 struct offsets are field offsets from the named 1.16.2 dump, which the `.text` shift does not
 reach. `0x348` is the same constant `EQUIP_GAME_DATA_EQUIPMENT_ENTRIES` in `equip_native.rs`, and
 that one is already runtime-proven by its neighbour `physicTears` at `840 + 156`.
@@ -86,7 +88,7 @@ _spec.loader.exec_module(_live)
 
 PROCESS = "eldenring.exe"
 
-GAME_DATA_MAN_RVA = 0x3D61F98
+GAME_DATA_MAN_RVA = 0x3D64FB8  # 1.17.1 0x3D61F98
 PLAYER_GAME_DATA_OFFSET = 0x08
 EQUIP_GAME_DATA_OFFSET = 0x2B0
 EQUIP_ITEM_DATA_OFFSET = 0x288

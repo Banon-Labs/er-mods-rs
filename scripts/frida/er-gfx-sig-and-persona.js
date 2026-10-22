@@ -1,5 +1,8 @@
 // Two questions this session cannot answer from a static image.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // 1. The GFx tag-parse prologue is unique in eldenring-deobf-1.17.1.bin and unique in the shipped
 //    eldenring.exe, and yet the DLL's boot-time scan of the LIVE .text calls it "absent or not
 //    unique" and turns the movie swap off -- which is why the announcement banner is still
@@ -15,7 +18,7 @@ function log(s) { send({ line: s }); }
 
 // The address the prologue occupies in both static images, so a live read can say what is
 // actually there instead of only that the scan found nothing.
-const PARSE_RVA = 0x11d1010;
+const PARSE_RVA = 0x11d2700; // 1.17.1 0x11d1010
 
 function question1(mod) {
   // The whole module rather than a parsed .text: the section walk was returning nothing and the

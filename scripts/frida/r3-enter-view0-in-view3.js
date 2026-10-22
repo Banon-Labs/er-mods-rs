@@ -1,5 +1,8 @@
 // In view 3, run pane 0's own "enter view" callback, so the game hides its right and center panels.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The player reports that one native view hides the right and center panels and leaves only the
 // left list. Each pane's callback is `vtable+0x10(pane, &shown)` on the slot objects at
 // `list + 0x48 + i*0x48` (8-aligned), and pane 0's (1.17 `FUN_140999130`) runs
@@ -9,7 +12,7 @@
 // caller, and sends one line per call so the effect can be lined up with what the player saw.
 'use strict';
 
-const APPLY_RVA = 0x975890;
+const APPLY_RVA = 0x975d40; // 1.17.1 0x975890
 const mod = Process.findModuleByName('eldenring.exe');
 const shown = Memory.alloc(8);
 shown.writeU8(1);

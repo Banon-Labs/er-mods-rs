@@ -1,5 +1,8 @@
 // Hand the player the three vanilla invasion fingers, through the engine's own inventory call.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this is not a written record and a signature-scanned routine
 //
 // The community `ItemGib` builds a 16-byte record array and calls a routine found by scanning.
@@ -41,7 +44,7 @@
 const GAME = 'eldenring.exe';
 
 /// `GLOBAL_GameDataMan`, read off `CanMainPlayerUseGoods+0xd` in the 1.17.1 image.
-const GAME_DATA_MAN_GLOBAL_RVA = 0x3d61f98;
+const GAME_DATA_MAN_GLOBAL_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 /// `GameDataMan::mainPlayerGameData`.
 const PLAYER_GAME_DATA_OFFSET = 0x08;
 /// `PlayerGameData::equipGameData`, held by value -- so this is an address, not a pointer to read.

@@ -1,5 +1,8 @@
 // Which device does the game ask about when it decides a menu tab switch?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The question
 //
 // `er-input-harness`'s `TabToQuit` phase derails on every run, and bd `er-effects-rs-9vyy` read
@@ -48,11 +51,11 @@
 
 'use strict';
 
-const PAGE_LEFT_PREDICATE = ptr('0x140759520');
-const PAGE_RIGHT_PREDICATE = ptr('0x140759ae0');
+const PAGE_LEFT_PREDICATE = ptr('0x1407599d0'); // 1.17.1 0x140759520
+const PAGE_RIGHT_PREDICATE = ptr('0x140759f90'); // 1.17.1 0x140759ae0
 const GET_ASSIGN = ptr('0x140242ab0');
 
-const KEY_CONFIG_SINGLETON_RVA = 0x3d61f08;
+const KEY_CONFIG_SINGLETON_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 const DEFAULT_TABLE_OFFSET = 0x008;
 const CURRENT_TABLE_OFFSET = 0x440;
 const ROW_STRIDE = 0x14;

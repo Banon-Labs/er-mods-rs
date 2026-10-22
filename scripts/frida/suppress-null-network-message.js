@@ -1,5 +1,8 @@
 // Drop network messages whose text came back as the placeholder, and count what was dropped.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What this suppresses, and what it deliberately does not
 //
 // ELDEN RING renders `?NetworkMessage?` when a network-message id has no entry in its FMG: the
@@ -35,7 +38,7 @@
 //
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/suppress-null-network-message.js
-const RVA_SHOW_NETWORK_MESSAGE = 0x76f190;
+const RVA_SHOW_NETWORK_MESSAGE = 0x76f640; // 1.17.1 0x76f190
 
 // `CS::MenuString` is `{ wchar_t *rawString; DLString<wchar_t> }` -- text, never an id.
 const MENU_STRING_RAW = 0;

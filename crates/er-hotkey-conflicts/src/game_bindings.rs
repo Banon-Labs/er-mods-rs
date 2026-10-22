@@ -75,6 +75,10 @@ pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: u32 =
 
 /// The game's internal-key-id to DirectInput-scancode lookup table, indexed by
 /// `keyId - KEY_ID_FIRST`. Read, never written.
+///
+/// A 1.16.2 rva like every other here: `game_rva` carries it through the row in
+/// `docs/recon/rva-map-1162-to-1170.data.tsv` (1.17.0 and 1.17.1 `0x3c48a00`, 2.7.2.0 `0x3c4ba10`).
+/// Before 2026-10-21 that row was withheld and every 1.17 build refused the address.
 pub const KEYBOARD_KEY_TO_DIK_GLOBAL_RVA: u32 = 0x3c4_49a0;
 
 /// `cfg + 0x440`: the table the player's own configuration lives in.

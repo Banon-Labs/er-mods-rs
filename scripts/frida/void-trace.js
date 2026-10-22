@@ -19,15 +19,25 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/void-trace.js
 //
-// Addresses are 1.17.1, all below the 0xafefe9 shift boundary, mapped from the named 1.16.2 dump
-// with scripts/map-rvas-1162-to-1170.py (create-or-reuse read back on the 1.17 dump, :8767):
-//   attack create-or-reuse  1.16.2 0x1404428f0 -> 0x140442e50  (CSChrDamageModule*, out, behaviorId,
-//                           dmgType, slot, ...)
-//   per-frame sweep         1.16.2 0x140445d30 -> 0x140446290  (CSChrDamageModule*)
-//   DmgMan create attack    1.16.2 0x140526430 -> 0x140527230  returns the new attack handle
-//   DmgMan release attack   1.16.2 0x140527140 -> 0x140527f40  (DmgMan*, handle)
-//   CalculateDamage2        1.16.2 0x1404483b0 -> 0x140448910  (as chainsaw-probe.js)
+// Addresses are 2.7.2.0. They were mapped from the named 1.16.2 dump to 1.17.1 with
+// scripts/map-rvas-1162-to-1170.py (create-or-reuse read back on the 1.17 dump, :8767), then
+// carried to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py; every body below matches
+// eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands.
+//                           1.16.2         1.17.1         2.7.2.0
+//   attack create-or-reuse  0x1404428f0 -> 0x140442e50 -> 0x140442ee0  (CSChrDamageModule*, out,
+//                           behaviorId, dmgType, slot, ...)
+//   per-frame sweep         0x140445d30 -> 0x140446290 -> 0x140446370  (CSChrDamageModule*)
+//   DmgMan create attack    0x140526430 -> 0x140527230 -> 0x140527610  returns the attack handle
+//   DmgMan release attack   0x140527140 -> 0x140527f40 -> 0x140528320  (DmgMan*, handle)
+//   CalculateDamage2        0x1404483b0 -> 0x140448910 -> 0x1404489f0  (as chainsaw-probe.js)
+// The segment table refuses 0x140527f40, because the leaf gap around it grew 0x10 bytes in
+// 2.7.2.0. It was carried by its callers instead: all six 1.17.1 call or jump sites carry to sites
+// that call or jump to 0x140528320, whose 0x48-byte body is the 1.17.1 one instruction for
+// instruction.
 // CSChrModuleBase keeps its owning ChrIns at +0x8 (GetChrOwner 1.16.2 0x14043ccf0).
+// 2.7.2.0 moved damage-side fields by +0x8: those the 1.17.1 helpers 0x1405240a0..0x140526fa0 read
+// between +0x28 and +0xa7, and +0xa4 of the singleton at 1.17.1 0x143d6a3e8. This agent reads none
+// of them, only the handles that create and release pass.
 //
 // Uses only Interceptor (no watchpoints), so a detach or reload leaves nothing behind.
 'use strict';
@@ -36,12 +46,15 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const CREATE_OR_REUSE = va('0x140442e50');
-const SWEEP = va('0x140446290');
-const DMGMAN_CREATE = va('0x140527230');
-const DMGMAN_RELEASE = va('0x140527f40');
-const CALC_DAMAGE2 = va('0x140448910');
-const WORLD_CHR_MAN = game.base.add(0x3d69ff8);
+const CREATE_OR_REUSE = va('0x140442ee0');   // 0x140442e50 -> 0x140442ee0
+const SWEEP = va('0x140446370');             // 0x140446290 -> 0x140446370
+const DMGMAN_CREATE = va('0x140527610');     // 0x140527230 -> 0x140527610
+const DMGMAN_RELEASE = va('0x140528320');    // 0x140527f40 -> 0x140528320 (carried by its callers)
+const CALC_DAMAGE2 = va('0x1404489f0');      // 0x140448910 -> 0x1404489f0
+// WorldChrMan rva 0x3d69ff8 -> 0x3d6d018. WorldChrManImp grew 0x10 bytes past +0x1e5e8 in
+// 2.7.2.0; main_player +0x1e508 is below that, and 456 of its 469 1.17.1 readers are unchanged at
+// their carried place.
+const WORLD_CHR_MAN = game.base.add(0x3d6d018);
 const MODULE_OWNER = 0x8;
 
 function mainPlayer() {
@@ -92,7 +105,8 @@ let watchedAnim = null;
 let watchedReq = null;
 let watchedY = null;
 // SpEffect apply as action-script.js calls it: (target, id, source, pos, correction, 0, 0, 0).
-const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb010'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
+// 0x1403fb010 -> 0x1403fb0a0.
+const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb0a0'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
 const SP_POS = Memory.alloc(16);
 const SP_CORR = Memory.alloc(0x60);
 const BALDACHIN = 503361;
@@ -168,7 +182,8 @@ hooks.push(Interceptor.attach(SWEEP, {
 }));
 
 // The injected R1 goes in where action-script.js puts the player's: request bits at
-// CSChrActionRequestModule +0x10 on entry to UpdateFromManipulator (0x140408190); written from the
+// CSChrActionRequestModule +0x10 on entry to UpdateFromManipulator (1.17.1 0x140408190, 2.7.2.0
+// 0x140408220, which writes +0x10 itself in both); written from the
 // sweep instead, it never reached the game (measured: no attack at any offset).
 // Player drive (config { drivePlayer: true, attempts: n }): the watched character is the player,
 // whose request bits are replaced outright every frame while the drive runs (the player's own
@@ -179,7 +194,7 @@ const DRIVE_CYCLE = 90;
 let driveLeft = cfgDrive.drivePlayer ? (cfgDrive.attempts || 28) : 0;
 let driveStart = null;
 
-hooks.push(Interceptor.attach(va('0x140408190'), {
+hooks.push(Interceptor.attach(va('0x140408220'), {
     onEnter(args) {
         if (watched === null) return;
         if (!args[0].add(8).readPointer().equals(watched)) return;
@@ -320,10 +335,10 @@ hooks.push(Interceptor.attach(CALC_DAMAGE2, {
 
 // Which jump-attack clip is playing: the air clip (a<cat>_0310x0 / 0312x0 / 0345x0 ...) or the
 // landed one (031070 ...). The CustomManualSelectorGenerator writer stores the chosen TimeAct at
-// node+0xec as category * 1000000 + anim (skill-clip-trace.js; 1.17.1 0x1419bb530). It runs for
-// every character, so only jump-attack clips (anim 031000-031999 and 034500-034599) are kept, and
-// a repeat of the same clip on the next frame is folded.
-const CMSG_SET_TAE = va('0x1419bb530');
+// node+0xec as category * 1000000 + anim (skill-clip-trace.js; 1.17.1 0x1419bb530 -> 2.7.2.0
+// 0x1419bcc20). It runs for every character, so only jump-attack clips (anim 031000-031999 and
+// 034500-034599) are kept, and a repeat of the same clip on the next frame is folded.
+const CMSG_SET_TAE = va('0x1419bcc20');
 let lastClip = null;
 let lastClipFrame = -10;
 hooks.push(Interceptor.attach(CMSG_SET_TAE, {
@@ -347,11 +362,11 @@ hooks.push(Interceptor.attach(CMSG_SET_TAE, {
 
 // The selector's TimeAct clock, per update, for jump clips: CustomManualSelectorGenerator::update
 // (1.16.2 0x1419b82e0 -> 1.17.1 0x1419ba150, unique prologue match, the same +0x1e70 as the clip
-// setter above) stores preLocalTime at node +0xe0 and localTime at +0xe4 and fires the TAE
-// callback with (pre, local) for the clip at +0xec. A clip switch zeroes both (setter, 1.16.2
-// 0x1419b96c0), so the new clip's first update fires from -1. This shows the time the landed
-// clip starts from and which window each update fires.
-const CMSG_UPDATE = va('0x1419ba150');
+// setter above; -> 2.7.2.0 0x1419bb840, same body) stores preLocalTime at node +0xe0 and localTime
+// at +0xe4 and fires the TAE callback with (pre, local) for the clip at +0xec. A clip switch zeroes
+// both (setter, 1.16.2 0x1419b96c0), so the new clip's first update fires from -1. This shows the
+// time the landed clip starts from and which window each update fires.
+const CMSG_UPDATE = va('0x1419bb840');
 hooks.push(Interceptor.attach(CMSG_UPDATE, {
     onEnter(args) { this.node = args[0]; },
     onLeave() {
@@ -369,7 +384,8 @@ hooks.push(Interceptor.attach(CMSG_UPDATE, {
 
 // Every bullet the watched character fires: CSBulletManager::SpawnBullet(manager, outHandle,
 // BulletSpawnData*, ...), 1.16.2 0x1403a2ca0 -> 1.17.1 0x1403a2cb0 (prologue bytes 0x00-0x13 and
-// 0x20-0x5f identical; only the cookie displacement differs). BulletSpawnData: owner FieldInsHandle
+// 0x20-0x5f identical; only the cookie displacement differs) -> 2.7.2.0 0x1403a2cb0 (unmoved, the
+// whole body the same apart from rip-relative operands). BulletSpawnData: owner FieldInsHandle
 // +0x0, behaviorId +0x8, magicId +0xc, bulletId +0x14. FP is no cast counter on this NPC (it refills
 // a frame after every charge, and drops without a cast), so a cast is counted by its bullets: a
 // double cast fires the spell's bullets twice.

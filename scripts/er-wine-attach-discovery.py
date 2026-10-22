@@ -4,7 +4,7 @@ image base, and the GameMan singleton + saveState value. Nothing is injected."""
 import os, re, struct, sys, json
 
 PROC = "/proc"
-GAME_MAN_SINGLETON_VA = 0x143D6D988
+GAME_MAN_SINGLETON_VA = 0x143D709A8  # 1.17.1 0x143D6D988
 SAVE_STATE_OFF = 0xB80
 
 

@@ -1,5 +1,8 @@
 // Put back every proxy the R3 experiments hid and never restored, then report whether R3 works.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Measured: 45 R3 presses reached the pad and none reached any item-list R3 handler, in any view.
 // The menu windows outlive a menu close, so state left by earlier hides persists:
 //   * er-r3-view cleared `Visible` on the menu windows' proxies, and its restore skipped windows it
@@ -10,9 +13,9 @@
 // before it was faded). Runs once, inside `MenuWindowJob::Run`, on the menu thread.
 'use strict';
 
-const RUN_RVA = 0x7ae040;
+const RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const JOB_WINDOW = 0x130;
-const PADPOLL_RVA = 0x1f6d940;
+const PADPOLL_RVA = 0x1f6f030; // 1.17.1 0x1f6d940
 
 const VISIBLE = {
   '.?AVClockView@CS@@': [0x120],
@@ -105,7 +108,7 @@ Interceptor.attach(lo.add(PADPOLL_RVA), {
     } catch (e) {}
   },
 });
-for (const rva of [0x8f5170, 0x8f5260, 0x8f5510]) {
+for (const rva of [0x8f5620, 0x8f5710, 0x8f59c0]) { // 1.17.1 0x8f5170; 1.17.1 0x8f5260; 1.17.1 0x8f5510
   Interceptor.attach(follow(lo.add(rva)), { onEnter () { send({ tag: 'r3-handler', rva: '0x' + rva.toString(16) }); } });
 }
 

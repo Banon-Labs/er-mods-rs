@@ -17,11 +17,29 @@ into the runtime carry:
     segment, and the gap between them (leaf code `.pdata` does not describe) moves
     with them because the two entries around it did. An address in no segment is
     in or beside a function that changed, and is refused.
-  * data: every rip-relative operand (`modrm` mod 00, rm 101) inside a text
-    segment is read at its place in both images. The difference of the two targets
-    is the data delta at that target. Targets are voted on, consecutive targets
-    sharing a delta form a segment, and anything between segments that disagree is
-    refused.
+  * data: every instruction of carried code is decoded -- each `.pdata` function,
+    and the leaf code `.pdata` does not describe, found from call and jump targets
+    and from code pointers in data. A rip-relative operand whose instruction carries
+    to one of the same mnemonic and operand shape is a reader, and the difference of
+    its two targets is the data delta at that target. A reader votes when the code
+    after it matches too (see `collect_readers`). A target takes the delta a strict
+    majority of its voting readers agree on, one reader included. Consecutive
+    targets sharing a delta form a segment; a segment ends at the next target that
+    disagrees and never spans one.
+
+Why decoding, and why one reader is enough (2026-10-21): this used to scan every
+byte of `.text` for a `modrm` of mod 00 rm 101. Most of those are not instructions,
+so a target needed two agreeing votes and a segment two agreeing targets, and every
+target with a single reader was dropped. Its neighbours then carried it with their
+delta. `0x3b3885c` (the 10.0 the join tick reads at `0x6ff691`) went to `+0x3010`
+for `+0x300c`, and `0x3d6deb4` (read at `0x6ff688`) to `+0x3024` for `+0x301c`: the
+data inside `.data` is reordered as well as shifted, so a neighbour's delta says
+nothing about a target of its own. 66,406 of the 94,659 read targets have exactly
+one reader.
+
+The 2.7.2.0 side of a reader is decoded no further than the end of its function,
+as `scripts/function_extent.py` resolves it; a reader whose 2.7.2.0 code has no
+extent it can find does not vote.
 
 Refusing is the point. A carried address that lands in changed code is a
 mid-function detour or a wrong global; a refused one is a dead feature with a log
@@ -32,6 +50,10 @@ Usage
     python3 scripts/map-rvas-1171-to-1172.py --write        # regenerate the tsv
     python3 scripts/map-rvas-1171-to-1172.py 0x140b00070    # carry addresses (reads the tsv)
     python3 scripts/map-rvas-1171-to-1172.py --selftest
+    python3 scripts/map-rvas-1171-to-1172.py --measure [TSV ...]  # every reader against a table
+
+`--write`, `--selftest` and `--measure` decode with capstone and re-run themselves
+under `uv run --with capstone --with numpy` when it is not importable.
 
 Both images are read-only, gitignored inputs; see `AGENTS.md`.
 """
@@ -41,11 +63,16 @@ from __future__ import annotations
 import argparse
 import bisect
 import os
+import re
 import struct
 import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import NamedTuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import function_extent  # noqa: E402 - repo-local; the sys.path line above is what makes it work
 
 IMAGE_BASE = 0x140000000
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -56,10 +83,44 @@ TSV = REPO_ROOT / "docs" / "recon" / "carry-1171-to-1172.tsv"
 RESYNC_WINDOW = 256
 RESYNC_RUN = 8
 
-# A data target is accepted when at least this many references agree and they
-# are at least this share of all references to it.
+# The provisional data table `mispaired` checks pairs against: a target needs this many readers
+# agreeing, at this share, and a segment this many such targets. It is coarse on purpose -- it
+# only has to outvote a pair that is two different functions -- and it is never written out.
 MIN_DATA_VOTES = 2
 MIN_DATA_SHARE = 0.75
+
+# A segment's last target covers this many bytes, or its own access size when larger, unless the
+# next target comes first. It is what a `lea` of a pointer-sized global needs.
+MIN_DATA_WIDTH = 8
+
+# The two addresses the byte-scan vote carried wrong, each read by one instruction of the join
+# tick: (1.17.1 rva, 2.7.2.0 rva its reader reads). The selftest pins both.
+PINNED_DATA = ((0x3B3885C, 0x3B3B868), (0x3D6DEB4, 0x3D70ED0))
+
+# A rip-relative memory operand as capstone prints it: `[rip + 0x1234]`, `[rip - 0x10]`, `[rip]`.
+RIP_OPERAND = re.compile(r"\[rip(?: ([+-]) (0x[0-9a-f]+|\d+))?\]")
+# Every number in an operand string. Masking them leaves the operand shape: registers and sizes.
+NUMBER = re.compile(r"\b(0x[0-9a-f]+|\d+)\b")
+ACCESS = re.compile(r"\b(byte|word|dword|qword|tbyte|xmmword|ymmword|zmmword) ptr \[rip")
+ACCESS_SIZE = {"byte": 1, "word": 2, "dword": 4, "qword": 8, "tbyte": 10,
+               "xmmword": 16, "ymmword": 32, "zmmword": 64}
+# A leaf's straight-line decode stops after one of these. capstone spells `f3 c3`, the return the
+# hand-written runtime routines low in `.text` end with, `repz ret`.
+TERMINATORS = {"ret", "repz ret", "rep ret", "retf", "jmp", "int3", "ud2", "hlt"}
+# A reader votes only when this many instructions from it on, or up to a terminator, match.
+WINDOW = 8
+
+
+def _ensure_decoder() -> None:
+    """Re-run this script under uv when capstone or numpy is missing."""
+    try:
+        import capstone  # noqa: F401
+        import numpy  # noqa: F401
+    except ImportError:
+        if os.environ.get("_MAP1172_UNDER_UV"):
+            raise SystemExit("capstone or numpy is still missing under uv")
+        os.environ["_MAP1172_UNDER_UV"] = "1"
+        os.execvp("uv", ["uv", "run", "--with", "capstone", "--with", "numpy", "python3", *sys.argv])
 
 
 def _resolve_image(env_var: str, filename: str) -> Path:
@@ -216,8 +277,248 @@ def widen_over_identical_gaps(segs, old: Image, new: Image, entries) -> list[tup
     return [tuple(s) for s in out]
 
 
-def data_anchors(old: Image, new: Image, segs: list[tuple[int, int, int]]) -> dict[int, int]:
-    """{old data rva: delta}, voted over every rip-relative operand in carried code."""
+class Reader(NamedTuple):
+    """One rip-relative operand of 1.17.1 code that reads `.rdata` or `.data`."""
+
+    insn: int  # rva of the instruction
+    fn: int | None  # begin of the `.pdata` entry it sits in; None in leaf code
+    delta: int  # the text carry of the instruction
+    target: int  # rva its operand reads
+    new_target: int | None  # rva the carried instruction reads; None when the shapes differ
+    width: int  # bytes the operand accesses; 0 for a `lea`
+    doubt: str  # empty when the code from it to `WINDOW` instructions on matches; else what differs
+
+
+def segment_carry(rva: int, segs: list[tuple[int, int, int]], starts: list[int]) -> int | None:
+    at = bisect.bisect_right(starts, rva) - 1
+    if at >= 0 and segs[at][0] <= rva < segs[at][1]:
+        return rva + segs[at][2]
+    return None
+
+
+def rip_target(address: int, size: int, op: str) -> int | None:
+    m = RIP_OPERAND.search(op)
+    if m is None:
+        return None
+    disp = int(m.group(2), 0) if m.group(2) else 0
+    return address + size + (-disp if m.group(1) == "-" else disp)
+
+
+def operand_shape(mnemonic: str, op: str) -> str:
+    return mnemonic + " " + NUMBER.sub("N", RIP_OPERAND.sub("[rip]", op))
+
+
+def branch_target(mnemonic: str, op: str) -> int | None:
+    if (mnemonic == "call" or mnemonic.startswith("j")) and op.startswith("0x"):
+        return int(op, 16)
+    return None
+
+
+def collect_readers(old: Image, new: Image, entries: list[tuple[int, int]],
+                    segs: list[tuple[int, int, int]]) -> list[Reader]:
+    """Every rip-relative data operand of 1.17.1 code that `segs` carries, decoded in both images.
+
+    Code is every `.pdata` function, plus leaf code: `.pdata` describes no leaf, so a leaf is
+    entered from a direct call or jump of decoded code, or from a 16-byte-aligned code pointer in
+    `.rdata`/`.data`, and decoded in straight lines up to a terminator, following its own branches.
+    Decoding starts only at those entries, never at an arbitrary byte, so nothing between functions
+    -- padding, a jump table -- is read as an instruction.
+
+    A reader's own instruction having the same shape in 2.7.2.0 is not enough to trust where it
+    points: `0x5f7da4` is `lea rcx, [obj]; jmp dtor` in both builds, but the 2.7.2.0 one is another
+    object's destructor thunk, and its `jmp` goes to a function the text carry puts elsewhere. So
+    `doubt` records the first thing that differs in the straight line from the reader on, up to
+    `WINDOW` instructions or a terminator: an instruction of another shape, a direct branch the
+    text carry takes somewhere other than where the 2.7.2.0 branch goes, a `jmp` into code the
+    carry refuses (nothing after it can be checked), or the Arxan return `jmp qword ptr [rsp - 8]`
+    -- `0xfdf4d0` is `lea rax, [slot]` before one, and its slot moved by `+0x10040` among `.data`
+    neighbours at `+0x3020`. A reader whose target changes section is doubted too: a `.data`
+    global does not become `.rdata`, and the three that do here are all other objects.
+
+    The `.pdata` functions are decoded in forked workers, in fixed slices and joined in order, so
+    the result does not depend on how many there are.
+    """
+    import numpy as np
+
+    global _DECODER
+    dec = _Decoder(old, new, entries, segs)
+    step = 4096
+    spans = [(i, min(i + step, len(entries))) for i in range(0, len(entries), step)]
+    # `read` bounds every 2.7.2.0 decode with that image's function extents. Parse its section
+    # table and `.pdata` once, here, so the forked workers inherit them instead of each parsing.
+    function_extent.executable_at(new.data, IMAGE_BASE + new.text_lo)
+    function_extent.declared_functions(new.data)
+    _DECODER = dec
+    try:
+        import multiprocessing
+
+        with multiprocessing.get_context("fork").Pool(min(16, os.cpu_count() or 1)) as pool:
+            parts = pool.map(_decode_functions, spans)
+    except (OSError, ValueError):
+        parts = [dec.functions(lo, hi) for lo, hi in spans]
+    finally:
+        _DECODER = None
+    readers = [Reader(*r) for part, _ in parts for r in part]
+    leaves = set().union(*(found for _, found in parts))
+    for name in (".rdata", ".data"):
+        lo, hi = old.section(name)
+        q = np.frombuffer(old.data, dtype="<u8", count=(hi - lo) // 8, offset=lo)
+        q = q[(q >= IMAGE_BASE + old.text_lo) & (q < IMAGE_BASE + old.text_hi) & (q % 16 == 0)]
+        leaves.update(t for t in (q - IMAGE_BASE).tolist() if not dec.in_pdata(t))
+    return readers + dec.leaves(leaves)
+
+
+_DECODER: "_Decoder | None" = None
+
+
+def _decode_functions(span: tuple[int, int]):
+    return _DECODER.functions(*span)
+
+
+class _Decoder:
+    """The state `collect_readers` decodes with; see there for what it does."""
+
+    def __init__(self, old: Image, new: Image, entries: list[tuple[int, int]],
+                 segs: list[tuple[int, int, int]]):
+        self.old, self.new, self.entries, self.segs = old, new, entries, segs
+        self.data_lo = min(lo for n, lo, _ in old.sections if n in (".rdata", ".data"))
+        self.data_hi = max(lo + s for n, lo, s in old.sections if n in (".rdata", ".data"))
+        self.seg_starts = [s[0] for s in segs]
+        self.starts = [b for b, _ in entries]
+        self.ends = [e for _, e in entries]
+        self._md = None
+        self._md_pid = None
+
+    @property
+    def md(self):
+        # One capstone handle per process: a handle is not shared across a fork.
+        if self._md_pid != os.getpid():
+            import capstone
+
+            self._md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+            self._md_pid = os.getpid()
+        return self._md
+
+    def in_pdata(self, rva: int) -> bool:
+        at = bisect.bisect_right(self.starts, rva) - 1
+        return at >= 0 and rva < self.ends[at]
+
+    def is_code_target(self, rva: int) -> bool:
+        return self.old.text_lo <= rva < self.old.text_hi and not self.in_pdata(rva)
+
+    @staticmethod
+    def same_shape(mn: str, op: str, nmn: str, nop: str) -> bool:
+        return mn == nmn and (op == nop or operand_shape(mn, op) == operand_shape(nmn, nop))
+
+    def doubt(self, line: list, news: list) -> str:
+        for k, (a, _, mn, op) in enumerate(line):
+            if k >= len(news) or not self.same_shape(mn, op, news[k][2], news[k][3]):
+                return f"{a:#x} `{mn} {op}` has another shape in 2.7.2.0"
+            if mn == "jmp" and "[rsp" in op:
+                return f"{a:#x} `{mn} {op}` ends an Arxan stub, whose slots each build re-randomises"
+            t = branch_target(mn, op)
+            if t is None:
+                continue
+            want = segment_carry(t, self.segs, self.seg_starts)
+            if want is None and mn == "jmp":
+                return f"{a:#x} `jmp` continues at {t:#x}, which the text carry refuses"
+            if want is not None and want != int(news[k][3], 16):
+                return f"{a:#x} `{mn}` goes to {int(news[k][3], 16):#x} in 2.7.2.0, the carry says {want:#x}"
+        return ""
+
+    @staticmethod
+    def section_name(img: Image, rva: int) -> str | None:
+        return next((n for n, lo, size in img.sections if lo <= rva < lo + size), None)
+
+    def read(self, code: list, k: int, fn: int | None, out: list[Reader]) -> None:
+        address, size, mnemonic, op = code[k]
+        target = rip_target(address, size, op)
+        if target is None or not self.data_lo <= target < self.data_hi:
+            return
+        moved = segment_carry(address, self.segs, self.seg_starts)
+        if moved is None:
+            return
+        line = []
+        for ins in code[k:k + WINDOW]:
+            line.append(ins)
+            if ins[2] in TERMINATORS:
+                break
+        access = ACCESS.search(op)
+        width = ACCESS_SIZE[access.group(1)] if access else 0
+        # The 1.17.1 line was cut from its function's extent, so the 2.7.2.0 one is too: past the
+        # end of the function `moved` sits in, the image holds padding and the deobfuscator's
+        # leftover bytes, which decode into instructions nobody assembled and could pass for the
+        # rest of the line. The byte count only caps the slice. No extent is a refusal, and the
+        # reader does not vote.
+        stop = function_extent.body_slice_end(self.new.data, IMAGE_BASE + moved, cap=15 * len(line))
+        if stop is None:
+            out.append(Reader(address, fn, moved - address, target, None, width,
+                              f"{moved:#x} has no function extent in 2.7.2.0"))
+            return
+        news = list(self.md.disasm_lite(self.new.data[moved:stop], moved, len(line)))
+        new_target = None
+        if news and self.same_shape(mnemonic, op, news[0][2], news[0][3]):
+            new_target = rip_target(news[0][0], news[0][1], news[0][3])
+        why = self.doubt(line, news)
+        if not why and new_target is not None:
+            was, now = self.section_name(self.old, target), self.section_name(self.new, new_target)
+            if was != now:
+                why = f"reads {now} in 2.7.2.0 and {was} in 1.17.1"
+        out.append(Reader(address, fn, moved - address, target, new_target, width, why))
+
+    def functions(self, lo: int, hi: int) -> tuple[list[Reader], set[int]]:
+        """Readers in `.pdata` entries `lo..hi`, and the leaf entries their branches name."""
+        out: list[Reader] = []
+        leaves: set[int] = set()
+        for b, e in self.entries[lo:hi]:
+            code = list(self.md.disasm_lite(self.old.data[b:e], b))
+            for k, (a, s, mn, op) in enumerate(code):
+                if "rip" in op:
+                    self.read(code, k, b, out)
+                elif (mn[0] == "j" or mn == "call") and op[:2] == "0x":
+                    t = int(op, 16)
+                    if self.is_code_target(t):
+                        leaves.add(t)
+        # Plain tuples cross the process boundary: a module loaded through importlib under another
+        # name cannot pickle its own `Reader`.
+        return [tuple(r) for r in out], leaves
+
+    def leaves(self, entries: set[int]) -> list[Reader]:
+        """Readers in leaf code, decoded in straight lines from each entry and its branches."""
+        out: list[Reader] = []
+        seen: set[int] = set()
+        work = sorted(entries, reverse=True)
+        while work:
+            entry = work.pop()
+            if entry in seen:
+                continue
+            at = bisect.bisect_right(self.starts, entry)
+            stop = self.starts[at] if at < len(self.starts) else self.old.text_hi
+            code = []
+            for ins in self.md.disasm_lite(self.old.data[entry:stop], entry):
+                if ins[0] in seen:
+                    break
+                seen.add(ins[0])
+                code.append(ins)
+                t = branch_target(ins[2], ins[3])
+                if t is not None and self.is_code_target(t) and t not in seen:
+                    work.append(t)
+                if ins[2] in TERMINATORS:
+                    break
+            for k, ins in enumerate(code):
+                if "rip" in ins[3]:
+                    self.read(code, k, None, out)
+        return out
+
+
+def byte_scan_anchors(old: Image, new: Image, segs: list[tuple[int, int, int]]) -> dict[int, int]:
+    """{old data rva: delta}, voted over every byte of carried code that could be a rip operand.
+
+    This was the data table until 2026-10-21 and now only feeds `mispaired`, so the text rows stay
+    what they were. Most of the positions it reads are not instructions, which is why a target
+    needs two agreeing votes; it is also what lets `mispaired` refuse a pair whose code changed
+    without the change touching a decoded operand.
+    """
     import numpy as np
 
     od = np.frombuffer(old.data, dtype=np.uint8)
@@ -233,12 +534,8 @@ def data_anchors(old: Image, new: Image, segs: list[tuple[int, int, int]]) -> di
         p = p[(modrm & 0xC7) == 0x05]
         if p.size == 0:
             continue
-        def i32(buf, at):
-            b = buf[at[:, None] + np.arange(4)].astype(np.uint32)
-            v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16) | (b[:, 3] << 24)
-            return v.astype(np.int64) - ((v >= 0x80000000).astype(np.int64) << 32)
-        do = i32(od, p)
-        dn = i32(nd, p + d)
+        do = _i32(od, p)
+        dn = _i32(nd, p + d)
         target = p + 4 + do
         keep = (target >= data_lo) & (target < data_hi)
         for t, dd in zip(target[keep].tolist(), (d + dn[keep] - do[keep]).tolist()):
@@ -251,7 +548,16 @@ def data_anchors(old: Image, new: Image, segs: list[tuple[int, int, int]]) -> di
     return anchors
 
 
-def data_segments(anchors: dict[int, int], old: Image) -> list[tuple[int, int, int]]:
+def _i32(buf, at):
+    import numpy as np
+
+    b = buf[at[:, None] + np.arange(4)].astype(np.uint32)
+    v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16) | (b[:, 3] << 24)
+    return v.astype(np.int64) - ((v >= 0x80000000).astype(np.int64) << 32)
+
+
+def coarse_data_segments(anchors: dict[int, int], old: Image) -> list[tuple[int, int, int]]:
+    """The byte-scan anchors as segments, for `mispaired` only; never written out."""
     segs: list[list[int]] = []
     bounds = [(lo, lo + s) for n, lo, s in old.sections if n in (".rdata", ".data")]
 
@@ -281,6 +587,61 @@ def data_segments(anchors: dict[int, int], old: Image) -> list[tuple[int, int, i
     return [tuple(s) for s in out]
 
 
+class Verdict(NamedTuple):
+    """What the trusted readers of one target say."""
+
+    readers: int  # readers with no `doubt` whose instruction has the same shape in 2.7.2.0
+    delta: int | None  # the delta a strict majority of them read at; None when they split evenly
+
+
+def data_segments(readers: list[Reader], old: Image) -> tuple[list[tuple[int, int, int]], dict[int, Verdict]]:
+    """The written data table: each target where a strict majority of its trusted readers say.
+
+    A target with one reader is as good as one with a thousand -- the reader is decoded, in code
+    the text carry pairs, its instruction has the same shape on both sides and so does the code
+    after it. Only readers with no `doubt` vote: one whose following code changed is evidence of
+    nothing about the object, and as the sole reader of a target it would carry the target wherever
+    the changed code now points (`0x439e14` would take the vtable at `0x2be2fa0` to `-0x1894a8`,
+    among neighbours at `+0x22b0`, and refuse `csdebug_cam_pad_vmt` beside it).
+
+    Consecutive targets sharing a delta merge, the bytes between them included; the last one
+    covers `MIN_DATA_WIDTH` bytes or its access size, cut at the next target. Nothing is carried
+    across a target of another delta, and a target whose readers split evenly is refused.
+    """
+    votes: dict[int, Counter] = defaultdict(Counter)
+    width: dict[int, int] = defaultdict(int)
+    for r in readers:
+        if r.new_target is not None and not r.doubt:
+            votes[r.target][r.new_target - r.target] += 1
+            width[r.target] = max(width[r.target], r.width)
+    bounds = [(lo, lo + s) for n, lo, s in old.sections if n in (".rdata", ".data")]
+
+    def section_of(t: int):
+        return next((b for b in bounds if b[0] <= t < b[1]), None)
+
+    targets = sorted(votes)
+    verdicts: dict[int, Verdict] = {}
+    for t in targets:
+        delta, n = votes[t].most_common(1)[0]
+        total = sum(votes[t].values())
+        verdicts[t] = Verdict(total, delta if 2 * n > total else None)
+
+    segs: list[list[int]] = []
+    for k, t in enumerate(targets):
+        delta = verdicts[t].delta
+        if delta is None:
+            continue
+        section = section_of(t)
+        nxt = targets[k + 1] if k + 1 < len(targets) else section[1]
+        hi = min(t + max(MIN_DATA_WIDTH, width[t]), nxt, section[1])
+        if segs and segs[-1][2] == delta and segs[-1][3] == k - 1 and section_of(segs[-1][0]) == section:
+            segs[-1][1] = hi
+            segs[-1][3] = k
+        else:
+            segs.append([t, hi, delta, k])
+    return [(lo, hi, d) for lo, hi, d, _ in segs], verdicts
+
+
 def mispaired(old: Image, new: Image, pairs: list, data: list) -> set[int]:
     """Old entry starts whose pair is two different functions of the same length.
 
@@ -290,6 +651,10 @@ def mispaired(old: Image, new: Image, pairs: list, data: list) -> set[int]:
     real pair, carried through the data segments, lands where the new image's operand points; a
     mispair's operands point somewhere else. A pair is refused when at least two of its operands
     disagree and they outnumber the ones that agree.
+
+    It reads every byte that could be an operand, against the byte-scan table, as it did before
+    the data table was decoded. Feeding it decoded readers instead carried 657 more pairs, 553 of
+    them functions whose instructions differ between the builds.
     """
     import numpy as np
 
@@ -301,11 +666,6 @@ def mispaired(old: Image, new: Image, pairs: list, data: list) -> set[int]:
     dhi = np.array([s[1] for s in data], dtype=np.int64)
     dd = np.array([s[2] for s in data], dtype=np.int64)
 
-    def i32(buf, at):
-        b = buf[at[:, None] + np.arange(4)].astype(np.uint32)
-        v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16) | (b[:, 3] << 24)
-        return v.astype(np.int64) - ((v >= 0x80000000).astype(np.int64) << 32)
-
     bad = np.zeros(len(pairs), dtype=np.int64)
     good = np.zeros(len(pairs), dtype=np.int64)
     # One contiguous span per run of adjacent pairs is enough; per-function bookkeeping is by index.
@@ -314,8 +674,8 @@ def mispaired(old: Image, new: Image, pairs: list, data: list) -> set[int]:
         p = p[(od[p - 1] & 0xC7) == 0x05]
         if p.size == 0:
             continue
-        old_t = p + 4 + i32(od, p)
-        new_t = p + d + 4 + i32(nd, p + d)
+        old_t = p + 4 + _i32(od, p)
+        new_t = p + d + 4 + _i32(nd, p + d)
         at = np.searchsorted(dlo, old_t, side="right") - 1
         inside = (at >= 0) & (old_t < dhi[np.clip(at, 0, None)])
         carried = old_t + dd[np.clip(at, 0, None)]
@@ -359,21 +719,38 @@ def carry(rva: int, rows) -> int | None:
     return None
 
 
-def build() -> tuple[list, list, Image, Image, list]:
+def build() -> tuple[list, list, Image, Image, list, list[Reader], dict[int, Verdict]]:
     old, new = Image(OLD_IMAGE), Image(NEW_IMAGE)
     po, pn = old.pdata(), new.pdata()
     pairs = pair_text(po, pn)
-    data = data_segments(data_anchors(old, new, text_segments(pairs)), old)
+    coarse = coarse_data_segments(byte_scan_anchors(old, new, text_segments(pairs)), old)
     # Drop the pairs whose operands say they are different functions; the adjacency rule in
     # `text_segments` then refuses them and the gap on either side.
-    wrong = mispaired(old, new, pairs, data)
+    wrong = mispaired(old, new, pairs, coarse)
     pairs = [p for p in pairs if p[0] not in wrong]
     text = widen_over_identical_gaps(text_segments(pairs), old, new, po)
-    return text, data, old, new, pairs
+    # The data table is voted by decoded readers in the code the written text table carries.
+    readers = collect_readers(old, new, po, text)
+    data, verdicts = data_segments(readers, old)
+    return text, data, old, new, pairs, readers, verdicts
+
+
+def measure(rows, old: Image, new: Image) -> tuple[list[Reader], list[Reader]]:
+    """(agreeing, disagreeing) readers of a table: every rip-relative data operand of every decoded
+    1.17.1 instruction the table's text rows carry to one of the same mnemonic and operand shape,
+    judged by whether the table carries its target to where the 2.7.2.0 instruction reads."""
+    segs = sorted((lo, hi, d) for _, lo, hi, d in rows)
+    starts = [s[0] for s in segs]
+    text = [(lo, hi, d) for kind, lo, hi, d in sorted(rows, key=lambda r: r[1]) if kind != "data"]
+    readers = [r for r in collect_readers(old, new, old.pdata(), text) if r.new_target is not None]
+    agree, disagree = [], []
+    for r in readers:
+        (agree if segment_carry(r.target, segs, starts) == r.new_target else disagree).append(r)
+    return agree, disagree
 
 
 def selftest() -> int:
-    text, data, old, new, pairs = build()
+    text, data, old, new, pairs, readers, verdicts = build()
     rows = sorted([("text", *s) for s in text] + [("data", *s) for s in data], key=lambda r: r[1])
     failures = []
 
@@ -381,6 +758,29 @@ def selftest() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'}  {label}{(' -- ' + detail) if detail else ''}")
         if not ok:
             failures.append(label)
+
+    # The two the byte-scan vote got wrong: one reader each, inside runs of another delta.
+    for rva, expected in PINNED_DATA:
+        got = carry(rva, rows)
+        check(f"{rva:#x} carries to {expected:#x}, where its reader reads",
+              got == expected, "refused" if got is None else f"got {got:#x}")
+    # The table's contract: every read target carries to where a strict majority of its trusted
+    # readers read, and one they split on is refused.
+    missed = sorted(t for t, v in verdicts.items()
+                    if carry(t, rows) != (None if v.delta is None else t + v.delta))
+    split = sum(1 for v in verdicts.values() if v.delta is None)
+    lone = sum(1 for v in verdicts.values() if v.readers == 1)
+    check(f"{len(verdicts) - len(missed)} of {len(verdicts)} read targets carry to their trusted "
+          f"readers' majority ({lone} have one reader, {split} split and are refused)",
+          len(verdicts) > 50000 and not missed, ", ".join(f"{t:#x}" for t in missed[:10]))
+    doubted = sum(1 for r in readers if r.new_target is not None and r.doubt)
+    print(f"        {doubted} same-shape readers do not vote: the code after them changed")
+    # A `lea` whose 2.7.2.0 instruction names another vtable; its vtable stays with the neighbours.
+    check("0x2be2fa0 (its only reader's code changed) carries with its neighbours, +0x22b0",
+          carry(0x2BE2FA0, rows) == 0x2BE2FA0 + 0x22B0)
+    # Arxan stubs re-randomise their slots per build: `0xfdf4d0` would carry this by +0x10040.
+    check("0x3d6a2c4 (read only by an Arxan stub) carries with its neighbours, +0x3020",
+          carry(0x3D6A2C4, rows) == 0x3D6A2C4 + 0x3020)
 
     po = old.pdata()
     check(f"{len(pairs)} of {len(po)} .pdata entries paired", len(pairs) > 0.99 * len(po))
@@ -467,7 +867,11 @@ def main() -> int:
     ap.add_argument("addresses", nargs="*")
     ap.add_argument("--write", action="store_true", help=f"regenerate {TSV.relative_to(REPO_ROOT)}")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--measure", action="store_true",
+                    help="check every decoded reader against the tsv, or against each TSV named")
     a = ap.parse_args()
+    if a.selftest or a.write or a.measure:
+        _ensure_decoder()
     if a.selftest:
         return selftest()
     if a.write:
@@ -475,6 +879,35 @@ def main() -> int:
         write_tsv(text, data)
         print(f"wrote {TSV}: {len(text)} text and {len(data)} data segments")
         return 0
+    if a.measure:
+        old, new = Image(OLD_IMAGE), Image(NEW_IMAGE)
+        rc = 0
+        for path in [Path(p) for p in a.addresses] or [TSV]:
+            rows = read_tsv(path)
+            agree, disagree = measure(rows, old, new)
+            trusted = [r for r in agree + disagree if not r.doubt]
+            print(f"{path}: {len(agree)} readers agree, {len(disagree)} disagree "
+                  f"({len({r.target for r in disagree})} targets); of the {len(trusted)} whose "
+                  f"following code matches, {len(trusted) - sum(1 for r in disagree if not r.doubt)} "
+                  f"agree")
+            votes: dict[int, Counter] = defaultdict(Counter)
+            for r in trusted:
+                votes[r.target][r.new_target - r.target] += 1
+            for r in sorted(disagree, key=lambda r: (r.target, r.insn)):
+                got = carry(r.target, rows)
+                c = votes.get(r.target, Counter())
+                n = sum(c.values())
+                if r.doubt:
+                    why = f"code changed: {r.doubt}"
+                elif c.most_common(1)[0][1] * 2 > n:
+                    why = f"outvoted: {c[r.new_target - r.target]} of {n} matching readers read here"
+                else:
+                    why = f"its {n} matching readers split evenly"
+                print(f"  {r.target:#x} read at {r.insn:#x} ({'leaf' if r.fn is None else f'fn {r.fn:#x}'}): "
+                      f"table {'refuses' if got is None else f'{got:#x}'}, reader reads "
+                      f"{r.new_target:#x} -- {why}")
+            rc |= bool(disagree)
+        return rc
     if not a.addresses:
         ap.print_help()
         return 2

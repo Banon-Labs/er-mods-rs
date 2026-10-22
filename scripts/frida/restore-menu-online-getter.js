@@ -1,6 +1,9 @@
 // Restore `Menu_IsEnableOnlineMode` to its vanilla bytes on a LIVE game, and leave
 // `GameMan::IsOnlineMode` alone.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // er_quickload's `apply_online_disable` writes `xor eax,eax; ret` over both getters at DLL
 // attach, and the restore that used to undo them was deleted (user directive 2026-09-17), so
 // both stay stubbed for the whole process. This agent lifts exactly one of them, as a reversible
@@ -13,8 +16,8 @@
 // rvas are 1.17.1 (the installed build). `Menu_IsEnableOnlineMode` 1.16.2 0xe56310 -> 1.17
 // 0xe58180, which is what the DLL's own `ADDRESS TRANSLATED` log line reports.
 
-const MENU_ONLINE_GETTER_RVA = 0xe58180;
-const ONLINE_MODE_GETTER_RVA = 0x67ae80;
+const MENU_ONLINE_GETTER_RVA = 0xe59870; // 1.17.1 0xe58180
+const ONLINE_MODE_GETTER_RVA = 0x67b330; // 1.17.1 0x67ae80
 
 // `push rbx; sub rsp,0x70` -- read out of eldenring-deobf-1.17.1.bin at the rva above.
 const VANILLA_FIRST_THREE = [0x40, 0x53, 0x48];

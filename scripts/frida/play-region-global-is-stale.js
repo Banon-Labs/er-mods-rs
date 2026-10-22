@@ -1,5 +1,8 @@
 // Does `PLAY_REGION_POINT_MAN_GLOBAL_RVA` need translating on the installed build?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The claim under test
 //
 // `er-invasion-warp-core`'s `live_points` reads the region-point manager as
@@ -32,7 +35,7 @@ const MODULE = 'eldenring.exe';
 const STALE_RVA = 0x3d6e388;
 
 // What `docs/recon/rva-map-1162-to-1170.data.tsv` now records for it, 25 references agreeing.
-const MAPPED_RVA = 0x3d723f8;
+const MAPPED_RVA = 0x3d75418; // 1.17.1 0x3d723f8
 
 // `POINT_MAN_MAP_OFFSET` -- the container inside the manager, and `live_points`'s next hop.
 const MAP_OFFSET = 0x8;

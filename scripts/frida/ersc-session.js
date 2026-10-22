@@ -1,5 +1,8 @@
 // Cancel an invasion whose destination is not the block the player is standing in.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What this proves
 //
 // The DLL's own filter judges correctly and then cannot act, because it never finds Seamless's
@@ -39,8 +42,8 @@ const STATE = 0x150;
 // 0x1405efe00`, and the base is 0x140000000. Getting that subtraction wrong is silent -- an
 // `Interceptor` on the wrong address installs cleanly and simply never fires, which is what a
 // first attempt at this did with 0xafc370 while the player sat inside an invasion.
-const JOIN_SEAM_RVA = 0x6fc370;
-const GET_CURRENT_MAP_ID_RVA = 0x5efe00;
+const JOIN_SEAM_RVA = 0x6fc820; // 1.17.1 0x6fc370
+const GET_CURRENT_MAP_ID_RVA = 0x5f02b0; // 1.17.1 0x5efe00
 const JOIN_DATA_DESTINATION_BLOCK = 0x00;
 
 let menuObject = null;

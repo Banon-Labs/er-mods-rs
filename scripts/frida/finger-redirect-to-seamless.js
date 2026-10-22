@@ -1,5 +1,8 @@
 // The port, prototyped: the vanilla finger's bounds prompt, answered, drives Seamless's invade.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # What is being replaced
 //
 // Confirming the vanilla prompt reaches `FUN_1407c2e10`, which reads the answer through
@@ -22,7 +25,7 @@
 // highlight.  So `REDIRECT_ROW` is configurable and defaults to -1, meaning "any confirming
 // answer", which proves the mechanism without needing the highlight solved first.  Setting it to 1
 // is the whole difference between the prototype and the product rule.
-const POPUP_RESULT_READER = ptr('0x1407ee550');
+const POPUP_RESULT_READER = ptr('0x1407eea00'); // 1.17.1 0x1407ee550
 const ERSC_INVADE = 0x25850;
 const SESSION_OWNER = 0x58;
 const SESSION_STATE = 0x150;

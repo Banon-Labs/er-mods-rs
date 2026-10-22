@@ -1,6 +1,6 @@
 // Which of the three per-frame "show this sign" terms fails for an NPC red sign.
 //
-// SosSignMan's sign update (1.16.2 FUN_1406ff190, 1.17.1 0x1406fffe0) sets SosSignData+0x30 every
+// SosSignMan's sign update (1.16.2 FUN_1406ff190, 1.17.1 0x1406fffe0, 2.7.2.0 0x140700490) sets SosSignData+0x30 every
 // frame to !IsSignsPresent() && SummoningFrame::Check(&f, &sign.multiplayType) &&
 // FUN_1406fba00(&sign), then calls CreateSignSfx, which destroys the sign's effect when +0x30 is 0.
 // The DLL's duel sign for entity 35000 had +0x30 == 0 and no visible effect (2026-10-06). This
@@ -13,10 +13,16 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-const SIGN_UPDATE = va('0x1406fffe0');      // 1.16.2 0x1406ff190, +0xe50, prologue identical
-const IS_SIGNS_PRESENT = va('0x1401d3000'); // 1.16.2 0x1401d3000, delta 0
-const CHECK_FRAME = va('0x1406f3410');      // CheckSummoningFrame body, 1.16.2 0x1406f25c0
-const SIGN_TERM3 = va('0x1406fc850');       // 1.16.2 FUN_1406fba00(SosSignData**)
+// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; each body matches
+// between the two de-Arxan'd images with its rip-relative and branch operands carried.
+// 1.16.2 0x1406ff190, 1.17.1 0x1406fffe0 -> 0x140700490
+const SIGN_UPDATE = va('0x140700490');
+// 1.16.2 0x1401d3000, 1.17.1 0x1401d3000, did not move
+const IS_SIGNS_PRESENT = va('0x1401d3000');
+// CheckSummoningFrame body, 1.16.2 0x1406f25c0, 1.17.1 0x1406f3410 -> 0x1406f38c0
+const CHECK_FRAME = va('0x1406f38c0');
+// 1.16.2 FUN_1406fba00(SosSignData**), 1.17.1 0x1406fc850 -> 0x1406fcd00
+const SIGN_TERM3 = va('0x1406fcd00');
 
 let inUpdate = 0;
 let last = 0;

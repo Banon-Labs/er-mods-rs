@@ -67,7 +67,7 @@ from pathlib import Path
 
 PROC = "/proc"
 IMAGE_BASE = 0x140000000
-GAME_MAN_SINGLETON_VA = 0x143D6D988  # 1.17; 1.16.2 had it at 0x143d69918
+GAME_MAN_SINGLETON_VA = 0x143D709A8  # 2.7.2.0; 1.17 had it at 0x143D6D988, 1.16.2 at 0x143d69918
 SAVE_STATE_OFFSET = 0xB80
 DEFAULT_PROTON = "Proton - Experimental"
 

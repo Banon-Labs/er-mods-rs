@@ -12,18 +12,25 @@
 //          state, weapons and armour) and the NpcParam of everything else
 //
 // Passive: no hook here changes what the game does.
+//
+// Addresses are 2.7.2.0, measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py,
+// written `1.17.1 -> 2.7.2.0`. Both hooked bodies match eldenring-deobf-1.17.2.bin apart from
+// rip-relative and branch operands; WorldChrMan was checked through its readers.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 const cfg = Object.assign({ radius: 40, charEveryMs: 5000 }, globalThis.__ER_FRIDA_CONFIG || {});
 
-const FRAME_TICK = va('0x140773900');
-const WORLD_CHR_MAN = va('0x143d69ff8');
-const CALC_DAMAGE2 = va('0x140448910');
+const FRAME_TICK = va('0x140773db0');      // 0x140773900 -> 0x140773db0
+const WORLD_CHR_MAN = va('0x143d6d018');   // 0x143d69ff8 -> 0x143d6d018
+const CALC_DAMAGE2 = va('0x1404489f0');    // 0x140448910 -> 0x1404489f0
 const MAIN_PLAYER = 0x1e508;
 // fromsoftware-rs WorldChrMan: chr_sets[196] directly below null_chr_set, player_grid_area and
 // main_player; ChrSet capacity +0x10, entries +0x18, 16-byte entries with the ChrIns first.
+// WorldChrManImp grew 0x10 bytes past +0x1e5e8 in 2.7.2.0. chr_sets (+0x1ded8) and main_player
+// (+0x1e508) are below that: 7 of 8 and 456 of 469 of their 1.17.1 readers are unchanged at their
+// carried place.
 const CHR_SETS = MAIN_PLAYER - 0x10 - 196 * 8;
 
 // ChrIns (fromsoftware-rs cs/chr_ins.rs): +0x60 npc_param_id, +0x68 chr_type, +0x6c team_type,

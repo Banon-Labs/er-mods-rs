@@ -1,5 +1,8 @@
 // Who clears the player's d-pad binding while they are playing?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The gap this closes
 //
 // Action 0x0f of `CSPcKeyConfig` is "switch right armament". On 2026-09-19 a live process was
@@ -68,7 +71,7 @@ const SAVE_LOAD_STORE_RVA = 0x23f280;
 const REBUILD_RVA = 0x243200;
 
 // `qword ptr [0x143d61f08]`, the key-config singleton on 1.17.
-const KEY_CONFIG_GLOBAL_RVA = 0x3d61f08;
+const KEY_CONFIG_GLOBAL_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 
 // `lea rcx,[rcx + idx*0x14 + 0x440]` in the accessor at rva 0x242ab0.
 const CURRENT_TABLE_OFFSET = 0x440;
@@ -254,7 +257,7 @@ if (game === null) {
   // signature, 32 fixed) to `0x140772a50`, and the rva is below the 1.17.0 -> 1.17.1 boundary
   // `0xafefe9` so the installed build shares it. Read before hooking: it loads a float global and
   // branches on it before doing any work, which is the shape of an update taking a frame delta.
-  const FRAME_UPDATE_RVA = 0x772a50;
+  const FRAME_UPDATE_RVA = 0x772f00; // 1.17.1 0x772a50
   const DEFAULT_TABLE_OFFSET = 0x008;
   const PAD_FIELD_OFFSET = 0x00;
   const ROW_COUNT = 0x36;

@@ -2,28 +2,33 @@
 // read on the game thread once per few frames. Read-only: no write, no watchpoint, no
 // MemoryAccessMonitor. The one call it makes into the game is the engine's own handle lookup.
 //
-// Every offset below was established statically against the installed 1.17.1
-// (`eldenring-deobf-1.17.1.bin`) before this file was written; the point of running it is to see
-// the values the static reading cannot give -- what an enemy's FP/stamina maxima really hold, that
-// a status gauge falls from the resistance and snaps back on a proc, and what the stance maximum
-// is on an ordinary enemy.
+// Every offset below was established statically against 1.17.1 (`eldenring-deobf-1.17.1.bin`)
+// before this file was written, and carried to the installed 2.7.2.0
+// (`eldenring-deobf-1.17.2.bin`) with scripts/map-rvas-1171-to-1172.py: each cited instruction is
+// the same instruction, same displacement, at its 2.7.2.0 address. The point of running it is to
+// see the values the static reading cannot give -- what an enemy's FP/stamina maxima really hold,
+// that a status gauge falls from the resistance and snaps back on a proc, and what the stance
+// maximum is on an ordinary enemy. Addresses read 1.17.1 -> 2.7.2.0:
 //
-//   WorldChrManImp global      rva 0x3d69ff8   (0x140344e29: mov rdx,[rip+0x3a251c8])
-//   ->mainPlayer               +0x1e508        (0x140344e30)
-//   PlayerIns lockedOnEnemy    +0x6b0          (read 0x140344e3a; LockTgtMan writes -1 at
-//                                              0x14071806a and the target's handle at 0x1407180d2)
-//   LockTgtMan update          rva 0x7170b0    (prologue byte-identical to 1.16.2 0x140716260)
-//   GetChrInsFromHandle        rva 0x508a50    (tail call of the point resolver 0x140714c5f)
+//   WorldChrManImp global      rva 0x3d69ff8 -> 0x3d6d018 (0x140344e29, unmoved: mov rdx,[rip+..])
+//   ->mainPlayer               +0x1e508        (0x140344e30, unmoved)
+//   PlayerIns lockedOnEnemy    +0x6b0          (read 0x140344e3a, unmoved; LockTgtMan writes -1 at
+//                                              0x14071806a -> 0x14071851a and the target's handle
+//                                              at 0x1407180d2 -> 0x140718582)
+//   LockTgtMan update          rva 0x7170b0 -> 0x717560 (prologue byte-identical to 1.16.2 0x140716260)
+//   GetChrInsFromHandle        rva 0x508a50 -> 0x508cd0 (tail call of the point resolver
+//                                              0x140714c5f -> 0x14071510f)
 //   ChrIns handle +0x8, npc_param_id +0x60, chr_type +0x68, specialEffect +0x178, modules +0x190
 //   modules: data +0x0, resist +0x20, superArmor +0x40
-//   CSChrDataModule hp/max +0x138/+0x13c (GetHpRate 0x1404377c0), fp +0x148/+0x14c,
-//                   stamina +0x154/+0x158 (ctor stores 1 into all of them, 0x140436610)
-//   CSChrSuperArmorModule cur +0x10, max +0x14 (rewritten every frame, 0x14047ecbf),
+//   CSChrDataModule hp/max +0x138/+0x13c (GetHpRate 0x1404377c0 -> 0x140437850), fp +0x148/+0x14c,
+//                   stamina +0x154/+0x158 (ctor stores 1 into all of them, 0x140436610 -> 0x1404366a0)
+//   CSChrSuperArmorModule cur +0x10, max +0x14 (rewritten every frame, 0x14047ecbf -> 0x14047ed9f),
 //                   speffect bonus +0x18, recover timer +0x1c
-//   CSChrResistModule gauge[7] i32 +0x10, resistance[7] i32 +0x2c (0x14043de14, 0x14043e9c5)
+//   CSChrResistModule gauge[7] i32 +0x10, resistance[7] i32 +0x2c (0x14043de14 -> 0x14043dea4,
+//                   0x14043e9c5 -> 0x14043ea55)
 //   SpecialEffect head +0x8; entry param row +0x0, next +0x30, timer +0x40, flags +0x60
-//                   (entries with flags & 0x800c0003 are skipped by the engine, 0x1404fd490)
-//   SpEffectParam stateInfo u16 +0x156 (0x14043e7e5)
+//                   (entries with flags & 0x800c0003 are skipped by the engine, 0x1404fd490 -> 0x1404fd570)
+//   SpEffectParam stateInfo u16 +0x156 (0x14043e7e5 -> 0x14043e875)
 //
 // Run, against an approved session only:
 //   python3 scripts/er-frida-up.py
@@ -31,9 +36,9 @@
 
 'use strict';
 
-const RVA_WORLD_CHR_MAN = 0x3d69ff8;
-const RVA_LOCK_TGT_UPDATE = 0x7170b0;
-const RVA_GET_CHR_INS_FROM_HANDLE = 0x508a50;
+const RVA_WORLD_CHR_MAN = 0x3d6d018; // 1.17.1 0x3d69ff8
+const RVA_LOCK_TGT_UPDATE = 0x717560; // 1.17.1 0x7170b0
+const RVA_GET_CHR_INS_FROM_HANDLE = 0x508cd0; // 1.17.1 0x508a50
 
 const MAIN_PLAYER = 0x1e508;
 const LOCKED_ON_ENEMY = 0x6b0;

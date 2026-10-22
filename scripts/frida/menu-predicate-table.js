@@ -1,5 +1,8 @@
 // Who sets a menu grid's cell count, and from which module.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why this and not the predicate table
 //
 // The first version of this agent read the 61-entry menu-availability predicate table at 1.17.1
@@ -23,7 +26,7 @@
 // er_quickload's own row cloner calls this deliberately for the System>Quit dialog's grid, so a
 // hit attributed to `er_quickload.dll` is only interesting if its grid is not that dialog's.
 
-const SET_ITEM_COUNT_RVA = 0x739c10;
+const SET_ITEM_COUNT_RVA = 0x73a0c0; // 1.17.1 0x739c10
 const GRID_ITEM_COUNT_OFFSET = 0xd0;
 const IMAGE_BASE = ptr('0x140000000');
 

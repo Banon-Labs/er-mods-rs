@@ -1,5 +1,8 @@
 // Where a D-pad Right press stops, between the pad poll and the right-hand armament switch.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The symptom, reported 2026-09-19: "After invading, I can't press right on my dpad to switch
 // weapons on my right side". Every hook this repo's DLLs had armed on that run was cleared by
 // reading the run log and the 1.17 decompile -- the deathblight penalty never armed, the
@@ -34,7 +37,7 @@
 // `scripts/map-rvas-1170-to-1171.py`: the rva is at or above the `0xafefe9` boundary, so the
 // function moved `+0x70`. Its shape in the decompile is the anchor -- it calls `XInputGetState`
 // and stores `wButtons` to `param_1 + 0x890`.
-const POLL_RVA = 0x1f6d940;
+const POLL_RVA = 0x1f6f030; // 1.17.1 0x1f6d940
 
 // `XINPUT_GAMEPAD.wButtons` as the poll stored it, on the pad device object.
 const DEVICE_BUTTONS_OFFSET = 0x890;
@@ -59,7 +62,7 @@ const DPAD_LEFT = 0x0004;
 // being consumed as a MENU event while the player is in gameplay. That would mean something is
 // holding menu input open over the world -- an overlay is the obvious candidate -- and it is a
 // different fault from the game refusing an armament switch on its own state.
-const CS_MENU_MAN_RVA = 0x3d6f820;
+const CS_MENU_MAN_RVA = 0x3d72840; // 1.17.1 0x3d6f820
 
 // Logical input-event array: one i32 per event id. The game's node update writes
 // `CSMenuMan + 0xdc + eventId * 4`.
@@ -73,7 +76,7 @@ const MENU_EVENT_SCAN_COUNT = 128;
 const MENU_KEYSTATE_OFFSET = 0x90;
 
 // `GameDataMan`, 1.16.2 `0x3d5df38` -> 1.17 `0x3d61f98`, 642/642 references agreeing.
-const GAME_DATA_MAN_RVA = 0x3d61f98;
+const GAME_DATA_MAN_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 
 // `GameDataMan + 0x8` -> `PlayerGameData`, and `PlayerGameData + 0x2b0` -> `EquipGameData`, which
 // is embedded rather than pointed to.

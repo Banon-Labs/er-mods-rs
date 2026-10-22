@@ -1,22 +1,24 @@
 // Which inputs reach which layer, for choosing where the chainsaw driver injects.
 //
-//   vk      the one writer of FD4PadDevice+0x88, 1.17.1 0x142665d20 [1.16.2 0x1426634a0]. Keyboard
-//           input never reached it (every key pressed, 0 calls, 2026-10-04).
-//   action  CSChrActionRequestModule::UpdateFromManipulator, 1.17.1 0x140408190 [0x140407c60]: on
-//           entry +0x10 holds the raw action bits the manipulator wrote this frame (+0x18 previous,
-//           +0x40 disabled), whichever device produced them.
+//   vk      the one writer of FD4PadDevice+0x88, 1.17.1 0x142665d20 -> 2.7.2.0 0x142667450
+//           [1.16.2 0x1426634a0]. Keyboard input never reached it (every key pressed, 0 calls,
+//           2026-10-04).
+//   action  CSChrActionRequestModule::UpdateFromManipulator, 1.17.1 0x140408190 -> 2.7.2.0
+//           0x140408220 [0x140407c60]: on entry +0x10 holds the raw action bits the manipulator
+//           wrote this frame (+0x18 previous, +0x40 disabled), whichever device produced them.
 //
+// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
 // Reported every 60 action-module updates while anything is set. Read-only.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const WRITER = va('0x142665d20');
-const UPDATE_FROM_MANIPULATOR = va('0x140408190');
+const WRITER = va('0x142667450');
+const UPDATE_FROM_MANIPULATOR = va('0x140408220');
 
 const devices = new Map();
 const S_owner = new Map();
-const WCM = game.base.add(0x3d69ff8);
+const WCM = game.base.add(0x3d6d018); // 1.17.1 0x3d69ff8
 function mainPlayer () { try { const w = WCM.readPointer(); return w.isNull() ? null : w.add(0x1e508).readPointer().toString(); } catch (e) { return null; } }
 let ticks = 0;
 let vk = {};

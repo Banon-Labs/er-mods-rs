@@ -38,7 +38,8 @@ const STICK_FULL = 32767;
 const ACT = { R1: 1 << 0, L1: 1 << 2, L2: 1 << 3, USE_ITEM: 1 << 7, CHANGE_WEAPON_L: 1 << 10, R3: 1 << 12 };
 // The pad taps the core asks for, as request bits.
 const TAP_ACT = { 0x0004: ACT.CHANGE_WEAPON_L, 0x0080: ACT.R3 };
-// A d-pad tap is not a request bit. The pad manipulator (1.17.1 0x1403daa90 [FUN_1403daa80]) hands a
+// A d-pad tap is not a request bit. The pad manipulator (1.17.1 0x1403daa90, unmoved in 2.7.2.0
+// [FUN_1403daa80]) hands a
 // short press of action 9/10 to the character as a command, `ChrIns` vtable +0x2c0 with 0x21 (right)
 // or 0x22 (left), which only stores it at PlayerIns+0x6a8. The decompile's following
 // `SetRequestActionState(USE_ITEM)` is not part of the tap: bit 7 is the item-use button, and sending
@@ -766,7 +767,8 @@ function createDriver (userConfig) {
   };
 
   // Counted from the equip event's frame. L2 is released while the menu is still open: a button
-  // held through the menu stays masked after it closes (UpdateFromManipulator 0x140408190).
+  // held through the menu stays masked after it closes (UpdateFromManipulator 1.17.1 0x140408190
+  // -> 2.7.2.0 0x140408220).
   H.RELEASE_L2 = function (obs) {
     d.l2 = false;
     if (d.frame - d.ctx.equipFrame >= cfg.releaseFrames) return go(action ? 'REHOLD_L2' : 'CLOSE_MENU', 'L2 released after equip', { frames: d.frame - d.ctx.equipFrame, anims: obs.anims });
@@ -1380,44 +1382,50 @@ function bind () {
   const inImage = function (p) { return !p.isNull() && p.compare(lo) >= 0 && p.compare(hi) < 0; };
   // About 28 percent of entries on this build open with an Arxan healing stub; a hook on the stub
   // never fires. Wine's XInput exports open with the same 5-byte jump.
-  // 1.16.2 0x144588af1 -> 1.17.0 0x14458cb71 (docs/recon/rva-map-1162-to-1170.data.tsv); .data did
-  // not move in 1.17.1.
-  const FOCUS_BYTE = va('0x14458cb71');
+  // `Game.Debug.IsEnableControlOnDisactiveWindow`: 1.16.2 0x144588af1 -> 1.17.0/1.17.1 0x14458cb71
+  // (docs/recon/rva-map-1162-to-1170.data.tsv) -> 2.7.2.0 0x14458fb91. Its one reader, the getter
+  // stub that STEP_Update+0xa3c and the CSPadStep constructor+0x7e call (1.17.1 0x140e55090 ->
+  // 2.7.2.0 0x140e56780), reads 0x14458fb91 in the 2.7.2.0 image.
+  const FOCUS_BYTE = va('0x14458fb91');
   const follow = function (a) { return a.readU8() === 0xe9 ? a.add(5).add(a.add(1).readS32()) : a; };
 
-  // 1.17.1 addresses, each with its 1.16.2 source. Everything below rva 0xafefe9 is identical in
-  // 1.17.0 and 1.17.1; mapped with scripts/map-rvas-1162-to-1170.py (unique signatures unless noted).
+  // 2.7.2.0 addresses: `1.17.1 -> 2.7.2.0` after each, then its 1.16.2 source in brackets. The
+  // 1.17.1 values came from scripts/map-rvas-1162-to-1170.py (unique signatures unless noted); the
+  // step to 2.7.2.0 is scripts/map-rvas-1171-to-1172.py, and every function below opens with the
+  // same bytes in both images (rel32/rip displacements masked).
   const A = {
-    PRE_BEHAVIOR_SAFE: va('0x140401f30'), // CS::ChrIns::PreBehaviorSafe [0x140401bd0]
-    UPDATE_FROM_MANIPULATOR: va('0x140408190'), // CSChrActionRequestModule::UpdateFromManipulator [0x140407c60]
-    FE_UPDATE: va('0x140772a50'), // CSFeManImp::Update [0x140771bd0]; hooked live 2026-09-19
-    MENU_WINDOW_JOB_RUN: va('0x1407ae040'), // MenuWindowJob::Run, job+0x130 = window [0x1407ad1c0]
-    GATE: va('0x140789910'), // CanChangeEquipmentInSlot(ChrAsmSlot) [0x140788a90], equip-gate.md
-    GATE_RET_SLOT_CONFIRM: va('0x1408de3aa'), // its call in EquipDialog vtable+0x90 (0x1408de350)
-    GATE_RET_COMMIT: va('0x140788b00'), // its call in EquipItemToChrAsmSlot
-    GR_DIALOGUES: va('0x140760a20'), // GetGR_Dialogues(out, id); 103130 "Cannot change equipment"
-    RECORD_NAME: va('0x14099a5a0'), // item list detail panel names the highlighted record (er-r3-view)
+    PRE_BEHAVIOR_SAFE: va('0x140401fc0'), // 0x140401f30 -> 0x140401fc0, CS::ChrIns::PreBehaviorSafe [0x140401bd0]
+    UPDATE_FROM_MANIPULATOR: va('0x140408220'), // 0x140408190 -> 0x140408220, CSChrActionRequestModule::UpdateFromManipulator [0x140407c60]
+    FE_UPDATE: va('0x140772f00'), // 0x140772a50 -> 0x140772f00, CSFeManImp::Update [0x140771bd0]; hooked live 2026-09-19
+    MENU_WINDOW_JOB_RUN: va('0x1407ae4f0'), // 0x1407ae040 -> 0x1407ae4f0, MenuWindowJob::Run, job+0x130 = window [0x1407ad1c0]
+    GATE: va('0x140789dc0'), // 0x140789910 -> 0x140789dc0, CanChangeEquipmentInSlot(ChrAsmSlot) [0x140788a90], equip-gate.md
+    // Return addresses of the gate's two calls. Each caller is the same bytes from its entry through
+    // the call in both images, and the call lands on GATE in both.
+    GATE_RET_SLOT_CONFIRM: va('0x1408de85a'), // 0x1408de3aa -> 0x1408de85a, its call in EquipDialog vtable+0x90 (0x1408de350 -> 0x1408de800)
+    GATE_RET_COMMIT: va('0x140788fb0'), // 0x140788b00 -> 0x140788fb0, its call in EquipItemToChrAsmSlot
+    GR_DIALOGUES: va('0x140760ed0'), // 0x140760a20 -> 0x140760ed0, GetGR_Dialogues(out, id); 103130 "Cannot change equipment"
+    RECORD_NAME: va('0x14099aa50'), // 0x14099a5a0 -> 0x14099aa50, item list detail panel names the highlighted record (er-r3-view)
     // The detail panel's update, run on every cursor move [0x140998790] (er-r3-view imp.rs,
     // r3-view3-cursor.js). It names the record only while one of its two status holders is shown:
     // holder A (parts+0x180) or holder B (parts+0x198, shown only in view 2).
-    PANEL_UPDATE: va('0x140999930'),
-    GET_WEAPON_NAME: va('0x140d12ab0'), // MsgRepositoryImp::GetWeaponName(msg, id) [0x140d11370]
-    EQUIP_TO_SLOT: va('0x140788ab0'), // EquipItemToChrAsmSlot(ChrAsmSlot, MenuGaitem*) [0x140787c30]
-    UNEQUIP: va('0x14078ace0'), // UnequipItem(ChrAsmSlot, bool removeItem) [0x140789e60]
-    GET_EQUIP_INVENTORY: va('0x140247b30'), // EquipGameData::GetEquipInventoryData = egd+0x158 [0x140247b30]
-    GET_ITEM_INVENTORY_IDX: va('0x14024c560'), // EquipInventoryData::GetItemInventoryIdx(inv, int*) [0x14024c560]
-    GET_SLOT_BY_ITEM_IDX: va('0x140248440'), // EquipGameData::GetSlotIndexByItemIndex(egd, idx) [0x140248440]
-    // EquipGameData::GetParamIdInSlot(egd, slot) [0x1402470e0]: the game-data view, which an equip
-    // changes at once; the PlayerIns view (GET_EQUIP) follows on the character's next update.
+    PANEL_UPDATE: va('0x140999de0'), // 0x140999930 -> 0x140999de0
+    GET_WEAPON_NAME: va('0x140d141a0'), // 0x140d12ab0 -> 0x140d141a0, MsgRepositoryImp::GetWeaponName(msg, id) [0x140d11370]
+    EQUIP_TO_SLOT: va('0x140788f60'), // 0x140788ab0 -> 0x140788f60, EquipItemToChrAsmSlot(ChrAsmSlot, MenuGaitem*) [0x140787c30]
+    UNEQUIP: va('0x14078b190'), // 0x14078ace0 -> 0x14078b190, UnequipItem(ChrAsmSlot, bool removeItem) [0x140789e60]
+    GET_EQUIP_INVENTORY: va('0x140247b30'), // unmoved, EquipGameData::GetEquipInventoryData = egd+0x158 [0x140247b30]
+    GET_ITEM_INVENTORY_IDX: va('0x14024c560'), // unmoved, EquipInventoryData::GetItemInventoryIdx(inv, int*) [0x14024c560]
+    GET_SLOT_BY_ITEM_IDX: va('0x140248440'), // unmoved, EquipGameData::GetSlotIndexByItemIndex(egd, idx) [0x140248440]
+    // EquipGameData::GetParamIdInSlot(egd, slot) [0x1402470e0], unmoved: the game-data view, which
+    // an equip changes at once; the PlayerIns view (GET_EQUIP) follows on the character's next update.
     GET_PARAM_ID_IN_SLOT: va('0x1402470e0'),
-    WEAPON_SWITCH: va('0x14042d4d0'), // d-pad weapon switch [0x14042cf80]
-    CMSG_SET_TAE: va('0x1419bb530'), // CustomManualSelectorGenerator: argTaeId (+0xec) from the chosen clip [0x1419b96c0]
-    CALC_DAMAGE2: va('0x140448910'), // CalculateDamage2 [0x1404483b0]
-    CONSUME_FP: va('0x14047fba0'), // CSChrSwordArtsModule::ConsumeFp [0x14047f640]
-    GET_EQUIP: va('0x1406577b0'), // PlayerIns::GetEquipmentEntryParamId(PlayerIns*, -6..11) [0x140656960]
-    PAD_DEVICE_POLL: va('0x141f6d940'), // DLUID::PadDevice::Poll; wButtons at device+0x890 (1.17.1, measured 2026-09-19)
-    WORLD_CHR_MAN: va('0x143d69ff8'),
-    GAME_DATA_MAN: va('0x143d61f98'), // [0x143d5df38], data map 642/642
+    WEAPON_SWITCH: va('0x14042d560'), // 0x14042d4d0 -> 0x14042d560, d-pad weapon switch [0x14042cf80]
+    CMSG_SET_TAE: va('0x1419bcc20'), // 0x1419bb530 -> 0x1419bcc20, CustomManualSelectorGenerator: argTaeId (+0xec) from the chosen clip [0x1419b96c0]
+    CALC_DAMAGE2: va('0x1404489f0'), // 0x140448910 -> 0x1404489f0, CalculateDamage2 [0x1404483b0]
+    CONSUME_FP: va('0x14047fc80'), // 0x14047fba0 -> 0x14047fc80, CSChrSwordArtsModule::ConsumeFp [0x14047f640]
+    GET_EQUIP: va('0x140657c60'), // 0x1406577b0 -> 0x140657c60, PlayerIns::GetEquipmentEntryParamId(PlayerIns*, -6..11) [0x140656960]
+    PAD_DEVICE_POLL: va('0x141f6f030'), // 0x141f6d940 -> 0x141f6f030, DLUID::PadDevice::Poll; wButtons at device+0x890 (1.17.1, measured 2026-09-19)
+    WORLD_CHR_MAN: va('0x143d6d018'), // 0x143d69ff8 -> 0x143d6d018
+    GAME_DATA_MAN: va('0x143d64fb8'), // 0x143d61f98 -> 0x143d64fb8 [0x143d5df38], data map 642/642
   };
   const OFF = {
     MAIN_PLAYER: 0x1e508, // WorldChrMan -> main PlayerIns
@@ -1440,9 +1448,9 @@ function bind () {
     CHR_ASM: 0x6c, ARM_LEFT: 0x0c, ARM_RIGHT: 0x10, // EquipGameData.chr_asm; selected left/right slot 0..2
     MENU_GAITEM_SIZE: 0x80, MENU_GAITEM_IDX: 0x48, MENU_GAITEM_ID: 0x4c,
     PARTS_WINDOW: 0x10, // DetailStatusViewParts -> the GaitemSelectDialog that owns it
-    PARTS_VIEW: 0x8f8, // R3 view index (the step at 0x140998260)
+    PARTS_VIEW: 0x8f8, // R3 view index (the step at 1.17.1 0x140998260 -> 2.7.2.0 0x140998710)
     // Holder A's CompositeItemStatusDialog (parts+0x180+8); its first byte is the shown flag the
-    // holder's vtable+8 (0x140997c40) answers with.
+    // holder's vtable+8 (1.17.1 0x140997c40 -> 2.7.2.0 0x1409980f0) answers with.
     PARTS_HOLDER_A_COMPOSITE: 0x188,
     PAD_BUTTONS: 0x890,
   };
@@ -1451,17 +1459,17 @@ function bind () {
   const GET_EQUIP = new NativeFunction(A.GET_EQUIP, 'int', ['pointer', 'int']);
   const EQUIP = new NativeFunction(A.EQUIP_TO_SLOT, 'void', ['int', 'pointer']);
   const UNEQUIP = new NativeFunction(A.UNEQUIP, 'void', ['int', 'uint8']);
-  // Grant natives (er-build-import-runtime grant.rs), 1.16.2 -> 1.17 by docs/recon/rva-map-1162-to-1170: all
-  // below the 1.17.1 shift, and .data did not move.
-  const MINT_WEAPON_WITH_GEM = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'pointer', 'int', 'int']); // [0x140671ce0]
-  const ADD_INVENTORY_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // [0x140246480]
-  const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']); // [0x140682480]
-  const GLOBAL_CSGAITEM = va('0x143d6d900'); // [0x143d69890]
+  // Grant natives (er-build-import-runtime grant.rs), 1.16.2 -> 1.17 by docs/recon/rva-map-1162-to-1170
+  // (all below the 1.17.1 shift), then 1.17.1 -> 2.7.2.0 by scripts/map-rvas-1171-to-1172.py.
+  const MINT_WEAPON_WITH_GEM = new NativeFunction(va('0x140672fe0'), 'pointer', ['pointer', 'pointer', 'int', 'int']); // 0x140672b30 -> 0x140672fe0 [0x140671ce0]
+  const ADD_INVENTORY_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // unmoved [0x140246480]
+  const HANDLE_DTOR = new NativeFunction(va('0x140683780'), 'void', ['pointer']); // 0x1406832d0 -> 0x140683780 [0x140682480]
+  const GLOBAL_CSGAITEM = va('0x143d70920'); // 0x143d6d900 -> 0x143d70920 [0x143d69890]
   // GetMainPlayerStats(int out[10]) / ApplyMainPlayerStats(const int in[10]): level, then vigor, endurance, mind,
   // strength, dexterity, [6], intelligence, faith, arcane; the apply recomputes every derived value
   // (er-build-import-runtime character.rs). [0x140788360] / [0x140788cf0]
-  const GET_MAIN_PLAYER_STATS = new NativeFunction(va('0x1407891e0'), 'void', ['pointer']);
-  const APPLY_MAIN_PLAYER_STATS = new NativeFunction(va('0x140789b70'), 'void', ['pointer']);
+  const GET_MAIN_PLAYER_STATS = new NativeFunction(va('0x140789690'), 'void', ['pointer']); // 0x1407891e0 -> 0x140789690
+  const APPLY_MAIN_PLAYER_STATS = new NativeFunction(va('0x14078a020'), 'void', ['pointer']); // 0x140789b70 -> 0x14078a020
   const GET_INV = new NativeFunction(A.GET_EQUIP_INVENTORY, 'pointer', ['pointer']);
   const GET_IDX = new NativeFunction(A.GET_ITEM_INVENTORY_IDX, 'int', ['pointer', 'pointer']);
   const GET_SLOT_OF_IDX = new NativeFunction(A.GET_SLOT_BY_ITEM_IDX, 'int', ['pointer', 'int']);
@@ -1632,7 +1640,8 @@ function bind () {
   }
 
   // ------------------------------------------------------------------ input stage: action requests
-  // CSChrActionRequestModule::UpdateFromManipulator 1.17.1 0x140408190 [0x140407c60]. On entry +0x10
+  // CSChrActionRequestModule::UpdateFromManipulator 1.17.1 0x140408190 -> 2.7.2.0 0x140408220
+  // [0x140407c60]. On entry +0x10
   // holds the request bits the manipulator wrote this frame from whatever device; the function then
   // masks, edges and times them. Replacing them here for the player's module (owner at +0x8) is the
   // block and the injection at once, at the layer every device reaches.
@@ -1893,10 +1902,11 @@ function bind () {
 
   // Why the naming alone went stale (run of 2026-10-05, nav_no_effect in C3): the panel update
   // names the record only while holder A or holder B is shown. Opening the list in view 0 runs it
-  // once while holder A's freshly built composite still says shown (its constructor 0x140999ec0
-  // sets byte 0 to 1), which is the one naming the driver saw; view 0's pane callback
-  // (0x140999130) then applies sub-list +0xb50 index 0 and -1, which hides holder A through
-  // 0x140998f60, and view 0 is level 0 so holder B (level == 2) is hidden too. Every later cursor
+  // once while holder A's freshly built composite still says shown (its constructor 1.17.1
+  // 0x140999ec0 -> 2.7.2.0 0x14099a370 sets byte 0 to 1), which is the one naming the driver saw;
+  // view 0's pane callback (1.17.1 0x140999130 -> 2.7.2.0 0x1409995e0) then applies sub-list +0xb50
+  // index 0 and -1, which hides holder A through 1.17.1 0x140998f60 -> 2.7.2.0 0x140999410, and
+  // view 0 is level 0 so holder B (level == 2) is hidden too. Every later cursor
   // move reaches this function and names nothing. er-r3-view hit the same gate in its view 3 and
   // answers it the same way: holder A says shown for the length of this one call, so the record
   // under the cursor is named on every move whatever view the list is in. The panel itself stays
@@ -2124,7 +2134,8 @@ function bind () {
   }
 
   // The cell under EquipDialog's cursor and the ChrAsmSlot it edits, read the way its confirm
-  // handler (0x1408de350) reads them: rows at +0x2550, 0x58 apart, 8-aligned, slot at row+4.
+  // handler (1.17.1 0x1408de350 -> 2.7.2.0 0x1408de800) reads them: rows at +0x2550, 0x58 apart,
+  // 8-aligned, slot at row+4.
   function equipCursor () {
     const dlg = liveWindow(CLASS_EQUIP);
     if (dlg === null) return null;
@@ -2188,9 +2199,9 @@ function bind () {
   // `radius` metres are held at full HP, and those others get the Darkness SpEffect from the player
   // every `every` frames so they drop their target, the way er-enemynpc-effects applies it
   // (charm.rs: apply with the player as source, 1.16.2 0x1403fade0 -> 1.17 0x1403fb010, below the
-  // 1.17.1 shift). Offsets from fromsoftware-rs: data module hp +0x138 / max +0x13c, physics module
-  // (container +0x68) position +0x70.
-  const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb010'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
+  // 1.17.1 shift, -> 2.7.2.0 0x1403fb0a0). Offsets from fromsoftware-rs: data module hp +0x138 /
+  // max +0x13c, physics module (container +0x68) position +0x70.
+  const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb0a0'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
   const SUSTAIN_POS = Memory.alloc(16);
   const SUSTAIN_CORR = Memory.alloc(0x60);
   S.sustained = {};
@@ -2204,7 +2215,8 @@ function bind () {
     const max = dm.add(0x13c).readS32();
     if (max > 0 && dm.add(0x138).readS32() < max) dm.add(0x138).writeS32(max);
     // A hit bigger than max HP kills before the next refill, so the data module's no-death bit
-    // (+0x19b bit 0, tested by 1.17.1 0x1404379d0; +0x19b bit 1 is no-damage, 0x140437970) is set too
+    // (+0x19b bit 0, tested by 1.17.1 0x1404379d0 -> 2.7.2.0 0x140437a60; +0x19b bit 1 is
+    // no-damage, 1.17.1 0x140437970 -> 2.7.2.0 0x140437a00) is set too
     // and cleared again on dispose.
     const f = dm.add(0x19b).readU8();
     if ((f & 1) === 0) { dm.add(0x19b).writeU8(f | 1); S.noDead[dm.toString()] = dm; }

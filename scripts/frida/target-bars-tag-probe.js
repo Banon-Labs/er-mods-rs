@@ -2,27 +2,31 @@
 // enemy tag, or a boss bar at the bottom of the screen. Read-only: no write, no watchpoint, no
 // MemoryAccessMonitor; one Interceptor on the lock-on update, read on the game thread.
 //
-// Offsets (1.17.1, `eldenring-deobf-1.17.1.bin`):
-//   CSFeManImp global          rva 0x3d6f8f0   (GetCSFeManImp 0x1407164f0: mov rax,[rip+0x36593f5])
+// Offsets (read in `eldenring-deobf-1.17.1.bin`; addresses carried 1.17.1 -> 2.7.2.0 with
+// scripts/map-rvas-1171-to-1172.py, and each cited function is the same bytes in
+// `eldenring-deobf-1.17.2.bin`):
+//   CSFeManImp global          rva 0x3d6f8f0 -> 0x3d72910 (GetCSFeManImp 0x1407164f0 -> 0x1407169a0:
+//                              mov rax,[rip+..])
 //   hudState                   +0x78
 //   frontendValues             +0x80; its chrNameHudEnemy[8] at +0x11d0 (=+0x1250), stride 0x128,
 //                              chrNameHudBoss[3] at +0x1b10 (=+0x1b90); a ChrNameHudData holds
 //                              isVisible +0x0, updatePosition +0x1, isNotOnScreen +0x2,
 //                              handle +0x8, screenX +0x10, screenY +0x14 (Ghidra types them float,
 //                              fromsoftware-rs i32 -- both are reported), hp +0x18, maxHp +0x20
-//   chrEnemyTagDisplays[8]     +0x59f0 (UpdateEnemyTags 0x1407724f0: add rbx,0x59f0), stride 0x40:
-//                              handle +0x0, screenPos f32x4 +0x10, isVisible +0x34
+//   chrEnemyTagDisplays[8]     +0x59f0 (UpdateEnemyTags 0x1407724f0 -> 0x1407729a0: add rbx,0x59f0),
+//                              stride 0x40: handle +0x0, screenPos f32x4 +0x10, isVisible +0x34
 //   bossHealthDisplays[3]      +0x5bf0, stride 0x20: fmg id +0x0, handle +0x8, damage +0x10
-//   Lock-on: WorldChrMan rva 0x3d69ff8 ->+0x1e508 ->+0x6b0; LockTgtMan update rva 0x7170b0.
+//   Lock-on: WorldChrMan rva 0x3d69ff8 -> 0x3d6d018 ->+0x1e508 ->+0x6b0; LockTgtMan update rva
+//   0x7170b0 -> 0x717560.
 //
 // The 01_000_fe.gfx stage is 1920x1080. EnemyTagN and BossList are placed on the root timeline,
 // so whichever of these fields holds stage pixels is what the movie positions the tag with.
 
 'use strict';
 
-const RVA_WORLD_CHR_MAN = 0x3d69ff8;
-const RVA_FE_MAN = 0x3d6f8f0;
-const RVA_LOCK_TGT_UPDATE = 0x7170b0;
+const RVA_WORLD_CHR_MAN = 0x3d6d018; // 1.17.1 0x3d69ff8
+const RVA_FE_MAN = 0x3d72910; // 1.17.1 0x3d6f8f0
+const RVA_LOCK_TGT_UPDATE = 0x717560; // 1.17.1 0x7170b0
 const EVERY_CALLS = 15;
 
 const base = Process.getModuleByName('eldenring.exe').base;

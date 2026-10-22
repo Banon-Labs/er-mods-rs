@@ -1,5 +1,8 @@
 // Write the online flag back to 1 and watch whether anything writes it down again.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // Restoring both getters changed nothing because neither was the problem: `GameMan+0xbc8` itself
 // reads 0, so the getter faithfully returns the zero somebody stored. This does the direct thing --
 // store 1 -- and then arms a hardware watchpoint on that byte so a rewrite names its own
@@ -8,7 +11,7 @@
 // `Thread.setHardwareWatchpoint`, never `MemoryAccessMonitor`: the latter revokes access to a whole
 // 4 KB page and killed this game at `ersc+0x89e23` on 2026-09-15. A watchpoint changes no
 // protection and traps only the address asked for.
-const GAME_MAN_GETTER_RVA = 0x67ae80;
+const GAME_MAN_GETTER_RVA = 0x67b330; // 1.17.1 0x67ae80
 const ONLINE_FLAG_OFFSET = 0xbc8;
 
 const game = Process.findModuleByName('eldenring.exe');

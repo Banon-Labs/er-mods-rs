@@ -1,6 +1,9 @@
 // How long is the ENGINE prepared to wait for a join, and is its connect still running when this
 // mod calls one lost?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // `attempt_verdict::CONNECT_DEADLINE_MS` is 1500ms, derived from 313 successes all measured on one
 // machine reaching hosts it could almost touch. Run br-20260917-195855-46cf found a real remote
 // host and cancelled the connect at that deadline, repeatedly:
@@ -27,7 +30,7 @@
 
 'use strict';
 
-const SESSION_MANAGER_GLOBAL_RVA = 0x3d7a4d0;
+const SESSION_MANAGER_GLOBAL_RVA = 0x3d81560; // 1.16.2 0x3d7a4d0, 1.17.1 0x3d7e540
 const LOBBY_STATE_OFFSET = 0x0c;
 const PROTOCOL_STATE_OFFSET = 0x10;
 const JOIN_REQUEST_HANDLE_OFFSET = 0x28;

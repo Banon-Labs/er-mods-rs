@@ -1,5 +1,8 @@
 // How wide does the System > Quit grid actually get, and who widened it?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # The decision this measures
 //
 // `er_quit_menu_core::arm::arm_standalone` serves `GfxServeSet::ALL_PICKER_KEYED` for every
@@ -33,8 +36,8 @@
 
 'use strict';
 
-const GRID_CONTROL_SET_ITEM_COUNT = ptr('0x140739c10');
-const ADD_CANCEL_BUTTON = ptr('0x140921e30');
+const GRID_CONTROL_SET_ITEM_COUNT = ptr('0x14073a0c0'); // 1.17.1 0x140739c10
+const ADD_CANCEL_BUTTON = ptr('0x1409222e0'); // 1.17.1 0x140921e30
 
 // About 28 percent of function entries on this build open with an Arxan healing stub, and a hook
 // on the stub never fires.

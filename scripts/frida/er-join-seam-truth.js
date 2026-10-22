@@ -1,5 +1,8 @@
 // Does the judge seam ever fire, and if not, what carries the join instead?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The DLL arms `CS::SosSignMan::SetMultiplayJoinData` (1.16.2 0x1406fb520 -> 1.17.1 0x1406fc370)
 // as the place it judges an incoming match. Run br-20260910-010746-7306 logged that hook armed
 // once and then ZERO judgements -- no REJECT, no KEEP, no cancel -- while three `join-progress`
@@ -9,7 +12,7 @@
 // This settles which, and it writes nothing.
 'use strict';
 
-const SET_MULTIPLAY_JOIN_DATA = 0x6fc370;   // 1.17.1 runtime rva
+const SET_MULTIPLAY_JOIN_DATA = 0x6fc820;   // 1.17.1 runtime rva (1.17.1 0x6fc370)
 const ERSC_INVADE = 0x25850;
 const ERSC_CANCEL = 0x258d0;
 

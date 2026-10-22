@@ -10,29 +10,41 @@
 //   3. Lua: `lua_pcall`'s first argument against the AI state read through
 //      `CSWorldAiManager+0x6938 -> +0xb8 -> +0x28`. Reports the first match and every state change.
 //   4. The finger: `CanUseGoods` for goods 101, its verdict beside the red-sign term
-//      (`0x140657de0`) and `WorldChrManImp::CanStartMultiplay` (`0x14050aa50`).
-//   5. The cursor: `FUN_140766650(CSMenuManImp*)`, the menu-has-the-mouse predicate; every change
-//      of its answer.
+//      (1.17.1 `0x140657de0`, 2.7.2.0 `0x140658290`) and `WorldChrManImp::CanStartMultiplay`
+//      (1.17.1 `0x14050aa50`, 2.7.2.0 `0x14050acd0`).
+//   5. The cursor: 1.17.1 `FUN_140766650(CSMenuManImp*)` (2.7.2.0 `0x140766b00`), the
+//      menu-has-the-mouse predicate; every change of its answer.
 //
 // Nothing is written. Every call made here is a predicate the engine calls on the same thread.
 // No timer: each report fires on the game event it describes.
 //
-// Addresses are 1.17.1 runtime RVAs, each read from eldenring-deobf-1.17.1.bin.
+// Addresses are 2.7.2.0 runtime RVAs, measured on 1.17.1 (eldenring-deobf-1.17.1.bin) and carried
+// with scripts/map-rvas-1171-to-1172.py. Each function's whole body matches
+// eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands; the two globals were
+// checked through their readers: at the carried place, 2506 of 2552 1.17.1 WorldChrMan readers and
+// 437 of 442 CSWorldAiManager readers read the carried address; the rest are refused by the carry
+// or decode differently in 2.7.2.0.
 
 'use strict';
 
 const RVA = {
-  createSummonChr: 0x4baea0,
-  getChrName: 0x7605a0,
-  luaPcall: 0x2026970,
-  canUseGoods: 0x68ee60,
-  redSignTerm: 0x657de0,
-  canStartMultiplay: 0x50aa50,
-  menuHasMouse: 0x766650,
-  worldChrManGlobal: 0x3d69ff8,
-  worldAiManGlobal: 0x3d66548,
+  createSummonChr: 0x4baf80,     // 1.17.1 0x4baea0
+  getChrName: 0x760a50,          // 1.17.1 0x7605a0
+  luaPcall: 0x2028060,           // 1.17.1 0x2026970
+  canUseGoods: 0x68f310,         // 1.17.1 0x68ee60
+  redSignTerm: 0x658290,         // 1.17.1 0x657de0
+  canStartMultiplay: 0x50acd0,   // 1.17.1 0x50aa50
+  menuHasMouse: 0x766b00,        // 1.17.1 0x766650
+  worldChrManGlobal: 0x3d6d018,  // 1.17.1 0x3d69ff8
+  worldAiManGlobal: 0x3d69568,   // 1.17.1 0x3d66548
 };
 
+// WorldChrManImp grew 0x10 bytes past +0x1e5e8 in 2.7.2.0; +0x1e538 is below that, and the 11 of
+// its 13 1.17.1 readers that the carry accepts are unchanged at their carried place. The
+// group-tree offsets below are read
+// by SummonBuddyManager::Update (0x1404b86d0 -> 0x1404b87b0), whose body is unchanged; the
+// CSWorldAiManager +0x6938 getter (0x14037c140, unmoved) and the DLLuaDetail wrapper that passes
+// +0x28 (0x142020900 -> 0x142021ff0) are unchanged too.
 const WCM_SUMMON_BUDDY_MANAGER = 0x1e538;
 const MGR_GROUP_TREE_HEAD = 0x78;
 const NODE_IS_NIL = 0x19;

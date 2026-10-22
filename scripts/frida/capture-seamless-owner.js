@@ -1,5 +1,8 @@
 // Catch Seamless's option-menu object as it is handed to the game, instead of scanning for it.
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // # Why a hook and not a scan
 //
 // Four scans of `ersc.dll`'s writable data returned four different addresses in one process
@@ -19,7 +22,7 @@
 
 'use strict';
 
-const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea0360');
+const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea1a50'); // 1.17.1 0x140ea0360
 const OSM_FROM_R14 = 0x120;
 const OWNER_SESSION = 0x58;
 const SESSION_STATE = 0x150;
@@ -29,9 +32,9 @@ const SESSION_STATE = 0x150;
 // repo has latched onto it before.
 const SESSION_STATES = [1, 2, 4, 6, 7, 0x0e, 0x0f, 0x12, 0x16, 0x23, 0x24];
 
-const WORLD_CHR_MAN = ptr('0x143d69ff8');
+const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const MAIN_PLAYER = 0x1e508;
-const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x140657410');
+const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x1406578c0'); // 1.17.1 0x140657410
 
 const out = { owner: null, session: null, sessionState: null, opens: 0, queries: 0, log: [] };
 

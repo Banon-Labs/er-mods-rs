@@ -1,5 +1,8 @@
 // Which instruction writes the item list's R3 view mode, and where does it wrap at 3?
 //
+// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
+// old value in its comment.
+//
 // The mode is a u32 at `(*(GaitemSelectDialog+0xf98)) + 0x7f0` (a `CS::SceneObjProxy`), measured by
 // `r3-menu-view-toggle.js`: 0, 1, 2, 0 on successive R3 presses. A write watchpoint on that one
 // address names the writer.
@@ -10,7 +13,7 @@
 // outlives the agent.
 'use strict';
 
-const MENU_WINDOW_JOB_RUN_RVA = 0x7ae040;
+const MENU_WINDOW_JOB_RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const MENU_WINDOW_JOB_WINDOW_OFFSET = 0x130;
 const VIEW_PROXY_OFFSET = 0xf98;
 const VIEW_MODE_OFFSET = 0x7f0;
