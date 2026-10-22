@@ -7,12 +7,47 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Per-eval cap, and it cannot rise: scripts/check-no-timeouts.py holds every subprocess timeout in
+# this repo at or under 30s.
+CASE_TIMEOUT_SECONDS = 30
+
+# The compile every `cupcake eval` repeats. Each eval copies the rulebook into a fresh temp
+# directory and runs `opa build -t wasm -O 2` on it, twice (project and global policies). Measured
+# 2026-10-20 with `--trace signals,eval`: one eval was 1.18s wall and 2.36 CPU-seconds, and the
+# project compile alone was 0.61s of the wall. This suite evaluates the same unchanged rulebook
+# ~176 times, so it compiled the same two bundles ~176 times each; on a contended machine (the
+# pre-push hook runs ten stages at once) that is what pushed single cases past the 30s cap. Routed
+# through scripts/opa-build-cache.sh the compile happens once per bundle per run and an eval is
+# 0.42s wall. The cache is keyed on the policy file contents, so it cannot hand back a stale
+# bundle, and it lives in a temp directory that dies with this process.
+OPA_BUILD_CACHE_SHIM = REPO_ROOT / "scripts" / "opa-build-cache.sh"
+_REAL_OPA = shutil.which("opa")
+_OPA_BUILD_CACHE_DIR = Path(tempfile.mkdtemp(prefix="cupcake-policy-regression-opa-cache-"))
+atexit.register(shutil.rmtree, _OPA_BUILD_CACHE_DIR, True)
+
+
+def cupcake_eval_argv(real_opa: str | None = _REAL_OPA) -> list[str]:
+    """The eval command, through the compile cache when there is a real `opa` behind it.
+
+    Without one, cupcake is left to report the missing binary itself rather than the shim
+    failing in a way that reads as a policy verdict."""
+    argv = ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"]
+    if real_opa and OPA_BUILD_CACHE_SHIM.is_file():
+        argv[2:2] = ["--opa-path", str(OPA_BUILD_CACHE_SHIM)]
+    return argv
+
+
+class CaseTimedOut(Exception):
+    """A case whose eval did not answer within CASE_TIMEOUT_SECONDS."""
 
 
 @dataclass(frozen=True)
@@ -319,17 +354,23 @@ def run_case(case: PolicyCase) -> None:
     env["CUPCAKE_HOST_PLATFORM_OVERRIDE"] = "wsl"
 
     env.update(dict(case.extra_env))
+    env["ER_OPA_BUILD_CACHE"] = str(_OPA_BUILD_CACHE_DIR)
+    if _REAL_OPA:
+        env["ER_OPA_REAL"] = _REAL_OPA
 
-    result = subprocess.run(
-        ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
-        cwd=REPO_ROOT,
-        input=json.dumps(event),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=30,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            cupcake_eval_argv(),
+            cwd=REPO_ROOT,
+            input=json.dumps(event),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=CASE_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CaseTimedOut(case.name) from exc
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
     if allowed != case.should_allow:
@@ -2935,43 +2976,199 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    # 12, measured, not guessed. 176 cases x ~1.3 CPU-seconds of `cupcake eval` each; the pool width
-    # is the only lever, since each case must spawn the real binary. Wall clock over the whole case
-    # list, taken 2026-08-31 on 16 cores under a deliberately hostile loadavg of ~100 (six agents
-    # plus this probe), so these are worst-case rather than best-case numbers:
-    #     8 workers 26.5s | 12 workers 20.4s | 16 workers 21.8s | 24 workers 21.6s
-    # Scaling flattens past 12 and then reverses, so 12 is the floor of the curve, not the edge of
-    # it -- there is nothing to be won by going wider and contention to lose. This does not risk the
-    # per-case timeout=30 below: a single case costs ~1.3s, so even the 100-loadavg run left it more
-    # than an order of magnitude of margin. Widening the pool is safe here precisely because it does
-    # not change what any one case does; that is why the far slower delivered-shape gate is not
-    # folded in as a 177th unit of work but left as its own step in the callers.
-    # ...BUT never wider than the machine this run is allowed. `12` was written against a free
-    # 16-core box; under scripts/lib/cpu-courtesy.sh a gate run is confined to an affinity mask of
-    # half that, and 12 threads each spawning a `cupcake eval` subprocess onto 8 permitted cores is
-    # oversubscription, not parallelism. sched_getaffinity reports the mask rather than the core
-    # count, so this reads the same number the cap actually granted. Falls back to 12 on a platform
-    # without affinity (never Linux, where this gate runs).
-    try:
-        permitted = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        permitted = 12
-    max_workers = min(12, permitted, max(1, len(cases)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(run_case, case): case for case in cases}
-        # Every failing case is reported, not only the first to finish: a rule change that moves
-        # several verdicts at once should be read as one list.
-        failures = []
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except AssertionError as exc:
-                failures.append(str(exc))
+    width = pool_width(len(cases), _permitted_cores(), _load_average(), os.cpu_count(),
+                       os.environ.get("CUPCAKE_POLICY_TEST_JOBS"))
+    print(f"cupcake policy cases: {len(cases)} on {width} worker(s)", flush=True)
+    failures = run_cases(cases, run_case, width)
+    events = _OPA_BUILD_CACHE_DIR / "events"
+    if events.is_file():
+        tally = events.read_text(encoding="utf-8").split()
+        print(f"opa build cache: {tally.count('miss')} compile(s), {tally.count('hit')} reuse(s)")
     if failures:
         raise AssertionError(f"{len(failures)} policy case(s) failed:\n\n" + "\n\n".join(sorted(failures)))
     print("cupcake policy regression tests passed")
     return 0
 
 
+# 12, measured, not guessed: on 2026-08-31, 16 cores under a hostile loadavg of ~100, wall clock
+# over the whole case list was 8 workers 26.5s | 12 workers 20.4s | 16 workers 21.8s | 24 workers
+# 21.6s. Scaling flattens past 12 and then reverses, so there is nothing to win by going wider.
+POOL_WIDTH_CEILING = 12
+# Never below 4, however loaded the machine reads. A loadavg reading is a minute-old average, and
+# the timeout this sizing protects is per eval, which a cached eval (~0.4s alone) is far from at
+# width 4. Runs on 2026-10-20 under 28 busy loops pinned to 14 of 16 cores, with other sessions
+# also loading the box: width 2 passed in 168s (loadavg 32), width 4 in 252s (loadavg 61), no
+# retries in either. The wall clock follows the machine's other load more than this width.
+POOL_WIDTH_FLOOR = 4
+
+
+def _permitted_cores() -> int | None:
+    """The affinity mask, which is what scripts/lib/cpu-courtesy.sh narrows for a gate run."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return None
+
+
+def _load_average() -> float | None:
+    try:
+        return os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return None
+
+
+def pool_width(n_cases: int, permitted: int | None, load1: float | None, machine_cores: int | None,
+               override: str | None = None) -> int:
+    """How many evals to run at once: the cores that are actually free, not the cores that exist.
+
+    The width used to be `min(12, affinity)`. On 2026-10-20 that put 8 concurrent evals onto a
+    machine where the pre-push hook was running ten stages in parallel and another session's full
+    check.sh was running too, and a case timed out. Each eval is a multi-threaded process (opa
+    build was ~2 CPU-seconds of it before the compile cache), so a pool sized to the mask
+    oversubscribes a machine whose other users already hold the mask. The free share is the
+    machine's cores minus its one-minute load, capped by the mask, the ceiling above and the case
+    count. `CUPCAKE_POLICY_TEST_JOBS` overrides outright.
+    """
+    if override and override.strip().isdigit() and int(override) > 0:
+        return min(int(override), max(1, n_cases))
+    width = POOL_WIDTH_CEILING
+    if permitted:
+        width = min(width, permitted)
+    if load1 is not None and machine_cores:
+        width = min(width, max(POOL_WIDTH_FLOOR, int(machine_cores - load1)))
+    return max(1, min(width, n_cases))
+
+
+def run_cases(cases: Sequence[PolicyCase], runner: Callable[[PolicyCase], None], width: int,
+              log: Callable[[str], None] = lambda line: print(line, file=sys.stderr, flush=True)) -> list[str]:
+    """Run every case on the pool, re-run each timed-out one once on its own, return the failures.
+
+    A timeout inside the pool says the machine was busy as often as it says the case hung, so it
+    gets a second attempt after the pool has drained, alone, with nothing of this suite competing
+    with it. That attempt is logged. A case that times out again fails, so a real hang in a policy
+    or a signal is still a red gate and not a silent retry loop.
+
+    Every failing case is reported, not only the first to finish: a rule change that moves several
+    verdicts at once should be read as one list.
+    """
+    failures: list[str] = []
+    timed_out: list[PolicyCase] = []
+    with ThreadPoolExecutor(max_workers=max(1, width)) as pool:
+        futures = {pool.submit(runner, case): case for case in cases}
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except CaseTimedOut:
+                timed_out.append(futures[future])
+            except AssertionError as exc:
+                failures.append(str(exc))
+    for case in sorted(timed_out, key=lambda c: c.name):
+        log(f"retry: {case.name} timed out after {CASE_TIMEOUT_SECONDS}s in the pool; "
+            "running it once more on its own")
+        try:
+            runner(case)
+        except CaseTimedOut:
+            failures.append(f"{case.name}: timed out after {CASE_TIMEOUT_SECONDS}s twice, the second "
+                            "time running alone -- a hang, not load")
+        except AssertionError as exc:
+            failures.append(str(exc))
+        else:
+            log(f"retry: {case.name} passed on its own")
+    return failures
+
+
+def selftest() -> int:
+    """The pool sizing, the timeout retry and the compile cache, without one real policy case."""
+    problems: list[str] = []
+
+    def expect(label: str, got: object, want: object) -> None:
+        if got != want:
+            problems.append(f"{label}: got {got!r}, want {want!r}")
+
+    # Pool width.
+    expect("idle 16-core box", pool_width(176, 16, 0.5, 16), 12)
+    expect("courtesy mask of 8", pool_width(176, 8, 0.5, 16), 8)
+    expect("half the machine busy", pool_width(176, 16, 10.0, 16), 6)
+    expect("2026-10-20 pre-push load", pool_width(176, 8, 36.6, 16), POOL_WIDTH_FLOOR)
+    expect("no loadavg", pool_width(176, 8, None, 16), 8)
+    expect("no affinity", pool_width(176, None, 2.0, 16), 12)
+    expect("fewer cases than cores", pool_width(3, 16, 0.0, 16), 3)
+    expect("override", pool_width(176, 8, 36.6, 16, "5"), 5)
+    expect("junk override ignored", pool_width(176, 8, 0.0, 16, "lots"), 8)
+
+    # Retry: a case that times out once passes on its retry and is logged; one that times out twice
+    # fails; an ordinary failure is not retried.
+    attempts: dict[str, int] = {}
+
+    def fake_runner(case: PolicyCase) -> None:
+        attempts[case.name] = attempts.get(case.name, 0) + 1
+        if case.name == "flaky" and attempts[case.name] == 1:
+            raise CaseTimedOut(case.name)
+        if case.name == "hang":
+            raise CaseTimedOut(case.name)
+        if case.name == "wrong":
+            raise AssertionError("wrong: expected allow=True")
+
+    logged: list[str] = []
+    fake_cases = [PolicyCase(n, "true", True) for n in ("ok", "flaky", "hang", "wrong")]
+    failures = run_cases(fake_cases, fake_runner, 4, logged.append)
+    expect("attempts", attempts, {"ok": 1, "flaky": 2, "hang": 2, "wrong": 1})
+    expect("failures", sorted(f.split(":")[0] for f in failures), ["hang", "wrong"])
+    expect("hang named as a hang", any("twice" in f for f in failures if f.startswith("hang")), True)
+    expect("retry logged", sum("retry: flaky" in line for line in logged), 2)
+    expect("retry of a real hang logged", any("retry: hang timed out" in line for line in logged), True)
+
+    # The compile cache, against a fake `opa` that counts its compiles. Same tree in two different
+    # directories hits; one changed byte misses; a non-build call passes straight through.
+    with tempfile.TemporaryDirectory(prefix="opa-build-cache-selftest-") as tmp:
+        root = Path(tmp)
+        counter = root / "compiles"
+        fake_opa = root / "opa"
+        fake_opa.write_text(
+            "#!/usr/bin/env bash\n"
+            f"echo x >> {counter}\n"
+            'if [ "$1" = build ]; then out=""; prev=""; for a in "$@"; do\n'
+            '  [ "$prev" = -o ] && out="$a"; prev="$a"; done\n'
+            '  cat "${@: -3:1}"/*.rego > "$out"; else echo passthrough; fi\n',
+            encoding="utf-8")
+        fake_opa.chmod(0o755)
+        cache = root / "cache"
+        env = {**os.environ, "ER_OPA_REAL": str(fake_opa), "ER_OPA_BUILD_CACHE": str(cache)}
+
+        def build(tag: str, content: str) -> str:
+            d = root / tag
+            d.mkdir()
+            (d / "p.rego").write_text(content, encoding="utf-8")
+            subprocess.run(["bash", str(OPA_BUILD_CACHE_SHIM), "build", "-t", "wasm", "-e", "x", str(d),
+                            "-o", str(d / "bundle.tar.gz")], env=env, check=True, capture_output=True,
+                           timeout=10)
+            return (d / "bundle.tar.gz").read_text(encoding="utf-8")
+
+        def compiles() -> int:
+            return len(counter.read_text(encoding="utf-8").split()) if counter.exists() else 0
+
+        expect("first build output", build("a", "package one\n"), "package one\n")
+        expect("first build compiles", compiles(), 1)
+        expect("same tree elsewhere output", build("b", "package one\n"), "package one\n")
+        expect("same tree elsewhere reuses", compiles(), 1)
+        expect("changed tree output", build("c", "package two\n"), "package two\n")
+        expect("changed tree compiles", compiles(), 2)
+        passthrough = subprocess.run(["bash", str(OPA_BUILD_CACHE_SHIM), "version"], env=env,
+                                     capture_output=True, text=True, timeout=10)
+        expect("non-build passes through", passthrough.stdout.strip(), "passthrough")
+        expect("events", (cache / "events").read_text(encoding="utf-8").split(), ["miss", "hit", "miss"])
+    expect("argv without opa", "--opa-path" in cupcake_eval_argv(None), False)
+    expect("argv with opa", cupcake_eval_argv("/usr/bin/opa")[2:4], ["--opa-path", str(OPA_BUILD_CACHE_SHIM)])
+
+    for p in problems:
+        print(f"FAIL {p}", file=sys.stderr)
+    if problems:
+        return 1
+    print("test-cupcake-policies selftest: pool sizing, timeout retry and opa build cache ok")
+    return 0
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--selftest"]:
+        raise SystemExit(selftest())
     raise SystemExit(main())

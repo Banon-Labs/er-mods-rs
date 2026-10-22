@@ -1544,6 +1544,7 @@ if [[ -z $_check_stage || -z $_check_cupcake_stage || $_check_stage == "$_check_
 	}
 fi
 cupcake validate --log-level error
+python3 "$repo_root/scripts/test-cupcake-policies.py" --selftest
 python3 "$repo_root/scripts/test-cupcake-policies.py"
 # Every cupcake guard in this REPO was partly or wholly inert until 2026-08-22, and the suite was
 # green the whole time. `cupcake eval` does not run policies in the OPA interpreter -- it compiles

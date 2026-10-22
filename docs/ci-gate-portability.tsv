@@ -118,6 +118,7 @@ portable	-	check-reload-trace-policy.py --audit	source/AST/text analysis only	po
 portable	-	check-windows-proof-render.py	source/AST/text analysis only	product
 portable	-	test-windows-proof-render.py	source/AST/text analysis only	product
 portable	-	test-windows-proof-render-smoke-verdict.py	verdict logic in-process; one case runs the smoke script --dry-run against a fixture launcher	product
+portable	-	test-cupcake-policies.py --selftest	pool sizing and timeout retry in-process; the opa build cache against a fake opa in a temp directory	policy
 portable	-	test-cupcake-policies.py	176 cupcake eval spawns, 20-35s; needs the cupcake binary the fail-fast guard above checks for	policy
 portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis only	policy
 portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only	policy
