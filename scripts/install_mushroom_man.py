@@ -47,6 +47,22 @@ WINDOWS_ME3_RELATIVE_PATH = Path("garyttierney") / "me3" / "bin" / "me3.exe"
 # present me3 read as missing.
 NATIVE_ME3_FALLBACKS = (Path("~/.local/bin/me3"),)
 WSL_LOCAL_APP_DATA_ROOT = Path("/mnt/c/Users")
+# Where a native Linux me3 keeps the Windows binaries it hands to Proton. me3 0.11.0 looks for
+# them in a cwd-relative `target/x86_64-pc-windows-msvc/release` first, so `--launch` run from this
+# repo's root picks the repo's build directory, which has no me3-launcher.exe, and me3 hangs in
+# `wait_for_partner` (measured 2026-10-22; bd me3-launch-cwd-must-lack-rust-target-dir). Naming the
+# directory with the top-level `--windows-binaries-dir` takes the cwd out of the lookup.
+ME3_WINDOWS_BIN_DIR = Path(
+    os.environ.get("ME3_WINDOWS_BIN_DIR", str(Path.home() / ".local" / "share" / "me3" / "windows-bin"))
+)
+
+
+def me3_global_args(me3_path: Path) -> list[str]:
+    """Options that go before `launch`. The Windows me3.exe has no `--windows-binaries-dir`
+    (`me3 --help` lists it as Linux only), so it gets none."""
+    if me3_path.name.lower().endswith(".exe"):
+        return []
+    return ["--windows-binaries-dir", str(ME3_WINDOWS_BIN_DIR)]
 
 REQUIRED_PAYLOAD_FILES = (
     Path("mushroom_man.dll"),
@@ -386,6 +402,7 @@ def main() -> int:
         subprocess.run(
             [
                 str(me3_path),
+                *me3_global_args(me3_path),
                 "launch",
                 "-g",
                 DEFAULT_GAME,
