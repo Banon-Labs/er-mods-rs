@@ -2927,6 +2927,7 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "fromsoftware-shared",
+ "iced-x86",
 ]
 
 [[package]]

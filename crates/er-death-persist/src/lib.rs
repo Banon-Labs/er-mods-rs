@@ -99,11 +99,11 @@ const PERSIST_THROUGH_DEATH_SAVE_CATEGORY: i8 = 3;
 /// `cycleOccurrenceSpEffectId` value marking the end of a cycle chain.
 const NO_CYCLE_OCCURRENCE: i32 = -1;
 
-/// The opening bytes both getters share after their first instruction: `sub rsp, 0x40` ends in
-/// the `40` and `mov qword [rsp+0x20], -2` follows. Read from offset 5 because the running
-/// `GetSpEffectParam` opens with an Arxan `jmp rel32` stub over its first five bytes, which
-/// `register_union_hook_runtime_derived_following_arxan` follows.
-const GETTER_PROLOGUE_TAIL: &[u8] = &[0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff];
+// The getters' addresses and window offsets, shared with build.rs; see `getter_sites.rs`.
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
+// The windows themselves, assembled by build.rs from named instructions and checked against the
+// 1.17.1 image. Byte-identical on 2.7.2.0, and read from the live 2.7.2.0 process on 2026-10-22.
+include!(concat!(env!("OUT_DIR"), "/generated_getter_windows.rs"));
 
 /// A typed param getter `fn(out, id)` this DLL answers for, and the bytes that identify it.
 struct Getter {
@@ -112,41 +112,43 @@ struct Getter {
     rva_1171: usize,
     /// Offset of the row pointer in the getter's out struct.
     row_slot: usize,
-    /// `(offset from the entry, bytes)` that must all match before anything is hooked: the
-    /// prologue, the table index handed to `GetParamResCap`, and the store of the row pointer.
-    /// Byte-identical on 1.17.1 and 2.7.2.0, and read from the live 2.7.2.0 process on 2026-10-22.
+    /// `(offset from the entry, window)` pairs that must all match before anything is hooked:
+    /// the frame setup, the table index handed to `GetParamResCap`, and the row-pointer stores.
     pins: &'static [(usize, &'static [u8])],
 }
 
-/// `GetSpEffectParam(out, id)`: 1.17.1 `0x140d523a0`, 2.7.2.0 `0x140d53a90`, 1.16.2
-/// `0x140d505f0`.
 const SP_EFFECT_GETTER: Getter = Getter {
     name: "GetSpEffectParam",
-    rva_1171: 0xd5_23a0,
-    row_slot: 0,
+    rva_1171: GET_SP_EFFECT_PARAM_1171_RVA,
+    row_slot: SP_EFFECT_OUT_ROW_SLOT,
     pins: &[
-        (5, GETTER_PROLOGUE_TAIL),
-        // xor r8d, r8d; lea edx, [r8+0xf]; call GetParamResCap -- table 0xf is SpEffectParam.
-        (0x6f, &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x0f, 0xe8]),
-        // mov [r14], rbx -- the row pointer into out+0.
-        (0x15d, &[0x49, 0x89, 0x1e]),
+        (GETTER_FRAME_WINDOW_OFFSET, SP_EFFECT_FRAME_WINDOW),
+        (SP_EFFECT_TABLE_WINDOW_OFFSET, SP_EFFECT_TABLE_WINDOW),
+        (
+            SP_EFFECT_ROW_STORE_WINDOW_OFFSET,
+            SP_EFFECT_ROW_STORE_WINDOW,
+        ),
     ],
 };
 
-/// The SpEffectVfxParam getter `(out, id)`: 1.17.1 `0x140d52980`, 2.7.2.0 `0x140d54070`,
-/// 1.16.2 `FUN_140d50bd0`.
 const SP_EFFECT_VFX_GETTER: Getter = Getter {
     name: "GetSpEffectVfxParam",
-    rva_1171: 0xd5_2980,
-    row_slot: 8,
+    rva_1171: GET_SP_EFFECT_VFX_PARAM_1171_RVA,
+    row_slot: SP_EFFECT_VFX_OUT_ROW_SLOT,
     pins: &[
-        (5, GETTER_PROLOGUE_TAIL),
-        // xor r8d, r8d; lea edx, [r8+0x10]; call GetParamResCap -- table 0x10 is SpEffectVfxParam.
-        (0x67, &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x10, 0xe8]),
-        // mov [rbx+8], rax -- the row pointer into out+8 on a hit.
-        (0xbd, &[0x48, 0x89, 0x43, 0x08]),
-        // mov [rbx+8], rbp -- the same slot on a miss.
-        (0xc5, &[0x48, 0x89, 0x6b, 0x08]),
+        (GETTER_FRAME_WINDOW_OFFSET, SP_EFFECT_VFX_FRAME_WINDOW),
+        (
+            SP_EFFECT_VFX_TABLE_WINDOW_OFFSET,
+            SP_EFFECT_VFX_TABLE_WINDOW,
+        ),
+        (
+            SP_EFFECT_VFX_HIT_STORE_WINDOW_OFFSET,
+            SP_EFFECT_VFX_HIT_STORE_WINDOW,
+        ),
+        (
+            SP_EFFECT_VFX_MISS_STORE_WINDOW_OFFSET,
+            SP_EFFECT_VFX_MISS_STORE_WINDOW,
+        ),
     ],
 };
 
@@ -185,7 +187,9 @@ pub unsafe extern "system" fn DllMain(
     // `extern "system"` boundary and becomes an abort, which does not dispatch to a
     // vectored handler -- so no crash record is written at all and the process simply
     // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
-    er_game_base::panic_report::report_panics_to("er-death-persist", panic_log_sink);
+    er_game_base::panic_report::report_panics_to("er-death-persist", log_args_sink);
+    // So a refused hook or address says so in this DLL's log instead of nowhere.
+    er_hook::set_hook_logger(log_args_sink);
 
     if START_PATCH_TASK
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -519,12 +523,13 @@ const RUNTIME_LOG_NAME: &str = "er-death-persist.log";
 /// `er_game_base::log::begin_fresh_run`), so ordering within it is the whole story.
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
+/// The sink `report_panics_to` and `er_hook::set_hook_logger` write through, which take
+/// `fmt::Arguments` where this crate logs `&str`.
 ///
 /// Small and duplicated per shell on purpose: the hook is installed per DLL because every cdylib
 /// statically links its own `er-game-base`, so there is no shared place this could live and still
 /// be the thing that runs in this module.
-fn panic_log_sink(args: core::fmt::Arguments<'_>) {
+fn log_args_sink(args: core::fmt::Arguments<'_>) {
     write_runtime_log(&args.to_string());
 }
 
