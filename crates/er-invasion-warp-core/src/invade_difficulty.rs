@@ -1,4 +1,4 @@
-//! Which matchmaking bracket the far half of a search invades into.
+//! Which matchmaking bracket a search started by one of this mod's invasion fingers invades into.
 //!
 //! # What this is for, and where it applies
 //!
@@ -9,12 +9,18 @@
 //! what that second half does, 2026-09-18: "it essentially returns to Seamless default invasion
 //! properties, whereby I invade someone in my bracket."
 //!
-//! This is the one thing that stays attached across that handover. The player names the bracket
-//! they want to be sent to, and the far half's queries ask for it instead of their own.
+//! The pick is the one thing that stays attached across that handover, and since 2026-09-18 it
+//! binds to the near half too: the player names the bracket they want to be sent to, and every
+//! query the finger's search sends asks for it instead of their own.
 //!
-//! It does nothing to the near half. A search that has not reached the handover is still asking
-//! about the neighbourhood at the player's own band, and narrowing that by bracket as well would
-//! move two axes on one failed cycle -- the mistake `failed_cycle`'s module docs already record.
+//! It binds to nothing else. The fingers this crate routes -- the Bloody Finger, the Festering
+//! Bloody Finger and the Recusant Finger -- are the only way to change which bracket a search asks
+//! for. The Challenger's Lynchpin is Seamless's own item and keeps Seamless's own bracket, whatever
+//! is picked (user directive 2026-10-22: "We want users to get their normal brackets from
+//! challenger lynchpin, not effect it, but take configuration updates through our mod items
+//! only"). Seamless's query looks the same whichever item started the search, so the DLL tells the
+//! two apart by who owns the search, and [`far_half_verdict`] is what keeps the far half's latch
+//! from outliving the finger's search into the Lynchpin's.
 //!
 //! # Why brackets are picked and not stepped
 //!
@@ -128,7 +134,7 @@ pub fn weapon_band_labels() -> Vec<String> {
     (0..=MAX_WEAPON_BAND).map(weapon_band_label).collect()
 }
 
-/// The bracket pair the player has asked the far half to invade into.
+/// The bracket pair the player has asked the finger's searches to invade into.
 ///
 /// `None` on an axis means "whatever mine is", which is what a fresh session holds and what a
 /// player who cares about only one axis leaves the other at.
@@ -156,7 +162,7 @@ impl BracketChoice {
         self.level.is_none() && self.weapon.is_none()
     }
 
-    /// The band value the far half should ask for, given the one Seamless computed for this
+    /// The band value a finger's search should ask for, given the one Seamless computed for this
     /// character.
     ///
     /// `None` means send Seamless's own value -- because nothing is picked, because the pick
@@ -203,6 +209,77 @@ impl BracketChoice {
             ),
         }
     }
+}
+
+/// One change in Seamless's session state, as the DLL's transition tracer sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionTransition {
+    /// The state before, or `None` on the first reading of a session.
+    pub previous: Option<u32>,
+    /// The state now.
+    pub state: u32,
+    /// This Seamless build's idle code.
+    pub idle: u32,
+    /// This Seamless build's searching code.
+    pub searching: u32,
+    /// Whether one of the DLL's own calls into `ersc.dll` produced this change.
+    pub driven_by_us: bool,
+    /// Whether one of this mod's fingers has a search armed.
+    pub finger_armed: bool,
+}
+
+/// What a session-state change means for the far-half latch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FarHalfVerdict {
+    /// Nothing about this change ends the far half.
+    Keep,
+    /// The session came back to idle, so the search the far half belonged to is over.
+    SearchEnded,
+    /// A search began that no finger armed and no call of the DLL made: the Challenger's Lynchpin,
+    /// or Seamless's own menu.
+    SomebodyElsesSearch,
+}
+
+/// Whether this transition ends the far half.
+///
+/// The far half is the one stretch of a finger's search where no finger is armed any more --
+/// `hand_off_to_seamless` retires the override before the latch is set -- so the latch is the only
+/// thing that says the search is still the finger's. Every other ending of a search used to be the
+/// only thing that cleared it: the player standing the search down, or a finger arming the next
+/// one. A far half that landed, or that Seamless itself gave up on, left it standing, and the
+/// Lynchpin's search after it went out at the picked bracket.
+///
+/// Two transitions clear it:
+///
+/// - The session arriving at idle from anything but idle. Searching, connecting and invading are
+///   all non-idle, so this is the far half's search finishing, however it finished. A first
+///   reading is not an arrival and clears nothing.
+/// - A search starting that the DLL did not drive while no finger is armed. That is Seamless's own
+///   item, and it is a backstop for an end the tracer never saw: a session that was not resolvable
+///   while the far half ran.
+///
+/// A failed cycle -- `0x0e -> 0x0f -> 0x12 -> 0x0e`, measured -- comes back to searching from a
+/// non-idle state, so it keeps the far half alive across its own retries.
+#[must_use]
+pub fn far_half_verdict(change: SessionTransition) -> FarHalfVerdict {
+    let from_idle_or_unseen = change
+        .previous
+        .is_none_or(|previous| previous == change.idle);
+    if change.state == change.idle
+        && change
+            .previous
+            .is_some_and(|previous| previous != change.idle)
+    {
+        return FarHalfVerdict::SearchEnded;
+    }
+    if change.state == change.searching
+        && from_idle_or_unseen
+        && !change.driven_by_us
+        && !change.finger_armed
+    {
+        return FarHalfVerdict::SomebodyElsesSearch;
+    }
+    FarHalfVerdict::Keep
 }
 
 #[cfg(test)]
@@ -431,5 +508,86 @@ mod tests {
             .describe()
             .contains("your own rune level")
         );
+    }
+
+    /// Seamless 2.0.0's codes, as `ersc::Abi` records them: a landed invasion walks
+    /// `0x01 -> 0x0e -> 0x0f -> 0x13 -> 0x14 -> 0x16`, and a failed cycle `0x0e -> 0x0f -> 0x12 ->
+    /// 0x0e`.
+    const IDLE: u32 = 0x01;
+    const SEARCHING: u32 = 0x0e;
+
+    fn change(previous: Option<u32>, state: u32) -> SessionTransition {
+        SessionTransition {
+            previous,
+            state,
+            idle: IDLE,
+            searching: SEARCHING,
+            driven_by_us: false,
+            finger_armed: false,
+        }
+    }
+
+    /// The far half ends however its search ends: landed and finished, given up, or cancelled.
+    #[test]
+    fn a_session_back_at_idle_ends_the_far_half() {
+        for from in [SEARCHING, 0x0f, 0x12, 0x16] {
+            assert_eq!(
+                far_half_verdict(change(Some(from), IDLE)),
+                FarHalfVerdict::SearchEnded,
+                "{from:#04x} -> idle"
+            );
+        }
+    }
+
+    /// A first reading is not an arrival, and idle staying idle is not a change.
+    #[test]
+    fn a_first_reading_of_idle_ends_nothing() {
+        assert_eq!(far_half_verdict(change(None, IDLE)), FarHalfVerdict::Keep);
+        assert_eq!(
+            far_half_verdict(change(Some(IDLE), IDLE)),
+            FarHalfVerdict::Keep
+        );
+    }
+
+    /// Seamless retrying its own search is the far half carrying on, not a new search.
+    #[test]
+    fn a_failed_cycle_keeps_the_far_half() {
+        for from in [0x0f, 0x12] {
+            assert_eq!(
+                far_half_verdict(change(Some(from), SEARCHING)),
+                FarHalfVerdict::Keep,
+                "{from:#04x} -> searching"
+            );
+        }
+    }
+
+    /// The Lynchpin: a search from idle that nothing of ours drove and no finger armed.
+    #[test]
+    fn a_search_nobody_here_started_is_somebody_elses() {
+        for previous in [Some(IDLE), None] {
+            assert_eq!(
+                far_half_verdict(change(previous, SEARCHING)),
+                FarHalfVerdict::SomebodyElsesSearch,
+                "{previous:?} -> searching"
+            );
+        }
+    }
+
+    /// A finger's own search, driven by the DLL or with the finger still armed, is never mistaken
+    /// for the Lynchpin's.
+    #[test]
+    fn a_fingers_search_is_never_somebody_elses() {
+        for (driven_by_us, finger_armed) in [(true, false), (false, true), (true, true)] {
+            let start = SessionTransition {
+                driven_by_us,
+                finger_armed,
+                ..change(Some(IDLE), SEARCHING)
+            };
+            assert_eq!(
+                far_half_verdict(start),
+                FarHalfVerdict::Keep,
+                "driven_by_us={driven_by_us} finger_armed={finger_armed}"
+            );
+        }
     }
 }

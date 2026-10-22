@@ -382,9 +382,10 @@ fn build_view() -> SettingsView {
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
     ];
     // The two bracket pickers, and the other half of the widening rule rather than an exception to
-    // it: they do not decide how far the search reaches, they decide which bracket the far half
-    // asks for once the finger's own row has already sent it there. Neither is written to the
-    // file, so no config from last week can disagree with what they show.
+    // it: they do not decide how far the search reaches, they decide which bracket a finger's
+    // search asks for. They reach the Bloody, Festering Bloody and Recusant Fingers only; the
+    // Challenger's Lynchpin keeps Seamless's own bracket. Neither is written to the file, so no
+    // config from last week can disagree with what they show.
     rows.extend(bracket_rows());
     // Both of these decide something: `search_by_location` asks Steam for the one marked
     // location, and refuses to run while that location is excluded. A third row sat here until
@@ -474,7 +475,7 @@ fn bracket_rows() -> Vec<SettingRow> {
         options.extend(labels);
         let note = match own_band {
             Some(band) => format!(
-                "yours is {} -- {describe}",
+                "yours is {} -- {describe}; invasion fingers only, the Lynchpin keeps yours",
                 options
                     .get(band as usize + 1)
                     .map_or("unknown", String::as_str)

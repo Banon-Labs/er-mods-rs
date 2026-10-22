@@ -638,7 +638,7 @@ pub(crate) fn stand_down_hunt(reason: &str) {
     // A search the player stopped is not a search in its far half. The difficulty itself survives
     // -- it is their standing choice, not a property of this search -- but the latch that says the
     // near half is over must not outlive the search that ended it.
-    crate::invade_difficulty::leave_far_half();
+    crate::invade_difficulty::leave_far_half(reason);
     // The recital of the places it was asking about goes now. This function's own log line
     // promises "nothing here will start another search until you ask for one", and a screen still
     // naming one location a second is the player's only evidence about whether that is true --
@@ -1924,6 +1924,18 @@ fn log_transition(abi: &ersc::Abi, previous: usize, state: u32, driven_by: Optio
     ));
     failed_cycle::advance_place_on_failed_cycle(abi, previous, state);
     failed_cycle::climb_band_on_failed_cycle(abi, previous, state);
+    // The far half's latch ends with its search, so the Lynchpin's next search cannot inherit it.
+    #[cfg(windows)]
+    crate::invade_difficulty::observe_session_transition(
+        er_invasion_warp_core::invade_difficulty::SessionTransition {
+            previous: (previous != usize::MAX).then_some(previous as u32),
+            state,
+            idle: abi.state_idle,
+            searching: abi.state_searching,
+            driven_by_us: driven_by.is_some(),
+            finger_armed: finger_reach() != FINGER_REACH_NONE,
+        },
+    );
     // A search starting from idle is the moment the player is looking for somebody again, and the
     // only moment the search banners are allowed to speak after a match. Idle is the discriminator
     // that matters: every other arrival at `SEARCHING` is a failed cycle restarting mid-search, and
