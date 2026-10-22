@@ -1,6 +1,8 @@
 //! The rule-break list: the newest breaks in the top-right corner, one line each with the time,
-//! drawn through whatever imgui already exists in the process. Every break also goes to
-//! `er-duel-rules-breaks.txt` (`crate::breaks::record_break`), so what scrolls off is kept.
+//! drawn through whatever imgui already exists in the process. Each row fades out on its own
+//! clock (`er_duel_rules_core::feed::row_alpha`), the title and background fade with the last row,
+//! and once every row has faded the list is not drawn at all. Every break also goes to
+//! `er-duel-rules-breaks.txt` (`crate::breaks::record_break`), so what fades or scrolls off is kept.
 //!
 //! This DLL never installs a second `Present` hook. If another module hosts the overlay it
 //! registers as a guest and draws through it; if nobody does, it hosts and dispatches guests
@@ -77,11 +79,12 @@ fn steam_name(feed: &mut Feed) -> Option<String> {
 /// List a break and append it to the text file. Called from the game thread.
 pub(crate) fn push(alert: Alert) {
     let stamp = local_stamp();
+    let listed = Instant::now();
     let Ok(mut feed) = FEED.lock() else {
         return;
     };
     steam_name(&mut feed);
-    feed.push(stamp, alert);
+    feed.push(stamp, listed, alert);
     if let Some(entry) = feed.shown().next() {
         record_break(&entry.file_line());
     }
@@ -130,7 +133,12 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     let Ok(feed) = FEED.lock() else {
         return;
     };
-    if feed.is_empty() {
+    // Each row fades on its own clock and the title and background fade with the most opaque one,
+    // so when every row has faded there is nothing left to show and no window is begun. The rows
+    // stay in the feed; a new break brings the list back.
+    let now = Instant::now();
+    let panel_alpha = feed.panel_alpha(now);
+    if panel_alpha <= 0.0 {
         return;
     }
     let display = ui.io().display_size;
@@ -156,7 +164,7 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     ));
     let t = theme::current();
     let edge = t.px(EDGE).round();
-    let window_style = theme::window_style(ui);
+    let window_style = theme::faded_window_style(ui, panel_alpha);
     let begun = ui
         .window("##er-duel-rules")
         .position([display[0] - edge, edge], Condition::Always)
@@ -178,17 +186,25 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     ui.set_cursor_pos([origin[0] + pad[0], origin[1] + pad[1]]);
     {
         let _group = ui.begin_group();
-        theme::text(ui, Font::Strong, theme::ERROR_TEXT, "Rule breaks");
-        for entry in feed.shown() {
-            theme::text(ui, Font::Mono, theme::TEXT_QUIET, &entry.stamp.time());
+        let title = theme::faded(theme::ERROR_TEXT, panel_alpha);
+        theme::text(ui, Font::Strong, title, "Rule breaks");
+        for (entry, alpha) in feed.visible(now) {
+            let quiet = theme::faded(theme::TEXT_QUIET, alpha);
+            theme::text(ui, Font::Mono, quiet, &entry.stamp.time());
             ui.same_line();
-            theme::text(ui, Font::Body, theme::TEXT, &entry.who());
+            theme::text(
+                ui,
+                Font::Body,
+                theme::faded(theme::TEXT, alpha),
+                &entry.who(),
+            );
             ui.same_line();
-            theme::text(ui, Font::Body, theme::ERROR_TEXT, entry.rule());
+            let rule = theme::faded(theme::ERROR_TEXT, alpha);
+            theme::text(ui, Font::Body, rule, entry.rule());
             // What broke it, so a rule worded "Spells/Crystal Tears/Consumables" names the one.
             if !entry.alert.detail.is_empty() {
                 ui.same_line();
-                theme::text(ui, Font::Body, theme::TEXT_QUIET, &entry.alert.detail);
+                theme::text(ui, Font::Body, quiet, &entry.alert.detail);
             }
         }
     }
