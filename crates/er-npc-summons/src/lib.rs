@@ -15,10 +15,12 @@
 //!   is open the game gets neither its keys and buttons ([`pad`], `er-dinput-suppress-core`) nor
 //!   the mouse ([`cursor`]).
 //! * The finger is still refused where the game bars summoning ([`finger`]).
-//! * Mimic Tear: four detours rewrite what `BuddyGenerator` summons for a Mimic Tear request
-//!   ([`mimic_hooks`]), and each companion with a `build_url` is built wearing that build's gear
-//!   ([`dress`]), carries its configured name ([`names`]) and, with `ai = { brain = "x" }`, runs
-//!   a Lua brain loaded into the AI state ([`brains`]).
+//! * Mimic Tear: four detours and a `GetCharaInitParam` union handler rewrite what
+//!   `BuddyGenerator` summons for a Mimic Tear request ([`mimic_hooks`]), and each companion with
+//!   a `build_url` is built wearing that build's gear ([`dress`]), carries its configured name
+//!   ([`names`]) and, with `ai = { brain = "x" }`, runs a Lua brain loaded into the AI state
+//!   ([`brains`]). No param row is written: the changed BuddyParam and `CharaInitParam` rows are
+//!   copies this DLL serves through the two getters, so Seamless's `lobby_key` is unchanged.
 //! * Companions get a friendly overhead name and HP plate with a friendly name colour, and no red
 //!   enemy damage bar when hit: three `ilhook` mid hooks and one detour ([`mid_hooks`]).
 //!

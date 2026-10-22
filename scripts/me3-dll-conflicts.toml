@@ -1355,12 +1355,22 @@ for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 throu
 seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
 companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
 `GetBuddyListBySpEffectId` `0x1404bc960`, `GetBuddyParam` `0x140d26890` and \
-`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request; the \
-last swaps the companion's `CharaInitParam` row for its build URL's gear for the length of one \
-call). It links `er-build-import-runtime` for the item catalog and the reinforce clamp only: \
-it never starts that crate's phase machine, fetch worker or game task, so it is not a second \
-owner of the player's inventory the way `er-build-import` is. No other shell hooks those five \
-prologues. Since 2026-10-06 it also detours, bare and alone on each prologue: \
+`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request, and \
+since 2026-10-22 a union handler on `GetCharaInitParam` (no 1.16.2 ledger row; 1.17.1 \
+`0x140d35f70`, 2.7.2.0 `0x140d37660`, carried by `carry_1171_rva` and refused unless its frame, \
+table-index and out-store windows match), scoped to one companion's `CreateSummonChr` call on \
+that call's thread). It writes no param row. `GetBuddyParam` and `GetCharaInitParam` both fill \
+`out = {id, row*}`, and the detours point `out+8` at a copy this DLL owns: row 20700001 with the \
+companion's npc, think, charaInit and formation offset, and the body's `CharaInitParam` row with \
+its build URL's gear. Copies are interned by content and never freed. Seamless's `lobby_key` is \
+a fingerprint of the loaded param tables compared for equality, so a resident-row write would \
+put the player in a matchmaking pool of one (bd \
+death-persist-is-the-lobby-key-mover-seamless-201-2720-2026-10-22); until 2026-10-22 this shell \
+wrote both rows for the length of one call and put them back. It links `er-build-import-runtime` \
+for the item catalog and the reinforce clamp only: it never starts that crate's phase machine, \
+fetch worker or game task, so it is not a second owner of the player's inventory the way \
+`er-build-import` is. No other shell hooks those six prologues. Since 2026-10-06 it also \
+detours, bare and alone on each prologue: \
 `ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
 `0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
 only on the AI state); since 2026-10-07 `CalculateDamage2` `0x1404483b0` (observes every landed \

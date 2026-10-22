@@ -44,9 +44,10 @@ different scalar type, and never a float.
 
 # What it checks
 
-Every call to a union registrar (`register_union_hook`, `register_shared_hook`, their `5` and
-`_runtime_derived` and `_with_budget` spellings) and every call to a local helper that forwards a
-type-erased `*mut c_void` into one. The type-erasing helpers are the whole reason a source gate is
+Every call to a union registrar (`register_union_hook`, `register_shared_hook`, their `5`, `7`,
+`_runtime_derived`, `_following_arxan` and `_with_budget` spellings) and every call to a local
+helper that forwards a type-erased `*mut c_void` into one. The type-erasing helpers are the whole
+reason a source gate is
 needed rather than the type checker: `register_union_hook` takes a typed `UnionFn`, so a float
 handler cannot reach it directly -- it reaches it through a helper that took `*mut c_void` and
 transmuted, which erases the declaration the compiler would have refused.
@@ -66,6 +67,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTRAR_ARITY = {
     "register_union_hook": 4,
     "register_union_hook_runtime_derived": 4,
+    # Not reached by the name above: `\b` does not end inside an identifier, so the Arxan-following
+    # spelling and the seven-argument one went unchecked until 2026-10-22.
+    "register_union_hook_runtime_derived_following_arxan": 4,
+    "register_union_hook7_runtime_derived": 7,
     "register_shared_hook": 4,
     "register_shared_hook_with_budget": 4,
     "register_union_hook5": 5,
@@ -90,7 +95,7 @@ FN_DECL = re.compile(
 )
 PLAIN_FN_DECL = re.compile(r'(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?fn\s+([A-Za-z0-9_]+)\s*\(')
 FLOAT = re.compile(r"\bf(?:32|64)\b")
-UNION_CAST = re.compile(r"\bas\s+(?:[A-Za-z0-9_]+::)*UnionFn5?\b")
+UNION_CAST = re.compile(r"\bas\s+(?:[A-Za-z0-9_]+::)*UnionFn[57]?\b")
 ERASED_CAST = re.compile(r"\bas\s+\*(?:mut|const)\s+(?:[A-Za-z0-9_]+::)*c_void\b")
 
 
@@ -614,6 +619,28 @@ def selftest() -> int:
             },
             1,
             "float handler registered directly is caught",
+        ),
+        # The Arxan-following registrar is a registrar too, under a name the plain one's pattern
+        # does not reach.
+        (
+            {
+                "crates/a/src/lib.rs": float_handler
+                + "fn install() { let _ = unsafe { "
+                "register_union_hook_runtime_derived_following_arxan(entry, float_hook, &ORIG) "
+                "}; }\n"
+            },
+            1,
+            "float handler on the Arxan-following registrar is caught",
+        ),
+        # A five-argument handler cast to the seven-argument shape: refused.
+        (
+            {
+                "crates/a/src/lib.rs": five_shaped
+                + "fn install() { let _ = unsafe { register_union_hook7_runtime_derived(entry, "
+                "wide_hook as er_hook::UnionFn7, &ORIG) }; }\n"
+            },
+            1,
+            "a 5-argument handler on the 7-argument union is caught",
         ),
         # A narrow handler: refused, because its `orig` may be the next handler in the chain.
         (
