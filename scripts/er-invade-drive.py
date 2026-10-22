@@ -166,11 +166,10 @@ def main() -> int:
         print("no eldenring.exe in the prefix", file=sys.stderr)
         return 1
     frida_session = dev.attach(pid)
-    LOG.parent.mkdir(parents=True, exist_ok=True)
-    log = open(LOG, "a", buffering=1, encoding="utf-8")
+    log = _watch.SessionLog(LOG)
 
     def on_message(message, _data):
-        log.write(json.dumps({"at": time.time(), "message": message}) + "\n")
+        log.write({"at": time.time(), "message": message})
         print(f"AGENT {message.get('payload', message)}", flush=True)
 
     script = frida_session.create_script(AGENT.read_text(encoding="utf-8"))

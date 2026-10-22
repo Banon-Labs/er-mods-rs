@@ -69,6 +69,64 @@ PROGRESS_EVERY_SECONDS = 10.0
 # The evidence recorder, beside this file. Hyphenated, so it is loaded by path rather than imported
 # by name; see `evidence_module`.
 EVIDENCE_SCRIPT = pathlib.Path(__file__).resolve().parent / "er-frida-evidence.py"
+# The log only ever grew. By 2026-10-22 it was 5.4 GB, about 4.5 GB of it written by one per-frame
+# probe in three hours on 2026-09-17. A log at least this big is moved to `<name>.prev` when a
+# session opens it, so the disk holds at most two of them and readers no longer parse a month.
+ROTATE_LOG_BYTES = 64 * 1024 * 1024
+# What one session may write. Past it, messages are still counted and printed but not written, and
+# the log says so twice: a `log_capped` record when it happens and a `log_dropped` count at close.
+SESSION_LOG_CAP_BYTES = 256 * 1024 * 1024
+
+
+class SessionLog:
+    """The JSON-lines log one watch session appends to, bounded on disk.
+
+    Opening it rotates a log that has reached `rotate_bytes`. Writing stops at `cap_bytes` for this
+    session, and the stop is written into the log itself, because a reader that finds the messages
+    ending must be able to tell a cap from a quiet game.
+    """
+
+    def __init__(
+        self,
+        path: pathlib.Path,
+        cap_bytes: int = SESSION_LOG_CAP_BYTES,
+        rotate_bytes: int = ROTATE_LOG_BYTES,
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if path.stat().st_size >= rotate_bytes:
+                os.replace(path, path.with_name(path.name + ".prev"))
+        except FileNotFoundError:
+            pass
+        self.path = path
+        self.cap_bytes = cap_bytes
+        self.written = 0
+        self.dropped = 0
+        self.handle = open(path, "a", buffering=1, encoding="utf-8")
+
+    def write(self, record: dict) -> None:
+        # `json.dumps` escapes everything outside ASCII by default, so characters are bytes here.
+        line = json.dumps(record) + "\n"
+        if self.dropped or self.written + len(line) > self.cap_bytes:
+            if not self.dropped:
+                self.handle.write(json.dumps({"at": time.time(), "log_capped": self.written}) + "\n")
+                print(
+                    f"log cap reached: {self.written} bytes written to {self.path}; later messages "
+                    f"are printed and counted, not written",
+                    flush=True,
+                )
+            self.dropped += 1
+            return
+        self.handle.write(line)
+        self.written += len(line)
+
+    def close(self) -> None:
+        try:
+            if self.dropped:
+                self.handle.write(json.dumps({"at": time.time(), "log_dropped": self.dropped}) + "\n")
+            self.handle.close()
+        except OSError:
+            pass
 
 
 def evidence_module():
@@ -330,8 +388,7 @@ def run(
     session = dev.attach(pid)
     print(f"attached to eldenring.exe (windows pid {pid})", flush=True)
     attached_at = time.monotonic()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log = open(log_path, "a", buffering=1, encoding="utf-8")
+    log = SessionLog(log_path)
     # How many messages the agent sent back. This is the number the evidence gate reads, and it is
     # counted here rather than by anyone reading the transcript afterwards: a watch that attached
     # and received nothing observed nothing, and a zero licenses no edit.
@@ -340,7 +397,7 @@ def run(
     def on_message(message, _data):
         seen["messages"] += 1
         record = {"at": time.time(), "role": role, "endpoint": endpoint, "pid": pid, "message": message}
-        log.write(json.dumps(record) + "\n")
+        log.write(record)
         payload = message.get("payload", message)
         print(f"AGENT {payload}", flush=True)
 
@@ -481,17 +538,46 @@ def run(
         # Every path out of the watch comes through here: a detach, an interrupt, a `SIGTERM`, or
         # an exception from Frida. What the session observed is recorded once, whichever it was.
         record_evidence(agent_path, pid, seen["messages"], time.monotonic() - attached_at)
-        try:
-            log.close()
-        except OSError:
-            pass
+        log.close()
     return 0
+
+
+def session_log_behaves() -> list[tuple[str, bool]]:
+    """Run `SessionLog` against a scratch directory and report what it did."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "hits.jsonl"
+        path.write_text("x" * 100, encoding="utf-8")
+        # Twenty records of `{"n": k}` come to 190 bytes, so a 100-byte cap stops them partway.
+        log = SessionLog(path, cap_bytes=100, rotate_bytes=100)
+        rotated = (path.parent / "hits.jsonl.prev").read_text(encoding="utf-8") == "x" * 100
+        for n in range(20):
+            log.write({"n": n})
+        log.close()
+        lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        kept = [r for r in lines if "n" in r]
+        capped = [r for r in lines if "log_capped" in r]
+        dropped = [r for r in lines if "log_dropped" in r]
+
+        small = pathlib.Path(tmp) / "small.jsonl"
+        small.write_text('{"old": 1}\n', encoding="utf-8")
+        SessionLog(small, rotate_bytes=100).close()
+        appended = small.read_text(encoding="utf-8") == '{"old": 1}\n' and not small.with_name("small.jsonl.prev").exists()
+
+    return [
+        ("a log at the rotation size is moved to .prev when a session opens it", rotated),
+        ("a smaller log is appended to, not rotated", appended),
+        ("a session stops writing at its cap", 0 < len(kept) < 20 and sum(len(json.dumps(r)) + 1 for r in kept) <= 100),
+        ("the cap is written into the log once", len(capped) == 1),
+        ("the dropped messages are counted in the log", len(dropped) == 1 and dropped[0]["log_dropped"] == 20 - len(kept)),
+    ]
 
 
 def selftest() -> int:
     import inspect
 
-    checks = [
+    checks = session_log_behaves() + [
         ("the agent file exists", DEFAULT_AGENT.is_file()),
         ("the agent hooks the invade action", "0x25850" in DEFAULT_AGENT.read_text()),
         ("the agent hooks the cancel action", "0x258d0" in DEFAULT_AGENT.read_text()),
