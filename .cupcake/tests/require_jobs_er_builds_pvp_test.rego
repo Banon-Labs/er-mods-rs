@@ -121,3 +121,57 @@ test_deny_unbuffered_flag if {
 test_deny_direct_exec if {
 	denied("./scripts/er-builds-pvp.py --rl 150 --json")
 }
+
+# The false positive reported 2026-10-19: a subagent's `sed -i` edit of the script was refused
+# as a run. Editing or reading the source is never a run, whatever the quoted script holds.
+test_deny_execution_without_jobs if {
+	denied("python3 scripts/er-builds-pvp.py --rl 150")
+}
+
+test_allow_sed_in_place_edit if {
+	allowed("sed -i 's/a/b/' scripts/er-builds-pvp.py")
+}
+
+test_allow_grep_of_the_file if {
+	allowed("grep -n x scripts/er-builds-pvp.py")
+}
+
+test_allow_sed_script_with_inner_double_quote if {
+	allowed(`sed -i 's/print("x")/y/' scripts/er-builds-pvp.py`)
+}
+
+test_allow_sed_script_with_lone_inner_double_quote if {
+	allowed(`sed -i 's/"/x/' scripts/er-builds-pvp.py`)
+}
+
+test_allow_sed_script_naming_the_run if {
+	allowed(`sed -i 's|python3 scripts/er-builds-pvp.py --rl 150|x|' scripts/er-builds-pvp.py`)
+}
+
+test_allow_sed_append_with_python_code if {
+	allowed(`sed -i '/^def main/a\    p.add_argument("--x")' scripts/er-builds-pvp.py`)
+}
+
+test_allow_edit_then_diff if {
+	allowed("sed -i 's/a/b/' /home/banon/projects/er-mods-rs/scripts/er-builds-pvp.py && git diff -- scripts/er-builds-pvp.py")
+}
+
+test_allow_cat_and_wc if {
+	allowed("cat scripts/er-builds-pvp.py | head; wc -l scripts/er-builds-pvp.py")
+}
+
+test_allow_heredoc_body_naming_the_run if {
+	allowed("cat > /tmp/claude-1000/x/notes.txt <<'EOF'\npython3 scripts/er-builds-pvp.py --rl 150\nEOF")
+}
+
+test_deny_run_chained_after_edit if {
+	denied("sed -i 's/a/b/' scripts/er-builds-pvp.py && python3 scripts/er-builds-pvp.py --rl 150")
+}
+
+test_deny_run_on_next_line if {
+	denied("grep -n x scripts/er-builds-pvp.py\npython3 scripts/er-builds-pvp.py --rl 150")
+}
+
+test_deny_behind_timeout if {
+	denied("timeout 120 python3 scripts/er-builds-pvp.py --rl 150")
+}
