@@ -1,4 +1,5 @@
-//! The settings panel, and joining whatever imgui already exists in the process.
+//! The settings panel, and joining whatever imgui already exists in the process. The band census
+//! panel (`band_panel`) is drawn from the same draw callback.
 //!
 //! This DLL never installs a second `Present` hook. If another module in this workspace already
 //! hosts the overlay it registers as a guest and draws through that; if nobody does, it hosts and
@@ -28,6 +29,7 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
@@ -449,6 +451,19 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     };
     // SAFETY: as above; `adopt_frame` accepted it, so it is the host's live frame.
     unsafe { draw(ui, frame) };
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { er_overlay_theme::frame_fonts(frame) };
+    // This function is `extern "C"`, so a panic unwinding out of it would abort the game. imgui-rs's
+    // tokens end the panel's windows as a panic unwinds, and after one the panel stays hidden.
+    if catch_unwind(AssertUnwindSafe(|| {
+        crate::band_panel::draw_ui(ui, ui_scale, &fonts);
+    }))
+    .is_err()
+    {
+        crate::band_panel::hide_for_session();
+    }
 }
 
 /// This module's own render loop, used only when nothing else in the process hosts one.
@@ -466,8 +481,9 @@ impl ImguiRenderLoop for SettingsOverlay {
 
     fn render(&mut self, ui: &mut Ui) {
         // Guests first and before any early return: this module would host the only imgui context
-        // in the process, so returning early here draws nothing for every other overlay too. The
-        // settings panel is one of the guests, registered when this module became the host.
+        // in the process, so returning early here draws nothing for every other overlay too. This
+        // module's own panels, settings and band census, are one guest, registered when this
+        // module became the host.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
         er_build_watermark_core::draw_rows(ui, standalone_log);
     }

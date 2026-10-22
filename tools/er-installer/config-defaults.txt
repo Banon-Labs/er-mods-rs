@@ -26,6 +26,19 @@ save_game = "add-row"
 
 [local_invasion]
 
+# AUTO RE-INVADE -- what this calls inside Seamless Co-op.
+#
+# When this DLL cancels a match (wrong place, stalled, or a join that died), it starts the next
+# search itself by calling Seamless Co-op's own invade action: the function at ersc.dll+0x25850 in
+# Seamless Co-op v2.0.1, called as invade(owner, 0, 1, 1) on a thread of this DLL, where `owner`
+# is Seamless's object that holds its session, found by reading Seamless's memory. It is the action
+# behind the invade option of Seamless's own invasion menu. Nothing in ersc.dll is changed by the
+# call.
+#
+# Set false and this DLL never calls it: matches are still refused and cancelled, and you start the
+# next search yourself with the item.
+auto_reinvade = true
+
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
 
@@ -201,6 +214,16 @@ enable_toggle_key = "F3"
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
+
+# The band census panel, by NAME, from the same list: how many hosts you could invade right now in
+# each rune level and weapon level band, counted from Steam's lobby list in your own matchmaking
+# pool. Nothing is joined and nothing is published to count them.
+#
+# While the panel is open, band_census_view_key switches the grid between hosts now and new hosts
+# per minute, averaged over every minute the panel's counter has watched. That average is kept in
+# er-invasion-warp-band-census.txt beside this file; delete it to start over.
+band_census_key = "F8"
+band_census_view_key = "R"
 
 # There is no setting for what closes the "Attempting to invade another world." popup, and that is
 # deliberate: the mod reads the key you have bound to the game's own menu back-out, out of the

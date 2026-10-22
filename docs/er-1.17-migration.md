@@ -20,12 +20,21 @@ So the carry is a segment table, `docs/recon/carry-1171-to-1172.tsv`, generated 
 
 * text segments are consecutive `.pdata` pairs that share a delta, including the gap between them.
   Length alone pairs two different same-length stubs (`0x262890` is a different stub in each
-  build), so a pair whose rip-relative operands, carried through the data segments, do not land
-  where the new image's operands point is dropped: 234,831 pairs survive in 860 segments. A gap
-  next to a dropped entry rejoins its segment when its bytes are identical apart from alignment
-  filler, which is what keeps the identical leaf `0x252130` carried;
-* data segments come from every rip-relative operand inside a text segment, read at its place in
-  both images, voted per target;
+  build), so a pair whose rip-relative operands, carried through a byte-scan vote of the data, do
+  not land where the new image's operands point is dropped: 234,831 pairs survive in 860
+  segments. A gap next to a dropped entry rejoins its segment when its bytes are identical apart
+  from alignment filler, which is what keeps the identical leaf `0x252130` carried;
+* data segments come from decoded readers: every rip-relative operand of every carried `.pdata`
+  function and of the leaf code reached from them, whose instruction -- and the straight line
+  after it, up to 8 instructions -- has the same shape in 2.7.2.0 with every direct branch
+  carried. The 2.7.2.0 line is decoded no further than the end of its function, as
+  `scripts/function_extent.py` resolves it, and a reader in code whose end that cannot find --
+  `.pdata`-less runtime routines and long straight-line blocks -- does not vote. Each read target
+  takes the delta a strict majority of its readers read at, one reader included, and no segment
+  spans a target of another delta. Until 2026-10-21 the data was voted from every byte that could
+  be an operand and a target needed two votes, so one with a single reader (66,406 of the 94,659
+  read targets have one) took its neighbours' delta: `0x3b3885c` (the 10.0 the join tick reads)
+  went to `+0x3010` for `+0x300c`, `0x3d6deb4` to `+0x3024` for `+0x301c`;
 * an rva in no segment is refused, because it sits in or beside something that changed.
 
 `crates/er-game-base/build.rs` compiles the table into `CARRY_1171_TO_1172`. `game_build.rs` then
@@ -41,8 +50,12 @@ The table was checked against evidence that shares none of its assumptions:
 | code pointers in three vtables, read at the carried vtable address | 36 of 36 agree with the text carry |
 | RTTI type names, read at the carried address | 400 of 400 match |
 | `VERIFIED_1162_TO_1170` / `DETOUR_SAFE_1162_TO_1170` destinations | 656 of 656 and 535 of 535 carry |
+| every decoded rip-relative data operand whose instruction carries, inside its 2.7.2.0 function, to one of the same shape (`--measure`) | 373,226 of 373,336 land where the 2.7.2.0 instruction reads (the byte-scan table: 372,445) |
 
-`--selftest` re-runs all of them. The new de-Arxan'd image is `eldenring-deobf-1.17.2.bin`: 1597
+The 110 that do not are 107 readers whose following code changed -- a branch to another function,
+a `jmp` into refused code, an Arxan return stub, an instruction of another shape -- and 3 outvoted
+by the other readers of their target (1 of 4,400, 1 of 153, 1 of 237). `--selftest` re-runs all of
+them but `--measure`, and pins both addresses above. The new de-Arxan'd image is `eldenring-deobf-1.17.2.bin`: 1597
 stubs and 1359 regions, the same shape as 1.17.1.
 
 The sibling `fromsoftware-rs` checkout carries a `Ww2720` arm and a regenerated `rva_ww.rs`, with

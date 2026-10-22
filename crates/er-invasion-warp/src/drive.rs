@@ -318,6 +318,12 @@ impl InvasionWarpDrive {
             let panel_draws = crate::overlay::draws();
             let panel_clicks = crate::overlay::clicks();
             let panel_suppressed = er_dinput_suppress_core::suppressed_mouse_clicks();
+            // The band census panel. `drawn` zero while `open` is the same guest-registration
+            // failure as the settings panel's; `switches` counts the view key and the clicked
+            // prompt, so a key that does nothing shows as a zero beside a nonzero `drawn`.
+            let (census_open, census_draws, census_switches) = crate::band_panel::counters();
+            let census_input = er_overlay_input::counters();
+            let (census_sweeps, census_failures) = crate::band_census::tallies();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} \
                  block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
@@ -331,6 +337,10 @@ impl InvasionWarpDrive {
                  drawn={banners_drawn} empty={banners_empty}] \
                  panel[open={panel_open} drawn={panel_draws} clicks={panel_clicks} \
                  clicks_kept_from_game={panel_suppressed}] \
+                 census[open={census_open} drawn={census_draws} switches={census_switches} \
+                 sweeps={census_sweeps} failed={census_failures} \
+                 taking={} cursor_hooked={} cursor_forced={} keys_blanked={} \
+                 mouse_reads_blanked={}] \
                  -- invasion locations are markers, not warp destinations: the map's own confirm \
                  is declined while a search is armed, and the pins are drawn dimmed to show it",
                 self.ticks,
@@ -344,6 +354,11 @@ impl InvasionWarpDrive {
                 verdicts.0,
                 verdicts.3,
                 verdicts.2,
+                census_input.taking,
+                census_input.cursor_hooked,
+                census_input.cursor_forced,
+                census_input.keys_blanked,
+                census_input.mouse_reads_blanked,
             ));
         }
     }
@@ -523,6 +538,8 @@ mod tests {
             shipped.unmark_key,
             shipped.enable_toggle_key,
             shipped.settings_key,
+            shipped.band_census_key,
+            shipped.band_census_view_key,
         ];
         for (index, key) in keys.iter().enumerate() {
             assert!(

@@ -299,11 +299,13 @@ def main() -> int:
                 )
                 # ...and the guard is not thereby neutered: a genuinely separate run, which
                 # inherits no marker, is still refused. Without this half the fix above would pass
-                # by turning the lock off.
+                # by turning the lock off. ER_CHECK_WAIT_LOCK goes too: the pre-push hook exports
+                # it, and inherited here it turns the refusal into a wait on a holder that never
+                # lets go, so every push timed out at this case while a plain run passed.
                 separate = {
                     k: v
                     for k, v in os.environ.items()
-                    if k not in ("ER_CHECK_LOCK_HELD", "ER_CHECK_FORCE")
+                    if k not in ("ER_CHECK_LOCK_HELD", "ER_CHECK_FORCE", "ER_CHECK_WAIT_LOCK")
                 }
                 rc, out = run_fixture(
                     f"{PASSING}\n{MARKER}\n{END}", env=separate, lock_dir=lock_dir

@@ -64,6 +64,9 @@ TOOL = "frida-carry-1172"
 SCRIPTS = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS.parent
 
+sys.path.insert(0, str(SCRIPTS))
+import function_extent  # noqa: E402 - repo-local; the sys.path line above is what makes it work
+
 
 def _load(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
@@ -376,7 +379,13 @@ class Images:
             reg = self._family(first.reg_name(first.operands[0].reg))
             want = list(offsets)
             at = s + first.size
-            for i in self.md.disasm(data[at:at + window * 15], at, window):
+            # The chain is followed inside the function the load sits in and no further: past its
+            # end the bytes decode into instructions nobody assembled, and a field read there is
+            # one the class never had. No extent, no chain; the byte count only caps the slice.
+            end = function_extent.body_slice_end(data, IMAGE_BASE + s, cap=first.size + window * 15)
+            if end is None:
+                continue
+            for i in self.md.disasm(data[at:end], at, window):
                 hit = None
                 for op in i.operands:
                     if op.type == cs.x86.X86_OP_MEM and op.mem.base and op.mem.index == 0 and \
@@ -1667,8 +1676,14 @@ def main() -> int:
                 print(f"    .pdata entry around it: {inside and tuple(hex(x) for x in inside)}; "
                       f"previous entry end {hex(ends[j]) if j >= 0 else '-'}")
                 print(f"    1.17.1 bytes before {d[r - 16:r].hex()} at {d[r:r + 16].hex()}")
-                for i in img.md.disasm(d[r:r + 24], r):
-                    print(f"      {IMAGE_BASE + i.address:#x}  {i.mnemonic} {i.op_str}")
+                # Decoded up to the end of the function it sits in: the bytes after that are
+                # already printed raw above, and decoded they would only look like instructions.
+                end = function_extent.body_slice_end(d, IMAGE_BASE + r, cap=24)
+                if end is None:
+                    print("      no function extent here, so nothing is decoded")
+                else:
+                    for i in img.md.disasm(d[r:end], r):
+                        print(f"      {IMAGE_BASE + i.address:#x}  {i.mnemonic} {i.op_str}")
         return 0
     if not a.files:
         ap.print_help()

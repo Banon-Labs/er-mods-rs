@@ -35,8 +35,71 @@ const RVA = {
   getCurrentMapId: 0x5f02b0, // 1.17.1 0x5efe00
   chrInsGetPhysicsPosition: 0x3f0e20, // 1.17.1 0x3f0e20, unmoved
   convertBlockCoordsToPhysics: 0x61f420, // 1.17.1 0x61ef70
+  convertPhysicsToBlockCoords: 0x61f570, // 1.17.1 0x61f0c0
+  chrInsGetOrientation: 0x3eeb80, // 1.17.1 0x3eeb80, unmoved
+  chrInsRequestWarp: 0x3fa660, // 1.17.1 0x3fa5d0
   worldChrManGlobal: 0x3d6d018, // 1.17.1 0x3d69ff8
 };
+
+// The local warp: the engine's own in-map teleport, with no area reload.
+//
+// `0x1403fa5d0` (2.7.2.0 `0x1403fa660`; 1.16.2 `0x1403fa3a0`, unnamed there) is what every in-place
+// move of a live character goes through -- 23 callers in 1.16.2, among them the EMEVD
+// WarpCharacterAndCopyFloor bodies `FUN_1405f7790` / `FUN_1405f7890` (1.17.1 `0x1405f85e0` /
+// `0x1405f86e0`, 2.7.2.0 `0x1405f8a90` / `0x1405f8b90`) behind
+// `CSEventFadeWarpCtrl::STEP_Warp`. Its signature is (ChrIns*, FloatVector4* physicsPos,
+// FloatVector4* euler). It does not move anything itself: it calls `0x1403c9250` (unmoved in
+// 2.7.2.0), which is
+//
+//   or     dword [rcx+0xfc], 3          ; ChrCtrl.chrProxyFlags |= pos | rot
+//   movaps xmm0, [rdx]                  ; position, 16-byte aligned or #GP
+//   movups [rcx+0x100], xmm0            ; ChrCtrl.ragdollPosition
+//   movaps xmm0, [r8]                   ; euler, 16-byte aligned or #GP
+//   movups [rcx+0x110], xmm0            ; ChrCtrl.ragdollRotation
+//
+// and then marks the ChrIns dirty (+0x2e7 |= 2, vtable +0x480, +0x1c6 |= 0x80, +0xc8 = 1,
+// +0x350 = 1.0). The engine drains the request on its next character update through
+// `ChrCtrl::UpdatePositions`: `CSChrPhysicsModule::ForceSetPosition` + `SetOrientation` + the
+// Havok proxy move, then it clears the flags. The EMEVD caller follows the call with
+// `or byte [rbx+0x1c4], 2` (force this character's update this frame), and so does this agent.
+// Read out of eldenring-deobf-1.17.1.bin at `0x1405f8650..0x1405f8662`, so the 1.17.1 call
+// sequence is byte-proven, not carried. In 2.7.2.0 the same bytes sit at `0x1405f8b00..0x1405f8b12`
+// inside a byte-identical body.
+//
+// The position is in physics space, the space `ChrIns::GetPhysicsPosition` reads. A block-local
+// target is put through `ConvertBlockCoordsToPhysicsCoords` (`0x14061ef70`, 2.7.2.0 `0x14061f420`,
+// 1.16.2 `0x14061e120`), which is a pure translation by the block's origin (overworld: the grid
+// cell's `WorldGridAreaInfo` coordinates; legacy: `WorldBlockInfo::GetBlockCenterInPhysicsSpace`).
+// `ConvertPhysicsCoordinatesToBlockCoordinates` (`0x14061f0c0`, 2.7.2.0 `0x14061f570`) is its exact
+// inverse.
+//
+// `ForceSetPosition` does not touch `CSChrPhysicsModule+0x150` lastGroundedPosition, and the fall
+// module charges `lastGroundedPosition.y - position.y` on landing (bd
+// invincibility-does-not-cover-fall-death-pin-lastgrounded-2026-09-02). So on the frame after the
+// drain the agent pins +0x150 to the new position: a downward warp then lands as a fall from the
+// target, not from where the player stood before.
+//
+// These offsets read unchanged in 2.7.2.0, each in a function that is byte-identical across the
+// builds (1.17.1 -> 2.7.2.0): ChrIns +0x58 in the warp request 0x1403fa5d0 -> 0x1403fa660, +0x1c4 in
+// the EMEVD body above, +0x30 in ChrIns::GetBlockId 0x1403f0470 (unmoved), ChrCtrl +0xfc in
+// 0x1403c9250, physics +0x150 in the fall check 0x14044e27f -> 0x14044e35f, and PlayerIns +0x6c0
+// and +0x6d0 in the block-position writer 0x14065ad00 -> 0x14065b1b0.
+const CHR_INS_CHR_CTRL = 0x58;
+const CHR_INS_FLAGS_1C4 = 0x1c4;
+const CHR_INS_FLAGS_1C4_FORCE_UPDATE = 0x2;
+const CHR_INS_BLOCK_ID = 0x30;
+const CHR_CTRL_PROXY_FLAGS = 0xfc;
+const CHR_CTRL_PROXY_FLAGS_POS_ROT = 0x3;
+const PHYSICS_LAST_GROUNDED = 0x150;
+// PlayerIns block_position (fromsoftware-rs `PlayerIns::block_position`, "position within the
+// current block"), followed by current_block_id at +0x10 and safe_block_pos at +0x14. Found live
+// 2026-10-17 by scanning the PlayerIns for the converter's output: +0x6c0 matched it to the last
+// bit, with 0x3c2a2400 (m60_42_36_00) at +0x6d0. The engine maintains it itself, so it is an
+// independent check that `blockLocal` (our conversion) is the frame the MSB and the warp use.
+const PLAYER_INS_BLOCK_POSITION = 0x6c0;
+// Frames to watch after the request before reporting where the player settled. 45 is ~0.75 s at
+// 60 fps: long enough for a short drop onto the target surface to finish.
+const LOCAL_SETTLE_FRAMES = 45;
 
 // `WorldChrMan.main_player`. The global and this offset are one instruction pair in the
 // de-Arxan'd image (`mov rax,[rip+disp]; mov r13,[rax+0x1e508]`), which is why they are quoted
@@ -91,6 +154,8 @@ let lastStreamAt = 0;
 // the proof the main thread has left the hook invocation that issued the kick and driven the
 // stage machine one more frame.
 let kickedOnFrame = null;
+// Set while a local warp is being followed frame by frame (see `followLocalWarp`).
+let localWatch = null;
 
 function resolve() {
   const mod = Process.findModuleByName('eldenring.exe');
@@ -109,8 +174,140 @@ function resolve() {
     setupMapReentry: new NativeFunction(at(RVA.setupMapReentry), 'void', ['pointer', 'bool'], 'win64'),
     chrInsGetPhysicsPosition: new NativeFunction(at(RVA.chrInsGetPhysicsPosition), 'pointer', ['pointer', 'pointer'], 'win64'),
     convertBlockCoordsToPhysics: new NativeFunction(at(RVA.convertBlockCoordsToPhysics), 'bool', ['pointer', 'pointer', 'pointer'], 'win64'),
+    convertPhysicsToBlockCoords: new NativeFunction(at(RVA.convertPhysicsToBlockCoords), 'bool', ['pointer', 'pointer', 'pointer'], 'win64'),
+    chrInsGetOrientation: new NativeFunction(at(RVA.chrInsGetOrientation), 'pointer', ['pointer', 'pointer'], 'win64'),
+    chrInsRequestWarp: new NativeFunction(at(RVA.chrInsRequestWarp), 'void', ['pointer', 'pointer', 'pointer'], 'win64'),
   };
   return base;
+}
+
+// A FloatVector4 the engine may load with MOVAPS. `Memory.alloc` promises no 16-byte alignment.
+function vec4Aligned(x, y, z, w) {
+  const raw = Memory.alloc(32);
+  const p = raw.add((16 - (raw.toUInt32() & 15)) & 15);
+  p.writeFloat(x);
+  p.add(4).writeFloat(y);
+  p.add(8).writeFloat(z);
+  p.add(12).writeFloat(w);
+  return { raw: raw, p: p };
+}
+
+function readVec3(p) {
+  return { x: p.readFloat(), y: p.add(4).readFloat(), z: p.add(8).readFloat() };
+}
+
+function mainPlayer() {
+  const worldChrMan = base.add(RVA.worldChrManGlobal).readPointer();
+  if (worldChrMan.isNull()) return null;
+  const chr = worldChrMan.add(MAIN_PLAYER_OFFSET).readPointer();
+  return chr.isNull() ? null : chr;
+}
+
+function playerPhysics(chr) {
+  return chr.add(MODULES_OFFSET).readPointer().add(MODULE_PHYSICS).readPointer();
+}
+
+function toBlock(physicsPos, block) {
+  const id = Memory.alloc(4);
+  id.writeU32(block);
+  const out = vec4Aligned(0, 0, 0, 0);
+  if (!fn.convertPhysicsToBlockCoords(out.p, physicsPos, id)) return null;
+  return readVec3(out.p);
+}
+
+// Where the player is, in both spaces, plus the block they are in.
+function localState() {
+  const chr = mainPlayer();
+  if (chr === null) return null;
+  const ph = playerPhysics(chr);
+  const block = chr.add(CHR_INS_BLOCK_ID).readU32() >>> 0;
+  const phys = readVec3(ph.add(PHYSICS_POSITION));
+  const posBuf = vec4Aligned(phys.x, phys.y, phys.z, 1.0);
+  const euler = vec4Aligned(0, 0, 0, 0);
+  fn.chrInsGetOrientation(chr, euler.p);
+  return {
+    playerBlock: '0x' + block.toString(16),
+    mapBlock: '0x' + currentBlock().toString(16),
+    physics: phys,
+    blockLocal: toBlock(posBuf.p, block),
+    engineBlockLocal: readVec3(chr.add(PLAYER_INS_BLOCK_POSITION)),
+    engineBlock: '0x' + (chr.add(PLAYER_INS_BLOCK_POSITION + 0x10).readU32() >>> 0).toString(16),
+    yaw: euler.p.add(4).readFloat(),
+    standing: ph.add(PHYSICS_ON_SOLID_GROUND).readU8() !== 0,
+    lastGrounded: readVec3(ph.add(PHYSICS_LAST_GROUNDED)),
+    proxyFlags: chr.add(CHR_INS_CHR_CTRL).readPointer().add(CHR_CTRL_PROXY_FLAGS).readU32(),
+  };
+}
+
+// Request the engine's in-map teleport for the main player. Runs on the game thread.
+function performLocalWarp(req) {
+  const report = { mode: 'local', target: req, before: localState() };
+  const chr = mainPlayer();
+  if (chr === null) {
+    report.refused = 'no main player';
+    return report;
+  }
+  const playerBlock = chr.add(CHR_INS_BLOCK_ID).readU32() >>> 0;
+  if (playerBlock !== (req.block >>> 0) && !req.anyLoadedBlock) {
+    report.refused = 'target block is not the player block (' + report.before.playerBlock + ')';
+    return report;
+  }
+  const local = vec4Aligned(req.x, req.y, req.z, 0.0);
+  const id = Memory.alloc(4);
+  id.writeU32(req.block);
+  const pos = vec4Aligned(0, 0, 0, 1.0);
+  if (!fn.convertBlockCoordsToPhysics(pos.p, local.p, id)) {
+    report.refused = 'ConvertBlockCoordsToPhysicsCoords refused the block (not resident)';
+    return report;
+  }
+  // The converter writes a FloatVector3; keep w = 1 as GetDmyPolyPosition hands the EMEVD path.
+  pos.p.add(12).writeFloat(1.0);
+  const euler = vec4Aligned(0, 0, 0, 0);
+  if (req.yaw === null || req.yaw === undefined) {
+    fn.chrInsGetOrientation(chr, euler.p);
+  } else {
+    euler.p.add(4).writeFloat(req.yaw);
+  }
+  report.physicsTarget = readVec3(pos.p);
+  report.euler = readVec3(euler.p);
+  fn.chrInsRequestWarp(chr, pos.p, euler.p);
+  chr.add(CHR_INS_FLAGS_1C4).writeU8(chr.add(CHR_INS_FLAGS_1C4).readU8() | CHR_INS_FLAGS_1C4_FORCE_UPDATE);
+  report.requestedFlags = chr.add(CHR_INS_CHR_CTRL).readPointer().add(CHR_CTRL_PROXY_FLAGS).readU32();
+  report.requested = true;
+  localWatch = {
+    startFrame: frame,
+    target: report.physicsTarget,
+    pin: req.pinGround !== false,
+    pinned: false,
+    drainedOnFrame: null,
+    settle: req.settleFrames || LOCAL_SETTLE_FRAMES,
+  };
+  return report;
+}
+
+// Per-frame follow-up of a local warp: notice the drain, pin lastGroundedPosition, then report.
+function followLocalWarp() {
+  const w = localWatch;
+  const s = localState();
+  if (s === null) return;
+  const elapsed = frame - w.startFrame;
+  const d = Math.hypot(s.physics.x - w.target.x, s.physics.y - w.target.y, s.physics.z - w.target.z);
+  if (w.drainedOnFrame === null && (s.proxyFlags & CHR_CTRL_PROXY_FLAGS_POS_ROT) === 0) {
+    w.drainedOnFrame = frame;
+    w.distAtDrain = d;
+    if (w.pin) {
+      const ph = playerPhysics(mainPlayer());
+      ph.add(PHYSICS_LAST_GROUNDED).writeFloat(s.physics.x);
+      ph.add(PHYSICS_LAST_GROUNDED + 4).writeFloat(s.physics.y);
+      ph.add(PHYSICS_LAST_GROUNDED + 8).writeFloat(s.physics.z);
+      w.pinned = true;
+    }
+    send({ type: 'local-drained', frame: frame, elapsed: elapsed, distFromTarget: d, state: s, pinned: w.pinned });
+  }
+  if (elapsed >= w.settle) {
+    localWatch = null;
+    send({ type: 'local-settled', frame: frame, elapsed: elapsed, drainedOnFrame: w.drainedOnFrame, distAtDrain: w.distAtDrain === undefined ? null : w.distAtDrain, distFromTarget: d, state: s });
+  }
 }
 
 // Where the engine actually put the player, in physics space, plus where the requested
@@ -274,7 +471,7 @@ function armListener() {
         pending = null;
         let report;
         try {
-          report = req.probeOnly ? probeWhere(req) : performWarp(req);
+          report = req.probeOnly ? probeWhere(req) : req.local ? performLocalWarp(req) : performWarp(req);
         } catch (e) {
           report = { error: e.message, target: req };
         }
@@ -282,6 +479,14 @@ function armListener() {
         report.frame = frame;
         if (report.kicked) kickedOnFrame = frame;
         send({ type: 'warp', report: report });
+      }
+      if (localWatch !== null && pending === null) {
+        try {
+          followLocalWarp();
+        } catch (e) {
+          localWatch = null;
+          send({ type: 'local-settled', error: e.message });
+        }
       }
       if (streamPeriodMs !== null) {
         const now = Date.now();
@@ -316,7 +521,15 @@ rpc.exports = {
   },
   where() {
     if (base === null) resolve();
-    return { block: '0x' + currentBlock().toString(16), spawnFlag: fn.getExplicitSpawnFlag() };
+    return { block: '0x' + currentBlock().toString(16), spawnFlag: fn.getExplicitSpawnFlag(), player: localState() };
+  },
+  // The in-map teleport, no area reload. `yaw` null keeps the current facing. `anyLoadedBlock`
+  // lets the target name a block other than the player's own, provided the converter accepts it.
+  localWarp(block, x, y, z, yaw, pinGround, anyLoadedBlock) {
+    if (base === null) resolve();
+    armListener();
+    pending = { local: true, block: block, x: x, y: y, z: z, yaw: yaw, pinGround: pinGround, anyLoadedBlock: anyLoadedBlock };
+    return 'queued';
   },
   // One read on the calling Frida thread, for the moments the per-frame pass is not running --
   // a load, or a softlocked session -- where the stream below delivers nothing.

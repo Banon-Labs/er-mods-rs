@@ -34,8 +34,12 @@ target with a single reader was dropped. Its neighbours then carried it with the
 delta. `0x3b3885c` (the 10.0 the join tick reads at `0x6ff691`) went to `+0x3010`
 for `+0x300c`, and `0x3d6deb4` (read at `0x6ff688`) to `+0x3024` for `+0x301c`: the
 data inside `.data` is reordered as well as shifted, so a neighbour's delta says
-nothing about a target of its own. 45,722 of the 70,851 targets read from `.pdata`
-code have exactly one reader.
+nothing about a target of its own. 66,406 of the 94,659 read targets have exactly
+one reader.
+
+The 2.7.2.0 side of a reader is decoded no further than the end of its function,
+as `scripts/function_extent.py` resolves it; a reader whose 2.7.2.0 code has no
+extent it can find does not vote.
 
 Refusing is the point. A carried address that lands in changed code is a
 mid-function detour or a wrong global; a refused one is a dead feature with a log
@@ -67,6 +71,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import NamedTuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import function_extent  # noqa: E402 - repo-local; the sys.path line above is what makes it work
+
 IMAGE_BASE = 0x140000000
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TSV = REPO_ROOT / "docs" / "recon" / "carry-1171-to-1172.tsv"
@@ -97,8 +104,9 @@ NUMBER = re.compile(r"\b(0x[0-9a-f]+|\d+)\b")
 ACCESS = re.compile(r"\b(byte|word|dword|qword|tbyte|xmmword|ymmword|zmmword) ptr \[rip")
 ACCESS_SIZE = {"byte": 1, "word": 2, "dword": 4, "qword": 8, "tbyte": 10,
                "xmmword": 16, "ymmword": 32, "zmmword": 64}
-# A leaf's straight-line decode stops after one of these.
-TERMINATORS = {"ret", "retf", "jmp", "int3", "ud2", "hlt"}
+# A leaf's straight-line decode stops after one of these. capstone spells `f3 c3`, the return the
+# hand-written runtime routines low in `.text` end with, `repz ret`.
+TERMINATORS = {"ret", "repz ret", "rep ret", "retf", "jmp", "int3", "ud2", "hlt"}
 # A reader votes only when this many instructions from it on, or up to a terminator, match.
 WINDOW = 8
 
@@ -336,6 +344,10 @@ def collect_readers(old: Image, new: Image, entries: list[tuple[int, int]],
     dec = _Decoder(old, new, entries, segs)
     step = 4096
     spans = [(i, min(i + step, len(entries))) for i in range(0, len(entries), step)]
+    # `read` bounds every 2.7.2.0 decode with that image's function extents. Parse its section
+    # table and `.pdata` once, here, so the forked workers inherit them instead of each parsing.
+    function_extent.executable_at(new.data, IMAGE_BASE + new.text_lo)
+    function_extent.declared_functions(new.data)
     _DECODER = dec
     try:
         import multiprocessing
@@ -431,7 +443,19 @@ class _Decoder:
             line.append(ins)
             if ins[2] in TERMINATORS:
                 break
-        news = list(self.md.disasm_lite(self.new.data[moved:moved + 15 * len(line)], moved, len(line)))
+        access = ACCESS.search(op)
+        width = ACCESS_SIZE[access.group(1)] if access else 0
+        # The 1.17.1 line was cut from its function's extent, so the 2.7.2.0 one is too: past the
+        # end of the function `moved` sits in, the image holds padding and the deobfuscator's
+        # leftover bytes, which decode into instructions nobody assembled and could pass for the
+        # rest of the line. The byte count only caps the slice. No extent is a refusal, and the
+        # reader does not vote.
+        stop = function_extent.body_slice_end(self.new.data, IMAGE_BASE + moved, cap=15 * len(line))
+        if stop is None:
+            out.append(Reader(address, fn, moved - address, target, None, width,
+                              f"{moved:#x} has no function extent in 2.7.2.0"))
+            return
+        news = list(self.md.disasm_lite(self.new.data[moved:stop], moved, len(line)))
         new_target = None
         if news and self.same_shape(mnemonic, op, news[0][2], news[0][3]):
             new_target = rip_target(news[0][0], news[0][1], news[0][3])
@@ -440,9 +464,7 @@ class _Decoder:
             was, now = self.section_name(self.old, target), self.section_name(self.new, new_target)
             if was != now:
                 why = f"reads {now} in 2.7.2.0 and {was} in 1.17.1"
-        access = ACCESS.search(op)
-        out.append(Reader(address, fn, moved - address, target, new_target,
-                          ACCESS_SIZE[access.group(1)] if access else 0, why))
+        out.append(Reader(address, fn, moved - address, target, new_target, width, why))
 
     def functions(self, lo: int, hi: int) -> tuple[list[Reader], set[int]]:
         """Readers in `.pdata` entries `lo..hi`, and the leaf entries their branches name."""

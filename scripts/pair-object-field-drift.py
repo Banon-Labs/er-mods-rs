@@ -33,8 +33,10 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMAGE_1162 = os.path.join(ROOT, "eldenring-deobf.bin")
-IMAGE_1170 = os.path.join(ROOT, "eldenring-deobf-1.17.bin")
+# The same overrides `check-object-field-offsets-1170.py` reads, so a worktree without the
+# gitignored images can point both at one copy.
+IMAGE_1162 = os.environ.get("ER_DEOBF_1162", os.path.join(ROOT, "eldenring-deobf.bin"))
+IMAGE_1170 = os.environ.get("ER_DEOBF_1170", os.path.join(ROOT, "eldenring-deobf-1.17.bin"))
 BASE = 0x140000000
 # Frame and instruction-pointer bases are never game-object fields.
 NON_FIELD_BASES = ("rip", "rsp", "rbp", "esp", "ebp")

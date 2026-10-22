@@ -147,11 +147,17 @@ fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_functio
     let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
     assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
     assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
-    for function_key in [defaults.enable_toggle_key, defaults.settings_key] {
+    for function_key in [
+        defaults.enable_toggle_key,
+        defaults.settings_key,
+        defaults.band_census_key,
+    ] {
         assert_ne!(defaults.mark_key, function_key);
         assert_ne!(defaults.unmark_key, function_key);
     }
     assert_ne!(defaults.enable_toggle_key, defaults.settings_key);
+    assert_ne!(defaults.band_census_key, defaults.enable_toggle_key);
+    assert_ne!(defaults.band_census_key, defaults.settings_key);
 }
 
 /// A player who names a key must be able to see which key is live, or a typo that parsed into
