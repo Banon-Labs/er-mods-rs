@@ -14,6 +14,11 @@ hooks -- see er-frida-watch.py), so stop any other er-frida-watch.py first:
 
 Both agent files are reloaded in place when they change on disk, like er-frida-watch.py does.
 
+The duelists' gear is regenerated from their build planner link (scripts/er-duelist-gear.py, config
+scripts/frida/ai-lua/duelists.json) at start and before every respawn, and the respawn waits, a
+few seconds at most, for the new gear to reach spawn-npc.js. A respawn request,
+`POST /api/respawn {"preset": "duelists"}`, respawns with duelists.json's `respawn` config.
+
 The page streams every agent message over server-sent events, edits hot.lua (saving it is the
 reload), and posts REPL code. Everything the agents send is also appended to `--log` as JSON lines.
 """
@@ -29,7 +34,9 @@ import queue
 import re
 import os
 import select
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -68,6 +75,27 @@ LUA_DIR = HERE / "frida" / "ai-lua"
 FRAMEWORK = "_lab.lua"
 MOD_NAME = re.compile(r"[A-Za-z0-9_-]+\.lua")
 
+# The duelists' gear generator and its config (see the module docstring).
+GEAR_SCRIPT = HERE / "er-duelist-gear.py"
+DUELISTS_CONFIG = LUA_DIR / "duelists.json"
+# The whole generator run: fetch, catalog, resolve. Its own steps are bounded below this.
+GEAR_TIMEOUT_S = 30
+# How long a respawn waits for rewritten gear to reach spawn-npc.js. The hot reload re-reads the
+# mods every 0.5 s while some AI character runs, so it normally arrives in under 3 s; when no AI
+# runs nothing re-reads them, and waiting longer would not help.
+GEAR_APPLY_WAIT_S = 4.0
+# The generator reads regulation.bin, which needs Python 3.14's compression.zstd. This lab runs
+# under `uv run --with frida`, whose interpreter can be older (3.12 on 2026-10-21), so the generator
+# runs under the system interpreter instead: the first python3 on the default path, outside any
+# virtual environment, or ER_SYSTEM_PYTHON.
+SYSTEM_PYTHON = os.environ.get("ER_SYSTEM_PYTHON") or shutil.which("python3", path=os.defpath) or "python3"
+
+
+def wine_dir(path: pathlib.Path) -> str:
+    """A directory as the game's Wine side spells it, with the trailing separator the AI agent
+    joins file names onto."""
+    return "Z:" + str(path).replace("/", "\\") + "\\"
+
 # unluac writes `function L0_1(A0_2, ...)` ... `end` and then `Name = L0_1`.
 FUNC_START = re.compile(r"^function (L\d+_1)\(")
 FUNC_NAMED = re.compile(r"^function ([A-Za-z_][\w.:]*)\(")
@@ -80,9 +108,17 @@ ARG_ROLES = [
 ]
 
 
+# --duelists sets this to duelists.json's `mods`: the only mods the AI agent runs, so nothing but the
+# duelists' own brain and gear reaches them.
+ONLY_MODS: list[str] | None = None
+
+
 def mod_files() -> list[str]:
-    """Run order: the framework, then mods/*.lua by name."""
-    return [FRAMEWORK] + [f"mods/{p.name}" for p in sorted((LUA_DIR / "mods").glob("*.lua"))]
+    """Run order: the framework, then mods/*.lua by name (only ONLY_MODS when it is set)."""
+    mods = sorted((LUA_DIR / "mods").glob("*.lua"))
+    if ONLY_MODS is not None:
+        mods = [p for p in mods if p.name in ONLY_MODS]
+    return [FRAMEWORK] + [f"mods/{p.name}" for p in mods]
 
 
 def write_manifest() -> list[str]:
@@ -178,6 +214,12 @@ class Lab:
         self.methods: list[dict] = []
         self.reference: dict[str, dict] = {}
         self.corpus = DEFAULT_CORPUS
+        # One gear generation at a time; a respawn arriving mid-run waits for it.
+        self.gear_lock = threading.Lock()
+        # The last spawn request spawn-npc.js accepted, and a condition notified when it changes,
+        # so a respawn can wait for rewritten gear to arrive.
+        self.request_applied: dict | None = None
+        self.request_changed = threading.Condition()
 
     def publish(self, source: str, payload: dict) -> None:
         with self.lock:
@@ -231,6 +273,12 @@ class Lab:
                     payload = {"kind": "send", "value": payload}
                 if name == "spawn" and payload.get("kind") == "world":
                     self.route_world(payload.get("facts") or {}, bool(payload.get("quiet")))
+                if name == "spawn" and payload.get("kind") == "grace-resummon":
+                    # spawn-npc.js respawned on its own (a grace rest dismissed the squad). Its
+                    # summon waits for STABLE_MS of steady player pose first, which a generator run
+                    # and a hot reload fit inside; nothing here can hold the spawn back.
+                    threading.Thread(target=self.refresh_duelist_gear, args=("grace resummon",),
+                                     daemon=True).start()
                 if payload.get("what") == "spawn-request":
                     self.route_spawn_request(payload.get("team"), payload.get("home"), payload.get("equip"))
                     return
@@ -245,6 +293,8 @@ class Lab:
         if name == "spawn":
             # A reloaded spawn agent starts with no requests; the next spawn-request re-sends them.
             self.request_sent = None
+            with self.request_changed:
+                self.request_applied = None
         self.publish("lab", {"kind": "loaded", "agent": name})
 
     def route_spawn_request(self, team, home, equip=None) -> None:
@@ -262,12 +312,78 @@ class Lab:
         def send():
             try:
                 now = self.rpc("spawn", "request", request)
+                with self.request_changed:
+                    self.request_applied = request
+                    self.request_changed.notify_all()
                 self.publish("lab", {"kind": "spawn-request-set", **now})
             except Exception as exc:
                 self.request_sent = None
                 self.publish("lab", {"kind": "spawn-request-error", "error": f"{type(exc).__name__}: {exc}"})
 
         threading.Thread(target=send, daemon=True).start()
+
+    def refresh_duelist_gear(self, why: str) -> dict:
+        """Rewrite mods/duelists.lua from the duelists' planner link and say what happened.
+
+        Never raises and never blanks the file: a failed fetch or resolve keeps the last generated
+        duelists.lua, and the event says so, so a spawn always goes ahead.
+        """
+        with self.gear_lock:
+            try:
+                run = subprocess.run([SYSTEM_PYTHON, str(GEAR_SCRIPT), "--json"], capture_output=True,
+                                     text=True, timeout=GEAR_TIMEOUT_S)
+                lines = run.stdout.strip().splitlines()
+                if not lines:
+                    raise RuntimeError(f"no status from {GEAR_SCRIPT.name} (exit {run.returncode}): "
+                                       f"{run.stderr.strip()[-500:]}")
+                status = json.loads(lines[-1])
+            except Exception as exc:
+                status = {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                          "kept": (LUA_DIR / "mods" / "duelists.lua").exists()}
+        if status.get("ok"):
+            self.publish("lab", {"kind": "duelist-gear", "why": why, "changed": status.get("changed"),
+                                 "link": status.get("link"), "build": status.get("name"),
+                                 "revision": status.get("revision"), "slots": status.get("slots"),
+                                 "unresolved": status.get("unresolved"), "notes": status.get("notes")})
+        else:
+            kept = ("kept the last generated duelists.lua" if status.get("kept")
+                    else "there is no duelists.lua, so the duelists wear moonrithyll.lua's gear")
+            self.publish("lab", {"kind": "duelist-gear-error", "why": why, "error": status.get("error"),
+                                 "outcome": kept})
+        return status
+
+    def wait_for_equip(self, pieces: list[str], timeout: float) -> bool:
+        """Whether spawn-npc.js holds every one of `pieces` (LAB_EQUIP entries) within `timeout`."""
+        wanted = set(pieces)
+        deadline = time.monotonic() + timeout
+        with self.request_changed:
+            while not wanted <= set(str((self.request_applied or {}).get("equip") or "").split(";")):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self.request_changed.wait(left)
+        return True
+
+    def before_respawn(self, why: str) -> None:
+        """Bring the duelists' gear up to their planner link before a spawn reads it.
+
+        spawn-npc.js mints a hand's gaitem, and so its Ash of War, only when the character is
+        created; gear that arrives afterwards changes the param ids but not the minted weapons. So
+        when the generator rewrote the file, the respawn waits for the hot reload to apply it and
+        the lab to hand the new equip request over -- and goes ahead anyway when that does not
+        happen in GEAR_APPLY_WAIT_S, saying so.
+        """
+        status = self.refresh_duelist_gear(why)
+        if not (status.get("ok") and status.get("changed")):
+            return
+        if self.wait_for_equip(status.get("pieces") or [], GEAR_APPLY_WAIT_S):
+            self.publish("lab", {"kind": "duelist-gear-applied", "why": why, "revision": status.get("revision")})
+        else:
+            # "error" in the kind is what the page marks red.
+            self.publish("lab", {"kind": "duelist-gear-apply-error", "why": why, "revision": status.get("revision"),
+                                 "error": f"the rewritten duelists.lua had not reached spawn-npc.js after "
+                                          f"{GEAR_APPLY_WAIT_S} s (the hot reload applies mods only while an "
+                                          f"AI character runs); duelists spawning now wear the previous gear"})
 
     def route_world(self, facts: dict, quiet: bool = False) -> None:
         """spawn-npc.js reports world facts the AI cannot query (player_on_lift, ...) when they
@@ -444,13 +560,21 @@ def make_handler(lab: Lab):
                     lab.publish("lab", {"kind": "eval-result", **r})
                     self.send_json(r)
                 elif self.path == "/api/respawn":
-                    self.send_json(lab.rpc("spawn", "respawn", req.get("overrides")))
+                    overrides = req.get("overrides")
+                    if req.get("preset") == "duelists":
+                        # duelists.json's spawn config, with anything the request adds on top.
+                        preset = json.loads(DUELISTS_CONFIG.read_text(encoding="utf-8")).get("respawn") or {}
+                        overrides = {**preset, **(overrides or {})}
+                    lab.before_respawn("respawn")
+                    self.send_json(lab.rpc("spawn", "respawn", overrides))
                 elif self.path == "/api/despawn":
                     self.send_json(lab.rpc("spawn", "despawn"))
                 elif self.path == "/api/god":
                     self.send_json({"flags": lab.rpc("spawn", "god", bool(req.get("on")))})
                 elif self.path == "/api/rpc":
                     # Any agent export: {"agent": "spawn", "method": "peekHome", "args": []}.
+                    if req.get("agent") == "spawn" and req.get("method") == "respawn":
+                        lab.before_respawn("rpc respawn")
                     self.send_json({"ok": True, "out": lab.rpc(req["agent"], req["method"], *req.get("args", []))})
                 elif self.path == "/api/reload":
                     lab.load(req["agent"])
@@ -503,20 +627,71 @@ def main() -> int:
     parser.add_argument("--extra-agent", action="append", default=[], metavar="NAME=PATH",
                         help="load another agent in the same session (a second watcher on the process "
                              "would break these hooks), e.g. void=scripts/frida/void-trace.js")
+    parser.add_argument("--duelists", action="store_true",
+                        help="the arena duelists: spawn with duelists.json's `respawn` config instead of "
+                             "--spawn-config, run only its `mods`, and load its `agents`")
+    parser.add_argument("--agent-config", action="append", default=[], metavar="NAME=JSON",
+                        help="the cfg an --extra-agent reads as __ER_FRIDA_CONFIG, like er-frida-watch.py's "
+                             "--config-json, e.g. geom={\"noSweeps\": true}; for one of duelists.json's "
+                             "`agents` it goes on top of the config there, e.g. block={\"mode\": \"recipe\"}")
     args = parser.parse_args()
     for spec in args.extra_agent:
         name, _, path = spec.partition("=")
         if not name or not path or name in AGENTS:
             raise SystemExit(f"--extra-agent wants NAME=PATH with a new name, got {spec!r}")
         AGENTS[name] = pathlib.Path(path).resolve()
+    # Checked against the agents once duelists.json's are known too.
+    overrides = {}
+    for spec in args.agent_config:
+        name, _, text = spec.partition("=")
+        overrides[name] = json.loads(text)
+    extra_configs = {}
     args.log.parent.mkdir(parents=True, exist_ok=True)
 
-    lab = Lab(args.log, args.endpoint, {"spawn": json.loads(args.spawn_config), "ai": json.loads(args.ai_config)})
+    # The AI agent reads the mods this lab writes the manifest for and the gear generator writes
+    # into. Its own default is the main checkout's ai-lua, so a lab run from a worktree would
+    # otherwise apply another tree's mods and never see this one's duelists.lua.
+    ai_config = json.loads(args.ai_config)
+    ai_config.setdefault("dir", wine_dir(LUA_DIR))
+    spawn_config = json.loads(args.spawn_config)
+    if args.duelists:
+        global ONLY_MODS
+        duelists = json.loads(DUELISTS_CONFIG.read_text(encoding="utf-8"))
+        spawn_config = duelists.get("respawn") or {}
+        ONLY_MODS = list(duelists.get("mods") or [])
+        missing = [m for m in ONLY_MODS if not (LUA_DIR / "mods" / m).is_file()]
+        if missing:
+            raise SystemExit(f"{DUELISTS_CONFIG}: `mods` names files mods/ does not have: {missing}")
+        # Agents the duelists need beside spawn-npc.js and the AI agent (the block trainer), as
+        # {name: {path relative to scripts/frida, config}}; loaded like an --extra-agent.
+        for name, spec in (duelists.get("agents") or {}).items():
+            path = (LUA_DIR.parent / spec["path"]).resolve()
+            if name in AGENTS or not path.is_file():
+                raise SystemExit(f"{DUELISTS_CONFIG}: agent {name!r} is a taken name or {path} is missing")
+            AGENTS[name] = path
+            config = extra_configs.setdefault(name, dict(spec.get("config") or {}))
+            # Where the agent keeps what it learns across reloads and lab runs, spelled for the Wine side.
+            state = args.log.resolve().parent / f"{name}-learned.json"
+            config.setdefault("stateFile", "Z:" + str(state).replace("/", "\\"))
+    for name, override in overrides.items():
+        if name not in AGENTS or name in ("spawn", "ai"):
+            raise SystemExit(f"--agent-config wants NAME=JSON for an --extra-agent or a duelists.json agent, "
+                             f"got {name!r}")
+        extra_configs.setdefault(name, {}).update(override)
+    lab = Lab(args.log, args.endpoint, {"spawn": spawn_config, "ai": ai_config, **extra_configs})
     lab.corpus = args.corpus
     lab.methods = mine_methods(args.corpus) if args.corpus.is_dir() else []
     lab.reference = index_reference(args.corpus) if args.corpus.is_dir() else {}
     print(f"{len(lab.methods)} methods and {len(lab.reference)} functions indexed from {args.corpus}", flush=True)
     write_manifest()
+    # Before the agents load, so the first apply of the mods already carries the current build.
+    gear = lab.refresh_duelist_gear("lab start")
+    if gear.get("ok"):
+        print(f"duelist gear: {gear.get('link')} revision {gear.get('revision')}"
+              f"{' (rewritten)' if gear.get('changed') else ''}", flush=True)
+    else:
+        kept = "kept the last duelists.lua" if gear.get("kept") else "there is no duelists.lua yet"
+        print(f"duelist gear not refreshed ({gear.get('error')}); {kept}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(lab))
     server.daemon_threads = True
 

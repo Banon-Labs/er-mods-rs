@@ -22,10 +22,16 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 use crate::name::fold;
 
 /// Which of the planner's seven item databases a name should be looked up in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// Deserializes from its snake-case name (`"weapon"`, `"ash_of_war"`, `"great_rune"`), which is
+/// how a host-built catalog file names the kind of each row (see [`crate::gear::CatalogRow`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// Armaments, including staves, seals and shields.
     Weapon,
@@ -64,6 +70,32 @@ impl Kind {
             Kind::Ammo => "ammo",
             Kind::GreatRune => "great rune",
         }
+    }
+
+    /// The category-tagged item id of row `row` in this kind's param table.
+    ///
+    /// The nibble is the game's and the one `er-build-import-runtime`'s catalog tags its rows
+    /// with: armaments and ammunition 0 (both are `EquipParamWeapon` rows), armour 1, talismans 2,
+    /// every goods row 4 -- spells, tools and great runes alike -- and an ash of war 8, because
+    /// what the game mounts is the `EquipParamGem` row (see [`crate::plan::GEM_ITEM_CATEGORY`]).
+    /// [`crate::sweep::Category::of`] reads the same nibbles back.
+    ///
+    /// ```
+    /// use er_build_import_core::catalog::Kind;
+    /// assert_eq!(Kind::Weapon.item_id(21_070_000), 21_070_000);
+    /// assert_eq!(Kind::Protector.item_id(140_100), 0x1000_0000 | 140_100);
+    /// assert_eq!(Kind::AshOfWar.item_id(65_200), 0x8000_0000 | 65_200);
+    /// ```
+    #[must_use]
+    pub fn item_id(self, row: u32) -> u32 {
+        let tag = match self {
+            Kind::Weapon | Kind::Ammo => 0x0000_0000,
+            Kind::Protector => 0x1000_0000,
+            Kind::Talisman => 0x2000_0000,
+            Kind::Spell | Kind::Tool | Kind::GreatRune => 0x4000_0000,
+            Kind::AshOfWar => crate::plan::GEM_ITEM_CATEGORY,
+        };
+        tag | (row & crate::sweep::ITEM_ID_ROW_MASK)
     }
 }
 

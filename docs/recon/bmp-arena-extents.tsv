@@ -1,0 +1,13 @@
+# Better Multiplayer (DEN) arena walkable extents, walked 2026-10-21 on game 2.7.2.0.
+# Measured with scripts/frida/arena-extents.js + scripts/arena-extents.py: the longest
+# horizontal distance between any two walked points. Each figure is short of the true
+# wall-to-wall span by roughly a body width, since the walker stops at the wall.
+# block	shape	diagonal_m	span_a_m	span_b_m	height_range_m	note
+0x2e000000	rectangle	26.1	22.1	13.9	0.0	two arenas share this block; both measured 26.1
+0x2e010000	square	23.6	16.6	16.9	0.0
+0x2e020000	diamond	21.0	21.0	18.0	0.0	diagonal is point to point
+0x2e030000	square	23.9	16.8	16.9	0.0
+0x2e040000	octagon	21.1	21.1	-	0.0	walked vertex to opposite vertex
+0x2e060000	square	28.3	-	-	0.0	diagonal runs along world x; arena turned 45 degrees to the grid
+0x2e070000	rectangle	27.0	14.6	22.7	0.0
+0x2e090000	square	26.2	18.6	18.5	0.0

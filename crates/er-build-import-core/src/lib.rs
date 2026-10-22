@@ -31,6 +31,7 @@ pub mod chr_name;
 pub mod claim;
 pub mod class;
 pub mod equip;
+pub mod gear;
 pub mod model;
 pub mod name;
 pub mod plan;
