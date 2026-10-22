@@ -13,18 +13,26 @@
 //!
 //! At possession start it reads the creature's own physics capsule -- `CSChrPhysicsModule+0x340
 //! hitHeight`, the value `CS::ChrIns::GetPhysicsHitHeight` returns -- turns it into two camera
-//! numbers ([`geometry`]), writes them into a `LockCamParam` row nothing else references, and puts
-//! that row's id in `ChrExFollowCam+0x468`, which is the highest-precedence input to the engine's
-//! own per-frame `ApplyZoomLerp` and which nothing in the game ever writes. On release the row's
-//! bytes and `+0x468` both go back exactly as they were. See [`game`] for the mechanism and
-//! [`layout`] for the offsets and their proof.
+//! numbers ([`geometry`]), puts them into this DLL's own copy of the `LockCamParam` row the camera
+//! was using, and points `ChrExFollowCam+0x468` at an id the table does not contain. That field is
+//! the highest-precedence input to the engine's own per-frame `ApplyZoomLerp`, and nothing in the
+//! game ever writes it. `ApplyZoomLerp` looks the id up through `LookupLockCamParam`, and a detour
+//! there ([`getter`]) answers that one id with the copy. On release `+0x468` goes back and the
+//! copy stops being served. See [`game`] for the sequence, [`served`] for why the id is one the
+//! table lacks, and [`layout`] for the offsets and their proof.
 //!
-//! # The one thing it costs, and the one thing it does not
+//! # What it costs, and what it does not
 //!
-//! It costs **no game address and no detour** -- both singletons come from `fromsoftware-rs`'s
-//! DLRF name resolution and everything else is a struct field, exactly like layers 1 and 2. It does
-//! write a param row, which no earlier layer did; `scripts/me3-dll-conflicts.toml` carries why that
-//! is still co-loadable with the other 25 shells.
+//! It writes **no param row**. Seamless Co-op's `lobby_key` is a fingerprint of the param tables as
+//! loaded, so a resident row patched for the length of a possession -- which is what this layer
+//! used to do -- put the player in a matchmaking pool of one for that long. The resident tables are
+//! only ever read here.
+//!
+//! It costs **one detour**, on `LookupLockCamParam` (1.17.1 `0x140d3f4b0`, 2.7.2.0 `0x140d40ba0`),
+//! installed the first time a possession wants an adapted camera. Its address comes from
+//! `er_game_base::game_build::carry_1171_rva`, so it exists on 1.17.1 and 2.7.2.0 only; every other
+//! build keeps the vanilla framing and the derived file says why. Both singletons still come from
+//! `fromsoftware-rs`'s DLRF name resolution and everything else is a struct field.
 //!
 //! # What it deliberately does not do, named so nobody goes looking
 //!
@@ -52,11 +60,12 @@
 //!   direction, in the auto-rotation branch.
 //! * **The mount blend.** `ApplyZoomLerp` has a second branch, taken when
 //!   `ChrExFollowCam+0x488` is set, which adds the delta between two `LockCamParamLookupResult`s
-//!   the CONSTRUCTOR cached (`+0x478`/`+0x480` against `lockCamParam`) to every value it just
-//!   derived from our row. That is the Torrent zoom blend, and it is left alone: the deltas are
-//!   the game's own and the engine clamps the result (distance to 100, pivot to 10, FOV to pi),
-//!   so possessing while mounted gets a camera that is blended rather than wrong. Nobody has
-//!   measured how it looks.
+//!   the CONSTRUCTOR cached (rows 1000 and 1001 at `+0x478`/`+0x480`, against row 0 at `+0x470`)
+//!   to every value it just derived from our row. That is the Torrent zoom blend, and it is left
+//!   alone: the deltas are the game's own and the engine clamps the result (distance to 100, pivot
+//!   to 10, FOV to pi), so possessing while mounted gets a camera that is blended rather than
+//!   wrong. Nobody has measured how it looks. Those three cached lookups are also why the copy is
+//!   not served under row 1000 -- see [`served`].
 //! * **Body scale.** If a later layer ever applies a visual scale (`ChrCtrl::SetScaleSize`), the
 //!   hurtbox does not follow it -- that function writes `ChrCtrl+0x2d4` and mirrors to
 //!   `CSChrDataModule+0x54`, and never touches `CSChrPhysicsModule` where `hitHeight` lives. The
@@ -70,14 +79,21 @@
 //!   here. The warning above still stands for the case it was written about: a scale applied to
 //!   the subject.
 
-// The size law, the offset table and the derived-file renderer are pure, so `cargo test` proves
-// them on the host with no game running. Only `game` touches live memory.
+// The size law, the offset table, the derived-file renderer and the served-copy state are pure, so
+// `cargo test` proves them on the host with no game running. Only `game` and `getter` touch live
+// memory.
 pub(crate) mod derived;
 pub(crate) mod geometry;
 pub(crate) mod layout;
+pub(crate) mod served;
 
 #[cfg(windows)]
 pub(crate) mod game;
+#[cfg(windows)]
+mod getter;
+
+// The getter's 1.17.1 address and window offsets, shared with build.rs; see `getter_sites.rs`.
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 
 #[cfg(windows)]
 pub(crate) use game::Session;

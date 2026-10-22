@@ -325,9 +325,11 @@ speed_scale = 1.0
 # about a second later, mid-possession, without letting go.
 #
 # Vanilla's follow camera is tuned for a 1.5 m capsule, so wearing an Ancient Dragon puts the
-# camera inside the model. The mod reads the creature's OWN physics capsule height and writes two
-# numbers -- how far back the camera sits and how high it aims -- into a LockCamParam row nothing
-# else in the game references, for the length of the possession. Every byte goes back on release.
+# camera inside the model. The mod reads the creature's own physics capsule height and puts two
+# numbers -- how far back the camera sits and how high it aims -- into its own copy of the camera's
+# LockCamParam row, which the camera is handed for the length of the possession. The game's param
+# tables are never written, so Seamless Co-op matchmaking still sees the same params as everyone
+# else's.
 #
 # The two numbers are solved, not tuned: they are the ones that put the top of the creature in the
 # same place on your screen, with the same gap above it in proportion to its own size, that your
@@ -342,11 +344,6 @@ speed_scale = 1.0
 [camera]
 # The off switch. false frames every creature the way your own body would be framed.
 enabled = true
-# Which LockCamParam row is patched in memory. 1000 is one of 73 rows the shipped regulation never
-# references. If you run a regulation mod that DOES use it, the mod refuses rather than stealing it
-# and says so in the log; pick another free row here. It must already exist as a row -- an id the
-# table does not contain makes the engine's camera update do nothing at all.
-param_row = 1000
 # How hard the camera backs off as the creature gets bigger: distance = 3.8 * (height / 1.5) ^ this.
 # 1 is the default and is not a taste setting: with a fixed field of view, holding a framing means
 # distance scales STRAIGHT with height, so 1 gives a Fire Giant the same headroom above its head

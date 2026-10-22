@@ -24,18 +24,28 @@
 //! why polling rather than hooking is the smaller claim rather than the lazier one, and
 //! [`possess::game`] for why the possession engine itself needed almost no addresses at all.
 //!
-//! It resolves **three** game function addresses and claims **one prologue**, and both numbers are
-//! worth knowing because they were zero for two layers and every one of them is a thing that can
-//! break on a game patch. [`moveset`] spends one address on `PlayAnimationByBehaviorName`, without
-//! which no dodge in the game is reachable; [`spawn`] spends two, on creating and removing a
-//! character, which are the two things that cannot be done by writing a field. The prologue is
-//! `CS::CSFeManImp::UpdatePlayerComponents`, detoured by [`hud`] so the HP, FP and stamina bars
-//! read the possessed creature. All four go through `game_rva_named`, so on a build with no
-//! verified 1.16.2 -> 1.17 mapping the feature is refused rather than jumping into whatever now
-//! occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars keep showing your own
-//! character. That is the whole of this DLL's footprint in the game image; it is recorded in
-//! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks that function or its
-//! caller.
+//! It resolves **three** game function addresses and claims **two prologues**, and both numbers
+//! are worth knowing because they were zero for two layers and every one of them is a thing that
+//! can break on a game patch. [`moveset`] spends one address on `PlayAnimationByBehaviorName`,
+//! without which no dodge in the game is reachable; [`spawn`] spends two, on creating and removing
+//! a character, which are the two things that cannot be done by writing a field. The first
+//! prologue is `CS::CSFeManImp::UpdatePlayerComponents`, detoured by [`hud`] so the HP, FP and
+//! stamina bars read the possessed creature. Those four go through `game_rva_named`, so on a build
+//! with no verified 1.16.2 -> 1.17 mapping the feature is refused rather than jumping into
+//! whatever now occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars keep showing
+//! your own character.
+//!
+//! The second prologue is the `LockCamParam` getter `LookupLockCamParam`, detoured by [`camera`]
+//! the first time a possession wants an adapted camera, so the follow camera can be handed this
+//! DLL's own copy of a camera row instead of a resident row being written. Its address is a 1.17.1
+//! one carried by `er_game_base::game_build::carry_1171_rva` and checked against byte windows
+//! `build.rs` generates, so it exists on 1.17.1 and 2.7.2.0 and is refused everywhere else. That
+//! is the whole of this DLL's footprint in the game image; it is recorded in
+//! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks either function.
+//!
+//! It writes **no param row**. Seamless Co-op matches players on a fingerprint of the param tables
+//! as loaded, so a resident row written for the length of a possession is a matchmaking pool of
+//! one for that long.
 //!
 //! One more hook exists and is not a game prologue: hudhook's DX12 `Present`, which [`picker`]
 //! installs the first time the creature list is opened and never otherwise. That is a swapchain
@@ -422,6 +432,12 @@ pub unsafe extern "system" fn DllMain(
     // possessed character's `ChrCtrl+0x3b0`, and `ChrCtrl::Unref` DLPanics on a non-null slot -- so
     // a DLL that unloads without clearing it arms a crash for whenever that character is next torn
     // down, in a process where our code is no longer present to explain it.
+    //
+    // The same release puts `ChrExFollowCam+0x468` back and stops serving the camera's row copy.
+    // The `LookupLockCamParam` detour itself stays, because the hook union has no way to take a
+    // handler out; with nothing published it is a pass-through. On process exit that is moot. A
+    // real `FreeLibrary` of this DLL would leave it jumping into unmapped code -- the one
+    // unload hazard the HUD detour below avoids and this one does not.
     if reason == DLL_PROCESS_DETACH {
         engine::shutdown_engine();
         // ...AND the detour, which is the other pointer to our memory the game is holding. The

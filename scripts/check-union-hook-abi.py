@@ -45,7 +45,9 @@ different scalar type, and never a float.
 # What it checks
 
 Every call to a union registrar (`register_union_hook`, `register_shared_hook`, their `5` and
-`_runtime_derived` and `_with_budget` spellings) and every call to a local helper that forwards a
+`_runtime_derived` and `_with_budget` spellings, the Arxan-following
+`register_union_hook_runtime_derived_following_arxan`, and the seven-argument
+`register_union_hook7_runtime_derived`) and every call to a local helper that forwards a
 type-erased `*mut c_void` into one. The type-erasing helpers are the whole reason a source gate is
 needed rather than the type checker: `register_union_hook` takes a typed `UnionFn`, so a float
 handler cannot reach it directly -- it reaches it through a helper that took `*mut c_void` and
@@ -66,6 +68,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REGISTRAR_ARITY = {
     "register_union_hook": 4,
     "register_union_hook_runtime_derived": 4,
+    # The two Arxan-following registrars were missing until 2026-10-22, so every handler
+    # registered through them (er-invasion-warp, er-npc-summons, er-overlay-input, er-render-scale,
+    # er-npc-possess) went unchecked while the summary line counted only the others.
+    "register_union_hook_runtime_derived_following_arxan": 4,
+    "register_union_hook7_runtime_derived": 7,
     "register_shared_hook": 4,
     "register_shared_hook_with_budget": 4,
     "register_union_hook5": 5,
@@ -90,7 +97,7 @@ FN_DECL = re.compile(
 )
 PLAIN_FN_DECL = re.compile(r'(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?fn\s+([A-Za-z0-9_]+)\s*\(')
 FLOAT = re.compile(r"\bf(?:32|64)\b")
-UNION_CAST = re.compile(r"\bas\s+(?:[A-Za-z0-9_]+::)*UnionFn5?\b")
+UNION_CAST = re.compile(r"\bas\s+(?:[A-Za-z0-9_]+::)*UnionFn[57]?\b")
 ERASED_CAST = re.compile(r"\bas\s+\*(?:mut|const)\s+(?:[A-Za-z0-9_]+::)*c_void\b")
 
 
@@ -680,6 +687,39 @@ def selftest() -> int:
             },
             1,
             "an undeclared handler fails closed",
+        ),
+        # The Arxan-following registrar is read like the others: a float handler on it is caught,
+        # spread over several lines the way rustfmt lays a long call out.
+        (
+            {
+                "crates/a/src/lib.rs": float_handler
+                + "fn install() { let _ = unsafe {\n"
+                "    er_hook::register_union_hook_runtime_derived_following_arxan(\n"
+                "        entry,\n        float_hook,\n        &ORIG,\n    )\n}; }\n"
+            },
+            1,
+            "a float handler on the Arxan-following registrar is caught",
+        ),
+        # The seven-argument registrar, with a handler cast to `UnionFn7`: allowed when seven wide.
+        (
+            {
+                "crates/a/src/lib.rs": 'unsafe extern "system" fn seven_hook(a: usize, b: usize, '
+                "c: usize, d: usize, e: usize, f: usize, g: usize) -> usize { a }\n"
+                + "fn install() { let _ = unsafe { register_union_hook7_runtime_derived(entry, "
+                "seven_hook as UnionFn7, &ORIG) }; }\n"
+            },
+            0,
+            "a 7-argument handler on the 7-argument union passes",
+        ),
+        # ...and refused when it is four wide.
+        (
+            {
+                "crates/a/src/lib.rs": union_shaped
+                + "fn install() { let _ = unsafe { register_union_hook7_runtime_derived(entry, "
+                "good_hook as UnionFn7, &ORIG) }; }\n"
+            },
+            1,
+            "a 4-argument handler on the 7-argument union is caught",
         ),
     ]
 

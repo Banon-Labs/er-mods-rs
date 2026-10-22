@@ -1585,11 +1585,14 @@ the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_sha
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
-"er-npc-possess" = """Co-loadable with every other shell here. It claims exactly ONE prologue and \
-nothing else: `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 `0x140773900`), \
-the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the possessed creature \
-instead of the body the player walked in as. No other shell in this suite hooks that function or \
-its caller. Everything else it does happens from one recurring `FrameBegin` task.
+"er-npc-possess" = """Co-loadable with every other shell here. It claims two game prologues and \
+nothing else. One is `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 \
+`0x140773900`), the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the \
+possessed creature instead of the body the player walked in as. The other is the `LockCamParam` \
+getter `LookupLockCamParam` (1.16.2 `0x140d3dcf0`, 1.17.1 `0x140d3f4b0`, 2.7.2.0 `0x140d40ba0`), \
+detoured so the follow camera can be handed this DLL's own row copy during a possession; see the \
+param paragraph below. No other shell in this suite hooks either function or the first one's \
+caller. Everything else it does happens from one recurring `FrameBegin` task.
 
 THE ONE OTHER HOOK, and only once the player asks for something to be DRAWN: hudhook's DX12 \
 `Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest arbitration \
@@ -1618,16 +1621,24 @@ attack whose `AtkParam_Npc.throwTypeId` is non-zero, and the game's own throw sy
 rest. Every write is made only while something is possessed and is undone by `possess::teardown` \
 on release, death, despawn and `DLL_PROCESS_DETACH`.
 
-THE ONE PARAM ROW, AND WHY IT IS NOT THE KIND OF PARAM EDIT THAT BREAKS SEAMLESS. The camera layer \
-patches ONE `LockCamParam` row IN MEMORY for the length of a single possession -- three floats -- \
-and writes the row's original bytes back on release. `regulation.bin` on disk is never opened, so \
-this is not the file-level regulation edit that makes Seamless refuse a session. The row is chosen \
-by `[camera].param_row` (1000 by default, one of the 73 rows the shipped regulation never \
-references) and is re-checked at every possession against the LIVE `NpcParam.lockCameraParamId` and \
-`RideParam.rideCamParamId` tables, so a player running a regulation mod that DOES use it gets a \
-refusal naming the row rather than a stolen camera. It is still a shared write: a second mod \
-patching the same row while a possession is in flight would fight it, which is exactly what the \
-setting exists to resolve.
+No param row is written, and since 2026-10-22 that is the whole point of the camera layer's \
+design. It used to patch one resident `LockCamParam` row (1000 by default) for the length of a \
+possession and argue that an in-memory edit was not the kind that matters to Seamless. That \
+argument is refuted: Seamless filters its lobby search on `lobby_key`, a fingerprint of the param \
+tables as they sit in memory, compared for equality, so any write to a resident row puts the \
+player in a matchmaking pool of one for as long as it lasts (measured on 2.7.2.0 with Seamless \
+2.0.1, bd death-persist-is-the-lobby-key-mover-seamless-201-2720-2026-10-22). Row 1000 was not \
+free either: the `ChrExFollowCam` constructor looks up rows 0, 1000 and 1001 and caches the \
+pointers as its mount-blend rows. Now the layer copies the row the camera was using, sets the two \
+size-derived fields on the copy, serves that copy from the `LookupLockCamParam` detour for one id \
+the table does not contain (2,000,000,000 unless a regulation has taken it), and points \
+`ChrExFollowCam+0x468` -- a camera field, not a param -- at that id. Every other lookup gets the \
+game's own answer. The detour is a union handler registered with \
+`register_union_hook_runtime_derived_following_arxan` on an entry carried from 1.17.1 by \
+`carry_1171_rva` and checked against three windows `build.rs` generates (the frame setup, table \
+index `0x1f`, and the `out = {row* @+0, id @+8}` stores); on any other build it is refused and the \
+camera stays vanilla. It is installed the first time a possession wants an adapted camera, so a \
+session that possesses nothing patches nothing there.
 
 THAT PROLOGUE IS UNSHARED, AND CHECKED RATHER THAN ASSUMED. No other shell in `me3_shells` \
 detours `UpdatePlayerComponents` or its sole caller `CSFeManImp::Update` (1.16.2 `0x140771bd0`): a \

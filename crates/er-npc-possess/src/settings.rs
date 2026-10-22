@@ -794,18 +794,20 @@ impl MovementSettings {
     }
 }
 
-/// `[camera]`. Live -- but only read at possession start, because the row patch and the
-/// `ChrExFollowCam+0x468` write both happen once and are undone once.
+/// `[camera]`. Live: an edit rebuilds the camera's row copy mid-possession (see
+/// `camera::Session::refresh`).
 ///
 /// See [`crate::camera`] for what each of these actually moves.
+///
+/// There used to be a `param_row` here, naming the resident `LockCamParam` row the mod patched.
+/// Nothing is patched any more -- the camera is handed a copy under an id the table lacks, picked
+/// at possession start -- so there is no row left to choose, and an old config that still names
+/// one is unaffected: the parser only reads keys it asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CameraSettings {
     /// The off switch. `false` leaves the follow camera exactly as vanilla frames it, which on
     /// anything large means inside the model.
     pub(crate) enabled: bool,
-    /// Which `LockCamParam` row to patch in memory. It must exist and nothing in the regulation
-    /// may reference it; both are checked against the live param tables at possession start.
-    pub(crate) param_row: u32,
     /// A taste KNOB over the framing law, not the law: `3.8 * (H / 1.5) ^ exponent`. `1.0` is
     /// the law -- distance scaling with height, which is what holds the player's framing at every
     /// size -- and is the default for that reason rather than as a preference. `0.0` pins the
@@ -824,10 +826,6 @@ impl Default for CameraSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            // 1000. Free in the shipped regulation -- 73 of the 166 `LockCamParam` rows are, and
-            // all of 1000-1099 are among them -- and re-checked live so a regulation mod that
-            // uses it gets a refusal rather than a stolen camera.
-            param_row: 1000,
             // 1.0, not 0.7, and the difference is the whole of "the big ones get clipped".
             //
             // The camera's job is to hold a framing, and with a fixed vertical FOV holding a
@@ -978,14 +976,6 @@ impl CameraSettings {
         let s = CAMERA_SECTION;
         take(&mut self.enabled, doc, s, "enabled", rejections, parse_bool);
         take(
-            &mut self.param_row,
-            doc,
-            s,
-            "param_row",
-            rejections,
-            |raw| parse_i32(raw).and_then(|v| u32::try_from(v).ok()),
-        );
-        take(
             &mut self.distance_exponent,
             doc,
             s,
@@ -1007,8 +997,8 @@ impl CameraSettings {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "enabled={} param_row={} distance_exponent={} distance_max={}",
-            self.enabled, self.param_row, self.distance_exponent, self.distance_max
+            "enabled={} distance_exponent={} distance_max={}",
+            self.enabled, self.distance_exponent, self.distance_max
         )
     }
 }
@@ -1365,24 +1355,34 @@ enabled = false
         assert_eq!(tables.movement.turn_deadzone_deg, 5.0);
         assert_eq!(tables.movement.speed_scale, 1.25);
         assert!(!tables.camera.enabled);
-        assert_eq!(tables.camera.param_row, 1099);
         assert_eq!(tables.camera.distance_exponent, 1.0);
         assert_eq!(tables.camera.distance_max, 25.0);
         assert!(!tables.hud.enabled);
     }
 
+    /// An old config's `param_row` is ignored rather than rejected: the mod no longer patches a
+    /// row, so there is nothing for it to choose, and a file the old default wrote must not start
+    /// logging a rejection on upgrade. The `every_table_reads_back_what_the_file_says` sample above
+    /// carries one too.
+    #[test]
+    fn a_retired_param_row_is_ignored() {
+        let (tables, _, rejections) = read("[camera]\nparam_row = 1000\n");
+        assert_eq!(tables.camera, CameraSettings::default());
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+        let (_, _, rejections) = read("[camera]\nparam_row = -3\n");
+        assert!(rejections.is_empty(), "{}", rejections.summary());
+    }
+
     /// `[camera]` values that would break the size law are rejected rather than taken.
     ///
-    /// A negative exponent would make a dragon's camera closer than a rat's, and a negative row id
-    /// cannot be a param row at all -- both are the kind of value that produces a camera nobody
-    /// can explain, so both keep the working value and name themselves.
+    /// A negative exponent would make a dragon's camera closer than a rat's -- the kind of value
+    /// that produces a camera nobody can explain, so it keeps the working value and names itself.
     #[test]
     fn the_camera_table_refuses_values_that_invert_the_size_law() {
         let (tables, _, rejections) =
-            read("[camera]\nparam_row = -3\ndistance_exponent = -1.0\ndistance_max = 0\n");
+            read("[camera]\ndistance_exponent = -1.0\ndistance_max = 0\n");
         assert_eq!(tables.camera, CameraSettings::default());
         let summary = rejections.summary();
-        assert!(summary.contains("camera.param_row=\"-3\""), "{summary}");
         assert!(
             summary.contains("camera.distance_exponent=\"-1.0\""),
             "{summary}"
@@ -1390,8 +1390,8 @@ enabled = false
         assert!(summary.contains("camera.distance_max=\"0\""), "{summary}");
     }
 
-    /// The shipped default is the row this crate proved free offline, and the exponent that holds
-    /// a framing rather than the one that fitted under a ceiling.
+    /// The shipped default is the exponent that holds a framing rather than the one that fitted
+    /// under a ceiling.
     ///
     /// The old default was `0.7`, and this comment used to justify it as "the exponent that keeps
     /// the biggest shipped creature inside the ceiling" -- which is the reasoning backwards. The
@@ -1413,7 +1413,6 @@ enabled = false
     fn the_camera_defaults_hold_a_framing_rather_than_fit_under_a_ceiling() {
         let camera = CameraSettings::default();
         assert!(camera.enabled);
-        assert_eq!(camera.param_row, 1000);
         assert_eq!(camera.distance_exponent, 1.0);
         assert_eq!(
             camera.distance_max,
@@ -1738,7 +1737,6 @@ speed_scale = 0.5
             "l2=",
             "turn_deadzone_deg=",
             "speed_scale=",
-            "param_row=",
             "distance_exponent=",
             "distance_max=",
             "chr_overrides=",

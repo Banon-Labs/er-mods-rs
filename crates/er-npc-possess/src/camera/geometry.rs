@@ -230,10 +230,10 @@ pub(crate) struct Framing {
 /// Why a possession is being framed with the vanilla camera instead of an adapted one.
 ///
 /// Every one of these is an ordinary outcome rather than an error: the feature is off, the build
-/// is one nobody measured, the creature has no readable size, or the row the player picked is not
-/// free. All of them end with the camera behaving exactly as it did before this layer existed,
-/// and all of them are named in `er-npc-possess.derived.toml` so "my camera did not change" has an
-/// answer that is not "read the source".
+/// is one nobody measured, the creature has no readable size, or the getter could not be hooked.
+/// All of them end with the camera behaving exactly as it did before this layer existed, and all
+/// of them are named in `er-npc-possess.derived.toml` so "my camera did not change" has an answer
+/// that is not "read the source".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
     /// `[camera].enabled = false`.
@@ -243,19 +243,17 @@ pub(crate) enum Refusal {
     UnmeasuredBuild,
     /// `CSChrPhysicsModule+0x340` did not read, or read as zero/NaN.
     NoHeight,
-    /// `SoloParamRepository` is not up, or its `LockCamParam` / `NpcParam` holder has not
-    /// streamed in yet.
+    /// `SoloParamRepository` is not up, or its `LockCamParam` holder has not streamed in yet.
     ParamsNotReady,
-    /// A `NpcParam.lockCameraParamId` or `RideParam.rideCamParamId` in the live regulation names
-    /// the row `[camera].param_row` picked, so patching it would change some other character's
-    /// camera. Carries that row.
-    RowInUse(u32),
-    /// `[camera].param_row` is not a row of `LockCamParam` at all. A missing id makes
-    /// `LookupLockCamParam` return NULL and `ApplyZoomLerp` do nothing whatsoever -- the camera
-    /// freezes at its current values with no crash -- so this must be caught rather than written.
-    RowMissing(u32),
-    /// `LockCamParam` row 0 is gone, so there is no vanilla base to copy the untouched fields from.
+    /// Every id tried for the copy, from `crate::camera::served::SERVED_ID_FIRST` on, is a row of
+    /// this regulation. Serving the copy under a row id would hand it to whatever else asks for
+    /// that row, so this refuses instead.
+    NoFreeId,
+    /// The row the camera was using, which the copy starts from, is not in `LockCamParam`.
     BaseRowMissing,
+    /// `LookupLockCamParam` could not be hooked: the build is not 1.17.1 or 2.7.2.0, its bytes do
+    /// not match the windows `build.rs` generated, or MinHook declined. The log says which.
+    HookUnavailable,
     /// `WorldChrMan.chrCam` (`+0x1ece0`, `+0x1ecf0` on 2.7.2.0) or `ChrCam+0x60 chrExFollowCam`
     /// did not resolve.
     NoFollowCam,
@@ -279,17 +277,20 @@ impl Refusal {
                     .to_owned()
             }
             Self::ParamsNotReady => "SoloParamRepository has not streamed the params in".to_owned(),
-            Self::RowInUse(row) => format!(
-                "LockCamParam row {row} is referenced by this regulation, so patching it would \
-                 move some other character's camera -- pick a free row with [camera].param_row"
-            ),
-            Self::RowMissing(row) => format!(
-                "LockCamParam has no row {row}, and a missing id makes the engine's ApplyZoomLerp \
-                 do nothing at all rather than fall back"
+            Self::NoFreeId => format!(
+                "every id from {} to {} is a LockCamParam row in this regulation, so there is no \
+                 id to serve the camera's copy under without handing it to something else",
+                crate::camera::served::SERVED_ID_FIRST,
+                crate::camera::served::SERVED_ID_FIRST + crate::camera::served::SERVED_ID_TRIES - 1,
             ),
             Self::BaseRowMissing => {
-                "LockCamParam row 0, the player's own camera row this one is derived from, is \
+                "the LockCamParam row the camera was using, which the copy is derived from, is \
                  missing"
+                    .to_owned()
+            }
+            Self::HookUnavailable => {
+                "LookupLockCamParam could not be hooked on this build, so there is no way to hand \
+                 the camera a row without writing one -- er-npc-possess.log says why"
                     .to_owned()
             }
             Self::NoFollowCam => {
@@ -306,9 +307,9 @@ impl Refusal {
             Self::UnmeasuredBuild => "unmeasured-build",
             Self::NoHeight => "no-height",
             Self::ParamsNotReady => "params-not-ready",
-            Self::RowInUse(_) => "row-in-use",
-            Self::RowMissing(_) => "row-missing",
+            Self::NoFreeId => "no-free-id",
             Self::BaseRowMissing => "base-row-missing",
+            Self::HookUnavailable => "hook-unavailable",
             Self::NoFollowCam => "no-follow-cam",
             Self::WriteFailed => "write-failed",
         }
@@ -322,8 +323,9 @@ pub(crate) struct Report {
     pub(crate) hit_height: Option<f32>,
     /// `CSChrPhysicsModule+0x344`.
     pub(crate) hit_radius: Option<f32>,
-    /// The row `[camera].param_row` named.
-    pub(crate) row: u32,
+    /// The id the copy was served under, which is not a row of `LockCamParam`; `None` until one
+    /// was picked.
+    pub(crate) served_id: Option<u32>,
     /// The row the untouched fields were copied from -- whatever the camera resolved last frame,
     /// or 0 when that was unreadable.
     pub(crate) base_row: Option<u32>,
@@ -336,12 +338,12 @@ pub(crate) struct Report {
 }
 
 impl Report {
-    /// A report for a possession that never got as far as reading a size.
-    pub(crate) const fn refused(row: u32, distance_scale: f32, refusal: Refusal) -> Self {
+    /// A report for a possession whose camera was not adapted.
+    pub(crate) const fn refused(distance_scale: f32, refusal: Refusal) -> Self {
         Self {
             hit_height: None,
             hit_radius: None,
-            row,
+            served_id: None,
             base_row: None,
             distance_scale,
             applied: None,
@@ -864,9 +866,9 @@ mod tests {
             Refusal::UnmeasuredBuild,
             Refusal::NoHeight,
             Refusal::ParamsNotReady,
-            Refusal::RowInUse(1000),
-            Refusal::RowMissing(1000),
+            Refusal::NoFreeId,
             Refusal::BaseRowMissing,
+            Refusal::HookUnavailable,
             Refusal::NoFollowCam,
             Refusal::WriteFailed,
         ];
