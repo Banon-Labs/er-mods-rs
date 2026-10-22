@@ -1169,6 +1169,15 @@ mod live {
     /// `m61_48_45_00` are not band-shaped anyway, and refusing them by name costs nothing and
     /// removes the possibility of a coincidence.
     fn band_ladder_value(key: usize, value: usize) -> Option<std::ffi::CString> {
+        // Nothing below may move a query no finger of this mod started. Seamless sends the same
+        // band field whichever item began the search, so the Challenger's Lynchpin reaches this
+        // function too, and all three rewrites used to apply to it: the picked bracket through a
+        // far-half latch left standing, a climbed rung no stand-down reset, and the band of a host
+        // the idle walk had found nearby. User directive 2026-10-22: the Lynchpin keeps its normal
+        // bracket, and the mod's own items are the only way to change it.
+        if !crate::invade_difficulty::applies_to_this_search() {
+            return None;
+        }
         let rung = band_rung();
         // A host the sweep has identified publishes its own band, and that value outranks the
         // ladder. The ladder is a walk through bands nobody has been seen in; once a specific host
@@ -1181,11 +1190,13 @@ mod live {
         // the one host the search had positively located was five failed cycles away -- about a
         // minute and a quarter of the item being held, for a value already in memory.
         let targeted = crate::lobby_preflight::found_host_band();
-        // The far half reaches here with the rung back at the player's own band and the sweep
-        // cleared -- `hand_off_to_seamless` does both -- so without this test the difficulty could
-        // never rewrite anything. It is the one part of the overlay that survives the handover.
-        let difficulty = crate::invade_difficulty::in_far_half();
-        if rung.is_own() && targeted.is_none() && !difficulty {
+        // A pick binds to the whole of a finger's search, near half included, so it is the pick
+        // and not the far-half latch that keeps this from short-circuiting. Testing the latch here
+        // was what still held the pick off the near half after `band_for` stopped asking about it:
+        // a near half at the player's own rung with no host found returned before the pick was
+        // read.
+        let picked = !crate::invade_difficulty::current().is_own();
+        if rung.is_own() && targeted.is_none() && !picked {
             return None;
         }
         let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) }?;
@@ -2294,7 +2305,9 @@ mod live {
         // left standing would put the difficulty's bracket on the very first query of the next
         // invasion -- the ring, at a band the player never climbed to -- and the only thing on
         // screen would be a neighbourhood that has apparently emptied.
-        crate::invade_difficulty::leave_far_half();
+        crate::invade_difficulty::leave_far_half(
+            "a finger armed a new search, which opens in its near half",
+        );
         // A tripwire that outlived its search would penalise the next invasion for a query this
         // one sent.
         crate::invade_below_penalty::forget();

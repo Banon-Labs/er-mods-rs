@@ -2414,3 +2414,81 @@ fn the_far_half_latch_is_cleared_by_every_ending() {
         "the far half must be entered from the handover and nowhere else"
     );
 }
+
+/// The picked bracket, and every other band rewrite, reaches only a search a finger started.
+///
+/// User directive 2026-10-22: "We want users to get their normal brackets from challenger
+/// lynchpin, not effect it, but take configuration updates through our mod items only". The
+/// Lynchpin's queries pass through the same filter detour as a finger's, so the one predicate that
+/// tells them apart has to be the first thing the rewrite asks, and the pick itself has to ask it
+/// too so no later caller can apply it to the Lynchpin by going around the detour.
+#[test]
+fn only_a_fingers_search_has_its_band_rewritten() {
+    let gate = ["applies", "to", "this", "search()"].join("_");
+    let publish = include_str!("../lobby_publish.rs");
+    let ladder = publish
+        .split_once("fn band_ladder_value(")
+        .expect("the band rewrite is in lobby_publish")
+        .1
+        .split_once("\n    }")
+        .expect("a function body")
+        .0;
+    let first_code = ladder
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("//"))
+        .expect("a body with code in it");
+    assert!(
+        first_code.contains(&gate),
+        "the ownership test must come before the pick, the located host and the ladder are read; \
+         the body opens with `{first_code}`"
+    );
+    let difficulty = include_str!("../invade_difficulty.rs");
+    let band_for = difficulty
+        .split_once("pub fn band_for(")
+        .expect("the pick's own entry point")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        band_for.contains(&gate),
+        "the pick must refuse a search no finger started on its own account:\n{band_for}"
+    );
+    let applies = difficulty
+        .split_once(&format!("pub fn {}", gate.trim_end_matches("()")))
+        .expect("the ownership predicate")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    for half in ["finger_reach()", "in_far_half()"] {
+        assert!(
+            applies.contains(half),
+            "a finger's search is the finger's in both halves, so `{half}` must decide it:\n\
+             {applies}"
+        );
+    }
+}
+
+/// The far-half latch is cleared by the session itself, not only by this DLL's own endings.
+///
+/// A far half that landed, or that Seamless gave up on, used to leave the latch standing until a
+/// finger armed the next search -- and a Lynchpin search in between asked for the picked bracket.
+#[test]
+fn the_session_transition_tracer_ends_the_far_half() {
+    let observe = ["observe", "session", "transition("].join("_");
+    let filter = product_code();
+    let body = filter
+        .split_once("fn log_transition(")
+        .expect("the transition tracer is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        body.contains(&observe),
+        "every observed session change must reach the far-half latch:\n{body}"
+    );
+}

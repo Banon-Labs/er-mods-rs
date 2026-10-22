@@ -106,6 +106,7 @@ impl SettingsKey {
 /// one frame behind the player.
 pub fn tick(key: &mut SettingsKey) {
     install_click_suppression();
+    install_input_capture();
     key.poll();
     apply_pending_edits();
     if crate::overlay::is_open() {
@@ -113,6 +114,23 @@ pub fn tick(key: &mut SettingsKey) {
         // every frame for a panel nobody opened is work the game thread does not owe anyone.
         crate::overlay::publish(build_view());
     }
+}
+
+/// Arm the keyboard, mouse and pad blanking that `er_overlay_input::set_taking` drives, retrying
+/// until DirectInput and XInput are loaded.
+///
+/// The band census panel arms the same hooks from its draw loop, and both panels share this DLL's
+/// copy of them, but that loop only arms what it draws for: a session where the census panel never
+/// draws would leave F4 opening a panel that takes nothing. Idempotent and cheap once armed.
+fn install_input_capture() {
+    static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    use std::sync::atomic::Ordering;
+    if ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    let dinput = er_overlay_input::try_install_dinput(crate::standalone_log);
+    let pad = er_overlay_input::try_install_pad(crate::standalone_log);
+    ARMED.store(dinput && pad, Ordering::Relaxed);
 }
 
 /// Arm the DirectInput click suppression for this DLL, retrying until `dinput8.dll` is loaded.
@@ -382,9 +400,10 @@ fn build_view() -> SettingsView {
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
     ];
     // The two bracket pickers, and the other half of the widening rule rather than an exception to
-    // it: they do not decide how far the search reaches, they decide which bracket the far half
-    // asks for once the finger's own row has already sent it there. Neither is written to the
-    // file, so no config from last week can disagree with what they show.
+    // it: they do not decide how far the search reaches, they decide which bracket a finger's
+    // search asks for. They reach the Bloody, Festering Bloody and Recusant Fingers only; the
+    // Challenger's Lynchpin keeps Seamless's own bracket. Neither is written to the file, so no
+    // config from last week can disagree with what they show.
     rows.extend(bracket_rows());
     // Both of these decide something: `search_by_location` asks Steam for the one marked
     // location, and refuses to run while that location is excluded. A third row sat here until
@@ -474,7 +493,7 @@ fn bracket_rows() -> Vec<SettingRow> {
         options.extend(labels);
         let note = match own_band {
             Some(band) => format!(
-                "yours is {} -- {describe}",
+                "yours is {} -- {describe}; invasion fingers only, the Lynchpin keeps yours",
                 options
                     .get(band as usize + 1)
                     .map_or("unknown", String::as_str)

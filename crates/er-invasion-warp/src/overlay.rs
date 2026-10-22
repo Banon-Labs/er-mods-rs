@@ -136,8 +136,16 @@ pub(crate) fn drain_edits() -> Vec<SettingEdit> {
 }
 
 /// Open or close the panel.
+///
+/// Opening takes the game's input the way the band census panel does: the camera stops following
+/// the mouse, the cursor is freed, and the keyboard, mouse buttons and pad stop reaching the
+/// character. It never did, and the player's report on 2026-10-22 was exactly that -- "opening er
+/// invasion warp with F4 doesn't lock my camera, doesn't make my mouse cursor appear". Both panels
+/// live in this DLL and share one copy of `er_overlay_input`'s state, so input is taken while
+/// either is open; closing one must not hand the game its input back under the other.
 pub(crate) fn set_open(open: bool) {
     OPEN.store(open, Ordering::Relaxed);
+    er_overlay_input::set_taking(open || crate::band_panel::is_open());
     if !open {
         // A panel that is not drawn owns no pointer and may not go on swallowing clicks. Cleared
         // from the game thread as well as the render thread, so a stalled render loop cannot

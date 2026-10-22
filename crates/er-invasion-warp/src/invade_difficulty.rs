@@ -18,17 +18,29 @@
 //!
 //! # When it applies
 //!
-//! Only during the far half of `Both near and far`, which begins at exactly one place:
-//! `lobby_preflight::hand_over_when_the_neighbourhood_is_empty` calling
-//! `local_invasion_filter::hand_off_to_seamless`. Before that the search is this DLL's own, aimed
-//! at a ring of tiles at the player's own band; after it, every query is Seamless's, unfiltered,
-//! and the band field is the only thing left that decides who can answer.
+//! To every query of a search one of this mod's invasion fingers started, and to nothing else --
+//! [`applies_to_this_search`] is the one place that says so. The Challenger's Lynchpin is
+//! Seamless's own item and keeps Seamless's own bracket whatever is picked (user directive
+//! 2026-10-22: "take configuration updates through our mod items only").
+//!
+//! A finger's search is the finger's in two stretches. While its near half runs, the finger is
+//! armed (`local_invasion_filter::finger_reach`). The far half of `Both near and far` begins at
+//! exactly one place, `lobby_preflight::hand_over_when_the_neighbourhood_is_empty` calling
+//! `local_invasion_filter::hand_off_to_seamless`, which retires the finger and sets the
+//! [`in_far_half`] latch in its stead; from there every query is Seamless's, unfiltered, and the
+//! band field is the only thing left that decides who can answer.
 //!
 //! [`in_far_half`] is a latch rather than a question asked of the ring, because the two are read
 //! on different sides of one query round. Seamless adds its string filters and only then calls
 //! `RequestLobbyList`, where `hunt_target` runs -- so a filter asking the ring what it decided this
 //! round would be reading last round's answer. The handover happens on the game task, once, and the
 //! latch it sets is true for every query that follows it.
+//!
+//! The latch is also the one way the pick could reach a Lynchpin search, so it has to die with the
+//! search that set it. Until 2026-10-22 it died only when the player stood a search down or a finger
+//! armed the next one; a far half that landed, or that Seamless gave up on, left it standing, and
+//! the Lynchpin's next search asked for the picked bracket. [`observe_session_transition`] now
+//! clears it when the session returns to idle, and when a search starts that no finger armed.
 //!
 //! # Where the player's own bracket comes from
 //!
@@ -56,7 +68,8 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use er_invasion_warp_core::invade_difficulty::{
-    BracketChoice, MAX_LEVEL_BAND, MAX_WEAPON_BAND, level_band, weapon_band,
+    BracketChoice, FarHalfVerdict, MAX_LEVEL_BAND, MAX_WEAPON_BAND, SessionTransition,
+    far_half_verdict, level_band, weapon_band,
 };
 
 /// Stored as `band + 1` so that zero means "not picked", which is what an atomic starts at and
@@ -109,8 +122,10 @@ pub fn pick_weapon(band: Option<u32>) {
 fn announce() {
     let choice = current();
     crate::standalone_log(format_args!(
-        "invade-bracket: the far half will ask for {}. Held in memory only: it is gone at the next \
-         launch and there is no line in the config file that could disagree with it.",
+        "invade-bracket: searches started with the Bloody, Festering Bloody or Recusant Finger \
+         will ask for {}; the Challenger's Lynchpin keeps this character's own. Held in memory \
+         only: it is gone at the next launch and there is no line in the config file that could \
+         disagree with it.",
         choice.describe()
     ));
 }
@@ -204,10 +219,45 @@ pub fn enter_far_half() {
 /// Leave the far half, because this search is over.
 ///
 /// Every path that ends a search calls this. A latch left set would apply the selection to the
-/// opening query of the next invasion -- the near half, at a band the player never climbed to --
-/// with nothing on screen to say why nobody nearby could be found.
-pub fn leave_far_half() {
-    FAR_HALF.store(false, Ordering::SeqCst);
+/// opening query of the next invasion -- the near half, at a band the player never climbed to, or
+/// a Challenger's Lynchpin search that the pick must never reach -- with nothing on screen to say
+/// why. Logged only when it was set, so the line marks a far half ending and not every search.
+pub fn leave_far_half(reason: &str) {
+    if FAR_HALF.swap(false, Ordering::SeqCst) {
+        crate::standalone_log(format_args!(
+            "invade-bracket: the far half is over -- {reason}. A search started after this asks \
+             for this character's own bracket unless one of this mod's fingers starts it."
+        ));
+    }
+}
+
+/// Clear the far-half latch on a session-state change that ends the search it belonged to.
+///
+/// Called from `local_invasion_filter::log_transition`, which sees every change the DLL observes,
+/// its own calls included. The decision is [`far_half_verdict`], kept in the core crate so it is
+/// covered off the target.
+pub fn observe_session_transition(change: SessionTransition) {
+    match far_half_verdict(change) {
+        FarHalfVerdict::Keep => {}
+        FarHalfVerdict::SearchEnded => leave_far_half(
+            "Seamless's session is back at idle, so the search the finger handed over has ended",
+        ),
+        FarHalfVerdict::SomebodyElsesSearch => leave_far_half(
+            "a search started that no finger of this mod armed and no call of this DLL made -- \
+             the Challenger's Lynchpin or Seamless's own menu",
+        ),
+    }
+}
+
+/// Whether the picked bracket may reach the search running now.
+///
+/// Yes while one of this mod's fingers has a search armed, and through the far half that search
+/// hands to Seamless. No for anything else, which in practice is the Challenger's Lynchpin: its
+/// queries are Seamless's own and must ask for Seamless's own bracket.
+#[must_use]
+pub fn applies_to_this_search() -> bool {
+    crate::local_invasion_filter::finger_reach() != crate::local_invasion_filter::FINGER_REACH_NONE
+        || in_far_half()
 }
 
 /// Whether the running search has reached its far half.
@@ -244,9 +294,19 @@ pub fn in_far_half() -> bool {
 /// module walks while nobody has been found. A pick is not a guess: it does not move on a failed
 /// cycle and it takes no rung from anything.
 ///
-/// `None` for a selection that resolves to the player's own bracket, and for a value that is not
-/// band-shaped.
+/// # Why it does not bind to every search
+///
+/// "The whole search" means the whole of a search one of this mod's fingers started. Bound to
+/// every query, the pick reached the Challenger's Lynchpin as well, and the player asked for the
+/// opposite on 2026-10-22: the Lynchpin keeps its normal bracket and the pick is taken through the
+/// mod's items only. [`applies_to_this_search`] draws that line.
+///
+/// `None` for a search no finger started, for a selection that resolves to the player's own
+/// bracket, and for a value that is not band-shaped.
 #[must_use]
 pub fn band_for(own: &str) -> Option<String> {
+    if !applies_to_this_search() {
+        return None;
+    }
     current().band_for(own)
 }
