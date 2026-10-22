@@ -106,6 +106,7 @@ impl SettingsKey {
 /// one frame behind the player.
 pub fn tick(key: &mut SettingsKey) {
     install_click_suppression();
+    install_input_capture();
     key.poll();
     apply_pending_edits();
     if crate::overlay::is_open() {
@@ -113,6 +114,23 @@ pub fn tick(key: &mut SettingsKey) {
         // every frame for a panel nobody opened is work the game thread does not owe anyone.
         crate::overlay::publish(build_view());
     }
+}
+
+/// Arm the keyboard, mouse and pad blanking that `er_overlay_input::set_taking` drives, retrying
+/// until DirectInput and XInput are loaded.
+///
+/// The band census panel arms the same hooks from its draw loop, and both panels share this DLL's
+/// copy of them, but that loop only arms what it draws for: a session where the census panel never
+/// draws would leave F4 opening a panel that takes nothing. Idempotent and cheap once armed.
+fn install_input_capture() {
+    static ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    use std::sync::atomic::Ordering;
+    if ARMED.load(Ordering::Relaxed) {
+        return;
+    }
+    let dinput = er_overlay_input::try_install_dinput(crate::standalone_log);
+    let pad = er_overlay_input::try_install_pad(crate::standalone_log);
+    ARMED.store(dinput && pad, Ordering::Relaxed);
 }
 
 /// Arm the DirectInput click suppression for this DLL, retrying until `dinput8.dll` is loaded.

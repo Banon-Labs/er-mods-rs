@@ -77,7 +77,9 @@ fn set_open(open: bool) {
     if OPEN.swap(open, Ordering::AcqRel) == open {
         return;
     }
-    er_overlay_input::set_taking(open);
+    // The settings panel shares this DLL's input capture, so closing this one while it is open
+    // leaves the input taken.
+    er_overlay_input::set_taking(open || crate::overlay::is_open());
     if open {
         RATE_VIEW.store(false, Ordering::Relaxed);
         band_census::arm();
