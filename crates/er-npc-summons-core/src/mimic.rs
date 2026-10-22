@@ -4,9 +4,11 @@
 //! sets `SummonBuddyManager+0x20` to `207000 + N`; `BuddyGenerator` asks `GetBuddyList` for the
 //! BuddyParam rows whose trigger is `207000` (rows 20700000 and 20700001), reads each row through
 //! `GetBuddyParam` and turns it into a spawn request. The DLL rewrites that list to one entry per
-//! companion, all pointing at the human row, and rewrites the human row's values per read.
+//! companion, all pointing at the human row, and answers each read of that row with a copy
+//! carrying the companion's values ([`RowValues::write_into`], [`crate::row_copy`]). The resident
+//! row is never written.
 //!
-//! This module decides those values; the DLL writes them.
+//! This module decides those values and lays them into a copy's bytes; the DLL serves the copy.
 
 use crate::config::Companion;
 
@@ -63,9 +65,25 @@ pub struct Offset {
     pub yaw: f32,
 }
 
+/// `BUDDY_PARAM_ST`'s size, the bytes a copy of a BuddyParam row carries. The last field the game
+/// reads is `generateAnimId` at `+0x58` (`CreateSummonChr`, 2.7.2.0 `0x1404bb7c9`); the paramdef
+/// runs on to `+0xa0`.
+pub const BUDDY_ROW_SIZE: usize = 0xa0;
+
+/// `BUDDY_PARAM_ST` offsets of the fields a companion's copy changes. `triggerSpEffectId` (`+0x4`)
+/// is deliberately not among them: `UpdateTriggerSpEffectMap` (2.7.2.0 `0x1404bd040`) reads the
+/// resident rows by index, so a copy could never move a row to another trigger.
+pub mod buddy_field {
+    pub const NPC: usize = 0x08;
+    pub const THINK: usize = 0x0c;
+    pub const X: usize = 0x18;
+    pub const Z: usize = 0x1c;
+    pub const YAW: usize = 0x20;
+    pub const CHARA_INIT: usize = 0x54;
+}
+
 /// The values one read of [`HUMAN_ROW`] is given before `BuddyGenerator` copies them out.
-/// `BUDDY_PARAM_ST` offsets: `+0x08` npc, `+0x0c` think, `+0x18` x, `+0x1c` z, `+0x20` yaw,
-/// `+0x54` charaInit.
+/// `BUDDY_PARAM_ST` offsets are in [`buddy_field`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowValues {
     /// The companion's config slot, 1..=4: the key its dressing is found by.
@@ -74,6 +92,31 @@ pub struct RowValues {
     pub think: i32,
     pub chara_init: i32,
     pub offset: Offset,
+}
+
+impl RowValues {
+    /// Lay these values into a copy of a BuddyParam row: npc, think, charaInit and the formation
+    /// offset. Every other byte, `triggerSpEffectId` included, keeps the row's own value.
+    ///
+    /// Returns `false`, with `row` untouched, when `row` is shorter than [`BUDDY_ROW_SIZE`].
+    #[must_use]
+    pub fn write_into(&self, row: &mut [u8]) -> bool {
+        if row.len() < BUDDY_ROW_SIZE {
+            return false;
+        }
+        put(row, buddy_field::NPC, self.npc_param.to_le_bytes());
+        put(row, buddy_field::THINK, self.think.to_le_bytes());
+        put(row, buddy_field::X, self.offset.x.to_le_bytes());
+        put(row, buddy_field::Z, self.offset.z.to_le_bytes());
+        put(row, buddy_field::YAW, self.offset.yaw.to_le_bytes());
+        put(row, buddy_field::CHARA_INIT, self.chara_init.to_le_bytes());
+        true
+    }
+}
+
+/// Write `bytes` at `offset`. The caller has checked the row is long enough.
+fn put<const N: usize>(row: &mut [u8], offset: usize, bytes: [u8; N]) {
+    row[offset..offset + N].copy_from_slice(&bytes);
 }
 
 /// The plan for one summon: one entry per companion, in slot order. Its length is the length the
@@ -168,6 +211,64 @@ mod tests {
             None
         );
         assert_eq!(pending.len(), 1);
+    }
+
+    fn i32_at(row: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes(row[offset..offset + 4].try_into().expect("four bytes"))
+    }
+
+    fn f32_at(row: &[u8], offset: usize) -> f32 {
+        f32::from_le_bytes(row[offset..offset + 4].try_into().expect("four bytes"))
+    }
+
+    #[test]
+    fn a_copy_changes_only_the_six_companion_fields() {
+        // A stand-in for row 20700001 as the game holds it: every byte distinct, and the Mimic
+        // Tear trigger at +0x4.
+        let mut resident: Vec<u8> = (0..BUDDY_ROW_SIZE).map(|i| i as u8).collect();
+        resident[4..8].copy_from_slice(&MIMIC_TRIGGER.to_le_bytes());
+        let values = RowValues {
+            slot: 2,
+            npc_param: 523_590_024,
+            think: 523_590_100,
+            chara_init: 23_590,
+            offset: FORMATION[1],
+        };
+        let mut copy = resident.clone();
+        assert!(values.write_into(&mut copy));
+
+        assert_eq!(i32_at(&copy, buddy_field::NPC), 523_590_024);
+        assert_eq!(i32_at(&copy, buddy_field::THINK), 523_590_100);
+        assert_eq!(i32_at(&copy, buddy_field::CHARA_INIT), 23_590);
+        assert_eq!(f32_at(&copy, buddy_field::X), FORMATION[1].x);
+        assert_eq!(f32_at(&copy, buddy_field::Z), FORMATION[1].z);
+        assert_eq!(f32_at(&copy, buddy_field::YAW), FORMATION[1].yaw);
+        assert_eq!(i32_at(&copy, 4), MIMIC_TRIGGER);
+
+        let written = [
+            buddy_field::NPC,
+            buddy_field::THINK,
+            buddy_field::X,
+            buddy_field::Z,
+            buddy_field::YAW,
+            buddy_field::CHARA_INIT,
+        ];
+        for (offset, (&was, &now)) in resident.iter().zip(&copy).enumerate() {
+            if !written
+                .iter()
+                .any(|&field| (field..field + 4).contains(&offset))
+            {
+                assert_eq!(was, now, "byte +0x{offset:x} changed");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_row_is_left_alone() {
+        let values = plan(&Config::parse("[mimic.companion.1]\n").mimic.companions)[0];
+        let mut short = vec![0xaa; BUDDY_ROW_SIZE - 1];
+        assert!(!values.write_into(&mut short));
+        assert!(short.iter().all(|&b| b == 0xaa));
     }
 
     #[test]

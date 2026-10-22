@@ -1315,39 +1315,6 @@ head -- a VISIBLE costume change on whatever character the run loads. Harmless t
 and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
 wanted. Load it only when the mushroom IS the experiment: `--with mushroom-man-runtime`."""
 
-"er-death-persist" = """Patches SpEffectParam / SpEffectVfxParam rows (saveCategory 5 -> 3 on \
-19980/19981/19982, plus their cycle-chain and VFX flags) from a CSTaskImp task at boot. It hooks \
-NOTHING -- no MinHook instance, no union entry, no VirtualProtect -- and that is precisely why it \
-sat in [compatible] for so long: it cannot corrupt another DLL's trampolines, so every \
-prologue-based check called it safe. It still LOCKS THE PLAYER OUT OF SEAMLESS INVASIONS.
-
-MECHANISM. Seamless filters its lobby list on `lobby_key` with k_ELobbyComparisonEqual, and that \
-key is a SHA256 fingerprint of the PARAM TABLES (BuildLobbyKey @ ersc 0xABC20). It re-derives on \
-a jittered timer AFTER this DLL's boot task has run, so the PATCHED fingerprint is what gets \
-published and filtered on -- and nobody else in the world has it. A search against a pool of one \
-finds nobody.
-
-The RULE survives a Seamless update; the ADDRESS does not. `0xABC20` and the SHA256 values below \
-were measured against ersc.dll v1.9.9. Seamless Co-op v2.0.0 (2026-09-02) moved its entry points, \
-and a body search for BuildLobbyKey there returns two candidates plus a third whose prologue \
-matches -- ambiguous, so it is unverified rather than relocated. That does not weaken this \
-conflict: param-table divergence locking you out of matchmaking is Seamless's design, not an \
-artifact of one build. It only means nothing should ACT on the number without re-measuring \
-(scripts/locate-ersc-entry-points.py; scripts/ersc_identify.py reports the installed build). \
-Tracked in bd er-effects-rs-wqzf.
-
-MEASURED TWICE, byte-identical two days apart (2026-08-23 A/B; reconfirmed live 2026-08-25 on the \
-user's own save and the full 14-DLL pack):
-  with it     LOBBY KEY = 0044f570d958f07ace546a90fa62ba2044ef7c3a1f9864fb3cb336bf611965d3
-  without it  LOBBY KEY = 16ca67264987f56ca821525a2f65884cedc2546cf15ca3e69292c5c394c9d4ef
-With it dropped, the user invaded on the next attempt.
-
-WHY DEFAULT-OFF RATHER THAN A [[conflict]]: nothing crashes, nothing logs an error and no \
-prologue is contended, so there is no pair to rank. The failure is INVISIBLE and looks exactly \
-like "no hosts online" -- the worst possible way for a DLL to arrive uninvited on a \
-dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
-invade during that run: `--with er-death-persist`."""
-
 "er-npc-summons" = """Changes what two items do. The Duelist's Furled Finger opens an NPC picker \
 instead of placing the player's own red sign (a detour on \
 `PlayerIns::StartMultiplayProcedureWithMountData`, 1.16.2 `0x1406587b0`, that skips the original \
@@ -1355,12 +1322,22 @@ for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 throu
 seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
 companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
 `GetBuddyListBySpEffectId` `0x1404bc960`, `GetBuddyParam` `0x140d26890` and \
-`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request; the \
-last swaps the companion's `CharaInitParam` row for its build URL's gear for the length of one \
-call). It links `er-build-import-runtime` for the item catalog and the reinforce clamp only: \
-it never starts that crate's phase machine, fetch worker or game task, so it is not a second \
-owner of the player's inventory the way `er-build-import` is. No other shell hooks those five \
-prologues. Since 2026-10-06 it also detours, bare and alone on each prologue: \
+`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request, and \
+since 2026-10-22 a union handler on `GetCharaInitParam` (no 1.16.2 ledger row; 1.17.1 \
+`0x140d35f70`, 2.7.2.0 `0x140d37660`, carried by `carry_1171_rva` and refused unless its frame, \
+table-index and out-store windows match), scoped to one companion's `CreateSummonChr` call on \
+that call's thread). It writes no param row. `GetBuddyParam` and `GetCharaInitParam` both fill \
+`out = {id, row*}`, and the detours point `out+8` at a copy this DLL owns: row 20700001 with the \
+companion's npc, think, charaInit and formation offset, and the body's `CharaInitParam` row with \
+its build URL's gear. Copies are interned by content and never freed. Seamless's `lobby_key` is \
+a fingerprint of the loaded param tables compared for equality, so a resident-row write would \
+put the player in a matchmaking pool of one (bd \
+death-persist-is-the-lobby-key-mover-seamless-201-2720-2026-10-22); until 2026-10-22 this shell \
+wrote both rows for the length of one call and put them back. It links `er-build-import-runtime` \
+for the item catalog and the reinforce clamp only: it never starts that crate's phase machine, \
+fetch worker or game task, so it is not a second owner of the player's inventory the way \
+`er-build-import` is. No other shell hooks those six prologues. Since 2026-10-06 it also \
+detours, bare and alone on each prologue: \
 `ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
 `0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
 only on the AI state); since 2026-10-07 `CalculateDamage2` `0x1404483b0` (observes every landed \
@@ -1376,6 +1353,23 @@ did not ask for it would find two items behaving differently, so it is never pul
 dependency closure: `--with er-npc-summons`."""
 
 [compatible]
+"er-death-persist" = """Co-loadable with everything, and since 2026-10-22 it writes no param row. At \
+boot it copies the SpEffectParam and SpEffectVfxParam rows it changes (saveCategory 5 -> 3 on \
+19980/19981/19982, dontDeleteOnDead on their cycle-chain rows, isVisibleDeadChr on their VFX rows) \
+and hooks the two typed getters every reader goes through -- `GetSpEffectParam` (2.7.2.0 \
+`0x140d53a90`) and the SpEffectVfxParam getter (`0x140d54070`) -- to hand back the copy for those \
+ids. Both go through `er_hook::register_union_hook_runtime_derived_following_arxan`, so another DLL \
+on the same getter chains rather than collides; no other crate here hooks either one \
+(`er-allow-hostile-actions` only calls `GetSpEffectParam`).
+
+Why it used to be opt-in. The old build wrote those fields into the resident rows, and Seamless's \
+`lobby_key` is a fingerprint of the param tables as loaded, filtered with \
+k_ELobbyComparisonEqual, so the player searched a pool of one and found no hosts. Measured on \
+2.7.2.0 with Seamless 2.0.1 from the same Lynchpin search: the old build gave `2d11f036...` and no \
+hosts; without the DLL, and with this build, the key is the common `724e9aa8...` and the search \
+joins lobbies (bd death-persist-row-copies-keep-common-lobby-key-2720-2026-10-22). Writing a \
+resident row again would bring that failure back."""
+
 "er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its whole \
 effect is three one-byte stores into `.text`, made (and undone, when an option is switched back \

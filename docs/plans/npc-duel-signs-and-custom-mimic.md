@@ -50,7 +50,7 @@ loadStatus is already 4 before the touch (MEASURED).
 **STATIC**, bd `mimic-tear-summon-hijack-1171-2026-10-06`; prototype
 `scripts/frida/mimic-tear-turtles.js`.
 - Using Mimic Tear Ashes (goods 207000..207010) goes through `BuddyGenerator` `0x1404bbdd0`.
-- Inside that call, the DLL rewrites the BuddyParam rows that `GetBuddyParam` `0x140d28010` returns: npc, think, charaInit and offsets.
+- Inside that call, the DLL answers each read of the human BuddyParam row through `GetBuddyParam` `0x140d28010` with a copy carrying a companion's npc, think, charaInit and offsets. Since 2026-10-22 the resident row is never written: Seamless fingerprints the loaded param tables into its `lobby_key`, so a written row leaves the player in a matchmaking pool of one.
 - It also grows the summon list to N entries with the game's own list insert, and removes the copy-the-player branch.
 
 Item use, FP cost, the summoning-pool range check, dismissal and the Seamless broadcast (packet 78)
@@ -276,10 +276,13 @@ er-effects-rs-x6nl):
   the regulation's own CharaInitParam weapons do.
 - So the DLL adds a fourth detour, on `CreateSummonChr`, active only inside a hijacked
   `BuddyGenerator`. It pairs the call with its companion by the npc/think/charaInit loop one wrote
-  (`mimic::claim`), writes that companion's build into the row, calls the original and restores
-  the row. Field values come from `er_npc_summons_core::dress`, which reuses the importer's parser,
-  catalog interface and equip planner; the game side fetches each build once per URL and resolves
-  it with the importer's runtime catalog and `ReinforceParamWeapon` clamp.
+  (`mimic::claim`) and calls the original while a union handler on `GetCharaInitParam` (1.17.1
+  `0x140d35f70`, 2.7.2.0 `0x140d37660`, out `{id @+0, row* @+8}`) answers that thread's lookup of
+  the companion's row with a copy carrying its build. The resident row is never written (until
+  2026-10-22 it was written for the call and restored). Field values come from
+  `er_npc_summons_core::dress`, which reuses the importer's parser, catalog interface and equip
+  planner; the game side fetches each build once per URL and resolves it with the importer's
+  runtime catalog and `ReinforceParamWeapon` clamp.
 - Not carried by the row, and logged as not applied: Ashes of War, spells, the great rune, the
   face, attributes. Peers still build the body's own gear, because packet 78 carries only the
   charaInit id. A URL that is refused, fails to fetch or parse, or resolves to nothing leaves the

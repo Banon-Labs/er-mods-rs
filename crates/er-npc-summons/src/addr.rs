@@ -43,7 +43,8 @@ pub(crate) const BUDDY_GENERATOR: u32 = 0x004b_b8b0;
 /// Detour: `GetBuddyListBySpEffectId(mgr, int spEffect, List<int>*)` (1.17.1 `0x1404bce80`).
 pub(crate) const GET_BUDDY_LIST: u32 = 0x004b_c960;
 /// Detour: `GetBuddyParam(BuddyParamLookup*, int id)`, lookup `{+0 id, +8 row}` (1.17.1
-/// `0x140d28010`).
+/// `0x140d28010`, 2.7.2.0 `0x140d29700`). The detour replaces `+8` with a row copy; the windows
+/// proving that layout are checked at the resolved address (`getter_sites.rs`).
 pub(crate) const GET_BUDDY_PARAM: u32 = 0x00d2_6890;
 /// Where `BuddyGenerator`'s first-loop `GetBuddyParam` call returns, as an offset into
 /// `BuddyGenerator` (1.17.1 `0x1404bbfa3 - 0x1404bbdd0`). The body is `IDENTICAL-WHOLE` between
@@ -419,14 +420,6 @@ pub(crate) mod tree {
 /// `SummonBuddyManager+0x20`: the requested summon SpEffect, `207000 + level` for the Mimic Tear.
 pub(crate) const BUDDY_MANAGER_REQUEST: usize = 0x20;
 
-/// `BUDDY_PARAM_ST` field offsets (paramdef; no drift on the 1.17.1 regulation).
-pub(crate) mod buddy_param {
-    pub(crate) const NPC: usize = 0x08;
-    pub(crate) const THINK: usize = 0x0c;
-    pub(crate) const X: usize = 0x18;
-    pub(crate) const Z: usize = 0x1c;
-    pub(crate) const YAW: usize = 0x20;
-    pub(crate) const CHARA_INIT: usize = 0x54;
-    /// Bytes saved and restored around a hijacked `BuddyGenerator` call.
-    pub(crate) const SAVE: usize = 0x58;
-}
+// `BUDDY_PARAM_ST` and `CHARACTER_INIT_PARAM` field offsets live in `er_npc_summons_core::mimic`
+// and `er_npc_summons_core::dress`, which lay a companion's values into a copy of the row; the two
+// getters the copies are served through are in `getter_sites.rs`.
