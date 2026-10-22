@@ -2529,8 +2529,9 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-target-bars --lib
 # er-duel-rules keeps every ruleset decision host-testable in its core: which grip a ban needs,
 # the hand a weapon buff sits on, the equip-load ratio, the per-round blue flask count and when a
 # popup may fire again. The ban table it reads is generated from the installed game, and the
-# generator's --check refuses a table that no longer matches it (skipping without a game).
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-duel-rules-core
+# generator's --check refuses a table that no longer matches it (skipping without a game). The
+# shell's own host tests are its settings file: the two keys and the in-place rewrite.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-duel-rules-core -p er-duel-rules
 python3 "$repo_root/scripts/er-duel-rules-gen.py" --selftest
 python3 "$repo_root/scripts/er-duel-rules-gen.py" --check
 # The shareable Frida agent (scripts/frida/er-duel-rules.js) carries a JS port of the same rules;

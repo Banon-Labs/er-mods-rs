@@ -29,6 +29,7 @@
 //! The manual-aiming and unlocked-FPS rules read settings no other player replicates, so each
 //! machine can only judge its own player.
 
+use crate::config::Config;
 use crate::facts::{CATEGORY_LEFT_WEAPON_BUFF, CATEGORY_RIGHT_WEAPON_BUFF, GameFacts, equip_load};
 use crate::player::{Hand, PlayerSnapshot, skill_clip, weapon_affinity, weapon_base};
 use crate::tables::{self, TearBan, affinity, skill, talisman, weapon, wep_type};
@@ -96,9 +97,142 @@ pub enum Rule {
     TwoHandedSwordTalisman,
     SpearTalismanSwordLance,
     OffhandPoisonGrease,
+    /// A ban of the player's own, from the rules file; the ban's name is its text
+    /// ([`Violation::text`]). Not one of [`Rule::ALL`], and never switched off by name.
+    Custom,
 }
 
 impl Rule {
+    /// The ruleset's own rules, in the order the rules file and every port list them.
+    pub const ALL: [Rule; 49] = [
+        Self::RuneLevel,
+        Self::PlayerBuff,
+        Self::PassiveRegen,
+        Self::Healing,
+        Self::SpectralSteed,
+        Self::SpiritAshes,
+        Self::Respec,
+        Self::SwitchingBuilds,
+        Self::ArmorSwapPoiseReset,
+        Self::BuffTransfer,
+        Self::ManualAttackAiming,
+        Self::UnlockedFps,
+        Self::RuneArc,
+        Self::CeruleanFlasks,
+        Self::FanDaggers,
+        Self::ShieldGuard,
+        Self::RotGrease,
+        Self::SleepGreaseRipple,
+        Self::PoisonGreaseShamshir,
+        Self::WeaponBuffRestricted,
+        Self::StatTear,
+        Self::DamageTear,
+        Self::NamedTear,
+        Self::ThrustingShield,
+        Self::PowerstanceBackhandBlade,
+        Self::SmithscriptCirque,
+        Self::TwoHandedBackhandBlade,
+        Self::LightningReverseBlades,
+        Self::TwoHandedCleanrot,
+        Self::PataNotOffhand,
+        Self::ClawsOfNight,
+        Self::SmithscriptShield,
+        Self::SpreadCrossbow,
+        Self::SmithscriptDagger,
+        Self::Milady,
+        Self::StoneClubStatus,
+        Self::LightningRaptorTalons,
+        Self::BannedSpell,
+        Self::LightRoll,
+        Self::BannedArmor,
+        Self::BannedAsh,
+        Self::ChillingMistCold,
+        Self::SpinningSlashLightGreatsword,
+        Self::MuletaTalismans,
+        Self::IFrameTalisman,
+        Self::RedFeather,
+        Self::TwoHandedSwordTalisman,
+        Self::SpearTalismanSwordLance,
+        Self::OffhandPoisonGrease,
+    ];
+
+    /// The name the rules file uses for the rule (its `off` list), the variant's own name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::RuneLevel => "RuneLevel",
+            Self::PlayerBuff => "PlayerBuff",
+            Self::PassiveRegen => "PassiveRegen",
+            Self::Healing => "Healing",
+            Self::SpectralSteed => "SpectralSteed",
+            Self::SpiritAshes => "SpiritAshes",
+            Self::Respec => "Respec",
+            Self::SwitchingBuilds => "SwitchingBuilds",
+            Self::ArmorSwapPoiseReset => "ArmorSwapPoiseReset",
+            Self::BuffTransfer => "BuffTransfer",
+            Self::ManualAttackAiming => "ManualAttackAiming",
+            Self::UnlockedFps => "UnlockedFps",
+            Self::RuneArc => "RuneArc",
+            Self::CeruleanFlasks => "CeruleanFlasks",
+            Self::FanDaggers => "FanDaggers",
+            Self::ShieldGuard => "ShieldGuard",
+            Self::RotGrease => "RotGrease",
+            Self::SleepGreaseRipple => "SleepGreaseRipple",
+            Self::PoisonGreaseShamshir => "PoisonGreaseShamshir",
+            Self::WeaponBuffRestricted => "WeaponBuffRestricted",
+            Self::StatTear => "StatTear",
+            Self::DamageTear => "DamageTear",
+            Self::NamedTear => "NamedTear",
+            Self::ThrustingShield => "ThrustingShield",
+            Self::PowerstanceBackhandBlade => "PowerstanceBackhandBlade",
+            Self::SmithscriptCirque => "SmithscriptCirque",
+            Self::TwoHandedBackhandBlade => "TwoHandedBackhandBlade",
+            Self::LightningReverseBlades => "LightningReverseBlades",
+            Self::TwoHandedCleanrot => "TwoHandedCleanrot",
+            Self::PataNotOffhand => "PataNotOffhand",
+            Self::ClawsOfNight => "ClawsOfNight",
+            Self::SmithscriptShield => "SmithscriptShield",
+            Self::SpreadCrossbow => "SpreadCrossbow",
+            Self::SmithscriptDagger => "SmithscriptDagger",
+            Self::Milady => "Milady",
+            Self::StoneClubStatus => "StoneClubStatus",
+            Self::LightningRaptorTalons => "LightningRaptorTalons",
+            Self::BannedSpell => "BannedSpell",
+            Self::LightRoll => "LightRoll",
+            Self::BannedArmor => "BannedArmor",
+            Self::BannedAsh => "BannedAsh",
+            Self::ChillingMistCold => "ChillingMistCold",
+            Self::SpinningSlashLightGreatsword => "SpinningSlashLightGreatsword",
+            Self::MuletaTalismans => "MuletaTalismans",
+            Self::IFrameTalisman => "IFrameTalisman",
+            Self::RedFeather => "RedFeather",
+            Self::TwoHandedSwordTalisman => "TwoHandedSwordTalisman",
+            Self::SpearTalismanSwordLance => "SpearTalismanSwordLance",
+            Self::OffhandPoisonGrease => "OffhandPoisonGrease",
+            Self::Custom => "Custom",
+        }
+    }
+
+    /// The built-in rule a rules file names by [`Rule::key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|rule| rule.key() == key)
+    }
+
+    /// The rule as written with the numbers `cfg` gives it: the three rules that carry a number
+    /// say the one in force.
+    pub fn text_with(self, cfg: &Config) -> String {
+        match self {
+            Self::RuneLevel => format!("Rune Level: {}", number_text(cfg.rune_level)),
+            Self::CeruleanFlasks => {
+                format!("Blue flasks limited to {}", number_text(cfg.blue_flasks))
+            }
+            Self::ShieldGuard => format!(
+                "Blocking With Shields above {}% physical absorption",
+                number_text(cfg.shield_guard_cap)
+            ),
+            _ => self.text().to_owned(),
+        }
+    }
+
     /// The rule as the ruleset words it.
     pub fn text(self) -> &'static str {
         match self {
@@ -155,7 +289,18 @@ impl Rule {
             Self::TwoHandedSwordTalisman => "Two-Handed Sword Tali.",
             Self::SpearTalismanSwordLance => "Spear Talisman on Sword Lance",
             Self::OffhandPoisonGrease => "Offhand drawstring poison grease",
+            Self::Custom => "Custom",
         }
+    }
+}
+
+/// A rules-file number as the rule text and the file write it: whole numbers without a fraction,
+/// as JavaScript prints them, so `125` reads `125` in every port.
+pub fn number_text(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{value:.0}")
+    } else {
+        format!("{value}")
     }
 }
 
@@ -163,6 +308,9 @@ impl Rule {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Violation {
     pub rule: Rule,
+    /// A ban of the player's own: its name, which is the rule as listed. `None` for a built-in
+    /// rule, whose text comes from [`Rule::text_with`].
+    pub text: Option<String>,
     pub detail: String,
     /// Broken by what the player has equipped or set rather than by something they did. The
     /// ruleset counts equipping banned content as using it, but a build is free until an opponent
@@ -179,6 +327,7 @@ pub struct Violation {
 pub(crate) fn violation(rule: Rule, detail: impl Into<String>) -> Violation {
     Violation {
         rule,
+        text: None,
         detail: detail.into(),
         on_equipment: false,
         event: false,
@@ -315,15 +464,21 @@ pub fn buff_restricted_setup(
     }
 }
 
-/// Every rule `p` breaks this frame, except the per-round flask count, which needs history
-/// ([`crate::referee::Referee`] adds it).
+/// Every rule `p` breaks this frame under the ruleset as written, except the per-round flask
+/// count, which needs history ([`crate::referee::Referee`] adds it).
 pub fn check(p: &PlayerSnapshot, facts: &impl GameFacts) -> Vec<Violation> {
+    check_with(p, facts, &Config::default())
+}
+
+/// [`check`] with the rune level and the shield guard cap `cfg` sets. Switched-off rules are
+/// still reported here; the referee drops them, after the history they feed is kept.
+pub fn check_with(p: &PlayerSnapshot, facts: &impl GameFacts, cfg: &Config) -> Vec<Violation> {
     let mut out = Vec::new();
     // Level 0 is a remote player whose data has not arrived yet.
-    if p.level != 0 && p.level != RUNE_LEVEL {
+    if p.level != 0 && f64::from(p.level) != cfg.rune_level {
         out.push(equipped(Rule::RuneLevel, format!("Rune Level {}", p.level)));
     }
-    check_weapons(p, facts, &mut out);
+    check_weapons(p, facts, cfg, &mut out);
     check_armor_and_talismans(p, &mut out);
     check_tears(p, &mut out);
     check_effects(p, facts, &mut out);
@@ -371,7 +526,12 @@ pub fn is_roll(anim: i32) -> bool {
         && anim % 10 <= 7
 }
 
-fn check_weapons(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violation>) {
+fn check_weapons(
+    p: &PlayerSnapshot,
+    facts: &impl GameFacts,
+    cfg: &Config,
+    out: &mut Vec<Violation>,
+) {
     for id in p.weapons() {
         let base = weapon_base(id);
         for &(banned, rule) in BANNED_WEAPONS {
@@ -387,7 +547,7 @@ fn check_weapons(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Viola
         }
         if SHIELD_CLASSES.contains(&w.wep_type)
             && w.wep_type != wep_type::THRUSTING_SHIELD
-            && w.phys_guard_cut > SHIELD_PHYS_GUARD_CAP
+            && f64::from(w.phys_guard_cut) > cfg.shield_guard_cap
         {
             out.push(equipped(
                 Rule::ShieldGuard,

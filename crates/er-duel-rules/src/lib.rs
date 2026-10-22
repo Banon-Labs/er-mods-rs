@@ -6,23 +6,42 @@
 //! `cargo test` proves it. This DLL only reads the game into that crate's `PlayerSnapshot`s,
 //! answers its param questions from the live tables, and draws the notices.
 //!
+//! # The rules menu
+//!
+//! F2 (`menu_key` in `er-duel-rules.toml`) opens a menu that switches built-in rules off, changes
+//! the rune level, blue flasks and shield cap, and writes bans of your own over any weapon, class,
+//! affinity, armour, talisman, tear, skill, spell, item, effect, projectile, animation, rune level
+//! or attribute ([`menu`]). What it sets is saved to `er-duel-rules.json`, the file the Cheat
+//! Engine table and the Frida agent read too, and an edit to that file from either of them is
+//! picked up within a second ([`control`]). ctrl+F2 (`breaks_key`) hides and shows the list;
+//! hidden or not, every break is still filed and logged.
+//!
 //! # What this DLL does to the game
 //!
-//! Nothing. No detours, no memory writes, no param edits, no input. A `FrameBegin` game task
-//! reads the players, the param tables and the bullet manager; the overlay draws the list that
-//! task keeps.
+//! No memory writes and no param edits. A `FrameBegin` game task reads the players, the param
+//! tables and the bullet manager; the overlay draws the list that task keeps. While the menu is
+//! open it takes the game's input the way every menu in this workspace does (`er-overlay-input`):
+//! the "a menu has the mouse" predicate answers true, and DirectInput and XInput reads come back
+//! empty. Those three hooks chain on `er-hook`'s unions and pass everything through while the menu
+//! is shut.
 //!
 //! # The log is the oracle
 //!
 //! `er-duel-rules.log` beside the game records every rule break with its detail, each player the
 //! first time they are judged (level, weapons, armour, talismans, tears), every skill clip a
-//! player starts, every blue flask counted, and a status line every ten seconds.
+//! player starts, every blue flask counted, every change to the rules and where it came from, and a
+//! status line every ten seconds.
 
 mod breaks;
 mod log;
+pub mod settings;
 
 #[cfg(windows)]
+mod control;
+#[cfg(windows)]
 mod game;
+#[cfg(windows)]
+mod menu;
 #[cfg(windows)]
 mod params;
 #[cfg(windows)]
@@ -78,6 +97,8 @@ struct TaskState {
     logged_builds: HashMap<u64, String>,
     /// Ticks the param tables were not ready yet.
     facts_missing: usize,
+    /// The rules generation the referee was last handed (`control::rules_generation`).
+    rules_generation: u64,
 }
 
 #[cfg(windows)]
@@ -109,6 +130,11 @@ fn build_line(p: &PlayerSnapshot) -> String {
 #[cfg(windows)]
 fn tick(state: &mut TaskState) {
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
+    let generation = control::rules_generation();
+    if generation != state.rules_generation {
+        state.referee.set_config(control::rules());
+        state.rules_generation = generation;
+    }
     let Some(facts) = params::LiveFacts::get() else {
         state.facts_missing += 1;
         return;
@@ -166,14 +192,20 @@ fn tick(state: &mut TaskState) {
     if ticks.is_multiple_of(STATUS_LOG_TICKS) && ticks > 0 {
         rules_log(format_args!(
             "status: ticks={ticks} players={} remote_pending={} bullets_owned={} alerts={} \
-             facts_missing_ticks={} overlay_installed={} notice_frames={}",
+             facts_missing_ticks={} overlay_installed={} notice_frames={} list_shown={} \
+             menu_open={} menu_frames={} rules_generation={} input={:?}",
             stats.players,
             stats.remote_pending,
             stats.bullets_owned,
             ALERTS.load(Ordering::Relaxed),
             state.facts_missing,
             render::installed(),
-            render::draws()
+            render::draws(),
+            control::show_breaks(),
+            menu::is_open(),
+            menu::draws(),
+            state.rules_generation,
+            er_overlay_input::counters()
         ));
     }
 }
@@ -199,15 +231,49 @@ fn spawn_game_task() {
         });
 }
 
+/// How often the worker saves and rereads the two files.
+#[cfg(windows)]
+const WORKER_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[cfg(windows)]
+fn spawn_worker() {
+    let spawned = std::thread::Builder::new()
+        .name("er-duel-rules-worker".to_owned())
+        .spawn(|| {
+            let mut panicked = false;
+            // The repo's pacing primitive: a channel nothing sends on, so each receive waits out
+            // the period.
+            let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
+            loop {
+                let _ = tick_rx.recv_timeout(WORKER_PERIOD);
+                if std::panic::catch_unwind(control::tick).is_err() && !panicked {
+                    panicked = true;
+                    rules_log(format_args!(
+                        "worker: a step panicked; the worker carries on (logged once)"
+                    ));
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        rules_log(format_args!(
+            "worker: not started ({error}); the menu's changes stay in force but are not saved"
+        ));
+    }
+}
+
 #[cfg(windows)]
 fn install(module_base: usize) {
     reset_log_file();
     rules_log(format_args!(
-        "attach: module_base={module_base:#x}; duel ruleset referee, read-only (no detours, no \
-         game writes), overlay ABI {:#06x}",
+        "attach: module_base={module_base:#x}; duel ruleset referee (no game writes; input taken \
+         only while the menu is open), overlay ABI {:#06x}",
         er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
     ));
+    er_hook::set_hook_logger(rules_log);
+    control::init();
+    spawn_worker();
     spawn_game_task();
+    er_overlay_input::install_cursor(rules_log);
     render::install(module_base);
 }
 

@@ -55,7 +55,7 @@ pub fn install_if_owner(_hmodule_raw: usize, _log: fn(std::fmt::Arguments<'_>)) 
 }
 
 #[cfg(test)]
-mod every_host_builds_one_default_font {
+mod overlay_hosts {
     use std::path::{Path, PathBuf};
 
     fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -67,6 +67,55 @@ mod every_host_builds_one_default_font {
                 out.push(path);
             }
         }
+    }
+
+    /// A shell that can win the overlay claim but does not export the guest registration
+    /// (`overlay_host::REGISTER_EXPORT`) hosts a render loop no guest can join: every other
+    /// overlay in the profile then spins in `register_with_host_retrying` and never draws.
+    /// Measured on run br-20261016-203753-6e0e, where er_invasion_warp.dll won the claim without
+    /// the export and er_duel_rules.dll and er_net_effects.dll drew nothing. So every crate that
+    /// calls the claim must invoke `export_overlay_host!`.
+    #[test]
+    fn every_crate_that_can_host_exports_the_guest_registration() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/");
+        let mut claimers = Vec::new();
+        let mut missing = Vec::new();
+        for entry in std::fs::read_dir(crates)
+            .expect("crates/ is readable")
+            .flatten()
+        {
+            let dir = entry.path();
+            let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+                continue;
+            };
+            if name == env!("CARGO_PKG_NAME") {
+                continue;
+            }
+            let mut files = Vec::new();
+            sources(&dir.join("src"), &mut files);
+            let text: String = files
+                .iter()
+                .filter_map(|f| std::fs::read_to_string(f).ok())
+                .collect();
+            if text.contains("claim_overlay_ownership()") || text.contains("claim_owner()") {
+                if !text.contains("export_overlay_host!") {
+                    missing.push(name.clone());
+                }
+                claimers.push(name);
+            }
+        }
+        assert!(
+            claimers.len() >= 5,
+            "found only {claimers:?}; the scan no longer sees the shells"
+        );
+        assert!(
+            missing.is_empty(),
+            "these crates can win the overlay claim but export no guest registration, so no \
+             other overlay can join them: {missing:?}. Add \
+             `er_build_watermark_core::export_overlay_host!();`."
+        );
     }
 
     /// Whichever module wins the overlay builds the default face every guest falls back to, so

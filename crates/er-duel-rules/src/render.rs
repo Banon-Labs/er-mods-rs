@@ -9,6 +9,7 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -98,7 +99,19 @@ pub(crate) fn draws() -> usize {
 pub(crate) fn headline(alert: &Alert) -> String {
     let steam = FEED.lock().ok().and_then(|mut feed| steam_name(&mut feed));
     let who = player_label(&alert.player, alert.is_local, steam.as_deref());
-    format!("Attention: Rule break: {who}. {}", alert.rule.text())
+    format!("Attention: Rule break: {who}. {}", alert.text)
+}
+
+/// Empty the list on screen. The file and the log keep every break.
+pub(crate) fn clear() {
+    if let Ok(mut feed) = FEED.lock() {
+        let steam = feed.steam_name().map(str::to_owned);
+        *feed = Feed::new();
+        feed.set_steam_name(steam);
+    }
+    rules_log(format_args!(
+        "overlay: rule-break list cleared from the menu"
+    ));
 }
 
 /// Draw the list in `er-overlay-theme`'s look. A guest passes the host's frame, which names the
@@ -110,6 +123,10 @@ pub(crate) fn headline(alert: &Alert) -> String {
 /// `frame` is null, or the pointer the overlay host just passed to [`guest_draw`], live for the
 /// duration of this call.
 unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
+    // Hidden by its key or the menu: the breaks are still filed and logged by `push`.
+    if !crate::control::show_breaks() {
+        return;
+    }
     let Ok(feed) = FEED.lock() else {
         return;
     };
@@ -201,6 +218,20 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     };
     // SAFETY: `frame` is the host's live pointer for this call.
     unsafe { draw(ui, frame) };
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    // `guest_draw` is `extern "C"`, so a panic unwinding out of it would abort the game. imgui-rs's
+    // tokens end the menu's windows as the panic unwinds, and the menu then stays shut for the
+    // session; the referee and the list are untouched.
+    if catch_unwind(AssertUnwindSafe(|| {
+        crate::menu::draw_ui(ui, ui_scale, &fonts);
+    }))
+    .is_err()
+    {
+        crate::menu::hide_for_session();
+    }
 }
 
 /// This module's own render loop, used only when nothing else in the process hosts one.

@@ -8,6 +8,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+# The rules file, `er-duel-rules.json`, which the Frida agent and the Cheat Engine table share.
+serde_json = "1"
 
 [lints]
 workspace = true

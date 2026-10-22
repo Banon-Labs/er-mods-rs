@@ -236,10 +236,11 @@ default = false
 
 [er-duel-rules]
 label = "Duel rules referee"
-blurb = "Names whoever breaks the duel ruleset and how: Rune Level not 125, banned gear, skills or spells, heals, Torrent, respecs, extra blue flasks. Also logged to a text file."
+blurb = "Names whoever breaks the duel ruleset and how: Rune Level not 125, banned gear, skills or spells, heals, Torrent, respecs, extra blue flasks. Logged to a text file. F2 edits the rules and adds bans."
 category = "multiplayer"
 audience = "player"
 default = false
+config = "er-duel-rules.toml"
 
 [er-positional-voice]
 label = "Positional voice chat"

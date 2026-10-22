@@ -72,9 +72,9 @@ impl Entry {
         )
     }
 
-    /// The rule's own words.
-    pub fn rule(&self) -> &'static str {
-        self.alert.rule.text()
+    /// The rule as listed: the ruleset's words with the numbers in force, or a ban's own name.
+    pub fn rule(&self) -> &str {
+        &self.alert.text
     }
 
     /// The line in the text file: date and time, player, rule, and what broke it.
@@ -143,6 +143,7 @@ mod tests {
             player: player.to_owned(),
             is_local,
             rule: Rule::SpiritAshes,
+            text: Rule::SpiritAshes.text().to_owned(),
             detail: detail.to_owned(),
         }
     }

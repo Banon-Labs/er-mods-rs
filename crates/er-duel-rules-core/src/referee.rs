@@ -3,9 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::bans::custom_violations;
+use crate::config::Config;
 use crate::facts::{CATEGORY_LEFT_WEAPON_BUFF, CATEGORY_RIGHT_WEAPON_BUFF, GameFacts};
 use crate::player::{ATTRIBUTE_NAMES, Hand, PlayerSnapshot};
-use crate::rules::{CERULEAN_FLASK_LIMIT, Rule, Violation, check, violation};
+use crate::rules::{Rule, Violation, check_with, violation};
 use crate::tables;
 
 /// A build as the ruleset means it: level, attributes and everything equipped.
@@ -85,6 +87,8 @@ pub struct Alert {
     pub player: String,
     pub is_local: bool,
     pub rule: Rule,
+    /// The rule as listed: its wording with the numbers in force, or a ban's own name.
+    pub text: String,
     pub detail: String,
 }
 
@@ -98,7 +102,9 @@ struct Flasks {
 
 #[derive(Default)]
 pub struct Referee {
-    last_seen: HashMap<(u64, Rule, String), u64>,
+    /// The rules in force ([`Referee::set_config`]); the ruleset as written by default.
+    config: Config,
+    last_seen: HashMap<(u64, Rule, String, String), u64>,
     flasks: HashMap<u64, Flasks>,
     alive: HashMap<u64, bool>,
     /// When each player last came alive: entered the world or respawned.
@@ -111,6 +117,24 @@ pub struct Referee {
 }
 
 impl Referee {
+    /// A referee judging by `config`.
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            config,
+            ..Self::default()
+        }
+    }
+
+    /// The rules from now on. What was already counted -- the flasks drunk this round, the build a
+    /// player entered the match with -- stays.
+    pub fn set_config(&mut self, config: Config) {
+        self.config = config;
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Judge one frame of every player and return the breaks that are new.
     pub fn observe(
         &mut self,
@@ -157,10 +181,11 @@ impl Referee {
 
         let mut alerts = Vec::new();
         for p in players {
-            let mut violations = check(p, facts);
+            let mut violations = check_with(p, facts, &self.config);
             if let Some(v) = self.count_flask(p) {
                 violations.push(v);
             }
+            violations.extend(custom_violations(p, facts, &self.config.bans));
             if in_match {
                 violations.extend(self.build_changes(p));
             }
@@ -185,13 +210,19 @@ impl Referee {
                 violations.extend(self.carried_buffs(now_ms, p, facts));
             }
             for v in violations {
-                if v.on_equipment && !in_match {
+                // A rule switched off still kept its history above (a build entered with, the
+                // flasks drunk), so switching it back on mid-round judges from the right state.
+                if (v.on_equipment && !in_match) || !self.config.is_on(v.rule) {
                     continue;
                 }
+                let text = v
+                    .text
+                    .clone()
+                    .unwrap_or_else(|| v.rule.text_with(&self.config));
                 let fresh = if v.event {
                     true
                 } else {
-                    let key = (p.key, v.rule, v.detail.clone());
+                    let key = (p.key, v.rule, text.clone(), v.detail.clone());
                     let fresh = self
                         .last_seen
                         .get(&key)
@@ -205,6 +236,7 @@ impl Referee {
                         player: p.name.clone(),
                         is_local: p.is_local,
                         rule: v.rule,
+                        text,
                         detail: v.detail,
                     });
                 }
@@ -220,12 +252,13 @@ impl Referee {
             .speffects
             .iter()
             .any(|id| tables::CERULEAN_FLASK.contains(id));
+        let limit = self.config.blue_flasks;
         let flasks = self.flasks.entry(p.key).or_default();
         if drinking && !flasks.drinking {
             flasks.used += 1;
         }
         flasks.drinking = drinking;
-        (flasks.used > CERULEAN_FLASK_LIMIT).then(|| {
+        (f64::from(flasks.used) > limit).then(|| {
             violation(
                 Rule::CeruleanFlasks,
                 format!("Flask of Cerulean Tears number {} this round", flasks.used),

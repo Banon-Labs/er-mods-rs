@@ -2023,6 +2023,47 @@ pub const CONFIGS: &[ConfigFile] = &[
         ],
     },
     ConfigFile {
+        file: "er-duel-rules.toml",
+        default_text: "# er-duel-rules settings. The rules themselves (which are on, the numbers, your own bans) are\n# in er-duel-rules.json, which the in-game menu, the Cheat Engine table and the Frida agent share.\n# The menu rewrites the show_breaks line when you hide or show the list; everything else in this\n# file is left as you wrote it.\n\n# The key that opens and closes the rules menu: a name such as \"F2\", \"ctrl+F2\", \"]\"\n# or \"KP_Plus\". Escape also closes it.\nmenu_key = \"F2\"\n\n# The key that hides and shows the rule-break list in the corner of the screen.\nbreaks_key = \"ctrl+F2\"\n\n# Whether the rule-break list is on screen. Every break is written to\n# er-duel-rules-breaks.txt and er-duel-rules.log whether it is shown or not.\nshow_breaks = true\n",
+        settings: &[
+            Setting {
+                key: "menu_key",
+                table: "",
+                default: "\"F2\"",
+                kind: Kind::Text,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# The key that opens and closes the rules menu: a name such as \"F2\", \"ctrl+F2\", \"]\"",
+                    "# or \"KP_Plus\". Escape also closes it.",
+                ],
+            },
+            Setting {
+                key: "breaks_key",
+                table: "",
+                default: "\"ctrl+F2\"",
+                kind: Kind::Text,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# The key that hides and shows the rule-break list in the corner of the screen.",
+                ],
+            },
+            Setting {
+                key: "show_breaks",
+                table: "",
+                default: "true",
+                kind: Kind::Bool,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# Whether the rule-break list is on screen. Every break is written to",
+                    "# er-duel-rules-breaks.txt and er-duel-rules.log whether it is shown or not.",
+                ],
+            },
+        ],
+    },
+    ConfigFile {
         file: "er-positional-voice.toml",
         default_text: "# Volume applied to every voice (1 = as received). 8 is about +18 dB.\ngain = 8.0\n# Play your own microphone at your own character, to test alone.\nloopback = false\n",
         settings: &[

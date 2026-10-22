@@ -19,7 +19,14 @@
 //!
 //! The ban lists themselves are param ids in [`tables`], generated from the installed game by
 //! `scripts/er-duel-rules-gen.py` with every row's name beside it.
+//!
+//! What is enforced can be changed without a rebuild: [`config`] reads `er-duel-rules.json`
+//! beside the game, which switches built-in rules off, changes the rune level, blue flasks and
+//! shield cap, and adds bans of the player's own ([`bans`]) over anything in [`catalog`].
 
+pub mod bans;
+pub mod catalog;
+pub mod config;
 pub mod facts;
 pub mod feed;
 pub mod player;
