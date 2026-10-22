@@ -2576,6 +2576,26 @@ def main() -> int:
             'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
             True,
         ),
+        # `me3_launch_needs_windows_binaries_dir`, live for the reason above: its opa suite runs in
+        # the interpreter, and the rulebook runs it as wasm. The first case is the launch that hung
+        # on 2026-10-22 (me3 took the repo's target/ dir for its Windows binaries); the second is
+        # the form the deny message offers; the third names the first in a grep pattern.
+        PolicyCase(
+            "me3-guard-denies-a-launch-without-windows-binaries-dir",
+            "cd /home/banon/projects/er-mods-rs && /home/banon/.local/bin/me3 launch --auto-detect -p /home/banon/Elden/quicksave.me3",
+            False,
+            "does not name its Windows binaries",
+        ),
+        PolicyCase(
+            "me3-guard-allows-a-launch-naming-windows-binaries-dir",
+            "/home/banon/.local/bin/me3 --windows-binaries-dir /home/banon/.local/share/me3/windows-bin launch --auto-detect -p /home/banon/Elden/quicksave.me3",
+            True,
+        ),
+        PolicyCase(
+            "me3-guard-allows-a-grep-naming-the-launch",
+            'grep -rn "me3 launch" scripts/',
+            True,
+        ),
         # `cap_parallel_fanout`, live for the same reason: its reading of a quoted `bash -c`
         # payload inside a `systemd-run` scope goes through the shared decomposition, which is
         # where the wasm runtime and `opa test` have disagreed before. The first case is the

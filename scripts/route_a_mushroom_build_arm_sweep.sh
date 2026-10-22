@@ -331,6 +331,16 @@ build_variant() {
 }
 
 me3_exe="$(locate_me3)"
+# This script runs from the repo root, and me3 0.11.0 looks for its Windows binaries in a
+# cwd-relative target/x86_64-pc-windows-msvc/release before ~/.local/share/me3/windows-bin; the
+# repo's build directory has no me3-launcher.exe, so the launch hung in wait_for_partner (measured
+# 2026-10-22; bd me3-launch-cwd-must-lack-rust-target-dir). The top-level --windows-binaries-dir
+# takes the cwd out of that lookup. `me3 --help` lists it as Linux only, so a Windows me3.exe gets
+# none.
+me3_global_args=()
+if [[ "$me3_exe" != *.exe ]]; then
+	me3_global_args=(--windows-binaries-dir "${ME3_WINDOWS_BIN_DIR:-$HOME/.local/share/me3/windows-bin}")
+fi
 witchy="$(locate_witchy)"
 witchy_pty="$(locate_witchy_pty)"
 require_path "$witchy"
@@ -384,10 +394,11 @@ print_launch_command() {
 	local profile_win
 	profile_win="$(maybe_windows_path "$profile_path")"
 	printf '\nlaunch command:\n'
-	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
-		"$repo_root" \
-		"$me3_exe" \
-		"$profile_win"
+	printf 'cd %q && %q' "$repo_root" "$me3_exe"
+	if ((${#me3_global_args[@]} > 0)); then
+		printf ' %q' "${me3_global_args[@]}"
+	fi
+	printf ' launch -g eldenring --online false -p %q\n' "$profile_win"
 }
 
 if [[ "${1:-}" == "--label" ]]; then
@@ -432,7 +443,7 @@ if [[ "${1:-}" == "--label" ]]; then
 	tail -n 1 "$sweep_root/variant-index.tsv"
 	print_launch_command "$profile_path"
 	if [[ "$launch_after" == true ]]; then
-		"$me3_exe" launch -g eldenring --online false -p "$(maybe_windows_path "$profile_path")"
+		"$me3_exe" ${me3_global_args[@]+"${me3_global_args[@]}"} launch -g eldenring --online false -p "$(maybe_windows_path "$profile_path")"
 	fi
 	exit 0
 fi

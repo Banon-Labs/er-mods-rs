@@ -77,6 +77,7 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.g
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_commit_authorization.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_fresh_origin_main.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_runtime_evidence.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.me3_launch_needs_windows_binaries_dir.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.monitor_rate_limit.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.no_lint_before_commit.deny

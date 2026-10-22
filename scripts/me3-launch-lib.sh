@@ -182,7 +182,10 @@ me3_launch() {
     echo "me3-launch-lib: refusing to launch from $PWD -- CWD contains target/x86_64-pc-windows-msvc/release, which hijacks me3's launcher payload resolution; cd to GAME_DIR first" >&2
     return 2
   fi
-  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$profile_path"
+  # `--windows-binaries-dir` names the directory me3_preflight checked, so the cwd cannot choose
+  # one (measured 2026-10-22: from the repo root me3 took target/ and hung in wait_for_partner).
+  # It is a top-level option: after `launch` me3 rejects it as an unexpected argument.
+  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" --windows-binaries-dir "$ME3_WINDOWS_BIN_DIR" launch -g eldenring -p "$profile_path"
 }
 
 # Fail closed if a leftover LazyLoader proxy is still active in GAME_DIR: an me3 native
