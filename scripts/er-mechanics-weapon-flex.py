@@ -28,6 +28,8 @@ import statistics
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 _s = importlib.util.spec_from_file_location('er_builds_optimize', os.path.join(HERE, 'er-builds-optimize.py'))
 OPT = importlib.util.module_from_spec(_s)
 sys.modules['er_builds_optimize'] = OPT
@@ -68,12 +70,11 @@ def main():
     sham = t.find_weapon(target)
 
     use, nbuilds = collections.Counter(), 0
-    with open(OPT.CACHE / 'builds.jsonl') as fh:
-        for line in fh:
-            b = json.loads(line)['build']
-            nbuilds += 1
-            use.update({sl['name'] for sl in (b.get('inventory') or {}).get('slots', [])
-                        if any(e in (0, 1, 2) for e in (sl.get('equipSet') or []))})
+    for row in er_corpus.iter_rows(OPT.CACHE / 'builds.jsonl'):
+        b = row['build']
+        nbuilds += 1
+        use.update({sl['name'] for sl in (b.get('inventory') or {}).get('slots', [])
+                    if any(e in (0, 1, 2) for e in (sl.get('equipSet') or []))})
     name2id = {n: b for b, n in melee.items()}
     popular = [(n, c) for n, c in use.most_common() if n in name2id][:25]
     cset = curved | {name2id[n] for n, _ in popular}

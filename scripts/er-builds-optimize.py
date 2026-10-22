@@ -71,6 +71,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = Path.home() / ".cache/er-build-planner"
 
 
@@ -209,8 +211,8 @@ def other_load(build: dict) -> float | None:
 
 def corpus_rows(mirror: Path, rl_lo: int, rl_hi: int) -> list[dict]:
     out = []
-    for line in mirror.read_text().splitlines():
-        b = json.loads(line)["build"]
+    for row in er_corpus.iter_rows(mirror):
+        b = row["build"]
         st = EMBED.stats_of(b)
         if st is None or not rl_lo <= st["rl"] <= rl_hi:
             continue
@@ -485,7 +487,10 @@ def stat_caps(tables, weapon, affinity, level=None) -> dict:
     key = (weapon, affinity, level)
     if key not in _CAPS:
         if tables is None:                    # a caller whose tables load lazily (ash levers)
-            tables = _CAPS.setdefault("_tables", AR.Tables(None))
+            # Built once: a `setdefault` default is built on every call, a full param read.
+            if "_tables" not in _CAPS:
+                _CAPS["_tables"] = AR.Tables(None)
+            tables = _CAPS["_tables"]
         caps = {k: STAT_CAP for k in DAMAGE_STATS}
         try:
             caps.update(AR.soft_caps(tables, weapon, affinity, level))
@@ -973,10 +978,13 @@ def _grease_one(job):
         for rl in rls:
             fl = sweep_floor(weapon_id, aff, level, two, need, rl)
             by_floor.setdefault(tuple(sorted(fl.items())), []).append(rl)
-        greases = [(el, amount) for el in GREASE_ELEMENTS] if aff in buff else []
+        greases = [(el, amount) for el in GREASE_ELEMENTS] if aff in buff and amount else []
         # The original sweep tries a buffable affinity greased only; a fixed-affinity weapon is
-        # also tried without, since it may have no ungreasable affinity to fall back on.
-        if aff not in buff or kind != "greasable":
+        # also tried without, since it may have no ungreasable affinity to fall back on. With no
+        # grease (`--grease none`, amount None: a duel, whose ladder bans every damage grease)
+        # every affinity is tried ungreased, Standard, Heavy, Keen and Quality included, so
+        # `elemental` is the best ungreased build over all of them.
+        if aff not in buff or kind != "greasable" or not amount:
             greases = [None] + greases
         for floor_key, group in by_floor.items():
             for g in greases:
@@ -1152,6 +1160,22 @@ def selftest() -> int:
         f2, l2 = sweep_corpus_stats({150: rows}, [150], 15, "pvp")
         _SWEEP.update(tables=tables, rls=[150], defender=dfn, amount=GREASES["dlc-drawstring"], floors=f2,
                       other_load=l2, roll="medium", real=real, weight_charge=True, pools={150: cpool})
+        # With no grease (a duel's sweep) a greasable weapon's buffable affinities are scored
+        # ungreased too: Giant-Crusher's best is Heavy (516 at RL 150, 2026-10-19), which the
+        # greased sweep's `elemental` never sees (its best ungreasable is Fire, 477).
+        import time
+        _SWEEP.update(amount=None, weight_charge=False)
+        t0 = time.time()
+        plain = (_grease_one((tables.find_weapon("Giant-Crusher"), False)) or [{}])[0]
+        took = time.time() - t0
+        _SWEEP.update(amount=GREASES["dlc-drawstring"])
+        old = (_grease_one((tables.find_weapon("Giant-Crusher"), False)) or [{}])[0]
+        pe, oe = plain.get("elemental") or {}, old.get("elemental") or {}
+        check(plain.get("greased") is None and plain.get("quality") is None and pe.get("aff") == "Heavy"
+              and pe.get("dmg", 0) > oe.get("dmg", 0) and oe.get("aff") not in ("Heavy", "Standard", "Keen", "Quality"),
+              f"no-grease sweep: Giant-Crusher's ungreased best is {pe.get('aff')} {pe.get('dmg', 0):.0f}, above the "
+              f"greased sweep's ungreasable {oe.get('aff')} {oe.get('dmg', 0):.0f} ({took:.1f}s for one weapon and grip)")
+        _SWEEP.update(amount=GREASES["dlc-drawstring"], weight_charge=True)
         out = _grease_one((tables.find_weapon("Bloodhound's Fang"), True))
         r = out[0] if out else {}
         check(r.get("kind") == "unique" and r.get("elemental") and r["elemental"]["aff"] == "Standard"
@@ -1234,10 +1258,14 @@ def main() -> int:
         rows_by_rl = {rl: corpus_rows(a.mirror, rl - a.window, rl + a.window) for rl in rls}
         dfn = bracket_defender(corpus_rows(a.mirror, lo - a.window, hi + a.window))
         grips = {"1h": [False], "2h": [True], "both": [False, True]}[a.grip]
-        amount = GREASES[a.grease]
+        amount = GREASES.get(a.grease)  # None for `none`: every affinity ungreased (`_grease_one`)
         out = a.out or sweep_cache("grease", a.grease, lo, hi, a.every_class)
         res = grease_sweep(tables, rows_by_rl, rls, grips, a.jobs, amount, dfn, out, a.min_peers,
                            a.floors, a.roll, not a.no_weight_charge, a.every_class)
+        if amount is None:
+            print(f"grease sweep RL {lo}-{hi}, grips {a.grip}, no grease: {len(res)} rows "
+                  f"({len({r['weapon'] for r in res})} weapons) in {out}")
+            return 0
         from collections import Counter
         kinds = Counter(r.get("kind", "greasable") for r in res)
         print("rows by kind: " + ", ".join(f"{k} {v} ({len({r['weapon'] for r in res if r.get('kind') == k})} weapons)"
@@ -1247,7 +1275,9 @@ def main() -> int:
             fs = sorted(w["factor"] for w in wcs)
             print(f"  weight charge factor over {len(fs)} rows: min {fs[0]:.3f}, median {fs[len(fs) // 2]:.3f}, "
                   f"max {fs[-1]:.3f}")
-        res = [r for r in res if r.get("kind", "greasable") == "greasable"]
+        # A row the stats cannot fill on one side (no ungreasable affinity, or no greased one,
+        # within the RL: seen at RL 125) has nothing to compare, so the summary leaves it out.
+        res = [r for r in res if r.get("kind", "greasable") == "greasable" and r["greased"] and r["elemental"]]
         n = len(res)
         win = [r for r in res if r["greased"]["dmg"] > r["elemental"]["dmg"]]
         qwin = [r for r in res if r["quality"] and r["quality"]["dmg"] > r["elemental"]["dmg"]]

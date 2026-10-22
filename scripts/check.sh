@@ -3079,11 +3079,18 @@ python3 "$repo_root/scripts/gen-installer-settings.py" --selftest
 python3 "$repo_root/scripts/gen-installer-settings.py" --check
 
 # ...and the R3 weapon boards, one per weapon, generated from the mechanics scripts. A full
-# regeneration is hours of build optimizer, so --check compares inputs instead of output: every
+# regeneration is hours of build optimizer, so the check compares inputs instead of output: every
 # source and data file the generation opened, by sha256, and the body against its own recorded
 # hash. The selftest holds the text rules to the hand-written Misericorde board.
+#
+# Stale boards block only a diff that touches what ships them: crates/er-r3-view/** or the
+# generator itself (user, 2026-10-21: "decouple the board so we don't need to constantly rebuild
+# it with other crate updates"). Any other diff, a mechanics-script edit included, gets one line
+# naming how many inputs changed and the regeneration command, and passes. The rule and its
+# selftest live in scripts/check-stages.py (BLOCKING_SCOPES); --strict blocks regardless.
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
-python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
+python3 "$repo_root/scripts/check-r3-weapon-boards.py" --selftest
+python3 "$repo_root/scripts/check-r3-weapon-boards.py"
 
 # The planner's own item spellings, which the loadout uploader resolves every name against before
 # it uploads (the stored name is the icon URL, and `Misericorde` has no full-size icon). Offline:

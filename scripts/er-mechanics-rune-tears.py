@@ -32,8 +32,9 @@ percent less damage kept per HP count the same. The best total is the pick; equa
 the kit the window's PvP builds carry more often (`er-mechanics-armor-targets.adoption`).
 
 The fight model (`fight`, `--fight`) is one of `er-mechanics-buffs.FIGHT_KINDS`. `invasion`, the
-default, is 10 s to 1 h (`fight_kind_points`, log-spaced) against five attackers and three hosts'
-HP bars, each drinking the window's median crimson flasks (`er-mechanics-pouch.Pouch._fight`
+default, is 10 s to 1 h (`fight_kind_points`, log-spaced) against 1-12 hosts and 0-11 other
+invaders (`FIGHT_KINDS`' derived `attackers`, about two opponents at once, and `targets`, 6.5
+hosts' HP bars), each drinking the window's median crimson flasks (`er-mechanics-pouch.Pouch._fight`
 builds it the same way); `duel` is the 180-300 s fight against one, the window's duel and flask
 fights mixed by their tag shares. Uptimes and recasts are read over the model's lengths, and a
 tear is one physick charge per encounter (`TEAR_USES`), so in a long invasion it covers less.
@@ -688,6 +689,18 @@ def _rounded(d, nd=4):
     return {k: round(v, nd) for k, v in d.items()}
 
 
+def full_hp_talisman(ctx, name):
+    """Whether the talisman's own SpEffect applies only at full HP (`conditionHpRate` 100)."""
+    sid = ctx.dt.talisman_row(name).get('refId')
+    return sid in ctx.m.sp and ctx.m.sp[sid]['conditionHpRate'] >= 100
+
+
+def raises_max_hp(ctx, build, rows):
+    """Whether any of an item's rows ((sid, via) pairs) raises this build's max HP."""
+    return any(ctx.res.resources(build.stats, build.talismans, build.armor, None, [sid])['max_hp'] > build.hp0
+               for sid, _ in rows if sid in ctx.m.sp)
+
+
 def pick(weapon, affinity, level, stats, two_handed=False, role=None, fight=B.DEFAULT_FIGHT, **kw):
     """The great rune and two crystal tears that maximise `total` for this build (module
     docstring), from every great rune and crystal tear in the regulation.
@@ -697,7 +710,8 @@ def pick(weapon, affinity, level, stats, two_handed=False, role=None, fight=B.DE
     `talismans`, `armor` (weight the incoming
     damage types by the set's absorption), `grease` ((element, flat) as `Scorer` takes it),
     `defender` (the hit's defender; default the window's median), `context` (a `Context` to reuse),
-    `top` (kits kept in `scores`), `mirror`. Returns `great_rune`, `crystal_tears`, `scores`
+    `top` (kits kept in `scores`), `mirror`, `exclude` (great rune and tear names never picked: a
+    duel's ladder bans). Returns `great_rune`, `crystal_tears`, `scores`
     (best kits with their terms), `runes` and `tears` (each item alone, with what is not valued),
     `unvalued`, `role`, `rule`."""
     rl = kw.get('rl') or sum(stats[k] for k in ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')) - LEVEL_OFFSET
@@ -718,16 +732,28 @@ def pick(weapon, affinity, level, stats, two_handed=False, role=None, fight=B.DE
                              'drain': round(v['drain'], 1)} for r, v in by_role.items()}
         return out
 
+    exclude = set(kw.get('exclude', ()))
+    # A talisman that works only at full HP (its row's `conditionHpRate` is 100: Ritual Shield,
+    # Ritual Sword) stops working the moment max HP rises with no heal to fill it, and a duel
+    # allows no heal (user, 2026-10-18: Crimsonspill breaks Ritual Shield the moment it is drunk).
+    # So in a duel with one worn, a tear any of whose rows raises max HP is never picked.
+    full_hp = [n for n in kw.get('talismans', ()) if fight == 'duel' and full_hp_talisman(ctx, n)]
+    if full_hp:
+        raises = [t['name'] for t in ctx.tears if raises_max_hp(ctx, b, t['rows'])]
+        exclude |= set(raises)
+        print(f"{' and '.join(full_hp)} work only at full HP and a duel has no heal: left out "
+              f"{', '.join(sorted(raises)) or 'nothing'}", file=sys.stderr)
+    ctx_runes = [r for r in ctx.runes if r['name'] not in exclude]
     unval = {}
     runes = []
-    for r in ctx.runes:
+    for r in ctx_runes:
         s = score(r['name'], ())
         rows = [(i, 'ApplyRuneArcEffects') for i in r['rows']]
         s['unvalued'] = unval[r['name']] = unvalued(ctx, rows, rune_note(ctx, r, weights))
         s['adoption'] = ctx.adoption.get(('great rune', r['name']), 0)
         runes.append(s)
     tears = []
-    for t in ctx.tears:
+    for t in (t for t in ctx.tears if t['name'] not in exclude):
         s = score(None, (t['name'],))
         s['adoption'] = ctx.adoption.get(('tear', t['name']), 0)
         s['effect'] = any(abs(v[k]) > 1e-9 for v in s['by_role'].values() for k in ('offense', 'defense', 'sustain'))
@@ -742,7 +768,7 @@ def pick(weapon, affinity, level, stats, two_handed=False, role=None, fight=B.DE
     if len(pool) < TEAR_SLOTS:
         rest = sorted((t for t in tears if not t['effect']), key=lambda t: -t['adoption'])
         pool += [t['crystal_tears'][0] for t in rest[:TEAR_SLOTS - len(pool)]]
-    kits = [score(r['name'], pair) for r in ctx.runes for pair in itertools.combinations(pool, TEAR_SLOTS)]
+    kits = [score(r['name'], pair) for r in ctx_runes for pair in itertools.combinations(pool, TEAR_SLOTS)]
     kits.sort(key=lambda k: rank_key(k, ctx.adoption))
     runes.sort(key=lambda k: rank_key(k, ctx.adoption))
     tears.sort(key=lambda k: rank_key({**k, 'great_rune': ''}, ctx.adoption))
@@ -941,8 +967,13 @@ def selftest():
 
     # The fight models (`er-mechanics-buffs.FIGHT_KINDS`): invasion by default, its role and lengths,
     # and the attacker count reaching a flat heal and not a cut.
-    check('invasion is the default fight model, five attackers', (B.DEFAULT_FIGHT, b.fight, b.attackers),
-          ('invasion', 'invasion', 5))
+    check("invasion is the default fight model, its attackers the mean opponents engaged at once",
+          (B.DEFAULT_FIGHT, b.fight, b.attackers),
+          ('invasion', 'invasion', sum(k * w for k, w in B.FIGHT_KINDS['invasion']['engaged'])))
+    check('one opponent at a time is the likeliest, two half as likely',
+          [round(w, 6) for _, w in B.FIGHT_KINDS['invasion']['engaged'][:2]],
+          [round(B.FIGHT_KINDS['invasion']['engaged'][0][1], 6),
+           round(B.FIGHT_KINDS['invasion']['engaged'][0][1] * B.ENGAGED_RATIO, 6)])
     check("the fight points are the invasion model's by default", tuple(fs), tuple(B.fight_kind_points('invasion')))
     check('invasion points run 10 s to 1 h', (round(fs[0], 6), round(fs[-1], 6)), (10.0, 3600.0))
     check("the default role is the fight model's: invader in an invasion, corpus in a duel",
@@ -960,10 +991,12 @@ def selftest():
           mi['defense'], float(md['defense']))
     cd, ci = (x.terms(None, ('Crimsonburst Crystal Tear',), 'host') for x in (bd, b))
     check('Crimsonburst in a duel: sustain 1 - 1 / (1 + 175 HP / max HP)', cd['sustain'], 1 - 1 / (1 + 175.0 / b.hp0))
-    check('a flat heal (Crimsonburst) is worth its duel sustain / 5 in an invasion', ci['sustain'], cd['sustain'] / 5)
+    check('a flat heal (Crimsonburst) is worth its duel sustain / attackers in an invasion', ci['sustain'],
+          cd['sustain'] / b.attackers)
     check('the heal itself, in HP over the window, is the same under both', ci['heal'], float(cd['heal']))
     sd, si = (x.terms(None, ('Bloodsucking Cracked Tear',), 'host') for x in (bd, b))
-    check('a flat drain (Bloodsucking) costs its duel sustain / 5 in an invasion', si['sustain'], sd['sustain'] / 5)
+    check('a flat drain (Bloodsucking) costs its duel sustain / attackers in an invasion', si['sustain'],
+          sd['sustain'] / b.attackers)
     check('the drain is a cost', sd['sustain'] < 0, True)
     why = {x['name']: unvalued(ctx, x['rows']) for x in ctx.tears}
     check('Spiked: the charged-heavy gate is reported', any('sub-category 100' in w for w in why['Spiked Cracked Tear']), True)

@@ -1,32 +1,32 @@
 # Ranged weapons in the weapon plan (`er-mechanics-shields-ranged.ranged_plan`).
 #
-# User, 2026-10-11: "Bone bow, ansbach's, gloem's, greatbow, spread crossbow, and repeating
-# crossbow are all viable picks. We don't want any bow with barrage because Bone Bow gives a unique
-# better version. We want rain of arrows on one greatbow".
+# Which ranged weapons are viable is measured, not listed here (user, 2026-10-18: no hand-listed
+# picks where an objective, measured score can decide). `ranged_viable` keeps every weapon the
+# build wields that has an option (its R1 shot with its best ammunition, or a skill it carries)
+# that no other option beats on every measure: damage landed per use, damage per second, share
+# landed on a running defender, frame it lands, frame it can roll. The list the user gave on
+# 2026-10-11 ("Bone bow, ansbach's, gloem's, greatbow, spread crossbow, and repeating crossbow are
+# all viable picks") is what that score is checked against; it used to be the `viable` key, and
+# `ranged_plan` now refuses that key.
 #
-# Each viable pick the build can wield gets one copy with its own skill. A pick that mounts ashes
-# carries the `[[place]]` ash assigned to its class when it can mount it, otherwise its best
-# skill outside `excluded_ashes`.
-
-viable = [
-    "Bone Bow",
-    "Ansbach's Longbow",
-    "Golem Greatbow",
-    "Greatbow",
-    "Spread Crossbow",
-    "Repeating Crossbow",
-]
-
-# Barrage: Bone Bow's own Rancor Shot does its job better (user). Rancor Shot is skill type 371
-# and Barrage 101, so no shared type would have found this.
-excluded_ashes = ["Barrage"]
+# The same score drops a skill another option beats on every measure. That is how the user's
+# "We don't want any bow with barrage because Bone Bow gives a unique better version" comes out:
+# Rancor Shot homes at 80 deg/s (BulletParam homingAngle) where Barrage flies straight, so it lands
+# on a running defender Barrage misses, at the same frames. `excluded_ashes` (a list of skill names)
+# is still read, for a skill the user rules out for a reason the score cannot see; none is listed.
+#
+# What stays below are the user's own loadout choices. None of them is a measurement: each says
+# how many of a kind to carry or what to put on it, which no damage or frame figure decides.
 
 # User, 2026-10-11: "A build should choose only one greatbow, depending on best stats or
 # requirements, and for spread crossbow, we might as well have 3 total". The greatbow kept is the
-# viable one worth most at the build's stats (`value`); a greatbow the build cannot wield is out
-# already. (A top-level key: under `[[place]]` below it would belong to that table.)
+# viable one worth most at the build's stats (`value`). (A top-level key: under `[[place]]` below
+# it would belong to that table.)
 one_per_class = ["greatbow"]
 
+# User, 2026-10-11: "We want rain of arrows on one greatbow". Rain of Arrows is an area-denial
+# skill: its damage per second is far below Through and Through and the score would never pick it.
+# It is placed on the kept greatbow when that greatbow mounts ashes.
 [[place]]
 ash = "Rain of Arrows"
 class = "greatbow"

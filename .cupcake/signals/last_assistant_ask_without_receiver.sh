@@ -83,8 +83,16 @@ ASK_RE = re.compile(
     # you finish"). Mid-sentence it is usually the generic player of a game mechanic: on
     # 2026-10-04 "... catch a roll taken at the first chance in 5 of 6 cases after you run in"
     # halted a finished report.
+    #
+    # A clause-leading state form ("once you're broken", "when you are in the lobby") describes a
+    # condition, not something the user is asked to do: on 2026-10-19 "Now, once you're broken, the
+    # roll-out escapes his later hits." halted a finished report on a game mechanic. It counts only
+    # when the sentence also speaks in the first person ("once you're in, I'll read it", "tell me").
     r"|(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
-    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'re|'ve|\s+have|\s+are)?\s+" + _NOT_PAST + r"\w+"
+    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'ve|\s+have)?\s+(?!are\b)" + _NOT_PAST + r"\w+"
+    r"|(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
+    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'re|\s+are)\s+\w+"
+    r"(?=[^.!?]*\b(?:i|i'll|i'm|i'd|me|my|we|we'll|us|our)\b)"
     r"|\b(?:i'll|i\s+will|i\s+can|we'll|we\s+will)\b[^.!?]*?\b(?:once|when|after|as\s+soon\s+as)\s+"
     r"you(?:'re|'ve|\s+have|\s+are)?\s+" + _NOT_PAST + r"\w+"
     r"|\b(?:can|could|would)\s+you\s+(?:please\s+)?\w+"
@@ -105,9 +113,27 @@ EXEMPT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A markdown table row is a description, never an ask: on 2026-10-18 the row "| Fixing the product
+# before the tools | No guard | New rule `X`: once you report a tool miss, the turn may only start
+# agents that work on guards ... |" halted a finished report, because the temporal clause after the
+# colon looked like a clause-leading "once you".
+TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*$", re.MULTILINE)
+
+# A temporal "you" clause whose consequent states what a rule permits or forbids ("once you report
+# a tool miss, the turn may only start agents ...") describes a trigger, not an ask. The clause is
+# blanked so any other ask in the same sentence is still seen. "the probe records it" stays an ask:
+# only deontic consequents qualify.
+RULE_CONDITIONAL_RE = re.compile(
+    r"\b(?:once|when|after|as\s+soon\s+as)\s+you\b[^,;.!?]*,\s*"
+    r"(?:the|a|an|this|that|its?|each|every|any|no|such)\b[^,;.!?]*?"
+    r"\b(?:may|must|cannot|can't|can\s+only|(?:is|are|gets?)\s+(?:not\s+)?"
+    r"(?:allowed|refused|blocked|denied|permitted|rejected|halted))\b",
+    re.IGNORECASE,
+)
+
 offending = None
-for sentence in re.split(r"(?<=[.!?])\s+|\n+", scrub(closing)):
-    s = sentence.strip()
+for sentence in re.split(r"(?<=[.!?])\s+|\n+", TABLE_ROW_RE.sub(" ", scrub(closing))):
+    s = RULE_CONDITIONAL_RE.sub(" ", sentence).strip()
     if not s or not ASK_RE.search(s):
         continue
     if EXEMPT_RE.search(s):

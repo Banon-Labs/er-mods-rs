@@ -15,7 +15,9 @@ One JSON record per key, nothing measured here that another script already measu
   roll cancel, next-attack cancel, reach (`er-mechanics-reach.reach_summary`; the off-hand slots
   through `attack_reach(..., hand='left')`, the weapon on `L_Weapon`),
   stamina, motion values, hits, poise damage, hyperarmor start, hold range and feint window
-  (below), attack by damage type, PvP damage against the fixed defender, status build-up and the
+  (below), each hit's frame and PvP poise damage and the slot's hyperarmor windows (`trade_fields`,
+  for `er-mechanics-ash-interrupt.ChainTrades`), attack by damage type, PvP damage against the
+  fixed defender, status build-up and the
   HP that build-up is worth (`er-mechanics-ash-table.Table.status_hp`). A slot the weapon lacks is
   absent. Summaries come from the slots: R1 chain recovery, chain motion value per second and
   stamina per R1 (`er-mechanics-moveset-sweep.chain_metrics`), R1 #1 reach, chain damage per
@@ -70,6 +72,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import struct
 import sys
 import time
 import types
@@ -97,6 +101,39 @@ PG = _load("er_mechanics_powerstance_guard", "er-mechanics-powerstance-guard.py"
 MS = _load("er_mechanics_moveset_sweep", "er-mechanics-moveset-sweep.py")
 COMBO = _load("er_mechanics_combo_loadout", "er-mechanics-combo-loadout.py")
 ATK = PG.ATK
+
+
+def _intr():
+    """`er-mechanics-interrupt.py`, for its member and window readers (`trade_fields`)."""
+    return _load("er_mechanics_interrupt", "er-mechanics-interrupt.py")
+
+
+def trade_fields(hits, windows):
+    """The per-hit fields `er-mechanics-ash-interrupt.chain_cast` reads off a slot (issue
+    er-effects-rs-q0r9): `hit_at` each hit's first frame, `hit_poise` its PvP poise damage in menu
+    units (`poise_damage x 10 x FinalDamageRateParam.saRate`, `er-mechanics-interrupt._slot_member`),
+    and `ha` the slot's TAE 795 windows [start, end, bonus (menu), poise-taken multiplier, floor
+    share, HP-taken multiplier] (`er-mechanics-interrupt._window` plus ToughnessParam `unk2`, the
+    tuple `er-mechanics-ash-interrupt.simulate` reads). `hits` [(frame, menu poise)], frames on the
+    slot's own clock."""
+    return {"hit_at": [rnd(f, 2) for f, _ in hits], "hit_poise": [rnd(p, 2) for _, p in hits],
+            "ha": [[rnd(x, 3) for x in w] for w in sorted(windows)]}
+
+
+def tae_windows(reg, events, frame, weapon_of):
+    """`trade_fields` windows of every TAE 795 event in `events`: `frame(seconds)` puts its ends on
+    the slot's clock, `weapon_of(event)` names the weapon whose `toughnessCorrectRate` the bonus
+    takes (Args byte 2 picks the hand, `er-mechanics-powerstance-guard._slot_row`)."""
+    INTR = _intr()
+    out = []
+    for e in events or ():
+        if e.type != ATK.TAE_TOUGHNESS:
+            continue
+        ratio = struct.unpack_from("<f", e.params, 4)[0]
+        w = INTR._window(reg, reg.weapon[weapon_of(e)], e.params[0], e.params[1], ratio,
+                         (frame(e.start), frame(e.end)))
+        out.append(w + [reg.toughness.get(e.params[0], {}).get("unk2") or 1.0])
+    return out
 
 #: Planner build 188e74da444029 (STR 18 / DEX 80, RL150).
 DEFAULT_STATS = {"str": 18, "dex": 80, "int": 7, "fth": 8, "arc": 9}
@@ -190,8 +227,14 @@ class Embed:
         self.st = ST.Tables(ar_tables=self.art)
         rows = OPT.corpus_rows(OPT.CACHE / "builds.jsonl", 140, 160)
         self.defender = OPT.bracket_defender(rows)
-        d = ST.corpus_defender(ST.corpus_rows(rl=150))
+        st_rows = ST.corpus_rows(rl=150)
+        d = ST.corpus_defender(st_rows)
         d["hp"] = AT.TARGET_HP
+        # `Table.buildup_hp`'s engagement model reads the corpus as defenders, under the fight
+        # model's pressure (`AT.FIGHT`, set from `--fight`).
+        d["dfs"] = ST.Defenders(self.st, st_rows)
+        B = AT._buffs_mod()
+        d["pressure"] = B.FIGHT_KINDS[AT.FIGHT or B.DEFAULT_FIGHT]["pressure"]
         self.status_target = d
         self.reach_path = reach_cache
         self.reach_on = reach
@@ -203,6 +246,13 @@ class Embed:
         self.base = [w for w in sorted(self.art.weapons) if w % 10000 == 0 and self.art.names.get(w)
                      and not self.art.names[w].startswith("[") and self.art.weapons[w]["wepType"] in COMBO.CLASS]
         self._moves = {}
+        self._sa = None
+
+    def sa(self):
+        """`FinalDamageRateParam.saRate` per AtkParam row (`er-mechanics-exchange.SaRates`)."""
+        if self._sa is None:
+            self._sa = _intr().EXCH.SaRates()
+        return self._sa
 
     # ---- moveset (affinity-independent)
 
@@ -213,7 +263,7 @@ class Embed:
             for grip in ("one", "both"):
                 try:
                     out.update({k: v.get("world_reach_m") for k, v in RC.reach_summary(name, grip).items()})
-                except Exception as e:  # a rigged model (whip, flail) has no world reach
+                except Exception as e:  # an input missing from the unpacked tree
                     print(f"{name} {grip}: no reach ({e!r})", file=sys.stderr)
             self.reach[name] = out
             self.save_reach()
@@ -248,11 +298,46 @@ class Embed:
             try:
                 r = RC.attack_reach(self._rc, wid, key, key, judge, anim, "one", clip=clip, hand="left")
                 cached[key] = r.get("world_reach_m") if r else None
-            except Exception as e:  # a rigged model (whip, flail) has no world reach
+            except Exception as e:  # an input missing from the unpacked tree
                 print(f"{name} {key}: no reach ({e!r})", file=sys.stderr)
                 cached[key] = None
             self.save_reach()
         return cached.get(key)
+
+    def dual_reach(self, row):
+        """World reach (m) of one powerstance slot row (`powerstance_rows`), or None: each hand's
+        hits measured with that hand's own weapon (`attack_reach` `only_judges`), the farther of
+        the two. Cached beside the other reaches under `<weapon>|PS`, per clip, hand and judges,
+        so every pair sharing a weapon's hits in a clip reads them once. Before 2026-10-19 no
+        dual attack had a reach, so the off-hand score left reach out wherever a powerstance was
+        in the pool, and Beastman's Curved Sword's 20% shorter R1 went unseen beside Shamshir."""
+        if not self.reach_on:
+            return None
+        cat, anim = (int(x) for x in row["anim"][1:].split("_"))
+        by_hand = collections.defaultdict(set)
+        for h in row["hits"]:
+            if h.get("judge") is not None:
+                by_hand[h["weapon"], h["hand"]].add(h["judge"])
+        out = []
+        for (wid, hand), judges in by_hand.items():
+            name = self.art.names[wid]
+            cached = self.reach.setdefault(f"{name}|PS", {})
+            key = f"{row['anim']}|{hand}|{','.join(map(str, sorted(judges)))}"
+            if key not in cached:
+                RC = ATK._reach()
+                if getattr(self, "_rc", None) is None:
+                    self._rc = RC.Reach(None)
+                try:
+                    r = RC.attack_reach(self._rc, wid, row["slot"], row["slot"], min(judges), anim, "one",
+                                        clip=(cat, anim), hand=hand, only_judges=judges)
+                    cached[key] = r.get("world_reach_m") if r else None
+                except Exception as e:  # an input missing from the unpacked tree
+                    print(f"{name} {key}: no reach ({e!r})", file=sys.stderr)
+                    cached[key] = None
+                self.save_reach()
+            if cached.get(key) is not None:
+                out.append(cached[key])
+        return max(out) if out else None
 
     def moveset(self, wid):
         """{grip: {slot: timing row}} for a base weapon: the right-hand rows of
@@ -264,6 +349,7 @@ class Embed:
         name = self.art.names[wid]
         reach = self.slot_reach(name)
         out = {}
+        paired = two_hand_is_pair(self.art.weapons[self.art.find_weapon(name, "Standard")])
         for grip, g in (("1H", "one"), ("2H", "both")):
             rows = {r["slot"].removeprefix("2h_"): r for r in ATK.weapon_attacks(reg, wid, g, level)}
             slots = {}
@@ -272,6 +358,20 @@ class Embed:
                 others = [o["frames"] for o in r.get("other_hitboxes") or []]
                 if not hw and not others:
                     continue
+                # Per-hit frames, poise and the TAE 795 windows (`trade_fields`), read as the
+                # interrupt matrix reads a member: each hit that opens a fresh hit record, the
+                # other hand's of a paired two-handed swing included.
+                mem = _intr()._slot_member(reg, self.sa(), wid, r, None)
+                trade = trade_fields([(f, p * sa) for f, p, sa in mem["hits"]],
+                                     [w + [h.get("pvp_hp_damage_taken") or 1.0]
+                                      for w, h in zip(mem["windows"], r.get("hyperarmor") or [])]) if mem else {}
+                if paired and grip == "2H" and others:
+                    # A paired weapon two-handed swings both hands (`two_hand_is_pair`): the other
+                    # hand's hitbox is a hit of the attack, not a stray one, so it counts toward
+                    # the hits, the startup and the status like the slot's own.
+                    r = dict(r, hit_windows=sorted(hw + others),
+                             own_sweep_hits=max(1, r.get("own_sweep_hits") or 1) + len(others), other_hitboxes=[])
+                    hw, others = r["hit_windows"], []
                 first = hw[0][0] if hw else min(f[0] for f in others)
                 cat, anim = (int(x) for x in r["tae_entry"][1:].split("_"))
                 _, _, events = ATK.resolve_events(cat, anim)
@@ -290,6 +390,7 @@ class Embed:
                     "hits": max(1, r.get("own_sweep_hits") or 1), "poise": rnd(r["poise_damage"]),
                     "hyperarmor": ha[0]["frames"][0] if ha else None,
                     "feint": feint_window(events, first, w["weaponWeightRate"]),
+                    **trade,
                 }
             for k in ("r2_1", "r2_2"):
                 if k in slots and k + "c" in slots:
@@ -340,6 +441,9 @@ class Embed:
                 "hits": r["hit_count"], "poise": rnd(r["poise_sum"]),
                 "hyperarmor": rf(ha[0]["frames"][0]) if ha else None,
                 "feint": feint_window(events, first, w["weaponWeightRate"]),
+                **trade_fields([(rf(h["frames"][0]), h["poise_damage"] * _intr().POISE_MENU * self.sa()(h["atk_row"]))
+                                for h in r["hits"]],
+                               tae_windows(reg, events, lambda s: rf(s * ATK.TAE_FPS), lambda e: wid)),
             }
         out["L1"] = slots
         self._moves[wid] = out
@@ -370,6 +474,7 @@ class Embed:
         # The same for `Table.buildup_hp`, which `status_hp` hands its totals to since the DoT
         # cut moved there.
         sh.buildup_hp = lambda *args: AT.Table.buildup_hp(sh, *args)
+        sh.status_seq = lambda *args: AT.Table.status_seq(sh, *args)
         ws = ST.weapon_status(self.st, name, aff, level, self.stats, two)
         return sh, ws
 
@@ -383,7 +488,7 @@ class Embed:
             two = grip == "2H"
             ar_by = {el: r["damage"].get(el, {}).get("total", 0.0) for el in ELEMENTS}
             sh, ws = self.status_shim(name, aff, level, two)
-            slots = {}
+            slots, seqs = {}, {}
             for key, s in moves[grip].items():
                 feat = {k: v for k, v in s.items() if not k.startswith("_") and v not in (None, {})}
                 # Every element's correction is the physical one on almost every row; keep the
@@ -409,12 +514,15 @@ class Embed:
                     status_rows = []
                     status_hits = [{"atk_row": h["atk_row"], "count": 1} for h in s["_pg"]["hits"]]
                 if ws["sources"]:
-                    feat["status_hp"] = AT.Table.status_hp(sh, two, status_hits, status_rows)
+                    _, _, first_row, seq = AT.Table.status_seq(sh, two, status_hits, status_rows)
+                    seqs[key] = (seq, first_row)
                     bu = collections.Counter()
                     for row in [x["attack"] for x in status_rows] + status_hits:
                         bu.update(ST.use_buildup(self.st, ws, row))
                     feat["status_buildup"] = {k: round(v, 1) for k, v in bu.items() if v}
                 slots[key] = feat
+            for key, hp in chain_status(seqs, lambda seq, first: sh.buildup_hp(ws, {}, first, seq)).items():
+                slots[key]["status_hp"] = hp
             first = moves[grip].get("r1_1") or moves[grip].get("left_1")
             d100 = greased = None
             row = self.art.weapons[self.art.find_weapon(name, aff)]
@@ -425,8 +533,10 @@ class Embed:
                 d100 = round(self.hit_damage(wid, ar_by, mv100, atk)["pvp_damage_total"], 1)
                 # A row a grease can buff (`isEnhance`: Standard, Heavy, Keen, Quality; never an
                 # elemental or status infusion) also takes the best DLC drawstring grease, added
-                # flat to that element's attack as `er-mechanics-weapon-flex.py` does.
-                if greasable:
+                # flat to that element's attack as `er-mechanics-weapon-flex.py` does. Not in a
+                # duel: the ladder bans every grease that adds attack (`er-builds-ladder.grease_ban`),
+                # so `er-mechanics-class-roles` must not rank a weapon by one.
+                if greasable and AT.FIGHT != "duel":
                     greased = max((round(self.hit_damage(wid, dict(ar_by, **{el: ar_by.get(el, 0.0) + GREASE_FLAT}),
                                                          mv100, atk)["pvp_damage_total"], 1), el)
                                   for el in OPT.GREASE_ELEMENTS)
@@ -449,15 +559,21 @@ class Embed:
         reg = self.pg
         lr = self.art.max_level(reg.weapon[right]["reinforceTypeId"])
         ll = self.art.max_level(reg.weapon[left]["reinforceTypeId"])
-        rows = PG.powerstance_rows(reg, right, left, {right: lr, left: ll})
+        # The rows (frames, hit weapons, attack rows) depend on the two base weapons and their top
+        # levels only, so a pair embedded on several affinities reads its animations once.
+        cache = self.__dict__.setdefault("_ps_rows", {})
+        if (right, left) not in cache:
+            cache[right, left] = PG.powerstance_rows(reg, right, left, {right: lr, left: ll})
+        rows = cache[right, left]
         if not rows:
             return None
-        hand = {}
+        hand, shim = {}, {}
         for wid, aff in ((right, raff), (left, laff)):
             r, ok, level = self.ar(self.art.names[wid], aff, "1H")
             hand[wid] = ({el: r["damage"].get(el, {}).get("total", 0.0) for el in ELEMENTS}, ok)
+            shim[wid] = self.status_shim(self.art.names[wid], aff, level, False)
         anims = ATK.tae_animations(reg.weapon[right]["wepmotionCategory"]) or {}
-        slots = {}
+        slots, seqs = {}, {}
         for r in rows:
             dmg, att = 0.0, collections.Counter()
             for h in r["hits"]:
@@ -465,6 +581,20 @@ class Embed:
                                       {el: h[k] for el, k in MV_KEY.items()}, h["atk_row"])
                 dmg += hit["pvp_damage_total"]
                 att.update(hit["attack"])
+            # Status build-up per hit through the hitting hand's own weapon and affinity: each hit
+            # is that hand's weapon's (the AttackBehavior `Source` byte,
+            # `er-mechanics-powerstance-guard`). Both hands fill one gauge, so the hits stay one
+            # sequence in landing order; `chain_status` values it below.
+            seq, first = [], {}
+            for h in r["hits"]:
+                sh, ws = shim[h["weapon"]]
+                f, b = (AT.Table.status_seq(sh, False, [{"atk_row": h["atk_row"], "count": 1}], [])[2:]
+                        if ws["sources"] else ({}, [{}]))
+                seq += b
+                for k, v in f.items():
+                    first.setdefault(k, v)
+            if any(seq):
+                seqs[r["slot"]] = (seq, first)
             anim = int(r["anim"].split("_")[1])
             ha = r["hyperarmor"]
             slots[r["slot"]] = {k: v for k, v in {
@@ -478,7 +608,20 @@ class Embed:
                 "feint": feint_window(anims.get(anim), r["first_hit"],
                                       reg.weapon[right]["weaponWeightRate"], real=False),
                 "attack": {el: round(v) for el, v in att.items() if v}, "damage": round(dmg, 1),
+                "reach": self.dual_reach(r),
+                # Clip frames, as the slot's other frames (`_slot_row`); each hit's poise through
+                # its own hand's weapon and AtkParam row.
+                **trade_fields([(h["frames"][0], h["poise_damage"] * _intr().POISE_MENU * self.sa()(h["atk_row"]))
+                                for h in r["hits"]],
+                               tae_windows(reg, anims.get(anim), lambda s: round(s * ATK.TAE_FPS),
+                                           lambda e: left if e.params[2] == PG.SOURCE_LEFT else right)),
             }.items() if v is not None}
+        # The proc row is the right hand's own when it carries the status, else the hand that
+        # built it first (`proc_row_for` falls back to `first`).
+        rsh, rws = shim[right]
+        for key, hp in chain_status(seqs, lambda seq, first: rsh.buildup_hp(rws, {}, first, seq)).items():
+            if hp:
+                slots[key]["status_hp"] = hp
         chain = [slots[k] for k in ("dual_1", "dual_2", "dual_3", "dual_4", "dual_5", "dual_6") if k in slots]
         return {"kind": "powerstance", "right": self.art.names[right], "right_affinity": raff,
                 "left": self.art.names[left], "left_affinity": laff, "stats": stats_key(self.stats),
@@ -625,6 +768,49 @@ def chain_summary(chain):
     return out
 
 
+def two_hand_is_pair(row):
+    """True when two-handing this weapon plays its paired moveset (`EquipParamWeapon.isDualBlade`
+    and `bothHandEquipable`): every claw, fist (Grafted Dragon excepted: it cannot be
+    two-handed), hand-to-hand, perfume bottle, throwing dagger, backhand blade, beast claw and a
+    few named weapons. Measured 2026-10-19: in each of those classes the two-handed clip
+    (032000 + n) hits on the same frames as the powerstance clip (034000 + n), e.g. Raptor Talons
+    a022_032000 f12-15 and f14-17 against a022_034000 f12-15 and f14-17. The same test as
+    `er-mechanics-talisman-affinity.two_hand_is_pair`."""
+    return bool(row.get("isDualBlade") and row.get("bothHandEquipable"))
+
+
+def chain_status(seqs, hp):
+    """{slot: {status: HP}} from {slot: ([{status: build-up} per landed hit], {status: first
+    row})}, where `hp(seq, first)` values one engagement that lands `seq`
+    (`er-mechanics-ash-table.Table.buildup_hp`).
+
+    A numbered slot `<p>_<n>` lands after `<p>_1` .. `<p>_<n-1>` on the same gauge, so it is
+    credited what it adds to that prefix, hp(prefix + its hits) - hp(prefix): a three-swing string
+    that procs on the third swing credits the proc across the string instead of zero to each
+    swing alone. Any other slot is its own engagement."""
+    memo = {}
+
+    def value(keys):
+        if keys not in memo:
+            seq, first = [], {}
+            for k in keys:
+                seq += seqs[k][0]
+                for s, v in seqs[k][1].items():
+                    first.setdefault(s, v)
+            memo[keys] = hp(seq, first) if seq else {}
+        return memo[keys]
+
+    out = {}
+    for key in seqs:
+        m = re.fullmatch(r"(.+)_(\d+)", key)
+        prefix = tuple(f"{m.group(1)}_{i}" for i in range(1, int(m.group(2)))) if m else ()
+        if not all(k in seqs for k in prefix):
+            prefix = ()
+        whole, before = value(prefix + (key,)), value(prefix)
+        out[key] = {s: round(v - before.get(s, 0)) for s, v in whole.items() if round(v - before.get(s, 0)) > 0}
+    return out
+
+
 def summarise(moves, slots, grip):
     """The ranking summaries of one grip, from its slots."""
     if grip == "L1":
@@ -651,59 +837,238 @@ def fun_of(mechs, share):
     return round(1.0 - share.get(m, 1.0), 4), m
 
 
+def role_affinities_1h(recs):
+    """The affinities `er-mechanics-class-roles.role_affinities` scores a weapon on (each one with a
+    status, and the best statusless one), of one base weapon's records `recs`, kept where the
+    one-handed record is wieldable: a powerstance holds both weapons one-handed
+    (`can_powerstance` refuses two-handing)."""
+    affs, by = COMBO._class_roles().role_affinities(recs)
+    return [aff for aff in affs if any(r["grip"] == "1H" and r["wieldable"] for r in by[aff])]
+
+
+def powerstance_affinities(same, best, right_roles, left_roles):
+    """[(right affinity, left affinity)] to embed one powerstance pair on: `best` (each weapon's
+    best one-handed damage affinity, the record every pair always had, wieldable or not) first,
+    then every pair of the two weapons' role affinities (`role_affinities_1h`), so a set's
+    powerstance is scored on the affinities its hands are picked on rather than on Heavy alone.
+    A weapon with itself (`same`) is one copy's affinity in both hands, so only matching pairs.
+    Bounded by the role affinities, which are wieldable ones only: measured on the 2026-10-19
+    heavy-kit stat block, 25,428 more records over 5,031 pairs (30,459 in all; the embedding
+    grew from 51 MB to 124 MB)."""
+    out = [tuple(best)]
+    for ra in right_roles:
+        for la in left_roles:
+            if (ra, la) not in out and (not same or ra == la):
+                out.append((ra, la))
+    return out
+
+
+#: Runs of neighbouring items each `pooled` worker takes, about: few enough that a run shares its
+#: weapons' caches, enough that a slow run does not leave the other workers idle at the end.
+POOL_RUNS = 8
+#: What the pool workers read (`_weapon_work`, `_pair_work`, `_ash_work`), set before they fork:
+#: the `Embed`, the mechanic shares and, in a worker, the reaches it has already handed back.
+_JOB = {}
+
+
+def _reach_news(e):
+    """{reach key: entries} this worker measured since its last call. A worker writes no reach file
+    (`_worker_start` clears its `reach_path`); `pooled` merges these into the caller's, which the
+    caller writes, so the file has one writer."""
+    seen = _JOB.setdefault("seen", {})
+    out = {}
+    for k, v in e.reach.items():
+        if seen.get(k) != v:
+            out[k] = seen[k] = dict(v) if isinstance(v, dict) else v
+    return out
+
+
+def _weapon_work(b):
+    """([(record, (affinity, 1H damage) when its 1H record is wieldable)], reaches measured): one
+    base weapon on every affinity, the records in the order one process appends them."""
+    e, share = _JOB["e"], _JOB["share"]
+    out = []
+    for aff in OPT.affinities(e.art, b):
+        try:
+            vec = e.weapon_vector(b, aff)
+        except Exception as ex:  # keep the sweep going; the failure is recorded
+            print(f"{e.art.names[b]} {aff}: {ex!r}", file=sys.stderr)
+            continue
+        mechs = list(e.option_mechanics(b, aff))
+        fun, m = fun_of(mechs, share)
+        one = vec["1H"]
+        best = (aff, one["damage"] or 0) if one["wieldable"] else None
+        for grip, rec in vec.items():
+            rec["mechanics"] = mechs
+            rec["fun"], rec["fun_mechanic"] = fun, m
+            out.append((rec, best if grip == "1H" else None))
+    return out, _reach_news(e)
+
+
+def _pair_work(job):
+    """([(record, on a role affinity pair)], reaches measured): one powerstance pair on each of
+    its affinity pairs."""
+    e = _JOB["e"]
+    r, l, affs, best = job
+    out = []
+    for ra, la in affs:
+        try:
+            rec = e.powerstance(r, ra, l, la)
+        except Exception as ex:
+            print(f"powerstance {e.art.names[r]} {ra} + {e.art.names[l]} {la}: {ex!r}", file=sys.stderr)
+            continue
+        if rec:
+            out.append((rec, (ra, la) != best))
+    return out, _reach_news(e)
+
+
+def _ash_work(x):
+    """(ash vector or None, reaches measured) of one ash-table row."""
+    e = _JOB["e"]
+    try:
+        rec = e.ash_vector(x, _JOB["share"])
+    except Exception as ex:
+        print(f"ash {x['ash']} on {x['weapon']}: {ex!r}", file=sys.stderr)
+        rec = None
+    return rec, _reach_news(e)
+
+
+def _worker_start(cores, counter):
+    """A pool worker: a core of its own (`er-mechanics-ash-interrupt._worker_init`) and no reach file."""
+    COMBO._ai()._worker_init(cores, counter)
+    e = _JOB["e"]
+    e.reach_path = None
+    _JOB["seen"] = {k: dict(v) if isinstance(v, dict) else v for k, v in e.reach.items()}
+
+
+def pooled(e, fn, items, jobs):
+    """`fn` over `items`, results in the order of `items`, on `jobs` forked workers each pinned to
+    a core of its own, as the loadout's pools are (`er-mechanics-ash-interrupt._worker_init`).
+    `fn` returns (result, reaches measured); the reaches go into `e.reach` here and its file is
+    written by this process alone. `jobs` 1 runs in this process. A result is the one the serial
+    loop computes: the caches an `Embed` keeps per item (`_moves`, `_ps_rows`, the reaches) hold
+    the same values whichever process fills them."""
+    AI = COMBO._ai()
+    cpus = AI.allowed_cpus()
+    workers = cpus[1:] or cpus
+    n = max(1, min(jobs, len(items), len(workers)))
+    # The first item here either way: whatever it reads on first use (tables, the status target's
+    # defenders) the forked workers then inherit instead of each reading it again.
+    for x in items[:1] if n > 1 else items:
+        yield fn(x)[0]
+    if n <= 1:
+        return
+    import multiprocessing as mp
+    ctx = mp.get_context("fork")
+    # The status sequence memo shared by the workers (`er-mechanics-status.share_seq_memo`): the
+    # pairs repeat the build-up sequences one process would have simulated once.
+    ST.share_seq_memo(ctx)
+    # Neighbouring items share their weapons (the pairs run right weapon by right weapon), so each
+    # worker takes runs of them and reads a weapon's animations and moveset once rather than once
+    # per pair: `POOL_RUNS` runs a worker.
+    rest = items[1:]
+    chunk = max(1, len(rest) // (n * POOL_RUNS))
+    with ctx.Pool(n, initializer=_worker_start, initargs=(workers, ctx.Value("i", 0))) as pool:
+        for res, news in pool.imap(fn, rest, chunksize=chunk):
+            for k, v in news.items():
+                if isinstance(v, dict):
+                    e.reach.setdefault(k, {}).update(v)
+                else:
+                    e.reach[k] = v
+            if news:
+                e.save_reach()
+            yield res
+
+
+#: The arguments an embedding reused by `--reuse` must have been made with, besides its stats.
+REUSE_ARGS = ("weapons", "no_reach", "no_powerstance", "fight")
+
+
+def stamp_path(out: Path) -> Path:
+    """The file beside an embedding naming the code, stats and arguments that made it (`reusable`)."""
+    return out.with_name(out.name + ".stamp.json")
+
+
+def code_stamp() -> dict:
+    """{file name: sha256} of every module of this directory the process has loaded: the code
+    behind an embedding's weapon and powerstance records."""
+    out = {}
+    for m in list(sys.modules.values()):
+        f = getattr(m, "__file__", None)
+        if f and Path(f).resolve().parent == HERE:
+            out[Path(f).name] = hashlib.sha256(Path(f).read_bytes()).hexdigest()
+    return dict(sorted(out.items()))
+
+
+def stamp_doc(a, stats, code) -> dict:
+    return {"stats": stats_key(stats), "args": {k: getattr(a, k, None) for k in REUSE_ARGS}, "code": code}
+
+
+def reuse_refusal(a, stats, doc) -> str | None:
+    """Why a stamp `doc` (`stamp_doc`) does not vouch for an embedding at `stats` made with `a`,
+    or None when it does: the same stats, the same `REUSE_ARGS`, and every module it names
+    unchanged on disk."""
+    if not doc or not doc.get("code"):
+        return "no code recorded"
+    want = stamp_doc(a, stats, None)
+    if doc.get("stats") != want["stats"]:
+        return f"stats {doc.get('stats')}"
+    if doc.get("args") != want["args"]:
+        return f"arguments {doc.get('args')}"
+    stale = [f for f, h in doc["code"].items()
+             if not (HERE / f).exists() or hashlib.sha256((HERE / f).read_bytes()).hexdigest() != h]
+    return f"changed code {', '.join(stale)}" if stale else None
+
+
+def reusable(a, stats, path: Path):
+    """The embedding at `path` when its stamp (`stamp_path`) vouches for it (`reuse_refusal`), else
+    None with the reason on stderr. The pipeline's step 6 reuses step 2's: the two runs differ only
+    in `--ash-rows`, which nothing but the ash vectors reads, so the weapon and powerstance records
+    are the ones step 6 would compute again (equal in both files of the 2026-10-19 heavy-kit pass,
+    37 MB and 112 MB of JSON, and about 90 s of step 6's 108)."""
+    try:
+        doc = json.loads(stamp_path(path).read_text())
+    except (OSError, ValueError):
+        doc = None
+    why = reuse_refusal(a, stats, doc)
+    if why:
+        print(f"reuse: not {path} ({why}); computing every record", file=sys.stderr, flush=True)
+        return None
+    return json.loads(path.read_text())
+
+
 def build(a, stats):
     t0 = time.time()
     e = Embed(stats, a.reach_cache, not a.no_reach)
     print(f"tables {time.time() - t0:.1f}s", file=sys.stderr, flush=True)
     share, labels, n_opts = e.shares()
     print(f"mechanics over {n_opts} options {time.time() - t0:.1f}s", file=sys.stderr, flush=True)
-    weapons, best_aff = [], {}
+    jobs = getattr(a, "jobs", 1) or 1
+    # Read once here rather than once in every forked worker.
+    e.sa()
+    _JOB.update(e=e, share=share)
     only = {w.strip() for w in a.weapons.split(",")} if a.weapons else None
-    todo = [b for b in e.base if not only or e.art.names[b] in only]
-    for i, b in enumerate(todo):
-        for aff in OPT.affinities(e.art, b):
-            try:
-                vec = e.weapon_vector(b, aff)
-            except Exception as ex:  # keep the sweep going; the failure is recorded
-                print(f"{e.art.names[b]} {aff}: {ex!r}", file=sys.stderr)
-                continue
-            mechs = list(e.option_mechanics(b, aff))
-            fun, m = fun_of(mechs, share)
-            for grip, rec in vec.items():
-                rec["mechanics"] = mechs
-                rec["fun"], rec["fun_mechanic"] = fun, m
-                weapons.append(rec)
-            one = vec["1H"]
-            if one["wieldable"] and (b not in best_aff or (one["damage"] or 0) > best_aff[b][1]):
-                best_aff[b] = (aff, one["damage"] or 0)
-        print(f"[{i + 1}/{len(todo)}] {e.art.names[b]} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
-    pstance = []
-    if not a.no_powerstance:
-        cand = [(r, l) for r in todo for l in todo if PG.can_powerstance(e.pg, r, l)]
-        for r, l in cand:
-            raff = best_aff.get(r, (OPT.affinities(e.art, r)[0],))[0]
-            laff = best_aff.get(l, (OPT.affinities(e.art, l)[0],))[0]
-            try:
-                rec = e.powerstance(r, raff, l, laff)
-            except Exception as ex:
-                print(f"powerstance {e.art.names[r]} + {e.art.names[l]}: {ex!r}", file=sys.stderr)
-                continue
-            if rec:
-                pstance.append(rec)
-        print(f"powerstance {len(pstance)} of {len(cand)} pairs {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    base = reusable(a, stats, a.reuse) if getattr(a, "reuse", None) else None
+    if base is not None:
+        weapons, pstance = base["weapons"], base["powerstance"]
+        print(f"reuse: {len(weapons)} weapon and {len(pstance)} powerstance records from {a.reuse} "
+              f"{time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    else:
+        weapons, pstance = build_weapons(a, e, only, jobs, t0)
     ashes = []
     seen = set()
     for path in a.ash_rows or ():
+        todo = []
         for x in json.loads(path.read_text()):
-            k = (x["weapon"], x.get("affinity", "Keen"), x["ash"], x["grip"])
+            # A stance skill's buttons are rows of their own (`variant`); each is a vector.
+            k = (x["weapon"], x.get("affinity", "Keen"), x["ash"], x["grip"], x.get("variant"))
             if (only and x["weapon"] not in only) or k in seen:
                 continue
             seen.add(k)
-            try:
-                ashes.append(e.ash_vector(x, share))
-            except Exception as ex:
-                print(f"ash {x['ash']} on {x['weapon']}: {ex!r}", file=sys.stderr)
+            todo.append(x)
+        ashes += [v for v in pooled(e, _ash_work, todo, jobs) if v is not None]
         print(f"ash vectors {len(ashes)} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    ST.release_seq_memo()
     if e._reach_dirty:
         e.save_reach(force=True)
     return {"stats": stats, "stats_key": stats_key(stats), "fun_max_share": FUN_MAX_SHARE,
@@ -712,14 +1077,89 @@ def build(a, stats):
             "weapons": weapons, "powerstance": pstance, "ashes": ashes}
 
 
+def build_weapons(a, e, only, jobs, t0):
+    """(weapon records, powerstance records): every base weapon on every affinity, then every
+    powerstance pair, on `jobs` workers (`pooled`), in the order one process makes them."""
+    weapons, best_aff, by_base = [], {}, collections.defaultdict(list)
+    todo = [b for b in e.base if not only or e.art.names[b] in only]
+    for i, (b, recs) in enumerate(zip(todo, pooled(e, _weapon_work, todo, jobs))):
+        for rec, one in recs:
+            weapons.append(rec)
+            by_base[b].append(rec)
+            if one and (b not in best_aff or one[1] > best_aff[b][1]):
+                best_aff[b] = one
+        print(f"[{i + 1}/{len(todo)}] {e.art.names[b]} {time.time() - t0:.0f}s", file=sys.stderr, flush=True)
+    pstance = []
+    if not a.no_powerstance:
+        cand = [(r, l) for r in todo for l in todo if PG.can_powerstance(e.pg, r, l)]
+        role = {b: role_affinities_1h(recs) for b, recs in by_base.items()}
+        jobs_in = []
+        for r, l in cand:
+            raff = best_aff.get(r, (OPT.affinities(e.art, r)[0],))[0]
+            laff = best_aff.get(l, (OPT.affinities(e.art, l)[0],))[0]
+            jobs_in.append((r, l, powerstance_affinities(r == l, (raff, laff), role.get(r, ()), role.get(l, ())),
+                            (raff, laff)))
+        n_extra = 0
+        # Minutes with no `[i/N]` line otherwise (3m17s on 2026-10-19): `  i/N pairs` on stderr.
+        progress = _load("er_mechanics_progress", "er-mechanics-progress.py")
+        tick = progress.Count(len(jobs_in), "pairs")
+        for recs in pooled(e, _pair_work, jobs_in, jobs):
+            for rec, extra in recs:
+                pstance.append(rec)
+                n_extra += extra
+            tick()
+        print(f"powerstance {len(pstance)} records over {len(cand)} pairs ({len(pstance) - n_extra} on the "
+              f"best-damage affinities, {n_extra} more on the role affinities) {time.time() - t0:.0f}s",
+              file=sys.stderr, flush=True)
+    return weapons, pstance
+
+
 def same_moves(a, b, keys=("anim", "startup", "active", "last_hit", "roll_cancel", "next_cancel",
                            "stamina", "mv", "hits")):
     return all(a.get(k) == b.get(k) for k in keys)
 
 
+def reach_coverage(e):
+    """{(weapon, grip): reason} of every pool weapon (`Embed.base`) whose R1 #1 has no measured
+    world reach for a reason that is not inherent (`er-mechanics-reach.r1_reach`), plus the
+    inherent ones and the measured count. The pool is every base weapon, not one stat block's
+    wieldable share: reach does not depend on stats, so a weapon outside one build's
+    requirements is in another's."""
+    RC = ATK._reach()
+    rc = RC.Reach(None)
+    gaps, inherent, measured = {}, {}, 0
+    for b in e.base:
+        for grip in ("one", "both"):
+            reach, why, fixed = RC.r1_reach(rc, b, grip)
+            if reach is not None:
+                measured += 1
+            elif fixed:
+                inherent[(e.art.names[b], grip)] = why
+            else:
+                gaps[(e.art.names[b], grip)] = why
+    return gaps, inherent, measured
+
+
 def selftest():
     e = Embed(DEFAULT_STATS, None, reach=False)
     ok = True
+    # Every pool weapon's R1 #1 has a measured reach, or a data-derived reason no measurement can
+    # give one. Before the weapon-model rigs were posed, 17 whips, flails and rigged weapons (and
+    # Dancing Blade of Ranah's 1H R1, an import entry with no clip of its own) had none, and
+    # `ChainTrades` credited their strings at the default exchange distance.
+    gaps, inherent, measured = reach_coverage(e)
+    good = not gaps
+    print(f"{'ok' if good else 'FAIL'}: R1 #1 world reach measured for {measured} weapon grips, "
+          f"{len(inherent)} with an inherent reason ({collections.Counter(inherent.values()).most_common(3)}), "
+          f"{len(gaps)} unmeasured: {sorted(gaps.items())[:10]}")
+    ok &= good
+    rc = ATK._reach().Reach(None)
+    reach = {n: ATK._reach().r1_reach(rc, e.art.find_weapon(n, "Standard"), "one")[0]
+             for n in ("Whip", "Chainlink Flail", "Nox Flowing Sword")}
+    good = all(v is not None for v in reach.values()) and reach["Whip"] > reach["Chainlink Flail"]
+    print(f"{'ok' if good else 'FAIL'}: rigged weapons posed through their own anibnd, whip outreaches "
+          f"flail ({reach})")
+    ok &= bool(good)
     sham, scim, falc = (e.art.find_weapon(n, "Standard") for n in ("Shamshir", "Scimitar", "Falchion"))
     ms, mc = e.moveset(sham), e.moveset(scim)
     r1 = [k for k in ms["1H"] if k.startswith("r1_")]
@@ -736,6 +1176,51 @@ def selftest():
     print(f"{'ok' if good else 'FAIL'}: Shamshir powerstance equals Falchion's "
           f"({sorted(ps['slots']) if ps else None})")
     ok &= bool(good)
+    # Powerstance status HP rides the hitting hand: a Blood Dagger right and a Heavy Parrying Dagger
+    # left bleed only on slots with a right-hand hit, and somewhere on the L1 string once its hits
+    # add up to a proc (`chain_status`); both Heavy bleed nowhere. (A record keys its hands by
+    # weapon, so one weapon in both hands is one affinity, as the sweep pairs it.)
+    dag, pdag = e.art.find_weapon("Dagger", "Standard"), e.art.find_weapon("Parrying Dagger", "Standard")
+    bh, hh = e.powerstance(dag, "Blood", pdag, "Heavy"), e.powerstance(dag, "Heavy", pdag, "Heavy")
+    got = {k: bool((s.get("status_hp") or {}).get("bleed")) for k, s in bh["slots"].items()}
+    right = {k: "right" in s["hands"] for k, s in bh["slots"].items()}
+    good = (all(right[k] for k, v in got.items() if v) and any(got[k] for k in got if k.startswith("dual_"))
+            and not any(s.get("status_hp") for s in hh["slots"].values()))
+    print(f"{'ok' if good else 'FAIL'}: powerstance bleed on the Blood hand's hits only ({got})")
+    ok &= bool(good)
+    # Role affinities: Blood and Cold carry a status, Heavy is the best statusless one, Keen is
+    # beaten by it, and Poison's one-handed record is not wieldable.
+    def rec(aff, grip, dmg, status=(), wieldable=True):
+        return {"affinity": aff, "grip": grip, "damage": dmg, "status": list(status), "wieldable": wieldable,
+                "slots": {}}
+    recs = [rec("Heavy", "1H", 100), rec("Keen", "1H", 90), rec("Blood", "1H", 80, ["bleed"]),
+            rec("Cold", "1H", 80, ["frost"]), rec("Poison", "1H", 80, ["poison"], wieldable=False),
+            rec("Poison", "2H", 80, ["poison"])]
+    got = (sorted(role_affinities_1h(recs)),
+           powerstance_affinities(False, ("Heavy", "Keen"), ["Blood", "Heavy"], ["Heavy"]),
+           powerstance_affinities(True, ("Heavy", "Heavy"), ["Blood", "Heavy"], ["Blood", "Heavy"]))
+    want = (["Blood", "Cold", "Heavy"], [("Heavy", "Keen"), ("Blood", "Heavy"), ("Heavy", "Heavy")],
+            [("Heavy", "Heavy"), ("Blood", "Blood")])
+    print(f"{'ok' if got == want else 'FAIL'}: powerstance role affinities {got}")
+    ok &= got == want
+    # Per-hit trade fields (`trade_fields`): one entry per hit, the first at the slot's startup,
+    # poise in menu units times the AtkParam row's saRate, and the TAE 795 windows on the slot's
+    # clock, the first opening at the slot's `hyperarmor` frame. Giant-Crusher 2H R1 #1 carries one,
+    # the Shamshir's R1 none; the L1 and dual slots follow the same shape.
+    gc = e.moveset(e.art.find_weapon("Giant-Crusher", "Standard"))
+    g1, s1 = gc["2H"]["r1_1"], ms["1H"]["r1_1"]
+    sa = e.sa()(g1["_row"]["atk_row"])
+    lft = next(iter(ms["L1"].values()))
+    duals = [s for s in ps["slots"].values() if "hit_at" in s]
+    got = (len(g1["hit_at"]) == g1["hits"], g1["hit_at"][0] == g1["startup"],
+           g1["hit_poise"][0] == rnd(g1["_row"]["poise_damage"] * _intr().POISE_MENU * sa, 2),
+           bool(g1["ha"]) and g1["ha"][0][0] == g1["hyperarmor"] and len(g1["ha"][0]) == 6,
+           s1["ha"] == [], lft["hit_at"][0] == lft["startup"],
+           bool(duals) and all(len(s["hit_at"]) == s["hits"] == len(s["hit_poise"]) for s in duals))
+    good = all(got)
+    print(f"{'ok' if good else 'FAIL'}: trade fields per hit and per window {got}, Giant-Crusher 2H R1 "
+          f"{g1['hit_at']} {g1['hit_poise']} {g1['ha']}")
+    ok &= good
     share, labels, n = e.shares(with_ashes=False)
     fang = e.art.find_weapon("Venomous Fang", "Standard")
     mf = e.option_mechanics(fang, "Standard")
@@ -747,6 +1232,37 @@ def selftest():
     print(f"{'ok' if good else 'FAIL'}: Venomous Fang fun {ff} ({fm}, share {share.get(fm)}) > "
           f"Keen Scimitar fun {pf_} ({pm}, share {share.get(pm)})")
     ok &= bool(good)
+    # `pooled`: forked workers hand back what one process computes, in the order of the items.
+    _JOB.update(e=e, share=share)
+    # Dagger first, in this process; Uchigatana's build-up sequences are none of its own.
+    few = [dag, e.art.find_weapon("Uchigatana", "Standard"), sham, scim]
+    serial = list(pooled(e, _weapon_work, few, 1))
+    ST._SEQ.clear()
+    forked = list(pooled(e, _weapon_work, few, 3))
+    memo = ST._SEQ
+    shared = (len(memo.shared), len(memo.local)) if isinstance(memo, ST.SharedMemo) else None
+    ST.release_seq_memo()
+    # The workers' sequences reach the shared memo: it holds more than this process computed.
+    good = (json.dumps(serial) == json.dumps(forked) and len(serial) == len(few) and bool(shared)
+            and shared[0] > shared[1])
+    print(f"{'ok' if good else 'FAIL'}: pooled weapon records on 3 workers equal one process's, in order, "
+          f"through a status memo they share (shared, this process's: {shared})")
+    ok &= good
+    # `reuse_refusal`: a stamp vouches only for the same stats, arguments and unchanged modules.
+    args = argparse.Namespace(weapons=None, no_reach=False, no_powerstance=False, fight="duel")
+    code = code_stamp()
+    doc = stamp_doc(args, DEFAULT_STATS, code)
+    other = dict(DEFAULT_STATS, str=DEFAULT_STATS["str"] + 1)
+    got = (reuse_refusal(args, DEFAULT_STATS, doc),
+           reuse_refusal(args, other, doc) is not None,
+           reuse_refusal(argparse.Namespace(**{**vars(args), "fight": "invasion"}), DEFAULT_STATS, doc) is not None,
+           reuse_refusal(args, DEFAULT_STATS, {**doc, "code": {**code, Path(__file__).name: "0" * 64}}),
+           reuse_refusal(args, DEFAULT_STATS, {**doc, "code": {}}), reuse_refusal(args, DEFAULT_STATS, None),
+           Path(__file__).name in code and "er-mechanics-ash-table.py" in code)
+    good = (got[0] is None and got[1] and got[2] and got[3] == f"changed code {Path(__file__).name}"
+            and got[4] == got[5] == "no code recorded" and got[6])
+    print(f"{'ok' if good else 'FAIL'}: reuse stamp refuses other stats, arguments and code {got}")
+    ok &= good
     print("selftest", "ok" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -764,8 +1280,17 @@ def main() -> int:
     ap.add_argument("--no-reach", action="store_true")
     ap.add_argument("--no-powerstance", action="store_true")
     ap.add_argument("--weapons", help="comma-separated weapon names: embed only these (mechanic shares stay game-wide)")
+    ap.add_argument("--fight", choices=("duel", "invasion"),
+                    help="fight model status is valued in (er-mechanics-buffs FIGHT_KINDS pressure)")
+    ap.add_argument("--jobs", type=int, default=len(os.sched_getaffinity(0)),
+                    help="pool workers for the weapons, powerstance pairs and ashes (`pooled`; at most the "
+                         "allowed cores less one; 1: in this process)")
+    ap.add_argument("--reuse", type=Path,
+                    help="an embedding of the same stats whose stamp (`<file>.stamp.json`) names this code: "
+                         "its weapon and powerstance records are taken as they are and only the ashes made")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
+    AT.FIGHT = a.fight
     if a.selftest:
         return selftest()
     if not a.out:
@@ -779,7 +1304,11 @@ def main() -> int:
     if a.reach_cache is None and not a.no_reach:
         a.reach_cache = default_reach_cache()
     out = build(a, stats)
+    # The old stamp goes first and the new one comes after the embedding, so a stamp never vouches
+    # for a file that was not written whole.
+    stamp_path(a.out).unlink(missing_ok=True)
     a.out.write_text(json.dumps(out, separators=(",", ":")))
+    stamp_path(a.out).write_text(json.dumps(stamp_doc(a, stats, code_stamp()), indent=1))
     c = collections.Counter(r["grip"] for r in out["weapons"])
     print(f"weapon vectors {len(out['weapons'])} ({dict(c)}), powerstance {len(out['powerstance'])}, "
           f"ash {len(out['ashes'])} -> {a.out}")

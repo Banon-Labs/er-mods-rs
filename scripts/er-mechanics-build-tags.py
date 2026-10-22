@@ -68,6 +68,8 @@ from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CORPUS = Path.home() / ".cache/er-build-planner/builds.jsonl"
 
 #: The planner's tag table `B`, by group.
@@ -418,8 +420,8 @@ def corpus(path: Path = CORPUS, show: int = 0, tables: Tables | None = None) -> 
     examples = {g: [] for g in groups}
     unknown = Counter()
     n = 0
-    for line in path.open(encoding="utf-8"):
-        b = json.loads(line)["build"]
+    for row in er_corpus.iter_rows(path):
+        b = row["build"]
         n += 1
         have = set(b.get("tags") or [])
         miss = []
@@ -446,7 +448,7 @@ def corpus(path: Path = CORPUS, show: int = 0, tables: Tables | None = None) -> 
 # ---- selftest ---------------------------------------------------------------------------------
 
 def _doc(stats, **kw):
-    d = {"stats": dict(stats, rl=parse_stats(",".join(f"{k}={v}" for k, v in stats.items()))["rl"]),
+    d = {"stats": parse_stats(",".join(f"{k}={v}" for k, v in stats.items())),
          "is2h": False, "isPvE": False, "characterClass": "Vagabond", "greatRune": None,
          "inventory": {"slots": []}, "talismans": {"slots": []}, "spells": {"slots": []},
          "protectors": {p: {"slots": []} for p in PROTECTOR_PARTS},

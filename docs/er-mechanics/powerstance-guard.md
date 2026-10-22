@@ -90,9 +90,16 @@ line 2417; the compiled vanilla HKS carries the same identifiers) works like thi
   - A dagger with 104 pairs only with another 104.
   - A katana also pairs with a left-hand 104.
   - In 1.17.1 only the Wakizashi carries 104 (VERIFIED regulation).
-- That env 225 `GetEquipWeaponCategory` returns `wepmotionCategory` is INFERRED. The HKS enum
-  values 20..52 equal the `wepmotionCategory` numbering exactly: Dagger 20, Longsword 23,
-  Greatsword 26, Giant-Crusher 31, shields 47/48/49. The DLC categories 60 (light greatsword),
+- Env 225 `GetEquipWeaponCategory` returns `wepmotionCategory` (VERIFIED 2026-10-19). `HksEnv`
+  (0x140410820) sends 225 through jump table 0x1404133a4 (index env - 0xdf) to 0x140410e05,
+  which calls ChrIns vtable slot 0x248. On `PlayerIns` (vtable 0x142a7cb40) that is 0x1406568b0,
+  the int at index `hand` of the 12-byte array PlayerIns+0x630 points to. `FUN_1404d0eb0` fills
+  its slots 0 and 1 from `FUN_1403beae0`, which reads `EquipParamWeapon+0xe7`,
+  `wepmotionCategory` (1.16.2; 1.17.1 has the same read at 0x1403beaf0). So the menu class
+  (`wepType`) does not decide: the Pickaxe is a great hammer (23) with motion category 32 and
+  powerstances with greataxes such as the Rusted Anchor (19, 32), not with Great Stars (23, 35).
+  The HKS enum values 20..52 equal the `wepmotionCategory` numbering exactly: Dagger 20,
+  Longsword 23, Greatsword 26, Giant-Crusher 31, shields 47/48/49. The DLC categories 60 (light greatsword),
   61 (great katana) and 62 (beast claw) are not in the list. Either they cannot powerstance or
   the decompile predates them; this is not resolved.
 - `isDualBlade` (env 340 `IsTwinSwords`) is not tested in `IsEnableDualWielding`.
@@ -438,8 +445,8 @@ players (slot 6 returns 0); guard regeneration is 20%.
   charge here is INFERRED.
 - Whether poise damage from the two hits of one swing stacks on the defender (each hit subtracts
   on its own; the refill timer was not read).
-- What env 225 `GetEquipWeaponCategory` reads, and so whether categories 60-62 (light
-  greatsword, great katana, beast claw) can powerstance. That the decompiled HKS matches the
+- Whether categories 60-62 (light greatsword, great katana, beast claw) can powerstance (env 225
+  is resolved above; the open part is the HKS list). That the decompiled HKS matches the
   1.17.1 compiled script beyond its identifiers is also unverified.
 - `AttackBothLeft1..3` (two-handing the left weapon) is also mapped to clips 034000..034020 by
   `er-behbnd-attack-map.py`. Whether that is the same clip or an id the behavior graph offsets

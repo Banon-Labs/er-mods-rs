@@ -35,6 +35,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 MIRROR = Path.home() / '.cache/er-build-planner/builds.jsonl'
 BOOT = 400
 SEED = 20260930
@@ -75,33 +77,31 @@ def corpus(mirror, rl_lo, rl_hi):
     embed = _mod('er_builds_embed', 'er-builds-embed.py')
     ash = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py')
     out, seen = [], set()
-    with open(mirror) as fh:
-        for line in fh:
-            row = json.loads(line)
-            b = row['build']
-            st = embed.stats_of(b)
-            if st is None or not rl_lo <= st['rl'] <= rl_hi:
-                continue
-            tags = set(b.get('tags') or [])
-            if b.get('isPvE') or 'PvE' in tags:
-                continue
-            if not (b.get('isPvE') is False or tags & ash.PVP_TAGS):
-                continue
-            if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
-                continue
-            key = (row.get('user'), tuple(embed.tokens(b)))
-            if key in seen:
-                continue
-            seen.add(key)
-            active = embed.active_set(b, 'weapons')
-            slots = []
-            for s in (b.get('inventory') or {}).get('slots') or []:
-                es = s.get('equipSet')
-                pos = (es[active] if active < len(es) else None) if isinstance(es, list) \
-                    else s.get('equipIndex')
-                if pos is not None and s.get('name'):
-                    slots.append({**s, 'pos': pos, 'name': ash.plain(s['name'])})
-            out.append({'tags': tags, 'slots': slots})
+    for row in er_corpus.iter_rows(mirror):
+        b = row['build']
+        st = embed.stats_of(b)
+        if st is None or not rl_lo <= st['rl'] <= rl_hi:
+            continue
+        tags = set(b.get('tags') or [])
+        if b.get('isPvE') or 'PvE' in tags:
+            continue
+        if not (b.get('isPvE') is False or tags & ash.PVP_TAGS):
+            continue
+        if sum(st[k] for k in embed.ATTRS) - embed.LEVEL_OFFSET != st['rl']:
+            continue
+        key = (row.get('user'), tuple(embed.tokens(b)))
+        if key in seen:
+            continue
+        seen.add(key)
+        active = embed.active_set(b, 'weapons')
+        slots = []
+        for s in (b.get('inventory') or {}).get('slots') or []:
+            es = s.get('equipSet')
+            pos = (es[active] if active < len(es) else None) if isinstance(es, list) \
+                else s.get('equipIndex')
+            if pos is not None and s.get('name'):
+                slots.append({**s, 'pos': pos, 'name': ash.plain(s['name'])})
+        out.append({'tags': tags, 'slots': slots})
     return out
 
 

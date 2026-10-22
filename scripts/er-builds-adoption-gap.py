@@ -22,10 +22,13 @@ import collections
 import importlib.util
 import json
 import statistics
+import sys
 import unicodedata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import er_corpus  # noqa: E402  the corpus floor every mirror read goes through
 CACHE = Path.home() / '.cache/er-build-planner'
 PVP_TAGS = {'Invasions', 'Duels', 'Co-op/Gank', '2v2', 'Ladder'}
 #: Roll thresholds as fractions of max equip load (COMMUNITY: 30% light, 70% medium).
@@ -82,8 +85,7 @@ def slots_at(slots, active):
 
 def corpus(mirror, kind, rl_lo, rl_hi, weapon, prot):
     out, seen, why = [], set(), collections.Counter()
-    for line in mirror.open():
-        row = json.loads(line)
+    for row in er_corpus.iter_rows(mirror):
         b = row['build']
         st = EMBED.stats_of(b)
         if st is None or not rl_lo <= st['rl'] <= rl_hi:

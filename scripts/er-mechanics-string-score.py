@@ -118,10 +118,17 @@ def best_spend(sc: StringScorer, st: dict, points: int) -> tuple[dict, int]:
     The greedy walk looks `LOOKAHEAD` points ahead and the arcane status curve is flat for
     longer than that before it climbs, so the walk stops short: Blood Uchigatana at RL 150
     settled on ARC 22 (382.8 per hit) where ARC 45 scored 404.8. Each arcane value is fixed in
-    turn and the rest spent on the other damage stats."""
+    turn and the rest spent on the other damage stats.
+
+    The plain greedy spend over every damage stat stays a candidate: fixing arcane and spending
+    the rest can lose to the joint walk when the status curve is flat. Measured with the
+    proc-threshold status model (`er-mechanics-status.sequence_hp`): Blood Uchigatana 1H, Bandit
+    RL 150, the fixed-arcane search settled on ARC 28 at 541.5 while the joint walk reached ARC
+    22 at 542.2."""
+    sc.floor = dict(st)
+    plain = OPT.spend(dict(st), points, sc, OPT.DAMAGE_STATS)
     if not sc.parts(st)["arcane_status"]:
-        sc.floor = dict(st)
-        return OPT.spend(st, points, sc, OPT.DAMAGE_STATS)
+        return plain
     others = tuple(k for k in OPT.DAMAGE_STATS if k != "arc")
     top = min(sc.cap.get("arc", OPT.STAT_CAP), st["arc"] + points)
     tried: dict = {}
@@ -139,27 +146,36 @@ def best_spend(sc: StringScorer, st: dict, points: int) -> tuple[dict, int]:
     best = max(tried, key=lambda k: tried[k][0])
     for arc in range(max(st["arc"], best - ARC_STEP + 1), min(top, best + ARC_STEP - 1) + 1):
         at(arc)
-    _, got, left = max(tried.values(), key=lambda v: v[0])
+    _, got, left = max(list(tried.values()) + [(sc.score(plain[0]), *plain)], key=lambda v: v[0])
     return got, left
 
 
-def build(sc: StringScorer, cls: str, rl: int, vig: int, end: int, floors: dict | None = None) -> dict | None:
-    """The class's best spread on `sc`'s weapon: base stats raised to the Vigor and Endurance
-    floors, every requirement and any extra `floors` (another weapon the build must also wield),
-    the rest spent by `best_spend`. None when the class cannot reach `rl` with those floors."""
-    e = sc.e
+def start_spread(sc: StringScorer, cls: str, rl: int, vig: int, end: int,
+                 floors: dict | None = None) -> tuple[dict, int] | None:
+    """(spread, points left to spend) before any damage stat is bought: the class's base stats
+    raised to the Vigor and Endurance floors (`vit` is Endurance in the planner's keys,
+    `er-builds-optimize.STATS`), every requirement and any extra `floors`. None when the class
+    cannot reach `rl` with those floors."""
     if "model" not in _E:                 # 0.7 s to build; `setdefault` would build it every call
         _E["model"] = RES.Model()
-    model = _E["model"]
-    cls_level, base = model.class_base(cls)
-    need = OPT.requirements(e.art, sc.base_id, sc.affinity, sc.level, sc.two)
+    cls_level, base = _E["model"].class_base(cls)
+    need = OPT.requirements(sc.e.art, sc.base_id, sc.affinity, sc.level, sc.two)
     st = {k: max(base[k], need.get(k, 0), (floors or {}).get(k, 0)) for k in OPT.STATS}
     st["vig"] = max(st["vig"], vig)
     st["end"] = max(st["end"], end)
     points = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
     if points < 0 or rl < cls_level:
         return None
-    st, left = best_spend(sc, st, points)
+    return st, points
+
+
+def build(sc: StringScorer, cls: str, rl: int, vig: int, end: int, floors: dict | None = None) -> dict | None:
+    """The class's best spread on `sc`'s weapon: `start_spread`, the rest spent by `best_spend`.
+    None when the class cannot reach `rl` with those floors."""
+    got = start_spread(sc, cls, rl, vig, end, floors)
+    if got is None:
+        return None
+    st, left = best_spend(sc, *got)
     p = sc.parts(st)
     return {"stats": st, "unspent": left, "score": round(p["score"], 1), "damage": round(p["damage"], 1),
             "status": p["status"], "frames": sc.frames, "links": len(sc.links)}
@@ -182,8 +198,22 @@ def selftest() -> int:
     hi = sc.parts({"str": 14, "dex": 25, "int": 9, "fth": 8, "arc": 45})
     check("Blood Uchigatana: ARC 45 builds more bleed than ARC 10", hi["status"]["bleed"] > lo["status"]["bleed"])
     check("Blood Uchigatana: DEX 60 deals more damage than DEX 25", lo["damage"] > hi["damage"])
+    # Under the proc-threshold status model the R1 string's bleed stops growing once every
+    # defender group procs. On the 2.7.2.0 regulation (measured 2026-10-22) it is 463 HP at ARC 14,
+    # 501 at ARC 30, 504 at ARC 38 and 505 from ARC 45 through 99; on 2026-10-20 it was 503 from
+    # ARC 38. Past that point each arcane level is a DEX level lost, so the best spread no longer
+    # runs arcane past 30 (the expectation of the linear model this test was written against).
+    sat = [sc.parts({"str": 14, "dex": 40, "int": 9, "fth": 8, "arc": a})["status"]["bleed"] for a in (45, 60)]
+    check(f"Blood Uchigatana: bleed saturates by ARC 45 (ARC 45 {sat[0]}, ARC 60 {sat[1]})", sat[0] == sat[1])
+    st, points = start_spread(sc, "Bandit", 150, 56, 41)
     r = build(sc, "Bandit", 150, 56, 41)
-    check(f"Blood Uchigatana Bandit spends ARC past 30 (got {r['stats']['arc']})", r["stats"]["arc"] > 30)
+    arc = r["stats"]["arc"]
+    check(f"Blood Uchigatana Bandit spends ARC past the class's {st['arc']} and short of the plateau (got {arc})",
+          st["arc"] < arc < 38)
+    sc.floor = dict(st)
+    greedy = sc.score(OPT.spend(dict(st), points, sc, OPT.DAMAGE_STATS)[0])
+    check(f"Bandit build scores at least the plain greedy spend ({r['score']} vs {greedy:.1f})",
+          r["score"] >= round(greedy, 1))
     return 0 if ok else 1
 
 
