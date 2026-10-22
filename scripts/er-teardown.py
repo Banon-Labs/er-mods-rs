@@ -281,8 +281,20 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
         # (86 threads) sat there with a mapped 3068x1703 window on screen. There is one ELDEN RING
         # on this machine; its name is enough.
         by_name = comm == "eldenring.exe"
+        # A `WINEPREFIX` naming this game's prefix is enough on its own, whatever the comm. The
+        # comm list only knows what Wine and Proton start; anything else run inside the prefix was
+        # invisible. On 2026-10-22 that was `C:\frida-server-17.17.0.exe` (comm `frida-server-17`,
+        # 2 threads, 13.5 hours old, parented to the user session) left behind by
+        # `er-frida-up.py`: `--status` reported 0 prefix processes while it sat in the prefix. The
+        # cwd and exe halves of `in_prefix` stay behind the comm list, because a shell that merely
+        # `cd`s into the prefix is not part of the game.
+        by_wineprefix = _env_names_prefix(entry, prefix)
         if not (
-            by_appid or by_name or (comm in PREFIX_COMMS and in_prefix) or comm in LAUNCHER_COMMS
+            by_appid
+            or by_name
+            or by_wineprefix
+            or (comm in PREFIX_COMMS and in_prefix)
+            or comm in LAUNCHER_COMMS
         ):
             continue
         # Hard exclusion, applied after classification so it cannot be reasoned around.
@@ -302,7 +314,15 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
                 "matched_by": (
                     "appid"
                     if by_appid
-                    else ("name" if by_name else ("prefix" if in_prefix else "launcher"))
+                    else (
+                        "name"
+                        if by_name
+                        else (
+                            "wineprefix"
+                            if by_wineprefix
+                            else ("prefix" if in_prefix else "launcher")
+                        )
+                    )
                 ),
                 "exe": exe.rsplit("/", 1)[-1],
             }
