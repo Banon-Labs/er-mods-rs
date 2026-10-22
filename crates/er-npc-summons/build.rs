@@ -14,9 +14,43 @@ mod prologue_build {
 
 use iced_x86::code_asm::*;
 use iced_x86::{Code, Instruction, MemoryOperand, Register};
-use prologue_build::{Assemble, Image, PrologueSpec, Shape, generate, mov_r64_mem, mov_r64_rm64};
+use prologue_build::{
+    Assemble, Image, PrologueSpec, Shape, generate, mov_r64_mem, mov_r64_rm64, xor_r32_rm32,
+};
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
+/// The one place the two param getters' addresses and window offsets are written down.
+const SITES: &str = "getter_sites.rs";
+
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
+
+// Each getter window's virtual address, written as `GAME_IMAGE_BASE + (rva + offset) as u64`
+// rather than through a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
+const BUDDY_PARAM_FRAME_VA: u64 =
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+const BUDDY_PARAM_TABLE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
+const BUDDY_PARAM_OUT_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
+const BUDDY_PARAM_NEGATIVE_ID_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
+const CHARA_INIT_PARAM_FRAME_VA: u64 =
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+const CHARA_INIT_PARAM_TABLE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
+const CHARA_INIT_PARAM_OUT_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
+const CHARA_INIT_PARAM_NEGATIVE_ID_STORE_VA: u64 = GAME_IMAGE_BASE
+    + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
+
+/// `mov qword [rsp+0x20],-2`, the frame marker both getters store third.
+const FRAME_MARKER_SLOT: i32 = 0x20;
+const FRAME_MARKER: i32 = -2;
+/// `GetParamResCap`'s table index for each getter: BuddyParam is solo param 128, CharaInitParam 23.
+const BUDDY_PARAM_TABLE: i32 = 0x80;
+const CHARA_INIT_PARAM_TABLE: i32 = 0x17;
+/// The out struct's row pointer, as a displacement.
+const OUT_ROW: i32 = GETTER_OUT_ROW_SLOT as i32;
 
 /// "A menu has the mouse", `bool(CSMenuManImp*)`, 1.17 `0x140766650`. Below the `0xafefe9`
 /// boundary, so 1.17.0 and 1.17.1 have it at the same address with the same bytes.
@@ -97,8 +131,43 @@ fn enemy_bar_tail(asm: &mut CodeAssembler) -> Result<(), IcedError> {
     Ok(())
 }
 
+/// `mov qword [rsp+0x20],-2`, the third instruction of both getters.
+fn getter_frame(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    asm.mov(qword_ptr(rsp + FRAME_MARKER_SLOT), FRAME_MARKER)?;
+    Ok(())
+}
+
+/// `xor r8d,r8d; mov edx,0x80`: BuddyParam's table index handed to `GetParamResCap`.
+fn buddy_param_table(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    xor_r32_rm32(asm, Register::R8D, Register::R8D)?;
+    asm.mov(edx, BUDDY_PARAM_TABLE)?;
+    Ok(())
+}
+
+/// `xor r8d,r8d; lea edx,[r8+0x17]`: CharaInitParam's table index handed to `GetParamResCap`.
+fn chara_init_param_table(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    xor_r32_rm32(asm, Register::R8D, Register::R8D)?;
+    asm.lea(edx, ptr(r8 + CHARA_INIT_PARAM_TABLE))?;
+    Ok(())
+}
+
+/// `mov [rsi],edi; mov [rsi+8],rbx`: the id and the row pointer into the out struct.
+fn getter_out_store(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    asm.mov(dword_ptr(rsi), edi)?;
+    asm.mov(qword_ptr(rsi + OUT_ROW), rbx)?;
+    Ok(())
+}
+
+/// `mov [rcx],edi; mov [rcx+8],rbx`: the same stores on the negative-id path.
+fn getter_negative_id_store(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    asm.mov(dword_ptr(rcx), edi)?;
+    asm.mov(qword_ptr(rcx + OUT_ROW), rbx)?;
+    Ok(())
+}
+
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
+    prologue_build::declare_rerun(SITES);
     generate(
         &[(
             PrologueSpec {
@@ -215,5 +284,125 @@ fn main() {
             ),
         ],
         "generated_tag_windows.rs",
+    );
+
+    // The two typed getters the Mimic Tear's row copies are served through (`getter_sites.rs`).
+    // Each window is checked at the running getter before its out struct is trusted: the frame
+    // marker, the table index that names the table, and both stores of `out = {id, row*}`.
+    // Byte-identical in eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin (2026-10-22).
+    generate(
+        &[
+            (
+                PrologueSpec {
+                    name: "BUDDY_PARAM_FRAME_WINDOW",
+                    doc: "1.17.1 `GetBuddyParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: BUDDY_PARAM_FRAME_VA,
+                    take: 0,
+                    pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
+                },
+                getter_frame as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "BUDDY_PARAM_TABLE_WINDOW",
+                    doc: "1.17.1 `GetBuddyParam+0x67`: `XOR R8D,R8D; MOV EDX,0x80`, the BuddyParam\n\
+                          table index handed to `GetParamResCap`.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: BUDDY_PARAM_TABLE_VA,
+                    take: 0,
+                    pin: &[0x45, 0x33, 0xc0, 0xba, 0x80, 0x00, 0x00, 0x00],
+                },
+                buddy_param_table as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "BUDDY_PARAM_OUT_STORE_WINDOW",
+                    doc: "1.17.1 `GetBuddyParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the id\n\
+                          and the row pointer into the out struct.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: BUDDY_PARAM_OUT_STORE_VA,
+                    take: 0,
+                    pin: &[0x89, 0x3e, 0x48, 0x89, 0x5e, 0x08],
+                },
+                getter_out_store as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "BUDDY_PARAM_NEGATIVE_ID_STORE_WINDOW",
+                    doc: "1.17.1 `GetBuddyParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the same\n\
+                          stores for a negative id.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: BUDDY_PARAM_NEGATIVE_ID_STORE_VA,
+                    take: 0,
+                    pin: &[0x89, 0x39, 0x48, 0x89, 0x59, 0x08],
+                },
+                getter_negative_id_store as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "CHARA_INIT_PARAM_FRAME_WINDOW",
+                    doc: "1.17.1 `GetCharaInitParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: CHARA_INIT_PARAM_FRAME_VA,
+                    take: 0,
+                    pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
+                },
+                getter_frame as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "CHARA_INIT_PARAM_TABLE_WINDOW",
+                    doc: "1.17.1 `GetCharaInitParam+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x17]`, the\n\
+                          CharaInitParam table index handed to `GetParamResCap`.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: CHARA_INIT_PARAM_TABLE_VA,
+                    take: 0,
+                    pin: &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x17],
+                },
+                chara_init_param_table as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "CHARA_INIT_PARAM_OUT_STORE_WINDOW",
+                    doc: "1.17.1 `GetCharaInitParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the\n\
+                          id and the row pointer into the out struct.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: CHARA_INIT_PARAM_OUT_STORE_VA,
+                    take: 0,
+                    pin: &[0x89, 0x3e, 0x48, 0x89, 0x5e, 0x08],
+                },
+                getter_out_store as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "CHARA_INIT_PARAM_NEGATIVE_ID_STORE_WINDOW",
+                    doc: "1.17.1 `GetCharaInitParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the\n\
+                          same stores for a negative id.",
+                    visibility: "",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing1171,
+                    va: CHARA_INIT_PARAM_NEGATIVE_ID_STORE_VA,
+                    take: 0,
+                    pin: &[0x89, 0x39, 0x48, 0x89, 0x59, 0x08],
+                },
+                getter_negative_id_store as Assemble,
+            ),
+        ],
+        "generated_getter_windows.rs",
     );
 }

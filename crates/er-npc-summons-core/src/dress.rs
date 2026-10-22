@@ -4,19 +4,25 @@
 //!
 //! A companion is a c0000 human because its summon request carries a `CharaInitParam` id `>= 0`.
 //! `CreateSummonChr` builds it synchronously: `ChrSet::SpawnChr` -> `ChrInsFactory::CreateCharacter`
-//! (1.16.2 `0x140403a60`, 1.17.1 `0x140403dd0`) takes a free "NPC Player" `PlayerGameData`, looks
-//! the row up with `GetCharaInitParam` (solo param 23; 1.16.2 `0x140d347f0`, 1.17.1 `0x140d35f00`)
-//! and applies it with `0x140258c00` (1.17.1 `0x140258bd0`). That applier mints a gaitem for every
-//! equip field and writes it into the new character's `ChrAsm`, the same way it does for every map
-//! NPC in the game:
+//! (1.16.2 `0x140403a60`, 1.17.1 `0x140403dd0`, 2.7.2.0 `0x140403e60`) takes a free "NPC Player"
+//! `PlayerGameData`, looks the row up with `GetCharaInitParam` (solo param 23; 1.16.2
+//! `0x140d347f0`, 1.17.1 `0x140d35f70`, 2.7.2.0 `0x140d37660`; called at 2.7.2.0 `0x140403ee2`) and
+//! applies it with `0x140258c00` (1.17.1 and 2.7.2.0 `0x140258bd0`). That applier mints a gaitem
+//! for every equip field and writes it into the new character's `ChrAsm`, the same way it does for
+//! every map NPC in the game:
 //!
 //! | `CHARACTER_INIT_PARAM` | `ChrAsm` slot | read by (1.16.2 / 1.17.1) |
 //! |---|---|---|
-//! | `+0x10 / +0x14 / +0x108` right 1..3, type bytes `+0xe8..+0xea` | 1, 3, 5 | `0x140d34750` / `0x140d35e60` |
-//! | `+0x18 / +0x1c / +0x10c` left 1..3, type bytes `+0xeb..+0xed` | 0, 2, 4 | `0x140d346b0` / `0x140d35dc0` |
+//! | `+0x10 / +0x14 / +0x108` right 1..3, type bytes `+0xe8..+0xea` | 1, 3, 5 | `0x140d34750` / `0x140d35ed0` |
+//! | `+0x18 / +0x1c / +0x10c` left 1..3, type bytes `+0xeb..+0xed` | 0, 2, 4 | `0x140d346b0` / `0x140d35e30` |
 //! | `+0x20..+0x2c` head, body, arms, legs | 12..15 | `0x14025aac0` / `0x14025aa90` |
 //! | `+0x30..+0x3c` arrow, bolt, arrow 2, bolt 2, counts `+0xb2..+0xb8` | 6..9 | `0x140259850` / `0x140259820` |
 //! | `+0x40..+0x4c` talismans 1..4 | 17..20 | `0x140255e80` / `0x140255e50` |
+//!
+//! The 1.17.1 column is 1.17.0 plus `0x70` at and above rva `0xafefe9` (`GetCharaInitParam` and the
+//! two weapon readers) and 1.17.0 itself below it. Until 2026-10-22 this table and bd
+//! `companion-dressing-charainit-row-native-point-1171-2026-10-06` gave the 1.17.0 addresses of
+//! those three as 1.17.1.
 //!
 //! A weapon field is an `EquipParamWeapon` id with affinity and upgrade level already added (the
 //! game's own rows do this: 4100 of the 14938 weapons in the 1.17.1 regulation's CharaInitParam
@@ -25,8 +31,22 @@
 //! to a different table, so every armament this module plans is written with type 0. An empty
 //! weapon field (`-1`) becomes Unarmed (110000), an empty armour field the default bare piece.
 //!
-//! So dressing a companion is writing its build into that row for exactly the length of its own
-//! `CreateSummonChr` call, and putting the row back afterwards. This module decides the values.
+//! So dressing a companion is building it from a row that carries its build. The resident row is
+//! never written, because Seamless fingerprints the loaded param tables into its lobby key
+//! ([`crate::row_copy`]): the DLL hooks `GetCharaInitParam`, whose out struct is `{id @+0, row*
+//! @+8}`, and for the companion's own `CreateSummonChr` call answers with a copy of the row that
+//! [`CharaInitGear::write_into`] has dressed. This module decides the values and lays them into
+//! the copy's bytes.
+//!
+//! Three readers walk the resident `CharaInitParam` rows by index instead of through the getter
+//! (2.7.2.0 `0x140259160`, `0x140af0a30`, `0x140af0be0`; 1.16.2 `FUN_140259190`, `FUN_140aef260`,
+//! `FUN_140aef410`), so they would never see a copy. None is on the summon path. None has a direct
+//! `call` from `CreateSummonChr`, `SpawnChr`, `CreateCharacter` or the row applier; each is reached
+//! only through a vtable (the first via the menu step `FUN_140ae77b0` and `FUN_140255da0`), and all
+//! three list rows for a menu: the first formats a "parameter change [push enter]" label for every
+//! row, the third fills a `CSEzSelectTab` with every row's name, and the second applies the row
+//! picked in such a list to the player (`FUN_140255d90` -> `FUN_140259070`, which itself goes
+//! through `GetCharaInitParam`). They read the shipped rows, as they always have outside a summon.
 //!
 //! # What a build URL cannot dress
 //!
@@ -117,6 +137,70 @@ pub struct CharaInitGear {
     pub ammo_count: [u16; 4],
     /// Talismans 1..4 (`+0x40..+0x4c`).
     pub talismans: [i32; 4],
+}
+
+/// `CHARACTER_INIT_PARAM`'s size, the bytes a copy of a `CharaInitParam` row carries. The last
+/// field the row applier reads is `voiceType` at `+0x139` (2.7.2.0 `0x140258e8f`).
+pub const CHARA_INIT_ROW_SIZE: usize = 0x140;
+
+/// `CHARACTER_INIT_PARAM` offsets of the fields [`CharaInitGear::write_into`] lays a build into,
+/// each in the order of the [`CharaInitGear`] array it comes from.
+pub mod chara_init_field {
+    /// `equipWepRight`, `equipSubWepRight`, `equipSubWepRight3`.
+    pub const RIGHT: [usize; 3] = [0x10, 0x14, 0x108];
+    /// `equipWepLeft`, `equipSubWepLeft`, `equipSubWepLeft3`.
+    pub const LEFT: [usize; 3] = [0x18, 0x1c, 0x10c];
+    /// `wepParamType_Right1..3`: one byte each, 0 for `EquipParamWeapon`.
+    pub const RIGHT_TYPE: [usize; 3] = [0xe8, 0xe9, 0xea];
+    /// `wepParamType_Left1..3`.
+    pub const LEFT_TYPE: [usize; 3] = [0xeb, 0xec, 0xed];
+    /// `equipHelm`, `equipArmer`, `equipGaunt`, `equipLeg`.
+    pub const PROTECTORS: [usize; 4] = [0x20, 0x24, 0x28, 0x2c];
+    /// `equipArrow`, `equipBolt`, `equipSubArrow`, `equipSubBolt`.
+    pub const AMMO: [usize; 4] = [0x30, 0x34, 0x38, 0x3c];
+    /// `arrowNum`, `boltNum`, `subArrowNum`, `subBoltNum`: two bytes each.
+    pub const AMMO_COUNT: [usize; 4] = [0xb2, 0xb4, 0xb6, 0xb8];
+    /// `equipAccessory01..04`.
+    pub const TALISMANS: [usize; 4] = [0x40, 0x44, 0x48, 0x4c];
+}
+
+/// `wepParamType` for an `EquipParamWeapon` id; 1 sends the id to a different table.
+const WEAPON_PARAM_TYPE: u8 = 0;
+
+impl CharaInitGear {
+    /// Lay this gear into a copy of a `CharaInitParam` row: every field the row applier mints
+    /// equipment from, with every armament's param type set to `EquipParamWeapon`. Every other
+    /// byte (stats, face, spells, items, voice) keeps the row's own value.
+    ///
+    /// Returns `false`, with `row` untouched, when `row` is shorter than [`CHARA_INIT_ROW_SIZE`].
+    #[must_use]
+    pub fn write_into(&self, row: &mut [u8]) -> bool {
+        use chara_init_field as field;
+        if row.len() < CHARA_INIT_ROW_SIZE {
+            return false;
+        }
+        let mut put = |offset: usize, bytes: &[u8]| {
+            row[offset..offset + bytes.len()].copy_from_slice(bytes);
+        };
+        for (offsets, values) in [
+            (&field::RIGHT[..], &self.right[..]),
+            (&field::LEFT[..], &self.left[..]),
+            (&field::PROTECTORS[..], &self.protectors[..]),
+            (&field::AMMO[..], &self.ammo[..]),
+            (&field::TALISMANS[..], &self.talismans[..]),
+        ] {
+            for (&offset, value) in offsets.iter().zip(values) {
+                put(offset, &value.to_le_bytes());
+            }
+        }
+        for (&offset, count) in field::AMMO_COUNT.iter().zip(&self.ammo_count) {
+            put(offset, &count.to_le_bytes());
+        }
+        for &offset in field::RIGHT_TYPE.iter().chain(&field::LEFT_TYPE) {
+            put(offset, &[WEAPON_PARAM_TYPE]);
+        }
+        true
+    }
 }
 
 /// The planner's six armament positions, as (hand, slot within the hand): positions 0..3 are the
@@ -423,6 +507,76 @@ mod tests {
         assert_eq!(values.ammo, [51_100_000, -1, -1, -1]);
         assert_eq!(values.ammo_count, [99, 0, 0, 0]);
         assert!(!gear.is_empty());
+    }
+
+    fn i32_at(row: &[u8], offset: usize) -> i32 {
+        i32::from_le_bytes(row[offset..offset + 4].try_into().expect("four bytes"))
+    }
+
+    #[test]
+    fn the_gear_lands_in_a_copy_and_nothing_else_moves() {
+        let doc = model::parse(BUILD).expect("fixture parses");
+        let values = gear_from_build(&doc, &catalog()).chara_init(level);
+        // A stand-in for the body's row: every byte distinct, and each weapon type byte 1 so the
+        // copy has to clear it.
+        let mut resident: Vec<u8> = (0..CHARA_INIT_ROW_SIZE).map(|i| i as u8).collect();
+        for offset in chara_init_field::RIGHT_TYPE
+            .iter()
+            .chain(&chara_init_field::LEFT_TYPE)
+        {
+            resident[*offset] = 1;
+        }
+        let mut copy = resident.clone();
+        assert!(values.write_into(&mut copy));
+
+        let read =
+            |offsets: &[usize]| -> Vec<i32> { offsets.iter().map(|&o| i32_at(&copy, o)).collect() };
+        assert_eq!(read(&chara_init_field::RIGHT), values.right);
+        assert_eq!(read(&chara_init_field::LEFT), values.left);
+        assert_eq!(read(&chara_init_field::PROTECTORS), values.protectors);
+        assert_eq!(read(&chara_init_field::AMMO), values.ammo);
+        assert_eq!(read(&chara_init_field::TALISMANS), values.talismans);
+        let counts: Vec<u16> = chara_init_field::AMMO_COUNT
+            .iter()
+            .map(|&o| u16::from_le_bytes([copy[o], copy[o + 1]]))
+            .collect();
+        assert_eq!(counts, values.ammo_count);
+        for offset in chara_init_field::RIGHT_TYPE
+            .iter()
+            .chain(&chara_init_field::LEFT_TYPE)
+        {
+            assert_eq!(copy[*offset], 0, "type byte +0x{offset:x}");
+        }
+
+        let mut written = Vec::new();
+        for (offsets, width) in [
+            (&chara_init_field::RIGHT[..], 4),
+            (&chara_init_field::LEFT[..], 4),
+            (&chara_init_field::PROTECTORS[..], 4),
+            (&chara_init_field::AMMO[..], 4),
+            (&chara_init_field::TALISMANS[..], 4),
+            (&chara_init_field::AMMO_COUNT[..], 2),
+            (&chara_init_field::RIGHT_TYPE[..], 1),
+            (&chara_init_field::LEFT_TYPE[..], 1),
+        ] {
+            for &offset in offsets {
+                written.extend(offset..offset + width);
+            }
+        }
+        for (offset, (&was, &now)) in resident.iter().zip(&copy).enumerate() {
+            if !written.contains(&offset) {
+                assert_eq!(was, now, "byte +0x{offset:x} changed");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_chara_init_row_is_left_alone() {
+        let doc = model::parse(BUILD).expect("fixture parses");
+        let values = gear_from_build(&doc, &catalog()).chara_init(level);
+        let mut short = vec![0xaa; CHARA_INIT_ROW_SIZE - 1];
+        assert!(!values.write_into(&mut short));
+        assert!(short.iter().all(|&b| b == 0xaa));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The custom Mimic Tear: three detours scoped to one `BuddyGenerator` call.
+//! The custom Mimic Tear: detours scoped to one `BuddyGenerator` call, and no write to a param row.
 //!
 //! Using Mimic Tear Ashes runs the game's own spirit-ash flow: the item use, FP cost, summoning
 //! pool range check, one-summon replacement, dismissal and the Seamless broadcast all stay native.
@@ -6,19 +6,36 @@
 //! Tear (bd `mimic-tear-summon-hijack-1171-2026-10-06`, prototype `scripts/frida/mimic-tear-turtles.js`):
 //!
 //! 1. `BuddyGenerator` detour: when `SummonBuddyManager+0x20` is `207000 + level` and the config
-//!    has companions, mark this thread as hijacking for the duration of the original call, and
-//!    put the human row back afterwards.
+//!    has companions, mark this thread as hijacking for the duration of the original call.
 //! 2. `GetBuddyList` detour: every list entry becomes the human row 20700001 (so no request
 //!    carries 20700000 and the copy-the-player branch never arms), and the list is grown or
 //!    shrunk to one entry per companion with the game's own node insert.
-//! 3. `GetBuddyParam` detour: each first-loop read of the human row gets the next companion's
-//!    npc, think, charaInit and formation offset written into the row before `BuddyGenerator`
-//!    copies them out.
+//! 3. `GetBuddyParam` detour: each first-loop read of the human row is answered with a copy of the
+//!    row carrying the next companion's npc, think, charaInit and formation offset, which
+//!    `BuddyGenerator` copies out of the lookup it passed.
+//! 4. `CreateSummonChr` detour: for each companion `BuddyGenerator` builds, the call is built from a
+//!    copy of its `CharaInitParam` row carrying its build's gear. The call is synchronous:
+//!    `ChrSet::SpawnChr` -> `CreateCharacter` looks the row up and mints the gear before it returns
+//!    (see `er_npc_summons_core::dress` for the evidence).
+//! 5. `GetCharaInitParam`, through the union: during that one call, on that thread, the lookup of
+//!    the companion's row is answered with the dressed copy.
 //!
-//! 4. `CreateSummonChr` detour: for each companion `BuddyGenerator` builds, write its build's gear
-//!    into the `CharaInitParam` row the call is about to build from, and put the row back when the
-//!    call returns. The call is synchronous: `ChrSet::SpawnChr` -> `CreateCharacter` reads the row
-//!    and mints the gear before it returns (see `er_npc_summons_core::dress` for the evidence).
+//! # No resident row is written
+//!
+//! Seamless Co-op's matchmaking `lobby_key` is a fingerprint of the param tables as loaded,
+//! compared for equality, so writing any resident row puts the player in a lobby pool of their own
+//! (bd `death-persist-is-the-lobby-key-mover-seamless-201-2720-2026-10-22`). Both getters this
+//! module answers fill `out = {id @+0, row* @+8}` (`getter_sites.rs`), and their callers read the
+//! row through `out+8` after they return: `BuddyGenerator` at 2.7.2.0 `0x1404bc083`,
+//! `CreateCharacter` through the row applier `0x140258bd0`. So the detours read the row the getter
+//! found, change a copy, and replace `out+8` with the copy. The copies are kept by
+//! `er_npc_summons_core::row_copy`: interned by content, never freed, never written once handed
+//! out, so any pointer the game keeps stays valid and repeated summons reuse the same few copies.
+//!
+//! Two readers a copy cannot reach. `UpdateTriggerSpEffectMap` (2.7.2.0 `0x1404bd040`) walks the
+//! resident BuddyParam rows by index for `triggerSpEffectId`; the copy leaves that field as the row
+//! has it, so nothing is lost. Three debug-menu readers walk the resident `CharaInitParam` rows by
+//! index; none is on the summon path (`er_npc_summons_core::dress`).
 //!
 //! Each companion built is also named for its slot ([`crate::names`]); a companion's Lua brain is
 //! loaded by [`crate::brains`], keyed by the think id the plan gives it.
@@ -27,23 +44,61 @@
 
 use core::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
-use eldenring::cs::{CharaInitParam, SoloParamRepository};
-use eldenring::param::CHARACTER_INIT_PARAM;
+use er_game_base::game_build::{carry_1171_rva, game_file_version};
 use er_game_base::mem::{
-    game_module_base, game_rva_for_hook, game_rva_named, safe_read_i32, safe_read_u8,
+    game_module_base, game_rva_for_hook, game_rva_named, read_bytes, safe_read_i32, safe_read_u8,
     safe_read_usize,
 };
-use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use er_npc_summons_core::dress::CharaInitGear;
-use er_npc_summons_core::mimic::{self, HUMAN_ROW, MIMIC_TRIGGER, RowValues};
-use fromsoftware_shared::FromStatic;
+use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn};
+use er_npc_summons_core::dress::{CHARA_INIT_ROW_SIZE, CharaInitGear};
+use er_npc_summons_core::mimic::{self, BUDDY_ROW_SIZE, HUMAN_ROW, MIMIC_TRIGGER, RowValues};
+use er_npc_summons_core::row_copy::RowCopies;
 use windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
-use crate::addr::{self, buddy_param};
+use crate::addr;
 use crate::log::summons_log;
+
+// The two getters' 1.17.1 addresses and window offsets, shared with build.rs.
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
+// The windows themselves, assembled by build.rs from named instructions and checked against the
+// 1.17.1 image; byte-identical in the 2.7.2.0 image.
+include!(concat!(env!("OUT_DIR"), "/generated_getter_windows.rs"));
+
+// The row sizes the copies carry are the paramdef's, as fromsoftware-rs lays the rows out.
+const _: () = assert!(core::mem::size_of::<eldenring::param::BUDDY_PARAM_ST>() == BUDDY_ROW_SIZE);
+const _: () =
+    assert!(core::mem::size_of::<eldenring::param::CHARACTER_INIT_PARAM>() == CHARA_INIT_ROW_SIZE);
+
+/// `(offset from the getter's entry, window)` pairs that must all match before a getter's out
+/// struct is trusted: the frame setup, the table index that names the table, and both stores of
+/// `out = {id, row*}`.
+type Pins = &'static [(usize, &'static [u8])];
+
+const BUDDY_PARAM_PINS: Pins = &[
+    (GETTER_FRAME_WINDOW_OFFSET, BUDDY_PARAM_FRAME_WINDOW),
+    (GETTER_TABLE_WINDOW_OFFSET, BUDDY_PARAM_TABLE_WINDOW),
+    (GETTER_OUT_STORE_WINDOW_OFFSET, BUDDY_PARAM_OUT_STORE_WINDOW),
+    (
+        GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET,
+        BUDDY_PARAM_NEGATIVE_ID_STORE_WINDOW,
+    ),
+];
+
+const CHARA_INIT_PARAM_PINS: Pins = &[
+    (GETTER_FRAME_WINDOW_OFFSET, CHARA_INIT_PARAM_FRAME_WINDOW),
+    (GETTER_TABLE_WINDOW_OFFSET, CHARA_INIT_PARAM_TABLE_WINDOW),
+    (
+        GETTER_OUT_STORE_WINDOW_OFFSET,
+        CHARA_INIT_PARAM_OUT_STORE_WINDOW,
+    ),
+    (
+        GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET,
+        CHARA_INIT_PARAM_NEGATIVE_ID_STORE_WINDOW,
+    ),
+];
 
 /// The companions' row values, refreshed whenever the config is reloaded.
 static PLAN: Mutex<Vec<RowValues>> = Mutex::new(Vec::new());
@@ -59,18 +114,32 @@ static ORIG_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 static ORIG_LIST: AtomicUsize = AtomicUsize::new(0);
 static ORIG_PARAM: AtomicUsize = AtomicUsize::new(0);
 static ORIG_CREATE: AtomicUsize = AtomicUsize::new(0);
+/// The next union handler or the trampoline of `GetCharaInitParam`.
+static ORIG_CHARA_INIT_GETTER: AtomicUsize = AtomicUsize::new(0);
+/// Set once the `GetCharaInitParam` handler is registered; without it no companion is dressed.
+static CHARA_INIT_HOOKED: AtomicBool = AtomicBool::new(false);
 
 /// The values each first-loop read was given in the current hijacked call, not yet built.
 static PENDING: Mutex<Vec<RowValues>> = Mutex::new(Vec::new());
 /// Companions built in the current hijacked call that wore their build's gear.
 static DRESSED: AtomicUsize = AtomicUsize::new(0);
 
-/// The human row's original bytes while a hijacked call has it patched.
-struct SavedRow {
-    row: usize,
-    bytes: [u8; buddy_param::SAVE],
+/// Every row copy handed to the game, BuddyParam and CharaInitParam alike, by content.
+static COPIES: Mutex<RowCopies> = Mutex::new(RowCopies::new());
+
+/// The `CharaInitParam` row one `CreateSummonChr` call is dressing, and in what.
+struct Dress {
+    id: u32,
+    gear: CharaInitGear,
 }
-static SAVED: Mutex<Option<SavedRow>> = Mutex::new(None);
+/// Set for exactly the length of one dressed `CreateSummonChr` call.
+static DRESS: Mutex<Option<Dress>> = Mutex::new(None);
+/// The thread making that call, or 0. The getter's handler reads only this on its common path.
+static DRESS_TID: AtomicU32 = AtomicU32::new(0);
+/// Lookups of the dressed row answered with the copy during the current call.
+static DRESS_SERVED: AtomicUsize = AtomicUsize::new(0);
+/// The copy last served, for the log.
+static DRESS_COPY: AtomicUsize = AtomicUsize::new(0);
 
 type GeneratorFn = unsafe extern "system" fn(usize);
 type ListFn = unsafe extern "system" fn(usize, i32, usize);
@@ -125,17 +194,9 @@ fn caller_return_address() -> usize {
     if captured == 0 { 0 } else { frames[0] as usize }
 }
 
-fn restore_row() {
-    let Ok(mut saved) = SAVED.lock() else {
-        return;
-    };
-    if let Some(row) = saved.take() {
-        // SAFETY: `row.row` is the BuddyParam row this call read and patched; the param table is
-        // resident for the life of the process.
-        unsafe {
-            core::ptr::copy_nonoverlapping(row.bytes.as_ptr(), row.row as *mut u8, row.bytes.len());
-        }
-    }
+/// How many row copies exist, for the log.
+fn copies_held() -> usize {
+    COPIES.lock().map(|copies| copies.len()).unwrap_or(0)
 }
 
 unsafe extern "system" fn generator_detour(manager: usize) {
@@ -159,13 +220,14 @@ unsafe extern "system" fn generator_detour(manager: usize) {
         pending.clear();
     }
     unsafe { original(manager) };
-    restore_row();
     HIJACK_TID.store(0, Ordering::Release);
     summons_log(format_args!(
-        "mimic: Mimic Tear +{} summoned {} companion(s), {} dressed from a build URL",
+        "mimic: Mimic Tear +{} summoned {} companion(s), {} dressed from a build URL; {} row \
+         copies held, no resident param row written",
         level.unwrap_or(0),
         READS.load(Ordering::Acquire),
-        DRESSED.load(Ordering::Acquire)
+        DRESSED.load(Ordering::Acquire),
+        copies_held()
     ));
 }
 
@@ -175,7 +237,7 @@ fn hijacking() -> bool {
 
 /// # Safety
 ///
-/// `address` must be a writable pointer-sized location in the game heap.
+/// `address` must be a writable pointer-sized location in the game heap or on a game stack.
 unsafe fn write_usize(address: usize, value: usize) {
     // SAFETY: caller's contract.
     unsafe { core::ptr::write_volatile(address as *mut usize, value) };
@@ -249,21 +311,38 @@ unsafe extern "system" fn list_detour(manager: usize, sp_effect: i32, list: usiz
     }
 }
 
-fn patch_row(row: usize, values: RowValues) {
-    // SAFETY: `row` is the resident BuddyParam row `GetBuddyParam` just returned; offsets are
-    // `BUDDY_PARAM_ST`.
-    unsafe {
-        let base = row as *mut u8;
-        core::ptr::write_volatile(base.add(buddy_param::NPC).cast::<i32>(), values.npc_param);
-        core::ptr::write_volatile(base.add(buddy_param::THINK).cast::<i32>(), values.think);
-        core::ptr::write_volatile(
-            base.add(buddy_param::CHARA_INIT).cast::<i32>(),
-            values.chara_init,
-        );
-        core::ptr::write_volatile(base.add(buddy_param::X).cast::<f32>(), values.offset.x);
-        core::ptr::write_volatile(base.add(buddy_param::Z).cast::<f32>(), values.offset.z);
-        core::ptr::write_volatile(base.add(buddy_param::YAW).cast::<f32>(), values.offset.yaw);
+/// Answer one getter call with a copy: read the row `out+8` points at, let `change` lay this DLL's
+/// values into a copy of its `size` bytes, and point `out+8` at the interned copy. The row itself
+/// is only read. On `Err`, `out` is left exactly as the getter filled it.
+fn serve_copy(
+    out: usize,
+    size: usize,
+    change: impl FnOnce(&mut [u8]) -> bool,
+) -> Result<usize, String> {
+    let slot = out + GETTER_OUT_ROW_SLOT;
+    // SAFETY: fault-tolerant read of the out struct the getter just filled.
+    let row = unsafe { safe_read_usize(slot) }
+        .filter(|&row| row != 0)
+        .ok_or("the getter found no row")?;
+    let mut bytes = vec![0u8; size];
+    // SAFETY: a fault-tolerant read of the resident row; nothing is written to it.
+    if !unsafe { read_bytes(row, &mut bytes) } {
+        return Err(format!("the row at 0x{row:x} did not read"));
     }
+    if !change(&mut bytes) {
+        return Err(format!(
+            "a copy of 0x{size:x} bytes is too short for its fields"
+        ));
+    }
+    let copy = COPIES
+        .lock()
+        .map_err(|_| "the row-copy table is poisoned".to_owned())?
+        .intern(&bytes)
+        .map_err(|why| why.to_string())?;
+    // SAFETY: `slot` is the caller's lookup struct, whose row pointer the getter just wrote; the
+    // copy outlives every reader (`er_npc_summons_core::row_copy`).
+    unsafe { write_usize(slot, copy) };
+    Ok(copy)
 }
 
 unsafe extern "system" fn param_detour(lookup: usize, id: i32) -> usize {
@@ -278,88 +357,87 @@ unsafe extern "system" fn param_detour(lookup: usize, id: i32) -> usize {
     if !hijacking() || id != HUMAN_ROW || ret != LOOP1_RET.load(Ordering::Acquire) {
         return result;
     }
-    // SAFETY: fault-tolerant read of the lookup's `+8` row pointer.
-    let Some(row) = (unsafe { safe_read_usize(lookup + 8) }).filter(|&r| r != 0) else {
+    // SAFETY: fault-tolerant read of the lookup's row pointer.
+    if unsafe { safe_read_usize(lookup + GETTER_OUT_ROW_SLOT) }.is_none_or(|row| row == 0) {
         return result;
-    };
-    if let Ok(mut saved) = SAVED.lock()
-        && saved.is_none()
-    {
-        let mut bytes = [0u8; buddy_param::SAVE];
-        // SAFETY: the resident param row.
-        unsafe {
-            core::ptr::copy_nonoverlapping(row as *const u8, bytes.as_mut_ptr(), bytes.len())
-        };
-        *saved = Some(SavedRow { row, bytes });
     }
     let read = READS.fetch_add(1, Ordering::AcqRel);
-    if let Some(values) = mimic::entry_for_read(&plan(), read) {
-        patch_row(row, values);
-        if let Ok(mut pending) = PENDING.lock() {
-            pending.push(values);
+    let Some(values) = mimic::entry_for_read(&plan(), read) else {
+        return result;
+    };
+    match serve_copy(lookup, BUDDY_ROW_SIZE, |row| values.write_into(row)) {
+        Ok(_copy) => {
+            if let Ok(mut pending) = PENDING.lock() {
+                pending.push(values);
+            }
         }
+        Err(why) => summons_log(format_args!(
+            "mimic: read {read} of row {HUMAN_ROW} (companion {}): {why}; this request keeps the \
+             row's own values",
+            values.slot
+        )),
     }
     result
 }
 
-/// Write a build's gear into a `CharaInitParam` row: the fields `CreateCharacter`'s row applier
-/// mints from (`er_npc_summons_core::dress`). Every armament slot gets type 0, `EquipParamWeapon`.
-fn write_gear(row: &mut CHARACTER_INIT_PARAM, gear: &CharaInitGear) {
-    row.set_equip_wep_right(gear.right[0]);
-    row.set_equip_subwep_right(gear.right[1]);
-    row.set_equip_subwep_right3(gear.right[2]);
-    row.set_equip_wep_left(gear.left[0]);
-    row.set_equip_subwep_left(gear.left[1]);
-    row.set_equip_subwep_left3(gear.left[2]);
-    row.set_wep_param_type_right1(0);
-    row.set_wep_param_type_right2(0);
-    row.set_wep_param_type_right3(0);
-    row.set_wep_param_type_left1(0);
-    row.set_wep_param_type_left2(0);
-    row.set_wep_param_type_left3(0);
-    row.set_equip_helm(gear.protectors[0]);
-    row.set_equip_armer(gear.protectors[1]);
-    row.set_equip_gaunt(gear.protectors[2]);
-    row.set_equip_leg(gear.protectors[3]);
-    row.set_equip_arrow(gear.ammo[0]);
-    row.set_equip_bolt(gear.ammo[1]);
-    row.set_equip_sub_arrow(gear.ammo[2]);
-    row.set_equip_sub_bolt(gear.ammo[3]);
-    row.set_arrow_num(gear.ammo_count[0]);
-    row.set_bolt_num(gear.ammo_count[1]);
-    row.set_sub_arrow_num(gear.ammo_count[2]);
-    row.set_sub_bolt_num(gear.ammo_count[3]);
-    row.set_equip_accessory01(gear.talismans[0]);
-    row.set_equip_accessory02(gear.talismans[1]);
-    row.set_equip_accessory03(gear.talismans[2]);
-    row.set_equip_accessory04(gear.talismans[3]);
-}
-
-/// Patch the companion's `CharaInitParam` row and return its original contents, or why not.
-fn dress_row(chara_init: i32, gear: &CharaInitGear) -> Result<CHARACTER_INIT_PARAM, String> {
-    let id = u32::try_from(chara_init)
-        .map_err(|_| format!("charaInit {chara_init} builds no human, so there is no row"))?;
-    // SAFETY: game thread, inside `BuddyGenerator`; the repository is resident once a summon runs.
-    let repo = unsafe { SoloParamRepository::instance_mut() }
-        .map_err(|_| "SoloParamRepository is not up".to_owned())?;
-    let row = repo
-        .get_mut::<CharaInitParam>(id)
-        .ok_or_else(|| format!("CharaInitParam {id} does not exist"))?;
-    let saved = row.clone();
-    write_gear(row, gear);
-    Ok(saved)
-}
-
-fn restore_chara_init(chara_init: i32, saved: CHARACTER_INIT_PARAM) {
-    let Ok(id) = u32::try_from(chara_init) else {
-        return;
-    };
-    // SAFETY: as in `dress_row`.
-    if let Ok(repo) = unsafe { SoloParamRepository::instance_mut() }
-        && let Some(row) = repo.get_mut::<CharaInitParam>(id)
-    {
-        *row = saved;
+/// `GetCharaInitParam(out, id)` in the union's four-argument shape (it takes two).
+unsafe extern "system" fn chara_init_getter(out: usize, id: usize, c: usize, d: usize) -> usize {
+    let next = ORIG_CHARA_INIT_GETTER.load(Ordering::Acquire);
+    if next == 0 {
+        return 0;
     }
+    // SAFETY: the next handler or the trampoline, both `UnionFn`.
+    let call: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(next) };
+    let result = unsafe { call(out, id, c, d) };
+    // The common path, for every other lookup on every thread: one atomic load.
+    let dressing = DRESS_TID.load(Ordering::Acquire);
+    if dressing != 0 && out != 0 && dressing == this_thread() {
+        // The id arrives in `edx`; the upper half of `rdx` is not part of it.
+        serve_dressed(out, id as u32);
+    }
+    result
+}
+
+/// Answer the dressing call's lookup of its companion's row with the dressed copy.
+fn serve_dressed(out: usize, id: u32) {
+    let gear = match DRESS.lock() {
+        Ok(dress) => match dress.as_ref() {
+            Some(dress) if dress.id == id => dress.gear,
+            _ => return,
+        },
+        Err(_) => return,
+    };
+    match serve_copy(out, CHARA_INIT_ROW_SIZE, |row| gear.write_into(row)) {
+        Ok(copy) => {
+            DRESS_SERVED.fetch_add(1, Ordering::AcqRel);
+            DRESS_COPY.store(copy, Ordering::Release);
+        }
+        Err(why) => summons_log(format_args!(
+            "dress: GetCharaInitParam({id}): {why}; this lookup gets the row's own gear"
+        )),
+    }
+}
+
+/// Dress the next `GetCharaInitParam(id)` lookups on this thread, until [`end_dress`].
+fn begin_dress(id: u32, gear: CharaInitGear) {
+    if let Ok(mut dress) = DRESS.lock() {
+        *dress = Some(Dress { id, gear });
+    }
+    DRESS_SERVED.store(0, Ordering::Release);
+    DRESS_COPY.store(0, Ordering::Release);
+    DRESS_TID.store(this_thread(), Ordering::Release);
+}
+
+/// Stop dressing; how many lookups were answered with the copy, and the copy's address.
+fn end_dress() -> (usize, usize) {
+    DRESS_TID.store(0, Ordering::Release);
+    if let Ok(mut dress) = DRESS.lock() {
+        *dress = None;
+    }
+    (
+        DRESS_SERVED.load(Ordering::Acquire),
+        DRESS_COPY.load(Ordering::Acquire),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -442,23 +520,38 @@ unsafe extern "system" fn create_detour(
             return named(call());
         }
     };
-    let saved = match dress_row(chara_init, &gear) {
-        Ok(saved) => saved,
-        Err(why) => {
-            summons_log(format_args!(
-                "dress: companion {slot}: not dressed ({why}); built as configured"
-            ));
-            return named(call());
-        }
+    if !CHARA_INIT_HOOKED.load(Ordering::Acquire) {
+        summons_log(format_args!(
+            "dress: companion {slot}: not dressed (GetCharaInitParam is not hooked on this build); \
+             built in charaInit {chara_init}'s own gear"
+        ));
+        return named(call());
+    }
+    let Ok(id) = u32::try_from(chara_init) else {
+        summons_log(format_args!(
+            "dress: companion {slot}: not dressed (charaInit {chara_init} builds no human, so \
+             there is no row); built as configured"
+        ));
+        return named(call());
     };
-    let chr = named(call());
-    restore_chara_init(chara_init, saved);
+    begin_dress(id, gear);
+    let chr = call();
+    let (served, copy) = end_dress();
+    let chr = named(chr);
+    if served == 0 {
+        summons_log(format_args!(
+            "dress: companion {slot}: built 0x{chr:x}, but GetCharaInitParam was never asked for \
+             row {id} on this thread during the call, so it wears the row's own gear"
+        ));
+        return chr;
+    }
     if chr != 0 {
         DRESSED.fetch_add(1, Ordering::AcqRel);
     }
     summons_log(format_args!(
-        "dress: companion {slot}: built 0x{chr:x} from charaInit {chara_init} wearing build \
-         {build:?} (R {:?}, L {:?}, armour {:?}, talismans {:?}, ammo {:?}); row restored",
+        "dress: companion {slot}: built 0x{chr:x} from a copy of charaInit {id} (0x{copy:x}, \
+         served {served} time(s)) wearing build {build:?} (R {:?}, L {:?}, armour {:?}, talismans \
+         {:?}, ammo {:?}); the resident row was not written",
         gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
     ));
     if chr != 0 {
@@ -505,8 +598,24 @@ fn apply_face(slot: u8, chr: usize) {
     ));
 }
 
+/// Compare `pins` against the code at `entry` on the running build.
+fn pins_match(name: &str, entry: usize, pins: Pins) -> Result<(), String> {
+    for &(offset, expected) in pins {
+        let mut bytes = vec![0u8; expected.len()];
+        // SAFETY: a fault-tolerant read of code bytes.
+        let read = unsafe { read_bytes(entry + offset, &mut bytes) };
+        if !read || bytes != expected {
+            return Err(format!(
+                "{name} at 0x{entry:x}: +0x{offset:x} reads {bytes:02x?}, expected {expected:02x?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Find and check `BuddyGenerator`'s first-loop return site: the 5 bytes before it must be a
-/// `call rel32` whose target is `GetBuddyParam`. Anything else and the hijack stays off.
+/// `call rel32` whose target is `GetBuddyParam`, and `GetBuddyParam` must carry the windows that
+/// say it fills `out = {id, row*}` from BuddyParam. Anything else and the hijack stays off.
 fn verify_loop1_ret() -> Result<usize, String> {
     let generator = game_rva_named(addr::BUDDY_GENERATOR, "BUDDY_GENERATOR")?;
     let get_param = game_rva_named(addr::GET_BUDDY_PARAM, "GET_BUDDY_PARAM")?;
@@ -522,6 +631,7 @@ fn verify_loop1_ret() -> Result<usize, String> {
             addr::BUDDY_GENERATOR_LOOP1_RET
         ));
     }
+    pins_match("GetBuddyParam", get_param, BUDDY_PARAM_PINS)?;
     Ok(ret)
 }
 
@@ -543,7 +653,32 @@ pub(crate) fn hook(
     Ok(hook)
 }
 
-/// Install the four detours. Called once, from the install thread.
+/// Register the `GetCharaInitParam` handler. Measured on 1.17.1 and carried from there: no ledger
+/// row carries this getter from 1.16.2, so its bytes are compared before anything is hooked.
+fn install_chara_init_getter() -> Result<usize, String> {
+    let rva = carry_1171_rva(GET_CHARA_INIT_PARAM_1171_RVA).ok_or_else(|| {
+        format!(
+            "no carry of 1.17.1 GetCharaInitParam 0x{GET_CHARA_INIT_PARAM_1171_RVA:x} to {:?}",
+            game_file_version()
+        )
+    })?;
+    let base = game_module_base().map_err(|error| format!("GetCharaInitParam: {error:?}"))?;
+    let entry = base + rva;
+    pins_match("GetCharaInitParam", entry, CHARA_INIT_PARAM_PINS)?;
+    // SAFETY: a runtime-derived entry whose windows were just checked; the handler calls its slot
+    // through `UnionFn`, and the getter takes two integer arguments.
+    unsafe {
+        er_hook::register_union_hook_runtime_derived_following_arxan(
+            entry,
+            chara_init_getter,
+            &ORIG_CHARA_INIT_GETTER,
+        )
+    }
+    .map_err(|status| format!("GetCharaInitParam at 0x{entry:x} refused: {status:?}"))?;
+    Ok(entry)
+}
+
+/// Install the four detours and the getter handler. Called once, from the install thread.
 pub(crate) fn install() {
     let ret = match verify_loop1_ret() {
         Ok(ret) => ret,
@@ -606,9 +741,22 @@ pub(crate) fn install() {
             return;
         }
     }
+    match install_chara_init_getter() {
+        Ok(entry) => {
+            CHARA_INIT_HOOKED.store(true, Ordering::Release);
+            summons_log(format_args!(
+                "dress: GetCharaInitParam at 0x{entry:x} answers a dressed companion's lookup \
+                 with a copy of its row"
+            ));
+        }
+        Err(why) => summons_log(format_args!(
+            "dress: {why}; companions are summoned in their bodies' own gear"
+        )),
+    }
     LOOP1_RET.store(ret, Ordering::Release);
     summons_log(format_args!(
         "mimic: BuddyGenerator, GetBuddyList, GetBuddyParam and CreateSummonChr detours \
-         installed; first-loop return site 0x{ret:x} verified"
+         installed; first-loop return site 0x{ret:x} and GetBuddyParam's out layout verified; \
+         every changed row is a copy"
     ));
 }
