@@ -53,6 +53,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -222,13 +223,37 @@ def run_bounded(
     raise subprocess.TimeoutExpired(argv, EVAL_WINDOW_SECONDS, stdout, stderr)
 
 
-def run(mode: str, command: str, env: dict[str, str] | None = None) -> tuple[int, str, bytes]:
+def run(mode: str, command: str, env: dict[str, str] | None = None,
+        extra_event: dict | None = None) -> tuple[int, str, bytes]:
+    payload = {**event(command, mode), **(extra_event or {})}
     code, stdout, stderr = run_bounded(
         ["bash", str(SHIM)],
-        json.dumps(event(command, mode)).encode(),
+        json.dumps(payload).encode(),
         env if env is not None else signal_env(),
     )
     return code, stdout.decode("utf-8", "replace"), stderr
+
+
+def commit_authorized(name: str, command: str, directory: Path) -> tuple[dict, dict[str, str]]:
+    """Event fields and env for a conversation whose last typed prompt is `authorize commit`.
+
+    The commit and lint gates (user directive 2026-10-17) read the transcript, so a case about
+    some other part of the shim that happens to commit needs a real one. Spends go to a file in
+    `directory`, never to this checkout's `.cupcake/state`.
+    """
+    tool_use_id = f"toolu_shim_{name}"
+    entries = [
+        {"type": "user", "uuid": f"{name}-prompt", "parentUuid": None, "isSidechain": False,
+         "origin": {"kind": "human"}, "promptSource": "typed",
+         "message": {"role": "user", "content": "authorize commit"}},
+        {"type": "assistant", "uuid": f"{name}-call", "parentUuid": f"{name}-prompt",
+         "isSidechain": False, "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}]}},
+    ]
+    path = directory / f"{name}.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    return ({"transcript_path": str(path), "tool_use_id": tool_use_id},
+            {"CUPCAKE_COMMIT_AUTHORIZATION_STATE": str(directory / "commit-authorizations.jsonl")})
 
 
 def global_config_root(env: dict[str, str]) -> Path:
@@ -383,11 +408,42 @@ REWRITE_CASES = [
         "git commit -F - <<'EOF'\nmessage body\nEOF\ngit push origin main",
         "git commit -F - <<'EOF'\nmessage body\nEOF; git push origin main",
     ),
+    # A backtick or `$(` in a data body does not stop the read (2026-10-16). Before, the
+    # backtick handed the whole command over unchanged, and the line after the terminator
+    # arrived with no separator. Quoted, backslash and bare tags alike: finding the
+    # terminator can only add a separator.
+    RewriteCase(
+        "backtick-in-quoted-heredoc-body-then-line-separated",
+        "git commit -F - <<'EOF'\nquote `echo $(date)` here\nEOF\ngit push origin main",
+        "git commit -F - <<'EOF'\nquote `echo $(date)` here\nEOF; git push origin main",
+    ),
+    RewriteCase(
+        "backslash-tag-heredoc-then-line-separated",
+        "git commit -F - <<\\EOF\nquote `x` here\nEOF\ngit push origin main",
+        "git commit -F - <<\\EOF\nquote `x` here\nEOF; git push origin main",
+    ),
+    RewriteCase(
+        "backtick-in-bare-tag-heredoc-body-then-line-separated",
+        "cat > f <<EOF\nstamp `date`\nEOF\ngit push origin main",
+        "cat > f <<EOF\nstamp `date`\nEOF; git push origin main",
+    ),
+    # The opener's own line is not body: a substitution there still hands the command over.
+    RewriteCase(
+        "substitution-on-heredoc-opener-line-passthrough",
+        "cat <<'EOF' > `mktemp`\nbody\nEOF\necho two",
+        "cat <<'EOF' > `mktemp`\nbody\nEOF\necho two",
+    ),
     # A heredoc a shell reads is a program, so its lines are commands.
     RewriteCase(
         "shell-read-heredoc-separated",
         "bash <<'EOF'\ngit push origin main\nEOF",
         "bash <<'EOF'; git push origin main; EOF",
+    ),
+    # So is one piped to a shell from the opener's line.
+    RewriteCase(
+        "heredoc-piped-to-a-shell-separated",
+        "cat <<'EOF' | bash\ngit push origin main\nEOF",
+        "cat <<'EOF' | bash; git push origin main; EOF",
     ),
     # A trailing backslash joins two lines. It is not a boundary and must not become `;`.
     RewriteCase(
@@ -435,6 +491,9 @@ class DecisionCase:
     expected: str  # "deny" or "allow"
     why: str
     env: dict[str, str] = field(default_factory=dict)
+    # The conversation ends on the user's `authorize commit`, which the commit gate needs before
+    # it lets any commit through (user directive 2026-10-17).
+    authorize_commit: bool = False
 
 
 DECISION_CASES = [
@@ -512,16 +571,26 @@ DECISION_CASES = [
         'git commit -m "guard: restore the separator so git push origin main is seen"',
         "allow",
         "naming the rule in a commit message must stay writable",
+        authorize_commit=True,
     ),
     DecisionCase(
         "allow-commit-message-with-the-command-on-its-own-line",
         'git commit -m "guard: restore the separator\n\ngit push origin main was invisible\n"',
         "allow",
         "a multi-paragraph commit message is quoted prose end to end",
+        authorize_commit=True,
     ),
     DecisionCase(
+        "deny-commit-without-authorization",
+        'git commit -m "guard: restore the separator so git push origin main is seen"',
+        "deny",
+        "the same commit with no `authorize commit` from the user (user directive 2026-10-17)",
+    ),
+    # `cargo fmt --all` opened this script until 2026-10-17; a formatter now waits for the user's
+    # `authorize commit`, which is not what this case is about.
+    DecisionCase(
         "allow-multi-line-build-script",
-        "cargo fmt --all\ncargo check -p er-quickload --all-targets\necho built",
+        "cargo test -p er-soulsformats\ncargo check -p er-quickload --all-targets\necho built",
         "allow",
         "an ordinary multi-line script with nothing forbidden in it",
     ),
@@ -574,6 +643,41 @@ DECISION_CASES = [
         "cat > docs/guards.md <<'EOF'\ndocumentation\nEOF\ngit push origin main",
         "deny",
         "the body is data, but the line after the terminator is command text again",
+    ),
+    # The holes measured 2026-10-16: a backtick in a heredoc body hid the line after the
+    # terminator from every guard. `cat >` rather than `git commit -F -` so no commit-gating
+    # policy can supply the deny these are about.
+    DecisionCase(
+        "deny-push-after-backtick-heredoc-body",
+        "cat > docs/msg.txt <<'EOF'\nquote `echo $(date)` here\nEOF\ngit push origin main",
+        "deny",
+        "the push follows the terminator; a backtick in the body used to make the shim give up",
+    ),
+    DecisionCase(
+        "deny-build-grep-after-backtick-heredoc-body",
+        "cat > docs/msg.txt <<'EOF'\nquote `x` here\nEOF\ncargo build -p er-quickload 2>&1 | grep error",
+        "deny",
+        "the same hole, with the build piped into grep after the terminator",
+    ),
+    DecisionCase(
+        "deny-push-after-backslash-tag-heredoc-body",
+        "cat > docs/msg.txt <<\\EOF\nquote `x` here\nEOF\ngit push origin main",
+        "deny",
+        "`<<\\EOF` is a quoted tag too",
+    ),
+    DecisionCase(
+        "deny-push-on-the-heredoc-opener-line",
+        "cat > docs/msg.txt <<'EOF' ; git push origin main\nquote `x` here\nEOF",
+        "deny",
+        "a separator on the opener line keeps the statement after it a command",
+    ),
+    DecisionCase(
+        "allow-message-quoting-a-substitution-build",
+        "cat > docs/msg.txt <<'EOF'\nfix: quote `echo $(cargo build 2>&1) | grep error` in docs\nEOF",
+        "allow",
+        "a quoted-tag body is literal; this message was refused as a build piped into grep. Written "
+        "to a file rather than to `git commit -F -`, because the commit gate refuses any heredoc "
+        "commit on its own account",
     ),
     DecisionCase(
         "deny-two-line-push-inside-double-quoted-bash-c",
@@ -669,15 +773,24 @@ def check_rewrites() -> list[str]:
 
 def check_decisions() -> list[str]:
     failures: list[str] = []
-    for case in DECISION_CASES:
-        code, stdout, stderr = run("default", case.command, signal_env(case.env))
-        if code != 0 and not stdout.strip():
-            failures.append(f"{case.name}: shim exited {code} with no decision: {stderr[:200]!r}")
-            continue
-        got = verdict(stdout)
-        if got != case.expected:
-            failures.append(f"{case.name}: got {got!r}, expected {case.expected!r} -- {case.why}")
+    with tempfile.TemporaryDirectory(prefix="hook-shim-commit-auth-") as directory:
+        for case in DECISION_CASES:
+            extra_event, extra_env = (commit_authorized(case.name, case.command, Path(directory))
+                                      if case.authorize_commit else (None, {}))
+            failure = check_decision(case, extra_event, {**case.env, **extra_env})
+            if failure:
+                failures.append(failure)
     return failures
+
+
+def check_decision(case: DecisionCase, extra_event: dict | None, env: dict[str, str]) -> str | None:
+    code, stdout, stderr = run("default", case.command, signal_env(env), extra_event)
+    if code != 0 and not stdout.strip():
+        return f"{case.name}: shim exited {code} with no decision: {stderr[:200]!r}"
+    got = verdict(stdout)
+    if got != case.expected:
+        return f"{case.name}: got {got!r}, expected {case.expected!r} -- {case.why}"
+    return None
 
 
 # A command long enough that the engine's wasm module runs out of linear memory. Built rather
@@ -689,9 +802,13 @@ def check_decisions() -> list[str]:
 # one child session, each classified by the agent that hit it as a guard blocking artifact
 # writes, when what had actually happened is that no guard answered at all.
 #
-# 300,000 bytes is about twice the 127,735 the ceiling survives on this policy set (measured
-# 2026-09-22), so this stays a genuine abort if the engine gets more efficient, and the guard
-# keeps its meaning if it does not.
+# 300,000 bytes is about twice the 127,735 the ceiling survived on the policy set of 2026-09-22,
+# so this stays a genuine abort if the engine gets more efficient, and the guard keeps its
+# meaning if it does not. Re-measured 2026-10-16 by bisecting this exact line through the shim:
+# the last passing length is 80,038 bytes both before and after the literal-heredoc reader in
+# commands.rego, because this body's first backtick has fewer than two words in front of it and
+# the reader refuses before it splits. A body the reader does take (a prose line with a
+# backtick in it) passes up to 78,421 bytes, against 81,963 before.
 ABORTING_COMMAND = "cat > handoffs/audit.md <<'EOF'\n" + (
     "- `crates/er-x/src/f.rs`: the 'host' & \"invader\" pair | one line of an audit\n" * 3600
 ) + "EOF"
@@ -724,6 +841,93 @@ def check_abort_is_not_an_allow() -> list[str]:
     return failures
 
 
+# An engine that cannot start is the case Claude Code hides from the agent (bd er-effects-rs-rafi):
+# cupcake exits 1 with nothing on stdout, and a hook's exit other than 0 or 2 reaches the user
+# alone. A TMPDIR that does not exist stops the engine before any policy loads, the same way the
+# full /tmp of 2026-10-16 did, and its stderr names that cause:
+#
+#     Fatal: Cupcake engine failed to initialize: Failed to create temp directory for OPA ...
+FAILING_ENGINE = {"TMPDIR": "/nonexistent-cupcake-hook-test-dir"}
+FAILURE_CAUSE = "Failed to create temp directory"
+
+
+def hook_event(name: str, **fields: object) -> dict:
+    return {
+        "session_id": "shim-test",
+        "transcript_path": "/tmp/does-not-exist.jsonl",
+        "cwd": str(REPO),
+        "hook_event_name": name,
+        "permission_mode": "default",
+        **fields,
+    }
+
+
+@dataclass
+class FailureCase:
+    name: str
+    payload: dict
+    # The field of the reply Claude Code delivers to the agent for this event, and the
+    # decision that must accompany it ("" for none).
+    field: str
+    decision: str
+
+
+ENGINE_FAILURE_CASES = [
+    FailureCase(
+        "tool call",
+        hook_event("PreToolUse", tool_name="Bash", tool_input={"command": ALLOWED_COMMAND}),
+        "permissionDecisionReason",
+        "deny",
+    ),
+    FailureCase("prompt", hook_event("UserPromptSubmit", prompt="hello"), "additionalContext", ""),
+    FailureCase(
+        "edit",
+        hook_event(
+            "PostToolUse",
+            tool_name="Write",
+            tool_input={"file_path": str(REPO / "x.txt"), "content": "x"},
+            tool_response={"success": True},
+        ),
+        "additionalContext",
+        "",
+    ),
+    FailureCase("session start", hook_event("SessionStart", source="startup"), "additionalContext", ""),
+    FailureCase("stop", hook_event("Stop", stop_hook_active=False), "reason", "block"),
+    # The re-entry after that block: let it through, or a lasting failure holds the turn open.
+    FailureCase("stop re-entry", hook_event("Stop", stop_hook_active=True), "systemMessage", ""),
+]
+
+
+def check_engine_failure_reaches_agent(shim: Path = SHIM) -> list[str]:
+    """A run with no verdict must come back in a field the agent reads, naming the cause."""
+    failures: list[str] = []
+    env = signal_env(FAILING_ENGINE)
+    for case in ENGINE_FAILURE_CASES:
+        code, stdout, _ = run_bounded(["bash", str(shim)], json.dumps(case.payload).encode(), env)
+        label = f"engine failure, {case.name}"
+        if code != 0:
+            failures.append(f"{label}: exited {code}, which Claude Code shows the user alone")
+            continue
+        try:
+            reply = json.loads(stdout)
+        except ValueError:
+            failures.append(f"{label}: stdout is not JSON: {stdout[:200]!r}")
+            continue
+        specific = reply.get("hookSpecificOutput") or {}
+        text = specific.get(case.field) or reply.get(case.field) or ""
+        if FAILURE_CAUSE not in text:
+            failures.append(f"{label}: {case.field} does not name the cause: {text[:200]!r}")
+        if specific and specific.get("hookEventName") != case.payload["hook_event_name"]:
+            failures.append(
+                f"{label}: hookEventName {specific.get('hookEventName')!r} does not match the "
+                "event, so Claude Code drops the reply"
+            )
+        got = specific.get("permissionDecision") or reply.get("decision") or ""
+        if got != case.decision:
+            failures.append(f"{label}: decision {got!r}, expected {case.decision!r}")
+    return failures
+
+
 def print_table() -> int:
     """Before (raw event straight to cupcake) beside after (through the shim)."""
     width = max(len(case.name) for case in DECISION_CASES)
@@ -747,15 +951,37 @@ def main() -> int:
         action="store_true",
         help="print the before/after decision table instead of asserting",
     )
+    parser.add_argument(
+        "--engine-failure-only",
+        metavar="WRAPPER",
+        type=Path,
+        help="run only the engine-failure cases, against WRAPPER (for the global hook's copy)",
+    )
     args = parser.parse_args()
 
+    if args.engine_failure_only:
+        failures = check_engine_failure_reaches_agent(args.engine_failure_only)
+        for failure in failures:
+            print(f"[test-cupcake-hook-shim] FAIL: {failure}")
+        if not failures:
+            print(
+                f"[test-cupcake-hook-shim] ok ({len(ENGINE_FAILURE_CASES)} engine-failure "
+                f"replies from {args.engine_failure_only})"
+            )
+        return 1 if failures else 0
     if not SHIM.exists():
         print(f"[test-cupcake-hook-shim] FAIL: missing {SHIM}")
         return 1
     if args.table:
         return print_table()
 
-    failures = check_modes() + check_rewrites() + check_decisions() + check_abort_is_not_an_allow()
+    failures = (
+        check_modes()
+        + check_rewrites()
+        + check_decisions()
+        + check_abort_is_not_an_allow()
+        + check_engine_failure_reaches_agent()
+    )
     if failures:
         for failure in failures:
             print(f"[test-cupcake-hook-shim] FAIL: {failure}")

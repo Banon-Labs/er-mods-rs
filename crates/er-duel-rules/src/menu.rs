@@ -17,6 +17,12 @@
 //! rule-break list key (ctrl+F2 by default) hides and shows the list with the menu closed; hidden
 //! or not, every break is still filed in `er-duel-rules-breaks.txt` and logged.
 //!
+//! # Look
+//!
+//! The menu draws with `er-overlay-theme`, as every overlay panel in this workspace does: the
+//! theme's window and panel styles, its header, tab strip and regions, its color tokens, and the
+//! faces the overlay host built for it, at the display's scale.
+//!
 //! # Threads
 //!
 //! Everything here runs on the render thread inside the overlay host's `Present`.
@@ -31,7 +37,10 @@ use er_duel_rules_core::config::{Config, Setting};
 use er_duel_rules_core::rules::Rule;
 use er_hotkey_config::Chord;
 use er_hotkey_config::keys::{MODIFIER_ALT, MODIFIER_CTRL, MODIFIER_SHIFT};
-use hudhook::imgui::{Condition, Ui};
+use er_overlay_theme::{
+    self as theme, ButtonKind, ButtonSize, Font, FrameFonts, Icon, Strip, Theme,
+};
+use hudhook::imgui::{Condition, Ui, WindowFlags};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SHIFT,
@@ -44,15 +53,15 @@ use crate::settings::{self, DEFAULT_BREAKS_KEY, DEFAULT_MENU_KEY};
 
 /// Catalog hits listed at once; a narrower search finds the rest.
 const SEARCH_LIMIT: usize = 300;
-/// The menu is laid out for a 1080-line screen and scaled from there.
-const REFERENCE_HEIGHT: f32 = 1080.0;
-/// Text height on a 1080-line screen, the body size the other overlay panels draw at.
-const TEXT_PX_AT_1080: f32 = 13.0;
-
-const TITLE: [f32; 4] = [1.0, 0.27, 0.22, 1.0];
-const MUTED: [f32; 4] = [0.62, 0.60, 0.55, 1.0];
-const PROBLEM: [f32; 4] = [1.0, 0.55, 0.45, 1.0];
-const GOOD: [f32; 4] = [0.55, 0.85, 0.55, 1.0];
+/// The window's size at 1080p, cut to the display when the display is smaller.
+const WINDOW_SIZE: [f32; 2] = [780.0, 640.0];
+/// One row of the editor's two lists at 1080p, which sizes them.
+const LIST_ROW: f32 = 22.0;
+/// The tabs, in the order the strip shows them.
+const TABS: [&str; 3] = ["Ruleset", "Your bans", "Display and keys"];
+/// The editor's two buttons that add the hit picked in the search.
+const ADD_NEW: &str = "Add as a new condition";
+const ADD_OR: &str = "Add to the selected condition (or)";
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 /// Set by a panic while drawing: the menu stays shut for the session and the game keeps its input.
@@ -141,6 +150,8 @@ impl Editor {
 }
 
 struct MenuState {
+    /// The tab shown, an index into `TABS`.
+    tab: usize,
     /// The rules generation the number fields were last filled from.
     numbers_from: u64,
     numbers: [f32; 3],
@@ -156,6 +167,7 @@ struct MenuState {
 impl MenuState {
     fn new() -> Self {
         Self {
+            tab: 0,
             numbers_from: u64::MAX,
             numbers: [0.0; 3],
             filter: String::new(),
@@ -256,8 +268,9 @@ fn poll_keys() {
 }
 
 /// The menu's per-frame work, called by the overlay inside `catch_unwind`: the keys, and the
-/// window while it is open.
-pub fn draw_ui(ui: &Ui) {
+/// window while it is open, drawn in the theme at the display's scale (`ui_scale`, its height over
+/// 1080) and in the `fonts` the host has built of the ones the theme asked for.
+pub fn draw_ui(ui: &Ui, ui_scale: f32, fonts: &FrameFonts) {
     static ARMED: AtomicBool = AtomicBool::new(false);
     if HIDDEN.load(Ordering::Acquire) {
         return;
@@ -272,85 +285,170 @@ pub fn draw_ui(ui: &Ui) {
     if !is_open() {
         return;
     }
+    let scale = theme::panel_scale(ui_scale);
+    let frame_theme = Theme::new(
+        scale,
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
+    );
+    let _theme = theme::enter(frame_theme);
+    // Asked once a session, by the menu or the list, whichever is drawn first; the host's default
+    // font is drawn with until they are built, this frame included.
+    if let Some(handles) = theme::request_fonts(scale) {
+        rules_log(format_args!(
+            "menu: panel fonts handed to the overlay host at scale {scale}: handles {handles:?}. \
+             A 0 is a face the host refused; a handle another panel already holds is that \
+             panel's fonts, shared"
+        ));
+    }
     let mut slot = STATE.lock().unwrap_or_else(PoisonError::into_inner);
     let state = slot.get_or_insert_with(MenuState::new);
+    draw_window(ui, state);
+    if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
+        let display = ui.io().display_size;
+        rules_log(format_args!(
+            "menu: first drawn, display {}x{}, panel scale {scale:.2}, font scale {:.2}, theme \
+             fonts in use {}",
+            display[0],
+            display[1],
+            frame_theme.font_scale,
+            frame_theme.custom_fonts()
+        ));
+    }
+}
+
+/// The menu's window: the header, the tab strip, then the shown tab in a padded region.
+fn draw_window(ui: &Ui, state: &mut MenuState) {
+    let t = theme::current();
     let display = ui.io().display_size;
-    let scale = (display[1] / REFERENCE_HEIGHT).max(1.0);
-    let host_px = host_font_px();
-    let font_scale = TEXT_PX_AT_1080 * scale / host_px;
-    let mut open = true;
-    ui.window("Duel rules##er-duel-rules-menu")
-        .size([780.0 * scale, 640.0 * scale], Condition::FirstUseEver)
+    let wanted = [
+        t.px(WINDOW_SIZE[0]).round().min(display[0].max(1.0)),
+        t.px(WINDOW_SIZE[1]).round().min(display[1].max(1.0)),
+    ];
+    let flags = WindowFlags::NO_TITLE_BAR
+        | WindowFlags::NO_COLLAPSE
+        | WindowFlags::NO_SAVED_SETTINGS
+        | WindowFlags::NO_SCROLLBAR
+        | WindowFlags::NO_SCROLL_WITH_MOUSE
+        | WindowFlags::NO_RESIZE;
+    let window_style = theme::window_style(ui);
+    let begun = ui
+        .window("Duel rules##er-duel-rules-menu")
+        .flags(flags)
         .position(
             [display[0] * 0.5, display[1] * 0.5],
             Condition::FirstUseEver,
         )
         .position_pivot([0.5, 0.5])
-        .collapsible(false)
-        .opened(&mut open)
-        .build(|| {
-            // Child windows draw at this scale times their own, so they set none of their own.
-            ui.set_window_font_scale(font_scale);
-            draw_window(ui, state, scale);
-        });
-    if !open {
+        .size(wanted, Condition::Always)
+        .begin();
+    drop(window_style);
+    let Some(_window) = begun else {
+        return;
+    };
+    theme::apply_font_scale(ui);
+    let _body = theme::font(ui, Font::Body);
+    let _style = theme::panel_style(ui);
+    let pos = ui.window_pos();
+    let size = ui.window_size();
+    let below_header = draw_header(ui, pos, size[0]);
+    ui.set_cursor_screen_pos([pos[0], below_header]);
+    if let Some(index) = theme::tab_strip(ui, "duel-rules-tabs", &TABS, state.tab, Strip::Section) {
+        state.tab = index;
+    }
+    let top = below_header
+        + t.px(theme::NAV_PAD[1]).round()
+        + t.px(theme::NAV_TAB_HEIGHT).round()
+        + t.stroke();
+    ui.set_cursor_screen_pos([pos[0], top]);
+    let rules = control::rules();
+    let body = [size[0], (pos[1] + size[1] - top).max(1.0)];
+    theme::region(
+        ui,
+        "##er-duel-rules-menu-body",
+        theme::CONTENT_PAD,
+        body,
+        || {
+            draw_status(ui, &rules);
+            match state.tab {
+                0 => ruleset_tab(ui, state, &rules),
+                1 => bans_tab(ui, state, &rules),
+                _ => display_tab(ui, state),
+            }
+        },
+    );
+    theme::painter(ui).outline(pos, [pos[0] + size[0], pos[1] + size[1]], theme::RULE, 0.0);
+}
+
+/// The header bar: the title on the left, close on the right, a rule under it. Returns the y below
+/// its rule.
+fn draw_header(ui: &Ui, pos: [f32; 2], width: f32) -> f32 {
+    let t = theme::current();
+    let height = t.px(theme::HEADER_HEIGHT).round();
+    let [left, top] = pos;
+    let right = left + width;
+    let paint = theme::painter(ui);
+    paint.with_clip([left, top], [right, top + height + t.stroke()], || {
+        paint.fill([left, top], [right, top + height], theme::HEADER_BG, 0.0);
+        paint.hline(left, right, top + height, theme::RULE);
+    });
+    let icon = t.px(theme::ICON_BUTTON).round();
+    ui.set_cursor_screen_pos([
+        right - t.px(theme::HEADER_PAD_RIGHT).round() - icon,
+        top + ((height - icon) * 0.5).round(),
+    ]);
+    if theme::icon_button(ui, "##close", Icon::Close, theme::ICON_BUTTON) {
         set_open(false);
     }
-    if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
-        rules_log(format_args!(
-            "menu: first drawn, display {}x{}, layout scale {scale:.2}, host font {host_px}px, \
-             font scale {font_scale:.2}",
-            display[0], display[1]
-        ));
+    if ui.is_item_hovered() {
+        theme::tooltip(
+            ui,
+            &["Close. The menu key or Esc does the same; the rules stay in force."],
+        );
     }
+    let line = theme::line_height(ui, Font::Strong);
+    ui.set_cursor_screen_pos([
+        left + t.px(theme::HEADER_PAD_LEFT).round(),
+        top + ((height - line) * 0.5).round(),
+    ]);
+    theme::text(ui, Font::Strong, theme::TEXT, "Duel rules");
+    top + height + t.stroke()
 }
 
-/// The pixel height the overlay host built its default font at. It depends on which module won
-/// the overlay: the build-watermark host builds 27px, er-net-effects 16.25px. So the menu's font
-/// scale is measured from it, not assumed from imgui's 13px face.
-fn host_font_px() -> f32 {
-    // SAFETY: called inside a frame the host opened, so the context has a current font.
-    let font = unsafe { hudhook::imgui::sys::igGetFont() };
-    if font.is_null() {
-        return TEXT_PX_AT_1080;
+/// Above every tab: the rules in force, what is wrong with the file, and where it is saved.
+fn draw_status(ui: &Ui, rules: &Config) {
+    theme::secondary(ui, &rules.describe());
+    for problem in control::rules_problems() {
+        theme::text_wrapped(ui, Font::Body, theme::ERROR_TEXT, &problem);
     }
-    // SAFETY: a live atlas font; atlas fonts live as long as the context.
-    let px = unsafe { (*font).FontSize };
-    if px.is_finite() && px > 0.0 {
-        px
-    } else {
-        TEXT_PX_AT_1080
-    }
+    theme::note(
+        ui,
+        &format!(
+            "Saved to {} -- the Cheat Engine table and the Frida agent read the same file.",
+            control::rules_path().display()
+        ),
+    );
+    theme::divider(ui);
 }
 
-fn draw_window(ui: &Ui, state: &mut MenuState, scale: f32) {
-    let rules = control::rules();
-    ui.text_colored(TITLE, "Duel rules");
-    ui.same_line();
-    ui.text_disabled(rules.describe());
-    let problems = control::rules_problems();
-    for problem in &problems {
-        ui.text_colored(PROBLEM, problem);
-    }
-    ui.text_disabled(format!(
-        "Saved to {} -- the Cheat Engine table and the Frida agent read the same file.",
-        control::rules_path().display()
-    ));
-    ui.separator();
-    if let Some(_bar) = ui.tab_bar("##er-duel-rules-tabs") {
-        if let Some(_tab) = ui.tab_item("Ruleset") {
-            ruleset_tab(ui, state, &rules, scale);
-        }
-        if let Some(_tab) = ui.tab_item("Your bans") {
-            bans_tab(ui, state, &rules, scale);
-        }
-        if let Some(_tab) = ui.tab_item("Display and keys") {
-            display_tab(ui, state);
-        }
-    }
+/// A bordered list that scrolls, `size` screen pixels with 0 filling the rest of the region on
+/// that axis, with `draw` inside. A theme region, so its text is the panel's size at any depth.
+fn list(ui: &Ui, id: &str, size: [f32; 2], draw: impl FnOnce()) {
+    let t = theme::current();
+    theme::region(ui, id, theme::STACK_PAD, size, draw);
+    let [x, y, width, height] = theme::item_rect(ui);
+    theme::painter(ui).outline(
+        [x, y],
+        [x + width, y + height],
+        theme::RULE,
+        t.px(theme::FRAME_RADIUS),
+    );
 }
 
-fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
+fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config) {
+    let t = theme::current();
     let generation = control::rules_generation();
     if state.numbers_from != generation && !ui.is_any_item_active() {
         for (i, setting) in Setting::ALL.into_iter().enumerate() {
@@ -359,7 +457,7 @@ fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
         state.numbers_from = generation;
     }
     for (i, setting) in Setting::ALL.into_iter().enumerate() {
-        ui.set_next_item_width(160.0 * scale);
+        ui.set_next_item_width(t.px(160.0));
         let entered = ui
             .input_float(setting.label(), &mut state.numbers[i])
             .enter_returns_true(true)
@@ -373,16 +471,16 @@ fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
             }
         }
     }
-    ui.text_disabled("Press Enter or click away to apply a number.");
-    if ui.button("All rules on") {
+    theme::note(ui, "Press Enter or click away to apply a number.");
+    if theme::secondary_button(ui, "All rules on") {
         control::edit_rules(|c| c.off.clear());
     }
     ui.same_line();
-    if ui.button("All rules off") {
+    if theme::secondary_button(ui, "All rules off") {
         control::edit_rules(|c| c.off = Rule::ALL.to_vec());
     }
     ui.same_line();
-    if ui.button("Ruleset as written") {
+    if theme::secondary_button(ui, "Ruleset as written") {
         control::edit_rules(|c| {
             let bans = std::mem::take(&mut c.bans);
             *c = Config {
@@ -391,50 +489,51 @@ fn ruleset_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
             };
         });
     }
-    ui.set_next_item_width(320.0 * scale);
+    ui.set_next_item_width(t.px(320.0));
     ui.input_text("Find a rule", &mut state.filter).build();
     let needle = state.filter.to_lowercase();
-    ui.child_window("##rules").border(true).build(|| {
+    list(ui, "##rules", [0.0, 0.0], || {
         for rule in Rule::ALL {
             let text = rule.text_with(rules);
             if !needle.is_empty() && !text.to_lowercase().contains(&needle) {
                 continue;
             }
             let mut on = rules.is_on(rule);
-            if ui.checkbox(format!("{text}##{}", rule.key()), &mut on) {
+            if theme::checkbox(ui, &format!("{text}##{}", rule.key()), &mut on) {
                 control::edit_rules(|c| c.set_rule(rule, on));
             }
         }
     });
 }
 
-fn bans_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
+fn bans_tab(ui: &Ui, state: &mut MenuState, rules: &Config) {
     if state.editor.is_some() {
-        let done = editor(ui, state.editor.as_mut().expect("checked"), scale);
+        let done = editor(ui, state.editor.as_mut().expect("checked"));
         if done {
             state.editor = None;
         }
         return;
     }
-    ui.text_wrapped(
+    theme::note(
+        ui,
         "A ban breaks when every one of its conditions holds for one player at once. A ban on \
          what someone wears waits for an opponent to share the world, a ban on something done \
          fires whenever it is seen, and a ban on a skill or an animation fires on every use.",
     );
-    if ui.button("New ban...") {
+    if theme::secondary_button(ui, "New ban...") {
         state.editor = Some(Editor::new(None));
     }
-    ui.separator();
+    theme::divider(ui);
     if rules.bans.is_empty() {
-        ui.text_disabled("No bans of your own yet.");
+        theme::quiet(ui, "No bans of your own yet.");
     }
     let mut edit = None;
     let mut delete = None;
-    ui.child_window("##bans").border(true).build(|| {
+    list(ui, "##bans", [0.0, 0.0], || {
         for (i, ban) in rules.bans.iter().enumerate() {
             let _id = ui.push_id_usize(i);
             let mut on = ban.on;
-            if ui.checkbox(&ban.name, &mut on) {
+            if theme::checkbox(ui, &ban.name, &mut on) {
                 let name = ban.name.clone();
                 control::edit_rules(|c| {
                     if let Some(b) = c.bans.iter_mut().find(|b| b.name == name) {
@@ -443,18 +542,18 @@ fn bans_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
                 });
             }
             ui.same_line();
-            ui.text_disabled(format!("({})", judged(ban).text()));
+            theme::quiet(ui, &format!("({})", judged(ban).text()));
             ui.same_line();
-            if ui.small_button("Edit") {
+            if theme::button(ui, "Edit", ButtonKind::Secondary, ButtonSize::ROW) {
                 edit = Some(ban.clone());
             }
             ui.same_line();
-            if ui.small_button("Delete") {
+            if theme::button(ui, "Delete", ButtonKind::Secondary, ButtonSize::ROW) {
                 delete = Some(ban.name.clone());
             }
             ui.indent();
             for c in &ban.all {
-                ui.text_colored(MUTED, c.describe());
+                theme::text(ui, Font::Body, theme::TEXT_QUIET, &c.describe());
             }
             ui.unindent();
         }
@@ -468,11 +567,12 @@ fn bans_tab(ui: &Ui, state: &mut MenuState, rules: &Config, scale: f32) {
 }
 
 /// The ban editor. Returns true when it is finished with, saved or not.
-fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
-    ui.set_next_item_width(360.0 * scale);
+fn editor(ui: &Ui, ed: &mut Editor) -> bool {
+    let t = theme::current();
+    ui.set_next_item_width(t.px(360.0));
     ui.input_text("Name", &mut ed.draft.name).build();
     ui.same_line();
-    ui.checkbox("On", &mut ed.draft.on);
+    theme::checkbox(ui, "On", &mut ed.draft.on);
     let preview = Ban {
         name: ed.draft.name.clone(),
         on: ed.draft.on,
@@ -480,17 +580,20 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
     };
     if !preview.all.is_empty() {
         ui.same_line();
-        ui.text_disabled(format!("fires {}", judged(&preview).text()));
+        theme::quiet(ui, &format!("fires {}", judged(&preview).text()));
     }
 
-    ui.text("Conditions -- all must hold at once; one condition may list alternatives:");
-    let rows = 5.0;
-    ui.child_window("##conditions")
-        .size([0.0, rows * 22.0 * scale])
-        .border(true)
-        .build(|| {
+    theme::secondary(
+        ui,
+        "Conditions -- all must hold at once; one condition may list alternatives:",
+    );
+    list(
+        ui,
+        "##conditions",
+        [0.0, t.px(5.0 * LIST_ROW).round()],
+        || {
             if ed.draft.all.is_empty() {
-                ui.text_disabled("Search below and add something.");
+                theme::quiet(ui, "Search below and add something.");
             }
             for (i, c) in ed.draft.all.iter().enumerate() {
                 let selected = ed.selected == Some(i);
@@ -502,99 +605,109 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
                     ed.selected = Some(i);
                 }
             }
-        });
+        },
+    );
     if let Some(index) = ed.selected.filter(|&i| i < ed.draft.all.len()) {
         let c = &ed.draft.all[index];
         if c.kind() == Kind::Weapon {
             let mut place = Place::ALL.iter().position(|&p| p == c.place).unwrap_or(0);
             let mut buff = c.buff;
-            ui.set_next_item_width(260.0 * scale);
+            ui.set_next_item_width(t.px(260.0));
             let moved = ui.combo_simple_string("Where", &mut place, &Place::ALL.map(Place::label));
             ui.same_line();
-            let toggled = ui.checkbox("Needs a weapon buff", &mut buff);
+            let toggled = theme::checkbox(ui, "Needs a weapon buff", &mut buff);
             if moved || toggled {
                 ed.draft.set_weapon(index, Place::ALL[place], buff);
             }
         }
-        if ui.button("Remove this condition") {
+        if theme::secondary_button(ui, "Remove this condition") {
             ed.draft.remove(index);
             ed.selected = None;
         }
     }
 
-    ui.separator();
+    theme::divider(ui);
     let mut look_in_names = vec!["Everything"];
     look_in_names.extend(Pick::ALL.map(Pick::label));
-    ui.set_next_item_width(280.0 * scale);
+    ui.set_next_item_width(t.px(280.0));
     ui.input_text("##search", &mut ed.search)
         .hint("Part of a name: rivers, katana, blood, azur...")
         .build();
     ui.same_line();
-    ui.set_next_item_width(180.0 * scale);
+    ui.set_next_item_width(t.px(180.0));
     ui.combo_simple_string("Look in", &mut ed.look_in, &look_in_names);
     ed.refresh_hits();
-    ui.child_window("##hits")
-        .size([0.0, 7.0 * 22.0 * scale])
-        .border(true)
-        .build(|| {
-            if ed.hits.is_empty() {
-                ui.text_disabled(if ed.search.trim().is_empty() {
+    list(ui, "##hits", [0.0, t.px(7.0 * LIST_ROW).round()], || {
+        if ed.hits.is_empty() {
+            theme::quiet(
+                ui,
+                if ed.search.trim().is_empty() {
                     "Type part of a name, or pick a list to look in."
                 } else {
                     "Nothing by that name."
-                });
-            }
-            for (i, hit) in ed.hits.iter().enumerate() {
-                let label = format!("{}: {}##h{i}", hit.pick.label(), hit.entry.name);
-                if ui
-                    .selectable_config(label)
-                    .selected(ed.hit == Some(i))
-                    .build()
-                {
-                    ed.hit = Some(i);
-                }
-            }
-            if ed.hits.len() >= SEARCH_LIMIT {
-                ui.text_disabled(format!("The first {SEARCH_LIMIT}; type more to narrow it."));
-            }
-        });
-    let picked = ed.hit.and_then(|i| ed.hits.get(i)).cloned();
-    ui.disabled(picked.is_none(), || {
-        if ui.button("Add as a new condition")
-            && let Some(hit) = &picked
-        {
-            ed.error = ed
-                .draft
-                .add_pick(hit.pick, hit.entry.clone(), None)
-                .err()
-                .unwrap_or_default();
-            if ed.error.is_empty() {
-                ed.selected = Some(ed.draft.all.len() - 1);
+                },
+            );
+        }
+        for (i, hit) in ed.hits.iter().enumerate() {
+            let label = format!("{}: {}##h{i}", hit.pick.label(), hit.entry.name);
+            if ui
+                .selectable_config(label)
+                .selected(ed.hit == Some(i))
+                .build()
+            {
+                ed.hit = Some(i);
             }
         }
-        ui.same_line();
-        if ui.button("Add to the selected condition (or)")
-            && let Some(hit) = &picked
-        {
-            ed.error = ed
-                .draft
-                .add_pick(hit.pick, hit.entry.clone(), ed.selected)
-                .err()
-                .unwrap_or_default();
+        if ed.hits.len() >= SEARCH_LIMIT {
+            theme::quiet(
+                ui,
+                &format!("The first {SEARCH_LIMIT}; type more to narrow it."),
+            );
         }
     });
+    let picked = ed.hit.and_then(|i| ed.hits.get(i)).cloned();
+    let (add_new, add_or) = if picked.is_some() {
+        let add_new = theme::secondary_button(ui, ADD_NEW);
+        ui.same_line();
+        (add_new, theme::secondary_button(ui, ADD_OR))
+    } else {
+        // Nothing picked yet: drawn faded and answering nothing.
+        theme::unavailable(ui, || {
+            theme::secondary_button(ui, ADD_NEW);
+            ui.same_line();
+            theme::secondary_button(ui, ADD_OR);
+        });
+        (false, false)
+    };
+    if add_new && let Some(hit) = &picked {
+        ed.error = ed
+            .draft
+            .add_pick(hit.pick, hit.entry.clone(), None)
+            .err()
+            .unwrap_or_default();
+        if ed.error.is_empty() {
+            ed.selected = Some(ed.draft.all.len() - 1);
+        }
+    }
+    if add_or && let Some(hit) = &picked {
+        ed.error = ed
+            .draft
+            .add_pick(hit.pick, hit.entry.clone(), ed.selected)
+            .err()
+            .unwrap_or_default();
+    }
 
-    ui.separator();
-    ui.set_next_item_width(180.0 * scale);
+    theme::divider(ui);
+    ui.set_next_item_width(t.px(180.0));
     ui.combo_simple_string("##other", &mut ed.other, &OTHER.map(|(_, label, _)| label));
     ui.same_line();
-    ui.set_next_item_width(320.0 * scale);
+    ui.set_next_item_width(t.px(320.0));
     let (kind, _, hint) = OTHER[ed.other.min(OTHER.len() - 1)];
     ui.input_text("##other-text", &mut ed.other_text)
         .hint(hint)
         .build();
     ui.same_line();
-    if ui.button("Add condition") {
+    if theme::secondary_button(ui, "Add condition") {
         let added = if matches!(kind, Kind::Level | Kind::Stat) {
             ed.draft.add_compare(kind, &ed.other_text)
         } else {
@@ -610,12 +723,12 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
         }
     }
 
-    ui.separator();
+    theme::divider(ui);
     if !ed.error.is_empty() {
-        ui.text_colored(PROBLEM, &ed.error);
+        theme::text_wrapped(ui, Font::Body, theme::ERROR_TEXT, &ed.error);
     }
     let mut finished = false;
-    if ui.button("Save ban") {
+    if theme::primary_button(ui, "Save ban") {
         match ed.draft.ban() {
             Ok(ban) => {
                 let replacing = ed.replacing.clone();
@@ -640,7 +753,7 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
         }
     }
     ui.same_line();
-    if ui.button("Cancel") {
+    if theme::secondary_button(ui, "Cancel") {
         finished = true;
     }
     finished
@@ -649,20 +762,22 @@ fn editor(ui: &Ui, ed: &mut Editor, scale: f32) -> bool {
 fn display_tab(ui: &Ui, state: &mut MenuState) {
     let mut show = control::show_breaks();
     let current = control::settings();
-    if ui.checkbox(
-        format!("Show rule breaks on screen ({})", current.breaks_key),
+    if theme::checkbox(
+        ui,
+        &format!("Show rule breaks on screen ({})", current.breaks_key),
         &mut show,
     ) {
         control::set_show_breaks(show);
     }
-    ui.text_wrapped(
+    theme::note(
+        ui,
         "Shown or not, every rule break is written to er-duel-rules-breaks.txt and \
          er-duel-rules.log beside the game.",
     );
-    if ui.button("Clear the list on screen") {
+    if theme::secondary_button(ui, "Clear the list on screen") {
         crate::render::clear();
     }
-    ui.separator();
+    theme::divider(ui);
     let generation = control::settings_generation();
     if state.keys_from != generation && !ui.is_any_item_active() {
         state.menu_key = current.menu_key.clone();
@@ -672,24 +787,25 @@ fn display_tab(ui: &Ui, state: &mut MenuState) {
     ui.input_text("Menu key", &mut state.menu_key).build();
     ui.input_text("Rule-break list key", &mut state.breaks_key)
         .build();
-    ui.text_disabled(
+    theme::note(
+        ui,
         "Names such as F2, ctrl+F2, alt+F11, ], KP_Plus. Escape also closes the menu.",
     );
-    if ui.button("Use these keys") {
+    if theme::secondary_button(ui, "Use these keys") {
         state.keys_message = match control::set_keys(&state.menu_key, &state.breaks_key) {
             Ok(()) => format!("Saved to {}.", control::settings_path().display()),
             Err(error) => error,
         };
     }
     if !state.keys_message.is_empty() {
-        let colour = if state.keys_message.starts_with("Saved") {
-            GOOD
+        let color = if state.keys_message.starts_with("Saved") {
+            theme::OK_TEXT
         } else {
-            PROBLEM
+            theme::ERROR_TEXT
         };
-        ui.text_colored(colour, &state.keys_message);
+        theme::text_wrapped(ui, Font::Body, color, &state.keys_message);
     }
     for warning in control::settings_warnings() {
-        ui.text_colored(PROBLEM, warning);
+        theme::text_wrapped(ui, Font::Body, theme::ERROR_TEXT, &warning);
     }
 }

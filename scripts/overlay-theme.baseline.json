@@ -1,0 +1,4 @@
+{
+  "about": "Overlay code that does not yet draw through crates/er-overlay-theme, per file and rule, written by scripts/check-overlay-theme.py --write-baseline. Counts may only fall; a file or crate missing here must be at zero.",
+  "files": {}
+}

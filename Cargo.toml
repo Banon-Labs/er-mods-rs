@@ -23,9 +23,6 @@ members = [
   # needs the same blanking -- a guest can read the mouse through the host's imgui context but
   # owns no `MessageFilter`. Host-buildable: the buffer-shape predicates are `cargo test`-able.
   "crates/er-dinput-suppress-core",
-  # Taking the game's input while an overlay menu is open (free cursor and still camera,
-  # DirectInput keyboard and mouse, pad 0): was er-cel-shade's `input.rs`, shared the same way.
-  "crates/er-overlay-input",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",
@@ -58,6 +55,10 @@ members = [
   # ruleset; the checks live in the host-testable core.
   "crates/er-duel-rules",
   "crates/er-duel-rules-core",
+  # Every player's voice out of their character, carried over Steam by this DLL itself and played
+  # through the game's Wwise audio input; it reads and writes nothing in Seamless Co-op.
+  "crates/er-positional-voice",
+  "crates/er-positional-voice-core",
   "crates/er-better-refills",
   # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
   # Runs from inside the storage box dialog's own update, which is what confines it to the only
@@ -133,6 +134,20 @@ members = [
   # any of them is an older PUBLISHED release than main's tip.
   "crates/er-build-watermark-core",
   "crates/er-build-watermark",
+  # Cel shading: swaps the deferred-lighting pixel shaders at D3D12 pipeline creation.
+  "crates/er-cel-shade",
+  # A lower 3D render resolution with the UI at native resolution, from a small F5 menu: holds
+  # the game's own dynamic resolution at 1/divisor. Opt-in (`[opt_in_only]`).
+  "crates/er-render-scale",
+  # The look every in-game panel shares (tokens, the vendored Plex Sans and JetBrains Mono, the
+  # drawing helpers): was er-cel-shade's `menu/theme.rs`, shared once er-render-scale needed it.
+  "crates/er-overlay-theme",
+  # Taking the game's input while an overlay menu is open (free cursor and still camera,
+  # DirectInput keyboard and mouse, pad 0): was er-cel-shade's `input.rs`, shared the same way.
+  "crates/er-overlay-input",
+  # The shader editor's compiler: the pipe protocol er-cel-shade speaks, and
+  # `er-shader-compiler.exe`, the helper that runs dxcompiler.dll out of the game's process.
+  "crates/er-shader-compiler",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
   # Which mods in this profile are fighting over the same key, and does the game already use it.
@@ -181,6 +196,10 @@ members = [
   # loads them. Zero dependencies, host-buildable, and the only crate here whose tests assert
   # that a first-run selection can actually be loaded together.
   "tools/er-installer",
+  # Builds the Mushroom Man ME3 package on the player's machine out of their own Dark Souls
+  # Remastered and Elden Ring installs -- the model is game content and cannot ship. Its tests
+  # use no game files; reading the game's Kraken archives needs the Windows build.
+  "tools/mushroom-man-builder",
   "tools/bevy-shader-lab",
   "tools/er-shaderlab",
   "tools/er-shader-viewer",

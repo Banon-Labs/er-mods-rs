@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What poise and which absorption to aim for, from what the RL window's PvP builds hit with.
 
-    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,vit=41,str=80,dex=20,int=7,fth=8,arc=9 \\
+    python3 scripts/er-mechanics-armor-targets.py --stats vig=56,mnd=8,end=41,str=80,dex=20,int=7,fth=8,arc=9 \\
         --talismans "Two Fingers Heirloom,Great-Jar's Arsenal,Bull-Goat's Talisman,Two-Handed Sword Talisman" \\
         --budget 46.4 --budget 52.0 --weapons "Executioner's Greataxe|both,Halberd|one"
 
@@ -42,6 +42,34 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 CACHE = Path.home() / ".cache/er-build-planner"
+#: The least poise a melee build ships with is one more than the PvP poise damage of a claw's
+#: one-handed R1 #1 (`melee_poise_floor`). User, 2026-10-13: "most people would laugh at me if I
+#: gave them a build that had less than 89 poise without bullgoat, unless it was a mage build",
+#: and, on a hard-coded 89,
+#: "89 poise MUST be informed by some weapon breakpoint else it will not be respected with"
+#: patches to the game. On the RL 140-160 pool that attack is 88.0 (Raptor Talons, Red
+#: Bear's Claw, Claws of Night, 1.0% of opening hits), so the floor is 89, read from the
+#: regulation each run rather than written down.
+FLOOR_ANCHOR_WEP_TYPE = 37      # EquipParamWeapon.wepType of the claws
+FLOOR_ANCHOR_FAMILY, FLOOR_ANCHOR_GRIP = "r1", "one"
+
+
+def melee_poise_floor(rows, reg) -> tuple[int, list[str]]:
+    """(floor, anchor weapons): one more than the largest first-hit PvP poise damage of the pool's
+    one-handed claw R1s, and the claws that reach it. Poise holds while it exceeds the hit's poise
+    damage (`poise_curve` breaks at `d1 >= P`)."""
+    def wep_type(name):
+        try:
+            return reg.weapon[reg.find_weapon(name)]["wepType"]
+        except (KeyError, ValueError, SystemExit):
+            return None
+
+    anchor = [s for s in rows.seqs if s["family"] == FLOOR_ANCHOR_FAMILY and s["grip"] == FLOOR_ANCHOR_GRIP
+              and wep_type(s["weapon"]) == FLOOR_ANCHOR_WEP_TYPE]
+    if not anchor:
+        raise SystemExit("no one-handed claw R1 in the pool to anchor the melee poise floor on")
+    top = max(s["d1"] for s in anchor)
+    return math.floor(top) + 1, sorted({s["weapon"] for s in anchor if s["d1"] == top})
 
 
 def _sibling(name: str):
@@ -72,6 +100,7 @@ FAMILY_JUDGES = {"r1": [0], "r2": [100], "move": [120, 125, 130, 140], "jump": [
 RANGED_TYPES = {50, 51, 53, 55, 56, 57, 61}
 REGULAR_MAX = 25
 
+#: `vit` is the planner's spelling of Endurance, still taken on the command line.
 STAT_ALIAS = {"vit": "end"}
 
 
@@ -273,7 +302,9 @@ class Frontier:
             nb = np.full_like(best, inf)
             ch = np.full(best.shape, -1, np.int32)
             for i, p in enumerate(cands[c]):
-                iw = int(math.ceil(p["weight"] / step - 1e-9))
+                # Armor weights are tenths stored as float32 (Steel Helm 7.9000001), so a ceiling
+                # put every piece one bin heavy and a 47.7 set read 47.9 against a 47.86 budget.
+                iw = int(round(p["weight"] / step))
                 ip = int(round(p["poise"]))
                 if iw >= self.W:
                     continue
@@ -302,7 +333,7 @@ class Frontier:
             i = int(self.choice[c][w, p])
             piece = self.cands[c][i]
             pieces.append(piece)
-            w -= int(math.ceil(piece["weight"] / self.step - 1e-9))
+            w -= int(round(piece["weight"] / self.step))
             p -= int(round(piece["poise"]))
         pieces.reverse()
         return pieces
@@ -310,6 +341,38 @@ class Frontier:
 
 def kept(pieces, share) -> float:
     return sum(share[k] * math.prod(p["cut"][k] for p in pieces) for k in TYPES)
+
+
+class ArmorModel:
+    """What `main` reads for one stat block, kept so a caller can ask for sets at many budgets: the
+    window's damage mix against this build's defense, its talismans' poise divisor and weight, and
+    the melee poise floor. `er-weapon-build.py` uses it to find the Endurance that fits a set."""
+
+    #: The heaviest budget the frontier is built for; four of the heaviest pieces weigh about 70.
+    MAX_BUDGET = 90.0
+
+    def __init__(self, stats: dict, talismans=(), great_rune=None, rl: int = 150, window: int = 10):
+        self.t = DEF.Tables()
+        st = {STAT_ALIAS.get(k, k): v for k, v in stats.items()}
+        me = DEF.defender(self.t, st, (), list(talismans), great_rune, pvp=True)
+        self.tcut = me["toughness_cut"]
+        self.talisman_weight = sum(self.t.talisman_row(n)["weight"] for n in talismans)
+        lo, hi = rl - window, rl + window
+        self.share = damage_mix(corpus_builds(lo, hi), me["defense"], AR.Tables(), ATK.Regulation(None))["share"]
+        self.melee_floor, self.anchors = melee_poise_floor(pool_rows(lo, hi)[0], ATK.Regulation(None))
+        self.frontier = Frontier(armor_candidates(self.t), self.share, self.MAX_BUDGET)
+
+    def pick(self, budget: float, armor_poise: float) -> dict | None:
+        """The set within `budget` that keeps least damage with at least `armor_poise` of the
+        armor's own poise (no talisman divisor: the user's floor is 89 without Bull-Goat's), or
+        None when none fits."""
+        pieces = self.frontier.pick(budget, armor_poise)
+        if not pieces:
+            return None
+        return {"pieces": [p["name"] for p in pieces], "weight": round(sum(p["weight"] for p in pieces), 1),
+                "armor_poise": round(sum(p["poise"] for p in pieces), 1),
+                "menu_poise": round(sum(p["poise"] for p in pieces) / self.tcut, 1),
+                "kept": round(kept(pieces, self.share), 4)}
 
 
 # --------------------------------------------------------------------------------------------
@@ -395,7 +458,7 @@ def buff_table(t, share: dict, builds: list[dict]) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stats", required=True, help="planner keys: vig,mnd,vit,str,dex,int,fth,arc")
+    ap.add_argument("--stats", required=True, help="vig,mnd,end,str,dex,int,fth,arc (vit is taken for end)")
     ap.add_argument("--talismans", default="")
     ap.add_argument("--great-rune")
     ap.add_argument("--rl", type=int, default=150)
@@ -403,7 +466,8 @@ def main() -> int:
     ap.add_argument("--budget", type=float, action="append", default=[],
                     help="armor weight budget (medium-roll load left for armor); repeatable")
     ap.add_argument("--weapons", default="", help="comma list of Name|one or Name|both for the windup curve")
-    ap.add_argument("--poise-floors", default="0,41,54,104,111,122,136,166")
+    ap.add_argument("--poise-floors", default="0,41,54,104,111,122,136,166",
+                    help="poise floors to solve for; the melee floor (`melee_poise_floor`) is always added")
     ap.add_argument("--current", default="", help="comma list of worn armor pieces to score")
     ap.add_argument("--focus", action="append", default=[], choices=TYPES,
                     help="also find the best set for this one absorption type; repeatable")
@@ -450,7 +514,10 @@ def main() -> int:
     d1 = np.array([s["hits"][0][1] for s in rows.seqs])
     print("   first-hit poise damage quantiles: " + ", ".join(
         f"p{q} {weighted_quantile(d1, rows.seq_w, q / 100):.0f}" for q in (10, 25, 50, 75, 90)))
-    floors = [float(x) for x in a.poise_floors.split(",")]
+    melee_floor, anchors = melee_poise_floor(rows, ATK.Regulation(None))
+    print(f"   melee poise floor {melee_floor}: one more than the one-handed claw R1's {melee_floor - 1} "
+          f"({', '.join(anchors[:4])})")
+    floors = sorted({float(x) for x in a.poise_floors.split(",")} | {float(melee_floor)})
     print(f"   {'poise':>6}{'1st hit breaks':>16}{'string breaks':>15}" + "".join(f"{f:>8}" for f in ("r1", "r2", "move", "jump")))
     for P in floors:
         i = int(P)
@@ -539,6 +606,7 @@ def main() -> int:
     if a.json:
         a.json.write_text(json.dumps({"share": share, "mix": {k: v for k, v in mix.items() if k != "per_build"},
                                       "poise": pc, "stopped": stopped, "frontier": frontier,
+                                      "melee_poise_floor": {"poise": melee_floor, "anchors": anchors},
                                       "defense": me["defense"], "toughness_cut": tcut, "buffs": buffs}, indent=1))
     return 0
 

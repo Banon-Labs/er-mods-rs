@@ -15,8 +15,9 @@ their counterpart, and it measures each class by what the class is used for:
 | bows, crossbows, ballistae, perfume bottles, fists | the attack rating of the best RL 150 build | the same class |
 | arrows, greatarrows, bolts, ballista bolts | the ammunition's own damage and build-up, which no stat scales | the same class |
 
-The builds come from `er-builds-optimize.optimize` exactly as the infusion ranking's do: Vigor,
-Mind and Endurance floors from the corpus's PvP builds at RL 150, every requirement met, every
+The builds come from `er-builds-optimize.optimize` exactly as the infusion ranking's do: a Vigor
+floor from the corpus's PvP builds at RL 150, Mind and Endurance from the PvP builds nearest the
+spread in INT/FTH and STR/DEX (`spend_floored`), every requirement met, every
 starting class tried, and the remaining points spent where they raise the measure most. A bow's
 attack rating is the bow's own, the number its menu shows, before the arrow is added.
 """
@@ -70,7 +71,7 @@ def best(tables, name):
     b = INF.Builder(name)
     fl, dfn = b.setup(RANK_RL)
     res = OPT.optimize(b.tables, b.model, name, RANK_RL, False, 'spell_buff' if k == 'casting' else 'ar',
-                       fl, dfn, b.affs, None, keep=1)
+                       fl, dfn, b.affs, None, keep=1, pool=b.pool)
     if not res:
         return None
     r = res[0]

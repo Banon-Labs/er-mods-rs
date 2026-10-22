@@ -113,9 +113,21 @@ IMAGE_ROLE = {
     "EldenRing": "1162",
     # The pin already holds 1.17 bytes at a 1.17 VA: no ledger hop, compare it in place.
     "EldenRing1170": "1170",
-    # Seamless Co-op's `ersc.dll`. A real image with real pins; this script loads only the two
-    # eldenring images, so it says so instead of pretending to check them.
-    "Ersc": None,
+    # 1.17.1 bytes at a 1.17.1 VA, compared in place against `eldenring-deobf-1.17.1.bin` (see
+    # `OPTIONAL_IMAGES`). er-render-scale's dynamic resolution update is the first spec to name it:
+    # above 0xafefe9, so its RIP-relative operand encodes differently on 1.17.0.
+    "EldenRing1171": "1171",
+    # Seamless Co-op's `ersc.dll`. A real image with real pins; this script loads only the
+    # eldenring images, so it says so instead of pretending to check them. Spelled as the enum
+    # spells it: this key read `Ersc` while the variant was `Ersc201`, so the completeness check
+    # above reported the variant as unmodelled on every run.
+    "Ersc201": None,
+}
+
+# Images a role may need that the rest of this script does not. Loaded when present; a spec whose
+# image is absent is a `SKIP` that names the file, never a pass.
+OPTIONAL_IMAGES = {
+    "1171": Path(os.environ.get("ER_DEOBF_1171", ROOT / "eldenring-deobf-1.17.1.bin")),
 }
 _UNMODELLED = object()
 
@@ -840,6 +852,21 @@ def classify_prologue(spec, images, mapped, detour):
     if va is None:
         return "SKIP", f"could not resolve {va_sym}"
     rva = va - BASE
+    if role == "1171":
+        # Pinned to 1.17.1 at a 1.17.1 VA, compared in place like the 1.17.0 role below.
+        image = images.get("1171")
+        if image is None:
+            return "SKIP", f"{OPTIONAL_IMAGES['1171']} is absent, so the 1.17.1 pin was not read"
+        after = image.data[rva : rva + len(pin)]
+        if len(after) != len(pin):
+            return "SKIP", f"{va:#x} is past the end of the 1.17.1 image"
+        if after == pin:
+            return "ARMS", f"{va:#x} (pinned to 1.17.1 directly; no ledger hop)"
+        differ = [i for i in range(len(pin)) if pin[i] != after[i]]
+        return "BAD-PIN", (
+            f"{va:#x} claims 1.17.1 bytes and the 1.17.1 image holds {after.hex()}, not "
+            f"{pin.hex()} (byte(s) {differ}); the gate will disarm"
+        )
     if role == "1170":
         # The spec pins 1.17 bytes at a 1.17 VA. No ledger hop: compare in place. There is no
         # DISARMS branch here -- if these bytes do not match, the pin is wrong about its own
@@ -894,6 +921,7 @@ def run_prologues(require_images):
         print(f"== prologues: SKIPPED -- missing image(s): {line}")
         return bad + (1 if require_images else 0)
     images = {b: Image(p) for b, p in IMAGES.items()}
+    images.update({b: Image(p) for b, p in OPTIONAL_IMAGES.items() if p.is_file()})
     mapped = ledger_rvas()
     detour = detour_rvas()
     specs = prologue_specs() + seam_specs()
@@ -1039,6 +1067,33 @@ def selftest():
         failures.append("seam_specs() found no MapSeam prologue in er-invasion-warp/map_seams.rs")
     if any(not pin for _c, _n, _i, _v, _s, pin in seams):
         failures.append("seam_specs() decoded an empty pin")
+
+    # Every `Image` variant the generator declares has a role here, and a 1.17.1 pin is compared
+    # against the 1.17.1 image when it is loaded and skipped by name when it is not.
+    check("every declared image variant is modelled", unmodelled_image_variants(), [])
+
+    class _Flat:
+        def __init__(self, data):
+            self.data = data
+
+    pin = bytes.fromhex("4053")
+    spec_1171 = ("crate", "DRS_SIG", "EldenRing1171", BASE + 0x10, "DRS_VA", pin)
+    present = _Flat(bytes(0x10) + pin + bytes(4))
+    check(
+        "a 1.17.1 pin arms on its own bytes",
+        classify_prologue(spec_1171, {"1171": present}, {}, set())[0],
+        "ARMS",
+    )
+    check(
+        "a 1.17.1 pin on other bytes is a bad pin",
+        classify_prologue(spec_1171, {"1171": _Flat(bytes(0x20))}, {}, set())[0],
+        "BAD-PIN",
+    )
+    check(
+        "a 1.17.1 pin with no 1.17.1 image is a skip",
+        classify_prologue(spec_1171, {}, {}, set())[0],
+        "SKIP",
+    )
 
     check(
         "diff_shape rel32",

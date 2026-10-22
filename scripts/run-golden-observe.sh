@@ -96,6 +96,8 @@ export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$OBSERVE_DIR/er-crash-breadcr
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$OBSERVE_DIR/er-crash-modules.txt"
 export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$OBSERVE_DIR/er-focus-input.log"
 export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$OBSERVE_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH="$OBSERVE_DIR/er-cel-shade-telemetry.json"
+export ER_QUICKLOAD_RENDER_SCALE_TELEMETRY_PATH="$OBSERVE_DIR/er-render-scale-telemetry.json"
 export ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$OBSERVE_DIR/er-build-import.log"
 
 cd "$GAME_DIR" || fatal "cannot cd to $GAME_DIR"

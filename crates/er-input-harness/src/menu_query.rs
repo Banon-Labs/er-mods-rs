@@ -33,14 +33,25 @@
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use er_hook::{UnionFn, register_shared_hook};
+use er_game_base::game_build::MAPPED_FILE_VERSION_1171;
+use er_game_base::mem::game_rva_measured_on;
+use er_hook::{UnionFn, register_union_hook_runtime_derived};
 
 use crate::log::harness_log;
 use crate::win32::read_usize;
 
-/// 1.17 candidates for 1.16.2's `FUN_14075d970`.
-const MENU_QUERY_CANDIDATE_A: usize = 0x14075e7c0;
-const MENU_QUERY_CANDIDATE_B: usize = 0x14075e880;
+/// 1.17.1 rvas of the two candidates for 1.16.2's `FUN_14075d970` (below the `0xafefe9` boundary,
+/// so 1.17.0 has them at the same place).
+///
+/// They used to be absolute 1.17 addresses handed to `register_shared_hook`, which resolves its
+/// argument as a 1.16.2 address -- a 1.17 address is no key of that table, so the hook rested on
+/// the resolver recognising it as already translated, and on 2.7.2.0 it would have been refused.
+/// Carried as 1.17.1 rvas instead: on 2.7.2.0 they are `0x75ec70` and `0x75ed30`, each a `.pdata`
+/// entry of the same `0xb6` length with the same opening bytes (`scripts/compare-carry-bytes-1172.py`).
+/// No other DLL in `scripts/me3-dll-conflicts.toml` hooks either, so this image's own union owns
+/// them.
+const MENU_QUERY_CANDIDATE_A: usize = 0x75_e7c0;
+const MENU_QUERY_CANDIDATE_B: usize = 0x75_e880;
 
 /// The captured menu code sits at `+0x08` of the `std::function` the caller built, and the mode byte
 /// at `+0x0c` -- `FUN_1407586d0` writes `0x30`/mode 2 there, `FUN_140758c90` writes `0x31`.
@@ -108,13 +119,22 @@ pub fn ensure_installed() {
     if ORIG_A.load(Ordering::Relaxed) != 0 || ORIG_B.load(Ordering::Relaxed) != 0 {
         return;
     }
-    for (target, handler, slot, name) in [
+    for (rva, handler, slot, name) in [
         (MENU_QUERY_CANDIDATE_A, query_a as UnionFn, &ORIG_A, "A"),
         (MENU_QUERY_CANDIDATE_B, query_b as UnionFn, &ORIG_B, "B"),
     ] {
-        match unsafe { register_shared_hook(target, handler, slot) } {
-            Ok(route) => {
-                harness_log!("menu-query: hooked candidate {name} 0x{target:x} via {route:?}")
+        let Some(target) = game_rva_measured_on(rva, MAPPED_FILE_VERSION_1171) else {
+            harness_log!(
+                "menu-query: candidate {name} (1.17.1 rva 0x{rva:x}) has no carry to {}",
+                er_game_base::game_build::describe_build()
+            );
+            continue;
+        };
+        // SAFETY: four-argument handlers on four-argument targets; the address was carried to the
+        // running image and the hook API checks its `.pdata` before writing.
+        match unsafe { register_union_hook_runtime_derived(target, handler, slot) } {
+            Ok(()) => {
+                harness_log!("menu-query: hooked candidate {name} 0x{target:x}")
             }
             Err(status) => {
                 harness_log!("menu-query: candidate {name} 0x{target:x} REFUSED {status:?}")

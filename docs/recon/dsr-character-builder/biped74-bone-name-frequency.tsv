@@ -1,0 +1,2500 @@
+# biped chars: 74 c1200 c1201 c1202 c1203 c2060 c2210 c2230 c2231 c2232 c2239 c2240 c2250 c2320 c2360 c2370 c2380 c2500 c2510 c2511 c2519 c2520 c2530 c2540 c2550 c2560 c2570 c2590 c2591 c2600 c2640 c2650 c2660 c2670 c2680 c2690 c2710 c2711 c2730 c2780 c2800 c2810 c2811 c2819 c2820 c2840 c2860 c2861 c2870 c2900 c2910 c2920 c2921 c2929 c2930 c2940 c2950 c3110 c3210 c3450 c4090 c4091 c4095 c4100 c4110 c4115 c4119 c4120 c4520 c5210 c5270 c5271 c5300 c5370 c5390
+norm_key	chars_with	chars_weighted	spellings
+pelvis	74	68	'Pelvis'x74
+spine	74	68	'Spine'x74
+spine1	74	68	'Spine1'x74
+neck	74	67	'Neck'x74
+lupperarm	74	67	'L UpperArm'x74
+lforearm	74	67	'L Forearm'x74
+lhand	74	67	'L Hand'x74
+lthigh	74	65	'L Thigh'x74
+lcalf	74	65	'L Calf'x74
+lfoot	74	65	'L Foot'x74
+ltoe0	74	65	'L Toe0'x74
+master	74	0	'Master'x59; 'master'x15
+lclavicle	74	63	'L Clavicle'x73; 'L_Clavicle'x1
+head	73	67	'Head'x73
+rupperarm	73	67	'R UpperArm'x73
+rforearm	73	67	'R Forearm'x73
+rhand	73	67	'R Hand'x73
+rthigh	73	64	'R Thigh'x73
+rcalf	73	64	'R Calf'x73
+rfoot	73	64	'R Foot'x73
+rtoe0	73	64	'R Toe0'x73
+rclavicle	73	61	'R Clavicle'x73
+lfinger0	68	60	'L Finger0'x68
+rfinger0	67	60	'R Finger0'x67
+sfxdummy	66	0	'sfx_dummy'x67
+lfinger1	66	58	'L Finger1'x66
+modeldmy	65	0	'Model_Dmy'x65
+ltoe0nub	65	0	'L Toe0Nub'x65
+rtoe0nub	65	0	'R Toe0Nub'x65
+lfinger01	65	57	'L Finger01'x65
+lfinger11	65	57	'L Finger11'x65
+lfinger2	65	57	'L Finger2'x65
+rfinger1	65	57	'R Finger1'x65
+rfinger2	65	57	'R Finger2'x65
+headnub	64	1	'HeadNub'x64
+固定dmy	64	0	'固定dmy'x64
+lfinger21	64	56	'L Finger21'x64
+rfinger01	64	57	'R Finger01'x64
+rfinger11	64	56	'R Finger11'x64
+rfinger21	64	55	'R Finger21'x64
+rfinger0nub	59	1	'R Finger0Nub'x59
+lfinger0nub	58	1	'L Finger0Nub'x58
+rfinger1nub	57	1	'R Finger1Nub'x57
+rfinger2nub	57	2	'R Finger2Nub'x57
+lfinger1nub	56	2	'L Finger1Nub'x56
+lfinger2nub	56	2	'L Finger2Nub'x56
+rweapon	53	46	'R_weapon'x40; 'R Weapon'x5; 'R weapon'x4; 'R_Weapon'x3; 'R weapon 'x1
+lforetwist	52	41	'L ForeTwist'x52
+rforetwist	52	42	'R ForeTwist'x52
+lcalftwist	42	27	'LCalfTwist'x42
+rcalftwist	42	27	'RCalfTwist'x42
+jaw	36	32	'Jaw'x25; 'Jaw 'x6; 'jaw'x5
+rfinger12	33	27	'R Finger12'x33
+lfinger02	32	27	'L Finger02'x32
+lfinger12	32	25	'L Finger12'x32
+lfinger22	32	25	'L Finger22'x32
+rfinger22	32	26	'R Finger22'x32
+rfinger02	32	28	'R Finger02'x32
+luparmtwist	29	23	'LUpArmTwist'x29
+lfinger3	29	24	'L Finger3'x29
+lfinger31	29	24	'L Finger31'x29
+lfinger32	29	22	'L Finger32'x29
+ruparmtwist	29	24	'RUpArmTwist'x29
+rfinger3	29	25	'R Finger3'x29
+rfinger31	29	25	'R Finger31'x29
+rfinger32	29	23	'R Finger32'x29
+lfinger4	25	21	'L Finger4'x25
+lfinger41	25	21	'L Finger41'x25
+lfinger42	25	19	'L Finger42'x25
+rfinger4	25	22	'R Finger4'x25
+rfinger41	25	22	'R Finger41'x25
+rfinger42	25	20	'R Finger42'x25
+rthightwist	23	18	'RThighTwist'x23
+lthightwist	23	18	'LThighTwist'x23
+spine2	21	20	'Spine2'x21
+lfinger3nub	21	0	'L Finger3Nub'x21
+rfinger3nub	21	0	'R Finger3Nub'x21
+dmy01	20	0	'dmy01'x20
+jawnub	20	0	'JawNub'x19; 'Jaw Nub'x1
+lweapon	20	14	'L_Weapon'x11; 'L_weapon'x8; 'L weapon'x1
+lfinger4nub	17	1	'L Finger4Nub'x17
+rfinger4nub	17	1	'R Finger4Nub'x17
+clotha01	16	14	'Cloth_a01'x16
+tailnub	14	0	'TailNub'x8; 'tailNub'x6
+オブジェクト01	14	0	'オブジェクト01'x14
+体力ゲージ	13	0	'体力ゲージ'x13
+lshield	13	11	'L_shield'x9; 'L_Shield'x4
+clotha00	12	10	'Cloth_a00'x12
+clothb00	12	10	'Cloth_b00'x12
+clothb01	12	10	'Cloth_b01'x12
+clothd00	12	10	'Cloth_d00'x12
+clothd01	12	10	'Cloth_d01'x12
+clothc00	12	10	'Cloth_c00'x12
+clothc01	12	10	'Cloth_c01'x12
+clothe00	11	9	'Cloth_e00'x11
+clothe01	11	9	'Cloth_e01'x11
+clothf00	11	9	'Cloth_f00'x11
+clotha02	10	10	'Cloth_a02'x10
+clotha03	10	10	'Cloth_a03'x10
+bowstring	10	6	'Bow_string'x8; 'bow_string'x2
+clothh00	10	8	'Cloth_h00'x10
+clothh01	10	8	'Cloth_h01'x10
+clothg00	10	8	'Cloth_g00'x10
+clothf01	10	8	'Cloth_f01'x10
+tail	9	9	'Tail'x8; 'tail'x1
+tail1	9	9	'Tail1'x8; 'tail1'x1
+tail2	9	9	'Tail2'x8; 'tail2'x1
+clothh02	9	7	'Cloth_h02'x9
+clothl01	9	6	'Cloth_l01'x6; 'Cloth_L01'x3
+clothf02	9	7	'Cloth_f02'x9
+clothg01	9	7	'Cloth_g01'x9
+tail3	8	8	'Tail3'x8
+tail4	8	8	'Tail4'x8
+neck1	8	5	'Neck1'x8
+rtoe01	8	7	'R Toe01'x8
+rtoe1	8	7	'R Toe1'x8
+rtoe2	8	7	'R Toe2'x8
+ltoe1	8	7	'L Toe1'x8
+ltoe2	8	7	'L Toe2'x8
+rtoe1nub	8	0	'R Toe1Nub'x8
+rtoe2nub	8	0	'R Toe2Nub'x8
+ltoe1nub	8	0	'L Toe1Nub'x8
+ltoe2nub	8	0	'L Toe2Nub'x8
+arrow	8	0	'arrow'x7; 'Arrow'x1
+lpad	8	7	'L_pad'x5; 'L_Pad'x3
+rpad	8	6	'R_pad'x5; 'R_Pad'x3
+clothi00	8	6	'Cloth_i00'x8
+clothi01	8	6	'Cloth_i01'x8
+clothi02	8	6	'Cloth_i02'x8
+clothg02	8	6	'Cloth_g02'x8
+spine3	7	7	'Spine3'x7
+nose	7	7	'nose'x4; 'Nose'x3
+leye	7	6	'L_eye'x7
+reye	7	7	'R_eye'x7
+clotha04	7	7	'Cloth_a04'x7
+clotha05	7	7	'Cloth_a05'x7
+tail01	7	5	'tail_01'x5; 'tail01'x2
+tail02	7	5	'tail_02'x5; 'tail02'x2
+tail03	7	5	'tail_03'x5; 'tail03'x2
+tail04	7	5	'tail_04'x5; 'tail04'x2
+tail05	7	5	'tail_05'x5; 'tail05'x2
+tail06	7	5	'tail_06'x5; 'tail06'x2
+tail07	7	5	'tail_07'x5; 'tail07'x2
+rtoe11	7	6	'R Toe11'x7
+rtoe21	7	6	'R Toe21'x7
+ltoe01	7	6	'L Toe01'x7
+ltoe11	7	6	'L Toe11'x7
+ltoe21	7	6	'L Toe21'x7
+clothj00	7	5	'Cloth_j00'x7
+clothj01	7	5	'Cloth_j01'x7
+clothj02	7	5	'Cloth_j02'x7
+rear	6	6	'R_ear'x6
+lear	6	6	'L_ear'x6
+clotha06	6	6	'Cloth_a06'x6
+tail5	6	6	'Tail5'x6
+tail00	6	4	'tail_00'x5; 'tail00'x1
+rtoe02	6	5	'R Toe02'x6
+rtoe12	6	5	'R Toe12'x6
+rtoe22	6	5	'R Toe22'x6
+ltoe02	6	5	'L Toe02'x6
+ltoe12	6	5	'L Toe12'x6
+ltoe22	6	5	'L Toe22'x6
+a	6	4	'a'x6
+b	6	4	'b'x6
+learnub	6	0	'L_earNub'x6
+rearnub	6	0	'R_earNub'x6
+tonguenub	6	0	'TongueNub'x6
+bow	6	4	'Bow'x6
+clothb02	6	6	'Cloth_b02'x6
+clothb03	6	6	'Cloth_b03'x6
+clothd02	6	6	'Cloth_d02'x6
+clothd03	6	6	'Cloth_d03'x6
+clothc02	6	6	'Cloth_c02'x6
+clothc03	6	6	'Cloth_c03'x6
+clothl00	6	4	'Cloth_l00'x6
+clothk00	6	4	'Cloth_k00'x6
+clothk01	6	4	'Cloth_k01'x6
+clothk02	6	4	'Cloth_k02'x6
+clothl02	6	4	'Cloth_l02'x5; 'Cloth_L02'x1
+ctrlmaster	6	0	'CTRL_master'x6; 'CTRL_Master'x1
+ctrlpelvis	6	0	'CTRL_Pelvis'x6
+ctrlspine	6	0	'CTRL_Spine'x6
+ctrlspine1	6	0	'CTRL_Spine1'x6
+ctrlneck	6	0	'CTRL_Neck'x6
+ctrlhead	6	0	'CTRL_Head'x6
+ctrlheadnub	6	0	'CTRL_HeadNub'x6
+ctrljaw	6	0	'CTRL_Jaw 'x3; 'CTRL_Jaw'x3
+ctrljawnub	6	0	'CTRL_JawNub'x6
+ctrllclavicle	6	0	'CTRL_L Clavicle'x6
+ctrllupperarm	6	0	'CTRL_L UpperArm'x6
+ctrllforearm	6	0	'CTRL_L Forearm'x6
+ctrllhand	6	0	'CTRL_L Hand'x6
+ctrllfinger0	6	0	'CTRL_L Finger0'x6
+ctrllfinger01	6	0	'CTRL_L Finger01'x6
+ctrllfinger02	6	0	'CTRL_L Finger02'x6
+ctrllfinger0nub	6	0	'CTRL_L Finger0Nub'x6
+ctrllfinger1	6	0	'CTRL_L Finger1'x6
+ctrllfinger11	6	0	'CTRL_L Finger11'x6
+ctrllfinger12	6	0	'CTRL_L Finger12'x6
+ctrllfinger1nub	6	0	'CTRL_L Finger1Nub'x6
+ctrllfinger2	6	0	'CTRL_L Finger2'x6
+ctrllfinger21	6	0	'CTRL_L Finger21'x6
+ctrllfinger22	6	0	'CTRL_L Finger22'x6
+ctrllfinger2nub	6	0	'CTRL_L Finger2Nub'x6
+ctrllfinger3	6	0	'CTRL_L Finger3'x6
+ctrllfinger31	6	0	'CTRL_L Finger31'x6
+ctrllfinger32	6	0	'CTRL_L Finger32'x6
+ctrllfinger3nub	6	0	'CTRL_L Finger3Nub'x6
+ctrllfinger4	6	0	'CTRL_L Finger4'x6
+ctrllfinger41	6	0	'CTRL_L Finger41'x6
+ctrllfinger42	6	0	'CTRL_L Finger42'x6
+ctrllfinger4nub	6	0	'CTRL_L Finger4Nub'x6
+ctrlrclavicle	6	0	'CTRL_R Clavicle'x6
+ctrlrupperarm	6	0	'CTRL_R UpperArm'x6
+ctrlrforearm	6	0	'CTRL_R Forearm'x6
+ctrlrhand	6	0	'CTRL_R Hand'x6
+ctrlrfinger0	6	0	'CTRL_R Finger0'x6
+ctrlrfinger01	6	0	'CTRL_R Finger01'x6
+ctrlrfinger02	6	0	'CTRL_R Finger02'x6
+ctrlrfinger0nub	6	0	'CTRL_R Finger0Nub'x6
+ctrlrfinger1	6	0	'CTRL_R Finger1'x6
+ctrlrfinger11	6	0	'CTRL_R Finger11'x6
+ctrlrfinger12	6	0	'CTRL_R Finger12'x6
+ctrlrfinger1nub	6	0	'CTRL_R Finger1Nub'x6
+ctrlrfinger2	6	0	'CTRL_R Finger2'x6
+ctrlrfinger21	6	0	'CTRL_R Finger21'x6
+ctrlrfinger22	6	0	'CTRL_R Finger22'x6
+ctrlrfinger2nub	6	0	'CTRL_R Finger2Nub'x6
+ctrlrfinger3	6	0	'CTRL_R Finger3'x6
+ctrlrfinger31	6	0	'CTRL_R Finger31'x6
+ctrlrfinger32	6	0	'CTRL_R Finger32'x6
+ctrlrfinger3nub	6	0	'CTRL_R Finger3Nub'x6
+ctrlrfinger4	6	0	'CTRL_R Finger4'x6
+ctrlrfinger41	6	0	'CTRL_R Finger41'x6
+ctrlrfinger42	6	0	'CTRL_R Finger42'x6
+ctrlrfinger4nub	6	0	'CTRL_R Finger4Nub'x6
+ctrllthigh	6	0	'CTRL_L Thigh'x6
+ctrllcalf	6	0	'CTRL_L Calf'x6
+ctrllfoot	6	0	'CTRL_L Foot'x6
+ctrlltoe0	6	0	'CTRL_L Toe0'x6
+ctrlltoe0nub	6	0	'CTRL_L Toe0Nub'x6
+ctrlrthigh	6	0	'CTRL_R Thigh'x6
+ctrlrcalf	6	0	'CTRL_R Calf'x6
+ctrlrfoot	6	0	'CTRL_R Foot'x6
+ctrlrtoe0	6	0	'CTRL_R Toe0'x6
+ctrlrtoe0nub	6	0	'CTRL_R Toe0Nub'x6
+tail6	5	5	'Tail6'x5
+c	5	4	'c'x5
+d	5	4	'd'x5
+e	5	4	'e'x5
+sfxdummy01	5	0	'sfx_dummy01'x5
+modeldmy1	5	0	'Model_Dmy_1'x4; 'Model_Dmy1'x1
+clothd04	5	5	'Cloth_d04'x5
+clothe03	5	5	'Cloth_e03'x5
+modeldmy01	5	0	'Model_Dmy01'x5
+clothe02	5	4	'Cloth_e02'x5
+trigger	5	3	'trigger'x5
+tail7	4	4	'Tail7'x4
+tail8	4	4	'Tail8'x4
+rwing00	4	3	'R_wing_00'x4
+rwing01	4	3	'R_wing_01'x4
+rwingdigitb00	4	3	'R_wing_digit_b_00'x4
+rwingdigitb01	4	3	'R_wing_digit_b_01'x4
+rwingdigita00	4	3	'R_wing_digit_a_00'x4
+rwingdigita01	4	3	'R_wing_digit_a_01'x4
+rwingdigita02	4	3	'R_wing_digit_a_02'x4
+rwing02	4	3	'R_wing_02'x4
+rwing03	4	3	'R_wing_03'x4
+rwing04	4	3	'R_wing_04'x4
+rwingdigitc	4	3	'R_wing_digit_c'x4
+lwing00	4	3	'L_wing_00'x4
+lwing01	4	3	'L_wing_01'x4
+lwing02	4	3	'L_wing_02'x4
+lwing03	4	3	'L_wing_03'x4
+lwing04	4	3	'L_wing_04'x4
+lwingdigita00	4	3	'L_wing_digit_a_00'x4
+lwingdigita01	4	3	'L_wing_digit_a_01'x4
+lwingdigita02	4	3	'L_wing_digit_a_02'x4
+lwingdigitb00	4	3	'L_wing_digit_b_00'x4
+lwingdigitb01	4	3	'L_wing_digit_b_01'x4
+lwingdigitc	4	3	'L_wing_digit_c'x4
+lear00	4	3	'L_ear_00'x4
+lear01	4	3	'L_ear_01'x4
+lear02	4	3	'L_ear_02'x4
+rear00	4	3	'R_ear_00'x4
+rear01	4	3	'R_ear_01'x4
+rear02	4	3	'R_ear_02'x4
+tongue00	4	3	'Tongue_00'x4
+tongue01	4	3	'Tongue_01'x4
+jaw2	4	3	'Jaw2'x4
+rwingdigitbnub	4	0	'R_wing_digit_bNub'x4
+rwingdigitanub	4	0	'R_wing_digit_aNub'x4
+rwingnub	4	0	'R_wingNub'x4
+rwingdigitcnub	4	0	'R_wing_digit_cNub'x4
+lwingnub	4	0	'L_wingNub'x4
+lwingdigitanub	4	0	'L_wing_digit_aNub'x4
+lwingdigitbnub	4	0	'L_wing_digit_bNub'x4
+lwingdigitcnub	4	0	'L_wing_digit_cNub'x4
+clothd05	4	4	'Cloth_d05'x4
+clothe04	4	4	'Cloth_e04'x4
+clothh03	4	4	'Cloth_h03'x4
+clothf03	4	4	'Cloth_f03'x4
+clothla00	4	4	'Cloth_L_a00'x4
+clothla01	4	4	'Cloth_L_a01'x4
+clothra00	4	4	'Cloth_R_a00'x4
+clothra01	4	4	'Cloth_R_a01'x4
+rfinger13	4	4	'R Finger13'x4
+hammer	4	0	'hammer'x4
+c2900body	4	0	'c2900_body'x4
+rsidearmor00	4	3	'R_Side_armor_00'x3; 'R_side_armor_00'x1
+rsidearmor01	4	3	'R_Side_armor_01'x3; 'R_side_armor_01'x1
+lsidearmor00	4	3	'L_Side_armor_00'x3; 'L_side_armor_00'x1
+lsidearmor01	4	3	'L_Side_armor_01'x3; 'L_side_armor_01'x1
+lsidearmornub	4	0	'L_Side_armor_Nub'x3; 'L_side_armor_Nub'x1
+center	3	0	'center'x3
+bip01lfinger0nub	3	0	'Bip01 L Finger0Nub'x3
+bip01lfinger1nub	3	0	'Bip01 L Finger1Nub'x3
+bip01lfinger2nub	3	0	'Bip01 L Finger2Nub'x3
+宝死体sfx	3	0	'宝死体SFX'x3
+c2230	3	0	'c2230'x3
+ltoe3	3	3	'L Toe3'x3
+ltoe31	3	3	'L Toe31'x3
+rtoe3	3	3	'R Toe3'x3
+rtoe31	3	3	'R Toe31'x3
+ltoe3nub	3	0	'L Toe3Nub'x3
+rtoe3nub	3	0	'R Toe3Nub'x3
+seeld	3	0	'seeld'x3
+masterponytail1	3	2	'Master Ponytail1'x3
+masterponytail11	3	2	'Master Ponytail11'x3
+masterponytail12	3	2	'Master Ponytail12'x3
+masterponytail2	3	2	'Master Ponytail2'x3
+masterponytail21	3	2	'Master Ponytail21'x3
+masterponytail22	3	2	'Master Ponytail22'x3
+masterponytail1nub	3	0	'Master Ponytail1Nub'x3
+masterponytail2nub	3	0	'Master Ponytail2Nub'x3
+clothb04	3	3	'Cloth_b04'x3
+clothb05	3	3	'Cloth_b05'x3
+clothb06	3	3	'Cloth_b06'x3
+clothd06	3	3	'Cloth_d06'x3
+clothd07	3	3	'Cloth_d07'x3
+clothe05	3	3	'Cloth_e05'x3
+clothc04	3	3	'Cloth_c04'x3
+clothc05	3	3	'Cloth_c05'x3
+clothc06	3	3	'Cloth_c06'x3
+clothc07	3	3	'Cloth_c07'x3
+clothi03	3	3	'Cloth_i03'x3
+wpa1500	3	0	'WP_A_1500'x3
+clothha00	3	3	'Cloth_H_a00'x3
+clothha01	3	3	'Cloth_H_a01'x3
+clothhb00	3	3	'Cloth_H_b00'x3
+clothhb01	3	3	'Cloth_H_b01'x3
+clothhc00	3	3	'Cloth_H_c00'x3
+clothhc01	3	3	'Cloth_H_c01'x3
+clothhd00	3	3	'Cloth_H_d00'x3
+clothhd01	3	3	'Cloth_H_d01'x3
+clothhe00	3	3	'Cloth_H_e00'x3
+clothhe01	3	3	'Cloth_H_e01'x3
+clothf04	3	3	'Cloth_f04'x3
+clothg03	3	3	'Cloth_g03'x3
+nosenub	3	0	'NoseNub'x3
+clothlb00	3	3	'Cloth_L_b00'x3
+clothlb01	3	2	'Cloth_L_b01'x3
+clothrb00	3	3	'Cloth_R_b00'x3
+clothrb01	3	2	'Cloth_R_b01'x3
+rblink	3	3	'R_blink'x3
+lblink	3	3	'L_blink'x3
+tail08	3	2	'tail08'x2; 'tail_08'x1
+cloth00	3	3	'Cloth_00'x3
+cloth01	3	3	'Cloth_01'x3
+cloth02	3	3	'Cloth_02'x3
+cloth03	3	3	'Cloth_03'x3
+cloth04	3	3	'Cloth_04'x3
+cloth05	3	3	'Cloth_05'x3
+cloth06	3	3	'Cloth_06'x3
+lbow	3	3	'L_bow'x3
+lbow01	3	3	'L_bow01'x3
+lbowstring	3	3	'L_bowstring'x3
+clothr01	3	2	'Cloth_R01'x3
+clothr02	3	2	'Cloth_R02'x3
+clothr03	3	2	'Cloth_R03'x3
+clothr04	3	2	'Cloth_R04'x3
+lfinger13	3	3	'L Finger13'x3
+lfinger23	3	3	'L Finger23'x3
+lfinger33	3	3	'L Finger33'x3
+lfinger43	3	3	'L Finger43'x3
+rfinger23	3	3	'R Finger23'x3
+rfinger33	3	3	'R Finger33'x3
+rfinger43	3	3	'R Finger43'x3
+modeldmy2	3	0	'Model_Dmy_2'x2; 'Model_dmy2'x1
+ctrlspine2	3	0	'CTRL_Spine2'x3
+beardc00	3	2	'Beard_c00'x3
+beardc01	3	2	'Beard_c01'x3
+beardc02	3	2	'Beard_c02'x3
+beardc03	3	2	'Beard_c03'x3
+beardc04	3	2	'Beard_c04'x3
+beardc05	3	2	'Beard_c05'x3
+beardd00	3	2	'Beard_d00'x3
+beardd01	3	2	'Beard_d01'x3
+beardd02	3	2	'Beard_d02'x3
+beardd03	3	2	'Beard_d03'x3
+beardd04	3	2	'Beard_d04'x3
+beardd05	3	2	'Beard_d05'x3
+bearde00	3	2	'Beard_e00'x3
+bearde01	3	2	'Beard_e01'x3
+bearde02	3	2	'Beard_e02'x3
+bearde03	3	2	'Beard_e03'x3
+bearde04	3	2	'Beard_e04'x3
+bearde05	3	2	'Beard_e05'x3
+beardf00	3	2	'Beard_f00'x3
+beardf01	3	2	'Beard_f01'x3
+beardf02	3	2	'Beard_f02'x3
+beardf03	3	2	'Beard_f03'x3
+beardf04	3	2	'Beard_f04'x3
+beardf05	3	2	'Beard_f05'x3
+beardg00	3	2	'Beard_g00'x3
+beardg01	3	2	'Beard_g01'x3
+beardg02	3	2	'Beard_g02'x3
+beardg03	3	2	'Beard_g03'x3
+beardg04	3	2	'Beard_g04'x3
+beardg05	3	2	'Beard_g05'x3
+beardg06	3	2	'Beard_g06'x3
+beardh00	3	2	'Beard_h00'x3
+beardh01	3	2	'Beard_h01'x3
+beardh02	3	2	'Beard_h02'x3
+beardh03	3	2	'Beard_h03'x3
+beardh04	3	2	'Beard_h04'x3
+beardh05	3	2	'Beard_h05'x3
+beardh06	3	2	'Beard_h06'x3
+bearda00	3	2	'Beard_a00'x3
+bearda01	3	2	'Beard_a01'x3
+bearda02	3	2	'Beard_a02'x3
+bearda03	3	2	'Beard_a03'x3
+bearda04	3	2	'Beard_a04'x3
+beardb00	3	2	'Beard_b00'x3
+beardb01	3	2	'Beard_b01'x3
+beardb02	3	2	'Beard_b02'x3
+beardb03	3	2	'Beard_b03'x3
+beardb04	3	2	'Beard_b04'x3
+ctrlbearda00	3	0	'CTRL_Beard_a00'x3
+ctrlbearda01	3	0	'CTRL_Beard_a01'x3
+ctrlbearda02	3	0	'CTRL_Beard_a02'x3
+ctrlbearda03	3	0	'CTRL_Beard_a03'x3
+ctrlbearda04	3	0	'CTRL_Beard_a04'x3
+ctrlbeardanub	3	0	'CTRL_Beard_aNub'x3
+ctrlbeardb00	3	0	'CTRL_Beard_b00'x3
+ctrlbeardb01	3	0	'CTRL_Beard_b01'x3
+ctrlbeardb02	3	0	'CTRL_Beard_b02'x3
+ctrlbeardb03	3	0	'CTRL_Beard_b03'x3
+ctrlbeardb04	3	0	'CTRL_Beard_b04'x3
+ctrlbeardbnub	3	0	'CTRL_Beard_bNub'x3
+ctrlbeardc00	3	0	'CTRL_Beard_c00'x3
+ctrlbeardc01	3	0	'CTRL_Beard_c01'x3
+ctrlbeardc02	3	0	'CTRL_Beard_c02'x3
+ctrlbeardc03	3	0	'CTRL_Beard_c03'x3
+ctrlbeardc04	3	0	'CTRL_Beard_c04'x3
+ctrlbeardc05	3	0	'CTRL_Beard_c05'x3
+ctrlbeardcnub	3	0	'CTRL_Beard_cNub'x3
+ctrlbeardd00	3	0	'CTRL_Beard_d00'x3
+ctrlbeardd01	3	0	'CTRL_Beard_d01'x3
+ctrlbeardd02	3	0	'CTRL_Beard_d02'x3
+ctrlbeardd03	3	0	'CTRL_Beard_d03'x3
+ctrlbeardd04	3	0	'CTRL_Beard_d04'x3
+ctrlbeardd05	3	0	'CTRL_Beard_d05'x3
+ctrlbearddnub	3	0	'CTRL_Beard_dNub'x3
+ctrlbearde00	3	0	'CTRL_Beard_e00'x3
+ctrlbearde01	3	0	'CTRL_Beard_e01'x3
+ctrlbearde02	3	0	'CTRL_Beard_e02'x3
+ctrlbearde03	3	0	'CTRL_Beard_e03'x3
+ctrlbearde04	3	0	'CTRL_Beard_e04'x3
+ctrlbearde05	3	0	'CTRL_Beard_e05'x3
+ctrlbeardenub	3	0	'CTRL_Beard_eNub'x3
+ctrlbeardf00	3	0	'CTRL_Beard_f00'x3
+ctrlbeardf01	3	0	'CTRL_Beard_f01'x3
+ctrlbeardf02	3	0	'CTRL_Beard_f02'x3
+ctrlbeardf03	3	0	'CTRL_Beard_f03'x3
+ctrlbeardf04	3	0	'CTRL_Beard_f04'x3
+ctrlbeardf05	3	0	'CTRL_Beard_f05'x3
+ctrlbeardfnub	3	0	'CTRL_Beard_fNub'x3
+ctrlbeardg00	3	0	'CTRL_Beard_g00'x3
+ctrlbeardg01	3	0	'CTRL_Beard_g01'x3
+ctrlbeardg02	3	0	'CTRL_Beard_g02'x3
+ctrlbeardg03	3	0	'CTRL_Beard_g03'x3
+ctrlbeardg04	3	0	'CTRL_Beard_g04'x3
+ctrlbeardg05	3	0	'CTRL_Beard_g05'x3
+ctrlbeardg06	3	0	'CTRL_Beard_g06'x3
+ctrlbeardgnub	3	0	'CTRL_Beard_gNub'x3
+ctrlbeardh00	3	0	'CTRL_Beard_h00'x3
+ctrlbeardh01	3	0	'CTRL_Beard_h01'x3
+ctrlbeardh02	3	0	'CTRL_Beard_h02'x3
+ctrlbeardh03	3	0	'CTRL_Beard_h03'x3
+ctrlbeardh04	3	0	'CTRL_Beard_h04'x3
+ctrlbeardh05	3	0	'CTRL_Beard_h05'x3
+ctrlbeardh06	3	0	'CTRL_Beard_h06'x3
+ctrlbeardhnub	3	0	'CTRL_Beard_hNub'x3
+tongue1	3	3	'Tongue1'x3
+固定dmy01	3	0	'固定dmy01'x3
+tailb00	3	3	'Tail_b00'x3
+tailb01	3	3	'Tail_b01'x3
+tailb02	3	3	'Tail_b02'x3
+tailb03	3	3	'Tail_b03'x3
+tailb04	3	3	'Tail_b04'x3
+tailb05	3	3	'Tail_b05'x3
+tailbnub	3	1	'Tail_bNub'x3
+bowroot	3	1	'Bow_root'x3
+bowa00	3	1	'Bow_a00'x3
+bowa01	3	1	'Bow_a01'x3
+bowb00	3	1	'Bow_b00'x3
+bowb01	3	1	'Bow_b01'x3
+lshoulderpad	3	2	'L_Shoulder_Pad'x3
+bowarrow	3	1	'Bow_Arrow'x3
+capea00	3	2	'Cape_a_00'x3
+capea01	3	2	'Cape_a_01'x3
+capeb00	3	2	'Cape_b_00'x3
+capeb01	3	2	'Cape_b_01'x3
+capec00	3	2	'Cape_c_00'x3
+capec01	3	2	'Cape_c_01'x3
+lshoulderpada01	3	2	'L_Shoulder_Pad_a01'x3
+lshoulderpadb01	3	2	'L_Shoulder_Pad_b01'x3
+lshoulderpadb02	3	2	'L_Shoulder_Pad_b02'x3
+lshoulderpadb03	3	2	'L_Shoulder_Pad_b03'x3
+capee00	3	2	'Cape_e_00'x3
+capee01	3	2	'Cape_e_01'x3
+caped00	3	2	'Cape_d_00'x3
+caped01	3	2	'Cape_d_01'x3
+chainspine2la	3	2	'Chain_Spine2_L_A'x3
+chainspine2lb	3	2	'Chain_Spine2_L_B'x3
+chainspine2ra	3	2	'Chain_Spine2_R_A'x3
+skirtla00	3	2	'Skirt_L_a_00'x3
+skirtla01	3	2	'Skirt_L_a_01'x3
+skirtlb00	3	2	'Skirt_L_b_00'x3
+skirtlb01	3	2	'Skirt_L_b_01'x3
+skirtlb02	3	2	'Skirt_L_b_02'x3
+skirtlc00	3	2	'Skirt_L_c_00'x3
+skirtlc01	3	2	'Skirt_L_c_01'x3
+skirtlc02	3	2	'Skirt_L_c_02'x3
+skirtra00	3	2	'Skirt_R_a_00'x3
+skirtra01	3	2	'Skirt_R_a_01'x3
+skirtrb00	3	2	'Skirt_R_b_00'x3
+skirtrb01	3	2	'Skirt_R_b_01'x3
+skirtrb02	3	2	'Skirt_R_b_02'x3
+skirtrc00	3	2	'Skirt_R_c_00'x3
+skirtrc01	3	2	'Skirt_R_c_01'x3
+skirtrc02	3	2	'Skirt_R_c_02'x3
+chainspineroot	3	2	'Chain_Spine_Root'x3
+chainspinea02	3	2	'Chain_Spine_A_02'x3
+chainspinea01	3	2	'Chain_Spine_A_01'x3
+chainspineb02	3	2	'Chain_Spine_B_02'x3
+chainspineb01	3	2	'Chain_Spine_B_01'x3
+skirtback00	3	2	'Skirt_Back_00'x3
+skirtback01	3	2	'Skirt_Back_01'x3
+skirtback02	3	2	'Skirt_Back_02'x3
+skirtfront00	3	2	'Skirt_Front_00'x3
+skirtfront01	3	2	'Skirt_Front_01'x3
+lshoulderpadnub	3	0	'L_Shoulder_PadNub'x3
+capeanub	3	0	'Cape_a_Nub'x3
+capebnub	3	0	'Cape_b_Nub'x3
+capecnub	3	0	'Cape_c_Nub'x3
+lshoulderpad01nub	3	0	'L_Shoulder_Pad01Nub'x3
+lshoulderpadb01nub	3	0	'L_Shoulder_Pad_b01Nub'x3
+lshoulderpadb02nub	3	0	'L_Shoulder_Pad_b02Nub'x3
+lshoulderpadb03nub	3	0	'L_Shoulder_Pad_b03Nub'x3
+capeenub	3	0	'Cape_e_Nub'x3
+capednub	3	0	'Cape_d_Nub'x3
+skirtlanub	3	0	'Skirt_L_a_Nub'x3
+skirtlbnub	3	0	'Skirt_L_b_Nub'x3
+skirtlcnub	3	0	'Skirt_L_c_Nub'x3
+rsidearmor00nub	3	0	'R_Side_armor_00Nub'x3
+skirtranub	3	0	'Skirt_R_a_Nub'x3
+skirtrbnub	3	0	'Skirt_R_b_Nub'x3
+skirtrcnub	3	0	'Skirt_R_c_Nub'x3
+skirtbacknub	3	0	'Skirt_Back_Nub'x3
+skirtfrontnub	3	0	'Skirt_Front_Nub'x3
+model	2	0	'model'x2
+tangue	2	1	'Tangue'x2
+tangue1	2	1	'Tangue1'x2
+modelwepon	2	0	'model_wepon'x2
+wpa0654	2	0	'WP_A_0654'x2
+オブジェクト02	2	0	'オブジェクト02'x2
+larmor	2	2	'L_Armor'x1; 'L_armor'x1
+rarmor	2	2	'R_Armor'x1; 'R_armor'x1
+l	2	1	'L'x1; 'l'x1
+luparmtwist1	2	2	'LUpArmTwist1'x2
+ruparmtwist1	2	2	'RUpArmTwist1'x2
+front01	2	2	'Front01'x1; 'Front_01'x1
+front02	2	2	'Front02'x1; 'Front_02'x1
+front03	2	2	'Front03'x1; 'Front_03'x1
+front04	2	2	'Front04'x1; 'Front_04'x1
+back02	2	2	'Back02'x1; 'back02'x1
+back03	2	2	'Back03'x1; 'back03'x1
+backl02	2	2	'Back_L02'x1; 'Back_L_02'x1
+backr02	2	2	'Back_R02'x1; 'Back_R_02'x1
+frontnub	2	0	'FrontNub'x2
+backlnub	2	0	'Back_LNub'x1; 'Back_L_Nub'x1
+backrnub	2	0	'Back_RNub'x1; 'Back_R_Nub'x1
+c2500weapon2	2	0	'c2500_weapon_2'x2
+c2510	2	0	'c2510'x2
+wpa0402	2	0	'WP_A_0402'x2
+clothb07	2	2	'Cloth_b07'x2
+clothj03	2	2	'Cloth_j03'x2
+rsword	2	0	'R_sword'x2
+clothhg00	2	2	'Cloth_H_g00'x2
+clothhg01	2	2	'Cloth_H_g01'x2
+clothhf00	2	2	'Cloth_H_f00'x2
+clothhf01	2	2	'Cloth_H_f01'x2
+neck2	2	2	'Neck2'x2
+neck3	2	2	'Neck3'x2
+clothhe02	2	2	'Cloth_H_e02'x2
+clothhe03	2	2	'Cloth_H_e03'x2
+clothhe05	2	2	'Cloth_H_e05'x2
+clothhe06	2	2	'Cloth_H_e06'x2
+clothhc02	2	2	'Cloth_H_c02'x2
+clothhc03	2	2	'Cloth_H_c03'x2
+clothhc04	2	2	'Cloth_H_c04'x2
+clothhc05	2	2	'Cloth_H_c05'x2
+clothhb02	2	2	'Cloth_H_b02'x2
+clothhb03	2	2	'Cloth_H_b03'x2
+clothhd02	2	2	'Cloth_H_d02'x2
+clothhd03	2	2	'Cloth_H_d03'x2
+clothhd04	2	2	'Cloth_H_d04'x2
+clothhd05	2	2	'Cloth_H_d05'x2
+clothha02	2	2	'Cloth_H_a02'x2
+clothha03	2	2	'Cloth_H_a03'x2
+clothh04	2	2	'Cloth_h04'x2
+clothh05	2	2	'Cloth_h05'x2
+clothe06	2	2	'Cloth_e06'x2
+clothg04	2	2	'Cloth_g04'x2
+clothg05	2	2	'Cloth_g05'x2
+clothg06	2	2	'Cloth_g06'x2
+clothf05	2	2	'Cloth_f05'x2
+clothf06	2	2	'Cloth_f06'x2
+clothf07	2	2	'Cloth_f07'x2
+clothlc00	2	2	'Cloth_L_c00'x2
+clothlc01	2	2	'Cloth_L_c01'x2
+clothrc00	2	2	'Cloth_R_c00'x2
+clothrc01	2	2	'Cloth_R_c01'x2
+ltoe32	2	2	'L Toe32'x2
+ltoe4	2	2	'L Toe4'x2
+ltoe41	2	2	'L Toe41'x2
+ltoe42	2	2	'L Toe42'x2
+rtoe32	2	2	'R Toe32'x2
+rtoe4	2	2	'R Toe4'x2
+rtoe41	2	2	'R Toe41'x2
+rtoe42	2	2	'R Toe42'x2
+ltoe4nub	2	0	'L Toe4Nub'x2
+rtoe4nub	2	0	'R Toe4Nub'x2
+c4020	2	0	'c4020_'x2
+armor00	2	2	'armor_00'x2
+armor01	2	2	'armor_01'x2
+armor02	2	2	'armor_02'x2
+armor03	2	2	'armor_03'x2
+c2860	2	0	'c2860'x2
+bip01lfinger3nub	2	0	'Bip01 L Finger3Nub'x2
+bip01lfinger4nub	2	0	'Bip01 L Finger4Nub'x2
+bip01rfinger0nub	2	0	'Bip01 R Finger0Nub'x2
+bip01rfinger1nub	2	0	'Bip01 R Finger1Nub'x2
+bip01rfinger2nub	2	0	'Bip01 R Finger2Nub'x2
+bip01rfinger3nub	2	0	'Bip01 R Finger3Nub'x2
+bip01rfinger4nub	2	0	'Bip01 R Finger4Nub'x2
+bip01headnub	2	0	'Bip01 HeadNub'x2
+bip01ltoe0nub	2	0	'Bip01 L Toe0Nub'x2
+bip01rtoe0nub	2	0	'Bip01 R Toe0Nub'x2
+armornub	2	0	'armorNub'x2
+sfxdummy1	2	0	'sfx_dummy_1'x2
+ctrlrweapon	2	0	'CTRL_R Weapon'x2
+beard	2	0	'Beard'x2
+helm	2	0	'Helm'x2
+wpa0504	2	0	'WP_A_0504'x2
+wpa0605	2	0	'WP_A_0605'x2
+wpa1520	2	0	'WP_A_1520'x2
+tailanub	2	0	'tail_aNub'x1; 'Tail_aNub'x1
+c4090bow	2	0	'c4090_bow'x2
+c4090mantle	2	0	'c4090_mantle'x2
+c4090	2	0	'c4090'x2
+c4090mantle01	2	0	'c4090_mantle01'x2
+c4110	2	0	'c4110'x2
+amm9720	2	0	'AM_M_9720'x2
+lgm9720	2	0	'LG_M_9720'x2
+bdm9720	2	0	'BD_M_9720'x18
+hdm9270	2	0	'HD_M_9270'x2
+c41102	2	0	'c4110_2'x2
+box02	2	0	'Box02'x2
+c4010	2	0	'c4010'x2
+lgm01	2	0	'LG_M_01'x2
+forehead1	2	2	'ForeHead1'x2
+forehead2	2	2	'ForeHead2'x2
+rmouth1	2	2	'R_mouth1'x2
+rmouth2	2	2	'R_mouth2'x2
+rmouth3	2	2	'R_mouth3'x2
+lmouth1	2	2	'L_mouth1'x2
+lmouth2	2	2	'L_mouth2'x2
+lmouth3	2	2	'L_mouth3'x2
+tongue2	2	2	'Tongue2'x2
+tongue3	2	2	'Tongue3'x2
+wep	2	2	'Wep'x2
+cloth07	2	2	'Cloth_07'x2
+cloth09	2	2	'Cloth_09'x2
+cloth08	2	2	'Cloth_08'x2
+cloth11	2	2	'Cloth_11'x2
+cloth10	2	2	'Cloth_10'x2
+cloth12	2	2	'Cloth_12'x2
+cloth13	2	2	'Cloth_13'x2
+cloth14	2	2	'Cloth_14'x2
+cloth15	2	2	'Cloth_15'x2
+cloth16	2	2	'Cloth_16'x2
+cloth17	2	2	'Cloth_17'x2
+cloth18	2	2	'Cloth_18'x2
+cloth19	2	2	'Cloth_19'x2
+cloth20	2	2	'Cloth_20'x2
+cloth21	2	2	'Cloth_21'x2
+cloth22	2	2	'Cloth_22'x2
+cloth23	2	2	'Cloth_23'x2
+cloth24	2	2	'Cloth_24'x2
+cloth25	2	2	'Cloth_25'x2
+cloth26	2	2	'Cloth_26'x2
+cloth27	2	2	'Cloth_27'x2
+cloth28	2	2	'Cloth_28'x2
+cloth29	2	2	'Cloth_29'x2
+cloth30	2	2	'Cloth_30'x2
+cloth31	2	2	'Cloth_31'x2
+cloth32	2	2	'Cloth_32'x2
+cloth33	2	2	'Cloth_33'x2
+cloth34	2	2	'Cloth_34'x2
+cloth35	2	2	'Cloth_35'x2
+cloth36	2	2	'Cloth_36'x2
+cloth37	2	2	'Cloth_37'x2
+cloth38	2	2	'Cloth_38'x2
+lhorselink	2	2	'L HorseLink'x2
+cloth39	2	2	'Cloth_39'x2
+cloth40	2	2	'Cloth_40'x2
+cloth41	2	2	'Cloth_41'x2
+rhorselink	2	2	'R HorseLink'x2
+cloth42	2	2	'Cloth_42'x2
+cloth43	2	2	'Cloth_43'x2
+cloth44	2	2	'Cloth_44'x2
+cloth45	2	2	'Cloth_45'x2
+cloth47	2	2	'Cloth_47'x2
+cloth48	2	2	'Cloth_48'x2
+cloth49	2	2	'Cloth_49'x2
+cloth50	2	2	'Cloth_50'x2
+cloth51	2	2	'Cloth_51'x2
+cloth52	2	2	'Cloth_52'x2
+cloth53	2	2	'Cloth_53'x2
+cloth54	2	2	'Cloth_54'x2
+cloth55	2	2	'Cloth_55'x2
+cloth56	2	2	'Cloth_56'x2
+cloth57	2	2	'Cloth_57'x2
+cloth58	2	2	'Cloth_58'x2
+cloth59	2	2	'Cloth_59'x2
+cloth60	2	2	'Cloth_60'x2
+c5210	2	0	'c5210'x2
+wpa0267	2	0	'WP_A_0267'x2
+forehead1nub	2	0	'ForeHead1Nub'x2
+forehead2nub	2	0	'ForeHead2Nub'x2
+reyenub	2	0	'R_eyeNub'x2
+leyenub	2	0	'L_eyeNub'x2
+rblinknub	2	0	'R_blinkNub'x2
+lblinknub	2	0	'L_blinkNub'x2
+rmouth1nub	2	0	'R_mouth1Nub'x2
+rmouth2nub	2	0	'R_mouth2Nub'x2
+rmouth3nub	2	0	'R_mouth3Nub'x2
+lmouth1nub	2	0	'L_mouth1Nub'x2
+lmouth2nub	2	0	'L_mouth2Nub'x2
+lmouth3nub	2	0	'L_mouth3Nub'x2
+cloth00nub	2	0	'Cloth_00Nub'x2
+cloth01nub	2	0	'Cloth_01Nub'x2
+cloth02nub	2	0	'Cloth_02Nub'x2
+cloth03nub	2	0	'Cloth_03Nub'x2
+cloth04nub	2	0	'Cloth_04Nub'x2
+cloth05nub	2	0	'Cloth_05Nub'x2
+cloth06nub	2	0	'Cloth_06Nub'x2
+cloth07nub	2	0	'Cloth_07Nub'x2
+cloth09nub	2	0	'Cloth_09Nub'x2
+cloth08nub	2	0	'Cloth_08Nub'x2
+cloth11nub	2	0	'Cloth_11Nub'x2
+cloth10nub	2	0	'Cloth_10Nub'x2
+cloth12nub	2	0	'Cloth_12Nub'x2
+cloth13nub	2	0	'Cloth_13Nub'x2
+cloth14nub	2	0	'Cloth_14Nub'x2
+cloth15nub	2	0	'Cloth_15Nub'x2
+cloth16nub	2	0	'Cloth_16Nub'x2
+cloth17nub	2	0	'Cloth_17Nub'x2
+cloth18nub	2	0	'Cloth_18Nub'x2
+cloth19nub	2	0	'Cloth_19Nub'x2
+cloth20nub	2	0	'Cloth_20Nub'x2
+cloth21nub	2	0	'Cloth_21Nub'x2
+cloth22nub	2	0	'Cloth_22Nub'x2
+cloth23nub	2	0	'Cloth_23Nub'x2
+cloth24nub	2	0	'Cloth_24Nub'x2
+cloth25nub	2	0	'Cloth_25Nub'x2
+cloth26nub	2	0	'Cloth_26Nub'x2
+cloth27nub	2	0	'Cloth_27Nub'x2
+cloth28nub	2	0	'Cloth_28Nub'x2
+cloth29nub	2	0	'Cloth_29Nub'x2
+cloth30nub	2	0	'Cloth_30Nub'x2
+cloth31nub	2	0	'Cloth_31Nub'x2
+cloth32nub	2	0	'Cloth_32Nub'x2
+cloth33nub	2	0	'Cloth_33Nub'x2
+cloth34nub	2	0	'Cloth_34Nub'x2
+cloth35nub	2	0	'Cloth_35Nub'x2
+cloth36nub	2	0	'Cloth_36Nub'x2
+cloth37nub	2	0	'Cloth_37Nub'x2
+cloth38nub	2	0	'Cloth_38Nub'x2
+cloth39nub	2	0	'Cloth_39Nub'x2
+cloth40nub	2	0	'Cloth_40Nub'x2
+cloth41nub	2	0	'Cloth_41Nub'x2
+cloth42nub	2	0	'Cloth_42Nub'x2
+cloth43nub	2	0	'Cloth_43Nub'x2
+cloth44nub	2	0	'Cloth_44Nub'x2
+cloth45nub	2	0	'Cloth_45Nub'x2
+cloth46	2	0	'Cloth_46'x2
+cloth46nub	2	0	'Cloth_46Nub'x2
+cloth47nub	2	0	'Cloth_47Nub'x2
+cloth48nub	2	0	'Cloth_48Nub'x2
+cloth49nub	2	0	'Cloth_49Nub'x2
+cloth50nub	2	0	'Cloth_50Nub'x2
+cloth51nub	2	0	'Cloth_51Nub'x2
+cloth52nub	2	0	'Cloth_52Nub'x2
+cloth53nub	2	0	'Cloth_53Nub'x2
+cloth54nub	2	0	'Cloth_54Nub'x2
+cloth55nub	2	0	'Cloth_55Nub'x2
+cloth56nub	2	0	'Cloth_56Nub'x2
+cloth57nub	2	0	'Cloth_57Nub'x2
+cloth58nub	2	0	'Cloth_58Nub'x2
+cloth59nub	2	0	'Cloth_59Nub'x2
+cloth60nub	2	0	'Cloth_60Nub'x2
+clothlg00	2	2	'Cloth_L_g00'x2
+clothlg01	2	1	'Cloth_L_g01'x2
+clothlg02	2	1	'Cloth_L_g02'x2
+clothlgnub	2	1	'Cloth_L_gNub'x2
+clothlf00	2	2	'Cloth_L_f00'x2
+clothlf01	2	2	'Cloth_L_f01'x2
+clothlf02	2	1	'Cloth_L_f02'x2
+clothle00	2	1	'Cloth_L_e00'x2
+clothle01	2	1	'Cloth_L_e01'x2
+clothle02	2	1	'Cloth_L_e02'x2
+clothlenub	2	1	'Cloth_L_eNub'x2
+clothrg00	2	2	'Cloth_R_g00'x2
+clothrg01	2	1	'Cloth_R_g01'x2
+clothrg02	2	1	'Cloth_R_g02'x2
+clothrgnub	2	1	'Cloth_R_gNub'x2
+clothrf00	2	2	'Cloth_R_f00'x2
+clothrf01	2	2	'Cloth_R_f01'x2
+clothrf02	2	1	'Cloth_R_f02'x2
+clothre00	2	1	'Cloth_R_e00'x2
+clothre01	2	1	'Cloth_R_e01'x2
+clothre02	2	1	'Cloth_R_e02'x2
+clothrenub	2	1	'Cloth_R_eNub'x2
+clothra02	2	2	'Cloth_R_a02'x2
+clothra03	2	2	'Cloth_R_a03'x2
+clothranub	2	1	'Cloth_R_aNub'x2
+clothla02	2	2	'Cloth_L_a02'x2
+clothla03	2	2	'Cloth_L_a03'x2
+clothlanub	2	1	'Cloth_L_aNub'x2
+wpa01102	2	0	'WP_A_01102'x2
+clothlfnub	2	0	'Cloth_L_fNub'x2
+clothrfnub	2	0	'Cloth_R_fNub'x2
+mantle01	2	0	'Mantle01'x1; 'mantle01'x1
+c1202	1	0	'c1202'x2
+c1204	1	0	'c1204'x1
+c02	1	0	'c02'x1
+c1210	1	0	'c1210'x1
+c1211	1	0	'c1211'x1
+c1203	1	0	'c1203'x1
+c2060	1	0	'c2060'x1
+宝死体用	1	0	'宝死体用'x1
+固定dummy	1	0	'固定dummy'x1
+wpa0702l	1	0	'WP_A_0702 _L'x1
+wpa0200l	1	0	'WP_A_0200_L'x1
+c2210	1	0	'c2210'x1
+c2230weapon01	1	0	'c2230_weapon01'x1
+c2240body	1	0	'c2240_body'x1
+c2240weapon	1	0	'c2240_weapon'x1
+c2240tale	1	0	'c2240_tale'x1
+c2240cloth	1	0	'c2240_cloth'x1
+c2250body	1	0	'c2250_body'x1
+modelweapon2	1	0	'model_weapon2'x1
+dmy	1	0	'dmy'x1
+masterエクストラ01nub	1	0	'master エクストラ01Nub'x1
+sphere01	1	0	'Sphere01'x1
+sphere02	1	0	'Sphere02'x1
+sphere03	1	0	'Sphere03'x1
+marmor	1	1	'M_Armor'x1
+c2320	1	0	'c2320'x1
+c2320weapon	1	0	'c2320_weapon'x1
+r	1	0	'R'x1
+c2360	1	0	'c2360'x1
+c2360weapon	1	0	'c2360_weapon'x1
+lweapon02	1	1	'L_Weapon02'x1
+chanesbase	1	1	'ChanesBase'x1
+clothbonec01	1	1	'Cloth_BoneC01'x1
+clothbonel101	1	1	'Cloth_BoneL1_01'x1
+clothbonel102	1	1	'Cloth_BoneL1_02'x1
+clothbonel103	1	1	'Cloth_BoneL1_03'x1
+clothbonel104	1	1	'Cloth_BoneL1_04'x1
+clothbonel105	1	1	'Cloth_BoneL1_05'x1
+clothboner101	1	1	'Cloth_BoneR1_01'x1
+clothboner102	1	1	'Cloth_BoneR1_02'x1
+clothboner103	1	1	'Cloth_BoneR1_03'x1
+clothboner104	1	1	'Cloth_BoneR1_04'x1
+clothboner105	1	1	'Cloth_BoneR1_05'x1
+clothbonel201	1	1	'Cloth_BoneL2_01'x1
+clothbonel202	1	1	'Cloth_BoneL2_02'x1
+clothbonel203	1	1	'Cloth_BoneL2_03'x1
+clothbonel204	1	1	'Cloth_BoneL2_04'x1
+clothbonel205	1	1	'Cloth_BoneL2_05'x1
+clothbonel206	1	1	'Cloth_BoneL2_06'x1
+clothboner201	1	1	'Cloth_BoneR2_01'x1
+clothboner202	1	1	'Cloth_BoneR2_02'x1
+clothboner203	1	1	'Cloth_BoneR2_03'x1
+clothboner204	1	1	'Cloth_BoneR2_04'x1
+clothboner205	1	1	'Cloth_BoneR2_05'x1
+clothboner206	1	1	'Cloth_BoneR2_06'x1
+hdm9210	1	0	'HD_M_9210'x1
+c2370weapon	1	0	'c2370_weapon'x1
+amm9210	1	0	'AM_M_9210'x1
+lgm9210	1	0	'LG_M_9210'x1
+bdm9210	1	0	'BD_M_9210'x1
+cloth	1	0	'cloth'x1
+leg	1	0	'leg'x1
+slc1	1	1	'SL_c1'x1
+slc102	1	1	'SL_c102'x1
+slb1	1	1	'SL_b1'x1
+slb102	1	1	'SL_b102'x1
+slb103	1	1	'SL_b103'x1
+sla1	1	1	'SL_a1'x1
+sla102	1	1	'SL_a102'x1
+wclotha00	1	1	'W_Cloth_a00'x1
+wclotha01	1	1	'W_Cloth_a01'x1
+wclotha02	1	1	'W_Cloth_a02'x1
+wclothb00	1	1	'W_Cloth_b00'x1
+wclothb01	1	1	'W_Cloth_b01'x1
+wclothb02	1	1	'W_Cloth_b02'x1
+wclothb03	1	1	'W_Cloth_b03'x1
+wclothb04	1	1	'W_Cloth_b04'x1
+wclothc00	1	1	'W_Cloth_c00'x1
+wclothc01	1	1	'W_Cloth_c01'x1
+wclothc02	1	1	'W_Cloth_c02'x1
+wclothc03	1	1	'W_Cloth_c03'x1
+src1	1	1	'SR_c1'x1
+src102	1	1	'SR_c102'x1
+srb1	1	1	'SR_b1'x1
+srb102	1	1	'SR_b102'x1
+srb103	1	1	'SR_b103'x1
+sra1	1	1	'SR_a1'x1
+sra102	1	1	'SR_a102'x1
+back	1	1	'Back'x1
+backl	1	1	'Back_L'x1
+backr	1	1	'Back_R'x1
+bl	1	1	'B_L'x1
+bl02	1	1	'B_L02'x1
+bl03	1	1	'B_L03'x1
+br	1	1	'B_R'x1
+br02	1	1	'B_R02'x1
+br03	1	1	'B_R03'x1
+backcloth	1	1	'back_cloth'x1
+backclothl	1	1	'back_cloth_L'x1
+backclothl02	1	1	'back_cloth_L02'x1
+backclothl03	1	1	'back_cloth_L03'x1
+backclothl04	1	1	'back_cloth_L04'x1
+backclothr	1	1	'back_cloth_R'x1
+backclothr02	1	1	'back_cloth_R02'x1
+backclothr04	1	1	'back_cloth_R04'x1
+a1	1	1	'a_1'x1
+a102	1	1	'a_102'x1
+b1	1	1	'b_1'x1
+b102	1	1	'b_102'x1
+c1	1	1	'c_1'x1
+c102	1	1	'c_102'x1
+d1	1	1	'd_1'x1
+d102	1	1	'd_102'x1
+e1	1	1	'e_1'x1
+e102	1	1	'e_102'x1
+f1	1	1	'f_1'x1
+f102	1	1	'f_102'x1
+g1	1	1	'g_1'x1
+g102	1	1	'g_102'x1
+h1	1	1	'h_1'x1
+h102	1	1	'h_102'x1
+裏面	1	0	'裏面'x1
+slc1nub	1	0	'SL_c1Nub'x1
+slb1nub	1	0	'SL_b1Nub'x1
+sla1nub	1	0	'SL_a1Nub'x1
+src1nub	1	0	'SR_c1Nub'x1
+srb1nub	1	0	'SR_b1Nub'x1
+sra1nub	1	0	'SR_a1Nub'x1
+backnub	1	0	'BackNub'x1
+blnub	1	0	'B_LNub'x1
+brnub	1	0	'B_RNub'x1
+backclothnub	1	0	'back_clothNub'x1
+backclothlnub	1	0	'back_cloth_LNub'x1
+backclothr03	1	0	'back_cloth_R03'x1
+backclothrnub	1	0	'back_cloth_RNub'x1
+a1nub	1	0	'a_1Nub'x1
+b1nub	1	0	'b_1Nub'x1
+c1nub	1	0	'c_1Nub'x1
+d1nub	1	0	'd_1Nub'x1
+e1nub	1	0	'e_1Nub'x1
+f1nub	1	0	'f_1Nub'x1
+g1nub	1	0	'g_1Nub'x1
+h1nub	1	0	'h_1Nub'x1
+clothrarma01	1	1	'Cloth_R_Arm_A01'x1
+clothrarma02	1	1	'Cloth_R_Arm_A02'x1
+clothllega01	1	1	'Cloth_L_Leg_A01'x1
+clothllegb01	1	1	'Cloth_L_Leg_B01'x1
+clothrlegb01	1	1	'Cloth_R_Leg_B01'x1
+clothrlegb02	1	1	'Cloth_R_Leg_B02'x1
+clothrlega01	1	1	'Cloth_R_Leg_A01'x1
+lgm9245	1	0	'LG_M_9245'x1
+bdm9245	1	0	'BD_M_9245'x1
+hdm9245	1	0	'HD_M_9245'x1
+amm9245	1	0	'AM_M_9245'x1
+wpa9246	1	0	'WP_A_9246'x1
+wpa9247	1	0	'WP_A_9247'x1
+clothlarma01	1	0	'Cloth_L_Arm_A01'x1
+clothlarma02	1	0	'Cloth_L_Arm_A02'x1
+bpw00	1	1	'bpw_00'x1
+bow01	1	1	'bow_01'x1
+sword	1	1	'sword'x1
+c2500	1	0	'c2500'x1
+wpa1300	1	0	'WP_A_1300'x1
+clothl	1	1	'Cloth_L'x1
+clothr	1	1	'Cloth_R'x1
+c2520shield	1	0	'c2520_shield'x1
+c2520weapon	1	0	'c2520_weapon'x1
+c2520	1	0	'c2520'x1
+modelweapon	1	0	'model_weapon'x1
+c2530	1	0	'c2530'x1
+modelweapon01	1	0	'model_weapon01'x1
+c2540shield	1	0	'c2540_shield'x1
+c2540weapon	1	0	'c2540_weapon'x1
+c2540	1	0	'c2540'x1
+weapon2	1	0	'weapon_2'x1
+c2550weapon	1	0	'c2550_weapon'x1
+wpa0201	1	0	'WP_A_0201'x1
+c2550shield	1	0	'c2550_shield'x1
+c2550lance	1	0	'c2550_lance'x1
+c2550	1	0	'c2550'x1
+clotht1	1	1	'Cloth_t1'x1
+cloths1	1	1	'Cloth_s1'x1
+clothr1	1	1	'Cloth_r1'x1
+clothr2	1	1	'Cloth_r2'x1
+wcloth3	1	1	'W_Cloth3'x1
+wcloth2	1	1	'W_Cloth2'x1
+wcloth1	1	1	'W_Cloth1'x1
+rweapon2	1	1	'R_weapon2'x1
+rweapon3	1	1	'R_weapon3'x1
+clothn1	1	1	'Cloth_n1'x1
+clotho1	1	1	'Cloth_o1'x1
+clotho2	1	1	'Cloth_o2'x1
+clothp1	1	1	'Cloth_p1'x1
+clothq1	1	1	'Cloth_q1'x1
+clothm1	1	1	'Cloth_m1'x1
+clothm2	1	1	'Cloth_m2'x1
+clothm3	1	1	'Cloth_m3'x1
+clothm4	1	1	'Cloth_m4'x1
+clothl1	1	1	'Cloth_L1'x1
+clothl2	1	1	'Cloth_L2'x1
+clothl3	1	1	'Cloth_L3'x1
+clothj1	1	1	'Cloth_j1'x1
+clothj3	1	1	'Cloth_j3'x1
+clothk1	1	1	'Cloth_k1'x1
+clothk2	1	1	'Cloth_k2'x1
+clothk3	1	1	'Cloth_k3'x1
+clothi1	1	1	'Cloth_i1'x1
+clothi2	1	1	'Cloth_i2'x1
+clothh1	1	1	'Cloth_h1'x1
+clothh2	1	1	'Cloth_h2'x1
+clothh3	1	1	'Cloth_h3'x1
+clothg1	1	1	'Cloth_g1'x1
+clothg2	1	1	'Cloth_g2'x1
+clothb2	1	1	'Cloth_b2'x1
+clothb3	1	1	'Cloth_b3'x1
+clothc1	1	1	'Cloth_c1'x1
+clothc2	1	1	'Cloth_c2'x1
+clothc3	1	1	'Cloth_c3'x1
+clothd1	1	1	'Cloth_d1'x1
+clothe1	1	1	'Cloth_e1'x1
+farmora1	1	1	'F_armor_a1'x1
+farmora2	1	1	'F_armor_a2'x1
+farmora3	1	1	'F_armor_a3'x1
+clotha1	1	1	'Cloth_a1'x1
+clotha2	1	1	'Cloth_a2'x1
+clotha3	1	1	'Cloth_a3'x1
+clothj2	1	0	'Cloth_j2'x1
+clothb1	1	0	'Cloth_b1'x1
+crossbowstring	1	1	'Crossbow_string'x1
+crossbow	1	1	'Crossbow'x1
+clotho00	1	1	'Cloth_o00'x1
+clotho01	1	1	'Cloth_o01'x1
+clothn00	1	1	'Cloth_n00'x1
+clothn01	1	1	'Cloth_n01'x1
+clothm00	1	1	'Cloth_m00'x1
+clothm01	1	1	'Cloth_m01'x1
+c2560weapon	1	0	'c2560_weapon'x1
+c2560	1	0	'c2560'x1
+c2560shield	1	0	'c2560_shield'x1
+c2560weapon2	1	0	'c2560_weapon_2'x1
+c2560weapon3	1	0	'c2560_weapon_3'x1
+wpa0602	1	0	'WP_A_0602'x1
+c2570	1	0	'c2570'x1
+c2570shield	1	0	'c2570_shield'x1
+c2570weapon	1	0	'c2570_weapon'x1
+reverth	1	0	'reverth'x1
+c2590bow	1	0	'c2590_bow'x1
+c2590mantle	1	0	'c2590_mantle'x1
+c2590	1	0	'c2590'x1
+c2591	1	0	'c2591'x1
+clothhn00	1	1	'Cloth_H_n00'x1
+clothhn01	1	1	'Cloth_H_n01'x1
+clothhn02	1	1	'Cloth_H_n02'x1
+clothhn03	1	1	'Cloth_H_n03'x1
+clothhn04	1	1	'Cloth_H_n04'x1
+clothhm00	1	1	'Cloth_H_m00'x1
+clothhm01	1	1	'Cloth_H_m01'x1
+clothhm02	1	1	'Cloth_H_m02'x1
+clothhm03	1	1	'Cloth_H_m03'x1
+clothhm04	1	1	'Cloth_H_m04'x1
+clothhl00	1	1	'Cloth_H_l00'x1
+clothhl01	1	1	'Cloth_H_l01'x1
+clothhl02	1	1	'Cloth_H_l02'x1
+clothhl03	1	1	'Cloth_H_l03'x1
+clothhl04	1	1	'Cloth_H_l04'x1
+clothhi00	1	1	'Cloth_H_i00'x1
+clothhi01	1	1	'Cloth_H_i01'x1
+clothhi02	1	1	'Cloth_H_i02'x1
+clothhi03	1	1	'Cloth_H_i03'x1
+clothho00	1	1	'Cloth_H_o00'x1
+clothho01	1	1	'Cloth_H_o01'x1
+clothho02	1	1	'Cloth_H_o02'x1
+clothho03	1	1	'Cloth_H_o03'x1
+clothhp00	1	1	'Cloth_H_p00'x1
+clothhp01	1	1	'Cloth_H_p01'x1
+clothhp02	1	1	'Cloth_H_p02'x1
+clothhp03	1	1	'Cloth_H_p03'x1
+clothhj00	1	1	'Cloth_H_j00'x1
+clothhj01	1	1	'Cloth_H_j01'x1
+clothhj02	1	1	'Cloth_H_j02'x1
+clothhj03	1	1	'Cloth_H_j03'x1
+clothhj04	1	1	'Cloth_H_j04'x1
+clothhk00	1	1	'Cloth_H_k00'x1
+clothhk01	1	1	'Cloth_H_k01'x1
+clothhk02	1	1	'Cloth_H_k02'x1
+clothhk03	1	1	'Cloth_H_k03'x1
+clothhk04	1	1	'Cloth_H_k04'x1
+clothhh00	1	1	'Cloth_H_h00'x1
+clothhh01	1	1	'Cloth_H_h01'x1
+clothwa00	1	1	'Cloth_W_a00'x1
+clothwa01	1	1	'Cloth_W_a01'x1
+clothwb00	1	1	'Cloth_W_b00'x1
+c2600wand2	1	0	'c2600_wand_2'x1
+c2600wand1	1	0	'c2600_wand_1'x1
+c2600	1	0	'c2600'x1
+clothwb01	1	0	'Cloth_W_b01'x1
+c2640hammer	1	0	'c2640_hammer'x1
+pony00	1	1	'pony_00'x1
+pony01	1	1	'pony_01'x1
+pony02	1	1	'pony_02'x1
+pony03	1	1	'pony_03'x1
+haira00	1	1	'Hair_a_00'x1
+haira01	1	1	'Hair_a_01'x1
+haira02	1	1	'Hair_a_02'x1
+hairb00	1	1	'Hair_b_00'x1
+hairb01	1	1	'Hair_b_01'x1
+beardm00	1	1	'Beard_M_00'x1
+beardm01	1	1	'Beard_M_01'x1
+beardm02	1	1	'Beard_M_02'x1
+beardl00	1	1	'Beard_L_00'x1
+beardl01	1	1	'Beard_L_01'x1
+beardl02	1	1	'Beard_L_02'x1
+beardr00	1	1	'Beard_R_00'x1
+beardr01	1	1	'Beard_R_01'x1
+beardr02	1	1	'Beard_R_02'x1
+mouthd	1	1	'mouth_D'x1
+hairc00	1	1	'Hair_c_00'x1
+hairc01	1	1	'Hair_c_01'x1
+haird00	1	1	'Hair_d_00'x1
+haird01	1	1	'Hair_d_01'x1
+haire00	1	1	'Hair_e_00'x1
+haire01	1	1	'Hair_e_01'x1
+hairf00	1	1	'Hair_f_00'x1
+hairf01	1	1	'Hair_f_01'x1
+eyer	1	1	'Eye_R'x1
+eyel	1	1	'Eye_L'x1
+blinkr	1	1	'Blink_R'x1
+blinkl	1	1	'Blink_L'x1
+eyebrowr	1	1	'Eyebrow_R'x1
+eyebrowl	1	1	'Eyebrow_L'x1
+cheekr	1	1	'cheek_R'x1
+cheekl	1	1	'cheek_L'x1
+noser	1	1	'Nose_R'x1
+nosel	1	1	'Nose_L'x1
+mouthu	1	1	'Mouth_U'x1
+mouthr	1	1	'Mouth_R'x1
+mouthl	1	1	'Mouth_L'x1
+apronm00	1	1	'Apron_M00'x1
+apronm01	1	1	'Apron_M01'x1
+apronm02	1	1	'Apron_M02'x1
+apronm03	1	1	'Apron_M03'x1
+apronr00	1	1	'Apron_R00'x1
+apronr01	1	1	'Apron_R01'x1
+apronr02	1	1	'Apron_R02'x1
+apronr03	1	1	'Apron_R03'x1
+apronl00	1	1	'Apron_L00'x1
+apronl01	1	1	'Apron_L01'x1
+apronl02	1	1	'Apron_L02'x1
+apronl03	1	1	'Apron_L03'x1
+c2640	1	0	'c2640'x1
+ponynub	1	0	'ponyNub'x1
+hairanub	1	0	'Hair_aNub'x1
+hairbnub	1	0	'Hair_bNub'x1
+beardmnub	1	0	'Beard_MNub'x1
+beardlnub	1	0	'Beard_LNub'x1
+beardrnub	1	0	'Beard_RNub'x1
+mouthdnub	1	0	'mouth_DNub'x1
+haircnub	1	0	'Hair_cNub'x1
+hairdnub	1	0	'Hair_dNub'x1
+hairenub	1	0	'Hair_eNub'x1
+hairfnub	1	0	'Hair_fNub'x1
+eyernub	1	0	'Eye_RNub'x1
+eyelnub	1	0	'Eye_LNub'x1
+blinkrnub	1	0	'Blink_RNub'x1
+blinklnub	1	0	'Blink_LNub'x1
+eyebrowrnub	1	0	'Eyebrow_RNub'x1
+eyebrowlnub	1	0	'Eyebrow_LNub'x1
+cheekrnub	1	0	'cheek_RNub'x1
+cheeklnub	1	0	'cheek_LNub'x1
+nosernub	1	0	'Nose_RNub'x1
+noselnub	1	0	'Nose_LNub'x1
+mouthunub	1	0	'Mouth_UNub'x1
+mouthrnub	1	0	'Mouth_RNub'x1
+mouthlnub	1	0	'Mouth_LNub'x1
+apronmnub	1	0	'Apron_MNub'x1
+apronrnub	1	0	'Apron_RNub'x1
+apronlnub	1	0	'Apron_LNub'x1
+lfaclotha1	1	1	'L_FA_Cloth_a1'x1
+lfaclotha2	1	1	'L_FA_Cloth_a2'x1
+lfaclothb1	1	1	'L_FA_Cloth_b1'x1
+lfaclothc1	1	1	'L_FA_Cloth_c1'x1
+lfaclothd1	1	1	'L_FA_Cloth_d1'x1
+rwclotha1	1	1	'R_W_Cloth_a1'x1
+rwclotha2	1	1	'R_W_Cloth_a2'x1
+rwclotha3	1	1	'R_W_Cloth_a3'x1
+rfaclotha1	1	1	'R_FA_Cloth_a1'x1
+rfaclotha2	1	1	'R_FA_Cloth_a2'x1
+rfaclothb1	1	1	'R_FA_Cloth_b1'x1
+rfaclothc1	1	1	'R_FA_Cloth_c1'x1
+rfaclothd1	1	1	'R_FA_Cloth_d1'x1
+sclothb1	1	1	'S_Cloth_b1'x1
+sclothb2	1	1	'S_Cloth_b2'x1
+sclotha1	1	1	'S_Cloth_a1'x1
+sclotha2	1	1	'S_Cloth_a2'x1
+sclothc1	1	1	'S_Cloth_c1'x1
+sclothc2	1	1	'S_Cloth_c2'x1
+sclothd1	1	1	'S_Cloth_d1'x1
+sclothd2	1	1	'S_Cloth_d2'x1
+sclothe1	1	1	'S_Cloth_e1'x1
+sclothe2	1	1	'S_Cloth_e2'x1
+sclothf1	1	1	'S_Cloth_f1'x1
+sclothf2	1	1	'S_Cloth_f2'x1
+sclothfood	1	1	'S_Cloth_food'x1
+c2650	1	0	'c2650'x1
+rlight	1	0	'R_Light'x1
+c2660knife	1	0	'c2660_knife'x1
+c2660stick	1	0	'c2660_stick'x1
+c2660	1	0	'c2660'x1
+clothhb04	1	1	'Cloth_H_b04'x1
+clothhb05	1	1	'Cloth_H_b05'x1
+clothwl00	1	1	'Cloth_WL_00'x1
+clothwl01	1	1	'Cloth_WL_01'x1
+clothwl02	1	1	'Cloth_WL_02'x1
+clothwl03	1	1	'Cloth_WL_03'x1
+a13	1	1	'a13'x1
+a08	1	1	'a08'x1
+clothwr00	1	1	'Cloth_WR_00'x1
+clothwr01	1	1	'Cloth_WR_01'x1
+clothwr02	1	1	'Cloth_WR_02'x1
+clothwr03	1	1	'Cloth_WR_03'x1
+a12	1	1	'a12'x1
+a09	1	1	'a09'x1
+a00	1	1	'a00'x1
+a05	1	1	'a05'x1
+a07	1	1	'a07'x1
+a01	1	1	'a01'x1
+a06	1	1	'a06'x1
+a04	1	1	'a04'x1
+clothh06	1	1	'Cloth_h06'x1
+clothe07	1	1	'Cloth_e07'x1
+clothe08	1	1	'Cloth_e08'x1
+clothe09	1	1	'Cloth_e09'x1
+clothe10	1	1	'Cloth_e10'x1
+clothe11	1	1	'Cloth_e11'x1
+clothc08	1	1	'Cloth_c08'x1
+clothg07	1	1	'Cloth_g07'x1
+clothg08	1	1	'Cloth_g08'x1
+a11	1	1	'a11'x1
+a02	1	1	'a02'x1
+a03	1	1	'a03'x1
+a10	1	1	'a10'x1
+c2670weapon	1	0	'c2670_weapon'x1
+c2670	1	0	'c2670'x1
+clothhg02	1	1	'Cloth_H_g02'x1
+clothhg03	1	1	'Cloth_H_g03'x1
+clothhg04	1	1	'Cloth_H_g04'x1
+clothhd06	1	1	'Cloth_H_d06'x1
+clothhd07	1	1	'Cloth_H_d07'x1
+clothhc06	1	1	'Cloth_H_c06'x1
+clothhc07	1	1	'Cloth_H_c07'x1
+clothhf02	1	1	'Cloth_H_f02'x1
+clothhf03	1	1	'Cloth_H_f03'x1
+clothha04	1	1	'Cloth_H_a04'x1
+clothhe04	1	1	'Cloth_H_e04'x1
+clothhe07	1	1	'Cloth_H_e07'x1
+baby00	1	1	'Baby_00'x1
+baby01	1	1	'Baby_01'x1
+baby02	1	1	'Baby_02'x1
+clothf08	1	1	'Cloth_f08'x1
+clothf09	1	1	'Cloth_f09'x1
+modeldmy02	1	0	'Model_Dmy02'x1
+c2680weapon	1	0	'c2680_weapon'x1
+c2680	1	0	'c2680'x1
+masterneck1	1	1	'Master Neck1'x1
+masterneck2	1	1	'Master Neck2'x1
+masterneck3	1	1	'Master Neck3'x1
+masterneck4	1	1	'Master Neck4'x1
+masterneck5	1	1	'Master Neck5'x1
+masterneck6	1	1	'Master Neck6'x1
+masterneck7	1	1	'Master Neck7'x1
+masterneck8	1	1	'Master Neck8'x1
+bone01	1	1	'Bone01'x1
+bone02	1	1	'Bone02'x1
+bone03	1	1	'Bone03'x1
+bone04	1	1	'Bone04'x1
+c2690weapon	1	0	'c2690_weapon'x1
+c2690shield	1	0	'c2690_shield'x1
+c2690	1	0	'c2690'x1
+c2710	1	0	'c2710'x1
+c2711	1	0	'c2711'x1
+iuwfng01	1	0	'_I_u_W_F_N_g01'x1
+amf9480	1	0	'AM_F_9480'x1
+hdf9480	1	0	'HD_F_9480'x1
+lgf9480	1	0	'LG_F_9480'x1
+bdf9480	1	0	'BD_F_9480'x1
+face	1	0	'Face'x1
+fcf0000a	1	0	'FC_F_0000_A'x1
+hrf0010	1	0	'HR_F_0010'x1
+フタ	1	0	'フタ'x1
+bda1000	1	0	'BD_A_1000'x1
+hdm1000	1	0	'HD_M_1000'x1
+ama1000	1	0	'AM_A_1000'x1
+lgm1000a	1	0	'LG_M_1000_A'x1
+lsodea00	1	1	'L_sode_a_00'x1
+lsodea01	1	1	'L_sode_a_01'x1
+lsodea02	1	1	'L_sode_a_02'x1
+lsodea03	1	1	'L_sode_a_03'x1
+lsodea04	1	1	'L_sode_a_04'x1
+lsodeb00	1	1	'L_sode_b_00'x1
+lsodeb01	1	1	'L_sode_b_01'x1
+lsodeb02	1	1	'L_sode_b_02'x1
+lsodeb03	1	1	'L_sode_b_03'x1
+lsodec00	1	1	'L_sode_c_00'x1
+lsodec01	1	1	'L_sode_c_01'x1
+lsodec02	1	1	'L_sode_c_02'x1
+rsodea00	1	1	'R_sode_a_00'x1
+rsodea01	1	1	'R_sode_a_01'x1
+rsodea02	1	1	'R_sode_a_02'x1
+rsodea03	1	1	'R_sode_a_03'x1
+rsodea04	1	1	'R_sode_a_04'x1
+rsodeb00	1	1	'R_sode_b_00'x1
+rsodeb01	1	1	'R_sode_b_01'x1
+rsodeb02	1	1	'R_sode_b_02'x1
+rsodeb03	1	1	'R_sode_b_03'x1
+rsodec00	1	1	'R_sode_c_00'x1
+rsodec01	1	1	'R_sode_c_01'x1
+rsodec02	1	1	'R_sode_c_02'x1
+chair00	1	1	'C_hair_00'x1
+chair01	1	1	'C_hair_01'x1
+chair02	1	1	'C_hair_02'x1
+chair03	1	1	'C_hair_03'x1
+chair04	1	1	'C_hair_04'x1
+lhairb00	1	1	'L_hair_b_00'x1
+lhairb01	1	1	'L_hair_b_01'x1
+lhairb02	1	1	'L_hair_b_02'x1
+lhairb03	1	1	'L_hair_b_03'x1
+lhairb04	1	1	'L_hair_b_04'x1
+lhairb05	1	1	'L_hair_b_05'x1
+rhairb00	1	1	'R_hair_b_00'x1
+rhairb01	1	1	'R_hair_b_01'x1
+rhairb02	1	1	'R_hair_b_02'x1
+rhairb03	1	1	'R_hair_b_03'x1
+rhairb04	1	1	'R_hair_b_04'x1
+rhairb05	1	1	'R_hair_b_05'x1
+lhaira00	1	1	'L_hair_a_00'x1
+lhaira01	1	1	'L_hair_a_01'x1
+lhaira02	1	1	'L_hair_a_02'x1
+lhaira03	1	1	'L_hair_a_03'x1
+lhaira04	1	1	'L_hair_a_04'x1
+lhaira05	1	1	'L_hair_a_05'x1
+rhaira00	1	1	'R_hair_a_00'x1
+rhaira01	1	1	'R_hair_a_01'x1
+rhaira02	1	1	'R_hair_a_02'x1
+rhaira03	1	1	'R_hair_a_03'x1
+rhaira04	1	1	'R_hair_a_04'x1
+rhaira05	1	1	'R_hair_a_05'x1
+umouth	1	1	'Umouth'x1
+ulmouth	1	1	'ULmouth'x1
+urmouth	1	1	'URmouth'x1
+lmouth	1	1	'Lmouth'x1
+rmouth	1	1	'Rmouth'x1
+lcheek	1	1	'Lcheek'x1
+rcheek	1	1	'Rcheek'x1
+uhead	1	1	'u_head'x1
+lblow1	1	1	'Lblow_1'x1
+rblow1	1	1	'R_blow1'x1
+rblow2	1	1	'R_blow2'x1
+lblow2	1	1	'L_blow2'x1
+dreye	1	1	'DR_eye'x1
+dleye	1	1	'DL_eye'x1
+dlmouth	1	1	'DLmouth'x1
+dmouth	1	1	'Dmouth'x1
+drmouth	1	1	'DRmouth'x1
+f	1	1	'f'x1
+g	1	1	'g'x1
+h	1	1	'h'x1
+i	1	1	'i'x1
+j	1	1	'j'x1
+k	1	1	'k'x1
+n	1	1	'n'x1
+m	1	1	'm'x1
+o	1	1	'o'x1
+cla00	1	1	'CL_a_00'x1
+cla01	1	1	'CL_a_01'x1
+cla02	1	1	'CL_a_02'x1
+clb00	1	1	'CL_b_00'x1
+clb01	1	1	'CL_b_01'x1
+clb02	1	1	'CL_b_02'x1
+clc00	1	1	'CL_c_00'x1
+clc01	1	1	'CL_c_01'x1
+clc02	1	1	'CL_c_02'x1
+cld00	1	1	'CL_d_00'x1
+cld01	1	1	'CL_d_01'x1
+cld02	1	1	'CL_d_02'x1
+cle00	1	1	'CL_e_00'x1
+cle01	1	1	'CL_e_01'x1
+cle02	1	1	'CL_e_02'x1
+clf00	1	1	'CL_f_00'x1
+clf01	1	1	'CL_f_01'x1
+clf02	1	1	'CL_f_02'x1
+clg00	1	1	'CL_g_00'x1
+clg01	1	1	'CL_g_01'x1
+clg02	1	1	'CL_g_02'x1
+clh00	1	1	'CL_h_00'x1
+clh01	1	1	'CL_h_01'x1
+clh02	1	1	'CL_h_02'x1
+cli00	1	1	'CL_i_00'x1
+cli01	1	1	'CL_i_01'x1
+cli02	1	1	'CL_i_02'x1
+clj00	1	1	'CL_j_00'x1
+clj01	1	1	'CL_j_01'x1
+clj02	1	1	'CL_j_02'x1
+c2730	1	0	'c2730'x1
+c2731	1	0	'c2731'x1
+wpa0810	1	0	'WP_A_0810'x1
+lsodeanub	1	0	'L_sode_a_Nub'x1
+lsodebnub	1	0	'L_sode_b_Nub'x1
+lsodecnub	1	0	'L_sode_c_Nub'x1
+rsodeanub	1	0	'R_sode_a_Nub'x1
+rsodebnub	1	0	'R_sode_b_Nub'x1
+rsodecnub	1	0	'R_sode_c_Nub'x1
+chairnub	1	0	'C_hair_Nub'x1
+lhairbnub	1	0	'L_hair_b_Nub'x1
+rhairbnub	1	0	'R_hair_b_Nub'x1
+lhairanub	1	0	'L_hair_a_Nub'x1
+rhairanub	1	0	'R_hair_a_Nub'x1
+anub	1	0	'aNub'x1
+bnub	1	0	'bNub'x1
+cnub	1	0	'cNub'x1
+dnub	1	0	'dNub'x1
+enub	1	0	'eNub'x1
+fnub	1	0	'fNub'x1
+gnub	1	0	'gNub'x1
+hnub	1	0	'hNub'x1
+inub	1	0	'iNub'x1
+jnub	1	0	'jNub'x1
+knub	1	0	'kNub'x1
+lnub	1	0	'lNub'x1
+nnub	1	0	'nNub'x1
+mnub	1	0	'mNub'x1
+onub	1	0	'oNub'x1
+clanub	1	0	'CL_a_Nub'x1
+clbnub	1	0	'CL_b_Nub'x1
+clcnub	1	0	'CL_c_Nub'x1
+cldnub	1	0	'CL_d_Nub'x1
+clenub	1	0	'CL_e_Nub'x1
+clfnub	1	0	'CL_f_Nub'x1
+clgnub	1	0	'CL_g_Nub'x1
+clhnub	1	0	'CL_h_Nub'x1
+clinub	1	0	'CL_i_Nub'x1
+cljnub	1	0	'CL_j_Nub'x1
+tang01	1	1	'Tang01'x1
+tang02	1	1	'Tang02'x1
+tang03	1	1	'Tang03'x1
+tang04	1	1	'Tang04'x1
+tang05	1	1	'Tang05'x1
+tang06	1	1	'Tang06'x1
+tang07	1	1	'Tang07'x1
+tang08	1	1	'Tang08'x1
+tang09	1	1	'Tang09'x1
+tang10	1	1	'Tang10'x1
+tang11	1	1	'Tang11'x1
+tang12	1	1	'Tang12'x1
+tang13	1	1	'Tang13'x1
+fangr00	1	1	'Fang_r00'x1
+fangr01	1	1	'Fang_r01'x1
+fangq00	1	1	'Fang_q00'x1
+fangq01	1	1	'Fang_q01'x1
+fangp00	1	1	'Fang_p00'x1
+fangp01	1	1	'Fang_p01'x1
+fango00	1	1	'Fang_o00'x1
+fango01	1	1	'Fang_o01'x1
+fangn00	1	1	'Fang_n00'x1
+fangn01	1	1	'Fang_n01'x1
+fangm00	1	1	'Fang_m00'x1
+fangm01	1	1	'Fang_m01'x1
+fangl00	1	1	'Fang_l00'x1
+fangl01	1	1	'Fang_l01'x1
+fangk00	1	1	'Fang_k00'x1
+fangk01	1	1	'Fang_k01'x1
+fangj00	1	1	'Fang_j00'x1
+fangj01	1	1	'Fang_j01'x1
+futa	1	1	'futa'x1
+fanga00	1	1	'Fang_a00'x1
+fanga01	1	1	'Fang_a01'x1
+fangb00	1	1	'Fang_b00'x1
+fangb01	1	1	'Fang_b01'x1
+fangc00	1	1	'Fang_c00'x1
+fangc01	1	1	'Fang_c01'x1
+fangd00	1	1	'Fang_d00'x1
+fangd01	1	1	'Fang_d01'x1
+fange00	1	1	'Fang_e00'x1
+fange01	1	1	'Fang_e01'x1
+fangf00	1	1	'Fang_f00'x1
+fangf01	1	1	'Fang_f01'x1
+fangg00	1	1	'Fang_g00'x1
+fangg01	1	1	'Fang_g01'x1
+fangh00	1	1	'Fang_h00'x1
+fangh01	1	1	'Fang_h01'x1
+fangi00	1	1	'Fang_i00'x1
+fangi01	1	1	'Fang_i01'x1
+c2780a	1	0	'c2780_a'x1
+tangnub	1	0	'TangNub'x1
+c2800	1	0	'c2800'x1
+c2810weapon	1	0	'c2810_weapon'x1
+c2810	1	0	'c2810'x1
+tare00	1	1	'tare_00'x1
+tare01	1	1	'tare_01'x1
+s2998	1	0	's2998'x1
+c2811	1	0	'c2811'x1
+fire01	1	0	'fire_01'x1
+fire02	1	0	'fire_02'x1
+fire03	1	0	'fire_03'x1
+fire05	1	0	'fire_05'x1
+fire00	1	0	'fire_00'x1
+rarma00	1	1	'R_arm_a00'x1
+rarma01	1	1	'R_arm_a01'x1
+rarma02	1	1	'R_arm_a02'x1
+rarma03	1	1	'R_arm_a03'x1
+rarma04	1	1	'R_arm_a04'x1
+larma00	1	1	'L_arm_a00'x1
+larma01	1	1	'L_arm_a01'x1
+larma02	1	1	'L_arm_a02'x1
+larma03	1	1	'L_arm_a03'x1
+larma04	1	1	'L_arm_a04'x1
+rarmb00	1	1	'R_arm_b00'x1
+rarmb01	1	1	'R_arm_b01'x1
+rarmb02	1	1	'R_arm_b02'x1
+larmb00	1	1	'L_arm_b00'x1
+larmb01	1	1	'L_arm_b01'x1
+larmb02	1	1	'L_arm_b02'x1
+rarmc00	1	1	'R_arm_c00'x1
+rarmc01	1	1	'R_arm_c01'x1
+rarmc02	1	1	'R_arm_c02'x1
+larmc00	1	1	'L_arm_c00'x1
+larmc01	1	1	'L_arm_c01'x1
+larmc02	1	1	'L_arm_c02'x1
+kosimino00	1	1	'kosimino_00'x1
+kosimino01	1	1	'kosimino_01'x1
+kosimino02	1	1	'kosimino_02'x1
+c2820	1	0	'c2820'x1
+c2820leg	1	0	'c2820_leg'x1
+fire04	1	0	'fire_04'x1
+rarmanub	1	0	'R_arm_a_Nub'x1
+larmanub	1	0	'L_arm_a_Nub'x1
+rarmbnub	1	0	'R_arm_b_Nub'x1
+larmbnub	1	0	'L_arm_b_Nub'x1
+rarmcnub	1	0	'R_arm_c_Nub'x1
+larmcnub	1	0	'L_arm_c_Nub'x1
+kosiminonub	1	0	'kosiminoNub'x1
+firectrl00	1	0	'FireCTRL00'x1
+firectrl02	1	0	'FireCTRL02'x1
+firectrl03	1	0	'FireCTRL03'x1
+firectrl01	1	0	'FireCTRL01'x1
+firectrl04	1	0	'FireCTRL04'x1
+firectrl05	1	0	'FireCTRL05'x1
+f00	1	1	'f00'x1
+f01	1	1	'f01'x1
+f02	1	1	'f02'x1
+f03	1	1	'f03'x1
+f04	1	1	'f04'x1
+f05	1	1	'f05'x1
+f06	1	1	'f06'x1
+f07	1	1	'f07'x1
+f08	1	1	'f08'x1
+f09	1	1	'f09'x1
+f10	1	1	'f10'x1
+f11	1	1	'f11'x1
+f12	1	1	'f12'x1
+f13	1	1	'f13'x1
+c2840	1	0	'c2840'x3
+o5010	1	0	'o5010'x1
+o5560	1	0	'o5560'x1
+front00	1	1	'Front_00'x1
+front05	1	1	'Front_05'x1
+backm00	1	1	'Back_M_00'x1
+backm01	1	1	'Back_M_01'x1
+backm02	1	1	'Back_M_02'x1
+backm03	1	1	'Back_M_03'x1
+backm04	1	1	'Back_M_04'x1
+backr00	1	1	'Back_R_00'x1
+backr01	1	1	'Back_R_01'x1
+backr03	1	1	'Back_R_03'x1
+backl00	1	1	'Back_L_00'x1
+backl01	1	1	'Back_L_01'x1
+backl03	1	1	'Back_L_03'x1
+rwaist00	1	1	'R_waist00'x1
+rwaist01	1	1	'R_waist01'x1
+rwaist02	1	1	'R_waist02'x1
+lwaist00	1	1	'L_waist00'x1
+lwaist01	1	1	'L_waist01'x1
+lwaist02	1	1	'L_waist02'x1
+c2870weapon	1	0	'c2870_weapon'x1
+c2870	1	0	'c2870'x1
+wpa1527	1	0	'WP_A_1527'x1
+backmnub	1	0	'Back_M_Nub'x1
+rside	1	0	'R_side'x1
+rsidenub	1	0	'R_sideNub'x1
+lside	1	0	'L_side'x1
+lsidenub	1	0	'L_sideNub'x1
+rwaistnub	1	0	'R_waistNub'x1
+lwaistnub	1	0	'L_waistNub'x1
+wpa0400	1	0	'WP_A_0400'x1
+wpa1500dymmy	1	0	'WP_A_1500_dymmy'x1
+wpa1500sfx用	1	0	'WP_A_1500_SFX用'x1
+wpa0401	1	0	'WP_A_0401'x1
+direct01	1	0	'Direct01'x1
+direct01.target	1	0	'Direct01.Target'x1
+direct02	1	0	'Direct02'x1
+direct02.target	1	0	'Direct02.Target'x1
+direct03	1	0	'Direct03'x1
+direct03.target	1	0	'Direct03.Target'x1
+direct04	1	0	'Direct04'x1
+direct04.target	1	0	'Direct04.Target'x1
+wpa1301	1	0	'WP_A_1301'x1
+c4020sord	1	0	'c4020_sord'x1
+c2930wheel	1	0	'c2930_Wheel'x1
+c2930chain	1	0	'c2930_Chain'x1
+c2930body	1	0	'c2930_body'x1
+wheel	1	1	'Wheel'x1
+ctrlwheel	1	0	'CTRL_Wheel'x1
+c2940	1	0	'c2940'x1
+rclavicle01	1	1	'R_Clavicle01'x1
+rupperarm01	1	1	'R UpperArm01'x1
+rforearm01	1	1	'R Forearm01'x1
+rhand01	1	1	'R Hand01'x1
+rfinger14	1	1	'R Finger14'x1
+rfinger15	1	1	'R Finger15'x1
+rthigh01	1	1	'R Thigh01'x1
+rcalf01	1	1	'R Calf01'x1
+rfoot01	1	1	'R Foot01'x1
+dummymaster	1	0	'Dummy_Master'x1
+dummypelvis	1	0	'Dummy_Pelvis'x1
+dummyspine	1	0	'Dummy_Spine'x1
+dummyspine1	1	0	'Dummy_Spine1'x1
+dummyneck	1	0	'Dummy_Neck'x1
+dummylclavicle	1	0	'Dummy_L Clavicle'x1
+dummylupperarm	1	0	'Dummy_L UpperArm'x1
+dummylforearm	1	0	'Dummy_L Forearm'x1
+dummylhand	1	0	'Dummy_L Hand'x1
+dummylfinger0	1	0	'Dummy_L Finger0'x1
+dummylfinger01	1	0	'Dummy_L Finger01'x1
+dummylfinger0nub	1	0	'Dummy_L Finger0Nub'x1
+dummylfinger1	1	0	'Dummy_L Finger1'x1
+dummylfinger11	1	0	'Dummy_L Finger11'x1
+dummylfinger1nub	1	0	'Dummy_L Finger1Nub'x1
+dummyrclavicle	1	0	'Dummy_R Clavicle'x1
+dummyrupperarm	1	0	'Dummy_R UpperArm'x1
+dummyrforearm	1	0	'Dummy_R Forearm'x1
+dummyrhand	1	0	'Dummy_R Hand'x1
+dummyrfinger0	1	0	'Dummy_R Finger0'x1
+dummyrfinger01	1	0	'Dummy_R Finger01'x1
+dummyrfinger0nub	1	0	'Dummy_R Finger0Nub'x1
+dummyrfinger1	1	0	'Dummy_R Finger1'x1
+dummyrfinger11	1	0	'Dummy_R Finger11'x1
+dummyrfinger1nub	1	0	'Dummy_R Finger1Nub'x1
+dummyhead	1	0	'Dummy_Head'x1
+dummyheadnub	1	0	'Dummy_HeadNub'x1
+dummyjaw	1	0	'Dummy_jaw'x1
+dummyjawnub	1	0	'Dummy_jawNub'x1
+dummylthigh	1	0	'Dummy_L Thigh'x1
+dummylcalf	1	0	'Dummy_L Calf'x1
+dummylfoot	1	0	'Dummy_L Foot'x1
+dummyltoe0	1	0	'Dummy_L Toe0'x1
+dummyltoe0nub	1	0	'Dummy_L Toe0Nub'x1
+dummyrthigh	1	0	'Dummy_R Thigh'x1
+dummyrcalf	1	0	'Dummy_R Calf'x1
+dummyrfoot	1	0	'Dummy_R Foot'x1
+dummyrtoe0	1	0	'Dummy_R Toe0'x1
+dummyrtoe0nub	1	0	'Dummy_R Toe0Nub'x1
+c2950	1	0	'c2950'x1
+taila	1	1	'tail_a'x1
+taila1	1	1	'tail_a1'x1
+taila2	1	1	'tail_a2'x1
+c3110	1	0	'c3110'x1
+tongue	1	1	'Tongue'x1
+jaw1	1	0	'Jaw1'x1
+c3210	1	0	'c3210'x1
+masteregg01	1	1	'master egg_01'x1
+head01	1	1	'Head01'x1
+spine02	1	1	'Spine02'x1
+spine4	1	1	'Spine4'x1
+spine5	1	1	'Spine5'x1
+llega1	1	1	'LLeg_a_1'x1
+llega2	1	1	'LLeg_a_2'x1
+llegaankle	1	1	'LLeg_a_Ankle'x1
+rlega1	1	1	'RLeg_a_1'x1
+rlega2	1	1	'RLeg_a_2'x1
+rlegaankle	1	1	'RLeg_a_Ankle'x1
+llegb1	1	1	'LLeg_b_1'x1
+llegb2	1	1	'LLeg_b_2'x1
+llegbankle	1	1	'LLeg_b_Ankle'x1
+rlegb1	1	1	'RLeg_b_1'x1
+rlegb2	1	1	'RLeg_b_2'x1
+rlegbankle	1	1	'RLeg_b_Ankle'x1
+llegc1	1	1	'LLeg_c_1'x1
+llegc2	1	1	'LLeg_c_2'x1
+llegcankle	1	1	'LLeg_c_Ankle'x1
+rlegc1	1	1	'RLeg_c_1'x1
+rlegc2	1	1	'RLeg_c_2'x1
+rlegcankle	1	1	'RLeg_c_Ankle'x1
+lfanga	1	1	'L_Fang_A'x1
+rfanga	1	1	'R_Fang_A'x1
+lfangb	1	1	'L_Fang_B'x1
+rfangb	1	1	'R_Fang_B'x1
+masteregg00	1	1	'master egg_00'x1
+egga00	1	1	'egg_A00'x1
+egga01	1	1	'egg_A01'x1
+eggb00	1	1	'egg_B00'x1
+eggb01	1	1	'egg_B01'x1
+eggc00	1	1	'egg_C00'x1
+eggc01	1	1	'egg_C01'x1
+eggd00	1	1	'egg_D00'x1
+eggd01	1	1	'egg_D01'x1
+c3210bug	1	0	'c3210_bug'x1
+modeldmybug	1	0	'Model_Dmy_bug'x1
+sfxdmybug	1	0	'SFX_Dmy_bug'x1
+masterjawnub	1	0	'master JawNub'x1
+masteregg01nub	1	0	'master egg_01Nub'x1
+bugmaster	1	0	'bug_Master'x1
+masteregg00nub	1	0	'master egg_00Nub'x1
+eggd	1	0	'egg_d'x1
+egge	1	0	'egg_e'x1
+eggb	1	0	'egg_b'x1
+egga	1	0	'egg_a'x1
+eggc	1	0	'egg_c'x1
+eggf	1	0	'egg_f'x1
+dummy01	1	0	'Dummy01'x1
+dummy02	1	0	'Dummy02'x1
+dummy03	1	0	'Dummy03'x1
+c3450	1	0	'c3450'x1
+lforetwist1	1	1	'L ForeTwist1'x1
+rforetwist1	1	1	'R ForeTwist1'x1
+lwinga00	1	1	'L_wing_a_00'x1
+lwinga01	1	1	'L_wing_a_01'x1
+lwinga02	1	1	'L_wing_a_02'x1
+lwinga03	1	1	'L_wing_a_03'x1
+lwinga04	1	1	'L_wing_a_04'x1
+lwinga05	1	1	'L_wing_a_05'x1
+lwingadigita00	1	1	'L_wing_a_digit_a_00'x1
+lwingadigita01	1	1	'L_wing_a_digit_a_01'x1
+lwingadigita02	1	1	'L_wing_a_digit_a_02'x1
+lwingadigita03	1	1	'L_wing_a_digit_a_03'x1
+lwingadigitb00	1	1	'L_wing_a_digit_b_00'x1
+lwingadigitb01	1	1	'L_wing_a_digit_b_01'x1
+lwingadigitb02	1	1	'L_wing_a_digit_b_02'x1
+lwingadigitb03	1	1	'L_wing_a_digit_b_03'x1
+lwingadigitc00	1	1	'L_wing_a_digit_c_00'x1
+lwingadigitc01	1	1	'L_wing_a_digit_c_01'x1
+lwingadigitc02	1	1	'L_wing_a_digit_c_02'x1
+lwingadigitc03	1	1	'L_wing_a_digit_c_03'x1
+lwingadigitd	1	1	'L_wing_a_digit_d'x1
+rwingb00	1	1	'R_wing_b_00'x1
+rwingb01	1	1	'R_wing_b_01'x1
+rwingb02	1	1	'R_wing_b_02'x1
+rwingb03	1	1	'R_wing_b_03'x1
+rwingb04	1	1	'R_wing_b_04'x1
+rwingb05	1	1	'R_wing_b_05'x1
+rwingbdigitc00	1	1	'R_wing_b_digit_c_00'x1
+rwingbdigitc01	1	1	'R_wing_b_digit_c_01'x1
+rwingbdigitc02	1	1	'R_wing_b_digit_c_02'x1
+rwingbdigitc03	1	1	'R_wing_b_digit_c_03'x1
+rwingbdigitb00	1	1	'R_wing_b_digit_b_00'x1
+rwingbdigitb01	1	1	'R_wing_b_digit_b_01'x1
+rwingbdigitb02	1	1	'R_wing_b_digit_b_02'x1
+rwingbdigitb03	1	1	'R_wing_b_digit_b_03'x1
+rwingbdigita00	1	1	'R_wing_b_digit_a_00'x1
+rwingbdigita01	1	1	'R_wing_b_digit_a_01'x1
+rwingbdigita02	1	1	'R_wing_b_digit_a_02'x1
+rwingbdigita03	1	1	'R_wing_b_digit_a_03'x1
+rwingbdigitd	1	1	'R_wing_b_digit_d'x1
+rwinga00	1	1	'R_wing_a_00'x1
+rwinga01	1	1	'R_wing_a_01'x1
+rwinga02	1	1	'R_wing_a_02'x1
+rwinga03	1	1	'R_wing_a_03'x1
+rwinga04	1	1	'R_wing_a_04'x1
+rwinga05	1	1	'R_wing_a_05'x1
+rwingadgita00	1	1	'R_wing_a_dgit_a_00'x1
+rwingadgita01	1	1	'R_wing_a_dgit_a_01'x1
+rwingadgita02	1	1	'R_wing_a_dgit_a_02'x1
+rwingadgita03	1	1	'R_wing_a_dgit_a_03'x1
+rwingadgitb00	1	1	'R_wing_a_dgit_b_00'x1
+rwingadgitb01	1	1	'R_wing_a_dgit_b_01'x1
+rwingadgitb02	1	1	'R_wing_a_dgit_b_02'x1
+rwingadgitb03	1	1	'R_wing_a_dgit_b_03'x1
+rwingadgitc00	1	1	'R_wing_a_dgit_c_00'x1
+rwingadgitc01	1	1	'R_wing_a_dgit_c_01'x1
+rwingadgitc02	1	1	'R_wing_a_dgit_c_02'x1
+rwingadgitc03	1	1	'R_wing_a_dgit_c_03'x1
+rwingadgitd	1	1	'R_wing_a_dgit_d'x1
+lwingb00	1	1	'L_wing_b_00'x1
+lwingb01	1	1	'L_wing_b_01'x1
+lwingb02	1	1	'L_wing_b_02'x1
+lwingb03	1	1	'L_wing_b_03'x1
+lwingb04	1	1	'L_wing_b_04'x1
+lwingb05	1	1	'L_wing_b_05'x1
+lwingbdigitb00	1	1	'L_wing_b_digit_b_00'x1
+lwingbdigitb01	1	1	'L_wing_b_digit_b_01'x1
+lwingbdigitb02	1	1	'L_wing_b_digit_b_02'x1
+lwingbdigitb03	1	1	'L_wing_b_digit_b_03'x1
+lwingbdigitc00	1	1	'L_wing_b_digit_c_00'x1
+lwingbdigitc01	1	1	'L_wing_b_digit_c_01'x1
+lwingbdigitc02	1	1	'L_wing_b_digit_c_02'x1
+lwingbdigitc03	1	1	'L_wing_b_digit_c_03'x1
+lwingbdigita00	1	1	'L_wing_b_digit_a_00'x1
+lwingbdigita01	1	1	'L_wing_b_digit_a_01'x1
+lwingbdigita02	1	1	'L_wing_b_digit_a_02'x1
+lwingbdigita03	1	1	'L_wing_b_digit_a_03'x1
+lwingbdigitd	1	1	'L_wing_b_digit_d'x1
+tail09	1	1	'tail09'x1
+tail10	1	1	'tail10'x1
+tail11	1	1	'tail11'x1
+tail12	1	1	'tail12'x1
+c3450section	1	0	'c3450_section'x1
+sfxdummy2	1	0	'sfx_dummy_2'x1
+sfxdummy4	1	0	'sfx_dummy_4'x2
+sfxdummy05	1	0	'sfx_dummy_05'x1
+lwinganub	1	0	'L_wing_a_Nub'x1
+lwingadigitanub	1	0	'L_wing_a_digit_a_Nub'x1
+lwingadigitbnub	1	0	'L_wing_a_digit_b_Nub'x1
+lwingadigitcnub	1	0	'L_wing_a_digit_c_Nub'x1
+lwingadigitdnub	1	0	'L_wing_a_digit_d_Nub'x1
+rwingbnub	1	0	'R_wing_b_Nub'x1
+rwingbdigitcnub	1	0	'R_wing_b_digit_c_Nub'x1
+rwingbdigitbnub	1	0	'R_wing_b_digit_b_Nub'x1
+rwingbdigitanub	1	0	'R_wing_b_digit_a_Nub'x1
+rwingbdigitdnub	1	0	'R_wing_b_digit_d_Nub'x1
+rwinganub	1	0	'R_wing_a_Nub'x1
+rwingadgitanub	1	0	'R_wing_a_dgit_a_Nub'x1
+rwingadgitbnub	1	0	'R_wing_a_dgit_b_Nub'x1
+rwingadgitcnub	1	0	'R_wing_a_dgit_c_Nub'x1
+rwingadgitdnub	1	0	'R_wing_a_dgit_d_Nub'x1
+lwingbnub	1	0	'L_wing_b_Nub'x1
+lwingbdigitbnub	1	0	'L_wing_b_digit_b_Nub'x1
+lwingbdigitcnub	1	0	'L_wing_b_digit_c_Nub'x1
+lwingbdigitanub	1	0	'L_wing_b_digit_a_Nub'x1
+lwingbdigitdnub	1	0	'L_wing_b_digit_d_Nub'x1
+c4091	1	0	'c4091'x1
+bda9700	1	0	'BD_A_9700'x5
+hda9700	1	0	'HD_A_9700'x2
+ama9700	1	0	'AM_A_9700'x2
+lgm9700a	1	0	'LG_M_9700_A'x1
+box01	1	0	'Box01'x1
+clothrclaviclec00	1	1	'Cloth_R_Clavicle_c00'x1
+clothrclaviclec01	1	1	'Cloth_R_Clavicle_c01'x1
+clothrclavicleb00	1	1	'Cloth_R_Clavicle_b00'x1
+clothrclavicleb01	1	1	'Cloth_R_Clavicle_b01'x1
+clothrclaviclea00	1	1	'Cloth_R_Clavicle_a00'x1
+clothrclaviclea01	1	1	'Cloth_R_Clavicle_a01'x1
+clothspinebackb00	1	1	'Cloth_Spine_back_b00'x1
+clothspinebackb01	1	1	'Cloth_Spine_back_b01'x1
+clothspinebackb02	1	1	'Cloth_Spine_back_b02'x1
+clothspinebacka00	1	1	'Cloth_Spine_back_a00'x1
+clothspinebacka01	1	1	'Cloth_Spine_back_a01'x1
+clothspinebacka02	1	1	'Cloth_Spine_back_a02'x1
+clothspinebacka03	1	1	'Cloth_Spine_back_a03'x1
+clothspinefronta00	1	1	'Cloth_Spine_front_a00'x1
+clothspinefrontb00	1	1	'Cloth_Spine_front_b00'x1
+clothspinefrontb01	1	1	'Cloth_Spine_front_b01'x1
+clothspinefrontc00	1	1	'Cloth_Spine_front_c00'x1
+clothspinefrontc01	1	1	'Cloth_Spine_front_c01'x1
+clothspinefrontc02	1	1	'Cloth_Spine_front_c02'x1
+clothpelvisbacka00	1	1	'Cloth_Pelvis_back_a00'x1
+clothpelvisbacka01	1	1	'Cloth_Pelvis_back_a01'x1
+clothpelvisbacka02	1	1	'Cloth_Pelvis_back_a02'x1
+clothpelvisrc00	1	1	'Cloth_Pelvis_R_c00'x1
+clothpelvisrc01	1	1	'Cloth_Pelvis_R_c01'x1
+clothpelvisrc02	1	1	'Cloth_Pelvis_R_c02'x1
+clothpelvisrc03	1	1	'Cloth_Pelvis_R_c03'x1
+clothpelvisrc04	1	1	'Cloth_Pelvis_R_c04'x1
+clothpelvisrc05	1	1	'Cloth_Pelvis_R_c05'x1
+clothpelvisrc06	1	1	'Cloth_Pelvis_R_c06'x1
+clothpelvislc00	1	1	'Cloth_Pelvis_L_c00'x1
+clothpelvislc01	1	1	'Cloth_Pelvis_L_c01'x1
+clothpelvislc02	1	1	'Cloth_Pelvis_L_c02'x1
+clothpelvislc03	1	1	'Cloth_Pelvis_L_c03'x1
+clothpelvisrb00	1	1	'Cloth_Pelvis_R_b00'x1
+clothpelvisrb01	1	1	'Cloth_Pelvis_R_b01'x1
+clothpelvisrb02	1	1	'Cloth_Pelvis_R_b02'x1
+clothpelvisrb03	1	1	'Cloth_Pelvis_R_b03'x1
+clothpelvisrb04	1	1	'Cloth_Pelvis_R_b04'x1
+clothpelvisrb05	1	1	'Cloth_Pelvis_R_b05'x1
+clothpelvislb00	1	1	'Cloth_Pelvis_L_b00'x1
+clothpelvislb01	1	1	'Cloth_Pelvis_L_b01'x1
+clothpelvislb02	1	1	'Cloth_Pelvis_L_b02'x1
+clothpelvislb03	1	1	'Cloth_Pelvis_L_b03'x1
+clothpelvisra00	1	1	'Cloth_Pelvis_R_a00'x1
+clothpelvisra01	1	1	'Cloth_Pelvis_R_a01'x1
+clothpelvisra02	1	1	'Cloth_Pelvis_R_a02'x1
+clothpelvisra03	1	1	'Cloth_Pelvis_R_a03'x1
+clothpelvisra04	1	1	'Cloth_Pelvis_R_a04'x1
+clothpelvisra05	1	1	'Cloth_Pelvis_R_a05'x1
+clothpelvisla00	1	1	'Cloth_Pelvis_L_a00'x1
+clothpelvisla01	1	1	'Cloth_Pelvis_L_a01'x1
+clothpelvisla02	1	1	'Cloth_Pelvis_L_a02'x1
+clothpelvisla03	1	1	'Cloth_Pelvis_L_a03'x1
+clothpelvisfronta00	1	1	'Cloth_Pelvis_front_a00'x1
+clothpelvisfronta01	1	1	'Cloth_Pelvis_front_a01'x1
+clothpelvisfronta02	1	1	'Cloth_Pelvis_front_a02'x1
+bda01	1	0	'BD_A_01'x1
+wpa0274	1	0	'WP_A_0274'x1
+clothrclaviclecnub	1	0	'Cloth_R_Clavicle_cNub'x1
+clothrclaviclebnub	1	0	'Cloth_R_Clavicle_bNub'x1
+clothrclavicleanub	1	0	'Cloth_R_Clavicle_aNub'x1
+clothspinebackbnub	1	0	'Cloth_Spine_back_bNub'x1
+clothspinebackanub	1	0	'Cloth_Spine_back_aNub'x1
+clothspinefronta01	1	0	'Cloth_Spine_front_a01'x1
+clothspinefrontbnub	1	0	'Cloth_Spine_front_bNub'x1
+clothspinefrontcnub	1	0	'Cloth_Spine_front_cNub'x1
+rsidearmornub	1	0	'R_side_armor_Nub'x1
+clothpelvisbackanub	1	0	'Cloth_Pelvis_back_aNub'x1
+clothpelvisrcnub	1	0	'Cloth_Pelvis_R_cNub'x1
+clothpelvislcnub	1	0	'Cloth_Pelvis_L_cNub'x1
+clothpelvisrbnub	1	0	'Cloth_Pelvis_R_bNub'x1
+clothpelvislbnub	1	0	'Cloth_Pelvis_L_bNub'x1
+clothpelvisranub	1	0	'Cloth_Pelvis_R_aNub'x1
+clothpelvislanub	1	0	'Cloth_Pelvis_L_aNub'x1
+clothpelvisfrontanub	1	0	'Cloth_Pelvis_front_aNub'x1
+wpa1361	1	0	'WP_A_1361'x1
+wpa1361arrow	1	0	'WP_A_1361_arrow'x1
+lgm02	1	0	'LG_M_02'x1
+lgm03	1	0	'LG_M_03'x1
+lgm04	1	0	'LG_M_04'x1
+wpa01	1	0	'WP_A_01'x1
+shoulderpadl	1	1	'Shoulder_Pad_L'x1
+skirtf00	1	1	'Skirt_F_00'x1
+skirtf0002	1	1	'Skirt_F_0002'x1
+skirtb00	1	1	'Skirt_B_00'x1
+skirtb0002	1	1	'Skirt_B_0002'x1
+bag00	1	1	'bag_00'x1
+bda9730	1	0	'BD_A_9730'x4
+hda9730	1	0	'HD_A_9730'x1
+ama9730	1	0	'AM_A_9730'x1
+lgm9730	1	0	'LG_M_9730'x1
+wpa0510l	1	0	'WP_A_0510_L'x1
+shoulderpadlnub	1	0	'Shoulder_Pad_LNub'x1
+skirtf00nub	1	0	'Skirt_F_00Nub'x1
+skirtb00nub	1	0	'Skirt_B_00Nub'x1
+bag00nub	1	0	'bag_00Nub'x1
+clothlh00	1	1	'Cloth_L_h00'x1
+clothlh01	1	1	'Cloth_L_h01'x1
+clothlh02	1	1	'Cloth_L_h02'x1
+clothlhnub	1	1	'Cloth_L_hNub'x1
+clothrh00	1	1	'Cloth_R_h00'x1
+clothrh01	1	1	'Cloth_R_h01'x1
+clothrh02	1	1	'Cloth_R_h02'x1
+clothrhnub	1	1	'Cloth_R_hNub'x1
+clothfront00	1	1	'Cloth_Front00'x1
+clothfront01	1	1	'Cloth_Front01'x1
+clothfront02	1	1	'Cloth_Front02'x1
+clothback00	1	1	'Cloth_back00'x1
+clothback01	1	1	'Cloth_back01'x1
+clothback02	1	1	'Cloth_back02'x1
+hda8010	1	0	'HD_A_8010'x1
+amm8010	1	0	'AM_M_8010'x1
+lgm8010	1	0	'LG_M_8010'x1
+bdm8010	1	0	'BD_M_8010'x1
+bdm01	1	0	'BD_M_01'x1
+clothfrontnub	1	0	'Cloth_FrontNub'x1
+clothbacknub	1	0	'Cloth_backNub'x1
+taila00	1	1	'Tail_a00'x1
+clothlb02	1	1	'Cloth_L_b02'x1
+clothlb03	1	1	'Cloth_L_b03'x1
+clothrb02	1	1	'Cloth_R_b02'x1
+clothrb03	1	1	'Cloth_R_b03'x1
+clothlc02	1	1	'Cloth_L_c02'x1
+clothlc03	1	1	'Cloth_L_c03'x1
+clothrc02	1	1	'Cloth_R_c02'x1
+clothrc03	1	1	'Cloth_R_c03'x1
+clothrd00	1	1	'Cloth_R_d00'x1
+clothrd01	1	1	'Cloth_R_d01'x1
+clothrd02	1	1	'Cloth_R_d02'x1
+clothrd03	1	1	'Cloth_R_d03'x1
+clothld00	1	1	'Cloth_L_d00'x1
+clothld01	1	1	'Cloth_L_d01'x1
+clothld02	1	1	'Cloth_L_d02'x1
+clothld03	1	1	'Cloth_L_d03'x1
+hdm9470	1	0	'HD_M_9470'x1
+amm9470	1	0	'AM_M_9470'x1
+lgm9470	1	0	'LG_M_9470'x1
+bdm9470	1	0	'BD_M_9470'x1
+taila01	1	0	'Tail_a01'x1
+taila02	1	0	'Tail_a02'x1
+clothlbnub	1	0	'Cloth_L_bNub'x1
+clothrbnub	1	0	'Cloth_R_bNub'x1
+clothlcnub	1	0	'Cloth_L_cNub'x1
+clothrcnub	1	0	'Cloth_R_cNub'x1
+clothrdnub	1	0	'Cloth_R_dNub'x1
+clothldnub	1	0	'Cloth_L_dNub'x1
+c5300wp	1	0	'c5300_wp'x1
+mantle	1	0	'Mantle'x1
+clotha07	1	1	'Cloth_a07'x1
+amm9410	1	0	'AM_M_9410'x1
+lgm9410a	1	0	'LG_M_9410_A'x1
+bdm9410	1	0	'BD_M_9410'x1
+c5300body01	1	0	'c5300_body01'x1
+c5300body02	1	0	'c5300_body02'x1
+clothdnub	1	0	'Cloth_dNub'x1
+clothanub	1	0	'Cloth_aNub'x1
+clothcnub	1	0	'Cloth_cNub'x1
+clothbnub	1	0	'Cloth_bNub'x1
+rweapon01	1	0	'R_weapon01'x1
+lpad01	1	0	'L_pad01'x1
+rpad01	1	0	'R_pad01'x1
+c5370hd	1	0	'c5370_HD'x1
+c5370hair	1	0	'c5370_hair'x1
+c5370bd	1	0	'c5370_BD'x1
+c5370am	1	0	'c5370_AM'x1
+c5370lg	1	0	'c5370_LG'x1
+c5370skin	1	0	'c5370_skin'x1
+c5370sword	1	0	'c5370_sword'x1
+shoulder	1	0	'shoulder'x1
+lcloth00	1	1	'L_Cloth00'x1
+lcloth01	1	1	'L_Cloth01'x1
+lcloth02	1	1	'L_Cloth02'x1
+lcloth03	1	1	'L_Cloth03'x1
+lcloth04	1	1	'L_Cloth04'x1
+lcloth05	1	1	'L_Cloth05'x1
+lcloth06	1	1	'L_Cloth06'x1
+hair00	1	1	'Hair_00'x1
+hair01	1	1	'Hair_01'x1
+hair02	1	1	'Hair_02'x1
+hair03	1	1	'Hair_03'x1
+lcalcloth01	1	1	'L_Cal_Cloth01'x1
+lcalcloth00	1	1	'L_Cal_Cloth00'x1
+lcalcloth02	1	1	'L_Cal_Cloth02'x1
+rcloth00	1	1	'R_Cloth00'x1
+rcloth01	1	1	'R_Cloth01'x1
+rcloth02	1	1	'R_Cloth02'x1
+rcloth03	1	1	'R_Cloth03'x1
+rcloth04	1	1	'R_Cloth04'x1
+rcloth05	1	1	'R_Cloth05'x1
+rcloth06	1	1	'R_Cloth06'x1
+hair04	1	1	'Hair_04'x1
+hair05	1	1	'Hair_05'x1
+hair06	1	1	'Hair_06'x1
+hair07	1	1	'Hair_07'x1
+rcalcloth01	1	1	'R_Cal_Cloth01'x1
+rcalcloth02	1	1	'R_Cal_Cloth02'x1
+rcalcloth00	1	1	'R_Cal_Cloth00'x1
+beard00	1	1	'Beard00'x1
+beard01	1	1	'Beard01'x1
+beard02	1	1	'Beard02'x1
+beard03	1	1	'Beard03'x1
+beard04	1	1	'Beard04'x1
+beard05	1	1	'Beard05'x1
+beard06	1	1	'Beard06'x1
+beard07	1	1	'Beard07'x1
+beard08	1	1	'Beard08'x1
+beard09	1	1	'Beard09'x1
+beard10	1	1	'Beard10'x1
+beard11	1	1	'Beard11'x1
+beard12	1	1	'Beard12'x1
+beard13	1	1	'Beard13'x1
+beard14	1	1	'Beard14'x1
+beard15	1	1	'Beard15'x1
+hair08	1	1	'Hair_08'x1
+hair09	1	1	'Hair_09'x1
+hair10	1	1	'Hair_10'x1
+hair11	1	1	'Hair_11'x1
+hair12	1	1	'Hair_12'x1
+hair13	1	1	'Hair_13'x1
+hair14	1	1	'Hair_14'x1
+hair15	1	1	'Hair_15'x1
+hair16	1	1	'Hair_16'x1
+hair17	1	1	'Hair_17'x1
+hair18	1	1	'Hair_18'x1
+hair19	1	1	'Hair_19'x1
+hair20	1	1	'Hair_20'x1
+hair21	1	1	'Hair_21'x1
+hair22	1	1	'Hair_22'x1
+hair23	1	1	'Hair_23'x1
+hair24	1	1	'Hair_24'x1
+hair25	1	1	'Hair_25'x1
+hair26	1	1	'Hair_26'x1
+hair27	1	1	'Hair_27'x1
+hair28	1	1	'Hair_28'x1
+hair29	1	1	'Hair_29'x1
+hair30	1	1	'Hair_30'x1
+hair31	1	1	'Hair_31'x1
+fhair00	1	1	'F_hair00'x1
+fhair01	1	1	'F_hair01'x1
+fhair02	1	1	'F_hair02'x1
+fhair03	1	1	'F_hair03'x1
+fhair04	1	1	'F_hair04'x1
+fhair05	1	1	'F_hair05'x1
+fhair06	1	1	'F_hair06'x1
+mcloth00	1	1	'M_Cloth00'x1
+hair32	1	1	'Hair_32'x1
+hair33	1	1	'Hair_33'x1
+hair34	1	1	'Hair_34'x1
+mantlea06	1	0	'Mantle_a06'x1
+mantlea13	1	0	'Mantle_a13'x1
+spcloth00	1	1	'SP_Cloth00'x1
+spcloth02	1	1	'SP_Cloth02'x1
+spcloth01	1	1	'SP_Cloth01'x1
+mcloth01	1	1	'M_Cloth01'x1
+mcloth02	1	1	'M_Cloth02'x1
+lfclotha	1	1	'LF_Cloth_a'x1
+lfclothb	1	1	'LF_Cloth_b'x1
+lfclothc	1	1	'LF_Cloth_c'x1
+lfclothd	1	1	'LF_Cloth_d'x1
+lfclothe	1	1	'LF_Cloth_e'x1
+lfclothf	1	1	'LF_Cloth_f'x1
+rfclotha	1	1	'RF_Cloth_a'x1
+rfclothb	1	1	'RF_Cloth_b'x1
+rfclothc	1	1	'RF_Cloth_c'x1
+rfclothd	1	1	'RF_Cloth_d'x1
+rfclothe	1	1	'RF_Cloth_e'x1
+rfclothf	1	1	'RF_Cloth_f'x1
+s1cloth00	1	1	'S1_Cloth00'x1
+s1cloth01	1	1	'S1_Cloth01'x1
+fcloth00	1	1	'F_Cloth00'x1
+fcloth01	1	1	'F_Cloth01'x1
+fcloth02	1	1	'F_Cloth02'x1
+fcloth03	1	1	'F_Cloth03'x1
+fmcloth00	1	1	'FM_Cloth00'x1
+fmcloth01	1	1	'FM_Cloth01'x1
+fmcloth02	1	1	'FM_Cloth02'x1
+frcloth00	1	1	'FR_Cloth00'x1
+frcloth01	1	1	'FR_Cloth01'x1
+frcloth02	1	1	'FR_Cloth02'x1
+flcloth00	1	1	'FL_Cloth00'x1
+flcloth01	1	1	'FL_Cloth01'x1
+flcloth02	1	1	'FL_Cloth02'x1
+rs00	1	1	'R_s00'x1
+rs01	1	1	'R_s01'x1
+rs02	1	1	'R_s02'x1
+rs03	1	1	'R_s03'x1
+ls00	1	1	'L_s00'x1
+ls01	1	1	'L_s01'x1
+ls02	1	1	'L_s02'x1
+ls03	1	1	'L_s03'x1
+bclotha00	1	1	'B_Cloth_a00'x1
+bclotha01	1	1	'B_Cloth_a01'x1
+bclotha02	1	1	'B_Cloth_a02'x1
+bclothb00	1	1	'B_Cloth_b00'x1
+bclothb01	1	1	'B_Cloth_b01'x1
+bclothc	1	1	'B_Cloth_c'x1
+bclothd00	1	1	'B_Cloth_d00'x1
+bclothd01	1	1	'B_Cloth_d01'x1
+bclothd02	1	1	'B_Cloth_d02'x1
+fur	1	0	'Fur'x1
+mantlea00	1	0	'Mantle_a00'x1
+mantlea01	1	0	'Mantle_a01'x1
+mantlea02	1	0	'Mantle_a02'x1
+mantlea03	1	0	'Mantle_a03'x1
+mantlea04	1	0	'Mantle_a04'x1
+mantlea05	1	0	'Mantle_a05'x1
+mantlea07	1	0	'Mantle_a07'x1
+mantlea08	1	0	'Mantle_a08'x1
+mantlea09	1	0	'Mantle_a09'x1
+mantlea10	1	0	'Mantle_a10'x1
+mantlea11	1	0	'Mantle_a11'x1
+mantlea12	1	0	'Mantle_a12'x1
+mantlea14	1	0	'Mantle_a14'x1
+mantlea15	1	0	'Mantle_a15'x1
+mantlea16	1	0	'Mantle_a16'x1
+mantleb00	1	0	'Mantle_b00'x1
+mantleb01	1	0	'Mantle_b01'x1
+mantleb02	1	0	'Mantle_b02'x1
+mantleb03	1	0	'Mantle_b03'x1
+mantleb04	1	0	'Mantle_b04'x1
+mantleb05	1	0	'Mantle_b05'x1
+mantleb06	1	0	'Mantle_b06'x1
+mantleb07	1	0	'Mantle_b07'x1
+mantleb08	1	0	'Mantle_b08'x1
+mantleb09	1	0	'Mantle_b09'x1
+mantleb10	1	0	'Mantle_b10'x1
+mantleb11	1	0	'Mantle_b11'x1
+mantleb12	1	0	'Mantle_b12'x1
+mantleb13	1	0	'Mantle_b13'x1
+mantleb14	1	0	'Mantle_b14'x1
+mantleb15	1	0	'Mantle_b15'x1
+mantleb16	1	0	'Mantle_b16'x1
+mantleb17	1	0	'Mantle_b17'x1
+mantleb18	1	0	'Mantle_b18'x1
+mantleb19	1	0	'Mantle_b19'x1
+mantlec00	1	0	'Mantle_c00'x1
+mantlec01	1	0	'Mantle_c01'x1
+mantlec02	1	0	'Mantle_c02'x1
+mantlec03	1	0	'Mantle_c03'x1
+mantlec04	1	0	'Mantle_c04'x1
+mantlec05	1	0	'Mantle_c05'x1
+mantlec06	1	0	'Mantle_c06'x1
+mantlec07	1	0	'Mantle_c07'x1
+mantlec08	1	0	'Mantle_c08'x1
+mantlec09	1	0	'Mantle_c09'x1
+mantlec10	1	0	'Mantle_c10'x1
+mantlec11	1	0	'Mantle_c11'x1
+mantlec12	1	0	'Mantle_c12'x1
+mantlec13	1	0	'Mantle_c13'x1
+mantlec14	1	0	'Mantle_c14'x1
+mantlec15	1	0	'Mantle_c15'x1
+mantlec16	1	0	'Mantle_c16'x1
+mantlec17	1	0	'Mantle_c17'x1
+mantlec18	1	0	'Mantle_c18'x1
+mantlec19	1	0	'Mantle_c19'x1
+mantlec20	1	0	'Mantle_c20'x1
+mantlec21	1	0	'Mantle_c21'x1
+mantlec22	1	0	'Mantle_c22'x1
+mantlec23	1	0	'Mantle_c23'x1
+mantlec24	1	0	'Mantle_c24'x1
+mantlec25	1	0	'Mantle_c25'x1
+mantlec26	1	0	'Mantle_c26'x1
+mantlec27	1	0	'Mantle_c27'x1
+mantlec28	1	0	'Mantle_c28'x1
+mantlec29	1	0	'Mantle_c29'x1
+mantlec30	1	0	'Mantle_c30'x1
+mantlec31	1	0	'Mantle_c31'x1
+mantlec32	1	0	'Mantle_c32'x1
+mantlec33	1	0	'Mantle_c33'x1
+mantlec34	1	0	'Mantle_c34'x1
+lfclothanub	1	0	'LF_Cloth_aNub'x1
+lfclothbnub	1	0	'LF_Cloth_bNub'x1
+lfclothcnub	1	0	'LF_Cloth_cNub'x1
+lfclothdnub	1	0	'LF_Cloth_dNub'x1
+lfclothenub	1	0	'LF_Cloth_eNub'x1
+lfclothfnub	1	0	'LF_Cloth_fNub'x1
+rfclothanub	1	0	'RF_Cloth_aNub'x1
+rfclothbnub	1	0	'RF_Cloth_bNub'x1
+rfclothcnub	1	0	'RF_Cloth_cNub'x1
+rfclothdnub	1	0	'RF_Cloth_dNub'x1
+rfclothenub	1	0	'RF_Cloth_eNub'x1
+rfclothfnub	1	0	'RF_Cloth_fNub'x1
+fclothnub	1	0	'F_ClothNub'x1
+fmclothnub	1	0	'FM_ClothNub'x1
+frclothnub	1	0	'FR_ClothNub'x1
+flclothnub	1	0	'FL_ClothNub'x1
+rsnub	1	0	'R_sNub'x1
+lsnub	1	0	'L_sNub'x1
+bclothanub	1	0	'B_Cloth_aNub'x1
+bclothbnub	1	0	'B_Cloth_bNub'x1
+bclothcnub	1	0	'B_Cloth_cNub'x1
+bclothdnub	1	0	'B_Cloth_dNub'x1
+c5390	1	0	'c5390'x1
+c5390weapon	1	0	'c5390_weapon'x1
+lshoulder2	1	1	'L_shoulder2'x1
+lshoulder202	1	1	'L_shoulder202'x1
+lshoulder203	1	1	'L_shoulder203'x1
+lshoulder3	1	1	'L_shoulder3'x1
+lhair00	1	1	'L_hair00'x1
+lhair01	1	1	'L_hair01'x1
+rhair00	1	1	'R_hair00'x1
+rhair01	1	1	'R_hair01'x1
+lhair02	1	1	'L_hair02'x1
+lhair03	1	1	'L_hair03'x1
+lhair04	1	1	'L_hair04'x1
+rhair02	1	1	'R_hair02'x1
+rhair03	1	1	'R_hair03'x1
+rhair04	1	1	'R_hair04'x1
+lhair24	1	1	'L_hair24'x1
+lhair25	1	1	'L_hair25'x1
+lhair26	1	1	'L_hair26'x1
+lhair27	1	1	'L_hair27'x1
+lhair28	1	1	'L_hair28'x1
+rhair05	1	1	'R_hair05'x1
+rhair06	1	1	'R_hair06'x1
+rhair07	1	1	'R_hair07'x1
+rhair08	1	1	'R_hair08'x1
+rhair09	1	1	'R_hair09'x1
+mhair00	1	1	'M_hair00'x1
+mhair01	1	1	'M_hair01'x1
+mhair02	1	1	'M_hair02'x1
+mhair03	1	1	'M_hair03'x1
+mhair04	1	1	'M_hair04'x1
+lhair29	1	1	'L_hair29'x1
+lhair30	1	1	'L_hair30'x1
+lhair31	1	1	'L_hair31'x1
+rhair22	1	1	'R_hair22'x1
+rhair23	1	1	'R_hair23'x1
+rhair24	1	1	'R_hair24'x1
+lhair05	1	1	'L_hair05'x1
+lhair06	1	1	'L_hair06'x1
+lhair07	1	1	'L_hair07'x1
+lhair08	1	1	'L_hair08'x1
+rhair10	1	1	'R_hair10'x1
+rhair11	1	1	'R_hair11'x1
+rhair12	1	1	'R_hair12'x1
+rhair13	1	1	'R_hair13'x1
+lhair12	1	1	'L_hair12'x1
+lhair09	1	1	'L_hair09'x1
+lhair10	1	1	'L_hair10'x1
+lhair11	1	1	'L_hair11'x1
+rhair14	1	1	'R_hair14'x1
+rhair15	1	1	'R_hair15'x1
+rhair16	1	1	'R_hair16'x1
+rhair17	1	1	'R_hair17'x1
+lhair13	1	1	'L_hair13'x1
+lhair14	1	1	'L_hair14'x1
+lhair15	1	1	'L_hair15'x1
+lhair16	1	1	'L_hair16'x1
+rhair18	1	1	'R_hair18'x1
+rhair19	1	1	'R_hair19'x1
+rhair20	1	1	'R_hair20'x1
+rhair21	1	1	'R_hair21'x1
+lhair32	1	1	'L_hair32'x1
+lhair33	1	1	'L_hair33'x1
+lhair34	1	1	'L_hair34'x1
+lhair35	1	1	'L_hair35'x1
+rhair25	1	1	'R_hair25'x1
+rhair26	1	1	'R_hair26'x1
+rhair27	1	1	'R_hair27'x1
+rhair28	1	1	'R_hair28'x1
+mhair05	1	1	'M_hair05'x1
+mhair06	1	1	'M_hair06'x1
+mhair07	1	1	'M_hair07'x1
+mhair08	1	1	'M_hair08'x1
+lhair21	1	1	'L_hair21'x1
+lhair22	1	1	'L_hair22'x1
+lhair23	1	1	'L_hair23'x1
+rhair29	1	1	'R_hair29'x1
+rhair30	1	1	'R_hair30'x1
+rhair31	1	1	'R_hair31'x1
+rhair32	1	1	'R_hair32'x1
+rhair33	1	1	'R_hair33'x1
+rhair34	1	1	'R_hair34'x1
+rhair35	1	1	'R_hair35'x1
+lhair17	1	1	'L_hair17'x1
+lhair18	1	1	'L_hair18'x1
+lhair19	1	1	'L_hair19'x1
+lhair20	1	1	'L_hair20'x1
+rhair36	1	1	'R_hair36'x1
+rhair37	1	1	'R_hair37'x1
+rhair38	1	1	'R_hair38'x1
+rhair39	1	1	'R_hair39'x1
+rhair40	1	1	'R_hair40'x1
+rhair41	1	1	'R_hair41'x1
+lhair36	1	1	'L_hair36'x1
+lhair37	1	1	'L_hair37'x1
+lhair38	1	1	'L_hair38'x1
+lhair39	1	1	'L_hair39'x1
+lhair40	1	1	'L_hair40'x1
+lhair41	1	1	'L_hair41'x1
+l00	1	1	'L00'x1
+l01	1	1	'L01'x1
+l02	1	1	'L02'x1
+l03	1	1	'L03'x1
+l04	1	1	'L04'x1
+l05	1	1	'L05'x1
+l06	1	1	'L06'x1
+l07	1	1	'L07'x1
+l08	1	1	'L08'x1
+l09	1	1	'L09'x1
+l10	1	1	'L10'x1
+l11	1	1	'L11'x1
+l12	1	1	'L12'x1
+l22	1	1	'L22'x1
+l13	1	1	'L13'x1
+l14	1	1	'L14'x1
+l15	1	1	'L15'x1
+l16	1	1	'L16'x1
+l17	1	1	'L17'x1
+l18	1	1	'L18'x1
+l19	1	1	'L19'x1
+l20	1	1	'L20'x1
+l21	1	1	'L21'x1
+l23	1	1	'L23'x1
+l24	1	1	'L24'x1
+l25	1	1	'L25'x1
+l26	1	1	'L26'x1
+l27	1	1	'L27'x1
+l28	1	1	'L28'x1
+l29	1	1	'L29'x1
+l30	1	1	'L30'x1
+l31	1	1	'L31'x1
+l32	1	1	'L32'x1
+l33	1	1	'L33'x1
+l34	1	1	'L34'x1
+l35	1	1	'L35'x1
+back04	1	1	'back04'x1
+back01	1	1	'back01'x1
+01	1	1	'01'x1
+02	1	1	'02'x1
+03	1	1	'03'x1
+04	1	1	'04'x1
+05	1	1	'05'x1
+06	1	1	'06'x1
+07	1	1	'07'x1
+lf1	1	1	'LF1'x1
+lf2	1	1	'LF2'x1
+lf3	1	1	'LF3'x1
+lf4	1	1	'LF4'x1
+lf5	1	1	'LF5'x1
+lf6	1	1	'LF6'x1
+lf7	1	1	'LF7'x1
+rf1	1	1	'RF1'x1
+rf2	1	1	'RF2'x1
+rf3	1	1	'RF3'x1
+rf4	1	1	'RF4'x1
+rf5	1	1	'RF5'x1
+rf6	1	1	'RF6'x1
+rf7	1	1	'RF7'x1
+c5390hair	1	0	'c5390_hair'x1
+固定dmy02	1	0	'固定dmy02'x1
+mantle00	1	0	'mantle00'x1
+mantle14	1	0	'mantle14'x1
+mantle15	1	0	'mantle15'x1
+mantle16	1	0	'mantle16'x1
+mantle02	1	0	'mantle02'x1
+mantle03	1	0	'mantle03'x1
+mantle04	1	0	'mantle04'x1
+mantle05	1	0	'mantle05'x1
+mantle06	1	0	'mantle06'x1
+mantle07	1	0	'mantle07'x1
+mantle08	1	0	'mantle08'x1
+mantle09	1	0	'mantle09'x1
+mantle10	1	0	'mantle10'x1
+mantle11	1	0	'mantle11'x1
+mantle12	1	0	'mantle12'x1
+mantle13	1	0	'mantle13'x1
+mantle17	1	0	'mantle17'x1
+mantle18	1	0	'mantle18'x1
+mantle19	1	0	'mantle19'x1
+mantle20	1	0	'mantle20'x1
+mantle23	1	0	'mantle23'x1
+mantle24	1	0	'mantle24'x1
+mantle22	1	0	'mantle22'x1
+mantle25	1	0	'mantle25'x1
+mantle26	1	0	'mantle26'x1
+mantle21	1	0	'mantle21'x1
+mantle27	1	0	'mantle27'x1
+mantle28	1	0	'mantle28'x1
+mantle39	1	0	'mantle39'x1
+mantle40	1	0	'mantle40'x1
+mantle41	1	0	'mantle41'x1
+mantle37	1	0	'mantle37'x1
+mantle38	1	0	'mantle38'x1
+mantle29	1	0	'mantle29'x1
+mantle33	1	0	'mantle33'x1
+mantle34	1	0	'mantle34'x1
+mantle35	1	0	'mantle35'x1
+mantle36	1	0	'mantle36'x1
+mantle31	1	0	'mantle31'x1
+mantle32	1	0	'mantle32'x1
+mantle30	1	0	'mantle30'x1
+mantle42	1	0	'mantle42'x1
+mantle43	1	0	'mantle43'x1
+mantle44	1	0	'mantle44'x1
+mantle45	1	0	'mantle45'x1
+mantle46	1	0	'mantle46'x1
+mantle47	1	0	'mantle47'x1
+mantle48	1	0	'mantle48'x1
+mantle49	1	0	'mantle49'x1
+mantle50	1	0	'mantle50'x1
+lshoulder2nub	1	0	'L_shoulder2Nub'x1
+lshoulder3nub	1	0	'L_shoulder3Nub'x1
+back04nub	1	0	'back04Nub'x1
+back03nub	1	0	'back03Nub'x1
+back02nub	1	0	'back02Nub'x1
+back01nub	1	0	'back01Nub'x1

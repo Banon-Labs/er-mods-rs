@@ -57,6 +57,10 @@ IGNORED_FILES = {
     # contents -- and their deadlines are backstops, never the synchronisation.
     Path("scripts/frida-lobby-watch-members.py"),
     Path("scripts/frida-hunt-drive-query.py"),
+    # Lobby band census over the Steam API directly, same class: its `time.sleep` paces
+    # `SteamAPI_RunCallbacks` while a `RequestLobbyList` call completes (20 s deadline as a
+    # backstop), spaces the per-band queries, and is the census sample period itself.
+    Path("scripts/er-lobby-bands.py"),
     # Stack sampler for a wedged game, same class as wine-thread-death-watch.py above: its
     # `time.sleep` is the CPU sample period, and its stop condition is an observed state (the
     # process flatlining, or its leader going Z), never a timer. There is no readiness primitive

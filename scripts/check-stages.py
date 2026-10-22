@@ -148,7 +148,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "lint",
         "formatting and text shape: cargo fmt, rustfmt, shellcheck, comment capitals, "
-        "lossy utf-8, markdown, file sizes",
+        "color spelling, lossy utf-8, markdown, file sizes",
         (
             "**/*.rs",
             "**/*.sh",
@@ -159,6 +159,20 @@ STAGES: tuple[Stage, ...] = (
             ".cargo/config.toml",
             "scripts/comment-caps-words.txt",
             "scripts/comment-caps.baseline.json",
+            # `check-color-spelling.py` counts every tracked text file. These are the text types
+            # beyond the ones above that carried the British spelling when it landed; a type not
+            # listed still selects every stage when it changes, through the unmatched-path rule.
+            "scripts/color-spelling.baseline.json",
+            "**/*.json",
+            "**/*.toml",
+            "**/*.txt",
+            "**/*.hlsl",
+            "**/*.hlsli",
+            "**/*.js",
+            "**/*.lua",
+            "**/*.rego",
+            "crates/er-overlay-theme/**/*",
+            "scripts/overlay-theme.baseline.json",
             "scripts/frida/ai-lua/**/*",
         ),
     ),
@@ -246,6 +260,11 @@ STAGES: tuple[Stage, ...] = (
             ".auto/*",
             "crates/**/*",
             "data/*",
+            # `er-shader-ab-proof.py --selftest` holds the Frida agent it loads into the game,
+            # `scripts/frida/shader-editor-stats.js`, to the DLL's `StatsV1` layout and runs it
+            # under node. It names the file through a path join the literal scan cannot read, so
+            # a push that edits only the agent has to select this stage through this line.
+            "scripts/frida/*",
             # `scripts/er_run_lib.py` carries the `WorldChrMan` global its world-read witness walks,
             # and reads this row back to prove the 1.16.2 to 1.17.0 hop that produced it. A push
             # that regenerates the map moves the provenance of a constant this stage gates on, so

@@ -77,6 +77,19 @@ check_script_word(word) if endswith(word, "check.sh")
 runs_check_sh if {
 	some text in executed_texts
 	words := commands.command_slot_words(text)
+	runs_check_sh_in(words)
+}
+
+# A newline ends a statement as `;` does: `git status<newline>bash scripts/check.sh`
+# ran the suite and was allowed until 2026-10-19. The words split on spaces alone are
+# still judged, because the heredoc spans are read from the lines inside a word.
+runs_check_sh if {
+	some text in executed_texts
+	words := commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; "))
+	runs_check_sh_in(words)
+}
+
+runs_check_sh_in(words) if {
 	spans := commands.data_heredoc_spans(words)
 	some index, word in words
 	check_script_word(word)
@@ -85,6 +98,7 @@ runs_check_sh if {
 	# through the word list, and a body that names the script on every line would pay
 	# for that walk once per mention.
 	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
 	commands.word_in_command_slot(words, index)
 	not read_without_executing(words, index)
 }
@@ -195,7 +209,7 @@ deny contains decision if {
 
 	decision := {
 		"rule_id": "ER-EFFECTS-NO-CHECK-SH",
-		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific gate your edit touched instead, by its own path -- and in the MODE check.sh runs it, which is where this list used to mislead: `cargo test -p <crate>` AND `cargo clippy -p <crate> --all-targets` (the workspace denies warnings, and `cargo test` never invokes clippy), `cargo fmt -p <crate> -- --check`, and `python3 scripts/check-<gate>.py --selftest` BEFORE `python3 scripts/check-<gate>.py` (most gates have both, check.sh runs both, and a gate that passes on your tree can still have a broken selftest). Touching a scripts/*.py gate also means `python3 scripts/check-stages.py --selftest`, which proves every path a gate reads is declared by its stage. Naming them is your work, and it is seconds.",
+		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific tests your edit touched instead, by their own path: `cargo test -p <crate>`, and `python3 scripts/check-<gate>.py --selftest` (a gate that passes on your tree can still have a broken selftest). Touching a scripts/*.py gate also means `python3 scripts/check-stages.py --selftest`, which proves every path a gate reads is declared by its stage. The lints -- `cargo clippy -p <crate> --all-targets` (the workspace denies warnings, and `cargo test` never invokes clippy), `cargo fmt -p <crate> -- --check`, `scripts/check-comment-caps.py` and `scripts/check-no-lossy-utf8.py` -- wait until the user replies `authorize commit` (user directive 2026-10-17), and a subagent never runs them. Naming them is your work, and it is seconds.",
 		"severity": "HIGH",
 	}
 }

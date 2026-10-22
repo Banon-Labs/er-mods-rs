@@ -192,6 +192,59 @@ test_allow_teardown_then_user_launcher if {
 	not denied("python3 scripts/er-teardown.py; bash /home/banon/Elden/launch.sh")
 }
 
+# A launcher behind a leading `NAME=value` is still the program the shell runs. The exact
+# command refused on 2026-10-14: the `/` in the assigned path made the shared command-slot
+# test read `ME3_PROFILE=/tmp/...` as the program and the launcher as its operand.
+test_allow_teardown_then_env_prefixed_user_launcher if {
+	not denied(`python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; ME3_PROFILE=/tmp/x/mushroom-man-crashlog.me3 /home/banon/Elden/launch.sh -o > /tmp/x/launch6.log 2>&1; echo "launcher returned exit=$? at $(date +%T)"`)
+}
+
+test_allow_teardown_then_env_prefixed_run_branch if {
+	not denied("python3 scripts/er-teardown.py; ME3_PROFILE=/tmp/x/p.me3 python3 scripts/er-run-branch.py --with er-save-game-row")
+}
+
+test_allow_teardown_then_several_assignments_before_the_launcher if {
+	not denied("python3 scripts/er-teardown.py; A=1 ME3_PROFILE=/tmp/x/p.me3 B_2=/y /home/banon/Elden/launch.sh")
+}
+
+test_allow_teardown_then_env_wrapper_with_path_assignment if {
+	not denied("python3 scripts/er-teardown.py; env ME3_PROFILE=/tmp/x/p.me3 /home/banon/Elden/launch.sh")
+}
+
+# Refused on 2026-10-15 with the session's shell in `.worktrees/er-sky`. The global hook runs
+# `cupcake eval` with no `--policy-dir`, so it judged that worktree's `.cupcake`, cut from an
+# origin/main that still read a `/` in an assignment as the program. The profile path played no
+# part: the vanilla-profile form below, allowed 40 minutes earlier, is denied by that rulebook
+# too. It was allowed then because the shell sat in a directory with no `.cupcake` of its own.
+test_allow_teardown_then_scratchpad_profile_user_launcher if {
+	not denied(`python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; ME3_PROFILE=/tmp/claude-1000/-home-banon-projects-er-mods-rs/e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun.me3 /home/banon/Elden/launch.sh -o > /tmp/claude-1000/-home-banon-projects-er-mods-rs/e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun-launch.log 2>&1`)
+}
+
+test_allow_teardown_then_home_profile_user_launcher if {
+	not denied(`python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; ME3_PROFILE=/home/banon/Elden/vanilla-nomods.me3 /home/banon/Elden/launch.sh -o > /tmp/claude-1000/-home-banon-projects-er-mods-rs/e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/vanilla-rt-launch.log 2>&1`)
+}
+
+# An assignment in front of something that is not a launcher relaunches nothing.
+test_deny_teardown_then_env_prefixed_non_launcher if {
+	denied("python3 scripts/er-teardown.py; FOO=1 ls")
+}
+
+test_deny_teardown_then_path_assigned_non_launcher if {
+	denied("python3 scripts/er-teardown.py; FOO=/x ls")
+}
+
+# A word with `=` whose left side is not a shell name is not an assignment: the shell runs
+# that word as the program, so the launcher after it is an operand.
+test_deny_teardown_then_non_name_assignment_before_launcher if {
+	denied("python3 scripts/er-teardown.py; dir/a=b /home/banon/Elden/launch.sh")
+}
+
+# The teardown itself behind a path-valued assignment is still a teardown. Allowed before
+# 2026-10-14, for the same reason the relaunch above was missed.
+test_deny_path_assigned_teardown_then_build if {
+	denied("FOO=/x python3 scripts/er-teardown.py; cargo build")
+}
+
 # Written across lines, which the live engine collapses before evaluation.
 test_allow_multiline_teardown_and_launch if {
 	not denied("python3 scripts/er-teardown.py \\\n  && python3 scripts/er-run-branch.py --with er-save-game-row")

@@ -505,7 +505,9 @@ fn fetch_inner(share_id: &str) {
             for raised in &normalised.raised {
                 log_line(&format!(
                     "[build-import]   RAISED {}: {} -> {} (class base)",
-                    raised.key, raised.was, raised.now
+                    class::attribute_name(raised.key),
+                    raised.was,
+                    raised.now
                 ));
             }
         }

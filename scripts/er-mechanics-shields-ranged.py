@@ -240,6 +240,7 @@ class ShieldModel:
         self.n_builds = len(builds)
         self.bl = G.Blockers(self.reg, builds)
         opening = self.bl.opening_hits(builds)
+        # `build` is a planner document, whose JSON spells Endurance `vit`.
         me = self.CR.DEF.defender(ct.defense, {"vig": build["stats"]["vig"], "mnd": build["stats"]["mnd"],
                                                 "end": build["stats"]["vit"], **self.stats},
                                   armor=self.armor, talismans=self.talismans, pvp=True, strict=False)

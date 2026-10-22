@@ -54,6 +54,19 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 
 [local_invasion]
 
+# AUTO RE-INVADE -- what this calls inside Seamless Co-op.
+#
+# When this DLL cancels a match (wrong place, stalled, or a join that died), it starts the next
+# search itself by calling Seamless Co-op's own invade action: the function at ersc.dll+0x25850 in
+# Seamless Co-op v2.0.1, called as invade(owner, 0, 1, 1) on a thread of this DLL, where `owner`
+# is Seamless's object that holds its session, found by reading Seamless's memory. It is the action
+# behind the invade option of Seamless's own invasion menu. Nothing in ersc.dll is changed by the
+# call.
+#
+# Set false and this DLL never calls it: matches are still refused and cancelled, and you start the
+# next search yourself with the item.
+auto_reinvade = true
+
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
 
@@ -229,6 +242,16 @@ enable_toggle_key = "F3"
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
+
+# The band census panel, by NAME, from the same list: how many hosts you could invade right now in
+# each rune level and weapon level band, counted from Steam's lobby list in your own matchmaking
+# pool. Nothing is joined and nothing is published to count them.
+#
+# While the panel is open, band_census_view_key switches the grid between hosts now and new hosts
+# per minute, averaged over every minute the panel's counter has watched. That average is kept in
+# er-invasion-warp-band-census.txt beside this file; delete it to start over.
+band_census_key = "F8"
+band_census_view_key = "R"
 
 # There is no setting for what closes the "Attempting to invade another world." popup, and that is
 # deliberate: the mod reads the key you have bound to the game's own menu back-out, out of the
@@ -408,6 +431,13 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
+            "auto_reinvade" => match parse_bool(value) {
+                Some(v) => config.auto_reinvade = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("auto_reinvade must be true or false, got {value:?}"),
+                }),
+            },
             "search_by_location" => match parse_bool(value) {
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
@@ -474,6 +504,24 @@ pub fn parse_local_invasion_config_with_fallback(
                     "settings_key",
                     value,
                     fallback.settings_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "band_census_key" => {
+                config.band_census_key = key_setting(
+                    "band_census_key",
+                    value,
+                    fallback.band_census_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "band_census_view_key" => {
+                config.band_census_view_key = key_setting(
+                    "band_census_view_key",
+                    value,
+                    fallback.band_census_view_key,
                     line_no,
                     &mut issues,
                 );
@@ -582,6 +630,9 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "reject_notice" => {
                 out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
             }
+            "auto_reinvade" => {
+                out.push_str(&format!("auto_reinvade = {}\n", config.auto_reinvade));
+            }
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
             }
@@ -633,6 +684,14 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "settings_key" => out.push_str(&format!(
                 "settings_key = \"{}\"\n",
                 crate::keybind::key_name(config.settings_key)
+            )),
+            "band_census_key" => out.push_str(&format!(
+                "band_census_key = \"{}\"\n",
+                crate::keybind::key_name(config.band_census_key)
+            )),
+            "band_census_view_key" => out.push_str(&format!(
+                "band_census_view_key = \"{}\"\n",
+                crate::keybind::key_name(config.band_census_view_key)
             )),
             "blocked_blocks" => {
                 let blocks = config
@@ -1146,6 +1205,36 @@ only_players_with_this_mod = true\n";
         assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
         assert_eq!(parsed.config.enable_toggle_key, config.enable_toggle_key);
         assert!(!parsed.config.enabled);
+    }
+
+    /// The band census keys ship as F8 and R, the template names both, and a rebind of either
+    /// survives the rewrite every in-game keypress makes.
+    #[test]
+    fn the_band_census_keys_ship_named_and_survive_a_write() {
+        let shipped = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
+        assert!(shipped.issues.is_empty(), "{:?}", shipped.issues);
+        assert_eq!(shipped.config.band_census_key, crate::keybind::VK_F8);
+        assert_eq!(shipped.config.band_census_view_key, crate::keybind::VK_R);
+        assert!(DEFAULT_CONFIG_TOML.contains("band_census_key = \"F8\""));
+        assert!(DEFAULT_CONFIG_TOML.contains("band_census_view_key = \"R\""));
+        let config = LocalInvasionConfig {
+            band_census_key: crate::keybind::parse_key("F11").expect("F11 is a key"),
+            band_census_view_key: crate::keybind::parse_key("Tab").expect("Tab is a key"),
+            ..Default::default()
+        };
+        let rendered = render_local_invasion_config(&config);
+        assert!(rendered.contains("band_census_key = \"F11\""), "{rendered}");
+        assert!(
+            rendered.contains("band_census_view_key = \"Tab\""),
+            "{rendered}"
+        );
+        let parsed = parse_local_invasion_config(&rendered);
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.band_census_key, config.band_census_key);
+        assert_eq!(
+            parsed.config.band_census_view_key,
+            config.band_census_view_key
+        );
     }
 
     /// The shipped default is F3, and the shipped file says so -- a default the template does not

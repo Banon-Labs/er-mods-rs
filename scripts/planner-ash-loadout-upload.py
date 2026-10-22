@@ -6,7 +6,8 @@
 
 `--plan` is `er-mechanics-ash-loadout.py --plan-json` output: one entry per ash, naming the weapon
 copy that carries it. Everything except the weapons (class, stats, armor, talismans, great rune,
-face) is copied from `--base`.
+face) is copied from `--base`, except what `--gear` replaces: armor and talisman sets
+(`apply_gear`), and the great rune, crystal tears, tools, flasks, spells and tags (`apply_kit`).
 
 Weapon inventory: one +25 copy per plan entry with its ash and affinity, ordered so each weapon's
 copies sit together (weapons with the most copies first; within a weapon bullet, then non-bullet,
@@ -31,6 +32,7 @@ Shields and bows need nothing else: they are weapon copies like any other.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import pathlib
@@ -66,7 +68,7 @@ def main() -> int:
     ap.add_argument("--plan", type=pathlib.Path, required=True)
     ap.add_argument("--combo", action="append", default=[], help="RIGHT+LEFT weapon names, repeatable")
     ap.add_argument("--upgrade", type=int, default=25)
-    ap.add_argument("--stats", help="override the base build's attributes, e.g. str=80,dex=20,vit=41")
+    ap.add_argument("--stats", help="override the base build's attributes, e.g. str=80,dex=20,end=41")
     ap.add_argument("--class", dest="character_class",
                     help="override the base build's starting class (the planner's `characterClass`, e.g. Hero)")
     ap.add_argument("--name")
@@ -75,7 +77,8 @@ def main() -> int:
                     help="overwrite this account's build ID instead of storing a new one (the account "
                          "has a cap on stored builds: HTTP 403 \"Exceeding max inventory count\")")
     ap.add_argument("--gear", type=pathlib.Path,
-                    help="armor and talisman sets to equip instead of the base build's (see `apply_gear`)")
+                    help="armor and talisman sets to equip instead of the base build's, and the great rune, "
+                         "tears, tools, flasks, spells and tags (see `apply_gear`, `apply_kit`)")
     ap.add_argument("--dry-run", action="store_true", help="print the inventory and sets, upload nothing")
     a = ap.parse_args()
 
@@ -155,7 +158,8 @@ def upload_with_sets(a, plan):
     return publish(a, slots, names, plan.get("ammo"))
 
 
-PLANNER_NAMES = pathlib.Path(__file__).resolve().parent.parent / "data" / "planner-item-names.json"
+HERE = pathlib.Path(__file__).resolve().parent
+PLANNER_NAMES = HERE.parent / "data" / "planner-item-names.json"
 
 
 def fold(name):
@@ -236,6 +240,40 @@ def apply_gear(doc, gear):
     for kind in ("protectors", "talismans"):
         for st in doc["sets"][kind]:
             print(f"{kind} set: {st['name']}")
+    apply_kit(doc, gear)
+
+
+def apply_kit(doc, gear):
+    """The rest of `gear`, each key replacing the base build's own when present:
+    "great_rune" (a name, or null for none), "crystal_tears" (two names), "tools" (a list of
+    {"name", "equipIndex"}: the quick items and the pouch, flasks included), "flasks"
+    ({"crimson", "cerulean"} of the base's flask total), "spells" (names in slot order) and "tags"."""
+    if "great_rune" in gear:
+        rune = gear["great_rune"]
+        doc["greatRune"] = planner_spelling([rune])[0] if rune else None
+        doc.pop("computed", None)
+        print("great rune:", doc["greatRune"])
+    items = doc.setdefault("items", {})
+    if gear.get("crystal_tears") is not None:
+        items["crystalTears"] = planner_spelling(list(gear["crystal_tears"]))
+        print("crystal tears:", items["crystalTears"])
+    if gear.get("tools") is not None:
+        names = planner_spelling([t["name"] for t in gear["tools"]])
+        items["tools"] = {**(items.get("tools") or {}), "slots": [
+            {"name": n, "order": i, **({"equipIndex": t["equipIndex"]} if t.get("equipIndex") is not None else {})}
+            for i, (n, t) in enumerate(zip(names, gear["tools"]))]}
+        print("tools:", [s["name"] for s in items["tools"]["slots"]])
+    if gear.get("flasks"):
+        items["flasks"] = {**(items.get("flasks") or {}), **gear["flasks"]}
+        print("flasks:", items["flasks"])
+    if gear.get("spells") is not None:
+        doc["spells"] = {**(doc.get("spells") or {}),
+                         "slots": [{"name": n, "order": i} for i, n in enumerate(planner_spelling(list(gear["spells"])))]}
+        print("spells:", [s["name"] for s in doc["spells"]["slots"]])
+    # "derive" is read from the finished document instead (`publish`), once the stats are set.
+    if gear.get("tags") not in (None, "derive"):
+        doc["tags"] = list(gear["tags"])
+        print("tags:", doc["tags"])
 
 
 def publish(a, slots, set_names, ammo=None):
@@ -257,7 +295,9 @@ def publish(a, slots, set_names, ammo=None):
     if a.gear:
         apply_gear(doc, json.loads(a.gear.read_text()))
     if a.stats:
-        doc["stats"].update({k: int(v) for k, v in (p.split("=") for p in a.stats.split(","))})
+        # The planner document spells Endurance `vit`, so `end=` is written under that key.
+        doc["stats"].update({("vit" if k == "end" else k): int(v)
+                             for k, v in (p.split("=") for p in a.stats.split(","))})
         doc.pop("computed", None)
     if a.character_class:
         doc["characterClass"] = a.character_class
@@ -265,6 +305,12 @@ def publish(a, slots, set_names, ammo=None):
     if a.name:
         doc["name"] = a.name
     doc["description"] = a.description
+    if a.gear and json.loads(a.gear.read_text()).get("tags") == "derive":
+        spec = importlib.util.spec_from_file_location("er_mechanics_build_tags", HERE / "er-mechanics-build-tags.py")
+        tags = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tags)
+        doc["tags"] = tags.tags(doc)
+        print("tags:", doc["tags"])
     if a.dry_run:
         return 0
     session = json.loads(SESSION.read_text(encoding="utf-8"))

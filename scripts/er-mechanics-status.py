@@ -435,7 +435,7 @@ def status_per_hit(t, ws, attack, defender, grease=None, interval=None):
 #: Same PvP rule as `er-builds-optimize.is_pvp`.
 PVP_TAGS = {'Invasions', 'Duels', 'Co-op/Gank', '2v2', 'Ladder', 'Fishing'}
 LEVEL_OFFSET = 79
-ATTRS = ('vig', 'mnd', 'vit', 'str', 'dex', 'int', 'fth', 'arc')
+ATTRS = ('vig', 'mnd', 'end', 'str', 'dex', 'int', 'fth', 'arc')
 
 
 def is_pvp(build):
@@ -449,7 +449,8 @@ def corpus_rows(path=CORPUS, rl=150, window=10, pvp_only=True):
     out = []
     for line in Path(path).read_text().splitlines():
         b = json.loads(line)['build']
-        st = b.get('stats') or {}
+        # The planner's JSON spells Endurance `vit`; rows carry it as `end`.
+        st = {('end' if k == 'vit' else k): v for k, v in (b.get('stats') or {}).items()}
         if not all(isinstance(st.get(k), int) for k in ATTRS + ('rl',)):
             continue
         if not rl - window <= st['rl'] <= rl + window or sum(st[k] for k in ATTRS) - LEVEL_OFFSET != st['rl']:

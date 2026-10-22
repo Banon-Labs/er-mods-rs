@@ -10,6 +10,7 @@ er-armament-icons	0	0
 er-better-refills	0	0
 er-build-import	0	0
 er-build-watermark	0	0
+er-cel-shade	0	0
 er-convenient-deaths	0	0
 er-crash-logging	0	0
 er-death-persist	0	0
@@ -27,11 +28,13 @@ er-net-effects	0	0
 er-npc-possess	0	0
 er-npc-summons	0	0
 er-player-name-filter	0	0
+er-positional-voice	0	0
 er-quickload	0	0
 er-quit-menu	0	0
 er-r3-view	0	0
 er-refill-all	0	0
 er-reload-trace	0	0
+er-render-scale	0	0
 er-save-disable	0	0
 er-save-picker	0	0
 er-seamless-bugfixes	0	0

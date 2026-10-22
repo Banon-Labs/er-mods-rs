@@ -6,6 +6,9 @@
 //! drawing nothing, or drawing a line to a bloodstain. Putting it here is what lets the host test
 //! it without a game.
 
+// Consumed only by the Windows build; the host build keeps it for tests.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 /// `ChrType` values that are emphatically not another player.
 ///
 /// Everything the game spawns from a map is `Npc`; the ghost kinds are the translucent replays of

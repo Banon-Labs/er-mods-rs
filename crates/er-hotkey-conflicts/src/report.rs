@@ -111,7 +111,7 @@ pub fn render(input: &ReportInput<'_>) -> Vec<String> {
             .map(|surface| surface.label())
             .collect();
         lines.push(format!(
-            "  CONFLICT  {}  <-  {}   [{}]{}",
+            "  CONFLICT  {}  <-  {}   [{}]{}{}",
             collision.input.describe(),
             collision.modules.join(", "),
             surfaces.join(", "),
@@ -119,7 +119,8 @@ pub fn render(input: &ReportInput<'_>) -> Vec<String> {
                 "  (the game reads this key too)"
             } else {
                 ""
-            }
+            },
+            move_hint(collision.input, &collision.modules)
         ));
     }
 
@@ -191,6 +192,26 @@ pub fn render(input: &ReportInput<'_>) -> Vec<String> {
     lines
 }
 
+/// Where to move the key, for each module in a collision whose default it is
+/// ([`crate::declared::SHIPPED_DEFAULTS`]): `  -- move it: er_cel_shade.dll menu_key in
+/// er-cel-shade.toml`. Empty when none of them is one of this workspace's shipped defaults.
+fn move_hint(input: InputId, modules: &[String]) -> String {
+    let InputId::Key(vk) = input else {
+        return String::new();
+    };
+    let settings: Vec<String> = modules
+        .iter()
+        .filter_map(|module| {
+            crate::declared::setting_for(module, vk).map(|setting| format!("{module} {setting}"))
+        })
+        .collect();
+    if settings.is_empty() {
+        String::new()
+    } else {
+        format!("  -- move it: {}", settings.join("; "))
+    }
+}
+
 /// The one-line form for the shared imgui overlay, where there is room for a sentence and no more.
 pub fn overlay_line(census: &Census, game_module: &str, bindings: &GameBindings) -> String {
     let collisions = census.key_collisions(game_module).len()
@@ -247,6 +268,28 @@ mod tests {
             surfaces_hooked: Box::leak(Box::new(watching())),
             surfaces_missed: &[],
         }
+    }
+
+    #[test]
+    fn a_collision_between_shipped_defaults_names_the_settings_to_move() {
+        const VK_F6: u16 = 0x75;
+        let mut census = Census::default();
+        for module in ["er_cel_shade.dll", "someone_elses.dll"] {
+            census.record(module, InputId::Key(VK_F6), Surface::AsyncKeyState, 600);
+        }
+        let bindings = GameBindings::Table(Vec::new());
+        let text = render(&input(&census, &bindings)).join("\n");
+        assert!(
+            text.contains("-- move it: er_cel_shade.dll menu_key in er-cel-shade.toml"),
+            "{text}"
+        );
+        assert!(!text.contains("someone_elses.dll menu_key"), "{text}");
+        // A key no shipped default uses gets no hint.
+        assert_eq!(
+            move_hint(InputId::Key(VK_E), &["er_cel_shade.dll".to_owned()]),
+            ""
+        );
+        assert_eq!(move_hint(InputId::WholeKeyboard, &[]), "");
     }
 
     fn f7_pair() -> Census {

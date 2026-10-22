@@ -522,10 +522,11 @@ fn refresh_config() {
                 "local-invasion: config loaded enabled={} search_by_location={} \
                  search_radius={} reach={} may_widen_to_anywhere={} may_climb_band={} \
                  only_players_with_this_mod={} \
-                 reject_notice={} steam_hooks={} ersc_observers={} \
+                 reject_notice={} auto_reinvade={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  blocks={} \
-                 excluded={} mark={} unmark={} enable_toggle={} settings={}",
+                 excluded={} mark={} unmark={} enable_toggle={} settings={} band_census={} \
+                 band_census_view={}",
                 outcome.config.enabled,
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
@@ -545,6 +546,7 @@ fn refresh_config() {
                 // "The config reloaded" is not the question anyone has; "what is in force now" is.
                 outcome.config.dll_users_only,
                 outcome.config.reject_notice,
+                outcome.config.auto_reinvade,
                 // The four ersc_* switches are the ones that decide whether this DLL DETOURS
                 // Seamless at all, and MinHook's patch into it faulted at 0x140010043. They
                 // default off and the filter now resolves the session by scanning ersc's writable
@@ -566,6 +568,8 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.band_census_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.band_census_view_key),
             ));
             warn_about_key_collisions(&outcome.config);
         }
@@ -595,6 +599,9 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
         ("unmark_key", config.unmark_key),
         ("enable_toggle_key", config.enable_toggle_key),
         ("settings_key", config.settings_key),
+        // The view key is left out: it is read only while the census panel is open, and that
+        // panel takes the keyboard from the game, so it shares a key with nothing that matters.
+        ("band_census_key", config.band_census_key),
     ];
     for (index, (name, key)) in bindings.iter().enumerate() {
         for (other_name, other_key) in &bindings[index + 1..] {
@@ -3088,8 +3095,9 @@ fn resume_the_hunt_if_an_accepted_join_died(
         return;
     }
     let count = KEPT_JOIN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    if !actions::rearm_reinvade(true) {
+        return;
+    }
     crate::standalone_log(format_args!(
         "local-invasion: the match this filter accepted never landed (#{count}) -- {progress}. \
          Accepting stands the hunt down, so without this the player is left with no search running \

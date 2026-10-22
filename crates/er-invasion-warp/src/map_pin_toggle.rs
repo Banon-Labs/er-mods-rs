@@ -147,11 +147,10 @@ pub unsafe fn tick() {
     }
 }
 
-/// Host stub: there is no game to tick.
+/// Host stub; there is no world map to repaint off the target.
 ///
 /// # Safety
-///
-/// None; it does nothing. `unsafe` only to match the Windows signature its callers use.
+/// None required; it does nothing. `unsafe` only to match the Windows signature.
 #[cfg(not(windows))]
 pub unsafe fn tick() {}
 
@@ -254,11 +253,10 @@ pub unsafe fn install_native_marker_suppressor() -> usize {
     }
 }
 
-/// Host stub: there is no game to hook, so nothing is installed.
+/// Host stub; there is no game image to detour off the target.
 ///
 /// # Safety
-///
-/// None; it does nothing. `unsafe` only to match the Windows signature its callers use.
+/// None required; it does nothing. `unsafe` only to match the Windows signature.
 #[cfg(not(windows))]
 pub unsafe fn install_native_marker_suppressor() -> usize {
     0

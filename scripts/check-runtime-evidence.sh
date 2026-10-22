@@ -223,25 +223,6 @@ selftest() {
 		expect 1 "a run does NOT carry forward across a change cargo compiles" \
 			carried_forward "$other_sha" "$tip_sha"
 
-		# The cupcake signal keeps its own copy of that decision, in python inside a heredoc, and
-		# the plumbing that hands it the candidate list is easy to break in silence: a pipe into a
-		# heredoc is swallowed, and the copy then answers `MISSING` having seen no candidates at all.
-		# That is SC2259, caught by the linter on the way in. So the copy is driven here, over
-		# the same fixture commits, because two enforcement points that disagree about one push
-		# teach the next agent to ignore whichever is louder.
-		local signal="$repo_root/.cupcake/signals/runtime_evidence_for_head.sh"
-		if [ -f "$signal" ]; then
-			sed -n "/<<'PY'/,/^PY\$/p" "$signal" | sed '1d;$d' >"$tmp/carry.py"
-			signal_carries() { # signal_carries <tip> <candidate sha>
-				[ "$(python3 "$tmp/carry.py" "$1" "$repo_root" "candidate $2 br-x/er-a.log")" = OK ]
-			}
-			expect 0 "the signal's copy carries forward from the same run" \
-				signal_carries "$tip_sha" "$ran_sha"
-			expect 1 "the signal's copy refuses across a change cargo compiles" \
-				signal_carries "$tip_sha" "$other_sha"
-			expect 1 "the signal's copy refuses when it was handed no candidates" \
-				signal_carries "$tip_sha" ""
-		fi
 		# The `.github/` case, which the scope tool alone answers wrongly for this question: it
 		# widens to everything on a workflow edit, so a commit touching only check.yml was told
 		# to rebuild and relaunch the game to prove a `curl` flag.
@@ -397,6 +378,131 @@ selftest() {
 		printf '  skip  long diff (a throwaway repository could not be created)\n'
 	fi
 
+	# 2026-10-19, against this repository's own history: the push the cupcake signal refused and
+	# this script accepted. The newest logs are another branch's tip (`90f5bcf6`) and an unrelated
+	# commit (`1a4b82ed`); the run that proves the branch is an older directory holding `f8716805`,
+	# and the two commits from there to the tip `581fb93f` touch only docs/ and scripts/. The capped
+	# scan the signal used to read stops after the two newest build shas, so it never saw the run
+	# that carries forward. Skipped once the tip is in origin/main, because the push then changes no
+	# crate and both answers below would be a trivial allow.
+	local x_tip=581fb93f x_ran=f8716805 x_other=90f5bcf6 x_third=1a4b82ed
+	local x_have=1 x_sha
+	for x_sha in "$x_tip" "$x_ran" "$x_other" "$x_third"; do
+		git cat-file -e "$x_sha^{commit}" 2>/dev/null || x_have=0
+	done
+	if [ "$x_have" -eq 1 ] &&
+		git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1 &&
+		grep -q '^crates/' <<<"$(git diff --name-only --diff-filter=d "refs/remotes/origin/main...$x_tip" 2>/dev/null)"; then
+		local x="$tmp/cross-branch"
+		mkdir -p "$x/runs/br-20261020-000550-3548" "$x/runs/br-20261020-010000-aaaa" \
+			"$x/runs/br-20261020-020000-bbbb" "$x/game"
+		x_log() { # x_log <sha> <file> <age>
+			printf 'build git=%s module=er_quickload.dll base=0x1 pe=0x2 (t)\nmore\n' \
+				"$(git rev-parse "$1")" >"$2"
+			touch -d "$3" "$2" 2>/dev/null || true
+		}
+		x_log "$x_ran" "$x/runs/br-20261020-000550-3548/er-quickload-autoload-debug.log" '-3 hours'
+		x_log "$x_third" "$x/runs/br-20261020-010000-aaaa/er-quickload-autoload-debug.log" '-2 hours'
+		x_log "$x_other" "$x/runs/br-20261020-020000-bbbb/er-quickload-autoload-debug.log" '-1 hour'
+		x_log "$x_other" "$x/game/er-quickload-autoload-debug.log" 'now'
+		mkdir -p "$x/runs-without"
+		cp -rf "$x/runs/br-20261020-010000-aaaa" "$x/runs/br-20261020-020000-bbbb" "$x/runs-without/"
+		judge_cross() { # judge_cross <run root>
+			(
+				cd "$repo_root" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$1" ER_GAME_DIR="$x/game" \
+					bash "$repo_root/scripts/check-runtime-evidence.sh" "$x_tip"
+			)
+		}
+		capped_sees_ran() { # the scan the signal used to read, uncapped only by --exhaustive
+			ER_ME3_RUN_ROOT="$x/runs" ER_GAME_DIR="$x/game" \
+				python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$x_tip" </dev/null |
+				grep -q "^candidate $(git rev-parse "$x_ran") "
+		}
+		expect 1 "the capped scan never reaches the older run that proves the ancestor" \
+			capped_sees_ran
+		expect 0 "an older run proving an ancestor carries past newer logs from another branch" \
+			judge_cross "$x/runs"
+		expect 1 "without that older run the same push is refused" \
+			judge_cross "$x/runs-without"
+	else
+		printf '  skip  cross-branch carry-forward (the fixture commits are not in this clone, or are merged)\n'
+	fi
+
+	# The cupcake signal's verdict on a push must be this script's. It calls this script now rather
+	# than carrying a copy, and this drives the signal end to end on the same shape as the case
+	# above, in a throwaway repository: newest logs from another branch, the run that proves the
+	# branch in an older directory, and only scripts/ commits between that run and the tip.
+	local signal="$repo_root/.cupcake/signals/runtime_evidence_for_head.sh"
+	local sg="$tmp/signal-agrees"
+	mkdir -p "$sg/repo/crates/er-thing" "$sg/repo/scripts" "$sg/game"
+	(
+		cd "$sg/repo" || exit 1
+		git init -q -b main . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'fn a() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "the base" --no-verify
+		git update-ref refs/remotes/origin/main HEAD
+		git checkout -q -b other
+		printf 'fn b() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "another branch's game code" --no-verify
+		printf 'fn c() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "another branch's tip" --no-verify
+		git checkout -q -b mine main
+		printf 'fn d() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "game code that ran" --no-verify
+		printf 'echo 1\n' >scripts/one.sh
+		git add -A && git commit -qm "a script" --no-verify
+		printf 'echo 2\n' >scripts/two.sh
+		git add -A && git commit -qm "another script" --no-verify
+	) >/dev/null 2>&1
+	if [ -f "$signal" ] && git -C "$sg/repo" rev-parse --verify --quiet mine >/dev/null 2>&1; then
+		sg_log() { # sg_log <rev> <file> <age>
+			mkdir -p "$(dirname "$2")"
+			printf 'build git=%s module=er_quickload.dll base=0x1 pe=0x2 (t)\n' \
+				"$(git -C "$sg/repo" rev-parse "$1")" >"$2"
+			touch -d "$3" "$2" 2>/dev/null || true
+		}
+		sg_log mine~2 "$sg/runs/br-1-older/er-quickload-autoload-debug.log" '-3 hours'
+		sg_log other~1 "$sg/runs/br-2-newer/er-quickload-autoload-debug.log" '-2 hours'
+		sg_log other "$sg/runs/br-3-newest/er-quickload-autoload-debug.log" '-1 hour'
+		sg_log other "$sg/game/er-quickload-autoload-debug.log" 'now'
+		mkdir -p "$sg/runs-without"
+		cp -rf "$sg/runs/br-2-newer" "$sg/runs/br-3-newest" "$sg/runs-without/"
+		signal_says() { # signal_says <word> <run root> <command>
+			local got
+			got="$(
+				cd "$sg/repo" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE
+				printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"}}' "$3" |
+					ER_ME3_RUN_ROOT="$2" ER_GAME_DIR="$sg/game" bash "$signal"
+			)"
+			[ "$got" = "$1" ]
+		}
+		judge_sg() { # judge_sg <run root>
+			(
+				cd "$sg/repo" || exit 1
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$1" ER_GAME_DIR="$sg/game" bash "$repo_root/scripts/check-runtime-evidence.sh"
+			)
+		}
+		expect 0 "this script carries the older run past another branch's newer logs" \
+			judge_sg "$sg/runs"
+		expect 0 "the signal agrees: OK on the push" \
+			signal_says OK "$sg/runs" "git push origin mine"
+		expect 1 "this script refuses once the older run is gone" \
+			judge_sg "$sg/runs-without"
+		expect 0 "the signal agrees: MISSING on the same push" \
+			signal_says MISSING "$sg/runs-without" "git push origin mine"
+		expect 0 "a command that is not a push gets no verdict from the signal" \
+			signal_says UNKNOWN "$sg/runs-without" "cargo test -p er-thing"
+	else
+		printf '  skip  signal agreement (a throwaway repository could not be created)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -494,8 +600,8 @@ judge_tip() {
 		printf '  this one -- neither under the run root nor in the game directory, both of which\n'
 		printf '  were read. Build it, launch it, and let the DLL write:\n'
 		printf '\n'
-		printf '    bash scripts/er-build-dlls.sh --all\n'
-		printf '    python3 scripts/er-run-branch.py --save <save>:<slot>\n'
+		printf '    bash scripts/er-build-dlls.sh <package>\n'
+		printf '    python3 scripts/er-run-branch.py --with <package>\n'
 		printf '\n'
 		printf '  A launcher run counts too -- its logs land in the game directory rather than the\n'
 		printf '  run root. Commit before you build: the sha is stamped at build time, so building\n'

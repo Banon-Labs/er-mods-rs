@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Warp the running game to one block-local coordinate, once, and report what the engine did.
 
+Two mechanisms, chosen automatically: when the target block is the block the player is in, the
+engine's in-map teleport moves the player with no area reload (placed assets and any runtime
+change to them survive); otherwise the area-reload warp runs. `--local` / `--reload` force one.
+`local_warp` below carries the mechanism and its proof.
+
 Pairs with `scripts/frida/warp-to-point.js`. The server has to be up already
 (`python3 scripts/er-frida-up.py`); this attaches, arms a one-shot hook on the per-frame
 heads-up-display pass, queues the destination, waits for the hook to report, and detaches.
@@ -11,6 +16,7 @@ reverse byte order and hand-assembling it is how a warp lands in the wrong area:
 
 Usage:
     uv run --with frida python3 scripts/er-warp-to.py m30_10_00_00 -105.59 751.49 167.70 --yaw-deg 152.55
+    uv run --with frida python3 scripts/er-warp-to.py m60_42_36_00 -36.96 106.3 82.48   # local
     uv run --with frida python3 scripts/er-warp-to.py --where
     python3 scripts/er-warp-to.py --selftest
 """
@@ -134,13 +140,86 @@ def connect():
     return dev, dev.attach(pid), pid
 
 
+def local_warp(script, session, messages: queue.Queue, bid: int, args, yaw) -> int:
+    """The in-map teleport: the engine's own `ChrIns` warp request, no area reload.
+
+    Mechanism (all 1.17.1, byte-read from eldenring-deobf-1.17.1.bin): the EMEVD
+    WarpCharacterAndCopyFloor body at `0x1405f85e0` reads the target in physics space and calls
+    `0x1403fa5d0(ChrIns*, FloatVector4* pos, FloatVector4* euler)`, then sets
+    `ChrIns+0x1c4 |= 2`. That call only queues the move -- `ChrCtrl+0x100` position, `+0x110`
+    euler, `+0xfc |= 3` -- and the character update drains it next frame through
+    `ChrCtrl::UpdatePositions` (`ForceSetPosition` + `SetOrientation` + the Havok proxy). Nothing
+    is unloaded, so placed assets keep their instances and whatever a Frida agent changed on them.
+    The block-local target goes through `ConvertBlockCoordsToPhysicsCoords` first, a pure
+    translation by the block origin. See `scripts/frida/warp-to-point.js` for the details and
+    bd `er-local-warp-no-reload-1171-2026-10-17` for the live proof.
+    """
+    print(
+        f"local warp to {args.block} ({bid:#010x}) ({args.x}, {args.y}, {args.z}) "
+        + ("keeping facing" if yaw is None else f"yaw={yaw:.4f} rad")
+    )
+    script.exports_sync.local_warp(
+        bid, args.x, args.y, args.z, yaw, not args.no_pin_ground, bool(args.local)
+    )
+    warp = wait_for_message(messages, "warp", args.wait)
+    if warp is None:
+        print("the per-frame hook never fired -- the game is probably not in a world yet")
+        session.detach()
+        return 2
+    report = warp["report"]
+    print(json.dumps(report, indent=1))
+    if not report.get("requested"):
+        session.detach()
+        return 3
+    drained = wait_for_message(messages, "local-drained", args.wait)
+    if drained is None:
+        print("the move request was never drained (ChrCtrl+0xfc still set)")
+    else:
+        print(
+            f"drained on frame {drained['frame']} ({drained['elapsed']} after the request), "
+            f"{drained['distFromTarget']:.3f} m from the target, "
+            f"lastGrounded pinned={drained['pinned']}"
+        )
+    settled = wait_for_message(messages, "local-settled", args.wait)
+    session.detach()
+    if settled is None:
+        print("no settle report")
+        return 4
+    print(json.dumps(settled, indent=1))
+    state = settled.get("state") or {}
+    print(
+        f"settled {settled.get('distFromTarget', float('nan')):.3f} m from the target, "
+        f"standing={state.get('standing')}, block {state.get('playerBlock')}"
+    )
+    return 0 if drained is not None else 4
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("block", nargs="?", help="block name such as m30_10_00_00, or 0x1e0a0000")
     ap.add_argument("x", nargs="?", type=float)
     ap.add_argument("y", nargs="?", type=float)
     ap.add_argument("z", nargs="?", type=float)
-    ap.add_argument("--yaw-deg", type=float, default=0.0, help="MSB rotations are degrees")
+    ap.add_argument(
+        "--yaw-deg",
+        type=float,
+        help="MSB rotations are degrees (reload default 0; local default keeps the current facing)",
+    )
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--local",
+        action="store_true",
+        help="force the in-map teleport (no area reload), even into another resident block",
+    )
+    mode.add_argument(
+        "--reload", action="store_true", help="force the area-reload warp even inside the player's block"
+    )
+    ap.add_argument(
+        "--no-pin-ground",
+        action="store_true",
+        help="local only: leave lastGroundedPosition alone, so a downward warp charges the fall "
+        "from where the player stood before",
+    )
     ap.add_argument("--yaw-rad", type=float, help="aip yaw is already radians")
     ap.add_argument("--where", action="store_true", help="report the current block and exit")
     ap.add_argument(
@@ -179,8 +258,25 @@ def main() -> int:
     ready = script.exports_sync.ready()
     print(f"attached pid={pid} base={ready['base']} block={ready['block']} spawnFlag={ready['spawnFlag']}")
 
-    yaw = args.yaw_rad if args.yaw_rad is not None else math.radians(args.yaw_deg)
+    if args.yaw_rad is not None:
+        yaw = args.yaw_rad
+    elif args.yaw_deg is not None:
+        yaw = math.radians(args.yaw_deg)
+    else:
+        yaw = None
     bid = block_id(args.block)
+    if not args.probe:
+        here = script.exports_sync.where().get("player") or {}
+        player_block = int(here.get("playerBlock") or "0x0", 16)
+        local = args.local or (not args.reload and player_block == bid)
+        print(
+            f"player block {player_block:#010x}, target {bid:#010x}: "
+            + ("local (no reload)" if local else "area reload")
+        )
+        if local:
+            return local_warp(script, session, messages, bid, args, yaw)
+    if yaw is None:
+        yaw = 0.0
     if args.probe:
         print(f"probing {args.block} ({bid:#010x}) ({args.x}, {args.y}, {args.z})")
         script.exports_sync.probe(bid, args.x, args.y, args.z)

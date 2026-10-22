@@ -8,10 +8,11 @@
 Three steps, each borrowed from a tool that already makes that decision, so this file adds only
 the last one:
 
-1. Vigor, Mind and Endurance are what PvP builds at that RL actually carry: the median of the
-   corpus's PvP builds in RL +- 10 of the weapon's stat archetype, Endurance raised until the
-   weapon keeps medium roll (`er-mechanics-infusions.Builder.setup`, which is
-   `er-builds-optimize.floors` and `medium_roll_end`). Those points come out of the pool first.
+1. Vigor, Mind and Endurance are what PvP builds at that RL actually carry. Vigor is the median of
+   the corpus's PvP builds in RL +- 10 of the weapon's stat archetype; Mind and Endurance are the
+   median of the PvP builds nearest the spread in INT/FTH and STR/DEX, re-read after each spend
+   (`er-builds-optimize.spend_floored`), Endurance at least what keeps the weapon at medium roll
+   (`er-mechanics-infusions.Builder.setup`). Those points come out of the pool first.
 2. The infusion is the weapon's own best at that RL: the affinity, starting class and grease whose
    build deals the most per hit (`er-builds-optimize.optimize`, the same call the Weapon card's
    "Top Infusions" makes), restricted to the affinities the skill can be mounted at
@@ -185,7 +186,7 @@ def optimal(weapon, skill=None, rl=RL, two_handed=False, levers=None):
     if not affs:
         raise SystemExit(f'{t.arts_name(sid)} cannot be mounted on {weapon} at any affinity it takes')
     weapon_best = OPT.optimize(b.tables, b.model, weapon, rl, two_handed, 'damage', fl, dfn, affs,
-                               INF.TIER, keep=1)
+                               INF.TIER, keep=1, pool=b.pool)
     if not weapon_best:
         raise SystemExit(f'no RL {rl} build wields {weapon}')
     wb = weapon_best[0]
@@ -195,20 +196,17 @@ def optimal(weapon, skill=None, rl=RL, two_handed=False, levers=None):
     for cls in OPT.RES.CLASS_ROWS:
         cls_level, base = b.model.class_base(cls)
         st = {k: max(base[k], fl.get(k, 0), need.get(k, 0)) for k in OPT.STATS}
-        points = rl - (sum(st.values()) - OPT.LEVEL_OFFSET)
-        if points < 0 or rl < cls_level:
+        if rl < cls_level:
             continue
         scorer = AshScorer(levers, weapon, aff, sid, two_handed, dfn, grease)
-        scorer.floor = dict(st)
-        st, left = OPT.spend(st, points, scorer)
-        for k in ('vig', 'vit', 'mnd'):
-            add = min(left, OPT.STAT_CAP - st[k])
-            st[k] += add
-            left -= add
+        spent = OPT.spend_floored(st, rl, scorer, b.pool)
+        if spent is None:
+            continue
+        st, floors = spent
         dmg = scorer.score(st)
         if best is None or dmg > best['skill_damage']:
-            best = {'class': cls, 'stats': st, 'skill_damage': dmg, 'scorer': scorer}
-    floors = {k: max(fl[k], b.model.class_base(best['class'])[1][k]) for k in OPT.SURVIVAL}
+            best = {'class': cls, 'stats': st, 'skill_damage': dmg, 'scorer': scorer, 'floors': floors}
+    floors = best['floors']
     weapon_spread = {k: wb['stats'][k] for k in OPT.STATS}
     return {
         'rl': rl, 'two_handed': two_handed, 'skill': t.arts_name(sid), 'skill_id': sid,

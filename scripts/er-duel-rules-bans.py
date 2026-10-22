@@ -297,7 +297,14 @@ def selftest() -> int:
                  "console.log(JSON.stringify([r.problems, A.describeConfig(r.config)]));")
         done = subprocess.run([node, '-e', probe, str(AGENT), str(path)], capture_output=True,
                               text=True, timeout=20)
-        problems, described = json.loads(done.stdout)
+        # The probe prints exactly one line, so read only the last one. Whatever runs `node` may
+        # print first: the proto shim writes "Detected an AI agent environment, printing as NDJSON"
+        # to stdout on some invocations when AI_AGENT is set (measured 2026-10-19, which failed
+        # this selftest in a pre-push run with `Extra data: line 2 column 1`).
+        lines = [line for line in done.stdout.splitlines() if line.strip()]
+        if not lines:
+            raise AssertionError(f'node printed nothing; stderr: {done.stderr.strip()}')
+        problems, described = json.loads(lines[-1])
         assert problems == [], problems
         assert described == ('48 of 49 built-in rules on (off: LightRoll), runeLevel=150, '
                              '2 of 3 bans of your own on'), described

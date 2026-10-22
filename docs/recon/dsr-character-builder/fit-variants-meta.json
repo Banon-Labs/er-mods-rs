@@ -1,0 +1,264 @@
+{
+ "c2280-shipped-fit": {
+  "what": "c2280 shipped fit (rust-shoulder)",
+  "scale": 1.225,
+  "counts": {
+   "raw": 1108,
+   "final": 1108,
+   "faces": 1708,
+   "weights": 2332,
+   "palms": {
+    "R": 202,
+    "L": 204
+   },
+   "tips": {
+    "R": 119,
+    "L": 121
+   }
+  }
+ },
+ "c2650-fit-frame": {
+  "what": "c2650 generic biped fit, fingers=frame",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "k": 1.0268176847939317,
+   "stretch": {
+    "L Clavicle": 1.221,
+    "L UpperArm": 1.084,
+    "L Forearm": 0.889,
+    "L Hand": 0.939,
+    "L Finger0": 2.299,
+    "L Finger01": 1.027,
+    "L Finger1": 1.128,
+    "L Finger11": 1.027,
+    "L Finger2": 1.098,
+    "L Finger21": 1.027,
+    "L Thigh": 0.953,
+    "L Calf": 1.076,
+    "L Foot": 1.132,
+    "L Toe0": 1.027,
+    "R Clavicle": 1.221,
+    "R UpperArm": 1.084,
+    "R Forearm": 0.889,
+    "R Hand": 0.939,
+    "R Finger0": 2.299,
+    "R Finger01": 1.027,
+    "R Finger1": 1.128,
+    "R Finger11": 1.027,
+    "R Finger2": 1.098,
+    "R Finger21": 1.027,
+    "R Thigh": 0.953,
+    "R Calf": 1.076,
+    "R Foot": 1.132,
+    "R Toe0": 1.027
+   },
+   "stripped_held_vertices": 817,
+   "kept_vertices": 1790,
+   "kept_triangles": 2456,
+   "source_R_weapon_mapped": [
+    -0.6090792771596956,
+    0.9466819481982368,
+    0.015345967487210312
+   ],
+   "fingers": "frame"
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2511,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ },
+ "c2650-fit-rigid": {
+  "what": "c2650 generic biped fit, rigid",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "variant": "rigid",
+   "k": 1.0268176847939317,
+   "stretch": {
+    "L Clavicle": 1.221,
+    "L UpperArm": 1.084,
+    "L Forearm": 0.889,
+    "L Hand": 0.939,
+    "L Thigh": 0.953,
+    "L Calf": 1.076,
+    "L Foot": 1.132,
+    "L Toe0": 1.027
+   },
+   "stripped_held_vertices": 817,
+   "kept_vertices": 1790,
+   "kept_triangles": 2456,
+   "source_R_weapon_mapped": [
+    -0.6091,
+    0.9467,
+    0.0153
+   ],
+   "bind_inside_out_by_source_bones": {}
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2511,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ },
+ "c2650-fit-skirt": {
+  "what": "c2650 generic biped fit, thumbrigid+skirt",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "variant": "thumbrigid+skirt",
+   "k": 1.0268176847939317,
+   "kept_vertices": 1790,
+   "calf_cloth_dominant_vertices": 70
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2558,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ },
+ "c2650-fit-thighcloth": {
+  "what": "c2650 generic biped fit, thumbrigid+thighcloth",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "variant": "thumbrigid+thighcloth",
+   "k": 1.0268176847939317,
+   "kept_vertices": 1790,
+   "calf_cloth_dominant_vertices": 70
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2554,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ },
+ "c2650-fit-thumbk": {
+  "what": "c2650 generic biped fit, thumbk",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "variant": "thumbk",
+   "k": 1.0268176847939317,
+   "stretch": {
+    "L Clavicle": 1.221,
+    "L UpperArm": 1.084,
+    "L Forearm": 0.889,
+    "L Hand": 0.939,
+    "L Finger0": 1.25,
+    "L Finger01": 1.027,
+    "L Finger1": 1.128,
+    "L Finger11": 1.027,
+    "L Finger2": 1.098,
+    "L Finger21": 1.027,
+    "L Thigh": 0.953,
+    "L Calf": 1.076,
+    "L Foot": 1.132,
+    "L Toe0": 1.027
+   },
+   "stripped_held_vertices": 817,
+   "kept_vertices": 1790,
+   "kept_triangles": 2456,
+   "source_R_weapon_mapped": [
+    -0.6091,
+    0.9467,
+    0.0153
+   ],
+   "bind_inside_out_by_source_bones": {
+    "R Finger0+R Hand": 10,
+    "R Finger0": 1,
+    "R Finger0+R Finger1+R Hand": 1,
+    "R Hand": 2,
+    "L Finger0+L Hand": 10,
+    "L Finger0": 1,
+    "L Finger0+L Finger1+L Hand": 1,
+    "L Hand": 2
+   }
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2511,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ },
+ "c2650-fit-thumbrigid": {
+  "what": "c2650 generic biped fit, thumbrigid",
+  "scale": 1.0268176847939317,
+  "meta": {
+   "variant": "thumbrigid",
+   "k": 1.0268176847939317,
+   "stretch": {
+    "L Clavicle": 1.221,
+    "L UpperArm": 1.084,
+    "L Forearm": 0.889,
+    "L Hand": 0.939,
+    "L Finger1": 1.128,
+    "L Finger11": 1.027,
+    "L Finger2": 1.098,
+    "L Finger21": 1.027,
+    "L Thigh": 0.953,
+    "L Calf": 1.076,
+    "L Foot": 1.132,
+    "L Toe0": 1.027
+   },
+   "kept_vertices": 1790,
+   "kept_triangles": 2456,
+   "bind_inside_out_by_source_bones": {}
+  },
+  "counts": {
+   "raw": 1790,
+   "final": 1790,
+   "faces": 2456,
+   "weights": 2511,
+   "palms": {
+    "L": 149,
+    "R": 157
+   },
+   "tips": {
+    "L": 69,
+    "R": 70
+   }
+  }
+ }
+}

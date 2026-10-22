@@ -63,7 +63,17 @@ def check(text: str) -> None:
         if re.search(r"^    needs:", build, re.MULTILINE):
             raise AssertionError("main build must not depend on Release Please")
         require(build, "bash scripts/er-build-dlls.sh --all", "all-DLL build command")
-        require(build, "scripts/me3-dll-list.py --pairs", "dynamic artifact list")
+        # release-assets.py stages every DLL `me3-dll-list.py` names, as its own asset, and
+        # writes the use-case table that groups them on the release page.
+        require(build, "python3 scripts/release-assets.py stage", "per-DLL staging")
+        require(build, "dist/*.dll\n", "per-DLL attestation subjects")
+        require(build, "dist/provenance.json\n", "attestation subject for provenance.json")
+        require(
+            build,
+            'python3 scripts/release-assets.py notes --repo "$GITHUB_REPOSITORY" '
+            '--tag "$rolling_tag" >> "$notes_file"',
+            "use-case table in the prerelease notes",
+        )
         require(build, "actions/attest@v4", "DLL attestation")
         require(build, "actions/upload-artifact@v4", "versioned-release handoff")
         # The installer is the file an ordinary player downloads, and every way it can go
@@ -105,6 +115,19 @@ def check(text: str) -> None:
         require(build, "chmod +x dist/er-installer", "executable bit on the Linux installer")
         for subject in ("dist/er-installer.exe", "dist/er-installer\n"):
             require(build, subject, f"attestation subject {subject.strip()}")
+        # The installer refuses Mushroom Man until this program has built its model, so a
+        # release without it offers a mod nobody can install.
+        require(
+            build,
+            "cargo xwin build --release --target x86_64-pc-windows-msvc -p mushroom-man-builder",
+            "Mushroom Man builder build",
+        )
+        require(
+            build,
+            "cp target/x86_64-pc-windows-msvc/release/mushroom-man-builder.exe dist/",
+            "staged Mushroom Man builder",
+        )
+        require(build, "dist/mushroom-man-builder.exe\n", "attestation subject for the builder")
         require(build, "--notes-file", "release notes from a file")
 
         require(build, 'rolling_tag="main-${GITHUB_SHA}"', "unique rolling tag")
@@ -125,7 +148,19 @@ def check(text: str) -> None:
         )
         require(versioned, "actions/download-artifact@v4", "staged-file retrieval")
         require(versioned, 'gh release upload "$tag_name" dist/*', "draft asset upload")
-        require(versioned, 'gh release edit "$tag_name" --draft=false', "draft publication")
+        # The notes step runs a script from the repo, so the job needs a checkout for it.
+        require(versioned, "actions/checkout@v4", "checkout for release-assets.py")
+        require(
+            versioned,
+            'python3 scripts/release-assets.py notes --repo "$GITHUB_REPOSITORY" '
+            '--tag "$tag_name" >> "$notes_file"',
+            "use-case table in the versioned notes",
+        )
+        require(
+            versioned,
+            'gh release edit "$tag_name" --notes-file "$notes_file" --draft=false',
+            "draft publication",
+        )
         if "--clobber" in versioned:
             raise AssertionError("immutable versioned release must not clobber assets")
     except (KeyError, json.JSONDecodeError) as err:
@@ -151,7 +186,28 @@ MUTATIONS: list[tuple[str, str, str]] = [
     ("the executable bit is dropped", "chmod +x dist/er-installer", "true"),
     ("the Windows installer leaves the attestation", "dist/er-installer.exe\n", "dist/gone.exe\n"),
     ("the all-DLL build is dropped", "bash scripts/er-build-dlls.sh --all", "true"),
+    (
+        "the Mushroom Man builder stops being staged",
+        "cp target/x86_64-pc-windows-msvc/release/mushroom-man-builder.exe dist/",
+        "true",
+    ),
     ("the prerelease stops being immutable", 'gh release create "$rolling_tag"', "gh release edit"),
+    (
+        "the DLLs stop being staged one asset each",
+        "python3 scripts/release-assets.py stage",
+        "true",
+    ),
+    ("the DLLs leave the attestation", "dist/*.dll\n", "dist/gone\n"),
+    (
+        "the prerelease loses its use-case table",
+        '--tag "$rolling_tag" >> "$notes_file"',
+        '--tag "$rolling_tag" > /dev/null',
+    ),
+    (
+        "the versioned release loses its use-case table",
+        '--tag "$tag_name" >> "$notes_file"',
+        '--tag "$tag_name" > /dev/null',
+    ),
 ]
 
 

@@ -71,7 +71,15 @@ import data.cupcake.system.commands
 # keywords that stand in front of a command (`if`, `!`, `do`, `then`, `{`, ...) and the `npx`/`bunx`
 # runners count as launchers, so `if ! cargo check | grep -q error; then` and the body of a
 # `for ...; do cargo test ...; done` loop still resolve to the build behind them.
-build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*(([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*|sudo|doas|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|npx|bunx|timeout[[:space:]]+[0-9.]+[smhd]?|if|elif|while|until|do|then|else|!|\\{)[[:space:]]+)*"
+build_launchers := "(([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*|sudo|doas|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|npx|bunx|timeout[[:space:]]+[0-9.]+[smhd]?|if|elif|while|until|do|then|else|!|\\{)[[:space:]]+)*"
+
+# A `(` opens a subshell, or a process substitution behind `<`/`>`, only where a command could
+# start: at the start, after a separator, a space, `!` or another `(`. Glued to a word or to a `^`
+# it is text -- a double-quoted regex such as `"^(scripts/check|crates)/"`, which stays raw in a
+# text that carries a substitution, read as a subshell running a repo check script (2026-10-15).
+subshell_opener := "(^|[;&|(`\\n[:space:]!<>])\\("
+
+build_command_position := concat("", ["(^|[;&|`\\n]|", subshell_opener, "|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*", build_launchers])
 
 # `cargo` counts only with a verdict subcommand later in the same stage: `cargo tree | grep serde`,
 # `cargo metadata | grep` and `cargo --version | grep` read information, not a pass/fail. The
@@ -79,12 +87,15 @@ build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*
 # verdict in fewer keystrokes, and `cargo xwin build` is covered because `build` is a later word.
 cargo_verdict_pattern := "cargo([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+(build|check|clippy|test|bench|doc|run|nextest|rustc|miri|fix|fmt|install|b|c|t|r|d)"
 
-build_verb_pattern := concat("", [
-	build_command_position,
+# The verb itself, without its command position in front or the word boundary behind it, so the
+# compound-command patterns further down can place it inside an opener and a closer of their own.
+build_verb_core := concat("", [
 	"(/?([[:alnum:]_.-]+/)*)?(",
 	cargo_verdict_pattern,
-	"|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/([[:alnum:]_.-]+/)*((build|check|test)([-_.][[:alnum:]_.-]*)?|[[:alnum:]_.-]*[-_](build|check|test)(\\.[[:alnum:]]+)?|er-build-dlls\\.sh))($|[^[:alnum:]_-])",
+	"|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/([[:alnum:]_.-]+/)*((build|check|test)([-_.][[:alnum:]_.-]*)?|[[:alnum:]_.-]*[-_](build|check|test)(\\.[[:alnum:]]+)?|er-build-dlls\\.sh))",
 ])
+
+build_verb_pattern := concat("", [build_command_position, build_verb_core, "($|[^[:alnum:]_-])"])
 
 # Matchers that ADJUDICATE. head/tail/sed/awk/wc/jq/python are deliberately absent: they excerpt or
 # reshape, they do not decide whether the build passed.
@@ -126,9 +137,36 @@ adjudicating_matcher_pattern := concat("", [pipe_pattern, "(/?([[:alnum:]_.-]+/)
 # neither, so in production the split came back undefined and this guard never fired at all, while
 # `opa test` -- which runs the interpreter -- passed every case. `scripts/check-cupcake-wasm-builtins.py`
 # refuses them for that reason. One `regex.match` per executed text needs neither.
-pipeline_body_pattern := concat("", [`([^;&|\n\\]|\\(.|\n)|`, pipe_pattern, `[^;&|[:space:]]|[<>]&|&>)*`])
+#
+# A command substitution among the build's arguments is one opaque token: `$(...)` or `(...)` up to
+# three levels deep, or a backtick pair. Its pipes and separators belong to its own pipeline, so
+# the body steps over them instead of reading them. On 2026-10-15 `python3
+# scripts/check-comment-caps.py $(git diff --name-only | grep -E '\.rs$'); echo "exit=$?"` was
+# denied: the body walked into the argument, and the grep filtering git's path list read as a grep
+# over the gate's output. A `(` or backtick that does not open a whole token stops the body, which
+# only ever loses a match. A `)` is still an ordinary character, so a build inside `$(...)` whose
+# output reaches the outer pipe (`echo $(cargo build 2>&1) | grep error`) still denies; the
+# backtick spelling of that has a pattern of its own below.
+substitution_group := `\(([^()]|\(([^()]|\([^()]*\))*\))*\)`
+
+backtick_group := "`[^`]*`"
+
+pipeline_body_pattern := concat("", [
+	"([^;&|\\n\\\\(`]|\\\\(.|\\n)|",
+	pipe_pattern, "([^;&|[:space:](`]|", substitution_group, "|", backtick_group, ")",
+	"|[<>]&|&>|", substitution_group, "|", backtick_group, ")*",
+])
 
 build_then_matcher_pattern := concat("", [build_verb_pattern, pipeline_body_pattern, adjudicating_matcher_pattern])
+
+# A build first inside backticks, whose closing backtick hands its output to the outer command:
+# ``echo `cargo build 2>&1` | grep error``. The body above cannot cross that backtick, because it
+# has no way to tell a closing one from an opening one.
+build_in_backticks_then_matcher_pattern := concat("", [
+	"`[[:space:]]*", build_launchers, build_verb_core,
+	"([^[:alnum:]_`-]", pipeline_body_pattern, ")?`",
+	pipeline_body_pattern, adjudicating_matcher_pattern,
+])
 
 # Matched against the shared decomposition rather than the raw command: each text a shell runs, a
 # `bash -c '...'` payload as a text of its own, with the separators inside quoted operands and data
@@ -141,42 +179,66 @@ greps_a_build if {
 	regex.match(build_then_matcher_pattern, text)
 }
 
-# A compound command piped as a whole. `(cargo build; echo done) | grep error`, `{ cargo build; }
-# 2>&1 | grep error` and `for c in a b; do cargo test -p $c; done 2>&1 | grep FAILED` put a `;`
-# between the build and the pipe, so the same-pipeline pattern above stops at it. When a stage that
-# opens with the close of a compound command feeds a matcher, and a build stands in command position
-# anywhere in the same executed text, that denies. It is the old co-presence reading, kept only for
-# this shape and only in the deny direction.
-#
-# Built only from `replace`, `split`, `count` and `regex.match`, which Cupcake's wasm runtime runs
-# (`scripts/check-cupcake-wasm-builtins.py`).
 greps_a_build if {
 	some text in commands.input_executed_texts
-	regex.match(build_verb_pattern, text)
-	some statement in commands.shell_statements(pipeline_text(text))
-	stages := split(statement, "|")
-	some close_at, stage in stages
-	closes_compound(stage)
-	some match_at, later in stages
-	match_at > close_at
-	regex.match(stage_matcher_pattern, later)
+	regex.match(build_in_backticks_then_matcher_pattern, text)
 }
 
-# `&` spelled inside a redirection is not "run in the background", but shell_statements cuts at
-# every `&`: without this, `done 2>&1 | grep error` falls apart into `done 2>` and `1 | grep error`.
-# `|&` is bash's `2>&1 |`, so it becomes a plain pipe.
-pipeline_text(text) := replace(replace(replace(replace(text, "|&", "|"), ">&", "> "), "<&", "< "), "&>", " >")
-
-stage_matcher_pattern := "^[[:space:]]*(/?([[:alnum:]_.-]+/)*)?(grep|egrep|fgrep|rg|ag|ack)($|[[:space:]])"
-
-# More `)` than `(` (a balanced `$(...)` in the stage is not a close), or a `}`, `done`, `fi` or
-# `esac` keyword as the first word.
-closes_compound(stage) if count(split(stage, ")")) > count(split(stage, "("))
-
-closes_compound(stage) if {
-	words := [word | some word in split(trim_space(stage), " "); word != ""]
-	words[0] in {"}", "done", "fi", "esac"}
+# A compound command piped as a whole. `(cargo build; echo done) | grep error`, `{ cargo build; }
+# 2>&1 | grep error` and `for c in a b; do cargo test -p $c; done 2>&1 | grep FAILED` put a `;`
+# between the build and the pipe, so the same-pipeline pattern above stops at it. These deny when
+# the build sits inside the compound whose close feeds the matcher: after its opener (`(`, `{`, or
+# one of `if elif then else while until do in`) and before its closer (`)`, `}`, `done`, `fi`,
+# `esac`), with the closer followed by the same pipeline body and matcher as above.
+#
+# The previous form asked only that a build stand in command position anywhere in the same executed
+# text. On 2026-10-15 a subagent in `.worktrees/er-shader-integrate` was denied for
+#
+#     F=$( (git diff --name-only; git ls-files --others --exclude-standard) | grep -vE '\.(dxil|ttf|txt|tsv)$' | ...); ...; python3 scripts/check-comment-caps.py $F ...
+#
+# The grep filters git's list of changed paths, and the only build verb is the comment-caps check
+# two statements later, which reads that list as arguments and is piped nowhere. A build before the
+# compound or after the pipe cannot be what the matcher reads, so neither one counts any more.
+#
+# A subshell interior is `[^()]` plus one level of `$(...)`, a brace group's is `[^{}]` plus one
+# level of `${...}`. A keyword compound's interior is anything, because its closer is a word, which
+# a character class cannot exclude; the cost is that a build between an unrelated `do` and a later
+# `done | grep` still denies, which is the direction this guard errs in. Built from `concat` and
+# `regex.match` only, which Cupcake's wasm runtime runs (`scripts/check-cupcake-wasm-builtins.py`).
+greps_a_build if {
+	some text in commands.input_executed_texts
+	some pattern in compound_build_then_matcher_patterns
+	regex.match(pattern, text)
 }
+
+subshell_char := `([^()]|\$\([^()]*\))`
+
+brace_char := `([^{}]|\$\{[^{}]*\})`
+
+compound_build_then_matcher_patterns := [
+	# `( ... cargo build ... ) | grep`. The opener is `subshell_opener`, so neither a command
+	# substitution's `$(` nor a `(` inside a word or a regex is mistaken for a subshell; the build is
+	# either first inside it or behind one of the build's own command-position separators.
+	concat("", [
+		subshell_opener, `([[:space:]]*`, build_launchers, `|`, subshell_char, `*`, build_command_position, `)`,
+		build_verb_core, `([^[:alnum:]_-]`, subshell_char, `*)?\)`,
+		pipeline_body_pattern, adjudicating_matcher_pattern,
+	]),
+	# `{ ... cargo build ...; } | grep`. The closing `}` is only a keyword after `;`, `&` or a
+	# newline.
+	concat("", [
+		`(^|[;&|(\n])[[:space:]]*\{([[:space:]]+`, build_launchers, `|`, brace_char, `*`, build_command_position, `)`,
+		build_verb_core, `([^[:alnum:]_-]`, brace_char, `*)?[;&\n][[:space:]]*\}`,
+		pipeline_body_pattern, adjudicating_matcher_pattern,
+	]),
+	# `for ...; do ... cargo test ...; done | grep`, and the same for `if`/`while`/`until`/`case`.
+	concat("", [
+		`(^|[;&|(\n[:space:]])(if|elif|then|else|while|until|do|in)([[:space:]]+`, build_launchers,
+		`|([^[:alnum:]_-](.|\n)*)?`, build_command_position, `)`,
+		build_verb_core, `([^[:alnum:]_-](.|\n)*)?[;&\n[:space:]](done|fi|esac)`,
+		pipeline_body_pattern, adjudicating_matcher_pattern,
+	]),
+]
 
 deny contains decision if {
 	greps_a_build

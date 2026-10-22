@@ -57,6 +57,7 @@ Run with --selftest to prove the detector still catches the original defect.
 
 from __future__ import annotations
 
+import atexit
 import glob
 import json
 import os
@@ -87,6 +88,22 @@ def _pool_width(requested: int) -> int:
     return max(1, min(requested, permitted))
 
 
+def _run_bounded(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`subprocess.run` under a 25 second cap, retried once when the cap is hit.
+
+    One cupcake evaluation takes a second or two, but these calls run from wide pools, and while
+    another check suite loads the machine one of them can wait in the run queue long enough to
+    reach the cap (measured in a pre-push on 2026-10-20: a shim call timed out at 25s while the
+    same test passed alone). One retry absorbs that without raising the cap past the 30 second
+    limit in scripts/check-no-timeouts.py. A second timeout still raises, so a real hang in the
+    engine or in a signal stays red.
+    """
+    try:
+        return subprocess.run(args, timeout=25, **kwargs)
+    except subprocess.TimeoutExpired:
+        return subprocess.run(args, timeout=25, **kwargs)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CUPCAKE_DIR = REPO_ROOT / ".cupcake"
 PROTECTED_PATHS_TEST = CUPCAKE_DIR / "tests" / "protected_paths_test.rego"
@@ -110,11 +127,34 @@ DEV_NULL = "/dev/" + "null"
 # the cases below exercise.
 CHECK_SUITE = "scripts/" + "check" + ".sh"
 
+# The commit gate (user directive 2026-10-17) reads the conversation and records spends. A case
+# that commits is given a conversation ending on the user's `authorize commit`, and its spend is
+# kept here rather than in this checkout's `.cupcake/state`.
+COMMIT_AUTH_DIR = Path(tempfile.mkdtemp(prefix="cupcake-delivered-shape-commit-auth-"))
+atexit.register(shutil.rmtree, COMMIT_AUTH_DIR, True)
+
 BASE_ENV = {
     "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/delivered-shape",
     "CUPCAKE_WORKTREE_BRANCHES_OVERRIDE": "",
     "CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE": "a" * 40 + " " + "a" * 40,
+    "CUPCAKE_COMMIT_AUTHORIZATION_STATE": str(COMMIT_AUTH_DIR / "commit-authorizations.jsonl"),
 }
+
+
+def commit_authorized(name: str, command: str) -> dict:
+    """Event fields for a conversation whose last typed prompt is `authorize commit`."""
+    tool_use_id = f"toolu_delivered_{name}"
+    entries = [
+        {"type": "user", "uuid": f"{name}-prompt", "parentUuid": None, "isSidechain": False,
+         "origin": {"kind": "human"}, "promptSource": "typed",
+         "message": {"role": "user", "content": "authorize commit"}},
+        {"type": "assistant", "uuid": f"{name}-call", "parentUuid": f"{name}-prompt",
+         "isSidechain": False, "message": {"role": "assistant", "content": [
+             {"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": command}}]}},
+    ]
+    path = COMMIT_AUTH_DIR / f"{name}.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+    return {"transcript_path": str(path), "tool_use_id": tool_use_id}
 
 
 class Failure(Exception):
@@ -150,7 +190,7 @@ def eval_event(event: dict) -> dict:
     debug_dir = tempfile.mkdtemp(prefix="cupcake-delivered-shape-")
     env = {**os.environ, **BASE_ENV}
     try:
-        result = subprocess.run(
+        result = _run_bounded(
             [
                 "cupcake", "eval", "--harness", "claude", "--strict",
                 "--log-level", "error", "--debug-files", "--debug-dir", debug_dir,
@@ -160,7 +200,6 @@ def eval_event(event: dict) -> dict:
             text=True,
             capture_output=True,
             check=False,
-            timeout=25,
             env=env,
         )
         traces = sorted(glob.glob(os.path.join(debug_dir, "*.txt")))
@@ -218,14 +257,13 @@ def eval_through_shim(command: str, permission_mode: str = "default") -> dict:
     event = bash_event(command)
     event["permission_mode"] = permission_mode
     env = {**os.environ, **BASE_ENV}
-    result = subprocess.run(
+    result = _run_bounded(
         ["bash", str(HOOK_SHIM)],
         cwd=REPO_ROOT,
         input=json.dumps(event),
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env=env,
     )
     body = {}
@@ -435,7 +473,8 @@ def check_case_table() -> list[str]:
     ]
 
     def measure(case):
-        return case, eval_bash(case["command"])
+        extra = commit_authorized(case["name"], case["command"]) if "git commit" in case["command"] else {}
+        return case, eval_bash(case["command"], **extra)
 
     with ThreadPoolExecutor(max_workers=_pool_width(12)) as pool:
         measured = list(pool.map(measure, cases))
@@ -537,8 +576,9 @@ def check_dead_logic_inventory() -> list[str]:
             f"says it cannot.\n  {blanked!r}"
         )
     findings.append(
-        "commands.heredoc_body_blanked / heredoc_tag / heredoc_resolved: DEAD for the "
-        "delivered shape (need \"\\n\" + tag); heredoc_resolved silently falls through to the raw text"
+        "commands.heredoc_body_blanked: DEAD for the delivered shape (need \"\\n\" + tag); "
+        "heredoc_resolved reads a delivered body only through heredoc_body_by_terminator, which "
+        "takes a quoted tag's body that carries a substitution, and otherwise falls through to the raw text"
     )
 
     # (c) Every command-position anchor in the git guards offers `\n` as an
@@ -921,7 +961,7 @@ EXPECTED_ENABLED_BUILTINS = {"git_pre_check", "protected_paths", "git_block_no_v
 
 
 def _enabled_builtins() -> set[str]:
-    result = subprocess.run(
+    result = _run_bounded(
         ["cupcake", "eval", "--harness", "claude", "--log-level", "info",
          "--policy-dir", str(CUPCAKE_DIR)],
         cwd=REPO_ROOT,
@@ -929,7 +969,6 @@ def _enabled_builtins() -> set[str]:
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env={**os.environ, **BASE_ENV},
     )
     match = re.search(r"Enabled builtins: \[([^\]]*)\]", result.stdout + result.stderr)
@@ -953,7 +992,7 @@ def _write_verdict(policy_dir: Path, file_path: str) -> bool:
         "tool_input": {"file_path": file_path, "content": "package probe"},
         "signals": {},
     }
-    result = subprocess.run(
+    result = _run_bounded(
         ["cupcake", "eval", "--harness", "claude", "--log-level", "error",
          "--policy-dir", str(policy_dir)],
         cwd=REPO_ROOT,
@@ -961,7 +1000,6 @@ def _write_verdict(policy_dir: Path, file_path: str) -> bool:
         text=True,
         capture_output=True,
         check=False,
-        timeout=25,
         env={**os.environ, **BASE_ENV},
     )
     body = {}
@@ -1067,9 +1105,12 @@ GUARD_LAYER_CASES = [
     ("deleting the git hooks directory", f"{DELETE_RECURSIVE} {GIT_HOOKS_TOKEN}", False),
     # ---- must be ALLOWED: this layer has to stay maintainable -----------------
     ("running the policy suite", f"opa test {CUPCAKE_DIR_TOKEN}/", True),
+    # Was `git commit -F /tmp/msg.txt -- <path>` until 2026-10-17, when every commit began to need
+    # the user's `authorize commit` (git_commit_authorization). Staging the same path keeps what
+    # this case is about: a git command naming the guard layer as an operand is maintenance.
     (
-        "committing a policy change by explicit path",
-        f"git commit -F /tmp/msg.txt -- {CUPCAKE_DIR_TOKEN}/rulebook.yml",
+        "staging a policy change by explicit path",
+        f"git add -- {CUPCAKE_DIR_TOKEN}/rulebook.yml",
         True,
     ),
     (

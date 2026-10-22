@@ -44,7 +44,7 @@ SS = _load("er_mechanics_string_score", "er-mechanics-string-score.py")
 SD = _load("er_mechanics_strdex_rl150", "er-mechanics-strdex-rl150.py")
 OPT, RES = SS.OPT, SS.RES
 CLASSES = list(RES.CLASS_ROWS)
-STATS = ("vig", "mnd", "vit", "str", "dex", "int", "fth", "arc")
+STATS = ("vig", "mnd", "end", "str", "dex", "int", "fth", "arc")
 COLUMNS = ("rl", "vig_floor", "end_floor", "weapon_id", "weapon", "grip", "class", "affinity", "score",
            "damage", "status_hp", "frames", "rank", "behind_best", "sole_best") + STATS + ("unspent",)
 _W: dict = {}

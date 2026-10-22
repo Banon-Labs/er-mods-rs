@@ -50,6 +50,20 @@
 # The extent column shows where each body's end came from and, when the two
 # disagree, by how much: PDATA:0x120b/0x1213+8 is a body that GREW, which is
 # evidence of a change that costs no decoding to see.
+0x1405605b0	0x140561400	IDENTICAL-WHOLE	1.000	335	GIVE_ITEMS_RVA	BOTH-ENTRIES	PDATA:0x56d/0x56d
+#
+# CARRIED FORWARD -- 487 row(s) and 0 comment/blank line(s) the run that last
+# wrote this file did not produce. `--tsv` TRUNCATES, so a pair verified in an
+# earlier, narrower run -- `verify-rva-map-1170.py 0x1407ada40 --tsv <this
+# file>` -- would otherwise disappear at exit 0 with nothing naming it, and the
+# address would read afterwards as one that was never verified. Each row below
+# is the verbatim line this verifier wrote when it was checked;
+# er-game-base/build.rs reads them exactly like the rows above. The prose
+# between them is carried for the same reason and matters as much: it is where
+# this ledger records why a row was REMOVED, or is deliberately ABSENT, or was
+# refused for being mid-function despite verifying IDENTICAL. Until 2026-09-01
+# only rows were carried and 181 of those lines were dropped by one narrow run.
+# To drop one, delete its line.
 0x140116c70	0x140116c70	IDENTICAL-WHOLE	1.000	88	DLSTRING_WCHAR_SUBSTR_RVA	BOTH-ENTRIES	PDATA:0x141/0x141
 0x140117910	0x140117910	BYTE-IDENTICAL	1.000	120	DL_STRING_COPY_RVA	BOTH-ENTRIES	PDATA:0x78/0x78
 0x14011a360	0x14011a360	IDENTICAL-WHOLE	1.000	47	DL_STRING_FROM_U16_ARRAY_RVA	BOTH-ENTRIES	PDATA:0xad/0xad

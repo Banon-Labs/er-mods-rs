@@ -31,6 +31,8 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+mod band_census;
+mod band_panel;
 pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
@@ -119,13 +121,57 @@ fn log_dir() -> PathBuf {
 /// taken over it read as one run doing something twelve times over.
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     let _ = dir;
+    let stamp = process_age_seconds()
+        .map(|seconds| format!("[+{seconds:.3}s] "))
+        .unwrap_or_default();
     er_game_base::log::append_line(
         &er_game_base::log::redirected_artifact_path(
             "ER_QUICKLOAD_INVASION_WARP_LOG_PATH",
             LOG_FILE_NAME,
         ),
-        format_args!("er-invasion-warp: {args}"),
+        format_args!("{stamp}er-invasion-warp: {args}"),
     );
+}
+
+/// Seconds since the game process was created, for the stamp on every log line.
+///
+/// Measured from process creation rather than from `DllMain`, because the report this exists for
+/// is a black window before the title: the time that matters starts before this DLL is loaded, and
+/// a player's log has to show which of its lines that time sits between.
+#[cfg(windows)]
+fn process_age_seconds() -> Option<f64> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .ok()?;
+    let created_100ns =
+        (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    // FILETIME counts 100 ns ticks from 1601-01-01; the Unix epoch is this many ticks later.
+    const UNIX_EPOCH_AS_FILETIME: u64 = 116_444_736_000_000_000;
+    let since_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let now_100ns = UNIX_EPOCH_AS_FILETIME + (since_unix.as_nanos() / 100) as u64;
+    Some(now_100ns.checked_sub(created_100ns)? as f64 / 10_000_000.0)
+}
+
+/// The host build has no game process to age, so its lines carry no stamp.
+#[cfg(not(windows))]
+fn process_age_seconds() -> Option<f64> {
+    None
 }
 
 fn standalone_log(args: std::fmt::Arguments<'_>) {
@@ -194,6 +240,10 @@ fn spawn_catalog_task() {
             // probe resolves an export out of another DLL -- none of which may happen under the
             // loader lock. Installing it from `DllMain` deadlocked the boot on 2026-09-15, with
             // the process alive and burning CPU and no window ever appearing.
+            // The band census panel frees the cursor and holds the camera while it is open, by
+            // answering the game's own "a menu has the mouse" predicate through `er-overlay-input`.
+            // Hooked here, off the loader lock, before the overlay can draw the panel.
+            er_overlay_input::install_cursor(standalone_log);
             crate::overlay::install_from_installer_thread();
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
@@ -217,6 +267,9 @@ fn spawn_catalog_task() {
             let handle = task.run_recurring(
                 move |_data: &FD4TaskData| {
                     frame = frame.wrapping_add(1);
+                    if frame == 1 {
+                        standalone_log(format_args!("first FrameBegin tick of the game task"));
+                    }
                     // Fold every map the player has actually been in into the MSB InvasionPoint
                     // catalog. This has to live here rather than in the map hook: the world-map
                     // ViewModel constructor fires once per world entry during the loading screen,
@@ -259,6 +312,9 @@ fn spawn_catalog_task() {
                     // Read once per tick, because the config is hot-reloaded and several gates
                     // below ask it different questions.
                     let config_snapshot = crate::local_invasion_filter::current_config_snapshot();
+                    // The band census panel's keys, and its view while it is open. The renderer
+                    // reads both without touching the config or the census.
+                    crate::band_census::publish(config_snapshot.as_ref());
                     // The map hooks arm unconditionally.
                     //
                     // They used to be gated on `map_pins` in the TOML, and that key is gone: the
@@ -437,6 +493,13 @@ fn spawn_catalog_task() {
             std::mem::forget(handle);
         });
 }
+
+// If this module wins the imgui context, every other overlay in the process has to find it.
+// Measured 2026-10-14 (run br-20261014-214503-8296): with no watermark shell in the profile this
+// DLL hosted, and er-net-effects and er-cel-shade each spun in `register_with_host_retrying`
+// because no loaded module answered `er_overlay_register_guest_v1` -- both overlays invisible.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
@@ -627,13 +690,6 @@ pub extern "C" fn er_invasion_warp_adopt_menu_object(menu_object: usize) -> i32 
         menu_object,
     ))
 }
-
-// This module can win the overlay claim (`overlay::install`), and a guest finds the host only by
-// this export. Without it the host answers nobody: on run br-20261016-203753-6e0e this DLL hosted,
-// and er_duel_rules.dll and er_net_effects.dll spun in `register_with_host_retrying` with nothing
-// on screen, the duel-rules install thread's stack read by Frida at that function.
-#[cfg(windows)]
-er_build_watermark_core::export_overlay_host!();
 
 #[cfg(test)]
 mod tests {

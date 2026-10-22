@@ -94,8 +94,15 @@
 #    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
 #    present but empty still contributes nothing and still reports success here.
 #
-# stdout, stdin and the exit code are passed through untouched: the exit code is how cupcake
-# denies an action, so swallowing it would disable the guards just as thoroughly as bug 1.
+# 6. A cupcake that cannot run is invisible to the agent (bd er-effects-rs-rafi). The engine
+#    exits 1 with an empty stdout when it cannot start -- a full /tmp on 2026-10-16 -- and
+#    Claude Code shows a hook's non-0, non-2 exit to the user alone. Every guard was off and
+#    the agent was not told. run_cupcake now answers such a run through the channel each event
+#    delivers to the agent; scripts/lib/cupcake-non-verdict.sh holds the rule.
+#
+# stdin is passed through untouched, and so are a verdict's stdout and exit code: cupcake denies
+# through JSON on stdout at exit 0, so swallowing it would disable the guards as thoroughly as
+# bug 1. Only a run that produced no verdict (bugs 5 and 6) is replaced.
 set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -118,13 +125,38 @@ KNOWN_MODES = {"default", "plan", "acceptEdits", "bypassPermissions"}
 # identical so this shim and the policies read the same text the same way.
 ANCHORS = set("\n\r;&|()'\"")
 
+# Substitution characters, blanked in a data heredoc's body (not its opener line) before
+# the substitution refusal below reads the text.
+BODY_SUBSTITUTION = set("`$")
+
 # commands.rego's shell_heredoc_reader_pattern, verbatim. Rego's regex.match is an
 # unanchored search, so re.search is the faithful translation.
 SHELL_HEREDOC_READER = re.compile(
-    r"""(?i)(^|[ \t;&|(])(command[ \t]+)?(([^ \t;&|()'"]*/)?(ba|z|k|da|a)?sh|eval|source|\.)([ \t]+-{1,2}[a-z][a-z0-9-]*)*[ \t]*$"""
+    r"""(?i)(^|[ \t;&|(])(command[ \t]+)?(([^ \t;&|()'"]*/)?(ba|z|k|da|a|fi|c|tc)?sh|eval|source|\.)([ \t]+-{1,2}[a-z][a-z0-9-]*)*[ \t]*$"""
 )
-# commands.rego's heredoc_tag pattern, verbatim (anchored there, so re.match here).
-HEREDOC_TAG = re.compile(r"""^-?[ \t]*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""")
+# commands.rego's heredoc_opener pattern, verbatim (anchored there, so re.match here).
+# Group 1 is the quote that makes the body literal -- `'`, `"` or the backslash of
+# `<<\EOF` -- and is None for a bare tag; group 2 is the tag.
+HEREDOC_TAG = re.compile(r"""^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?""")
+
+# commands.rego's heredoc_shell_name: the programs that read a heredoc body as a program.
+HEREDOC_SHELL_NAMES = {"sh", "bash", "zsh", "ksh", "dash", "ash", "fish", "csh", "tcsh", "eval", "source", "."}
+
+
+def heredoc_shell_name(word):
+    if word in HEREDOC_SHELL_NAMES:
+        return True
+    return any(word.endswith("/" + name) for name in HEREDOC_SHELL_NAMES if name not in {"eval", "source", "."})
+
+
+def opener_line_feeds_a_shell(opener_tail):
+    """commands.rego's opener_line_feeds_a_shell: a shell anywhere on the opener's line.
+
+    `cat <<'EOF' | bash` hands the body to a shell, so the body is a program.
+    """
+    for separator in ";&|(":
+        opener_tail = opener_tail.replace(separator, " ")
+    return any(heredoc_shell_name(word) for word in opener_tail.split(" ") if word)
 
 UNRESOLVABLE = "unresolvable"
 SHELL_READ = "shell"
@@ -152,7 +184,19 @@ def heredoc_region(text):
         closes the shell-read-heredoc case pinned as known-open in
         scripts/test-cupcake-policies.py.
 
-    Returns (start, end) for a data body, SHELL_READ, UNRESOLVABLE, or NO_HEREDOC.
+      * a backtick or a `$(` in a data body does not stop the caller's scan, and the third
+        element of the result says where the body begins (the line after the opener) so
+        the opener's own line is still checked. Until 2026-10-16 a backtick there made the
+        caller give up, so the newline after the terminator was never turned into `; `
+        and a statement behind it -- a push, a build piped into grep -- arrived with no
+        command position (measured through this shim and through `cupcake eval`). The
+        body of a quoted tag (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) is literal; a bare tag's
+        expands, and commands.rego keeps that one raw. Here the two are the same on
+        purpose: this function only decides which newlines become `; `, and finding the
+        terminator can only add one.
+
+    Returns (start, end, body_start) for a data body, SHELL_READ, UNRESOLVABLE, or
+    NO_HEREDOC.
     """
     parts = text.split("<<")
     if len(parts) == 1:
@@ -172,16 +216,20 @@ def heredoc_region(text):
         # commands.rego does with the same input, and it is the one UNRESOLVABLE-shaped case
         # where carrying on cannot put a heredoc body at risk.
         return NO_HEREDOC
-    tag = matched.group(1)
+    tag = matched.group(2)
     terminator = "\n" + tag
     if after.count(terminator) != 1:
         # A body whose terminator never appears, or appears more than once (a line of the
         # body starting with the tag). The body is multi-line and cannot be located, so this
         # stops rather than guess where it ends.
         return UNRESOLVABLE
+    opener_end = after.index("\n")
+    if opener_line_feeds_a_shell(after[matched.end():opener_end]):
+        return SHELL_READ
     start = len(before) + 2
     end = start + after.index(terminator) + 1  # through the newline that closes the body
-    return (start, end)
+    body_start = start + opener_end + 1
+    return (start, end, body_start)
 
 
 def mask_escaped_quotes(work):
@@ -258,10 +306,15 @@ def rewrite_command(command):
         # invent a boundary inside a documentation heredoc.
         return None
     if isinstance(region, tuple):
-        start, end = region
+        start, end, body_start = region
         for i in range(start, end):
             quoted[i] = True
             if work[i] in ANCHORS:
+                work[i] = " "
+        # The body's own substitutions do not stop the scan. The opener's own line is not
+        # part of the body, so a `$(` or backtick there still does.
+        for i in range(body_start, end):
+            if work[i] in BODY_SUBSTITUTION:
                 work[i] = " "
     # NO_HEREDOC and SHELL_READ both fall through with nothing marked: there is either no
     # body, or the body is a program whose line breaks are boundaries like any other.
@@ -377,15 +430,59 @@ evaluation_aborted() {
 	grep -qE 'OPA policy aborted execution|Policy evaluation failed' "$1"
 }
 
-# The deny that replaces a non-verdict. Carries `systemMessage` as well as the PreToolUse
-# decision, because this hook also fires on PostToolUse, SessionStart, UserPromptSubmit
-# and Stop, where `permissionDecision` is ignored and the failure would otherwise be
-# silent again.
-abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is NOT an allow -- every guard was silent -- so the command is refused instead. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
+# The cause carried by the reply that replaces a non-verdict; cupcake_non_verdict adds what
+# it means for the event at hand. No `"` or `\` anywhere in it, so it needs no JSON escaping.
+abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is not an allow -- every guard was silent. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
+
+# A cupcake run with no verdict is answered in a form the agent receives, not the exit status
+# Claude Code only shows the user (bd er-effects-rs-rafi). Without the library the old pass-through
+# stands, which is no worse than before it existed.
+if [ -r "$repo_root/scripts/lib/cupcake-non-verdict.sh" ]; then
+	# shellcheck source=lib/cupcake-non-verdict.sh
+	# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+	. "$repo_root/scripts/lib/cupcake-non-verdict.sh"
+fi
+
+# A policy file that does not compile (2026-10-19): every tool call is refused, so the agent cannot
+# run the fix and the user has to. scripts/cupcake_engine_unlock.py names the one command that
+# restores the broken files; this reply hands it to the agent, and on Stop it holds the turn open
+# until the closing message is that command and nothing else -- user directive the same day: "don't
+# emit any text except for the command you want me to run. Without any other text at all around the
+# message". Unlike the plain non-verdict, the Stop block does not let `stop_hook_active` through:
+# the agent can always satisfy it, and a prose-wrapped command is the failure this exists for.
+# Returns 1 (the caller falls back to cupcake_non_verdict) when the command cannot go into the JSON
+# as-is, or when the library is missing.
+cupcake_unlock_reply() {
+	local rc=$1 cause=$2 unlock=$3 name="" notice
+	declare -F cupcake_non_verdict >/dev/null || return 1
+	case $unlock in *'"'* | *'\'*) return 1 ;; esac
+	if [[ $raw_event =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"([A-Za-z]+)\" ]]; then
+		name=${BASH_REMATCH[1]}
+	fi
+	notice="$(cupcake_engine_failure_notice "$rc" "$cause") A policy file does not compile, so every tool call is refused and you cannot fix it yourself: the user has to run the unlock command. The unlock command is: $unlock -- Your closing message must be exactly that command and nothing else: no words before or after it, no explanation, no heading. The Stop hook refuses any other closing message while the engine is broken."
+	case $name in
+	Stop | SubagentStop)
+		if printf '%s' "$raw_event" | python3 "$repo_root/scripts/cupcake_engine_unlock.py" stop-ok "$unlock" 2>/dev/null; then
+			printf '{"systemMessage": "cupcake-hook: the policy engine is broken; run the command above to unlock it."}'
+		else
+			printf '{"systemMessage": "cupcake-hook: %s", "decision": "block", "reason": "cupcake-hook: %s"}' \
+				"$notice" "$notice"
+		fi
+		;;
+	*)
+		cupcake_non_verdict "$raw_event" "$notice"
+		;;
+	esac
+	return 0
+}
 
 run_cupcake() {
 	local err_file out rc
-	err_file="$(mktemp "${TMPDIR:-/tmp}/cupcake-hook-stderr.XXXXXX")"
+	if declare -F cupcake_scratch_file >/dev/null; then
+		err_file=$(cupcake_scratch_file) || err_file=""
+	else
+		err_file=$(mktemp "${TMPDIR:-/tmp}/cupcake-hook-stderr.XXXXXX" 2>/dev/null) || err_file=""
+	fi
 	# `rc=$?` rather than `${PIPESTATUS[1]}`: the pipeline runs inside a command
 	# substitution, so it is a subshell and PIPESTATUS in this shell describes the
 	# assignment itself. `$?` of it is the exit status of the substitution, which is
@@ -395,19 +492,37 @@ run_cupcake() {
 		--log-level error \
 		--wasm-max-memory "$CUPCAKE_WASM_MAX_MEMORY" \
 		--policy-dir "$repo_root/.cupcake" \
-		"$@" 2>"$err_file")"
+		"$@" 2>"${err_file:-/dev/null}")"
 	rc=$?
-	cat "$err_file" >&2
-	if evaluation_aborted "$err_file"; then
+	[ -n "$err_file" ] && cat "$err_file" >&2
+	if ! declare -F cupcake_non_verdict >/dev/null; then
+		[ -n "$err_file" ] && rm -f "$err_file"
+		printf '%s' "$out"
+		return "$rc"
+	fi
+	if [ -n "$err_file" ] && evaluation_aborted "$err_file"; then
 		rm -f "$err_file"
-		# No `"` anywhere in the notice, so it needs no JSON escaping and no python: a
-		# second interpreter here would be one more thing that can fail in the path
-		# whose whole job is to not fail open.
-		printf '{"systemMessage": "cupcake-hook: %s", "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}}' \
-			"$abort_notice" "$abort_notice"
+		cupcake_non_verdict "$raw_event" "$abort_notice"
 		return 0
 	fi
-	rm -f "$err_file"
+	# A verdict is exit 0 with JSON on stdout -- a deny included, measured 2026-10-16 against
+	# 0.5.2. Exit 2 is Claude Code's own blocking channel and already reaches the agent, so it
+	# passes through. Anything else means the engine never ran the policies.
+	if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+		local cause unlock=""
+		cause=$(cupcake_failure_cause "$err_file")
+		if [ -n "$err_file" ] && [ -r "$repo_root/scripts/cupcake_engine_unlock.py" ] && command -v python3 >/dev/null 2>&1; then
+			unlock=$(python3 "$repo_root/scripts/cupcake_engine_unlock.py" command \
+				"$repo_root" "$cupcake_global_root" "$err_file" 2>/dev/null) || unlock=""
+		fi
+		[ -n "$err_file" ] && rm -f "$err_file"
+		if [ -n "$unlock" ] && cupcake_unlock_reply "$rc" "$cause" "$unlock"; then
+			return 0
+		fi
+		cupcake_non_verdict "$raw_event" "$(cupcake_engine_failure_notice "$rc" "$cause")"
+		return 0
+	fi
+	[ -n "$err_file" ] && rm -f "$err_file"
 	printf '%s' "$out"
 	return "$rc"
 }

@@ -11,7 +11,7 @@ mod prologue_build {
 }
 
 use iced_x86::Register;
-use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem};
+use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem, mov_r64_mem_base};
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
@@ -26,6 +26,22 @@ const APPLY_VA: u64 = 0x1404fa8e0;
 /// `FUN_140d3d5f0(out, platformKind)` -- the `LoadBalancerParam` row lookup that `DLPanic`s when
 /// `SoloParamRepository` is null. See `guards::null_param_repository`.
 const LOAD_BALANCER_PARAM_VA: u64 = 0x140d3d5f0;
+/// `void CS::MapItemManImpl::GiveItems(...)`. See `mid_hooks::give_items`.
+const GIVE_ITEMS_VA: u64 = 0x1405605b0;
+/// Offsets into `GiveItems`, identical in 1.16.2 and 1.17.1 (the body is `IDENTICAL-WHOLE`).
+const GIVE_ITEMS_STORAGE_OVERFLOW_LOAD: u64 = 0x1d9;
+const GIVE_ITEMS_STORAGE_ABSENT_JOIN: u64 = 0x2f3;
+const GIVE_ITEMS_PICKUP_LOG_LOAD: u64 = 0x34a;
+const GIVE_ITEMS_PICKUP_NOT_MINE: u64 = 0x3c1;
+/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+const STORAGE_OVERFLOW_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_OVERFLOW_LOAD;
+const STORAGE_ABSENT_JOIN_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_ABSENT_JOIN;
+const PICKUP_LOG_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_LOG_LOAD;
+const PICKUP_NOT_MINE_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_NOT_MINE;
+/// `WorldChrManImp+0x1e508`, the local `PlayerIns`.
+const WORLD_CHR_MAN_MAIN_PLAYER: i64 = 0x1e508;
+/// `ChrIns` vtable slot `+0x168`, `GetPlayerGameData`.
+const CHR_INS_GET_PLAYER_GAME_DATA_SLOT: i32 = 0x168;
 /// The SEH frame marker the prologue stores; named so the assembled `MOV` is not a bare literal.
 const SEH_FRAME_UNINITIALISED: i32 = -2;
 /// The leak assertion inside `CS::CSFreeListMemorySystem`'s shutdown, at the `CMP` that decides
@@ -113,6 +129,92 @@ fn main() {
             }) as prologue_build::Assemble,
         )],
         "generated_null_param_repository_prologues.rs",
+    );
+
+    // `GiveItems` loads the local player twice without testing it. Each load is the first of three
+    // instructions the mid hook overwrites (ilhook writes a 14-byte jump), and the window is those
+    // three in full, so the bytes it moves are exactly the bytes checked here.
+    const MAIN_PLAYER_LOAD_PIN: &[u8] = &[
+        0x48, 0x8b, 0x89, 0x08, 0xe5, 0x01, 0x00, 0x48, 0x8b, 0x01, 0xff, 0x90, 0x68, 0x01, 0x00,
+        0x00,
+    ];
+    fn main_player_load(
+        asm: &mut iced_x86::code_asm::CodeAssembler,
+    ) -> Result<(), iced_x86::IcedError> {
+        use iced_x86::code_asm::*;
+        mov_r64_mem(asm, Register::RCX, Register::RCX, WORLD_CHR_MAN_MAIN_PLAYER)?;
+        mov_r64_mem_base(asm, Register::RAX, Register::RCX)?;
+        asm.call(qword_ptr(rax + CHR_INS_GET_PLAYER_GAME_DATA_SLOT))?;
+        Ok(())
+    }
+    generate(
+        &[
+            (
+                PrologueSpec {
+                    name: "STORAGE_OVERFLOW_LOAD_WINDOW",
+                    doc: "1.16.2 `GiveItems+0x1d9`, the storage-overflow branch's player load:\n\
+                          `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: STORAGE_OVERFLOW_LOAD_VA,
+                    take: 0,
+                    pin: MAIN_PLAYER_LOAD_PIN,
+                },
+                main_player_load as prologue_build::Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "PICKUP_LOG_LOAD_WINDOW",
+                    doc: "1.16.2 `GiveItems+0x34a`, the pickup-log branch's player load:\n\
+                          `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: PICKUP_LOG_LOAD_VA,
+                    take: 0,
+                    pin: MAIN_PLAYER_LOAD_PIN,
+                },
+                main_player_load as prologue_build::Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "STORAGE_ABSENT_JOIN_WINDOW",
+                    doc: "1.16.2 `GiveItems+0x2f3`, where the no-storage-chest branch rejoins:\n\
+                          `MOV ESI,[RSP+0x34]`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: STORAGE_ABSENT_JOIN_VA,
+                    take: 0,
+                    pin: &[0x8b, 0x74, 0x24, 0x34],
+                },
+                (|asm| {
+                    use iced_x86::code_asm::*;
+                    asm.mov(esi, dword_ptr(rsp + 0x34))?;
+                    Ok(())
+                }) as prologue_build::Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "PICKUP_NOT_MINE_WINDOW",
+                    doc: "1.16.2 `GiveItems+0x3c1`, the branch for an item another player gave:\n\
+                          `AND EDI,-2`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Slice,
+                    image: Image::EldenRing,
+                    va: PICKUP_NOT_MINE_VA,
+                    take: 0,
+                    pin: &[0x83, 0xe7, 0xfe],
+                },
+                (|asm| {
+                    use iced_x86::code_asm::*;
+                    asm.and(edi, -2)?;
+                    Ok(())
+                }) as prologue_build::Assemble,
+            ),
+        ],
+        "generated_give_items_windows.rs",
     );
 
     generate(

@@ -181,6 +181,19 @@ test_shell_read_heredoc_body_keeps_its_separators if {
 	regex.match(`(?m)^git push`, single_text(commands.executed_texts(text)))
 }
 
+# The rest of the opener's line is code, not body (2026-10-15). It used to be blanked with
+# the body, which took the `;` in front of this push and with it the push's command position.
+test_heredoc_opener_line_tail_keeps_its_separators if {
+	text := concat("", ["cat <<'EOF' > notes.md; ", push_main, "\nit's a note\nEOF"])
+	contains(single_text(commands.executed_texts(text)), concat("", ["; ", push_main]))
+}
+
+# A shell on the opener's line reads the body as a program, so the body keeps its separators.
+test_heredoc_piped_into_a_shell_keeps_its_body if {
+	text := concat("", ["cat <<'EOF' | bash\necho hi; ", push_main, "\nEOF"])
+	contains(single_text(commands.executed_texts(text)), concat("", ["; ", push_main]))
+}
+
 single_text(texts) := t if {
 	count(texts) == 1
 	some t in texts
@@ -234,6 +247,59 @@ test_backtick_leaves_text_raw if {
 test_unbalanced_quotes_leave_text_raw if {
 	text := concat("", [`echo "unclosed `, push_main])
 	commands.executed_texts(text) == {text}
+}
+
+# --- single quotes beside a substitution (2026-10-15) --------------------------
+#
+# Nothing escapes single quotes, so a substitution elsewhere in the text is no reason to keep
+# them raw. Before this, `\.(go|rs)$` below kept its `(` and `|`, and `go` read as the Go
+# toolchain in command position.
+
+test_single_quoted_span_beside_a_substitution_is_neutralised if {
+	commands.executed_texts(`F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)`) == {
+		`F=$(git diff --name-only | grep -E '\. go rs $' | grep -v vendor)`,
+	}
+}
+
+test_single_quoted_span_beside_a_backtick_is_neutralised if {
+	commands.executed_texts("F=`git diff | grep -E '(go|rs)$'`") == {"F=`git diff | grep -E ' go rs $'`"}
+}
+
+# Everything outside the single quotes stays raw, substitution and separators included.
+test_separators_beside_the_neutralised_span_survive if {
+	texts := commands.executed_texts(concat("", ["x=$(date); echo 'a;b'; ", push_main]))
+	texts == {concat("", ["x=$(date); echo 'a b'; ", push_main])}
+}
+
+# A `'` inside double quotes is literal, and taking it for a delimiter would pair it with a later
+# one and blank the real command between them. Any such text stays raw.
+test_apostrophes_inside_double_quotes_beside_a_substitution_leave_text_raw if {
+	text := concat("", [`x=$(date); echo "a'b"; `, push_main, `; echo "c'd"`])
+	commands.executed_texts(text) == {text}
+}
+
+# Inside single quotes `\'` is a literal backslash and a closing quote, so deleting the pair would
+# move every span after it -- here, onto the push.
+test_backslash_quote_beside_a_substitution_leaves_text_raw if {
+	text := concat("", [`x=$(date); echo 'C:\'; `, push_main, `; echo 'D:\'`])
+	commands.executed_texts(text) == {text}
+}
+
+# An apostrophe in a comment is not a quote.
+test_comment_beside_a_substitution_leaves_text_raw if {
+	text := concat("", ["x=$(date) # it's here\n", push_main, " # don't"])
+	commands.executed_texts(text) == {text}
+}
+
+test_heredoc_beside_a_substitution_leaves_text_raw if {
+	text := concat("", ["x=$(date); cat <<EOF\nit's\nEOF\n", push_main, "\necho 'z'"])
+	commands.executed_texts(text) == {text}
+}
+
+# A substitution inside single quotes is literal text and is neutralised with the rest.
+test_substitution_inside_single_quotes_is_neutralised if {
+	texts := commands.executed_texts(concat("", ["x=$(date); echo '$(", push_main, ")'"]))
+	texts == {concat("", ["x=$(date); echo '$ ", push_main, " '"])}
 }
 
 # --- quote-scrubbed view, for unanchored substring tests ----------------------
@@ -475,11 +541,161 @@ test_odd_backslash_run_is_a_continuation if {
 	commands.continuations_joined("a \\\\\\\nb") == "a \\\\ b"
 }
 
+# --- leading assignments stand aside from the command slot --------------------
+
+test_assignment_word_with_a_plain_value if {
+	commands.shell_assignment_word("FOO=1")
+}
+
+test_assignment_word_with_a_path_value if {
+	commands.shell_assignment_word("ME3_PROFILE=/tmp/x/p.me3")
+}
+
+test_assignment_word_with_an_empty_value if {
+	commands.shell_assignment_word("_X9=")
+}
+
+test_not_assignment_option if {
+	not commands.shell_assignment_word("--out=/some/path")
+}
+
+test_not_assignment_path_containing_equals if {
+	not commands.shell_assignment_word("dir/a=b")
+}
+
+test_not_assignment_name_starting_with_a_digit if {
+	not commands.shell_assignment_word("9X=1")
+}
+
+test_not_assignment_empty_name if {
+	not commands.shell_assignment_word("=x")
+}
+
+test_not_assignment_dotted_name if {
+	not commands.shell_assignment_word("a.b=c")
+}
+
+test_not_assignment_without_equals if {
+	not commands.shell_assignment_word("launch.sh")
+}
+
+test_program_behind_path_assignments_is_in_the_command_slot if {
+	words := commands.command_slot_words("A=1 ME3_PROFILE=/tmp/x/p.me3 /home/u/Elden/launch.sh -o")
+	words[2] == "/home/u/Elden/launch.sh"
+	commands.word_in_command_slot(words, 2)
+}
+
+# The first word that is not an assignment takes the slot, and its operands do not.
+test_operand_after_assigned_program_is_not_in_the_command_slot if {
+	words := commands.command_slot_words("FOO=/x ls -la x")
+	commands.word_in_command_slot(words, 1)
+	not commands.word_in_command_slot(words, 3)
+}
+
+test_program_behind_non_name_assignment_is_an_operand if {
+	words := commands.command_slot_words("dir/a=b /home/u/Elden/launch.sh")
+	not commands.word_in_command_slot(words, 1)
+}
+
 test_executed_texts_see_one_line_across_a_continuation if {
 	texts := commands.executed_texts("cargo build \\\n  -p x")
 	some t in texts
 	not contains(t, "\n")
 	contains(t, "-p x")
+}
+
+# --- a literal heredoc body carrying a substitution (2026-10-16) --------------
+#
+# A quoted tag makes the body literal, so its backticks and `$(` are prose. Both the
+# raw spelling (newlines intact, as `opa test` sees it) and the delivered one (newlines
+# turned into spaces by the engine) are read.
+
+build_into_grep := concat(" ", ["echo", "$(cargo", "build", "2>&1)", "|", "grep", "error"])
+
+quoted_body := concat("", ["fix: quote `", build_into_grep, "`"])
+
+# Every text the decomposition reads for `cmd`, joined, so a test can ask whether a
+# character survived in any of them.
+all_texts(cmd) := concat(" || ", [t | some t in commands.executed_texts(cmd)])
+
+test_quoted_heredoc_body_substitution_is_blanked_by_lines if {
+	texts := all_texts(concat("", ["git commit -F - <<'EOF'\n", quoted_body, "\nEOF"]))
+	not contains(texts, "`")
+	not contains(texts, "$(")
+}
+
+test_quoted_heredoc_body_substitution_is_blanked_as_delivered if {
+	texts := all_texts(concat("", ["git commit -F - <<'EOF' ", quoted_body, " EOF"]))
+	not contains(texts, "`")
+	not contains(texts, "$(")
+}
+
+test_double_quoted_and_backslash_tags_are_literal if {
+	every opener in [`<<"EOF"`, `<<\EOF`] {
+		not contains(all_texts(concat("", ["git commit -F - ", opener, " ", quoted_body, " EOF"])), "`")
+		not contains(all_texts(concat("", ["git commit -F - ", opener, "\n", quoted_body, "\nEOF"])), "`")
+	}
+}
+
+test_backslash_tag_is_read if {
+	opener := commands.heredoc_opener(`\EOF rest`)
+	opener.tag == "EOF"
+	opener.quote == `\`
+	opener.full == `\EOF`
+}
+
+test_backslash_tag_opens_a_data_span if {
+	commands.heredoc_open_tag(`<<\EOF`) == "EOF"
+}
+
+# The `; ` the hook shim writes for the newline after the terminator still opens a
+# command, and the body in front of it is blanked.
+test_statement_after_a_delivered_terminator_keeps_its_position if {
+	some t in commands.executed_texts(concat("", ["git commit -F - <<'EOF' the body `x` here EOF; ", push_main]))
+	contains(t, concat("", ["EOF; ", push_main]))
+	not contains(t, "`")
+}
+
+test_unquoted_heredoc_body_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["cat > f <<EOF\n", quoted_body, "\nEOF"]),
+		concat("", ["cat > f <<EOF ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+test_shell_fed_heredoc_body_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["cat <<'EOF' | bash\n", quoted_body, "\nEOF"]),
+		concat("", ["cat <<'EOF' | bash ", quoted_body, " EOF"]),
+		concat("", ["bash <<'EOF' ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+# A statement or a redirect on the opener line ahead of the first substitution keeps the
+# delivered text raw, so a substitution there is still read as one.
+test_opener_line_statement_before_a_substitution_stays_raw if {
+	every cmd in [
+		concat("", ["git commit -F - <<'EOF' ; ", push_main, " ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' > \"$(mktemp)\" ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' && echo $(rm -rf x) ", quoted_body, " EOF"]),
+		concat("", ["cat <<'EOF' `rm -rf x` ", quoted_body, " EOF"]),
+	] {
+		contains(all_texts(cmd), "$(")
+	}
+}
+
+test_opener_line_separator_survives_by_lines if {
+	some t in commands.executed_texts(concat("", ["git commit -F - <<'EOF' ; ", push_main, "\n", quoted_body, "\nEOF"]))
+	contains(t, concat("", ["; ", push_main]))
+}
+
+# A body that mentions the tag as a word ends early; what follows stays raw.
+test_tag_word_inside_the_body_ends_it_early if {
+	contains(all_texts(concat("", ["git commit -F - <<'EOF' a b `x` EOF c `y` EOF"])), "`")
 }
 
 # --- a shell's options stand in front of its script ---------------------------
@@ -532,4 +748,44 @@ test_shell_program_by_name_and_by_path if {
 	commands.shell_program("/usr/bin/zsh")
 	not commands.shell_program("check.sh")
 	not commands.shell_program("bashrc")
+}
+
+# --- command substitution only counts where the shell runs it (2026-10-19) --------------------
+
+# A backtick or `$(` inside single quotes is a literal character, so the text is neutralised as
+# usual and quoted prose loses its separators and its backticks.
+test_backtick_in_single_quotes_is_neutralised if {
+	commands.executed_texts("bd note 'a `b`; c'") == {"bd note 'a  b   c'"}
+}
+
+test_dollar_paren_in_single_quotes_is_neutralised if {
+	commands.executed_texts("echo 'x $(y); z'") == {"echo 'x $ y   z'"}
+}
+
+# A substitution the shell would run keeps the text raw.
+test_unquoted_backtick_keeps_raw_text if {
+	commands.executed_texts("echo `a; b`") == {"echo `a; b`"}
+}
+
+test_backtick_in_double_quotes_keeps_raw_text if {
+	commands.executed_texts("echo \"`a; b`\" 'c'") == {"echo \"`a; b`\" 'c'"}
+}
+
+# Quote parity alone would pair the apostrophe inside the first double-quoted span with a real
+# quote later and call this unquoted backtick quoted. The tokenising match does not.
+test_apostrophe_in_double_quotes_cannot_hide_a_backtick if {
+	text := "echo \"'\" 'a' `x; y` 'b' \"'\""
+	commands.executed_texts(text) == {text}
+}
+
+# Inside an unquoted heredoc body a single quote is literal and a backtick still runs.
+test_heredoc_with_backtick_keeps_raw_text if {
+	text := "cat > f <<EOF\n'`x; y`'\nEOF"
+	commands.executed_texts(text) == {text}
+}
+
+# `$'...'` is not modelled, so it keeps the raw text.
+test_ansi_c_quote_with_backtick_keeps_raw_text if {
+	text := "echo $'a' `x; y`"
+	commands.executed_texts(text) == {text}
 }

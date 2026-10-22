@@ -76,7 +76,7 @@ PVE_DEF = {e: f'defEnemyDmgCorrectRate_{_PVP_EL[e]}' for e in ELEMENTS}
 CUT = {'magic': 'magicDamageCutRate', 'fire': 'fireDamageCutRate',
        'lightning': 'thunderDamageCutRate', 'holy': 'darkDamageCutRate'}
 CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
-STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
+STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
 # Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo
@@ -172,6 +172,29 @@ def fight_points(lo=FIGHT_SECONDS_RANGE[0], hi=FIGHT_SECONDS_RANGE[1], step=FIGH
 
 #: The fight lengths, as `fight_seconds` everywhere it is taken (a single number is also taken).
 FIGHT_SECONDS = fight_points()
+#: Fight models (user, 2026-10-14). `duel` is the fight above: one opponent, 3 to 5 minutes.
+#: `invasion` extends it to the current invasion meta and is the default for a generated build:
+#: the invader is hit by three hosts, who cannot hit each other, and by up to two co-invaders
+#: ("co-invaders can literally make it feel like a 5v1"), so five attackers; it has the three
+#: hosts' HP bars and their flasks to get through; an encounter lasts "anywhere between 10 seconds
+#: to 1 hour". How the lengths are spread over that range is not known: the points are spaced
+#: evenly in log time (`INFERRED`), so half the weight lies under two minutes and every tenfold
+#: length counts alike, where an even linear spread would let the hour-long ones decide.
+FIGHT_KINDS = {
+    'duel': {'seconds': FIGHT_SECONDS_RANGE, 'log': False, 'attackers': 1, 'targets': 1, 'role': 'host'},
+    'invasion': {'seconds': (10.0, 3600.0), 'log': True, 'attackers': 5, 'targets': 3, 'role': 'invader'},
+}
+DEFAULT_FIGHT = 'invasion'
+
+
+def fight_kind_points(kind, n=len(FIGHT_SECONDS)):
+    """The fight lengths (s) of fight model `kind` (`FIGHT_KINDS`): the duel's 10 s steps, or `n`
+    points spaced evenly in log time over the invasion's range."""
+    k = FIGHT_KINDS[kind]
+    lo, hi = k['seconds']
+    if not k['log']:
+        return fight_points(lo, hi)
+    return tuple(lo * (hi / lo) ** (i / (n - 1)) for i in range(n))
 #: TAE frames per second (`er-mechanics-status.FPS`), for cast frames -> seconds.
 CAST_FPS = 30.0
 #: Frames one cast of a spell takes from the fight. No spell cast animation is read here (the
@@ -857,6 +880,12 @@ class Buffs:
         Otherwise `uses` x duration over the fight, at most 1."""
         r = self.sp[sid]
         d = r['effectEndurance']
+        if r['deleteCriteriaDamage'] == 1 and r['stateInfo'] not in NEXT_HIT_STATES:
+            # A defender's one-hit cut (Opaline Bubbletear 3507, Uplifting Aromatic's 503500) ends
+            # on any hit above 0 damage, and a human opponent spends it on the cheapest, fastest
+            # one they carry -- a fan dagger or throwing knife -- before anything that hurts (user,
+            # 2026-10-17). So it absorbs no hit worth counting.
+            return 0.0
         if self.one_hit(sid):
             ps = _pairs(fight_seconds, hits)
             return sum(min(1.0, uses / max(h, 1)) for _, h in ps) / len(ps)
@@ -1394,8 +1423,8 @@ def ar_stat_ratio(weapon, affinity, level, stats, two_handed, tables=None):
             for k, v in key:
                 st[k] = st.get(k, 0) + v
             got = rating(st, dict(rkey) or None)
-            cache[key] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
-        return cache[key]
+            cache[key, rkey] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
+        return cache[key, rkey]
     return ratio
 
 
@@ -1561,7 +1590,8 @@ def _t_expected(m, check):
     f25 = 25.0
     check('uptime: 180 s tear over a 25 s fight', m.uptime(511011, f25), 1.0)
     check('uptime: 25 s grease over a 50 s fight', m.uptime(20501411, 50.0), 0.5)
-    check('uptime: one-hit row (Uplifting 503500) covers 1 of 5 hits', m.uptime(503500), 0.2)
+    check('uptime: defender one-hit row (Uplifting 503500) is spent on a chip hit', m.uptime(503500), 0.0)
+    check('uptime: defender one-hit row (Opaline Bubbletear 3507) is spent on a chip hit', m.uptime(3507), 0.0)
     check("uptime: Royal Knight's Resolve 1701 next hit, 2 casts", m.uptime(1701, uses=2), 0.4)
     check('uptime: Thorny tier 3558 (1.5 s, refreshed) none', m.uptime(3558), 0.0)
     check('uptime: great rune row permanent', m.uptime(620), 1.0)
@@ -1656,7 +1686,7 @@ def _t_expected(m, check):
     check('20 casts need 2 cerulean drinks: 19 x 30 f + 2 x 54 f off 300 s',
           (rk['drinks'], round(rk['time_factor'], 5)), (2.0, round(1.0 - (19 * 30.0 + 2 * 54.0) / 30.0 / 300.0, 5)))
     check('a one-hit row over a schedule: the mean of 1 / hits per point',
-          round(m.uptime(503500, (180.0, 300.0), (5, 20)), 4), round((0.2 + 0.05) / 2, 4))
+          round(m.uptime(1701, (180.0, 300.0), (5, 20)), 4), round((0.2 + 0.05) / 2, 4))
 
 
 def _t_regen(m, check):

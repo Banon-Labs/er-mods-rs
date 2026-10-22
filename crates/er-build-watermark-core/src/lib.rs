@@ -34,6 +34,10 @@ pub mod texture_request;
 #[cfg(windows)]
 mod overlay;
 
+/// The system clipboard behind every overlay text field; installed by the host.
+#[cfg(windows)]
+mod clipboard;
+
 /// One imgui host per process, and a way for every other module to draw on it.
 #[cfg(windows)]
 pub mod overlay_host;
@@ -51,7 +55,7 @@ pub fn install_if_owner(_hmodule_raw: usize, _log: fn(std::fmt::Arguments<'_>)) 
 }
 
 #[cfg(test)]
-mod every_host_answers_guests {
+mod overlay_hosts {
     use std::path::{Path, PathBuf};
 
     fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -111,6 +115,50 @@ mod every_host_answers_guests {
             "these crates can win the overlay claim but export no guest registration, so no \
              other overlay can join them: {missing:?}. Add \
              `er_build_watermark_core::export_overlay_host!();`."
+        );
+    }
+
+    /// Whichever module wins the overlay builds the default face every guest falls back to, so
+    /// every host must build the same one. Until 2026-10-16 the watermark built 27 pixels,
+    /// er-net-effects 16.25 and the rest Dear ImGui's 13, so a guest's text size depended on which
+    /// DLL won. Every render loop a crate can host therefore calls
+    /// `overlay_host::add_host_default_font` in the file that implements it.
+    #[test]
+    fn every_render_loop_calls_add_host_default_font() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/");
+        let mut hosts = Vec::new();
+        let mut missing = Vec::new();
+        for entry in std::fs::read_dir(crates)
+            .expect("crates/ is readable")
+            .flatten()
+        {
+            let mut files = Vec::new();
+            sources(&entry.path().join("src"), &mut files);
+            for file in files {
+                let Ok(text) = std::fs::read_to_string(&file) else {
+                    continue;
+                };
+                if !text.contains("impl ImguiRenderLoop for") {
+                    continue;
+                }
+                let name = file.display().to_string();
+                if !text.contains("add_host_default_font") {
+                    missing.push(name.clone());
+                }
+                hosts.push(name);
+            }
+        }
+        assert!(
+            hosts.len() >= 5,
+            "found only {hosts:?}; the scan no longer sees the render loops"
+        );
+        assert!(
+            missing.is_empty(),
+            "these render loops can host the overlay but build their own default face, so a \
+             guest's fallback text size depends on which DLL won: {missing:?}. Call \
+             `er_build_watermark_core::overlay_host::add_host_default_font(ctx)` in `initialize`."
         );
     }
 }

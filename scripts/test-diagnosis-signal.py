@@ -422,6 +422,22 @@ def main() -> int:
 
     # --- the deferred-investigation closer --------------------------------------------------------
 
+    # 2026-10-19: a table row reporting a finished change named "the next step" as the object of
+    # "handing", with nothing after it but a cell bar. It reports; it does not defer.
+    expect_facts(
+        "deferral-the-next-step-as-an-object-is-not-a-plan",
+        [
+            user("make the guard better"),
+            assistant_tool("Edit", file_path="x.sh", old_string="a", new_string="b"),
+            tool_result(),
+            assistant_text(
+                "| An imperative \"Reply ...\" at the start of a sentence now counts as handing you "
+                "the next step | same file |"
+            ),
+        ],
+        deferral=False,
+    )
+
     # The six closing sentences of 2026-09-12, verbatim. Each names the agent's own next
     # investigative move and stops in front of it, and not one was caught before this arm: the
     # promissory arm needs a work gerund, the unread arm needs a file claimed to hold the answer, and

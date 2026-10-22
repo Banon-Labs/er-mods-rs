@@ -19,6 +19,8 @@
 //!   ([`mimic_hooks`]), and each companion with a `build_url` is built wearing that build's gear
 //!   ([`dress`]), carries its configured name ([`names`]) and, with `ai = { brain = "x" }`, runs
 //!   a Lua brain loaded into the AI state ([`brains`]).
+//! * Companions get a friendly overhead name and HP plate with a friendly name colour, and no red
+//!   enemy damage bar when hit: three `ilhook` mid hooks and one detour ([`mid_hooks`]).
 //!
 //! # The log is the oracle
 //!
@@ -31,6 +33,7 @@ mod facts;
 mod hits;
 mod lift;
 mod log;
+mod mid_hooks;
 mod restock;
 mod stance;
 mod stuck;
@@ -352,6 +355,7 @@ fn tick(state: &mut TaskState) {
     step(state, Event::Frame);
     names::prune();
     team::tick();
+    mid_hooks::tag_list::tick();
     lift::live::tick();
     squad_facts::tick();
     match state.duel.state.clone() {
@@ -448,6 +452,9 @@ fn install(module_base: usize) {
     mimic_hooks::install();
     game::install();
     names::install();
+    // The voice-chat guard goes in before the tag hooks: the tag-slot hook is what brings a
+    // companion to that lookup.
+    mid_hooks::install(mid_hooks::tag_list::install_voice_chat_guard());
     squad_facts::install();
     brains::install();
     void_tech::install();

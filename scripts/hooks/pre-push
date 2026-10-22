@@ -15,6 +15,10 @@ if [[ -t 2 && ${ER_CHECK_LIVE:-1} != 0 && ${TERM:-dumb} != dumb ]]; then
 fi
 cd "$repo_root"
 
+# A push queues on check.sh's machine-wide lock instead of being refused by it (see the
+# ER_CHECK_WAIT_LOCK block in scripts/check.sh). Exported, so the gate tree's check.sh sees it.
+export ER_CHECK_WAIT_LOCK=1
+
 # GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
 #
 # Measured with scripts/measure-git-hook-env.sh on git 2.55.0. From the MAIN checkout a pre-push

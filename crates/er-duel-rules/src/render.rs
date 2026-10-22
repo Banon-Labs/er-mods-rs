@@ -19,6 +19,7 @@ use er_build_watermark_core::overlay_host::{
 };
 use er_duel_rules_core::feed::{Feed, Stamp, player_label};
 use er_duel_rules_core::referee::Alert;
+use er_overlay_theme::{self as theme, Font, Theme};
 use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Condition, Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
@@ -26,17 +27,10 @@ use hudhook::{ImguiRenderLoop, RenderContext};
 use crate::breaks::record_break;
 use crate::log::rules_log;
 
-/// The list is authored for a 1080-line display and scaled from there.
-const REFERENCE_HEIGHT: f32 = 1080.0;
-const FONT_SCALE_AT_1080: f32 = 1.1;
-/// Gap between the list and the screen's top and right edges, as a fraction of its height.
-const EDGE_FRACTION: f32 = 0.015;
-const BACKGROUND_ALPHA: f32 = 0.55;
-
-const TITLE: [f32; 4] = [1.0, 0.27, 0.22, 1.0];
-const TIME: [f32; 4] = [0.62, 0.60, 0.55, 1.0];
-const PLAYER: [f32; 4] = [1.0, 0.96, 0.88, 1.0];
-const RULE: [f32; 4] = [1.0, 0.55, 0.45, 1.0];
+/// Gap between the list and the screen's top and right edges, at 1080p.
+const EDGE: f32 = 16.0;
+/// Padding inside the list, at 1080p (horizontal, vertical).
+const LIST_PAD: [f32; 2] = [12.0, 10.0];
 
 static FEED: Mutex<Feed> = Mutex::new(Feed::new());
 static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
@@ -120,7 +114,15 @@ pub(crate) fn clear() {
     ));
 }
 
-fn draw(ui: &Ui) {
+/// Draw the list in `er-overlay-theme`'s look. A guest passes the host's frame, which names the
+/// theme's faces in the host's atlas; when this module hosts it passes null and the text is the
+/// host's default face scaled to the theme's size.
+///
+/// # Safety
+///
+/// `frame` is null, or the pointer the overlay host just passed to [`guest_draw`], live for the
+/// duration of this call.
+unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     // Hidden by its key or the menu: the breaks are still filed and logged by `push`.
     if !crate::control::show_breaks() {
         return;
@@ -132,36 +134,71 @@ fn draw(ui: &Ui) {
         return;
     }
     let display = ui.io().display_size;
-    let scale = FONT_SCALE_AT_1080 * (display[1] / REFERENCE_HEIGHT).max(0.5);
-    let edge = display[1] * EDGE_FRACTION;
-    ui.window("##er-duel-rules")
+    let ui_scale = if frame.is_null() {
+        er_build_watermark_core::font_request::ui_scale(display[1])
+    } else {
+        // SAFETY: the caller's contract: a non-null `frame` is live for this call.
+        unsafe { (*frame).ui_scale }
+    };
+    let scale = theme::panel_scale(ui_scale);
+    if !frame.is_null() {
+        // Once a session, the first time a break is listed; every later call asks nothing.
+        let _ = theme::request_fonts(scale);
+    }
+    // SAFETY: the caller's contract; `frame_fonts` takes null as no fonts.
+    let fonts = unsafe { theme::frame_fonts(frame) };
+    let _theme = theme::enter(Theme::new(
+        scale,
+        fonts.table,
+        fonts.granted,
+        fonts.scale,
+        theme::default_font_px(ui),
+    ));
+    let t = theme::current();
+    let edge = t.px(EDGE).round();
+    let window_style = theme::window_style(ui);
+    let begun = ui
+        .window("##er-duel-rules")
         .position([display[0] - edge, edge], Condition::Always)
         .position_pivot([1.0, 0.0])
-        .bg_alpha(BACKGROUND_ALPHA)
         .no_decoration()
         .no_inputs()
         .no_nav()
         .focus_on_appearing(false)
         .always_auto_resize(true)
-        .build(|| {
-            ui.set_window_font_scale(scale);
-            ui.text_colored(TITLE, "Rule breaks");
-            for entry in feed.shown() {
-                ui.text_colored(TIME, entry.stamp.time());
+        .begin();
+    drop(window_style);
+    let Some(_window) = begun else {
+        return;
+    };
+    theme::apply_font_scale(ui);
+    let _style = theme::panel_style(ui);
+    let pad = [t.px(LIST_PAD[0]).round(), t.px(LIST_PAD[1]).round()];
+    let origin = ui.cursor_pos();
+    ui.set_cursor_pos([origin[0] + pad[0], origin[1] + pad[1]]);
+    {
+        let _group = ui.begin_group();
+        theme::text(ui, Font::Strong, theme::ERROR_TEXT, "Rule breaks");
+        for entry in feed.shown() {
+            theme::text(ui, Font::Mono, theme::TEXT_QUIET, &entry.stamp.time());
+            ui.same_line();
+            theme::text(ui, Font::Body, theme::TEXT, &entry.who());
+            ui.same_line();
+            theme::text(ui, Font::Body, theme::ERROR_TEXT, entry.rule());
+            // What broke it, so a rule worded "Spells/Crystal Tears/Consumables" names the one.
+            if !entry.alert.detail.is_empty() {
                 ui.same_line();
-                ui.text_colored(PLAYER, entry.who());
-                ui.same_line();
-                ui.text_colored(RULE, entry.rule());
-                // What broke it, so a rule worded "Spells/Crystal Tears/Consumables" names the one.
-                if !entry.alert.detail.is_empty() {
-                    ui.same_line();
-                    ui.text_colored(TIME, &entry.alert.detail);
-                }
+                theme::text(ui, Font::Body, theme::TEXT_QUIET, &entry.alert.detail);
             }
-        });
+        }
+    }
+    // The right and bottom padding: auto-resize fits the window to the last item.
+    let end = ui.item_rect_max();
+    ui.set_cursor_screen_pos([end[0], end[1]]);
+    ui.dummy(pad);
     if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
         rules_log(format_args!(
-            "overlay: first rule-break list drawn, display {}x{}, font scale {scale:.2}",
+            "overlay: first rule-break list drawn, display {}x{}, panel scale {scale:.2}",
             display[0], display[1]
         ));
     }
@@ -179,11 +216,20 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    draw(ui);
+    // SAFETY: `frame` is the host's live pointer for this call.
+    unsafe { draw(ui, frame) };
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { theme::frame_fonts(frame) };
     // `guest_draw` is `extern "C"`, so a panic unwinding out of it would abort the game. imgui-rs's
     // tokens end the menu's windows as the panic unwinds, and the menu then stays shut for the
     // session; the referee and the list are untouched.
-    if catch_unwind(AssertUnwindSafe(|| crate::menu::draw_ui(ui))).is_err() {
+    if catch_unwind(AssertUnwindSafe(|| {
+        crate::menu::draw_ui(ui, ui_scale, &fonts);
+    }))
+    .is_err()
+    {
         crate::menu::hide_for_session();
     }
 }
@@ -192,8 +238,13 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
 struct RulesOverlay;
 
 impl ImguiRenderLoop for RulesOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        rules_log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        rules_log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {

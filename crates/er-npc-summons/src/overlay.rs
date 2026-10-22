@@ -1,6 +1,10 @@
 //! Joining the process's one imgui overlay, hosting it only if nothing else does, the way
 //! `er-target-bars` does: two `Hudhook::apply()` calls in one process double-hook `Present` and
 //! the second renders nothing, which is why `er_build_watermark_core::overlay_host` exists.
+//!
+//! The picker is drawn only as a guest, even while this module hosts: the theme's fonts
+//! (`er_overlay_theme::frame_fonts`) and the display's scale arrive in the frame the host passes
+//! its guests.
 
 #![cfg(windows)]
 
@@ -23,14 +27,23 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    crate::picker::draw(ui);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { er_overlay_theme::frame_fonts(frame) };
+    crate::picker::draw(ui, ui_scale, &fonts);
 }
 
 struct SummonsOverlay;
 
 impl ImguiRenderLoop for SummonsOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        summons_log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        summons_log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {

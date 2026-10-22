@@ -5,6 +5,11 @@
 //! hosts and dispatches guests itself. Two `Hudhook::apply()` calls in one process double-hook
 //! `Present` and the second one silently renders nothing -- measured live on 2026-08-25, and the
 //! reason `er_build_watermark_core::overlay_host` exists.
+//!
+//! The routes are drawn with `er-overlay-theme`'s foreground painter, in a theme at scale 1: a
+//! route's width is in screen pixels ([`crate::geometry::stroke_px`]) and the glow passes were
+//! tuned at those widths, so the theme's 1080p scale is not applied to them. Their colors are the
+//! per-player hues `geometry::path_color` generates, which identify a player and are not tokens.
 
 #![cfg(windows)]
 
@@ -13,6 +18,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use er_build_watermark_core::overlay_host::{OverlayFrame, adopt_frame, register_with_host};
+use er_overlay_theme::{self as theme, Theme};
 use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
@@ -90,9 +96,10 @@ fn draw(ui: &Ui) {
         return;
     };
     let screen = ui.io().display_size;
+    let _theme = theme::enter(Theme::plain(1.0));
     // The foreground list, so the paths sit above the game and above any imgui window another
     // overlay in this process happens to be drawing.
-    let draw_list = ui.get_foreground_draw_list();
+    let paint = theme::foreground_painter(ui);
     let mut segments = 0usize;
 
     for route in &snapshot.routes {
@@ -112,19 +119,17 @@ fn draw(ui: &Ui) {
                 continue;
             };
             for (width_scale, alpha_scale) in GLOW_PASSES {
-                draw_list
-                    .add_line(
-                        a,
-                        b,
-                        [
-                            route.color[0],
-                            route.color[1],
-                            route.color[2],
-                            route.alpha * alpha_scale,
-                        ],
-                    )
-                    .thickness(route.stroke_px * width_scale)
-                    .build();
+                paint.line(
+                    a,
+                    b,
+                    [
+                        route.color[0],
+                        route.color[1],
+                        route.color[2],
+                        route.alpha * alpha_scale,
+                    ],
+                    route.stroke_px * width_scale,
+                );
             }
             segments += 1;
         }
@@ -134,14 +139,11 @@ fn draw(ui: &Ui) {
             && let Some(last) = points.last()
             && let Some(point) = camera.project(*last, screen)
         {
-            draw_list
-                .add_circle(
-                    point,
-                    route.stroke_px * 1.8,
-                    [route.color[0], route.color[1], route.color[2], route.alpha],
-                )
-                .filled(true)
-                .build();
+            paint.circle(
+                point,
+                route.stroke_px * 1.8,
+                [route.color[0], route.color[1], route.color[2], route.alpha],
+            );
         }
     }
     LAST_SEGMENTS.store(segments, Ordering::Relaxed);
@@ -166,8 +168,13 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
 struct PathOverlay;
 
 impl ImguiRenderLoop for PathOverlay {
-    fn initialize<'a>(&'a mut self, _ctx: &mut Context, _render: &'a mut dyn RenderContext) {
-        path_log(format_args!("overlay: render loop initialized"));
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render: &'a mut dyn RenderContext) {
+        // The one default face every host builds, so a guest's fallback text is the same size
+        // whichever DLL won the overlay.
+        let font_px = er_build_watermark_core::overlay_host::add_host_default_font(ctx);
+        path_log(format_args!(
+            "overlay: render loop initialized, default font {font_px}px"
+        ));
     }
 
     fn render(&mut self, ui: &mut Ui) {

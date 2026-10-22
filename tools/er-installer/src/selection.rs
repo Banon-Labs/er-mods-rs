@@ -135,6 +135,9 @@ fn literal(path: &str) -> Result<String, UnquotablePath> {
 pub struct ProfileInputs<'a> {
     /// Chosen mods, paired with the absolute path each DLL will live at.
     pub natives: &'a [(&'static Mod, String)],
+    /// Package folders a chosen mod needs, paired with the mod, each an ME3 `[[packages]]`
+    /// entry. Built on the player's machine (`install::BUILT_PACKAGES`), never shipped.
+    pub packages: &'a [(&'static Mod, String)],
     /// The game-installed `ersc.dll`, when Seamless Co-op is present. Never a copy: this repo
     /// does not bundle, stage or redistribute that file, only reference where it already is.
     pub seamless: Option<&'a str>,
@@ -202,6 +205,15 @@ pub fn render_profile(inputs: &ProfileInputs<'_>) -> Result<String, UnquotablePa
         out.push_str("[[natives]]\npath = ");
         out.push_str(&literal(path)?);
         out.push('\n');
+    }
+
+    for (entry, path) in inputs.packages {
+        out.push_str("\n# ");
+        out.push_str(entry.label);
+        out.push_str(": the files built on this machine for it\n");
+        out.push_str("[[packages]]\nenabled = true\npath = ");
+        out.push_str(&literal(path)?);
+        out.push_str("\nload_after = []\nload_before = []\n");
     }
 
     Ok(out)
@@ -300,6 +312,7 @@ mod tests {
     fn an_empty_selection_renders_a_profile_that_loads_nothing() {
         let profile = render_profile(&ProfileInputs {
             natives: &[],
+            packages: &[],
             seamless: None,
             installer_version: "test",
         })
@@ -314,6 +327,7 @@ mod tests {
     fn an_empty_selection_leaves_seamless_out_too() {
         let profile = render_profile(&ProfileInputs {
             natives: &[],
+            packages: &[],
             seamless: Some("C:\\ER\\Game\\SeamlessCoop\\ersc.dll"),
             installer_version: "test",
         })
@@ -335,6 +349,7 @@ mod tests {
         ];
         let profile = render_profile(&ProfileInputs {
             natives: &natives,
+            packages: &[],
             seamless: None,
             installer_version: "test",
         })
@@ -345,12 +360,34 @@ mod tests {
     }
 
     #[test]
+    fn a_built_package_is_listed_as_a_package_beside_its_dll() {
+        let mushroom = by_package("mushroom-man-runtime").unwrap();
+        let natives = vec![(
+            mushroom,
+            "C:\\ER\\Game\\mushroom-man\\mushroom_man.dll".to_string(),
+        )];
+        let packages = vec![(mushroom, "C:\\ER\\Game\\mushroom-man".to_string())];
+        let profile = render_profile(&ProfileInputs {
+            natives: &natives,
+            packages: &packages,
+            seamless: None,
+            installer_version: "test",
+        })
+        .unwrap();
+        assert_eq!(profile.matches("[[natives]]").count(), 1);
+        assert_eq!(profile.matches("[[packages]]").count(), 1);
+        assert!(profile.contains("path = 'C:\\ER\\Game\\mushroom-man'\n"));
+        assert!(profile.contains("enabled = true"));
+    }
+
+    #[test]
     fn seamless_is_referenced_where_it_is_installed_and_never_copied() {
         let warp = by_package("er-invasion-warp").unwrap();
         let natives = vec![(warp, "C:\\ER\\mods\\er_invasion_warp.dll".to_string())];
         let installed = "C:\\ER\\Game\\SeamlessCoop\\ersc.dll";
         let profile = render_profile(&ProfileInputs {
             natives: &natives,
+            packages: &[],
             seamless: Some(installed),
             installer_version: "test",
         })
@@ -366,6 +403,7 @@ mod tests {
         let natives = vec![(warp, "C:\\ER\\mods\\er_invasion_warp.dll".to_string())];
         let profile = render_profile(&ProfileInputs {
             natives: &natives,
+            packages: &[],
             seamless: None,
             installer_version: "test",
         })
@@ -379,6 +417,7 @@ mod tests {
         let natives = vec![(product, "C:\\Bob's Games\\er_quickload.dll".to_string())];
         let result = render_profile(&ProfileInputs {
             natives: &natives,
+            packages: &[],
             seamless: None,
             installer_version: "test",
         });

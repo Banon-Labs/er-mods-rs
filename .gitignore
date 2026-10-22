@@ -32,6 +32,8 @@ eldenring-deobf-1.17.bin
 # -- the one thing every line in this block exists to prevent. The pattern is spelled out per
 # build rather than globbed on purpose, which is exactly why a new build has to be added by hand.
 eldenring-deobf-1.17.1.bin
+# FileVersion 2.7.2.0, installed by Steam on 2026-10-20.
+eldenring-deobf-1.17.2.bin
 *.deobf.bin
 # Raw executable bytes exported from the Ghidra runtime DUMP (copyrighted) -- used by
 # scripts/dump-deobf-shift.py to ground-truth dump<->deobf addresses. NEVER commit.
@@ -112,6 +114,16 @@ third_party/*.ct
 # transformed game data -- see the game-derived-binaries rule in AGENTS.md.
 docs/recon/speffect-vfx-rows.json
 
-# Spent push authorizations, written by the push_authorization cupcake signal
-# (scripts/cupcake_push_authorization.py). Machine-local runtime state, never committed.
+# Microsoft's DirectX Shader Compiler, fetched onto this machine by scripts/fetch-dxcompiler.py for
+# the shader editor's compiler. Never committed and never bundled: the scope of the LICENSE-MS.txt
+# in its release zip is unresolved (docs/plans/er-shader-editor.md, section 15). Unanchored,
+# because `--dest` can put it anywhere; `fetch-dxcompiler.py --check` holds these rules.
+dxcompiler.dll
+dxil.dll
+dxc_*.zip
+
+# Spent push and commit authorizations, written by the push_authorization and
+# commit_authorization cupcake signals
+# (scripts/cupcake_push_authorization.py, scripts/cupcake_commit_authorization.py).
+# Machine-local runtime state, never committed.
 /.cupcake/state/
