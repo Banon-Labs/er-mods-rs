@@ -362,6 +362,28 @@ def dirty_crate_names() -> set[str] | None:
     return answer
 
 
+def shell_compiled_crates() -> set[str] | None:
+    """Every in-repo crate that some shipped shell compiles, or None when that cannot be read.
+
+    A crate outside all of them (a host tool, an asset library such as `er-flver`, whose only
+    users are `er-objectkit` and a dev-dependency) never reaches the game, so no run can prove
+    a change to it. Measured 2026-10-22: a push carrying clippy fixes in `er-flver`'s examples was
+    refused after a live run of the product at that commit, because `er-flver` "is not compiled
+    into any shell that ran" -- and it is compiled into no shell at all.
+    """
+    try:
+        pairs = load_script("me3_dll_list", "me3-dll-list.py").dll_pairs()
+    except Exception:  # noqa: BLE001 -- an unreadable list means "cannot narrow", not a crash
+        return None
+    found: set[str] = set()
+    for package, _artifact in pairs:
+        members = closure_members(package)
+        if members is None:
+            return None
+        found.update(members)
+    return found
+
+
 def crates_in(paths: list[str]) -> set[str]:
     """The crate directories a list of repo-relative paths touches."""
     found = set()
@@ -683,6 +705,18 @@ def scan(head: str, changed: list[str], exhaustive: bool) -> tuple[int, list[str
     # and its closure covers everything being pushed. Both halves are checked here because
     # either alone would accept a run that never executed the code in the push.
     wanted = crates_in(changed)
+    # Only a crate some shell compiles can be asked of a run. When none of the changed crates is
+    # one, there is nothing a run could prove -- the line check-runtime-evidence.sh already draws
+    # for a deletion. When the shell list cannot be read, nothing is narrowed.
+    compiled = shell_compiled_crates()
+    if compiled is not None and wanted:
+        host_only = sorted(wanted - compiled)
+        wanted &= compiled
+        if not wanted:
+            return EXIT_MATCH, [
+                f"note no crate this push changes compiles into a shell ({', '.join(host_only)}) "
+                "-- no run can prove it, and none is asked for"
+            ]
     covered: set[str] = set()
     proven: list[Entry] = []
     refusals: list[tuple[Entry, str]] = []
@@ -815,6 +849,11 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
 
     def run(head: str, changed: list[str] | None = None) -> tuple[int, list[str]]:
         return scan(head, changed or [], exhaustive=True)
+
+    # The cases below name made-up crates, so the real shell list would narrow them away. They
+    # run with no narrowing; the narrowing has cases of its own further down.
+    real_shell_compiled_crates = globals()["shell_compiled_crates"]
+    globals()["shell_compiled_crates"] = lambda: None
 
     identity = "build git={sha}{dirty} module={module} base=0x1 pe=0x{pe} (t)\nmore\n"
 
@@ -987,6 +1026,43 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
                     code == EXIT_NO_MATCH,
                     "with no changed paths to check against, a dirty log is not accepted",
                 )
+
+                # A crate no shell compiles is not asked of the run.
+                globals()["shell_compiled_crates"] = lambda: {
+                    "er-quit-menu",
+                    "er-quit-menu-core",
+                    "er-invasion-warp",
+                }
+                code, lines = run(
+                    "deadbeef1234",
+                    ["crates/er-quit-menu/src/lib.rs", "crates/er-flver/examples/flver-obj.rs"],
+                )
+                check(
+                    code == EXIT_MATCH,
+                    "a host-only crate beside a covered one does not refuse the covered run",
+                )
+                code, lines = run("deadbeef1234", ["crates/er-invasion-warp/src/lib.rs"])
+                check(
+                    code == EXIT_NO_MATCH,
+                    "a crate a shell compiles still has to be covered by the run",
+                )
+                # A commit no log names: only the narrowing can let it through.
+                code, lines = run("cafebabe5678", ["crates/er-flver/examples/flver-obj.rs"])
+                check(
+                    code == EXIT_MATCH and any("er-flver" in line for line in lines),
+                    "a push changing only host-only crates needs no run, and says which crates",
+                )
+                code, lines = run("cafebabe5678", ["crates/er-invasion-warp/src/lib.rs"])
+                check(
+                    code != EXIT_MATCH,
+                    "a push changing a shell's crate with no run at all is not let through",
+                )
+                globals()["shell_compiled_crates"] = lambda: None
+                code, lines = run("cafebabe5678", ["crates/er-flver/examples/flver-obj.rs"])
+                check(
+                    code != EXIT_MATCH,
+                    "an unreadable shell list narrows nothing",
+                )
                 del os.environ["ER_ME3_RUN_ROOT"]
                 del os.environ["ER_GAME_DIR"]
     finally:
@@ -998,8 +1074,23 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
             globals()["closure_members"],
             globals()["dirty_crate_names"],
         ) = saved
+        globals()["shell_compiled_crates"] = real_shell_compiled_crates
 
-    selftest_provenance(check)
+    # The real shell list: the product compiles er-build-import-core, and nothing compiles
+    # er-flver. Skipped when the workspace layout cannot be read.
+    compiled = shell_compiled_crates()
+    if compiled is None:
+        print("  skip  the shipped-shell list could not be read")
+    else:
+        check("er-build-import-core" in compiled, "a real shell compiles er-build-import-core")
+        check("er-flver" not in compiled, "no real shell compiles er-flver")
+
+    # Its cases name made-up crates too, so it also runs with no narrowing.
+    globals()["shell_compiled_crates"] = lambda: None
+    try:
+        selftest_provenance(check)
+    finally:
+        globals()["shell_compiled_crates"] = real_shell_compiled_crates
 
     # The pe reader against a real artifact, when one is built: the fake above proves the
     # comparison, not the parser.
