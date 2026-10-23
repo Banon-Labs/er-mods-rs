@@ -319,16 +319,11 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
     finally:
         if writes is not None:
             writes.close()
-    if not holders:
-        raise Refused(f"this tool call was still not in the transcript {LOCATE_DEADLINE_SECONDS:g} s "
-                      "after the check began, so its conversation cannot be read; run the same "
-                      "command again")
     # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
     # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
     # were taken as the start it would carry its own forged parent onto the chain.
     if len(holders) > 1:
         raise Refused("the transcript holds this tool call more than once, so it cannot be trusted")
-    start = holders[0]
     by_uuid: dict[str, dict] = {}
     for e in entries:
         uid = e.get("uuid")
@@ -336,21 +331,59 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
             if uid in by_uuid:
                 raise Refused("the transcript repeats an entry uuid, so it cannot be trusted")
             by_uuid[uid] = e
+    if holders:
+        found = walk_back(holders[0], by_uuid)
+        if found is None:
+            raise Refused(NO_PROMPT)
+        return found
+    # In the main session the line is not on disk at all while PreToolUse hooks run: Claude Code
+    # writes it after they return (bd er-effects-rs-hu4w; on 2026-10-22, session e75d8996, two
+    # authorized pushes of `feat/asset-geometry-tooling` were refused here after the full wait).
+    # What is on disk then is the conversation up to this call, which descends from its newest
+    # entry, so the chain is walked back from there -- the same fallback
+    # `cupcake_commit_authorization.locate` takes. An entry whose parent is not written yet is
+    # stepped over, up to `HEAD_CANDIDATES` of them.
+    heads = [e for e in reversed(entries)
+             if isinstance(e.get("uuid"), str) and not e.get("isSidechain")]
+    for head in heads[:HEAD_CANDIDATES]:
+        found = walk_back(head, by_uuid)
+        if found is not None:
+            return found
+    raise Refused("this tool call is not in the transcript, and its newest entries do not link back "
+                  "to a message the user typed")
+
+
+NO_PROMPT = "no message typed by the user precedes this tool call"
+
+# How many newest entries the fallback walk may try when the walk from one runs into a parent the
+# file does not hold yet: room for the few hook attachments a call could collect before its line.
+HEAD_CANDIDATES = 16
+
+
+def walk_back(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] | None:
+    """(uuid, text, chain) of the first genuine prompt back from `start`, the chain newest first.
+
+    None when the walk reaches a parent the transcript does not hold yet. Raises Refused at a root,
+    a loop or a compaction summary, where the conversation ends without one.
+    """
     node, seen, chain = start, set(), []
-    while node is not None:
+    while True:
         uid = node.get("uuid")
         if uid in seen:
-            break
+            raise Refused("the transcript's conversation chain loops, so it cannot be trusted")
         seen.add(uid)
         chain.append(node)
         text = prompt_text(node)
-        if text is not None:
+        if text is not None and isinstance(uid, str):
             return uid, text, chain
         if node.get("type") == "user" and node.get("isCompactSummary"):
-            break
+            raise Refused(NO_PROMPT)
         parent = node.get("parentUuid")
-        node = by_uuid.get(parent) if isinstance(parent, str) else None
-    raise Refused("no message typed by the user precedes this tool call")
+        if not isinstance(parent, str):
+            raise Refused(NO_PROMPT)
+        node = by_uuid.get(parent)
+        if node is None:
+            return None
 
 
 # --- one push per authorization ----------------------------------------------------------------

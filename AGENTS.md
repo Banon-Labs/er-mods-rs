@@ -41,7 +41,18 @@ python3 scripts/kitty-tail-push.py --log <the push task's output file> --title '
 The tab follows the log with `tail --pid` on the newest `git push` process (or `--pid <n>`), so it
 lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
 output, waits 5 seconds, and closes. `--selftest` covers the verdict and the tab script's quoting.
-Close Elden Ring before pushing: check.sh refuses while it runs.
+Close Elden Ring before pushing: check.sh refuses while it runs. When the game up is the run that
+stamped the tip, close it with `python3 scripts/er-teardown.py --reason=stamped-<one-token-why>` as
+the whole command (a trailing `| tail -<n>` is allowed), which the teardown guard admits only while
+the `stamped_run` signal (`scripts/cupcake_stamped_run.py`) proves that run's own log carries
+evidence `scripts/check-runtime-evidence.sh` accepts for the tip.
+
+The user's `authorize <sha>` reply pays for the teardown its push needs, whatever the run up was
+for (user directive 2026-10-22: "to authorize a push sha is to authorize a teardown"). Do not hand
+the closing back to the user: while that reply is still their last message, close the game with
+`python3 scripts/er-teardown.py --reason=push-<one-token-why>` as the whole command, then push. The
+teardown guard admits it only while the `push_teardown` signal (`scripts/cupcake_push_teardown.py`)
+reads the reply as an unspent `authorize <sha>` for a local branch tip.
 
 ## A long background build is tailed in a kitty tab (user directive 2026-10-19)
 
