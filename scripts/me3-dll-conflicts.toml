@@ -58,7 +58,7 @@ This pair is therefore CO-LOADABLE and `er-dll-closure.py` may emit both; it rea
 only. It is recorded here so `check-shared-hook-rvas.py` can prove the sharing is DECLARED rather \
 than accidental, and so a future edit that reverts either side to a bare hook is a gate failure \
 rather than another silent day."""
-evidence = "crates/er-armament-icons/src/gfx_equip_hook.rs (register_shared_hook); crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs (register_union_hook); crates/er-hook/src/lib.rs (register_shared_hook)"
+evidence = "crates/er-armament-icons/src/gfx_equip_hook.rs (register_shared_hook); crates/er-quickload/src/startup_hooks/loading_cover/title_resources_stats_text.rs (register_union_hook); crates/er-hook/src/lib.rs (register_shared_hook)"
 
 [[shared]]
 a = "er-quickload"
@@ -379,7 +379,7 @@ and `er_gfx::options_02_040::quit6` fail-closes when handed bytes it has already
 whichever runs second refuses. The product is the side to keep; the shell exists for profiles that \
 do not load it. Tracked as bd er-effects-rs-ye3q, which is the extraction that would make both \
 hosts behave identically and is not what this entry waits on."""
-evidence = "crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs:153; crates/er-quit-menu/src/lib.rs (arm_build_rows); crates/er-quit-menu-core/src/row_registry.rs; ~/.cache/er-me3-runs/br-20260917-205031-edd3/er-quit-menu.log"
+evidence = "crates/er-quickload/src/startup_hooks/diagnostics/layout_global_hooks.rs:153; crates/er-quit-menu/src/lib.rs (arm_build_rows); crates/er-quit-menu-core/src/row_registry.rs; ~/.cache/er-me3-runs/br-20260917-205031-edd3/er-quit-menu.log"
 
 [[conflict]]
 a = "er-build-import"
@@ -506,7 +506,7 @@ from URL" row imports on demand, so the two interleave grants and stat writes wi
 lock -- and the shell's import can land on a character the player never asked to rebuild. \
 Neither installs a detour, so this is not a hook collision: it is two owners of one mutation. \
 The product DLL is the one to keep; the shell exists for profiles that do not load it."""
-evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quickload/src/experiments/startup_hooks/quit_menu/build_url_row.rs"
+evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quickload/src/startup_hooks/quit_menu/build_url_row.rs"
 
 [[conflict]]
 a = "er-quickload"
@@ -583,7 +583,7 @@ input blocker used to take it with a bare `MhHook`, which against a second MinHo
 the same prologue would have left one of the two installed and never running. It now registers \
 through `register_union_hook`, and er-npc-summons through `register_shared_hook_with_budget`, so \
 both chain on er-quickload's union. er-quickload's experiment harness (`xinput_get_state_union` in \
-experiments/input_block.rs) hooks the unfollowed export address, a different prologue."""
+crates/er-quickload/src/input_block.rs) hooks the unfollowed export address, a different prologue."""
 evidence = """crates/er-quickload/src/input_blocker.rs `install_xinput_hook` \
 `register_union_hook(target, xinput_get_state_detour, &ORIG_XINPUT_GET_STATE)`; \
 crates/er-npc-summons/src/pad.rs `try_install` \
@@ -1434,7 +1434,7 @@ flag instead of patching `IsGameInForeground`, which a user directive forbids fo
 cursor-grab regression it caused on 2026-07-16.
 
 INTERACTION WITH THE PRODUCT'S OWN OVERRIDE, which is the one place the two could have collided. \
-`crates/er-quickload/src/experiments/can_move_probe.rs` MinHooks the same accessor (thunk RVA \
+`crates/er-quickload/src/can_move_probe.rs` MinHooks the same accessor (thunk RVA \
 `0xe53220`) and returns 1 only while its harness is injecting, "real value otherwise". Those \
 compose rather than contend: this shell changes what "the real value" IS, and the detour keeps \
 returning it. Whichever installs first is irrelevant, because nothing here is a detour. Note the \

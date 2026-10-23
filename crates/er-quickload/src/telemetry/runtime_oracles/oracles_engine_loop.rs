@@ -54,7 +54,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
     // the save file's body+0x04, which is the dword the deserializer `FUN_14067bd70` writes here.
     let gm = crate::game_man_ptr_or_null();
     let read_i32 = |addr: usize| -> i32 {
-        unsafe { crate::experiments::safe_read_usize(addr) }
+        unsafe { crate::safe_read_usize(addr) }
             .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
     };
     let (b80, c30) = if gm == NULL_PTR {
@@ -160,7 +160,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             "Finish",
         ];
         let state = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 CS_SYSTEM_STEP_GLOBAL_RVA,
                 "CS_SYSTEM_STEP_GLOBAL_RVA",
@@ -168,7 +168,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         }
         .filter(|p| *p >= 0x10000)
         .and_then(|p| unsafe {
-            crate::experiments::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
+            crate::safe_read_usize(p + CS_SYSTEM_STEP_CURRENT_STATE_OFFSET)
         })
         .map(|v| v as u32 as i32);
         let (sv, sl) = match state {
@@ -193,7 +193,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
     {
         const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
         let flipper = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 CS_FLIPPER_SINGLETON_RVA,
                 "CS_FLIPPER_SINGLETON_RVA",
@@ -205,7 +205,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             if flipper == NULL_PTR {
                 -1.0
             } else {
-                unsafe { crate::experiments::safe_read_usize(flipper + off) }
+                unsafe { crate::safe_read_usize(flipper + off) }
                     .map_or(-1.0, |v| f32::from_bits((v & 0xffff_ffff) as u32))
             }
         };
@@ -213,7 +213,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             if flipper == NULL_PTR {
                 READ_FAIL_SENTINEL
             } else {
-                unsafe { crate::experiments::safe_read_usize(flipper + off) }
+                unsafe { crate::safe_read_usize(flipper + off) }
                     .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
             }
         };
@@ -237,7 +237,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
     // unfocused (the surviving compositor-present-throttle theory). Under Proton/Wine this is
     // Wine's foreground; a false during a 20fps window supports the compositor theory.
     {
-        let fg = crate::experiments::game_window_is_foreground();
+        let fg = crate::game_window_is_foreground();
         body.push_str(&format!("  \"oracle_window_foreground\": {fg},\n"));
     }
     // Present-duration semaphore: microseconds inside the last original Present call. Splits a

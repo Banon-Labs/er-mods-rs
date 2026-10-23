@@ -121,7 +121,7 @@ pub extern "system" fn er_quickload_save_picker_dialog() -> usize {
 /// has turned on.
 #[unsafe(no_mangle)]
 pub extern "system" fn er_quickload_hold_vk(vk: u8) {
-    crate::experiments::input_block::set_injected_vk_public(vk);
+    crate::input_block::set_injected_vk_public(vk);
 }
 
 /// C-ABI export: tell the game the cursor is at `(x, y)`. Pass `u64::MAX` as `packed` to stop.
@@ -142,7 +142,7 @@ pub extern "system" fn er_quickload_hold_vk(vk: u8) {
 /// needs to point, not to own the USER32 prologue.
 #[unsafe(no_mangle)]
 pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
-    crate::experiments::input_block::set_injected_cursor_pos(packed);
+    crate::input_block::set_injected_cursor_pos(packed);
 }
 
 /// C-ABI export: the live `CS::LoadingScreenData*`, or 0 when no loading screen is up.

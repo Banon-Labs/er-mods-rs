@@ -18,7 +18,7 @@ use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::PCSTR};
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
-use crate::{crashlog::*, experiments::*, ffi::*, hooks::*};
+use crate::{crashlog::*, ffi::*, hooks::*};
 
 #[repr(C)]
 pub(crate) struct GameManSaveSnapshotLayout {

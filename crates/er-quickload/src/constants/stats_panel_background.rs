@@ -7,10 +7,6 @@
 // resolves our texture). The dummy-face shapes are the visible per-row boxes (05_010 RE 2026-07-04), so
 // redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
 // upload is cheap (no per-frame render), so all 10 slots get a background with no GX-queue overflow.
-pub(crate) use er_loading_portrait_core::STATS_PANEL_BG_RGBA;
-pub(crate) use er_loading_portrait_core::STATS_PANEL_SLOT_COUNT;
-pub(crate) use er_loading_portrait_core::STATS_PANEL_SYSTEX_KEYS;
-pub(crate) use er_loading_portrait_core::STATS_PANEL_TEX_DIM;
 /// Last-error codes for `STATS_PANEL_LAST_ERROR` (a memory-read oracle).
 pub(crate) const STATS_PANEL_ERR_NONE: usize = 0;
 pub(crate) const STATS_PANEL_ERR_TPF_REPO_NULL: usize = 1;

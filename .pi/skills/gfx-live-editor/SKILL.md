@@ -32,8 +32,8 @@ Use these files as the reference implementation:
 - editor server/web UI: `scripts/profile-05-010-editor.py`
 - rebuild helper: `scripts/rebuild-profile-05-010-layout.sh`
 - GFX generator integration: `crates/er-gfx/examples/make_05_010_stats.rs`
-- runtime MemoryFile serving: `crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs`
-- DLL runtime bridge: `crates/er-quickload/src/experiments/startup_hooks/quit_menu/profile_05_010_editor_runtime.rs`
+- runtime MemoryFile serving: `crates/er-quickload/src/startup_hooks/loading_cover/profile_table_gfx_files.rs`
+- DLL runtime bridge: `crates/er-quickload/src/startup_hooks/quit_menu/profile_05_010_editor_runtime.rs`
 - hook wiring examples: `profile_row_populate_hook` / `profile_current_row_populate_hook` in the quit-menu startup hooks.
 
 For a new surface, create parallel names instead of overloading `05_010` paths:

@@ -1840,9 +1840,8 @@ python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/test-release-workflow.py" --selftest
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
-python3 "$repo_root/scripts/check-experiments-rustfmt.py"
-# The experiments ratchet. er-quickload is being extracted into crates until it is a thin
-# shim that bundles them, so the line total under crates/er-quickload/src/experiments/** may
+# The er-quickload ratchet. er-quickload is being extracted into crates until it is a thin
+# shim that bundles them, so the line total of its ledgered source (src/** minus NOT_LEDGERED) may
 # shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
 # a freeze: edits are free, only net growth is refused, and `--refresh` accepts growth in one
 # command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
@@ -2779,7 +2778,7 @@ python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --selftest
 # justification now lives in `_reasons` inside the baseline, keyed by the entry it justifies, and
 # `--write-baseline` carries it forward so regenerating the counts cannot silently drop it.
 #
-# The only key that was still red: er-quickload|VTABLE_WRITE|.../experiments/can_move_probe.rs
+# The only key that was still red: er-quickload|VTABLE_WRITE|.../src/can_move_probe.rs
 # 0 -> 4, the move probe's analog-stick writes at `+0x89c`/`+0x8a0`. Adjudicated in bounds by
 # static RE, not by inspection: the object is `DLUID::PadDevice` = HeapAlloc(0xa68) = 2664 bytes,
 # and the 1704-bytes-smaller `FD4::FD4PadDevice` (0x3c0 = 960) that made this look like a heap

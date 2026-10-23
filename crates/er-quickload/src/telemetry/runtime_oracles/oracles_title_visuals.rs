@@ -16,7 +16,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     let msgbox_vtable = if msgbox_dialog == NULL_PTR {
         NULL_PTR
     } else {
-        unsafe { crate::experiments::safe_read_usize(msgbox_dialog) }.unwrap_or(NULL_PTR)
+        unsafe { crate::safe_read_usize(msgbox_dialog) }.unwrap_or(NULL_PTR)
     };
     let msgbox_closing_latch = if msgbox_vtable
         == er_game_base::mem::game_data_addr(
@@ -25,7 +25,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
             "MSGBOX_DIALOG_VTABLE_RVA",
         ) {
         unsafe {
-            crate::experiments::safe_read_usize(msgbox_dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET)
+            crate::safe_read_usize(msgbox_dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET)
         }
         .map(|value| value & MSGBOX_LATCH_BYTE_MASK)
         .unwrap_or(MSGBOX_CLOSING_YES)
@@ -174,7 +174,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     };
     let title_logo_back_view_parts_vtable =
         if title_logo_back_view_parts != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe { crate::experiments::safe_read_usize(title_logo_back_view_parts) }
+            unsafe { crate::safe_read_usize(title_logo_back_view_parts) }
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
         } else {
             TITLE_OWNER_SCAN_START_ADDRESS
@@ -288,7 +288,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         let game_data_man = crate::game_data_man_ptr_or_null();
         if game_data_man != NULL_PTR {
             unsafe {
-                crate::experiments::safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET)
+                crate::safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET)
             }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
         } else {
@@ -434,7 +434,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     let title_custom_cover_black_cover_window = if title_custom_cover_black_last_job != NULL_PTR
         && title_custom_cover_black_last_job != TITLE_OWNER_SCAN_START_ADDRESS
     {
-        unsafe { crate::experiments::safe_read_usize(title_custom_cover_black_last_job + 0x130) }
+        unsafe { crate::safe_read_usize(title_custom_cover_black_last_job + 0x130) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
@@ -512,7 +512,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.load(Ordering::SeqCst);
     if latched_title_owner != NULL_PTR
         && let Some(count) = unsafe {
-            crate::experiments::safe_read_i32(
+            crate::safe_read_i32(
                 latched_title_owner + crate::constants::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET,
             )
         }

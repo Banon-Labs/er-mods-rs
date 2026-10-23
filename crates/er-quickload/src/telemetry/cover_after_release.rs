@@ -13,7 +13,7 @@
 /// Sample the post-release state for one presented frame. Called from
 /// [`native_ls_exposure_record`] on exactly the frames that function declines to judge.
 pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
-    crate::experiments::ensure_loading_cover_host();
+    crate::ensure_loading_cover_host();
     er_loading_portrait_core::cover_after_release::cover_after_release_record(base, now_ms)
 }
 
@@ -21,19 +21,19 @@ pub(crate) fn cover_after_release_record(base: usize, now_ms: u64) {
 /// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that start a menu
 /// session. Called from the product `MenuWindowJob::Run` post-hook.
 pub(crate) fn in_game_menu_note_run_tick(job: usize, window: usize) {
-    crate::experiments::ensure_loading_cover_host();
+    crate::ensure_loading_cover_host();
     er_loading_portrait_core::cover_after_release::in_game_menu_note_run_tick(job, window)
 }
 
 /// State once, in the log, how the log's own `[+Nms]` prefix and the telemetry `*_ms` fields relate.
 pub(crate) fn log_clock_map_once() {
-    crate::experiments::ensure_loading_cover_host();
+    crate::ensure_loading_cover_host();
     er_loading_portrait_core::cover_after_release::log_clock_map_once()
 }
 
 /// Emit the post-release watch oracles plus the boot-view null detector. Called from the telemetry
 /// writer.
 pub(crate) fn cover_after_release_write(body: &mut String) {
-    crate::experiments::ensure_loading_cover_host();
+    crate::ensure_loading_cover_host();
     er_loading_portrait_core::cover_after_release::cover_after_release_write(body)
 }

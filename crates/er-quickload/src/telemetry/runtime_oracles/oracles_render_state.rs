@@ -19,7 +19,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
     let now_loading = {
         let helper = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 NOW_LOADING_SINGLETON_RVA,
                 "NOW_LOADING_SINGLETON_RVA",
@@ -29,14 +29,14 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
         if helper == NULL_PTR {
             READ_FAIL_SENTINEL
         } else {
-            unsafe { crate::experiments::safe_read_usize(helper + NOW_LOADING_FLAG_OFFSET) }
+            unsafe { crate::safe_read_usize(helper + NOW_LOADING_FLAG_OFFSET) }
                 .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
         }
     };
     const FAKE_LOADING_SCREEN_SINGLETON_RVA: usize =
         RuntimeGlobalRva::FakeLoadingScreenSingleton as usize;
     let fake_loading_screen = unsafe {
-        crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+        crate::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
             FAKE_LOADING_SCREEN_SINGLETON_RVA,
             "FAKE_LOADING_SCREEN_SINGLETON_RVA",
@@ -46,19 +46,19 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     let fake_loading_visible = if fake_loading_screen == NULL_PTR {
         READ_FAIL_SENTINEL
     } else {
-        unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x8) }
+        unsafe { crate::safe_read_usize(fake_loading_screen + 0x8) }
             .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
     };
     let fake_loading_field_c = if fake_loading_screen == NULL_PTR {
         READ_FAIL_SENTINEL
     } else {
-        unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0xc) }
+        unsafe { crate::safe_read_usize(fake_loading_screen + 0xc) }
             .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
     };
     let fake_loading_field_10 = if fake_loading_screen == NULL_PTR {
         READ_FAIL_SENTINEL
     } else {
-        unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x10) }
+        unsafe { crate::safe_read_usize(fake_loading_screen + 0x10) }
             .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
     };
     if fake_loading_screen != NULL_PTR {
@@ -80,7 +80,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     const CSGRAPHICS_SINGLETON_RVA: usize = RuntimeGlobalRva::CsGraphicsSingleton as usize;
     const CSSCALEFORM_SINGLETON_RVA: usize = RuntimeGlobalRva::CsScaleformSingleton as usize;
     let rendman = unsafe {
-        crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+        crate::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
             RENDMAN_SINGLETON_RVA,
             "RENDMAN_SINGLETON_RVA",
@@ -88,7 +88,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     }
     .unwrap_or(NULL_PTR);
     let csgraphics = unsafe {
-        crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+        crate::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
             CSGRAPHICS_SINGLETON_RVA,
             "CSGRAPHICS_SINGLETON_RVA",
@@ -96,7 +96,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     }
     .unwrap_or(NULL_PTR);
     let csscaleform = unsafe {
-        crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+        crate::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
             CSSCALEFORM_SINGLETON_RVA,
             "CSSCALEFORM_SINGLETON_RVA",
@@ -107,7 +107,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
         if rendman == NULL_PTR {
             NULL_PTR
         } else {
-            unsafe { crate::experiments::safe_read_usize(rendman + offset) }.unwrap_or(NULL_PTR)
+            unsafe { crate::safe_read_usize(rendman + offset) }.unwrap_or(NULL_PTR)
         }
     };
     let rend_slot_28 = read_rend(0x28);
@@ -118,13 +118,13 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     let rendman_pause = if rendman == NULL_PTR {
         READ_FAIL_SENTINEL
     } else {
-        unsafe { crate::experiments::safe_read_usize(rendman + 0x90) }
+        unsafe { crate::safe_read_usize(rendman + 0x90) }
             .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
     };
     let csgraphics_field68 = if csgraphics == NULL_PTR {
         NULL_PTR
     } else {
-        unsafe { crate::experiments::safe_read_usize(csgraphics + 0x68) }.unwrap_or(NULL_PTR)
+        unsafe { crate::safe_read_usize(csgraphics + 0x68) }.unwrap_or(NULL_PTR)
     };
     let mut slots_mask = 0usize;
     if rend_slot_28 != NULL_PTR {

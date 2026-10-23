@@ -305,7 +305,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // after that return, so a deferred commit was never retried (2026-10-13: first
                 // fire at +63860 with no player, then nothing). A no-op unless a commit is deferred.
                 unsafe {
-                    crate::experiments::own_load_continue_retry_deferred(
+                    crate::own_load_continue_retry_deferred(
                         er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst)
                             as u64,
                     )
@@ -471,7 +471,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     && player.chr_ins.chr_flags1c5.enable_render();
                 if char_rendered {
                     let p = player.chr_ins.modules.physics.position;
-                    crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
+                    crate::can_move_probe::tick((p.0, p.1, p.2));
                 }
                 // NO PROGRAMMATIC SWITCH TRIGGER LIVES HERE ANY MORE (deleted 2026-09-05, user
                 // directive). `poll_switch_slot_control_file` used to read a game-directory control

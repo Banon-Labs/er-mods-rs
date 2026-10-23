@@ -7,7 +7,7 @@
 //!
 //! # What the chrome is
 //!
-//! Two things arm together in `experiments::lifecycle::title_visual_startup`, under one
+//! Two things arm together in `lifecycle::title_visual_startup`, under one
 //! `START_PROFILE_STATS_TEXT` block:
 //!
 //! * `PROFILE_05_010_RUNTIME_EDIT_ARMED`, which is the only thing

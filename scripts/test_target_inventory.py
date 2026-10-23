@@ -18,8 +18,8 @@ the module tree from each crate root rather than reading files independently:
   * `#![cfg(...)]` inner attributes at the top of a file,
   * the `#[cfg(...)]` on every `mod name;` declaration on the path from the crate root to
     that file -- this is the dominant mechanism in this workspace and the one a per-file
-    scan is blind to (er-quickload's 91 tests live under `#[cfg(windows)] mod experiments;`
-    in lib.rs, and every file below it is bare),
+    scan is blind to (er-quickload's 91 tests live under the `#[cfg(windows)] mod ...;` lines
+    in lib.rs, and every file below them is bare),
   * the `#[cfg(...)]` on every enclosing inline `mod name { ... }` block,
   * the `#[cfg(...)]` on the test function itself.
 

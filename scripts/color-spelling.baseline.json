@@ -104,7 +104,7 @@
     "crates/er-objectkit/examples/native_draw.rs": 4,
     "crates/er-objectkit/src/passthrough.rs": 1,
     "crates/er-objectkit/src/spirv_reflect.rs": 2,
-    "crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_render_drive.rs": 4,
+    "crates/er-quickload/src/startup_hooks/loading_cover/profile_render_drive.rs": 4,
     "crates/er-quickload/src/telemetry/runtime_oracles/portrait_framing_oracles.rs": 1,
     "crates/er-quit-menu-core/src/dim.rs": 3,
     "crates/er-quit-menu-core/src/profile_select_chrome_gate.rs": 1,

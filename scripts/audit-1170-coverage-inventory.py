@@ -831,7 +831,7 @@ FEATURE_OF_PATH = [
     ("own_stepper", "own-stepper (title step table)"),
     ("own_load", "own-load drive"),
     ("continue_load", "product Continue"),
-    ("experiments/trace", "menu / file trace"),
+    ("er-quickload/src/trace", "menu / file trace"),
     ("crashlog", "crash logging"),
     ("er-invasion-path/src/navpath", "invasion path: navmesh"),
     ("er-invasion-path/src/sfx", "invasion path: SFX"),

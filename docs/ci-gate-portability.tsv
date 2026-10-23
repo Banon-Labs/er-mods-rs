@@ -169,7 +169,6 @@ partial	build-artifact	test-dll-byte-identical.py	'ok (list tests only)' -- the 
 portable	-	test-release-workflow.py --selftest	source/AST/text analysis only	product
 portable	-	test-release-workflow.py	source/AST/text analysis only	product
 portable	-	check-rust-file-sizes.py	source/AST/text analysis only	lint
-portable	-	check-experiments-rustfmt.py	source/AST/text analysis only	lint
 portable	-	check-crate-extraction-roadmap.py --selftest	source/AST/text analysis only	docs
 portable	-	check-crate-extraction-roadmap.py	source/AST/text analysis only	docs
 portable	-	rva_symbols.py --selftest	source/AST/text analysis only	addresses

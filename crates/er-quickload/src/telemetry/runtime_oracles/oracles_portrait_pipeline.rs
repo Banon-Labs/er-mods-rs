@@ -151,7 +151,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS.load(Ordering::SeqCst),
     );
     {
-        let unpack = crate::experiments::portrait_equip_unpack;
+        let unpack = crate::portrait_equip_unpack;
         let effective =
             |slot: usize| unpack(PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID[slot].load(Ordering::SeqCst));
         let captured =
@@ -418,7 +418,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     push_json_usize(
         body,
         "oracle_ownership_spared_outstanding",
-        crate::experiments::ownership_outstanding(crate::constants::OwnedClass::SparedRenderer),
+        crate::ownership_outstanding(crate::constants::OwnedClass::SparedRenderer),
     );
     push_json_usize(
         body,
@@ -560,27 +560,27 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     push_json_usize(
         body,
         "oracle_portrait_color_from_bundle",
-        crate::experiments::PROFILE_COLOR_FROM_BUNDLE.load(Ordering::SeqCst),
+        crate::PROFILE_COLOR_FROM_BUNDLE.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_color_from_scan",
-        crate::experiments::PROFILE_COLOR_FROM_SCAN.load(Ordering::SeqCst),
+        crate::PROFILE_COLOR_FROM_SCAN.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_depth_from_chain",
-        crate::experiments::PROFILE_DEPTH_FROM_CHAIN.load(Ordering::SeqCst),
+        crate::PROFILE_DEPTH_FROM_CHAIN.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_depth_from_bfs",
-        crate::experiments::PROFILE_DEPTH_FROM_BFS.load(Ordering::SeqCst),
+        crate::PROFILE_DEPTH_FROM_BFS.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_publish_skipped_unpaired",
-        crate::experiments::PROFILE_PUBLISH_SKIPPED_UNPAIRED.load(Ordering::SeqCst),
+        crate::PROFILE_PUBLISH_SKIPPED_UNPAIRED.load(Ordering::SeqCst),
     );
     // hi2: partial-mask band (mask cut something but under the floor) + how long the bridge
     // held before the window's first publish.
@@ -597,27 +597,27 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     push_json_usize(
         body,
         "oracle_depth_key_degenerate",
-        crate::experiments::DEPTH_KEY_DEGENERATE.load(Ordering::SeqCst),
+        crate::DEPTH_KEY_DEGENERATE.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_depth_key_second_pass",
-        crate::experiments::DEPTH_KEY_SECOND_PASS.load(Ordering::SeqCst),
+        crate::DEPTH_KEY_SECOND_PASS.load(Ordering::SeqCst),
     );
     push_json_usize(
         body,
         "oracle_portrait_publish_skipped_badiou",
-        crate::experiments::PROFILE_PUBLISH_SKIPPED_BADIOU.load(Ordering::SeqCst),
+        crate::PROFILE_PUBLISH_SKIPPED_BADIOU.load(Ordering::SeqCst),
     );
     push_json_str(
         body,
         "oracle_gx_cmdqueue_top_producers",
-        &crate::experiments::gx_cmd_queue_hist_top(8),
+        &crate::gx_cmd_queue_hist_top(8),
     );
     push_json_str(
         body,
         "oracle_gx_cmdqueue_buckets",
-        &crate::experiments::gx_cmd_queue_bucket_summary(),
+        &crate::gx_cmd_queue_bucket_summary(),
     );
     push_json_usize(
         body,
@@ -630,7 +630,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         GX_CMD_ARENA_SWITCH_MIN_REMAINING.load(Ordering::SeqCst),
     );
     {
-        let (dd_pending, dd_highwater) = unsafe { crate::experiments::delay_delete_pending() }
+        let (dd_pending, dd_highwater) = unsafe { crate::delay_delete_pending() }
             .map(|(p, h)| (p as i64, h as i64))
             .unwrap_or((-1, -1));
         body.push_str(&format!(
@@ -675,7 +675,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         const RENDER_READ_FAIL: i64 = -1;
         const MIN_VALID_PTR: usize = 0x10000;
         let gxdc = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 G_GX_DRAW_CONTEXT_RVA,
                 "G_GX_DRAW_CONTEXT_RVA",
@@ -687,11 +687,11 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             (RENDER_READ_FAIL, RENDER_READ_FAIL, RENDER_READ_FAIL)
         } else {
             let begin =
-                unsafe { crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_BEGIN_OFFSET) };
+                unsafe { crate::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_BEGIN_OFFSET) };
             let end =
-                unsafe { crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_END_OFFSET) };
+                unsafe { crate::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_END_OFFSET) };
             let cap =
-                unsafe { crate::experiments::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_CAP_OFFSET) };
+                unsafe { crate::safe_read_usize(gxdc + GXDC_OUTPUT_VEC_CAP_OFFSET) };
             match (begin, end, cap) {
                 (Some(b), Some(e), Some(c)) if e >= b && c >= b => {
                     let span = e - b;
@@ -706,7 +706,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             }
         };
         let distview = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 GLOBAL_CS_DIST_VIEW_MANAGER_RVA,
                 "GLOBAL_CS_DIST_VIEW_MANAGER_RVA",
@@ -715,7 +715,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         .filter(|p| *p >= MIN_VALID_PTR)
         .unwrap_or(NULL_PTR);
         let mapitemman = unsafe {
-            crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(
+            crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
                 GLOBAL_MAP_ITEM_MAN_RVA,
                 "GLOBAL_MAP_ITEM_MAN_RVA",

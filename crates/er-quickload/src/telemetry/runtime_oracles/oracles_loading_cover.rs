@@ -517,7 +517,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         && real_handoff_observed
         && BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst) == 0
     {
-        let now_ms = crate::experiments::boot_view_epoch_ms().max(1) as usize;
+        let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
         if BOOT_VIEW_HANDOFF_SEEN_MS
             .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()

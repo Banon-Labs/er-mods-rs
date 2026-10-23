@@ -54,7 +54,7 @@ Inverted 2026-08-30. The old default was to rewrite, and `--dry-run` was the fla
 remember -- which put the destructive action one forgotten word away, on a tool whose whole job is
 editing source in bulk across the workspace. It cost exactly what it was always going to cost: an
 agent ran the bare command while investigating, silently rewrote
-`crates/er-quickload/src/experiments/trace/native_result_map_hooks.rs`, and had to `git checkout`
+`crates/er-quickload/src/trace/native_result_map_hooks.rs`, and had to `git checkout`
 it back out. Nobody asks a scanner for a report and gets edits; they do the reverse by accident.
 `--dry-run` is still accepted and still means "do not write", so old invocations keep working.
 

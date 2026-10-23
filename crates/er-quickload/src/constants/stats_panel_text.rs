@@ -297,7 +297,7 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_INSTALLED: AtomicUsize = AtomicUs
 /// before any work, exactly as [`TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED`] is.
 ///
 /// Same two-owner shape as that one, and found in the same sweep: `install_title_visual_startup_hooks`
-/// calls the installer synchronously (`experiments/lifecycle/title_visual_startup.rs:31`, so the
+/// calls the installer synchronously (`lifecycle/title_visual_startup.rs:31`, so the
 /// name getter is live before the first row populate) and then again from the thread it spawns two
 /// lines later (`:37`). Only sequencing has kept it from firing -- the spawn happens after the
 /// synchronous call returns -- and sequencing is not a guarantee: a scheduler that runs the new

@@ -64,7 +64,7 @@ pub(crate) fn snapshot_game_man_on_change() {
     } else {
         (-1, -1)
     };
-    let base = crate::experiments::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let base = crate::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let menu_job = if base != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
             .filter(|mm| *mm != TITLE_OWNER_SCAN_START_ADDRESS)
@@ -131,14 +131,14 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
     // arms on. It is distinct from `game_man_instance_resolved` below, which only means the GameMan
     // pointer is non-null (true from BootPhase4, long before the LoadGame job can be built without an AV).
     // Computed independently of GameMan::instance() so it is always emitted (both branches below).
-    let loadgame_build_ctx_ready = crate::experiments::game_module_base()
-        .map(|base| unsafe { crate::experiments::loadgame_build_ctx_ready(base) })
+    let loadgame_build_ctx_ready = crate::game_module_base()
+        .map(|base| unsafe { crate::loadgame_build_ctx_ready(base) })
         .unwrap_or(false);
     body.push_str(&format!(
         "  \"loadgame_build_ctx_ready\": {loadgame_build_ctx_ready},\n"
     ));
 
-    let base = crate::experiments::game_module_base().unwrap_or(0);
+    let base = crate::game_module_base().unwrap_or(0);
     let owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
     let dialog = if owner != 0 && owner != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)

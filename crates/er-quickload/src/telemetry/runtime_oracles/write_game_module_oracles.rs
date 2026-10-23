@@ -13,7 +13,7 @@ fn write_game_module_oracles(body: &mut String) {
     // Outside the `game_module_base` gate on purpose: the frame-time counters are ours, so the FPS
     // oracle must still be emitted on a run where the game module cannot be resolved.
     write_frame_pacing_oracles(body);
-    if let Ok(base) = crate::experiments::game_module_base() {
+    if let Ok(base) = crate::game_module_base() {
         write_engine_loop_oracles(body, base);
         let play_time_live = write_character_identity_oracles(body);
         write_render_state_oracles(body, base);

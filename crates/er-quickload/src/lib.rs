@@ -24,8 +24,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Instant,
 };
@@ -36,7 +36,7 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 #[cfg(windows)]
-use er_save_loader::{SaveLoadContext, SaveLoader};
+use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 #[cfg(windows)]
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 #[cfg(windows)]
@@ -44,9 +44,11 @@ use windows::{
     Win32::{
         Foundation::HINSTANCE,
         System::{
-            LibraryLoader::{GetProcAddress, LoadLibraryA},
+            LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
             SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
+        UI::WindowsAndMessaging::GetWindowThreadProcessId,
     },
     core::PCSTR,
 };
@@ -57,8 +59,6 @@ mod config;
 mod constants;
 #[cfg(windows)]
 mod crashlog;
-#[cfg(windows)]
-mod experiments;
 #[cfg(windows)]
 mod ffi;
 #[cfg(windows)]
@@ -73,6 +73,102 @@ pub mod menu_window_run_gate;
 mod mh;
 #[cfg(windows)]
 mod telemetry;
+
+// The modules below lived under `src/experiments/` until 2026-10-22. That directory held 76% of
+// the crate, most of it product code, and its name said the opposite.
+#[cfg(windows)]
+mod save_redirect;
+#[cfg(windows)]
+pub(crate) use save_redirect::*;
+
+// Diagnostics, and the first subsystem behind a feature (2026-09-11). Two external references in
+// 4,300 lines, so it is the cheapest proof that this crate can be compiled as a subset at all.
+#[cfg(all(windows, feature = "menu-trace"))]
+mod trace;
+#[cfg(all(windows, feature = "menu-trace"))]
+pub(crate) use trace::*;
+
+#[cfg(windows)]
+mod startup_hooks;
+#[cfg(windows)]
+pub(crate) use startup_hooks::*;
+
+#[cfg(windows)]
+mod gpu_readback;
+#[cfg(windows)]
+pub(crate) use gpu_readback::*;
+
+#[cfg(windows)]
+mod present_overlay;
+#[cfg(windows)]
+pub(crate) use present_overlay::*;
+
+#[cfg(windows)]
+mod gpu_frame_timing;
+#[cfg(windows)]
+pub(crate) use gpu_frame_timing::*;
+
+// native_overlay moved to the er-loading-portrait-core crate (portrait crate split); the
+// explicit re-exports keep the product call sites (lifecycle.rs, telemetry oracles)
+// compiling unchanged. The rest of the crate's surface flows in through the glob shims
+// at the top of gpu_readback.rs / startup_hooks.rs.
+#[cfg(windows)]
+pub(crate) use er_loading_portrait_core::{NATIVE_OVERLAY_SHOW, install_native_overlay};
+
+#[cfg(windows)]
+pub(crate) mod can_move_probe;
+#[cfg(windows)]
+pub(crate) mod input_block;
+#[cfg(windows)]
+pub(crate) use input_block::*;
+
+#[cfg(windows)]
+mod input_trace;
+#[cfg(windows)]
+pub(crate) use input_trace::*;
+
+#[cfg(windows)]
+mod own_load;
+#[cfg(windows)]
+pub(crate) use own_load::*;
+
+#[cfg(windows)]
+mod menu_diag;
+#[cfg(windows)]
+pub(crate) use menu_diag::*;
+
+#[cfg(windows)]
+mod mem;
+#[cfg(windows)]
+pub(crate) use mem::*;
+
+#[cfg(windows)]
+mod gating;
+#[cfg(windows)]
+pub(crate) use gating::*;
+
+#[cfg(windows)]
+mod own_stepper;
+#[cfg(windows)]
+pub(crate) use own_stepper::*;
+
+#[cfg(windows)]
+mod continue_load;
+#[cfg(windows)]
+pub(crate) use continue_load::*;
+
+#[cfg(windows)]
+mod save_picker;
+
+#[cfg(windows)]
+mod lifecycle;
+#[cfg(windows)]
+pub(crate) use lifecycle::*;
+
+#[cfg(windows)]
+mod product_core_own_stepper;
+#[cfg(windows)]
+pub(crate) use product_core_own_stepper::*;
 
 #[cfg(windows)]
 include!("lib_parts/dll_entry.rs");

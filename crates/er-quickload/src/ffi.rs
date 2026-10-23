@@ -5,7 +5,7 @@ use std::ffi::c_void;
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
-use crate::{crashlog::*, experiments::*, hooks::*, telemetry::*};
+use crate::{crashlog::*, hooks::*, telemetry::*};
 
 #[cfg(windows)]
 unsafe extern "system" {

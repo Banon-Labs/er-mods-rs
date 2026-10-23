@@ -54,7 +54,7 @@
 
 # DELETE -- the hook was never codegen'd. title_custom_cover_menu_window_run_hook's only
 #          address-taker (install_title_custom_cover_run_hook) has no callers, so rustc emitted
-#          neither. See crates/er-quickload/src/experiments/startup_hooks/loading_cover/
+#          neither. See crates/er-quickload/src/startup_hooks/loading_cover/
 #          title_scaleform_msgbox.rs:771 and the pinned literals in oracles_title_visuals.rs.
 TITLE_CUSTOM_COVER_RUN_INSTALLED
 TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB

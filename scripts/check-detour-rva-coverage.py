@@ -1306,7 +1306,7 @@ CONTROL_RVA = 0x11CED80
 # `let Ok(addr) = game_rva_for_hook(..) else` six lines above the `MhHook::new(addr, ..)` that uses
 # it, which is exactly what the naive matcher cannot see.
 CONTROL_INDIRECT_SITE = (
-    "crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_visual_hooks.rs"
+    "crates/er-quickload/src/startup_hooks/loading_cover/title_visual_hooks.rs"
 )
 CONTROL_INDIRECT_RVA = 0x25F8E0
 # ...and the third control, which is the one the seven-minute failure is about.
