@@ -1150,7 +1150,7 @@ mod tests {
         // the rule can be checked on the host -- which is exactly why the rule was made a value
         // the gate reads instead of an `if` buried in Windows-only code.
         //
-        // Serialised against the other test that moves this latch: it is process-global, and two
+        // Serialised against the other tests that move this latch: it is process-global, and two
         // tests toggling it in parallel would flake in a way that looks like a policy bug.
         let _guard = POLICY_LATCH.lock().unwrap_or_else(|e| e.into_inner());
         set_invasion_attempt_in_flight(false);
@@ -1168,8 +1168,11 @@ mod tests {
         set_invasion_attempt_in_flight(false);
     }
 
-    /// Serialises the two tests that move the process-global attempt latch.
-    static POLICY_LATCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Serialises every test that moves the process-global attempt latches, in this module and in
+    /// `cancel_window_tests`. A test that writes them without holding this lock can clear the
+    /// latch between another test's write and its assert, which on 2026-10-22 failed PR #587's CI
+    /// with `Warpable` where `MarkersOnly` was just set.
+    pub(super) static POLICY_LATCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn nothing_published_means_no_attempt_which_means_warps_are_allowed() {
@@ -1214,6 +1217,9 @@ mod cancel_window_tests {
     /// back to one is the regression this test exists to catch.
     #[test]
     fn a_cancel_frees_the_display_and_still_refuses_the_warp() {
+        let _guard = super::tests::POLICY_LATCH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         set_invasion_attempt_state(true, true);
         assert!(
             invasion_attempt_in_flight(),
@@ -1244,6 +1250,9 @@ mod cancel_window_tests {
     /// happening" would leave the warp bound forever.
     #[test]
     fn the_one_value_helper_sets_both() {
+        let _guard = super::tests::POLICY_LATCH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         set_invasion_attempt_in_flight(true);
         assert!(invasion_attempt_in_flight() && warp_bound_by_attempt());
         set_invasion_attempt_in_flight(false);
