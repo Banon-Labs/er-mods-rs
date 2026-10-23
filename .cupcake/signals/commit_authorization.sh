@@ -8,8 +8,8 @@
 #
 # The first field answers "may this command commit" (`-` when it holds no commit), the second
 # "may this command run a lint or formatter". Both open only on the user's own last typed message
-# being exactly `authorize commit`, unspent, in the main session. The judgement and its reasoning
-# live in `scripts/cupcake_commit_authorization.py`.
+# being exactly `authorize commit`, in the main session, while no commit it paid for has landed.
+# The judgement and its reasoning live in `scripts/cupcake_commit_authorization.py`.
 #
 # Fails closed: each policy allows only on its own allowing word, so a missing reader, a crash or a
 # timeout leaves commits and lints denied. There is no override that can print an allowing word.
@@ -32,7 +32,9 @@ case "$event" in
 *) exit 0 ;;
 esac
 
-# Same budget as `push_authorization.sh`: cupcake drops a discovered signal after 5 s, the reader
-# waits at most 3 s for the tool call's line, and 4.5 s ends it before cupcake gives up.
+# Cupcake drops a discovered signal after 5 s; 4.5 s ends the reader before cupcake gives up, so a
+# reader still running then never records a spend for a commit cupcake has already denied. The
+# reader does not wait for the tool call's own transcript line (it lands only after PreToolUse
+# returns): one read of the transcript and two `git rev-parse` calls, well under a second.
 printf '%s' "$event" | timeout 4.5 python3 "$reader" 2>/dev/null || true
 exit 0

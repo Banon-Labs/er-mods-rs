@@ -60,6 +60,26 @@ signals:
     command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/runtime_evidence_for_head.sh"'
     timeout_seconds: 30
 
+  # Has the run that is up stamped the commit its branch will push? Read by teardown_must_relaunch,
+  # which admits `er-teardown.py --reason=stamped-<token>` as a whole command only on `PROVEN`.
+  # Registered for the same reason as the entry above: its last step is
+  # scripts/check-runtime-evidence.sh, whose carry-forward answer can take longer than the 5 s a
+  # discovered signal gets, and a dropped signal here is a refusal the agent cannot get past. The
+  # script answers nothing, at once, for every command that does not name that form, and caps its
+  # evidence run at 22 s.
+  stamped_run:
+    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/stamped_run.sh"'
+    timeout_seconds: 30
+
+  # Is the user's last message an `authorize <sha>` that still has a push waiting on it? Read by
+  # teardown_must_relaunch, which admits `er-teardown.py --reason=push-<token>` as a whole command
+  # only on `AUTHORIZED` (user directive 2026-10-22: "to authorize a push sha is to authorize a
+  # teardown"). Registered so it gets 8 s rather than a discovered signal's 5: the reader waits up
+  # to 3 s for the tool call's own transcript line, as the push guard's reader does.
+  push_teardown:
+    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/push_teardown.sh"'
+    timeout_seconds: 8
+
   origin_main_oids:
     command: 'if [ -n "${CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE:-}" ]; then printf "%s" "$CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"; else local_oid="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"; remote_oid="$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | cut -f1)"; printf "%s %s" "$local_oid" "$remote_oid"; fi'
     timeout_seconds: 8
