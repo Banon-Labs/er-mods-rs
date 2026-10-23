@@ -324,6 +324,12 @@ def world_is_up() -> tuple[bool, str]:
         reverse=True,
     )
     for run in runs[:2]:
+        # A run whose `run.json` is gone has ended (the reaper removes it when the game exits), so
+        # its telemetry describes a process that no longer exists. Measured 2026-10-22: a game
+        # launched straight from an me3 profile, in a world and searching, was refused on
+        # br-20261022-145638-305c's `WaitBoot4`, a run that had ended hours before.
+        if not (run / "run.json").exists():
+            continue
         telemetry = run / "er-quickload-telemetry.json"
         if not telemetry.exists():
             continue
@@ -640,7 +646,19 @@ def world_gate_selftest() -> list[tuple[str, bool]]:
             run = pathlib.Path(tmp) / "br-selftest"
             run.mkdir()
             telemetry = run / "er-quickload-telemetry.json"
+            telemetry.write_text('{"oracle_player_present": false}', encoding="utf-8")
+            er_run_lib.player_in_a_world = lambda pid: (True, "stub: a player")
+            ready, detail = world_is_up()
+            results.append(
+                (
+                    f"an ended run's telemetry is not read -- {detail}",
+                    ready and "live read" in detail,
+                )
+            )
+
+            (run / "run.json").write_text("{}", encoding="utf-8")
             telemetry.write_text('{"oracle_player_present": true}', encoding="utf-8")
+            er_run_lib.player_in_a_world = lambda pid: (False, "stub: no player")
             ready, detail = world_is_up()
             results.append(
                 (

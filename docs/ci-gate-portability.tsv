@@ -138,6 +138,8 @@ portable	-	test-cupcake-delivered-shape.py --selftest	source/AST/text analysis o
 portable	-	test-cupcake-delivered-shape.py	source/AST/text analysis only	policy
 portable	-	cupcake_push_target_repo.py --selftest	builds a linked working tree and a stranger repository in a temp dir; no game image, no network	policy
 portable	-	cupcake_python_script_writes.py --selftest	scans python files it writes to a temp dir; no game image, no network	policy
+portable	-	cupcake_stamped_run.py --selftest	builds three fixture repositories and run roots in a temp dir and points the evidence scan at them; no game image, no network	policy
+portable	-	cupcake_push_teardown.py --selftest	fixture transcripts and a throwaway git repo in a temp dir; no game image, no network	policy
 portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin	product
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint

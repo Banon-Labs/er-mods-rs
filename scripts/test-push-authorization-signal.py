@@ -465,11 +465,30 @@ def main() -> int:
         expect("a second entry holding the pending tool call denies", sb.run(c, "toolu_g3", PUSH),
                "DENIED", "more than once")
 
+        # The main session's case: the call's own line is not written until the hooks return, so
+        # the chain is read back from the newest entry instead (bd er-effects-rs-hu4w).
         c = Chain()
         c.human(f"authorize {sb.tip}")
-        c.use("toolu_other", PUSH)
-        expect("a tool call missing from the transcript denies", sb.run(c, "toolu_absent", PUSH),
-               "DENIED", "not in the transcript")
+        c.say("pushing")
+        expect("a tool call not yet in the transcript is read back from the newest entry",
+               sb.run(c, "toolu_absent", PUSH), "AUTHORIZED")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.say("ok")
+        c.human("hold off")
+        c.say("holding")
+        expect("read back from the newest entry, a later message that is not an authorization denies",
+               sb.run(c, "toolu_absent2", PUSH), "DENIED", "not an authorization")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_prev", PUSH)
+        c.result("toolu_prev", "pushed")
+        spent = sb.run(c, "toolu_prev", PUSH)
+        expect("the earlier push holds the authorization", spent, "AUTHORIZED")
+        expect("read back from the newest entry, a spent authorization still denies a second push",
+               sb.run(c, "toolu_absent3", PUSH), "DENIED", "already spent")
 
         # --- the tool call's own line lands after the reader started ----------------------------
         # Measured 2026-10-14: Claude Code starts the PreToolUse hook before the line is on disk,
@@ -496,7 +515,8 @@ def main() -> int:
         c.human(f"authorize {sb.tip}")
         c.use("toolu_late3", PUSH)
         out, took = sb.run_late(c, "toolu_late3", PUSH, [])
-        expect("a tool call whose line never lands denies", out, "DENIED", "not in the transcript")
+        expect("a tool call whose line never lands is read back from the newest entry", out,
+               "AUTHORIZED")
         check("the reader waited its full bound and still answered inside the cap",
               reader.LOCATE_DEADLINE_SECONDS <= took < (cap or 0), f"{took:.2f}s")
 
@@ -598,8 +618,8 @@ def end_to_end(sb: Sandbox) -> None:
     never = Chain()
     never.human(f"authorize {sb.tip}")
     rc, out = verdict_late(never, "toolu_e4", False)
-    check("cupcake denies when the line never lands, with the reader's own reason inside its budget",
-          "not in the transcript" in out, f"rc={rc} {out[:400]}")
+    check("cupcake allows an authorized push whose line never lands, inside its budget",
+          rc == 0 and '"deny"' not in out and "BLOCK-ANY-PUSH" not in out, f"rc={rc} {out[:400]}")
 
 
 if __name__ == "__main__":

@@ -191,6 +191,51 @@ FRIDA_EVIDENCE_PROVEN.write_text(
     encoding="utf-8",
 )
 
+# The `stamped_run` fixtures, for the reason the Frida ones above exist: the signal answers from
+# the machine's run root and checkouts, so a case that does not pin them reads whatever run this
+# box last launched. Pinned the same way, through `ER_ME3_RUN_ROOT`, the run-root override the
+# evidence reader already has, and never through a variable that makes the signal print `PROVEN`:
+# `scripts/cupcake_stamped_run.py` builds a real repository and run root, and the real checks run
+# against them. The pid that keeps the fixture run up is this process, which outlives every case.
+#
+# Pinned per case rather than for every case like `ER_FRIDA_EVIDENCE_LOG`, because the Stop
+# signal behind `scripts/cupcake_fix_claim.py` reads the same variable and its cases must not
+# move with these.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import cupcake_stamped_run  # noqa: E402
+
+_STAMPED_RUN_DIR = Path(tempfile.mkdtemp(prefix="cupcake-policy-regression-stamped-"))
+atexit.register(shutil.rmtree, _STAMPED_RUN_DIR, True)
+STAMPED_FIXTURE = cupcake_stamped_run.build_fixture_repo(_STAMPED_RUN_DIR)
+STAMPED_GAME_DIR = _STAMPED_RUN_DIR / "game"
+STAMPED_GAME_DIR.mkdir()
+# Never created, so the signal answers `UNPROVEN no-run` on every host.
+STAMPED_RUNS_ABSENT = _STAMPED_RUN_DIR / "runs-absent"
+# A live run whose log names the fixture branch's tip.
+STAMPED_RUNS_PROVEN = _STAMPED_RUN_DIR / "runs-proven"
+cupcake_stamped_run.write_run(
+    STAMPED_RUNS_PROVEN, "br-20990101-000000-0001", pid=os.getpid(), stamp=STAMPED_FIXTURE["head"]
+)
+# A live run that stamped only the base, below the tip's crate change: up, on the branch, and
+# nothing ran the tip.
+STAMPED_RUNS_UNSTAMPED = _STAMPED_RUN_DIR / "runs-unstamped"
+cupcake_stamped_run.write_run(
+    STAMPED_RUNS_UNSTAMPED, "br-20990101-000000-0002", pid=os.getpid(), stamp=STAMPED_FIXTURE["base"]
+)
+
+
+def stamped_run_env(runs: Path) -> tuple[tuple[str, str], ...]:
+    """`extra_env` for a case about the stamped form, reading `runs` as the run root."""
+    return (
+        ("ER_ME3_RUN_ROOT", str(runs)),
+        ("ER_GAME_DIR", str(STAMPED_GAME_DIR)),
+        # The rulebook runs the signal from under this directory, and the caller's own value may
+        # name a checkout that does not have the script.
+        ("CLAUDE_PROJECT_DIR", str(REPO_ROOT)),
+    )
+
+
+STAMPED_RUN_EVENT = {"cwd": STAMPED_FIXTURE["repo"]}
 
 
 def _make_conflict_fixture(root: Path) -> tuple[Path, Path]:
@@ -2742,6 +2787,63 @@ def main() -> int:
             'python3 scripts/er-teardown.py --reason="invalid-run-import did not apply"',
             False,
             "teardown that does not relaunch",
+        ),
+        # The run that stamped a commit for its push has to end before the push, since check.sh
+        # refuses while the game is up. Refused 2026-10-22 on the undeclared reason in the last
+        # case, after run br-20261022-023259-d732 had stamped a9be7625. These run the real
+        # `stamped_run` signal against a fixture repository and run root, so the allow proves the
+        # signal reached the policy and the denials prove the policy needs it.
+        PolicyCase(
+            "allow-stamped-teardown-after-stamping-run",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-push-needs-game-closed",
+            True,
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_PROVEN),
+        ),
+        PolicyCase(
+            "allow-stamped-teardown-with-output-trim",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-push-needs-game-closed 2>&1 | tail -3",
+            True,
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_PROVEN),
+        ),
+        PolicyCase(
+            "deny-stamped-teardown-when-the-run-did-not-stamp-the-tip",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-push-needs-game-closed",
+            False,
+            "`stamped_run` signal: UNPROVEN no-evidence",
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_UNSTAMPED),
+        ),
+        PolicyCase(
+            "deny-stamped-teardown-with-no-run-up",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-push-needs-game-closed",
+            False,
+            "`stamped_run` signal: UNPROVEN no-run",
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_ABSENT),
+        ),
+        PolicyCase(
+            "deny-stamped-teardown-chained-with-work",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-push-needs-game-closed; cargo build -p er-quickload",
+            False,
+            "teardown that does not relaunch",
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_PROVEN),
+        ),
+        PolicyCase(
+            "deny-undeclared-reason-even-with-a-stamping-run",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=push-needs-game-closed",
+            False,
+            "teardown that does not relaunch",
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_PROVEN),
         ),
         # argparse prints usage and exits before any teardown code runs, like `--status`.
         PolicyCase(
