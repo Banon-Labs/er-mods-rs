@@ -855,9 +855,22 @@ def coverage_problems(stages: tuple[Stage, ...] = STAGES) -> list[str]:
 # several gates merely name the target triple in a comment. A bare-word scan marked seven of the
 # eleven stages as needing that download; requiring an invocation marks six, and only
 # `cargo-build` spells `cargo xwin` in check.sh itself.
+#
+# `wine` is the apt package that dominates a stage's install (libwine alone is about 105 MB, and the
+# runner's Ubuntu mirror has served it at modem speed), so it is matched against a gate script's
+# code with its comments and docstrings removed: check-test-target-coverage.py, a `suite` gate,
+# quotes the wine runner variable in its module docstring and runs nothing. It is derived here and
+# not from a ledger token on purpose, because a token is a thing a new gate's author forgets to
+# write, and then that stage's job has no wine and check-rust-build.sh used to skip quietly.
 INDIRECT_TOOL_USE = {
     "cargo": re.compile(r"\bcargo\s+(\+\S+\s+)?(xwin|build|check|test|fmt|clippy|metadata|tree)\b"),
     "xwin": re.compile(r"\bcargo\s+(\+\S+\s+)?xwin\b|--target[= ]x86_64-pc-windows-msvc"),
+    # `\s+` rather than literal spaces, so this line does not match itself: check-stages.py is a
+    # `suite` gate, and a pattern that names `command`, a space, `-v`, a space and `wine` verbatim
+    # would put wine in that stage.
+    "wine": re.compile(
+        r"CARGO_TARGET_[A-Z0-9_]+_RUNNER=wine\b|command\s+-v\s+wine\b|which\(\s*[\"']wine[\"']"
+    ),
     "shellcheck": re.compile(r"\bshellcheck\s+[-\"$\w/]"),
     "rustfmt": re.compile(r"\brustfmt\s+[-\"$\w/]"),
     "opa": re.compile(r"\bopa\s+(test|eval|build|version|fmt|check)\b"),
@@ -865,9 +878,15 @@ INDIRECT_TOOL_USE = {
     "uv": re.compile(r"\buv\s+run\b"),
 }
 
+# The host-native GUI compiles: Bevy and wgpu pull in wayland-sys, alsa-sys and libudev-sys, whose
+# build scripts ask pkg-config for the three `-dev` packages the workflow installs under `hostgui`.
+# Matched on step text only, because these crates are compiled for the host by a bare `cargo` step
+# in check.sh and by no gate script.
+HOST_GUI_STEP = re.compile(r"-p (er-shader-viewer|er-bevy-shader-lab)\b|--features wgpu")
+
 
 def stage_tools(stage: str) -> dict[str, bool]:
-    """Which external tools a stage needs, so a CI job installs those and not the other seven.
+    """Which external tools a stage needs, so a CI job installs those and not the rest.
 
     Derived from two readings, both over-inclusive on purpose. The first word of a toolchain step
     is the obvious one (`shellcheck ...` needs shellcheck). The second is the one that matters:
@@ -883,7 +902,8 @@ def stage_tools(stage: str) -> dict[str, bool]:
     """
     portability = _load_portability()
     steps = [s for s in staged_steps() if s.stage == stage]
-    tools = {k: False for k in ("cargo", "xwin", "shellcheck", "rustfmt", "opa", "cupcake", "uv")}
+    keys = ("cargo", "xwin", "wine", "hostgui", "shellcheck", "rustfmt", "opa", "cupcake", "uv")
+    tools = {k: False for k in keys}
     ledger = portability.read_ledger()
     for step in steps:
         head = step.text.split()[0]
@@ -894,6 +914,10 @@ def stage_tools(stage: str) -> dict[str, bool]:
         # long invocation and the triple can sit on a continuation line this text never sees.
         if "x86_64-pc-windows-msvc" in step.text or INDIRECT_TOOL_USE["xwin"].search(step.text):
             tools["xwin"] = True
+        if INDIRECT_TOOL_USE["wine"].search(step.text):
+            tools["wine"] = True
+        if HOST_GUI_STEP.search(step.text):
+            tools["hostgui"] = True
         if step.key is None:
             continue
         row = ledger.get(step.key)
@@ -903,8 +927,9 @@ def stage_tools(stage: str) -> dict[str, bool]:
         if not script.exists():
             continue
         source = script.read_text(encoding="utf-8", errors="replace")
+        code = code_without_prose(source, script.suffix)
         for name, pattern in INDIRECT_TOOL_USE.items():
-            if pattern.search(source):
+            if pattern.search(code if name == "wine" else source):
                 tools[name] = True
     if tools["xwin"]:
         tools["cargo"] = True
@@ -997,6 +1022,25 @@ def selftest() -> int:
         failures += 1
         for step in unmatched:
             print(f"          line {step.line}: {step.text[:80]}")
+    # The two install keys, on the real tree. Both directions are asserted: wine and the GUI `-dev`
+    # packages are the slow downloads, so a stage that gains one by accident pays minutes of apt for
+    # nothing, and a stage that loses one runs without it. The `suite` half is also the control for
+    # the prose stripping: check-test-target-coverage.py names the wine runner variable in a
+    # docstring, and reading prose as code puts wine in `suite`.
+    expected_owner = {"wine": {"cargo-build"}, "hostgui": {"cargo-test"}}
+    tools_by_stage = {name: stage_tools(name) for name in STAGE_NAMES}
+    for key, owners in expected_owner.items():
+        got = {name for name, tools in tools_by_stage.items() if tools[key]}
+        ok = got == owners
+        label = f"{key} is selected for {', '.join(sorted(owners))} only"
+        print(f"  {'ok  ' if ok else 'FAIL'}  {label}")
+        if not ok:
+            failures += 1
+            print(
+                f"          selected for: {', '.join(sorted(got)) or 'no stage'}. If a stage now "
+                f"legitimately needs {key}, update expected_owner in selftest() to say so; "
+                "otherwise find the step or gate script that matched and fix the pattern."
+            )
     failures += selection_selftest()
     print(f"check-stages selftest: {failures} failure(s)")
     return 1 if failures else 0

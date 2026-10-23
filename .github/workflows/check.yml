@@ -349,10 +349,12 @@ jobs:
         run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
       - name: Install Rust and the cross-compile system libraries
         run: |
-          sudo apt-get install -y --no-install-recommends clang lld llvm wine \
-              libwayland-dev libasound2-dev libudev-dev \
-            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
-              libwayland-dev libasound2-dev libudev-dev; }
+          # clang, lld and llvm only, the same form as release.yml. This job runs `cargo xwin check`
+          # and nothing else, so it never runs wine, and the three `-dev` libraries serve host GUI
+          # crates: `cargo tree --workspace -i wayland-sys --target x86_64-pc-windows-msvc` (and the
+          # same for alsa-sys and libudev-sys) finds nothing to print.
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
           # RUSTUP MAY NOT BE THERE. GitHub's `ubuntu-latest` image ships it, so this used to be
           # two bare `rustup` lines -- and both of the other places this workflow can run do not:
           # `catthehacker/ubuntu:act-latest`, which is what `act` uses, has no rustup (measured:
@@ -428,18 +430,80 @@ jobs:
           git clone "$FROMSOFTWARE_RS_REMOTE" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
-      # THE THREE `lib*-dev` PACKAGES ARE THE er-shader-viewer GATE: `cargo check -p
-      # er-shader-viewer` is a host-native Bevy 0.19 GUI and dies in wayland-sys's build script
-      # without them. The set is measured, not guessed -- `cargo tree -e normal,build --invert
-      # pkg-config` shows exactly three crates build-depend on pkg-config (wayland-sys, alsa-sys,
-      # libudev-sys) and a check with pkg-config blinded fails in those three and no others.
-      - name: Install the cross-compile system libraries
-        if: steps.tools.outputs.cargo == '1'
+      # Each stage installs only the apt packages it uses, keyed on `check-stages.py --tools`:
+      #
+      #   xwin=1     clang, lld and llvm, the compiler, linker and archiver `cargo xwin` drives.
+      #   wine=1     wine, which runs the windows-target unit tests in check-rust-build.sh. It is
+      #              the slow one (libwine is about 105 MB), and only `cargo-build` needs it.
+      #   hostgui=1  the three `lib*-dev` packages, for the host-native GUI compiles in `cargo-test`
+      #              (`cargo check -p er-shader-viewer`, a Bevy 0.19 GUI, dies in wayland-sys's build
+      #              script without them). The set is measured, not guessed: `cargo tree -e
+      #              normal,build --invert pkg-config` shows exactly three crates build-depend on
+      #              pkg-config (wayland-sys, alsa-sys, libudev-sys), and a check with pkg-config
+      #              blinded fails in those three and no others.
+      #
+      # `apt-get update` runs first instead of only after a failed install. It costs a few seconds
+      # even on a throttled mirror, and the stale index on the image named a libudev-dev version
+      # the mirror no longer had, so the install used to 404 and then download everything again.
+      # A missing package does not pass quietly: without clang or the `-dev` libraries the compile
+      # goes red, check-rust-build.sh exits 1 under GitHub Actions when wine is absent, and
+      # `check-stages.py --selftest` asserts which stages select wine and hostgui.
+      #
+      # The .debs of a wine stage come from the Actions cache instead of the mirror, because the
+      # mirror has served libwine at 48-106 kB/s and that one download has held `cargo-build` for
+      # up to 38 minutes. The cargo-test half was measured at about nothing and is not cached.
+      #
+      # Why a restored .deb can be trusted: apt 2.7.14 accepts a file already in the archives
+      # directory by its name and size and does not re-hash it (acquire-item.cc, pkgAcqArchive).
+      # Integrity therefore rests on three things: the version is in the file name, Ubuntu never
+      # reuses a version, and the key carries a hash of `--print-uris`, which lists each .deb's
+      # name, size and SHA256 as the freshly updated index gives them. A new version of any
+      # package is a new key and a miss, never a stale hit.
+      #
+      # Only main writes the entry. A pull request's entry would be readable by that pull request
+      # alone, and the repository's caches already sit above the 10 GB limit, so it would only
+      # evict something main uses. The save sits directly after the install rather than at the end
+      # of the job, because 7 of 22 measured main runs were cancelled before reaching the end.
+      - name: Resolve this stage's system packages
+        id: apt
+        if: steps.tools.outputs.xwin == '1' || steps.tools.outputs.wine == '1' || steps.tools.outputs.hostgui == '1'
         run: |
-          sudo apt-get install -y --no-install-recommends clang lld llvm wine \
-              libwayland-dev libasound2-dev libudev-dev \
-            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm wine \
-              libwayland-dev libasound2-dev libudev-dev; }
+          pkgs=""
+          if [ "${{ steps.tools.outputs.xwin }}" = 1 ]; then pkgs="$pkgs clang lld llvm"; fi
+          if [ "${{ steps.tools.outputs.wine }}" = 1 ]; then pkgs="$pkgs wine"; fi
+          if [ "${{ steps.tools.outputs.hostgui }}" = 1 ]; then pkgs="$pkgs libwayland-dev libasound2-dev libudev-dev"; fi
+          sudo apt-get update
+          # Same flags and package list as the install below, against the image's default archives
+          # directory, so the hash covers exactly the .debs (name_version_arch, size and SHA256)
+          # that the install will fetch.
+          h=$(sudo apt-get install -y --no-install-recommends --print-uris -qq $pkgs | sha256sum | cut -c1-16)
+          echo "pkgs=${pkgs# }" >> "$GITHUB_OUTPUT"
+          echo "key=apt-${ImageOS:-none}-${ImageVersion:-none}-$h" >> "$GITHUB_OUTPUT"
+          mkdir -p "$HOME/apt-archives/partial"
+
+      - name: Restore wine's .debs
+        id: apt-cache
+        if: steps.tools.outputs.wine == '1'
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt.outputs.key }}
+
+      # `APT::Keep-Downloaded-Packages=true` is apt-get's default, written out so an image-level
+      # apt.conf that turns it off cannot empty the directory the save below reads.
+      - name: Install the cross-compile system libraries
+        if: steps.apt.outcome == 'success'
+        run: |
+          sudo apt-get -o Dir::Cache::archives="$HOME/apt-archives" -o APT::Keep-Downloaded-Packages=true \
+            install -y --no-install-recommends ${{ steps.apt.outputs.pkgs }}
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/apt-archives"
+
+      - name: Save wine's .debs
+        if: steps.tools.outputs.wine == '1' && steps.apt-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt.outputs.key }}
 
       # Separate from the apt step above, and on a WIDER condition, because the two answer
       # different questions. A stage can want the `rustfmt` binary without wanting a compiler --
@@ -575,8 +639,16 @@ jobs:
         #
         # `stage-results/` is in .gitignore, so a local run of the same command leaves no untracked
         # file behind for scripts/check-gate-config-guard.sh to notice.
+        #
+        # On a GitHub-hosted runner the CPU courtesy in scripts/lib/cpu-courtesy.sh is switched
+        # off: nobody is sitting at that machine, and by default the stage ran on half its vCPUs
+        # (the taskset mask and CARGO_BUILD_JOBS) at nice 10 under SCHED_IDLE. The self-hosted
+        # laptop runner and act do not report `github-hosted`, so both keep the courtesy.
         run: |
           mkdir -p "$GITHUB_WORKSPACE/stage-results"
+          if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ]; then
+            export ER_BUILD_JOBS="$(nproc)" ER_SCHED_IDLE=0 ER_NICE_FLOOR=0
+          fi
           ER_CHECK_RESULT_DIR="$GITHUB_WORKSPACE/stage-results" \
             bash scripts/check.sh --stage "${{ matrix.stage }}"
 
