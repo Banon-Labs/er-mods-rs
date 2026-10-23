@@ -456,6 +456,8 @@ pub fn follow_arxan_stub(entry: usize) -> Option<usize> {
 const LANDING_OPENING_BYTES: usize = 14;
 /// `jmp qword ptr [rip+0]`, the six bytes MinHook's x64 relay opens with; the absolute address it
 /// jumps to follows them.
+// Not a prologue: the opening of MinHook's own relay, compared against a jump's landing to tell a
+// hook relay from an Arxan stub; no game function opens with it.
 const HOOK_RELAY_OPCODE: [u8; 6] = [0xff, 0x25, 0x00, 0x00, 0x00, 0x00];
 
 /// What the `jmp rel32` at a function entry lands on.
