@@ -1605,12 +1605,58 @@ def kill_group(proc: subprocess.Popen, unit: str | None = None, grace: float = K
                 pass
 
 
+def _session_end(proc: subprocess.Popen, silence: float, got: list[int]) -> str | None:
+    """Wait on `proc` and the ssh session on stdin; None when `proc` exits, else why the session is
+    over: EOF on stdin, `silence` seconds with nothing on it, or a signal recorded in `got`."""
+    fd = sys.stdin.fileno()
+    last = time.monotonic()
+    while proc.poll() is None:
+        if got:
+            return f"signal {got[0]}"
+        if time.monotonic() - last > silence:
+            return f"no heartbeat for {silence:.0f} s"
+        try:
+            ready, _, _ = select.select([fd], [], [], 0.5)
+        except OSError:
+            ready = [fd]
+        if ready:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                data = b""
+            if not data:
+                return "the session closed"
+            last = time.monotonic()
+    return None
+
+
+def _report(text: str) -> None:
+    """`text` on stderr, which for a supervisor whose session is gone is a pipe with no reader: the
+    write raises `BrokenPipeError`, and stderr is then pointed at /dev/null so the interpreter's
+    own flush at exit does not fail again and turn the exit status into 120."""
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except OSError:
+        try:
+            null = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(null, 2)
+            os.close(null)
+        except OSError:
+            pass
+
+
 def supervise(argv: list[str]) -> int:
     """`--supervise --silence <s> [--unit <u>] -- <cmd...>`, the host's end of `run_guarded`: run
     `cmd` in a new session (its own process group, so nothing here shares it), and kill that group
     (`kill_group`) when stdin -- the ssh session -- reaches EOF, when nothing arrives on it for
-    `--silence` seconds, or on SIGTERM, SIGINT or SIGHUP. Exits with `cmd`'s status, or 128 plus
-    the signal, or 129 when the session was lost."""
+    `--silence` seconds, on SIGTERM, SIGINT or SIGHUP, or when the supervisor itself fails. Exits
+    with `cmd`'s status, or 128 plus the signal, or 129 when the session was lost.
+
+    The group is killed before anything is reported. A stopped local run usually reaches the host
+    as its sshd going away (TaskStop and Ctrl-C signal the local ssh too, so it never forwards the
+    EOF `run_guarded` sends), and that takes the reader of this process's stderr with it. The
+    report used to come first: on 2026-10-22 its `BrokenPipeError` ended the supervisor on zerk and
+    left the run going, reparented to init, until it was killed by hand."""
     ap = argparse.ArgumentParser(prog="er-weapon-build.py --supervise")
     ap.add_argument("--silence", type=float, default=REMOTE_SILENCE_SECONDS)
     ap.add_argument("--unit")
@@ -1623,33 +1669,15 @@ def supervise(argv: list[str]) -> int:
     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(s, lambda n, _f: got.append(n))
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
-    fd = sys.stdin.fileno()
-    last = time.monotonic()
-    why = None
-    while proc.poll() is None:
-        if got:
-            why = f"signal {got[0]}"
-            break
-        if time.monotonic() - last > a.silence:
-            why = f"no heartbeat for {a.silence:.0f} s"
-            break
-        try:
-            ready, _, _ = select.select([fd], [], [], 0.5)
-        except OSError:
-            ready = [fd]
-        if ready:
-            try:
-                data = os.read(fd, 4096)
-            except OSError:
-                data = b""
-            if not data:
-                why = "the session closed"
-                break
-            last = time.monotonic()
+    why = "the supervisor failed"
+    try:
+        why = _session_end(proc, a.silence, got)
+    finally:
+        if why is not None:
+            kill_group(proc, a.unit)
+            _report(f"remote: {why}; killed the run's process group {proc.pid}")
     if why is None:
         return proc.returncode if proc.returncode >= 0 else 128 - proc.returncode
-    print(f"remote: {why}; killing the run's process group {proc.pid}", file=sys.stderr, flush=True)
-    kill_group(proc, a.unit)
     return 128 + got[0] if got else 129
 
 
@@ -2587,6 +2615,22 @@ def guard_checks(check) -> None:
         gone = pgid is not None and wait_group_gone(pgid, 5)
         check(gone and rc == 128 + signal.SIGTERM, f"supervise: SIGTERM kills the run's group (exit {rc})")
         sup.stdin.close()
+        # The host's sshd goes away under the supervisor, which is how a stopped run usually reaches
+        # the host: TaskStop signals every process in the local task, and Ctrl-C the whole
+        # foreground group, so the local ssh dies with this process and never forwards the EOF
+        # `run_guarded` sends. The supervisor's stdin, stdout and stderr all lose their other end
+        # at once, so it must kill the run before it reports anything on a stderr nobody reads.
+        cmd, pgid_fd = fake_host(tmp, 30)
+        sup = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pgid = pgid_of(pgid_fd)
+        for end in (sup.stdout, sup.stderr, sup.stdin):
+            end.close()
+        rc = sup.wait(timeout=20)
+        gone = pgid is not None and wait_group_gone(pgid, 5)
+        check(gone and rc == 129,
+              f"supervise: the session ending with its output pipes kills the run's group (gone {gone}, exit {rc})")
+        if pgid is not None and _group_alive(pgid):
+            os.killpg(pgid, signal.SIGKILL)
         # Normal completion: heartbeats keep a run longer than --silence alive, and its status comes back.
         cmd, pgid_fd = fake_host(tmp, 1.0, "sleep 2.5; exit 7")
         rc, stopped = run_guarded(cmd, heartbeat=0.2)
