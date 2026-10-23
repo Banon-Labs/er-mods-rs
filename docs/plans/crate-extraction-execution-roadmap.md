@@ -21,7 +21,7 @@ ratchet measures exactly what it measured before.
 
 | scope | files | lines |
 |---|---:|---:|
-| all ledgered source | 73 | 41,782 |
+| all ledgered source | 73 | 41,789 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -152,7 +152,7 @@ somebody's in-flight edit.
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,054 | dead-counter census |
 | `own_load/loaders/switch_reload.rs` | 767 | stale-RVA call-site closure |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 831 | stale-RVA call-site closure |
-| `own_load/drive.rs` | 1,737 | dead-counter census |
+| `own_load/drive.rs` | 1,744 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,227 | stale-RVA call-site closure |
 | `lifecycle/task_tick.rs` | 449 | dead-counter census |
 | `input_block.rs` | 1,654 | dead-counter census |
@@ -277,7 +277,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `product_core_own_stepper.rs` | 573 | product core own-stepper | D5 |
 | `product_core_own_stepper/fallback_drives.rs` | 669 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 12 | S11 own-load facade | D5 |
-| `own_load/drive.rs` | 1,737 | native-load, world-resource, and save-byte families | D5 |
+| `own_load/drive.rs` | 1,744 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
 | `own_load/loaders/load_drive.rs` | 952 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 767 | switch-reload adapter family | D5 |
