@@ -23,6 +23,10 @@ bash_event_with_evidence(cmd, evidence) := object.union(bash_event(cmd), {
 	"signals": {"frida_evidence": evidence},
 })
 
+bash_event_with_stamp(cmd, stamp) := object.union(bash_event(cmd), {
+	"signals": {"stamped_run": stamp},
+})
+
 rule_ids(denials) := {d.rule_id | some d in denials}
 
 denied(cmd) if {
@@ -34,6 +38,13 @@ denied_with_evidence(cmd, evidence) if {
 	denials := guard.deny with input as bash_event_with_evidence(cmd, evidence)
 	RULE in rule_ids(denials)
 }
+
+denied_with_stamp(cmd, stamp) if {
+	denials := guard.deny with input as bash_event_with_stamp(cmd, stamp)
+	RULE in rule_ids(denials)
+}
+
+PROVEN_STAMP := "PROVEN br-20261022-023259-d732 feat/asset-geometry-tooling a9be76256472 /home/banon/projects/er-mods-rs/.worktrees/feat-asset-geometry-tooling"
 
 # --- a teardown with no relaunch is DENIED -----------------------------------
 
@@ -160,6 +171,118 @@ test_deny_invalid_run_space_separated_reason if {
 
 test_deny_empty_invalid_run_token if {
 	denied("python3 scripts/er-teardown.py --reason=invalid-run-")
+}
+
+# --- a standalone teardown that ends the run which stamped the push ------------
+#
+# AGENTS.md says to close Elden Ring before pushing, since check.sh refuses while it runs, and a
+# push of crate code waits for a run of its exact tip. Refused 2026-10-22 after run
+# br-20261022-023259-d732 had stamped a9be7625 and the user had authorized the push.
+
+test_allow_stamped_teardown_after_stamping_run if {
+	not denied_with_stamp(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=stamped-push-needs-game-closed",
+		PROVEN_STAMP,
+	)
+}
+
+test_allow_stamped_teardown_with_output_trim if {
+	not denied_with_stamp(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=stamped-push-needs-game-closed 2>&1 | tail -3",
+		PROVEN_STAMP,
+	)
+}
+
+test_allow_stamped_teardown_with_leading_cd if {
+	not denied_with_stamp(
+		"cd /home/banon/projects/er-mods-rs; python3 scripts/er-teardown.py --reason=stamped-a9be7625 > /dev/null 2>&1",
+		PROVEN_STAMP,
+	)
+}
+
+# The declaration alone admits nothing: no signal, and a signal that could not prove the stamp,
+# both leave it refused.
+test_deny_stamped_teardown_without_signal if {
+	denied("python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=stamped-push-needs-game-closed")
+}
+
+test_deny_stamped_teardown_with_unproven_signal if {
+	denied_with_stamp(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=stamped-push-needs-game-closed",
+		"UNPROVEN no-stamp br-20261022-023259-d732 has no log opening with a build line yet",
+	)
+}
+
+# A signal that failed reaches the policy as a failure record, not a string.
+test_deny_stamped_teardown_with_failed_signal if {
+	denied_with_stamp(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=stamped-push-needs-game-closed",
+		{"error": "", "exit_code": 1, "output": "PROVEN x", "success": false},
+	)
+}
+
+# `PROVEN` has to open the answer; `UNPROVEN` contains it.
+test_deny_stamped_teardown_with_proven_inside_the_answer if {
+	denied_with_stamp(
+		"python3 scripts/er-teardown.py --reason=stamped-x",
+		"UNPROVEN no-evidence PROVEN",
+	)
+}
+
+# The exact command refused on 2026-10-22 does not declare the form, so a proven stamp does not
+# admit it.
+test_deny_undeclared_reason_with_proven_stamp if {
+	denied_with_stamp(
+		"python3 scripts/er-teardown.py --reason=push-needs-game-closed",
+		PROVEN_STAMP,
+	)
+}
+
+test_deny_bare_teardown_with_proven_stamp if {
+	denied_with_stamp("python3 scripts/er-teardown.py", PROVEN_STAMP)
+}
+
+test_deny_stamped_teardown_then_push if {
+	denied_with_stamp(
+		"python3 scripts/er-teardown.py --reason=stamped-x; git push -u origin feat/x",
+		PROVEN_STAMP,
+	)
+}
+
+test_deny_stamped_teardown_and_then_build if {
+	denied_with_stamp(
+		"python3 scripts/er-teardown.py --reason=stamped-x && bash scripts/er-build-dlls.sh er-save-game-row",
+		PROVEN_STAMP,
+	)
+}
+
+test_deny_stamped_teardown_then_tail_of_a_file if {
+	denied_with_stamp("python3 scripts/er-teardown.py --reason=stamped-x; tail -3 run.log", PROVEN_STAMP)
+}
+
+test_deny_stamped_multi_word_reason if {
+	denied_with_stamp(`python3 scripts/er-teardown.py --reason="stamped-push needs the game closed"`, PROVEN_STAMP)
+}
+
+test_deny_stamped_space_separated_reason if {
+	denied_with_stamp("python3 scripts/er-teardown.py --reason stamped-x", PROVEN_STAMP)
+}
+
+test_deny_empty_stamped_token if {
+	denied_with_stamp("python3 scripts/er-teardown.py --reason=stamped-", PROVEN_STAMP)
+}
+
+# The denial quotes what the signal answered, so the reason it could not prove the stamp is on
+# screen.
+test_denial_quotes_the_signal_answer if {
+	denials := guard.deny with input as bash_event_with_stamp(
+		"python3 scripts/er-teardown.py --reason=stamped-x",
+		"UNPROVEN not-up br-1 launcher pid 7 is not alive",
+	)
+	some d in denials
+	d.rule_id == RULE
+	contains(d.reason, "`stamped_run` signal: UNPROVEN not-up br-1 launcher pid 7 is not alive")
+	contains(d.reason, "--reason=stamped-<one-token-why>")
 }
 
 test_deny_teardown_with_a_reason_then_more_work if {
@@ -365,4 +488,79 @@ test_deny_teardown_inside_a_shell_wrapper_payload if {
 # `--status`, so this chained past it.
 test_deny_status_then_a_real_teardown if {
 	denied("python3 scripts/er-teardown.py --status; python3 scripts/er-teardown.py; cargo build")
+}
+
+# --- a standalone teardown the user's push authorization pays for -------------
+#
+# User directive 2026-10-22: "to authorize a push sha is to authorize a teardown". Refused that
+# day as `--reason=cursor-test-done-for-push` while the user's `authorize 58a59772...` waited on a
+# game that stamped nothing, so the `stamped-` form could not admit it.
+
+bash_event_with_push_auth(cmd, answer) := object.union(bash_event(cmd), {
+	"signals": {"push_teardown": answer},
+})
+
+denied_with_push_auth(cmd, answer) if {
+	denials := guard.deny with input as bash_event_with_push_auth(cmd, answer)
+	RULE in rule_ids(denials)
+}
+
+AUTHORIZED_PUSH := "AUTHORIZED\tfix/me3-launch-binaries-dir\t58a59772dbd2b83a271cee9bc593b26a79aad429\t0b9f3c1e-0000-4000-8000-000000000000"
+
+test_allow_push_teardown_after_authorization if {
+	not denied_with_push_auth(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-me3-guard",
+		AUTHORIZED_PUSH,
+	)
+}
+
+test_allow_push_teardown_with_output_trim if {
+	not denied_with_push_auth(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-me3-guard | tail -2",
+		AUTHORIZED_PUSH,
+	)
+}
+
+# The declaration alone admits nothing.
+test_deny_push_teardown_without_signal if {
+	denied("python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-me3-guard")
+}
+
+test_deny_push_teardown_with_denied_signal if {
+	denied_with_push_auth(
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=push-me3-guard",
+		"DENIED\tthe user's last message is not `authorize <sha>`",
+	)
+}
+
+test_deny_push_teardown_with_failed_signal if {
+	denied_with_push_auth(
+		"python3 scripts/er-teardown.py --reason=push-x",
+		{"error": "", "exit_code": 1, "output": "AUTHORIZED\tx\ty\tz", "success": false},
+	)
+}
+
+# An authorization pays for the push form only, never for another reason.
+test_deny_other_reason_with_authorized_push if {
+	denied_with_push_auth("python3 scripts/er-teardown.py --reason=done-testing", AUTHORIZED_PUSH)
+}
+
+test_deny_bare_teardown_with_authorized_push if {
+	denied_with_push_auth("python3 scripts/er-teardown.py", AUTHORIZED_PUSH)
+}
+
+# Anything chained after the teardown is refused; the push runs as its own command.
+test_deny_push_teardown_then_more_work if {
+	denied_with_push_auth("python3 scripts/er-teardown.py --reason=push-x; git status", AUTHORIZED_PUSH)
+}
+
+test_deny_push_teardown_and_then_build if {
+	denied_with_push_auth(
+		"python3 scripts/er-teardown.py --reason=push-x && bash scripts/er-build-dlls.sh er-hook",
+		AUTHORIZED_PUSH,
+	)
+}
+
+test_deny_push_multi_word_reason if {
+	denied_with_push_auth(`python3 scripts/er-teardown.py --reason="push the guard"`, AUTHORIZED_PUSH)
 }
