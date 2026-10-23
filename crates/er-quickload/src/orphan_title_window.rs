@@ -78,7 +78,7 @@
 //! swallowed the player's input on a world telemetry called controllable. The deregistration lives
 //! in `FUN_1407ada40`, which runs only when the window's job is run -- so the commit has to be held
 //! back for the frames `STEP_MenuJobWait` needs. That hold is `title_menu_drained_for_commit` in
-//! `experiments::own_load::loaders::load_drive`; what belongs here is the judgement of which window
+//! `own_load::loaders::load_drive`; what belongs here is the judgement of which window
 //! may be asked at all.
 //!
 //! The rejected alternative is recorded here because it is the obvious one and it is already known

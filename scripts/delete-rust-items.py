@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Delete named top-level items (fn/static/const/struct/enum) from a Rust file,
-including each item's immediately-preceding doc-comment / attribute block. Shares
-the comment/string-aware item-boundary logic with extract-experiments-items.py.
+including each item's immediately-preceding doc-comment / attribute block. Its
+comment/string-aware item-boundary logic came from extract-experiments-items.py, deleted
+2026-10-22 with the `experiments/mod.rs` it carved up.
 
     delete-rust-items.py <file.rs> <name1> [<name2> ...]
 

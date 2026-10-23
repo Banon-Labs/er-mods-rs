@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use crate::{config::*, constants::*, crashlog::*, experiments::*, ffi::*, hooks::*, telemetry::*};
+use crate::{config::*, constants::*, crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
 #[derive(Default)]
@@ -218,31 +218,31 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     er_loading_portrait_core::install_host(er_loading_portrait_core::PortraitHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         note_ls_portrait_capture: crate::telemetry::note_ls_portrait_capture,
-        portrait_overlay_enabled: crate::experiments::portrait_overlay_enabled,
-        portrait_render_drive_enabled: crate::experiments::portrait_render_drive_enabled,
-        portrait_real_pixels_enabled: crate::experiments::portrait_real_pixels_enabled,
-        system_quit_repro_enabled: crate::experiments::system_quit_repro_enabled,
+        portrait_overlay_enabled: crate::portrait_overlay_enabled,
+        portrait_render_drive_enabled: crate::portrait_render_drive_enabled,
+        portrait_real_pixels_enabled: crate::portrait_real_pixels_enabled,
+        system_quit_repro_enabled: crate::system_quit_repro_enabled,
         game_directory_path: crate::telemetry::game_directory_path,
-        renderdoc_active: crate::experiments::renderdoc_active,
-        portrait_loaded_slot: crate::experiments::portrait_loaded_slot,
-        portrait_loaded_slot_confirmed: crate::experiments::portrait_loaded_slot_confirmed,
-        portrait_target_slot: crate::experiments::portrait_target_slot,
-        portrait_tear_score: crate::experiments::portrait_tear_score,
-        count_live_profile_models: crate::experiments::count_live_profile_models,
-        now_loading_active: crate::experiments::now_loading_active,
-        portrait_pipeline_idle_in_gameplay: crate::experiments::portrait_pipeline_idle_in_gameplay,
-        save_picker_overlay_active: crate::experiments::save_picker_overlay_active,
-        boot_view_epoch_ms: crate::experiments::boot_view_epoch_ms,
-        best_active_slot: crate::experiments::best_active_slot,
+        renderdoc_active: crate::renderdoc_active,
+        portrait_loaded_slot: crate::portrait_loaded_slot,
+        portrait_loaded_slot_confirmed: crate::portrait_loaded_slot_confirmed,
+        portrait_target_slot: crate::portrait_target_slot,
+        portrait_tear_score: crate::portrait_tear_score,
+        count_live_profile_models: crate::count_live_profile_models,
+        now_loading_active: crate::now_loading_active,
+        portrait_pipeline_idle_in_gameplay: crate::portrait_pipeline_idle_in_gameplay,
+        save_picker_overlay_active: crate::save_picker_overlay_active,
+        boot_view_epoch_ms: crate::boot_view_epoch_ms,
+        best_active_slot: crate::best_active_slot,
         configured_autoload_slot: crate::config::configured_autoload_slot,
-        ensure_profile_slot_stats_cached: crate::experiments::ensure_profile_slot_stats_cached,
-        profile_slot_name: crate::experiments::profile_slot_name,
-        profile_slot_level: crate::experiments::profile_slot_level,
-        profile_slot_attributes: crate::experiments::profile_slot_attributes,
-        profile_slot_vitals: crate::experiments::profile_slot_vitals,
-        profile_slot_weapon_level: crate::experiments::profile_slot_weapon_level,
+        ensure_profile_slot_stats_cached: crate::ensure_profile_slot_stats_cached,
+        profile_slot_name: crate::profile_slot_name,
+        profile_slot_level: crate::profile_slot_level,
+        profile_slot_attributes: crate::profile_slot_attributes,
+        profile_slot_vitals: crate::profile_slot_vitals,
+        profile_slot_weapon_level: crate::profile_slot_weapon_level,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
-        boot_view_render_frame: crate::experiments::boot_view_render_frame,
+        boot_view_render_frame: crate::boot_view_render_frame,
     });
     // ProfileSummary crate split: wire the er-profile-summary-core seam before any hook install
     // or task spawn can execute moved code. Its neutral defaults read no summary and rebuild
@@ -250,29 +250,29 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     er_profile_summary_core::host::install_host(er_profile_summary_core::host::ProfileSummaryHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
-        direct_save_file_source_active: crate::experiments::direct_save_file_source_active,
-        active_save_file_for_system_quit: crate::experiments::active_save_file_for_system_quit,
-        native_fullread_slot: crate::experiments::native_fullread_slot,
+        direct_save_file_source_active: crate::direct_save_file_source_active,
+        active_save_file_for_system_quit: crate::active_save_file_for_system_quit,
+        native_fullread_slot: crate::native_fullread_slot,
         load_profile_slot_caches_from_bytes:
-            crate::experiments::load_profile_slot_caches_from_bytes,
+            crate::load_profile_slot_caches_from_bytes,
     });
     // Save-picker crate split: wire product (A)'s seam before any hook install or task spawn can
     // execute moved picker code. Pure fn-pointer writes; linking the crate still arms nothing by
     // itself.
     er_save_picker_core::install_host(er_save_picker_core::SavePickerHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
-        missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
+        missing_save_selection_pending: crate::missing_save_selection_pending,
         complete_missing_save_selection_from_picker:
-            crate::experiments::complete_missing_save_selection_from_picker,
+            crate::complete_missing_save_selection_from_picker,
         save_picker_seamless_mode_after_settle:
-            crate::experiments::save_picker_seamless_mode_after_settle,
-        picker_start_dir: crate::experiments::save_picker_title_start_dir,
+            crate::save_picker_seamless_mode_after_settle,
+        picker_start_dir: crate::save_picker_title_start_dir,
         remember_picker_dir: crate::config::remember_preferred_save_picker_dir,
         game_main_window: game_main_window_handle_usize,
-        save_file_core_hooks_live: crate::experiments::save_file_core_hooks_live,
+        save_file_core_hooks_live: crate::save_file_core_hooks_live,
         windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
-        save_dest_commit_window_armed: crate::experiments::save_dest_commit_window_armed,
-        request_game_exit: crate::experiments::load_error_close_game,
+        save_dest_commit_window_armed: crate::save_dest_commit_window_armed,
+        request_game_exit: crate::load_error_close_game,
     });
     // Quit-menu crate split: wire product (B)'s seam before its moved hook code can run.
     // This slice moves the OS-dialog dim overlay; the rest of the seam stays on neutral
@@ -281,13 +281,13 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         append_crash_log: crate::telemetry::append_crash_log,
         game_main_window: game_main_window_handle_usize,
-        os_native_picker_active: crate::experiments::os_native_picker_active,
+        os_native_picker_active: crate::os_native_picker_active,
         // The Seamless flavor of the extension filter. Without this the seam falls to
         // `QuitMenuHost::defaults()`, whose `default_seamless` answers false, so the System >
         // Quit browse surface offered `.sl2` alone and a Seamless `.co2` container was dropped
         // from the listing silently. `SavePickerHost` above already wires the same fn.
         save_picker_seamless_mode_after_settle:
-            crate::experiments::save_picker_seamless_mode_after_settle,
+            crate::save_picker_seamless_mode_after_settle,
         windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
         system_dialog_from_action_obj: system_dialog_from_action_obj_usize,
         // Three fields below belong to the cloned rows. With those off the struct update at the
@@ -295,37 +295,37 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         // swap, no picked save to ingest, no build import to redraw a portrait for.
         #[cfg(feature = "quit-rows")]
         system_quit_save_swap_restore_profile_summary:
-            crate::experiments::system_quit_save_swap_restore_profile_summary,
+            crate::system_quit_save_swap_restore_profile_summary,
         system_quit_save_swap_arm_original:
-            crate::experiments::system_quit_save_swap_arm_original,
-        save_picker_start_dir: crate::experiments::save_picker_start_dir,
+            crate::system_quit_save_swap_arm_original,
+        save_picker_start_dir: crate::save_picker_start_dir,
         #[cfg(feature = "quit-rows")]
-        system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
+        system_quit_ingest_picked_save: crate::system_quit_ingest_picked_save,
         save_dest_start_dir: save_dest_start_dir_for_quit_menu,
-        save_dest_set_target: crate::experiments::save_dest_set_target,
+        save_dest_set_target: crate::save_dest_set_target,
         // The two box seams that stood here are gone: their implementations moved into
         // `er-quit-menu-core` with the flow, so the crate calls them directly. What replaced them is
         // the pair the flow still cannot answer for itself -- the builder capture this DLL installs,
         // and where this DLL redirects the game's save writer.
-        install_msgbox_builder_capture: crate::experiments::install_auto_accept_hook,
-        save_redirect_native_source_dir: crate::experiments::save_redirect_native_source_dir,
+        install_msgbox_builder_capture: crate::install_auto_accept_hook,
+        save_redirect_native_source_dir: crate::save_redirect_native_source_dir,
         // Where the loaded save is, answered from this DLL's own redirect state. Left to the seam
         // default, the quit menu searched every account folder under `%APPDATA%\EldenRing` and took
         // the newest container, so a second Steam account's folder got statted on 2026-10-13; that
         // stat is what armed the "picked save did not load" picker mid-session. The default could
         // also have named the other account's file as the save to back up and restore.
-        system_quit_env_save_path: crate::experiments::system_quit_env_save_path,
-        system_quit_env_save_dir: crate::experiments::system_quit_env_save_dir,
+        system_quit_env_save_path: crate::system_quit_env_save_path,
+        system_quit_env_save_dir: crate::system_quit_env_save_dir,
         // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:
             er_profile_summary_core::live_records::system_quit_profile_summary_ptr,
         // The shared software keyboard moved with the link field it also serves, so the picker's
         // half of it now reaches the picker's own browse surface through the seam.
-        save_picker_stage_row_records: crate::experiments::save_picker_stage_row_records,
-        reset_path_editor_caret_latch: crate::experiments::reset_path_editor_caret_latch,
+        save_picker_stage_row_records: crate::save_picker_stage_row_records,
+        reset_path_editor_caret_latch: crate::reset_path_editor_caret_latch,
         #[cfg(feature = "quit-rows")]
-        build_import_applied: crate::experiments::build_url_refresh_character_portrait,
+        build_import_applied: crate::build_url_refresh_character_portrait,
         ..er_quit_menu_core::QuitMenuHost::defaults()
     });
     // Title-flow crate split: wire the er-title-flow seam to the real product fns, same
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // is nothing to re-apply after the return-title save -- which is what the seam default does.
     #[cfg(feature = "quit-rows")]
     let save_swap_recommit_after_title_save =
-        crate::experiments::system_quit_save_swap_recommit_after_return_title_save;
+        crate::system_quit_save_swap_recommit_after_return_title_save;
     #[cfg(not(feature = "quit-rows"))]
     let save_swap_recommit_after_title_save = er_title_flow::TitleFlowHost::defaults()
         .system_quit_save_swap_recommit_after_return_title_save;
@@ -350,55 +350,55 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         ingamestep_request_code_name: crate::constants::ingamestep_request_code_name,
         movemapstep_step_name: crate::constants::movemapstep_step_name,
         title_step_state_name: crate::constants::title_step_state_name,
-        autoload_disabled: crate::experiments::autoload_disabled,
+        autoload_disabled: crate::autoload_disabled,
         cleanup_title_dialog_after_world_enabled:
-            crate::experiments::cleanup_title_dialog_after_world_enabled,
+            crate::cleanup_title_dialog_after_world_enabled,
         // Permanently-off gates: the product-side fns were deleted; er-title-flow still declares the
         // seam fields, so wire them to a literal-false closure rather than editing the core crate.
         experimental_direct_menu_load_enabled: || false,
         fire_tfc_continue_enabled: || false,
-        force_profile_render_enabled: crate::experiments::force_profile_render_enabled,
+        force_profile_render_enabled: crate::force_profile_render_enabled,
         native_profile_capture_enabled: || false,
-        product_autoload_enabled: crate::experiments::product_autoload_enabled,
-        profile_select_load_flow_enabled: crate::experiments::profile_select_load_flow_enabled,
+        product_autoload_enabled: crate::product_autoload_enabled,
+        profile_select_load_flow_enabled: crate::profile_select_load_flow_enabled,
         title_accept_byte_gate_enabled: || false,
         title_proceed_gate_enabled: || false,
-        pab_advance_enabled: crate::experiments::pab_advance_enabled,
-        outgoing_teardown_enabled: crate::experiments::outgoing_teardown_enabled,
+        pab_advance_enabled: crate::pab_advance_enabled,
+        outgoing_teardown_enabled: crate::outgoing_teardown_enabled,
         outgoing_teardown_suppresses_holds:
-            crate::experiments::outgoing_teardown_suppresses_holds,
-        switch_reload_ownload_disabled: crate::experiments::switch_reload_ownload_disabled,
-        title_anim_speedup_factor: crate::experiments::title_anim_speedup_factor,
-        direct_save_file_source_active: crate::experiments::direct_save_file_source_active,
-        missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
-        save_override_telemetry_only: crate::experiments::save_override_telemetry_only,
+            crate::outgoing_teardown_suppresses_holds,
+        switch_reload_ownload_disabled: crate::switch_reload_ownload_disabled,
+        title_anim_speedup_factor: crate::title_anim_speedup_factor,
+        direct_save_file_source_active: crate::direct_save_file_source_active,
+        missing_save_selection_pending: crate::missing_save_selection_pending,
+        save_override_telemetry_only: crate::save_override_telemetry_only,
         refresh_direct_source_profile_summary:
-            crate::experiments::refresh_direct_source_profile_summary,
-        direct_source_slot_summary_real: crate::experiments::direct_source_slot_summary_real,
+            crate::refresh_direct_source_profile_summary,
+        direct_source_slot_summary_real: crate::direct_source_slot_summary_real,
         boot_slot_summary_real: er_profile_summary_core::picked_refresh::boot_slot_summary_real,
-        create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
-        install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
-        decode_thunk_hop: crate::experiments::decode_thunk_hop,
-        scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
-        resolve_menu_system_save_load: crate::experiments::resolve_menu_system_save_load,
-        fire_product_title_load_action: crate::experiments::fire_product_title_load_action,
-        product_continue_action_ready: crate::experiments::product_continue_action_ready,
-        product_continue_autoload_tick: crate::experiments::product_continue_autoload_tick,
-        native_fullread_tick: crate::experiments::native_fullread_tick,
-        resolve_active_load_slot: crate::experiments::resolve_active_load_slot,
-        mark_tfc_forced_continue_handoff: crate::experiments::mark_tfc_forced_continue_handoff,
-        own_stepper_enter_s2_phase: crate::experiments::own_stepper_enter_s2_phase,
-        own_stepper_stage2: crate::experiments::own_stepper_stage2,
-        own_load_switch_reload_fire: crate::experiments::own_load_switch_reload_fire,
-        blockres_stalecap_fix_enabled: crate::experiments::blockres_stalecap_fix_enabled,
-        map_mount_guard_flip_tick: crate::experiments::map_mount_guard_flip_tick,
-        run_ebl_mount_census: crate::experiments::run_ebl_mount_census,
-        fake_loading_screen_visible: crate::experiments::fake_loading_screen_visible,
-        now_loading_active: crate::experiments::now_loading_active,
-        force_profile_render_tick: crate::experiments::force_profile_render_tick,
+        create_continue_trace_hook: crate::create_continue_trace_hook,
+        install_auto_accept_hook: crate::install_auto_accept_hook,
+        decode_thunk_hop: crate::decode_thunk_hop,
+        scan_dialog_for_loadgame: crate::scan_dialog_for_loadgame,
+        resolve_menu_system_save_load: crate::resolve_menu_system_save_load,
+        fire_product_title_load_action: crate::fire_product_title_load_action,
+        product_continue_action_ready: crate::product_continue_action_ready,
+        product_continue_autoload_tick: crate::product_continue_autoload_tick,
+        native_fullread_tick: crate::native_fullread_tick,
+        resolve_active_load_slot: crate::resolve_active_load_slot,
+        mark_tfc_forced_continue_handoff: crate::mark_tfc_forced_continue_handoff,
+        own_stepper_enter_s2_phase: crate::own_stepper_enter_s2_phase,
+        own_stepper_stage2: crate::own_stepper_stage2,
+        own_load_switch_reload_fire: crate::own_load_switch_reload_fire,
+        blockres_stalecap_fix_enabled: crate::blockres_stalecap_fix_enabled,
+        map_mount_guard_flip_tick: crate::map_mount_guard_flip_tick,
+        run_ebl_mount_census: crate::run_ebl_mount_census,
+        fake_loading_screen_visible: crate::fake_loading_screen_visible,
+        now_loading_active: crate::now_loading_active,
+        force_profile_render_tick: crate::force_profile_render_tick,
         system_quit_save_swap_recommit_after_return_title_save: save_swap_recommit_after_title_save,
-        title_update_detour: crate::experiments::title_update_detour,
-        pab_node_update_detour: crate::experiments::pab_node_update_detour,
+        title_update_detour: crate::title_update_detour,
+        pab_node_update_detour: crate::pab_node_update_detour,
     });
     er_d3d12_compositor::set_frame_provider(boot_view_d3d12_compositor_frame);
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);

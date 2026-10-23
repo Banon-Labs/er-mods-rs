@@ -17,7 +17,7 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
-use crate::{experiments::*, ffi::*, hooks::*, telemetry::*};
+use crate::{ffi::*, hooks::*, telemetry::*};
 
 pub(crate) const NO_PROCESS_HANDLE: usize = 0;
 

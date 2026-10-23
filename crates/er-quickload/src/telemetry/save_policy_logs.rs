@@ -14,7 +14,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     const GAME_MAN_DESERIALIZE_READY_DF0_OFFSET: usize =
         core::mem::offset_of!(GameManSaveSnapshotLayout, deserialize_ready);
 
-    let Ok(base) = crate::experiments::game_module_base() else {
+    let Ok(base) = crate::game_module_base() else {
         body.push_str("  \"save_snapshot_available\": false,\n");
         return;
     };
@@ -24,7 +24,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         NULL_POINTER_VALUE
     } else {
         unsafe {
-            crate::experiments::safe_read_usize(
+            crate::safe_read_usize(
                 game_data_man + crate::SLOT_MANAGER_CONTAINER_OFFSET,
             )
         }
@@ -34,7 +34,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         None
     } else {
         unsafe {
-            crate::experiments::safe_read_usize(profile_summary + PROFILE_SLOT_ACTIVE_ARRAY_OFFSET)
+            crate::safe_read_usize(profile_summary + PROFILE_SLOT_ACTIVE_ARRAY_OFFSET)
         }
     };
     let save_mgr = crate::game_man_ptr_or_null();
@@ -42,7 +42,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         None
     } else {
         unsafe {
-            crate::experiments::safe_read_usize(save_mgr + GAME_MAN_DESERIALIZE_READY_DF0_OFFSET)
+            crate::safe_read_usize(save_mgr + GAME_MAN_DESERIALIZE_READY_DF0_OFFSET)
         }
     };
 
@@ -62,23 +62,23 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);
     const IO_DEVICE_REQHANDLE_20_OFFSET: usize =
         core::mem::offset_of!(IoDeviceSnapshotLayout, request_handle);
-    let io_pool = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA")) }
+    let io_pool = unsafe { crate::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_POOL_RVA, "FD4_IO_POOL_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_worker_manager =
-        unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_WORKER_MANAGER_RVA, "FD4_IO_WORKER_MANAGER_RVA")) }
+        unsafe { crate::safe_read_usize(er_game_base::mem::game_data_addr(base, FD4_IO_WORKER_MANAGER_RVA, "FD4_IO_WORKER_MANAGER_RVA")) }
             .unwrap_or(NULL_POINTER_VALUE);
     let stream_task = crate::runtime_heap_allocator_ptr_or_null();
-    let io_device = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, IO_DEVICE_SINGLETON_RVA, "IO_DEVICE_SINGLETON_RVA")) }
+    let io_device = unsafe { crate::safe_read_usize(er_game_base::mem::game_data_addr(base, IO_DEVICE_SINGLETON_RVA, "IO_DEVICE_SINGLETON_RVA")) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_inflight = if io_device == NULL_POINTER_VALUE {
         None
     } else {
-        unsafe { crate::experiments::safe_read_usize(io_device + IO_DEVICE_INFLIGHT_10_OFFSET) }
+        unsafe { crate::safe_read_usize(io_device + IO_DEVICE_INFLIGHT_10_OFFSET) }
     };
     let io_reqhandle = if io_device == NULL_POINTER_VALUE {
         None
     } else {
-        unsafe { crate::experiments::safe_read_usize(io_device + IO_DEVICE_REQHANDLE_20_OFFSET) }
+        unsafe { crate::safe_read_usize(io_device + IO_DEVICE_REQHANDLE_20_OFFSET) }
     };
 
     body.push_str("  \"save_snapshot_available\": true,\n");
@@ -127,10 +127,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // on validate/write). See CORRUPTED_SAVE_MSG_IDS.
     body.push_str(&format!(
         "  \"oracle_corrupted_save_seen_id\": {},\n  \"oracle_corrupted_save_load_failed_seen_id\": {},\n  \"oracle_corrupted_save_seen_count\": {},\n  \"oracle_corrupted_save_seen_caller_rva\": \"{:#x}\",\n",
-        crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst),
-        crate::experiments::CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID.load(Ordering::SeqCst),
-        crate::experiments::CORRUPTED_SAVE_SEEN_COUNT.load(Ordering::SeqCst),
-        crate::experiments::CORRUPTED_SAVE_SEEN_CALLER_RVA.load(Ordering::SeqCst)
+        crate::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst),
+        crate::CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID.load(Ordering::SeqCst),
+        crate::CORRUPTED_SAVE_SEEN_COUNT.load(Ordering::SeqCst),
+        crate::CORRUPTED_SAVE_SEEN_CALLER_RVA.load(Ordering::SeqCst)
     ));
     // Privacy-policy SEMAPHORE (privacy-policy-gated-on-character-presence-confirmed-2026-06-23):
     // this is a pre-render character/profile-summary gate, not evidence that a ToS/policy renderer was
@@ -143,7 +143,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // read/summary-population precondition so the gate is false before row/portrait rendering.
     let privacy_policy_gate = profile_summary != NULL_POINTER_VALUE
         && slot_active_bytes == Some(0)
-        && !crate::experiments::save_override_telemetry_only();
+        && !crate::save_override_telemetry_only();
     body.push_str(&format!(
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
@@ -158,7 +158,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // writes (at the title/menu) a live jg means the skip already executed this boot. This is the
     // in-process detector that was missing for "are we correctly skipping the splash screens".
     if let Some(address) = er_title_flow::splash_skip_je_address() {
-        let splash_byte = unsafe { crate::experiments::safe_read_u8(address) }.unwrap_or(0);
+        let splash_byte = unsafe { crate::safe_read_u8(address) }.unwrap_or(0);
         body.push_str(&format!(
             "  \"oracle_splash_skip_armed\": {},\n  \"oracle_splash_skip_patch_byte\": \"{:#x}\",\n",
             splash_byte == crate::SPLASH_SKIP_REPLACEMENT_JG,
@@ -926,7 +926,7 @@ static CONTINUE_TRACE_REPEATS: er_game_base::repeat::RepeatFilter =
 /// is `product_autoload_enabled()`, so every product run pays it.
 ///
 /// Collapsing at the writer rather than per hook means no call site can be added without the
-/// bound, and it keeps `experiments/**` from growing to hold a suppressor per site. Nothing in
+/// bound, and it keeps `er-quickload/src/**` from growing to hold a suppressor per site. Nothing in
 /// the repo parses this file (it is copied by `scripts/er-smoke-driver.sh` and size-polled by
 /// `scripts/er-user-session-watch.py`, neither of which reads a line), so no consumer's counting
 /// is disturbed -- and the counts are written down regardless.

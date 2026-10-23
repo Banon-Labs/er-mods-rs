@@ -428,6 +428,43 @@ def record_telemetry(repo: pathlib.Path, crate: str, log: str, line: str) -> int
     return 0
 
 
+# A waiver has to say what it is for, and a reason that fits in a word does not.
+MIN_WAIVER_REASON = 20
+
+
+def record_waiver(repo: pathlib.Path, crate: str, reason: str) -> int:
+    """Append the user's waiver for one crate, for a change no instrument can measure.
+
+    Added 2026-10-22 for dissolving `crates/er-quickload/src/experiments/` into `src/`: a module
+    move has no mechanism for Frida to hook and no branch for telemetry to report, so neither
+    instrument could ever say yes to it. The user issues this from their own shell -- the policy
+    refuses it from the agent's Bash -- and it is scoped and spent like telemetry evidence: it opens
+    one crate, until the next commit to that crate.
+    """
+    if not CRATE_NAME.match(crate):
+        print(f"refused: crate name {crate!r} is not a bare `[A-Za-z0-9_-]+` directory name")
+        return 2
+    crate_dir = repo / "crates" / crate
+    if not crate_dir.is_dir():
+        print(f"refused: {crate_dir} is not a crate in this workspace")
+        return 2
+    reason = " ".join(reason.split())
+    if len(reason) < MIN_WAIVER_REASON:
+        print(
+            f"refused: the reason is {len(reason)} characters, under the {MIN_WAIVER_REASON} "
+            "it takes to say what the waiver is for"
+        )
+        return 2
+
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {"at": int(time.time()), "kind": "waiver", "crate": crate, "reason": reason}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    print(f"frida-evidence: recorded {row}")
+    return 0
+
+
 def newest_record(path: pathlib.Path) -> dict | None:
     """The last well-formed record, or `None`.
 
@@ -481,6 +518,15 @@ def check(repo: pathlib.Path, targets: list[str] | None = None) -> int:
             f"PROVEN telemetry crate={row.get('crate', '?')} "
             f"log={row.get('log', '?')} line={row.get('line', '?')!r}"
         )
+        return 0
+
+    if row.get("kind") == "waiver":
+        if head is not None and int(row.get("at", 0)) <= head:
+            print(SPENT_VERDICT)
+            return 1
+        # Same anchoring as the telemetry verdict: the policy reads `crate=` straight after the
+        # two fixed words, and the user's reason to the right of it is free text.
+        print(f"PROVEN waiver crate={row.get('crate', '?')} reason={row.get('reason', '?')!r}")
         return 0
 
     messages = int(row.get("messages", 0) or 0)
@@ -574,6 +620,28 @@ def selftest() -> int:
             said.startswith("PROVEN telemetry crate=demo-crate "),
         )
 
+        # --- the user's waiver -------------------------------------------------------------
+        ok(
+            "a waiver for a crate this workspace does not have is refused",
+            record_waiver(fake_repo, "not-a-crate", "pure move, no behaviour change at all") == 2,
+        )
+        ok(
+            "a waiver whose reason is one word is refused",
+            record_waiver(fake_repo, "demo-crate", "refactor") == 2,
+        )
+        ok(
+            "a waiver for a real crate with a reason is recorded",
+            record_waiver(fake_repo, "demo-crate", "pure move, no behaviour change at all") == 0,
+        )
+        verdict = io.StringIO()
+        with contextlib.redirect_stdout(verdict):
+            code = check(empty)
+        ok("a waiver is proven", code == 0)
+        ok(
+            "the waiver verdict opens with the field the policy anchors on",
+            verdict.getvalue().strip().startswith("PROVEN waiver crate=demo-crate "),
+        )
+
         # --- a commit spends evidence only for the crates it touched ---------------------
         #
         # A real repository with commit times set by hand, so the ordering is a fact of the
@@ -664,6 +732,20 @@ def selftest() -> int:
             "the same crate committed after the measurement is spent",
             check(git_repo, ["crates/measured/src/board.rs"]) == 1,
         )
+        log.write_text(
+            json.dumps({"at": now - 20, "kind": "waiver", "crate": "measured", "reason": "x" * 20})
+            + "\n",
+            encoding="utf-8",
+        )
+        ok(
+            "a waiver after the crate's last commit is proven",
+            check(git_repo, ["crates/measured/src/board.rs"]) == 0,
+        )
+        commit_rust("crates/measured/src/board.rs", now - 10)
+        ok(
+            "a commit to the waived crate spends the waiver",
+            check(git_repo, ["crates/measured/src/board.rs"]) == 1,
+        )
         log.write_text("", encoding="utf-8")
         ok(
             "no measurement at all is unproven whatever the target",
@@ -737,7 +819,15 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="append an in-process-telemetry record, licensing one crate",
     )
-    parser.add_argument("--crate", default="", help="the crate the telemetry record licenses")
+    parser.add_argument(
+        "--waive",
+        action="store_true",
+        help="the user's waiver for one crate (with --crate and --reason); refused from the agent",
+    )
+    parser.add_argument("--reason", default="", help="with --waive: what the waiver is for")
+    parser.add_argument(
+        "--crate", default="", help="the crate the telemetry record or waiver licenses"
+    )
     parser.add_argument("--log", default="", help="the live run's log file")
     parser.add_argument("--line", default="", help="a line that must be in that log verbatim")
     parser.add_argument("--agent", default="", help="the agent file that ran")
@@ -765,6 +855,8 @@ def main(argv: list[str]) -> int:
         return record(args.agent, args.pid, args.messages, args.seconds)
     if args.record_telemetry:
         return record_telemetry(REPO_ROOT, args.crate, args.log, args.line)
+    if args.waive:
+        return record_waiver(REPO_ROOT, args.crate, args.reason)
     if args.check:
         targets = list(args.target)
         if args.event:

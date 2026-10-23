@@ -182,7 +182,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "the park satisfies it without ever exercising the code path"
         ),
         owner=(
-            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -204,7 +204,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "satisfier that can actually run is in the build."
         ),
         owner=(
-            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(case7-savedrain-satisfy) / crates/er-title-flow/src/title_tick_cover.rs "
             "(reload-drain-b80)"
         ),
@@ -228,7 +228,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "every warp after the first reload stays dead"
         ),
         owner=(
-            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -395,8 +395,8 @@ PREDICATES: tuple[Predicate, ...] = (
             "YK0J per-frame loop"
         ),
         owner=(
-            "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs "
-            "(OWN_LOAD_SAVE_REJECTION) / experiments/own_load/drive.rs"
+            "crates/er-quickload/src/save_redirect/path_hooks.rs "
+            "(OWN_LOAD_SAVE_REJECTION) / own_load/drive.rs"
         ),
         feature="save-load-continue",
         oracle_all={

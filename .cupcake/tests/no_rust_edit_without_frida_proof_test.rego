@@ -888,3 +888,39 @@ test_deny_bash_write_with_a_conflict_verdict if {
 test_deny_conflict_verdict_from_a_failure_record if {
 	denied(edit_event(CONFLICTED, {"error": "x", "exit_code": 1, "output": conflict_verdict("rebase", CONFLICTED), "success": false}))
 }
+
+# --- the user's waiver (2026-10-22) ------------------------------------------------------------
+#
+# Copied from `scripts/er-frida-evidence.py`'s format string, which its selftest asserts.
+PROVEN_WAIVER := "PROVEN waiver crate=er-quickload reason='pure move: dissolve src/experiments/ into src/'"
+
+test_allow_the_waived_crate if {
+	count(guard.deny) == 0 with input as edit_event("crates/er-quickload/src/lib.rs", PROVEN_WAIVER)
+}
+
+test_allow_the_waived_crate_in_a_worktree if {
+	count(guard.deny) == 0 with input as edit_event(
+		"/home/u/er-mods-rs/.worktrees/x/crates/er-quickload/src/lifecycle.rs",
+		PROVEN_WAIVER,
+	)
+}
+
+# A waiver is no wider than telemetry: it must not fall through to the unscoped Frida rule.
+test_deny_another_crate_on_a_waiver if {
+	denied(edit_event("crates/er-title-flow/src/lib.rs", PROVEN_WAIVER))
+}
+
+test_deny_a_waiver_verdict_with_no_crate_field if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", "PROVEN waiver reason='x'"))
+}
+
+test_deny_the_agent_issuing_a_waiver if {
+	denied(bash_event(
+		"python3 scripts/er-frida-evidence.py --waive --crate er-quickload --reason 'pure move, no behaviour change'",
+		PROVEN,
+	))
+}
+
+test_allow_the_agent_reading_the_verdict if {
+	count(guard.deny) == 0 with input as bash_event("python3 scripts/er-frida-evidence.py --check", UNPROVEN_NOTHING)
+}

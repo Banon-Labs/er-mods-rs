@@ -151,7 +151,7 @@ YIELD_SPIN_ALLOWED = {
     Path("crates/er-game-base/src/wait.rs"),
     # Already bounded by an `Instant` deadline a few milliseconds out, not by hope.
     Path("crates/er-loading-portrait-core/src/portrait_shared.rs"),
-    Path("crates/er-quickload/src/experiments/startup_hooks/quit_menu/save_swap_profile_table.rs"),
+    Path("crates/er-quickload/src/startup_hooks/quit_menu/save_swap_profile_table.rs"),
 }
 
 

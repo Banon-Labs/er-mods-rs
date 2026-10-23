@@ -187,10 +187,18 @@ telemetry_verdict if {
 	startswith(evidence, "PROVEN telemetry")
 }
 
+# The user's waiver (2026-10-22), for a change neither instrument can measure: a module move has no
+# mechanism to hook and no branch to report. It is scoped and spent exactly like telemetry, and the
+# rule at the end of this file refuses it from the agent's Bash, so it is issued from the user's
+# own shell or not at all.
+telemetry_verdict if {
+	startswith(evidence, "PROVEN waiver")
+}
+
 # Anchored at the front of the verdict: everything to the right of the crate name is free text
 # from a log, and free text must not be able to impersonate the field that decides scope.
 licensed_crate := name if {
-	matches := regex.find_all_string_submatch_n(`^PROVEN telemetry crate=([A-Za-z0-9_-]+)(?: |$)`, evidence, 1)
+	matches := regex.find_all_string_submatch_n(`^PROVEN (?:telemetry|waiver) crate=([A-Za-z0-9_-]+)(?: |$)`, evidence, 1)
 	count(matches) == 1
 	name := matches[0][1]
 }
@@ -1093,5 +1101,26 @@ deny contains decision if {
 			"\nEvidence reader said: ",
 			said,
 		]),
+	}
+}
+
+# A waiver is the user's to issue (2026-10-22). Written as plain substring tests rather than a
+# regex over the whole command, for the wasm regex-cache defect described above. It over-refuses a
+# command that merely mentions both words, which costs a Read instead of a grep.
+waiver_command if {
+	command := object.get(object.get(input, "tool_input", {}), "command", "")
+	contains(command, "er-frida-evidence.py")
+	contains(command, "--waive")
+}
+
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	tool_name == "Bash"
+	waiver_command
+
+	decision := {
+		"rule_id": "ER-EFFECTS-NO-RUST-EDIT-WITHOUT-FRIDA-PROOF",
+		"severity": "HIGH",
+		"reason": "🧁 Cupcake blocked the agent issuing a waiver. `er-frida-evidence.py --waive` is the user's answer to a change no instrument can measure, so it runs from the user's own shell: open a kitty tab for it with `python3 scripts/kitty-user-command.py --command-file <file>` and let the user submit it.",
 	}
 }

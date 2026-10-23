@@ -221,7 +221,7 @@ FD4_PAD_BUILDER_A = dict(
 # `FD4::FD4PadDevice` above, and the whole reason these two sit next to each other here. `this` is
 # rdi after `mov rdi,rcx`; rcx is admitted for the first three instructions before the move.
 #
-# This is the function `crates/er-quickload/src/experiments/can_move_probe.rs` detours, and the
+# This is the function `crates/er-quickload/src/can_move_probe.rs` detours, and the
 # object it writes `+0x89c`/`+0x8a0` into is this function's own `this`. The class is established
 # from the image, not from a name: the pointer to this function occurs exactly once in each flat
 # image (1.16.2 0x1430ca030, 1.17 0x1430cd170), both at `+0x128` of the vtable at 0x1430c9f08 ->
@@ -1314,19 +1314,19 @@ PINNED_CONSTANTS = (
     ("VK_ID_MAX", "crates/er-input-harness/src/pad_inject.rs", 1080, "FD4PadDevice"),
     # The analog-stick field the move probe writes. It belongs to `DLUID::PadDevice` (0xa68) and
     # to nothing else in that four-class family, which is what the sweep's vtable test enforces.
-    ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
-    ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
+    ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
+    ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
     # The pointer walk that reaches those two floats: FD4PadManager -> padDevices[i] ->
     # FD4PadDevice -> devices[slot] -> DLUID::PadDevice. `er-input-harness` spells the manager's
     # two offsets under different names (pinned above), and this gate looks a name up tree-wide, so
     # the can_move_probe copies were unwatched until 2026-09-01 despite being the base half of a
     # write. The capacity is here for the same reason `VK_ID_MAX` is: it is a bound, and the loop
     # that clamps to it is what keeps the walk inside the game's own DLFixedVector<_,4>.
-    ("PAD_MGR_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x18, "FD4PadManager"),
-    ("PAD_MGR_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x40, "FD4PadManager"),
-    ("FD4PADDEVICE_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x10, "FD4PadDevice"),
-    ("FD4PADDEVICE_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x38, "FD4PadDevice"),
-    ("FD4PADDEVICE_DEVICES_CAPACITY", "crates/er-quickload/src/experiments/can_move_probe.rs", 4, "FD4PadDevice"),
+    ("PAD_MGR_DEVICES_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x18, "FD4PadManager"),
+    ("PAD_MGR_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x40, "FD4PadManager"),
+    ("FD4PADDEVICE_DEVICES_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x10, "FD4PadDevice"),
+    ("FD4PADDEVICE_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/can_move_probe.rs", 0x38, "FD4PadDevice"),
+    ("FD4PADDEVICE_DEVICES_CAPACITY", "crates/er-quickload/src/can_move_probe.rs", 4, "FD4PadDevice"),
     # ---- The name-provenance sweep (2026-08-31) ---------------------------------------------
     # Constants whose only stated provenance was a name. The sweep measured all of them and all of
     # them were right, so nothing here is a correction -- these rows exist so that the next edit
@@ -1373,8 +1373,8 @@ PINNED_CONSTANTS = (
     ("GAME_MAN_ENDING_FLAG_B7D_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0xB7D, "CS::GameMan"),
     ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-reload-trace/src/lib.rs", 0xB80, "CS::GameMan"),
     ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-input-harness/src/game_mem.rs", 0xB80, "CS::GameMan"),
-    ("GAME_MAN_DLDATETIME_B98_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xB98, "CS::GameMan"),
-    ("GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET", "crates/er-quickload/src/experiments/own_stepper/bootstrap_drive.rs", 0xBA0, "CS::GameMan"),
+    ("GAME_MAN_DLDATETIME_B98_OFFSET", "crates/er-quickload/src/own_stepper/bootstrap_drive.rs", 0xB98, "CS::GameMan"),
+    ("GAME_MAN_DLDATETIME_B98_UPPER_BA0_OFFSET", "crates/er-quickload/src/own_stepper/bootstrap_drive.rs", 0xBA0, "CS::GameMan"),
     ("GAME_MAN_QUIT_PHASE_OFFSET", "crates/er-save-suppress/build.rs", 0xBC4, "CS::GameMan"),
     ("GAME_MAN_QUIT_PHASE_BC4_OFFSET", "crates/er-save-suppress/src/lib.rs", 0xBC4, "CS::GameMan"),
     ("GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET", "crates/er-title-flow/src/constants_return_title.rs", 0xBC9, "CS::GameMan"),

@@ -59,7 +59,7 @@ portrait = []
 # Menu construction and native-result tracing.
 #
 # It was called diagnostics-only when it was drawn, and that is not what it holds, so no
-# composition can currently leave it out. `experiments/trace/menu_trace_hooks.rs` also carries four
+# composition can currently leave it out. `src/trace/menu_trace_hooks.rs` also carries four
 # things tracing does not own: `b80_mount_trace_summary`, read by the crash log and by the
 # System>Quit repro guard, and the second-load stall fix -- `blockres_stalecap_fix_enabled`,
 # `map_mount_guard_flip_tick` and `run_ebl_mount_census`, all three named as host-seam fields the
@@ -87,7 +87,7 @@ er-hook = { path = "../er-hook" }
 er-scaleform-hooks = { path = "../er-scaleform-hooks" }
 # Shared low-level foundation (fault-safe RAM readers, game base/rva, stable
 # singleton RVA table, logger core). Source of truth for primitives previously
-# defined in experiments/mem.rs. game-types re-exports the typed game bindings.
+# defined in src/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
 # Diagnostic-only boot CPU/RIP sampler. The product starts it at the existing early attach point;
 # the crate owns its opt-in policy, sampling mechanism, and NDJSON output.

@@ -304,7 +304,7 @@ FROZEN_NEGATIVE_FILES = (
         "takes its target UNRESOLVED and resolves it exactly once itself",
     ),
     (
-        "crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs",
+        "crates/er-quickload/src/startup_hooks/loading_cover/profile_table_gfx_files.rs",
         "three sums that ARE the argument to `resolve_game_address`",
     ),
 )

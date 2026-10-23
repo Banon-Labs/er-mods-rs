@@ -231,10 +231,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(
     // left was which side of this line the consumer sat on.
     zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
     if hr == 0 && !data.is_null() {
-        crate::experiments::save_picker_latch_dinput_keyboard_state(
-            data as *const u8,
-            size as usize,
-        );
+        crate::save_picker_latch_dinput_keyboard_state(data as *const u8, size as usize);
     }
     raw
 }

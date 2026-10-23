@@ -132,7 +132,7 @@ YOUR LANE: how do we make the caption render "RL" instead of "Level"?
 Investigate, in order:
 1. Read crates/er-quickload/src/constants/stats_panel_text.rs around lines 100-200 in full.
 2. Find every place the DLL already writes text into a ProfileSelect row field. Start from
-   crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs
+   crates/er-quickload/src/startup_hooks/loading_cover/title_resources_stats_text.rs
    (it is large \u2014 find the SetText helpers, the row text pass, apply_row_slot_info_visibility around
    line 1240, and profile_editor_live_text_for_field around line 777). Establish EXACTLY which
    mechanism successfully writes ErStats / ErCharStats / DriveCell_* today, and whether that same

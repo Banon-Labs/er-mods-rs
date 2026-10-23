@@ -101,17 +101,17 @@ fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool
             false,
         );
     }
-    let menu_id = unsafe { crate::experiments::safe_read_u16(window + 0x180) }
+    let menu_id = unsafe { crate::safe_read_u16(window + 0x180) }
         .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
     if menu_id >= 0x47 {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
     }
-    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
+    let cs_menu_man = unsafe { crate::safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) }
         .unwrap_or(NULL_PTR);
     if cs_menu_man == NULL_PTR {
         return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
     }
-    let flags = unsafe { crate::experiments::safe_read_u8(cs_menu_man + 0x90 + menu_id) }
+    let flags = unsafe { crate::safe_read_u8(cs_menu_man + 0x90 + menu_id) }
         .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
     let draw_bit_set = flags != TITLE_OWNER_SCAN_START_ADDRESS
         && (flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
@@ -125,13 +125,13 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     let gfx_value = title_logo_back_view_parts + TITLE_LOGO_GFX_VALUE_88_OFFSET;
-    let Some(handle) = (unsafe { crate::experiments::safe_read_usize(gfx_value) }) else {
+    let Some(handle) = (unsafe { crate::safe_read_usize(gfx_value) }) else {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     };
     if handle == 0 || handle == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
-    let Some(vtable) = (unsafe { crate::experiments::safe_read_usize(handle) }) else {
+    let Some(vtable) = (unsafe { crate::safe_read_usize(handle) }) else {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     };
     if vtable == 0 || vtable == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -146,17 +146,17 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     // outside [game_base, +SizeOfImage); crash self+0x317bd `call *rdx`). Reject any vtable / resolved
     // call target that is not inside the game module image before the transmute+call. See bd
     // er-effects-rs-3pc (post-switch reload crash).
-    if !crate::experiments::vtable_in_game_image(vtable, base) {
+    if !crate::vtable_in_game_image(vtable, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
-    let Some(resolve_value_addr) = (unsafe { crate::experiments::safe_read_usize(vtable + 0x8) })
+    let Some(resolve_value_addr) = (unsafe { crate::safe_read_usize(vtable + 0x8) })
     else {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     };
     if resolve_value_addr == 0 || resolve_value_addr == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
-    if !crate::experiments::vtable_in_game_image(resolve_value_addr, base) {
+    if !crate::vtable_in_game_image(resolve_value_addr, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
@@ -168,6 +168,6 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     let current_frame: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(match crate::experiments::gated_game_fn(TITLE_LOGO_GFX_CURRENT_FRAME_RVA, "TITLE_LOGO_GFX_CURRENT_FRAME_RVA") { Some(address) => address, None => return 0 }) };
+        unsafe { std::mem::transmute(match crate::gated_game_fn(TITLE_LOGO_GFX_CURRENT_FRAME_RVA, "TITLE_LOGO_GFX_CURRENT_FRAME_RVA") { Some(address) => address, None => return 0 }) };
     unsafe { current_frame(value) }
 }

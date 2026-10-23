@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Ratchet `crates/er-quickload/src/experiments/**` and verify the critical caller ledger.
+"""Ratchet er-quickload's ledgered source and verify the critical caller ledger.
 
 `er-quickload` is being extracted into crates until it is a thin shim that bundles them, so
-the line count under `experiments/**` is a number that may shrink but must never grow. The
+the line count of its ledgered source is a number that may shrink but must never grow. The
 ledger row in the roadmap is the high-water mark; this gate fails when measured source has
 climbed past it.
+
+The ledgered source is every `.rs` file under `crates/er-quickload/src/` except the modules in
+`NOT_LEDGERED`. Until 2026-10-22 it was the `src/experiments/` directory; that directory was
+dissolved into `src/` and its files kept their relative paths, so the ledger rows did not change.
+`NOT_LEDGERED` is exactly what sat beside `experiments/` and was never measured, which keeps the
+scope as it was -- and a new module at the crate root is ledgered by default, so it is still caught
+as born in the shim.
 
 It is a ratchet, not a freeze. Edits are free -- a bug fix that rewrites 300 lines in place
 passes untouched, and so does a refactor that moves lines between files. Only net growth in
@@ -36,8 +43,28 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPERIMENTS = ROOT / "crates/er-quickload/src/experiments"
 SOURCE = ROOT / "crates/er-quickload/src"
+# The crate-root modules that were never under `experiments/` and never ledgered: a file is exempt
+# when its path relative to `SOURCE` equals one of these or starts with one ending in `/`.
+NOT_LEDGERED = (
+    "autoload_cover_gates.rs",
+    "config.rs",
+    "constants.rs",
+    "constants/",
+    "crashlog.rs",
+    "crashlog/",
+    "ffi.rs",
+    "hooks.rs",
+    "input_blocker.rs",
+    "lib.rs",
+    "lib_parts/",
+    "menu_window_run_gate.rs",
+    "mh.rs",
+    "orphan_title_window.rs",
+    "profile_select_chrome_gate.rs",
+    "telemetry.rs",
+    "telemetry/",
+)
 # Roots a partition function may legitimately be defined in. The whole point of the roadmap is
 # that code leaves `er-quickload/src`, so a required edge whose definition has already moved into
 # its extracted crate is the refactor working, not a missing function. The caller side is still
@@ -45,16 +72,16 @@ SOURCE = ROOT / "crates/er-quickload/src"
 DEFINITION_ROOTS = (SOURCE, ROOT / "crates/er-quit-menu-core/src")
 ROADMAP = ROOT / "docs/plans/crate-extraction-execution-roadmap.md"
 ROW = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|", re.MULTILINE)
-TOTAL = re.compile(r"^\| all `experiments/\*\*` \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
+TOTAL = re.compile(r"^\| all ledgered source \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
 FORBIDDEN_OWNERSHIP = re.compile(
     r"UNANALYSED|UNANALYZED|UNCLASSIFIED|APPROXIMATE(?:LY)?|ESTIMAT(?:E|ED|ES)|~",
     re.IGNORECASE,
 )
 # Matched by pattern, not by literal text, because the heading carries the file count and the
-# count changes every time a file enters or leaves `experiments/**`. A literal match makes a
+# count changes every time a file enters or leaves the ledgered source. A literal match makes a
 # truthful heading update break the gate, which pressures the next person to leave the number
 # stale instead. Nothing is lost: the count is separately and exactly validated against
-# measured source by the `all experiments/**` total row below.
+# measured source by the `all ledgered source` total row below.
 LEDGER_HEADING = re.compile(
     r"^## Appendix A -- R1 current \d+-file partition and caller ledger$", re.MULTILINE
 )
@@ -62,19 +89,17 @@ LEDGER_HEADING = re.compile(
 # These are source edges that define the ownership seams R1 refreshes. A later move must
 # update this table and the roadmap in the same PR; it cannot silently preserve an old caller map.
 REQUIRED_EDGES = {
-    "save_flow_tick": {"experiments/lifecycle/task_tick.rs"},
+    "save_flow_tick": {"lifecycle/task_tick.rs"},
     "tick_before_player_lookup": {"lib_parts/dll_entry_parts/task_registration.rs"},
     "install_title_visual_startup_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
     "install_profile_and_system_quit_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
     "install_boot_diagnostics_and_trace_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
-    "own_load_pump_tick": {"experiments/lifecycle/task_tick.rs"},
+    "own_load_pump_tick": {"lifecycle/task_tick.rs"},
     "own_load_switch_reload_fire": set(),
     "enforce_save_override_or_abort": {"lib_parts/dll_entry_parts/bootstrap.rs"},
-    "install_save_redirect_hooks": {"experiments/save_redirect/path_hooks.rs"},
+    "install_save_redirect_hooks": {"save_redirect/path_hooks.rs"},
     "profile_editor_necromancy_tick": {"lib_parts/dll_entry_parts/task_registration.rs"},
-    "profile_editor_runtime_tick": {
-        "experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
-    },
+    "profile_editor_runtime_tick": {"startup_hooks/loading_cover/title_resources_stats_text.rs"},
     # Left experiments/** entirely on 2026-09-11: the in-game save picker moved to
     # `er-quit-menu-core`, so both the function and its caller now live outside this scan root.
     # An empty set is the honest entry, the same way `own_load_switch_reload_fire` spells it --
@@ -101,10 +126,18 @@ REQUIRED_TERMS = {
 }
 
 
-def current_inventory(root: Path = EXPERIMENTS) -> dict[str, int]:
+def ledgered(relative: str) -> bool:
+    return not any(
+        relative.startswith(entry) if entry.endswith("/") else relative == entry
+        for entry in NOT_LEDGERED
+    )
+
+
+def current_inventory(root: Path = SOURCE) -> dict[str, int]:
     return {
-        path.relative_to(root).as_posix(): sum(1 for _ in path.open(encoding="utf-8", errors="replace"))
+        relative: sum(1 for _ in path.open(encoding="utf-8", errors="replace"))
         for path in sorted(root.rglob("*.rs"))
+        if ledgered(relative := path.relative_to(root).as_posix())
     }
 
 
@@ -145,13 +178,13 @@ def ratchet(
     ledger_count: int,
     text: str,
 ) -> tuple[list[str], list[str]]:
-    """Compare measured `experiments/**` against the ledger as a ratchet, not an equality.
+    """Compare the measured ledgered source against the ledger as a ratchet, not an equality.
 
     Returns `(errors, notes)`. Notes are printed and do not fail the gate.
 
     Hard FAILURES:
       * total measured lines exceed the ledger total (the ratchet itself);
-      * a file under `experiments/**` with no ledger row (a module born in the shim carrying
+      * a file under the ledgered source with no ledger row (a module born in the shim carrying
         no ownership claim -- the exact leak this gate exists for, and the one case the line
         total can miss when a large extraction has left slack);
       * the roadmap's own integrity: a missing total row, a duplicated ledger heading, a
@@ -160,7 +193,7 @@ def ratchet(
     Deliberately not failures, because they are edits and extraction rather than growth:
       * per-file line drift in either direction -- a 300-line in-place bug fix must pass;
       * a file shrinking, or the total shrinking (that is the point of the whole refactor);
-      * a ledger row whose file has left `experiments/**` (it was extracted; `--refresh`
+      * a ledger row whose file has left the ledgered source (it was extracted; `--refresh`
         drops the row).
     """
     errors: list[str] = []
@@ -187,14 +220,14 @@ def ratchet(
                 for delta, path in reversed(grew)
             )
             errors.append(
-                f"experiments/** GREW past the ledger: {ledger_lines:,} -> {current_lines:,} lines "
+                f"the ledgered source GREW past the ledger: {ledger_lines:,} -> {current_lines:,} lines "
                 f"(+{current_lines - ledger_lines:,}), {ledger_files} -> {len(current)} files.\n"
                 "er-quickload is being extracted INTO crates, so this number may shrink but "
                 f"never grow.\n{detail}"
             )
         elif current_lines < ledger_lines:
             notes.append(
-                f"experiments/** is {ledger_lines - current_lines:,} lines BELOW the ledger "
+                f"the ledgered source is {ledger_lines - current_lines:,} lines BELOW the ledger "
                 f"({ledger_lines:,} -> {current_lines:,}); allowed, and the point of the refactor. "
                 "Run --refresh to tighten the ratchet onto the new floor -- a baseline that is "
                 "never lowered after an extraction silently permits regrowth back up to it."
@@ -208,7 +241,7 @@ def ratchet(
         errors.append(GROWTH_REMEDY)
     if stale:
         notes.append(
-            "ledger rows whose file has left experiments/**: "
+            "ledger rows whose file has left the ledgered source: "
             + ", ".join(stale)
             + " (extraction; --refresh drops them)"
         )
@@ -247,7 +280,7 @@ def _fixture_roadmap(rows: dict[str, int], total: tuple[int, int] | None = None)
         + "\n".join(sorted(REQUIRED_TERMS))
         + "\n\n| file | lines | owner |\n|---|---|---|\n"
         + f"{body}\n"
-        + f"| all `experiments/**` | {files:,} | {lines:,} |\n"
+        + f"| all ledgered source | {files:,} | {lines:,} |\n"
     )
 
 
@@ -271,7 +304,7 @@ def _run_fixture(text: str, current: dict[str, int]) -> list[str]:
 def _refresh_fixture(rows: dict[str, int], tree: dict[str, int]) -> tuple[int, list[str]]:
     """Materialise a real tree + roadmap on disk, run `--refresh`, then re-run the ratchet."""
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "experiments"
+        root = Path(tmp) / "src"
         for path, count in tree.items():
             target = root / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -336,15 +369,28 @@ def selftest() -> int:
     if code == 0 or not after:
         failures.append(f"refresh must not invent a row for a new file: exit={code} errors={after}")
 
+    # The scope: the modules that sat beside `experiments/` stay out, and anything else under
+    # `src/` -- a new module at the crate root included -- is ledgered.
+    for relative, want in (
+        ("lib.rs", False),
+        ("telemetry/runtime_oracles/write_oracle.rs", False),
+        ("constants/system_quit.rs", False),
+        ("lifecycle/task_tick.rs", True),
+        ("brand_new_module.rs", True),
+        ("constantsx.rs", True),
+    ):
+        if ledgered(relative) != want:
+            failures.append(f"scope: ledgered({relative!r}) should be {want}")
+
     if failures:
         for failure in failures:
             print(f"[check-crate-extraction-roadmap] selftest FAILED: {failure}", file=sys.stderr)
         return 1
-    print(f"[check-crate-extraction-roadmap] selftest ok ({len(cases) + 7} cases)")
+    print(f"[check-crate-extraction-roadmap] selftest ok ({len(cases) + 13} cases)")
     return 0
 
 
-def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
+def refresh(roadmap: Path = ROADMAP, root: Path = SOURCE) -> int:
     """Rewrite the ledger's line counts and total from measured source.
 
     This is the ratchet's deliberate escape hatch and must stay trivially runnable: growth
@@ -352,7 +398,7 @@ def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
     baseline after an extraction is the same command. What it buys is that either decision
     lands as a diff a reviewer can see.
 
-    The ledger is a measured mirror of `experiments/**`, not a plan of intent -- a row exists
+    The ledger is a measured mirror of the ledgered source, not a plan of intent -- a row exists
     if and only if the file exists, with an exact line count, and the total row must match
     (file count, summed lines). So there is no judgement to apply and the refresh is mechanical,
     which is exactly why it belongs in the tool rather than in an ad-hoc script written from
@@ -361,7 +407,7 @@ def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
     the gate) before this mode existed.
 
     Only the count column is rewritten. The description and R-number columns are authored
-    judgement and are preserved verbatim; a row whose file has left `experiments/**` is dropped,
+    judgement and are preserved verbatim; a row whose file has left the ledgered source is dropped,
     and a file with no row is reported rather than invented, because inventing one would mean
     inventing the ownership claim next to it.
     """
@@ -390,14 +436,14 @@ def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
     text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
     text = TOTAL.sub(
-        f"| all `experiments/**` | {len(inventory):,} | {sum(inventory.values()):,} |", text
+        f"| all ledgered source | {len(inventory):,} | {sum(inventory.values()):,} |", text
     )
     roadmap.write_text(text, encoding="utf-8")
 
     for entry in retuned:
         print(f"[check-crate-extraction-roadmap] retuned {entry}")
     for entry in dropped:
-        print(f"[check-crate-extraction-roadmap] dropped (file left experiments/**): {entry}")
+        print(f"[check-crate-extraction-roadmap] dropped (file left the ledgered source): {entry}")
     missing = sorted(set(inventory) - seen)
     for entry in missing:
         print(
@@ -445,7 +491,7 @@ def main() -> int:
         return 1
     ceiling = expected_total[1] if expected_total is not None else sum(current.values())
     print(
-        "[check-crate-extraction-roadmap] ok -- experiments/** is "
+        "[check-crate-extraction-roadmap] ok -- the ledgered source is "
         f"{len(current)} files / {sum(current.values()):,} lines, at or under the "
         f"{ceiling:,}-line ledger ceiling; critical caller edges match"
     )

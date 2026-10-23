@@ -966,7 +966,7 @@ def audit(rows, old, new, old_cm, new_cm):
 # one and the source address when it does not; an address is a strictly more stable pin, and the
 # set still only shrinks.
 UNANCHORED = {
-    # `crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1248` -- the lazy
+    # `crates/er-quickload/src/trace/menu_trace_hooks.rs:1248` -- the lazy
     # `CSEblFileManager` slot. ACCESSOR-WEAK: exactly one surviving reference and it agrees. The
     # data map carries it on a bracket (0x3d5b078 and 0x3d5b0f4, both +0x4060, 105 anchors in
     # +-0x400) plus a shape count of 10 sites each side -- neither of which is an anchor this file

@@ -334,18 +334,6 @@ def _md():
         expect("markdown-code-blocks", "spec/skip-directive", rc, out, False)
 
 
-@control("experiments-rustfmt", baseline=["python3", "scripts/check-experiments-rustfmt.py"])
-def _expfmt():
-    g = ["python3", "scripts/check-experiments-rustfmt.py"]
-    p = "crates/er-quickload/src/experiments/_pc_probe_fmt.rs"
-    with new_file(p, "fn  _pc_probe( )   ->u8{  1  }\n"):
-        rc, out = run(g)
-        expect("experiments-rustfmt", "sens/misformatted", rc, out, True, ["_pc_probe_fmt.rs"])
-    with new_file(p, "fn _pc_probe() -> u8 {\n    1\n}\n"):
-        rc, out = run(g)
-        expect("experiments-rustfmt", "spec/well-formatted", rc, out, False)
-
-
 @control("launch-guardrails",
          baseline=["python3", "scripts/check-launch-guardrails.py", "--audit"])
 def _launch():
@@ -689,7 +677,7 @@ def _single_dll():
 def _own_load():
     g = ["python3", "scripts/check-own-load-save-rejection-guard.py"]
     # rename by SHORTENING: appending a suffix leaves the required token present as a prefix.
-    with edit_file("crates/er-quickload/src/experiments/save_redirect/path_hooks.rs",
+    with edit_file("crates/er-quickload/src/save_redirect/path_hooks.rs",
                    lambda t: t.replace("oracle_own_load_save_repeated_identical_rejections",
                                        "oracle_own_load_save_repeated_ident_rejections")):
         rc, out = run(g)

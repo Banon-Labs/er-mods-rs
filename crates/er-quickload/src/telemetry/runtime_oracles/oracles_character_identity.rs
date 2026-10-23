@@ -25,7 +25,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         NULL_PTR
     } else {
         unsafe {
-            crate::experiments::safe_read_usize(
+            crate::safe_read_usize(
                 gdm + crate::GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET,
             )
         }
@@ -39,7 +39,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         PLAY_TIME_READ_FAIL
     } else {
         unsafe {
-            crate::experiments::safe_read_usize(gdm + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
+            crate::safe_read_usize(gdm + crate::GAME_DATA_MAN_PLAY_TIME_A0_OFFSET)
         }
         .map_or(PLAY_TIME_READ_FAIL, |v| i64::from((v & 0xffff_ffff) as u32))
     };
@@ -100,7 +100,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         if pgd == NULL_PTR {
             ZERO_U32
         } else {
-            unsafe { crate::experiments::safe_read_usize(pgd + offset) }
+            unsafe { crate::safe_read_usize(pgd + offset) }
                 .map_or(ZERO_U32, |value| value as u32)
         }
     };
@@ -108,7 +108,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
         if pgd == NULL_PTR {
             ZERO_U32 as u8
         } else {
-            unsafe { crate::experiments::safe_read_usize(pgd + offset) }
+            unsafe { crate::safe_read_usize(pgd + offset) }
                 .map_or(ZERO_U32 as u8, |value| (value & U8_MASK) as u8)
         }
     };
@@ -199,7 +199,7 @@ fn write_character_identity_oracles(body: &mut String) -> bool {
     let mut name_idx = IDX_START;
     while pgd != NULL_PTR && name_idx < crate::PGD_NAME_LEN_U16 {
         name_units[name_idx] = unsafe {
-            crate::experiments::safe_read_usize(
+            crate::safe_read_usize(
                 pgd + crate::PGD_NAME_9C_OFFSET + name_idx * U16_STRIDE,
             )
         }

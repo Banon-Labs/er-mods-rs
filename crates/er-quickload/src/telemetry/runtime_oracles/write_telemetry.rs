@@ -168,13 +168,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // collected). The readiness watcher tears down on the terminal value instead of the cap.
     body.push_str(&format!(
         "  \"oracle_cold_char_mount_phase\": {},\n",
-        crate::experiments::COLD_CHAR_MOUNT_PHASE_PUB.load(Ordering::SeqCst)
+        crate::COLD_CHAR_MOUNT_PHASE_PUB.load(Ordering::SeqCst)
     ));
     // Own-load verify-only probe progress as phase+1 (0 = never ran, 2 = PHASE_DONE = terminal,
     // evidence collected). The readiness watcher tears down on the terminal value, not the cap.
     body.push_str(&format!(
         "  \"oracle_own_load_phase\": {},\n",
-        crate::experiments::OWN_LOAD_PHASE_PUB.load(Ordering::SeqCst)
+        crate::OWN_LOAD_PHASE_PUB.load(Ordering::SeqCst)
     ));
     // Own-load per-frame world-stream stall telemetry (own-load-reaches-loading-screen-2026-06-22 /
     // full-pipeline-traced-to-worldreswait-map-block-streaming). After own_load_continue fires
@@ -183,7 +183,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // advances (progress) or all are frozen (genuine stall). UNREAD sentinel -> JSON null (the chain
     // pointer was null / RPM faulted, distinct from a real 0). All hex except the count fields.
     let fmt_stream = |v: i64, hex: bool| -> String {
-        if v == crate::experiments::OWN_LOAD_STREAM_FIELD_UNREAD {
+        if v == crate::OWN_LOAD_STREAM_FIELD_UNREAD {
             "null".to_owned()
         } else if hex {
             format!("\"{v:#x}\"")
@@ -193,89 +193,89 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     };
     body.push_str(&format!(
         "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_forced_continue_handoff_ms\": {},\n  \"oracle_tfc_forced_continue_handoff_ms\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
-        crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
-        crate::experiments::TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
+        crate::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
+        crate::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
+        crate::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
+        crate::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
+        crate::TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_OWNER_STATE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_OWNER_STATE.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_OWNER_REQ_STATE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_OWNER_REQ_STATE.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_MMS_STATE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_MMS_STATE.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_BLOCK_COUNT.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_BLOCK_COUNT.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_REQ_COORD.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_REQ_COORD.load(Ordering::SeqCst),
             true
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_IO_INFLIGHT.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_IO_INFLIGHT.load(Ordering::SeqCst),
             true
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_IO_REQHANDLE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_IO_REQHANDLE.load(Ordering::SeqCst),
             true
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_C30.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_C30.load(Ordering::SeqCst),
             true
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_PLAYER_PRESENT.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_PLAYER_PRESENT.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_INGAME_PHASE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_INGAME_PHASE.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_REQ_BLOCKID.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_REQ_BLOCKID.load(Ordering::SeqCst),
             true
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT.load(Ordering::SeqCst),
+            crate::OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT.load(Ordering::SeqCst),
             false
         ),
-        crate::experiments::OWN_LOAD_WBR_UPDATE_CALLS.load(Ordering::SeqCst),
+        crate::OWN_LOAD_WBR_UPDATE_CALLS.load(Ordering::SeqCst),
         fmt_stream(
-            crate::experiments::OWN_LOAD_WBR_MAX_PHASE.load(Ordering::SeqCst) as i64,
+            crate::OWN_LOAD_WBR_MAX_PHASE.load(Ordering::SeqCst) as i64,
             true
         ),
-        crate::experiments::OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_INSTALL_JOB_FIRED.load(Ordering::SeqCst),
-        crate::experiments::OWN_LOAD_PUMP_FIRED.load(Ordering::SeqCst),
+        crate::OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst),
+        crate::OWN_LOAD_INSTALL_JOB_FIRED.load(Ordering::SeqCst),
+        crate::OWN_LOAD_PUMP_FIRED.load(Ordering::SeqCst),
         fmt_stream(
-            crate::experiments::OWN_LOAD_PUMP_STATE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_PUMP_STATE.load(Ordering::SeqCst),
             false
         ),
         fmt_stream(
-            crate::experiments::OWN_LOAD_PUMP_SUBCODE.load(Ordering::SeqCst),
+            crate::OWN_LOAD_PUMP_SUBCODE.load(Ordering::SeqCst),
             false
         ),
-        crate::experiments::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
+        crate::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
     ));
     // RequestMoveMap BlockId fix (bd er-effects-rs-um9g): fixups>=1 == the render-handoff fix fired on
     // this load (substituted last_c30 for the invalid last_before target BlockId).
     body.push_str(&format!(
         "  \"oracle_request_move_map_hook_calls\": {},\n  \"oracle_request_move_map_hook_fixups\": {},\n  \"oracle_request_move_map_last_before\": \"0x{:x}\",\n  \"oracle_request_move_map_last_c30\": \"0x{:x}\",\n",
-        crate::experiments::REQUEST_MOVE_MAP_HOOK_CALLS.load(Ordering::SeqCst),
-        crate::experiments::REQUEST_MOVE_MAP_FIXUPS.load(Ordering::SeqCst),
-        crate::experiments::REQUEST_MOVE_MAP_LAST_BEFORE.load(Ordering::SeqCst),
-        crate::experiments::REQUEST_MOVE_MAP_LAST_C30.load(Ordering::SeqCst),
+        crate::REQUEST_MOVE_MAP_HOOK_CALLS.load(Ordering::SeqCst),
+        crate::REQUEST_MOVE_MAP_FIXUPS.load(Ordering::SeqCst),
+        crate::REQUEST_MOVE_MAP_LAST_BEFORE.load(Ordering::SeqCst),
+        crate::REQUEST_MOVE_MAP_LAST_C30.load(Ordering::SeqCst),
     ));
     body.push_str(&format!(
         "  \"oracle_testnet_ff_fired_epoch\": {},\n",
-        crate::experiments::TESTNET_FF_FIRED_EPOCH.load(Ordering::SeqCst),
+        crate::TESTNET_FF_FIRED_EPOCH.load(Ordering::SeqCst),
     ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
@@ -974,10 +974,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // player could see it, and a refused exit means Close Game was pressed during a save write.
     body.push_str(&format!(
         "  \"oracle_load_error_screen_armed\": {},\n  \"oracle_load_error_screen_arm_count\": {},\n  \"oracle_load_error_screen_draw_hits\": {},\n  \"oracle_load_error_screen_exit_refused\": {},\n",
-        crate::experiments::LOAD_ERROR_SCREEN_ARMED.load(Ordering::SeqCst),
-        crate::experiments::LOAD_ERROR_SCREEN_ARM_COUNT.load(Ordering::SeqCst),
-        crate::experiments::LOAD_ERROR_SCREEN_DRAW_HITS.load(Ordering::SeqCst),
-        crate::experiments::LOAD_ERROR_SCREEN_EXIT_REFUSED.load(Ordering::SeqCst)
+        crate::LOAD_ERROR_SCREEN_ARMED.load(Ordering::SeqCst),
+        crate::LOAD_ERROR_SCREEN_ARM_COUNT.load(Ordering::SeqCst),
+        crate::LOAD_ERROR_SCREEN_DRAW_HITS.load(Ordering::SeqCst),
+        crate::LOAD_ERROR_SCREEN_EXIT_REFUSED.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n  \"system_quit_continue_confirm_non_switch_count\": {},\n  \"system_quit_continue_confirm_world_up_count\": {},\n  \"system_quit_continue_confirm_unproven_forward_count\": {},\n",

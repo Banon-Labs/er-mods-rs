@@ -30,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
-use crate::{crashlog::*, experiments::*, ffi::*, telemetry::*};
+use crate::{crashlog::*, ffi::*, telemetry::*};
 
 /// The boot autoload's confirm driver: it pulses the native confirm binding until the title chain
 /// has been walked, and it reads the menu trace to decide when the last pulse is allowed.
@@ -363,7 +363,7 @@ pub(crate) fn install_safe_input_hooks() {
     //
     // Not a style choice -- these two exports are contended and that one is not.
     // `er-hotkey-conflicts` arms `GetAsyncKeyState` and `GetKeyState` from its own attach thread,
-    // before the first game frame, as the conflict census; `experiments::input_block` arms
+    // before the first game frame, as the conflict census; `input_block` arms
     // `GetKeyState` and `GetKeyboardState` for focus-independent injection. A bare `MhHook::new`
     // against an export another handler already owns returns `MH_ERROR_ALREADY_CREATED`, and the
     // loser is then silently absent for the whole session -- which is exactly what the user32

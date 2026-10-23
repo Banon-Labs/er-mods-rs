@@ -11,6 +11,6 @@
 /// Advance the window state machine and emit the loadwin oracles. Called from the telemetry
 /// writer on every write (~4 Hz). Read-only against game state; writes only our own counters.
 pub(crate) fn portrait_loadwin_sample_and_write(body: &mut String) {
-    crate::experiments::ensure_loading_cover_host();
+    crate::ensure_loading_cover_host();
     er_loading_portrait_core::portrait_load_windows::portrait_loadwin_sample_and_write(body)
 }

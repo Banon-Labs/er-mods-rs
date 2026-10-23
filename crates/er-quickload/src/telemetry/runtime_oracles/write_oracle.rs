@@ -29,14 +29,14 @@ fn write_testnet_step_state_oracle(body: &mut String, stepper: usize, request_co
         if !live {
             return i64::MIN;
         }
-        unsafe { crate::experiments::safe_read_usize(stepper + off) }
+        unsafe { crate::safe_read_usize(stepper + off) }
             .map_or(i64::MIN, |v| i64::from(v as u32 as i32))
     };
     let current = rdi(TESTNETSTEP_CURRENT_STATE_48_OFFSET);
     let requested = rdi(TESTNETSTEP_REQUESTED_STATE_4C_OFFSET);
     let finish_requested = if live {
         unsafe {
-            crate::experiments::safe_read_u8(stepper + TESTNETSTEP_FINISH_REQUESTED_B4_OFFSET)
+            crate::safe_read_u8(stepper + TESTNETSTEP_FINISH_REQUESTED_B4_OFFSET)
         }
         .map_or(-1, i64::from)
     } else {
@@ -90,9 +90,9 @@ fn write_testnet_step_state_oracle(body: &mut String, stepper: usize, request_co
 /// via the cached session owner -> InGameStep+0x2e8 -> +0xe8 (same path as gm-snap).
 fn write_stepfinish_gate_oracle(body: &mut String) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let rd = |p: usize| -> Option<usize> { unsafe { crate::experiments::safe_read_usize(p) } };
+    let rd = |p: usize| -> Option<usize> { unsafe { crate::safe_read_usize(p) } };
     let rdi = |p: usize| -> i64 {
-        unsafe { crate::experiments::safe_read_usize(p) }.map_or(-1, |v| i64::from(v as u32 as i32))
+        unsafe { crate::safe_read_usize(p) }.map_or(-1, |v| i64::from(v as u32 as i32))
     };
     let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
     if owner == null {
@@ -119,7 +119,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
             rd(m + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET).unwrap_or(0),
             rdi(m + MOVEMAPSTEP_STATE_48_RE_OFFSET),
             unsafe {
-                crate::experiments::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
+                crate::safe_read_u8(m + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
             }
             .map_or(-1, i64::from),
         ),
@@ -127,7 +127,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
     };
     write_testnet_step_state_oracle(body, testnet_stepper, request_code, mms_state);
     // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
-    let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
+    let (csremo, remoman, remo_pending) = if let Ok(base) = crate::game_module_base() {
         let csremo = rd(er_game_base::mem::game_data_addr(base, GLOBAL_CSREMO_RVA, "GLOBAL_CSREMO_RVA"))
             .filter(|v| *v != null)
             .unwrap_or(0);
@@ -178,20 +178,20 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         }
     };
     let mms_u8 = |off: usize| -> i64 {
-        mms.and_then(|m| unsafe { crate::experiments::safe_read_u8(m + off) })
+        mms.and_then(|m| unsafe { crate::safe_read_u8(m + off) })
             .map_or(-1, i64::from)
     };
     let mms_i32 = |off: usize| -> i64 { mms.map_or(-1, |m| rdi(m + off)) };
     let mms_u32_hex = |off: usize| -> String {
-        match mms.and_then(|m| unsafe { crate::experiments::safe_read_usize(m + off) }) {
+        match mms.and_then(|m| unsafe { crate::safe_read_usize(m + off) }) {
             Some(v) => format!("\"0x{:x}\"", (v as u32)),
             None => "null".to_owned(),
         }
     };
-    let global_move_map_tasks_disabled = crate::experiments::game_module_base()
+    let global_move_map_tasks_disabled = crate::game_module_base()
         .ok()
         .and_then(|base| unsafe {
-            crate::experiments::safe_read_u8(er_game_base::mem::game_data_addr(base, MOVEMAPSTEP_GLOBAL_DISABLE_RVA, "MOVEMAPSTEP_GLOBAL_DISABLE_RVA"))
+            crate::safe_read_u8(er_game_base::mem::game_data_addr(base, MOVEMAPSTEP_GLOBAL_DISABLE_RVA, "MOVEMAPSTEP_GLOBAL_DISABLE_RVA"))
         })
         .map_or(-1, i64::from);
     body.push_str(&format!(
@@ -433,11 +433,11 @@ fn write_player_presence_oracle(body: &mut String) {
         let chr_model_ins_ptr = player.chr_ins.chr_model_ins.as_ptr() as usize;
         let chr_ctrl_ptr = player.chr_ins.chr_ctrl.as_ptr() as usize;
         let chr_ctrl_lua_event_flags = unsafe {
-            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET)
+            crate::safe_read_u8(chr_ctrl_ptr + CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET)
         }
         .unwrap_or(0);
         let chr_ctrl_disable_move = unsafe {
-            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_DISABLE_MOVE_E9_OFFSET)
+            crate::safe_read_u8(chr_ctrl_ptr + CHRCTRL_DISABLE_MOVE_E9_OFFSET)
         }
         .map(|value| value != 0)
         .unwrap_or(true);
@@ -540,10 +540,10 @@ fn write_player_presence_oracle(body: &mut String) {
         "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_xinput_hook_fires\": {},\n  \"oracle_xinput_injected_pad_stamps\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
         crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::Relaxed),
         crate::input_blocker::DINPUT_INJECTED_KEY_STAMPS.load(Ordering::Relaxed),
-        crate::experiments::USER32_GET_KEYBOARD_STATE_FIRES.load(Ordering::Relaxed),
-        crate::experiments::USER32_GET_KEY_STATE_FIRES.load(Ordering::Relaxed),
-        crate::experiments::USER32_INJECTED_VK_STAMPS.load(Ordering::Relaxed),
-        crate::experiments::USER32_GET_CURSOR_POS_FIRES.load(Ordering::Relaxed),
+        crate::USER32_GET_KEYBOARD_STATE_FIRES.load(Ordering::Relaxed),
+        crate::USER32_GET_KEY_STATE_FIRES.load(Ordering::Relaxed),
+        crate::USER32_INJECTED_VK_STAMPS.load(Ordering::Relaxed),
+        crate::USER32_GET_CURSOR_POS_FIRES.load(Ordering::Relaxed),
         er_telemetry_core::counters::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed),
         er_telemetry_core::counters::XINPUT_HOOK_FIRES.load(Ordering::Relaxed),
         er_telemetry_core::counters::XINPUT_INJECTED_PAD_STAMPS.load(Ordering::Relaxed),
@@ -559,10 +559,10 @@ fn write_player_presence_oracle(body: &mut String) {
     // here means the user's input reached the game -> the run is contaminated. Cumulative event counts.
     body.push_str(&format!(
         "  \"oracle_rawinput_hook_calls\": {},\n  \"oracle_rawinput_mouse_move_events\": {},\n  \"oracle_rawinput_mouse_button_events\": {},\n  \"oracle_rawinput_key_events\": {},\n  \"oracle_rawinput_blocked_unfocused_events\": {},\n",
-        crate::experiments::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),
-        crate::experiments::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
-        crate::experiments::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
-        crate::experiments::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
-        crate::experiments::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.load(Ordering::Relaxed),
+        crate::RAWINPUT_HOOK_CALLS.load(Ordering::Relaxed),
+        crate::RAWINPUT_MOUSE_MOVE_EVENTS.load(Ordering::Relaxed),
+        crate::RAWINPUT_MOUSE_BUTTON_EVENTS.load(Ordering::Relaxed),
+        crate::RAWINPUT_KEY_EVENTS.load(Ordering::Relaxed),
+        crate::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS.load(Ordering::Relaxed),
     ));
 }

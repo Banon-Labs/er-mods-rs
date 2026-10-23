@@ -67,7 +67,7 @@ pub(crate) fn native_ls_exposure_record(base: usize, gate: usize) {
         NATIVE_LS_GATE_DREW,
     };
     let update_last = LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) as u64;
-    let now_ms = crate::experiments::boot_view_epoch_ms().max(1);
+    let now_ms = crate::boot_view_epoch_ms().max(1);
     // One line, once, mapping this clock to the log's `[+Nms]` prefix. Placed here because this is
     // the earliest thing that runs every frame and already reads the boot-view clock, so it neither
     // needs a home of its own nor risks anchoring that clock. One atomic load per frame after the

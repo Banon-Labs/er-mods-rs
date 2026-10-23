@@ -8,13 +8,15 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# `experiments` is a directory module (crates/er-quickload/src/experiments/{mod,save_redirect,trace,
-# startup_hooks,input_block,own_load,...}.rs). The autoload happy-path tokens and
-# function bodies may live in any submodule, so treat the whole module as one
-# concatenated source for these fail-closed string/fn-body checks.
+# The product modules (save_redirect, trace, startup_hooks, input_block, own_load, ...) lived under
+# `crates/er-quickload/src/experiments/` until 2026-10-22 and now sit directly in `src/`. The
+# autoload happy-path tokens and function bodies may live in any of them, so every module outside
+# the `lib` blob below is read as one concatenated source for these fail-closed string/fn-body
+# checks. The blob kept its old name, `experiments`, because the assertions below are written
+# against it.
 RUNTIME_SRC = REPO_ROOT / "crates" / "er-quickload" / "src"
-EXPERIMENTS_DIR = RUNTIME_SRC / "experiments"
-EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
+# Read into the `lib` blob instead (see `main`).
+LIB_BLOB_PATHS = ("lib.rs", "lib_parts/", "constants.rs", "constants/")
 # The title/autoload/switch cluster moved into the er-title-flow crate
 # (docs/plans/title-flow-crate-extraction.md). It is the same logical module the
 # checks below were written against, so it stays part of the concatenated source.
@@ -107,9 +109,26 @@ def read_quit_menu_core() -> str:
     return read_module_tree(QUIT_MENU_CORE_DIR / "lib.rs", QUIT_MENU_CORE_DIR)
 
 
+def read_product_modules() -> str:
+    """Every `src/` module outside the `lib` blob, shallowest first."""
+    files = sorted(
+        (
+            path
+            for path in RUNTIME_SRC.rglob("*.rs")
+            if not any(
+                relative.startswith(entry) if entry.endswith("/") else relative == entry
+                for relative in [path.relative_to(RUNTIME_SRC).as_posix()]
+                for entry in LIB_BLOB_PATHS
+            )
+        ),
+        key=lambda p: (len(p.relative_to(RUNTIME_SRC).parts), str(p.relative_to(RUNTIME_SRC))),
+    )
+    return "\n".join(read(path) for path in files)
+
+
 def read_experiments() -> str:
     return (
-        read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
+        read_product_modules()
         + "\n"
         + read_title_flow()
         + "\n"

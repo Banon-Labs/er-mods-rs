@@ -145,7 +145,7 @@ def test_boot_autoload_never_finishes_the_in_world_testnet_step() -> None:
     # for the whole map stay; the game finishes it only from the map-leave teardown. The boot branch
     # that called RequestFinish on it after 120 frames left summon signs dead for every boot autoload
     # (bd testnetstep-not-executing-after-autoload-1171-2026-10-06), so its return is a regression.
-    hooks = (REPO_ROOT / "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
+    hooks = (REPO_ROOT / "crates/er-quickload/src/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
     assert "request_finish(wrapper)" not in hooks
     assert "boot_stuck_signature" not in hooks
     assert "TESTNET_FF_STUCK_FRAME_THRESHOLD" not in hooks
@@ -193,13 +193,13 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "pub static OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS" in counters
     assert "pub static TFC_FORCED_CONTINUE_HANDOFF_MS" in counters
 
-    product_core = (REPO_ROOT / "crates/er-quickload/src/experiments/mod/product_core_own_stepper.rs").read_text()
+    product_core = (REPO_ROOT / "crates/er-quickload/src/product_core_own_stepper.rs").read_text()
     assert "pub(crate) fn mark_own_load_forced_continue_handoff()" in product_core
     assert "OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
     assert "pub(crate) fn mark_tfc_forced_continue_handoff()" in product_core
     assert "TFC_FORCED_CONTINUE_HANDOFF_MS.compare_exchange" in product_core
 
-    present = (REPO_ROOT / "crates/er-quickload/src/experiments/present_overlay.rs").read_text()
+    present = (REPO_ROOT / "crates/er-quickload/src/present_overlay.rs").read_text()
     assert "fn set_boot_view_pump_stop_reason" in present
     assert "BOOT_VIEW_PUMP_STOP_MS.store" in present
 
@@ -238,11 +238,11 @@ def test_continue_and_boot_view_timing_oracles_exist() -> None:
     assert "oracle_boot_view_present_cover_failures" in readiness_watch
     assert "boot_view_present_cover_failure" in readiness_watch
     assert "boot_view_pre_world_stop_failure" in readiness_watch
-    boot_progress = (REPO_ROOT / "crates/er-quickload/src/experiments/gpu_readback/boot_progress.rs").read_text()
-    present_overlay = (REPO_ROOT / "crates/er-quickload/src/experiments/present_overlay.rs").read_text()
+    boot_progress = (REPO_ROOT / "crates/er-quickload/src/gpu_readback/boot_progress.rs").read_text()
+    present_overlay = (REPO_ROOT / "crates/er-quickload/src/present_overlay.rs").read_text()
     assert "BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur" in present_overlay
     assert "cur != 0" in present_overlay
-    assert "crate::experiments::is_native_windows() && idx >= 8" not in boot_progress
+    assert "crate::is_native_windows() && idx >= 8" not in boot_progress
     assert "let can_move_handoff" in boot_progress
     assert "boot_view_cover_release_ready(can_move_handoff)" in boot_progress
     assert "boot_view_player_render_ready" in boot_progress

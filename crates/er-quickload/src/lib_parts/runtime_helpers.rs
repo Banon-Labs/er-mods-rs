@@ -19,7 +19,7 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
         // Bypass arming signal: engine filled enough to build the LoadGame job at the title (GameDataMan
         // -> mss -> plausible TitleFlowContext), without waiting for the press-any-button handoff.
         loadgame_build_ctx_ready: unsafe {
-            crate::experiments::loadgame_build_ctx_ready(game_module_base)
+            crate::loadgame_build_ctx_ready(game_module_base)
         },
     };
     let _ = unsafe {
