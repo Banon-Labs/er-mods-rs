@@ -707,11 +707,13 @@ def scan(head: str, changed: list[str], exhaustive: bool) -> tuple[int, list[str
     wanted = crates_in(changed)
     # Only a crate some shell compiles can be asked of a run. When none of the changed crates is
     # one, there is nothing a run could prove -- the line check-runtime-evidence.sh already draws
-    # for a deletion. When the shell list cannot be read, nothing is narrowed.
+    # for a deletion. When the shell list cannot be read, nothing is narrowed, and neither is a
+    # crate this checkout does not have: the shell list describes this checkout's workspace, so it
+    # cannot say a crate outside it is host-only, and asking for a run is the safe direction.
     compiled = shell_compiled_crates()
     if compiled is not None and wanted:
-        host_only = sorted(wanted - compiled)
-        wanted &= compiled
+        host_only = sorted(c for c in wanted - compiled if (REPO_ROOT / "crates" / c).is_dir())
+        wanted -= set(host_only)
         if not wanted:
             return EXIT_MATCH, [
                 f"note no crate this push changes compiles into a shell ({', '.join(host_only)}) "
