@@ -124,11 +124,14 @@ def comment_spans(text: str, dialect: str) -> list[tuple[int, str]]:
     """
     spans: list[tuple[int, str]] = []
     i, line, n = 0, 1, len(text)
+    # Shell only: whether the next character starts a word. See `SHELL_WORD_BREAKS`.
+    word_start = True
     while i < n:
         c = text[i]
         if c == "\n":
             line += 1
             i += 1
+            word_start = True
             continue
         if dialect == "rust":
             if c == '"':
@@ -175,40 +178,83 @@ def comment_spans(text: str, dialect: str) -> list[tuple[int, str]]:
                 i = j
                 continue
         else:  # hash dialects: python and shell both comment with `#`
+            shell = dialect == "hash"
+            if shell and c == "\\":
+                # `\'`, `\"`, `\#` and an escaped space are literal characters inside a word. A
+                # backslash before a newline is a line continuation: both vanish, and whether a
+                # word starts next is whatever it was before the backslash.
+                if text.startswith("\n", i + 1):
+                    line += 1
+                else:
+                    word_start = False
+                i += 2
+                continue
             if c in "\"'":
-                j = _skip_hash_string(text, i)
+                j = _skip_hash_string(text, i, escapes=not _is_shell_single_quote(text, i, shell))
                 line += text.count("\n", i, j)
                 i = j
+                word_start = False
                 continue
-            if c == "#" and not _is_shell_expansion_hash(text, i):
+            if shell and text.startswith("${", i):
+                j = _skip_shell_brace_expansion(text, i)
+                line += text.count("\n", i, j)
+                i = j
+                word_start = False
+                continue
+            if c == "#" and (not shell or word_start):
                 end = text.find("\n", i)
                 end = n if end < 0 else end
                 spans.append((line, text[i:end]))
                 i = end
                 continue
+            word_start = c in SHELL_WORD_BREAKS
         i += 1
     return spans
 
 
-def _is_shell_expansion_hash(text: str, i: int) -> bool:
-    """Whether the `#` at `i` is part of a shell parameter expansion rather than a comment.
+# Characters after which bash starts a new word, and a `#` opens a comment only at the start of
+# one: `echo a;# c` prints `a`, `echo a#b` prints `a#b` (bash 5.3, measured). Everything else is
+# code -- `$#` is the argument count, `${p##*/}` and `${x#prefix}` strip a prefix,
+# `$(( 16#ff ))` is a base-16 literal -- and reading one as a comment hands the rest of the line
+# to `--fix` as prose. That happened: the 2026-09-07 sweep turned `revs=(HEAD)` in
+# `scripts/check-committed-compiles.sh` into `revs=(head)`, a ref git does not have, and
+# `(( ${#SKIPPED[@]} ))` in `.agents/skills/wizard/template.sh` into `${#skipped[@]}`, an array
+# that does not exist, so under `set -u` every wizard died with exit 1 on its last line. Python
+# keeps the plain rule: `x = 1#comment` is a Python comment.
+SHELL_WORD_BREAKS = " \t\n;&|()<>"
 
-    Two shapes, and both are the length operator: `$#` is the positional-parameter count and
-    `${#name[@]}` is an array's length. In neither does the `#` open a comment, so reading the
-    rest of the line as prose invents a finding in code the author cannot rewrite.
 
-    Measured: `scripts/open-draft-prs.sh` line 164 reads `[[ ${#BRANCHES[@]} -eq 0 ]]; then`, and
-    the gate reported `BRANCHES is emphasis, not a name` against an array it cannot rename. bd
-    `er-effects-rs-0y71`.
+def _is_shell_single_quote(text: str, i: int, shell: bool) -> bool:
+    """A shell `'...'` has no escapes, so `'\\'` is a whole string. `$'...'` does, as Python's
+    strings do."""
+    return shell and text[i] == "'" and not (i > 0 and text[i - 1] == "$")
 
-    Deliberately narrower than the POSIX rule that a comment begins a word. Python is scanned by
-    this same branch and `x = 1#comment` is a real Python comment with no space before it, so a
-    word-boundary test would blind the gate to a whole dialect. `$` is not a Python token at all,
-    which is what makes this shape safe to exempt for both.
-    """
-    if i > 0 and text[i - 1] == "$":
-        return True
-    return i > 1 and text[i - 1] == "{" and text[i - 2] == "$"
+
+def _skip_shell_brace_expansion(text: str, i: int) -> int:
+    """Skip `${...}` from its `$`. Nothing inside is a comment: `${x:-a #b}` expands to `a #b`.
+
+    Stops at the end of the line when the brace never closes, so a stray `${` in a heredoc body
+    hides one line from the gate rather than the rest of the file."""
+    j, depth, n = i + 2, 1, len(text)
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "\"'":
+            j = _skip_hash_string(text, j, escapes=not _is_shell_single_quote(text, j, True))
+        elif text.startswith("${", j):
+            depth += 1
+            j += 2
+        elif ch == "}":
+            depth -= 1
+            j += 1
+            if not depth:
+                return j
+        elif ch == "\n":
+            return j
+        else:
+            j += 1
+    return n
 
 
 def _skip_rust_string(text: str, i: int) -> int:
@@ -242,13 +288,13 @@ def _skip_char_literal(text: str, i: int) -> int:
     return m.end() if m else i + 1
 
 
-def _skip_hash_string(text: str, i: int) -> int:
+def _skip_hash_string(text: str, i: int, escapes: bool = True) -> int:
     quote = text[i]
     triple = text.startswith(quote * 3, i)
     close = quote * 3 if triple else quote
     j = i + len(close)
     while j < len(text):
-        if text[j] == "\\":
+        if escapes and text[j] == "\\":
             j += 2
             continue
         if text.startswith(close, j):
@@ -766,9 +812,58 @@ def selftest() -> int:
     )
     check(
         "a python comment with no space before it is still a comment",
-        [c for _, c in prose_spans("x = 1# THE tail\n", "hash")],
+        [c for _, c in prose_spans("x = 1# THE tail\n", "python")],
         ["# THE tail"],
     )
+    # The two lines the 2026-09-07 sweep broke, and the other shapes of a `#` that is not at the
+    # start of a shell word. Each is checked against what bash 5.3 does with it.
+    check(
+        "an array length before a git ref is code",
+        [c for _, c in prose_spans("[[ ${#revs[@]} -eq 0 ]] && revs=(HEAD)\n# THE rest\n", "hash")],
+        ["# THE rest"],
+    )
+    check(
+        "an array length in arithmetic is code",
+        [c for _, c in prose_spans("if (( ${#SKIPPED[@]} )); then\n  echo ok\nfi\n", "hash")],
+        [],
+    )
+    shell_code = {
+        "prefix strip": "p=${path##*/} && echo THE",
+        "pattern strip": "v=${ver#ONLY}",
+        "a # inside a word": "echo a#THE",
+        "a # inside a default": "echo ${x:-a #THE}",
+        "an escaped space": "echo a\\ #THE",
+        "a base literal": "echo $(( 2#101 )) THE",
+        "an escaped quote": "echo it\\'s THE # tail",
+    }
+    for name, code in shell_code.items():
+        check(
+            f"shell {name} is code",
+            [c for _, c in prose_spans(code + "\n", "hash")],
+            ["# tail"] if name == "an escaped quote" else [],
+        )
+    check("a # after ; opens a comment", [c for _, c in prose_spans("echo a;# THE c\n", "hash")], ["# THE c"])
+    check(
+        "a shell single quote has no escapes",
+        [c for _, c in prose_spans("echo '\\'  # THE tail\n", "hash")],
+        ["# THE tail"],
+    )
+    check(
+        "line numbers survive a shell line continuation",
+        comment_spans("echo a \\\n  b\n# ONLY here\n", "hash"),
+        [(3, "# ONLY here")],
+    )
+    check(
+        "a backslash ending a comment escapes nothing",
+        comment_spans("#   usage [--name NAME] \\\n#       [--log FILE]\n", "hash"),
+        [(1, "#   usage [--name NAME] \\"), (2, "#       [--log FILE]")],
+    )
+    check(
+        "a continuation after a space still starts a word",
+        comment_spans("echo a \\\n# THE rest\n", "hash"),
+        [(2, "# THE rest")],
+    )
+    check("a continuation inside a word does not", comment_spans("echo a\\\n#THE\n", "hash"), [])
     check(
         "a first line after a shebang opens its own sentence",
         fix_comment("# THE rest is", words, opens_a_sentence(None, 2)),
@@ -805,6 +900,12 @@ def selftest() -> int:
             '"""A completely shouted docstring."""\n\n\ndef f():\n    """And another."""\n    return 1  # The end\n',
         ),
         "sample.sh": ("# THE shell too\necho ok\n", "# The shell too\necho ok\n"),
+        "expansions.sh": (
+            "[[ ${#revs[@]} -eq 0 ]] && revs=(HEAD)\nif (( ${#SKIPPED[@]} )); then :; fi\n"
+            "p=${p##*/}  # THE tail\n",
+            "[[ ${#revs[@]} -eq 0 ]] && revs=(HEAD)\nif (( ${#SKIPPED[@]} )); then :; fi\n"
+            "p=${p##*/}  # The tail\n",
+        ),
     }
     with tempfile.TemporaryDirectory() as tmp:
         for name, (before, want) in fixtures.items():
