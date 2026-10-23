@@ -541,6 +541,12 @@ pub struct WindowStyle<'ui> {
 
 /// See [`WindowStyle`].
 pub fn window_style(ui: &Ui) -> WindowStyle<'_> {
+    faded_window_style(ui, 1.0)
+}
+
+/// [`window_style`] with the panel's background at `alpha` of its opacity ([`faded`]): a panel
+/// that fades out with the last thing it shows, as er-duel-rules' rule-break list does.
+pub fn faded_window_style(ui: &Ui, alpha: f32) -> WindowStyle<'_> {
     WindowStyle {
         _vars: [
             ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0])),
@@ -548,7 +554,7 @@ pub fn window_style(ui: &Ui) -> WindowStyle<'_> {
             ui.push_style_var(StyleVar::WindowRounding(0.0)),
             ui.push_style_var(StyleVar::WindowMinSize([1.0, 1.0])),
         ],
-        _color: ui.push_style_color(StyleColor::WindowBg, PANEL_BG),
+        _color: ui.push_style_color(StyleColor::WindowBg, faded(PANEL_BG, alpha)),
     }
 }
 

@@ -22,7 +22,8 @@
 //! through [`rgb`]; no other file of a panel writes a color literal. Every size is in pixels at
 //! 1080p, as the mockups give it, and is multiplied by the panel's scale ([`px`]) where it is
 //! drawn. The few colors the mockups never show -- a hovered secondary button, a pressed toggle
-//! Dear ImGui draws itself -- are derived from the token beside them and say so.
+//! Dear ImGui draws itself -- are derived from the token beside them and say so. A panel that
+//! fades something out draws its token through [`faded`], which scales only the opacity.
 //!
 //! # Fonts
 //!
@@ -94,6 +95,19 @@ pub const fn rgba(hex: u32, alpha: f32) -> [f32; 4] {
 #[must_use]
 pub const fn rgb(hex: u32) -> [f32; 4] {
     rgba(hex, 1.0)
+}
+
+/// `color` with its opacity multiplied by `alpha`, which is held to 0..=1: a token drawn while it
+/// fades out, such as a row leaving er-duel-rules' rule-break list. An `alpha` that is not a
+/// number draws nothing.
+#[must_use]
+pub fn faded(color: [f32; 4], alpha: f32) -> [f32; 4] {
+    let alpha = if alpha.is_nan() {
+        0.0
+    } else {
+        alpha.clamp(0.0, 1.0)
+    };
+    [color[0], color[1], color[2], color[3] * alpha]
 }
 
 /// Nothing: a color that draws nothing.
@@ -1282,13 +1296,14 @@ mod draw;
 pub use draw::{
     ClearField, FontScope, FrameFonts, Painter, PanelStyle, Row, WindowStyle, apply_font_scale,
     badge, button, button_width, card, checkbox, chip, clear_field, combo, content,
-    danger_toggle_button, default_font_px, divider, dot, dots_button, field_fill, fit_text, font,
-    fonts_requested, footer, foreground_painter, frame, frame_fonts, gap, global_font_scale,
-    icon_button, item_rect, kbd, kbd_size, last_track, light_dot, line_height, mono, mono_quiet,
-    note, painter, panel_style, primary_button, quiet, region, register_item, request_fonts, rule,
-    secondary, secondary_button, section_heading, spaced_text, spacing, spans, spans_width,
-    square_toggle, tab_strip, text, text_width, text_wrapped, toggle_button, tooltip, unavailable,
-    unavailable_button, vertical_label, window_style, with_font,
+    danger_toggle_button, default_font_px, divider, dot, dots_button, faded_window_style,
+    field_fill, fit_text, font, fonts_requested, footer, foreground_painter, frame, frame_fonts,
+    gap, global_font_scale, icon_button, item_rect, kbd, kbd_size, last_track, light_dot,
+    line_height, mono, mono_quiet, note, painter, panel_style, primary_button, quiet, region,
+    register_item, request_fonts, rule, secondary, secondary_button, section_heading, spaced_text,
+    spacing, spans, spans_width, square_toggle, tab_strip, text, text_width, text_wrapped,
+    toggle_button, tooltip, unavailable, unavailable_button, vertical_label, window_style,
+    with_font,
 };
 
 #[cfg(test)]
@@ -1310,6 +1325,20 @@ mod tests {
         assert_eq!(PRIMARY_BG, ACCENT);
         assert_eq!(INPUT_BORDER, CARD_BORDER);
         assert_eq!(light_color(Light::Error), DOT_ERROR);
+    }
+
+    #[test]
+    fn a_faded_token_keeps_its_hue_and_scales_only_its_opacity() {
+        assert_eq!(faded(TEXT, 1.0), TEXT);
+        assert_eq!(faded(PANEL_BG, 1.0), PANEL_BG);
+        let half = faded(PANEL_BG, 0.5);
+        assert_eq!(half[..3], PANEL_BG[..3]);
+        assert!((half[3] - BACKGROUND_ALPHA * 0.5).abs() < 1e-6);
+        assert_eq!(faded(ERROR_TEXT, 0.0)[3], 0.0);
+        // Out of range is held to the range, and not a number draws nothing.
+        assert_eq!(faded(ERROR_TEXT, 2.0), ERROR_TEXT);
+        assert_eq!(faded(ERROR_TEXT, -1.0)[3], 0.0);
+        assert_eq!(faded(ERROR_TEXT, f32::NAN)[3], 0.0);
     }
 
     #[test]
