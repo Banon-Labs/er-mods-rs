@@ -1,5 +1,8 @@
 //! Every touch of live game memory the engine makes, and nothing that decides anything.
 //!
+//! An address or `FUN_`/`DAT_` name in this module's comments is a 1.16.2 dump one, where it was
+//! reversed, unless labelled with another build; the one function address it calls is 2.7.2.0.
+//!
 //! # What is deliberately not here
 //!
 //! **Almost no native calls: One game function address in the whole module, and no detour.** Every
@@ -12,11 +15,10 @@
 //! The field write formats `W_Event%04d` and nothing else, and `W_Event` is a broad alias layer
 //! rather than a total one -- so every dodge in the game (2,252 of them, spelled `W_Step`) is
 //! unreachable without it. Keeping the property would have meant shipping a possession that cannot
-//! roll. That address is registered as a verified 1.16.2 -> 1.17 pair and resolved through
-//! `game_rva_named`, so on an unrecognised build the fallback goes quiet rather than jumping into
-//! whatever now occupies those bytes.
+//! roll. That address is a 2.7.2.0 rva resolved through `game_rva_named`, so on any other build
+//! the fallback goes quiet rather than jumping into whatever now occupies those bytes.
 //!
-//! Everything else here is still translation-proof; what it can be broken by is a struct offset,
+//! Everything else here holds no code address; what it can be broken by is a struct offset,
 //! which is why [`crate::possess::layout`] is one module and why the assertions below exist.
 //!
 //! # The two singletons, and why neither is an address either
@@ -38,7 +40,6 @@ use eldenring::cs::{
     CSChrPhysicsModule, CSChrTimeActModule, CSChrTimeActModuleAnim, ChrCtrl as CsChrCtrl,
     ChrIns as CsChrIns, ChrInsModuleContainer, ChrSet, ChrType, WorldChrMan, WorldChrManDbg,
 };
-use er_game_base::game_build::game_file_version;
 use er_game_base::mem::{
     game_rva_named, is_heap_aligned_ptr, safe_read_f32, safe_read_i32, safe_read_u8, safe_read_u16,
     safe_read_usize,
@@ -47,7 +48,7 @@ use fromsoftware_shared::FromStatic;
 
 use crate::possess::fall::{self, FallState};
 use crate::possess::intent::{IntentWrite, Stick};
-use crate::possess::layout::{self, packet15_receive};
+use crate::possess::layout::packet15_receive;
 use crate::possess::layout::{
     ai_ins, ai_path_data, chr_action_request_module, chr_behavior_module, chr_ctrl,
     chr_ctrl_modifier, chr_data_module, chr_event_module, chr_ins, chr_physics_module,
@@ -96,13 +97,11 @@ const _: () = {
             == chr_ins::TINT_ALPHA_MULTIPLIER_MODIFIER
     );
     // The sibling mirror models the 1.17 position of `debugFlags` since it was refreshed on
-    // 2026-09-08 (upstream `b080915`, adopted at `16d2661`); before that it modelled 1.16.2 and
-    // this line named the other constant. The engine still picks 1.16.2 or 1.17 at runtime, and
-    // asserting the mirror against whichever build it models is what pins the pair -- so the day
-    // this assertion needs flipping is the day the mirror moved, which is precisely when every
+    // 2026-09-08 (upstream `b080915`, adopted at `16d2661`), which is also the 2.7.2.0 one. The
+    // day this assertion fails is the day the mirror moved, which is precisely when every
     // `offset_of!` answer in the crate changed and somebody has to look. Measured, not assumed:
     // 0x538 came out of a type error, the same way the `PlayerGameData` size did.
-    assert!(core::mem::offset_of!(CsChrIns, debug_flags) == chr_ins::DEBUG_FLAGS_1170);
+    assert!(core::mem::offset_of!(CsChrIns, debug_flags) == chr_ins::DEBUG_FLAGS);
     assert!(core::mem::offset_of!(CsChrCtrl, owner) == chr_ctrl::OWNER);
     assert!(core::mem::offset_of!(CsChrCtrl, manipulator) == chr_ctrl::MANIPULATOR);
     assert!(core::mem::offset_of!(CsChrCtrl, modifier) == chr_ctrl::MODIFIER);
@@ -166,7 +165,7 @@ const _: () = {
     );
 };
 
-/// `CS::PlayAnimationByBehaviorName`, 1.16.2 RVA `0xc14370`.
+/// `CS::PlayAnimationByBehaviorName`, 2.7.2.0 RVA.
 ///
 /// The only game function address this crate resolves. Layers 1 and 2 resolve none at all -- every
 /// lever they need turned out to be a field -- and layer 3 keeps that for everything the
@@ -174,13 +173,10 @@ const _: () = {
 /// remainder, which is almost entirely the 2,252 dodges: they are spelled `W_Step` and have no
 /// `W_Event` name at all, so without this they are simply not in the game.
 ///
-/// Verified for 1.17 rather than assumed. The function is 80 bytes and byte-identical between
-/// 1.16.2 `0x140c14370` and 1.17 `0x140c15a40`, matching uniquely in both images with no rel32
-/// wildcarding needed -- both of its callees moved by the same `+0x16d0` as the function itself.
-/// The pair is registered in `docs/recon/rva-map-1162-to-1170.verified.tsv`, which is what makes
-/// [`game_rva_named`] able to translate it; without that row it refuses and the fallback goes
-/// quiet rather than jumping into whatever now occupies those bytes.
-const PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA: u32 = 0x00c1_4370;
+/// The function is 80 bytes, byte-identical to its 1.16.2 counterpart (both of its callees moved
+/// with it). [`game_rva_named`] refuses it on any build other than 2.7.2.0, and the fallback then
+/// goes quiet rather than jumping into whatever now occupies those bytes.
+const PLAY_ANIMATION_BY_BEHAVIOR_NAME_RVA: u32 = 0x00c1_5f70;
 
 /// `void PlayAnimationByBehaviorName(hkbCharacter** slot, const wchar_t* name)`.
 ///
@@ -1480,22 +1476,15 @@ pub(crate) fn players_in_world() -> Vec<netdamage::Seen> {
 /// telemetry could: when nobody's HP moves, did the other player's damage arrive?
 ///
 /// Read-only, and the only game address this module resolves for the net-damage watch -- one
-/// per-build data RVA, refused rather than guessed on an unmeasured build. See
+/// 2.7.2.0 data RVA, refused rather than guessed on any other build. See
 /// [`crate::possess::layout::packet15_receive`] for the pump's own instruction sequence and for
 /// why the damage is an `i16`.
 ///
 /// `None` means the build is unmeasured or the read faulted, which the ledger reports as such
 /// rather than as an absence of packets.
 pub(crate) fn last_received_damage_packet() -> Option<netdamage::ReceivedPacket> {
-    // 1.16.2 and 1.17.0 have their own measured rvas; anything else is the 1.17.1 rva carried to
-    // the running build, which refuses on a build the carry does not reach.
-    let base = match layout::packet15_receive_rva(game_file_version()) {
-        Some(rva) => er_game_base::mem::game_module_base().ok()? + rva as usize,
-        None => er_game_base::mem::game_rva_measured_on(
-            packet15_receive::BUFFER_RVA_1171 as usize,
-            er_game_base::game_build::MAPPED_FILE_VERSION_1171,
-        )?,
-    };
+    // Refused on any build other than 2.7.2.0.
+    let base = game_rva_named(packet15_receive::BUFFER_RVA, "PACKET15_RECEIVE_BUFFER_RVA").ok()?;
     // Handles are two `u32`s side by side; read them as one `usize` so a partial read is a miss
     // rather than half a handle. `safe_read_usize` is `ReadProcessMemory`, so an address that has
     // somehow gone bad answers `None` instead of raising.

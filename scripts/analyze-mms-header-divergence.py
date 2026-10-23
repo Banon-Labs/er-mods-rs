@@ -2,7 +2,10 @@
 """Analyze the MoveMapStep header window across advancer ticks in an er-reload-trace.log.
 
 The trace DLL's finalize-advancer hook now logs, per tick:
-  finalize_advancer_afa6d0 call#N mms=0xADDR field25_12a A->B menuData_5d=.. 5e=.. mmshdr[+0=0x.. +8=0x.. ...] <snapshot>
+  finalize_advancer call#N mms=0xADDR field25_12a A->B menuData_5d=.. 5e=.. mmshdr[+0=0x.. +8=0x.. ...] <snapshot>
+
+Logs written before the 2.7.2.0 port spell the label `finalize_advancer_afa6d0` (the evaluator's
+1.16.2 address); both spellings are read.
 
 Each distinct mms=0xADDR is one load epoch's MoveMapStep. load2's Update is dropped by the FD4
 scheduler after ~6 ticks (field25 stuck at 0) while load1 ticks ~145x and field25 walks 0->9. This
@@ -20,7 +23,7 @@ import sys
 from collections import OrderedDict
 
 LINE = re.compile(
-    r"finalize_advancer_afa6d0 call#(\d+) mms=0x([0-9a-fA-F]+) "
+    r"finalize_advancer(?:_afa6d0)? call#(\d+) mms=0x([0-9a-fA-F]+) "
     r"field25_12a (-?\d+)->(-?\d+).*?mmshdr\[(.*?)\]"
 )
 FIELD = re.compile(r"\+([0-9a-fA-F]+)=0x([0-9a-fA-F]+)")
@@ -73,7 +76,7 @@ def main() -> int:
         return 2
     groups = parse(sys.argv[1])
     if not groups:
-        print("no finalize_advancer_afa6d0 mmshdr lines found (old DLL, or advancer never ticked?)")
+        print("no finalize_advancer mmshdr lines found (old DLL, or advancer never ticked?)")
         return 1
     sums = [summarize_group(mms, ticks) for mms, ticks in groups.items()]
     # load1 = the group that walks field25 furthest / most ticks; the short stuck ones are reloads.

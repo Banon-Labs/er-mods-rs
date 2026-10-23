@@ -7,6 +7,12 @@
 // both files clear the repo's hard file-size gate.
 // PARITY: Debt -- see constants_moved.rs; the split that created these two files kept the
 // import blocks intact so the diff read as a move rather than a rewrite.
+//
+// Every game address this crate declares is a native ELDEN RING 2.7.2.0 rva, refused by the
+// er-game-base resolvers on any other build. Addresses quoted in prose across these files are
+// 2.7.2.0 too unless labelled with another build: 1.16.2 for the deobf image and the named Ghidra
+// dump (`FUN_<1.16.2 VA>`), 1.16.1 for the older dump the early RE used, 1.17 for the 1.17.x
+// images. A label may cover a whole sentence or paragraph ("the addresses below are 1.16.2's").
 #![allow(unused_imports)]
 // PARITY: Debt -- this suppresses clippy::missing_safety_doc (a clippy::all lint) for the
 // whole crate, so this crate's reported zero rests on it rather than on written contracts.

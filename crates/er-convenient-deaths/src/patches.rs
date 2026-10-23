@@ -26,15 +26,13 @@
 //!    immediate the game itself writes whenever a rune arc is applied.
 //! 2. **Pin the address by a window, not by the byte.** `0x74` occurs everywhere. The window is
 //!    generated from named `iced-x86` instructions by `build.rs` and ground-truthed against
-//!    `eldenring-deobf.bin` there, then re-checked against the live image before anything is
-//!    written.
+//!    `eldenring-deobf-1.17.2.bin` there, then re-checked against the live image before anything
+//!    is written.
 //! 3. **Write one byte.** The window is live code other threads may be executing.
 //! 4. **Read it back.** A successful `VirtualProtect` is not proof the byte landed; another mod
 //!    can own the same address.
-//! 5. **Name the function RVA in a `const *_RVA`.** `scripts/select-needed-1170-rows.py` scans
-//!    `crates/` for that spelling to decide which rows of the 1.16.2 -> 1.17 map get compiled in.
-//!    A patch whose function is not in the map is refused at runtime, not mis-applied -- but it
-//!    is refused every time, so the constant is what makes it work at all.
+//! 5. **Name the function RVA in a `const *_RVA`**, measured on 2.7.2.0. On any other build the
+//!    patch is refused at runtime, not mis-applied.
 
 use core::sync::atomic::AtomicBool;
 
@@ -65,12 +63,10 @@ pub(crate) struct Patch {
     pub(crate) name: &'static str,
     /// Key in the game-directory config that turns this patch on. Off when absent.
     pub(crate) config_key: &'static str,
-    /// 1.16.2 RVA of the `.pdata` function entry that contains the window.
+    /// 2.7.2.0 RVA of the function entry that contains the window.
     ///
-    /// The window's own address is deliberately not stored. A patch site is by nature
-    /// mid-function, and the 1.16.2 -> 1.17 maps are keyed on function starts, so a mid-function
-    /// address is structurally unmappable and must be refused rather than translated. What is
-    /// mappable is the enclosing function; the offset rides along in Rust. See
+    /// The window's own address is deliberately not stored: a patch site is mid-function, and its
+    /// identity is the enclosing function plus an offset. See
     /// `er_game_base::game_build::resolve_call_site_rva`.
     pub(crate) function_rva: usize,
     /// Byte offset of the verified window's first byte within [`Self::function_rva`].
@@ -95,7 +91,7 @@ pub(crate) struct Patch {
 }
 
 impl Patch {
-    /// 1.16.2 RVA of the verified window's first byte.
+    /// 2.7.2.0 RVA of the verified window's first byte.
     ///
     /// Derived from the two stored halves rather than kept beside them, so no third field can
     /// drift out of agreement with the address the window was generated at.

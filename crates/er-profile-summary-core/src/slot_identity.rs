@@ -17,7 +17,7 @@ pub const MIN_REAL_LEVEL: u32 = 1;
 /// True when the record says this slot holds a character.
 ///
 /// Deliberately not `saveSlotsStates[slot]` (the occupancy byte at `summary+0x8`): that byte is
-/// a flag, `MarkProfileIndexAsUsed` (`0x140262250`) sets it without touching any record field,
+/// a flag, `MarkProfileIndexAsUsed` (`0x140262260`) sets it without touching any record field,
 /// and this DLL writes it itself, so it reads active even for a slot whose record is all
 /// zeroes. Level plus a non-empty name are fields only a real deserialize (or this crate's own
 /// rebuild) can have filled.

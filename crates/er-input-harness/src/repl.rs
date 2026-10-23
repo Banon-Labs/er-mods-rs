@@ -111,11 +111,11 @@ const DEFAULT_MAX_HITS: usize = 64;
 /// Ceiling on the qwords one `read` prints, for the same reason.
 const MAX_READ_QWORDS: usize = 64;
 
-/// `CS::GridControl`'s vtable RVA on 1.17, declared once in `game_mem` (from `scripts/er-rtti-map.py`,
-/// MSVC RTTI walked in `eldenring-deobf-1.17.bin`: `.?AVGridControl@CS@@` -> 0x142a94438). Restating
-/// the literal here made two declarations of one address, which is the drift this crate's own
-/// scanner would then disagree with itself about.
-use crate::game_mem::GRID_CONTROL_VTABLE_RVA_1170;
+/// `CS::GridControl`'s 2.7.2.0 vtable RVA, declared once in `game_mem` (MSVC RTTI walked in
+/// `eldenring-deobf-1.17.2.bin`: `.?AVGridControl@CS@@` -> 0x142a96528). Restating the literal
+/// here made two declarations of one address, which is the drift this crate's own scanner would
+/// then disagree with itself about.
+use crate::game_mem::GRID_CONTROL_VTABLE_RVA;
 /// Selected cell, off the pager's own comparisons against the extents at `+0xd0`/`+0xd8`/`+0xdc`.
 const GRID_CONTROL_SELECTED_D4_OFFSET: usize = 0xd4;
 /// The save-file picker's own cursor grid, embedded in the `05_010_ProfileSelect` dialog. Its
@@ -178,13 +178,13 @@ const HOLD_POLL_INTERVAL_FRAMES: u64 = 10;
 /// Release an expired hold and report the grid cells afterwards. Returns whether a hold is still
 /// down, so the caller knows the input edge has not finished yet.
 /// Every `CS::GridControl` instance in memory, found by its vtable: `(vtable, hits, capped)`.
-/// None at all when the vtable has no carry to the running build, rather than a scan for an
-/// address that means nothing there.
+/// None at all when the running build is not 2.7.2.0, rather than a scan for an address that
+/// means nothing there.
 fn grid_instances(max_hits: usize) -> (usize, Vec<usize>, bool) {
     let Some(vtable) = crate::game_mem::grid_control_vtable() else {
         harness_log!(
-            "repl: GridControl vtable (1.17.1 rva 0x{GRID_CONTROL_VTABLE_RVA_1170:x}) has no carry \
-             to {}; no grid read",
+            "repl: GridControl vtable (2.7.2.0 rva 0x{GRID_CONTROL_VTABLE_RVA:x}) is refused on \
+             {}; no grid read",
             er_game_base::game_build::describe_build()
         );
         return (0, Vec::new(), false);
@@ -793,8 +793,9 @@ fn run_command(base: usize, line: &str) {
             match opened {
                 Some(true) => harness_log!(
                     "repl: optionsetting -> built the System pause-row MenuJob (factory rva \
-                     0x8024d0, resource 02_040_OptionSetting) and submitted it through the native \
-                     CSPopupMenu top-job path; the pane opens on tab 0, not the Quit tab"
+                     0x{:x}, resource 02_040_OptionSetting) and submitted it through the native \
+                     CSPopupMenu top-job path; the pane opens on tab 0, not the Quit tab",
+                    crate::input_inject::OPTIONSETTING_JOB_FACTORY_RVA
                 ),
                 Some(false) => harness_log!(
                     "repl: optionsetting REFUSED -- CSMenuMan+0x80 is null, the factory has no \

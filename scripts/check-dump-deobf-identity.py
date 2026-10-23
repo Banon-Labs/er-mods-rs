@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
-"""Prove a 1.16.2 Ghidra-dump VA is the same code as that VA in `eldenring-deobf.bin`.
+"""Prove a Ghidra-dump VA is the same code as that VA in the flat image of the same build.
 
-AGENTS.md records that for 1.16.2 the dump VA, the deobf VA and the live runtime VA are all
-identical (shift 0) -- and that `scripts/dump-deobf-shift.py` is cross-version (its dump side
-is still the 1.16.1 image) so it invents a nonzero shift and returns addresses that land
-mid-instruction. This tool is the cheap replacement for the "still byte-check anything you
-will call or patch" step: it asks the 1.16.2 MCP daemon for the first N instructions at a VA,
-disassembles the same VA out of the flat deobf image with objdump, and compares the
+An RE tool, not a build gate. AGENTS.md records that for 1.16.2 the dump VA and the
+`eldenring-deobf.bin` VA are identical (shift 0) -- and that `scripts/dump-deobf-shift.py` is
+cross-version (its dump side is still the 1.16.1 image) so it invents a nonzero shift and returns
+addresses that land mid-instruction. This tool asks the MCP daemon for the first N instructions
+at a VA, disassembles the same VA out of the flat deobf image with objdump, and compares the
 (offset, mnemonic) sequences.
 
-Matching sequences mean the two images agree at that address, i.e. the VA is safe to cite,
-call or patch. A mismatch means the address is wrong for one of the two images -- do not hook
-it; find the real VA by byte signature (`scripts/find-deobf-bytes.py`).
+It only applies where dump and image are one build: the named 1.16.2 dump on :8765 with
+`eldenring-deobf.bin` (the default), or the 1.17.0 dump with `--port 8767 --image
+eldenring-deobf-1.17.bin`. Neither is the installed game: a match makes the VA safe to cite as
+that build's name for the code, and the 2.7.2.0 address is still found on
+`eldenring-deobf-1.17.2.bin` by byte signature (`scripts/find-deobf-bytes.py`). A mismatch means
+the address is wrong for one of the two images.
+
+The images are gitignored and live in the main checkout; a bare `--image` name and the default
+are looked up beside this checkout and then in each directory above it, so a `git worktree` finds
+them too.
 
 Usage:
     python3 scripts/check-dump-deobf-identity.py 0x140a69550 [0x1402016600 ...]
     python3 scripts/check-dump-deobf-identity.py --count 24 0x140a69550
+    python3 scripts/check-dump-deobf-identity.py --port 8767 --image eldenring-deobf-1.17.bin 0x14074a970
     python3 scripts/check-dump-deobf-identity.py --selftest
 
-Exit status is 1 when any VA fails to match, so this can gate a docs/RE claim.
+Exit status is 1 when any VA fails to match, so this can back a docs/RE claim.
 """
 
 from __future__ import annotations
@@ -34,7 +41,18 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_IMAGE = REPO_ROOT / "eldenring-deobf.bin"
+DEFAULT_IMAGE = Path("eldenring-deobf.bin")
+
+
+def resolve_image(path: Path) -> Path:
+    """`path` as given when it exists, else the same name beside this checkout or above it."""
+    if path.is_file():
+        return path
+    for directory in (REPO_ROOT, *REPO_ROOT.parents):
+        candidate = directory / path.name
+        if candidate.is_file():
+            return candidate
+    return path
 IMAGE_BASE = 0x140000000
 DEFAULT_COUNT = 16
 DEFAULT_PORT = 8765
@@ -238,7 +256,7 @@ def main() -> int:
 
     import os
 
-    image = args.image or Path(os.environ.get("ER_DEOBF_BIN", DEFAULT_IMAGE))
+    image = resolve_image(args.image or Path(os.environ.get("ER_DEOBF_BIN", DEFAULT_IMAGE)))
     failures = 0
     for text in args.addresses:
         va = int(text, 16) if text.lower().startswith("0x") else int(text, 16)

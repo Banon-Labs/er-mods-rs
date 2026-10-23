@@ -8,7 +8,7 @@
 // settled. Frames are counted off `MenuWindowJob::Run` (1.17 rva `0x7ae040`, 2.7.2.0 `0x7ae4f0`): a
 // frame ends when a job already pumped in it is pumped again. Read-only.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
+// Addresses are 2.7.2.0, carried from 1.17.1.
 'use strict';
 
 // 1.17.0/1.17.1 global 0x143d6f820 -> 2.7.2.0 0x143d72840 (960 readers in the 1.17.1 image read

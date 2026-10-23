@@ -17,7 +17,7 @@
 # check-singleton-field-offsets.py and adjudicate-autoload-offsets.py all import. Use `None`
 # there, with a reason in NON_GAME_STRUCT_REASONS, for a Windows / MSVC / PE ABI structure a
 # FromSoftware patch cannot move. Then measure it:
-#     python3 scripts/clear-fields-by-object.py --class CS::SomeClass --offsets 0xNN
+#     add a witness row for it to scripts/check-object-field-offsets.py
 # and re-run --refresh.
 #
 # NAMING THE OWNER IS NOT A CLEARANCE. It is what makes the offset measurable. Several attributed

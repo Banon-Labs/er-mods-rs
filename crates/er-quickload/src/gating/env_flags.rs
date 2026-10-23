@@ -145,7 +145,7 @@ pub(crate) fn own_stepper_enabled() -> bool {
 /// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
 /// drives past press-any-button + modals in this hybrid test, or the own-stepper opens the menu),
 /// and once the live TitleTopDialog menu is rendered + settled, it fires the native continue
-/// (load-most-recent) MenuMemberFuncJob node's run 0x1409aaba0 exactly once -- which drives the full
+/// (load-most-recent) MenuMemberFuncJob node's run 0x1409ac1f0 exactly once -- which drives the full
 /// native load (parse + world-asset streaming + spawn). No SetState(2/3), no beginlogo-gate clear,
 /// no registrar self-fire, no direct_build / cold_char_mount. Observe + one-shot fire only.
 ///
@@ -316,14 +316,14 @@ pub(crate) fn native_continue_enabled() -> bool {
     !save_override_telemetry_only()
 }
 /// Commit sub-gate for the native full-save-read chain (required to actually fire continue_confirm
-/// 0x140b0e180 -> SetState5, the sole save write). Off by default; enable via env
+/// 0x140b0fd50 -> SetState5, the sole save write). Off by default; enable via env
 /// `ER_QUICKLOAD_FULLREAD_COMMIT=1` or a GAME_DIR file `er-quickload-fullread-commit.txt`. Without it the
 /// chain stops at the step-6 guard (deserialize + guard + log only): save-safe, no continue_confirm,
 /// no SetState5. This lets a first test run verify-only (default) before any save write.
 pub(crate) fn native_fullread_commit_enabled() -> bool {
     product_autoload_enabled()
 }
-/// OPT-in post-world native TitleTopDialog cleanup. Static trace of 0x1409a8890 shows this is the
+/// OPT-in post-world native TitleTopDialog cleanup. Static trace of 0x1409a9ee0 (2.7.2.0) shows this is the
 /// real dialog cleanup body: it clears active-screen renderers and releases dialog-owned resources.
 /// It fires only after PlayerIns exists, so it cannot participate in save/load success.
 pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
@@ -452,7 +452,7 @@ pub(crate) fn harness_force_drive_marker_present() -> bool {
 /// Cold CHAR-mount experiment gate (env ER_QUICKLOAD_COLD_CHAR_MOUNT / er-quickload-cold-char-mount.txt,
 /// off by default). The decisive save-data experiment (save-io-infra-present-cold-char-mount-is-the-
 /// decisive-untested-experiment-2026): with the stream worker registered, can the b80 save-IO read
-/// drain to resident so 0x67b290 mounts the real char -- zero-input, save-safe (reads the save,
+/// drain to resident so 0x67c590 mounts the real char -- zero-input, save-safe (reads the save,
 /// applies char to memory; No SetState, no save write).
 pub(crate) fn cold_char_mount_enabled() -> bool {
     COLD_CHAR_MOUNT_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
@@ -460,8 +460,8 @@ pub(crate) fn cold_char_mount_enabled() -> bool {
 /// Save-safe verify-only own-load buffer-feed gate. Off by default; enable via the reliable
 /// autoload-file channel (`own_load=1` in er-quickload-autoload.txt -> `OWN_LOAD_FILE_ARMED`), env
 /// `ER_QUICKLOAD_OWN_LOAD=1`, or a GAME_DIR file `er-quickload-own-load.txt`. When on, `own_load_drive`
-/// hooks the FSM-gated save read 0x67b100, feeds it our sliced plaintext .sl2 slot body, calls the
-/// native parser 0x67b290(slot) in-process, then reads back GameMan+0xc30 + the PlayerGameData
+/// hooks the FSM-gated save read 0x67c400, feeds it our sliced plaintext .sl2 slot body, calls the
+/// native parser 0x67c590(slot) in-process, then reads back GameMan+0xc30 + the PlayerGameData
 /// fingerprint. No SetState5, no autosave, no continue_confirm.
 pub(crate) fn own_load_enabled() -> bool {
     OWN_LOAD_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
@@ -486,8 +486,8 @@ pub(crate) fn own_dispatch_enabled() -> bool {
     OWN_DISPATCH_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
 /// Whether the menu-free LoadGame-job install lever is armed. When set (alongside `own_load`, which
-/// makes `own_load_drive` run), the verify-only parse is followed by build (`FUN_140826510`) +
-/// install (`FUN_1407a9560`) of the native LoadGame `MenuJobWithContext` into the title owner's
+/// makes `own_load_drive` run), the verify-only parse is followed by build (0x1408279b0; 1.16.2
+/// `FUN_140826510`) + install (0x1407aa890; 1.16.2 `FUN_1407a9560`) of the native LoadGame `MenuJobWithContext` into the title owner's
 /// `+0x130` MenuJob slot -- replacing the idle `IfElseJob` so `STEP_MenuJobWait` ticks it (self-build
 /// -> deser -> world stream). This is the non-SetState5 alternative to `own_load_continue`: no
 /// `SetState5`, no autosave, no save write (build + first-tick deser only read the save). Off by

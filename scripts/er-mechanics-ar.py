@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Elden Ring weapon attack rating from the installed regulation, offline.
 
-A port of the executable's own scaling code (1.16.2 addresses, byte-compared
-against the 1.17.1 image; see docs/er-mechanics/attack-rating.md):
+A port of the executable's own scaling code (2.7.2.0 addresses in `eldenring-deobf-1.17.2.bin`;
+each function decodes to the same instructions as its 1.16.2 namesake in the named dump; see
+docs/er-mechanics/attack-rating.md):
 
-  `PerformCalcCorrection`  0x140690f30  CalcCorrectGraph curve
-  `PerformWeaponScaling`   0x140690870  one stat -> multiplier (or the 0.6 penalty)
-  `FUN_140690390`          0x140690390  combine five stats for one element, 2H STR x1.5
-  `FUN_1406832a0`          0x1406832a0  attackBase * ReinforceParamWeapon rate * multiplier
-  `FUN_1407c0390/0430`     sorcery / incantation buff = 100 * magic / holy multiplier
+  `PerformCalcCorrection`  0x140692230  CalcCorrectGraph curve
+  `PerformWeaponScaling`   0x140691b70  one stat -> multiplier (or the 0.6 penalty)
+  `FUN_140691690`          0x140691690  combine five stats for one element, 2H STR x1.5
+  `FUN_1406845a0`          0x1406845a0  attackBase * ReinforceParamWeapon rate * multiplier
+  `FUN_1407c16c0/1760`     sorcery / incantation buff = 100 * magic / holy multiplier
 
   python3 scripts/er-mechanics-ar.py "Uchigatana" --affinity Keen --level 25 --stats str=18,dex=65
   python3 scripts/er-mechanics-ar.py "Claymore" --stats str=11,dex=13 --two-handed
@@ -41,7 +42,7 @@ STAT_FIELDS = {
     'fth': ('Faith', 'correctFaith', 'correctFaithRate', 'properFaith'),
     'arc': ('Luck', 'correctLuck', 'correctLuckRate', 'properLuck'),
 }
-# Element index 0..4 as the executable numbers them (`FUN_140690390` param_4 picks
+# Element index 0..4 as the executable numbers them (`FUN_140691690` param_4 picks
 # correctType at +0xec, +0x17d, +0x17e, +0x17f, +0x18e).
 ELEMENTS = [
     # name, AECP suffix, attackBase field, reinforce rate field, correctType field
@@ -52,7 +53,7 @@ ELEMENTS = [
     ('holy', 'Dark', 'attackBaseDark', 'darkAtkRate', 'correctType_Dark'),
 ]
 # Status build-up: SpEffectParam field and the weapon's correctType field. The four with a
-# graph are the four arcane multipliers `FUN_1406832a0` stores at out+0x18/+0x20/+0x2c/+0x30
+# graph are the four arcane multipliers `FUN_1406845a0` stores at out+0x18/+0x20/+0x2c/+0x30
 # (`VERIFIED`); the other three get no multiplier.
 STATUSES = [
     ('poison', 'poizonAttackPower', 'correctType_Poison'),
@@ -66,19 +67,19 @@ STATUSES = [
 # `COMMUNITY`: bows, greatbows, crossbows and ballistae are always two-handed.
 ALWAYS_TWO_HANDED_WEP_TYPES = {50, 51, 53, 55, 56}
 
-# SpEffect scaling-rate adds (`VERIFIED` 1.16.2, attack-rating.md section 7): the accumulator
-# `FUN_1404f4520` sums these columns as ints into AttackInfo +0xb4..+0xc4, `FUN_140690390` reads
-# them back, and the per-stat wrapper (STR: `FUN_140690c60`) calls
-# `PerformWeaponScaling(req, stat, FUN_140d53db0() + add, graph)`. `FUN_140d53db0` is the weapon's
+# SpEffect scaling-rate adds (`VERIFIED`, attack-rating.md section 7): the accumulator
+# `FUN_1404f53d0` sums these columns as ints into AttackInfo +0xb4..+0xc4, `FUN_140691690` reads
+# them back, and the per-stat wrapper (STR: `FUN_140691f60`) calls
+# `PerformWeaponScaling(req, stat, FUN_140d57250() + add, graph)`. `FUN_140d57250` is the weapon's
 # correct rate (or the AECP overwrite) times the ReinforceParamWeapon rate, so the add is in rate
 # points after reinforcement and before the `rate > 0` test. Roar, Barbaric/Milos Roar and War Cry
 # carry `changeStrengthPoint` 5.
 RATE_POINT_FIELDS = {'str': 'changeStrengthPoint', 'dex': 'changeAgilityPoint',
                      'int': 'changeMagicPoint', 'fth': 'changeFaithPoint', 'arc': 'changeLuckPoint'}
 
-TWO_HAND_STR_MULT = 1.5          # 0x143b33d7c (1.16.2), 0x14069134c load on 1.17.1
-PENALTY_CAP_PCT = 20.0           # 0x143b33d80
-PENALTY_FULL_PCT = 100.0         # 0x143b33d84
+TWO_HAND_STR_MULT = 1.5          # 0x143b3ad9c, loaded by the movss at 0x1406917f9
+PENALTY_CAP_PCT = 20.0           # 0x143b3ada0
+PENALTY_FULL_PCT = 100.0         # 0x143b3ada4
 
 
 class Tables:
@@ -152,7 +153,7 @@ class Tables:
 
 
 def calc_correct(graph, x):
-    """`PerformCalcCorrection` 0x140690f30: CalcCorrectGraph value (percent) at stat x."""
+    """`PerformCalcCorrection` 0x140692230: CalcCorrectGraph value (percent) at stat x."""
     if graph is None:
         return x                                  # missing row: returns the input
     v = [graph[f'stageMaxVal{i}'] for i in range(5)]
@@ -177,7 +178,7 @@ def calc_correct(graph, x):
 
 
 def stat_multiplier(tables, requirement, stat, rate, graph_id, stat_mult=1.0, raw_for_graph=False):
-    """`PerformWeaponScaling` 0x140690870 for one stat.
+    """`PerformWeaponScaling` 0x140691b70 for one stat.
 
     Returns 1 + rate/100 * graph/100 when the requirement is met, 1 when the rate is
     zero, and the lack-of-stats factor when not met. The requirement is checked
@@ -198,7 +199,7 @@ def stat_multiplier(tables, requirement, stat, rate, graph_id, stat_mult=1.0, ra
 
 def element_multiplier(tables, wep, reinf, aecp, elem_suffix, graph_id, stats, str_mult=1.0,
                        rate_adds=None):
-    """`FUN_140690390`: combine the five stat multipliers for one element.
+    """`FUN_140691690`: combine the five stat multipliers for one element.
 
     `rate_adds` {stat: points} is the SpEffect scaling-rate add (`RATE_POINT_FIELDS`), added to
     the reinforced rate of every stat the AECP row flags for this element."""
@@ -289,7 +290,7 @@ def attack_rating(tables, weapon, affinity='Standard', level=0, stats=None, two_
     maxlvl = tables.max_level(wep['reinforceTypeId'])
     if not 0 <= level <= maxlvl:
         raise SystemExit(f'level {level} out of range 0..{maxlvl} for {tables.names.get(base_id)}')
-    # EquipParamWeapon::GetEntry 0x140d54600: reinforce row = reinforceTypeId + id % 100.
+    # EquipParamWeapon::GetEntry 0x140d57aa0: reinforce row = reinforceTypeId + id % 100.
     reinf = tables.reinforce[wep['reinforceTypeId'] + level]
     aecp = tables.aecp.get(wep['attackElementCorrectId'], {})
     two = two_handed or wep['wepType'] in ALWAYS_TWO_HANDED_WEP_TYPES
@@ -332,7 +333,7 @@ def attack_rating(tables, weapon, affinity='Standard', level=0, stats=None, two_
                                    'scaling': prev['scaling'] + val * (mult - 1.0),
                                    'total': prev['total'] + val * mult}
 
-    # 0x1407c0390 (enableMagic) / 0x1407c0430 (enableMiracle): 100 * element multiplier,
+    # 0x1407c16c0 (enableMagic) / 0x1407c1760 (enableMiracle): 100 * element multiplier,
     # stat-only path with the two-handing multiplier fixed at 1.0.
     for flag, (name, suf, _, _, gfield) in (('enableMagic', ELEMENTS[1]),
                                             ('enableMiracle', ELEMENTS[4])):
@@ -404,7 +405,7 @@ SELFTEST_CASES = [
 ]
 
 # Curve points read straight off CalcCorrectGraph rows (graph 0: stage ends 1/18/60/80/150
-# at 0/25/75/90/110), so these test the port of 0x140690f30, not a reference calculator.
+# at 0/25/75/90/110), so these test the port of 0x140692230, not a reference calculator.
 GRAPH_CASES = [(0, 1, 0.0), (0, 18, 25.0), (0, 60, 75.0), (0, 80, 90.0), (0, 150, 110.0),
                (0, 200, 110.0), (6, 25, 10.0), (6, 45, 75.0), (6, 30, 26.25)]
 

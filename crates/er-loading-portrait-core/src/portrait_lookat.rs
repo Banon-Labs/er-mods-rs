@@ -7,7 +7,7 @@ use crate::prelude::*;
 //
 // Reach (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
 // X = *(R + ANIM_LOCATION) ; importer = *(X + importer) ; poseHolder = importer + POSEHOLDER (embedded,
-// not a deref). Verified at FUN_140bba7d0 + GetPosHolder (lea rax,[rcx+0x48]).
+// not a deref). Verified at 0x140bbc2c0 + GetPosHolder (lea rax,[rcx+0x48]).
 pub const PROFILE_LOOKAT_ANIM_LOCATION_OFFSET: usize = 0x948;
 pub const PROFILE_LOOKAT_IMPORTER_OFFSET: usize = 0x20;
 pub const PROFILE_LOOKAT_POSEHOLDER_OFFSET: usize = 0x48;
@@ -29,7 +29,7 @@ pub const HKA_BONE_NAME_OFFSET: usize = 0x0; // hkStringPtr (char* ASCII; mask b
 /// `dirtyFlags[idx] |= this` marks a bone's model-space transform stale so `updateBoneModelSpace`
 /// rebuilds it (and its descendants) from the local pose before the offscreen render.
 pub const POSE_DIRTY_MODEL_SPACE_BIT: u32 = 0x2;
-/// Bone names we drive (standard ER c0000 names, confirmed via the ragdoll bone map FUN_141d700c0).
+/// Bone names we drive (standard ER c0000 names, confirmed via the ragdoll bone map 0x141d73600).
 pub const LOOKAT_BONE_HEAD: &str = "Head";
 pub const LOOKAT_BONE_NECK: &str = "Neck";
 pub const LOOKAT_BONE_SPINE2: &str = "Spine2";
@@ -87,58 +87,54 @@ pub use er_telemetry_core::counters::PROFILE_READBACK_CHECKER;
 /// were classified as a checker/placeholder (so did not publish). `oracle_profile_readback_some` /
 /// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
 pub use er_telemetry_core::counters::PROFILE_READBACK_SOME;
-/// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
+/// `updateBoneModelSpace` (`0x1416568b0`). The
 /// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
 /// (anim-imported) `localSpaceBoneData` for every dirty bone. We hook it: before the original runs, we
 /// compose the cursor rotation onto the Head/Neck/Spine2 local quaternions and mark all bones dirty, so
 /// the original's recompute cascades our rotation into the final pose the render skins from. This is the
 /// only injection point that survives the per-frame anim re-import (a game-task write is clobbered).
-pub const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x1653350;
-/// Per-frame per-model push task `FUN_140bba7d0` (dump) -> deobf RVA 0x140bba6e0 (content-unique, shift
-/// -0xf0). `fn(renderer, frame)`: if model_ins(+0x778) && X(+0x948) it reads importer=*(X+0x20) and calls
-/// the submodel propagation `FUN_1409e9ac0(model_ins, frame, importer)` which copies the importer's
+pub const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x16568b0;
+/// Per-frame per-model push task (`0x140bbc2c0`). `fn(renderer, frame)`: if model_ins(+0x778) && X(+0x948) it reads importer=*(X+0x20) and calls
+/// the submodel propagation `0x1409eb100(model_ins, frame, importer)` which copies the importer's
 /// model-space bones into every submodel's own poseHolder.modelSpaceBoneData (what the GPU skins from).
 /// We hook it: write our Head/Neck/Spine2 rotation into the importer PoseHolder + updateBoneModelSpace
 /// before the original, so the original propagates our pose to the submodels at 60 Hz with the correct
 /// `frame` arg (which we cannot synthesize -- it feeds the render-entity commit + cloth). See bd
 /// portrait-lookat-submodel-propagation-RE-2026-06-29.
-pub const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
+pub const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbbc2c0;
 pub static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_HOOK_HITS;
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_HOOK_INSTALLED;
-/// Profile-renderer update task `FUN_140bba820` (dump) -> deobf RVA 0x140bba730 (content-unique, shift
-/// -0xf0). `fn(renderer, FD4TaskData*)`: runs the FD4 state-machine stepper (vtable+0xc0) then refreshes the
+/// Profile-renderer update task (`0x140bbc310`). `fn(renderer, FD4TaskData*)`: runs the FD4 state-machine stepper (vtable+0xc0) then refreshes the
 /// model transform/animation (anim step with `*(td+8)` delta-time, model matrix, FaceData) for the tick.
 /// Paired with the draw task (== `PROFILE_PER_FRAME_PUSH_RVA`). RE-confirmed: both are `CSEzUpdateTask`s
 /// the renderer self-registers; post-Continue their ResMan driver under-schedules them (~4-19x/loading
 /// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
 /// portrait re-rasterize the live look-at pose every frame. See keepalive-pool-refuted-readback-crossqueue.
-pub const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
-/// `FD4Singleton<CS::CSCloth>` instance pointer -- the world cloth manager. Live/dump addr 0x143d75f28
-/// (data, shift 0; disasm-verified: `FUN_1409f0250` loads `[0x143d75f28]`, `test rcx,rcx`, and DLPanics
+pub const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbbc310;
+/// `FD4Singleton<CS::CSCloth>` instance pointer -- the world cloth manager. Address 0x143d7cfb8
+/// (data; disasm-verified: its readers load `[0x143d7cfb8]`, `test rcx,rcx`, and DLPanic
 /// "accessed an uninitialized singleton" (FD4Singleton.h:0xb4) when null). Our profile-model update/draw
 /// drive triggers that model's cloth release; at shutdown CSCloth is freed first, so driving it then is a
 /// hard CTD (DLPanic is a native abort, not a catchable Rust panic). We must skip our drive when null.
-pub const CS_CLOTH_GLOBAL_RVA: usize = 0x3d75f28;
-/// Menu-model ANIM BIND `FUN_140bba300` (dump) -> deobf RVA 0xbba210 (content-unique, shift -0xf0,
-/// verified via dump-deobf-shift 2026-07-03). `fn(renderer, &anim_id_i32, force, mode)`: stops the
+pub const CS_CLOTH_GLOBAL_RVA: usize = 0x3d7cfb8;
+/// Menu-model ANIM BIND (RVA `0xbbbdf0`). `fn(renderer, &anim_id_i32, force, mode)`: stops the
 /// current anim entry (via the handle at +0x96c), resolves + plays `anim_id` on the model's anim
 /// holder X(+0x948), and caches id/handle at +0x968/+0x96c; id -1 unbinds (handle := the null
 /// sentinel). Early-returns on an unchanged id unless `force != 0`. The update task steps the bound
 /// anim by frame-dt each call only while `+0x96c != sentinel` -- see bd
 /// `portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03` (corrects the earlier "~6Hz gparam gate"
-/// reading). The native profile pipeline binds id 0 (FUN_140bbe290 <- refresh FUN_1409aa7d0), which
+/// reading). The native profile pipeline binds id 0 (FUN_140bbfda0 <- refresh FUN_1409abcd0), which
 /// is the static menu pose -- that, not cadence, is why the loading portrait never moved.
-pub const PROFILE_ANIM_BIND_RVA: usize = 0xbba210;
-/// Null anim-handle sentinel global `DAT_143b39470` (data RVA; data addresses do not shift between
-/// the dump and the live binary -- same convention as `GX_DRAW_CONTEXT_RVA`). The CSMenuAsmModelRend
+pub const PROFILE_ANIM_BIND_RVA: usize = 0xbbbdf0;
+/// Null anim-handle sentinel global `DAT_143b40490` (data RVA). The CSMenuAsmModelRend
 /// ctor inits renderer+0x96c to this global's value.
-pub const PROFILE_ANIM_NULL_HANDLE_RVA: usize = 0x3b39470;
+pub const PROFILE_ANIM_NULL_HANDLE_RVA: usize = 0x3b40490;
 /// The bound-anim handle cache on the renderer (low16 = anim-entry index, high16 = generation).
 pub const PROFILE_ANIM_HANDLE_OFFSET: usize = 0x96c;
 /// Idle anim ids to bind on the loading portrait, in order. The menu model's anim holder is built
-/// from the full c0000 ANIBND (`FUN_140bbb4a0`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
-/// `FUN_1401ac2f0` -> renderer+0x948), so base c0000 anim ids resolve -- not just menu poses.
+/// from the full c0000 ANIBND (`0x140bbcf90`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
+/// `0x1401ac280` -> renderer+0x948), so base c0000 anim ids resolve -- not just menu poses.
 /// 3000000 = the in-world standing idle (grounded: our own in-world telemetry reports
 /// `current_animation_id = 3000000`; visibly more movement than the menu idles, per user request
 /// 2026-07-03). 0x18696=100022 / 0x1863c=99900 are the CSMenuPlayerModelRend ctor's equip-menu
@@ -163,7 +159,7 @@ pub use er_telemetry_core::counters::PORTRAIT_DRIVE_TICKS;
 /// why nothing ever visibly animated. Per drive frame we sample the renderer's request/teardown
 /// latches (+0x754/+0x755/+0x756) and re-run `STEP_Wait_Play`'s own FaceData compare
 /// (`GetFaceDataBuffer(renderer_FaceData@+0x788, true)` vs the staged buffer at +0x218, 0x120
-/// bytes): a mismatch makes the step invalidate the model (`FUN_1409ecb40`) every tick -- and we
+/// bytes): a mismatch makes the step invalidate the model (`0x1409ee1b0`) every tick -- and we
 /// drive that step at 60Hz. `NEQ_TICKS`/`DRIVE_TICKS` ~= 1.0 convicts the FaceData loop; latch
 /// bytes != 0 at rebind time convict a latch raiser instead.
 pub use er_telemetry_core::counters::PORTRAIT_FACEDATA_NEQ_TICKS;
@@ -176,7 +172,7 @@ pub use er_telemetry_core::counters::PORTRAIT_FACEDATA_NEQ_TICKS;
 pub use er_telemetry_core::counters::PORTRAIT_KICK_RENDERER;
 /// Slot-KEYED kick latch (rebuild-storm root fix, run #4 tripwire `latches=0/1/0`; slot-keyed per
 /// user eyewitness 2026-07-03 "wrong character rendered the whole load, no swap"). The engine's
-/// global refresh (dump FUN_1409aa7d0) raises the +0x754/+0x755 request latches once per profile
+/// global refresh (FUN_1409abcd0) raises the +0x754/+0x755 request latches once per profile
 /// data change, gated on both reading 0. Our cadence re-kick hit the mid-pipeline phase where the
 /// model is dead and the latches are already consumed, re-raising them -- so `STEP_Wait_Play` saw
 /// +0x755 != 0 on every pass and re-entered the rebuild state (7) forever: ~1 rebuild/second, anim
@@ -228,8 +224,8 @@ pub use er_telemetry_core::counters::DEPTH_RB_NOGAP;
 pub use er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_MULTI;
 pub use er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF;
 /// Count of frames where the profile renderer/offscreen object exists, but one of the four native
-/// offscreen texture wrappers is not ready for `FUN_141a02de0`: wrapper is null or wrapper+0x40 is null.
-/// Windows crash 2026-07-14 hit `FUN_141e90290` with rcx=0x20 because `FUN_141a02de0` passed a null
+/// offscreen texture wrappers is not ready for `0x141a06340`: wrapper is null or wrapper+0x40 is null.
+/// Windows crash 2026-07-14 (1.16.2) hit `0x141e937f0` with rcx=0x20 because `0x141a06340` passed a null
 /// wrapper+0x40 into the GX resource-state classifier; skip the drive until all four wrappers are ready.
 pub use er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF_RESOURCE;
 /// Pump-block reason counters (run #7: modeldraws froze at 250 ~10s before the load-completed
@@ -346,21 +342,20 @@ pub use er_telemetry_core::counters::PROFILE_TEAR_EMA;
 /// how long the make-before-break bridge held the prior head. Snapshot + reset per window.
 pub use er_telemetry_core::counters::PROFILE_WINDOW_FIRST_KEYED_DISPLAY;
 pub use er_telemetry_core::counters::PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST;
-// Native scene-alpha KEYING (strategy pivot 2026-07-03). Deobf RVAs read directly from the deobf
-// disassembly of the engine's own offscreen clear (dump FUN_140bb73a0 -> deobf 0x140bb72b0,
-// shift -0xf0, scripts/dump-deobf-shift.py content-unique): pop a GX frame context from
+// Native scene-alpha KEYING (strategy pivot 2026-07-03). RVAs read directly from the
+// disassembly of the engine's own offscreen clear (`0x140bb8e90`): pop a GX frame context from
 // g_GxDrawContext (pointer global at GX_DRAW_CONTEXT_RVA), clear the scene bundle's RTV
 // (bundle+0x30) through the frame's subcontext (+0x25c8), release the frame context. We replicate
 // that body with clear color {0,0,0,0} (the engine uses the shared opaque-black FloatVector4 at
-// dump 0x14329e9b0 -- 136 xrefs, not patchable), so the RT's alpha channel becomes the native
-// subject mask once the pump redraws only the model each frame.
-/// Deobf RVA of the GX frame-context pop (deobf 0x1419e5830; dump FUN_1419e5850).
-pub const GX_FRAME_CTX_POP_RVA: usize = 0x19e5830;
-/// Deobf RVA of the ClearRTV wrapper (deobf 0x1419e0e10; dump FUN_1419e0e30).
+// 0x1432a3f30, read from many sites and not patchable), so the RT's alpha channel becomes the
+// native subject mask once the pump redraws only the model each frame.
+/// RVA of the GX frame-context pop (`0x1419e8d90`).
+pub const GX_FRAME_CTX_POP_RVA: usize = 0x19e8d90;
+/// RVA of the ClearRTV wrapper (`0x1419e4370`).
 /// Args: rcx = *(frame_ctx + GX_FRAME_SUBCTX_OFFSET), rdx = *(bundle+0x30) RTV view, r8 = &f32x4.
-pub const GX_CLEAR_RTV_WRAPPER_RVA: usize = 0x19e0e10;
-/// Deobf RVA of the GX frame-context release (deobf 0x1419eaa20; dump FUN_1419eaa40).
-pub const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19eaa20;
+pub const GX_CLEAR_RTV_WRAPPER_RVA: usize = 0x19e4370;
+/// RVA of the GX frame-context release (`0x1419edf80`).
+pub const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19edf80;
 /// Offset of the clear-target subcontext pointer inside a popped GX frame context.
 pub const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
@@ -377,16 +372,16 @@ pub use er_telemetry_core::counters::PROFILE_PERFRAME_MODEL_DRAWS;
 /// removed 2026-08-31: no writer, printed as `spared[... draws=]` forever at 0.)
 pub use er_telemetry_core::counters::PROFILE_SPARED_MODEL_OK;
 /// Q4 keepalive oracle: g_GxDrawContext global (gamebase + this RVA). The offscreen draw rasterizes only
-/// when FUN_1419e5850(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
+/// when FUN_1419e8d90(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
 /// *(ctx+0x100). We read those two qwords non-destructively each draw frame (no pop) to detect whether a
 /// GX pass is queued -- the decisive runtime question for whether a post-Continue / now-loading offscreen
 /// render can produce pixels at all. Counters: total samples vs frames the queue was non-empty.
-pub const GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+pub const GX_DRAW_CONTEXT_RVA: usize = 0x47f6400;
 pub const GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET: usize = 0xf8;
 pub const GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET: usize = 0x100;
 pub use er_telemetry_core::counters::PROFILE_GX_QUEUE_NONEMPTY;
 pub use er_telemetry_core::counters::PROFILE_GX_QUEUE_SAMPLES;
-/// GX SUBCONTEXT pool stat offsets (RE-confirmed via Ghidra Initilize@0x1419e7d10 + pop FUN_1419e5850):
+/// GX SUBCONTEXT pool stat offsets (RE-confirmed via Initilize@0x1419eb250 + pop FUN_1419e8d90):
 /// the `+0xf0` member is a `Vector<subctx*>` whose floor pointer is at `+0xf8` and movable stack-top at
 /// `+0x100` (the pop checks `*(ctx+0xf8) == *(ctx+0x100)` for empty, else pops `*(top-8)`, `top -= 8`). So
 /// the number of free (poppable) subcontexts this frame == `(*(ctx+0x100) - *(ctx+0xf8)) / 8`. The
@@ -422,7 +417,7 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_HOOK_INSTALLED;
 /// (that would double-apply / drift). The detour stays installed only to provide the clean recompute
 /// trampoline and to passthrough the engine's own natural recompute calls.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_REALTIME;
-/// Count of per-tick offscreen re-render drives (`FUN_140bb8d90`). Without this the forced portrait only
+/// Count of per-tick offscreen re-render drives (`0x140bba880`). Without this the forced portrait only
 /// re-renders at the ~4s model-rebuild cadence, so the head appears to track the cursor with seconds of
 /// lag; driving the offscreen render each tick (menu phase only -- valid GxDrawContext) makes it smooth.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RENDER_DRIVES;
@@ -621,12 +616,12 @@ pub const LOOKAT_RT_SAMPLE_INTERVAL: usize = 8;
 /// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path
 /// (fire the Load-Game row -> live ProfileLoadDialog -> hold for the portrait render -> STAGE2 commit).
 pub const PROFILE_SELECT_LOAD_FLOW_ENABLED: bool = false; // proven Continue char-load is the default; ProfileSelect flow is blocked by the accept-byte open+drain coupling (the only reliable menu-open commits Continue), so it can't get a window to navigate Load-Game -- left gated-off for the record
-/// `MarkProfileIndexAsUsed` (deobf 0x140262250): sets `ProfileSummary->saveSlotsStates[slot] = true`
-/// (the `bool[10]` at `ProfileSummary+0x8` that the refresh `FUN_1409aa680` gates each slot's portrait
+/// `MarkProfileIndexAsUsed` (0x140262260): sets `ProfileSummary->saveSlotsStates[slot] = true`
+/// (the `bool[10]` at `ProfileSummary+0x8` that the refresh `FUN_1409abcd0` gates each slot's portrait
 /// render on). `fn(summary, slot)`. Not called by the ProfileSelect flow by default -- the live
 /// ProfileLoadDialog's own header-read marks the slots; wire a call only if a runtime probe shows the
 /// target slot stays unmarked (`saveSlotsStates[slot]==0`) inside the open dialog.
-pub const PROFILE_MARK_SLOT_USED_RVA: usize = 0x262250;
+pub const PROFILE_MARK_SLOT_USED_RVA: usize = 0x262260;
 /// Target save slot for the menu-phase `force_profile_render` manual diagnostic (the staged
 /// single-profile gold save's character is slot 0). The autoload path passes its own target slot
 /// instead of this constant.

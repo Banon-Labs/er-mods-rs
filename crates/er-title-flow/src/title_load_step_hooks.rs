@@ -39,8 +39,9 @@ unsafe fn title_dialog_sm_state(
 
 /// Skip the title FadeIn ONCE: the first frame the dialog SM is settled in FadeIn (menu-open latch
 /// clear), drive the FD4 state machine FadeIn->Loop by calling the game's own transition `SetState`
-/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is exactly the call
-/// `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
+/// (0x14074ace0, `TITLE_FD4_SETSTATE_RVA`; 1.16.2 0x1407499e0) with
+/// `(sm = dialog+0xa60, desc = Loop 0x142a94b58)`. This is exactly
+/// the call `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
 /// fadein-* RE), so it is save-safe and routes through the SM's own vtable[0x150] request path (no
 /// struct stomp) -- but zero input. `SetState` internally no-ops unless the current node is settled
 /// (`[node+0x20]&0x8f >= 2`), so an early call before the node is eligible cannot corrupt the SM.
@@ -92,12 +93,11 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     };
     let set_state: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(set_state_addr) };
-    // The argument needed resolving too. The call target was already gated by `title_fn`, but the
-    // Loop state DESCRIPTOR was passed as a raw `base + RVA` -- and `set_state` dereferences it.
-    // `.rdata` moved on 1.17 like everything else (0x2a8f9e8 -> 0x2a92a68), so the FD4 state
-    // machine was being handed a pointer to whatever now occupies the 1.16.2 slot and told to
-    // transition to whatever it found there. A refusal returns instead: the fade is not skipped,
-    // which is cosmetic, where the wrong descriptor is not.
+    // The argument needs resolving too. The call target is gated by `title_fn`, and the Loop state
+    // DESCRIPTOR goes through the same build check because `set_state` dereferences it: on a build
+    // the rva was not measured on, the slot holds something else and the FD4 state machine would be
+    // told to transition to whatever it found there. A refusal returns instead: the fade is not
+    // skipped, which is cosmetic, where the wrong descriptor is not.
     let Some(loop_desc) = er_game_base::game_build::resolve_game_address(
         base + TITLE_STATE_DESC_LOOP_RVA,
         "TITLE_STATE_DESC_LOOP_RVA",
@@ -111,7 +111,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     ));
 }
 
-/// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
+/// Detour for STEP_MenuJobWait (0x140b0efd0, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
 /// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
 pub unsafe extern "system" fn title_menujob_speed_detour(
     owner: usize,
@@ -152,7 +152,7 @@ pub unsafe fn install_title_anim_speed_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "title_menujob_speed_b0d400",
+            "title_menujob_speed_b0efd0",
             TITLE_MENU_JOB_WAIT_RVA as u32,
             title_menujob_speed_detour as *mut c_void,
             &TITLE_ANIM_SPEED_ORIG,
@@ -276,7 +276,7 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "movemapstep_step_movemap_gate_af7cf0",
+            "movemapstep_step_movemap_gate_af94c0",
             MOVEMAPSTEP_STEP_MOVEMAP_RVA as u32,
             movemapstep_step_move_map_gate_detour as *mut c_void,
             &MOVEMAPSTEP_STEP_MOVEMAP_ORIG,
@@ -293,11 +293,12 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// Before-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (deobf 0x140aec720). Root fix
+/// Before-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (0x140aedef0). Root fix
 /// for the warm-reload revert (bd er-effects-rs-9fmm): the parent reports the ending child finished
-/// (`FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the MoveMapStep finalize substate)
-/// while the ending advancer is still at substate 8, then sets requestCode `+0xd8=2` and tears the child
-/// down (`FUN_140eb54e0`) before the advancer runs case 8 (which posts substate 9). That strands the
+/// (`0x140eb8a90`, 1.16.1 dump `FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the
+/// MoveMapStep finalize substate) while the ending advancer is still at substate 8, then sets
+/// requestCode `+0xd8=2` and tears the child down (`0x140eb8a20`, 1.16.1 dump `FUN_140eb54e0`)
+/// before the advancer runs case 8 (which posts substate 9). That strands the
 /// reload and native reverts to title. This detour replicates the function's own "child not finished"
 /// early-return: while the MoveMapStep finalize substate is in [1..=8] (finalize in progress) it skips
 /// the original, so the advancer (pumped elsewhere -- STEP_MoveMap_Update does not pump it, confirmed by
@@ -315,7 +316,8 @@ pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
         return 0;
     }
     // Instrument (bd root-load2-finalize-advancer-not-ticked-fun140afa7c0): count STEP_MoveMap_Update
-    // calls per reload epoch. The finalize advancer FUN_140afa7c0 is ticked ~145x for load1 but ~1x for
+    // calls per reload epoch. The finalize advancer (0x140afbeb0; 1.16.1 dump FUN_140afa7c0) is
+    // ticked ~145x for load1 but ~1x for
     // load2. This detour runs on every STEP_MoveMap_Update call, so if this counter climbs for epoch>=1
     // (load2) while the advancer stays at 1, STEP_MoveMap_Update runs but skips the advancer call
     // internally (an internal branch); if it stays low for load2, the parent stopped calling it.
@@ -390,7 +392,7 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "ingamestep_step_movemap_update_defer_aec720",
+            "ingamestep_step_movemap_update_defer_aedef0",
             INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA as u32,
             ingamestep_step_movemap_update_defer_detour as *mut c_void,
             &INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG,
@@ -407,14 +409,15 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// After-original override for the child-done query FUN_140eb5550 (rva 0xeb5530). STEP_MoveMap_Update
-/// tears the MoveMapStep child down (FUN_140eb54e0 + requestCode+0xd8=2) when this returns done; for
+/// After-original override for the child-done query (rva 0xeb8a90; 1.16.1 dump FUN_140eb5550).
+/// STEP_MoveMap_Update tears the MoveMapStep child down (0x140eb8a20 + requestCode+0xd8=2) when
+/// this returns done; for
 /// load2 it returns done prematurely (field25=0) -> advancer stops -> frozen (bd complete-chain-load2-
 /// child-torndown-early-fun140eb5550-done-premature). Isolate the MoveMapStep child's call
 /// (rcx == current MoveMapStep + 0x108, bd mms-child-ezchildstepbase-at-plus0x108) and, on a committed
 /// reload while the finalize is mid-walk (field25 in 0..=8), force the result not-done so
 /// STEP_MoveMap_Update takes its `if(!done) return` branch (keeps the child, no teardown) while the
-/// FD4-ticked child keeps ticking the advancer FUN_140afa7c0 until field25 reaches 9; then the real
+/// FD4-ticked child keeps ticking the advancer 0x140afbeb0 until field25 reaches 9; then the real
 /// done passes -> natural teardown -> world completes. Only the MoveMapStep child (rcx gate) on a
 /// committed reload is touched; load1 (epoch 0) and every other child/query are unchanged.
 pub unsafe extern "system" fn child_done_query_override_detour(
@@ -522,7 +525,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "child_done_query_override_eb5530",
+            "child_done_query_override_eb8a90",
             CHILD_DONE_QUERY_RVA as u32,
             child_done_query_override_detour as *mut c_void,
             &CHILD_DONE_QUERY_ORIG,
@@ -535,7 +538,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
     std::mem::forget(hooks);
 }
 
-/// STEP_MoveMap_LoadlistInit (deobf rva 0xaec480 / dump 0x140aec570). Its build is gated on
+/// STEP_MoveMap_LoadlistInit (2.7.2.0 rva 0xaedd40; 1.16.2 0x140aec570). Its build is gated on
 /// `worldloadlistlistVirtualPath.size != 0` (InGameStep+0x108, a DlFixedString<wchar_t,128> inline:
 /// +0x00 union{pointer when capacity>7 / inline}, +0x08 size(wchars), +0x10 capacity). When that
 /// string is empty the game skips building the loadlist -> no block-res -> WorldResWait hangs ->
@@ -543,9 +546,9 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
 /// trace-DLL copy never fired). Read-only for now: it logs the DlFixedString per load epoch so a run
 /// settles whether the stalled load's path was empty (empty-loadlist root confirmed) or populated
 /// (root is downstream/contention). The capture-replay write is added once the layout is confirmed.
-// deobf entry 0x140aec570 (== dump 0x140aec570; shift 0 for this fn -- the dump-deobf-shift tool
-// mislanded at 0xaec480 in the -0xf0 sub-region). Verified by prologue mov [rsp+0x10],rbx; push rsi;
-// sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
+// 1.16.2 deobf entry 0x140aec570 (== dump 0x140aec570; shift 0 for this fn -- the dump-deobf-shift
+// tool mislanded at 0xaec480 in the -0xf0 sub-region). Verified (1.16.2) by prologue
+// mov [rsp+0x10],rbx; push rsi; sub rsp,0x20; mov rbx,rcx then the DAT_143d5db09=1 store (0x140aec57d) + CreateLoadlistlistFileCap
 // call (0x140aec5f0). bd loadlist-capture-hook-wrong-address-0xaec480-midfunction-refind-entry.
 pub const LOADLIST_INIT_RVA: usize = er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA;
 const INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET: usize = 0x108;
@@ -609,7 +612,7 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "loadlist_init_capture_aec480",
+            "loadlist_init_capture_aedd40",
             LOADLIST_INIT_RVA as u32,
             loadlist_init_capture_detour as *mut c_void,
             &LOADLIST_INIT_ORIG,
@@ -621,7 +624,7 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     ));
     std::mem::forget(hooks);
 }
-/// Read-only trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
+/// Read-only trace detour for the title step-setter `SetState(owner, int state)` (0x140b0f530).
 /// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
 /// holder) liveness, then calls the original unchanged. Pure observation -- this is the
 /// "look before acting" instrument for the menu-build-overlap lever: it reveals the exact wall-clock
@@ -677,7 +680,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(
         // tears down the just-entered reload world. To decide native-vs-ours without a return-address
         // capture, log the concurrent state: our return-title chain is the only way our code can cause
         // a native SetState(2) (we never call the setter with state 2 directly -- we submit the game's
-        // own return-title builder 0x79d700). So SetState(2) with rt_submit unchanged/old across it, at
+        // own return-title builder 0x79ea30). So SetState(2) with rt_submit unchanged/old across it, at
         // phase==AUTOLOAD_HANDOFF, is a genuine native InGameStep decision; a fresh rt_submit near it is
         // ours. request_code (InGameStep+0xd8) tells whether the finalize had reached in-world (>=2).
         let ig_request_code = if owner > PAB_MIN_HEAP_PTR {
@@ -704,7 +707,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(
         //       if (GameMan+0xb7c == 0)                   // else: state 7
         //         if (GameMan+0xb7d == 0)  -> state 2 = BeginLogo   // else: state 9
         //
-        // `menuData+0x5e` is not read on that path -- verified on the installed 1.17 build and
+        // `menuData+0x5e` is not read on that path -- verified on the then-installed 1.17 build and
         // identity-checked (shift 0). Because b7c/b7d were missing from this line, the only field
         // that happened to be set at the revert was md5e, which is how a byte with no role in the
         // decision became the prime suspect. b7c/b7d are logged now so the trace can name the branch.
@@ -820,7 +823,7 @@ pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "title_setstate_b0d960",
+            "title_setstate_b0f530",
             TITLE_SET_STATE_RVA as u32,
             title_setstate_trace_detour as *mut c_void,
             &TITLE_SETSTATE_TRACE_ORIG,

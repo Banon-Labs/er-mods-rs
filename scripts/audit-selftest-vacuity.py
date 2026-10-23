@@ -455,7 +455,7 @@ def run_mutated(path: Path, args: list[str], mode: str = "regex") -> "tuple[int,
     # Any mention of capstone, not `import capstone`. The narrow needle missed three real cases:
     # `from capstone import ...` (check-singleton-field-offsets.py), and gates that never import
     # it themselves but load a matcher module that does and re-execs from in there
-    # (check-object-field-offsets-1170.py, attribute-field-offset-owners.py). Each came back
+    # (check-object-field-offsets.py, attribute-field-offset-owners.py). Each came back
     # UNMEASURED -- the verdict that means this tool could not judge the gate at all. The two
     # errors are not symmetric: a false positive costs one `uv run` startup, a false negative
     # costs the whole judgement, so the needle is deliberately broad.

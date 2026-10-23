@@ -1,7 +1,7 @@
 // How often `MenuWindowJob::Run` (1.17.1 rva 0x7ae040) runs the item list's window while it is open.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // er-r3-view keeps its board up until the item list has gone `ITEM_LIST_GONE_MS` without a Run,
 // which the player sees as a one-second delay after B. A shorter draw-side cutoff is safe only if

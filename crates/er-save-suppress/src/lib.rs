@@ -21,8 +21,8 @@
 //!   no-op because its periodic telemetry writer exports the counters on its own cadence.
 //!
 //! Never load `er_save_disable.dll` alongside `er_quickload.dll` in one me3 profile:
-//! each carries its own MinHook instance and both would detour `0x140e6fb50` /
-//! `0x140e6e430`, corrupting each other's trampolines.
+//! each carries its own MinHook instance and both would detour `0x140e730b0` /
+//! `0x140e71990`, corrupting each other's trampolines.
 //!
 //! # The one-shot bypass (save-game-flow WP1)
 //!
@@ -42,7 +42,7 @@
 //! [`bypass_final_status_source`] says which of them it was, so a commit that only ended
 //! because the caller's watchdog expired stays distinguishable from one that was observed.
 //!
-//! # Why this layer and not another (1.16.2, all addresses byte-verified)
+//! # Why this layer and not another (2.7.2.0, all addresses byte-verified)
 //!
 //! Every save in the game is request-based and asynchronous. A trigger sets
 //! `GameMan+0xb72`/`+0xb73`; a per-frame dispatcher serializes the data and hands it to
@@ -50,37 +50,37 @@
 //! writes it. The whole write side funnels through a single call:
 //!
 //! ```text
-//!   FUN_14067b750 (game save)     -> FUN_140e6ec70 -+
-//!   FUN_14067b940 (game+system)   -> FUN_140e6ef60  |
-//!   FUN_14067b570 (system only)   -> FUN_140e6ec70  +-> FUN_140e6fb50 -> FUN_14240ae10
-//!   FUN_14067b4e0 (all blocks)    -> FUN_140e6ec80  |      (enqueue)      -> FUN_14240e6f0
-//!   FUN_140e6e430 (deferred)      -> FUN_140e6f370 -+                        (worker queue)
+//!   FUN_14067ca50 (game save)     -> FUN_140e721d0 -+
+//!   FUN_14067cc40 (game+system)   -> FUN_140e724c0  |
+//!   FUN_14067c870 (system only)   -> FUN_140e721d0  +-> FUN_140e730b0 -> FUN_14240edc0
+//!   FUN_14067c7e0 (all blocks)    -> FUN_140e721e0  |      (enqueue)      -> FUN_1424126a0
+//!   FUN_140e71990 (deferred)      -> FUN_140e728d0 -+                        (worker queue)
 //! ```
 //!
-//! `FUN_140e6fb50` has exactly five callers image-wide (the five above) and is the
-//! *only* caller of `FUN_14240ae10`, which is in turn the only caller of the write
-//! enqueue `FUN_14240e6f0`. So `FUN_140e6fb50` is not "a good place to intercept" --
+//! `FUN_140e730b0` has exactly five callers image-wide (the five above) and is the
+//! *only* caller of `FUN_14240edc0`, which is in turn the only caller of the write
+//! enqueue `FUN_1424126a0`. So `FUN_140e730b0` is not "a good place to intercept" --
 //! it is the unique, provable choke point for every save write the game can perform,
 //! including the boot-time system-slot save that no trigger-level hook would have seen.
 //!
 //! It is also strictly *above* the thread hand-off: `CopyFileW` of `ER0000.sl2.bak`
-//! (`FUN_142410830`), the `.bak` delete, the BND4 rebuild (`FUN_142413860`), the
-//! per-block writes (`FUN_1424142e0`) and `SetEndOfFile` all live inside the job body
-//! `FUN_14240fd70`, which only ever runs after a successful enqueue. Swallowing the
+//! (`FUN_1424147e0`), the `.bak` delete, the BND4 rebuild (`FUN_142417810`), the
+//! per-block writes (`FUN_142418290`) and `SetEndOfFile` all live inside the job body
+//! `FUN_142413d20`, which only ever runs after a successful enqueue. Swallowing the
 //! enqueue therefore removes 100% of the save file IO, not just the payload write.
 //!
 //! # Why loads are untouched
 //!
 //! The SL device keeps *save* state in `iodev+0x10` (an `SLSaveContent`) and *load*
 //! state in `iodev+0x18` (a distinct 0x230-byte content object). Loads submit through
-//! `FUN_140e6eb80` -> `FUN_14240ad30` -> `FUN_14240e420` -- a different enqueue with a
-//! different job class, reached from `FUN_14067b200` (slot load), `FUN_14067b1a0`,
-//! `FUN_14067b480` and `FUN_140829f30`. None of them touches `FUN_140e6fb50`. Continue
+//! `FUN_140e720e0` -> `FUN_14240ece0` -> `FUN_1424123d0` -- a different enqueue with a
+//! different job class, reached from `FUN_14067c500` (slot load), `FUN_14067c4a0`,
+//! `FUN_14067c780` and `FUN_14082b2c0`. None of them touches `FUN_140e730b0`. Continue
 //! and Load Game read the real save file exactly as they always did.
 //!
 //! # Why the status lie cannot corrupt anything
 //!
-//! `FUN_140e6e430` (the save status poll) returns the literal `4` from exactly one
+//! `FUN_140e71990` (the save status poll) returns the literal `4` from exactly one
 //! place: an early-out taken when `iodev+0x10 == 0`, i.e. when *no save request object
 //! exists at all*. Every other return path goes through the job-state jump table and
 //! can only produce 0,1,2,7,8,9. So the detour calls the original first and only
@@ -99,8 +99,8 @@
 //! save is in progress, so it declined to start another". The decompile rules that out.
 //! The lie only ever rewrites `4` (no request) to `0` (success); it never produces `1`
 //! (in flight). The gate that decides whether a new save may be dispatched is
-//! `FUN_14067a080`, which is exactly `GameMan.saveState == 0` -- and the only writers of
-//! `saveState` on the poll path, `FUN_140679510` and `FUN_1406794b0`, set it to **0**
+//! `FUN_14067b380`, which is exactly `GameMan.saveState == 0` -- and the only writers of
+//! `saveState` on the poll path, `FUN_14067a810` and `FUN_14067a7b0`, set it to **0**
 //! whenever the status is not `1`. So the lie can only ever open that gate, never close
 //! it. When a fired request sits latched with `saveState == 0` and no submit appears, the
 //! refusal is downstream of the gate and upstream of the enqueue -- see the save-dispatch
@@ -110,10 +110,10 @@
 //!
 //! Because the detour returns "submitted OK", the dispatcher runs its real commit tail:
 //! `b72 = 0`, `b73 = 0`, `b80 = 1`, `bb8 = 1`, `bbc` bumped, `bc4 1 -> 2`. The next
-//! frame `FUN_140679510` polls, gets our `0`, retires `b80 -> 0`, consumes `bb8`,
-//! increments `bc0`; `DoSaveStuff` takes case 0 and calls `FUN_14067a980`, which moves
-//! `bc4 2 -> 3` and sets the `0x143b355c8` "save concluded" latch. The finalize case-7
-//! gate then passes on its own (`b80 == 0`, `!ShouldSave()`, `!FUN_140679370()`), the
+//! frame `FUN_14067a810` polls, gets our `0`, retires `b80 -> 0`, consumes `bb8`,
+//! increments `bc0`; `DoSaveStuff` takes case 0 and calls `FUN_14067bc80`, which moves
+//! `bc4 2 -> 3` and sets the "save concluded" latch (`0x143b3c5e8`). The finalize case-7
+//! gate then passes on its own (`b80 == 0`, `!ShouldSave()`, `!FUN_14067a670()`), the
 //! "saving..." MenuJob reads `0` and reports Success, and the autosave spinner retires
 //! within one `CSFeManImp::Update`. No field is forged and no state is poked.
 
@@ -187,22 +187,22 @@ fn publish_snapshot() {
     }
 }
 
-/// `FUN_140e6fb50` -- allocates the SL job wrapper and pushes it onto the save-IO
+/// `FUN_140e730b0` -- allocates the SL job wrapper and pushes it onto the save-IO
 /// worker queue. Returns `bool` in AL: true = submitted.
 #[cfg(windows)]
-const SL_ENQUEUE_SAVE_JOB_RVA: usize = 0xe6fb50;
-/// `FUN_140e6e430` -- polls the outcome of the outstanding save request.
+const SL_ENQUEUE_SAVE_JOB_RVA: usize = 0xe730b0;
+/// `FUN_140e71990` -- polls the outcome of the outstanding save request.
 #[cfg(windows)]
-const SL_POLL_SAVE_STATUS_RVA: usize = 0xe6e430;
-/// `FUN_140e6f200` -- the device's own request teardown. Releases `iodev+0x10`
+const SL_POLL_SAVE_STATUS_RVA: usize = 0xe71990;
+/// `FUN_140e72760` -- the device's own request teardown. Releases `iodev+0x10`
 /// (save content), `+0x18` (load content), `+0x20` (job) and `+0x28` (file cap)
 /// through `CSDelayDeleteMan`/`CSFile`, and zeroes `+0x44`. This is precisely what
 /// the native code calls when the enqueue fails, which is the state we synthesize.
 #[cfg(windows)]
 const SL_RELEASE_REQUEST_RVA: usize = er_game_base::rva::SL_RELEASE_REQUEST_RVA;
 
-/// The status code `FUN_140e6e430` returns when `iodev+0x10 == 0`, meaning "there is
-/// no save request". Its single producer is the `MOV EAX,0x4` at `0x140e6e460`.
+/// The status code `FUN_140e71990` returns when `iodev+0x10 == 0`, meaning "there is
+/// no save request". Its single producer is the `MOV EAX,0x4` at `0x140e719c0`.
 const SL_STATUS_NO_REQUEST: u32 = 4;
 /// The status code that means "the save completed successfully". `DoSaveStuff` maps it
 /// to the only arm that advances `GameMan+0xbc4` 2 -> 3.
@@ -212,17 +212,17 @@ const SL_STATUS_SUCCESS: u32 = 0;
 #[cfg(windows)]
 const SL_STATUS_IN_FLIGHT: u32 = 1;
 
-/// `FUN_14067a980` -- the only code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
+/// `FUN_14067bc80` -- the only code that moves `GameMan+0xbc4` from 2 to 3, i.e. the
 /// moment the quit-to-title wait job is released. Its whole body is
 /// `if (bc4 == 2) bc4 = 3;`.
 #[cfg(windows)]
-const QUIT_PHASE_SETTLE_RVA: usize = 0x67a980;
+const QUIT_PHASE_SETTLE_RVA: usize = 0x67bc80;
 
-// Opening bytes of every hooked target as they appear in the 1.16.2 image, checked at install
+// Opening bytes of every hooked target as they appear in the 2.7.2.0 image, checked at install
 // time: if the bytes do not match, the address means something else in this build and the hook
 // is refused rather than crash-installed. Every one is assembled from named instructions by this
-// crate's `build.rs` -- which also compares them against `eldenring-deobf.bin` when a copy is
-// present -- because a hand-typed prologue that is one byte wrong disarms its own hook silently.
+// crate's `build.rs` -- which also compares them against `eldenring-deobf-1.17.2.bin` when a copy
+// is present -- because a hand-typed prologue that is one byte wrong disarms its own hook silently.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_save_suppress_prologues.rs"
@@ -233,8 +233,8 @@ include!(concat!(
 // reached the enqueue was refused by the submit builder's precondition, and if so by
 // which operand.
 //
-// `FUN_140e6ef60` -- the submit builder the combined lane `FUN_14067b940` calls -- opens
-// with a single conjunction (1.16.2 decompile, shift 0):
+// `FUN_140e724c0` -- the submit builder the combined lane `FUN_14067cc40` calls -- opens
+// with a single conjunction (1.16.2 decompile; the names are the 2.7.2.0 functions):
 //
 // ```text
 //   if (iodev+0x10 == 0 && iodev+0x20 == 0 && buf != 0 && tail != 0
@@ -242,7 +242,7 @@ include!(concat!(
 //   return 0;                                   // AL = 0: "no submit"
 // ```
 //
-// Its only caller passes `FUN_140e6ef60(FUN_140e6e060(), pvVar4, param_1, buffer, 10, ..)`
+// Its only caller passes `FUN_140e724c0(FUN_140e715c0(), pvVar4, param_1, buffer, 10, ..)`
 // and has already proven four of those six operands:
 //
 //   * `buf`  (`pvVar4`, the 0x280000 MainHeap block) -- `if (pvVar4 == 0) return 0;`
@@ -254,7 +254,7 @@ include!(concat!(
 //
 // So when that lane declines after a successful serialization, the guard can only have
 // failed on `iodev+0x10` or `iodev+0x20`. There is no third possibility, and the two are
-// different bugs. `FUN_140e6ec70` (the char-only and system-only lanes' builder) gates on
+// different bugs. `FUN_140e721d0` (the char-only and system-only lanes' builder) gates on
 // the same two fields plus `buf != 0`.
 //
 // The remaining non-guard exit is the `HeapAlloc(0x298)`/`SLSaveContent::SLSaveContent`
@@ -262,22 +262,22 @@ include!(concat!(
 // leaves the slot clear and is distinguishable from a guard bail by exactly this sample.
 //
 // Why both fields and not just `+0x10`: `iodev+0x20` is a shared job slot. The load
-// builders `FUN_140e6f430`/`FUN_140e6f5b0` write `param_1[4]`, which is `iodev+0x20`, and
+// builders `FUN_140e72990`/`FUN_140e72b10` write `param_1[4]`, which is `iodev+0x20`, and
 // gate on `iodev+0x18 == 0 && iodev+0x20 == 0`. A load that completed but was never
 // consumed therefore blocks every subsequent save through the same conjunction -- and
-// `FUN_140e6e080` case 0x14 deliberately does not release on a successful load, deferring
-// that to the consumer `FUN_14067b100` -> `FUN_140e6e380` -> `FUN_140e6f200`. Sampling
+// `FUN_140e715e0` case 0x14 deliberately does not release on a successful load, deferring
+// that to the consumer `FUN_14067c400` -> `FUN_140e718e0` -> `FUN_140e72760`. Sampling
 // `+0x18` alongside `+0x20` separates "a stale save request" from "a stale load request",
 // which the guard itself cannot.
 // ============================================================================
 
-/// `DAT_144589390` -- the process-wide SL IO device singleton, the `iodev` every save and
+/// `DAT_144590430` -- the process-wide SL IO device singleton, the `iodev` every save and
 /// load request lives in.
 ///
-/// Read directly rather than by calling `FUN_140e6e060`: the getter lazily constructs the
+/// Read directly rather than by calling `FUN_140e715c0`: the getter lazily constructs the
 /// device under a global mutex, and an instrument must never be able to allocate. Proven
 /// to be the whole story by xref -- the global has exactly five references image-wide, all
-/// inside `FUN_140e6e060` (the getter) and `FUN_140e6f6f0` (the destructor), so every
+/// inside `FUN_140e715c0` (the getter) and `FUN_140e72c50` (the destructor), so every
 /// consumer in the game reaches the same object through the getter.
 #[cfg(windows)]
 const SL_IODEV_GLOBAL_RVA: usize = er_game_base::rva::SL_IODEV_GLOBAL_RVA;
@@ -297,9 +297,9 @@ const SL_IODEV_LOAD_CONTENT_OFFSET: usize = 0x18;
 const SL_IODEV_JOB_OFFSET: usize = 0x20;
 /// `iodev+0x28` -- an `FD4FileCap` still loading. Not a guard operand: when it is set the
 /// builders defer (store the opcode at `+0x30`, return 1) instead of declining, and
-/// `FUN_140e6e430` routes the poll to `FUN_140e6f370`.
+/// `FUN_140e71990` routes the poll to `FUN_140e728d0`.
 const SL_IODEV_FILE_CAP_OFFSET: usize = 0x28;
-/// `iodev+0x30` -- the opcode parked by a deferred build, replayed by `FUN_140e6f370`.
+/// `iodev+0x30` -- the opcode parked by a deferred build, replayed by `FUN_140e728d0`.
 const SL_IODEV_DEFERRED_OPCODE_OFFSET: usize = 0x30;
 
 /// A sample of the SL device's request slot: the submit builders' precondition operands
@@ -314,7 +314,7 @@ pub struct SlRequestSlot {
     pub job: usize,
     /// `iodev+0x28`, a file capability still being loaded.
     pub file_cap: usize,
-    /// `iodev+0x30`, the opcode a deferred build parked for `FUN_140e6f370`.
+    /// `iodev+0x30`, the opcode a deferred build parked for `FUN_140e728d0`.
     pub deferred_opcode: usize,
 }
 
@@ -326,8 +326,8 @@ impl SlRequestSlot {
     }
 
     /// True when the load builders' `iodev+0x18 == 0 && iodev+0x20 == 0` precondition holds
-    /// -- i.e. no load request occupies the device. `FUN_140e6f430` opens with
-    /// `if (param_1[3] != 0 || param_1[4] != 0) return 0;` and `FUN_140e6f5b0` with
+    /// -- i.e. no load request occupies the device. `FUN_140e72990` opens with
+    /// `if (param_1[3] != 0 || param_1[4] != 0) return 0;` and `FUN_140e72b10` with
     /// `if (param_1[3] == 0 && param_1[4] == 0) { ...build... }`; `param_1[3]`/`[4]` are
     /// `iodev+0x18`/`+0x20`.
     ///
@@ -461,7 +461,7 @@ impl SlotSampleCell {
 /// The slot as it stood when the lane last declined -- the sample that names the culprit, but only
 /// once [`dispatch_refusal_is_the_mutex`] has said the builder was reached at all.
 static DECLINE_SLOT: SlotSampleCell = SlotSampleCell::new();
-/// The slot as it stood immediately before the last swallow's `FUN_140e6f200` call.
+/// The slot as it stood immediately before the last swallow's `FUN_140e72760` call.
 static SWALLOW_SLOT_BEFORE: SlotSampleCell = SlotSampleCell::new();
 /// The slot as it stood immediately after it. If this is not clear, our release is the bug.
 static SWALLOW_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
@@ -480,16 +480,16 @@ static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 // the load consumer. The other half of the shared `iodev+0x20` job slot, and the reason a
 // save can be refused forever by something that is not a save at all.
 //
-// A completed load is not released where it completes. `FUN_140e6e080` case 0x14 with a
+// A completed load is not released where it completes. `FUN_140e715e0` case 0x14 with a
 // zero `param_2` reads the job's result, finds success, and returns 0 having called
 // nothing -- deliberately, because the payload has not been handed to anyone yet. The
 // release is owed by the CONSUMER:
 //
 // ```text
-//   FUN_14067b100(out_buf, size)          // gate: saveState == 3 && GameMan+0xdf0 == 0
-//     -> FUN_140e6e380(iodev, out, size)  // gate: +0x18 && +0x20 && result==0 && state==0x14
+//   FUN_14067c400(out_buf, size)          // gate: saveState == 3 && GameMan+0xdf0 == 0
+//     -> FUN_140e718e0(iodev, out, size)  // gate: +0x18 && +0x20 && result==0 && state==0x14
 //          memcpy(out, content, n)
-//          FUN_140e6f200(iodev)           // <-- the release, and its ONLY unconditional site
+//          FUN_140e72760(iodev)           // <-- the release, and its only unconditional site
 // ```
 //
 // So the load's job survives exactly as long as its consumer is not run. And the submit
@@ -497,11 +497,11 @@ static SLOT_READ_FAILURES: AtomicU64 = AtomicU64::new(0);
 // permanently, for every save in the process. That is the shape of a save refusal whose
 // cause is a load: [`SL_BAIL_LOAD_JOB_LATCHED`].
 //
-// Anything that stands in for `FUN_14067b100` therefore inherits its debt to the device.
+// Anything that stands in for `FUN_14067c400` therefore inherits its debt to the device.
 // The helpers below let such a substitution prove that the debt was paid, by sampling the
 // slot on both sides of whatever it did and classifying the transition. They deliberately
 // do not release anything themselves: releasing from here would mean re-deriving the
-// native guard (`FUN_14240a180`/`FUN_14240a1f0` on the job) in our own code, and a guard
+// native guard (`FUN_14240e130`/`FUN_14240e1a0` on the job) in our own code, and a guard
 // we re-derive is a guard that can disagree with the game about whether a load is still
 // in flight. Running the game's own consumer and measuring it cannot disagree.
 // ============================================================================
@@ -552,7 +552,7 @@ pub fn classify_load_consumer(
     }
 }
 
-/// Load-consumer calls observed (one per substituted `FUN_14067b100`).
+/// Load-consumer calls observed (one per substituted `FUN_14067c400`).
 static LOAD_CONSUMER_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Calls after which the shared job slot was free. This is the "the slot was freed, and by
 /// the native consumer we invoked" oracle.
@@ -575,7 +575,7 @@ static LOAD_CONSUMER_SLOT_AFTER: SlotSampleCell = SlotSampleCell::new();
 
 /// Sample the SL device's request slot for a caller outside this crate.
 ///
-/// Exposed so the one place that substitutes `FUN_14067b100` can bracket its call without
+/// Exposed so the one place that substitutes `FUN_14067c400` can bracket its call without
 /// re-deriving the device pointer, the field offsets, or the fault-safe read.
 #[cfg(windows)]
 pub fn sample_sl_request_slot() -> Option<SlRequestSlot> {
@@ -699,26 +699,26 @@ include!("save_submit_latch.rs");
 // the character serializer that gates two of them. They change nothing; they exist so a
 // save that never reaches the enqueue can be attributed in one run instead of three.
 //
-// Why they are needed (1.16.2 decompile, `FUN_140aff640` = MoveMapStep step 18, the
-// steady in-world step -- its step-table entry sits at MoveMapStep+0x378, and the table
-// base 0xa8 with 0x28-byte entries puts that at index 18, the `STEP_MoveMap` index this
+// Why they are needed (1.16.2 decompile with the 2.7.2.0 names, `FUN_140b01000` = MoveMapStep
+// step 18, the steady in-world step -- its step-table entry sits at MoveMapStep+0x378, and the
+// table base 0xa8 with 0x28-byte entries puts that at index 18, the `STEP_MoveMap` index this
 // repo already tracks; the array ends at +0x4b8, which the same function reads):
 //
-//   FUN_140aff640 (every in-world frame)
+//   FUN_140b01000 (every in-world frame)
 //     -> DoSaveStuff              polls the SL status while GameMan.saveState == 1
-//     -> FUN_140afb880            the save dispatcher
-//          gate: !BOOL_143d856a0, (ShouldSave() || b73 || slotLoad != -1),
-//                and FUN_14067a080() == (GameMan.saveState == 0)
-//          lane: b72 && b73 -> FUN_14067b940   (combined: char slot + system)
-//                b72        -> FUN_14067b750   (char slot only)
-//                       b73 -> FUN_14067b570   (system only)
+//     -> FUN_140afd060            the save dispatcher
+//          gate: !BOOL_143d8c740, (ShouldSave() || b73 || slotLoad != -1),
+//                and FUN_14067b380() == (GameMan.saveState == 0)
+//          lane: b72 && b73 -> FUN_14067cc40   (combined: char slot + system)
+//                b72        -> FUN_14067ca50   (char slot only)
+//                       b73 -> FUN_14067c870   (system only)
 //
-// The two character lanes only build a submit when `FUN_14067dc00` (the character
+// The two character lanes only build a submit when `FUN_14067ef00` (the character
 // serializer) returns non-zero:
 //
-//   cVar2 = FUN_14067dc00(GameMan, buf, 0x280000, 0);
+//   cVar2 = FUN_14067ef00(GameMan, buf, 0x280000, 0);
 //   ...
-//   if (cVar2 != '\0') { cVar3 = FUN_140e6ef60(iodev, buf, slot, ...); }   // -> the enqueue
+//   if (cVar2 != '\0') { cVar3 = FUN_140e724c0(iodev, buf, slot, ...); }   // -> the enqueue
 //   if (cVar3 != '\0') { bc4 1->2; bb8 = 1; saveState = 1; b72 = b73 = 0; }
 //
 // So a serializer that returns 0 makes the lane return 0 having touched NOTHING: b72/b73
@@ -728,18 +728,18 @@ include!("save_submit_latch.rs");
 // These observers make the three cases distinguishable.
 //
 // The serializer's own first gate is
-//   `buf == 0 || GameMan+0xcb1 != 0 || GameMan+0xcb2 != 0 || [0x143d68078] == 0`
-// and it is the one exit that returns without writing the byte counter `_DAT_143d69920`.
+//   `buf == 0 || GameMan+0xcb1 != 0 || GameMan+0xcb2 != 0 || [0x143d6f108] == 0`
+// and it is the one exit that returns without writing the byte counter `_DAT_143d709b0`.
 // That gate is PROVEN UNREACHABLE in this scenario, so the byte counter is written on
 // every exit we can actually observe -- see `SAVE_SERIALIZE_BYTES_RVA` for the proof and
 // `serialize_fail_step_label` for the decode.
 // ============================================================================
 
-/// `FUN_14067b940` -- combined save dispatcher, taken when b72 and b73 are set. This is
+/// `FUN_14067cc40` -- combined save dispatcher, taken when b72 and b73 are set. This is
 /// the lane the Save Game commit deliberately produces (it fires both request setters).
 #[cfg(windows)]
 const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA;
-/// `FUN_14067b750` -- character-slot-only dispatcher (b72 set, b73 clear).
+/// `FUN_14067ca50` -- character-slot-only dispatcher (b72 set, b73 clear).
 ///
 /// Same address as `SAVE_WRITE_TO_SLOT_RVA` in er-quickload and er-save-loader, where it
 /// was called `CONTINUE_LOAD_RVA` until 2026-08-01. This crate's name was the correct one:
@@ -748,51 +748,52 @@ const SAVE_DISPATCH_COMBINED_RVA: usize = er_game_base::rva::SAVE_DISPATCH_COMBI
 /// match the others -- the `_COMBINED` / `_CHAR` / `_SYSTEM` family here encodes the b72/b73
 /// lane distinction, which a generic "write to slot" name would lose.
 #[cfg(windows)]
-const SAVE_DISPATCH_CHAR_RVA: usize = 0x67b750;
-/// `FUN_14067b570` -- system-slot-only dispatcher (b73 set, b72 clear). Unlike the two
-/// character lanes it does not consult `FUN_14067dc00`; it always submits.
+const SAVE_DISPATCH_CHAR_RVA: usize = 0x67ca50;
+/// `FUN_14067c870` -- system-slot-only dispatcher (b73 set, b72 clear). Unlike the two
+/// character lanes it does not consult `FUN_14067ef00`; it always submits.
 #[cfg(windows)]
 const SAVE_DISPATCH_SYSTEM_RVA: usize = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA;
-/// `FUN_14067dc00` -- the character serializer. Its return value is the sole gate on the
+/// `FUN_14067ef00` -- the character serializer. Its return value is the sole gate on the
 /// submit call in both character lanes.
 #[cfg(windows)]
-const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67dc00;
-/// `_DAT_143d69920` -- bytes the character serializer produced on its last call.
+const SAVE_SERIALIZE_CHAR_RVA: usize = 0x67ef00;
+/// `_DAT_143d709b0` -- bytes the character serializer produced on its last call.
 ///
-/// Written exactly once per call, at the merge point after the sub-serializer cascade:
+/// Written exactly once per call, at the merge point after the sub-serializer cascade
+/// (2.7.2.0 listing):
 ///
 /// ```text
-///   14067e0aa  CALL 0x141ede890        ; RAX = stream->capacity   (`return *(u64*)(this+0x18)`)
-///   14067e0af  MOV  RDI,RAX
-///   14067e0b7  CALL 0x141ede7d0        ; RAX = GetBytesLeft()
-///   14067e0bc  SUB  RDI,RAX            ; RDI = bytes written
-///   14067e0c6  MOV  qword ptr [0x143d69920],RDI
+///   14067f3aa  CALL 0x141ee1df0        ; RAX = stream->capacity   (`return *(u64*)(this+0x18)`)
+///   14067f3af  MOV  RDI,RAX
+///   14067f3b7  CALL 0x141ee1d30        ; RAX = GetBytesLeft()
+///   14067f3bc  SUB  RDI,RAX            ; RDI = bytes written
+///   14067f3c6  MOV  qword ptr [0x143d709b0],RDI
 /// ```
 ///
 /// So the stored value is the stream position at the moment the cascade stopped. The only
-/// exit that skips the store is the first gate (`0x14067dc30`/`dc3d`/`dc4a`/`dc58` all jump
-/// to `0x14067e12f: XOR AL,AL`), and that gate is proven unreachable here: `buf` is
+/// exit that skips the store is the first gate (`0x14067ef30`/`ef3d`/`ef4a`/`ef58` all jump
+/// to `0x14067f42f: XOR AL,AL`), and that gate is proven unreachable here: `buf` is
 /// null-checked by both calling lanes, `GameMan+0xcb1`/`+0xcb2` are zeroed by
-/// `CS::GameMan::GameMan` and have no other writer in the whole image, and `[0x143d68078]`
+/// `CS::GameMan::GameMan` and have no other writer in the whole image, and `[0x143d6f108]`
 /// (`GLOBAL_CSEventState`) is a process-lifetime singleton allocated once at save-subsystem
 /// boot. Every exit this instrument can observe therefore leaves a fresh count.
 ///
-/// The 12 identical `CALL 0x141ede890; CALL 0x141ede7d0` pairs sprinkled between the steps
+/// The 12 identical `CALL 0x141ee1df0; CALL 0x141ee1d30` pairs sprinkled between the steps
 /// discard both results (no `MOV`/`SUB` follows them) -- they are vestigial, not a per-step
 /// counter, so there is no finer-grained global to read.
 #[cfg(windows)]
-const SAVE_SERIALIZE_BYTES_RVA: usize = 0x3d69920;
+const SAVE_SERIALIZE_BYTES_RVA: usize = 0x3d709b0;
 
 // The four dispatch/serializer signatures are generated alongside the hook prologues above; see
 // the `include!` near `QUIT_PHASE_SETTLE_RVA`.
 /// Lane codes for [`dispatch_last_lane`]. Not an enum: it crosses an atomic and lands in
 /// telemetry JSON as a number.
 pub const SAVE_LANE_NONE: usize = 0;
-/// `FUN_14067b750`, the character-slot-only lane.
+/// `FUN_14067ca50`, the character-slot-only lane.
 pub const SAVE_LANE_CHAR: usize = 1;
-/// `FUN_14067b570`, the system-slot-only lane.
+/// `FUN_14067c870`, the system-slot-only lane.
 pub const SAVE_LANE_SYSTEM: usize = 2;
-/// `FUN_14067b940`, the combined lane the Save Game commit fires.
+/// `FUN_14067cc40`, the combined lane the Save Game commit fires.
 pub const SAVE_LANE_COMBINED: usize = 3;
 
 /// [`serialize_last_fail_bytes`] when the byte counter could not be read -- its address
@@ -818,12 +819,12 @@ pub const SAVE_SERIALIZE_STEP_HEADER_SHORT: &str = "step1-header-write-short";
 pub const SAVE_SERIALIZE_STEP_RANDSEED_NONE: &str = "step2-randseed-write-nothing";
 /// Step 2 -- the 0x10-byte xorshift-seed write was short.
 pub const SAVE_SERIALIZE_STEP_RANDSEED_SHORT: &str = "step2-randseed-write-short";
-/// Step 3 -- `FUN_140257f20` (the GameDataMan chain) refused having written nothing.
+/// Step 3 -- `FUN_140257ef0` (the GameDataMan chain) refused having written nothing.
 pub const SAVE_SERIALIZE_STEP_GAMEDATAMAN_NONE: &str = "step3-gamedataman-no-output";
 /// Step 3 or later -- output was produced past the last statically fixed boundary.
 pub const SAVE_SERIALIZE_STEP_AFTER_OUTPUT: &str = "step3plus-after-output";
 
-/// Decode `_DAT_143d69920` into the name of the `FUN_14067dc00` step that refused.
+/// Decode `_DAT_143d709b0` into the name of the `FUN_14067ef00` step that refused.
 ///
 /// The serializer is a straight-line cascade -- each step runs only if the previous one
 /// returned true -- and the byte counter is stored once, at the merge point, so the count
@@ -832,20 +833,20 @@ pub const SAVE_SERIALIZE_STEP_AFTER_OUTPUT: &str = "step3plus-after-output";
 ///
 /// | bytes | exit |
 /// |-------|------|
-/// | `0x00` | step 1 `Write(header,0x10)` @`0x14067dd3d` wrote nothing |
+/// | `0x00` | step 1 `Write(header,0x10)` @`0x14067f03d` wrote nothing |
 /// | `0x01..=0x0f` | step 1 short write |
-/// | `0x10` | step 2 `Write(4 x CS::CSRandXorshift::NextInt, 0x10)` @`0x14067ddcc` wrote nothing |
+/// | `0x10` | step 2 `Write(4 x CS::CSRandXorshift::NextInt, 0x10)` @`0x14067f0cc` wrote nothing |
 /// | `0x11..=0x1f` | step 2 short write |
-/// | `0x20` | step 3 `FUN_140257f20` refused with no output |
+/// | `0x20` | step 3 `FUN_140257ef0` refused with no output |
 /// | `> 0x20` | inside step 3 after output, or any later step |
 ///
 /// Only steps 1 and 2 are fixed-size (0x10 each), which is why the map stops at `0x20`.
-/// Step 3 (`FUN_140257f20`) opens with `PlayerGameData::Serialize` and then writes an
+/// Step 3 (`FUN_140257ef0`) opens with `PlayerGameData::Serialize` and then writes an
 /// optional 0x40-byte bloodstain block plus a 4-byte entity id, so its length is decided by
 /// game state and no later cumulative boundary is a constant. Separating the twelve steps
 /// past that point needs a hook per sub-serializer, not more arithmetic on this count.
 ///
-/// `0x20` is the interesting one: `FUN_140257f20`'s first act is
+/// `0x20` is the interesting one: `FUN_140257ef0`'s first act is
 /// `if (GLOBAL_GameDataMan->mainPlayerGameData == 0) return false`, so a count of exactly
 /// `0x20` is the signature of "the character has no serializable player data".
 pub fn serialize_fail_step_label(bytes: u64) -> &'static str {
@@ -866,36 +867,36 @@ pub fn serialize_fail_step_label(bytes: u64) -> &'static str {
 pub fn serialize_fail_step_detail(bytes: u64) -> &'static str {
     match bytes {
         SAVE_SERIALIZE_BYTES_UNREADABLE => {
-            "the byte counter 0x143d69920 could not be read, so the failing step is unknown; \
+            "the byte counter 0x143d709b0 could not be read, so the failing step is unknown; \
              the counter address never resolved"
         }
         0 => {
-            "step 1 of FUN_14067dc00 -- the 0x10-byte header Write returned short having \
+            "step 1 of FUN_14067ef00 -- the 0x10-byte header Write returned short having \
              written nothing, so the 0x280000 output stream refused its very first write"
         }
         0x01..=0x0f => {
-            "step 1 of FUN_14067dc00 -- the 0x10-byte header Write was cut short mid-write"
+            "step 1 of FUN_14067ef00 -- the 0x10-byte header Write was cut short mid-write"
         }
         0x10 => {
-            "step 2 of FUN_14067dc00 -- the 0x10-byte xorshift-seed Write returned short \
+            "step 2 of FUN_14067ef00 -- the 0x10-byte xorshift-seed Write returned short \
              having written nothing; the header went out but the stream then refused"
         }
         0x11..=0x1f => {
-            "step 2 of FUN_14067dc00 -- the 0x10-byte xorshift-seed Write was cut short \
+            "step 2 of FUN_14067ef00 -- the 0x10-byte xorshift-seed Write was cut short \
              mid-write"
         }
         0x20 => {
-            "step 3 of FUN_14067dc00 -- FUN_140257f20, the GameDataMan chain, refused having \
+            "step 3 of FUN_14067ef00 -- FUN_140257ef0, the GameDataMan chain, refused having \
              written NOTHING. Its first act is `if (GLOBAL_GameDataMan->mainPlayerGameData \
              == 0) return false`, so this count is the signature of a character with no \
              serializable player data"
         }
         _ => {
-            "past the last statically fixed boundary of FUN_14067dc00: the abort is inside \
-             FUN_140257f20 after it produced output, or in one of the later steps \
-             (FUN_1405b5c60 event flags, FUN_14067e290, FUN_14067eaa0, FUN_14067e9a0, \
-             FUN_1401cd510 CSNetMan, FUN_140647420, FUN_140643560, FUN_140258640, \
-             FUN_1402586f0, FUN_1402585e0, FUN_1402586a0, FUN_14067c590 + the 0x80-byte \
+            "past the last statically fixed boundary of FUN_14067ef00: the abort is inside \
+             FUN_140257ef0 after it produced output, or in one of the later steps \
+             (FUN_1405b6f60 event flags, FUN_14067f590, FUN_14067fda0, FUN_14067fca0, \
+             FUN_1401cd510 CSNetMan, FUN_140648720, FUN_140644860, FUN_140258610, \
+             FUN_1402586c0, FUN_1402585b0, FUN_140258670, FUN_14067d890 + the 0x80-byte \
              tail). Step 3 is variable-length, so no later boundary is a constant and this \
              count cannot separate them -- naming one needs a hook per sub-serializer"
         }
@@ -1128,7 +1129,7 @@ pub fn bypass_expired_total() -> u64 {
 }
 
 /// `GameMan+0xbc4 == 2`: the return-to-title save was submitted and the wait job is
-/// still spinning. This is the only state from which `FUN_14067a980` does anything.
+/// still spinning. This is the only state from which `FUN_14067bc80` does anything.
 #[cfg(windows)]
 const QUIT_PHASE_SAVE_SUBMITTED: usize = 2;
 /// Highest return-to-title phase ever observed. A secondary diagnostic only: it says
@@ -1138,8 +1139,8 @@ static QUIT_PHASE_MAX_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// Times the 2 -> 3 transition actually executed, counted as an event at the only
 /// function that performs it.
 ///
-/// Sampling the field could never prove this. `bc4 == 3` is TRANSIENT: `FUN_14067a980`
-/// sets it, the quit chain's wait job consumes it, and `FUN_14067a970(0)` resets it to
+/// Sampling the field could never prove this. `bc4 == 3` is TRANSIENT: `FUN_14067bc80`
+/// sets it, the quit chain's wait job consumes it, and `FUN_14067bc70(0)` resets it to
 /// 0. Two runs with a user-confirmed working quit both ended with the sampled maximum
 /// at 2, because the value simply never existed at a moment anything sampled it.
 static QUIT_PHASE_SETTLE_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -1387,17 +1388,17 @@ pub fn status_faked() -> u64 {
 ///
 /// Read the pair, never `status_faked` alone. The rewrite is what retires a swallowed save
 /// (`saveState == 1`), and only those rewrites did anything; an idle rewrite is a no-op for
-/// every consumer that matters, because `FUN_140679510`/`FUN_1406794b0` treat 4 and 0
+/// every consumer that matters, because `FUN_14067a810`/`FUN_14067a7b0` treat 4 and 0
 /// identically (both are "not 1") and the only callers that distinguish them --
-/// `DoSaveStuff` and the "saving..." MenuJob `FUN_14082a0f0` -- are not running when there
+/// `DoSaveStuff` and the "saving..." MenuJob `FUN_14082b8e0` -- are not running when there
 /// is nothing to retire. A large `status_faked` with `status_faked_idle` almost equal to it
 /// therefore says the suppressor did nothing that run, which is exactly the reading a bare
 /// `status_faked = 207` against 2 swallows failed to give.
 ///
 /// The lie itself is deliberately not narrowed to an outstanding swallow. Narrowing it
 /// risks answering a poll with the raw 4, and 4 is catastrophic in the other direction:
-/// `FUN_14082a0f0` maps it to `MenuJobResult::Failed` and `DoSaveStuff` maps it to a silent
-/// no-op that never calls `FUN_14067a980`, so `GameMan+0xbc4` never reaches 3 and
+/// `FUN_14082b8e0` maps it to `MenuJobResult::Failed` and `DoSaveStuff` maps it to a silent
+/// no-op that never calls `FUN_14067bc80`, so `GameMan+0xbc4` never reaches 3 and
 /// System->Quit spins forever. Two different pollers can run in the same frame, so any
 /// consume-once scheme under-lies on the second one. Over-lying is inert; under-lying
 /// deadlocks the quit.
@@ -1428,7 +1429,7 @@ pub fn dispatch_last_lane() -> usize {
     DISPATCH_LAST_LANE.load(Ordering::SeqCst)
 }
 
-/// Entries into the character serializer `FUN_14067dc00`.
+/// Entries into the character serializer `FUN_14067ef00`.
 pub fn serialize_calls() -> u64 {
     SERIALIZE_CALLS.load(Ordering::SeqCst)
 }
@@ -1439,7 +1440,7 @@ pub fn serialize_failures() -> u64 {
     SERIALIZE_FAILURES.load(Ordering::SeqCst)
 }
 
-/// Bytes the character serializer had produced when it last failed -- `_DAT_143d69920` read
+/// Bytes the character serializer had produced when it last failed -- `_DAT_143d709b0` read
 /// straight after the failing call -- or [`SAVE_SERIALIZE_BYTES_UNREADABLE`] when the
 /// counter could not be read at all.
 ///
@@ -1451,7 +1452,7 @@ pub fn serialize_last_fail_bytes() -> u64 {
     SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst)
 }
 
-/// The `FUN_14067dc00` step that refused on the last failing call, decoded from
+/// The `FUN_14067ef00` step that refused on the last failing call, decoded from
 /// [`serialize_last_fail_bytes`] by [`serialize_fail_step_label`].
 pub fn serialize_last_fail_step() -> &'static str {
     serialize_fail_step_label(SERIALIZE_LAST_FAIL_BYTES.load(Ordering::SeqCst))
@@ -1473,7 +1474,7 @@ pub fn settle_events() -> u64 {
     QUIT_PHASE_SETTLE_EVENTS.load(Ordering::SeqCst)
 }
 
-/// Swallows that ran with no resolved `FUN_140e6f200` address and were therefore passed
+/// Swallows that ran with no resolved `FUN_140e72760` address and were therefore passed
 /// through to the real enqueue -- each one is a save that was written.
 ///
 /// `install` refuses to arm without that address, so this should be structurally
@@ -1484,7 +1485,7 @@ pub fn release_unavailable() -> u64 {
     RELEASE_UNAVAILABLE.load(Ordering::SeqCst)
 }
 
-/// Swallows whose `FUN_140e6f200` release did not restore the submit builders'
+/// Swallows whose `FUN_140e72760` release did not restore the submit builders'
 /// `iodev+0x10 == 0 && iodev+0x20 == 0` precondition.
 ///
 /// This is the direct test of "does our swallow leave the request slot dirty". Zero with
@@ -1494,10 +1495,10 @@ pub fn swallow_release_left_dirty() -> u64 {
     SWALLOW_RELEASE_LEFT_DIRTY.load(Ordering::SeqCst)
 }
 
-/// Swallows where the `iodev` argument differed from the `DAT_144589390` singleton, i.e.
+/// Swallows where the `iodev` argument differed from the `DAT_144590430` singleton, i.e.
 /// the release would have been applied to a different object than the one the builders
 /// check. Structurally impossible (every caller reaches the device through
-/// `FUN_140e6e060`), and measured anyway.
+/// `FUN_140e715c0`), and measured anyway.
 pub fn swallow_iodev_mismatch() -> u64 {
     SWALLOW_IODEV_MISMATCH.load(Ordering::SeqCst)
 }
@@ -1555,8 +1556,8 @@ fn decide_status(raw: u32, armed: bool, swallowed: u64) -> u32 {
 /// Delegates to [`er_game_base::prologue::matches_masked`] -- the rule about which operand bytes
 /// a game patch is allowed to re-encode has one implementation, shared with the other crate that
 /// byte-checks generated prologues. `QUIT_PHASE_SETTLE_SIG` is why: it opens with
-/// `mov rax,[rip+disp32]`, that displacement re-encoded on 1.17 at a correctly translated
-/// address, and the gate disarmed a hook whose function had not changed at all.
+/// `mov rax,[rip+disp32]`, a displacement that re-encodes whenever the function or the singleton
+/// moves; when it did on 1.17 the gate disarmed a hook whose function had not changed at all.
 ///
 /// Kept as a named function for the same reason it always was: an address guard that is itself
 /// unverified would be decoration, and this one has unit tests.
@@ -1570,7 +1571,7 @@ fn prologue_matches(actual: &[u8], expected: &[u8], mask: &[u8]) -> bool {
 /// enormously frequent. Measured rate is 7-25 swallowed submits per session, so the
 /// throttle saves tens of lines, not thousands. (An earlier version of this comment
 /// claimed the rune-counter widget drives a save on every rune change and implied
-/// thousands per session. The save site is real -- `FUN_1408d4a30` calls
+/// thousands per session. The save site is real -- `FUN_1408d6080` calls
 /// `CSMenuManImp::RequestSave(.., 7)` when the rune total changes -- but it is gated by
 /// the widget's own state machine at `+0x2a0` and the requests coalesce through the
 /// `GameMan+0xb72`/`+0xb73` flags, so the rate is nothing like that.)
@@ -1627,7 +1628,7 @@ fn verify(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize>
         log_message(format_args!(
             "suppress: {name} @0x{address:x}: prologue mismatch in {differing} compared byte(s) \
              ({ignored} relocation byte(s) ignored) (got {:02x?}, want {:02x?}) \
-             -- refusing to hook; this build is not the 1.16.2 image these addresses were \
+             -- refusing to hook; this build is not the 2.7.2.0 image these addresses were \
              verified against",
             window, expected
         ));
@@ -1644,20 +1645,12 @@ fn verify(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize>
 ///
 /// Most callers of [`verify`] `transmute` the result into a function pointer and call it, and a
 /// call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
-/// `register_union_hook` resolve what they are handed, and they must be the one resolve that
-/// decides where MinHook writes.
+/// `register_union_hook` check what they are handed against the 2.7.2.0 detour allowlist, and
+/// they must be the one check that decides where MinHook writes.
 ///
-/// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
-/// prologue and once inside the hook API, both landing on the same address. Resolving the output is
-/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 source of another
-/// (a region shift equal to the local function spacing, `B - A == C - B`), and the second resolve
-/// then silently returns a third, unrelated function -- three live detours were measured doing
-/// exactly that on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
-///
-/// Note the two also consult different tables: [`verify`] resolves through the call map, while the
-/// hook API resolves through the detour-audited one. A row good enough to call that has not been
-/// audited as a detour target is now refused by the hook API with a log line, instead of being
-/// waved through by the already-translated shortcut.
+/// The two also answer different questions: [`verify`] only needs the build to be 2.7.2.0, while
+/// the hook API also needs the rva on the detour allowlist. An address good enough to call that
+/// has not been audited as a detour target is refused by the hook API with a log line.
 #[cfg(windows)]
 fn verify_for_hook(rva: usize, expected: &[u8], mask: &[u8], name: &str) -> Option<usize> {
     verify(rva, expected, mask, name)?;
@@ -1822,7 +1815,7 @@ pub fn install(disarm_for_census: bool) -> usize {
 /// It cost a wasted launch. The epoch-1 reload parks with `GameMan+0xb72`/`+0xb73` latched -- measured
 /// `[+195245ms] gm-snap: save_requested=true ... b73=1`, still set at `+196171ms`, the last change-
 /// detected snapshot in a log running to `+384590ms`, while epoch 0 drained the identical request in
-/// 24-55ms -- and those two bytes are the `FUN_140afa6d0` case-7 gate. Without the decline reason the
+/// 24-55ms -- and those two bytes are the `FUN_140afbeb0` case-7 gate. Without the decline reason the
 /// only way to find out why is to guess, and guessing is what produced a fix that would have turned a
 /// silent no-op warp into a permanent black screen.
 ///
@@ -1861,7 +1854,7 @@ pub fn install_observers_only() -> usize {
     }
     // Observers-only is the product configuration, so this is the resolution that matters:
     // without it `save_orphan_poll_unavailable` climbs and a forgotten save request stays
-    // forgotten. Nothing detours `FUN_140e6e430` on this path, so the address is called
+    // forgotten. Nothing detours `FUN_140e71990` on this path, so the address is called
     // directly.
     if let Some(poll) = verify(
         SL_POLL_SAVE_STATUS_RVA,
@@ -1894,7 +1887,7 @@ pub fn install_observers_only() -> usize {
 #[cfg(windows)]
 fn install_observers(settle: Option<usize>) {
     // The quit-settle observer keeps its private `MhHook` (nothing else contends on
-    // `FUN_14067a980`, and it is a zero-argument target the union's 4-argument shape does
+    // `FUN_14067bc80`, and it is a zero-argument target the union's 4-argument shape does
     // not describe). Every failure path here is non-fatal.
     let settle_queued = match settle {
         Some(address) => match unsafe {
@@ -1953,7 +1946,7 @@ fn install_observers(settle: Option<usize>) {
     // second `MhHook::new` on an address the same MinHook instance already owns returns
     // ALREADY_CREATED -- whichever install thread lost the race would silently have no
     // hook. The union chains handlers on one dispatcher per address, which is exactly the
-    // contract that exists for this. `FUN_14067dc00` currently has no other registrant;
+    // contract that exists for this. `FUN_14067ef00` currently has no other registrant;
     // going through the union anyway costs nothing and makes a future one safe.
     let mut dispatch_bound = 0_usize;
     for (name, rva, sig, mask, handler, orig_slot) in [
@@ -2017,16 +2010,16 @@ fn install_observers(settle: Option<usize>) {
 
     log_message(format_args!(
         "suppress: observers bound -- quit-settle={}, save-dispatch attribution={dispatch_bound}/4 \
-         (lanes FUN_14067b940/b750/b570 + serializer FUN_14067dc00, byte counter @0x{:x}), \
+         (lanes FUN_14067cc40/ca50/c870 + serializer FUN_14067ef00, byte counter @0x{:x}), \
          save-job-body completion={}, write-branch attribution={write_branch_bound}/2 \
-         (rebuild FUN_142413860 + in-place FUN_1424142e0); these only count, they change nothing",
+         (rebuild FUN_142417810 + in-place FUN_142418290); these only count, they change nothing",
         if settle_queued { "yes" } else { "NO" },
         SERIALIZE_BYTES_ADDR.load(Ordering::SeqCst),
         if job_body_bound { "yes" } else { "NO" }
     ));
 }
 
-/// Detour on `FUN_140e6fb50`.
+/// Detour on `FUN_140e730b0`.
 ///
 /// The caller has already allocated an `SLSaveContent` into `iodev+0x10` and filled it
 /// with the serialized blocks. Default (no token): we do not enqueue it. We hand it
@@ -2036,7 +2029,7 @@ fn install_observers(settle: Option<usize>) {
 /// and is forwarded to the real trampoline, so the game performs a genuine submit and a
 /// genuine write; the completion watch then tells the poll detour to latch the outcome.
 ///
-/// Releasing through `FUN_140e6f200` is not optional on the swallow path: leaving
+/// Releasing through `FUN_140e72760` is not optional on the swallow path: leaving
 /// `iodev+0x10` populated would permanently fail the `iodev+0x10 == 0 && iodev+0x20 == 0`
 /// precondition on every later submit, and would leave the status poll dereferencing a
 /// null job.
@@ -2163,7 +2156,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         // Unthrottled on purpose. This is not a rate, it is a latch: from here on every
         // save in the process is refused by a precondition we left failing.
         log_message(format_args!(
-            "suppress: BUG -- FUN_140e6f200 did not clear the request slot (#{dirty}); \
+            "suppress: BUG -- FUN_140e72760 did not clear the request slot (#{dirty}); \
              before {}, after {} -- the submit precondition `iodev+0x10 == 0 && \
              iodev+0x20 == 0` now fails for every later save",
             describe_slot(before),
@@ -2189,8 +2182,8 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
         ));
         // Publish on the same schedule. A snapshot per swallow meant a full JSON
         // re-serialize, `fs::write` and `fs::rename` on the game thread for every save
-        // request -- this detours `FUN_140e6fb50`, whose callers are the per-frame
-        // dispatchers, strictly above the `FUN_14240ae10` worker boundary -- and each of
+        // request -- this detours `FUN_140e730b0`, whose callers are the per-frame
+        // dispatchers, strictly above the `FUN_14240edc0` worker boundary -- and each of
         // those can re-enter the host DLL's own file-API detours. Every counter a
         // harness gates on is a threshold, and a threshold is crossed on the first
         // occurrence, which is always published.
@@ -2199,7 +2192,7 @@ unsafe extern "system" fn enqueue_save_job_hook(iodev: usize, opcode: u32) -> u8
     1
 }
 
-/// Detour on `FUN_140e6e430`.
+/// Detour on `FUN_140e71990`.
 ///
 /// Always runs the original first. The original's answer is the guard: only the literal
 /// "no request" code is rewritten, and that code is produced by exactly one branch,
@@ -2259,7 +2252,7 @@ unsafe extern "system" fn poll_save_status_hook(iodev: usize) -> u32 {
     decided
 }
 
-/// Observer on `FUN_14067b940`, the combined (b72 && b73) save dispatch lane -- the lane the
+/// Observer on `FUN_14067cc40`, the combined (b72 && b73) save dispatch lane -- the lane the
 /// Save Game commit deliberately produces by firing both native request setters.
 #[cfg(windows)]
 unsafe extern "system" fn save_dispatch_combined_hook(
@@ -2271,13 +2264,13 @@ unsafe extern "system" fn save_dispatch_combined_hook(
     unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_COMBINED, SAVE_LANE_COMBINED, a, b, c, d) }
 }
 
-/// Observer on `FUN_14067b750`, the character-slot-only (b72, !b73) lane.
+/// Observer on `FUN_14067ca50`, the character-slot-only (b72, !b73) lane.
 #[cfg(windows)]
 unsafe extern "system" fn save_dispatch_char_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
     unsafe { observe_dispatch(&ORIG_SAVE_DISPATCH_CHAR, SAVE_LANE_CHAR, a, b, c, d) }
 }
 
-/// Observer on `FUN_14067b570`, the system-slot-only (!b72, b73) lane.
+/// Observer on `FUN_14067c870`, the system-slot-only (!b72, b73) lane.
 #[cfg(windows)]
 unsafe extern "system" fn save_dispatch_system_hook(
     a: usize,
@@ -2377,9 +2370,9 @@ unsafe fn observe_dispatch(
             match refusing_state {
                 Some(state) if dispatch_refusal_is_the_mutex(Some(state)) => format!(
                     "REFUSED BY THE MUTEX: GameMan.saveState is {state}, so the lane returned \
-                     before `FUN_140e6ef60` and the device fields below did not cause this"
+                     before `FUN_140e724c0` and the device fields below did not cause this"
                 ),
-                Some(_) => "saveState is IDLE, so the lane DID reach `FUN_140e6ef60` and the \
+                Some(_) => "saveState is IDLE, so the lane DID reach `FUN_140e724c0` and the \
                             device fields below are what refused it"
                     .to_owned(),
                 None => "saveState unreadable, so it is unknown whether the builder was reached"
@@ -2398,12 +2391,12 @@ unsafe fn observe_dispatch(
     ret
 }
 
-/// Observer on `FUN_14067dc00`, the character serializer.
+/// Observer on `FUN_14067ef00`, the character serializer.
 ///
 /// Its return value is the sole gate on the submit call in both character lanes, so a zero
 /// here is a character save that produced no submit at all.
 ///
-/// The byte counter `_DAT_143d69920` is read once, after the call, and decoded into a step
+/// The byte counter `_DAT_143d709b0` is read once, after the call, and decoded into a step
 /// name. It is not compared against a pre-call sample: the serializer's only exit that
 /// leaves the counter untouched is a first gate proven unreachable here, and a pre/post
 /// comparison actively misreads the normal case -- the lane is re-entered every frame while
@@ -2437,7 +2430,7 @@ unsafe extern "system" fn save_serialize_char_hook(
     SERIALIZE_LAST_FAIL_BYTES.store(recorded, Ordering::SeqCst);
     if should_report(failures, false) {
         log_message(format_args!(
-            "suppress: character serializer FUN_14067dc00 returned 0 (failure #{failures} of \
+            "suppress: character serializer FUN_14067ef00 returned 0 (failure #{failures} of \
              {calls} calls) at {} -- {recorded} (0x{recorded:x}) bytes produced: {}. No submit \
              is built for this save, so the request flags stay latched and no SL enqueue is \
              created",
@@ -2461,7 +2454,7 @@ fn read_serialize_bytes() -> Option<usize> {
     unsafe { safe_read_usize(addr) }
 }
 
-/// Observer on `FUN_14067a980`, the sole performer of the `bc4` 2 -> 3 transition.
+/// Observer on `FUN_14067bc80`, the sole performer of the `bc4` 2 -> 3 transition.
 ///
 /// Pure observation: the original runs unmodified and its effect is untouched. Verified
 /// against the 1.16.2 dump -- `undefined FUN_14067a980(void)`, 27 bytes, no parameters,
@@ -2471,7 +2464,7 @@ fn read_serialize_bytes() -> Option<usize> {
 /// It counts the transition, not the call, and that distinction is the whole value of
 /// the instrument. `DoSaveStuff` calls this function from case 0 and from cases 3, 7 and
 /// 9 of its switch on the *save status* -- nothing there tests `bc4` -- and the menu job
-/// `FUN_1407ecf20` calls it from *its own* state 3. So it runs on every ordinary save
+/// `FUN_1407ee250` calls it from *its own* state 3. So it runs on every ordinary save
 /// completion, when `bc4` is 0 and the body is a no-op.
 ///
 /// Counting entries would therefore make `quit_phase_settle_events` non-zero from the
@@ -2515,7 +2508,7 @@ unsafe extern "system" fn quit_phase_settle_hook() {
 /// more often would eventually catch `bc4 == 3`. That was wrong twice over: each call
 /// costs a `GetModuleHandleA` plus two `ReadProcessMemory` syscalls, paid on *every
 /// file open in the process*, and it still could not catch the transition, because
-/// `FUN_14067a980` sets 3 and the quit chain consumes and resets it within the same
+/// `FUN_14067bc80` sets 3 and the quit chain consumes and resets it within the same
 /// sequence. The transition is counted as an event instead.
 #[cfg(windows)]
 fn sample_quit_phase() {
@@ -2599,7 +2592,7 @@ mod tests {
 
     #[test]
     fn a_job_result_only_maps_to_success_when_it_is_literally_zero() {
-        // 0 is the value `FUN_14240ebd0` writes at construction and no failure path
+        // 0 is the value `FUN_142412b80` writes at construction and no failure path
         // overwrites. Everything else -- including the "we could not read it" stand-in --
         // has to come out as a non-success status, or a save that did not land could be
         // reported as one that did.
@@ -2627,7 +2620,7 @@ mod tests {
 
     #[test]
     fn job_results_map_through_the_polls_own_terminal_table() {
-        // `FUN_140e6e430` case 0x14, verbatim.
+        // `FUN_140e71990` case 0x14, verbatim.
         assert_eq!(save_job_result_to_status(3), 7);
         assert_eq!(save_job_result_to_status(4), 8);
         assert_eq!(save_job_result_to_status(2), 8);
@@ -2680,8 +2673,8 @@ mod tests {
     }
 
     /// `QUIT_PHASE_SETTLE_SIG` is the reason the mask exists: its opening
-    /// `mov rax,[rip+disp32]` re-encoded on 1.17 at a correctly translated address, and the
-    /// unmasked gate refused a function that had not changed. Masking the displacement accepts
+    /// `mov rax,[rip+disp32]` re-encoded on 1.17 when the function and the singleton moved, and
+    /// the unmasked gate refused a function that had not changed. Masking the displacement accepts
     /// it; mutating the opcode still refuses.
     #[test]
     fn prologue_guard_accepts_a_relocated_rip_displacement_but_not_a_new_opcode() {
@@ -2746,16 +2739,16 @@ mod tests {
     }
 
     #[test]
-    fn recorded_signatures_are_the_verified_1162_prologues() {
+    fn recorded_signatures_are_the_verified_prologues() {
         // Guards against an edit that silently shortens or reorders a signature: these
-        // exact bytes were read out of `eldenring-deobf.bin` at the hook addresses.
+        // exact bytes were read out of `eldenring-deobf-1.17.2.bin` at the hook addresses.
         assert_eq!(&SL_ENQUEUE_SAVE_JOB_SIG[..4], &[0x40, 0x53, 0x56, 0x57]);
         assert_eq!(&SL_POLL_SAVE_STATUS_SIG[..4], &[0x40, 0x57, 0x48, 0x83]);
         assert_eq!(&SL_RELEASE_REQUEST_SIG[..4], &[0x48, 0x89, 0x6C, 0x24]);
         assert!(SL_ENQUEUE_SAVE_JOB_SIG.len() >= 16);
         assert!(SL_POLL_SAVE_STATUS_SIG.len() >= 16);
         assert!(SL_RELEASE_REQUEST_SIG.len() >= 16);
-        // `SaveLoad2::SLSaveSession`'s job body at 0x14240fd70, read the same way:
+        // `SaveLoad2::SLSaveSession`'s job body at 0x142413d20, read the same way:
         // `mov rax,rsp; push rbp; push rdi; push r12; push r14; push r15`. Six whole
         // instructions before MinHook's 5-byte window closes, and no relative branch.
         assert_eq!(
@@ -2768,9 +2761,9 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_observer_signatures_are_the_verified_1162_prologues() {
-        // Read out of `eldenring-deobf.bin` at 0x14067b940 / b750 / b570 / dc00 and
-        // cross-checked against the 1.16.2 Ghidra dump at the same VAs (shift 0).
+    fn dispatch_observer_signatures_are_the_verified_prologues() {
+        // Read out of `eldenring-deobf-1.17.2.bin` at 0x14067cc40 / ca50 / c870 / ef00; the
+        // same bytes open the 1.16.2 functions the Ghidra dump names.
         assert_eq!(&SAVE_DISPATCH_COMBINED_SIG[..3], &[0x48, 0x8B, 0xC4]);
         assert_eq!(
             &SAVE_DISPATCH_CHAR_SIG[..5],
@@ -2794,11 +2787,11 @@ mod tests {
     }
 
     #[test]
-    fn write_branch_observer_signatures_are_the_verified_1162_prologues() {
+    fn write_branch_observer_signatures_are_the_verified_prologues() {
         // Both open with the same seven-instruction multi-push prologue -- asserted against
         // each other rather than against a transcription, because `build.rs` already pins the
-        // bytes themselves and checks them against `eldenring-deobf.bin` at 0x142413860 /
-        // 0x1424142e0 (file offset == RVA) when a copy is present.
+        // bytes themselves and checks them against `eldenring-deobf-1.17.2.bin` at 0x142417810 /
+        // 0x142418290 (file offset == RVA) when a copy is present.
         const SHARED_PUSH_BYTES: usize = 12;
         assert_eq!(
             &SAVE_WRITE_FULL_REBUILD_SIG[..SHARED_PUSH_BYTES],
@@ -2826,16 +2819,16 @@ mod tests {
     #[test]
     fn a_missing_write_trampoline_reports_failure_not_success() {
         // The whole point of `SAVE_WRITE_FAILED_RESULT`: the job body treats 0 as success
-        // (`FUN_14240d8d0(job) == 0` is its continue condition), so a degraded observer must
+        // (`FUN_142411880(job) == 0` is its continue condition), so a degraded observer must
         // never return 0 -- that would certify a write that never happened.
         assert_ne!(SAVE_WRITE_FAILED_RESULT, 0);
         assert_eq!(SAVE_WRITE_FAILED_RESULT, 6);
     }
 
     #[test]
-    fn the_serializer_exit_map_matches_the_1162_decompile() {
-        // Boundaries read out of FUN_14067dc00: two fixed 0x10-byte writes
-        // (0x14067dd3d header, 0x14067ddcc xorshift seeds) then FUN_140257f20, whose
+    fn the_serializer_exit_map_matches_the_decompile() {
+        // Boundaries read out of FUN_14067ef00: two fixed 0x10-byte writes
+        // (0x14067f03d header, 0x14067f0cc xorshift seeds) then FUN_140257ef0, whose
         // length is game-state dependent. Anything past 0x20 is deliberately one bucket;
         // widening it would be a claim the decompile does not support.
         assert_eq!(
@@ -2952,8 +2945,8 @@ mod tests {
         assert_eq!(BYPASS_ARMED_TOTAL.load(Ordering::SeqCst), 2);
     }
 
-    /// The submit builders' precondition, transcribed from the 1.16.2 decompile of
-    /// `FUN_140e6ef60`: `iodev+0x10 == 0 && iodev+0x20 == 0`. Neither `+0x18` nor `+0x28`
+    /// The submit builders' precondition, transcribed from the 1.16.2 decompile of the
+    /// combined builder (2.7.2.0 `FUN_140e724c0`): `iodev+0x10 == 0 && iodev+0x20 == 0`. Neither `+0x18` nor `+0x28`
     /// is an operand of it -- `+0x18` only tells us who owns a latched `+0x20`, and a
     /// non-zero `+0x28` makes the builder defer (return 1) rather than decline.
     #[test]

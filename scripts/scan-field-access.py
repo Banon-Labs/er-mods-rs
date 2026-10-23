@@ -7,10 +7,11 @@ optionally, the immediate).  Complements scripts/find-deobf-bytes.py, which only
 takes literal byte patterns with whole-byte `??` wildcards.
 
     uv run --with capstone python3 scripts/scan-field-access.py 0x1c8 0x40,0xbf
-    ER_DEOBF_BIN=eldenring-deobf-1.17.bin uv run --with capstone \
+    ER_DEOBF_BIN=eldenring-deobf.bin uv run --with capstone \
         python3 scripts/scan-field-access.py 0x538 --size 1
 
-Env: ER_DEOBF_BIN (default eldenring-deobf.bin = 1.16.2), SCAN_START, SCAN_END.
+Env: ER_DEOBF_BIN (default eldenring-deobf-1.17.2.bin, the installed 2.7.2.0 build;
+eldenring-deobf.bin is 1.16.2), SCAN_START, SCAN_END.
 """
 import argparse
 import os
@@ -31,7 +32,7 @@ def main() -> int:
                     help="require this memory-operand size in bytes (0 = any)")
     a = ap.parse_args()
 
-    image = os.environ.get("ER_DEOBF_BIN", "eldenring-deobf.bin")
+    image = os.environ.get("ER_DEOBF_BIN", "eldenring-deobf-1.17.2.bin")
     data = open(image, "rb").read()
     disp = int(a.disp, 0)
     imms = [int(x, 0) & 0xFF for x in a.imms.split(",")] if a.imms else None

@@ -145,7 +145,7 @@ const AGE_MODULUS: u32 = 10;
 // A `list` field is written as the full four bytes, unclamped, and that is a decision with
 // evidence behind it rather than an omission.
 //
-// `CS::FaceData::ValidateFaceData` (1.16.2 `0x140252610`) requires the magic, `version == 4`,
+// `CS::FaceData::ValidateFaceData` (2.7.2.0 `0x1402525e0`) requires the magic, `version == 4`,
 // `buffer_size == 0x120`, and the eight leading `i32`s to be non-negative -- and those eight are
 // exactly this layout's eight `list` rows, 8 fields of 4 bytes tiling `buffer[0..32]`, from
 // `faceModelId` through `eyelashModelId`. Clamping to `i32::MAX` to satisfy that check is what

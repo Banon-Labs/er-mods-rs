@@ -13,7 +13,7 @@
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; both bodies
+// Addresses are 2.7.2.0, carried from 1.17.1; both bodies
 // match eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands.
 // CreateSummonChr 0x1404baea0 -> 0x1404baf80.
 const CREATE_SUMMON_CHR = va('0x1404baf80');

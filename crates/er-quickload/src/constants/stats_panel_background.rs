@@ -53,14 +53,14 @@ pub(crate) use er_title_flow::TITLE_STEP_END_FLOW;
 pub(crate) use er_title_flow::TITLE_STEP_END_FLOW_WAIT;
 
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = TitleStepState::BeginTitle as i32;
-/// STEP_BeginLogo (idx2, handler 0x140b0c2a0): the native press-any-button advance target.
+/// STEP_BeginLogo (idx2, 2.7.2.0 handler 0x140b0de70): the native press-any-button advance target.
 /// The parked press-any-button screen is the first state 10; the engine's own press handler
-/// 0x140b0b6b0 issues SetState(owner, 2), then the native pump advances 2->3->10, building
+/// (1.16.2 0x140b0b6b0) issues SetState(owner, 2), then the native pump advances 2->3->10, building
 /// the full main menu (Continue / Load-Game item d180 / New Game / ...). SetState(3)=BeginTitle
 /// alone (skipping BeginLogo) only built the BackScreen (c000), not the main-menu items -- so
 /// we replicate the full sequence by SetState(2) from our idx10 handler (zero-input, the
 /// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
-/// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
+/// singleton 0x14458ff38 (2.7.2.0) at entry; only SetState(2) when that is non-null.
 pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = TitleStepState::BeginLogo as i32;
 /// Cleared value (0) for the BeginLogo list-build gate [owner+0xb8].
 pub(crate) const TITLE_OWNER_BEGINLOGO_GATE_CLEAR: u32 = false as u32;
@@ -69,18 +69,18 @@ pub(crate) use er_title_flow::TITLE_OWNER_MENU_LIST_130_OFFSET;
 
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_OPEN_MENU_RVA;
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_VTABLE_RVA;
-/// CS::MenuWindow vtable 0x142a93a60 (.?AVMenuWindow@CS@@) (RVA). The live MenuWindow* the live
+/// CS::MenuWindow vtable 0x142a98bd0 (.?AVMenuWindow@CS@@) (2.7.2.0 RVA). The live MenuWindow* the live
 /// Load-Game dialog factory needs as its rdx call-frame arg. Located by the active-screen scan.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a93a60;
-/// CS::MenuWindowProxy vtable 0x142a94318 (RVA). The proxy variant of MenuWindow that the
+pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a98bd0;
+/// CS::MenuWindowProxy vtable 0x142a99488 (2.7.2.0 RVA). The proxy variant of MenuWindow that the
 /// active-screen array may hold instead of the concrete MenuWindow; either is a valid factory rdx.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const MENU_WINDOW_PROXY_VTABLE_RVA: usize = 0x2a94318;
+pub(crate) const MENU_WINDOW_PROXY_VTABLE_RVA: usize = 0x2a99488;
 
 /// Probe-2 ground truth (2026-06-18, runtime, REFUTES the static group->holder->screen walk):
-/// the 10 slots of the active-screen array 0x143d6d8d0 each hold a menu model RENDERER (vtable
-/// 0x142b80128 CSMenuProfModelRend / 0x142b7f310 CSMenuAsmModelRend), not screen/group controllers,
+/// the 10 slots of the active-screen array (2.7.2.0 0x143d74960) each hold a menu model RENDERER
+/// (vtable 2.7.2.0 0x142b852c8 CSMenuProfModelRend / 1.16.2 0x142b7f310 CSMenuAsmModelRend), not screen/group controllers,
 /// so the +0xa8 holder / +0x48 screen walk leads nowhere. That walk (and the MENU_GROUP_* /
 /// MENU_HOLDER_* offsets it used) is removed. What is runtime-reliable: TitleTopDialog at owner+0xe0
 /// (vtable-gated, TITLE_TOP_DIALOG_VTABLE_RVA). The live MenuWindow* is not statically pinned; it is
@@ -92,15 +92,15 @@ pub(crate) const FIELD_SCAN_STRIDE: usize = 8;
 
 pub(crate) use er_title_flow::DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
 pub(crate) use er_title_flow::LIVE_DIALOG_FACTORY_RVA;
-/// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
+/// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (1.16.2 ctor 0x14074a735).
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
 pub(crate) use er_title_flow::SCENE_OBJ_PROXY_CONTEXT_20_OFFSET;
 pub(crate) use er_title_flow::TITLE_PRESS_START_SET_VISIBLE_RVA;
-/// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
+/// Lower-level GFx visibility setter (2.7.2.0 `0x140d87970`). It has one
 /// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
 /// PressStart CSScaleformValue pointer, not globally.
-pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
+pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd87970;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED;
@@ -126,7 +126,7 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 #[cfg(feature = "quit-rows")]
-/// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
+/// Named child SceneObjProxy binder (2.7.2.0 `0x14074b5f0`). TitleTopDialog ctor calls it with
 /// r8="PressStart" and output `dialog+0xb78`. Called from this side, never hooked: it is variadic,
 /// so no fixed-arity detour is argument-transparent on it.
 pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize =

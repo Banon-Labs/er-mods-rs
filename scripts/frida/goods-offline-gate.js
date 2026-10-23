@@ -1,7 +1,7 @@
 // Clear `disable_offline` on the vanilla invasion goods, and watch `CanUseGoods` flip.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Measured: `CanUseGoods` (1.16.2 0x14068e010) greys the Use row through one long AND, and the
 // term that fails here is `disable_offline != 0 -> IsInOnlineMode()`. Seamless runs its own
@@ -16,7 +16,7 @@
 // Diagnostic write into the loaded param table. The product shape is the same edit applied through
 // the game's own param load, not a correction made behind it.
 const CAN_USE_GOODS_RVA = 0x68f310; // 1.17, unique 43B signature, +0xe50 from 1.16.2 (1.17.1 0x68ee60)
-const REPO_RVA = 0x3d88f78; // 1.17 .data, from rva-map-1162-to-1170.data.tsv (1.17.1 0x3d85f58)
+const REPO_RVA = 0x3d88f78; // 2.7.2.0 .data (1.17.1 0x3d85f58)
 const GOODS_INDEX = 3;
 const FLAG_OFFSET = 0x48;
 const DISABLE_OFFLINE_BIT = 1 << 5;

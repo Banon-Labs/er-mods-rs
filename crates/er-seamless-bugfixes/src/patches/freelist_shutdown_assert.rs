@@ -6,7 +6,9 @@
 //! carrying only this DLL and the crash logger. Unlike every other crash this DLL answers, it is
 //! not an access violation: `exception_code=0x80000003` is `STATUS_BREAKPOINT`, and
 //! `exception_address == context_rip == eldenring.exe+0xc57676` is a literal `INT3` the game
-//! executes on purpose. Both records are identical apart from thread id and stack pointer.
+//! executes on purpose. Both records are identical apart from thread id and stack pointer. That
+//! crash was on 1.16.2, so every address in this section and the next is a 1.16.2 VA as the log
+//! recorded it; the 2.7.2.0 window is described under "What the assertion checks".
 //!
 //! # It only happens on the way out
 //!
@@ -24,21 +26,21 @@
 //!
 //! # What the assertion checks
 //!
-//! `0x140c575e0` is vtable slot 2 of `CS::CSFreeListMemorySystem` -- its RTTI complete object
-//! locator at `0x143352958` names `.?AVCSFreeListMemorySystem@CS@@` -- called with flags `3`, which
-//! is its free-everything path. It walks a chain of `0x28`-byte nodes linked at `+0x20` and breaks
-//! on any node whose byte at `+0x18` is still set:
+//! On 2.7.2.0, `0x140c591e0` is vtable slot 2 of `CS::CSFreeListMemorySystem` -- its RTTI
+//! complete object locator at `0x143357ed8` names `.?AVCSFreeListMemorySystem@CS@@` -- called with
+//! flags `3`, which is its free-everything path. It walks a chain of `0x28`-byte nodes linked at
+//! `+0x20` and breaks on any node whose byte at `+0x18` is still set:
 //!
 //! ```text
-//! 140c57670: 80 7a 18 00     CMP byte ptr [RDX + 0x18], 0x0
-//! 140c57674: 74 01           JZ  0x140c57677
-//! 140c57676: cc              INT3
-//! 140c57677: 48 8b 4f 08     MOV RCX, [RDI + 0x8]      ; free the node -- on BOTH paths
+//! 140c59270: 80 7a 18 00     CMP byte ptr [RDX + 0x18], 0x0
+//! 140c59274: 74 01           JZ  0x140c59277
+//! 140c59276: cc              INT3
+//! 140c59277: 48 8b 4f 08     MOV RCX, [RDI + 0x8]      ; free the node -- on both paths
 //! ```
 //!
 //! That byte is the registrar's "checked out" flag. The registrar is vtable slot 3
-//! (`0x140c579f0`): it reuses a node whose `+0x18` is zero, otherwise allocates exactly `0x28`
-//! bytes, links it at `+0x20`, and sets `+0x18` to `1`. The sibling debug dump at `0x140c576b0`
+//! (`0x140c595f0`): it reuses a node whose `+0x18` is zero, otherwise allocates exactly `0x28`
+//! bytes, links it at `+0x20`, and sets `+0x18` to `1`. The sibling debug dump at `0x140c592b0`
 //! walks the same chain under the heading `"unused in thread local freelists"`. So a set flag means
 //! a thread-local free-list is still checked out while the allocator that owns it is being
 //! destroyed -- and deto's minidump holds 52 live threads at that instant, including roughly twenty
@@ -46,7 +48,7 @@
 //!
 //! # Why removing the `INT3` is safe
 //!
-//! The `JZ` at `0x140c57674` targets `0x140c57677`, which is `RIP + 1` from the `INT3`. Both the
+//! The `JZ` at `0x140c59274` targets `0x140c59277`, which is `RIP + 1` from the `INT3`. Both the
 //! asserting and the non-asserting path continue at the same instruction, and the node is freed
 //! either way. The break reports; it does not protect. A debugger would step over it and the
 //! function would carry on, which is exactly what this patch makes happen with no debugger
@@ -71,31 +73,27 @@ use core::sync::atomic::AtomicBool;
 
 use super::Patch;
 
-/// RVA of the `.pdata` function entry that contains the assertion: `CS::CSFreeListMemorySystem`
-/// vtable slot 2, the free-everything path documented above.
+/// 2.7.2.0 RVA of the `.pdata` function entry that contains the assertion:
+/// `CS::CSFreeListMemorySystem` vtable slot 2, the free-everything path documented above.
 ///
 /// # Why the constant names the function and not the window
 ///
-/// The window itself, `0xc57670`, is `0x90` bytes inside this function, and a mid-function address
-/// can never appear in a 1.16.2 -> 1.17 map: those tables are keyed on `.pdata` function starts,
-/// which is what a masked signature can identify. `docs/recon/rva-map-1162-to-1170.verified.tsv`
-/// records the refusal of `0xc57670` for exactly that reason.
+/// The window itself, `0xc59270`, is `0x90` bytes inside this function. Spelling it as the
+/// function plus an offset keeps a mid-function address out of every table keyed on function
+/// starts, and makes clear it is not a place a detour may go.
 ///
-/// The obvious repair is wrong, and every existing gate passes it. `.pdata` declares a record at
-/// `0xc57666`, `0xa` bytes before the window, and `scripts/classify-1170-entry-kind.py` calls it
-/// `ENTRY` on both builds; the pair `0xc57666 -> 0xc58d36` is already in
-/// `docs/recon/rva-map-1162-to-1170.functions.tsv`. It is not a function start. Its `UNWIND_INFO`
-/// carries `UNW_FLAG_CHAININFO`, so it is an MSVC chained-unwind continuation and the real
-/// prologue is `0x86` bytes earlier -- here. A constant naming `0xc57666` would be selected into
-/// the maps with `BOTH-ENTRIES` and would license MinHook to write five bytes `0x86` into a live
-/// function body. `scripts/check-no-chained-continuation-rows.py` is the gate for that shape.
+/// The obvious repair is wrong. `.pdata` declares a record at `0xc59266`, `0xa` bytes before the
+/// window. It is not a function start. Its `UNWIND_INFO` carries `UNW_FLAG_CHAININFO`, so it is an
+/// MSVC chained-unwind continuation and the real prologue is `0x86` bytes earlier -- here. A
+/// constant naming `0xc59266` would license MinHook to write five bytes `0x86` into a live
+/// function body. The detour allowlist holds function entries only, so such a constant is refused
+/// as a detour target.
 ///
-/// Confirmed on both images: `scripts/pdata-chain-root-1170.py` reports `0xc57666` (1.16.2) and
-/// `0xc58d36` (1.17) as chained continuations of `0xc575e0` / `0xc58cb0`, both of which are root
-/// records of extent `0x86`; RTTI names both `.?AVCSFreeListMemorySystem@CS@@` slot 2; and the
-/// window's offset within the function is `0x90` in both builds
-/// (`0xc57670 - 0xc575e0 == 0xc58d40 - 0xc58cb0`).
-pub(crate) const FREELIST_SHUTDOWN_ASSERT_FN_RVA: usize = 0xc5_75e0;
+/// Confirmed on `eldenring-deobf-1.17.2.bin`: `0xc591e0` is a root `.pdata` record of extent
+/// `0x86` and `0xc59266` its chained continuation; RTTI names `0xc591e0`
+/// `.?AVCSFreeListMemorySystem@CS@@` slot 2; and the window's bytes sit at offset `0x90`, the
+/// same offset as on 1.16.2 (`0xc57670 - 0xc575e0`).
+pub(crate) const FREELIST_SHUTDOWN_ASSERT_FN_RVA: usize = 0xc5_91e0;
 
 /// Byte offset of the verified window's first byte within [`FREELIST_SHUTDOWN_ASSERT_FN_RVA`].
 ///
@@ -103,13 +101,13 @@ pub(crate) const FREELIST_SHUTDOWN_ASSERT_FN_RVA: usize = 0xc5_75e0;
 /// be mistaken for a detour licence -- see `er_game_base::game_build::resolve_call_site_rva`.
 pub(crate) const FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET: usize = 0x90;
 
-/// 1.16.2 RVA of the `CMP` that opens the assertion, i.e. the first byte of the verified window.
+/// 2.7.2.0 RVA of the `CMP` that opens the assertion, i.e. the first byte of the verified window.
 /// The `INT3` itself is [`INT3_OFFSET`] bytes further on.
 ///
 /// Derived rather than written, so the two halves above cannot drift from the address `build.rs`
-/// ground-truths the generated window against. It is deliberately not a `= 0x...` literal:
-/// `scripts/select-needed-1170-rows.py` scans for that spelling, and selecting this mid-function
-/// address is the thing that must not happen.
+/// ground-truths the generated window against. It is deliberately not a `= 0x...` literal: the
+/// 1.17 ledger's row selector scanned for that spelling, and selecting this mid-function address
+/// was the thing that must not happen.
 ///
 /// Only the tests read it: since the address became a sum the install path goes through
 /// [`Patch::rva`], so a plain build has no caller and `-D warnings` rejects it as dead. It is
@@ -132,7 +130,7 @@ const NOP: u8 = 0x90;
 static ASSERT_DEFUSED: AtomicBool = AtomicBool::new(false);
 
 // The expected window, assembled from named `iced-x86` instructions by this crate's `build.rs` and
-// verified there against `eldenring-deobf.bin` when a copy is present.
+// verified there against `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_freelist_shutdown_assert.rs"
@@ -164,7 +162,7 @@ mod tests {
             &[
                 0x80, 0x7a, 0x18, 0x00, 0x74, 0x01, 0xcc, 0x48, 0x8b, 0x4f, 0x08
             ],
-            "the 1.16.2 bytes of CMP/JZ/INT3/MOV at 0x140c57670"
+            "the 2.7.2.0 bytes of CMP/JZ/INT3/MOV at 0x140c59270"
         );
     }
 
@@ -231,45 +229,42 @@ mod tests {
     }
 
     /// The RVA is what the install path adds to the live module base, and it is written
-    /// separately from the VA `build.rs` ground-truths against `eldenring-deobf.bin`. If the two
-    /// ever disagree, the bytes get verified at one address and the write lands at another.
+    /// separately from the VA `build.rs` ground-truths against `eldenring-deobf-1.17.2.bin`. If the
+    /// two ever disagree, the bytes get verified at one address and the write lands at another.
     ///
     /// Since 2026-08-30 the address is a sum, so this also pins the two halves: the entry has to
-    /// be the one `.pdata` roots the chain at, and the offset has to be the one measured in both
-    /// images. Asserting only the sum would let a wrong entry be cancelled by a wrong offset --
-    /// and a wrong entry is what gets resolved on 1.17, so the sum being right on 1.16.2 would
-    /// prove nothing about the build this exists for.
+    /// be the one `.pdata` roots the chain at, and the offset has to be the one measured in the
+    /// image. Asserting only the sum would let a wrong entry be cancelled by a wrong offset.
     #[test]
     fn the_rva_matches_the_va_the_window_was_generated_from() {
         const PREFERRED_IMAGE_BASE: usize = 0x1_4000_0000;
         assert_eq!(
             PREFERRED_IMAGE_BASE + FREELIST_SHUTDOWN_ASSERT_RVA,
-            0x1_40c5_7670,
+            0x1_40c5_9270,
             "the VA named in build.rs as FREELIST_SHUTDOWN_ASSERT_VA"
         );
         assert_eq!(FREELIST_SHUTDOWN_ASSERT.rva(), FREELIST_SHUTDOWN_ASSERT_RVA);
         assert_eq!(
             PREFERRED_IMAGE_BASE + FREELIST_SHUTDOWN_ASSERT_FN_RVA,
-            0x1_40c5_75e0,
-            "the ROOT .pdata record 0xc57666 chains to, and vtable slot 2 of \
-             CS::CSFreeListMemorySystem in both 1.16.2 and 1.17"
+            0x1_40c5_91e0,
+            "the ROOT .pdata record 0xc59266 chains to, and vtable slot 2 of \
+             CS::CSFreeListMemorySystem on 2.7.2.0"
         );
         assert_eq!(
             FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET, 0x90,
-            "0xc57670 - 0xc575e0 on 1.16.2, and 0xc58d40 - 0xc58cb0 on 1.17"
+            "0xc59270 - 0xc591e0 on 2.7.2.0, the same offset as on 1.16.2"
         );
     }
 
-    /// The chained-continuation record `0xc57666` is the wrong answer that reads as the right one:
-    /// `.pdata` declares it, `classify-1170-entry-kind.py` calls it `ENTRY`, and `functions.tsv`
-    /// already pairs it. Naming it here would put a `BOTH-ENTRIES` row into the maps for an
-    /// address `0x86` inside a live function.
+    /// The chained-continuation record `0xc59266` is the wrong answer that reads as the right one:
+    /// `.pdata` declares it. Naming it here would license a detour for an address `0x86` inside a
+    /// live function.
     #[test]
     fn the_function_rva_is_not_the_chained_continuation_record() {
-        const CHAINED_CONTINUATION_RVA: usize = 0xc5_7666;
+        const CHAINED_CONTINUATION_RVA: usize = 0xc5_9266;
         assert_ne!(
             FREELIST_SHUTDOWN_ASSERT_FN_RVA, CHAINED_CONTINUATION_RVA,
-            "0xc57666 carries UNW_FLAG_CHAININFO; the root of its chain is 0xc575e0"
+            "0xc59266 carries UNW_FLAG_CHAININFO; the root of its chain is 0xc591e0"
         );
         // `const` block: both sides are constants, so clippy::assertions_on_constants is right
         // that a runtime assert is the wrong tool. Checking it at compile time is strictly

@@ -352,7 +352,7 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(_base: usize) {
     // unsound in both directions, and the user found both within half an hour on 2026-08-07:
     //
     //   * view on screen (16:39:16) -- writing to components the menu thread is simultaneously
-    //     laying out. Died in `FUN_14075dc30`.
+    //     laying out. Died in 1.16.2 `FUN_14075dc30`.
     //   * view gone (17:03:32) -- writing to components whose owner has been destructed. Died in
     //     `_purecall` -> `purecall_crash_handler`, a deliberate write of 0xdead to NULL. The
     //     liveness check could not see it coming, because a destructed object's vtable slots hold
@@ -1378,7 +1378,7 @@ unsafe fn set_text_field_width_probe(
     let Some(reflow_addr) =
         crate::gated_game_fn(GFX_TEXT_DOC_REFLOW_RVA, "GFX_TEXT_DOC_REFLOW_RVA")
     else {
-        return Err("GFx text-doc reflow has no verified address for this build".to_owned());
+        return Err("GFx text-doc reflow is refused on this build (not 2.7.2.0)".to_owned());
     };
     let reflow: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(reflow_addr) };
     unsafe { reflow(text_doc) };

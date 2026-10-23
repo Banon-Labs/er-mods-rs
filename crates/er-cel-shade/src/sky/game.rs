@@ -13,20 +13,19 @@
 //! - A weather: `WorldAreaWeather::ChangeWeather(this, type, lifespan, immediate)`, the call
 //!   EMEVD's weather instruction ends in, with a lifespan of -1 (never expires, and the area's
 //!   random rolls stop) and immediate set. -1 as the type ends it again.
-//! - The lock on the clock is the byte EMEVD's "freeze time" sets (`SetTimeFrozen`, 0x1405f6240,
+//! - The lock on the clock is the byte EMEVD's "freeze time" sets (`SetTimeFrozen`, 0x1405f66f0,
 //!   is one store to it once a `WorldAreaTime` exists), written here only while one does. The game
 //!   carries it across area loads itself.
 //! - The pace has no call: it is the speed pair at `WorldAreaTime+0x34/+0x38` (game seconds per
 //!   real second; 24 in vanilla), written together because a client's resync copies +0x34 into
 //!   +0x38. What it was is kept and written back when the tab lets go.
 //!
-//! Every address was measured on 1.17.1 and is carried to the running build by
-//! `carry_1171_rva` (the identity on 1.17.1, the segment carry on 2.7.2.0, refused elsewhere);
-//! both calls are made only after their opening bytes match the generated prologues.
+//! Every address is a 2.7.2.0 rva and is refused on any other build; both calls are made only
+//! after their opening bytes match the generated prologues.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{
     game_module_base, read_bytes, safe_read_f32, safe_read_i32, safe_read_u8, safe_read_u16,
     safe_read_usize, safe_write_i32,
@@ -38,17 +37,17 @@ use crate::log;
 include!(concat!(env!("OUT_DIR"), "/generated_sky_prologues.rs"));
 
 /// `WorldAreaTime*`, null outside the world.
-const WORLD_AREA_TIME_1171_RVA: usize = 0x03d6_d368;
+const WORLD_AREA_TIME_RVA: usize = 0x03d7_0388;
 /// The freeze flag; time does not pass while it is set.
-const TIME_FROZEN_1171_RVA: usize = 0x03d6_d370;
+const TIME_FROZEN_RVA: usize = 0x03d7_0390;
 /// `WorldAreaWeather*`, null outside the world.
-const WORLD_AREA_WEATHER_1171_RVA: usize = 0x03d6_d3f0;
+const WORLD_AREA_WEATHER_RVA: usize = 0x03d7_0410;
 /// `CSSessionManager*`; its lobby state at +0xc is 6 on a co-op client.
-const SESSION_MANAGER_1171_RVA: usize = 0x03d7_e540;
+const SESSION_MANAGER_RVA: usize = 0x03d8_1560;
 /// `WorldAreaTime::RequestTime(this, u32 hour, u32 minute, u32 second)`.
-const REQUEST_TIME_1171_RVA: usize = 0x0064_42a0;
+const REQUEST_TIME_RVA: usize = 0x0064_4750;
 /// `WorldAreaWeather::ChangeWeather(this, i16 type, f32 lifespan, bool immediate)`.
-const CHANGE_WEATHER_1171_RVA: usize = 0x0064_7940;
+const CHANGE_WEATHER_RVA: usize = 0x0064_7df0;
 
 /// `WorldAreaTime`: the packed date the clock is read from.
 const TIME_PACKED: usize = 0x08;
@@ -81,7 +80,7 @@ pub static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// The task's own memory between frames.
 struct Task {
-    /// The four `.data` globals, carried to the running build.
+    /// The four `.data` globals, resolved on 2.7.2.0.
     world_area_time: usize,
     time_frozen: usize,
     world_area_weather: usize,
@@ -107,13 +106,6 @@ struct Task {
 fn refuse(why: &'static str) {
     log(format_args!("sky: {why}; the Sky tab only reads"));
     with(|s| s.install = Install::Refused(why));
-}
-
-/// Where the 1.17.1 address `rva_1171` is in the running module, or `None` when the carry
-/// refuses this build.
-fn carried(base: usize, rva_1171: usize) -> Option<usize> {
-    let rva = carry_1171_rva(rva_1171)?;
-    Some(base + rva)
 }
 
 /// `entry` if its opening bytes are `prologue`.
@@ -148,36 +140,26 @@ fn install() {
         refuse("no game module");
         return;
     };
-    // Measured on 1.17.1 and carried from there: `game_rva`'s 1.16.2 ledger has no row for any
-    // of them. A build the carry does not cover refuses here, before anything is read or called.
-    let (
-        Some(request_entry),
-        Some(change_entry),
-        Some(world_area_time),
-        Some(time_frozen),
-        Some(world_area_weather),
-        Some(session_manager),
-    ) = (
-        carried(base, REQUEST_TIME_1171_RVA),
-        carried(base, CHANGE_WEATHER_1171_RVA),
-        carried(base, WORLD_AREA_TIME_1171_RVA),
-        carried(base, TIME_FROZEN_1171_RVA),
-        carried(base, WORLD_AREA_WEATHER_1171_RVA),
-        carried(base, SESSION_MANAGER_1171_RVA),
-    )
-    else {
+    // Measured on 2.7.2.0. Any other build refuses here, before anything is read or called.
+    if !is_supported_build() {
         log(format_args!(
-            "sky: no carry of the 1.17.1 addresses to {:?}",
-            game_file_version()
+            "sky: the addresses were measured on 2.7.2.0 and this build is another: {}",
+            describe_build()
         ));
-        refuse("no carry of the 1.17.1 addresses to this build");
+        refuse("this build is not 2.7.2.0, the build the addresses were measured on");
         return;
-    };
-    let Some(request) = checked_entry(request_entry, &REQUEST_TIME_1171_PROLOGUE) else {
+    }
+    let request_entry = base + REQUEST_TIME_RVA;
+    let change_entry = base + CHANGE_WEATHER_RVA;
+    let world_area_time = base + WORLD_AREA_TIME_RVA;
+    let time_frozen = base + TIME_FROZEN_RVA;
+    let world_area_weather = base + WORLD_AREA_WEATHER_RVA;
+    let session_manager = base + SESSION_MANAGER_RVA;
+    let Some(request) = checked_entry(request_entry, &REQUEST_TIME_PROLOGUE) else {
         refuse("RequestTime does not open as expected");
         return;
     };
-    let Some(change) = checked_entry(change_entry, &CHANGE_WEATHER_1171_PROLOGUE) else {
+    let Some(change) = checked_entry(change_entry, &CHANGE_WEATHER_PROLOGUE) else {
         refuse("ChangeWeather does not open as expected");
         return;
     };
@@ -187,7 +169,7 @@ fn install() {
         refuse("the game's task scheduler never appeared");
         return;
     };
-    // SAFETY: both entries are 1.17.1 functions carried to the running build whose opening bytes
+    // SAFETY: both entries are 2.7.2.0 functions on the running 2.7.2.0 build whose opening bytes
     // were just compared with the generated prologues; the signatures are the ones the Frida
     // prototype called them with.
     let (request_time, change_weather) = unsafe {
@@ -378,7 +360,7 @@ impl Task {
 ///
 /// # Safety
 ///
-/// `addr` must be [`TIME_FROZEN_1171_RVA`] carried to the running build: a byte of `.data`,
+/// `addr` must be [`TIME_FROZEN_RVA`] on the running 2.7.2.0 build: a byte of `.data`,
 /// always mapped and writable.
 unsafe fn write_frozen(addr: usize, value: u8) {
     // SAFETY: per the contract above.

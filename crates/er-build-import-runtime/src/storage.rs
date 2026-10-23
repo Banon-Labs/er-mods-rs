@@ -16,11 +16,11 @@
 //! [`crate::catalog::PotGroups`]). The box is exempt, and the exemption is a construction flag
 //! rather than a special case in the transfer code:
 //! `EquipInventoryData::EquipInventoryData(this, size, keySize, limitedPots, unlimitedConsumables)`
-//! (1.16.2 `0x14024bbf0`) has exactly two callers -- the `EquipGameData` constructor at
+//! (2.7.2.0 `0x14024bbf0`) has exactly two callers -- the `EquipGameData` constructor at
 //! `0x140245485` passes `unlimitedConsumables = 0`, the `PlayerGameData` constructor at
-//! `0x14025d879` passes `1`. That flag makes `UpdatePotsStates` return immediately and routes
-//! `GetMaxAmountForItem` to `GetMaxItemCountForUnlimitedConsumables` (`0x1406748c0`, 1.17
-//! `0x140675710`), which answers `EquipParamGoods.maxRepositoryNum` instead of the group's
+//! `0x14025d856` passes `1`. That flag makes `UpdatePotsStates` return immediately and routes
+//! `GetMaxAmountForItem` to `GetMaxItemCountForUnlimitedConsumables` (`0x140675bc0`), which
+//! answers `EquipParamGoods.maxRepositoryNum` instead of the group's
 //! remaining headroom.
 //!
 //! So depositing a pot the build does not want DECREMENTS the carried `potItemsCount` for its
@@ -66,13 +66,13 @@ use er_game_base::rva::{
 /// upstream declares, because before a character is loaded the slot really is null.
 ///
 /// Measured, not taken from that declaration. `CS::GameDataMan::GetMainPlayerGameData`
-/// (`0x140e9fc30`) is a twelve-byte leaf whose whole body is
+/// (2.7.2.0 `0x140ea3190`) is a twelve-byte leaf whose whole body is
 /// `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret` -- the field's identity in one
 /// instruction. It has not moved: `CS::GameData::GameData(GameDataMan*)`, the constructor
-/// (`0x140254680`, 1.17 `0x140254650`), aligns 351/351 instructions across the two de-Arxan'd
-/// images with 45 `this`-relative offsets and zero moved, `0x8` among them; `~GameDataMan`
-/// (`0x140254d40`, 1.17 `0x140254d10`) aligns 359/359 and agrees. Re-measured every run by
-/// `scripts/check-object-field-offsets-1170.py`.
+/// (2.7.2.0 `0x140254650`), aligned 351/351 instructions between the 1.16.2 and 1.17 images
+/// with 45 `this`-relative offsets and zero moved, `0x8` among them; `~GameDataMan`
+/// (2.7.2.0 `0x140254d10`) aligned 359/359 and agrees. Re-measured every run by
+/// `scripts/check-object-field-offsets.py`.
 ///
 /// Same value and same reason as `grant::GAME_DATA_MAN_PLAYER_OFFSET`; it is repeated here rather
 /// than shared because this module's use of it is a NULL check on the engine's behalf --
@@ -177,7 +177,7 @@ unsafe fn drop_natives(module_base: usize) -> Option<DropNatives> {
         [
             (
                 er_game_base::rva::ITEM_DROP_DATA_FROM_GAITEM_RVA,
-                "ItemDropData from GaItemHandle (FUN_14055e3d0)",
+                "ItemDropData from GaItemHandle (0x14055f6d0)",
             ),
             (
                 er_game_base::rva::MAP_ITEM_MAN_DROP_ITEM_RVA,
@@ -669,7 +669,7 @@ impl Storage {
     ///
     /// # What it refuses
     ///
-    /// A handle the filler cannot look up. `FUN_14055e3d0` leaves `itemId` at `-1` when it cannot
+    /// A handle the filler cannot look up. `0x14055f6d0` leaves `itemId` at `-1` when it cannot
     /// resolve the instance, and going on from there would remove the entry and spawn nothing --
     /// a silent destruction wearing this method's name. The `-1` is checked before anything moves.
     ///
@@ -1295,13 +1295,13 @@ impl Storage {
 mod tests {
     use super::*;
 
-    /// The addresses this module calls, pinned to the 1.16.2 static RE that established them.
+    /// The addresses this module calls, pinned to their 2.7.2.0 values.
     ///
     /// They live in `er-game-base::rva` now, shared with `er-better-refills`, so this is the check
     /// that the shared declaration did not move under this crate.
     #[test]
-    fn rvas_match_er_1162_static_re() {
-        assert_eq!(GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, 0x786810);
+    fn rvas_match_the_2720_static_re() {
+        assert_eq!(GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, 0x787b40);
         assert_eq!(GET_QUANTITY_BY_ITEM_ID_RVA, 0x24c1b0);
         assert_eq!(GET_ITEM_INVENTORY_IDX_RVA, 0x24c560);
         assert_eq!(CHANGE_AMOUNT_IN_BOX_RVA, 0x24e3d0);
@@ -1313,18 +1313,17 @@ mod tests {
         assert_eq!(ADJUST_QUANTITY_BY_RVA, 0x24bfe0);
     }
 
-    /// The world-drop trio, pinned to the 1.16.2 static RE and to the ledger row that carries it.
+    /// The world-drop trio, pinned to its 2.7.2.0 values.
     ///
-    /// `docs/recon/rva-map-1162-to-1170.verified.tsv` maps `0x14055aba0 -> 0x14055b9f0` and
-    /// `0x14055e3d0 -> 0x14055f220`, both `IDENTICAL-WHOLE` at ratio 1.000 over their whole bodies
-    /// with matching `.pdata` extents, and the data map carries `0x3d67a50 -> 0x3d6bac0`. If one
-    /// of these constants is edited without the ledger, the address resolves to a function that is
-    /// not this one, so the constant and the row are checked together rather than separately.
+    /// These are the addresses the 1.16.2 static RE (`0x14055aba0`, `0x14055e3d0`, `0x3d67a50`)
+    /// resolved to on 2.7.2.0 through the verified ledger before the workspace went native. If one
+    /// of these constants is edited, the address lands on a function that is not this one, so the
+    /// shared declaration is pinned here as well.
     #[test]
-    fn the_drop_trio_matches_the_1162_static_re() {
-        assert_eq!(er_game_base::rva::MAP_ITEM_MAN_DROP_ITEM_RVA, 0x55aba0);
-        assert_eq!(er_game_base::rva::ITEM_DROP_DATA_FROM_GAITEM_RVA, 0x55e3d0);
-        assert_eq!(er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA, 0x3d67a50);
+    fn the_drop_trio_matches_the_2720_static_re() {
+        assert_eq!(er_game_base::rva::MAP_ITEM_MAN_DROP_ITEM_RVA, 0x55bea0);
+        assert_eq!(er_game_base::rva::ITEM_DROP_DATA_FROM_GAITEM_RVA, 0x55f6d0);
+        assert_eq!(er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA, 0x3d6eae0);
     }
 
     /// The request is sixteen bytes of four ints, which is the whole input contract.

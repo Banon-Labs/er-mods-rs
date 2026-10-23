@@ -144,8 +144,8 @@ Interceptor.attach(exp('GetCursorPos'), {
 // Why the cursor is shown or hidden: 0x140e20b20 decides it each frame (show when 0x140e20520
 // answers, or the gate 0x140e20490 is true and the idle timer at +4 has not run out, or +2 is clear,
 // or +0x31 is clear), and stores the answer at +3. Reported on every change of those inputs.
-// Those are 1.17.1 addresses; the hooks below use 2.7.2.0 ones, carried with
-// scripts/map-rvas-1171-to-1172.py: decider 0x140e20b20 -> 0x140e22210, gate 0x140e20490 ->
+// Those are 1.17.1 addresses; the hooks below use 2.7.2.0 ones: decider 0x140e20b20 ->
+// 0x140e22210, gate 0x140e20490 ->
 // 0x140e21b80, both matching between the two de-Arxan'd images (the decider reads the same +2, +3,
 // +4, +8, +0x30 and +0x31). 0x140e20520 -> 0x140e21c10 is an Arxan stub in both images, carried by
 // the decider's own call to it.

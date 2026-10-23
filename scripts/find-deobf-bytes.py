@@ -9,7 +9,12 @@ Usage:
 A pattern is a hex string; use "??" for a wildcard byte, e.g.:
     python3 scripts/find-deobf-bytes.py "0fb683a8820000" "488b0d????????"
 
-Override the image with ER_DEOBF_BIN.
+The default image is `eldenring-deobf-1.17.2.bin`, the installed build (eldenring.exe 2.7.2.0):
+the repo copy, or from a linked worktree the main checkout's copy, since the images are
+gitignored and git never copies them into a worktree. Point ER_DEOBF_BIN at another image to
+read an older build, e.g. `ER_DEOBF_BIN=eldenring-deobf.bin` for 1.16.2 (the named dump's build).
+A relative ER_DEOBF_BIN that does not exist from the current directory is looked up the same
+way, repo root first.
 
 The scan stops at 64 hits and says so ("hits=64+ (TRUNCATED ...)"), because a pattern loose
 enough to match dozens of sites is usually the wrong pattern rather than a long answer. Raise the
@@ -22,10 +27,39 @@ encoding, so it covers every base register and prefix in one pass and does not t
 import os
 import sys
 
-DEFAULT_IMG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf.bin"
-)
-IMG = os.environ.get("ER_DEOBF_BIN", DEFAULT_IMG)
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_IMAGE_NAME = "eldenring-deobf-1.17.2.bin"
+
+
+def main_checkout():
+    """The main checkout's root when this file lives in a linked worktree, else None."""
+    git = os.path.join(REPO, ".git")
+    if not os.path.isfile(git):
+        return None
+    with open(git, encoding="utf-8", errors="replace") as handle:
+        text = handle.read().strip()
+    if not text.startswith("gitdir:"):
+        return None
+    private = text.split(":", 1)[1].strip()
+    common = os.path.join(private, "commondir")
+    if not os.path.isfile(common):
+        return None
+    with open(common, encoding="utf-8") as handle:
+        main_git = os.path.normpath(os.path.join(private, handle.read().strip()))
+    return os.path.dirname(main_git)
+
+
+def resolve_image(name):
+    """`name` as given if it exists, else beside the repo root, else beside the main checkout."""
+    if os.path.isabs(name) or os.path.exists(name):
+        return name
+    for root in (REPO, main_checkout()):
+        if root and os.path.exists(os.path.join(root, name)):
+            return os.path.join(root, name)
+    return os.path.join(REPO, name)
+
+
+IMG = resolve_image(os.environ.get("ER_DEOBF_BIN", DEFAULT_IMAGE_NAME))
 BASE = 0x140000000
 MAX_HITS = int(os.environ.get("ER_DEOBF_MAX_HITS", "64"))
 

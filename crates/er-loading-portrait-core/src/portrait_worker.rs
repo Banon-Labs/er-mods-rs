@@ -328,7 +328,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // Depth-KEYED transparent background (restored 2026-07-03 after the
         // scene-alpha probe): the alpha-0 clear alone cannot key the RT
         // because the backdrop is live scene content redrawn every frame by
-        // the model submit (FUN_1409e9ac0 walks the model's 27-slot node
+        // the model submit (0x1409eb100 walks the model's 27-slot node
         // array +0x28..+0x100; run 7eefdbd: alpha0_clears=556, every frame
         // still opaque, clean=0 -- overlay starved, no animation). Scene-
         // alpha keying resumes once the backdrop NODE is identified (see

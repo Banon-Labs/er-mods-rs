@@ -2,7 +2,7 @@
 /// Read-only, save-safe save-data snapshot for the parked-title disambiguation
 /// (goal step 2): confirm GameDataMan (`game_data_man_ptr_or_null()`) and its `CS::ProfileSummary`
 /// container (`+SLOT_MANAGER_CONTAINER_OFFSET`) are built cold, read the per-slot
-/// active bytes the char-mount gate (`0x67b200`) checks via `byte[profile+slot+8]`,
+/// active bytes the char-mount gate (`0x67c500`) checks via `byte[profile+slot+8]`,
 /// and read the save-mgr deserialize-ready handle (`[mgr+0xdf0]`, the gate fast-path).
 /// Every access is a fault-tolerant `ReadProcessMemory` -- no game-state mutation.
 pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
@@ -10,7 +10,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     const NULL_POINTER_VALUE: usize = 0;
     /// ProfileSummary per-slot active-byte array base (getter reads `byte[profile+slot+8]`).
     const PROFILE_SLOT_ACTIVE_ARRAY_OFFSET: usize = core::mem::size_of::<usize>();
-    /// Save-mgr deserialize-ready handle (gate `0x67b200` fast-path `[mgr+0xdf0]`).
+    /// Save-mgr deserialize-ready handle (gate `0x67c500` fast-path `[mgr+0xdf0]`).
     const GAME_MAN_DESERIALIZE_READY_DF0_OFFSET: usize =
         core::mem::offset_of!(GameManSaveSnapshotLayout, deserialize_ready);
 
@@ -48,8 +48,8 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
 
     // FD4 async-IO drain subsystem (B step-3 lever check, read-only). The cold save-IO read
     // never drains because the queue-processing worker threads live in the global thread pool
-    // [0x144853048], not in the worker manager. If the pool is NULL cold, cold-building it
-    // (0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
+    // [0x14485a178] (2.7.2.0), not in the worker manager. If the pool is NULL cold, cold-building it
+    // (1.16.2 0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
     // Correction (autoresearch 2026-06-18): the "stream task" read is actually
     // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
     // `fd4_stream_task_present` signal is meaningless. Resolve it through fromsoftware-rs.
@@ -919,7 +919,7 @@ static CONTINUE_TRACE_REPEATS: er_game_base::repeat::RepeatFilter =
 ///
 /// Several of these hooks sit on polled game paths -- the game asks the same question every
 /// frame and the hook answers identically. Measured on run `br-20260831-160354-2513` (8m39s):
-/// `combined_load_67b940` was entered 8,639 times, every one of them `slot=-1 arg1=0 arg2=1`
+/// `save_dispatch_combined` was entered 8,639 times, every one of them `slot=-1 arg1=0 arg2=1`
 /// from a single 8-frame caller stack, and all 8,639 enter lines had **seven** distinct
 /// contents between them. `ENTER`/`LEAVE` together were 94% of an 18,368-line, 5.43 MB file
 /// (37 MB/h, unbounded) -- and the trace is not a diagnostic mode: `trace_continue_enabled()`

@@ -9,11 +9,14 @@ Covers both the no-SIB form (rm != 100) and the SIB form (rm == 100). Reports th
 opcode/REX byte and the decoded base/index/source registers for triage.
 
 Usage: regstore-scan-deobf.py 0xa8 [0xe8 ...]
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
 """
 import sys, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+IMG = os.environ.get(
+    "ER_DEOBF_BIN", os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf-1.17.2.bin")
+)
 REXW = {0x48, 0x49, 0x4C, 0x4D}  # REX.W with optional R/X/B bits
 REG = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]
 

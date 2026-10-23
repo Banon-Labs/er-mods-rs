@@ -21,7 +21,7 @@ use crate::prelude::*;
 //       and a later good sample erased an earlier bad one. This publishes through per-window
 //       accumulators: `fetch_add` for bad frames, `compare_exchange`-from-zero for first values, plus
 //       a session total that nothing can decrement.
-//   (d) it measured `equipment_param_ids`, which `FUN_1409e6fb0` OVERRIDES from `unkd4`/`unkd8`/`unk0`
+//   (d) it measured `equipment_param_ids`, which `FUN_1409e86f0` OVERRIDES from `unkd4`/`unkd8`/`unk0`
 //       -- a field with no causal power over the rendered result in the failing case. This replicates
 //       the override arithmetic and publishes the effective ids the renderer actually resolves.
 //
@@ -55,7 +55,7 @@ pub use er_telemetry_core::counters::PORTRAIT_EQUIP_WINDOWS_BAD;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_WINDOWS_SAMPLED;
 
 /// Byte offset of protector `slot`'s entry within a `ChrAsm`'s `equipment_param_ids` array.
-/// `CS::ChrAsm::GetProtectorParamIdBySlot` (deobf 0x1403be950) is literally
+/// `CS::ChrAsm::GetProtectorParamIdBySlot` (0x1403be960) is literally
 /// `lea 0xc(%rdx),%eax ; movslq %eax,%rdx ; mov 0x7c(%rcx,%rdx,4),%eax ; ret`.
 pub fn chr_asm_protector_param_id_offset(slot: usize) -> usize {
     CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
@@ -86,7 +86,7 @@ pub fn portrait_equip_roll_window(window: usize) {
 
 /// Read the live stage-0 `ChrAsm` of `slot`'s profile renderer, or `None` when there is nothing
 /// meaningful to measure this tick. The pool pointer is re-read on every call and vtable-guarded --
-/// `FUN_1409af3a0` deletes and reconstructs all ten renderers on every `TitleTopDialog` construction,
+/// `FUN_1409b0aa0` deletes and reconstructs all ten renderers on every `TitleTopDialog` construction,
 /// so a cached pointer goes stale mid-session.
 ///
 /// `None` (rather than a sample) when:
@@ -215,7 +215,7 @@ pub unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, target_s
         // real post-rebuild defect. One run decides it; nothing here assumes which.
         PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS.store(sample.model_ins, Ordering::SeqCst);
     }
-    // The armament half, read off the same live ChrAsm. `FUN_1409e6fb0` resolves weapons
+    // The armament half, read off the same live ChrAsm. `FUN_1409e86f0` resolves weapons
     // (`EquipParamWeapon::GetEntry`) and handedness
     // (`getSelectedWeaponSlotIndex(&equipment.armStyle, 0|1)` -> `selectedWeaponSlotIndex`) from
     // exactly this object, so a non-empty id here is the model build being asked for a weapon.

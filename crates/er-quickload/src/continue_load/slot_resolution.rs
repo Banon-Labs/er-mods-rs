@@ -73,7 +73,7 @@ pub(crate) fn native_fullread_slot() -> i32 {
 /// our slot. On every done exit, including the commit handoff, the register must be
 /// returned to the no-request sentinel: the in-game save manager services any >=0 request on the
 /// first frames after world arrival, which runs a second full deserialize into the already-live
-/// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at live 0x67141a
+/// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at 1.16.2 0x67141a
 /// (6/6 picker-boot crashes 2026-07-07; explicit save_file repro 2026-07-08, ~25s in, immediately
 /// after save_state 1->2). Earlier code assumed continue_confirm consumed the pending request, but
 /// runtime gm-snap proved requestedSaveSlotLoadIndex survived as 0 until the crash, so commit must
@@ -104,25 +104,26 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
 /// live TitleTopDialog menu action is semantically validated (TitleTopDialog vtable,
 /// [dialog+0xa48] registry, Load-Game node/action chain),
 /// it runs the full-save-read load chain as a per-frame phase
-/// machine at the live menu (where the FD4 IO worker pool 0x144853048 is live so the submit drains):
-///   SUBMIT: set `GameMan::requestedSaveSlotLoadIndex` (step 1), set_save_slot 0x14067a810
-///           (step 2 -> `GameMan::saveSlot`), submit full read 0x14067b1a0 (step 3, type-0xa).
-///   DRAIN:  tick lane 0x140679510 + poll 0x140679180 each frame until `GameMan::saveState==3`
+/// machine at the live menu (where the FD4 IO worker pool 0x14485a178 is live so the submit drains)
+/// (2.7.2.0 addresses):
+///   SUBMIT: set `GameMan::requestedSaveSlotLoadIndex` (step 1), set_save_slot 0x14067bb10
+///           (step 2 -> `GameMan::saveSlot`), submit full read 0x14067c4a0 (step 3, type-0xa).
+///   DRAIN:  tick lane 0x14067a810 + poll 0x14067a480 each frame until `GameMan::saveState==3`
 ///           (step 4).
-///   DESER:  deserialize 0x14067b290(slot) once at resident saveState (step 5 ->
+///   DESER:  deserialize 0x14067c590(slot) once at resident saveState (step 5 ->
 ///           `GameMan::stayInMultipleAreaBlockId` = real map).
 ///   GUARD:  loaded map != 0xa010000 (m10 default) and char fingerprint present (level>=10 + name) (step 6).
 ///   Confirm (step 7, the sole save write): Only if the guard passes and native_fullread_commit_enabled():
-///           continue_confirm 0x140b0e180(rcx=shim{[owner]=live_title_owner});
+///           continue_confirm 0x140b0fd50(rcx=shim{[owner]=live_title_owner});
 ///           it takes the non-NewGame branch when owner+0x284!=1, sets owner+0xbc=c30 + SetState5
 ///           (AUTOSAVES). Without the
 ///           commit sub-gate, stops at guard (verify-ONLY: log only, no continue_confirm/NO SetState5).
 /// Reuses cold_char_mount_drive's submit/lane/poll/deser calls (exact RVAs) but builds/pumps no
 /// selector step (probe-12 crash) and forces no SetState for boot. Logs saveState/loaded-map/level
 /// each frame.
-/// Record that the title-time save deserialize `0x14067b290` is about to be called.
+/// Record that the title-time save deserialize `0x14067c590` is about to be called.
 ///
-/// `0x14067b290` has exactly one caller in the image -- `CS::MoveMapStep::DoSaveStuff`, reachable
+/// `0x14067c590` has exactly one caller in the image -- `CS::MoveMapStep::DoSaveStuff`, reachable
 /// only from `MoveMapStep::Update`, the in-world step. Calling it from the boot title is calling it
 /// outside every precondition that caller establishes, and a picked save died there. The routing
 /// fix (`er_title_flow::autoload_route`) sends a picked save down the native Continue row instead,
@@ -211,7 +212,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     // The default boot save reaches here for the same reason a picked one does: the native Continue
     // row cannot be identified on this build, and the node this scan looks for does not live in the
     // dialog at all -- the title's rows are ref-counted CS::MenuMemberFuncJob nodes chained into a
-    // FixOrderJobSequence by the registrar 0x1409b24e0 and owned by the menu manager, so the bounded
+    // FixOrderJobSequence by the registrar 0x1409b3be0 and owned by the menu manager, so the bounded
     // flat scan of the dialog object reports hits=0 every tick by construction (measured 2026-09-06,
     // 1280 qwords). Gating the chain on it would stall a default boot forever. The summary
     // fingerprint is the real precondition -- the chain loads what the record describes -- and the
@@ -242,11 +243,11 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
 
     if phase == FULLREAD_PHASE_SUBMIT {
-        // Step 0: mark the target slot occupied so the native save-load gate (0x14067b200, which reads
+        // Step 0: mark the target slot occupied so the native save-load gate (0x14067c500, which reads
         // ProfileSummary->saveSlotsStates[slot]) accepts it. At a missing-save boot the boot save-check
         // has not populated ProfileSummary, so saveSlotsStates[slot]==0 and the load is refused. The
         // full-read below reads the character data itself, but the gate still needs the occupancy flag.
-        // MarkProfileIndexAsUsed 0x262250(profileSummary, slot) sets it with no other side effect;
+        // MarkProfileIndexAsUsed 0x262260(profileSummary, slot) sets it with no other side effect;
         // idempotent. Skip if ProfileSummary is not resolvable yet.
         let gdm_for_mark = game_data_man_ptr_or_null();
         let summary = if gdm_for_mark != NULL {
@@ -268,10 +269,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             };
             let _ = unsafe { mark(summary, slot) };
         }
-        // Step 1: set `GameMan::requestedSaveSlotLoadIndex`; resolver 0x1406793c0 returns this
+        // Step 1: set `GameMan::requestedSaveSlotLoadIndex`; resolver (1.16.2 0x1406793c0) returns this
         // field so the native chain resolves our slot. Save-safe (an in-memory selector).
         unsafe { *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *mut i32) = slot };
-        // Step 2: set_save_slot 0x14067a810(slot) -> `GameMan::saveSlot=slot`.
+        // Step 2: set_save_slot 0x14067bb10(slot) -> `GameMan::saveSlot=slot`.
         let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
             std::mem::transmute(
                 match crate::gated_game_fn(
@@ -284,7 +285,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             )
         };
         unsafe { set_save_slot(slot) };
-        // Step 3: submit the full read 0x14067b1a0(slot) (type-0xa; sets `GameMan::saveState=2`,
+        // Step 3: submit the full read 0x14067c4a0 (type-0xa; sets `GameMan::saveState=2`,
         // the deserialize arm). At the live menu the FD4 IO worker pool is live so this drains.
         let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
             std::mem::transmute(
@@ -329,7 +330,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
 
     if phase == FULLREAD_PHASE_DRAIN {
-        // Step 4: tick lane 0x140679510 (saveState==1/2 IO tick) + poll 0x140679180 each frame
+        // Step 4: tick lane 0x14067a810 (saveState==1/2 IO tick) + poll 0x14067a480 each frame
         // until `GameMan::saveState==3` (resident, the 0x280000 buffer drained). Reuses
         // cold_char_mount's calls.
         let lane: unsafe extern "system" fn() -> i32 = unsafe {
@@ -405,10 +406,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
 
     if phase == FULLREAD_PHASE_DESER {
-        // Switch feed + stale-table fix (0x67141a + soft-lock, 2026-07-16, workflow wf_0a1d790f). Two bugs on a
+        // Switch feed + stale-table fix (1.16.2 0x67141a + soft-lock, 2026-07-16, workflow wf_0a1d790f). Two bugs on a
         // 2nd+ consecutive System->Quit->Load-Profile switch, both here:
-        //  (a) CRASH: the native deser's inner CSGaitemImp::Deserialize (game+0x671130) runs on the prior
-        //      character's stale gaitem table -> AV at game+0x67141a. Fix: reset the singleton to pristine
+        //  (a) CRASH: the native deser's inner CSGaitemImp::Deserialize (2.7.2.0 game+0x672430) runs on the prior
+        //      character's stale gaitem table -> AV at (1.16.2) game+0x67141a. Fix: reset the singleton to pristine
         //      first (own_load_reset_gaitem_singleton, the same native per-item release continue_confirm uses).
         //  (b) soft-LOCK: the native deser(slot) reads the game's resident IO buffer, which on switch 2 comes
         //      back m10-null (c30=0xa010000, a level-9 shell) and never populates -> guard never passes ->
@@ -442,7 +443,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // screen for a permanent stall in STEP_WorldResWait.
         //
         // The repo's own routing design already says where the deserialize belongs -- In-world,
-        // from `CS::MoveMapStep::DoSaveStuff`, the only native caller `0x14067b290` has. Doing it
+        // from `CS::MoveMapStep::DoSaveStuff`, the only native caller `0x14067c590` has. Doing it
         // at the title is what `note_title_time_deser` exists to make loud, and a correct product
         // run reports `oracle_title_time_deser_calls = 0`.
         let dret = if switch_feed_case {
@@ -497,7 +498,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 0
             }
         } else {
-            // Step 5: deserialize 0x14067b290(slot) once at resident saveState -> writes
+            // Step 5: deserialize 0x14067c590(slot) once at resident saveState -> writes
             // `GameMan::stayInMultipleAreaBlockId` = real map.
             let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
                 std::mem::transmute(
@@ -510,7 +511,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             note_title_time_deser(slot, "boot-fullread");
             unsafe { deser(slot) }
         };
-        // Clear the warp request the DESERIALIZE just raised. `0x14067b290` ends with
+        // Clear the warp request the DESERIALIZE just raised. `0x14067c590` ends with
         // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true` -- correct for the
         // native flow, where this runs in-world from `CS::MoveMapStep::DoSaveStuff` and the map
         // move consumes the request on the same pass. We run it at the title, so nothing consumes
@@ -701,7 +702,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
-        // COMMIT: continue_confirm 0x140b0e180(rcx=&shim{[owner]=title_owner}). Disasm shows it
+        // COMMIT: continue_confirm 0x140b0fd50(rcx=&shim{[owner]=title_owner}). Disasm shows it
         // reads shim+8, only takes the NewGame branch when owner+0x284 == 1, otherwise writes
         // owner+0xbc, calls SetState5, then touches owner+0x138/+0x300. The product Continue path uses
         // this live title owner; using the stale GameDataMan+8 owner here can crash at owner+0x300
@@ -756,7 +757,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // continue_confirm starts the native world stream but does not reliably consume
         // `GameMan::requestedSaveSlotLoadIndex`. If the requested slot survives into the first post-world save state, DoSaveStuff runs a second
         // full-deserialize into the already-live PlayerGameData and crashes in CSGaitemImp::Deserialize
-        // (live 0x14067141a, gaitemInsTable[-1]). Disarm immediately after the confirmed handoff;
+        // (1.16.2 0x14067141a, gaitemInsTable[-1]). Disarm immediately after the confirmed handoff;
         // `GameMan::saveSlot` still carries the selected save slot for the normal loaded-world state.
         unsafe { fullread_disarm_slot_request(gm, "commit-after-confirm") };
         append_autoload_debug(format_args!(
@@ -856,7 +857,7 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, loaded_map: i32) -> Requ
 pub(crate) use er_loading_portrait_core::char_fingerprint;
 /// Read the load-correctness invariants at the in-world transition and log a single greppable
 /// `LOAD-CORRECTNESS` record: GameMan loaded-map/save-slot/name-is-empty + the CS::PlayerGameData
-/// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,
+/// (`[base+0x4588268]` on 1.16.2) character fingerprint (name, level, runes, rune-memory, chr_type,
 /// 8-stat block). A native-menu load and a DLL-driven load produce comparable records;
 /// correctness == field-for-field match (name non-empty, level/runes/stats equal). Pure reads,
 /// fault-tolerant; safe to call once at the first in-world frame.
@@ -895,7 +896,7 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
     } else {
         (BAD_I32, BAD_I32, NAME_UNKNOWN)
     };
-    // [0x144588268] -> GameDataMan; PlayerGameData (the save data) = [GameDataMan + 0x08].
+    // [0x144588268] (1.16.2) -> GameDataMan; PlayerGameData (the save data) = [GameDataMan + 0x08].
     let gdm = game_data_man_ptr_or_null();
     let pgd = if gdm != NULL {
         unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)

@@ -18,7 +18,7 @@ Effects (bd `perfect-block-static-findings-1171-2026-10-10`, scratchpad `pb-*.md
   guard bit), so the guard's cut and stamina cost apply, but the block-stun reaction is skipped.
   The stuns it skips, first actionable frame (`SKIPPED_STUN`): small 24f clip, R1/roll f5, re-guard
   f16; middle 50f, R1/roll f10, re-guard f32; large 64f, R1 f50, roll f47; guard break 70f. The
-  stun level is `GUARD_REACTION_TABLE[guard level][damage level]` (`FUN_140686f00`).
+  stun level is `GUARD_REACTION_TABLE[guard level][damage level]` (`FUN_140688200`).
 - `COMMUNITY` (pb-yt-*.vtt): a ~1-frame input timed to impact; works against single hits and
   spells; a status proc still deals its damage but the effect is dropped; multi-hit attacks
   (Milady, twinblades, Spinning Slash) catch the blocker with their second hit; ~10% of players
@@ -808,7 +808,7 @@ def selftest() -> int:
     # Regulation and corpus (skipped when the game files or the mirror are absent).
     try:
         g = G()
-        check("guard reaction table row 1 (`FUN_140686f00`)", g.GUARD_REACTION_TABLE[1][:5] == (0, 1, 3, 3, 4))
+        check("guard reaction table row 1 (`FUN_140688200`)", g.GUARD_REACTION_TABLE[1][:5] == (0, 1, 3, 3, 4))
         guards, _ = corpus_guards()
         # 0.335 on the 2026-10-10 mirror: a bare left hand, a left melee weapon or catalyst and a
         # powerstance cannot guard one-handed (`GUARD_LEFT_ONE_HAND`).

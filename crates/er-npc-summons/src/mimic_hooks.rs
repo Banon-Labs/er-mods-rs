@@ -46,7 +46,7 @@ use core::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{
     game_module_base, game_rva_for_hook, game_rva_named, read_bytes, safe_read_i32, safe_read_u8,
     safe_read_usize,
@@ -61,10 +61,10 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use crate::addr;
 use crate::log::summons_log;
 
-// The two getters' 1.17.1 addresses and window offsets, shared with build.rs.
+// The two getters' 2.7.2.0 addresses and window offsets, shared with build.rs.
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 // The windows themselves, assembled by build.rs from named instructions and checked against the
-// 1.17.1 image; byte-identical in the 2.7.2.0 image.
+// 2.7.2.0 image.
 include!(concat!(env!("OUT_DIR"), "/generated_getter_windows.rs"));
 
 // The row sizes the copies carry are the paramdef's, as fromsoftware-rs lays the rows out.
@@ -247,9 +247,9 @@ unsafe fn write_usize(address: usize, value: usize) {
 ///
 /// MSVC `std::list<int>`: list `+8` head node, `+0x10` size; node `+0` next, `+8` prev, `+0x10`
 /// value. Growth uses the game's own insert, then the three link writes the game's own fill does
-/// (`0x1404bcef0..0x1404bcf26`). Shrinking unlinks the surplus nodes and leaves them allocated:
-/// a few bytes per summon, against freeing game-heap memory from outside the allocator that
-/// owns it.
+/// (2.7.2.0 `0x1404bcfd0..0x1404bd006`). Shrinking unlinks the surplus nodes and leaves them
+/// allocated: a few bytes per summon, against freeing game-heap memory from outside the allocator
+/// that owns it.
 fn rewrite_list(list: usize, wanted: usize) -> Option<usize> {
     // SAFETY: fault-tolerant reads; the writes below go to nodes these reads just walked.
     let head = unsafe { safe_read_usize(list + 8) }.filter(|&h| h != 0)?;
@@ -635,14 +635,14 @@ fn verify_loop1_ret() -> Result<usize, String> {
     Ok(ret)
 }
 
-/// Create and queue one bare detour on a 1.16.2 rva; the caller applies the queue.
+/// Create and queue one bare detour on a 2.7.2.0 rva; the caller applies the queue.
 pub(crate) fn hook(
     rva: u32,
     detour: usize,
     original: &AtomicUsize,
     what: &str,
 ) -> Result<MhHook, String> {
-    // Unresolved on purpose: `MhHook::new` translates through the detour map itself.
+    // Unchecked on purpose: `MhHook::new` checks the build and the detour allowlist itself.
     let target = game_rva_for_hook(rva)?;
     // SAFETY: `detour` has the target's exact signature.
     let hook = unsafe { MhHook::new(target as *mut c_void, detour as *mut c_void) }
@@ -653,15 +653,17 @@ pub(crate) fn hook(
     Ok(hook)
 }
 
-/// Register the `GetCharaInitParam` handler. Measured on 1.17.1 and carried from there: no ledger
-/// row carries this getter from 1.16.2, so its bytes are compared before anything is hooked.
+/// Register the `GetCharaInitParam` handler. It is not on the detour allowlist, so its bytes are
+/// compared before anything is hooked through the runtime-derived entry point.
 fn install_chara_init_getter() -> Result<usize, String> {
-    let rva = carry_1171_rva(GET_CHARA_INIT_PARAM_1171_RVA).ok_or_else(|| {
-        format!(
-            "no carry of 1.17.1 GetCharaInitParam 0x{GET_CHARA_INIT_PARAM_1171_RVA:x} to {:?}",
-            game_file_version()
-        )
-    })?;
+    let rva = is_supported_build()
+        .then_some(GET_CHARA_INIT_PARAM_RVA)
+        .ok_or_else(|| {
+            format!(
+                "2.7.2.0 GetCharaInitParam 0x{GET_CHARA_INIT_PARAM_RVA:x} refused -- {}",
+                describe_build()
+            )
+        })?;
     let base = game_module_base().map_err(|error| format!("GetCharaInitParam: {error:?}"))?;
     let entry = base + rva;
     pins_match("GetCharaInitParam", entry, CHARA_INIT_PARAM_PINS)?;

@@ -4,12 +4,12 @@
 //!
 //! `fromsoftware-rs` models most of these fields already, and the engine could reach half of them
 //! through a typed reference. It deliberately does not, for one reason that is worth the
-//! duplication: **one of these offsets moved between the two builds this repo supports** --
-//! `ChrIns.debugFlags` is `+0x530` on 1.16.2 and `+0x538` on 1.17 (byte-proven: the same three
-//! sites test `[reg+0x538]` in 1.17). A typed field access compiles to one offset and cannot say
-//! which build it is for, so on the wrong build it writes into `stamina_recovery` and reports
-//! success. [`debug_flags_offset`] answers `None` on a build nobody has measured, which is the
-//! only honest third answer and the one a struct field cannot give.
+//! duplication: **these offsets move between builds** -- `ChrIns.debugFlags` was `+0x530` on
+//! 1.16.2 and is `+0x538` from 1.17 on (2.7.2.0 included). A typed field access compiles to one
+//! offset and cannot say which build it is for, so on the wrong build it writes into
+//! `stamina_recovery` and reports success. [`debug_flags_offset`] answers `None` on a build
+//! nobody has measured, which is the only honest answer there and the one a struct field cannot
+//! give.
 //!
 //! Having decided that for one field, the rest follow it: an offset table that is half typed
 //! fields and half constants is a table where nobody can tell which half was checked.
@@ -24,6 +24,10 @@
 //! * On the host, the tests at the foot of this file check the invariants that are arithmetic --
 //!   the build gate, the flag bits, and that the override slot is nobody else's field.
 //!
+//! An address or `FUN_`/`DAT_` name in this module's comments is a 1.16.2 dump one, where the
+//! reverse engineering was done, unless the comment labels it with another build or names the
+//! image it was read from.
+//!
 //! Every value is from the settled reverse engineering recorded in `bd`
 //! (`chrmanipulator-vtable-55-slots-thunk-design-2026-09-01`,
 //! `possess-body-neuter-levers-debugflags-invincible-2026-09-01`,
@@ -33,18 +37,7 @@
 // This module is pure arithmetic and stays ungated so its tests run on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use er_game_base::game_build::{
-    FileVersion, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, SUPPORTED_FILE_VERSION,
-};
-
-/// ELDEN RING 1.17, PE `FileVersion` 2.7.0.0 -- the build installed on this machine since
-/// 2026-08-27. [`SUPPORTED_FILE_VERSION`] is its 1.16.2 counterpart, 2.6.2.0.
-pub(crate) const FILE_VERSION_1170: FileVersion = FileVersion {
-    major: 2,
-    minor: 7,
-    build: 0,
-    revision: 0,
-};
+use er_game_base::game_build::{FileVersion, SUPPORTED_FILE_VERSION};
 
 /// `ChrIns` field offsets.
 pub(crate) mod chr_ins {
@@ -169,18 +162,12 @@ pub(crate) mod chr_ins {
     /// started, this silences what already has.
     pub(crate) const STOP_PLAYING_SOUNDS: u8 = 0x80;
 
-    /// `ChrIns.debugFlags` on ELDEN RING 1.16.2.
-    pub(crate) const DEBUG_FLAGS_1162: usize = 0x530;
-    /// `ChrIns.debugFlags` on ELDEN RING 1.17. It moved; see the module docs.
+    /// `ChrIns.debugFlags` on ELDEN RING 2.7.2.0 (1.16.2 had it at `+0x530`; see the module docs).
     ///
-    /// Also 1.17.1 and 2.7.2.0. Read 2026-10-21 out of `eldenring-deobf-1.17.1.bin` and
-    /// `eldenring-deobf-1.17.2.bin`: the sites sit in a carry segment of delta zero, so each is at
-    /// the same address in both, and the five functions holding them (`0x1403cff80`,
-    /// `0x1403d00a0`, `0x1403d0260`, `0x1403daa90` `PadManipulator::Tick`, `0x1403cc05d`) are
-    /// `.pdata` starts of the same length in both and agree instruction for instruction with
-    /// rip-relative displacements masked:
+    /// Read out of `eldenring-deobf-1.17.2.bin`, in the functions at `0x1403cff80`, `0x1403d00a0`,
+    /// `0x1403d0260`, `0x1403daa90` (`PadManipulator::Tick`) and `0x1403cc05d`:
     ///
-    /// | site | instruction in both |
+    /// | site | instruction |
     /// |---|---|
     /// | `0x1403d0008` | `test byte [rax+0x538],0x10` |
     /// | `0x1403d0141` | `test byte [rax+0x538],0x10` |
@@ -188,7 +175,7 @@ pub(crate) mod chr_ins {
     /// | `0x1403dad74` | `test byte [rcx+0x538],0x20`, then `mov [rbp+0x1e5],bl` at `0x1403dae12` |
     /// | `0x1403d0537` | `test byte [rax+0x538],0x20` |
     /// | `0x1403cc235` | `test byte [rax+0x538],0x20` |
-    pub(crate) const DEBUG_FLAGS_1170: usize = 0x538;
+    pub(crate) const DEBUG_FLAGS: usize = 0x538;
     /// `debugFlags` bit `0x10`: the character issues no attack requests.
     ///
     /// In `PadManipulator::Tick` this is tested before `IsMainPlayerIns`, so it works on the main
@@ -387,48 +374,40 @@ pub(crate) mod chr_res {
 
 /// `EneDat` and the `FD4FileCap` it hangs the chrbnd off.
 ///
-/// # The second offset in this crate that moved between the two builds
+/// # The second offset in this crate that moved between builds
 ///
-/// `FUN_1404ca4a0` -- "give me this character's `FlverResCap`, or null" -- is the asset-residency
-/// predicate. It is not byte-identical across the builds: its 1.17 counterpart is `0x1404caf70`
-/// (uniquely shape-matched in both images, and independently confirmed by decoding the `rel32` at
-/// its caller `EnemyIns::InitializeCharacterRendering`), and both `EneDat` offsets it loads moved:
+/// The asset-residency predicate -- "give me this character's `FlverResCap`, or null", 1.16.2
+/// `FUN_1404ca4a0`, 2.7.2.0 `0x1404cb050` -- loads two `EneDat` offsets, and both moved from 1.16.2
+/// to 1.17 by different amounts:
 ///
-/// | | 1.16.2 | 1.17 | delta |
+/// | | 1.16.2 | 1.17 and later | delta |
 /// |---|---|---|---|
 /// | primary cap | `+0xa0` | `+0xb0` | `+0x10` |
 /// | fallback cap | `+0x88` | `+0x90` | `+0x8` |
 ///
-/// **the two DELTAS are not the same**, which is the part worth reading twice: an eight-byte field
+/// **the two deltas are not the same**, which is the part worth reading twice: an eight-byte field
 /// was inserted somewhere below `+0x88` and another between `+0x88` and `+0xa0`. So the pair cannot
 /// be carried forward by adding one number to both, and a reader who checked only the primary would
 /// get the fallback wrong by eight bytes -- landing on a live pointer rather than on nothing.
 ///
 /// The `FD4FileCap` offsets it then reads -- [`file_cap::LOAD_STATE`] and
-/// [`file_cap::FLVER_RES_CAP`] -- Are unchanged. `EneDat` is a large heap struct, so a stale
-/// `+0xa0` on 1.17 reads a live neighbouring field rather than faulting, which is why
+/// [`file_cap::FLVER_RES_CAP`] -- did not move. `EneDat` is a large heap struct, so a stale
+/// offset reads a live neighbouring field rather than faulting, which is why
 /// [`ene_dat_cap_offsets`] answers `None` on a build nobody has measured instead of guessing.
 pub(crate) mod ene_dat {
-    /// `EneDat`'s primary `ChrbndFileCap*` on 1.16.2.
-    pub(crate) const CAP_PRIMARY_1162: usize = 0xa0;
-    /// ...and the one it falls back to when that is null.
-    pub(crate) const CAP_FALLBACK_1162: usize = 0x88;
-    /// `EneDat`'s primary `ChrbndFileCap*` on 1.17. It moved; see the module docs.
+    /// `EneDat`'s primary `ChrbndFileCap*` on 2.7.2.0.
     ///
-    /// Also 1.17.1 and 2.7.2.0. The predicate is a 79-byte leaf with no `.pdata` record, at 1.17.1
-    /// `0x1404caf70` and 2.7.2.0 `0x1404cb050`, and its bytes are identical in both images
-    /// (2026-10-21) -- `48 8b 81 b0 00 00 00` `mov rax,[rcx+0xb0]` at `+0x0`, `48 8b 81 90 00 00
-    /// 00` `mov rax,[rcx+0x90]` at `+0x26`, and the [`super::file_cap`] reads `movzx eax,byte
-    /// [rax+0x88]` and `mov rax,[rax+0x90]` behind each. A leaf has no `.pdata` to anchor a carry,
-    /// so the identification is by its callers: the four `call`s to it in 1.17.1 (`0x1404cf72a`,
-    /// `0x1404cfa27`, `0x140651b75`, `0x140651ca4`) carry to exactly the four `call`s to
-    /// `0x1404cb050` in 2.7.2.0 (`0x1404cf80a`, `0x1404cfb07`, `0x140652025`, `0x140652154`).
-    pub(crate) const CAP_PRIMARY_1170: usize = 0xb0;
-    /// ...and the 1.17 fallback, which 1.17.1 and 2.7.2.0 share.
-    pub(crate) const CAP_FALLBACK_1170: usize = 0x90;
+    /// The predicate is a 79-byte leaf with no `.pdata` record, at 2.7.2.0 `0x1404cb050` --
+    /// `48 8b 81 b0 00 00 00` `mov rax,[rcx+0xb0]` at `+0x0`, `48 8b 81 90 00 00 00`
+    /// `mov rax,[rcx+0x90]` at `+0x26`, and the [`super::file_cap`] reads `movzx eax,byte
+    /// [rax+0x88]` and `mov rax,[rax+0x90]` behind each. It is identified by its four callers,
+    /// the `call`s at 2.7.2.0 `0x1404cf80a`, `0x1404cfb07`, `0x140652025` and `0x140652154`.
+    pub(crate) const CAP_PRIMARY: usize = 0xb0;
+    /// ...and the one it falls back to when that is null.
+    pub(crate) const CAP_FALLBACK: usize = 0x90;
 }
 
-/// `FD4FileCap`, as `FUN_1404ca4a0` reads it. Both offsets are identical on both builds.
+/// `FD4FileCap`, as the residency predicate reads it.
 pub(crate) mod file_cap {
     /// The load-state byte. `4` means the cap's bytes are in memory.
     pub(crate) const LOAD_STATE: usize = 0x88;
@@ -1116,22 +1095,15 @@ pub(crate) mod world_chr_man_dbg {
 ///
 /// # Why this refuses rather than guessing
 ///
-/// The two known answers are eight bytes apart, and eight bytes past 1.16.2's `debugFlags` is
-/// 1.17's -- so a wrong guess in either direction lands on a real, live field
-/// (`stamina_recovery` one way, `debugFlags`'s neighbour the other). There is no crash to notice
-/// and no log line to read; the body simply keeps attacking, or a counter starts drifting.
-/// A third build gets `None`, the neuter is skipped, and the log says so.
+/// The field has already moved once (eight bytes, between 1.16.2 and 1.17), and a wrong guess
+/// lands on a real, live field (`stamina_recovery` one way, `debugFlags`'s neighbour the other).
+/// There is no crash to notice and no log line to read; the body simply keeps attacking, or a
+/// counter starts drifting. A build other than 2.7.2.0 gets `None`, the neuter is skipped, and
+/// the log says so.
 #[must_use]
 pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> {
-    match version? {
-        v if v == SUPPORTED_FILE_VERSION => Some(chr_ins::DEBUG_FLAGS_1162),
-        v if v == FILE_VERSION_1170 => Some(chr_ins::DEBUG_FLAGS_1170),
-        // Measured, not carried forward; see `chr_ins::DEBUG_FLAGS_1170` for the sites.
-        v if v == MAPPED_FILE_VERSION_1171 || v == MAPPED_FILE_VERSION_1172 => {
-            Some(chr_ins::DEBUG_FLAGS_1170)
-        }
-        _ => None,
-    }
+    // Measured, not carried forward; see `chr_ins::DEBUG_FLAGS` for the sites.
+    (version? == SUPPORTED_FILE_VERSION).then_some(chr_ins::DEBUG_FLAGS)
 }
 
 /// The `(primary, fallback)` `EneDat` cap offsets for the running build, or `None` when the build
@@ -1139,35 +1111,24 @@ pub(crate) fn debug_flags_offset(version: Option<FileVersion>) -> Option<usize> 
 ///
 /// # Why this refuses rather than guessing, and what refusing costs
 ///
-/// The two answers are `0x10` apart in both fields, and `EneDat` is a large heap struct, so a wrong
-/// choice reads a live neighbouring pointer and follows it -- the residency gate would then be
-/// deciding on whatever that field happens to hold. There is no crash to notice.
+/// Both fields have already moved once, and `EneDat` is a large heap struct, so a wrong offset
+/// reads a live neighbouring pointer and follows it -- the residency gate would then be deciding
+/// on whatever that field happens to hold. There is no crash to notice.
 ///
 /// Refusing is cheap here in a way it is not for `debugFlags`: the asset-residency gate is one
-/// conjunct of a readiness predicate whose other three are byte-proven identical on both builds, so
-/// `None` skips that conjunct and readiness still rests on the registration, the `ChrRes` step and
-/// the `ChrCtrl` chain. What is lost is the early detection of a chr whose caps loaded but yielded
+/// conjunct of a readiness predicate whose other three do not depend on these offsets, so `None`
+/// skips that conjunct and readiness still rests on the registration, the `ChrRes` step and the
+/// `ChrCtrl` chain. What is lost is the early detection of a chr whose caps loaded but yielded
 /// no FLVER -- and the game self-despawns that case anyway, which the registration gate sees.
 #[must_use]
 pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize, usize)> {
-    match version? {
-        v if v == SUPPORTED_FILE_VERSION => {
-            Some((ene_dat::CAP_PRIMARY_1162, ene_dat::CAP_FALLBACK_1162))
-        }
-        // 1.17.1 and 2.7.2.0 measured too; see `ene_dat::CAP_PRIMARY_1170` for the bytes.
-        v if v == FILE_VERSION_1170
-            || v == MAPPED_FILE_VERSION_1171
-            || v == MAPPED_FILE_VERSION_1172 =>
-        {
-            Some((ene_dat::CAP_PRIMARY_1170, ene_dat::CAP_FALLBACK_1170))
-        }
-        _ => None,
-    }
+    // See `ene_dat::CAP_PRIMARY` for the bytes.
+    (version? == SUPPORTED_FILE_VERSION).then_some((ene_dat::CAP_PRIMARY, ene_dat::CAP_FALLBACK))
 }
 
 /// The game'S own receive buffer for player-versus-player damage.
 ///
-/// `WorldChrManImp`'s packet pump (1.16.2 `FUN_14050e4a0`, 1.17 `FUN_14050f2a0`) dequeues each
+/// `WorldChrManImp`'s packet pump (1.16.2 `FUN_14050e4a0`) dequeues each
 /// arriving `Packet15` into one function-static buffer and then applies it. The buffer is not
 /// cleared afterwards, so it always holds the last PvP damage packet this process received --
 /// which makes it a read-only oracle for the one question this crate could not otherwise answer:
@@ -1176,7 +1137,7 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
 /// The pump's own sequence, in its own order, is what these offsets are transcribed from:
 ///
 /// ```text
-/// LEA  RCX,[buffer]              ; CALL validate      (1.16.2 0x140ca6280 / 1.17 0x140ca7950)
+/// LEA  RCX,[buffer]              ; CALL validate
 /// MOV  EAX,[buffer+0x128] / [+0x12c]  -> GetChrInsByP2PEntityHandle ; JZ skip   (the VICTIM)
 /// MOV  ECX,[buffer+0x120] / [+0x124]  -> GetChrInsByP2PEntityHandle ; JZ skip   (the DEALER)
 /// ... HitChr(victim->damage, dealer, info, true)
@@ -1191,18 +1152,11 @@ pub(crate) fn ene_dat_cap_offsets(version: Option<FileVersion>) -> Option<(usize
 /// Note the width: the damage is read with `MOVSX ..., word ptr`, so it is an `i16`. A decompiler
 /// widening it to `int` is the kind of detail that makes a telemetry reader print garbage.
 pub(crate) mod packet15_receive {
-    /// Buffer base, 1.16.2 (`0x143d65fd0`).
-    pub(crate) const BUFFER_RVA_1162: u32 = 0x03d6_5fd0;
-    /// Buffer base, 1.17 (`0x143d6a040`). The four fields moved as one block, delta `+0x4070`,
-    /// which is why they are one base and fixed offsets rather than four constants per build.
-    pub(crate) const BUFFER_RVA_1170: u32 = 0x03d6_a040;
-    /// Buffer base, 1.17.1: the same rva, because 1.17.1 moved no `.data`. Later builds reach it
-    /// through `er_game_base::mem::game_rva_measured_on`; on 2.7.2.0 it carries to `0x3d6d060`,
-    /// and the pump's five references to the buffer and its handle/damage fields in 1.17.1
-    /// (`0x50f48b`, `0x50f498`, `0x50f4a5`, `0x50f4b6`, `0x50f586`) carry to instructions in
-    /// 2.7.2.0 that reach exactly `0x3d6d060 + {0, 0x120, 0x128, 0x130}`, so the field offsets
-    /// below hold there too.
-    pub(crate) const BUFFER_RVA_1171: u32 = BUFFER_RVA_1170;
+    /// Buffer base, 2.7.2.0 rva. The pump's rip-relative operands in 2.7.2.0 reach exactly
+    /// `0x3d6d060 + {0, 0x120, 0x124, 0x128, 0x12c, 0x130, 0x132}` (the displacements at
+    /// `0x14050f70b`, `0x14050f718`, `0x14050f7d1`, `0x14050f725`, `0x14050f79a`, `0x14050f84d`,
+    /// `0x14050f87c`), so the four fields are one base and fixed offsets.
+    pub(crate) const BUFFER_RVA: u32 = 0x03d6_d060;
     /// The attacker's `P2PEntityHandle` (`blockId`, `chrSelector`), 8 bytes.
     pub(crate) const DEALER_HANDLE: usize = 0x120;
     /// The victim's `P2PEntityHandle`, 8 bytes. On a packet aimed at us this is our handle.
@@ -1211,20 +1165,6 @@ pub(crate) mod packet15_receive {
     pub(crate) const DAMAGE: usize = 0x130;
     /// The stamina the pump subtracts, an `i16`.
     pub(crate) const STAMINA: usize = 0x132;
-}
-
-/// The `Packet15` receive-buffer RVA for the running build, or `None` on a build nobody measured.
-///
-/// Refuses rather than guessing for the same reason [`debug_flags_offset`] does, and the stakes
-/// are lower but the failure is worse to read: a wrong base here does not crash, it prints a
-/// plausible number from unrelated memory and sends the next investigation somewhere false.
-#[must_use]
-pub(crate) fn packet15_receive_rva(version: Option<FileVersion>) -> Option<u32> {
-    match version? {
-        v if v == SUPPORTED_FILE_VERSION => Some(packet15_receive::BUFFER_RVA_1162),
-        v if v == FILE_VERSION_1170 => Some(packet15_receive::BUFFER_RVA_1170),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -1253,39 +1193,11 @@ mod tests {
     /// The value is the whole of the lock-on fix, so it is pinned rather than left as a literal
     /// somebody could "tidy" into the player's team id -- which would work for lock-on and would
     /// also tell every PvP and invasion path that an `EnemyIns` is a player.
-    /// The receive buffer is a different address on each build, and refusing beats guessing.
-    ///
-    /// The two bases are `0x4070` apart, which is nothing recognisable in either image, so a wrong
-    /// choice reads live-but-unrelated memory and prints a plausible packet that never arrived --
-    /// the worst possible failure for an instrument whose whole job is to say whether one did.
+    /// The receive buffer is the 2.7.2.0 rva the pump reads, and its four fields sit where the
+    /// pump's own instructions read them.
     #[test]
-    fn the_packet15_receive_buffer_is_per_build_and_refuses_an_unknown_one() {
-        assert_eq!(
-            packet15_receive_rva(Some(SUPPORTED_FILE_VERSION)),
-            Some(packet15_receive::BUFFER_RVA_1162)
-        );
-        assert_eq!(
-            packet15_receive_rva(Some(FILE_VERSION_1170)),
-            Some(packet15_receive::BUFFER_RVA_1170)
-        );
-        assert_eq!(packet15_receive_rva(None), None);
-        assert_eq!(
-            packet15_receive_rva(Some(FileVersion {
-                major: 2,
-                minor: 8,
-                build: 0,
-                revision: 0,
-            })),
-            None
-        );
-        // The block moved as a unit, which is why the fields are offsets and not per-build
-        // constants. If a future build breaks that, this is where it shows up.
-        assert_eq!(
-            u64::from(packet15_receive::BUFFER_RVA_1170)
-                - u64::from(packet15_receive::BUFFER_RVA_1162),
-            0x4070
-        );
-        // ...and the four fields sit where the pump's own instructions read them.
+    fn the_packet15_receive_buffer_is_where_the_pump_reads_it() {
+        assert_eq!(packet15_receive::BUFFER_RVA, 0x03d6_d060);
         assert_eq!(packet15_receive::DEALER_HANDLE, 0x120);
         assert_eq!(packet15_receive::VICTIM_HANDLE, 0x128);
         assert_eq!(packet15_receive::DAMAGE, 0x130);
@@ -1300,26 +1212,21 @@ mod tests {
     }
 
     #[test]
-    fn the_ene_dat_cap_offsets_are_known_for_the_measured_builds_and_nothing_else() {
+    fn the_ene_dat_cap_offsets_are_known_for_the_measured_build_and_nothing_else() {
         assert_eq!(
             ene_dat_cap_offsets(Some(SUPPORTED_FILE_VERSION)),
-            Some((0xa0, 0x88)),
-            "1.16.2"
-        );
-        assert_eq!(
-            ene_dat_cap_offsets(Some(FILE_VERSION_1170)),
-            Some((0xb0, 0x90)),
-            "1.17 -- BOTH MOVED, by +0x10"
-        );
-        assert_eq!(
-            ene_dat_cap_offsets(Some(MAPPED_FILE_VERSION_1171)),
-            Some((0xb0, 0x90)),
-            "1.17.1"
-        );
-        assert_eq!(
-            ene_dat_cap_offsets(Some(MAPPED_FILE_VERSION_1172)),
             Some((0xb0, 0x90)),
             "2.7.2.0"
+        );
+        assert_eq!(
+            ene_dat_cap_offsets(Some(FileVersion {
+                major: 2,
+                minor: 7,
+                build: 1,
+                revision: 0,
+            })),
+            None,
+            "1.17.1 is no longer measured"
         );
         assert_eq!(
             ene_dat_cap_offsets(Some(FileVersion {
@@ -1333,27 +1240,14 @@ mod tests {
         assert_eq!(ene_dat_cap_offsets(None), None, "the host, with no game");
     }
 
-    /// The two fields did not move by the same amount, and this is what stops anyone "simplifying"
-    /// the table into one delta. The primary went `+0x10` and the fallback `+0x8`; deriving the
-    /// fallback from the primary's delta lands eight bytes off, on a live pointer rather than on
-    /// nothing, and the residency gate would then be following it.
-    ///
-    /// The primary must also stay above the fallback in both builds -- reading them in the wrong
-    /// order would prefer a cap the game only consults second.
+    /// The primary must stay above the fallback -- reading them in the wrong order would prefer a
+    /// cap the game only consults second.
     #[test]
-    fn the_two_ene_dat_offsets_moved_by_different_amounts_and_keep_their_order() {
-        assert_eq!(ene_dat::CAP_PRIMARY_1170 - ene_dat::CAP_PRIMARY_1162, 0x10);
-        assert_eq!(ene_dat::CAP_FALLBACK_1170 - ene_dat::CAP_FALLBACK_1162, 0x8);
-        assert_ne!(
-            ene_dat::CAP_PRIMARY_1170 - ene_dat::CAP_PRIMARY_1162,
-            ene_dat::CAP_FALLBACK_1170 - ene_dat::CAP_FALLBACK_1162,
-            "one delta cannot carry both fields forward"
-        );
-        // `const` blocks rather than plain asserts: both sides are constants, so this is decidable
-        // at compile time and a violation should be a build error rather than a test that has to be
-        // run to notice. (clippy::assertions_on_constants says the same thing.)
-        const { assert!(ene_dat::CAP_PRIMARY_1162 > ene_dat::CAP_FALLBACK_1162) };
-        const { assert!(ene_dat::CAP_PRIMARY_1170 > ene_dat::CAP_FALLBACK_1170) };
+    fn the_two_ene_dat_offsets_keep_their_order() {
+        // A `const` block rather than a plain assert: both sides are constants, so this is
+        // decidable at compile time and a violation should be a build error rather than a test
+        // that has to be run to notice. (clippy::assertions_on_constants says the same thing.)
+        const { assert!(ene_dat::CAP_PRIMARY > ene_dat::CAP_FALLBACK) };
     }
 
     /// The band the game scans must sit inside the array it scans, and the request must be big
@@ -1398,24 +1292,9 @@ mod tests {
     }
 
     #[test]
-    fn the_debug_flags_offset_is_known_for_the_measured_builds_and_nothing_else() {
+    fn the_debug_flags_offset_is_known_for_the_measured_build_and_nothing_else() {
         assert_eq!(
             debug_flags_offset(Some(SUPPORTED_FILE_VERSION)),
-            Some(0x530),
-            "1.16.2"
-        );
-        assert_eq!(
-            debug_flags_offset(Some(FILE_VERSION_1170)),
-            Some(0x538),
-            "1.17 -- IT MOVED"
-        );
-        assert_eq!(
-            debug_flags_offset(Some(MAPPED_FILE_VERSION_1171)),
-            Some(0x538),
-            "1.17.1"
-        );
-        assert_eq!(
-            debug_flags_offset(Some(MAPPED_FILE_VERSION_1172)),
             Some(0x538),
             "2.7.2.0"
         );
@@ -1430,16 +1309,6 @@ mod tests {
             None
         );
         assert_eq!(debug_flags_offset(None), None);
-    }
-
-    /// The two answers must stay eight bytes apart and in that order; a transposition here is the
-    /// shape of the bug the gate exists to prevent.
-    #[test]
-    fn the_two_debug_flags_offsets_differ_by_exactly_one_pointer() {
-        assert_eq!(
-            chr_ins::DEBUG_FLAGS_1170 - chr_ins::DEBUG_FLAGS_1162,
-            core::mem::size_of::<usize>()
-        );
     }
 
     /// The neuter must not set the no-move bit: the body is driven by the co-location write, and

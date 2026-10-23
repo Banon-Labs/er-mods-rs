@@ -1,54 +1,48 @@
-//! Every game address this DLL uses, as a 1.16.2 RVA.
+//! Every game address this DLL uses, as a 2.7.2.0 RVA.
 //!
-//! The repo convention: an RVA in Rust is 1.16.2 and is translated for the running build at use,
-//! through `docs/recon/rva-map-1162-to-1170.verified.tsv` (calls and detours) or
-//! `docs/recon/rva-map-1162-to-1170.data.tsv` (globals). Every row below was verified on
-//! 2026-10-06; the 1.17.1 runtime address, the verdict and how each pair was found are in
-//! `docs/recon/npc-summons-addresses.tsv`. An address with no verified row is refused at runtime,
-//! and the feature that needed it logs that it is off.
+//! The repo convention: an RVA in Rust is measured on 2.7.2.0 (`eldenring-deobf-1.17.2.bin`) and
+//! is refused at runtime on any other build, so the feature that needed it logs that it is off.
+//! How each address was first found is in `docs/recon/npc-summons-addresses.tsv`.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
-/// `SummonBuddyManager::CreateSummonChr`, 18 arguments, returns `ChrIns*` (1.17.1 `0x1404baea0`).
-pub(crate) const CREATE_SUMMON_CHR: u32 = 0x004b_a980;
+/// `SummonBuddyManager::CreateSummonChr`, 18 arguments, returns `ChrIns*`.
+pub(crate) const CREATE_SUMMON_CHR: u32 = 0x004b_af80;
 /// `ChangeCharacterDisableState(ChrIns*, bool disable)`: the body of EMEVD
 /// `ChangeCharacterEnableState`. Writes `ChrSetEntry+0xa` bit 0 and the collision flag; does not
-/// touch the load state (1.17.1 `0x1403f6500`, bd `chr-enable-setter-and-join-enable-1171-2026-10-06`).
-pub(crate) const CHANGE_DISABLE_STATE: u32 = 0x003f_62d0;
+/// touch the load state (bd `chr-enable-setter-and-join-enable-1171-2026-10-06`).
+pub(crate) const CHANGE_DISABLE_STATE: u32 = 0x003f_6590;
 /// `PlaceNPCSummonSign` body: `(SosSignMan*, u8 type, u32* entity, u32* region, i32 summonFlag,
-/// BlockId*, i32 dismissFlag, u8 mpRules)` (1.17.1 `0x1406fa7f0`).
-pub(crate) const PLACE_NPC_SIGN: u32 = 0x006f_99a0;
-/// `CreateSignSfx(SosSignMan*, SosSignData*)`: redraws a sign at its current position (1.17.1
-/// `0x1406febe0`).
-pub(crate) const CREATE_SIGN_SFX: u32 = 0x006f_dd90;
-/// `GetChrInsByEntityId(u32* entity, int, int)` (1.17.1 `0x1405eefd0`).
-pub(crate) const GET_CHR_BY_ENTITY: u32 = 0x005e_e180;
-/// `GetPhysicsPos(ChrIns*, FloatVector4* out)` (1.17.1 `0x1403f0e20`).
-pub(crate) const GET_PHYSICS_POS: u32 = 0x003f_0bf0;
-/// `ConvertBlockCoordsToPhysicsCoords(FloatVector4* out, FloatVector4* local, BlockId*)`
-/// (1.17.1 `0x14061ef70`).
-pub(crate) const BLOCK_TO_PHYSICS: u32 = 0x0061_e120;
-/// `IsDrawn(ChrIns*) -> bool` (1.17.1 `0x1403f3930`).
-pub(crate) const IS_DRAWN: u32 = 0x003f_3700;
-/// `PlayerIns` event id getter used by `BuddyGenerator` for the creator id (1.17.1 `0x140657230`).
-pub(crate) const PLAYER_EVENT_ID: u32 = 0x0065_63e0;
-/// `PlayerIns` steam id getter used by `BuddyGenerator` (1.17.1 `0x140657160`).
-pub(crate) const PLAYER_STEAM_ID: u32 = 0x0065_6310;
-/// MSVC `std::list<int>` node insert the buddy list fill uses: `node*(List*, next, prev, int*)`
-/// (1.17.1 `0x1404b4fb0`).
-pub(crate) const BUDDY_LIST_INSERT: u32 = 0x004b_4a50;
+/// BlockId*, i32 dismissFlag, u8 mpRules)`.
+pub(crate) const PLACE_NPC_SIGN: u32 = 0x006f_aca0;
+/// `CreateSignSfx(SosSignMan*, SosSignData*)`: redraws a sign at its current position.
+pub(crate) const CREATE_SIGN_SFX: u32 = 0x006f_f090;
+/// `GetChrInsByEntityId(u32* entity, int, int)`.
+pub(crate) const GET_CHR_BY_ENTITY: u32 = 0x005e_f480;
+/// `GetPhysicsPos(ChrIns*, FloatVector4* out)`.
+pub(crate) const GET_PHYSICS_POS: u32 = 0x003f_0e20;
+/// `ConvertBlockCoordsToPhysicsCoords(FloatVector4* out, FloatVector4* local, BlockId*)`.
+pub(crate) const BLOCK_TO_PHYSICS: u32 = 0x0061_f420;
+/// `IsDrawn(ChrIns*) -> bool`.
+pub(crate) const IS_DRAWN: u32 = 0x003f_3930;
+/// `PlayerIns` event id getter used by `BuddyGenerator` for the creator id.
+pub(crate) const PLAYER_EVENT_ID: u32 = 0x0065_76e0;
+/// `PlayerIns` steam id getter used by `BuddyGenerator`.
+pub(crate) const PLAYER_STEAM_ID: u32 = 0x0065_7610;
+/// MSVC `std::list<int>` node insert the buddy list fill uses: `node*(List*, next, prev, int*)`.
+pub(crate) const BUDDY_LIST_INSERT: u32 = 0x004b_5090;
 
-/// Detour: `SummonBuddyManager::BuddyGenerator(SummonBuddyManager*)` (1.17.1 `0x1404bbdd0`).
-pub(crate) const BUDDY_GENERATOR: u32 = 0x004b_b8b0;
-/// Detour: `GetBuddyListBySpEffectId(mgr, int spEffect, List<int>*)` (1.17.1 `0x1404bce80`).
-pub(crate) const GET_BUDDY_LIST: u32 = 0x004b_c960;
-/// Detour: `GetBuddyParam(BuddyParamLookup*, int id)`, lookup `{+0 id, +8 row}` (1.17.1
-/// `0x140d28010`, 2.7.2.0 `0x140d29700`). The detour replaces `+8` with a row copy; the windows
-/// proving that layout are checked at the resolved address (`getter_sites.rs`).
-pub(crate) const GET_BUDDY_PARAM: u32 = 0x00d2_6890;
+/// Detour: `SummonBuddyManager::BuddyGenerator(SummonBuddyManager*)`.
+pub(crate) const BUDDY_GENERATOR: u32 = 0x004b_beb0;
+/// Detour: `GetBuddyListBySpEffectId(mgr, int spEffect, List<int>*)`.
+pub(crate) const GET_BUDDY_LIST: u32 = 0x004b_cf60;
+/// Detour: `GetBuddyParam(BuddyParamLookup*, int id)`, lookup `{+0 id, +8 row}`. The detour
+/// replaces `+8` with a row copy; the windows proving that layout are checked at this address
+/// (`getter_sites.rs` spells the same rva for `build.rs`).
+pub(crate) const GET_BUDDY_PARAM: u32 = 0x00d2_9700;
 /// Where `BuddyGenerator`'s first-loop `GetBuddyParam` call returns, as an offset into
-/// `BuddyGenerator` (1.17.1 `0x1404bbfa3 - 0x1404bbdd0`). The body is `IDENTICAL-WHOLE` between
-/// 1.16.2 and 1.17, and the DLL checks the call instruction in front of it before trusting it.
+/// `BuddyGenerator` (2.7.2.0 `0x1404bc083 - 0x1404bbeb0`). The DLL checks the call instruction in
+/// front of it before trusting it.
 pub(crate) const BUDDY_GENERATOR_LOOP1_RET: usize = 0x1d3;
 
 /// `WorldChrManImp` offsets.
@@ -106,18 +100,17 @@ pub(crate) mod party {
 
 /// `SummonBuddyManager::RemoveChrIns(SummonBuddyManager*, ChrIns*)`: untracks the warp, then
 /// `WorldChrManImp::RemoveChrIns`, then (arena only) packet 79. It reads no summon group, which
-/// is why it is the unsummon for a character this DLL has unlinked (1.17.1 `0x1404bbaa0`).
-pub(crate) const SUMMON_REMOVE_CHR: u32 = 0x004b_b580;
+/// is why it is the unsummon for a character this DLL has unlinked.
+pub(crate) const SUMMON_REMOVE_CHR: u32 = 0x004b_bb80;
 /// `SummonBuddyWarpManager` untrack, `void(warpManager, FieldInsHandle by value)`; a handle it
-/// does not track is a no-op, and it does not check the manager for null (1.17.1 `0x1404c26f0`).
-pub(crate) const WARP_UNTRACK: u32 = 0x004c_21d0;
-/// `WorldChrManImp::GetChrInsFromHandle(WorldChrManImp*, FieldInsHandle*) -> ChrIns*` (1.17.1
-/// `0x140508a50`).
-pub(crate) const GET_CHR_FROM_HANDLE: u32 = 0x0050_7c80;
+/// does not track is a no-op, and it does not check the manager for null.
+pub(crate) const WARP_UNTRACK: u32 = 0x004c_27d0;
+/// `WorldChrManImp::GetChrInsFromHandle(WorldChrManImp*, FieldInsHandle*) -> ChrIns*`.
+pub(crate) const GET_CHR_FROM_HANDLE: u32 = 0x0050_8cd0;
 /// Detour: `ChrSet::SpawnChr(ChrSet*, u8, ChrSpawnRequest*, int buddySlot) -> ChrIns*`. Its only
 /// caller is `CreateSummonChr`, which hands it a request whose event entity it set to 35000
-/// (1.17.1 `0x1404bb43b`, call at `0x1404bb4bf`) (1.17.1 `0x140493380`).
-pub(crate) const SPAWN_CHR: u32 = 0x0049_2e20;
+/// (2.7.2.0 `0x1404bb51b`, call at `0x1404bb59f`).
+pub(crate) const SPAWN_CHR: u32 = 0x0049_3460;
 /// `ChrSpawnRequest+0x4c`: the event entity id `SpawnChr` registers the new character under in
 /// its `ChrSet`'s entity map, which is what `GetChrInsByEntityId` searches.
 pub(crate) const SPAWN_REQUEST_EVENT_ENTITY: usize = 0x4c;
@@ -140,22 +133,20 @@ pub(crate) mod summon_group {
     pub(crate) const ENTRY_PREV: usize = 0x8;
     pub(crate) const ENTRY_CHR: usize = 0x10;
     /// `DLAllocator::Deallocate(this, void*)`, the slot the game's own sweep frees an entry
-    /// through (1.17.1 `0x1404b945f`).
+    /// through (2.7.2.0 `0x1404b953f`).
     pub(crate) const ALLOCATOR_DEALLOCATE: usize = 0x68;
 }
 
 /// The finger's own red-sign term, `bool(PlayerIns*)`: the player's `+0x2e7` bit 3, then
 /// `IsInSafePosRange`, `WorldChrManImp::IsRedSignLimited` and the play region's red-sign event
-/// flag. `CanUseGoods` calls it for goods 101 at 1.17.1 `0x14068f9bf` (1.16.2 `FUN_140656f90`,
-/// 1.17.1 `0x140657de0`).
-pub(crate) const RED_SIGN_TERM: u32 = 0x0065_6f90;
+/// flag. `CanUseGoods` calls it for goods 101 at 2.7.2.0 `0x14068fe6f`.
+pub(crate) const RED_SIGN_TERM: u32 = 0x0065_8290;
 /// `WorldChrManImp::CanStartMultiplay(WorldChrManImp*) -> bool`: the term every multiplayer item
-/// shares; false in an area where summoning is barred (1.17.1 `0x14050aa50`).
-pub(crate) const CAN_START_MULTIPLAY: u32 = 0x0050_9c80;
+/// shares; false in an area where summoning is barred.
+pub(crate) const CAN_START_MULTIPLAY: u32 = 0x0050_acd0;
 
-/// Detour: `GetChrName(MenuString* out, ChrIns*, bool decorate) -> MenuString*` (1.17.1
-/// `0x1407605a0`).
-pub(crate) const GET_CHR_NAME: u32 = 0x0075_f750;
+/// Detour: `GetChrName(MenuString* out, ChrIns*, bool decorate) -> MenuString*`.
+pub(crate) const GET_CHR_NAME: u32 = 0x0076_0a50;
 /// `MenuString+0`: `wchar_t* rawString`, then a `DLString<wchar_t>`. Readers take `rawString`
 /// when it is not null and the `DLString` otherwise (`MenuString::Replace`, 1.16.2
 /// `0x140763490`).
@@ -168,9 +159,9 @@ pub(crate) const MENU_STRING_RAW: usize = 0x0;
 /// `npc-summon-enemy-damage-tag-producer-1171-2026-10-06`; prototyped in
 /// `scripts/frida/spawn-npc.js` (`tagHooks`).
 pub(crate) mod tags {
-    /// `FUN_140777380`, the producer that rebuilds the seven `ChrFriendlyTagEntry` rows at
-    /// `CSFeManImp+0x5c60` every frame (1.17.1 `0x140778200`). Mid hooks only, so `usize`.
-    pub(crate) const FRIENDLY_TAG_PRODUCER: usize = 0x77_7380;
+    /// `FUN_1407786b0`, the producer that rebuilds the seven `ChrFriendlyTagEntry` rows at
+    /// `CSFeManImp+0x5c60` every frame. Mid hooks only, so `usize`.
+    pub(crate) const FRIENDLY_TAG_PRODUCER: usize = 0x77_86b0;
     /// `test r15d,r15d; js <empty>; cmp r15d,[rsp+0x50]`, the per-slot member test.
     pub(crate) const SLOT_TEST: usize = 0x2f8;
     /// The instruction after `GetFieldInsHandleByMemberIndex(pmi, [rbp-0x78], r15d)` returns.
@@ -185,8 +176,8 @@ pub(crate) mod tags {
     pub(crate) const SLOTS: i32 = 7;
     /// `RoleParam.roleNameColor` for a friend (host, white phantoms, summoned NPCs); hostile is 2.
     pub(crate) const FRIENDLY_NAME_COLOUR: u8 = 1;
-    /// `CSChrDamageModule::UpdateUI` (1.17.1 `0x1404497e0`). Mid hooks only, so `usize`.
-    pub(crate) const DAMAGE_UPDATE_UI: usize = 0x44_9280;
+    /// `CSChrDamageModule::UpdateUI`. Mid hooks only, so `usize`.
+    pub(crate) const DAMAGE_UPDATE_UI: usize = 0x44_98c0;
     /// `cmp [rsp+0x31],r12b`, the first test that can send a hit character's bar to the enemy
     /// tag list (`CSFeManImp+0x59f0`) through `SetEntityHealthBarDamage` at `+0x363`.
     pub(crate) const ENEMY_BAR_TEST: usize = 0x26e;
@@ -197,41 +188,39 @@ pub(crate) mod tags {
     /// `UpdateUI` (`mov rdi,rcx` at `+0x2e`, restored only by the epilogue).
     pub(crate) const DAMAGE_MODULE_OWNER: u64 = 0x8;
     /// Detour: the voice-chat lookup `(this, u32* out, PlayerIns*)`, which reads `PlayerIns+0x6b8`
-    /// without a null check once it is past its own `test r8,r8` (1.17.0 `0x140cbbbe0`, 1.17.1
-    /// `0x140cbbc50`).
-    pub(crate) const VOICE_CHAT_LOOKUP: u32 = 0x00cb_a510;
+    /// without a null check once it is past its own `test r8,r8`.
+    pub(crate) const VOICE_CHAT_LOOKUP: u32 = 0x00cb_d340;
 }
 
 /// Lua 5.0.2 API of the AI state (bd `ai-lua-state-and-loader-1171-static-2026-10-05`).
 pub(crate) mod lua {
-    /// Detour: `lua_pcall(L, nargs, nresults, errfunc) -> int` (1.17.1 `0x142026970`).
-    pub(crate) const PCALL: u32 = 0x0202_4b00;
-    /// `lua_gettop(L) -> int` (1.17.1 `0x1420265d0`).
-    pub(crate) const GETTOP: u32 = 0x0202_4760;
-    /// `lua_settop(L, int)` (1.17.1 `0x142026fd0`).
-    pub(crate) const SETTOP: u32 = 0x0202_5160;
-    /// `luaL_loadbuffer(L, const char*, size_t, const char* name) -> int` (1.17.1
-    /// `0x142027f30`).
-    pub(crate) const LOADBUFFER: u32 = 0x0202_60c0;
-    /// `lua_tostring(L, int) -> const char*` (1.17.1 `0x142027200`).
-    pub(crate) const TOSTRING: u32 = 0x0202_5390;
+    /// Detour: `lua_pcall(L, nargs, nresults, errfunc) -> int`.
+    pub(crate) const PCALL: u32 = 0x0202_8060;
+    /// `lua_gettop(L) -> int`.
+    pub(crate) const GETTOP: u32 = 0x0202_7cc0;
+    /// `lua_settop(L, int)`.
+    pub(crate) const SETTOP: u32 = 0x0202_86c0;
+    /// `luaL_loadbuffer(L, const char*, size_t, const char* name) -> int`.
+    pub(crate) const LOADBUFFER: u32 = 0x0202_9620;
+    /// `lua_tostring(L, int) -> const char*`.
+    pub(crate) const TOSTRING: u32 = 0x0202_88f0;
 }
 
 /// Void tech for brains ([`crate::void_tech`]), all measured with `scripts/frida/void-trace.js`
 /// on 1.17.1 (bd `void-tech-landing-frame-spawn-double-1171-2026-10-07`).
 pub(crate) mod void_tech {
-    /// Detour: `CSChrActionRequestModule::UpdateFromManipulator(module, FD4Time*)` (1.17.1
-    /// `0x140408190`). Request bits written to `module+0x10` on entry reach the action; written
-    /// from anywhere else they never did.
-    pub(crate) const UPDATE_FROM_MANIPULATOR: u32 = 0x0040_7c60;
-    /// Detour: the damage module's attack create-or-reuse, `FUN_1404428f0(CSChrDamageModule*,
-    /// out, behaviorId, dmgType, slot, ...)`, 10 integer arguments (1.17.1 `0x140442e50`).
+    /// Detour: `CSChrActionRequestModule::UpdateFromManipulator(module, FD4Time*)`. Request bits
+    /// written to `module+0x10` on entry reach the action; written from anywhere else they never
+    /// did.
+    pub(crate) const UPDATE_FROM_MANIPULATOR: u32 = 0x0040_8220;
+    /// Detour: the damage module's attack create-or-reuse, `FUN_140442ee0(CSChrDamageModule*,
+    /// out, behaviorId, dmgType, slot, ...)`, 10 integer arguments.
     /// Behavior 550 is created at a jump's takeoff and refreshed every airborne frame; the last
     /// refresh is the landing frame.
-    pub(crate) const ATTACK_CREATE_OR_REUSE: u32 = 0x0044_28f0;
-    /// Detour: `CSBulletManager::SpawnBullet(manager, int* out, BulletSpawnData*, param4)` (1.17.1
-    /// `0x1403a2cb0`). `BulletSpawnData`: owner `FieldInsHandle` +0x0, behavior id +0x8.
-    pub(crate) const SPAWN_BULLET: u32 = 0x003a_2ca0;
+    pub(crate) const ATTACK_CREATE_OR_REUSE: u32 = 0x0044_2ee0;
+    /// Detour: `CSBulletManager::SpawnBullet(manager, int* out, BulletSpawnData*, param4)`.
+    /// `BulletSpawnData`: owner `FieldInsHandle` +0x0, behavior id +0x8.
+    pub(crate) const SPAWN_BULLET: u32 = 0x003a_2cb0;
     /// The jump's airborne attack behavior.
     pub(crate) const JUMP_BEHAVIOR: i32 = 550;
     /// `CSChrModuleBase` +0x8: the owning `ChrIns*`.
@@ -278,12 +267,12 @@ pub(crate) mod void_tech {
     pub(crate) const TAE_QUEUE_LEN: u32 = 10;
 }
 
-/// `CSWorldAiManager*` global (1.17.1 `0x143d66548`), carried by the data map.
-pub(crate) const CS_WORLD_AI_MAN_GLOBAL_RVA: usize = 0x3d6_24e8;
+/// `CSWorldAiManager*` global, 2.7.2.0 rva.
+pub(crate) const CS_WORLD_AI_MAN_GLOBAL_RVA: usize = 0x3d6_9568;
 
-/// `CSWorldAiManager` -> `+0x6938` `CSAiLua*` (getter `mov rax,[rcx+0x6938]; ret` at 1.17.1
+/// `CSWorldAiManager` -> `+0x6938` `CSAiLua*` (getter `mov rax,[rcx+0x6938]; ret` at 2.7.2.0
 /// `0x14037c140`) -> `+0xb8` `DLLuaDetail*` -> `+0x28` `lua_State*` (the detail's load wrapper at
-/// 1.17.1 `0x142020900` passes `[this+0x28]`). Live-confirmed 2026-10-06: `lua_pcall` was called
+/// 2.7.2.0 `0x142021ff0` passes `[this+0x28]`). Live-confirmed 2026-10-06: `lua_pcall` was called
 /// with the state this chain reads.
 pub(crate) mod ai_lua {
     pub(crate) const MAN_CS_AI_LUA: usize = 0x6938;
@@ -291,14 +280,13 @@ pub(crate) mod ai_lua {
     pub(crate) const DETAIL_STATE: usize = 0x28;
 }
 
-/// "A menu has the mouse", `bool(CSMenuManImp*)`, 1.16.2 `FUN_140765800`. Its callers are the
-/// cursor gate (1.17.1 `0x140e20490`: show and free the cursor) and the mouse axis readers
-/// (`0x140e2b360`, `0x140e2b450`: return 0 while it is true). 1.17 added a clause to its body, so
-/// it has no verified ledger row; it is an rva into 1.17.1 only, checked by its opening bytes
-/// before it is hooked.
-pub(crate) const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
-// The 1.17.1 opening of `MENU_HAS_MOUSE_1171_RVA`, `MENU_HAS_MOUSE_1171_PROLOGUE`, is generated
-// by build.rs from named instructions and checked against the 1.17 image.
+/// "A menu has the mouse", `bool(CSMenuManImp*)`, 2.7.2.0 rva. Its callers are the cursor gate
+/// (2.7.2.0 `0x140e21b80`: show and free the cursor) and the mouse axis readers (`0x140e2ca50`,
+/// `0x140e2cb40`: return 0 while it is true). It is checked by its opening bytes before it is
+/// hooked.
+pub(crate) const MENU_HAS_MOUSE_RVA: usize = 0x0076_6b00;
+// The 2.7.2.0 opening of `MENU_HAS_MOUSE_RVA`, `MENU_HAS_MOUSE_PROLOGUE`, is generated by build.rs
+// from named instructions and checked against the 2.7.2.0 image.
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
 /// `ChrIns+0x190` modules -> `+0x68` physics module (`scripts/frida/spawn-npc.js` `physicsOf`,
@@ -316,7 +304,7 @@ pub(crate) mod physics {
     pub(crate) const GROUND_HANDLE: usize = 0x240;
 }
 
-/// `CSWorldGeomMan*` global (1.17.1 `0x143d6dc18`), carried by the data map.
+/// `CSWorldGeomMan*` global, 2.7.2.0 rva (defined in `er_game_base::rva`).
 pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize =
     er_game_base::rva::CS_WORLD_GEOM_MAN_GLOBAL_RVA;
 
@@ -386,12 +374,12 @@ pub(crate) mod lab {
 }
 
 /// Detour: `CalculateDamage2(CSChrDamageModule* victim, ChrIns* attacker, AttackDamageInfo*,
-/// u64, bool)`, once per landed hit; the victim is `[victim + 0x8]` (1.17.1 `0x140448910`,
-/// `IDENTICAL-WHOLE`; `scripts/frida/spawn-npc.js` `damageHook`).
-pub(crate) const CALCULATE_DAMAGE2: u32 = 0x0044_83b0;
+/// u64, bool)`, once per landed hit; the victim is `[victim + 0x8]`
+/// (`scripts/frida/spawn-npc.js` `damageHook`).
+pub(crate) const CALCULATE_DAMAGE2: u32 = 0x0044_89f0;
 pub(crate) const DAMAGE_MODULE_OWNER: usize = 0x8;
 /// `EquipGameData::AddInventoryEquip(egd, u32* handle, u32 quantity, bool, bool) -> i32`, the
-/// grant the lab's food and heal restock used (1.17.1 `0x140246480`, unmoved). The build importer
+/// grant the lab's food and heal restock used (2.7.2.0 `0x140246480`). The build importer
 /// declares it for its own grants.
 #[cfg(windows)]
 pub(crate) const ADD_INVENTORY_EQUIP: u32 =
@@ -399,7 +387,7 @@ pub(crate) const ADD_INVENTORY_EQUIP: u32 =
 
 /// `CSWorldGeomMan` -> `+0x20` an MSVC `std::map` of loaded blocks (node `+0x28` block data), and
 /// in each block data `+0x340` a `std::map` of entity id (node `+0x20`) -> field-ins handle (node
-/// `+0x28` low, `+0x2c` high). 1.17.1 `0x1406d38f0`, `0x1406a76d0`; read live by
+/// `+0x28` low, `+0x2c` high). 2.7.2.0 `0x1406d3da0`, `0x1406a7b80`; read live by
 /// `spawn-npc.js` `refreshLiftHandles`.
 pub(crate) mod geom {
     pub(crate) const MAN_BLOCKS: usize = 0x20;

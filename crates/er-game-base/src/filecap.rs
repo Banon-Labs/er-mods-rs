@@ -39,7 +39,7 @@ pub const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
 /// no timeout.
 ///
 /// `0` and `0xDEADBEEF` mean different things and the distinction is the key discriminator:
-/// `MsbFileCap::MsbFileCap` (0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
+/// `MsbFileCap::MsbFileCap` (1.16.2 0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
 /// releases through the repository and then stores `0xDEADBEEF`. So `0` == never PARSED, never
 /// "freed after use".
 pub const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
@@ -66,8 +66,8 @@ pub const FD4_FILECAP_NAME_MAX_CHARS: usize = 96;
 /// return null, which is exactly the short-circuit that leaves `msbResCap` at `0`.
 pub const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
 
-/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
-/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global is the manager pointer.
+/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (2.7.2.0 0x141f4c0a0) is literally
+/// `MOV RAX,[0x14484d548]` plus a null-check branch, so this global is the manager pointer.
 ///
 /// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
 /// which called the same address "the mounted-archive registry". It is not: a genuinely null
@@ -81,8 +81,9 @@ pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize =
 ///
 /// This is the phase-2 freeze suspect. The stalled caps are named
 /// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in this vector, not a data
-/// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
-/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an empty root `L""`, and
+/// archive. It has a two-phase lifecycle (1.16.2 dump names): `FUN_140e06490(CSDlc, true)` --
+/// called only from the title start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases
+/// with an empty root `L""`, and
 /// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
 /// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
 /// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
@@ -133,7 +134,7 @@ pub const FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET: usize = 0x30;
 /// Walk `FD4FileCap::loadProcess -> FD4FileLoadProcess::fileLoadProcessor` and sample the content
 /// state the MSB load-complete callback gates on, returning `(processor, content, size, acquires)`.
 ///
-/// This is the exact chain `FD4FileCap::AcquireContent` (`FUN_1426591c0`) walks: it returns null if
+/// This is the exact chain `FD4FileCap::AcquireContent` (1.16.2 `FUN_1426591c0`) walks: it returns null if
 /// either `loadProcess` or `fileLoadProcessor` is null, and otherwise hands back `processor.content_`
 /// -- re-fetching it through a vtable call only on the acquire refcount's `0 -> 1` edge, while the
 /// matching release nulls `content_` on the `1 -> 0` edge. A null content is what makes

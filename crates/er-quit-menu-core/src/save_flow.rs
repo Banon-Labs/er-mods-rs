@@ -738,7 +738,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     }
     .unwrap_or(0);
     // Failure latch first: `CSMenuMan->[0x80]+0x290` (byte) / `+0x298` (qword). Latched
-    // means SaveRequest_Profile's gate FUN_14080d570 fails permanently for the session --
+    // means SaveRequest_Profile's gate 0x14080e8a0 fails permanently for the session --
     // waiting cannot help, so abort loudly instead of timing out (noise rule 3: failure
     // paths log on first occurrence; the counter is exported every telemetry cadence).
     if csm >= HEAP_LO {
@@ -934,16 +934,17 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 ///
 /// This exists because "no save enqueue arrived" is the same observation for every failure
 /// along the chain, and telling them apart used to take a run each. The native chain a fired
-/// request has to walk (1.16.2 decompile) is:
+/// request has to walk (read from the 1.16.2 decompile; the addresses are the 2.7.2.0 functions)
+/// is:
 ///
 /// ```text
 ///   RequestSave/SaveRequest_Profile   set GameMan+0xb72 / +0xb73
-///     -> FUN_140afb880                 the per-frame dispatcher in MoveMapStep step 18
-///          gate: saveState == 0, ShouldSave()/b73 getter, !BOOL_143d856a0
-///     -> FUN_14067b940 / b750 / b570   the lane
-///     -> FUN_14067dc00                 the character serializer (character lanes only)
-///     -> FUN_140e6ef60 / FUN_140e6ec70 the submit builder
-///     -> FUN_140e6fb50                 the SL enqueue -- where the one-shot bypass lives
+///     -> 0x140afd060                   the per-frame dispatcher in MoveMapStep step 18
+///          gate: saveState == 0, ShouldSave()/b73 getter, !*(bool*)0x143d8c740
+///     -> 0x14067cc40 / ca50 / c870     the lane
+///     -> 0x14067ef00                   the character serializer (character lanes only)
+///     -> 0x140e724c0 / 0x140e721d0     the submit builder
+///     -> 0x140e730b0                   the SL enqueue -- where the one-shot bypass lives
 /// ```
 ///
 /// Only the last link is ours. A lane that returns 0 touches nothing (the request flags stay
@@ -956,8 +957,8 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
 ///
 /// The lane's own refusal splits three ways, and `serializer_calls` is what splits it. Both
 /// character lanes allocate their MainHeap buffers and null-check them before calling
-/// `FUN_14067dc00` (`FUN_14067b940`: `0x280000` then `0x60000`, both checked;
-/// `FUN_14067b750`: `0x280000`), so:
+/// `0x14067ef00` (`0x14067cc40`: `0x280000` then `0x60000`, both checked;
+/// `0x14067ca50`: `0x280000`), so:
 ///
 /// * declines up, `serializer_calls` flat -> the lane never reached the serializer: an
 ///   allocation returned null, or a pre-allocation gate refused.
@@ -1016,11 +1017,11 @@ fn save_flow_fire_failure_reason() -> String {
             .to_owned()
     } else if serialize_fails > 0 {
         // The allocations are not in question on this path: the lane null-checks its
-        // MainHeap buffers before it can reach FUN_14067dc00 at all, so entering the
-        // serializer is proof they succeeded.
+        // MainHeap buffers before it can reach the serializer (0x14067ef00) at all, so entering
+        // it is proof they succeeded.
         format!(
             "THE CHARACTER SERIALIZER REFUSED: the lane's MainHeap buffers allocated fine and \
-             FUN_14067dc00 was entered, but it returned 0, so the lane skipped the submit \
+             0x14067ef00 was entered, but it returned 0, so the lane skipped the submit \
              builder entirely. Nothing downstream (submit, enqueue, bypass) was ever \
              reachable. It refused at: {}",
             er_save_suppress::serialize_fail_step_detail(
@@ -1029,27 +1030,28 @@ fn save_flow_fire_failure_reason() -> String {
         )
     } else if declines > 0 && serialize_calls == 0 {
         "THE LANE BAILED BEFORE THE SERIALIZER: a save lane was entered and returned 0 without \
-         ever calling FUN_14067dc00, so the request flags stay latched and no submit is built. \
+         ever calling the serializer 0x14067ef00, so the request flags stay latched and no \
+         submit is built. \
          Every exit ahead of the serializer is pre-serialization: the 0x280000 (and, on the \
          combined lane, 0x60000) MainHeap allocations returned null, or one of the gates in \
          front of them turned the lane away -- CanShowSaveMenu() true, GameMan.saveState != 0, \
          or a slot index >= 10"
             .to_owned()
     } else if declines > 0 {
-        "THE SUBMIT BUILDER REFUSED: the lane allocated its buffers, FUN_14067dc00 SUCCEEDED, \
-         and the lane still returned 0 -- so the refusal is FUN_140e6ef60 / FUN_140e6ec70, \
+        "THE SUBMIT BUILDER REFUSED: the lane allocated its buffers, 0x14067ef00 SUCCEEDED, \
+         and the lane still returned 0 -- so the refusal is 0x140e724c0 / 0x140e721d0, \
          between a good serialization and the SL enqueue. Serialization and allocation are \
          both ruled out"
             .to_owned()
     } else if dispatch > 0 {
         "THE DISPATCHER RAN AND SUCCEEDED BUT NO ENQUEUE ARRIVED: a lane returned non-zero \
-         yet FUN_140e6fb50 was never reached, which contradicts the decompiled chain -- treat \
+         yet 0x140e730b0 was never reached, which contradicts the decompiled chain -- treat \
          the hook set as suspect"
             .to_owned()
     } else {
         "THE DISPATCHER NEVER RAN: no save lane was entered at all after the request flags \
-         were set, so FUN_140afb880's own gate refused (saveState != 0, ShouldSave()/b73 \
-         getter false, or the global save-suppress byte 0x143d856a0 set)"
+         were set, so 0x140afd060's own gate refused (saveState != 0, ShouldSave()/b73 \
+         getter false, or the global save-suppress byte 0x143d8c740 set)"
             .to_owned()
     };
     format!("{verdict} [{facts}]")
@@ -1060,8 +1062,8 @@ fn save_flow_fire_failure_reason() -> String {
 /// # Why this is not optional
 ///
 /// A save lane that refuses touches nothing: `GameMan+0xb72`/`+0xb73` stay set, `saveState`
-/// stays 0, so `FUN_140afb880` re-enters the refusing lane on the very next frame and does
-/// it again forever. Every entry runs the full character serializer into a 0x280000 (2.6 MB)
+/// stays 0, so the dispatcher `0x140afd060` re-enters the refusing lane on the very next frame
+/// and does it again forever. Every entry runs the full character serializer into a 0x280000 (2.6 MB)
 /// buffer and throws the result away. Measured on a stuck run: 27,824 declines with zero
 /// serializer failures over 854 s -- about 33 complete character serializations per second,
 /// ~73 GB produced and discarded in fourteen minutes, on the game thread, for the rest of
@@ -1172,7 +1174,7 @@ fn save_flow_retract_stuck_request(reason: &str) {
     SAVE_FLOW_REQUEST_RETRACTIONS.fetch_add(cleared, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "save-flow: RETRACTED the latched save request after '{reason}' (b72={cleared_b72} \
-         b73={cleared_b73}) through the game's own FUN_140678740/FUN_140678710 -- the fire went \
+         b73={cleared_b73}) through the game's own 0x140679a40/0x140679a10 -- the fire went \
          nowhere and the flags were ours, so the per-frame re-serialization spin stops here"
     ));
 }
@@ -1402,7 +1404,7 @@ fn save_flow_commit_wait_tick(ticks: usize) {
 /// ones where the native write had already succeeded. And `take_bypass_final_status` can never
 /// return `Some` here either, so that bailout was the only exit the path had.
 ///
-/// The signal that does exist on this path is the writer's own: `FUN_14240fd70`, the SL save-job
+/// The signal that does exist on this path is the writer's own: `0x142413d20`, the SL save-job
 /// body, runs for every save the worker performs, bypassed or not. A completion past the value
 /// sampled at the fire is positive evidence that a save finished writing, and its result code is
 /// the game's own verdict on it. When the observer is not installed there is no such evidence,

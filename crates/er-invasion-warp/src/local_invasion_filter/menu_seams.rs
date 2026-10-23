@@ -11,7 +11,8 @@ use super::{ersc, ersc_module_base};
 /// game address anywhere in its image, so the owner was not decidable statically -- and the owner
 /// decides where an added menu row would have to attach.
 ///
-/// Answered live, 2026-08-17 (run `br-20260817-184836-d6a7`, user opened the lynchpin menu):
+/// Answered live on 1.16.2, 2026-08-17 (run `br-20260817-184836-d6a7`, user opened the lynchpin
+/// menu):
 ///
 /// ```text
 /// +0xa8 open_dialog   0x140e9e4f0   eldenring.exe+0xe9e4f0

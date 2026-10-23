@@ -342,7 +342,7 @@ declare -A _check_step_cmd=()
 
 # --- Which steps cannot run on this machine ------------------------------------------------
 # A fifth state, and it exists because of one measurement. Run this suite in a tree that has no
-# `eldenring-deobf*.bin` -- which is every tree except a developer's, since both images are
+# `eldenring-deobf*.bin` -- which is every tree except a developer's, since the images are
 # gitignored, game-derived and ~100 MB -- and fourteen gates printed one line saying their input
 # was absent and exited 0, having asserted nothing whatever. Several say so in their own output:
 # `SKIPPED (NOT A PASS) ... no field offset was checked at all`. The summary above still wrote
@@ -1141,7 +1141,7 @@ _check_live_order=()
 _check_live_done=0
 _check_live_cols=120
 
-# `python3 "$repo_root/scripts/audit-1170-readiness.py" --selftest` -> `audit-1170-readiness.py --selftest`.
+# `python3 "$repo_root/scripts/audit-ungated-image-writes.py" --selftest` -> `audit-ungated-image-writes.py --selftest`.
 _check_live_short() {
 	local text=$1
 	text=${text//\"/}
@@ -1355,15 +1355,14 @@ python3 "$repo_root/scripts/check-oracle-writers.py"
 python3 "$repo_root/scripts/check-counter-writers.py" --selftest
 python3 "$repo_root/scripts/check-counter-writers.py"
 # The counter gate above asks whether an oracle has a writer. This one asks where its reads point.
-# `standalone_tick` reached four game singletons through `safe_read_usize(base + rva)` with the RVA
-# hidden behind a closure parameter, so no name-keyed gate could see it -- and on 1.17 all four
-# fields went constant for a whole 4,350-record run rather than going quiet. Selftest first; its
-# blinds revert the ledger rows to their 1.16.2 values and confirm the gate turns red.
-# RE-armed 2026-08-31. The files it is derived against have landed (da529e95 / 04b16f3a), its
-# ratchet docs/recon/ungated-module-base-arithmetic.txt regenerated to zero rows, and both halves
-# are green -- so the reason for unwiring it is gone. It shares its vocabulary with
-# check-stale-rva-calls.py through scripts/module_base_arith.py: that gate owns `base + NAMED_CONST`
-# in any context, this one owns every other right-hand side plus `base.wrapping_add(CONST)`.
+# `standalone_tick` reaches four game singletons, and on 2026-08-31 all four fields went constant
+# for a whole 4,350-record run because the addresses were 1.16.2 slots read on 1.17 -- a wrong
+# pointer oracle does not go quiet, it goes constant. The source half requires one agreed value per
+# singleton across every declaration in crates/; the image half requires that value to look like a
+# pointer global in the 2.7.2.0 image (non-executable, aligned, zero at rest, outside any ASCII run,
+# loaded by at least three `mov r64, [rip+disp]`), and skips, saying so, without the image.
+# Selftest first: planted RTTI-string, unreferenced, .text and misaligned addresses must each be
+# refused for their own reason.
 python3 "$repo_root/scripts/check-oracle-singleton-globals.py" --selftest
 python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 # Seamless Co-op is third-party and the user updates it on their own schedule, so the swap that
@@ -1509,9 +1508,11 @@ python3 "$repo_root/scripts/check-yk0j-runtime-proof.py" --selftest
 python3 "$repo_root/scripts/check-user-release-package.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
-# RVA 0 is the PE header: the 1.16.2 -> 1.17 resolver refuses it every time, forever, at the call
-# site's own rate. One `game_rva(0)` used only to fetch the module base sat on the 4 Hz telemetry
-# write and logged 339,764 anonymous refusals in a single session. Selftest first.
+# RVA 0 is the PE header. The old 1.16.2 -> 1.17 resolver refused it every time, at the call
+# site's own rate: one `game_rva(0)` used only to fetch the module base sat on the 4 Hz telemetry
+# write and logged 339,764 anonymous refusals in a single session. On 2.7.2.0 `game_rva(0)` quietly
+# returns the PE header instead, so this scan is now the only thing that notices a constant that
+# degraded to 0. Selftest first.
 python3 "$repo_root/scripts/check-no-rva-zero.py" --selftest
 python3 "$repo_root/scripts/check-no-rva-zero.py"
 # Selftest first (mirrors check-no-rva-zero above). Both gates read Rust and Rego through
@@ -1851,20 +1852,14 @@ python3 "$repo_root/scripts/check-rust-file-sizes.py"
 # Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
-# The stale-call ratchet (2026-08-28). The 1.17 build gate resolves detour addresses and refuses
-# the ones it cannot place. Nothing looked at a game address reached as a direct call --
-# `transmute(base + SOME_RVA)` -- and that is the worse of the two: a refused detour makes one
-# feature inert and logs why, while a stale call transfers control into whatever now occupies
-# those bytes and faults with no unwind and no record naming anything of ours. One such site is
-# left; this refuses a second while it is converted to er_game_base::mem::game_rva.
-#
-# Two defects in the gate itself were fixed on 2026-08-30, and both had made it report a number
-# that was not the truth. It required the constant to be spelled `*RVA*`, so forty converted-since
-# sites in er-build-import-runtime named `GET_MAIN_PLAYER_STATS` were never visible to it; and it
-# matched raw file text, so two of the three rows in its baseline were doc comments describing the
-# hazard. The baseline was re-derived from scratch rather than edited, because a ratchet is only
-# meaningful when every row in it is a finding somebody consciously accepted.
-# The shared symbol RESOLVER, gated first because two gates now ask it their central question.
+# The deleted-carry gate. Until 2026-10-23 this was a ratchet over `transmute(base + SOME_RVA)`
+# that skipped the 1.16.2 -> 1.17 translation; every game address is now a native 2.7.2.0 rva and
+# nothing translates, so the gate is inverted. It fails on any use, in code or a string literal
+# (comments are prose about the history and are skipped), of the deleted carry API under crates/,
+# build-support/ and tools/: the carry functions and their tables, `MAPPED_FILE_VERSION*`,
+# `Image::EldenRing1170/1171`, the ledger paths, and the suffixless hub exports a companion would
+# use to hand the hub an address of the wrong build. There is no baseline; the target is zero.
+# The shared symbol resolver, gated first because two gates now ask it their central question.
 # It answers "which symbol declares this address" by evaluating values -- literal consts and
 # statics, enum discriminants, `use X as Y` aliases, `const A = path::B` indirection,
 # module-qualified names, arrays, Range bands, bare hex literals in table fields -- rather than by
@@ -1897,47 +1892,16 @@ python3 "$repo_root/scripts/check-stale-rva-calls.py"
 python3 "$repo_root/scripts/check-expression-constants.py" --selftest
 python3 "$repo_root/scripts/check-expression-constants.py"
 
-# The hand-row guard (2026-08-30). `select-needed-1170-rows.py --refresh` rewrites
-# docs/recon/rva-map-1162-to-1170.needed.tsv wholesale, so until today a pair somebody derived by
-# hand and typed in -- exactly the short .pdata records and body-changed functions the machine map
-# cannot carry -- was deleted by the next refresh at exit 0, with nothing printed and nothing in
-# the diff anyone reads. The loss does not read as a loss afterwards: the address reads as one that
-# was never mapped. The selftest asserts on a fabricated table that such a row is carried forward
-# and that a pair contradicting the function map stops the write instead of being merged. Only the
-# selftest runs here; the `--refresh`/current check is not wired in, because the tracked file
-# tracks constants that land continuously and would make this gate red on somebody else's commit.
-python3 "$repo_root/scripts/select-needed-1170-rows.py" --selftest
-# The row-deletion guard (2026-08-30). The sibling ledger's generator,
-# `map-data-rvas-1162-to-1170.py --refresh`, does not merely advise: a row it does not reproduce
-# and does not want was dropped, and "does not want" was decided by a name-filtered `*RVA*` regex
-# with no bare `rva: 0x..` table-field form and no inline enum-variant form. Measured on a scratch
-# copy of the 111-row ledger with two rows injected: the pre-fix tool deleted `0xb0d400
-# TITLE_MENU_JOB_WAIT_RVA` at exit 0 while printing "nothing declares 0xb0d400 any more", which is
-# false -- `MenuTraceRva::MenuJobWait` declares it and three live autoload sites reach it. The drop
-# now needs `scripts/rva_symbols.py` to prove nothing claims the address; anything short of a proof
-# is preserved. `--selftest-source` is the part that reads only crates/, so this gate needs no
-# capstone and no network; the image calibration still lives behind plain `--selftest`.
-# RE-armed 2026-08-31. `--selftest-source` landed in f31fd637, so the exit-2 `unrecognized arguments`
-# -- a step that produced no verdict about anything -- is gone. Green against a detached worktree
-# pinned to head (545 sources, 5189 address-capable declarations, 0 failures) as well as against this
-# working tree. Non-vacuity re-proved rather than assumed: `audit-selftest-vacuity.py --script
-# scripts/map-data-rvas-1162-to-1170.py` reports PROVABLE in both modes (regex and reads) -- with its
-# 61 regexes neutered the retirement gate drops 0xb0d400 as `PROVEN unclaimed` while three live
-# autoload sites still reach it, which is the exact silent deletion this guard exists to refuse.
-python3 "$repo_root/scripts/map-data-rvas-1162-to-1170.py" --selftest-source
-# The silent-comparison gate (2026-08-30). The two gates above catch stale addresses that are
-# DETOURED or called; both of those announce themselves when they fail. A stale address that is
-# only compared does not. `trace_first_game_caller_rva()` / `callstack_contains_game_rva()` take a
-# return address off the live stack, subtract the module base, and test it against a 1.16.2
-# constant -- nothing is resolved, so nothing is refused, and on a moved build the comparison
-# simply stops matching with no log line anywhere. Nine such sites existed; two of them were
-# user-visible features that were dead on 1.17 in total silence (the three cloned System>Quit rows,
-# and the title FadeIn suppression). The constants are mid-function return addresses, which the
-# address map structurally cannot carry, so the fix is to name the containing function and add the
-# offset at the use site -- see the script's docstring and `scripts/derive-callsite-1170.py`.
-python3 "$repo_root/scripts/check-no-stale-callsite-rva.py" --selftest
-python3 "$repo_root/scripts/check-no-stale-callsite-rva.py"
-python3 "$repo_root/scripts/derive-callsite-1170.py" --selftest
+# The two classifiers the expression-constant gate above builds its address population from, each
+# with its own controls. `rva_role.py` proves which `*RVA*`-named constants are not game addresses
+# (section bounds, `*INTERVAL*` tick counts) from how the workspace uses them, and its selftest
+# plants a bound and a real address and requires each to land on its side. `rva_usage.py` reads
+# the call sites instead of the names -- a constant handed to the address resolver is an address
+# by construction -- and its plain run is its selftest: five matched shapes, a rejected one, and a
+# blinded matcher that must lose them. Both ran only through the deleted 1.17 ledger tool's
+# selftest until the carry went on 2026-10-23, so each is a step of its own now.
+python3 "$repo_root/scripts/rva_role.py" --selftest
+python3 "$repo_root/scripts/rva_usage.py"
 # The silent-refusal gate (2026-08-28). Every cdylib statically links its own er-hook/er-game-base,
 # so the log sink is a per-DLL static and a DLL that never installs one says nothing when the build
 # gate refuses an address. Measured cost: er-armament-icons reported four
@@ -1946,13 +1910,14 @@ python3 "$repo_root/scripts/derive-callsite-1170.py" --selftest
 # table, and a whole game run could not tell the two apart.
 python3 "$repo_root/scripts/check-hook-log-sink.py" --selftest
 python3 "$repo_root/scripts/check-hook-log-sink.py"
-# The translated-target audit. `verify-rva-map-1170.py` proves the mapped 1.17 code is the same
-# function; this proves the destination is a real function entry, by the calls and pointers the
-# 1.17 image itself makes to it, and that MinHook's five-byte patch is safe there. Its selftest
-# calibrates on the 27 addresses this project hooks successfully on 1.16.2 today -- the previous
-# implementation of the entry check called 20 of those mid-function, and calibration is what
-# caught it.
-python3 "$repo_root/scripts/audit-1170-hook-targets.py" --selftest
+# The detour-target audit. Every row of `DETOUR_ALLOWLIST` (crates/er-game-base/src/
+# detour_allowlist.rs) licenses MinHook to write five bytes there, so this proves against the
+# 2.7.2.0 image that each row is a real function entry -- by the calls and pointers the image
+# itself makes to it, and its `.pdata` -- that the patch's relocated instructions fit with nothing
+# jumping into them, and that no two targets overlap. The selftest runs byte fixtures measured on
+# 2.7.2.0, a planted branch-scan control, and then the audit of all 535 rows. A backward-decoding
+# predecessor called 20 of 27 known-good hooks mid-function, and calibration is what caught it.
+python3 "$repo_root/scripts/audit-hook-targets.py" --selftest
 # The class that audit keeps being bitten by, made un-reintroducible (2026-08-31). A linear decode
 # in the de-Arxan'd images is trustworthy only inside one function: past the `ret` the gaps hold
 # the deobfuscator's leftovers, not `cc`/`90` runs, so the decode resynchronises into instructions
@@ -1971,33 +1936,30 @@ python3 "$repo_root/scripts/check-decode-extent-bounds.py"
 # one byte off byte-checks its own hook off on every launch while looking perfectly built
 # (check-prologue-bytes.py above), and this is what proves the mask half of that comparison is not
 # simply matching everything. Positive-controlled rather than assumed: making `masked_equal` always
-# return True, and making `derive_rip_mask` ignore every byte, each turn the selftest red. Two more
-# selftest-carrying gates below it are still unwired, and unwiring is what this line is about, but
-# both read the gitignored de-Arxan'd images, so they are left for a change that can also state what
-# they should do without them.
-python3 "$repo_root/scripts/verify-prologue-masks-1170.py" --selftest
+# return True, and making `derive_rip_mask` ignore every byte, each turn the selftest red. Its
+# negative controls are the 1.16.2 bodies of three 2.7.2.0 pins, which the masked comparison must
+# refuse at the pin's own VA.
+python3 "$repo_root/scripts/verify-prologue-masks.py" --selftest
 # The module the gate above already imports, now run as a gate itself (wired 2026-08-31).
-# `verify-prologue-masks-1170.py` has been importing this file for its spec enumeration all along,
+# `verify-prologue-masks.py` has been importing this file for its spec enumeration all along,
 # so half of it was already load-bearing and none of it was checked. It answers whether every AOB
-# signature this tree scans for still matches, and matches uniquely, in the 1.17 image -- a pattern
-# that silently matches twice, or not at all, turns a feature off with no refusal to log, which is
-# the failure mode the whole 1.17 migration is about.
+# signature this tree scans for still matches, with its pinned hit count, in the 2.7.2.0 image, and
+# whether every prologue pin matches at its own literal 2.7.2.0 VA -- a pattern that silently
+# matches twice, or not at all, turns a feature off with no refusal to log.
 # It was red on three stale `guarded: False` pins claiming that three needle scans lacked a
 # zero-needle guard. All three guards do exist and `return None` before any scan runs
 # (er-telemetry-core title_binding.rs:200, er-input-harness title_scan.rs:125, er-title-flow
 # profile_select_flow.rs:1011) -- and, checked at head, the same commit shipped both the guards and
 # the pins contradicting them. Pins corrected; no source defect.
-# 13s, the most expensive step added today, and it is the `patterns` section: it scans both 98 MB
-# de-Arxan'd images. Deliberately wired without `--require-images`, so a checkout that lacks them
-# (they are gitignored) degrades to skipped in 0.05s and exits 0 rather than failing for the wrong
-# reason.
+# Deliberately wired without `--require-images`, so a checkout that lacks the gitignored image
+# degrades to skipped and exits 0 rather than failing for the wrong reason.
 # Positive control: neutralising the zero-needle guard in profile_select_flow.rs goes red naming
 # `find_title_owner_by_vtable`; swapping the guard's two `||` operands stays green.
-python3 "$repo_root/scripts/verify-aob-patterns-1170.py" --selftest
-# UNWIRED 2026-08-31: Failed (3 problems, no-row=1) against the committed
-# docs/recon/rva-map-1162-to-1170.data.tsv, whose update is uncommitted. The --selftest above stays
-# wired and green. Re-arm this line with the ledger.
-# python3 "$repo_root/scripts/verify-aob-patterns-1170.py"
+python3 "$repo_root/scripts/verify-aob-patterns.py" --selftest
+# Re-armed 2026-10-23 on the single 2.7.2.0 image (1.4s): sync, the pinned pattern counts, the
+# needle scans and all prologue pins. It had been unwired since 2026-08-31 because the 1.17 data
+# ledger it compared against was red, and that ledger is gone.
+python3 "$repo_root/scripts/verify-aob-patterns.py"
 # ...AND whether that sweep looked at everything. The sweep above globs build files exactly one
 # directory level deep, so a spec declared in `crates/foo/dll/build.rs` is invisible to it and its
 # verdict silently covers fewer pins than it appears to -- while still printing `verdict: ok`.
@@ -2008,219 +1970,63 @@ python3 "$repo_root/scripts/verify-aob-patterns-1170.py" --selftest
 # identical tree. A check that reports success over work it never looked at is the defect this
 # whole file exists to refuse, so the sweep now has to say how much it swept.
 #
-# `--section coverage` specifically, measured: 4.1s. The tool's other section re-reads both 98 MB
-# images and is reporting-only -- it never affects the exit code -- so wiring the whole tool would
-# buy that fixed cost for output nothing gates on.
+# `--section coverage` specifically, measured: 4.1s. The tool's other section measures pattern
+# uniqueness in the image and is reporting-only -- it never affects the exit code -- so wiring the
+# whole tool would buy that fixed cost for output nothing gates on.
 # Wired 2026-09-01 (bd er-effects-rs-zivc). The selftest was left out when the gate above it
 # went in, and audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest line in
 # this file is one the vacuity auditor never judges, so the gate that catches an unswept
 # build.rs had nothing checking that it still catches anything. Measured with an audit hook:
 # 690 files opened, every one a tracked repo source -- no image, no subprocess, no uv.
-python3 "$repo_root/scripts/verify-prologue-coverage-1170.py" --selftest
-python3 "$repo_root/scripts/verify-prologue-coverage-1170.py" --section coverage
-# The mid-function gate. `NEITHER-ENTRY` in a verdict table is two verdicts wearing one name: a
-# leaf function the x64 ABI let omit unwind data (safe to hook), and an address inside another
-# function (MinHook writes five bytes into a live body). build.rs accepts the word for detours
-# because refusing it would throw away every legitimate leaf, and nothing downstream re-checked
-# which sense it was. Measured 2026-08-30, in one merge wave: six mid-function addresses reached
-# or nearly reached the verified table, every one of them carrying `IDENTICAL` over 20-94
-# instructions -- because a mid-function address verifies better than a real entry, sitting in a
-# neighbourhood that did not change. One (0x140aec480, +0x360 inside 0x140aec120) was merged with
-# its own note saying `containing-fn-offset-0x360`, while the real entry (0x140aec570) was already
-# written down in crates/er-title-flow, and crates/er-reload-trace carried a raw `rva: 0xaec480`
-# HookSpec that would have consumed the licence (since removed, on the same day, by a different
-# agent who reached the same address from the other direction).
-#
-# The inversion, stated once: that impostor row is identical over 56 instructions and would carry a
-# detour; the correct pair 0xaec570 -> 0xaed880 is identical over 9 and is refused one by
-# MIN_VERIFIED_INSNS. The wrong address had the better-looking evidence.
-#
-# So a clean verdict is not evidence of a valid hook target, and no reviewer can be the check.
-# Selftest first, so the gate is never trusted on its own say-so: it builds a .pdata table in
-# memory and proves both senses of neither-entry are separated, then drives the whole failure path
-# on a synthetic mid-function row. The live half skips, saying so, on a checkout without the
-# de-Arxan'd images (they are untracked by policy).
-python3 "$repo_root/scripts/classify-1170-entry-kind.py" --selftest
-python3 "$repo_root/scripts/classify-1170-entry-kind.py" --fail-on-mid
-# The hole the gate above leaves (wired 2026-08-31; the script existed since 2026-08-30 and was
-# invoked by nothing). `IDENTICAL-LEAF` is the one verdict that issues its own detour licence: a
-# leaf has no `.pdata` entry, so it reaches `DETOURABLE_ENTRY_EVIDENCE` through the `NEITHER-ENTRY`
-# clause, which asserts nothing about the entry. That is only safe if the address really is a whole
-# undescribed function rather than a point in the middle of a described one -- and
-# `add_leaf_extents` tests the weaker premise, skipping a VA only when a `.pdata` entry begins
-# there. An address 0x10 bytes into a declared function begins nothing, so it gets a leaf extent,
-# so it can reach identical-leaf and carry a detour into the middle of a live function.
-# `--fail-on-mid` above does not close this: its GATED_MAPS deliberately exclude
-# `docs/recon/rva-map-1162-to-1170.tsv`, which this one reads. 2.3s. Skips, saying so, without the
-# untracked de-Arxan'd images, and re-execs itself under `uv` when capstone is absent, so the step
-# stays spelled `python3` for the accounting above.
-# Positive control: an identical-leaf row planted at a real .pdata interior goes red naming the
-# address and the containing region; the same address as identical-whole stays green.
-python3 "$repo_root/scripts/check-leaf-extent-pdata-coverage.py"
-# The other way an address can look like a function start and not be one (wired 2026-08-31; the
-# script has existed since 2026-08-30 and was invoked by nothing). A `UNW_FLAG_CHAININFO`
-# continuation chunk has a `.pdata` record, so every "does .pdata describe this address" test says
-# yes -- but the record points at another record, and the real entry is somewhere else entirely.
-# Detour such an address and MinHook writes its five bytes into the middle of a function whose
-# prologue it never saw. Held at 0 across all three ledgers (102/411/412 rows), 0.27s.
-# It skips, in a line that deliberately refuses the words OK and pass, when the untracked
-# de-Arxan'd images are absent -- it used to die on a raw FileNotFoundError instead, which is the
-# only reason it could not be wired.
-# Positive control: a row planted at 0x140c57666 (a real continuation, primary 0x140c575e0) goes
-# red naming the row and its real entry; the same row shape at the root 0x1408c47c0 stays green.
-python3 "$repo_root/scripts/check-no-chained-continuation-rows.py" --selftest
-python3 "$repo_root/scripts/check-no-chained-continuation-rows.py"
-# The duplicate-row gate (2026-08-30). er-game-base/build.rs concatenates four address ledgers and
-# finishes with `rows.sort_unstable(); rows.dedup_by_key(|(old, _)| *old)`. `sort_unstable` orders
-# by the whole tuple, so among rows sharing a source the survivor is the one with the numerically
-# smallest destination -- a choice nobody made, applied silently, with the losing row leaving no
-# trace anywhere. Nothing gated ledger duplicates: check-rva-alias-drift.py gates Rust
-# declarations, the double-resolve gate below gates a destination that is also somebody's source,
-# and a verdict table verifies a pair without asking whether it was written down twice. Measured
-# 2026-08-30: the curated ledger declared 0x1408c47c0 and 0x1409b72b0 twice each. Both pairs
-# agreed, so the maps were right by luck -- and the two 0x1408c47c0 rows disagreed in prose about
-# whether its .pdata record is a chained continuation (it is a root), which is exactly the drift a
-# second row hides.
-#
-# A generated ledger legitimately repeats a source: select-needed-1170-rows.py emits one row per
-# declaring name, 85 of them today. So the repeat rule applies only to the curated ledger, and the
-# selftest carries a false-positive control that fails if anyone widens it. The selftest plants
-# each defect into a copy of the real tracked ledgers and requires the verdict to flip; 7 of 7
-# mutations of the gate's own rules are caught by it.
-python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py" --selftest
-python3 "$repo_root/scripts/check-no-duplicate-ledger-rows.py"
-# The section-kind gate (wired 2026-08-31). The gate above asks whether a ledger says the same
-# thing twice; this one asks whether it is talking about code at all. A ledger feeding
-# `detourable_pairs` licenses a five-byte MinHook patch, which is only meaningful in EXECUTABLE
-# memory; `data.tsv` carries GLOBALS, which is only meaningful outside it. Neither claim had ever
-# been checked against the image's own section table.
-#
-# Measured 2026-08-31 on `docs/recon/rva-1170-detour-audited.tsv`, and it is why that file was
-# deleted rather than refreshed: 87 of its 444 rows named non-executable destinations while
-# carrying prologue verdicts like `6B relocatable`, and all 85 of the rows promoted on its
-# "unwindless leaf" clause were among them -- `.pdata` declares no enclosing function for a `.data`
-# global for the same reason it declares none for a leaf, so the clause could not tell them apart.
-# Four were 24 bytes of zeros in both images. The four live ledgers are clean: 1047 rows, every
-# code row in `.text` and every data row outside it, so this arrives green by separation and not
-# by vacuity.
-#
-# Only --selftest runs here: R1/R2 read the gitignored de-Arxan'd 1.17 image, and the selftest
-# builds a synthetic PE so it runs in a checkout that has no game files. Run the bare command where
-# the image exists.
-python3 "$repo_root/scripts/check-ledger-section-kind.py" --selftest
-# The double-resolve gate. A row's 1.17 destination can also be some other row's 1.16.2 source,
-# and then translating an address twice does not fail -- it succeeds, returning a third, unrelated
-# function. The table is keyed by the 1.16.2 side and an address carries no label saying which side
-# it came from, so the second lookup cannot tell an already-translated address from an untranslated
-# one: nothing errors, nothing logs, and a hook lands somewhere it was never meant to. Measured
-# 2026-08-30: er-reload-trace's `native_submit` resolved 0x7ac890 -> 0x7ad710 in er-hook, which
-# handed the resolved address to the product's union register, which resolved again -- and
-# 0x7ad710 is itself a tracked source, -> 0x7ae590. Both rows are byte-IDENTICAL/BOTH-entries, so
-# no verdict, audit or entry check had anything to object to.
-#
-# That call path was restructured to resolve exactly once per branch and
-# `register_shared_hook_resolved` was deleted, but single-resolve is a convention across six crates
-# and the ledgers went from 80 to 470+ rows in a day. This is the machine check the convention did
-# not have: er-game-base's `verified_map_is_idempotent` reads like it covers this and cannot -- it
-# filters to rows where `from != moved`, then asks a predicate requiring `from == moved`, so it is
-# a tautology. Selftest first, so the gate is never trusted on its own say-so; it drives the whole
-# path over synthetic ledgers and re-reads every admission rule out of build.rs rather than
-# copying it, because a copied `EXHAUSTIVE_VERDICTS` already reported one of these tables as 42
-# rows instead of 374.
-#
-# Its claimed-by-no-feature test was fixed on 2026-08-30, and that one had passed while
-# recommending a destructive action: it searched for `const NAME: usize = 0x<addr>;`, and printed
-# "claimed by no feature: deleting it removes this collision at zero cost" whenever it found none.
-# 0xb0d400 is declared `MenuJobWait = 0x00b0d400` inside an enum, reached as
-# TITLE_MENU_JOB_WAIT_RVA, with live uses on the autoload path -- the shape it demanded never
-# occurs, so its advice would have deleted a working feature's address. The answer now has three
-# values (claimed / proven UNCLAIMED / not proven) and only the middle one licenses a deletion,
-# and the baselined notes are held to the same rule since a note is what a reader actually sees.
-python3 "$repo_root/scripts/check-1170-translation-collisions.py" --selftest
-python3 "$repo_root/scripts/check-1170-translation-collisions.py"
-
-# ...AND the other half of the same BUG: The call sites. The gate above finds the ledger rows whose
-# shape makes a second resolve dangerous (`A -> B` and `B -> C` both present, which happens when a
-# region's shift equals the local function spacing). This one finds the code that performs that
-# second resolve: a value handed to a resolving hook API must not itself be a resolver's output.
-#
-# Both were needed, and the ledger gate alone would not have caught it. On the 2026-08-30 18:42 run
-# three detours were installed on unrelated functions, each with the collision row sitting
-# blamelessly in a baselined ledger:
-#
-#   drive.rs:373            game_rva 0x140614870 -> 0x1406156c0, MhHook::new -> 0x140616510
-#   menu_trace_hooks.rs:274 game_rva 0x1407ac890 -> 0x1407ad710, union      -> 0x1407ae590
-#   lookat_stage_camera:575 game_rva 0x140bba6e0 -> 0x140bbbd90, MhHook::new -> 0x140bbd440
-#
-# and each feature then logged the address it meant, which is why nobody noticed for a day.
-#
-# The resolving APIs and the resolvers are derived by call-graph closure over `resolve_target` /
-# `resolve_detour_address` and `resolve_game_address*`, not transcribed, so a fourth entry point is
-# covered the day it is added; the taint is followed through parameter forwarding and return values
-# too, which is the only reason `mh_install_hook_once` and `save_flow_verify_rva` were seen at all.
-# Selftest first: it blinds each half of the matcher in turn and asserts the frozen controls change
-# classification, so a gate that has quietly stopped matching fails instead of printing OK.
-python3 "$repo_root/scripts/check-double-resolved-hook-targets.py" --selftest
-# UNWIRED 2026-08-31: 62 double-resolved arguments in the committed crate sources. Green in this
-# working tree, where the conversions are in flight. The --selftest above stays wired and green.
-# Re-arm this line with the crate changes.
-# python3 "$repo_root/scripts/check-double-resolved-hook-targets.py"
-# the second opinion on the data map'S VTABLE rows. `map-data-rvas-1162-to-1170.py` carries every
-# datum by the code that references it, so each row depends on the function map being right about
-# one function. RTTI depends on none of that: a vtable's [base-8] points at its
-# CompleteObjectLocator, whose TypeDescriptor holds the class's mangled name, and a name occurring
-# once per image identifies its vtable outright. Two methods with disjoint failure modes.
-#
-# This is the gate the failure it guards did not have. `TITLE_OWNER_VTABLE_RVA` is `CS::TitleStep`
-# in 1.16.2 and not a vtable at all at the same address in 1.17, and its three scans had been
-# finding no title owner, forever, with no refusal line and no fault -- a wrong data address does
-# not crash, the comparison simply never matches. 31 of the map's rows are vtables and all 31 are
-# checked here. The selftest runs first and carries its own negative control (every destination
-# shifted onto the next vtable must be rejected); `--prove-selftest-catches-regression` blinds the
-# matcher and requires the selftest to go red, so a green here cannot be vacuous. SKIPs at exit 0
-# without the two gitignored images.
+python3 "$repo_root/scripts/verify-prologue-coverage.py" --selftest
+python3 "$repo_root/scripts/verify-prologue-coverage.py" --section coverage
+# The mid-function gate. An address with no `.pdata` record of its own is two things wearing one
+# name: a leaf function the x64 ABI let omit unwind data (safe to hook), and an address inside
+# another function (MinHook writes five bytes into a live body). Measured 2026-08-30, in one merge
+# wave: six mid-function addresses reached or nearly reached the old 1.17 verified table, every one
+# of them byte-identical over 20-94 instructions -- because a mid-function address compares better
+# than a real entry, sitting in a neighbourhood that did not change. The wrong address had the
+# better-looking evidence, so a clean comparison is not evidence of a valid hook target and no
+# reviewer can be the check. This classifies every `DETOUR_ALLOWLIST` row against the 2.7.2.0
+# `.pdata` as entry, leaf or mid-function, and `--fail-on-mid` refuses the third (an empty table
+# counts as a finding). Selftest first, so the gate is never trusted on its own say-so: it builds a
+# .pdata table in memory and proves both senses are separated, then classifies 2.7.2.0
+# precedents. The live half skips, saying so, on a checkout without the de-Arxan'd image.
+python3 "$repo_root/scripts/classify-entry-kind.py" --selftest
+python3 "$repo_root/scripts/classify-entry-kind.py" --fail-on-mid
+# The vtable constants, checked by RTTI. A vtable's [base-8] points at its CompleteObjectLocator,
+# whose TypeDescriptor holds the class's mangled name, so the image itself says which class a
+# vtable constant names -- independent of how the constant was found. This is the gate the failure
+# it guards did not have: `TITLE_OWNER_VTABLE_RVA` was `CS::TitleStep` in 1.16.2 and not a vtable
+# at all at the same address in 1.17, and its three scans had been finding no title owner, forever,
+# with no refusal line and no fault -- a wrong data address does not crash, the comparison simply
+# never matches. `PINNED` holds the 56 vtable constants with their 2.7.2.0 rva and class: each
+# definition must still be at its rva, the 2.7.2.0 image's locator at [rva-8] must name the class,
+# and every crate constant whose value is a vtable must be pinned. The selftest runs synthetic PE
+# controls; without the gitignored image the source half still runs and the image half says it
+# was skipped.
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" --selftest
 python3 "$repo_root/scripts/verify-data-rvas-by-rtti.py" > /dev/null
-# The MAPPER'S own SELFTEST, wired 2026-09-01; it had existed for weeks and was invoked by nothing.
-# It asserts three things no other gate does. (1) The two mappings established by reading the live
-# 1.17 process are re-derived from bytes alone. (2) `0x1409a5810` is the 39th of 51 shape matches
-# for `0x1409a4670`, which is why `CANDIDATE_CEILING` is not 9 -- the old cap ended the candidate
-# list thirty short of the answer and the table recorded the loss as "UNRESOLVED: 9 shape matches".
-# (3) The four ProfileSelect/System-Quit addresses er-effects-rs-4uw5.13 was filed about resolve
-# one at a time, which they can only do from the anchor rows in
-# docs/recon/rva-map-1162-to-1170.verified.tsv -- so deleting one of those rows goes red here
-# naming the address, rather than quietly taking a region's coverage with it. Negative control run
-# 2026-09-01: with the eight anchor rows removed, 0x875590 and 0x920c90 both go UNMAPPED and this
-# exits 1. Re-execs itself under `uv` when capstone is absent, so the step stays spelled `python3`.
-python3 "$repo_root/scripts/map-rvas-1162-to-1170.py" --selftest
-# The independent opinion on those same anchors. Everything above reads the two flat images with
-# one decoder under one normalisation, so a wrong destination that decodes into the right shape is
-# invisible to all of it. This asks both Ghidra dumps instead -- 1.16.2 on :8765, 1.17 on :8767 --
-# whether each half of a pair is a declared function entry and whether the call graph carries
-# across. Its refusals are the control: six destinations that are wrong in a named way (0x10 past
-# the entry, or another anchor's entry) must all be refused, and the clause that refuses a
-# differing size with too few carried callees exists because the swapped cases passed without it.
-# Skips at exit 0 when either daemon is down.
-python3 "$repo_root/scripts/confirm-1170-pair-in-dumps.py" --selftest
-# The field-offset gate (2026-08-30). The three ways to be wrong about a 1.17 address are not
-# equally loud. A stale detour target is refused by er-hook and logged; an unmapped CALL/data RVA
-# resolves to 0 and the caller says so; a stale STRUCT field offset returns the neighbouring
+# The field-offset gate (2026-08-30). The three ways to be wrong about an address are not equally
+# loud. A wrong detour target is refused by er-hook and logged; a call or data rva on another
+# build is refused and the caller says so; a wrong struct field offset returns the neighbouring
 # field, plausible and wrong, with no refusal, no fault and no log line, forever. That third class
 # had no check at all until the 2026-08-30 struct-offset audit, which found the oracle for it
 # already lying on the disk and unused.
 #
 # `mov r64,[rip+d]` onto a known singleton global, then `[reg+0xNN]` before that register is
-# written again: the base PROVABLY holds the singleton, so the displacement is a real field offset
+# written again: the base provably holds the singleton, so the displacement is a real field offset
 # of whatever class lives there -- no dataflow, no RTTI pairing, no signature matching. Run over
-# both flat images it says, per object, which field offsets 1.16.2 reads and 1.17 no longer does.
+# the 2.7.2.0 image it clears every repo offset constant whose owner is one of those objects and
+# whose value is in that set, and names the rest `NOT-WITNESSED`, under a ceiling.
 #
 # It reports coverage, not a verdict, and its floors are the point: the per-object field counts
-# are frozen exactly (they depend only on the two frozen images and the matcher), so a change that
+# are frozen exactly (they depend only on the frozen image and the matcher), so a change that
 # blinds the scan goes red instead of reporting a smaller clean set -- the failure nine audits in
 # this repo shipped in one week, where `assert bad == 0` passed over an empty set. Selftest first,
 # and `--prove-selftest-catches-regression` blinds the matcher and requires the selftest to go red,
-# so a green here cannot be vacuous. SKIPs -- loudly, never with the word OK -- without the two
-# gitignored de-Arxan'd images.
+# so a green here cannot be vacuous. SKIPs -- loudly, never with the word OK -- without the
+# gitignored de-Arxan'd image.
 python3 "$repo_root/scripts/check-singleton-field-offsets.py" --selftest
 python3 "$repo_root/scripts/check-singleton-field-offsets.py"
 
@@ -2228,32 +2034,28 @@ python3 "$repo_root/scripts/check-singleton-field-offsets.py"
 # been written and left uninvoked, so it caught nothing at all).
 #
 # A displacement census answers "which offsets does the image read off this object", which cannot
-# say which field lives at one and cannot see a move when both the old and new offset are read
-# somewhere. This gate instead ALIGNS one function'S two BODIES: when the instruction sequences
-# agree except for memory displacements, instruction k is the same access to the same field in
-# both builds, so a displacement difference is that field moving, by exactly that much. Each row
-# names the witness function pair that produced its number; a row that cannot be re-measured is a
-# failure, not a pass. It also pins the repo constants those rows verify, and the allocation size
-# and class-identity of every object this repo writes into -- a wrong offset misinforms, a wrong
-# object corrupts the heap.
+# say which field lives at one. This gate's rows instead name one witness function each, found by
+# aligning that function's 1.16.2 and 1.17 bodies (where the instruction sequences agree except
+# for memory displacements, instruction k is the same access to the same field), and carried to
+# 2.7.2.0. Each run decodes the 2.7.2.0 witness and requires the row's current offset among the
+# displacements it reaches through the registers that hold `this`; a row whose witness no longer
+# touches its offset is a failure, not a pass. It also pins the repo constants those rows verify,
+# and the allocation size and class-identity of every object this repo writes into -- a wrong
+# offset misinforms, a wrong object corrupts the heap.
 #
 # It carries the one failure a drift check structurally cannot reach: an offset that was never
 # right in either build. `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 against a field at 0x48,
 # so `oracle_system_step_label` read a pointer's low half and emitted `"?"` with a legal-looking
 # i32 on every run since it was written, with nothing to drift.
 #
-# Selftest first: 93 perturbations, each of which must go red -- every witness row moved by 4 and
-# every held row by 8, every allocation size, identity anchor and 1.17 witness address, every write
-# bound raised past its allocation, plus a blind matcher, an empty source read and a changed
-# constant literal. 2s (it was 82s until the tree scan and the function alignments it repeats ~95
-# times over an unchanged tree were memoised; the point of that was not patience but that
-# scripts/audit-selftest-vacuity.py allows 25s per script and its blinded replay costs several
-# times the plain run, so this gate was UNMEASURABLE for vacuity -- an unjudgeable selftest is an
-# unproven one. It now reports PROVABLE).
+# Selftest first: every witness field, object and write-reach bound is perturbed and each mutant
+# must go red, plus a blind matcher, an empty source read and a changed constant literal. It refuses
+# to run without the image, because a green selftest with nothing to decode would be vacuous.
 # scripts/prove-gate-positive-controls.py additionally plants the real defect in the real tree.
-# SKIPs its image half -- saying so -- without the two gitignored de-Arxan'd images.
-python3 "$repo_root/scripts/check-object-field-offsets-1170.py" --selftest
-python3 "$repo_root/scripts/check-object-field-offsets-1170.py"
+# The plain run still recomputes the constant pins and write-reach bounds without the image, and
+# says its image half was skipped.
+python3 "$repo_root/scripts/check-object-field-offsets.py" --selftest
+python3 "$repo_root/scripts/check-object-field-offsets.py"
 
 # The population the two lines above are measured against. `audit-name-derived-offsets.py` is a
 # report, not a gate -- it counts every hand-written offset constant in the tree and says how many
@@ -2275,8 +2077,8 @@ python3 "$repo_root/scripts/audit-name-derived-offsets.py" --selftest
 # may disappear, they may not appear. Its floors carry the same anti-blindness property as the
 # scan above, and for the same reason: a shrinking unattributed list is exactly what a blinded
 # matcher or a lost owners import produces, and it would otherwise read as progress. The
-# witnesses are frozen function-pair alignments re-measured from the two images on every run, so
-# a row that cannot be measured is a failure, not a pass. Do not run --refresh to make it green.
+# witnesses are frozen 2.7.2.0 functions re-measured from the image on every run, so a row that
+# cannot be measured is a failure, not a pass. Do not run --refresh to make it green.
 # UNWIRED 2026-08-31: the ratchet refuses 4 new unattributed offsets in the committed crate sources
 # (three GXDC_OUTPUT_VEC_* in write_game_module_oracles.rs plus SWORD_ARTS_PARAM_ICON_ID_OFFSET);
 # the working tree has already moved them into files this commit does not carry. Both lines re-arm
@@ -2284,29 +2086,25 @@ python3 "$repo_root/scripts/audit-name-derived-offsets.py" --selftest
 # python3 "$repo_root/scripts/attribute-field-offset-owners.py" --selftest
 # python3 "$repo_root/scripts/attribute-field-offset-owners.py"
 
-# The work-list audit. The inventory that says how much of the 1.17 migration is left classified
-# every `*_RVA` constant in a cdylib as an eldenring.exe address, by name. Four of them are
-# Seamless Co-op's, added to `GetModuleHandleA("ersc.dll")`, and an ELDEN RING patch does not move
-# them: translating one through the game map and detouring the result would have put five bytes of
-# jmp into an unrelated game function. Two agents caught it by reading the code and no checker did.
-# The selftest pins the four foreign addresses, the plausibility bounds that are not addresses at
-# all, and two real game addresses as the control, so an exclusion that ate real work fails too.
-python3 "$repo_root/scripts/audit-1170-coverage-inventory.py" --selftest
 # The detour-licence gate (2026-08-30). Being the right address is not the same claim as being a
-# safe place for MinHook to write five bytes, and `er-hook` enforces the difference at RUNTIME: a
-# detour on an address that is in the call map but not the detour map is refused, correctly and
-# loudly, once per retry, forever. Nothing static noticed. A user played for seven minutes with the
-# loading-screen cover pasted over live gameplay because `LOADING_SCREEN_GFX_FADEOUT_RVA`
-# (0x90a0a0) was one of those, and the only evidence was 8,430 `HOOK REFUSED` lines in a 412 MB
-# log. Two facts were in the tree the whole time -- "this line detours RVA X" and "X is not
-# detour-safe" -- and no gate put them together.
+# safe place for MinHook to write five bytes, and `er-hook` enforces the difference at runtime: a
+# constant detour on an address that is not on `DETOUR_ALLOWLIST` (crates/er-game-base/src/
+# detour_allowlist.rs) is refused, correctly and loudly, once per retry, forever. Nothing static
+# noticed. A user played for seven minutes with the loading-screen cover pasted over live gameplay
+# because `LOADING_SCREEN_GFX_FADEOUT_RVA` was callable but not detour-safe, and the only evidence
+# was 8,430 `HOOK REFUSED` lines in a 412 MB log. Two facts were in the tree the whole time --
+# "this line detours rva X" and "X is not on the list" -- and no gate put them together.
 #
-# The verdict vocabulary, the ledger paths and the installer list are all PARSED out of
-# er-game-base/build.rs and er-hook/src/lib.rs rather than copied, so a renamed verdict or a new
-# entry point is tracked instead of silently un-checked. Selftest first, and it carries a frozen
-# control (a known detour-safe site the scan must find and name) plus floors on how many sites the
-# scan sees -- because a matcher that goes blind reports zero findings, which is exactly what nine
-# audits in this repo did while real findings stood.
+# Every constant address handed to `MhHook::new`, `register_union_hook*`, `register_shared_hook*`
+# or `resolve_detour_address` must be on the list, and the list itself must parse, match its
+# declared length and be strictly ascending, because `binary_search` cannot find a row out of
+# order. With the 2.7.2.0 image present every row must also be executable and either a `.pdata`
+# function start or an unwindless leaf of at least five bytes that no declared function contains:
+# never a chained-unwind continuation, a mid-function address or a `.data` global. The installer
+# list is derived out of er-hook/src/lib.rs rather than copied, so a new entry point is tracked
+# instead of silently unchecked. Selftest first: malformed lists, planted missing addresses and
+# planted bad image rows must all be refused -- because a matcher that goes blind reports zero
+# findings, which is exactly what nine audits in this repo did while real findings stood.
 python3 "$repo_root/scripts/check-detour-rva-coverage.py" --selftest
 python3 "$repo_root/scripts/check-detour-rva-coverage.py"
 # The other half of the same seven minutes. The gate above keeps the unmappable address out. This
@@ -2337,28 +2135,14 @@ python3 "$repo_root/scripts/check-hook-batch-abort.py" --selftest
 # on the real fix. `audit-selftest-vacuity.py --only check-hook-batch-abort` agrees -- PROVABLE,
 # 531 regexes neutered, selftest red on "a reasonless marker exempted anyway".
 python3 "$repo_root/scripts/check-hook-batch-abort.py"
-# The same question for direct calls. The detour gate above covers addresses that go through
-# MinHook. This one covers addresses a crate simply calls, which is a different and larger set --
-# and the one that broke on 2026-08-30, when the whole build importer went silently inert on 1.17.
-# All 27 game functions er-build-import-runtime calls are spelled without `RVA` in the name
-# (`GET_WEAPON_NAME`, `SET_REINFORCEMENT`, ...), every tool that picks addresses to translate
-# keyed on the name, so none of the 27 were ever selected, mapped or verified. The six item-name
-# getters were refused at runtime, every item name failed to resolve, the exporter dropped all 18
-# equipped items, and the telemetry reported success the whole time.
-#
-# So this gate asks the question by use rather than by spelling: what does the workspace hand to
-# the address resolver, and can the map answer it? A crate that resolves game addresses and has
-# none of them mapped fails. Selftest first: it carries a frozen floor under the control crate and
-# proves non-vacuity by blinding the matcher and observing the control collapse and the gate fail,
-# because a scan that goes blind otherwise reports a clean tree over a broken one.
-python3 "$repo_root/scripts/check-native-call-rva-coverage.py" --selftest
-python3 "$repo_root/scripts/check-native-call-rva-coverage.py"
 # The version gate. On 2026-08-29 every product DLL died within a second of loading, and it took
 # eight game launches to find out why: `ERGameVersion::from_lang_version` in the sibling
 # fromsoftware-rs checkout accepted only "2.6.2.0" and "2.6.2.1", the game had become 2.7.0.0, and
 # `eldenring::rva::get()` therefore panicked inside a LazyLock on whichever thread first touched a
 # singleton -- surfacing as eight unattributed rust_panics with the message nowhere a human looks.
 # Both halves of that comparison are readable off the disk, so it never needed a game to catch.
+# Since the 2.7.2.0 port it also requires the installed FileVersion to equal er-game-base's
+# `SUPPORTED_FILE_VERSION`, the one build every address in crates/ was measured on.
 python3 "$repo_root/scripts/check-game-version-supported.py" --selftest
 python3 "$repo_root/scripts/check-game-version-supported.py"
 # The same question for seamless co-OP, which needs its own gate because its answer is not a
@@ -2699,7 +2483,7 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # The freelist patch rewrites one byte of live game code, and its licence to do so is that the `JZ`
 # two bytes earlier already lands past the `INT3`; these tests recompute that landing address the
 # way the CPU does, and require the write to be one NOP at the `INT3`'s own offset. The window
-# bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
+# bytes are ground-truthed separately, against eldenring-deobf-1.17.2.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
 # er-r3-view's scroll arithmetic for the weapon board's gear list. The six tests are pure
@@ -2739,57 +2523,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-convenient-deaths --lib
 # confirmed to go red against a deliberately broken implementation.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hook --lib
 
-# The 1.17 UNGATED-address ratchet. `er_game_base::game_build` translates or refuses a known 1.16.2
-# address on the running build, and `er-hook`'s `MhHook::new` routes detours through it -- so a hook
-# on a function the patch moved fails loudly instead of corrupting the image. That protection only
-# covers addresses that go through it, and a hand-built `transmute(base + SOME_RVA)` does not: it
-# calls the 1.16.2 address on 1.17 with nothing to refuse it, even when the map already knows where
-# that function went. This counts those per cdylib and fails when a count rises.
-#
-# The property worth protecting most: 0 ungated WRITEs across all 27 cdylibs, so no DLL can corrupt
-# the 1.17 image with a stale address. Measured 2026-08-29; this is what keeps it true.
-python3 "$repo_root/scripts/audit-1170-readiness.py" --selftest
-python3 "$repo_root/scripts/audit-1170-readiness.py" --check
-# Eight more ways to reach an address without the gate (wired 2026-08-31). The ratchet above counts
-# EXEC/WRITE/READ; this one adds RAW_MINHOOK, PRE_GATE_CHECK, CACHED_ADDR, CONST_FOLD, VTABLE_WRITE,
-# INDIRECT_HELPER, DOUBLE_TRANSLATE and UPSTREAM_STATIC, keyed per crate-and-class against
-# `scripts/audit-1170-gate-bypass.baseline.json`, failing when any count rises.
-# It was red on five keys. All five were adjudicated against the source and all five are benign:
-# upstream's `SoloParamRepository::instance()` resolves by runtime `.text` pattern scan through
-# FromSingleton, not by a pinned RVA; `mem.rs:101`/`:122` are the gate's own implementation and its
-# `game_rva_for_hook`, which returns an address deliberately unresolved so the hook API owns the
-# single resolve; `announce.rs:344` and `er-refill-all/runtime.rs` hand raw targets to
-# `register_union_hook`/`register_shared_hook`, which is the required form; and
-# `er-seamless-bugfixes/lib.rs:430` recomposes `base + rva` from `resolve_call_site_rva`, which
-# returns an RVA rather than a VA. Baseline regenerated, and it ratcheted down hard in the process
-# -- 116 keys / 251 findings to 87 / 161.
-# Worth recording: the baseline committed in 7a7f25b3 did not pass on 7a7f25b3's own tree.
-# 1.1s + 5.4s.
-# Positive control: injecting a raw `*((base + SOME_RVA) as *mut u8) = 0x90` write goes red naming
-# the crate and both classes it trips (CACHED_ADDR 0->1, UNGATED_ARITH 2->3).
-python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --selftest
-# RE-armed 2026-09-01, after the one key that still drifted was adjudicated and measured.
-#
-# The comment that stood here from 2026-08-31 to 2026-09-01 named two keys -- er-game-base/mem.rs
-# 1->2 and er-seamless-bugfixes/lib.rs 0->1 -- and by the time anyone read it neither drifted any
-# more; both are in the baseline at their current counts. That is the failure mode of writing an
-# adjudication into a comment beside a disabled line: the prose rots while the line stays off, and
-# the next reader cannot tell whether the gate is off for a live reason or a dead one. The
-# justification now lives in `_reasons` inside the baseline, keyed by the entry it justifies, and
-# `--write-baseline` carries it forward so regenerating the counts cannot silently drop it.
-#
-# The only key that was still red: er-quickload|VTABLE_WRITE|.../src/can_move_probe.rs
-# 0 -> 4, the move probe's analog-stick writes at `+0x89c`/`+0x8a0`. Adjudicated in bounds by
-# static RE, not by inspection: the object is `DLUID::PadDevice` = HeapAlloc(0xa68) = 2664 bytes,
-# and the 1704-bytes-smaller `FD4::FD4PadDevice` (0x3c0 = 960) that made this look like a heap
-# overrun is a different class that merely holds the PadDevices in its +0x10 vector. The decisive
-# fact is that the game's own device poll -- the very function this repo detours -- Stores both
-# floats on that same `this`, so the offsets are in-bounds by construction. Full derivation in the
-# baseline's `_reasons`, and frozen against future drift by six new rows in
-# check-object-field-offsets-1170.py (the poll pairs 616/616 with 72 offsets and zero moved).
-python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --baseline "$repo_root/scripts/audit-1170-gate-bypass.baseline.json"
-# The four write classes the ratchet above cannot see (wired 2026-08-31). That one counts ungated
-# addresses per cdylib; this one names the shapes that reach a write without any `base + SOMETHING`
+# Writes into the game image that skip the build check (wired 2026-08-31). On 2.7.2.0
+# `resolve_game_address(base + rva)` hands back `base + rva`; on any other build it refuses, and a
+# write through an address that skipped that refusal corrupts whatever code or data the next patch
+# put there, with no fault and no log line. So a write is the one place the check is never
+# optional. This names the shapes that reach a write without any `base + SOMETHING`
 # text to count -- a store into a vtable/function-pointer slot, a `game_data_addr(..) + offset` that
 # destroys the 0-means-refused sentinel (a refusal on row 3 yields the address 24, which `if addr
 # != 0` waves through), and the byte-patch primitives that take `(base, rva)` as separate
@@ -2804,6 +2542,21 @@ python3 "$repo_root/scripts/audit-1170-gate-bypass.py" --baseline "$repo_root/sc
 # stays green.
 python3 "$repo_root/scripts/audit-ungated-image-writes.py" --selftest
 python3 "$repo_root/scripts/audit-ungated-image-writes.py"
+
+# Hand-built game addresses (wired 2026-10-23). The successor of the deleted
+# audit-1170-gate-bypass.py and audit-1170-readiness.py: a `base + FOO_RVA` (or a
+# `game_rva_for_hook` result) that reaches a call, a read, a write or a `.pdata`-only hook API must
+# pass the build check first -- inline, through a resolving hook API, or behind an earlier
+# `is_supported_build()` / `resolve_*` refusal in the same function that leaves before the site.
+# Today's nine exceptions are in scripts/audit-ungated-game-addresses.baseline.json with the
+# reason each is safe; a new site with no row, a stale row, or a row whose sinks changed fails, and
+# so does a gate name that no longer reaches `is_supported_build` in er-game-base. The selftest
+# plants a positive per sink and a negative per pass shape (pinned by count), plants non-gate
+# names and a shadowing `game_rva` to prove the gate names are re-earned, strips
+# `resolve_detour_address` out of er-hook to prove the hook APIs' licence is re-earned, and strips
+# er-cel-shade's sky refusal to prove real code goes red.
+python3 "$repo_root/scripts/audit-ungated-game-addresses.py" --selftest
+python3 "$repo_root/scripts/audit-ungated-game-addresses.py"
 
 # er-game-base: the shared re-entrancy latch and the bounded wait helpers. Both are load-bearing
 # for whether the game survives, not for what it computes -- `wait::poll_until` is what stops an

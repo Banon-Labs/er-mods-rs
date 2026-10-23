@@ -1,4 +1,6 @@
 # er-npc-summons game addresses, 1.17.1 runtime -> 1.16.2 RVA as written in Rust.
+# Historical (2026-10-23): the crate now spells every address as a 2.7.2.0 rva, and the ledgers and
+#   tools named below were deleted with the address carry; their last copies are at 41d6a363.
 # verified_row: whether rva-map-1162-to-1170.verified.tsv holds the pair. "added" rows were written
 #   2026-10-06 by `uv run --with capstone python3 scripts/verify-rva-map-1170.py --map <candidates>
 #   --tsv docs/recon/rva-map-1162-to-1170.verified.tsv` (24 accepted, 0 rejected; the 174 earlier rows

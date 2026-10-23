@@ -11,8 +11,10 @@
 //! # The call chain, and where it came from
 //!
 //! Reversed out of `CS::CSAiFunc`'s path request (`FUN_1402ea2f0`, `0x1402ea2f0`) against ER
-//! 1.16.2, where the dump VA, the `eldenring-deobf.bin` VA and the live runtime VA are all
-//! identical (shift 0). The sequence is:
+//! 1.16.2, so the `FUN_`/instruction addresses quoted in comments here are 1.16.2 dump addresses,
+//! except in a constant's own doc, which gives the 2.7.2.0 address first and the 1.16.2 one in
+//! parentheses. The constants themselves are 2.7.2.0 rvas, the build the DLL runs on. The
+//! sequence is:
 //!
 //! 1. [`PARAMS_INIT_RVA`] fills a 0x34-byte request-parameter block with defaults.
 //! 2. [`RESOLVE_POINT_RVA`] snaps a world position onto the navmesh, returning the snapped point
@@ -39,14 +41,14 @@
 
 use er_game_base::mem::{game_rva, safe_read_f32, safe_read_usize};
 
-/// `GLOBAL_CSHkAiManager` -- `0x143d74ae8`, from
-/// `1402ea34d: MOV RCX, qword ptr [0x143d74ae8]`.
-const HK_AI_MANAGER_GLOBAL_RVA: u32 = 0x3d7_4ae8;
+/// `GLOBAL_CSHkAiManager` -- `0x143d7bb78` on 2.7.2.0 (1.16.2 `0x143d74ae8`, from
+/// `1402ea34d: MOV RCX, qword ptr [0x143d74ae8]`).
+const HK_AI_MANAGER_GLOBAL_RVA: u32 = 0x3d7_bb78;
 /// `CSHkAiManager::hkAiWorld`, from `1402ea39c: MOV RCX, qword ptr [RCX + 0x20]`.
 const HK_AI_WORLD_OFFSET: usize = 0x20;
-/// `GLOBAL_CSWorldNvmManager` -- `0x143d75870`. Read only as a residency check: it is the owner of
-/// the loaded navmesh data, and a null one means no map's navmesh is resident.
-const WORLD_NVM_MANAGER_GLOBAL_RVA: u32 = 0x3d7_5870;
+/// `GLOBAL_CSWorldNvmManager` -- `0x143d7c908` on 2.7.2.0. Read only as a residency check: it is
+/// the owner of the loaded navmesh data, and a null one means no map's navmesh is resident.
+const WORLD_NVM_MANAGER_GLOBAL_RVA: u32 = 0x3d7_c908;
 /// `CSHkAiWorld`'s nav-data holder, from `FUN_140bddfe0`'s
 /// `*(longlong *)(*(longlong *)(param_1 + 0xe8) + 0x130)`.
 const HK_AI_WORLD_NAV_DATA_OFFSET: usize = 0xe8;
@@ -54,33 +56,41 @@ const HK_AI_WORLD_NAV_DATA_OFFSET: usize = 0xe8;
 /// function dereferences it without checking.
 const NAV_DATA_SECTIONS_OFFSET: usize = 0x130;
 
-/// `FUN_140be4840` -- default-fill the request parameters.
-const PARAMS_INIT_RVA: u32 = 0xbe_4840;
-/// `FUN_140bddfe0(world, pos, params, out_point, out_face)` -- snap a position onto the navmesh.
-const RESOLVE_POINT_RVA: u32 = 0xbd_dfe0;
-/// `FUN_140bdd570(world, point, face, params)` -- refine the start pair before the request.
-const REFINE_START_RVA: u32 = 0xbd_d570;
-/// `FUN_140bdec90(world, start_pt, start_face, end_pt, end_face, params) -> request_id`.
-const REQUEST_RVA: u32 = 0xbd_ec90;
-/// `FUN_140bdfde0(world, request_id) -> bool` -- true once the request is no longer pending.
-const IS_READY_RVA: u32 = 0xbd_fde0;
-/// `FUN_140bdf610(world, container, &mut request_id) -> status` -- drain the finished route.
-const FETCH_RVA: u32 = 0xbd_f610;
-/// `FUN_140be4880(container)` -- construct the route container on the AI heap.
-const CONTAINER_INIT_RVA: u32 = 0xbe_4880;
-/// `FUN_14029cc10(container)` -- release the container's chunks and chunk table.
-const CONTAINER_RELEASE_RVA: u32 = 0x29_cc10;
-/// `CS::ChrIns::GetPhysicsHitRadius` -- `0x1403efc30`. The agent's width, which is what makes the
-/// route avoid gaps a player cannot fit through.
-const CHR_PHYSICS_HIT_RADIUS_RVA: u32 = 0x3e_fc30;
-/// `CS::ChrIns::GetPhysicsHitHeight` -- `0x1403efc20`.
-const CHR_PHYSICS_HIT_HEIGHT_RVA: u32 = 0x3e_fc20;
-/// `DAT_143d61dc0` -- the traversal-cost table `CS::CSAiFunc` uses for the ordinary world.
+/// `FUN_140be6440` (1.16.2 `FUN_140be4840`) -- default-fill the request parameters.
+const PARAMS_INIT_RVA: u32 = 0xbe_6440;
+/// `FUN_140bdfbe0` (1.16.2 `FUN_140bddfe0`)`(world, pos, params, out_point, out_face)` -- snap a
+/// position onto the navmesh.
+const RESOLVE_POINT_RVA: u32 = 0xbd_fbe0;
+/// `FUN_140bdf170` (1.16.2 `FUN_140bdd570`)`(world, point, face, params)` -- refine the start pair
+/// before the request.
+const REFINE_START_RVA: u32 = 0xbd_f170;
+/// `FUN_140be0890` (1.16.2 `FUN_140bdec90`)`(world, start_pt, start_face, end_pt, end_face,
+/// params) -> request_id`.
+const REQUEST_RVA: u32 = 0xbe_0890;
+/// `FUN_140be19e0` (1.16.2 `FUN_140bdfde0`)`(world, request_id) -> bool` -- true once the request
+/// is no longer pending.
+const IS_READY_RVA: u32 = 0xbe_19e0;
+/// `FUN_140be1210` (1.16.2 `FUN_140bdf610`)`(world, container, &mut request_id) -> status` --
+/// drain the finished route.
+const FETCH_RVA: u32 = 0xbe_1210;
+/// `FUN_140be6480` (1.16.2 `FUN_140be4880`)`(container)` -- construct the route container on the
+/// AI heap.
+const CONTAINER_INIT_RVA: u32 = 0xbe_6480;
+/// `FUN_14029cc20` (1.16.2 `FUN_14029cc10`)`(container)` -- release the container's chunks and
+/// chunk table.
+const CONTAINER_RELEASE_RVA: u32 = 0x29_cc20;
+/// `CS::ChrIns::GetPhysicsHitRadius` -- `0x1403efe60` (1.16.2 `0x1403efc30`). The agent's width,
+/// which is what makes the route avoid gaps a player cannot fit through.
+const CHR_PHYSICS_HIT_RADIUS_RVA: u32 = 0x3e_fe60;
+/// `CS::ChrIns::GetPhysicsHitHeight` -- `0x1403efe50` (1.16.2 `0x1403efc20`).
+const CHR_PHYSICS_HIT_HEIGHT_RVA: u32 = 0x3e_fe50;
+/// `DAT_143d68e40` (1.16.2 `DAT_143d61dc0`) -- the traversal-cost table `CS::CSAiFunc` uses for
+/// the ordinary world.
 ///
-/// The alternative, `DAT_143d61e10`, is the one the game swaps in inside a sealed world
+/// The alternative, 1.16.2 `DAT_143d61e10`, is the one the game swaps in inside a sealed world
 /// (`CSWorldAiManagerImp::IsInSealdWorld`). Using the ordinary table everywhere means a route in
 /// a sealed area may cost differently than the AI's own, never that it is invalid.
-const NAV_COST_TABLE_RVA: u32 = 0x3d6_1dc0;
+const NAV_COST_TABLE_RVA: u32 = 0x3d6_8e40;
 
 /// The `FETCH_RVA` status that means a complete route, from
 /// `1402ea602: CMP dword ptr [RSP + 0x48], 0x2`.
@@ -215,7 +225,8 @@ pub(crate) enum RequestRefusal {
     QueueRefused,
 }
 
-/// Resolve `rva` to a callable address, or `None` when the module base is unavailable.
+/// Resolve a 2.7.2.0 `rva` to an address, or `None` when the module base is unavailable or the
+/// running build is another.
 fn function(rva: u32) -> Option<usize> {
     game_rva(rva).ok().filter(|address| *address != 0)
 }

@@ -4,9 +4,11 @@
 loaded through [me3](https://github.com/garyttierney/me3) -- plus the host-side Rust libraries
 they are built from and the reverse-engineering tooling used to find the addresses.
 
-Targets **Elden Ring 1.16.2** on Linux (native Steam + Proton) and Windows. Cross-compiled to
-`x86_64-pc-windows-msvc` from Linux with `cargo-xwin`. Compatible with vanilla and with Seamless
-Co-op -- which is a compatibility target, never a bundled file.
+Targets **Elden Ring 2.7.2.0** (Steam patch 1.17.2) only, on Linux (native Steam + Proton) and
+Windows; on any other game build er-game-base refuses every game address, and the fromsoftware-rs
+singleton lookups panic on a build their bundle does not list (`docs/game-build.md`).
+Cross-compiled to `x86_64-pc-windows-msvc` from Linux with `cargo-xwin`. Compatible with vanilla
+and with Seamless Co-op -- which is a compatibility target, never a bundled file.
 
 > Formerly `er-effects-rs`. That name described one feature -- named SpEffect calls -- which now
 > lives in its own crate (`er-net-effects`) and is the smallest thing here. Beads issue keys
@@ -179,10 +181,12 @@ data/              effect lists and other embedded data
 
 ## Reverse engineering
 
-Addresses come from a Ghidra runtime dump of **1.16.2** -- see `AGENTS.md` for the MCP daemon,
-the deobfuscated-binary conventions, and the rule that matters most: the dump is authoritative
-for *meaning*, and `eldenring-deobf.bin` is authoritative for *addresses*. `scripts/ghidra/`
-holds the version-controlled query scripts.
+Every game address is a 2.7.2.0 rva, measured on that build's de-Arxan'd image
+`eldenring-deobf-1.17.2.bin`. Names and types come from a Ghidra runtime dump of **1.16.2**, the
+only named one, so the rule that matters most is: the dump is authoritative for *meaning*, and the
+2.7.2.0 image is authoritative for *addresses*. `docs/game-build.md` describes that model and how
+the next game patch is taken; `AGENTS.md` covers the MCP daemon and the deobfuscated-binary
+conventions; `scripts/ghidra/` holds the version-controlled query scripts.
 
 Issue tracking and long-form findings live in [beads](https://github.com/steveyegge/beads)
 (`.beads/`), not in markdown TODOs.

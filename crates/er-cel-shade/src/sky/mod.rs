@@ -125,8 +125,8 @@ pub struct Weather {
 pub const NATURAL: i16 = -1;
 
 /// Every weather the game has effects for, in the order the tab lists them, natural first. The ids
-/// are the internal `WeatherParam` rows the EMEVD weather enum maps to (MapWeatherType
-/// 0x140577410); rows 83-88 exist but carry no effects and 99 no script reaches, so they are left
+/// are the internal `WeatherParam` rows the EMEVD weather enum maps to (MapWeatherType, 2.7.2.0
+/// 0x1405778c0); rows 83-88 exist but carry no effects and 99 no script reaches, so they are left
 /// out. Names follow Paramdex.
 pub const WEATHERS: [Weather; 17] = [
     Weather {
@@ -434,7 +434,7 @@ pub enum Install {
     #[default]
     Waiting,
     Running,
-    /// Not 1.17.1, or the game's bytes are not the ones checked: nothing is called.
+    /// Not 2.7.2.0, or the game's bytes are not the ones checked: nothing is called.
     Refused(&'static str),
 }
 

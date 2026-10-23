@@ -31,26 +31,29 @@
 //!
 //! # Who should have torn the window down
 //!
-//! `CS::TitleStep` is a twelve-state machine whose table is built at `FUN_1400a4f50` into
-//! `0x143d71580`, and `STEP_BeginTitle` (index 3, `0x140b0c5b0`) composes the title's `MenuJob`
-//! chain -- `FUN_14081f9f0` builds the `05_000_Title` job -- and submits it through `FUN_140b0e530`,
-//! which assigns it into `TitleStep+0x130` and requests state 10, `STEP_MenuJobWait`. That step
-//! (`0x140b0d400`) does one thing that matters here: it calls
+//! Addresses below are 2.7.2.0 unless marked 1.16.2 (the build the RE was done on).
+//!
+//! `CS::TitleStep` is a twelve-state machine whose table is built at (1.16.2) `FUN_1400a4f50` into
+//! `0x143d78610`, and `STEP_BeginTitle` (index 3, 1.16.2 `0x140b0c5b0`) composes the title's `MenuJob`
+//! chain -- `FUN_140820d20` builds the `05_000_Title` job -- and submits it through (1.16.2)
+//! `FUN_140b0e530`, which assigns it into `TitleStep+0x130` and requests state 10,
+//! `STEP_MenuJobWait`. That step (`0x140b0efd0`) does one thing that matters here: it calls
 //! `ExecuteMenuJob(&TitleStep->field85_0x130, dt)`.
 //!
 //! Two native functions reap the title, and both are gated on a job reporting a terminal result:
 //!
-//! * `ExecuteMenuJob` (`0x1407a9600`) runs the job, then `if (MenuJobResult::ShouldContinue(&r))`
-//!   unrefs it and writes null back over `TitleStep+0x130`. `ShouldContinue` is `0x1407a9200`, three
-//!   instructions -- `CMP dword ptr [RCX],0x1; SETA AL; RET` -- so it is `state > Continue(1)`, i.e.
-//!   the predicate is "has a result", not "wants another tick".
-//! * `CS::MenuWindowJob::Run` (`0x1407ad1c0`) ends by reading its own window's result at
-//!   `MenuWindow+0x1e8`, and on the same `ShouldContinue` calls `FUN_1407ada40` -- the teardown that
-//!   deregisters the window from `CSMenuMan` -- and propagates the terminal result to its caller.
+//! * `ExecuteMenuJob` (`0x1407aa930`) runs the job, then `if (MenuJobResult::ShouldContinue(&r))`
+//!   unrefs it and writes null back over `TitleStep+0x130`. `ShouldContinue` is (1.16.2)
+//!   `0x1407a9200`, three instructions -- `CMP dword ptr [RCX],0x1; SETA AL; RET` -- so it is
+//!   `state > Continue(1)`, i.e. the predicate is "has a result", not "wants another tick".
+//! * `CS::MenuWindowJob::Run` (`0x1407ae4f0`) ends by reading its own window's result at
+//!   `MenuWindow+0x1e8`, and on the same `ShouldContinue` calls (1.16.2) `FUN_1407ada40` -- the
+//!   teardown that deregisters the window from `CSMenuMan` -- and propagates the terminal result to
+//!   its caller.
 //!
 //! # Why neither runs on a switch
 //!
-//! `continue_confirm` (`0x140b0e180`) ends with `FUN_140b0d960(titleStep, 5)`, which writes
+//! `continue_confirm` (`0x140b0fd50`) ends with `FUN_140b0f530(titleStep, 5)`, which writes
 //! `FD4StepTemplateBase.requestedState = 5` (`STEP_PlayGame`). The step machine leaves
 //! `STEP_MenuJobWait` on the next tick, so `ExecuteMenuJob` is never called against that job again,
 //! and `STEP_PlayGame` / `STEP_GameStepWait` never touch `+0x130`. The only other writer of that

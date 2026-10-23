@@ -43,41 +43,11 @@ pub fn game_module_base() -> Result<usize, String> {
     Ok(module as usize)
 }
 
-/// Where an rva measured on `measured_on` is in the running image, or `None`.
+/// `game_module_base() + rva`, if the running build is the one `rva` was measured on.
 ///
-/// For an address read straight off one build's image instead of carried from 1.16.2 through the
-/// address map -- a 1.16.2 rva goes through [`game_rva`] or the hook APIs. The version is the
-/// build the constant was measured on, written at the call site so a reader knows which image to
-/// check it against:
-///
-/// * `measured_on` is the running build: the rva as given;
-/// * measured on 1.17.1 while 2.7.2.0 runs: the segment carry of
-///   [`crate::game_build::carry_1171_rva`], `None` where it refuses;
-/// * anything else: `None`. Nothing carries backwards, and a 1.17.0 measurement is spelled as its
-///   1.17.1 value first (`scripts/map-rvas-1170-to-1171.py`).
-///
-/// The caller still checks the bytes at the answer before it calls or hooks it.
-pub fn game_rva_measured_on(
-    rva: usize,
-    measured_on: crate::game_build::FileVersion,
-) -> Option<usize> {
-    let running = crate::game_build::game_file_version()?;
-    let carried = if running == measured_on {
-        rva
-    } else if measured_on == crate::game_build::MAPPED_FILE_VERSION_1171 {
-        crate::game_build::carry_1171_rva(rva)?
-    } else {
-        return None;
-    };
-    Some(game_module_base().ok()? + carried)
-}
-
-/// `game_module_base() + rva`, resolved for the running build.
-///
-/// Every RVA in this workspace is a 1.16.2 RVA. On a build that moved the code, this returns the
-/// translated address when one has been verified and an `Err` when it has not -- so a caller
-/// that ignores the error cannot call into whatever now occupies those bytes. Plain addition on
-/// the supported build, and for anything outside the game image.
+/// Every rva in this workspace is a 2.7.2.0 rva. On 2.7.2.0 this is plain addition; on any other
+/// build it is an `Err`, so a caller that ignores the error cannot call into whatever now occupies
+/// those bytes. See [`crate::game_build::resolve_game_address`].
 ///
 /// # Why `#[track_caller]`
 ///
@@ -96,43 +66,13 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
     resolve_rva(rva, "game_rva", core::panic::Location::caller())
 }
 
-/// `game_module_base() + rva`, deliberately not resolved for the running build.
+/// `game_module_base() + rva`, for an address about to be handed to a hook API.
 ///
-/// # The one caller shape this is for
-///
-/// An address about to be handed to a hook API that resolves it itself -- `er_hook::MhHook::new`,
-/// `register_union_hook`, `register_shared_hook`, or a local helper that forwards into one. Those
-/// own the single 1.16.2 -> 1.17 resolve, and [`game_rva`] would perform a second one.
-///
-/// # Why a second resolve is not merely redundant
-///
-/// It is usually a no-op: the address is a 1.17 destination, `already_translated_in` recognises it
-/// and hands it straight back. That is exactly why this survived so long unnoticed. But an address
-/// can be both a 1.17 destination of one row and the 1.16.2 source of a different row -- which is
-/// what happens whenever a region's shift equals the local spacing between two functions, so
-/// `B - A == C - B`. On such an address translation wins over the shortcut (it must; see
-/// `already_translated_in`), and the second resolve silently returns C.
-///
-/// Measured on the 2026-08-30 18:42 boot, three detours installed on unrelated functions:
-///
-/// | intended                  | resolve 1     | resolve 2 (the detour that was installed) |
-/// |---------------------------|---------------|-------------------------------------------|
-/// | `WorldBlockRes::Update`   | `0x1406156c0` | `0x140616510`                             |
-/// | `native_submit_7ac890`    | `0x1407ad710` | `0x1407ae590` (hot Scaleform, 16 callers) |
-/// | profile per-frame push    | `0x140bbbd90` | `0x140bbd440` (`CSMenuFaceModelRend`)     |
-///
-/// No error, no refusal, no log line -- and each feature then logged the address it meant, which
-/// is why nobody noticed. `scripts/check-double-resolved-hook-targets.py` is the gate that keeps
-/// the shape out.
-///
-/// # What the `Result` means here, and what moved
-///
-/// It is the module-base lookup and nothing else, so a call site that already had an `else` branch
-/// for a failed [`game_rva`] keeps it unchanged. What moves is where an unmappable address is
-/// refused: no longer here, but inside the hook API, which logs `HOOK REFUSED` naming the address
-/// and the build. That is the better place for it anyway -- it is the layer that knows whether the
-/// row is merely callable or actually audited as a detour target, which are different questions
-/// with different tables.
+/// `er_hook::MhHook::new`, `register_union_hook` and `register_shared_hook` run the address
+/// through [`crate::game_build::resolve_detour_address`] themselves, which checks the build and
+/// the detour allowlist and logs the refusal naming the address. So this does no check of its own:
+/// the `Result` is the module-base lookup and nothing else, and the refusal is reported by the
+/// layer that knows whether the address is merely callable or also a place a detour may go.
 pub fn game_rva_for_hook(rva: u32) -> Result<usize, String> {
     Ok(game_module_base()? + rva as usize)
 }
@@ -162,13 +102,14 @@ fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<u
     )
     .ok_or_else(|| {
         format!(
-            "rva 0x{rva:x} has no verified mapping for the running build: {}",
+            "rva 0x{rva:x} was measured on {} and the running build is another: {}",
+            crate::game_build::SUPPORTED_FILE_VERSION,
             crate::game_build::describe_build()
         )
     })
 }
 
-/// `base + rva` for a read, resolved for the running build -- or `0` when there is no mapping.
+/// `base + rva` for a read on the supported build -- or `0` on any other.
 ///
 /// # Why zero rather than an error
 ///
@@ -180,13 +121,12 @@ fn resolve_rva(rva: u32, what: &str, at: &core::panic::Location<'_>) -> Result<u
 ///
 /// # Why reads needed this at all
 ///
-/// A stale call announces itself: 1.16.2's `0x1405eefb0` is mid-instruction on 1.17 and the
-/// process dies immediately. A stale read does not. Every `.data` global moved between the
-/// builds -- most by +0x4070, `runtime_heap_allocator` by +0x4080, `multiplay_properties` by
-/// +0x4000 -- so `safe_read_usize` succeeds and returns whatever now occupies the old slot. Two
-/// measured consequences: a garbage repository pointer reached `CreateTpfResCap`, which divided
-/// by zero 894ms into boot; and the swapchain find read a stale `GX_DRAW_CONTEXT_RVA` root, missed
-/// for 1200 consecutive tries, and left a live process behind a black screen.
+/// A stale call announces itself: an address from another patch is usually mid-instruction and the
+/// process dies immediately. A stale read does not. Every `.data` global moved when 1.17 shipped
+/// -- most by +0x4070 -- so `safe_read_usize` succeeded and returned whatever occupied the old
+/// slot. Two measured consequences: a garbage repository pointer reached `CreateTpfResCap`, which
+/// divided by zero 894ms into boot; and the swapchain find read a stale `GX_DRAW_CONTEXT_RVA`
+/// root, missed for 1200 consecutive tries, and left a live process behind a black screen.
 ///
 /// Never use this for a call target. Zero is a safe address to fail a read at and a fatal one to
 /// jump to; call sites must take the `Option` from [`crate::game_build::resolve_game_address`]
@@ -227,8 +167,8 @@ pub fn game_data_addr_offset(
 ///
 /// The two halves are useless apart and were repeatedly written apart. Resolving without a safe
 /// read turns a refusal into a crash, because [`game_data_addr`] answers 0 and `*(0 as *const _)`
-/// faults. Safe-reading without resolving is worse and quieter: every `.data` global moved between
-/// 1.16.2 and 1.17, so the read succeeds and returns whatever now occupies the old slot.
+/// faults. Safe-reading without resolving is worse and quieter: on another patch the read succeeds
+/// and returns whatever now occupies the slot.
 ///
 /// This is a safe function on purpose. It dereferences nothing the caller can get wrong: the
 /// address is resolved here and the read is kernel-validated, so there is no precondition to

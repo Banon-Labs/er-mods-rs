@@ -7,8 +7,9 @@ disassembly. A hit is a candidate: the window filter only proves the field-offse
 shortly before the call, so read each hit's disassembly before believing it.
 
 Usage
-    python3 scripts/find-vcall-slot-sites.py --image eldenring-deobf-1.17.1.bin \
-        --slot 0xe8 --slot 0xf0 --field 0x6a0 [--window 48]
+    python3 scripts/find-vcall-slot-sites.py --slot 0xe8 --slot 0xf0 --field 0x6a0 [--window 48]
+
+`--image` defaults to `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--image", default="eldenring-deobf-1.17.1.bin")
+    ap.add_argument("--image", default="eldenring-deobf-1.17.2.bin")
     ap.add_argument("--slot", action="append", required=True, help="vtable byte offset, hex ok")
     ap.add_argument("--field", default=None, help="object field offset that must precede the call")
     ap.add_argument("--window", type=int, default=48)

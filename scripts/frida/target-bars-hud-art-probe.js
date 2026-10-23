@@ -3,8 +3,8 @@
 // MenuWindowJob::Run on the menu thread -- the same call er-r3-view makes in production for item
 // icons (crates/er-r3-view/src/item_icon.rs). No write, no watchpoint, no MemoryAccessMonitor.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // 1.17.1 addresses (bd item-icon-runtime-chain-1171-2026-10-02):
 //   Scaleform texture repository global   rva 0x3d86580

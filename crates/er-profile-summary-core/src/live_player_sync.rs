@@ -13,13 +13,13 @@
 //! body is the live character copied into one record:
 //!
 //! ```text
-//! FUN_140262270(ProfileSummary *summary, uint slot)   // 1.16.2; refuses slot >= 10
+//! FUN_140262280(ProfileSummary *summary, uint slot)   // 2.7.2.0; refuses slot >= 10
 //!   pgd = GameDataMan->mainPlayerGameData
-//!   wcsncpy(record+0x00, FUN_14025f8e0(pgd), 0x10)    // name, terminated at +0x20
+//!   wcsncpy(record+0x00, FUN_14025f8f0(pgd), 0x10)    // name, terminated at +0x20
 //!   record+0x24 = pgd->level
 //!   record+0x2c = pgd->runeMemory
 //!   record+0x28 = GetPlayTimeInSeconds()
-//!   FUN_14025f900(pgd, record)                        // FaceData +0x38, ChrAsm +0x1a8, gender +0x290
+//!   FUN_14025f910(pgd, record)                        // FaceData +0x38, ChrAsm +0x1a8, gender +0x290
 //!   record+0x291 = pgd->archetype
 //!   record+0x292 = pgd->startingGift
 //!   record+0x293 = pgd->field_0xc4
@@ -30,27 +30,27 @@
 //! and the equipment step inside it is the one that matters here:
 //!
 //! ```text
-//! FUN_14025f900(PlayerGameData *pgd, longlong record)
-//!   FUN_1403bffa0(record+0x1a8)                       // release the 22 handles the record held
+//! FUN_14025f910(PlayerGameData *pgd, longlong record)
+//!   FUN_1403bffb0(record+0x1a8)                       // release the 22 handles the record held
 //!   FUN_140251580(record+0x38, &pgd->faceData)
 //!   FUN_140245c00(record+0x1a8, &pgd->equipGameData.chrAsm)   // ChrAsm::Copy, live -> record
 //!   record+0x290 = pgd->gender
-//!   FUN_1403bffa0(record+0x1a8)                       // un-index the handles just copied in
+//!   FUN_1403bffb0(record+0x1a8)                       // un-index the handles just copied in
 //! ```
 //!
 //! # Why the record is what a portrait shows
 //!
-//! `FUN_1409aa680` -- `er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA` -- is the only
-//! caller of the profile renderer's set-ChrAsm (`FUN_140bbe1a0`; one call xref in the 1.16.2 dump,
-//! the other two being vtable data), and the source it passes is `record + 0x1a8`. So a profile
+//! `FUN_1409abcd0` -- `er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA` -- is the only
+//! caller of the profile renderer's set-ChrAsm (`FUN_140bbfda0`; one call xref in the 1.16.2 dump,
+//! the other two being vtable data, and one `E8` call on 2.7.2.0), and the source it passes is `record + 0x1a8`. So a profile
 //! portrait is dressed from a record and from nothing else, and a record that still describes the
 //! pre-import loadout renders the pre-import loadout however many times the model is rebuilt.
 //! Syncing first is what makes a rebuild worth asking for.
 //!
 //! # When the game does this by itself
 //!
-//! Only at a save. The two callers of the native in the 1.16.2 dump are `FUN_14067b750` and
-//! `FUN_14067b940`, both `GameMan` save lanes, and each opens with
+//! Only at a save. The two callers of the native (1.16.2 dump, and the same two `E8` calls on
+//! 2.7.2.0) are `FUN_14067ca50` and `FUN_14067cc40`, both `GameMan` save lanes, and each opens with
 //! `MarkProfileIndexAsUsed(summary, slot)` then this function then the serialize. So an import that
 //! writes no save leaves the record behind until something else saves -- which is the whole defect.
 
@@ -69,16 +69,10 @@ use crate::live_records::system_quit_profile_summary_ptr;
 /// `CS::ProfileSummary::UpdateRecordFromLivePlayer(ProfileSummary*, uint slot)` -- the game's own
 /// live-character-into-one-record writer, decompiled in this module's header.
 ///
-/// Verified onto the installed build rather than assumed. The 1.16.2 entry byte-matches
-/// `eldenring-deobf.bin` at shift zero (16 instructions identical,
-/// `python3 scripts/check-dump-deobf-identity.py 0x140262270`), and
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv` carries `0x140262270 -> 0x140262280` as
-/// `IDENTICAL-WHOLE` over 99 instructions, both entries declared, `PDATA:0x179/0x179`. The `+0x10`
-/// step is the one its neighbour `MarkProfileIndexAsUsed` (`0x140262250 -> 0x140262260`) already
-/// carries, and the pair sits below the `0xafefe9` boundary, so 1.17.1 does not move it again.
-/// Every call goes through [`game_rva_named`], so a build with no row for it refuses rather than
-/// transferring control into whatever now occupies the address.
-pub const PROFILE_SUMMARY_UPDATE_FROM_LIVE_PLAYER_RVA: usize = 0x262270;
+/// The 2.7.2.0 entry, `0x140262280`; its neighbour `MarkProfileIndexAsUsed` is `0x140262260`.
+/// Every call goes through [`game_rva_named`], so another build refuses rather than transferring
+/// control into whatever now occupies the address.
+pub const PROFILE_SUMMARY_UPDATE_FROM_LIVE_PLAYER_RVA: usize = 0x262280;
 
 /// The host-side test in [`crate::equip_fingerprint`] spells the array length itself, because the
 /// typed constant is behind the Windows-only game bindings. This is the assertion that keeps the

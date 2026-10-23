@@ -25,9 +25,9 @@
 //!    its bytes are checked as well. A resume target that moved fails closed rather than sending a
 //!    thread into the middle of an instruction.
 //! 4. **Resolve as call sites, never as detours.** Both addresses are an offset into a function, so
-//!    they go through [`er_game_base::game_build::resolve_call_site_rva`], which maps the enclosing
-//!    function and adds the offset afterwards. `resolve_detour_address` refuses mid-function
-//!    addresses on purpose.
+//!    they go through [`er_game_base::game_build::resolve_call_site_rva`], which checks the
+//!    enclosing function against the running build and adds the offset afterwards.
+//!    `resolve_detour_address` refuses mid-function addresses on purpose.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 
@@ -37,7 +37,7 @@ pub(crate) mod give_items;
 pub(crate) struct MidHook {
     /// Name used in the install log and the telemetry line.
     pub(crate) name: &'static str,
-    /// 1.16.2 RVA of the `.pdata` function entry that contains both addresses.
+    /// 2.7.2.0 RVA of the `.pdata` function entry that contains both addresses.
     pub(crate) function_rva: usize,
     /// Offset of the hooked instruction within [`Self::function_rva`].
     pub(crate) hook_offset: usize,

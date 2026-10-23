@@ -17,27 +17,27 @@
 //
 // -- while `GameMan.saveState` read 0. That combination is UNREACHABLE while the game
 // still owns the request, and it is permanent. The proof is three decompiled facts
-// (1.16.2, shift 0):
+// (read from the 1.16.2 decompile; the names are the 2.7.2.0 functions):
 //
-//  1. `iodev+0x10`/`+0x20` are cleared by `FUN_140e6f200` and by nothing else.
-//  2. On the save side the only path that reaches `FUN_140e6f200` is the poll
-//     `FUN_140e6e430`, whose only two callers are `FUN_140679510` and `FUN_1406794b0`,
+//  1. `iodev+0x10`/`+0x20` are cleared by `FUN_140e72760` and by nothing else.
+//  2. On the save side the only path that reaches `FUN_140e72760` is the poll
+//     `FUN_140e71990`, whose only two callers are `FUN_14067a810` and `FUN_14067a7b0`,
 //     which are in turn reached only from `CS::MoveMapStep::DoSaveStuff` -- gated on
-//     `GameMan::IsSaveState1()` -- and from the "saving..." MenuJob `FUN_14082a0f0`.
-//  3. Every submit path sets `saveState = 1` at its commit tail (`FUN_14067b940`,
-//     `FUN_14067b750`, `FUN_14067b570`, `FUN_14067bc10`), so `+0x10 != 0` and
+//     `GameMan::IsSaveState1()` -- and from the "saving..." MenuJob `FUN_14082b8e0`.
+//  3. Every submit path sets `saveState = 1` at its commit tail (`FUN_14067cc40`,
+//     `FUN_14067ca50`, `FUN_14067c870`, `FUN_14067cf10`), so `+0x10 != 0` and
 //     `saveState == 1` are set together and cleared together.
 //
 // Once `saveState` leaves 1 with `+0x10` still populated, (2) says nothing will ever poll
 // the device again, so (1) says the request is never released -- and every later submit
-// builder (`FUN_140e6ef60`, `FUN_140e6ec70`) fails its opening
+// builder (`FUN_140e724c0`, `FUN_140e721d0`) fails its opening
 // `iodev+0x10 == 0 && iodev+0x20 == 0` guard. Autosave, rest, quit-save and the Save Game
 // row are all refused, silently, forever. Elden Ring shows no error for a save that is
 // never attempted, so the player keeps playing and loses everything they do.
 //
-// What this does about it. It runs the game's own poll, `FUN_140e6e430(iodev)`, once per
+// What this does about it. It runs the game's own poll, `FUN_140e71990(iodev)`, once per
 // refused dispatch that carries this signature. Nothing here decides whether the request
-// may be freed: the poll's `case 0x14` arm frees it only when `FUN_14240a1f0(job)` reports
+// may be freed: the poll's `case 0x14` arm frees it only when `FUN_14240e1a0(job)` reports
 // terminal, which is the same guard `DoSaveStuff` would have applied on the frame the game
 // forgot to. A job still in flight lands in a `break -> return 1` arm and nothing is
 // touched. That is the same discipline the load side already follows in
@@ -45,21 +45,21 @@
 // disagree with the game about whether a write is still running, and the object being freed
 // is one the SL worker thread may still be writing through.
 //
-// Why it is safe to call from a decline. `FUN_140e6f200` frees both sides of the device
+// Why it is safe to call from a decline. `FUN_140e72760` frees both sides of the device
 // (`+0x10`, `+0x18`, `+0x20`, `+0x28`), so a poll fired while a load owns the job would
 // take that load's payload away before its consumer ever saw it. [`save_request_is_orphaned`]
 // therefore demands the load side be empty and `saveState` be exactly idle -- which
 // excludes a save in flight (1) and a load in any of its phases (2, 3, 7) -- and refuses to
 // act on an unreadable sample. The decline itself already implies `saveState == 0`
-// (`FUN_140afb880` picks no lane otherwise), so the check is a restatement the code can be
+// (`FUN_140afd060` picks no lane otherwise), so the check is a restatement the code can be
 // read against rather than a new assumption.
 //
 // Why the first refused save is not lost. A declining lane touches nothing --
-// `GameMan+0xb72`/`+0xb73` stay set -- so `FUN_140afb880` re-enters it on the next frame.
+// `GameMan+0xb72`/`+0xb73` stay set -- so `FUN_140afd060` re-enters it on the next frame.
 // The drain runs between those two entries, so the save the user was owed is built one
 // frame later instead of never.
 //
-// What is deliberately not done. `FUN_140679510` would additionally retire
+// What is deliberately not done. `FUN_14067a810` would additionally retire
 // `GameMan+0xbb8`/`+0xbc0` and write `saveState = 0`. That accounting is not replicated
 // here: `saveState` is already 0 by the predicate above, and `+0xbb8` is read by that
 // function alone -- the next genuine save's own poll retires it. Writing GameMan from an
@@ -73,24 +73,24 @@ pub const GAME_MAN_SAVE_STATE_IDLE: u32 = 0;
 // `GameMan.saveState` is a MUTEX, not a progress bar -- and reading it as a progress bar is
 // what killed saving after a Load Character reload in the first place.
 //
-// There is one SL device (the `FUN_140e6e060` singleton) and one `saveState` word arbitrating
+// There is one SL device (the `FUN_140e715c0` singleton) and one `saveState` word arbitrating
 // it. Every submit builder refuses unless it reads idle, and each stamps its own value on the
-// way out (1.16.2, shift 0):
+// way out (read from the 1.16.2 decompile; the names are the 2.7.2.0 functions):
 //
-//   `FUN_14067b940` / `b750` / `b570` / `bc10`  save    -> saveState = 1, fills +0x10 and +0x20
-//   `FUN_14067b4e0`                             preview -> saveState = 1, same two fields
-//   `FUN_14067b1a0`                             load    -> saveState = 2, fills +0x18 and +0x20
+//   `FUN_14067cc40` / `ca50` / `c870` / `cf10`  save    -> saveState = 1, fills +0x10 and +0x20
+//   `FUN_14067c7e0`                             preview -> saveState = 1, same two fields
+//   `FUN_14067c4a0`                             load    -> saveState = 2, fills +0x18 and +0x20
 //
 // and `CS::MoveMapStep::DoSaveStuff` then picks exactly one pump by that value: `IsSaveState1()`
-// -> `FUN_140679510` (which polls `FUN_140e6e430`, the save side), else `IsSaveState2()` ->
-// `FUN_140679180` (which polls `FUN_140e6e080`, the load side). The two are never both run.
+// -> `FUN_14067a810` (which polls `FUN_140e71990`, the save side), else `IsSaveState2()` ->
+// `FUN_14067a480` (which polls `FUN_140e715e0`, the load side). The two are never both run.
 //
 // They are not interchangeable, and the load-side one is actively destructive against a save:
-// `FUN_140e6e080` opens with `if (iodev+0x18 == 0 || iodev+0x20 == 0) return 4;` -- and +0x18 is
+// `FUN_140e715e0` opens with `if (iodev+0x18 == 0 || iodev+0x20 == 0) return 4;` -- and +0x18 is
 // the load's buffer, so during a save it is 0 and the poll returns 4 having released nothing.
-// `FUN_140679180` then writes `saveState = 0` for any answer that is not 0 or 1. That single
+// `FUN_14067a480` then writes `saveState = 0` for any answer that is not 0 or 1. That single
 // write is the whole bug: `IsSaveState1()` goes false, `DoSaveStuff` stops polling the save,
-// `FUN_140e6e430` -- the only save-side road to the release `FUN_140e6f200` -- is never called
+// `FUN_140e71990` -- the only save-side road to the release `FUN_140e72760` -- is never called
 // again, and +0x10/+0x20 stay latched for the life of the process. That is precisely the
 // orphan the block above repairs, arriving with `saveState` already 0 exactly as measured.
 //
@@ -99,16 +99,16 @@ pub const GAME_MAN_SAVE_STATE_IDLE: u32 = 0;
 // the engine that can cost the user every save they make afterwards.
 // ============================================================================
 
-/// `GameMan+0xb80` == 1: a save (`FUN_14067b940`/`b750`/`b570`/`bc10`) or the preview read
-/// (`FUN_14067b4e0`) owns the device through `iodev+0x10` + `+0x20`. Pumped by `FUN_140679510` /
-/// `FUN_1406794b0` alone.
+/// `GameMan+0xb80` == 1: a save (`FUN_14067cc40`/`ca50`/`c870`/`cf10`) or the preview read
+/// (`FUN_14067c7e0`) owns the device through `iodev+0x10` + `+0x20`. Pumped by `FUN_14067a810` /
+/// `FUN_14067a7b0` alone.
 pub const GAME_MAN_SAVE_STATE_SAVE_OWNS: u32 = 1;
 
-/// `GameMan+0xb80` == 2: a load (`FUN_14067b1a0`) owns the device through `iodev+0x18` + `+0x20`.
-/// This is the only value under which `FUN_140679180` may be called.
+/// `GameMan+0xb80` == 2: a load (`FUN_14067c4a0`) owns the device through `iodev+0x18` + `+0x20`.
+/// This is the only value under which `FUN_14067a480` may be called.
 pub const GAME_MAN_SAVE_STATE_LOAD_OWNS: u32 = 2;
 
-/// `GameMan+0xb80` == 3: the load's payload is resident. `FUN_140679180` reaches it by answering
+/// `GameMan+0xb80` == 3: the load's payload is resident. `FUN_14067a480` reaches it by answering
 /// 0, so a drain that polls after residency is polling a lane that is already finished.
 pub const GAME_MAN_SAVE_STATE_LOAD_RESIDENT: u32 = 3;
 
@@ -118,7 +118,7 @@ pub fn sl_device_is_free(save_state: Option<u32>) -> bool {
     save_state == Some(GAME_MAN_SAVE_STATE_IDLE)
 }
 
-/// May the load-side poll `FUN_140679180` be run right now?
+/// May the load-side poll `FUN_14067a480` be run right now?
 ///
 /// Only when a load we submitted actually owns the device. Every other answer is a refusal with
 /// its own reason: Idle has no request to advance; `SAVE_OWNS` is the destructive case above;
@@ -173,7 +173,7 @@ pub fn save_orphan_outcome_label(code: usize) -> &'static str {
 /// * an unreadable device or `GameMan` proves nothing, so it is not an orphan;
 /// * `save_content == 0` means there is no save request to release;
 /// * `load_content != 0` or `file_cap != 0` means the load side or a deferred build also
-///   owns this device, and `FUN_140e6f200` would free their objects too;
+///   owns this device, and `FUN_140e72760` would free their objects too;
 /// * `saveState != IDLE` means the game still owns the transaction -- 1 is a save in
 ///   flight that `DoSaveStuff` is polling, and 2/3/7 are load phases.
 pub fn save_request_is_orphaned(slot: Option<SlRequestSlot>, save_state: Option<u32>) -> bool {
@@ -186,7 +186,7 @@ pub fn save_request_is_orphaned(slot: Option<SlRequestSlot>, save_state: Option<
         && save_state == GAME_MAN_SAVE_STATE_IDLE
 }
 
-/// `FUN_140e6e430`'s resolved, prologue-verified address for the running build.
+/// `FUN_140e71990`'s resolved, prologue-verified address for the running build.
 ///
 /// Stored by both installers. Armed runs also detour this address, and the drain then
 /// prefers the trampoline in [`ORIG_POLL_SAVE_STATUS`] so the repair cannot be re-read by
@@ -268,7 +268,7 @@ pub fn drain_orphaned_save_request(origin: &str) -> usize {
         if should_report(unavailable, false) {
             log_message(format_args!(
                 "suppress: BUG -- {origin} found a FORGOTTEN save request (#{detections}) but \
-                 `FUN_140e6e430` was never resolved for this build, so nothing can release it. \
+                 `FUN_140e71990` was never resolved for this build, so nothing can release it. \
                  Every save in this process stays refused. Slot: {}",
                 describe_slot(before)
             ));
@@ -295,8 +295,8 @@ pub fn drain_orphaned_save_request(origin: &str) -> usize {
             log_message(format_args!(
                 "suppress: {origin} released a FORGOTTEN save request (release #{released} of \
                  {drains} drains, {detections} detections) -- the game's own poll \
-                 `FUN_140e6e430` returned status {status} (0 = the write had succeeded) and its \
-                 terminal arm ran `FUN_140e6f200`. Before {}, after {}. The submit builders' \
+                 `FUN_140e71990` returned status {status} (0 = the write had succeeded) and its \
+                 terminal arm ran `FUN_140e72760`. Before {}, after {}. The submit builders' \
                  `iodev+0x10 == 0 && iodev+0x20 == 0` precondition is open again, so the \
                  request the dispatcher is still holding builds on the next frame and saving \
                  works for the rest of this process",
@@ -379,7 +379,7 @@ pub fn save_orphan_slot_after() -> Option<SlRequestSlot> {
 //
 // `iodev+0x20` is shared (see `SlRequestSlot::admits_a_load`), so the orphan above does not
 // merely kill saving -- it kills loading, through a completely different door. The load
-// builder (`FUN_140e6f430`/`FUN_140e6f5b0`, reached from `FUN_14067b1a0`) opens with
+// builder (`FUN_140e72990`/`FUN_140e72b10`, reached from `FUN_14067c4a0`) opens with
 // `iodev+0x18 == 0 && iodev+0x20 == 0` on every branch and returns 0 without releasing
 // anything. Its caller then leaves `GameMan+0xb80` at idle, so a caller that armed a drain
 // on the strength of `saveState == 0` waits for `b80 == RESIDENT(3)` on a request that was
@@ -410,11 +410,11 @@ pub fn save_orphan_slot_after() -> Option<SlRequestSlot> {
 // The fix is not a timer and not a per-frame sweep. It is the other point of use: the device
 // has exactly two consumers, and each one now checks the precondition it is about to be
 // judged against, at the moment it is about to submit, and asks the game to release what it
-// finds. The save lane checks it in `observe_dispatch` (inside `FUN_140afb880`, the game's
+// finds. The save lane checks it in `observe_dispatch` (inside `FUN_140afd060`, the game's
 // own dispatcher, on the game's own frame); the load lane checks it here, called from the
 // switch reload's submit gate. Neither invents a schedule, neither writes a device field,
-// and the only thing that frees anything is still `FUN_140e6f200` reached through the game's
-// own `FUN_140e6e430` terminal arm. A wedge with neither a later save nor a later load harms
+// and the only thing that frees anything is still `FUN_140e72760` reached through the game's
+// own `FUN_140e71990` terminal arm. A wedge with neither a later save nor a later load harms
 // nothing until one of the two arrives -- and both arrivals now repair it.
 // ============================================================================
 
@@ -636,7 +636,7 @@ mod save_orphan_drain_tests {
         ));
         // A save the game is still polling. Freeing this races the SL worker's own write.
         assert!(!save_request_is_orphaned(Some(orphan), Some(1)));
-        // Load phases (reading / resident / the 7 the quit path uses). `FUN_140e6f200`
+        // Load phases (reading / resident / the 7 the quit path uses). `FUN_140e72760`
         // frees both sides, so a poll fired here takes the load's payload away too.
         for load_phase in [2, 3, 7] {
             assert!(
@@ -675,8 +675,8 @@ mod save_orphan_drain_tests {
 
     /// The write that creates the orphan, stated as a rule a caller can be held to.
     ///
-    /// `FUN_140679180` writes `saveState = 0` for any poll answer that is not 0 or 1, and
-    /// `FUN_140e6e080` answers 4 on the spot whenever `iodev+0x18 == 0` -- which is every frame
+    /// `FUN_14067a480` writes `saveState = 0` for any poll answer that is not 0 or 1, and
+    /// `FUN_140e715e0` answers 4 on the spot whenever `iodev+0x18 == 0` -- which is every frame
     /// a save owns the device. So running the load-side poll under `SAVE_OWNS` converts a live
     /// save into exactly the `save_request_is_orphaned` signature above, permanently. The
     /// predicate must therefore refuse that state, and refuse the two states with nothing to
@@ -697,7 +697,7 @@ mod save_orphan_drain_tests {
         }
     }
 
-    /// A submit offered to an owned device is refused by the game anyway (`FUN_14067b1a0` and
+    /// A submit offered to an owned device is refused by the game anyway (`FUN_14067c4a0` and
     /// every save builder open with a `saveState == 0` test), so the caller's own gate has to
     /// agree with that test exactly -- including treating an unreadable sample as not-free.
     #[test]

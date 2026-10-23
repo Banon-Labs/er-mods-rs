@@ -33,33 +33,31 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # Commit of vswarte/fromsoftware-rs the workspace is developed against.
-  # The root crate uses `../fromsoftware-rs` path dependencies, so the
-  # workspace cannot even be loaded by cargo without this sibling checkout.
+  # Commit of the fromsoftware-rs sibling the workspace is developed against,
+  # on the fork named by FROMSOFTWARE_RS_REMOTE below. The root crate uses
+  # `../fromsoftware-rs` path dependencies, so the workspace cannot even be
+  # loaded by cargo without this sibling checkout.
   #
-  # THIS PIN DECIDES WHICH GAME BUILDS THE DLLs SURVIVE, and it is not a
-  # taste question. Every `T::instance_ptr()` in this workspace -- 63 sites
-  # across 17 crates, and the ONLY way `er-death-persist` and
-  # `mushroom-man-runtime` reach the game at all -- resolves through
-  # upstream's own `crates/eldenring/src/rva/` bundle, selected by the
-  # running image's PE version. `er-game-base`'s 1.17 gate is not on that
-  # path and cannot cover it. Upstream's `rva::get()` ends in
-  # `unwrap_or_else(|e| panic!("{e}"))`, so an unrecognised build is a PANIC
-  # inside a game-loaded cdylib on the first singleton access, not a refusal.
+  # The pin does not decide which game build the workspace supports. That is
+  # `SUPPORTED_FILE_VERSION` in crates/er-game-base/src/game_build.rs, 2.7.2.0
+  # only, and every game address is refused on any other build
+  # (docs/game-build.md). The pin decides something narrower that still has
+  # to agree with it: every `T::instance_ptr()` in this workspace resolves
+  # through the sibling's own `crates/eldenring/src/rva/` bundle, selected by
+  # the running image's PE version, and not through er-game-base. Its
+  # `rva::get()` ends in `unwrap_or_else(|e| panic!("{e}"))`, so a build the
+  # bundle does not list is a panic inside a game-loaded cdylib on the first
+  # singleton access, with no message in any log. The bundle at this pin
+  # must therefore list the supported build, and it moves in the same change
+  # as SUPPORTED_FILE_VERSION.
   #
-  # The previous pin, `9028518` ("Bump to 0.14.0"), predates the 1.17
-  # bundle by two commits: at that revision `ERGameVersion::from_lang_version`
-  # knows only `2.6.2.0` and `2.6.2.1`, and the installed game has been
-  # `2.7.0.0` since 2026-08-27. The local sibling checkouts were already
-  # past it, so local builds worked and only a CI-built artifact carried the
-  # panic -- the split where the released DLL differs from the tested one.
-  #
-  # `1027d24` is the local sibling checkout's own revision. It adds
-  # `rva/rva_ww_270.rs` (`4284a05`) and fixes an ambiguous `cs_system_step`
-  # pattern that picked a different global on 2.7.0.0 (`1027d24`), while
-  # KEEPING `2.6.2.0`/`2.6.2.1`. Do not advance this to upstream `main`
-  # without re-verifying: `acb2a19` DELETES `rva_ww_270.rs` and rewrites
-  # `rva_ww.rs`/`rva_jp.rs` as 1.17-only, dropping 1.16.2 support entirely.
+  # `4612952` ("feat(eldenring): RVAs for game version 2.7.2.0", fork branch
+  # feat/eldenring-2.7.0.0-rvas) lists 2.7.2.0 (`rva_ww.rs`), 2.7.1.0
+  # (`rva_ww_2710.rs`) and JP 2.7.1.1 (`rva_jp.rs`). The two older arms are
+  # not supported builds: on them `instance_ptr()` would resolve while
+  # er-game-base refuses every other game address. Upstream also has 2.7.2.0,
+  # but after a licence change the fork does not take, so do not advance this
+  # to upstream `main`.
   FROMSOFTWARE_RS_REV: 4612952a71bfbd123445c805c0c7145e66e80229
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON. This step used to clone
   # vswarte/fromsoftware-rs unconditionally, and from 2026-08-30 18:31 that made
@@ -74,7 +72,8 @@ env:
   # Point this back at https://github.com/vswarte/fromsoftware-rs.git the moment
   # FROMSOFTWARE_RS_REV names a commit that is merged upstream. It is a clone URL
   # for a read-only checkout and nothing else; the rev pin above still decides
-  # which game builds the DLLs survive, and it is unchanged.
+  # which game builds `instance_ptr()` resolves on, and it is unchanged. The
+  # current pin, `4612952`, is likewise on the fork and not on upstream `main`.
   FROMSOFTWARE_RS_REMOTE: https://github.com/chozandrias76/fromsoftware-rs.git
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.

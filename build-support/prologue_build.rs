@@ -38,10 +38,10 @@
 //
 // The two halves of an image's identity, and why they are not the same question:
 //
-// * **Which build is this file?** A game image answers by its NAME: `eldenring-deobf.bin` *is*
-//   1.16.2 and `eldenring-deobf-1.17.bin` *is* 1.17, because this workspace produces them and
-//   names them. `ersc.dll` cannot answer that way -- it is third-party, it always has the same
-//   file name, and the user replaces it on their own schedule -- so it answers by CONTENT: the
+// * **Which build is this file?** A game image answers by its NAME: `eldenring-deobf-1.17.2.bin`
+//   *is* FileVersion 2.7.2.0, because this workspace produces it and names it. `ersc.dll` cannot
+//   answer that way -- it is third-party, it always has the same file name, and the user replaces
+//   it on their own schedule -- so it answers by CONTENT: the
 //   `Seamless Co-op vX.Y.Z by Yui` banner Seamless builds into its own image.
 //   [`ERSC_SUPPORTED_VERSION`] is the recorded answer, and it is the single value to change when
 //   this workspace moves to a new Seamless build.
@@ -154,40 +154,20 @@ const ERSC_VERSION_BANNER_LIMIT: usize = 128;
 /// file can ground-truth it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Image {
-    /// `eldenring.exe` 1.16.2. Ground truth is `eldenring-deobf.bin`, a flat image at base
-    /// `0x140000000` in which file offset == RVA for every section.
-    EldenRing,
-    /// `eldenring.exe` 1.17 -- the build the game has actually been since 2026-08-27. Ground
-    /// truth is `eldenring-deobf-1.17.bin`, flat in the same way.
+    /// `eldenring.exe` FileVersion 2.7.2.0, the one game build this workspace supports (installed
+    /// 2026-10-20). Ground truth is `eldenring-deobf-1.17.2.bin`, a de-Arxan'd flat image at base
+    /// `0x140000000` in which file offset == rva for every section.
     ///
-    /// # Why the version has to be part of the spec
+    /// # Why the build is part of the name
     ///
-    /// A prologue constant is compared against the bytes of the running game, and 1.17 moved
-    /// things these bytes encode. The two save-request retractions are the clearest case: their
-    /// whole body is `mov rax,[rip+disp]; mov byte [rax+0xb72],0; ret`, and `disp` reaches the
-    /// GameMan singleton, which 1.17 moved by `+0x4070`. The instructions did not change and the
-    /// field offset did not change, but four bytes of the encoding did -- so a signature
-    /// generated against 1.16.2 fails its own byte check on 1.17, `call_verified_retract` fails
-    /// closed, and the retraction silently never fires.
-    ///
-    /// Mapping the RVA does not fix that. The address translation gets the call to the right
-    /// place; the check that decides whether to make the call is comparing against bytes from
-    /// the previous build. Both halves have to move, which is why the version is named here
-    /// rather than assumed.
-    EldenRing1170,
-    /// `eldenring.exe` 1.17.1 (FileVersion 2.7.1.0), the installed build since 2026-09-08. Ground
-    /// truth is `eldenring-deobf-1.17.1.bin`, flat like the other two.
-    ///
-    /// # When a spec names this rather than [`Image::EldenRing1170`]
-    ///
-    /// For a function at or above rva `0xafefe9`, which 1.17.1 moved by `0x70` while every
-    /// `.data` global stayed put. A RIP-relative operand in such a prologue therefore encodes a
-    /// different displacement on each build, and when the prologue also opens with MSVC's
-    /// redundant REX prefix the generator cannot mask that field (a `db` declines re-encoding, so
-    /// the mask is every byte compared). The bytes are then right for one build only, and naming
-    /// that build here is what lets ground truth say so. er-render-scale's dynamic resolution
-    /// update (`0x141b2e9b0`, `40 53 ..` then `mov rax,[rip+..]`) is the first such spec.
-    EldenRing1171,
+    /// A prologue constant is compared against the bytes of the running game, and a patch moves
+    /// things those bytes encode even where the instructions do not change. The two save-request
+    /// retractions are the clearest case: their whole body is `mov rax,[rip+disp]; mov byte
+    /// [rax+0xb72],0; ret`, and when 1.17 moved the GameMan singleton four bytes of that encoding
+    /// changed, so a pin generated against the earlier build failed its own byte check and the
+    /// retraction silently never fired. Naming the build makes the next patch a compile-visible
+    /// re-measurement rather than a pin that quietly describes the previous image.
+    EldenRing2720,
     /// `ersc.dll` **v2.0.1**, the one build this workspace supports. The version is named
     /// rather than assumed: `ersc.dll` is third-party, always has the same file name, and the
     /// user replaces it on their own schedule, so [`Image::locate`] reads each candidate and
@@ -200,7 +180,7 @@ pub enum Image {
 impl Image {
     pub fn base(self) -> u64 {
         match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => 0x1_4000_0000,
+            Self::EldenRing2720 => 0x1_4000_0000,
             Self::Ersc201 => 0x1_8000_0000,
         }
     }
@@ -222,18 +202,14 @@ impl Image {
 
     fn label(self) -> &'static str {
         match self {
-            Self::EldenRing => "eldenring-deobf.bin",
-            Self::EldenRing1170 => "eldenring-deobf-1.17.bin",
-            Self::EldenRing1171 => "eldenring-deobf-1.17.1.bin",
+            Self::EldenRing2720 => "eldenring-deobf-1.17.2.bin",
             Self::Ersc201 => "ersc.dll (Seamless Co-op v2.0.1)",
         }
     }
 
     fn env_override(self) -> &'static str {
         match self {
-            Self::EldenRing => "ER_DEOBF_BIN",
-            Self::EldenRing1170 => "ER_DEOBF_BIN_1170",
-            Self::EldenRing1171 => "ER_DEOBF_BIN_1171",
+            Self::EldenRing2720 => "ER_DEOBF_BIN_1172",
             // Two variables, because they list files to consider and the version marker
             // decides whether a file answers for this spec at all. Naming the version in the
             // variable instead would make the caller assert the very thing this code is able
@@ -247,11 +223,11 @@ impl Image {
     ///
     /// `None` for the game images, and that is not a gap: they are version-named, so the file the
     /// build script opened has already answered the question by being called
-    /// `eldenring-deobf.bin` rather than `eldenring-deobf-1.17.bin`. A flat dump carries no
+    /// `eldenring-deobf-1.17.2.bin`. A flat dump carries no
     /// version resource to read anyway.
     fn supported_version(self) -> Option<&'static str> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => None,
+            Self::EldenRing2720 => None,
             Self::Ersc201 => Some(ERSC_SUPPORTED_VERSION),
         }
     }
@@ -261,7 +237,7 @@ impl Image {
     /// `ersc.dll` can answer; the game dumps have nothing to read.
     fn declared_version(self, image: &[u8]) -> Option<String> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => None,
+            Self::EldenRing2720 => None,
             Self::Ersc201 => ersc_declared_version(image),
         }
     }
@@ -269,10 +245,9 @@ impl Image {
     /// The one-line command that re-measures this image's addresses by hand.
     fn remeasure_hint(self) -> &'static str {
         match self {
-            Self::EldenRing | Self::EldenRing1170 => {
-                "python3 scripts/map-rvas-1162-to-1170.py <va>"
+            Self::EldenRing2720 => {
+                "disassemble eldenring-deobf-1.17.2.bin at the VA (scripts/disas-deobf.sh) and re-pin"
             }
-            Self::EldenRing1171 => "python3 scripts/map-rvas-1170-to-1171.py <va>",
             // uv, because the body mapping needs capstone and there is no system pip here.
             Self::Ersc201 => "uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
         }
@@ -282,7 +257,7 @@ impl Image {
     /// downgrades ground truth to a warning rather than breaking the build.
     fn locate(self, manifest_dir: &Path) -> Option<PathBuf> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
+            Self::EldenRing2720 => {
                 if let Some(explicit) = env::var_os(self.env_override()) {
                     let path = PathBuf::from(explicit);
                     return path.is_file().then_some(path);
@@ -317,9 +292,7 @@ impl Image {
     fn bytes_at(self, image: &[u8], va: u64, len: usize) -> Option<Vec<u8>> {
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
-                usize::try_from(rva).ok()?
-            }
+            Self::EldenRing2720 => usize::try_from(rva).ok()?,
             Self::Ersc201 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
         };
         image
@@ -361,7 +334,7 @@ impl Image {
         // would abort a build script over a file this repo does not control.
         let ranges: Vec<(usize, usize, u64)> = match self {
             // Flat: file offset == RVA for every section, so one range covers the image.
-            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
+            Self::EldenRing2720 => {
                 vec![(0, image.len(), 0)]
             }
             Self::Ersc201 => pe_sections(image)
@@ -768,8 +741,9 @@ fn assemble(spec: &PrologueSpec, body: Assemble) -> Assembled {
 ///   pin into "some instruction is here", which is not a pin at all.
 /// * **Register-base memory displacements** (`[rax+0xb72]`). They are struct field offsets, and
 ///   they are the only thing distinguishing `SAVE_REQUEST_RETRACT_B72_SIG` from `..._B73_SIG`:
-///   masking them would let each of those two pins accept the other function. `map-rvas`'s
-///   search matcher masks them because a search wants candidates; a gate wants identity.
+///   masking them would let each of those two pins accept the other function. The signature
+///   search that carried 1.16.2 addresses to 1.17 masked them because a search wants candidates;
+///   a gate wants identity.
 /// * **Immediates** (`cmp [rax+0xbc4], 2`) and **relative branch targets** (`jne +0xa`). A branch
 ///   inside the checked window is relative to the function's own layout, so it does not move when
 ///   the function moves -- it survived 1.17 unchanged, and it is evidence worth keeping.
@@ -1260,9 +1234,7 @@ pub fn generate(specs: &[(PrologueSpec, Assemble)], out_file: &str) {
 pub fn declare_rerun(build_script_relative_support_path: &str) {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={build_script_relative_support_path}");
-    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN");
-    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1170");
-    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1171");
+    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1172");
     println!("cargo:rerun-if-env-changed=ER_ERSC_DLL");
     println!("cargo:rerun-if-env-changed=ME3_STEAM_DIR");
 }

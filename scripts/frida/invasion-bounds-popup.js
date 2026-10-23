@@ -1,7 +1,7 @@
 // Which button did the player press in the invasion-bounds popup?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `FUN_1407c2ab0` is the goods popup dispatcher: it switches on the item's `opmeMenuType` and,
 // for the invasion fingers, raises either the bounds prompt or the cancel prompt through

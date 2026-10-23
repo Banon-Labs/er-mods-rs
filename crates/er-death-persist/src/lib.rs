@@ -63,7 +63,7 @@ use std::{
     },
 };
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::log::{append_line, game_directory_path};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::UnionFn;
@@ -102,14 +102,14 @@ const NO_CYCLE_OCCURRENCE: i32 = -1;
 // The getters' addresses and window offsets, shared with build.rs; see `getter_sites.rs`.
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 // The windows themselves, assembled by build.rs from named instructions and checked against the
-// 1.17.1 image. Byte-identical on 2.7.2.0, and read from the live 2.7.2.0 process on 2026-10-22.
+// 2.7.2.0 image, and read from the live 2.7.2.0 process on 2026-10-22.
 include!(concat!(env!("OUT_DIR"), "/generated_getter_windows.rs"));
 
 /// A typed param getter `fn(out, id)` this DLL answers for, and the bytes that identify it.
 struct Getter {
     name: &'static str,
-    /// The entry on 1.17.1, carried to the running build by `carry_1171_rva`.
-    rva_1171: usize,
+    /// The entry on 2.7.2.0, used only when the running build is that one.
+    rva: usize,
     /// Offset of the row pointer in the getter's out struct.
     row_slot: usize,
     /// `(offset from the entry, window)` pairs that must all match before anything is hooked:
@@ -119,7 +119,7 @@ struct Getter {
 
 const SP_EFFECT_GETTER: Getter = Getter {
     name: "GetSpEffectParam",
-    rva_1171: GET_SP_EFFECT_PARAM_1171_RVA,
+    rva: GET_SP_EFFECT_PARAM_RVA,
     row_slot: SP_EFFECT_OUT_ROW_SLOT,
     pins: &[
         (GETTER_FRAME_WINDOW_OFFSET, SP_EFFECT_FRAME_WINDOW),
@@ -133,7 +133,7 @@ const SP_EFFECT_GETTER: Getter = Getter {
 
 const SP_EFFECT_VFX_GETTER: Getter = Getter {
     name: "GetSpEffectVfxParam",
-    rva_1171: GET_SP_EFFECT_VFX_PARAM_1171_RVA,
+    rva: GET_SP_EFFECT_VFX_PARAM_RVA,
     row_slot: SP_EFFECT_VFX_OUT_ROW_SLOT,
     pins: &[
         (GETTER_FRAME_WINDOW_OFFSET, SP_EFFECT_VFX_FRAME_WINDOW),
@@ -358,12 +358,12 @@ fn hook_getter(
     handler: UnionFn,
     orig: &'static AtomicUsize,
 ) -> Result<usize, String> {
-    let rva = carry_1171_rva(getter.rva_1171).ok_or_else(|| {
+    let rva = is_supported_build().then_some(getter.rva).ok_or_else(|| {
         format!(
-            "{}: no carry of 1.17.1 rva 0x{:x} to {:?}",
+            "{}: 2.7.2.0 rva 0x{:x} refused -- {}",
             getter.name,
-            getter.rva_1171,
-            game_file_version()
+            getter.rva,
+            describe_build()
         )
     })?;
     let base = game_module_base().map_err(|error| format!("{}: {error:?}", getter.name))?;

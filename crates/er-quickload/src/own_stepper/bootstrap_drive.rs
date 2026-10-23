@@ -56,18 +56,22 @@ pub(crate) fn own_stepper_s2_elapsed_ms() -> u64 {
     phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS)
 }
 // The 2026-06-18 direct-build drive (`own_stepper_direct_build`) stood here: it constructed a
-// CS::ProfileLoadDialog straight from dialog_factory 0x14081ead0 at the open menu, bypassing
+// CS::ProfileLoadDialog straight from dialog_factory (2.7.2.0 0x14081fe00) at the open menu, bypassing
 // the input-gated router_this/d180-on-confirm layer, then handed off to stage 2. Its only
 // caller was the `direct_build_enabled()` branch in
 // product_core_own_stepper/fallback_drives.rs, and that gate has returned a literal `false`
 // since it was written, so the build never ran. Deleted with the branch rather than left as an
 // orphan that reads like a live dialog-construction path.
 /// Multi-frame cold char-mount drive (gated, save-safe). Sequence (worker registered): build+register
-/// the FD4 stream worker (0xb0a980 stub) so the scheduler ticks it and drains the save-IO read; set
-/// the slot; Preview 0x67b4e0 (b80=1 + starts the iodev read); poll 0x679180 each frame until
+/// the FD4 stream worker (0xb0c550 stub) so the scheduler ticks it and drains the save-IO read; set
+/// the slot; Preview 0x67c7e0 (b80=1 + starts the iodev read); poll 0x67a480 each frame until
 /// GameMan+0xb80==3 (the make-or-break -- the registered+ticked worker draining the read); then
-/// deserialize 0x67b290 (mounts GameMan+0xc30=real map + applies the char to PlayerGameData).
+/// deserialize 0x67c590 (mounts GameMan+0xc30=real map + applies the char to PlayerGameData).
 /// No SetState / no save write. dump_load_correctness verifies the mounted char.
+///
+/// Addresses in this doc are 2.7.2.0 rvas. The RE notes inside the body cite 1.16.2 addresses
+/// (the build they were measured on) unless they say 2.7.2.0; the code resolves only the named
+/// `_RVA` constants, which are 2.7.2.0.
 pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
     const PHASE_INIT: usize = 0;
     const PHASE_LANE: usize = 1;
@@ -86,7 +90,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
     const WAIT_INC: usize = 1;
     static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
     pub(crate) use er_telemetry_core::counters::MOUNT_WAITS;
-    // Fire the warm FD4 worker-kick (0x67b4e0) at most once per process.
+    // Fire the warm FD4 worker-kick (2.7.2.0 0x67c7e0) at most once per process.
     pub(crate) use er_telemetry_core::counters::WARM_KICK_FIRED;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == null {
@@ -121,23 +125,24 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             return;
         }
         // (-2) sign-in force (bd b80-ROOTCAUSE-cold-no-user-signin). The SaveLoad2 storage-select op
-        // ctor (0x14240f1b0) builds its runnable only if the sign-in check returns true and the user
+        // ctor (1.16.1 dump 0x14240f1b0) builds its runnable only if the sign-in check returns true and the user
         // index is <= 3; cold (no signed-in user) both fail -> the op is null and the load FSM parks
         // at idx 0x16 (the b80 wall). Patch the two gate fns (deobf-verified live entries) so the
         // cold path loads as if signed in as user 0. Save-safe (in-memory code patch). Done here, in
         // PHASE_INIT, before the submit so the select op the load triggers sees the patched gates.
         apply_signin_force(base);
-        // (-1.5) source probe (read-only) for a future controlled public-requestLoad (0x14240ac00):
-        // the dead load builder reads source globals that may be invalid cold (it crashed). Before
-        // ever calling requestLoad, log the candidate sources so we know a valid one: SLLoadContent
-        // *0x143d87358, the main heap allocator *0x143d872e0, and owner+8 (what the dead builder
-        // passed as the requestLoad source). Pure reads -- no calls into risky fns.
+        // (-1.5) source probe (read-only) for a future controlled public-requestLoad (1.16.2
+        // 0x14240ac00): the dead load builder reads source globals that may be invalid cold (it
+        // crashed). Before ever calling requestLoad, log the candidate sources so we know a valid
+        // one: SLLoadContent *0x143d8e3f8, the main heap allocator *0x143d8e380 (2.7.2.0), and
+        // owner+8 (what the dead builder passed as the requestLoad source). Pure reads -- no calls
+        // into risky fns.
         //
-        // 0x3d872e0 was named SLLOAD_SRC2_RVA here, which read as a save-load-specific "second
-        // source". It is not: the 1.16.2 dump shows GLOBAL_MainHeapAllocator, 1821 xrefs across
+        // The allocator global was named SLLOAD_SRC2_RVA here, which read as a save-load-specific
+        // "second source". It is not: the 1.16.2 dump shows GLOBAL_MainHeapAllocator, 1821 xrefs across
         // CSTaskImp/CSWindowImp/CSEzWork, and GameMan::WriteSaveToSlot derefs it as
         // `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned`. Renamed 2026-08-01.
-        const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
+        const SLLOADCONTENT_SRC_RVA: usize = 0x3d8e3f8;
         let src1 = unsafe {
             safe_read_usize(er_game_base::mem::game_data_addr(
                 base,
@@ -162,13 +167,13 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             null
         };
         append_autoload_debug(format_args!(
-            "cold-char-mount: SOURCE-PROBE SLLoadContent[*0x143d87358]=0x{src1:x} src2[*0x143d872e0]=0x{src2:x} owner=0x{owner_probe:x} owner8=0x{owner8:x} (non-null source needed for a safe public requestLoad 0x14240ac00)"
+            "cold-char-mount: SOURCE-PROBE SLLoadContent[*rva 0x{SLLOADCONTENT_SRC_RVA:x}]=0x{src1:x} src2[*rva 0x{GLOBAL_MAIN_HEAP_ALLOCATOR_RVA:x}]=0x{src2:x} owner=0x{owner_probe:x} owner8=0x{owner8:x} (non-null source needed for a safe public requestLoad)"
         ));
         // SLSYS-probe (read-only): is the SaveLoad2 SLSystemImpl + its session manager built cold? If
         // the session manager (sysimpl+0x8) is NULL, requestLoad derefs null -> that explains the
         // off-thread crash, and the narrow menu-free fix is to call SaveLoad2 initialize first (build
         // the manager) before any load. If it's already built+ready (sysimpl+0x19!=0), the crash is a
-        // deeper threading issue and the synthetic path is a real dead end. *0x144852f88 = SLSystemImpl
+        // deeper threading issue and the synthetic path is a real dead end. *0x14485a0b8 (2.7.2.0) = SLSystemImpl
         // ptr; +0x8 = SLSessionManager; +0x10 = device/result table; +0x19 = manager-ready flag.
         // This file had the identity right all along; `constants.rs` called the same address
         // an FD4 IO worker manager until 2026-08-01. Ghidra confirms this reading.
@@ -191,15 +196,15 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             (null, null, 0xff)
         };
         append_autoload_debug(format_args!(
-            "cold-char-mount: SLSYS-PROBE SLSystemImpl[*0x144852f88]=0x{sysimpl:x} sessionMgr[+0x8]=0x{sl_mgr:x} table[+0x10]=0x{sl_tbl:x} ready[+0x19]={sl_ready} (sessionMgr=0 => requestLoad null-derefs = need SaveLoad2 initialize first = NARROW menu-free fix; built+ready => deeper dead end)"
+            "cold-char-mount: SLSYS-PROBE SLSystemImpl[*rva 0x{SLSYSTEMIMPL_PTR_RVA:x}]=0x{sysimpl:x} sessionMgr[+0x8]=0x{sl_mgr:x} table[+0x10]=0x{sl_tbl:x} ready[+0x19]={sl_ready} (sessionMgr=0 => requestLoad null-derefs = need SaveLoad2 initialize first = NARROW menu-free fix; built+ready => deeper dead end)"
         ));
         // (-1) Set the save-file path/name on the container so the device read returns slot N's real
-        // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 first (reads
+        // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140679d50 (2.7.2.0) first (reads
         // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
         // container+0x94, sets GameMan+0xe70=1) before the load. The prior cold attempt skipped it,
         // so the device read an empty buffer (deserialize gave c30=0xffffffff + garbage char).
         // Save-safe (sets a path + reads metadata; No save write).
-        const SLOT_MGR_PEEK_RVA: usize = 0x678a50;
+        const SLOT_MGR_PEEK_RVA: usize = 0x679d50;
         let peek: unsafe extern "system" fn() = unsafe {
             std::mem::transmute(
                 match crate::gated_game_fn(SLOT_MGR_PEEK_RVA, "SLOT_MGR_PEEK_RVA") {
@@ -215,9 +220,9 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         ));
         // (0) REFRAME (2026-06-18, REFRAME-io-subsystem-present-cold-blocker-is-just-the-active-byte):
         // the FD4 IO subsystem (pool/task/iodev) is already present + clean cold (snapshot-proven).
-        // 0x67b200 fails cold only because its slot-check 0x140261cd0 reads [ProfileSummary+8+slot]==0
-        // (the session/ProfileSummary is present). Set that byte directly via activate 0x140262250
-        // (byte[profile+slot+8]=1) so 0x67b200 passes its slot-check and submits the read onto the
+        // 2.7.2.0 0x67c500 fails cold only because its slot-check (1.16.2 0x140261cd0) reads [ProfileSummary+8+slot]==0
+        // (the session/ProfileSummary is present). Set that byte directly via activate (2.7.2.0 0x140262260)
+        // (byte[profile+slot+8]=1) so 0x67c500 passes its slot-check and submits the read onto the
         // present subsystem. Save-safe (sets an in-memory flag; the deserialize only reads the .sl2).
         const SLOT_ACTIVE_BYTE_BASE: usize = 0x8;
         let game_data_man = game_data_man_ptr_or_null();
@@ -243,7 +248,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
                 *((profile_summary + SLOT_ACTIVE_BYTE_BASE + want_slot as usize) as *const u8)
             };
             append_autoload_debug(format_args!(
-                "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so 0x67b200 slot-check 0x140261cd0 passes)",
+                "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so the LoadSaveData 0x{B80_LOAD_SAVE_DATA_INITIATOR_RVA:x} slot-check passes)",
                 er_game_base::mem::game_data_addr(
                     base,
                     PROFILE_SLOT_ACTIVATE_RVA,
@@ -252,7 +257,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             ));
         } else {
             append_autoload_debug(format_args!(
-                "cold-char-mount: ProfileSummary null (gdm=0x{game_data_man:x}) -- cannot ACTIVATE; 0x67b200 will fail its slot-check"
+                "cold-char-mount: ProfileSummary null (gdm=0x{game_data_man:x}) -- cannot ACTIVATE; LoadSaveData 0x{B80_LOAD_SAVE_DATA_INITIATOR_RVA:x} will fail its slot-check"
             ));
         }
         // (1) build + register the FD4 stream worker so the scheduler ticks it (drains the read).
@@ -369,7 +374,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             null
         };
         append_autoload_debug(format_args!(
-            "cold-char-mount: WORKER-GATE worker_mgr=0x{worker_mgr:x} noaccept[+0x19]={worker_noaccept} io_pool=0x{io_pool:x} reg_list_node=0x{reg_list_node:x} reg_list_first=0x{reg_list_first:x} reg_list_empty={} (noaccept!=0 OR list_empty => enqueue 0x14240e420 DISCARDS the read)",
+            "cold-char-mount: WORKER-GATE worker_mgr=0x{worker_mgr:x} noaccept[+0x19]={worker_noaccept} io_pool=0x{io_pool:x} reg_list_node=0x{reg_list_node:x} reg_list_first=0x{reg_list_first:x} reg_list_empty={} (noaccept!=0 OR list_empty => the enqueue DISCARDS the read)",
             reg_list_node == reg_list_first
         ));
         // Worker queue snapshot before submit (b80-device-mount-refuted-...). Compared against the
@@ -476,7 +481,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
                 0
             };
             append_autoload_debug(format_args!(
-                "cold-char-mount: SAVE-DIR VERIFY io18=0x{io18:x} dir@+0xe8 size={dir_size} cap={dir_cap} data=0x{dir_data_ptr:x} first8=0x{first8:x} (size==0/first8==0 => EMPTY dir = the cold wall: slot-3 0x142410c60 returns empty -> name-builder 0x14240d5b0 ret 0 -> code 8 -> no open)"
+                "cold-char-mount: SAVE-DIR VERIFY io18=0x{io18:x} dir@+0xe8 size={dir_size} cap={dir_cap} data=0x{dir_data_ptr:x} first8=0x{first8:x} (size==0/first8==0 => EMPTY dir = the cold wall: slot-3 returns empty -> name-builder ret 0 -> code 8 -> no open)"
             ));
         }
         // (2.5) save-directory post-submit install (bd savedir-CONFIG-lever-setter-0x14240a2a0-...).
@@ -621,20 +626,21 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         // Owner-FSM gate measurement (bd b80-owner-FSM-lifecycle-gates-2026-06-21). Runtime data
         // refuted the static "empty registry / null early-out" story: reg_count=16 (non-empty) and
         // io18/io20 (=owner+0x18/+0x20) persist non-null, so the poll's early-out is not the wall.
-        // The real bounce is inside the native FSM tick setter 0x140679180: with df0==0 it polls the
-        // owner FSM 0x140e6e080(owner); Only state-index 0x14 returns 0 (-> b80=3), any index>=2 (18
+        // The real bounce is inside the native FSM tick setter 0x14067a480: with df0==0 it polls the
+        // owner FSM (1.16.2 0x140e6e080)(owner); Only state-index 0x14 returns 0 (-> b80=3), any index>=2 (18
         // ->3, 0x19->2+teardown, 0x19... ) resets b80=0. The index comes from the pure getter
-        // 0x14240a1f0([owner+0x20]): returns 0x19 when the handle's container ([o20]) is null, else a
+        // 0x14240e1a0([owner+0x20]): returns 0x19 when the handle's container ([o20]) is null, else a
         // real node index; 0x14 only when idle-ready (container built, current-node null, deep gate 0).
         // Read the handle internals + index here while b80 is still 2, to pin the exact failing gate
         // before building any fix. All reads are fault-safe; the getter is a read-only status query.
-        const STATE_INDEX_GETTER_RVA: usize = 0x240a1f0;
+        // 2.7.2.0 addresses.
+        const STATE_INDEX_GETTER_RVA: usize = 0x240e1a0;
         const OWNER_HANDLE_CONTAINER_OFFSET: usize = 0x0;
         const OWNER_HANDLE_H10_OFFSET: usize = 0x10;
         // Not the owner FSM's field and not a handle: `GameMan + 0xdf0` is the length of the
         // `DLString<wchar_t>` inside the `FD4FilePathBase` at `GameMan + 0xdd0` (Ghidra's 1.16.2
         // `GameMan` type; the ctor's `lea rdi,[rsi+0xdd0]` at 0x14067644b / 1.17 0x14067729b).
-        // `0x140679180` spells its own gate `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`,
+        // The b80 poll (2.7.2.0 `0x14067a480`) spells its own gate `(GLOBAL_GameMan->field479_0xdd0).string.length != 0`,
         // so "df0!=0 = warm fast-path" below means "a save path is already set". A count, printed
         // in decimal -- rendered hex beside `owner=0x..`/`o20=0x..` it reads as an address.
         const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
@@ -715,7 +721,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             let lret = unsafe { loadsave(want_slot) };
             let (io10, io18, io20) = iodev_summary();
             append_autoload_debug(format_args!(
-                "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x67b200 ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
+                "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x{B80_LOAD_SAVE_DATA_INITIATOR_RVA:x} ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
                 read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET)
             ));
             MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
@@ -940,7 +946,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser path_len(gm+0xdf0)={path_len} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (path_len!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
+            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser path_len(gm+0xdf0)={path_len} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d6f108)=0x{c30_gate:x} (path_len!=0 -> 0x67c400 fast-path skips the read = empty parse). NO SetState/NO save write:"
         ));
         unsafe { dump_load_correctness(base, n) };
         // Publish the result so a STAGE2 caller that delegates here can observe completion + the

@@ -155,7 +155,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // calls a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
     // the title screen; once we have loaded into a world that stored dialog is freed (and, on every
     // character switch, freed+rebuilt). A freed object keeps its vtable, and worse, its reused
-    // vtable+8 slot can point at a valid-but-wrong game function (observed: the factory FUN_1411d10f0),
+    // vtable+8 slot can point at a valid-but-wrong game function (observed: the factory, 1.16.1 dump FUN_1411d10f0),
     // so the earlier `vtable_in_game_image` check passes and the call still derefs freed memory ->
     // access violation deep in the game (crash write_oracle_telemetry -> game+0x11d10f3). You cannot
     // safely virtual-call a maybe-freed object. So skip this GFX walk entirely once in-world: the

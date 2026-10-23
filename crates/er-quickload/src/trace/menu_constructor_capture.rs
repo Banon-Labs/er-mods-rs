@@ -71,10 +71,10 @@ unsafe fn call_cap_original(orig: &AtomicUsize, a: usize, b: usize, c: usize, d:
     unsafe { f(a, b, c, d) }
 }
 
-/// Title CSMenu controller ctor 0x1409060d0 (real prologue entry; doc's 0x9060d8 was mid-
-/// prologue): latches `router_this` (the object owning the
+/// Title CSMenu controller ctor 0x140907720 (2.7.2.0 real prologue entry; an address 8 bytes in
+/// would be mid-prologue): latches `router_this` (the object owning the
 /// selectable Continue/Load/NewGame row vector at +0x1290) when its primary vtable
-/// (runtime `base+0x2afa070`) is installed. router_this is not field-linked from the
+/// (2.7.2.0 `base+0x2aff1e0`) is installed. router_this is not field-linked from the
 /// TitleTopDialog, so this ctor capture is how the own-stepper obtains it. Pure observe +
 /// pass-through; latches the first matching controller.
 pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
@@ -108,9 +108,8 @@ pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
             MENU_ROUTER_THIS.store(this, Ordering::SeqCst);
         }
         // Log the first N constructions regardless of match: reveals whether this ctor fires
-        // headless at all and the actual installed runtime vtable (vt_rva), so the inferred
-        // ROUTER_THIS_VTABLE_RVA=0x2afa070 (derived via a +0xe00 dump skew, not measured) can be
-        // corrected if wrong.
+        // headless at all and the actual installed runtime vtable (vt_rva), so
+        // ROUTER_THIS_VTABLE_RVA (2.7.2.0 0x2aff1e0) can be checked against the live object.
         let n = CAP_CSMENU_CTOR_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         if n < CAP_CSMENU_CTOR_LOG_FIRST {
             let vb = unsafe { safe_read_usize(this + ROUTER_VEC_BEGIN_1290) }.unwrap_or(NULL);
@@ -127,7 +126,7 @@ pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
 /// Post-build scan of a row container (`rebuild_rows`/`append_one` rcx). The generic FD4 list
 /// builder fires for every menu list, so the title menu is identified by CONTENT: a row whose
 /// action functor ([entry+0xf8] -> [+0] vtable -> [+0x10] _Do_call) chains to dialog_factory
-/// 0x14081ead0 (Load-Game) or continue_confirm 0x140b0e180 (Continue). Captures the Load-Game /
+/// 0x14081fe00 (Load-Game) or continue_confirm 0x140b0fd50 (Continue). Captures the Load-Game /
 /// Continue row entries (and router_this = container-0x1290) when found. Pure reads + classify
 /// (the original already ran) -> save-safe. Called after the original builds the rows.
 /// Is this `MenuWindowJob` the title's Continue row -- the game's own vtable at `[item+0]` and the
@@ -135,7 +134,7 @@ pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
 ///
 /// Both targets resolved, and neither may be zero. The `_Do_call` half used to be a raw
 /// `base + MENU_TITLE_CONTINUE_DOCALL_RVA` sitting next to a resolved vtable sibling, at four
-/// separate constructor/update hooks. That function moved on 1.17 (0x764b80 -> 0x7659d0), so the
+/// separate constructor/update hooks. Once that function moved on a game update, the
 /// conjunction could never be true and all four Continue classifiers reported nothing -- no
 /// counter, no trace line, no `MENU_CONTINUE_ITEM` latch, and therefore no Continue item for the
 /// autoload to act on. The zero screens matter because both observed values arrive as
@@ -161,7 +160,7 @@ fn continue_job_identity_matches(base: usize, vt: usize, do_call: usize) -> bool
 /// Is `accept_predicate` the real (selectable) accept predicate rather than the constant-false
 /// idle one? Resolved, and never satisfied by zero -- an uninitialised row reads 0 at `+0xf8`.
 fn accept_predicate_is_native(base: usize, accept_predicate: usize) -> bool {
-    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007aeb40;
     let want = er_game_base::mem::game_data_addr(
         base,
         MENU_ITEM_ACCEPT_NATIVE_RVA,
@@ -197,9 +196,8 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
     if base == NULL {
         return;
     }
-    // Resolved, next to the sibling that already was. `LIVE_DIALOG_FACTORY_RVA` moved on 1.17
-    // (0x81ead0 -> 0x81f950), so the raw form matched no `_Do_call` and the Load-Game row was
-    // never latched from a row container. Both targets are then screened at every comparison
+    // Resolved, next to the sibling that already was: a raw form would match no `_Do_call` on
+    // another build and the Load-Game row would never latch. Both targets are then screened at every comparison
     // below: a refusal resolves to 0 and the jmp walk reaches 0 on any unreadable hop.
     let factory =
         er_game_base::mem::game_data_addr(base, DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
@@ -264,7 +262,7 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
     }
 }
 
-/// rebuild_rows 0x14078d2c0(rcx=list-model container, rdx=src iterator pair): bulk-emplaces the
+/// rebuild_rows 0x14078e5f0(rcx=list-model container, rdx=src iterator pair): bulk-emplaces the
 /// Continue/Load/NewGame rows. Firing headless proves the rows materialize zero-input; the
 /// post-build scan isolates the title menu by row content.
 pub(crate) unsafe extern "system" fn cap_rebuild_rows_hook(
@@ -279,7 +277,7 @@ pub(crate) unsafe extern "system" fn cap_rebuild_rows_hook(
     ret
 }
 
-/// append_one 0x14078eea0(rcx=list-model, r8=&idx): single-row emplace.
+/// append_one 0x1407901d0(rcx=list-model, r8=&idx): single-row emplace.
 pub(crate) unsafe extern "system" fn cap_append_one_hook(
     a: usize,
     b: usize,
@@ -329,7 +327,7 @@ unsafe fn log_row_push_caller(tag: &str, container: usize) {
     ));
 }
 
-/// Menu/FD4 insertion helper 0x1407a7b60(rcx=registry/builder, rdx=descriptor): passive capture of
+/// Menu/FD4 insertion helper 0x1407a8e90(rcx=registry/builder, rdx=descriptor): passive capture of
 /// the exact objects TitleTopDialog::open_menu inserts. This is intentionally generic: log the
 /// original return plus a few qwords around rcx/rdx so the next static/runtime step can identify the
 /// registry storage without guessing dialog fields or generic Sequence trees.
@@ -389,7 +387,7 @@ pub(super) unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: us
     }
 }
 
-/// SetState 0x140b0d960(this, state): the title state machine setter. Logging every call
+/// SetState 0x140b0f530(this, state): the title state machine setter. Logging every call
 /// reveals the press-any-key advance + Continue's SetState(5) sequence.
 pub(crate) unsafe extern "system" fn cap_setstate_hook(
     this: usize,
@@ -407,10 +405,10 @@ pub(crate) unsafe extern "system" fn cap_setstate_hook(
 }
 
 // (cap_continue_confirm_hook was folded into system_quit_continue_confirm_hook in
-// startup_hooks.rs -- the 0x140b0e180 detour is now installed unconditionally at attach and
+// startup_hooks.rs -- the 0x140b0fd50 detour is now installed unconditionally at attach and
 // carries both the trace logging and the System->Quit fresh-deserialize guard.)
 
-/// Load activate 0x1409a4670 = CS::ProfileLoadDialog vtable slot 20 (this = the dialog).
+/// Load activate 0x1409a5cc0 = CS::ProfileLoadDialog vtable slot 20 (this = the dialog).
 pub(crate) unsafe extern "system" fn cap_load_activate_hook(
     this: usize,
     b: usize,
@@ -425,7 +423,7 @@ pub(crate) unsafe extern "system" fn cap_load_activate_hook(
     unsafe { call_cap_original(&CAP_LOAD_ACTIVATE_ORIG, this, b, c, d) }
 }
 
-/// Load activate variant 0x1409ac760 (global-slot path).
+/// Load activate variant 0x1409ade60 (global-slot path).
 pub(crate) unsafe extern "system" fn cap_load_activate2_hook(
     this: usize,
     b: usize,
@@ -481,7 +479,7 @@ fn explicit_boot_loadgame_slot(
         })
 }
 
-/// Enter-Load-Game builder 0x140826510(owner, rdx, r8d=slot, r9) -> selector step.
+/// Enter-Load-Game builder 0x1408279b0(owner, rdx, r8d=slot, r9) -> selector step.
 pub(crate) unsafe extern "system" fn cap_builder_hook(
     owner: usize,
     rdx: usize,
@@ -495,7 +493,7 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
     // This builder's `r8d` slot argument is what the LoadGame job is built for, and on the
     // TitleTopDialog Continue path it comes from `CSMenuSystemSaveLoad+0x1200` -- the last-used
     // slot persisted inside the save container, restored by the system-save chunk deserialize
-    // (`CSMenuSimpleSaveDataChunk<1, MENU_TITLEFLOW_SAVEDATA, 0>`, ctor 0x14081af80). Nothing about
+    // (`CSMenuSimpleSaveDataChunk<1, MENU_TITLEFLOW_SAVEDATA, 0>`, ctor 1.16.2 0x14081af80). Nothing about
     // it knows what the user clicked, so a container whose stored slot differs from the pick loads
     // the wrong character. Runtime proof 2026-08-03: user picked slot 0 of
     // save-files/45-Slots/ER0000.sl2, this hook logged `built for slot=2`, and slot 2 of that
@@ -548,11 +546,11 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
     //
     // Reading CSMenuSystemSaveLoad+0x1200 here was tried and REMOVED: it resolved to `None` on every
     // call across two runs, so it cost a singleton walk per build and told us nothing. The value is
-    // still the origin of `slot` on the TitleTopDialog Continue path (FUN_1409ac760 @0x1409ac9e1:
+    // still the origin of `slot` on the TitleTopDialog Continue path (1.16.2 FUN_1409ac760 @0x1409ac9e1:
     // `CALL GetMenuSystemSaveLoad; MOV R8D,[RAX+0x1200]; CALL 0x140826510`) -- that is established by
     // static RE plus the on-disk chunk, and does not need re-deriving per frame.
     append_autoload_debug(format_args!(
-        "loadgame-builder: 0x140826510 built for slot={slot_i32} (expected={expected_slot}) effective={} owner=0x{owner:x} {}",
+        "loadgame-builder: 0x1408279b0 built for slot={slot_i32} (expected={expected_slot}) effective={} owner=0x{owner:x} {}",
         effective_slot as i32,
         trace_callers_summary()
     ));
@@ -593,7 +591,7 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
     ret
 }
 
-/// Selector-owner step tick 0x140826d50(step, ctx, result). Rate-limited (it ticks every
+/// Selector-owner step tick 0x1408281f0(step, ctx, result). Rate-limited (it ticks every
 /// frame). Logs the step this, its +0x68 install flag, and the slot at ctx[0].
 pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
     step: usize,
@@ -687,7 +685,7 @@ pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
     unsafe { call_cap_original(&CAP_SELECTOR_TICK_ORIG, step, ctx, result, d) }
 }
 
-/// ProfileLoadDialog factory 0x14081ead0(rcx=ctx, rdx): builds the Load-Game dialog when the
+/// ProfileLoadDialog factory 0x14081fe00(rcx=ctx, rdx): builds the Load-Game dialog when the
 /// main-menu "Load Game" item is activated. The caller backtrace pins the navigation chain.
 pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
     a: usize,
@@ -697,7 +695,7 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
 ) -> usize {
     // Capture all four register args (rcx/rdx/r8/r9) and a window of the rcx capture object so the
     // headless path-3-direct replay can reconstruct the exact factory invocation. The native
-    // _Do_call thunk 0x140820c60 does `add rcx,8` before jmping here, so rcx (=a) is the lambda
+    // _Do_call thunk (1.16.2 0x140820c60) does `add rcx,8` before jmping here, so rcx (=a) is the lambda
     // capture state past the _Func_impl header; the ctor reads the owner from a field of it. Pure
     // reads + pass-through -> save-safe.
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -765,7 +763,7 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
     ret
 }
 
-/// Menu deserialize 0x14082c240(this, ctx): the real mount (writes GameMan+0xc30 + char).
+/// Menu deserialize 0x14082d6e0(this, ctx): the real mount (writes GameMan+0xc30 + char).
 pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
     this: usize,
     ctx: usize,
@@ -830,7 +828,7 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
     ret
 }
 
-/// Title native-ready predicate 0x140733150 hook. Static RE shows the original body is:
+/// Title native-ready predicate 0x140734450 hook. Static RE shows the original body is:
 /// `state = this->vtable[0](this); return (state->flags_20 & 0x8f) != 0`. Re-implement that tiny
 /// body exactly so the hook can record the returned state object/flags without making a second
 /// native getter call or changing success semantics.
@@ -879,10 +877,10 @@ pub(crate) unsafe extern "system" fn title_native_ready_predicate_hook(
     ret
 }
 
-/// MenuWindowJob ctor 0x1407ac8c0 hook: observe constructed menu jobs and latch the semantic
+/// MenuWindowJob ctor 0x1407adbf0 hook: observe constructed menu jobs and latch the semantic
 /// Continue item only when both the Continue action and native accept predicate are installed.
 /// This avoids poisoning MENU_CONTINUE_ITEM with the first updated title input leaf, whose
-/// accept predicate is the constant-false 0x1407add70 diagnostic dead end.
+/// accept predicate is the constant-false 0x1407af0a0 diagnostic dead end.
 pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     out_slot: usize,
     b: usize,
@@ -963,9 +961,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     ret
 }
 
-/// MenuWindowJob native-accept ctor variant 0x1407acb00 hook: observe constructed menu jobs from
-/// the sibling constructor that static RE shows installs the native accept predicate 0x1407ad810.
-/// This is passive except for the same semantic pointer latch used by the existing 0x1407ac8c0
+/// MenuWindowJob native-accept ctor variant 0x1407ade30 hook: observe constructed menu jobs from
+/// the sibling constructor that static RE shows installs the native accept predicate 0x1407aeb40.
+/// This is passive except for the same semantic pointer latch used by the existing 0x1407adbf0
 /// constructor hook: if the item is a Continue row with native accept, record its pointer so the
 /// product path can later submit through native semantics.
 pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
@@ -1047,8 +1045,8 @@ pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
     ret
 }
 
-/// MenuWindowJob disabled/idle ctor 0x1407acf80 hook: observe constructed menu jobs whose accept
-/// functor is the constant-false 0x1407add70 variant. Static RE of the constructor shows it builds
+/// MenuWindowJob disabled/idle ctor 0x1407ae2b0 hook: observe constructed menu jobs whose accept
+/// functor is the constant-false 0x1407af0a0 variant. Static RE of the constructor shows it builds
 /// the same MenuWindowJob vtable but installs the idle predicate into item+0xf0/+0xf8; this hook
 /// attributes Continue-looking candidates to that disabled native path without promoting or
 /// submitting them.
@@ -1121,9 +1119,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_idle_ctor_hook(
     ret
 }
 
-/// MenuWindowJob::Update 0x1407ad1c0 hook: the native menu pump calls this with rcx = a
+/// MenuWindowJob::Update 0x1407ae4f0 hook: the native menu pump calls this with rcx = a
 /// menu-item each tick. We let the game walk its own (CSMenu) tree and capture the item
-/// whose +0xa8 action functor's _Do_call chain resolves to dialog_factory 0x14081ead0 (=
+/// whose +0xa8 action functor's _Do_call chain resolves to dialog_factory 0x14081fe00 (=
 /// the Load-Game item) into MENU_LOAD_GAME_ITEM, so the own-stepper can drive it
 /// zero-input without guessing the container layout. Pure observe + pass-through (no
 /// behaviour change). Logs the first distinct items to map the live title menu.
@@ -1270,12 +1268,12 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
     unsafe { call_cap_original(&MENU_ITEM_UPDATE_ORIG, item, b, c, d) }
 }
 
-/// FD4 Sequence::Update / child-iterator 0x1407aa1f0 hook. The opened main-menu registers the
+/// FD4 Sequence::Update / child-iterator 0x1407ab520 hook. The opened main-menu registers the
 /// Load-Game leaf d180 but it does not tick (only the focused entry ticks the leaf Update, so
 /// `cap_menu_item_update_hook` misses d180). This iterator runs on every Sequence node; we
 /// walk its inline child array ([seq+0x18 + i*8], count [seq+0x60]) and classify each child by
 /// the action-functor `_Do_call` chain (`functor_chain_hits_factory` -> dialog_factory
-/// 0x14081ead0). The unique hit is d180 / Load-Game -- captured regardless of focus, then read
+/// 0x14081fe00). The unique hit is d180 / Load-Game -- captured regardless of focus, then read
 /// by own_stepper idx10 (MENU_LOAD_GAME_ITEM) for the Stage-2 functor invoke. Early-outs once
 /// found (the iterator is hot); fault-tolerant reads never AV; pure read, no writes/calls into
 /// the game beyond the original.

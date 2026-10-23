@@ -76,7 +76,7 @@ POLICY_PATH = AUTO_DIR / "marker_file_gate_policy.rego"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # One dialect, not another ad-HOC stripper. `code_only` lives in `scripts/rva_symbols.py` and is
-# shared with `check-reload-trace-policy.py`, `check-stale-rva-calls.py` and `gate-stale-rva-calls.py`.
+# shared with `check-reload-trace-policy.py`, `check-stale-rva-calls.py` and `audit-ungated-game-addresses.py`.
 # A private blanker is exactly what went wrong in `audit-1170-gate-bypass.py`, whose own stripper did
 # not know a Rust char literal from a lifetime and erased live code in 42 files. Do not grow a fourth.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work

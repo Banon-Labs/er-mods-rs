@@ -696,7 +696,7 @@ pub enum Overflow {
     Ground,
     /// Destroy it. Nothing survives, the upgrade material included.
     ///
-    /// The fallback for a build the drop has no verified mapping on. Irreversible, so a caller
+    /// The fallback for a game build the drop is refused on. Irreversible, so a caller
     /// choosing this owes the player a named line per item.
     Destroy,
     /// Neither is available, so it stays on the character and is reported.

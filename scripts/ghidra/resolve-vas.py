@@ -8,10 +8,14 @@ guard, so it lives here instead.
 
 Usage:
     python3 scripts/ghidra/resolve-vas.py 0x1402bf9b5 0x1402bfb23 ...
-    python3 scripts/find-deobf-bytes.py '89??24c40000' | ... | python3 scripts/ghidra/resolve-vas.py -
+    ER_DEOBF_BIN=eldenring-deobf.bin python3 scripts/find-deobf-bytes.py '89??24c40000' | ... \
+        | python3 scripts/ghidra/resolve-vas.py -
 
 `-` reads whitespace-separated addresses from stdin. `GPORT` picks the daemon: 8765 is the
 1.16.2 named dump (the default, and the only one with symbols), 8767 the 1.17 structure dump.
+The addresses must belong to the daemon's build: `find-deobf-bytes.py` scans the installed
+2.7.2.0 image unless `ER_DEOBF_BIN` names another, and a 2.7.2.0 VA handed to the 1.16.2 dump
+lands on whatever 1.16.2 has there.
 A VA inside no known function prints `-`, which is a real answer -- it usually means the scan
 landed in data rather than in code.
 """

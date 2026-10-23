@@ -15,10 +15,9 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/chainsaw-probe.js
 //
-// Addresses are 2.7.2.0. Mapped from the named 1.16.2 dump to 1.17.1 with
-// scripts/map-rvas-1162-to-1170.py (signatures from :8765; all below the 0xafefe9 shift boundary,
-// so 1.17.0 == 1.17.1), then to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py. Each function opens
-// with the same bytes in the 1.17.1 and 2.7.2.0 images (rel32/rip displacements masked):
+// Addresses are 2.7.2.0. They were paired with the named 1.16.2 dump by signature (from :8765; all
+// below the 0xafefe9 shift boundary, so 1.17.0 == 1.17.1). Each function opens with the same bytes
+// in the 1.17.1 and 2.7.2.0 images (rel32/rip displacements masked):
 //   CalculateDamage2           1.16.2 0x1404483b0 -> 0x140448910 -> 0x1404489f0
 //   EquipItemToChrAsmSlot      1.16.2 0x140787c30 -> 0x140788ab0 -> 0x140788f60  (ChrAsmSlot, MenuGaitem*)
 //   weapon switch FUN_14042cf80 1.16.2 0x14042cf80 -> 0x14042d4d0 -> 0x14042d560

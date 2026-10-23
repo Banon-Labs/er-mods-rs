@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Ask each ELDEN RING image's own .pdata where the function containing an address begins.
 
-Why this exists: `verify-rva-map-1170.py` reports a pair's entry evidence as a single word
-(both-entries / neither-entry) and stops there. When a pair comes back neither-entry the next
+Why this exists: `verify-rva-map-1170.py` (deleted with the address carry on 2026-10-23)
+reported a pair's entry evidence as a single word (both-entries / neither-entry) and stopped
+there. When a pair comes back neither-entry the next
 question is always the same -- is the real entry a few bytes earlier, is the address in a
 .pdata gap (a hand-written thunk the linker emitted no unwind record for), or did the two
 builds disagree about where the function begins? That is what this prints.
 
+`1172` is the installed build, eldenring.exe 2.7.2.0 (`eldenring-deobf-1.17.2.bin`), and the one
+to ask about a live address; `1162` and `1170` are the older images, kept for comparisons.
+
 Usage
+    python3 scripts/pdata-enclosing-function.py 1172:0x14075ebf0
     python3 scripts/pdata-enclosing-function.py 1162:0x141158940 1170:0x14115a740
     python3 scripts/pdata-enclosing-function.py --context 6 1170:0x1408d32b0
 """
@@ -19,6 +24,7 @@ import struct
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 0x140000000
 IMAGES = {
+    "1172": os.environ.get("ER_DEOBF_1172", os.path.join(ROOT, "eldenring-deobf-1.17.2.bin")),
     "1162": os.environ.get("ER_DEOBF_1162", os.path.join(ROOT, "eldenring-deobf.bin")),
     "1170": os.environ.get("ER_DEOBF_1170", os.path.join(ROOT, "eldenring-deobf-1.17.bin")),
 }

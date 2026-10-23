@@ -49,7 +49,7 @@
 //!
 //! # This shell is a hook union hub
 //!
-//! It defines `er_effects_union_register` and `er_effects_union_register5` through
+//! It defines `er_effects_union_register_2720` and `er_effects_union_register5_2720` through
 //! `er_hook::export_union_registrar!`, which is what lets a companion in a product-less profile
 //! find a hub at all. Before that, `er_quickload.dll` was the only image in the workspace
 //! exporting either name -- measured 2026-09-20 on the live module table, 103 modules readable,

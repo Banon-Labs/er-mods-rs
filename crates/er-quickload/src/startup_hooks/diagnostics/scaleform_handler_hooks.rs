@@ -8,7 +8,7 @@
 
 use super::*;
 
-/// Scaleform handler CONSTRUCTOR hook (`FUN_1411a8890`, deobf 0x1411a8870). rcx = the object being
+/// Scaleform handler CONSTRUCTOR hook (2.7.2.0 0x1411abdd0). rcx = the object being
 /// constructed (the 0x58 handler embedded at container+0x40), rdx = parent. Records the object as
 /// live, then forwards to the original ctor (which returns the object pointer). Read-only w.r.t.
 /// game state; only maintains our live-set. See SCALEFORM_HANDLER_LIVE.
@@ -36,7 +36,7 @@ pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(
     unsafe { f(obj, parent) }
 }
 
-/// Scaleform handler inner DESTRUCTOR hook (`FUN_1411a8920`, deobf 0x1411a8900). rcx = the object.
+/// Scaleform handler inner DESTRUCTOR hook (2.7.2.0 0x1411abe60). rcx = the object.
 /// If the object is in our live-set -> a normal teardown: remove it and forward to the original.
 /// If it is not live -> a double-free (the repeated-switch ProfileSelect UAF): the original would
 /// walk this object's now-garbage intrusive list and crash. Log it and return without forwarding,

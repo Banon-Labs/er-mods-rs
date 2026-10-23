@@ -112,7 +112,7 @@ impl EquipLoad {
     }
 }
 
-/// `.rdata` 1.17.1 `0x143b37d64`, the medium-load threshold `GetWeightType` compares against.
+/// `.rdata` 2.7.2.0 `0x143b3ad74`, the medium-load threshold `GetWeightType` compares against.
 pub const LIGHT_LOAD_CEILING: f32 = 0.3;
 
 /// Burden and max load the way the game sums them (`CalculateEquipmentWeight` 1.16.2

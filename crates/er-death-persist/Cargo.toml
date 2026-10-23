@@ -9,7 +9,7 @@ name = "er_death_persist"
 crate-type = ["cdylib"]
 
 # Assembles each getter window from named instructions in `build.rs` and ground-truths it against
-# `eldenring-deobf-1.17.1.bin`, so a hand-typed byte cannot silently disarm a hook.
+# `eldenring-deobf-1.17.2.bin`, so a hand-typed byte cannot silently disarm a hook.
 [build-dependencies]
 iced-x86 = { version = "1.21", default-features = false, features = [
   "std",

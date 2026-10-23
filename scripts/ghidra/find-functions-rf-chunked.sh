@@ -12,8 +12,10 @@
 # Results stream to the JSONL out file; a deduped/sorted summary prints at the end.
 set -uo pipefail
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
-PROJ_NAME=erdeobf
+# The installed build's deobf-native project (scripts/ghidra/import-deobf.sh); the 1.16.2 one is
+# `--proj-dir $HOME/ghidra_maporch/proj-deobf --proj-name erdeobf`.
+PROJ_DIR=$HOME/ghidra_maporch/proj-deobf-2720
+PROJ_NAME=erdeobf2720
 THRESHOLD=0.80
 # Training fits in ~2G regardless (it was never the OOM -- only the monolithic classify was), so
 # use the full training set for good recall; chunking keeps classify memory bounded either way.
@@ -21,7 +23,10 @@ MAX_STARTS=1000
 MIN_RANGE=16
 CHUNK=20000
 MAXMEM=4G
-OUT=/home/banon/ghidra_maporch/tmp/erdeobf-rf.jsonl
+# Empty means `$TMP/<project>-rf.jsonl`, set after argument parsing. The output and its `.state`
+# resume file belong to one program: a state file left by another program skips every address
+# at or below its offset, so a project never shares them.
+OUT=""
 RESET=0
 
 while [[ $# -gt 0 ]]; do
@@ -39,9 +44,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ! -d "$PROJ_DIR/$PROJ_NAME.rep" ]]; then
+  echo "Ghidra project $PROJ_NAME is not built in $PROJ_DIR: run scripts/ghidra/import-deobf.sh" >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
-TMP=/home/banon/ghidra_maporch/tmp
+HEADLESS=$HOME/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
+TMP=$HOME/ghidra_maporch/tmp
+OUT="${OUT:-$TMP/$PROJ_NAME-rf.jsonl}"
 STATE="$OUT.state"
 LOG="$TMP/$(basename "$OUT").run.log"
 

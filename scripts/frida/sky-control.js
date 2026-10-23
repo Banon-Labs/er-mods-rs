@@ -1,8 +1,8 @@
 // Sets and locks the time of day and the weather through the game's own calls, and reports the
 // clock and weather state twice a second, as the prototype for the Sky tab (er-effects-rs-pjyh).
 //
-// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give with
-// scripts/map-rvas-1171-to-1172.py and written old -> new below. Each function's bytes match the
+// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give and written old -> new
+// below. Each function's bytes match the
 // 1.17.1 one once rip-relative and branch operands are masked, every masked target carrying to the
 // new operand; each global is the carried target of those same readers.
 //

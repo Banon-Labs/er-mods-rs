@@ -337,7 +337,8 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     PROFILE_TEAR_EMA.store(0, Ordering::SeqCst);
     // Do not drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
     // excluded from the native delete and its offscreen draw task kept filling the 192-slot GX
-    // command queue -> 0x1aeaf05 overflow ~switch #4). Move it to the orphan slot; the game-thread
+    // command queue -> overflow at 0x1aee465, observed on 1.16.2 at 0x1aeaf05, ~switch #4). Move it
+    // to the orphan slot; the game-thread
     // teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (this reset
     // runs off the game thread, so it stashes rather than deleting in place).
     let prev_spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.swap(0, Ordering::SeqCst);

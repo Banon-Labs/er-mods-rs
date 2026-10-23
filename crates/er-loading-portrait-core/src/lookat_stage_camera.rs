@@ -2,7 +2,7 @@ use crate::prelude::*;
 use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 
 /// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- No pop) to detect
-/// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
+/// whether a GX pass is queued this frame (the precondition the offscreen draw checks via 0x1419e8d90).
 /// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
 /// back to the global address. All reads fault-guarded.
 ///
@@ -346,9 +346,9 @@ pub fn profile_lookat_phase_diag_tick() {
         let null = TITLE_OWNER_SCAN_START_ADDRESS;
         let (mut built_r, mut built_m) = (0u32, 0u32);
         if let Ok(b) = game_module_base() {
-            // Resolved, not `b + <1.16.2 RVA>`: the vtable moved 0x2b80128 -> 0x2b831d8 on 1.17, and
-            // a raw add never reaches the resolver, so this comparison matched nothing and reported
-            // built[r]=0/built[m]=0 forever without a single refusal line to say why.
+            // Resolved, not `b + <RVA>`: a raw add never reaches the build check, and when the
+            // vtable moved on 1.17 this comparison matched nothing and reported built[r]=0/built[m]=0
+            // forever without a single refusal line to say why.
             let want_vt = er_game_base::mem::game_data_addr(
                 b,
                 TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
@@ -464,9 +464,9 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
     }
 }
 
-/// Hook on the per-frame per-model push task (deobf 0x140bba6e0). For our profile renderers, write the
+/// Hook on the per-frame per-model push task (0x140bbc2c0). For our profile renderers, write the
 /// cursor/sinusoid Head/Neck/Spine2 rotation into the importer PoseHolder (+ recompute its model-space)
-/// before the original runs, so the original's submodel propagation (FUN_1409e9ac0) copies our pose into
+/// before the original runs, so the original's submodel propagation (0x1409eb100) copies our pose into
 /// every submodel's modelSpaceBoneData -- the buffer the GPU actually skins from -- using the engine's
 /// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
 /// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
@@ -475,7 +475,7 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
 /// # Safety
 ///
 /// Do not call this directly. It is the detour body MinHook installs over the game's per-frame per-
-/// model push task (deobf `0x140bba6e0`), so it may only be entered by that patched call site, on
+/// model push task (`0x140bbc2c0`), so it may only be entered by that patched call site, on
 /// the game thread that made the call, with the arguments and `extern "system"` ABI the original
 /// declares.
 ///
@@ -593,11 +593,7 @@ pub fn install_per_frame_push_hook() {
             return;
         }
     }
-    // Unresolved, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
-    // which resolves too, and the pair was measured wrong on 2026-08-30 18:42: 0x140bba6e0 ->
-    // 0x140bbbd90 here, then 0x140bbbd90 -> 0x140bbd440 inside `MhHook::new` -- a
-    // `CSMenuFaceModelRend` method, detoured while this log line reported 0x140bbbd90.
-    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    // Unresolved, so `MhHook::new` owns the single build and detour-allowlist check.
     let Ok(target) = game_rva_for_hook(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
         return;
     };
@@ -763,7 +759,7 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 
 /// Camera LEVER: override one profile renderer's orbit camera with a custom viewport (closer, model-facing
 /// framing), proving the lever on the still dump. Replicates the tail of the engine's own camera routine
-/// `FUN_140bbe190` without its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
+/// `0x140bbfca0` without its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
 /// engine baseline once, write the orbit fields from `baseline + offsets`, rebuild the view matrix via
 /// the engine builder, copy it into the renderer's matrix slot, then push the CSPersCam into the
 /// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
@@ -876,7 +872,7 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
     let _facing_yaw = unsafe { latched_profile_model_facing_yaw(renderer, idx) };
     let yaw = baseline.yaw + PROFILE_CAM_YAW_DELTA_RAD;
     let fov = baseline.fov * PROFILE_CAM_FOV_SCALE;
-    // Write the orbit fields (mirrors `FUN_140bbe190`'s field writes, minus the param read). The
+    // Write the orbit fields (mirrors `0x140bbfca0`'s field writes, minus the param read). The
     // renderer is a validated live object spanning well past +0xa24, so direct volatile writes are safe.
     unsafe {
         core::ptr::write_volatile(
@@ -902,7 +898,7 @@ pub unsafe fn apply_profile_camera_override(_base: usize, renderer: usize, slot:
     }
     // Rebuild the view matrix with the engine's own builder (correct handedness/basis), then copy the 16
     // floats into the renderer's matrix slot (== the CSPersCam view matrix).
-    // Both through the 1.17 gate, resolved before the matrix is built: writing a view matrix the
+    // Both through the build gate, resolved before the matrix is built: writing a view matrix the
     // push can never deliver would leave the renderer half-updated.
     let (Ok(build_addr), Ok(push_addr)) = (
         er_game_base::mem::game_rva_named(

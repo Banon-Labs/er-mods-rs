@@ -145,9 +145,9 @@ pub fn row_records_restore_counts() -> (usize, usize) {
     )
 }
 
-/// `FUN_14067dc00` -- the character serializer, the one function that turns the live
-/// `CS::ProfileSummary` into save bytes.
-const SAVE_SERIALIZE_CHAR_RVA: u32 = 0x67dc00;
+/// The character serializer (2.7.2.0 rva; 1.16.2 `FUN_14067dc00`), the one function that turns
+/// the live `CS::ProfileSummary` into save bytes.
+const SAVE_SERIALIZE_CHAR_RVA: u32 = 0x67ef00;
 
 static SERIALIZE_GUARD_ORIG: AtomicUsize = AtomicUsize::new(0);
 static SERIALIZE_GUARD_INSTALLED: AtomicUsize = AtomicUsize::new(0);

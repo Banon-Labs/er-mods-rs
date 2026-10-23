@@ -118,7 +118,7 @@ pub(crate) unsafe extern "system" fn native_submit_hook(
     NATIVE_SUBMIT_LAST_RESULT.store(result, Ordering::SeqCst);
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "native_submit_7ac890 seq={seq} phase=ENTER result=0x{result:x} built={} {}",
+            "native_submit seq={seq} phase=ENTER result=0x{result:x} built={} {}",
             format_optional_usize_hex(unsafe { result_built_flag(result) }),
             trace_callers_summary()
         ));
@@ -126,7 +126,7 @@ pub(crate) unsafe extern "system" fn native_submit_hook(
     let ret = unsafe { call_union_original(&NATIVE_SUBMIT_ORIG, result, b, c, d) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "native_submit_7ac890 seq={seq} phase=LEAVE result=0x{result:x} built={} {}",
+            "native_submit seq={seq} phase=LEAVE result=0x{result:x} built={} {}",
             format_optional_usize_hex(unsafe { result_built_flag(result) }),
             game_man_trace_summary()
         ));
@@ -153,7 +153,7 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(
     let built_before = unsafe { result_built_flag(result) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_raw_qword0={} fd4_code={} fd4_arg={} built_before={} {}",
+            "result_event_handler seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_raw_qword0={} fd4_code={} fd4_arg={} built_before={} {}",
             format_optional_usize_hex(event_raw_qword0),
             format_optional_usize_hex(fd4_code),
             format_optional_usize_hex(fd4_arg),
@@ -165,7 +165,7 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(
     let built_after = unsafe { result_built_flag(result) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_event_handler_746e80 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built_after={} {}",
+            "result_event_handler seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built_after={} {}",
             format_optional_usize_hex(built_after),
             game_man_trace_summary()
         ));
@@ -206,7 +206,7 @@ pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
         RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
         if seq <= TRACE_FIRST {
             append_continue_trace(format_args!(
-                "result_event_wrapper_builder_744a60 seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} ret_update_rva={} -- passive wrapper-builder call from result action builder",
+                "result_event_wrapper_builder seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} ret_update_rva={} -- passive wrapper-builder call from result action builder",
                 format_optional_usize_hex(ret_update_rva)
             ));
         }
@@ -230,7 +230,7 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(
     RESULT_ACTION_LAST_WORD1.store(event_word1, Ordering::SeqCst);
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_action_builder_746a00 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_word0={} event_word1={} built={} {}",
+            "result_action_builder seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_word0={} event_word1={} built={} {}",
             format_optional_usize_hex(event_word0),
             format_optional_usize_hex(event_word1),
             format_optional_usize_hex(unsafe { result_built_flag(result) }),
@@ -240,7 +240,7 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(
     let ret = unsafe { call_union_original(&RESULT_ACTION_BUILDER_ORIG, result, event, c, d) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_action_builder_746a00 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built={} {}",
+            "result_action_builder seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built={} {}",
             format_optional_usize_hex(unsafe { result_built_flag(result) }),
             game_man_trace_summary()
         ));
@@ -380,10 +380,10 @@ unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, la
         return;
     }
     let update_rva = unsafe { task_node_update_rva(base, candidate) };
-    // `task_node_update_rva` returns a live RVA (`update - base`), so comparing it to the 1.16.2
-    // constant is the same stale-address defect as a raw `base + RVA` with the base cancelled off
-    // both sides -- and invisible to any scan for `base +`. The Continue task wrapper moved on
-    // 1.17 (0x82bac0 -> 0x82cab0), so no task node was ever captured. Compare addresses instead.
+    // `task_node_update_rva` returns a live RVA (`update - base`), so comparing it to the constant
+    // unresolved would be the same stale-address defect as a raw `base + RVA` with the base
+    // cancelled off both sides -- and invisible to any scan for `base +`. Compare resolved
+    // addresses instead (`game_data_addr` answers 0 on a build other than 2.7.2.0).
     let want_wrapper = er_game_base::mem::game_data_addr(
         base,
         TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
@@ -428,9 +428,9 @@ unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, 
     if member_fn == null {
         return;
     }
-    // Same constant, same 1.17 move (0x82bac0 -> 0x82cab0): the raw form matched nothing, so the
-    // registered TitleTopDialog Continue `MenuMemberFuncJob` was never captured. Refuse rather
-    // than compare 0 -- `target` walks to 0 on an unreadable hop.
+    // Same constant, resolved for the same reason (a raw form once left the registered
+    // TitleTopDialog Continue `MenuMemberFuncJob` uncaptured). Refuse rather than compare 0 --
+    // `target` walks to 0 on an unreadable hop.
     let continue_wrapper = er_game_base::mem::game_data_addr(
         base,
         TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
@@ -530,8 +530,8 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         _ => {}
     }
     // Both were raw 1.16.2 return addresses compared against live frames. They now name the
-    // containing function and an offset, resolved for the running build; when this build has no
-    // pair for that function both come back `None` and the two caller-shaped matches below are
+    // containing function and an offset, both 2.7.2.0; on any other build both come back `None`
+    // and the two caller-shaped matches below are
     // skipped, leaving the three object-identity matches -- which do not depend on a game version
     // at all and were always the stronger evidence.
     let idle_call_site = menu_continue_idle_insert_call_site();
@@ -721,13 +721,13 @@ pub(crate) unsafe extern "system" fn current_slot_load_hook(
     let arg1 = b as u8;
     let arg2 = c as u8;
     append_continue_trace(format_args!(
-        "ENTER current_slot_load_67b570 arg0={arg0} arg1={arg1} arg2={arg2} {} {}",
+        "ENTER save_dispatch_system arg0={arg0} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
     let ret = unsafe { call_union_original(&CURRENT_SLOT_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE current_slot_load_67b570 ret={} {}",
+        "LEAVE save_dispatch_system ret={} {}",
         ret as u8,
         game_man_trace_summary()
     ));
@@ -744,13 +744,13 @@ pub(crate) unsafe extern "system" fn continue_load_hook(
     let arg1 = b as u8;
     let arg2 = c as u8;
     append_continue_trace(format_args!(
-        "ENTER continue_load_67b750 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        "ENTER save_write_to_slot slot={slot} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
     let ret = unsafe { call_union_original(&CONTINUE_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE continue_load_67b750 ret={} {}",
+        "LEAVE save_write_to_slot ret={} {}",
         ret as u8,
         game_man_trace_summary()
     ));
@@ -767,13 +767,13 @@ pub(crate) unsafe extern "system" fn combined_load_hook(
     let arg1 = b as u8;
     let arg2 = c as u8;
     append_continue_trace(format_args!(
-        "ENTER combined_load_67b940 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        "ENTER save_dispatch_combined slot={slot} arg1={arg1} arg2={arg2} {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
     let ret = unsafe { call_union_original(&COMBINED_LOAD_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE combined_load_67b940 ret={} {}",
+        "LEAVE save_dispatch_combined ret={} {}",
         ret as u8,
         game_man_trace_summary()
     ));
@@ -787,7 +787,7 @@ pub(crate) unsafe extern "system" fn map_load_hook(
     d: usize,
 ) -> usize {
     append_continue_trace(format_args!(
-        "ENTER map_load_67bc10 {} {}",
+        "ENTER save_dispatch_entry0b {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
@@ -796,7 +796,7 @@ pub(crate) unsafe extern "system" fn map_load_hook(
         TITLE_HANDOFF_COMPLETE.store(TITLE_HANDOFF_COMPLETE_VALUE, Ordering::SeqCst);
     }
     append_continue_trace(format_args!(
-        "LEAVE map_load_67bc10 ret={} {}",
+        "LEAVE save_dispatch_entry0b ret={} {}",
         ret as u8,
         game_man_trace_summary()
     ));
@@ -810,13 +810,13 @@ pub(crate) unsafe extern "system" fn save_load_state_init_hook(
     d: usize,
 ) -> usize {
     append_continue_trace(format_args!(
-        "ENTER save_load_state_init_67b030 {} {}",
+        "ENTER save_load_state_init {} {}",
         trace_callers_summary(),
         game_man_trace_summary()
     ));
     let ret = unsafe { call_union_original(&SAVE_LOAD_STATE_INIT_ORIG, a, b, c, d) };
     append_continue_trace(format_args!(
-        "LEAVE save_load_state_init_67b030 ret={} {}",
+        "LEAVE save_load_state_init ret={} {}",
         ret as u8,
         game_man_trace_summary()
     ));

@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
-"""Forbid resolving RVA 0 through the 1.16.2 -> 1.17 address resolver.
+"""Forbid resolving RVA 0 through the game address resolver.
 
 Why
 ===
-RVA 0 is the PE header. It is never a code or data address, so the verified 1.16.2 -> 1.17
-map has nothing to translate it to and `resolve_game_address` correctly refuses it -- every
-single time, forever, at whatever rate the call site runs.
+RVA 0 is the PE header. It is never a code or data address. Asking `game_rva(0)` for it is
+asking for the module base through a function whose whole job is to refuse addresses on a build
+they were not measured on -- and the module base is not measured on any build.
 
-That is not theoretical. One session (2026-08-29 -> 2026-08-30, a 14.9 GB
+That cost real noise once. One session (2026-08-29 -> 2026-08-30, a 14.9 GB
 `er-quickload-autoload-debug.log`) logged 339,764 lines reading
 
     Address refused (game_rva): 0x140000000 -- game FileVersion 2.7.0.0 ...
 
 because `delay_delete_pending` called `game_rva(0)` purely to obtain the module base, and it
-sits on the 4 Hz telemetry write. The refusals were pure noise -- the code wanted
-`game_module_base()`, which is version-independent and cannot be refused.
+sits on the 4 Hz telemetry write. The code wanted `game_module_base()`, which is
+version-independent and cannot be refused.
+
+Why it still matters on the native model
+========================================
+Since 2026-10-23 `er_game_base::game_build` translates nothing: on 2.7.2.0 an address inside the
+image is handed back unchanged, so `game_rva(0)` now quietly returns the base instead of being
+refused. That makes this scan the only thing left that notices a real constant which has
+silently degraded to 0 (an unset `AtomicUsize`, a sentinel like `TRACE_UNKNOWN_TABLE_RVA`, a
+lookup that fell back): the resolver no longer exposes it, it reads the PE header. And on any
+other build the same call is refused with the `UNSUPPORTED GAME BUILD` line, so a caller that
+only wanted the base loses it for no reason.
 
 The rule
 ========
-Ask for the module base with `er_game_base::mem::game_module_base()`. Do not launder it
-through an address resolver by adding an RVA of 0. The fix belongs at the call site: the
-resolver must not be taught to tolerate 0, because a real constant that has silently
-degraded to 0 (an unset `AtomicUsize`, a sentinel like `TRACE_UNKNOWN_TABLE_RVA`, a lookup
-that fell back) is a bug the refusal is right to expose -- guard the sentinel before the
-call instead.
+Ask for the module base with `er_game_base::mem::game_module_base()`. Do not launder it through
+an address resolver by adding an RVA of 0, and guard a sentinel before the call rather than
+teaching the resolver to tolerate 0.
 """
 
 from __future__ import annotations
@@ -53,6 +60,10 @@ FORBIDDEN = (
     (
         "game_rva_named(0, ...) -- use er_game_base::mem::game_module_base() instead",
         re.compile(rf"\bgame_rva_named\s*\(\s*{ZERO}\s*,"),
+    ),
+    (
+        "game_rva_for_hook(0) -- the PE header is never a hook target",
+        re.compile(rf"\bgame_rva_for_hook\s*\(\s*{ZERO}\s*\)"),
     ),
     (
         "game_data_addr(base, 0, ...) -- that is the module base, not a global",
@@ -99,11 +110,12 @@ def selftest() -> int:
             "    let f = game_rva(module_base, 0)?;",
             '    let a = game_rva_named(0, "NAME")?;',
             '    let g = game_data_addr(base, 0, "NAME");',
+            "    let h = game_rva_for_hook(0u32)?;",
         )
     )
     hits = scan_text("fixture.rs", bad)
-    if len(hits) != 5:
-        failures.append(f"expected 5 violations in the bad fixture, got {len(hits)}: {hits}")
+    if len(hits) != 6:
+        failures.append(f"expected 6 violations in the bad fixture, got {len(hits)}: {hits}")
 
     good = "\n".join(
         (
@@ -143,10 +155,11 @@ def main() -> int:
         for finding in findings:
             print(f"  {finding}", file=sys.stderr)
         print(
-            "\nRVA 0 is the PE header. The resolver refuses it on every non-1.16.2 build, "
-            "forever, at the call site's own rate -- one such site logged 339,764 refusals in "
-            "a single session. Use er_game_base::mem::game_module_base() for the base, and "
-            "guard sentinel/unset RVAs before the call.",
+            "\nRVA 0 is the PE header. On 2.7.2.0 the resolver hands it back as the module base, "
+            "which hides a constant that degraded to 0; on any other build it refuses it, at the "
+            "call site's own rate -- one such site logged 339,764 refusals in a single session. "
+            "Use er_game_base::mem::game_module_base() for the base, and guard sentinel/unset "
+            "RVAs before the call.",
             file=sys.stderr,
         )
         return 1

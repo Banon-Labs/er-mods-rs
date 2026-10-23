@@ -2,7 +2,7 @@
 // table (eldenring_all-in-one_Hexinton-v4.25_ce7.5.ct) to 1.17.1. Each pattern was checked unique
 // in eldenring-deobf-1.17.1.bin before use, and again in eldenring-deobf-1.17.2.bin for 2.7.2.0:
 // still one hit each (two for the lua event manager), and every resolved target is the 1.17.1
-// target carried by scripts/map-rvas-1171-to-1172.py -- chr dbg flags 0x143d6a210 -> 0x143d6d230,
+// target carried to 2.7.2.0 -- chr dbg flags 0x143d6a210 -> 0x143d6d230,
 // WorldChrMan 0x143d69ff8 -> 0x143d6d018, lua warp 0x14059aa60 -> 0x14059af10. Nothing here is
 // spelled as an address, so the patterns needed no change.
 //

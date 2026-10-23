@@ -123,8 +123,8 @@ const cfg = Object.assign({
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
 
-// 2.7.2.0. UpdateFromManipulator: 1.16.2 0x140407c60 -> 1.17.0 0x140408190 (map-rvas-1162-to-1170,
-// 42-byte signature) -> 1.17.1 unchanged -> 2.7.2.0 0x140408220, first 0x60 bytes identical to
+// 2.7.2.0. UpdateFromManipulator: 1.16.2 0x140407c60 -> 1.17.0 0x140408190 (paired on a 42-byte
+// signature) -> 1.17.1 unchanged -> 2.7.2.0 0x140408220, first 0x60 bytes identical to
 // 1.16.2. CalculateDamage2, WorldChrMan and MAIN_PLAYER as spawn-npc.js uses them.
 const UPDATE_FROM_MANIPULATOR = va('0x140408220');
 const CALC_DAMAGE2 = va('0x1404489f0');

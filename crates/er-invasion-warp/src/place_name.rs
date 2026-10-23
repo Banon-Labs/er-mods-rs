@@ -10,10 +10,11 @@
 //!
 //! # The lookup, and why it needs no `MenuString`
 //!
-//! `CS::MsgRepository::GetAndFormat` (`0x1407633d0`) resolves a `PlaceName` in two steps: it reads
-//! the `MsgRepositoryImp` singleton out of [`MSG_REPOSITORY_GLOBAL_RVA`], calls a getter with
-//! `(repo, id)` to obtain a raw `wchar_t*`, and only then wraps that pointer in a `MenuString`.
-//! The wrapper `0x1407611c0` is what binds the getter to `PlaceName`:
+//! `CS::MsgRepository::GetAndFormat` (`0x1407646d0`, 1.16.2 `0x1407633d0`) resolves a `PlaceName`
+//! in two steps: it reads the `MsgRepositoryImp` singleton out of [`MSG_REPOSITORY_GLOBAL_RVA`],
+//! calls a getter with `(repo, id)` to obtain a raw `wchar_t*`, and only then wraps that pointer in
+//! a `MenuString`. The wrapper (1.16.2 `0x1407611c0`, whose decompile this is) is what binds the
+//! getter to `PlaceName`:
 //!
 //! ```text
 //!   getter = FUN_140d10b60;
@@ -36,13 +37,14 @@
 /// module's own callers and its address test keep the name they had.
 pub use er_game_base::rva::MSG_REPOSITORY_GLOBAL_RVA;
 
-/// `FUN_140d10b60(MsgRepositoryImp*, id) -> wchar_t*` -- the `PlaceName` getter.
-pub const PLACE_NAME_LOOKUP_RVA: usize = 0xd1_0b60;
+/// `FUN_140d13990(MsgRepositoryImp*, id) -> wchar_t*` -- the `PlaceName` getter, 2.7.2.0 (1.16.2
+/// `FUN_140d10b60`, the name in the decompile above).
+pub const PLACE_NAME_LOOKUP_RVA: usize = 0xd1_3990;
 
 // `PLACE_NAME_LOOKUP_PROLOGUE`: the getter's opening bytes, so a game update that moves it fails
 // closed instead of calling into the middle of something else. Assembled from named `iced-x86`
-// instructions by this crate's `build.rs`, which checks them against `eldenring-deobf.bin` at
-// shift 0 when a copy is present.
+// instructions by this crate's `build.rs`, which checks them against
+// `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_place_name_prologues.rs"
@@ -140,13 +142,13 @@ pub fn place_name_for_block(block: u32) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// The RVAs are byte-checked facts about 1.16.2, not tunables.
+    /// The RVAs are byte-checked facts about 2.7.2.0, not tunables.
     #[test]
     fn the_rvas_are_the_byte_checked_ones() {
-        assert_eq!(MSG_REPOSITORY_GLOBAL_RVA, 0x3d7_d4f8);
-        assert_eq!(PLACE_NAME_LOOKUP_RVA, 0xd1_0b60);
+        assert_eq!(MSG_REPOSITORY_GLOBAL_RVA, 0x3d8_4588);
+        assert_eq!(PLACE_NAME_LOOKUP_RVA, 0xd1_3990);
         // `48 89 5C 24 08` is `MOV [RSP+8],RBX` -- long enough to discriminate, and confirmed
-        // against eldenring-deobf.bin at shift 0.
+        // against eldenring-deobf-1.17.2.bin.
         assert_eq!(
             PLACE_NAME_LOOKUP_PROLOGUE,
             &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20]

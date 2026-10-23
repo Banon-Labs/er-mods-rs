@@ -119,20 +119,21 @@ pub(crate) fn mh_install_hook_once(
 
 const SOFTWARE_KEYBOARD_JOB_SIZE: usize = 0x1a8;
 const SOFTWARE_KEYBOARD_VALIDATOR_SIZE: usize = 0x70;
-const SOFTWARE_KEYBOARD_JOB_CTOR_RVA: u32 = 0x81be30;
-const SOFTWARE_KEYBOARD_RESULT_GATE_RVA: u32 = 0x81d3d0;
-const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA: u32 = 0x81d220;
-const FD4_TIME_VTABLE_RVA: usize = 0x29c8e58;
-const FD4_TIME_FLOAT_VTABLE_RVA: usize = 0x29c8e48;
-const SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA: u32 = 0xe70920;
-const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA: u32 = 0xe70960;
-const SOFTWARE_KEYBOARD_ENTER_NAME_RVA: u32 = 0xe70c00;
-const SOFTWARE_KEYBOARD_SET_INITIAL_RVA: u32 = 0xe709f0;
-const SOFTWARE_KEYBOARD_SET_MAX_RVA: u32 = 0x2416ee0;
+// 2.7.2.0 rvas.
+const SOFTWARE_KEYBOARD_JOB_CTOR_RVA: u32 = 0x81d160;
+const SOFTWARE_KEYBOARD_RESULT_GATE_RVA: u32 = 0x81e700;
+const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA: u32 = 0x81e550;
+const FD4_TIME_VTABLE_RVA: usize = 0x29cde58;
+const FD4_TIME_FLOAT_VTABLE_RVA: usize = 0x29cde48;
+const SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA: u32 = 0xe73e80;
+const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA: u32 = 0xe73ec0;
+const SOFTWARE_KEYBOARD_ENTER_NAME_RVA: u32 = 0xe74160;
+const SOFTWARE_KEYBOARD_SET_INITIAL_RVA: u32 = 0xe73f50;
+const SOFTWARE_KEYBOARD_SET_MAX_RVA: u32 = 0x241ae90;
 
 // The `*_SIG` prologue for each RVA above -- plus `GAME_HEAP_ALLOC_SIG` for the allocator thunk
 // at `GAME_HEAP_ALLOC_RVA` -- is assembled from named instructions by this crate's `build.rs`,
-// which also compares them against `eldenring-deobf.bin` when a copy is present.
+// which also compares them against `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_software_keyboard_prologues.rs"
@@ -188,14 +189,14 @@ const fn utf16_resource<const N: usize>(name: &str) -> [u16; N] {
 
 // `static`, not `const`, and that distinction is load-bearing. The job constructor copies the
 // `SoftwareKeyboardConfig` struct by value into the job (`MOVUPS XMM0,[RSI]; MOVUPS
-// [R14+0x150],XMM0` at `0x14081bec2`) -- pointer included -- and the movie is not loaded then. It is
-// loaded later, from the job's own first step: `FUN_14081cd70` reads the copied config back out of
-// `job+0x150` and takes `config.resource` as the `CSScaleformLoadInfo::filename` it hands to
-// `FUN_1407fb050`. That dereference happens long after `submit_software_keyboard` has returned, so
-// the bytes must outlive it. A `const` is inlined as a temporary at each use site and `.as_ptr()` on
-// one has no lifetime past its statement unless the compiler happens to promote it -- a guarantee
-// this must not depend on when the failure mode is the keyboard loading a movie named out of reused
-// stack.
+// [R14+0x150],XMM0` at 2.7.2.0 `0x14081d1f2`) -- pointer included -- and the movie is not loaded
+// then. It is loaded later, from the job's own first step: 2.7.2.0 `0x14081e0a0` reads the copied
+// config back out of `job+0x150` and takes `config.resource` as the `CSScaleformLoadInfo::filename`
+// it hands to 2.7.2.0 `0x1407fc380`. That dereference happens long after
+// `submit_software_keyboard` has returned, so the bytes must outlive it. A `const` is inlined as a
+// temporary at each use site and `.as_ptr()` on one has no lifetime past its statement unless the
+// compiler happens to promote it -- a guarantee this must not depend on when the failure mode is
+// the keyboard loading a movie named out of reused stack.
 static TEXT_INPUT_RESOURCE: [u16; 28] = utf16_resource(TEXT_INPUT_RESOURCE_NAME);
 static BUILD_URL_TEXT_INPUT_RESOURCE: [u16; 26] =
     utf16_resource(BUILD_URL_TEXT_INPUT_RESOURCE_NAME);
@@ -252,7 +253,7 @@ static SAVE_PICKER_PATH_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>
 // Two editors, one pair of DETOURS.
 //
 // The Quit tab's "Load Build from URL" row needs the same native `CS::SoftwareKeyboard` this file
-// already drives for save paths. It must not install its own hooks on 0x81d3d0 / 0x81d220: two
+// already drives for save paths. It must not install its own hooks on 0x81e700 / 0x81e550: two
 // MinHook detours on one prologue overwrite each other's trampolines, which is the exact corruption
 // `scripts/me3-dll-conflicts.toml` exists to keep out of a profile -- and it would be worse here,
 // inside one DLL, where no profile check could see it.
@@ -420,12 +421,12 @@ pub fn build_url_note_editor_window_state(window: usize, state: i32) -> bool {
         }
         // The window going terminal is the only reliable "THE FIELD CLOSED" signal we get.
         //
-        // The back action was supposed to arrive at the `0x81d3d0` result gate, which would record
-        // `Cancelled` and clear the active-job slot. It does not: a live session opened three link
-        // fields, the player closed each with B, and that detour fired zero times (runtime log
-        // `dll:8dca09bb`, 2026-08-23). Neither did the `0x81d220` terminal callback. Those two RVAs
-        // are on the `SoftwareKeyboardJob` path, and this field is served by the SCALEFORM 02_990
-        // fallback instead -- so a cancel there never reaches them, the job slot stays set forever,
+        // The back action was supposed to arrive at the result gate (1.16.2 `0x81d3d0`), which
+        // would record `Cancelled` and clear the active-job slot. It does not: a live session
+        // opened three link fields, the player closed each with B, and that detour fired zero
+        // times (runtime log `dll:8dca09bb`, 2026-08-23). Neither did the terminal callback
+        // (1.16.2 `0x81d220`). Those two RVAs are on the `SoftwareKeyboardJob` path, and this
+        // field is served by the SCALEFORM 02_990 fallback instead -- so a cancel there never reaches them, the job slot stays set forever,
         // and the row refuses every future press with "editor already active". The row is dead for
         // the rest of the session.
         //
@@ -552,10 +553,10 @@ fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
     // A job whose latch we already released is still ours, and the detours must still claim it.
     //
     // This is what crashed the game (`dll:a71aa552`, 2026-08-23, `0xe06d7363` ->
-    // `ThrowBadFunctionCallException` from inside `FUN_14081d220+0xf8`, then
-    // `NtTerminateProcess(0xc0000005)`). The job is constructed with an intentionally empty
-    // `std::function` as its completion callback, which is only safe because the `0x81d220` detour
-    // recognises the job and never lets the native side invoke it. The abandoned-latch watchdog
+    // `ThrowBadFunctionCallException` from inside 1.16.2 `FUN_14081d220+0xf8` (2.7.2.0
+    // `0x14081e648`), then `NtTerminateProcess(0xc0000005)`). The job is constructed with an
+    // intentionally empty `std::function` as its completion callback, which is only safe because
+    // the terminal-callback detour recognises the job and never lets the native side invoke it. The abandoned-latch watchdog
     // cleared the active-job slot while the job was still alive, so when that job later terminated
     // `keyboard_owner_of` no longer recognised it, the detour forwarded to the original, and the
     // engine called an empty `std::function` -- `std::bad_function_call`, straight through the
@@ -694,7 +695,7 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
 ///
 /// The latch and ownership are different things, and the build-url field has had this right since
 /// 2026-08-23 while the save path never did. The job carries the intentionally empty
-/// `std::function` this crate hands the engine, and the `0x81d220` / `0x81d3d0` detours are the only
+/// `std::function` this crate hands the engine, and the `0x81e550` / `0x81e700` detours are the only
 /// reason that is safe: they recognise the job and never let the native side invoke it. Clearing the
 /// active-job slot without recording the job here makes `keyboard_owner_of` stop recognising it, the
 /// detour forwards to the original, and the engine calls the empty `std::function` --
@@ -704,7 +705,8 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
 /// invokes the callback, so backing out of the field worked all session and the first accept was
 /// fatal. The crash record names it exactly -- `exception_code=0xe06d7363`,
 /// `cpp_throw_type=std::bad_function_call`, thrown at `eldenring.exe+0x81e198` with the released job
-/// still in `r15`. It is the same failure recorded as `dll:a71aa552` on 2026-08-23.
+/// still in `r15` (1.17.1 terminal callback `0x14081e0a0` + `0xf8`; 2.7.2.0 `+0x81e648`). It is
+/// the same failure recorded as `dll:a71aa552` on 2026-08-23.
 ///
 /// `Cancelled` is deposited only when nothing is already waiting: an accept records its text from
 /// the terminal callback and its window goes terminal immediately afterwards, so overwriting here
@@ -943,13 +945,13 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
         return unsafe { original(job, result, time, d) };
     };
 
-    // Preserve the native accepted-state and intermediate cleanup chain. The owned terminal d220
-    // detour below replaces only the callback leaf that our intentionally-empty std::function cannot
-    // satisfy. Cancellation still terminates here and never reaches d220.
+    // Preserve the native accepted-state and intermediate cleanup chain. The owned terminal-callback
+    // detour (0x81e550) below replaces only the callback leaf that our intentionally-empty
+    // std::function cannot satisfy. Cancellation still terminates here and never reaches 0x81e550.
     let ret = unsafe { original(job, result, time, d) };
     let result_state = unsafe { safe_read_i32(result) }.unwrap_or(0);
     if result_state == MENU_JOB_STATE_FAILED {
-        // The back action lands here. `FUN_14081d3d0` reads the controller's result code
+        // The back action lands here. `0x14081e700` reads the controller's result code
         // (`+0x78`) once the keyboard has closed and reports Failed for anything but 2, so a
         // cancel is a native verdict rather than something inferred from absence. Recording it as
         // `Cancelled` is what lets the build-url editor tell "the player backed out" apart from
@@ -1013,8 +1015,9 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
     // must not linger in the released list, where a recycled address would be claimed by mistake.
     forget_released_keyboard_job(job);
 
-    // Exact native d220 tail after callback return: SetResult(Success, 0), then restore FD4Time's
-    // two vtables in order. This skips only the null job+0x1a0 callback invocation.
+    // Exact native terminal-callback tail (2.7.2.0 `0x14081e550`) after callback return:
+    // SetResult(Success, 0), then restore FD4Time's two vtables in order. This skips only the
+    // null job+0x1a0 callback invocation.
     if result != 0 && result != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe {
             *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
@@ -1142,18 +1145,19 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
 /// # which arguments the native side keeps, and for how long
 ///
 /// Every pointer below is handed to code that outlives this call, so "does it copy?" is settled
-/// here from the 1.16.2 dump rather than re-litigated each time the field misbehaves. It has been
-/// blamed for a stale field twice, and it was not the cause either time.
+/// here from the 1.16.2 dump rather than re-litigated each time the field misbehaves (the
+/// addresses below are the 2.7.2.0 functions). It has been blamed for a stale field twice, and it
+/// was not the cause either time.
 ///
 /// * `initial` is copied three times over, and none of the copies keeps the pointer.
-///   `enter_name` (`0xe70c00`) and `set_initial` (`0xe709f0`) both run it through
+///   `enter_name` (`0xe74160`) and `set_initial` (`0xe73f50`) both run it through
 ///   `DLTX::DLString::CopyFromU16Array` into a stack `DLString` and then assign that into the
-///   validator with `0x142416ef0` (a `DLString::substr(dst, src, 0, -1)`). The ctor takes it a third
+///   validator with `0x14241aea0` (a `DLString::substr(dst, src, 0, -1)`). The ctor takes it a third
 ///   time as its 5th argument and calls `DLTX::DLString<wchar_t>::FromU16Array(job+0xe8, initial,
 ///   GetMenuHeapAllocator())` -- which measures the string, allocates on the menu heap and copies.
 ///   The live log is the independent confirmation: a field left open for 36 seconds returned
 ///   exactly the 43 code units it was opened with.
-/// * `validator` is deep-copied into `job+0x60` by `0x1407f3eb0`, which runs `DLString::Copy` over
+/// * `validator` is deep-copied into `job+0x60` by `0x1407f51e0`, which runs `DLString::Copy` over
 ///   both of its strings. That is why destroying the stack validator immediately after the ctor is
 ///   correct and not a use-after-free.
 /// * `config` is copied by value into `job+0x150` (16 bytes, one `MOVUPS` pair). The struct's
@@ -1888,8 +1892,8 @@ mod tests {
         }
         assert_eq!(SOFTWARE_KEYBOARD_JOB_CONTROLLER_D8_OFFSET, 0xd8);
         assert_eq!(SOFTWARE_KEYBOARD_CONTROLLER_TEXT_80_OFFSET, 0x80);
-        assert_eq!(FD4_TIME_VTABLE_RVA, 0x29c8e58);
-        assert_eq!(FD4_TIME_FLOAT_VTABLE_RVA, 0x29c8e48);
+        assert_eq!(FD4_TIME_VTABLE_RVA, 0x29cde58);
+        assert_eq!(FD4_TIME_FLOAT_VTABLE_RVA, 0x29cde48);
     }
 
     #[test]
@@ -2068,8 +2072,8 @@ mod tests {
     /// Pressing B closed the field and killed the row for the rest of the session.
     ///
     /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
-    /// action, and the `0x81d3d0` cancel gate fired zero times -- so the active-job slot stayed set
-    /// and every later press was refused with "editor already active". The window going terminal is
+    /// action, and the cancel gate (1.16.2 `0x81d3d0`) fired zero times -- so the active-job slot
+    /// stayed set and every later press was refused with "editor already active". The window going terminal is
     /// the signal that actually arrives, so it has to be the one that releases the latch.
     #[test]
     fn a_link_field_window_closing_releases_a_latch_no_detour_cleared() {
@@ -2230,11 +2234,11 @@ mod tests {
     /// Releasing the latch must not DISOWN the job -- That crashed the game.
     ///
     /// `dll:a71aa552`, 2026-08-23: `0xe06d7363` -> `ThrowBadFunctionCallException` inside
-    /// `FUN_14081d220+0xf8`, then `NtTerminateProcess(0xc0000005)`. The job carries an
-    /// intentionally empty `std::function`, safe only because our detour claims the job and never
-    /// lets the engine invoke it. The abandoned-latch watchdog cleared the active-job slot while
-    /// the job was still alive, `keyboard_owner_of` stopped recognising it, the detour forwarded,
-    /// and the engine called an empty function.
+    /// 1.16.2 `FUN_14081d220+0xf8` (2.7.2.0 `0x14081e648`), then `NtTerminateProcess(0xc0000005)`.
+    /// The job carries an intentionally empty `std::function`, safe only because our detour claims
+    /// the job and never lets the engine invoke it. The abandoned-latch watchdog cleared the
+    /// active-job slot while the job was still alive, `keyboard_owner_of` stopped recognising it,
+    /// the detour forwarded, and the engine called an empty function.
     #[test]
     fn a_released_job_is_still_ours_to_intercept() {
         let _guard = KEYBOARD_STATE_TEST_LOCK

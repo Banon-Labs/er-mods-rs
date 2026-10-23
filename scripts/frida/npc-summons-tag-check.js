@@ -14,7 +14,7 @@
 // Nothing is written and no behaviour changes. The one Interceptor is on FRAME_TICK, the
 // per-frame function spawn-npc.js drives its own frame from, and only paces the reads; there are
 // no timers, because a pre-commit gate refuses them in agents. Addresses are 2.7.2.0, carried from
-// 1.17.1 with scripts/map-rvas-1171-to-1172.py and written `1.17.1 -> 2.7.2.0` below.
+// 1.17.1 and written `1.17.1 -> 2.7.2.0` below.
 //
 // Proof the bd issue asks for: every companion's handle in a friendly row at or past the party's
 // member count with colour (+0x13) 1, and, after a companion is hit, no enemy row (+0x0) holding

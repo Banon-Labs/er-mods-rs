@@ -31,12 +31,11 @@ use crate::face_data::{
 };
 use crate::host::append_autoload_debug;
 
-/// `base + rva`, resolved for the running build, or `None` when this build moved the function.
+/// `base + rva`, or `None` on any build but 2.7.2.0.
 ///
 /// The two calls below copy a character's face data and ChrAsm out of a serialized slot. A
-/// hand-built `base + rva` would call the 1.16.2 address on ELDEN RING 1.17 -- whatever now
-/// occupies it -- and a mapped constant is no safer that way, because the map knows the new
-/// address and `base + rva` never asks it.
+/// hand-built `base + rva` would call the 2.7.2.0 address on another build -- whatever occupies
+/// it there -- because `base + rva` never asks which build is running.
 #[cfg(windows)]
 fn gated_summary_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
@@ -225,12 +224,12 @@ impl<'a> SerializedSaveSlot<'a> {
     ///
     /// The three override SENTINELS must be -1, not zero (bd er-effects-rs-wncc -- the real
     /// entirely-nude root cause). `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) are not padding:
-    /// the model-resource request `FUN_1409e6fb0` tests them signed and treats a non-negative value in
+    /// the model-resource request `FUN_1409e86f0` tests them signed and treats a non-negative value in
     /// any of them as a forced whole-outfit override, so a zero-filled image resolves head/chest/hands/
     /// legs to param ids 0/100/200/300 -- rows that do not exist. Nothing renders, including the
     /// bare-body defaults the native feed equips into hands and legs, which is exactly the reported
-    /// "nude, missing even the default underwear". A ctor-built `ChrAsm` holds -1 here (deobf
-    /// 0x1403be1d0 and 0x1403be208), which is why boot was unaffected: its record is copied from the
+    /// "nude, missing even the default underwear". A ctor-built `ChrAsm` holds -1 here (2.7.2.0
+    /// 0x1403be1e0 and 0x1403be218), which is why boot was unaffected: its record is copied from the
     /// ctor-initialised `PlayerGameData.equipGameData.chrAsm`. See `CHR_ASM_OVERRIDE_ABSENT`.
     /// `unk4` (+0x04) and the +0xdc..+0xe8 tail stay zero -- that is also what the ctor does.
     ///
@@ -242,8 +241,8 @@ impl<'a> SerializedSaveSlot<'a> {
     /// mutate live refcount state on entries this process owns.
     ///
     /// Dropping them costs nothing visually: the render path resolves armor from
-    /// `equipment_param_ids` alone (`CS::ChrAsm::GetProtectorParamIdBySlot` at deobf 0x1403be950 is
-    /// `mov 0x7c(%rcx,%rdx,4),%eax`, and `FUN_1409e6fb0` feeds that straight to
+    /// `equipment_param_ids` alone (`CS::ChrAsm::GetProtectorParamIdBySlot` at 2.7.2.0 0x1403be960 is
+    /// `mov 0x7c(%rcx,%rdx,4),%eax`, and `FUN_1409e86f0` feeds that straight to
     /// `EquipParamProtector::GetEntry`). No gaitem handle is read anywhere on the render path.
     /// Handles matter only because `CS::ChrAsm::EquipItem` writes a param id from a handle lookup and
     /// stores -1 when the lookup fails -- i.e. a bad handle can only destroy a good param id.
@@ -700,7 +699,7 @@ mod loading_cover_chr_asm_image_tests {
         )
     }
 
-    /// The fix (bd er-effects-rs-wncc). `FUN_1409e6fb0` tests these three signed and treats a
+    /// The fix (bd er-effects-rs-wncc). `FUN_1409e86f0` tests these three signed and treats a
     /// non-negative value as a forced whole-outfit override, so a zero here resolves the four
     /// protector slots to 0/100/200/300 and the portrait renders entirely nude -- default underwear
     /// included. A ctor-built `ChrAsm` holds -1; our hand-built image must too.
@@ -812,7 +811,7 @@ mod loading_cover_chr_asm_image_tests {
 mod arm_style_corpus {
     use super::*;
 
-    /// Legal `ChrAsmArmStyle` values. `CS::ChrIns::IsTwoHanding` (deobf 0x1403f4930) is
+    /// Legal `ChrAsmArmStyle` values. `CS::ChrIns::IsTwoHanding` (2.7.2.0 0x1403f4b60) is
     /// `ADD EAX,-0x2 ; CMP EAX,0x1 ; SETBE`, so 2 and 3 are the two-handed pair and the enum has at
     /// least four members.
     const ARM_STYLE_MAX: u32 = 3;

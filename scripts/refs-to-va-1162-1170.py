@@ -3,7 +3,8 @@
 
 Why this exists
 ---------------
-`map-rvas-1162-to-1170.py` answers "where does this byte shape re-occur". When a function has a
+`map-rvas-1162-to-1170.py` (deleted with the address carry on 2026-10-23) answered "where does
+this byte shape re-occur". When a function has a
 byte-identical TWIN -- and this image has several; MSVC emits duplicate bodies that COMDAT folding
 did not merge -- that question has two answers and no way to choose between them. Byte evidence is
 structurally incapable of separating twins: "the body is byte-identical" is the premise, not the

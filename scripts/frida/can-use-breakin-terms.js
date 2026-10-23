@@ -1,7 +1,7 @@
 // Measure the three predicates `can_use_goods_gate.rs` now consults, against a live player.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The gate stopped forcing `CanUseGoods` to 1 unconditionally and started keeping a refusal that
 // came from `CanUseBreakInItem` or `HasNonNPCPhantoms`. Two things about that are unproven from

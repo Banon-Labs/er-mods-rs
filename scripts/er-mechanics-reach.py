@@ -3,7 +3,8 @@
 
 Write-up: `docs/er-mechanics/reach.md`. Labels as in the other `docs/er-mechanics` docs:
 `VERIFIED` = regulation value or read out of the executable (1.16.2 named dump on :8765,
-re-found in `eldenring-deobf-1.17.1.bin`), `TAE` = decoded animation event, `MEASURED` =
+re-found in `eldenring-deobf-1.17.2.bin`, whose 2.7.2.0 addresses are the ones cited), `TAE` =
+decoded animation event, `MEASURED` =
 read out of an unpacked model or clip, `INFERRED` = fits the data, consumer not traced,
 `COMMUNITY` = outside claim (Smithbox annotations, WitchyBND TimeAct template).
 
@@ -47,16 +48,16 @@ centre still touched, hit height kept), both for a defender facing the attacker.
 
 Tracking (`VERIFIED` handlers, `TAE` windows):
 
-    TAE 224 SetTurnSpeed (0x14042c480): f32 deg/s, u8 IsLockOnCheck (1: only while locked on),
+    TAE 224 SetTurnSpeed (0x14042ca60): f32 deg/s, u8 IsLockOnCheck (1: only while locked on),
         u8 priority at +5 (read only when the event's +0x1a word is >= 0x19, else -1)
-        -> CSChrActionFlagModule::SetTurnSpeed 0x140406a60 (lower-or-equal priority overwrites)
-    ChrCtrlJointModifier::CalculateTurnSpeed 0x1403c4090 picks, first that is >= 0:
+        -> CSChrActionFlagModule::SetTurnSpeed 0x140407020 (lower-or-equal priority overwrites)
+    ChrCtrlJointModifier::CalculateTurnSpeed 0x1403c40a0 picks, first that is >= 0:
         joint turn speed (TAE 704 path), the TAE 224 turn speed, the behavior-data turn speed
         (module +0xc0, field +0x250, set from HKS), else the modifier's own turnVelocity;
-        times 0.017453292 (deg -> rad, 0x14329e62c)
-    TAE 0 JumpTable 7 (case 0x140427853): actionModifiersFlags |= 0x8000, named
-        "Disable Turning" by the community template. Read by the ChrCtrl update FUN_1403cbff0
-        (0x1403cc10f): bit 15 set clears its may-rotate flag and it zeroes rotationUpdate.
+        times 0.017453292 (deg -> rad, 0x1432a3bac)
+    TAE 0 JumpTable 7 (case 0x140427e33): actionModifiersFlags |= 0x8000, named
+        "Disable Turning" by the community template. Read by the ChrCtrl update FUN_1403cc000
+        (0x1403cc11f): bit 15 set clears its may-rotate flag and it zeroes rotationUpdate.
 
 Spatial coverage (`MEASURED` pose and dummies; the metrics are modelling choices, `INFERRED`):
 every 60 Hz sample of a live damaging shape becomes spheres along the capsule; each sphere's
@@ -68,15 +69,15 @@ hit heights come from it; `coverage_factor` combines the arc with the turn budge
 
 Play speed (`VERIFIED`):
 
-    TAE 608 AnimSpeedGradient (0x140426420): speed = start + (end - start) * min(progress, 1),
-        stored as the pending multiplier at CSChrBehaviorModule+0x15c4 (0x14041bda0)
-    each behavior update latches +0x15c4 into +0x15c0 and resets +0x15c4 to 1.0 (0x14041d6ac)
-    CSChrBehaviorModule::Update 0x14041d760: graph dt = dt * behaviorDataFactor * debugSpeed
+    TAE 608 AnimSpeedGradient (0x140426a00): speed = start + (end - start) * min(progress, 1),
+        stored as the pending multiplier at CSChrBehaviorModule+0x15c4 (0x14041c370)
+    each behavior update latches +0x15c4 into +0x15c0 and resets +0x15c4 to 1.0 (0x14041dc7c)
+    CSChrBehaviorModule::Update 0x14041dd30: graph dt = dt * behaviorDataFactor * debugSpeed
         * animSpeedGradientMultiplier(+0x15c0)
 
 So clip time runs `speed` times faster than real time inside a 608 window. Real frames below are
 `30 * integral of dt / speed` (30 fps is the attacks-doc convention, `INFERRED`).
-`behaviorDataFactor` (thunk 0x140416270 -> 0x144cb547a) is a debug override, 1.0 unless a
+`behaviorDataFactor` (thunk 0x140416830 -> 0x14596a1e9) is a debug override, 1.0 unless a
 `GlobalDebugFlags` play-speed switch is set (`VERIFIED`, bd
 behaviordatafactor-is-debug-gated-1-in-retail-2026-09-29); EquipParamWeapon and SpEffectParam have
 no play-speed column (`VERIFIED`: no such field in either paramdef).
@@ -118,8 +119,8 @@ PARTS_ROOT = os.environ.get(
     os.path.expanduser('~/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/sharded/parts'))
 SMITHBOX_ER = os.environ.get(
     'ER_SMITHBOX_PARAM_DIR', os.path.expanduser('~/.local/share/smithbox/app/Assets/PARAM/ER'))
-DEOBF_1162 = os.environ.get('ER_DEOBF_1162', os.path.join(ROOT, 'eldenring-deobf.bin'))
-DEOBF_1171 = os.environ.get('ER_DEOBF_1171', os.path.join(ROOT, 'eldenring-deobf-1.17.1.bin'))
+#: The installed build's flat image (2.7.2.0), the one `er-mechanics-attacks` reads.
+DEOBF = ATK.DEOBF
 TAE_TEMPLATE_ER = ATK.TAE_TEMPLATE_ER
 
 TAE_FPS = ATK.TAE_FPS
@@ -132,7 +133,7 @@ TAE_TURN_TYPES = (224, 703, 704, 705, 706)
 JT_DISABLE_TURNING = 7
 JUMP_TABLE_STATE_GATE_OFFSET = ATK.JUMP_TABLE_STATE_GATE_OFFSET
 #: TAE 1 Args+0xe: SpEffect state-info id. Nonzero skips the hitbox unless the attacker has it
-#: (`VERIFIED`: 0x1404266d0 `movzx edx, word [rbx+0xe]` -> 0x1404f95a0 on the SpEffect module).
+#: (`VERIFIED`: 0x140426cb0 `movzx edx, word [rbx+0xe]` -> 0x1404fa450 on the SpEffect module).
 #: The Lance's judge 5000-5005 hitboxes carry 187 (only SpEffect 1908 has that state info).
 ATTACK_STATE_INFO_OFFSET = 0xe
 
@@ -578,9 +579,9 @@ def _turn_integral(turns, disabled, a0, a1, windows):
 
 #: The turn rate in force during attack frames with no usable TAE 224 event. Next in
 #: `CalculateTurnSpeed` is behavior-data +0x250, written by the HKS `SetTurnSpeed` act (id 2004,
-#: `HksAct` 0x14040cbd0, `VERIFIED` write). No attack state or helper in `c0000.hks` reaches that
+#: `HksAct` 0x14040d190, `VERIFIED` write). No attack state or helper in `c0000.hks` reaches that
 #: act (`scripts/er-hks-disasm.py --reaches SetTurnSpeed`: only move, roll and step states, and
-#: the move values only for AI-controlled players), and `ChrIns::PreBehaviorSafe` -> FUN_1404146b0
+#: the move values only for AI-controlled players), and `ChrIns::PreBehaviorSafe` -> FUN_140414c70
 #: resets +0x250 to -1.0 every frame (`VERIFIED` store). So the joint modifier's own
 #: `turnVelocity` applies: 720.0, stored by the `ChrCtrlJointModifier` constructor
 #: (`TURN_VELOCITY_STORE`, `VERIFIED`). That the player's modifier keeps it is `INFERRED`: the only
@@ -767,7 +768,7 @@ def _clip(reg, weapon_id, slot, anim, grip):
 
 
 #: TAE 307 PCBehavior: Args+4 u32 flags, Args+8 judge. With flag 8 the judge resolves through the
-#: weapon's behaviorVariationId like event 1 (`VERIFIED` 0x14042a580; `er-mechanics-ashes`
+#: weapon's behaviorVariationId like event 1 (`VERIFIED` 0x14042ab60; `er-mechanics-ashes`
 #: `anim_actions`). Skill TimeActs fire some of their hits this way; slot clips are read as before.
 TAE_PC_BEHAVIOR, PC_BEHAVIOR_WEAPON_FLAG = 307, 8
 
@@ -1006,7 +1007,7 @@ DEFENDER_CLIP = (0, 0)
 #: Horizontal directions in the defender's model space (it faces -Z, right hand on -X).
 HURTBOX_DIRECTIONS = {'front': (0.0, -1.0), 'back': (0.0, 1.0), 'right': (-1.0, 0.0),
                       'left': (1.0, 0.0)}
-#: Movement/push capsule, for comparison only (`VERIFIED` InitForPlayer 0x140460050 immediates,
+#: Movement/push capsule, for comparison only (`VERIFIED` InitForPlayer 0x140460690 immediates,
 #: from the bd entry above): not the damage hurtbox.
 PUSH_CAPSULE_RADIUS, PUSH_CAPSULE_HALF_HEIGHT = 0.4, 1.5
 CONTACT_SEGMENT_SAMPLES = 32
@@ -1908,27 +1909,28 @@ def print_table(rc):
 
 # --------------------------------------------------------------------------- selftest
 
-#: Executable facts checked against both images: (1.16.2 VA, 1.17.1 VA, what).
+#: Executable facts checked against the image (2.7.2.0 VAs; each function decodes to the same
+#: instructions as its 1.16.2 and its 1.17.1 counterpart).
 EXE_SITES = {
-    'tae224': (0x14042c480, 0x14042c9d0),
-    'set_turn_speed': (0x140406a60, 0x140406f90),
-    'tae608': (0x140426420, 0x140426970),
-    'calc_turn_speed': (0x1403c4090, 0x1403c40a0),
-    'speed_latch': (0x14041d6ac, 0x14041dbec),
+    'tae224': 0x14042ca60,
+    'set_turn_speed': 0x140407020,
+    'tae608': 0x140426a00,
+    'calc_turn_speed': 0x1403c40a0,
+    'speed_latch': 0x14041dc7c,
 }
 IMAGE_BASE = 0x140000000
 #: `mov r15d, [rdx+0x40]; shr r15, 0xf; not r15b; and r15b, 1` inside the ChrCtrl update
-#: FUN_1403cbff0 (1.16.2; 1.17.1 0x1403cc000). The byte is the may-rotate flag: it is also cleared
-#: by SpEffect state 435, `disableMove`, a ladder and a throw, and when it is clear the function
-#: stores a zero vector into `ChrCtrl.rotationUpdate` (`VERIFIED`, 1.16.2 decompile). That this
+#: FUN_1403cc000. The byte is the may-rotate flag: it is also cleared by SpEffect state 435,
+#: `disableMove`, a ladder and a throw, and when it is clear the function stores a zero vector
+#: into `ChrCtrl.rotationUpdate` (`VERIFIED`, 1.16.2 decompile of the same code). That this
 #: zero request is what the joint modifier then turns toward, so a Disable Turning window blocks
 #: turning whatever the TAE 224 speed, is `INFERRED`: the modifier's read of `rotationUpdate`
 #: was not traced.
-JT7_READER = (0x1403cc10f, 0x1403cc11f)
+JT7_READER = 0x1403cc11f
 JT7_READER_BYTES = bytes.fromhex('448b7a4049c1ef0f41f6d74180e701')
-#: `mov dword [rcx+8], 720.0` in the `ChrCtrlJointModifier` constructor (1.16.2 0x1403c3c50,
-#: 1.17.1 0x1403c3c60): `turnVelocity`. The only store of that immediate to +8 in either image.
-TURN_VELOCITY_STORE = (0x1403c3c6a, 0x1403c3c7a)
+#: `mov dword [rcx+8], 720.0` in the `ChrCtrlJointModifier` constructor (0x1403c3c60):
+#: `turnVelocity`. The only store of that immediate to +8 in the 1.16.2 and 1.17.1 images.
+TURN_VELOCITY_STORE = 0x1403c3c7a
 TURN_VELOCITY_STORE_BYTES = bytes.fromhex('c7410800003444')
 
 
@@ -1951,57 +1953,56 @@ def _find(path, va, size, pattern):
 
 
 def _exe_checks(check, skips):
-    for build, path, idx in (('1.16.2', DEOBF_1162, 0), ('1.17.1', DEOBF_1171, 1)):
-        if not os.path.exists(path):
-            skips.append(f'EXE {build}: {path} absent')
-            continue
-        src = f'EXE {os.path.basename(path)}'
-        tae224, set_turn = EXE_SITES['tae224'][idx], EXE_SITES['set_turn_speed'][idx]
-        # 224: `cmp byte [rbx+4], 1` (IsLockOnCheck), `movss xmm1, [rbx]`, then a call to
-        # SetTurnSpeed with the priority byte `movzx r8d, byte [rbx+5]` or 0xff.
-        body = _image(path, tae224, 0x60)
-        check(f'{build} 224 checks IsLockOnCheck byte +4', b'\x80\x7b\x04\x01' in body, True, src)
-        check(f'{build} 224 reads priority byte +5', b'\x44\x0f\xb6\x43\x05' in body, True, src)
-        call_at = body.find(b'\xe8', body.find(b'\x41\xb0\xff'))
-        check(f'{build} 224 calls SetTurnSpeed',
-              call_at >= 0 and _rel32_target(path, tae224 + call_at) == set_turn, True, src)
-        # 608: interpolate and tail-jump into a two-instruction setter of +0x15c4.
-        h608 = EXE_SITES['tae608'][idx]
-        body = _image(path, h608, 0x80)
-        jmp_at = body.find(b'\xe9', 0x60)
-        setter = _rel32_target(path, h608 + jmp_at) if jmp_at >= 0 else None
-        check(f'{build} 608 setter writes behavior +0x15c4',
-              setter and _image(path, setter, 9), b'\xf3\x0f\x11\x89\xc4\x15\x00\x00\xc3', src)
-        latch = EXE_SITES['speed_latch'][idx]
-        check(f'{build} latch +0x15c4 -> +0x15c0, reset 1.0', _image(path, latch, 0x16),
-              b'\x8b\x83\xc4\x15\x00\x00\x89\x83\xc0\x15\x00\x00'
-              b'\xc7\x83\xc4\x15\x00\x00\x00\x00\x80\x3f', src)
-        # Update multiplies the graph dt by +0x15c0 (`mulss xmmN, [reg+0x15c0]`).
-        check(f'{build} behavior Update multiplies by +0x15c0',
-              _find(path, latch, 0x300, rb'\xf3(?:\x44)?\x0f\x59[\x80-\xbf]\xc0\x15\x00\x00') >= 0,
-              True, src)
-        # CalculateTurnSpeed ends with `mulss xmm0, [rip+X]`, X = 0.017453292.
-        calc = EXE_SITES['calc_turn_speed'][idx]
-        off = _find(path, calc, 0x90, rb'\xf3\x0f\x59\x05')
-        const = None
-        if off >= 0:
-            disp = struct.unpack('<i', _image(path, calc + off + 4, 4))[0]
-            const = struct.unpack('<f', _image(path, calc + off + 8 + disp, 4))[0]
-        check(f'{build} turn speed deg->rad constant', const and round(const, 7),
-              round(math.pi / 180, 7), src)
-        # JumpTable 7 case: `or qword [rbx+0x40], 0x8000`.
-        table = 0x140428650 if idx == 0 else 0x140428650 + 0x550
-        case7 = IMAGE_BASE + struct.unpack('<I', _image(path, table + 4 * 6, 4))[0]
-        check(f'{build} JumpTable 7 sets actionModifiersFlags 0x8000', _image(path, case7, 8),
-              b'\x48\x81\x4b\x40\x00\x80\x00\x00', src)
-        # The reader: ChrCtrl's update loads actionModifiersFlags and keeps !(bit 15) as the
-        # may-rotate flag; with it clear the rotation request is zeroed.
-        check(f'{build} ChrCtrl reads actionModifiersFlags bit 15 as may-rotate',
-              _image(path, JT7_READER[idx], len(JT7_READER_BYTES)), JT7_READER_BYTES, src)
-        store = _image(path, TURN_VELOCITY_STORE[idx], len(TURN_VELOCITY_STORE_BYTES))
-        check(f'{build} joint modifier turnVelocity = {DEFAULT_TURN_DEG_PER_S}',
-              store == TURN_VELOCITY_STORE_BYTES
-              and struct.unpack('<f', store[3:])[0] == DEFAULT_TURN_DEG_PER_S, True, src)
+    path = DEOBF
+    if not os.path.exists(path):
+        skips.append(f'EXE: {path} absent')
+        return
+    src = f'EXE {os.path.basename(path)}'
+    tae224, set_turn = EXE_SITES['tae224'], EXE_SITES['set_turn_speed']
+    # 224: `cmp byte [rbx+4], 1` (IsLockOnCheck), `movss xmm1, [rbx]`, then a call to
+    # SetTurnSpeed with the priority byte `movzx r8d, byte [rbx+5]` or 0xff.
+    body = _image(path, tae224, 0x60)
+    check('224 checks IsLockOnCheck byte +4', b'\x80\x7b\x04\x01' in body, True, src)
+    check('224 reads priority byte +5', b'\x44\x0f\xb6\x43\x05' in body, True, src)
+    call_at = body.find(b'\xe8', body.find(b'\x41\xb0\xff'))
+    check('224 calls SetTurnSpeed',
+          call_at >= 0 and _rel32_target(path, tae224 + call_at) == set_turn, True, src)
+    # 608: interpolate and tail-jump into a two-instruction setter of +0x15c4.
+    h608 = EXE_SITES['tae608']
+    body = _image(path, h608, 0x80)
+    jmp_at = body.find(b'\xe9', 0x60)
+    setter = _rel32_target(path, h608 + jmp_at) if jmp_at >= 0 else None
+    check('608 setter writes behavior +0x15c4',
+          setter and _image(path, setter, 9), b'\xf3\x0f\x11\x89\xc4\x15\x00\x00\xc3', src)
+    latch = EXE_SITES['speed_latch']
+    check('latch +0x15c4 -> +0x15c0, reset 1.0', _image(path, latch, 0x16),
+          b'\x8b\x83\xc4\x15\x00\x00\x89\x83\xc0\x15\x00\x00'
+          b'\xc7\x83\xc4\x15\x00\x00\x00\x00\x80\x3f', src)
+    # Update multiplies the graph dt by +0x15c0 (`mulss xmmN, [reg+0x15c0]`).
+    check('behavior Update multiplies by +0x15c0',
+          _find(path, latch, 0x300, rb'\xf3(?:\x44)?\x0f\x59[\x80-\xbf]\xc0\x15\x00\x00') >= 0,
+          True, src)
+    # CalculateTurnSpeed ends with `mulss xmm0, [rip+X]`, X = 0.017453292.
+    calc = EXE_SITES['calc_turn_speed']
+    off = _find(path, calc, 0x90, rb'\xf3\x0f\x59\x05')
+    const = None
+    if off >= 0:
+        disp = struct.unpack('<i', _image(path, calc + off + 4, 4))[0]
+        const = struct.unpack('<f', _image(path, calc + off + 8 + disp, 4))[0]
+    check('turn speed deg->rad constant', const and round(const, 7),
+          round(math.pi / 180, 7), src)
+    # JumpTable 7 case: `or qword [rbx+0x40], 0x8000`.
+    case7 = IMAGE_BASE + struct.unpack('<I', _image(path, ATK.JT_TABLE + 4 * 6, 4))[0]
+    check('JumpTable 7 sets actionModifiersFlags 0x8000', _image(path, case7, 8),
+          b'\x48\x81\x4b\x40\x00\x80\x00\x00', src)
+    # The reader: ChrCtrl's update loads actionModifiersFlags and keeps !(bit 15) as the
+    # may-rotate flag; with it clear the rotation request is zeroed.
+    check('ChrCtrl reads actionModifiersFlags bit 15 as may-rotate',
+          _image(path, JT7_READER, len(JT7_READER_BYTES)), JT7_READER_BYTES, src)
+    store = _image(path, TURN_VELOCITY_STORE, len(TURN_VELOCITY_STORE_BYTES))
+    check(f'joint modifier turnVelocity = {DEFAULT_TURN_DEG_PER_S}',
+          store == TURN_VELOCITY_STORE_BYTES
+          and struct.unpack('<f', store[3:])[0] == DEFAULT_TURN_DEG_PER_S, True, src)
 
 
 def _smithbox_enum(name):

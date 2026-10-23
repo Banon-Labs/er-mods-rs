@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Verify a 1.16.2 -> 1.17 pair whose function has no `.pdata` extent.
 
-Why `verify-rva-map-1170.py` cannot do it
------------------------------------------
-That tool stops a decode at (1) the `.pdata` extent, (2) a `ret`, or (3) a `jmp` immediately
+Why `verify-rva-map-1170.py` could not do it
+--------------------------------------------
+That tool (deleted with the address carry on 2026-10-23) stopped a decode at (1) the `.pdata` extent, (2) a `ret`, or (3) a `jmp` immediately
 followed by an `int3`. A leaf THUNK satisfies none of them. MSVC emits no unwind data for a
 function that neither allocates stack nor saves a register, so there is no extent; the thunk ends
 in a tail call, so there is no `ret`; and in this de-Arxan'd image the alignment gap after the

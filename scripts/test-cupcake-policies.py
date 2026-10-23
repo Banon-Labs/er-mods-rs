@@ -2585,6 +2585,47 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # Fenced code in a Rust comment is code, and the gate never reads it: the listing below was
+        # refused on 2026-10-23 although `scripts/check-comment-caps.py` drops it. Fences are
+        # honoured only in Rust, so this one has to be a `.rs` file, and it sits in
+        # `build-support/` rather than `crates/` for the reason given above the deny case.
+        PolicyCase(
+            "allow-edit-fenced-listing-in-a-rust-module-doc",
+            "",
+            True,
+            None,
+            {
+                "file_path": str(REPO_ROOT / "build-support" / "probe-example.rs"),
+                "old_string": "//! x\n",
+                "new_string": (
+                    "//! ```text\n"
+                    "//! 140c59277: 48 8b 4f 08     MOV RCX, [RDI + 0x8]      ; free the node -- on BOTH paths\n"
+                    "//! ```\n"
+                ),
+            },
+            include_timeout=False,
+            tool_name="Edit",
+        ),
+        # Its pair: the same edit with the word moved below the closing fence is refused, which is
+        # what keeps the allow above from passing on a guard that has gone inert for Rust edits.
+        PolicyCase(
+            "deny-edit-shouted-word-below-a-rust-fence",
+            "",
+            False,
+            "shouted word going into a comment",
+            {
+                "file_path": str(REPO_ROOT / "build-support" / "probe-example.rs"),
+                "old_string": "//! x\n",
+                "new_string": (
+                    "//! ```text\n"
+                    "//! 140c59277: 48 8b 4f 08     MOV RCX, [RDI + 0x8]\n"
+                    "//! ```\n"
+                    "//! The node is freed on BOTH paths.\n"
+                ),
+            },
+            include_timeout=False,
+            tool_name="Edit",
+        ),
         # AskUserQuestion (the multiple-choice questionnaire tool). Corrected 2026-08-15: the prior
         # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
         # design-interview question from the `grilling` skill was blocked while not in any /goal work.

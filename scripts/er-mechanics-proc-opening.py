@@ -8,22 +8,22 @@ what follow-up damage that lets through. Write-up: `docs/er-mechanics/status.md`
         --affinity Heavy --source "Drawstring Freezing Grease"
     python3 scripts/er-mechanics-proc-opening.py --rank --rl 150 --jobs 4 > proc-rank.txt
 
-Labels as in the sibling docs: `VERIFIED` (code in the 1.16.2 image, byte-checked at the mapped
-1.17.1 address, or a regulation value), `TAE` (player TimeAct / behavior graph), `COMMUNITY`
-(Smithbox's decompile of `c0000.hks` for 1.08.1; the constants it relies on are checked in the
-installed 1.17.1 bytecode), `INFERRED`.
+Labels as in the sibling docs: `VERIFIED` (code read in the 1.16.2 image and byte-checked at the
+mapped 2.7.2.0 address in `eldenring-deobf-1.17.2.bin`, or a regulation value), `TAE` (player
+TimeAct / behavior graph), `COMMUNITY` (Smithbox's decompile of `c0000.hks` for 1.08.1; the
+constants it relies on are checked in the installed bytecode), `INFERRED`.
 
-# What a proc does to a player (static RE, 1.16.2; 1.17.1 addresses after the slash)
+# What a proc does to a player (static RE; 2.7.2.0 addresses)
 
 ```
-FUN_14043d8a0 / 0x14043de00   gauge < 1: CSChrResistModule+0xb8 |= 1 << status index
-                              (or [rbx+0xb8], eax at 0x14043d904 / 0x14043de64)
+FUN_14043de90   gauge < 1: CSChrResistModule+0xb8 |= 1 << status index
+                (or [rbx+0xb8], eax at 0x14043def4)
   index = resist-module order: 0 poison, 1 rot, 2 bleed, 3 death blight, 4 frost, 5 sleep, 6 madness
-  (ApplySpEffectStatusClearFlags 0x14043e250 sets the same bits by stateInfo 2/5/6/116/260/436/437)
-HksEnv 0x140410820, env 409 GetDamageSpecialAttribute(i): switch byte table 0x1404133a4[409 - 223]
-  = case 0x6b -> IsStatusClearFlagSet 0x14043e0d0 / 0x14043e630: test [resist+0xb8], 1 << i
-ResetStatusClearFlags 0x14043d970 / 0x14043ded0: cleared by the ChrIns update 0x1404011c0 /
-  0x1404014b0, so a bit lives for the update that set it
+  (ApplySpEffectStatusClearFlags 0x14043e840 sets the same bits by stateInfo 2/5/6/116/260/436/437)
+HksEnv 0x140410de0, env 409 GetDamageSpecialAttribute(i): switch byte table 0x140413964[409 - 223]
+  = case 0x6b -> IsStatusClearFlagSet 0x14043e6c0: test [resist+0xb8], 1 << i
+ResetStatusClearFlags 0x14043df60: cleared by the ChrIns update 0x140401540, so a bit lives for
+  the update that set it
 ```
 
 `ExecDamage` (`COMMUNITY`, called first by every attack, roll and stagger state through
@@ -37,13 +37,13 @@ ResetStatusClearFlags 0x14043d970 / 0x14043ded0: cleared by the ChrIns update 0x
 | 2, 4 | bleed, frost | a level-0 hit (poise held) becomes `DAMAGE_LEVEL_SMALL`, unless SpEffect 6340 (Stamp stance), 1650 (Endure) or 1851 (Oath of Vengeance) is on, or the one-shot skill is `c_SwordArtsID` 136 (Seppuku's `swordArtsTypeNew`, `INFERRED` reading of the variable). A hit that already staggers keeps its own level |
 | 0, 1 | poison, rot | nothing: no branch reads them |
 
-The installed 1.17.1 `c0000.hks` carries the same constant run in `ExecDamage`'s pool (409, 5,
+The installed `c0000.hks` carries the same constant run in `ExecDamage`'s pool (409, 5,
 `W_DamageSleepResist`, 6, `W_DamageMad`, 2, 4, ..., 136, 6340, 1650, 1851); the selftest reads it.
 Ordinary attack hyperarmor is not an exemption: a ToughnessParam window (SpEffect 6352/6353)
 only lowers the hit's level to 0, which is exactly the case the bleed/frost branch promotes.
 
-Proc damage and i-frames (`VERIFIED`): status SpEffect HP is summed by `FUN_1404fb920` with
-`param_9` = PlayerIns vtable +0x1e8 (0x140656e90 -> `FUN_1403f3ca0`), true while
+Proc damage and i-frames (`VERIFIED`): status SpEffect HP is summed by `FUN_1404fc7d0` with
+`param_9` = PlayerIns vtable +0x1e8 (0x140658190 -> `FUN_1403f3ed0`), true while
 `actionModifiersFlags` bit 1 (TAE JumpTable 8, the roll's i-frames) is set, and then every
 positive HP change of that update is zeroed. On the victim's machine the hit packet's status
 build-up runs in `CalculateDamage2` whatever the victim's own immunity (that only sets
@@ -53,7 +53,7 @@ reaction above still interrupts the roll.
 
 Damage taken during the opening: frost's proc row multiplies every `*DamageCutRate` by 1.2 for
 30 s and is ended early by a hit whose `AttackDamageInfo+0x26` is 11 (fire): `deleteCriteriaDamage`
-9 -> `FUN_1404f67c0` case 9 (`param_4 == 0xb`), called at the end of `CalculateDamage2`. The sleep
+9 -> `FUN_1404f7670` case 9 (`param_4 == 0xb`), called at the end of `CalculateDamage2`. The sleep
 and madness clips apply SpEffect 54 / 55 (all cut rates 1.2) through TAE event 67 for the clip's
 length (`TAE` + regulation; read here, not hard-coded).
 
@@ -70,7 +70,7 @@ damage D_j:
 
 * P_proc(k): chance the first proc lands on chain position k. Two readings:
   `string_shares` (every hit lands at T_j; the corpus resistances; the gauge refills r_s per
-  second between hits: proc when int(R - d) - b < 1, `FUN_14043d8a0`, refill `FUN_14043e440`
+  second between hits: proc when int(R - d) - b < 1, `FUN_14043de90`, refill `FUN_14043ea30`
   at `resistRecoverPoint_*_Player`), and `fight_shares` (status.md section 9 engagement model:
   an engagement lands hit 1 and each follow-up while the links land, engagements 5 s apart,
   bolus carriers refilled after each, a 5-engagement fight; `er-mechanics-status.simulate`).
@@ -93,6 +93,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -139,21 +140,24 @@ def ashes():
 
 # ---------------------------------------------------------------------------------- evidence
 
-#: Resist-module index order (`CSChrResistModule` arrays, `FUN_14043daf0` dispatch) = the bit of
+#: Resist-module index order (`CSChrResistModule` arrays, `FUN_14043e0e0` dispatch) = the bit of
 #: `+0xb8` and the argument of HKS `GetDamageSpecialAttribute`.
 STATUS_INDEX = {name: i for i, name in enumerate(ST.NAMES)}
 #: HksEnv id of `GetDamageSpecialAttribute` (Smithbox `c0000.hks` constant list) and the
-#: 1.16.2 switch: byte table at 0x1404133a4 indexed by id - `GetMapActionID` (223).
+#: HksEnv (0x140410de0) switch: byte table at 0x140413964 indexed by id - `GetMapActionID` (223).
 ENV_GET_DAMAGE_SPECIAL_ATTRIBUTE, ENV_GET_MAP_ACTION_ID = 409, 223
-HKSENV_SWITCH_BYTES_VA, HKSENV_CASE = 0x1404133a4, 0x6b
-#: Sites byte-checked in both images (1.16.2 VA, 1.17.1 VA from `map-rvas-1162-to-1170.py`,
-#: every one below the 0xafefe9 boundary so 1.17.0 == 1.17.1).
+HKSENV_SWITCH_BYTES_VA, HKSENV_CASE = 0x140413964, 0x6b
+#: The installed build's flat image; every VA in this module is a 2.7.2.0 VA in it.
+IMAGE = 'eldenring-deobf-1.17.2.bin'
+#: Sites byte-checked in the image (2.7.2.0 VA, bytes). Each sequence was the same at its 1.16.2
+#: and its 1.17.1 address, and each 2.7.2.0 one was found by pairing the instructions of the
+#: function that holds it.
 SITES = {
-    'IsStatusClearFlagSet (test [r8+0xb8])': (0x14043e0d0, 0x14043e630,
+    'IsStatusClearFlagSet (test [r8+0xb8])': (0x14043e6c0,
                                               '4c8bc1b8010000008bcad3e0418580b80000000f97c0c3'),
-    'proc sets the bit (or [rbx+0xb8], eax)': (0x14043d904, 0x14043de64, '0983b8000000'),
-    'SpEffect HP no-damage gate (call [r9+0x1e8])': (0x140440e68, 0x1404413c8, '41ff91e8010000'),
-    'deleteCriteriaDamage read (movzx ecx, [rax+0x327])': (0x1404f6801, 0x1404f75d1, '0fb68827030000'),
+    'proc sets the bit (or [rbx+0xb8], eax)': (0x14043def4, '0983b8000000'),
+    'SpEffect HP no-damage gate (call [r9+0x1e8])': (0x140441458, '41ff91e8010000'),
+    'deleteCriteriaDamage read (movzx ecx, [rax+0x327])': (0x1404f76b1, '0fb68827030000'),
 }
 #: Bleed/frost promotion exemptions read by `ExecDamage` (`COMMUNITY`, constants in the
 #: installed bytecode): SpEffect ids and the `c_SwordArtsID` of a one-shot skill.
@@ -167,9 +171,9 @@ CLIP = {'sleep': 5840, 'madness': 5850}
 HKS_RUN = [409.0, 5.0, 'W_DamageSleepResist', 6.0, 'W_DamageMad', 2.0, 4.0, 'DAMAGE_LEVEL_NONE',
            'IsNodeActive', 'SwordArtsOneShot Selector', 'c_SwordArtsID', 136.0, 6340.0, 1650.0, 1851.0,
            'DAMAGE_LEVEL_SMALL']
-#: Frost proc rows (`deleteCriteriaDamage` 9): ended by a fire hit (`FUN_1404f67c0` case 9).
+#: Frost proc rows (`deleteCriteriaDamage` 9): ended by a fire hit (`FUN_1404f7670` case 9).
 DELETE_ON_FIRE = 9
-#: TAE events that apply a SpEffect (`CSChrTaeAnimEvent::AddSpEffect`, both reach 0x14042bfd0).
+#: TAE events that apply a SpEffect (`CSChrTaeAnimEvent::AddSpEffect`, both reach 0x14042c5b0).
 TAE_ADD_SPEFFECT = (66, 67)
 #: Landing weight per verdict (`er-mechanics-status.COMBO_LAND`).
 LAND = ST.COMBO_LAND
@@ -269,7 +273,7 @@ def first_proc(builds, times, resist, recover, d0=0.0):
 
     `builds` ints per hit, `times` frames per hit; gauge refills `recover` per second between
     hits; `d0` = depletion already on the gauge at hit 1. Proc when int(gauge) - b < 1
-    (`FUN_14043d8a0`, as `er-mechanics-status.simulate`)."""
+    (`FUN_14043de90`, as `er-mechanics-status.simulate`)."""
     gauge = max(0.0, float(resist) - d0)
     for j, b in enumerate(builds):
         if j:
@@ -754,23 +758,21 @@ def selftest():
         if not ok:
             fails.append(label)
 
-    # 1. EXE: the HksEnv switch byte and the byte-checked sites in both images.
-    img16, img17 = REPO / 'eldenring-deobf.bin', REPO / 'eldenring-deobf-1.17.1.bin'
-    if img16.exists():
-        with open(img16, 'rb') as f:
+    # 1. EXE: the HksEnv switch byte and the byte-checked sites in the image.
+    # `ER_DEOBF_BIN`, else the image at the repo root or the nearest directory above it (the
+    # images are gitignored, so a linked worktree reads the main checkout's).
+    img = Path(os.environ.get('ER_DEOBF_BIN') or next(
+        (d / IMAGE for d in (REPO, *REPO.parents) if (d / IMAGE).exists()), REPO / IMAGE))
+    if img.exists():
+        with open(img, 'rb') as f:
             f.seek(HKSENV_SWITCH_BYTES_VA - 0x140000000 + ENV_GET_DAMAGE_SPECIAL_ATTRIBUTE - ENV_GET_MAP_ACTION_ID)
             check('env 409 -> HksEnv case 0x6b (IsStatusClearFlagSet)', f.read(1)[0], HKSENV_CASE)
-    else:
-        skips.append('1.16.2 image')
-    for label, (va16, va17, hexb) in SITES.items():
-        for img, va in ((img16, va16), (img17, va17)):
-            if not img.exists():
-                skips.append(img.name)
-                continue
-            with open(img, 'rb') as f:
+            for label, (va, hexb) in SITES.items():
                 f.seek(va - 0x140000000)
-                check(f'{label} @ {va:#x} in {img.name}', f.read(len(hexb) // 2).hex(), hexb)
-    # 2. Installed 1.17.1 HKS: ExecDamage's constant run.
+                check(f'{label} @ {va:#x} in {IMAGE}', f.read(len(hexb) // 2).hex(), hexb)
+    else:
+        skips.append(IMAGE)
+    # 2. Installed HKS: ExecDamage's constant run.
     hks = Path(FA.INSTALLED_HKS)
     if hks.exists():
         check("installed c0000.hks ExecDamage constants (409, 5 sleep, 6 madness, 2/4, 136, 6340, 1650, 1851)",

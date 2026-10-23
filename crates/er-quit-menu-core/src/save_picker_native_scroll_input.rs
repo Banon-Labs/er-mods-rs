@@ -43,7 +43,7 @@ pub(crate) static SAVE_PICKER_SET_CURSOR_NEUTRALISED: AtomicUsize = AtomicUsize:
 /// Wheel detents the native grid refused (view base at a clamp) that this pump stepped instead.
 pub(crate) static SAVE_PICKER_WHEEL_NATIVE_STEPS: AtomicUsize = AtomicUsize::new(0);
 
-/// `FUN_14073bc10` detour: neutralise the ensure-visible base for every select on the picker's list.
+/// `0x14073cf10` detour: neutralise the ensure-visible base for every select on the picker's list.
 ///
 /// The wheel step can zero the base around its own call, but the game makes this call itself on
 /// every mouse hover and click, and those resets are what re-orient the list under a stationary
@@ -112,7 +112,7 @@ pub fn install_save_picker_set_cursor_hook() {
                 MH_STATUS::MH_OK => {
                     leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
-                        "save-picker: hooked list select-index FUN_14073bc10 0x{addr:x}"
+                        "save-picker: hooked list select-index rva 0x{MENU_ITEM_LIST_SET_CURSOR_RVA:x} at 0x{addr:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -126,13 +126,14 @@ pub fn install_save_picker_set_cursor_hook() {
     }
 }
 
-/// `FUN_140757c70` -- the only place the grid reads a wheel notch. Byte-verified unique in the
-/// 1.16.2 deobf image at `0x140757c70` (`48 89 5c 24 08 57 48 83 ec 20 48 8b da 48 8b f9 ba 2c ..`).
+/// The only place the grid reads a wheel notch (1.16.2 `FUN_140757c70`). 2.7.2.0 rva,
+/// byte-verified unique in `eldenring-deobf-1.17.2.bin` at `0x140758f70`
+/// (`48 89 5c 24 08 57 48 83 ec 20 48 8b da 48 8b f9 ba 2c ..`).
 ///
 /// It resolves the wheel to a `(col, row)` step from menu event ids `0x2c` (up, row -1) and `0x2d`
-/// (down, row +1) via `FUN_14075d8f0`, and its only two callers are the grid mouse handler
-/// `FUN_14073a5c0` and `FUN_140781460`.
-pub(crate) const MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA: usize = 0x757c70;
+/// (down, row +1) via `0x14075ebf0`, and its only two callers are the grid mouse handler
+/// `0x14073b8c0` and `0x140782790` (2.7.2.0 addresses throughout).
+pub(crate) const MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA: usize = 0x758f70;
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::new(0);
@@ -141,7 +142,7 @@ pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::n
 /// waiting for the edge-scroll pump to drain it.
 ///
 /// A direction rather than a count, and deliberately: the accessor has two callers (the grid mouse
-/// handler `FUN_14073a5c0` and the scrollbar handler `FUN_140781460`), so one detent can be read
+/// handler `0x14073b8c0` and the scrollbar handler `0x140782790`), so one detent can be read
 /// twice in a frame. A bit set twice is still one step, which is the behaviour a player expects;
 /// a counter would scroll two rows for one notch whenever both callers ran.
 pub(crate) static SAVE_PICKER_NATIVE_WHEEL_EDGES: AtomicUsize = AtomicUsize::new(0);
@@ -183,7 +184,7 @@ pub(crate) static SAVE_PICKER_WHEEL_EDGES_CONSUMED: AtomicUsize = AtomicUsize::n
 /// and get a true answer. Deferring by a fixed number of ticks just moves the guess.
 ///
 /// So do not arbitrate: remove one of the two mechanisms. Zeroing the delta here makes the wheel
-/// branch in `FUN_14073a5c0` (`if (delta.col != 0 || delta.row != 0)`) fall through, so the native
+/// branch in `0x14073b8c0` (`if (delta.col != 0 || delta.row != 0)`) fall through, so the native
 /// grid performs no view scroll and no cursor move at all, and the pump is the sole owner of the
 /// wheel with no timing assumption anywhere. It also removes the reason the wheel was uneven in the
 /// first place: the native step was gated on the grid's own view base being able to move, which is
@@ -279,7 +280,7 @@ pub fn install_save_picker_wheel_delta_hook() {
                 MH_STATUS::MH_OK => {
                     leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
-                        "save-picker: hooked wheel-delta FUN_140757c70 0x{addr:x}"
+                        "save-picker: hooked wheel-delta rva 0x{MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA:x} at 0x{addr:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -295,17 +296,17 @@ pub fn install_save_picker_wheel_delta_hook() {
 
 /// Move the picker's selection onto `model_row` through the list's own select primitive.
 ///
-/// This calls `FUN_14073bc10`, the select primitive, which is the same call the grid's own mouse hit
+/// This calls `0x14073cf10`, the select primitive, which is the same call the grid's own mouse hit
 /// test makes. It moves the cell cursor and carries the chrome with it, and it re-enters the detour
 /// above so the view base stays pinned exactly as it does for a hover or a click.
 ///
-/// The wrapper around it, `FUN_140738d40`, additionally fires the owning dialog's
+/// The wrapper around it, `0x14073a040`, additionally fires the owning dialog's
 /// selection-changed callbacks, and it must not be used here: on run br-20260912-231628-6a27 it
 /// stopped the picker's scrolling outright. See bd
 /// `select-and-notify-wrapper-kills-picker-scrolling-2026-09-12`.
 ///
 /// The grid refuses an index at or past its item count (`list+0xd0`) and the refusal is silent:
-/// `FUN_14073bc10` returns 0, writes no cursor and shows no chrome. A short directory stages fewer
+/// `0x14073cf10` returns 0, writes no cursor and shows no chrome. A short directory stages fewer
 /// than ten occupied records and the rebuild sets the count from them, so that is reachable
 /// whenever the window holds empty slots. The row is clamped into the count here, because a
 /// selection on a row the grid does not have is a selection nobody can see.
@@ -371,9 +372,9 @@ pub(crate) unsafe fn save_picker_wheel_step_native_cursor(
     index
 }
 
-/// `FUN_140736c90(grid, point)` -- the grid's pointer hit test, byte-verified unique at
-/// `0x140736c90` in the 1.16.2 deobf image.
-pub(crate) const MENU_ITEM_LIST_POINT_TO_INDEX_RVA: usize = 0x736c90;
+/// `(grid, point)` -- the grid's pointer hit test (1.16.2 `FUN_140736c90`). 2.7.2.0 rva; its first
+/// `0x20` bytes are identical to 1.16.2 and unique in `eldenring-deobf-1.17.2.bin`.
+pub(crate) const MENU_ITEM_LIST_POINT_TO_INDEX_RVA: usize = 0x737f90;
 pub(crate) static SAVE_PICKER_HIT_TEST_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_HIT_TEST_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_HIT_TEST_REBASED: AtomicUsize = AtomicUsize::new(0);
@@ -382,12 +383,13 @@ pub(crate) static SAVE_PICKER_HIT_TEST_REBASED: AtomicUsize = AtomicUsize::new(0
 /// the select itself.
 ///
 /// The hit test walks the visible cells and turns the one under the pointer into an absolute item
-/// index by adding the view base, then discards the hit if that index is past the item count:
+/// index by adding the view base, then discards the hit if that index is past the item count
+/// (2.7.2.0 addresses):
 ///
-///     140736d41  MOV  R11D, [RSI + 0x348]   ; view row base
-///     140736d80  LEA  EDI, [R10 + R11*1]    ; view row + base
-///     140736daf  CMP  [RSI + 0xd0], EDI     ; count vs index
-///     140736db5  JLE  ...                   ; index >= count -> report no hit
+///     140738041  MOV  R11D, [RSI + 0x348]   ; view row base
+///     140738080  LEA  EDI, [R10 + R11*1]    ; view row + base
+///     1407380af  CMP  [RSI + 0xd0], EDI     ; count vs index
+///     1407380b5  JLE  ...                   ; index >= count -> report no hit
 ///
 /// The picker keeps its model's scroll offset in that base so the native scrollbar thumb tracks a
 /// listing far longer than the ten staged records (`save-picker: native scrollbar sync`). For the
@@ -460,7 +462,7 @@ pub fn install_save_picker_hit_test_hook() {
                 MH_STATUS::MH_OK => {
                     leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
-                        "save-picker: hooked pointer hit test FUN_140736c90 0x{addr:x}"
+                        "save-picker: hooked pointer hit test rva 0x{MENU_ITEM_LIST_POINT_TO_INDEX_RVA:x} at 0x{addr:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

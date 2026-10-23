@@ -6,7 +6,8 @@
 //! torn back to the title map -- `WORLD LOST #2` in run br-20260905-194101-bd9d, which is the black
 //! screen the user sees.
 //!
-//! Why. From the named 1.16.2 decompile of `STEP_RequestWait` (0x140aecc10), the step dispatches on
+//! Why. From the named 1.16.2 decompile of `STEP_RequestWait` (1.16.2 0x140aecc10, 2.7.2.0
+//! 0x140aee3e0; the `FUN_` names below are 1.16.2 addresses), the step dispatches on
 //! `InGameStep+0xd8` (`requestCode`):
 //!
 //! ```text
@@ -85,8 +86,9 @@ use crate::telemetry::append_autoload_debug;
 /// step (to step 4); `SESSION_END` is the one whose arm clears `+0xd8`.
 const REQUEST_CODE_SESSION_END: i32 = 2;
 
-/// The arm that leaves the step: fade, `FUN_14067a320(mode)` to start the loading bar, then
-/// `FUN_140aed270(this, 4)`. A boot load's second tick reads this value and is gone from the step.
+/// The arm that leaves the step: fade, `0x14067b620(mode)` (1.16.2 `FUN_14067a320`) to start the
+/// loading bar, then `0x140aeea40(this, 4)` (1.16.2 `FUN_140aed270`). A boot load's second tick reads
+/// this value and is gone from the step.
 const REQUEST_CODE_ADVANCE: i32 = 1;
 
 /// `GameMan+0x14` once `STEP_MoveMap_Init` has copied it into the MoveMapStep and cleared it. A move
@@ -187,7 +189,8 @@ unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
     let d8 =
         unsafe { safe_read_i32(in_game_step + INGAMESTEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
     // Log every tick, not only the session-end arm. The decompile says the `d8 == 1` arm is what
-    // advances out of this step (`FUN_140aed270(this, 4)`), and a load that keeps its world is
+    // advances out of this step (`0x140aeea40(this, 4)`, 1.16.2 `FUN_140aed270`), and a load that
+    // keeps its world is
     // believed to leave through that arm before `STEP_MoveMap_Update` ever raises d8 to 2 -- the
     // boot-load run br-20260904-165518-e3be sat at `ig_d8=1` for its whole session and lost no world.
     // If our switch never ticks this step at d8 == 1, that is the divergence, and it is invisible in
@@ -237,7 +240,7 @@ unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
                     )
                 };
                 append_autoload_debug(format_args!(
-                    "requestwait-guard: CONVERTED session-end #{n} -- InGameStep+0xd8 2 -> 1 (wrote={wrote}) on a real world (c30=0x{c30:x}) whose NowLoading job is gone. The original now takes its d8==1 arm: FUN_14067a320 starts the loading bar (loadingScreenData +0xc=0 +0x10=1 +0x8=mode) and FUN_140aed270(this,4) advances out of this step. GameMan+0x14 read 0x{block_before:x}, restored={restored} from GameMan+0xc30=0x{c30:x} -- without a destination the move that step starts waits on block ff/ff/ff/ff forever"
+                    "requestwait-guard: CONVERTED session-end #{n} -- InGameStep+0xd8 2 -> 1 (wrote={wrote}) on a real world (c30=0x{c30:x}) whose NowLoading job is gone. The original now takes its d8==1 arm: 0x14067b620 (1.16.2 FUN_14067a320) starts the loading bar (loadingScreenData +0xc=0 +0x10=1 +0x8=mode) and 0x140aeea40(this,4) (1.16.2 FUN_140aed270) advances out of this step. GameMan+0x14 read 0x{block_before:x}, restored={restored} from GameMan+0xc30=0x{c30:x} -- without a destination the move that step starts waits on block ff/ff/ff/ff forever"
                 ));
             }
         }
@@ -284,7 +287,7 @@ pub(crate) fn install_request_wait_guard() -> bool {
                     crate::mh::leak_installed_hook(hook);
                     HOOK_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "requestwait-guard: hooked STEP_RequestWait, asked for 0x{addr:x} -- that is the 1.16.2 constant, not the live entry; MhHook logs the address it translated to for the running build on the line above. Pass-through until a switch arms it"
+                        "requestwait-guard: hooked STEP_RequestWait at 0x{addr:x} (the 2.7.2.0 entry). Pass-through until a switch arms it"
                     ));
                     true
                 }

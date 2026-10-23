@@ -116,7 +116,7 @@ pub struct Entry {
     /// # Whose number this is
     ///
     /// Not a comfortable stack size picked here. `CS::EquipInventoryData::GetMaxAmountForItem`
-    /// (1.16.2 `0x14024e570`, same address on 1.17) is the engine's entire answer to "how many
+    /// (2.7.2.0 `0x14024e570`) is the engine's entire answer to "how many
     /// more of this may be added", and for a goods item that is not pot-capped its body reduces
     /// to `paramRow->maxNum > 0 ? paramRow->maxNum : 99`. So this is the ceiling the engine will
     /// enforce whatever the importer asks for.
@@ -124,8 +124,8 @@ pub struct Entry {
     /// # two fields in two tables, and which one this holds depends on the [`Kind`]
     ///
     /// `maxNum` is a goods field, and the engine reads it only for the goods category: every
-    /// other category is tail-jumped to `::GetMaxItemQuantity` (1.16.2 `0x140674680`, 1.17
-    /// `0x1406754d0`), which answers `1` for an armament, a protector and a talisman -- and, for
+    /// other category is tail-jumped to `::GetMaxItemQuantity` (2.7.2.0 `0x140675980`), which
+    /// answers `1` for an armament, a protector and a talisman -- and, for
     /// a weapon row whose `weaponCategory` is 13 or 14, `EquipParamWeapon.maxArrowQuantity`.
     ///
     /// So for [`Kind::Ammo`] this field is `maxArrowQuantity`, not `maxNum`; ammunition is an
@@ -164,7 +164,7 @@ pub struct Entry {
     /// # Consumables only, never the material
     ///
     /// This mirrors `EquipParamGoodsLookupResult::IsPotConsumable` exactly
-    /// (1.16.2 `0x140d3a190`, 1.17 `0x140d3b8e0`, byte-identical): `goodsType == 0` (NORMAL_ITEM)
+    /// (2.7.2.0 `0x140d3d040`): `goodsType == 0` (NORMAL_ITEM)
     /// **and** `potGroupId >= 0`. The Cracked Pot itself is `goodsType == 0x0b`
     /// (REGENERATIVE_MATERIAL) and is deliberately excluded, because it is what supplies the
     /// capacity -- a caller freeing pot space by depositing group members would otherwise deposit

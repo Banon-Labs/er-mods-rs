@@ -33,9 +33,8 @@ the installed 1.17.1 `regulation.bin`.
 
 ## 1. The chain, per hit (EXE)
 
-1.16.2 address first, 1.17.1 second. The 1.17.1 addresses come from
-`scripts/map-rvas-1162-to-1170.py` (every one below 0xafefe9, so 1.17.0 == 1.17.1) and were
-byte-checked where noted.
+1.16.2 address first, 1.17.1 second. The 1.17.1 addresses came from the masked-signature map,
+since deleted (every one below 0xafefe9, so 1.17.0 == 1.17.1), and were byte-checked where noted.
 
 ```
 FUN_140d24b10 / (stores at 0x140d264f8, 0x140d26520)   build AttackDamageInfo from the AtkParam
@@ -201,8 +200,8 @@ ranking number changes; the selftest asserts that list stays empty.
 
 ## 1c. A blocked hit: the shield's status cut (EXE + REGULATION)
 
-1.16.2 address first, 1.17.1 second. The 1.17.1 functions were located with
-`scripts/map-rvas-1162-to-1170.py` and then compared byte for byte; the only differences are
+1.16.2 address first, 1.17.1 second. The 1.17.1 functions were located with the masked-signature
+map (since deleted) and then compared byte for byte; the only differences are
 RIP-relative displacements, except where noted.
 
 ```
@@ -657,8 +656,8 @@ prints the bolus carry shares and the status talismans worn.
 ## 11. What the victim does when a status procs, and the opening it makes
 
 Tool: `scripts/er-mechanics-proc-opening.py` (`--selftest` 37/37, `--reactions`, `--rank`,
-`--weapon`). Static RE on the 1.16.2 dump; the 1.17.1 addresses come from
-`scripts/map-rvas-1162-to-1170.py` (all below 0xafefe9) and each listed site was byte-checked in
+`--weapon`). Static RE on the 1.16.2 dump; the 1.17.1 addresses came from the masked-signature
+map, since deleted (all below 0xafefe9), and each listed site was byte-checked in
 `eldenring-deobf-1.17.1.bin` by the selftest. Nothing was launched.
 
 ### The proc reaches the behavior script (VERIFIED)

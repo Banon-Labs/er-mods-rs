@@ -1,7 +1,7 @@
 // Prove the normal path of er-seamless-bugfixes' two GiveItems mid hooks (2026-10-19).
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Each ilhook jmp-ret hook moves `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]` into a
 // trampoline and, with a local player present, runs them there and jumps back to the instruction

@@ -1,11 +1,14 @@
+// Autoload/title-flow constant table (`include!`d by lib.rs). Every `*_RVA` value here is a native
+// 2.7.2.0 (FileVersion 2.7.2.0) rva; the resolvers refuse it on any other build. Addresses quoted in
+// the prose are 2.7.2.0 too unless labelled with another build (1.16.2 for the deobf image and the
+// named dump, 1.16.1 for the older dump, 1.17 for the 1.17.x images).
 
-/// `base + rva`, resolved for the running build, or `None` when this build moved the function.
+/// `base + rva` for a native 2.7.2.0 rva, or `None` on any other build.
 ///
-/// The title flow's calls were hand-built `base + rva` function pointers. On ELDEN RING 1.17 that
-/// transfers control into whatever now occupies the 1.16.2 address, with nothing to refuse it --
-/// and a mapped constant is no safer that way, because the map knows the new address and
-/// `base + rva` never asks it. `CS::CSFadeImp`-adjacent title code is exactly where the 1.17 boot
-/// fault lives, so refusing here is worth a dead title feature.
+/// The title flow's calls were hand-built `base + rva` function pointers. On a build the rva was
+/// not measured on, that transfers control into whatever occupies the address, with nothing to
+/// refuse it, so every call goes through `game_rva_named` and a refusal costs a dead title feature
+/// instead of a fault.
 #[cfg(windows)]
 pub(crate) fn title_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
@@ -16,13 +19,14 @@ pub(crate) fn title_fn(rva: usize, what: &'static str) -> Option<usize> {
 // state machine (no SetState(2/3), no beginlogo-gate clear, no registrar self-fire, no
 // direct_build / cold_char_mount). It lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native
 // title machine, and once the live TitleTopDialog menu is rendered + settled, it fires the native
-// Load-Game MenuMemberFuncJob node's run 0x1409aaba0(rcx=node) exactly once, then observes so the
+// Load-Game MenuMemberFuncJob node's run 0x1409ac1f0(rcx=node) exactly once, then observes so the
 // golden oracle is written as the native pump loads the char.
 // ---------------------------------------------------------------------------
-/// CS::MenuMemberFuncJob<TitleTopDialog>::run 0x1409aaba0 (RVA 0x9aaba0). Takes rcx=node (a
-/// MenuMemberFuncJob, vtable TITLE_TOP_DIALOG run-node = MEMBERFUNCJOB_VTABLE_RVA); internally it
-/// computes rcx=[node+0x10]+[node+0x20] (the member `this`, dialog + adjustor) and calls the
-/// member-fn pointer at [node+0x18] -- which chains to the Load-Game dialog factory 0x14081ead0.
+/// CS::MenuMemberFuncJob<TitleTopDialog>::run 0x1409ac1f0 (RVA 0x9ac1f0; 1.16.2 0x1409aaba0). Takes
+/// rcx=node (a MenuMemberFuncJob, vtable TITLE_TOP_DIALOG run-node = MEMBERFUNCJOB_VTABLE_RVA);
+/// internally it computes rcx=[node+0x10]+[node+0x20] (the member `this`, dialog + adjustor) and
+/// calls the member-fn pointer at [node+0x18] -- which chains to the Load-Game dialog factory
+/// 0x14081fe00.
 /// Firing it on the naturally-booted menu builds a live registered ProfileLoadDialog the native
 /// pump drives (the live-dialog MenuWindow wall was a forcing artifact -- this de-risks step 4).
 pub const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize = ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
@@ -32,7 +36,8 @@ pub const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize = ProfileLoadMenuRva::MenuMemberFu
 pub const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 
 /// === native full-save-read observe chain (native-full-save-read-slot-resolve-chain-observe-recipe-2026). ===
-/// The slot-resolve global the menu cursor / Continue selection writes: resolver 0x1406793c0 returns
+/// The slot-resolve global the menu cursor / Continue selection writes: resolver (1.16.2
+/// 0x1406793c0) returns
 /// `GameMan::requestedSaveSlotLoadIndex`. Step 1 of the recipe sets that field before set_save_slot
 /// so the native chain resolves our slot.
 pub const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize = GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET;
@@ -45,7 +50,7 @@ pub const FULLREAD_C30_M10_DEFAULT: i32 = 0xa010000;
 /// Minimum real character level (a new-game default is <10; the golden Banon is 150). The step-6
 /// guard requires the live PlayerGameData level >= this and a non-empty name (via char_fingerprint).
 pub const FULLREAD_MIN_REAL_LEVEL: u32 = 10;
-/// Poll arg (0) for the `GameMan::saveState` poll 0x140679180 and the lane driver 0x140679510 in
+/// Poll arg (0) for the `GameMan::saveState` poll 0x14067a480 and the lane driver 0x14067a810 in
 /// the drain phase.
 pub const FULLREAD_POLL_ARG: u8 = 0;
 /// Drain-phase budget: max frames to tick lane+poll waiting for resident saveState before timeout
@@ -58,10 +63,10 @@ pub const FULLREAD_LOG_INTERVAL: u64 = 30;
 pub const FULLREAD_DEFAULT_SLOT: i32 = 0;
 /// continue_confirm shim field that owner+0x284 (new-game flag) must equal before the confirm runs
 /// the SetState5: the native continue_confirm reads owner = *(shim[OWN_STEPPER_SHIM_OWNER_IDX]) =
-/// *(base+0x3d5df38+8), checks owner+0x284==0, then sets owner+0xbc=c30 + SetState5 (autosaves).
+/// *(base+0x3d64fb8+8), checks owner+0x284==0, then sets owner+0xbc=c30 + SetState5 (autosaves).
 pub const FULLREAD_OWNER_NEW_GAME_OK: u8 = 0;
 /// owner = *(game_data_man_ptr_or_null() + this offset) -- the GameDataMan+0x8 chain the
-/// continue_confirm shim owner is read from (recipe step 7: owner = *(base+0x3d5df38+8)).
+/// continue_confirm shim owner is read from (recipe step 7: owner = *(base+0x3d64fb8+8)).
 pub const FULLREAD_OWNER_GDM_08_OFFSET: usize = 0x08;
 pub const FULLREAD_PHASE_DRAIN: usize = 1;
 pub const FULLREAD_PHASE_DESER: usize = 2;
@@ -70,7 +75,8 @@ pub use er_telemetry_core::counters::FULLREAD_DRAIN_WAITS;
 /// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). Submit arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
 /// save manager services any >=0 request on the first frames after world arrival, running a second
-/// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 0x67141a).
+/// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 1.16.2
+/// 0x67141a).
 /// Every done exit that does not hand off to the native confirm chain must clear the register; these
 /// count the clears and record the slot value the last clear removed (u32-packed i32; !0 == none).
 pub use er_telemetry_core::counters::FULLREAD_REQ_DISARM_COUNT;
@@ -89,7 +95,8 @@ pub use er_telemetry_core::counters::LOADED_PEAK_NAME_LEN;
 pub use er_telemetry_core::counters::LOADED_PEAK_SEEN_COUNT;
 pub static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
-/// The save-device MOUNT/OPEN routine 0x140e6e8d0(rcx=iodev): the title->Continue boot
+/// The save-device MOUNT/OPEN routine 0x140e71e30(rcx=iodev) (1.16.2 0x140e6e8d0; every other
+/// address in this paragraph is 1.16.2's too): the title->Continue boot
 /// (single native call site 0x140defec2) runs it to BIND the .sl2 file to the IO device.
 /// It opens the OS handle (via 0x140e45660), registers the save paths, then writes the
 /// open status byte to [iodev+0x40] @0x140e6eb56 -- the device-ready flag the async
@@ -99,38 +106,42 @@ pub static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(St
 /// submit routes the read through the bound branch. Internally gated by 0x14240acd0(
 /// [0x143d872e0]) which needs the IO worker registry [0x144843038+0x18]!=0. Decoded in
 /// bd b80-mount-routine-0x140e6e8d0-recipe-and-guard-open-question-2026-06-21.
-pub const IODEV_MOUNT_OPEN_RVA: usize = 0xe6e8d0;
-/// The iodev getter 0x140e6e060() -> iodev (lazily creates the singleton if null).
-pub const IODEV_GETTER_RVA: usize = 0xe6e060;
+pub const IODEV_MOUNT_OPEN_RVA: usize = 0xe71e30;
+/// The iodev getter 0x140e715c0() -> iodev (lazily creates the singleton if null).
+pub const IODEV_GETTER_RVA: usize = 0xe715c0;
 /// Root-cause fix (b80-ROOTCAUSE-worker-empty-iodev-dir-string-...): the cold full read
 /// completes empty because the worker builds a MALFORMED save path -- the request's
 /// directory std::u16string is unset (the worker's `"%s\%s%s%s"` format yields a bare
 /// `.sl2`). The live title->Continue boot populates that directory via the iodev state
-/// machine (opcode 0x17/0x18 handler 0x140e6ded0): it builds `<userdata>/EldenRing/<steamid>/`
+/// machine (opcode 0x17/0x18 handler 1.16.2 0x140e6ded0): it builds `<userdata>/EldenRing/<steamid>/`
 /// then installs it on the path DB. The menu-free cold path skips that opcode, so the
 /// directory is never set. Pre-submit replay is refuted (io20=[iodev+0x20] is NULL before
 /// submit; bd b80-cold-fix-refuted-...). The correct replay is post-submit, on the live
 /// io20, in the same game-task invocation (tightest race vs the worker drain):
-///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&wrapper): self-fetches the userdata folder
-///      (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats `%s/EldenRing/%s/`
-///      (fmt @0x142bda858) into the wrapper. The id path runs 0x140e8d550 -> 0x140e8d510, which
-///      calls through the qword at 0x143b48ff0 (STEAM_ID_ACCESSOR_CALL_SLOT_RVA) before reading
-///      the id, so that slot must be non-null or the call chain executes `CALL 0`.
-///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=io20 path-DB, edx=slot=0, r8=raw char16_t*): stores
-///      the directory into the path database (via 0x14240dce0 -> entry+0xb0, which copies
+///   1. SAVE_DIR_BUILDER (0x140e11be0; 1.16.2 0x140e0e680)(rcx=&wrapper): self-fetches the
+///      userdata folder (SHGetFolderPathW CSIDL 0x1a) + Steam id (1.16.2 0x140e8d550) and formats
+///      `%s/EldenRing/%s/` (fmt @1.16.2 0x142bda858) into the wrapper. The id path runs 1.16.2
+///      0x140e8d550 -> 0x140e8d510, which calls through the qword at 0x143b50060
+///      (STEAM_ID_ACCESSOR_CALL_SLOT_RVA) before reading the id, so that slot must be non-null or
+///      the call chain executes `CALL 0`.
+///   2. SAVE_DIR_SETTER 0x14240e250 (1.16.2 0x14240a2a0)(rcx=io20 path-DB, edx=slot=0, r8=raw
+///      char16_t*): stores the directory into the path database (via 1.16.2 0x14240dce0 ->
+///      entry+0xb0, which copies
 ///      our buffer) -- exactly what the opcode-0x17/0x18 handler does. r8 is the raw data
 ///      pointer (cap>=8 ? heap ptr @+0x08 : &SSO @+0x08), not the wrapper object.
-pub const SAVE_DIR_BUILDER_RVA: usize = 0xe0e680;
-pub const SAVE_DIR_SETTER_RVA: usize = 0x240a2a0;
-/// The wrapper's stateful allocator getter (0x141eba960): `call 0x141ebb680; add rax,0x28`
+pub const SAVE_DIR_BUILDER_RVA: usize = 0xe11be0;
+pub const SAVE_DIR_SETTER_RVA: usize = 0x240e250;
+/// The wrapper's stateful allocator getter (2.7.2.0 0x141ebdec0; 1.16.2 0x141eba960):
+/// `call 0x141ebb680; add rax,0x28` (1.16.2 disassembly)
 /// -- a trivial singleton accessor returning the arena ptr SAVE_DIR_BUILDER stores at the
 /// wrapper's +0x00 (the string's stateful allocator). Must be installed before the builder.
-pub const SAVE_DIR_ALLOC_GETTER_RVA: usize = 0x1eba960;
-/// Path-DB slot-entry lookup (0x14240c270): rcx=collection ([io20]), edx=key ([io20+8]) ->
+pub const SAVE_DIR_ALLOC_GETTER_RVA: usize = 0x1ebdec0;
+/// Path-DB slot-entry lookup (2.7.2.0 0x142410220): rcx=collection ([io20]), edx=key ([io20+8]) ->
 /// entry (find-or-create; idempotent post-setter). The setter writes the directory into
 /// `entry+0xb0`. Used for the post-setter readback.
-pub const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
-/// The indirect-call slot inside the SteamID64 accessor (abs 0x143b48ff0). Renamed from
+pub const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x2410220;
+/// The indirect-call slot inside the SteamID64 accessor (2.7.2.0 abs 0x143b50060; 1.16.2
+/// 0x143b48ff0). Renamed from
 /// `STEAM_INTERFACE_GUARD_RVA` on 2026-08-31; the old name said "Steam interface pointer the
 /// save-dir builder dereferences" and every clause of that was wrong, which mattered because
 /// there is a real Steam interface in this same call chain (`SteamInternal_ContextInit(&
@@ -148,21 +159,22 @@ pub const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
 ///                call 0x140e8abe0   (scope exit)
 ///
 /// So it is a code pointer that is called, not an object that is dereferenced, and its reader is
-/// `0x140e8d510`, not SAVE_DIR_BUILDER -- the builder reaches it two frames down, via
-/// `0x140e8d550` ("%I64d"-format the id into a `DLString<wchar_t>`). Its stored value is a
+/// 1.16.2 `0x140e8d510`, not SAVE_DIR_BUILDER -- the builder reaches it two frames down, via
+/// 1.16.2 `0x140e8d550` ("%I64d"-format the id into a `DLString<wchar_t>`). Its stored value is a
 /// five-byte `E9 rel32` thunk sitting 0xb0 past its reader's own entry (0x140e8d5c0 in 1.16.2,
 /// 0x140e8f3c0 in 1.17), jumping into Arxan rubble, and no code Ghidra found ever writes the
 /// slot.
 ///
 /// The null check the two callers below perform is still exactly right, and now says what it
-/// means: a null here would make `0x140e8d510` execute `CALL 0`, so SAVE_DIR_BUILDER must not be
+/// means: a null here would make the reader (1.16.2 `0x140e8d510`) execute `CALL 0`, so
+/// SAVE_DIR_BUILDER must not be
 /// called until the slot is populated.
-pub const STEAM_ID_ACCESSOR_CALL_SLOT_RVA: usize = 0x3b48ff0;
-/// Active SteamID64 getter (0x140e8d590): returns the current signed-in Steam account's full
+pub const STEAM_ID_ACCESSOR_CALL_SLOT_RVA: usize = 0x3b50060;
+/// Active SteamID64 getter (2.7.2.0 0x140e90af0): returns the current signed-in Steam account's full
 /// SteamID64 as a `u64`. Static-grounded from the SAVE_DIR_BUILDER chain; used to normalize staged
 /// foreign save bytes before native deserialize stores them in GameDataMan/ProfileSummary.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const STEAM_ID64_GETTER_RVA: usize = 0xe8d590;
+pub const STEAM_ID64_GETTER_RVA: usize = 0xe90af0;
 /// SAVE_DIR_BUILDER's output is a MSVC `basic_string<char16_t, ..., StatefulAllocator>`
 /// (the stateful allocator occupies the first member): allocator ptr at +0x00, the _Bx
 /// SSO/heap union at +0x08 (8 char16 SSO when cap<8, else `char16_t*`), _Mysize (code units)
@@ -178,36 +190,37 @@ pub const U16STRING_SSO_CAP: usize = 7;
 pub const IODEV_READY_FLAG_40_OFFSET: usize = 0x40;
 /// [iodev+0x30] = the OS file-handle slot (0xffffffff invalid until the mount opens it).
 pub const IODEV_OS_HANDLE_30_OFFSET: usize = 0x30;
-/// The FD4 IO worker registry singleton (abs 0x144843038); its size/count is at +0x18.
-/// The mount's guard 0x14240acd0 bails (no open) when [registry+0x18]==0 (no workers
+/// The FD4 IO worker registry singleton (abs 0x14484a0d8); its size/count is at +0x18.
+/// The mount's guard (1.16.2 0x14240acd0) bails (no open) when [registry+0x18]==0 (no workers
 /// registered), so logging it tells us whether the mount can fire at the cold state.
-pub const IO_WORKER_REGISTRY_RVA: usize = 0x4843038;
+pub const IO_WORKER_REGISTRY_RVA: usize = 0x484a0d8;
 pub const IO_WORKER_REGISTRY_COUNT_18_OFFSET: usize = 0x18;
-/// The FD4 IO worker manager singleton (abs 0x144852f88) the read job is posted to. The
-/// enqueue 0x14240e420 immediately DISCARDS the request (no-op completion 0x14240a000,
-/// status 0xe, saveState 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
-/// byte) @0x14240e472. Prime suspect for the read-completes-empty wall (b80-device-mount-
+/// The FD4 IO worker manager singleton (abs 0x14485a0b8) the read job is posted to. The
+/// enqueue (1.16.2 0x14240e420) immediately DISCARDS the request (no-op completion 1.16.2
+/// 0x14240a000, status 0xe, saveState 2->0 in one frame) when [worker+0x19]!=0 (the worker
+/// no-accept/shutdown byte) @1.16.2 0x14240e472. Prime suspect for the read-completes-empty wall (b80-device-mount-
 /// refuted-...).
 /// Correction (2026-08-01): this is `SaveLoad2::SLSystemImpl*`, not an FD4 IO worker
-/// manager -- its lazy initializer `FUN_14240dee0` opens with
+/// manager -- its lazy initializer (1.16.2 `FUN_14240dee0`) opens with
 /// `*param_1 = SaveLoad2::SLSystemImpl::vftable`. The name is kept for its call sites.
 ///
 /// Unresolved, and it matters: the doc above reads `+0x19` as "the worker no-accept/
-/// shutdown byte", while `experiments/own_stepper/bootstrap_drive.rs` reads the same field
+/// shutdown byte", while er-quickload's `own_stepper/bootstrap_drive.rs` reads the same field
 /// on the same object as "sysimpl built+ready (`sysimpl+0x19 != 0`)". Those are opposite
 /// polarities. Tracked in bd; do not build new logic on either reading until it is settled.
 pub const FD4_IO_WORKER_MGR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
 pub const FD4_IO_WORKER_NOACCEPT_19_OFFSET: usize = 0x19;
-/// The worker's job queue fields the normal (non-discard) enqueue pushes to: 0x14240e420
-/// pushes onto [worker+0x8] (via 0x14240c060) and [worker+0x10] (via 0x14240f2c0). Reading
+/// The worker's job queue fields the normal (non-discard) enqueue pushes to: the enqueue
+/// pushes onto [worker+0x8] (via 1.16.2 0x14240c060) and [worker+0x10] (via 1.16.2 0x14240f2c0).
+/// Reading
 /// these before vs after the submit distinguishes enqueued (queue changes) from discarded
 /// (queue unchanged) -- the decisive fork for the read-completes-empty wall.
 pub const FD4_IO_WORKER_QUEUE_08_OFFSET: usize = 0x8;
 pub const FD4_IO_WORKER_QUEUE_10_OFFSET: usize = 0x10;
-/// The FD4 IO thread pool singleton (abs 0x144853048).
-pub const FD4_IO_POOL_RVA: usize = 0x4853048;
-/// The 2nd discard gate 0x141ee1240 searches the worker-registry's intrusive list at
-/// [registry+0x28] for a node matching a key from the calling context (lock 0x141ee05f0);
+/// The FD4 IO thread pool singleton (abs 0x14485a178).
+pub const FD4_IO_POOL_RVA: usize = 0x485a178;
+/// The 2nd discard gate (1.16.2 0x141ee1240) searches the worker-registry's intrusive list at
+/// [registry+0x28] for a node matching a key from the calling context (lock 1.16.2 0x141ee05f0);
 /// returns false (=> discard) when not found (e.g. the calling thread is not a registered
 /// IO context). Empty when [[registry+0x28]] == [registry+0x28].
 pub const IO_WORKER_REGISTRY_LIST_28_OFFSET: usize = 0x28;
@@ -223,24 +236,20 @@ pub const RENDER_PROBE_INTERVAL: usize = 120;
 ///
 /// # Why this is a function plus an offset and not one address
 ///
-/// It used to be the single mid-function RVA `0xb0c35d`, and that address is UNMAPPABLE: the 1.17
-/// address gate is keyed on `.pdata` function starts, and a byte in the middle of a function is not
-/// one, so the selector in `scripts/select-needed-1170-rows.py` never saw it and the patch went out
-/// ungated. On 1.17 `0xb0c35d` holds `0x4a` -- the first displacement byte of a `lea` -- and writing
+/// It used to be the single mid-function RVA `0xb0c35d`, and that address was UNMAPPABLE: the 1.17
+/// address gate was keyed on `.pdata` function starts, and a byte in the middle of a function is
+/// not one, so the 1.17 ledger's row selector never saw it and the patch went out ungated. On 1.17 `0xb0c35d` holds `0x4a` -- the first displacement byte of a `lea` -- and writing
 /// `0x7f` there would have corrupted an unrelated instruction. Nothing was corrupted only because
 /// `apply_splash_skip` checks the opcode before it writes, and it logged
 /// `splash-skip: ABORT -- byte at 0x140b0c35d is 0x4a, expected 0x74` on 2026-08-29.
 ///
-/// Naming the function start makes the pair mappable, and the offset then rides along. The pair is
-/// corroborated three independent ways: the whole-image masked-signature map already carries
-/// `0xb0c2a0 -> 0xb0d940`; both functions are `0x294` bytes long in `.pdata`; and the byte at
-/// `+0xbd` is `0x74` in both images behind the same `bf b8 00 00 00 00` prefix. The `+0x16a0` delta
-/// is the same one the `CS::TitleStep` vtable slots move by, so the whole region shifted together.
-pub const SPLASH_SKIP_FN_RVA: usize = 0xb0c2a0;
-/// Offset of the `je` within [`SPLASH_SKIP_FN_RVA`]. Same in 1.16.2 and 1.17.
+/// Naming the function start keeps the pair honest across builds, and the offset rides along. On
+/// 2.7.2.0 the function is `0xb0de70` (1.16.2 `0xb0c2a0`), and the byte at `+0xbd` is `0x74`
+/// (`74 53`) in `eldenring-deobf-1.17.2.bin` exactly as it is in the 1.16.2 image.
+pub const SPLASH_SKIP_FN_RVA: usize = 0xb0de70;
+/// Offset of the `je` within [`SPLASH_SKIP_FN_RVA`]. Same in 1.16.2, 1.17 and 2.7.2.0.
 pub const SPLASH_SKIP_JE_OFFSET: usize = 0xbd;
-/// Address of the splash-skip `je`, for the running build, or `None` when this build has no
-/// verified `STEP_BeginLogo`.
+/// Address of the splash-skip `je` on 2.7.2.0, or `None` on any other build.
 ///
 /// Lives here, beside the constants, so the patcher and the telemetry oracle that reads the byte
 /// back can never disagree about which byte that is -- they used to compute `base + <mid-function
@@ -265,7 +274,7 @@ pub const SPLASH_PATCH_LEN: usize = 1;
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
 
-/// `FUN_1407b0cf0` -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
+/// `0x1407b2020` (1.16.2 `FUN_1407b0cf0`) -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
 /// `return 1 < *(i32*)(this+0x25e8)`, i.e. "this box has MORE THAN ONE button" (a Yes/No
 /// confirm rather than a single-OK notice). It is not a finished/decided poll: `+0x25e8` is
 /// the button count the ctor writes at construction (see `MSGBOX_BUTTON_COUNT_25E8_OFFSET`).
@@ -273,11 +282,11 @@ pub const SPLASH_PATCH_LEN: usize = 1;
 /// resolve a freshly built two-button confirm on its first frame (2026-07-28).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub const MSGBOX_MULTI_CHOICE_GETTER_RVA: u32 = MsgBoxRva::MultiChoiceGetter as u32;
-/// `CS::MessageBoxDialog::Update` (`FUN_140927d30`), vtable slot 2. Structural IDENTITY: all
-/// five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry this exact function in
-/// slot 2 -- base `CS::MessageBoxDialog` (rva 0x2b03550), `CS::SaveRetryDialog` (0x2aaabf8),
-/// and the subclasses at 0x2ae5ae0 / 0x2b06780 / 0x2b220d0 (byte-read from the deobf image
-/// 2026-07-28). Comparing `vtable[2]` therefore recognises every legitimate subclass -- and a
+/// `CS::MessageBoxDialog::Update` (`0x140929380`; 1.16.2 `FUN_140927d30`), vtable slot 2.
+/// Structural IDENTITY: all five MessageBoxDialog-family vtables in the 1.16.2
+/// `eldenring-deobf.bin` carry this exact function in slot 2 -- base `CS::MessageBoxDialog`
+/// (1.16.2 rva 0x2b03550), `CS::SaveRetryDialog` (0x2aaabf8), and the subclasses at 0x2ae5ae0 /
+/// 0x2b06780 / 0x2b220d0 (all 1.16.2, byte-read from that image 2026-07-28). Comparing `vtable[2]` therefore recognises every legitimate subclass -- and a
 /// wrapper that swaps the vtable after the builder runs -- while still rejecting a freed or
 /// reused object, which a single hard-coded vtable equality cannot do.
 pub const MSGBOX_DIALOG_UPDATE_RVA: usize = MsgBoxRva::Update as usize;
@@ -285,9 +294,10 @@ pub const MSGBOX_DIALOG_UPDATE_RVA: usize = MsgBoxRva::Update as usize;
 pub const MSGBOX_DIALOG_VTABLE_UPDATE_SLOT: usize = 2;
 
 /// `dialog+0x25e0` -- the DEFAULT/INITIAL cursor index, written once by the ctor
-/// (`FUN_1409275b0`: `*(u32*)(param_1+0x4bc) = param_5`, and `0x4bc*8 == 0x25e0`) from the
-/// MenuJob config the builder's `finalize` filled in. `OnDecide` (`FUN_140927ba0`) reads it
-/// and either moves the list cursor there (`FUN_140738d40(dialog+0xa38, idx, 0)`) or, when it
+/// (`0x140928c00`, 1.16.2 `FUN_1409275b0`: `*(u32*)(param_1+0x4bc) = param_5`, and
+/// `0x4bc*8 == 0x25e0`) from the MenuJob config the builder's `finalize` filled in. `OnDecide`
+/// (`0x1409291f0`, 1.16.2 `FUN_140927ba0`) reads it and either moves the list cursor there
+/// (1.16.2 `FUN_140738d40(dialog+0xa38, idx, 0)`) or, when it
 /// is -1, takes the cancel arm. It is not the button the user chose: it never changes after
 /// construction, so for a `[Yes, No]` + `default_last` confirm it reads 1 ("No") from the very
 /// first frame the box exists.
@@ -324,8 +334,9 @@ pub const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize =
 pub const MSGBOX_JOB_RESULT_SUBCODE_1EC_OFFSET: usize =
     core::mem::offset_of!(MsgBoxDialogLayout, job_result_subcode);
 /// `MenuJobResult` state values, read straight out of the callers' immediates:
-/// `MenuJobResult::SetResult` (0x1407a91e0) is `[rcx]=edx; [rcx+4]=r8d`, `add_yes` passes
-/// `edx=2`, `add_no` passes `edx=3`, and `ShouldContinue` (0x1407a9200) is `cmp [rcx],1;
+/// `MenuJobResult::SetResult` (0x1407aa510; 1.16.2 0x1407a91e0) is `[rcx]=edx; [rcx+4]=r8d`,
+/// `add_yes` passes `edx=2`, `add_no` passes `edx=3`, and `ShouldContinue` (1.16.2 0x1407a9200)
+/// is `cmp [rcx],1;
 /// seta al` -- so state <= 1 means "no answer yet" and anything above is terminal.
 pub const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
 pub const MENU_JOB_RESULT_STATE_SUCCESS: i32 = 2;
@@ -338,9 +349,10 @@ pub const MENU_JOB_RESULT_STATE_NONE: i32 = 0;
 /// latch (`cmpb $0x0,0x3b0(%rcx)`), picks the confirm/cancel sound by
 /// `MenuJobResult::IsSuccess`, hands the result to the parent, then sets `+0x3b0`. It is the
 /// single choke point every answer passes through -- a pressed Yes, a pressed No, and the
-/// cancel/auto-close path (`FUN_1407ac890`, which emits `Failed`) -- which is why the
+/// cancel/auto-close path (`0x1407adbc0`, `MENU_WINDOW_CLOSE_WITH_FAILED_RVA`, 1.16.2
+/// `FUN_1407ac890`, which emits `Failed`) -- which is why the
 /// save-flow observes it instead of guessing from dialog fields.
-pub const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x746e80;
+pub const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x748180;
 // The `generated_autoload_state_prologues.rs` include that used to sit here stayed in the root
 // crate (`crates/er-quickload/src/constants/autoload_state.rs`) when this table moved. Its
 // generator is that crate's `build.rs`, and every `*_SIG` it emits is consumed by root-crate
@@ -352,7 +364,7 @@ pub static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 pub const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
 pub const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
 pub use er_telemetry_core::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
-/// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
+/// SaveRetryDialog fade gate the OK-handler (0x78f360, `MsgBoxRva::OkHandler`) reads: it commits/closes only when
 /// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
 /// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
 pub const MSGBOX_FADE_CURRENT_1278_OFFSET: usize = 0x1278;
@@ -397,25 +409,25 @@ pub use er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
 /// force-stops it, so the GPU readback can never tank FPS indefinitely even if permille stalls.
 pub const BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS: u64 = 20_000;
 /// DIAGNOSTIC: identify the real connection-error dialog (the inferred MessageBoxDialog vtable
-/// 0x142b03550 did not match -- the auto-accept never fired). Hook the dialog builder
-/// 0x1409275b0 to log each created dialog's vtable/class + args (the FMG message id is in an
+/// 1.16.2 0x142b03550 did not match -- the auto-accept never fired). Hook the dialog builder
+/// 0x140928c00 (1.16.2 0x1409275b0) to log each created dialog's vtable/class + args (the FMG message id is in an
 /// arg) + caller; and log every distinct vtable that polls the finished-getter pre-world.
 pub const MSGBOX_BUILDER_RVA: u32 = MsgBoxRva::Builder as u32;
 pub static MSGBOX_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static MSGBOX_BUILDER_LOG: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub const MSGBOX_BUILDER_LOG_MAX: usize = TraceSampleLimit::Value24 as usize;
-/// Native policy/ToS surface oracle: constructor 0x1409b5970 builds the TosTitle UI object and
+/// Native policy/ToS surface oracle: constructor 0x1409b7070 builds the TosTitle UI object and
 /// binds asset UI paths such as `TosTitle`, `TosTitle/Text`, and the ToS_win64-backed text body.
 /// This is not a generic string-presence check; a hit means the live policy/privacy screen object
 /// was constructed during runtime. Any hit is invalid product proof.
-pub const POLICY_TOS_TITLE_CTOR_RVA: u32 = 0x9b5970;
-pub const POLICY_TOS_TITLE_CTOR_WRAPPER_RVA: u32 = 0x9b6070;
-pub const POLICY_TOS_SELECTOR_WRAPPER_RVA: u32 = 0x9b6140;
-pub const POLICY_TOS_SELECTOR_CTOR_RVA: u32 = 0x9b49f0;
+pub const POLICY_TOS_TITLE_CTOR_RVA: u32 = 0x9b7070;
+pub const POLICY_TOS_TITLE_CTOR_WRAPPER_RVA: u32 = 0x9b7770;
+pub const POLICY_TOS_SELECTOR_WRAPPER_RVA: u32 = 0x9b7840;
+pub const POLICY_TOS_SELECTOR_CTOR_RVA: u32 = 0x9b60f0;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const POLICY_TOS_SELECTOR_VTABLE_RVA: usize = 0x2b27788;
-pub const POLICY_TOS_TITLE_VTABLE_RVA: usize = 0x2b28100;
-pub const POLICY_TOS_TITLE_TEXT_PATH_RVA: usize = 0x2b27330;
+pub const POLICY_TOS_SELECTOR_VTABLE_RVA: usize = 0x2b2c8f8;
+pub const POLICY_TOS_TITLE_VTABLE_RVA: usize = 0x2b2d270;
+pub const POLICY_TOS_TITLE_TEXT_PATH_RVA: usize = 0x2b2c4a0;
 pub static POLICY_TOS_TITLE_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static POLICY_TOS_SELECTOR_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -510,11 +522,11 @@ pub static POLICY_TOS_SELECTOR_CTOR_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Native policy/status predicate 0x1409b72b0: returns true if the policy gate at 0x140e4fda0
-/// is set, otherwise falls back to `[this+8]+0x29c0`. Hooked passively to explain legal/status
-/// gate failures in direct/offline runs; never used to auto-accept or skip the UI.
-pub const POLICY_TOS_STATUS_PREDICATE_RVA: u32 = 0x9b72b0;
-pub const POLICY_TOS_FLAG_SETTER_RVA: u32 = 0x9b6b30;
+/// Native policy/status predicate 0x1409b89b0: returns true if the policy gate at (1.16.2)
+/// 0x140e4fda0 is set, otherwise falls back to `[this+8]+0x29c0`. Hooked passively to explain
+/// legal/status gate failures in direct/offline runs; never used to auto-accept or skip the UI.
+pub const POLICY_TOS_STATUS_PREDICATE_RVA: u32 = 0x9b89b0;
+pub const POLICY_TOS_FLAG_SETTER_RVA: u32 = 0x9b8230;
 pub static POLICY_TOS_STATUS_PREDICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static POLICY_TOS_FLAG_SETTER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static POLICY_TOS_STATUS_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
@@ -549,8 +561,8 @@ pub static START_WINDOW_RECONFIG_OBSERVER: Once = Once::new();
 /// Native server/login status-text formatter. Static asset/native scan (see
 /// `target/autoresearch/server-semaphore-assets/server-semaphore-static-summary.json`) maps
 /// `GR_System_Message_win64.fmg` status IDs 401120/401150/401160/401165 to state records at
-/// 0x142acbe40. Product proof must fail if this online/login status UI appears.
-pub const SERVER_STATUS_FORMATTER_RVA: u32 = 0x83ac60;
+/// 0x142acbe40 (1.16.2). Product proof must fail if this online/login status UI appears.
+pub const SERVER_STATUS_FORMATTER_RVA: u32 = 0x83c100;
 pub const SERVER_STATUS_RECORD_STATE_OFFSET: usize = 0x0;
 pub const SERVER_STATUS_RECORD_TEXT_ID_OFFSET: usize = 0x10;
 pub const SERVER_STATUS_CHECKING_NETWORK_TEXT_ID: usize = 401_120;
@@ -568,15 +580,16 @@ pub static SERVER_STATUS_LAST_TEXT_ID: AtomicUsize =
 pub static START_SERVER_STATUS_HOOK: Once = Once::new();
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
-/// CS::SceneObjProxy ctor 0x14074a700 -- the fn the title dialog-build path runs to wrap the live
-/// host MenuWindow in a transient SceneObjProxy. Disasm-verified prologue: `mov %rdx,%rbx`
+/// CS::SceneObjProxy ctor 0x14074ba00 (1.16.2 0x14074a700) -- the fn the title dialog-build path
+/// runs to wrap the live host MenuWindow in a transient SceneObjProxy. Disasm-verified (1.16.2)
+/// prologue: `mov %rdx,%rbx`
 /// (0x14074a720) then store `mov %rbx,0x20(%rsi)` (0x14074a735) -> proxy+0x20 = the incoming RDX =
 /// the engine-verified MenuWindow (probe-6 proved the TitleTopDialog factory rdx was a std::function
 /// delegate, not the MenuWindow). We MinHook this ctor at process attach and latch the validated
 /// MenuWindow (arg2/rdx) on every valid call (most-recent live host window wins) so the live-dialog
-/// path reuses it as the Load-Game factory 0x14081ead0 rdx
+/// path reuses it as the Load-Game factory 0x14081fe00 rdx
 /// (bd live-dialog-probe6-factory-fires-returns-dialog-rdx-not-menuwindow-2026).
-pub const SCENE_OBJ_PROXY_CTOR_RVA: u32 = 0x74a700;
+pub const SCENE_OBJ_PROXY_CTOR_RVA: u32 = 0x74ba00;
 /// The host MenuWindow* latched from the SceneObjProxy ctor (incoming rdx) at title build. 0 until
 /// the title builds. Updated on every valid (vtable-checked) call. Read by
 /// `locate_live_loadgame_node` (SeqCst); fail-closed when still 0.
@@ -592,45 +605,43 @@ pub static START_MENU_WINDOW_LATCH: Once = Once::new();
 /// `AddCancelButton` call into Load Profile and Open Save Folder rows. Load Profile routes to
 /// native 05_010_ProfileSelect; Open Save Folder opens the env-provided save directory. The hook is
 /// always installed; slot-load activation from the injected in-world ProfileSelect is separately
-/// guarded below. Address is deobf/live (dump AddCancelButton
-/// 0x140920d80 -> live 0x140920c90).
-pub const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
-/// The Quit Game tab builder, `FUN_140958910` -- the function whose two `AddCancelButton` calls
-/// the product clones its three rows from.
+/// guarded below. AddCancelButton is 2.7.2.0 0x1409222e0 (1.16.2 deobf 0x140920c90, 1.16.1 dump
+/// 0x140920d80).
+pub const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x9222e0;
+/// The Quit Game tab builder, 2.7.2.0 `0x140959f60` (1.16.2 `FUN_140958910`) -- the function whose
+/// two `AddCancelButton` calls the product clones its three rows from.
 ///
 /// # Why the function is the constant and the return addresses are offsets
 ///
 /// Both row detections are return addresses, captured off the live stack and compared against a
-/// 1.16.2 RVA. A return address is mid-function, so it can never appear in the 1.16.2 -> 1.17
-/// address map -- that map is keyed on `.pdata` function starts, which is what a masked signature
-/// can identify. `scripts/select-needed-1170-rows.py` could not see `0x958a20` at all, so on 1.17
-/// the two comparisons below simply never matched: no hook was refused, no address was resolved,
-/// nothing was logged, and the Load Character / Load Character from File / Load Build from URL
-/// rows were never cloned onto the tab. Silence, not a refusal.
+/// 2.7.2.0 RVA. A return address is mid-function, so it could never appear in the old 1.16.2 ->
+/// 1.17 address map -- that map was keyed on `.pdata` function starts, which is what a masked
+/// signature can identify. The 1.17 ledger's row selector could not see `0x958a20` at all,
+/// so on 1.17 the two comparisons below simply never matched: no hook was refused, no address was
+/// resolved, nothing was logged, and the Load Character / Load Character from File / Load Build
+/// from URL rows were never cloned onto the tab. Silence, not a refusal.
 ///
-/// Naming the containing function makes the pair mappable and lets the offsets ride along. Both
-/// are corroborated by `scripts/derive-callsite-1170.py`: the whole-image map carries
-/// `0x958910 -> 0x959ab0`, and at `+0x110` and `+0x227` both images hold an `E8` whose callee is
-/// the mapped pair of `AddCancelButton` (`0x920c90 -> 0x921e30`). Same offsets, same callee, so
-/// the two calls are the same two calls.
+/// Naming the containing function keeps the offsets honest across builds. On 2.7.2.0
+/// `eldenring-deobf-1.17.2.bin` holds `e8 70 82 fc ff` at `+0x10b` and `e8 59 81 fc ff` at
+/// `+0x222`, both calling `AddCancelButton` at `0x1409222e0`, exactly the two calls the 1.16.2
+/// builder makes, so the returns are at `+0x110` and `+0x227` on both builds.
 ///
 /// Putting the return addresses themselves into a verdict table was the alternative, and it is
 /// the wrong one: `DETOURABLE_ENTRY_EVIDENCE` accepts `NEITHER-ENTRY`, so such a row would
 /// license a mid-function address as a detour target and MinHook would write five bytes into the
 /// middle of a live function.
-pub const SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA: usize = 0x958910;
+pub const SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA: usize = 0x959f60;
 /// Offset of the return after the first `AddCancelButton` within the Quit Game tab builder. The
 /// first native row is Quit Game / return-to-title; the second is Return to Desktop and must not
-/// be cloned for quick-load. Same offset in 1.16.2 and 1.17.
+/// be cloned for quick-load. Same offset in 1.16.2, 1.17 and 2.7.2.0.
 pub const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_OFFSET: usize = 0x110;
 /// Offset of the return after the second native `AddCancelButton`. Used to append exactly one
 /// third in-place-style row while preserving the native GameEnd GFx component. Same offset in
-/// 1.16.2 and 1.17.
+/// 1.16.2, 1.17 and 2.7.2.0.
 pub const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_OFFSET: usize = 0x227;
 pub const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
 
-/// The two Quit Game tab row return addresses as RVAs on the running build, or `None` when this
-/// build has no verified `FUN_140958910`.
+/// The two Quit Game tab row return addresses as RVAs on 2.7.2.0, or `None` on any other build.
 ///
 /// One resolution for both, deliberately: they are two offsets into one function, so resolving
 /// twice would emit two refusal lines for one missing mapping and invite the two halves of the
@@ -654,36 +665,27 @@ pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
 pub fn system_quit_row_return_rvas() -> Option<(usize, usize)> {
     None
 }
-/// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
-/// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
-/// proof, patch it to the multi-slot controls component index used by `FUN_140958d40`; the Quit
-/// Game builder callback is left unchanged, so only the visible layout changes.
-#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA: usize = 0x93bb41;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub const SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END: u8 = 0x0e;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub const SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT: u8 = 0x02;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN: usize = 1;
 /// Existing native line-help text reused as the visible label/help for the cloned quick-load row.
 /// `GR_LineHelp[406000] == "Select profile to load"` in the local FMG dump.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const SYSTEM_QUIT_LOAD_LINEHELP_ID: u32 = 406000;
-/// Live/deobf `GetGR_LineHelp(MenuString*, int)` (dump `0x140760880` -> live `0x140760790`).
+/// `GetGR_LineHelp(MenuString*, int)` (2.7.2.0 `0x140761a90`; 1.16.2 deobf `0x140760790`, 1.16.1
+/// dump `0x140760880`).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const GET_GR_LINEHELP_ENTRY_RVA: u32 = 0x760790;
-/// Live/deobf `CS::MsgRepository::GetAndFormat(MenuString*, getter, id, fmg_name, abbrev)`
-/// (dump `0x1407634c0` -> live `0x1407633d0`). Hooked narrowly for System -> Quit Game
-/// relabeling to Save Game without editing bundled FMGs.
-pub const MSG_REPOSITORY_GET_AND_FORMAT_RVA: u32 = 0x7633d0;
-/// Live/deobf `CS::MsgRepository::Format(MenuString*, wchar_t*, id, fmg_name, abbrev)`
-/// (dump `0x1407639a0` -> live `0x1407638b0`). The GetAndFormat detour delegates here with
-/// process-lifetime UTF-16 literals for the Save Game replacement strings.
-pub const MSG_REPOSITORY_FORMAT_RVA: u32 = 0x7638b0;
-/// Live/deobf `CS::MenuString::MenuString(MenuString*, wchar_t*)` (dump `0x140675990` ->
-/// live `0x1406758a0`). Stores the raw UTF-16 pointer, so callers must pass process-lifetime data.
-pub const MENU_STRING_FROM_WIDE_RVA: u32 = 0x6758a0;
+pub const GET_GR_LINEHELP_ENTRY_RVA: u32 = 0x761a90;
+/// `CS::MsgRepository::GetAndFormat(MenuString*, getter, id, fmg_name, abbrev)`
+/// (2.7.2.0 `0x1407646d0`; 1.16.2 deobf `0x1407633d0`, 1.16.1 dump `0x1407634c0`). Hooked narrowly for
+/// System -> Quit Game relabeling to Save Game without editing bundled FMGs.
+pub const MSG_REPOSITORY_GET_AND_FORMAT_RVA: u32 = 0x7646d0;
+/// `CS::MsgRepository::Format(MenuString*, wchar_t*, id, fmg_name, abbrev)`
+/// (2.7.2.0 `0x140764bb0`; 1.16.2 deobf `0x1407638b0`, 1.16.1 dump `0x1407639a0`). The GetAndFormat
+/// detour delegates here with process-lifetime UTF-16 literals for the Save Game replacement
+/// strings.
+pub const MSG_REPOSITORY_FORMAT_RVA: u32 = 0x764bb0;
+/// `CS::MenuString::MenuString(MenuString*, wchar_t*)` (2.7.2.0 `0x140676ba0`; 1.16.2 deobf
+/// `0x1406758a0`, 1.16.1 dump `0x140675990`). Stores the raw UTF-16 pointer, so callers must pass
+/// process-lifetime data.
+pub const MENU_STRING_FROM_WIDE_RVA: u32 = 0x676ba0;
 /// FMG IDs for the two native System -> Quit Game rows. We keep the native GameEnd GFx component
 /// and replace these two button slots in-place; adding rows or swapping to the multi-slot component
 /// poisons the shared OptionSetting GFx list.
@@ -693,31 +695,33 @@ pub const SYSTEM_QUIT_SECOND_ROW_MENU_TEXT_ID: i32 = 110511;
 pub const SYSTEM_QUIT_SECOND_ROW_LINEHELP_ID: i32 = 110501;
 pub const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
 /// Native save-only routines: `SaveRequest_Profile(bool)` and `RequestSave(bool)`. Distinct from
-/// `FUN_14067a490`, which requests save and sets return-title teardown state.
+/// 1.16.1 dump `FUN_14067a490`, which requests save and sets return-title teardown state.
 ///
 /// Bool pinned via the 1.16.2 Ghidra decompile (2026-07-28): the parameter is `throttled`.
 /// `RequestSave(true)` runs a 60-second throttle against `GameMan+0xb98` (last game-save
 /// DLDateTime, +60 window) with an early `return` that sets nothing; `false` skips the throttle
 /// and always sets `+0xb73` (plus `+0xb72` iff `saveSlot != -1`), gated only on the suppression
-/// global. `SaveRequest_Profile` has the same shape (gate `FUN_14080d570` first, throttle vs
+/// global. `SaveRequest_Profile` has the same shape (gate 1.16.2 `FUN_14080d570` first, throttle vs
 /// `+0xb88` `SetSeconds(0x3c)`).
-pub const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67a420;
-pub const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
-/// The game's own retractions of the two save-request flags: `FUN_140678740` clears
-/// `GameMan+0xb72` and `FUN_140678710` clears `GameMan+0xb73`. Each is a whole function of
-/// three instructions -- load the GameMan singleton from `0x143d69918`, store 0 into the
+pub const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67b720;
+pub const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67b820;
+/// The game's own retractions of the two save-request flags (2.7.2.0 `0x140679a40` /
+/// `0x140679a10`; 1.16.2 `FUN_140678740` / `FUN_140678710`): the first clears
+/// `GameMan+0xb72` and the second clears `GameMan+0xb73`. Each is a whole function of
+/// three instructions -- load the GameMan singleton (2.7.2.0 `0x143d709a8`), store 0 into the
 /// flag byte, return -- so calling them is exactly the game's own retract semantics with
 /// no offset of ours in the loop.
 ///
 /// They exist because a refused save lane touches NOTHING: the flags stay latched, the
-/// per-frame dispatcher `FUN_140afb880` re-enters the refusing lane every frame, and each
+/// per-frame dispatcher (`B80_DISPATCHER2_RVA`, 1.16.2 `FUN_140afb880`) re-enters the refusing
+/// lane every frame, and each
 /// entry serializes the whole character into a 0x280000 buffer and throws it away. Measured
 /// on a run whose submit builder was refusing: 27,824 declines with 0 serializer failures
 /// over 854 s -- ~33 full character serializations per second, indefinitely, on the game
 /// thread. Retracting a request that provably cannot be serviced is not a dropped save; it
 /// is the end of a spin.
-pub const SAVE_REQUEST_RETRACT_B72_RVA: u32 = 0x678740;
-pub const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x678710;
+pub const SAVE_REQUEST_RETRACT_B72_RVA: u32 = 0x679a40;
+pub const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x679a10;
 // `SAVE_REQUEST_RETRACT_B72_SIG` / `..._B73_SIG` are the whole body of the two retractions --
 // RIP-relative GameMan load, flag store, return -- generated with the rest of this file's
 // prologues. Verified before the call: if the bytes ever differ, the address means something
@@ -756,8 +760,8 @@ pub const SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS: usize = 600;
 /// arrives expires the still-pending bypass token so it can never leak onto a later
 /// native save.
 pub const SAVE_BYPASS_WATCHDOG_TICKS: usize = 900;
-/// `CSMenuMan+0x80` -> the save-gate sub-object read by `FUN_14080d660` /
-/// `SaveRequest_Profile`'s gate `FUN_14080d570`: the gate fails permanently for the session
+/// `CSMenuMan+0x80` -> the save-gate sub-object read by 1.16.1 dump `FUN_14080d660` /
+/// `SaveRequest_Profile`'s gate 1.16.2 `FUN_14080d570`: the gate fails permanently for the session
 /// while the `+0x290` byte or `+0x298` qword is latched nonzero (same fields the switch-2
 /// save-freeze diagnostic `system_quit_log_save_gates` reads inline).
 pub const CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET: usize = 0x80;
@@ -869,32 +873,33 @@ pub const SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS: usize = 3600;
 /// `PropertyEditDialog` pointer stored at `action_object + 0x8` -- how every System>Quit row
 /// action reaches its owning dialog.
 pub const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;
-/// `CS::MessageBoxBuilder` recipe, byte-verified against `eldenring-deobf.bin` on 2026-07-28
-/// and lifted verbatim from the native Yes/No confirm wrapper `FUN_1407b73d0` (whose own
-/// disassembly is the source for the call order and argument registers). Every address is
+/// `CS::MessageBoxBuilder` recipe, byte-verified against the 1.16.2 `eldenring-deobf.bin` on
+/// 2026-07-28 and lifted verbatim from the native Yes/No confirm wrapper (1.16.2 `FUN_1407b73d0`,
+/// whose own disassembly is the source for the call order and argument registers; the constants
+/// below are the 2.7.2.0 rvas of the same functions). Every address is
 /// re-checked against its prologue at first use; a mismatch disarms the whole chain rather
 /// than calling into a drifted build.
 ///
 /// `ctor(rcx=builder, rdx=ctx, r8=prompt MenuString*, r9=&mode_i32, [rsp+0x28]=0u8)`
-pub const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA: u32 = 0x7af730;
+pub const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA: u32 = 0x7b0a60;
 /// `add_yes(rcx=builder, rdx=&SaveFlowYesButtonDesc) -> builder` (localized Yes label).
-pub const SYSTEM_QUIT_MSGBOX_ADD_YES_RVA: u32 = 0x7b1c70;
+pub const SYSTEM_QUIT_MSGBOX_ADD_YES_RVA: u32 = 0x7b2fa0;
 /// `add_no(rcx=builder) -> builder` (localized No/Cancel label; builds its own descriptor).
-pub const SYSTEM_QUIT_MSGBOX_ADD_NO_RVA: u32 = 0x7b1900;
+pub const SYSTEM_QUIT_MSGBOX_ADD_NO_RVA: u32 = 0x7b2c30;
 /// `default_last(rcx=builder) -> builder`; whole body is
 /// `*(i32*)(builder+0x28) = *(i32*)(builder+0x10f0) - 1`, i.e. the default choice is the
 /// last button added. That is why add order encodes the default.
-pub const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA: u32 = 0x7b1b60;
+pub const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA: u32 = 0x7b2e90;
 /// `finalize(rcx=builder, rdx=&job_slot, r8b=0) -> &job_slot`: writes the built MenuJob
 /// reference into the caller's slot.
-pub const SYSTEM_QUIT_MSGBOX_FINALIZE_RVA: u32 = 0x7b10f0;
+pub const SYSTEM_QUIT_MSGBOX_FINALIZE_RVA: u32 = 0x7b2420;
 /// `dtor(rcx=builder)`: tears down the stack builder once the job is built.
-pub const SYSTEM_QUIT_MSGBOX_DTOR_RVA: u32 = 0x7b0140;
-/// Stack footprint of `CS::MessageBoxBuilder` (`sub $0x11b8,%rsp` frame in `FUN_1407b73d0`
+pub const SYSTEM_QUIT_MSGBOX_DTOR_RVA: u32 = 0x7b1470;
+/// Stack footprint of `CS::MessageBoxBuilder` (`sub $0x11b8,%rsp` frame in 1.16.2 `FUN_1407b73d0`
 /// hands `lea 0x60(%rsp)` to the ctor and `finalize` reads up to `builder+0x1138`).
 pub const MSGBOX_BUILDER_SIZE: usize = 0x1140;
 /// Builder mode dword every native Yes/No confirm passes (`movl $0x17`). Only one dword is
-/// read from the pointer (`mov (%rdx),%eax` in the sub-ctor `FUN_14078c950`).
+/// read from the pointer (`mov (%rdx),%eax` in the sub-ctor 1.16.2 `FUN_14078c950`).
 pub const MSGBOX_BUILDER_MODE_CONFIRM: i32 = 0x17;
 /// Builder trailing byte argument (5th stack arg) every native confirm passes.
 pub const MSGBOX_BUILDER_CTOR_TRAILING_ARG: u8 = 0;
@@ -925,27 +930,28 @@ pub static START_SAVE_OBSERVERS: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub const MENU_HELP_LABEL_SIZE: usize = 0x70;
-/// Live/deobf `MenuHelpLabelComponent::~MenuHelpLabelComponent` (dump `0x140742d90`).
-pub const MENU_HELP_LABEL_DTOR_RVA: u32 = 0x742c90;
+/// `MenuHelpLabelComponent::~MenuHelpLabelComponent` (2.7.2.0 `0x140743f90`; 1.16.2 deobf
+/// `0x140742c90`, dump `0x140742d90`).
+pub const MENU_HELP_LABEL_DTOR_RVA: u32 = 0x743f90;
 /// Quit Game / return-to-title action std::function-like vtable used by the native Quit Game builder.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA: usize = 0x2b12b48;
+pub const SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA: usize = 0x2b17cb8;
 /// Vtable invoke target for the first native Quit-tab action object (`add rcx, 8; jmp native route`).
 /// This is the row we relabel to Save Game; the hook suppresses the native quit behavior.
-pub const SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA: u32 = 0x961640;
+pub const SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA: u32 = 0x962c30;
 /// Vtable invoke target for the second native Quit-tab action object (`Return to Desktop`). Custom
 /// rows are cloned from the native second AddCancelButton call, so they use this thunk, not the first
 /// row thunk above. Keep this hooked separately so forwarding the real Return-to-Desktop row still
 /// calls its own original trampoline.
-pub const SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA: u32 = 0x9610d0;
+pub const SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA: u32 = 0x962720;
 /// `PropertyNewButtonController` activation/update method. It is the row-click layer above the
 /// std::function fields; hook it for custom Quit rows because Scaleform can reach native confirmation
 /// without hitting the specific action-object thunk we first captured.
-pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA: u32 = 0x9749f0;
+pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA: u32 = 0x976040;
 /// Native predicate called by `PropertyNewButtonController::Activate` before invoking the action
 /// callback. It filters focus/update events from real click/confirm events; controller-level routing
 /// must call this first or merely focusing a custom row opens its action.
-pub const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x974b00;
+pub const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x976150;
 /// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
@@ -975,21 +981,22 @@ pub const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// only the two native row controllers. Use `system_quit_resolve_row_now` for row identity.
 pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0xa8;
 /// `CS::CSEzMenuViewerPad` predicates that `PropertyNewButtonController`'s should-invoke predicate
-/// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
+/// (2.7.2.0 0x976150; 1.16.2 `FUN_140974b00`) itself calls to classify the dispatched event. The first
 /// short-circuits the predicate with no positional test (pad/keyboard confirm); the second is the one
 /// whose result the native code then hit-tests against the row's display object (mouse click).
 pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = er_game_base::rva::MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA;
 pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = er_game_base::rva::MENU_VIEWER_PAD_MOUSE_CLICKED_RVA;
-/// `CS::GridControl::SetItemCount(this, count)` (1.16.2 `FUN_140738dc0`; byte-verified against
-/// `eldenring-deobf.bin`: `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d`).
+/// `CS::GridControl::SetItemCount(this, count)` (2.7.2.0 `0x14073a0c0`, 1.16.2 `FUN_140738dc0`;
+/// both images hold `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d` there).
 ///
 /// The list widget's item count is not a plain field to poke. This setter writes `this + 0xd0` and
 /// recomputes the scroll/page row count on the embedded scroll control at `this + 0x1a8`
-/// (`FUN_14074dad0(this + 0x1a8, (count - 1 + cols) / cols)`), which is what the native rebuild
-/// (`FUN_140975040`) calls. Writing the raw field leaves the scroll control describing the old,
+/// (1.16.2 `FUN_14074dad0(this + 0x1a8, (count - 1 + cols) / cols)`), which is what the native
+/// rebuild (1.16.2 `FUN_140975040`) calls. Writing the raw field leaves the scroll control describing the old,
 /// shorter list.
-pub const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x738dc0;
-/// The `CS::GridControl` (0x7c8 bytes, vtable dump `0x142a913b8`) embedded in every
+pub const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x73a0c0;
+/// The `CS::GridControl` (0x7c8 bytes, vtable 1.16.2 dump `0x142a913b8`; the `FUN_` names in this
+/// comment are that dump's) embedded in every
 /// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
 /// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which
 /// `Item_<row>_<col>` components the movie actually contains:
@@ -1146,37 +1153,44 @@ pub use er_telemetry_core::counters::{
     SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT, SYSTEM_QUIT_ROW_RESOLVE_COUNT,
     SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT,
 };
-/// Live/deobf native `05_010_ProfileSelect` wrapper (`FUN_14081f7e0` dump -> live `0x14081f6f0`).
-pub const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
-/// Live/deobf native `CS::MenuJob::ChainMenuJobs` (`0x1407a7ca0` dump -> live `0x1407a7bb0`).
+/// Native `05_010_ProfileSelect` wrapper (2.7.2.0 `0x140820a20`; 1.16.2 deobf `0x14081f6f0`, 1.16.1
+/// dump `FUN_14081f7e0`).
+pub const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x820a20;
+/// Native `CS::MenuJob::ChainMenuJobs` (2.7.2.0 `0x1407a8ee0`; 1.16.2 deobf `0x1407a7bb0`, 1.16.1
+/// dump `0x1407a7ca0`).
 /// ABI: `rcx=&first_job_slot, rdx=&out_job_slot, r8=&second_job_slot`; it builds a native
 /// FixOrderJobSequence so the existing menu/job pump owns both jobs rather than a private manual pump.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const MENU_JOB_CHAIN_MENU_JOBS_RVA: u32 = 0x7a7bb0;
-/// Live/deobf native ProfileSelect LoadJob builder (`FUN_140826600` dump -> live `0x140826510`).
+pub const MENU_JOB_CHAIN_MENU_JOBS_RVA: u32 = 0x7a8ee0;
+/// Native ProfileSelect LoadJob builder (2.7.2.0 `0x1408279b0`; 1.16.2 deobf `0x140826510`, 1.16.1
+/// dump `FUN_140826600`).
 /// ABI: `rcx=&out_job_slot, rdx=dialog+0x50/list, r8d=profile_id, r9=*(dialog+0x1cc8)`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const SYSTEM_QUIT_PROFILE_LOAD_JOB_BUILDER_RVA: u32 = 0x826510;
-/// Live/deobf native Quit Game return-title chain builder (`FUN_14079d7f0` dump -> live `0x14079d700`).
-pub const SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA: u32 = 0x79d700;
-/// Live/deobf `FUN_140733ff0(list, window)`: appends a MenuWindow to a DLFixedVector-backed list.
+pub const SYSTEM_QUIT_PROFILE_LOAD_JOB_BUILDER_RVA: u32 = 0x8279b0;
+/// Native Quit Game return-title chain builder (2.7.2.0 `0x14079ea30`; 1.16.2 deobf `0x14079d700`,
+/// 1.16.1 dump `FUN_14079d7f0`).
+pub const SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA: u32 = 0x79ea30;
+/// `(list, window)`: appends a MenuWindow to a DLFixedVector-backed list (2.7.2.0 `0x1407351f0`;
+/// 1.16.2 deobf `0x140733ef0`, 1.16.1 dump `FUN_140733ff0`).
 /// Hooked as a listener to identify the ProfileSelect append/list for Back/removal restore state.
-pub const MENU_WINDOW_LIST_PUSH_RVA: u32 = 0x733ef0;
-/// Live/deobf `FUN_140747980(MenuWindow*, SceneObjProxy*)`: constructs a root SceneObjProxy scratch
-/// from `MenuWindow+0x188`. Dump `0x140747a80` -> deobf `0x140747980`.
-pub const MENU_WINDOW_ROOT_PROXY_CTOR_RVA: u32 = 0x747980;
-/// Live/deobf `CSScaleformValue`/SceneObjProxy scratch destructor used by native MenuWindow fade helpers.
-pub const MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA: u32 = 0xd7f850;
+pub const MENU_WINDOW_LIST_PUSH_RVA: u32 = 0x7351f0;
+/// `(MenuWindow*, SceneObjProxy*)`: constructs a root SceneObjProxy scratch from
+/// `MenuWindow+0x188` (2.7.2.0 `0x140748c80`; 1.16.2 deobf `0x140747980`, 1.16.1 dump
+/// `0x140747a80`).
+pub const MENU_WINDOW_ROOT_PROXY_CTOR_RVA: u32 = 0x748c80;
+/// `CSScaleformValue`/SceneObjProxy scratch destructor used by native MenuWindow fade helpers.
+pub const MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA: u32 = 0xd82cf0;
 pub const MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE: usize = 0x80;
 /// SCALEFORM menu-handler LIFECYCLE guard (er-quickload crash, repeated-switch ProfileSelect UAF).
-/// The crash is the inner destructor `FUN_1411a8920` (deobf 0x1411a8900) walking a garbage intrusive
-/// list of a double-freed 0x58-byte Scaleform handler (vtable 0x142cc22c8), embedded at +0x40 of a
-/// 0x98 container cached at owner+0x28. ctor `FUN_1411a8890` (deobf 0x1411a8870). We hook both: track
+/// The crash is the inner destructor (2.7.2.0 0x1411abe60; 1.16.2 deobf 0x1411a8900) walking a
+/// garbage intrusive list of a double-freed 0x58-byte Scaleform handler (1.16.2 vtable 0x142cc22c8),
+/// embedded at +0x40 of a 0x98 container cached at owner+0x28. ctor 2.7.2.0 0x1411abdd0 (1.16.2
+/// deobf 0x1411a8870). We hook both: track
 /// every live object (ctor inserts, normal dtor removes); a dtor of an address not live is the
 /// double-free -> log it + skip the original inner destructor so it can't dereference the freed list.
 /// A true double-inner-destruct of an already-freed object is safe to skip (it was already torn down).
-pub const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11a8870;
-pub const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11a8900;
+pub const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11abdd0;
+pub const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11abe60;
 pub static SCALEFORM_HANDLER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub static SCALEFORM_HANDLER_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::SCALEFORM_HANDLER_TRACE_INSTALLED;
@@ -1192,8 +1206,9 @@ pub use er_telemetry_core::counters::SCALEFORM_HANDLER_DTORS;
 pub use er_telemetry_core::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 
 /// ~MenuWindowJob doomed-window guard (er-effects-rs-j74t, return-to-title crash rva 0x7ada87 and
-/// 0x7adb28). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (deobf 0x1407ac720) calls
-/// the finalize (deobf 0x1407ada40), whose `if (owningMenuWindow != 0)` block virtual-calls the window
+/// 0x7adb28, 1.16.2). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (2.7.2.0
+/// 0x1407ada50; 1.16.2 deobf 0x1407ac720) calls the finalize (2.7.2.0 0x1407aed70; 1.16.2 deobf
+/// 0x1407ada40), whose `if (owningMenuWindow != 0)` block virtual-calls the window
 /// (`vfptr[3]`) to fetch an input-event descriptor, indexes the event table by the descriptor's first
 /// i32, and consumes the entry as a refcounted CSScaleformLoadResult. During return-to-title the title
 /// window is doomed: `vfptr[3]` leaves the descriptor index UNINITIALISED (stack garbage, e.g.
@@ -1208,10 +1223,10 @@ pub use er_telemetry_core::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 /// so healthy mapped windows are untouched (byte-identical, no extra virtual call). The dtor forwards
 /// rdx/r8/r9 to the finalize untouched, so all four argument registers are forwarded verbatim.
 ///
-/// Identity layer (2026-07-29, closes the 2026-07-23 false-negative at rva 0x7ada7c): the state
+/// Identity layer (2026-07-29, closes the 2026-07-23 false-negative at 1.16.2 rva 0x7ada7c): the state
 /// heuristic above forwards whenever `menu_id != 0xffff` -- but a freed-and-reused window can carry an
 /// in-module vtable and arbitrary non-0xffff bytes at +0x180, so the native finalize then virtual-
-/// calls the reused object and crashes at its first `vfptr[3]` call (rva 0x7ada7c; observed
+/// calls the reused object and crashes at its first `vfptr[3]` call (1.16.2 rva 0x7ada7c; observed
 /// 2026-07-23 with the guard armed). No memory-state probe can identify that case. What can identify
 /// it is OWNERSHIP: the only producer of stale jobs is our own title-cover masquerade, which latches
 /// every job it preserves (`title_native_menu_visual_begin_title_hook` /
@@ -1220,42 +1235,45 @@ pub use er_telemetry_core::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 /// predicate: forward natively only when the window is verifiably still in the state the finalize's
 /// contract requires (in-module vtable and `menu_id < 0x47` mapped, i.e. the native deregistration is
 /// valid), probe `vfptr[3]` for the `0xffff` never/de-registered state, and DETACH (native
-/// vector-remove `FUN_140733d70` + null `job+0x130`) on every unverifiable state (unreadable window,
+/// vector-remove `MENU_WINDOW_LIST_REMOVE_RVA`, 1.16.2 `FUN_140733d70`, + null `job+0x130`) on every
+/// unverifiable state (unreadable window,
 /// out-of-module vtable, unreadable or garbage `menu_id`, garbage descriptor index). The 1.16.2
 /// finalize (0x1407ada40) and dtor both gate every window access on `owningMenuWindow != 0`, so the
 /// detached state is native-tolerated by construction. Non-preserved (native-owned) jobs keep the
 /// legacy heuristic byte-identically.
-pub const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
+pub const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ada50;
 
-/// `CS::MenuWindowJob` FINALIZE (deobf 0x1407ada40) -- the function whose `if (owningMenuWindow != 0)`
-/// block virtual-calls `owningMenuWindow->vfptr[3]`, faulting at rva 0x7ada7c when that window is
-/// freed/reused.
+/// `CS::MenuWindowJob` FINALIZE (2.7.2.0 0x1407aed70; 1.16.2 deobf 0x1407ada40) -- the function
+/// whose `if (owningMenuWindow != 0)` block virtual-calls `owningMenuWindow->vfptr[3]`, faulting at
+/// (1.16.2) rva 0x7ada7c when that window is freed/reused.
 ///
-/// It has five callers and `MENU_WINDOW_JOB_DTOR_RVA` (0x7ac720) is only one of them; the others are
+/// It has five callers and `MENU_WINDOW_JOB_DTOR_RVA` is only one of them; the others are (1.16.2)
 /// three sites inside `MenuWindowJob::Run` (0x7ad3fb / 0x7ad54d / 0x7ad66a) and 0x7bdee0. The
 /// destructor guard therefore cannot see the crash observed on the profile switch, which arrives via
 /// `Run` (proven twice 2026-07-30: agent + user runs, identical AV signature). Hooking the finalize
-/// itself covers every caller with one detour, and 0x7ada40 has no other detour -- unlike
-/// `MenuWindowJob::Run` (0x7ad1c0), where two detours already collided (MinHook allows one per
-/// address; see bd system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
-pub const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
+/// itself covers every caller with one detour, and the finalize has no other detour -- unlike
+/// `MenuWindowJob::Run` (`ProfileLoadMenuRva::MenuItemUpdate`), where two detours already collided
+/// (MinHook allows one per address; see bd
+/// system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
+pub const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7aed70;
 // The MSB-PARSE / STEP_LoadListWait / DLC-virtual-root trace addresses are not in this table.
 // They moved out on 2026-08-25 with the traces that owned them, into
 // `crates/er-diag-harness/src/rva.rs`: `MSB_FILECAP_PARSE_CALLBACK_RVA` (0x21bbf0),
-// `STEP_LOADLIST_WAIT_RVA` (0xaf1800), `DLC_ROOTS_BLANK_RVA` (0xe06490) and `DLC_ROOTS_JOB_RVA`
-// (0x836f30), plus the `MOVEMAPLISTSTEP_*` gate operands and the verbose-call budgets. This table
+// `STEP_LOADLIST_WAIT_RVA` (0xaf2fd0), `DLC_ROOTS_BLANK_RVA` (0xe099f0) and `DLC_ROOTS_JOB_RVA`
+// (0x8383d0), plus the `MOVEMAPLISTSTEP_*` gate operands and the verbose-call budgets. This table
 // carried them only because it was lifted out of the root crate while those three traces still
 // compiled into the product DLL -- they had no reader here other than the traces, and one game
 // address gets exactly one literal declaration (`scripts/check-rva-alias-drift.py`).
 //
 // `DLC_ROOTS_REFILL_RVA`, `CSDLC_SINGLETON_RVA` and `DLC_ROOT_ALIAS_NAME` below did not move: the
 // DLC-root self-heal in `dlc_roots_self_heal.rs` is product code and names all three.
-/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the REFILL: re-queries Steam DLC ownership and calls
+/// `0x140e09510(CSDlcImp*, bool)` (1.16.2 `FUN_140e05fb0`) -- the REFILL: re-queries Steam DLC
+/// ownership and calls
 /// `CSDlcImp::AddVirtualFileRoots`. Hooked at this shared entry rather than at either caller,
 /// because a measured run showed `STEP_LoadListWait` never executes at all.
 pub const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
-/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
-/// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
+/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from 1.16.2 `FUN_1408371e0`'s own load:
+/// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8` (2.7.2.0 `0x143d8dc78`).
 pub const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
 /// The DLIO alias every failing `m28` read resolves through.
 pub const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
@@ -1278,15 +1296,16 @@ pub const MENU_WINDOW_INPUT_DESC_SCRATCH_LEN: usize = 0x200;
 pub const GAME_MODULE_VTABLE_SPAN: usize = 0x0800_0000;
 /// The job's push-target `DLFixedVector*` (`field2_0x50`, a pointer at job+0x50 -- verified by the
 /// finalize's `mov rcx,[rbx+0x50]`). `MenuWindowJob::Run` pushes owningMenuWindow into this vector,
-/// and the finalize is supposed to remove it via `FUN_140733e70(field2_0x50, window)` -- but that
-/// call sits after the crashing getter, so on a doomed window the removal never runs and the window
-/// dangles in the title-step's active-window vector that `STEP_MenuJobWait` walks (the second crash,
-/// rva 0x733f80). We perform this removal ourselves in the doomed branch.
+/// and the finalize is supposed to remove it via `MENU_WINDOW_LIST_REMOVE_RVA(field2_0x50, window)`
+/// (1.16.1 dump `FUN_140733e70`) -- but that call sits after the crashing getter, so on a doomed
+/// window the removal never runs and the window dangles in the title-step's active-window vector
+/// that `STEP_MenuJobWait` walks (the second crash, 1.16.2 rva 0x733f80). We perform this removal ourselves in the doomed branch.
 pub const MENU_WINDOW_JOB_PUSH_TARGET_50_OFFSET: usize = 0x50;
-/// `FUN_140733e70` (deobf/live 0x140733d70): DLFixedVector pointer-remove-and-compact. ABI
+/// DLFixedVector pointer-remove-and-compact (2.7.2.0 0x140735070; 1.16.2 deobf 0x140733d70, 1.16.1
+/// dump `FUN_140733e70`). ABI
 /// `fn(rcx = vector, rdx = window)`; it only searches/removes the pointer and decrements the count at
 /// vector+0x48 -- it never dereferences the window's vtable, so it is safe to call on a doomed window.
-pub const MENU_WINDOW_LIST_REMOVE_RVA: usize = 0x733d70;
+pub const MENU_WINDOW_LIST_REMOVE_RVA: usize = 0x735070;
 /// The DLFixedVector count field (`vector+0x48`) + a sane upper bound. We validate the count is
 /// readable and in `(0, MAX]` before calling the native removal so a corrupt push-target pointer
 /// cannot drive the (non-SEH) native search loop off into unmapped memory.
@@ -1341,17 +1360,18 @@ pub static MASQUERADE_PRESERVED_JOBS: [AtomicUsize; MASQUERADE_PRESERVED_JOB_SLO
 /// `CSMenuProfModelRend` looks up the `MenuOffscrRendParam` param table, which the teardown has
 /// unloaded, so the game `DLPanic`s (`MenuOffscrRendParam.cpp:0x23`, `GetParamResCap(..., MenuOffscr-
 /// RendParam, 0) == NULL`). We turn that exact condition into a fast clean exit: hook the offscreen-
-/// render param lookup (inner `LookupMenuOffscrRendParam`, deobf 0x140d3ed90), and when the param
+/// render param lookup (inner `LookupMenuOffscrRendParam`, 2.7.2.0 0x140d41c40), and when the param
 /// table is absent -- which only happens on a quit teardown (it stays resident through loads, proven
 /// by the successful repeated loads) -- `ExitProcess(0)` instead of the DLPanic. The native quit has
 /// already issued the character save before the rebuild, so this is save-then-kill; the native
 /// confirm dialog is untouched (the teardown only runs after Yes). Grounded by the inner lookup's own
-/// disasm: repo ptr `0x143d81ee8`, `GetParamResCap` `0x140d4cc50`, `MenuOffscrRendParam` type `0x4e`.
-pub const MENU_OFFSCR_REND_PARAM_LOOKUP_RVA: usize = 0xd3ed90;
+/// disasm (1.16.2): repo ptr `0x143d81ee8`, `GetParamResCap` `0x140d4cc50`, `MenuOffscrRendParam`
+/// type `0x4e`. On 2.7.2.0 they are `0x143d88f78` and `0x140d500f0`.
+pub const MENU_OFFSCR_REND_PARAM_LOOKUP_RVA: usize = 0xd41c40;
 /// Declared once in `er-game-base::rva`; the seamless-bugfixes guard tests the same slot.
 pub const SOLO_PARAM_REPOSITORY_PTR_RVA: usize =
     er_game_base::rva::SOLO_PARAM_REPOSITORY_GLOBAL_RVA;
-pub const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
+pub const GET_PARAM_RESCAP_RVA: usize = 0xd500f0;
 pub const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
 pub static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED;
@@ -1480,31 +1500,34 @@ pub use er_telemetry_core::counters::OPTIONSETTING_PANE_FIX_APPLIED;
 pub const OPTIONSETTING_TAB_CONTROL_OFFSET: usize = 0x1870;
 pub const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
 pub const OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
-/// Composite current-dialog embedded pane proxy offset (`dialog+0x1200`; FUN_14093b850 SetVisibles it).
+/// Composite current-dialog embedded pane proxy offset (`dialog+0x1200`; 1.16.1 dump FUN_14093b850
+/// SetVisibles it).
 pub const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
-/// Deobf/runtime RVA for the native OptionSetting tab-select helper body. It sets composite+0xb8,
+/// 2.7.2.0 RVA for the native OptionSetting tab-select helper body. It sets composite+0xb8,
 /// copies pane state old->new, refreshes the selected row, then toggles all cached panes. Call only
 /// after first repairing composite+0xb8 to the target pane so its copy step is self-copy, not stale
 /// Quit->Game state copy.
-pub const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x0093b760;
+pub const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x0093cdb0;
 /// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
 pub const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
 
-/// Native `CS::ProfileLoadDialog` in-place list rebuild `FUN_1409a5020`. `fn(rcx = dialog)`. The
+/// Native `CS::ProfileLoadDialog` in-place list rebuild (2.7.2.0 `0x1409a6520`; 1.16.2 dump
+/// `FUN_1409a5020`). `fn(rcx = dialog)`. The
 /// game's own records-changed refresh, used by the delete-save flow: it re-runs the item-list
 /// builder against a fresh `GetProfileSummary()` read, copies the new list into `dialog+0x1260`,
 /// and rebinds -- rewriting the row count at `+0xb08`, re-selecting a valid cursor and
 /// re-decorating every visible row. This is the sanctioned way to change row text while the
 /// `05_010` window stays open: the decorate pass reads per-row snapshots, so a bare record write
 /// is invisible without it. RE 2026-07-07, adversarially verified.
-pub const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
-/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift
-/// 0; entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in
-/// `eldenring-deobf.bin`). `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`.
+pub const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a6520;
+/// Native ProfileSelect item-list builder, 2.7.2.0 `0x140876a30` (1.16.2 `FUN_140875590`; entry
+/// bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in both
+/// `eldenring-deobf-1.17.2.bin` and `eldenring-deobf.bin`).
+/// `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`.
 /// Builds the visible 10-row list straight from the live ProfileSummary. Every point where records
 /// become visible rows funnels through this one function -- the dialog ctor/bind paths and the
 /// delete-flow rebuild above -- so a re-stage hook at its entry covers every build site.
-pub const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
+pub const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x876a30;
 /// OptionSettingTopDialog (menu_id 0x25) -> embedded `CS::CompositeOptionSettingDialog`.
 pub const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
 /// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
@@ -1518,15 +1541,15 @@ pub const OPTIONSETTING_MENU_ID: u16 = 0x25;
 pub const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
 
 /// GX command-queue producer telemetry (switch-#4 overflow, run autostep10c-directarm 2026-07-03).
-/// `reserve_command_queue_slot` (deobf entry 0x141aeae60; shift-verified against dump 0x141aeae80)
+/// `reserve_command_queue_slot` (2.7.2.0 entry 0x141aee3c0; 1.16.2 deobf 0x141aeae60)
 /// appends a command-list slot to a fixed array: base at queue+0x28, count at +0x30, capacity at
 /// +0x34 (fixed 192). When count >= capacity the append branch is skipped and the engine writes the
-/// slot through a NULL pointer -- the repeated-switch crash at rva 0x1aeaf05. Switches #1-#3 survive
+/// slot through a NULL pointer -- the repeated-switch crash at 1.16.2 rva 0x1aeaf05. Switches #1-#3 survive
 /// and #4 overflows, so some producer's per-frame submissions grow per switch. This hook is
 /// telemetry-only (always forwards -- the 5ae3965 drop-on-overflow guard corrupted rendering and was
 /// removed in c2794d9): it tracks occupancy high-water (cumulative + per-switch) and a caller
 /// histogram so the run that overflows names the accumulating producer instead of just crashing.
-pub const GX_RESERVE_CMD_QUEUE_SLOT_RVA: usize = 0x1aeae60;
+pub const GX_RESERVE_CMD_QUEUE_SLOT_RVA: usize = 0x1aee3c0;
 /// Queue-struct field offsets (from the reserve_command_queue_slot decompile).
 pub const GX_CMD_QUEUE_COUNT_OFFSET: usize = 0x30;
 pub const GX_CMD_QUEUE_CAP_OFFSET: usize = 0x34;
@@ -1543,33 +1566,34 @@ pub use er_telemetry_core::counters::GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED;
 /// stack frame lies inside our own DLL (attributes submissions our pipeline caused vs pure-native).
 pub const GX_CMD_QUEUE_HIST_SLOTS: usize = 32;
 pub const GX_CMD_QUEUE_SELF_TAG: usize = 1 << 63;
-/// Deobf RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (dump
-/// 0x141aea930..0x141aeab60, shift +0x20); return addresses inside it are transport, not producers.
+/// 2.7.2.0 RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (1.16.2
+/// deobf `0x1aea900..0x1aeaf60`); return addresses inside it are transport, not producers.
 ///
-/// These two are 1.16.2 RVAs and are compared against live stack frames, so on 1.17 they name the
-/// wrong bytes. Use [`gx_cmd_queue_wrapper_rva_band`] rather than the raw pair; it anchors both
-/// endpoints on [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`], which the address map does carry.
-pub const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aea900;
-pub const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aeaf60;
-/// Offsets of the band's endpoints from [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`] (0x1aeae60), which sits
-/// inside the band and is a mapped function start.
+/// These are compared against live stack frames. Use [`gx_cmd_queue_wrapper_rva_band`] rather than
+/// the raw pair; it anchors both endpoints on [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`] and refuses on any
+/// build other than 2.7.2.0.
+pub const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aede60;
+pub const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aee4c0;
+/// Offsets of the band's endpoints from [`GX_RESERVE_CMD_QUEUE_SLOT_RVA`] (0x1aee3c0), which sits
+/// inside the band and is a function start.
 ///
 /// # Why an anchored band is honest here and is not honest everywhere
 ///
-/// A band spanning several functions only translates if those functions moved together. This one
-/// does, and it was measured rather than assumed: all 12 mapped `.pdata` functions overlapping
-/// `0x1aea900..0x1aeaf60` move by exactly `+0x1e00` between 2.6.2.0 and 2.7.0.0, so the block is
-/// rigid and its width is preserved. Compare `0x7a3000..0x7a4000`, where seven different deltas
-/// occur across the band's functions -- that one cannot be anchored and is refused instead.
+/// A band spanning several functions only carries across builds if those functions moved together.
+/// This one does, and it was measured rather than assumed: all 12 `.pdata` functions overlapping the
+/// 1.16.2 band `0x1aea900..0x1aeaf60` moved by exactly `+0x1e00` between 2.6.2.0 and 2.7.0.0, and the
+/// 2.7.2.0 band `0x1aede60..0x1aee4c0` holds the same bytes as the 1.16.2 one at 1543 of 1632
+/// positions (the rest are rel32 displacements), so the block is rigid and its width is preserved.
+/// Compare 1.16.2 `0x7a3000..0x7a4000`, where seven different deltas occur across the band's
+/// functions -- that one cannot be anchored.
 pub const GX_CMD_QUEUE_WRAPPER_BAND_START_OFFSET: isize =
     GX_CMD_QUEUE_WRAPPER_RVA_MIN as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
 pub const GX_CMD_QUEUE_WRAPPER_BAND_END_OFFSET: isize =
     GX_CMD_QUEUE_WRAPPER_RVA_MAX as isize - GX_RESERVE_CMD_QUEUE_SLOT_RVA as isize;
 
-/// The reserve/enqueue transport band as RVAs on the running build, or `None` when this build has
-/// no verified `reserve_command_queue_slot`.
+/// The reserve/enqueue transport band as RVAs on 2.7.2.0, or `None` on any other build.
 ///
-/// A caller that gets `None` must not fall back to the raw 1.16.2 pair: with a stale band every
+/// A caller that gets `None` must not fall back to the raw pair: with a stale band every
 /// transport frame reads as a producer, and the histogram then names the wrong function as the
 /// thing filling the command queue -- a wrong answer that looks exactly like a right one.
 #[cfg(windows)]
@@ -1598,13 +1622,14 @@ pub const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
 pub const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
 pub use er_telemetry_core::counters::GX_CMD_QUEUE_NEARFULL_HITS;
 /// Bucket-table instrument (names the retainer class the producer histogram cannot: run 10d proved
-/// the drain pump FUN_141b3bdc0 dominates reserves by RESUBMITTING its context list each frame, so
-/// the leak is list membership). The pump's context (its param_1; latched by a thin entry hook at
-/// deobf 0x1b3bda0, dump 0x141b3bdc0, shift-verified) holds a 109-bucket table of per-frame queue
+/// the drain pump (1.16.1 dump FUN_141b3bdc0) dominates reserves by RESUBMITTING its context list
+/// each frame, so the leak is list membership). The pump's context (its param_1; latched by a thin
+/// entry hook at 2.7.2.0 0x1b3f300; 1.16.2 deobf 0x1b3bda0, 1.16.1 dump 0x141b3bdc0) holds a 109-bucket table of
+/// per-frame queue
 /// slot ranges: begin i32 at ctx+0x30+idx*0x18, end i32 at ctx+0x34+idx*0x18 (from the pump's
 /// bucket-locate loop, bound 0x6d). Nonzero widths per bucket, diffed across switches, name which
 /// bucket's submissions grow toward the 192 cap.
-pub const GX_CMD_PUMP_RVA: usize = 0x1b3bda0;
+pub const GX_CMD_PUMP_RVA: usize = 0x1b3f300;
 pub static GX_CMD_PUMP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::GX_CMD_PUMP_CTX;
 pub use er_telemetry_core::counters::GX_CMD_PUMP_INSTALLED;
@@ -1625,10 +1650,11 @@ pub const GX_CMD_QUEUE_PEAK_LOG_STEP: usize = 8;
 pub use er_telemetry_core::counters::GX_CMD_QUEUE_PEAK_LAST_LOGGED;
 /// Command-byte arena fill (user-reported render corruption during switch #3's return-title window,
 /// 2026-07-03): `reserve_command_queue_slot` allocates command bytes from a bump arena at
-/// queue+0x40 (FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at +0x28;
-/// remaining = limit - align_up(cursor_lo); on remaining < request it takes a refill/wrap path
-/// FUN_141c48f50). If that wraps while earlier commands are unconsumed, live command bytes are
-/// overwritten -> garbled draws without a crash -- the sub-critical sibling of the 0x1aeaf05
+/// queue+0x40 (1.16.1 dump FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at
+/// +0x28; remaining = limit - align_up(cursor_lo); on remaining < request it takes a refill/wrap
+/// path, 1.16.1 dump FUN_141c48f50). If that wraps while earlier commands are unconsumed, live
+/// command bytes are overwritten -> garbled draws without a crash -- the sub-critical sibling of
+/// the 1.16.2 0x1aeaf05
 /// slot-table overflow. Track remaining low-water (cumulative + per-switch) to correlate.
 pub const GX_CMD_QUEUE_ARENA_OFFSET: usize = 0x40;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
@@ -1639,36 +1665,40 @@ pub const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
 pub use er_telemetry_core::counters::GX_CMD_ARENA_MIN_REMAINING;
 pub use er_telemetry_core::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
 /// CSDelayDeleteMan pending-count read (repeated-switch GX overflow root-cause probe, 2026-07-03).
-/// The profile-renderer teardown (`FUN_1409b2f00`) does not destroy the 10 old CSMenuProfModelRend
-/// per switch -- it hands each to CSDelayDeleteMan (`FUN_140e77540`) and nulls the table slot. The
-/// pre-delete prep (`FUN_140bb9930`) only sets the object's +0x756 "marked" byte; it does not
+/// The profile-renderer teardown (`0x1409b44b0`, `PROFILE_RENDERER_TEARDOWN_RVA`; 1.16.2
+/// `0x1409b2db0`, 1.16.1 dump `FUN_1409b2f00`) does not destroy the 10
+/// old CSMenuProfModelRend per switch -- it hands each to CSDelayDeleteMan (1.16.1 dump
+/// `FUN_140e77540`) and nulls the table slot. The pre-delete prep (1.16.1 dump `FUN_140bb9930`)
+/// only sets the object's +0x756 "marked" byte; it does not
 /// unregister the renderer's ResMan draw task, so a marked-but-unfreed renderer keeps submitting to
 /// the 192-slot GX command queue every frame. If the delay-delete pump does not drain them during
 /// our in-world return-title/reload, they pile up -> queue climbs ~+23/switch -> null-slot crash
-/// (0x1aeaf05) at switch #4-5 (A/B run 10g). CSDelayDeleteMan is a singleton whose pointer lives at
-/// dump global 0x1445896a8; its enqueue (`FUN_140e77f30`) increments a pending count at
+/// (1.16.2 0x1aeaf05) at switch #4-5 (A/B run 10g). CSDelayDeleteMan is a singleton whose pointer
+/// lives at 1.16.2 global 0x1445896a8; its enqueue (1.16.1 dump `FUN_140e77f30`) increments a pending count at
 /// manager+0x40 (high-water at +0x44). Reading manager+0x40 per switch tests the pileup directly:
 /// climbing +~10/switch confirms the pump is not draining our enqueued renderers. Pure guarded read
-/// (validate the pointer + a sane count); RVA ground-truthed in the DEOBF binary (teardown 0x9b2db0
-/// disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x1445896a8 - 0x140000000 = 0x45896a8),
-/// same VA as the dump. The runtime read is self-validating so a bad RVA logs -1, not a crash.
+/// (validate the pointer + a sane count); RVA ground-truthed in the 1.16.2 deobf binary (teardown
+/// 0x9b2db0 disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x45896a8; 2.7.2.0 0x4590748).
+/// The runtime read is self-validating so a bad RVA logs -1, not a crash.
 pub const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = crate::CS_DELAY_DELETE_MAN_GLOBAL_RVA;
 pub const DELAY_DELETE_MAN_PENDING_COUNT_OFFSET: usize = 0x40;
 pub const DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET: usize = 0x44;
 /// Sane upper bound for the pending count; a larger read means the singleton RVA/layout is wrong.
 pub const DELAY_DELETE_MAN_PENDING_SANE_MAX: usize = 100_000;
-/// CSDelayDeleteMan ENQUEUE `FUN_140e77540` (dump) -> deobf 0x140e77490, ground-truthed from the
-/// deobf profile-renderer teardown (0x9b2db0): it calls this at 0x9b2e0d as `call 0x140e77490` with
+/// CSDelayDeleteMan ENQUEUE, 2.7.2.0 0x140e7a9f0 (1.16.2 deobf 0x140e77490, 1.16.1 dump
+/// `FUN_140e77540`),
+/// ground-truthed from the 1.16.2 profile-renderer teardown (0x9b2db0): it calls this at 0x9b2e0d as
+/// `call 0x140e77490` with
 /// rcx=manager (the singleton above), rdx=object. This is the safe delayed-destruction path the game
 /// uses for the other 9 renderers every teardown -- marks the object's +0x756 byte, enqueues it, and
 /// the delete pump frees it when the GPU is done. We call it to destroy the previously-spared
 /// portrait renderer (see `PROFILE_SPARE_ORPHAN`) instead of leaking it.
-pub const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
+pub const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe7a9f0;
 /// The previously-spared portrait renderer awaiting safe destruction. The teardown-spare excludes
 /// one CSMenuProfModelRend from the native delete each load (nulls its table slot) to render the
 /// now-loading portrait; the load-complete reset then dropped the pointer without freeing it, so one
 /// live renderer -- still running its ResMan offscreen draw task -- leaked per System->Quit->Load
-/// switch, each filling the 192-slot GX command queue every frame until it overflowed (0x1aeaf05,
+/// switch, each filling the 192-slot GX command queue every frame until it overflowed (1.16.2 0x1aeaf05,
 /// ~switch #4). The reset now moves the pointer here (render thread, a plain store); the game-thread
 /// teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (thread-correct,
 /// same thread the native teardown runs on).
@@ -1676,18 +1706,18 @@ pub use er_telemetry_core::counters::PROFILE_SPARE_ORPHAN;
 /// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
 pub use er_telemetry_core::counters::PROFILE_SPARE_ORPHANS_DELETED;
 
-/// Native MenuWindow close-finalize `FUN_1407ac980` (dump `0x1407ac980` -> live/deobf `0x7ac890`,
-/// content-unique). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
+/// Native MenuWindow close-finalize (2.7.2.0 `0x7adbc0`; 1.16.2 deobf `0x7ac890`, 1.16.1 dump
+/// `FUN_1407ac980`). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
 /// invokes the window's own close vmethod (`window->vtable+0x60`). Calling it on the ProfileSelect
-/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ad1c0) reads a
-/// terminal result and `ExecuteMenuJob` (0x7a96f0) pops the job from the menu-job queue head. That
+/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ae4f0; 1.16.2
+/// 0x7ad1c0) reads a terminal result and `ExecuteMenuJob` (1.16.1 dump 0x7a96f0) pops the job from the menu-job queue head. That
 /// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
 /// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
 pub const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
     er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
 /// Native return-title semantic request used after System->ProfileSelect confirmation. This is
-/// `FUN_14067a490` in the Ghidra dump and maps to live/deobf `0x14067a3a0`; it sets the same
+/// 2.7.2.0 `0x14067b6a0` (1.16.2 deobf `0x14067a3a0`, 1.16.1 dump `FUN_14067a490`); it sets the same
 /// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
 /// displaying another confirmation dialog.
-pub const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+pub const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67b6a0;

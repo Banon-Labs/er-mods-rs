@@ -1,7 +1,7 @@
 // What does the live `EquipParamGoods` row for a vanilla invasion item look like?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why this and not another predicate
 //
@@ -27,11 +27,9 @@
 // crates/eldenring/src/cs/solo_param_repository.rs. The PARAM header layout is the one
 // er-invasion-warp-core/src/map_piece.rs already parses: row count at 0x0A, the row index at 0x40
 // with a 24-byte stride, each entry holding the row id first and its data offset at +8.
-// 1.17 rva. Every `.data` global moved between 1.16.2 and 1.17, so the 1.16.2 value 0x3d81ee8
-// this agent first used read whatever now occupies the old slot and faulted on the walk. The
-// destination comes from docs/recon/rva-map-1162-to-1170.data.tsv, which the DLL resolves through
-// at runtime; a hand-written agent has to carry the translated value itself. `.data` did not move
-// again between 1.17.0 and 1.17.1 -- only `.text` took the `+0x70` -- so this is the live address.
+// 2.7.2.0 rva. Every `.data` global moved between 1.16.2 and 1.17, so the 1.16.2 value 0x3d81ee8
+// this agent first used read whatever occupied the old slot and faulted on the walk; it moved again
+// in 2.7.2.0 (1.17.1 value beside it). The DLL uses the same 2.7.2.0 rva, untranslated.
 const SOLO_PARAM_REPOSITORY_GLOBAL_RVA = 0x3d88f78; // 1.17.1 0x3d85f58
 const EQUIP_PARAM_GOODS_INDEX = 3;
 

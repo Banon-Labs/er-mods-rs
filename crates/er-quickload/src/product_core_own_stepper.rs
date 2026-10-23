@@ -28,7 +28,8 @@ pub(crate) use er_telemetry_core::counters::OWN_LOAD_FORCED_CONTINUE_HANDOFF_MS;
 /// Armed from the reliable autoload-file channel (`own_load_install_job=1` in er-quickload-autoload.txt)
 /// so the menu-free LoadGame-job install lever runs without depending on env-var propagation through
 /// Proton. Defaults off. When armed (and `own_load` is armed so `own_load_drive` runs), the verify-only
-/// parse is followed by build (`FUN_140826510`) + install (`FUN_1407a9560`) of the LoadGame
+/// parse is followed by build (0x1408279b0; 1.16.2 `FUN_140826510`) + install (0x1407aa890; 1.16.2
+/// `FUN_1407a9560`) of the LoadGame
 /// MenuJobWithContext into `owner+0x130` -- Instead of the guarded continue_confirm/SetState5. Save-safe
 /// (build + first-tick deser only read the save; no SetState5, no autosave, no save write).
 pub(crate) use er_telemetry_core::counters::OWN_LOAD_INSTALL_JOB_FILE_ARMED;
@@ -373,7 +374,7 @@ pub(crate) use er_telemetry_core::counters::TFC_LOAD_VEC_WAIT_TICKS;
 /// Trampoline for the hooked TitleTopDialog::update (`title_update_detour` -> original). 0 = not hooked.
 pub(crate) use er_telemetry_core::counters::TITLE_UPDATE_ORIG;
 
-/// Detour for CS::TitleTopDialog::update (0x1409aac10, vtable slot 2). Runs in the pump'S frame with
+/// Detour for CS::TitleTopDialog::update (2.7.2.0 0x1409ac260, vtable slot 2). Runs in the pump'S frame with
 /// the live dialog (rcx) -- the in-context timing our recurring-game-task build lacked. Calls the
 /// original first (the pump sets up the live dialog state + drains the menu jobs), then runs the gated
 /// one-shot Continue build (`maybe_fire_tfc_continue`), so it builds with the now-live dialog fields
@@ -406,18 +407,18 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
 
 // ===== readiness-gated press-any-button advance (golden path, zero-input) =====
 // The press-any-button gate is code, not a packed asset: the per-frame node-update/builder
-// 0x1407ad1c0 builds the MenuJobWait job into [step+0x130]; the job completes when predicate
-// 0x1407a9200 (= `*rcx>=2`) sees [job+0x1e8]>=2 (the press-count the native node bumps on the bound
+// 0x1407ae4f0 (2.7.2.0) builds the MenuJobWait job into [step+0x130]; the job completes when predicate
+// (1.16.2 0x1407a9200, `*rcx>=2`) sees [job+0x1e8]>=2 (the press-count the native node bumps on the bound
 // keycode [job+0x180]). We readiness-gate the existing job zero-input: hook the node-update, and once
 // the job is built+valid (we are at press-any-button) and settled, write [job+0x1e8]=2 so the job's
 // own predicate passes and it completes via its normal path (bootstrap cascade intact). No new job (no
-// cap-8 overflow), no replace, no file mod, no input. Distinct from the dead latch-force 0x143d856a0
+// cap-8 overflow), no replace, no file mod, no input. Distinct from the dead latch-force 0x143d8c740
 // (skipped bookkeeping -> crash). bd press-any-button-golden-lever-job1e8-readiness-2026-06-23.
 
 /// Trampoline to the original PAB node-update. 0 = not hooked.
 pub(crate) use er_telemetry_core::counters::PAB_ADVANCE_ORIG;
 
-/// Detour for the press-any-button node-update 0x1407ad1c0. Calls the original (builds/updates the job
+/// Detour for the press-any-button node-update 0x1407ae4f0. Calls the original (builds/updates the job
 /// at `[step+0x130]`) then runs the gated, fail-closed, one-shot readiness advance. Pass-through return.
 pub(crate) unsafe extern "system" fn pab_node_update_detour(
     step: usize,
@@ -436,9 +437,9 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         pab_advance_try(step)
     }));
-    // PAB deterministically wins the shared MinHook slot at 0x7ad1c0 (MENU_WINDOW_JOB_RUN_RVA ==
+    // PAB deterministically wins the shared MinHook slot at 0x7ae4f0 (MENU_WINDOW_JOB_RUN_RVA ==
     // PAB_NODE_UPDATE_RVA), so it must also run the System->Quit post-original work here. Root cause
-    // (2026-07-15): Three detours target 0x7ad1c0 (PAB, System->Quit MenuWindowJob::Run, and the dead
+    // (2026-07-15): Three detours target 0x7ae4f0 (PAB, System->Quit MenuWindowJob::Run, and the dead
     // title-cover hook); MinHook binds only one. On native Windows the inline/early PAB install wins and
     // the background-thread System->Quit install fails ALREADY_CREATED, so `system_quit_menu_window_run_post`
     // -- the sole writer of the hide latch (SYSTEM_QUIT_REAL_WINDOWS_HIDDEN) and the slot-activation gate
@@ -453,7 +454,7 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
         let n = crate::constants::PAB_RUN_POST_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
         if n == 1 || n.is_multiple_of(1200) {
             append_autoload_debug(format_args!(
-                "pab-run-post: PAB detour (deterministic 0x7ad1c0 winner) drove system_quit_menu_window_run_post #{n}"
+                "pab-run-post: PAB detour (deterministic 0x7ae4f0 winner) drove system_quit_menu_window_run_post #{n}"
             ));
         }
         // The Save Game row's destination browser, on every build. It used to be one block inside
@@ -509,7 +510,7 @@ pub(crate) use er_title_flow::StartupModalBlockingState;
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
 /// stable press-any-button state, it drives the game's own load: SetState(3=BeginTitle)
 /// builds the Continue/Load menu + sets GameMan+0xc30 to the most-recent saved map, then
-/// the native Continue confirm 0x140b0e180 (via a {[+8]=owner} shim) does slot-select +
+/// the native Continue confirm 0x140b0fd50 (via a {[+8]=owner} shim) does slot-select +
 /// child-request + SetState(5=PlayGame). The native pump then loads the world, skipping
 /// the entire variable UI -- no input, no menu traversal.
 pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: usize) {

@@ -21,7 +21,8 @@
 //! that slot: fourteen sites resolve `chrManipulator ?? manipulator` and then use the answer as an
 //! object. Enumerate them with `find-deobf-field-access.py 0x3b0`.
 //!
-//! The publish and the consume are a matched pair, and the `rcx` swap put them on opposite sides:
+//! The publish and the consume are a matched pair, and the `rcx` swap put them on opposite sides
+//! (1.16.2 dump names, here and below):
 //!
 //! ```text
 //! publish:  FUN_1403cdc20(manip, vec)   writes ChrManipulator +0x10 AND +0x70

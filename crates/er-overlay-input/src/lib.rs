@@ -3,7 +3,7 @@
 //! Four pieces, each the one the game actually reads:
 //!
 //! * **Cursor and camera.** The game frees and shows the cursor, and stops turning the camera with
-//!   the mouse, whenever its "a menu has the mouse" predicate answers true (1.17.1 `0x140766650`;
+//!   the mouse, whenever its "a menu has the mouse" predicate answers true (2.7.2.0 `0x140766b00`;
 //!   see `er-npc-summons/src/cursor.rs`, where it was measured live). [`install_cursor`] hooks it
 //!   to answer true while the menu takes input. It chains through `er-hook`'s union, so every other
 //!   DLL hooking the same predicate for its own menu still works, and either menu open is enough.

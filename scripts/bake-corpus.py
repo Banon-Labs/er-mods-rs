@@ -27,6 +27,8 @@ from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TSV = os.path.join(HERE, "arxan-thunks.tsv")
+#: PE TimeDateStamp of the 1.16.2 image the thunk corpus was measured on.
+CORPUS_BUILD_STAMP = 0x69E21187
 
 
 def load_bake():
@@ -122,6 +124,17 @@ def main():
     args = ap.parse_args()
 
     bf = load_bake()
+    # The corpus lists 1.16.2 thunk VAs, and bake-function now reads the installed build's image
+    # (2.7.2.0) unless `ER_DEOBF` names another; baking those VAs out of any other build bakes
+    # whatever code happens to sit there. No 2.7.2.0 thunk corpus exists, so refuse instead.
+    image = bf.DR.find_deobf()
+    with open(image, "rb") as handle:
+        head = handle.read(0x1000)
+    stamp = int.from_bytes(head[int.from_bytes(head[0x3C:0x40], "little") + 8:][:4], "little")
+    if stamp != CORPUS_BUILD_STAMP:
+        sys.exit(f"{image} is not the 1.16.2 image (PE stamp {stamp:#x}, want "
+                 f"{CORPUS_BUILD_STAMP:#x}) that {os.path.basename(TSV)} lists VAs of; "
+                 "set ER_DEOBF to the 1.16.2 image")
     rows = read_corpus()
     keep = set(args.kinds.split(","))
     rows = [r for r in rows if r["kind"] in keep]

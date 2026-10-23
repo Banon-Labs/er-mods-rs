@@ -21,7 +21,7 @@
 // Each forced call is logged with its before/after state and a verdict, and `counts` keeps one
 // counter per branch. Calls that arrive with a null page on their own are counted, not forced.
 //
-// The address is 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; the offsets
+// The address is 2.7.2.0, carried from 1.17.1; the offsets
 // into the advance are unchanged (the whole function, 0x18b bytes, is the same in both images apart
 // from rel32/rip displacements, which carry consistently). Nothing is written except `ring+0x38`, and
 // only for the length of the one call; the forced page-roll call leaves the real page off the free

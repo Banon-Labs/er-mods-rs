@@ -16,7 +16,7 @@
 //!
 //! # Why serving a row is the mechanism, rather than writing camera state
 //!
-//! `CS::ChrExFollowCam::ApplyZoomLerp` (1.17 `0x1403b7570`) runs every frame from
+//! `CS::ChrExFollowCam::ApplyZoomLerp` (2.7.2.0 `0x1403b7570`) runs every frame from
 //! `ChrExFollowCam::Update`, calls `LookupLockCamParam` afresh each time, and re-derives distance,
 //! pivot height, pitch minimum, FOV and chase rate from the row it gets back. Writing the derived
 //! camera state directly would be overwritten before the next frame drew; a row the lookup returns
@@ -30,7 +30,7 @@
 //!   written only after the copy is published, and on release it goes back before the copy stops
 //!   being served. A frame that loaded `+0x468` just before the release can still miss once,
 //!   which keeps the previous frame's distance and pivot for one frame.
-//! * **The getter could not be hooked** -- a build `carry_1171_rva` does not cover, bytes that do
+//! * **The getter could not be hooked** -- a build other than 2.7.2.0, bytes that do
 //!   not match the windows `build.rs` generated, or MinHook declining. The possession keeps the
 //!   vanilla framing and the derived file names the refusal; the log has the reason.
 //! * **A rebuilt `ChrExFollowCam`.** The constructor writes `+0x464|+0x468 = -1`, so a camera
@@ -59,8 +59,11 @@ use crate::settings::CameraSettings;
 /// `offset_of!`. It is the field immediately after `ChrCam`'s `CSPersCam` superclass, though, so
 /// the superclass's size is its offset -- and that the crate and this table agree on where the
 /// follow camera lives is the thing worth failing the build over.
+///
+/// `WorldChrMan.chr_cam` is not cross-checked: the crate still models the pre-2.7.2.0 layout, in
+/// which it sits `0x10` before [`layout::world_chr_man::CHR_CAM`], so it is read at the table's
+/// offset instead.
 const _: () = {
-    assert!(core::mem::offset_of!(WorldChrMan, chr_cam) == layout::world_chr_man::CHR_CAM);
     assert!(core::mem::size_of::<CSPersCam>() == layout::chr_cam::EX_FOLLOW_CAM);
 };
 
@@ -410,9 +413,9 @@ fn base_row(follow_cam: usize, offsets: Offsets, served_id: u32) -> u32 {
 /// `WorldChrMan.chrCam -> +0x60 chrExFollowCam`, or `None` when either link has not come up.
 fn follow_cam(offsets: Offsets) -> Option<usize> {
     // Safety: `instance()` yields a reference only when the singleton is populated, and both raw
-    // reads after it are fault-tolerant. `chrCam` is read at the per-build offset rather than
+    // reads after it are fault-tolerant. `chrCam` is read at the table's offset rather than
     // through the crate's typed `chr_cam` field, because 2.7.2.0 moved it `+0x10` and the crate
-    // still models the earlier layout (see `layout::world_chr_man::CHR_CAM_1172`).
+    // still models the earlier layout (see `layout::world_chr_man::CHR_CAM`).
     let world_chr_man = unsafe { WorldChrMan::instance() }.ok()?;
     let base = core::ptr::from_ref(world_chr_man) as usize;
     let chr_cam = unsafe { safe_read_usize(base + offsets.chr_cam) }.filter(|&p| p != 0)?;
@@ -426,7 +429,7 @@ fn follow_cam(offsets: Offsets) -> Option<usize> {
 ///
 /// One `f32` at `ChrExFollowCam+0x154 anglesEuler.y`, which the engine derives as
 /// `atan2(look.x, look.z)` -- see [`layout::chr_ex_follow_cam::ANGLES_EULER_YAW`] for the four
-/// lines of `Update` that compute it and the byte window that pins it on both builds.
+/// lines of `Update` that compute it and the byte window that pins it.
 ///
 /// **The sign is not a character heading.** A body facing this direction has yaw
 /// `anglesEuler.y + PI`; [`crate::possess::intent::aim`] is the only place that conversion is

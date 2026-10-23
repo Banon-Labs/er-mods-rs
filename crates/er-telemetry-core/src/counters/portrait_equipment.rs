@@ -73,10 +73,11 @@ pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
 pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
 
 // --- The repair itself (2026-09-06) ------------------------------------------------------------
-// The native feed `FUN_140bbe1a0` erases the record's armaments and replaces its gauntlets and
-// greaves with the bare-body rows before the portrait is built; the kick now writes the record's own
-// `equipment_param_ids` back over the fed array. These count what that write actually changed, so a
-// portrait that still renders bare can be told apart from a portrait whose character is bare.
+// The native feed (`0x140bbfda0`, 1.16.2 `FUN_140bbe1a0`) erases the record's armaments and
+// replaces its gauntlets and greaves with the bare-body rows before the portrait is built; the kick
+// now writes the record's own `equipment_param_ids` back over the fed array. These count what that
+// write actually changed, so a portrait that still renders bare can be told apart from a portrait
+// whose character is bare.
 /// Build kicks on which the write-back ran at all (the inbox and record both read cleanly).
 pub static PORTRAIT_EQUIP_RESTORE_KICKS: AtomicUsize = AtomicUsize::new(0);
 /// Kicks where the write-back found nothing to change -- the character is genuinely bare-handed and
@@ -94,10 +95,11 @@ pub static PORTRAIT_EQUIP_RESTORE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 /// First kick's record ids, packed by `portrait_equip_pack` so a real `-1` (slot empty) is
 /// distinguishable from "never sampled". Order: right weapon, left weapon, hands, legs.
 pub static PORTRAIT_EQUIP_RESTORE_RECORD_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
-/// What the live ChrAsm at `renderer+0x130` -- the one `FUN_1409e6fb0` re-reads every frame -- holds
-/// for the armaments and the handedness, first sample of the window. Writing the inbox proves only
-/// that we wrote the inbox; these are the values the model build actually resolves from, so they are
-/// what separates "the repair reached the renderer" from "the repair reached a buffer".
+/// What the live ChrAsm at `renderer+0x130` -- the one 1.16.2 `FUN_1409e6fb0` re-reads every
+/// frame -- holds for the armaments and the handedness, first sample of the window. Writing the
+/// inbox proves only that we wrote the inbox; these are the values the model build actually
+/// resolves from, so they are what separates "the repair reached the renderer" from "the repair
+/// reached a buffer".
 /// Packed by `portrait_equip_pack`: right weapon, left weapon.
 pub static PORTRAIT_EQUIP_LIVE_WEAPON_ID: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
 /// `ChrAsm::equipment.armStyle` (ChrAsm+0x08), the handedness input

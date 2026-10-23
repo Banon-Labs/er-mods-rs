@@ -7,8 +7,8 @@ frames. Static research only: nothing was launched and no runtime result is clai
 Labels: **VERIFIED** read out of the 1.16.2 named Ghidra dump (:8765) and re-read byte-for-byte in
 `eldenring-deobf-1.17.1.bin`; **DATA** read out of a file (HKS, another doc); **INFERRED** follows
 from the verified code but was not measured. Addresses are 1.17.1 with the 1.16.2 source in
-brackets, carried by `scripts/map-rvas-1162-to-1170.py` (everything here is below rva `0xafefe9`,
-so 1.17.0 and 1.17.1 agree) and then read in the 1.17.1 image.
+brackets, carried by the masked-signature map, since deleted (everything here is below rva
+`0xafefe9`, so 1.17.0 and 1.17.1 agree), and then read in the 1.17.1 image.
 
 ## The recommendation
 

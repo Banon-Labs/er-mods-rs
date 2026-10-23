@@ -14,18 +14,19 @@
 //! engine through `CSGameMan` where anything can read them. One invasion therefore tells us what
 //! the encrypted code decided, which is the fact the static analysis could not produce.
 //!
-//! # Offsets, each byte-verified against `eldenring-deobf.bin` via its own named getter
+//! # Offsets, each byte-verified against `eldenring-deobf-1.17.2.bin` via its own named getter
 //!
-//! | field | offset | getter |
-//! |---|---|---|
-//! | entry-point entity id | `+0xaf0` | `GetNpcInvadeTargetEntryPoint` `0x140679650` |
-//! | destination block id  | `+0xac8` | `GetTargetMapId` `0x140679630` |
-//! | rapid-reentry flag    | `+0xafc` | `ShouldUseRapidReentry` `0x14067a150` |
+//! | field | offset | getter | 2.7.2.0 | 1.16.2 |
+//! |---|---|---|---|---|
+//! | entry-point entity id | `+0xaf0` | `GetNpcInvadeTargetEntryPoint` | `0x14067a950` | `0x140679650` |
+//! | destination block id  | `+0xac8` | `GetTargetMapId` | `0x14067a930` | `0x140679630` |
+//! | rapid-reentry flag    | `+0xafc` | `ShouldUseRapidReentry` | `0x14067b450` | `0x14067a150` |
 //!
-//! All three are `mov rax,[0x143d69918]` followed by a load at their offset, so the singleton
-//! pointer is confirmed three times over. `FUN_140afcf60` -- the spawn resolver `ersc.dll` hooks
-//! at `0x140af9d20` -- calls the first two, which is what puts these fields on the placement path
-//! rather than merely near it.
+//! All three are `mov rax,[0x143d709a8]` (1.16.2 `[0x143d69918]`) followed by a load at their
+//! offset, so the singleton pointer is confirmed three times over, and none of the offsets moved.
+//! The spawn resolver (2.7.2.0 `0x140afe740`, 1.16.2 `FUN_140afcf60`, whose call site in
+//! `STEP_WorldResWait` `ersc.dll` hooks at 1.16.2 `0x140af9d20`) calls the first two,
+//! which is what puts these fields on the placement path rather than merely near it.
 //!
 //! This module only reads. It never writes `CSGameMan` and never calls into the engine, because
 //! the point is to find out what Seamless does, and a probe that perturbs the thing it measures
@@ -33,7 +34,7 @@
 
 use crate::invasion_warp::BlockKey;
 
-/// `GLOBAL_CSGameMan` -- the pointer at `0x143d69918`.
+/// `GLOBAL_CSGameMan` -- the pointer at `0x143d709a8` on 2.7.2.0 (1.16.2 `0x143d69918`).
 ///
 /// Re-exported from the one place it is declared rather than repeated here: a second literal
 /// is free to drift from the first, and an address that silently disagrees with itself is the

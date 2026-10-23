@@ -1,5 +1,9 @@
-// ---- Return-title "rebuild the title" request flags set by the final functor (0x7a3900) ----
-// The functor does `*(*([GLOBAL_CSMenuMan]+0x8)+0x5d)=1` and `*(0x143d6c5e8)=1`. These are level
+// Every `*_RVA` value in this table is a native 2.7.2.0 (FileVersion 2.7.2.0) rva; the resolvers
+// refuse it on any other build. Addresses quoted in the prose are 2.7.2.0 too unless labelled with
+// another build (1.16.2 for the deobf image and the named dump, 1.16.1 for the older dump).
+//
+// ---- Return-title "rebuild the title" request flags set by the final functor (1.16.2 0x7a3900) ----
+// The functor does `*(*([GLOBAL_CSMenuMan]+0x8)+0x5d)=1` and `*(0x143d73678)=1`. These are level
 // flags (not edge-consumed); we set them to tear down the old char for the switch, but nothing
 // resets them, so once the reloaded character's world comes up the still-set +0x5d re-requests the
 // quit-to-title -> GameMan.save_requested flips true again (~3.6s post-load, proven by the gm-snap
@@ -8,10 +12,11 @@
 /// (`CS_MENU_MAN_GLOBAL_RVA` = `[GLOBAL_CSMenuMan]` pointer global is already defined above.)
 /// `CSMenuManImp::menuData` pointer at CSMenuMan+0x8.
 pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
-/// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
-/// symmetry so we fully undo what the final functor set.
-pub const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d6c5e8;
+/// Companion rebuild flag (data RVA; 2.7.2.0 `0x143d73678`, 1.16.2 `DAT_143d6c5e8`). No readers
+/// found in the dump, but cleared for symmetry so we fully undo what the final functor set.
+pub const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d73678;
 // ---- In-game session liveness gate (the post-reload bounce decision, static RE 2026-07-02) ----
+// (Every "dump" address in this block is the 1.16.1 dump's.)
 // TitleStep state 6 (STEP_GameStepWait, dump 0x140b0ced0) exits to the quit-to-title transition
 // (SetState(2) -> BeginLogo -> BeginTitle -> MenuJobWait) the first tick it sees
 // `InGameStep->requestCode == 0`. The request-code register (InGameStep+0xd8, int) lifecycle:
@@ -22,19 +27,20 @@ pub const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d6c5e8;
 // (the stable in-world state); if that qword reads 0 it writes the request code to 0, which is what
 // STEP_GameStepWait converts into the return-to-title. So a reloaded world only stays up if
 // CSMenuMan+0x798 is (re)populated after the load.
-/// `CS::EzChildStepBase::RequestFinish` (dump `0x140eb5590` -> live `0x140eb5570`, shift -0x20,
-/// content-unique). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
+/// `CS::EzChildStepBase::RequestFinish` (2.7.2.0 `0x140eb8ad0`; 1.16.2 deobf `0x140eb5570`, 1.16.1
+/// dump `0x140eb5590`). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
 /// step's finish-requested byte at child+0xb4) then latches wrapper+0x10. The quit-to-title
 /// teardown ends the in-world MoveMapStep session through here; the post-switch reload bounce is
 /// this firing against the fresh MoveMapStep child right after streaming completes. Read-only
 /// trace hook logs every call + caller RVA to identify the stale requester.
 pub const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = EZ_CHILDSTEP_REQUEST_FINISH_RVA as u32;
-/// `EzChildStep<MoveMapStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabf3).
+/// `EzChildStep<MoveMapStep>` wrapper offset inside `InGameStep` (ctor, 1.16.1 dump 0x140aeabf3).
 pub const IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET: usize = 0xe0;
-/// `EzChildStep<InGameStayStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabc3).
+/// `EzChildStep<InGameStayStep>` wrapper offset inside `InGameStep` (ctor, 1.16.1 dump 0x140aeabc3).
 pub const IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET: usize = 0xb8;
 /// `EzChildStepBase::stepper` (the owned child step object) at wrapper+0x8; the finish latch byte
-/// is wrapper+0x10 and the CSSetFinishHelper pointer wrapper+0x18 (dump 0x140eb5590 decompile).
+/// is wrapper+0x10 and the CSSetFinishHelper pointer wrapper+0x18 (1.16.1 dump 0x140eb5590
+/// decompile).
 pub const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
 pub use er_telemetry_core::counters::SWITCH_ORACLE_MAX_STABLE_FRAMES;
 pub use er_telemetry_core::counters::SWITCH_ORACLE_STABLE_FRAMES;
@@ -56,9 +62,10 @@ pub use er_telemetry_core::counters::SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT;
 /// instead of the low-level accepted callback alone. This is an experiment to test whether the full
 /// native return-title menu-job chain is the missing teardown boundary.
 pub use er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT;
-/// Rate-limit counter for the switch-2 save-gate diagnostic (which of the save orchestrator
-/// `FUN_140afb970`'s three gates -- force latch `0x143d856a0`, `save_state`, or the CSMenuMan menu gate
-/// `FUN_14080d660` -- is blocking the quit-save so `bc4` freezes at 1).
+/// Rate-limit counter for the switch-2 save-gate diagnostic (which of the save orchestrator's
+/// (1.16.1 dump `FUN_140afb970`) three gates -- force latch `0x143d8c740` (1.16.2 `0x143d856a0`),
+/// `save_state`, or the CSMenuMan menu gate (1.16.1 dump `FUN_14080d660`) -- is blocking the
+/// quit-save so `bc4` freezes at 1).
 pub use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT;
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = stable in-world (the load handoff completed, the world is settled -- player present,
@@ -83,7 +90,8 @@ pub fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
 pub use er_telemetry_core::counters::SWITCH_ORACLE_MMS_STEP;
 /// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
-/// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
+/// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` (1.16.1 dump @0x140aec810) loads the
+/// destination block
 /// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
 /// `CSSessionManager.protocol_state == WaitReload(4)`, else `GameMan+0x14` (moveMapStepBlockId), and
 /// skips the load when that BlockId == 0xffffffff -> the world reverts to title with nothing reloaded.
@@ -93,7 +101,7 @@ pub const GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET: usize = 0xac8;
 /// BlockId sentinel meaning "no destination" (skip the map load).
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const MOVE_MAP_BLOCK_ID_NONE: u32 = 0xffff_ffff;
-/// `FUN_140508d30` (dump 0x140508d30) returns `WorldChrMan.field47_0x1e524 == 2` = world genuinely
+/// 1.16.1 dump `FUN_140508d30` returns `WorldChrMan.field47_0x1e524 == 2` = world genuinely
 /// stable/ready -- a stronger world-ready oracle than can_move. RE-verified offset + constant.
 pub const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;
 pub const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
@@ -125,7 +133,7 @@ pub use er_telemetry_core::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
 pub use er_telemetry_core::counters::SWITCH_ORACLE_PLAYER_PRESENT;
 /// MoveMapStep internal step index -> name. Order from the InGameStep-analogue registrar labels
-/// (`u_MoveMapStep::STEP_*` at dump 0x142b5eb30..) and validated for 0..3 by the observed
+/// (`u_MoveMapStep::STEP_*` at 1.16.2 0x142b5eb30..) and validated for 0..3 by the observed
 /// `mms_state 1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait` progression (own_stepper idx6 watch).
 /// Indices >8 are best-effort (label order); the raw index in the log is authoritative.
 /// UPPERCASE (the boot-bar 5x7 font is A-Z + space only, and it doubles as the bar's phase label).
@@ -165,7 +173,7 @@ pub fn movemapstep_step_name(idx: i32) -> &'static str {
 pub const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
 
 /// The InGameStep request code at `InGameStep+0xd8`, which gates the load after the MoveMapStep
-/// child's own finish (20). RE grounding (2026-07-19, InGameStep step table 0x143d70190:
+/// child's own finish (20). RE grounding (2026-07-19, InGameStep step table 1.16.2 0x143d70190:
 /// STEP_MoveMap_Init -> STEP_MoveMap_Update -> STEP_MoveMap_Finish): the MoveMapStep child (steps
 /// 0..20) runs entirely inside the InGameStep's STEP_MoveMap_Update, so the child reaching finish is
 /// not genuine world readiness -- the InGameStep must still advance STEP_MoveMap_Update ->
@@ -180,8 +188,9 @@ pub const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
 pub const INGAMESTEP_REQUEST_CODE_MAP_FINISH: i32 = 1;
 pub const INGAMESTEP_REQUEST_CODE_IN_WORLD: i32 = 2;
 
-/// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer FUN_140afa7c0.
-/// Grounded in the decompiled `switch(field25_0x12a)` cases (2026-07-19, bd er-effects-rs-9fmm):
+/// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer 0x140afbeb0
+/// (1.16.1 dump FUN_140afa7c0). Grounded in the decompiled `switch(field25_0x12a)` cases
+/// (2026-07-19, bd er-effects-rs-9fmm; the `FUN_` names below are the 1.16.1 dump's):
 ///   0 idle/done; 1 fade-out wait; 2 death/retry check; 3 retry-menu + map-block setup;
 ///   4 map-block/session wait; 5/6 fade-in wait (+sfx); 7 remo/save-drain wait; 8 warp/server
 ///   finalize; 9 post-finalize. The warm reload parks at 7 (its 7->8 gate --
@@ -212,14 +221,14 @@ pub use er_telemetry_core::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
 /// fires when the load completes). On the softlock INIT fires but finish never does = the semaphore.
 pub use er_telemetry_core::counters::SWITCH_ORACLE_MMS_INIT_HITS;
 /// MoveMapStep+0x244 is the native completion bit consumed by InGameStep/TitleStep
-/// (`FUN_140aebe20` returns true iff MoveMapStep exists and this byte is nonzero).
+/// (1.16.1 dump `FUN_140aebe20` returns true iff MoveMapStep exists and this byte is nonzero).
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
 /// Save-disabled switch completion (2026-07-16). By design the only save writer is the in-game "Save
 /// Game" button; the game's quit-save on a System->Quit switch must not run. But the native return-title
-/// state machine advances `GameMan+0xbc4` 1->2->3 only inside a successful quit-save write (dump
-/// FUN_14067b840: bc4 1->2 is welded to `cVar4 != 0`), and our final functor (title_tick_cover.rs) only
-/// fires at bc4==ready(3). So with saving disabled bc4 can never reach ready through the game and the
+/// state machine advances `GameMan+0xbc4` 1->2->3 only inside a successful quit-save write (1.16.1
+/// dump FUN_14067b840, as are the `FUN_` names below: bc4 1->2 is welded to `cVar4 != 0`), and
+/// our final functor (title_tick_cover.rs) only fires at bc4==ready(3). So with saving disabled bc4 can never reach ready through the game and the
 /// switch stalls at STEP_MoveMap(18). We therefore drive bc4 ourselves, deterministically (no frame
 /// counters): at the return-title request we write bc4=ready(3) directly, which both lets the final
 /// functor fire and suppresses the quit-save (the orchestrator's `ShouldSave`/`FUN_140679460` require
@@ -229,50 +238,56 @@ pub const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
 /// blocks>0) and parked at STEP_MoveMap with the final functor already fired, we clear bc4->0 so it
 /// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
 pub use er_telemetry_core::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
-/// PopulateLists' per-area block-res source-builder (deobf 0x0066bb10, dump 0x14066bc00). The only caller
+/// PopulateLists' per-area block-res source-builder (2.7.2.0 0x0066ce10; 1.16.2 deobf 0x0066bb10,
+/// 1.16.1 dump 0x14066bc00). The only caller
 /// of the +0xce0 WorldBlockRes constructor. Its 2nd arg (rdx) is the input MSB block list; it early-outs
 /// on `*(rdx+0x10) == 0` (the block count) and builds nothing. On a fresh boot this list is full (incl the
 /// dest block); on the in-game reload it is empty for the dest -> +0xce0 entry never (re)created -> blk_ls=0.
 /// The `*(rdx+0x10)` count is the single decisive divergence semaphore between load 1 and load 2.
-pub const POPULATE_BLOCKS_LISTS_RVA: u32 = 0x0066bb10;
+pub const POPULATE_BLOCKS_LISTS_RVA: u32 = 0x0066ce10;
 pub const POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET: usize = 0x10;
-/// Load-state entry constructor (deobf/runtime 0x006610e0, ground-truthed by disassembling the deobf
-/// binary at this address: vtable `lea …142a7d4b0`, `mov (%rdx),%eax; mov %eax,0x8(%rcx)` = the BlockId
+/// Load-state entry constructor (2.7.2.0 0x006623e0; 1.16.2 deobf 0x006610e0, ground-truthed by
+/// disassembling the 1.16.2 deobf binary there: vtable `lea …142a7d4b0`,
+/// `mov (%rdx),%eax; mov %eax,0x8(%rcx)` = the BlockId
 /// key `entry+0x8` the getter scans for). Creates one entry in the shared load-state pool `worldres+0x148`
-/// (stride 0xe0). Called only from the reconcile 0x66bb10. If this is not called with key 0x1c000000 on the
+/// (stride 0xe0). Called only from the reconcile 0x66ce10. If this is not called with key 0x1c000000 on the
 /// second load, the load-state entry for the destination block is never created -> getter null -> world RES
 /// wait stall. Args: rcx=entry, rdx=descNode.
-pub const WORLDRES_ENTRY_CTOR_RVA: u32 = 0x006610e0;
-/// The real WorldResWait block-res getter (deobf/runtime 0x0062f470; ground-truthed decompile:
+pub const WORLDRES_ENTRY_CTOR_RVA: u32 = 0x006623e0;
+/// The real WorldResWait block-res getter (2.7.2.0 0x00630770; 1.16.2 deobf 0x0062f470;
+/// ground-truthed decompile:
 /// `longlong FUN(WorldAreaRes* rcx, int* keyBlockId rdx)` scanning `+0xce0` [count `+0xcd8`, stride
 /// 0xb98] for the entry whose WorldBlockInfo(+0x8)->BlockId(+0x34) == *key, returns that WorldBlockRes
 /// (or 0). The WorldResWait check calls this with the real key and requires the returned entry's
 /// +0x2d(ready) != 0 and +0x35(phase) == 0x0a. The switch-oracle's `blk_ls` calls the vtable getter
 /// without this key, so it is unreliable; hook this to see the true result with the real key.
-pub const WORLDRES_BLOCKRES_GETTER_RVA: u32 = 0x0062f470;
-/// WorldBlockRes phase-2 handler (deobf/runtime 0x006157f0, dump 0x1406158d0). Advances the block load
+pub const WORLDRES_BLOCKRES_GETTER_RVA: u32 = 0x00630770;
+/// WorldBlockRes phase-2 handler (2.7.2.0 0x00616af0; 1.16.2 deobf 0x006157f0, 1.16.1 dump
+/// 0x1406158d0).
+/// Advances the block load
 /// phase +0x35 from 2 to 3 only when the block's primary FD4FileCap (block-res+0x40) has data ptr +0x90
 /// != 0. On the reload the cap reports status +0x88==0x04 (loaded) but +0x90 stays null (file resident
 /// from load 1, load short-circuits without re-attaching data), so it parks at phase 2. Single arg
 /// (rcx=block-res). Hooked to force a bounded teardown/reload retry (phase +0x35 = 5) when that exact
 /// stuck condition holds, so the block releases the stale cap and re-loads fresh.
-pub const WORLDRES_BLOCKRES_PHASE2_RVA: u32 = 0x006157f0;
+pub const WORLDRES_BLOCKRES_PHASE2_RVA: u32 = 0x00616af0;
 pub const BLOCKRES_PHASE_35_OFFSET: usize = 0x35;
 pub const BLOCKRES_GATE_2F_OFFSET: usize = 0x2f;
 pub const BLOCKRES_PRIMARY_FILECAP_40_OFFSET: usize = 0x40;
-// Secondary FD4 file cap on the WorldBlockRes; the phase-2 handler (deobf 0x1406157f0) reads both
+// Secondary FD4 file cap on the WorldBlockRes; the phase-2 handler (0x140616af0) reads both
 // block-res+0x40 and +0x48 and requires both to report status==4 before advancing.
 pub const BLOCKRES_SECOND_FILECAP_48_OFFSET: usize = 0x48;
 pub const FILECAP_STATUS_88_OFFSET: usize = 0x88;
 pub const FILECAP_DATA_90_OFFSET: usize = 0x90;
 pub const FILECAP_STATUS_LOADED: i32 = 0x04;
 // Historical: the block-load phase value the game's own data-null retry writes (phase-2 handler
-// 0x1406157f0 sets +0x35=5 when worldBlockInfo+0x28 != 0). The stalecap fix no longer forces this --
+// 0x140616af0 sets +0x35=5 when worldBlockInfo+0x28 != 0). The stalecap fix no longer forces this --
 // RE proved forcing the phase re-runs phase-1's find-or-insert which refcount-bumps the same stale cap
 // and re-issues no read. Kept as documentation of the native retry value; the fix now re-enqueues.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const BLOCKRES_PHASE_TEARDOWN_RETRY: u8 = 5;
-// --- FD4 file-cap re-issue path (RE 2026-07-17, deobf eldenring-deobf.bin) ---
+// --- FD4 file-cap re-issue path (RE 2026-07-17 on the 1.16.2 eldenring-deobf.bin; the addresses
+// in this block are 1.16.2 except the ENQUEUE primitive, 2.7.2.0 0x1426a1760) ---
 // The stale second-load cap is status +0x88==4 (loaded) with data +0x90==NULL because world teardown
 // releases the content child (refcount->0, freed) but leaves the parent cap registered in CSFile's name
 // map (parent refcount +0x58 never reached 0). CSFile load (0x142651bb0) then find-or-inserts the same
@@ -281,21 +296,25 @@ pub const BLOCKRES_PHASE_TEARDOWN_RETRY: u8 = 5;
 //   holder     = *(singleton + 0x8)                  (load thunk 0x1426538b0: `mov rcx,[rcx+8]`)
 //   idx        = (cap[+0x89] >> 2) & 7               (queue/priority index, set at insert 0x142651c1a)
 //   queue      = *(holder + 0xe0 + idx*8)            (enqueue site 0x142651c4d; update loop 0x1426525bc)
-//   cap[+0x88] = 0  then  ENQUEUE(rcx=queue, rdx=cap) via 0x14269d7b0
+//   cap[+0x88] = 0  then  ENQUEUE(rcx=queue, rdx=cap) via 0x1426a1760
 // The per-frame update loop (0x1426525a0) then selects the status==0 cap, sets it in-progress, and
 // dispatches the async read (0x142659440) which re-attaches +0x90 on completion -> phase-2 advances.
-/// CSFile singleton global (deobf VA 0x143d5b0f8): holds a pointer to the CSFile object.
-pub const CSFILE_SINGLETON_RVA: u32 = 0x03d5b0f8;
-/// Load-queue holder offset inside the CSFile object (`*(singleton+0x8)`; load thunk 0x1426538b0).
+/// CSFile singleton global (2.7.2.0 VA 0x143d62178; 1.16.2 0x143d5b0f8): holds a pointer to the
+/// CSFile object.
+pub const CSFILE_SINGLETON_RVA: u32 = 0x03d62178;
+/// Load-queue holder offset inside the CSFile object (`*(singleton+0x8)`; load thunk 1.16.2
+/// 0x1426538b0).
 pub const CSFILE_HOLDER_8_OFFSET: usize = 0x8;
 /// Base of the per-priority load-queue pointer array inside the holder (`holder+0xe0`, stride 8).
 pub const CSFILE_QUEUE_ARRAY_E0_OFFSET: usize = 0xe0;
 /// FD4FileCap +0x89: bits [2:4] hold the load-queue/priority index, `idx = (v>>2)&7`.
 pub const FILECAP_QUEUEFLAGS_89_OFFSET: usize = 0x89;
-/// FD4 file-cap ENQUEUE primitive (deobf VA 0x14269d7b0): `fn(rcx=queue, rdx=cap)`.
-pub const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
-/// Warm-reload map-mount guard state root (deobf VA 0x143d5df38). The map-mount MenuJob (chain
-/// 0x140836f30 -> ... -> 0x14082dbf0 -> 0x14082faf0) is enqueued only when the change-detector 0x14082d5b0
+/// FD4 file-cap ENQUEUE primitive (2.7.2.0 VA 0x1426a1760; 1.16.2 0x14269d7b0):
+/// `fn(rcx=queue, rdx=cap)`.
+pub const CSFILE_ENQUEUE_RVA: u32 = 0x026a1760;
+/// Warm-reload map-mount guard state root (2.7.2.0 VA 0x143d64fb8). The map-mount MenuJob (chain
+/// 0x1408383d0 -> ... -> 0x14082f090 -> 0x140830f90) is enqueued only when the change-detector
+/// 0x14082ea50
 /// sees the load-phase state differ from a self-updating cached descriptor. On the warm System->Quit->Load
 /// the cached descriptor already equals the controller (System->Quit resets neither) -> "unchanged" ->
 /// mount skipped -> the block FD4FileCap gets +0x88=4 but +0x90 stays NULL -> world RES wait stall.
@@ -304,10 +323,11 @@ pub const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
 /// plainly because the guard below writes into a structure hanging off it (`*(root+0x60)`)
 /// and nothing here said so. Derived from `er-game-base` (2026-08-01 RVA dedupe).
 pub const MOUNT_GUARD_STATE_ROOT_RVA: u32 = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA as u32;
-/// The change-detector itself (deobf 0x14082d5b0, `fn(rcx=controller, rdx=descriptor) -> al`): al=1 changed
+/// The change-detector itself (2.7.2.0 0x14082ea50; 1.16.2 deobf 0x14082d5b0,
+/// `fn(rcx=controller, rdx=descriptor) -> al`): al=1 changed
 /// (mount runs + descriptor re-synced), al=0 unchanged (mount skipped). Instrumented read-only to identify
 /// which gate instance is the m28 map-mount (al flips 1 on load1 -> 0 on load2). A clean leaf compare fn.
-pub const MOUNT_GUARD_DETECTOR_RVA: u32 = 0x0082d5b0;
+pub const MOUNT_GUARD_DETECTOR_RVA: u32 = 0x0082ea50;
 pub const MOUNT_GUARD_SINGLETON_OFFSET: usize = 0x60;
 pub const MOUNT_GUARD_DESCRIPTOR_OFFSET: usize = 0x1200;
 /// Descriptor mirror: +0x08 = cached u64 id, +0x04 = cached state bits (bits 0,3,4,5,6 mirror the
@@ -316,8 +336,10 @@ pub const MOUNT_GUARD_DESCRIPTOR_OFFSET: usize = 0x1200;
 pub const MOUNT_GUARD_DESC_ID_OFFSET: usize = 0x08;
 pub const MOUNT_GUARD_DESC_BITS_OFFSET: usize = 0x04;
 pub const MOUNT_GUARD_DESC_BITS_CLEAR_MASK: u32 = 0x79;
-/// Mounted-EBL-archive registry global (deobf VA 0x1448464a8): `R = *(this)`, lazy-created by 0x141f49f60,
-/// resolver 0x141f48b40. This is the container a mount census walks (not the CSEblFileManager object at
+/// Mounted-EBL-archive registry global (2.7.2.0 VA 0x14484d548; 1.16.2 0x1448464a8): `R = *(this)`,
+/// lazy-created by 1.16.2 0x141f49f60,
+/// resolver 1.16.2 0x141f48b40 (2.7.2.0 `GetFileDeviceManager` is 0x141f4c0a0). This is the
+/// container a mount census walks (not the CSEblFileManager object at 0x143d620f8, 1.16.2
 /// 0x143d5b078). Container B (the keyed registry) at `R+0x90`(first)/`R+0x98`(last), stride 0x40; per entry
 /// the archive name is an MSVC wstring at `entry+0x08` and the `Archive*` is at `entry+0x30`; lock at
 /// `R+0xB8`. Walk it to see whether the m28 (area 0x1c) player-map archive is mounted on the load-2 stall.
@@ -330,7 +352,7 @@ pub const MOUNT_GUARD_DESC_BITS_CLEAR_MASK: u32 = 0x79;
 /// `0x5e01800`-byte image, so every reader took its `else` branch from the day it was written.
 ///
 /// `game_rva` did not refuse it, and that is the part worth carrying forward. The resolver only
-/// consults the 1.16.2 -> 1.17 table for addresses inside the image (`is_game_image_address`);
+/// checks the build for addresses inside the image (`is_game_image_address`);
 /// anything outside is handed back unchanged, on the reasoning that an import or a non-image
 /// address means the same thing on every patch. A corrupt RVA is outside the image by
 /// construction, so it takes the passthrough and arrives at `safe_read_usize` looking resolved.
@@ -338,21 +360,23 @@ pub const MOUNT_GUARD_DESC_BITS_CLEAR_MASK: u32 = 0x79;
 /// into `None`/`0` -- indistinguishable from a genuinely null global. An out-of-image constant is
 /// therefore the one class of wrong address the refusal machinery cannot catch.
 ///
-/// The byte proof and the 1.17 carry live with the owning declaration; deriving instead of
-/// re-typing is what keeps the two in step.
+/// The byte proof lives with the owning declaration; deriving instead of re-typing is what keeps
+/// the two in step.
 pub const EBL_REGISTRY_GLOBAL_RVA: u32 =
     er_game_base::rva::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA as u32;
-/// In-game player-map mount ORCHESTRATOR (deobf 0x14082dbf0): a thin wrapper that calls 0x14082faf0
-/// (which builds + dispatches the player-map EBL mount -- the `0x82dc1c` step). It is dispatched as an
-/// in-game step (caller 0x14082eb7e is a step-thunk); on the warm System->Quit->Load reload the step is
+/// In-game player-map mount ORCHESTRATOR (2.7.2.0 0x14082f090; 1.16.2 deobf 0x14082dbf0): a thin
+/// wrapper that calls 0x140830f90
+/// (which builds + dispatches the player-map EBL mount -- the 1.16.2 `0x82dc1c` step). It is
+/// dispatched as an in-game step (1.16.2 caller 0x14082eb7e is a step-thunk); on the warm System->Quit->Load reload the step is
 /// skipped, so the destination map's archive is not re-mounted and the block read yields empty (+0x90
 /// null) -> world RES wait stall. `fn(rcx=stepContext, rdx, ...)`. Not hooked by me3 (in-game fn, not the
 /// file/EBL/mount path), so a read-only forwarding hook is safe. Hooked to capture its context args on
 /// load 1 (fires + works) vs load 2 (skipped?) -- both the bug-fix driver interface and the own-load
 /// primitive (drive the essential map mount menu-free for any save).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082dbf0;
-/// MountEblArchive (deobf entry VA 0x1401efc00, prologue `40 55 56 57 41 56 41 57`): mounts an EBL/BHD
+pub const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082f090;
+/// MountEblArchive (entry VA 0x1401efc00 on both 2.7.2.0 and 1.16.2, prologue
+/// `40 55 56 57 41 56 41 57`): mounts an EBL/BHD
 /// archive so its packed block files can be read. `fn(rcx=CSEblFileManager, rdx, r8, r9)` -- all three of
 /// rdx/r8/r9 are null-checked; rdx and r8 point at (largely static, ~0x1429cf6xx) archive descriptors,
 /// so their pointer identity distinguishes archives. Golden trace (bd
@@ -362,22 +386,22 @@ pub const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082dbf0;
 /// warm reload (the run7 empty-EBL-read hypothesis; content child +0x90 stays null though status->4).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub const MOUNT_EBL_ARCHIVE_RVA: u32 = 0x001efc00;
-// World block constructor (deobf/runtime 0x0062ec00): the only writer of block+0x40 (load-state slice
+// World block constructor (1.16.2 deobf 0x0062ec00): the only writer of block+0x40 (load-state slice
 // count) and block+0x48 (slice base), sourced from stack args (0x68/0x70(%rsp)). Not hooked -- a
 // register-only forwarding hook loses those stack args and corrupts every block (runtime AV 2026-07-17).
 // The slice-count/base offsets (0x40/0x48) live with the fix when it needs to repoint them.
-// The matched block's load-state, read exactly as FUN_14066d4d0 does: call the block's vtable slot
+// The matched block's load-state, read exactly as 1.16.1 dump FUN_14066d4d0 does: call the block's vtable slot
 // +0x10 (`block->vtable[0x10](block)`) to get the load-state object, then loaded requires +0x2d != 0
 // and +0x35 == 0x0a(10). +0x35 (the stream-state/phase enum) stuck below 10 = the block is registered
 // but its stream never completes (the world RES wait stall). The getter/flag/phase offsets already
 // exist as BLOCK_LOADSTATE_GETTER_VT_10_OFFSET / BLOCK_LOADSTATE_FLAG_2D_OFFSET /
 // BLOCK_LOADSTATE_PHASE_35_OFFSET in constants/gaitem_restore.rs -- reused here, not redefined.
 /// The `dlc02` loadlist file-cap arg `_Common_Initialize` passes to `ProcessMsbLoadLists` as its
-/// 3rd param: `MOV R8, [InGameStep+0x240]` (dump 0x140aed820). Null for base-game (non-DLC) areas;
+/// 3rd param: `MOV R8, [InGameStep+0x240]` (1.16.2 0x140aed820). Null for base-game (non-DLC) areas;
 /// the callee null-checks it, so passing this field (or 0) is safe.
 pub const INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET: usize = 0x240;
 /// `_Common_Initialize` passes the WorldInfoOwner to `ProcessMsbLoadLists` by address of an embedded
-/// sub-object at `InGameStep+0x250` (`LEA RCX, [InGameStep+0x250]`, dump 0x140aed820), not the pointer
+/// sub-object at `InGameStep+0x250` (`LEA RCX, [InGameStep+0x250]`, 1.16.2 0x140aed820), not the pointer
 /// stored at `FieldArea+0x10`. The init-time world-res rebuild replicates the native call verbatim,
 /// so it uses this embedded address as the `this`.
 pub const INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET: usize = 0x250;
@@ -452,7 +476,7 @@ pub static MSGBOX_LAST_ARG_R9: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_S
 /// This is the verified headless dismiss: call with rcx=dialog. (Field writes do not close it --
 /// +0x25e8 is the button count, +0x25e0 the chosen index; both are config/output, not triggers.)
 pub const MSGBOX_ONDECIDE_RVA: usize = MsgBoxRva::OnDecide as usize;
-/// Force-stop / notify-owner-closed 0x14078dfd0(rcx=dialog): if owner [dialog+0x1c80]!=0 ->
+/// Force-stop / notify-owner-closed 0x14078f300(rcx=dialog): if owner [dialog+0x1c80]!=0 ->
 /// owner->vtable[+0x10](dialog); else StepResult(3=stop)+EmitResult. Directly emits "stop" to
 /// the parent MenuWindowJob so it tears the dialog down -- a more direct dismiss than OnDecide
 /// (which only moved the selection to OK). Acceptable because the connection-error OK is a no-op.
@@ -495,7 +519,7 @@ pub const MSGBOX_FORCE_STOP_RVA: usize = MsgBoxRva::ForceStop as usize;
 // discriminator can name which.
 
 /// Offset of `protocolState` on `CSSessionManagerImp` (field ordinal 3 in the named 1.16.2 dump),
-/// from `0x140afa8a5: CMP dword ptr [RAX + 0x10],0x4`. Same field
+/// from 1.16.2 `0x140afa8a5: CMP dword ptr [RAX + 0x10],0x4`. Same field
 /// `er_invasion_warp_core::warp::SESSION_PROTOCOL_STATE_OFFSET` names.
 pub const CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET: usize = 0x10;
 
@@ -511,18 +535,19 @@ pub const CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET: usize = 0x10;
 pub const SESSION_PROTOCOL_STATE_WAIT_RELOAD: i32 = 4;
 
 /// Offset of the `deadReset` member on `CSEventManImp` (field ordinal 2, a
-/// `CSEventDeadResetState *`), from `0x140afa8f7: MOV RCX,qword ptr [RCX + 0x10]`.
+/// `CSEventDeadResetState *`), from 1.16.2 `0x140afa8f7: MOV RCX,qword ptr [RCX + 0x10]`.
 pub const CS_EVENT_MAN_DEAD_RESET_10_OFFSET: usize = 0x10;
 
-/// Offset of the state word on `CSEventDeadResetState`. `FUN_1405fef50` is the whole getter --
-/// `return param_1->field1_0x8;` -- and `0x140afa900: CMP EAX,0x2` is its only consumer here.
+/// Offset of the state word on `CSEventDeadResetState`. 1.16.2 `FUN_1405fef50` is the whole getter
+/// -- `return param_1->field1_0x8;` -- and 1.16.2 `0x140afa900: CMP EAX,0x2` is its only consumer
+/// here.
 pub const CS_EVENT_DEAD_RESET_STATE_8_OFFSET: usize = 0x8;
 
 /// The dead-reset state the evaluator treats as an ending request.
 pub const DEAD_RESET_STATE_ENDING: i32 = 2;
 
 /// `CS::MoveMapStep`'s per-frame advancer -- the function that COMPUTES `cVar10` and writes it to
-/// `menuData+0x5e`. 1.16.2 `0x140afa6d0`; 1.17 `0x140afb9f0`.
+/// `menuData+0x5e`. 2.7.2.0 `0x140afbeb0`; 1.16.2 `0x140afa6d0`; 1.17 `0x140afb9f0`.
 ///
 /// Why it is here. Every reading of the nine inputs so far has been taken from outside this
 /// function: `MMS-CLEANUP` on the child's Cleanup entry (measured ~2 s late) and then `CVAR10 RISE`
@@ -533,15 +558,15 @@ pub const DEAD_RESET_STATE_ENDING: i32 = 2;
 /// this function's entry is the only place the inputs are the ones the decision is actually made
 /// from.
 ///
-/// How it was identified, because the usual route failed. `scripts/map-rvas-1162-to-1170.py`
-/// refuses this address: 111 shape matches, none at the nearest anchor's delta. It was found by
-/// call graph instead -- `L"EnableBot"` occurs twice in the 1.17 image and only `0x142bfdfd0` has
-/// xrefs; of its two referents the 137-byte `0x140e7e580` matches 1.16.2
+/// How it was identified, because the usual route failed. The 1.16.2 -> 1.17 signature search
+/// refused this address: 111 shape matches, none at the nearest anchor's delta. It was found by
+/// call graph instead -- `L"EnableBot"` occurs twice in the 1.17 image and only 1.17 `0x142bfdfd0`
+/// has xrefs; of its two referents the 137-byte 1.17 `0x140e7e580` matches 1.16.2
 /// `CS::CSEzSelectBot::IsBotEnabled` exactly, and the one caller of it in the MoveMap region
-/// decompiles with `L"CSEzSelectBot.MoveMapStep"`. `scripts/verify-rva-map-1170.py` then confirmed
-/// the pair independently: Identical-whole, ratio 1.00 over 972 instructions, both-entries,
+/// decompiles with `L"CSEzSelectBot.MoveMapStep"`. The 1.17 pair verifier then confirmed the pair
+/// independently: Identical-whole, ratio 1.00 over 972 instructions, both-entries,
 /// `PDATA:0x11b0/0x11b0`.
-pub const MOVEMAP_ADVANCER_RVA: usize = 0xafa6d0;
+pub const MOVEMAP_ADVANCER_RVA: usize = 0xafbeb0;
 
 /// Last sampled `menuData+0x5e` (== the evaluator's `cVar10` output), so the game-task tick can
 /// detect its 0->1 rising edge. `-1` is the unread sentinel and never matches an edge.

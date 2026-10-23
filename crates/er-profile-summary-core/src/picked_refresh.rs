@@ -5,9 +5,9 @@
 //!
 //! The records the Load-Character rows and `profile_slot_fingerprint` read come from the save
 //! container's own `USER_DATA010` table, parsed by `CS::ProfileSummary::Deserialize`
-//! (`0x140261f00` -> `0x140261f10`: ten occupancy bytes into `summary+0x8`, then ten records of
-//! `0x2a0` from `summary+0x18` via `0x140261cf0`). The game runs that exactly once, inside the boot
-//! common-data load (`0x1402570c0`, reached from the save-data `ShowProgressJob`'s delegate).
+//! (`0x140261f10` -> `0x140261f20`: ten occupancy bytes into `summary+0x8`, then ten records of
+//! `0x2a0` from `summary+0x18` via `0x140261d00`). The game runs that exactly once, inside the boot
+//! common-data load (`0x140257090`, reached from the save-data `ShowProgressJob`'s delegate).
 //!
 //! At a boot picker that read comes free: the DLL holds the save-data job in `Continue` until the
 //! user picks, then passes it through, and the delegate reads the redirected container. A late pick
@@ -17,7 +17,7 @@
 //!
 //! # What this does instead
 //!
-//! `MarkProfileIndexAsUsed` (`0x140262250`) is not the answer and was checked before this was
+//! `MarkProfileIndexAsUsed` (`0x140262260`) is not the answer and was checked before this was
 //! written: its entire body is `if (slot < 10) { saveSlotsStates[slot] = true; return true; }`. It
 //! sets an occupancy flag and touches no record field, so a slot it marks still fingerprints empty
 //! and the native Continue row still has nothing to load.
@@ -46,7 +46,7 @@
 //!   [`crate::reassert_policy`] for the bounded drift watch that answers it (bd er-effects-rs-ccud).
 //!
 //! It deliberately does not call the profile-renderer refresh: that AVs when the renderer table has
-//! not been built yet (`0x9aa6d4`, observed), and at the boot title it has not.
+//! not been built yet (`0x9abd24`, observed), and at the boot title it has not.
 
 use core::sync::atomic::Ordering;
 
@@ -129,8 +129,9 @@ pub fn refresh_direct_source_profile_summary() -> bool {
 /// The game fills `CS::ProfileSummary` exactly once per boot, in `CS::ProfileSummary::Deserialize`
 /// reached from the save-data `ShowProgressJob`'s delegate. When that read completes with no data
 /// the summary stays zeroed for the rest of the boot and nothing retries it: measured run
-/// 2026-09-05 20:58:51, the wait step `0x140af2d40` polled `0x140679fd0` four times, got `1` then
-/// `0` (`FUN_140e6fe80`'s "completed, result code 0" answer, not the `3` that fills), advanced on
+/// 2026-09-05 20:58:51 (1.17.0; addresses below are the 2.7.2.0 ones), the wait step
+/// `0x140af3200` polled `0x14067a480` four times, got `1` then
+/// `0` (`FUN_140e715e0`'s "completed, result code 0" answer, not the `3` that fills), advanced on
 /// the `0` without calling `GetProfileSummary`, and every one of the ten records stayed empty --
 /// `oracle_profile_own_summary_rows = 0`, `stats-text: DECLINED slot 0 ... name="" level=0`.
 /// The container itself was fine: 28,967,888 bytes of BND4 with all ten characters readable.

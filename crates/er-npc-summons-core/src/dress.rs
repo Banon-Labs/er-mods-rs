@@ -4,25 +4,22 @@
 //!
 //! A companion is a c0000 human because its summon request carries a `CharaInitParam` id `>= 0`.
 //! `CreateSummonChr` builds it synchronously: `ChrSet::SpawnChr` -> `ChrInsFactory::CreateCharacter`
-//! (1.16.2 `0x140403a60`, 1.17.1 `0x140403dd0`, 2.7.2.0 `0x140403e60`) takes a free "NPC Player"
-//! `PlayerGameData`, looks the row up with `GetCharaInitParam` (solo param 23; 1.16.2
-//! `0x140d347f0`, 1.17.1 `0x140d35f70`, 2.7.2.0 `0x140d37660`; called at 2.7.2.0 `0x140403ee2`) and
-//! applies it with `0x140258c00` (1.17.1 and 2.7.2.0 `0x140258bd0`). That applier mints a gaitem
+//! (2.7.2.0 `0x140403e60`) takes a free "NPC Player"
+//! `PlayerGameData`, looks the row up with `GetCharaInitParam` (solo param 23; 2.7.2.0
+//! `0x140d37660`, called at `0x140403ee2`) and
+//! applies it with 2.7.2.0 `0x140258bd0`. That applier mints a gaitem
 //! for every equip field and writes it into the new character's `ChrAsm`, the same way it does for
 //! every map NPC in the game:
 //!
-//! | `CHARACTER_INIT_PARAM` | `ChrAsm` slot | read by (1.16.2 / 1.17.1) |
+//! | `CHARACTER_INIT_PARAM` | `ChrAsm` slot | read by (2.7.2.0) |
 //! |---|---|---|
-//! | `+0x10 / +0x14 / +0x108` right 1..3, type bytes `+0xe8..+0xea` | 1, 3, 5 | `0x140d34750` / `0x140d35ed0` |
-//! | `+0x18 / +0x1c / +0x10c` left 1..3, type bytes `+0xeb..+0xed` | 0, 2, 4 | `0x140d346b0` / `0x140d35e30` |
-//! | `+0x20..+0x2c` head, body, arms, legs | 12..15 | `0x14025aac0` / `0x14025aa90` |
-//! | `+0x30..+0x3c` arrow, bolt, arrow 2, bolt 2, counts `+0xb2..+0xb8` | 6..9 | `0x140259850` / `0x140259820` |
-//! | `+0x40..+0x4c` talismans 1..4 | 17..20 | `0x140255e80` / `0x140255e50` |
+//! | `+0x10 / +0x14 / +0x108` right 1..3, type bytes `+0xe8..+0xea` | 1, 3, 5 | `0x140d375c0` |
+//! | `+0x18 / +0x1c / +0x10c` left 1..3, type bytes `+0xeb..+0xed` | 0, 2, 4 | `0x140d37520` |
+//! | `+0x20..+0x2c` head, body, arms, legs | 12..15 | `0x14025aa90` |
+//! | `+0x30..+0x3c` arrow, bolt, arrow 2, bolt 2, counts `+0xb2..+0xb8` | 6..9 | `0x140259820` |
+//! | `+0x40..+0x4c` talismans 1..4 | 17..20 | `0x140255e50` |
 //!
-//! The 1.17.1 column is 1.17.0 plus `0x70` at and above rva `0xafefe9` (`GetCharaInitParam` and the
-//! two weapon readers) and 1.17.0 itself below it. Until 2026-10-22 this table and bd
-//! `companion-dressing-charainit-row-native-point-1171-2026-10-06` gave the 1.17.0 addresses of
-//! those three as 1.17.1.
+//! First measured on 1.17.1 (bd `companion-dressing-charainit-row-native-point-1171-2026-10-06`).
 //!
 //! A weapon field is an `EquipParamWeapon` id with affinity and upgrade level already added (the
 //! game's own rows do this: 4100 of the 14938 weapons in the 1.17.1 regulation's CharaInitParam
@@ -42,10 +39,11 @@
 //! (2.7.2.0 `0x140259160`, `0x140af0a30`, `0x140af0be0`; 1.16.2 `FUN_140259190`, `FUN_140aef260`,
 //! `FUN_140aef410`), so they would never see a copy. None is on the summon path. None has a direct
 //! `call` from `CreateSummonChr`, `SpawnChr`, `CreateCharacter` or the row applier; each is reached
-//! only through a vtable (the first via the menu step `FUN_140ae77b0` and `FUN_140255da0`), and all
-//! three list rows for a menu: the first formats a "parameter change [push enter]" label for every
-//! row, the third fills a `CSEzSelectTab` with every row's name, and the second applies the row
-//! picked in such a list to the player (`FUN_140255d90` -> `FUN_140259070`, which itself goes
+//! only through a vtable (the first via the menu step 1.16.2 `FUN_140ae77b0` and `FUN_140255da0`),
+//! and all three list rows for a menu: the first formats a "parameter change [push enter]" label
+//! for every row, the third fills a `CSEzSelectTab` with every row's name, and the second applies
+//! the row picked in such a list to the player (1.16.2 `FUN_140255d90` -> `FUN_140259070`, which
+//! itself goes
 //! through `GetCharaInitParam`). They read the shipped rows, as they always have outside a summon.
 //!
 //! # What a build URL cannot dress

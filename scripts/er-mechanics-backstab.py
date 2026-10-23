@@ -5,11 +5,11 @@
     python3 scripts/er-mechanics-backstab.py Lance --skill "Charge Forth"
     python3 scripts/er-mechanics-backstab.py --selftest
 
-# What a backstab needs (`VERIFIED`, 1.16.2 named dump)
+# What a backstab needs (`VERIFIED`, 1.16.2 named dump; addresses are the 2.7.2.0 ones)
 
-`FUN_140485cf0` runs the backstab test for a victim when `throwState` is None, the victim is not
-already in a pair animation (`FUN_1404efc40`), `IsImmuneToThrow` 0x1403f3d30 is false, and
-`ValidateThrowForHKSSpEffects` 0x140485990 passes. Then `ThrowPoseChecks` 0x140485720 is called
+`FUN_140486330` runs the backstab test for a victim when `throwState` is None, the victim is not
+already in a pair animation (`FUN_1404f0af0`), `IsImmuneToThrow` 0x1403f3f60 is false, and
+`ValidateThrowForHKSSpEffects` 0x140485fd0 passes. Then `ThrowPoseChecks` 0x140485d60 is called
 with the backstab-attempt flag set, so the ThrowParam 10000000 `_start` limits apply:
 
 * distance below `Dist_start` 1.7 m, height within `upperYRange_start` / `lowerYRange_start`;
@@ -17,9 +17,9 @@ with the backstab-attempt flag set, so the ThrowParam 10000000 `_start` limits a
 * the two facings within `DiffAngMin_start`..`DiffAngMax_start`, -35..35 degrees.
 
 `IsImmuneToThrow` is true while `actionModifiersFlags` bit 0x1, 0x4 or 0x8 is set (TAE JumpTable
-94, 68 and 67 in `0ChrActionFlag` 0x1404275e0), at zero HP, or while
+94, 68 and 67 in `0ChrActionFlag` 0x140427bc0), at zero HP, or while
 `ChrCtrlModifierData.allowedThrowDefType` is 0xff. That byte is HKS act 103
-(`ctrlModifier+0x21`, `HksAct` 0x14040ccbc); in `c0000.hks` it is set to 255 only by the prayer,
+(`ctrlModifier+0x21`, `HksAct` 0x14040d27c); in `c0000.hks` it is set to 255 only by the prayer,
 item-dash and riding states and by `SetThrowDefInvalid` / `SetThrowInvalid` (throws and ladders),
 never by an attack or skill state. `ValidateThrowForHKSSpEffects` refuses a victim carrying a
 SpEffect with `throwCondition` 1 or 11..15. `skill_blocks_backstab` checks every clip of a skill
@@ -64,8 +64,8 @@ R = _mod('er_mechanics_reach', 'er-mechanics-reach.py')
 EXPORT = _mod('er_mechanics_ar_export', 'er-mechanics-ar-export.py')
 
 BACKSTAB_THROW_ROW = 10000000
-#: TAE JumpTable ids whose `actionModifiersFlags` bit makes `IsImmuneToThrow` true (0x1404284d9
-#: bit 0x1, 0x140428288 bit 0x4, 0x14042827e bit 0x8; ids from the table at 0x140428650).
+#: TAE JumpTable ids whose `actionModifiersFlags` bit makes `IsImmuneToThrow` true (0x140428ab9
+#: bit 0x1, 0x140428868 bit 0x4, 0x14042885e bit 0x8; ids from the table at 0x140428c30).
 THROW_IMMUNE_JUMP_TABLES = (94, 68, 67)
 #: `throwCondition` values on the victim that `ValidateThrowForHKSSpEffects` refuses a backstab for.
 THROW_BLOCKING_CONDITIONS = (1, 11, 12, 13, 14, 15)

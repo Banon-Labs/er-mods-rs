@@ -10,15 +10,21 @@
 {$lua}
 if syntaxcheck then return end
 
--- Elden Ring 1.16.1 locked-target weapon-level diagnostic.
+-- Elden Ring 2.7.2.0 locked-target weapon-level diagnostic. Every rva below is the one in
+-- eldenring-deobf-1.17.2.bin, and the table refuses any eldenring.exe whose PE timestamp is not
+-- that build's (BUILD below).
 -- This record is deliberately READ-ONLY: it computes the intended all-weapon-slot
 -- level match and prints veto/planned-change information, but does not write memory.
 -- Reason: raw ChrAsm.equipment_param_ids writes can desync GaItem handles; mutation
 -- should use/prove a native equip/update path or a row-validating writer first.
 
+local BUILD = { label = 'eldenring.exe 2.7.2.0', timeDateStamp = 0x6aabf7e7 }
+
 local O = {
-  GLOBAL_WORLD_CHR_MAN = 0x3d65f88,  -- *(eldenring.exe+RVA) -> WorldChrManImp*
-  PLAYER_INS_VMT       = 0x2a7cb40,
+  GLOBAL_WORLD_CHR_MAN = 0x3d6d018,  -- *(eldenring.exe+RVA) -> WorldChrManImp*
+  -- The vftable whose [-8] complete object locator (rva 0x32ea0b0, offset 0) names the type
+  -- descriptor at rva 0x3c88de8, `.?AVPlayerIns@CS@@`; no other vftable's locator names it.
+  PLAYER_INS_VMT       = 0x2a81cb0,
   WORLD_MAIN_PLAYER    = 0x1e508,
   PLAYER_GAME_DATA     = 0x580,
   PLAYER_CHRASM        = 0x638,
@@ -27,7 +33,7 @@ local O = {
   CHRASM_SEL_LEFT      = 0x0c,
   CHRASM_SEL_RIGHT     = 0x10,
   CHRASM_PARAM_IDS     = 0x7c,
-  GET_CHR_FROM_HANDLE  = 0x507c80, -- live/deobf VA 0x140507c80
+  GET_CHR_FROM_HANDLE  = 0x508cd0, -- live/deobf VA 0x140508cd0
 }
 
 local SLOT_NAMES = {
@@ -141,6 +147,11 @@ end
 
 local function main()
   local base = module_base()
+  local stamp = ru(base + ru(base + 0x3c) + 8)
+  if stamp ~= BUILD.timeDateStamp then
+    error(string.format('this table is written for %s (exe timestamp 0x%X) and this game is %s; every address it reads belongs to that build',
+      BUILD.label, BUILD.timeDateStamp, hx(stamp)))
+  end
   local world = rp(base + O.GLOBAL_WORLD_CHR_MAN)
   local veto = {}
   local lines = {}

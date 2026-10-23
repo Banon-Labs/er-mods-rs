@@ -83,7 +83,7 @@ Current dynamic spawns land in slots `6..0x13`, explicitly outside that summon-b
 
 ## Static RE evidence gathered in this pass
 
-All Ghidra queries were against the named 1.16.2 daemon on `localhost:8765` unless noted. 1.17 mappings below are candidates from `scripts/map-rvas-1162-to-1170.py` unless the existing verified table is cited.
+All Ghidra queries were against the named 1.16.2 daemon on `localhost:8765` unless noted. 1.17 mappings below are candidates from `scripts/map-rvas-1162-to-1170.py` (deleted 2026-10-23 with the cross-build carry; last committed copy at `41d6a363`) unless the existing verified table is cited.
 
 ### Local-control query and ownership
 
@@ -358,7 +358,7 @@ Suggested approach:
 Validation:
 
 - Static Ghidra snippets for chosen route.
-- 1.17 mapping through existing verified table or `scripts/map-rvas-1162-to-1170.py`, then read the 1.17 function before any hook/call.
+- Find each 1.16.2 address on `eldenring-deobf-1.17.2.bin` by its bytes (`docs/game-build.md`), then read the 2.7.2.0 function before any hook/call.
 - Host-side unit/static checks only if source changes later.
 
 Stop/escalation rules:
@@ -381,12 +381,12 @@ Resolved assumptions:
 - Read `crates/er-npc-possess/src/possess/{netdamage.rs,game.rs,layout.rs}` relevant sections.
 - Read `docs/recon/npc-possess-1170-address-table.md` ownership rows.
 - Queried Ghidra MCP for functions listed above via `python3 scripts/ghidra/mcp_query.py`.
-- Ran `python3 scripts/map-rvas-1162-to-1170.py ...` for candidate 1.17 mappings.
+- Ran `python3 scripts/map-rvas-1162-to-1170.py ...` for candidate 1.17 mappings (the tool was deleted on 2026-10-23; last committed copy at `41d6a363`).
 - Ran `git status --short` and `git diff --cached --name-only`; many pre-existing unstaged files were present, no staged files were reported before this handoff write.
 
 ## Residual risks
 
 - Existing workspace had many unrelated unstaged changes before this handoff; this file is the only intended artifact from this task.
 - Seamless packet preservation cannot be settled by this static pass.
-- 1.17 addresses from the mapper are candidates unless backed by verified-table rows; read 1.17 before using any address in code.
+- The 1.17 addresses above are mapper candidates from before the 2.7.2.0 port; none is a running-game address until it has been found on `eldenring-deobf-1.17.2.bin` and read there.
 - No source changes or tests were made because the task requested investigation/handoff only.

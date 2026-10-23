@@ -7,50 +7,51 @@
 // the call, forwards every argument and changes no return value). It adds no new kind of instrument.
 //
 // Why it exists. The 2026-08-31 wedge is not a stranded save: at the instant `saveState` went 1 -> 0
-// the game's own poll `FUN_140e6e430` answered status 1 on the latched request, and 250 ms later the
+// the game's own poll `FUN_140e71990` answered status 1 on the latched request, and 250 ms later the
 // same poll answered 0 and released the device. So the write landed while the SL worker was still
 // writing, and the two witnessed wrappers reported `abandoning_writes = 0` in the very run that
 // wedged. The remaining writes had to be enumerated from the image rather than guessed at.
 //
-// The complete writer set, byte-scanned on both images and paired (`mov [reg+0xb80], imm/reg`, every
-// store form including the register one an immediate-only scan misses). 22 stores in each image,
-// pairing exactly at +0xE50 with no 1.17-only writer and none missing -- so the 1.17 game this branch
-// targets has the same writers as the 1.16.2 decompiles below describe:
+// The complete writer set, byte-scanned on the 1.16.2 and 2.7.2.0 images and paired
+// (`mov [reg+0xb80], imm/reg`, every store form including the register one an immediate-only scan
+// misses). Every store in `0x660000..0x6a0000` pairs at exactly +0x1300 with no 2.7.2.0-only writer
+// and none missing -- so the 2.7.2.0 game has the same writers as the 1.16.2 decompiles below
+// describe. Addresses and names are 2.7.2.0:
 //
-//   1.16.2      1.17        function                who can reach it                       witnessed
-//   0x677f5d    0x678dad    FUN_140677f40           DoSaveStuff under `IsSaveState7`        no (*)
-//   0x678e28    0x679c78    FUN_140678e00           MenuJob step FUN_14082a450              this file
-//   0x6791a2..  0x679ff2..  FUN_140679180           load poll (3 and 0)                     witness
-//   0x6794ee    0x67a33e    FUN_1406794b0           MenuJob step FUN_14082a0f0              this file
-//   0x67954b    0x67a39b    FUN_140679510           DoSaveStuff / FUN_14082a0f0             witness
-//   0x67ac97    0x67bae7    FUN_14067ac90           `SetSaveState(int)` -- see below        this file
-//   0x67b08f..  0x67bedf..  submit builders         each guarded on `saveState == 0`        n/a
-//   0x67b125/61 0x67bf75/b1 FUN_14067b100           guarded on `saveState == 3`             n/a
+//   store       function                who can reach it                       witnessed
+//   0x67925d    FUN_140679240           DoSaveStuff under `IsSaveState7`        no (*)
+//   0x67a128    FUN_14067a100           MenuJob step FUN_14082b720              this file
+//   0x67a4a2..  FUN_14067a480           load poll (3 and 0)                     witness
+//   0x67a7ee    FUN_14067a7b0           MenuJob step FUN_14082b8e0              this file
+//   0x67a84b    FUN_14067a810           DoSaveStuff / FUN_14082b8e0             witness
+//   0x67bf97    FUN_14067bf90           `SetSaveState(int)` -- see below        this file
+//   0x67c38f..  submit builders         each guarded on `saveState == 0`        n/a
+//   0x67c425/61 FUN_14067c400           guarded on `saveState == 3`             n/a
 //
-//   (*) `FUN_140677f40` writes `saveState = 0` unconditionally, but `CS::MoveMapStep::DoSaveStuff`
+//   (*) `FUN_140679240` writes `saveState = 0` unconditionally, but `CS::MoveMapStep::DoSaveStuff`
 //       reaches it only through `IsSaveState7`, and the wedge forms out of `saveState == 1`, where
 //       `DoSaveStuff` takes the `IsSaveState1` arm instead. The three arms are mutually exclusive
 //       in one `if/else if/else`, so this is exclusion by the caller's own structure.
 //
 // The one that is not a poll wrapper, and the reason this file is worth the hooks:
-// `FUN_14067ac90` is `GameMan::SetSaveState(int)` -- 14 bytes, `MOV RAX,[0x143d69918];
+// `FUN_14067bf90` is `GameMan::SetSaveState(int)` -- 14 bytes, `MOV RAX,[0x143d709a8];
 // MOV [RAX+0xb80],ECX; RET`. It is the only store to the field that writes a register rather than an
-// immediate, and its one caller in the whole image is `FUN_140aff640`, the per-frame in-map
-// `MoveMapStep` tick, three statements after `DoSaveStuff` and `FUN_140afb880`:
+// immediate, and its one caller in the whole image is `FUN_140b01000`, the per-frame in-map
+// `MoveMapStep` tick, three statements after `DoSaveStuff` and `FUN_140afd060`:
 //
 //     MOVSS  XMM6,[RDI+0x8]            ; the frame delta
-//     call   0x14067a080               ; IsSaveStateIdle()
+//     call   0x14067b380               ; IsSaveStateIdle()
 //     test   AL,AL / JNZ  ...          ; idle -> skip
 //     ADDSS  XMM6,[RBX+0x130]          ; accumulate, only while a transaction owns the device
-//     COMISS XMM6,[0x142b60870]        ; == 210.0f
+//     COMISS XMM6,[0x142b65a18]        ; == 210.0f
 //     MOVSS  [RBX+0x130],XMM6
 //     JBE    ...
 //     MOV    [RBX+0x130],ESI           ; acc = 0
-//     call   0x14067ac90               ; SetSaveState(0)   <-- releases nothing
+//     call   0x14067bf90               ; SetSaveState(0)   <-- releases nothing
 //
 // That is a WATCHDOG: 210 seconds of continuously non-idle `saveState` and the field is forced to 0
 // with the SL device untouched, which is the wedge signature exactly. The accumulator at
-// `MoveMapStep+0x130` is zeroed only inside `FUN_140afb880`, which returns early at its own
+// `MoveMapStep+0x130` is zeroed only inside `FUN_140afd060`, which returns early at its own
 // `IsSaveStateIdle` gate -- so nothing can reset it while a transaction is in flight and the deadline
 // is unconditional once the clock starts.
 //
@@ -67,43 +68,41 @@
 // sites installed, the write did not come through any of them, and the next thing to doubt is the
 // model (the field, the singleton, our own writers) rather than another arm of another poll.
 
-/// `FUN_140678e00` (1.16.2) -- the MenuJob load-save-data wait step's poll wrapper. Calls
-/// `FUN_140e6de10` on the SL device and writes `saveState = 0` for any answer that is not 1. Its one
-/// caller is `FUN_14082a450`, a `MenuJobResult` step, which is exactly the pipeline the 2026-08-31
-/// wedge window contains. 1.17 `0x140679c50`, identical-whole over 14 instructions, both-entries.
-const SAVE_STATE_MENUJOB_LOADWAIT_RVA: usize = 0x678e00;
+/// `FUN_14067a100` -- the MenuJob load-save-data wait step's poll wrapper. Calls
+/// `FUN_140e71370` on the SL device and writes `saveState = 0` for any answer that is not 1. Its one
+/// caller is `FUN_14082b720`, a `MenuJobResult` step, which is exactly the pipeline the 2026-08-31
+/// wedge window contains.
+const SAVE_STATE_MENUJOB_LOADWAIT_RVA: usize = 0x67a100;
 
-/// `FUN_1406794b0` (1.16.2) -- the alternate save-wait wrapper, and the reason the original witness
-/// could miss a save-side write entirely. Its one caller `FUN_14082a0f0` picks between it and
-/// `FUN_140679510` on a float at `MenuJob+0x8`:
+/// `FUN_14067a7b0` -- the alternate save-wait wrapper, and the reason the original witness
+/// could miss a save-side write entirely. Its one caller `FUN_14082b8e0` picks between it and
+/// `FUN_14067a810` on a float at `MenuJob+0x8`:
 ///
 /// ```text
-/// if (*(float *)(param_1 + 8) <= 0.0)  FUN_140679510();  else  FUN_1406794b0();
+/// if (*(float *)(param_1 + 8) <= 0.0)  FUN_14067a810();  else  FUN_14067a7b0();
 /// ```
 ///
-/// Both poll `FUN_140e6e430` and both write `saveState = 0` on a non-1 answer; only the second also
+/// Both poll `FUN_140e71990` and both write `saveState = 0` on a non-1 answer; only the second also
 /// clears `GameMan+0xbb8` and increments `GameMan+0xbc0`. The witness hooks the first, so on any
 /// frame the float is positive the save-side write happened where nothing was looking.
-/// 1.17 `0x14067a300`, identical-whole over 18 instructions, both-entries.
-const SAVE_STATE_SAVE_LANE_ALT_RVA: usize = 0x6794b0;
+const SAVE_STATE_SAVE_LANE_ALT_RVA: usize = 0x67a7b0;
 
-/// `FUN_14067ac90` (1.16.2) -- `GameMan::SetSaveState(int)`, the watchdog's setter. See the header:
+/// `FUN_14067bf90` -- `GameMan::SetSaveState(int)`, the watchdog's setter. See the header:
 /// the only register store to the field, one caller, and the caller is a 210-second deadline.
-/// 1.17 `0x14067bae0`, identical-leaf over 3 instructions (neither image declares it in `.pdata`;
-/// both decoded to the same 0xe bytes), neither-entry.
-const SAVE_STATE_SETTER_RVA: usize = 0x67ac90;
+/// A 0xe-byte leaf that `.pdata` does not declare.
+const SAVE_STATE_SETTER_RVA: usize = 0x67bf90;
 
-/// The MenuJob load-save-data wait step `FUN_140678e00` was the writer.
+/// The MenuJob load-save-data wait step `FUN_14067a100` was the writer.
 pub const SAVE_STATE_SITE_MENUJOB_LOADWAIT: usize = 3;
-/// The alternate save-wait wrapper `FUN_1406794b0` was the writer.
+/// The alternate save-wait wrapper `FUN_14067a7b0` was the writer.
 pub const SAVE_STATE_SITE_SAVE_LANE_ALT: usize = 4;
 /// `GameMan::SetSaveState` was called directly -- on the only caller in the image, the 210-second
 /// `MoveMapStep` watchdog.
 pub const SAVE_STATE_SITE_SETTER: usize = 5;
 
-/// Calls forwarded through `FUN_140678e00`.
+/// Calls forwarded through `FUN_14067a100`.
 static SAVE_STATE_MENUJOB_LOADWAIT_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Calls forwarded through `FUN_1406794b0`.
+/// Calls forwarded through `FUN_14067a7b0`.
 static SAVE_STATE_SAVE_LANE_ALT_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Calls forwarded through `GameMan::SetSaveState`.
 static SAVE_STATE_SETTER_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -184,13 +183,13 @@ pub fn wedge_writer_is_outside_the_witnessed_set(
     Some(exits_at_wedge == 0)
 }
 
-/// Calls forwarded through `FUN_140678e00`. Zero with sites installed means the MenuJob load-save-data
+/// Calls forwarded through `FUN_14067a100`. Zero with sites installed means the MenuJob load-save-data
 /// wait step never ran; zero with none installed means nothing was watching.
 pub fn save_state_menujob_loadwait_calls() -> u64 {
     SAVE_STATE_MENUJOB_LOADWAIT_CALLS.load(Ordering::SeqCst)
 }
 
-/// Calls forwarded through `FUN_1406794b0`, the alternate save-wait wrapper.
+/// Calls forwarded through `FUN_14067a7b0`, the alternate save-wait wrapper.
 pub fn save_state_save_lane_alt_calls() -> u64 {
     SAVE_STATE_SAVE_LANE_ALT_CALLS.load(Ordering::SeqCst)
 }
@@ -355,7 +354,7 @@ unsafe extern "system" fn save_state_setter_witness(
         // releases nothing, so its first firing is the most consequential line this crate can emit.
         log_message(format_args!(
             "suppress: GameMan::SetSaveState({requested}) CALLED (#{calls}) -- the only caller in \
-             the image is the MoveMapStep 210-second watchdog at FUN_140aff640, which forces \
+             the image is the MoveMapStep 210-second watchdog at FUN_140b01000, which forces \
              saveState without touching the SL device. saveState {} -> {}. Stamp: {}. Device: {}",
             match before_state {
                 Some(state) => state.to_string(),
@@ -389,7 +388,7 @@ unsafe extern "system" fn save_state_setter_witness(
 ///
 /// Registered through [`register_union_hook`] exactly like `install_save_state_witness`, so the
 /// product's existing detours on these addresses (there are none today) would chain rather than
-/// compete, and so the single 1.16.2 -> 1.17 resolve stays inside the union.
+/// compete, and so the single detour-allowlist check stays inside the union.
 #[cfg(windows)]
 pub fn install_save_state_writers() {
     for (rva, handler, orig, name) in [
@@ -397,19 +396,19 @@ pub fn install_save_state_writers() {
             SAVE_STATE_MENUJOB_LOADWAIT_RVA,
             save_state_menujob_loadwait_witness as UnionFn,
             &ORIG_SAVE_STATE_MENUJOB_LOADWAIT,
-            "menujob load-save-data wait 0x678e00",
+            "menujob load-save-data wait 0x67a100",
         ),
         (
             SAVE_STATE_SAVE_LANE_ALT_RVA,
             save_state_save_lane_alt_witness as UnionFn,
             &ORIG_SAVE_STATE_SAVE_LANE_ALT,
-            "alternate save-wait 0x6794b0",
+            "alternate save-wait 0x67a7b0",
         ),
         (
             SAVE_STATE_SETTER_RVA,
             save_state_setter_witness as UnionFn,
             &ORIG_SAVE_STATE_SETTER,
-            "GameMan::SetSaveState 0x67ac90",
+            "GameMan::SetSaveState 0x67bf90",
         ),
     ] {
         // Non-resolving on purpose (`game_rva_for_hook`), like `install_save_state_witness`:

@@ -2,13 +2,16 @@
 //!
 //! # Two independent checks, and why both exist
 //!
-//! Every address here was byte-checked offline against `eldenring-deobf.bin` at shift 0
-//! (`python3 scripts/check-dump-deobf-identity.py --count 32 0x<va>`). That proves the address
-//! is right *for the image we reverse-engineered*. It says nothing about the image actually
-//! running, which is why each seam also carries the first bytes of its prologue and
-//! [`verify_seam`] re-reads them from live memory before anything is patched. A patch applied
-//! to a differently-built game lands mid-instruction and crashes; refusing to hook merely costs
-//! the feature.
+//! Every rva here is a 2.7.2.0 rva, byte-checked offline against `eldenring-deobf-1.17.2.bin`:
+//! each seam's recorded prologue occurs at its rva there (and at its 1.16.2 counterpart in
+//! `eldenring-deobf.bin`, where the seams were first reversed). That proves the address is right
+//! *for the image we reverse-engineered*. It says nothing about the image actually running, which
+//! is why each seam also carries the first bytes of its prologue and [`verify_seam`] re-reads them
+//! from live memory before anything is patched. A patch applied to a differently-built game lands
+//! mid-instruction and crashes; refusing to hook merely costs the feature.
+//!
+//! The `FUN_` names in this file are 1.16.2 dump names; any other address in a comment is 2.7.2.0
+//! unless labelled with another build.
 //!
 //! # What a prologue signature does and does not catch
 //!
@@ -56,19 +59,20 @@ impl MapSeam {
     }
 }
 
-/// Image base every VA in the RE notes is expressed against. For 1.16.2 the dump VA, the
-/// `eldenring-deobf.bin` VA and the live runtime VA are identical, so `RVA = VA - this`.
+/// Image base every VA in the RE notes is expressed against. The images are flat at this base,
+/// so `RVA = VA - this`.
 pub const RE_IMAGE_BASE: usize = 0x1_4000_0000;
 
 /// Arguments `er_hook`'s union dispatcher forwards. Exceeding this silently truncates.
 pub const UNION_DISPATCHER_ARG_COUNT: usize = 4;
 
-/// `CS::WorldMapViewModel::WorldMapViewModel` -- `0x1408855b0`. The row list at `+0x2d8` is
-/// populated here and nowhere else, so an epilogue hook here is the injection seam for synthetic
-/// rows.
+/// `CS::WorldMapViewModel::WorldMapViewModel` -- `0x140886a50` (1.16.2 `0x1408855b0`). The row
+/// list at `+0x2d8` is populated here and nowhere else, so an epilogue hook here is the injection
+/// seam for synthetic rows.
 ///
 /// Lifetime, corrected twice and now pinned by the static call graph: the ViewModel is built once
-/// per world entry -- not once per session, and not once per map view. This ctor's only code xref
+/// per world entry -- not once per session, and not once per map view. On 1.16.2, where every
+/// address in this paragraph was read, this ctor's only code xref
 /// is `FUN_1407ed840 @0x1407ed8d3`, whose body is `if (popupMenu->worldMapViewModel == NULL) {
 /// alloc(0x450, MenuHeap); ctor(...) }`; its only caller is `FUN_140766010 @0x14076607b`, whose
 /// only caller is `MoveMapStep`'s constructor `@0x140af2e47`, reached from `STEP_MoveMap_Init`.
@@ -88,14 +92,15 @@ pub const UNION_DISPATCHER_ARG_COUNT: usize = 4;
 /// at the same size class, so a later ViewModel can land on the same address.
 pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
     name: "CS::WorldMapViewModel::WorldMapViewModel",
-    rva: 0x088_55b0,
+    rva: 0x088_6a50,
     prologue: &[
         0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
     ],
     arg_count: 1,
 };
 
-/// `CS::SosSignMan::SetMultiplayJoinData` -- `0x1406fb520`. The single function that writes every
+/// `CS::SosSignMan::SetMultiplayJoinData` -- `0x1406fc820` (1.16.2 `0x1406fb520`). The single
+/// function that writes every
 /// CSGameMan field the invasion destination lives in, from a 128-byte server-pushed struct in RDX:
 /// `SetTargetMapId` -> `GameMan+0xAC8`, `SetMultiplayJoinTargetBlockPos` -> `+0xAA0`,
 /// `SetNPCInvadeTargetEntryPoint(0)` -> `+0xAF0` (hard zero, which is why that field always read
@@ -108,13 +113,13 @@ pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
 /// have pointed at the wrong dword).
 pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
     name: "CS::SosSignMan::SetMultiplayJoinData",
-    rva: 0x06f_b520,
+    rva: 0x06f_c820,
     prologue: &[0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00],
     arg_count: 2,
 };
 
-/// `CS::CSSessionManager::JoinSession` -- `0x140cae640`. The call that issues the Steam join RPC,
-/// and the last instant at which a rejected match is still free.
+/// `CS::CSSessionManager::JoinSession` -- `0x140cb1470` (1.16.2 `0x140cae640`). The call that
+/// issues the Steam join RPC, and the last instant at which a rejected match is still free.
 ///
 /// `SosSignMan::JoinSession` calls `SetMultiplayJoinData` and then this, 87 bytes later in the same
 /// function, so the seam the filter already judges at runs immediately before the join is sent.
@@ -122,9 +127,9 @@ pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
 /// # Why a rejection has to be refused here rather than cancelled afterwards
 ///
 /// Once this has run, `lobbyState` is `Joining` and the engine will not unwind:
-/// `CSSessionManager::LeaveSession` (`0x140cae730`) sets `disconnectRequested` and returns without
-/// tearing anything down while the state is `Creating` or `Joining`, and `CSSessionManagerImp::
-/// Update` (`0x140cafd10` in 1.16.2) only acts on that request under
+/// `CSSessionManager::LeaveSession` (1.16.2 `0x140cae730`) sets `disconnectRequested` and returns
+/// without tearing anything down while the state is `Creating` or `Joining`, and
+/// `CSSessionManagerImp::Update` (`0x140cafd10` in 1.16.2) only acts on that request under
 /// `lobbyState != Creating && lobbyState != Joining`. So the disconnect is parked until the join
 /// RPC resolves on its own.
 ///
@@ -139,7 +144,7 @@ pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
 /// nothing outstanding to unwind.
 pub const CS_SESSION_MANAGER_JOIN_SESSION: MapSeam = MapSeam {
     name: "CS::CSSessionManager::JoinSession",
-    rva: 0x0ca_e640,
+    rva: 0x0cb_1470,
     prologue: &[0x88, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40],
     arg_count: 4,
 };
@@ -147,154 +152,158 @@ pub const CS_SESSION_MANAGER_JOIN_SESSION: MapSeam = MapSeam {
 /// Offset of the destination block id within `ServerPushJoinData`.
 pub const JOIN_DATA_DESTINATION_BLOCK_OFFSET: usize = 0x00;
 
-/// `FUN_1407a04f0` -- the warp-job assembler. All five confirm routes funnel through it, which
-/// makes it the single chokepoint before a MenuJob exists.
+/// `FUN_1407a04f0` (2.7.2.0 `0x1407a1820`) -- the warp-job assembler. All five confirm routes
+/// funnel through it, which makes it the single chokepoint before a MenuJob exists.
 pub const WARP_JOB_ASSEMBLER: MapSeam = MapSeam {
-    name: "warp job assembler (FUN_1407a04f0)",
-    rva: 0x07a_04f0,
+    name: "warp job assembler (1.16.2 FUN_1407a04f0)",
+    rva: 0x07a_1820,
     prologue: &[
         0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48,
     ],
     arg_count: 4,
 };
 
-/// `FUN_140d26390` -- `BonfireWarpTabParam` row lookup (param table index `0x2C`).
+/// `FUN_140d26390` (2.7.2.0 `0x140d29200`) -- `BonfireWarpTabParam` row lookup (param table index
+/// `0x2C`).
 pub const BONFIRE_WARP_TAB_LOOKUP: MapSeam = MapSeam {
-    name: "BonfireWarpTabParam lookup (FUN_140d26390)",
-    rva: 0x0d2_6390,
+    name: "BonfireWarpTabParam lookup (1.16.2 FUN_140d26390)",
+    rva: 0x0d2_9200,
     prologue: &[
         0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe,
     ],
     arg_count: 2,
 };
 
-/// `FUN_140d26220` -- `BonfireWarpSubCategoryParam` row lookup (param table index `0x2D`).
+/// `FUN_140d26220` (2.7.2.0 `0x140d29090`) -- `BonfireWarpSubCategoryParam` row lookup (param
+/// table index `0x2D`).
 pub const BONFIRE_WARP_SUBCATEGORY_LOOKUP: MapSeam = MapSeam {
-    name: "BonfireWarpSubCategoryParam lookup (FUN_140d26220)",
-    rva: 0x0d2_6220,
+    name: "BonfireWarpSubCategoryParam lookup (1.16.2 FUN_140d26220)",
+    rva: 0x0d2_9090,
     prologue: &[
         0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe,
     ],
     arg_count: 2,
 };
 
-/// `BonfireWarpParamLookup` -- `0x140d25c30` (param table index `0x2B`).
+/// `BonfireWarpParamLookup` -- `0x140d28aa0` (1.16.2 `0x140d25c30`) (param table index `0x2B`).
 pub const BONFIRE_WARP_PARAM_LOOKUP: MapSeam = MapSeam {
     name: "BonfireWarpParamLookup",
-    rva: 0x0d2_5c30,
+    rva: 0x0d2_8aa0,
     prologue: &[
         0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe,
     ],
     arg_count: 2,
 };
 
-/// `CS::BonfireWarpParamLookupResult::GetBonfireEntityId` -- `0x140d25650`. Reads `param_row+0x08`
-/// and answers `-1` as `0`.
+/// `CS::BonfireWarpParamLookupResult::GetBonfireEntityId` -- `0x140d284c0` (1.16.2
+/// `0x140d25650`). Reads `param_row+0x08` and answers `-1` as `0`.
 pub const GET_BONFIRE_ENTITY_ID: MapSeam = MapSeam {
     name: "BonfireWarpParamLookupResult::GetBonfireEntityId",
-    rva: 0x0d2_5650,
+    rva: 0x0d2_84c0,
     prologue: &[
         0x48, 0x8b, 0x41, 0x08, 0x33, 0xc9, 0x48, 0x85, 0xc0, 0x74, 0x0f, 0x8b,
     ],
     arg_count: 2,
 };
 
-/// `FUN_140885ed0` -- the `CS::WorldMapWarpPinData` copy-constructor. The row owns two heap
-/// regions, so this is the only safe way to duplicate one; a `memcpy` double-frees at teardown.
-/// It carries no symbol in the 1.16.2 dump -- an earlier agent-supplied name for it was
-/// fabricated and refuted.
+/// `FUN_140885ed0` (2.7.2.0 `0x140887370`) -- the `CS::WorldMapWarpPinData` copy-constructor. The
+/// row owns two heap regions, so this is the only safe way to duplicate one; a `memcpy`
+/// double-frees at teardown. It carries no symbol in the 1.16.2 dump -- an earlier agent-supplied
+/// name for it was fabricated and refuted.
 pub const WORLDMAP_PIN_ROW_COPY_CTOR: MapSeam = MapSeam {
-    name: "WorldMapWarpPinData copy-ctor (FUN_140885ed0)",
-    rva: 0x088_5ed0,
+    name: "WorldMapWarpPinData copy-ctor (1.16.2 FUN_140885ed0)",
+    rva: 0x088_7370,
     prologue: &[
         0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7,
     ],
     arg_count: 2,
 };
 
-/// `FUN_14088b7b0` -- the `CS::WorldMapWarpPinData` constructor, called by the ViewModel ctor as
-/// `(dst, &mapCoords, &bonfireLookupResult)`.
+/// `FUN_14088b7b0` (2.7.2.0 `0x14088cc50`) -- the `CS::WorldMapWarpPinData` constructor, called
+/// by the ViewModel ctor as `(dst, &mapCoords, &bonfireLookupResult)`.
 pub const WORLDMAP_PIN_ROW_CTOR: MapSeam = MapSeam {
-    name: "WorldMapWarpPinData ctor (FUN_14088b7b0)",
-    rva: 0x088_b7b0,
+    name: "WorldMapWarpPinData ctor (1.16.2 FUN_14088b7b0)",
+    rva: 0x088_cc50,
     prologue: &[
         0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
     ],
     arg_count: 3,
 };
 
-/// `FUN_14088bac0` -- the `CS::WorldMapWarpPinData` non-deleting destructor. Destroys
+/// `FUN_14088bac0` (2.7.2.0 `0x14088cf60`) -- the `CS::WorldMapWarpPinData` non-deleting
+/// destructor. Destroys
 /// `label[0..*(u64*)(row+0x230))` then the `+0x18` MenuString. Does not free the row storage.
 /// The temp row used to build a pin must be destroyed with this; `free`/`operator delete`
 /// instead corrupts the game heap.
 pub const WORLDMAP_PIN_ROW_DTOR: MapSeam = MapSeam {
-    name: "WorldMapWarpPinData dtor (FUN_14088bac0)",
-    rva: 0x088_bac0,
+    name: "WorldMapWarpPinData dtor (1.16.2 FUN_14088bac0)",
+    rva: 0x088_cf60,
     prologue: &[
         0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7,
     ],
     arg_count: 1,
 };
 
-/// `FUN_140888aa0` -- the row list's reserve/grow helper.
+/// `FUN_140888aa0` (2.7.2.0 `0x140889f40`) -- the row list's reserve/grow helper.
 pub const WORLDMAP_PIN_LIST_GROW: MapSeam = MapSeam {
-    name: "WorldMapPinDataList grow (FUN_140888aa0)",
-    rva: 0x088_8aa0,
+    name: "WorldMapPinDataList grow (1.16.2 FUN_140888aa0)",
+    rva: 0x088_9f40,
     prologue: &[
         0x40, 0x57, 0x48, 0x83, 0xec, 0x20, 0x4c, 0x8b, 0xda, 0x4c, 0x8b, 0xd1,
     ],
     arg_count: 2,
 };
 
-/// `FUN_14088be50` -- the fast-travel list filter.
+/// `FUN_14088be50` (2.7.2.0 `0x14088d2f0`) -- the fast-travel list filter.
 /// `(row /*RCX*/, categoryMask /*EDX*/, allowUnvisited /*R8B*/)` returns non-zero when the row
 /// should be listed.
 ///
 /// It is **not** the map-marker visibility gate, whatever this comment used to claim. All four
-/// of its callers (`0x1409cef10`, `0x1408803b0`, `0x14088a6c0`, `0x14088aba0`) build the
+/// of its callers (1.16.2 `0x1409cef10`, `0x1408803b0`, `0x14088a6c0`, `0x14088aba0`) build the
 /// fast-travel list or the bookmark dialog. A live run that saw the pins on the map while this
 /// reported `ours 0/0` was reporting the truth; the earlier reading of that as a bug sent an
 /// agent chasing a refuted experiment, which is why the correction is spelled out here.
 ///
-/// The real marker gate is `WorldMapPinData::UpdateVisible` (`0x14087afa0`, pin vtable slot 3),
+/// The real marker gate is `WorldMapPinData::UpdateVisible` (2.7.2.0 `0x14087c440`, 1.16.2
+/// `0x14087afa0`, pin vtable slot 3),
 /// which writes the per-row draw flag `row+0xc` from four tests: `IsOpen`, the map-layer bit
 /// (`(row+0x60 >> FUN_140887e90(mapId)) & 1`), an any-label-enabled test, and a zoom threshold.
 pub const WORLDMAP_ROW_FILTER: MapSeam = MapSeam {
-    name: "WorldMapWarpPinData row filter (FUN_14088be50)",
-    rva: 0x088_be50,
+    name: "WorldMapWarpPinData row filter (1.16.2 FUN_14088be50)",
+    rva: 0x088_d2f0,
     prologue: &[
         0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89,
     ],
     arg_count: 3,
 };
 
-/// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` -- `0x140876140`. Produces the
-/// `WorldMapCoordinates{x, z}` a pin renders at.
+/// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` -- `0x1408775e0` (1.16.2
+/// `0x140876140`). Produces the `WorldMapCoordinates{x, z}` a pin renders at.
 ///
 /// The signature stops at 10 bytes on purpose. The eleventh byte begins the `disp32` of
 /// `mov rax,[rip+disp32]`, and a RIP-relative displacement is the distance between the
 /// instruction and the global it names -- so it re-encodes whenever either end moves, even when
-/// the function is untouched. 1.17 moved both: this function translates cleanly to `0x140877130`
-/// and its body is byte-identical there except that `disp32` (`62 4c 3e 03` -> `d2 7c 3e 03`).
-/// The old 12-byte signature captured the low half of that field, so it matched nowhere in 1.17
-/// and `verify_seam` -- which compares exactly, having no mask -- would have refused a correctly
-/// translated address. That is the same failure the generated pins hit, where it was solved with
-/// a `_MASK` that ignores exactly these bytes; a hand-written seam has no mask, so it stops short
-/// of the field instead. This is the `take` idea from `build-support/prologue_build.rs`: name the
+/// the function is untouched. Every patch so far moved both: the body is byte-identical across
+/// builds except that `disp32` (1.16.2 `62 4c 3e 03`, 1.17 `d2 7c 3e 03`, 2.7.2.0 `32 a8 3e 03`).
+/// An earlier 12-byte signature captured the low half of that field, so it matched nowhere in 1.17
+/// and `verify_seam` -- which compares exactly, having no mask -- would have refused a correct
+/// address. That is the same failure the generated pins hit, where it was solved with a `_MASK`
+/// that ignores exactly these bytes; a hand-written seam has no mask, so it stops short of the
+/// field instead. This is the `take` idea from `build-support/prologue_build.rs`: name the
 /// instructions in full, keep only the bytes that are stable.
 ///
 /// Truncating costs nothing here, which is why this is the fix rather than a wider one: the
-/// 10-byte prefix still occurs exactly once in each image (1.16.2 and 1.17 both n=1), measured by
-/// `scripts/verify-prologue-coverage-1170.py --section uniqueness`. A shorter signature is only a
-/// weaker signature when it actually matches more; this one does not.
+/// 10-byte prefix occurs exactly once in each image (1.16.2, 1.17 and 2.7.2.0 all n=1). A shorter
+/// signature is only a weaker signature when it actually matches more; this one does not.
 pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
     name: "WorldMapAreaConverter::ConvertMsbCoordsToMapCoords",
-    rva: 0x087_6140,
+    rva: 0x087_75e0,
     prologue: &[0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x68, 0x48, 0x8b, 0x05],
     arg_count: 3,
 };
 
-/// `FUN_1409c6730` -- the builder for the native map markers our invasion pins replace.
+/// `FUN_1409c6730` (2.7.2.0 `0x1409c7e30`) -- the builder for the native map markers our invasion
+/// pins replace.
 ///
 /// It reads `CSServerInterface->netPlayerWatcher->playRegionActivityList` and appends one
 /// `CS::WorldMapPlayRegionData` row per entry into the map menu's own `0x30`-stride list, then
@@ -313,20 +322,23 @@ pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
 /// trampoline. This one never does, which takes that hazard off the table here.
 ///
 /// Read back from the running 1.17.1 process at `0x1409c7980` through Frida in run
-/// `br-20260919-063332-c93b`; the twelve bytes below are that reading, not a carry-across.
+/// `br-20260919-063332-c93b`; the twelve bytes below are that reading, not a carry-across, and
+/// they also open the 2.7.2.0 function in `eldenring-deobf-1.17.2.bin`.
 pub const WORLDMAP_NATIVE_MARKER_BUILD: MapSeam = MapSeam {
-    name: "native map-marker builder (FUN_1409c6730)",
-    rva: 0x09c_6730,
+    name: "native map-marker builder (1.16.2 FUN_1409c6730)",
+    rva: 0x09c_7e30,
     prologue: &[
         0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
     ],
     arg_count: 1,
 };
 
-/// `FUN_140887580` -- the writer behind the Map Functions row that now toggles our pins.
+/// `FUN_140887580` (2.7.2.0 `0x140888a20`) -- the writer behind the Map Functions row that now
+/// toggles our pins.
 ///
 /// Two stores, byte-proven in `eldenring-deobf-1.17.1.bin` at `0x140888570` and read back live
-/// from the running process at the same address: `88 91 c5 03 00 00` is `mov [rcx+0x3c5], dl`,
+/// from the running process at the same address, and present unchanged in 2.7.2.0 at `+0x9` and
+/// `+0x14` of this entry: `88 91 c5 03 00 00` is `mov [rcx+0x3c5], dl`,
 /// the live flag [`crate::map_pin_toggle`] reads, and `88 98 f1 0f 00 00` is
 /// `mov [rax+0xff1], bl`, the copy inside `CSMenuProfileSaveLoad` (`0xfc8 + 0x29`) that makes
 /// the row remember its position across sessions.
@@ -335,8 +347,8 @@ pub const WORLDMAP_NATIVE_MARKER_BUILD: MapSeam = MapSeam {
 /// flag's owner is where this build expects, which gives the offset in
 /// [`crate::map_pin_toggle`] a checked address to stand on rather than a remembered one.
 pub const WORLDMAP_PIN_TOGGLE_SETTER: MapSeam = MapSeam {
-    name: "map pin-toggle setter (FUN_140887580)",
-    rva: 0x088_7580,
+    name: "map pin-toggle setter (1.16.2 FUN_140887580)",
+    rva: 0x088_8a20,
     prologue: &[
         0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0xda, 0x88, 0x91, 0xc5,
     ],
@@ -368,17 +380,17 @@ pub enum SeamError {
     ModuleBase(String),
     /// The prologue could not be read -- unmapped or protected.
     Unreadable { name: &'static str, address: usize },
-    /// The running build moved this function and no verified mapping says where to.
+    /// The detour gate refused the address: the running build is not 2.7.2.0, or the rva is not
+    /// on the 2.7.2.0 detour allowlist.
     ///
     /// Separate from [`Self::PrologueMismatch`] on purpose, because the two need opposite fixes
-    /// and this file reported the wrong one for the whole of the 1.17 migration. Every RVA here
-    /// is 1.16.2; the installed game has been 1.17 since 2026-08-27. Byte-comparing at
-    /// `base + rva` on that build reads unrelated code and answers "prologue mismatch", which
-    /// blames the signature -- sending a reader to re-derive bytes that were never wrong -- when
-    /// the address is what moved and the fix is to map the function.
-    NoMappingForBuild {
+    /// and this file once reported the wrong one for the whole of the 1.17 migration.
+    /// Byte-comparing at `base + rva` on another build reads unrelated code and answers "prologue
+    /// mismatch", which blames the signature -- sending a reader to re-derive bytes that were
+    /// never wrong -- when the address is what moved and the fix is to re-measure the function.
+    RefusedForBuild {
         name: &'static str,
-        /// The 1.16.2 address that was asked for.
+        /// The 2.7.2.0 address that was asked for.
         address: usize,
         /// `er_game_base::game_build::describe_build()` at the moment of the refusal.
         build: String,
@@ -389,11 +401,6 @@ pub enum SeamError {
         address: usize,
         expected: Vec<u8>,
         actual: Vec<u8>,
-        /// `Some(stale)` when `address` is a translation of the 1.16.2 address `stale`, i.e. the
-        /// build gate did find this function on the running build and its prologue still differs.
-        /// That is a recompiled function, not a wrong address, and saying so keeps this message
-        /// from being read as the refusal above.
-        translated_from: Option<usize>,
     },
 }
 
@@ -404,37 +411,27 @@ impl core::fmt::Display for SeamError {
             Self::Unreadable { name, address } => {
                 write!(f, "{name} @0x{address:x}: prologue unreadable")
             }
-            Self::NoMappingForBuild {
+            Self::RefusedForBuild {
                 name,
                 address,
                 build,
             } => write!(
                 f,
-                "{name}: the 1.16.2 address 0x{address:x} has no verified detour mapping for the \
-                 running build ({build}) -- refusing to hook. THE ADDRESS MOVED; the prologue \
-                 signature is not in question and must not be \"fixed\""
+                "{name}: the 2.7.2.0 address 0x{address:x} is refused as a detour target on the \
+                 running build ({build}) -- refusing to hook. THE ADDRESS IS IN QUESTION; the \
+                 prologue signature is not, and must not be \"fixed\""
             ),
             Self::PrologueMismatch {
                 name,
                 address,
                 expected,
                 actual,
-                translated_from,
-            } => match translated_from {
-                Some(stale) => write!(
-                    f,
-                    "{name} @0x{address:x} (the verified translation of 1.16.2 0x{stale:x}): \
-                     prologue mismatch (got {actual:02x?}, want {expected:02x?}) -- refusing to \
-                     hook. The address resolved, so this is a RECOMPILED function, not a wrong \
-                     address"
-                ),
-                None => write!(
-                    f,
-                    "{name} @0x{address:x}: prologue mismatch (got {actual:02x?}, want \
-                     {expected:02x?}) -- refusing to hook; this is not the 1.16.2 image these \
-                     addresses were verified against"
-                ),
-            },
+            } => write!(
+                f,
+                "{name} @0x{address:x}: prologue mismatch (got {actual:02x?}, want \
+                 {expected:02x?}) -- refusing to hook; this is not the 2.7.2.0 image these \
+                 addresses were verified against"
+            ),
         }
     }
 }
@@ -468,8 +465,8 @@ static CALL_REFUSAL_LOGS: core::sync::atomic::AtomicUsize = core::sync::atomic::
 ///
 /// [`verify_seam`] is for a seam about to carry a MinHook detour and uses `resolve_detour_address`.
 /// This is for a seam about to be `transmute`d into a function pointer and called, and uses
-/// `resolve_game_address`, which additionally accepts the whole-image `.pdata` pairing -- good
-/// enough to say where a function is, not good enough to say MinHook may write five bytes there.
+/// `resolve_game_address`, which checks only the build -- good enough to call a function, not
+/// good enough to say MinHook may write five bytes there, which also needs the detour allowlist.
 /// The two live together so the choice is a visible fork rather than a habit.
 ///
 /// # Why it logs here
@@ -479,9 +476,8 @@ static CALL_REFUSAL_LOGS: core::sync::atomic::AtomicUsize = core::sync::atomic::
 /// the injection tallies that will now read zero. It is capped by
 /// [`CALL_REFUSAL_LOG_LIMIT`]; see that constant for why.
 ///
-/// On 1.16.2 `resolve_game_address` returns its argument unchanged (`is_supported_build()`
-/// short-circuits before the table is consulted), so this is a pass-through and nothing about the
-/// shipped behaviour on that build changes.
+/// On 2.7.2.0 `resolve_game_address` returns its argument unchanged, so this is a pass-through;
+/// on any other build it refuses.
 #[cfg(windows)]
 #[must_use]
 pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
@@ -491,10 +487,10 @@ pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
             < CALL_REFUSAL_LOG_LIMIT
     {
         crate::standalone_log(format_args!(
-            "map-inject: REFUSED -- {} (1.16.2 0x{:x}) has NO verified address for the running \
-             build ({}); it will NOT be called, so the map-pin surface is inert this session. The \
-             ADDRESS moved -- map the function rather than removing the guard. This line is \
-             logged at most {CALL_REFUSAL_LOG_LIMIT} times per process",
+            "map-inject: REFUSED -- {} (2.7.2.0 0x{:x}) is not callable on the running build \
+             ({}); it will NOT be called, so the map-pin surface is inert this session. The \
+             ADDRESS was measured on 2.7.2.0 -- re-measure the function rather than removing the \
+             guard. This line is logged at most {CALL_REFUSAL_LOG_LIMIT} times per process",
             seam.name,
             seam.verified_va(),
             er_game_base::game_build::describe_build(),
@@ -504,51 +500,31 @@ pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
 }
 
 #[cfg(windows)]
-/// Resolve a seam to a live address, refusing when the running build moved the function or when
-/// the bytes there are not what we reversed.
+/// Resolve a seam to a live address, refusing when the running build is not 2.7.2.0 or when the
+/// bytes there are not what we reversed.
 ///
-/// # resolve first, byte-check second
+/// # gate first, byte-check second
 ///
-/// The order is the fix. This used to byte-compare at `base + seam.rva` with no translation at
-/// all, which on 1.17 reads whatever the patch put at a 1.16.2 address -- so every seam reported
+/// The order is the fix. This used to byte-compare at `base + seam.rva` with no gate at all,
+/// which on 1.17 read whatever the patch put at a 1.16.2 address -- so every seam reported
 /// [`SeamError::PrologueMismatch`], a message that blames the signature when the address is what
 /// moved. The build gate is asked first now, and its refusal has its own variant.
 ///
-/// # Why the detour resolver and not the call one
+/// # Why the detour gate and not the call one
 ///
-/// All four callers hand the result straight to `er_hook::register_union_hook`; every one of them
-/// is installing a detour. `resolve_game_address` answers "where is this function now", which is
-/// what a call needs, and it will happily return a pair carried by the whole-image `.pdata` map.
-/// A detour needs the further claim that the destination is a real function entry with a
-/// relocatable five-byte prologue, and only `resolve_detour_address` speaks to it -- letting the
-/// weaker rows carry detours is what killed a boot on 2026-08-29. If a future caller wants one of
-/// these seams as a plain call target, it must resolve with `resolve_game_address` itself rather
-/// than loosening this.
+/// Every caller hands the result straight to a hook API; every one of them is installing a
+/// detour. `resolve_game_address` checks only the build, which is what a call needs. A detour
+/// needs the further claim that the destination is a real function entry with a relocatable
+/// five-byte prologue, and only `resolve_detour_address` speaks to it, through the detour
+/// allowlist -- letting weaker addresses carry detours is what killed a boot on 2026-08-29. If a
+/// future caller wants one of these seams as a plain call target, it must resolve with
+/// `resolve_game_address` itself rather than loosening this.
 ///
-/// # what it returns is the unresolved address, and that is the point (corrected 2026-08-30)
+/// # What it returns
 ///
-/// The byte check runs at the resolved address -- it has to, that is where the bytes are -- but
-/// what comes back is `base + seam.rva`, untranslated, because `register_union_hook` resolves
-/// again and must be the one resolve that decides where the detour lands.
-///
-/// This doc used to say the opposite: that resolving twice is idempotent for an address which is
-/// already a 1.17 destination, so handing over the translated one is safe. That is true of most
-/// addresses and false of exactly the ones that matter. An address can be both a 1.17 destination
-/// of one row and the 1.16.2 source of a different row -- which happens whenever a region's shift
-/// equals the local spacing between two functions, so `B - A == C - B`. On such an address
-/// translation wins over the already-translated shortcut (it must; see `already_translated_in`),
-/// and the second resolve silently returns a third, unrelated function. Three rows in the current
-/// detour table have that shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and on 2026-08-30 three live
-/// detours in this workspace were measured landing on the wrong function because of it.
-///
-/// Resolving the same 1.16.2 input twice is harmless and is what happens now: this function
-/// resolves it to read the prologue, `register_union_hook` resolves it to place the detour, and
-/// both get the same answer. Resolving the output is the bug.
-/// `scripts/check-double-resolved-hook-targets.py` is the gate that keeps it out.
-///
-/// On 1.16.2 `resolve_detour_address` returns its argument unchanged (`is_supported_build()`
-/// short-circuits), so this whole step is a no-op there and the byte check runs at exactly the
-/// address it always did.
+/// `base + seam.rva`, the native 2.7.2.0 address, which is also where the byte check ran: the
+/// gate no longer translates, it only refuses. The hook API the caller hands it to checks the same
+/// address once more.
 ///
 /// # Safety
 ///
@@ -556,13 +532,12 @@ pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
 /// address yields [`SeamError::Unreadable`] rather than a fault.
 pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
     let base = er_game_base::mem::game_module_base().map_err(SeamError::ModuleBase)?;
-    let stale = base + seam.rva;
     let Some(address) =
         er_game_base::game_build::resolve_detour_address(base + seam.rva, seam.name)
     else {
-        return Err(SeamError::NoMappingForBuild {
+        return Err(SeamError::RefusedForBuild {
             name: seam.name,
-            address: stale,
+            address: base + seam.rva,
             build: er_game_base::game_build::describe_build(),
         });
     };
@@ -579,16 +554,9 @@ pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
             address,
             expected: seam.prologue.to_vec(),
             actual,
-            translated_from: (address != stale).then_some(stale),
         });
     }
-    // `stale`, not `address`: see "WHAT IT RETURNS IS THE UNRESOLVED ADDRESS" above. The prologue
-    // was verified at `address`; the caller hands `stale` to `register_union_hook`, which resolves
-    // this same 1.16.2 input to that same `address` and owns the single resolve that places the
-    // detour. Callers log what comes back, so their line now names the address the feature meant
-    // and er-hook's own `HOOK TRANSLATED` line names where it went -- which is the pair a reader
-    // needs, rather than one address twice.
-    Ok(stale)
+    Ok(base + seam.rva)
 }
 
 #[cfg(test)]
@@ -613,22 +581,22 @@ mod tests {
 
     #[test]
     fn seam_rvas_reconstruct_the_byte_checked_vas() {
-        // Guards against a transcription slip turning a verified VA into a crash-hook.
+        // Guards against a transcription slip turning a verified 2.7.2.0 VA into a crash-hook.
         for (seam, va) in [
-            (WORLDMAP_VIEWMODEL_CTOR, 0x1_4088_55b0_usize),
-            (WARP_JOB_ASSEMBLER, 0x1_407a_04f0),
-            (BONFIRE_WARP_TAB_LOOKUP, 0x1_40d2_6390),
-            (BONFIRE_WARP_SUBCATEGORY_LOOKUP, 0x1_40d2_6220),
-            (BONFIRE_WARP_PARAM_LOOKUP, 0x1_40d2_5c30),
-            (GET_BONFIRE_ENTITY_ID, 0x1_40d2_5650),
-            (WORLDMAP_PIN_ROW_COPY_CTOR, 0x1_4088_5ed0),
-            (WORLDMAP_PIN_ROW_CTOR, 0x1_4088_b7b0),
-            (WORLDMAP_PIN_ROW_DTOR, 0x1_4088_bac0),
-            (WORLDMAP_PIN_LIST_GROW, 0x1_4088_8aa0),
-            (WORLDMAP_ROW_FILTER, 0x1_4088_be50),
-            (CONVERT_MSB_COORDS_TO_MAP_COORDS, 0x1_4087_6140),
-            (WORLDMAP_NATIVE_MARKER_BUILD, 0x1_409c_6730),
-            (WORLDMAP_PIN_TOGGLE_SETTER, 0x1_4088_7580),
+            (WORLDMAP_VIEWMODEL_CTOR, 0x1_4088_6a50_usize),
+            (WARP_JOB_ASSEMBLER, 0x1_407a_1820),
+            (BONFIRE_WARP_TAB_LOOKUP, 0x1_40d2_9200),
+            (BONFIRE_WARP_SUBCATEGORY_LOOKUP, 0x1_40d2_9090),
+            (BONFIRE_WARP_PARAM_LOOKUP, 0x1_40d2_8aa0),
+            (GET_BONFIRE_ENTITY_ID, 0x1_40d2_84c0),
+            (WORLDMAP_PIN_ROW_COPY_CTOR, 0x1_4088_7370),
+            (WORLDMAP_PIN_ROW_CTOR, 0x1_4088_cc50),
+            (WORLDMAP_PIN_ROW_DTOR, 0x1_4088_cf60),
+            (WORLDMAP_PIN_LIST_GROW, 0x1_4088_9f40),
+            (WORLDMAP_ROW_FILTER, 0x1_4088_d2f0),
+            (CONVERT_MSB_COORDS_TO_MAP_COORDS, 0x1_4087_75e0),
+            (WORLDMAP_NATIVE_MARKER_BUILD, 0x1_409c_7e30),
+            (WORLDMAP_PIN_TOGGLE_SETTER, 0x1_4088_8a20),
         ] {
             assert_eq!(seam.verified_va(), va, "{}", seam.name);
         }
@@ -704,10 +672,9 @@ mod tests {
     fn a_mismatch_error_shows_both_byte_strings_and_refuses_rather_than_claiming_success() {
         let error = SeamError::PrologueMismatch {
             name: "example",
-            address: 0x1_4088_55b0,
+            address: 0x1_4088_6a50,
             expected: vec![0x48, 0x8b],
             actual: vec![0xcc, 0xcc],
-            translated_from: None,
         };
         let rendered = error.to_string();
         assert!(rendered.contains("refusing to hook"), "{rendered}");
@@ -716,36 +683,35 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_address_is_not_reported_as_a_byte_mismatch() {
+    fn a_refused_address_is_not_reported_as_a_byte_mismatch() {
         // The defect this pair exists to stop coming back. `verify_seam` used to byte-compare at
-        // the untranslated `base + rva`, so on 1.17 every seam came back "prologue mismatch" --
-        // which reads as "our recorded bytes are wrong" and sends the next agent to re-derive a
+        // `base + rva` with no gate, so on 1.17 every seam came back "prologue mismatch" -- which
+        // reads as "our recorded bytes are wrong" and sends the next agent to re-derive a
         // signature that was never the problem. The two failures must not share wording.
-        let moved = SeamError::NoMappingForBuild {
+        let refused = SeamError::RefusedForBuild {
             name: "example",
-            address: 0x1_4088_55b0,
-            build: "game FileVersion 2.7.0.0 (this build supports 2.6.2.0)".to_owned(),
+            address: 0x1_4088_6a50,
+            build: "game FileVersion 2.7.3.0 (this build supports 2.7.2.0)".to_owned(),
         }
         .to_string();
-        assert!(moved.contains("no verified detour mapping"), "{moved}");
-        assert!(moved.contains("THE ADDRESS MOVED"), "{moved}");
-        assert!(moved.contains("2.7.0.0"), "{moved}");
+        assert!(refused.contains("refused as a detour target"), "{refused}");
+        assert!(refused.contains("THE ADDRESS IS IN QUESTION"), "{refused}");
+        assert!(refused.contains("2.7.3.0"), "{refused}");
+        assert!(refused.contains("140886a50"), "{refused}");
         // The word a reader greps for when they think the signature is stale must not appear.
-        assert!(!moved.contains("prologue mismatch"), "{moved}");
+        assert!(!refused.contains("prologue mismatch"), "{refused}");
 
-        // And the converse: a mismatch at an address that did resolve says so, so it is not read
+        // And the converse: a mismatch at an address the gate admitted says so, so it is not read
         // as the refusal above.
-        let recompiled = SeamError::PrologueMismatch {
+        let mismatch = SeamError::PrologueMismatch {
             name: "example",
-            address: 0x1_4088_65a0,
+            address: 0x1_4088_6a50,
             expected: vec![0x48, 0x8b],
             actual: vec![0x40, 0x53],
-            translated_from: Some(0x1_4088_55b0),
         }
         .to_string();
-        assert!(recompiled.contains("prologue mismatch"), "{recompiled}");
-        assert!(recompiled.contains("RECOMPILED"), "{recompiled}");
-        assert!(recompiled.contains("1408855b0"), "{recompiled}");
+        assert!(mismatch.contains("prologue mismatch"), "{mismatch}");
+        assert!(mismatch.contains("140886a50"), "{mismatch}");
     }
 
     #[test]
@@ -756,19 +722,18 @@ mod tests {
             SeamError::ModuleBase("no module".to_owned()),
             SeamError::Unreadable {
                 name: "example",
-                address: 0x1_4088_55b0,
+                address: 0x1_4088_6a50,
             },
-            SeamError::NoMappingForBuild {
+            SeamError::RefusedForBuild {
                 name: "example",
-                address: 0x1_4088_55b0,
+                address: 0x1_4088_6a50,
                 build: "unreadable".to_owned(),
             },
             SeamError::PrologueMismatch {
                 name: "example",
-                address: 0x1_4088_55b0,
+                address: 0x1_4088_6a50,
                 expected: vec![0x48],
                 actual: vec![0xcc],
-                translated_from: None,
             },
         ] {
             let rendered = error.to_string();

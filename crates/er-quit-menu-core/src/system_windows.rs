@@ -124,7 +124,8 @@ pub unsafe fn menu_window_set_visible_and_flags(
     // 0x1dc3d080 read vt=0 during the hide, was reused before the restore, and the ctor faulted
     // reading 0x1dc3d208 (the window plus 0x188). A live MenuWindow's first qword is a vtable in
     // the game image -- 0x142b00620 for IngameTop, 0x142b16b48 for OptionSetting, 0x142b25a78 for
-    // ProfileSelect, all measured on run br-20260912-034506-45db -- so that is the screen.
+    // ProfileSelect, all measured on 1.17.1 run br-20260912-034506-45db (2.7.2.0 0x142b02710,
+    // 0x142b18c38, 0x142b27b68) -- so that is the screen.
     let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
     if !er_game_base::mem::vtable_in_game_image(window_vt, base) {
         append_autoload_debug(format_args!(
@@ -368,7 +369,7 @@ pub unsafe fn reapply_optionsetting_pane_visibility(
         return;
     }
     // The real selected tab the user is viewing: SettingTabControl at window+0x1870, its tab view at
-    // +0x10, selected index at view+0xd4 (`FUN_140739f20` = `*(view+0xd4)`). Use this, not the composite's
+    // +0x10, selected index at view+0xd4 (`0x14073b120` = `*(view+0xd4)`). Use this, not the composite's
     // `current` pane pointer -- after our detour `current` (composite+0xb8) is stale (observed: it matched
     // cache slot 9 while the user was on the Game tab), so re-applying its index re-shows the wrong pane.
     // When restoring after Back from our child ProfileSelect, the previous menu is always the Quit tab:

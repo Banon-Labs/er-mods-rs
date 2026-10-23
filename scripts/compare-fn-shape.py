@@ -14,8 +14,8 @@ in the main checkout; override the directory with `ER_DEOBF_DIR`.
 Decodes each function over its own `.pdata` extent (the exception directory of each image) when
 the address begins a `.pdata` entry, so Arxan residue past the end is never compared; a leaf with
 no entry is decoded up to the first `ret`/`jmp` followed by `int3` padding, capped at --max. Normalised shape per instruction: mnemonic plus
-operands with every immediate, displacement and branch target replaced by `#`, the way
-`map-rvas-1162-to-1170.py` masks them. `SAME n/n` means every decoded instruction has the same
+operands with every immediate, displacement and branch target replaced by `#`, which is what
+survives a patch moving code and data. `SAME n/n` means every decoded instruction has the same
 shape; anything else names the first differing index. Displacements on non-RIP memory operands
 (struct offsets) are kept in a second, stricter comparison, because a struct offset that moved is
 exactly the kind of change that makes a call with a hand-built argument wrong; `offsets SAME`

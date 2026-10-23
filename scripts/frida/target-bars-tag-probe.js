@@ -2,9 +2,8 @@
 // enemy tag, or a boss bar at the bottom of the screen. Read-only: no write, no watchpoint, no
 // MemoryAccessMonitor; one Interceptor on the lock-on update, read on the game thread.
 //
-// Offsets (read in `eldenring-deobf-1.17.1.bin`; addresses carried 1.17.1 -> 2.7.2.0 with
-// scripts/map-rvas-1171-to-1172.py, and each cited function is the same bytes in
-// `eldenring-deobf-1.17.2.bin`):
+// Offsets (read in `eldenring-deobf-1.17.1.bin`; addresses carried 1.17.1 -> 2.7.2.0, and each
+// cited function is the same bytes in `eldenring-deobf-1.17.2.bin`):
 //   CSFeManImp global          rva 0x3d6f8f0 -> 0x3d72910 (GetCSFeManImp 0x1407164f0 -> 0x1407169a0:
 //                              mov rax,[rip+..])
 //   hudState                   +0x78

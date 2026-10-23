@@ -36,9 +36,10 @@
 //!
 //! # Why the region term is dropped, and why by hand
 //!
-//! This module used to re-gate on `CS::PlayerIns::CanUseBreakInItem` (1.17.1 `0x140657d50`)
-//! wholesale. That function bundles the region question with two others, and the region question
-//! is the one Seamless disagrees with: Seamless makes zones invadable that vanilla flags off, so a
+//! This module used to re-gate on `CS::PlayerIns::CanUseBreakInItem` (2.7.2.0 `0x140658200`,
+//! 1.17.1 `0x140657d50`) wholesale. That function bundles the region question with two others,
+//! and the region question is the one Seamless disagrees with: Seamless makes zones invadable that
+//! vanilla flags off, so a
 //! player standing in one had every invasion item greyed -- in the inventory as much as the
 //! Multiplayer menu, because `CanUseGoods` is the one gate all three of its callers share
 //! (`GetSelectedGoodsUseAnim`, `IsItemUsable`, `CanMainPlayerUseGoods`).
@@ -59,27 +60,23 @@
 //! confirmed the items usable and an invasion obtainable. It is the wrong product shape because
 //! that predicate is shared: scanning `eldenring-deobf-1.17.1.bin` for calls landing on
 //! `0xa61980` finds three, and only two are these. The third, at `0x140a04c25` inside the function
-//! starting `0x140a04b4a`, belongs to something this mod has not read and must not change. Asking
-//! the terms directly patches no engine code at all.
+//! starting `0x140a04b4a` (1.17.1 addresses), belongs to something this mod has not read and must
+//! not change. Asking the terms directly patches no engine code at all.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(windows)]
-use er_game_base::{game_build::MAPPED_FILE_VERSION_1171, mem::game_rva_measured_on};
+use er_game_base::mem::game_rva_named;
 
-/// `CS::CanUseGoods` on 1.17. Carried from 1.16.2 `0x14068e010` with
-/// `scripts/map-rvas-1162-to-1170.py` (delta `+0xe50`, unique 43-byte signature) and recorded in
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv`. Below the `0xafefe9` boundary, so 1.17.0 and
-/// 1.17.1 agree.
+/// `CS::CanUseGoods` on 2.7.2.0 (1.17.1 `0x14068ee60`, 1.16.2 `0x14068e010`).
 ///
-/// All four functions in this module are 1.17.1 rvas and reach the running build through
-/// `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`, never a 1.16.2 resolver. On 2.7.2.0
-/// they carry to `0x68f310`, `0x658200`, `0x67b5d0` and `0x9fab60`, measured with `scripts/compare-carry-bytes-1172.py`: three hold the
-/// same 24 opening bytes and the same `.pdata` length, and `GetPartyMemberInfo` differs only in
-/// its rip displacement, which reaches `GLOBAL_GameMan`'s own carry (`0x3d6d988` -> `0x3d709a8`).
-/// `CanUseGoods`' two calls to the others (`0x68effc`, `0x68f004`) carry to `0x68f4ac` and
-/// `0x68f4b4`, which call `0x67b5d0` and `0x9fab60`.
-const CAN_USE_GOODS_RVA: usize = 0x68_ee60;
+/// All four functions in this module are 2.7.2.0 rvas, and `game_rva_named` refuses each of them
+/// on any other build. They were measured on 1.17.1, carried, and compared byte for byte across
+/// the two images: three hold the same 24 opening bytes and the same
+/// `.pdata` length, and `GetPartyMemberInfo` differs only in its rip displacement, which reaches
+/// `GLOBAL_GameMan` (`0x143d709a8`). `CanUseGoods`' two calls to the others sit at `0x14068f4ac`
+/// and `0x14068f4b4` and land on `0x14067b5d0` and `0x1409fab60`.
+const CAN_USE_GOODS_RVA: u32 = 0x68_f310;
 
 /// The three `EquipParamGoods` rows Seamless greys out, from the decompile's own branch:
 /// `uVar31 == 0x66 || uVar31 - 0x6f < 2`.
@@ -87,32 +84,34 @@ const BLOODY_FINGER: usize = 102;
 const FESTERING_BLOODY_FINGER: usize = 111;
 const RECUSANT_FINGER: usize = 112;
 
-/// `CS::PlayerIns::CanUseBreakInItem` on 1.17.1 -- the engine's own answer to "may this player use
-/// an invasion item right now".
+/// `CS::PlayerIns::CanUseBreakInItem` on 2.7.2.0 (1.17.1 `0x140657d50`, 1.16.2 `0x140656f00`) --
+/// the engine's own answer to "may this player use an invasion item right now".
 ///
-/// Carried from 1.16.2 `0x140656f00` with `scripts/map-rvas-1162-to-1170.py`: delta `+0xe50`,
-/// unique on a 38-byte signature, the same delta `CAN_USE_GOODS_RVA` took. Below the `0xafefe9`
-/// boundary, so 1.17.0 and 1.17.1 agree. The mapping was then read rather than trusted -- the
-/// disassembly at `0x140657d50` in `eldenring-deobf-1.17.1.bin` is instruction-for-instruction the
-/// 1.16.2 function, differing only in the rip displacements the moved globals force.
+/// The 1.17.1 mapping was read rather than trusted -- the disassembly at `0x140657d50` in
+/// `eldenring-deobf-1.17.1.bin` is instruction-for-instruction the 1.16.2 function, differing only
+/// in the rip displacements the moved globals force -- and its 2.7.2.0 body opens with the same
+/// 24 bytes.
 ///
 /// Its region term is the one Seamless disagrees with, and it is answered upstream by
 /// [`crate::break_in_region_gate`] rather than skipped here -- the engine asks the same question
 /// again while the invasion runs, so skipping it only here left the game cancelling what the
 /// player had started.
-const CAN_USE_BREAK_IN_ITEM_RVA: u32 = 0x65_7d50;
+const CAN_USE_BREAK_IN_ITEM_RVA: u32 = 0x65_8200;
 
 /// `PlayerIns->playRegionId`, from `CanUseBreakInItem`'s own `lea rcx,[rbx+0x6e8]` at
-/// `0x140657db9`. Read only for the log line that names which region a finger was opened in.
+/// `0x140658269` (1.17.1 `0x140657db9`). Read only for the log line that names which region a
+/// finger was opened in.
 const PLAYER_INS_PLAY_REGION_ID_OFFSET: usize = 0x6e8;
 
-/// `CS::GetPartyMemberInfo` on 1.17 -- `return GLOBAL_GameMan->partyMemberInfo`, 15 bytes.
+/// `CS::GetPartyMemberInfo` on 2.7.2.0 -- `return GLOBAL_GameMan->partyMemberInfo`, 15 bytes.
 ///
-/// Read out of the 1.17.1 image rather than mapped: `CanUseGoods` calls it, and the instruction at
-/// `0x14068effc` is `call 0x14067b120` where 1.16.2's `0x14068e1ac` is `call 0x14067a2d0`.
-const GET_PARTY_MEMBER_INFO_RVA: u32 = 0x67_b120;
+/// Read out of the image rather than mapped: `CanUseGoods` calls it, and the instruction at
+/// 2.7.2.0 `0x14068f4ac` is `call 0x14067b5d0` (1.17.1 `0x14068effc` is `call 0x14067b120`, 1.16.2
+/// `0x14068e1ac` is `call 0x14067a2d0`).
+const GET_PARTY_MEMBER_INFO_RVA: u32 = 0x67_b5d0;
 
-/// `CS::PartyMemberInfo::HasNonNPCPhantoms` on 1.17 -- "are there other real players in my world".
+/// `CS::PartyMemberInfo::HasNonNPCPhantoms` on 2.7.2.0 -- "are there other real players in my
+/// world".
 ///
 /// ```text
 /// HasNonNPCPhantoms(p) = p->sessionPlayerCount >= 2
@@ -120,17 +119,19 @@ const GET_PARTY_MEMBER_INFO_RVA: u32 = 0x67_b120;
 /// ```
 ///
 /// Also read out of the image, and it had to be: this one moved `+0x12e0` while everything else
-/// around it moved `+0xe50`, so `scripts/map-rvas-1162-to-1170.py` could not sign it: it answers
+/// around it moved `+0xe50`, so the 1.16.2 -> 1.17 signature search could not sign it: it answered
 /// `UNRESOLVED` over 143 shape matches, a `__security_check_cookie` prologue being far too
 /// ordinary to pick out. The call site settles it with no signature at all: 1.16.2
 /// `0x14068e1b4` is `call 0x1409f93c0` and 1.17.1 `0x14068f004` is `call 0x1409fa6a0`, in an
-/// instruction stream otherwise byte-identical for the twenty bytes either side.
+/// instruction stream otherwise byte-identical for the twenty bytes either side. On 2.7.2.0 the
+/// same call sits at `0x14068f4b4` and lands here.
 ///
-/// All three addresses were then called live through Frida on run `br-20260917-190536-c9d4`, which
-/// is the part the de-Arxan'd image cannot supply: that image is unpacked and the running process
-/// is not, so a byte match there proves where the function went, not that the running one agrees.
-/// Ten messages over 83 seconds, every call returning a value rather than faulting.
-const PARTY_HAS_NON_NPC_PHANTOMS_RVA: u32 = 0x9f_a6a0;
+/// All three 1.17.1 addresses were then called live through Frida on run
+/// `br-20260917-190536-c9d4`, which is the part the de-Arxan'd image cannot supply: that image is
+/// unpacked and the running process is not, so a byte match there proves where the function went,
+/// not that the running one agrees. Ten messages over 83 seconds, every call returning a value
+/// rather than faulting.
+const PARTY_HAS_NON_NPC_PHANTOMS_RVA: u32 = 0x9f_ab60;
 
 /// `bool CanUseBreakInItem(PlayerIns *player)` -- one argument in `rcx`, `al` out.
 type CanUseBreakInItemFn = unsafe extern "system" fn(usize) -> bool;
@@ -234,9 +235,8 @@ fn can_use_break_in_item(player: usize) -> Option<bool> {
         return None;
     }
     let base = er_game_base::mem::game_module_base().ok()?;
-    // SAFETY: fault-tolerant read of a game global through the checked resolver, which translates
-    // this 1.16.2 rva for the running build -- `docs/recon/rva-map-1162-to-1170.data.tsv` maps
-    // `0x3d65f88` to `0x3d69ff8`, the address 1.17.1's own `CanUseBreakInItem` loads.
+    // SAFETY: fault-tolerant read of a game global through the checked resolver, which answers 0
+    // for this 2.7.2.0 rva on any other build.
     let world_chr_man = unsafe {
         er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
@@ -247,7 +247,7 @@ fn can_use_break_in_item(player: usize) -> Option<bool> {
     if world_chr_man == 0 {
         return None;
     }
-    let entry = game_rva_measured_on(CAN_USE_BREAK_IN_ITEM_RVA as usize, MAPPED_FILE_VERSION_1171)?;
+    let entry = game_rva_named(CAN_USE_BREAK_IN_ITEM_RVA, "CAN_USE_BREAK_IN_ITEM_RVA").ok()?;
     // SAFETY: a one-argument predicate at an address this build mapped, called on the game thread
     // the engine already calls it from. It reads three fields and calls two further predicates; it
     // writes nothing and cannot re-enter `CanUseGoods`.
@@ -268,12 +268,12 @@ fn can_use_break_in_item(_player: usize) -> Option<bool> {
 /// a zero return is taken as unreadable rather than passed on.
 #[cfg(windows)]
 fn world_has_other_players() -> Option<bool> {
-    let get_info =
-        game_rva_measured_on(GET_PARTY_MEMBER_INFO_RVA as usize, MAPPED_FILE_VERSION_1171)?;
-    let has_phantoms = game_rva_measured_on(
-        PARTY_HAS_NON_NPC_PHANTOMS_RVA as usize,
-        MAPPED_FILE_VERSION_1171,
-    )?;
+    let get_info = game_rva_named(GET_PARTY_MEMBER_INFO_RVA, "GET_PARTY_MEMBER_INFO_RVA").ok()?;
+    let has_phantoms = game_rva_named(
+        PARTY_HAS_NON_NPC_PHANTOMS_RVA,
+        "PARTY_HAS_NON_NPC_PHANTOMS_RVA",
+    )
+    .ok()?;
     // SAFETY: a nullary getter at an address this build mapped, on the game thread the engine
     // calls it from. It reads one field of a singleton and writes nothing.
     let info = unsafe { core::mem::transmute::<usize, GetPartyMemberInfoFn>(get_info)() };
@@ -410,7 +410,7 @@ unsafe extern "system" fn can_use_goods_hook(
 /// `player->playRegionId`, for the log line above. `None` when it cannot be read.
 ///
 /// The offset is the engine's own: `CanUseBreakInItem` computes this field's address with
-/// `lea rcx,[rbx+0x6e8]` at `0x140657db9` before handing it to the region predicate.
+/// `lea rcx,[rbx+0x6e8]` at `0x140658269` before handing it to the region predicate.
 #[cfg(windows)]
 fn play_region_id(player: usize) -> Option<u32> {
     if player == 0 {
@@ -436,16 +436,14 @@ pub unsafe fn install() -> bool {
         return true;
     }
 
-    // `CAN_USE_GOODS_RVA` is the 1.17 address, not a 1.16.2 one, so no 1.16.2 resolver may
-    // touch it: `register_union_hook7_runtime_derived` translates nothing and only checks the
-    // running image's `.pdata` around the entry. Until 2.7.2.0 this went through
-    // `game_rva_for_hook`, which is plain `base + rva` -- right on 1.17.1 (run
-    // br-20260917-031812-b399 logged `CanUseGoods @0x14068ee60 answered`) and a detour into the
-    // middle of other code on 2.7.2.0. The 1.17.1 carry moves it, and refuses on any build it
-    // does not reach.
-    let Some(entry) = game_rva_measured_on(CAN_USE_GOODS_RVA, MAPPED_FILE_VERSION_1171) else {
+    // `register_union_hook7_runtime_derived` checks only the running image's `.pdata` around the
+    // entry, not the build, so the build check happens here: `game_rva_named` refuses this
+    // 2.7.2.0 rva on any other build. Plain `base + rva` with no check (`game_rva_for_hook`) was
+    // right on 1.17.1 (run br-20260917-031812-b399 logged `CanUseGoods @0x14068ee60 answered`)
+    // and would have been a detour into the middle of other code on 2.7.2.0.
+    let Ok(entry) = game_rva_named(CAN_USE_GOODS_RVA, "CAN_USE_GOODS_RVA") else {
         crate::standalone_log(format_args!(
-            "vanilla-fingers: CanUseGoods has no carry from 1.17.1 to {} -- the fingers stay \
+            "vanilla-fingers: CanUseGoods was measured on 2.7.2.0, not on {} -- the fingers stay \
              greyed",
             er_game_base::game_build::describe_build()
         ));

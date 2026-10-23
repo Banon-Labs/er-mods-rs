@@ -71,14 +71,14 @@ The ones worth knowing:
 | `arrow_meters` | `3.0` | length of the no-route arrow |
 | `start_enabled` | `false` | begin with the overlay already on |
 | `marker_fxr_id` | `0` | spawn the game's OWN effects along the route; `302022` is the Rainbow Stone's lingering coloured stone. `0` is off, and off is the only setting here that leaves the game untouched |
-| `marker_fxr_ids` | *(unset)* | one effect **per player**, in tracking order — overrides `marker_fxr_id`. Every id must LINGER |
+| `marker_fxr_ids` | *(unset)* | one effect **per player**, in tracking order -- overrides `marker_fxr_id`. Every id must LINGER |
 | `marker_variant_a/b/c` | `-1` | the three spare spawn arguments, unset by default. An unproven lead on effect variants |
 | `marker_spacing_meters` | `2.7` | metres between markers, measured along the path |
 | `marker_keep_behind_meters` | `12.0` | how much already-walked trail is kept behind you before those stones are removed |
 | `max_markers` | `144` | most markers one trail may hold |
 | `markers_per_pass` | `3` | markers placed per pass (~6 passes a second), so the trail creeps out from your feet rather than appearing whole |
 | `search_range_meters` | `0.0` | how far the navmesh search may range; `0` = unlimited, the engine's own default |
-| `search_budget` | `100000` | iterations the search may spend — the engine's own default. `CS::CSAiFunc` uses `800`, which fails on spiral descents |
+| `search_budget` | `100000` | iterations the search may spend -- the engine's own default. `CS::CSAiFunc` uses `800`, which fails on spiral descents |
 
 ## Pick a key no other mod in your profile reads
 
@@ -93,11 +93,13 @@ relationship, and only one is non-zero:
 
 | field | offset | value |
 |---|---|---|
-| `compassEnemyHostInnerDistance` | `+0xa4` | **30.0** — an invader's marker for the host, hidden inside this |
-| `compassFriendHostInnerDistance` | `+0xa0` | `0.0` — never hidden |
-| `compassFriendGuestInnerDistance` | `+0xa8` | `0.0` — never hidden |
+| `compassEnemyHostInnerDistance` | `+0xa4` | **30.0** -- an invader's marker for the host, hidden inside this |
+| `compassFriendHostInnerDistance` | `+0xa0` | `0.0` -- never hidden |
+| `compassFriendGuestInnerDistance` | `+0xa8` | `0.0` -- never hidden |
 
-`FUN_140775f30` squares it at runtime and compares. Two deliberate departures from that rule:
+`FUN_140775f30` squares it at runtime and compares (this and every other `FUN_` name in this file
+is a name from the 1.16.2 dump, where the crate was reversed; the DLL's own constants are 2.7.2.0).
+Two deliberate departures from that rule:
 
 - **This compares in 3D. The compass compares in 2D.** Its `dx`/`dy` are map-plane components with
   no vertical term, so a player five metres away and forty metres straight down reads as five
@@ -161,11 +163,12 @@ overlay keeps the previous route on screen while the next one is computed instea
 route computed here instead would be a second opinion about walkability, and it would be wrong
 exactly where being wrong costs you the invasion: the ledge that looks crossable and is not.
 
-**Runtime status: the chain runs.** Every address and structure offset is from static RE of ER
-1.16.2 (dump VA == deobf VA == runtime VA, shift 0), cross-checked against two independent call
-sites -- and on 2026-08-25 a live run answered `selfcheck: PASS -- 13 waypoints over 9m`, which is
-all eleven function pointers, the async poll and the container walk executing for real. The
-container walk validates everything it reads -- capacity a power of two, count bounded, every
+**Runtime status: the chain runs.** Every function and structure offset was found by static RE of
+ER 1.16.2 (the named dump), cross-checked against two independent call sites; the address
+constants are now the 2.7.2.0 rvas of those functions and globals (`docs/game-build.md`), and the
+structure offsets are the 1.16.2 measurements. On 2026-08-25, with 1.16.2 installed, a live run
+answered `selfcheck: PASS -- 13 waypoints over 9m`, which is all eleven function pointers, the
+async poll and the container walk executing for real. The container walk validates everything it reads -- capacity a power of two, count bounded, every
 element pointer non-null, every coordinate finite -- and refuses rather than trusting, and a
 refusal degrades to the arrow.
 
@@ -232,7 +235,7 @@ It reads the roster, asks the navmesh a question, casts one sight ray per player
 
 Set `marker_fxr_id` and that stops being true in exactly one way: the DLL spawns real engine
 effects in the world, through the game's own SFX manager, at the positions along your route. Still
-no detours and no writes to game memory — but these are real objects with real lifetimes, and
+no detours and no writes to game memory -- but these are real objects with real lifetimes, and
 "this mod only reads" is no longer an accurate description of it. That is why it is opt-in.
 
 **They are yours alone.** Measured live on 2026-08-25 with a second player present: the markers
@@ -240,14 +243,14 @@ appear on the spawning client and on no other. A trail pointing at an invader do
 at you, and nothing about your position reaches their game.
 
 **They are removed again.** Each marker is spawned through `CS::CSSfxImp::SpawnFfxInstance`
-directly — not the fire-and-forget wrapper, which discards the control block and leaves an effect
-nothing can ever take back — and the block is kept so the effect can be torn down. Stones go when
+directly -- not the fire-and-forget wrapper, which discards the control block and leaves an effect
+nothing can ever take back -- and the block is kept so the effect can be torn down. Stones go when
 the route changes, when you walk past them, when a player leaves, and when the overlay is switched
 off.
 
 Removing one follows `CS::SosSignMan::ClearSignsWithSfxSetting_`, the game's own summon-sign
 cleanup: stop flag, push, finalise, release, unlink. The guard in front of it is
-`FUN_1420b6370`, and using anything weaker is what crashed a live session on 2026-08-25 — that
+`FUN_1420b6370`, and using anything weaker is what crashed a live session on 2026-08-25 -- that
 function is **two levels deep**, requiring both a non-null instance pointer at `ctrl+0x08` *and*
 `FUN_1420b6280` reporting the instance still alive. A marker held for a few seconds, which every
 real trail marker is, can have its effect finish in the meantime; reading the pointer alone passes
@@ -256,7 +259,7 @@ for that case and pushes parameters into a dead object.
 ### Proving the effects without a second player
 
 The marker path only ever ran for a remote player's route, so its first real execution was in a
-live session — and it took the game down. Now, whenever markers are enabled, the overlay's
+live session -- and it took the game down. Now, whenever markers are enabled, the overlay's
 self-check also spawns one at your feet, **holds it for 300 frames**, and removes it, logging each
 step:
 
@@ -268,7 +271,7 @@ marker-selfcheck: PASS -- a held marker spawned and despawned without faulting
 ```
 
 The hold is the point. An earlier version of this probe spawned and despawned in the same tick,
-passed, and proved nothing — the gap during which an effect can finish on its own is the entire
+passed, and proved nothing -- the gap during which an effect can finish on its own is the entire
 bug.
 
 The drawing goes through `er_build_watermark_core::overlay_host`: if another module in this

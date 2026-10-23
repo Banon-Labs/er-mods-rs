@@ -15,10 +15,10 @@
 //!
 //! # Fail-closed by construction
 //!
-//! `ConvertBlockCoordsToPhysicsCoords` (@ `0x14061e120`, byte-checked `MATCH ... shift 0`)
-//! returns `false` when the target block's world info is not resident. Those targets must never
-//! become [`ResolvedTarget`]s: a point that cannot be placed is a point that must not be warped
-//! to, so the conversion stays at the call site and a failure is dropped rather than defaulted.
+//! `ConvertBlockCoordsToPhysicsCoords` (2.7.2.0 `0x14061f420`, 1.16.2 `0x14061e120`) returns
+//! `false` when the target block's world info is not resident. Those targets must never become
+//! [`ResolvedTarget`]s: a point that cannot be placed is a point that must not be warped to, so
+//! the conversion stays at the call site and a failure is dropped rather than defaulted.
 
 use crate::invasion_warp::InvasionWarpTarget;
 

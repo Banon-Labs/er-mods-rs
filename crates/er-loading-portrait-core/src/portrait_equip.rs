@@ -19,7 +19,7 @@ pub const PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT: usize = 4;
 /// `equipment_param_ids`. Non-negative values force whole-outfit override arithmetic.
 pub const PORTRAIT_EQUIP_OVERRIDE_ABSENT: i32 = -1;
 
-/// Whole-outfit override category addends used by `FUN_1409e6fb0`.
+/// Whole-outfit override category addends used by `FUN_1409e86f0`.
 pub const PORTRAIT_EQUIP_OVERRIDE_CHEST_ADDEND: i32 = 100;
 pub const PORTRAIT_EQUIP_OVERRIDE_HANDS_ADDEND: i32 = 200;
 pub const PORTRAIT_EQUIP_OVERRIDE_LEGS_ADDEND: i32 = 300;
@@ -69,7 +69,7 @@ pub struct PortraitEquipSample {
     pub unk0: i32,
     pub unkd4: i32,
     pub unkd8: i32,
-    /// The four `EquipParamProtector` row ids `FUN_1409e6fb0` will actually request, head/chest/hands/
+    /// The four `EquipParamProtector` row ids `FUN_1409e86f0` will actually request, head/chest/hands/
     /// legs, after the override arithmetic.
     pub effective: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
     /// The same four slots as the target save record carries them, for classification.
@@ -92,7 +92,7 @@ pub fn protector_default_param_id(slot: usize) -> i32 {
         + PORTRAIT_EQUIP_PROTECTOR_DEFAULT_PARAM_ID_STRIDE * slot as i32
 }
 
-/// Replicate `FUN_1409e6fb0`'s protector resolution (deobf 0x1409e7553..0x1409e75b6, every test a
+/// Replicate `FUN_1409e86f0`'s protector resolution (0x1409e8c94..0x1409e8cf7, every test a
 /// signed `js`) for one slot. The per-slot param id is the baseline; a non-negative override field
 /// replaces it outright.
 pub fn portrait_effective_protector_id(
@@ -278,7 +278,7 @@ mod tests {
     }
 
     /// The hands-only fallback branch: `unkd8` negative but `unk0` non-negative still overrides hands
-    /// (`mov (%rcx),%eax ; test ; js ; lea 0xc8(%rax),%ebx` at deobf 0x1409e758f).
+    /// (`mov (%rcx),%eax ; test ; js ; lea 0xc8(%rax),%ebx` at 0x1409e8cd0).
     #[test]
     fn a_non_negative_unk0_overrides_hands_alone() {
         let s = sample(

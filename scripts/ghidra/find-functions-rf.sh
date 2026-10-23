@@ -5,19 +5,22 @@
 #   scripts/ghidra/find-functions-rf.sh [--proj-dir DIR] [--proj-name name] \
 #       [--threshold 0.80] [--max-starts 1000] [--min-range 16] [--log file]
 #
-# Defaults target the persistent ER runtime dump project (ermaporch). NOTE: the dump is already
-# heavily symbolized, so it is mainly a smoke-test target -- few functions remain undiscovered,
-# and its addresses carry the ~0x10 dump-vs-deobf shift (see AGENTS.md). For real address-bearing
-# results, point --proj-dir/--proj-name at the deobf-binary project (scripts/ghidra/import-deobf.sh).
+# Defaults target the deobf-binary project of the installed build (scripts/ghidra/import-deobf.sh),
+# whose addresses are the ones the game runs at. The runtime dump project (ermaporch) is already
+# heavily symbolized, so few functions remain undiscovered there and it is only a smoke-test
+# target.
 #
 # Same env gotchas as ghidra-query.sh: java.io.tmpdir is forced onto /home (the /tmp tmpfs
 # is a near-full 32G and overflows when Ghidra unpacks program data).
 set -euo pipefail
 
-# Default to the deobf-native project (erdeobf): RF is only useful for call/patch-able VAs, and
-# the dump (ermaporch) is both slow to classify and exclusively locked by a running MCP daemon.
-PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
-PROJ_NAME=erdeobf
+# Default to the deobf-native project of the installed build (erdeobf2720, built by
+# scripts/ghidra/import-deobf.sh from eldenring-deobf-1.17.2.bin): RF is only useful for
+# call/patch-able VAs, and the dump (ermaporch) is both slow to classify and exclusively locked by
+# a running MCP daemon. The 1.16.2 deobf project is `--proj-dir $HOME/ghidra_maporch/proj-deobf
+# --proj-name erdeobf`.
+PROJ_DIR=$HOME/ghidra_maporch/proj-deobf-2720
+PROJ_NAME=erdeobf2720
 THRESHOLD=0.80
 MAX_STARTS=1000
 MIN_RANGE=16
@@ -40,9 +43,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ! -d "$PROJ_DIR/$PROJ_NAME.rep" ]]; then
+  echo "Ghidra project $PROJ_NAME is not built in $PROJ_DIR: run scripts/ghidra/import-deobf.sh" >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HEADLESS=/home/banon/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
-TMP=/home/banon/ghidra_maporch/tmp
+HEADLESS=$HOME/tools/ghidra_12.1_PUBLIC/support/analyzeHeadless
+TMP=$HOME/ghidra_maporch/tmp
 
 mkdir -p "$TMP"
 export TMPDIR="$TMP"

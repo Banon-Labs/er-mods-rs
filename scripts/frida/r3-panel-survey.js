@@ -1,7 +1,7 @@
 // Read-only: which display objects are still drawn in view 3, against views 0-2?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The center (detail) panel shows in every view and survives er-r3-view's view 3, and fading
 // objects to find it polluted the menu state for the rest of a session, because these windows

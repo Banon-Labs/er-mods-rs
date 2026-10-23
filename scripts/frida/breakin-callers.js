@@ -1,7 +1,7 @@
 // Who actually calls `CanUseBreakInItem` on 1.17, by return address rather than by signature.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Two mapped functions have now been hooked and logged nothing while the behaviour they decide was
 // visibly happening on screen: `CanUseGoods` (0x68ee60) and the goods popup dispatcher

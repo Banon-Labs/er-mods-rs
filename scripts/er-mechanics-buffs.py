@@ -59,9 +59,9 @@ _EL = {'physical': 'physics', 'magic': 'magic', 'fire': 'fire', 'lightning': 'th
 _PT = {'slash': 'slash', 'strike': 'blow', 'pierce': 'thrust', 'standard': 'neutral'}
 _PVP_EL = {'physical': 'Physics', 'magic': 'Magic', 'fire': 'Fire', 'lightning': 'Thunder', 'holy': 'Dark'}
 
-# `FUN_140d4fdf0` (1.16.2; 1.17.1 below the 0xafefe9 boundary, same address class as grease.md's
-# getters) switch 0..8 reads +0x48, +0x220, +0x224, +0x228, +0x22c, +0x4c, +0x50, +0x54, +0x1e0:
-# the nine `*AttackPowerRate` columns. These are the products `FUN_1406832a0` multiplies into the
+# `FUN_140d53290` (1.16.2 `FUN_140d4fdf0`, the same instructions; same address class as
+# grease.md's getters) switch 0..8 reads +0x48, +0x220, +0x224, +0x228, +0x22c, +0x4c, +0x50,
+# +0x54, +0x1e0: the nine `*AttackPowerRate` columns. These are the products `FUN_1406845a0` multiplies into the
 # weapon part of the hit (buffs.md section 2).
 AP_RATE = {e: f'{_EL[e]}AttackPowerRate' for e in ELEMENTS}
 AP_RATE_PT = {p: f'{_PT[p]}AttackPowerRate' for p in PHYS_TYPES}
@@ -87,7 +87,7 @@ STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEn
 # War Cry carry `changeStrengthPoint` 5 beside their x1.075.
 RATE_POINTS = {'str': 'changeStrengthPoint', 'dex': 'changeAgilityPoint', 'int': 'changeMagicPoint',
                'fth': 'changeFaithPoint', 'arc': 'changeLuckPoint'}
-# Status build-up adds, summed as ints by the same accumulator (`FUN_1404ff690` and siblings).
+# Status build-up adds, summed as ints by the same accumulator (`FUN_140500540` and siblings).
 STATUS = {'poison': 'poizonAttackPower', 'rot': 'diseaseAttackPower', 'blood': 'bloodAttackPower',
           'death': 'curseAttackPower', 'frost': 'freezeAttackPower', 'sleep': 'sleepAttackPower',
           'madness': 'madnessAttackPower'}
@@ -109,7 +109,7 @@ BULLET_SP = ('spEffectIDForShooter', 'spEffectId0', 'spEffectId1', 'spEffectId2'
              'spEffectId4')
 BULLET_LINKS = ('HitBulletID', 'intervalCreateBulletId')
 
-# Great rune goods 191..196 carry no refId. `ChrIns::ApplyRuneArcEffects` 0x1404a6d20 applies
+# Great rune goods 191..196 carry no refId. `ChrIns::ApplyRuneArcEffects` 0x1404a7360 applies
 # 600+10g .. 608+10g for the equipped rune g (host), 609+10g for an invader whose rune matches
 # ConstantParam 0xc3, and 790 for a host with no rune; Rune Arc (goods 190) applies 3450
 # (`stateInfo 277`), which only sets `PlayerGameData.runeArcActive` (buffs.md section 4).
@@ -121,8 +121,8 @@ GREAT_RUNE_SPEFFECT = {
 # 10 physick tear, 0 normal item.
 SPELL_TYPES = (5, 16, 17, 18)
 PVP_TAGS = ('Invasions', 'Duels', 'Co-op/Gank', '2v2', 'Ladder')
-STATE_SKIPPED = (197, 315, 316)          # accumulator `0x1404f486a` skips these
-# `spCategory` sets read out of `FUN_1405005a0` (R2c) and `FUN_140500c40` (R3), buffs.md section 3.
+STATE_SKIPPED = (197, 315, 316)          # accumulator `0x1404f571a` skips these
+# `spCategory` sets read out of `FUN_140501450` (R2c) and `FUN_140501af0` (R3), buffs.md section 3.
 CAT_SAME_PRIO = frozenset((100, 200, 201))
 CAT_SAME = frozenset((110, 130, 131, 132, 133, 140, 180, *range(150, 165), 1003, 1004, 1005, 1006))
 CAT_E_SIDE = frozenset(range(165, 175))
@@ -680,8 +680,8 @@ class Buffs:
 
     # -- stacking -----------------------------------------------------------------------------
     def _clash(self, n, e):
-        """R2, `FUN_1404fc0c0` over one live entry `e` for the new row `n`."""
-        if e['effectEndurance'] <= 0.0:          # `FUN_140500be0` skip (meaning `INFERRED`)
+        """R2, `FUN_1404fcf70` over one live entry `e` for the new row `n`."""
+        if e['effectEndurance'] <= 0.0:          # `FUN_140501a90` skip (meaning `INFERRED`)
             return False
         if e['id'] == n['id'] and e['spCategory'] != 10:
             return True
@@ -698,7 +698,7 @@ class Buffs:
         return e['spCategory'] in CAT_E_SIDE and e['spCategory'] == c
 
     def _target(self, n, e):
-        """R3, `FUN_140500c40`: may `n` take over the slot of live entry `e`."""
+        """R3, `FUN_140501af0`: may `n` take over the slot of live entry `e`."""
         c = n['spCategory']
         if c == 20:
             return e['id'] == n['id']
@@ -715,9 +715,9 @@ class Buffs:
     def stack(self, entries):
         """Apply entries in order through the add path; returns the survivors and the refusals.
 
-        R1 (`FUN_1404fc690`): `spCategory >= 10000` is refused while one of that category lives.
-        R2 (`FUN_1404fc0c0`): no clash -> a new entry, i.e. the buff stacks.
-        R3 (`FUN_140500c40`): clash -> the first live entry R3 accepts is re-pointed at the new id
+        R1 (`FUN_1404fd540`): `spCategory >= 10000` is refused while one of that category lives.
+        R2 (`FUN_1404fcf70`): no clash -> a new entry, i.e. the buff stacks.
+        R3 (`FUN_140501af0`): clash -> the first live entry R3 accepts is re-pointed at the new id
         with a full new duration; none -> the new buff is refused. See buffs.md section 3.
         """
         live, refused = [], []
@@ -774,13 +774,13 @@ class Buffs:
                         `by_point/100` under the same flag.
         Post-defense, on the damage:
           `atk_rate[e]` product of `*AttackRate` (entries with 0 skipped; `by_dmg/100` under the
-                        flag), already cut to a whole percent as `FUN_140d24a30` stores it.
+                        flag), already cut to a whole percent as `FUN_140d278a0` stores it.
           `pvp_rate[e]` attacker `atkPlayerDmgCorrectRate` product when `pvp`, else
                         `atkEnemyDmgCorrectRate`.
         `status` sums build-up adds. `stats` are attribute adds, which change AR through scaling:
         feed them to `er-mechanics-ar.py`. `rate_points` are the `change*Point` scaling-rate adds,
         `er-mechanics-ar.attack_rating(rate_adds=...)`. `stamina_rate` is the `staminaAttackRate`
-        product, the multiplier `FUN_14068aa80` puts on a guarded hit's stamina damage
+        product, the multiplier `FUN_14068bd80` puts on a guarded hit's stamina damage
         (info+0x28); that it passes the same hand gate is `INFERRED` from the right/left row pairs
         (Royal Knight's Resolve 1701 `wepParamChange` 1, 1703 2).
 
@@ -828,7 +828,7 @@ class Buffs:
                 continue
             for k, f in STATUS.items():
                 status[k] += int(r[f])
-            # Plain int sum, not scaled by the byPoint/byRate correction (`FUN_1404f4520`).
+            # Plain int sum, not scaled by the byPoint/byRate correction (`FUN_1404f53d0`).
             for k, f in RATE_POINTS.items():
                 points[k] += int(r[f])
             use = r['isUseAtkParamAtkPowerCorrect']

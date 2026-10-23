@@ -3,21 +3,21 @@
 // `include!`d into `lib.rs` so it shares the crate's flat module namespace (same pattern
 // the product's telemetry writers use) while keeping each file under the size gate.
 //
-// `FUN_14240fd70` == `SaveLoad2::SLSaveSession`'s job body, the function the SL worker
+// `FUN_142413d20` == `SaveLoad2::SLSaveSession`'s job body, the function the SL worker
 // thread runs to perform one save. Its return is the moment the bypassed save has finished
 // writing, and it is the only completion signal in this chain that does not require
 // somebody to poll.
 //
-// Why a poll cannot be relied on (1.16.2 decompile, shift 0):
+// Why a poll cannot be relied on (1.16.2 decompile; the names are the 2.7.2.0 functions):
 //
-//   * `FUN_140e6e430` (the status poll) reports "terminal" as case `0x14`, and 0x14 is
-//     produced by `FUN_14240a1f0` only when `FUN_14240c270(queue, id)` fails to find the
+//   * `FUN_140e71990` (the status poll) reports "terminal" as case `0x14`, and 0x14 is
+//     produced by `FUN_14240e1a0` only when `FUN_142410220(queue, id)` fails to find the
 //     job -- i.e. after the worker has removed it from the queue. It is strictly later than
 //     the write, and nothing in the job body ever sets a terminal state itself: the body
 //     sets `job+0x98` to 0x16 on entry and 2 mid-write, and both map to the poll's
 //     `break -> return 1` ("still in flight") arm.
 //   * The poll has exactly two consumers: `CS::MoveMapStep::DoSaveStuff`, gated on
-//     `GameMan::IsSaveState1()`, and `FUN_14082a0f0`, the "saving..." MenuJob. The Save Game
+//     `GameMan::IsSaveState1()`, and `FUN_14082b8e0`, the "saving..." MenuJob. The Save Game
 //     commit closes the menus before it fires (deliberately -- it is what stops the b73-only
 //     lane stealing the bypass token), so the MenuJob consumer may not exist at all for our
 //     commit.
@@ -26,19 +26,19 @@
 // place and verified, and `bypass_final_status` was still unset 900 ticks later.
 //
 // The body's own result is right there when it returns. `SLSession` (base ctor
-// `FUN_14240d110`) holds a refcounted `SaveLoad2::detail::SLSessionResultInfo*` at `+0xa0`;
-// `FUN_14240ebd0` initialises its `+0x10` code to 0, every failure path in the body writes a
-// non-zero code there through `FUN_14240dc40`, and `FUN_14240a180` -- the getter the poll
+// `FUN_1424110c0`) holds a refcounted `SaveLoad2::detail::SLSessionResultInfo*` at `+0xa0`;
+// `FUN_142412b80` initialises its `+0x10` code to 0, every failure path in the body writes a
+// non-zero code there through `FUN_142411bf0`, and `FUN_14240e130` -- the getter the poll
 // itself uses on the terminal arm -- reads that exact field. Reading it at the body's return
 // therefore yields the same verdict the poll would eventually report, one queue-drain
 // earlier and with nobody having to ask.
 
-/// `FUN_14240fd70` -- `SaveLoad2::SLSaveSession`'s job body (worker thread), reached only
-/// through the vtable the save-job constructor `FUN_14240fa50` installs. That constructor
-/// has one call site, `FUN_14240e6f0`, the save-side worker enqueue -- so this body runs
-/// for saves and for nothing else. Loads build a different job through `FUN_14240e420`.
+/// `FUN_142413d20` -- `SaveLoad2::SLSaveSession`'s job body (worker thread), reached only
+/// through the vtable the save-job constructor `FUN_142413a00` installs. That constructor
+/// has one call site, `FUN_1424126a0`, the save-side worker enqueue -- so this body runs
+/// for saves and for nothing else. Loads build a different job through `FUN_1424123d0`.
 #[cfg(windows)]
-const SL_SAVE_JOB_BODY_RVA: usize = 0x240fd70;
+const SL_SAVE_JOB_BODY_RVA: usize = 0x2413d20;
 // `SL_SAVE_JOB_BODY_SIG`: `mov rax,rsp; push rbp/rdi/r12/r14/r15; lea rbp,[rax-0x5f];
 // sub rsp,0xb0`, assembled from those named instructions by this crate's `build.rs`.
 include!(concat!(
@@ -76,7 +76,7 @@ static BYPASS_COMPLETED_VIA_JOB_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// No terminal status has been observed for the current commit.
 pub const BYPASS_STATUS_SOURCE_NONE: usize = 0;
-/// The status came from a native poll consumer calling `FUN_140e6e430`.
+/// The status came from a native poll consumer calling `FUN_140e71990`.
 pub const BYPASS_STATUS_SOURCE_POLL: usize = 1;
 /// The status came from `SLSaveSession`'s job body returning on the SL worker thread.
 pub const BYPASS_STATUS_SOURCE_JOB: usize = 2;
@@ -84,7 +84,7 @@ pub const BYPASS_STATUS_SOURCE_JOB: usize = 2;
 /// [`BYPASS_STATUS_SOURCE_NONE`]: the save is known-dead rather than merely unobserved.
 pub const BYPASS_STATUS_SOURCE_SUBMIT_FAILED: usize = 3;
 
-/// Trampoline for `FUN_14240fd70` (0 = the observer is not installed).
+/// Trampoline for `FUN_142413d20` (0 = the observer is not installed).
 #[cfg(windows)]
 static ORIG_SAVE_JOB_BODY: AtomicUsize = AtomicUsize::new(0);
 /// Times the SL worker picked up a save job and entered its body. Under armed suppression
@@ -153,7 +153,7 @@ pub fn save_job_completions() -> u64 {
 /// between the reads and reports it as quiescent.
 ///
 /// This is the writer-side interlock the destination redirect needs. The native in-place
-/// writer `FUN_1424142e0` opens the container once per dirty block, so a redirect window that
+/// writer `FUN_142418290` opens the container once per dirty block, so a redirect window that
 /// closes mid-body patches the remaining blocks into whatever the unredirected path resolves
 /// to -- the very file the user chose not to overwrite.
 pub fn save_job_writer_idle() -> bool {
@@ -181,10 +181,10 @@ pub fn save_job_no_trampoline() -> u64 {
 /// Map an `SLSessionResultInfo` code onto the status space [`take_bypass_final_status`]
 /// reports in, using the game's own table.
 ///
-/// This is `FUN_140e6e430`'s terminal (`case 0x14`) arm verbatim: it calls `FUN_14240a180`,
+/// This is `FUN_140e71990`'s terminal (`case 0x14`) arm verbatim: it calls `FUN_14240e130`,
 /// which returns exactly this field, and then maps `0 -> 0`, `3 -> 7`, `2|4 -> 8`, `7 -> 2`,
 /// everything else `-> 9`. Reproducing the mapping rather than the side effects is
-/// deliberate -- the native arm also releases the request and sets the `DAT_14458937d`
+/// deliberate -- the native arm also releases the request and sets the `DAT_14459041d`
 /// save-error flag, and an observer must not do either.
 ///
 /// Note what this cannot do: turn an unknown code into a success. Only the literal 0 the
@@ -276,7 +276,7 @@ pub fn adopt_completed_save_job_as_final_status() -> Option<u32> {
     Some(status)
 }
 
-/// Observer on `FUN_14240fd70`, `SaveLoad2::SLSaveSession`'s job body. **Runs on the SL
+/// Observer on `FUN_142413d20`, `SaveLoad2::SLSaveSession`'s job body. **Runs on the SL
 /// worker thread**, not the game thread.
 ///
 /// Pure observation: it calls the body and records two atomics around it. It deliberately
@@ -287,7 +287,7 @@ pub fn adopt_completed_save_job_as_final_status() -> Option<u32> {
 /// line emitted) by the product's commit tick on the game thread instead.
 ///
 /// The result is read after the body returns, from `SLSession+0xa0 -> +0x10`, which is the
-/// same field `FUN_14240a180` returns and the poll's terminal arm maps. The job object is
+/// same field `FUN_14240e130` returns and the poll's terminal arm maps. The job object is
 /// still owned by the queue at that point, so the read is against live memory.
 #[cfg(windows)]
 unsafe extern "system" fn save_job_body_hook(job: usize) {
@@ -327,7 +327,7 @@ fn read_save_job_result(job: usize) -> Option<u32> {
 }
 
 /// Bind the write-completion observer. Its own `MhHook`: nothing else in the process detours
-/// `FUN_14240fd70`, and it is a one-argument void target the union's four-argument shape does
+/// `FUN_142413d20`, and it is a one-argument void target the union's four-argument shape does
 /// not describe.
 ///
 /// Non-fatal like every other observer -- losing it costs the prompt completion signal and

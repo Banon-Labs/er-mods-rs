@@ -14,7 +14,7 @@
 //!
 //! # Where the fields are
 //!
-//! `GXRenderingSystem` (`[0x1447f37a8]`) holds the environment manager inline at `+0xc500`; each
+//! `GXRenderingSystem` (`[0x1447f67c8]`) holds the environment manager inline at `+0xc500`; each
 //! gparam group's manager pointer sits at a fixed offset in it, and each manager keeps its
 //! instances in a two-level list map (bank, then id). A light set's fields are at fixed offsets.
 //! The tone map's and the ray tracing's are found through the accessor table each instance
@@ -32,7 +32,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
@@ -42,10 +42,11 @@ use crate::log;
 
 include!(concat!(env!("OUT_DIR"), "/generated_light_prologues.rs"));
 
-/// `GXParamDB::Update(this, f32 time, u32)`.
-const PARAM_DB_UPDATE_1171_RVA: usize = 0x01a4_e7a0;
-/// `GXRenderingSystem*`.
-const RENDERING_SYSTEM_1171_RVA: usize = 0x047f_37a8;
+/// `GXParamDB::Update(this, f32 time, u32)`, 2.7.2.0.
+const PARAM_DB_UPDATE_RVA: usize = 0x01a4_fe90;
+/// `GXRenderingSystem*`, 2.7.2.0 `0x47f67c8`. The same global `er-game-base` declares, so it is
+/// taken from there rather than written out a second time.
+const RENDERING_SYSTEM_RVA: usize = er_game_base::rva::GX_RENDERING_SYSTEM_GLOBAL_RVA;
 /// `GXEnvironmentManager`, inline in the rendering system.
 const ENVIRONMENT: usize = 0xc500;
 
@@ -121,7 +122,7 @@ type ParamDbUpdateFn = unsafe extern "system" fn(usize, f32, u32);
 
 /// The trampoline to the game's own `GXParamDB::Update`.
 static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
-/// Where the rendering system's global is in the running module, carried from 1.17.1.
+/// Where the rendering system's global is in the running 2.7.2.0 module.
 static RENDERING_SYSTEM: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
@@ -140,37 +141,34 @@ fn refuse(why: &'static str) {
 /// Detour `GXParamDB::Update`. Called from the Sky tab's install thread once the game's task
 /// scheduler exists, so the game's code is in place.
 pub fn install() {
-    // Measured on 1.17.1 and carried from there: `game_rva`'s 1.16.2 ledger has no row for
-    // either. The opening bytes are compared below before anything is hooked.
-    let (Some(update_rva), Some(rendering_rva)) = (
-        carry_1171_rva(PARAM_DB_UPDATE_1171_RVA),
-        carry_1171_rva(RENDERING_SYSTEM_1171_RVA),
-    ) else {
+    // Measured on 2.7.2.0. Any other build refuses here; the opening bytes are compared below
+    // before anything is hooked.
+    if !is_supported_build() {
         log(format_args!(
-            "sun: no carry of the 1.17.1 addresses to {:?}",
-            game_file_version()
+            "sun: the addresses were measured on 2.7.2.0 and this build is another: {}",
+            describe_build()
         ));
-        refuse("no carry of the 1.17.1 addresses to this build");
+        refuse("this build is not 2.7.2.0, the build the addresses were measured on");
         return;
-    };
+    }
     let Ok(base) = game_module_base() else {
         refuse("no game module");
         return;
     };
-    let entry = base + update_rva;
-    let mut bytes = [0u8; PARAM_DB_UPDATE_1171_PROLOGUE.len()];
+    let entry = base + PARAM_DB_UPDATE_RVA;
+    let mut bytes = [0u8; PARAM_DB_UPDATE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
     // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
     let matches = read
-        && (bytes == PARAM_DB_UPDATE_1171_PROLOGUE
-            || (bytes[0] == 0xe9 && bytes[5..] == PARAM_DB_UPDATE_1171_PROLOGUE[5..]));
+        && (bytes == PARAM_DB_UPDATE_PROLOGUE
+            || (bytes[0] == 0xe9 && bytes[5..] == PARAM_DB_UPDATE_PROLOGUE[5..]));
     if !matches {
         log(format_args!("sun: 0x{entry:x} opens {bytes:02x?}"));
         refuse("GXParamDB::Update does not open as expected");
         return;
     }
-    RENDERING_SYSTEM.store(base + rendering_rva, Ordering::Release);
+    RENDERING_SYSTEM.store(base + RENDERING_SYSTEM_RVA, Ordering::Release);
     // SAFETY: MinHook's own initialisation; a second call reports it already ran.
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
@@ -180,7 +178,7 @@ pub fn install() {
             return;
         }
     }
-    // SAFETY: a 1.17.1 entry carried to the running module whose opening bytes were just
+    // SAFETY: a 2.7.2.0 entry on the running 2.7.2.0 module whose opening bytes were just
     // checked, and a detour with its exact signature.
     let hook = match unsafe {
         MhHook::new_following_arxan(entry as *mut c_void, param_db_update as *mut c_void)

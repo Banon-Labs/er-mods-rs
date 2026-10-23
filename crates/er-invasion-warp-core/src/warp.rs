@@ -5,13 +5,15 @@
 //! Three candidates were reversed against ER 1.16.2. The plan doc named two of them and chose
 //! neither; the one actually used here is the third, and it is the engine's own.
 //!
-//! * `WarpPlayer` (`0x1405f7ad0`) is **entity-id anchored** -- it moves you to a map's initial
-//!   spawn entity, not to a coordinate. Unusable for arbitrary points.
-//! * `PlayerIns::Respawn`, the `ChrIns` vtable slot `+0x5a0` (target `0x140657b60`, read out of
-//!   the shipped image at `*(u64*)0x142a7d0e0`), does take arbitrary coordinates -- but it
+//! * `WarpPlayer` (`0x1405f8dd0`, 1.16.2 `0x1405f7ad0`) is **entity-id anchored** -- it moves you
+//!   to a map's initial spawn entity, not to a coordinate. Unusable for arbitrary points.
+//! * `PlayerIns::Respawn`, the `ChrIns` vtable slot `+0x5a0` (target `0x140658e60`; on 1.16.2
+//!   `0x140657b60`, read out of the image at `*(u64*)0x142a7d0e0`), does take arbitrary
+//!   coordinates -- but it
 //!   **heals to full and reinitialises SpEffects**, and it performs no map load or streaming
 //!   request at all, so a long-distance teleport would drop the player into unstreamed world.
-//! * `TriggerAreaReload` (`0x1405f2890`), the EMEVD `Event2003` warp, is an arbitrary-coordinate
+//! * `TriggerAreaReload` (`0x1405f3b90`, 1.16.2 `0x1405f2890`), the EMEVD `Event2003` warp, is an
+//!   arbitrary-coordinate
 //!   warp **with** the load. Its input shape is `BlockId + block-local xyz + euler yaw` --
 //!   which is, field for field, the `.aip` record this crate already decodes. That is the one
 //!   replicated here.
@@ -22,7 +24,8 @@
 //!
 //! # Why the coordinates are handed over untouched
 //!
-//! `MoveMapStep`'s spawn resolver (`FUN_140afcf60`) reads the explicit-spawn slot and calls
+//! `MoveMapStep`'s spawn resolver (`0x140afe740`, 1.16.2 `FUN_140afcf60`) reads the explicit-spawn
+//! slot and calls
 //! `ConvertBlockCoordsToPhysicsCoords` on it *itself*. So the block-local `.aip` xyz goes in
 //! raw: converting first would double-apply the block origin.
 //!
@@ -35,19 +38,21 @@
 //! the number is zero. Nothing here starts, fakes or spoofs invasion/multiplayer state; no
 //! `CSNetMan`, `QuickmatchManager` or `CSBreakInPointManager` code is entered.
 //!
-//! Every RVA below is byte-checked against `eldenring-deobf.bin` at shift 0
-//! (`python3 scripts/check-dump-deobf-identity.py --count 32 0x<va>`); see
-//! `docs/plans/world-map-invasion-warp.md`.
+//! Every RVA constant below is a 2.7.2.0 rva, the build the DLL runs on (image
+//! `eldenring-deobf-1.17.2.bin`), and an address quoted in a comment is 2.7.2.0 unless labelled
+//! with another build. This was reversed on the 1.16.2 dump, whose addresses are labelled 1.16.2;
+//! see `docs/plans/world-map-invasion-warp.md`.
 
 use crate::invasion_warp::InvasionWarpTarget;
 
-/// The image base every VA in the RE notes is expressed against. For 1.16.2 the dump VA, the
-/// `eldenring-deobf.bin` VA and the live runtime VA are all identical, so `RVA = VA - this`.
+/// The image base every VA in the RE notes is expressed against. The image is flat and its base
+/// is `0x140000000`, so `RVA = VA - this`.
 pub const RE_IMAGE_BASE: usize = 0x1_4000_0000;
 
-/// `CS::GameMan::SetDisableMapEnterAnim(bool)` -- `0x14067a850`.
-pub const SET_DISABLE_MAP_ENTER_ANIM_RVA: usize = 0x67_a850;
-/// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- `0x14067abd0`.
+/// `CS::GameMan::SetDisableMapEnterAnim(bool)` -- `0x14067bb50` (1.16.2 `0x14067a850`).
+pub const SET_DISABLE_MAP_ENTER_ANIM_RVA: usize = 0x67_bb50;
+/// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- `0x14067bed0` (1.16.2
+/// `0x14067abd0`).
 ///
 /// The literal is declared exactly once, in `er_game_base::rva`, because the product crate
 /// needs the same address and two independent literals would be free to drift apart. There is
@@ -55,45 +60,51 @@ pub const SET_DISABLE_MAP_ENTER_ANIM_RVA: usize = 0x67_a850;
 /// second literal the alias-drift gate exists to prevent.
 #[cfg(windows)]
 pub use er_game_base::rva::SET_MOVE_MAP_STEP_BLOCK_ID_RVA;
-/// `FUN_14067ab20(FloatVector4 *blockLocalPos, FloatVector4 *euler)` -- the explicit-spawn
-/// setter: writes `GameMan+0xc90`, `GameMan+0xca0`, and sets `GameMan+0xcb0 = 1`.
-pub const SET_EXPLICIT_SPAWN_RVA: usize = 0x67_ab20;
-/// `CS::GameMan::SetInitialAreaEntityId(int *in)` -- `0x14067abb0`.
+/// `FUN_14067be20` (1.16.2 `FUN_14067ab20`)`(FloatVector4 *blockLocalPos, FloatVector4 *euler)`
+/// -- the explicit-spawn setter: writes `GameMan+0xc90`, `GameMan+0xca0`, and sets
+/// `GameMan+0xcb0 = 1`.
+pub const SET_EXPLICIT_SPAWN_RVA: usize = 0x67_be20;
+/// `CS::GameMan::SetInitialAreaEntityId(int *in)` -- `0x14067beb0` (1.16.2 `0x14067abb0`).
 ///
 /// `STEP_MoveMap_Init` latches this into `MoveMapStep+0xd8` and it becomes the spawn-point
 /// entity id the destination-side resolver looks for. Grace fast-travel uses it with
 /// `bonfireEntityId - 970`; we use [`DEFAULT_SPAWN_ENTITY_ID`].
-pub const SET_INITIAL_AREA_ENTITY_ID_RVA: usize = 0x67_abb0;
+pub const SET_INITIAL_AREA_ENTITY_ID_RVA: usize = 0x67_beb0;
 /// Spawn-point entity id meaning "this map's own default player start".
 ///
-/// `FUN_14061fc80` scans the destination MSB's Player parts and treats an unset entity id
+/// `0x140620f80` (1.16.2 `FUN_14061fc80`) scans the destination MSB's Player parts and treats an
+/// unset entity id
 /// (`-1`) as 0, so 0 matches the map's authored `c0000_0000` start. Verified present in every
 /// non-overworld map that has Player parts at all.
 pub const DEFAULT_SPAWN_ENTITY_ID: u32 = 0;
-/// `FUN_14067a1c0()` -- reads the `GameMan+0xcb0` use-explicit-spawn flag back.
-pub const GET_EXPLICIT_SPAWN_FLAG_RVA: usize = 0x67_a1c0;
-/// `FUN_1406792a0(FloatVector4 *outPos, FloatVector4 *outEuler)` -- reads `GameMan+0xc90` /
-/// `+0xca0` back. This is the requested-position / requested-yaw oracle.
-pub const GET_EXPLICIT_SPAWN_RVA: usize = 0x67_92a0;
-/// `WarpNextStageKick_()` -- `0x1405f7b70`. Kicks the stage transition.
-pub const WARP_NEXT_STAGE_KICK_RVA: usize = 0x5f_7b70;
-/// `CS::CSSessionManagerImp::SetupMapReentry(this, bool)` -- `0x140cafc30`.
-pub const SETUP_MAP_REENTRY_RVA: usize = 0xca_fc30;
-/// `GLOBAL_CSSessionManager` -- `0x143d7a4d0`, read from
-/// `1405f2935: mov 0x3787b94(%rip),%rcx  # 0x143d7a4d0`.
+/// `FUN_14067b4c0` (1.16.2 `FUN_14067a1c0`)`()` -- reads the `GameMan+0xcb0` use-explicit-spawn
+/// flag back.
+pub const GET_EXPLICIT_SPAWN_FLAG_RVA: usize = 0x67_b4c0;
+/// `FUN_14067a5a0` (1.16.2 `FUN_1406792a0`)`(FloatVector4 *outPos, FloatVector4 *outEuler)` --
+/// reads `GameMan+0xc90` / `+0xca0` back. This is the requested-position / requested-yaw oracle.
+pub const GET_EXPLICIT_SPAWN_RVA: usize = 0x67_a5a0;
+/// `WarpNextStageKick_()` -- `0x1405f8e70` (1.16.2 `0x1405f7b70`). Kicks the stage transition.
+pub const WARP_NEXT_STAGE_KICK_RVA: usize = 0x5f_8e70;
+/// `CS::CSSessionManagerImp::SetupMapReentry(this, bool)` -- `0x140cb2a60` (1.16.2
+/// `0x140cafc30`).
+pub const SETUP_MAP_REENTRY_RVA: usize = 0xcb_2a60;
+/// `GLOBAL_CSSessionManager` -- `0x143d81560` on 2.7.2.0 (1.16.2 `0x143d7a4d0`, read from
+/// `1405f2935: mov 0x3787b94(%rip),%rcx  # 0x143d7a4d0`).
 ///
 /// Derived, not re-declared: the product reads the same global from `MoveMapStep`'s
 /// ending-request evaluator, so the literal lives once in `er_game_base::rva`.
 pub const SESSION_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA;
-/// `GetCurrentMapId(BlockId *out)` -- `0x1405eefb0`. Used to report where the warp started.
-pub const GET_CURRENT_MAP_ID_RVA: usize = 0x5e_efb0;
+/// `GetCurrentMapId(BlockId *out)` -- `0x1405f02b0` (1.16.2 `0x1405eefb0`). Used to report where
+/// the warp started.
+pub const GET_CURRENT_MAP_ID_RVA: usize = 0x5f_02b0;
 /// `ConvertBlockCoordsToPhysicsCoords(FloatVector3 *out, FloatVector3 *blockLocal, BlockId *id)`
-/// -- `0x14061e120`. Block-local -> physics space, handling the overworld and interior cases,
-/// and returning `false` when the block's world info is not resident. Session-free: its whole
-/// body reads `GLOBAL_FieldArea->worldInfoOwner2`.
-pub const CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA: usize = 0x61_e120;
-/// `ChrIns::GetPhysicsPosition(ChrIns *chr, FloatVector4 *out)` -- `0x1403f0bf0`.
-pub const CHR_INS_GET_PHYSICS_POSITION_RVA: usize = 0x3f_0bf0;
+/// -- `0x14061f420` (1.16.2 `0x14061e120`). Block-local -> physics space, handling the overworld
+/// and interior cases, and returning `false` when the block's world info is not resident.
+/// Session-free: its whole body reads `GLOBAL_FieldArea->worldInfoOwner2`.
+pub const CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA: usize = 0x61_f420;
+/// `ChrIns::GetPhysicsPosition(ChrIns *chr, FloatVector4 *out)` -- `0x1403f0e20` (1.16.2
+/// `0x1403f0bf0`).
+pub const CHR_INS_GET_PHYSICS_POSITION_RVA: usize = 0x3f_0e20;
 
 /// Offset of `protocolState` on `CSSessionManagerImp`, from
 /// `1405f293c: cmpl $0x6,0x10(%rcx)`.
@@ -101,7 +112,7 @@ pub const SESSION_PROTOCOL_STATE_OFFSET: usize = 0x10;
 /// The `InGame` protocol state -- the literal `6` that same compare tests.
 pub const SESSION_PROTOCOL_STATE_IN_GAME: i32 = 6;
 /// The `WaitReentryToMap` protocol state -- the literal `7` that `SetupMapReentry` **writes as
-/// its very first statement** (`140cafc47: movl $0x7,0x10(%rcx)`).
+/// its very first statement** (`140cb2a77: movl $0x7,0x10(%rcx)` on 2.7.2.0, 1.16.2 `140cafc47`).
 ///
 /// This is why the re-entry is self-latching: entering it moves the session out of `InGame`, so a
 /// second warp issued before the engine has driven the session back sees `7` and skips the
@@ -199,7 +210,8 @@ pub const BLOCK_ID_NONE: u32 = 0xFFFF_FFFF;
 /// A 16-byte vector in the engine's layout.
 ///
 /// `align(16)` is not decoration. The lean teleport path
-/// (`CSChrPhysicsModule::ForceSetPosition`, `0x14045f910`) loads its argument with **`MOVAPS`**,
+/// (`CSChrPhysicsModule::ForceSetPosition`, `0x14045ff50`, 1.16.2 `0x14045f910`) loads its
+/// argument with **`MOVAPS`**,
 /// which `#GP`s on an unaligned address. The reload path used here writes with `MOVUPS` and
 /// would tolerate misalignment, but the type is shared and a future caller must not have to
 /// rediscover that the hard way.
@@ -234,12 +246,14 @@ pub const fn spawn_position(position: [f32; 3]) -> FloatVector4 {
 /// `.aip` yaw -> the euler `FloatVector4` the explicit-spawn slot expects.
 ///
 /// The orientation argument is **euler angles in radians**, not a quaternion:
-/// `CSChrPhysicsModule::SetOrientation` (`0x14045f7a0`) feeds it straight to `EulerToQuat`
-/// (`0x140461a00`), which reads `.x`, `.y`, `.z` as half-angle rotations about `DL_X/Y/Z`.
-/// Yaw is the `.y` slot -- confirmed by the inverse conversion
-/// (`EulerFromTransformationMatrix`, `0x14039b0b0`, derives `.y` from `atan2` in the XZ plane)
-/// and by `SosSignMan::SetMultiplayJoinData` (`0x1406fb577`) writing `{0, spawnAngle, 0, 0}`,
-/// where `spawnAngle` occupies the same wire slot as the `.aip` fourth float.
+/// `CSChrPhysicsModule::SetOrientation` (`0x14045fde0`, 1.16.2 `0x14045f7a0`) feeds it straight
+/// to `EulerToQuat` (`0x140462040`, 1.16.2 `0x140461a00`), which reads `.x`, `.y`, `.z` as
+/// half-angle rotations about `DL_X/Y/Z`. Yaw is the `.y` slot -- confirmed by the inverse
+/// conversion (`EulerFromTransformationMatrix`, `0x14039b0c0`, 1.16.2 `0x14039b0b0`, derives `.y`
+/// from `atan2` in the XZ plane)
+/// and by `SosSignMan::SetMultiplayJoinData` (2.7.2.0 `0x1406fc877`, 1.16.2 `0x1406fb577`)
+/// writing `{0, spawnAngle, 0, 0}`, where `spawnAngle` occupies the same wire slot as the `.aip`
+/// fourth float.
 ///
 /// So: **no negation, no degree conversion, and no wrapping.** The raw authored value goes in.
 /// [`InvasionWarpTarget::heading_radians`] exists for compass/pin display, not for this -- using
@@ -364,11 +378,11 @@ pub enum WarpError {
     /// `MoveMapStep` would use that stale coordinate instead of the destination block's own
     /// spawn, dropping the player at another map's position inside this one.
     StaleSpawnSlotArmed { flag: u8 },
-    /// The running build is not the one these RVAs were reverse-engineered against, and this
-    /// address has no mapping onto it. Refused before the call, because making it is not a
-    /// degraded warp but a dead process: on 1.17 `GET_CURRENT_MAP_ID_RVA` is the second byte of
-    /// a five-byte `call`, and the `9a` it lands on is a far call, invalid in long mode -- which
-    /// is exactly how this crate killed the game 491ms after load on 2026-08-29.
+    /// The running build is not 2.7.2.0, the build these RVAs were measured on, so the address
+    /// was refused. Refused before the call, because making it is not a degraded warp but a dead
+    /// process: on 1.17 the 1.16.2 value of `GET_CURRENT_MAP_ID_RVA` was the second byte of a
+    /// five-byte `call`, and the `9a` it lands on is a far call, invalid in long mode -- which is
+    /// exactly how this crate killed the game 491ms after load on 2026-08-29.
     AddressUnavailable { what: &'static str },
 }
 
@@ -556,9 +570,10 @@ mod native {
 
         // Vanilla step 4: arm the explicit spawn with the .aip record, untouched.
         //
-        // Skipped entirely for a provisional target. `FUN_140afcf60` reads the explicit-spawn
-        // flag and, when it is clear, resolves the destination block's own authored player start
-        // out of that map's MSB instead (`FUN_14061fc80`, on the destination side, after the
+        // Skipped entirely for a provisional target. The spawn resolver (`0x140afe740`, 1.16.2
+        // `FUN_140afcf60`) reads the explicit-spawn flag and, when it is clear, resolves the
+        // destination block's own authored player start out of that map's MSB instead
+        // (`0x140620f80`, 1.16.2 `FUN_14061fc80`, on the destination side, after the
         // load). That is the same coordinate-free path the shipped `WarpPlayer` EMEVD
         // instruction and grace fast-travel take -- neither of them ever calls
         // `SET_EXPLICIT_SPAWN_RVA`. It is what lets a dungeon the player has never entered be a
@@ -889,16 +904,16 @@ mod tests {
 
     #[test]
     fn the_rvas_are_the_byte_checked_vas_minus_the_image_base() {
-        // Guards against a transcription slip turning a verified VA into a crash-hook.
+        // Guards against a transcription slip turning a verified 2.7.2.0 VA into a crash-hook.
         for (rva, va) in [
-            (SET_DISABLE_MAP_ENTER_ANIM_RVA, 0x1_4067_a850_usize),
-            (SET_EXPLICIT_SPAWN_RVA, 0x1_4067_ab20),
-            (GET_EXPLICIT_SPAWN_FLAG_RVA, 0x1_4067_a1c0),
-            (GET_EXPLICIT_SPAWN_RVA, 0x1_4067_92a0),
-            (WARP_NEXT_STAGE_KICK_RVA, 0x1_405f_7b70),
-            (SETUP_MAP_REENTRY_RVA, 0x1_40ca_fc30),
-            (SESSION_MANAGER_GLOBAL_RVA, 0x1_43d7_a4d0),
-            (GET_CURRENT_MAP_ID_RVA, 0x1_405e_efb0),
+            (SET_DISABLE_MAP_ENTER_ANIM_RVA, 0x1_4067_bb50_usize),
+            (SET_EXPLICIT_SPAWN_RVA, 0x1_4067_be20),
+            (GET_EXPLICIT_SPAWN_FLAG_RVA, 0x1_4067_b4c0),
+            (GET_EXPLICIT_SPAWN_RVA, 0x1_4067_a5a0),
+            (WARP_NEXT_STAGE_KICK_RVA, 0x1_405f_8e70),
+            (SETUP_MAP_REENTRY_RVA, 0x1_40cb_2a60),
+            (SESSION_MANAGER_GLOBAL_RVA, 0x1_43d8_1560),
+            (GET_CURRENT_MAP_ID_RVA, 0x1_405f_02b0),
         ] {
             assert_eq!(rva + RE_IMAGE_BASE, va, "rva 0x{rva:x} -> 0x{va:x}");
         }
@@ -911,7 +926,7 @@ mod tests {
     fn the_shared_move_map_step_rva_is_the_byte_checked_va() {
         assert_eq!(
             SET_MOVE_MAP_STEP_BLOCK_ID_RVA + RE_IMAGE_BASE,
-            0x1_4067_abd0
+            0x1_4067_bed0
         );
     }
 

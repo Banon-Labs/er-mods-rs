@@ -155,8 +155,8 @@ mod gpu {
 
     use super::{BASE_IMAGE, BLOCK_BYTES, BLOCK_DIM, FILL_IMAGE};
 
-    // The repository global and its lookup are 1.16.2 rvas shared with `er-r3-view`, translated
-    // for the running build by `er_game_base`.
+    // The repository global and its lookup are 2.7.2.0 rvas shared with `er-r3-view`, refused by
+    // `er_game_base` on any other build.
     use er_game_base::rva::{
         SCALEFORM_TEXTURE_LOOKUP_RVA, SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA,
     };
@@ -270,7 +270,7 @@ mod gpu {
             "SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA",
         );
         if repo_global == 0 {
-            return Err("texture repository global has no mapping for this build".to_owned());
+            return Err("texture repository global is refused on this build".to_owned());
         }
         let repo = unsafe { safe_read_usize(repo_global) }.unwrap_or(0);
         if repo == 0 {

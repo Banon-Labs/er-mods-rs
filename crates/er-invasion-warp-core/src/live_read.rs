@@ -33,12 +33,14 @@
 //! up as `value_nodes != count`, which returns an error the sampler simply retries. It cannot
 //! silently produce a plausible-but-wrong total, which is precisely what oracle 1 must not do.
 //!
-//! # Layout provenance (ELDEN RING 1.16.2; dump VA == deobf VA == runtime VA, shift 0)
+//! # Layout provenance (read on the 1.16.2 dump)
 //!
 //! Offsets are the 1.16.2 Ghidra structures, cross-checked against the `fromsoftware-rs`
 //! bindings this crate would otherwise use (`DLMap` = MSVC `std::map`, `AutoInvadePointBlockEntry`,
 //! `AutoInvadePoint`) and against `CSAutoInvadePoint`'s own lookup-by-`BlockId`
-//! (`0x140a693e0`), which walks `head->parent` down `left`/`right` testing `isNull`.
+//! (2.7.2.0 `0x140a6ab80`, 1.16.2 `0x140a693e0`), which walks `head->parent` down `left`/`right`
+//! testing `isNull`. Function addresses below give the 2.7.2.0 entry first; the listing is the
+//! 1.16.2 disassembly it was read from.
 //!
 //! | Ghidra type | field | offset | mirror in `fromsoftware-rs` |
 //! |---|---|---|---|
@@ -56,7 +58,7 @@
 //! | | `points` | `0x10` | `AutoInvadePointBlockEntry::head` |
 //!
 //! One point is a `FloatVector4`: `x`, `y`, `z`, `yaw`, matching the on-disk `.aip` record
-//! ([`crate::aip::AIP_POINT_LEN`]) because `AddForBlockId` (`0x140a69550`) `memcpy`s the file
+//! ([`crate::aip::AIP_POINT_LEN`]) because `AddForBlockId` (`0x140a6acf0`) `memcpy`s the file
 //! payload verbatim into a `fileSize - 0x10` allocation.
 //!
 //! # `pointCount` is 32 BITS, and its upper dword is uninitialised stack
@@ -64,7 +66,8 @@
 //! This resolves the open risk `docs/plans/world-map-invasion-warp.md` §6 flagged as "not proven
 //! either way offline". It is proven now, statically, and it decides how the field is read.
 //!
-//! `AddForBlockId` (`0x140a69550`) stages the map value on the stack and inserts it:
+//! `AddForBlockId` (2.7.2.0 `0x140a6acf0`) stages the map value on the stack and inserts it
+//! (1.16.2 disassembly, entry `0x140a69550`):
 //!
 //! ```text
 //! 140a695d5  MOV   ECX, dword ptr [RSI + 0xc]     ; count, a u32 in the .aip header
@@ -76,7 +79,7 @@
 //!
 //! The 16-byte copy carries `[RSP+0x34]` -- a stack slot this function never writes -- into the
 //! upper half of the value's 8-byte `pointCount`. The engine never notices because it only ever
-//! reads the low dword: `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0c4f0`) tests
+//! reads the low dword: `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0dc90`) tests
 //! `0 < (int)count` and loops `while ((int)i < (int)count)`.
 //!
 //! So this module reads `pointCount` as a **u32** and ignores the upper dword. Two consequences
@@ -713,7 +716,7 @@ mod tests {
 
     #[test]
     fn stale_stack_garbage_above_the_32_bit_point_count_is_ignored_not_treated_as_corruption() {
-        // `AddForBlockId` (0x140a69550) stores pointCount with a 32-bit MOV and then MOVUPS-copies
+        // `AddForBlockId` (0x140a6acf0) stores pointCount with a 32-bit MOV and then MOVUPS-copies
         // 16 bytes, dragging an uninitialised stack dword into the upper half of the slot. Reading
         // the field as the `usize` the fromsoftware-rs binding declares would see a colossal count
         // and reject every block; the engine itself only reads `(int)count`.

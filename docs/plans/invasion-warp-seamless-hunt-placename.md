@@ -625,10 +625,10 @@ session and must not be assumed.
 
 1. **Read `WorldMapPlaceNameParam` before touching anything.** Ghidra MCP on `:8765` (1.16.2, the only
    named dump) for the RTTI-adjacent code: `getXrefsTo` the vtable at `0x142ad61d0`, find the
-   constructor and the consumer, and decompile whatever does the point-in-region test. Then carry the
-   addresses to 1.17 through `scripts/map-rvas-1162-to-1170.py` -> `scripts/map-rvas-1170-to-1171.py`
-   and **read the 1.17.1 function before hooking anything** -- the installed game is 1.17.1 and every
-   address in the named dump describes 1.16.2. Also check whether the param is already reachable
+   constructor and the consumer, and decompile whatever does the point-in-region test. Then find
+   each one on `eldenring-deobf-1.17.2.bin` by its bytes (a vtable by its RTTI name) and **read the
+   2.7.2.0 function before hooking anything** -- the installed game is now 2.7.2.0 and every address
+   in the named dump describes 1.16.2 (`docs/game-build.md`). Also check whether the param is already reachable
    host-side through `crates/soulsformats` + `tools/er-param-inspect`, which would let the mapping be
    validated offline against `regulation.bin` with no game at all.
 2. **Confirm the specific case offline.** With the param readable, dump the row whose text id is the
@@ -871,11 +871,14 @@ Three defects follow:
 1. **The address is quoted with no build.** Per `AGENTS.md` that alone is worth reporting, and here
    it is not academic -- following it into 1.17 lands on `KeywordViewModel`.
 2. **Plan step 1's carry route is a category error.** It says to carry the address to 1.17 through
-   `scripts/map-rvas-1162-to-1170.py` -> `scripts/map-rvas-1170-to-1171.py`. Those tools match
-   `.text` functions by masked instruction bytes; they cannot carry an `.rdata` vtable, and the
-   1.17.1 mapper only models the `.text` `+0x70` shift at all. The measured `.rdata` drift for this
-   object is `+0x3080`, which neither tool would ever produce. Re-resolve the RTTI in the target
+   `scripts/map-rvas-1162-to-1170.py` -> `scripts/map-rvas-1170-to-1171.py`. Those tools (deleted
+   with the address carry on 2026-10-23) matched `.text` functions by masked instruction bytes;
+   they could not carry an `.rdata` vtable, and the 1.17.1 mapper only modelled the `.text` `+0x70`
+   shift at all. The measured `.rdata` drift for this object is `+0x3080`, which neither tool
+   would ever have produced. Re-resolve the RTTI in the target
    image instead -- it is a ten-line script and it is an identity check rather than an inference.
+   (Step 1 was rewritten on 2026-10-23 to find the vtable by its RTTI name on
+   `eldenring-deobf-1.17.2.bin`.)
 3. **Provenance conflict, unresolved.** `docs/recon/deobf-rtti-classmap.README.md:3` says the
    harvest is from Elden Ring **1.16.1**; `AGENTS.md` says `eldenring-deobf.bin` is **1.16.2**. One
    of the two is stale. The plan treats the TSV as interchangeable with the `:8765` (1.16.2) dump

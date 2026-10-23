@@ -4,7 +4,7 @@
 //
 // `scripts/me3-dll-conflicts.toml` and `scripts/check-shared-hook-rvas.py` both now claim, as of
 // the 2026-09-20 deletion of the `er-quit-rows` fork, that this workspace has exactly ONE hub:
-// `er_quickload.dll` is the only image left defining `er_effects_union_register`. That claim was
+// `er_quickload.dll` is the only image left defining `er_effects_union_register_2720`. That claim was
 // read out of the source tree, and a source read cannot see what is actually in the process --
 // Seamless, me3's own natives, and any companion a profile happens to carry are all loaded images
 // this repo does not compile.
@@ -20,7 +20,7 @@
 
 'use strict';
 
-const REGISTRARS = ['er_effects_union_register', 'er_effects_union_register5'];
+const REGISTRARS = ['er_effects_union_register_2720', 'er_effects_union_register5_2720'];
 
 // Count the failures, do not swallow them.
 //

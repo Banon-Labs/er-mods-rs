@@ -17,8 +17,8 @@ crate-type = ["cdylib"]
 # makes it co-loadable with the product and with every other shell.
 #
 # Tier A `er-game-base` only (no `game-types`): the store goes through
-# `er_game_base::mem::write_global_u8`, which owns the 1.16.2 -> 1.17 address translation and
-# REFUSES rather than writing a moved slot.
+# `er_game_base::mem::write_global_u8`, which takes a 2.7.2.0 rva and refuses on any other build
+# rather than writing a slot from another patch.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
 

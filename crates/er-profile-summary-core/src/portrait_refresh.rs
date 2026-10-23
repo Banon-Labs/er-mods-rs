@@ -2,10 +2,10 @@
 //!
 //! # Why an import leaves it showing the previous loadout
 //!
-//! The portrait is the game's own widget, not anything this workspace composites. `FUN_1409aa680`
+//! The portrait is the game's own widget, not anything this workspace composites. `FUN_1409abcd0`
 //! (`er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`) is the only caller of the profile
-//! renderer's set-ChrAsm `FUN_140bbe1a0` -- one call xref in the 1.16.2 dump, the other two
-//! references being vtable data -- and the source it hands over is `record + 0x1a8`, the `ChrAsm`
+//! renderer's set-ChrAsm `FUN_140bbfda0` -- one call xref in the 1.16.2 dump, the other two
+//! references being vtable data, and one `E8` call on 2.7.2.0 -- and the source it hands over is `record + 0x1a8`, the `ChrAsm`
 //! image inside a `CS::ProfileSummary` record. So the gear a portrait wears is whatever that record
 //! says, and nothing else.
 //!
@@ -32,11 +32,11 @@
 //! step 1. The whole cycle is `6 -> 7 -> 8 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6`, and step 4
 //! `STEP_Finish_Setup` is the one that matters: it promotes the staged `ChrAsm` into the live one at
 //! `+0x130`, allocates the model, registers its parts into the offscreen's layer holder
-//! (`FUN_1409e9790`) and registers the per-frame submit task at group 100.
+//! (`FUN_1409eaf00`) and registers the per-frame submit task at group 100.
 //!
 //! Two arming mistakes are worth naming because each looks plausible. `+0x755` alone parks the
 //! machine at step 8 forever and the portrait goes permanently blank. `+0x754` alone walks
-//! `1 -> 2 -> 3 -> 4 -> 5 -> 6` with no teardown, and the builder `FUN_140bbb3b0` is null-guarded on
+//! `1 -> 2 -> 3 -> 4 -> 5 -> 6` with no teardown, and the builder `FUN_140bbcf90` is null-guarded on
 //! every allocation, so it is a complete no-op: the stages are re-promoted and the model is not
 //! rebuilt at all. Only the pair does the work.
 //!
@@ -77,7 +77,7 @@
 //! # The Quit panel's own producer, which now has a module of its own
 //!
 //! `SYSTEX_Menu_StatusFace` is filled by `CS::CSMenuFaceModelRend`, built by
-//! `FUN_14099b950(rendSlot, dialog, 0x13, faceSource, 1)` with the renderer slot at
+//! `FUN_14099cfa0(rendSlot, dialog, 0x13, faceSource, 1)` with the renderer slot at
 //! `dialog+0x1890`. Its single caller is `CS::OptionSettingTopDialog`'s constructor, at the guarded
 //! tail `if (param_4 != 0) { ... }`, which is why backing out of the menu and reopening it fixes
 //! the portrait: reconstructing the dialog re-runs the builder against the current
@@ -91,11 +91,9 @@
 //!   its constructor calls that constructor on the same `this` and then overwrites the vftable --
 //!   so `+0x40`, `+0x754`, `+0x755`, `+0x778` and the part-node array are the same fields, not
 //!   parallel ones, and this module's rebuild detector applies to it unchanged;
-//! * the two addresses are no longer unmapped. `0x14099b950 -> 0x14099caf0` and
-//!   `0x140966120 -> 0x1409672c0` were pinned on 2026-09-10 and carry `IDENTICAL-WHOLE` verdicts in
-//!   `docs/recon/rva-map-1162-to-1170.verified.tsv`; `map-rvas-1162-to-1170.py` resolves both from
-//!   the ledger alone. The refresh is written, and it refuses rather than calls when an address in
-//!   its chain has no mapping.
+//! * the two addresses are known: `0x14099cfa0` (the builder) and `0x140967770` (the dialog
+//!   constructor) on 2.7.2.0. The refresh is written, and it refuses rather than calls on any other
+//!   build.
 //!
 //! The remaining difference between the two surfaces is what each one renders. The profile portrait
 //! wears the record's gear. The Quit panel's takes `param_5 = 1`, which unequips every weapon slot
@@ -183,7 +181,7 @@ pub struct PortraitRebuildTarget {
     pub base: usize,
     /// The live `CS::ProfileSummary`.
     pub summary: usize,
-    /// `DAT_143d6d8d0[slot]`, vtable-checked.
+    /// `DAT_143d74960[slot]`, vtable-checked.
     pub renderer: usize,
 }
 
@@ -358,7 +356,7 @@ unsafe fn read_draw_bits(renderer: usize) -> usize {
 
 /// Bytes per `ChrAsmModelRes` entry, and where the entry array starts inside it.
 ///
-/// `STEP_Wait_Play` passes `renderer+0x768` to the model-resource request `FUN_1409e6fb0`, which
+/// `STEP_Wait_Play` passes `renderer+0x768` to the model-resource request `FUN_1409e86f0`, which
 /// walks entries of `0x40` bytes from `+0x30`. Each carries the resolved param id at `+0x00` and the
 /// id that was requested at `+0x04`; while they disagree the parts file for the new row is still
 /// loading, and the request early-outs rather than rebuilding the model from it.

@@ -1,7 +1,7 @@
 // The port, prototyped: the vanilla finger's bounds prompt, answered, drives Seamless's invade.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # What is being replaced
 //

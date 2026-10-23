@@ -25,36 +25,32 @@
 //!
 //! # Two hooks, because the address is genuinely ambiguous
 //!
-//! Mapping 1.16.2 `0x14075d970` to 1.17 yields two candidates with the same prologue and near-equal
-//! bodies (`0x14075e7c0` at 179/192 bytes identical, `0x14075e880` at 177/192). Byte scoring cannot
+//! Mapping 1.16.2 `0x14075d970` forward yields two candidates with the same prologue and near-equal
+//! bodies (2.7.2.0 `0x14075ec70` and `0x14075ed30`; on 1.17 179/192 and 177/192 bytes identical to
+//! the 1.16.2 body). Byte scoring cannot
 //! separate near-identical siblings, and picking the higher score would be a guess dressed as a
 //! measurement. Both are hooked; each logs its own hit count and the codes it is asked about, so one
 //! run says which one the picker actually drives -- and the wrong one simply never fires.
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use er_game_base::game_build::MAPPED_FILE_VERSION_1171;
-use er_game_base::mem::game_rva_measured_on;
+use er_game_base::mem::game_rva_named;
 use er_hook::{UnionFn, register_union_hook_runtime_derived};
 
 use crate::log::harness_log;
 use crate::win32::read_usize;
 
-/// 1.17.1 rvas of the two candidates for 1.16.2's `FUN_14075d970` (below the `0xafefe9` boundary,
-/// so 1.17.0 has them at the same place).
+/// 2.7.2.0 rvas of the two candidates for 1.16.2's `FUN_14075d970`.
 ///
-/// They used to be absolute 1.17 addresses handed to `register_shared_hook`, which resolves its
-/// argument as a 1.16.2 address -- a 1.17 address is no key of that table, so the hook rested on
-/// the resolver recognising it as already translated, and on 2.7.2.0 it would have been refused.
-/// Carried as 1.17.1 rvas instead: on 2.7.2.0 they are `0x75ec70` and `0x75ed30`, each a `.pdata`
-/// entry of the same `0xb6` length with the same opening bytes (`scripts/compare-carry-bytes-1172.py`).
-/// No other DLL in `scripts/me3-dll-conflicts.toml` hooks either, so this image's own union owns
-/// them.
-const MENU_QUERY_CANDIDATE_A: usize = 0x75_e7c0;
-const MENU_QUERY_CANDIDATE_B: usize = 0x75_e880;
+/// Each is a `.pdata` entry of the same `0xb6` length with the same opening bytes in
+/// `eldenring-deobf-1.17.2.bin`. They are hooked through `register_union_hook_runtime_derived`,
+/// which audits the live `.pdata` rather than the detour allowlist. No other DLL in
+/// `scripts/me3-dll-conflicts.toml` hooks either, so this image's own union owns them.
+const MENU_QUERY_CANDIDATE_A: usize = 0x75_ec70;
+const MENU_QUERY_CANDIDATE_B: usize = 0x75_ed30;
 
 /// The captured menu code sits at `+0x08` of the `std::function` the caller built, and the mode byte
-/// at `+0x0c` -- `FUN_1407586d0` writes `0x30`/mode 2 there, `FUN_140758c90` writes `0x31`.
+/// at `+0x0c` -- `0x1407599d0` writes `0x30`/mode 2 there, `0x140759f90` writes `0x31`.
 const FUNC_CODE_OFFSET: usize = 0x08;
 
 static ORIG_A: AtomicUsize = AtomicUsize::new(0);
@@ -123,15 +119,15 @@ pub fn ensure_installed() {
         (MENU_QUERY_CANDIDATE_A, query_a as UnionFn, &ORIG_A, "A"),
         (MENU_QUERY_CANDIDATE_B, query_b as UnionFn, &ORIG_B, "B"),
     ] {
-        let Some(target) = game_rva_measured_on(rva, MAPPED_FILE_VERSION_1171) else {
+        let Ok(target) = game_rva_named(rva as u32, "MENU_QUERY_CANDIDATE") else {
             harness_log!(
-                "menu-query: candidate {name} (1.17.1 rva 0x{rva:x}) has no carry to {}",
+                "menu-query: candidate {name} (2.7.2.0 rva 0x{rva:x}) refused on {}",
                 er_game_base::game_build::describe_build()
             );
             continue;
         };
-        // SAFETY: four-argument handlers on four-argument targets; the address was carried to the
-        // running image and the hook API checks its `.pdata` before writing.
+        // SAFETY: four-argument handlers on four-argument targets; the address is for the running
+        // 2.7.2.0 image and the hook API checks its `.pdata` before writing.
         match unsafe { register_union_hook_runtime_derived(target, handler, slot) } {
             Ok(()) => {
                 harness_log!("menu-query: hooked candidate {name} 0x{target:x}")

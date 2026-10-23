@@ -9,8 +9,8 @@
 //! actually calls, so the detours observe the real write path.
 //!
 //! Those blind spots do not exist in this binary. An exhaustive parse of
-//! `eldenring-deobf.bin`'s import directory (RVA 0x4c09000, 23 DLLs) plus its delay-import
-//! directory (0x3b03bec, EOSSDK only) shows the game imports none of `NtWriteFile`,
+//! `eldenring-deobf.bin`'s import directory (the 1.16.2 image; RVA 0x4c09000, 23 DLLs) plus its
+//! delay-import directory (0x3b03bec, EOSSDK only) shows the game imports none of `NtWriteFile`,
 //! `NtCreateFile`, `ZwWriteFile`, `CreateFile2`, `WriteFileEx`, `WriteFileGather`,
 //! `ReplaceFileW/A`, `CreateFileMapping*` or `MapViewOfFile*`. `WriteFile` has exactly five
 //! xref sites image-wide and `SetEndOfFile` exactly one.

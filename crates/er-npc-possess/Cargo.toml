@@ -35,7 +35,7 @@ er-hotkey-config = { path = "../er-hotkey-config" }
 er-overlay-theme = { path = "../er-overlay-theme" }
 
 # Assembles the `LockCamParam` getter's windows from named instructions in `build.rs` and
-# ground-truths them against `eldenring-deobf-1.17.1.bin`, so a hand-typed byte cannot silently
+# ground-truths them against `eldenring-deobf-1.17.2.bin`, so a hand-typed byte cannot silently
 # disarm the hook.
 [build-dependencies]
 iced-x86 = { version = "1.21", default-features = false, features = [

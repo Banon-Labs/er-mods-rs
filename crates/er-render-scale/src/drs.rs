@@ -1,9 +1,9 @@
 //! The detour on Elden Ring's per-frame dynamic resolution update, and the reads that report what
-//! the game did with it. 1.17.1 only.
+//! the game did with it. 2.7.2.0 only.
 //!
 //! # The chain (bd `er-dynamic-resolution-chain-static-2026-10-15`)
 //!
-//! The update (1.17.1 `0x141b2e9b0`) takes the controller's config in rcx: `*(GXRenderingSystem +
+//! The update (2.7.2.0 `0x141b300a0`) takes the controller's config in rcx: `*(GXRenderingSystem +
 //! 0x13a70)`. It copies the current percentage out of `GxDrawContext+0xedc` into `+0x30`, and when
 //! the enable byte (`+0x00`) is set it clamps that to `[+0x1c, +0x20]` before the setter writes the
 //! percentage back; the view setup then draws the scene into a viewport that fraction of the
@@ -33,7 +33,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{
     game_data_addr, game_module_base, read_bytes, safe_read_f32, safe_read_u8, safe_read_usize,
 };
@@ -46,10 +46,9 @@ use crate::scale::{self, NATIVE, Plan};
 
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
-/// The 1.17.1 rva of the update. Above `0xafefe9`, so 1.17.1 moved it `0x70` from 1.17.0's
-/// `0x1b2e940`; it is used on 1.17.1 only, after its opening bytes are compared with
-/// `DRS_UPDATE_1171_PROLOGUE`.
-const DRS_UPDATE_1171_RVA: usize = 0x01b2_e9b0;
+/// The 2.7.2.0 rva of the update. It is used on 2.7.2.0 only, after its opening bytes are
+/// compared with `DRS_UPDATE_PROLOGUE`.
+const DRS_UPDATE_RVA: usize = 0x01b3_00a0;
 
 /// `GXRenderingSystem+0x13a70`: the pointer to the controller's config.
 const GXRS_DRS_CONFIG_OFFSET: usize = 0x13a70;
@@ -293,26 +292,25 @@ pub fn retry() {
     let _ = install();
 }
 
-/// Detour the update on 1.17.1. Any other build, other bytes at the address, or a global that
+/// Detour the update on 2.7.2.0. Any other build, other bytes at the address, or a global that
 /// does not resolve leaves the game's dynamic resolution alone and says why; the menu then shows
 /// the reason and offers nothing.
 pub fn install() -> Result<(), String> {
     if INSTALLED.load(Ordering::Acquire) {
         return Ok(());
     }
-    // Measured on 1.17.1 and carried from there by the segment table; the opening bytes are
-    // compared below before anything is hooked.
-    let Some(rva) = carry_1171_rva(DRS_UPDATE_1171_RVA) else {
+    // Measured on 2.7.2.0; the opening bytes are compared below before anything is hooked.
+    let Some(rva) = is_supported_build().then_some(DRS_UPDATE_RVA) else {
         return refuse(format!(
-            "the game is {:?}, and the update measured on 1.17.1 has no carry to it",
-            game_file_version()
+            "the update was measured on 2.7.2.0 and this build is another: {}",
+            describe_build()
         ));
     };
     let base = match game_module_base() {
         Ok(base) => base,
         Err(error) => return refuse(error),
     };
-    // Both are 1.16.2 rvas carried to the running build by the data map; 0 when unmapped.
+    // Both are 2.7.2.0 rvas; 0 on another build.
     let gxrs_global = game_data_addr(
         base,
         GX_RENDERING_SYSTEM_GLOBAL_RVA,
@@ -325,36 +323,34 @@ pub fn install() -> Result<(), String> {
     );
     if gxrs_global == 0 || ctx_global == 0 {
         return refuse(format!(
-            "a global has no mapping for this build (GXRenderingSystem 0x{gxrs_global:x}, \
+            "a global was refused on this build (GXRenderingSystem 0x{gxrs_global:x}, \
              GxDrawContext 0x{ctx_global:x})"
         ));
     }
     GXRS_GLOBAL.store(gxrs_global, Ordering::Release);
     CTX_GLOBAL.store(ctx_global, Ordering::Release);
     let entry = base + rva;
-    let mut bytes = [0u8; DRS_UPDATE_1171_PROLOGUE.len()];
+    let mut bytes = [0u8; DRS_UPDATE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
     // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match under
-    // the mask, which skips the stack cookie's RIP-relative displacement. That field re-encodes
-    // whenever `.data` moves against `.text`: on 1.17.2 the update moved `+0x16f0` and the cookie
-    // `+0x3010`, so the same `mov rax,[rip+..]` now reads `73 1d 13 02` where 1.17.1 read
-    // `53 04 13 02`.
+    // the generated mask. On 2.7.2.0 the stack cookie's `mov rax,[rip+..]` reads `73 1d 13 02`
+    // (the 1.17.1 build read `53 04 13 02`), and the pin carries the 2.7.2.0 encoding.
     let masked_eq = |from: usize| {
         (from..bytes.len()).all(|i| {
-            bytes[i] & DRS_UPDATE_1171_PROLOGUE_MASK[i]
-                == DRS_UPDATE_1171_PROLOGUE[i] & DRS_UPDATE_1171_PROLOGUE_MASK[i]
+            bytes[i] & DRS_UPDATE_PROLOGUE_MASK[i]
+                == DRS_UPDATE_PROLOGUE[i] & DRS_UPDATE_PROLOGUE_MASK[i]
         })
     };
     let matches = read && (masked_eq(0) || (bytes[0] == 0xe9 && masked_eq(5)));
     if !matches {
         BYTES_PENDING.store(true, Ordering::Release);
         return refuse(format!(
-            "0x{entry:x} does not open like the 1.17.1 dynamic resolution update ({bytes:02x?})"
+            "0x{entry:x} does not open like the 2.7.2.0 dynamic resolution update ({bytes:02x?})"
         ));
     }
     BYTES_PENDING.store(false, Ordering::Release);
-    // SAFETY: a runtime-derived 1.17.1 entry whose bytes were just checked; the handler calls its
+    // SAFETY: a runtime-derived 2.7.2.0 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
     match unsafe {
         er_hook::register_union_hook_runtime_derived_following_arxan(entry, drs_update_union, &ORIG)

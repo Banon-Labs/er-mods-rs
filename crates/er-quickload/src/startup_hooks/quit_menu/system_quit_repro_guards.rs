@@ -30,11 +30,12 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         && SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst) != 0
     {
-        // Close ProfileSelect via the native cancel/back close (FUN_1407ac980: SetResult(Failed) +
+        // Close ProfileSelect via the native cancel/back close (`MENU_WINDOW_CLOSE_WITH_FAILED_RVA`;
+        // 1.16.1 dump FUN_1407ac980: SetResult(Failed) +
         // window close vmethod) instead of arming the confirm-load. Arming the load (writing
         // load_job_ctx+0x14c=2, the coupled Success-close path) makes the game enter an in-world
         // load/warp transition (GameMan.saveState/b80 -> 2 -> DoSaveStuff). Even with the actual
-        // deserialize skipped by the FUN_14067b290 guard, that half-started transition sticks the game
+        // deserialize skipped by the deserialize (0x14067c590; 1.16.2 FUN_14067b290) guard, that half-started transition sticks the game
         // at a loading screen and blocks the return-title chain from ever running (observed 2026-07-01:
         // stuck, return_title functor_call_count=0, save_state=3, player still present). The cancel-close
         // pops the ProfileSelect window without starting any load, so the menu-pump return-title chain
@@ -208,7 +209,7 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     }
     // Disabled (2026-07-01): the CSGaitemImp deserialize/lookup/finalize guards only ever corrupt
     // the gaitem singleton -- emptying gaitemInsTable handles left a garbage non-canonical entry that
-    // crashed GetGaitemIns->GetGaitemHandle (live 0x6710c0). They were a doomed attempt to make the
+    // crashed GetGaitemIns->GetGaitemHandle (2.7.2.0 0x6723c0). They were a doomed attempt to make the
     // in-world load "safe"; we now block the in-world load-job entirely (see the robust gate in
     // system_quit_profile_load_job_run_hook) and return to title + autoload instead, so no in-world
     // gaitem deserialize should run. Leaving them installed would additionally corrupt the AUTOLOAD's
@@ -217,18 +218,20 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // Install the load-only guard so the picked slot is not deserialized into the still-live world
     // when the native confirm arms the load; it forwards the real load at a clean title (autoload).
     install_system_quit_inworld_load_guard();
-    // Install the in-world load request guard: neutralizes the native RequestLoadSlot (FUN_14067b2f0)
+    // Install the in-world load request guard: neutralizes the native RequestLoadSlot (1.16.1 dump FUN_14067b2f0)
     // so GameMan.saveState/b80 never reaches 2 during the switch. This is the true source of the
     // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
     // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
     install_system_quit_request_load_slot_guard();
     // Reverted 2026-07-16: wiring install_system_quit_gaitem_deserialize_hook() here (to backstop the
-    // 0x67141a stale-table AV) was worse -- its handler's skip path during the return-title transition
-    // (phase confirmed..HANDOFF) leaves the gaitem singleton inconsistent and the game DL_PANICs from inside
-    // the gaitem code (crash stk showed the panic called from game+0x671843). That broke the first switch
-    // (DL_PANIC before the load) whereas without the hook the first switch completes via continue_confirm.
-    // The 0x67141a crash on the 2nd+ consecutive switch remains a separate, pre-existing issue to solve
-    // without this skip-based hook (2026-07-01 already noted these gaitem guards corrupt the singleton).
+    // 0x67141a stale-table AV on 1.16.2, 0x67271a on 2.7.2.0) was worse -- its handler's skip path
+    // during the return-title transition (phase confirmed..HANDOFF) leaves the gaitem singleton
+    // inconsistent and the game DL_PANICs from inside the gaitem code (crash stk showed the panic
+    // called from game+0x671843 on 1.16.2, 0x672b43 on 2.7.2.0). That broke the first switch
+    // (DL_PANIC before the load) whereas without the hook the first switch completes via
+    // continue_confirm. That stale-table crash on the 2nd+ consecutive switch remains a separate,
+    // pre-existing issue to solve without this skip-based hook (2026-07-01 already noted these gaitem
+    // guards corrupt the singleton).
     // Re-arm the continue_confirm guard's one-shot: the upcoming clean-title confirm must drive a
     // fresh deserialize of this switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
@@ -334,8 +337,8 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     SWITCH_ORACLE_STABLE_FRAMES.store(0, Ordering::SeqCst);
     SWITCH_ORACLE_MAX_STABLE_FRAMES.store(0, Ordering::SeqCst);
     // Switch-2 soft-lock fix (arm-point pre-clear, 2026-07-16). RE of the 1.16.1 dump proved the switch-2
-    // freeze is the native quit-save (`ShouldSave` 0x1406794c0) aborting on a stale
-    // `CSMenuMan->disableSaveMenu` (+0x13c, read by `CanShowSaveMenu` 0x14080d150) left set from the prior
+    // freeze is the native quit-save (`ShouldSave`, 2.7.2.0 0x14067a6d0) aborting on a stale
+    // `CSMenuMan->disableSaveMenu` (+0x13c, read by `CanShowSaveMenu`, 2.7.2.0 0x14080e390) left set from the prior
     // switch's menu flow -- so `bc4` freezes at 1 and the world never tears down. Clear it here, the moment
     // this switch arms its return-title, so the gate is already open before the quit-save orchestrator runs
     // (belt-and-suspenders with the per-frame game-task clear in product_core_autoload_tick and the menu-pump
@@ -359,14 +362,15 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     ));
 }
 
-/// Guard on the load-only routine `FUN_14067b380(slot)`. While the in-world System->Quit->Load-Profile
+/// Guard on the load-only routine (1.16.1 dump `FUN_14067b380(slot)`). While the in-world
+/// System->Quit->Load-Profile
 /// transition is active (phase in confirmed..AUTOLOAD_HANDOFF) and the old world is still up (local
 /// player present), skip the deserialize+warp and report success -- so `DoSaveStuff` completes (clears
 /// its pending slot) and ProfileSelect closes, but nothing loads into the live world. At a clean title
 /// (player absent, or phase past the transition) it forwards to the real load so the autoload works.
 ///
 /// Union-shaped, not `fn(i32)` (2026-08-31). The native takes one integer in ECX and touches no
-/// XMM register (checked on the 1.17 image at `0x14067c0e0`: 112 instructions, zero XMM), so the
+/// XMM register (checked on the 2.7.2.0 image at `0x14067c590`: 112 instructions, zero XMM), so the
 /// union's four-integer signature fits it -- `b`/`c`/`d` are whatever the caller happened to leave
 /// in RDX/R8/R9 and are forwarded untouched. The shape matters because `orig` may be the next
 /// handler in the chain rather than the game trampoline, and a next handler must be called through
@@ -388,7 +392,7 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
         append_autoload_debug(format_args!(
             "system-quit-quickload: in-world load SKIPPED #{n} slot={slot} phase={phase} (old world still up) -- ProfileSelect close proceeds; return-title tears down; autoload loads at clean title"
         ));
-        // FUN_14067b380 returns 1 on success; report success without deserializing so DoSaveStuff's
+        // The load-only routine (1.16.1 dump FUN_14067b380) returns 1 on success; report success without deserializing so DoSaveStuff's
         // caller advances (it then clears MoveMapStep+0x12c) instead of retrying the in-world load.
         return 1;
     }
@@ -418,7 +422,7 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
         }
         let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested finalize/autoclear"
+            "system-quit-quickload: native slot deserialize proof OK via 0x67c590 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested; native owns warp_requested finalize/autoclear"
         ));
     }
     ret
@@ -427,9 +431,9 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
 /// This guard registers through the union, and until 2026-08-31 it did not -- so it did not exist.
 ///
 /// A bare `MhHook::new` here lost the address to the product's own menu-trace observer
-/// (`b80_deserialize_67b290`, `trace/menu_trace_hooks.rs`), which unions
-/// `DESERIALIZE_SLOT_RVA` -- the same `0x67b290` -- at boot. Measured in run
-/// `br-20260831-160354-2513`: `register_union_hook` translated it to `0x14067c0e0` at +1288ms, this
+/// (`b80_deserialize`, `trace/menu_trace_hooks.rs`), which unions
+/// `DESERIALIZE_SLOT_RVA` -- the same `0x67c590` -- at boot. Measured in run
+/// `br-20260831-160354-2513` (1.17): the menu trace's union claimed the address at +1288ms, this
 /// installer arrived later, `MH_CreateHook` answered `MH_ERROR_ALREADY_CREATED`, and the guard was
 /// simply absent for the rest of the session (`system_quit_inworld_load_skip_count = 0`). Nothing
 /// crashed; the picked slot was free to deserialize into the still-live world.
@@ -441,8 +445,7 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
 /// reachable failure is permanent.
 pub(crate) fn install_system_quit_inworld_load_guard() {
     // Unresolved on purpose: `register_union_hook` inside `mh_install_hook_once` owns the single
-    // 1.16.2 -> 1.17 resolve. `game_rva` here would be the double-resolve shape
-    // `scripts/check-double-resolved-hook-targets.py` refuses.
+    // build and detour-allowlist check, and reports any refusal.
     let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve in-world load rva 0x{SYSTEM_QUIT_INWORLD_LOAD_RVA:x}"
@@ -460,8 +463,8 @@ pub(crate) fn install_system_quit_inworld_load_guard() {
     );
 }
 
-/// Guard on the native in-world load request `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
-/// 0x67b200). This is the true source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
+/// Guard on the native in-world load request `CS::GameMan::RequestLoadSlot(slot)` (2.7.2.0
+/// 0x67c500). This is the true source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
 /// the per-frame MoveMapStep load steps call it once the confirmed ProfileSelect chain pushes the map
 /// machine into loading, and it sets saveState=2, which starts the 02_904_NowLoading transition that
 /// freezes the menu pump so the queued return-title chain can never run. During the in-world
@@ -470,11 +473,12 @@ pub(crate) fn install_system_quit_inworld_load_guard() {
 /// the pump keeps running, and the menu-pump-owned return-title chain tears the world down. Once the
 /// world is gone (player absent) or the switch is idle, we forward to the real request -- so the
 /// clean-title autoload and any normal load work. The boot/Continue autoload uses the distinct sentinel
-/// variants (FUN_14067b290 slot 10 / FUN_14067b570 slot 0xb), which this hook does not touch. See bd
+/// variants (0x14067c590 slot 10 / 0x14067c870 slot 0xb; 1.16.2 FUN_14067b290 / FUN_14067b570),
+/// which this hook does not touch. See bd
 /// system-quit-loadjob-success-commits-phantom-load-2026-07-01.
 ///
 /// Union-shaped for the same reason as its in-world-load sibling: one integer in ECX, zero XMM in
-/// the whole body (checked on the 1.17 image at `0x14067c050`: 40 instructions), and `orig` may be
+/// the whole body (checked on the 2.7.2.0 image at `0x14067c500`: 40 instructions), and `orig` may be
 /// the next chained handler rather than the game trampoline.
 pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
     slot_arg: usize,
@@ -514,9 +518,9 @@ pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
 }
 
 /// Registers through the union, for the reason spelled out on
-/// [`install_system_quit_inworld_load_guard`]. This one lost `0x67b200` to the menu trace's
-/// `b80_loadsavedata_67b200` observer, translated to `0x14067c050` at +1172ms in run
-/// `br-20260831-160354-2513`, leaving `system_quit_request_load_slot_block_count` and
+/// [`install_system_quit_inworld_load_guard`]. This one lost `SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA`
+/// (2.7.2.0 0x67c500) to the menu trace's `b80_loadsavedata` observer, which claimed it at
+/// +1172ms in run `br-20260831-160354-2513` (1.17), leaving `system_quit_request_load_slot_block_count` and
 /// `..._allow_count` both at zero -- the guard was never in the process.
 pub(crate) fn install_system_quit_request_load_slot_guard() {
     // Unresolved on purpose -- see the sibling installer.
@@ -537,13 +541,13 @@ pub(crate) fn install_system_quit_request_load_slot_guard() {
     );
 }
 
-/// Guard on the native title Continue confirm `0x140b0e180` (rcx = the {[+8]=owner} shim; reads
+/// Guard on the native title Continue confirm `0x140b0fd50` (rcx = the {[+8]=owner} shim; reads
 /// GameMan+0xc30 -> owner+0xbc -> SetState(5); picks no slot). Static RE 2026-07-02 proved the
 /// post-switch clean-title reload streams the pre-switch GameMan/PlayerGameData state: no fresh
 /// deserialize of the picked slot runs anywhere on that path, so the resident (original) character
 /// gets re-streamed -- the wrong-character bug. While a System->Quit->Load-Profile switch is active
 /// this hook drives one fresh synchronous feed-deserialize of the picked slot
-/// (`own_load_feed_deserialize`: on-disk read -> gated 0x67b100 feed -> native parser 0x67b290)
+/// (`own_load_feed_deserialize`: on-disk read -> gated 0x67c400 feed -> native parser 0x67c590)
 /// before forwarding, so ac0/c30/PGD all become the picked slot and the confirm streams the right
 /// character. Fail-closed: if the fresh deserialize cannot be proven, the confirm is blocked --
 /// streaming stale state would load the wrong character and the post-load autosave would then write

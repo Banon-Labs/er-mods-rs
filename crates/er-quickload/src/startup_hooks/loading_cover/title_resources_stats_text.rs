@@ -19,18 +19,18 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         }
     }
     // Three addresses, three independent observers (2026-08-30). These were three `let Ok(..) else
-    // { log; return; }` bindings ahead of all three installs, so one unmapped RVA on 1.17 refused
-    // the other two before either was attempted -- and the Scaleform file-open row is the one this
-    // DLL shares with er-armament-icons through the hook union, so losing it silently breaks a
-    // second DLL too. Each row is now resolved into an `Option` and skipped alone; the three
-    // outcomes stay distinguishable (refused = no map row, failed = MinHook said no).
+    // { log; return; }` bindings ahead of all three installs, so one refused RVA refused the other
+    // two before either was attempted -- and the Scaleform file-open row is the one this DLL
+    // shares with er-armament-icons through the hook union, so losing it silently breaks a second
+    // DLL too. Each row is now resolved into an `Option` and skipped alone; the three outcomes
+    // stay distinguishable (refused = not the 2.7.2.0 build, failed = MinHook said no).
     // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
     let resolve = |rva: u32, label: &str| -> Option<usize> {
         match game_rva(rva) {
             Ok(addr) => Some(addr),
             Err(_) => {
                 append_autoload_debug(format_args!(
-                    "title-resource-observer: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other observers are unaffected"
+                    "title-resource-observer: REFUSED {label} -- rva 0x{rva:x} is refused on the running build (not 2.7.2.0); the other observers are unaffected"
                 ));
                 None
             }
@@ -101,7 +101,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     // entire session while every GFx swap it owns rendered vanilla, and nothing crashed or logged.
     // Registering through the union makes install order irrelevant -- the first registrant creates
     // the dispatcher and owns the real trampoline, every later one chains -- and the companion
-    // reaches this same union from its own image through the `er_effects_union_register` export.
+    // reaches this same union from its own image through the `er_effects_union_register_2720` export.
     // The union enables its hook immediately rather than through MinHook's queue, so this
     // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
     if let Some(file_open_addr) = file_open_addr
@@ -513,9 +513,9 @@ pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
             | "PRESS BUTTON"
             // The legal footer. The binder is handed a path relative to whichever proxy is asked,
             // and `TitleTopDialog`'s initializer asks two different ones: it binds `Top` into
-            // dialog+0xa48 and then asks dialog+0xa48 for the bare `PressStart` (deobf-1.17.1
-            // 0x1409a9415), but asks the parent root for `Top/CopyrightText` (0x1409a98ac and
-            // 0x1409a991a, both `lea r8, [0x142b295a8]`). The bare `CopyrightText` below is the
+            // dialog+0xa48 and then asks dialog+0xa48 for the bare `PressStart` (2.7.2.0
+            // 0x1409a98c5), but asks the parent root for `Top/CopyrightText` (0x1409a9d5c and
+            // 0x1409a9dca, both `lea r8, [0x142b2b698]`). The bare `CopyrightText` below is the
             // name as written in `05_000_title.gfx` and is what this list carried, so it never
             // matched an argument: run br-20260913-143409-05ec hid `PressStart`, `Info`,
             // `ProgressInfo` and `Install_ProgressInfo`, and left the footer on screen.
@@ -564,7 +564,7 @@ unsafe fn er_char_stats_field_name_matches(name_ptr: usize) -> bool {
 /// Read the name a [`title_scene_obj_proxy_named_child_bind_hook`] call is binding.
 ///
 /// The constructor is handed an object, not a `char*`, and resolves the text itself before passing
-/// it on: `p = *(name + 0x38); text = p ? p + 0x10 : name`. `FUN_140d7f9d0` then runs
+/// it on: `p = *(name + 0x38); text = p ? p + 0x10 : name`. 1.16.2 `FUN_140d7f9d0` then runs
 /// `strchr(text, '/')` on the result, which is what proves `text` is the `NUL`-terminated path.
 /// Repeating that indirection here is the whole difference between reading a name and reading a
 /// string header. The read fails closed, like every other foreign pointer in this file.
@@ -594,21 +594,21 @@ thread_local! {
 ///
 /// # Why not at the binder
 ///
-/// This detour used to sit on `SceneObjProxy::assignComponentWithName` (1.16.2 `0x14074a2f0`),
+/// This detour used to sit on `SceneObjProxy::assignComponentWithName` (2.7.2.0 `0x14074b5f0`),
 /// which is **variadic**: Ghidra types its fourth parameter `va_list`, its prologue homes both
 /// `r8` and `r9` (`mov [rsp+0x18],r8 ; mov [rsp+0x20],r9`), and it reads format arguments from the
 /// caller's frame at `[rsp+0x28]` onward. A detour declaring three parameters and forwarding three
 /// dropped all of them, so the game formatted the name it was about to bind out of whatever the
 /// detour had left in `r9` and on its own stack.
 ///
-/// `CS::EquipDialog`'s per-slot layout loop is the caller that paid for it (1.16.2 `0x1408db4a3`):
+/// `CS::EquipDialog`'s per-slot layout loop is the caller that paid for it (2.7.2.0 `0x1408dcaf3`):
 ///
 /// ```text
 /// mov  dword ptr [rsp+0x20], esi          ; column
 /// mov  r9d, r15d                          ; row
 /// lea  r8, ["ItemList/BackItemList/Item_%d_%d"]
-/// call 0x14074a2f0
-/// call 0x140733340                        ; SetVisible(bound cell, 0 or 1)
+/// call 0x14074b5f0
+/// call 0x140734640                        ; SetVisible(bound cell, 0 or 1)
 /// ```
 ///
 /// With the indices gone the name resolved to nothing, so the `SetVisible(cell, 0)` that hides the
@@ -620,7 +620,7 @@ thread_local! {
 /// Widening the detour to forward a fixed number of variadic slots would only have bounded that:
 /// the binder has 1297 references, so no arity chosen here is provable, and the first caller
 /// passing one more would lose it again in silence. The constructor takes four arguments and no
-/// varargs, is reached only through `FUN_14074abc0`, and receives the name already formatted --
+/// varargs, is reached only through 2.7.2.0 `0x14074bec0`, and receives the name already formatted --
 /// so the same binds are observed with nothing left to drop.
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
     out_proxy: usize,
@@ -677,7 +677,7 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         }
     }
     // NOTE: per-slot stats for native ProfileSelect rows are normally pushed from
-    // `profile_row_populate_hook` (FUN_1408758d0 carries the slot index). The binder fallback above
+    // `profile_row_populate_hook` (FUN_140876c80 carries the slot index). The binder fallback above
     // only covers title/load surfaces that bind ErCharStats but never invoke that populate path.
     if unsafe { title_profile_list_container_matches(name_ptr) } {
         TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -898,7 +898,7 @@ pub(crate) fn build_loaded_char_name() -> Option<String> {
 /// The loaded character's Rune Level, read off live `PlayerGameData` -- the same object
 /// [`build_loaded_char_name`] takes the name from.
 ///
-/// The title Load Game row describes the current character (`FUN_140951220` builds a transient
+/// The title Load Game row describes the current character (`FUN_140952870` builds a transient
 /// current-player `MenuSaveDataSummary` for it), which is not necessarily save slot 0. Taking the
 /// name from live PGD and the level from `profile_slot_level(0)` would render one character's name
 /// beside another's level for anyone whose loaded character is not in slot 0 -- a confident wrong
@@ -1258,7 +1258,7 @@ static PROFILE_ROW_PARAM_PLACE_NAME_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Point slot `slot`'s live `ProfileSummary` record at `place_name_id` for the duration of one native
 /// row populate, returning the id it displaced.
 ///
-/// The row's `Location` string is built by the game from this one `u32` (`FUN_1408752c0` loads
+/// The row's `Location` string is built by the game from this one `u32` (`FUN_140876760` loads
 /// `record[0x34]` into the row-model builder, which formats it through
 /// `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`), so lending the field our resolved id makes
 /// the game's own writer render the right place -- the same borrow-then-restore the merged
@@ -1285,7 +1285,7 @@ pub(crate) unsafe fn stage_profile_record_place_name(slot: i32, place_name_id: u
     Some(displaced)
 }
 
-/// Hook of the ProfileSelect row-model builder `FUN_1408752c0(rowModel, slot)`.
+/// Hook of the ProfileSelect row-model builder (2.7.2.0 `FUN_140876760(rowModel, slot)`).
 ///
 /// This is where a slot's `ProfileSummary` record becomes a row: the builder reads `record[0x34]`
 /// and the field filler turns it into the row model's `Location` string. So a slot whose record was
@@ -1622,7 +1622,7 @@ pub(crate) use er_loading_portrait_core::profile_row_model::{
     stage_row_model_player_name,
 };
 
-/// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
+/// Hook of the ProfileSelect row-populate template `FUN_140876c80(rowModel, rowProxy, ...)`. Runs once
 /// per visible list row with a per-slot row model, so it can push the correct slot's attributes (unlike
 /// the per-field named-child binder, which has no slot). The push happens before the original runs: the
 /// original resolves the native fields and then destroys the row proxy's embedded `CSScaleformValue` at
@@ -1647,7 +1647,7 @@ thread_local! {
     /// (`PROFILE_CURRENT_ROW_POPULATE_RVA`), which calls the per-slot row populate we also hook.
     ///
     /// This exists because the slot index cannot answer "whose character is this row". The builder
-    /// composes its transient summary as `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
+    /// composes its transient summary as 1.16.2 `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
     /// index 0 with the live player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
     /// both that row and save slot 0's real row. Guessing "0 means the live character" put the
     /// loaded character's name on save slot 0's row, level, attributes and location: with slot 3 of
@@ -1675,9 +1675,9 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         return;
     }
     let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
-    // Marked across the original because the per-slot row populate runs inside it (the builder ends
-    // `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and that nested call
-    // is the one that has to know this row is the live character's.
+    // Marked across the original because the per-slot row populate runs inside it (the 1.16.2
+    // builder ended `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and
+    // that nested call is the one that has to know this row is the live character's.
     let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get() + 1));
     unsafe { f(param_1, row_proxy) };
     let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get().saturating_sub(1)));

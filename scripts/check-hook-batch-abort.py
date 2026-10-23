@@ -57,7 +57,8 @@ To declare one, put a line
 
 inside the function. A bare marker with no reason does not exempt. Every exemption is printed on
 every run, pass or fail, so the set of them stays visible instead of accumulating in silence --
-the same rule `1170-translation-collisions.baseline.tsv` is kept under.
+the same rule the translation-collision baseline was kept under until the address carry was
+deleted on 2026-10-23.
 
 What counts
 ===========

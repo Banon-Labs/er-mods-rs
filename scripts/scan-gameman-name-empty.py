@@ -3,14 +3,36 @@
 
 Scans the deobfuscated mapped image (file offset == RVA, base 0x140000000) for byte-field
 accesses `[reg+disp32]` with disp32 in {0xe70, 0xe78}, then checks whether the base register
-was loaded from the GameMan singleton global (0x143d69918) within a short window before the
-access. Whichever displacement the GameMan accessors actually use is the ground-truth offset.
+was loaded from the GameMan singleton global (0x143d709a8 on 2.7.2.0) within a short window
+before the access. Whichever displacement the GameMan accessors actually use is the ground-truth
+offset. The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed build); a
+different build needs its own GAMEMAN_GLOBAL.
 """
 import struct, os
 
 BASE = 0x140000000
-GAMEMAN_GLOBAL = 0x143d69918
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+GAMEMAN_GLOBAL = 0x143d709a8
+
+
+def find_image(name="eldenring-deobf-1.17.2.bin"):
+    """`ER_DEOBF_BIN` when set, else `name` at the repo root or the nearest directory above it.
+
+    The images are gitignored, so a linked worktree under `.worktrees/` reads the main
+    checkout's.
+    """
+    if os.environ.get("ER_DEOBF_BIN"):
+        return os.environ["ER_DEOBF_BIN"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = root
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(root, name)
+        d = os.path.dirname(d)
+
+
+IMG = find_image()
 TARGET_DISPS = {0xE70: "0xe70 (upstream)", 0xE78: "0xe78 (our code)"}
 WINDOW = 0x80  # bytes to look back for a GameMan-pointer load
 REG_NAMES = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi"]

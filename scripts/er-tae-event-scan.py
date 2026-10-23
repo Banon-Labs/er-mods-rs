@@ -5,15 +5,15 @@ Corrected 2026-09-01. The i-frame carrier is not "TAE event type 8". It is
 **TAE event type 0 (JumpTable) with first param == 8**:
 
   * The master TAE event-type dispatcher is inside `ExecuteThreadOne`
-    (1.16.2 `0x14042e1c2`): `cmp $0xee` -> byte index table `0x14042eda0`
-    -> dword jump table `0x14042ece8`. **Event type 0 alone** lands on
-    `0x14042e1f6 -> jmp 0x1404275e0` (`0ChrActionFlag`); event type 300 lands on
-    `ActivateChrActionFlagEarly` `0x140425ba0`.
+    (`0x14042e7a2`): `cmp $0xee` -> byte index table `0x14042f380`
+    -> dword jump table `0x14042f2c8`. **Event type 0 alone** lands on
+    `0x14042e7d6 -> jmp 0x140427bc0` (`0ChrActionFlag`); event type 300 lands on
+    `ActivateChrActionFlagEarly` `0x140426180`.
   * `0ChrActionFlag` then switches on the event's **params[0]** (`mov 0x8(%r13),%r15`
     = `TaeAnimEventParams::Args`, `mov (%r15),%eax`), `dec`, `cmp $0x8e`, jump table
-    `0x140428650`. Index 7 (params[0]==8) is `0x140427860`:
+    `0x140428c30`. Index 7 (params[0]==8) is `0x140427e40`:
     `orq $0x2,0x40(%rbx)` -> `CSChrActionFlagModule::actionModifiersFlags |= 2`.
-  * `CS::ChrIns::IsImmuneToAttack` `0x1403f3b90` returns true when that bit is set
+  * `CS::ChrIns::IsImmuneToAttack` `0x1403f3dc0` returns true when that bit is set
     (and the incoming ATK_PARAM_ST has `isDisableNoDamage == 0`).
 
 So `--jumptable 8` is the i-frame query. `--type 8` is a different, unused event.
@@ -140,23 +140,23 @@ def parse(path):
 #: into `TaeAnimEventParams::Args` (an int array) holding the id the event resolves,
 #: or None when the id does not come from the event's own args.
 ABILITY_EVENTS = {
-    1:   ('AttackBehavior',        0x1404266d0, 2,    'ResolveBehaviorId -> BehaviorParam'),
-    2:   ('BulletBehavior',        0x140426e60, 2,    'ResolveBehaviorId -> BehaviorParam -> BulletParam'),
-    5:   ('CommonBehavior',        0x1404269e0, 1,    'RAW -> BehaviorParam (no ResolveBehaviorId)'),
-    64:  ('CastHighlightedMagic',  0x140429db0, None, 'CSChrMagicModule::GetActiveSpell -> MagicParam'),
-    65:  ('ConsumeCurrentGoods',   0x14042c4f0, None, 'ChrIns::GetToUseItemId -> EquipParamGoods'),
-    66:  ('AddSpEffect',           0x14042bfd0, 0,    'ApplySpEffect -> SpEffectParam'),
-    67:  ('AddSpEffect2',          0x14042bfd0, 0,    'ApplySpEffect -> SpEffectParam'),
-    123: ('SpawnFFXBySpEffect2',   0x140426ca0, 1,    'repack -> BulletBehavior (SpEffect-gated)'),
-    302: ('ApplySpEffect302',      0x1403e8be0, 0,    'ApplySpEffect -> SpEffectParam'),
-    304: ('ThrowAttackBehavior',   0x14042c0f0, 1,    'ResolveBehaviorId -> BehaviorParam -> throw hitbox'),
-    307: ('AttackBehaviorFlagged', 0x14042a580, 2,    'ResolveBehaviorId(flags) or vf FUN_1403ef450'),
-    330: ('ConsumeFp',             0x14047f640, 0,    'CSChrSuperArmorModule FP drain'),
-    331: ('ApplySpEffect331',      0x1403e8be0, 0,    'ApplySpEffect -> SpEffectParam'),
-    340: ('SpawnNpcItemLot',       0x140429a60, 0,    'NpcParam itemLotId -> ItemLotParam'),
-    401: ('ApplySpEffect401',      0x1403e8be0, 0,    'ApplySpEffect -> SpEffectParam'),
-    785: ('SpawnChrFinderBullet',  0x14042a3b0, 0,    'MultiTargetShootBullet -> BulletParam'),
-    903: ('HavokThrowUnk903',      0x140429100, 0,    'Havok throw / grab networking'),
+    1:   ('AttackBehavior',        0x140426cb0, 2,    'ResolveBehaviorId -> BehaviorParam'),
+    2:   ('BulletBehavior',        0x140427440, 2,    'ResolveBehaviorId -> BehaviorParam -> BulletParam'),
+    5:   ('CommonBehavior',        0x140426fc0, 1,    'RAW -> BehaviorParam (no ResolveBehaviorId)'),
+    64:  ('CastHighlightedMagic',  0x14042a390, None, 'CSChrMagicModule::GetActiveSpell -> MagicParam'),
+    65:  ('ConsumeCurrentGoods',   0x14042cad0, None, 'ChrIns::GetToUseItemId -> EquipParamGoods'),
+    66:  ('AddSpEffect',           0x14042c5b0, 0,    'ApplySpEffect -> SpEffectParam'),
+    67:  ('AddSpEffect2',          0x14042c5b0, 0,    'ApplySpEffect -> SpEffectParam'),
+    123: ('SpawnFFXBySpEffect2',   0x140427280, 1,    'repack -> BulletBehavior (SpEffect-gated)'),
+    302: ('ApplySpEffect302',      0x1403e8dc0, 0,    'ApplySpEffect -> SpEffectParam'),
+    304: ('ThrowAttackBehavior',   0x14042c6d0, 1,    'ResolveBehaviorId -> BehaviorParam -> throw hitbox'),
+    307: ('AttackBehaviorFlagged', 0x14042ab60, 2,    'ResolveBehaviorId(flags) or vf FUN_1403ef680'),
+    330: ('ConsumeFp',             0x14047fc80, 0,    'CSChrSuperArmorModule FP drain'),
+    331: ('ApplySpEffect331',      0x1403e8dc0, 0,    'ApplySpEffect -> SpEffectParam'),
+    340: ('SpawnNpcItemLot',       0x14042a040, 0,    'NpcParam itemLotId -> ItemLotParam'),
+    401: ('ApplySpEffect401',      0x1403e8dc0, 0,    'ApplySpEffect -> SpEffectParam'),
+    785: ('SpawnChrFinderBullet',  0x14042a990, 0,    'MultiTargetShootBullet -> BulletParam'),
+    903: ('HavokThrowUnk903',      0x1404296e0, 0,    'Havok throw / grab networking'),
 }
 
 

@@ -12,7 +12,7 @@
 //!
 //! # The friendly tag list
 //!
-//! `FUN_140777380` (1.17.1 `0x140778200`) rebuilds the seven `ChrFriendlyTagEntry` rows at
+//! `FUN_1407786b0` (2.7.2.0) rebuilds the seven `ChrFriendlyTagEntry` rows at
 //! `CSFeManImp+0x5c60` every frame. For slot `i` (`R15D`, reloaded from `[rsp+0x3c]` each turn of
 //! the loop) it tests `0 <= i < count`, where `count` is `PartyMemberInfo+0x14` stored at
 //! `[rsp+0x50]`; a member slot asks `GetFieldInsHandleByMemberIndex(pmi, [rbp-0x78], i)` for a
@@ -42,7 +42,7 @@
 //!
 //! # The enemy damage bar
 //!
-//! `CSChrDamageModule::UpdateUI` (1.17.1 `0x1404497e0`) sends a hit character to the enemy tag
+//! `CSChrDamageModule::UpdateUI` (2.7.2.0 `0x1404498c0`) sends a hit character to the enemy tag
 //! list at `CSFeManImp+0x59f0` through `SetEntityHealthBarDamage` (`call` at `+0x363`, then
 //! `jmp +0x375`). The selection starts at `+0x26e` ([`ENEMY_BAR`]); `RDI` is the module, its
 //! owner at `[rdi+8]`. For a companion the routine resumes at `+0x375`, the tail that call and
@@ -53,10 +53,9 @@
 //!
 //! # Windows, relocation, branches
 //!
-//! Read on 2026-10-19 in `eldenring-deobf.bin` (1.16.2), `eldenring-deobf-1.17.bin` and
-//! `eldenring-deobf-1.17.1.bin`; both functions are `IDENTICAL-WHOLE` with equal `.pdata`
-//! extents, and every window is byte-identical in the three images except the resume pin at
-//! `+0x31c`, whose RIP displacement is masked.
+//! Read in `eldenring-deobf-1.17.2.bin` (2.7.2.0; first read on 2026-10-19 in the 1.16.2, 1.17.0
+//! and 1.17.1 images, where both functions had the same `.pdata` extents). The resume pin at
+//! `+0x31c` has its RIP displacement masked.
 //!
 //! | hook | window | bytes | relocated |
 //! |---|---|---|---|
@@ -424,14 +423,14 @@ mod tests {
 
     #[test]
     fn offsets_match_the_static_re() {
-        assert_eq!(tags::FRIENDLY_TAG_PRODUCER, 0x77_7380);
+        assert_eq!(tags::FRIENDLY_TAG_PRODUCER, 0x77_86b0);
         assert_eq!(
             (tags::SLOT_TEST, tags::SLOT_HANDLE_READY, tags::COLOUR_STORE),
             (0x2f8, 0x31c, 0x607)
         );
-        assert_eq!(tags::DAMAGE_UPDATE_UI, 0x44_9280);
+        assert_eq!(tags::DAMAGE_UPDATE_UI, 0x44_98c0);
         assert_eq!((tags::ENEMY_BAR_TEST, tags::ENEMY_BAR_TAIL), (0x26e, 0x375));
-        assert_eq!(tags::VOICE_CHAT_LOOKUP, 0x00cb_a510);
+        assert_eq!(tags::VOICE_CHAT_LOOKUP, 0x00cb_d340);
     }
 
     #[test]
@@ -443,13 +442,16 @@ mod tests {
             TAG_SLOT_HANDLE_READY_WINDOW_MASK,
             [0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]
         );
-        // The 1.17.1 bytes at the same offset: only the displacement differs.
-        let live = [0x48, 0x8b, 0x0d, 0xd5, 0x1a, 0x5f, 0x03];
+        // The 2.7.2.0 bytes at that offset match, and so does the same instruction with another
+        // displacement.
+        let live = [0x48, 0x8b, 0x0d, 0x45, 0x46, 0x5f, 0x03];
+        let other_displacement = [0x48, 0x8b, 0x0d, 0xd5, 0x1a, 0x5f, 0x03];
         let window = Window {
             bytes: TAG_SLOT_HANDLE_READY_WINDOW,
             mask: TAG_SLOT_HANDLE_READY_WINDOW_MASK,
         };
         assert!(super::super::window_matches(&live, &window));
+        assert!(super::super::window_matches(&other_displacement, &window));
     }
 
     #[test]

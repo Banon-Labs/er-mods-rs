@@ -9,7 +9,7 @@ talisman slots and the off-hand of a spell build.
 
 # What cast speed does
 
-`CSPlayerMagicModule::GetCastingSpeed` (1.16.2 `0x140453cc0`, 1.17.1 `0x140454220`, decompiled):
+`CSPlayerMagicModule::GetCastingSpeed` (`0x140454300`, decompiled as 1.16.2 `0x140453cc0`):
 
     v = clamp(1 - (clamp(DEX + bonus, lo, hi) - lo) / (hi - lo), 0, 1)     (0 when hi == lo)
 
@@ -38,7 +38,7 @@ weapon's (talismans.md). For a spell the context gate is `Magic.spEffectCategory
 `magParamChange`, 4 `miracleParamChange`, 10 `shamanParamChange` (`IsApplicableForCategory`,
 `VERIFIED`). Then `magicSubCategoryChange1..3` must meet the attack's subcategory mask. Giantsflame's
 AtkParam rows carry no subcategory, while the mask in `AttackInfo+0x14` is accumulated with bitwise or
-(`FUN_14068ffa0`), and Giant's Seal's 1923 gates on 21 = Giantsflame's `Magic.subCategory1`, so the
+(`FUN_1406912a0`), and Giant's Seal's 1923 gates on 21 = Giantsflame's `Magic.subCategory1`, so the
 spell's own subcategories are read as its mask (`INFERRED`). Held weapons' resident SpEffects count
 from either hand, and two copies of one seal both stay live: 1923 is `spCategory` 10, which the
 add path's same-id clash skips (buffs.md section 3, `VERIFIED`); that the two rates multiply is
@@ -278,7 +278,7 @@ class CastModel:
                     rate[e] = T.f32(rate[e] * T.f32(x))
                     correct[e] *= c
                     applied.append((src, r['id'], e, round(x * c, 4)))
-        # `*AttackRate` reaches the damage as a whole percent (FUN_140d24a30, talismans.py).
+        # `*AttackRate` reaches the damage as a whole percent (FUN_140d278a0, talismans.py).
         damage = sum(w * int(T.f32(rate[e] * T.f32(100.0))) / 100.0 * correct[e]
                      for e, w in spell['elements'].items()) or 1.0
         inc = T.defender_modifiers(self.t, [x for x in talismans])

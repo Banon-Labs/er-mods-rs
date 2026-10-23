@@ -1,12 +1,12 @@
 use super::*;
 
-/// Drive the native MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
-/// build the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
-/// wires the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
-/// 0x140d6a8e0 + window-mgr 0x143d83148) before firing the functor -- so it needs no synthetic ctx
+/// Drive the native MenuWindowJob::Update (2.7.2.0 0x1407ae4f0)(rcx=item, rdx=&out, r8=framectx)
+/// once to build the item's dialog the way the game does. Unlike a bare functor invoke, the native
+/// Update wires the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
+/// 1.16.2 0x140d6a8e0 + window-mgr 0x143d83148) before firing the functor -- so it needs no synthetic ctx
 /// (the prior wall). It is idempotent (returns early if item+0x130 already holds a dialog) and the
 /// Load-Game item only builds a ProfileLoadDialog -> build-only, no save write. Guarded by the
-/// native build precondition (mirrors 0x1407ad1ec/1fa/208): [item+0x130]==0 && [item+0xa8]!=0 &&
+/// native build precondition (mirrors 1.16.2 0x1407ad1ec/1fa/208): [item+0x130]==0 && [item+0xa8]!=0 &&
 /// [item+0x10]==0. `framectx` is the live FD4Time passed to our idx10 step (the same ctx the native
 /// pump feeds the leaf). Returns the built dialog at [item+0x130], if any.
 pub(crate) unsafe fn drive_menu_item_update(
@@ -92,8 +92,8 @@ pub(crate) unsafe fn decorator_child_offset(update_fn: usize) -> Option<usize> {
 /// Stage 1b (strictly no-write): recursive bounded walk of the title menu job tree rooted
 /// at `[owner+0xe0]` (the FD4 multicast/job holder -- runtime proved the real menu lives
 /// here, not the empty `owner+0x138`). Classifies each node by its Update slot
-/// `[vtable+0x10]`: 0x1407aa1f0 = Sequence/IfElse container (children at `[node+0x18]` base,
-/// count `[node+0x60]`, stride 8), 0x1407ad1c0 = MenuWindowJob leaf (action functor
+/// `[vtable+0x10]` (2.7.2.0): 0x1407ab520 = Sequence/IfElse container (children at `[node+0x18]` base,
+/// count `[node+0x60]`, stride 8), 0x1407ae4f0 = MenuWindowJob leaf (action functor
 /// `[node+0xa8]`). Logs the structure and returns the Load-Game leaf (functor -> dialog
 /// factory). Both child-pointer interpretations (base-deref and inline) are enqueued; a
 /// visited-set + node/depth caps bound it; fault-tolerant reads never AV. No writes/calls.
@@ -109,18 +109,19 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const NODE_COUNT_60: usize = 0x60;
     const NODE_HOLDER_ROOT_18: usize = 0x18;
     const SEQ_UPDATE_RVA: usize = SEQUENCE_ITER_RVA as usize;
-    const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
+    // Update-slot rvas below are 2.7.2.0; the vtable/selector addresses in the notes are 1.16.2.
+    const LEAF_UPDATE_RVA: usize = 0x07ae4f0;
     // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are not at the sequence
     // [+0x18]/[+0x60] layout; that mis-read is the "garbage count" the generic walk hit.
     // Decoded from selector 0x140793390: inline entry array at [node+0x18], stride 0x10,
     // each entry = {predicate@+0, child_job@+0x8}; entry count at [node+0xa0]; default/else
     // child at [node+0xa8]; runtime-active child at [node+0xb0]. Entry + default child jobs
     // are pre-built/retained at build time, so reading them needs no pump.
-    const IFELSE_UPDATE_RVA: usize = 0x07931e0;
-    // Single-child wrapper (vt 0x142a93af8, update 0x140745510): `mov rcx,[node+0x48];
+    const IFELSE_UPDATE_RVA: usize = 0x0794510;
+    // Single-child wrapper (vt 0x142a93af8, update 2.7.2.0 0x140746810): `mov rcx,[node+0x48];
     // call [rcx]->vt[+0x10]` -- forwards Update to one wrapped child at [node+0x48]. The
     // IfElseJob entry child jobs are these wrappers, not MenuWindowJobs directly.
-    const WRAP_UPDATE_RVA: usize = 0x0745510;
+    const WRAP_UPDATE_RVA: usize = 0x0746810;
     const WRAP_CHILD_48: usize = 0x48;
     const IFELSE_ENTRY_STRIDE_10: usize = 0x10;
     const IFELSE_ENTRY_JOB_8: usize = 0x8;
@@ -153,9 +154,8 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const MODULE_MIN_OFFSET: usize = 0x1000;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Resolved like its three siblings. `SEQUENCE_ITER_RVA` moved on 1.17 (0x7aa1f0 -> 0x7ab070),
-    // so the raw form matched no node, container nodes went unclassified, the walk never
-    // descended, and the Load-Game leaf could not be found down this path.
+    // Resolved like its three siblings: a raw form would match no node on another build, container
+    // nodes would go unclassified, and the walk would never descend to the Load-Game leaf.
     let seq_update_abs =
         er_game_base::mem::game_data_addr(module_base, SEQ_UPDATE_RVA, "SEQUENCE_ITER_RVA");
     let leaf_update_abs =
@@ -437,7 +437,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         // Drive d180's native Update once as soon as the item exists and its native build
         // preconditions are true. d180 lives at owner+0x130 under an input-gated IfElseJob branch
         // (its case child is never bound headless), so the native pump never ticks it -- but the
-        // item is fully built, so calling its own MenuWindowJob::Update 0x1407ad1c0 (which wires
+        // item is fully built, so calling its own MenuWindowJob::Update 0x1407ae4f0 (which wires
         // the ctx item+0x10 from the descriptor item+0x58 before firing the functor) builds the
         // ProfileLoadDialog with a native ctx (no synthesis) and zero input. Build-only;
         // idempotent; no save write.
@@ -620,7 +620,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         let io_was_set =
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
-        // Mount signal = the deserialize 0x67b290 succeeded (ret==1), which proves it wrote c30 from
+        // Mount signal = the deserialize 0x67c590 succeeded (ret==1), which proves it wrote c30 from
         // the save header + applied the real char. c30 itself is ambiguous (the char's real early map
         // 0xa010000 collides with the new-game default), so the reliable signal is deser-success +
         // a SANE latched c30 (not the unset sentinel, not zero). (setstate5-is-save-safe-c30-from-save)
@@ -775,15 +775,16 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
     }
     // Resolved, not added (2026-08-30). These two are `.data` function-pointer slots in the inner
     // title state table, and this is the only write in the product that stores our code address
-    // into the game's dispatch table. A stale one is the worst case the 1.17 gate exists for: no
-    // refusal, no fault at write time, no log -- the qword that now lives at the 1.16.2 offset is
-    // silently replaced with a pointer to our handler, and the detonation happens later, in
-    // whatever native code owned that slot. `native_continue_enabled()` is true in the default
+    // into the game's dispatch table. A stale one is the worst case the build gate exists for: no
+    // refusal, no fault at write time, no log -- whatever qword lives at that offset on another
+    // build is silently replaced with a pointer to our handler, and the detonation happens later,
+    // in whatever native code owned that slot. `native_continue_enabled()` is true in the default
     // product path, so this runs on every boot.
     //
-    // The table's own base is mapped (`INNER_TITLE_STATE_TABLE_RVA` 0x3d71580 -> 0x3d755f0, +0x4070)
-    // but these two slots at +0x60 and +0xa0 are not rows of their own, so they refuse on 1.17
-    // until the data map carries them. Refusing costs own-stepper; guessing corrupts the table.
+    // On 2.7.2.0 the table base is 0x143d78610, and the static initializer at 0x1400a5017/0x1400a5087
+    // stores STEP_GameStepWait 0x140b0e9b0 to +0x60 (idx6, 0x3d78670) and STEP_MenuJobWait
+    // 0x140b0efd0 to +0xa0 (idx10, 0x3d786b0) -- the same two stores 1.16.2 made at the same
+    // initializer offsets. `game_data_addr` answers 0 on any other build, which refuses below.
     let slot = er_game_base::mem::game_data_addr(
         module_base,
         TITLE_STEP_IDX10_SLOT_RVA,
@@ -798,7 +799,7 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
         append_autoload_debug(format_args!(
             "own_stepper: REFUSED to patch the step-fn slots -- idx10 rva 0x{TITLE_STEP_IDX10_SLOT_RVA:x} \
              resolved to 0x{slot:x} and idx6 rva 0x{TITLE_STEP_IDX6_SLOT_RVA:x} to 0x{slot6:x}; a zero \
-             means no verified mapping for this build, and storing a handler pointer into an unmapped \
+             means the running build is not 2.7.2.0, and storing a handler pointer into an unverified \
              .data qword corrupts silently. own-stepper stays OFF for this boot."
         ));
         return;

@@ -7,9 +7,9 @@
 //! name from the game's own texture repositories at runtime.
 //!
 //! Mechanism (static RE 2026-07-23, bd er-effects-rs-pe98 comments): the game populates
-//! each tile natively -- `TilePopulate(SceneObjProxy* tile, MenuGaitem*)` (dump
+//! each tile natively -- `TilePopulate(SceneObjProxy* tile, MenuGaitem*)` (1.16.1 dump
 //! FUN_1408ff560) fills the tile's named child proxies and pushes icons through the
-//! universal icon setter (dump FUN_14074bdb0), which draws a bitmap-fill quad via the
+//! universal icon setter (1.16.1 dump FUN_14074bdb0), which draws a bitmap-fill quad via the
 //! Scaleform Drawing API from a symbol like `MENU_ItemIcon_%05d`. Vanilla corner badges
 //! (affinity/infusion) are driven the same way. We post-hook TilePopulate and drive a
 //! badge child with the game's own primitives.
@@ -31,12 +31,11 @@ use std::{
 
 use er_game_base::log::{append_line, game_directory_path};
 
-/// `base + rva`, resolved for the running build, or `None` when this build moved the function.
+/// `base + rva` on 2.7.2.0, or `None` on any other build.
 ///
-/// Every Scaleform call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
-/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A mapped
-/// constant is no safer that way: the map knows the new address and `base + rva` never asks it.
-/// Refusing costs a badge; calling an arbitrary address costs the process.
+/// Every Scaleform call below used to transmute a hand-built `base + rva`, which on another patch
+/// calls whatever now occupies that address with nothing to refuse it. Refusing costs a badge;
+/// calling an arbitrary address costs the process.
 #[cfg(windows)]
 pub(crate) fn icons_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
@@ -56,41 +55,41 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 
 const LOG_FILE_NAME: &str = "er-armament-icons.log";
 
-// -- Ground-truthed deobf RVAs (scripts/dump-deobf-shift.py 2026-07-23, all content-unique;
-//    dump VA -> deobf VA recorded on bd er-effects-rs-pe98) --
+// -- 2.7.2.0 rvas (eldenring-deobf-1.17.2.bin). The `FUN_` names below are 1.16.1 Ghidra dump
+//    labels, kept as names only. --
 
 /// Per-tile populate `TilePopulate(SceneObjProxy* tile, MenuGaitem*)`.
-/// dump FUN_1408ff560 -> deobf 0x1408ff470 (shift -0xf0). Hook target.
-const TILE_POPULATE_RVA: usize = 0x8ff470;
+/// 1.16.1 dump FUN_1408ff560; 2.7.2.0 0x140900ac0. Hook target.
+const TILE_POPULATE_RVA: usize = 0x900ac0;
 /// Universal icon setter `SetIcon(SceneObjProxy*, iconInfo*)` (iconInfo +0x38 category
-/// byte, +0x3c i32 iconId). dump FUN_14074bdb0 -> deobf 0x14074bcc0 (-0xf0). Call target
+/// byte, +0x3c i32 iconId). 1.16.1 dump FUN_14074bdb0; 2.7.2.0 0x14074cfc0. Call target
 /// for the badge draw (milestone 2).
-const ICON_SETTER_RVA: usize = 0x74bcc0;
+const ICON_SETTER_RVA: usize = 0x74cfc0;
 /// Menu-side MenuGaitem -> swordArtsParamId resolver `int f(MenuGaitem*)` (dump
 /// FUN_140849970): returns -1 for non-weapons; honors the socketed Ash-of-War gem
 /// override (gemParamId +0x7c, gaitem handle +0x50) before falling back to the
 /// EquipParamWeapon row's swordArtsParamId.
-/// dump 0x140849970 -> deobf 0x140849880 (-0xf0). Call target.
-const MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA: usize = 0x849880;
+/// 2.7.2.0 0x14084ad20. Call target.
+const MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA: usize = 0x84ad20;
 /// `LookupSwordArtsParam(SwordArtsParamLookupResult* out, uint id)` -- POD result
 /// `{ u32 paramId @0x0, SwordArtsParam* row @0x8 }`, row null when the id misses.
-/// dump 0x140d50d70 -> deobf 0x140d50cc0 (-0xb0). Call target.
-const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd50cc0;
+/// 1.16.1 dump 0x140d50d70; 2.7.2.0 0x140d54160. Call target.
+const LOOKUP_SWORD_ARTS_PARAM_RVA: usize = 0xd54160;
 /// `FUN_1408487d0(MenuGaitem*) -> u32 iconId` -- the tile's own item icon id (the main
 /// ItemIcon). Used by the mirror-item-icon diagnostic to draw a guaranteed-visible glyph
-/// into the badge for oracle rect-location. dump 0x1408487d0 -> deobf 0x1408486e0 (-0xf0).
-const MENU_GAITEM_ICON_ID_RVA: usize = 0x8486e0;
+/// into the badge for oracle rect-location. 2.7.2.0 0x140849b80.
+const MENU_GAITEM_ICON_ID_RVA: usize = 0x849b80;
 /// `FUN_140d81a20(CSScaleformValue* value, float* out4)` -- GLOBAL/stage-space bounds of a
 /// bound display object: out = {xmin, ymin, xmax, ymax} in the 1920x1080 GFx stage, pixels
 /// (twips->px already applied). value = proxy+0x28. Its local-space sibling is FUN_140d82060.
-/// dump 0x140d81a20 -> deobf 0x140d81970 (-0xb0). Call target for the oracle crop rect.
-const PROXY_GLOBAL_RECT_RVA: usize = 0xd81970;
+/// 2.7.2.0 0x140d84e10. Call target for the oracle crop rect.
+const PROXY_GLOBAL_RECT_RVA: usize = 0xd84e10;
 /// `FUN_140d82060(CSScaleformValue* value, float* out4) -> out` -- Local-space bounds of a
 /// bound display object, {xmin,ymin,xmax,ymax} px; {0,0,0,0} when unbound/empty. This is
 /// the rect the icon setter reads to compute the drawn quad's scale (= rect/tex), so an
 /// empty (zero-extent) container yields a zero-scale, invisible icon. value = proxy+0x28.
-/// dump 0x140d82060 -> deobf 0x140d81fb0 (-0xb0, content-unique). Call target.
-const PROXY_LOCAL_RECT_RVA: usize = 0xd81fb0;
+/// 2.7.2.0 0x140d85450. Call target.
+const PROXY_LOCAL_RECT_RVA: usize = 0xd85450;
 /// `MenuGaitem.itemId` (+0x4c): top nibble = category (0 = weapon), low 28 bits =
 /// EquipParamWeapon id. Identifies the weapon in a tile for deterministic slot picking.
 const MENU_GAITEM_ITEM_ID_OFFSET: usize = 0x4c;
@@ -100,9 +99,9 @@ const MENU_GAITEM_CATEGORY_SHIFT: u32 = 28;
 /// staff, seal). The armament-only gate for the badge.
 const MENU_GAITEM_CATEGORY_WEAPON: u32 = 0;
 /// `GetEquipParamGem(EquipParamGemLookupResult* out, uint id)` -- out.paramId@0, out.paramRow@8
-/// (0 on miss). dump 0x140d2a420 -> deobf 0x140d2a360 (-0xc0; prologue disasm-confirmed:
-/// id<0 js + SoloParamRepository load). Call target.
-const GET_EQUIP_PARAM_GEM_RVA: usize = 0xd2a360;
+/// (0 on miss). 1.16.1 dump 0x140d2a420; 2.7.2.0 0x140d2d1d0 (prologue: id<0 js +
+/// SoloParamRepository load). Call target.
+const GET_EQUIP_PARAM_GEM_RVA: usize = 0xd2d1d0;
 /// `EquipParamGem.iconId` = u16 at row+0x4 (Ghidra get_structure _EQUIP_PARAM_GEM_ST). The
 /// applied ash's inventory item icon = the crescent icon shown in the detail panel.
 const EQUIP_PARAM_GEM_ICON_ID_OFFSET: usize = 0x4;
@@ -111,31 +110,31 @@ const EQUIP_PARAM_GEM_ICON_ID_OFFSET: usize = 0x4;
 /// looked it up for -- see `resolve_gem_icon_id`.
 const EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET: usize = 0x18;
 /// SwordArtsParam row: skill iconId is the u16 at row +0x1A. Ground-truthed to the
-/// game's own HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (dump
-/// 0x140772b70): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
+/// game's own HUD skill-icon builder CS::CSFeManImp::UpdatePlayerComponents (2.7.2.0
+/// 0x140773db0): it reads `*(u16*)(swordArtsRow + offsetof(_EQUIP_PARAM_GOODS_ST,
 /// behaviorId=0x18) + 2)` = row+0x1A and feeds it to the iconInfo builder for the
 /// equipped-weapon skill icon. Reading the same offset makes the badge match the
 /// game's own skill icon exactly.
 const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
 /// iconInfo builder `FUN_14073d4e0(iconInfo* out, uint iconId)`: zero-fills the
 /// 0x40-byte iconInfo, writes category (+0x38, from the iconId range table) and
-/// iconId (+0x3c). dump 0x14073d4e0 -> deobf 0x14073d3e0 (-0x100). Call target.
-const ICON_INFO_BUILDER_RVA: usize = 0x73d3e0;
+/// iconId (+0x3c). 2.7.2.0 0x14073e6e0. Call target.
+const ICON_INFO_BUILDER_RVA: usize = 0x73e6e0;
 /// `SceneObjProxy::assignComponentWithName(SceneObjProxy* parent, SceneObjProxy* out,
 /// const char* nameFmt, ...)` -- constructs into raw `out` (no pre-init needed),
-/// returns `out`. dump 0x14074a3e0 -> deobf 0x14074a2f0 (-0xf0). Call target.
-const ASSIGN_COMPONENT_WITH_NAME_RVA: usize = 0x74a2f0;
+/// returns `out`. 1.16.1 dump 0x14074a3e0; 2.7.2.0 0x14074b5f0. Call target.
+const ASSIGN_COMPONENT_WITH_NAME_RVA: usize = 0x74b5f0;
 /// `bool FUN_140733250(SceneObjProxy*)` -- did the named resolve bind a real GFx
-/// display object. dump 0x140733250 -> deobf 0x140733150 (-0x100). Call target.
-const PROXY_IS_BOUND_RVA: usize = 0x733150;
+/// display object. 2.7.2.0 0x140734450. Call target.
+const PROXY_IS_BOUND_RVA: usize = 0x734450;
 /// `FUN_140733440(SceneObjProxy*, u8 visible)` -- GFx SetDisplayInfo(visible);
 /// stateful in the movie, no native per-frame re-hide.
-/// dump 0x140733440 -> deobf 0x140733340 (-0x100). Call target.
-const PROXY_SET_VISIBLE_RVA: usize = 0x733340;
+/// 2.7.2.0 0x140734640. Call target.
+const PROXY_SET_VISIBLE_RVA: usize = 0x734640;
 /// `CS::CSScaleformValue::~CSScaleformValue` -- Mandatory after every
 /// assignComponentWithName resolve (the proxy holds a ref-counted GFx Value).
-/// dump 0x140d7f900 -> deobf 0x140d7f850 (-0xb0). Call target.
-const SCALEFORM_VALUE_DTOR_RVA: usize = 0xd7f850;
+/// 1.16.1 dump 0x140d7f900; 2.7.2.0 0x140d82cf0. Call target.
+const SCALEFORM_VALUE_DTOR_RVA: usize = 0xd82cf0;
 /// `CSScaleformValue scaleformValue` lives at SceneObjProxy +0x28 (Ghidra
 /// get_structure CS/SceneObjProxy: size 0x60, scaleformValue @40, len 0x38).
 const PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x28;
@@ -406,7 +405,7 @@ fn install_tile_populate_hook(base: usize) {
         MH_STATUS::MH_OK => {
             HOOK_ACTIVE.store(1, Ordering::SeqCst);
             log_message(format_args!(
-                "install: tile_populate hook ACTIVE @0x{target:x} (deobf rva 0x{TILE_POPULATE_RVA:x})"
+                "install: tile_populate hook ACTIVE @0x{target:x} (rva 0x{TILE_POPULATE_RVA:x})"
             ));
         }
         status => log_message(format_args!("install: MH_ApplyQueued failed: {status:?}")),
@@ -848,7 +847,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         unsafe { dump_scaleform_vtables(base, tile) };
         // Full child inventory with local rects (tile-relative: +x=right, +y=down; AttributeIcon
         // local[17,30,43,56]=bottom-right proven). Names are the authoritative set the game's
-        // TilePopulate references (deobf 0x1408ff470 string refs). Goal: find a bottom-left clip
+        // TilePopulate references (string refs of 2.7.2.0 0x140900ac0). Goal: find a bottom-left clip
         // (local x<0, y>0) for the additive AoW badge, since AttributeIcon is bottom-right
         // (infusion, untouched), ArtsIcon is detail-only + zero-extent, and grid tiles otherwise
         // bind only ItemIcon/AttributeIcon. A bound child with a real rect is a draw candidate.
@@ -888,7 +887,7 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     }
 
     // A/B diagnostic (one run answers both): the icon setter scales the drawn quad by
-    // rect/tex where rect = the target's local bounds (verified: FUN_140d816f0 computes
+    // rect/tex where rect = the target's local bounds (verified: 1.16.1 dump FUN_140d816f0 computes
     // scaleXY = (rect_wh)/(tex_wh)). If ArtsIcon is an empty, zero-extent container its rect
     // is 0 => scale 0 => invisible, which is exactly why a "DRAWN" badge still matches vanilla.
     // Log the working control (ItemIcon) vs ArtsIcon(pre) so the trace confirms the cause and

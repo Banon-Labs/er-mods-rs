@@ -205,7 +205,7 @@ static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 // slot view, so the "pick file -> pick character" flow never leaves the game's visual system.
 //
 // The only input this window gives the DLL is row ACTIVATION: `system_quit_profile_load_activate_hook`
-// intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`) and reads the highlighted list
+// intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a5cc0`) and reads the highlighted list
 // index out of `dialog+0xb0c`. Cursor movement, back and every other press stay inside the game's
 // own list widget. Directory and drive browse actions are row/cell activations; overflow scrolling is
 // handled by held-edge restaging so it does not consume visible rows.
@@ -292,8 +292,8 @@ pub fn save_picker_start_dir() -> Option<PathBuf> {
 /// transport -- no snapshot bookkeeping and no renderer refresh -- shared by the staging path below
 /// and the list-builder re-stage hook. Returns the number of occupied (visible) rows.
 ///
-/// Occupancy is the row's existence, not a decoration. The native list builder `FUN_140875590`
-/// (1.16.2) walks slots 0..10 and appends a row only when the occupancy predicate `FUN_140261cd0`
+/// Occupancy is the row's existence, not a decoration. The native list builder `0x140876a30`
+/// walks slots 0..10 and appends a row only when the occupancy predicate `0x140261ce0`
 /// -- literally `ProfileSummary::saveSlotsStates[slot]`, summary+0x8+slot -- returns true, taking
 /// the row's name/level/playtime from the record at summary+0x18+slot*0x2a0. Two consequences:
 ///
@@ -327,7 +327,7 @@ pub unsafe fn save_picker_write_row_records(
             face_hash.store(0, Ordering::SeqCst);
             if slot >= visible {
                 // Beyond the listing: no row. The record is already zeroed above, so nothing stale
-                // survives if the game's own save path (`FUN_140262270`, which also runs
+                // survives if the game's own save path (`0x140262280`, which also runs
                 // `MarkProfileIndexAsUsed`) flips this slot back to occupied between here and the
                 // native build -- and the list-builder re-stage hook re-runs this whole pass at
                 // every build site precisely to close that window.
@@ -409,7 +409,8 @@ pub unsafe fn save_picker_stage_row_records(
     if let Ok(base) = game_module_base() {
         // `PROFILE_RENDERER_REFRESH_RVA` walks the profile model renderer table without checking
         // it, so calling it on a null table reads `[null + 0x754]` and the process dies -- the
-        // access violation bd `er-effects-rs-p88u` measured three times at `eldenring.exe+0x9ab874`.
+        // access violation bd `er-effects-rs-p88u` measured three times at `eldenring.exe+0x9ab874`
+        // on 1.17.1 (2.7.2.0 `+0x9abd24`).
         // `system_quit_open_profile_load_dialog_on` guards its own submit the same way; this call
         // site had no guard, and run br-20260912-200740-d5e1 died here, between the line saying the
         // pump had a staged request and any line saying the browser opened.
@@ -860,7 +861,7 @@ pub unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &st
     unsafe { save_picker_native_close(dialog, reason) };
     // Restore before the save fires, not merely before the next loading screen. The save-flow tick
     // is about to run a native save, and the native save writes the ProfileSummary table into the
-    // container (`FUN_14067b940` -> `MarkProfileIndexAsUsed` + `FUN_140262270`). Firing while our
+    // container (`0x14067cc40` -> `MarkProfileIndexAsUsed` + `0x140262280`). Firing while our
     // browse-row labels are still in those records would persist `[ new ]` as a character name
     // into the file the user just chose. The picker's own close path restores too; this is
     // deliberately not left to it, because "commit" is one of the three exits the restore must
@@ -1247,28 +1248,29 @@ pub(crate) const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
 const GRID_CONTROL_SCROLLBAR_OFFSET: usize = 0x1a8;
 const PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET: usize =
     PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + GRID_CONTROL_SCROLLBAR_OFFSET;
-const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
-/// The field `MENU_ITEM_LIST_CURSOR_GETTER_RVA` reads: `FUN_140739e20` is exactly
+/// 2.7.2.0 rva (1.16.2 `FUN_140739e20`).
+const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x73b120;
+/// The field `MENU_ITEM_LIST_CURSOR_GETTER_RVA` reads: `0x14073b120` is exactly
 /// `*(undefined4 *)(param_1 + 0xd4)`. `GridControl::HandleMouse` writes the same field on a hit.
 const MENU_ITEM_LIST_CURSOR_FIELD_OFFSET: usize = 0xd4;
-/// `FUN_14073bc10(grid, index)` -- the native select-index primitive, not a field poke.
+/// `0x14073cf10(grid, index)` -- the native select-index primitive, not a field poke.
 ///
 /// Writing `+0xd4` directly changes which row is selected without any of the side effects that
 /// make the selection VISIBLE: the highlight stays where it was while the logical cursor moves
 /// somewhere else (reported 2026-08-12 as the wheel scrolling rows "but the chrome doesn't travel
 /// with it"). This is the function the game's own mouse handler calls after resolving a hit
-/// (`GridControl::HandleMouse` -> `FUN_140736c90` returns the cell -> `FUN_14073bc10(grid, cell)`),
-/// and it bounds-checks the index, runs `FUN_140739830`, and only then writes `+0xd4`.
+/// (`GridControl::HandleMouse` -> `0x140737f90` returns the cell -> `0x14073cf10(grid, cell)`),
+/// and it bounds-checks the index, runs `0x14073ab30`, and only then writes `+0xd4`.
 ///
-/// Address byte-verified against `eldenring-deobf.bin`: the prologue
+/// 2.7.2.0 rva, byte-verified against `eldenring-deobf-1.17.2.bin`: the prologue
 /// `48 89 5c 24 18 89 54 24 10 57 48 83 ec 20 44 8b 99 dc 00 00 00` occurs exactly once in the
-/// image, at `0x14073bc10` (1.16.2 dump VA == deobf VA == runtime VA, shift 0).
-pub(crate) const MENU_ITEM_LIST_SET_CURSOR_RVA: usize = 0x73bc10;
-/// The grid's ensure-visible bases, column and row: `FUN_140739830` measures the target as
+/// image, at `0x14073cf10` (1.16.2 `FUN_14073bc10`, the same bytes).
+pub(crate) const MENU_ITEM_LIST_SET_CURSOR_RVA: usize = 0x73cf10;
+/// The grid's ensure-visible bases, column and row: `0x14073ab30` measures the target as
 /// `index % cols - [+0xe0]` and `index / cols - [+0x348]`.
 ///
 /// `+0x348` is the SCROLLBAR position, not a private grid field. The scrollbar control is embedded
-/// at `grid+0x1a8` and `ScrollbarControl::SetPosition` (`FUN_14074db60`) writes `scrollbar+0x1a0`
+/// at `grid+0x1a8` and `ScrollbarControl::SetPosition` (`0x14074ee60`) writes `scrollbar+0x1a0`
 /// -- and `0x1a8 + 0x1a0 == 0x348`. The native list scrolls its view by that position: the game's
 /// design is one item array plus a moving window.
 ///
@@ -1281,7 +1283,7 @@ pub(crate) const MENU_ITEM_LIST_SET_CURSOR_RVA: usize = 0x73bc10;
 pub(crate) const GRID_CONTROL_VIEW_COL_BASE_OFFSET: usize = 0xe0;
 pub(crate) const GRID_CONTROL_VIEW_ROW_BASE_OFFSET: usize = 0x348;
 /// Item count, columns and rows-per-view on the grid, read only to explain the index space in the
-/// log (`FUN_14073bc10` bounds-checks the index against exactly these).
+/// log (`0x14073cf10` bounds-checks the index against exactly these).
 pub(crate) const GRID_CONTROL_ITEM_COUNT_OFFSET: usize = 0xd0;
 pub(crate) const GRID_CONTROL_COLUMNS_OFFSET: usize = 0xd8;
 pub(crate) const GRID_CONTROL_ROWS_OFFSET: usize = 0xdc;
@@ -1290,12 +1292,13 @@ pub(crate) const GRID_CONTROL_ROWS_OFFSET: usize = 0xdc;
 pub(crate) static SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR: AtomicUsize =
     AtomicUsize::new(EDGE_SCROLL_NO_PREV_CURSOR);
 pub(crate) const EDGE_SCROLL_NO_PREV_CURSOR: usize = usize::MAX;
-const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
-const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
+/// 2.7.2.0 rvas (1.16.2 `FUN_14074dad0` / `FUN_14074db60`).
+const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74edd0;
+const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74ee60;
 /// `ScrollBarV`'s three state fields, read out of the two setters this pump already calls.
 ///
-/// `FUN_14074dad0(sb, total)` clamps `total` to at least 1, stores it at `+0x1a4`, and then clamps
-/// `+0x1a0` into `[0, total - *(sb + 0x1a8)]`; `FUN_14074db60(sb, pos)` clamps `pos` into that same
+/// `0x14074edd0(sb, total)` clamps `total` to at least 1, stores it at `+0x1a4`, and then clamps
+/// `+0x1a0` into `[0, total - *(sb + 0x1a8)]`; `0x14074ee60(sb, pos)` clamps `pos` into that same
 /// range before storing it. So `+0x1a8` is the page size, and it -- not the total alone -- decides
 /// how far the thumb may travel and how large it draws.
 const SCROLLBAR_CONTROL_POSITION_OFFSET: usize = 0x1a0;
@@ -1305,7 +1308,8 @@ static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MA
 /// zeroed straight after each draw, so the previous value has to be remembered here instead.
 static SAVE_PICKER_SCROLLBAR_LAST_POSITION: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS: AtomicUsize = AtomicUsize::new(0);
-const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
+/// 2.7.2.0 rva (1.16.2 `FUN_140757af0`).
+const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x758df0;
 const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
 const PROFILE_SELECT_MOVIE_HEIGHT_PX: f32 = 1080.0;
 /// `ProfileList` is placed at root movie x=960 and every nested ItemList/row placement has identity
@@ -1441,11 +1445,14 @@ pub(crate) fn save_picker_live_profile_dialog() -> usize {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst)
 }
 
-/// Final derived vtable installed by `FUN_140875590` on
-/// `BasicViewItemList<MenuSaveDataSummary,10>`. During destruction it regresses through
-/// `0x2ad53c8` and `0x2a9e598`; slot `+8` is then pure virtual. The records-changed rebuild calls
-/// that slot at `FUN_1409a2cf0+0x3d`, so the exact derived vtable is a hard precondition.
-const PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA: usize = 0x2ad5400;
+/// Final derived vtable installed by the list builder `0x140876a30` on
+/// `BasicViewItemList<MenuSaveDataSummary,10>` (2.7.2.0 rva, RTTI-checked against
+/// `eldenring-deobf-1.17.2.bin`). During destruction it regresses through the
+/// `MenuViewItemList<MenuSaveDataSummary>` and `MenuViewItemListBase` vtables (2.7.2.0 `0x2ada538`
+/// and `0x2aa3708`); slot `+8` is then pure virtual. The records-changed rebuild calls that slot
+/// (1.16.2 `FUN_1409a2cf0+0x3d`, 2.7.2.0 `0x1409a4340+0x3d`), so the exact derived vtable is a
+/// hard precondition.
+const PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA: usize = 0x2ada570;
 const PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET: usize = 0x1260;
 
 fn save_picker_rebuild_target_is_live(
@@ -1455,11 +1462,12 @@ fn save_picker_rebuild_target_is_live(
 ) -> bool {
     // Both expected vtables are resolved for the running build, and neither comparison may be
     // satisfied by zero. The dialog half used to be a raw `game_base + RVA` sitting next to a
-    // resolved sibling: `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so
-    // that half could never match and the in-place list rebuild was silently declined on every
-    // records-changed event. The zero screens close the other direction -- `game_data_addr` answers
-    // 0 for a refusal and both observed vtables arrive here as `unwrap_or(0)`, so `0 == 0` would
-    // have called the native rebuild on a dialog nothing had identified.
+    // resolved sibling: `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78;
+    // 2.7.2.0 0x2b27b68), so that half could never match and the in-place list rebuild was
+    // silently declined on every records-changed event. The zero screens close the other
+    // direction -- `game_data_addr` answers 0 for a refusal and both observed vtables arrive here
+    // as `unwrap_or(0)`, so `0 == 0` would have called the native rebuild on a dialog nothing had
+    // identified.
     let expected_dialog_vtable = er_game_base::mem::game_data_addr(
         game_base,
         er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
@@ -1490,9 +1498,9 @@ const SAVE_PICKER_CHROME_DIRTY_TICK_COUNT: usize = 3;
 
 /// Put the selection chrome back on the row the grid settled on after an in-place rebuild.
 ///
-/// The rebuild re-selects through the grid's own path -- `FUN_1409a4ed0` reads `+0xd4`, hands it to
-/// `FUN_1409a2cf0`, and that calls `FUN_140738d40` -> `FUN_14073bc10`, which is where the chrome
-/// lives: `FUN_14073bae0` assigns the cell's `Cursor` component and shows it. That select is also
+/// The rebuild re-selects through the grid's own path -- `0x1409a6520` reads `+0xd4`, hands it to
+/// `0x1409a4340`, and that calls `0x14073a040` -> `0x14073cf10`, which is where the chrome
+/// lives: `0x14073cde0` assigns the cell's `Cursor` component and shows it. That select is also
 /// allowed to fail. The rebuild sets the item count from the staged records first, so a window
 /// holding empty slots refuses every index at or past the count; the rebuild then walks forward and
 /// backward looking for a row that will take it, and if none does, the list ends up with no visible
@@ -1529,7 +1537,7 @@ unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) ->
         unsafe { safe_read_usize(dialog + PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET) }.unwrap_or(0);
     if !save_picker_rebuild_target_is_live(dialog_vtable, list_vtable, base) {
         append_autoload_debug(format_args!(
-            "save-picker: dropped in-place list rebuild for terminal/unbound dialog=0x{dialog:x} reason={reason} dialog_vt=0x{dialog_vtable:x} list_vt=0x{list_vtable:x}; native rebuild would purecall at game+0x9a2d2d"
+            "save-picker: dropped in-place list rebuild for terminal/unbound dialog=0x{dialog:x} reason={reason} dialog_vt=0x{dialog_vtable:x} list_vt=0x{list_vtable:x}; native rebuild would purecall at game+0x9a437d"
         ));
         return false;
     }
@@ -1568,14 +1576,16 @@ mod rebuild_liveness_tests {
             "PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA",
         );
         assert!(save_picker_rebuild_target_is_live(dialog, list, base));
+        // The two base-class vtables the list regresses through while it is destroyed (2.7.2.0
+        // `MenuViewItemList<MenuSaveDataSummary>` and `MenuViewItemListBase`).
         assert!(!save_picker_rebuild_target_is_live(
             dialog,
-            base + 0x2ad53c8,
+            base + 0x2ada538,
             base
         ));
         assert!(!save_picker_rebuild_target_is_live(
             dialog,
-            base + 0x2a9e598,
+            base + 0x2aa3708,
             base
         ));
         assert!(!save_picker_rebuild_target_is_live(0, list, base));
@@ -2178,10 +2188,11 @@ pub unsafe fn save_picker_menu_pump_native_scrollbar() {
         return;
     };
     let scrollbar = window + PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET;
-    // Both setters call FUN_14074dcc0, which immediately executes
+    // Both setters call 0x14074efc0, which immediately executes
     // `call [*(scrollbar+8)+8]` to toggle the embedded visible component. ProfileSelect's native
     // in-place rebuild can leave that component unbound between teardown/rebind frames. Calling the
-    // setter then jumps through NULL (observed crash: rcx=dialog+0xbe8, ret=game+0x73334f).
+    // setter then jumps through NULL (observed crash on 1.16.2: rcx=dialog+0xbe8,
+    // ret=game+0x73334f; the same return is 2.7.2.0 game+0x73464f).
     let Ok(base) = game_module_base() else {
         return;
     };
@@ -2235,11 +2246,11 @@ pub unsafe fn save_picker_menu_pump_native_scrollbar() {
     // visible cell. The picker's ten staged records are the whole of that list, so the only base
     // the grid can lay itself out at is 0; parking the model's scroll offset there told it the top
     // rows had scrolled off, and the header row went with them. It did not come back on the way
-    // up because `FUN_14074db60` only redraws the thumb -- the cells are re-laid out by the grid's
+    // up because `0x14074ee60` only redraws the thumb -- the cells are re-laid out by the grid's
     // own scroll path, which nothing here calls.
     //
     // So the field carries the position exactly as long as the setter needs it: the previous
-    // position goes in first so `FUN_14074db60`'s change test passes and `FUN_14074dcc0` moves the
+    // position goes in first so `0x14074ee60`'s change test passes and `0x14074efc0` moves the
     // thumb, and zero goes back in immediately afterwards. Both writes are to the raw field, which
     // is the same thing the page store above does and for the same reason -- the setter owns the
     // visual, and this owns the geometry the setter has no opinion about.
@@ -2509,14 +2520,14 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         // moves its own selection for a key, a pad direction and a wheel detent.
         //
         // The wheel is the exception, and the reason is in the grid's own mouse handler. In
-        // `FUN_14073a5c0` the wheel branch reads the notch delta and then, per notch:
+        // `0x14073b8c0` the wheel branch reads the notch delta and then, per notch:
         //
-        //     if (FUN_14073b670(grid, delta))                  // scroll the view; "did base move?"
-        //         FUN_14073b0c0(grid, grid->cursor, delta);    // ...only then move the cursor
+        //     if (0x14073c970(grid, delta))                    // scroll the view; "did base move?"
+        //         0x14073c3c0(grid, grid->cursor, delta);      // ...only then move the cursor
         //
         // so the detent's cursor step is gated on the grid's own view base (`grid+0x348`, the
-        // scrollbar position) actually changing. `FUN_14073b670` clamps the new base into
-        // `[0, ((count-1)/cols) - rows + 1]` (`FUN_14073a0a0`) and reports "unchanged" at either
+        // scrollbar position) actually changing. `0x14073c970` clamps the new base into
+        // `[0, ((count-1)/cols) - rows + 1]` (`0x14073b3a0`) and reports "unchanged" at either
         // clamp -- and the picker owns scrolling in its model, staging a fixed window of records, so
         // that native range is a degenerate one or two positions that our select hook then pins.
         // At a clamped base the whole detent reaches nothing at all: no view move, no cursor move,
@@ -2524,7 +2535,7 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         //
         // The wheel is unconditionally ours, and it is safe to act on the spot only because the
         // other mechanism no longer exists: `save_picker_wheel_delta_hook` zeroes the notch the grid
-        // would have read, so `FUN_14073a5c0` never scrolls or moves the cursor while the picker is
+        // would have read, so `0x14073b8c0` never scrolls or moves the cursor while the picker is
         // up. Two earlier shapes of this both double-scrolled, because both tried to decide who acts
         // by looking at the cursor -- once on the arrival tick, once a tick later -- and the native
         // handler runs later than either (live log: our step `+107884ms`, its move `+107911ms`).
@@ -2660,15 +2671,16 @@ mod text;
 pub use text::*;
 
 /// Entry hook on the native ProfileSelect item-list builder (`PROFILE_SELECT_LIST_BUILDER_RVA`,
-/// FUN_140875590): while the browse picker owns the `05_010` rows, RE-stage the browse-row records
+/// `0x140876a30`): while the browse picker owns the `05_010` rows, RE-stage the browse-row records
 /// immediately before the native builder turns ProfileSummary records into visible list rows.
 ///
 /// Root cause of the stray current-character row (er-effects-rs-xlqh): the ProfileSummary records
 /// are game-owned and volatile in-world. Every save the game performs runs the save-write path
-/// `FUN_14067b940`, which calls `CS::ProfileSummary::MarkProfileIndexAsUsed(summary, saveSlot)`
-/// and then `FUN_140262270(summary, saveSlot)` -- and `FUN_140262270` rewrites the active slot's
+/// `0x14067cc40`, which calls `CS::ProfileSummary::MarkProfileIndexAsUsed(summary, saveSlot)`
+/// and then `0x140262280(summary, saveSlot)` -- and `0x140262280` rewrites the active slot's
 /// record from the live `mainPlayerGameData` (`wcsncpy(record.name, pgd.name, 0x10)` + level +
-/// playtime + rune memory + map + face data; static RE, 1.16.2 dump). A save landing between our
+/// playtime + rune memory + map + face data; static RE on the 1.16.2 dump, the addresses are the
+/// 2.7.2.0 functions with the same bytes). A save landing between our
 /// row staging and the builder's record read left that slot's record holding the loaded character,
 /// which then rendered as a stray browse row (user report: `[ up .. ]`, <current character name>,
 /// <save file name>). Rewriting the records here, on the same menu thread that immediately reads
@@ -2751,7 +2763,7 @@ pub fn install_save_picker_list_builder_hook() {
                     leak_installed_hook(hook);
                     SAVE_PICKER_LIST_BUILDER_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "save-picker: hooked ProfileSelect list builder FUN_140875590 0x{addr:x}; browse rows re-stage at every native list build"
+                        "save-picker: hooked ProfileSelect list builder rva 0x{PROFILE_SELECT_LIST_BUILDER_RVA:x} at 0x{addr:x}; browse rows re-stage at every native list build"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -2939,8 +2951,9 @@ static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Run br-20260920-170800-d70b, `er_quit_menu.dll` alone in the profile: the player opened
 /// **Load Character**, picked a slot, and the game died with `0xc0000005` reading `-1` at
-/// `eldenring.exe+0x67226a`, which is 1.16.2 `CSGaitemImp::Deserialize+0x2ea`. The instruction is
-/// a virtual call through a table indexed by a lookup result the code never checks:
+/// `eldenring.exe+0x67226a`, which is 1.17.1 `CSGaitemImp::Deserialize+0x2ea` (1.17.1 function
+/// `0x140671f80`; 2.7.2.0 `0x140672430`, so `+0x67271a`). The instruction is a virtual call
+/// through a table indexed by a lookup result the code never checks:
 ///
 /// ```text
 ///   movslq %r14d,%rax          ; r14d came back -1 from the id lookup
@@ -2949,9 +2962,9 @@ static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 ///   call   *0x30(%rax)         ; faults
 /// ```
 ///
-/// The stack reaches it from the load job at `0x826d50` through `GameMan`, so this is the
-/// character load actually running: it deserialized the gaitem table against a live world whose
-/// item ids do not match, and indexed with the `-1` the lookup returned.
+/// The stack reaches it from the load job (1.16.2 `0x826d50`, 2.7.2.0 `0x8281f0`) through
+/// `GameMan`, so this is the character load actually running: it deserialized the gaitem table
+/// against a live world whose item ids do not match, and indexed with the `-1` the lookup returned.
 ///
 /// The product does not hit this because `system_quit_arm_quickload_autoload` returns to the title
 /// and tears the world down before it reloads, gaitem reset included. A standalone shell has none

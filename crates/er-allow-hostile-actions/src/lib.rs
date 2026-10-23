@@ -4,18 +4,18 @@
 //!
 //! SpEffectParam row 9621 is the only row with `stateInfo` 457 (`0x1c9`). Map event scripts apply
 //! it -- Roundtable Hold's event 11102600, and the invasion-only no-attack regions elsewhere -- and
-//! native code reads the state rather than the id: the pad update at 1.17.1 `0x1403daa90` disables
+//! native code reads the state rather than the id: the pad update at 2.7.2.0 `0x1403daa90` disables
 //! R1/R2/L1/L2 while `HasSpecialEffectWithStateInfo(se, 0x1c9)` holds, and `CanUseMagic` /
 //! `CanUseGoods` refuse anything without `isUseNoAttackRegion` under the same state. See
 //! `docs/er-mechanics/map-combat-restrictions.md`.
 //!
 //! # Where this says no
 //!
-//! At the single function that adds an entry to a `SpecialEffect` list: 1.16.2 `FUN_1404fd090`,
-//! 1.17.1 `0x1404fde60`. It is the only caller of `NewSpecialEffectEntry` (1.16.2 `0x1404fb5f0`),
+//! At the single function that adds an entry to a `SpecialEffect` list: 2.7.2.0 `0x1404fdf40`.
+//! It is the only caller of `NewSpecialEffectEntry` (2.7.2.0 `0x1404fc4a0`, its call at `+0x47`),
 //! and its three callers are every way an effect goes on -- `CS::SpecialEffect::Apply` (reached
-//! from apply-with-source `0x1403fade0`, which event scripts use) and the two direct wrappers at
-//! 1.16.2 `0x1404f6e30` / `0x1404f6e90`. The detour looks the row up and returns `-1` -- the
+//! from apply-with-source, 2.7.2.0 `0x1403fb0a0`, which event scripts use) and the two direct
+//! wrappers at 1.16.2 `0x1404f6e30` / `0x1404f6e90`. The detour looks the row up and returns `-1` -- the
 //! function's own "refused" value, which a negative id already produces through its first branch
 //! with no side effect -- when the row's `stateInfo` is 457 and the list belongs to the main player.
 //!
@@ -50,22 +50,22 @@ const LOG_FILE_NAME: &str = "er-allow-hostile-actions.log";
 /// `stateInfo` of "Disallow Hostile Actions" (SpEffectParam row 9621, the only row carrying it).
 pub const DISALLOW_HOSTILE_ACTIONS_STATE_INFO: u16 = 457;
 
-/// The add-entry function, 1.16.2 RVA. `er-hook` carries it to the running build
-/// (1.17.1 `0x4fde60`).
+/// The add-entry function, 2.7.2.0 RVA.
 ///
-/// `int FUN_1404fd090(SpecialEffect*, int id, FloatVector4*, FieldInsHandle, char,
+/// `int FUN_1404fdf40(SpecialEffect*, int id, FloatVector4*, FieldInsHandle, char,
 /// float lifeReductionRate, byte, byte)`.
-const SPECIAL_EFFECT_ADD_ENTRY_RVA: usize = 0x4fd090;
+const SPECIAL_EFFECT_ADD_ENTRY_RVA: usize = 0x4fdf40;
 
-/// `GetSpEffectParam(SpEffectParamLookupResult* out, int id)`, 1.16.2 RVA (1.17.1 `0xd523a0`,
-/// whose first five bytes are an Arxan `jmp` stub -- calling through it is what the game does).
-const GET_SP_EFFECT_PARAM_RVA: u32 = 0xd5_05f0;
-
-use er_game_base::rva::{WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_PLAYER_INS_OFFSET};
+// `GetSpEffectParam` is called, never hooked, so its address is `er_game_base::rva`'s
+// `GET_SP_EFFECT_PARAM_RVA`, named at the call: a local `*_RVA` alias of it would read as a hook
+// target to `scripts/check-shared-hook-rvas.py`, colliding with `er-death-persist`'s real detour.
+use er_game_base::rva::{
+    GET_SP_EFFECT_PARAM_RVA, WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_PLAYER_INS_OFFSET,
+};
 
 /// `SpecialEffect::owner`, the `ChrIns` the list belongs to.
 const SPECIAL_EFFECT_OWNER_OFFSET: usize = 0x10;
-/// `SP_EFFECT_PARAM_ST::stateInfo`, read by `HasSpecialEffectWithStateInfo` (1.17.1 `0x1404fa370`
+/// `SP_EFFECT_PARAM_ST::stateInfo`, read by `HasSpecialEffectWithStateInfo` (2.7.2.0 `0x1404fa450`
 /// as `movzwl 0x156(%rcx)`).
 const PARAM_ROW_STATE_INFO_OFFSET: usize = 0x156;
 
@@ -159,17 +159,18 @@ fn install(base: usize) {
 
     use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
-    let get_param =
-        match er_game_base::mem::game_rva_named(GET_SP_EFFECT_PARAM_RVA, "GET_SP_EFFECT_PARAM_RVA")
-        {
-            Ok(address) => address,
-            Err(why) => {
-                log_message(format_args!(
-                    "install: refused, GetSpEffectParam has no address on this build: {why}"
-                ));
-                return;
-            }
-        };
+    let get_param = match er_game_base::mem::game_rva_named(
+        GET_SP_EFFECT_PARAM_RVA as u32,
+        "GET_SP_EFFECT_PARAM_RVA",
+    ) {
+        Ok(address) => address,
+        Err(why) => {
+            log_message(format_args!(
+                "install: refused, GetSpEffectParam has no address on this build: {why}"
+            ));
+            return;
+        }
+    };
     let world_chr_man = er_game_base::mem::game_data_addr(
         base,
         WORLD_CHR_MAN_GLOBAL_RVA,
@@ -196,7 +197,7 @@ fn install(base: usize) {
         Ok(hook) => hook,
         Err(status) => {
             log_message(format_args!(
-                "install: MhHook::new(SpecialEffect add @1.16.2 0x{target:x}) failed: {status:?}"
+                "install: MhHook::new(SpecialEffect add @0x{target:x}) failed: {status:?}"
             ));
             return;
         }
@@ -208,9 +209,7 @@ fn install(base: usize) {
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => log_message(format_args!(
-            "install: ACTIVE -- refusing stateInfo {DISALLOW_HOSTILE_ACTIONS_STATE_INFO} for the main player; add-entry @0x{:x}, GetSpEffectParam @0x{get_param:x}, WorldChrMan slot @0x{world_chr_man:x}",
-            er_game_base::game_build::resolve_game_address(target, "SPECIAL_EFFECT_ADD_ENTRY_RVA")
-                .unwrap_or(0),
+            "install: ACTIVE -- refusing stateInfo {DISALLOW_HOSTILE_ACTIONS_STATE_INFO} for the main player; add-entry @0x{target:x}, GetSpEffectParam @0x{get_param:x}, WorldChrMan slot @0x{world_chr_man:x}",
         )),
         status => log_message(format_args!("install: MH_ApplyQueued failed: {status:?}")),
     }
@@ -361,8 +360,8 @@ mod tests {
 
     #[test]
     fn rvas_match_the_static_re() {
-        assert_eq!(SPECIAL_EFFECT_ADD_ENTRY_RVA, 0x4fd090);
-        assert_eq!(GET_SP_EFFECT_PARAM_RVA, 0xd505f0);
+        assert_eq!(SPECIAL_EFFECT_ADD_ENTRY_RVA, 0x4fdf40);
+        assert_eq!(GET_SP_EFFECT_PARAM_RVA, 0xd53a90);
         assert_eq!(PARAM_ROW_STATE_INFO_OFFSET, 0x156);
         assert_eq!(SPECIAL_EFFECT_OWNER_OFFSET, 0x10);
     }

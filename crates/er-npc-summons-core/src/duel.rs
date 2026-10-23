@@ -34,7 +34,7 @@ pub const LOAD_DEADLINE_FRAMES: u32 = 600;
 pub const PICK_DEADLINE_FRAMES: u32 = 60 * 60;
 
 /// The event entity id `CreateSummonChr` gives every character it builds (a constant store into
-/// its spawn request, 1.17.1 `0x1404bb43b`). Every spirit ash, Mimic Tear companion and duel NPC
+/// its spawn request, 2.7.2.0 `0x1404bb51b`). Every spirit ash, Mimic Tear companion and duel NPC
 /// built that way shares it.
 pub const SUMMON_ENTITY_ID: u32 = 35_000;
 

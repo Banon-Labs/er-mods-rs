@@ -3,7 +3,7 @@
 // `include!`d into `lib.rs` like the blocks around it, and split out of it so the classifier and
 // its labels sit together rather than in the middle of the observers that consume them.
 //
-// The submit builders (`FUN_140e6ef60`, `FUN_140e6ec70`) open on
+// The submit builders (`FUN_140e724c0`, `FUN_140e721d0`) open on
 // `iodev+0x10 == 0 && iodev+0x20 == 0` plus four operands the call site guarantees statically, so
 // when a lane returns 0 those two fields are the only ones that can have failed -- Provided the
 // lane reached the builder at all. `dispatch_refusal_is_the_mutex` in `save_state_device.rs` is
@@ -68,22 +68,22 @@ pub fn bail_verdict(reason: usize) -> &'static str {
              slot_read_failures before believing any iodev oracle in this run"
         }
         SL_BAIL_SAVE_CONTENT_LATCHED | SL_BAIL_SAVE_CONTENT_AND_JOB_LATCHED => {
-            "a previous SAVE request is still latched at iodev+0x10. Only FUN_140e6f200 \
+            "a previous SAVE request is still latched at iodev+0x10. Only FUN_140e72760 \
              clears it, so either a swallow's release did not run (check \
              swallow_release_left_dirty and release_unavailable) or a builder took the \
              iodev+0x28 DEFERRED branch, which returns success without ever calling \
-             FUN_140e6fb50 and leaves +0x10 populated for FUN_140e6f370 to replay"
+             FUN_140e730b0 and leaves +0x10 populated for FUN_140e728d0 to replay"
         }
         SL_BAIL_LOAD_JOB_LATCHED => {
-            "a completed LOAD is still occupying the shared job slot. FUN_140e6e080 case \
-             0x14 deliberately does not release on success; the consumer FUN_14067b100 -> \
-             FUN_140e6e380 -> FUN_140e6f200 does. This is NOT the swallow's doing -- the \
+            "a completed LOAD is still occupying the shared job slot. FUN_140e715e0 case \
+             0x14 deliberately does not release on success; the consumer FUN_14067c400 -> \
+             FUN_140e718e0 -> FUN_140e72760 does. This is NOT the swallow's doing -- the \
              load was never consumed, so every save is blocked by the load's job"
         }
         SL_BAIL_JOB_LATCHED => {
             "a job is latched at iodev+0x20 with no content on either side -- an enqueue \
              whose poll never reached a terminal case, so nothing ever called \
-             FUN_140e6f200"
+             FUN_140e72760"
         }
         SL_BAIL_PRECONDITION_CLEAR => {
             "the precondition HOLDS, so the builder passed its guard: the refusal is the \

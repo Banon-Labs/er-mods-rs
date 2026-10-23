@@ -517,10 +517,10 @@ pub unsafe extern "system" fn DllMain(
             // One sink for both refusal channels, installed before anything resolves an address.
             //
             // Every cdylib statically links its own copy of `er-hook` and `er-game-base`, so an
-            // uninstalled sink is silent per DLL -- and this DLL had none. `HOOK REFUSED` and
-            // `ADDRESS REFUSED` lines, the two things that say a 1.16.2 address did not survive
-            // 1.17, were being written to nowhere while the map surface simply failed to appear.
-            // `set_hook_logger` installs the address-resolution sink too.
+            // uninstalled sink is silent per DLL -- and this DLL had none. Hook and address
+            // refusal lines, the things that say an address did not survive a patch, were being
+            // written to nowhere while the map surface simply failed to appear (on 1.17, with
+            // 1.16.2 addresses). `set_hook_logger` installs the address-resolution sink too.
             er_hook::set_hook_logger(standalone_log);
             // Beside the hook sink, and for the same reason one level worse. A panic in this
             // cdylib crosses an `extern "system"` boundary and becomes an abort, which does not

@@ -8,10 +8,10 @@ use super::*;
 /// filling the GX command queue.
 pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
     // `game_module_base()`, not `game_rva(0)`. RVA 0 is the PE header, never a code or data
-    // address, so there is nothing for the 1.16.2 -> 1.17 map to translate and asking it is
-    // always a refusal. This site alone logged 339,764 of them in one session (it is on the
-    // 4 Hz telemetry write), each reading `ADDRESS REFUSED (game_rva): 0x140000000` and naming
-    // nothing. The module base is version-independent; take it directly.
+    // address. While `game_rva` still translated, asking it for 0 was always a refusal: this
+    // site alone logged 339,764 of them in one session (it is on the 4 Hz telemetry write),
+    // each reading `ADDRESS REFUSED (game_rva): 0x140000000` and naming nothing. The module base
+    // is version-independent; take it directly.
     let base = er_game_base::mem::game_module_base().ok()?;
     let man = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
@@ -58,7 +58,7 @@ pub(crate) fn ownership_outstanding(class: OwnedClass) -> usize {
 }
 
 /// Destroy a previously-spared portrait renderer via CSDelayDeleteMan -- the exact native path the
-/// profile-renderer teardown (`FUN_1409b2f00`) uses for the other 9 renderers each teardown (marks
+/// profile-renderer teardown (2.7.2.0 0x1409b44b0) uses for the other 9 renderers each teardown (marks
 /// the object's +0x756 byte, enqueues it, freed on the delete pump when the GPU is done). Vtable-
 /// guarded so a stale/freed/garbage pointer is never enqueued. Must run on the game/menu thread (the
 /// same thread the native teardown runs on -- the manager's list is mutated without locks). Returns
@@ -164,7 +164,7 @@ pub(crate) fn gx_cmd_queue_hist_top(n: usize) -> String {
         .join(", ")
 }
 
-/// Thin entry hook on the GX drain pump `FUN_141b3bdc0` (deobf 0x1b3bda0): latch its context
+/// Thin entry hook on the GX drain pump (2.7.2.0 0x1b3f300): latch its context
 /// (param_1, the object holding the 109-bucket per-frame slot-range table) and forward. The bucket
 /// table is what `gx_cmd_queue_bucket_summary` reads; the pump itself is untouched.
 pub(crate) unsafe extern "system" fn gx_cmd_pump_hook(
@@ -184,7 +184,7 @@ pub(crate) unsafe extern "system" fn gx_cmd_pump_hook(
 
 /// Nonzero per-bucket widths from the pump context's 109-bucket slot-range table as
 /// `idx:width, ...` (begin at ctx+0x30+idx*0x18, end at +0x34). The bucket whose width grows
-/// across switches is the retained-producer class behind the 0x1aeaf05 overflow. Empty string
+/// across switches is the retained-producer class behind the 0x1aee465 overflow. Empty string
 /// until the pump context has been latched.
 pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
     let ctx = GX_CMD_PUMP_CTX.load(Ordering::Relaxed);
@@ -212,7 +212,7 @@ pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
 }
 
 /// Sample the command-byte arena's remaining space (arena at queue+0x40; remaining =
-/// limit@+0x20 - align4(cursor_lo@+0x28), per the FUN_141c48e80 decompile) and fold it into the
+/// limit@+0x20 - align4(cursor_lo@+0x28), per the 1.16.1 dump FUN_141c48e80 decompile) and fold it into the
 /// cumulative + per-switch low-water. Returns the sampled remaining for the caller's own logging,
 /// or None on unreadable fields.
 /// Read one `i32` field off a live object this process is currently operating on.
@@ -257,19 +257,19 @@ fn gx_cmd_queue_band_unavailable_once() {
         return;
     }
     append_autoload_debug(format_args!(
-        "callsite-gate: GX cmd-queue producer attribution has no verified transport band on this \
-         build (GX_RESERVE_CMD_QUEUE_SLOT_RVA 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x} unresolved) -- \
+        "callsite-gate: GX cmd-queue producer attribution has no transport band on this build \
+         (not 2.7.2.0; GX_RESERVE_CMD_QUEUE_SLOT_RVA 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x} refused) -- \
          producers are recorded as 0 rather than mis-attributed to the transport wrappers"
     ));
 }
 
-/// Telemetry-only wrapper for `reserve_command_queue_slot` (deobf 0x141aeae60): the fixed 192-slot
-/// GX command queue whose full-queue null-slot write is the repeated-switch crash at rva 0x1aeaf05
-/// (reproduced at switch #4, run autostep10c-directarm-20260703-145348). Tracks occupancy
-/// high-water (cumulative + per-switch), total reserves, and a producer histogram keyed by the
-/// first game-.text caller outside the enqueue-wrapper band (self-tagged when our DLL is in the
-/// chain), and dumps the top producers as the queue nears the edge -- so the overflow run names the
-/// accumulating producer. Always forwards unchanged: the 5ae3965 drop-on-overflow guard corrupted
+/// Telemetry-only wrapper for `reserve_command_queue_slot` (2.7.2.0 0x141aee3c0): the fixed 192-slot
+/// GX command queue whose full-queue null-slot write is the repeated-switch crash (rva 0x1aeaf05 on
+/// 1.16.2, reproduced at switch #4, run autostep10c-directarm-20260703-145348; the same instruction
+/// is 0x1aee465 on 2.7.2.0). Tracks occupancy high-water (cumulative + per-switch), total
+/// reserves, and a producer histogram keyed by the first game-.text caller outside the
+/// enqueue-wrapper band (self-tagged when our DLL is in the chain), and dumps the top producers as
+/// the queue nears the edge -- so the overflow run names the accumulating producer. Always forwards unchanged: the 5ae3965 drop-on-overflow guard corrupted
 /// the render (c2794d9) and must not return.
 pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     queue: usize,
@@ -513,11 +513,12 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
     }
 }
 
-/// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (deobf 0x1407ac720). Prevents both observed
-/// return-to-title crashes (rva 0x7ada87 and 0x7adb28) at their common root: the finalize's whole
-/// `if (owningMenuWindow != 0)` block runs on a doomed title window during return-to-title. See
-/// `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis (er-effects-rs-j74t). rcx = the job; the native
-/// dtor passes rdx/r8/r9 to the finalize untouched, so we forward all four verbatim.
+/// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (2.7.2.0 0x1407ada50). Prevents both observed
+/// return-to-title crashes (rva 0x7ada87 and 0x7adb28 on 1.16.2; 0x7aedb7 and 0x7aee58 on 2.7.2.0)
+/// at their common root: the finalize's whole `if (owningMenuWindow != 0)` block runs on a doomed
+/// title window during return-to-title. See `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis
+/// (er-effects-rs-j74t). rcx = the job; the native dtor passes rdx/r8/r9 to the finalize
+/// untouched, so we forward all four verbatim.
 ///
 /// We reproduce the exact call the finalize makes -- `owningMenuWindow->vfptr[3](window, &scratch)` --
 /// and inspect the descriptor's first i32 (the event-table index). If the vtable is not in the game
@@ -547,7 +548,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
                 // The finalize would remove the window from its push-target vector, but
                 // it crashes at the getter first, leaving the window dangling in the
                 // title-step's active-window vector STEP_MenuJobWait walks (crash rva
-                // 0x733f80). Do that removal ourselves so no stale entry survives.
+                // 0x735280). Do that removal ourselves so no stale entry survives.
                 let removed = unsafe { menu_window_remove_from_push_target(job, window, base) };
                 // Null owningMenuWindow so the finalize skips its own (now-crashing)
                 // window block entirely.
@@ -563,7 +564,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
                 }
                 if n <= 32 {
                     append_crash_log(format_args!(
-                        "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada7c/0x7ada87/0x7adb28/0x733f80)"
+                        "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7aedac/0x7aedb7/0x7aee58/0x735280)"
                     ));
                 }
             }
@@ -594,8 +595,8 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
 ///   already known-broken, so only a VERIFIABLY healthy mapped window (`menu_id <
 ///   MENU_WINDOW_MAPPED_MENU_ID_MAX`, the game's own bound) forwards; an unreadable or garbage
 ///   menu_id means freed/reused memory and is doomed. This closes the 2026-07-23 false negative
-///   (crash at rva 0x7ada7c: reused window, in-module vtable, menu_id garbage != 0xffff, native
-///   finalize virtual-called the reused object).
+///   (crash at rva 0x7ada7c on 1.16.2, 0x7aedac on 2.7.2.0: reused window, in-module vtable,
+///   menu_id garbage != 0xffff, native finalize virtual-called the reused object).
 pub(crate) unsafe fn menu_window_doomed_event_index(
     window: usize,
     base: usize,
@@ -697,10 +698,10 @@ pub(crate) fn masquerade_preserved_job_take(job: usize) -> bool {
 }
 
 /// Remove `window` from the job's push-target `DLFixedVector` (`*(job+0x50)`) via the game's own
-/// `FUN_140733e70`, replicating the cleanup the finalize can no longer reach. Returns true iff the
-/// removal ran. Validated before calling: the push-target pointer must be readable and its count
-/// (`vector+0x48`) sane, because the native search loop is not SEH-guarded and a corrupt vector
-/// pointer would otherwise fault. The removal itself only touches vector slots -- never the window's
+/// list remove (2.7.2.0 0x140735070), replicating the cleanup the finalize can no longer reach.
+/// Returns true iff the removal ran. Validated before calling: the push-target pointer must be
+/// readable and its count (`vector+0x48`) sane, because the native search loop is not SEH-guarded
+/// and a corrupt vector pointer would otherwise fault. The removal itself only touches vector slots -- never the window's
 /// vtable -- so it is safe on a doomed window.
 pub(crate) unsafe fn menu_window_remove_from_push_target(
     job: usize,
@@ -730,12 +731,13 @@ pub(crate) unsafe fn menu_window_remove_from_push_target(
 }
 
 /// Install the ~MenuWindowJob doomed-window guard (er-effects-rs-j74t). Idempotent.
-/// `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40) -- the call-path-complete counterpart to
+/// `MenuWindowJob` FINALIZE hook (2.7.2.0 0x1407aed70) -- the call-path-complete counterpart to
 /// `menu_window_job_dtor_hook`.
 ///
-/// The destructor guard only covers the finalize's caller at 0x7ac720. The finalize has five callers,
-/// and the profile-switch crash reproduced twice on 2026-07-30 (agent run 15:27:41, user run
-/// 15:45:14, both `access-violation rva=0x7ada7c ... NtTerminateProcess code=0xc0000005`) arrives via
+/// The destructor guard only covers the finalize's caller at 0x7ada50. The finalize has five
+/// callers, and the profile-switch crash reproduced twice on 2026-07-30 on 1.16.2 (agent run
+/// 15:27:41, user run 15:45:14, both `access-violation rva=0x7ada7c ... NtTerminateProcess
+/// code=0xc0000005`; the same instruction is 0x7aedac on 2.7.2.0) arrives via
 /// `MenuWindowJob::Run`, which the destructor hook never sees. Hooking the finalize itself closes
 /// every caller at once.
 ///
@@ -779,7 +781,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
             MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW.store(window, Ordering::SeqCst);
             if n <= 32 {
                 append_crash_log(format_args!(
-                    "menu-window-finalize-guard: DOOMED owningMenuWindow #{n} on FINALIZE job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- nulled job+0x130 so the native block skips it (prevents the AV at rva 0x7ada7c reached via MenuWindowJob::Run, which the ~MenuWindowJob guard cannot see)"
+                    "menu-window-finalize-guard: DOOMED owningMenuWindow #{n} on FINALIZE job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- nulled job+0x130 so the native block skips it (prevents the AV at rva 0x7aedac reached via MenuWindowJob::Run, which the ~MenuWindowJob guard cannot see)"
                 ));
             }
         }
@@ -797,8 +799,8 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     }
 }
 
-/// Install the finalize guard. Idempotent. 0x7ada40 carries no other detour (MinHook allows one per
-/// address, and the collision that killed a previous hook was at `MenuWindowJob::Run` 0x7ad1c0).
+/// Install the finalize guard. Idempotent. 0x7aed70 carries no other detour (MinHook allows one per
+/// address, and the collision that killed a previous hook was at `MenuWindowJob::Run` 0x7ae4f0).
 pub(crate) fn install_menu_window_job_finalize_guard() {
     if MENU_WINDOW_JOB_FINALIZE_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
@@ -824,7 +826,7 @@ pub(crate) fn install_menu_window_job_finalize_guard() {
                 return;
             }
             append_crash_log(format_args!(
-                "menu-window-finalize-guard: hooked MenuWindowJob finalize 0x{addr:x} -- covers all five callers incl. MenuWindowJob::Run (the ~MenuWindowJob guard covers only 0x7ac720)"
+                "menu-window-finalize-guard: hooked MenuWindowJob finalize 0x{addr:x} -- covers all five callers incl. MenuWindowJob::Run (the ~MenuWindowJob guard covers only 0x7ada50)"
             ));
         }
         Err(status) => {
@@ -880,7 +882,7 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
         MH_STATUS::MH_OK => {
             MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "menu-window-job-guard: hooked ~MenuWindowJob 0x{dtor_addr:x}; doomed-window guard armed (nulls a doomed owningMenuWindow so the finalize skips its block; prevents the return-to-title AV at rva 0x7ada87/0x7adb28)"
+                "menu-window-job-guard: hooked ~MenuWindowJob 0x{dtor_addr:x}; doomed-window guard armed (nulls a doomed owningMenuWindow so the finalize skips its block; prevents the return-to-title AV at rva 0x7aedb7/0x7aee58)"
             ));
         }
         status => append_autoload_debug(format_args!(
@@ -970,7 +972,7 @@ pub(crate) unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
     rescap == 0
 }
 
-/// `LookupMenuOffscrRendParam` (inner, deobf 0x140d3ed90; rcx = out descriptor, edx = row id). See
+/// `LookupMenuOffscrRendParam` (inner, 2.7.2.0 0x140d41c40; rcx = out descriptor, edx = row id). See
 /// `MENU_OFFSCR_REND_PARAM_LOOKUP_RVA` for the quit-to-desktop clean-kill rationale. When the param
 /// table is absent (quit teardown), `ExitProcess(0)` for a fast clean exit instead of the game's
 /// imminent DLPanic; otherwise forward unchanged.
@@ -1180,11 +1182,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         unsafe { std::mem::transmute(orig) };
     let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    // Resolved. `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so the
-    // raw form matched no dialog and every slot activation on the profile picker fell through to
-    // "forward-original(no-op)" -- neither the save-file picker branch nor arm-load reachable, on
-    // a stale address, with nothing in the log to say so. `vt` is `unwrap_or(0)` and a refusal
-    // resolves to 0, so `vt_matches` screens the sentinel for every comparison below.
+    // Resolved. `CS::ProfileLoadDialog`'s vtable (2.7.2.0 0x142b27b68) moves between builds. Read
+    // raw on another build, the stale address matched no dialog and every slot activation on the
+    // profile picker fell through to "forward-original(no-op)" -- neither the save-file picker
+    // branch nor arm-load reachable, with nothing in the log to say so. `vt` is `unwrap_or(0)` and
+    // a refusal resolves to 0, so `vt_matches` screens the sentinel for every comparison below.
     let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
         er_game_base::mem::game_data_addr(
             base,
@@ -1200,7 +1202,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
 
     // Diagnostic (2026-07-16): slot-click does nothing on native Windows 1.16.2 despite ghosting fixed.
     // Log every activation with the full gate inputs so one click pinpoints the failing condition
-    // (vt mismatch = wrong 1.16.2 RVA, or profile_window unset, or hidden unset).
+    // (vt mismatch = wrong vtable RVA, or profile_window unset, or hidden unset).
     let flow_active_diag = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     append_autoload_debug(format_args!(
         "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",

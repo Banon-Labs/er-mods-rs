@@ -1,7 +1,7 @@
 // What happens when the player touches the duel sign: does the action button find it, does the
 // summon get queued, does the join tick run? Measured on 1.17.1, bd
 // placenpcsummonsign-position-1171-2026-10-06 and npc-sign-join-visibility-1171-2026-10-06, and
-// carried to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py (old -> new beside each). Every body
+// carried to 2.7.2.0 (old -> new beside each). Every body
 // matches between the two de-Arxan'd images with its rip-relative and branch operands carried.
 //
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/duel-sign-touch.js

@@ -1,7 +1,7 @@
 // Which of `CanUseBreakInItem`'s three tests says no?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `IsOnlineMode` was never called once while the inventory was open, so the online theory is dead.
 // The real predicate is named: `CS::PlayerIns::CanUseBreakInItem`, and its whole body is
@@ -32,9 +32,9 @@
 // a wrong thread is the difference between a read and a race. The hook detaches itself after one
 // shot for the same reason a monitor is not left armed.
 //
-// Addresses are 1.16.2 -> 1.17 candidates from scripts/map-rvas-1162-to-1170.py, all below rva
-// 0xafefe9 so the 1.17.0 -> 1.17.1 `+0x70` does not apply to any of them. Each prologue is read
-// back and printed, which is what rules out a candidate that landed mid-instruction.
+// The addresses began as 1.16.2 -> 1.17 pairings by signature (all below rva 0xafefe9, so 1.17.0
+// and 1.17.1 agreed) and are 2.7.2.0 now. Each prologue is read back and printed, which is what
+// rules out an address that landed mid-instruction.
 const SITES = [
   { name: 'CanUseBreakInItem', rva: 0x658200, confidence: 'unique 38B signature' }, // 1.17.1 0x657d50
   { name: 'IsInSafePosRange', rva: 0x65fb50, confidence: '2 shape candidates' }, // 1.17.1 0x65f6a0

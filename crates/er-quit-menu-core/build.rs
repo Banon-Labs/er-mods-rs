@@ -33,16 +33,17 @@ use prologue_build::{
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// The SoftwareKeyboard recipe the save-picker path editor drives.
-const SOFTWARE_KEYBOARD_JOB_CTOR_VA: u64 = 0x14081be30;
-const SOFTWARE_KEYBOARD_RESULT_GATE_VA: u64 = 0x14081d3d0;
-const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_VA: u64 = 0x14081d220;
-const SOFTWARE_KEYBOARD_VALIDATOR_INIT_VA: u64 = 0x140e70920;
-const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_VA: u64 = 0x140e70960;
-const SOFTWARE_KEYBOARD_ENTER_NAME_VA: u64 = 0x140e70c00;
-const SOFTWARE_KEYBOARD_SET_INITIAL_VA: u64 = 0x140e709f0;
-const SOFTWARE_KEYBOARD_SET_MAX_VA: u64 = 0x142416ee0;
-const GAME_HEAP_ALLOC_VA: u64 = 0x141eb9ed0;
+/// The SoftwareKeyboard recipe the save-picker path editor drives. Every VA in this file is a
+/// 2.7.2.0 address.
+const SOFTWARE_KEYBOARD_JOB_CTOR_VA: u64 = 0x14081d160;
+const SOFTWARE_KEYBOARD_RESULT_GATE_VA: u64 = 0x14081e700;
+const SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_VA: u64 = 0x14081e550;
+const SOFTWARE_KEYBOARD_VALIDATOR_INIT_VA: u64 = 0x140e73e80;
+const SOFTWARE_KEYBOARD_VALIDATOR_DTOR_VA: u64 = 0x140e73ec0;
+const SOFTWARE_KEYBOARD_ENTER_NAME_VA: u64 = 0x140e74160;
+const SOFTWARE_KEYBOARD_SET_INITIAL_VA: u64 = 0x140e73f50;
+const SOFTWARE_KEYBOARD_SET_MAX_VA: u64 = 0x14241ae90;
+const GAME_HEAP_ALLOC_VA: u64 = 0x141ebd430;
 /// The EnterName preset's window stops inside its `sub rsp,0x70`, so the assembled sequence is
 /// one byte longer than the constant.
 const SOFTWARE_KEYBOARD_ENTER_NAME_CHECKED_BYTES: usize = 7;
@@ -57,55 +58,50 @@ fn validator_prologue(asm: &mut CodeAssembler) -> Result<(), iced_x86::IcedError
 
 const VALIDATOR_PIN: &[u8] = &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x48, 0x83, 0xec, 0x30];
 
-/// `GLOBAL_CSGameMan`, at its 1.17 address. The two retractions load it RIP-relative; naming the
-/// absolute address lets iced compute each site's displacement instead of transcribing it.
+/// `GLOBAL_CSGameMan` on 2.7.2.0. The two retractions load it RIP-relative; naming the absolute
+/// address lets iced compute each site's displacement instead of transcribing it.
 ///
-/// 1.16.2 had it at `0x143d69918`; 1.17 moved it `+0x4070`, along with most of `.data`. That is
-/// carried in `docs/recon/rva-map-1162-to-1170.data.tsv` as `GAME_MAN_SINGLETON_RVA` on 136 of
-/// 137 independent references, and confirmed here by reading the 1.17 image: all three sites that
-/// load it (`0x140679560`, `0x140679590`, `0x14067ae80`) resolve to `0x143d6d988`.
-///
-/// It is spelled at the 1.17 address because the constants it produces are compared against the
-/// bytes of the running game. See [`Image::EldenRing1170`] for why a mapped RVA does not make a
-/// 1.16.2 signature usable.
-const GAME_MAN_SINGLETON_VA: u64 = 0x143d6d988;
+/// Read out of `eldenring-deobf-1.17.2.bin`: both retraction sites (`0x140679a10`, `0x140679a40`)
+/// load `[rip+disp]` that resolves to `0x143d709a8`.
+const GAME_MAN_SINGLETON_VA: u64 = 0x143d709a8;
 /// `GameMan+0xb72` / `+0xb73`, the two save-request flags the retractions clear.
 const GAME_MAN_SAVE_REQUEST_B72_OFFSET: i64 = 0xb72;
 const GAME_MAN_SAVE_REQUEST_B73_OFFSET: i64 = 0xb73;
 /// `CS::MenuJob::EmitResult`.
-const MENU_JOB_EMIT_RESULT_VA: u64 = 0x140746e80;
-/// The game's own retractions of the two save-request flags, at their 1.17 addresses.
+const MENU_JOB_EMIT_RESULT_VA: u64 = 0x140748180;
+/// The game's own retractions of the two save-request flags (1.16.2 `FUN_140678740` /
+/// `FUN_140678710`).
 ///
-/// 1.16.2 `FUN_140678740` / `FUN_140678710`; 1.17 `0x140679590` / `0x140679560`, both `+0xe50`,
-/// which is the whole-region delta for this part of `.text` and agrees with three unanimous
-/// caller votes each. Read out of `eldenring-deobf-1.17.bin`, the two bodies are still exactly
-/// `mov rax,[rip+disp]; mov byte [rax+0xb7x],0; ret`, and the field offsets `+0xb72`/`+0xb73` are
-/// unchanged -- only `disp` moved, because the singleton did.
+/// The two 2.7.2.0 bodies are exactly `mov rax,[rip+disp]; mov byte [rax+0xb7x],0; ret`, with the
+/// field offsets `+0xb72`/`+0xb73` unchanged from 1.16.2 -- only `disp` differs, because the
+/// singleton moved.
 ///
 /// The site address matters as much as the target: a RIP displacement is the distance between
-/// them, so generating the signature at the 1.16.2 site would encode the wrong four bytes even
-/// with the target corrected.
-const SAVE_REQUEST_RETRACT_B72_VA: u64 = 0x140679590;
-const SAVE_REQUEST_RETRACT_B73_VA: u64 = 0x140679560;
-/// The `CS::MessageBoxBuilder` recipe, lifted from the native Yes/No confirm `FUN_1407b73d0`.
-const MSGBOX_BUILDER_CTOR_VA: u64 = 0x1407af730;
-const MSGBOX_ADD_YES_VA: u64 = 0x1407b1c70;
-const MSGBOX_ADD_NO_VA: u64 = 0x1407b1900;
-const MSGBOX_DEFAULT_LAST_VA: u64 = 0x1407b1b60;
-const MSGBOX_FINALIZE_VA: u64 = 0x1407b10f0;
-const MSGBOX_DTOR_VA: u64 = 0x1407b0140;
+/// them, so generating the signature at another site would encode the wrong four bytes even with
+/// the target correct.
+const SAVE_REQUEST_RETRACT_B72_VA: u64 = 0x140679a40;
+const SAVE_REQUEST_RETRACT_B73_VA: u64 = 0x140679a10;
+/// The `CS::MessageBoxBuilder` recipe, lifted from the native Yes/No confirm (1.16.2
+/// `FUN_1407b73d0`).
+const MSGBOX_BUILDER_CTOR_VA: u64 = 0x1407b0a60;
+const MSGBOX_ADD_YES_VA: u64 = 0x1407b2fa0;
+const MSGBOX_ADD_NO_VA: u64 = 0x1407b2c30;
+const MSGBOX_DEFAULT_LAST_VA: u64 = 0x1407b2e90;
+const MSGBOX_FINALIZE_VA: u64 = 0x1407b2420;
+const MSGBOX_DTOR_VA: u64 = 0x1407b1470;
 /// `MessageBoxBuilder+0x10f0` is the button count and `+0x28` the default index; `default_last`
 /// is the whole two-field body `default = count - 1`.
 const MSGBOX_BUILDER_BUTTON_COUNT_OFFSET: i64 = 0x10f0;
 const MSGBOX_BUILDER_DEFAULT_INDEX_OFFSET: i64 = 0x28;
 
 /// The native profile-renderer refresh, `er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`
-/// (1.17.1 `0x1409ab820`). See `profile_table_mid_hook`.
-const PROFILE_RENDERER_REFRESH_VA: u64 = 0x1409aa680;
-/// Offsets into the refresh, identical in 1.16.2 and 1.17.1 (the body is `IDENTICAL-WHOLE`).
+/// on 2.7.2.0. See `profile_table_mid_hook`.
+const PROFILE_RENDERER_REFRESH_VA: u64 = 0x1409abcd0;
+/// Offsets into the refresh, identical in 1.16.2, 1.17.1 and 2.7.2.0 (the body is the same
+/// instruction for instruction; re-read on 2026-10-23).
 const PROFILE_RENDERER_REFRESH_LATCH_CHECK: u64 = 0x54;
 const PROFILE_RENDERER_REFRESH_NEXT_SLOT: u64 = 0xce;
-/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+/// Each window's address, named so `verify-aob-patterns.py` can read the spec's `va:`.
 const PROFILE_REFRESH_LATCH_CHECK_VA: u64 =
     PROFILE_RENDERER_REFRESH_VA + PROFILE_RENDERER_REFRESH_LATCH_CHECK;
 const PROFILE_REFRESH_NEXT_SLOT_VA: u64 =
@@ -145,7 +141,7 @@ fn main() {
                     doc: "`mov [rsp+8],rcx; push rbx/rbp/rsi/rdi/r14; sub rsp,0x30`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_JOB_CTOR_VA,
                     take: 0,
                     pin: &[
@@ -170,7 +166,7 @@ fn main() {
                     doc: "`mov [rsp+0x18],r8; push rbp/rsi/rdi; sub rsp,0x40`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_RESULT_GATE_VA,
                     take: 0,
                     pin: &[
@@ -192,7 +188,7 @@ fn main() {
                     doc: "Seven callee-saved pushes: `rbp, rsi, rdi, r12, r13, r14, r15`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_VA,
                     take: 0,
                     pin: &[
@@ -216,7 +212,7 @@ fn main() {
                     doc: "`mov [rsp+8],rcx; push rbx; sub rsp,0x30`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_VALIDATOR_INIT_VA,
                     take: 0,
                     pin: VALIDATOR_PIN,
@@ -230,7 +226,7 @@ fn main() {
                           checked at its own RVA rather than one standing in for the other.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_VALIDATOR_DTOR_VA,
                     take: 0,
                     pin: VALIDATOR_PIN,
@@ -244,7 +240,7 @@ fn main() {
                           so the assembled sequence is one byte longer than the constant.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_ENTER_NAME_VA,
                     take: SOFTWARE_KEYBOARD_ENTER_NAME_CHECKED_BYTES,
                     pin: &[0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec],
@@ -263,7 +259,7 @@ fn main() {
                     doc: "`push rbp/rsi/rdi; lea rbp,[rsp-0x47]`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_SET_INITIAL_VA,
                     take: 0,
                     pin: &[0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xb9],
@@ -283,7 +279,7 @@ fn main() {
                           max-length setter's floor 1.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOFTWARE_KEYBOARD_SET_MAX_VA,
                     take: 0,
                     pin: &[0xb8, 0x01, 0x00, 0x00, 0x00, 0x3b, 0xd0, 0x0f, 0x4d, 0xc2],
@@ -302,7 +298,7 @@ fn main() {
                           tail-jumps through the allocator vtable.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: GAME_HEAP_ALLOC_VA,
                     take: 0,
                     pin: &[0x49, 0x8b, 0x00, 0x4d, 0x8b, 0xc8, 0x4c, 0x8b, 0xc2],
@@ -327,7 +323,7 @@ fn main() {
                           `mov [rsp+0x10],rdx; push rbx; sub rsp,0x80`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MENU_JOB_EMIT_RESULT_VA,
                     take: 0,
                     pin: &[
@@ -345,18 +341,18 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_REQUEST_RETRACT_B72_SIG",
-                    doc: "WHOLE BODY of the `+0xb72` retraction (1.16.2 `FUN_140678740`, 1.17\n\
-                          `0x140679590`): load the GameMan singleton, store 0 into `+0xb72`,\n\
+                    doc: "WHOLE BODY of the `+0xb72` retraction (2.7.2.0 `0x140679a40`, 1.16.2\n\
+                          `FUN_140678740`): load the GameMan singleton, store 0 into `+0xb72`,\n\
                           return. Verified before the call: if the bytes ever differ, the\n\
                           address means something else in that build and the retraction is\n\
                           skipped rather than fired blind at unknown code.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1170,
+                    image: Image::EldenRing2720,
                     va: SAVE_REQUEST_RETRACT_B72_VA,
                     take: 0,
                     pin: &[
-                        0x48, 0x8B, 0x05, 0xF1, 0x43, 0x6F, 0x03, 0xC6, 0x80, 0x72, 0x0B, 0x00,
+                        0x48, 0x8B, 0x05, 0x61, 0x6F, 0x6F, 0x03, 0xC6, 0x80, 0x72, 0x0B, 0x00,
                         0x00, 0x00, 0xC3,
                     ],
                 },
@@ -370,15 +366,15 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_REQUEST_RETRACT_B73_SIG",
-                    doc: "WHOLE BODY of the `+0xb73` retraction (1.16.2 `FUN_140678710`, 1.17\n\
-                          `0x140679560`), the same three instructions against `+0xb73`.",
+                    doc: "WHOLE BODY of the `+0xb73` retraction (2.7.2.0 `0x140679a10`, 1.16.2\n\
+                          `FUN_140678710`), the same three instructions against `+0xb73`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1170,
+                    image: Image::EldenRing2720,
                     va: SAVE_REQUEST_RETRACT_B73_VA,
                     take: 0,
                     pin: &[
-                        0x48, 0x8B, 0x05, 0x21, 0x44, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00,
+                        0x48, 0x8B, 0x05, 0x91, 0x6F, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00,
                         0x00, 0x00, 0xC3,
                     ],
                 },
@@ -396,7 +392,7 @@ fn main() {
                           [rsp+0x28]=0u8)`: `push rbp/rsi/rdi; sub rsp,0x80`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_BUILDER_CTOR_VA,
                     take: 0,
                     pin: &[
@@ -418,7 +414,7 @@ fn main() {
                           `mov r11,rsp; push rdi; sub rsp,0x90`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_ADD_YES_VA,
                     take: 0,
                     pin: &[
@@ -438,7 +434,7 @@ fn main() {
                     doc: "`add_no(rcx=builder) -> builder`: `push rdi; sub rsp,0xa0`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_ADD_NO_VA,
                     take: 0,
                     pin: &[0x40, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00],
@@ -457,7 +453,7 @@ fn main() {
                           That is why add order encodes the default.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_DEFAULT_LAST_VA,
                     take: 0,
                     pin: &[
@@ -486,7 +482,7 @@ fn main() {
                           `mov r11,rsp; push rsi/rdi/r14; sub rsp,0x130`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_FINALIZE_VA,
                     take: 0,
                     pin: &[
@@ -509,7 +505,7 @@ fn main() {
                     doc: "`dtor(rcx=builder)`: `mov [rsp+8],rcx; push rdi; sub rsp,0x30`.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: MSGBOX_DTOR_VA,
                     take: 0,
                     pin: &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30],
@@ -533,11 +529,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "PROFILE_REFRESH_LATCH_CHECK_WINDOW",
-                    doc: "1.16.2 profile-renderer refresh `+0x54`, the first read of `table[slot]`:\n\
+                    doc: "2.7.2.0 profile-renderer refresh `+0x54`, the first read of `table[slot]`:\n\
                           `CMP byte [RDI+0x754],0; JNE +0xce; CMP byte [RDI+0x755],0`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PROFILE_REFRESH_LATCH_CHECK_VA,
                     take: 0,
                     pin: &[
@@ -550,11 +546,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "PROFILE_REFRESH_NEXT_SLOT_WINDOW",
-                    doc: "1.16.2 profile-renderer refresh `+0xce`, the loop's skip-this-slot join:\n\
+                    doc: "2.7.2.0 profile-renderer refresh `+0xce`, the loop's skip-this-slot join:\n\
                           `INC EBX; ADD RSI,8; CMP EBX,10`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PROFILE_REFRESH_NEXT_SLOT_VA,
                     take: 0,
                     pin: &[0xff, 0xc3, 0x48, 0x83, 0xc6, 0x08, 0x83, 0xfb, 0x0a],

@@ -333,9 +333,10 @@ itself out**.
 
 One stale doc comment worth correcting while you are in the file: `announce.rs:88-118` says the 1.17 row
 `0x8c47c0 -> 0x8c5960` has not landed and "the announcement banner is simply absent on 1.17". **The row
-exists** -- `docs/recon/rva-map-1162-to-1170.verified.tsv:247`, `IDENTICAL-WHOLE`, ratio 1.000 -- and
-`0x8c5960` is below the 1.17.1 carry boundary `0xafefe9` (`crates/er-game-base/src/game_build.rs:65`,
-`:884`), so it needs no further shift on the installed build. The comment is now misleading, not wrong in a
+existed** -- line 247 of the 1.17 ledger `docs/recon/rva-map-1162-to-1170.verified.tsv` (deleted with
+the address carry on 2026-10-23), `IDENTICAL-WHOLE`, ratio 1.000 -- and `0x8c5960` is below the
+1.17.1 carry boundary `0xafefe9` (`crates/er-game-base/src/game_build.rs:65`, `:884` at the time),
+so it needed no further shift on the build then installed. The comment is now misleading, not wrong in a
 way that breaks anything.
 
 ### Why the banner can be absent -- five independent causes, all VERIFIED
@@ -746,7 +747,7 @@ Everything else in item 2 verified: `show` at `announce.rs:487-532` writes text 
 `UPDATE_RVA = 0x8c_47c0` `:119`, `LIVE_VIEW == 0` refusal `:488-494`, `poll_measurement` `:226-271`,
 `banner.rs:194` `LAST_VERDICT_BLOCK` / `:216` its definition / `:199-201` the 1728 px note -- all
 exact. The stale-comment finding is **correct and worth landing**: `rva-map-1162-to-1170.verified.tsv`
-line **247** carries `0x1408c47c0 -> 0x1408c5960`, `IDENTICAL-WHOLE`, ratio 1.000, and `0x8c5960 <
+(deleted since, with the address carry) line **247** carried `0x1408c47c0 -> 0x1408c5960`, `IDENTICAL-WHOLE`, ratio 1.000, and `0x8c5960 <
 CARRY_1171_BOUNDARY_RVA = 0xafefe9` (`game_build.rs:65`, applied at `:883-889`), so the row has
 landed and needs no 1.17.1 carry.
 

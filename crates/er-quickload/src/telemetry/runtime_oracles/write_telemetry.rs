@@ -368,8 +368,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // Ending-latch residual, as a RAM oracle (2026-09-04, re-grounded on 1.17 the same day).
     //
-    // `menuData+0x5e` is the MoveMapStep ending flag. Confirmed on the installed build (1.17 dump on
-    // :8767, identity-checked against `eldenring-deobf-1.17.bin`, shift 0): the evaluator
+    // `menuData+0x5e` is the MoveMapStep ending flag. Confirmed on the then-installed 1.17 build (1.17
+    // dump on :8767, identity-checked against `eldenring-deobf-1.17.bin`, shift 0): the evaluator
     // `FUN_140afb9f0` writes it unconditionally on every call as `MOV byte ptr [RAX + 0x5e], BL`
     // @ `0x140afbd0c`, where `RAX = *(CSMenuMan + 8)`; `+0x5d` (return-title request) is one of the
     // inputs to the value written. Once `case 8` of its `0x12a` walk consumes the warp
@@ -562,7 +562,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         BUILD_URL_PORTRAIT_STEPS_SEEN.load(Ordering::SeqCst),
         BUILD_URL_PORTRAIT_DRAW_BITS.load(Ordering::SeqCst),
         // Registration is not execution. `_draw_task_calls` counts runs of the draw task
-        // `FUN_140bba7d0` for the renderer that was kicked, and only a delta over
+        // (1.16.1 dump `FUN_140bba7d0`) for the renderer that was kicked, and only a delta over
         // `_draw_calls_at_kick` proves the offscreen was rasterized after the rebuild. The
         // `_modelres_*` pair separates "loaded the old rows" from "the new rows are still
         // loading": while resolved and requested disagree the parts file has not arrived and
@@ -1034,7 +1034,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     }
     // Full-read chain terminal disarm (bd er-effects-rs-ns4n): count > 0 proves a non-commit exit
     // cleared the pending native slot request, so the in-game save manager cannot service a stale
-    // request into the live world (the gaitem free-queue AV at 0x67141a). `_last_prev_slot` is the
+    // request into the live world (the gaitem free-queue AV at 1.16.2 0x67141a). `_last_prev_slot` is the
     // i32 slot value the last clear removed, u32-packed (0xffffffff == the no-request sentinel, i.e.
     // nothing needed clearing on that exit).
     body.push_str(&format!(
@@ -1179,8 +1179,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
     ));
-    // Which write branch ran (2026-07-29). `SaveLoad2::SLSaveSession`'s job body
-    // `FUN_14240fd70` has two mutually exclusive write paths and picks between them on the
+    // Which write branch ran (2026-07-29; the `FUN_` names in this block are 1.16.2's).
+    // `SaveLoad2::SLSaveSession`'s job body `FUN_14240fd70` has two mutually exclusive write paths and picks between them on the
     // result of a probe (`FUN_142413230`) that mounts the container already on disk and asks
     // whether every supplied block still fits its existing entry:
     //
@@ -1217,8 +1217,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // Read them as: observers_installed == 0 -> the rest are meaningless (not "no dispatch");
     // dispatch_calls == 0 -> the dispatcher never ran; declines > 0 -> it ran and refused.
     //
-    // serialize_calls is the alloc/serializer discriminator. A lane only calls
-    // FUN_14067dc00 after its MainHeap buffer allocations have been null-checked, so
+    // serialize_calls is the alloc/serializer discriminator. A lane only calls the serializer
+    // (0x14067ef00; 1.16.2 FUN_14067dc00) after its MainHeap buffer allocations have been
+    // null-checked, so
     // serialize_calls climbing proves the 0x280000 (and, on the combined lane, 0x60000)
     // allocations succeeded; declines climbing while serialize_calls stands still means the
     // lane bailed before the serializer.
@@ -1276,7 +1277,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         // as a finding: the call graph already forces it. `FUN_14067b940` has exactly one caller,
         // `FUN_140afb880`, and that caller gates the whole dispatch on
         // `cVar6 = FUN_14067a080(); if (cVar6 == 0) return;` -- and `FUN_14067a080` is literally
-        // `MOV RAX,[0x143d69918]; CMP dword [RAX+0xb80],0; SETZ AL; RET`, i.e. `saveState == 0`.
+        // `MOV RAX,[0x143d69918]; CMP dword [RAX+0xb80],0; SETZ AL; RET` (1.16.2), i.e. `saveState == 0`.
         // So every game-originated decline is PROVEN idle one call earlier, and this field can only
         // ever report 0 for one. What it therefore measures is the INSTRUMENT: 0 says the sampler
         // ran and agrees with the call graph, `u32::MAX` says it never sampled at all.
@@ -1307,7 +1308,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // 2026-08-31 the published decline sample was taken on entry 8,638 of 8,638, four minutes after
     // the state it describes formed, and byte-identical to the 8,637 before it because nothing in
     // that loop can change the device. These four are first-writer-wins over
-    // `iodev+0x10 != 0 && saveState == 0`, so they timestamp the moment instead.
+    // `iodev+0x10 != 0 && saveState == 0`, so they timestamp the moment instead. (The `FUN_` names
+    // below are 1.16.2's.)
     //
     //   oracle_save_dispatch_first_latched_save_content  the `SLSaveContent` still on the device.
     //                                                    Compare it against the accept records in
@@ -1346,7 +1348,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::dispatch_first_latched_lane(),
     ));
     // The load consumer -- the other owner of the shared `iodev+0x20` job, and the reason a
-    // save can be refused by something that is not a save.
+    // save can be refused by something that is not a save. (1.16.2 `FUN_` names throughout.)
     //
     // A completed load is released only by its consumer (`FUN_14067b100` ->
     // `FUN_140e6e380` -> `FUN_140e6f200`); `FUN_140e6e080` case 0x14 deliberately returns
@@ -1382,6 +1384,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // The forgotten save request -- the state in which the game has lost track of a save it
     // submitted, and therefore the state in which saving is dead for the rest of the process.
+    // (1.16.2 `FUN_` names throughout.)
     //
     // `iodev+0x10`/`+0x20` are freed by `FUN_140e6f200` alone, and on the save side only the
     // poll `FUN_140e6e430` reaches it -- from `DoSaveStuff`, gated on `GameMan::IsSaveState1()`,
@@ -1469,7 +1472,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // The rest of the writer set (`save_state_writers.rs`), and the counter that makes a negative
     // mean something. The two oracles above watch two wrappers; these watch the other three stores
     // that can take `saveState` off 1, which completes the set the image byte-scan found on both
-    // builds (22 stores each, pairing exactly at +0xE50).
+    // builds (22 stores each, pairing exactly at +0xE50). The `FUN_` names below are 1.16.2's.
     //
     //   oracle_save_state_writer_sites_installed  how many of the three chained. Zero means nothing
     //                                             below was watching, and every other field here
@@ -1519,7 +1522,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // and the submit builders that write them, because the 2026-08-31 wedge formed with the writer
     // set complete and silent. The shape that produces exactly that is a submit that latched the
     // device and whose lane never accepted -- `saveState` was never written to 1, so no writer was
-    // ever needed to bring it back down.
+    // ever needed to bring it back down. The `FUN_` names below are 1.16.2's.
     //
     //   oracle_save_submit_sites_installed        how many of FUN_140e6ef60 / FUN_140e6ec70 /
     //                                             FUN_140e6fb50 chained. Zero means nothing here

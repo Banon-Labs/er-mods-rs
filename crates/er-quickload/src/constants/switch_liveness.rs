@@ -13,7 +13,7 @@
 // deleted, and `constants.rs` already carries `pub(crate) use er_title_flow::*;` in the same
 // module, so any feature build that drives menu input again resolves them through that glob.
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
-/// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to log the live cursor (diagnostic) while injecting.
+/// 2.7.2.0 0x14073b120 = `mov eax,[rcx+0xd4]`). Used to log the live cursor (diagnostic) while injecting.
 #[repr(C)]
 #[allow(dead_code)] // Retained RE layout: decoded struct shape, nothing constructs it today.
 pub(crate) struct MenuListLayout {

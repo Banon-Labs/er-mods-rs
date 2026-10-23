@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Static guard for native title-menu MenuWindowJob constructor provenance.
 
-This intentionally checks a few small byte/table anchors in the repo-local decrypted
-Elden Ring image. It does not prove runtime success; it prevents future agents from
-forgetting which native path built the disabled Continue row and which constructor
-families install native vs idle accept predicates.
+This intentionally checks a few small byte/table anchors in the de-Arxan'd 2.7.2.0 image
+(`eldenring-deobf-1.17.2.bin`, located by `scripts/er_game_image.py`). It does not prove runtime
+success; it prevents future agents from forgetting which native path built the disabled Continue
+row and which constructor families install native vs idle accept predicates.
+
+Every rva below is a 2.7.2.0 rva. They were carried from their 1.16.2 measurement on 2026-10-23:
+a function by a masked signature unique in `.text` or by the call it is reached through, a site
+inside a function as that function's entry plus the same offset (the instruction there is what
+the checks below decode), and a vtable by its RTTI class name, which the checks below re-read
+from the image's own CompleteObjectLocator (`docs/recon/deobf-rtti-classmap-2720.tsv` is the same
+scan written to a file).
 """
 
 from __future__ import annotations
@@ -14,129 +21,146 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = ROOT / "eldenring-deobf.bin"
+sys.path.insert(0, str(ROOT / "scripts"))
+import er_game_image  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
-BASE = 0x1_4000_0000
+IMAGE = er_game_image.image_path()
 
-IDLE_CTOR = 0x007ACF80
-NATIVE_CTOR_A = 0x007AC8C0
-NATIVE_CTOR_B = 0x007ACB00
-TASK_ENQUEUE = 0x007A7B60
+BASE = er_game_image.BASE
 
-DISABLED_CONTINUE_CALL = 0x00764327
-DISABLED_CONTINUE_ENQUEUE_CALL = 0x00764333
-DISABLED_CONTINUE_ENQUEUE_RETURN = 0x00764338
-DISABLED_NEIGHBOR_CALL = 0x00764457
-DISABLED_NEIGHBOR_ENQUEUE_RETURN = 0x00764468
-NATIVE_CTOR_A_TITLE_CALL = 0x009B6854
-NATIVE_TITLE_READY_CALL = 0x009B676B
-NATIVE_TITLE_READY_SKIP_JE = 0x009B6772
-NATIVE_TITLE_REGISTER_CALL = 0x009B6880
-NATIVE_ACCEPT_PREDICATE_LEA = 0x007AC962
-IDLE_ACCEPT_PREDICATE_LEA = 0x007AD025
-NATIVE_ACCEPT_PREDICATE = 0x007AD810
-IDLE_ACCEPT_PREDICATE = 0x007ADD70
-TITLE_DIALOG_READY_PREDICATE = 0x00733150
-TITLE_MENU_REGISTER = 0x007A9250
-LANG_SELECT_LABEL = 0x02B281D0
-LANG_SELECT_COMPONENT_CTOR_CALL = 0x009B5A0A
-LANG_SELECT_RESET_CALL = 0x009B5B04
-LANG_SELECT_COMPONENT_CTOR = 0x0074A2F0
-LANG_SELECT_SET_BOOL = 0x00733340
-LANG_SELECT_READY_VTABLE = 0x02A94A70
-LANG_SELECT_GETTER_SLOT0 = 0x0074BAF0
-LANG_SELECT_GETTER_SLOT1 = 0x0074BAE0
+IDLE_CTOR = 0x007AE2B0
+NATIVE_CTOR_A = 0x007ADBF0
+NATIVE_CTOR_B = 0x007ADE30
+TASK_ENQUEUE = 0x007A8E90
+
+DISABLED_CONTINUE_CALL = 0x00765627
+DISABLED_CONTINUE_ENQUEUE_CALL = 0x00765633
+DISABLED_CONTINUE_ENQUEUE_RETURN = 0x00765638
+DISABLED_NEIGHBOR_CALL = 0x00765757
+DISABLED_NEIGHBOR_ENQUEUE_RETURN = 0x00765768
+NATIVE_CTOR_A_TITLE_CALL = 0x009B7F54
+NATIVE_TITLE_READY_CALL = 0x009B7E6B
+NATIVE_TITLE_READY_SKIP_JE = 0x009B7E72
+NATIVE_TITLE_READY_SKIP_TARGET = 0x009B8066
+NATIVE_TITLE_REGISTER_CALL = 0x009B7F80
+NATIVE_ACCEPT_PREDICATE_LEA = 0x007ADC92
+IDLE_ACCEPT_PREDICATE_LEA = 0x007AE355
+NATIVE_ACCEPT_PREDICATE = 0x007AEB40
+IDLE_ACCEPT_PREDICATE = 0x007AF0A0
+TITLE_DIALOG_READY_PREDICATE = 0x00734450
+TITLE_MENU_REGISTER = 0x007AA580
+LANG_SELECT_LABEL = 0x02B2D340
+LANG_SELECT_COMPONENT_CTOR_CALL = 0x009B710A
+LANG_SELECT_RESET_CALL = 0x009B7204
+LANG_SELECT_COMPONENT_CTOR = 0x0074B5F0
+LANG_SELECT_SET_BOOL = 0x00734640
+LANG_SELECT_READY_VTABLE = 0x02A99BE0
+LANG_SELECT_GETTER_SLOT0 = 0x0074CDF0
+LANG_SELECT_GETTER_SLOT1 = 0x0074CDE0
 LANG_SELECT_GETTER_BYTES = bytes.fromhex("488d4128c3")
 
-CONTINUE_DOCALL = 0x00764B80
-CONTINUE_DOCALL_IMPL = 0x00763FC0
-CONTINUE_DOCALL_TABLE_SLOT = 0x02A9B9D8
+CONTINUE_DOCALL = 0x00765E80
+CONTINUE_DOCALL_IMPL = 0x007652C0
+CONTINUE_DOCALL_TABLE_SLOT = 0x02AA0B48
 
-# Disabled Continue row builder provenance (traced statically; Not a product readiness
+# Disabled Continue row builder provenance (traced statically; not a product readiness
 # predicate). The idle/constant-false-accept Continue row is built by the function at
-# 0x140764290, which uses the Continue descriptor/vtable table at 0x142a9b808/958/9c8.
-# Its sole caller is the title step-update method 0x140766980 (installed as a CSMenu
-# step at 0x1407651cf with step vtable 0x142a9be20). The build is gated by two booleans
-# on the title-step object: this+0x6b0 (build-request) and this+0x6b1 (suppress). The
-# disabled row handle is stored at this+0x708. These offsets describe the disabled build
-# path only; they are diagnostic provenance, not a Continue-armed/ready oracle.
-DISABLED_CONTINUE_BUILDER = 0x00764290
+# DISABLED_CONTINUE_BUILDER, which uses the Continue descriptor/vtable table beside the functor
+# vtables below. Its sole caller is the title step-update method DISABLED_CONTINUE_STEP_UPDATE
+# (installed as a CSMenu step together with DISABLED_CONTINUE_STEP_VTABLE). The build is gated by
+# two booleans on the title-step object: this+0x6b0 (build-request) and this+0x6b1 (suppress). The
+# disabled row handle is stored at this+0x708. These offsets describe the disabled build path
+# only; they are diagnostic provenance, not a Continue-armed/ready oracle.
+DISABLED_CONTINUE_BUILDER = 0x00765590
 DISABLED_CONTINUE_BUILDER_PROLOGUE = bytes.fromhex("40555657488d6c24b9")
-DISABLED_CONTINUE_BUILDER_CALL = 0x00766E12
-DISABLED_CONTINUE_GATE_6B0 = 0x00766DD1
-DISABLED_CONTINUE_GATE_6B1 = 0x00766DDE
+DISABLED_CONTINUE_BUILDER_CALL = 0x00768142
+DISABLED_CONTINUE_GATE_6B0 = 0x00768101
+DISABLED_CONTINUE_GATE_6B1 = 0x0076810E
 DISABLED_CONTINUE_GATE_6B0_BYTES = bytes.fromhex("80bbb006000000")
 DISABLED_CONTINUE_GATE_6B1_BYTES = bytes.fromhex("80bbb106000000")
-DISABLED_CONTINUE_STEP_UPDATE = 0x00766980
-DISABLED_CONTINUE_STEP_UPDATE_INSTALL = 0x007651CF
-DISABLED_CONTINUE_STEP_VTABLE_INSTALL = 0x007651C1
-DISABLED_CONTINUE_STEP_VTABLE = 0x02A9BE20
+DISABLED_CONTINUE_STEP_UPDATE = 0x00767CB0
+DISABLED_CONTINUE_STEP_UPDATE_INSTALL = 0x007664CF
+DISABLED_CONTINUE_STEP_VTABLE_INSTALL = 0x007664C1
+DISABLED_CONTINUE_STEP_VTABLE = 0x02AA0F90
 
-# RTTI identities for the disabled-Continue builder chain (from
-# docs/recon/deobf-rtti-classmap.tsv). They prove this region is CSMenuManImp's title
-# MenuWindow-building update task and that the row's accept is a constant-false (idle)
-# std::function lambda -- i.e. the idle row the product must not promote, and which is
-# unrelated to title+0x2610 LangSelect readiness.
-#   0x142a9be20 = CSEzUpdateTask<CSEzTask, CSMenuManImp>  (the step; owner this = CSMenuManImp menu obj)
-#   0x142a9b958 = _Func_base<MenuWindow*, SceneProxy&>    (Continue row docall functor base)
-#   0x142a9b9c8 = _Func_impl<lambda, MenuWindow*, SceneProxy&> (the lambda impl)
-#   0x142a9bcb8 = NullPlayerMenuCtrl  (installed at this+0x6a8 -- title has no player)
-#   0x142a9be00 = BackScreenData      (installed at this+0x710)
-CONTINUE_FUNC_BASE_LEA = 0x007642DE
-CONTINUE_FUNC_BASE_VTABLE = 0x02A9B958
-CONTINUE_FUNC_IMPL_LEA = 0x007642E9
-CONTINUE_FUNC_IMPL_VTABLE = 0x02A9B9C8
-NULL_PLAYER_MENU_CTRL_INSTALL = 0x00765127
-NULL_PLAYER_MENU_CTRL_VTABLE = 0x02A9BCB8
-BACKSCREEN_DATA_INSTALL = 0x00765152
-BACKSCREEN_DATA_VTABLE = 0x02A9BE00
+# RTTI identities for the disabled-Continue builder chain, checked against the image below. They
+# prove this region is CSMenuManImp's title MenuWindow-building update task and that the row's
+# accept is a constant-false (idle) std::function lambda -- i.e. the idle row the product must not
+# promote, and which is unrelated to title+0x2610 LangSelect readiness.
+#   DISABLED_CONTINUE_STEP_VTABLE = CSEzUpdateTask<CSEzTask, CSMenuManImp>  (the step)
+#   CONTINUE_FUNC_BASE_VTABLE     = _Func_base<MenuWindow*, SceneProxy&>    (docall functor base)
+#   CONTINUE_FUNC_IMPL_VTABLE     = _Func_impl<lambda, MenuWindow*, SceneProxy&> (the lambda impl)
+#   NULL_PLAYER_MENU_CTRL_VTABLE  = NullPlayerMenuCtrl (installed at this+0x6a8 -- title has no player)
+#   BACKSCREEN_DATA_VTABLE        = BackScreenData     (installed at this+0x710)
+CONTINUE_FUNC_BASE_LEA = 0x007655DE
+CONTINUE_FUNC_BASE_VTABLE = 0x02AA0AC8
+CONTINUE_FUNC_IMPL_LEA = 0x007655E9
+CONTINUE_FUNC_IMPL_VTABLE = 0x02AA0B38
+NULL_PLAYER_MENU_CTRL_INSTALL = 0x00766427
+NULL_PLAYER_MENU_CTRL_VTABLE = 0x02AA0E28
+BACKSCREEN_DATA_INSTALL = 0x00766452
+BACKSCREEN_DATA_VTABLE = 0x02AA0F70
 
 # Real native Load-Game job (the zero-input autoload target). A menu Continue/Load action
 # enqueues a std::function LoadJob of type MenuJobResult(LoadJobContext&). The callback at
-# 0x14082c240 allocates a 0x280000-byte buffer (== ER save-slot size) via vtable [rax+0x50]
-# and reads/scans the slot -- this is the actual save read, reached through the MenuJob/
-# LoadJob factory (functor vtable 0x142ac7728 built at 6 sites in 0x140827xxx-0x14082axxx),
-# not the CSMenuManImp idle/disabled Continue row above. measure.sh's required runtime
-# trace hits (0x14082c240/0x14082c2c8/0x14082c374/0x14067a810/0x14082c521) all live here.
-# Our own stepper must drive this job zero-input; pin its identity so the path is not lost.
-#   0x142ac7188 = _Func_base<MenuJobResult, LoadJobContext&>
-#   0x142ac7728 = _Func_impl<MenuJobResult(*)(LoadJobContext&), ...>
-LOADJOB_CALLBACK = 0x0082C240
+# LOADJOB_CALLBACK allocates a 0x280000-byte buffer (== ER save-slot size) via vtable [rax+0x50]
+# and reads/scans the slot -- this is the actual save read, reached through the MenuJob/LoadJob
+# factory (functor vtable LOADJOB_FUNCTOR_VTABLE), not the CSMenuManImp idle/disabled Continue
+# row above. Our own stepper must drive this job zero-input; pin its identity so the path is not
+# lost.
+LOADJOB_CALLBACK = 0x0082D6E0
 LOADJOB_CALLBACK_PROLOGUE = bytes.fromhex("488bc4574154415541564157")
-LOADJOB_CALLBACK_INSTALL = 0x0082AA21
-LOADJOB_FUNCTOR_VTABLE_INSTALL = 0x0082AA15
-LOADJOB_FUNCTOR_VTABLE = 0x02AC7728
-LOADJOB_SAVE_SLOT_SIZE_LOAD = 0x0082C2D5
+LOADJOB_CALLBACK_INSTALL = 0x0082BEC1
+LOADJOB_FUNCTOR_VTABLE_INSTALL = 0x0082BEB5
+LOADJOB_FUNCTOR_VTABLE = 0x02ACC898
+LOADJOB_SAVE_SLOT_SIZE_LOAD = 0x0082D775
 LOADJOB_SAVE_SLOT_SIZE_BYTES = bytes.fromhex("ba00002800")  # mov edx, 0x280000
 
-# Startup ToS/legal modal that the zero-input path must not build unnecessarily. The
-# title flow builds TosMultiLangDialog (the multi-language Terms-of-Service modal) via the
-# wrapper 0x9b6070 -> ctor 0x9b5970, unconditionally once invoked (no accept-gate at the
-# build site). The accept-gate predicate 0x9b72b0 returns "ToS satisfied" if the global
-# gate 0x140e4fda0 is true or owner+0x29c0->[0] != 0 -- but run-243 telemetry shows it is
-# never consulted before the build (oracle_policy_status_predicate_hits=0), so the modal is
-# constructed even though the accepted flag is already 1. RTTI (deobf-rtti-classmap.tsv):
-#   0x142b28100 = TosMultiLangDialog   (the ToS modal -- ctor 0x9b5970 / wrapper 0x9b6070)
-#   0x142b27788 = TosLangSelectDialog  (language-select surface; the title+0x2610 LangSelect)
-#   0x142b26468 = TitleTopDialog       (the actual title menu, not a legal modal)
+# Startup ToS/legal modal that the zero-input path must not build unnecessarily. The title flow
+# builds TosMultiLangDialog (the multi-language Terms-of-Service modal) via the wrapper
+# TOS_MULTILANG_DIALOG_CTOR_WRAPPER -> ctor TOS_MULTILANG_DIALOG_CTOR, unconditionally once
+# invoked (no accept-gate at the build site). The accept-gate predicate TOS_ACCEPTED_PREDICATE
+# returns "ToS satisfied" if the global gate TOS_ACCEPTED_GATE is true or owner+0x29c0->[0] != 0
+# -- but run-243 telemetry showed it is never consulted before the build
+# (oracle_policy_status_predicate_hits=0), so the modal is constructed even though the accepted
+# flag is already 1.
+#   TOS_MULTILANG_DIALOG_VTABLE  = TosMultiLangDialog  (the ToS modal)
+#   TOS_LANGSELECT_DIALOG_VTABLE = TosLangSelectDialog (language-select surface; title+0x2610 LangSelect)
+#   TITLE_TOP_DIALOG_VTABLE      = TitleTopDialog      (the actual title menu, not a legal modal)
 # Goal target: suppress/skip the TosMultiLangDialog build when the accept-gate is satisfied
 # (replace the native "show ToS" stepper with our own), keeping zero input.
-TOS_MULTILANG_DIALOG_CTOR = 0x009B5970
-TOS_MULTILANG_DIALOG_CTOR_WRAPPER = 0x009B6070
+TOS_MULTILANG_DIALOG_CTOR = 0x009B7070
+TOS_MULTILANG_DIALOG_CTOR_WRAPPER = 0x009B7770
 TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE = bytes.fromhex("488bc456574156")
-TOS_MULTILANG_DIALOG_WRAPPER_CTOR_CALL = 0x009B60F6
-TOS_MULTILANG_DIALOG_VTABLE = 0x02B28100
-TOS_LANGSELECT_DIALOG_VTABLE = 0x02B27788
-TITLE_TOP_DIALOG_VTABLE = 0x02B26468
-TOS_ACCEPTED_PREDICATE = 0x009B72B0
+TOS_MULTILANG_DIALOG_WRAPPER_CTOR_CALL = 0x009B77F6
+TOS_MULTILANG_DIALOG_VTABLE = 0x02B2D270
+TOS_LANGSELECT_DIALOG_VTABLE = 0x02B2C8F8
+TITLE_TOP_DIALOG_VTABLE = 0x02B2B5D8
+TOS_ACCEPTED_PREDICATE = 0x009B89B0
 TOS_ACCEPTED_PREDICATE_PROLOGUE = bytes.fromhex("40534883ec20488b5908")
-TOS_ACCEPTED_GATE_CALL = 0x009B72BA
-TOS_ACCEPTED_GATE = 0x00E4FDA0
+TOS_ACCEPTED_GATE_CALL = 0x009B89BA
+TOS_ACCEPTED_GATE = 0x00E53300
+
+# `(vtable rva, substrings its RTTI class name must carry)`. Substrings rather than the whole
+# mangled name, because MSVC stamps each translation unit's anonymous namespace with a per-build
+# hash (`?A0x8fca6706` on 2.7.2.0 for `LoadJobContext`), which is not what identifies the class.
+RTTI_IDENTITIES = (
+    (LANG_SELECT_READY_VTABLE, (".?AVSceneObjProxy@CS@@",)),
+    (DISABLED_CONTINUE_STEP_VTABLE, ("CSEzUpdateTask", "CSEzTask", "CSMenuManImp")),
+    (CONTINUE_FUNC_BASE_VTABLE, ("_Func_base", "MenuWindow", "SceneProxy")),
+    (CONTINUE_FUNC_IMPL_VTABLE, ("_Func_impl", "lambda_606f6780271773a44095900f2b003a3c", "MenuWindow")),
+    (NULL_PLAYER_MENU_CTRL_VTABLE, (".?AVNullPlayerMenuCtrl@CS@@",)),
+    (BACKSCREEN_DATA_VTABLE, (".?AVBackScreenData@CS@@",)),
+    (LOADJOB_FUNCTOR_VTABLE, ("_Func_impl", "MenuJobResult", "LoadJobContext")),
+    (TOS_MULTILANG_DIALOG_VTABLE, (".?AVTosMultiLangDialog@CS@@",)),
+    (TOS_LANGSELECT_DIALOG_VTABLE, (".?AVTosLangSelectDialog@CS@@",)),
+    (TITLE_TOP_DIALOG_VTABLE, (".?AVTitleTopDialog@CS@@",)),
+)
 
 
 def read_image() -> bytes | None:
-    if not IMAGE.exists():
-        print(f"menu constructor static check skipped: {IMAGE} is absent")
+    if IMAGE is None:
+        print(f"menu constructor static check skipped: {er_game_image.missing_reason()}")
         return None
     return IMAGE.read_bytes()
 
@@ -192,20 +216,33 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def va(rva: int) -> str:
+    return f"0x{BASE + rva:x}"
+
+
 def main() -> int:
     data = read_image()
     if data is None:
         return 0
     failures: list[str] = []
+    image = er_game_image.FlatImage(data, IMAGE)
+
+    for vtable, parts in RTTI_IDENTITIES:
+        found = image.rtti_class(vtable)
+        require(
+            found is not None and all(part in found[1] for part in parts),
+            f"vtable {va(vtable)} must carry RTTI naming {' / '.join(parts)}; it carries {found and found[1]!r}",
+            failures,
+        )
 
     require(
         rel32_call_target(data, DISABLED_CONTINUE_CALL) == IDLE_CTOR,
-        "disabled Continue caller must call idle MenuWindowJob ctor 0x1407acf80",
+        f"disabled Continue caller must call idle MenuWindowJob ctor {va(IDLE_CTOR)}",
         failures,
     )
     require(
         rel32_call_target(data, DISABLED_CONTINUE_ENQUEUE_CALL) == TASK_ENQUEUE,
-        "disabled Continue caller must enqueue via exact 0x1407a7b60 after idle ctor",
+        f"disabled Continue caller must enqueue via exact {va(TASK_ENQUEUE)} after idle ctor",
         failures,
     )
     require(
@@ -215,13 +252,13 @@ def main() -> int:
     )
     require(
         rel32_call_target(data, NATIVE_CTOR_A_TITLE_CALL) == NATIVE_CTOR_A,
-        "native-accept constructor A title caller anchor must call 0x1407ac8c0",
+        f"native-accept constructor A title caller anchor must call {va(NATIVE_CTOR_A)}",
         failures,
     )
     require(
         rel32_call_target(data, NATIVE_TITLE_READY_CALL)
         == TITLE_DIALOG_READY_PREDICATE,
-        "LangSelect native-accept builder is gated by 0x140733150(this+0x2610); this is diagnostic, not Continue proof",
+        f"LangSelect native-accept builder is gated by {va(TITLE_DIALOG_READY_PREDICATE)}(this+0x2610); this is diagnostic, not Continue proof",
         failures,
     )
     require(
@@ -233,12 +270,12 @@ def main() -> int:
     require(
         rel32_call_target(data, LANG_SELECT_COMPONENT_CTOR_CALL)
         == LANG_SELECT_COMPONENT_CTOR,
-        "TosTitle ctor must construct title+0x2610 from the LangSelect descriptor through 0x14074a2f0",
+        f"TosTitle ctor must construct title+0x2610 from the LangSelect descriptor through {va(LANG_SELECT_COMPONENT_CTOR)}",
         failures,
     )
     require(
         rel32_call_target(data, LANG_SELECT_RESET_CALL) == LANG_SELECT_SET_BOOL,
-        "TosTitle ctor must reset LangSelect readiness through 0x140733340(..., false)",
+        f"TosTitle ctor must reset LangSelect readiness through {va(LANG_SELECT_SET_BOOL)}(..., false)",
         failures,
     )
     require(
@@ -263,34 +300,41 @@ def main() -> int:
         failures,
     )
     require(
-        rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE) == 0x009B6966,
+        rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE) == NATIVE_TITLE_READY_SKIP_TARGET,
         "native title builder ready failure must skip native-row construction",
         failures,
     )
     require(
         rel32_call_target(data, NATIVE_TITLE_REGISTER_CALL) == TITLE_MENU_REGISTER,
-        "native title builder must register the native-accept row through 0x1407a9250(this+0x10, row)",
+        f"native title builder must register the native-accept row through {va(TITLE_MENU_REGISTER)}(this+0x10, row)",
         failures,
     )
     require(
         rip_lea_target(data, NATIVE_ACCEPT_PREDICATE_LEA) == NATIVE_ACCEPT_PREDICATE,
-        "native constructor A must install native accept predicate 0x1407ad810",
+        f"native constructor A must install native accept predicate {va(NATIVE_ACCEPT_PREDICATE)}",
         failures,
     )
     require(
         rip_lea_target(data, IDLE_ACCEPT_PREDICATE_LEA) == IDLE_ACCEPT_PREDICATE,
-        "idle constructor must install constant-false accept predicate 0x1407add70",
+        f"idle constructor must install constant-false accept predicate {va(IDLE_ACCEPT_PREDICATE)}",
         failures,
     )
     require(
-        data[CONTINUE_DOCALL : CONTINUE_DOCALL + 9]
-        == bytes.fromhex("4883c108e937f4ffff"),
-        "Continue docall must remain adjustor thunk to 0x140763fc0",
+        data[IDLE_ACCEPT_PREDICATE : IDLE_ACCEPT_PREDICATE + 3] == b"\x33\xc0\xc3",
+        "idle accept predicate must remain the constant-false xor eax,eax; ret",
+        failures,
+    )
+    docall_thunk = data[CONTINUE_DOCALL : CONTINUE_DOCALL + 5]
+    require(
+        docall_thunk == bytes.fromhex("4883c108e9")
+        and CONTINUE_DOCALL + 9 + struct.unpack_from("<i", data, CONTINUE_DOCALL + 5)[0]
+        == CONTINUE_DOCALL_IMPL,
+        f"Continue docall must remain adjustor thunk to {va(CONTINUE_DOCALL_IMPL)}",
         failures,
     )
     require(
         u64_at(data, CONTINUE_DOCALL_TABLE_SLOT) == BASE + CONTINUE_DOCALL,
-        "Continue docall table slot must point at 0x140764b80",
+        f"Continue docall table slot must point at {va(CONTINUE_DOCALL)}",
         failures,
     )
     require(
@@ -299,13 +343,13 @@ def main() -> int:
             + len(DISABLED_CONTINUE_BUILDER_PROLOGUE)
         ]
         == DISABLED_CONTINUE_BUILDER_PROLOGUE,
-        "disabled Continue row builder must remain 0x140764290 (idle-ctor path), not LangSelect readiness",
+        f"disabled Continue row builder must remain {va(DISABLED_CONTINUE_BUILDER)} (idle-ctor path), not LangSelect readiness",
         failures,
     )
     require(
         rel32_call_target(data, DISABLED_CONTINUE_BUILDER_CALL)
         == DISABLED_CONTINUE_BUILDER,
-        "title step-update method must call the disabled Continue builder at 0x140766e12",
+        f"title step-update method must call the disabled Continue builder at {va(DISABLED_CONTINUE_BUILDER_CALL)}",
         failures,
     )
     require(
@@ -329,13 +373,13 @@ def main() -> int:
     require(
         rip_lea_target(data, DISABLED_CONTINUE_STEP_UPDATE_INSTALL)
         == DISABLED_CONTINUE_STEP_UPDATE,
-        "title step object must install update method 0x140766980 (owner of the disabled Continue builder)",
+        f"title step object must install update method {va(DISABLED_CONTINUE_STEP_UPDATE)} (owner of the disabled Continue builder)",
         failures,
     )
     require(
         rip_lea_target(data, DISABLED_CONTINUE_STEP_VTABLE_INSTALL)
         == DISABLED_CONTINUE_STEP_VTABLE,
-        "title step object must install step vtable 0x142a9be20 alongside the disabled Continue update method",
+        f"title step object must install step vtable {va(DISABLED_CONTINUE_STEP_VTABLE)} alongside the disabled Continue update method",
         failures,
     )
 
@@ -365,17 +409,17 @@ def main() -> int:
     require(
         data[LOADJOB_CALLBACK : LOADJOB_CALLBACK + len(LOADJOB_CALLBACK_PROLOGUE)]
         == LOADJOB_CALLBACK_PROLOGUE,
-        "real native LoadJob callback MenuJobResult(LoadJobContext&) must remain at 0x14082c240",
+        f"real native LoadJob callback MenuJobResult(LoadJobContext&) must remain at {va(LOADJOB_CALLBACK)}",
         failures,
     )
     require(
         rip_lea_target(data, LOADJOB_CALLBACK_INSTALL) == LOADJOB_CALLBACK,
-        "MenuJob/LoadJob factory must install the save-reading LoadJob callback 0x14082c240",
+        f"MenuJob/LoadJob factory must install the save-reading LoadJob callback {va(LOADJOB_CALLBACK)}",
         failures,
     )
     require(
         rip_lea_target(data, LOADJOB_FUNCTOR_VTABLE_INSTALL) == LOADJOB_FUNCTOR_VTABLE,
-        "LoadJob must use the _Func_impl<MenuJobResult(*)(LoadJobContext&)> functor vtable 0x142ac7728",
+        f"LoadJob must use the _Func_impl<MenuJobResult(*)(LoadJobContext&)> functor vtable {va(LOADJOB_FUNCTOR_VTABLE)}",
         failures,
     )
     require(
@@ -393,13 +437,13 @@ def main() -> int:
             + len(TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE)
         ]
         == TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE,
-        "TosMultiLangDialog ToS-modal build wrapper must remain at 0x9b6070 (zero-input suppress target)",
+        f"TosMultiLangDialog ToS-modal build wrapper must remain at {va(TOS_MULTILANG_DIALOG_CTOR_WRAPPER)} (zero-input suppress target)",
         failures,
     )
     require(
         rel32_call_target(data, TOS_MULTILANG_DIALOG_WRAPPER_CTOR_CALL)
         == TOS_MULTILANG_DIALOG_CTOR,
-        "TosMultiLangDialog wrapper must build the ToS modal via ctor 0x9b5970 (unconditional once invoked)",
+        f"TosMultiLangDialog wrapper must build the ToS modal via ctor {va(TOS_MULTILANG_DIALOG_CTOR)} (unconditional once invoked)",
         failures,
     )
     require(
@@ -408,12 +452,12 @@ def main() -> int:
             + len(TOS_ACCEPTED_PREDICATE_PROLOGUE)
         ]
         == TOS_ACCEPTED_PREDICATE_PROLOGUE,
-        "ToS accept-gate predicate must remain at 0x9b72b0 (this+0x8 owner, then global gate)",
+        f"ToS accept-gate predicate must remain at {va(TOS_ACCEPTED_PREDICATE)} (this+0x8 owner, then global gate)",
         failures,
     )
     require(
         rel32_call_target(data, TOS_ACCEPTED_GATE_CALL) == TOS_ACCEPTED_GATE,
-        "ToS accept-gate predicate must call the global ToS-accepted gate 0x140e4fda0",
+        f"ToS accept-gate predicate must call the global ToS-accepted gate {va(TOS_ACCEPTED_GATE)}",
         failures,
     )
 

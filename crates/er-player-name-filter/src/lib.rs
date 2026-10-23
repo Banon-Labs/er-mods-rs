@@ -1,6 +1,6 @@
 //! Standalone remote-player name filter DLL.
 //!
-//! The hook targets `CS::SessionManagerPlayerEntryBase::Copy` in Elden Ring 1.16.2. That is the
+//! The hook targets `CS::SessionManagerPlayerEntryBase::Copy` in Elden Ring 2.7.2.0. That is the
 //! storage/copy point feeding vanilla overhead friendly tags, including Seamless Co-op's default
 //! overhead-name mode. The DLL rewrites the copied inline Steam display-name string when it matches
 //! a configured group.
@@ -27,12 +27,12 @@ use std::{collections::HashMap, path::PathBuf};
 use regex::{Regex, RegexBuilder};
 
 const DLL_MAIN_SUCCESS: i32 = 1;
-const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA: usize = 0x023f1bf0;
+const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA: usize = 0x023f5ba0;
 /// `CS::GetPlayerChrName(MenuString *out, PlayerIns *player, char decorate)` -- the single
 /// producer of a player's displayed name, reached from `CSFeManImp::UpdateEnemyTags` via
 /// `GetChrName`. NPCs leave through `MenuString::NpcName` before either name branch.
-const GET_PLAYER_CHR_NAME_RVA: usize = 0x0075f800;
-/// `CS::PlayerIns::GetSessionManagerPlayerEntry` @0x140657b20 is `mov rax, [rcx+0x6b8]; ret`,
+const GET_PLAYER_CHR_NAME_RVA: usize = 0x00760b00;
+/// `CS::PlayerIns::GetSessionManagerPlayerEntry` (1.16.2 @0x140657b20) is `mov rax, [rcx+0x6b8]; ret`,
 /// so the entry is read inline rather than called.
 const PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET: usize = 0x6b8;
 /// `DLTX::DLString<wchar_t>::FromU16Array(DLString *out, const wchar_t *text, DLAllocator *)`.
@@ -52,9 +52,9 @@ const DL_STRING_IN_PLACE_CAPACITY: usize = 7;
 const DL_STRING_MAX_PLAUSIBLE_TEXT_UNITS: usize = 512;
 /// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` -- the sole writer
 /// of `PlayerGameData::characterName`, reached for a remote player from the network receive path
-/// `TryDequeuePacket8@0x140ca3030`. Masking the name here masks it before anything can read it,
-/// including third-party overlays that read the field straight out of game memory rather than
-/// calling a game function (ERGG does exactly that), and it costs those overlays nothing and
+/// `TryDequeuePacket8` (1.16.2 `0x140ca3030`). Masking the name here masks it before anything can
+/// read it, including third-party overlays that read the field straight out of game memory rather
+/// than calling a game function (ERGG does exactly that), and it costs those overlays nothing and
 /// needs no knowledge of them.
 ///
 /// Declared once in `er-game-base::rva`, where the full three-storage layout is written down: the
@@ -1094,7 +1094,7 @@ mod windows_runtime {
         }
         if actual != prologue {
             log_message(format_args!(
-                "DISARMED {label} @0x{target:x}: prologue mismatch (got {actual:02x?}, want {prologue:02x?}) -- either this is not Elden Ring 1.16.2 or the entry is already detoured"
+                "DISARMED {label} @0x{target:x}: prologue mismatch (got {actual:02x?}, want {prologue:02x?}) -- either this is not Elden Ring 2.7.2.0 or the entry is already detoured"
             ));
             return false;
         }
@@ -1283,8 +1283,8 @@ mod windows_runtime {
             return false;
         };
         unsafe { release_dl_string(&mut menu_string.dl_string) };
-        // Through the 1.17 gate: `base + rva` calls the 1.16.2 address on a build that moved
-        // DLString::copy, and this one writes through a caller-owned string.
+        // Through the build gate: `base + rva` on another patch calls whatever now occupies the
+        // 2.7.2.0 address of DLString::copy, and this one writes through a caller-owned string.
         let Ok(copy_addr) =
             er_game_base::mem::game_rva_named(DL_STRING_COPY_RVA as u32, "DL_STRING_COPY_RVA")
         else {

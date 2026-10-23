@@ -68,7 +68,7 @@ const PARSE_SIG: &str =
 /// arrived at independently -- and it loads first, because me3 walks the natives in name order and
 /// `er_armament_icons.dll` sorts before `er_invasion_warp.dll`. A five-byte detour replaces
 /// `40 53 48 83 EC` with `E9 <rel32>`, so by the time this scan runs the prologue it is looking for
-/// no longer exists. Read live on 2026-09-10 at `0x1411d1010`:
+/// no longer exists. Read live on 2026-09-10 (1.17.1) at `0x1411d1010`:
 /// `e9 bf ff dd fe 40 48 8b 41 18 ...` against a static `40 53 48 83 ec 40 48 8b 41 18 ...` --
 /// bytes 5 onward identical, bytes 0..5 replaced. The scan found zero matches, this module
 /// switched itself off, and the announcement banner stayed left-aligned for exactly that reason.
@@ -459,14 +459,14 @@ pub unsafe fn install_world_map_gfx_hook(base: usize) -> usize {
              loads first, so this is the ordinary case, not a fault."
         ));
     }
-    // `scan_matches` found this address by matching the patched-prologue tail inside the running image's `.text`,
-    // so it is already a 1.17 address. `register_union_hook` would translate it against a table
-    // keyed by 1.16.2 RVAs -- a table that structurally cannot contain a runtime-derived address --
-    // and answer refused, which is what was turning this hook off on 1.17 for an address the scan
-    // had got right. A ledger row would be worse than the refusal: the address would be translated
-    // a second time and land mid-function. The runtime-derived entry point skips the version
-    // translation and keeps the validation -- `detour_site::write_site_is_sound` asks the running
-    // image's own `.pdata` whether this is a function entry with room for MinHook's five bytes.
+    // `scan_matches` found this address by matching the patched-prologue tail inside the running
+    // image's `.text`, so it is already a live address of whatever build is running.
+    // `register_union_hook` would check it against the 2.7.2.0 detour allowlist, which describes
+    // constants rather than scanned addresses -- under the old 1.16.2 translation table that check
+    // answered refused and turned this hook off on 1.17 for an address the scan had got right. The
+    // runtime-derived entry point skips the constant gate and keeps the validation --
+    // `detour_site::write_site_is_sound` asks the running image's own `.pdata` whether this is a
+    // function entry with room for MinHook's five bytes.
     match unsafe {
         er_hook::register_union_hook_runtime_derived(
             address,

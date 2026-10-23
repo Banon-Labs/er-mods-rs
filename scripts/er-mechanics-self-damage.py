@@ -31,7 +31,7 @@ HP change (its `stateInfo` 6, the blood-loss state), not a second proc (`INFERRE
 # Full-HP gear (`hp_gated_rows`, `gated_loss`)
 
 A worn talisman row with `conditionHpRate` >= 0 works only at or above that share of max HP
-(`er-mechanics-talismans._hp_gate`, `VERIFIED` FUN_1405012a0): Ritual Shield 340900 (100%,
+(`er-mechanics-talismans._hp_gate`, `VERIFIED` FUN_140502150): Ritual Shield 340900 (100%,
 `defPlayerDmgCorrectRate` 0.7) and Ritual Sword 320500 (100%, `atkPlayerDmgCorrectRate` 1.1) in
 1.17.1. Without a heal, which the duel ladder bans (10-3 "All Methods of HP Recovery"), HP the cast
 took is not regained, so such a row covers fewer of the fight's hits:

@@ -18,31 +18,29 @@ use prologue_build::{Assemble, Image, PrologueSpec, Shape, generate, mov_r64_rm6
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// `WorldAreaTime::RequestTime`, 1.17 `0x1406442a0`.
-const REQUEST_TIME_1170_VA: u64 = 0x1406442a0;
-/// `WorldAreaWeather::ChangeWeather`, 1.17 `0x140647940`.
-const CHANGE_WEATHER_1170_VA: u64 = 0x140647940;
-/// `GXParamDB::Update(this, f32 time, u32)`, 1.17.0 `0x141a4e730`. Above the `0xafefe9` boundary,
-/// so 1.17.1 holds the same bytes `0x70` higher, at `0x141a4e7a0`.
-const PARAM_DB_UPDATE_1170_VA: u64 = 0x141a4e730;
+/// `WorldAreaTime::RequestTime`, 2.7.2.0 `0x140644750`.
+const REQUEST_TIME_VA: u64 = 0x140644750;
+/// `WorldAreaWeather::ChangeWeather`, 2.7.2.0 `0x140647df0`.
+const CHANGE_WEATHER_VA: u64 = 0x140647df0;
+/// `GXParamDB::Update(this, f32 time, u32)`, 2.7.2.0 `0x141a4fe90`.
+const PARAM_DB_UPDATE_VA: u64 = 0x141a4fe90;
 
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
-    // The two calls the Sky tab makes (`src/sky/game.rs`), checked before either is made. Both sit
-    // below the `0xafefe9` boundary, so 1.17.0 and 1.17.1 hold them at the same address.
+    // The two calls the Sky tab makes (`src/sky/game.rs`), checked before either is made.
     generate(
         &[
             (
                 PrologueSpec {
-                    name: "REQUEST_TIME_1171_PROLOGUE",
+                    name: "REQUEST_TIME_PROLOGUE",
                     doc: "`mov [rsp+0x10],rbx; mov [rsp+0x18],rbp; mov [rsp+0x20],rsi; push rdi;\n\
                           sub rsp,0x60; cmp byte [rcx+0x114],0` -- the opening of\n\
                           `WorldAreaTime::RequestTime(this, hour, minute, second)`, whose first\n\
                           test is the time-set lock at +0x114.",
                     visibility: "pub(crate)",
                     shape: Shape::Array,
-                    image: Image::EldenRing1170,
-                    va: REQUEST_TIME_1170_VA,
+                    image: Image::EldenRing2720,
+                    va: REQUEST_TIME_VA,
                     take: 0,
                     pin: &[
                         0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89,
@@ -62,15 +60,15 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "CHANGE_WEATHER_1171_PROLOGUE",
+                    name: "CHANGE_WEATHER_PROLOGUE",
                     doc: "`movss [rcx+0x8c],xmm2; mov [rcx+0x88],dx; mov [rcx+0x90],r9b;\n\
                           mov byte [rcx+0x91],1` -- all of\n\
                           `WorldAreaWeather::ChangeWeather(this, type, lifespan, immediate)` but\n\
                           its `ret`: it latches the request the weather's own update applies.",
                     visibility: "pub(crate)",
                     shape: Shape::Array,
-                    image: Image::EldenRing1170,
-                    va: CHANGE_WEATHER_1170_VA,
+                    image: Image::EldenRing2720,
+                    va: CHANGE_WEATHER_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x11, 0x91, 0x8c, 0x00, 0x00, 0x00, 0x66, 0x89, 0x91, 0x88,
@@ -94,15 +92,15 @@ fn main() {
     generate(
         &[(
             PrologueSpec {
-                name: "PARAM_DB_UPDATE_1171_PROLOGUE",
+                name: "PARAM_DB_UPDATE_PROLOGUE",
                 doc: "`mov rax,rsp; mov [rax+0x18],r8d; movss [rax+0x10],xmm1; push rbp; push\n\
                           rsi; push rdi; push r12; push r13; push r14; push r15; lea rbp,[rax-0x5f];\n\
                           sub rsp,0xb0` -- the opening of `GXParamDB::Update(this, time, n)`, whose\n\
                           second argument is a float in xmm1.",
                 visibility: "pub(crate)",
                 shape: Shape::Array,
-                image: Image::EldenRing1170,
-                va: PARAM_DB_UPDATE_1170_VA,
+                image: Image::EldenRing2720,
+                va: PARAM_DB_UPDATE_VA,
                 take: 0,
                 pin: &[
                     0x48, 0x8b, 0xc4, 0x44, 0x89, 0x40, 0x18, 0xf3, 0x0f, 0x11, 0x48, 0x10, 0x55,

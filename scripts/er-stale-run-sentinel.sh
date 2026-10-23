@@ -405,8 +405,8 @@ def build_readers(pkg_dir, build_scripts):
       * `include_str!` / `include_bytes!` / `include!` literals in any `.rs` of a crate, resolved
         against the file that holds them, which is how rustc resolves them.
       * Every string literal in a build script, resolved against the crate's directory, which is a
-        build script's working directory. `er-game-base/build.rs` reads `docs/recon/*.tsv` this
-        way. A literal naming another `.rs` file -- `#[path = "../../build-support/..."]` -- is
+        build script's working directory. `er-build-import-core/build.rs` reads its
+        `data/planner-sliders-layout.json` this way. A literal naming another `.rs` file -- `#[path = "../../build-support/..."]` -- is
         followed, so what `build-support/prologue_build.rs` reads is attributed to every crate
         whose build script pulls it in.
 
@@ -757,9 +757,9 @@ def answer_if_inert(target, owner, meta, why, pkg_dir, build_scripts, profiles):
     guard refused edits its own refusal text promised stay open mid-run.
 
     Inert means "no build reads it", which is checked, not assumed. Until 2026-10-03 docs/ was
-    skipped wholesale while `er-game-base/build.rs` compiles `docs/recon/rva-map-*.tsv` into every
-    product DLL and `er-invasion-warp-core` embeds `docs/invasion-warp-*.{md,toml}` with
-    `include_str!`. The same day AGENTS.md, which no build reads, tore down a live run under
+    skipped wholesale while `er-game-base/build.rs` compiled `docs/recon/rva-map-*.tsv` into every
+    product DLL (it reads nothing under docs/ since the 2.7.2.0 port) and `er-invasion-warp-core`
+    embeds `docs/invasion-warp-*.{md,toml}` with `include_str!`. The same day AGENTS.md, which no build reads, tore down a live run under
     `fallback-unclassified`. A prose file outside every crate is inert by the same test.
     """
     inert_top = inert_top_level_of(target)
@@ -1028,7 +1028,8 @@ PY
 # line for `.cupcake/signals/live_er_run.sh`, so the PreToolUse guard refuses exactly the edits this
 # hook would tear a run down for -- before the edit instead of after it. On 2026-10-02 the two
 # disagreed: the guard allowed any edit outside `crates/` and promised docs stay editable mid-run,
-# while this classifier tears down for a `docs/recon/*.tsv` that `er-game-base/build.rs` compiles in.
+# while this classifier tore down for a `docs/recon/*.tsv` that `er-game-base/build.rs` then
+# compiled in.
 #
 # Explicit profile arguments stand in for the live run, as they do for `classify`, so the decision
 # is testable without a game: the /proc liveness gate is skipped and those profiles are the run.
@@ -1264,14 +1265,14 @@ TOML
   expect_branch "$REPO_ROOT/Cargo.toml" fallback-unclassified "workspace manifest is not prose"
   expect_branch "$REPO_ROOT/new-top-level.rs" fallback-unclassified "new top-level .rs is not prose"
   # A file a crate's build reads counts as that crate's source, inert directory or not. Both
-  # are real reads in this tree: `er-invasion-warp-core` embeds the doc with `include_str!`,
-  # and `er-game-base/build.rs` compiles the TSV into every product DLL.
+  # are real reads in this tree: `er-invasion-warp-core` embeds the doc and the example config
+  # with `include_str!`, one prose file and one that is not.
   expect_branch "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" build-input-feeds-loaded-dll \
     "docs/*.md a crate include_str!s -> that crate"
   expect_detail "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" \
     "pkg=er-invasion-warp-core, which feeds er_invasion_warp.dll" "reason names the reading crate and its DLL"
-  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" build-input-feeds-loaded-dll \
-    "docs/recon TSV a build.rs reads -> that crate"
+  expect_branch "$REPO_ROOT/docs/er-invasion-warp.dll-pool-test.toml" build-input-feeds-loaded-dll \
+    "docs/*.toml a crate include_str!s -> that crate"
 
   echo "  -- must NOT tear down --"
   # The five real false teardowns from 2026-08-04, each of which cost a user-driven invasion.
@@ -1299,6 +1300,10 @@ path = '/nonexistent/er_quickload.dll'
 TOML
   expect_branch "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" build-input-of-unloaded-crate \
     "embedded doc, embedding crate not loaded" "$warpless"
+  # The same holds under scripts/: `er-duel-rules-core` embeds this fixture in a test, so the
+  # reading crate is found and judged, rather than the directory being waved through.
+  expect_branch "$REPO_ROOT/scripts/test-er-duel-rules-bans.json" build-input-of-unloaded-crate \
+    "scripts/ fixture a crate embeds, that crate not loaded"
   # bd er-effects-rs-kvqp, both halves, measured on this machine 2026-09-21.
   #
   # A profile that parses and lists zero natives is determined, and determined to be safe: the
@@ -1332,7 +1337,7 @@ path = '/nonexistent/SeamlessCoop/ersc.dll'
 TOML
   expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" dlls-built-by-another-tree \
     "edit here, live DLLs built by tree B" "$treebprof"
-  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" dlls-built-by-another-tree \
+  expect_branch "$REPO_ROOT/docs/er-invasion-warp.dll-pool-test.toml" dlls-built-by-another-tree \
     "build-read doc here, live DLLs built by tree B" "$treebprof"
   local winprof="$tmpdir/tree-b-wine.me3" windll="$treeb/$rel_dll/er_quickload.dll"
   printf 'profileVersion = "v1"\n[[natives]]\npath = '"'"'Z:%s'"'"'\n' "${windll//\//\\}" >"$winprof"
@@ -1418,8 +1423,8 @@ TOML
   expect_branch "$REPO_ROOT/AGENTS.md" inert-documentation "AGENTS.md with a game live without me3" "$nome3"
   expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" fallback-profile-undiscoverable \
     "crate source with a game live without me3" "$nome3"
-  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" fallback-profile-undiscoverable \
-    "docs/recon TSV a build.rs reads, without me3" "$nome3"
+  expect_branch "$REPO_ROOT/docs/er-invasion-warp.dll-pool-test.toml" fallback-profile-undiscoverable \
+    "docs/ file a crate embeds, without me3" "$nome3"
   expect_verdict "$REPO_ROOT/.beads/issues.jsonl" SKIP ".beads/ issue data"
   expect_verdict "$REPO_ROOT/.github/workflows/ci.yml" SKIP ".github/ workflow file"
   expect_verdict "$REPO_ROOT/.claude/settings.json" SKIP ".claude/ settings"

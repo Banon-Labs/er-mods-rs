@@ -7,12 +7,11 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-ai-lab.py
 //
-// Static chain, read on 1.17.1 (eldenring-deobf-1.17.1.bin; names from the 1.16.2 dump) and carried
-// to the installed 2.7.2.0 (1.17.2) with scripts/map-rvas-1171-to-1172.py, written "1.17.1 ->
-// 2.7.2.0". scripts/verify-carry-1171-to-1172.py decodes every function below to the same
-// instructions in both de-Arxan'd images, branch and rip-relative targets compared through the carry
-// table, and finds 897 of the 907 rip-relative references to the CSWorldAiManager global carried
-// onto references of its new address (the other 10 sit in gap code after a ret).
+// Static chain, read on 1.17.1 (eldenring-deobf-1.17.1.bin; names from the 1.16.2 dump); the
+// addresses are 2.7.2.0 (1.17.2), written "1.17.1 -> 2.7.2.0". When they were carried, every
+// function below decoded to the same instructions in both de-Arxan'd images, branch and
+// rip-relative targets compared, and 897 of the 907 rip-relative references to the CSWorldAiManager
+// global landed on references of its new address (the other 10 sit in gap code after a ret).
 //   CSWorldAiManager global   0x143d66548 -> 0x143d69568  (1.16.2 0x143d624e8; 11 callers of the
 //                              getter agree)
 //   ->+0x6938 CSAiLua          getter `mov rax,[rcx+0x6938]; ret` at 0x14037c140 (unmoved, same

@@ -1,0 +1,77 @@
+{
+  "_doc": "Findings of scripts/audit-ungated-game-addresses.py that stand, each with the reason it is safe. Keyed by file, function and expression; count is how many times that expression occurs there. A finding with no row, a row whose site is gone, a row whose sinks no longer match and a row without a reason all fail the gate. A finding that a one-line is_supported_build() guard would clear gets the guard instead of a row.",
+  "sites": [
+    {
+      "file": "crates/er-game-base/src/game_build.rs",
+      "fn": "resource_entry",
+      "expr": "base + directory_rva",
+      "sinks": ["READ"],
+      "count": 1,
+      "reason": "The version-resource walk behind is_supported_build itself. directory_rva comes from the image's own resource directory (game_file_version -> resource_directory -> version_resource_data), which describes the running build on every build."
+    },
+    {
+      "file": "crates/er-game-base/src/game_build.rs",
+      "fn": "resource_entry",
+      "expr": "base + directory_rva + 16 + index * 8",
+      "sinks": ["READ"],
+      "count": 1,
+      "reason": "Same walk: an entry of the resource directory the image itself declares."
+    },
+    {
+      "file": "crates/er-game-base/src/mem.rs",
+      "fn": "game_rva_for_hook",
+      "expr": "game_module_base()? + rva as usize",
+      "sinks": ["RETURN"],
+      "count": 1,
+      "reason": "The for-hook helper: hands base + rva to a hook API that resolves it (MhHook::new, register_union_hook*, register_shared_hook*). Every game_rva_for_hook(..) call is a site of this audit and is held to reaching one."
+    },
+    {
+      "file": "crates/er-hook/src/detour_site.rs",
+      "fn": "function_table",
+      "expr": "base + table_rva",
+      "sinks": ["STORE"],
+      "count": 1,
+      "reason": "table_rva is the exception directory's rva, read out of the running image's own optional header (read_u32(optional + entry), with the entry bounds-checked against the size the COFF header declares and the rva checked against the first section), so it describes the running build on every build. It is the .pdata the *_runtime_derived hook APIs audit against."
+    },
+    {
+      "file": "crates/er-input-harness/src/rtti.rs",
+      "fn": "derives_from",
+      "expr": "base + descriptor_rva as usize + BASE_CLASS_DESCRIPTOR_TYPE_RVA_OFFSET",
+      "sinks": ["READ"],
+      "count": 1,
+      "reason": "descriptor_rva is an element of the base-class array the live object's own class hierarchy descriptor points at, reached from a locator that locator() accepts only when its self-rva matches its address; RTTI rvas describe the running image on every build."
+    },
+    {
+      "file": "crates/er-input-harness/src/rtti.rs",
+      "fn": "name_at",
+      "expr": "base + type_descriptor_rva as usize + TYPE_DESCRIPTOR_NAME_OFFSET",
+      "sinks": ["READ"],
+      "count": 1,
+      "reason": "type_descriptor_rva is read by class_name out of the live object's RTTI complete-object locator, which locator() accepts only when the locator's own self-rva matches; RTTI rvas describe the running image on every build."
+    },
+    {
+      "file": "crates/er-invasion-warp/src/map_seams.rs",
+      "fn": "verified_va",
+      "expr": "RE_IMAGE_BASE + self.rva",
+      "sinks": ["RETURN"],
+      "count": 1,
+      "reason": "RE_IMAGE_BASE is the flat image base 0x140000000 the RE notes are written against, not the running module's base, and verified_va's one non-test caller (map_seams.rs, the call-refusal log line) prints it. The address that is called is verify_seam's base + seam.rva, which passes behind its resolve_detour_address let-else."
+    },
+    {
+      "file": "crates/er-positional-voice/src/game.rs",
+      "fn": "at",
+      "expr": "self.base + rva",
+      "sinks": ["RETURN"],
+      "count": 1,
+      "reason": "Game::at serves Game::f and the readers; lib.rs builds Game::new(base) only after game::check_sites(base) passed, and check_sites refuses any build but 2.7.2.0 before comparing a byte."
+    },
+    {
+      "file": "crates/er-reload-trace/src/lib.rs",
+      "fn": "install_one",
+      "expr": "base + spec.rva",
+      "sinks": ["ARG:register"],
+      "count": 1,
+      "reason": "register is the product hub's er_effects_union_register_2720 export (er_hook::UnionRegisterFn), which calls register_union_hook -> resolve_target -> resolve_detour_address; the other arm is register_union_hook itself. Both refuse another build."
+    }
+  ]
+}

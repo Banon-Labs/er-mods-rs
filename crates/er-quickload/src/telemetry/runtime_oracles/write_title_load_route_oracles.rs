@@ -6,9 +6,9 @@
 /// Emit the title-time deserialize + picked-summary oracle fields.
 ///
 /// `oracle_title_time_deser_calls` must be 0 on a correct run. Non-zero means a save was
-/// deserialized at the boot title through `0x14067b290` instead of in-world from
+/// deserialized at the boot title through `0x14067c590` instead of in-world from
 /// `CS::MoveMapStep::DoSaveStuff`, its only caller in the whole image -- the picked-save crash
-/// (`gaitemInsTable[-1]` AV at `0x67141a`), which before this counter existed left no trace but a
+/// (`gaitemInsTable[-1]` AV at 1.16.2 `0x67141a`), which before this counter existed left no trace but a
 /// debug log that stopped mid-line with no shutdown sequence.
 ///
 /// The picked-summary fields alongside it say why that route was taken:

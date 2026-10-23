@@ -4,7 +4,7 @@ Read-only. Prints JSON on stdout.
 
     python3 scripts/er-mechanics-ash-mount-rank.py Shamshir [rows-sweep.json]
 
-- Ash counts use `AshTables.can_mount` (`CanMountGemWithAffinityOnWeapon` 0x140d549d0) over every
+- Ash counts use `AshTables.can_mount` (`CanMountGemWithAffinityOnWeapon` 0x140d57e70) over every
   ash-of-war item (`AshTables.ash_gems`) at the weapon's maximum reinforcement level, per affinity.
 - Affinities are the EquipParamWeapon rows `id + 100*affinity` that exist.
 - Moveset coverage is `er-mechanics-attacks.weapon_attacks` per grip over every weapon of the same

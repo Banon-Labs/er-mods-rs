@@ -160,7 +160,7 @@ pub unsafe fn title_live_dialog_fire_ready(
     owner: usize,
     base: usize,
 ) -> Option<LiveDialogFireReady> {
-    const TITLE_FLOW_CONTEXT_VTABLE_RVA: usize = 0x2ac7f20;
+    const TITLE_FLOW_CONTEXT_VTABLE_RVA: usize = 0x2acd090;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if !unsafe { title_scheduler_ready(owner, base) } {
         return None;
@@ -232,7 +232,7 @@ pub unsafe fn title_live_dialog_fire_ready(
     })
 }
 /// True if `vt` is a startup MessageBoxDialog the auto-accept should drive: the base MessageBoxDialog
-/// vtable or the CS::SaveRetryDialog subclass vtable (the wrapper 0x1407af9a0 overrides base ->
+/// vtable or the CS::SaveRetryDialog subclass vtable (the wrapper, 1.16.1 dump 0x1407af9a0, overrides base ->
 /// SaveRetryDialog after the builder, so a base-only check bails once the override lands). bd
 /// offline-title-modal-is-saveretrydialog.
 pub fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
@@ -291,7 +291,7 @@ pub fn startup_modal_blocking_state() -> StartupModalBlockingState {
 ///
 /// The list is COMPACTED (only occupied slots get rows), so `row` and the slot are different
 /// numbers for any container whose characters are not dense from slot 0. This walks the exact chain
-/// `CS::ProfileLoadDialog::load_activate` (`0x1409a4670`) walks -- dialog vtable slot `+0x90` for
+/// `CS::ProfileLoadDialog::load_activate` (`0x1409a5cc0`; 1.16.2 `0x1409a4670`) walks -- dialog vtable slot `+0x90` for
 /// the embedded row list, the list's own vtable slot `+0x20` for the row, then the row's
 /// `save_slot` at `+0x8` -- so the answer is by construction the slot the native activation is
 /// about to load, not a second guess at it.
@@ -337,11 +337,11 @@ pub unsafe fn profile_dialog_row_slot(dialog: usize, row: i32) -> Option<i32> {
 }
 
 /// Park the ProfileSelect list cursor on the row describing `slot`, through the game's own
-/// `CS::ProfileLoadDialog::SelectSaveSlot` (`0x1409a5f20`).
+/// `CS::ProfileLoadDialog::SelectSaveSlot` (`0x1409a7570`; 1.16.2 `0x1409a5f20`).
 ///
 /// This is native ownership rather than a field poke: the same call the dialog's constructor makes
 /// with `GetMenuSystemSaveLoad()->saveSlot`. It searches the rows for `save_slot == slot` and, on a
-/// hit, sets the cursor through the list widget's own setter (`0x140738d40`) -- so a row list that
+/// hit, sets the cursor through the list widget's own setter (1.16.2 `0x140738d40`) -- so a row list that
 /// does not contain `slot` leaves the cursor exactly where it was and returns `false`, which is the
 /// correct answer rather than a failure to paper over.
 pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: i32) -> bool {
@@ -375,8 +375,8 @@ pub unsafe fn profile_dialog_select_save_slot(base: usize, dialog: usize, slot: 
     }
     // Broken on 1.17 until 2026-08-30: this was `transmute(base + ProfileLoadSelectSaveSlot)`, a
     // raw `base + RVA` that never asked the resolver where the function lives on the running build.
-    // `CS::ProfileLoadDialog::SelectSaveSlot` MOVED: docs/recon/rva-map-1162-to-1170.verified.tsv
-    // maps 0x1409a5f20 -> 0x1409a70c0 (identical-whole, 38 insns, both `.pdata` entries agree), and
+    // `CS::ProfileLoadDialog::SelectSaveSlot` MOVED: the 1.17 ledger mapped 1.16.2 0x1409a5f20 ->
+    // 1.17 0x1409a70c0 (identical-whole, 38 insns, both `.pdata` entries agree), and
     // byte-checking both images confirms it -- 1.16.2 @0x9a5f20 and 1.17 @0x9a70c0 are the same
     // prologue `48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 33`, while 1.17 @0x9a5f20 reads
     // `78 b5 01 48 83 c4 38 c3 ...`, which is mid-instruction and not a function entry. The vtable
@@ -400,7 +400,7 @@ pub unsafe fn profile_load_dialog_ready(
     want_slot: i32,
     log_pending: bool,
 ) -> Option<ProfileLoadDialogReady> {
-    const PROFILE_LOAD_ACTIVATE_RVA: usize = 0x009a4670;
+    const PROFILE_LOAD_ACTIVATE_RVA: usize = 0x009a5cc0;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let pld_vt = er_game_base::mem::game_data_addr(
         base,
@@ -614,7 +614,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);
     // Frame-level save-IO orchestration capture (menu-b80-mount-orchestration-sequence):
     // the iodev request handle pair [iodev+0x18]/[iodev+0x20] + [iodev+0x10] inflight.
-    // Only 0x14067b4e0's preview read populates these; logging them across a real
+    // Only 0x14067c7e0's preview read (1.16.2 0x14067b4e0) populates these; logging them across a real
     // load pins exactly when the read goes in-flight/resident vs when b80 flips.
     let iodev = read_global_ptr(module_base, IODEV_GLOBAL_RVA, "IODEV_GLOBAL_RVA");
     let read_iodev = |off: usize| {
@@ -644,7 +644,7 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     let slotmgr = game_data_man_ptr_or_null();
     // World-resource streaming enable-state (the WorldResWait resolution gate):
     // resmgr = deref(deref(MoveMapStep+0xf0)+0x10); b7c1 = its streaming-enable flag;
-    // driver = the streaming/session driver singleton 0x143d7c088. Capture what the
+    // driver = the streaming/session driver singleton 0x143d83118 (1.16.2 0x143d7c088). Capture what the
     // real load has enabled during mms_state=3 that our forced load lacks.
     let wrm = if mms != null {
         unsafe { *((mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) as *const usize) }
@@ -706,7 +706,8 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         "observe: state={state} csfeman=0x{csfeman:x} gxctx=0x{gx_draw_ctx:x} c30=0x{c30:x} ac0={ac0} b80={b80} b78={b78} iodev=0x{iodev:x} io10=0x{iodev10:x} io18=0x{iodev18:x} io20=0x{iodev20:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
     ));
 }
-/// Patch the `GameMan::IsOnlineMode` getter 0x14067a030 to `xor eax,eax; ret` so it always
+/// Patch the `GameMan::IsOnlineMode` getter 0x14067b330 (1.16.2 0x14067a030) to `xor eax,eax; ret`
+/// so it always
 /// reports offline. Validates the expected first opcode byte (aborts if the binary differs),
 /// VirtualProtects the 3-byte stub region RWX, writes the stub, restores protection, and
 /// flushes the instruction cache. Spawned early at DLL attach (timing-independent: it changes
@@ -719,7 +720,7 @@ pub fn apply_online_disable() {
         return;
     };
     // Patch the IsOnlineMode getter (consumers read offline). NOTE: the login-readiness predicate
-    // patch (0x140cab230) was reverted -- it did not prevent the modal (the offline fork shows it
+    // patch (1.16.2 0x140cab230) was reverted -- it did not prevent the modal (the offline fork shows it
     // too) and it broke the OnDecide OK-dispatch (the modal stuck instead of proceeding).
     er_hook::apply_xor_ret_stub(
         base,
@@ -730,8 +731,8 @@ pub fn apply_online_disable() {
     );
     // The third menu-open popup ("Starting in offline mode", GR_System_Message 401170) is gated by
     // TitleFlowContext->notReleaseFlag55 = !Menu_IsEnableOnlineMode(). Force that getter false so the
-    // game's own ctx-init (0x14082d0d0) writes notReleaseFlag55=1 each time, the title-flow offline step
-    // (0x14082fda0) takes the clean no-popup branch, and the Continue/Load/NewGame rows build with zero
+    // game's own ctx-init (1.16.2 0x14082d0d0) writes notReleaseFlag55=1 each time, the title-flow
+    // offline step (1.16.2 0x14082fda0) takes the clean no-popup branch, and the Continue/Load/NewGame rows build with zero
     // MessageBoxDialog builds. Race-free + offline-gated (Seamless online unaffected). bd
     // menu-open-3rd-popup-offline-mode-notice-2026-06-23 / er-effects-rs-yvf.
     let menu_online_off = er_hook::patch_3byte_stub(
@@ -790,7 +791,7 @@ pub fn apply_online_disable() {
 // made the game grab the OS cursor on world-entry; the product must use real focus state. See bootstrap.rs.
 /// Force the SaveLoad2 storage-select op gate to pass cold (bd b80-ROOTCAUSE-cold-no-user-signin):
 /// patch the sign-in check to always return true and the user-index resolver to return 0, so the
-/// select-op ctor (0x14240f1b0) builds the runnable and the load proceeds to SLLoadSession -> read
+/// select-op ctor (1.16.1 dump 0x14240f1b0) builds the runnable and the load proceeds to SLLoadSession -> read
 /// -> b80 resident. Save-safe (in-memory code patch; no save write). Called once from the cold-mount
 /// attempt so normal play is unaffected unless a cold mount is requested.
 pub fn apply_signin_force(base: usize) {
@@ -815,14 +816,15 @@ pub fn apply_signin_force(base: usize) {
     ));
 }
 /// Boot-level title-accept (genuine zero input). The press-any-button wall is the
-/// boot intro/movie thread parked in its movie-wait loop; the latch 0x143d856a0
-/// (sole writer 0x140c8ff41) is set only after that loop finishes, which is what
-/// lets the inner MenuJobWait advance 10->11. The movie-dismiss gate 0x140e90820
-/// has no input check -- it finishes on decode completion or the skip-flag byte
-/// 0x14458b8a5. So writing the skip-flag makes the intro thread complete its real
-/// fade-out + teardown + latch legitimately (proper bookkeeping, unlike the bare
-/// latch poke that crashes), driving the native title-accept with zero input.
-/// Watch CSFeMan 0x143d6b880 for the bootstrap.
+/// boot intro/movie thread parked in its movie-wait loop; the latch 0x143d8c740
+/// (1.16.2 0x143d856a0, sole writer 1.16.2 0x140c8ff41) is set only after that loop
+/// finishes, which is what lets the inner MenuJobWait advance 10->11. The movie-dismiss
+/// gate (1.16.2 0x140e90820) has no input check -- it finishes on decode completion or
+/// the skip-flag byte 0x144592945 (1.16.2 0x14458b8a5). So writing the skip-flag makes
+/// the intro thread complete its real fade-out + teardown + latch legitimately (proper
+/// bookkeeping, unlike the bare latch poke that crashes), driving the native
+/// title-accept with zero input. Watch CSFeMan 0x143d72910 (1.16.2 0x143d6b880) for the
+/// bootstrap.
 pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
@@ -910,7 +912,7 @@ pub unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
 /// Per-frame native autoload arm. Recipe A set the slot once and the title reset
 /// it to -1 before the save-mgr update could arm, so the latch fired Finish with
 /// nothing armed -> null deref. This re-sets the slot every frame (against the
-/// title's reset) and sets the latch, giving the native update 0x14067f5d0 a
+/// title's reset) and sets the latch, giving the native update (1.16.2 0x14067f5d0) a
 /// chance to arm GameMan+0xb72 before Finish. Observes b72 / b80 / CSFeMan to see
 /// if the arm + bootstrap take. Crash logger should run alongside.
 pub unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {

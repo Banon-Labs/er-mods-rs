@@ -12,6 +12,9 @@
 //!
 //! # The function, and how it was identified (1.16.2 dump on `:8765`)
 //!
+//! Every address in these module notes is the 1.16.2 dump's, down to the end of the `# Mode 2`
+//! section; the resolver's 2.7.2.0 rva is `MENU_MOVE_DIR_REPEAT_RVA`.
+//!
 //! `FUN_140757c40(this, out)` is a two-line wrapper: it writes the byte `2` into a local, then
 //! tails into `FUN_140757b60(this, out, &mode)`, the generic `CS::MoveDir` resolver. That resolver
 //! builds a `std::function<CS::MoveDir(CS::CSEzMenuViewerPad const&)>` over the captured mode and
@@ -91,10 +94,11 @@ use crate::save_picker_menu::{
     SAVE_PICKER_NAV_UP_MASK,
 };
 
-/// `FUN_140757c40` -- `CS::MoveDir GetMoveDir(mode 2)`, the mode `CS::GridControl` steps its cursor
-/// with. 1.16.2 rva; `0x758a90` on 1.17, byte-identical over the whole `.pdata` extent
-/// (`0x21` bytes in both images) including the `mov byte ptr [rsp+0x38], 2` that names the mode.
-pub(crate) const MENU_MOVE_DIR_REPEAT_RVA: usize = 0x757c40;
+/// `CS::MoveDir GetMoveDir(mode 2)` (1.16.2 `FUN_140757c40`), the mode `CS::GridControl` steps its
+/// cursor with. 2.7.2.0 rva, byte-identical to 1.16.2 over the whole `.pdata` extent (`0x21`
+/// bytes, unique in `eldenring-deobf-1.17.2.bin`) including the `mov byte ptr [rsp+0x38], 2` that
+/// names the mode.
+pub(crate) const MENU_MOVE_DIR_REPEAT_RVA: usize = 0x758f40;
 
 /// `CS::MoveDir`: a column delta and a row delta, in that order.
 #[repr(C)]
@@ -104,7 +108,7 @@ struct MoveDir {
     y: i32,
 }
 
-/// The value the engine's own callers put in the byte `FUN_140758050` reads: this surface wants
+/// The value the engine's own callers put in the byte `0x140759350` reads: this surface wants
 /// menu input. Anything nonzero does, and the global gates still decide whether the frame counts.
 const MENU_INPUT_ACCEPTED: u8 = 1;
 
@@ -161,8 +165,8 @@ fn move_dir_fn() -> Option<unsafe extern "system" fn(*const u8, *mut MoveDir) ->
             )),
         }
     }
-    // Safety: the address is the verified 1.17 destination of the 1.16.2 resolver, whose signature
-    // was read off its own disassembly: `rcx` the input-accepted byte, `rdx` the out `MoveDir`,
+    // Safety: the address is the verified 2.7.2.0 resolver, whose signature was read off its own
+    // disassembly: `rcx` the input-accepted byte, `rdx` the out `MoveDir`,
     // `rax` the same out pointer back.
     resolved.ok().map(|address| unsafe {
         std::mem::transmute::<
@@ -174,7 +178,7 @@ fn move_dir_fn() -> Option<unsafe extern "system" fn(*const u8, *mut MoveDir) ->
 
 /// True once the menu manager singleton exists.
 ///
-/// `FUN_140758050` panics through `DLPanic` on a null `GLOBAL_CSMenuMan` rather than returning, so
+/// `0x140759350` panics through `DLPanic` on a null `GLOBAL_CSMenuMan` rather than returning, so
 /// the one singleton this path can reach before the game has built it is checked here. The others
 /// it touches (`CSFade`, `FD4PadManager`) are reached only from inside a live menu frame, which is
 /// the only kind of frame this module is called on.
@@ -183,7 +187,7 @@ fn menu_manager_live() -> bool {
         return false;
     };
     let slot = game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA");
-    // Safety: a fault-safe read of a game global, zero when the address has no mapping.
+    // Safety: a fault-safe read of a game global, zero when the game is not 2.7.2.0.
     slot != 0 && unsafe { safe_read_usize(slot) }.is_some_and(|pointer| pointer != 0)
 }
 

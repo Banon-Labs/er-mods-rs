@@ -7,17 +7,17 @@ compute target assuming the disp32 follows ModRM and the instruction ends right 
 Because instruction length varies, we test a range of plausible instruction-end offsets
 (ModRM+disp32 is 5 bytes; insn ends at modrm_pos+5+trailing_imm). We report any position
 whose RIP-rel target == requested VA for end at modrm_pos+5 (most lea/mov/cmp with no imm).
-The image defaults to the 1.16.2 deobf; pass `--img eldenring-deobf-1.17.bin` for a 1.17
-question. Answering a 1.17 question out of the 1.16.2 file is the stale-address failure
-this migration exists to close, and nothing in the output would have said which build it
-read -- so the chosen image is now printed with the results.
+The image defaults to `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build; pass
+`--img eldenring-deobf.bin` for a 1.16.2 question. Answering one build's question out of
+another build's file is a stale-address failure, and nothing in the output would have said
+which build it read -- so the chosen image is printed with the results.
 
-Usage: riprefscan-deobf.py 0x143d703e0 [--img eldenring-deobf-1.17.bin]
+Usage: riprefscan-deobf.py 0x143d709a8 [--img eldenring-deobf.bin]
 """
 import argparse, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf-1.17.2.bin")
 RIPREL = {0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D}
 
 

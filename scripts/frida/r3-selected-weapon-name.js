@@ -1,8 +1,8 @@
 // Which code asks for a weapon's name while the item list is open, and with which id, so the R3
 // board can follow the highlighted weapon instead of always showing Misericorde.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Measured 2026-10-03 with the first version of this agent: the detail panel names the highlighted
 // weapon through `0x99a5a0(this, record)` (return address 0x99a607), which builds the name from

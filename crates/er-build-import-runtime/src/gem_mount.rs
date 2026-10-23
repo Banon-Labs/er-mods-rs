@@ -8,7 +8,7 @@
 //! the game itself would never let a player make -- which the export then faithfully reports, and
 //! the planner refuses to believe.
 //!
-//! The rule is `CheckIfWepTypeCanEquipGem` @`0x140d29e00`: a switch on `EquipParamWeapon::wepType`
+//! The rule is `CheckIfWepTypeCanEquipGem` @`0x140d2cc70`: a switch on `EquipParamWeapon::wepType`
 //! selecting one `canMountWep_*` flag off the `EquipParamGem` row, and `false` for any weapon type
 //! it does not list (ammunition, unarmed). The switch is transcribed below rather than called,
 //! because calling it needs an `EquipParamGemLookupResult` the caller would have to build, and the

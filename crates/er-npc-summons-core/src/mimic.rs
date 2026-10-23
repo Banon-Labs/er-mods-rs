@@ -17,14 +17,15 @@ use crate::config::Companion;
 pub const MIMIC_TRIGGER: i32 = 207_000;
 
 /// The Mimic Tear's c0000 human row. Every companion request points here, so no request carries
-/// row 20700000 and the copy-the-player branch (`cmp $0x13bdb60` at `0x1404bc384`) never arms.
+/// row 20700000 and the copy-the-player branch (`cmp $0x13bdb60` at 2.7.2.0 `0x1404bc464`) never
+/// arms.
 pub const HUMAN_ROW: i32 = 20_700_001;
 
 /// Highest Mimic Tear upgrade level.
 const MAX_LEVEL: i32 = 10;
 
 /// The Mimic Tear upgrade level of a summon request, or `None` when the request is not a Mimic
-/// Tear at all (`SummonBuddyManager+0x20`, read where `0x1404bbed9` reads it).
+/// Tear at all (`SummonBuddyManager+0x20`, read where 2.7.2.0 `0x1404bbfb9` reads it).
 #[must_use]
 pub fn mimic_level(request: i32) -> Option<i32> {
     let level = request - MIMIC_TRIGGER;

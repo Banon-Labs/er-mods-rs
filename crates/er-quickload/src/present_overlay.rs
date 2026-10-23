@@ -38,9 +38,9 @@ const PRESENT1_VTABLE_INDEX: usize = 22;
 type PresentFn = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
 type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void) -> i32;
 
-/// `g_GxDrawContext` (GXSR::GxDrawContext singleton) deobf RVA -- the RE-confirmed root of the live
-/// swapchain. The deobf binary stores this singleton at 0x1419e637c (`mov [rip]=0x1447ef360`) right before
-/// the `GxDrawContext::Initilize` fall-through (ground-truthed against the deobf binary, not a formula).
+/// `g_GxDrawContext` (GXSR::GxDrawContext singleton) RVA (2.7.2.0 0x1447f6400) -- the RE-confirmed
+/// root of the live swapchain. The 1.16.2 deobf binary stores this singleton at 0x1419e637c
+/// (`mov [rip]=0x1447ef360`) right before the `GxDrawContext::Initilize` fall-through.
 /// The 0x1010-byte GxDrawContext holds the per-window render-output vector at +0x120 (begin ptr at +0x128);
 /// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword is the live
 /// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
@@ -522,7 +522,7 @@ fn boot_present_pump() {
             // arbitrary time (our thread, not synchronized with the game's frame). That barrier assumes the
             // backbuffer is in present state; on a real D3D12 driver it usually is not (the game may be
             // mid-render), so the wrong-state transition removes the device (Present hr=0x887a0005) and the
-            // game crashes in its device-removed handler (rva=0x1e8ad57). vkd3d/Proton TOLERATES the wrong
+            // game crashes in its device-removed handler (1.16.2 rva=0x1e8ad57). vkd3d/Proton TOLERATES the wrong
             // barrier (translation layer), which is the only reason this ever worked. So the self-present is
             // safe only under Wine/Proton; on native Windows (with or without a co-resident overlay like
             // Special K) skip it entirely and let the Present detour -- which draws inside the game's Present
@@ -749,12 +749,11 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
         log_find_miss(stage);
         None
     };
-    // Resolved, not added. This is a 1.16.2 data address and every `.data` global moved on
-    // 1.17, so read raw it names some other object -- which is why the find reported
-    // `stage=1 candidate=0x0 vt_module=<none>` for 1200 consecutive tries: it never got past
-    // the root. With the vanilla title surfaces hidden and no overlay able to draw, that is a
-    // black screen with a live process behind it. The carry is unusually well evidenced --
-    // 965 of 966 referencing sites agree on 0x47f33e0.
+    // Resolved, not added. This is a 2.7.2.0 data address; on another build it names some other
+    // object -- an unresolved read once made the find report `stage=1 candidate=0x0
+    // vt_module=<none>` for 1200 consecutive tries: it never got past the root. With the vanilla
+    // title surfaces hidden and no overlay able to draw, that is a black screen with a live
+    // process behind it.
     let Some(ctx_slot) = er_game_base::game_build::resolve_game_address(
         base + G_GX_DRAW_CONTEXT_RVA,
         "GX_DRAW_CONTEXT_RVA",

@@ -6,8 +6,8 @@
 // `controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET` (`+0xa8`). That pointer is
 // **not an object of its own** -- it is a fixed-offset alias of the controller:
 //
-// `CS::PropertyNewButtonController` is a 0x300-byte heap object (`HeapAlloc(0x300, 8, ...)` in the
-// 1.16.2 dump's `FUN_14086a950`) whose constructor `FUN_14086a2a0` copy-constructs the caller's
+// `CS::PropertyNewButtonController` is a 0x300-byte heap object (`HeapAlloc(0x300, 8, ...)` in
+// `0x14086bdf0`) whose constructor `0x14086b740` copy-constructs the caller's
 // action `std::function` into `this + 0x70` (`param_1 + 0xe`) and stores the resulting
 // `_Getter()` pointer at `this + 0xa8` (`param_1[0x15]`). MSVC's `std::function` keeps that getter
 // slot at `storage + 0x38` and, for a small (inline) callable, it points at the storage itself --
@@ -41,20 +41,20 @@
 //
 // Which row was activated comes from one source for all three input kinds: the dialog's own list
 // cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
-// (`FUN_140739e20` returns it; the widget's item count is `+0xd0 == dialog + 0xb08`).
+// (`0x14073b120` returns it; the widget's item count is `+0xd0 == dialog + 0xb08`).
 //
 // # Why the cursor is authoritative for the mouse too
 //
-// `GridControl::Update` (vtable `+0x10`, 1.16.2 `FUN_1407392f0`) is the single writer of that field:
+// `GridControl::Update` (vtable `+0x10`, `0x14073a5f0`) is the single writer of that field:
 //
-//   * mouse -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
-//     (`FUN_140758050`: `CSMenuManImp::disableMouseCursor == false`) and the mouse is the active
-//     pointer (`FUN_1407588a0`: `CSMouseMan + 0x30`) and no drag/wheel/direction input is in flight,
-//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid cell
-//     proxies via `FUN_14074b0d0`, converts the hit cell's `(row, col)` into an item index, and calls
-//     `FUN_14073bc10(this, index)` -- which writes `+0xd4`. Hover moves the native cursor.
-//   * PAD / keyboard -- the direction branches of the same `Update` (`FUN_14073b0c0` /
-//     `FUN_14073b4d0` / `FUN_14073a250`) land on the same `FUN_14073bc10`, and `Update` then diffs
+//   * mouse -- `GridControl::HandleMouse` (`0x14073b8c0`) ends by asking, when the cursor is live
+//     (`0x140759350`: `CSMenuManImp::disableMouseCursor == false`) and the mouse is the active
+//     pointer (`0x140759ba0`: `CSMouseMan + 0x30`) and no drag/wheel/direction input is in flight,
+//     `0x140737f90(this, 0x140758df0(pad))`. That hit-tests each of the `cols * rows` grid cell
+//     proxies via `0x14074c3d0`, converts the hit cell's `(row, col)` into an item index, and calls
+//     `0x14073cf10(this, index)` -- which writes `+0xd4`. Hover moves the native cursor.
+//   * PAD / keyboard -- the direction branches of the same `Update` (`0x14073c3c0` /
+//     `0x14073c7d0` / `0x14073b550`) land on the same `0x14073cf10`, and `Update` then diffs
 //     `+0xd4` against its pre-update value to fire the selection-changed callbacks.
 //
 // There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
@@ -207,11 +207,11 @@ pub enum QuitRowLabel {
 }
 
 /// How the activation arrived, as classified by the game's own predicates on the dispatched event
-/// (`FUN_140758a10` = pad/keyboard confirm, `FUN_140758a70` = mouse click; both are the tests
-/// `PropertyNewButtonController`'s should-invoke predicate `FUN_140974b00` itself runs).
+/// (`0x140759d10` = pad/keyboard confirm, `0x140759d70` = mouse click; both are the tests
+/// `PropertyNewButtonController`'s should-invoke predicate `0x140976150` itself runs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitInputKind {
-    /// A confirm press from either a pad button or the keyboard: `FUN_140758a10` is one predicate
+    /// A confirm press from either a pad button or the keyboard: `0x140759d10` is one predicate
     /// covering both, so there is deliberately no separate keyboard variant. Do not add one, and do
     /// not test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
     /// own predicate is exactly what makes a rebind work without this DLL knowing any key codes.

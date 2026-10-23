@@ -2,9 +2,10 @@
 //!
 //! # Why this exists, and why the narrower shape failed
 //!
-//! `CS::IsBreakInLimitedByEventFlagId` (1.17.1 `0x140a61980`) is the engine's answer to "may anyone
-//! break into this region". Vanilla flags whole zones off; Seamless makes them playable, so under
-//! Seamless the flag is wrong rather than protective.
+//! `CS::IsBreakInLimitedByEventFlagId` (2.7.2.0 `0x140a61e40`, 1.17.1 `0x140a61980`) is the
+//! engine's answer to "may anyone break into this region". Vanilla flags whole zones off; Seamless
+//! makes them playable, so under Seamless the flag is wrong rather than protective. The other
+//! addresses in this module doc are 1.17.1 ones, where it was measured.
 //!
 //! [`crate::can_use_goods_gate`] first tried to route around it by asking `CanUseBreakInItem`'s
 //! other terms itself and never asking this one. That opens the item and nothing else, and the
@@ -17,19 +18,20 @@
 //!   line 117   FUN_140763a70(local_60, 2200000)                <- refused, look up the message
 //! ```
 //!
-//! Measured live on run `br-20260918-185924-8a9e`: the player raised the item in region `1400000`,
-//! started an invasion, and the game cancelled it with network message id `2200200`, "Invasion
-//! canceled". The capture came from `scripts/frida/who-shows-network-message.js`, and its stack --
-//! `eldenring.exe+0xa05461`, `+0x5afe9a`, `+0x591780`, `+0x58f27e`, `+0x62599d` -- carries no
-//! `ersc.dll` frame and none of ours, so the decision is the game's own. The same player, with this
-//! predicate forced from Frida, invaded with no cancel at all.
+//! Measured live on 1.17.1, run `br-20260918-185924-8a9e`: the player raised the item in region
+//! `1400000`, started an invasion, and the game cancelled it with network message id `2200200`,
+//! "Invasion canceled". The capture came from `scripts/frida/who-shows-network-message.js`, and its
+//! stack -- `eldenring.exe+0xa05461`, `+0x5afe9a`, `+0x591780`, `+0x58f27e`, `+0x62599d` -- carries
+//! no `ersc.dll` frame and none of ours, so the decision is the game's own. The same player, with
+//! this predicate forced from Frida, invaded with no cancel at all.
 //!
 //! So the flag has to read "allowed" to the engine, not only to our gate.
 //!
 //! # Why owning this predicate is safe
 //!
-//! It has three callers on the installed build, found by scanning `eldenring-deobf-1.17.1.bin` for
-//! calls that land on `0xa61980`, and every one of them is break-in:
+//! It had three callers on 1.17.1, found by scanning `eldenring-deobf-1.17.1.bin` for calls that
+//! land on `0xa61980` (2.7.2.0 `0xa61e40`), and every one of them is break-in. The table is in
+//! 1.17.1 addresses:
 //!
 //! | call site | owner | what it decides |
 //! |---|---|---|
@@ -49,21 +51,19 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// `CS::IsBreakInLimitedByEventFlagId` on 1.17.1.
+/// `CS::IsBreakInLimitedByEventFlagId` on 2.7.2.0.
 ///
 /// Read out of the image rather than mapped: `CanUseBreakInItem` computes the argument with
-/// `lea rcx,[rbx+0x6e8]` and calls it at `0x140657dc0`, and `CanStartBreakIn` calls the same
-/// address at `0x14050a99b` with a stack copy of `FieldArea->playRegionParamId`. Below the
-/// `0xafefe9` boundary, so 1.17.0 and 1.17.1 agree.
+/// `lea rcx,[rbx+0x6e8]` and calls it at `0x140658270`, and `CanStartBreakIn` calls the same
+/// address at `0x14050ac1b` with a stack copy of `FieldArea->playRegionParamId` (1.17.1
+/// `0x140657dc0` and `0x14050a99b`, calling `0x140a61980`).
 ///
 /// Its sense is inverted against its name: both callers refuse when it returns false, so true means
 /// "breaking in is permitted in this region".
 ///
-/// A 1.17.1 rva, carried with `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`. On 2.7.2.0 it
-/// is `0xa61e40`: a `.pdata` entry of the same `0x1e` length whose bytes differ only in its two
-/// call displacements, and both callers above carry (`0x657dc0` -> `0x658270`, `0x50a99b` ->
-/// `0x50ac1b`) to a `call` that lands on it.
-const IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA: u32 = 0xa6_1980;
+/// The 2.7.2.0 function is a `.pdata` entry of the same `0x1e` length as the 1.17.1 one, whose
+/// bytes differ only in its two call displacements.
+const IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA: u32 = 0xa6_1e40;
 
 /// Trampoline to the original predicate, or the next handler in the union chain.
 static ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -141,14 +141,14 @@ pub unsafe fn install() -> bool {
     if INSTALLED.load(Ordering::SeqCst) != 0 {
         return true;
     }
-    // Carried, not `game_rva_for_hook`: that is plain `base + rva`, and the runtime-derived hook
-    // API below translates nothing, so on 2.7.2.0 the detour would land `0x4c0` short.
-    let Some(entry) = er_game_base::mem::game_rva_measured_on(
-        IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA as usize,
-        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    // `game_rva_named`, not `game_rva_for_hook`: the runtime-derived hook API below checks only the
+    // live `.pdata`, not the build, so the build check has to happen here.
+    let Ok(entry) = er_game_base::mem::game_rva_named(
+        IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA,
+        "IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA",
     ) else {
         crate::standalone_log(format_args!(
-            "break-in region: IsBreakInLimitedByEventFlagId has no carry from 1.17.1 to {} -- \
+            "break-in region: IsBreakInLimitedByEventFlagId was measured on 2.7.2.0, not on {} -- \
              zones vanilla flags non-pvp stay non-pvp",
             er_game_base::game_build::describe_build()
         ));
@@ -196,9 +196,9 @@ mod tests {
 
     #[test]
     fn the_address_is_the_one_both_break_in_callers_reach() {
-        // `CanUseBreakInItem` calls this at `0x140657dc0` and `CanStartBreakIn` at `0x14050a99b`,
-        // both read out of `eldenring-deobf-1.17.1.bin`.
-        assert_eq!(IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA, 0xa6_1980);
+        // `CanUseBreakInItem` calls this at `0x140658270` and `CanStartBreakIn` at `0x14050ac1b`,
+        // both read out of `eldenring-deobf-1.17.2.bin`.
+        assert_eq!(IS_BREAK_IN_LIMITED_BY_EVENT_FLAG_ID_RVA, 0xa6_1e40);
     }
 
     /// Only a refusal may be overridden, asserted against the source so it cannot regress quietly.

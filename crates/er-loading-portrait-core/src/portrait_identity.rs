@@ -192,7 +192,7 @@ pub struct LiveRecordScan {
 /// Occupancy is the load-bearing term, and it is what keeps the mask a defect rather than a state.
 /// A save with three characters leaves seven records zeroed, and a zeroed record is not a
 /// character; without the occupancy term this would read `0b1111111000` on a perfectly healthy
-/// boot. The game produces no row for an unoccupied slot (`FUN_140875590` appends only where
+/// boot. The game produces no row for an unoccupied slot (`FUN_140876a30` appends only where
 /// `ProfileSummary::saveSlotsStates[slot]` is set), so an unoccupied slot's bytes describe nothing
 /// on screen and cannot be the defect.
 ///

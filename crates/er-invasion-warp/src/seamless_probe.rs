@@ -8,7 +8,8 @@
 //!
 //! It does not have to be read. The decision's output is written to `CSGameMan` in the clear:
 //! an MSB entry-point entity id at `+0xaf0` and a destination map at `+0xac8`, both consumed by
-//! `FUN_140afcf60`, the spawn resolver `ersc.dll` hooks. One invasion therefore yields the fact
+//! the spawn resolver `ersc.dll` hooks (2.7.2.0 `0x140afe740`, 1.16.2 `FUN_140afcf60`). One
+//! invasion therefore yields the fact
 //! that the static analysis could not.
 
 /// Sample the invasion destination and log it when it changes.

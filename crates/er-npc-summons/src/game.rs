@@ -1,7 +1,7 @@
 //! The native calls and field reads. Every function here runs on the game thread (the `FrameBegin`
 //! task or a detour the game called), and every address goes through `er_game_base`'s resolver,
-//! so an address with no verified mapping for the running build refuses instead of jumping into
-//! whatever code now sits there.
+//! so on any build other than 2.7.2.0 an address refuses instead of jumping into whatever code
+//! now sits there.
 //!
 //! The call shapes are the ones the Frida prototypes ran live on 1.17.1
 //! (`scripts/frida/spawn-npc.js`, `scripts/frida/signs-to-player.js`); the memories that record
@@ -284,8 +284,8 @@ pub(crate) fn spawn_hidden(body: Body, at: Vec4) -> Result<usize, String> {
             0.0,
             // `args[11]`: "spawn waiting to appear". With 1, `SummonBuddyManager::Update` later
             // plays the appear animation, applies doping and enables the character
-            // (`0x1404bdfc0` -> `0x1404be1d0`), undoing the hide below. With 0 none of that runs
-            // (bd `createsummonchr-args-and-spawn-sfx-1171-2026-10-06`).
+            // (2.7.2.0 `0x1404be0a0` -> `0x1404be2b0`), undoing the hide below. With 0 none of
+            // that runs (bd `createsummonchr-args-and-spawn-sfx-1171-2026-10-06`).
             false,
             false,
             u32::MAX,
@@ -351,7 +351,7 @@ fn summon_group_node(manager: usize, key: i32) -> Option<usize> {
 }
 
 /// Unlink and free `chr`'s entry in the group keyed `key`, the way the game's PostPhysics sweep
-/// does (1.17.1 `0x1404b943c..0x1404b945f`): `prev->next = next`, `next->prev = prev`, the size
+/// does (2.7.2.0 `0x1404b951c..0x1404b953f`): `prev->next = next`, `next->prev = prev`, the size
 /// down by one, then the list allocator's `Deallocate(entry)`. The sentinel and the group node are
 /// never touched; the game does not erase a group node either. Returns the size before and after.
 ///
@@ -528,7 +528,8 @@ pub(crate) fn place_red_sign(
 ) -> Result<usize, String> {
     let man = sign_man().ok_or("no SosSignMan")?;
     if sign_for(entity).is_none() {
-        // SAFETY: `PlaceNPCSummonSign` body, signature read from its EMEVD caller `0x14060b5a0`.
+        // SAFETY: `PlaceNPCSummonSign` body, signature read from its EMEVD caller (2.7.2.0
+        // `0x14060ba50`).
         let place: PlaceSignFn = unsafe { native(addr::PLACE_NPC_SIGN, "PLACE_NPC_SIGN") }?;
         let region: u32 = 0;
         unsafe {

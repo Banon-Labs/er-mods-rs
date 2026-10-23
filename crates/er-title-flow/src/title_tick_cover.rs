@@ -22,7 +22,7 @@
 ///
 /// `title_menu_action_ready` cannot rescue it either: the title's rows are reference-counted
 /// `CS::MenuMemberFuncJob` nodes chained into a `FixOrderJobSequence` by the registrar
-/// `0x1409b24e0` and owned by the menu manager -- they are not fields of the dialog, so
+/// `0x1409b3be0` and owned by the menu manager -- they are not fields of the dialog, so
 /// `scan_dialog_for_loadgame`'s bounded flat scan of the dialog object reports `hits=0` by
 /// construction (measured, 1280 qwords, every tick).
 ///
@@ -265,8 +265,8 @@ pub unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     let session = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
             base,
-            SESSION_SINGLETON_144588E98_RVA,
-            "SESSION_SINGLETON_144588E98_RVA",
+            BEGIN_LOGO_SESSION_SINGLETON_RVA,
+            "BEGIN_LOGO_SESSION_SINGLETON_RVA",
         ))
     }
     .unwrap_or(null);
@@ -352,8 +352,8 @@ pub unsafe fn product_core_autoload_ready(
     let session = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
             base,
-            SESSION_SINGLETON_144588E98_RVA,
-            "SESSION_SINGLETON_144588E98_RVA",
+            BEGIN_LOGO_SESSION_SINGLETON_RVA,
+            "BEGIN_LOGO_SESSION_SINGLETON_RVA",
         ))
     }
     .unwrap_or(null);
@@ -909,7 +909,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // functor, not our clear. See bd ending-request-fix-was-wrong / rt5d-never-set findings.)
     // switch-outcome oracle (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
     // outside the dormancy gate below, so it observes the post-commit native session too. CSMenuMan comes
-    // from CS_MENU_MAN_GLOBAL_RVA (1.16.2 +0x3d6b7b0), resolved for the running build like every other read
+    // from CS_MENU_MAN_GLOBAL_RVA (2.7.2.0 +0x3d72840), build-checked like every other read
     // of it here; literals: in-game menu job +0x798, InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
     // The trace classifies the outcome with no eyeballs: stable_frames (player present + requestCode==2 +
     // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world dropped (bounce/reload);
@@ -945,7 +945,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .unwrap_or(-1);
         // MoveMapStep child state (3rd-load root, 2026-07-16 Ghidra). InGameStep step 7
         // STEP_MoveMap_Update loops until the MoveMapStep child's own step machine finishes (gate
-        // FUN_140eb5550); only then does requestCode(ig_d8) go 1->2. On the softlock the child is
+        // 0x140eb8a90, 1.16.1 dump FUN_140eb5550); only then does requestCode(ig_d8) go 1->2. On the softlock the child is
         // created (step 6 STEP_MoveMap_Init ran) but never finishes, so ig_d8 stays 1 and step 7
         // self-loops. Read the child's internal step + world-res streaming state so the true stuck
         // point is a RAM semaphore, not the eyeballed "stuck at LOADING SAVE" bar. All reads are
@@ -1010,7 +1010,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             .and_then(|w| unsafe { safe_read_usize(w + WORLDRES_RESMGR_10_OFFSET) })
             .filter(|&v| v > 0x10000);
         // DEST-block register (RE wf_3f1e7d9a): worldres+0xb798 = current dest BlockId the WorldResWait
-        // drives to, +0xb79c = previous. ResetAreaResLists sets b798=-1 each load; FUN_14066da30 pushes
+        // drives to, +0xb79c = previous. ResetAreaResLists sets b798=-1 each load; 1.16.1 dump
+        // FUN_14066da30 pushes
         // the target on a "changed" transition. If on the reload b798 stays -1/stale (not 0x1c000000)
         // while it is 0x1c000000 on the first load, the dest was never seeded -> area never activates
         // -> world RES wait. Read-only.
@@ -1058,7 +1059,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             && mms_blocks < 256
         {
             let wio = mms_resmgr.unwrap_or(null);
-            // areaId is BlockId byte[3] (disasm FUN_14066d4d0: `MOVZX R11D, byte ptr [RDX + 0x3]`,
+            // areaId is BlockId byte[3] (disasm of 1.16.1 dump FUN_14066d4d0, 1.16.2 0x14066d3e0:
+            // `MOVZX R11D, byte ptr [RDX + 0x3]`,
             // then `CMP dword ptr [inner + 0xc], R11D`). So the block the step waits on is the one whose
             // inner+0xc == (curblk >> 24) & 0xff. Match exactly that (the earlier byte-set match false-
             // positived on the 0x00 bytes of curblk).
@@ -1066,7 +1068,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             let mut found = false;
             // The matched block's load-state: the getter return `ls_ptr` (0 = NULL load-state, i.e. the
             // block's load was never kicked off = FUN_14066d4d0's `if(loadstate==0) return 0` bail), and
-            // when non-null its bytes +0x2c (load-request flag, set by FUN_14066d8d0), +0x2d (ready), and
+            // when non-null its bytes +0x2c (load-request flag, set by 1.16.1 dump FUN_14066d8d0), +0x2d
+            // (ready), and
             // +0x35 (stream phase; == 10 means loaded). -1 = not read.
             let mut ls_ptr: usize = 0;
             let mut ls_vt: usize = 0;
@@ -1110,7 +1113,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ar_bres = unsafe { safe_read_i32(bp + 0xcd8) }.unwrap_or(-1);
                     ar_ptr = bp;
                     // Stale +0xce0 dump (run-validated root probe 2026-07-17): the getter
-                    // (deobf 0x14062f470) searches WorldAreaRes+0xce0[i] (stride 0xb98), reads
+                    // (0x140630770; 1.16.2 deobf 0x14062f470) searches WorldAreaRes+0xce0[i] (stride 0xb98), reads
                     // *(entry+0x8)=worldBlockInfo, +0x34=mapId2, matching the requested BlockId
                     // (0x1c000000). ar_bres=1 yet the getter returns null => the resident entry's
                     // mapId2 != 0x1c000000, i.e. a stale block-res left over from the prior in-world
@@ -1148,7 +1151,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                             ));
                         }
                     }
-                    // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
+                    // Read the load-state exactly like the game's check (1.16.1 dump FUN_14066d4d0):
+                    // block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
                     if let Some(vt) = unsafe { safe_read_usize(bp) }.filter(|&v| v > 0x10000) {
@@ -1157,8 +1161,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                             unsafe { safe_read_usize(vt + BLOCK_LOADSTATE_GETTER_VT_10_OFFSET) }
                                 .filter(|&v| v > 0x10000)
                         {
-                            // 2-ARG call, matching the game's check FUN_14066d4d0 (deobf
-                            // 0x14066d3e0): vtable[0x10](rcx=WorldAreaRes, rdx=&blockId) returns the
+                            // 2-ARG call, matching the game's check (1.16.1 dump FUN_14066d4d0, 1.16.2
+                            // deobf 0x14066d3e0): vtable[0x10](rcx=WorldAreaRes, rdx=&blockId) returns the
                             // LOADSTATE for that block; the earlier 1-arg call passed garbage in rdx
                             // and got null (the blk_ls=0 red herring). blockId = area<<24 (0x1c000000
                             // for the legacy angrE block, byte[3]==area as the check reads *(blockId+3)).
@@ -1318,7 +1322,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 String::new(),
             )
         };
-        // File-cap readiness (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
+        // File-cap readiness (RE of 1.16.1 dump FUN_140613710): the state-2 handler advances 2->3 only when every present
         // FD4FileCap slot on the WorldAreaRes has load-status +0x88 == 0x04. Scan them so the stall shows
         // whether a file cap is stuck (present but not 0x04) -- vs all-loaded (=> the CSEmkResMan gate is
         // what stalls). Read-only, bounded.
@@ -1395,7 +1399,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // world RES wait (step 3) with the incoming block's load-state NULL (blk_ls=0), the block-res
         // entry was never created because the fast in-process switch skipped STEP_MoveMap_Init's
         // world-res rebuild. Re-run the game's own CS::WorldInfoOwner::ProcessMsbLoadLists(worldInfoOwner,
-        // loadlistlistFileCap, dlc02=0) (0x14066b2c0) -- it runs ResetAreaResLists + PopulateLists to
+        // loadlistlistFileCap, dlc02=0) (1.16.1 dump 0x14066b2c0) -- it runs ResetAreaResLists + PopulateLists to
         // create the missing block-res, exactly like _Common_Initialize (which calls it with
         // &worldInfoOwner, loadlistlistFileCap, loadlistlistFileCap_dlc02). dlc02=0 is null-safe
         // (decompile line 214 null-checks it; base-game areas have no dlc02 loadlist). Gate on a
@@ -1431,9 +1435,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // the game died before the call returned. ProcessMsbLoadLists runs ResetAreaResLists +
             // PopulateLists, which is only safe at STEP_MoveMap_Init (before the world starts streaming);
             // resetting the area-res lists mid-stream faults. So the reactive rebuild is disabled. The
-            // correct fix must run before STEP_MoveMap_Init (1.16.2 0x140aec120; _Common_Initialize
-            // is 0x140aed820 -- the 0x140aec210/0x140aed910 pair this comment used to name are
-            // 1.16.1-era addresses and neither is a function entry on 1.16.2, so do not chase them).
+            // correct fix must run before STEP_MoveMap_Init (0x140aed8f0; 1.16.2 0x140aec120;
+            // _Common_Initialize is 0x140aeeff0, 1.16.2 0x140aed820 -- the 0x140aec210/0x140aed910
+            // pair this comment used to name are 1.16.1 dump addresses and neither is a function entry
+            // on 1.16.2, so do not chase them).
             // Fixed 2026-09-05, and it was not the loadlist: `STEP_MoveMap_Init` takes the
             // MoveMapStep's `mapId` (+0xdc) from `GameMan::GetMoveMapStepBlockId()` = GameMan+0x14
             // and then clears that field, and nothing on the switch path was writing it -- read live
@@ -1518,10 +1523,12 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             }
         }
         // Ending-request diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
-        // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
+        // to its -1 terminal only while the advancer (0x140afbeb0; 1.16.1 dump FUN_140afa7c0) sets
+        // menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
         // step 18 and the InGameStep parent (finished == MoveMapStep+0x48==-1) waits forever. Read the
-        // output (0x5e) + the two easy inputs (return-title byte 0x5d, force-flag 0x3d856a0) + the parent
+        // output (0x5e) + the two easy inputs (return-title byte 0x5d, force-flag 0x3d8c740, 1.16.2
+        // 0x3d856a0) + the parent
         // step (InGameStep+0x48/+0x4c) so the next repro names why the ending request never fires.
         let ig_pstep = ig_ptr
             .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_STEP_STATE_OFFSET) })
@@ -1550,8 +1557,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let ending_force = unsafe {
             safe_read_u8(er_game_base::mem::game_data_addr(
                 module_base,
-                ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
-                "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+                ENDING_REQUEST_FORCE_FLAG_RVA,
+                "ENDING_REQUEST_FORCE_FLAG_RVA",
             ))
         }
         .map(|b| b as i32)
@@ -1682,7 +1689,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine cross-char switch stall,
         // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
         // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
-        // (b7c/b7d/force/warp/rt5d) are set, the advancer FUN_140afa7c0 never writes menuData+0x5e=1,
+        // (b7c/b7d/force/warp/rt5d) are set, the advancer 0x140afbeb0 never writes menuData+0x5e=1,
         // and the old world's MoveMapStep child parks at STEP_MoveMap(18): the InGameStep parent (step 7)
         // waits forever on MoveMapStep+0x48 != -1, so the world never tears down (the switched-from char
         // stays resident, mms_step pinned at 18, end5e=0, rt5d=0, b7c1=1, blocks>0 -- the exact runtime
@@ -1734,7 +1741,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     // mms18->19(cleanup)->20(finish) with rt5d/end5e=1 and warp=0, while LOAD2 arrives at
                     // mms18 with all cVar10 inputs 0 (warp consumed + our handoff over-cleared 0x5d/0x5e)
                     // and freezes at finalize case 0 (present but frozen; 463 move-input frames, 4 moved).
-                    // Setting menuData+0x5d=1 makes the advancer FUN_140afa7c0 compute cVar10=1 and write
+                    // Setting menuData+0x5d=1 makes the advancer 0x140afbeb0 compute cVar10=1 and write
                     // 0x5e=1, walking the child 18->19->20 the same non-warp way load1 does -- no case-8
                     // re-warp (warp stays native-owned/cleared, so no warp-reload teardown loop). The
                     // ending-latch-residual-clear below clears rt5d the frame mms leaves 18, preventing the
@@ -1799,7 +1806,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         );
         // b80 is `GameMan::saveState`. Publish for the loading bar, and drain the
         // FD4-IO reload's stuck residency: the reload SUBMIT/DRAIN leaves b80=3 (the resident IO buffer
-        // is never consumed by the feed), and the finalize case-7 gate (FUN_14067a170 == saveState==0)
+        // is never consumed by the feed), and the finalize case-7 gate (1.16.1 dump FUN_14067a170 ==
+        // saveState==0)
         // waits on it forever. Force b80->0 only at the exact stuck signature -- AUTOLOAD_HANDOFF,
         // MoveMapStep step 18, finalize substate live (1..=9), b80==3 resident, player present (world
         // genuinely resident+live) -- so a healthy load (b80 already draining) is never touched.
@@ -1812,8 +1820,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
         let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
         // Early b73 hold -- the post-warp revert root fix (RE er-effects-rs-9fmm). GameMan+0xb73 is the
-        // quit-save return-title latch our System->Quit sets (FUN_14067a490); it persists into the
-        // reload's world, and the MoveMapStep ending evaluator FUN_140afa7c0 -> FUN_140679460
+        // quit-save return-title latch our System->Quit sets (1.16.1 dump FUN_14067a490); it persists
+        // into the reload's world, and the MoveMapStep ending evaluator 0x140afbeb0 -> 1.16.1 dump
+        // FUN_140679460
         // (= b73 && !savePopup && bc4!=3) latches session-end into CSMenuMan.menuData+0x5e at load2's
         // MoveMap entry -> STEP_EndFlow -> SetState 6->2 revert. The case-7 drain below also clears b73
         // but only at finalize (mms18) -- Too late, the evaluator already latched. Clear it continuously
@@ -1844,8 +1853,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // FIX: clear the residual only when warpRequested==0 (warp consumed / not driving), never
             // during the warp-driven finalize.
             //
-            // The evaluator is `FUN_140afb9f0` on the installed 1.17 build (1.16.2: `FUN_140afa6d0`).
-            // The `FUN_140afa7c0` this comment used to name is not a function entry on either build.
+            // The evaluator is `0x140afbeb0` (1.17 `FUN_140afb9f0`, 1.16.2 `FUN_140afa6d0`). The
+            // `FUN_140afa7c0` this comment used to name is a 1.16.1 dump address, not a function
+            // entry on any of those builds.
             // See `CS_MENU_DATA_ENDING_FLAG_5E_OFFSET` in `constants_moved.rs` for the pairing proof.
             //
             // Gate only on warpRequested==0 (warp consumed / not driving the finalize). Do not also gate
@@ -1894,7 +1904,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 }
             }
         }
-        // Unblock the finalize case-7->8 gate on the warm reload. The gate is
+        // Unblock the finalize case-7->8 gate on the warm reload. The gate is (1.16.1 dump names)
         // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
         // (b73==0) && FUN_140a9ceb0(CSRemo). Fire at the exact stuck signature and satisfy the two
         // GameMan-owned conditions we control: (a) drain b80 (== save_state) 3->0 (the reload's
@@ -1921,7 +1931,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 cleared_save = er_save_loader::GameManSaveAccess::save_requested(gm_typed);
                 er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
             }
-            // Clear the b73 save-request companion (FUN_140679460 = b73 && menu_gate && bc4!=3): our
+            // Clear the b73 save-request companion (1.16.1 dump FUN_140679460 = b73 && menu_gate &&
+            // bc4!=3): our
             // return-title request set it for the switch teardown and it lingers (level flag, nothing
             // resets it), keeping the case-7 !FUN_140679460() condition false. Runtime-confirmed b73=1
             // at the finalize-7 stall.
@@ -1990,7 +2001,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         {
             SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
             // Do not clear GameMan+0xb78 here. RE-confirmed (InGameStep::STEP_MoveMap_Update
-            // @0x140aec810 + orchestrator FUN_140afb970, bd er-effects-rs-9fmm): b78
+            // @0x140aec810 + orchestrator FUN_140afb970, both 1.16.1 dump names, bd
+            // er-effects-rs-9fmm): b78
             // (requestedSaveSlotLoad) is the MoveMap warp target the finalize (case 8) consumes to load
             // the destination block and rebuild the player; STEP_MoveMap_Update skips the map load when
             // the destination BlockId is 0xffffffff, which is what happens if b78 was cleared to -1
@@ -2101,7 +2113,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // at the return-title request purely to fire the final functor without a quit-save. bc4=3 has done its
         // one job the moment the functor has fired (FINAL_FUNCTOR_CALL_COUNT>0), so put it straight back to 0
         // -- leaving it at 3 would keep clearing the incoming world's STEP_MoveMap advance gate (+0x4b8)
-        // (FUN_140679010 reads bc4). This is not the step-18 stall fix: runtime (2026-07-16) proved the child
+        // (1.16.1 dump FUN_140679010 reads bc4). This is not the step-18 stall fix: runtime (2026-07-16) proved the child
         // parks at STEP_MoveMap with the +0x4b8 gate already ready (1/0) at bc4=0 and cd100 (field17_0x100)
         // frozen -- i.e. the child's step handler is not ticking at all, a task-starvation freeze, not a bc4
         // gate. So this only keeps bc4 from interfering; the real freeze is handled elsewhere. Deterministic
@@ -2184,7 +2196,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // screen, mms=-1, defaulted level-9 character, loading bar frozen at 1/500). The in-world
     // protection this guard exists for is UNAFFECTED: fd4io submit only ever happens post-teardown
     // at the clean title, so idle still covers the whole in-world window (the 2026-07-01
-    // RequestLoadSlot spin, where writing b78=slot in-world made FUN_140afb970 spin
+    // RequestLoadSlot spin, where writing b78=slot in-world made the MoveMapStep load orchestrator
+    // (1.16.1 dump FUN_140afb970) spin
     // RequestLoadSlot 4600+ times). Reset per switch by reset_switch_reload_latches.
     //
     // SCOPED to commit, not all of non-idle (user-driven A/B, 2026-08-01, runs
@@ -2236,10 +2249,11 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     }
     if b78_guard_window_open && !fd4io_owns_b78 {
         // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
-        // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
+        // orchestrator (1.16.1 dump FUN_140afb970, live) reads it and, when != -1, calls
+        // RequestLoadSlot(b78) to
         // load that slot in-world. So while the old world is still up (local player present) b78 must
         // stay -1 -- writing the picked slot here arms the very in-world load we are trying to avoid.
-        // (Observed 2026-07-01: writing b78=slot while in-world made FUN_140afb970 spin
+        // (Observed 2026-07-01: writing b78=slot while in-world made the orchestrator spin
         // RequestLoadSlot(slot) 4600+ times; with that arm blocked the map machine stuck "loading" and
         // the return-title final functor never fired, so the world never tore down -- the menu just
         // closed leaving a stray cursor.) Only once the world has torn down (player absent) do we set
@@ -2248,8 +2262,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
         // Switch-2 soft-lock fix (game-task path, 2026-07-16). RE of the 1.16.1 dump (Ghidra persistent
         // project) proved the switch-2 freeze is the native quit-save aborting on a stale
-        // `CSMenuMan->disableSaveMenu` (+0x13c): `ShouldSave` (dump 0x1406794c0) does
-        // `if (CanShowSaveMenu()) saveRequested = 0;` and `CanShowSaveMenu` (dump 0x14080d150) returns
+        // `CSMenuMan->disableSaveMenu` (+0x13c): `ShouldSave` (1.16.1 dump 0x1406794c0) does
+        // `if (CanShowSaveMenu()) saveRequested = 0;` and `CanShowSaveMenu` (1.16.1 dump 0x14080d150) returns
         // `GLOBAL_CSMenuMan->disableSaveMenu != 0`, so while that byte is set the quit-save returns 0
         // regardless of saveRequested/menu-gate/save_state -- `bc4` never pumps 1->2->3 and the world
         // never tears down. This is distinct from the menu gate the stall-diag below logs (`FUN_14080d660`
@@ -2309,12 +2323,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // keeps the loaded world up. Inert before the feed (latch still 0 -> b78=slot fires the initial load
         // exactly as before) and reset for the next genuine pick, so switch 1's initial load is unchanged.
         // Runtime 6d7fdd89 proved any post-Continue write to GameMan+0xb78 is still the
-        // native requested-slot load branch (`FUN_14067b2f0`) and re-enters the 0x67141a
+        // native requested-slot load branch (1.16.1 dump `FUN_14067b2f0`) and re-enters the 1.16.2 0x67141a
         // crash path. Keep it disarmed here; do not use b78 as a progress mechanism.
         unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE };
-        // Clear the quit-save request flags during TEARDOWN (2026-07-16, Ghidra + runtime proven root).
+        // Clear the quit-save request flags during TEARDOWN (2026-07-16, Ghidra + runtime proven root;
+        // the `FUN_` names and addresses below are the 1.16.1 dump's, except the advancer 0x140afbeb0).
         // The old world's MoveMapStep leaves its resident STEP_MoveMap(18) step only when the "ending
-        // request" sub-machine (MoveMapStep.field25_0x12a, in FUN_140afa7c0, ticked by the MoveMap update
+        // request" sub-machine (MoveMapStep.field25_0x12a, in the advancer 0x140afbeb0, ticked by the
+        // MoveMap update
         // FUN_140aff730) walks case 0->..->7->8; case 8 calls FUN_140af9e80 to advance the parent step
         // (18->19->20->-1), which is what lets the InGameStep finish and the world tear down. The gate that
         // freezes it is case 7->8: it requires `ShouldSave() == false` and `FUN_140679460() == false`.
@@ -2351,12 +2367,13 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 "system-quit-quickload: requested save-slot load index world_up={world_up} kept gm_b78=-1 (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
-            // save-gate diag during the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
-            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, and the
-            // menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while
-            // bc4 is frozen. Both globals are read through their RVA constants
-            // (ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA = the load-active latch, CS_MENU_MAN_GLOBAL_RVA), so the
-            // 1.16.2 addresses quoted above are RE provenance, not addresses this code reaches for.
+            // save-gate diag during the stall (bc4=1): the quit-save orchestrator (1.16.1 dump
+            // FUN_140afb970) skips the save unless force-latch 0x3d8c740 (1.16.2 0x3d856a0) == 0,
+            // GameMan->save_state(+0xb80) == 0, and the menu gate (1.16.1 dump FUN_14080d660,
+            // *(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while bc4 is frozen.
+            // Both globals are read through their RVA constants (ENDING_REQUEST_FORCE_FLAG_RVA = the
+            // load-active latch, CS_MENU_MAN_GLOBAL_RVA); the dump names above are RE provenance, not
+            // addresses this code reaches for.
             // An UNREAD value is not a measured one. Every read below is fault-tolerant, and
             // this block used to fold each failure into an in-band sentinel -- `0xff` for a
             // byte, `-1` for `disableSaveMenu`, `usize::MAX` for a pointer -- and then compare
@@ -2373,17 +2390,17 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // a blocker. `render` prints "unreadable" where a sentinel used to print as data.
             //
             // The gate being described (RE 1.16.1): the quit-save orchestrator FUN_140afb970
-            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0,
-            // and the menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0).
-            // The 1.16.2 RVAs quoted here are RE provenance; the reads below go through
-            // ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA and CS_MENU_MAN_GLOBAL_RVA, resolved for the
-            // running build. A refusal makes the read `None`, which the Option chain already
-            // reports as `unreadable` -- it can never be mistaken for a measured `Some(0)`.
+            // skips the save unless force-latch 0x3d8c740 (1.16.2 0x3d856a0) == 0,
+            // GameMan->save_state(+0xb80) == 0, and the menu gate FUN_14080d660
+            // (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0), both names from the 1.16.1 dump.
+            // The reads below go through ENDING_REQUEST_FORCE_FLAG_RVA and CS_MENU_MAN_GLOBAL_RVA,
+            // build-checked against 2.7.2.0. A refusal makes the read `None`, which the Option chain
+            // already reports as `unreadable` -- it can never be mistaken for a measured `Some(0)`.
             let dsg_force = unsafe {
                 safe_read_u8(er_game_base::mem::game_data_addr(
                     module_base,
-                    ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
-                    "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+                    ENDING_REQUEST_FORCE_FLAG_RVA,
+                    "ENDING_REQUEST_FORCE_FLAG_RVA",
                 ))
             };
             let dsg_ss = unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
@@ -2400,14 +2417,15 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 .filter(|sub| *sub > 0x10000);
             let dsg_m290 = dsg_sub.and_then(|sub| unsafe { safe_read_u8(sub + 0x290) });
             let dsg_m298 = dsg_sub.and_then(|sub| unsafe { safe_read_usize(sub + 0x298) });
-            // `None` = at least one operand of FUN_14080d660 could not be read. Not `false`:
+            // `None` = at least one operand of the menu gate (1.16.1 dump FUN_14080d660) could not be
+            // read. Not `false`:
             // "the menu gate is shut" and "we could not see the menu gate" are different facts
             // and only one of them is a blocker.
             let dsg_menu_ok = match (dsg_m290, dsg_m298) {
                 (Some(m290), Some(m298)) => Some(m290 == 0 && m298 == 0),
                 _ => None,
             };
-            // The real orchestrator (FUN_140afb970) pump gate is bVar5:
+            // The real orchestrator (1.16.1 dump FUN_140afb970, as are the names below) pump gate is bVar5:
             // bVar5 = ShouldSave() [saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3]
             //      || FUN_140679460() [b73 && menu_gate && bc4!=3]  ||  GetRequestedSaveSlotLoad()(b78) != -1.
             // If bVar5==0 the orchestrator returns without pumping bc4.
@@ -2419,7 +2437,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 (Some(b72), Some(menu_ok)) => Some(b72 != 0 && menu_ok && bc4_not3),
                 _ => None,
             };
-            let dsg_679460 = match (dsg_b73, dsg_menu_ok) {
+            let dsg_b73_save_pending = match (dsg_b73, dsg_menu_ok) {
                 (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3),
                 _ => None,
             };
@@ -2427,7 +2445,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // and only that shape is honest: `Some(true)` needs one true term, `Some(false)`
             // needs every term readable and false.
             let bvar5_est = {
-                let terms = [dsg_should_save, dsg_679460, dsg_b78.map(|b78| b78 != -1)];
+                let terms = [dsg_should_save, dsg_b73_save_pending, dsg_b78.map(|b78| b78 != -1)];
                 if terms.contains(&Some(true)) {
                     Some(true)
                 } else if terms.iter().all(|term| *term == Some(false)) {
@@ -2436,7 +2454,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     None
                 }
             };
-            // The real bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
+            // The real bc4 blocker (deeper than bVar5; 1.16.1 dump names): the quit-save FUN_14067ba30
+            // does the full
             // bc4-advancing save only if saveSlot < 10 and disableSaveMenu == 0; otherwise it falls
             // back to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and
             // clears saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0).
@@ -2477,7 +2496,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 // blocker, and must not name one. Which field is absent is in the line itself.
                 "UNREADABLE(one or more gate inputs could not be read -- NO blocker determined)"
             } else if dsg_force != Some(0) {
-                "FORCE_LATCH(0x143d856a0)"
+                "FORCE_LATCH(0x143d8c740)"
             } else if dsg_ss != Some(0) {
                 "save_state"
             } else if dsg_menu_ok != Some(true) {
@@ -2498,7 +2517,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 render(dsg_dsm),
                 render(pump_fallback),
             ));
-            // Case-7 7->8 gate, computed exactly from the decompiled formulas (FUN_140afa7c0 case 7,
+            // Case-7 7->8 gate, computed exactly from the decompiled formulas (advancer case 7; the
+            // `FUN_` names here are the 1.16.1 dump's,
             // bd corrected-load2-substate7-not-save-drain-saving-disabled-shouldsave-structurally-false-2026-07-20).
             // Advance needs all of: c1 FUN_14067a170[saveState b80==0], c2 !ShouldSave, c3 !FUN_140679460,
             // c4 FUN_140a9ceb0(CSRemo) [historically passing]. ShouldSave = b72 && !CanShowSaveMenu()
@@ -2519,35 +2539,35 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 _ if !bc4_not3_c => Some(false),
                 _ => None,
             };
-            let fun679460 = match (dsg_b73, dsg_menu_ok) {
+            let b73_save_pending = match (dsg_b73, dsg_menu_ok) {
                 (Some(b73), Some(menu_ok)) => Some(b73 != 0 && menu_ok && bc4_not3_c),
                 (Some(0), _) | (_, Some(false)) => Some(false),
                 _ if !bc4_not3_c => Some(false),
                 _ => None,
             };
             let c2_not_shouldsave = shouldsave.map(|value| !value);
-            let c3_not_679460 = fun679460.map(|value| !value);
+            let c3_not_b73_save_pending = b73_save_pending.map(|value| !value);
             let case7_blocker = if c1_savestate0 == Some(false) {
                 "C1 saveState(b80)!=0"
             } else if c2_not_shouldsave == Some(false) {
                 "C2 ShouldSave==true (unexpected: saving-disabled should force it false)"
-            } else if c3_not_679460 == Some(false) {
-                "C3 FUN_140679460==true (b73 && menu_gate && bc4!=3)"
+            } else if c3_not_b73_save_pending == Some(false) {
+                "C3 b73_save_pending==true (b73 && menu_gate && bc4!=3)"
             } else if c1_savestate0.is_none()
                 || c2_not_shouldsave.is_none()
-                || c3_not_679460.is_none()
+                || c3_not_b73_save_pending.is_none()
             {
                 "UNREADABLE(a case-7 condition's input could not be read -- NO verdict)"
             } else {
-                "C1-3 pass -> C4 CSRemo (FUN_140a9ceb0) or advancer not ticking"
+                "C1-3 pass -> C4 CSRemo (1.16.1 dump FUN_140a9ceb0) or advancer not ticking"
             };
             append_autoload_debug(format_args!(
-                "case7-gate(4-bool): c1_savestate0={} c2_not_shouldsave={}(shouldsave={}) c3_not_679460={}(f679460={}) [b80={} b72={} b73={} disableSaveMenu={} menu_gate_ok={} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}",
+                "case7-gate(4-bool): c1_savestate0={} c2_not_shouldsave={}(shouldsave={}) c3_not_b73_save_pending={}(b73_save_pending={}) [b80={} b72={} b73={} disableSaveMenu={} menu_gate_ok={} bc4!=3={bc4_not3_c}] -> case7_blocker={case7_blocker}",
                 render(c1_savestate0),
                 render(c2_not_shouldsave),
                 render(shouldsave),
-                render(c3_not_679460),
-                render(fun679460),
+                render(c3_not_b73_save_pending),
+                render(b73_save_pending),
                 render(dsg_ss),
                 render(dsg_b72),
                 render(dsg_b73),
@@ -2732,8 +2752,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let session = unsafe {
             safe_read_usize(er_game_base::mem::game_data_addr(
                 module_base,
-                SESSION_SINGLETON_144588E98_RVA,
-                "SESSION_SINGLETON_144588E98_RVA",
+                BEGIN_LOGO_SESSION_SINGLETON_RVA,
+                "BEGIN_LOGO_SESSION_SINGLETON_RVA",
             ))
         }
         .unwrap_or(null);
@@ -2828,10 +2848,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             } else if want_title_dialog_vt == null || dialog_vt != want_title_dialog_vt {
                 PRODUCT_CORE_BLOCKER_TITLE_DIALOG
             // Resolved, reusing the value the press-start context read above already screened.
-            // `CS::SceneObjProxy`'s vtable moved on 1.17 (0x2a94a70 -> 0x2a97af0), so this raw
-            // comparison could not match and product-core readiness reported
-            // `BLOCKER_PRESS_START` forever -- the autoload's own boot gate, stuck on a stale
-            // address rather than on anything the title was doing.
+            // `CS::SceneObjProxy`'s vtable moves between builds (1.16.2 0x2a94a70, 2.7.2.0
+            // 0x2a99be0), and a raw comparison against the wrong build's value made product-core
+            // readiness report `BLOCKER_PRESS_START` forever -- the autoload's own boot gate, stuck
+            // on a stale address rather than on anything the title was doing.
             } else if !press_start_vt_is_scene_obj_proxy || press_start_context == null {
                 PRODUCT_CORE_BLOCKER_PRESS_START
             } else if !title_loop
@@ -3034,14 +3054,14 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // Direct-file save source: the "native Continue row" product_continue waits for can be stale
         // or backed by an empty ProfileSummary. Picker path already used this bypass; explicit loose
         // `save_file` needs the same verified native full-read chain. It marks the slot occupied (so
-        // the save-load gate 0x14067b200 accepts it), reads the staged save itself
+        // the save-load gate 0x14067c500 accepts it), reads the staged save itself
         // (submit/drain/deserialize), and commits (continue_confirm -> SetState5) into the redirected
         // staged save. The user's original source save remains read-only.
         //
         // Narrowed 2026-08-26 (the routing fork itself): a picked save now takes this bypass only
         // while its slot still has no readable `CS::ProfileSummary` record. Once the summary
         // re-read lands, it goes down the same native Continue path the default save uses -- which
-        // deserializes in-world from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067b290`
+        // deserializes in-world from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067c590`
         // has. See `crate::autoload_route`.
         if (direct_save_file_source_active() && direct_source_runs_title_full_read())
             || unsafe { boot_default_needs_full_read(owner, module_base) }

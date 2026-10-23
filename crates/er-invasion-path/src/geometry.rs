@@ -29,11 +29,11 @@ pub const NEAR_EPSILON: f32 = 0.05;
 ///
 /// That direction is not an assumption. The game's own world-to-screen -- the overhead nameplate
 /// path, `CSFeManImp::UpdateChrEnemyTagEntries` -> `FUN_1407763d0` -> `FloatMatrix4x4::TransformCopy`
-/// (`0x140680910`) -- takes the matrix `GetViewMatrix` hands back and **`Invert`s** it before
-/// multiplying a world position through. Inverting a matrix to reach camera space is only
-/// necessary if it maps camera space out to the world. Had it been a true view matrix the game
-/// would use it directly, and reading it as camera-to-world would put every path somewhere it
-/// is not.
+/// (`0x140680910`), 1.16.2 addresses -- takes the matrix `GetViewMatrix` hands back and
+/// **`Invert`s** it before multiplying a world position through. Inverting a matrix to reach
+/// camera space is only necessary if it maps camera space out to the world. Had it been a true
+/// view matrix the game would use it directly, and reading it as camera-to-world would put every
+/// path somewhere it is not.
 ///
 /// The axes are re-normalised by the reader in `crate::game::camera`, because this projection
 /// takes the inverse by transposing the basis -- correct for an orthonormal one, silently
@@ -41,9 +41,9 @@ pub const NEAR_EPSILON: f32 = 0.05;
 /// three square roots a frame and removes the difference.
 ///
 /// `fov_y` is the vertical field of view in RADIANS -- read out of `CS::CSPersCam::ToPerspective`
-/// (`0x1403e9ac0`), which builds `cot(fov*0.5)` and divides only the X term by `aspect`. Getting
-/// that backwards stretches the overlay horizontally by about 1.78 at 16:9, which is why the
-/// convention is written down here rather than assumed.
+/// (1.16.2 `0x1403e9ac0`), which builds `cot(fov*0.5)` and divides only the X term by `aspect`.
+/// Getting that backwards stretches the overlay horizontally by about 1.78 at 16:9, which is why
+/// the convention is written down here rather than assumed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
     pub right: [f32; 3],

@@ -15,9 +15,8 @@ const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 const LOG_FILE_NAME: &str = "er-r3-view.log";
 
-/// The step's bytes from its entry through the opcode of its tail jump. Identical on 1.16.2
-/// (`0x1409970c0`) and 1.17.1 (`0x140998260`), and unique in each image; the `jb` displacement is
-/// masked.
+/// The step's bytes from its entry through the opcode of its tail jump. Unique in the 2.7.2.0
+/// image (`0x140998710`); the `jb` displacement is masked.
 const STEP_PATTERN: [Option<u8>; 34] = {
     const fn b(v: u8) -> Option<u8> {
         Some(v)
@@ -61,11 +60,11 @@ const STEP_PATTERN: [Option<u8>; 34] = {
 };
 const STEP_TAIL_JUMP_OFFSET: usize = 33;
 
-/// R3's enable predicate, `FUN(parts) -> bool` (1.16.2 `0x140995990`, 1.17.1 `0x140996b30`). The item
+/// R3's enable predicate, `FUN(parts) -> bool` (2.7.2.0 `0x140996fe0`). The item
 /// list registers R3 through `FUN_140745390(window, key, action, predicate)` with a predicate lambda
 /// (`lambda_34d17bc8…`, 1.17 `FUN_1408f5040`) that calls this. It returns false unless
 /// `0 <= mode < pane_count`, so in view 3 the game disables R3 itself and no press reaches the step:
-/// measured, 45 presses at the pad and not one call to any R3 handler. Unique in both images.
+/// measured, 45 presses at the pad and not one call to any R3 handler. Unique in the image.
 const R3_ENABLED_PATTERN: [Option<u8>; 24] = {
     const fn b(v: u8) -> Option<u8> {
         Some(v)
@@ -111,10 +110,9 @@ const fn aob<const N: usize>(pattern: [u8; N], from: usize, len: usize) -> [Opti
 }
 
 /// The function the item list's detail panel names its highlighted record with,
-/// `FUN(parts, record)` (1.16.2 `0x140999400`, 1.17.1 `0x14099a5a0`, the two prologues identical
-/// but for the cookie's rip displacement). Found by its body, `RECORD_NAME_BODY_OFFSET` in:
+/// `FUN(parts, record)` (2.7.2.0 `0x14099aa50`). Found by its body, `RECORD_NAME_BODY_OFFSET` in:
 /// `lea r14,[rdx+0x80]; mov rbx,rdx; cmp dword [r14+0x4c],-1; cmovne rbx,r14`, which is unique in
-/// both images. Measured with Frida (`r3-selected-weapon-name.js`): every highlight in the weapon
+/// the image. Measured with Frida (`r3-selected-weapon-name.js`): every highlight in the weapon
 /// list reaches it, and the weapon name getter it calls is asked for the highlighted weapon's id,
 /// infusion and level included.
 // AOB signature: an instruction run inside the body, not the prologue that is hooked.
@@ -128,7 +126,7 @@ const RECORD_NAME_BODY: [Option<u8>; 19] = aob(
 );
 const RECORD_NAME_BODY_OFFSET: usize = 0x45;
 
-/// `MsgRepositoryImp::GetWeaponName(msg, u32 id)` (1.16.2 `0x140d11370`, 1.17.1 `0x140d12ab0`).
+/// `MsgRepositoryImp::GetWeaponName(msg, u32 id)` (2.7.2.0 `0x140d141a0`).
 /// Its first 25 bytes are shared with one sibling getter; the bundle fallback after the first
 /// lookup tells them apart. The call's rel32 is masked.
 // AOB signature: the getter's entry through its second bundle offset.
@@ -142,15 +140,14 @@ const GET_WEAPON_NAME_PATTERN: [Option<u8>; 42] = aob(
     4,
 );
 
-/// The detail panel's update on a cursor move, `FUN(parts, flag)` (1.16.2 `0x140998790`, 1.17.1
-/// `0x140999930`, prologues identical but for the cookie's rip displacement). It asks
+/// The detail panel's update on a cursor move, `FUN(parts, flag)` (2.7.2.0 `0x140999de0`). It asks
 /// `parts+0x180`, a `CS::DetailStatusViewParts::CompositeItemStatusDialogHolder`, whether its panel
-/// is shown (`vtable+8`, 1.17.1 `0x140997c40`: `*holder.shown_flag`, a byte behind `holder+8`) and
+/// is shown (`vtable+8`, 2.7.2.0 `0x1409980f0`: `*holder.shown_flag`, a byte behind `holder+8`) and
 /// names the highlighted record only if it is. View 3 borrows view 0's layout, where both holders
 /// answer 0, so the cursor moves and the board never hears of it. Measured with Frida
 /// (`r3-view3-cursor.js`): holders answer 1 in views 1 and 2 and 0 in view 3, and two cursor moves
 /// in view 3 reached this function and never the record naming. Found by its gate, which is
-/// unique in both images.
+/// unique in the image.
 // AOB signature: `mov rax,[rcx+0x180]; add rcx,0x180; call [rax+8]; test al,al; je`, inside the body.
 const PANEL_UPDATE_GATE: [Option<u8>; 20] = aob(
     [
@@ -175,14 +172,14 @@ const PARTS_OWNER_WINDOW_OFFSET: usize = 0x10;
 const PANE_SLOTS_OFFSET: usize = 0x48;
 const PANE_CALLBACK_SLOT: usize = 0x10;
 
-/// 1.16.2 rva of `MenuWindowJob::Run`; `register_shared_hook` carries it to the running build.
-const MENU_WINDOW_JOB_RUN_RVA_1162: usize = 0x7ad1c0;
+/// 2.7.2.0 rva of `MenuWindowJob::Run`; `register_shared_hook` refuses it on any other build.
+const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ae4f0;
 /// `CS::MenuJob::EmitResult` (vtable slot 12), where every window's answer passes, a cancel by B
 /// included. Measured with Frida (`r3-item-list-close-trace.js`): B on the item list calls it on
 /// the item list's window, and `Run` then keeps pumping that window for 14 more frames of the
 /// native close before it is torn down, so the board leaves here rather than when `Run` stops.
-/// Same address as er-title-flow's `MENU_JOB_EMIT_RESULT_RVA`.
-const MENU_JOB_EMIT_RESULT_RVA_1162: usize = 0x746e80;
+/// Same address as er-title-flow's `MENU_JOB_EMIT_RESULT_RVA`; 2.7.2.0 rva.
+const MENU_JOB_EMIT_RESULT_RVA: usize = 0x748180;
 const MENU_WINDOW_JOB_WINDOW_OFFSET: usize = 0x130;
 
 const ITEM_LIST: &str = ".?AVGaitemSelectDialog@CS@@";
@@ -315,7 +312,7 @@ fn install() {
         )),
     }
     install_selection_hooks(start, end);
-    let run = start + MENU_WINDOW_JOB_RUN_RVA_1162;
+    let run = start + MENU_WINDOW_JOB_RUN_RVA;
     match unsafe { er_hook::register_shared_hook(run, run_hook, &RUN_ORIG) } {
         Ok(route) => log(format_args!(
             "MenuWindowJob::Run registered on the {route:?} union"
@@ -326,7 +323,7 @@ fn install() {
     }
     match unsafe {
         er_hook::register_shared_hook(
-            start + MENU_JOB_EMIT_RESULT_RVA_1162,
+            start + MENU_JOB_EMIT_RESULT_RVA,
             emit_result_hook,
             &EMIT_RESULT_ORIG,
         )

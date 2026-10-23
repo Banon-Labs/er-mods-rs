@@ -443,7 +443,9 @@ exported entry point is in the wrong place.
 
 1. **Move the export into `er-hook`**, behind a macro each cdylib invokes exactly once
    (`er_hook::export_union_registrar!();`). The symbol name, C ABI and semantics of
-   `er_effects_union_register(target, handler, *mut orig_slot) -> i32` are **unchanged**, so
+   `er_effects_union_register(target, handler, *mut orig_slot) -> i32` are **unchanged** (renamed
+   to `er_effects_union_register_2720` / `er_effects_union_register5_2720` on 2026-10-23, when the
+   address contract changed; `docs/game-build.md`), so
    `er-reload-trace` and `er-input-harness` keep working untouched, product present
    or not. `er-quickload/src/mh.rs` keeps re-exporting for source compatibility.
 2. **Elect one owner per process, first-loader-wins.** At `DllMain`, each of our cdylibs:

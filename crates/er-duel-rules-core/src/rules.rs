@@ -15,7 +15,7 @@
 //! # Rules no check covers, and why
 //!
 //! - Rune Arc outside Better Multiplayer: the game itself applies a Great Rune only to host-like
-//!   characters (1.17.1 `IsHostLike` 0x1404c85c0: Local and GrayPhantom), so in vanilla only the
+//!   characters (2.7.2.0 `IsHostLike` 0x1404c86a0: Local and GrayPhantom), so in vanilla only the
 //!   host gains one. In Better Multiplayer the referee requires every player to have one lit
 //!   ([`crate::referee::RUNE_ARC_GRACE_MS`]).
 //! - Macros, third-party tools other than an FPS unlocker, transmog without consent, falsified

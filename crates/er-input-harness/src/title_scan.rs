@@ -28,10 +28,10 @@ use crate::win32::{read_u8, read_u32, read_usize};
 
 // --- RVAs / offsets off the game image base (0x140000000), bd title-continue-is-accept-byte-not-keystate ---
 /// Title-owner vtable RVA -- `[owner+0x00]` equals `base + this`.
-const TITLE_OWNER_VTABLE_RVA: usize = 0x2b63bb0;
+const TITLE_OWNER_VTABLE_RVA: usize = 0x2b68d40;
 /// Per-instance state-dispatch table RVA -- `[owner+0x10]` equals `base + this` (the discriminator that
 /// rejects stray `.data` matches on the vtable value alone).
-const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
+const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d78610;
 /// Live title state (`owner+0x48`, i32): 10 = MenuJobWait (PAB + menu), 11 = Finish, 6 = in-world.
 const TITLE_OWNER_STATE_OFFSET: usize = 0x48;
 /// State-table pointer slot within the owner (`owner+0x10`).
@@ -153,7 +153,7 @@ fn scan_for_owner(base: usize) -> Option<usize> {
     if want_vtable == 0 || want_table == 0 {
         if !NEEDLE_REFUSAL_LOGGED.swap(true, Ordering::SeqCst) {
             harness_log!(
-                "title_scan: REFUSED to scan -- a needle RVA has no mapping on this build \
+                "title_scan: REFUSED to scan -- a needle RVA is refused on this build \
                  (vtable base+0x{TITLE_OWNER_VTABLE_RVA:x} -> 0x{want_vtable:x}, state-table \
                  base+0x{INNER_TITLE_STATE_TABLE_RVA:x} -> 0x{want_table:x}); 0 as a scan needle \
                  matches every zeroed qword, so the title owner is reported not-found rather \
@@ -258,11 +258,11 @@ pub fn title_dialog(base: usize) -> Option<usize> {
     let dialog =
         (unsafe { read_usize(owner + TITLE_OWNER_DIALOG_E0_OFFSET) }).filter(|p| *p >= HEAP_LO)?;
     let vtable = unsafe { read_usize(dialog) }?;
-    // Resolved, and never satisfied by zero. `CS::TitleTopDialog`'s vtable moved on 1.17
-    // (0x2b26468 -> 0x2b294e8), so the raw `base + RVA` matched nothing: `title_dialog` returned
+    // Through the build gate, and never satisfied by zero. When `CS::TitleTopDialog`'s vtable moved
+    // on 1.17, the raw `base + RVA` of the older build matched nothing: `title_dialog` returned
     // `None` for the whole session and everything downstream of it -- `title_dialog_a40`, the
     // PAB/menu discriminator the harness gates its title navigation on -- reported `-1` with no
-    // refusal line to say why. A resolved 0 must not stand in either: an object whose first qword
+    // refusal line to say why. A refused 0 must not stand in either: an object whose first qword
     // reads back 0 would then be accepted as the dialog.
     let want_vtable = er_game_base::mem::game_data_addr(
         base,

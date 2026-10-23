@@ -13,8 +13,8 @@
 //!   every `vc*.bnk` carries the same object under the same id). It is written here from its
 //!   curve points ([`ATTENUATION_CURVES`]) rather than copied out of `enus/vcmain.bnk`.
 //! - `CAkFxCustom` with id = the sound's source id, holding the Audio Input parameters (fGain).
-//!   The engine finds a source plugin's parameters only there (`CAkSrcFxBase` start, 1.17.1
-//!   `0x1423ba2c0`); without it every voice of the sound ended within 300 ms.
+//!   The engine finds a source plugin's parameters only there (`CAkSrcFxBase` start, 2.7.2.0
+//!   `0x1423bb9f0`); without it every voice of the sound ended within 300 ms.
 //! - `CAkSound`: source plugin `0x00C80002` (Audiokinetic Audio Input, registered statically in
 //!   `eldenring.exe`), output bus `0x6F005C01` (the bus of 8,811 NPC dialogue sounds), the props
 //!   in [`PROPS`], 3D emitter positioning with attenuation, game-defined aux sends on.

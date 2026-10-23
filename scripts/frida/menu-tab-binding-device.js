@@ -1,7 +1,7 @@
 // Which device does the game ask about when it decides a menu tab switch?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The question
 //
@@ -42,12 +42,10 @@
 //
 // # Addresses
 //
-// 1.16.2 `0x7586d0` / `0x758c90` / `0x242ab0`, carried to 1.17.0 by
-// `scripts/map-rvas-1162-to-1170.py` as `0x759520` / `0x759ae0` / `0x242ab0` (the accessor does not
-// move; its 43-byte signature is unique). All three sit below `0xafefe9`, so the 1.17.0 -> 1.17.1
-// step leaves them where they are (`docs/er-1.17-migration.md`). The singleton rva `0x3d61f08` is
-// the mapped 1.17 value recorded at `docs/recon/rva-map-1162-to-1170.data.tsv:87`, agreed by 82
-// references.
+// 1.16.2 `0x7586d0` / `0x758c90` / `0x242ab0` were paired with 1.17.0 by signature as `0x759520` /
+// `0x759ae0` / `0x242ab0` (the accessor did not move; its 43-byte signature is unique). All three
+// sit below `0xafefe9`, so 1.17.1 had them at the same place. The singleton rva `0x3d61f08` was the
+// 1.17 value of the data map, agreed by 82 references. The literals below are 2.7.2.0.
 
 'use strict';
 

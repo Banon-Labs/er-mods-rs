@@ -2,7 +2,8 @@
 //! session.
 //!
 //! A remote player's own machine decides what they wear and cast; ours only sees what their game
-//! sends. That turns out to be most of a build, and the checks here use only that:
+//! sends. That turns out to be most of a build, and the checks here use only that (the addresses
+//! in this list are 1.16.2 ones):
 //!
 //! - packet 8 fills a remote `PlayerGameData` with level and attributes (`TryDequeuePacket8`,
 //!   1.16.2 `0x140ca3030`, once per player entry);

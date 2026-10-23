@@ -20,8 +20,8 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
         return;
     };
     // Cross-DLL union (2026-07-18): install through the union, not a bare MhHook. The companion
-    // er-reload-trace also observes this address (0xb0e180) and routes through this DLL's union
-    // via the `er_effects_union_register` export. A bare MhHook here would let whichever DLL grabbed
+    // er-reload-trace also observes this address (0xb0fd50) and routes through this DLL's union
+    // via the `er_effects_union_register_2720` export. A bare MhHook here would let whichever DLL grabbed
     // the single MinHook slot first win and silently drop the other -- and if the trace preempted,
     // this critical continue-confirm guard (it drives a fresh picked-slot deserialize before SetState5)
     // would never fire and the reload would break. The union chains both handlers regardless of order.
@@ -158,7 +158,8 @@ pub(crate) use er_telemetry_core::counters::TESTNET_FF_FIRED_EPOCH;
 /// `GameMan+0x10` for the rest of the process, on every map move.
 ///
 /// `GameMan+0x10` is what `SetCallForWarp(true)` sets, and it is the only live input to the `cVar10`
-/// that `FUN_140afa6d0` gates case 0 on -- so from the first reload onward, no warp could complete.
+/// that the advancer (0x140afbeb0; 1.16.2 `FUN_140afa6d0`) gates case 0 on -- so from the first
+/// reload onward, no warp could complete.
 /// That is the reported "cannot warp to a marker after loading a second character", and it is not
 /// specific to the invasion-warp feature: an ordinary grace-to-grace fast travel goes through the same
 /// byte. The measured run reads `warps_issued: 3, warps_arrived: 1`, the one arrival being epoch 0,
@@ -221,7 +222,8 @@ fn warp_clear_note_window_entered(epoch: usize) {
 /// Withheld, and why. This is only half a fix, and shipping the half is worse than shipping nothing.
 /// Letting go of `GameMan+0x10` lets `cVar10` reach 1, and case 0 then fades the plate to black, cuts
 /// sound, and sets `field25_0x12a = 5`; 5/6 walk to 7 on the fade timer; and case 7 advances only when
-/// `!ShouldSave() && !FUN_140679370()`, i.e. when `GameMan+0xb72` and `+0xb73` are both clear. In
+/// `!ShouldSave() && !FUN_140679370()` (1.16.2 names), i.e. when `GameMan+0xb72` and `+0xb73` are
+/// both clear. In
 /// epoch 1 they are measurably STUCK: `[+195245ms] gm-snap: save_requested=true ... b73=1` and
 /// `[+196171ms]` the same -- the last `gm-snap` in a log that runs to `+384590ms`, and `gm-snap` only
 /// prints on change. In epoch 0 the identical request drained in 24-55ms every time. So the walk
@@ -264,21 +266,20 @@ fn warp_clear_note_world_live(epoch: usize) {
 /// The name is historical. This function no longer finishes `CS::TestNetStep`, and must not. That
 /// step is the in-world network step (it owns SosSignMan, BloodstainMan and WanderGhostMan and runs
 /// the PartyMemberInfo and joining-player updates), and in vanilla it runs for the whole time the
-/// player is on a map. Read statically out of 1.16.2 (1.17.1 in brackets):
+/// player is on a map. Read statically out of 2.7.2.0:
 ///
-/// - `MoveMapStep::STEP_InitAnim` 0x140af7b20 [0x140af8e30] constructs it (ctor 0x140b05a30
-///   [0x140b07140]) and registers it into `MoveMapStep+0x108` through
-///   `EzChildStepBase::RegisterStepTask` 0x140eb55a0 [0x140eb7410]. Its state table (written at
-///   0x1400a47e0 in both builds) has two entries, 0 = `STEP_Update` 0x140b06bb0 [0x140b082c0] and
-///   1 = `STEP_Finish` 0x140b06ba0 [0x140b082b0], and the base constructor starts it at state 0.
+/// - `MoveMapStep::STEP_InitAnim` 0x140af92f0 constructs it (ctor 0x140b07600) and registers it
+///   into `MoveMapStep+0x108` through `EzChildStepBase::RegisterStepTask` 0x140eb8b00. Its state
+///   table (written at 0x1400a47e0) has two entries, 0 = `STEP_Update` 0x140b08780 and
+///   1 = `STEP_Finish` 0x140b08770, and the base constructor starts it at state 0.
 ///   Nothing has to "start" it.
 /// - It leaves `STEP_Update` only when its `+0xb4` finish flag is set: the tail of `STEP_Update`
-///   (0x140b07479) then bumps `+0x4c` to 1, and `STEP_Finish` writes -1. `+0xb4` is written only by
-///   `CSSetFinishHelper<TestNetStep>` 0x140af9d80 [0x140afb0a0], which only
-///   `EzChildStepBase::RequestFinish` 0x140eb5570 [0x140eb73e0] calls.
+///   (0x140b09049) then bumps `+0x4c` to 1, and `STEP_Finish` writes -1. `+0xb4` is written only by
+///   `CSSetFinishHelper<TestNetStep>` 0x140afb560, which only
+///   `EzChildStepBase::RequestFinish` 0x140eb8ad0 calls.
 /// - The game's one call of that on `MoveMapStep+0x108` is case 8 of the finalize advancer
-///   `FUN_140afa6d0` (call at 0x140afb602 [0x140afc922]) -- the map-leave teardown.
-/// - `InGameStep::STEP_MoveMap_Update` 0x140aec720 [0x140aeda30] returns every frame until the
+///   0x140afbeb0 (`FUN_140afa6d0` in 1.16.2; call at 0x140afcde2) -- the map-leave teardown.
+/// - `InGameStep::STEP_MoveMap_Update` 0x140aedef0 returns every frame until the
 ///   MoveMapStep finishes and only then writes requestCode (`InGameStep+0xd8`) = 2. So
 ///   `requestCode == 1, mms == 18, fin == 0` is the ordinary in-world state, not a stall.
 ///
@@ -326,8 +327,9 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         return;
     };
     // FINALIZE SUBSTATE force-advance (bd load2-real-blocker-finalize-advancer-stuck-substate7): the
-    // load2 softlock parks at MoveMapStep+0x12a == 7 ("REMO/SAVE-DRAIN WAIT") -- the advancer FUN_140afa7c0's
-    // 7->8 gate (FUN_14067a170 && !ShouldSave && !FUN_140679460 && FUN_140a9ceb0(CSRemo)) never passes for a
+    // load2 softlock parks at MoveMapStep+0x12a == 7 ("REMO/SAVE-DRAIN WAIT") -- the advancer's
+    // (0x140afbeb0; the names here are the 1.16.1 dump's: FUN_140afa7c0) 7->8 gate
+    // (FUN_14067a170 && !ShouldSave && !FUN_140679460 && FUN_140a9ceb0(CSRemo)) never passes for a
     // warm reload. A just-deserialized load2 has not played, so that save/remo drain is spurious. Force the
     // substate 7->8 (WARP/SERVER FINALIZE) so the advancer continues to 9, STEP_MoveMap_Update latches
     // requestCode=2, and the world completes. Writing +0x12a is load-state progression, not a save write.
@@ -335,7 +337,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .map(i32::from)
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
-    // FRAMERATE fix (2026-07-21, case 7 gate decompiled from FUN_140afa6d0 via the ghidra MCP): the
+    // FRAMERATE fix (2026-07-21, case 7 gate decompiled from 1.16.2 FUN_140afa6d0 via the ghidra MCP): the
     // finalize walk (fin 5->9) is a cleanup that runs after the fin=0 movable window; load1 becomes
     // movable, then walks and settles (mms 18->-1) -> exits loading mode -> fps recovers. Holding fin=0
     // forever (below) keeps load2/load3 in loading mode -> flat 20fps. So: once this reload's 60-frame
@@ -356,7 +358,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // the cVar10 warp-clear disarm it was introduced alongside is withheld. That reasoning was
     // wrong, and the cost was immediate: a plain grace-to-grace fast travel on epoch 1 hung, with
     // `STEP_MoveMap_Update CALL #7320 epoch=1 mms_step=18 fin12a=7` still repeating after ~198
-    // seconds. Substate 7 advances only when `!ShouldSave() && !FUN_140679370()` -- GameMan+0xb72
+    // seconds. Substate 7 advances only when `!ShouldSave() && !FUN_140679370()` (1.16.2) -- GameMan+0xb72
     // and +0xb73 clear -- and on a warm reload both stay latched, so without this satisfier the
     // finalize never walks and the loading screen never ends.
     //
@@ -409,7 +411,8 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     }
     // Movable-window preservation (bd complete-cvar10-ending-request-9-inputs +
     // precise-ordered-divergence-load1-movable-at-fin0): load1 reaches genuine readiness by becoming
-    // movable at mms=18/fin=0 -- FUN_140afa7c0 case 0 does `if (cVar10 == 0) return;`, so the finalize
+    // movable at mms=18/fin=0 -- the advancer (1.16.1 dump FUN_140afa7c0) case 0 does
+    // `if (cVar10 == 0) return;`, so the finalize
     // stays at 0 (movable window; can_move ramps to 60 frames) while the ending-request cVar10 is 0; the
     // finalize walk (fin 5->9) is a quick cleanup after, not a prerequisite. Load2 diverges because an
     // ending-request input is left set (dominant: warpRequested / GameMan+0x10, residue of the
@@ -417,7 +420,7 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     // can_move never ramps. Fix = keep cVar10 = 0 by clearing warpRequested (and idle saveState) every
     // frame during the pre-finalize load window, so load2 gets load1's fin=0 movable window. We prevent
     // the ending walk rather than forcing/advancing the finalize (forcing tore the world down). Clear
-    // during 13..=18 (character loaded, warp already consumed) so it is 0 before FUN_140afa7c0 reaches
+    // during 13..=18 (character loaded, warp already consumed) so it is 0 before the advancer reaches
     // case 0 at mms=18. Epoch-scoped: load1 (epoch 0) is never touched.
     if !(13..=18).contains(&mms_state) || fin >= 5 {
         return;
@@ -451,7 +454,8 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     //
     // Witnessed, not inferred: a hardware write watchpoint on `GameMan+0xb80` (run
     // `wedge-watchpoint-20260831-q`, via `scripts/er-winedbg-watchpoint.py`) caught the pair
-    // twice on the game task thread -- the game's own `movl $1,0xb80(%rcx)` at `0x14067ca24`,
+    // twice on the game task thread -- the game's own `movl $1,0xb80(%rcx)` at `0x14067ca24`
+    // (that 1.17 run; 0x14067ced4 on 2.7.2.0),
     // then 226 ms / 113 ms later `mov byte ptr [rdi],0` at `er_quickload.dll+0x78a28`, which is
     // this statement. Five earlier investigations found no native writer because there is none:
     // the game-image writer set is byte-complete and was correctly silent.
@@ -522,7 +526,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     // (real System windows hidden + our ProfileSelect window present). The prior `list ==
     // profile_window + 0x50` match was fragile: when it failed (observed 2026-07-01), the in-world
     // deserialize ran, our gaitem guards corrupted CSGaitemImp::gaitemInsTable, and it crashed in
-    // GetGaitemIns->GetGaitemHandle (live 0x6710c0) before the per-tick native close could pop
+    // GetGaitemIns->GetGaitemHandle (2.7.2.0 0x6723c0) before the per-tick native close could pop
     // ProfileSelect. The only load job that runs while our injected ProfileSelect is showing is our
     // flow's load, so hidden+profile-present is a sufficient and robust discriminator. `list` is
     // still captured above for telemetry.
@@ -538,12 +542,14 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
             // Success(2), terminal: the load-job is the second link in the native chain the slot
-            // activation submits (msgbox -> loadjob -> confirm-lambda FUN_1409a4ee0). Returning Success
+            // activation submits (msgbox -> loadjob -> confirm-lambda, 1.16.1 dump FUN_1409a4ee0).
+            // Returning Success
             // lets the chain advance to the confirm-lambda, which our confirm hook cancel-closes
             // (natively pops ProfileSelect) so the menu-pump return-title chain can submit. Returning
             // Failed(3) instead ABORTS the chain -> the confirm-lambda never runs -> ProfileSelect never
             // closes -> return-title never submits (verified live 2026-07-01). The in-world load is not
-            // committed here: the actual saveState/b80=2 arm is the native RequestLoadSlot FUN_14067b2f0,
+            // committed here: the actual saveState/b80=2 arm is the native RequestLoadSlot (1.16.1 dump
+            // FUN_14067b2f0),
             // which system_quit_request_load_slot_hook neutralizes during the switch. See bd
             // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
             *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
@@ -571,9 +577,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         && fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
         && unsafe { safe_read_usize(fd4_time) }.is_some()
     {
-        // Never store a refusal. `game_data_addr` answers 0 when the running build moved this
-        // vftable and nothing verified where to; storing that gives the FD4Time a NULL vptr the
-        // engine will later call through. Leaving the native's own value is strictly safer.
+        // Never store a refusal. `game_data_addr` answers 0 when the running build is not
+        // 2.7.2.0, the build this vftable rva belongs to; storing that gives the FD4Time a NULL
+        // vptr the engine will later call through. Leaving the native's own value is strictly safer.
         let vftable = er_game_base::mem::game_data_addr(
             base,
             FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA,

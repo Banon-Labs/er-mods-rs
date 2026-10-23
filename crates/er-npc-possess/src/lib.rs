@@ -30,16 +30,16 @@
 //! without which no dodge in the game is reachable; [`spawn`] spends two, on creating and removing
 //! a character, which are the two things that cannot be done by writing a field. The first
 //! prologue is `CS::CSFeManImp::UpdatePlayerComponents`, detoured by [`hud`] so the HP, FP and
-//! stamina bars read the possessed creature. Those four go through `game_rva_named`, so on a build
-//! with no verified 1.16.2 -> 1.17 mapping the feature is refused rather than jumping into
-//! whatever now occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars keep showing
-//! your own character.
+//! stamina bars read the possessed creature. Those four are 2.7.2.0 rvas resolved through
+//! `game_rva_named` and the hook API, so on any other build the feature is refused rather than
+//! jumping into whatever now occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars
+//! keep showing your own character.
 //!
 //! The second prologue is the `LockCamParam` getter `LookupLockCamParam`, detoured by [`camera`]
 //! the first time a possession wants an adapted camera, so the follow camera can be handed this
-//! DLL's own copy of a camera row instead of a resident row being written. Its address is a 1.17.1
-//! one carried by `er_game_base::game_build::carry_1171_rva` and checked against byte windows
-//! `build.rs` generates, so it exists on 1.17.1 and 2.7.2.0 and is refused everywhere else. That
+//! DLL's own copy of a camera row instead of a resident row being written. Its address is a 2.7.2.0
+//! rva checked against byte windows `build.rs` generates, so it exists on 2.7.2.0 and is refused
+//! everywhere else. That
 //! is the whole of this DLL's footprint in the game image; it is recorded in
 //! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks either function.
 //!

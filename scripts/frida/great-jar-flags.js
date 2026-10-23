@@ -10,7 +10,7 @@
 // reload (rest at a grace), because the knights stay dead until then.
 const GJ = (() => {
   const base = Process.getModuleByName('eldenring.exe').base;
-  // Carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. CSEventFlagMan* global
+  // 2.7.2.0, carried from 1.17.1. CSEventFlagMan* global
   // 0x143d6c4b8 -> 0x143d6f4d8 (1.16.2 0x143d68448), confirmed by its 2.7.2.0 readers;
   // GetEventFlag 0x1405fa250 -> 0x1405fa700 and SetEventFlag 0x1405d2f60 -> 0x1405d3410, both
   // bodies matching between the two de-Arxan'd images.

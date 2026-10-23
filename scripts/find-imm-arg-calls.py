@@ -7,10 +7,11 @@ Built to find the readers of a `stateInfo` value: the `CS::SpecialEffect` querie
 in another register, or computing it, is not found, so an empty result is not proof of absence.
 
     uv run --with capstone python3 scripts/find-imm-arg-calls.py 0x180 0x181
-    ER_DEOBF_BIN=eldenring-deobf-1.17.1.bin uv run --with capstone python3 scripts/find-imm-arg-calls.py 384
+    ER_DEOBF_BIN=eldenring-deobf.bin uv run --with capstone python3 scripts/find-imm-arg-calls.py 384
     uv run --with capstone python3 scripts/find-imm-arg-calls.py --any 0x180   # cmp/lea/sub too
 
-The default image is `eldenring-deobf.bin` (1.16.2, the named Ghidra dump's build; shift 0).
+The default image is `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build;
+`eldenring-deobf.bin` is 1.16.2, the named Ghidra dump's build.
 """
 import os
 import re
@@ -60,7 +61,7 @@ def any_operand(img, md, v):
 
 
 def main():
-    image = os.environ.get('ER_DEOBF_BIN', 'eldenring-deobf.bin')
+    image = os.environ.get('ER_DEOBF_BIN', 'eldenring-deobf-1.17.2.bin')
     img = open(os.path.join(ROOT, image), 'rb').read()
     args = sys.argv[1:]
     anyop = '--any' in args

@@ -1,8 +1,8 @@
 use super::*;
 
 /// Save-safe verify-only own-load buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
-/// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
-/// parser 0x67b290(slot) in-process so it parses our body, then reads back GameMan+0xc30 + the
+/// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67c400 hook, calls the native
+/// parser 0x67c590(slot) in-process so it parses our body, then reads back GameMan+0xc30 + the
 /// PlayerGameData fingerprint. No SetState5, no autosave, no continue_confirm. Records presses==0.
 pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_slot: i32, n: u64) {
     const PHASE_INIT: usize = 0;
@@ -64,7 +64,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         er_save_loader::bnd4::SLOT_BODY_LEN,
         er_game_base::mem::game_data_addr(base, DESERIALIZE_SLOT_RVA, "DESERIALIZE_SLOT_RVA")
     ));
-    // (2) Install the gated 0x67b100 detour (harmless pass-through until armed).
+    // (2) Install the gated 0x67c400 detour (harmless pass-through until armed).
     if !install_own_load_hook() {
         append_autoload_debug(format_args!(
             "own-load: hook install failed -- ABORT (no-write)"
@@ -73,7 +73,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
         return;
     }
     let c30_before = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
-    // (3) Set the gate, call native 0x67b290(slot) in-process, clear the gate. 0x67b290 does not
+    // (3) Set the gate, call native 0x67c590(slot) in-process, clear the gate. 0x67c590 does not
     // re-check b80 after the read (static-confirmed), so our al=1 + body flow into the native parse.
     OWN_LOAD_GATE.store(true, Ordering::SeqCst);
     let parser: unsafe extern "system" fn(i32) -> i32 = unsafe {
@@ -118,10 +118,9 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
                 .unwrap_or(0)
         }
     };
-    // Resolved, through the indexed form. `GAME_DATA_MAN_GLOBAL_RVA` moved +0x4060 on 1.17
-    // (0x3d5df38 -> 0x3d61f98), so the raw read succeeded and handed back whatever now sits at the
-    // old address + 8, which became the recipe owner. `game_data_addr_offset` keeps a refusal a
-    // refusal: plain `+ FULLREAD_OWNER_GDM_08` would turn 0 into the address 8.
+    // Resolved, through the indexed form: a raw read on another build would succeed and hand back
+    // whatever sits at that address + 8 as the recipe owner. `game_data_addr_offset` keeps a refusal
+    // a refusal: plain `+ FULLREAD_OWNER_GDM_08` would turn 0 into the address 8.
     let recipe_owner = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr_offset(
             base,
@@ -252,7 +251,7 @@ static OWN_LOAD_CONTINUE_DEFER_LEVEL: AtomicUsize = AtomicUsize::new(0);
 /// # Safety
 ///
 /// Game-task context, and every read is a fault-tolerant `safe_read_usize`. The one call it makes
-/// is the engine's own `CloseAsFailed(MenuWindow*)`, resolved through the build-verified translator.
+/// is the engine's own `CloseAsFailed(MenuWindow*)`, resolved through the build-checked resolver.
 unsafe fn title_menu_drained_for_commit(base: usize, owner: usize, n: u64) -> bool {
     /// Ticks the commit will wait for the engine to finish its own teardown before giving up.
     ///
@@ -337,14 +336,14 @@ unsafe fn title_menu_drained_for_commit(base: usize, owner: usize, n: u64) -> bo
             "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
         ) {
             Some(close_addr) => {
-                // Justify the transmute: the address is resolved through the same build-verified
-                // translator every other direct call here uses, and the signature matches the
-                // static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+                // Justify the transmute: the address is resolved through the same build-checked
+                // resolver every other direct call here uses, and the signature matches the
+                // static decompile of (1.16.2) `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
                 let close: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };
                 unsafe { close(window) };
                 append_autoload_debug(format_args!(
-                    "title-menu-drain: asked CloseAsFailed 0x{close_addr:x} for the title window the switch rebuilt (owner=0x{owner:x} window=0x{window:x} count={count}) -- holding the commit so STEP_MenuJobWait can run FUN_1407ada40 itself (#{n})"
+                    "title-menu-drain: asked CloseAsFailed 0x{close_addr:x} for the title window the switch rebuilt (owner=0x{owner:x} window=0x{window:x} count={count}) -- holding the commit so STEP_MenuJobWait can run the finalize 0x1407aed70 itself (#{n})"
                 ));
             }
             None => {
@@ -369,7 +368,7 @@ unsafe fn title_menu_drained_for_commit(base: usize, owner: usize, n: u64) -> bo
 }
 
 /// Own-load final step (er-effects-rs-mr2): after the proven verify-only parse mounted a real c30 +
-/// real character, fire the guarded native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
+/// real character, fire the guarded native `continue_confirm` 0x140b0fd50 -> `SetState5` 0x140b0f530
 /// to stream the character into the playable world. `continue_confirm` reads owner = [rcx+8] off
 /// the shim, reads GameMan+0xc30 (already real from our parse) into owner+0xbc, then
 /// SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
@@ -451,7 +450,8 @@ pub(crate) unsafe fn own_load_continue_fire(
     // `05_000_Title` and `05_001_Title_Logo` a few milliseconds later, and `continue_confirm` then
     // takes `CS::TitleStep` to `STEP_PlayGame` -- while the title's own job chain is still
     // mid-flight. `STEP_MenuJobWait` never runs again, so `ExecuteMenuJob` never asks the job for a
-    // result and `FUN_1407ada40`, the only thing that deregisters the window from `CSMenuMan+0x90`
+    // result and the finalize (0x1407aed70; 1.16.2 `FUN_1407ada40`), the only thing that
+    // deregisters the window from `CSMenuMan+0x90`
     // and erases it from the owner's vector, never runs. The world then arrives underneath a title
     // menu nothing will take down: `br-20260913-162421-3421` logged
     // `title-dialog-orphan: ... owner_window_count=1` on the same frame as `T_controllable`.
@@ -577,14 +577,14 @@ unsafe fn own_load_install_job_fire(
     // BEFORE: dump owner+0x130 (the idle IfElseJob it replaces). Pure reads.
     let (b_job, b_vt, b_seq, b_built, b_idx) = own_load_install_job_slot_snapshot(slot_addr);
     append_autoload_debug(format_args!(
-        "own-load-install-job: BEFORE slot=owner+0x130=0x{slot_addr:x} job=0x{b_job:x} vt=0x{b_vt:x} (expect IfElseJob dump 0x{:x}) +0x68_built={b_built} +0x70_seq=0x{b_seq:x} +0x10_idx=0x{b_idx:x} -- BUILD 0x{:x}(out,ctx=0,slot={want_slot},owner_ctx=0) presses=0",
-        MENUJOB_IFELSE_VTABLE_DUMP_VA,
+        "own-load-install-job: BEFORE slot=owner+0x130=0x{slot_addr:x} job=0x{b_job:x} vt=0x{b_vt:x} (expect IfElseJob 0x{:x}) +0x68_built={b_built} +0x70_seq=0x{b_seq:x} +0x10_idx=0x{b_idx:x} -- BUILD 0x{:x}(out,ctx=0,slot={want_slot},owner_ctx=0) presses=0",
+        MENUJOB_IFELSE_VTABLE_VA,
         er_game_base::mem::game_data_addr(base, LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA"),
     ));
     // (a) build the LoadGame MenuJobWithContext into a local DLRefCountPtr (the factory writes the job
     //     ptr into *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
-    // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
+    // LoadGame-job factory; the signature matches the static decompile of 1.16.2 FUN_140826510.
     let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize = unsafe {
         std::mem::transmute(
             match crate::gated_game_fn(LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA") {
@@ -614,18 +614,19 @@ unsafe fn own_load_install_job_fire(
     }
     let built_vt = unsafe { safe_read_usize(built_job) }.unwrap_or(null);
     append_autoload_debug(format_args!(
-        "own-load-install-job: BUILD OK job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame dump 0x{:x}) -- INSTALL via assign 0x{:x}(slot=0x{slot_addr:x}, src=&job)",
-        MENUJOB_LOADGAME_VTABLE_DUMP_VA,
+        "own-load-install-job: BUILD OK job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame 0x{:x}) -- INSTALL via assign 0x{:x}(slot=0x{slot_addr:x}, src=&job)",
+        MENUJOB_LOADGAME_VTABLE_VA,
         er_game_base::mem::game_data_addr(base, MENUJOB_ASSIGN_RVA, "MENUJOB_ASSIGN_RVA"),
     ));
     // (b) APPEND our built job into the owner+0x130 MenuJobQueue via PushBackJob (not a slot-overwrite).
     //     owner+0x130 is a CS::MenuJobQueue (active job +0x130, ring +0x138, count +0x178). The prior
     //     move-assign overwrite orphaned the title IfElseJob's sibling CS::MenuWindowJobs -> AV at
-    //     CS::DLFixedVector::push_back 0x140733fea. PushBackJob(queue_base=&owner+0x130, src=&built_job)
+    //     CS::DLFixedVector::push_back (1.16.2 0x140733fea). PushBackJob(queue_base=&owner+0x130, src=&built_job)
     //     appends behind the still-active IfElseJob (no tear, AtomicIncrements the job, does not zero
     //     src); STEP_MenuJobWait's ExecuteMenuJob then pops + ticks our queued job.
     // Justify the transmute: MENUJOB_PUSHBACK_RVA is the prologue-grounded live entry of
-    // CS::MenuJobQueue::PushBackJob (FUN_1407a9254).
+    // CS::MenuJobQueue::PushBackJob (0x1407aa580; 1.16.2 0x1407a9250 -- the `FUN_1407a9254` this
+    // note used to cite is +4 into that function).
     let queue_count_before =
         unsafe { safe_read_i32(slot_addr + MENUJOB_QUEUE_COUNT_178_OFFSET) }.unwrap_or(-1);
     let pushback: unsafe extern "system" fn(*mut usize, *mut usize) -> *mut usize = unsafe {
@@ -665,8 +666,8 @@ unsafe fn own_load_install_job_fire(
         format_args!("c30=0x{c30:x} level={fp_level}"),
     );
     append_autoload_debug(format_args!(
-        "own-load-install-job: *** APPENDED -- AFTER queue=owner+0x130=0x{slot_addr:x} active_job=0x{a_job:x} vt=0x{a_vt:x} (active stays IfElseJob dump 0x{:x}, NOT torn) active+0x68={a_built} +0x70=0x{a_seq:x} +0x10_idx=0x{a_idx:x} | queue_count {queue_count_before}->{queue_count_after} (expect +1) | our_job=0x{built_job:x} (LoadGame dump 0x{:x}) ingame=0x{ingame_cached:x} -- STEP_MenuJobWait pops+ticks queued job -> self-build -> deser -> world stream (NO SetState5/NO save write) presses=0 (#{n}) -> DONE ***",
-        MENUJOB_IFELSE_VTABLE_DUMP_VA, MENUJOB_LOADGAME_VTABLE_DUMP_VA,
+        "own-load-install-job: *** APPENDED -- AFTER queue=owner+0x130=0x{slot_addr:x} active_job=0x{a_job:x} vt=0x{a_vt:x} (active stays IfElseJob 0x{:x}, NOT torn) active+0x68={a_built} +0x70=0x{a_seq:x} +0x10_idx=0x{a_idx:x} | queue_count {queue_count_before}->{queue_count_after} (expect +1) | our_job=0x{built_job:x} (LoadGame 0x{:x}) ingame=0x{ingame_cached:x} -- STEP_MenuJobWait pops+ticks queued job -> self-build -> deser -> world stream (NO SetState5/NO save write) presses=0 (#{n}) -> DONE ***",
+        MENUJOB_IFELSE_VTABLE_VA, MENUJOB_LOADGAME_VTABLE_VA,
     ));
     let _ = (b_seq, b_idx, b_built, b_vt, b_job);
 }
@@ -675,7 +676,8 @@ unsafe fn own_load_install_job_fire(
 /// recurring per-frame private pump. The menu-free alternative to both the owner+0x130 install (a
 /// proven dead end) and the SetState5-only continue (reached the loading screen but never mounted m28).
 ///
-/// We build via `FUN_140826510(out, ctx_parent=mss+0x50, save_slot, owner_ctx=*(mss+0xa38))` -- the real
+/// We build via `LOADGAME_JOB_BUILD_RVA(out, ctx_parent=mss+0x50, save_slot, owner_ctx=*(mss+0xa38))`
+/// (0x1408279b0; 1.16.2 `FUN_140826510`) -- the real
 /// non-null ctx from the golden Continue trace (the prior ctx=0 build AV'd when the outer
 /// profile-selection sub-job dereffed the captured null). We do not install the job anywhere (no
 /// owner+0x130, no MenuJobQueue, no CSMenuMan dialog). Instead the recurring game task ticks its `Run`
@@ -683,7 +685,7 @@ unsafe fn own_load_install_job_fire(
 /// (m28 mount) and reaches `state==Success`, then drives the title->ingame transition once.
 ///
 /// Save-SAFETY ABSOLUTE: Build only allocates + copies a template (no save write); the first-tick deser
-/// step (`FUN_14082c330`) only reads the save up to world-stream. No SetState5 here. The same hard
+/// step (1.16.1 dump `FUN_14082c330`) only reads the save up to world-stream. No SetState5 here. The same hard
 /// c30/fp guard as the other levers is kept as a belt-and-braces precondition even though no write
 /// occurs at build time. The transition (the only save-writing step) is separately gated in
 /// `own_load_pump_tick`. Keeps `simulated_button_presses_total = 0`.
@@ -748,7 +750,7 @@ unsafe fn own_load_pump_fire(
     }
     let ctx_parent = dialog + DIALOG_CTX_PARENT_50_OFFSET;
     // owner_ctx = *(dialog+0xa38) = CS::TitleFlowContext (written unconditionally by the dialog ctor
-    // 0x1409a82d0, so it is valid at the settled press-any-button title -- unlike mss+0xa38 which read
+    // (1.16.1 dump 0x1409a82d0), so it is valid at the settled press-any-button title -- unlike mss+0xa38 which read
     // back uninitialized garbage). Fail closed (no build) if it is not a plausible heap pointer:
     // passing NULL is exactly what AV'd before, and a real ctx is the whole point of the correction.
     let raw_owner_ctx =
@@ -772,7 +774,7 @@ unsafe fn own_load_pump_fire(
     // Build the LoadGame MenuJobWithContext into a local DLRefCountPtr (factory writes the job ptr into
     // *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot:i32, owner_ctx).
     // Justify the transmute: LOADGAME_JOB_BUILD_RVA is the prologue-grounded live entry of the menu-heap
-    // LoadGame-job factory; the signature matches the static decompile of FUN_140826510.
+    // LoadGame-job factory; the signature matches the static decompile of 1.16.2 FUN_140826510.
     let build: unsafe extern "system" fn(*mut usize, usize, i32, usize) -> *mut usize = unsafe {
         std::mem::transmute(
             match crate::gated_game_fn(LOADGAME_JOB_BUILD_RVA, "LOADGAME_JOB_BUILD_RVA") {
@@ -818,8 +820,8 @@ unsafe fn own_load_pump_fire(
         format_args!("c30=0x{c30:x} level={fp_level}"),
     );
     append_autoload_debug(format_args!(
-        "own-load-pump: *** BUILT job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame dump 0x{:x}) +0x68_built={built_flag} -- ARMED private per-frame pump (NO owner+0x130 install, NO queue, NO dialog) ingame=0x{ingame_cached:x} -- recurring task will tick Run each frame -> self-build -> deser -> m28 stream -> SetState5 transition on Success presses=0 (#{n}) ***",
-        MENUJOB_LOADGAME_VTABLE_DUMP_VA,
+        "own-load-pump: *** BUILT job=0x{built_job:x} vt=0x{built_vt:x} (expect LoadGame 0x{:x}) +0x68_built={built_flag} -- ARMED private per-frame pump (NO owner+0x130 install, NO queue, NO dialog) ingame=0x{ingame_cached:x} -- recurring task will tick Run each frame -> self-build -> deser -> m28 stream -> SetState5 transition on Success presses=0 (#{n}) ***",
+        MENUJOB_LOADGAME_VTABLE_VA,
     ));
 }
 

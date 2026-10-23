@@ -84,7 +84,9 @@ def test_pad_inject_records_why_the_owner_is_fd4paddevice() -> None:
     """
     prose = _prose((REPO_ROOT / "crates/er-input-harness/src/pad_inject.rs").read_text())
     assert "FD4::FD4PadDevice" in prose
-    assert "0x1426634a0" in prose and "0x142665cb0" in prose
+    # The writer and the FD4PadDevice constructor, at their 2.7.2.0 addresses (1.16.2 0x1426634a0
+    # and 0x142665cb0).
+    assert "0x142667450" in prose and "0x142667830" in prose
     assert "HeapAlloc(0x3c0)" in prose
     assert "HeapAlloc(0x98)" in prose
 
@@ -137,7 +139,8 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
     manifest = (REPO_ROOT / "crates/er-input-harness/Cargo.toml").read_text()
     assert "FD4PadDevice::poll" not in manifest
     assert "DLUID virtual-key builders/writer" in manifest
-    assert "0x240e70/0x241130/0x26634a0" in manifest
+    # The two builders and the per-key writer, 2.7.2.0 rvas (the writer was 0x26634a0 on 1.16.2).
+    assert "0x240e70/0x241130/0x2667450" in manifest
 
 
 def test_boot_autoload_never_finishes_the_in_world_testnet_step() -> None:

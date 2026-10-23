@@ -6,7 +6,7 @@
 //! every existing `crate::mh::{MhHook, MH_*, MH_STATUS, register_union_hook, ...}` reference is
 //! unchanged.
 //!
-//! The `er_effects_union_register` C export has its definition here rather than in `er-hook`, by invoking
+//! The `er_effects_union_register_2720` C export has its definition here rather than in `er-hook`, by invoking
 //! `er_hook::export_union_registrar!`. A `no_mangle` body in an rlib is retained by every cdylib
 //! that links it, so a definition in the shared crate would make all eleven companions advertise
 //! themselves as hubs; the macro keeps the bodies in one place and the symbol opt-in per image.
@@ -37,7 +37,7 @@ pub fn leak_installed_hook(_hook: MhHook) {}
 //
 // What they are for, which the macro's own docs do not repeat: a companion loaded into the same
 // process -- the log-only `er-reload-trace` is the original one -- hooks ~40 native load and menu
-// functions that overlap this DLL's own (`0xb0e180` continue-confirm, `0xb0d960` title-SetState).
+// functions that overlap this DLL's own (`0xb0fd50` continue-confirm, `0xb0f530` title-SetState).
 // If it drove its own MinHook instance, two instances patching one address would corrupt each
 // other's trampolines: the silent race the internal union was built to fix, now across images. The
 // companion calls the export instead, and its handler chains like any internal one.
@@ -152,8 +152,8 @@ pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
 /// advancing through a loading screen (measured on a Seamless invasion-load softlock, 2026-08-15:
 /// eleven minutes at 12% with the frame counter ticking throughout).
 ///
-/// It is an export rather than a second hook for the same reason `er_effects_union_register` exists.
-/// This DLL already detours the loading-screen update (`er-loading-portrait-core`, RVA 0x90a6b0) and
+/// It is an export rather than a second hook for the same reason `er_effects_union_register_2720` exists.
+/// This DLL already detours the loading-screen update (`er-loading-portrait-core`, RVA 0x90bd00) and
 /// records the object there; a companion installing its own MinHook on that same prologue would
 /// corrupt trampolines, which is the conflict class tracked in `scripts/me3-dll-conflicts.toml`. So
 /// the companion polls this instead, on the thread it already runs.

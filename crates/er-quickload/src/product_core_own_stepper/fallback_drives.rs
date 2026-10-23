@@ -1,3 +1,5 @@
+// The RE notes in this macro cite 1.16.2 addresses (the build the RE was done on). The code
+// resolves only named `_RVA` constants, which are 2.7.2.0 rvas.
 macro_rules! own_stepper_idx10_fallbacks {
     ($owner:ident, $framectx:ident, $n:ident, $base:ident, $phase:ident, $gm:ident, $c30:ident, $b80:ident, $want_slot:ident, $pass_through:ident) => {{
         // `format_args!` implicit captures resolve at this macro's definition site.
@@ -26,8 +28,8 @@ macro_rules! own_stepper_idx10_fallbacks {
         return;
     }
     // `read_global_ptr` rather than `*(($base + RVA) as *const usize)`: the raw form was both
-    // unresolved and unguarded. Every `.data` global moved between 1.16.2 and 1.17 -- this one
-    // among them -- so the raw read would have returned whatever now occupies the old slot, and it
+    // unresolved and unguarded. `.data` globals move between game builds -- this one among them --
+    // so a raw read on another build would return whatever occupies that slot there, and it
     // dereferenced an unvalidated address to do it. `read_global_ptr` resolves for the running
     // build and reads fault-tolerantly, answering 0 for a refusal, an unmapped page, or a
     // genuinely null global -- all three of which this closure already treats as "no IO device".
@@ -50,12 +52,12 @@ macro_rules! own_stepper_idx10_fallbacks {
         }
     };
     // Decisive save-data experiment (gated off by default; Save-safe). Register the stream worker,
-    // then drive the cold $b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67b290
+    // then drive the cold $b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67c590
     // mounts the real char to memory -- No SetState, no save write. Bypasses the menu drive while
     // active; pass-through keeps the title ticking so the scheduler ticks the registered worker.
     // Save-safe verify-only own-load buffer-feed probe (gated off by default; one-shot). Takes
-    // precedence over cold_char_mount: hooks 0x67b100 to feed our sliced .sl2 slot body, calls the
-    // native parser 0x67b290(slot), and reads back $c30 + the char fingerprint. No SetState5, no
+    // precedence over cold_char_mount: hooks 0x67c400 to feed our sliced .sl2 slot body, calls the
+    // native parser 0x67c590(slot), and reads back $c30 + the char fingerprint. No SetState5, no
     // save write. Bypasses the menu drive while active; pass-through keeps the title ticking.
     if own_load_enabled() && unsafe { title_boot_ready($owner, $base) } {
         unsafe { own_load_drive($base, $gm, $owner, $want_slot, n) };
@@ -101,17 +103,17 @@ macro_rules! own_stepper_idx10_fallbacks {
             return;
         }
         // No-write checkpoint. Path A (b78-route) is runtime-FALSIFIED
-        // (pathA-b78-route-falsified-$b80-stuck-latch-gate-2026): disp2 0x140afb880's b78-route
-        // is gated by the title-accept latch [0x143d856a0] (set by load time -> disp2 bails to
+        // (pathA-b78-route-falsified-$b80-stuck-latch-gate-2026): disp2 0x140afd060's b78-route
+        // is gated by the title-accept latch [0x143d8c740] (set by load time -> disp2 bails to
         // cleanup every frame), so GameMan+0xb80 never leaves 0 and the native PlayGame
         // defaults to a new-game null character (which autosaved over the live slot in the
         // Seamless run). Every hand-driven $b80 lever (cold slot-int primitives, b72 lever,
         // b78-route) hits the same wall: $b80 reaches 3 only when the native MoveMapListStep
-        // async job pumps the menu deserialize 0x14082c240; FD4 stream-worker registration
-        // alone does not advance $b80 (0x140af1b40 registers the same task 0x144842d40 under the
-        // same key 0x59682f01 as the in-game 0x140b0a980 milestone lever-c already tried with
-        // $b80 still 0). So idx10 no longer SetState(5)s -- it stays at the title (no save
-        // write) pending the Path B menu-drive (drive the selector-$owner step 0x140826d50 /
+        // async job pumps the menu deserialize 0x14082d6e0; FD4 stream-worker registration
+        // alone does not advance $b80 (1.16.2 0x140af1b40 registers the same task, 1.16.2
+        // 0x144842d40, under the same key 0x59682f01 as the in-game 0x140b0c550 milestone lever-c
+        // already tried with $b80 still 0). So idx10 no longer SetState(5)s -- it stays at the
+        // title (no save write) pending the Path B menu-drive (drive the selector-$owner step 0x1408281f0 /
         // native Load-Game menu entry so the native async job mounts c30=real before PlayGame).
         // Stage 1 (no-write layout verification + zero-input main-menu build). The parked
         // press-any-button title is the first state 10 and has not run BeginTitle, so
@@ -153,16 +155,16 @@ macro_rules! own_stepper_idx10_fallbacks {
         );
         // Stage 1c: build the full main menu by replicating the engine's own press path.
         // The parked press-any-button screen is the first state 10; the native press handler
-        // 0x140b0b6b0 issues SetState($owner,2)=BeginLogo, after which the native pump advances
-        // 2->3->10 and builds the Continue / Load-Game(d180) / New-Game items into the CSMenu
-        // registry at $owner+0xe0. The registry update 0x1409aac10 then ticks every registered
+        // (1.16.2 0x140b0b6b0) issues SetState($owner,2)=BeginLogo, after which the native pump
+        // advances 2->3->10 and builds the Continue / Load-Game(d180) / New-Game items into the
+        // CSMenu registry at $owner+0xe0. The registry update 0x1409ac260 then ticks every registered
         // entry each frame, so our menu-item Update hook (functor_chain_hits_factory) will
         // capture d180. SetState(3)=BeginTitle alone (skipping BeginLogo) only built the
         // BackScreen (runtime: only c000 ticked), so we drive the full sequence. BeginLogo(2)
-        // hard-asserts session singleton 0x144588e98 at entry -- read it live; SetState(2) only
+        // hard-asserts session singleton 0x14458ff38 at entry -- read it live; SetState(2) only
         // when non-null, else fall back to SetState(3). Save-safe either way: BeginLogo/BeginTitle
         // are menu-UI builds with no save write (only SetState(5)/PlayGame writes).
-        let session = unsafe { safe_read_usize(er_game_base::mem::game_data_addr($base, SESSION_SINGLETON_144588E98_RVA, "SESSION_SINGLETON_144588E98_RVA")) }
+        let session = unsafe { safe_read_usize(er_game_base::mem::game_data_addr($base, BEGIN_LOGO_SESSION_SINGLETON_RVA, "BEGIN_LOGO_SESSION_SINGLETON_RVA")) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let target_state = if session != TITLE_OWNER_SCAN_START_ADDRESS {
             TITLE_STEP_BEGIN_LOGO
@@ -170,7 +172,7 @@ macro_rules! own_stepper_idx10_fallbacks {
             TITLE_STEP_BEGIN_TITLE
         };
         // CRITICAL: STEP_BeginLogo builds the main-menu list (Continue/Load d180/...) into
-        // $owner+0xe0 via 0x14081f180 only when [$owner+0xb8]==0; if set it short-circuits to
+        // $owner+0xe0 via (1.16.2) 0x14081f180 only when [$owner+0xb8]==0; if set it short-circuits to
         // SetState(3) and skips the build (bd mainmenu-item-builder-into-iterator-tree-2026) --
         // which is why our prior SetState(2) only produced the 3 title-composition items. Clear
         // the gate so BeginLogo runs the full build (zero-input, menu-UI only -> save-safe).
@@ -183,12 +185,16 @@ macro_rules! own_stepper_idx10_fallbacks {
                     TITLE_OWNER_BEGINLOGO_GATE_CLEAR;
             }
         }
-        let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(er_game_base::mem::game_data_addr($base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA")) };
-        unsafe { set_state($owner, target_state) };
+        // `game_data_addr` answers 0 on any build but 2.7.2.0; calling that would jump to page zero.
+        let set_state_addr = er_game_base::mem::game_data_addr($base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA");
+        if set_state_addr != TITLE_OWNER_SCAN_START_ADDRESS {
+            let set_state: unsafe extern "system" fn(usize, i32) =
+                unsafe { std::mem::transmute(set_state_addr) };
+            unsafe { set_state($owner, target_state) };
+        }
         own_stepper_enter_menu_build_phase();
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x144588e98)=0x{session:x} beginlogo_gate(0xb8)=0x{beginlogo_gate:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
+            "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x14458ff38)=0x{session:x} beginlogo_gate(0xb8)=0x{beginlogo_gate:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
             bare.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
             bare_tree.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
             if target_state == TITLE_STEP_BEGIN_LOGO {
@@ -266,10 +272,10 @@ macro_rules! own_stepper_idx10_fallbacks {
         // keystate bitmap inputmgr+0x90 to move the cursor onto Load-Game -- that is synthesized
         // input and violates the No-Compromises zero-input standard). SetState(2)->3->10 builds the
         // main-menu job tree; the Load-Game item d180 (a MenuWindowJob whose +0xa8 functor's
-        // _Do_call chains to dialog_factory 0x14081ead0) is constructed into the tree at build time,
+        // _Do_call chains to dialog_factory 0x14081fe00) is constructed into the tree at build time,
         // so a pure-read recursive walk can surface it without the pump ticking it and without any
         // input. A user-driven capture (2026-06-17) pinned d180's functor object = {_Func_impl
-        // vtable 0x142ac3ea8, captured $owner+0x138}; the factory reads [capture+8]=$owner+0x138 as
+        // vtable 0x142ac9018 (1.16.2 0x142ac3ea8), captured $owner+0x138}; the factory reads [capture+8]=$owner+0x138 as
         // the dialog $owner. We walk the candidate holder roots and, on the first functor->factory
         // hit, latch the item into MENU_LOAD_GAME_ITEM so stage 2 drives the load. (The
         // cap_menu_item_update hook also sets it if d180 ever ticks; whichever fires first wins.)
@@ -277,7 +283,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         const D180_ROOT_E0: usize = 0xe0;
         const D180_ROOT_130: usize = 0x130;
         const D180_ROOT_138: usize = 0x138;
-        // d180's +0xa8 functor object = {_Func_impl vtable $base+0x2ac3ea8, capture[+8]=$owner+0x138}
+        // d180's +0xa8 functor object = {_Func_impl vtable $base+0x2ac9018, capture[+8]=$owner+0x138}
         // (user-driven capture 2026-06-17) -- a strong fingerprint corroborating the functor->factory
         // classification.
         const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize =
@@ -290,7 +296,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         {
             // Walk the candidate roots; on the first functor->dialog_factory hit (= the Load-Game
             // item d180), validate its fingerprint and latch it into MENU_LOAD_GAME_ITEM. Stage 2
-            // then drives it via the native MenuWindowJob::Update 0x1407ad1c0 (which wires the ctx
+            // then drives it via the native MenuWindowJob::Update 0x1407ae4f0 (which wires the ctx
             // item+0x10 from the descriptor item+0x58 before firing the functor -> no synthetic
             // ctx, no save write). The cap_menu_item_update hook also sets it if d180 ever ticks;
             // whichever fires first wins. Throttled; pure reads here (save-safe).
@@ -332,10 +338,10 @@ macro_rules! own_stepper_idx10_fallbacks {
             }
         }
         // Stage 1d: open the main menu zero-input. SetState(2)->3->10 built the TitleTopDialog at
-        // $owner+0xe0 (vt 0x142b26468). The dialog's native update 0x1409aac10 (ticked every frame
+        // $owner+0xe0 (vt 0x142b2b5d8). The dialog's native update 0x1409ac260 (ticked every frame
         // by $pass_through -> STEP_MenuJobWait) runs the intro FadeIn animation, transitions
         // FadeIn->Loop on anim-complete (not input), and on its non-input Loop-ready path
-        // (0x1409aade8) calls the open-menu registrar 0x1409b24e0 itself, which set_state's the
+        // (0x1409ac438) calls the open-menu registrar 0x1409b3be0 itself, which set_state's the
         // SM [dialog+0xa60] to "TextFadeOut" and registers Continue/Load(d180)/New-Game. So the
         // primary path is to do nothing and let the native update self-open the menu.
         //
@@ -361,11 +367,9 @@ macro_rules! own_stepper_idx10_fallbacks {
             // Zero is not a match, and this comparison used to treat it as one. Both sides collapse
             // to 0 on failure: `safe_read_usize(dialog)` falls back to
             // `TITLE_OWNER_SCAN_START_ADDRESS`, which is literally `usize::MIN`, and
-            // `game_data_addr` answers 0 when the running build has no verified mapping for the
-            // RVA. So an unreadable dialog paired with a refused vtable satisfied `0 == 0` and the
-            // native calls below fired on an object nothing had identified. It never bit only
-            // because TITLE_TOP_DIALOG_VTABLE_RVA happens to be mapped on 1.17
-            // (0x2b26468 -> 0x2b294e8) -- guarded by luck, not by design.
+            // `game_data_addr` answers 0 when the running build is not 2.7.2.0. So an unreadable dialog paired with a refused vtable satisfied `0 == 0` and the
+            // native calls below fired on an object nothing had identified -- guarded by luck,
+            // not by design, until the zero screen below.
             let title_top_dialog_vt = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA");
             if title_top_dialog_vt != TITLE_OWNER_SCAN_START_ADDRESS
                 && dialog_vt == title_top_dialog_vt
@@ -374,14 +378,10 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // the registrar's `add rcx,0xa60; call`. is_in_state(sm, desc) -> bool reads the
                 // live state by name (no hand pointer-chase). Read-only / no side effects.
                 let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-                // Was broken on 1.17 until 2026-08-30: this was `transmute($base + RVA)`, a raw
-                // `base + RVA` that never called `game_data_addr`/`game_rva`, so the 1.16.2 -> 1.17
-                // translation table was never consulted and the refusal path could never fire. The
-                // function moved -- docs/recon/rva-map-1162-to-1170.needed-verified.tsv maps
-                // 0x749b20 -> 0x74a970 (identical-whole, 28 insns, both .pdata entries agree) --
-                // and byte-checking both images confirms it: 1.16.2 @0x749b20 and 1.17 @0x74a970
-                // are the same prologue `48 89 54 24 10 53 48 83 ec 20`, while 1.17 @0x749b20 is
-                // `03 48 8b cb ff 10 90 eb 18`, mid-instruction and not a function entry. The
+                // Was broken until 2026-08-30: this was `transmute($base + RVA)`, a raw
+                // `base + RVA` that never called `game_data_addr`/`game_rva`, so the refusal path
+                // could never fire, and after a game update the address was mid-instruction rather
+                // than a function entry. The
                 // vtable gate above does not save it, because that RVA resolves fine and the gate
                 // therefore passes. Never `transmute` a raw `base + RVA` call target.
                 //
@@ -426,14 +426,14 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // TitleTopDialog SM sits in Loop forever -- the Loop-ready predicate needs the
                 // accept byte (input), which never comes headless (latch=0 for 3000 waits). So the
                 // "native self-opens" assumption is false for a clean offline boot; we must fire
-                // 0x1409b24e0 ourselves (the zero-input-menu-open milestone proved this opens the
+                // 0x1409b3be0 ourselves (the zero-input-menu-open milestone proved this opens the
                 // menu). Default on now (no flag) since headless cannot rely on a button press;
                 // gated to the correct state (in_loop, not FadeIn) + once + latch-clear so it can
                 // neither corrupt the SM (titletopdialog-fadein-gate) nor double-fire.
                 // `game_data_addr` answers 0 for a refusal, which is a safe address to fail a read
                 // at and a fatal one to jump to -- so the resolved address is bound and checked
                 // before it becomes a function pointer, per the rule stated on `mem.rs`'s own
-                // `game_data_addr`. It resolves on 1.17 today; the check is what keeps that a fact
+                // `game_data_addr`. It resolves on 2.7.2.0; the check is what keeps that a fact
                 // rather than an assumption.
                 let open_menu_addr = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA");
                 // WHY `in_loop` IS NOT REQUIRED (2026-09-04). `TitleTopDialog::update` calls this
@@ -449,8 +449,8 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // return to "Loop" (the hazard already noted at title_tick_cover.rs ~2562, where
                 // the press-start SceneObjProxy comes back unbound), so the boot fires this once
                 // and a switch never can. Measured: the accept byte is written correctly and
-                // repeatedly post-switch -- it is translated fine for 1.17
-                // (0x144589bdc -> 0x14458dc5c) -- and the title still sits at press button for
+                // repeatedly post-switch -- it resolves fine (2.7.2.0 0x144590c7c) -- and the
+                // title still sits at press button for
                 // 185s, because behind that gate nothing reads it (bd er-effects-rs-tkfb).
                 //
                 // FadeIn/TextFadeOut stay excluded: firing during the fade corrupts the state
@@ -492,15 +492,15 @@ macro_rules! own_stepper_idx10_fallbacks {
         //   * inject-NAV capture (`inject_nav_enabled`) -- stamped DIK_DOWN into the DInput block
         //     via `InputBlocker::set_injected_key` to self-drive the cursor, down only;
         //   * direct build (`direct_build_enabled`) -- built the ProfileLoadDialog straight from
-        //     factory 0x14081ead0 through `own_stepper_direct_build`, bypassing the input-gated
+        //     factory 0x14081fe00 through `own_stepper_direct_build`, bypassing the input-gated
         //     row controller.
         //
         // All three returned early, so deleting them cannot change which path runs: control has
         // always reached the safe read-only default below.
         //
         // Safe default (RTTI-corrected, 2026-06-17). The "title-confirm" menu-drive that used to sit
-        // below was built on a MISIDENTIFIED function: 0x14078e1c0 is CommandSelectDialog::Update (an
-        // in-game dialog), not the TitleTopDialog ($owner+0xe0, RTTI vt 0x142b26468) confirm router, so
+        // below was built on a MISIDENTIFIED function: 1.16.2 0x14078e1c0 is CommandSelectDialog::Update
+        // (an in-game dialog), not the TitleTopDialog ($owner+0xe0, RTTI vt 0x142b2b5d8) confirm router, so
         // its cursor [+0xb0c] / rows [+0x1290] offsets do not apply here (bd rtti-correction-...). It
         // was demoted behind legacy_menu_drive_enabled() and is now deleted. A plain own_stepper run
         // reaches the open menu zero-input and stays there (no fire, no SetState, save-safe). The real
@@ -556,7 +556,7 @@ macro_rules! own_stepper_idx10_fallbacks {
             ));
         }
         // Search both the $owner+0x130 BeginLogo commit target (where the main-menu list with d180
-        // actually lands, per the commit fn 0x140b0e530) and $owner+0xe0 (the dialog holder).
+        // actually lands, per the 1.16.2 commit fn 0x140b0e530) and $owner+0xe0 (the dialog holder).
         let found = if hooked != TITLE_OWNER_SCAN_START_ADDRESS {
             Some(hooked)
         } else {

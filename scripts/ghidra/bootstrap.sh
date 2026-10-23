@@ -7,10 +7,11 @@
 #   1. install Ghidra's MachineLearning extension (ships with Ghidra) for the RF finder
 #   2. clone + build 13bm GhidraMCP from source (Go bridge + Java extension, our local patch)
 #   3. install the built MCP extension into Ghidra
-#   4. (optional) import + analyze the deobf binary into the persistent `erdeobf` project
+#   4. (optional) import + analyze the deobf binary into the persistent `erdeobf2720` project
 #
 # What you must supply (not in the repo -- copyrighted game data):
-#   - eldenring-deobf.bin            the dearxan-deobfuscated mapped image (repo-local, gitignored)
+#   - eldenring-deobf-1.17.2.bin     the dearxan-deobfuscated mapped image of the installed build
+#                                    (2.7.2.0; repo-local, gitignored)
 #   - (optional) the runtime gzf     for the `ermaporch` semantics project (set GZF=...)
 # and the toolchain: a Ghidra 12.1 install, Go, a JDK 21, and gradle 8.14 (see checks below).
 #
@@ -23,7 +24,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GHIDRA_INSTALL_DIR=${GHIDRA_INSTALL_DIR:-/home/banon/tools/ghidra_12.1_PUBLIC}
 MCP_SRC=${MCP_SRC:-/home/banon/tools/GhidraMCP-13bm}
 GHIDRA_MAPORCH=${GHIDRA_MAPORCH:-/home/banon/ghidra_maporch}
-DEOBF_BIN="$REPO_DIR/eldenring-deobf.bin"
+DEOBF_BIN="$REPO_DIR/eldenring-deobf-1.17.2.bin"
+DEOBF_PROJ="$GHIDRA_MAPORCH/proj-deobf-2720"
+DEOBF_PROJ_NAME=erdeobf2720
 
 ok()   { echo "  [ok]   $*"; }
 warn() { echo "  [warn] $*" >&2; }
@@ -63,9 +66,9 @@ else
   warn "no built MCP extension zip found in $MCP_SRC/dist"
 fi
 
-echo "== 4/4 deobf project (erdeobf) =="
-if [[ -d "$GHIDRA_MAPORCH/proj-deobf/erdeobf.rep" ]]; then
-  ok "erdeobf project already built"
+echo "== 4/4 deobf project ($DEOBF_PROJ_NAME) =="
+if [[ -d "$DEOBF_PROJ/$DEOBF_PROJ_NAME.rep" ]]; then
+  ok "$DEOBF_PROJ_NAME project already built"
 elif [[ -f "$DEOBF_BIN" ]]; then
   warn "importing + analyzing $DEOBF_BIN -- this is SLOW (~1-2h). Run in background:"
   echo "        bash $REPO_DIR/scripts/ghidra/import-deobf.sh   # watch: scripts/ghidra/tail-analysis-progress.sh"
@@ -82,7 +85,7 @@ elif [[ -n "${GZF:-}" && -f "${GZF:-}" ]]; then
 else
   warn "no dump gzf (set GZF=/path/to/runtime.gzf then run scripts/ghidra/import-dump.sh) --"
   warn "without it, start the daemon on the deobf project instead:"
-  echo "        scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir $GHIDRA_MAPORCH/proj-deobf --proj-name erdeobf"
+  echo "        scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir $DEOBF_PROJ --proj-name $DEOBF_PROJ_NAME"
 fi
 
 echo
@@ -91,4 +94,4 @@ echo "Next:"
 echo "  - start the warm MCP server:  scripts/ghidra/mcp-ghidra-daemon.sh start"
 echo "  - reload your MCP client so it picks up .mcp.json (the 'ghidra' server)"
 echo "  - RF finder on the deobf project once built:"
-echo "      scripts/ghidra/find-functions-rf.sh --proj-dir $GHIDRA_MAPORCH/proj-deobf --proj-name erdeobf"
+echo "      scripts/ghidra/find-functions-rf.sh --proj-dir $DEOBF_PROJ --proj-name $DEOBF_PROJ_NAME"

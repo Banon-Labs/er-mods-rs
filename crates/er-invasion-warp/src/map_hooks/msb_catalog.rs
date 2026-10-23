@@ -243,7 +243,7 @@ unsafe fn log_msb_cap_census() {
         // block list does not contain"), which was never a symptom of anything.
         //
         // The offset is not the problem: `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET = 0x48` is witnessed
-        // for 1.17 by `scripts/check-object-field-offsets-1170.py` (WorldBlockInfo constructor,
+        // for 1.17 by `scripts/check-object-field-offsets.py` (WorldBlockInfo constructor,
         // 55/55 aligned, zero moved offsets), and Ghidra's 1.16.2 type names that member
         // `msbResCap` at 0x48.
         (Some(raw), None) if is_overworld_block(raw) => format!(

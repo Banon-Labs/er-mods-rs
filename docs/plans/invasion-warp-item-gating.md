@@ -174,9 +174,8 @@ state, which is measured.
 
 The Ghidra route if it has to be reverse-engineered: the 1.16.2 dump on `:8765` is the only **named**
 image (`getDecompiledCode` / `searchFunctionsByName`); the 1.17 dump on `:8767` has structure and no
-names; the installed game is **1.17.1**, so an address from either dump must be carried with
-`scripts/map-rvas-1162-to-1170.py` then `scripts/map-rvas-1170-to-1171.py` and byte-checked against
-`eldenring-deobf-1.17.1.bin` before anything calls it.
+names; the installed game is now **2.7.2.0**, so an address from either dump must be found on
+`eldenring-deobf-1.17.2.bin` by its bytes before anything calls it (`docs/game-build.md`).
 
 ---
 
@@ -597,7 +596,7 @@ This was the highest-stakes question in the brief and it resolves cleanly in the
 
 * The renumber commit is `fd554f9d` "Re-pin er-invasion-warp against Seamless Co-op v2.0.0",
   **2026-09-02**. `git show --stat` lists eleven files; `stall_watchdog.rs` is not among them
-  (this also confirms §8 independently).
+  (this also confirms section 8 independently).
 * `git log -S'0x16' -- crates/er-invasion-warp/src/local_invasion_filter.rs` returns its earliest
   commit as `392b4b3c`, **2026-09-08** -- six days *after* the renumber. `0x16` has never existed
   in this file under the old numbering.
@@ -679,10 +678,11 @@ Two corrections, in opposite directions:
 * **The plan does state the build** ("The address is the 1.16.2 RVA ...; the installed game is
   1.17.1"). It is not overreaching there. But its hedge that the call "can legitimately come back
   `AddressUnavailable`" is **too pessimistic**:
-  `docs/recon/rva-map-1162-to-1170.needed-verified.tsv` carries the row
+  `docs/recon/rva-map-1162-to-1170.needed-verified.tsv` (deleted with the address carry on
+  2026-10-23) carried the row
   `0x140cafc30 -> 0x140cb1300 IDENTICAL-WHOLE 1.000 55 SETUP_MAP_REENTRY_RVA BOTH-ENTRIES
-  PDATA:0xc4/0xc4`, and `0xcb1300` is above the `0xafefe9` boundary so the 1.17.1 carry adds
-  `0x70`. The address resolves on the installed build; the semantics apply live. **#2 is stronger
+  PDATA:0xc4/0xc4`, and `0xcb1300` is above the `0xafefe9` boundary so the 1.17.1 carry added
+  `0x70`. The address resolved on the build then installed; the semantics applied live. **#2 is stronger
   than the plan says, not weaker.**
 * **The plan does not overreach on the host branch either** -- it explicitly separates
   "as a guest/invader it sets `protocolState = WaitReentryToMap` and nothing else" from the
@@ -718,7 +718,7 @@ not fully open -- there is a **negative live measurement the plan missed**, bd
 
 Note also that the measured field is `ChrIns::chr_type +0x68`, a *different* field from the
 `PlayerGameData::chr_type 0x98` the plan proposes. The plan's route is not the one that was
-measured, and its sibling was measured to be unstable. So §2.2's framing -- "already in the
+measured, and its sibling was measured to be unstable. So section 2.2's framing -- "already in the
 dependency graph and needs no new RE to *read*" -- is true about the mechanics and wrong about the
 confidence. Rewrite it as: **there is positive evidence against a naive `chr_type` read under
 Seamless; the ERSC session state is the only measured oracle and the only one to build on.** Step
@@ -787,7 +787,7 @@ both.
 
 ### Defects found in the plan
 
-1. **§3.1's mechanism is self-contradictory in its `adopted` branch.** It has
+1. **Section 3.1's mechanism is self-contradictory in its `adopted` branch.** It has
    `drive_invade_with_owner(menu_object, ..)` re-reading the real session "through the menu object"
    and finding `0x16`. That cannot happen: `adopt_menu_object` -> `capture_osm` -> `OSM.swap`
    (`menu_object.rs:33`, `:90-93`) runs at `lynchpin_use.rs:350`, *before* the gate at `:390`, so
@@ -796,17 +796,17 @@ both.
    through**. The swallow can only occur on the `drive_invade_inline` path with `OSM == 0` and a
    scanned look-alike reading `0x01`. Fix the narrative; the failure mode survives, in a narrower
    form.
-2. **§3.1 omits a second brake that makes the swallow even rarer.** The moment a scan-latched
+2. **Section 3.1 omits a second brake that makes the swallow even rarer.** The moment a scan-latched
    session is discarded, `SESSION_EVER_DISCARDED` latches (`:2674`) and
    `popup_skip_gate_is_idle`'s fallback returns `(false, "nothing trustworthy ...")` (`:2187-2193`)
    for the rest of the run -- dialog passes through. And with the *real* session at `0x16`,
    `session_is_idle()` -> `resolve_session()` -> `Err` -> `false` -> dialog passes through. So the
-   honest-session case already fails safe today. Item 7's exposure is narrower than §3 implies,
+   honest-session case already fails safe today. Item 7's exposure is narrower than section 3 implies,
    which makes the **argument for the item gate a defence-in-depth one, not a live-bug one** --
    still worth building, but it should not be sold as the cause of the user's report.
 3. **Two directly-relevant `bd` memories are missing**, against AGENTS.md's "read relevant bd
    memories before broad source inspection":
-   `seamless-types-the-local-player-duelist-2-summonparam-minus12-2026-09-07` (contradicts §2.2 and
+   `seamless-types-the-local-player-duelist-2-summonparam-minus12-2026-09-07` (contradicts section 2.2 and
    re-scopes step 7.5, above) and
    `invasion-pin-dim-and-warp-block-are-search-scoped-2026-08-12`. The second is *supporting*
    evidence the plan should want: the user explicitly confirmed this behaviour once already --
@@ -816,12 +816,12 @@ both.
    live map will not repaint when the flag flips, so the plan's "the pins dimmed
    (`map_hooks.rs:1109`)" is only half the story.
 4. **The plan never asks what published `in_flight` during the user's run.** Every discriminating
-   line it lists in §4 is a log line, and the single cheapest one is missing from the table:
+   line it lists in section 4 is a log line, and the single cheapest one is missing from the table:
    whether `local-invasion: Seamless session resolved -- OSM=0x... session=0x...` (`:850-852`)
    appears at all. That one line decides between the `OSM != 0` world (gate closed, #1 is not the
    bug) and the `OSM == 0` world (gate open). It should be the **first** thing read from the run,
    before any of the others.
-5. **§8 is fully confirmed** and if anything is the strongest finding in the document.
+5. **Section 8 is fully confirmed** and if anything is the strongest finding in the document.
    `stall_watchdog.rs` still declares `state::IDLE = 0x00`, `SEARCHING = 0x0d`, `RETRYING = 0x11`,
    `CANCELLING = 0x22` (`:38-51`) -- pre-renumber, against `ersc.rs`'s `0x01/0x0e/0x23`.
    `TIMED_STATES = [0x0e, 0x12, 0x13]` (`:76-80`), and under v2.0.1 `0x0e` **is** `state_searching`

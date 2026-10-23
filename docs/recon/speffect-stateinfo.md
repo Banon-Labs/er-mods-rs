@@ -4,9 +4,11 @@ Scope: the 41 SpEffect ids `crates/er-net-effects` must never push at another pl
 Question asked: what is `stateInfo`, and per state id on those marks, what does it do to a character.
 
 Every address below is a **1.16.2 dump VA** unless it says otherwise -- that is the only Ghidra
-program with symbols (`localhost:8765`, `ermaporch1162`). Translations to the installed 1.17.1 build
-are given where `docs/recon/rva-map-1162-to-1170.functions.tsv` already carries the pair; where it
-does not, the row says so and the address must be mapped before it is used against the live process.
+program with symbols (`localhost:8765`, `ermaporch1162`). Translations to 1.17.1 (the installed
+build when this was written) are given where the 1.16.2 -> 1.17 function map (deleted with the
+address carry on 2026-10-23) carried the pair; where it did not, the row says so. The live process is 2.7.2.0 now, so every address here, translated or
+not, must be found on `eldenring-deobf-1.17.2.bin` by its bytes before it is used against it
+(`docs/game-build.md`).
 
 ---
 

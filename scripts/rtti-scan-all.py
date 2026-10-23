@@ -19,13 +19,31 @@ Why --image exists. The image was hard-coded to the 1.16.2 `eldenring-deobf.bin`
 made this tool unable to answer the one question it is uniquely good at during the
 1.16.2 -> 1.17 migration: does the vtable a data-map row points at in 1.17 carry the same
 mangled class name as the source did in 1.16.2? That is an identity check, not an
-inference, and it needs the 1.17 image. Defaults are unchanged.
+inference, and it needs the 1.17 image. The default image is now `eldenring-deobf-1.17.2.bin`,
+the installed 2.7.2.0 build; `--image eldenring-deobf.bin` reads 1.16.2.
 """
 import argparse, struct, os
 
 BASE = 0x140000000
-REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-IMG = os.path.join(REPO, "eldenring-deobf.bin")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def find_image(name="eldenring-deobf-1.17.2.bin"):
+    """`name` at the repo root or the nearest directory above it.
+
+    The images are gitignored, so a linked worktree under `.worktrees/` reads the main
+    checkout's.
+    """
+    d = REPO
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(REPO, name)
+        d = os.path.dirname(d)
+
+
+IMG = find_image()
 
 
 def main():

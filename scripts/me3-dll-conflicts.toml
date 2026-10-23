@@ -37,7 +37,7 @@ mechanism = "hook-union"
 handler_a = "title_scaleform_file_open_observer_hook"
 handler_b = "file_open_hook"
 reason = """RESOLVED 2026-08-23, was a `hook-collision`. Both DLLs detour the SAME Scaleform \
-LoaderImpl file-open prologue (0x11ced80), and each links `er-hook` statically -- so each owned a \
+LoaderImpl file-open prologue (0x11d22e0), and each links `er-hook` statically -- so each owned a \
 SEPARATE MinHook instance and whichever installed second overwrote the other's trampoline. \
 RUNTIME-MEASURED: in an 11-native profile the product reported file_open_observer_installed = true \
 and file_open_hits = 0 for a whole session, and EVERY GFx swap it owns went silently inert -- the \
@@ -47,7 +47,7 @@ logged an error, so the loader bug wore a feature bug's clothes for a full day.
 
 THE FIX, both sides, so install ORDER cannot decide it: the product registers its observer through \
 `er_hook::register_union_hook` instead of a bare `MhHook`, and the companion registers through \
-`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register_2720` export \
 and chains into that single instance (falling back to its own union when the product is absent, so \
 a standalone armament-icons run is unchanged). Whoever registers first creates the dispatcher and \
 owns the real trampoline; the other CHAINS. Both handlers are now UNION-SHAPED -- four `usize` \
@@ -80,7 +80,7 @@ loser reporting installed and never running, with nothing crashing and nothing l
 
 RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
 registers through `er_hook::register_union_hook`, and both companions through \
-`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register_2720` export \
 and chains into that one instance (falling back to its own union when the product is absent). \
 Both companions also moved the install off the FrameBegin tick onto their own thread, because \
 `register_shared_hook` polls for that export for up to a second."""
@@ -112,7 +112,7 @@ loser reporting installed and never running, with nothing crashing and nothing l
 
 RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
 registers through `er_hook::register_union_hook`, and both companions through \
-`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register_2720` export \
 and chains into that one instance (falling back to its own union when the product is absent). \
 Both companions also moved the install off the FrameBegin tick onto their own thread, because \
 `register_shared_hook` polls for that export for up to a second."""
@@ -144,7 +144,7 @@ loser reporting installed and never running, with nothing crashing and nothing l
 
 RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
 registers through `er_hook::register_union_hook`, and both companions through \
-`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register_2720` export \
 and chains into that one instance (falling back to its own union when the product is absent). \
 Both companions also moved the install off the FrameBegin tick onto their own thread, because \
 `register_shared_hook` polls for that export for up to a second."""
@@ -237,16 +237,16 @@ hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same pro
 [[shared]]
 a = "er-diag-harness"
 b = "er-reload-trace"
-target = "er_game_base::rva::DLC_ROOTS_JOB_RVA (0x836f30; 1.17 0x837f20)"
+target = "er_game_base::rva::DLC_ROOTS_JOB_RVA (0x8383d0)"
 mechanism = "hook-union"
 handler_a = "dlc_roots_job_trace_hook"
 handler_b = "hook_map_request_do"
 reason = """RESOLVED 2026-08-30, and it was a LIVE collision, not a latent one. Both shells detour \
-`FUN_140836f30` -- the `Do` body of the MenuFunctorJob that reaches the DLC virtual-root refill \
-(1.16.2 `ulonglong FUN_140836f30(longlong p1, ulonglong p2, undefined8 p3, undefined8 p4)`, 65 \
-bytes, one callee `FUN_14082e230`; BYTE-IDENTICAL at 1.17 `0x837f20` per \
-docs/recon/rva-map-1162-to-1170.verified.tsv). er-diag-harness traces it as the "job ran / job \
-never enqueued" fork for the reload softlock; er-reload-trace traces it as `map_request_do_836f30`.
+2.7.2.0 `0x1408383d0` -- the `Do` body of the MenuFunctorJob that reaches the DLC virtual-root \
+refill (1.16.2 `ulonglong FUN_140836f30(longlong p1, ulonglong p2, undefined8 p3, undefined8 p4)`, \
+65 bytes, one callee `FUN_14082e230`; BYTE-IDENTICAL at 1.17 `0x837f20` per the 1.16.2 -> 1.17 \
+verified ledger, deleted with the address carry on 2026-10-23). er-diag-harness traces it as the "job ran / job \
+never enqueued" fork for the reload softlock; er-reload-trace traces it as `map_request_do`.
 
 CO-LOADED, MEASURED FROM THE PROFILES THEMSELVES: `~/Elden/group-1170.me3` lists `er_quickload`, \
 `er_diag_harness`, `er_reload_trace` AND `er_armament_icons` together. So this was not a pair the \
@@ -280,8 +280,8 @@ Standalone runs are unchanged: with no product DLL in the process `register_shar
 back to this DLL's own union, so `~/Elden/sweep-er-diag-harness.me3` behaves as before."""
 evidence = """crates/er-diag-harness/src/dlc_roots_trace.rs `install_shared_dlc_roots_job_hook` \
 (`register_shared_hook(base + DLC_ROOTS_JOB_RVA, dlc_roots_job_trace_hook, &DLC_ROOTS_JOB_ORIG)`, \
-address handed over UNTRANSLATED so the registrar owns the single 1.16.2 -> 1.17 resolve); \
-crates/er-reload-trace/src/lib.rs `HookSpec { rva: 0x836f30, detour: hook_map_request_do }` \
+address handed over unchecked so the registrar owns the single 2.7.2.0 build check); \
+crates/er-reload-trace/src/lib.rs `HookSpec { rva: 0x8383d0, detour: hook_map_request_do }` \
 installed via `install_one` -> `register_shared_hook`/`register_union_hook`; \
 crates/er-hook/src/lib.rs `register_shared_hook`. Ghidra 1.16.2 MCP (:8765) \
 `getDecompiledCode 140836f30` for the four-integer-argument signature."""
@@ -291,7 +291,7 @@ a = "er-quickload"
 b = "er-save-disable"
 kind = "hook-collision"
 reason = """Both carry their own MinHook instance and detour the SAME prologues \
-(0x140e6fb50 / 0x140e6e430), so each overwrites the other's trampoline. \
+(0x140e730b0 / 0x140e71990), so each overwrites the other's trampoline. \
 er_save_disable additionally suppresses every save write, so a run that loads it \
 cannot produce save-path evidence at all."""
 evidence = "crates/er-save-disable/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
@@ -300,7 +300,7 @@ evidence = "crates/er-save-disable/src/lib.rs:23; crates/er-save-suppress/Cargo.
 a = "er-quit-menu"
 b = "er-reload-trace"
 kind = "hook-collision"
-reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x748180) as a bare `rva:` in its own \
 HookSpec table, and each shell links `er-hook` statically, so whichever installs second finds a \
 `jmp` where the prologue should be. The Save Game row needs that observer to see the overwrite \
 confirm's result: without it `emit_observer_installed=0`, the confirm is never built, and picking \
@@ -314,7 +314,7 @@ and the table has no way to say "conflicts only when that row is configured" (bd
 er-effects-rs-38gi), so the pair is declared for every configuration. Over-declaring costs a \
 profile someone has to justify; under-declaring costs a save the player asked for and did not \
 get."""
-evidence = "crates/er-reload-trace/src/lib.rs (rva: 0x746e80); crates/er-quit-menu-core/src/save_flow_boxes.rs:916"
+evidence = "crates/er-reload-trace/src/lib.rs (rva: 0x748180); crates/er-quit-menu-core/src/save_flow_boxes.rs:916"
 
 [[conflict]]
 a = "er-quit-menu"
@@ -415,7 +415,7 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 #
 # The deleted `[[shared]]` row paired `er-quit-rows` with `er-armament-icons` on
 # `TITLE_SCALEFORM_FILE_OPEN_RVA`, and the reason it was worth having is now the reason it cannot
-# be kept: the fork exported `er_effects_union_register` from its own copy of `mh.rs`, so it was
+# be kept: the fork exported `er_effects_union_register_2720` from its own copy of `mh.rs`, so it was
 # the one image in this workspace other than `er-quickload` that a companion could chain into.
 # Measured 2026-09-20 after the deletion, on the live module table: 103 modules readable, zero
 # errors, and `er_quickload.dll` the only answer for either registrar name.
@@ -444,8 +444,8 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 #
 # One measurement in that row belonged to the companion rather than to the fork, and is therefore
 # still open against `er-quickload`: two addresses are shared with `er-armament-icons` and are NOT
-# covered by the union -- `CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and
-# `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` (0x74a2f0), which the companion spells
+# covered by the union -- `CSSCALEFORMVALUE_DTOR_RVA` (0xd82cf0) and
+# `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` (0x74b5f0), which the companion spells
 # `SCALEFORM_VALUE_DTOR_RVA` and `ASSIGN_COMPONENT_WITH_NAME_RVA`. Neither side has been measured
 # as the owner. Measure them before a profile carries both.
 
@@ -605,7 +605,7 @@ hook_xinput_get_state, &XINPUT_GET_STATE_ORIG, ..)`; crates/er-npc-summons/src/p
 [[shared]]
 a = "er-npc-summons"
 b = "er-cel-shade"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -614,7 +614,7 @@ panel is open -- the duel picker, the cel-shading menu -- which is what makes th
 free the cursor and stop turning the camera with the mouse. Each asks the next handler otherwise, \
 so either panel open is enough and neither closes the other's. Both register through \
 `er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
-1.17.1 prologue, so one MinHook instance owns the entry and the two handlers chain."""
+2.7.2.0 prologue, so one MinHook instance owns the entry and the two handlers chain."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-cel-shade/src/lib.rs; both prologues generated from the \
 same spec, in crates/er-npc-summons/build.rs and crates/er-overlay-input/build.rs."""
@@ -721,7 +721,7 @@ evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates
 [[shared]]
 a = "er-npc-summons"
 b = "er-render-scale"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -729,7 +729,7 @@ reason = """er-render-scale answers the game's "a menu has the mouse" predicate 
 menu is open, which frees and shows the cursor and stops the camera turning with the mouse, and \
 asks the next handler otherwise, as er-npc-summons' picker and er-cel-shade's Shaders panel do. \
 All register through `er_hook::register_union_hook_runtime_derived_following_arxan` after checking \
-the same generated 1.17.1 prologue, so one MinHook instance owns the entry and the handlers chain: \
+the same generated 2.7.2.0 prologue, so one MinHook instance owns the entry and the handlers chain: \
 any one menu open is enough and none closes another's."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-render-scale/src/lib.rs; the prologue generated from the \
@@ -738,7 +738,7 @@ same spec in crates/er-overlay-input/build.rs."""
 [[shared]]
 a = "er-cel-shade"
 b = "er-render-scale"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -865,21 +865,21 @@ evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates
 [[shared]]
 a = "er-npc-summons"
 b = "er-invasion-warp"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
 reason = """er-invasion-warp answers the game's "a menu has the mouse" predicate with true while its \
 band census panel is open, which frees the cursor and stops the camera turning, and asks the next \
 handler otherwise. Registered through `er-overlay-input`'s `install_cursor`, on the same union and \
-after the same generated 1.17.1 prologue check as every other menu here."""
+after the same generated 2.7.2.0 prologue check as every other menu here."""
 evidence = """crates/er-overlay-input/src/hooks.rs `install_cursor`, called from \
 crates/er-invasion-warp/src/lib.rs `spawn_catalog_task`."""
 
 [[shared]]
 a = "er-cel-shade"
 b = "er-invasion-warp"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -889,7 +889,7 @@ evidence = "crates/er-cel-shade/src/input.rs `install_cursor`; crates/er-overlay
 [[shared]]
 a = "er-render-scale"
 b = "er-invasion-warp"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -1034,7 +1034,7 @@ evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates
 [[shared]]
 a = "er-npc-summons"
 b = "er-duel-rules"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -1042,7 +1042,7 @@ reason = """er-duel-rules answers the game's "a menu has the mouse" predicate wi
 rules menu is open, which frees and shows the cursor and stops the camera turning with the mouse, \
 and asks the next handler otherwise, as er-npc-summons' picker does. Both register through \
 `er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
-1.17.1 prologue, so one MinHook instance owns the entry and the handlers chain: either menu open \
+2.7.2.0 prologue, so one MinHook instance owns the entry and the handlers chain: either menu open \
 is enough and neither closes the other's."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-duel-rules/src/lib.rs; the prologue generated from the \
@@ -1051,7 +1051,7 @@ same spec in crates/er-overlay-input/build.rs."""
 [[shared]]
 a = "er-cel-shade"
 b = "er-duel-rules"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -1061,7 +1061,7 @@ evidence = "crates/er-overlay-input/src/hooks.rs `install_cursor`, linked into b
 [[shared]]
 a = "er-render-scale"
 b = "er-duel-rules"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -1071,7 +1071,7 @@ evidence = "crates/er-overlay-input/src/hooks.rs `install_cursor`, called from b
 [[shared]]
 a = "er-invasion-warp"
 b = "er-duel-rules"
-target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+target = "the menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766b00"
 mechanism = "hook-union"
 handler_a = "menu_has_mouse_union"
 handler_b = "menu_has_mouse_union"
@@ -1274,7 +1274,7 @@ gets one parameter appended (a root CBV at `b0, space42`), which also changes ev
 cache key, so the first session with it loaded rebuilds the pipeline cache once.
 
 Its settings menu (F6) joins the shared imgui overlay and, while open, takes the game's input \
-through the shared unions: the keyboard `GetDeviceState`, `XInputGetState` and the 1.17.1 \
+through the shared unions: the keyboard `GetDeviceState`, `XInputGetState` and the \
 menu-has-the-mouse predicate, each recorded as a [[shared]] row. It writes no game memory.
 
 Load it only when the look is the point: `--with er-cel-shade`."""
@@ -1282,13 +1282,13 @@ Load it only when the look is the point: `--with er-cel-shade`."""
 "er-render-scale" = """Changes how every frame looks once a divisor is saved: the 3D scene is \
 drawn at the screen's size divided by that number and upsampled under a native-resolution UI, so \
 a run that did not ask for it would be judged on a softer picture than the game draws. At divisor 1 \
-(the default) it writes nothing. It detours one game function, the 1.17.1 dynamic resolution \
-update at `0x141b2e9b0`, which no other shell here detours, and while scaled it writes the dynamic \
+(the default) it writes nothing. It detours one game function, the dynamic resolution \
+update at `0x141b300a0`, which no other shell here detours, and while scaled it writes the dynamic \
 resolution controller's enable, coupling, minimum and maximum and one byte of \
 `GXRenderingSystem` -- heap state, not the game image.
 
 Its menu (F5) joins the shared imgui overlay and, while open, takes the game's input through the \
-shared unions: the keyboard `GetDeviceState`, `XInputGetState` and the 1.17.1 \
+shared unions: the keyboard `GetDeviceState`, `XInputGetState` and the \
 menu-has-the-mouse predicate, each recorded as a [[shared]] row.
 
 Load it only when the scale is the point: `--with er-render-scale`."""
@@ -1317,14 +1317,13 @@ wanted. Load it only when the mushroom IS the experiment: `--with mushroom-man-r
 
 "er-npc-summons" = """Changes what two items do. The Duelist's Furled Finger opens an NPC picker \
 instead of placing the player's own red sign (a detour on \
-`PlayerIns::StartMultiplayProcedureWithMountData`, 1.16.2 `0x1406587b0`, that skips the original \
+`PlayerIns::StartMultiplayProcedureWithMountData`, `0x140659ab0`, that skips the original \
 for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 through the shared \
 seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
-companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
-`GetBuddyListBySpEffectId` `0x1404bc960`, `GetBuddyParam` `0x140d26890` and \
-`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request, and \
-since 2026-10-22 a union handler on `GetCharaInitParam` (no 1.16.2 ledger row; 1.17.1 \
-`0x140d35f70`, 2.7.2.0 `0x140d37660`, carried by `carry_1171_rva` and refused unless its frame, \
+companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bbeb0`, \
+`GetBuddyListBySpEffectId` `0x1404bcf60`, `GetBuddyParam` `0x140d29700` and \
+`SummonBuddyManager::CreateSummonChr` `0x1404baf80`, all scoped to one Mimic Tear request, and \
+since 2026-10-22 a union handler on `GetCharaInitParam` (`0x140d37660`, refused unless its frame, \
 table-index and out-store windows match), scoped to one companion's `CreateSummonChr` call on \
 that call's thread). It writes no param row. `GetBuddyParam` and `GetCharaInitParam` both fill \
 `out = {id, row*}`, and the detours point `out+8` at a copy this DLL owns: row 20700001 with the \
@@ -1338,15 +1337,15 @@ for the item catalog and the reinforce clamp only: it never starts that crate's 
 fetch worker or game task, so it is not a second owner of the player's inventory the way \
 `er-build-import` is. No other shell hooks those six prologues. Since 2026-10-06 it also \
 detours, bare and alone on each prologue: \
-`ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
-`0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
-only on the AI state); since 2026-10-07 `CalculateDamage2` `0x1404483b0` (observes every landed \
+`ChrSet::SpawnChr` `0x140493460` (the duel NPC gets its own entity id), `GetChrName` \
+`0x140760a50` (duel NPC and companion names), `lua_pcall` `0x142028060` (companion Lua brains, \
+only on the AI state); since 2026-10-07 `CalculateDamage2` `0x1404489f0` (observes every landed \
 hit to tell the brains when the squad or the player was hit; it always calls the original). Since \
 2026-10-07, for brains that call `brain_void()`, also bare and alone: \
-`UpdateFromManipulator` `0x140407c60` (the void tech press), the attack create-or-reuse \
-`0x1404428f0` (jump takeoff and landing) and `SpawnBullet` `0x1403a2ca0` (the spawn and its \
-double); and through the union: the 1.17.1 menu-has-the-mouse predicate \
-`0x140766650` (a free cursor and a still camera while the picker is open), the keyboard \
+`UpdateFromManipulator` `0x140408220` (the void tech press), the attack create-or-reuse \
+`0x140442ee0` (jump takeoff and landing) and `SpawnBullet` `0x1403a2cb0` (the spawn and its \
+double); and through the union: the menu-has-the-mouse predicate \
+`0x140766b00` (a free cursor and a still camera while the picker is open), the keyboard \
 `GetDeviceState` slot and `XInputGetState` (the picker's keys and buttons are taken from the \
 game while it is open; see the [[shared]] rows). Co-loadable, but a player who \
 did not ask for it would find two items behaving differently, so it is never pulled in by a \
@@ -1378,9 +1377,9 @@ second. Neither failure mode this table exists to \
 catch can arise -- no second MinHook instance can overwrite a trampoline it never installed, and \
 no D3D12 Present/compositor is touched.
 
-WHICH BYTES, AND WHO ELSE COULD WANT THEM. The three sites are 1.16.2 `0x5fc0c0+0x0` (the \
-bloodstain writer's entry), `0x25e1e0+0x9` (the rune-arc clear's 16-bit store) and \
-`0x5a6fb0+0x11d` (the `MenuCommonParam` null-check inside `SoloPlayDeath`). No other crate in \
+WHICH BYTES, AND WHO ELSE COULD WANT THEM. The three sites are `0x5fd3c0+0x0` (the \
+bloodstain writer's entry), `0x25e1c0+0x9` (the rune-arc clear's 16-bit store) and \
+`0x5a82b0+0x11d` (the `MenuCommonParam` null-check inside `SoloPlayDeath`). No other crate in \
 this workspace declares any of the five addresses involved -- verified 2026-09-09 through \
 `scripts/rva_symbols.py`, which keys on resolved VALUES rather than names, so the claim is \
 checkable and not a naming coincidence.
@@ -1393,7 +1392,7 @@ anything of ours because there is no trampoline to overwrite -- the byte is simp
 
 RELATIONSHIP TO er-seamless-bugfixes, which is the shell a reader will suspect, since it is the \
 only other crate that writes game code. Its single patch is the freelist shutdown assert at \
-1.16.2 `0xc57670`, which is nowhere near these three, and it reaches its address the same way \
+`0xc59270`, which is nowhere near these three, and it reaches its address the same way \
 (`resolve_call_site_rva`, window check, one byte, read back). The two are independent by address \
 and identical in mechanism.
 
@@ -1403,14 +1402,16 @@ without editing that file changes no byte at all."""
 "er-focus-input" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its entire \
 effect is one byte store, from the game thread, into the `.data` global behind \
-`Game.Debug.IsEnableControlOnDisactiveWindow` -- 1.16.2 RVA `0x4588af1`, read by the single \
-instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. There is no prologue to contend \
+`Game.Debug.IsEnableControlOnDisactiveWindow` -- RVA `0x458fb91`, read by the single \
+instruction `movzx eax, byte ptr [0x14458fb91]` (on 1.16.2 the byte was `0x4588af1`, read at \
+`0x1402e6853`). There is no prologue to contend \
 with, so the two failure modes this table exists to catch cannot arise: no second MinHook instance \
 can overwrite a trampoline it never installed, and no D3D12 Present/compositor is touched.
 
 WHAT IT WRITES, AND WHO ELSE COULD WANT IT. Ghidra reports exactly ONE reader of that byte (the \
-getter above) and exactly TWO callers of the getter: `CS::CSPadStep::STEP_Update` (`0x140e33aa0`, \
-at `+0xa3c`) and `CS::CSPadStep::CSPadStep` (`0x140e328d0`, at `+0x7e`). No other crate in this \
+getter above) and exactly TWO callers of the getter: `CS::CSPadStep::STEP_Update` (1.16.2 \
+`0x140e33aa0`, at `+0xa3c`) and `CS::CSPadStep::CSPadStep` (1.16.2 `0x140e328d0`, at `+0x7e`), both \
+read in the 1.16.2 dump. No other crate in this \
 workspace declares the address -- and `check-shared-hook-rvas.py` keys on resolved VALUES, so that \
 claim is checkable rather than name-keyed. The byte ships `0x00` in both `eldenring-deobf.bin` and \
 `eldenring-deobf-1.17.bin`, and the store is idempotent, so a second writer would be a duplicate \
@@ -1435,7 +1436,7 @@ cursor-grab regression it caused on 2026-07-16.
 
 INTERACTION WITH THE PRODUCT'S OWN OVERRIDE, which is the one place the two could have collided. \
 `crates/er-quickload/src/can_move_probe.rs` MinHooks the same accessor (thunk RVA \
-`0xe53220`) and returns 1 only while its harness is injecting, "real value otherwise". Those \
+`0xe56780`) and returns 1 only while its harness is injecting, "real value otherwise". Those \
 compose rather than contend: this shell changes what "the real value" IS, and the detour keeps \
 returning it. Whichever installs first is irrelevant, because nothing here is a detour. Note the \
 detour and this shell resolve DIFFERENT things -- the product resolves a `.text` thunk through the \
@@ -1507,13 +1508,13 @@ two overlays and the click would reach the game about half the time."""
 "er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
 shell exists to carry five detours the product USED TO install unconditionally, so every one of \
 its addresses is one the product has stopped claiming. `0x21bbf0` (the sole `MsbFileCap::msbResCap` \
-writer), `0xaf1800` (`CS::MoveMapListStep::STEP_LoadListWait`), and `0xe06490` / `0xe05fb0` / \
-`0x836f30` (the DLC virtual-root blank, refill and job body).
+writer), `0xaf2fd0` (`CS::MoveMapListStep::STEP_LoadListWait`), and `0xe099f0` / `0xe09510` / \
+`0x8383d0` (the DLC virtual-root blank, refill and job body).
 
 FOUR OF THE FIVE HAVE ONE CLAIMANT. THE FIFTH DOES NOT, AND THIS ENTRY SAID OTHERWISE UNTIL \
 2026-08-30. The sentence that stood here -- "No other shell in this table names any of the five" -- \
-was FALSE of `0x836f30`: `er-reload-trace` detours the same prologue as \
-`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, detour: hook_map_request_do, .. }`, a \
+was FALSE of `0x8383d0`: `er-reload-trace` detours the same prologue as \
+`HookSpec { name: "map_request_do", rva: 0x8383d0, detour: hook_map_request_do, .. }`, a \
 BARE `rva:` field with no constant name at all. Nothing keyed on NAMES could contradict the claim, \
 because the two sides shared an address and no spelling; `check-shared-hook-rvas.py` only found it \
 once its collision key became the RESOLVED VALUE. The pair is now recorded as a [[shared]] row \
@@ -1522,9 +1523,9 @@ assertion is exactly the kind that a name-keyed scan cannot check and a reader c
 
 It cannot corrupt a co-load in the ways the other rows describe. It installs no D3D12 Present or \
 compositor hook, drives no input, and reads no product static: every value in its log lines comes \
-from GAME memory through `er_game_base::filecap`. Its `0x21bbf0` / `0xaf1800` / `0xe06490` / \
-`0xe05fb0` detours call their own MinHook trampoline and return the native result verbatim; the \
-`0x836f30` job trace no longer owns a MinHook instance at all and chains through the union (see \
+from GAME memory through `er_game_base::filecap`. Its `0x21bbf0` / `0xaf2fd0` / `0xe099f0` / \
+`0xe09510` detours call their own MinHook trampoline and return the native result verbatim; the \
+`0x8383d0` job trace no longer owns a MinHook instance at all and chains through the union (see \
 the [[shared]] row). It links only `er-hook` and `er-game-base` (tier A), so it is not a second \
 owner of any feature crate's state machine -- deliberately, since that is the `duplicate-owner` \
 failure mode above.
@@ -1569,9 +1570,9 @@ is the type both were built against (OVERLAY_ABI_TAG refuses the pair if that st
 Load order no longer decides who is visible."""
 "er-better-refills" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
 "er-allow-hostile-actions" = """Co-loadable with everything here. It installs one bare MinHook \
-detour, on the SpecialEffect add-entry function (1.16.2 `0x4fd090`, 1.17.1 `0x4fde60`), which no \
+detour, on the SpecialEffect add-entry function (`0x4fdf40`), which no \
 other crate in this workspace hooks -- `check-shared-hook-rvas.py` would name a second owner. The \
-nearest neighbour is er-seamless-bugfixes' guard on `SpecialEffect::Apply` (1.16.2 `0x4fa8e0`), \
+nearest neighbour is er-seamless-bugfixes' guard on `SpecialEffect::Apply` (`0x4fb790`), \
 the caller one frame up: a different prologue, and both detours run in sequence on the same call. \
 Everything else is a call to the game's own `GetSpEffectParam` and two pointer reads."""
 "er-enemynpc-effects" = """Co-loadable with the product. It detours exactly one address -- \
@@ -1580,10 +1581,10 @@ product's single MinHook instance owns the prologue and the handlers chain; see 
 rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
 on a FrameBegin walk of WorldChrMan's ChrSets."""
 "er-npc-possess" = """Co-loadable with every other shell here. It claims two game prologues and \
-nothing else. One is `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 \
-`0x140773900`), the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the \
+nothing else. One is `CS::CSFeManImp::UpdatePlayerComponents` (`0x140773db0`), the per-frame \
+HUD vitals pass, detoured so the HP/FP/stamina bars read the \
 possessed creature instead of the body the player walked in as. The other is the `LockCamParam` \
-getter `LookupLockCamParam` (1.16.2 `0x140d3dcf0`, 1.17.1 `0x140d3f4b0`, 2.7.2.0 `0x140d40ba0`), \
+getter `LookupLockCamParam` (`0x140d40ba0`), \
 detoured so the follow camera can be handed this DLL's own row copy during a possession; see the \
 param paragraph below. No other shell in this suite hooks either function or the first one's \
 caller. Everything else it does happens from one recurring `FrameBegin` task.
@@ -1628,20 +1629,21 @@ size-derived fields on the copy, serves that copy from the `LookupLockCamParam` 
 the table does not contain (2,000,000,000 unless a regulation has taken it), and points \
 `ChrExFollowCam+0x468` -- a camera field, not a param -- at that id. Every other lookup gets the \
 game's own answer. The detour is a union handler registered with \
-`register_union_hook_runtime_derived_following_arxan` on an entry carried from 1.17.1 by \
-`carry_1171_rva` and checked against three windows `build.rs` generates (the frame setup, table \
+`register_union_hook_runtime_derived_following_arxan` on its 2.7.2.0 entry, checked first against \
+three windows `build.rs` generates (the frame setup, table \
 index `0x1f`, and the `out = {row* @+0, id @+8}` stores); on any other build it is refused and the \
 camera stays vanilla. It is installed the first time a possession wants an adapted camera, so a \
 session that possesses nothing patches nothing there.
 
 THAT PROLOGUE IS UNSHARED, AND CHECKED RATHER THAN ASSUMED. No other shell in `me3_shells` \
-detours `UpdatePlayerComponents` or its sole caller `CSFeManImp::Update` (1.16.2 `0x140771bd0`): a \
+detours `UpdatePlayerComponents` or its sole caller `CSFeManImp::Update` (1.16.2 `0x140771bd0`; \
+no crate declares it, so it has no 2.7.2.0 constant here): a \
 scan of every crate for those four RVAs -- both builds, both functions -- returns only \
 er-npc-possess itself. The three shells that live nearest this neighbourhood do not touch it. \
 er-armament-icons READS a param offset it ground-truthed against this function's skill-icon \
 builder and hooks the GFx tile/file-open paths instead; er-player-name-filter hooks the name \
 PRODUCERS reached from `CSFeManImp::UpdateEnemyTags`, a sibling pass; er-save-suppress only \
-observes `CSFeManImp::Update` in prose. `audit-1170-hook-targets.py` OVERLAP is what keeps that \
+observes `CSFeManImp::Update` in prose. `audit-hook-targets.py` OVERLAP is what keeps that \
 true against a future addition landing within 16 bytes.
 
 IT IS A BARE `MhHook` ON PURPOSE, AND MUST STAY ONE. The function's signature is \
@@ -1739,7 +1741,7 @@ extra NPCs would make."""
 
 "er-save-picker" = "Detects the product DLL and stays inert when it is present."
 "er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
-(0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
+(0x4fa7f0) and SpecialEffect::Apply (0x4fb790) -- prologues no other DLL in this repo hooks \
 (searched repo-wide). It cannot use the er-hook union: that handler type carries four register \
 arguments only, and SpecialEffect::Apply passes four more on the stack. Instead it byte-checks each \
 prologue immediately before hooking, so an entry another MinHook instance already claimed fails the \
@@ -1879,8 +1881,8 @@ whose absence is only discovered when it is already too late to add it."""
 # `gfx_swap::install_quit_menu_gfx_swap_hook` says exactly that, and names this table as the thing
 # that keeps one deriver per process: "two derivers of one movie is not a race to be won". Every
 # one of them also calls `profile_row_chrome::install_profile_row_populate_hooks`, which is a bare
-# `MhHook::new` on `PROFILE_ROW_POPULATE_RVA` (0x8757e0) and `PROFILE_CURRENT_ROW_POPULATE_RVA`
-# (0x951220) -- and that function's doc comment is the clearest statement of why these rows have
+# `MhHook::new` on `PROFILE_ROW_POPULATE_RVA` (0x876c80) and `PROFILE_CURRENT_ROW_POPULATE_RVA`
+# (0x952870) -- and that function's doc comment is the clearest statement of why these rows have
 # to exist: "one owner per process is a property of the conflict table, not an assumption made
 # here".
 #
@@ -1904,8 +1906,8 @@ whose absence is only discovered when it is already too late to add it."""
 # `install_gfx_swap_hook_for` with `quit_grid: true` on top of `PICKER_KEYED` -- so whichever ran
 # second was handed already-derived bytes, `quit6` fail-closed, and the tab it served was the
 # vanilla two-cell one with the other host's cloned rows indexed into cells that did not exist.
-# Each also installed the two row-populate detours with a bare `MhHook` on `0x8757e0` and
-# `0x951220`, and each took its own MinHook instance on the Scaleform file-open prologue. A
+# Each also installed the two row-populate detours with a bare `MhHook` on `0x876c80` and
+# `0x952870`, and each took its own MinHook instance on the Scaleform file-open prologue. A
 # narrower row set narrowed none of that: all three are properties of opening a ProfileSelect at
 # all.
 #
@@ -1916,7 +1918,7 @@ whose absence is only discovered when it is already too late to add it."""
 # The third of the 2026-09-19 pairs was `er-quit-rows` X `er-save-disable`, deleted 2026-09-20 with
 # the package. It was the `er-quickload` entry against the same shell, inherited by copying that
 # source: both called `er_save_suppress::install` from their own statically linked copy, and
-# `install` detours `SL_ENQUEUE_SAVE_JOB_RVA` (0xe6fb50) and `SL_POLL_SAVE_STATUS_RVA` (0xe6e430)
+# `install` detours `SL_ENQUEUE_SAVE_JOB_RVA` (0xe730b0) and `SL_POLL_SAVE_STATUS_RVA` (0xe71990)
 # with a bare `MhHook::new`, so whichever installed second overwrote the other's trampoline. Both
 # halves of that survive on the product's own row above, which is the row to read.
 #
@@ -1928,7 +1930,7 @@ whose absence is only discovered when it is already too late to add it."""
 [[shared]]
 a = "er-quickload"
 b = "er-r3-view"
-target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ae4f0)"
 mechanism = "hook-union"
 handler_a = "quit_menu_window_job_run_hook"
 handler_b = "run_hook"
@@ -1938,17 +1940,18 @@ er-r3-view to find the item list's window, whose left panel R3's fourth view fad
 registers through `er_hook::register_shared_hook` with a `UnionFn` handler that calls its slot \
 first, so whichever registers second chains onto the one MinHook instance. Same four-integer \
 signature the product's handler already uses. er-r3-view names the address as a literal \
-(`MENU_WINDOW_JOB_RUN_RVA_1162`) rather than er-title-flow's constant, which is why this row is \
+(`MENU_WINDOW_JOB_RUN_RVA`) rather than er-title-flow's constant, which is why this row is \
 written by hand: `check-shared-hook-rvas.py` did not pair the two spellings."""
 evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
-MENU_WINDOW_JOB_RUN_RVA_1162, run_hook, &RUN_ORIG)`); crates/er-quit-menu-core/src/menu_pump.rs \
-`install_quit_menu_window_run_hook`; docs/recon/rva-map-1162-to-1170.needed-verified.tsv \
-`0x1407ad1c0 0x1407ae040 IDENTICAL-WHOLE`."""
+MENU_WINDOW_JOB_RUN_RVA, run_hook, &RUN_ORIG)`, rva 0x7ae4f0); crates/er-quit-menu-core/src/menu_pump.rs \
+`install_quit_menu_window_run_hook`; the function was `IDENTICAL-WHOLE` across 1.16.2 \
+`0x1407ad1c0` and 1.17.0 `0x1407ae040` in the 1.16.2 -> 1.17 needed-verified ledger (deleted \
+with the address carry on 2026-10-23)."""
 
 [[shared]]
 a = "er-quit-menu"
 b = "er-r3-view"
-target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ae4f0)"
 mechanism = "hook-union"
 handler_a = "quit_menu_window_job_run_hook"
 handler_b = "run_hook"
@@ -1961,7 +1964,7 @@ evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/s
 [[shared]]
 a = "er-quickload"
 b = "er-r3-view"
-target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x748180)"
 mechanism = "hook-union"
 handler_a = "menu_job_emit_result_hook"
 handler_b = "emit_result_hook"
@@ -1969,15 +1972,15 @@ reason = """Both observe `CS::MenuJob::EmitResult`: the product's save flow thro
 `er_quit_menu_core::save_flow_boxes`, er-r3-view to hide its R3 board on the frame the item list \
 answers. Both handlers only read their arguments and always call their slot, and both register \
 through the hook union, so they chain on one MinHook instance. er-r3-view names the address as \
-a literal (`MENU_JOB_EMIT_RESULT_RVA_1162`), which is why this row is written by hand."""
+a literal (its own `MENU_JOB_EMIT_RESULT_RVA`), which is why this row is written by hand."""
 evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
-MENU_JOB_EMIT_RESULT_RVA_1162, emit_result_hook, ...)`); crates/er-quit-menu-core/src/\
+MENU_JOB_EMIT_RESULT_RVA, emit_result_hook, ...)`, rva 0x748180); crates/er-quit-menu-core/src/\
 save_flow_boxes.rs `install_menu_job_emit_result_hook`."""
 
 [[shared]]
 a = "er-quit-menu"
 b = "er-r3-view"
-target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x748180)"
 mechanism = "hook-union"
 handler_a = "menu_job_emit_result_hook"
 handler_b = "emit_result_hook"
@@ -1991,8 +1994,8 @@ save_game_row.rs calls `install_menu_job_emit_result_hook`."""
 a = "er-r3-view"
 b = "er-reload-trace"
 kind = "hook-collision"
-reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x748180) as a bare `rva:` in its own \
 HookSpec table with its own MinHook instance, so whichever installs second finds a `jmp` where \
 the prologue should be. er-r3-view hides its R3 board from that function; without it the board \
 stays up through the item list's native close. Same mechanism as the er-quit-menu pair."""
-evidence = "crates/er-reload-trace/src/lib.rs:780; crates/er-r3-view/src/imp.rs `install`"
+evidence = "crates/er-reload-trace/src/lib.rs:761 (rva: 0x748180); crates/er-r3-view/src/imp.rs `install`"

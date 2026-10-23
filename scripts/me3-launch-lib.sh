@@ -155,7 +155,7 @@ EOF
 # Appends one additional [[natives]] block to an existing profile. Used to add the
 # standalone er_telemetry.dll as a 4th native alongside the product +
 # reload-trace + input-harness DLLs (companion DLLs are enabled purely by presence
-# in the profile; product must be listed first so its er_effects_union_register
+# in the profile; product must be listed first so its er_effects_union_register_2720
 # export is mapped before companions resolve it).
 me3_append_native() {
   local profile_path="$1" dll_path="$2"

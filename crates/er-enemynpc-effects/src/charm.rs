@@ -2,7 +2,8 @@
 //!
 //! # Why applying the SpEffect is the whole feature
 //!
-//! `CS::ChrIns::GetTeamType` (`0x1403f1a60`, ER 1.16.2, dump == deobf == runtime at shift 0) is:
+//! `CS::ChrIns::GetTeamType` (1.16.2 `0x1403f1a60`, read on the named dump, whose VAs equal
+//! `eldenring-deobf.bin`'s) is:
 //!
 //! ```text
 //! *out = chrIns->teamType;
@@ -57,7 +58,8 @@ pub(crate) const ENABLE_CHARM_EFFECT_ID: i32 = 90200;
 const ENABLE_CHARM_ROW_BYTE: usize = 0x163;
 const ENABLE_CHARM_ROW_BIT: u8 = 1 << 6;
 
-/// `FUN_1403fade0` -- the apply implementation that takes the source as a separate argument.
+/// `FUN_1403fb0a0` (2.7.2.0 RVA) -- the apply implementation that takes the source as a separate
+/// argument.
 ///
 /// This is the whole reason the feature works. `ChrIns::ApplySpEffect` (what `apply_speffect`
 /// calls) hands the target in as its own source, and the charm row is an oppose-target effect:
@@ -72,10 +74,10 @@ const ENABLE_CHARM_ROW_BIT: u8 = 1 << 6;
 /// So no flag on `apply_speffect` could ever have worked -- the source has to be the player. The
 /// two trailing pointers are a position vector and a damage-correction block that `ApplySpEffect`
 /// fills from defaults. For a `stateInfo` 132 row the correction block is never read (the resist
-/// module's charm branch is `return FUN_1404fa080(se) ? 0 : 1` and touches nothing else) and the
-/// vector is only stored on the entry, so zeroed buffers are sound here and avoid reconstructing
-/// two game globals.
-const APPLY_SPEFFECT_WITH_SOURCE_RVA: u32 = 0x3f_ade0;
+/// module's charm branch is 1.16.2 `return FUN_1404fa080(se) ? 0 : 1` and touches nothing else)
+/// and the vector is only stored on the entry, so zeroed buffers are sound here and avoid
+/// reconstructing two game globals.
+const APPLY_SPEFFECT_WITH_SOURCE_RVA: u32 = 0x3f_b0a0;
 
 type ApplySpEffectWithSourceFn = unsafe extern "C" fn(
     *mut ChrIns,

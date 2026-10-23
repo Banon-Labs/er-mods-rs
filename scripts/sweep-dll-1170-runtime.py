@@ -22,8 +22,9 @@ What it records
                  access-violation / exception line its own crash log carried, if any
     no-launch    the game never came up at all (a launcher or environment problem, not a DLL one)
 
-Results merge into `docs/recon/dll-1170-runtime-results.json`, which
-`scripts/audit-1170-readiness.py` prints as its `runtime` column. That file is the only source of
+Results merge into `docs/recon/dll-1170-runtime-results.json`, which `audit-1170-readiness.py`
+printed as its `runtime` column until that audit was deleted with the address carry on
+2026-10-23. That file is the only source of
 runtime truth: a DLL with zero ungated addresses is not thereby working, and nothing infers one
 from the other.
 

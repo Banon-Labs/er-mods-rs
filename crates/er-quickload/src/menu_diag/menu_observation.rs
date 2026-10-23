@@ -46,8 +46,8 @@ pub(crate) unsafe fn decode_thunk_hop(addr: usize) -> Option<usize> {
 /// log each item, so we can (a) confirm the live FD4 SBO pointer-vector layout matches
 /// the static RE (the captured recipe pointers were suspiciously low, so verify before
 /// any call) and (b) identify the Load-Game leaf by its `+0xa8` action functor's
-/// `_Do_call` jmp-chain resolving to `dialog_factory 0x14081ead0` (Continue's instead
-/// routes to confirm `0x140b0e180`, no dialog). All reads go through fault-tolerant
+/// `_Do_call` jmp-chain resolving to `dialog_factory 0x14081fe00` (Continue's instead
+/// routes to confirm `0x140b0fd50`, no dialog). All reads go through fault-tolerant
 /// ReadProcessMemory -- No writes, no native calls, no SetState -> save-safe at the
 /// parked title. Tries both container interpretations (inline SBO vs base-pointer at
 /// `+0x18`) and reports which yields valid menu-item vtables. Runs once.
@@ -62,7 +62,7 @@ pub(crate) unsafe fn diagnostic_menu_walk(
     const CONT_ELEM0_18: usize = 0x18;
     const CONT_COUNT_60: usize = 0x60;
     const MENU_JOB_HOLDER_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
-    const ITEM_VTABLE_RVA: usize = 0x02aa97e8;
+    const ITEM_VTABLE_RVA: usize = 0x02aae958;
     const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const ITEM_CTX_10: usize = 0x10;
     const ITEM_DESC_58: usize = 0x58;
@@ -82,9 +82,8 @@ pub(crate) unsafe fn diagnostic_menu_walk(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let item_vtable_abs =
         er_game_base::mem::game_data_addr(module_base, ITEM_VTABLE_RVA, "ITEM_VTABLE_RVA");
-    // Resolved, like the `ITEM_VTABLE_RVA` sibling one line up. `CS::LiveDialogFactory` moved on
-    // 1.17 (0x81ead0 -> 0x81f950), so the raw form matched no functor and this walk classified
-    // every row as "not the Load-Game leaf".
+    // Resolved, like the `ITEM_VTABLE_RVA` sibling one line up: a raw form would match no functor
+    // on another build, and this walk would classify every row as "not the Load-Game leaf".
     let dialog_factory_abs = er_game_base::mem::game_data_addr(
         module_base,
         DIALOG_FACTORY_RVA,
@@ -211,8 +210,8 @@ pub(crate) unsafe fn diagnostic_menu_walk(
 }
 
 /// Does `item`'s action functor at `+0xa8` resolve (through its `_Do_call` jmp-chain) to
-/// the dialog factory 0x14081ead0? That uniquely marks the Load-Game leaf (Continue's
-/// functor instead routes to the c30->SetState(5) confirm 0x140b0e180). Appends the decoded
+/// the dialog factory 0x14081fe00? That uniquely marks the Load-Game leaf (Continue's
+/// functor instead routes to the c30->SetState(5) confirm 0x140b0fd50). Appends the decoded
 /// chain to `chain` for logging. Fault-tolerant reads; never faults.
 pub(crate) unsafe fn functor_chain_hits_factory(
     item: usize,
@@ -226,10 +225,9 @@ pub(crate) unsafe fn functor_chain_hits_factory(
     const HOP_START: usize = 0;
     const HOP_STEP: usize = 1;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Resolved, and a refusal must not answer `true`. `LIVE_DIALOG_FACTORY_RVA` moved on 1.17
-    // (0x81ead0 -> 0x81f950), so this predicate -- the sole discriminator between the Load-Game
-    // leaf and Continue -- returned `false` for every item. Refusing early matters as much:
-    // `docall` is `unwrap_or(null)` = 0, which a refused RVA would match.
+    // Resolved, and a refusal must not answer `true`: this predicate is the sole discriminator
+    // between the Load-Game leaf and Continue. Refusing early matters: `docall` is
+    // `unwrap_or(null)` = 0, which a refused RVA would match.
     let dialog_factory_abs = er_game_base::mem::game_data_addr(
         module_base,
         DIALOG_FACTORY_RVA,
@@ -269,14 +267,14 @@ pub(crate) unsafe fn functor_chain_hits_factory(
 
 /// Read-only enumerator of the TitleTopDialog's realized selectable-entry vector -- the actual
 /// Continue/Load-Game/New-Game rows the user navigates. These are not FD4 MenuWindowJobs in the
-/// Sequence tree (which is why every job-tree walk + the 0x1407ad1c0 Update hook miss them); they
+/// Sequence tree (which is why every job-tree walk + the 0x1407ae4f0 Update hook miss them); they
 /// live in the dialog's own CSMenu sub-object (menu = dialog+0xa38) as a vector
 /// `[menu+0x1290]..[menu+0x1298]` stride 0x210, cursor `[dialog+0xb0c]`, bound `[dialog+0xb08]`
-/// (mainmenu-items-are-titletopdialog-widgets-not-fd4-jobs-2026). The confirm router 0x14078e1c0
-/// fires an entry via `rax=[entry]; call [rax+0x10]` when `[entry+0xf8]!=0`. For each entry this
-/// logs the vtable, its action method `[vtable+0x10]`, the `+0xf8` action-functor + its decoded
-/// `_Do_call` jmp-chain, and whether either resolves to dialog_factory 0x14081ead0 (Load-Game) or
-/// continue_confirm 0x140b0e180 (Continue). Pure vector math + reads (no game call) -> save-safe.
+/// (mainmenu-items-are-titletopdialog-widgets-not-fd4-jobs-2026). The confirm router (1.16.2
+/// 0x14078e1c0) fires an entry via `rax=[entry]; call [rax+0x10]` when `[entry+0xf8]!=0`. For each
+/// entry this logs the vtable, its action method `[vtable+0x10]`, the `+0xf8` action-functor + its
+/// decoded `_Do_call` jmp-chain, and whether either resolves to dialog_factory 0x14081fe00
+/// (Load-Game) or continue_confirm 0x140b0fd50 (Continue). Pure vector math + reads (no game call) -> save-safe.
 /// Returns (load_game_entry, continue_entry, cursor) for stage 2 to drive.
 pub(crate) unsafe fn dump_titletop_menu_entries(
     owner: usize,
@@ -334,8 +332,8 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     }
     // The selectable-row vector does not live on the TitleTopDialog -- [dialog+0x1290] is GFx
     // markup text (runtime read = ASCII). The rows live on a separate title CSMenu controller
-    // ("router_this", runtime vtable base+0x2afa070, ctor 0x1409060d8): the select router
-    // 0x14078e1c0 calls the resolver 0x14078fbd0 with rcx=router_this, reading [router_this+0x1290]
+    // ("router_this", 2.7.2.0 vtable base+0x2aff1e0): the select router (1.16.2
+    // 0x14078e1c0) calls the resolver (1.16.2 0x14078fbd0) with rcx=router_this, reading [router_this+0x1290]
     // /[+0x1298] (stride 0x210); cursor [+0xb0c], bound [+0xb08]. Locate router_this by scanning
     // the TitleTopDialog's fields for a pointer to an object whose [0] == that vtable. Pure reads
     // (safe_read_usize tolerates bad derefs) -> save-safe.
@@ -345,16 +343,14 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     const QW_START: usize = 0;
     const QW_STEP: usize = 1;
     const PTR_SZ: usize = 8;
-    // Resolved, and refused rather than used as a scan needle. The title CSMenu vtable moved on
-    // 1.17 (0x2afa070 -> 0x2afd0f0), so the raw value matched nothing, `router_this` was never
-    // found, and the selectable-row enumeration returned `(None, None, cursor)` every time. 0 as
+    // Resolved, and refused rather than used as a scan needle on a build other than 2.7.2.0. 0 as
     // a needle would match the first zeroed qword of the 0x400-qword sweep -- the same failure
     // `er-input-harness::title_scan` refuses to scan for.
     let router_vt =
         er_game_base::mem::game_data_addr(base, ROUTER_VTABLE_RVA, "ROUTER_THIS_VTABLE_RVA");
     if router_vt == NULL {
         append_autoload_debug(format_args!(
-            "titletop-entries: dialog=0x{dialog:x} -- ROUTER_THIS_VTABLE_RVA has no mapping on this build; refusing to scan (0 as a needle matches every zeroed qword)"
+            "titletop-entries: dialog=0x{dialog:x} -- ROUTER_THIS_VTABLE_RVA does not resolve on this build (not 2.7.2.0); refusing to scan (0 as a needle matches every zeroed qword)"
         ));
         return (None, None, cursor);
     }
@@ -396,10 +392,8 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
     append_autoload_debug(format_args!(
         "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} count={count} cursor={cursor} bound={bound} vec=[0x{vec_begin:x}..0x{vec_end:x}]"
     ));
-    // All three classifier targets resolved. Two were raw and both moved on 1.17
-    // (`LIVE_DIALOG_FACTORY_RVA` 0x81ead0 -> 0x81f950, `TRACE_MENU_CONTINUE_WRAPPER_RVA`
-    // 0x82bac0 -> 0x82cab0), so `classify` could return only `(false, false)` and every row was
-    // logged as neither Load-Game nor Continue.
+    // All three classifier targets resolved; raw ones would let `classify` return only
+    // `(false, false)` on another build and log every row as neither Load-Game nor Continue.
     let factory_abs =
         er_game_base::mem::game_data_addr(base, DIALOG_FACTORY_RVA, "LIVE_DIALOG_FACTORY_RVA");
     let confirm_abs =
@@ -500,21 +494,21 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
 /// Save-safe read-only structural scan of the open TitleTopDialog for the Load-Game entry,
 /// using the two RTTI fingerprints from the 2026-06-18 reconciliation
 /// (bd title-load-is-profileloaddialog-not-movemapliststep-b78-dead-2026):
-///   * d180 std::function `_Func_impl` vtable = `base+0x2ac3ea8` (its `_Do_call` 0x140820c60
-///     `add rcx,8; jmp dialog_factory 0x14081ead0`), held at a MenuWindowJob's `+0xa8`;
-///   * `CS::MenuMemberFuncJob<TitleTopDialog>` vtable = `base+0x2b265d0` (run 0x1409aaba0),
-///     the entries the registrar 0x1409b24e0 registers into `[dialog+0xa48]`.
+///   * d180 std::function `_Func_impl` vtable = `base+0x2ac9018` (its `_Do_call`, 1.16.2 0x140820c60:
+///     `add rcx,8; jmp dialog_factory`), held at a MenuWindowJob's `+0xa8`;
+///   * `CS::MenuMemberFuncJob<TitleTopDialog>` vtable = `base+0x2b2b740` (run 0x1409ac1f0),
+///     the entries the registrar 0x1409b3be0 registers into `[dialog+0xa48]`. (2.7.2.0 addresses.)
 ///
 /// The prior d180-locate walked the FD4 MenuJobSequence tree (owner+0xe0/0x130/0x138) and never
 /// surfaced the item, because the title rows are TitleTopDialog registry entries, not Sequence
-/// children, and `[dialog+0xa48]` is an opaque FD4 delegate registry (insert 0x1407a6c00, vcall
+/// children, and `[dialog+0xa48]` is an opaque FD4 delegate registry (insert 1.16.2 0x1407a6c00, vcall
 /// node-build -- not statically walkable). This instead does a bounded flat scan of the dialog
 /// object's own fields for any pointer to either fingerprint (and any object whose `+0xa8` holds
 /// the d180 functor = a MenuWindowJob d180). Pure ReadProcessMemory (safe_read_usize tolerates bad
 /// derefs) -> no writes, no native calls -> save-safe. Recon-ONLY: logs every hit and returns
 /// `(member_node, window_item)`: `member_node` = the first Load-Game CS::MenuMemberFuncJob node
 /// (vt MEMBERFUNCJOB_VTABLE_RVA, member_fn reaches the dialog factory) -- this is the node the
-/// native run 0x1409aaba0 is fired against; `window_item` = the first d180 MenuWindowJob item
+/// native run 0x1409ac1f0 is fired against; `window_item` = the first d180 MenuWindowJob item
 /// (whose +0xa8 holds the d180 functor). It does not latch/advance (the caller decides) so a first
 /// run stays no-write at the menu. (Extended 2026-06-18 to also return the MenuMemberFuncJob node
 /// so a caller can fire its run; previously it returned only the window item.)
@@ -527,9 +521,10 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
     const ENTRY_REGISTRY_A48: usize = 0xa48;
     const ENTRY_SOURCE_A38: usize = DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
     // d180 std::function _Func_impl vtable (user-capture-confirmed); MenuMemberFuncJob vtable.
-    const FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
-    const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x02b265d0;
-    const FACTORY_RVA: usize = 0x0081ead0;
+    // 2.7.2.0 rvas.
+    const FUNCTOR_VTABLE_RVA: usize = 0x02ac9018;
+    const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x02b2b740;
+    const FACTORY_RVA: usize = 0x0081fe00;
     const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const MEMBER_FN_18: usize = 0x18;
     const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
@@ -628,8 +623,8 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
         "loadgame-scan: dialog=0x{dialog:x} registry(0xa48)=0x{registry:x} source(0xa38)=0x{source:x} functor_vt=0x{functor_vt:x} memberjob_vt=0x{memberjob_vt:x} -- scanning {SCAN_QWORDS} qwords"
     ));
     // Direct-build r8 (ctor owner-obj) candidate validation (2026-06-18 breakthrough: the
-    // ProfileLoadDialog ctor 0x1409a3d90 is cold-viable -- it builds router_this + slot rows
-    // inline, no session/PGD/input-focus deps). dialog_factory 0x14081ead0 passes the ctor
+    // ProfileLoadDialog ctor (1.16.2 0x1409a3d90) is cold-viable -- it builds router_this + slot rows
+    // inline, no session/PGD/input-focus deps). dialog_factory 0x14081fe00 passes the ctor
     // r8 = *(capture+8); the gold capture showed that = owner+0x138, and the ctor reads the
     // profile row-vector count at [r8+0xa60]. Validate read-only which candidate has a plausible
     // vtable [+0] + a small row count [+0xa60] before any native build call (look before acting).
@@ -705,7 +700,7 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
                     ));
                 }
                 // The Load-Game run target: a MenuMemberFuncJob whose member_fn chains to the
-                // dialog factory. Latch the first such node (run 0x1409aaba0 fires against it).
+                // dialog factory. Latch the first such node (run 0x1409ac1f0 fires against it).
                 if rf && found_member_node.is_none() {
                     found_member_node = Some(p);
                 }
@@ -714,7 +709,7 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
                 // (b) the d180 functor object itself.
                 if hits < HIT_CAP {
                     append_autoload_debug(format_args!(
-                        "loadgame-scan: dialog+0x{off:x} -> d180 FUNCTOR object=0x{p:x} (vt 0x2ac3ea8)"
+                        "loadgame-scan: dialog+0x{off:x} -> d180 FUNCTOR object=0x{p:x} (vt rva 0x{FUNCTOR_VTABLE_RVA:x})"
                     ));
                 }
                 hits += HIT_STEP;

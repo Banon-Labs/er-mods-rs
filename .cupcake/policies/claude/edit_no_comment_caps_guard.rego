@@ -28,6 +28,26 @@ import rego.v1
 # later, which is the status quo; a false positive costs a refused edit the author cannot fix, which
 # is worse. The asymmetry is the design.
 #
+# Two more places where it reads less than the gate, both measured false positives:
+#
+#   * Fenced code in a Rust comment is not read. The gate drops every comment line between a pair of
+#     ``` markers (`FENCE` and `drop_code` in the script), so an asm listing in a `//!` block may
+#     annotate `; free the node -- on both paths` in capitals. This toggles on the same regex, line
+#     by line, and only in `.rs`: the gate's `#` comment stream never toggles, and this guard reads
+#     no Python docstrings. Over all 1017 tracked `.rs` files on 2026-10-23, compared against the
+#     script's own `comment_spans` and `drop_code`, a whole-file Write judged by this model read no
+#     line the gate drops and skipped no line the gate reads.
+#   * An Edit is refused only for a shouted word it adds. Each edit carries the text it replaces,
+#     so a word already in `old_string` the same number of times is not new writing: the edit that
+#     ported `freelist_shutdown_assert.rs` to 2.7.2.0 rewrote every address of a fenced listing that
+#     ends in `on BOTH paths`, and the word was refused although nobody typed it. The same count
+#     keeps the baseline's contract text (`do NOT call TitleTopDialog::open_menu ...`) editable
+#     around. A Write replaces a file whose previous text this guard cannot see, so all of it counts.
+#
+# What it still cannot know is whether an Edit starts inside a fence: the opening marker may sit
+# above `old_string`. A new shouted word written there is refused, and the reason says to widen the
+# edit to take in the opening fence, which this guard then sees.
+#
 # The word list is the head of the measured distribution, from the sweep that took this tree to
 # zero: `NOT` 1637, `THE` 1603, `IS` 750, `THIS` 518, `ONLY` 483, `ONE` 465, `BEFORE` 302, `SAME`
 # 286, `EVERY` 241, `FIRST` 240. Excluded on purpose: `AND`, `OR`, `SET`, `CALL`, `TEST`, `PUSH`,
@@ -47,9 +67,12 @@ lower_tool_name := lower(object.get(input, "tool_name", ""))
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	scanned_file
-	some text in written_texts
-	some line in split(text, "\n")
-	shouted_line(line)
+	some pair in written_pairs
+	added := added_words(pair)
+	count(added) > 0
+	some line in shouted_lines(pair.new)
+	some m in regex.find_all_string_submatch_n(shouted_words_re, quotable_prefix(line), -1)
+	m[0] in added
 
 	decision := {
 		"rule_id": "ER-EFFECTS-COMMENT-CAPS-GUARD",
@@ -61,25 +84,62 @@ deny contains decision if {
 			trim_space(line),
 			"\n\nCapitals in a comment name something -- a const/static, an env var, an acronym, an x86 register or mnemonic, a file or section name, an upstream FUN_<addr> symbol. They are never emphasis. This tree was swept to zero shouted words on 2026-09-07 and `scripts/check-comment-caps.py` (wired into check.sh) holds it there, so this edit would go red at push time.",
 			"\n\nHappy path: lowercase the word. If it really is a name -- the x86 NOT, a \"NOT RUN\" status string, a constant that happens to be an English word -- put it in backticks and this guard stops reading there. If it is load-bearing, the fix is usually a rewritten first sentence, not a louder one. See AGENTS.md, `Conventions & Patterns`.",
+			"\n\nIf the line sits inside a ``` fenced block in a Rust comment, it is code and the gate does not read it; this guard cannot see a fence that opens above the edit, so widen the edit to take in the opening ``` line.",
 		]),
 	}
 }
 
-# Only the tools that author file content, and only the field each one writes.
-written_texts contains text if {
+# Only the tools that author file content, and only the field each one writes, paired with the text
+# it replaces. A Write or NotebookEdit replaces text this guard cannot see, so its `old` is empty.
+written_pairs contains {"old": "", "new": text} if {
 	lower_tool_name in {"write", "notebookedit"}
 	text := object.get(tool_input, "content", object.get(tool_input, "new_source", ""))
 }
 
-written_texts contains text if {
+written_pairs contains {"old": object.get(tool_input, "old_string", ""), "new": object.get(tool_input, "new_string", "")} if {
 	lower_tool_name == "edit"
-	text := object.get(tool_input, "new_string", "")
 }
 
-written_texts contains text if {
+written_pairs contains {"old": object.get(edit, "old_string", ""), "new": object.get(edit, "new_string", "")} if {
 	lower_tool_name == "multiedit"
 	some edit in object.get(tool_input, "edits", [])
-	text := object.get(edit, "new_string", "")
+}
+
+# The shouted words a pair writes more often than the text it replaces held them.
+added_words(pair) := {w |
+	new := shouted_words(pair.new)
+	old := shouted_words(pair.old)
+	some w in new
+	count([x | some x in new; x == w]) > count([x | some x in old; x == w])
+}
+
+# Every shouted word on `shouted_lines(text)`, once per occurrence. The pattern carries one group
+# between a zero-width `\b` pair, so a match's whole text is the word.
+shouted_words(text) := [m[0] |
+	some line in shouted_lines(text)
+	some m in regex.find_all_string_submatch_n(shouted_words_re, quotable_prefix(line), -1)
+]
+
+# The comment lines of `text` outside a fenced block that carry a shouted word.
+# Counting markers before a line stands in for the gate's toggle: an odd count is inside a block.
+shouted_lines(text) := [line |
+	lines := split(text, "\n")
+	markers := fence_markers(lines)
+	some i, line in lines
+	not i in markers
+	count([m | some m in markers; m < i]) % 2 == 0
+	shouted_line(line)
+]
+
+# The gate's `FENCE` regex, `^\s*(?://+!?|\*)?\s*` then three backticks, which a raw string cannot
+# hold. Rust only: the gate's `#` comment stream never toggles, so a `.py` or `.sh` line is read
+# whatever surrounds it.
+fence_re := "^\\s*(?://+!?|\\*)?\\s*```"
+
+fence_markers(lines) := {i |
+	endswith(file_path, ".rs")
+	some i, line in lines
+	regex.match(fence_re, line)
 }
 
 scanned_file if {

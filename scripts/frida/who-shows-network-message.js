@@ -1,7 +1,7 @@
 // Who asks the game to show a network message, and with which id.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The question
 //
@@ -26,10 +26,10 @@
 //        -> SummonMsgData::SummonMsgData -> SummonMsgQueue::AddEntry
 // ```
 //
-// The 1.16.2 dump is the only named image; these are its addresses carried onto the installed
-// build by `scripts/map-rvas-1162-to-1170.py`, which reported `0x14076e310 -> 0x14076f190` as a
-// unique 47-byte signature match. The mapper calls every mapping a candidate, so the agent
-// byte-checks the prologue it finds and refuses rather than trampolining a wrong address.
+// The 1.16.2 dump is the only named image; these are its addresses. The hooked one was paired with
+// 1.17 by its bytes, `0x14076e310 -> 0x14076f190` on a unique 47-byte signature, and the literal
+// below is its 2.7.2.0 address. A pairing is a candidate, so the agent byte-checks the prologue it
+// finds and refuses rather than trampolining a wrong address.
 //
 // # What it prints
 //
@@ -143,8 +143,8 @@ Interceptor.attach(target, {
 // id has no entry. So the id this is called with IS the answer, and `MenuString` never carries it
 // -- that type is `{ wchar_t *rawString; DLString<wchar_t> }`, text only.
 //
-// 1.16.2 `0x140762c20` carried across by `map-rvas-1162-to-1170.py`, which called it a
-// nearest-anchor guess with five shape candidates rather than a unique match -- so it was read
+// 1.16.2 `0x140762c20`, whose 1.17 pairing was a nearest-anchor guess with five shape candidates
+// rather than a unique match -- so it was read
 // before being hooked: the 1.17 function at this address has the same `id < 1` guard and the same
 // `L"NetworkMessage"` literal, which is the identification the mapper could not give.
 const RVA_GET_NETWORK_MESSAGE = 0x763f20; // 1.17.1 0x763a70

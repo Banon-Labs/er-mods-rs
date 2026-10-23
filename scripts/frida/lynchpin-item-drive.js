@@ -1,7 +1,7 @@
 // Drive a goods item by id with no DLL of ours loaded.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // This is the port the standing directive asks for: "absolutely not. You're obligated to do it
 // with Frida. The entire point is that dll has too many side effects." Every invasion experiment
@@ -23,8 +23,8 @@
 // `scripts/check-no-timeouts.py` bans them in scripts, and a hook-driven agent has no business
 // owning a clock anyway.
 //
-// Addresses are 1.17.1, taken from er-invasion-warp's own `ADDRESS TRANSLATED` log lines rather
-// than from a 1.16.2 constant plus arithmetic.
+// Addresses were measured as 1.17.1, taken from er-invasion-warp's `ADDRESS TRANSLATED` log lines
+// of the time rather than from a 1.16.2 constant plus arithmetic; the literals are 2.7.2.0 now.
 const CS_MENU_MAN_GLOBAL = ptr('0x143d72840'); // 1.17.1 0x143d6f820
 const CS_MENU_MAN_MENU_DATA = 0x8;
 const MENU_GAITEM_USE_STATE = 0x70;

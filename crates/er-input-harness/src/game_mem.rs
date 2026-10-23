@@ -10,7 +10,7 @@
 //! Coarse vs precise (honest limit): the product's window latches are populated by native menu-window
 //! ctor hooks (`menu_window_job_ctor_*`, the `SetState` trace). Standalone, a *precise* window
 //! identity (IngameTop vs OptionSetting vs ProfileSelect) would require union-registering those same
-//! ctor observers through the product's `er_effects_union_register` export and matching vtable RVAs.
+//! ctor observers through the product's `er_effects_union_register_2720` export and matching vtable RVAs.
 //! This module intentionally re-derives only what a passive read can prove: image base, player
 //! presence (in-world proxy), and top-menu-window presence -- enough to sequence the proven
 //! keyboard-open + submenu edges, not enough to positively identify each pane.
@@ -66,14 +66,14 @@ pub fn product_dll_present() -> bool {
     (unsafe { GetModuleHandleA(name.as_ptr().cast()) } as usize) != 0
 }
 
-/// Dereference a game singleton pointer by RVA -- Resolved for the running build, never added raw.
+/// Dereference a game singleton pointer by its 2.7.2.0 RVA, through the build gate, never added raw.
 ///
 /// This is the one chokepoint every singleton read in this DLL goes through, and its results feed
-/// raw byte stores (`inject_vk` stamps `source+0x88`, the popup request byte at `+0x121`). Every
-/// `.data` global moved on 1.17, so a raw `base + rva` reads whatever now occupies the old slot;
-/// `plausible_ptr` screens the result but cannot prove it, so a garbage qword inside the user-mode
-/// range still passes and the store lands somewhere arbitrary. Resolving here makes an unmapped global answer `None` instead,
-/// which is a path every caller already has.
+/// raw byte stores (`inject_vk` stamps `source+0x88`, the popup request byte at `+0x121`). On any
+/// other build a raw `base + rva` reads whatever occupies that slot there; `plausible_ptr` screens
+/// the result but cannot prove it, so a garbage qword inside the user-mode range still passes and
+/// the store lands somewhere arbitrary. `game_data_addr` refuses on another build, so the global
+/// answers `None` instead, which is a path every caller already has.
 fn deref_singleton(base: usize, rva: usize, what: &'static str) -> Option<usize> {
     let address = er_game_base::mem::game_data_addr(base, rva, what);
     if address == 0 {
@@ -165,9 +165,9 @@ pub fn world_simulating() -> bool {
 // SL-device-busy semaphores (ground truth from the product constant tree): `GameMan::saveState`
 // at +0xb80 (0 idle -> non-0 busy) and the NowLoading latch. A driven Continue "took effect" once
 // one of these trips within the frame budget -- else the harness is derailed (bd harness-drive-
-// semaphore-gated-teardown-on-miss). GameMan singleton RVA 0x3d69918
+// semaphore-gated-teardown-on-miss). GameMan singleton RVA 0x3d709a8
 // (profile_rows_system_quit_menu.rs), saveState = GAME_MAN_SAVE_STATE_B80_OFFSET; NowLoading singleton
-// 0x3d60ec8, flag +0xED (CSNowLoadingHelperImp.load_done).
+// 0x3d67f48, flag +0xED (CSNowLoadingHelperImp.load_done).
 //
 // This was called `GAME_MAN_LOAD_FSM_B80_OFFSET` / `load_fsm()` until 2026-08-31. The field is
 // not load-only: the save lane stamps it too (see the value table on the declaration in
@@ -175,12 +175,12 @@ pub fn world_simulating() -> bool {
 // what both call sites in `drive.rs` actually want.
 const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
-const NOW_LOADING_SINGLETON_RVA: usize = 0x3d60ec8;
+const NOW_LOADING_SINGLETON_RVA: usize = 0x3d67f48;
 const NOW_LOADING_FLAG_ED_OFFSET: usize = 0xed;
 
 /// `GameMan::saveState` (+0xb80), low byte: 0 = the SL device is idle, non-zero = a save, a
-/// preview read or a load owns it. Named by the game's own predicates `IsSaveState1` (1.16.2
-/// `0x14067a010`) and `IsSaveState2` (`0x140679ff0`), each a two-instruction
+/// preview read or a load owns it. Named by the game's own predicates `IsSaveState1` (2.7.2.0
+/// `0x14067b310`) and `IsSaveState2` (`0x14067b2f0`), each a two-instruction
 /// `cmp dword ptr [rax+0xb80], N` off the GameMan singleton.
 pub fn save_state() -> i32 {
     let Some(base) = game_base() else {
@@ -229,7 +229,7 @@ pub fn world_map_mounted() -> bool {
     map != GAME_MAN_SAVED_MAP_TITLE_DEFAULT && map != -1 && map != 0
 }
 
-/// NowLoading latch (deref base+0x3d60ec8 -> +0xED): set while/after a load screen; a load-activity
+/// NowLoading latch (deref base+0x3d67f48 -> +0xED): set while/after a load screen; a load-activity
 /// signal (lingers). Non-zero = loading activity seen.
 pub fn now_loading() -> bool {
     let Some(base) = game_base() else {
@@ -243,7 +243,7 @@ pub fn now_loading() -> bool {
     unsafe { read_usize(helper + NOW_LOADING_FLAG_ED_OFFSET) }.is_some_and(|v| (v & 0xff) != 0)
 }
 
-// Flip-timing semaphore. CSFlipperImp singleton base+0x4589ad8; fixed_spf f32@+0x1c is the game's
+// Flip-timing semaphore. CSFlipperImp singleton base+0x4590b78; fixed_spf f32@+0x1c is the game's
 // frame-time target (0.0167=60, 0.05=20, 0.0333=30, 0.0083=120), mode_current i32@+0xc.
 // Correction (bd decisive-reload-20fps-is-render-bound-not-throttle-syncinterval1-refresh4-2026-07-22,
 // build a38dccd): the reload 20fps is not a fixed_spf=0.05 cap. Measured across the full reload movable
@@ -251,7 +251,7 @@ pub fn now_loading() -> bool {
 // SyncInterval=1 to Present yet GetFrameStatistics shows 4 refreshes/present -> the frame is render-bound
 // (not ready within 1 vblank), not a loading-mode cap. Keep fixed_spf as a phase signal (target vs actual
 // divergence) but do not treat 0.05 as the cap mechanism; the earlier fixedspf-0.05 memory is refuted.
-const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+const CS_FLIPPER_SINGLETON_RVA: usize = 0x4590b78;
 const CS_FLIPPER_FIXED_SPF_1C_OFFSET: usize = 0x1c;
 const CS_FLIPPER_MODE_CURRENT_C_OFFSET: usize = 0xc;
 
@@ -285,19 +285,19 @@ pub fn flip_mode_current() -> i32 {
 
 // In-world menu-pane semaphores for the quit-to-menu flow (bd quit-to-menu-semaphores-2026-07-22).
 // menuData (inputmgr+0x8) is non-null for the whole session -> useless as "menu open". The real open
-// signal is the popupMenu's currentTopMenuJob (HasTopMenuJob 0x14080d810), and the pane identity is the
+// signal is the popupMenu's currentTopMenuJob (HasTopMenuJob 0x14080eb40), and the pane identity is the
 // top window's menu_id.
 const CS_MENU_MAN_POPUP_MENU_80_OFFSET: usize = 0x80;
 const CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET: usize = 0xb0;
 /// `CS::MenuWindowJob::owningMenuWindow`, the last field of that class and valid only on that class.
-/// `CS::MenuWindowJob::Run` reads it at `0x1407ad63c`, `er-quit-rows` reads it every frame on the
+/// `CS::MenuWindowJob::Run` reads it at `0x1407ae96c`, `er-quit-rows` reads it every frame on the
 /// job `Run` hands it, and `er_title_flow::MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET` is the same number.
 /// See [`resolve_top_window`] for why reading it off `currentTopMenuJob` was reading past the end of
 /// a different object.
 const TOP_JOB_WINDOW_130_OFFSET: usize = 0x130;
 /// `CS::MenuWindow`'s menu id (u16). The engine bounds-checks it against `0x47` before indexing
-/// `CSMenuMan+0x90` with it, in `MenuWindow::MenuWindow` (`0x140741960`), `FUN_140744dd0` and the
-/// job teardown `FUN_1407ada40`; `0xffff` is its "ask the vtable" sentinel rather than a real id.
+/// `CSMenuMan+0x90` with it, in `MenuWindow::MenuWindow` (`0x140742c60`), `0x1407460d0` and the
+/// job teardown `0x1407aed70`; `0xffff` is its "ask the vtable" sentinel rather than a real id.
 const TOP_WINDOW_MENU_ID_180_OFFSET: usize = 0x180;
 /// OptionSetting SettingTabControl (window+0x1870) -> tab view ptr (+0x10, deref) -> selected index (+0xd4).
 const OPTIONSETTING_TAB_CONTROL_1870_OFFSET: usize = 0x1870;
@@ -345,10 +345,10 @@ fn input_mgr() -> usize {
         .unwrap_or(0)
 }
 
-/// The gate every menu PAD read passes through (`FUN_140758050`, 1.16.2).
+/// The gate every menu PAD read passes through (`0x140759350`).
 ///
-/// `CS::GridControl`'s pager (vtable slot 2, `FUN_1407392f0`) does not read a pad device directly.
-/// Each direction it tests goes through `FUN_14075d970`, whose first act is to call this predicate
+/// `CS::GridControl`'s pager (vtable slot 2, `0x14073a5f0`) does not read a pad device directly.
+/// Each direction it tests goes through `0x14075ec70`, whose first act is to call this predicate
 /// with no arguments of its own; when it answers false the lambda holding the menu code is never
 /// invoked and the read returns "not pressed". So a shut gate makes the pause menu ignore every
 /// input, whatever is written into the pad device -- which is the exact shape of every derailed
@@ -429,12 +429,12 @@ const JOB_GRAPH_REPORT_LIMIT: usize = 4;
 /// The top menu window, resolved through the job graph the engine itself builds, or 0.
 ///
 /// What was wrong, and it was not the offset (bd er-effects-rs-h09b, static RE 2026-09-12).
-/// `+0x130` is `CS::MenuWindowJob::owningMenuWindow` -- the engine reads it at `0x1407ad63c` inside
+/// `+0x130` is `CS::MenuWindowJob::owningMenuWindow` -- the engine reads it at `0x1407ae96c` inside
 /// `CS::MenuWindowJob::Run`, and the product's own Quit-rows hook reads it every frame on the job
 /// that `Run` hands it. But `popupMenu->currentTopMenuJob` is not that job.
-/// `CSPopupMenu::StartTopMenuJob` (1.16.2 `FUN_1407f0b50`) chains the caller's job with a
+/// `CSPopupMenu::StartTopMenuJob` (`0x1407f1e80`) chains the caller's job with a
 /// wait-frame job and a functor job through `CS::MenuJob::ChainMenuJobs`, wraps the resulting
-/// `FixOrderJobSequence` in a `0x58`-byte `CS::FinalizeCallbackJob` (`FUN_1407a8180` heap-allocates
+/// `FixOrderJobSequence` in a `0x58`-byte `CS::FinalizeCallbackJob` (`0x1407a94b0` heap-allocates
 /// exactly `0x58`), and assigns that to `+0xb0`. Reading `+0x130` off a `0x58`-byte object is a read
 /// `0xd8` bytes past its end, which is why the live value on 1.17.1 was `0x2f003a00320063` -- the
 /// UTF-16 for `c2:/aet/aet050/A...`, heap text sitting behind the job.
@@ -446,7 +446,7 @@ const JOB_GRAPH_REPORT_LIMIT: usize = 4;
 ///
 /// The route the brief suggested -- `CSMenuMan+0x90`'s per-menu-id table -- does not exist. That
 /// field is a `byte[0x47]` of shown-flags, not window pointers: `MenuWindowJob::Run` sets
-/// `field99_0x90[menu_id] |= 1`, `FUN_140744dd0` sets `|= 3`, and the teardown `FUN_1407ada40`
+/// `field99_0x90[menu_id] |= 1`, `0x1407460d0` sets `|= 3`, and the teardown `0x1407aed70`
 /// writes `0`. There is no live-window registry in `CSMenuManImp` to read.
 ///
 /// Fails closed. When no `MenuWindowJob` is in the graph, or the window it owns is not a
@@ -623,9 +623,8 @@ pub fn top_menu_id() -> i32 {
     unsafe { read_usize(w + TOP_WINDOW_MENU_ID_180_OFFSET) }.map_or(-1, |v| (v & 0xffff) as i32)
 }
 
-/// `GLOBAL_CSPcKeyConfig` (1.16.2 RVA; `er_game_base::mem::game_data_addr` maps it to 0x3d61f08 on
-/// 1.17, agreed by 82 references). Resolved from `mov rcx, [rip+0x3607e98]` at 0x140756009, inside
-/// the function that turns a menu code into a device binding.
+/// `GLOBAL_CSPcKeyConfig` (2.7.2.0 RVA `0x3d64f28`). Resolved from `mov rcx, [rip+0x360dc18]` at
+/// 0x140757309, inside the function that turns a menu code into a device binding.
 const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 /// The binding table inside CSPcKeyConfig: `config + 0x440 + code * 0x14`, valid for `code < 0x36`.
 /// Stride, count and table offset all come off one instruction in the `GetAssign` accessor at rva
@@ -671,8 +670,8 @@ pub const KEY_CONFIG_MAX_MENU_CODE: u32 = 0x36;
 /// not carry.
 ///
 /// Dword `[1]` is not a DIK scancode. `CS_KEYBOARD_KEY` is a game-internal enum over `0x46..=0xd5`
-/// that `KeyboardDevice::IsKeyDown` (1.16.2 rva `0x1f6d0f0`) resolves through a lookup table at
-/// `base + 0x3c449a0`, indexed by `keyId - 0x46`. Read that table rather than transcribing it: a
+/// that `KeyboardDevice::IsKeyDown` (2.7.2.0 rva `0x1f70650`) resolves through a lookup table at
+/// `base + 0x3c4ba10`, indexed by `keyId - 0x46`. Read that table rather than transcribing it: a
 /// copy is a second source of truth that goes stale on the next patch and names the wrong key.
 ///
 /// The dwords are read as five separate byte-quads rather than through `read_usize`, which would
@@ -778,7 +777,7 @@ pub fn optionsetting_current_pane() -> usize {
     .unwrap_or(0)
 }
 
-/// `CS::GridControl` selected-cell index. Read off the pager FUN_1407392f0, which compares
+/// `CS::GridControl` selected-cell index. Read off the pager `0x14073a5f0`, which compares
 /// `*(int*)(this+0xd4)` against the extents at `+0xd0`/`+0xd8`/`+0xdc`. It is the same field
 /// `optionsetting_tab_index` already reads through the tab strip -- because the tab strip is a
 /// GridControl, and so is the pause-menu grid.
@@ -787,12 +786,11 @@ const GRID_CONTROL_SELECTED_D4_OFFSET: usize = 0xd4;
 /// sits at +0x1870; this covers that and the pause menu's own, without running off the object.
 const MENU_WINDOW_SCAN_QWORDS: usize = 0x400;
 
-/// `CS::GridControl`'s vtable on the installed 1.17 build, measured rather than translated.
+/// `CS::GridControl`'s vtable on 2.7.2.0, measured rather than translated.
 ///
-/// Recovered by `scripts/er-rtti-map.py`, which walks MSVC RTTI in `eldenring-deobf-1.17.bin`:
-/// TypeDescriptor (`.?AVGridControl@CS@@`, name at `+0x10`) -> CompleteObjectLocator (validated by
-/// its own self-RVA and signature 1) -> the qword pointing at that COL, whose `+8` is the vtable.
-/// The 1.16.2 value was `0x142a913b8`; nothing translates between them and nothing needs to.
+/// Its `-8` qword in `eldenring-deobf-1.17.2.bin` reaches a CompleteObjectLocator (signature 1,
+/// valid self-RVA) whose TypeDescriptor names `.?AVGridControl@CS@@` -- the same MSVC RTTI walk
+/// `scripts/er-rtti-map.py` does.
 ///
 /// This replaces a circular runtime derivation. The previous version read GridControl's vtable off
 /// the OptionSetting tab strip (`window+0x1870 -> +0x10`) because `map-data-rvas` rated the 1.16.2
@@ -801,20 +799,12 @@ const MENU_WINDOW_SCAN_QWORDS: usize = 0x400;
 /// top window is IngameTop, the `+0x1870` read yields nothing usable, and the function returned
 /// `None` before scanning a single slot. Measured on br-20260905-170715-2300, which logged
 /// "no GridControl found in the top menu window" at nav frames 0, 120 and 240.
-///
-/// `.rdata` did not move between 1.17.0 and 1.17.1, so this is also the 1.17.1 rva, and it reaches
-/// the running build through [`grid_control_vtable`]. 2.7.2.0 moved `.rdata`: the carry puts it at
-/// `0x2a96528`, whose `-8` qword reaches a CompleteObjectLocator naming `.?AVGridControl@CS@@`,
-/// and whose first slots are the carries of 1.17.1's (`0x735100` -> `0x7355b0`, ...).
-pub(crate) const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
+pub(crate) const GRID_CONTROL_VTABLE_RVA: usize = 0x2a96528;
 
-/// `CS::GridControl`'s vtable in the running image, or `None` on a build the 1.17.1 carry does not
-/// reach.
+/// `CS::GridControl`'s vtable in the running image, or `None` on any build but 2.7.2.0.
 pub(crate) fn grid_control_vtable() -> Option<usize> {
-    er_game_base::mem::game_rva_measured_on(
-        GRID_CONTROL_VTABLE_RVA_1170,
-        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
-    )
+    er_game_base::mem::game_rva_named(GRID_CONTROL_VTABLE_RVA as u32, "GRID_CONTROL_VTABLE_RVA")
+        .ok()
 }
 
 /// Find a `CS::GridControl` inside the top menu window and report `(offset_in_window, selected_cell)`.

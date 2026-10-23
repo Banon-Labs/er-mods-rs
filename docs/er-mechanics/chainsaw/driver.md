@@ -74,8 +74,9 @@ reload in place, or the watcher's `SIGTERM`).
 ## 2. Hooks and addresses (1.17.1)
 
 All of these are below rva `0xafefe9`, so 1.17.0 and 1.17.1 agree, except the last three, which
-were measured on 1.17.1 directly. "Mapped" means `scripts/map-rvas-1162-to-1170.py` returned a
-unique signature, which was then read in `eldenring-deobf-1.17.1.bin`.
+were measured on 1.17.1 directly. "Mapped" means the 1.16.2 -> 1.17 signature map (deleted with
+the address carry on 2026-10-23) returned a unique signature, which was then read in
+`eldenring-deobf-1.17.1.bin`.
 
 | what | 1.17.1 | 1.16.2 | evidence |
 |---|---|---|---|

@@ -143,9 +143,9 @@ def connect():
 def local_warp(script, session, messages: queue.Queue, bid: int, args, yaw) -> int:
     """The in-map teleport: the engine's own `ChrIns` warp request, no area reload.
 
-    Mechanism (all 1.17.1, byte-read from eldenring-deobf-1.17.1.bin): the EMEVD
-    WarpCharacterAndCopyFloor body at `0x1405f85e0` reads the target in physics space and calls
-    `0x1403fa5d0(ChrIns*, FloatVector4* pos, FloatVector4* euler)`, then sets
+    Mechanism (2.7.2.0, eldenring-deobf-1.17.2.bin): the EMEVD WarpCharacterAndCopyFloor body at
+    `0x1405f8a90` reads the target in physics space and calls
+    `0x1403fa660(ChrIns*, FloatVector4* pos, FloatVector4* euler)` (at `+0x7d`), then sets
     `ChrIns+0x1c4 |= 2`. That call only queues the move -- `ChrCtrl+0x100` position, `+0x110`
     euler, `+0xfc |= 3` -- and the character update drains it next frame through
     `ChrCtrl::UpdatePositions` (`ForceSetPosition` + `SetOrientation` + the Havok proxy). Nothing

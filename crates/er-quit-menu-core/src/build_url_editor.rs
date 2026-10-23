@@ -7,10 +7,10 @@
 //!
 //! # Why "refuse to accept" is a re-open and not a veto
 //!
-//! There is no native validation hook to say no with. `FUN_14081d3d0`, the job's per-frame result
+//! There is no native validation hook to say no with. `0x14081e700`, the job's per-frame result
 //! gate, reports `Continue` while `CSMenuManImp+0x858` says the keyboard is up and then reads the
 //! controller's result code at `+0x78` -- 2 means the player pressed accept, anything else means
-//! they backed out. The validator struct the job is built with (`FUN_140e70920`) holds a max length
+//! they backed out. The validator struct the job is built with (`0x140e73e80`) holds a max length
 //! and flags, not a predicate: nothing in it can refuse a string.
 //!
 //! So the accept is allowed to complete natively, and the refusal is expressed the only way the
@@ -435,8 +435,8 @@ unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: us
 pub unsafe fn build_url_editor_menu_pump() {
     PUMP_PASSES.fetch_add(1, Ordering::SeqCst);
     // 0. A latch whose window stopped running is debris. The field's 02_990 MenuWindow is not
-    //    reported terminal when it closes -- it simply stops being run -- so neither the 0x81d3d0
-    //    cancel gate, the 0x81d220 terminal callback, nor the live->terminal release can see a
+    //    reported terminal when it closes -- it simply stops being run -- so neither the 0x81e700
+    //    cancel gate, the 0x81e550 terminal callback, nor the live->terminal release can see a
     //    field the player closed with the back action. Absence is the only signal it emits, and
     //    this is where it is acted on: the row must never stay dead for the rest of the session
     //    because a close went unreported (user report + `dll:9caf1a27`, 2026-08-23).

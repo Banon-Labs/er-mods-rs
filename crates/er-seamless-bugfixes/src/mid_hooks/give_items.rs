@@ -13,8 +13,9 @@
 //!
 //! The same three instructions appear again at `+0x34a`. Seamless reaches both through
 //! `MapItemManImpl::PacketReceive` case 6, a client receiving the host's pickup approval while it
-//! has no `PlayerIns` (during a load, for one). Offsets are the same in 1.16.2 and 1.17.1: the
-//! function is `IDENTICAL-WHOLE` between them.
+//! has no `PlayerIns` (during a load, for one). Offsets are the same in 1.16.2, 1.17.1 and
+//! 2.7.2.0: the function is `IDENTICAL-WHOLE` between the first two, and the 2.7.2.0 body has the
+//! same instruction at every offset (checked against `eldenring-deobf-1.17.2.bin` 2026-10-23).
 //!
 //! # Why two mid hooks and not one entry guard
 //!
@@ -38,15 +39,16 @@
 //!   `AND EDI,-2` pair also left, and `RBX` is written by the branch before it is read.
 //!
 //! No branch in `GiveItems` lands inside either 16-byte window; checked against both images'
-//! disassembly on 2026-10-19 by collecting every jump and call target in the function.
+//! disassembly on 2026-10-19, and against the 2.7.2.0 one on 2026-10-23, by collecting every jump
+//! and call target in the function.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::MidHook;
 
 /// `void CS::MapItemManImpl::GiveItems(MapItemManImpl *, ItemLotSpawnDataList *,
-/// ItemLotSpawnDataStatus *, DL_BOOL)`. 1.17.1 `0x140561400`.
-pub(crate) const GIVE_ITEMS_RVA: usize = 0x56_05b0;
+/// ItemLotSpawnDataStatus *, DL_BOOL)`. 2.7.2.0 rva.
+pub(crate) const GIVE_ITEMS_RVA: usize = 0x56_18b0;
 pub(crate) const STORAGE_OVERFLOW_LOAD: usize = 0x1d9;
 pub(crate) const STORAGE_ABSENT_JOIN: usize = 0x2f3;
 pub(crate) const PICKUP_LOG_LOAD: usize = 0x34a;
@@ -153,8 +155,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offsets_match_er_1162_static_re() {
-        assert_eq!(GIVE_ITEMS_RVA, 0x56_05b0);
+    fn offsets_match_the_2720_static_re() {
+        assert_eq!(GIVE_ITEMS_RVA, 0x56_18b0);
         assert_eq!(
             (
                 STORAGE_OVERFLOW_LOAD,

@@ -1,5 +1,8 @@
 //! The two game functions this layer calls, and the field reads that decide when to call them.
 //!
+//! The two called functions are 2.7.2.0 rvas. The `FUN_` names in this module's comments are 1.16.2
+//! dump names, where the spawn path was reversed, unless labelled 2.7.2.0.
+//!
 //! # Why these two and not the two the brief named
 //!
 //! The obvious spawn entry is `CS::ChrSet::SpawnSummonBuddy` (1.16.2 `0x140492cb0`), and it is the
@@ -79,24 +82,21 @@ const _: () = {
 };
 
 /// `CS::WorldChrManImp::SpawnDynamicChr(WorldChrManImp*, ChrSpawnRequest*) -> ChrIns*`,
-/// 1.16.2 RVA `0x506f30`.
+/// 2.7.2.0 RVA.
 ///
-/// Ghidra leaves it `FUN_140506f30`; the name here is what it does. Its whole body is
-/// `FUN_140492a90(&this->buddyChrSet, request)` followed by `chrIns->vft[0x610](chrIns,
-/// this->field_0x1e610)` on a non-null result -- so calling it rather than `FUN_140492a90` directly
-/// is what keeps the post-spawn step the game performs.
+/// Ghidra leaves it `FUN_140506f30` in the 1.16.2 dump; the name here is what it does. Its whole
+/// body (`.pdata` length `0x43`) is 2.7.2.0 `FUN_1404930d0(&this->buddyChrSet, request)` (1.16.2
+/// `FUN_140492a90`) followed by
+/// `chrIns->vft[0x610](chrIns, this->field_0x1e620)` on a non-null result -- so calling it rather
+/// than the inner spawn directly is what keeps the post-spawn step the game performs. (The second
+/// field was `+0x1e610` before 2.7.2.0 inserted two qwords at `WorldChrManImp+0x1e5f0`.)
 ///
-/// Verified for 1.17 rather than assumed, twice over. The sweep row in
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv` is `IDENTICAL-WHOLE` over 18 instructions with
-/// `.pdata` extents `0x43/0x43` in both images; and independently, a masked byte search with the
-/// two struct immediates pinned (`0x10f90` for the buddy `ChrSet`, `0x1e610` for the vtable call's
-/// argument) matches exactly one place in each image -- 1.16.2 `0x140506f3a`, 1.17 `0x140507d0a`,
-/// both `+0xa` into the function. Pinning those immediates is what separates it from
-/// `WorldChrManImp::CreatePlayer`, its byte-for-byte twin on `playerChrSet` `+0x10ee0`, which a
-/// fully wildcarded pattern cannot tell it from (two hits per image).
-pub(crate) const SPAWN_DYNAMIC_CHR_RVA: u32 = 0x0050_6f30;
+/// The two struct immediates, `0x10f90` for the buddy `ChrSet` and the vtable call's argument,
+/// are what separate it from `WorldChrManImp::CreatePlayer`, its byte-for-byte twin on
+/// `playerChrSet` `+0x10ee0`; on 2.7.2.0 they sit at `+0xd` and `+0x27`.
+pub(crate) const SPAWN_DYNAMIC_CHR_RVA: u32 = 0x0050_7f80;
 
-/// `CS::WorldChrManImp::RemoveChrIns(WorldChrManImp*, ChrIns*)`, 1.16.2 RVA `0x50a570`.
+/// `CS::WorldChrManImp::RemoveChrIns(WorldChrManImp*, ChrIns*)`, 2.7.2.0 RVA.
 ///
 /// The only thing DESPAWN may call. The refcount needs nothing from us: this hands the character to
 /// `CSDelayDeleteMan` and the game balances the `EneDat` reference itself, exactly as its own
@@ -107,17 +107,15 @@ pub(crate) const SPAWN_DYNAMIC_CHR_RVA: u32 = 0x0050_6f30;
 /// `replayGhostChrSet` and then `buddyChrSet`, and nulls the entry in whichever one holds the
 /// character. Two of its side effects matter here and are relied on rather than repeated: it clears
 /// `WorldChrManDbg+0xb8` when that names the character being removed, and it removes it from the
-/// `+0x1e630..+0x1e638` vector.
+/// `+0x1e640..+0x1e648` vector (2.7.2.0; `+0x1e630..+0x1e638` before it).
 ///
 /// **ordering, and it is a crash if it moves.** The delayed delete eventually destroys the
 /// `ChrIns`, which runs `ChrCtrl::Unref`, which DLPanics on a non-null `ChrCtrl+0x3b0`. So this
 /// must never run before the manipulator override has been cleared; see
 /// `crate::possess::teardown::Step`, where that ordering is the enum's own discriminants.
 ///
-/// Verified for 1.17 as `IDENTICAL-WHOLE` over 126 instructions, `.pdata` `0x233/0x233`, and
-/// independently by a masked byte search unique in both images (1.16.2 `0x14050a570`, 1.17
-/// `0x14050b340`).
-pub(crate) const REMOVE_CHR_INS_RVA: u32 = 0x0050_a570;
+/// `.pdata` length `0x233`, opening `test rdx,rdx; jz` exactly as the 1.16.2 function does.
+pub(crate) const REMOVE_CHR_INS_RVA: u32 = 0x0050_b5c0;
 
 /// `ChrIns* SpawnDynamicChr(WorldChrManImp*, ChrSpawnRequest*)`.
 type SpawnDynamicChrFn = unsafe extern "system" fn(*mut c_void, *const u8) -> usize;
@@ -202,8 +200,8 @@ pub(crate) fn spawn(spec: &SpawnSpec) -> Result<Spawned, String> {
 
     let Ok(address) = game_rva_named(SPAWN_DYNAMIC_CHR_RVA, "SPAWN_DYNAMIC_CHR_RVA") else {
         return Err(format!(
-            "the spawn entry has no verified mapping for {} -- refusing rather than calling \
-             whatever now occupies those bytes",
+            "the spawn entry is a 2.7.2.0 address and the game is {} -- refusing rather than \
+             calling whatever now occupies those bytes",
             er_game_base::game_build::describe_build()
         ));
     };

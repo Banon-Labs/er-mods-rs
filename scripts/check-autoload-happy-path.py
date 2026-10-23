@@ -326,7 +326,7 @@ def loading_layer_runtime_deref_guarded(telemetry: str, constants: str) -> bool:
 
 
 def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
-    """The diagnostic Continue candidate can be the disabled/idle 0x1407add70 job.
+    """The diagnostic Continue candidate can be a job carrying the disabled/idle 0x1407af0a0 predicate.
 
     Only MENU_CONTINUE_ITEM is promoted by constructor hooks after the native
     accept predicate is present. The product submit path must not fall back to
@@ -474,10 +474,10 @@ def main() -> int:
     # 1.16.2 shift is zero. Pinning the alias means this gate now checks that the two agree
     # instead of keeping a copy that can drift on its own.
     require(
-        "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0" in lib
+        "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x820d20" in lib
         and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =" in lib
         and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize" in lib
-        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA: u32 = 0x007acb00" in lib
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA: u32 = 0x007ade30" in lib
         and "TITLE_NATIVE_MENU_VISUAL_NAME: &str = \"05_000_Title\"" in lib,
         "title native visual suppression must pin the RE-proven BeginTitle wrapper/factory/05_000_Title anchors",
         failures,
@@ -499,12 +499,13 @@ def main() -> int:
         failures,
     )
     require(
-        # Assert the anchor still exists and 0x81f6f0 is still declared somewhere, rather than
-        # pinning one literal spelling. The RVA dedupe (2026-08-01) made this name derive from
-        # the canonical PROFILE_SELECT_WRAPPER_RVA so the value has a single definition; pinning
-        # `: usize = 0x81f6f0` here would have forced the duplicate literal to stay forever.
+        # Assert the anchor still exists and 0x820a20 (1.16.2 0x81f6f0) is still declared
+        # somewhere, rather than pinning one literal spelling. The RVA dedupe (2026-08-01) made
+        # this name derive from the canonical PROFILE_SELECT_WRAPPER_RVA so the value has a single
+        # definition; pinning `: usize = 0x820a20` here would have forced the duplicate literal to
+        # stay forever.
         "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA" in lib
-        and "0x81f6f0" in lib
+        and "0x820a20" in lib
         and "TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL" in lib
         and "MENU_DummyProfileFace_01" in lib
         and "SYSTEX_Menu_Profile00" in lib
@@ -590,7 +591,7 @@ def main() -> int:
     require(
         "MENU-WINDOW-CTOR captured semantic native Continue item" in ctor_body
         and "MENU_WINDOW_JOB_CTOR_RVA" in lib
-        and "cap_menu_window_job_ctor_7ac8c0" in experiments
+        and '"cap_menu_window_job_ctor"' in experiments
         and "MENU_WINDOW_JOB_CTOR_ORIG" in lib,
         "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
         failures,
@@ -598,18 +599,18 @@ def main() -> int:
     native_ctor_b_body = rust_fn_body(experiments, "menu_window_job_native_ctor_b_hook")
     require(
         "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA" in lib
-        and "cap_menu_window_job_native_ctor_b_7acb00" in experiments
+        and '"cap_menu_window_job_native_ctor_b"' in experiments
         and "MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG" in lib
         and "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item" in native_ctor_b_body
         and classifier_reaches(
             native_ctor_b_body,
             experiments,
             "MENU_ITEM_ACCEPT_NATIVE_RVA",
-            "0x007ad810",
+            "0x007aeb40",
         )
         and "MENU_CONTINUE_ITEM" in native_ctor_b_body
-        and "0x007add70" not in native_ctor_b_body
-        and "0x007add70" not in rust_fn_body(experiments, "accept_predicate_is_native"),
+        and "0x007af0a0" not in native_ctor_b_body
+        and "0x007af0a0" not in rust_fn_body(experiments, "accept_predicate_is_native"),
         "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
         failures,
     )
@@ -634,21 +635,21 @@ def main() -> int:
     require(
         "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
         and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
-        and "cap_menu_window_job_idle_ctor_7acf80" in experiments
+        and '"cap_menu_window_job_idle_ctor"' in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_ORIG" in lib
         and "MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item" in idle_ctor_body
         and "record_continue_candidate" in idle_ctor_body
         and "trace_first_game_caller_rva" in idle_ctor_body
         and "MENU_CONTINUE_ITEM.store" not in idle_ctor_body
         and "MENU_CONTINUE_ITEM.compare_exchange" not in idle_ctor_body,
-        "product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them",
+        "product diagnostics must passively attribute disabled Continue rows to the 0x1407ae2b0 idle constructor without promoting them",
         failures,
     )
     title_ready_body = rust_fn_body(experiments, "title_native_ready_predicate_hook")
     require(
         "TITLE_NATIVE_READY_PREDICATE_RVA" in lib
         and "TITLE_NATIVE_READY_PREDICATE_ORIG" in lib
-        and "cap_title_native_ready_733150" in experiments
+        and '"cap_title_native_ready"' in experiments
         and "STATE_FLAGS_20_OFFSET" in title_ready_body
         and "READY_MASK_8F" in title_ready_body
         and "TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT" in title_ready_body
@@ -688,10 +689,10 @@ def main() -> int:
         and "RESULT_EVENT_HANDLER_ORIG" in lib
         and "RESULT_ACTION_BUILDER_ORIG" in lib
         and "RESULT_EVENT_WRAPPER_BUILDER_ORIG" in lib
-        and "native_submit_7ac890" in experiments
-        and "result_event_handler_746e80" in experiments
-        and "result_action_builder_746a00" in experiments
-        and "result_event_wrapper_builder_744a60" in experiments
+        and '"native_submit"' in experiments
+        and '"result_event_handler"' in experiments
+        and '"result_action_builder"' in experiments
+        and '"result_event_wrapper_builder"' in experiments
         # One forwarder, not three. `call_result_void1_original`, `call_result_void2_original`
         # and `call_wrapper_builder_original` were three copies of "load the trampoline slot,
         # refuse if it is unset, call it"; they were replaced by the single
@@ -825,14 +826,14 @@ def main() -> int:
         and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check
         and "policy ToS flag setter writes requested value to flag pointer" in native_static_check
         and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check
-        and "policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380" in native_static_check
-        and "policy ToS selector wrapper vtable slot no longer points at 0x1409b7390" in native_static_check
+        and "policy ToS ctor wrapper vtable slot no longer points at {POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK:#x}" in native_static_check
+        and "policy ToS selector wrapper vtable slot no longer points at {POLICY_TOS_SELECTOR_WRAPPER_THUNK:#x}" in native_static_check
         and "policy ToS ctor wrapper thunk adjusts this pointer by +0x8" in native_static_check
         and "policy ToS selector wrapper thunk adjusts this pointer by +0x8" in native_static_check
         and "CommandSelectDialog/SceneProxy/MenuWindow lambda" in native_static_check
         and "policy ToS selector wrapper passes owner+0x29c8 requested flag pointer" in native_static_check
         and "policy ToS selector wrapper passes owner+0x29d0 selector argument" in native_static_check
-        and "policy ToS selector wrapper no longer calls 0x1409b49f0" in native_static_check
+        and "policy ToS selector wrapper no longer calls {POLICY_TOS_SELECTOR_CTOR:#x}" in native_static_check
         and "policy ToS selector ctor stores selector arg at object+0x1260" in native_static_check
         and "policy ToS selector ctor stores requested flag pointer at object+0x1268" in native_static_check
         and "policy ToS selector ctor matches option id against requested flag value" in native_static_check

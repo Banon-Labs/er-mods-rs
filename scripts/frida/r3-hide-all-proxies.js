@@ -1,7 +1,7 @@
 // Prototype: in view 3, fade every SceneObjProxy of the item list to alpha 0, not just four.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // er-r3-view fades the four `CS::MenuWindow` proxies of `GaitemSelectDialog` (+0x120, +0x188,
 // +0x230, +0x3b8) and sets detail level 0, which left two of the menu's three panels drawn. The rest

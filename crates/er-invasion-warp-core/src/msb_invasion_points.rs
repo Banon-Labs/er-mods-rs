@@ -9,14 +9,15 @@
 //!
 //! That is not an oversight in the shipped data. The engine selects between two entirely separate
 //! mechanisms on a param bit: `CS::PlayRegionParamLookupResult::isAutoIntrudePoint`
-//! (`0x140d44a20`) returns `_PLAY_REGION_PARAM_ST` byte `0x45` bit 0. Of the 593 `PlayRegionParam`
-//! rows in the shipped `regulation.bin`, exactly **90** have that bit set, and all 90 are area 60,
-//! area 61, or an `areaNo == 0` row whose id sits in the 6100000..=6941010 overworld band. Every
-//! row for areas 10..=45 has it clear. `CSBreakInPointManager` accordingly has two consumers:
+//! (1.16.2 `0x140d44a20`) returns `_PLAY_REGION_PARAM_ST` byte `0x45` bit 0. Of the 593
+//! `PlayRegionParam` rows in the shipped `regulation.bin`, exactly **90** have that bit set, and
+//! all 90 are area 60, area 61, or an `areaNo == 0` row whose id sits in the 6100000..=6941010
+//! overworld band. Every row for areas 10..=45 has it clear. `CSBreakInPointManager` accordingly
+//! has two consumers:
 //!
-//! * `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0c4f0`) -- the `.aip` path, and
-//! * `FUN_140a0c100` (`0x140a0c100`) -- the general path, which enumerates **MSB `POINT_PARAM_ST`
-//!   regions of subtype `InvasionPoint`** out of each resident map.
+//! * `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0dc90`) -- the `.aip` path, and
+//! * `0x140a0d8a0` (1.16.2 `FUN_140a0c100`) -- the general path, which enumerates **MSB
+//!   `POINT_PARAM_ST` regions of subtype `InvasionPoint`** out of each resident map.
 //!
 //! This module is the second one. An offline harvest of all 1347 shipped MSBs found **2807**
 //! `InvasionPoint` regions across 113 maps, 2596 of them outside the overworld (Leyndell 168,
@@ -43,17 +44,21 @@
 
 use crate::invasion_warp::BlockKey;
 
-/// `MsbPointType::InvasionPoint`, the `EDX` value byte-verified at `0x140a0c1f1` in the general
-/// break-in-point consumer's call to [`GET_POINT_DATA_SECTION_ITEM_COUNT_RVA`].
+/// `MsbPointType::InvasionPoint`, the `EDX` value byte-verified at `0x140a0d991` (1.16.2
+/// `0x140a0c1f1`) in the general break-in-point consumer's call to
+/// [`GET_POINT_DATA_SECTION_ITEM_COUNT_RVA`].
 pub const MSB_POINT_TYPE_INVASION_POINT: u32 = 1;
 
-/// `CS::MsbResCap::GetPointDataSectionItemCount(MsbResCap*, MsbPointType)` -- `0x140cf6300`.
+/// `CS::MsbResCap::GetPointDataSectionItemCount(MsbResCap*, MsbPointType)` -- `0x140cf9130` on
+/// 2.7.2.0 (1.16.2 `0x140cf6300`). Addresses in this file's comments are 2.7.2.0 unless labelled
+/// with another build; the reader was first reversed on the 1.16.2 dump.
 ///
 /// Preferred over walking `MsbResCap+0x318 + type*0x10` by hand: the count is the sum of that
 /// static TOC entry and a dynamic overflow vector, so a pointer-walk that knows only about the TOC
 /// silently undercounts any map that populates the vector.
 ///
-/// The overflow vector's layout, corrected against the disassembly of `FUN_140cf6350` (which
+/// The overflow vector's layout, corrected against the disassembly of 1.16.2 `FUN_140cf6350`
+/// (2.7.2.0 `0x140cf9180`, which
 /// computes `RDX = (type << 5) + resCap`, then reads begin at `[RDX+0xa98]` and end at
 /// `[RDX+0xaa0]`): the container starts at `MsbResCap+0xa70`, but the per-type element base is
 /// `+0xa90` with stride `0x20`, and within an element `begin` is at `+0x8` and `end` at `+0x10`.
@@ -63,34 +68,49 @@ pub const MSB_POINT_TYPE_INVASION_POINT: u32 = 1;
 /// IMPORTANT: this count has no readiness gate. `CS::MsbResCap`'s constructor zeroes the header and
 /// the section tables, so a cap that has been constructed but not yet PARSED answers `0` while
 /// already carrying an in-image vtable. See [`EMPTY_READS_BEFORE_OBSERVED`].
-pub const GET_POINT_DATA_SECTION_ITEM_COUNT_RVA: usize = 0xcf_6300;
-/// `CS::CSMsbPoint::CSMsbPoint(out, MsbResCap*, 0, MsbPointType, index)` -- `0x140cf9300`.
-pub const CS_MSB_POINT_CTOR_RVA: usize = 0xcf_9300;
-/// `CS::CSMsbPoint::~CSMsbPoint` -- `0x140cf9500`. The ctor takes a reference on the cap, so the
-/// dtor is not optional bookkeeping.
-pub const CS_MSB_POINT_DTOR_RVA: usize = 0xcf_9500;
-/// `CS::CSMsbPoint::ComputePosition(CSMsbPoint*, FloatVector4* out)` -- `0x140cfaff0`.
-pub const CS_MSB_POINT_COMPUTE_POSITION_RVA: usize = 0xcf_aff0;
-/// `CS::CSMsbPoint::GetAngle(CSMsbPoint*, FloatVector3* out)` -- `0x140cfae60`. Euler degrees;
-/// only `.y` is meaningful for a point, exactly as with an `.aip` record's yaw.
-pub const CS_MSB_POINT_GET_ANGLE_RVA: usize = 0xcf_ae60;
-/// `CS::CSMsbPoint::HasNoShapeData(CSMsbPoint*)` -- `0x140cfbc30`. A point whose shape data is
-/// absent has no position to read; the engine's own consumer skips those and so must we.
-pub const CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA: usize = 0xcf_bc30;
-/// `FUN_140669af0(WorldInfoOwner*, vector* out, 0)` -- `0x140669af0`. Appends the `BlockId` of
-/// every resident world block.
-pub const WORLD_INFO_OWNER_RESIDENT_BLOCKS_RVA: usize = 0x66_9af0;
-/// `FUN_140669ea0(WorldInfoOwner*, BlockId*)` -- `0x140669ea0`. Resolves a block to its
+pub const GET_POINT_DATA_SECTION_ITEM_COUNT_RVA: usize = 0xcf_9130;
+/// `CS::CSMsbPoint::CSMsbPoint(out, MsbResCap*, 0, MsbPointType, index)` -- `0x140cfc130` on
+/// 2.7.2.0 (1.16.2 `0x140cf9300`).
+///
+/// Measured by hand on `eldenring-deobf-1.17.2.bin`, because none of the old cross-build address
+/// maps held a row for it. The evidence: `.pdata` has an entry starting here with the same `0x90`
+/// extent as the 1.16.2 one; both open with the same Arxan `e9` entry stub and make their first
+/// real call at `+0x40` into 1.16.2 `FUN_140cf6350`'s 2.7.2.0 counterpart `0x140cf9180`; both
+/// images have 21 `call`s
+/// to it; and the first of those (`0x140a0d9c4`, 1.16.2 `0x140a0c224`) sets up the same
+/// `(lea rcx,[rbp-0x39]; rdx=r12; r8d=0; r9d=1; [rsp+0x20]=esi)` arguments. It moved by the same
+/// `+0x2e30` as the five natives beside it. The entry is called, never hooked, so calling through
+/// the Arxan stub is what the game's own 21 callers do.
+pub const CS_MSB_POINT_CTOR_RVA: usize = 0xcf_c130;
+/// `CS::CSMsbPoint::~CSMsbPoint` -- `0x140cfc330` (1.16.2 `0x140cf9500`). The ctor takes a
+/// reference on the cap, so the dtor is not optional bookkeeping.
+pub const CS_MSB_POINT_DTOR_RVA: usize = 0xcf_c330;
+/// `CS::CSMsbPoint::ComputePosition(CSMsbPoint*, FloatVector4* out)` -- `0x140cfde20` (1.16.2
+/// `0x140cfaff0`).
+pub const CS_MSB_POINT_COMPUTE_POSITION_RVA: usize = 0xcf_de20;
+/// `CS::CSMsbPoint::GetAngle(CSMsbPoint*, FloatVector3* out)` -- `0x140cfdc90` (1.16.2
+/// `0x140cfae60`). Euler degrees; only `.y` is meaningful for a point, exactly as with an `.aip`
+/// record's yaw.
+pub const CS_MSB_POINT_GET_ANGLE_RVA: usize = 0xcf_dc90;
+/// `CS::CSMsbPoint::HasNoShapeData(CSMsbPoint*)` -- `0x140cfea60` (1.16.2 `0x140cfbc30`). A point
+/// whose shape data is absent has no position to read; the engine's own consumer skips those and
+/// so must we.
+pub const CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA: usize = 0xcf_ea60;
+/// `FUN_14066adf0` (1.16.2 `FUN_140669af0`)`(WorldInfoOwner*, vector* out, 0)`. Appends the
+/// `BlockId` of every resident world block.
+pub const WORLD_INFO_OWNER_RESIDENT_BLOCKS_RVA: usize = 0x66_adf0;
+/// `FUN_14066b1a0` (1.16.2 `FUN_140669ea0`)`(WorldInfoOwner*, BlockId*)`. Resolves a block to its
 /// `MsbResCap`.
-pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
+pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_b1a0;
 /// `FieldArea+0x10` -- the owned `WorldInfoOwner` pointer used by the previous typed
 /// `FieldArea::instance().world_info_owner` path.
 ///
 /// Measured. The previous note here said only that "both the CI-pinned and local binding layouts
 /// pin this field at the same offset", which is two copies of one declaration agreeing with each
 /// other -- the exact shape that left `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` wrong for its whole
-/// life. The instructions: in `CS::FieldArea::FieldArea` (`0x140618bf0`) the constructor's first
-/// act after installing the vtable is
+/// life. The instructions: in `CS::FieldArea::FieldArea` (2.7.2.0 `0x140619ef0`, read on 1.16.2
+/// at `0x140618bf0`, whose disassembly this is) the constructor's first act after installing the
+/// vtable is
 ///
 /// ```text
 ///   140618c2c  call 0x14066d5c0          ; rcx = the WorldInfoOwner* argument
@@ -98,19 +118,20 @@ pub const WORLD_INFO_OWNER_GET_MSB_RES_CAP_RVA: usize = 0x66_9ea0;
 ///   140618c35  mov  [rsi+0x18], r14      ; this->worldInfoOwner2
 /// ```
 ///
-/// with `rsi = this`. `FUN_14066d5c0` is a one-shot ownership claim: it sets a flag inside the
-/// argument's `worldres` and returns the argument (it `DLPanic`s in `WorldRes.cpp:0x482` on a
-/// second claim), so at construction `+0x10` and `+0x18` receive the same pointer -- the "owned"
-/// in the name is about the claim, not about a different object.
+/// with `rsi = this`. 1.16.2 `FUN_14066d5c0` (2.7.2.0 `0x14066e8c0`) is a one-shot ownership
+/// claim: it sets a flag inside the argument's `worldres` and returns the argument (it `DLPanic`s
+/// in `WorldRes.cpp:0x482` on a second claim), so at construction `+0x10` and `+0x18` receive the
+/// same pointer -- the "owned" in the name is about the claim, not about a different object.
 ///
 /// It has not moved: that constructor aligns 311/311 instructions against its 1.17 counterpart
 /// (`0x140619a40`) with 101 `this`-relative offsets and zero moved. Re-measured every run by
-/// `scripts/check-object-field-offsets-1170.py`.
+/// `scripts/check-object-field-offsets.py`.
 pub const FIELD_AREA_WORLD_INFO_OWNER_OFFSET: usize = 0x10;
 /// `FieldArea+0x18` -- `worldInfoOwner2`, the owner the native lookup calls above take. Written by
-/// the very next instruction of the constructor above (`mov [rsi+0x18],r14` at `0x140618c35`), and
-/// held across 1.17 by the same 311/311 alignment. It is the frozen negative for the row above: a
-/// walk that confused the two adjacent `WorldInfoOwner*` members would land here.
+/// the very next instruction of the constructor above (`mov [rsi+0x18],r14` at 1.16.2
+/// `0x140618c35`), and held across 1.17 by the same 311/311 alignment. It is the frozen negative
+/// for the row above: a walk that confused the two adjacent `WorldInfoOwner*` members would land
+/// here.
 pub const FIELD_AREA_WORLD_INFO_OWNER2_OFFSET: usize = 0x18;
 /// `CSMsbPoint+0x18` -- `shapeData`.
 pub const CS_MSB_POINT_SHAPE_DATA_OFFSET: usize = 0x18;
@@ -189,11 +210,12 @@ pub struct MsbInvasionCatalog {
 /// Below this separation, two points of the same map cannot render as two icons.
 ///
 /// The world map's projection is 1:1 in metres and discards Y entirely:
-/// `ConvertMsbCoordsToMapCoords` (0x140876140) keeps only the converted X and Z, and the converter's
-/// scale is the literal `1.0`. `ConvertLegacyDungeonPositionToOverworldPositionForMap`'s tile rebase
-/// subtracts `i*256` on x/z which the projection's `+i*256` term cancels exactly, so relative XZ
-/// distances survive the whole pipeline unchanged -- which is what lets this clustering run in
-/// physics space without needing the ViewModel's converters.
+/// `ConvertMsbCoordsToMapCoords` (0x1408775e0) keeps only the converted X and Z, and the
+/// converter's scale is the literal `1.0`.
+/// `ConvertLegacyDungeonPositionToOverworldPositionForMap`'s tile rebase subtracts `i*256` on x/z
+/// which the projection's `+i*256` term cancels exactly, so relative XZ distances survive the whole
+/// pipeline unchanged -- which is what lets this clustering run in physics space without needing
+/// the ViewModel's converters.
 ///
 /// The pin clip is counter-scaled to a constant screen size, so its footprint in map units is
 /// `screenPixels / zoom`, and the maximum zoom in the table is 2.25 stage-px per map unit. A 40px
@@ -436,14 +458,11 @@ mod native {
     ///
     /// # Why this is cached rather than resolved per read
     ///
-    /// On 1.17 it is not RESOLVABLE at all, and that is not a bug.
-    /// `docs/recon/rva-map-1162-to-1170.verified.tsv` records [`CS_MSB_POINT_CTOR_RVA`]
-    /// (`0x140cf9300`) as deliberately absent: its 1.17 pair `0x140cfa9d0` is correct by 16 caller
-    /// votes -- both bodies write `.?AVDLNonCopyable@DLUT@@`'s vtable -- but the pair verifies
-    /// DIVERGES 0.09 on an Arxan entry-jmp whose targets differ over inert stack-shuffle spills,
-    /// and writing a row that weak would make `refuted_sources()` drop the constructor from the
-    /// call map as well. So the address is genuinely unmapped, this reader is genuinely
-    /// unavailable on 1.17, and the honest behaviour is to say so once and stop asking.
+    /// On any build but 2.7.2.0 none of the six resolves, and the right behaviour there is to say
+    /// so once and stop asking. Until the 2.7.2.0 port this was also the state on 2.7.2.0 itself:
+    /// no address map carried [`CS_MSB_POINT_CTOR_RVA`] past 1.16.2 (its 1.17 pair verified
+    /// DIVERGES 0.09 over the Arxan entry jmp), so the reader was refused. The 2.7.2.0 ctor is now
+    /// measured directly; see the constant.
     ///
     /// Before this cache it asked on every map open: the 2026-08-30 21:16 session's
     /// `er-invasion-warp.log` carries 628 lines of
@@ -593,9 +612,9 @@ mod native {
         msb_res_cap: usize,
     ) -> Option<MapPointRead> {
         // Asked once per process, not once per map open -- and answered `None` for the whole
-        // session on a build where any of the six natives is unmapped. See [`point_api`]: on 1.17
-        // the CSMsbPoint constructor has no verified row, so this reader is genuinely unavailable
-        // and used to refuse 628 times rather than once.
+        // session on a build where any of the six natives is refused, i.e. any build but 2.7.2.0.
+        // See [`point_api`]: before the cache this refused 628 times in one session rather than
+        // once.
         let api = point_api(base)?;
         if !unsafe { msb_res_cap_looks_live(base, msb_res_cap) } {
             // Not loaded. Say so, so the caller leaves this block unobserved and looks again once
@@ -666,9 +685,9 @@ mod native {
     /// Every resident block paired with its `MsbResCap`.
     ///
     /// Walks the typed `FieldArea -> WorldInfoOwner -> WorldRes -> WorldInfo` binding rather than
-    /// calling `FUN_140669af0`: that native fills a `std::vector` with the game's allocator, and
-    /// owning the lifetime of an engine-allocated vector from here is a leak-or-crash choice with
-    /// no upside. The slice is already exactly the resident set.
+    /// calling [`WORLD_INFO_OWNER_RESIDENT_BLOCKS_RVA`]: that native fills a `std::vector` with the
+    /// game's allocator, and owning the lifetime of an engine-allocated vector from here is a
+    /// leak-or-crash choice with no upside. The slice is already exactly the resident set.
     ///
     /// # Safety
     ///
@@ -841,8 +860,9 @@ mod tests {
 
     #[test]
     fn the_invasion_point_type_is_the_byte_verified_edx_value() {
-        // `0x140a0c1f1` loads EDX = 1 for the InvasionPoint section. If this drifts, the reader
-        // silently enumerates a different region subtype and every marker is wrong.
+        // 2.7.2.0 `0x140a0d991` (1.16.2 `0x140a0c1f1`) loads EDX = 1 for the InvasionPoint
+        // section. If this drifts, the reader silently enumerates a different region subtype and
+        // every marker is wrong.
         assert_eq!(MSB_POINT_TYPE_INVASION_POINT, 1);
     }
 

@@ -16,24 +16,27 @@ use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem, mov_r64_
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
 /// `bool CS::SpecialEffect::HasSpecialEffectId(SpecialEffect *container, uint spEffectId)`.
-const HAS_SPECIAL_EFFECT_ID_VA: u64 = 0x1404f9940;
-/// The `container->head == null` early-out `HasSpecialEffectId` jumps to; the branch is part of
-/// the checked prologue, so its destination has to be named too.
-const HAS_SPECIAL_EFFECT_ID_EMPTY_RETURN_VA: u64 = 0x1404f995e;
+/// Every VA in this file is a 2.7.2.0 VA in `eldenring-deobf-1.17.2.bin`.
+const HAS_SPECIAL_EFFECT_ID_VA: u64 = 0x1404fa7f0;
+/// The `container->head == null` early-out `HasSpecialEffectId` jumps to (`+0x1e`, its own
+/// `XOR AL,AL; RET`); the branch is part of the checked prologue, so its destination has to be
+/// named too.
+const HAS_SPECIAL_EFFECT_ID_EMPTY_RETURN_VA: u64 = 0x1404fa80e;
 /// `int CS::SpecialEffect::Apply(SpecialEffect *container, int spEffectId, ChrIns *, ChrIns *,
 /// FloatVector4 *, byte, bool, byte)`.
-const APPLY_VA: u64 = 0x1404fa8e0;
-/// `FUN_140d3d5f0(out, platformKind)` -- the `LoadBalancerParam` row lookup that `DLPanic`s when
-/// `SoloParamRepository` is null. See `guards::null_param_repository`.
-const LOAD_BALANCER_PARAM_VA: u64 = 0x140d3d5f0;
+const APPLY_VA: u64 = 0x1404fb790;
+/// `FUN_140d3d5f0(out, platformKind)` (1.16.2 dump name) -- the `LoadBalancerParam` row lookup
+/// that `DLPanic`s when `SoloParamRepository` is null. See `guards::null_param_repository`.
+const LOAD_BALANCER_PARAM_VA: u64 = 0x140d404a0;
 /// `void CS::MapItemManImpl::GiveItems(...)`. See `mid_hooks::give_items`.
-const GIVE_ITEMS_VA: u64 = 0x1405605b0;
-/// Offsets into `GiveItems`, identical in 1.16.2 and 1.17.1 (the body is `IDENTICAL-WHOLE`).
+const GIVE_ITEMS_VA: u64 = 0x1405618b0;
+/// Offsets into `GiveItems`, identical in 1.16.2, 1.17.1 and 2.7.2.0 (the 2.7.2.0 body has the
+/// same instruction at every offset).
 const GIVE_ITEMS_STORAGE_OVERFLOW_LOAD: u64 = 0x1d9;
 const GIVE_ITEMS_STORAGE_ABSENT_JOIN: u64 = 0x2f3;
 const GIVE_ITEMS_PICKUP_LOG_LOAD: u64 = 0x34a;
 const GIVE_ITEMS_PICKUP_NOT_MINE: u64 = 0x3c1;
-/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+/// Each window's address, named so `verify-aob-patterns.py` can read the spec's `va:`.
 const STORAGE_OVERFLOW_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_OVERFLOW_LOAD;
 const STORAGE_ABSENT_JOIN_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_STORAGE_ABSENT_JOIN;
 const PICKUP_LOG_LOAD_VA: u64 = GIVE_ITEMS_VA + GIVE_ITEMS_PICKUP_LOG_LOAD;
@@ -46,13 +49,13 @@ const CHR_INS_GET_PLAYER_GAME_DATA_SLOT: i32 = 0x168;
 const SEH_FRAME_UNINITIALISED: i32 = -2;
 /// The leak assertion inside `CS::CSFreeListMemorySystem`'s shutdown, at the `CMP` that decides
 /// whether to break. See `patches::freelist_shutdown_assert`.
-const FREELIST_SHUTDOWN_ASSERT_VA: u64 = 0x140c57670;
+const FREELIST_SHUTDOWN_ASSERT_VA: u64 = 0x140c59270;
 /// Where the assertion's `JZ` lands: one byte past the `INT3`, which is also where the `INT3`
 /// itself falls through to. Naming it is the whole argument for the patch, so it is named here
 /// rather than encoded as a displacement.
-const FREELIST_SHUTDOWN_ASSERT_RESUME_VA: u64 = 0x140c57677;
+const FREELIST_SHUTDOWN_ASSERT_RESUME_VA: u64 = 0x140c59277;
 /// Offset within the node of the "this thread-local free-list is still checked out" flag the
-/// assertion tests. Set by the registrar at `0x140c579f0`.
+/// assertion tests. Set by the registrar at `0x140c595f0`.
 const FREE_LIST_NODE_IN_USE_FLAG: i64 = 0x18;
 /// Offset of the allocator the shutdown loop calls `Free` through, loaded by the instruction
 /// immediately after the `INT3` -- the one that pins the far side of the window.
@@ -65,11 +68,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "HAS_SPECIAL_EFFECT_ID_PROLOGUE",
-                    doc: "1.16.2 prologue of `CS::SpecialEffect::HasSpecialEffectId`:\n\
+                    doc: "2.7.2.0 prologue of `CS::SpecialEffect::HasSpecialEffectId`:\n\
                           `MOV RCX,[RCX+8]; TEST RCX,RCX; JZ +0x15`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: HAS_SPECIAL_EFFECT_ID_VA,
                     take: 0,
                     pin: &[0x48, 0x8b, 0x49, 0x08, 0x48, 0x85, 0xc9, 0x74, 0x15],
@@ -84,11 +87,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "APPLY_PROLOGUE",
-                    doc: "1.16.2 prologue of `CS::SpecialEffect::Apply`:\n\
+                    doc: "2.7.2.0 prologue of `CS::SpecialEffect::Apply`:\n\
                           `MOV [RSP+0x10],RBP; MOV [RSP+0x18],RSI`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: APPLY_VA,
                     take: 0,
                     pin: &[0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18],
@@ -108,11 +111,11 @@ fn main() {
         &[(
             PrologueSpec {
                 name: "LOAD_BALANCER_PARAM_PROLOGUE",
-                doc: "1.16.2 prologue of the `LoadBalancerParam` row lookup:\n\
+                doc: "2.7.2.0 prologue of the `LoadBalancerParam` row lookup:\n\
                       `PUSH R14; SUB RSP,0x40; MOV [RSP+0x20],-2`.",
                 visibility: "pub(crate)",
                 shape: Shape::Slice,
-                image: Image::EldenRing,
+                image: Image::EldenRing2720,
                 va: LOAD_BALANCER_PARAM_VA,
                 take: 0,
                 pin: &[
@@ -152,11 +155,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "STORAGE_OVERFLOW_LOAD_WINDOW",
-                    doc: "1.16.2 `GiveItems+0x1d9`, the storage-overflow branch's player load:\n\
+                    doc: "2.7.2.0 `GiveItems+0x1d9`, the storage-overflow branch's player load:\n\
                           `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: STORAGE_OVERFLOW_LOAD_VA,
                     take: 0,
                     pin: MAIN_PLAYER_LOAD_PIN,
@@ -166,11 +169,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "PICKUP_LOG_LOAD_WINDOW",
-                    doc: "1.16.2 `GiveItems+0x34a`, the pickup-log branch's player load:\n\
+                    doc: "2.7.2.0 `GiveItems+0x34a`, the pickup-log branch's player load:\n\
                           `MOV RCX,[RCX+0x1e508]; MOV RAX,[RCX]; CALL [RAX+0x168]`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PICKUP_LOG_LOAD_VA,
                     take: 0,
                     pin: MAIN_PLAYER_LOAD_PIN,
@@ -180,11 +183,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "STORAGE_ABSENT_JOIN_WINDOW",
-                    doc: "1.16.2 `GiveItems+0x2f3`, where the no-storage-chest branch rejoins:\n\
+                    doc: "2.7.2.0 `GiveItems+0x2f3`, where the no-storage-chest branch rejoins:\n\
                           `MOV ESI,[RSP+0x34]`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: STORAGE_ABSENT_JOIN_VA,
                     take: 0,
                     pin: &[0x8b, 0x74, 0x24, 0x34],
@@ -198,11 +201,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "PICKUP_NOT_MINE_WINDOW",
-                    doc: "1.16.2 `GiveItems+0x3c1`, the branch for an item another player gave:\n\
+                    doc: "2.7.2.0 `GiveItems+0x3c1`, the branch for an item another player gave:\n\
                           `AND EDI,-2`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PICKUP_NOT_MINE_VA,
                     take: 0,
                     pin: &[0x83, 0xe7, 0xfe],
@@ -221,13 +224,13 @@ fn main() {
         &[(
             PrologueSpec {
                 name: "FREELIST_SHUTDOWN_ASSERT_WINDOW",
-                doc: "1.16.2 bytes of the leak assertion in `CS::CSFreeListMemorySystem`'s\n\
+                doc: "2.7.2.0 bytes of the leak assertion in `CS::CSFreeListMemorySystem`'s\n\
                       shutdown: `CMP byte [RDX+0x18],0; JZ +1; INT3; MOV RCX,[RDI+8]`.\n\
                       The `JZ` and the `MOV` are in the window on purpose -- they are what prove\n\
                       the `INT3` is advisory, and they pin an address a bare `0xcc` could not.",
                 visibility: "pub(crate)",
                 shape: Shape::Slice,
-                image: Image::EldenRing,
+                image: Image::EldenRing2720,
                 va: FREELIST_SHUTDOWN_ASSERT_VA,
                 take: 0,
                 pin: &[

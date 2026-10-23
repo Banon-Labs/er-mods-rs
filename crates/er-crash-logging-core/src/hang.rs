@@ -55,14 +55,14 @@ use crate::{
     safe_read_usize, utc_timestamp,
 };
 
-/// `eldenring.exe` 1.16.2: the dword `MainUpdate` (`0x140dea370`) increments once per main-loop
-/// frame, at `0x140dea394` -- `INC dword ptr [0x143d8567c]`. Image base is `0x140000000`, so the
+/// `eldenring.exe` 2.7.2.0: the dword `MainUpdate` (`0x140ded8d0`) increments once per main-loop
+/// frame, at `0x140ded8f4` -- `INC dword ptr [0x143d8c71c]`. Image base is `0x140000000`, so the
 /// runtime address is the loaded exe base plus this RVA.
 ///
 /// This is the one version-pinned constant in the module. `validate_frame_counter` is what keeps it
 /// honest on any other build.
 #[cfg(any(windows, test))]
-const GAME_FRAME_COUNTER_RVA: usize = 0x3d8_567c;
+const GAME_FRAME_COUNTER_RVA: usize = 0x3d8_c71c;
 
 /// Executable this counter belongs to. Checked case-insensitively before the RVA is read at all, so
 /// the watchdog stays inert if the crate is ever loaded into some other host process.
@@ -307,7 +307,7 @@ pub mod framedrop {
 // it watches was stalled.
 //
 // What is stalled is visible one level down, in `CS::LoadingScreenData` (class name read from
-// live MSVC RTTI; vtable 0x142a9be10 in 1.16.2):
+// live MSVC RTTI; vtable 0x142aa0f80 in 2.7.2.0):
 //
 //     +0x0c  u32   already-closed latch
 //     +0x11  u8    close gate -- the update refuses to finish while this is 0
@@ -318,7 +318,7 @@ pub mod framedrop {
 //     +0x24  f32   ELAPSED (seconds), advances 1.0/s
 //
 // The subtlety that makes this oracle correct where a naive one is wrong: `+0x1c` is not a
-// progress counter, it is the target of an interpolation. The game's getter (0x140860d40)
+// progress counter, it is the target of an interpolation. The game's getter (0x1408621e0)
 // returns lerp(start, target, elapsed/duration), clamped to the target once elapsed exceeds
 // duration. So a bar frozen at 12% does not mean an animation is stuck mid-flight -- it means
 // the last animation completed and no producer ever supplied a new target. In the captured
@@ -357,7 +357,7 @@ pub mod loading_screen {
     impl Sample {
         /// A screen that is displaying, unfinished, and not yet finalized or closed.
         ///
-        /// `active < 0` is the reset state written by the game's own teardown (0x140860d90), so
+        /// `active < 0` is the reset state written by the game's own teardown (0x140862230), so
         /// an inactive screen is not a stall -- it is the absence of a loading screen.
         ///
         /// A target of 1.0 is excluded, and that exclusion was paid for: the first live firing of
@@ -438,7 +438,7 @@ pub mod loading_screen {
 /// Live `CS::LoadingScreenData` pointer, published by whoever already has it.
 ///
 /// This DLL deliberately does not hook the loading-screen update to obtain it. That prologue
-/// (`LOADING_SCREEN_UPDATE_RVA` = 0x90a6b0) is already detoured by `er-loading-portrait-core`, which
+/// (`LOADING_SCREEN_UPDATE_RVA` = 0x90bd00) is already detoured by `er-loading-portrait-core`, which
 /// the product links, and a second MinHook instance on one prologue is the documented
 /// trampoline-corruption conflict this repo tracks in `scripts/me3-dll-conflicts.toml`. So the
 /// witness consumes a pointer instead of competing for the hook: zero when nobody publishes one,
@@ -1548,7 +1548,7 @@ mod tests {
                 ..pending
             }
             .is_pending(),
-            "active = -1 is the game's own reset state (0x140860d90), not a loading screen"
+            "active = -1 is the game's own reset state (0x140862230), not a loading screen"
         );
     }
 
@@ -1593,9 +1593,9 @@ mod tests {
 
     #[test]
     fn frame_counter_rva_matches_main_update_increment() {
-        // `MainUpdate` @ 0x140dea370 contains `INC dword ptr [0x143d8567c]` at 0x140dea394.
-        // Image base 0x140000000, so the counter's RVA is 0x3d8567c.
-        assert_eq!(0x1_4000_0000_usize + GAME_FRAME_COUNTER_RVA, 0x1_43d8_567c);
+        // 2.7.2.0 `MainUpdate` @ 0x140ded8d0 contains `INC dword ptr [0x143d8c71c]` at
+        // 0x140ded8f4. Image base 0x140000000, so the counter's RVA is 0x3d8c71c.
+        assert_eq!(0x1_4000_0000_usize + GAME_FRAME_COUNTER_RVA, 0x1_43d8_c71c);
     }
 
     #[test]

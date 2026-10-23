@@ -90,13 +90,13 @@ static DISPATCH_FIRST_LATCHED_LANE: AtomicUsize = AtomicUsize::new(SAVE_LANE_NON
 ///
 /// `iodev+0x10 != 0` with `saveState == 0`: the device holds save content, and the mutex that
 /// would make anything poll it is free. Every submit path sets `saveState = 1` at its commit tail
-/// and only `FUN_140e6f200` clears `+0x10`, so the pair cannot occur in a healthy transaction --
+/// and only `FUN_140e72760` clears `+0x10`, so the pair cannot occur in a healthy transaction --
 /// it is the wedge, seen from the dispatch that the wedge is refusing.
 ///
 /// Deliberately LOOSER than [`save_request_is_orphaned`], and the difference is not an oversight.
 /// That predicate gates a call into the engine, so it additionally demands `load_content == 0` and
 /// `file_cap == 0` -- release the device while the load side or a deferred build also owns it and
-/// `FUN_140e6f200` frees their objects too. This one gates a counter and a log line, so narrowing
+/// `FUN_140e72760` frees their objects too. This one gates a counter and a log line, so narrowing
 /// it the same way would make the instrument blind to precisely the compound states hardest to
 /// reason about, for a safety margin nothing here needs.
 ///
@@ -123,7 +123,7 @@ pub fn dispatch_latched_declines() -> u64 {
 ///
 /// `save_content` (`iodev+0x10`) is the `SLSaveContent` of the submit that is still on the device.
 /// Compare it against the accept records to name which submit wedged; `job` (`iodev+0x20`) says
-/// whether that submit reached `FUN_140e6fb50` (non-zero) or was deferred/never enqueued (zero).
+/// whether that submit reached `FUN_140e730b0` (non-zero) or was deferred/never enqueued (zero).
 pub fn dispatch_first_latched_slot() -> Option<SlRequestSlot> {
     (DISPATCH_FIRST_LATCHED_SEEN.load(Ordering::SeqCst) != 0)
         .then(|| DISPATCH_FIRST_LATCHED_SLOT.snapshot())

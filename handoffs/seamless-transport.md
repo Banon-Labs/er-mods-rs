@@ -201,7 +201,7 @@ Goal: Find whether a map NPC's animation can be driven through a vanilla/network
 
 Context/evidence:
 - Current possession fires attacks with local `CSChrEventModule+0x18 requestAnimationId` (`possess/mod.rs:20-24`), which `netdamage.rs:79-85` says is not published.
-- Ghidra named dump is available; use 1.16.2 names and map addresses for 1.17.1 as required.
+- Ghidra named dump is available; use 1.16.2 names, and find each address on `eldenring-deobf-1.17.2.bin` by its bytes before using it (`docs/game-build.md`).
 
 Suggested approach:
 - Static RE of normal NPC owner update / animation event propagation in ER, not runtime first.

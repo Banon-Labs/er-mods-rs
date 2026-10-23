@@ -1,7 +1,7 @@
 // Reload the current map in place: the game's own TriggerAreaReload(false), 1.17.1 0x1405f36e0 ->
 // 2.7.2.0 0x1405f3b90 (bd great-jar-sign-flags-1171-2026-10-06), called once on the frame thread.
 // The frame tick is CSFeManImp::UpdatePlayerComponents, 1.17.1 0x140773900 -> 2.7.2.0 0x140773db0.
-// Both carried with scripts/map-rvas-1171-to-1172.py, and each whole function is byte-identical in
+// Both are 2.7.2.0 addresses, and each whole function is byte-identical in
 // eldenring-deobf-1.17.2.bin apart from relocated call and data operands.
 //
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/area-reload.js

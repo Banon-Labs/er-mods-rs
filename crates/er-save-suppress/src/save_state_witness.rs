@@ -5,21 +5,22 @@
 // this one hunts the cause of. That block ends at "once `saveState` leaves 1 with `+0x10` still
 // populated, nothing will ever poll the device again"; everything here is about the word "leaves".
 //
-// What static analysis settled, and where it stopped (1.16.2 decompiles, shift 0). Exactly three
-// writes can take `saveState` out of 1 while leaving `iodev+0x10` populated:
+// What static analysis settled, and where it stopped (1.16.2 decompiles; the names are the 2.7.2.0
+// functions). Exactly three writes can take `saveState` out of 1 while leaving `iodev+0x10`
+// populated:
 //
-//  1. `FUN_140679180` -> `FUN_140e6e080` returns 4 on the spot when `iodev+0x18 == 0` (that field
+//  1. `FUN_14067a480` -> `FUN_140e715e0` returns 4 on the spot when `iodev+0x18 == 0` (that field
 //     belongs to a load, so it is 0 for the whole life of a save) and releases nothing; the wrapper
 //     then writes `saveState = 0` for any answer that is not 0 or 1. No other state is required, so
 //     this is the one that needs no coincidence.
-//  2. `FUN_140679180`'s own first branch writes `saveState = 3` when `GameMan+0xdd0` is a non-empty
+//  2. `FUN_14067a480`'s own first branch writes `saveState = 3` when `GameMan+0xdd0` is a non-empty
 //     string -- also without releasing. That leaves the orphan one write short, and needs a second
 //     writer to bring 3 down to 0.
-//  3. `FUN_140679510` -> `FUN_140e6e430` -> (`iodev+0x28 != 0`) `FUN_140e6f370` can return 9 after
+//  3. `FUN_14067a810` -> `FUN_140e71990` -> (`iodev+0x28 != 0`) `FUN_140e728d0` can return 9 after
 //     clearing `+0x28` alone, and the wrapper writes `saveState = 0`. Narrower: it needs a deferred
 //     file cap parked on the device and its enqueue to fail.
 //
-// Every other non-1 answer from either poll passes through `FUN_140e6f200` first, so it clears
+// Every other non-1 answer from either poll passes through `FUN_140e72760` first, so it clears
 // `+0x10` on the way out and cannot produce the signature. That is as far as reading gets: all three
 // are reachable, and which one fired is a fact about a particular frame, not about the code.
 //
@@ -33,37 +34,35 @@
 // the 1 the game held one instruction earlier, so the save it just lost goes back to the game's own
 // pump. `save_state_device.rs` carries why that is a repair rather than a policy, and why the save
 // lane deliberately does not get the same treatment: its only non-releasing answer comes from
-// `FUN_140e6f370`, which clears `iodev+0x28` on the way out, so a re-poll takes a different branch
+// `FUN_140e728d0`, which clears `iodev+0x28` on the way out, so a re-poll takes a different branch
 // and the state it leaves is the orphan `drain_orphaned_save_request` is built for. Restoring there
 // would hand a repaired-looking state to a repair that then cannot see it.
 //
-// Why both WRAPPERS and not just the load poll. Reporting only `FUN_140679180` would make case 3
+// Why both WRAPPERS and not just the load poll. Reporting only `FUN_14067a480` would make case 3
 // invisible, and an instrument that can only confirm the hypothesis it was built for is not
 // evidence. Both are chained through the hook union, so the product's existing detour on
-// `FUN_140679180` (the menu trace) keeps working and neither owner is silently dropped.
+// `FUN_14067a480` (the menu trace) keeps working and neither owner is silently dropped.
 
-/// `FUN_140679180` (1.16.2): the load-side poll wrapper. Writes `saveState` 3 or 0 depending on
-/// `FUN_140e6e080`'s answer. 1.17 `0x140679fd0`, verdict identical-whole over 39 instructions,
-/// both-entries, PDATA:0x94/0x94 (`docs/recon/rva-map-1162-to-1170.needed-verified.tsv`).
+/// `FUN_14067a480`: the load-side poll wrapper. Writes `saveState` 3 or 0 depending on
+/// `FUN_140e715e0`'s answer.
 const SAVE_STATE_LOAD_POLL_RVA: usize = er_game_base::rva::SL_LOAD_POLL_WRAPPER_RVA;
 
-/// `FUN_140679510` (1.16.2): the save-side lane wrapper. Writes `saveState = 0` for any
-/// `FUN_140e6e430` answer that is not 1. 1.17 `0x14067a360`, identical-whole over 15 instructions,
-/// both-entries, 9B relocatable.
+/// `FUN_14067a810`: the save-side lane wrapper. Writes `saveState = 0` for any
+/// `FUN_140e71990` answer that is not 1.
 ///
 /// Its `MOVSS XMM1` is a dead store, checked rather than assumed. The wrapper loads a float into
-/// XMM1 immediately before `call FUN_140e6e430`, which looks exactly like a float second argument
-/// and would make the union's all-integer shape wrong for it. `FUN_140e6e430` reads zero XMM
-/// registers -- 126 instructions on 1.17 (`0x140e70230`), none of them touching XMM, opening
-/// `MOV RBX,RCX; CMP [RCX+0x10],0` on its single integer parameter. The same `MOVSS` is present on
-/// 1.16.2 at `0x140679519`, so it is not migration drift either. The union shape is correct here.
+/// XMM1 immediately before `call FUN_140e71990`, which looks exactly like a float second argument
+/// and would make the union's all-integer shape wrong for it. `FUN_140e71990` reads zero XMM
+/// registers -- none of its instructions touch XMM, and it opens `MOV RBX,RCX; CMP [RCX+0x10],0`
+/// on its single integer parameter. The same `MOVSS` sits at `0x14067a819` on 2.7.2.0 and at the
+/// same offset on 1.16.2, so it is not migration drift either. The union shape is correct here.
 const SAVE_STATE_SAVE_LANE_RVA: usize = er_game_base::rva::SL_SAVE_LANE_WRAPPER_RVA;
 
 /// No abandoning write has been observed.
 pub const SAVE_STATE_SITE_NONE: usize = 0;
-/// The load-side poll `FUN_140679180` was the writer.
+/// The load-side poll `FUN_14067a480` was the writer.
 pub const SAVE_STATE_SITE_LOAD_POLL: usize = 1;
-/// The save-side lane `FUN_140679510` was the writer.
+/// The save-side lane `FUN_14067a810` was the writer.
 pub const SAVE_STATE_SITE_SAVE_LANE: usize = 2;
 
 /// Does an abandoning write at this site get `saveState` put back?
@@ -71,11 +70,11 @@ pub const SAVE_STATE_SITE_SAVE_LANE: usize = 2;
 /// Only the load poll. Pure and total so the scoping rule can be exercised with no game attached,
 /// because it is a decision about which native branch is being undone, not about a runtime value:
 ///
-/// * `FUN_140679180` reaches its `saveState = 0` through `FUN_140e6e080`'s `iodev+0x18 == 0`
+/// * `FUN_14067a480` reaches its `saveState = 0` through `FUN_140e715e0`'s `iodev+0x18 == 0`
 ///   early-out, which releases nothing and leaves the device byte-identical. Putting the 1 back
 ///   restores exactly the state the game had one instruction earlier, and the game's own pump
 ///   finishes the save from there.
-/// * `FUN_140679510`'s only non-releasing answer comes from `FUN_140e6f370`, which UNLOADS the
+/// * `FUN_14067a810`'s only non-releasing answer comes from `FUN_140e728d0`, which UNLOADS the
 ///   file cap and zeroes `iodev+0x28` before returning 9. The device is no longer what it was, a
 ///   re-poll would take the `+0x28 == 0` branch instead, and the state left behind is precisely
 ///   the orphan `drain_orphaned_save_request` exists to release. Restoring there would hide it.
@@ -86,14 +85,14 @@ pub fn save_state_site_takes_the_repair(site: usize) -> bool {
 /// Name the site that abandoned a save.
 pub fn save_state_site_label(site: usize) -> &'static str {
     match site {
-        SAVE_STATE_SITE_LOAD_POLL => "load-poll-0x679180",
-        SAVE_STATE_SITE_SAVE_LANE => "save-lane-0x679510",
+        SAVE_STATE_SITE_LOAD_POLL => "load-poll-0x67a480",
+        SAVE_STATE_SITE_SAVE_LANE => "save-lane-0x67a810",
         // The three writes `save_state_writers.rs` completes the set with. Named here rather than
         // there so one table answers "which site" for every site, and a new one cannot be added
         // without a reader noticing the others.
-        SAVE_STATE_SITE_MENUJOB_LOADWAIT => "menujob-loadwait-0x678e00",
-        SAVE_STATE_SITE_SAVE_LANE_ALT => "save-lane-alt-0x6794b0",
-        SAVE_STATE_SITE_SETTER => "setsavestate-0x67ac90",
+        SAVE_STATE_SITE_MENUJOB_LOADWAIT => "menujob-loadwait-0x67a100",
+        SAVE_STATE_SITE_SAVE_LANE_ALT => "save-lane-alt-0x67a7b0",
+        SAVE_STATE_SITE_SETTER => "setsavestate-0x67bf90",
         _ => "none",
     }
 }
@@ -108,7 +107,7 @@ pub fn save_state_site_label(site: usize) -> &'static str {
 /// * `after_state` must have left `SAVE_OWNS`. Staying at 1 is the healthy in-flight answer and by
 ///   far the common case.
 /// * the device must still hold the save afterwards. A normal completion goes through
-///   `FUN_140e6f200` and comes back with `save_content` and `job` at zero -- that is the poll doing
+///   `FUN_140e72760` and comes back with `save_content` and `job` at zero -- that is the poll doing
 ///   its job, and reporting it would bury the real event in noise.
 /// * an unreadable sample on either side proves nothing and is never a finding.
 pub fn poll_abandoned_a_save(
@@ -136,9 +135,9 @@ static LOAD_POLL_ANSWERS_SEEN: core::sync::atomic::AtomicU32 = core::sync::atomi
 
 /// Every distinct answer the load poll has given, low answer first.
 ///
-/// The poll is `FUN_140679180`: `0` and an already-set error string both mean done, `1` means the
+/// The poll is `FUN_14067a480`: `0` and an already-set error string both mean done, `1` means the
 /// read is still in flight, and everything else is an error that also forces `saveState` to `0`.
-/// The two this has produced in the wild come straight out of `FUN_140e6e080`, which it wraps:
+/// The two this has produced in the wild come straight out of `FUN_140e715e0`, which it wraps:
 ///
 /// | answer | what the game measured |
 /// |---|---|
@@ -235,7 +234,7 @@ unsafe fn witness_call(
     let original: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(raw) };
     let answer = unsafe { original(a, b, c, d) };
     // Which answer the load poll gave, once per distinct value (bd er-effects-rs-1742). The whole
-    // ProfileSummary boot fill hangs off this number: `STEP_LoadSaveData_Wait` (1.17 0x140af2d40)
+    // ProfileSummary boot fill hangs off this number: `STEP_LoadSaveData_Wait` (0x140af3200)
     // fills the summary only when this returns 3. Return 0 is the "done" path and advances without
     // filling; 2 falls through to state 3 without filling; 4..9 are errors. The call count was
     // already witnessed (4 calls on the parked run) but the counts cannot tell those branches
@@ -245,7 +244,7 @@ unsafe fn witness_call(
         let bit = 1u32 << (answer as u32 & 31);
         if LOAD_POLL_ANSWERS_SEEN.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
             log_message(format_args!(
-                "save-state-witness: load poll 0x679180 returned {answer} for the FIRST time                  (saveState {before_state:?} -> {after_state_preview:?}); 3 is the only answer that                  fills ProfileSummary in STEP_LoadSaveData_Wait, 0 advances without filling",
+                "save-state-witness: load poll 0x67a480 returned {answer} for the FIRST time                  (saveState {before_state:?} -> {after_state_preview:?}); 3 is the only answer that                  fills ProfileSummary in STEP_LoadSaveData_Wait, 0 advances without filling",
                 after_state_preview = read_save_state()
             ));
         }
@@ -315,7 +314,7 @@ fn note_abandoning_write(
             },
             if repaired {
                 "saveState PUT BACK to 1, so the game's own pump finishes the save and runs \
-                 `FUN_140e6f200`"
+                 `FUN_140e72760`"
             } else if save_state_site_takes_the_repair(site) {
                 "the repair could NOT be written (GameMan unaddressable), so nothing polls this \
                  save now and every later submit is refused"
@@ -371,9 +370,9 @@ unsafe extern "system" fn save_state_save_lane_witness(
 
 /// Chain both witnesses onto the wrappers. Never fatal: a failure costs attribution, not saving.
 ///
-/// Registered through [`register_union_hook`], which resolves each 1.16.2 constant through the
-/// detour-safe table -- the same audit `mh_install_hook_once` relies on -- and chains rather than
-/// competing with the product's existing detour on `FUN_140679180`.
+/// Registered through [`register_union_hook`], which checks each 2.7.2.0 rva against the detour
+/// allowlist -- the same audit `mh_install_hook_once` relies on -- and chains rather than
+/// competing with the product's existing detour on `FUN_14067a480`.
 #[cfg(windows)]
 pub fn install_save_state_witness() {
     for (rva, handler, orig, name) in [
@@ -381,19 +380,17 @@ pub fn install_save_state_witness() {
             SAVE_STATE_LOAD_POLL_RVA,
             save_state_load_poll_witness as UnionFn,
             &ORIG_SAVE_STATE_LOAD_POLL,
-            "load poll 0x679180",
+            "load poll 0x67a480",
         ),
         (
             SAVE_STATE_SAVE_LANE_RVA,
             save_state_save_lane_witness as UnionFn,
             &ORIG_SAVE_STATE_SAVE_LANE,
-            "save lane 0x679510",
+            "save lane 0x67a810",
         ),
     ] {
         // Non-resolving on purpose (`game_rva_for_hook`, not `game_rva`): `register_union_hook`
-        // owns the single 1.16.2 -> 1.17 resolve. Resolving here as well would hand it an address
-        // that can be both a destination of one row and the source of another, and the detour lands
-        // on a third function in silence -- `scripts/check-double-resolved-hook-targets.py`.
+        // owns the single build and detour-allowlist check, and
         let Ok(address) = er_game_base::mem::game_rva_for_hook(rva as u32) else {
             log_message(format_args!(
                 "suppress: save-state witness could not resolve {name}; an abandoned save will stay \
@@ -481,7 +478,7 @@ mod save_state_witness_tests {
             Some(GAME_MAN_SAVE_STATE_LOAD_RESIDENT),
             Some(latched())
         ));
-        // A healthy completion: the poll's terminal arm ran `FUN_140e6f200`, so the device came
+        // A healthy completion: the poll's terminal arm ran `FUN_140e72760`, so the device came
         // back empty. This is the common case and must never be reported.
         assert!(!poll_abandoned_a_save(
             Some(GAME_MAN_SAVE_STATE_SAVE_OWNS),

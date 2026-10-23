@@ -3,6 +3,8 @@
 //! # The chain, decoded 2026-09-05 from the 1.16.2 Ghidra dump (`:8765`) and byte-checked in both
 //! # `eldenring-deobf.bin` and `eldenring-deobf-1.17.bin`
 //!
+//! The addresses in this chain are 1.16.2; the 2.7.2.0 ones the code uses are in the next section.
+//!
 //! 1. `CS::CSPadStep::STEP_Update` (1.16.2 `0x140e33aa0`, called from `FUN_1400b3f40`) opens its
 //!    input update with
 //!
@@ -53,43 +55,39 @@
 //!    with `if (GLOBAL_FD4PadManager->field625_0x2f9 == false) { ...read the pad... }`. So a probe
 //!    that writes a stick into the live `FD4PadDevice` writes into a device nothing will read.
 //!
-//! # The 1.17 address
+//! # The 2.7.2.0 addresses
 //!
-//! `docs/recon/rva-map-1162-to-1170.functions.tsv` already carries both callers
-//! (`0xe33aa0 -> 0xe358a0`, `0xe328d0 -> 0xe346d0`). Decoding those two 1.17 functions
-//! (`scripts/find-debug-flag-getter.py`) finds the getter call at the identical byte offsets --
-//! `+0xa3c` and `+0x7e` -- both reaching one stub at `0x140e55020`, which reads `0x14458cb71`.
-//! That is `0x4588af1 + 0x4080`, and `+0x4080` is the delta every already-mapped `.data` neighbour
-//! moved by (`0x4588e98`, `0x4589390`, `0x45896a8`, `0x4589ad8`, `0x4589bdc`).
-//! `scripts/map-data-rvas-1162-to-1170.py 0x4588af1 --confirm 0x458cb71` agrees, and the pair is
-//! recorded in that script's `SHAPE_RESCUED` table so the generated map carries it.
+//! The byte is `0x14458fb91`: the only `movzx eax, byte ptr [rip+..]; lea rsp,[rsp+8];
+//! jmp [rsp-8]` stub in `eldenring-deobf-1.17.2.bin` that reads it sits at `0x1404702b2`. The
+//! `DLUID+0x88d` latch below is cleared by the image's only `mov byte ptr [rdi+0x88d], 0`, at
+//! `0x141f2c81d`.
 //!
 //! # What was eliminated
 //!
 //! * **Patching `IsGameInForeground` itself** -- a user directive already forbids it (2026-07-16,
 //!   `crates/er-title-flow/src/constants_autoload_state.rs`), and the reason is visible right here:
-//!   `CSMouseMan::Update` (`0x140e1e500`) calls `FUN_140e1eac0` (`ClipCursor` / `SetCursorPos`) and
-//!   `FUN_140e1ecb0` (`ShowCursor`), each gated by `FUN_140e1e620`, which itself calls
-//!   `IsGameInForeground`. Forcing the predicate true confines the OS cursor to an unfocused
+//!   `CSMouseMan::Update` (2.7.2.0 `0x140e21a60`) calls `0x140e22020` (`ClipCursor` /
+//!   `SetCursorPos`) and `0x140e22210` (`ShowCursor`), each gated by `0x140e21b80`, which itself
+//!   calls `IsGameInForeground`. Forcing the predicate true confines the OS cursor to an unfocused
 //!   window. Forcing the debug byte does not: the cursor gate keeps reading the real answer.
 //! * **DirectInput cooperative level** -- `DLUID::KeyboardDevice::SetupDirectInput`
-//!   (`0x141f6d6c0`) selects `0xA` (`DISCL_NONEXCLUSIVE | DISCL_BACKGROUND`) and only switches to
-//!   `0x6` (`| DISCL_FOREGROUND`) when
+//!   (2.7.2.0 `0x141f70c20`) selects `0xA` (`DISCL_NONEXCLUSIVE | DISCL_BACKGROUND`) and only
+//!   switches to `0x6` (`| DISCL_FOREGROUND`) when
 //!   `DLUserInputManagerImpl+0x88f` (`Ext.UserInput.CooperativeLevel.SetForeGround.Keyboard`) is
 //!   set. That field comes from `GetPropertyBoolean(props, name, false)` -- a debug system
 //!   property, default false -- so the shipped device is acquired background and keeps delivering
 //!   while unfocused. Not the gate.
 //! * **The DLUID `+0x88d` "input active" latch** that `er-input-harness` re-asserts every frame.
 //!   Its only consumer is guarded by the same default-false `Ext.*.SetForeGround.*` flags --
-//!   `FUN_141f6bad0` reads it solely inside
+//!   the pad poll (2.7.2.0 `0x141f6f030`, 1.16.2 `FUN_141f6bad0`) reads it solely inside
 //!   `if (Ext_UserInput_CooperativeLevel_SetForeGround_Pad != false) { ... }` -- so on a stock
 //!   build that write is inert. It is not harmful and is not this shell's business, but it is not
 //!   what unblocks unfocused input either.
 
 /// `Game.Debug.IsEnableControlOnDisactiveWindow`'s backing byte.
 ///
-/// `_DATA_` is load-bearing in the name, not decoration. This is a `.data` address, translated by
-/// the data map (`docs/recon/rva-map-1162-to-1170.data.tsv`), and nothing detours it -- this shell
+/// `_DATA_` is load-bearing in the name, not decoration. This is a `.data` address and nothing
+/// detours it -- this shell
 /// writes the byte, `er-quickload`'s `can_move_probe` reads it. `scripts/check-shared-hook-rvas.py`
 /// cannot tell an aliased data address from a hook target by text (it says so itself, and a
 /// proximity rule for it was tried and rejected), so it read the two crates naming this one value
@@ -97,9 +95,8 @@
 /// designed answer: a name carrying `_DATA_` is excluded. Renaming it here is not a workaround --
 /// the old name claimed a hook target that never existed.
 ///
-/// 1.16.2 RVA, read by the single instruction `movzx eax, byte ptr [0x144588af1]` at
-/// `0x1402e6853`. `er_game_base::mem::write_global_u8` translates it for the running build and
-/// refuses when it cannot, so the 1.17 address (`0x458cb71`) is never spelled here.
+/// 2.7.2.0 rva `0x458fb91`, read by the single instruction `movzx eax, byte ptr [0x14458fb91]` at
+/// `0x1404702b2`. `er_game_base::mem::write_global_u8` refuses it on any other build.
 pub use er_game_base::rva::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA;
 
 /// The value `CS::CSPadStep::STEP_Update` needs to see. It tests `CSPadStep+0xba` against zero
@@ -112,8 +109,8 @@ const CONTROL_ON_DISACTIVE_WINDOW_ENABLED: u8 = 1;
 /// # Why every frame rather than once
 ///
 /// The byte has no writer among the functions Ghidra analysed, but the de-obfuscated image does
-/// contain one -- `mov byte ptr [rip + 0x3d4f86a], al` at `0x140839281`, a relocated setter tail
-/// sitting in the trampoline rubble between an `int3` and the next prologue, with no enclosing
+/// contain one -- in 1.16.2, `mov byte ptr [rip + 0x3d4f86a], al` at `0x140839281`, a relocated
+/// setter tail sitting in the trampoline rubble between an `int3` and the next prologue, with no enclosing
 /// function for Ghidra to attribute it to. Nothing in a retail run is known to reach it, but a
 /// one-shot store would be silently undone if something did, and this store costs one byte per
 /// frame. Re-asserting also means the shell does not care whether it attached before or after
@@ -144,16 +141,15 @@ pub fn control_on_disactive_window(base: usize) -> u8 {
     )
 }
 
-/// `DLUID::DLUserInputManagerImpl` singleton (`0x485dc18`), the input-device manager.
+/// `DLUID::DLUserInputManagerImpl` singleton (2.7.2.0 `0x4864d48`), the input-device manager.
 ///
-/// Shared spelling with `er-input-harness`'s `DLUID_SINGLETON_RVA`, and carried by the generated
-/// 1.17 map with 84/84 agreeing references.
-const DLUID_SINGLETON_RVA: usize = 0x485dc18;
+/// Shared spelling with `er-input-harness`'s `DLUID_SINGLETON_RVA`.
+const DLUID_SINGLETON_RVA: usize = 0x4864d48;
 
 /// `DLUserInputManagerImpl+0x88d` -- the "the window we were given IS the active window" latch.
 ///
-/// Cleared by `mov byte ptr [rdi + 0x88d], 0` at `0x141f292bd`, immediately after
-/// `GetActiveWindow() != this->activeWindowHandle` inside `FUN_141f29250` (Ghidra:
+/// Cleared by `mov byte ptr [rdi + 0x88d], 0` at 1.16.2 `0x141f292bd` (2.7.2.0 `0x141f2c81d`),
+/// immediately after `GetActiveWindow() != this->activeWindowHandle` inside `FUN_141f29250` (Ghidra:
 /// `DLUserInputManagerImpl *`, called from `Init@142667390`).
 const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
 
@@ -166,7 +162,7 @@ const HEAP_LO: usize = 0x10000;
 ///
 /// This is the lever `er-input-harness` re-asserts every frame and the one the standing RE notes
 /// name as "the input-accept-while-unfocused flag". Its only consumer in the whole image is
-/// `FUN_141f6bad0` (the pad poll), and it is read only inside
+/// the pad poll (2.7.2.0 `0x141f6f030`, 1.16.2 `FUN_141f6bad0`), and it is read only inside
 ///
 /// ```text
 /// if (mgr->Ext_UserInput_CooperativeLevel_SetForeGround_Pad != false) {
@@ -178,8 +174,8 @@ const HEAP_LO: usize = 0x10000;
 /// `GetPropertyBoolean(props, name, false)` -- a FromSoft debug system property whose default is
 /// false -- so on a retail build the enclosing `if` is never entered and `+0x88d` gates nothing.
 /// The same field also selects `DISCL_FOREGROUND` (`0x6`) over `DISCL_BACKGROUND` (`0xA`) in
-/// `DLUID::KeyboardDevice::SetupDirectInput` (`0x141f6d6c0`), which is the other half of the same
-/// switch.
+/// `DLUID::KeyboardDevice::SetupDirectInput` (2.7.2.0 `0x141f70c20`), which is the other half of
+/// the same switch.
 ///
 /// It is asserted anyway because the cost is one byte store on a pointer we already validate, and
 /// because the one configuration where it matters -- a build or a `.ini` that does set those
@@ -189,8 +185,8 @@ const HEAP_LO: usize = 0x10000;
 ///
 /// # Safety
 ///
-/// Game-thread only. The singleton pointer is resolved through the 1.17 map, screened for a
-/// plausible heap address, and the flag byte is proved readable by a kernel-validated read before
+/// Game-thread only. The singleton pointer is resolved for 2.7.2.0 (refused on another build),
+/// screened for a plausible heap address, and the flag byte is proved readable by a kernel-validated read before
 /// anything is written.
 pub fn hold_dluid_input_active(base: usize) -> bool {
     let dluid =

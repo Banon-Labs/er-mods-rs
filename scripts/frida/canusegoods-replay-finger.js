@@ -1,7 +1,7 @@
 // Does the SHIPPED `er_invasion_warp.dll` open an invasion finger in a region vanilla refuses?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The gate that has to be exercised is `can_use_goods_gate.rs`'s hook on `CS::CanUseGoods`, and
 // the engine only reaches it for a finger when the player is holding one and a menu is asking. A
@@ -37,11 +37,11 @@ const RVA = {
   isInSafePosRange: 0x65fb50, // 1.17.1 0x65f6a0
 };
 
-// `WorldChrMan` and `FieldArea` as the 1.17.1 image's own code loads them, read off the
-// rip-relative operands in `CanUseBreakInItem` and `CanStartBreakIn`. Deliberately not the
-// constants in `crates/er-game-base/src/rva.rs`: those are 1.16.2 rvas that the Rust translates at
-// runtime through `game_data_addr`, so an agent using them raw reads an untranslated address and
-// the result looks like a stale constant when it is merely unmapped.
+// `WorldChrMan` and `FieldArea` as the 1.17.1 image's own code loaded them, read off the
+// rip-relative operands in `CanUseBreakInItem` and `CanStartBreakIn`, now at their 2.7.2.0 rvas.
+// When this was written the constants in `crates/er-game-base/src/rva.rs` were 1.16.2 rvas the Rust
+// translated at runtime through `game_data_addr`, so an agent using them raw read an untranslated
+// address; they are 2.7.2.0 rvas now.
 const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d6d018; // 1.17.1 0x3d69ff8
 const WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1e508;
 const PLAYER_INS_PLAY_REGION_ID_OFFSET = 0x6e8;

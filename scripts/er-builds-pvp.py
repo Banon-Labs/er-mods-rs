@@ -15,8 +15,8 @@ if its attacks were the same attack. This joins each weapon's actual attacks
 * Motion value, per element (`AtkParam_Pc.atk*Correction`), applied to AR before defense.
 * The physical damage type, which picks the physical absorption the hit meets:
   `AtkParam_Pc.atkAttribute` 0 slash, 1 strike, 2 pierce, 3 standard; 253 takes the weapon's
-  `atkAttribute` and 252 its `atkAttribute2` (`VERIFIED`, EXE resolver 0x140685a90 / 1.17.1
-  0x1406868e0, see `er-mechanics-attacks.resolve_phys_type`). Affinity, grease and buffs do not
+  `atkAttribute` and 252 its `atkAttribute2` (`VERIFIED`, EXE resolver 0x140686d90, see
+  `er-mechanics-attacks.resolve_phys_type`). Affinity, grease and buffs do not
   change it (docs/er-mechanics/defense.md section 2a).
 * The defender is the RL window's PvP corpus, not one build. Every attack is scored against each
   PvP build of the window (its planner-computed defense and per-type absorption) and `dmg` is the
@@ -26,11 +26,11 @@ if its attacks were the same attack. This joins each weapon's actual attacks
   defender's stateInfo-110 SpEffect cut rate for the hit's damage type (`VERIFIED`, defense.md
   section 2b). Player weapon attacks apply SpEffect 45 there, which is 1.15 for pierce and 1.0
   for every other type, so `ctr` differs from `dmg` for pierce hits only. `--spear-talisman`
-  multiplies that factor by Spear Talisman's `physicsAttackRate` 1.15 (EXE 0x1404f5310).
+  multiplies that factor by Spear Talisman's `physicsAttackRate` 1.15 (EXE 0x1404f61c0).
   `ctrW` is the attack's own exposure: how many frames it carries SpEffect 45 itself.
 * The player-vs-player factors: the weapon's `vsPlayerDmgCorrectRate_*` and the attack's
   `FinalDamageRateParam[finalDamageRateId]` (defense.md section 3, EXE). That row's `saRate`
-  multiplies poise damage between players (0x140486bf0), so PvP poise damage is far above the
+  multiplies poise damage between players (0x140487230), so PvP poise damage is far above the
   PvE 51-poise breakpoint (see `slot_hit`).
 * Startup (first active frame), active frames, hyperarmor window and stamina cost, from the TAE
   at 30 fps (`INFERRED` rate; play-speed changes are not modelled).
@@ -272,7 +272,7 @@ MULTI_HIT_ESCAPE = False
 PROC_OPENING = None
 #: `--setup` (combo.md section 11a): the left hand's weapon-buff category. Buffs.md section 3:
 #: 162 is the right hand's slot and 163 the left's, and the add path clashes only within one
-#: category, so one buff per hand coexists (`VERIFIED`, 0x1404fc0c0 / 0x1405005a0).
+#: category, so one buff per hand coexists (`VERIFIED`, 0x1404fcf70 / 0x140501450).
 LEFT_WEAPON_BUFF_CAT = 163
 RIGHT_WEAPON_BUFF_CAT = 162
 
@@ -498,7 +498,7 @@ def slot_hit(pvp, reg, weapon_id, attack, ar_by, defenders, grease=None, spear=F
     hit = corpus_hit(scaled, phys, defenders, fr, counter, post)
     med_parts = DEF.damage(scaled, 100.0, defenders.median, phys, fr)["by_type"]
     median = sum(v * (post.get(el, 1.0) if post else 1.0) for el, v in med_parts.items())
-    # FinalDamageRateParam.saRate multiplies poise damage between players (0x140486bf0, under the
+    # FinalDamageRateParam.saRate multiplies poise damage between players (0x140487230, under the
     # same player-vs-player gate as ToughnessParam unk1). The 51-poise breakpoint is PvE only.
     poise = attack["poise_damage"] * POISE_MENU * (fr["saRate"] if fr else 1.0)
     windows = attack.get("hit_windows") or []
@@ -531,7 +531,7 @@ def slot_hit(pvp, reg, weapon_id, attack, ar_by, defenders, grease=None, spear=F
         for k in ("startup", "next", "roll"):
             if out[k] is not None:
                 out[k] = round(out[k] + lead, 1)
-    # The attacker's staminaAttackRate on a guarded hit (info+0x28, `FUN_14068aa80`): the worn
+    # The attacker's staminaAttackRate on a guarded hit (info+0x28, `FUN_14068bd80`): the worn
     # talismans' (Hammer Talisman) times the buff kits' uptime-weighted product.
     stamina_rate = (tm["stamina_damage"] if tm else 1.0) * (buff.get("stamina", 1.0) if buff else 1.0)
     out["guard_part"] = {"hit": {**attack, "weapon": weapon_id}, "scaled": scaled, "fr": fr, "post": post,
@@ -1243,8 +1243,8 @@ class SetupBuffs:
     `er-mechanics-ashes.skill_buffs`), so the cast also buffs the right hand until a right-hand
     grease replaces 826 (same category 162, buffs.md section 3 R3). That right-hand row is not
     scored: the right keeps the sweep's grease. Both the AR accumulator and the status selector
-    `FUN_1404f71e0` pass every entry through `IsApplicableForCategory` (the hand gate on
-    `wepParamChange`, `VERIFIED` 1.16.2 decompile), so 828 reaches only the left hand's hits.
+    `FUN_1404f8090` pass every entry through `IsApplicableForCategory` (the hand gate on
+    `wepParamChange`, `VERIFIED` 1.16.2 decompile of the same code), so 828 reaches only the left hand's hits.
     Its frost is its `atkOccurrenceSpEffectId` 880 (frost 60, both rates; status.md section 1),
     not its own `freezeAttackPower` 30, which no hit reads. A skill's rows are read on the first
     weapon asked about it (`INFERRED`: the rows a skill applies do not depend on the weapon that
@@ -1370,7 +1370,7 @@ class SetupBuffs:
         """`rows` through one hand's gate (`Buffs.attack_context`): `pre`, `flat`, `post` per
         element, `gated` (any row passed), and `status_row`: a hit's status from an attacker buff
         is the first hand-applicable row with stateInfo 152/153's `atkOccurrenceSpEffectId`
-        (`FUN_1404f71e0`, status.md section 1)."""
+        (`FUN_1404f8090`, status.md section 1)."""
         ctx = self.buf.attack_context(list(rows), pvp=True, hand=hand, apply_stack=False)
         st, sp = self.mech.st, self.mech.st_t.sp
         passed = {i for i, _ in ctx["entries"]}
@@ -1731,7 +1731,7 @@ def selftest() -> int:
         "SpEffect 45 (stateInfo 110): pierce 1.15, every other type 1.0 (regulation)")
     f = counter_factors(reg, "pierce", True)
     check(abs(f["physical"] - 1.15 * 1.15) < 1e-6 and f["fire"] == 1.0,
-          "Spear Talisman scales only a counter factor above 1 (EXE 0x1404f5310 guard)")
+          "Spear Talisman scales only a counter factor above 1 (EXE 0x1404f61c0 guard)")
     one = {"defenses": {el: 100 for el in ELEMENTS}, "absorption": {k: 20.0 for k in ABSORB_KEY.values()},
            "poise": {"original": 50}}
     d = Defenders([one, one])

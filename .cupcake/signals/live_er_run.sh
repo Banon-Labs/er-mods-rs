@@ -14,8 +14,9 @@
 #
 # and nothing otherwise. The verdict is the very function `check` acts on after the edit, so the
 # policy and the teardown decide on one implementation and cannot drift. On 2026-10-02 they did:
-# the policy matched `crates/` only, while the sentinel tears down for a `docs/recon/*.tsv` that
-# `er-game-base/build.rs` compiles into every product DLL.
+# the policy matched `crates/` only, while the sentinel tore down for a `docs/recon/*.tsv` that
+# `er-game-base/build.rs` then compiled into every product DLL. A file outside `crates/` that a
+# crate compiles in is still a build input (`er-invasion-warp-core` embeds docs with `include_str!`).
 #
 # Never fails and never kills: a signal that errors would take the policy with it, and the fail-open
 # direction is "no live run", which leaves editing exactly as permissive as it was before this file.

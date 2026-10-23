@@ -6,14 +6,14 @@ needs no game running and no Ghidra daemon.
 
 * `CharacterTypeProperties` is a 23-entry array of 20-byte records indexed by
   `ChrIns::chrType` (`+0x68`). `CS::CharacterTypeProperties::IsHostilePhantom`
-  (1.16.2 `0x1404c7d10`) is `MOVSXD RAX,[RCX]; CMP EAX,0x16; JA default; LEA RCX,[RAX+RAX*4];
+  (`0x1404c8780`) is `MOVSXD RAX,[RCX]; CMP EAX,0x16; JA default; LEA RCX,[RAX+RAX*4];
   LEA RAX,[table]; MOVZX EAX,[RAX+RCX*4+0xa]`, which is where the base, the stride and the
   `isHostilePhantom` field offset below all come from. `isHostLike` (`+0x7`) and
   `isFriendlyPhantom` (`+0x9`) are the neighbouring flags read by the same pattern from
   `IsHostLike` / `IsFriendlyPhantom`.
 
 * `MultiplayProperties` is a 32-entry array of 64-byte records, walked linearly by
-  `GetMultiplayPropertiesByMultiplayRole` (1.16.2 `0x1401db340`) comparing `+0xc multiplayRole`.
+  `GetMultiplayPropertiesByMultiplayRole` (`0x1401db340`) comparing `+0xc multiplayRole`.
   Each row carries the `SummonParamType` the engine matched on and the `CharacterType` it
   derives from it -- the `GameMan::GetSummonParamType -> MultiplayProperties ->
   PlayerGameData::SetChrType` chain in one table.
@@ -25,10 +25,14 @@ first asked, `er-lockon-filter`, was deleted on 2026-09-11 by user directive; it
 are in docs/recon/lockon-filter-findings.md and this script is the half of them that still
 re-reads the image.
 
+Every address here is a 2.7.2.0 VA in `eldenring-deobf-1.17.2.bin`, the image of the installed
+build. Both readers were found by their own bytes (each pattern has exactly one hit in the
+1.16.2 and in the 2.7.2.0 image), and the table VAs are the targets of their `LEA`s.
+
 Usage
     python3 scripts/er-character-type-tables.py
     python3 scripts/er-character-type-tables.py --rust
-    ER_DEOBF_BIN=eldenring-deobf-1.17.1.bin python3 scripts/er-character-type-tables.py \
+    python3 scripts/er-character-type-tables.py --image <other image> \
         --character-type-properties 0x... --multiplay-properties 0x...
     python3 scripts/er-character-type-tables.py --selftest
 """
@@ -40,18 +44,39 @@ import os
 import struct
 import sys
 
-DEFAULT_IMAGE = os.environ.get("ER_DEOBF_BIN", "eldenring-deobf.bin")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import er_game_image  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
+
+def find_image() -> str:
+    """The 2.7.2.0 image as `scripts/er_game_image.py` locates it, or the path that is absent.
+
+    `ER_DEOBF_BIN_1172`, else `eldenring-deobf-1.17.2.bin` at the repo root or the nearest
+    directory above it, so a linked worktree under `.worktrees/` reads the main checkout's.
+    `ER_DEOBF_BIN` is deliberately not read: it is the variable `find-deobf-bytes.py` and the
+    disassembly scripts take to point at any image, so a value left exported from that work would
+    make this table check read another build. `--image` is the way to name a different file.
+    """
+    found = er_game_image.image_path()
+    if found is not None:
+        return str(found)
+    return os.environ.get(er_game_image.ENV) or str(er_game_image.REPO / er_game_image.IMAGE_NAME)
+
+
+DEFAULT_IMAGE = find_image()
 IMAGE_BASE = 0x140000000
 
-# 1.16.2. Every one is read out of the function named in the module docstring above.
-CHARACTER_TYPE_PROPERTIES_VA = 0x143B17C00
+# 2.7.2.0. Every one is read out of the function named in the module docstring above
+# (`LEA RAX` at `0x1404c878c` and at `0x1401db340`; 1.16.2 had them at `0x143b17c00` and
+# `0x143b11230`).
+CHARACTER_TYPE_PROPERTIES_VA = 0x143B1EC00
 CHARACTER_TYPE_PROPERTIES_COUNT = 23
 CHARACTER_TYPE_PROPERTIES_STRIDE = 20
 IS_HOST_LIKE_OFFSET = 0x7
 IS_FRIENDLY_PHANTOM_OFFSET = 0x9
 IS_HOSTILE_PHANTOM_OFFSET = 0xA
 
-MULTIPLAY_PROPERTIES_VA = 0x143B11230
+MULTIPLAY_PROPERTIES_VA = 0x143B18230
 MULTIPLAY_PROPERTIES_COUNT = 32
 MULTIPLAY_PROPERTIES_STRIDE = 64
 SUMMON_PARAM_TYPE_OFFSET = 0x4
@@ -165,8 +190,8 @@ def hostile_phantom_multiplay_roles(
 ) -> list[int]:
     """Every `MultiplayRole` whose row resolves to a hostile-phantom `CharacterType`.
 
-    The per-person half of the same join. `CS::PlayerIns::GetMultiplayRole` (1.16.2
-    `0x140655fd0`) returns `PlayerGameData+229`, so this set is what that field has to hold
+    The per-person half of the same join. `CS::PlayerIns::GetMultiplayRole`
+    (`0x1406572d0`) returns `PlayerGameData+229`, so this set is what that field has to hold
     for a candidate to be a fellow invader -- the question `ChrIns::chr_type` failed to
     answer under Seamless Co-op, where a remote player has measured `Local`.
 

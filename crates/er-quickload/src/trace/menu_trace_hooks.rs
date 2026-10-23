@@ -23,54 +23,54 @@ use crate::{
     CS_MENU_MAN_MENU_DATA_OFFSET, CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET, CSFILE_ENQUEUE_RVA,
     CSFILE_HOLDER_8_OFFSET, CSFILE_QUEUE_ARRAY_E0_OFFSET, CSFILE_SINGLETON_RVA, CSMENU_CTOR_RVA,
     CURRENT_SLOT_LOAD_ORIG, DEAD_RESET_STATE_ENDING, DESERIALIZE_SLOT_RVA, EBL_REGISTRY_GLOBAL_RVA,
-    ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA, FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET,
-    FILECAP_DATA_90_OFFSET, FILECAP_QUEUEFLAGS_89_OFFSET, FILECAP_STATUS_88_OFFSET,
-    FILECAP_STATUS_LOADED, FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET, GAME_MAN_C30_UNSET,
-    GAME_MAN_ENDING_FLAG_B7C_OFFSET, GAME_MAN_ENDING_FLAG_B7D_OFFSET,
-    GAME_MAN_FLAG_B73_PROBE_OFFSET, GAME_MAN_FLAG_B75_PROBE_OFFSET,
-    GAME_MAN_REQUESTED_SLOT_B78_OFFSET, GAME_MAN_SAVE_STATE_B80_OFFSET,
-    GAME_MAN_SAVED_MAP_C30_OFFSET, GAME_MAN_WARP_REQUESTED_10_OFFSET, HOOK_ORIGINAL_UNSET,
-    IN_WORLD_REACHED, IN_WORLD_REACHED_YES, INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET,
-    INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET, INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET,
-    INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET, INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET,
-    INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET, IODEV_GLOBAL_RVA, IODEV_INFLIGHT_10_OFFSET,
-    IODEV_REQHANDLE_18_OFFSET, IODEV_REQHANDLE_20_OFFSET, LIVE_DIALOG_FACTORY_RVA, MAP_LOAD_ORIG,
-    MENU_CONTINUE_WRAPPER_ORIG, MENU_ITEM_UPDATE_LOG_MAX, MENU_ITEM_UPDATE_ORIG,
-    MENU_ITEM_UPDATE_RVA, MENU_NEW_OR_LOAD_WRAPPER_ORIG, MENU_OTHER_LOAD_WRAPPER_ORIG,
-    MENU_TASK_NULL_PAYLOAD_PTR, MENU_TASK_NULL_STATE_QWORD, MENU_TASK_STATE_DELAY_OFFSET,
-    MENU_TASK_STATE_PAYLOAD_CODE_OFFSET, MENU_TASK_STATE_PAYLOAD_PTR_OFFSET,
-    MENU_TRACE_EVENT_INCREMENT, MENU_TRACE_EVENT_SEQ, MENU_TRACE_LAST_HOOK_RVA,
-    MENU_TRACE_LAST_PAYLOAD_PTR, MENU_TRACE_LAST_SEQ, MENU_TRACE_LAST_STATE_QWORD,
-    MENU_TRACE_LAST_TABLE_RVA, MENU_TRACE_LAST_THIS, MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
-    MENU_WINDOW_JOB_CTOR_ORIG, MENU_WINDOW_JOB_CTOR_RVA, MENU_WINDOW_JOB_IDLE_CTOR_ORIG,
-    MENU_WINDOW_JOB_IDLE_CTOR_RVA, MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG,
-    MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA, MOUNT_GUARD_DESC_BITS_CLEAR_MASK,
-    MOUNT_GUARD_DESC_BITS_OFFSET, MOUNT_GUARD_DESC_ID_OFFSET, MOUNT_GUARD_DESCRIPTOR_OFFSET,
-    MOUNT_GUARD_DETECTOR_RVA, MOUNT_GUARD_SINGLETON_OFFSET, MOUNT_GUARD_STATE_ROOT_RVA,
-    MOVEMAPSTEP_WORLDRES_F0_OFFSET, NATIVE_SUBMIT_ORIG, NO_SAFE_INPUT_CONFIRM_FRAMES,
-    OWN_STEPPER_CALL_INC, OWN_STEPPER_DESER_FIRED, OWN_STEPPER_DESER_FIRED_OK,
-    OWN_STEPPER_MOUNT_C30, POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET, POPULATE_BLOCKS_LISTS_RVA,
-    PROFILE_LOAD_JOB_RUN_RVA, ProfileLoadMenuRva, REBUILD_ROWS_RVA, REQUEST_SAVE_ORIG,
-    RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA, RESULT_EVENT_HANDLER_ORIG,
-    RESULT_EVENT_HANDLER_RVA, RESULT_EVENT_WRAPPER_BUILDER_ORIG, RESULT_EVENT_WRAPPER_BUILDER_RVA,
-    SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG,
-    SAVE_REQUEST_PROFILE_ORIG, SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA,
-    SESSION_PROTOCOL_STATE_WAIT_RELOAD, SET_SAVE_SLOT_ORIG, SWITCH_ORACLE_MMS_FINISH_HITS,
-    SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG, TITLE_NATIVE_READY_PREDICATE_ORIG,
-    TITLE_NATIVE_READY_PREDICATE_RVA, TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE,
-    TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA,
-    TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA, TRACE_UNKNOWN_TABLE_RVA,
-    WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA, WORLDRES_ENTRY_CTOR_RVA,
-    WORLDRES_RESMGR_10_OFFSET, append_autoload_debug, append_continue_trace, cap_append_one_hook,
-    cap_builder_hook, cap_csmenu_ctor_hook, cap_dialog_factory_hook, cap_load_activate_hook,
-    cap_load_activate2_hook, cap_menu_deser_hook, cap_menu_item_update_hook, cap_rebuild_rows_hook,
-    cap_selector_tick_hook, cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook,
-    continue_load_hook, current_slot_load_hook, game_directory_path, game_man_ptr_or_null,
-    game_module_base, game_rva, game_rva_for_hook, map_load_hook, menu_window_job_ctor_hook,
-    menu_window_job_idle_ctor_hook, menu_window_job_native_ctor_b_hook, native_submit_hook,
-    request_save_hook, result_action_builder_hook, result_event_handler_hook,
-    result_event_wrapper_builder_hook, safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize,
-    save_load_state_init_hook, save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
+    ENDING_REQUEST_FORCE_FLAG_RVA, FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET, FILECAP_DATA_90_OFFSET,
+    FILECAP_QUEUEFLAGS_89_OFFSET, FILECAP_STATUS_88_OFFSET, FILECAP_STATUS_LOADED,
+    FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET, GAME_MAN_C30_UNSET, GAME_MAN_ENDING_FLAG_B7C_OFFSET,
+    GAME_MAN_ENDING_FLAG_B7D_OFFSET, GAME_MAN_FLAG_B73_PROBE_OFFSET,
+    GAME_MAN_FLAG_B75_PROBE_OFFSET, GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
+    GAME_MAN_SAVE_STATE_B80_OFFSET, GAME_MAN_SAVED_MAP_C30_OFFSET,
+    GAME_MAN_WARP_REQUESTED_10_OFFSET, HOOK_ORIGINAL_UNSET, IN_WORLD_REACHED, IN_WORLD_REACHED_YES,
+    INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET, INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET,
+    INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET, INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET,
+    INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET, INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET,
+    IODEV_GLOBAL_RVA, IODEV_INFLIGHT_10_OFFSET, IODEV_REQHANDLE_18_OFFSET,
+    IODEV_REQHANDLE_20_OFFSET, LIVE_DIALOG_FACTORY_RVA, MAP_LOAD_ORIG, MENU_CONTINUE_WRAPPER_ORIG,
+    MENU_ITEM_UPDATE_LOG_MAX, MENU_ITEM_UPDATE_ORIG, MENU_ITEM_UPDATE_RVA,
+    MENU_NEW_OR_LOAD_WRAPPER_ORIG, MENU_OTHER_LOAD_WRAPPER_ORIG, MENU_TASK_NULL_PAYLOAD_PTR,
+    MENU_TASK_NULL_STATE_QWORD, MENU_TASK_STATE_DELAY_OFFSET, MENU_TASK_STATE_PAYLOAD_CODE_OFFSET,
+    MENU_TASK_STATE_PAYLOAD_PTR_OFFSET, MENU_TRACE_EVENT_INCREMENT, MENU_TRACE_EVENT_SEQ,
+    MENU_TRACE_LAST_HOOK_RVA, MENU_TRACE_LAST_PAYLOAD_PTR, MENU_TRACE_LAST_SEQ,
+    MENU_TRACE_LAST_STATE_QWORD, MENU_TRACE_LAST_TABLE_RVA, MENU_TRACE_LAST_THIS,
+    MENU_WINDOW_CLOSE_WITH_FAILED_RVA, MENU_WINDOW_JOB_CTOR_ORIG, MENU_WINDOW_JOB_CTOR_RVA,
+    MENU_WINDOW_JOB_IDLE_CTOR_ORIG, MENU_WINDOW_JOB_IDLE_CTOR_RVA,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG, MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA,
+    MOUNT_GUARD_DESC_BITS_CLEAR_MASK, MOUNT_GUARD_DESC_BITS_OFFSET, MOUNT_GUARD_DESC_ID_OFFSET,
+    MOUNT_GUARD_DESCRIPTOR_OFFSET, MOUNT_GUARD_DETECTOR_RVA, MOUNT_GUARD_SINGLETON_OFFSET,
+    MOUNT_GUARD_STATE_ROOT_RVA, MOVEMAPSTEP_WORLDRES_F0_OFFSET, NATIVE_SUBMIT_ORIG,
+    NO_SAFE_INPUT_CONFIRM_FRAMES, OWN_STEPPER_CALL_INC, OWN_STEPPER_DESER_FIRED,
+    OWN_STEPPER_DESER_FIRED_OK, OWN_STEPPER_MOUNT_C30, POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET,
+    POPULATE_BLOCKS_LISTS_RVA, PROFILE_LOAD_JOB_RUN_RVA, ProfileLoadMenuRva, REBUILD_ROWS_RVA,
+    REQUEST_SAVE_ORIG, RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA,
+    RESULT_EVENT_HANDLER_ORIG, RESULT_EVENT_HANDLER_RVA, RESULT_EVENT_WRAPPER_BUILDER_ORIG,
+    RESULT_EVENT_WRAPPER_BUILDER_RVA, SAFE_INPUT_CONFIRM_FRAMES_REMAINING,
+    SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG,
+    SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA, SESSION_PROTOCOL_STATE_WAIT_RELOAD, SET_SAVE_SLOT_ORIG,
+    SWITCH_ORACLE_MMS_FINISH_HITS, SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG,
+    TITLE_NATIVE_READY_PREDICATE_ORIG, TITLE_NATIVE_READY_PREDICATE_RVA,
+    TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, TRACE_MENU_CONTINUE_WRAPPER_RVA,
+    TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA, TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+    TRACE_UNKNOWN_TABLE_RVA, WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA,
+    WORLDRES_ENTRY_CTOR_RVA, WORLDRES_RESMGR_10_OFFSET, append_autoload_debug,
+    append_continue_trace, cap_append_one_hook, cap_builder_hook, cap_csmenu_ctor_hook,
+    cap_dialog_factory_hook, cap_load_activate_hook, cap_load_activate2_hook, cap_menu_deser_hook,
+    cap_menu_item_update_hook, cap_rebuild_rows_hook, cap_selector_tick_hook,
+    cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook, continue_load_hook,
+    current_slot_load_hook, game_directory_path, game_man_ptr_or_null, game_module_base, game_rva,
+    game_rva_for_hook, map_load_hook, menu_window_job_ctor_hook, menu_window_job_idle_ctor_hook,
+    menu_window_job_native_ctor_b_hook, native_submit_hook, request_save_hook,
+    result_action_builder_hook, result_event_handler_hook, result_event_wrapper_builder_hook,
+    safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize, save_load_state_init_hook,
+    save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
     title_native_ready_predicate_hook, trace_callers_summary, write_bootstrap_event,
 };
 use eldenring::cs::GameMan;
@@ -277,18 +277,15 @@ pub(crate) unsafe fn create_continue_trace_hook(
     hook_impl: *mut c_void,
     original: &'static AtomicUsize,
 ) {
-    // Unresolved, so `register_union_hook` owns the single 1.16.2 -> 1.17 resolve. This was
-    // `game_rva`, which resolves too, and the double resolve was measured wrong on 2026-08-30
-    // 18:42 for `native_submit_7ac890`: 0x1407ac890 -> 0x1407ad710 here, then 0x1407ad710 ->
-    // 0x1407ae590 inside the union -- a hot Scaleform function with 16 callers, unioned by
-    // mistake while the trace log said 0x1407ad710.
-    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    // Unresolved, so `register_union_hook` owns the single build check (the 2.7.2.0 detour
+    // allowlist). When the hook API still translated, resolving here as well once unioned a hot
+    // Scaleform function by mistake (2026-08-30, `native_submit`).
     let Ok(addr) = game_rva_for_hook(rva) else {
         append_continue_trace(format_args!("hook {name}: failed to resolve rva=0x{rva:x}"));
         return;
     };
     // Union (2026-07-16): these diagnostic trace observers hook the same menu functions as product
-    // hooks (e.g. cap_load_activate on 0x9a4670). Register through the union so the trace chains with
+    // hooks (e.g. cap_load_activate on 0x9a5cc0). Register through the union so the trace chains with
     // the product handler instead of racing it for the single MinHook slot -- the trace no longer
     // silently steals (or loses) the address depending on install order.
     let handler_fn: crate::mh::UnionFn =
@@ -306,10 +303,11 @@ pub(crate) fn install_continue_trace_hooks() {
         BOOTSTRAP_EVENT_CONTINUE_TRACE_STARTED,
         BOOTSTRAP_DETAIL_START,
     );
-    // Local Proton executable RVAs. The shared Ghidra 1.16.1 function starts are
-    // currently +0xf0 for these text symbols; these RVAs are verified against
-    // /home/banon/.local/share/Steam/.../eldenring.exe sha256
-    // 34102b1c08bb5f769a724427a6f70fe29b3b732c31cf73693f861c48d3492ddb.
+    // ELDEN RING 2.7.2.0 RVAs. A label names the hooked function; until the port many carried the
+    // function's 1.16.2 address as a suffix. The save-path labels match er-reload-trace's spelling
+    // (`save_dispatch_*`, `save_write_to_slot`); the other functions both DLLs observe are labelled
+    // independently, and `check-autoload-happy-path.py` pins several of the names here. Labels
+    // nothing else reads still end in the 2.7.2.0 address they hook.
     const MENU_CONTINUE_WRAPPER_RVA: u32 = TRACE_MENU_CONTINUE_WRAPPER_RVA;
     const MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA;
     const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = er_save_loader::MENU_OTHER_LOAD_WRAPPER_RVA;
@@ -317,14 +315,13 @@ pub(crate) fn install_continue_trace_hooks() {
     const SAVE_REQUEST_PROFILE_RVA: u32 = er_save_loader::SAVE_REQUEST_PROFILE_RVA;
     const REQUEST_SAVE_RVA: u32 = er_save_loader::REQUEST_SAVE_RVA;
     const SAVE_DISPATCH_SYSTEM_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA as u32;
-    // 0x67b750 writes a save, it does not load one -- see the decompile evidence on
-    // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). The trace label below is
-    // deliberately left as "continue_load_67b750": er-reload-trace matches that exact
-    // string (its lib.rs:555 and :724), so renaming it here would desync the two DLLs' log
-    // correlation. The address is in the label, so it stays unambiguous.
-    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067b750;
+    // 0x67ca50 writes a save, it does not load one -- see the decompile evidence on
+    // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). Its trace label is
+    // "save_write_to_slot" here and in er-reload-trace alike (it was "continue_load_67b750"
+    // before the port), so the two DLLs' logs still correlate.
+    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067ca50;
     const SAVE_DISPATCH_COMBINED_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA as u32;
-    const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
+    const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067cf10;
     const SAVE_LOAD_STATE_INIT_RVA: u32 = er_save_loader::SAVE_LOAD_STATE_INIT_RVA;
 
     append_continue_trace(format_args!(
@@ -365,35 +362,35 @@ pub(crate) fn install_continue_trace_hooks() {
         );
         create_continue_trace_hook(
             &mut hooks,
-            "native_submit_7ac890",
+            "native_submit",
             MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32,
             native_submit_hook as *mut c_void,
             &NATIVE_SUBMIT_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "result_event_handler_746e80",
+            "result_event_handler",
             RESULT_EVENT_HANDLER_RVA,
             result_event_handler_hook as *mut c_void,
             &RESULT_EVENT_HANDLER_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "result_action_builder_746a00",
+            "result_action_builder",
             RESULT_ACTION_BUILDER_RVA,
             result_action_builder_hook as *mut c_void,
             &RESULT_ACTION_BUILDER_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "result_event_wrapper_builder_744a60",
+            "result_event_wrapper_builder",
             RESULT_EVENT_WRAPPER_BUILDER_RVA,
             result_event_wrapper_builder_hook as *mut c_void,
             &RESULT_EVENT_WRAPPER_BUILDER_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "task_enqueue_7a7b60",
+            "task_enqueue",
             TRACE_TASK_ENQUEUE_RVA,
             task_enqueue_hook as *mut c_void,
             &TASK_ENQUEUE_ORIG,
@@ -421,35 +418,35 @@ pub(crate) fn install_continue_trace_hooks() {
         );
         create_continue_trace_hook(
             &mut hooks,
-            "current_slot_load_67b570",
+            "save_dispatch_system",
             SAVE_DISPATCH_SYSTEM_RVA,
             current_slot_load_hook as *mut c_void,
             &CURRENT_SLOT_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "continue_load_67b750",
+            "save_write_to_slot",
             SAVE_WRITE_TO_SLOT_RVA,
             continue_load_hook as *mut c_void,
             &CONTINUE_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "combined_load_67b940",
+            "save_dispatch_combined",
             SAVE_DISPATCH_COMBINED_RVA,
             combined_load_hook as *mut c_void,
             &COMBINED_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "map_load_67bc10",
+            "save_dispatch_entry0b",
             SAVE_DISPATCH_ENTRY0B_RVA,
             map_load_hook as *mut c_void,
             &MAP_LOAD_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "save_load_state_init_67b030",
+            "save_load_state_init",
             SAVE_LOAD_STATE_INIT_RVA,
             save_load_state_init_hook as *mut c_void,
             &SAVE_LOAD_STATE_INIT_ORIG,
@@ -460,47 +457,47 @@ pub(crate) fn install_continue_trace_hooks() {
         // can replicate it with slot-int primitives (no synthetic-owner save-write).
         create_continue_trace_hook(
             &mut hooks,
-            "b80_preview_67b4e0",
+            "b80_preview",
             BLANK_SAVE_CONTAINER_REQUEST_RVA as u32,
             b80_preview_initiator_hook as *mut c_void,
             &B80_PREVIEW_INITIATOR_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "b80_loadsavedata_67b200",
+            "b80_loadsavedata",
             B80_LOAD_SAVE_DATA_INITIATOR_RVA as u32,
             b80_loadsavedata_hook as *mut c_void,
             &B80_LOAD_SAVE_DATA_INITIATOR_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "b80_fullload_67b1a0",
+            "b80_fullload_67c4a0",
             B80_FULL_LOAD_INITIATOR_RVA as u32,
             b80_fullload_hook as *mut c_void,
             &B80_FULL_LOAD_INITIATOR_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "b80_poll_679180",
+            "b80_poll",
             B80_POLL_RVA as u32,
             b80_poll_hook as *mut c_void,
             &B80_POLL_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "b80_deserialize_67b290",
+            "b80_deserialize",
             DESERIALIZE_SLOT_RVA as u32,
             b80_deserialize_hook as *mut c_void,
             &B80_DESERIALIZE_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "b80_dispatcher2_afb880_observe",
+            "b80_dispatcher2_afd060_observe",
             B80_DISPATCHER2_RVA as u32,
             b80_dispatcher2_observe_hook as *mut c_void,
             &B80_DISPATCHER2_OBSERVE_ORIG,
         );
-        // NOTE: the c30_writer 0x67bd70 hook is not installed here. It is installed
+        // NOTE: the c30_writer 0x67d070 hook is not installed here. It is installed
         // unconditionally at process attach via install_c30_writer_hook (mirroring the
         // MenuWindow-latch precedent) so the save-safe c30-write diagnostic is always
         // armed without requiring the continue-trace path. Installing it twice on the
@@ -509,21 +506,21 @@ pub(crate) fn install_continue_trace_hooks() {
         // this-pointers + construction order + call sequence for the 4 user interactions:
         // SetState (state machine), Continue confirm, ProfileLoadDialog activate (both
         // variants), the enter-Load-Game builder, the selector-step tick, and the mount.
-        const CAP_SETSTATE_RVA: u32 = 0x00b0d960;
-        const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a4670;
-        const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ac760;
-        const CAP_BUILDER_RVA: u32 = 0x00826510;
+        const CAP_SETSTATE_RVA: u32 = 0x00b0f530;
+        const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a5cc0;
+        const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ade60;
+        const CAP_BUILDER_RVA: u32 = 0x008279b0;
         const CAP_LOAD_JOB_RUN_RVA: u32 = PROFILE_LOAD_JOB_RUN_RVA as u32;
         const CAP_MENU_DESER_RVA: u32 = ProfileLoadMenuRva::MenuDeser as u32;
         const CAP_DIALOG_FACTORY_RVA: u32 = LIVE_DIALOG_FACTORY_RVA as u32;
         create_continue_trace_hook(
             &mut hooks,
-            "cap_setstate_b0d960",
+            "cap_setstate",
             CAP_SETSTATE_RVA,
             cap_setstate_hook as *mut c_void,
             &CAP_SETSTATE_ORIG,
         );
-        // NOTE: the continue_confirm 0x140b0e180 hook is not installed here. It is installed
+        // NOTE: the continue_confirm 0x140b0fd50 hook is not installed here. It is installed
         // unconditionally at process attach via install_system_quit_continue_confirm_hook
         // (mirroring the c30_writer precedent): the System->Quit switch needs it in every product
         // run, and installing a second MhHook on the same address would fail. That hook reproduces
@@ -531,110 +528,110 @@ pub(crate) fn install_continue_trace_hooks() {
         // is enabled, so trace runs see identical output.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_load_activate_9a4670",
+            "cap_load_activate",
             CAP_LOAD_ACTIVATE_RVA,
             cap_load_activate_hook as *mut c_void,
             &CAP_LOAD_ACTIVATE_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_load_activate2_9ac760",
+            "cap_load_activate2",
             CAP_LOAD_ACTIVATE2_RVA,
             cap_load_activate2_hook as *mut c_void,
             &CAP_LOAD_ACTIVATE2_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_builder_826510",
+            "cap_builder",
             CAP_BUILDER_RVA,
             cap_builder_hook as *mut c_void,
             &CAP_BUILDER_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_selector_tick_826d50",
+            "cap_selector_tick",
             CAP_LOAD_JOB_RUN_RVA,
             cap_selector_tick_hook as *mut c_void,
             &CAP_SELECTOR_TICK_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_menu_deser_82c240",
+            "cap_menu_deser",
             CAP_MENU_DESER_RVA,
             cap_menu_deser_hook as *mut c_void,
             &CAP_MENU_DESER_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_dialog_factory_81ead0",
+            "cap_dialog_factory",
             CAP_DIALOG_FACTORY_RVA,
             cap_dialog_factory_hook as *mut c_void,
             &CAP_DIALOG_FACTORY_ORIG,
         );
-        // MenuWindowJob ctor 0x1407ac8c0: latch semantic Continue items at construction before
+        // MenuWindowJob ctor 0x1407adbf0: latch semantic Continue items at construction before
         // the first updated/idle title input leaf can poison MENU_CONTINUE_ITEM.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_menu_window_job_ctor_7ac8c0",
+            "cap_menu_window_job_ctor",
             MENU_WINDOW_JOB_CTOR_RVA,
             menu_window_job_ctor_hook as *mut c_void,
             &MENU_WINDOW_JOB_CTOR_ORIG,
         );
-        // MenuWindowJob native-accept ctor variant 0x1407acb00: observe/latch semantic Continue
-        // rows built by the sibling constructor that also installs native accept 0x1407ad810.
+        // MenuWindowJob native-accept ctor variant 0x1407ade30: observe/latch semantic Continue
+        // rows built by the sibling constructor that also installs native accept 0x1407aeb40.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_menu_window_job_native_ctor_b_7acb00",
+            "cap_menu_window_job_native_ctor_b",
             MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA,
             menu_window_job_native_ctor_b_hook as *mut c_void,
             &MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG,
         );
-        // MenuWindowJob idle ctor 0x1407acf80: static RE shows this neighboring constructor
-        // installs the constant-false accept predicate 0x1407add70. Observe it separately so a
+        // MenuWindowJob idle ctor 0x1407ae2b0: static RE shows this neighboring constructor
+        // installs the constant-false accept predicate 0x1407af0a0. Observe it separately so a
         // Continue-looking row with idle accept can be attributed to the disabled native path.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_menu_window_job_idle_ctor_7acf80",
+            "cap_menu_window_job_idle_ctor",
             MENU_WINDOW_JOB_IDLE_CTOR_RVA,
             menu_window_job_idle_ctor_hook as *mut c_void,
             &MENU_WINDOW_JOB_IDLE_CTOR_ORIG,
         );
-        // Title native-ready predicate 0x140733150: the native title builder calls this on
+        // Title native-ready predicate 0x140734450: the native title builder calls this on
         // title_dialog+0x2610 before constructing native-accept rows. Observe the exact result
         // and state flags so product-core can wait for the native condition instead of promoting
         // idle rows.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_title_native_ready_733150",
+            "cap_title_native_ready",
             TITLE_NATIVE_READY_PREDICATE_RVA,
             title_native_ready_predicate_hook as *mut c_void,
             &TITLE_NATIVE_READY_PREDICATE_ORIG,
         );
-        // Menu-item Update 0x1407ad1c0: capture the live Load-Game item (functor ->
+        // Menu-item Update 0x1407ae4f0: capture the live Load-Game item (functor ->
         // dialog_factory) by letting the native pump walk its own CSMenu tree.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_menu_item_update_7ad1c0",
+            "cap_menu_item_update_7ae4f0",
             MENU_ITEM_UPDATE_RVA,
             cap_menu_item_update_hook as *mut c_void,
             &MENU_ITEM_UPDATE_ORIG,
         );
-        // Sequence child-iterator 0x1407aa1f0: enumerate every Sequence's children to capture
+        // Sequence child-iterator 0x1407ab520: enumerate every Sequence's children to capture
         // the Load-Game leaf d180 even though it does not tick (only the focused entry ticks
         // the leaf Update above).
         create_continue_trace_hook(
             &mut hooks,
-            "cap_sequence_iter_7aa1f0",
+            "cap_sequence_iter_7ab520",
             SEQUENCE_ITER_RVA,
             cap_sequence_iter_hook as *mut c_void,
             &SEQUENCE_ITER_ORIG,
         );
-        // CSMenu controller ctor 0x1409060d0: latch router_this (owns the selectable-row vector
+        // CSMenu controller ctor 0x140907720: latch router_this (owns the selectable-row vector
         // at +0x1290) -- it is not field-linked from the TitleTopDialog, so capturing it at
         // construction is how the own-stepper reaches the Continue/Load rows zero-input.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_csmenu_ctor_9060d8",
+            "cap_csmenu_ctor_907720",
             CSMENU_CTOR_RVA,
             cap_csmenu_ctor_hook as *mut c_void,
             &CAP_CSMENU_CTOR_ORIG,
@@ -643,14 +640,14 @@ pub(crate) fn install_continue_trace_hooks() {
         // zero-input; if neither does, the interactive menu controller is input-instantiated.
         create_continue_trace_hook(
             &mut hooks,
-            "cap_rebuild_rows_78d2c0",
+            "cap_rebuild_rows_78e5f0",
             REBUILD_ROWS_RVA,
             cap_rebuild_rows_hook as *mut c_void,
             &CAP_REBUILD_ROWS_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "cap_append_one_78eea0",
+            "cap_append_one_7901d0",
             APPEND_ONE_RVA,
             cap_append_one_hook as *mut c_void,
             &CAP_APPEND_ONE_ORIG,
@@ -659,55 +656,53 @@ pub(crate) fn install_continue_trace_hooks() {
         // STEP_MoveMap_Init creates the MoveMapStep child; step 8 STEP_MoveMap_Finish fires when its
         // load completes. On the softlock Init fires but Finish never does -- that absence is the
         // semaphore. These fire once per world load (edge, not per-frame) so they add no timing
-        // perturbation to the Windows-native race (unlike detouring the hot Execute pump 0x140b0bd60,
-        // which froze the title machine, submit.rs run 305). RVAs ground-truthed dump->deobf via the
-        // shift tool (dump 0x140aec210/0x140aec140 -> deobf, shift -0xf0, content-unique).
+        // perturbation to the Windows-native race (unlike detouring the hot Execute pump, 1.16.2
+        // 0x140b0bd60, which froze the title machine, submit.rs run 305).
         create_continue_trace_hook(
             &mut hooks,
-            "mms_step_init_aec120",
+            "mms_step_init_aed8f0",
             MMS_STEP_INIT_RVA,
             mms_step_init_hook as *mut c_void,
             &MMS_STEP_INIT_ORIG,
         );
         create_continue_trace_hook(
             &mut hooks,
-            "mms_step_finish_aec050",
+            "mms_step_finish_aed820",
             MMS_STEP_FINISH_RVA,
             mms_step_finish_hook as *mut c_void,
             &MMS_STEP_FINISH_ORIG,
         );
-        // The child's own STEP_Cleanup (MoveMapStep step 18->19 exit, dump 0x140af5840 -> deobf, shift
-        // -0xf0 content-unique). Fires the instant a MoveMapStep child leaves the STEP_MoveMap resident
+        // The child's own STEP_Cleanup (MoveMapStep step 18->19 exit). Fires the instant a MoveMapStep child leaves the STEP_MoveMap resident
         // step toward Finish. Logs the GameMan load-in signals at that exact moment so a successful load
         // reveals which input drives the advance -- on the re-load lock the incoming child never reaches
         // this hook (parks at 18), so its absence (with a matching MMS-INIT ptr) is itself the signal.
         create_continue_trace_hook(
             &mut hooks,
-            "mms_child_cleanup_af5750",
+            "mms_child_cleanup_af6f20",
             MMS_CHILD_CLEANUP_RVA,
             mms_child_cleanup_hook as *mut c_void,
             &MMS_CHILD_CLEANUP_ORIG,
         );
-        // World-RES POPULATE source-builder (deobf 0x66bb10): the one function that (re)creates the
+        // World-RES POPULATE source-builder (2.7.2.0 0x66ce10): the one function that (re)creates the
         // +0xce0 per-block res the WorldResWait stall waits on. It early-outs when its input MSB-list
         // count (arg2+0x10) is 0. Logging that count per load is the decisive divergence semaphore --
         // full on the fresh boot (load 1), 0 for the dest on the in-game reload (load 2). Read-only.
         create_continue_trace_hook(
             &mut hooks,
-            "populate_blocks_lists_66bb10",
+            "populate_blocks_lists_66ce10",
             POPULATE_BLOCKS_LISTS_RVA,
             populate_blocks_lists_hook as *mut c_void,
             &POPULATE_BLOCKS_LISTS_ORIG,
         );
-        // Load-state entry ctor (0x6610e0): decisive load1-vs-load2 probe for whether the destination
+        // Load-state entry ctor (0x6623e0): decisive load1-vs-load2 probe for whether the destination
         // area-0x1c load-state entry is re-created on the reload (absence on load 2 == the resident-reuse
         // root). Read-only, 2 register args (rcx=entry, rdx=descNode) so 4-arg forwarding is safe.
-        // NOTE: we deliberately do not hook the world block ctor 0x62ec00 -- it takes its count/base as
+        // NOTE: we deliberately do not hook the world block ctor (1.16.2 0x62ec00) -- it takes its count/base as
         // stack args (0x68/0x70(%rsp)); a 4-register forwarding hook loses them and corrupts every block's
         // load-state slice -> AV (runtime-proven 2026-07-17, crash in the 0x61-0x62 worldres region).
         create_continue_trace_hook(
             &mut hooks,
-            "worldres_entry_ctor_6610e0",
+            "worldres_entry_ctor_6623e0",
             WORLDRES_ENTRY_CTOR_RVA,
             worldres_entry_ctor_hook as *mut c_void,
             &WORLDRES_ENTRY_CTOR_ORIG,
@@ -716,7 +711,7 @@ pub(crate) fn install_continue_trace_hooks() {
         // oracle blk_ls could not give. Change-detected so the hot path is not flooded.
         create_continue_trace_hook(
             &mut hooks,
-            "worldres_blockres_getter_62f470",
+            "worldres_blockres_getter_630770",
             WORLDRES_BLOCKRES_GETTER_RVA,
             worldres_blockres_getter_hook as *mut c_void,
             &WORLDRES_BLOCKRES_GETTER_ORIG,
@@ -725,7 +720,7 @@ pub(crate) fn install_continue_trace_hooks() {
         // file cap is loaded but its data +0x90 is null (the determined reload stall). Inert unless armed.
         create_continue_trace_hook(
             &mut hooks,
-            "worldres_blockres_phase2_6157f0",
+            "worldres_blockres_phase2_616af0",
             WORLDRES_BLOCKRES_PHASE2_RVA,
             blockres_phase2_hook as *mut c_void,
             &BLOCKRES_PHASE2_ORIG,
@@ -734,20 +729,20 @@ pub(crate) fn install_continue_trace_hooks() {
         // mount_ebl path (asset override), so a second detour collides and corrupts control flow ->
         // boot crash (RIP-outside-.text stack overflow, DLL ec09cb30 2026-07-17). Use the read-only
         // CAPSTATE-SUBSYS globals (repo gate / CSEblFileManager) below, or a sw-breakpoint, instead.
-        // INSTRUMENT: the map-mount change-detector 0x14082d5b0 (clean leaf compare fn). Read-only
+        // INSTRUMENT: the map-mount change-detector 0x14082ea50 (clean leaf compare fn). Read-only
         // forwarding hook to see each gate's controller/descriptor/al on load1 vs load2 and identify the
         // m28 map-mount gate (al 1->0). This is also where the precise fix will force the m28 result.
         create_continue_trace_hook(
             &mut hooks,
-            "mount_guard_detector_82d5b0",
+            "mount_guard_detector_82ea50",
             MOUNT_GUARD_DETECTOR_RVA,
             mount_guard_detector_hook as *mut c_void,
             &MOUNT_GUARD_DETECTOR_ORIG,
         );
-        // NOTE: do not detour the map-load orchestrator 0x82dbf0 to observe it -- it is a load-critical,
+        // NOTE: do not detour the map-load orchestrator 0x82f090 to observe it -- it is a load-critical,
         // step-dispatched in-game fn and a forwarding detour stalls the first autoload at "Preparing Save"
         // (DLL 99a12f98, 2026-07-17). Observe it via a sw-breakpoint on MountEblArchive 0x1efc00 (deep
-        // stack shows the 0x82dc1c orchestrator caller chain + the archive descriptor) instead.
+        // stack shows the (1.16.2 0x82dc1c) orchestrator caller chain + the archive descriptor) instead.
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -772,9 +767,9 @@ pub(crate) fn install_continue_trace_hooks() {
     std::mem::forget(hooks);
 }
 
-/// MoveMapStep child STEP_Cleanup deobf RVA (dump 0x140af5840, shift -0xf0 content-unique). Fires when a
+/// MoveMapStep child STEP_Cleanup, 2.7.2.0 RVA. Fires when a
 /// child leaves the resident STEP_MoveMap(18) toward Finish -- the load-in completion (or teardown) edge.
-const MMS_CHILD_CLEANUP_RVA: u32 = 0xaf5750;
+const MMS_CHILD_CLEANUP_RVA: u32 = 0xaf6f20;
 pub(crate) use er_telemetry_core::counters::MMS_CHILD_CLEANUP_ORIG;
 
 /// Logs the GameMan load-in signals at the moment a MoveMapStep child advances out of STEP_MoveMap. On a
@@ -797,7 +792,7 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
                 -1
             }
         };
-        // Also read the return-title byte (menuData+0x5d) + force latch (0x3d856a0) at the advance edge --
+        // Also read the return-title byte (menuData+0x5d) + force latch (0x3d8c740) at the advance edge --
         // warp/b7c/b7d proved 0 even on a successful advance, so the driver is one of these (or session).
         let menudata = game_rva(CS_MENU_MAN_GLOBAL_RVA as u32)
             .ok()
@@ -809,7 +804,7 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
             .map(|v| v as i32)
             .unwrap_or(-1);
-        let force = game_rva(ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA as u32)
+        let force = game_rva(ENDING_REQUEST_FORCE_FLAG_RVA as u32)
             .ok()
             .and_then(|p| unsafe { safe_read_u8(p) })
             .map(|v| v as i32)
@@ -818,7 +813,7 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
         // the ending evaluator ORs into `cVar10` (the table is in `constants_return_title.rs`),
         // and all five read 0 at the black-screen advance in three separate runs -- which was
         // read as "the evaluator advanced on nothing" when it actually means we were blind to
-        // the rest of it. Two of the remaining four are statically dead (`FUN_140e2aa70` and
+        // the rest of it. Two of the remaining four are statically dead (1.16.2 `FUN_140e2aa70` and
         // `FUN_140e62aa0` are both `return 0;`), so these are the only candidates left. `-1` is
         // "could not resolve or read", not a zero: a refusal must stay distinguishable from a
         // measurement, because the whole point of this line is which term was non-zero.
@@ -867,10 +862,11 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
     unsafe { mms_call_original(&MMS_CHILD_CLEANUP_ORIG, this, b, c, d) }
 }
 
-/// STEP_MoveMap_Init deobf RVA (dump 0x140aec210, shift -0xf0 content-unique). Creates the child.
-const MMS_STEP_INIT_RVA: u32 = 0xaec120;
-/// STEP_MoveMap_Finish deobf RVA (dump 0x140aec140, shift -0xf0 content-unique). Load complete.
-const MMS_STEP_FINISH_RVA: u32 = 0xaec050;
+/// STEP_MoveMap_Init, 2.7.2.0 RVA. Creates the child.
+const MMS_STEP_INIT_RVA: u32 = 0xaed8f0;
+/// STEP_MoveMap_Finish, 2.7.2.0 RVA. Load complete. (Its value equals 1.16.2 `REQUEST_SUBMIT_RVA`;
+/// the two were each ported from their own 1.16.2 value.)
+const MMS_STEP_FINISH_RVA: u32 = 0xaed820;
 pub(crate) use er_telemetry_core::counters::MMS_STEP_FINISH_ORIG;
 pub(crate) use er_telemetry_core::counters::MMS_STEP_INIT_ORIG;
 
@@ -902,7 +898,8 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     // `STEP_MoveMap_Init` reads `GameMan+0x14` into the MoveMapStep's `mapId` (+0xdc) and then clears
     // the field. An earlier version of this line wrote the block here, on the theory that nothing on
     // the switch path set it. That theory is false and the decompile says so: the slot deserialize
-    // `FUN_14067b290` -- the function our own-load already calls -- ends with
+    // `DESERIALIZE_SLOT_RVA` (0x14067c590; 1.16.2 `FUN_14067b290`) -- the function our own-load
+    // already calls -- ends with
     // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true`, so the native flow we are
     // already inside sets it for us. Writing it again was a second, redundant store of a field the
     // game owns, which is the shape of fix this repo keeps having to undo. Logging the value instead
@@ -1076,7 +1073,7 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
     // The determined stall: the primary cap reports loaded (0x88==0x04) but its data (+0x90) is null.
     // World teardown released the cap's content child (refcount->0, freed) but left the parent cap
     // registered in CSFile's name map with status still 0x04, so the reload's find-or-insert
-    // (0x142651bb0) just refcount-bumps the same stale cap and re-reads nothing. RE-proven (2026-07-17):
+    // (1.16.2 0x142651bb0) just refcount-bumps the same stale cap and re-reads nothing. RE-proven (2026-07-17):
     // clearing +0x88 alone or resetting the block phase does not re-issue -- loading is enqueue-driven
     // and nothing polls a registered cap's status. The only native re-issue is to put the cap back on
     // its own CSFile load queue (blockres_reissue_filecap), which the per-frame update loop then reads
@@ -1113,7 +1110,7 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
                 }
             }
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} primary-cap=0x{fc:x} status=0x04 data=null -> re-enqueued {issued} stale file cap(s) onto the CSFile load queue (native 0x269d7b0) to re-attach +0x90"
+                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} primary-cap=0x{fc:x} status=0x04 data=null -> re-enqueued {issued} stale file cap(s) onto the CSFile load queue (native 0x{CSFILE_ENQUEUE_RVA:x}) to re-attach +0x90"
             ));
         } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
             // Identified failure, not a hedge. One native re-issue already ran and the read came back
@@ -1131,7 +1128,7 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
 }
 
 /// Re-issue the FD4 read for a resident-but-dataless file cap by putting it back on its own CSFile load
-/// queue exactly the way the game's new-insert load path does (0x142651c42 in 0x142651bb0). The stale
+/// queue exactly the way the game's new-insert load path does (1.16.2 0x142651c42 in 0x142651bb0). The stale
 /// cap keeps its name-map identity (path/name intact), so the dispatched read re-attaches its content
 /// child at +0x90. Every derived pointer is validated before the status write or the native call, so a
 /// missing/unexpected layout fails closed (returns false) rather than faulting. Returns true iff the
@@ -1160,7 +1157,7 @@ unsafe fn blockres_reissue_filecap(cap: usize) -> bool {
     let Ok(enqueue_addr) = game_rva(CSFILE_ENQUEUE_RVA) else {
         return false;
     };
-    // Clear the stale "loaded" status so the per-frame update loop (0x1426525a0) will select this cap
+    // Clear the stale "loaded" status so the per-frame update loop (1.16.2 0x1426525a0) will select this cap
     // (it picks only status==0 queue entries), then hand it to the enqueue primitive (rcx=queue,rdx=cap).
     unsafe { *((cap + FILECAP_STATUS_88_OFFSET) as *mut u8) = 0 };
     let enqueue: unsafe extern "system" fn(usize, usize) =
@@ -1196,7 +1193,7 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
             -1
         };
         // Read the block-res load-state (getter return) + the exact phase-2->3 gate inputs from the
-        // decompiled FUN_1406158d0: gate byte +0x2f; the block's two FD4FileCap slots at +0x40 (blockres[8])
+        // decompiled 1.16.1 dump FUN_1406158d0: gate byte +0x2f; the block's two FD4FileCap slots at +0x40 (blockres[8])
         // and +0x48 (blockres[9]); for the primary cap +0x88 load-status (0x04=loaded) and +0x90 data ptr.
         // HYPOTHESIS: on the reload the primary cap is loaded (0x88==0x04) but its data +0x90 is NULL, so
         // the phase-2 handler cannot advance and parks at 2 (the determined stall cause).
@@ -1290,30 +1287,34 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 ));
             }
             // Which mechanism starves the load-2 read? (RE step3-run7-re-result-*): read the
-            // resource-repository gate byte *0x14485cbec (0 => repo fast-path off, NameLookup returns
+            // resource-repository gate byte (0 => repo fast-path off, NameLookup returns
             // null and AddDefaultFileLoadProcess skips the repo attach) and the FD4 subsystem singletons
-            // (repo *0x14485d0e8, CSEblFileManager *0x143d5b078 + lazy *0x143d5b088, CSFile *0x143d5b0f8).
+            // (repo, CSEblFileManager + its lazy slot, CSFile). 2.7.2.0 data rvas below.
             // A gate==0 at the stall points at repository-path loss; gate==1 with a live EBL manager
             // points at an EBL unmount (0x1401efc00 reads empty). Read-only globals via game_rva.
+            const REPO_GATE_BYTE_RVA: u32 = 0x04863d1c;
+            const REPO_SINGLETON_RVA: u32 = 0x04864218;
+            const CSEBL_FILE_MANAGER_RVA: u32 = 0x03d620f8;
+            const CSEBL_FILE_MANAGER_LAZY_RVA: u32 = 0x03d62108;
             let g = |rva: u32| game_rva(rva).ok();
-            let repo_gate = g(0x0485cbec)
+            let repo_gate = g(REPO_GATE_BYTE_RVA)
                 .and_then(|a| unsafe { safe_read_u8(a) })
                 .map(|v| v as i32)
                 .unwrap_or(-1);
-            let repo_singleton = g(0x0485d0e8)
+            let repo_singleton = g(REPO_SINGLETON_RVA)
                 .and_then(|a| unsafe { safe_read_usize(a) })
                 .unwrap_or(0);
-            let ebl_mgr = g(0x03d5b078)
+            let ebl_mgr = g(CSEBL_FILE_MANAGER_RVA)
                 .and_then(|a| unsafe { safe_read_usize(a) })
                 .unwrap_or(0);
-            let ebl_mgr_lazy = g(0x03d5b088)
+            let ebl_mgr_lazy = g(CSEBL_FILE_MANAGER_LAZY_RVA)
                 .and_then(|a| unsafe { safe_read_usize(a) })
                 .unwrap_or(0);
-            let csfile = g(0x03d5b0f8)
+            let csfile = g(CSFILE_SINGLETON_RVA)
                 .and_then(|a| unsafe { safe_read_usize(a) })
                 .unwrap_or(0);
             append_autoload_debug(format_args!(
-                "CAPSTATE-SUBSYS: repo_gate(*0x14485cbec)={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
+                "CAPSTATE-SUBSYS: repo_gate(*rva 0x{REPO_GATE_BYTE_RVA:x})={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
             ));
             // Census only in measurement mode (fix disabled via marker); off when the guard-flip fix is
             // active so its done line does not trigger a premature census-teardown of a fix/instrument run.
@@ -1401,7 +1402,7 @@ pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DET_LOGS_L1;
 pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DET_LOGS_L2;
 pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DETECTOR_ORIG;
 
-/// Read-only instrument of the map-mount change-detector 0x14082d5b0 (rcx=controller, rdx=descriptor -> al
+/// Read-only instrument of the map-mount change-detector 0x14082ea50 (rcx=controller, rdx=descriptor -> al
 /// in rax; al=1 changed->mount runs, al=0 unchanged->mount skipped). Logs controller id/bits (+0x120 id,
 /// +0x128/+0x130/+0x131/+0x132/+0x133 bits) + descriptor id/bits (+0x08 id, +0x04 bits) + al, tagged by
 /// load phase, so the m28 gate is the one whose al is 1 on load1 (in_world=false) and 0 on load2
@@ -1484,12 +1485,12 @@ pub(crate) fn ebl_registry_is_null() -> bool {
         .is_none()
 }
 
-/// Fix (RE 2026-07-17): clobber the map-mount guard's cached descriptor so the change-detector 0x14082d5b0
+/// Fix (RE 2026-07-17): clobber the map-mount guard's cached descriptor so the change-detector 0x14082ea50
 /// sees "changed" on its next check and enqueues the map-mount MenuJob (mount + bind) on the warm reload,
 /// repopulating the block cap's +0x90. `desc = *(*(MOUNT_GUARD_STATE_ROOT_RVA)+0x60)+0x1200`; write id
 /// (+0x08)=0 and clear bits (+0x04 &= ~0x79). One clobber -> exactly one extra mount (the detector
 /// re-syncs the descriptor on the changed path). Every pointer validated; returns (written, old_id,
-/// old_bits) for the log. No detour of the load-critical orchestrator 0x82dbf0.
+/// old_bits) for the log. No detour of the load-critical orchestrator 0x82f090.
 pub(crate) fn force_map_mount_guard_flip() -> (bool, u64, u32) {
     let Ok(root_addr) = game_rva(MOUNT_GUARD_STATE_ROOT_RVA) else {
         return (false, 0, 0);
@@ -1601,7 +1602,7 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
 }
 
 /// FD4FileCap resource-name (`std::wstring`, MSVC SSO) offsets. RE (deobf `eldenring-deobf.bin`):
-/// RequestDCX 0x142658a80 (called by AddDefaultFileLoadProcess 0x142658c60 at 0x142658d57 with
+/// RequestDCX (1.16.2 0x142658a80, called by AddDefaultFileLoadProcess 1.16.2 0x142658c60 at 0x142658d57 with
 /// rcx = the cap saved in r14) does `lea 0x18(%rcx),%rdx; cmpq $0x8,0x18(%rdx); jb .; mov (%rdx),%rdx`
 /// -- i.e. the resource path is an MSVC `std::basic_string<wchar_t>` embedded at cap+0x18: `_Bx` (inline
 /// buffer / heap ptr) at +0x18, `_Mysize` (length in wchars) at +0x28, `_Myres` (capacity) at +0x30.
@@ -1845,12 +1846,12 @@ pub(crate) unsafe extern "system" fn b80_preview_initiator_hook(
 ) -> usize {
     let slot = a as i32;
     append_continue_trace(format_args!(
-        "b80_preview_67b4e0 ENTER slot={slot} {}",
+        "b80_preview ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_union_original(&B80_PREVIEW_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
-        "b80_preview_67b4e0 LEAVE slot={slot} ret={ret} {}",
+        "b80_preview LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
     ret as usize
@@ -1864,12 +1865,12 @@ pub(crate) unsafe extern "system" fn b80_loadsavedata_hook(
 ) -> usize {
     let slot = a as i32;
     append_continue_trace(format_args!(
-        "b80_loadsavedata_67b200 ENTER slot={slot} {}",
+        "b80_loadsavedata ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_union_original(&B80_LOAD_SAVE_DATA_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
-        "b80_loadsavedata_67b200 LEAVE slot={slot} ret={ret} {}",
+        "b80_loadsavedata LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
     ret as usize
@@ -1883,12 +1884,12 @@ pub(crate) unsafe extern "system" fn b80_fullload_hook(
 ) -> usize {
     let slot = a as i32;
     append_continue_trace(format_args!(
-        "b80_fullload_67b1a0 ENTER slot={slot} {}",
+        "b80_fullload_67c4a0 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_union_original(&B80_FULL_LOAD_INITIATOR_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
-        "b80_fullload_67b1a0 LEAVE slot={slot} ret={ret} {}",
+        "b80_fullload_67c4a0 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
     ret as usize
@@ -1903,12 +1904,12 @@ pub(crate) unsafe extern "system" fn b80_poll_hook(
     let arg0 = a as u8;
     let arg1 = b as u8;
     append_continue_trace(format_args!(
-        "b80_poll_679180 ENTER arg0={arg0} arg1={arg1} {}",
+        "b80_poll ENTER arg0={arg0} arg1={arg1} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_union_original(&B80_POLL_ORIG, a, b, c, d) } as i32;
     append_continue_trace(format_args!(
-        "b80_poll_679180 LEAVE ret={ret} {}",
+        "b80_poll LEAVE ret={ret} {}",
         b80_mount_trace_summary()
     ));
     ret as usize
@@ -1933,7 +1934,7 @@ pub(crate) unsafe extern "system" fn b80_dispatcher2_observe_hook(
         || before.contains("b80=3")
     {
         append_continue_trace(format_args!(
-            "b80_dispatcher2_afb880 OBS this=0x{this:x} ret={ret} before{{{before}}} after{{{}}} {}",
+            "b80_dispatcher2_afd060 OBS this=0x{this:x} ret={ret} before{{{before}}} after{{{}}} {}",
             b80_mount_trace_summary(),
             trace_callers_summary()
         ));
@@ -1949,7 +1950,7 @@ pub(crate) unsafe extern "system" fn b80_deserialize_hook(
 ) -> usize {
     let slot = a as i32;
     append_continue_trace(format_args!(
-        "b80_deserialize_67b290 ENTER slot={slot} {}",
+        "b80_deserialize ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_union_original(&B80_DESERIALIZE_ORIG, a, b, c, d) } as i32;
@@ -1963,12 +1964,12 @@ pub(crate) unsafe extern "system" fn b80_deserialize_hook(
             OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
             OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "b80_deserialize_67b290: latched native post-click deserialize success slot={slot} ac0={ac0} c30=0x{c30:x}"
+                "b80_deserialize: latched native post-click deserialize success slot={slot} ac0={ac0} c30=0x{c30:x}"
             ));
         }
     }
     append_continue_trace(format_args!(
-        "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
+        "b80_deserialize LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
     ));
     ret as usize

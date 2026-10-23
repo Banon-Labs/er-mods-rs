@@ -32,16 +32,16 @@ apart, uniform, `INFERRED`), and every hit A lands before B's strike counts towa
 The poise state follows `CSChrToughnessModule` (docs/er-mechanics/interrupt.md section 2):
 
 * A hit subtracts `dealt x unk1 x damageRatio` (the window's rates while a TAE 795 window is open)
-  from current poise; at or below 0 the defender is broken (`FUN_140486bf0`, `VERIFIED`).
+  from current poise; at or below 0 the defender is broken (`FUN_140487230`, `VERIFIED`).
 * Opening or closing a window recomputes `max`, and current becomes
-  `clamp(newMax - (oldMax - current), minToughness% x newMax, newMax)` (`FUN_140486e50`,
+  `clamp(newMax - (oldMax - current), minToughness% x newMax, newMax)` (`FUN_140487490`,
   `VERIFIED`), so damage taken before and inside a window carries through it, except what the
   window's floor heals.
 * Nothing regenerates gradually. Every hit with a nonzero damage level re-arms a timer of
   `GameSystemCommonParam.baseToughnessRecoverTime x PlayerCommonParam.toughnessRecoverCorrection
   x prod(1 + armor toughnessRecoverCorrection)` seconds (30.0 x 1.0 x 1.0 in 1.17.1); when it runs
   out, poise refills to max at once. A break refills it two updates later. A guarded hit subtracts
-  nothing (`info+0x258`). All `VERIFIED` in the 1.16.2 image, values from the regulation.
+  nothing (`info+0x258`). All `VERIFIED` in the 2.7.2.0 image, values from the regulation.
 
 Two chip scenarios: `fresh` (full poise at B's first frame, the exchange module's assumption) and
 `carried`: the defender is at a uniformly random point of the steady-state cycle an attacker who
@@ -117,7 +117,7 @@ ENTRY_FRAMES = {"roll_r1": 20.0, "bstep_r1": 14.0, "crouch_r1": 8.0, "run_r1": 2
 
 def poise_reset_seconds(armor_rates=(0.0, 0.0, 0.0, 0.0)) -> float:
     """Seconds after the last poise hit until poise refills to max, per the rule in
-    `CSChrToughnessModule` vtable slot 8 (0x140487b00) and `FUN_140688e50` (`VERIFIED` 1.16.2):
+    `CSChrToughnessModule` vtable slot 8 (0x140488140) and `FUN_14068a150` (`VERIFIED`):
     `baseToughnessRecoverTime x PlayerCommonParam.toughnessRecoverCorrection x prod(1 + armor
     toughnessRecoverCorrection)`. `armor_rates` are the four pieces' values (every
     EquipParamProtector row holds 0.0 in 1.17.1)."""
@@ -138,7 +138,7 @@ def armor_recover_rates() -> Counter:
 
 def counter_poise_rate() -> dict:
     """SpEffect 45's fields that could touch poise. `toughnessDamageCutRate` is the SpEffect half
-    of the defender's cut rate in `FUN_140486bf0` (toughness vtable slot 7, attacks.md section 2);
+    of the defender's cut rate in `FUN_140487230` (toughness vtable slot 7, attacks.md section 2);
     the thrust rate only reaches HP damage."""
     files = PR.load(None)
     rows, _, _ = PR.rows(PR.param_bytes(files, "SpEffectParam"),
@@ -216,7 +216,7 @@ def _window(reg, weapon, row_id, source, ratio, frames):
     """One TAE 795 window as (start, end, bonus menu, poise-taken multiplier, floor fraction):
     bonus `100 x correctionRate x weapon toughnessCorrectRate` when Args byte 1 is 1 or 2,
     multiplier ToughnessParam `unk1` x the event's damageRatio, floor `minToughness` / 100
-    (attacks.md section 2, `VERIFIED` handler 0x14042c2e0 and update 0x140486e50)."""
+    (attacks.md section 2, `VERIFIED` handler 0x14042c8c0 and update 0x140487490)."""
     t = reg.toughness.get(row_id, {})
     bonus = (ATK.TOUGHNESS_SCALE * t.get("correctionRate", 0.0) * weapon["toughnessCorrectRate"]
              if source in (1, 2) else 0.0)
@@ -944,23 +944,26 @@ def print_weapon(doc: dict, name: str, grip: str) -> None:
 # --------------------------------------------------------------------------------------------
 # self test
 
-#: Instructions of the 1.16.2 image (`eldenring-deobf.bin`, shift 0 against the named dump) the
-#: poise rules above rest on, byte-checked by the selftest.
+#: Instructions of the 2.7.2.0 image (`eldenring-deobf-1.17.2.bin`) the poise rules above rest
+#: on, byte-checked by the selftest. The three in FUN_140487230 sit in its chunk at 0x140487392
+#: and the one in FUN_140487490 in its chunk at 0x1404875a6 (separate `.pdata` entries).
 EXE_ANCHORS = [
-    (0x140486d52, bytes.fromhex("80bf5802000000"),
-     "FUN_140486bf0: cmp byte [info+0x258], 0 (a guarded hit skips the poise subtraction)"),
-    (0x140486d93, bytes.fromhex("807f2400"),
-     "FUN_140486bf0: cmp byte [info+0x24], 0 (the hit's damage level; nonzero re-arms the timer)"),
-    (0x140486d9f, bytes.fromhex("ff5040f30f114320"),
-     "FUN_140486bf0: timer [+0x20] = toughness vtable slot 8 (recover time)"),
-    (0x140486f80, bytes.fromhex("f30f104b20"),
-     "FUN_140486e50: loads the timer [+0x20] to count it down by deltaTime"),
-    (0x140487c70, bytes.fromhex("e9db112000"),
-     "slot 8 (0x140487b00) ends in jmp FUN_140688e50 = baseToughnessRecoverTime x its product"),
+    (0x140487392, bytes.fromhex("80bf5802000000"),
+     "FUN_140487230: cmp byte [info+0x258], 0 (a guarded hit skips the poise subtraction)"),
+    (0x1404873d3, bytes.fromhex("807f2400"),
+     "FUN_140487230: cmp byte [info+0x24], 0 (the hit's damage level; nonzero re-arms the timer)"),
+    (0x1404873df, bytes.fromhex("ff5040f30f114320"),
+     "FUN_140487230: timer [+0x20] = toughness vtable slot 8 (recover time)"),
+    (0x1404875c0, bytes.fromhex("f30f104b20"),
+     "FUN_140487490: loads the timer [+0x20] to count it down by deltaTime"),
+    (0x1404882b0, bytes.fromhex("e99b1e2000"),
+     "slot 8 (0x140488140) ends in jmp FUN_14068a150 = baseToughnessRecoverTime x its product"),
 ]
+#: `CSChrToughnessModule` player vtable (0x142a40f30) slot 8 and the function it holds.
+TOUGHNESS_SLOT8_VA, TOUGHNESS_SLOT8 = 0x142a40f70, 0x140488140
 
 
-def _read(va: int, size: int, path=ATK.DEOBF_1162) -> bytes:
+def _read(va: int, size: int, path=ATK.DEOBF) -> bytes:
     with open(path, "rb") as f:
         f.seek(va - 0x140000000)
         return f.read(size)
@@ -1038,14 +1041,14 @@ def selftest() -> int:
     ours = {**ENTRY_FRAMES, "jump_r1": jump_entry(), "jump_r2": jump_entry()}
     check(all(pvp_entry.get(k) == v for k, v in ours.items() if k in pvp_entry),
           f"entry frames agree with er-builds-pvp.SCORE_ENTRY_FRAMES ({ours})")
-    if os.path.exists(ATK.DEOBF_1162):
-        vt = struct.unpack_from("<Q", _read(0x142a3bf40, 8))[0]
-        check(vt == 0x140487b00, f"player toughness vtable slot 8 at 0x142a3bf40 -> {vt:#x} (the recover-time getter)")
+    if os.path.exists(ATK.DEOBF):
+        vt = struct.unpack_from("<Q", _read(TOUGHNESS_SLOT8_VA, 8))[0]
+        check(vt == TOUGHNESS_SLOT8, f"player toughness vtable slot 8 at {TOUGHNESS_SLOT8_VA:#x} -> {vt:#x} (the recover-time getter)")
         for va, want, what in EXE_ANCHORS:
             got = _read(va, len(want))
             check(got == want, f"{va:#x} {want.hex()}: {what}")
     else:
-        print("skip EXE checks: no", ATK.DEOBF_1162)
+        print("skip EXE checks: no", ATK.DEOBF)
 
     # Real weapons.
     reg = ATK.Regulation(None)

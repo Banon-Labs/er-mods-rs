@@ -16,16 +16,20 @@
 //! it does, a trail of markers pointing at an invader is a trail pointing back at you. Until
 //! somebody watches a second client while these spawn, treat that as an open question rather than
 //! a solved one.
+//!
+//! The `FUN_`/instruction addresses quoted in comments are 1.16.2 dump addresses, where this was
+//! reversed. The rva constants are 2.7.2.0 rvas, the build the DLL runs on.
 
 #![cfg(windows)]
 
-/// The fire-and-forget wrapper `FUN_140d929f0` is deliberately not used.
+/// `GLOBAL_CSSfx` (1.16.2 `0x143d839b8`). The fire-and-forget wrapper `FUN_140d929f0` is
+/// deliberately not used.
 ///
 /// It resolves the singleton, spawns, and then throws the control block away -- which is why the
 /// first version of this feature could place stones and never take them back. Everything here
 /// goes through [`SPAWN_FFX_INSTANCE_RVA`] and keeps the block.
 ///
-const GLOBAL_CSSFX_RVA: u32 = 0x3d8_39b8;
+const GLOBAL_CSSFX_RVA: u32 = 0x3d8_aa48;
 
 /// A world transform with no rotation and no scale, positioned at `position`.
 ///
@@ -80,13 +84,13 @@ fn transform_at(position: [f32; 3]) -> WorldTransform {
 #[repr(C, align(16))]
 struct WorldTransform([f32; 16]);
 
-/// Resolve a game function by RVA for the running build, refusing what it cannot place.
+/// Resolve a 2.7.2.0 game function rva, refusing it on any other build.
 ///
 /// The doc comment here used to make this claim while the body only added the base -- it checked
-/// nothing. It now delegates to the shared resolver, which returns the translated address on a
-/// build that moved the code and `None` when no mapping is verified. That matters more here than
-/// almost anywhere: these addresses are transmuted into function pointers and called, so a stale
-/// one transfers control into whatever now occupies those bytes.
+/// nothing. It now delegates to the shared resolver, which returns `None` when the running build
+/// is not 2.7.2.0. That matters more here than almost anywhere: these addresses are transmuted
+/// into function pointers and called, so a stale one transfers control into whatever now occupies
+/// those bytes.
 fn function(rva: u32) -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     er_game_base::game_build::resolve_game_address(module_base + rva as usize, "invasion-path sfx")
@@ -100,10 +104,10 @@ fn function(rva: u32) -> Option<usize> {
 /// the slack costs nothing, and being short here would let the engine write past the end.
 const CTRL_BYTES: usize = 0x440;
 
-/// `CS::CSSfxImp::SpawnFfxInstance` -- RVA `0xd95280`. Called directly rather than through
-/// `FUN_140d929f0`, because the wrapper discards the control block this returns and a discarded
-/// control block is an effect that can never be removed.
-const SPAWN_FFX_INSTANCE_RVA: u32 = 0xd9_5280;
+/// `CS::CSSfxImp::SpawnFfxInstance` -- RVA `0xd98720` (1.16.2 `0xd95280`). Called directly rather
+/// than through `FUN_140d929f0`, because the wrapper discards the control block this returns and a
+/// discarded control block is an effect that can never be removed.
+const SPAWN_FFX_INSTANCE_RVA: u32 = 0xd9_8720;
 
 /// `FUN_1420b6370(ctrl) -> bool` -- the engine's own liveness check, and it is two levels deep:
 /// the instance pointer at `ctrl+0x08` must be non-null and `FUN_1420b6280` must report that
@@ -113,17 +117,23 @@ const SPAWN_FFX_INSTANCE_RVA: u32 = 0xd9_5280;
 /// Reading `ctrl+0x08` alone -- which is what this module did first -- passes for a control block
 /// whose effect has already finished, and the teardown then pushes parameters into a dead object.
 /// The engine's sign cleanup calls this before deciding anything, and so does this now.
-const CTRL_IS_ALIVE_RVA: u32 = 0x20b_6370;
+///
+/// 2.7.2.0 `0x1420b9910`.
+const CTRL_IS_ALIVE_RVA: u32 = 0x20b_9910;
 
 /// `FUN_1420b6ac0(ctrl, params, len, arg4)` -- push the parameter block to the live instance.
-const CTRL_PUSH_PARAMS_RVA: u32 = 0x20b_6ac0;
+/// 2.7.2.0 `0x1420ba060`.
+const CTRL_PUSH_PARAMS_RVA: u32 = 0x20b_a060;
 /// `FUN_1420b63c0(ctrl)` -- finalise: acts on the instance at `ctrl+0x08` if there is one.
-const CTRL_FINALISE_RVA: u32 = 0x20b_63c0;
-/// `FUN_141c92f30(ctrl + 0x20)` -- tear down the control's second sub-object.
-const CTRL_SUBOBJECT_RELEASE_RVA: u32 = 0x1c9_2f30;
+/// 2.7.2.0 `0x1420b9960`.
+const CTRL_FINALISE_RVA: u32 = 0x20b_9960;
+/// `FUN_141c92f30(ctrl + 0x20)` -- tear down the control's second sub-object. 2.7.2.0
+/// `0x141c96490`, a three-byte `ret 0` leaf: callable, never hooked.
+const CTRL_SUBOBJECT_RELEASE_RVA: u32 = 0x1c9_6490;
 /// `FUN_1420b5c40(ctrl)` -- unlink the control from the instance's observer list. Not a kill:
-/// on its own this only unregisters, which is why the stop above has to happen first.
-const CTRL_UNLINK_RVA: u32 = 0x20b_5c40;
+/// on its own this only unregisters, which is why the stop above has to happen first. 2.7.2.0
+/// `0x1420b91e0`.
+const CTRL_UNLINK_RVA: u32 = 0x20b_91e0;
 
 /// Offsets inside the control block, all from the same base -- the pointer handed to
 /// `SpawnFfxInstance` as its out-parameter.
@@ -364,10 +374,11 @@ unsafe fn sfx_singleton() -> Option<usize> {
     let module_base = er_game_base::mem::game_module_base().ok()?;
     // SAFETY: fault-tolerant read; None rather than a fault if the page is not mapped.
     //
-    // Resolved, not `module_base + RVA`. Every `.data` global moved between 1.16.2 and 1.17 --
-    // this one 0x3d839b8 -> 0x3d87a28 -- and a stale read does not announce itself the way a
-    // stale call does: `safe_read_usize` succeeds and hands back whatever now occupies the old
-    // slot, which the heap-alignment screen below cannot tell from a real CSSfx pointer.
+    // Resolved, not `module_base + RVA`. Every `.data` global moves between patches -- this one
+    // was 0x3d839b8 on 1.16.2 -- and a stale read does not announce itself the way a stale call
+    // does: `safe_read_usize` succeeds and hands back whatever now occupies the old slot, which the
+    // heap-alignment screen below cannot tell from a real CSSfx pointer. `game_data_addr` answers
+    // 0 on any build but 2.7.2.0.
     let singleton = unsafe {
         er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
             module_base,

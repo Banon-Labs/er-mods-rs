@@ -144,7 +144,7 @@ pub unsafe fn portrait_equip_restore_apply(
 /// Why the PARAM IDS were not enough. Restoring `equipment_param_ids` gives the portrait its
 /// weapons back, but it does not give it the GRIP: `armStyle` lives in a different block
 /// (`ChrAsm+0x08`), and the per-frame model-resource request reads it -- `getSelectedWeaponSlotIndex
-/// (&equipment.armStyle, 0|1)` in `FUN_1409e6fb0` -- to decide both handedness and which of the
+/// (&equipment.armStyle, 0|1)` in `FUN_1409e86f0` -- to decide both handedness and which of the
 /// three slots per hand is the active armament. Writing the model instance's own `chrAsmArmStyle`
 /// (`CSChrAsmModelIns+0x328`) after the fact did stick (writes 4 / read-back 3, run
 /// br-20260907-191016-4020) and changed nothing on screen, which is the signature of a value that

@@ -20,7 +20,7 @@ er-game-base = { path = "../er-game-base" }
 er-hotkey-config = { path = "../er-hotkey-config" }
 
 # Assembles each patched window from NAMED instructions in `build.rs` and ground-truths it
-# against `eldenring-deobf.bin`, so a hand-typed byte cannot silently disarm a patch.
+# against `eldenring-deobf-1.17.2.bin`, so a hand-typed byte cannot silently disarm a patch.
 [build-dependencies]
 iced-x86 = { version = "1.21", default-features = false, features = [
   "std",

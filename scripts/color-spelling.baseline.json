@@ -147,7 +147,6 @@
     "scripts/map-icon-colors.py": 3,
     "scripts/planner-copy-build.py": 14,
     "scripts/planner-face-hex.py": 4,
-    "scripts/rva-alias-allowlist.txt": 1,
     "scripts/save-slot-oracle.py": 2,
     "scripts/test-future-commitment-signal.py": 2,
     "scripts/watch-shader-editor-edits.py": 4,

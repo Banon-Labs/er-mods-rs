@@ -12,8 +12,9 @@ Labels:
 
 Addresses are written `1.16.2 VA / 1.17.1 VA`. The 1.16.2 side comes from the named Ghidra dump on
 `localhost:8765` (dump VA = deobf VA = runtime VA on 1.16.2). Every function below sits under the
-1.17.1 boundary `0xafefe9`, so its 1.17.0 and 1.17.1 addresses are equal. The 1.17.1 side is from
-`docs/recon/rva-map-1162-to-1170.functions.tsv`, except the leaf getters, which have no `.pdata`
+1.17.1 boundary `0xafefe9`, so its 1.17.0 and 1.17.1 addresses are equal. The 1.17.1 side came
+from the 1.16.2 -> 1.17 function map (deleted with the address carry on 2026-10-23), except the
+leaf getters, which have no `.pdata`
 entry and were located by searching `eldenring-deobf-1.17.1.bin` for their exact 24 leading bytes
 (one hit each, all `+0xdd0`). The accumulator `0x1404f4520 / 0x1404f52f0` and the hand gate
 `0x140500930 / 0x140501700` were disassembled out of both images with capstone: 609/609 and

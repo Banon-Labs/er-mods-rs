@@ -1,7 +1,7 @@
 // Who sets a menu grid's cell count, and from which module.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why this and not the predicate table
 //
@@ -16,8 +16,8 @@
 //
 // The cell count is the thing that decides how many cells a grid has.
 // `CS::GridControl::SetItemCount` writes `+0xd0` and recomputes the embedded scroll control at
-// `+0x1a8`; 1.16.2 `0x738dc0` pairs BYTE-IDENTICAL to 1.17 `0x739c10`, which `map-rvas-1170-to-1171`
-// reports unchanged on 1.17.1 (below the `0xafefe9` boundary).
+// `+0x1a8`; 1.16.2 `0x738dc0` pairs BYTE-IDENTICAL to 1.17 `0x739c10`, unchanged on 1.17.1 (below
+// the `0xafefe9` boundary).
 //
 // # What it reports
 //

@@ -18,8 +18,8 @@
 // Nothing is written. Every call made here is a predicate the engine calls on the same thread.
 // No timer: each report fires on the game event it describes.
 //
-// Addresses are 2.7.2.0 runtime RVAs, measured on 1.17.1 (eldenring-deobf-1.17.1.bin) and carried
-// with scripts/map-rvas-1171-to-1172.py. Each function's whole body matches
+// Addresses are 2.7.2.0 runtime RVAs, measured on 1.17.1 (eldenring-deobf-1.17.1.bin) and carried.
+// Each function's whole body matches
 // eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands; the two globals were
 // checked through their readers: at the carried place, 2506 of 2552 1.17.1 WorldChrMan readers and
 // 437 of 442 CSWorldAiManager readers read the carried address; the rest are refused by the carry

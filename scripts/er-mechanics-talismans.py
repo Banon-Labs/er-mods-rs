@@ -6,7 +6,7 @@ names), the game's own item text through `scripts/er-item-name.py`, and the exec
 written up in `docs/er-mechanics/talismans.md`. Nothing here launches the game.
 
 Labels, as in the rest of `docs/er-mechanics/`: `VERIFIED` = a regulation value, or read out of the
-1.16.2 executable and carried to 1.17.1; `INFERRED` = fits the data and names but the consumer was
+1.16.2 executable and carried to 2.7.2.0 (the addresses here); `INFERRED` = fits the data and names but the consumer was
 not traced; `COMMUNITY` = outside claim; `GAME TEXT` = the item's own `AccessoryInfo` line.
 
 What a talisman is (`VERIFIED`, `EquipParamAccessory`): a row with `refCategory 2` whose `refId`
@@ -675,7 +675,7 @@ STAGE_THRESHOLDS = (17, 30, 45, 60)
 
 
 def _hp_gate(f, hp):
-    """`VERIFIED` (FUN_1405012a0): hpRate <= conditionHp*0.01f, hpRate >= conditionHpRate*0.01f."""
+    """`VERIFIED` (FUN_140502150): hpRate <= conditionHp*0.01f, hpRate >= conditionHpRate*0.01f."""
     hp = f32(hp)
     if f.get('conditionHpRate', -1) >= 0 and not hp >= f32(f['conditionHpRate'] * f32(0.01)):
         return f"needs HP >= {f['conditionHpRate']:g}% (exactly full for 100)"
@@ -718,7 +718,7 @@ def _attack_gate(t, s, ctx):
 
 
 def blue_dancer_factor(t, rate, stateinfo, weight):
-    """`VERIFIED` FUN_1404f3450: 1 + (rate - 1) * CalcCorrectGraph[50 or 51](min(weight, 100) / 100).
+    """`VERIFIED` FUN_1404f4300: 1 + (rate - 1) * CalcCorrectGraph[50 or 51](min(weight, 100) / 100).
 
     `weight` is absolute equipped weight (weapons in all six slots, armor, talismans; arrows not
     counted), not a load ratio. None means unknown and returns the full rate."""
@@ -761,7 +761,7 @@ def multipliers(t, talismans, ctx=None):
                 continue
             si = f.get('stateInfo', 0)
             if si == 197:
-                # Spear: skipped by the accumulator; FUN_1404f5310 multiplies its *AttackRate into
+                # Spear: skipped by the accumulator; FUN_1404f61c0 multiplies its *AttackRate into
                 # the counter-hit rate of the elements whose counter rate is above 1.
                 for e in ELEMENTS:
                     v = f.get(ATTACK_RATE[e])
@@ -792,7 +792,7 @@ def multipliers(t, talismans, ctx=None):
             if 'staminaAttackRate' in f:
                 out['stamina_damage'] *= f['staminaAttackRate']
                 out['applied'].append((tal.name, s.id, 'staminaAttackRate', f['staminaAttackRate'], 'stamina damage'))
-    # FUN_140d24a30: the *AttackRate product is stored as (short)(int)(rate * 100), so the damage
+    # FUN_140d278a0: the *AttackRate product is stored as (short)(int)(rate * 100), so the damage
     # sees it truncated to a whole percent (1.17f * 100 = 116.99999 -> 1.16).
     for e in ELEMENTS:
         out['damage_rate'][e] = int(f32(raw_rate[e] * f32(100.0))) / 100.0
@@ -965,7 +965,7 @@ def selftest():
     check('Ritual Sword off below full HP', m['damage_correct']['physical'], 1.0)
     m = multipliers(t, ['Ritual Sword Talisman'], {'slot': 'r1_1', 'hp_ratio': 1.0})
     check('Ritual Sword at full HP', m['damage_correct']['physical'], 1.1)
-    # 20 * 0.01f rounds to 0.19999999f, so exactly 20% HP is outside (FUN_1405012a0).
+    # 20 * 0.01f rounds to 0.19999999f, so exactly 20% HP is outside (FUN_140502150).
     check('Red-Feathered off at exactly 20%',
           multipliers(t, ['Red-Feathered Branchsword'], {'hp_ratio': 0.2})['damage_correct']['physical'], 1.0)
     check('Red-Feathered at 19%',

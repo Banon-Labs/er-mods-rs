@@ -166,7 +166,7 @@ test_repo_absolute_path_script_is_allowed if {
 		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py",
 		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=band-tables-measured",
 		"python3 /home/banon/projects/er-mods-rs/scripts/ghidra/mcp_query.py getContext",
-		"uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/map-rvas-1162-to-1170.py",
+		"uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/locate-ersc-entry-points.py",
 	] {
 		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
 	}

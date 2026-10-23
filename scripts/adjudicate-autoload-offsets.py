@@ -9,7 +9,8 @@ Three things at once, and a verdict that has fewer is an annotation, not a clear
      (`scripts/rtti-classmap-both.py`), so the class exists in 1.16.2 and in 1.17 as FromSoft's
      own embedded type descriptor rather than as a guess at a name.
   2. A base register that provably holds a pointer to that object, tracked from the incoming
-     `this` (`scripts/clear-fields-by-object.py`).
+     `this` (the cross-build `clear-fields-by-object.py`, deleted 2026-10-23; the witness rows of
+     `scripts/check-object-field-offsets.py` are re-measured on 2.7.2.0 now).
   3. A WITNESS: two function bodies that are instruction-for-instruction identical apart from
      numbers, so a displacement that did not change did not change because the code did not
      change.
@@ -115,7 +116,7 @@ OWNERS: dict[str, object] = {
     # 1.17 0x140dee4d0, 57/57 aligned) zeroes currentState+requestedState as one qword at
     # +0x48 in both builds and never touches 0x40, which holds
     # FD4ComponentAttachSystem_Step::allocator. Frozen in
-    # scripts/check-object-field-offsets-1170.py and pinned there to 0x48.
+    # scripts/check-object-field-offsets.py and pinned there to 0x48.
     "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",  # 0x48 cleared
     # The same field under the boot-progress crate's local alias, which is a straight
     # `= er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` and whose doc comment names
@@ -246,7 +247,7 @@ OWNERS: dict[str, object] = {
     # `CSInGamePad0x10` records exactly that).
     #
     # Both 1.17 values re-measured, held, and frozen in
-    # scripts/check-object-field-offsets-1170.py.
+    # scripts/check-object-field-offsets.py.
     "VK_ARRAY_88_OFFSET": "FD4::FD4PadDevice",  # 0x88 cleared (writer 7/7 aligned; ctor 168/168)
     "PAD_MGR_DEVICES_18_OFFSET": "FD4::FD4PadManager",  # 0x18 cleared (builder A 195/195 aligned)
     "PAD_DEVICES_COUNT_40_OFFSET": "FD4::FD4PadManager",  # 0x40 cleared (same alignment)
@@ -346,9 +347,9 @@ NON_GAME_STRUCT_REASONS = {
 BASE_SUBOBJECT_LIMIT = 0x10
 
 # Constants whose owning object has no vtable of its own, adjudicated instead against one named
-# consumer function: `constant -> (witness label prefix, base register)`. The witness evidence is
-# re-measured by `scripts/clear-fields-by-object.py --witness ... --witness-out`, never quoted
-# from notes. The object identity here rests on the repo's own RE (recorded in the doc comment
+# consumer function: `constant -> (witness label prefix, base register)`. The witness evidence was
+# re-measured by the cross-build `clear-fields-by-object.py --witness` (deleted 2026-10-23), never
+# quoted from notes. The object identity here rests on the repo's own RE (recorded in the doc comment
 # beside the constant) rather than on RTTI, which is weaker -- so these are reported as
 # cleared-by-named-witness, not as cleared, and the witness is printed with them.
 NAMED_WITNESS: dict[str, tuple[str, str]] = {

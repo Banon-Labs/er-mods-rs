@@ -8,7 +8,7 @@
 // Standalone on purpose (scripts/frida/spawn-npc.js is owned elsewhere); it can also be pasted into
 // that agent, where `created` is what its dressing code (gear, face, names) should be fed.
 // Static RE behind it: bd mimic-tear-summon-hijack-1171-2026-10-06, measured on 1.17.1. The
-// addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked in
+// addresses are 2.7.2.0, carried from 1.17.1 and checked in
 // eldenring-deobf-1.17.2.bin: every function hooked or called here has the same body in both
 // images apart from rip-relative and branch operands, and every mid-function site named here holds
 // the same instruction. Each is written `1.17.1 -> 2.7.2.0`.

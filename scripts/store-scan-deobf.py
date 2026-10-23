@@ -5,12 +5,15 @@ mapped image. Mapped image: file offset == RVA, base 0x140000000.
 Matches `[REX.W] 89 modrm disp32` where modrm encodes mod=00, rm=101 (RIP-relative) -- i.e.
 mov [rip+disp32], r64. Also matches `[REX] 88 ...` (byte store) and `C7 ...` (mov imm).
 Reports the VA of each store instruction.
-Usage: store-scan-deobf.py 0x143d76060
+Usage: store-scan-deobf.py 0x143d709a8
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
 """
 import sys, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+IMG = os.environ.get(
+    "ER_DEOBF_BIN", os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf-1.17.2.bin")
+)
 RIPREL_MODRM = {0x05, 0x0D, 0x15, 0x1D, 0x2D, 0x35, 0x3D}  # mod=00, rm=101, reg=0..7
 REXW = {0x48, 0x49, 0x4C, 0x4D, 0x40, 0x41, 0x44, 0x45}
 

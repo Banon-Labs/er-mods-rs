@@ -15,8 +15,8 @@
 //!    the byte-identical behaviour the game already has whenever the assertion holds.
 //! 2. **Pin the address by a window, not by the byte.** A lone `0xcc` occurs everywhere. The window
 //!    is generated from named `iced-x86` instructions by this crate's `build.rs` and ground-truthed
-//!    against `eldenring-deobf.bin` there, then re-checked against the live image before anything
-//!    is written.
+//!    against `eldenring-deobf-1.17.2.bin` there, then re-checked against the live image before
+//!    anything is written.
 //! 3. **Write one byte, not the window.** The verified window is live code other threads may be
 //!    executing. Rewriting bytes that were already correct widens that race for no gain, so
 //!    [`Patch::offset`] names the single byte that changes.
@@ -40,14 +40,13 @@ pub(crate) mod freelist_shutdown_assert;
 pub(crate) struct Patch {
     /// Name used in the install log.
     pub(crate) name: &'static str,
-    /// 1.16.2 RVA of the `.pdata` function entry that contains the window.
+    /// 2.7.2.0 RVA of the `.pdata` function entry that contains the window.
     ///
     /// The window's own address is not stored, and that is the point. A patch site is by nature
     /// mid-function -- if the interesting instruction were the first one, this would be a guard --
-    /// and the 1.16.2 -> 1.17 maps are keyed on function starts, so a mid-function address is
-    /// structurally unmappable and must be refused on 1.17 rather than translated. What is
-    /// mappable is the enclosing function; the offset rides along in Rust. See
-    /// [`er_game_base::game_build::resolve_call_site_rva`], which exists for exactly this and
+    /// and a mid-function address must never look like a function entry to anything that keys on
+    /// one. The function is checked against the running build; the offset rides along in Rust.
+    /// See [`er_game_base::game_build::resolve_call_site_rva`], which exists for exactly this and
     /// spells out why the offset must never enter a table.
     pub(crate) function_rva: usize,
     /// Byte offset of the verified window's first byte within [`Self::function_rva`]. Not the byte
@@ -70,12 +69,12 @@ pub(crate) struct Patch {
 }
 
 impl Patch {
-    /// 1.16.2 RVA of the verified window's first byte.
+    /// 2.7.2.0 RVA of the verified window's first byte.
     ///
     /// Derived from the two stored halves rather than kept beside them, so no third field can
-    /// drift out of agreement with the address the window was generated at. Used for the 1.16.2
+    /// drift out of agreement with the address the window was generated at. Used for the
     /// bookkeeping this file does -- overlap checks, the install log -- and never as the address
-    /// to resolve: on 1.17 the install path resolves [`Self::function_rva`] and adds
+    /// to check: the install path checks [`Self::function_rva`] and adds
     /// [`Self::offset_in_function`] to the answer.
     pub(crate) const fn rva(&self) -> usize {
         self.function_rva + self.offset_in_function
@@ -84,11 +83,9 @@ impl Patch {
     /// Absolute address of the byte this patch rewrites, given the window's address on the
     /// running build.
     ///
-    /// It takes the resolved window rather than the module base on purpose. `base + rva` is only
-    /// the window's address on the build these RVAs came from; on a build that moved this code it
-    /// names something else entirely, and a `target` derived from the base would point at a
-    /// different byte than the one the install path just verified. One input, one answer, and no
-    /// way for the check and the write to disagree about which byte they mean.
+    /// It takes the checked window rather than the module base on purpose: the window is the
+    /// address the install path just verified, and deriving the byte from anything else would let
+    /// the check and the write disagree about which byte they mean. One input, one answer.
     pub(crate) fn target(&self, window: usize) -> usize {
         window + self.offset
     }
@@ -178,29 +175,28 @@ mod tests {
         }
     }
 
-    /// `target` must follow the window wherever the running build put it.
+    /// `target` must follow the window it was handed, not recompute one from the preferred base.
     ///
-    /// This is the property the signature change exists for. `apply_patch` resolves the window for
-    /// the running build and then verifies the bytes there; if `target` still derived the byte
-    /// from the module base, it would name an address inside the old window on any build that
-    /// moved this code -- verified in one place, written in another. A moved window is modelled
-    /// here by a displacement no real build would use, so the assertion cannot pass by accident.
+    /// `apply_patch` verifies the bytes at the window it was given and then writes; if `target`
+    /// derived the byte from anything else, the two could name different bytes -- verified in one
+    /// place, written in another. A window away from the preferred base (the game loads wherever
+    /// ASLR puts it) is modelled here so the assertion cannot pass by accident.
     #[test]
-    fn target_follows_a_window_the_running_build_moved() {
+    fn target_follows_the_window_it_was_handed() {
         const PREFERRED_IMAGE_BASE: usize = 0x1_4000_0000;
-        const MOVED_BY: usize = 0x16d0;
+        const RELOCATED_BY: usize = 0x7ff6_0000_0000;
         for patch in REGISTRY {
-            let moved = PREFERRED_IMAGE_BASE + patch.rva() + MOVED_BY;
+            let relocated = PREFERRED_IMAGE_BASE + patch.rva() + RELOCATED_BY;
             assert_eq!(
-                patch.target(moved),
-                moved + patch.offset,
+                patch.target(relocated),
+                relocated + patch.offset,
                 "{}: target must be relative to the window it was handed",
                 patch.name
             );
             assert_ne!(
-                patch.target(moved),
+                patch.target(relocated),
                 PREFERRED_IMAGE_BASE + patch.rva() + patch.offset,
-                "{}: target ignored the moved window and answered with the 1.16.2 address",
+                "{}: target ignored the window and answered with the preferred-base address",
                 patch.name
             );
         }

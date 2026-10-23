@@ -7,7 +7,8 @@
 //! was off in the build that drives the menus itself and on in the build where a person drives
 //! them.
 //!
-//! The cost was measured rather than argued. Run br-20260913-154820-c63f, the rows-only build:
+//! The cost was measured rather than argued. Run br-20260913-154820-c63f (game 1.17), the rows-only
+//! build:
 //! `msgbox-builder #0 ... captured=true in_world=false` at +13980ms, `auto-accept: OK-handler
 //! 0x14078eeb0 ... real OK-press` 13 ms later, the closing latch at +14010ms, and at +14502ms the
 //! message that box carried -- `GetGR_System_Message id=401106`, save data is corrupted. The

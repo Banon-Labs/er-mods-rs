@@ -3,8 +3,8 @@
 // missing, and Noble Sorcerer Ashes (11 FP, the cheapest summon in the regulation; Mimic Tear's
 // 660 HP is more than a low-Vigor character has).
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Granting is `grant-invasion-fingers.js`'s path: `CS::EquipGameData::AddInventoryEquipByItemId`,
 // on the game thread inside its per-frame tick, each grant proven by the quantity read
@@ -16,8 +16,8 @@
 // dispatcher at index 16 (`SetGreatRune`), run the post-write refresh, and ask
 // `GetEquippedGreatrune(egd, &out, 0)` -- three arguments, the third is the slot.
 //
-// Every address is 1.16.2's, mapped onto 1.17 by `scripts/map-rvas-1162-to-1170.py` and below the
-// `0xafefe9` boundary, so 1.17.1 has it at the same place.
+// Every address began as 1.16.2's, paired with 1.17 by signature and below the `0xafefe9`
+// boundary, so 1.17.1 had it at the same place; the literals are 2.7.2.0 now.
 'use strict';
 
 const GAME = 'eldenring.exe';

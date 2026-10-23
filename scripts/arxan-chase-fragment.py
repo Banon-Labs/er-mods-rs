@@ -5,13 +5,37 @@ An Arxan-rewritten ELDEN RING image parks stolen/hoisted instructions in the dea
 other functions' `.pdata` extents.  So "which function contains this address" is answered by
 physical placement and is wrong.  The only sound answer is "who branches here", walked until
 the walk lands inside a real `.pdata` extent.
+
+Usage (addresses are VAs of the image read, here the installed 2.7.2.0 build):
+
+    python3 scripts/arxan-chase-fragment.py 1172 0x1404478f0 [more...]
+    python3 scripts/arxan-chase-fragment.py 1172 --window 1404478f0 140447ef0
+
+`1172` is the only build key: the image is `eldenring-deobf-1.17.2.bin` at the repo root or the
+nearest directory above it (the images are gitignored, so a linked worktree reads the main
+checkout's), or `ER_DEOBF_BIN`, whose addresses are then that image's own.
 """
 import bisect, struct, sys, os
 import numpy as np
 
 BASE = 0x140000000
-ROOT = "/home/banon/projects/er-mods-rs"
-IMAGES = {"1162": ROOT + "/eldenring-deobf.bin", "1170": ROOT + "/eldenring-deobf-1.17.bin"}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def find_image(name="eldenring-deobf-1.17.2.bin"):
+    """`ER_DEOBF_BIN` when set, else `name` at the repo root or the nearest directory above it."""
+    if os.environ.get("ER_DEOBF_BIN"):
+        return os.environ["ER_DEOBF_BIN"]
+    d = ROOT
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(ROOT, name)
+        d = os.path.dirname(d)
+
+
+IMAGES = {"1172": find_image()}
 _C = {}
 
 
@@ -136,6 +160,8 @@ def refs_into(build, lo, hi):
 
 if __name__ == "__main__":
     build = sys.argv[1]
+    if build not in IMAGES:
+        raise SystemExit(f"unknown build {build!r}: the only one is 1172 (set ER_DEOBF_BIN for another image)")
     if sys.argv[2] == "--window":
         lo, hi = int(sys.argv[3], 16), int(sys.argv[4], 16)
         for va, tg, kind in refs_into(build, lo, hi):

@@ -4,7 +4,7 @@
 //
 // Every offset below was established statically against 1.17.1 (`eldenring-deobf-1.17.1.bin`)
 // before this file was written, and carried to the installed 2.7.2.0
-// (`eldenring-deobf-1.17.2.bin`) with scripts/map-rvas-1171-to-1172.py: each cited instruction is
+// (`eldenring-deobf-1.17.2.bin`): each cited instruction is
 // the same instruction, same displacement, at its 2.7.2.0 address. The point of running it is to
 // see the values the static reading cannot give -- what an enemy's FP/stamina maxima really hold,
 // that a status gauge falls from the resistance and snaps back on a proc, and what the stance

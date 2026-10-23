@@ -2,9 +2,9 @@
 
 Labels, as in the other `docs/er-mechanics/*.md`: **VERIFIED** = a regulation value (installed
 1.17.1 `regulation.bin`) or code read out of the executable. EXE addresses are 1.16.2 VAs from the
-named Ghidra dump on :8765 (shift 0 against `eldenring-deobf.bin`); carry one through
-`scripts/map-rvas-1162-to-1170.py` and `scripts/map-rvas-1170-to-1171.py` before using it on the
-running 1.17.1 game. **TAE** = decoded from the player TimeAct (`a00.tae` for reactions, the weapon
+named Ghidra dump on :8765 (shift 0 against `eldenring-deobf.bin`); the running game is 2.7.2.0,
+so find one on `eldenring-deobf-1.17.2.bin` by its bytes before using it there
+(`docs/game-build.md`). **TAE** = decoded from the player TimeAct (`a00.tae` for reactions, the weapon
 TAEs through `scripts/er-mechanics-attacks.py`) or the behavior graph `c0000.behbnd`
 (`scripts/er-behbnd-attack-map.py`). **COMMUNITY** = the curated decompile of the player behavior
 script `c0000.hks` for ER 1.08.1 (ividyon/EldenRingHKS, shipped in Smithbox's

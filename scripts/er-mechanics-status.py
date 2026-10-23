@@ -2,7 +2,8 @@
 """Elden Ring status build-up per hit, hits to proc and proc damage, offline, PvP focused.
 
 Covers bleed, frost, poison, scarlet rot, sleep, madness and death blight. The chain was read
-out of the named 1.16.2 Ghidra dump and re-found in `eldenring-deobf-1.17.1.bin`; the write-up
+out of the named 1.16.2 Ghidra dump and re-found in `eldenring-deobf-1.17.2.bin`, whose 2.7.2.0
+addresses are the ones cited here; the write-up
 with every address is `docs/er-mechanics/status.md`. Labels in comments: `VERIFIED` (executable
 or regulation), `INFERRED` (fits the data, consumer not traced), `COMMUNITY`, `MEASURED` (corpus).
 
@@ -16,14 +17,14 @@ or regulation), `INFERRED` (fits the data, consumer not traced), `COMMUNITY`, `M
 
 The chain per hit (`VERIFIED` unless marked):
 
-  sources  = 13 hit SpEffect slots (`FUN_140d24b10`): 0..4 the AtkParam's five SpEffect ids,
+  sources  = 13 hit SpEffect slots (`FUN_140d27980`): 0..4 the AtkParam's five SpEffect ids,
              5..7 EquipParamWeapon.spEffectBehaviorId0..2 + ReinforceParamWeapon.spEffectId1..3,
              8..9 unused, 10..12 from the weapon gaitem; plus one grease row
              (attacker SpEffect with stateInfo 152/153 -> atkOccurrenceSpEffectId)
   status   = the row's stateInfo (2 poison, 5 rot, 6 bleed, 116 death, 260 frost, 436 sleep,
-             437 madness), value = that status's *AttackPower field (`FUN_140d4ffd0`)
+             437 madness), value = that status's *AttackPower field (`FUN_140d53470`)
   per row  = int(value * finalStatus[s] * part * reqPenalty * atkCorrect) * defenderRate
-             finalStatus[s] = arcane multiplier (`FUN_1406832a0`, 4 statuses) * durability
+             finalStatus[s] = arcane multiplier (`FUN_1406845a0`, 4 statuses) * durability
                               * weapon vsPlayerDmgCorrectRate_<s> when both sides are PvP
              reqPenalty     = 0.2 when the STR (x1.5 two-handed), DEX, INT or FTH requirement
                               is unmet
@@ -80,7 +81,7 @@ CORPUS = Path.home() / '.cache/er-build-planner/builds.jsonl'
 REPO = Path(_HERE).parent
 
 # Resist-module index order (`CSChrResistModule` arrays at +0x10/+0x2c/+0x48/+0x64/+0x80/+0x9c,
-# `FUN_14043daf0` dispatch): name, stateInfo, SpEffect attack field, arcane graph field,
+# `FUN_14043e0e0` dispatch): name, stateInfo, SpEffect attack field, arcane graph field,
 # vsPlayer suffix, defender *DefDamageRate field, PlayerCommonParam recover spelling, corpus group.
 STATUSES = [
     ('poison', 2, 'poizonAttackPower', 'correctType_Poison', 'Poison', 'poisonDefDamageRate', 'Poision', 'immunity'),
@@ -95,16 +96,18 @@ NAMES = [s[0] for s in STATUSES]
 BY_STATE = {s[1]: s for s in STATUSES}
 GROUPS = ('immunity', 'robustness', 'focus', 'vitality')
 
-#: `FUN_14068d1b0` (1.16.2) / 0x14068e000 (1.17.1): status multiplier when HasStatsForWeapon is
-#: false. Constant at 0x14329e64c (1.16.2) / 0x1432a190c (1.17.1), both 0.2.
+#: `FUN_14068e4b0`: status multiplier when HasStatsForWeapon is false. Constant at 0x1432a3bcc,
+#: 0.2 (the target of the readers the 1.16.2 and 1.17.1 constants had).
 REQ_PENALTY = 0.2
-REQ_PENALTY_VA = {'eldenring-deobf.bin': 0x14329e64c, 'eldenring-deobf-1.17.1.bin': 0x1432a190c}
-#: `FUN_140d2f930` returns 5: the per-status proc counter cap. The counter only feeds the NPC
-#: ResistCorrectParam raise in `FUN_14043ea10`, which needs a NpcParam.
+#: The installed build's flat image; every VA below is a 2.7.2.0 VA in it.
+IMAGE = 'eldenring-deobf-1.17.2.bin'
+REQ_PENALTY_VA = 0x1432a3bcc
+#: `FUN_140d327a0` returns 5: the per-status proc counter cap. The counter only feeds the NPC
+#: ResistCorrectParam raise in `FUN_14043f000`, which needs a NpcParam.
 PROC_COUNT_CAP = 5
-#: The hit-slot index below which the byPoint rate also applies (`cmp r12d,5` at 0x140448d1a).
+#: The hit-slot index below which the byPoint rate also applies (`cmp r12d,5` at 0x14044935a).
 ATK_SLOTS = 5
-#: Grease buff rows carry these stateInfo values (`FUN_1404f71e0`: `stateInfo - 0x98 < 2`).
+#: Grease buff rows carry these stateInfo values (`FUN_1404f8090`: `stateInfo - 0x98 < 2`).
 GREASE_BUFF_STATES = (152, 153)
 TWO_HAND_STR = AR.TWO_HAND_STR_MULT
 
@@ -121,34 +124,31 @@ SP_FIELDS = ['stateInfo', 'changeHpRate', 'changeHpPoint', 'changeMpRate', 'chan
     + [s[2] for s in STATUSES] + [s[5] for s in STATUSES]
 #: Who a hit row can land on (status.md section 1b). `CheckApplyConditions` passes the row's
 #: byte +0x16c bits 0..2 (`effectTargetOpposeTarget`, `FriendlyTarget`, `SelfTarget`) to
-#: `canTeamTypeHitAnother` 0x14051ac10 / 0x14051ba10 through
-#: `validateTeamTypeRelationshipWithSpEffect` 0x14051a9f0 / 0x14051b7f0, with (attacker, victim):
-#: the same call, argument order and relation table the damage check `FUN_1404443e0` makes with
+#: `canTeamTypeHitAnother` 0x14051bcb0 through
+#: `validateTeamTypeRelationshipWithSpEffect` 0x14051ba90, with (attacker, victim):
+#: the same call, argument order and relation table the damage check `FUN_1404449d0` makes with
 #: `AtkParam` +0x81 bits 0..2. A hostile victim (an invader and a host) needs
 #: `effectTargetOpposeTarget`. Bit 3 (`effectTargetPcHorse`) restricts the row to a player's
-#: horse (`IsSomeonesHorse` 0x1403f4370). `effectTargetAttacker` (+0x160 bit 1) sends the row to
-#: the attacker instead (`CalculateDamage2` at 0x140448aed -> `FUN_1403e8b70`). The legacy
+#: horse (`IsSomeonesHorse` 0x1403f45a0). `effectTargetAttacker` (+0x160 bit 1) sends the row to
+#: the attacker instead (`CalculateDamage2` at 0x14044912d -> `FUN_1403e8d50`). The legacy
 #: `effectTargetSelf`..`Ghost` byte (+0x15f), `effectTargetPlayer` and `effectTargetAI`
-#: included, has no reader in either image.
+#: included, had no reader in the 1.16.2 or the 1.17.1 image.
 TARGET_GATE_BYTES = {
     # movzx r8d, byte [rax+0x16c]; and r8d, 1  -> the opposeTarget argument
     'oppose': bytes.fromhex('440fb6806c0100004183e001'),
     # movzx eax, byte [rcx+0x16c]; shr eax, 3  -> effectTargetPcHorse
     'horse': bytes.fromhex('0fb6816c010000c1e803'),
 }
-TARGET_GATE_VA = {
-    'eldenring-deobf.bin': {'oppose': 0x14051aa32, 'horse': 0x1404fc62a},
-    'eldenring-deobf-1.17.1.bin': {'oppose': 0x14051b832, 'horse': 0x1404fd3fa},
-}
-#: `FUN_1404fc690` (1.16.2) / 0x1404fd460 (1.17.1), called from `CheckApplyConditions`
-#: 0x1404fc4e0 / 0x1404fd2b0: a row with `spCategory` at or above this (`cmp r10w, 0x2710`) is
-#: refused while any live entry has the same category. Every weapon, grease and AtkParam status
-#: row is category 10003..10010, one per status, so while a proc is live the next row of that
-#: status is refused by `CS::SpecialEffect::Apply`, and `FUN_1403fade0` returns before
-#: `FUN_14043daf0`: no build-up reaches the gauge, no refresh, no second instance (`VERIFIED`).
+TARGET_GATE_VA = {'oppose': 0x14051bad2, 'horse': 0x1404fd4da}
+#: `FUN_1404fd540`, called from `CheckApplyConditions` 0x1404fd390: a row with `spCategory` at
+#: or above this (`cmp r10w, 0x2710`) is refused while any live entry has the same category.
+#: Every weapon, grease and AtkParam status row is category 10003..10010, one per status, so
+#: while a proc is live the next row of that status is refused by `CS::SpecialEffect::Apply`,
+#: and `FUN_1403fb0a0` returns before `FUN_14043e0e0`: no build-up reaches the gauge, no
+#: refresh, no second instance (`VERIFIED`).
 EXCLUSIVE_CATEGORY_MIN = 10000
 EXCLUSIVE_CATEGORY_BYTES = bytes.fromhex('b81027000066443bd0')    # mov eax, 0x2710; cmp r10w, ax
-EXCLUSIVE_CATEGORY_VA = {'eldenring-deobf.bin': 0x1404fc6a3, 'eldenring-deobf-1.17.1.bin': 0x1404fd473}
+EXCLUSIVE_CATEGORY_VA = 0x1404fd553
 ATK_FIELDS = ['statusAilmentAtkPowerCorrectRate', 'statusAilmentAtkPowerCorrectRate_byPoint',
               'disableHitSpEffect'] + [f'spEffectId{i}' for i in range(5)]
 
@@ -193,9 +193,9 @@ class Tables:
 def cure_status(row):
     """(status name, value) when the row carries a negative build-up for its status, else None.
 
-    A negative amount passes `FUN_14043e630` unchanged (it returns early when amount <= 0) and
-    `FUN_14043d8a0` then does `gauge -= amount` and clamps to the resistance, so -99999 refills
-    the gauge to full (`VERIFIED`, 1.16.2). `FUN_14043daf0` also dispatches stateInfo 118 to the
+    A negative amount passes `FUN_14043ec20` unchanged (it returns early when amount <= 0) and
+    `FUN_14043de90` then does `gauge -= amount` and clamps to the resistance, so -99999 refills
+    the gauge to full (`VERIFIED`). `FUN_14043e0e0` also dispatches stateInfo 118 to the
     death blight gauge (Rejuvenating Boluses' row)."""
     for s in STATUSES:
         if row.get(s[2], 0) < 0:
@@ -230,7 +230,7 @@ def boluses(sp, goods, goods_names):
 def row_status(row):
     """(status name, build-up value) a SpEffect row applies, or None.
 
-    `FUN_14043daf0` dispatches on stateInfo alone, then reads the matching *AttackPower field;
+    `FUN_14043e0e0` dispatches on stateInfo alone, then reads the matching *AttackPower field;
     a value in any other status field of the same row is ignored (`VERIFIED`)."""
     s = BY_STATE.get(row.get('stateInfo'))
     if not s or row.get(s[2], 0) <= 0:
@@ -239,7 +239,7 @@ def row_status(row):
 
 
 def has_stats_for_weapon(wep, stats, two_handed):
-    """`PlayerGameData::HasStatsForWeapon` 0x14068db30: STR (x1.5 two-handed), DEX, INT, FTH.
+    """`PlayerGameData::HasStatsForWeapon` 0x14068ee30: STR (x1.5 two-handed), DEX, INT, FTH.
 
     Arcane is not checked (`VERIFIED`)."""
     s = int((TWO_HAND_STR if two_handed else 1.0) * stats['str'])
@@ -262,10 +262,10 @@ def weapon_status(t, weapon, affinity='Standard', level=0, stats=None, two_hande
     arc_rate = wep['correctLuck'] * reinf['correctLuckRate']
     finals = {}
     for name, _, _, graph, vs, _, _, _ in STATUSES:
-        # `FUN_1406832a0` out[6..12]: the arcane wrapper `FUN_140690b40` for four statuses, 1.0
+        # `FUN_1406845a0` out[6..12]: the arcane wrapper `FUN_140691e40` for four statuses, 1.0
         # for the rest; times the durability factor (1.0 for an unbroken weapon, `INFERRED`).
         arc = AR.stat_multiplier(tab, wep['properLuck'], stats['arc'], arc_rate, wep[graph]) if graph else 1.0
-        # `CalculateDamageCorrections` 0x140684d70: weapon vsPlayer rate when both are PvP.
+        # `CalculateDamageCorrections` 0x140686070: weapon vsPlayer rate when both are PvP.
         rate = wep.get(f'vsPlayerDmgCorrectRate_{vs}', 1.0) if pvp else 1.0
         finals[name] = {'arcane': arc, 'vs_player': rate}
     sources = []
@@ -316,8 +316,8 @@ def _row_amount(t, ws, rid, atk, both_rates, part_rate, defender_rates):
         mult *= atk['statusAilmentAtkPowerCorrectRate'] / 100.0
         if both_rates:
             mult *= atk['statusAilmentAtkPowerCorrectRate_byPoint'] / 100.0
-    # `FUN_14043e630`: (1 - guard cut) * raw * product of the defender's *DefDamageRate, then
-    # `(int)fVar10` before `FUN_14043d8a0`. Guarded hits are not modelled.
+    # `FUN_14043ec20`: (1 - guard cut) * raw * product of the defender's *DefDamageRate, then
+    # `(int)fVar10` before `FUN_14043de90`. Guarded hits are not modelled.
     return name, int(base * mult * (defender_rates or {}).get(name, 1.0))
 
 
@@ -330,7 +330,7 @@ def hit_buildup(t, ws, atk_row=None, grease=None, part_rate=1.0, defender_rates=
     atk = t.atk.get(atk_row) if atk_row is not None else None
     out = {}
     if atk and atk['disableHitSpEffect']:
-        return out                                      # all 13 slots -1 (`FUN_140d24b10`)
+        return out                                      # all 13 slots -1 (`FUN_140d27980`)
     rows = []
     if atk:
         rows += [(atk[f'spEffectId{i}'], True) for i in range(5) if atk[f'spEffectId{i}'] > 0]
@@ -346,10 +346,10 @@ def hit_buildup(t, ws, atk_row=None, grease=None, part_rate=1.0, defender_rates=
 
 
 def hits_to_proc(per_hit, resistance, interval=None, recover=0.0, limit=200):
-    """Hits until the gauge drops below 1 (`FUN_14043d8a0`).
+    """Hits until the gauge drops below 1 (`FUN_14043de90`).
 
     `per_hit` is the int build-up of one hit. With `interval` (seconds between hits) the gauge
-    refills by `recover` points per second between hits (`FUN_14043e440`; seconds are
+    refills by `recover` points per second between hits (`FUN_14043ea30`; seconds are
     `INFERRED` from `FD4Time::SetScaled` on the frame delta)."""
     if per_hit <= 0 or resistance <= 0:
         return None
@@ -364,7 +364,7 @@ def hits_to_proc(per_hit, resistance, interval=None, recover=0.0, limit=200):
 
 
 def proc_effect(t, rid, max_hp):
-    """HP an applied status row costs a player (`FUN_1404fb920` -> `FUN_1404f7d00`).
+    """HP an applied status row costs a player (`FUN_1404fc7d0` -> `FUN_1404f8bb0`).
 
     Per tick: maxHP * changeHpRate / 100 + changeHpPoint, scaled by the defender's
     *DamageRate for bleed/frost/sleep/madness (100 on players without an effect). Ticks =
@@ -755,10 +755,10 @@ def simulate(builds, gaps, resistance, recover, lock, carrier, engagements, eng_
 
     `builds` are the int build-ups of the landed hits, `gaps` the frames between them; engagement
     e starts at e * `eng_s` seconds. Per hit: the gauge refills since the previous hit
-    (`FUN_14043e440`, `recover` per second); while a proc of this status is live (`lock` s, the
+    (`FUN_14043ea30`, `recover` per second); while a proc of this status is live (`lock` s, the
     proc row's effectEndurance) the row is refused (`EXCLUSIVE_CATEGORY_MIN`) and nothing
     happens; otherwise gauge -= b and a proc when it drops below 1, gauge back to full
-    (`FUN_14043d8a0`). A carrier boluses after each engagement: gauge full, and the live proc
+    (`FUN_14043de90`). A carrier boluses after each engagement: gauge full, and the live proc
     ends `cure_s` after the last hit (the bolus ending poison / rot / frost is game text).
     A proc is credited ticks from its hit to the first of its expiry, the cure and `fight_end`:
     one on application, then one per `interval` when `dot` (`INFERRED` schedule); a proc after
@@ -1246,8 +1246,22 @@ def top_weapons(t, a):
 # selftest
 
 
-def _read_f32(image, va):
-    p = REPO / image
+def _image_path():
+    """`ER_DEOBF_BIN` when set, else `IMAGE` at the repo root or the nearest directory above it.
+
+    The images are gitignored, so a linked worktree under `.worktrees/` reads the main
+    checkout's.
+    """
+    if os.environ.get('ER_DEOBF_BIN'):
+        return Path(os.environ['ER_DEOBF_BIN'])
+    for d in (REPO, *REPO.resolve().parents):
+        if (d / IMAGE).exists():
+            return d / IMAGE
+    return REPO / IMAGE
+
+
+def _read_f32(va):
+    p = _image_path()
     if not p.exists():
         return None
     with open(p, 'rb') as f:
@@ -1279,12 +1293,11 @@ def selftest(t):
     for name, want in (('poison', 4.0), ('scarlet_rot', 4.0), ('bleed', 7.0), ('death_blight', 3.0),
                        ('frost', 5.0), ('sleep', 5.0), ('madness', 4.0)):
         check(f'resistRecoverPoint {name} player', t.recover[name], want)
-    for image, va in REQ_PENALTY_VA.items():
-        v = _read_f32(image, va)
-        if v is None:
-            print(f'skip {image} not on disk')
-            continue
-        check(f'0.2 status penalty in {image} @ {va:#x}', round(v, 6), 0.2)
+    v = _read_f32(REQ_PENALTY_VA)
+    if v is None:
+        print(f'skip {_image_path()} not on disk')
+    else:
+        check(f'0.2 status penalty in {IMAGE} @ {REQ_PENALTY_VA:#x}', round(v, 6), 0.2)
 
     # Base build-up agrees with er-mechanics-ar, which agrees with the `COMMUNITY` calculator.
     for weapon, aff, lvl, stats, two, expected in AR.SELFTEST_CASES:
@@ -1313,7 +1326,7 @@ def selftest(t):
     vs = {round(w.get(f'vsPlayerDmgCorrectRate_{s[4]}', 1.0), 4) for w in t.ar.weapons.values() for s in STATUSES}
     check('distinct vsPlayerDmgCorrectRate status values', sorted(vs), [1.0])
 
-    # Gauge arithmetic (`FUN_14043d8a0`: proc when gauge - build-up < 1).
+    # Gauge arithmetic (`FUN_14043de90`: proc when gauge - build-up < 1).
     check('hits_to_proc(50, 100)', hits_to_proc(50, 100), 2)
     check('hits_to_proc(34, 100)', hits_to_proc(34, 100), 3)
     check('hits_to_proc(50, 101)', hits_to_proc(50, 101), 3)
@@ -1346,7 +1359,7 @@ def selftest(t):
     check('refill between hits raises hits to proc', hits_to_proc(45, 332, 60 / FPS, t.recover['bleed'])
           > hits_to_proc(45, 332), True)
     # Re-proc while active: every status row the model applies is exclusive-category (R1 in
-    # `FUN_1404fc690`), one category per status; the 0x2710 threshold is in both images.
+    # `FUN_1404fd540`), one category per status; the 0x2710 threshold is read out of the image.
     rows_by_status = {}
     for w in t.ar.weapons.values():
         for k in range(3):
@@ -1358,27 +1371,25 @@ def selftest(t):
     check('status rows: one exclusive category (>= 10000) per status',
           all(len(c) == 1 and min(c) >= EXCLUSIVE_CATEGORY_MIN for c in rows_by_status.values())
           and len({min(c) for c in rows_by_status.values()}) == len(rows_by_status), True)
-    for image, va in EXCLUSIVE_CATEGORY_VA.items():
-        p = REPO / image
-        if not p.exists():
-            print(f'skip {image} not on disk')
-            continue
+    p = _image_path()
+    if not p.exists():
+        print(f'skip {p} not on disk')
+    else:
         with open(p, 'rb') as f:
-            f.seek(va - 0x140000000)
+            f.seek(EXCLUSIVE_CATEGORY_VA - 0x140000000)
             got = f.read(len(EXCLUSIVE_CATEGORY_BYTES))
-        check(f'R1 `mov eax, 0x2710; cmp r10w, ax` in {image} @ {va:#x}', got.hex(), EXCLUSIVE_CATEGORY_BYTES.hex())
+        check(f'R1 `mov eax, 0x2710; cmp r10w, ax` in {IMAGE} @ {EXCLUSIVE_CATEGORY_VA:#x}', got.hex(),
+              EXCLUSIVE_CATEGORY_BYTES.hex())
 
-    # Target gate (section 1b): the +0x16c reads are in both images.
-    for image, vas in TARGET_GATE_VA.items():
-        p = REPO / image
-        if not p.exists():
-            print(f'skip {image} not on disk')
-            continue
+    # Target gate (section 1b): the +0x16c reads.
+    if not p.exists():
+        print(f'skip {p} not on disk')
+    else:
         with open(p, 'rb') as f:
-            for key, va in vas.items():
+            for key, va in TARGET_GATE_VA.items():
                 f.seek(va - 0x140000000)
                 got = f.read(len(TARGET_GATE_BYTES[key]))
-                check(f'target gate {key} read in {image} @ {va:#x}', got.hex(), TARGET_GATE_BYTES[key].hex())
+                check(f'target gate {key} read in {IMAGE} @ {va:#x}', got.hex(), TARGET_GATE_BYTES[key].hex())
     # effectTargetPlayer is not a gate: Morgott's Great Rune (620, max HP x1.25 on the player)
     # has every legacy target bit at 0, and so do 3570 rows in all.
     legacy = ('effectTargetSelf', 'effectTargetFriend', 'effectTargetEnemy', 'effectTargetPlayer',

@@ -154,17 +154,19 @@ const SHORT_USE_ANIM: u8 = 17;
 #[cfg(windows)]
 const PIN_FRAMES: usize = 90;
 
-/// `EquipParamGoods::GetEntry(EquipParamGoodsLookupResult *out, uint id) -> out`.
+/// `EquipParamGoods::GetEntry(EquipParamGoodsLookupResult *out, uint id) -> out`, 2.7.2.0
+/// `0x140d3cca0` (1.16.2 `0x140d39df0`).
 #[cfg(windows)]
-const EQUIP_PARAM_GOODS_GET_ENTRY_RVA: u32 = 0x00d3_9df0;
+const EQUIP_PARAM_GOODS_GET_ENTRY_RVA: u32 = 0x00d3_cca0;
 
-/// `CS::CSMenuMan::OpenConversationChoicesMenu` -- the game function Seamless opens its option
-/// menu through. Its own body stamps the menu id and hands a job to the menu system; declining to
-/// call it is what keeps the menu from ever appearing.
+/// `CS::CSMenuMan::OpenConversationChoicesMenu` -- 2.7.2.0 `0x140ea1a50` (1.16.2 `0x140e9e4f0`),
+/// the game function Seamless opens its option menu through. Its own body stamps the menu id and
+/// hands a job to the menu system; declining to call it is what keeps the menu from ever
+/// appearing.
 #[cfg(windows)]
 const OPEN_CONVERSATION_CHOICES_MENU: MapSeam = MapSeam {
     name: "CS::CSMenuMan::OpenConversationChoicesMenu",
-    rva: 0x00e9_e4f0,
+    rva: 0x00ea_1a50,
     prologue: &[
         0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xd9, 0x33, 0xd2,
     ],
@@ -192,9 +194,9 @@ static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
 ///
 /// The whole function is `return GLOBAL_GameMan->isInOnlineMode` -- 15 bytes, `mov rax,[rip+d]` /
 /// `movzx eax,byte [rax+0xbc8]` / `ret` -- so the flag can be written directly and no detour has to
-/// go anywhere near it. The offset is `0xbc8` on both 1.16.2 and 1.17.1, read out of the two
-/// de-Arxan'd images; the singleton itself is [`er_game_base::rva::GAME_MAN_SINGLETON_RVA`], which
-/// the address translation already carries.
+/// go anywhere near it. The offset is `0xbc8` on 1.16.2, 1.17.1 and 2.7.2.0 (`0x14067b330`),
+/// read out of the de-Arxan'd images; the singleton itself is
+/// [`er_game_base::rva::GAME_MAN_SINGLETON_RVA`], a 2.7.2.0 rva like every other here.
 #[cfg(windows)]
 const GAME_MAN_IS_IN_ONLINE_MODE: usize = 0xbc8;
 /// `menuGaitemUseState+0x8` once the engine has taken the request: 0 idle, 1 requested, 2 latched.
@@ -358,7 +360,7 @@ pub(crate) unsafe fn goods_row(goods_id: u32) -> Option<usize> {
     // `EquipParamGoodsLookupResult` is `{ int paramId; int _pad; _EQUIP_PARAM_GOODS_ST *row; }`.
     let mut lookup: [usize; 2] = [usize::MAX, 0];
     type GetEntryFn = unsafe extern "system" fn(*mut usize, u32) -> *mut usize;
-    // SAFETY: the address is version-translated and the shape is the engine's own two-argument
+    // SAFETY: the address is build-checked and the shape is the engine's own two-argument
     // lookup; the out-parameter is this frame's stack.
     let get_entry: GetEntryFn = unsafe { core::mem::transmute(entry) };
     // SAFETY: as above.
@@ -829,13 +831,14 @@ pub unsafe fn install_popup_skip() -> bool {
 /// is invisible to it however many frames it is repeated. Answering the question directly removes
 /// the ordering from the problem: while a use of ours is in flight, this is the item.
 ///
-/// The seam is `verify_seam`-gated like the others. Its prologue is identical on both builds
+/// The seam is `verify_seam`-gated like the others. Its prologue is identical on every build
 /// (`48 89 5c 24 10 57 48 83 ec 20 c7 02 ff ff ff ff` -- the `*out = -1` is right there in it), and
-/// it is byte-identical to the shipped image in live memory, unlike `CanUseGoods`.
+/// it is byte-identical to the shipped image in live memory, unlike `CanUseGoods`. 2.7.2.0
+/// `0x1406578c0` (1.16.2 `0x1406565c0`).
 #[cfg(windows)]
 const SELECTED_QUICK_SLOT_ITEM: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
     name: "CS::PlayerIns::GetSelectedQuickSlotItemId",
-    rva: 0x0065_65c0,
+    rva: 0x0065_78c0,
     prologue: &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20],
     arg_count: 2,
 };
@@ -1614,7 +1617,7 @@ unsafe fn inventory_index(item_id: u32) -> Option<usize> {
     let inventory =
         player_game_data + PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET + EQUIP_INVENTORY_DATA_OFFSET;
     type GetItemIdxFn = unsafe extern "system" fn(usize, *const u32) -> i32;
-    // SAFETY: version-translated address, engine's own two-argument getter.
+    // SAFETY: build-checked address, engine's own two-argument getter.
     let get_item_idx: GetItemIdxFn = unsafe { core::mem::transmute(lookup) };
     // SAFETY: as above; the id is this frame's stack. The tagged spelling is the one the
     // inventory keys on -- the bare goods id answers -1.
@@ -1682,7 +1685,7 @@ unsafe fn read_quick_slots() -> Option<[i32; QUICK_SLOT_COUNT]> {
     // SAFETY: game task thread.
     let equip = unsafe { equip_game_data() }?;
     type GetBySlotFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
-    // SAFETY: version-translated address, the engine's own three-argument getter.
+    // SAFETY: build-checked address, the engine's own three-argument getter.
     let get_by_slot: GetBySlotFn = unsafe { core::mem::transmute(getter) };
     let mut slots = [-1i32; QUICK_SLOT_COUNT];
     for (slot, entry) in slots.iter_mut().enumerate() {
@@ -1717,7 +1720,7 @@ unsafe fn equip_quick_slot(slot: u32, inventory_index: u32) -> bool {
         return false;
     };
     type SetQuickSlotFn = unsafe extern "system" fn(usize, u32, u64, u32);
-    // SAFETY: version-translated address, the engine's own four-argument setter.
+    // SAFETY: build-checked address, the engine's own four-argument setter.
     let set: SetQuickSlotFn = unsafe { core::mem::transmute(setter) };
     // SAFETY: as above.
     unsafe { set(equip, slot, 0, inventory_index) };
@@ -1986,8 +1989,8 @@ unsafe fn drive_pinned_use() {
     }
     // Raised on the first frame of the window and never again: the action is an edge, not a level.
     //
-    // Counting the action path settled this. Across one drive, with a control proving the hooks
-    // fire (`EquipParamGoods::GetEntry` 435333 -> 1521325):
+    // Counting the action path settled this. Across one drive on 1.17.1, whose addresses these
+    // are, with a control proving the hooks fire (`EquipParamGoods::GetEntry` 435333 -> 1521325):
     //
     //   action update 0x1403daa90      93 ->  325
     //   use-state latch 0x140768c60     0 ->  232

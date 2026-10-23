@@ -9,9 +9,9 @@ It was, and the literal contained a session UUID:
 That path is correct for exactly one agent session and wrong for every other one, including every
 future run by the same user -- a scratchpad directory is created per session. The next agent gets
 a path that does not exist, so `detect-struct-field-drift.py` reports "no scan output; run --scan
-first" and `clear-fields-by-object.py` reports "missing rtti-joined.tsv" -- both loud, but both
-describing a missing cache rather than the real cause, which is that the tool is looking in
-somebody else's directory.
+first" and the since-deleted `clear-fields-by-object.py` reported "missing rtti-joined.tsv" --
+both loud, but both describing a missing cache rather than the real cause, which is that the tool
+is looking in somebody else's directory.
 
 Resolution order
   1. `$ER_STRUCT_DRIFT_OUT`, so a caller can still point the tools anywhere.

@@ -10,6 +10,8 @@
 //! share one import surface. The mini-DLLs enable tier A only.
 
 pub mod build_id;
+/// The 2.7.2.0 rvas a constant detour may target; read by `game_build::resolve_detour_address`.
+mod detour_allowlist;
 /// Tier A: bounded, fault-safe walks over `FD4FileCap`, `DLString<wchar_t>` and the DLIO
 /// virtual-root table. Two images read those layouts now -- the product through
 /// `er-title-flow`, and the `er-diag-harness` shell that carries the msb-parse / DLC-root /
@@ -18,9 +20,9 @@ pub mod build_id;
 pub mod filecap;
 pub mod fnv1a;
 /// Tier A: which ELDEN RING this DLL is loaded into, read from the running image's own
-/// version resource. Every game address here is a 1.16.2 RVA, and 1.17 moved code, so the
-/// question "is this the build these addresses came from" has to be answerable before a
-/// detour goes in -- see the module docs for the crash that motivated it.
+/// version resource, and the gate every game address passes. Every game address here is a
+/// 2.7.2.0 rva, so on any other build each of them is refused before it is called, read or
+/// detoured -- see the module docs for the crash that motivated it.
 pub mod game_build;
 /// Tier A: does this process have a real, sized, top-level window yet? An overlay that installs
 /// its Present hook before the answer is yes can be handed a dead HWND and abort -- see the
@@ -46,7 +48,7 @@ pub mod profile_summary;
 pub mod prologue;
 pub mod reentry;
 /// Run-length suppression for log lines that repeat verbatim -- see the module docs for the
-/// measurement that motivated it (8,639 identical `combined_load_67b940` enter lines carrying
+/// measurement that motivated it (8,639 identical `save_dispatch_combined` enter lines carrying
 /// seven distinct facts, 5.43 MB in one 8m39s run).
 pub mod repeat;
 pub mod rva;

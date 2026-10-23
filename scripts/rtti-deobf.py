@@ -6,12 +6,33 @@ and print the class name + the slot index of the queried address.
 Mapped image: file offset == RVA, image base 0x140000000 (VA = offset + base).
 MSVC x64 RTTI: vtable[-1] -> COL (abs VA); COL+0x0C = RVA(TypeDescriptor);
 TypeDescriptor+0x10 = null-terminated mangled name (".?AVClass@NS@@").
-Usage: rtti-deobf.py 0x142aa1fb0 [more slots...]
+Usage: rtti-deobf.py 0x142a81cb0 [more slots...]
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
 """
 import sys, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+
+
+def find_image(name="eldenring-deobf-1.17.2.bin"):
+    """`ER_DEOBF_BIN` when set, else `name` at the repo root or the nearest directory above it.
+
+    The images are gitignored, so a linked worktree under `.worktrees/` reads the main
+    checkout's.
+    """
+    if os.environ.get("ER_DEOBF_BIN"):
+        return os.environ["ER_DEOBF_BIN"]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = root
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(root, name)
+        d = os.path.dirname(d)
+
+
+IMG = find_image()
 MAX_BACK = 0x4000  # scan up to 2048 slots back
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Static call-graph climber over the deobf flat image (eldenring-deobf.bin).
+"""Static call-graph climber over a deobf flat image (ER_DEOBF_BIN, default
+eldenring-deobf-1.17.2.bin, the installed 2.7.2.0 build).
 
 Given a target VA and a depth, recursively resolve callers (up) or CALLEES
 (down) of a function, grounding each `call rel32` site to its containing
@@ -17,12 +18,13 @@ Usage:
   --down N  climb callees to depth N
 Examples:
   call-graph.py 0x1401efc00 --up 4
-  call-graph.py 0x140615340 --down 2
+  call-graph.py 0x14075ebf0 --down 1
 """
+import os
 import sys
 
 BASE = 0x140000000
-IMG = __file__.rsplit("/", 1)[0] + "/../eldenring-deobf.bin"
+IMG = os.environ.get("ER_DEOBF_BIN", __file__.rsplit("/", 1)[0] + "/../eldenring-deobf-1.17.2.bin")
 
 # Common MSVC x64 function-prologue opening byte patterns, used to validate a
 # grounded entry. Order-independent; we just check the entry starts with one.

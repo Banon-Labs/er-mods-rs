@@ -220,7 +220,8 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // Both character rows open `05_010_ProfileSelect`, and that window renders a character model
     // per slot. The native refresh that draws them walks the renderer table without a null check,
     // so a host arming either row has to own the guard or the first press is an access violation
-    // rather than a row -- measured 2026-09-11, `0xc0000005` at `eldenring.exe+0x9ab874`.
+    // rather than a row -- measured 2026-09-11 on 1.17.1, `0xc0000005` at `eldenring.exe+0x9ab874`
+    // (2.7.2.0 `+0x9abd24`).
     // The product installs the same body from its own private detour and must not call this.
     let character_rows = rows.load_character || rows.load_character_from_file;
     // The Save Game row opens the same `05_010` window, by a different route: its destination

@@ -17,7 +17,8 @@ events or code read in the executable.
     python3 scripts/er-mechanics-talisman-affinity.py --selftest
 
 Labels as in `docs/er-mechanics/`: `VERIFIED` = regulation value, TimeAct event, or code read in
-the named 1.16.2 Ghidra dump and byte-checked in `eldenring-deobf-1.17.1.bin`; `INFERRED` = fits
+the named 1.16.2 Ghidra dump and byte-checked in `eldenring-deobf-1.17.2.bin` (every address here
+is a 2.7.2.0 VA; each function decodes to the same instructions as its 1.16.2 namesake); `INFERRED` = fits
 the data but the consumer was not traced; `COMMUNITY` = outside claim. A feature whose basis is
 not established is emitted as `unknown` with the reason, never filled in.
 
@@ -45,31 +46,31 @@ Trigger kinds (from each talisman's SpEffect closure, `er-mechanics-talismans.py
                   weapon's base attack share in those elements.
     independent   no weapon-dependent condition (HP gates, resources, defense, always-on).
 
-The successive-hit counter (`VERIFIED`, addresses 1.16.2 / 1.17.1, byte-checked by --selftest):
+The successive-hit counter (`VERIFIED`, byte-checked by --selftest):
 
-    per landed hit   CalculateDamage2 0x1404483b0 / 0x140448910 walks the 13 SpEffect slots of
-                     the AttackDamageInfo (`mov ebx,0xd` 0x1404489eb / 0x140448f4b). Slots 0-4 are
-                     AtkParam_Pc.spEffectId0..4 (copied in FUN_140d24440 0x140d244b0 / 0x140d25c30,
+    per landed hit   CalculateDamage2 0x1404489f0 walks the 13 SpEffect slots of
+                     the AttackDamageInfo (`mov ebx,0xd` 0x14044902b). Slots 0-4 are
+                     AtkParam_Pc.spEffectId0..4 (copied in FUN_140d272b0 at 0x140d27320,
                      skipped when disableHitSpEffect). A slot whose SpEffectParam has
-                     effectTargetAttacker (+0x160 bit 1, 0x140448aed / 0x14044904d) is applied to
-                     the attacker (FUN_1403e8b70 -> Apply -> FUN_1404fd090).
-    one entry each   FUN_1404fc0c0 reuses an existing entry with the same id only through
-                     FUN_140500510 0x140500510 / 0x1405012e0, which refuses an entry with
+                     effectTargetAttacker (+0x160 bit 1, 0x14044912d) is applied to
+                     the attacker (FUN_1403e8d50 -> Apply -> FUN_1404fdf40).
+    one entry each   FUN_1404fcf70 reuses an existing entry with the same id only through
+                     FUN_1405013c0, which refuses an entry with
                      controlFlags & 2, the flag a zero-duration row gets at creation
-                     (FUN_1404ff010). The 314 rows (6900-6909) have effectEndurance 0, spCategory 0
+                     (FUN_1404ffec0). The 314 rows (6900-6909) have effectEndurance 0, spCategory 0
                      and stateInfo 314, so no other match applies: every landed hit adds its own
                      entry, even two in one frame.
-    counted once     FUN_1404fae40 (the per-frame SpEffect update) ticks every entry, then calls
-                     FUN_1404fe4e0, which adds to every accumulator whose host stateInfo
-                     (303 + id) is present the sum FUN_1404f70e0 0x1404f70e0 / 0x1404f7eb0 of
+    counted once     FUN_1404fbcf0 (the per-frame SpEffect update) ticks every entry, then calls
+                     FUN_1404ff390, which adds to every accumulator whose host stateInfo
+                     (303 + id) is present the sum FUN_1404f7f90 of
                      accumuVal (+0x184) over entries with stateInfo 314 (+0x156) activated this
                      update (flags & 4). An unconditional new entry starts in state 2
                      (IsHpDependend, inverted), is activated on its first tick and removed on the
-                     next (FUN_140500be0, controlFlags & 2): one count per entry.
-    decay            a host row's ActivateInterval 0x1405011c0 adds its own accumuVal every
+                     next (FUN_140501a90, controlFlags & 2): one count per entry.
+    decay            a host row's ActivateInterval 0x140502070 adds its own accumuVal every
                      motionInterval (Winged Sword / Millicent's: -1 per 0.5 s; Godskin: -1 per
                      0.8 s). Active stage rows also decay (-1 per 1.0 / 0.7 / 0.4 s). The counter
-                     is clamped at 0 (FUN_1404fe170) and has no upper clamp in FUN_1404fe4e0.
+                     is clamped at 0 (FUN_1404ff020) and has no upper clamp in FUN_1404ff390.
 
 So every hit record that lands counts, including each blade of a multi-hitbox swing: Backhand
 Blade's 2H R1 #1 is two hit records (AtkParam 6400200 index 0, 6400203 index 1), each carrying
@@ -80,7 +81,7 @@ geometry; the counts here are the ceiling the TimeAct allows (`max_hits`, attack
 Not established, so not modelled (reported as unknown): how the stage rows (spCategory 120 for
 stages 1-3, 20 for stage 4) interact once more than one threshold is met, and the order of the
 four host rows in the entry list, which decides which fire id the single per-accumulator queue
-slot (FUN_1404fe450) holds. Stage 2+ timing therefore is not computed; stage 1 from a cold start
+slot (FUN_1404ff300) holds. Stage 2+ timing therefore is not computed; stage 1 from a cold start
 is, because no stage row exists before it. Which machine runs CalculateDamage2 for a hit on a
 remote player in online play was not traced.
 """
@@ -117,10 +118,10 @@ def _ash_mod():
 FPS = 30
 ELEMENTS = TAL.ELEMENTS
 #: SpEffectParam.stateInfo of the rows AtkParam hits add to the successive-hit counter
-#: (FUN_1404f70e0 compares +0x156 with 0x13a).
+#: (FUN_1404f7f90 compares +0x156 with 0x13a).
 ACCUM_ADD_STATE_INFO = 314
-#: Accumulator host stateInfo range (`IsStateInfoFrom303To312` 0x140d50770); accumulator id is
-#: stateInfo - 303 (FUN_140d4fd80).
+#: Accumulator host stateInfo range (`IsStateInfoFrom303To312` 0x140d53c10); accumulator id is
+#: stateInfo - 303 (FUN_140d53220).
 ACCUM_HOST_STATE_INFO = range(303, 313)
 #: Spear Talisman's stateInfo (talismans.md 2c).
 COUNTER_BOOST_STATE_INFO = 197
@@ -139,22 +140,23 @@ NON_WEAPON_GATES = {288: 'critical rows of every weapon', 289: 'critical rows of
                     496: 'flask animation'}
 AFFINITIES = ST.AR.AFFINITIES
 
-# Byte checks of the executable sites the successive-counter answer rests on. (label, 1.16.2 VA,
-# 1.17.1 VA, bytes). Each sequence is position-independent and identical in both images.
+# Byte checks of the executable sites the successive-counter answer rests on. (label, 2.7.2.0 VA,
+# bytes). Each sequence is position-independent and was identical in the 1.16.2 and 1.17.1
+# images; each function here decodes to the same instructions in all three builds.
 EXE_SITES = [
-    ('FUN_1404f70e0: sum accumuVal of activated stateInfo 314 entries', 0x1404f70e0, 0x1404f7eb0,
+    ('FUN_1404f7f90: sum accumuVal of activated stateInfo 314 entries', 0x1404f7f90,
      '33c048ba00000000000000f0488551287440488b49084885c97437' '41b83a0100008b5160f7c203000c80751df6c2047418'
      '488b114885d274106644398256010000750603828401' '0000488b49304885c975cfc3'),
-    ('FUN_1404fe4e0 calls the sum', 0x1404fe50a, 0x1404ff2da, 'e8d18bffff'),
-    ('CalculateDamage2: 13 SpEffect slots from AttackDamageInfo+0x74', 0x1404489d2, 0x140448f32,
+    ('FUN_1404ff390 calls the sum', 0x1404ff3ba, 'e8d18bffff'),
+    ('CalculateDamage2: 13 SpEffect slots from AttackDamageInfo+0x74', 0x140449012,
      '4d8d6e74f2410f108e680100000f57c0f3410f10b644020000bb0d000000'),
     ('CalculateDamage2: effectTargetAttacker (+0x160 bit 1) -> applied to the attacker',
-     0x140448aed, 0x14044904d, '0fb68160010000d1e883e00184c00f84010200004885f6'),
-    ('FUN_140d24440: slots 0-4 = AtkParam+0x18 (spEffectId0..4)', 0x140d244b0, 0x140d25c30,
+     0x14044912d, '0fb68160010000d1e883e00184c00f84010200004885f6'),
+    ('FUN_140d272b0: slots 0-4 = AtkParam+0x18 (spEffectId0..4)', 0x140d27320,
      '488d44245848c7442458ffffffff482bd0'),
-    ('FUN_140d24440: indexed read [paramRow + 0x18 + 4i]', 0x140d24500, 0x140d25c80,
+    ('FUN_140d272b0: indexed read [paramRow + 0x18 + 4i]', 0x140d27370,
      '4883fb04770a488d049a8b4c0470'),
-    ('FUN_140500510: no reuse of an entry with controlFlags & 2', 0x140500510, 0x1405012e0,
+    ('FUN_1405013c0: no reuse of an entry with controlFlags & 2', 0x1405013c0,
      '8b4160c1e81ff6d0a801750332c0c3f641700275f7'),
 ]
 
@@ -891,17 +893,15 @@ def selftest():
             fails += 1
             print(f'FAIL {name}: got {got!r}, want {want!r}')
 
-    # 1. Executable sites, both images.
-    for build, fname, env, col in (('1.16.2', 'eldenring-deobf.bin', 'ER_DEOBF_1162', 1),
-                                   ('1.17.1', 'eldenring-deobf-1.17.1.bin', 'ER_DEOBF_1171', 2)):
-        path = _find_image(fname, env)
-        if not path:
-            skips.append(f'{build} image {fname} absent')
-            continue
-        for site in EXE_SITES:
-            want = bytes.fromhex(site[3])
-            check(f'{build} {site[0]} at {site[col]:#x}', _image_bytes(path, site[col], len(want)).hex(),
-                  want.hex())
+    # 1. Executable sites in the installed build's image.
+    fname = 'eldenring-deobf-1.17.2.bin'
+    path = _find_image(fname, 'ER_DEOBF_BIN')
+    if not path:
+        skips.append(f'image {fname} absent')
+    else:
+        for label, va, raw in EXE_SITES:
+            want = bytes.fromhex(raw)
+            check(f'{label} at {va:#x}', _image_bytes(path, va, len(want)).hex(), want.hex())
     d = Data()
     # 2. The 314 adder rows: on the attacker, zero duration, accumuVal 2..20 (regulation).
     adders = {i: r for i, r in d.sp.items() if r['stateInfo'] == ACCUM_ADD_STATE_INFO}

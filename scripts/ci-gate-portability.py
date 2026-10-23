@@ -72,22 +72,21 @@ BUCKETS = ("portable", "partial", "blocked")
 # not the developer's main checkout -- any `git worktree`, including the one scripts/hooks/pre-push
 # pins to a pushed commit -- starts without them, and the gates that read them then skip. The hook
 # links these paths in from the checkout that has them (`--root-inputs` prints the list), so a push
-# gated in a worktree covers what a push gated in the main checkout covers. The 1.17.1 image has no
-# ledger dependency of its own yet; it is listed because gates name it by path.
+# gated in a worktree covers what a push gated in the main checkout covers.
+#
+# One image, because the workspace supports one game build. Every game address in crates/ is a
+# 2.7.2.0 rva measured on this image, and `build-support/prologue_build.rs` ground-truths its pins
+# against it. The older images (`eldenring-deobf.bin` = 1.16.2, `-1.17.bin`, `-1.17.1.bin`) are
+# read-only RE inputs that no gate may depend on, so they are neither probed nor linked; neither is
+# the `docs/recon/rva-map-1162-to-1170*` alignment the carry layer was built from, which went with
+# that layer in the 2.7.2.0 port.
 ROOT_INPUTS = {
-    # The de-Arxan'd game images. Gitignored, ~100 MB, derived from the user's install.
-    "image-1162": "eldenring-deobf.bin",
-    "image-1170": "eldenring-deobf-1.17.bin",
-    "image-1171": "eldenring-deobf-1.17.1.bin",
-    # The whole-image .pdata alignment (128,602 pairs) derived from those images. Gitignored at
-    # .gitignore:82 because it is 128k rows of game-derived addresses.
-    "rva-map-tsv": "docs/recon/rva-map-1162-to-1170.functions.tsv",
+    # The de-Arxan'd 2.7.2.0 image. Gitignored, ~100 MB, derived from the user's install.
+    "image-1172": "eldenring-deobf-1.17.2.bin",
 }
 
 DEP_PROBES = {
-    "image-1162": lambda root: (root / ROOT_INPUTS["image-1162"]).exists(),
-    "image-1170": lambda root: (root / ROOT_INPUTS["image-1170"]).exists(),
-    "rva-map-tsv": lambda root: (root / ROOT_INPUTS["rva-map-tsv"]).exists(),
+    "image-1172": lambda root: (root / ROOT_INPUTS["image-1172"]).exists(),
     # A compiled DLL under target/. Present on a developer's machine, and on a runner only after
     # the Rust steps have run -- which are later in check.sh than the gates that read it.
     "build-artifact": lambda root: any(
@@ -105,13 +104,6 @@ DEP_PROBES = {
     "crash-logging-dll": lambda root: (
         root / "target/x86_64-pc-windows-msvc/release/er_crash_logging.dll"
     ).exists(),
-    # er-game-base's build.rs output, `address_map_1170.rs`, under target/**/out/. Any `cargo
-    # check` of the workspace produces it; a bare checkout has it nowhere. This is distinct from
-    # build-artifact (a linked release .dll): a `cargo check` makes the first and not the second.
-    "generated-address-map": lambda root: any(
-        (root / "target").glob("*/*/build/er-game-base-*/out/address_map_1170.rs")
-    )
-    or any((root / "target").glob("*/build/er-game-base-*/out/address_map_1170.rs")),
     # MinHook vendor source. CI clones it; a bare checkout does not have it.
     "minhook": lambda root: (root / "vendor/minhook").exists(),
     # The Elden Ring install itself: regulation.bin and eldenring.exe. Three gates read it and
@@ -402,7 +394,7 @@ def selftest() -> int:
 
         led.write_text(
             "portable\t-\talpha.py --selftest\tsource only\n"
-            "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n",
+            "blocked\timage-1172\tbeta.py\tneeds the 2.7.2.0 image\n",
             encoding="utf-8",
         )
         expect("a fully-ledgered suite is clean", check(sh, led), [])
@@ -416,7 +408,7 @@ def selftest() -> int:
         # A gate deleted from check.sh, row left behind.
         led.write_text(
             "portable\t-\talpha.py --selftest\tsource only\n"
-            "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n"
+            "blocked\timage-1172\tbeta.py\tneeds the 2.7.2.0 image\n"
             "portable\t-\tgamma.py\tgone\n",
             encoding="utf-8",
         )
@@ -427,7 +419,7 @@ def selftest() -> int:
         # Flags are part of the KEY: the selftest half and the live half classify separately.
         led.write_text(
             "portable\t-\talpha.py\tsource only\n"
-            "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n",
+            "blocked\timage-1172\tbeta.py\tneeds the 2.7.2.0 image\n",
             encoding="utf-8",
         )
         expect("a row that drops the flags does not match", len(check(sh, led)), 2)
@@ -450,17 +442,26 @@ def selftest() -> int:
         expect("an unprobeable dependency is caught", len(check(sh, led)), 1)
 
         # The `!` marker, which decides whether a partial gate is run or skipped.
-        expect("a partial row degrades on a plain dep", fatal_deps("partial", ["image-1162"]), [])
+        expect("a partial row degrades on a plain dep", fatal_deps("partial", ["image-1172"]), [])
         expect(
             "...and dies on a !-marked one",
-            fatal_deps("partial", ["image-1162", "!uv"]),
+            fatal_deps("partial", ["image-1172", "!uv"]),
             ["uv"],
         )
         expect(
             "every dep of a blocked row is fatal",
-            fatal_deps("blocked", ["image-1162", "!uv"]),
-            ["image-1162", "uv"],
+            fatal_deps("blocked", ["image-1172", "!uv"]),
+            ["image-1172", "uv"],
         )
+
+        # A dependency the 2.7.2.0 port retired is as unprobeable as one nobody ever defined, so a
+        # row still naming one is caught rather than skipped forever on a probe that cannot exist.
+        led.write_text(
+            "portable\t-\talpha.py --selftest\tsource only\n"
+            "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n",
+            encoding="utf-8",
+        )
+        expect("a row naming a retired image dependency is caught", len(check(sh, led)), 1)
 
     print(f"selftest: {failures} failure(s)")
     return 1 if failures else 0

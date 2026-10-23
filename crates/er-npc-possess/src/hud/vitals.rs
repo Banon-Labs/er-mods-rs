@@ -27,7 +27,8 @@
 //! `GethpMaxUncapped(data) - data.hpMax`, i.e. **uncapped minus capped** -- how much maximum HP
 //! has been taken away, which the HUD draws as the darkened tail of the bar. The bar's width is
 //! `hpMaxUncapped`. On a character with no reduction the two are equal and the field is zero.
-//! For a possessed creature they are equal too, because `FUN_140438a50` writes both from the same
+//! For a possessed creature they are equal too, because 1.16.2 `FUN_140438a50` (2.7.2.0
+//! `0x140439040`) writes both from the same
 //! `NpcParam.hp`, so a boss shows a full undarkened bar. Reproducing the subtraction faithfully is
 //! what makes that come out right; "fixing" it to report the max would darken the whole bar.
 //!
@@ -37,17 +38,17 @@
 //!
 //! * `stamina` (`NpcParam+0xf4`) is **> 1 on 7,043 of them** -- 50 for most bosses, 100 for
 //!   Gideon, 150 for the Grafted Scion. The two exceptions are degenerate rows with `hp == 0`.
-//!   The stamina bar is therefore real, and it MOVES: `FUN_1404016d0` tops stamina up every frame
-//!   from the character's own `GetStaminaRecoverySpeed`, and `EnemyIns::Update` calls it with no
-//!   player gate at all.
+//!   The stamina bar is therefore real, and it MOVES: 1.16.2 `FUN_1404016d0` tops stamina up
+//!   every frame from the character's own `GetStaminaRecoverySpeed`, and `EnemyIns::Update` calls
+//!   it with no player gate at all.
 //! * `mp` (`NpcParam+0x28`, the source of `fpMax`) is **0 on 6,989 of them** and on every boss
 //!   checked. The 56 rows with any FP are almost all merchants. So the FP bar has nothing to show
 //!   for essentially anything worth possessing.
 //!
 //! Note what that corrects: `CSChrDataModule`'s constructor defaults these to **1**, but
-//! `FUN_140438a50` OVERWRITES that with the param, so the real reading for a creature is `0`, not
-//! `1`. [`EMPTY_POOL_MAX`] is the threshold rather than an equality test precisely so both the
-//! constructor default and the param zero are caught by one rule.
+//! 1.16.2 `FUN_140438a50` OVERWRITES that with the param, so the real reading for a creature is
+//! `0`, not `1`. [`EMPTY_POOL_MAX`] is the threshold rather than an equality test precisely so
+//! both the constructor default and the param zero are caught by one rule.
 //!
 //! # What an empty pool is turned into, and why not zero
 //!
@@ -68,9 +69,9 @@
 /// At or below this, a pool is treated as absent rather than nearly empty.
 ///
 /// One rather than zero because there are two ways to be empty and this catches both: the
-/// `CSChrDataModule` constructor's default of `1`, and the `0` that `FUN_140438a50` writes from
-/// `NpcParam.mp` for a creature that has no FP. A real pool is never this small -- the smallest
-/// non-zero `mp` in the shipped param table is 50.
+/// `CSChrDataModule` constructor's default of `1`, and the `0` that 1.16.2 `FUN_140438a50` writes
+/// from `NpcParam.mp` for a creature that has no FP. A real pool is never this small -- the
+/// smallest non-zero `mp` in the shipped param table is 50.
 pub(crate) const EMPTY_POOL_MAX: i32 = 1;
 
 /// The floor an empty pool's maximum is clamped to. See the module docs for why this is not 0.

@@ -67,7 +67,7 @@ fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
         // `05_001_title_logo.gfx` shows root depth 3 is placed at frame 1 with no color transform,
         // then moved by FadeIn frames 2..60 using alphaMultTerm 0..256, remains full through
         // Title_TopMenu/FadeOut frame 113, and fades to 0 by frame 133. The in-memory oracle reads
-        // the live Scaleform current frame through `FUN_140d82620`, so convert that frame back into
+        // the live Scaleform current frame through 1.16.1 dump `FUN_140d82620`, so convert that frame back into
         // the on-disk alpha term instead of treating the entire ramp as a generic visible boolean.
         1 => TITLE_LOGO_GFX_FULL_ALPHA,
         2..=60 => ((frame - 2) * TITLE_LOGO_GFX_FULL_ALPHA + 29) / 58,
@@ -159,8 +159,9 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     if !crate::vtable_in_game_image(resolve_value_addr, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
-    // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
-    // then pass the resolved Scaleform value to FUN_140d82620 to read the current 1-based frame.
+    // Mirrors native helpers (1.16.2 0x140749980/0x1407499e0): load *(gfx_value) into rcx, call vtable+8,
+    // then pass the resolved Scaleform value to the current-frame reader (2.7.2.0 0x140d85a10) to read
+    // the current 1-based frame.
     let resolve_value: unsafe extern "system" fn(usize) -> usize =
         unsafe { std::mem::transmute(resolve_value_addr) };
     let value = unsafe { resolve_value(handle) };

@@ -1,7 +1,7 @@
 // Where the item list's window is reachable from the R3 step's `this`.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // er-r3-view names the window from `MenuWindowJob::Run` (1.17.1 rva 0x7ae040), and in one run
 // that never fired for `GaitemSelectDialog`, so view 3 could not fade the left panel. This asks

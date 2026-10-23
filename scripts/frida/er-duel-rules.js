@@ -57,42 +57,42 @@ const CATALOG = {"affinities": [["Standard", 0], ["Heavy", 100], ["Keen", 200], 
 // The build this agent is pinned to. `TimeDateStamp` comes from the in-memory PE header, which
 // the game does not rewrite; every RVA and offset below was measured against this build.
 // ============================================================================================
-// 1.17.1 was 0x6a96b418; 0x6aabf7e7 is the stamp of the installed 2.7.2.0 eldenring.exe and of
+// 0x6aabf7e7 is the stamp of the installed 2.7.2.0 eldenring.exe and of
 // eldenring-deobf-1.17.2.bin.
 const BUILD = { label: 'ELDEN RING 1.17.2 (eldenring.exe 2.7.2.0)', timeDateStamp: 0x6aabf7e7 };
 
-// Singleton pointers, `.data` RVAs on 2.7.2.0. Each was measured on 1.17.1 (the first three from
-// docs/recon/rva-map-1162-to-1170.data.tsv, the fourth from the `mov [rip+...], rax` after
-// `CSBulletManager`'s constructor in `_Common_Initialize`, 1.17.1 0x140aeeec9 -> 2.7.2.0
-// 0x140aef389) and carried with scripts/map-rvas-1171-to-1172.py; the 2.7.2.0 readers of each one
-// load the carried address.
+// Singleton pointers, `.data` RVAs on 2.7.2.0, the same values as
+// scripts/cheat-engine/er-duel-rules.lua. Each is the address the game's own readers of that
+// singleton load in eldenring-deobf-1.17.2.bin (`mov r64, [rip+disp32]` loads of it in the first
+// `.text`, 2026-10-23: gameDataMan 730, worldChrMan 2475, soloParamRepository 476, bulletManager
+// 75, flipper 111). bulletManager is stored by the `mov [rip+...], rax` after `CSBulletManager`'s
+// constructor in `_Common_Initialize`, at 0x140aef389.
 const RVA = {
-    gameDataMan: 0x3d64fb8,             // 0x3d61f98 -> 0x3d64fb8, also fromsoftware-rs rva_ww.rs game_data_man
-    worldChrMan: 0x3d6d018,             // 0x3d69ff8 -> 0x3d6d018
-    soloParamRepository: 0x3d88f78,     // 0x3d85f58 -> 0x3d88f78
-    bulletManager: 0x3d697c8,           // 0x3d667a8 -> 0x3d697c8
-    // CSFlipperImp's singleton pointer (1.16.2 0x4589ad8, crates/er-telemetry-core/src/lib.rs),
-    // 0x458db58 -> 0x4590b78.
+    gameDataMan: 0x3d64fb8,             // also fromsoftware-rs rva_ww.rs game_data_man
+    worldChrMan: 0x3d6d018,
+    soloParamRepository: 0x3d88f78,
+    bulletManager: 0x3d697c8,
+    // CSFlipperImp's singleton pointer (crates/er-telemetry-core/src/lib.rs).
     flipper: 0x4590b78,
-    // Hooks, with the bytes each must start with: the same 16 bytes in eldenring-deobf-1.17.1.bin
-    // and eldenring-deobf-1.17.2.bin, and each body matches with its operands carried.
-    frameTick: 0x773db0,                // 0x773900 -> 0x773db0
-    speffectApply: 0x4fb790,            // 0x4fb6b0 -> 0x4fb790
+    // Hooks, with the bytes each must start with: the 16 bytes at each rva in
+    // eldenring-deobf-1.17.2.bin.
+    frameTick: 0x773db0,
+    speffectApply: 0x4fb790,
 };
 const PROLOGUE = {
     frameTick: '48 8b c4 55 56 57 41 54 41 55 41 56 41 57 48 8d',
     speffectApply: '48 89 6c 24 10 48 89 74 24 18 57 41 56 41 57 48',
 };
 
-// Struct offsets, read off fromsoftware-rs by the compiler (offset_of!) on 2026-10-15, for 1.17.1.
-// Checked statically against 2.7.2.0 (2026-10-21). These have a reader that is identical in both
-// builds: GetLevel +0x68, GetBaseEndurance +0x44, GetBaseVigor +0x3c, ChrIns GetPlayerGameData
+// Struct offsets, read off fromsoftware-rs by the compiler (offset_of!) on 2026-10-15 and checked
+// statically against 2.7.2.0 on 2026-10-21. These have a 2.7.2.0 reader whose body is unchanged
+// from the build they were first read on: GetLevel +0x68, GetBaseEndurance +0x44, GetBaseVigor +0x3c, ChrIns GetPlayerGameData
 // +0x580, GetSpecialEffect +0x178, GetRideNode +0x10, GetGameSettings +0x58,
 // GetPlayerGameDataByIndex +0x10 and 0xaf0 for 5 slots, IsRemotePlayerGameDataFullySynced +0x20 and
 // 0xf, GetArmStyle ChrAsm +0x8, and WorldChrMan +0x10ee0 / +0x1e508, GameDataMan +0x8,
 // CSFlipper +0x2b8 and ChrIns +0x190 / +0x8 loaded straight off their singleton. The rest have no
-// identified reader, so the evidence for them is a census of every carried 1.17.1 instruction using
-// the displacement: none changed for 0xc, 0x16, 0x1c, 0x7c, 0x9c, 0xe8, 0xff, 0x138, 0x31c, 0x694,
+// identified reader, so the evidence for them is a census of every instruction using the
+// displacement, compared with its counterpart in the build before 2.7.2.0: none changed for 0xc, 0x16, 0x1c, 0x7c, 0x9c, 0xe8, 0xff, 0x138, 0x31c, 0x694,
 // 0xb40, 0xda0, 0xdd0, 0xe00 and 0xe18, and the common small ones (0x4 to 0xc0) differ in under
 // 0.1% of their uses with no cluster on a different displacement.
 const OFF = {

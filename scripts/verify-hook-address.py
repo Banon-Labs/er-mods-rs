@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Verify a VA holds the same function in the 1.16.2 Ghidra dump and in `eldenring-deobf.bin`.
 
-Why this is mandatory before hooking
-------------------------------------
-The Ghidra dump is authoritative for meaning; `eldenring-deobf.bin` is authoritative for
-addresses (it is what the DLL actually patches). They are not the same file, and the offset
-between them is piecewise-constant per code region -- so a VA read off the dump can land
-mid-instruction in the live image and turn a detour into a crash.
+What it can and cannot answer
+-----------------------------
+Both sides are build 1.16.2, so this only says whether a 1.16.2 dump VA and the 1.16.2 image
+agree. It says nothing about a hook address: the DLL patches the installed 2.7.2.0 build, whose
+image is `eldenring-deobf-1.17.2.bin` and which has no Ghidra dump on this machine, so a 2.7.2.0
+address is checked against that image's own bytes and `.pdata` instead. The reason the check was
+written still holds for the two 1.16.2 files: the dump is authoritative for meaning and the image
+for bytes, and a VA read off a dump that does not match its image can land mid-instruction.
 
 Comparing the two disassemblies as text does not work: Ghidra prints `RAX,RSP` where capstone
 prints `rax, rsp`, `[RAX + -0x5f]` vs `[rax - 0x5f]`, `JZ` vs `je`. An earlier pass reported all

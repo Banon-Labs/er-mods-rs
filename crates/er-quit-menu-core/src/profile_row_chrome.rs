@@ -134,7 +134,7 @@ pub(crate) fn row_populate_hooks() -> RowPopulateHooks {
 
 /// Is this summary row one of our edited `05_010_ProfileSelect` rows?
 ///
-/// `CS::MenuSaveDataSummary`'s populate (vtable slot 1, `0x8757e0`) is a shared template: every
+/// `CS::MenuSaveDataSummary`'s populate (vtable slot 1, `0x876c80`) is a shared template: every
 /// surface that renders a character summary reaches it, including the game's own System>Quit
 /// `GameEnd` panel in `02_040_OptionSetting`, which owns its own `PlayerName` / `Level` /
 /// `StaticText_110502` / `Location` / `PlayTime` fields with its own geometry. Applying this mod's
@@ -243,18 +243,18 @@ pub unsafe fn apply_row_slot_info_visibility(
 // The row populate itself
 // ============================================================================================
 
-/// The per-slot row populate `FUN_1408758d0(rowModel, rowProxy, ...)`, and the current-player
-/// summary builder `FUN_140951220(param, rowProxy)` nested around it.
+/// The per-slot row populate `(rowModel, rowProxy, ...)`, and the current-player summary builder
+/// `(param, rowProxy)` nested around it: 2.7.2.0 rvas (1.16.2 `FUN_1408757e0` / `FUN_140951220`).
 ///
 /// Public because every shell that hooks these rows -- `er-quickload` and `er-quit-menu` today,
 /// and the retired `er-quit-rows` fork before them -- derives its own names from these two rather
 /// than writing the addresses out again. This crate is the shared floor they already depend on, and
-/// one literal per address is what keeps a 1.17 correction from having to be found in three places. The fuller reverse-engineering note on what
-/// each function writes lives beside the derived name in
-/// `er-quickload/src/constants/stats_panel_text.rs`.
-pub const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// one literal per address is what keeps a correction from having to be found in three places.
+/// The fuller reverse-engineering note on what each function writes lives beside the derived name
+/// in `er-quickload/src/constants/stats_panel_text.rs`.
+pub const PROFILE_ROW_POPULATE_RVA: usize = 0x876c80;
 /// The current-player summary builder, documented with the address above.
-pub const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
+pub const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x952870;
 
 static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -268,7 +268,7 @@ std::thread_local! {
     /// per-slot populate we also hook.
     ///
     /// This exists because the slot index cannot answer "whose character is this row". The builder
-    /// composes its transient summary as `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
+    /// composes its transient summary as `0x140876e80(summary, 0, &name, pgd->level)` -- slot
     /// index 0 with the live player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
     /// both that row and save slot 0's real row. Guessing "0 means the live character" put the
     /// loaded character's name, level, attributes and location on save slot 0's row.
@@ -297,7 +297,7 @@ pub unsafe extern "system" fn profile_current_row_populate_hook(param_1: usize, 
     }
     let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
     // Marked across the original because the per-slot row populate runs inside it (the builder ends
-    // `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and that nested call
+    // `SceneObjProxy(&local_188, param_2); 0x140876c80(local_128, pSVar3);`), and that nested call
     // is the one that has to know this row is the live character's.
     let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get() + 1));
     unsafe { f(param_1, row_proxy) };
@@ -636,7 +636,7 @@ pub fn install_profile_row_populate_hooks() {
 fn install_one(rva: usize, handler: *mut std::ffi::c_void, orig: &'static AtomicUsize, what: &str) {
     let Ok(addr) = er_game_base::mem::game_rva_for_hook(rva as u32) else {
         append_autoload_debug(format_args!(
-            "row-populate: refused {what} -- rva 0x{rva:x} has no verified mapping for the running build; the other row is unaffected"
+            "row-populate: refused {what} -- 2.7.2.0 rva 0x{rva:x} did not resolve in the running game; the other row is unaffected"
         ));
         return;
     };

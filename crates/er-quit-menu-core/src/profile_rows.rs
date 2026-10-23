@@ -1,29 +1,29 @@
 //! The PROFILESELECT list cursor is a row index, not a PROFILESUMMARY slot.
 //!
 //! `05_010_ProfileSelect` lists only the character slots that exist. The game builds its row list
-//! in `FUN_140875590` (1.16.2, byte-identical in `eldenring-deobf.bin` at the same VA) by walking
-//! slots `0..10` and pushing a `CS::MenuSaveDataSummary` **only** where
-//! `ProfileSummary->saveSlotsStates[slot]` is set:
+//! in `0x140876a30` by walking slots `0..10` and pushing a `CS::MenuSaveDataSummary` **only** where
+//! `ProfileSummary->saveSlotsStates[slot]` is set (1.16.2 decompile, with the 2.7.2.0 addresses
+//! of the functions it calls):
 //!
 //! ```text
 //!   iVar5 = 0;
 //!   do {
-//!     if (FUN_140261cd0(GetProfileSummary(), iVar5))   // saveSlotsStates[slot]
-//!       push(FUN_1408752c0(&tmp, iVar5));              // row remembers its slot at +8
+//!     if (0x140261ce0(GetProfileSummary(), iVar5))     // saveSlotsStates[slot]
+//!       push(0x140876760(&tmp, iVar5));                // row remembers its slot at +8
 //!     iVar5 = iVar5 + 1;
 //!   } while (iVar5 < 10);
 //! ```
 //!
 //! So the row at list index `i` describes slot `rows[i]`, and `i == rows[i]` only when the
 //! container's characters happen to run densely from slot 0. `CS::ProfileLoadDialog::load_activate`
-//! (`0x1409a4670`) never confuses the two -- it reads the cursor, clamps it, fetches the row and
-//! takes the slot from the row:
+//! (`0x1409a5cc0`) never confuses the two -- it reads the cursor, clamps it, fetches the row and
+//! takes the slot from the row (2.7.2.0 disassembly):
 //!
 //! ```text
-//!   1409a46b9: call 0x140739e20            ; cursor = [dialog+0xa38+0xd4] == [dialog+0xb0c]
-//!   1409a46c0: test eax,eax / js  ...      ; cursor < 0        -> row 0
-//!   1409a46c4: cmp  eax,[rdi+0xb08] / jg   ; cursor >= bound   -> row 0
-//!   1409a46d5: call qword [rax+0x90]       ; list = dialog->vt[+0x90](dialog)
+//!   1409a5d09: call 0x14073b120            ; cursor = [dialog+0xa38+0xd4] == [dialog+0xb0c]
+//!   1409a5d10: test eax,eax / js  ...      ; cursor < 0        -> row 0
+//!   1409a5d14: cmp  eax,[rdi+0xb08] / jg   ; cursor >= bound   -> row 0
+//!   1409a5d25: call qword [rax+0x90]       ; list = dialog->vt[+0x90](dialog)
 //!   ...        call qword [r8 +0x20]       ; row  = list->vt[+0x20](list, row_index)
 //!   ...        mov  eax,[rax+8]            ; slot = row->save_slot
 //! ```
@@ -43,8 +43,8 @@
 //! 3 previews as a one-row list, the user presses A on row 0, and the mod asked "does slot 0 hold a
 //! character" -- it does not, so the pick was refused with `slot holds no character`, six times in a
 //! row, while the native `load_activate` in the very same frame built the load job for slot 3
-//! (`loadgame-builder: 0x140826510 built for slot=3`, measured 2026-08-25). Any container whose
-//! characters are not dense from slot 0 was unloadable through the menu.
+//! (`loadgame-builder: 0x140826510 built for slot=3`, measured 2026-08-25 on 1.16.2). Any
+//! container whose characters are not dense from slot 0 was unloadable through the menu.
 
 /// Character slots in one `ER0000.{sl2,co2}` container, and rows in a full ProfileSelect list.
 pub const PROFILE_SLOT_COUNT: usize = 10;

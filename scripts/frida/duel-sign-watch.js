@@ -12,7 +12,7 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: the frame tick's
+// 2.7.2.0 addresses, carried from 1.17.1: the frame tick's
 // body matches between the two de-Arxan'd images, and the global is what its 2.7.2.0 readers load.
 const FRAME_TICK = va('0x140773db0');       // frame tick 0x140773900 -> 0x140773db0
 const CS_EVENT_MAN = va('0x143d6f788');     // CSEventMan 0x143d6c768 -> 0x143d6f788

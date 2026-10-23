@@ -1,8 +1,8 @@
 // Which `GaitemSelectDialog` methods run when B closes the item list, and how long `Run` keeps
 // pumping the window after that.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // er-r3-view hides its board once the item list's `MenuWindowJob::Run` (1.17.1 rva 0x7ae040) has
 // gone quiet, and the player sees it go later than the game's own panels. This hooks every

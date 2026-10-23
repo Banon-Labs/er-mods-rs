@@ -246,7 +246,7 @@ Static RE behind the implementation, each in bd:
 - `createsummonchr-args-and-spawn-sfx-1171-2026-10-06`: `args[11] = 0` is what keeps the appear animation, the doping and the later re-enable from running. The DLL passes 0, where the prototype passed 1.
 - `sign-touch-verdict-offline-1171-2026-10-06`: one red slot, which is why a joined NPC blocks every other red sign.
 
-Every address is a 1.16.2 RVA with a verified row in `docs/recon/rva-map-1162-to-1170.verified.tsv`. They are listed in `docs/recon/npc-summons-addresses.tsv`, plus `StartMultiplayProcedureWithMountData` 1.16.2 `0x1406587b0` (`IDENTICAL-WHOLE`).
+Every address was a 1.16.2 RVA with a verified row in the 1.17 ledger (`docs/recon/rva-map-1162-to-1170.verified.tsv`, deleted with the address carry on 2026-10-23); the workspace spells them as 2.7.2.0 rvas now. They are listed in `docs/recon/npc-summons-addresses.tsv`, plus `StartMultiplayProcedureWithMountData` 1.16.2 `0x1406587b0` (`IDENTICAL-WHOLE`).
 
 Runtime-proven 2026-10-06, run `br-20261006-231247-f262` (Leo, 1.17.1, Seamless loaded): the
 finger opened the picker offline, the chosen NPC (Yura) was created hidden, its red sign was
@@ -372,8 +372,10 @@ write the raw top pointer: the stack can be reallocated by a chunk (two crashes 
 `crates/er-npc-summons/lua/brain-framework.lua` (cut down from `scripts/frida/ai-lua/_lab.lua`,
 host-checked by `brain-framework.test.lua`); brains are `<game dir>/er-npc-summons/brains/<name>.lua`
 and are keyed by think id, so a brain on a shared think also drives every world NPC with that think.
-`CSWorldAiManager` has no `data.tsv` row until a crate declares `0x3d624e8` and
-`map-data-rvas-1162-to-1170.py --refresh` runs (425/425 references agree on `0x3d66548`).
+`CSWorldAiManager`'s global is 1.16.2 `0x3d624e8`, 1.17 `0x3d66548` (425/425 references agreed
+when the old data ledger was refreshed) and 2.7.2.0 `0x3d69568`, the value a crate declares now
+that addresses are native (`docs/game-build.md`); check it against `eldenring-deobf-1.17.2.bin`
+before use.
 Runtime proof: the probe's `ai-lua-pcall` report; with the DLL, the log's `brain_drain_log` lines
 (`wrapped count N brains name=think`).
 

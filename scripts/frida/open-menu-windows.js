@@ -1,7 +1,7 @@
 // Which menu windows are open right now, named by their RTTI class.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `MenuWindowJob::Run` is pumped once per frame for every live menu window job, and `job+0x130` is
 // the window it owns. Collecting the owners seen over one frame and naming each by the RTTI beside
@@ -10,9 +10,8 @@
 // sent whenever it changes, so a menu opening or closing is one message. When the last window
 // closes nothing is pumped any more, so that final change is not reported.
 //
-// The rva is the 1.17 one: 1.16.2 `0x7ad1c0` maps to `0x7ae040` (`IDENTICAL-WHOLE` in
-// `docs/recon/rva-map-1162-to-1170.needed-verified.tsv`), and it sits below the `0xafefe9` boundary,
-// so the installed 1.17.1 has it at the same address.
+// 1.16.2 `0x7ad1c0` was `0x7ae040` on 1.17.0 and 1.17.1 (the whole function identical); the
+// literal below is the 2.7.2.0 rva.
 //
 // Read-only: one Interceptor, reads only.
 'use strict';

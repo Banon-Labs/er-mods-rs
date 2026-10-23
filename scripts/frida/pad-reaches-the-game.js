@@ -1,7 +1,7 @@
 // Is injected pad state actually reaching the game, or is the driver pressing into a void?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `scripts/er-drive-finger-bounds.py` refuses with "input is not reaching the game (window focus?)"
 // whenever a D-pad Down leaves the selected quick slot unchanged. That one symptom covers at least

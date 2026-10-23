@@ -73,6 +73,11 @@
 //! builds its own frame with `sub rsp, 0x170`, leaving a shifted-but-self-consistent anchor. One
 //! success is not proof. If a fifth stack argument or a caller-frame-relative read is ever found
 //! in this ctor, the call form breaks and this must become a JMP-entry trampoline.
+//!
+//! # Addresses
+//!
+//! The `FUN_`/instruction/vftable addresses quoted in this file's comments are 1.16.2 dump
+//! addresses, where this was reversed, unless labelled 2.7.2.0.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -181,9 +186,9 @@ pub(crate) fn authoritative_view_model() -> Option<usize> {
 /// against the 1.16.2 image: the attach `0x140886540` (`MOV [RCX+0x8],RDX` at `0x14088654a`), whose
 /// only caller is `CS::WorldMapDialogBase`'s constructor at `0x1409beeba`, and the detach
 /// `0x140886750` (`MOV [RCX+0x8],0`) from that dialog's destructor. The `WorldMapViewModel`
-/// constructor `0x1408855b0` zeroes it unconditionally four instructions in. So the slot is null
-/// exactly while no world-map dialog object is alive -- opening the map, not entering the world, is
-/// what closes this gate.
+/// constructor (2.7.2.0 `0x140886a50`, 1.16.2 `0x1408855b0`) zeroes it unconditionally four
+/// instructions in. So the slot is null exactly while no world-map dialog object is alive --
+/// opening the map, not entering the world, is what closes this gate.
 ///
 /// # It fails closed, and the first version did not
 ///
@@ -313,8 +318,8 @@ pub const ROW_ICON_ID_OFFSET: usize = 0x248;
 /// the engine — not us — decides which.
 ///
 /// `CS::WorldMapWarpPinData` (vftable `0x142ad8228`, `sizeof == 0x350`, which is the row stride)
-/// embeds four 0x40-byte icon descriptors, seeded by its constructor `0x14088b7b0` from four
-/// separate `BonfireWarpParam` fields:
+/// embeds four 0x40-byte icon descriptors, seeded by its constructor (2.7.2.0 `0x14088cc50`,
+/// 1.16.2 `0x14088b7b0`) from four separate `BonfireWarpParam` fields:
 ///
 /// | offset  | seeded from             |
 /// |---------|-------------------------|
@@ -587,11 +592,12 @@ pub(crate) static DORMANT_NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// Rows appended beyond the real pin set, held invisible until a later harvest claims one.
 ///
 /// This is the whole answer to "WITHOUT A WORLD ENTRY". The pin row vector can only be grown by
-/// `FUN_140888aa0`, which has exactly two call sites, both inside the ViewModel constructor -- and
-/// growing frees the old buffer, dangling every raw row pointer a `CS::WorldMapWarpData` holds.
-/// So there is no safe moment to APPEND later, and 20 independent adversarial reviews of a
-/// late-append design all converged on the same conclusion. Refusing to relocate is a property;
-/// guarding a relocation is a check, and a check is what failed on 2026-08-05.
+/// `FUN_140888aa0` (2.7.2.0 `0x140889f40`), which has exactly two call sites, both inside the
+/// ViewModel constructor -- and growing frees the old buffer, dangling every raw row pointer a
+/// `CS::WorldMapWarpData` holds. So there is no safe moment to APPEND later, and 20 independent
+/// adversarial reviews of a late-append design all converged on the same conclusion. Refusing to
+/// relocate is a property; guarding a relocation is a check, and a check is what failed on
+/// 2026-08-05.
 ///
 /// Instead every row that could ever be needed exists from the constructor, and a later change is a
 /// plain in-place field write to a row that is already there. Nothing moves, so nothing dangles.
@@ -925,12 +931,13 @@ pub(crate) fn legacy_regions_for_search()
     Vec::new()
 }
 
-/// `DAT_142ad82f8` -- the engine's converter-index -> map-layer-id table, `{0, 1, 10}`.
+/// `DAT_142add468` on 2.7.2.0 (1.16.2 `DAT_142ad82f8`) -- the engine's converter-index ->
+/// map-layer-id table, `{0, 1, 10}` in both images.
 ///
 /// Read live rather than hard-coded: if a patch ever reorders the converters, a baked table would
 /// keep assigning confidently wrong layers, whereas a live read that fails its shape check
 /// assigns none.
-pub const LAYER_ID_TABLE_RVA: usize = 0x2ad_82f8;
+pub const LAYER_ID_TABLE_RVA: usize = 0x2ad_d468;
 /// Converter slots that have a layer entry. The engine gates every use on `(byte)i < 3`, so a
 /// pin projected by slot 3..7 can never be drawn on any map.
 pub const LAYERED_CONVERTER_COUNT: usize = 3;
@@ -2193,7 +2200,7 @@ pub(crate) fn clear_top_up_targets() {
     refused.clear();
 }
 
-/// Union handler for the fast-travel list filter `FUN_14088be50`.
+/// Union handler for the fast-travel list filter `FUN_14088be50` (2.7.2.0 `0x14088d2f0`).
 ///
 /// Observation only -- it forwards the original verdict untouched.
 ///

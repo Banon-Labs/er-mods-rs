@@ -17,12 +17,12 @@ use prologue_build::{Assemble, Image, PrologueSpec, Shape, generate, mov_r64_rm6
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// `CS::SessionManagerPlayerEntryBase::Copy`.
-const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA: u64 = 0x1423f1bf0;
-/// `CS::GetPlayerChrName(MenuString *out, PlayerIns *player, char decorate)`.
-const GET_PLAYER_CHR_NAME_VA: u64 = 0x14075f800;
-/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)`.
-const PLAYER_GAME_DATA_COPY_CHR_NAME_VA: u64 = 0x1402610c0;
+/// `CS::SessionManagerPlayerEntryBase::Copy` (2.7.2.0).
+const SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA: u64 = 0x1423f5ba0;
+/// `CS::GetPlayerChrName(MenuString *out, PlayerIns *player, char decorate)` (2.7.2.0).
+const GET_PLAYER_CHR_NAME_VA: u64 = 0x140760b00;
+/// `CS::PlayerGameData::CopyChrName(PlayerGameData *pgd, const wchar_t *name)` (2.7.2.0).
+const PLAYER_GAME_DATA_COPY_CHR_NAME_VA: u64 = 0x1402610d0;
 
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
@@ -35,7 +35,7 @@ fn main() {
                           register spills `CS::SessionManagerPlayerEntryBase::Copy` opens with.",
                     visibility: "",
                     shape: Shape::Array,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA,
                     take: 0,
                     pin: &[
@@ -62,7 +62,7 @@ fn main() {
                           through [`mov_r64_rm64`] rather than left to the assembler.",
                     visibility: "",
                     shape: Shape::Array,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: GET_PLAYER_CHR_NAME_VA,
                     take: 0,
                     pin: &[0x48, 0x8b, 0xc4, 0x55, 0x57, 0x41, 0x56],
@@ -81,7 +81,7 @@ fn main() {
                     doc: "`mov [rsp+8],rbx; push rdi; sub rsp,0x20`.",
                     visibility: "",
                     shape: Shape::Array,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PLAYER_GAME_DATA_COPY_CHR_NAME_VA,
                     take: 0,
                     pin: &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20],

@@ -56,8 +56,8 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-// 2.7.2.0 addresses. The 1.17.1 ones named above were carried with
-// scripts/map-rvas-1171-to-1172.py, except set enable, which no carried segment covers: its
+// 2.7.2.0 addresses. The 1.17.1 ones named above were carried by the 1.17.1 -> 2.7.2.0 segment
+// table, except set enable, which no carried segment covered: its
 // first 20 bytes occur once in eldenring-deobf-1.17.2.bin, at 0x1406c9c10. The other three
 // functions' first 16 bytes match across both images.
 const WORLD_CHR_MAN = va('0x143d6d018');

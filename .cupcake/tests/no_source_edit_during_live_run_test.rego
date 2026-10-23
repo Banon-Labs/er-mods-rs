@@ -81,7 +81,7 @@ test_allow_script_edit_while_live if {
 }
 
 test_allow_docs_edit_while_live if {
-	not denied(edit_event("docs/er-1.17-migration.md", LIVE))
+	not denied(edit_event("docs/game-build.md", LIVE))
 }
 
 # --- the guard stays out of everything else ----------------------------------
@@ -146,15 +146,23 @@ test_scripts_stay_editable_with_a_closure if {
 # editable, so an edit to a build-read doc was allowed and then killed the run.
 # The signal now carries `er-stale-run-sentinel.sh verdict <path>` and the
 # policy denies exactly its TEARDOWN. The verdict lines below are real output of
-# that mode against the live ~/Elden/r3-view.me3 run.
+# that mode against the live ~/Elden/r3-view.me3 run, except the build-input
+# `TEARDOWN`, which is its output against ~/Elden/all-mods-plus-warp.me3: r3-view
+# loads no DLL whose closure reaches a crate that compiles in a file outside
+# `crates/`. The build-input lines were re-measured 2026-10-23, when
+# `er-game-base/build.rs` stopped reading `docs/recon/rva-map-*.tsv`.
 
 PROFILE := "/home/banon/Elden/r3-view.me3"
+
+PLUS_WARP_PROFILE := "/home/banon/Elden/all-mods-plus-warp.me3"
 
 verdict_signal(line) := concat("\n", [LIVE, concat("", ["VERDICT ", line])])
 
 TEARDOWN_CRATE := concat("\t", ["TEARDOWN", "crate-feeds-loaded-dll", "pkg=er-game-base feeds er_build_watermark.dll,er_r3_view.dll", PROFILE])
 
-TEARDOWN_BUILD_INPUT := concat("\t", ["TEARDOWN", "build-input-feeds-loaded-dll", "read by the build of pkg=er-game-base, which feeds er_build_watermark.dll,er_r3_view.dll", PROFILE])
+TEARDOWN_BUILD_INPUT := concat("\t", ["TEARDOWN", "build-input-feeds-loaded-dll", "read by the build of pkg=er-invasion-warp-core, which feeds er_hotkey_conflicts.dll,er_invasion_path.dll,er_invasion_warp.dll", PLUS_WARP_PROFILE])
+
+SKIP_UNLOADED_BUILD_INPUT := concat("\t", ["SKIP", "build-input-of-unloaded-crate", "read only by the build of pkg=er-invasion-warp-core, outside the dependency closure of er_build_watermark,er_r3_view,ersc", PROFILE])
 
 SKIP_PROSE := concat("\t", ["SKIP", "inert-documentation", "AGENTS.md is prose outside every crate and no build reads it", PROFILE])
 
@@ -170,20 +178,27 @@ test_allow_agents_md_on_skip_verdict if {
 	not denied(edit_event("/home/banon/projects/er-mods-rs/AGENTS.md", verdict_signal(SKIP_PROSE)))
 }
 
-# The case this section exists for: a doc outside `crates/` that
-# `er-game-base/build.rs` compiles into the loaded DLLs.
-test_deny_build_read_rva_map_while_live if {
-	denied(edit_event("/home/banon/projects/er-mods-rs/docs/recon/rva-map-1162-to-1170.data.tsv", verdict_signal(TEARDOWN_BUILD_INPUT)))
+# The case this section exists for: a file outside `crates/` that a loaded DLL's
+# crate compiles in. `er-invasion-warp-core` embeds this example config with
+# `include_str!`. (It was `docs/recon/rva-map-1162-to-1170.data.tsv`, which
+# `er-game-base/build.rs` compiled in, until the 2.7.2.0 port.)
+test_deny_build_read_doc_while_live if {
+	denied(edit_event("/home/banon/projects/er-mods-rs/docs/er-invasion-warp.dll-pool-test.toml", verdict_signal(TEARDOWN_BUILD_INPUT)))
 }
 
-test_allow_build_read_rva_map_with_no_live_run if {
-	not denied(edit_event("/home/banon/projects/er-mods-rs/docs/recon/rva-map-1162-to-1170.data.tsv", ""))
+test_allow_build_read_doc_with_no_live_run if {
+	not denied(edit_event("/home/banon/projects/er-mods-rs/docs/er-invasion-warp.dll-pool-test.toml", ""))
 }
 
-# `functions.tsv` is named only in comments and is gitignored; the sentinel skips
-# it, so the policy must too.
-test_allow_unread_gitignored_rva_map_while_live if {
-	not denied(edit_event("/home/banon/projects/er-mods-rs/docs/recon/rva-map-1162-to-1170.functions.tsv", verdict_signal(SKIP_IGNORED)))
+# The same file while a run is up that loads nothing its reading crate feeds.
+test_allow_build_read_doc_whose_crate_is_not_loaded if {
+	not denied(edit_event("/home/banon/projects/er-mods-rs/docs/er-invasion-warp.dll-pool-test.toml", verdict_signal(SKIP_UNLOADED_BUILD_INPUT)))
+}
+
+# A gitignored file is not repo source; the sentinel skips it, so the policy
+# must too.
+test_allow_gitignored_recon_data_while_live if {
+	not denied(edit_event("/home/banon/projects/er-mods-rs/docs/recon/speffect-vfx-rows.json", verdict_signal(SKIP_IGNORED)))
 }
 
 # A SKIP verdict overrides the closure fallback for a crate the run did not load,
@@ -193,7 +208,7 @@ test_allow_unloaded_crate_on_skip_verdict if {
 }
 
 test_refusal_names_the_sentinel_branch if {
-	denials := guard.deny with input as edit_event("docs/recon/rva-map-1162-to-1170.data.tsv", verdict_signal(TEARDOWN_BUILD_INPUT))
+	denials := guard.deny with input as edit_event("docs/er-invasion-warp.dll-pool-test.toml", verdict_signal(TEARDOWN_BUILD_INPUT))
 	some d in denials
 	contains(d.reason, "build-input-feeds-loaded-dll")
 	not contains(d.reason, "docs stay editable")

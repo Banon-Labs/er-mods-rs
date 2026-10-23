@@ -589,20 +589,33 @@ def selftest(path: str) -> int:
           "Move_onUpdate's second local is named 'npc_turn_speed' in debug info")
     wrapper = [a for pc, c, a in calls(by_name["SetTurnSpeed"]) if c == "act"]
     check(wrapper == [[TURN_SPEED_ACT, "param0"]], f"SetTurnSpeed wrapper is act({TURN_SPEED_ACT}, param0): {wrapper}")
-    # independent: in the 1.16.2 image, HksAct's switch subtracts 2002 and entry 2
-    # of its table is the case that stores to behaviorData+0x250
-    deobf = os.environ.get("ER_DEOBF_BIN", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "eldenring-deobf.bin"))
+    # independent: in the 2.7.2.0 image, HksAct's switch subtracts 2002 and entry 2
+    # of its table is the case that stores to behaviorData+0x250. Every address here is
+    # its 1.16.2 counterpart + 0x5c0 (the whole function moved as one, measured 2026-10-23).
+    # ER_DEOBF_BIN_1172, not ER_DEOBF_BIN: the other image helpers take that one to point at
+    # an older build, and these offsets mean nothing there.
+    # Unset, the image is looked up at the repo root and then in each directory above it: the
+    # images are gitignored, so a linked worktree reads the main checkout's.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    deobf = os.environ.get("ER_DEOBF_BIN_1172") or ""
+    d = root
+    while not deobf:
+        if os.path.exists(os.path.join(d, "eldenring-deobf-1.17.2.bin")):
+            deobf = os.path.join(d, "eldenring-deobf-1.17.2.bin")
+        elif os.path.dirname(d) == d:
+            deobf = os.path.join(root, "eldenring-deobf-1.17.2.bin")
+        d = os.path.dirname(d)
     if os.path.exists(deobf):
         with open(deobf, "rb") as fh:
-            fh.seek(0x40E2E8)
+            fh.seek(0x40E8A8)
             table = struct.unpack("<3I", fh.read(12))
-            fh.seek(0x40D57A)
+            fh.seek(0x40DB3A)
             sub = fh.read(6)
-            fh.seek(0x40D9E1)
+            fh.seek(0x40DFA1)
             store = fh.read(8)
-        check(sub == bytes.fromhex("81c22ef8ffff") and table[2] == 0x40D9BA
+        check(sub == bytes.fromhex("81c22ef8ffff") and table[2] == 0x40DF7A
               and store == bytes.fromhex("f30f118350020000"),
-              "eldenring-deobf.bin: HksAct `add edx,-2002`, table[2] -> 0x40d9ba, "
+              "eldenring-deobf-1.17.2.bin: HksAct `add edx,-2002`, table[2] -> 0x40df7a, "
               "which stores `movss [rbx+0x250]` -- act id 2004 is SetTurnSpeed")
     else:
         print(f"SKIP deobf cross-check ({deobf} absent)")

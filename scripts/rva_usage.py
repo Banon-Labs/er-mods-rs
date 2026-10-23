@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Which constants this workspace uses as game addresses, derived from the call sites.
 
+Who asks
+--------
+`check-expression-constants.py` builds its game-address population from this module's call-site
+reading as well as the `*RVA*` name filter. The 1.17 ledger harvester this was written for,
+`select-needed-1170-rows.py`, was deleted with the carry on 2026-10-23; the history below is its,
+and the question it answers -- which constants does the workspace use as game addresses -- is not.
+
 Why this exists, and why it is not a fourth name REGEX
 ------------------------------------------------------
-`select-needed-1170-rows.py` decides what to translate by scanning for constants whose name
+`select-needed-1170-rows.py` decided what to translate by scanning for constants whose name
 carries `RVA`. That question -- "is this spelled like an address?" -- is not the question that
 matters, and it has now been answered wrong four times:
 
@@ -31,11 +38,12 @@ What this deliberately does not do
 It does not guess from the value. A value threshold was measured first and rejected: admitting
 any uppercase hex constant at or above `0x1000` pulls in eleven constants that are not addresses,
 ten of them because they are exactly `0x1000` -- which is where `.text` begins and therefore
-where a function begins, so they pair cleanly against the function map and mean nothing. That is
-the same trap `select-needed-1170-rows.py::BOUND` already documents for `AV_GAME_TEXT_RVA_MIN`.
+where a function begins, so they pair cleanly against the function map and mean nothing. That was
+the same trap `select-needed-1170-rows.py::BOUND` documented for `AV_GAME_TEXT_RVA_MIN` (the
+script was deleted on 2026-10-23 with the carry; its last committed copy is at `41d6a363`).
 `MEM_COMMIT`, `DDSD_PIXELFORMAT` and `MINIDUMP_WITH_THREAD_INFO` are Win32 flags; translating one
-would write a wrong row into a tracked ledger, and the ledger's own docstring is explicit that a
-wrong row that survives forever reads as a live value and is worse than a missing one.
+would have written a wrong row into a tracked ledger, and the ledger's own docstring was explicit
+that a wrong row that survives forever reads as a live value and is worse than a missing one.
 
 Usage has no such failure mode: nothing passes `MEM_COMMIT` to an address resolver.
 """
@@ -63,7 +71,8 @@ TRANSMUTE = re.compile(
 )
 # A table field that holds an address, initialised from a named constant:
 # `getter_rva: rva::GET_WEAPON_NAME_RVA,`. This is the named twin of the bare `rva: 0x...` literal
-# that `select-needed-1170-rows.py::BARE_RVA_FIELD` already special-cases, and it is how the six
+# that `select-needed-1170-rows.py::BARE_RVA_FIELD` special-cased (deleted 2026-10-23, last
+# committed copy at `41d6a363`), and it is how the six
 # `MsgRepository` name getters reach the resolver: `SOURCES` stores the address, `getter_rva_for`
 # returns it, and `name_for` resolves the returned variable. Four of the six therefore never
 # appear inside a resolver's argument list at all, and a call-site-only scan finds 23 of the 27
@@ -396,8 +405,9 @@ pub fn logged() {
 def control_failures() -> list[str]:
     """The fixture half of the bare-literal contract, so a gate can run it without a tree sweep.
 
-    `select-needed-1170-rows.py --selftest` is what `check.sh` actually runs, and it calls this.
-    Controls that only execute when somebody types `rva_usage.py` by hand are controls nobody runs.
+    `select-needed-1170-rows.py --selftest` used to be what `check.sh` ran, and it called this.
+    With that file deleted, `rva_usage.py` (whose plain run is its selftest) has to be a step of
+    its own: controls that only execute when somebody types it by hand are controls nobody runs.
     """
     failures: list[str] = []
 
@@ -565,8 +575,7 @@ def selftest() -> int:
     )
 
     # The bare-literal reader's own controls, run here too so `rva_usage.py` alone is a complete
-    # check of this module even though `select-needed-1170-rows.py --selftest` is what `check.sh`
-    # executes.
+    # check of this module.
     bare = control_failures()
     for failure in bare:
         print(f"FAIL: {failure}")

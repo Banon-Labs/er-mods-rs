@@ -1,7 +1,7 @@
 // What does the vanilla finger's bounds prompt hand back, and what does the game do with it?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The chain, read out of the 1.17.0 image
 //

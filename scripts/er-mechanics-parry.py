@@ -10,7 +10,7 @@ The user asked for it on 2026-10-10 ("Model parrying"): a parry model for the Pv
 both directions, wired into the plan. Labels as `docs/er-mechanics/attacks.md`: `VERIFIED`, `TAE`,
 `MEASURED`, `INFERRED`, `COMMUNITY`.
 
-Mechanism (`er-mechanics-crits`, `VERIFIED` `FUN_14044a910`): a hit is parried only while the
+Mechanism (`er-mechanics-crits`, `VERIFIED` `FUN_14044af50`): a hit is parried only while the
 attacker's animation has JumpTable 5 open. Two routes reach that test:
 
     hitbox   the parry skill's AttackBehavior with AttackType 64 touches the attacker;
@@ -28,7 +28,7 @@ SpEffect, so its clip frames are real frames and a failed parry is not a counter
 Parry tools (`tools`): every parry skill (`er-mechanics-crits.PARRY_SWORD_ARTS`) on every base
 weapon the build wields one-handed that can carry it, as its own skill or mounted from an ash a
 player can obtain (`er-mechanics-ashes.mountable_skills`, `obtainable_skills`), cast from the left hand while the right hand is held one-handed: L2 fires the
-left weapon's skill then (`er-mechanics-ashes.active_skill`, `VERIFIED` `FUN_14047f770`). Per tool:
+left weapon's skill then (`er-mechanics-ashes.active_skill`, `VERIFIED` `FUN_14047fdb0`). Per tool:
 the hitbox and JumpTable 119 frames of the skill's opening on that carrier (`TAE`), the parry
 hitbox's radius and dummy poly (AtkParam_Pc, regulation), the clip's dodge cancel (the recovery a
 whiff sits in), the BehaviorParam stamina cost and the skill's FP.

@@ -506,6 +506,9 @@ python3 /home/banon/projects/er-mods-rs/scripts/er-mechanics-ashes.py term --wea
 python3 /home/banon/projects/er-mods-rs/scripts/er-hkx-pose.py --selftest
 python3 /home/banon/projects/er-mods-rs/scripts/er-hkx-pose.py 37 30000 --bone R_Weapon --times 0.6,0.7 --rotation
 uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/er-tae-dispatch-decode.py
-uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/map-rvas-1162-to-1170.py 0x14042c480 0x140426420 0x1403c4090
 python3 /home/banon/projects/er-mods-rs/scripts/ghidra/mcp_query.py getDecompiledCode --params '{"address":"14041d760"}'
 ```
+
+The 1.17.1 addresses of `0x14042c480`, `0x140426420` and `0x1403c4090` came from the 1.16.2 -> 1.17
+signature mapper, deleted with the address carry on 2026-10-23 (`docs/game-build.md`); on 2.7.2.0
+a function is found on `eldenring-deobf-1.17.2.bin` by its bytes instead.

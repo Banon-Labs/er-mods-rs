@@ -12,7 +12,9 @@ in it against the RTTI class names harvested from the images themselves
 (`scripts/rtti-classmap-both.py`), so a suggestion is only ever a class that DEMONSTRABLY exists
 in both builds -- never a guess at a name.
 
-A suggestion is a lead, not a verdict. `scripts/clear-fields-by-object.py` is what decides.
+A suggestion is a lead, not a verdict: an offset is cleared only by a witness row that re-measures
+it on the 2.7.2.0 image (`scripts/check-object-field-offsets.py`), which replaced the cross-build
+`clear-fields-by-object.py` on 2026-10-23.
 Output: `autoload-class-suggest.json` under the drift out-dir.
 """
 from __future__ import annotations

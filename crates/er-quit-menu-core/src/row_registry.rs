@@ -10,7 +10,7 @@
 //!
 //! The cure is the one `er-hook` already applies to detours: elect a single owner for the process
 //! and have everybody else register through it. `er-hook` used to elect by name, looking up
-//! `er_quickload.dll`'s `er_effects_union_register` export, which held only while one DLL was
+//! `er_quickload.dll`'s `er_effects_union_register_2720` export, which held only while one DLL was
 //! always the product; since 2026-09-19 it elects by export walk instead, on this module's own
 //! rule (`er_hook::elect_union_host`) and this module's own walk. Rows still need a second
 //! election because a build may carry any subset of them, or none, and a row host is not

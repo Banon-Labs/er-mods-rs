@@ -1,7 +1,7 @@
 // Who clears the player's d-pad binding while they are playing?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The gap this closes
 //
@@ -253,9 +253,9 @@ if (game === null) {
   const ROW_ACCESSOR_RVA = 0x242ab0;
 
   // `CSFeManImp::Update`, the per-frame owner of the quick-slot switch this binding drives.
-  // 1.16.2 `0x140771bd0` carried forward by `scripts/map-rvas-1162-to-1170.py` (unique, 40-byte
-  // signature, 32 fixed) to `0x140772a50`, and the rva is below the 1.17.0 -> 1.17.1 boundary
-  // `0xafefe9` so the installed build shares it. Read before hooking: it loads a float global and
+  // 1.16.2 `0x140771bd0` was paired with 1.17 `0x140772a50` (unique, 40-byte signature, 32 fixed),
+  // below the 1.17.0 -> 1.17.1 boundary `0xafefe9`, so 1.17.1 shared it; the literal is its 2.7.2.0
+  // address. Read before hooking: it loads a float global and
   // branches on it before doing any work, which is the shape of an update taking a frame delta.
   const FRAME_UPDATE_RVA = 0x772f00; // 1.17.1 0x772a50
   const DEFAULT_TABLE_OFFSET = 0x008;

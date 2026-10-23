@@ -2,10 +2,14 @@
 //!
 //! # Why this needs its own hooks
 //!
-//! The menu badge rides `TilePopulate` (`FUN_1408ff470`), which never reaches HUD tiles: across
+//! The menu badge rides `TilePopulate` (2.7.2.0 `0x140900ac0`), which never reaches HUD tiles: across
 //! 9216 populates in run 20260727-233703, zero bound `Dish`/`MpShortage`/`ReloadedIcon` -- the
 //! HUD quick-slot child signature -- and the child probe already tests `Dish/Root`, so that is a
 //! tested negative rather than an assumption.
+//!
+//! The `FUN_` names and instruction addresses in these notes are 1.16.2 ones, kept because the
+//! slot map below was read on that build. Every rva constant is a 2.7.2.0 rva
+//! (`eldenring-deobf-1.17.2.bin`), and each constant's doc gives its 2.7.2.0 address.
 //!
 //! # The HUD slot map (1.16.2, read out of `PlayerHUDScene`)
 //!
@@ -27,8 +31,9 @@
 //! armament slot ctor called exactly twice", and it is called exactly twice -- for **Magic** and
 //! **Item**. So every earlier HUD run drove the spell and quick-item slots, which is precisely
 //! what the user saw: green placeholder squares on the quick-item strip and never anything on
-//! the weapons. `scripts/disas-annotate-strings.py 0x1408cf3c0` prints the table above straight
-//! out of the image; `crates/er-gfx/tests/hud_tree_probe.rs` asserts the movie side of it.
+//! the weapons. `scripts/disas-annotate-strings.py --image deobf1162 0x1408cf3c0` prints the table
+//! above straight out of the 1.16.2 image; `crates/er-gfx/tests/hud_tree_probe.rs` asserts the
+//! movie side of it.
 //!
 //! # The three hooks
 //!
@@ -85,10 +90,6 @@
 //! `GetGaitemInsGem`, i.e. the actual equipped gem, so unlike the menu path's `arts_id * 100`
 //! heuristic it does not miss weapons whose gem id is not derived from the arts id (Igon's Drake
 //! Hunt: arts 4210 -> gem 548000).
-//!
-//! Every RVA below was verified with `scripts/verify-hook-address.py`, which compares MNEMONIC
-//! and instruction length between the 1.16.2 dump and `eldenring-deobf.bin` -- the dump is
-//! authoritative for meaning, the deobf binary for addresses, and they are not the same file.
 
 #![cfg(windows)]
 
@@ -107,24 +108,28 @@ use er_game_base::rva::{
 
 use crate::log_message;
 
-// -- verified deobf RVAs (`scripts/verify-hook-address.py`, mnemonic + length vs the dump) --
+// -- 2.7.2.0 rvas; each was a verified 1.16.2 detour row before the port --
 
-/// `FUN_1408d0900(scene /*rcx*/, alpha /*xmm1*/, viewModel /*r8*/)` -- per-frame slot driver.
+/// `FUN_1408d0900(scene /*rcx*/, alpha /*xmm1*/, viewModel /*r8*/)` -- per-frame slot driver,
+/// 2.7.2.0 0x1408d1f50.
 ///
 /// Hooked purely to capture `scene`. Its prologue does `mov rsi, rcx` and every slot update it
 /// issues is `lea rcx, [rsi + <offset>]`, so `rcx` here is the base those offsets are relative
 /// to. One call site only (`FUN_1408c8b70`).
-const HUD_SCENE_UPDATE_RVA: usize = 0x8d0900;
-/// `FUN_1408d1d00(component /*rcx*/, panelClip /*rdx*/)` -- weapon slot ctor.
-const HUD_WEAPON_SLOT_CTOR_RVA: usize = 0x8d1d00;
-/// `FUN_1408d1e30(subComponent /*rcx*/, tileClip /*rdx*/, textClip /*r8*/)` -- child binder.
+const HUD_SCENE_UPDATE_RVA: usize = 0x8d1f50;
+/// `FUN_1408d1d00(component /*rcx*/, panelClip /*rdx*/)` -- weapon slot ctor, 2.7.2.0
+/// 0x1408d3350.
+const HUD_WEAPON_SLOT_CTOR_RVA: usize = 0x8d3350;
+/// `FUN_1408d1e30(subComponent /*rcx*/, tileClip /*rdx*/, textClip /*r8*/)` -- child binder,
+/// 2.7.2.0 0x1408d3480.
 ///
 /// Hooked for its `rdx` only. The ctor does not forward its own `rdx`: it resolves `Fade/Item`
 /// (or `Fade`) from the panel clip and passes that, so the ctor's argument is the panel, not the
 /// tile. Its `rcx` is `component + 0x68`, which is why it cannot key the registry itself.
-const HUD_CHILD_BINDER_RVA: usize = 0x8d1e30;
-/// `FUN_1408d2110(component /*rcx*/, alpha /*xmm1*/, slotData /*r8*/)` -- weapon slot update.
-const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d2110;
+const HUD_CHILD_BINDER_RVA: usize = 0x8d3480;
+/// `FUN_1408d2110(component /*rcx*/, alpha /*xmm1*/, slotData /*r8*/)` -- weapon slot update,
+/// 2.7.2.0 0x1408d3760.
+const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d3760;
 
 /// `PlayerHUD/ItemPanel/LeftWep` and `/RightWep`, as offsets into the `PlayerHUDScene` object.
 ///
@@ -142,9 +147,9 @@ const BADGE_PATH: &std::ffi::CStr = c"ItemIcon/ArtsIcon";
 
 /// `ChrAsmSlot` selectors for "the weapon currently cycled into each hand".
 ///
-/// Negative slots are SELECTORS, not indices: `FUN_1403be430` validates `slot + 6 <= 0x12` and
-/// jumps through a table at `0x1403be508` to resolve the player's current cycle position into a
-/// concrete ChrAsm equipment index. That resolution is what makes these the right thing to ask
+/// Negative slots are SELECTORS, not indices: 2.7.2.0 `0x1403be440` validates `slot + 6 <= 0x12`
+/// and jumps through a table at `0x1403be518` to resolve the player's current cycle position into
+/// a concrete ChrAsm equipment index. That resolution is what makes these the right thing to ask
 /// for -- a raw index would ignore which of the three slots per hand the player has selected.
 ///
 /// The table decodes as:
@@ -226,16 +231,17 @@ struct SwordArtsLookupResult {
 /// resolves nothing -- no crash, no log, just a badge that never appears.
 ///
 /// `+0x10` is not incidental: `GetSwordArtsParamIdForWeapon` reads exactly that field
-/// (`mov edx, dword ptr [rdi + 0x10]` at `0x140673fb6`).
+/// (`mov edx, dword ptr [rdi + 0x10]` at 2.7.2.0 `0x1406752b6`).
 ///
 /// The field at `+0x10` is the item ID, and its empty value is `-1`, not `0` (1.16.2 `getStructure`
 /// puts `itemId` last in a 20-byte record; the engine's own constructor `GaitemLookupResult(out,
-/// handle)` @0x1406726c0 writes `gaItemIns = nullptr; itemId = -1`). Zero is not "nothing" here:
-/// `GetSwordArtsParamIdForWeapon` rejects an id only when `(itemId & 0xF0000000) != 0` or it equals
-/// `0x0FFFFFFF`, and **zero passes both**, naming `EquipParamWeapon` row 0 -- unarmed -- whose
-/// `canGemBeChanged` refuses, so the gem override never runs and the function returns row 0's own
-/// default skill. That is why a badge built on a zero-initialised record shows "Kick" (arts 503) on
-/// every weapon instead of showing nothing. Starting at `-1` fails closed instead.
+/// handle)` at 2.7.2.0 `0x1406739c0` writes `gaItemIns = nullptr; itemId = -1`). Zero is not
+/// "nothing" here: `GetSwordArtsParamIdForWeapon` rejects an id only when
+/// `(itemId & 0xF0000000) != 0` or it equals `0x0FFFFFFF`, and **zero passes both**, naming
+/// `EquipParamWeapon` row 0 -- unarmed -- whose `canGemBeChanged` refuses, so the gem override
+/// never runs and the function returns row 0's own default skill. That is why a badge built on a
+/// zero-initialised record shows "Kick" (arts 503) on every weapon instead of showing nothing.
+/// Starting at `-1` fails closed instead.
 #[repr(C)]
 struct GaitemLookupResult {
     handle: u32,

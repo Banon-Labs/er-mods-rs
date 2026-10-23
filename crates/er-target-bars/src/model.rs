@@ -16,9 +16,9 @@ pub const STATUS_COUNT: usize = 7;
 
 /// A status ailment, in the order `CSChrResistModule` stores its gauges.
 ///
-/// The order is the engine's: `FUN_14043d8a0` (1.17.1 `0x14043de00`) indexes the gauge array with
-/// it and sets bit `1 << index` of the proc flags, and `ApplySpEffectStatusClearFlags` (1.17.1
-/// `0x14043e7b0`) maps each `stateInfo` onto the same bit.
+/// The order is the engine's: 2.7.2.0 `FUN_14043de90` indexes the gauge array with
+/// it and sets bit `1 << index` of the proc flags, and `ApplySpEffectStatusClearFlags` (2.7.2.0
+/// `0x14043e840`) maps each `stateInfo` onto the same bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Status {
     Poison,
@@ -57,7 +57,7 @@ impl Status {
 
     /// `SpEffectParam.stateInfo` of the row that is live on a character while this status is.
     ///
-    /// Read out of `ApplySpEffectStatusClearFlags` (1.16.2 `0x14043e250`, 1.17.1 `0x14043e7b0`):
+    /// Read out of `ApplySpEffectStatusClearFlags` (2.7.2.0 `0x14043e840`):
     /// 2 sets bit 0, 5 bit 1, 6 bit 2, `0x74` bit 3, `0x104` bit 4, `0x1b4` bit 5, `0x1b5` bit 6.
     pub fn state_info(self) -> u16 {
         match self {
@@ -118,8 +118,8 @@ pub const IMMUNE_RESISTANCE: i32 = 999;
 /// One status gauge as `CSChrResistModule` holds it.
 ///
 /// The gauge starts at the resistance and falls: each hit subtracts its build-up, a value below
-/// 1 is a proc, and the proc resets it to the resistance (1.17.1 `0x14043de00`; the refill
-/// `0x14043e9a0` clamps it to `[0, resistance]` every frame). So the build-up a player thinks of
+/// 1 is a proc, and the proc resets it to the resistance (2.7.2.0 `0x14043de90`; the refill
+/// `0x14043ea30` clamps it to `[0, resistance]` every frame). So the build-up a player thinks of
 /// is `resistance - gauge`. Measured live: a frostbite hit on NpcParam 46000014 took the gauge
 /// from 316 to 236 with the resistance staying 316.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -207,8 +207,8 @@ pub struct Row {
     pub active: bool,
 }
 
-/// `CSChrDataModule`'s constructor stores 1 into every FP and stamina field (1.17.1
-/// `0x140436610`, byte-identical to 1.16.2 `0x1404360b0`), and only a param initialiser replaces
+/// `CSChrDataModule`'s constructor stores 1 into every FP and stamina field (2.7.2.0
+/// `0x1404366a0`), and only a param initialiser replaces
 /// it. A maximum at or below this is "never given a pool", not a pool of one. Ordinary enemies
 /// measured live read FP max 0 and stamina max 54 and 163.
 pub const PLACEHOLDER_POOL_MAX: i32 = 1;
@@ -375,13 +375,13 @@ pub fn handle_bits(selector: u32, block_id: i32) -> u64 {
 
 /// The selector the lock-on manager writes when nothing is locked on.
 ///
-/// `LockTgtMan`'s update (1.17.1 `0x14071806a`) stores `-1` over the whole handle at
+/// `LockTgtMan`'s update (2.7.2.0 `0x14071851a`) stores `-1` over the whole handle at
 /// `PlayerIns+0x6b0` when the lock drops, and `FieldInsHandle::is_empty` tests the selector half.
 pub const EMPTY_SELECTOR: u32 = u32::MAX;
 
 /// Selector type nibble (bits 28..31) of a character handle.
 ///
-/// The lock-on point resolver (1.17.1 `0x140714c00`) refuses any handle whose
+/// The lock-on point resolver (2.7.2.0 `0x1407150b0`) refuses any handle whose
 /// `selector & 0xf0000000` is not `0x10000000` before asking `WorldChrMan` for its owner. Every
 /// live lock-on measured on 2026-10-04 carried selector type 1.
 pub const CHR_SELECTOR_TYPE: u32 = 1;

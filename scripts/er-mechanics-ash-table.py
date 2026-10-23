@@ -645,14 +645,14 @@ class Table:
 
     def hit_buildup(self, st, ws, atk_row, bullet=None):
         """({status: build-up}, {status: first row that built it}) of one hit, from the 13 slots
-        `FUN_140d24b10` fills (`VERIFIED`, 1.16.2 :8765):
+        `FUN_140d27980` fills (`VERIFIED`, 1.16.2 :8765, where it is `FUN_140d24b10`):
 
         - slots 0..4: a bullet hit takes the Bullet row's `spEffectId0..4`
-          (`BulletParamEntry::GetSpEffectIds` in the bullet-hit caller `FUN_140526230`), a swing
+          (`BulletParamEntry::GetSpEffectIds` in the bullet-hit caller `FUN_140527410`), a swing
           its AtkParam's; scaled by the AtkParam's `statusAilmentAtkPowerCorrectRate` x `_byPoint`;
         - slots 5..7: the weapon's rows (`spEffectBehaviorId0..2` + reinforce `spEffectId1..3`),
           the same for a bullet as for a swing, scaled by `statusAilmentAtkPowerCorrectRate` alone
-          (`CalculateDamage2` 0x1404483b0, the `< 5` branch).
+          (`CalculateDamage2` 0x1404489f0, the `< 5` branch).
 
         A scale applies only to a row with `isUseStatusAilmentAtkPowerCorrect`: every weapon and
         infusion status row has it, a skill bullet's own status rows (Hoarfrost 1800/1801, Ice

@@ -24,7 +24,7 @@ OPA_TIMEOUT_SECONDS = 10
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # One dialect, not another ad-HOC stripper. `code_only` lives in `scripts/rva_symbols.py` and is
-# shared by `check-stale-rva-calls.py`, `gate-stale-rva-calls.py` and others for the same reason
+# shared by `check-stale-rva-calls.py`, `audit-ungated-game-addresses.py` and others for the same reason
 # it is needed here: a snippet counter run over raw source text reads prose as code. On 2026-08-30
 # this gate denied a clean `er-reload-trace` build because a `//` comment explaining a removed
 # hook's history said the words `product_autoload_enabled()` while describing another crate's

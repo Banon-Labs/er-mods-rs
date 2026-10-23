@@ -3,10 +3,10 @@
 // After PHASE_MENU_BUILD identifies the Load-Game leaf d180 (MENU_LOAD_GAME_ITEM), stage 2
 // invokes its +0xa8 functor (-> ProfileLoadDialog), sets the dialog slot cursor, calls the
 // dialog's vtable-slot-20 `load_activate` (which reads the cursor [dialog+0xb0c] -- Not an
-// arg), lets the native menu pump tick the registered selector step 0x140826d50 (which
-// populates iodev io18/io20 and runs the menu deserialize 0x14082c240 -> ac0=N + c30=real +
-// character applied, b80-independent), then `continue_confirm` 0x140b0e180 -> SetState(5).
-// All offsets verified against the on-disk decrypted exe (stage-2 spec 2026-06-16).
+// arg), lets the native menu pump tick the registered selector step 0x1408281f0 (which
+// populates iodev io18/io20 and runs the menu deserialize 0x14082d6e0 -> ac0=N + c30=real +
+// character applied, b80-independent), then `continue_confirm` 0x140b0fd50 -> SetState(5).
+// Offsets verified against the 1.16.2 decrypted exe (stage-2 spec 2026-06-16); addresses are 2.7.2.0.
 // ============================================================================================
 pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_ACTIVATE;
 pub(crate) use er_title_flow::ProfileLoadMenuRva;
@@ -39,37 +39,42 @@ pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
 /// The `_Do_call` this file used to call the main-title Continue row action. It is not one, and
 /// nothing should be identified as Continue by matching it.
 ///
-/// `0x140764b80` (1.16.2) is a nine-byte adjustor thunk onto `FUN_140763fc0`, which allocates
+/// `0x140765e80` (2.7.2.0) is a nine-byte adjustor thunk onto `FUN_1407652c0`, which allocates
 /// `0xaa0` bytes and builds a `MenuWindow` from whatever scaleform resource name its caller passes.
-/// Its single data xref is the `_Func_impl` vtable at `0x142a9b9c8`, and the one builder that
-/// constructs that functor is `FUN_140764290`, which passes `L"01_900_Black"` -- the black fade
+/// Its single data xref is slot 2 of the `_Func_impl` vtable at `0x142aa0b38`, and the one builder
+/// that constructs that functor is `FUN_140765590`, which passes `L"01_900_Black"` -- the black fade
 /// screen. So every job this matches is a fade window, which is why the candidate counters read
 /// `idle_accept_hits = 18851, native_accept_hits = 0` on run br-20260913-033803-0fc0 and
 /// `998 / 0` on br-20260913-040611-5d26 after the command list was finally built with its rows.
 ///
 /// The real Continue row is not a `MenuWindowJob` at all, so no accept predicate on one can ever
 /// promote it: see [`TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA`].
-pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
+pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00765e80;
 
-/// `std::_Func_impl` vtable of the title command list's Continue row action (1.16.2 `0x142b268c8`).
+/// `std::_Func_impl` vtable of the title command list's Continue row action (2.7.2.0 `0x142b2ba38`).
+///
+/// 2.7.2.0 rva, paired by RTTI: its complete-object locator `0x14332d390` names the type
+/// `.?AV?$_Func_impl@V<lambda_896b3fd315194e6315fb8170e6ebce3a>@@...@CommandSelectDialog@CS@@@std@@`,
+/// the same unique mangled name the 1.16.2 vtable `0x142b268c8` carried.
 ///
 /// This is the identity to match, and it is a row action rather than a job. `CS::TitleTopDialog`'s
-/// command-list builder `FUN_1409abc30` binds `01_070_CommandList` and appends each row with
-/// `FUN_1407447b0(list, label, functor, result)`, stride `0x210`; the Continue row's functor is a
+/// command-list builder (1.16.2 `FUN_1409abc30`) binds `01_070_CommandList` and appends each row with
+/// (1.16.2) `FUN_1407447b0(list, label, functor, result)`, stride `0x210`; the Continue row's functor is a
 /// `std::function<DLReferencePointer<CS::MenuJob>(CS::CommandSelectDialog&)>` over
-/// `lambda_896b3fd315194e6315fb8170e6ebce3a`, whose `_Do_call` is `FUN_1409b0e50`. That reads
-/// `this+8` as the `TitleTopDialog**` and forwards through `FUN_1409a7750` ->  `FUN_1409a7f40` ->
-/// `FUN_1409a7000` (which passes `dialog+0x50`) -> `FUN_1409a9110` -> `FUN_1409ac760`, the action
+/// `lambda_896b3fd315194e6315fb8170e6ebce3a`, whose `_Do_call` (slot 2) is 2.7.2.0 `FUN_1409b2550`.
+/// That reads `this+8` as the `TitleTopDialog**` and forwards through a chain of 1.16.2
+/// `FUN_1409a7750` ->  `FUN_1409a7f40` -> `FUN_1409a7000` (which passes `dialog+0x50`) ->
+/// `FUN_1409a9110` to 2.7.2.0 `FUN_1409ade60`, the action
 /// that reads `GetProfileSummary()` plus `GetMenuSystemSaveLoad()->saveSlot` and builds the load
-/// job through `FUN_140826510` -- the same builder this repo already hooks as `loadgame-builder`.
+/// job through `FUN_1408279b0` -- the same builder this repo already hooks as `loadgame-builder`.
 ///
 /// The row exists only when the summary is populated first, which is what
 /// `maybe_set_title_accept_byte` now guarantees; see the note there for the measurement.
 #[allow(dead_code)] // Decoded identity for the row-fire that replaces the docall match above.
-pub(crate) const TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA: usize = 0x02b268c8;
+pub(crate) const TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA: usize = 0x02b2ba38;
 
 /// Stride of one appended title command-list row, from the builder's own
-/// `(end - begin) / 0x210` row-index arithmetic in `FUN_1409abc30`.
+/// `(end - begin) / 0x210` row-index arithmetic in the command-list builder.
 #[allow(dead_code)] // Decoded identity for the row-fire that replaces the docall match above.
 pub(crate) const TITLE_COMMAND_LIST_ROW_STRIDE: usize = 0x210;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
@@ -82,12 +87,13 @@ pub(crate) const TITLE_COMMAND_LIST_ROW_STRIDE: usize = 0x210;
 /// # Everything after the request is the engine's
 ///
 /// This call is the whole of the orphan-title fix, so the chain it starts is written down where the
-/// address is named. `MenuWindow::Close` (`0x140746e80`, slot 12) latches `MenuWindow+0x3b0` so a
+/// address is named. `MenuWindow::Close` (2.7.2.0 `0x140748180`, slot 12) latches `MenuWindow+0x3b0` so a
 /// second request is ignored, plays the fade, and schedules the write of the terminal result to
 /// `MenuWindow+0x1e8`. The next `CS::MenuWindowJob::Run` reads that, `MenuJobResult::ShouldContinue`
-/// (`0x1407a9200`, `CMP dword ptr [RCX],0x1; SETA AL`) answers true, and `FUN_1407ada40` deregisters
-/// the window from `CSMenuMan+0x90` / `+0xdc`, erases it from its owner list via `FUN_140733d70`,
-/// unrefs it and unloads its movie. `ExecuteMenuJob` (`0x1407a9600`) then nulls `TitleStep+0x130`.
+/// (1.16.2 `0x1407a9200`, `CMP dword ptr [RCX],0x1; SETA AL`) answers true, and (1.16.2)
+/// `FUN_1407ada40` deregisters the window from `CSMenuMan+0x90` / `+0xdc`, erases it from its owner
+/// list via (1.16.2) `FUN_140733d70`, unrefs it and unloads its movie. `ExecuteMenuJob` (2.7.2.0
+/// `0x1407aa930`) then nulls `TitleStep+0x130`.
 ///
 /// So the request alone is half a teardown: the deregistration needs the window's job to be run
 /// again, and a `System>Quit` switch takes `CS::TitleStep` out of `STEP_MenuJobWait` before that can
@@ -100,8 +106,8 @@ pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
 pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;
 /// Row-result virtual event handler slot. Both native accept branches dispatch through this slot.
 pub(crate) const MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET: usize = 0x60;
-/// Tiny FD4 event constructor: writes `{ code: edx, payload: r8d }` to the output slot.
-pub(crate) const FD4_EVENT_CONSTRUCTOR_RVA: usize = 0x007a91e0;
+/// Tiny FD4 event constructor: writes `{ code: edx, payload: r8d }` to the output slot. 2.7.2.0 rva.
+pub(crate) const FD4_EVENT_CONSTRUCTOR_RVA: usize = 0x007aa510;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_MODE_EVENT3: i32 = 1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
@@ -128,17 +134,17 @@ pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OWN_STEPPER_S2_PHASE_TIMEOUT_MS
 /// Per-phase poll counter for S2 diagnostics/log throttling, not a readiness gate.
 pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) use er_title_flow::OWN_STEPPER_DIALOG;
-/// The CS::MenuJobWithContext<LoadJobContext> selector step (vtable 0x142ac71e0) that
-/// load_activate 0x1409a4670 builds at `dialog+0x18`. A cold standalone dialog is not ticked by
-/// the menu task-group, so stage 2 reads this and self-pumps the tick 0x140826d50 each frame
-/// (installer -> io18/io20 full-save read -> menu_deser 0x14082c240 -> mount).
+/// The CS::MenuJobWithContext<LoadJobContext> selector step (vtable 0x142acc350) that
+/// load_activate 0x1409a5cc0 builds at `dialog+0x18`. A cold standalone dialog is not ticked by
+/// the menu task-group, so stage 2 reads this and self-pumps the tick 0x1408281f0 each frame
+/// (installer -> io18/io20 full-save read -> menu_deser 0x14082d6e0 -> mount). 2.7.2.0 addresses.
 pub(crate) static OWN_STEPPER_SELECTOR_STEP: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The selector tick context observed at builder `owner+0xf8`; natural selector_tick calls use this
-/// as arg2 while arg1 is the heap selector step stored at `[owner]` by builder 0x140826510.
+/// as arg2 while arg1 is the heap selector step stored at `[owner]` by builder 0x1408279b0.
 pub(crate) static OWN_STEPPER_SELECTOR_CTX: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// One-shot guard: fire the deserialize 0x67b290 exactly once when the full-save read is resident.
+/// One-shot guard: fire the deserialize 0x67c590 exactly once when the full-save read is resident.
 /// State machine for the shared DESER latch: NOT_FIRED -> {FIRED_FAIL, FIRED_OK}. Used by both
 /// the STAGE2 mount and cold_char_mount_drive's DESER phase so the result is observable.
 #[repr(usize)]
@@ -153,7 +159,7 @@ pub(crate) static OWN_STEPPER_DESER_FIRED: AtomicUsize =
 pub(crate) const OWN_STEPPER_DESER_NOT_FIRED: usize = OwnStepperDeserState::NotFired as usize;
 pub(crate) const OWN_STEPPER_DESER_FIRED_FAIL: usize = OwnStepperDeserState::FiredFail as usize;
 pub(crate) const OWN_STEPPER_DESER_FIRED_OK: usize = OwnStepperDeserState::FiredOk as usize;
-/// deserialize 0x67b290 success return code (ret==1 == real char applied + c30 written from save).
+/// deserialize 0x67c590 success return code (ret==1 == real char applied + c30 written from save).
 pub(crate) const OWN_STEPPER_DESER_SUCCESS_RET: i32 = true as i32;
 pub(crate) use er_title_flow::OWN_STEPPER_TITLE_FIRED;
 /// The resolved target slot the mount is expected to land on: the configured `slot=N` if

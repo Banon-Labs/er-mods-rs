@@ -62,7 +62,8 @@
 //!   reachable code takes reports 0 for a structural reason, not a measured one, and a reader
 //!   cannot tell those apart. What does carry evidence today is the absence of any such call in
 //!   a crate whose only unsafe engine surface is one read -- reviewable, but not a semaphore.
-//! * MSGBOX_BUILDS needs either a detour on the `CS::MessageBoxDialog` builder (`0x1409275b0`)
+//! * MSGBOX_BUILDS needs either a detour on the `CS::MessageBoxDialog` builder (`0x140928c00`,
+//!   1.16.2 `0x1409275b0`)
 //!   or the passive full-address-space vtable scan `er_telemetry_core::read::dialog_active` runs.
 //!   The DLL that hosts this crate installs no detours at all, and the passive scan answers
 //!   "a box is on screen", not "THIS feature built one" -- so it could not attribute a hit
@@ -121,7 +122,7 @@ pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_
 /// label text ids are negative.
 ///
 /// This is the oracle whose absence let a whole class of missing icons look like success.
-/// `CS::WorldMapPinData::UpdateVisible` (0x14087afa0) writes the clip's visible flag at `row+0x0c`
+/// `CS::WorldMapPinData::UpdateVisible` (0x14087c440) writes the clip's visible flag at `row+0x0c`
 /// only when, among other terms, some label satisfies `param+0x30+12i >= 0`; `SetTo` then hands
 /// that flag straight to the clip. So an unnamed pin is not a pin with a blank caption -- it is a
 /// pin that never appears, while `legacy_pins_placed` counts it as placed and the row count and

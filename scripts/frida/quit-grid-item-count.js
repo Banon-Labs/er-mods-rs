@@ -1,7 +1,7 @@
 // How wide does the System > Quit grid actually get, and who widened it?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The decision this measures
 //
@@ -29,10 +29,9 @@
 //
 // # Addresses
 //
-// 1.16.2 `0x738dc0` / `0x920c90`, carried to 1.17.0 through
-// `docs/recon/rva-map-1162-to-1170.verified.tsv` as `0x739c10` (byte-identical, 171 instructions)
-// and `0x921e30` (identical-whole, 104). Both sit below `0xafefe9`, so the 1.17.0 -> 1.17.1 step
-// leaves them where they are (`docs/er-1.17-migration.md`).
+// 1.16.2 `0x738dc0` / `0x920c90` were `0x739c10` (byte-identical, 171 instructions) and
+// `0x921e30` (identical-whole, 104) on 1.17.0 and 1.17.1, both below `0xafefe9`. The literals
+// below are their 2.7.2.0 rvas.
 
 'use strict';
 

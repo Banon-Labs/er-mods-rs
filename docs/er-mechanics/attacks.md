@@ -596,7 +596,11 @@ without it the length is empty. For a chain, startup of the next attack counts f
 animation start, so time between hits = `cancel_frame.r1` of this slot + the next slot's first
 hit frame.
 
-## 7. Selftest (`--selftest`, 105 passed, 0 failed, 0 skipped)
+## 7. Selftest (`--selftest`, 102 passed, 0 failed, 0 skipped)
+
+The EXE rows read `eldenring-deobf-1.17.2.bin` (or `ER_DEOBF_BIN`), the installed 2.7.2.0 build,
+so the addresses in those rows are 2.7.2.0 ones, not the 1.16.2 ones the rest of this document
+cites.
 
 | check | reference |
 |---|---|
@@ -605,24 +609,23 @@ hit frame.
 | a20 dagger anims 030000..030050, 030500..030515 fire the slot judges | TAE a20.tae. This is a regression check: the slot table was built from these files |
 | Longsword and Uchigatana R1 poise = 50 menu units (< 51) | COMMUNITY: the 51-poise PvE breakpoint (PvP multiplies by `saRate`) |
 | Longsword R1 has no hyperarmor window; Greatsword R1 has one | COMMUNITY: straight swords have no R1 hyperarmor, colossals do |
-| 0.01 at 0x14329e624 and 100.0 at 0x142bb55d8 | EXE `eldenring-deobf.bin` (1.16.2) |
-| 1.17.1: 0.01 at 0x1432a18e4, 100.0 at 0x142bb86f8, -5.0 at 0x1429e8c30, -10.0 at 0x1429d1438, each also read through the rip operand of the re-found instruction (stamina damage 0x14068ba51, toughness slot 3 0x140487630, repel 0x14068d0d7 / 0x14068d0e1) | EXE `eldenring-deobf-1.17.1.bin` |
-| behaviorDataFactor, both builds: the debug branch is `movss xmm0, [rdi+0x310]`, the other loads 1.0; the gate reads two bytes 4 apart under `cmovne`; both bytes are zero-filled `.data`; TAE 603 stores `(end - start) * 30.0 / Args[0]` at +0x310 | EXE `eldenring-deobf.bin` and `-1.17.1.bin`, sites in `FACTOR_SITES` |
-| JumpTable cases 4/115/116/26 call `SetAllowedCancelToActionState` with R1+R2 / R1 only / R2 / `ROLLING`; 11 and 78 call `CancelMovement`; 1, 25, 87 call the input helpers | EXE: call targets and EDX read out of the case bodies behind the table at 0x140428650 |
-| event 300 handles ids 4, 11, 26, 115, 116; early type 2 jumps through PlayerIns vtable +0x400 | EXE tables 0x14042639c/0x140426348 and 0x14042f9f0 |
+| 0.01 at 0x1432a3ba4, 100.0 at 0x142bba9a8, -5.0 at 0x1429eac30, -10.0 at 0x1429d3438, each also read through the rip operand of the instruction that loads it (stamina damage 0x14068bf01, toughness slot 3 0x140487710, repel 0x14068d587 / 0x14068d591) | EXE `eldenring-deobf-1.17.2.bin` (2.7.2.0; 1.16.2 had the first two at 0x14329e624 and 0x142bb55d8) |
+| behaviorDataFactor: the debug branch is `movss xmm0, [rdi+0x310]`, the other loads 1.0; the gate reads two bytes 4 apart under `cmovne`; both bytes are zero-filled `.data`; TAE 603 stores `(end - start) * 30.0 / Args[0]` at +0x310 | EXE `eldenring-deobf-1.17.2.bin`, sites in `FACTOR_SITES` |
+| JumpTable cases 4/115/116/26 call `SetAllowedCancelToActionState` with R1+R2 / R1 only / R2 / `ROLLING`; 11 and 78 call `CancelMovement`; 1, 25, 87 call the input helpers | EXE: call targets and EDX read out of the case bodies behind the table at 0x140428c30 (2.7.2.0) |
+| event 300 handles ids 4, 11, 26, 115, 116; early type 2 jumps through PlayerIns vtable +0x400 | EXE tables 0x14042697c/0x140426928 and 0x14042ffd0 (2.7.2.0) |
 | ids 1, 4, 11, 25, 26, 87, 115, 116 carry the names Input/Cancel RH Attack, LS Movement, Dodge, Common, R1, R2 | COMMUNITY: WitchyBND `TAE.Template.ER.xml` |
 | a020_030000.hkx is 41 frames of 1/30 s | the clip's own `hkaSplineCompressedAnimation` fields |
-| the atkAttribute resolver compares 0xfd then reads weapon +0x104, compares 0xfc then reads +0x191 | EXE bytes at 0x1406868e0 in `eldenring-deobf-1.17.1.bin` |
+| the atkAttribute resolver compares 0xfd then reads weapon +0x104, compares 0xfc then reads +0x191 | EXE bytes at 0x140686d90 in `eldenring-deobf-1.17.2.bin` |
 | EquipParamWeapon +0x104 / +0x191 are `atkAttribute` / `atkAttribute2`; the tool's 253/252 map agrees | Smithbox paramdef layout |
 | enum 252 = "atkAttribute2 reference", 253 = "atkAttribute reference" | COMMUNITY: Smithbox `ATKPARAM_ATKATTR_TYPE` |
-| `CalculateDefenseModifiers` compares stateInfo 0x6e | EXE bytes at 0x1404f631e (1.17.1) |
+| `CalculateDefenseModifiers` compares stateInfo 0x6e | EXE bytes at 0x1404f63fe (2.7.2.0) |
 | SpEffect 45 is named `[HKS] Counter Frames`; Greatsword R1 applies it through event 66 | COMMUNITY: Smithbox row names; TAE a23.tae |
 | Greatsword R1: 608 window 1.34 over clip 0-17, hit clip 22-26 -> real 17.7-21.7, roll cancel = clip - (17 - 17/1.34) | TAE a26.tae + arithmetic on the decoded window |
 | a027_031230 (0.6 -> 0.8 gradient, then 1.3): clip frame 20 -> real, equal to the closed form and within 0.02 f of reach's numeric integral | arithmetic; `er-mechanics-reach.real_seconds` |
 | a263_030000 has no events; Fire Knight's Greatsword R1 row exists, reads a137_030000, hit frames equal a137's own entry | TAE mini-header + a137.tae read directly |
 | 189 gated type-1 events in the player TAEs, all stateInfo 187; the Lance R1 keeps no judge 5000-5005 extra | TAE, counted in the test |
-| `FUN_1403f1d40` adds 23000000 for hand 1 and 48000000 for hand 0, in 1.16.2 and (0x230 higher) 1.17.1 | EXE bytes |
-| hit-record sites: `cmp byte [rbx+4],0` 0x14044299d, `cmp [rax+0x38],esi` 0x1404429f6, `mov dword [rbx],-1` 0x140442a6f, `xorps xmm2,xmm2` 0x140523638 | EXE bytes, `eldenring-deobf.bin` (1.16.2) |
+| `FUN_1403f1d40` (2.7.2.0 0x1403f1f70) adds 23000000 for hand 1 and 48000000 for hand 0 | EXE bytes, `eldenring-deobf-1.17.2.bin` |
+| hit-record sites: `cmp byte [rbx+4],0` 0x140442f8d, `cmp [rax+0x38],esi` 0x140442fe6, `mov dword [rbx],-1` 0x14044305f, `xorps xmm2,xmm2` 0x1405246d8 | EXE bytes, `eldenring-deobf-1.17.2.bin` (2.7.2.0; 1.16.2 had them at 0x14044299d, 0x1404429f6, 0x140442a6f, 0x140523638) |
 | walk: back-to-back same judge = 1 record; same judge after a 1-frame gap = 2; judge change on an index = new record with `follows_judge`; overlap on one index = first event holds it; two indices = 2 | synthetic events against the section 4 rule |
 | Milady running R1: 998 on index 1 cannot hit an enemy, 123 on index 0 counts 1, 120 follows 123 on index 0; max 2, sweep 1 (judge 123) | TAE a60.tae + AtkParam_Pc `opposeTarget` |
 | a031 lacks 032310 and a023 has it; `motion_category` takes a023, the Giant-Crusher 2H crouch R1 row stays on a031_032300; Greatsword keeps a026_032310; Longbow R1 does not take a023 | TAE entry lists |
@@ -678,10 +681,10 @@ hit frame.
 
 ## 9. The addresses in 1.17.1
 
-Every 1.16.2 address this document cites, carried to the installed 1.17.1 build (2.7.1.0).
-Code went through `scripts/map-rvas-1162-to-1170.py` and then the fixed 1.17.0 -> 1.17.1 rule
-of `scripts/map-rvas-1170-to-1171.py` (+0x70 at or above rva 0xafefe9, which here moves only
-the 0x140d... functions). Every row was then checked against `eldenring-deobf-1.17.1.bin`:
+Every 1.16.2 address this document cites, carried to 1.17.1 (2.7.1.0), the build installed when
+it was written. Code went through the masked-signature 1.16.2 -> 1.17 map and then the fixed
+1.17.0 -> 1.17.1 rule (+0x70 at or above rva 0xafefe9, which here moves only the 0x140d...
+functions); both tools were deleted with the address carry on 2026-10-23. Every row was then checked against `eldenring-deobf-1.17.1.bin`:
 the first eight instructions of both sides, with addresses masked, match for every row
 except the special cases named in the method column (MEASURED 2026-09-29).
 

@@ -5,15 +5,13 @@
 // our destination substituted -- replayed here so a target can be chosen while the game is
 // already running, with no rebuild and no relaunch.
 //
-// The addresses were 1.17.1, carried from the 1.16.2 constants in `warp.rs` through
-// `docs/recon/rva-map-1162-to-1170.verified.tsv` and `scripts/map-rvas-1170-to-1171.py`, then
+// The addresses were 1.17.1, carried from the 1.16.2 constants `warp.rs` then held, then
 // byte-checked against `eldenring-deobf-1.17.1.bin`. The prologues confirm the semantics rather
 // than merely the location: `SET_EXPLICIT_SPAWN` opens `movaps xmm0,[rcx]` then
 // `movups [rax+0xc90],xmm0`, and `GET_EXPLICIT_SPAWN_FLAG` is `movzx eax,byte [rax+0xcb0]` --
 // the two offsets the reverse-engineering notes name.
 //
-// They are now 2.7.2.0 (1.17.1 -> 2.7.2.0 beside each), carried with
-// `scripts/map-rvas-1171-to-1172.py`. Every function is byte-identical in
+// They are now 2.7.2.0 (1.17.1 -> 2.7.2.0 beside each). Every function is byte-identical in
 // `eldenring-deobf-1.17.2.bin` apart from relocated call and data operands, and both globals have
 // the same readers in both builds (session manager 3143 of 3147, the rest Arxan stubs).
 //

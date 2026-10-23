@@ -33,7 +33,8 @@ use crate::constants::{
 /// probe here -- Not the `er-quickload-stay-active.txt` marker, which the samechar-3x run script sweeps,
 /// so the injected stick was being discarded while ER was unfocused (bd
 /// canmove-contaminated-user-moved-harness-never-supplied). Fault-safe (null/low-ptr guarded).
-const DLUID_SINGLETON_RVA: u32 = 0x485dc18;
+/// 2.7.2.0 rva.
+const DLUID_SINGLETON_RVA: u32 = 0x4864d48;
 const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
 const HEAP_LO: usize = 0x1_0000;
 
@@ -46,7 +47,7 @@ fn movement_input_ready() -> bool {
         unsafe { crate::safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) };
     let move_map = unsafe { crate::safe_read_usize(ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) };
 
-    // Keep the ordinary teardown-complete path, but do not require it: 1.16.2 intentionally remains
+    // Keep the ordinary teardown-complete path, but do not require it: the game intentionally remains
     // in requestCode=1 / STEP_MoveMap=18 while the resident world is playable. requestCode=2 and a
     // null MoveMap child belong to ending/Cleanup/Finish teardown, not normal movement readiness.
     if request_code == Some(INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD) && move_map == Some(0) {
@@ -83,7 +84,7 @@ use crate::telemetry::append_autoload_debug;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::core::s;
 
-/// FD4PadDevice poll (deobf `0x141f6bad0`, RE `er-movement-input-stick-boundary-2026-07-18`): the
+/// FD4PadDevice poll (2.7.2.0 `0x141f6f030`, RE `er-movement-input-stick-boundary-2026-07-18`): the
 /// per-device, per-frame function where XInput / DirectInput / ScePad all deposit the device's
 /// normalized analog-stick into `this`, below the OS/Steam-Input layer and before locomotion reads it.
 /// Our synthetic `XInputGetState(0)` never moved the character because Steam Input routes the pad
@@ -91,7 +92,7 @@ use windows::core::s;
 /// controller stick deflection at the game's own input boundary -- run through the full deadzone ->
 /// mapping -> locomotion chain, identical to any real pad, robust to Steam Input. This injects input
 /// (a stick push), not the locomotion output, so it faithfully tests "does input move the character".
-const FD4_PAD_DEVICE_POLL_RVA: u32 = 0x1f6bad0;
+const FD4_PAD_DEVICE_POLL_RVA: u32 = 0x1f6f030;
 const PAD_STICK_LX_OFFSET: usize = 0x89c; // f32 in [-1.0, 1.0]
 const PAD_STICK_LY_OFFSET: usize = 0x8a0; // f32 in [-1.0, 1.0]; +1.0 = full forward
 pub(crate) use er_telemetry_core::counters::ORIG_PAD_POLL;
@@ -130,7 +131,7 @@ pub(crate) use er_telemetry_core::counters::ORIG_PAD_POLL;
 /// The decisive fact is not the arithmetic, though: the game's own poll stores to `+0x89c` and
 /// `+0x8a0` on this same `this`, in all three of its source branches (DirectInput, XInput,
 /// ScePad). An offset the engine writes on an object is in-bounds by construction. Frozen against
-/// drift in `scripts/check-object-field-offsets-1170.py` -- the poll's two bodies align 616/616
+/// drift in `scripts/check-object-field-offsets.py` -- the poll's two bodies align 616/616
 /// with 72 field offsets and zero moved, the highest of them `0xa60`, eight bytes below the
 /// allocation's end.
 static POLLED_DEVICE_VTABLE: AtomicUsize = AtomicUsize::new(0);
@@ -161,10 +162,10 @@ unsafe extern "system" fn pad_poll_hook(this: usize, a: usize, b: usize, c: usiz
     ret
 }
 
-/// FD4PadManager singleton RVA (GLOBAL_FD4PadManager, dump 0x14485dc20 == DLUID+0x8). Its `padDevices`
-/// is a `DLFixedVector<FD4PadDevice*,4>`: inline entries at +0x18, count at +0x40.
+/// FD4PadManager singleton RVA (GLOBAL_FD4PadManager, 2.7.2.0 0x144864d50 == DLUID+0x8). Its
+/// `padDevices` is a `DLFixedVector<FD4PadDevice*,4>`: inline entries at +0x18, count at +0x40.
 /// bd er-movement-input-stick-boundary-2026-07-18.
-const FD4_PAD_MANAGER_RVA: u32 = 0x485dc20;
+const FD4_PAD_MANAGER_RVA: u32 = 0x4864d50;
 const PAD_MGR_DEVICES_OFFSET: usize = 0x18;
 const PAD_MGR_DEVICE_COUNT_OFFSET: usize = 0x40;
 
@@ -204,11 +205,11 @@ const FD4PADDEVICE_DEVICES_CAPACITY: usize = 4;
 /// unfocused frame.
 const PAD_MGR_INACTIVE_REQUEST_2F8_OFFSET: usize = 0x2f8;
 /// `FD4PadManager` inactive-window latch, written forward from `+0x2f8` by `FD4PadManager::Update`
-/// (`0x142667c70`). Every `CSInGamePad` query short-circuits while this is set, so an injected stick
+/// (1.16.2 `0x142667c70`). Every `CSInGamePad` query short-circuits while this is set, so an injected stick
 /// or DIK is read by nothing at all on a frame where it is true.
 const PAD_MGR_INACTIVE_LATCH_2F9_OFFSET: usize = 0x2f9;
-/// 1.16.2 RVA of the `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single
-/// instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. Same constant as
+/// 2.7.2.0 RVA of the `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single
+/// instruction `movzx eax, byte ptr [0x14458fb91]`. Same constant as
 /// `er-focus-input`'s `GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA`; read here, never written,
 /// so the two DLLs keep exactly one writer.
 const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_DATA_RVA: u32 =
@@ -280,14 +281,14 @@ unsafe fn inject_all_pad_devices() {
     }
 }
 
-/// `Game.Debug::IsEnableControlOnDisactiveWindow` (deobf `0x140e53220`, RE `AUTONOMOUS-FOCUS-FIX-...`):
+/// `Game.Debug::IsEnableControlOnDisactiveWindow` (2.7.2.0 `0x140e56780`, RE `AUTONOMOUS-FOCUS-FIX-...`):
 /// returns false in retail. Its result is cached to `CSPadStep+0xba` every frame; when the ER window
 /// is UNFOCUSED and that byte is 0, `CSPadStep::STEP_Update` runs the pad-manager on the "inactive"
 /// path that latches a flag which makes the locomotion consumer discard our injected stick (menus still
 /// work via the separate DLUID+0x88d gate, but gameplay movement does not). Forcing this to return 1
 /// makes the unfocused path byte-identical to the focused one, so the injected pad stick reaches
 /// locomotion without the window being active -- the missing half of an autonomous, focus-free proof.
-const IS_ENABLE_CONTROL_ON_DISACTIVE_RVA: u32 = 0xe53220;
+const IS_ENABLE_CONTROL_ON_DISACTIVE_RVA: u32 = 0xe56780;
 
 /// Original `IsEnableControlOnDisactiveWindow` (minhook trampoline). 0 until the hook installs. The
 /// detour calls this to return the game's real value whenever the harness is not actively injecting.
@@ -332,7 +333,7 @@ fn install_focus_override_hook() {
     INSTALLED.call_once(|| {
         // One owner for the gate (2026-09-05). `er-focus-input` holds
         // `Game.Debug.IsEnableControlOnDisactiveWindow` at 1 every frame by writing the `.data` byte
-        // (1.17 0x14458cb71). ER reads that byte only through this accessor, so a detour here does not
+        // (2.7.2.0 0x14458fb91). ER reads that byte only through this accessor, so a detour here does not
         // merely coexist with that write -- it replaces it, and this detour answers with the game's
         // real value (0) on every frame the harness is not injecting. The result is a gate that
         // flickers instead of holding, and the game's consumers do not read the byte directly: it

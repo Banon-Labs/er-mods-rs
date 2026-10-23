@@ -1,13 +1,10 @@
 use crate::prelude::*;
 
-/// `base + rva`, resolved for the running build, or `None` when this build moved the function and
-/// nothing verified where to.
+/// `base + rva`, or `None` on any build but 2.7.2.0.
 ///
-/// Every portrait call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
-/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A mapped
-/// constant is no safer that way: the map knows the new address, and `base + rva` never asks it.
-/// A refusal costs one portrait frame; the alternative executes an arbitrary address on the
-/// render path.
+/// Every portrait call below used to transmute a hand-built `base + rva`, which on another build
+/// calls whatever occupies the 2.7.2.0 address with nothing to refuse it. A refusal costs one
+/// portrait frame; the alternative executes an arbitrary address on the render path.
 #[cfg(windows)]
 fn portrait_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()
@@ -332,8 +329,8 @@ pub unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pi
     true
 }
 
-/// The native offscreen command path (`FUN_141a853a0` -> `FUN_141a02de0`) only checks the four wrapper
-/// pointers at `off+0x40..0x58`; `FUN_141a02de0` then blindly loads each wrapper's underlying GX resource
+/// The native offscreen command path (`0x141a88900` -> `0x141a06340`) only checks the four wrapper
+/// pointers at `off+0x40..0x58`; `0x141a06340` then blindly loads each wrapper's underlying GX resource
 /// from `wrapper+0x40` and passes it to the GX state classifier. On the Windows crash report from
 /// 2026-07-14, the second wrapper existed but `wrapper+0x40 == 0`, so the classifier saw rcx=0x20 and
 /// faulted reading `[rcx+0x10]`. Match the native wrapper-presence check and add the missing inner-resource
@@ -476,7 +473,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
         crate::host::boot_view_epoch_ms().max(1) as usize,
         Ordering::SeqCst,
     );
-    // The 0x1653350 detour stays a passthrough (the per-frame push hook owns the pose write now).
+    // The 0x16568b0 detour stays a passthrough (the per-frame push hook owns the pose write now).
     PROFILE_LOOKAT_REALTIME.store(true, Ordering::SeqCst);
     // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the
     // engine propagate it to the GPU-skinned submodels each frame (the actual head movement).
@@ -490,8 +487,8 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
     // push hook propagated this frame is re-rendered (the engine does not redraw thumbnails per frame).
     // The draw step skips null slots and fail-closes if the GX pool is empty, so it is safe every frame.
-    // draw_step (FUN_1409aa3e0 -> per-slot FUN_140bb73a0) is a clear-render-target, not a rasterize
-    // (FUN_141e8af80 = ClearRTV; RE-confirmed). Post-Continue the offscreen is a single texture (RT==SRV,
+    // draw_step (0x1409ab8e0 -> per-slot 0x140bb8e90) is a clear-render-target, not a rasterize
+    // (0x141e8e4c0 = ClearRTV; RE-confirmed). Post-Continue the offscreen is a single texture (RT==SRV,
     // proven: find_d3d12_resource(off)==find_d3d12_resource(srv_gx)), so clearing it every frame wipes the
     // rendered head before GFx samples it -> the now-loading background reads mostly-black. Once our own
     // table is built, skip the clear so the last-rendered portrait persists in the sampleable texture.
@@ -567,8 +564,8 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
             // Stability gate (subsequent-load crash + cascade fix, 2026-07-02, static-RE grounded). Driving
             // the live model render / RT copy / readback while the game's Load Profile menu has multiple
             // character models live (all 10 thumbnails + its teardown churn) dereferenced a freed render
-            // object deep in the GX accessor chain (crash: game FUN_141214c80 -> FUN_141140ce0 read of
-            // 0x7ffe00000011) and read back the wrong character (cascade). Run the whole live-drive block
+            // object deep in the GX accessor chain (crash, 1.16.1 dump names: game FUN_141214c80 ->
+            // FUN_141140ce0, read of 0x7ffe00000011) and read back the wrong character (cascade). Run the whole live-drive block
             // only when the loaded character is the single live profile model -- i.e. past the menu, in the
             // stable target-only post-Continue window. During churn: skip entirely (leave the artwork up).
             let live_models = unsafe { count_live_profile_models(base) };
@@ -585,7 +582,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 let n = PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.fetch_add(1, Ordering::SeqCst) + 1;
                 if n <= 4 || n.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "profile-drive-resource-skip #{n}: offscreen=0x{off:x} has a null native GX resource wrapper(+0x40/+0x48/+0x50/+0x58 or wrapper+0x40); skipping extra profile draw to avoid FUN_141e90290 rcx=0x20 AV"
+                        "profile-drive-resource-skip #{n}: offscreen=0x{off:x} has a null native GX resource wrapper(+0x40/+0x48/+0x50/+0x58 or wrapper+0x40); skipping extra profile draw to avoid the 0x141e937f0 rcx=0x20 AV"
                     ));
                 }
             }
@@ -677,7 +674,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 } else if cs_cloth == 0 || cs_cloth == null {
                     // World CSCloth singleton gone (shutdown / return-to-title tears it down before our
                     // draw-phase task stops). Driving the profile model's update/draw here runs its cloth
-                    // release (FUN_1409f0250), which DLPanics "accessed an uninitialized singleton" on the
+                    // release (0x1409f18c0), which DLPanics "accessed an uninitialized singleton" on the
                     // null manager -> hard CTD. DLPanic is a native abort, so the catch_unwind below can't
                     // save us; the only fix is to not drive when the manager is absent. (The profile model
                     // only reaches the cloth path when it actually has a cloth instance + the manager is
@@ -731,7 +728,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 // own-built renderer, and the engine only redraws on profile data-change -- so without this
                 // the look-at bone writes never reach the RT and the captured head is a stale render (proven:
                 // cursor left vs right dumps were 95% identical, head centroid did not move). The offscreen
-                // thunk (FUN_140bb8ca0) submits FUN_140bb73a0(*(r+0xa8)) using the live global GxDrawContext;
+                // thunk (FUN_140bba880) submits FUN_140bb8e90(*(r+0xa8)) using the live global GxDrawContext;
                 // we own this renderer (force_profile_render built it) so its model+deps are alive (unlike the
                 // teardown-freed spared renderer this crashes on). Runs before the RT->SRV copy + readback so
                 // they capture the fresh pose. Gated by the existing render-drive lever; bumps the hits oracle.
@@ -751,7 +748,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 // cause is settled: the cached-resource readback went stale [~10% nonblack] while a
                 // fresh-resolved readback saw the head [~73%] -- see readback_offscreen_fast below. Keeping a
                 // second per-frame readback would just waste GPU bandwidth on the now-known-bad cached path.)
-                // disabled (2026-06-30): drive(r) = FUN_140bb8d90 -> FUN_140bb73a0 is only a ClearRTV of the
+                // disabled (2026-06-30): drive(r) = 0x140bba880 -> 0x140bb8e90 is only a ClearRTV of the
                 // offscreen RT (RE-confirmed by decompile), not a re-rasterize as the original author believed.
                 // Running it every frame (render_drives~206) wipes the offscreen RT to black every frame, so
                 // the engine's ~4x genuine head renders get cleared on the ~200 intervening frames -> the
@@ -765,14 +762,14 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                 }
                 // Per-frame model RASTERIZE (the actual fix). The ~4x head refresh is not pool contention
                 // (free_min=18) nor a readback race (deferred read was also 4x) -- it is that the engine's
-                // own profile update+draw CSEzUpdateTasks (FUN_140bba820 / FUN_140bba7d0) are under-scheduled
+                // own profile update+draw CSEzUpdateTasks (0x140bbc310 / 0x140bbc2c0) are under-scheduled
                 // post-Continue (~4-19x/loading screen) by their ResMan driver, so the model only re-skins +
                 // re-enqueues into the offscreen RT that few times. drive(r) above is only a ClearRTV (RE-
-                // confirmed: FUN_140bb73a0). Here we drive the real per-frame render ourselves, on the render
+                // confirmed: 0x140bb8e90). Here we drive the real per-frame render ourselves, on the render
                 // thread inside the live GX frame, passing our task's FD4TaskData as the `frame` arg (its +8
                 // delta-time is the only scalar consumed; the GX submit routes via the global frame/GX ctx):
-                //   1. Update task FUN_140bba820(r, td): runs the FD4 stepper + refreshes model transform/anim.
-                //   2. Draw task (== per_frame_push_hook's target FUN_140bba7d0): we call per_frame_push_hook
+                //   1. Update task 0x140bbc310(r, td): runs the FD4 stepper + refreshes model transform/anim.
+                //   2. Draw task (== per_frame_push_hook's target 0x140bbc2c0): we call per_frame_push_hook
                 //      directly so it applies the live look-at pose then calls the original body (skin submodels
                 //      + GX-enqueue = the rasterize). Guard on model_ins(+0x778) && X(+0x948) (the state machine
                 //      reached STEP_Wait_Play) so a half-built renderer can't fault the draw. catch_unwind so a
@@ -784,7 +781,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                     let loc = unsafe { safe_read_usize(r + 0x948) }.unwrap_or(0);
                     if model_ins != 0 && model_ins != null && loc != 0 && loc != null {
                         // Model-parts ENUMERATOR (scene-alpha phase 2, one-shot per run): the
-                        // model submit (dump FUN_1409e9ac0) draws every non-null slot of the
+                        // model submit (0x1409eb100) draws every non-null slot of the
                         // model's node array (+0x28..+0x100, 27 slots). One of those parts is the
                         // per-frame-redrawn backdrop box (run 7eefdbd: alpha-0 clear + full-scene
                         // redraw left every frame opaque). Log each slot's pointer + vtable RVA so

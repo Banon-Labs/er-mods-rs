@@ -1,7 +1,7 @@
 // Can this process tell you which matchmaking bracket the player is in, before any search?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why it has to
 //
@@ -40,18 +40,15 @@
 
 const GAME = 'eldenring.exe';
 
-// The 1.17 address, not the one `er_game_base::rva` stores.
+// The 2.7.2.0 rva of `GameDataMan`, the same value `er_game_base::rva` now stores.
 //
-// That file holds 1.16.2 rvas on purpose and `er_game_base::mem::game_data_addr` translates them
-// for the running build; a Frida agent has no such layer and must do the mapping itself. Measured
-// 2026-09-18, the first run of this agent: `base + 0x3d5df38` read back `0xfffffffffffffff7` and
-// faulted, which looks exactly like a stale constant in the Rust and is merely an untranslated
+// When this agent was written that file held 1.16.2 rvas and `er_game_base::mem::game_data_addr`
+// translated them for the running build; a Frida agent had no such layer and did the mapping
+// itself. Measured 2026-09-18, its first run: `base + 0x3d5df38` read back `0xfffffffffffffff7` and
+// faulted, which looked exactly like a stale constant in the Rust and was merely an untranslated
 // one -- the trap bd `rva-rs-worldchrman-and-fieldarea-globals-are-stale-1162-2026-09-18` was
-// written about the same day.
-//
-//   docs/recon/rva-map-1162-to-1170.data.tsv:87   0x3d5df38 -> 0x3d61f98   642/642 witnesses
-//
-// 1.17.0 to 1.17.1 moved nothing outside `.text`, so the 1.17.0 address is the running one.
+// written about the same day. The data map then gave `0x3d5df38 -> 0x3d61f98` (642 of 642
+// witnesses), the same on 1.17.0 and 1.17.1, and the literal below is its 2.7.2.0 value.
 const GAME_DATA_MAN_RVA = 0x3d64fb8; // 1.17.1 0x3d61f98
 const PLAYER_GAME_DATA_OFFSET = 0x08;
 const LEVEL_OFFSET = 0x68;

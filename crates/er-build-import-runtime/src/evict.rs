@@ -218,9 +218,7 @@ impl Refusal {
     /// The sentence for the log.
     fn explain(self) -> &'static str {
         match self {
-            Self::Worn => {
-                "still worn, and `UnequipItem` has no verified mapping for the running build"
-            }
+            Self::Worn => "still worn, and `UnequipItem` is refused on the running build",
             Self::BoxHasNoRoom => {
                 "the storage box is full -- its ordinary item list has no free entry left"
             }
@@ -499,8 +497,7 @@ pub unsafe fn unlisted_gear(module_base: usize, egd: usize, allowance: &Allowanc
         er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA,
         "CS::EquipGameData::GetEquipInventoryData",
     ) else {
-        outcome.unavailable =
-            Some("`GetEquipInventoryData` has no verified mapping for the running build");
+        outcome.unavailable = Some("`GetEquipInventoryData` is refused on the running build");
         return outcome;
     };
     // Safety: resolved for the running build on the line above.

@@ -1,18 +1,18 @@
-// Does `PLAY_REGION_POINT_MAN_GLOBAL_RVA` need translating on the installed build?
+// Did `PLAY_REGION_POINT_MAN_GLOBAL_RVA` need translating on 1.17.1? Answered; kept as a record.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
-// # The claim under test
+// # The claim it tested
 //
-// `er-invasion-warp-core`'s `live_points` reads the region-point manager as
+// `er-invasion-warp-core`'s `live_points` read the region-point manager as
 // `game_module_base() + er_game_base::rva::PLAY_REGION_POINT_MAN_GLOBAL_RVA`, with no resolve.
-// Every rva in this workspace is a 1.16.2 rva and the installed game is 1.17.1, so that addition
-// is only correct if the global did not move. `scripts/check-stale-rva-calls.py` says it is a new
-// unresolved site; `scripts/map-data-rvas-1162-to-1170.py` says the global moved, 25 references
+// Every rva in the workspace was then a 1.16.2 rva and the installed game was 1.17.1, so that
+// addition was only correct if the global had not moved. `scripts/check-stale-rva-calls.py` called
+// it a new unresolved site; the 1.16.2 -> 1.17 data map said the global moved, 25 references
 // agreeing on `0x3d6e388 -> 0x3d723f8`.
 //
-// Those are both static arguments. This reads the running process, which is the only thing that
+// Those were both static arguments. This reads the running process, which is the only thing that
 // settles it, and it reads BOTH addresses in the same pass so the answer is a comparison rather
 // than an assertion about one number.
 //
@@ -31,10 +31,12 @@
 
 const MODULE = 'eldenring.exe';
 
-// The constant as `crates/er-game-base/src/rva.rs` declares it: a 1.16.2 rva.
+// The constant as `crates/er-game-base/src/rva.rs` declared it until the 2026-10-23 native port: a
+// 1.16.2 rva, read on purpose so the comparison below still has its stale side. rva.rs now holds
+// 2.7.2.0 rvas, so this agent documents a resolved question.
 const STALE_RVA = 0x3d6e388;
 
-// What `docs/recon/rva-map-1162-to-1170.data.tsv` now records for it, 25 references agreeing.
+// Where the data map put it (1.17.1 `0x3d723f8`, 25 references agreeing), as its 2.7.2.0 rva.
 const MAPPED_RVA = 0x3d75418; // 1.17.1 0x3d723f8
 
 // `POINT_MAN_MAP_OFFSET` -- the container inside the manager, and `live_points`'s next hop.

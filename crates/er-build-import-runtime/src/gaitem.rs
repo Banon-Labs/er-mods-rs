@@ -4,7 +4,7 @@
 //!
 //! It is twenty bytes, and the only field the ash-of-war answer depends on is the last one:
 //! `itemId` at `+0x10`. Both readers of a worn armament ask exactly that field --
-//! `GaitemLookupResult::canGemBeChanged` (0x1406741b0, reached through
+//! `GaitemLookupResult::canGemBeChanged` (0x1406754b0, reached through
 //! `GetGemGaitemHandleFromWeapon`) decides whether the weapon may carry a gem at all, and
 //! `GetSwordArtsParamIdForWeapon` turns it into an `EquipParamWeapon` row whose
 //! `swordArtsParamId` is the armament's default skill.
@@ -41,10 +41,10 @@ use er_game_base::rva::{
 /// reimplementing those four steps means the engine keeps owning what a fresh record looks like.
 ///
 /// It takes no reference and there is nothing to release: the matching
-/// `~GaitemLookupResult` (0x140672730) is a single `RET`, so a record is plain data and may be
+/// `~GaitemLookupResult` (0x140673a30) is a single `RET`, so a record is plain data and may be
 /// dropped. That is worth stating, because the sibling `GaItemHandle` this crate mints in
 /// `grant` does hold one and leaks the `CSGaitemImp` table if it is not destructed.
-const GAITEM_LOOKUP_RESULT_CTOR_RVA: usize = 0x6726c0;
+const GAITEM_LOOKUP_RESULT_CTOR_RVA: usize = 0x6739c0;
 
 type LookupCtorFn = unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32);
 type GaitemHandleBySlotFn = unsafe extern "system" fn(usize, *mut u32, i32) -> *mut u32;
@@ -99,9 +99,9 @@ impl GaitemLookupResult {
             return None;
         }
         // Resolved for the running build, not added blind: this is a direct call into game code
-        // at a 1.16.2 address, and on a build that moved it that is a control transfer into
-        // whatever now occupies those bytes. `None` means the handle cannot be resolved, which is
-        // the answer this function already has a shape for.
+        // at a 2.7.2.0 RVA, which `crate::native::resolve` refuses on any other build, where the
+        // call would transfer control into unrelated code. `None` means the handle cannot be
+        // resolved, which is the answer this function already has a shape for.
         let ctor = crate::native::resolve(
             module_base,
             GAITEM_LOOKUP_RESULT_CTOR_RVA,
@@ -165,7 +165,7 @@ impl GaitemLookupResult {
 /// Reached through the engine rather than by walking `CSGemSlotTable` here: the function checks
 /// `canGemBeChanged` and the instance pointer first, so an armament that takes no gem answers zero
 /// instead of reading a slot table that is not there.
-const GET_GEM_HANDLE_FROM_WEAPON_RVA: usize = 0x673e30;
+const GET_GEM_HANDLE_FROM_WEAPON_RVA: usize = 0x675130;
 
 type GemHandleFromWeaponFn =
     unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32) -> *mut u32;

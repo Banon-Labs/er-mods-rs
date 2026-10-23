@@ -491,7 +491,7 @@ mod profiler {
         let mut v: Vec<(usize, u32)> = h.iter().map(|(k, c)| (*k, *c)).collect();
         v.sort_by_key(|e| std::cmp::Reverse(e.1));
         let mut s = format!(
-            "er-cpu-profile: {total} samples of the game thread during slow frames (task_delta>={SLOW_TASK_DELTA}). Top RVAs (rva -> deobf VA = base+rva):\n"
+            "er-cpu-profile: {total} samples of the game thread during slow frames (task_delta>={SLOW_TASK_DELTA}). Top RVAs (rva -> VA in eldenring-deobf-1.17.2.bin = 0x140000000+rva):\n"
         );
         for (rva, c) in v.iter().take(40) {
             s.push_str(&format!(
@@ -620,20 +620,18 @@ pub fn standalone_tick() {
     // `safe_read_usize(base + rva)` until 2026-08-31, and that one line is why four of the fields
     // below were byte-identical in all 4,350 records of run `br-20260831-160354-2513`.
     //
-    // A raw `base + rva` is a read of the 1.16.2 slot, and every `.data` global moved on 1.17:
-    // GameDataMan 0x3d5df38 -> 0x3d61f98, GameMan 0x3d69918 -> 0x3d6d988, CSMenuMan
-    // 0x3d6b7b0 -> 0x3d6f820, CSFlipperImp 0x4589ad8 -> 0x458db58. The reads did not FAIL -- they
-    // succeeded against whatever now occupies the stale address, and the series recorded exactly
-    // what that was: `oracle_game_data_man_ptr` was `0x6e614d6e6f697463` in every single record,
-    // which is little-endian ASCII `"ctionMan"` -- eight bytes out of the middle of the RTTI type
-    // name `.?AVNWSteamConnectionManager@DLNW3@@`, which 1.17 parks where GameDataMan used to be.
-    // The other three stale slots landed in still-blank `.data` and read `0x0`, which is
-    // indistinguishable from a global the game has not created yet. That is the whole hazard: a
+    // That run read 1.16.2 slots on 1.17, where every `.data` global had moved. The reads did not
+    // FAIL -- they succeeded against whatever occupied the stale address, and the series recorded
+    // exactly what that was: `oracle_game_data_man_ptr` was `0x6e614d6e6f697463` in every single
+    // record, which is little-endian ASCII `"ctionMan"` -- eight bytes out of the middle of the
+    // RTTI type name `.?AVNWSteamConnectionManager@DLNW3@@`, which 1.17 parked where GameDataMan
+    // used to be. The other three stale slots landed in still-blank `.data` and read `0x0`, which
+    // is indistinguishable from a global the game has not created yet. That is the whole hazard: a
     // wrong pointer oracle does not go quiet, it goes constant, and a constant is invisible.
     //
-    // `game_data_addr` translates through the verified 1.16.2 -> 1.17 map and answers `0` for an
-    // address with no mapping, which `safe_read_usize` then fails on -- so the next stale RVA
-    // reaches the UNMAPPED sentinels below instead of a plausible number.
+    // Every rva here is a 2.7.2.0 rva. `game_data_addr` answers `0` on any other build, which
+    // `safe_read_usize` then fails on -- so a wrong build reaches the UNMAPPED sentinels below
+    // instead of a plausible number.
     let read_singleton = |rva: usize, what: &'static str| -> Option<usize> {
         if base == 0 {
             return None;
@@ -660,16 +658,16 @@ pub fn standalone_tick() {
     );
 
     // Vanilla-reload FPS comparison (2026-07-22): read the game's own frame timer. CSFlipperImp
-    // singleton at 1.16.2 base+0x4589ad8; task_delta (+0x268) = the game loop frame time
+    // singleton at 2.7.2.0 base+0x4590b78; task_delta (+0x268) = the game loop frame time
     // (1/task_delta = fps), fixed_spf (+0x1c) = the flip target (0.0167=60). play_time
     // (GameDataMan+0xa0, u32 ms) rises only while the world simulates -> the in-world/playable
     // gate. Lets a telemetry-only run measure a user-driven native reload's playable fps to
     // compare against our reload path. bd user-chose-vanilla-reload-comparison-2026-07-22.
     //
-    // Both OFFSETS are 1.17-confirmed and neither moved: `GetPlayTime` (1.16.2 `0x1402565d0`,
-    // 1.17 `0x1402565a0`) is `mov rax,[GameDataMan]; ...; mov eax,[rax+0xa0]` in both images,
-    // byte-identical apart from the rip displacement. Only the global moved.
-    const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+    // The play-time offset is read off 2.7.2.0's own getter: `GetPlayTime` (`0x1402565a0`) is
+    // `mov rax,[GameDataMan]; ...; mov eax,[rax+0xa0]`, byte-identical to the 1.16.2 body apart
+    // from the rip displacement.
+    const CS_FLIPPER_SINGLETON_RVA: usize = 0x4590b78;
     const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize = 0xa0;
     let flipper = read_singleton(CS_FLIPPER_SINGLETON_RVA, "CS_FLIPPER_SINGLETON_RVA");
     // `-2.0` = the CSFlipperImp global could not be resolved for this build; `-1.0` = it resolved

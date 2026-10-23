@@ -2,8 +2,8 @@
 //!
 //! # The crash
 //!
-//! The native refresh ([`er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`], 1.17.1
-//! `0x1409ab820`) walks the ten-slot renderer table and, for every slot whose profile record exists,
+//! The native refresh ([`er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`], 2.7.2.0
+//! `0x1409abcd0`) walks the ten-slot renderer table and, for every slot whose profile record exists,
 //! reads the slot's request latches without testing the slot first:
 //!
 //! ```text
@@ -17,8 +17,8 @@
 //! +0xce: INC EBX; ADD RSI,8; CMP EBX,10; JB +0x30
 //! ```
 //!
-//! Offsets are the same in 1.16.2 (`0x1409aa680`) and 1.17.1: the function is `IDENTICAL-WHOLE`
-//! between them, and both images were read on 2026-10-19.
+//! Offsets are the same in 1.16.2 (`0x1409aa680`), 1.17.1 and 2.7.2.0 (`0x1409abcd0`): the body is
+//! the same instruction for instruction in all three images (read 2026-10-19 and 2026-10-23).
 //!
 //! # Why a mid hook and not only the entry guard
 //!
@@ -35,10 +35,10 @@
 //! `INC` before anything reads them. So the routine changes no register; it only picks the address.
 //!
 //! No branch in the refresh lands inside the 16-byte window `+0x54..+0x64`: its branch targets are
-//! `+0x30` and `+0xce` only, checked against both images' disassembly on 2026-10-19 by collecting
-//! every jump target in the function. The window holds a rel8 `JNE`, which ilhook 2.3 relocates
-//! either through `iced_x86::BlockEncoder` (trampoline within 2 GB, short branches widened as
-//! needed) or by negating the condition over an absolute jump (`move_inst::relocate_inst_addr`).
+//! `+0x30` and `+0xce` only, checked against the disassembly of each image (1.16.2 and 1.17.1 on
+//! 2026-10-19, 2.7.2.0 on 2026-10-23) by collecting every jump target in the function. The window
+//! holds a rel8 `JNE`, which ilhook 2.3 relocates either through `iced_x86::BlockEncoder`
+//! (trampoline within 2 GB, short branches widened as needed) or by negating the condition over an absolute jump (`move_inst::relocate_inst_addr`).
 //!
 //! # One installer for two hosts
 //!
@@ -52,7 +52,7 @@
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-/// The refresh, 1.16.2 RVA of its `.pdata` entry. 1.17.1 `0x9ab820`. Its declaring module is
+/// The refresh, 2.7.2.0 RVA of its `.pdata` entry (`0x9abcd0`). Its declaring module is
 /// game-target only, and so is the installer that reads it.
 #[cfg(windows)]
 pub const PROFILE_RENDERER_REFRESH_FUNCTION_RVA: usize =
@@ -166,8 +166,7 @@ pub unsafe fn install_profile_table_mid_hook() -> bool {
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return fail();
     };
-    // Named `at_offset`, not `resolve`: `scripts/check-native-call-rva-coverage.py` reads every
-    // `resolve(` argument as a game address, and these are offsets into the refresh.
+    // Named `at_offset`, not `resolve`: these are offsets into the refresh, not game addresses.
     let at_offset = |offset: usize| {
         er_game_base::game_build::resolve_call_site_rva(
             PROFILE_RENDERER_REFRESH_FUNCTION_RVA,
@@ -181,7 +180,7 @@ pub unsafe fn install_profile_table_mid_hook() -> bool {
         at_offset(PROFILE_RENDERER_REFRESH_NEXT_SLOT),
     ) else {
         append_autoload_debug(format_args!(
-            "profileselect-table-midhook: REFUSED {name} (fn 0x{PROFILE_RENDERER_REFRESH_FUNCTION_RVA:x} + 0x{PROFILE_RENDERER_REFRESH_LATCH_CHECK:x}, resume + 0x{PROFILE_RENDERER_REFRESH_NEXT_SLOT:x}): no mapping for the refresh on the running build -- {}. Nothing read, nothing written; the entry guard still skips a degraded refresh whole.",
+            "profileselect-table-midhook: REFUSED {name} (fn 0x{PROFILE_RENDERER_REFRESH_FUNCTION_RVA:x} + 0x{PROFILE_RENDERER_REFRESH_LATCH_CHECK:x}, resume + 0x{PROFILE_RENDERER_REFRESH_NEXT_SLOT:x}): the refresh is only measured on 2.7.2.0 -- {}. Nothing read, nothing written; the entry guard still skips a degraded refresh whole.",
             er_game_base::game_build::describe_build()
         ));
         return fail();
@@ -219,7 +218,7 @@ pub unsafe fn install_profile_table_mid_hook() -> bool {
             core::mem::forget(point);
             STATE.store(STATE_ARMED, Ordering::Release);
             append_autoload_debug(format_args!(
-                "profileselect-table-midhook: ARMED {name} @0x{site:x} (resume 0x{resume:x}, vtable 0x{want_vtable:x}; 1.16.2 fn 0x{PROFILE_RENDERER_REFRESH_FUNCTION_RVA:x} + 0x{PROFILE_RENDERER_REFRESH_LATCH_CHECK:x}): a null or non-renderer slot takes the loop's own next-slot join (+0x{PROFILE_RENDERER_REFRESH_NEXT_SLOT:x}); the other slots still get their portrait requests (er-effects-rs-j3r)"
+                "profileselect-table-midhook: ARMED {name} @0x{site:x} (resume 0x{resume:x}, vtable 0x{want_vtable:x}; fn 0x{PROFILE_RENDERER_REFRESH_FUNCTION_RVA:x} + 0x{PROFILE_RENDERER_REFRESH_LATCH_CHECK:x}): a null or non-renderer slot takes the loop's own next-slot join (+0x{PROFILE_RENDERER_REFRESH_NEXT_SLOT:x}); the other slots still get their portrait requests (er-effects-rs-j3r)"
             ));
             true
         }
@@ -243,9 +242,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offsets_match_er_1162_static_re() {
+    fn offsets_match_static_re() {
         #[cfg(windows)]
-        assert_eq!(PROFILE_RENDERER_REFRESH_FUNCTION_RVA, 0x9a_a680);
+        assert_eq!(PROFILE_RENDERER_REFRESH_FUNCTION_RVA, 0x9a_bcd0);
         assert_eq!(
             (
                 PROFILE_RENDERER_REFRESH_LATCH_CHECK,

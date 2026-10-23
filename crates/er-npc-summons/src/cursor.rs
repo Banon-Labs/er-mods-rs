@@ -2,12 +2,12 @@
 //!
 //! In the world the game holds the cursor for the camera, and the only native way to get one is
 //! to open one of its menus. Both halves of that come from one predicate, "a menu has the mouse",
-//! `bool(CSMenuManImp*)` (1.16.2 `FUN_140765800`, 1.17.1 `0x140766650`). It reads
+//! `bool(CSMenuManImp*)` (2.7.2.0 `0x140766b00`). It reads
 //! `CSMenuMan+0x1a` and the shown-menu bitmap at `+0x1c`, and it has three callers:
 //!
-//! * the cursor gate (1.17.1 `0x140e20490`), `predicate && IsGameInForeground`, which decides
+//! * the cursor gate (2.7.2.0 `0x140e21b80`), `predicate && IsGameInForeground`, which decides
 //!   whether `CSMouseMan` shows the cursor and stops clipping and re-centring it;
-//! * the mouse X and Y axis readers (`0x140e2b360`, `0x140e2b450`), which return 0 while it is
+//! * the mouse X and Y axis readers (`0x140e2ca50`, `0x140e2cb40`), which return 0 while it is
 //!   true; `ChrCam`'s input update and the mouse-flick lock-on switch read only those.
 //!
 //! So the detour answers true while the picker is open and asks the game otherwise. Foreground
@@ -16,19 +16,18 @@
 //! left button is blanked over the picker by `er-dinput-suppress-core`.
 //!
 //! Measured live 2026-10-06 with `scripts/frida/npc-summons-gaps-probe.js`: the predicate answers
-//! 0 in the world and 1 while a game menu is open. 1.17 added a clause to its body, so the
-//! 1.16.2-to-1.17 ledger refuses the pair; it is hooked by its 1.17.1 address on 1.17.1 only, after
-//! its opening bytes are checked, through the runtime-derived installer.
+//! 0 in the world and 1 while a game menu is open. It is hooked by its 2.7.2.0 address on 2.7.2.0
+//! only, after its opening bytes are checked, through the runtime-derived installer.
 
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::UnionFn;
 
-use crate::addr::{MENU_HAS_MOUSE_1171_PROLOGUE, MENU_HAS_MOUSE_1171_RVA};
+use crate::addr::{MENU_HAS_MOUSE_PROLOGUE, MENU_HAS_MOUSE_RVA};
 use crate::log::summons_log;
 
 static ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -64,17 +63,15 @@ pub(crate) fn forced() -> usize {
     FORCED.load(Ordering::Relaxed)
 }
 
-/// Install the detour on 1.17.1. Any other build, or other bytes at the address, leaves the
+/// Install the detour on 2.7.2.0. Any other build, or other bytes at the address, leaves the
 /// cursor and camera to the game and says so.
 pub(crate) fn install() {
-    // Measured on 1.17.1 and carried from there, not from 1.16.2: `game_rva` has no ledger row
-    // for this function because 1.17 changed its body. The opening bytes are compared below
-    // before anything is hooked.
-    let Some(rva) = carry_1171_rva(MENU_HAS_MOUSE_1171_RVA) else {
+    // The opening bytes are compared below before anything is hooked.
+    let Some(rva) = is_supported_build().then_some(MENU_HAS_MOUSE_RVA) else {
         summons_log(format_args!(
-            "cursor: no carry of the 1.17.1 menu-mouse predicate to {:?}; the picker gets no free \
-             cursor in the world",
-            game_file_version()
+            "cursor: the 2.7.2.0 menu-mouse predicate is refused on this build ({}); the picker \
+             gets no free cursor in the world",
+            describe_build()
         ));
         return;
     };
@@ -82,13 +79,13 @@ pub(crate) fn install() {
         return;
     };
     let entry = base + rva;
-    let mut bytes = [0u8; MENU_HAS_MOUSE_1171_PROLOGUE.len()];
+    let mut bytes = [0u8; MENU_HAS_MOUSE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
     // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
     let matches = read
-        && (bytes == MENU_HAS_MOUSE_1171_PROLOGUE
-            || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_1171_PROLOGUE[5..]));
+        && (bytes == MENU_HAS_MOUSE_PROLOGUE
+            || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_PROLOGUE[5..]));
     if !matches {
         summons_log(format_args!(
             "cursor: 0x{entry:x} does not open like the menu-mouse predicate ({bytes:02x?}); not \
@@ -96,7 +93,7 @@ pub(crate) fn install() {
         ));
         return;
     }
-    // SAFETY: a runtime-derived 1.17.1 entry whose bytes were just checked; the handler calls its
+    // SAFETY: a runtime-derived 2.7.2.0 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
     match unsafe {
         er_hook::register_union_hook_runtime_derived_following_arxan(

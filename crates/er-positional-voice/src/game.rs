@@ -11,9 +11,7 @@
 use std::ffi::c_void;
 
 use eldenring::cs::{CSSessionManager, GameDataMan, WorldChrMan};
-use er_game_base::game_build::{
-    MAPPED_FILE_VERSION_1172, carry_1171_rva, describe_build, game_file_version,
-};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_positional_voice_core::{
     bank, sites,
     slots::{Lookup, PlayStep, SlotState, Slots},
@@ -27,49 +25,29 @@ pub(crate) struct Game {
     base: usize,
 }
 
-/// Which build's bytes the sites are compared against: 2.7.2.0 when that is running, else 1.17.1.
-/// Any other build fails the check anyway, because `carry_1171_rva` refuses every offset on it.
-fn running_build() -> sites::Build {
-    if game_file_version() == Some(MAPPED_FILE_VERSION_1172) {
-        sites::Build::V1172
-    } else {
-        sites::Build::V1171
-    }
-}
-
-/// Why the game cannot be used: a site or global does not carry to the running build, or a site's
-/// bytes differ from that build's.
+/// Why the game cannot be used: it is not 2.7.2.0, or a site's bytes differ from 2.7.2.0's.
 ///
-/// The offsets in `sites` were measured on 1.17.1 and are carried by
-/// [`carry_1171_rva`]: unchanged on 1.17.1, moved segment by segment on 2.7.2.0, refused on
-/// anything else.
+/// The offsets in `sites` were measured on 2.7.2.0 and are refused on any other build.
 pub(crate) fn check_sites(base: usize) -> Result<(), String> {
-    if let Some((name, rva)) = sites::GLOBALS
-        .iter()
-        .find(|(_, rva)| carry_1171_rva(*rva).is_none())
-    {
+    if !is_supported_build() {
         return Err(format!(
-            "the 1.17.1 {name} global (eldenring.exe+{rva:X}) has no carry to {}",
+            "the sites were measured on 2.7.2.0 and this build is another: {}",
             describe_build()
         ));
     }
-    let build = running_build();
-    let mismatch = sites::first_mismatch(build, |rva| {
-        let carried = carry_1171_rva(rva)?;
+    let mismatch = sites::first_mismatch(|rva| {
         let mut out = [0u8; 8];
         // SAFETY: `read_bytes` fails closed on an unmapped address.
-        unsafe { er_game_base::mem::read_bytes(base + carried, &mut out) }.then_some(out)
+        unsafe { er_game_base::mem::read_bytes(base + rva, &mut out) }.then_some(out)
     });
     match mismatch {
         None => Ok(()),
         Some((site, got)) => Err(format!(
-            "1.17.1 eldenring.exe+{:X} ({}), carried to {:X?}, reads {:02X?}, expected {:02X?} \
-             for {build:?}: {}",
+            "eldenring.exe+{:X} ({}) reads {:02X?}, expected {:02X?}: {}",
             site.rva,
             site.name,
-            carry_1171_rva(site.rva),
             got,
-            site.expected(build),
+            site.bytes,
             describe_build()
         )),
     }
@@ -80,15 +58,15 @@ impl Game {
         Self { base }
     }
 
-    /// Where a 1.17.1 offset from `sites` is on the running build.
+    /// Where an offset from `sites` is in the running module.
     ///
-    /// [`check_sites`] refused the game unless every site and global carried, and `Game` is only
-    /// built after it passed, so the `0` is never handed out for an offset from `sites`.
+    /// [`check_sites`] refused the game unless it is 2.7.2.0 and every site matched, and `Game` is
+    /// only built after it passed.
     fn at(&self, rva: usize) -> usize {
-        carry_1171_rva(rva).map_or(0, |carried| self.base + carried)
+        self.base + rva
     }
 
-    /// A game function by its 1.17.1 offset, typed by the caller.
+    /// A game function by its offset, typed by the caller.
     ///
     /// # Safety
     ///
