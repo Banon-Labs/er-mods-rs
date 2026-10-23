@@ -356,6 +356,13 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 		cargo xwin test --lib -p er-game-base --features game-types \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 else
+	# Under GitHub Actions a missing wine is an install defect, not an optional tool: the workflow
+	# installs wine only for the stages `check-stages.py --tools` marks `wine=1`, so a skip here
+	# would mean the derivation lost this script and the windows-target tests silently stopped.
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		echo "[check-rust-build] wine or cargo-xwin not found under GitHub Actions; refusing to skip the windows-target unit-test run" >&2
+		exit 1
+	fi
 	echo "[check-rust-build] wine not found; skipping the windows-target unit-test RUN (compile check above still ran)" >&2
 fi
 
