@@ -1,7 +1,7 @@
 // Does driving Seamless's own invade action actually make it search?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The question the near+far handoff turns on. `ersc+0x25850` is nine instructions read out of the
 // decrypted image -- lock the session, return unless the state reads idle, store 0x0e, unlock --
@@ -393,7 +393,8 @@ rpc.exports = {
   // it has just done `lea r14,[rcx+0x120]`, so `r14 - 0x120` IS the option-menu object. Detouring
   // inside ersc.dll has killed this process before; detouring the game function it calls has not.
   //
-  // 1.16.2 `0x140e9e4f0` -> 1.17.1 `0x140ea0360`, the translation this repo's own DLL logs.
+  // 1.16.2 `0x140e9e4f0` -> 1.17.1 `0x140ea0360`, the translation this repo's own DLL logged then;
+  // the literal is its 2.7.2.0 address.
   watchHandover() {
     const game = Process.enumerateModules().find((m) => m.name.toLowerCase() === 'eldenring.exe');
     if (!game) return { ok: false, why: 'eldenring.exe not found' };

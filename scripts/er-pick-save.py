@@ -13,8 +13,10 @@ Validity is the product'S own definition, not a guess
     `crates/er-save-redirect/src/lib.rs` rather than copied here -- `validate_save_file_path`
     rejects anything else at runtime, so a picker using a different number would hand back
     saves the DLL refuses.
-  * A slot counts as occupied when the decoded name is not empty-like and level > 0, decoded
-    with `save-slot-oracle.py` (the evidence-bound decoder), never inferred from filenames.
+  * A slot counts as occupied when the container's `USER_DATA010.active_slot` bitmap marks it,
+    and its body must then decode to a name that is not empty-like and a level > 0, decoded with
+    `save-slot-oracle.py` (the evidence-bound decoder), never inferred from filenames. A container
+    or slot that cannot be read or decoded is reported as that failure, never as an empty slot.
 
 Why it picks a file first, then a slot
 --------------------------------------
@@ -44,12 +46,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import random
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -170,10 +175,53 @@ def eligible_saves(root: Path, container: str, expected_bytes: int) -> list[Path
     return found
 
 
-def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dict]:
-    """Decode every slot of one save; return the occupied ones with their identity.
+class SaveDecodeError(RuntimeError):
+    """A container, or one slot of it, that could not be read or decoded.
 
-    Occupancy is the `USER_DATA010.active_slot` BITMAP, not "the body decodes".
+    Kept apart from "this slot holds no character" on purpose. On 2026-10-23 `er-run-branch.py`
+    refused a launch with "no occupied character at .../save-files/0/ER0000.sl2 slot 0", and the
+    same decode a minute later read slot 0 as "Vagabond", level 9. That save sits on an
+    autofs-mounted CIFS share, so the first read after the share idled out also mounted it. Whatever
+    went wrong in that read was reported as an empty slot, because an unreadable bitmap, a decode
+    that raised and a clear bitmap bit all came back as the same empty list.
+    """
+
+
+def read_save(path: Path, expected_bytes: int | None) -> bytes:
+    """The whole container, or `SaveDecodeError` naming the path and the cause.
+
+    The length is checked again although `eligible_saves` already compared `st_size`: that is the
+    size the directory entry reported, and this is what the read returned. On a network share they
+    are separate requests, and a container cut short decodes as a bitmap that is not there.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as err:
+        raise SaveDecodeError(f"could not read {path}: {err}") from err
+    if expected_bytes is not None and len(data) != expected_bytes:
+        raise SaveDecodeError(
+            f"read {len(data)} bytes of {path}, expected {expected_bytes} "
+            "(the size its directory entry reported)"
+        )
+    return data
+
+
+def decode_occupied(
+    module, path: Path, only_slot: int | None = None, expected_bytes: int | None = None
+) -> tuple[list[dict], list[str]]:
+    """The occupied slots of one save with their identity, and the slots that failed to decode.
+
+    Each slot asked for has exactly one of three outcomes, and they are never folded together:
+
+      * bitmap bit clear: not occupied, and neither list mentions it;
+      * bitmap bit set, body decodes to a character: an entry in the first list;
+      * bitmap bit set, decode raises or finds no character: a line in the second list naming the
+        slot, the path and the cause.
+
+    A container that cannot be read, or whose bitmap cannot be read, raises `SaveDecodeError`,
+    because no slot of it can be answered for.
+
+    Occupancy is the `USER_DATA010.active_slot` bitmap, not "the body decodes".
 
     Deleting a character clears that bitmap and leaves the `USER_DATA00N` body in place, so a
     deleted slot still decodes to a plausible name, level, runes and stats. Testing the body alone
@@ -188,14 +236,18 @@ def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dic
     "reproductions" was an invalid-slot launch, which is the boot path that faults at
     `game+0x10043`; the bisect blamed a DLL for what its own save picker had set up.
 
-    An unreadable bitmap yields None and is treated as "cannot answer": the file is skipped
-    entirely rather than falling back to the body-only test that caused this.
+    An unreadable bitmap is "cannot answer", never a fallback to the body-only test that caused
+    this, and never "nothing is occupied" either.
     """
-    data = path.read_bytes()
+    data = read_save(path, expected_bytes)
     bitmap = module.active_slot_bitmap(data)
     if bitmap is None:
-        return []
+        raise SaveDecodeError(
+            f"the occupancy bitmap (USER_DATA010.active_slot) of {path} is unreadable "
+            f"({len(data)} bytes read)"
+        )
     results = []
+    failures = []
     # `only_slot` narrows which slots are decoded and nothing else: the bitmap below still decides
     # whether the slot is real, so a targeted read refuses a deleted character exactly as a sweep
     # does. Decoding one slot of this container costs about three seconds, so a caller that wants
@@ -206,14 +258,27 @@ def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dic
             continue
         try:
             decoded = module.decode_save_slot(data, path, slot)
-        except Exception:  # a slot that will not decode is not a launch target
+        # `SystemExit` too: the oracle's `extract_slot` raises it for a missing `USER_DATA` entry,
+        # and letting it through would end a whole sweep on one bad container.
+        except (Exception, SystemExit) as err:
+            failures.append(
+                f"slot {slot} of {path} is marked occupied but did not decode: "
+                f"{type(err).__name__}: {err}"
+            )
             continue
         fields = decoded.get("decoded_fields") or {}
         name = fields.get("name") or ""
         level = fields.get("level")
-        if fields.get("name_empty_like") or module.name_empty_like(name):
-            continue
-        if not isinstance(level, int) or level <= 0:
+        if (
+            fields.get("name_empty_like")
+            or module.name_empty_like(name)
+            or not isinstance(level, int)
+            or level <= 0
+        ):
+            failures.append(
+                f"slot {slot} of {path} is marked occupied but decoded to no character "
+                f"(name {name!r}, level {level!r}, layout {decoded.get('layout')!r})"
+            )
             continue
         results.append(
             {
@@ -231,6 +296,25 @@ def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dic
                 "matchmaking_weapon_level": fields.get("matchmaking_weapon_level"),
             }
         )
+    return results, failures
+
+
+def occupied_slots(
+    module, path: Path, only_slot: int | None = None, expected_bytes: int | None = None
+) -> list[dict]:
+    """[`decode_occupied`] for a sweep: skip what fails, but say so on stderr.
+
+    A sweep (`pick`, `inventory`) has other containers to try, so one it cannot read is skipped
+    rather than ending the run. It is still named with its cause, because a skipped container that
+    says nothing reads exactly like one that holds no character.
+    """
+    try:
+        results, failures = decode_occupied(module, path, only_slot, expected_bytes)
+    except SaveDecodeError as err:
+        print(f"er-pick-save: skipping {path}: {err}", file=sys.stderr)
+        return []
+    for failure in failures:
+        print(f"er-pick-save: skipping {failure}", file=sys.stderr)
     return results
 
 
@@ -262,7 +346,7 @@ def pick(root: Path, container: str, seed: int) -> dict:
     pool = candidates[:]
     rng.shuffle(pool)
     for attempt, path in enumerate(pool[:MAX_DRAWS], start=1):
-        slots = occupied_slots(module, path)
+        slots = occupied_slots(module, path, expected_bytes=expected)
         if not slots:
             continue
         chosen = rng.choice(slots)
@@ -364,6 +448,10 @@ def targeted(root: Path, container: str, slot: int) -> dict:
     The bitmap is still the occupancy authority, so a slot the game will not load is refused here
     exactly as it is in [`occupied_slots`] -- the saving is in how many slots are decoded, never in
     which of them counts as real.
+
+    Unlike a sweep, this has no other container to fall back on, so a read or decode failure raises
+    [`SaveDecodeError`] naming the slot, the path and the cause. Only a clear bitmap bit comes back
+    as an empty `targets`, which is what `er-run-branch.py` reports as "no occupied character".
     """
     module = oracle()
     expected = expected_save_bytes()
@@ -388,10 +476,14 @@ def targeted(root: Path, container: str, slot: int) -> dict:
     cached = cached_identity(active, slot)
     if cached is not None:
         return {"corpus_root": str(root), "count": 1, "targets": [cached]}
-    entries = [
-        describe(active, entry, root)
-        for entry in occupied_slots(module, active, only_slot=slot)
-    ]
+    try:
+        decoded, failures = decode_occupied(module, active, only_slot=slot, expected_bytes=expected)
+    except SaveDecodeError as err:
+        raise SaveDecodeError(f"cannot decode slot {slot}: {err}") from err
+    if failures:
+        raise SaveDecodeError("; ".join(failures))
+    entries = [describe(active, entry, root) for entry in decoded]
+    # Only a decoded character reaches the cache; every failure above raised before this line.
     if entries:
         remember_identity(active, slot, entries[0])
     return {"corpus_root": str(root), "count": len(entries), "targets": entries}
@@ -403,7 +495,7 @@ def inventory(root: Path, container: str) -> dict:
     expected = expected_save_bytes()
     entries = []
     for path in eligible_saves(root, container, expected):
-        for entry in occupied_slots(module, path):
+        for entry in occupied_slots(module, path, expected_bytes=expected):
             entries.append(describe(path, entry, root))
     return {"corpus_root": str(root), "count": len(entries), "targets": entries}
 
@@ -475,10 +567,144 @@ def selftest() -> int:
         def active_slot_bitmap(_data: bytes) -> None:
             return None
 
+    class _NamedFakePath:
+        """A path-shaped stand-in with a name, so a message can be checked for naming it."""
+
+        def __str__(self) -> str:
+            return "/selftest/sweep/ER0000.sl2"
+
+        @staticmethod
+        def read_bytes() -> bytes:
+            return b""
+
+    sweep_stderr = io.StringIO()
+    with contextlib.redirect_stderr(sweep_stderr):
+        skipped = occupied_slots(_UnreadableBitmap, _NamedFakePath())
     check(
-        occupied_slots(_UnreadableBitmap, _FakePath) == [],
+        skipped == [],
         "an unreadable bitmap skips the file rather than falling back to the body-only test",
     )
+    check(
+        "/selftest/sweep/ER0000.sl2" in sweep_stderr.getvalue()
+        and "bitmap" in sweep_stderr.getvalue(),
+        "a sweep that skips an unreadable container says so on stderr, naming it",
+    )
+
+    # The launch gate's three answers, kept apart. On 2026-10-23 a save on an autofs CIFS share was
+    # refused as "no occupied character" and decoded as "Vagabond" level 9 a minute later, because
+    # an unreadable bitmap, a decode that raised and a clear bitmap bit all came back as one empty
+    # list. `targeted` runs here against a real container of the product's size on disk, with the
+    # decoder swapped for the fakes, so the file handling is the real code path.
+    class _DecodeRaises(_FakeModule):
+        @staticmethod
+        def decode_save_slot(_data: bytes, _path: Path, _slot: int) -> dict:
+            raise ValueError("no PlayerGameData candidate in this slot body")
+
+    class _DecodeExits(_FakeModule):
+        @staticmethod
+        def decode_save_slot(_data: bytes, _path: Path, _slot: int) -> dict:
+            raise SystemExit("slot USER_DATA000 not found in BND4 entries")
+
+    class _EmptyBody(_FakeModule):
+        @staticmethod
+        def decode_save_slot(_data: bytes, _path: Path, _slot: int) -> dict:
+            return {"layout": "unknown", "decoded_fields": {}}
+
+    previous_cache_home = os.environ.get("XDG_CACHE_HOME")
+    previous_oracle = globals()["oracle"]
+    with tempfile.TemporaryDirectory(prefix="er-pick-save-selftest-") as scratch:
+        gate_root = Path(scratch) / "corpus"
+        gate_root.mkdir()
+        gate_save = gate_root / "ER0000.sl2"
+        with gate_save.open("wb") as handle:
+            handle.truncate(expected)
+        os.environ["XDG_CACHE_HOME"] = str(Path(scratch) / "cache")
+
+        def run_targeted(fake_module, slot: int) -> tuple[dict | None, str | None]:
+            globals()["oracle"] = lambda: fake_module
+            try:
+                return targeted(gate_root, "both", slot), None
+            except RuntimeError as err:
+                return None, str(err)
+            finally:
+                globals()["oracle"] = previous_oracle
+
+        try:
+            result, error = run_targeted(_UnreadableBitmap, 0)
+            check(
+                result is None
+                and error is not None
+                and str(gate_save) in error
+                and "slot 0" in error
+                and "bitmap" in error,
+                f"the gate reports an unreadable bitmap as an error naming the path and slot ({error})",
+            )
+            result, error = run_targeted(_DecodeRaises, 0)
+            check(
+                result is None
+                and error is not None
+                and "no PlayerGameData candidate in this slot body" in error
+                and str(gate_save) in error
+                and "slot 0" in error,
+                f"the gate reports a decode that raised with the exception's own text ({error})",
+            )
+            result, error = run_targeted(_DecodeExits, 0)
+            check(
+                result is None
+                and error is not None
+                and "USER_DATA000 not found" in error,
+                "a decoder that raises SystemExit is reported, not allowed to end the process",
+            )
+            result, error = run_targeted(_EmptyBody, 0)
+            check(
+                result is None and error is not None and "decoded to no character" in error,
+                "a slot the bitmap marks occupied whose body decodes to nothing is a decode failure",
+            )
+            result, error = run_targeted(_FakeModule, 1)
+            check(
+                error is None and result is not None and result["count"] == 0
+                and result["targets"] == [],
+                f"a slot whose bitmap bit is clear is still plain 'not occupied', no error ({error})",
+            )
+            check(
+                not identity_cache_path().exists(),
+                "no failure and no empty slot was written to the identity cache",
+            )
+            result, error = run_targeted(_FakeModule, 0)
+            check(
+                error is None
+                and result is not None
+                and [entry["name"] for entry in result["targets"]] == ["Live0"]
+                and cached_identity(gate_save, 0) is not None,
+                "an occupied slot still decodes, and that success is what the cache stores",
+            )
+
+            short = Path(scratch) / "short.sl2"
+            short.write_bytes(b"\0" * 10)
+            try:
+                read_save(short, 20)
+                short_error = None
+            except SaveDecodeError as err:
+                short_error = str(err)
+            check(
+                short_error is not None and "10 bytes" in short_error and str(short) in short_error,
+                f"a read shorter than the product's size is reported as one ({short_error})",
+            )
+            try:
+                read_save(Path(scratch) / "absent.sl2", None)
+                missing_error = None
+            except SaveDecodeError as err:
+                missing_error = str(err)
+            check(
+                missing_error is not None and "absent.sl2" in missing_error,
+                f"an unreadable file is reported as a read failure naming it ({missing_error})",
+            )
+        finally:
+            globals()["oracle"] = previous_oracle
+            if previous_cache_home is None:
+                os.environ.pop("XDG_CACHE_HOME", None)
+            else:
+                os.environ["XDG_CACHE_HOME"] = previous_cache_home
 
     try:
         root = resolve_root(None)
@@ -565,7 +791,9 @@ def main() -> int:
             return EXIT_OK
         seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
         result = pick(root, args.container, seed)
-    except RuntimeError as err:
+    # `OSError` as well: a `stat` of a save on a share that did not mount is a failure to report in
+    # one line naming the path, not a traceback for the caller to quote.
+    except (RuntimeError, OSError) as err:
         print(f"er-pick-save: {err}", file=sys.stderr)
         return EXIT_ERROR
 

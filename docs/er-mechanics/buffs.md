@@ -13,8 +13,8 @@ Labels, as in the other docs here:
 - **SITE**: the er-build-planner corpus.
 
 Addresses are `1.16.2 VA / 1.17.1 VA`. The 1.16.2 side is the named Ghidra dump on `:8765`
-(dump VA = runtime VA on 1.16.2). The 1.17.1 side is from
-`docs/recon/rva-map-1162-to-1170.functions.tsv` plus `+0x70` at or above rva `0xafefe9`. Leaf
+(dump VA = runtime VA on 1.16.2). The 1.17.1 side came from the 1.16.2 -> 1.17 function map
+(deleted with the address carry on 2026-10-23) plus `+0x70` at or above rva `0xafefe9`. Leaf
 functions missing from that map were located by a unique byte match in
 `eldenring-deobf-1.17.1.bin` (`scripts/find-deobf-bytes.py`). Nothing was launched.
 

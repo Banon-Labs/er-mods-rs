@@ -20,8 +20,8 @@
 //! `CS::CSPadStep::STEP_Update` skips the whole input update on an unfocused frame unless
 //! `Game.Debug.IsEnableControlOnDisactiveWindow()` is true. That accessor is a single
 //! `movzx eax, byte ptr [<global>]`, and this shell writes that global from the game thread each
-//! frame. Read `predicate.rs` before changing anything here -- it carries the addresses, the two
-//! independent 1.17 corroborations, and the three candidate mechanisms that were eliminated.
+//! frame. Read `predicate.rs` before changing anything here -- it carries the addresses, the
+//! 2.7.2.0 byte evidence, and the three candidate mechanisms that were eliminated.
 //!
 //! # Why it installs no detour
 //!
@@ -123,13 +123,13 @@ fn on_frame() {
         }
         return;
     }
-    // Refused: the running build has no verified translation for this global, so nothing was
-    // written. Say so once -- a per-frame refusal line is the 339,764-line failure mode
+    // Refused: the running build is not 2.7.2.0, the build this global was measured on, so nothing
+    // was written. Say so once -- a per-frame refusal line is the 339,764-line failure mode
     // `er_game_base::game_build` exists to avoid.
     if REFUSED_FRAMES.fetch_add(1, Ordering::Relaxed) == 0 {
         focus_log!(
-            "unfocused-input: REFUSED -- no verified address for \
-             GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA (0x{:x}) on this build ({}). \
+            "unfocused-input: REFUSED -- GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA \
+             (0x{:x}) is a 2.7.2.0 address and this build is another ({}). \
              The window-focus requirement is UNCHANGED; this shell is inert.",
             predicate::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA,
             er_game_base::game_build::describe_build(),

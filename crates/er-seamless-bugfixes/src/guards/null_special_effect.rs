@@ -2,7 +2,9 @@
 //!
 //! # The crash
 //!
-//! Captured live 2026-08-15, ~46 minutes into a Seamless Co-op session:
+//! Captured live 2026-08-15, ~46 minutes into a Seamless Co-op session on 1.16.2. So every VA in
+//! this module's prose is a 1.16.2 one, as the log and that image recorded it, unless it is marked
+//! 2.7.2.0; the guarded entries' 2.7.2.0 addresses are on the constants below.
 //!
 //! ```text
 //! exception_address        = 0x1404f9940 {eldenring.exe+0x4f9940}
@@ -67,8 +69,10 @@
 //! the apply are guarded together, and each returns the value the original already returns when it
 //! has nothing to report:
 //!
-//! * `HasSpecialEffectId` -> `false`, which is its own `XOR AL,AL; RET` at `0x1404f995e`.
-//! * `Apply` -> `-1`, which is its own `OR RAX,-1; RET` at `0x1404fa9df`. `FUN_1403fade0` already
+//! * `HasSpecialEffectId` -> `false`, which is its own `XOR AL,AL; RET` at `0x1404fa80e`
+//!   (2.7.2.0).
+//! * `Apply` -> `-1`, which is its own `OR RAX,-1; RET` at `0x1404fb88f` (2.7.2.0). `FUN_1403fade0`
+//!   already
 //!   tests that with `JS` and returns false, so the chain unwinds the way the game expects.
 //!
 //! Neither value is invented and neither is a lie: a `ChrIns` with no `SpecialEffect` container has
@@ -95,20 +99,20 @@ use super::{Guard, null_arg1_guard};
 
 /// `bool CS::SpecialEffect::HasSpecialEffectId(SpecialEffect *container, uint spEffectId)`.
 ///
-/// Its expected prologue is assembled from named instructions by this crate's `build.rs` and
-/// arrives as `HAS_SPECIAL_EFFECT_ID_PROLOGUE` through the `include!` below.
-pub(crate) const HAS_SPECIAL_EFFECT_ID_RVA: usize = 0x4f9940;
+/// 2.7.2.0 rva. Its expected prologue is assembled from named instructions by this crate's
+/// `build.rs` and arrives as `HAS_SPECIAL_EFFECT_ID_PROLOGUE` through the `include!` below.
+pub(crate) const HAS_SPECIAL_EFFECT_ID_RVA: usize = 0x4fa7f0;
 
 /// `int CS::SpecialEffect::Apply(SpecialEffect *container, int spEffectId, ChrIns *, ChrIns *,
 /// FloatVector4 *, byte, bool, byte)`.
 ///
 /// Four of its eight arguments arrive on the stack and at least one slot is typed inconsistently
 /// between call sites, which is exactly why the detour tail-jumps instead of re-marshalling
-/// arguments.
-pub(crate) const APPLY_RVA: usize = 0x4fa8e0;
+/// arguments. 2.7.2.0 rva.
+pub(crate) const APPLY_RVA: usize = 0x4fb790;
 
 // Both expected prologues, assembled from named `iced-x86` instructions by `build.rs` and
-// verified there against `eldenring-deobf.bin` when a copy is present.
+// verified there against `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_null_special_effect_prologues.rs"
@@ -119,7 +123,7 @@ null_arg1_guard! {
     stub = has_special_effect_id_guard,
     original = ORIG_HAS_SPECIAL_EFFECT_ID,
     blocked = BLOCKED_HAS_SPECIAL_EFFECT_ID,
-    // `XOR AL,AL` is what the original executes at 0x1404f995e when the walk finds nothing.
+    // `XOR AL,AL` is what the original executes at 0x1404fa80e when the walk finds nothing.
     ret = ["xor eax, eax"],
 }
 
@@ -128,7 +132,7 @@ null_arg1_guard! {
     stub = apply_guard,
     original = ORIG_APPLY,
     blocked = BLOCKED_APPLY,
-    // `OR RAX,-1` is what the original executes at 0x1404fa9df when CheckApplyConditions fails.
+    // `OR RAX,-1` is what the original executes at 0x1404fb88f when CheckApplyConditions fails.
     ret = ["or rax, -1"],
 }
 
@@ -154,8 +158,8 @@ pub(crate) const APPLY_GUARD: Guard = Guard {
     original: &ORIG_APPLY,
     blocked: &BLOCKED_APPLY,
     prepare: None,
-    rationale: "null container -> -1 (the original's own conditions-not-met answer); FUN_1403fade0 \
-                already tests it with JS and unwinds to false",
+    rationale: "null container -> -1 (the original's own conditions-not-met answer); its caller \
+                (1.16.2 FUN_1403fade0) already tests it with JS and unwinds to false",
 };
 
 #[cfg(test)]
@@ -165,12 +169,12 @@ mod tests {
     /// These RVAs are the whole safety argument for the hook: if one drifts, the install-time
     /// prologue check is comparing against the wrong thing. The bytes are pinned where they are
     /// produced -- `build.rs` asserts the assembled sequence against the pin and, when a copy of
-    /// `eldenring-deobf.bin` is present, against the real image at the same VA -- so repeating
-    /// them here would only be a third transcription to keep in step.
+    /// `eldenring-deobf-1.17.2.bin` is present, against the real image at the same VA -- so
+    /// repeating them here would only be a third transcription to keep in step.
     #[test]
-    fn rvas_match_er_1162_static_re() {
-        assert_eq!(HAS_SPECIAL_EFFECT_ID_RVA, 0x4f9940);
-        assert_eq!(APPLY_RVA, 0x4fa8e0);
+    fn rvas_match_the_2720_static_re() {
+        assert_eq!(HAS_SPECIAL_EFFECT_ID_RVA, 0x4fa7f0);
+        assert_eq!(APPLY_RVA, 0x4fb790);
     }
 
     /// MinHook relocates the first five bytes of the entry. Both prologues must therefore start

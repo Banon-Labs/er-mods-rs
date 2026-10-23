@@ -60,7 +60,7 @@ pub(crate) const PGD_FACE_DATA_OFFSET: usize = core::mem::offset_of!(PlayerGameD
 // `CHR_ASM_OVERRIDE_ABSENT` moved to `er_loading_portrait_core::chr_asm_layout` with the
 // loading-cover crate extraction (same values, same doc comments); the `constants.rs` glob
 // re-exports them into this flat namespace.
-/// The per-category addends `FUN_1409e6fb0` applies to a non-negative `unkd8`/`unk0`
+/// The per-category addends 1.16.2 `FUN_1409e6fb0` applies to a non-negative `unkd8`/`unk0`
 /// (`lea 0x64(%rax),%ebx`, `lea 0xc8(%rax),%ebx`, `lea 0x12c(%rax),%ebx`). Head takes the override
 /// value verbatim, so it has no addend.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
@@ -69,7 +69,7 @@ pub(crate) const CHR_ASM_OVERRIDE_CHEST_ADDEND: i32 = 100;
 pub(crate) const CHR_ASM_OVERRIDE_HANDS_ADDEND: i32 = 200;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const CHR_ASM_OVERRIDE_LEGS_ADDEND: i32 = 300;
-/// `CS::ChrAsm::GetDefaultProtectorParamId` (deobf 0x140d47420) is a pure switch:
+/// `CS::ChrAsm::GetDefaultProtectorParamId` (1.16.2 0x140d47420) is a pure switch:
 /// 0 -> 10000, 1 -> 10100, 2 -> 10200, 3 -> 10300, anything else -> -1. The profile feed
 /// `set_model_source` calls it only with 2 and 3, so a portrait's hands and legs are always these
 /// bare-body rows -- vanilla behaviour, not a defect.
@@ -133,7 +133,7 @@ pub(crate) const PGD_STAT_COUNT: usize =
     (PGD_STAT_END_OFFSET - PGD_STAT_BASE_3C_OFFSET) / core::mem::size_of::<u32>();
 /// GameMan last field: `character_name_is_empty` (a cheap blank/new-game discriminator).
 /// Resolved (autoresearch 2026-06-18) via static RE of `eldenring-deobf.bin`: the in-game
-/// getter at 0x140679d90 is `mov rax,[GameMan]; movzbl 0xe70(rax),eax; ret`, so the field is
+/// getter at 1.16.2 0x140679d90 is `mov rax,[GameMan]; movzbl 0xe70(rax),eax; ret`, so the field is
 /// at +0xe70 -- our prior hand-decoded offset was 8 bytes too far (read padding past the field),
 /// a real bug. Now bound to the upstream typed field, which the disassembly confirms correct.
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
@@ -141,7 +141,7 @@ pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
 /// One-shot latch for the in-world load-correctness dump.
 pub(crate) use er_telemetry_core::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
-/// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
+/// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0c550 (2.7.2.0)
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
     [MOVIE_SKIP_FLAG_CLEAR; SYNTHETIC_STEP_THIS_SIZE];

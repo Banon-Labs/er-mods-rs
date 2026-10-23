@@ -34,7 +34,7 @@ mods.forEach(function (m) {
 send({ kind: 'armed', modules: mods.map(function (m) { return m.name; }), hooks: hooks.length });
 
 // The clock is the game itself: CSChrActionRequestModule::UpdateFromManipulator (1.17.1 0x140408190
-// -> 2.7.2.0 0x140408220, scripts/map-rvas-1171-to-1172.py), which runs every frame for each
+// -> 2.7.2.0 0x140408220), which runs every frame for each
 // character with a manipulator, so it ticks whether or not XInput is ever polled. One report per
 // 60 calls, 20 reports, then the hooks come off.
 const game = Process.findModuleByName('eldenring.exe');

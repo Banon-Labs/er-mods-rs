@@ -1,7 +1,7 @@
 // Is item use refused while a Seamless search is in flight?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // User ground truth, 2026-09-16: "I cannot press my square button to activate an item while we are
 // searching or until I reach the host's world." Square is the use-item binding. If that is the

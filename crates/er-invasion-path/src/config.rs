@@ -44,7 +44,7 @@ pub(crate) const DEFAULT_TOGGLE_KEY_NAME: &str = "semicolon";
 ///
 /// `30.0` is the game's own number: `MenuCommonParam` row 0's `compassEnemyHostInnerDistance` at
 /// `+0xa4`, the distance inside which an invader's compass marker for the host disappears. The
-/// engine squares it at runtime in `FUN_140775f30`.
+/// engine squares it at runtime in 1.16.2 `FUN_140775f30`.
 ///
 /// Two deliberate departures from that rule:
 ///

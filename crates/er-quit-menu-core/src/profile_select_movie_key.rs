@@ -25,7 +25,7 @@
 //! canonical bytes rather than letting the loader hunt for them.
 //!
 //! The keyboard supplies its own resource name through a config struct it builds. Nobody builds the
-//! ProfileSelect one: `FUN_14081f6f0` ([`PROFILE_SELECT_WRAPPER_RVA`]) writes the literal
+//! ProfileSelect one: `0x140820a20` ([`PROFILE_SELECT_WRAPPER_RVA`]) writes the literal
 //! `L"05_010_ProfileSelect"` into a stack `CSScaleformLoadInfo` and hands it to the window-job
 //! constructor at [`MENU_WINDOW_JOB_BUILD_RVA`], which copies `filename` into the job. Detouring the
 //! constructor and rewriting that one field, only while this crate's own picker is the thing
@@ -48,7 +48,7 @@ use crate::host::append_autoload_debug;
 /// `CS::MenuWindowJob`'s constructor, which every ProfileSelect opener funnels through.
 ///
 /// Two callers reach it with the ProfileSelect load info: the wrapper at
-/// [`er_title_flow::PROFILE_SELECT_WRAPPER_RVA`] the picker fires directly, and `FUN_1407fb050`, which copies a
+/// [`er_title_flow::PROFILE_SELECT_WRAPPER_RVA`] the picker fires directly, and `0x1407fc380`, which copies a
 /// caller's `CSScaleformLoadInfo` onto its own stack first. Detouring the constructor rather than
 /// either caller means the rewrite happens once, in the one place both arrive.
 // The address is `er_title_flow`'s to declare: it hooks the same constructor passively as

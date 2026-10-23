@@ -32,19 +32,23 @@ import threading
 
 import frida
 
+# Every rva below is ELDEN RING 2.7.2.0 (`eldenring-deobf-1.17.2.bin`). Each function rva is a
+# .pdata entry whose body is the named function's, instruction for instruction, with only rip and
+# rel32 displacements differing (checked 2026-10-23).
+
 #: `GetWeaponGaitemHandleBySlot(obj /*rcx*/, u32* out /*rdx*/, ChrAsmSlot /*r8d*/)`.
-GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA = 0x656920
+GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA = 0x657C20
 #: `WorldChrMan` singleton pointer, and the local-player offset inside it.
-WORLD_CHR_MAN_GLOBAL_RVA = 0x3D65F88
+WORLD_CHR_MAN_GLOBAL_RVA = 0x3D6D018
 WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1E508
 #: `GetGaitemInsByHandle(record /*rcx*/, record /*rdx*/)` -- record is in+out, handle at +0x0.
-GET_GAITEM_INS_BY_HANDLE_RVA = 0x672E40
+GET_GAITEM_INS_BY_HANDLE_RVA = 0x674140
 #: `GetSwordArtsParamForWeapon(record /*rcx*/, SwordArtsParamLookupResult* /*rdx*/)`.
-GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA = 0x673F30
+GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA = 0x675230
 #: `SwordArtsParam.iconId`, u16.
 SWORD_ARTS_PARAM_ICON_ID_OFFSET = 0x1A
 #: `GetEquipParamGem(EquipParamGemLookupResult* out, uint id)` -- {paramId@0, row@8}.
-GET_EQUIP_PARAM_GEM_RVA = 0xD2A360
+GET_EQUIP_PARAM_GEM_RVA = 0xD2D1D0
 #: `EquipParamGem.iconId` u16 @+0x4, `.swordArtsParamId` s32 @+0x18.
 EQUIP_PARAM_GEM_ICON_ID_OFFSET = 0x4
 EQUIP_PARAM_GEM_SWORD_ARTS_ID_OFFSET = 0x18

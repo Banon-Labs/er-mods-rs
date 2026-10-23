@@ -12,9 +12,10 @@ the same reason.
   (`ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize`) and other crates reach one through its
   module (`jp::GAME_MAN_GLOBAL_RVA`).
 
-  `check-1170-translation-collisions.py` searched for the literal `const NAME: usize = 0x<addr>;`
-  and, finding none, printed "row B is claimed by no feature: deleting it removes this collision at
-  zero cost." For 0xb0d400 that advice was wrong and destructive. The declaration is
+  `check-1170-translation-collisions.py` (deleted with the carry, 2026-10-23) searched for the
+  literal `const NAME: usize = 0x<addr>;` and, finding none, printed "row B is claimed by no
+  feature: deleting it removes this collision at zero cost." For 1.16.2 0xb0d400 (2.7.2.0
+  0xb0efd0, the value the selftest now pins) that advice was wrong and destructive. The declaration is
   `MenuJobWait = 0x00b0d400` inside `#[repr(u32)] pub enum MenuTraceRva`, reached through
   `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;`. The hex literal
   is in the tree; the shape `const NAME: usize = 0x..;` is not. Its three live use sites are on the
@@ -64,8 +65,8 @@ Measured on this tree, 2026-08-30: 5124 address-capable declarations, 285 uneval
 layout-derived, 66 genuinely unread, and 4 wide enough to hold a `.text` RVA. Those four are what
 stands between the three baselined collisions and a proof that nothing claims them.
 
-    python3 scripts/rva_symbols.py 0xb0d400        # who declares this address
-    python3 scripts/rva_symbols.py 0x140b0d400     # VA or RVA, both accepted
+    python3 scripts/rva_symbols.py 0xb0efd0        # who declares this address
+    python3 scripts/rva_symbols.py 0x140b0efd0     # VA or RVA, both accepted
     python3 scripts/rva_symbols.py --residue       # what the resolver could not evaluate
     python3 scripts/rva_symbols.py --residue 0x7ad710   # ...only the ones wide enough to be it
     python3 scripts/rva_symbols.py --selftest
@@ -1785,11 +1786,15 @@ def selftest():
     live = index()
     check("the real walk reads a tree", live.files_read > 200, True)
     check("the real universe is populated", live.universe_size() > 500, True)
-    real = live.claims(0xB0D400)
+    # `TITLE_MENU_JOB_WAIT_RVA` on 2.7.2.0. It was 1.16.2 0xb0d400 until the port; the shape that
+    # matters is unchanged -- an enum discriminant reached through an `as usize` alias -- and so is
+    # the point: a matcher for `const NAME: usize = 0x..;` finds none of these. Since 2026-10-23 it
+    # is also an element of `DETOUR_ALLOWLIST`, which claims every detour target by value.
+    real = live.claims(0xB0EFD0)
     check(
-        "0xb0d400 is claimed in the real tree (the case the old matcher called unclaimed)",
+        "0xb0efd0 is claimed in the real tree (the case the old matcher called unclaimed)",
         sorted({d.qualified for d in real.declarations}),
-        ["MenuTraceRva::MenuJobWait", "TITLE_MENU_JOB_WAIT_RVA"],
+        ["DETOUR_ALLOWLIST", "MenuTraceRva::MenuJobWait", "TITLE_MENU_JOB_WAIT_RVA"],
     )
     check("...and it has live use sites", sum(len(u) for u in real.uses.values()) > 0, True)
 

@@ -12,31 +12,33 @@
 //!
 //! It never fakes an invasion and never enters any session path. The engine's own consumer
 //! of this table is `CS::CSBreakInPointManager::_GetCurBreakInPointVecFromAutoIntrudePoint`
-//! (0x140a0c4f0), which threads through `CSNetMan->quickmatchManager`; that function is
+//! (0x140a0dc90), which threads through `CSNetMan->quickmatchManager`; that function is
 //! deliberately not called. Its block-local -> world-space arithmetic was read out of it
 //! statically and reimplemented here ([`InvasionWarpTarget::world_position`]), so the
 //! multiplayer code is never entered.
 //!
-//! # Reverse-engineering provenance (1.16.2; dump VA == deobf VA == runtime VA, shift 0)
+//! # Reverse-engineering provenance
 //!
-//! Every address below is byte-checked with
-//! `python3 scripts/check-dump-deobf-identity.py <va>`.
+//! The reading was done on the named 1.16.2 dump, whose VAs equal `eldenring-deobf.bin`'s
+//! (`python3 scripts/check-dump-deobf-identity.py <va>` checks a 1.16.2 VA). The 2.7.2.0 column
+//! is the same function found by its bytes on `eldenring-deobf-1.17.2.bin`; the two lowest ones
+//! did not move. Addresses elsewhere in this module are 2.7.2.0.
 //!
-//! | address | symbol | what it proves |
-//! |---|---|---|
-//! | `0x140ae9860` | `CS::InGameStayStep::STEP_InGameStayLoad` | requests both `.aipbnd` files at boot |
-//! | `0x1401f0620` | `CS::CSFileImp::LoadAutoInvadePointBnd` | registers the file cap (does not parse) |
-//! | `0x140201660` | `CS::AutoInvadePointBndFileCap::Process` | walks the BND, one `AddForBlockId` per entry |
-//! | `0x140a69550` | `CS::CSAutoInvadePoint::AddForBlockId` | the on-disk record layout (see [`crate::aip`]) |
-//! | `0x140a68ea0` | `CS::CSAutoInvadePoint::CSAutoInvadePoint` | the singleton layout (`DLMap` at +0x00, size 0x70) |
-//! | `0x140a693e0` | `CSAutoInvadePoint` lookup-by-`BlockId` | returns the `{count, points}` value, not the node |
-//! | `0x140660d20` | `BlockId::BlockId` | disk byte order + the BCD index packing |
-//! | `0x140a0c4f0` | `_GetCurBreakInPointVecFromAutoIntrudePoint` | `world = point.xyz + block_origin.xyz` |
-//! | `0x1406338d0` | `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` | the block-origin source |
+//! | 2.7.2.0 | 1.16.2 | symbol | what it proves |
+//! |---|---|---|---|
+//! | `0x140aeb030` | `0x140ae9860` | `CS::InGameStayStep::STEP_InGameStayLoad` | requests both `.aipbnd` files at boot |
+//! | `0x1401f0620` | `0x1401f0620` | `CS::CSFileImp::LoadAutoInvadePointBnd` | registers the file cap (does not parse) |
+//! | `0x140201660` | `0x140201660` | `CS::AutoInvadePointBndFileCap::Process` | walks the BND, one `AddForBlockId` per entry |
+//! | `0x140a6acf0` | `0x140a69550` | `CS::CSAutoInvadePoint::AddForBlockId` | the on-disk record layout (see [`crate::aip`]) |
+//! | `0x140a6a640` | `0x140a68ea0` | `CS::CSAutoInvadePoint::CSAutoInvadePoint` | the singleton layout (`DLMap` at +0x00, size 0x70) |
+//! | `0x140a6ab80` | `0x140a693e0` | `CSAutoInvadePoint` lookup-by-`BlockId` | returns the `{count, points}` value, not the node |
+//! | `0x140662020` | `0x140660d20` | `BlockId::BlockId` | disk byte order + the BCD index packing |
+//! | `0x140a0dc90` | `0x140a0c4f0` | `_GetCurBreakInPointVecFromAutoIntrudePoint` | `world = point.xyz + block_origin.xyz` |
+//! | `0x140634bd0` | `0x1406338d0` | `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` | the block-origin source |
 
 use std::fmt;
 
-/// The `area` range for which `BlockId::BlockId` (0x140660d20) BCD-packs the index byte
+/// The `area` range for which `BlockId::BlockId` (0x140662020) BCD-packs the index byte
 /// instead of storing it raw: `area - 0x32 < 0x27`, i.e. 50..=88. Both overworld areas that
 /// carry auto-invade points (60 = Lands Between, 61 = Shadow of the Erdtree) are inside it.
 /// `eldenring::cs::BlockId::is_overworld` uses the same range for the same reason.
@@ -96,7 +98,7 @@ impl BlockKey {
     /// `m{..}_{..}_{..}_{DD}` -- the decimal index.
     ///
     /// For an area inside [`BCD_INDEX_AREA_RANGE`] the engine stores this byte BCD-packed
-    /// (`BlockId::BlockId` @ 0x140660d20 computes
+    /// (`BlockId::BlockId` @ 0x140662020 computes
     /// `(i + (i/10)*6) & 0xf | ((i/10) % 10) << 4`), so the raw byte is decoded here.
     /// Outside that range the byte is the index verbatim.
     ///
@@ -121,7 +123,7 @@ impl BlockKey {
         self.area() >= *BCD_INDEX_AREA_RANGE.start() && self.area() <= *BCD_INDEX_AREA_RANGE.end()
     }
 
-    /// Build a key the way `BlockId::BlockId` (0x140660d20) does, BCD packing included.
+    /// Build a key the way `BlockId::BlockId` (0x140662020) does, BCD packing included.
     #[must_use]
     pub const fn from_parts(area: u8, block: u8, region: u8, index: u8) -> Self {
         let bcd = area >= *BCD_INDEX_AREA_RANGE.start() && area <= *BCD_INDEX_AREA_RANGE.end();
@@ -139,7 +141,7 @@ impl BlockKey {
 
     /// Decode the four `BlockId` bytes as they sit in an on-disk `.aip` header (offset 0x08).
     ///
-    /// Proven by `CSAutoInvadePoint::AddForBlockId` (0x140a69550), which passes the four disk
+    /// Proven by `CSAutoInvadePoint::AddForBlockId` (0x140a6acf0), which passes the four disk
     /// bytes to `BlockId::BlockId` as `(area, block, region, index)` -- i.e. the disk order is
     /// the reverse of the in-memory byte order. Reading the disk bytes as a little-endian u32
     /// and using it as a map key misses every entry.
@@ -233,9 +235,9 @@ impl InvasionWarpTarget {
 
     /// Block-local position + the owning block's origin = physics-space position.
     ///
-    /// Proven from `_GetCurBreakInPointVecFromAutoIntrudePoint` (0x140a0c4f0), which for each
+    /// Proven from `_GetCurBreakInPointVecFromAutoIntrudePoint` (0x140a0dc90), which for each
     /// point computes `world.{x,y,z} = point.{x,y,z} + blockOrigin.{x,y,z}` after fetching the
-    /// origin from `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` (0x1406338d0). The point's
+    /// origin from `WorldGridAreaInfo::GetWorldAreaInfoCoordinates` (0x140634bd0). The point's
     /// fourth float takes no part in that sum -- it is carried alongside as the facing.
     #[must_use]
     pub fn world_position(&self, block_origin: [f32; 3]) -> [f32; 3] {

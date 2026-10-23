@@ -6,9 +6,9 @@ The question
 Static RE of the invasion path finishes at roughly 92%. The readable part says the destination is
 chosen entirely on the INVADER'S own MACHINE:
 
-    GetNpcWorldInvasionInfo  0x1405ee3d0   walks the MSB `PseudoMultiplayer` regions and returns the
+    GetNpcWorldInvasionInfo  0x1405ef6d0   walks the MSB `PseudoMultiplayer` regions and returns the
                                            first one geometrically containing the invader
-    ReqInvadeNPCWorld        0x1409fafe0   receives that record; `+0x28` names the destination map,
+    ReqInvadeNPCWorld        0x1409fc780   receives that record; `+0x28` names the destination map,
                                            `+0x14` names the MSB entry point to spawn on
 
 The unreadable part is Seamless. `ersc.dll` has its own invade site and its own spawn-position
@@ -23,15 +23,15 @@ all -- and everything downstream depends on the answer:
 
 What this watches, and why
 --------------------------
-The destination the engine places an invader at lives in `CSGameMan+0xac8`, and in 1.16.2 exactly
-two functions write it. That bounds the whole answer space, so the run watches the writers rather
-than the value:
+The destination the engine places an invader at lives in `CSGameMan+0xac8`, and on 2.7.2.0 exactly
+two functions write it (the only rel32 callers of its setter). That bounds the whole answer space,
+so the run watches the writers rather than the value:
 
-  SetTargetMapId  0x14067acf0  <- ReqInvadeNPCWorld     this machine's own MSB-region lookup
+  SetTargetMapId  0x14067bff0  <- ReqInvadeNPCWorld     this machine's own MSB-region lookup
                                <- SetMultiplayJoinData  it arrived in multiplayer join data
 
 A return address at each write says which one decided it, and the same is done for
-`SetNPCInvadeTargetEntryPoint` 0x14067ad00 (`+0xaf0`). `ReqInvadeNPCWorld` itself is hooked too,
+`SetNPCInvadeTargetEntryPoint` 0x14067c000 (`+0xaf0`). `ReqInvadeNPCWorld` itself is hooked too,
 with its whole 48-byte `NpcWorldInvasionInfo` dumped, and its caller named -- because one of its
 three callers is `DequeueCeremonyPacket`, i.e. a received packet, which is a different story from
 the local path even when the same function runs.
@@ -99,7 +99,7 @@ UNKNOWN_WRITER = "unknown-writer"
 NO_INVASION = "no-invasion-observed"
 
 #: `SetTargetMapId` is the field the engine places from, so its last writer before placement is the
-#: one that actually decided the destination. Its two callers in 1.16.2 bound the answer space.
+#: one that actually decided the destination. Its two callers on 2.7.2.0 bound the answer space.
 _WRITER_VERDICT = {
     "ReqInvadeNPCWorld": LOCAL_MSB,
     "SetMultiplayJoinData": JOIN_DATA,
@@ -109,7 +109,7 @@ def _armed_writes(records: list[dict]) -> list[dict]:
     """The `SetTargetMapId` writes that name a destination the engine can actually place from.
 
     Retracted premise, 2026-08-06. This filter first required a non-zero entry point, on the
-    reasoning that 0 means "unset". Decompiling `SetMultiplayJoinData` (0x1406fb520) killed that:
+    reasoning that 0 means "unset". Decompiling `SetMultiplayJoinData` (0x1406fc820) killed that:
     on the join path the entry point is zeroed unconditionally --
 
         SetTargetMapId(local_68);
@@ -426,23 +426,25 @@ AGENT = r"""
 // against the bytes actually present before anything is attached, and a mismatch REFUSES rather
 // than hooking whatever now lives there.
 //
-// eldenring.exe 1.16.2: the Ghidra dump VA, eldenring-deobf.bin's VA and the live VA are all the
-// same number (shift zero, image base 0x140000000), so these are written as VAs and turned into
-// offsets against the module's real base at runtime.
+// eldenring.exe 2.7.2.0: every VA below is the one in eldenring-deobf-1.17.2.bin (flat image, base
+// 0x140000000, file offset == rva), measured 2026-10-23, and is turned into an offset against the
+// module's real base at runtime. Names and struct layouts come from the named 1.16.2 Ghidra dump;
+// each function was paired to 2.7.2.0 by a whole-body match with rip and rel32 displacements
+// masked, unique in the image and starting a .pdata record.
 // ---------------------------------------------------------------------------------------------
 const ER_IMAGE_BASE = ptr('0x140000000');
 
 const ER = {
   // CS::PartyMemberInfo::ReqInvadeNPCWorld -- the vanilla invasion request.
   //   bool ReqInvadeNPCWorld(PartyMemberInfo *pmi, NpcWorldInvasionInfo *info, uint *outMapNumber)
-  // so the record we want is ARG 1 (rdx). Read out of the 1.16.2 dump's own signature, not assumed.
-  // Prologue read independently out of eldenring-deobf.bin at file offset 0x9fafe0:
+  // so the record we want is ARG 1 (rdx). Read out of the named dump's own signature, not assumed.
+  // Prologue read out of eldenring-deobf-1.17.2.bin at file offset 0x9fc780, the begin of a .pdata
+  // record (0x9fc780..0x9fce26, the same 0x6a6 bytes as the named function):
   //   push rbp; push rsi; push rdi; push r12; push r13; push r14; push r15; sub rsp,0x50
-  // and the bytes immediately before it are the previous function's `jmp`, so this is a boundary.
-  reqInvade: { va: '0x1409fafe0', prologue: '4055565741544155415641574883ec50', infoArg: 1 },
+  reqInvade: { va: '0x1409fc780', prologue: '4055565741544155415641574883ec50', infoArg: 1 },
 };
 
-// NpcWorldInvasionInfo -- 48 bytes, every field name and offset from the 1.16.2 dump's own typed
+// NpcWorldInvasionInfo -- 48 bytes, every field name and offset from the named dump's own typed
 // structure (getStructure), not inferred from access patterns.
 const INFO_FIELDS = [
   ['onlineEnabled',           0x00, 'u8'],
@@ -462,9 +464,11 @@ const INFO_FIELDS = [
 
 // CSGameMan singleton pointer, and the two fields the engine PLACES from. Byte-verified in this
 // repo against their own named getters (crates/er-invasion-warp-core/src/seamless_invade_probe.rs):
-//   +0xac8 destination BlockId          GetTargetMapId                0x140679630
-//   +0xaf0 npcInvadeTargetEntryPoint    GetNpcInvadeTargetEntryPoint  0x140679650
-// The whole placement block, field names straight from the 1.16.2 dump's GameMan structure. THREE
+//   +0xac8 destination BlockId          GetTargetMapId                0x14067a930
+//   +0xaf0 npcInvadeTargetEntryPoint    GetNpcInvadeTargetEntryPoint  0x14067a950
+// Both 2.7.2.0 getters load the global below and read those offsets, and the image has as many
+// global-relative accesses at +0xaa0/+0xac8/+0xacc/+0xaf0/+0xafc as the named build (2/4/2/3/4).
+// The whole placement block, field names straight from the named dump's GameMan structure. THREE
 // different mechanisms write into it, at three different offsets, which is why the poll reads all
 // of them rather than just the map:
 //   +0xaa0 lastLoadPosition             <- ersc.dll's own detour writes HERE, last, bypassing the
@@ -473,7 +477,7 @@ const INFO_FIELDS = [
 //   +0xacc multiplayJoinTargetBlockPos  <- SetMultiplayJoinData only (the server-pushed coordinate)
 //   +0xaf0 npcInvadeTargetEntryPoint    <- ReqInvadeNPCWorld only; join path zeroes it
 // Polling +0xaa0 is how ersc's effect is observed WITHOUT hooking a Themida-protected page.
-const GAME_MAN_PTR_VA = '0x143d709a8'; // 1.16.2 0x143d69918, 1.17.1 0x143d6d988
+const GAME_MAN_PTR_VA = '0x143d709a8';
 const LAST_LOAD_POSITION_OFFSET = 0xaa0;
 const TARGET_MAP_ID_OFFSET = 0xac8;
 const JOIN_TARGET_POS_OFFSET = 0xacc;
@@ -485,7 +489,8 @@ const BLOCK_NONE = 0xffffffff;
 // THE TWO WRITERS OF THE DESTINATION, hooked instead of anything inside ersc.dll.
 //
 // SetTargetMapId (+0xac8) and SetNPCInvadeTargetEntryPoint (+0xaf0) each have exactly TWO callers
-// in 1.16.2 -- ReqInvadeNPCWorld and SetMultiplayJoinData@0x1406fb520 -- so watching them bounds
+// on 2.7.2.0 -- ReqInvadeNPCWorld@0x1409fc780 and SetMultiplayJoinData@0x1406fc820, the only rel32
+// call sites of either setter in the image -- so watching them bounds
 // the entire answer space: a destination either came from this machine's own MSB lookup, or it
 // arrived in multiplayer JOIN DATA. The return address says which, every time.
 //
@@ -496,16 +501,16 @@ const BLOCK_NONE = 0xffffffff;
 // over `.text`. A frida Interceptor is exactly the inline patch such a check exists to catch, so
 // "safe" is unproven, not merely unlikely to bite. There is also an unresolved hook-ordering
 // collision: ersc installs its 0x8f4b0 routine as the detour over the game's spawn-position
-// selector FUN_140afcf60, which this repo's own coordinate-free warp already depends on.
+// selector FUN_140afe740, which this repo's own coordinate-free warp already depends on.
 // Watching ersc's EFFECT from the game side costs nothing and touches no protected page.
 //
 // Each is a 16-byte leaf: mov rax,[rip+..] ; mov edx,[rcx] ; mov [rax+off],edx ; ret -- which is
 // also where the +0xac8/+0xaf0 offsets are confirmed for the third independent time.
 const WRITERS = [
-  { name: 'SetTargetMapId',               va: '0x14067acf0',
-    prologue: '488b0521ec6e038b118990c80a0000c3' },
-  { name: 'SetNPCInvadeTargetEntryPoint', va: '0x14067ad00',
-    prologue: '488b0511ec6e038b118990f00a0000c3' },
+  { name: 'SetTargetMapId',               va: '0x14067bff0',
+    prologue: '488b05b1496f038b118990c80a0000c3' },
+  { name: 'SetNPCInvadeTargetEntryPoint', va: '0x14067c000',
+    prologue: '488b05a1496f038b118990f00a0000c3' },
 ];
 
 // THE WHOLE CANDIDATE RECORD. `SetMultiplayJoinData(SosSignMan*, ServerPushJoinData*)` receives
@@ -514,7 +519,7 @@ const WRITERS = [
 // what a filter CAN match on is the question, and a field we did not think to decode is exactly
 // the kind of thing that answers it.
 //
-// Layout from the 1.16.2 dump's own ServerPushJoinData structure:
+// Layout from the named dump's own ServerPushJoinData structure:
 //   +0x00 u32          "matchPlayerCount" -- MISNAMED in the dump: this is the value handed to
 //                       SetTargetMapId, i.e. the destination BlockId. Decoded as both.
 //   +0x04 FloatVector3 spawnPosition          +0x10 float spawnAngle
@@ -523,15 +528,15 @@ const WRITERS = [
 //   +0x1e bool         shouldUseRapidReentry  +0x20 FnVector<byte> lobbyData (begin/end/cap)
 //   +0x38 byte         settings               +0x39 byte stage
 //   +0x3a wchar_t[32]  password
-const JOIN_DATA_FN = { name: 'SetMultiplayJoinData', va: '0x1406fc820', // 1.16.2 0x1406fb520, 1.17.1 0x1406fc370
+const JOIN_DATA_FN = { name: 'SetMultiplayJoinData', va: '0x1406fc820',
                        prologue: '40534881ec8000000048c7442428feff' };
 const JOIN_DATA_LEN = 0x80;
 
 // THE COORDINATE. `SetMultiplayJoinData` places by raw position, not by MSB entry point, so on the
 // server-pushed path this -- not the entry point -- is what says a destination is real:
 //   void SetMultiplayJoinTargetBlockPos(FloatVector3*) -> GameMan->multiplayJoinTargetBlockPos
-const SPAWN_POS = { name: 'SetMultiplayJoinTargetBlockPos', va: '0x14067ad10',
-                    prologue: '488b1501ec6e03f20f1001f20f1182cc' };
+const SPAWN_POS = { name: 'SetMultiplayJoinTargetBlockPos', va: '0x14067c010',
+                    prologue: '488b1591496f03f20f1001f20f1182cc' };
 
 let seq = 0;
 function emit(o) { o.seq = ++seq; send(o); }
@@ -575,8 +580,14 @@ function ceremonyBlockName(v) {
        + '_' + d2(Math.floor(v / 100) % 100) + '_' + d2(v % 100);
 }
 
-// The three functions that call ReqInvadeNPCWorld in 1.16.2, with their body extents from the
-// dump. A return address inside one of them names WHO asked for the invasion, which is the single
+// The three functions that call ReqInvadeNPCWorld on 2.7.2.0 (its only rel32 call sites, at
+// 0x1405f2c80, 0x1405965bd and 0x1409fecd2), with inclusive body extents read from
+// eldenring-deobf-1.17.2.bin's .pdata: DequeueCeremonyPacket is three chained records
+// (0x1409feba0, 0x1409febff, 0x1409fec82) and its call sits in the last one. UpdateMultiplayData
+// is the same 1364 instructions as the named function with four struct offsets changed, so it has
+// no whole-body match and was paired by that instruction-for-instruction diff and by its call at
+// 0x14065c0d2 to ReqInvadeNpcWorld 0x1405f2c40. A return address inside one of them names who
+// asked for the invasion, which is the single
 // most informative field in the record: DequeueCeremonyPacket means a received packet drove it.
 // Anything outside all three is reported as unknown rather than guessed -- an unrecognised caller
 // (ersc.dll, say) is itself the answer, and must not be silently rounded to the nearest known one.
@@ -584,14 +595,14 @@ function ceremonyBlockName(v) {
 // silently-truncated address comes from.
 const CALLERS = [
   // -- callers of ReqInvadeNPCWorld --
-  ['ReqInvadeNpcWorld',     '0x1405f1940', '0x1405f1a42'],
-  ['WarpNextStage_Bonfire', '0x140595170', '0x1405953a9'],
-  ['DequeueCeremonyPacket', '0x1409fd400', '0x1409fd54b'],
+  ['ReqInvadeNpcWorld',     '0x1405f2c40', '0x1405f2d42'],
+  ['WarpNextStage_Bonfire', '0x140596470', '0x1405966a9'],
+  ['DequeueCeremonyPacket', '0x1409feba0', '0x1409feceb'],
   // -- the other writer of the destination, and the request that reaches it --
-  ['ReqInvadeNPCWorld',     '0x1409fafe0', '0x1409fb685'],
-  ['SetMultiplayJoinData',  '0x1406fb520', '0x1406fb605'],
-  // Seamless replaces the call to ReqInvadeNpcWorld inside this one, at 0x14065add2.
-  ['UpdateMultiplayData',   '0x14065a930', '0x14065c016'],
+  ['ReqInvadeNPCWorld',     '0x1409fc780', '0x1409fce25'],
+  ['SetMultiplayJoinData',  '0x1406fc820', '0x1406fc905'],
+  // Seamless replaces the call to ReqInvadeNpcWorld inside this one, at 0x14065c0d2.
+  ['UpdateMultiplayData',   '0x14065bc30', '0x14065d316'],
 ];
 // Takes the RAW return address. Each module is normalised against ITS OWN base: subtracting
 // eldenring.exe's slide from an address that is actually inside ersc.dll would compare two
@@ -701,8 +712,8 @@ rpc.exports = {
       rec.host_entry_point = rec.fields.hostEntryPointEntityId;
       rec.ceremony_param_id = rec.fields.ceremonyParamId;
       rec.ceremony_block = ceremonyBlockName(rec.fields.ceremonyParamId);
-      // WHO ASKED. ReqInvadeNPCWorld has three callers in 1.16.2 -- ReqInvadeNpcWorld@1405f1940,
-      // WarpNextStage_Bonfire@140595170, and DequeueCeremonyPacket@1409fd400. The last one is fed
+      // Who asked. ReqInvadeNPCWorld has three callers on 2.7.2.0 -- ReqInvadeNpcWorld@1405f2c40,
+      // WarpNextStage_Bonfire@140596470, and DequeueCeremonyPacket@1409feba0. The last one is fed
       // by a received PACKET, so the caller is what separates "this machine chose the destination"
       // from "the destination arrived over the wire". That distinction is the run's whole point,
       // and it is invisible without the return address.
@@ -794,16 +805,6 @@ def main() -> int:
 
     if args.selftest:
         return _selftest()
-
-    # Carried to 2.7.2.0 by `scripts/frida-carry-1172.py` on 2026-10-21. The agent's addresses are
-    # 1.16.2 values, and only `GAME_MAN_PTR_VA` and `SetMultiplayJoinData` have recorded 1.16.2 ->
-    # 1.17 rows (`docs/recon/rva-map-1162-to-1170*.tsv`), so only those two moved. The rest have
-    # none, and the live path stops here rather than hook a guess.
-    raise SystemExit(
-        "frida-carry-1172: not verified on 2.7.2.0: 0x1409fafe0 (ReqInvadeNPCWorld), "
-        "0x14067acf0 (SetTargetMapId), 0x14067ad00 (SetNPCInvadeTargetEntryPoint), "
-        "0x14067ad10 (SetMultiplayJoinTargetBlockPos), and every CALLERS body range"
-    )
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if os.path.abspath(args.out).startswith(repo):

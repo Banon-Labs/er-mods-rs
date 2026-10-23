@@ -12,10 +12,12 @@
 //!   the default save has always done, and it works.
 //!
 //! * [`TitleAutoloadRoute::TitleTimeFullRead`] is ours: submit / drain / **deserialise at the
-//!   title**, which calls `0x14067b290`. That function has exactly one caller in the whole image,
+//!   title**, which calls `0x14067c590` (1.16.2 `0x14067b290`). That function has exactly one
+//!   caller in the whole image,
 //!   `CS::MoveMapStep::DoSaveStuff`, reachable only from `MoveMapStep::Update` -- the in-world
 //!   step. Calling it from the boot title is calling it outside every precondition its only caller
-//!   sets up, and a picked save died there (`gaitemInsTable[-1]` AV at `0x67141a`). Four separate
+//!   sets up, and a picked save died there (`gaitemInsTable[-1]` AV at 1.16.2 `0x67141a`). Four
+//!   separate
 //!   attempts to gate those preconditions each moved the fault one step later and never removed it,
 //!   which is what a wrong-place call looks like from the inside.
 //!

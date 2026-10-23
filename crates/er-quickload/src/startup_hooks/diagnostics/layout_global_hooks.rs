@@ -14,11 +14,11 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_scaleform_handler_lifecycle_guard();
     // Return-to-title crash fix (er-effects-rs-j74t): the ~MenuWindowJob finalize runs its whole
     // owningMenuWindow block on a doomed title window during return-to-title, dereferencing wild
-    // memory (crashes rva 0x7ada87 and 0x7adb28). At the destructor we reproduce the finalize's
+    // memory (crashes rva 0x7aedb7 and 0x7aee58). At the destructor we reproduce the finalize's
     // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
     // owningMenuWindow so the finalize skips the block entirely.
     install_menu_window_job_dtor_guard();
-    // The dtor guard covers only the finalize's 0x7ac720 caller; the switch crash arrives via
+    // The dtor guard covers only the finalize's 0x7ada50 caller; the switch crash arrives via
     // MenuWindowJob::Run. Hook the finalize itself so every caller is covered.
     install_menu_window_job_finalize_guard();
     // The three traces that used to be installed here are gone (2026-08-25). `install_msb_parse_trace`,
@@ -35,9 +35,9 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_quit_to_desktop_clean_kill_hook();
     // Telemetry-only successor to the removed 5ae3965 overflow guard (dropping command lists on
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
-    // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.
+    // producer's submissions grow per switch so the 0x1aee465 overflow can be fixed at its source.
     install_gx_cmd_queue_telemetry();
-    // Disabled 2026-07-15: this detour targets 0x7ad1c0, the same RVA as the default-on PAB detour
+    // Disabled 2026-07-15: this detour targets 0x7ae4f0, the same RVA as the default-on PAB detour
     // (PAB_NODE_UPDATE_RVA == MENU_WINDOW_JOB_RUN_RVA). MinHook binds only one detour per address, and on
     // native Windows the inline/early PAB install always wins, so this background-thread install fails
     // ALREADY_CREATED and its post-original work never ran (ghosting + non-interactive ProfileSelect). Its
@@ -70,7 +70,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_profile_load_job_run_hook();
     // Save-picker browse-row integrity (er-effects-rs-xlqh): re-stage the picker's browse rows at
     // the entry of the native ProfileSelect list builder, so an in-world game save that rewrote the
-    // active slot's ProfileSummary record (MarkProfileIndexAsUsed + FUN_140262270 stomping the
+    // active slot's ProfileSummary record (MarkProfileIndexAsUsed + 0x140262280, 1.16.2 FUN_140262270, stomping the
     // loaded character's name over a staged row) can never leak a stray character-name row into the
     // browse list.
     // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
@@ -193,7 +193,7 @@ unsafe fn open_save_picker_menu_for_row(action_obj: usize) -> bool {
     )
 }
 
-/// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074a700),
+/// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074ba00),
 /// matching the auto-accept builder-hook precedent exactly (MhHook::new + queue_enable +
 /// MH_ApplyQueued). Must run at process attach before the title builds during boot so the ctor's
 /// rdx (the validated host MenuWindow*) is latched. Idempotent + harmless (latch + passthrough).
@@ -257,7 +257,7 @@ pub(crate) fn install_menu_window_latch_hook() {
 pub(crate) fn apply_splash_skip() {
     let Some(address) = er_title_flow::splash_skip_je_address() else {
         append_autoload_debug(format_args!(
-            "splash-skip: STEP_BeginLogo has no verified address for this build -- not patching"
+            "splash-skip: STEP_BeginLogo is refused on this build (not 2.7.2.0) -- not patching"
         ));
         return;
     };

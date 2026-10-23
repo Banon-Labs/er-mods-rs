@@ -15,12 +15,12 @@ use er_game_base::rva::{
 use eldenring::cs::PlayerGameData;
 
 /// `GetMainPlayerStats(int out[10])`.
-const GET_MAIN_PLAYER_STATS_RVA: usize = 0x788360;
+const GET_MAIN_PLAYER_STATS_RVA: usize = 0x789690;
 /// `ApplyMainPlayerStats(const int in[10])` -- writes the fields **and** recomputes every
 /// derived value: base/current max HP, FP and stamina, attack rating, max equip load,
 /// resistance gauges and the spell-slot count. Writing the fields directly would leave all
 /// of those stale, which is the whole reason this function is used.
-const APPLY_MAIN_PLAYER_STATS_RVA: usize = 0x788cf0;
+const APPLY_MAIN_PLAYER_STATS_RVA: usize = 0x78a020;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*)` -- pass null and it derives
 /// the effect itself. Clamps to 14. The source of capacity; never hardcode a number.
@@ -41,14 +41,14 @@ const MAGIC_SLOT_ENTRIES: usize = 14;
 /// It is both the value the read-back returns for an empty slot and the id handed to
 /// `EquipMagicInSlot` to make one: the writer looks the id up in `MAGIC_PARAM_ST`, finds no row
 /// for -1, and stores `{paramId: -1, charges: -1}`. That is not an inferred use of an invalid
-/// argument -- `ChangeMagicEquipSlot` (`0x1407881c0`), the menu's own handler, computes
+/// argument -- `ChangeMagicEquipSlot` (`0x1407894f0`), the menu's own handler, computes
 /// `magicId = 0xffffffff` when the gaitem it was handed carries no item id and passes exactly
 /// that to exactly this function.
 const EMPTY_MAGIC_SLOT: i32 = -1;
 
 /// `GameDataMan + 0x08 -> PlayerGameData*`.
 ///
-/// Measured: `GetMainPlayerGameData` (`0x140e9fc30`) is a twelve-byte leaf reading exactly this
+/// Measured: `GetMainPlayerGameData` (`0x140ea3190`) is a twelve-byte leaf reading exactly this
 /// slot, and the `GameDataMan` constructor pairs 351/351 with zero moved offsets across
 /// 1.16.2/1.17. Full witness in `storage::GAME_DATA_MAN_PLAYER_OFFSET`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
@@ -160,7 +160,7 @@ pub fn archetype_of(class_name: &str) -> Option<u8> {
 /// Set the starting class.
 ///
 /// Writes `PlayerGameData::archetype` directly and deliberately does **not** call the native
-/// class setter at `0x140787250`: that one re-runs character initialisation, which overwrites
+/// class setter at `0x140788580`: that one re-runs character initialisation, which overwrites
 /// all eight attributes and the level with the class defaults and re-issues starting gear --
 /// erasing the build. Nothing caches the archetype, so the byte is the whole operation.
 ///

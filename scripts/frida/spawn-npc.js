@@ -23,12 +23,11 @@
 // is what RemoveSummonsByOwnerEventId tears down through RemoveChrIns.
 //
 // Addresses are for the installed game, FileVersion 2.7.2.0 (1.17.2). Each was measured on 1.17.1
-// (2.7.1.0) out of eldenring-deobf-1.17.1.bin, carried with scripts/map-rvas-1171-to-1172.py and
-// checked against eldenring-deobf-1.17.2.bin with scripts/verify-carry-1171-to-1172.py: every
-// function called or hooked here decodes to the same instructions in both images (branch and
-// rip-relative targets compared through the carry table), every mid-function hook point is an
-// instruction boundary at the same offset of a function whose bytes all match, and the
-// rip-relative readers of every global carry onto readers of its new address. Comments give both,
+// (2.7.1.0) out of eldenring-deobf-1.17.1.bin, carried and checked against
+// eldenring-deobf-1.17.2.bin: every function called or hooked here decodes to the same
+// instructions in both images (branch and rip-relative targets compared), every mid-function hook
+// point is an instruction boundary at the same offset of a function whose bytes all match, and
+// the rip-relative readers of every global land on readers of its new address. Comments give both,
 // "1.17.1 -> 2.7.2.0"; names are from the 1.16.2 dump on :8765.
 //   SummonBuddyManager::CreateSummonChr 0x1404baea0 -> 0x1404baf80 (1.16.2 0x1404ba980): its body
 //       loads FieldArea [0x143d6d248 -> 0x143d70268]+0x18 and calls GetWorldBlockInfoByBlockId

@@ -12,10 +12,9 @@
 //! # The producer
 //!
 //! `SYSTEX_Menu_StatusFace` is filled by a `CS::CSMenuFaceModelRend`, built by
-//! `FUN_14099b950(rendSlot, dialog, 0x13, faceSource, 1)` -- 1.16.2, carried to `0x14099caf0` by
-//! `docs/recon/rva-map-1162-to-1170.verified.tsv`. Its only caller is
+//! `FUN_14099cfa0(rendSlot, dialog, 0x13, faceSource, 1)`. Its only caller is
 //! `CS::OptionSettingTopDialog::OptionSettingTopDialog` at the guarded tail
-//! `if (param_4 != 0) { ... FUN_14099b950(&this->field_0x1890) }`, which is precisely why backing
+//! `if (param_4 != 0) { ... FUN_14099cfa0(&this->field_0x1890) }`, which is precisely why backing
 //! out of the menu and reopening it fixes the portrait today: reconstructing the dialog re-runs
 //! the builder against the current `PlayerGameData`.
 //!
@@ -23,13 +22,13 @@
 //!
 //! ```text
 //! if (*rendSlot == 0) { HeapAlloc(0xa30) -> CSMenuFaceModelRend::CSMenuFaceModelRend }
-//! FaceDataBuffer::Copy(renderer+0x630, faceSource+0x10)   // 0x140bb9860
-//! renderer+0x750 = faceSource+0x38                        // 0x140bb9880, gender
-//! renderer+0x753 = faceSource+0x39                        // 0x140bb9890, the hollow flag
-//! FUN_140bbbe90(renderer)                                 // param_5 != 0: bare head, default kit
-//! renderer+0x754 = 1                                      // 0x140bb9810
-//! renderer+0x755 = 1                                      // 0x140bb9830
-//! renderer+0x9a8 = 2                                      // 0x140bb8c00
+//! FaceDataBuffer::Copy(renderer+0x630, faceSource+0x10)   // 0x140bbb440
+//! renderer+0x750 = faceSource+0x38                        // 0x140bbb460, gender
+//! renderer+0x753 = faceSource+0x39                        // 0x140bbb470, the hollow flag
+//! FUN_140bbda70(renderer)                                 // param_5 != 0: bare head, default kit
+//! renderer+0x754 = 1                                      // 0x140bbb3f0
+//! renderer+0x755 = 1                                      // 0x140bbb410
+//! renderer+0x9a8 = 2                                      // 0x140bba7e0
 //! register MENU_DummyStatus_Face -> SYSTEX_Menu_StatusFace onto dialog+0x3b8
 //! ```
 //!
@@ -40,7 +39,7 @@
 //!
 //! # The two things this portrait shows, and the one it does not
 //!
-//! `param_5 = 1` takes `FUN_140bbbe90`, which unequips all eight weapon and bolt slots on the
+//! `param_5 = 1` takes `FUN_140bbda70`, which unequips all eight weapon and bolt slots on the
 //! renderer's own staged `ChrAsm` (`renderer+0x548`) and equips the default head and body
 //! protectors from `GetDefaultProtectorParamId(2)` and `(3)`. So the Quit panel's portrait is the
 //! character's face: appearance, gender and the hollow flag, on a neutral body. It does not show
@@ -52,7 +51,7 @@
 //!
 //! # `CSMenuFaceModelRend` is a `CSMenuAsmModelRend`
 //!
-//! Read out of the constructor at 1.16.2 `0x140bbbc00`: it calls
+//! Read out of the constructor (2.7.2.0 `0x140bbd7e0`): it calls
 //! `CSMenuAsmModelRend::CSMenuAsmModelRend` on the same `this` and then overwrites `*this` with its
 //! own vftable, adding fields from `+0x9a8` up. So every offset
 //! [`crate::portrait_refresh`] measured on the profile renderer applies here unchanged -- the step
@@ -68,7 +67,7 @@
 //! rather than assumed:
 //!
 //! * `*(usize*)dialog` equals `CS::OptionSettingTopDialog::vftable`, the class the constructor
-//!   stores at `+0x77` of its own body in both builds (1.16.2 `0x142b13ac8`, 1.17 `0x142b16b48`);
+//!   stores at `+0x77` of its own body (2.7.2.0 `0x142b18c38`);
 //! * `*(u16*)(dialog+0x180)` is the menu id `0x25`, which the same constructor passes to
 //!   `MenuWindow::MenuWindow` at its head;
 //! * `*(u8*)(dialog+0x1898)` is non-zero -- the `param_4` the constructor stored two instructions
@@ -143,28 +142,25 @@ use crate::equip_fingerprint::{
 };
 use crate::host::append_autoload_debug;
 
-/// The `CS::CSMenuFaceModelRend` builder, `FUN_14099b950(rendSlot, dialog, 0x13, faceSource, 1)`.
+/// The `CS::CSMenuFaceModelRend` builder, `FUN_14099cfa0(rendSlot, dialog, 0x13, faceSource, 1)`.
 ///
 /// The only writer of `SYSTEX_Menu_StatusFace`: `"SYSTEX_Menu_StatusFace"` is 22 ASCII bytes
 /// occurring exactly once per image, with exactly one rip-relative reference in each, and `.pdata`
-/// declares the function containing that reference to be this address.
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv` carries `0x14099b950 -> 0x14099caf0` as
-/// `IDENTICAL-WHOLE` over all 213 instructions with both entries declared and matching extents, so
-/// `game_rva_named` resolves it on 1.17 and refuses on anything else.
-pub const MENU_FACE_MODEL_REND_BUILD_RVA: usize = 0x99b950;
+/// declares the function containing that reference to be this address. `game_rva_named` resolves
+/// it on 2.7.2.0 and refuses on anything else.
+pub const MENU_FACE_MODEL_REND_BUILD_RVA: usize = 0x99cfa0;
 
-/// `FUN_1407c5c40()` -- picks which of two static descriptors the status source is built from,
+/// `FUN_1407c6f70()` -- picks which of two static descriptors the status source is built from,
 /// on whether `WorldChrMan` exists. Takes no argument and returns the descriptor.
 ///
-/// Carried as `0x1407c5c40 -> 0x1407c6ac0`, `IDENTICAL-WHOLE` over all 38 instructions. The 1.17
-/// constructor calls exactly this address at the same position in its own body.
-pub const MENU_PLAYER_CHR_STATUS_SOURCE_RVA: usize = 0x7c5c40;
+/// The dialog constructor calls exactly this address at the same position in its own body.
+pub const MENU_PLAYER_CHR_STATUS_SOURCE_RVA: usize = 0x7c6f70;
 
-/// `FUN_1407c6f40(descriptor, dest)` -- fills `dest` with a `CS::MenuPlayerChrStatus` derived from
+/// `FUN_1407c8270(descriptor, dest)` -- fills `dest` with a `CS::MenuPlayerChrStatus` derived from
 /// the live character, and returns `dest`.
 ///
 /// Its body refreshes `CSMenuMan->playerStatusCalculator` from
-/// `GameDataMan->mainPlayerGameData` and then writes, through `FUN_1407c95f0`:
+/// `GameDataMan->mainPlayerGameData` and then writes, through `FUN_1407ca920`:
 ///
 /// ```text
 /// dest+0x00 = CS::MenuPlayerChrStatus::vftable   dest+0x20 = equipMagicData
@@ -175,23 +171,20 @@ pub const MENU_PLAYER_CHR_STATUS_SOURCE_RVA: usize = 0x7c5c40;
 /// ```
 ///
 /// Re-deriving those from the live `PlayerGameData` on every call is the whole reason re-invoking
-/// the builder picks up an import. Carried as `0x1407c6f40 -> 0x1407c7dc0`, `IDENTICAL-WHOLE` over
-/// all 54 instructions.
-pub const MENU_PLAYER_CHR_STATUS_BUILD_RVA: usize = 0x7c6f40;
+/// the builder picks up an import.
+pub const MENU_PLAYER_CHR_STATUS_BUILD_RVA: usize = 0x7c8270;
 
 /// `CS::OptionSettingTopDialog::vftable`, stored at `[this+0]` by the constructor at `+0x77` of its
-/// body in both builds. Carried by `docs/recon/rva-map-1162-to-1170.data.tsv` on two agreeing code
-/// references, and independently by reading the operand out of both disassemblies.
-pub const OPTION_SETTING_TOP_DIALOG_VFTABLE_RVA: usize = 0x2b13ac8;
+/// body; the operand read out of the 2.7.2.0 disassembly.
+pub const OPTION_SETTING_TOP_DIALOG_VFTABLE_RVA: usize = 0x2b18c38;
 
 /// `CS::CSMenuFaceModelRend::vftable`, stored at `[this+0]` by its constructor at `+0x8a` of the
-/// body in both builds, after the `CSMenuAsmModelRend` base constructor has run. Carried the same
-/// two ways, and it moves by the same `.rdata` delta as the profile renderer's vftable, which sits
-/// beside it.
-pub const MENU_FACE_MODEL_REND_VTABLE_RVA: usize = 0x2b7fa90;
+/// body, after the `CSMenuAsmModelRend` base constructor has run; the operand read out of the
+/// 2.7.2.0 disassembly. It sits beside the profile renderer's vftable.
+pub const MENU_FACE_MODEL_REND_VTABLE_RVA: usize = 0x2b84c30;
 
 /// `OptionSettingTopDialog+0x1890` -- the one-qword renderer slot. The constructor nulls it
-/// through `FUN_14099a250` (`mov qword ptr [rcx], 0; mov rax, rcx; ret`) before the guard, and the
+/// through `FUN_14099b8a0` (`mov qword ptr [rcx], 0; mov rax, rcx; ret`) before the guard, and the
 /// builder is the only thing that ever fills it.
 pub const OPTION_SETTING_TOP_DIALOG_FACE_RENDERER_OFFSET: usize = 0x1890;
 
@@ -209,12 +202,12 @@ pub const OPTION_SETTING_TOP_DIALOG_MENU_ID_OFFSET: usize = 0x180;
 pub const OPTION_SETTING_TOP_DIALOG_MENU_ID: u16 = 0x25;
 
 /// `CSMenuFaceModelRend+0x630` -- the renderer's own `FaceDataBuffer`, a copy rather than a
-/// pointer. `FUN_140bb9860` is `add rcx, 0x630; jmp FaceDataBuffer::Copy`.
+/// pointer. `FUN_140bbb440` is `add rcx, 0x630; jmp FaceDataBuffer::Copy`.
 pub const MENU_FACE_RENDERER_FACE_DATA_OFFSET: usize = 0x630;
 
 /// How much of that copy is filled unconditionally, and so how much may be compared.
 ///
-/// `FaceDataBuffer::Copy` (1.16.2 `0x1401bce70`) writes `[0x00, 0x2c)` field by field, `[0x2c,
+/// `FaceDataBuffer::Copy` (`0x1401bce70`) writes `[0x00, 0x2c)` field by field, `[0x2c,
 /// 0xac)` through the 8-times-`movups` block at `0x140251530`, `[0xac, 0x10f)` field by field
 /// again, and then everything from `+0x10f` in a counted byte loop. Only the first three are
 /// guaranteed to have been written from this source, so the fingerprint stops where the loop
@@ -222,9 +215,9 @@ pub const MENU_FACE_RENDERER_FACE_DATA_OFFSET: usize = 0x630;
 /// alone, and that would be an oracle failing on its own arithmetic.
 pub const MENU_FACE_RENDERER_FACE_DATA_COMPARED: usize = 0x10f;
 
-/// `CSMenuFaceModelRend+0x750` -- gender, from `faceSource+0x38` (`FUN_140bb9880`).
+/// `CSMenuFaceModelRend+0x750` -- gender, from `faceSource+0x38` (`FUN_140bbb460`).
 pub const MENU_FACE_RENDERER_GENDER_OFFSET: usize = 0x750;
-/// `CSMenuFaceModelRend+0x753` -- the hollow flag, from `faceSource+0x39` (`FUN_140bb9890`).
+/// `CSMenuFaceModelRend+0x753` -- the hollow flag, from `faceSource+0x39` (`FUN_140bbb470`).
 pub const MENU_FACE_RENDERER_HOLLOW_OFFSET: usize = 0x753;
 
 /// `CS::PlayerGameData::face_data`, pinned in `er_game_base::pgd` as a literal verified against
@@ -240,7 +233,7 @@ pub const PLAYER_GAME_DATA_FACE_DATA_OFFSET: usize = 0x760;
 pub const MENU_FACE_RENDERER_OFFSCR_PARAM_INDEX: u32 = 0x13;
 
 /// Bytes of `CS::MenuPlayerChrStatus`, from the constructor's own frame: the builder's fourth
-/// argument is `rbp+0x1c0` and the next local begins at `rbp+0x240`. `FUN_1407c95f0`'s last write
+/// argument is `rbp+0x1c0` and the next local begins at `rbp+0x240`. `FUN_1407ca920`'s last write
 /// is `param_1[0xf]`, at `+0x78`, which agrees.
 pub const MENU_PLAYER_CHR_STATUS_SIZE: usize = 0x80;
 /// Where that object keeps a `std::function`: the impl pointer at `+0x78` and its small-buffer
@@ -249,8 +242,8 @@ pub const MENU_PLAYER_CHR_STATUS_SIZE: usize = 0x80;
 pub const MENU_PLAYER_CHR_STATUS_CALLBACK_OFFSET: usize = 0x78;
 /// `MENU_PLAYER_CHR_STATUS + 0x10` -- where the builder finds the face it copies.
 ///
-/// It holds a pointer, and the dereference is the whole point. `FUN_14099b950` does not read the
-/// status object's own bytes for the face: it calls `FUN_1407c8350(param_4)`, whose entire body is
+/// It holds a pointer, and the dereference is the whole point. `FUN_14099cfa0` does not read the
+/// status object's own bytes for the face: it calls `FUN_1407c9680(param_4)`, whose entire body is
 /// `return *(param_4 + 0x10)`, and hands that result to `FaceDataBuffer::Copy`. This module's doc
 /// comment used to render that step as `faceSource+0x10`, dropping the dereference, and the live
 /// oracle was written to the comment rather than to the disassembly -- see
@@ -299,7 +292,7 @@ pub const QUIT_FACE_REFRESH_OWED_TICKS: usize = 120;
 pub enum QuitFaceRefusal {
     /// No refusal recorded.
     None,
-    /// An address in the chain has no verified mapping for the running build.
+    /// An address in the chain was refused for the running build (it is not 2.7.2.0).
     Unmapped,
     /// The pointer is not a `CS::OptionSettingTopDialog`.
     NotTheDialog,
@@ -335,7 +328,7 @@ impl QuitFaceRefusal {
     pub const fn tag(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::Unmapped => "an address in the chain has no mapping for this build",
+            Self::Unmapped => "an address in the chain is refused on this build (not 2.7.2.0)",
             Self::NotTheDialog => "the window is not a CS::OptionSettingTopDialog",
             Self::DialogHasNoFace => "the dialog was constructed with no portrait",
             Self::EmptyRendererSlot => "the renderer slot is empty, so a call would allocate one",
@@ -448,7 +441,7 @@ pub unsafe fn refresh_quit_panel_portrait(dialog: usize) -> QuitFaceRefresh {
     ) else {
         return refuse(dialog, QuitFaceRefusal::Unmapped);
     };
-    // `FUN_1407c6f40` and the `FUN_1407c95f0` inside it both take the non-returning
+    // `FUN_1407c8270` and the `FUN_1407ca920` inside it both take the non-returning
     // `DLPanic("...FD4Singleton.h", 0xb4, ...)` path when this singleton is null. A live menu
     // window implies it is not, and a guard is cheaper than trusting that implication.
     if er_game_base::mem::read_global_ptr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")
@@ -479,7 +472,7 @@ pub unsafe fn refresh_quit_panel_portrait(dialog: usize) -> QuitFaceRefresh {
         .store(PortraitRenderVerdict::Unproven.code(), Ordering::SeqCst);
 
     // The status object the builder reads its four inputs from. Zeroed rather than left as stack
-    // garbage: `FUN_1407c95f0` writes every field it uses, but a zero in a field it does not is a
+    // garbage: `FUN_1407ca920` writes every field it uses, but a zero in a field it does not is a
     // readable value instead of whatever the last call left on this stack.
     let mut status = [0u8; MENU_PLAYER_CHR_STATUS_SIZE];
     // Safety: both addresses resolved for the running build immediately above, `CSMenuMan` proved
@@ -600,9 +593,9 @@ unsafe fn quit_face_renderer(base: usize, dialog: usize) -> Result<usize, QuitFa
 
 /// Release the `std::function` the status object may be carrying, the way the constructor does.
 ///
-/// Provably inert on this path and written anyway. `FUN_1407c95f0` assigns `param_1[0xf] = 0` in
+/// Provably inert on this path and written anyway. `FUN_1407ca920` assigns `param_1[0xf] = 0` in
 /// both its branches and only fills it when its third argument carries a callable, which
-/// `FUN_1407c6f40` passes as null -- so the guard below does not fire. It is here because the
+/// `FUN_1407c8270` passes as null -- so the guard below does not fire. It is here because the
 /// object is the game's and the game's own caller does this, and because a future build that does
 /// fill the field would otherwise leak it silently.
 ///

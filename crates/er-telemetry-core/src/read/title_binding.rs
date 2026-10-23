@@ -19,15 +19,16 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_game_image};
 
-// --- RVAs / offsets off the game image base (0x140000000). Sources cited inline. ---
+// --- 2.7.2.0 RVAs / offsets off the game image base (0x140000000). Sources cited inline;
+// each vtable was checked by its RTTI CompleteObjectLocator in `eldenring-deobf-1.17.2.bin`. ---
 /// TitleStep owner vtable RVA -- `[owner+0x00] == base+this`. Source:
 /// constants/anti_debug.rs `TitleSessionRva::TitleOwnerVtable` (== the value the
 /// decoupled er-input-harness/src/title_scan.rs:31 also pins).
-const TITLE_OWNER_VTABLE_RVA: usize = 0x2b63bb0;
+const TITLE_OWNER_VTABLE_RVA: usize = 0x2b68d40;
 /// Per-instance state-dispatch table RVA -- `[owner+0x10] == base+this`; the
 /// discriminator that rejects stray `.data` matches on the vtable value alone.
 /// Source: er-input-harness/src/title_scan.rs:34.
-const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
+const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d78610;
 /// Live title state (`owner+0x48`, i32): 10 = MenuJobWait (PAB + menu), 11 =
 /// Finish, 6 = in-world. Source: er-input-harness/src/title_scan.rs:36.
 const TITLE_OWNER_STATE_48_OFFSET: usize = 0x48;
@@ -46,14 +47,14 @@ const TITLE_TOP_DIALOG_VTABLE_RVA: usize = er_game_base::rva::TITLE_TOP_DIALOG_V
 const DIALOG_PRESS_START_PROXY_B78_OFFSET: usize = 0xb78;
 /// CS::SceneObjProxy vtable RVA -- `[proxy+0x00] == base+this` when bound. Source:
 /// constants/stats_panel_background.rs `SCENE_OBJ_PROXY_VTABLE_RVA`.
-const SCENE_OBJ_PROXY_VTABLE_RVA: usize = 0x2a94a70;
+const SCENE_OBJ_PROXY_VTABLE_RVA: usize = 0x2a99be0;
 /// SceneObjProxy component slot (`proxy+0x08`) -- proxy header window field.
 const SCENE_OBJ_PROXY_COMPONENT_08_OFFSET: usize = 0x08;
 /// SceneObjProxy context back-ref (`proxy+0x20`). Source:
 /// constants/stats_panel_background.rs `SCENE_OBJ_PROXY_CONTEXT_20_OFFSET`.
 const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
 /// SceneObjProxy embedded CSScaleformValue handle (`proxy+0x28`) -- Bound iff this
-/// is non-null (the named-child binder 0x74a2f0 fills it). Source:
+/// is non-null (the named-child binder 0x74b5f0 fills it). Source:
 /// constants/stats_panel_text.rs `SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET`.
 const SCENE_OBJ_PROXY_EMBEDDED_VALUE_28_OFFSET: usize = 0x28;
 /// CS::TitleFlowContext slot (`dialog+0xa38`). Source: constants/own_load_pump.rs
@@ -61,7 +62,7 @@ const SCENE_OBJ_PROXY_EMBEDDED_VALUE_28_OFFSET: usize = 0x28;
 const DIALOG_TFC_A38_OFFSET: usize = 0xa38;
 /// CS::TitleFlowContext vtable RVA. Source:
 /// experiments/title/profile_select_flow.rs:140 `TITLE_FLOW_CONTEXT_VTABLE_RVA`.
-const TITLE_FLOW_CONTEXT_VTABLE_RVA: usize = 0x2ac7f20;
+const TITLE_FLOW_CONTEXT_VTABLE_RVA: usize = 0x2acd090;
 /// TFC dispatch-state (`tfc+0x14c`, i32: 0=idle 1=load 3/5=busy). Source:
 /// constants/own_load_pump.rs `TFC_DISPATCH_STATE_14C_OFFSET`.
 const TFC_DISPATCH_STATE_14C_OFFSET: usize = 0x14c;

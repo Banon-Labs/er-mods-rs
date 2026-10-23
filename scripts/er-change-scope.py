@@ -44,9 +44,11 @@ Every uncertainty selects more work, never less, and names the reason:
 
 The one thing that can subtract work is an explicit list of paths that cannot reach cargo,
 and it is asserted rather than asserted-by-assumption: `--selftest` reads every build script in
-the tree, extracts the repo-relative paths they actually open, and fails if any of them falls
-inside the non-build set. `crates/er-game-base/build.rs` reading `docs/recon/*.tsv` is exactly
-why `docs/` carries an exception rather than being waved through wholesale.
+the tree and every `include_str!`/`include_bytes!` in crate sources, extracts the repo-relative
+paths they actually open, and fails if any of them falls inside the non-build set without being
+named in `BUILD_INPUT_EXCEPTIONS`. Test modules that compile a script or a doc into the test
+binary are why `scripts/` and `docs/` carry exact-file exceptions rather than being waved through
+wholesale.
 
 Usage:
     python3 scripts/er-change-scope.py                 # human-readable
@@ -96,11 +98,24 @@ NON_BUILD_PREFIXES = (
     "save-files/",
     "vendor-archive/",
 )
-# ...and the holes in them. `crates/er-game-base/build.rs` opens four TSVs under `docs/recon/`
-# (VERIFIED_MAP, quarantine, FUNCTION_MAP, DATA_MAP) and generates `address_map_1170.rs` from
-# them, so `docs/` as a blanket exemption would let an address-map edit skip every compile.
-BUILD_INPUT_EXCEPTIONS = ("docs/recon/",)
-# A markdown file anywhere is prose. No build script reads one; `--selftest` re-proves it.
+# ...and the holes in them: files under a non-build prefix that a crate compiles in. Every one is
+# read by a `#[cfg(test)]` module through `include_str!`, so an edit to it changes what
+# `cargo test` builds and can turn that test red; without the entry a diff touching only this file
+# would skip the test that reads it. Exact paths, not prefixes, and `--selftest` holds the list
+# equal to what the crate sources actually include, in both directions. (Until the 2.7.2.0 port
+# this was the single prefix `docs/recon/`, because `crates/er-game-base/build.rs` generated its
+# address map from the TSVs there. It reads nothing under `docs/` any more.)
+BUILD_INPUT_EXCEPTIONS = (
+    "docs/er-invasion-warp.dll-pool-test.toml",
+    "docs/er-invasion-warp.invader-example.toml",
+    "docs/invasion-warp-second-player-setup.md",
+    "scripts/build-cel-shaders.py",
+    "scripts/er-moveset-table-gen.py",
+    "scripts/test-er-duel-rules-bans.json",
+    "scripts/test-er-duel-rules-written.json",
+)
+# A markdown file anywhere is prose. No build script reads one, the one a test compiles in is an
+# exception above, and `--selftest` re-proves both.
 NON_BUILD_SUFFIXES = (".md",)
 
 # `.github/` is deliberately absent from the non-build set even though cargo never reads it:
@@ -163,7 +178,7 @@ def closure_module():
 
 def is_build_input(path: str) -> bool:
     """True when changing `path` can change what cargo compiles."""
-    if any(path.startswith(prefix) for prefix in BUILD_INPUT_EXCEPTIONS):
+    if path in BUILD_INPUT_EXCEPTIONS:
         return True
     if any(path.startswith(prefix) for prefix in NON_BUILD_PREFIXES):
         return False
@@ -536,6 +551,32 @@ def _build_script_paths() -> list[tuple[str, str]]:
     return out
 
 
+INCLUDE_MACRO = re.compile(r'\binclude(?:_str|_bytes)?!\s*\(\s*"([^"]+)"')
+
+
+def _included_paths() -> list[tuple[str, str]]:
+    """(crate source, repo-relative path) for every `include!`-family literal that names a file.
+
+    The build-script scan above cannot see these: the macro resolves its literal against the
+    source file's own directory at compile time, so a test module can compile a script or a doc
+    into the test binary without any build script being involved.
+    """
+    out = []
+    for source in sorted(REPO_ROOT.glob("crates/**/*.rs")):
+        if "target" in source.relative_to(REPO_ROOT).parts:
+            continue
+        text = source.read_text(encoding="utf-8", errors="replace")
+        for match in INCLUDE_MACRO.finditer(text):
+            resolved = (source.parent / match.group(1)).resolve()
+            try:
+                rel = resolved.relative_to(REPO_ROOT).as_posix()
+            except ValueError:
+                continue
+            if resolved.is_file():
+                out.append((source.relative_to(REPO_ROOT).as_posix(), rel))
+    return out
+
+
 TOOLCHAIN_CALL = re.compile(
     r"""(?x)
     (?:^|[;&|(]\s*|\$\(\s*)ca rgo\s        # a shell command position
@@ -573,8 +614,16 @@ def selftest() -> int:
     check(is_build_input("data/effects.json"), "data/ is a build input (embedded at compile time)")
     check(is_build_input(".github/workflows/check.yml"), "the CI pin file is a build input")
     check(
-        is_build_input("docs/recon/rva-map-1162-to-1170.data.tsv"),
-        "docs/recon is a build input -- er-game-base's build.rs reads it",
+        is_build_input("scripts/test-er-duel-rules-bans.json"),
+        "a script-tree fixture a crate test compiles in is a build input",
+    )
+    check(
+        not is_build_input("scripts/test-er-duel-rules-bans.json.orig"),
+        "...matched as an exact path, not as a prefix",
+    )
+    check(
+        not is_build_input("docs/recon/README.md"),
+        "docs/recon is prose and data for people -- no build script reads it any more",
     )
     check(not is_build_input("scripts/check.sh"), "a shell script is not a build input")
     check(not is_build_input("docs/plans/whatever.md"), "a doc is not a build input")
@@ -625,18 +674,26 @@ def selftest() -> int:
     else:
         print("  skip the shortcut over this repository's history (commits not in this clone)")
 
-    # --- Anti-drift 1: no build script reads anything the predicate waves through ----------
+    # --- Anti-drift 1: nothing cargo reads is a path the predicate waves through -----------
     literals = _build_script_paths()
     check(len(literals) >= 4, f"build scripts name {len(literals)} real repo path(s) to audit")
-    leaks = sorted({rel for _, rel in literals if not is_build_input(rel)})
+    included = _included_paths()
+    check(len(included) >= 4, f"crate sources include {len(included)} real repo file(s) to audit")
+    leaks = sorted({rel for _, rel in literals + included if not is_build_input(rel)})
     check(
         not leaks,
-        "every path a build script opens is classified as a build input"
+        "every path a build script opens or a crate source includes is classified as a build input"
         + ("" if not leaks else f" -- LEAKED: {', '.join(leaks)}"),
     )
+    # The exceptions exist only because something under a non-build prefix is compiled in, so
+    # each one must still be: an entry nothing reads would make its file's edits select work for
+    # no reason, and would read as a requirement that is not there.
+    read = {rel for _, rel in literals + included}
+    unread = sorted(set(BUILD_INPUT_EXCEPTIONS) - read)
     check(
-        any(rel.startswith("docs/recon/") for _, rel in literals),
-        "the docs/recon exception is load-bearing, not decorative (a build script reads it)",
+        not unread,
+        "every BUILD_INPUT_EXCEPTIONS entry is read by a build script or included by a crate source"
+        + ("" if not unread else f" -- UNREAD: {', '.join(unread)}"),
     )
 
     # --- Anti-drift 2: every compile-invoking gate in check.sh is declared ------------------

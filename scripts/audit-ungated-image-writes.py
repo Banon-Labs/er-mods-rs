@@ -12,15 +12,21 @@ so nothing had ever checked them:
   raw      a raw store whose address expression contains `base + *_rva` in any casing
 
 Every class has a positive control in `--selftest`, because a detector that reports zero
-is indistinguishable from a detector that matches nothing: `audit-1170-readiness.py`
-reported zero ungated writes while six existed, and its `HAND_BUILT` pattern required an
-uppercase `RVA` so `base + spec.rva` matched 0 of 40 real sites.
+is indistinguishable from a detector that matches nothing: the deleted
+`audit-1170-readiness.py` reported zero ungated writes while six existed, and its `HAND_BUILT`
+pattern required an uppercase `RVA` so `base + spec.rva` matched 0 of 40 real sites.
 
 Exits 1 on any finding (since 2026-08-31). It used to only report, and it reported six
 findings that were every one of them false: two were the primitives' own `fn` declarations
 and four were call sites of primitives that gate internally. With those two matcher faults
 fixed the true count is zero, so the class can be held at zero instead of narrated.
-The complementary ratchet is `scripts/audit-1170-readiness.py`.
+
+Why it still holds on the native model (2026-10-23). The gate translates nothing now: on
+2.7.2.0 `resolve_game_address(base + rva)` hands back `base + rva`. What it still does is
+refuse every game-image address on any other build. A read through an ungated address on the
+next patch returns a wrong value; a write corrupts whatever code or data now sits there, with
+no fault and no log line. So a write into the image is the one place where skipping the build
+check is never acceptable, and this audit is what holds that line.
 """
 from __future__ import annotations
 
@@ -66,8 +72,8 @@ RVA_ARG_DEF = re.compile(r"\bfn\s+$")
 #
 # The invariant that is actually worth failing a build over is therefore not "does this call site
 # gate" but "does the primitive still gate". Delete that `resolve_game_address` line and all four
-# call sites silently become raw writes into a 1.17 image at 1.16.2 offsets, with no other check in
-# the tree noticing. So: a call site is reported only when the primitive it calls has lost its
+# call sites silently become raw writes into whatever build is running at 2.7.2.0 offsets, with no
+# other check in the tree noticing. So: a call site is reported only when the primitive it calls has lost its
 # gate, and a primitive whose definition is not in the scanned set is treated as ungated
 # (fail-closed -- an audit that cannot see the definition must not vouch for it).
 PRIMITIVE_NAMES = ("patch_3byte_stub", "apply_xor_ret_stub")
@@ -316,8 +322,8 @@ def main() -> int:
     if rows:
         print(
             "\naudit-ungated-image-writes: FAILED -- each finding above writes into the game image\n"
-            "from an address the running build's version gate never vetted. On 1.17 a 1.16.2 offset\n"
-            "lands mid-function, so the write corrupts whatever now occupies it, silently.\n"
+            "from an address the running build's version gate never vetted. On any build but\n"
+            "2.7.2.0 a 2.7.2.0 rva lands on whatever now occupies it, and the write corrupts it, silently.\n"
             "Route the address through er_game_base::game_build::resolve_game_address (or\n"
             "game_data_addr / game_rva) and honour the 0/None refusal."
         )

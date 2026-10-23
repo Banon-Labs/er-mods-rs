@@ -17,13 +17,14 @@ use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem, rex_push
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// `CS::FeSystemAnnounceView::Update`.
-const ANNOUNCE_UPDATE_VA: u64 = 0x1408c47c0;
+/// `CS::FeSystemAnnounceView::Update` on 2.7.2.0 (1.16.2 `0x1408c47c0`).
+const ANNOUNCE_UPDATE_VA: u64 = 0x1408c5e10;
 /// How much of `Update`'s opening the check reads. It deliberately stops part way through the
 /// `movaps` that spills `xmm6`, which is why the assembled sequence is longer than the constant.
 const ANNOUNCE_UPDATE_CHECKED_BYTES: usize = 8;
-/// `FUN_140d10b60(MsgRepositoryImp*, id) -> wchar_t*`, the `PlaceName` getter.
-const PLACE_NAME_LOOKUP_VA: u64 = 0x140d10b60;
+/// `FUN_140d13990(MsgRepositoryImp*, id) -> wchar_t*` on 2.7.2.0 (1.16.2 `FUN_140d10b60`), the
+/// `PlaceName` getter.
+const PLACE_NAME_LOOKUP_VA: u64 = 0x140d13990;
 
 // ---------------------------------------------------------------------------------------------
 // Seamless Co-op's `ersc.dll`, at its preferred base `0x180000000`
@@ -201,14 +202,14 @@ fn main() {
         &[(
             PrologueSpec {
                 name: "UPDATE_PROLOGUE",
-                doc: "Opening bytes of `CS::FeSystemAnnounceView::Update`, so a game update that\n\
-                      moves it fails closed instead of jumping mid-instruction. The check stops\n\
-                      inside the `movaps` that spills `xmm6`, so this is the first\n\
+                doc: "2.7.2.0 opening bytes of `CS::FeSystemAnnounceView::Update`, so a game\n\
+                      update that moves it fails closed instead of jumping mid-instruction. The\n\
+                      check stops inside the `movaps` that spills `xmm6`, so this is the first\n\
                       `ANNOUNCE_UPDATE_CHECKED_BYTES` of `push rbx; sub rsp,0x30; movaps\n\
                       [rsp+0x20],xmm6`.",
                 visibility: "pub",
                 shape: Shape::Slice,
-                image: Image::EldenRing,
+                image: Image::EldenRing2720,
                 va: ANNOUNCE_UPDATE_VA,
                 take: ANNOUNCE_UPDATE_CHECKED_BYTES,
                 pin: &[0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29],
@@ -227,12 +228,12 @@ fn main() {
         &[(
             PrologueSpec {
                 name: "PLACE_NAME_LOOKUP_PROLOGUE",
-                doc: "Opening bytes of the `PlaceName` getter, so a game update that moves it\n\
-                      fails closed instead of calling into the middle of something else:\n\
-                      `mov [rsp+8],rbx; push rdi; sub rsp,0x20`.",
+                doc: "2.7.2.0 opening bytes of the `PlaceName` getter, so a game update that\n\
+                      moves it fails closed instead of calling into the middle of something\n\
+                      else: `mov [rsp+8],rbx; push rdi; sub rsp,0x20`.",
                 visibility: "pub",
                 shape: Shape::Slice,
-                image: Image::EldenRing,
+                image: Image::EldenRing2720,
                 va: PLACE_NAME_LOOKUP_VA,
                 take: 0,
                 pin: &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20],

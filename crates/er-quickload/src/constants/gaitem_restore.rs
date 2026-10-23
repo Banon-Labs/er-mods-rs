@@ -1,22 +1,21 @@
 // ---- CSGaitemImp pristine-restore (post-switch reload gaitem free-queue exhaustion fix) ----
 // `GLOBAL_CSGaitem` is a process-lifetime FD4 singleton (constructed once at boot by the giant
-// repository-init FUN_140cd6d40 behind `if (GLOBAL_CSGaitem==0)`; Not rebuilt per world-load). Its
-// pointer lives at dump 0x143d69890 (data RVA, stable across deobf; the unmodified
+// repository-init FUN_140cd6d40 (1.16.2) behind `if (GLOBAL_CSGaitem==0)`; Not rebuilt per
+// world-load). Its pointer lives at 0x143d70920 (2.7.2.0 data rva; the unmodified
 // PlayerGameData::Deserialize reads this same global and boot loads work through it). On a normal
 // quit-to-title the world/inventory teardown releases the player's gaitems back to the free-queue
-// via RemoveCSGaitemIns; our lightweight return-title chain (0x67a3a0) skips that, so char#1's
+// via RemoveCSGaitemIns; our lightweight return-title chain (2.7.2.0 0x67b6a0) skips that, so char#1's
 // items stay resident, char#2's reload deserialize exhausts freeTableIdxQueue (head==end ->
-// GetUnindexedGaItemHandle returns 0 -> gaitemInsTable[-1] OOB dispatch = the AV at live 0x67141a).
+// GetUnindexedGaItemHandle returns 0 -> gaitemInsTable[-1] OOB dispatch = the AV at 1.16.2 0x67141a).
 // We restore pristine at clean title before the reload by sweeping occupied gaitemInsTable slots
 // and calling the native per-item release RemoveCSGaitemIns (which frees the ins and returns its
 // index to the free-queue) -- the exact primitive the native teardown would use, no hand-rebuilt
 // queue. See bd system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02.
 pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = er_game_base::rva::GLOBAL_CSGAITEM_RVA;
-/// `CS::GaItemImp::RemoveCSGaitemIns(CSGaitemImp*, uint* gaItemHandle)` -- dump 0x140672650 ->
-/// live/deobf 0x672560 (shift -0xf0, content-unique, ground-truthed via dump-deobf-shift.py). Given
-/// a handle it destructs+deallocates gaitemInsTable[index], resets the entry, and pushes index back
-/// to freeTableIdxQueue[++end].
-pub(crate) const CSGAITEM_REMOVE_INS_RVA: usize = 0x672560;
+/// `CS::GaItemImp::RemoveCSGaitemIns(CSGaitemImp*, uint* gaItemHandle)` -- 2.7.2.0 rva 0x673860.
+/// Given a handle it destructs+deallocates gaitemInsTable[index], resets the entry, and pushes
+/// index back to freeTableIdxQueue[++end].
+pub(crate) const CSGAITEM_REMOVE_INS_RVA: usize = 0x673860;
 /// CSGaitemImp field offsets (Ghidra struct, size 0x19038): gaitemInsTable = CSGaitemIns*[0x1400],
 /// entries = CSGaitemImpEntry[0x1400] (stride 8: {u32 unindexedGaItemHandle, u32 refCount}),
 /// freeTableIdxQueue = uint[0x1400], then head/end ids.
@@ -36,27 +35,29 @@ pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS
 pub(crate) use er_telemetry_core::counters::SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE;
 pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
     AtomicUsize::new(usize::MAX);
-/// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
-/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). Ghidra names it `GLOBAL_CSEventState`.
+/// The save-data subsystem gate the c30-writer 0x67d070 checks before it writes
+/// GameMan+0xc30: `[0x143d6f108]` (2.7.2.0 rva 0x3d6f108). Ghidra names it `GLOBAL_CSEventState`.
 ///
 /// Corrected 2026-08-01: it is not "a 0x270-byte heap object". The allocation is
 /// `MOV EDX,0x1` / `LEA ECX,[RDX+0x2]` -> `HeapAlloc(size = 3, align = 1)`, which is consistent
 /// with `IsAliveMotion` reading it as `MOVZX EAX, byte [RAX]` at offset 0. The 0x270-byte object
 /// allocated in the same function belongs to a different global (`MOV ECX,0x270` ...
-/// `MOV [0x143d68448],RAX`). The gate role below is unaffected -- only the size claim was wrong.
+/// `MOV [0x143d68448],RAX` on 1.16.2). The gate role below is unaffected -- only the size claim
+/// was wrong.
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
-/// 0x140aed820 so the builder creates the m10 load-states. Gap 2: the resmgr
-/// ([InGameStep+0x250]) streaming-enable flag [resmgr+0xb7c1]==0; the virtual
-/// enabler 0x14066e2e4 sets it + builds the session singletons + starts the IO jobs.
+/// 0x140aeeff0 so the builder creates the m10 load-states. Gap 2: the resmgr
+/// ([InGameStep+0x250]) streaming-enable flag [resmgr+0xb7c1]==0; a virtual
+/// enabler (1.16.2 0x14066e2e4, not a function start) sets it + builds the session singletons +
+/// starts the IO jobs.
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_TARGET_COORD_100_OFFSET: usize = 0x100;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
-/// `InGameStep::RequestMoveMap` (deobf 0x140aebdc0). Builds the world-res loadlist virtual path via
+pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaeeff0;
+/// `InGameStep::RequestMoveMap` (2.7.2.0 0x140aed590). Builds the world-res loadlist virtual path via
 /// `DlFixedString::FormatV` -- but only when its `param_2` target BlockId (`*rdx`) is valid
 /// (`!= -1` and `IsNonDebugArea(area) == area < 0x59`). On our in-memory redirect load the caller
 /// captured a stale/`-1` BlockId (GameMan+0xc30 was set too late), so FormatV is skipped, the loadlist
@@ -67,39 +68,36 @@ pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
 /// FormatV -> LoadlistInit -> ProcessMsbLoadLists -> world-stream -> STEP_Finish chain runs natively and
 /// re-enables draw_group + dismisses the loading cover on its own. Root cause RE: bd
 /// render-handoff-freeze-worldreswait-loadlist-root-2026-07-18.
-pub(crate) const REQUEST_MOVE_MAP_RVA: usize = 0xaebdc0;
-/// Area-id ceiling of `IsNonDebugArea` (deobf 0x140720210 == `areaId < 0x59`). A BlockId whose area
+pub(crate) const REQUEST_MOVE_MAP_RVA: usize = 0xaed590;
+/// Area-id ceiling of `IsNonDebugArea` (2.7.2.0 0x140721510 == `areaId < 0x59`). A BlockId whose area
 /// byte `((blockid >> 24) & 0xff)` is >= this is a debug area for which RequestMoveMap skips FormatV.
 pub(crate) const REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL: u32 = 0x59;
-#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SESSION_SINGLETON_A_RVA: usize = TitleSessionRva::SessionA as usize;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as usize;
 /// Corrected streaming-enable (worldres-enable-0x14066e2e4-decoded-receiver-and-
 /// driver-singleton-2026): the correct resmgr is deref(deref(MoveMapStep+0xf0)+0x10)
-/// with vtable 0x142a7e030 (not InGameStep+0x250, which is the WorldRes-owner, vtable
-/// 0x142a7de60 -- the wrong object that crashed). The hard floor is the streaming/
-/// session driver singleton 0x143d7c088 (job machine asserts if null); build it via
-/// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
+/// with vtable 0x142a831a0 (2.7.2.0; not InGameStep+0x250, which is the WorldRes-owner -- the
+/// wrong object that crashed). The hard floor is the streaming/session driver singleton
+/// 0x143d83118 (2.7.2.0; job machine asserts if null); build it via the lazy getter
+/// (1.16.2 0x140cd6c50) before calling the enabler on resmgr.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
-/// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
-/// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
-/// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
-/// 0x142656b00) -- the piece our forced path skips (b80-initiate-advances-mms-but-
-/// async-io-stalls). The arm uses only globals/stack after the +0x48 check, so calling
-/// it with a synthetic `this` (a zeroed buffer with +0x48=7) replicates the build
-/// without needing the real 0x143d71340 step object.
-pub(crate) const WORLD_WORKER_BUILD_RVA: usize = 0xb0a980;
+pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a831a0;
+/// World-stream worker build+register: IngameInit's SetState tail 0x140b0c550 (2.7.2.0), whose
+/// `[this+0x48] >= 7` arm constructs the world-stream worker (ctor 1.16.2 0x141eceb10) and
+/// registers it with the FD4 scheduler (key 0x59682f01 via 1.16.2 0x142656b00) -- the piece our
+/// forced path skips (b80-initiate-advances-mms-but-async-io-stalls). The arm uses only
+/// globals/stack after the +0x48 check, so calling it with a synthetic `this` (a zeroed buffer
+/// with +0x48=7) replicates the build without needing the real step object.
+pub(crate) const WORLD_WORKER_BUILD_RVA: usize = 0xb0c550;
 pub(crate) const SYNTHETIC_STEP_THIS_SIZE: usize = 0x60;
 pub(crate) const SYNTHETIC_STEP_STATE_OFFSET: usize = 0x48;
 pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
-/// MISIDENTIFIED-corrected (autoresearch 2026-06-18): 0x4842d40 is upstream `eldenring`'s
+/// MISIDENTIFIED-corrected (autoresearch 2026-06-18): 1.16.2 0x4842d40 is upstream `eldenring`'s
 /// `runtime_heap_allocator` (the `DLAllocator` singleton, `rva::get().runtime_heap_allocator`),
 /// confirmed by static RE -- it has 4057 RIP-relative refs (allocator footprint, not a task) and
-/// the cached-singleton getter at 0x140078ed5. It is built at startup and is always non-null, so
+/// the cached-singleton getter at 1.16.2 0x140078ed5. It is built at startup and is always non-null, so
 /// reading it non-null is not evidence that any "world-stream worker"/FD4 stream task was built.
 /// The save-IO/worldres "worker present" levers below that relied on that inference are false
 /// positives and need the real stream-task RVA. Name kept generic and accurate; see bd
@@ -107,7 +105,7 @@ pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
     DLAllocator::runtime_heap_allocator() as *const DLAllocator as usize
 }
-/// World/scene singletons built by MoveMapStep::STEP_MsbLoad 0x140af8f00. Non-null
+/// World/scene singletons built by MoveMapStep::STEP_MsbLoad (1.16.2 0x140af8f00). Non-null
 /// == MsbLoad ran (the IsResident-relevant world exists). Diagnostic for whether the
 /// worker is servicing the stream vs the b80 lane stalling first.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
@@ -119,11 +117,11 @@ pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// The block coord/map-id the MoveMapStep requests in STEP_WorldResWait: at
-/// [[MoveMapStep+0xf0]+0x2c] (0x140624bd0 reads byte3 as the target area). byte3 ==
+/// [[MoveMapStep+0xf0]+0x2c] (2.7.2.0 0x140625ed0 reads byte3 as the target area). byte3 ==
 /// 0x0a means slot 9's m10 is being requested (loader/streaming issue); 0 means the
 /// saved world position never loaded (coord issue).
 pub(crate) const WORLDRES_COORD_2C_OFFSET: usize = 0x2c;
-/// Resource-manager block array scan (mirrors 0x14066d3e0): entries at
+/// Resource-manager block array scan (mirrors 1.16.2 0x14066d3e0): entries at
 /// [resmgr+0xb3030 + i*8]; each entry's block area = [[entry+0x8]+0xc]. We scan for
 /// the target area 0x0a (m10) to learn if slot 9's block is registered (streaming
 /// gap) or absent (loader never picks up the request).
@@ -169,16 +167,15 @@ pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
 
 /// Own-load m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
-/// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
-/// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the
-/// 0x140000000 image base, resolved at runtime as `module_base + RVA` like the other native-call
-/// RVAs in this file (e.g. `CONTINUE_CONFIRM_RVA`). Signature (Win64 fastcall):
+/// `FD4::FD4FileCap::AddDefaultFileLoadProcess`, 2.7.2.0 VA 0x14265cc10. Stored as an RVA,
+/// resolved at runtime as `module_base + RVA` like the other native-call RVAs in this file (e.g.
+/// `CONTINUE_CONFIRM_RVA`). Signature (Win64 fastcall):
 /// `bool AddDefaultFileLoadProcess(FD4FileCap* cap /*rcx*/, FD4FileLoadProcess* loadProcess /*rdx*/)`.
 /// It builds the FD4FileLoadProcessor internally + self-enqueues IO to the already-live FD4 workers
 /// (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager). PushTask / AssignFileCap are not
 /// needed. Reaches only world-asset file-load streaming -- no save IO, cannot autosave.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000;
+pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x265cc10;
 /// FD4FileCap layout (struct len 0x90): the cap's existing `FD4FileLoadProcess*` lives at +0x78 --
 /// Read it for arg2, we never construct one. `loadState` at +0x88 == 4 means the cap is already
 /// resident (skip). Both grounded in the Ghidra dump decomp of the lever.
@@ -195,7 +192,7 @@ pub(crate) const WORLDBLOCKRES_FILECAP_40_OFFSET: usize = 0x40;
 pub(crate) const WORLDBLOCKRES_FILECAP2_48_OFFSET: usize = 0x48;
 /// The resmgr 0xb3030 array entry `block` is a container (WorldBlockData): the WorldBlockRes elements
 /// live in an inline array at `*(block+0xce0)`, count `*(block+0xcd8)` (i32), stride 0xb98 -- decoded
-/// from the keyed getter vt+0x8 (deobf 0x14062f470): `movslq 0xcd8(rcx); mov 0xce0(rcx),r11;
+/// from the keyed getter vt+0x8 (2.7.2.0 0x140630770): `movslq 0xcd8(rcx); mov 0xce0(rcx),r11;
 /// elem=r11+i*0xb98`. Each element is a WorldBlockRes (phase byte +0x35, caps +0x40/+0x48). We iterate
 /// this array directly (plain reads) instead of calling the getter -- the getter takes a second `key`
 /// arg in rdx and AV-crashes if called without it.
@@ -210,8 +207,8 @@ pub(crate) const DIAG_COUNT_ZERO: i32 = 0;
 pub(crate) const DIAG_COUNT_ONE: i32 = 1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_SAMPLE_ZERO: u32 = 0;
-/// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
-/// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
+/// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67bb10 (2.7.2.0)
+/// / save_slot_get (1.16.2 0x678ca0)). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
 pub(crate) fn game_man_ptr_or_null() -> usize {
     GameMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
@@ -219,7 +216,7 @@ pub(crate) fn game_man_ptr_or_null() -> usize {
 pub(crate) use er_title_flow::FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET;
 /// Read-only autoload-arm precondition probe. The native save-mgr update
-/// 0x14067f5d0 arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
+/// (1.16.2 0x14067f5d0) arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
 /// pass; the one runtime unknown is whether the slot-record container
 /// [slotmgr+0x8] is populated at the pre-bootstrap title. These RVAs/offsets let
 /// us read those preconditions without touching state.
@@ -229,16 +226,16 @@ pub(crate) fn game_data_man_ptr_or_null() -> usize {
     GameDataMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
 /// Own-the-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
-/// SimpleTitleStep step-fn table (base abs 0x143d71580, owner+0x10) is in WRITABLE
-/// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d71620
-/// (RVA 0x3d71620) is dispatched every frame at the press-any-button title. We patch
+/// SimpleTitleStep step-fn table (2.7.2.0 base abs 0x143d78610, owner+0x10) is in WRITABLE
+/// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d786b0
+/// (2.7.2.0 RVA 0x3d786b0) is dispatched every frame at the press-any-button title. We patch
 /// it to our own handler so the FD4 scheduler runs our code in-context (rcx=owner,
 /// rdx=FD4Time), instead of trampolining from an external CSTask.
-pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d71620;
+pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d786b0;
 /// Native Continue/Load confirm handler (reads owner=[rcx+8]; slot-select + child
-/// request + SetState(5)). Invoked via a {[+8]=owner} shim.
-pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
-/// Continue/Load manager object global (.data abs 0x143d5df38; ==0 at rest in the deobf
+/// request + SetState(5)). Invoked via a {[+8]=owner} shim. 2.7.2.0 rva.
+pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0fd50;
+/// Continue/Load manager object global (2.7.2.0 .data abs 0x143d64fb8; ==0 at rest in the deobf
 /// image, built at runtime). `[mgr]` = the manager vtable, `[mgr + 8]` = the recipe's
 /// literal "owner" used by the native-fullread commit recipe. Used read-only here for the
 /// own-load owner diagnostic; the continue_confirm owner is the threaded SetState-able
@@ -248,20 +245,18 @@ pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
 /// object. Derived from `er-game-base` so the value has one definition (2026-08-01 dedupe).
 pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 
-/// LoadGame-job build factory (`FUN_140826510` live; the 1.16.2 shift is 0, so the live VA is `0x140826510`; the old
-/// "dump VA 0x140826600 lands +0xF0 mid-instr" note was a 1.16.1 dump-deobf-shift.py artifact). Builds
+/// LoadGame-job build factory (2.7.2.0 `FUN_1408279b0`). Builds
 /// the LoadGame `CS::MenuJobWithContext<LoadJobContext>` via the menu-heap factory and returns it in
 /// `*out` with refcount 1. Win64 fastcall `(out: *DLRefCountPtr<MenuJob>, ctx_parent, save_slot:i32,
 /// owner_ctx)`. Only `out` (our local) and `save_slot` (the int slot) are required by the deser/map
 /// self-build path; `ctx_parent`/`owner_ctx` are the outer profile-selection UI context (stored as
 /// lambda captures, every build-path deref null-guarded) -- passed as 0 here (see `own_load_install_job`).
-pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
-/// `DLUT::DLReferenceCountPointer<MenuJob>` ASSIGN/INSTALL helper (`FUN_1407a9560` live; dump entry
-/// `0x1407a9650` is the same fn, prologue-grounded vs `eldenring-deobf.bin`). Win64 fastcall
+pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x8279b0;
+/// `DLUT::DLReferenceCountPointer<MenuJob>` ASSIGN/INSTALL helper (2.7.2.0 `FUN_1407aa890`). Win64 fastcall
 /// `(slot: *MenuJob*, src: *MenuJob* (longlong*))`: writes `*slot = *src`, `AtomicIncrement`s the new
 /// occupant, then `AtomicDecrement`s/releases the prior occupant and zeroes `*src` (move-assign).
 /// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
-pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
+pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7aa890;
 /// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
 /// successful PushBackJob; the active job stays at +0x130.
 pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;
@@ -269,13 +264,13 @@ pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;
 /// `ExecuteMenuJob((MenuJob**)&owner->field85_0x130, &time)`. Installing the LoadGame job here makes
 /// the per-frame title step drive it (self-build -> deser -> world stream). Owner-relative byte offset.
 pub(crate) const TITLE_OWNER_MENUJOB_SLOT_130_OFFSET: usize = 0x130;
-/// LoadGame `MenuJobWithContext<LoadJobContext>` vtable (dump VA `0x142ac71e0`). Diagnostic ONLY: the
-/// installed job's vtable should read back as this (modulo the dump->live `.rdata` shift) -- logged,
-/// never used to gate the call. The IfElseJob it replaces reads vtable dump `0x142aa2958`.
-pub(crate) const MENUJOB_LOADGAME_VTABLE_DUMP_VA: usize = 0x142ac71e0;
-/// Idle title `CS::MenuJobSequence::IfElseJob` vtable (dump VA `0x142aa2958`) that occupies
+/// LoadGame `MenuJobWithContext<LoadJobContext>` vtable (2.7.2.0 VA `0x142acc350`, at the
+/// `0x140000000` image base). Diagnostic ONLY: the installed job's vtable should read back as this --
+/// logged, never used to gate the call. The IfElseJob it replaces reads vtable `0x142aa7ac8`.
+pub(crate) const MENUJOB_LOADGAME_VTABLE_VA: usize = 0x142acc350;
+/// Idle title `CS::MenuJobSequence::IfElseJob` vtable (2.7.2.0 VA `0x142aa7ac8`) that occupies
 /// `owner+0x130` before install. Diagnostic only (logged for the before/after vtable-flip evidence).
-pub(crate) const MENUJOB_IFELSE_VTABLE_DUMP_VA: usize = 0x142aa2958;
+pub(crate) const MENUJOB_IFELSE_VTABLE_VA: usize = 0x142aa7ac8;
 /// MenuJob `+0x68` built-flag byte (0 before first Run tick, 1 after self-build) and `+0x70` inner
 /// FixOrderJobSequence ptr (0 -> built). Diagnostic ONLY: dumped before/after to witness self-build.
 pub(crate) const MENUJOB_BUILT_FLAG_68_OFFSET: usize = 0x68;

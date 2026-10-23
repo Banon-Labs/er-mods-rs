@@ -115,7 +115,7 @@ pub(crate) fn install_title_visual_startup_hooks() {
         });
     }
     // er-effects-rs-y22i: Always-on Scaleform descriptor-ring guard (native-Windows crash
-    // 0xec95d1), a mid hook on the advance's page-roll branch (er-effects-rs-7xbs.1). Not
+    // 1.16.2 0xec95d1), a mid hook on the advance's page-roll branch (er-effects-rs-7xbs.1). Not
     // feature-gated -- it is a crash guard, a transparent passthrough when the null never occurs.
     // Installed at attach so it is live before the first loading-screen composite.
     START_SCALEFORM_GUARD.call_once(|| {

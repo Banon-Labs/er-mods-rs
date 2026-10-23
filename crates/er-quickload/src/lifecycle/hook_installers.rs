@@ -33,7 +33,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
             .spawn(install_system_quit_duplicate_button_hook);
     });
 
-    // Title Continue confirm guard (0x140b0e180): while a System->Quit->Load-Profile switch is
+    // Title Continue confirm guard (0x140b0fd50): while a System->Quit->Load-Profile switch is
     // active, drive one fresh feed-deserialize of the picked slot before the confirm streams, so
     // the clean-title reload loads the picked character instead of re-streaming the stale
     // pre-switch state (bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
@@ -58,7 +58,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
 }
 
 pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
-    // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
+    // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074ba00) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands before the title state
     // machine builds the title dialog during boot. On each valid call it latches rdx (the engine-
     // verified host MenuWindow*) for the live-dialog Load-Game path; pure latch + passthrough.

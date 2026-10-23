@@ -68,8 +68,13 @@ DECODER = _load("save_slot_oracle", "save-slot-oracle.py")
 # install lines ("safe_input hook NtTerminateProcess: target..." / "...applied") are not crashes --
 # they are excluded below. An actual crash surfaces the AV rva / assert / deliberate-abort markers,
 # and process-liveness (process_alive) catches a real terminate independently.
-AV_MARKERS = ("access-violation rva", "0x1eb9999", "deliberate-abort",
-              "game ASSERT", "a0_rva=0x29c7aa0", "DL_PANIC")
+#
+# The two rvas are ELDEN RING 2.7.2.0 (`eldenring-deobf-1.17.2.bin`): 0x1ebcef9 is the image's only
+# `mov dword ptr [0], 0xdeadba`, the deliberate fault inside DLPanic's worker 0x141ebce30 (+0xc9),
+# reached from DLPanic 0x141ebcd00; 0x29ccaa0 is the `...Core/Singleton/FD4Singleton.h` path that
+# the uninitialised-singleton asserts pass as DLPanic's first argument.
+AV_MARKERS = ("access-violation rva", "0x1ebcef9", "deliberate-abort",
+              "game ASSERT", "a0_rva=0x29ccaa0", "DL_PANIC")
 
 
 def expected_identity(file_path: Path, slot: int) -> dict:

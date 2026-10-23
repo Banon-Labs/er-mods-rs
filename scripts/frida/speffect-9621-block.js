@@ -27,7 +27,7 @@
 // no state-457 entry exists, then apply a short unrelated row (392, five seconds) and confirm that
 // one did land.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The EXPECTED
+// Addresses are 2.7.2.0, carried from 1.17.1. The EXPECTED
 // prologues below are unchanged: each was read at its 2.7.2.0 address in
 // `eldenring-deobf-1.17.2.bin`.
 

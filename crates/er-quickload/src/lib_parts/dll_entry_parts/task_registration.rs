@@ -71,7 +71,8 @@ fn poll_cached_mms18_ending_request_advancer() {
     // not (RE er-effects-rs-9fmm, re-confirmed by the 2026-09-04 revert).
     //
     // RE-grounded on 1.17 (2026-09-04). The reading below was originally decompiled off the 1.16.2
-    // dump on :8765; the installed game is 1.17. Every address here is now measured on the 1.17
+    // dump on :8765; the installed game was 1.17 at the time (2.7.2.0 since 2026-10-20, where the
+    // evaluator is `MOVEMAP_ADVANCER_RVA`, 0x140afbeb0). Every address here was measured on the 1.17
     // dump (:8767, `proj1170`) and identity-checked against `eldenring-deobf-1.17.bin`
     // (`check-dump-deobf-identity.py` -> match, shift 0). The 1.16.2 addresses are kept only as the
     // pairing evidence, never as current.
@@ -80,8 +81,9 @@ fn poll_cached_mms18_ending_request_advancer() {
     // comment used to name is not a function entry on either build -- it lands 0xf0 inside the
     // 1.16.2 one). Paired by the unique wide literal `L"CSEzSelectBot.MoveMapStep"` -- 1.16.2
     // `0x142b60758`, 1.17 `0x142b637f8` -- which both functions reference at the same +0xc1 from
-    // entry, with the same body size (4491). The byte mapper cannot carry this address: it reports
-    // unresolved (111 shape matches, none at the nearest anchor delta), so the literal is the proof.
+    // entry, with the same body size (4491). The byte mapper could not carry this address: it
+    // reported unresolved (111 shape matches, none at the nearest anchor delta), so the literal was
+    // the proof.
     //
     // Measured on 1.17, at instruction level:
     //   * `MOV byte ptr [RAX + 0x5e], BL` @ `0x140afbd0c` -- the write, unconditional and ahead of
@@ -493,7 +495,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we just loaded. Load #1 then
                 // completes and is stable in-world, but because the phase stays armed the in-world branch below
                 // keeps driving product_core_autoload_tick until the return-title chain submits, tears down the
-                // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV 0x1eb9999).
+                // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV at 1.16.2 0x1eb9999).
                 // DISCRIMINATOR: the earlier pure time-based gate (disarm after N continuous armed in-world
                 // frames) also cancelled genuine cross-slot/cross-file switches whose old world lingers past
                 // the threshold (the switch-regression). The correct, index-space-free discriminator is the

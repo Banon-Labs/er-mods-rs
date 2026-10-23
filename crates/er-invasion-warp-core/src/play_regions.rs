@@ -13,8 +13,12 @@
 //!
 //! # What the game does, read statically
 //!
-//! Region membership is positional. `CS::ChrIns::GetPlayRegionId` (1.16.2 `0x1403e96d0`) takes the
-//! character's physics position and hands it to `FUN_140a61290`, which walks
+//! Read on the 1.16.2 dump: the `FUN_` names in this module are 1.16.2 names unless labelled
+//! otherwise, and the 2.7.2.0 address of each function is given where it is first named.
+//!
+//! Region membership is positional. `CS::ChrIns::GetPlayRegionId` (2.7.2.0 `0x1403e98b0`, 1.16.2
+//! `0x1403e96d0`) takes the character's physics position and hands it to `FUN_140a61290` (2.7.2.0
+//! `0x140a62a30`), which walks
 //! `CSPlayRegionPointMan`'s embedded `std::map` and returns the region point whose own virtual
 //! `contains(position)` test -- vtable slot `+0x10` -- accepts it. So there is no block-to-region
 //! arithmetic to do and no table of block lists to read: a block belongs to a region when a point
@@ -27,15 +31,17 @@
 //! id = *(u32 *)( *(usize *)(point + 0x20) + 0x58 )
 //! ```
 //!
-//! That is the chain `FUN_140a60a40` follows -- it calls `FUN_140d0e460(point + 8)`, which reads
-//! `+0x18` of that (so `point + 0x20`), then `+0x58`, then the first `u32`, and hands it to
-//! `FUN_140a60740` beside `GetMatchAreaIdForPlayRegionId`. The `short` at `+0x4` of the same object
+//! That is the chain `FUN_140a60a40` (2.7.2.0 `0x140a621e0`) follows -- it calls
+//! `FUN_140d0e460(point + 8)` (2.7.2.0 `0x140d11290`), which reads `+0x18` of that (so
+//! `point + 0x20`), then `+0x58`, then the first `u32`, and hands it to `FUN_140a60740` (2.7.2.0
+//! `0x140a61ee0`) beside `GetMatchAreaIdForPlayRegionId`. The `short` at `+0x4` of the same object
 //! is the point's priority, which `FUN_140a61290` uses to break ties between overlapping points and
 //! which this module keeps for the same reason.
 //!
 //! # The near pool, and why it is not the far pool
 //!
-//! `FUN_140a04f50` calls the visited-areas walker `FUN_140a04ba0` only when its multi-region byte
+//! 1.17.1 `FUN_140a04f50` (2.7.2.0 `0x140a05410`) calls the visited-areas walker 1.17.1
+//! `FUN_140a04ba0` (2.7.2.0 `0x140a05060`) only when its multi-region byte
 //! `+0x109` is `1`; with `0` it takes the `else` branch, which resets the pool cursor and walks
 //! nothing. So `PlayerGameData+0x938` `visitedAreas` is the `Both near and far` pool alone, and
 //! `Nearby only` sends exactly one region -- the one the player is standing in.
@@ -247,9 +253,10 @@ mod native {
             return None;
         }
         // `safe_read_i32` and `safe_read_u16` are the primitives this tree has; the casts are the
-        // signedness the game's own code reads these two fields with. `FUN_140d0e460` treats the id
-        // as `undefined4` and compares it against -1 and -2, so the bit pattern is what matters and
-        // the reinterpretation is exact. `FUN_140a60a60` returns the priority through
+        // signedness the game's own code reads these two fields with. 1.16.2 `FUN_140d0e460`
+        // treats the id as `undefined4` and compares it against -1 and -2, so the bit pattern is
+        // what matters and the reinterpretation is exact. 1.16.2 `FUN_140a60a60` (2.7.2.0
+        // `0x140a62200`) returns the priority through
         // `(int)*(short *)`, i.e. sign-extended, which is why it is read back as signed here.
         let region =
             unsafe { er_game_base::mem::safe_read_i32(row + ROW_REGION_ID_OFFSET) }? as u32;
@@ -269,15 +276,13 @@ mod native {
     /// is null -- which it is until the first world load, exactly as the game's own callers assume.
     #[must_use]
     pub unsafe fn live_points() -> Vec<RegionPoint> {
-        // Resolved, not added. Every rva in this workspace is a 1.16.2 rva and the installed game
-        // is 1.17.1, and this global moved: measured live on run `br-20260919-050342-85b3` with
-        // `scripts/frida/play-region-global-is-stale.js`, the unresolved `0x143d6e388` reads null
-        // while the mapped `0x143d723f8` holds a manager at `0x135f5d00` whose `+0x8` map head is
-        // `0x1395fcc0`. So this function has returned an empty list on every 1.17 run, and the
-        // null guard below reported that as "no regions loaded yet" -- a wrong address wearing the
-        // shape of a legitimate early return. `game_rva_named` translates it against
-        // `docs/recon/rva-map-1162-to-1170.data.tsv` and refuses when no mapping is recorded, so
-        // an unrecognised build gives an empty list by saying so rather than by reading rubbish.
+        // Resolved, not added. This global moves between patches: measured live on 1.17.1 (run
+        // `br-20260919-050342-85b3`, `scripts/frida/play-region-global-is-stale.js`), the stale
+        // 1.16.2 slot `0x143d6e388` read null while the real one held a manager -- and the null
+        // guard below reported that as "no regions loaded yet", a wrong address wearing the shape
+        // of a legitimate early return. The rva is a 2.7.2.0 one, and `game_rva_named` refuses it
+        // on any other build, so an unrecognised build gives an empty list by saying so rather
+        // than by reading rubbish.
         let Ok(global) = er_game_base::mem::game_rva_named(
             er_game_base::rva::PLAY_REGION_POINT_MAN_GLOBAL_RVA as u32,
             "PLAY_REGION_POINT_MAN_GLOBAL_RVA",

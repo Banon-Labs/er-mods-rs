@@ -16,11 +16,11 @@
 //! pin, a layout edit upstream moves these silently and the only symptom is a portrait that
 //! renders the wrong outfit.
 //!
-//! The measurement the pins freeze: `CS::ChrAsm::ChrAsm` (1.16.2 0x1403be1b0, 1.17 0x1403be1c0,
-//! 161 bytes) aligns 38/38 instructions across the two de-Arxan'd images with six field offsets
+//! The measurement the pins freeze: `CS::ChrAsm::ChrAsm` (1.16.2 0x1403be1b0; 1.17 and 2.7.2.0
+//! 0x1403be1c0, 161 bytes) aligns 38/38 instructions across the two de-Arxan'd images with six field offsets
 //! -- 0x0, 0x4, 0x24, 0x7c, 0xd4, 0xdc -- every one held and none moved. Reproduce with
 //! `scripts/pair-object-field-drift.py --pair 0x1403be1b0:161 0x1403be1c0:161 --base rcx
-//! --base rsi`; the same rows are frozen in `scripts/check-object-field-offsets-1170.py`.
+//! --base rsi`; the same rows are frozen in `scripts/check-object-field-offsets.py`.
 
 use eldenring::cs::ChrAsm;
 
@@ -33,12 +33,12 @@ pub const CHR_ASM_GAITEM_HANDLES_OFFSET: usize = core::mem::offset_of!(ChrAsm, g
 pub const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, equipment_param_ids);
 // The three above are what the binding says; these are what the game does. `CS::ChrAsm::ChrAsm`
-// (deobf 0x1403be1b0) constructs the object front to back and every one of them is a store or a
+// (0x1403be1c0) constructs the object front to back and every one of them is a store or a
 // callee's `this`, not an inference:
 //
 //   0x00  `movl $-1,(%rcx)`                                       unk0
 //   0x04  `mov %ebx,0x4(%rcx)`   (ebx = 0)                        unk4
-//   0x08  `add $0x8,%rcx ; call 0x1404c4b30`   -> `CS::ChrAsmEquipment::ChrAsmEquipment`
+//   0x08  `add $0x8,%rcx ; call 0x1404c55a0`   -> `CS::ChrAsmEquipment::ChrAsmEquipment`
 //   0x24  `lea 0x24(%rsi),%rcx` with edx=4, r8d=0x16              array ctor, 22 x 4 bytes
 //   0xd4  `movq $-1,0xd4(%rsi)`                                   eight bytes: unkd4 and unkd8
 //   0x7c  `lea 0x7c(%rsi),%rdi ; mov $0x16,%ecx ; rep stos %eax`  22 dwords of -1
@@ -60,8 +60,8 @@ const _: () = assert!(CHR_ASM_GAITEM_HANDLES_OFFSET == 0x24);
 const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x7c);
 /// Index of `ProtectorHead` within `ChrAsm::gaitem_handles` / `ChrAsm::equipment_param_ids`; the four
 /// armor slots are head/chest/hands/legs at `+0..+3`. Grounded in the disassembly, not assumed:
-/// `CS::ChrAsm::EquipProtectorOrAccessory` (deobf 0x1403bf490) is literally `add $0xc,%edx; jmp
-/// EquipItem`, and `CS::ChrAsm::GetProtectorParamIdBySlot` (deobf 0x1403be950) is `lea 0xc(%rdx),%eax
+/// `CS::ChrAsm::EquipProtectorOrAccessory` (0x1403bf4a0) is literally `add $0xc,%edx; jmp
+/// EquipItem`, and `CS::ChrAsm::GetProtectorParamIdBySlot` (0x1403be960) is `lea 0xc(%rdx),%eax
 /// ; movslq %eax,%rdx ; mov 0x7c(%rcx,%rdx,4),%eax ; ret`.
 pub const CHR_ASM_PROTECTOR_HEAD_INDEX: usize = 12;
 /// Number of protector (armor) slots the portrait resolution oracle covers: head, chest, hands, legs.
@@ -69,12 +69,12 @@ pub const CHR_ASM_PROTECTOR_SLOT_COUNT: usize =
     crate::portrait_equip::PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT;
 /// Entries in `ChrAsm::gaitem_handles` and in `ChrAsm::equipment_param_ids`. The ctor pins it: after
 /// `lea 0x7c(%rsi),%rdi` it runs `mov $0x16,%ecx ; rep stos %eax,(%rdi)` with `eax = -1`
-/// (deobf 0x1403be213..0x1403be222), i.e. 0x16 = 22 dwords.
+/// (0x1403be223..0x1403be232), i.e. 0x16 = 22 dwords.
 pub const CHR_ASM_EQUIPMENT_ENTRY_COUNT: usize = 22;
 /// `ChrAsm::unk0` (+0x00). Together with `unkd4`/`unkd8` this is a whole-outfit override input, not
 /// padding: see `CHR_ASM_OVERRIDE_ABSENT`. Its typed field is private in `fromsoftware-rs`, so the
 /// offset is spelled out here rather than taken from `offset_of!`; the ctor writes it first
-/// (`movl $0xffffffff,(%rcx)` at deobf 0x1403be1d0), which is what pins it to +0.
+/// (`movl $0xffffffff,(%rcx)` at 0x1403be1e0), which is what pins it to +0.
 pub const CHR_ASM_UNK0_OFFSET: usize = 0x00;
 /// `ChrAsm::unkd4` (+0xd4) -- the head whole-outfit override.
 ///
@@ -82,7 +82,7 @@ pub const CHR_ASM_UNK0_OFFSET: usize = 0x00;
 /// array past it) because the member is private upstream and cannot be reached by `offset_of!`.
 /// A layout walk is a name argument, not a measurement, and the same shape is what put
 /// `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 -- so the number itself comes from the ctor:
-/// `movq $-1,0xd4(%rsi)` at deobf 0x1403be208, an eight-byte store, so that one instruction sets
+/// `movq $-1,0xd4(%rsi)` at 0x1403be218, an eight-byte store, so that one instruction sets
 /// both `unkd4` and `unkd8`. 0xdc (`boltLoadedStates`) is the next witnessed field, which brackets
 /// the pair from above and leaves exactly two dwords in between.
 pub const CHR_ASM_UNKD4_OFFSET: usize = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
@@ -93,7 +93,7 @@ const _: () = assert!(CHR_ASM_UNKD4_OFFSET == 0xd4);
 const _: () = assert!(CHR_ASM_UNKD8_OFFSET == 0xd8);
 /// The value `unk0`/`unkd4`/`unkd8` must hold for the renderer to dress a character from its per-slot
 /// `equipment_param_ids`. These three fields are read with signed tests by the model-resource request
-/// `FUN_1409e6fb0` (deobf 0x1409e7553..0x1409e75b6, every branch a `js`), and a non-negative value in
+/// `FUN_1409e86f0` (0x1409e8c94..0x1409e8cf7, every branch a `js`), and a non-negative value in
 /// any of them forces the whole outfit from arithmetic on that value instead:
 ///
 /// ```text
@@ -106,15 +106,15 @@ const _: () = assert!(CHR_ASM_UNKD8_OFFSET == 0xd8);
 /// A zero-initialised image therefore renders param ids 0/100/200/300 -- rows that do not exist -- so
 /// nothing resolves, not even the bare-body defaults the native profile feed equips into hands and
 /// legs. That is the entirely-nude portrait (bd er-effects-rs-wncc). The ctor
-/// `CS::ChrAsm::ChrAsm` (deobf 0x1403be1b0) sets all three to -1, which is why a ctor-built ChrAsm
+/// `CS::ChrAsm::ChrAsm` (0x1403be1c0) sets all three to -1, which is why a ctor-built ChrAsm
 /// never hits the override path and our hand-built image must match it.
 pub const CHR_ASM_OVERRIDE_ABSENT: i32 = crate::portrait_equip::PORTRAIT_EQUIP_OVERRIDE_ABSENT;
 /// `CSMenuProfModelRend` -> its live stage-0 `ChrAsm`, the one the model build actually reads.
 ///
 /// Do not substitute +0x548. The renderer holds three `ChrAsm` stages: +0x548 is the inbox that
 /// `set_model_source` writes, +0x33c is the staged copy, and +0x130 is live. `STEP_Init_Setup`
-/// (0x140bb9ca0) snapshots the inbox into +0x33c exactly once and never dereferences it again, while
-/// `STEP_Wait_Play` (0x140bba080) re-runs the model-resource request `FUN_1409e6fb0` against +0x130
+/// (0x140bbb880) snapshots the inbox into +0x33c exactly once and never dereferences it again, while
+/// `STEP_Wait_Play` (0x140bbbc60) re-runs the model-resource request `FUN_1409e86f0` against +0x130
 /// every frame a model instance exists. An oracle reading +0x548 therefore reports what we handed the
 /// renderer, not what it is rendering -- which is precisely how the PR #128 oracle passed a run the
 /// user saw as nude (bd er-effects-rs-91l5).
@@ -122,9 +122,9 @@ pub const PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET: usize = 0x130;
 
 /// `CSMenuProfModelRend` -> the inbox `ChrAsm`, the one `set_model_source` writes and mutilates.
 ///
-/// Not inferred from the trio above: `FUN_140bb9800` -- the ChrAsm getter every part of
-/// `FUN_140bbe1a0` passes around -- is the whole function `return param_1 + 0x548;`, and
-/// `FUN_140bb9850(renderer, source)` is `ChrAsm::Copy(renderer + 0x548, source)`. So the feed's
+/// Not inferred from the trio above: `FUN_140bbb3e0` -- the ChrAsm getter every part of
+/// `FUN_140bbfda0` passes around -- is the whole function `return param_1 + 0x548;`, and
+/// `FUN_140bbb430(renderer, source)` is `ChrAsm::Copy(renderer + 0x548, source)`. So the feed's
 /// eight weapon clears and its two default-protector writes all land here, and here is where the
 /// record's own param ids have to be put back before the build kick consumes them.
 pub const PROFILE_RENDERER_CHR_ASM_INBOX_OFFSET: usize = 0x548;
@@ -136,19 +136,19 @@ pub const PROFILE_RENDERER_CHR_ASM_INBOX_OFFSET: usize = 0x548;
 /// `chrAsmArmStyle: ChrAsmArmStyle` at +0x328, `dummyPolyLocationModifiers:
 /// CSFD4LocationChrAsmMdlDmypolyProxy*[27]` at +0x100 and `partsArray: CSPartsModelIns*[25]` at
 /// +0x1d8 -- i.e. the field sits with the machinery that decides whether a weapon hangs in a hand or
-/// on the back. The portrait's instance is built by `FUN_140bbb3b0` (`HeapAlloc(0x370)` = 880) and
+/// on the back. The portrait's instance is built by `FUN_140bbcf90` (`HeapAlloc(0x370)` = 880) and
 /// stored at `renderer+0x778`, which is the same pointer the equip oracle reads as `model_ins`.
 ///
 /// Nothing in our path writes it, which is why a two-handed portrait still holds its off-hand out to
 /// the side instead of stowing it: the idle animation says two-handing while this field still says
-/// otherwise. The three setters the constructor's caller does invoke (`FUN_1409eb720`,
-/// `FUN_1409eb5e0`, `FUN_1409eb9b0`) touch flag bits at +0x20 and a pointer at +0x320; none is an
+/// otherwise. The three setters the constructor's caller does invoke (`0x1409ecec0`,
+/// `0x1409ecd80`, `0x1409ed150`) touch flag bits at +0x20 and a pointer at +0x320; none is an
 /// arm-style setter, so there is no native call to prefer over the write.
 pub const CHR_ASM_MODEL_INS_ARM_STYLE_OFFSET: usize = 0x328;
 
 /// `CS::CSChrAsmModelIns` -> the first of its part-model node pointers.
 ///
-/// This array is the model as the renderer draws it: the model submit `FUN_1409e9ac0` walks every
+/// This array is the model as the renderer draws it: the model submit `0x1409eb100` walks every
 /// non-null slot of `model_ins+0x28 .. +0x100` and draws it, so one pointer per attached piece of
 /// armour, weapon and body part. `lookat_bone_hooks`'s parts enumerator already reads exactly this
 /// range; the two constants are named here so a reader does not have to recover `0x28` and `27`

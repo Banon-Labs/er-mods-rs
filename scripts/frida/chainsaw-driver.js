@@ -1383,16 +1383,16 @@ function bind () {
   // About 28 percent of entries on this build open with an Arxan healing stub; a hook on the stub
   // never fires. Wine's XInput exports open with the same 5-byte jump.
   // `Game.Debug.IsEnableControlOnDisactiveWindow`: 1.16.2 0x144588af1 -> 1.17.0/1.17.1 0x14458cb71
-  // (docs/recon/rva-map-1162-to-1170.data.tsv) -> 2.7.2.0 0x14458fb91. Its one reader, the getter
+  // -> 2.7.2.0 0x14458fb91. Its one reader, the getter
   // stub that STEP_Update+0xa3c and the CSPadStep constructor+0x7e call (1.17.1 0x140e55090 ->
   // 2.7.2.0 0x140e56780), reads 0x14458fb91 in the 2.7.2.0 image.
   const FOCUS_BYTE = va('0x14458fb91');
   const follow = function (a) { return a.readU8() === 0xe9 ? a.add(5).add(a.add(1).readS32()) : a; };
 
   // 2.7.2.0 addresses: `1.17.1 -> 2.7.2.0` after each, then its 1.16.2 source in brackets. The
-  // 1.17.1 values came from scripts/map-rvas-1162-to-1170.py (unique signatures unless noted); the
-  // step to 2.7.2.0 is scripts/map-rvas-1171-to-1172.py, and every function below opens with the
-  // same bytes in both images (rel32/rip displacements masked).
+  // 1.17.1 values were paired with 1.16.2 on unique signatures unless noted, and every function
+  // below opens with the same bytes in the 1.17.1 and 2.7.2.0 images (rel32/rip displacements
+  // masked).
   const A = {
     PRE_BEHAVIOR_SAFE: va('0x140401fc0'), // 0x140401f30 -> 0x140401fc0, CS::ChrIns::PreBehaviorSafe [0x140401bd0]
     UPDATE_FROM_MANIPULATOR: va('0x140408220'), // 0x140408190 -> 0x140408220, CSChrActionRequestModule::UpdateFromManipulator [0x140407c60]
@@ -1459,8 +1459,8 @@ function bind () {
   const GET_EQUIP = new NativeFunction(A.GET_EQUIP, 'int', ['pointer', 'int']);
   const EQUIP = new NativeFunction(A.EQUIP_TO_SLOT, 'void', ['int', 'pointer']);
   const UNEQUIP = new NativeFunction(A.UNEQUIP, 'void', ['int', 'uint8']);
-  // Grant natives (er-build-import-runtime grant.rs), 1.16.2 -> 1.17 by docs/recon/rva-map-1162-to-1170
-  // (all below the 1.17.1 shift), then 1.17.1 -> 2.7.2.0 by scripts/map-rvas-1171-to-1172.py.
+  // Grant natives (er-build-import-runtime grant.rs), at their 2.7.2.0 addresses (1.17.0 and 1.17.1
+  // agreed on all of them).
   const MINT_WEAPON_WITH_GEM = new NativeFunction(va('0x140672fe0'), 'pointer', ['pointer', 'pointer', 'int', 'int']); // 0x140672b30 -> 0x140672fe0 [0x140671ce0]
   const ADD_INVENTORY_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // unmoved [0x140246480]
   const HANDLE_DTOR = new NativeFunction(va('0x140683780'), 'void', ['pointer']); // 0x1406832d0 -> 0x140683780 [0x140682480]

@@ -9,7 +9,7 @@ fn write_render_state_oracles(body: &mut String, base: usize) {
     const NULL_PTR: usize = 0;
     const READ_FAIL_SENTINEL: i32 = -1;
     let format_optional_ptr = format_optional_oracle_ptr;
-    // World-live oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
+    // World-live oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d67f48]+0xED) (2.7.2.0).
     // NOTE (RE-corrected 2026-07-02): this reads `CSNowLoadingHelperImp::load_done` -- a load-complete
     // latch, not "loading screen visible." `Update` copies it from `request_load_done` (raised by the
     // map-load system), so it reads true after the load finishes and lingers into gameplay. Kept as a

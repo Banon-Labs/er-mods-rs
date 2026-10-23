@@ -992,9 +992,9 @@ attacker clock, first hit on frame 0:
 
 ### What a runtime measurement would hook (1.17.1)
 
-All below the 0xafefe9 boundary, so 1.17.0 == 1.17.1
-(`docs/recon/rva-map-1162-to-1170.functions.tsv`, `scripts/map-rvas-1170-to-1171.py`); the two
-+0x25f sites were byte-checked in `eldenring-deobf-1.17.1.bin`.
+All below the 0xafefe9 boundary, so 1.17.0 == 1.17.1 (the 1.16.2 -> 1.17 function map and the
++0x70 rule, both deleted with the address carry on 2026-10-23); the two +0x25f sites were
+byte-checked in `eldenring-deobf-1.17.1.bin`.
 
 | 1.16.2 | 1.17.1 | what to log |
 |---|---|---|

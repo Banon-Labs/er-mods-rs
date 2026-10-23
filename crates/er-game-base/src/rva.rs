@@ -1,34 +1,37 @@
-//! Tier A: stable singleton RVA / offset table (game 1.16.x, image base
+//! Tier A: stable singleton RVA / offset table (game FileVersion 2.7.2.0, image base
 //! 0x140000000). These are version-anchored facts shared by all three DLLs;
 //! they were previously re-declared under ~4 different aliases in the product
 //! `constants/*` tree and hand-copied verbatim into the two mini-DLLs. This is
 //! the single source of truth.
+//!
+//! Every rva here is a native 2.7.2.0 rva, used as-is on 2.7.2.0 and refused on any other build
+//! by the `er_game_base::mem` / `game_build` resolvers. Other addresses quoted in the prose are
+//! 2.7.2.0 unless labelled with another build; the RE behind most of them was done on the named
+//! 1.16.2 dump, and its `FUN_<1.16.2 VA>` names carry a 1.16.2 label. An address that is the same
+//! function at the same place on 1.16.2 and 2.7.2.0 (most of the `0x1402xxxxx` inventory code) is
+//! valid on both and needs no label.
 //!
 //! Feature-specific / experiment-local offsets do not belong here — only the
 //! cross-cutting singleton globals + their generic field offsets.
 
 /// `GameDataMan` singleton global (aliased as GAME_DATA_MAN_GLOBAL_RVA /
 /// CONTINUE_MANAGER_GLOBAL_RVA in the product tree).
-pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d64fb8;
 /// `CSMenuMan` singleton global (aliased GLOBAL_CSMENUMAN_RVA /
 /// CS_MENU_MAN_GLOBAL_RVA / SELECTBOT_INPUT_MANAGER_GLOBAL_RVA /
 /// TITLE_INPUT_MANAGER_RVA).
-pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
-/// `CSWorldGeomMan` singleton global, built by `MoveMapStep::STEP_MsbLoad`. Carried to 1.17 by
-/// the data map: `0x3d69ba8 -> 0x3d6dc18`, 389/394 votes.
-pub const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize = 0x3d69ba8;
+pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d72840;
+/// `CSWorldGeomMan` singleton global, built by `MoveMapStep::STEP_MsbLoad` (1.16.2 `0x3d69ba8`).
+pub const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize = 0x3d70c38;
 /// `GameMan` singleton global (save-slot owner).
-pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
-/// `CS::CSNetMan` singleton global -- `0x143d6de98` on 1.16.2.
+pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d709a8;
+/// `CS::CSNetMan` singleton global -- `0x143d74f28` on 2.7.2.0 (`0x143d6de98` on 1.16.2).
 ///
 /// Reached for `BreakInManager` at `+0xa8`, which is where the host currently being negotiated
 /// with is readable before any session exists. That is the only place a rejected match can be
 /// given a name: `SetMultiplayJoinData`'s `ServerPushJoinData` carries a destination and no
 /// identity at all.
-///
-/// Carried to 1.17 by `scripts/map-data-rvas-1162-to-1170.py`: `0x3d6de98 -> 0x3d71f08`, agreed by
-/// 645 references. `.data` does not move between 1.17.0 and 1.17.1.
-pub const CS_NET_MAN_GLOBAL_RVA: usize = 0x3d6de98;
+pub const CS_NET_MAN_GLOBAL_RVA: usize = 0x3d74f28;
 /// `CS::CSPcKeyConfig` singleton global (Ghidra: `GLOBAL_CSPcKeyConfig`) -- the player'S own
 /// keyboard, mouse and gamepad bindings. NULL until the game initialises its key configuration.
 ///
@@ -38,7 +41,8 @@ pub const CS_NET_MAN_GLOBAL_RVA: usize = 0x3d6de98;
 /// `cmp r8d,0x35; ja fail; lea rcx,[rcx + idx*0x14 + 0x440]`.
 ///
 /// `+0x000` is the input-device source byte: the title screen writes 0 for a pad press and 1 for a
-/// key press (`FUN_1409b0800` / `FUN_1409b1260`), which is what flips the on-screen button glyphs.
+/// key press (1.16.2 `FUN_1409b0800` / `FUN_1409b1260`), which is what flips the on-screen button
+/// glyphs.
 /// `er-title-flow` aliases this global as `TITLE_MENU_TRANSITION_SINGLETON_RVA` and its narrow
 /// title advance sets that byte -- correct behaviour, but it is the device-source byte and not a
 /// "menu-open in progress" flag as the comment there used to say.
@@ -46,10 +50,10 @@ pub const CS_NET_MAN_GLOBAL_RVA: usize = 0x3d6de98;
 /// RE 2026-08-25 against the 1.16.2 dump; see bd
 /// `er-keybinding-table-cspckeyconfig-1162-2026-08-25` for the full layout, the internal-key-id
 /// enum and the scancode lookup table that goes with it.
-pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d5dea8;
+pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d64f28;
 /// The `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single instruction
-/// `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853` (1.16.2 RVA; the data map carries it to
-/// 0x458cb71 on 1.17, bracketed by five anchors that all move +0x4080).
+/// `movzx eax, byte ptr [0x14458fb91]` at `0x1404702b2` (2.7.2.0; on 1.16.2 it is `[0x144588af1]`
+/// at `0x1402e6853`).
 ///
 /// Data, not a hook target, and the name says so on purpose: nothing detours this address.
 /// `er-focus-input` writes the byte so an unfocused window still feeds input;
@@ -58,42 +62,44 @@ pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d5dea8;
 /// drift `scripts/check-rva-alias-drift.py` exists to catch, and because `_DATA_` in the name is
 /// what keeps `scripts/check-shared-hook-rvas.py` from reading the pair as two MinHook instances on
 /// one prologue.
-pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA: usize = 0x4588af1;
-/// `CS::FieldArea**` singleton global -- 1.16.2 runtime VA `0x143d691d8`.
+pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA: usize = 0x458fb91;
+/// `CS::FieldArea**` singleton global -- 2.7.2.0 runtime VA `0x143d70268` (1.16.2 `0x143d691d8`).
 ///
 /// The 1.16.2 Ghidra dump has 264 reads of this global. `ConvertBlockCoordsToPhysicsCoords`
-/// (`0x14061e120`) reads it as `GLOBAL_FieldArea`, then passes `FieldArea+0x18` to the typed
+/// (1.16.2 `0x14061e120`) reads it as `GLOBAL_FieldArea`, then passes `FieldArea+0x18` to the typed
 /// `WorldInfoOwner` methods.
-pub const FIELD_AREA_PTR_RVA: usize = 0x3d691d8;
-/// `FUN_14067b570` -- system-slot-only save dispatcher (GameMan b73 set, b72 clear).
-pub const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67b570;
-/// `FUN_14067b940` -- combined character+system save dispatcher (GameMan b72 and b73 set).
-pub const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67b940;
+pub const FIELD_AREA_PTR_RVA: usize = 0x3d70268;
+/// System-slot-only save dispatcher (GameMan b73 set, b72 clear); 1.16.2 `FUN_14067b570`.
+pub const SAVE_DISPATCH_SYSTEM_RVA: usize = 0x67c870;
+/// Combined character+system save dispatcher (GameMan b72 and b73 set); 1.16.2 `FUN_14067b940`.
+pub const SAVE_DISPATCH_COMBINED_RVA: usize = 0x67cc40;
 /// `InGameStep::STEP_MoveMap_LoadlistInit` -- builds the world-res loadlist.
-pub const STEP_MOVEMAP_LOADLIST_INIT_RVA: usize = 0xaec570;
+pub const STEP_MOVEMAP_LOADLIST_INIT_RVA: usize = 0xaedd40;
 /// SaveLoad IO device request teardown/release function.
-pub const SL_RELEASE_REQUEST_RVA: usize = 0xe6f200;
-/// `FUN_140679180` -- the load-side pump of the SaveLoad IO device. Polls `FUN_140e6e080` and writes
-/// `GameMan.saveState` 3 (answer 0) or 0 (any answer but 0 or 1). `CS::MoveMapStep::DoSaveStuff`
-/// calls it only under `IsSaveState2()`, because `FUN_140e6e080` answers 4 without releasing
+pub const SL_RELEASE_REQUEST_RVA: usize = 0xe72760;
+/// The load-side pump of the SaveLoad IO device (1.16.2 `FUN_140679180`). Polls 1.16.2
+/// `FUN_140e6e080` and writes `GameMan.saveState` 3 (answer 0) or 0 (any answer but 0 or 1).
+/// `CS::MoveMapStep::DoSaveStuff` calls it only under `IsSaveState2()`, because that poll
+/// answers 4 without releasing
 /// anything while `iodev+0x18 == 0` -- which is every frame a save owns the device.
 /// Aliased as B80_POLL_RVA (er-title-flow) / SAVE_STATE_LOAD_POLL_RVA (er-save-suppress); both
 /// derive from here (2026-08-31).
-pub const SL_LOAD_POLL_WRAPPER_RVA: usize = 0x679180;
-/// `FUN_140679510` -- the save-side pump of the same device. Polls `FUN_140e6e430` and writes
+pub const SL_LOAD_POLL_WRAPPER_RVA: usize = 0x67a480;
+/// The save-side pump of the same device (1.16.2 `FUN_140679510`). Polls 1.16.2 `FUN_140e6e430` and
+/// writes
 /// `GameMan.saveState = 0` for any answer but 1. `DoSaveStuff` calls it only under `IsSaveState1()`.
 /// Aliased as B80_LANE1_DRIVER_RVA (er-title-flow) / SAVE_STATE_SAVE_LANE_RVA (er-save-suppress).
-pub const SL_SAVE_LANE_WRAPPER_RVA: usize = 0x679510;
+pub const SL_SAVE_LANE_WRAPPER_RVA: usize = 0x67a810;
 /// `EzChildStepBase` child-step reset/teardown function.
-pub const EZ_CHILDSTEP_RESET_RVA: usize = 0xeb54c0;
+pub const EZ_CHILDSTEP_RESET_RVA: usize = 0xeb8a20;
 /// Scaleform LoaderImpl file-open wrapper.
-pub const TITLE_SCALEFORM_FILE_OPEN_RVA: usize = 0x11ced80;
+pub const TITLE_SCALEFORM_FILE_OPEN_RVA: usize = 0x11d22e0;
 /// CS::TitleTopDialog vtable.
-pub const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+pub const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b2b5d8;
 /// Scaleform::MemoryFile vtable.
-pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
+pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2baa020;
 /// `CSSystemStep` singleton global.
-pub const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+pub const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d8c720;
 /// `FD4::FD4StepTemplateBase::currentState` -- the state the stepper is executing this frame,
 /// at `CSSystemStep + 0x48`. `requestedState` is the adjacent `+0x4c` and the "step done,
 /// advance" bool is `+0x50`; the constructor zeroes the first two together with a single
@@ -111,50 +117,50 @@ pub const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
 /// and the Rust struct's computed layout was right all along.
 ///
 /// Measured instead of named: `scripts/pair-object-field-drift.py --pair 0x140dec6d0:226
-/// 0x140dee4d0:226 --base rsi --base rcx` aligns the CSSystemStep step-template constructor's two
-/// bodies 57/57 instructions with 13 field offsets -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60,
+/// 0x140dee4d0:226 --base rsi --base rcx` (the 1.16.2 and 1.17.0 entries) aligns the CSSystemStep
+/// step-template constructor's two bodies 57/57 instructions with 13 field offsets -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60,
 /// 0x68, 0x69, 0x70, 0xa0, 0xa8, 0xac -- every one held across 1.16.2 -> 1.17 and 0x40 absent from
 /// the set. The bytes are identical in both images: `48 89 5e 48 88 5e 50` at 0x140dec744 (1.16.2)
 /// and 0x140dee544 (1.17). Frozen as a witness row in
-/// `scripts/check-object-field-offsets-1170.py`, which is what now keeps this honest.
+/// `scripts/check-object-field-offsets.py`, which is what now keeps this honest.
 pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;
 /// Native `MenuWindowJob::Run` close-with-Failed helper. It calls `SetResult(..., Failed=3, 0)`
 /// and then invokes the receiver's own vtable slot +0x60.
-pub const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize = 0x7ac890;
+pub const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize = 0x7adbc0;
 /// Save-data subsystem gate global (submit path guard). Ghidra names it `GLOBAL_CSEventState`;
 /// the guard role is the reason it is here. It is a 3-byte HeapAlloc read as a byte at
-/// offset 0, not the 0x270-byte object allocated beside it (that one is 0x3d68448).
-pub const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
+/// offset 0, not the 0x270-byte object allocated beside it (that one is 1.16.2 0x3d68448).
+pub const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d6f108;
 /// Main heap allocator singleton global (`GLOBAL_MainHeapAllocator`). Identified from the
 /// 1.16.2 Ghidra dump: 1821 xrefs, readers spanning `CSTaskImp` / `CSWindowImp` / `CSEzWork`
-/// / `BloodMessageInsMan`, and `GameMan::WriteSaveToSlot` (0x14067b750) derefs
+/// / `BloodMessageInsMan`, and `GameMan::WriteSaveToSlot` (1.16.2 0x14067b750) derefs
 /// `GLOBAL_MainHeapAllocator->_vfptr->AllocateAligned` while referencing this address.
 /// Aliased in the tree as GLOBAL_MAIN_HEAP_ALLOCATOR_RVA / SLLOAD_SRC2_RVA (a wrong name) /
 /// SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA (a role name in er-save-loader; that crate now derives
 /// from here, so the misnomer is documented at its declaration rather than duplicated).
-pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+pub const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d8e380;
 /// Menu heap allocator singleton global (`GLOBAL_MenuHeapAllocator`, `DLAllocator*`), the
 /// allocator every menu-owned allocation goes through. Sits 0x70 past the main heap allocator
 /// above; the two are easy to transpose, which is the second reason it is pinned here.
 /// Identified from the 1.16.2 Ghidra dump: 401 xrefs, and the accessor
-/// `DLAllocator *GetMenuHeapAllocator(void)` (0x1407a72a0) is nothing but
+/// `DLAllocator *GetMenuHeapAllocator(void)` (1.16.2 0x1407a72a0) is nothing but
 /// `return GLOBAL_MenuHeapAllocator;` reading this address.
 /// Aliased in the tree as GLOBAL_MENU_HEAP_ALLOCATOR_RVA (er-quickload save-picker path editor,
 /// which passes it as the allocator argument of the SoftwareKeyboard job alloc) /
 /// MENU_HEAP_ALLOCATOR_POINTER_RVA (er-player-name-filter, which passes it to
 /// `DLString<wchar_t>::FromU16Array` exactly as `GetPlayerChrName` does).
-pub const GLOBAL_MENU_HEAP_ALLOCATOR_RVA: usize = 0x3d87350;
-/// SaveLoad IO device singleton global. Its lazy getter is 0x140e6e060, and
+pub const GLOBAL_MENU_HEAP_ALLOCATOR_RVA: usize = 0x3d8e3f0;
+/// SaveLoad IO device singleton global. Its lazy getter is 1.16.2 0x140e6e060, and
 /// `GameMan::WriteSaveToSlot` fetches the device through that getter before submitting a save.
 /// Aliased as IODEV_GLOBAL_RVA (er-title-flow) / SL_IODEV_GLOBAL_RVA (er-save-suppress); both
 /// now derive from here (2026-08-01). "iodev" is the role the callers use -- the dump does not
 /// name the class, so treat the name as descriptive rather than authoritative.
-pub const SL_IODEV_GLOBAL_RVA: usize = 0x4589390;
-/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
-/// and calls `CSDlcImp::AddVirtualFileRoots`.
-pub const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_5fb0;
+pub const SL_IODEV_GLOBAL_RVA: usize = 0x4590430;
+/// `(CSDlcImp*, bool)` -- the DLC virtual-root refill (1.16.2 `FUN_140e05fb0`): re-queries Steam
+/// DLC ownership and calls `CSDlcImp::AddVirtualFileRoots`.
+pub const DLC_ROOTS_REFILL_RVA: usize = 0x00e0_9510;
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
-pub const CSDLC_SINGLETON_RVA: usize = 0x03d8_6bd8;
+pub const CSDLC_SINGLETON_RVA: usize = 0x03d8_dc78;
 
 /// `CS::ItemReplenishStateTracker::ShouldReplenishItem(tracker, int *itemId)` -- whether an item is
 /// currently flagged to be topped back up from the storage box. Honours the per-type default for an
@@ -169,12 +175,12 @@ pub const REPLANISH_ITEMS_FROM_CHEST_RVA: usize = 0x0024_dff0;
 /// `GameDataMan` -> `PlayerGameData` pointer field offset.
 /// `CS::GameMan::SetMoveMapStepBlockId(BlockId *out, BlockId *in)` -- writes
 /// `GameMan.moveMapStepBlockId`, i.e. picks the destination block of the next map transition.
-/// Byte-checked against `eldenring-deobf.bin` at shift 0 for 1.16.2 (`0x14067abd0`).
+/// 2.7.2.0 `0x14067bed0` (1.16.2 `0x14067abd0`).
 ///
 /// NOTE for callers: `param_1` is the out slot, and it is not always equal to `param_2` --
 /// for areas 50..=88 the id is rewritten through `CalcGetReplaceMapIdByDisaster`. Read the
 /// out slot back rather than assuming the requested block is the effective one.
-pub const SET_MOVE_MAP_STEP_BLOCK_ID_RVA: usize = 0x67abd0;
+pub const SET_MOVE_MAP_STEP_BLOCK_ID_RVA: usize = 0x67bed0;
 
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 /// `CSMenuMan` -> `menuData` pointer field offset.
@@ -188,9 +194,9 @@ pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 /// `MenuString` for the system-message banner. Declared twice with different names until 2026-08-06,
 /// which is exactly the alias drift this module exists to stop.
 ///
-/// Corrected history worth keeping: 0x762e30 is `GetTextEmbedImageName`, not this. Hooking that one
-/// is why a corrupted-save oracle once stayed at zero forever.
-pub const GR_SYSTEM_MESSAGE_RVA: usize = 0x762d50;
+/// Corrected history worth keeping: 1.16.2 0x762e30 is `GetTextEmbedImageName`, not this. Hooking
+/// that one is why a corrupted-save oracle once stayed at zero forever.
+pub const GR_SYSTEM_MESSAGE_RVA: usize = 0x764050;
 
 /// Shared `CS::MessageBoxDialog` function/vtable RVAs.
 ///
@@ -198,13 +204,13 @@ pub const GR_SYSTEM_MESSAGE_RVA: usize = 0x762d50;
 /// startup/quit paths. Keep the values here so a version correction cannot drift between crates.
 #[repr(usize)]
 pub enum MsgBoxRva {
-    ForceStop = 0x78dfd0,
-    OkHandler = 0x78e030,
-    MultiChoiceGetter = 0x7b0cf0,
-    Builder = 0x9275b0,
-    OnDecide = 0x927ba0,
-    Update = 0x927d30,
-    DialogVtable = 0x2b03550,
+    ForceStop = 0x78f300,
+    OkHandler = 0x78f360,
+    MultiChoiceGetter = 0x7b2020,
+    Builder = 0x928c00,
+    OnDecide = 0x9291f0,
+    Update = 0x929380,
+    DialogVtable = 0x2b086c0,
 }
 
 pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
@@ -233,21 +239,33 @@ pub const GET_QUANTITY_BY_ITEM_ID_RVA: usize = 0x24c1b0;
 // global keeps the address in this repo, where `scripts/check-rva-alias-drift.py` can see it.
 
 /// `GLOBAL_MsgRepository` -- the `CS::MsgRepositoryImp*` singleton slot, read from
-/// `MOV RCX, qword ptr [0x143d7d4f8]` inside `MsgRepository::GetAndFormat`.
+/// `MOV RCX, qword ptr [0x143d84588]` inside `MsgRepository::GetAndFormat` (1.16.2 `0x143d7d4f8`).
 ///
 /// The slot is null until the repository is constructed, so every caller must treat a zero as
 /// "not up yet" rather than dereferencing it -- the engine itself DLPanics on that path.
-pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d7_d4f8;
+pub const MSG_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_4588;
 
 /// `GLOBAL_SoloParamRepository` -- the `SoloParamRepositoryImp*` singleton slot, read as
-/// `MOV RCX, qword ptr [0x143d81ee8]` at the head of every param-row lookup.
+/// `MOV RCX, qword ptr [0x143d88f78]` at the head of every param-row lookup (1.16.2
+/// `0x143d81ee8`).
 ///
-/// Null on a quit teardown, and the lookups do not tolerate that: `FUN_140d3d5f0`
+/// Null on a quit teardown, and the lookups do not tolerate that: 1.16.2 `FUN_140d3d5f0`
 /// (`LoadBalancerParam`) and `LookupMenuOffscrRendParam` both go straight to
 /// `DLPanic("...FD4Singleton.h", 0xb4, "<uninitialised singleton accessed>")`, which then dies
 /// writing through a null pointer. Treat a zero here as "already gone" rather than dereferencing
 /// it. Observed killing a tester's game twice in two days, 2026-08-22 and 2026-08-23.
-pub const SOLO_PARAM_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_1ee8;
+pub const SOLO_PARAM_REPOSITORY_GLOBAL_RVA: usize = 0x3d8_8f78;
+
+/// `GetSpEffectParam(SpEffectParamLookupResult* out, int id)`, the typed `SpEffectParam` getter
+/// every reader goes through. Its first five bytes are an Arxan `jmp` stub in the running game, and
+/// calling through it is what the game does.
+///
+/// Declared here for the shells that only call it. `er-death-persist` hooks the same entry and
+/// keeps its own declaration in `getter_sites.rs`, because its `build.rs` includes that file and
+/// cannot reach this crate. A shell calling the getter names this constant at the call rather
+/// than aliasing it into a local `*_RVA` constant: `scripts/check-shared-hook-rvas.py` reads such
+/// an alias as a hook target, and two shells would then appear to hook one prologue.
+pub const GET_SP_EFFECT_PARAM_RVA: usize = 0xd5_3a90;
 
 /// `EquipInventoryData::GetItemInventoryIdx(inventory, int *itemId) -> int`.
 ///
@@ -267,7 +285,8 @@ pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
 // the carried inventory. The one difference that matters is a construction flag:
 // `EquipInventoryData::EquipInventoryData(this, size, keySize, limitedPots, unlimitedConsumables)`
 // (0x14024bbf0) has two callers, and the `EquipGameData` ctor at 0x140245485 passes
-// `unlimitedConsumables = 0` while the `PlayerGameData` ctor at 0x14025d879 passes `1`. That flag
+// `unlimitedConsumables = 0` while the `PlayerGameData` ctor at 1.16.2 0x14025d879 passes `1`
+// (the other two addresses are the same code on 1.16.2 and 2.7.2.0). That flag
 // makes `UpdatePotsStates` early-return and routes `GetMaxAmountForItem` to
 // `GetMaxItemCountForUnlimitedConsumables`, so the box has no pot-group cap -- which is the whole
 // reason depositing a displaced pot raises the ceiling for the one being imported.
@@ -278,7 +297,7 @@ pub const GET_ITEM_INVENTORY_IDX_RVA: usize = 0x24c560;
 /// a null `GLOBAL_CSMenuMan` takes the `DLPanic("...FD4Singleton.h", 0xb4, ...)` path, and a
 /// non-null `GLOBAL_GameDataMan` with a null `mainPlayerGameData` reads through the null pointer
 /// at `+0x8d0`. Check both before calling.
-pub const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x786810;
+pub const GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA: usize = 0x787b40;
 /// `EquipInventoryData::ChangeAmountInBox(box, int *itemId, int requested) -> int accepted`.
 ///
 /// A pure query despite the NAME: its whole body is `if (requested < 1) return 0;`, then the
@@ -392,9 +411,10 @@ pub const REMOVE_GEM_FROM_WEAPON_RVA: usize = 0x249e60;
 /// The inner drop's whole callee set contains no `EquipGameData` or `EquipInventoryData` symbol.
 /// This spawns the object and nothing else; the caller still has to remove the entry, and the
 /// order matters -- see `er_build_import_runtime::storage::Storage::drop_to_ground`.
-pub const MAP_ITEM_MAN_DROP_ITEM_RVA: usize = 0x55aba0;
+pub const MAP_ITEM_MAN_DROP_ITEM_RVA: usize = 0x55bea0;
 
-/// `FUN_14055e3d0(ItemDropData *out, GaItemHandle *held)` -- fill a drop request from an instance.
+/// `(ItemDropData *out, GaItemHandle *held)` -- fill a drop request from an instance (1.16.2
+/// `FUN_14055e3d0`).
 ///
 /// The reason a drop preserves anything. It zeroes the request to `{-1, 0, -1, -1}` and then, for
 /// a weapon, reads `GetItemId` into `itemId`, `GetDurability` into `reinforce`, and -- when
@@ -405,9 +425,9 @@ pub const MAP_ITEM_MAN_DROP_ITEM_RVA: usize = 0x55aba0;
 ///
 /// `quantity` is deliberately left at zero here; the game's own caller sets it afterwards.
 ///
-/// Its caller `FUN_140784960` is the inventory menu's Drop action, which is the path this repo
+/// Its caller 1.16.2 `FUN_140784960` is the inventory menu's Drop action, which is the path this repo
 /// clones: fill from the handle, set the quantity, null-check the singleton, drop.
-pub const ITEM_DROP_DATA_FROM_GAITEM_RVA: usize = 0x55e3d0;
+pub const ITEM_DROP_DATA_FROM_GAITEM_RVA: usize = 0x55f6d0;
 
 /// `GLOBAL_MapItemMan` -- the `CS::MapItemManImpl` singleton [`MAP_ITEM_MAN_DROP_ITEM_RVA`] takes.
 ///
@@ -415,7 +435,7 @@ pub const ITEM_DROP_DATA_FROM_GAITEM_RVA: usize = 0x55e3d0;
 /// the `FD4Singleton` `DLPanic` path when it is null, so a caller must check it too rather than
 /// pass a null through. It is populated once the world is up and freed again by
 /// `CS::InGameStep::_Common_Finalize` on return to title.
-pub const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d67a50;
+pub const GLOBAL_MAP_ITEM_MAN_RVA: usize = 0x3d6eae0;
 
 /// `EquipInventoryData::GetInventoryItemEntryByIndex(inventory, uint itemIdx)
 /// -> InventoryItemEntry*`.
@@ -440,8 +460,8 @@ pub const GET_INVENTORY_ITEM_ENTRY_BY_INDEX_RVA: usize = 0x24e770;
 /// ```
 ///
 /// so an entry's `sortId` is the value of the inventory's monotonic counter at the moment the
-/// item arrived. `UpdateQuantityAndSortId` (`0x140712940`) is seven instructions and re-stamps
-/// the field only when the new quantity is greater than the old one (or when its fourth argument
+/// item arrived. `UpdateQuantityAndSortId` (1.16.2 `0x140712940`) is seven instructions and
+/// re-stamps the field only when the new quantity is greater than the old one (or when its fourth argument
 /// forces it), so topping a stack up moves it and spending from it does not.
 ///
 /// # The consequence a caller can use
@@ -471,7 +491,7 @@ pub const INVENTORY_ITEM_ENTRY_SORT_ID_OFFSET: usize = 0xc;
 // address are divergent claims about what that address is, and at least one of them is then a
 // wrong reverse-engineering fact shipping in the DLL. Declaring the value once and deriving the
 // aliases keeps the names -- which are useful, they say what the caller wants -- while leaving
-// exactly one place a 1.16.x address correction has to land.
+// exactly one place an address correction has to land.
 
 /// `CS::EquipGameData::GetParamIdInSlot(egd, ChrAsmSlot) -> int`.
 ///
@@ -507,8 +527,9 @@ pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
 ///     verbatim image of the PGD from `+0x08`, so the raw name lands at slot-body `+0x94`
 ///     (`er_profile_summary_core::SAVE_PGD_CHARACTER_NAME_OFFSET`).
 ///   * `+0x8e8`, a ref-counted `CSWordCheckedStringInternal` holding the raw and word-checked
-///     spellings. `FUN_14025f8e0` reads this one, and `FUN_14025f8e0` is what
-///     `CS::ProfileSummary`'s per-slot update (`0x140262270`) and `CS::GetPlayerChrName` -- the
+///     spellings. 1.16.2 `FUN_14025f8e0` (2.7.2.0 `0x14025f8f0`) reads this one, and it is what
+///     `CS::ProfileSummary`'s per-slot update (1.16.2 `0x140262270`, 2.7.2.0 `0x140262280`) and
+///     `CS::GetPlayerChrName` -- the
 ///     overhead nameplate -- both call. A raw `memcpy` into `+0x9c` would leave the save-slot
 ///     list and every other player still reading the old name out of here.
 ///   * `+0x8f8`, a second such string, refreshed with the word-check flag set when
@@ -520,7 +541,7 @@ pub const GET_PHYSIC_TEAR_BY_SLOT_RVA: usize = 0x247a20;
 /// the call returns having changed no name at all, while still refreshing the two string objects
 /// from the unchanged `+0x9c`. Clamp to 16 units and terminate; never rely on a length check
 /// inside the callee to report anything.
-pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
+pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610d0;
 
 /// `CS::PlayerGameData::CopyFaceDataFromBuffer(PlayerGameData*, FaceDataBuffer*)` -- the game's
 /// own writer of a character's appearance, and the only sanctioned way to change one.
@@ -534,7 +555,7 @@ pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
 ///     reporting either. A rejected call changes nothing and returns normally, so the caller has
 ///     to read the buffer back rather than infer success from the call having returned.
 ///   * After copying it recomputes a derived block of seven floats at `FaceData+0x130` through
-///     `FUN_140251b10`. A `memcpy` of the buffer alone leaves that block describing the previous
+///     1.16.2 `FUN_140251b10`. A `memcpy` of the buffer alone leaves that block describing the previous
 ///     face.
 ///   * It then increments a generation stamp at `FaceData+0x14c` and sets bit 0 of
 ///     `FaceData+0x154`. The stamp is what makes an appearance change reach a model that is
@@ -550,19 +571,19 @@ pub const PLAYER_GAME_DATA_COPY_CHR_NAME_RVA: usize = 0x2610c0;
 /// `InitializeCharacterRendering(PlayerIns*)` (1.16.2 `0x140650bf0`) runs
 /// `SetFaceData(playerIns->chrAsmModelIns, &GetPlayerGameData(chrIns)->faceData)`.
 /// `CSChrAsmModelIns::SetFaceData` (1.16.2 `0x1409eb640`) caches the stamp at `modelIns+0x308`,
-/// and `CS::PlayerIns::PrePhysicsSafe1` calls `FUN_1409ec160` on every frame that
-/// `chrAsmModelIns` is non-null, ending in `FUN_1409e9b20`: compare the stamp with the cached
+/// and `CS::PlayerIns::PrePhysicsSafe1` calls 1.16.2 `FUN_1409ec160` on every frame that
+/// `chrAsmModelIns` is non-null, ending in 1.16.2 `FUN_1409e9b20`: compare the stamp with the cached
 /// one and, on a difference, re-apply the face across the instance's 27 model slots. So the
 /// character re-renders on the next frame with nothing pumped. The game leans on this itself --
 /// `CS::PlayerIns::PopulateFromPcInfo` writes a peer's face into a live `PlayerGameData` as
 /// routine network handling.
 ///
 /// The exception is the eight leading `i32`s of the payload, which are model ids (face mesh,
-/// hair, eyes, ...). Their consumer `FUN_1409e6fb0` is reached for a live `PlayerIns` only
+/// hair, eyes, ...). Their consumer 1.16.2 `FUN_1409e6fb0` is reached for a live `PlayerIns` only
 /// through vtable slot `0x500`, whose one dispatch site is inside the `ChrSet` load-state
 /// machine, so those are expected to wait for the next load. That is inference from a
 /// single-dispatch-site search, not a proven negative.
-pub const PLAYER_GAME_DATA_COPY_FACE_DATA_FROM_BUFFER_RVA: usize = 0x261000;
+pub const PLAYER_GAME_DATA_COPY_FACE_DATA_FROM_BUFFER_RVA: usize = 0x261010;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*) -> uint`.
 ///
@@ -576,14 +597,14 @@ pub const GET_EQUIP_MAGIC_ID_RVA: usize = 0x2506d0;
 /// `GetWeaponGaitemHandleBySlot(PlayerIns*, u32 *out, ChrAsmSlot) -> u32*`.
 ///
 /// First hop of the ash-of-war read: a `ChrAsmSlot` names a gaitem handle.
-pub const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x656920;
+pub const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x657c20;
 
 /// `GetGaitemInsByHandle(GaitemLookupResult *inout, GaitemLookupResult *handleSource)`.
 ///
 /// Second hop. Both arguments are the same pointer in every native caller; passing two different
 /// buffers reads a handle that was never written into the second one, and the failure is a silent
 /// nothing rather than a fault.
-pub const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
+pub const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x674140;
 
 /// `GetSwordArtsParamForWeapon(GaitemLookupResult*, SwordArtsParamLookupResult *out)`.
 ///
@@ -591,19 +612,19 @@ pub const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
 /// `GetGemGaitemHandleFromWeapon` -> `GetGaitemInsGem`, i.e. the actual equipped gem. The menu
 /// path's `arts_id * 100` heuristic misses every weapon whose gem id is not derived that way
 /// (Igon's Drake Hunt: arts 4210 -> gem 548000).
-pub const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
+pub const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x675230;
 
 /// `GLOBAL_CSGaitem`, the process-lifetime `CSGaitemImp` singleton pointer.
 ///
 /// Constructed once at boot and never rebuilt per world-load. Every gaitem primitive in the game
 /// reads it and `DLPanic`s on null, so a caller that mints or releases a handle must read it from
 /// here rather than keep its own copy.
-pub const GLOBAL_CSGAITEM_RVA: usize = 0x3d69890;
+pub const GLOBAL_CSGAITEM_RVA: usize = 0x3d70920;
 
 /// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`.
 ///
 /// Both dereferences are null-checked in the game's own code, so both must be null-checked here.
-pub const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
+pub const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d6d018;
 
 /// `WorldChrMan::mainPlayerIns`, the local player inside the singleton above.
 pub const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
@@ -611,21 +632,20 @@ pub const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
 /// `CSPlayRegionPointMan` singleton global -- the table that decides which play region a position
 /// is in, and so what "nearby" means for an invasion.
 ///
-/// Read out of `CS::ChrIns::GetPlayRegionId` (`0x1403e96d0`), which loads it four times; the first
-/// is `MOV RAX,qword ptr [0x143d6e388]` at `0x1403e96e4`. The load of
-/// [`WORLD_CHR_MAN_GLOBAL_RVA`] sits in the same function at `0x1403e971c` reading `0x143d65f88`,
-/// which is how this address is known to sit on the same 1.16.2 baseline as the rest of this file
-/// rather than on a dump carrying its own shift.
+/// Read out of `CS::ChrIns::GetPlayRegionId` (1.16.2 `0x1403e96d0`), which loads it four times; on
+/// 1.16.2 the first is `MOV RAX,qword ptr [0x143d6e388]` at `0x1403e96e4`, and the load of
+/// [`WORLD_CHR_MAN_GLOBAL_RVA`] sits in the same function at `0x1403e971c` reading `0x143d65f88`.
+/// On 2.7.2.0 the global is `0x143d75418`.
 ///
 /// Region membership is positional, never per-block: `GetPlayRegionId` takes the character's
-/// physics position and hands it to `FUN_140a61290`, which walks this singleton and returns the
+/// physics position and hands it to 1.16.2 `FUN_140a61290`, which walks this singleton and returns the
 /// region point whose own `contains` test accepts it. A block id therefore cannot be turned into a
 /// region by arithmetic -- the table has to be read, which is why this address exists.
-pub const PLAY_REGION_POINT_MAN_GLOBAL_RVA: usize = 0x3d6e388;
+pub const PLAY_REGION_POINT_MAN_GLOBAL_RVA: usize = 0x3d75418;
 
 /// The region-point container inside [`PLAY_REGION_POINT_MAN_GLOBAL_RVA`].
 ///
-/// An embedded MSVC `std::map` rather than a pointer to one. `FUN_140a61290` reads
+/// An embedded MSVC `std::map` rather than a pointer to one. 1.16.2 `FUN_140a61290` reads
 /// `param_1->field1_0x8` and then dereferences it once to reach the first node, so `+0x8` is the
 /// head sentinel and `*(+0x8)` is where the in-order walk starts -- the same shape
 /// `er_invasion_warp_core::legacy_map_regions` already walks, down to the `isNull` byte at node
@@ -634,7 +654,7 @@ pub const PLAY_REGION_POINT_MAN_MAP_OFFSET: usize = 0x8;
 
 /// A container node's own region-point object.
 ///
-/// `FUN_140a61290` reads `node[5]` -- `node + 0x28` -- null-checks it, and calls its vtable slot
+/// 1.16.2 `FUN_140a61290` reads `node[5]` -- `node + 0x28` -- null-checks it, and calls its vtable slot
 /// `+0x10` as the `contains(position)` test. A null is skipped rather than fatal there, so a walk
 /// here must skip it too.
 pub const PLAY_REGION_POINT_NODE_POINT_OFFSET: usize = 0x28;
@@ -652,16 +672,16 @@ pub const PLAY_REGION_POINT_NODE_POINT_OFFSET: usize = 0x28;
 /// `FUN_14021bbf0` -- the MSB filecap parse callback.
 pub const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x0021_bbf0;
 /// `CS::MenuViewer` pad-confirm-pressed predicate.
-pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x0075_8a10;
+pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x0075_9d10;
 /// `CS::MenuViewer` mouse-clicked predicate.
-pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x0075_8a70;
+pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x0075_9d70;
 /// The DLC virtual-root refill job.
-pub const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
+pub const DLC_ROOTS_JOB_RVA: usize = 0x0083_83d0;
 /// `STEP_Loadlist_Wait`.
-pub const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
+pub const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_2fd0;
 /// The DLC virtual-root blank path.
-pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
-/// `DLIO::DLFileDeviceManager` singleton global -- deobf VA `0x1448464a8`.
+pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_99f0;
+/// `DLIO::DLFileDeviceManager` singleton global -- 2.7.2.0 VA `0x14484d548` (1.16.2 `0x1448464a8`).
 ///
 /// Sole declaration of this address. `er-title-flow`'s `EBL_REGISTRY_GLOBAL_RVA` and
 /// `er-reload-trace`'s `MOUNTED_ARCHIVE_REGISTRY_RVA` are aliases derived from this constant;
@@ -670,11 +690,10 @@ pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
 /// The image is `0x5e01800` bytes, so neither corruption is inside it and every read through them
 /// silently returned nothing. That is the failure mode this centralisation exists to prevent.
 ///
-/// The value is byte-proven, not inferred: `GetFileDeviceManager` @`0x141f48b40` is
-/// `48 8b 05 61 d9 8f 02` = `mov rax, [rip+0x28fd961]`, and `0x141f48b47 + 0x28fd961` is
-/// `0x1448464a8` and nothing else. Ghidra names that global `GLOBAL_DLFileDeviceManager` and its
-/// lazy creator `FUN_141f49f60`. `0x48464a8` has reference sites in `.text` (6/6 agreeing on the
-/// 1.17 carry to `0x484a528`); `0x84864a8` and `0x448464a8` have zero between them.
+/// The value is byte-proven, not inferred: on 2.7.2.0 `GetFileDeviceManager` @`0x141f4c0a0` is
+/// `48 8b 05 a1 14 90 02` = `mov rax, [rip+0x29014a1]`, and `0x141f4c0a7 + 0x29014a1` is
+/// `0x14484d548` (1.16.2: `0x141f48b40`, `48 8b 05 61 d9 8f 02`, `0x1448464a8`). Ghidra names that
+/// global `GLOBAL_DLFileDeviceManager` and its lazy creator `FUN_141f49f60` (1.16.2).
 ///
 /// This global is the manager pointer, not "the mounted-archive registry" -- the mount census
 /// walks the registry hanging off it (`R+0x90`/`R+0x98`, stride `0x40`; archive name is an MSVC
@@ -682,28 +701,30 @@ pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
 /// `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`: a genuinely null manager
 /// would break every file read in the process, so that census reading `null` was a
 /// deref-depth/timing artifact and the conclusion drawn from it does not follow.
-pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
+pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_d548;
 
-/// `GLOBAL_CSSessionManager` singleton global -- 1.16.2 runtime VA `0x143d7a4d0`.
+/// `GLOBAL_CSSessionManager` singleton global -- 2.7.2.0 runtime VA `0x143d81560` (1.16.2
+/// `0x143d7a4d0`).
 ///
 /// Sole declaration of this address; `er-invasion-warp-core`'s `SESSION_MANAGER_GLOBAL_RVA` is an
-/// alias derived from it. Byte-proven out of `1405f2935: mov 0x3787b94(%rip),%rcx`, and read a
-/// second, independent way by `MoveMapStep`'s ending-request evaluator at `0x140afa86b`
-/// (`MOV RAX,qword ptr [0x143d7a4d0]` immediately before `CMP dword ptr [RAX + 0x10],0x4`).
+/// alias derived from it. Byte-proven on 1.16.2 out of `1405f2935: mov 0x3787b94(%rip),%rcx`, and
+/// read a second, independent way by `MoveMapStep`'s ending-request evaluator at 1.16.2
+/// `0x140afa86b` (`MOV RAX,qword ptr [0x143d7a4d0]` immediately before `CMP dword ptr [RAX + 0x10],0x4`).
 ///
 /// It is here rather than in the warp crate because that second reader is the product's, not the
 /// sidecar's: the ending evaluator's `protocolState == WaitReload` term is one of the nine inputs
 /// that decide whether the MoveMap child tears the world down (see
 /// `er_title_flow::SESSION_PROTOCOL_STATE_WAIT_RELOAD`).
-pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
+pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d8_1560;
 
-/// `GLOBAL_CSEventMan` singleton global -- 1.16.2 runtime VA `0x143d686f8`.
+/// `GLOBAL_CSEventMan` singleton global -- 2.7.2.0 runtime VA `0x143d6f788` (1.16.2
+/// `0x143d686f8`).
 ///
-/// Byte-proven out of the same ending-request evaluator: `0x140afa8bd`
+/// Byte-proven on 1.16.2 out of the same ending-request evaluator: `0x140afa8bd`
 /// `MOV RCX,qword ptr [0x143d686f8]`, then `MOV RCX,qword ptr [RCX + 0x10]` (the `deadReset`
 /// member, `CSEventManImp` field ordinal 2 in the named 1.16.2 dump) and `CALL 0x1405fef50`,
 /// which is the one-line getter `return param_1->field1_0x8;`, compared against `2`.
-pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
+pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_f788;
 
 // ---------------------------------------------------------------------------------------
 // Scaleform proxy primitives
@@ -717,25 +738,26 @@ pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
 // (`scripts/check-rva-alias-drift.py`).
 
 /// `CS::CSScaleformValue::~CSScaleformValue`, the destructor every resolved child proxy owes.
-pub const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
+pub const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd82cf0;
 
 // The Scaleform texture repository and its by-name lookup, read by `er-r3-view` (item icons) and
 // `er-target-bars` (HUD bar art). Both resolve them through `game_data_addr` / `game_rva_named`;
 // declared once here so the two crates cannot disagree about the address.
 
-/// 1.16.2 rva of the Scaleform texture repository global, a pointer that is null until the menu
-/// system has built it (1.17.1 `0x3d86580`, bd `item-icon-runtime-chain-1171-2026-10-02`).
-pub const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d82510;
+/// 2.7.2.0 rva of the Scaleform texture repository global, a pointer that is null until the menu
+/// system has built it (1.16.2 `0x3d82510`, bd `item-icon-runtime-chain-1171-2026-10-02`).
+pub const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d895a0;
 
-/// 1.16.2 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
-/// (1.17.1 `0xd65c00`); the resource is written to `out`. Called, never hooked.
-pub const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
+/// 2.7.2.0 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
+/// (1.16.2 `0xd63e50`); the resource is written to `out`. Called, never hooked.
+pub const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd672f0;
 
 /// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
 /// thing that moves the caret in either 02_990 field. The native SoftwareKeyboard owns no caret at
-/// all: `EnterName_` (`0xe70c00`) writes a prompt string, max length and flags, and the set-initial
-/// path (`0xe709f0` -> `0x142416ef0`) is a pure `DLString` assign. The caret lives in Scaleform, and
-/// this is the function ActionScript's `Selection.setSelection` (impl `0x140f47060`) ends up calling
+/// all: `EnterName_` (1.16.2 `0xe70c00`) writes a prompt string, max length and flags, and the
+/// set-initial path (1.16.2 `0xe709f0` -> `0x142416ef0`) is a pure `DLString` assign. The caret
+/// lives in Scaleform, and this is the function ActionScript's `Selection.setSelection` (impl
+/// 1.16.2 `0x140f47060`) ends up calling
 /// once it has resolved the focused character and checked the text object's kind slot against 4.
 ///
 /// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
@@ -744,14 +766,14 @@ pub const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
 /// field resolves it to the end -- exactly what ActionScript does when `setSelection` is called
 /// without an end argument.
 ///
-/// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
-/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), matching the 1.16.2 dump at
-/// the same VA (shift 0). See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
-pub const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
+/// Byte-verified against `eldenring-deobf-1.17.2.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
+/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), the same prologue the 1.16.2
+/// function at `0x141198e50` has. See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
+pub const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x119c3b0;
 
 /// The engine's own `SetText` wrapper over a resolved component slot: it changes what is drawn and
 /// what an accept reads back in one move.
-pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+pub const PROFILE_SETTEXT_RVA: usize = 0x74b300;
 
 /// `CS::SceneObjProxy::assignComponentWithName`, the named-child binder every proxy resolve goes
 /// through. Callable from this side; not a hook site, because it is **variadic** -- Ghidra types
@@ -761,21 +783,21 @@ pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
 /// every caller's arity, and there are 1297 references to it. Hook
 /// [`SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA`] instead. Calling it with a literal name is fine: a format
 /// with no conversions reads no varargs.
-pub const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+pub const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74b5f0;
 
 /// `CS::SceneObjProxy::SceneObjProxy(this /rcx/, src /rdx/, name /r8/, r9)` -- the constructor
 /// `assignComponentWithName` calls once it has formatted the name, and the argument-transparent
 /// place to observe a named-child bind.
 ///
 /// Fixed arity: one home (`48 89 4c 24 08 57 48 83 ec 30 48 c7 44 24 20 fe ff ff ff`), byte-identical
-/// in `eldenring-deobf.bin` at this rva and in `eldenring-deobf-1.17.1.bin` at `0x74b610`, which is
-/// the pair `docs/recon/rva-map-1162-to-1170.functions.tsv` already records. One call site,
-/// `FUN_14074abc0+0x24`, so hooking it observes the same binds the variadic entry would.
+/// in `eldenring-deobf-1.17.2.bin` at this rva and in `eldenring-deobf.bin` at 1.16.2 `0x74a7c0`.
+/// One call site (1.16.2 `FUN_14074abc0+0x24`), so hooking it observes the same binds the variadic
+/// entry would.
 ///
 /// `name` is not a `char*`: the constructor resolves it as `p = *(name + 0x38); text = p ? p + 0x10
-/// : name` before handing it to `FUN_140d7f9d0`, which does `strchr(text, '/')` -- so `text` is the
+/// : name` before handing it to 1.16.2 `FUN_140d7f9d0`, which does `strchr(text, '/')` -- so `text` is the
 /// `NUL`-terminated path, and that indirection is what a reader here must repeat.
-pub const SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA: usize = 0x74a7c0;
+pub const SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA: usize = 0x74bac0;
 
 /// Within the name object handed to [`SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA`]: a non-zero pointer
 /// here means the text lives at `*(name + 0x38) + 0x10` rather than at `name` itself.
@@ -783,22 +805,22 @@ pub const SCENE_OBJ_NAME_INDIRECT_38_OFFSET: usize = 0x38;
 pub const SCENE_OBJ_NAME_INDIRECT_TEXT_10_OFFSET: usize = 0x10;
 
 /// Lower-level GFx display-info setters for a `CSScaleformValue`'s position(x,y) and scale(x,y).
-/// Dump `0x140d83ed0` / `0x140d84140` -> deobf and live `0x140d83e20` / `0x140d84090`. The scale
+/// 2.7.2.0 `0x140d872c0` / `0x140d87530` (1.16.2 `0x140d83e20` / `0x140d84090`). The scale
 /// setter converts to Scaleform's percent space itself, so a caller passes the unit factor through.
-pub const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
-pub const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
+pub const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd872c0;
+pub const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd87530;
 
 /// The two addresses a destroyed component's `GetValue` vtable slot points at. A dispatch to
 /// either is the crash this repo guards against by checking the slot before calling it.
-pub const PURECALL_RVA: usize = 0x251c480;
-pub const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
+pub const PURECALL_RVA: usize = 0x2520430;
+pub const PURECALL_CRASH_HANDLER_RVA: usize = 0xc91c80;
 
-/// The game's heap-allocator wrapper (dump `0x141eb9ec0` -> deobf `0x141eb9ed0`):
+/// The game's heap-allocator wrapper (2.7.2.0 `0x141ebd430`, 1.16.2 `0x141eb9ed0`):
 /// `fn(size /rcx/, align /rdx/, allocator_obj /r8/) -> *mut u8`, where `allocator_obj` is the
 /// dereferenced `DLAllocator*`. Its prologue is `mov rax,[r8]; mov r9,r8; mov r8,rdx` before it
 /// tail-jumps through the allocator vtable. Every native object this repo constructs on the game's
 /// heap -- the `CS::SoftwareKeyboard` job among them -- is allocated through it.
-pub const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+pub const GAME_HEAP_ALLOC_RVA: usize = 0x1ebd430;
 
 /// `FD4StateMachine::is_in_state(sm, state_descriptor) -> bool`, a read-only predicate with no
 /// side effects, which is what makes it safe to call from a per-frame task.
@@ -808,14 +830,14 @@ pub const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
 /// it is right to. `er-title-flow` reaches it through `TitleDialogRva::IsInState`, and
 /// `er-input-harness` has no `er-title-flow` dependency, so the shared floor both already depend on
 /// is this crate.
-pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
+pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x74ae20;
 
 /// The `Loop` state descriptor: the title dialog has finished fading in and is sitting still.
 ///
 /// Anything else -- `FadeIn`, `TextFadeOut`, the transient states a return-to-title teardown passes
 /// through -- is a dialog that is not ready to be pressed. Owned here for the same reason as the
 /// predicate above.
-pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a94b58;
 
 /// `CS::EquipGameData::GetItemIdByQuickSlotIndex(egd, int *out, uint index) -> int*`
 ///
@@ -830,8 +852,7 @@ pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
 /// depends on the other, so the shared floor they both already depend on is this crate.
 pub const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;
 
-/// `g_GxDrawContext`, the `GxDrawContext*` global (1.16.2 `0x1447ef360`, 1.17 `0x1447f33e0` by the
-/// data map, 1178/1178 references).
+/// `g_GxDrawContext`, the `GxDrawContext*` global (2.7.2.0 `0x1447f6400`, 1.16.2 `0x1447ef360`).
 ///
 /// Its fields carry the output size the scene is drawn for (`+0x3c8`, `+0xefc`), the viewport the
 /// view setup actually used as a ratio of it (`+0xed0`), the dynamic resolution percentage
@@ -842,11 +863,10 @@ pub const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;
 /// and where er-render-scale reads it from. The older literals in er-loading-portrait-core
 /// (`GX_DRAW_CONTEXT_RVA`), er-title-flow (`TitleSessionRva::GxDrawContextSingleton`) and
 /// er-input-harness are the `todo:centralize-global-rva` row of `scripts/rva-alias-allowlist.txt`.
-pub const GX_DRAW_CONTEXT_GLOBAL_RVA: usize = 0x47ef360;
+pub const GX_DRAW_CONTEXT_GLOBAL_RVA: usize = 0x47f6400;
 
 /// `GXRenderingSystem*`, the global whose `+0x13a70` points at the dynamic resolution controller's
 /// config and whose `+0x13a78` byte gates the mip LOD bias the view setup applies at a reduced
-/// scale (1.16.2 `0x1447ef728`, 1.17.x `0x1447f37a8`; `.data` does not move between 1.17.0 and
-/// 1.17.1). Carried to 1.17 by `scripts/map-data-rvas-1162-to-1170.py`. See bd
+/// scale (2.7.2.0 `0x1447f67c8`, 1.16.2 `0x1447ef728`). See bd
 /// `er-dynamic-resolution-chain-static-2026-10-15`; read by er-render-scale.
-pub const GX_RENDERING_SYSTEM_GLOBAL_RVA: usize = 0x47ef728;
+pub const GX_RENDERING_SYSTEM_GLOBAL_RVA: usize = 0x47f67c8;

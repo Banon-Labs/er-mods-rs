@@ -8,18 +8,20 @@ tab pair 0x30/0x31 and does not contain MoveUp 0x45 or MoveDown 0x00, so the two
 menu navigation depends on had no evidence behind them on either build. Directional nav is consumed
 somewhere else, and "somewhere else" is what this finds.
 
-How. Every id reaches the keystate lookup through a tiny identity helper -- 1.16.2 `FUN_140767df0`,
-1.17 `FUN_140768c70`, both literally `*param_1 = param_2; return param_1;` -- called as
+How. Every id reaches the keystate lookup through a tiny identity helper -- 2.7.2.0 `FUN_140769120`
+(1.16.2 `FUN_140767df0`, 1.17.0 `FUN_140768c70`), in each build the same seven bytes
+`66 89 11 48 8b c1 c3`, `*param_1 = param_2; return param_1;` -- called as
 `helper(&local, <id>)`. So each id appears as an immediate in the register that carries the second
 argument, in the instructions immediately before the call. Scanning for direct `e8` calls to that
 helper and reading back the last immediate move into that register recovers the id at every site,
 without decompiling 269 xrefs one at a time.
 
 Usage:
-  uv run --with capstone python3 scripts/find-menu-event-id-callers.py 0x140767df0 0x45 0x00
-  uv run --with capstone python3 scripts/find-menu-event-id-callers.py 0x140768c70 0x45 \
-      --image eldenring-deobf-1.17.bin
-Omit the ids to get a census of every id the build feeds to that helper.
+  uv run --with capstone python3 scripts/find-menu-event-id-callers.py 0x140769120 0x45 0x00
+  uv run --with capstone python3 scripts/find-menu-event-id-callers.py 0x140767df0 0x45 \
+      --image eldenring-deobf.bin
+Omit the ids to get a census of every id the build feeds to that helper. The image defaults to
+`eldenring-deobf-1.17.2.bin`, the installed build.
 """
 
 from __future__ import annotations
@@ -40,9 +42,9 @@ ARG2_REGISTERS = ("edx,", "dx,", "rdx,")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("helper", help="VA of the identity id helper, e.g. 0x140767df0")
+    parser.add_argument("helper", help="VA of the identity id helper, e.g. 0x140769120")
     parser.add_argument("ids", nargs="*", help="event ids to report (hex or decimal); omit for a census")
-    parser.add_argument("--image", default="eldenring-deobf.bin", help="flat de-Arxan'd image to scan")
+    parser.add_argument("--image", default="eldenring-deobf-1.17.2.bin", help="flat de-Arxan'd image to scan")
     return parser.parse_args()
 
 

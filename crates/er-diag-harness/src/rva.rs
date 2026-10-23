@@ -6,9 +6,12 @@
 //! address are divergent claims about what it is. `DLC_ROOTS_REFILL_RVA` is the exception --
 //! `er-title-flow`'s DLC-root self-heal also names it, so it already lives in the shared
 //! `er_game_base::rva` table and is referenced from there by both.
+//!
+//! Every value is a 2.7.2.0 rva taken from `er_game_base::rva`; the `FUN_` names below are 1.16.2
+//! Ghidra labels.
 
 /// `MsbFileCap` load-complete callback -- The sole writer of `msbResCap` (`cap+0x90`), 1.16.2 dump
-/// `FUN_14021bbf0`. Byte-verified against `eldenring-deobf.bin` at the same VA (shift 0 on 1.16.2):
+/// `FUN_14021bbf0`, the same VA on 2.7.2.0. `eldenring-deobf-1.17.2.bin` there reads
 /// `48 8b c4 56 57 41 56 48 81 ec 80 00 00 00`, with the first rip-relative operand only at +0x1e,
 /// so the prologue is safely detourable.
 ///
@@ -32,8 +35,9 @@ pub(crate) const MSB_PARSE_TRACE_ROOTS_ON_NULL_RESULTS: usize = 4;
 /// the fix site by bd `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty`.
 ///
 /// Prologue is `40 53 48 83 ec 20 48 8b 81 c0 02 00 00` (`push rbx; sub rsp,0x20; mov rax,[rcx+0x2c0]`)
-/// -- no rip-relative operand anywhere near the patch site, and the deobf bytes match the 1.16.2 dump
-/// exactly, so a 5-byte detour relocates cleanly. `rcx` is the `MoveMapListStep` this-pointer.
+/// -- no rip-relative operand anywhere near the patch site, and the 2.7.2.0 bytes at `0x140af2fd0`
+/// match the 1.16.2 dump exactly, so a 5-byte detour relocates cleanly. `rcx` is the
+/// `MoveMapListStep` this-pointer.
 pub(crate) const STEP_LOADLIST_WAIT_RVA: usize = er_game_base::rva::STEP_LOADLIST_WAIT_RVA;
 
 /// Gate A operand: `MoveMapListStep::loadList`. The step proceeds when this is NULL **or** the int at
@@ -56,8 +60,8 @@ pub(crate) const DLC_ROOTS_BLANK_RVA: usize = er_game_base::rva::DLC_ROOTS_BLANK
 /// because a measured run showed `STEP_LoadListWait` never executes at all.
 pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
 
-/// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (vtable
-/// 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
+/// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (1.16.2
+/// vtable 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
 /// and diverged inside". Prologue `48 89 54 24 10 53 48 83 ec 30`, no rip-relative in the window.
 pub(crate) const DLC_ROOTS_JOB_RVA: usize = er_game_base::rva::DLC_ROOTS_JOB_RVA;
 

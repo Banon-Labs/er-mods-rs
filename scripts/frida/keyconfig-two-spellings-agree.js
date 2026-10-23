@@ -1,23 +1,24 @@
 // Do the two spellings of the key-config singleton name the same object?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
-// # The disagreement
+// # The disagreement it settled
 //
-// `CS_PC_KEY_CONFIG_GLOBAL_RVA` is declared twice in this workspace with different values:
+// Until the 2026-10-23 native port `CS_PC_KEY_CONFIG_GLOBAL_RVA` was declared twice in this
+// workspace with different values:
 //
 //   crates/er-invasion-warp/src/vanilla_invasion_items.rs   0x3d61f08   a 1.17 literal, added by hand
 //   crates/er-input-harness/src/game_mem.rs                 0x3d5dea8   er_game_base's 1.16.2 constant
 //
-// The second is translated at use through `er_game_base::mem`; the first is not translated at all,
-// because it is already spelled for the installed build. `scripts/audit-1170-readiness.py` reports
-// the name as unresolvable for exactly this reason -- one name, two values, so neither wins -- and
-// it is right to: a constant that means two addresses is a constant nobody can check.
+// The second was translated at use through `er_game_base::mem`; the first was not translated at
+// all, because it was already spelled for the installed build. The readiness audit of the time
+// reported the name as unresolvable for exactly this reason -- one name, two values, so neither
+// wins -- and it was right to: a constant that means two addresses is a constant nobody can check.
 //
-// The fix is to delete the local literal and take the shared one through the gate. That is only
-// safe if both spellings land on the same object on the running build, which is a claim about the
-// live process, not about the two files.
+// The fix was to delete the local literal and take the shared one through the gate. That was only
+// safe if both spellings landed on the same object on the running build, which is a claim about
+// the live process, not about the two files.
 //
 // # What this reads
 //
@@ -34,11 +35,12 @@
 
 const MODULE = 'eldenring.exe';
 
-// The literal `er-invasion-warp` carries, already spelled for 1.17.
+// The literal `er-invasion-warp` carried, spelled for 1.17; here at its 2.7.2.0 rva.
 const LOCAL_LITERAL_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 
-// `er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA`, a 1.16.2 rva, and what
-// `docs/recon/rva-map-1162-to-1170.data.tsv` carries it to at 82 of 82 references.
+// `er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA` as it read until the 2026-10-23 native port,
+// a 1.16.2 rva, and where the 1.16.2 -> 1.17 data map put it (82 of 82 references agreeing).
+// rva.rs now holds the 2.7.2.0 rva, so this agent documents a resolved question.
 const SHARED_CONSTANT_RVA = 0x3d5dea8;
 const SHARED_CONSTANT_MAPPED_RVA = 0x3d64f28; // 1.17.1 0x3d61f08
 

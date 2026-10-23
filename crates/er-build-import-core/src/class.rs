@@ -179,12 +179,12 @@ pub fn class_name_message_id(archetype: u8) -> u32 {
 /// [`STARTING_CLASSES`] -- two independent sources agreeing about which row is Confessor and which
 /// is Samurai. It is now also product data, because a class's base attributes are the **floor**
 /// under its character: character creation deals you these numbers, and the level-up dialog reads
-/// this same row (`0x1407c6560` -> `CS::PlayerLevelUpDialog` @ `0x14096daa0`) into a base-stats
+/// this same row (`0x1407c7890` -> `CS::PlayerLevelUpDialog` @ `0x14096f0f0`) into a base-stats
 /// simulator held beside the live one. No ordinary play session produces a Vagabond with strength
 /// below 14.
 ///
 /// The importer needs that fact, and it cannot borrow it from the engine: the native it calls to
-/// write stats, `ApplyMainPlayerStats` @ `0x140788cf0`, does no clamping whatsoever. A planner
+/// write stats, `ApplyMainPlayerStats` @ `0x14078a020`, does no clamping whatsoever. A planner
 /// payload can carry an attribute below the base of the class it names, and the eight attributes
 /// are what the level is derived from ([`crate::stats::normalise`]) -- so a sub-base attribute
 /// silently costs the character levels it claimed to have, and nothing downstream objects. See

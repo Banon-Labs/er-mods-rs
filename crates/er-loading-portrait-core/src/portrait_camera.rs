@@ -3,13 +3,15 @@ use crate::prelude::*;
 // ---------------------------------------------------------------------------------------------------
 // Camera lever (custom profile-portrait viewport). Verified RE 2026-06-29 -- bd
 // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`. The interactive-face roadmap's camera
-// function addresses were garbled (dump-vs-deobf space confusion); these are ground-truthed against the
-// Ghidra runtime dump (`pc_eldenring_runtime.1.16.1.exe`) + `scripts/dump-deobf-shift.py`.
+// function addresses were garbled (dump-vs-deobf space confusion). The RE was read on the 1.16.1
+// Ghidra runtime dump (`pc_eldenring_runtime.1.16.1.exe`); every address in this file is the 2.7.2.0
+// function with the same bytes.
 //
-// The `CSMenuProfModelRend` ctor (dump 0x140bbe010) sets the orbit camera once from `MenuOffscrRendParam`
-// via `FUN_140bbe190`, which (a) writes the orbit fields below, (b) builds a view matrix into `+0x9e0`
-// via `FUN_140bbe480`, (c) pushes the CSPersCam (`+0x9d0`) into the offscreen render via `FUN_140bba550`.
-// We replicate steps (b)+(c) after writing our own orbit fields, and never call `FUN_140bbe190` itself
+// The `CSMenuProfModelRend` ctor (0x140bbfb20) sets the orbit camera once from
+// `MenuOffscrRendParam` via `0x140bbfca0`, which (a) writes the orbit fields below, (b) builds a view
+// matrix into `+0x9e0` via `PROFILE_CAM_BUILD_MATRIX_RVA`, (c) pushes the CSPersCam (`+0x9d0`) into the
+// offscreen render via `PROFILE_CAM_PUSH_RVA`.
+// We replicate steps (b)+(c) after writing our own orbit fields, and never call `0x140bbfca0` itself
 // (it re-reads the param and clobbers the orbit fields).
 //
 // All offsets are byte offsets from the renderer (CSMenuProfModelRend) base.
@@ -34,17 +36,17 @@ pub const PROFILE_CAM_VIEW_MATRIX_OFFSET: usize = 0x9e0;
 pub const PROFILE_CAM_FOV_OFFSET: usize = 0xa20;
 /// Aspect ratio (f32) == CSPersCam.aspectRatio.
 pub const PROFILE_CAM_ASPECT_OFFSET: usize = 0xa24;
-/// View-matrix builder `FUN_140bbe480` (dump) -> deobf 0x140bbe390 (shift -0xf0, content-unique).
+/// View-matrix builder (`0x140bbff90`).
 /// `fn(renderer /rcx/, out: *mut f32[16] /rdx/) -> *mut f32`. Pure orbit->view-matrix math (sinf/cosf
 /// of pitch/yaw, target, -distance); reads renderer+0x9b4/+0x9c4/+0x9c8/+0x9cc; no render context,
 /// allocation, or lock.
-pub const PROFILE_CAM_BUILD_MATRIX_RVA: usize = 0xbbe390;
-/// Camera push `FUN_140bba550` (dump) -> deobf 0x140bba460 (shift -0xf0, content-unique).
+pub const PROFILE_CAM_BUILD_MATRIX_RVA: usize = 0xbbff90;
+/// Camera push (`0x140bbc040`).
 /// `fn(renderer /rcx/, persCam = renderer+0x9d0 /rdx/)`. Copies the cam matrix+projection into the
 /// offscreen render's view-state (`*(renderer+0xa8)`) and recomputes derived matrices/viewport. Verified
 /// pure CPU state (no GPU submit / allocation / lock) -- safe on the CSTaskImp game thread; it is the
 /// exact path the engine runs at renderer construction.
-pub const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
+pub const PROFILE_CAM_PUSH_RVA: usize = 0xbbc040;
 /// Custom-viewport transform applied to the engine's latched baseline orbit. Produces a visibly closer,
 /// tilted portrait framing vs the engine's straight-on default. These exact values are the framing the
 /// user approved in the 2026-06-29 runtime smoke (a tight zoom with a strong upward pitch into the
@@ -102,14 +104,15 @@ pub use er_telemetry_core::counters::PROFILE_CAM_LAST_TARGET_X_BITS;
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_TARGET_Y_BITS;
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_TARGET_Z_BITS;
 pub use er_telemetry_core::counters::PROFILE_CAM_LAST_YAW_BITS;
-/// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
-/// Verified RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
-/// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
-/// The leading 4x4 view matrix at +0x00 is written by `FUN_141a536b0` (copies exactly 0x40 bytes); the
-/// 1280x720 (0x500x0x2d0) viewport rects and the fov/aspect copies are written by `FUN_140b12260`.
+/// Offscreen render camera-params POD (the ~0xc4-byte block `0x140ccd190` blits). Verified RE
+/// 2026-06-29 on the 1.16.1 dump; the addresses are the 2.7.2.0 functions. Reached via
+/// the camera push: `0x140bbc040` -> `0x140bb9890` ->
+/// `0x141adca20` -> `0x140ccd190(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
+/// The leading 4x4 view matrix at +0x00 is written by `0x141a56bf0` (copies exactly 0x40 bytes); the
+/// 1280x720 (0x500x0x2d0) viewport rects and the fov/aspect copies are written by `0x140b13d40`.
 /// Fields named where the RE is confident; the rest are kept as offset-named `u32`/`f32` so the exact
 /// layout is preserved and editable as future RE resolves them. This represents the 0xc4 bytes
-/// `FUN_140cca450` copies; the containing allocation may be larger. `#[repr(C)]` with all-4-byte fields
+/// `0x140ccd190` copies; the containing allocation may be larger. `#[repr(C)]` with all-4-byte fields
 /// keeps every field naturally aligned at its true offset (the engine reads some as unaligned u64).
 /// Documentary/layout type: never constructed at runtime (the engine populates the real block) -- kept
 /// for future view/use/edit, with the size/align asserts below as the compile-time layout guard.
@@ -117,24 +120,24 @@ pub use er_telemetry_core::counters::PROFILE_CAM_LAST_YAW_BITS;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct OffscreenRenderCamParams {
-    /// +0x00: 4x4 view matrix (row-major as the engine stores it). Written by `FUN_141a536b0`.
+    /// +0x00: 4x4 view matrix (row-major as the engine stores it). Written by `0x141a56bf0`.
     pub view_matrix: [f32; 16],
     /// +0x40: inferred camera position / extra row (set outside the copy path; unconfirmed).
     pub field_0x40: [f32; 4],
-    /// +0x50: field-of-view (copied from view-state+0x50 by `FUN_140b12260`).
+    /// +0x50: field-of-view (copied from view-state+0x50 by `0x140b13d40`).
     pub fov: f32,
     /// +0x54, +0x58: inferred near/far plane (copied from view-state+0x58/+0x5c).
     pub field_0x54: f32,
     pub field_0x58: f32,
-    /// +0x5c/+0x60: primary viewport width/height (set to 1280/720 by `FUN_140b12260`).
+    /// +0x5c/+0x60: primary viewport width/height (set to 1280/720 by `0x140b13d40`).
     pub viewport_width_a: u32,
     pub viewport_height_a: u32,
     /// +0x64, +0x68: unknown.
     pub field_0x64: u32,
     pub field_0x68: u32,
-    /// +0x6c: aspect ratio (copied from view-state+0x54 by `FUN_140b12260`).
+    /// +0x6c: aspect ratio (copied from view-state+0x54 by `0x140b13d40`).
     pub aspect_ratio: f32,
-    /// +0x70: unknown (not copied by `FUN_140cca450`; present in the layout).
+    /// +0x70: unknown (not copied by `0x140ccd190`; present in the layout).
     pub field_0x70: u32,
     /// +0x74..+0x9c: unknown.
     pub field_0x74: u32,

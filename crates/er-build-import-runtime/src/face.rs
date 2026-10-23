@@ -13,15 +13,16 @@
 //! # Whether a character already in the world re-renders
 //!
 //! It does, for the sliders, and the engine does it by itself. Three links, each read out of the
-//! 1.16.2 dump and carried to the installed build:
+//! 1.16.2 dump (the `FUN_` names are 1.16.2 ones) and found again on 2.7.2.0:
 //!
-//! 1. `PlayerIns::InitializeCharacterRendering` (`0x140650bf0`) runs
+//! 1. `PlayerIns::InitializeCharacterRendering` (2.7.2.0 `0x140651ef0`) runs
 //!    `CSChrAsmModelIns::SetFaceData(playerIns->chrAsmModelIns, &GetPlayerGameData(chrIns)->faceData)`.
 //!    The model instance holds a pointer to `PlayerGameData::faceData` rather than a copy of it,
 //!    so there is no second buffer to keep in step.
 //! 2. `SetFaceData` caches the `FaceData+0x14c` generation stamp at `modelIns+0x308`.
-//! 3. `CS::PlayerIns::PrePhysicsSafe1` calls `FUN_1409ec160` every frame that
-//!    `chrAsmModelIns` is non-null, which ends in `FUN_1409e9b20`: read the stamp, compare it with
+//! 3. `CS::PlayerIns::PrePhysicsSafe1` calls `FUN_1409ec160` (2.7.2.0 `0x1409ed900`) every frame
+//!    that `chrAsmModelIns` is non-null, which ends in `FUN_1409e9b20` (2.7.2.0 `0x1409eb2c0`):
+//!    read the stamp, compare it with
 //!    the cached one, and on a difference re-apply the face across the instance's 27 model slots
 //!    before re-caching.
 //!
@@ -33,7 +34,8 @@
 //! ## The part that stays until the next load
 //!
 //! The eight leading `i32`s of the payload are model ids -- face mesh, hair, eyes, eyebrows,
-//! beard, accessories, decal, eyelashes. Those are consumed by `FUN_1409e6fb0`, which a live
+//! beard, accessories, decal, eyelashes. Those are consumed by 1.16.2 `FUN_1409e6fb0` (2.7.2.0
+//! `0x1409e86f0`), which a live
 //! `PlayerIns` reaches only through vtable slot `0x500`, and the single dispatch site for that
 //! slot sits inside the `ChrSet` load-state machine -- that is, while a character is streaming
 //! in. So a build whose face differs from the character's only by hair style is expected to look
@@ -84,7 +86,7 @@ pub enum FaceOutcome {
     NothingToAdopt(SlidersRejection),
     /// The character's own appearance could not be read, so there was nothing to write over.
     Unreadable,
-    /// `CopyFaceDataFromBuffer` has no verified mapping for the running build.
+    /// `CopyFaceDataFromBuffer` is refused on the running build (only 2.7.2.0 is measured).
     Refused,
     /// The call was made and the buffer does not hold what was asked for. Never reported as a
     /// success: this crate derives no result from a call having returned, and the callee's own

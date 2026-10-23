@@ -11,19 +11,19 @@
 //! * `componentContainer->actionFlag->actionAnimationFlags` bit 12 clear -- and that bit has three
 //!   `or dword [rax+0x10], 0x1000` sites in the whole image, two of them inside `SetTextScale` /
 //!   `SetFontSize` (debug text, a different structure at the same offset) and the third inside
-//!   `HksAct` (`0x14040cbd0`), the Lua action-script host. It is script-driven state, not a
-//!   per-swing marker;
+//!   `HksAct` (1.16.2 `0x14040cbd0`), the Lua action-script host. It is script-driven state, not
+//!   a per-swing marker;
 //! * `!CS::CSChrThrowModule::IsInTrow`;
-//! * `FUN_14043acc0`, which is not a cancel check at all -- its whole body compares the requested
-//!   id against `PlayerCommonParam::animeID_MaterialItemPick`, `animeID_DropItemPick`,
+//! * 1.16.2 `FUN_14043acc0`, which is not a cancel check at all -- its whole body compares the
+//!   requested id against `PlayerCommonParam::animeID_MaterialItemPick`, `animeID_DropItemPick`,
 //!   `animeID_SleepCollectorItemPick` and two `GameSystemCommonParam` treasure pickup ids, and
 //!   defers those five to `actionFlag->field_0x28` instead of playing them;
 //! * `field_0x70 == 0`.
 //!
-//! Everything else goes straight to `FUN_140c14400`, which formats `W_Event%04d` and hands it to
-//! the behaviour graph -- which accepts it, mid-swing, every time. So the cancel the player sees
-//! is not a bug in how this crate writes the field. It is the absence of any rule at all, and the
-//! rule has to live here.
+//! Everything else goes straight to 1.16.2 `FUN_140c14400`, which formats `W_Event%04d` and hands
+//! it to the behaviour graph -- which accepts it, mid-swing, every time. So the cancel the player
+//! sees is not a bug in how this crate writes the field. It is the absence of any rule at all, and
+//! the rule has to live here.
 //!
 //! # ...but it does know, one module along
 //!

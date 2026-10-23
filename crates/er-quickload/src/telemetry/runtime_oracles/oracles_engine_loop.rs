@@ -51,7 +51,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
     // stop every one of those matching, i.e. it would rewrite recorded evidence to fit a new
     // label. `oracle_saved_map_c30` is also still literally accurate at the moment its consumers
     // read it: `scripts/er-readiness-watch.py` and `switch-character-oracle.py` compare it against
-    // the save file's body+0x04, which is the dword the deserializer `FUN_14067bd70` writes here.
+    // the save file's body+0x04, which is the dword the deserializer (0x14067d070; 1.16.2 `FUN_14067bd70`) writes here.
     let gm = crate::game_man_ptr_or_null();
     let read_i32 = |addr: usize| -> i32 {
         unsafe { crate::safe_read_usize(addr) }
@@ -118,7 +118,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         ));
     }
     // Loading SUBSTEP oracle (bd user-loading-bar-labels-stuck): CSSystemStep (global
-    // base+0x3d85680 -> instance) drives the boot/resource load; current_state names the exact
+    // base+0x3d8c720 on 2.7.2.0 -> instance) drives the boot/resource load; current_state names the exact
     // subsystem being waited on (WaitRes/File/Graphics/Sound/Pad), so the loading-bar sublabel can
     // track the real hanging substep instead of a stuck label. current_state is the low 4 bytes at
     // the offset owned by `er_game_base::rva` (requested_state is the adjacent +4).
@@ -180,7 +180,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             "  \"oracle_system_step_state\": {sv},\n  \"oracle_system_step_label\": \"{sl}\",\n"
         ));
     }
-    // Flip-timing oracle. CSFlipperImp singleton at base+0x4589ad8 (same 0x14458_9xxx singleton
+    // Flip-timing oracle. CSFlipperImp singleton at base+0x4590b78 (2.7.2.0; same singleton
     // table as IoDevice/DELAY_DELETE/ACCEPT_BYTE). fixed_spf(+0x1c)=frame-time target,
     // task_delta(+0x268)=actual measured delta, mode_current(+0xc), use_dynamic_lock(+0x2c8).
     // Correction (bd decisive-reload-20fps-is-render-bound-not-throttle-syncinterval1-refresh4,
@@ -191,7 +191,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
     // -> the frame is render-bound, not sleep-capped. The 2026-07-21 fixedspf-0.05 cap claim is
     // refuted; keep fixed_spf vs task_delta as the target-vs-actual divergence signal.
     {
-        const CS_FLIPPER_SINGLETON_RVA: usize = 0x4589ad8;
+        const CS_FLIPPER_SINGLETON_RVA: usize = 0x4590b78;
         let flipper = unsafe {
             crate::safe_read_usize(er_game_base::mem::game_data_addr(
                 base,

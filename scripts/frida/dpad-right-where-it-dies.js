@@ -1,7 +1,7 @@
 // Where a D-pad Right press stops, between the pad poll and the right-hand armament switch.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The symptom, reported 2026-09-19: "After invading, I can't press right on my dpad to switch
 // weapons on my right side". Every hook this repo's DLLs had armed on that run was cleared by
@@ -33,9 +33,9 @@
 
 // `DLUID::PadDevice::Poll`, the XInput-reading half of the pad device.
 //
-// Read off the 1.17.0 Ghidra dump at `0x141f6d8d0` and carried to the installed 1.17.1 by
-// `scripts/map-rvas-1170-to-1171.py`: the rva is at or above the `0xafefe9` boundary, so the
-// function moved `+0x70`. Its shape in the decompile is the anchor -- it calls `XInputGetState`
+// Read off the 1.17.0 Ghidra dump at `0x141f6d8d0`; the rva is at or above the `0xafefe9`
+// boundary, so on 1.17.1 the function sat `+0x70` higher, and the literal below is its 2.7.2.0
+// address. Its shape in the decompile is the anchor -- it calls `XInputGetState`
 // and stores `wButtons` to `param_1 + 0x890`.
 const POLL_RVA = 0x1f6f030; // 1.17.1 0x1f6d940
 
@@ -85,8 +85,7 @@ const EQUIP_GAME_DATA_OFFSET = 0x2b0;
 
 // `CS::EquipGameData::GetParamIdInSlot(egd, ChrAsmSlot) -> int`, the game's own read-back oracle
 // for what is in a slot. 1.16.2 `0x1402470e0`, and the rva is below the `0xafefe9` boundary, so
-// 1.17.0 and the installed 1.17.1 are both the same address -- confirmed unique by
-// `map-rvas-1162-to-1170.py` on a 40-byte signature.
+// 1.17.0 and 1.17.1 were both the same address -- paired unique on a 40-byte signature.
 const GET_PARAM_ID_IN_SLOT_RVA = 0x2470e0;
 
 // `ChrAsm` inside `EquipGameData`. See `armamentState` for how this is derived.

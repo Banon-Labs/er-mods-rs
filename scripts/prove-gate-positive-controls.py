@@ -362,8 +362,8 @@ def _native_continue():
     # The image is ground truth and must not be touched; the mutable input is the gate's
     # own claim about where a byte window sits. A false claim must be rejected.
     s = "scripts/check-native-continue-static.py"
-    with edit_file(s, lambda t: t.replace("CONTINUE_LOAD = 0x14067B750",
-                                          "CONTINUE_LOAD = 0x14067B760", 1)):
+    with edit_file(s, lambda t: t.replace("CONTINUE_LOAD = 0x14067CA50",
+                                          "CONTINUE_LOAD = 0x14067CA60", 1)):
         rc, out = run(["python3", s])
         expect("native-continue-static", "sens/wrong-rva", rc, out, True)
 
@@ -371,8 +371,8 @@ def _native_continue():
 @control("menu-constructor-static")
 def _menu_ctor():
     s = "scripts/check-menu-constructor-static.py"
-    with edit_file(s, lambda t: t.replace("IDLE_CTOR = 0x007ACF80",
-                                          "IDLE_CTOR = 0x007ACF90", 1)):
+    with edit_file(s, lambda t: t.replace("IDLE_CTOR = 0x007AE2B0",
+                                          "IDLE_CTOR = 0x007AE2C0", 1)):
         rc, out = run(["python3", s])
         expect("menu-constructor-static", "sens/wrong-rva", rc, out, True)
 
@@ -690,15 +690,6 @@ def _own_load():
         expect("own-load-save-rejection-guard", "sens/host-test-renamed", rc, out, True)
 
 
-@control("derive-callsite-1170")
-def _derive_callsite():
-    s = "scripts/derive-callsite-1170.py"
-    with edit_file(s, lambda t: t.replace("def call_at(", "def call_at_real(", 1).replace(
-            "def call_at_real(", "def call_at(image, addr):\n    return None\n\n\ndef call_at_real(", 1)):
-        rc, out = run(["python3", s, "--selftest"])
-        expect("derive-callsite-1170", "sens/decoder-stubbed", rc, out, True)
-
-
 @control("oracle-writers", fast=False,
          baseline=["python3", "scripts/check-oracle-writers.py"])
 def _oracle_writers():
@@ -893,25 +884,25 @@ def _freshness():
         expect("dll-freshness", "sens/unknown-name-skipped", rc, out, True)
 
 
-@control("prologue-masks-1170")
+@control("prologue-masks")
 def _prologue_masks():
-    f = "scripts/verify-prologue-masks-1170.py"
+    f = "scripts/verify-prologue-masks.py"
     g = ["python3", f, "--selftest"]
     with edit_file(f, lambda t: t.replace("def masked_equal(", "def masked_equal_real(", 1).replace(
             "def masked_equal_real(",
             "def masked_equal(*a, **k):\n    return True\n\n\ndef masked_equal_real(", 1)):
         rc, out = run(g)
-        expect("prologue-masks-1170", "sens/mask-always-matches", rc, out, True)
+        expect("prologue-masks", "sens/mask-always-matches", rc, out, True)
     with edit_file(f, lambda t: t.replace("def derive_rip_mask(", "def derive_rip_mask_real(", 1).replace(
             "def derive_rip_mask_real(",
             "def derive_rip_mask(b, *a, **k):\n    return bytes(len(b))\n\n\ndef derive_rip_mask_real(", 1)):
         rc, out = run(g)
-        expect("prologue-masks-1170", "sens/mask-all-ignored", rc, out, True)
+        expect("prologue-masks", "sens/mask-all-ignored", rc, out, True)
 
 
-@control("hook-targets-1170", fast=False,
-         baseline=["python3", "scripts/audit-1170-hook-targets.py", "--selftest"])
-def _hook_targets_1170():
+@control("hook-targets", fast=False,
+         baseline=["python3", "scripts/audit-hook-targets.py", "--selftest"])
+def _hook_targets():
     """The gate that decides where a detour may be written on the installed build.
 
     Its two arms fail in opposite directions and both are planted here. The entry arm going
@@ -924,19 +915,19 @@ def _hook_targets_1170():
     and not of an arbitrary window. Under the unbounded scan it was a property of the window,
     and how far past the `ret` it happened to read decided the verdict.
     """
-    f = "scripts/audit-1170-hook-targets.py"
+    f = "scripts/audit-hook-targets.py"
     g = ["python3", f, "--selftest"]
     with edit_file(f, lambda t: t.replace("    end = body_end(blob, va)\n", "    end = None\n", 1)):
         rc, out = run(g)
-        expect("hook-targets-1170", "sens/scan-unbounded", rc, out, True, ["0x14067ac90"])
+        expect("hook-targets", "sens/scan-unbounded", rc, out, True, ["0x14067bf90"])
     with edit_file(f, lambda t: t.replace("def entry_verdict(", "def entry_verdict_real(", 1).replace(
             "def entry_verdict_real(",
             "def entry_verdict(*a, **k):\n    return True, 'mutant'\n\n\ndef entry_verdict_real(", 1)):
         rc, out = run(g)
-        expect("hook-targets-1170", "sens/entry-always-ok", rc, out, True)
+        expect("hook-targets", "sens/entry-always-ok", rc, out, True)
     with edit_file(f, lambda t: t.replace("BRANCH_SCAN_BYTES = 0x400", "BRANCH_SCAN_BYTES = 0x800", 1)):
         rc, out = run(g)
-        expect("hook-targets-1170", "spec/wider-scan-cap", rc, out, False)
+        expect("hook-targets", "spec/wider-scan-cap", rc, out, False)
 
 
 @control("dll-provenance")
@@ -1022,7 +1013,7 @@ def _expression_constants():
 
 
 @control("object-field-offsets",
-         baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
+         baseline=["python3", "scripts/check-object-field-offsets.py"])
 def _object_field_offsets():
     """The gate that decides whether a declared struct-field offset is a field at all.
 
@@ -1039,7 +1030,7 @@ def _object_field_offsets():
     punish the constants this tree duplicates across independently-shipped crates on purpose, and
     one that went red on the number 0x40 anywhere would be red on a large fraction of the tree.
     """
-    g = ["python3", "scripts/check-object-field-offsets-1170.py"]
+    g = ["python3", "scripts/check-object-field-offsets.py"]
     home = "crates/er-game-base/src/rva.rs"
     real = "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;"
     dup = "crates/er-game-base/src/_pc_probe_sysstep.rs"
@@ -1114,7 +1105,7 @@ def _offset_census_kinds():
 
 
 @control("name-derived-offsets",
-         baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
+         baseline=["python3", "scripts/check-object-field-offsets.py"])
 def _name_derived_offsets():
     """The 2026-08-31 sweep's rows: offsets whose only provenance had been a name.
 
@@ -1129,7 +1120,7 @@ def _name_derived_offsets():
     binding above it -- so a control that only ever flipped a hex digit would prove the gate
     catches the one edit nobody makes.
     """
-    g = ["python3", "scripts/check-object-field-offsets-1170.py"]
+    g = ["python3", "scripts/check-object-field-offsets.py"]
     chr_asm = "crates/er-loading-portrait-core/src/chr_asm_layout.rs"
     msb = "crates/er-invasion-warp-core/src/msb_invasion_points.rs"
     probe = "crates/er-game-base/src/_pc_probe_namederived.rs"
@@ -1316,59 +1307,6 @@ def _hooks_content():
                ["forward"])
 
 
-@control("ledger-section-kind")
-def _ledger_section_kind():
-    """The gate that decides whether a ledger is talking about code at all.
-
-    Its rules fail in opposite directions and both are planted. R1 going blind hands a hook
-    licence to `.data`; R2 going blind files a code address as a global, which is how a `read`
-    becomes a call. Both were live in `docs/recon/rva-1170-detour-audited.tsv` until it was
-    deleted on 2026-08-31 -- 87 of its 444 rows named non-executable memory while carrying
-    prologue verdicts like `6B relocatable` -- and nothing in the tree could see it.
-
-    The specificity arm is against the real ledgers, not the selftest's synthetic ones: a
-    correctly-placed `.text` row added to a code ledger must change no verdict. It is reported
-    inconclusive rather than pass when the gitignored 1.17 image is absent, because the gate
-    then skips R1/R2 and its green says nothing about the tree.
-    """
-    f = "scripts/check-ledger-section-kind.py"
-    g = ["python3", f, "--selftest"]
-
-    # Sensitivity 1: the section comparison itself, disabled. Every planted wrong-kind row is
-    # then accepted, and the selftest's four sensitivity cases must notice.
-    with edit_file(f, lambda t: t.replace(
-            "            if executable != want_executable:\n",
-            "            if False:  # pc_probe: section comparison disabled\n", 1)):
-        rc, out = run(g)
-        expect("ledger-section-kind", "sens/kind-comparison-off", rc, out, True)
-
-    # Sensitivity 2: R3's tombstone removed, so the deleted ledger may come back unseen. This is
-    # the arm that matters most while `audit-1170-hook-targets.py --promote` still writes it.
-    with edit_file(f, lambda t: t.replace(
-            "    if os.path.exists(retired):\n",
-            "    if False and os.path.exists(retired):  # pc_probe: tombstone removed\n", 1)):
-        rc, out = run(g)
-        expect("ledger-section-kind", "sens/tombstone-removed", rc, out, True)
-
-    # Sensitivity 3: an unclassified ledger skipped instead of refused -- a partial view is this
-    # defect class wearing a green tick, so the selftest asserts the refusal.
-    with edit_file(f, lambda t: t.replace(
-            "            unknown.append(f\"{const_name} -> {relative}\")\n",
-            "            continue  # pc_probe: unclassified ledger skipped\n", 1)):
-        rc, out = run(g)
-        expect("ledger-section-kind", "sens/unclassified-ledger-skipped", rc, out, True)
-
-    # SPECIFICITY: a legitimately-placed row in a real code ledger must stay green.
-    real = "docs/recon/rva-map-1162-to-1170.needed.tsv"
-    with edit_file(real, lambda t: t.rstrip("\n") + "\n0x116c70\t0x116c70\tpc_probe\n"):
-        rc, out = run(["python3", f])
-        if "SKIPPED R1/R2" in out:
-            inconclusive("ledger-section-kind", "spec/legitimate-text-row",
-                         "the gitignored 1.17 image is absent, so R1/R2 did not run")
-        else:
-            expect("ledger-section-kind", "spec/legitimate-text-row", rc, out, False)
-
-
 @control("decode-extent-bounds",
          baseline=["python3", "scripts/check-decode-extent-bounds.py"])
 def _decode_extent_bounds():
@@ -1382,7 +1320,7 @@ def _decode_extent_bounds():
 
     Narrowing a scan can only ever make a check accept more, so the sensitivity arms plant the
     defect rather than removing a rule: a new file with a byte-budget decode, the real instance 1
-    put back into `audit-1170-hook-targets.py`, an objdump span, and an allowlist row pointing at
+    put back into `audit-hook-targets.py`, an objdump span, and an allowlist row pointing at
     nothing. The specificity arms are the three legitimate shapes the gate must not touch --
     caller-supplied extent, site-anchored upper bound, and the prescribed `body_end` fix -- because
     a gate red on every disassembly is one people delete the line for.
@@ -1418,13 +1356,13 @@ def _decode_extent_bounds():
     # BRANCH_SCAN_BYTES scan that manufactured a `jno` out of a padding byte on 2026-08-31. This
     # is the arm that proves the gate would have caught the incident it was written for, rather
     # than only catching a toy.
-    with edit_file("scripts/audit-1170-hook-targets.py", lambda t: t.replace(
+    with edit_file("scripts/audit-hook-targets.py", lambda t: t.replace(
             "    body = blob[off : max(limit, off)]\n",
             "    body = blob[off : off + BRANCH_SCAN_BYTES]  # pc_probe: instance 1 replanted\n",
             1)):
         rc, out = run(g)
         expect("decode-extent-bounds", "sens/instance-1-replanted", rc, out, True,
-               ["audit-1170-hook-targets.py", "patch_safe"])
+               ["audit-hook-targets.py", "patch_safe"])
 
     # Sensitivity 4: the other disassembler. objdump takes its span as a start plus a count in a
     # subprocess argument, invisible to the AST scan, so it has its own matcher and its own arm.

@@ -22,7 +22,7 @@ use er_game_base::mem::{safe_read_i32, safe_read_u8};
 use fromsoftware_shared::FromStatic;
 
 // --- CS::CSWorldGeomMan::Update fields. GHIDRA-confirmed against the dump
-// (CS::CSWorldGeomMan::Update @ 0x1406d31f0): field_0xd0/0xf0/0xf8/0x100 are reset
+// (CS::CSWorldGeomMan::Update, 2.7.2.0 @ 0x1406d44f0): field_0xd0/0xf0/0xf8/0x100 are reset
 // to 0 at the top of Update; field_0xd0 is set to 1 when a block update returns
 // work; 0xf0/0xf4/0xf8/0x100 are per-block work accumulators added across the
 // block tree; 0x104 = pending count `(int)*(field_0xc0)`; 0x108/0x109 are the
@@ -46,7 +46,7 @@ const GEOM_ALL_READY_A_108_OFFSET: usize = 0x108;
 const GEOM_ALL_READY_B_109_OFFSET: usize = 0x109;
 
 /// WorldChrMan world-stable oracle: `WorldChrMan+0x1e524 == 2` = world genuinely
-/// stable/ready (FUN_140508d30). Source: constants/return_title.rs
+/// stable/ready (1.16.1 dump FUN_140508d30). Source: constants/return_title.rs
 /// `WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET` / `WORLD_CHR_MAN_WORLD_STABLE_VALUE`.
 /// Emitted as a cross-check diagnostic; Not part of the spec's movable definition.
 const WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET: usize = 0x1e524;

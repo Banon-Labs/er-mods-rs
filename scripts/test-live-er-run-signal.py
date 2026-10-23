@@ -9,8 +9,11 @@ format between them, fails here.
 
 No game is needed and none is touched: `LIVE_ER_RUN_PROFILES_OVERRIDE` stands in for the live run
 with a throwaway profile, and the `verdict` mode never kills anything. The profile loads
-`er_r3_view.dll`, whose dependency closure includes `er-game-base`, which is the crate whose
-`build.rs` compiles `docs/recon/rva-map-1162-to-1170.data.tsv` in.
+`er_invasion_warp.dll`, whose dependency closure includes `er-game-base` and
+`er-invasion-warp-core`, and the second embeds `docs/er-invasion-warp.dll-pool-test.toml` with
+`include_str!`: a file under docs/ that a build reads. Until the 2.7.2.0 port that role was played
+by `docs/recon/rva-map-1162-to-1170.data.tsv`, which `er-game-base/build.rs` compiled in; nothing
+under `docs/recon/` is read by a build any more.
 
 Added 2026-10-02, after the guard allowed any edit outside `crates/` while the sentinel tore a run
 down for a build-read doc.
@@ -34,9 +37,10 @@ TIMEOUT = 25
 CASES = [
     ("crates/er-game-base/src/mem.rs", True, True, "crate source in the loaded closure"),
     ("AGENTS.md", True, False, "prose no build reads"),
-    ("docs/recon/rva-map-1162-to-1170.data.tsv", True, True, "doc er-game-base/build.rs reads"),
-    ("docs/recon/rva-map-1162-to-1170.data.tsv", False, False, "same doc, nothing live"),
-    ("docs/recon/rva-map-1162-to-1170.functions.tsv", True, False, "named only in comments, gitignored"),
+    ("docs/er-invasion-warp.dll-pool-test.toml", True, True, "doc er-invasion-warp-core embeds"),
+    ("docs/er-invasion-warp.dll-pool-test.toml", False, False, "same doc, nothing live"),
+    ("docs/recon/boot-timing.tsv", True, False, "new recon data no build reads"),
+    ("docs/recon/speffect-vfx-rows.json", True, False, "gitignored, not repo source"),
     ("scripts/er-stale-run-sentinel.sh", True, False, "host-side script"),
 ]
 
@@ -44,7 +48,7 @@ CASES = [
 # sentinel used to tear down the main tree's run, matching loaded DLLs by basename alone.
 FOREIGN_CASES = [
     ("crates/er-game-base/src/mem.rs", True, False, "crate source, DLL built by another tree"),
-    ("docs/recon/rva-map-1162-to-1170.data.tsv", True, False, "build-read doc, DLL built by another tree"),
+    ("docs/er-invasion-warp.dll-pool-test.toml", True, False, "build-read doc, DLL built by another tree"),
 ]
 
 # A game running without me3 leaves no profile to read. Measured 2026-10-17: the sentinel answered
@@ -55,7 +59,7 @@ UNDISCOVERABLE_CASES = [
     ("scripts/er-stale-run-sentinel.sh", True, False, "host-side script, game live without me3"),
     ("docs/foo.md", True, False, "docs prose, game live without me3"),
     ("crates/er-game-base/src/mem.rs", True, True, "crate source, game live without me3"),
-    ("docs/recon/rva-map-1162-to-1170.data.tsv", True, True, "build-read doc, game live without me3"),
+    ("docs/er-invasion-warp.dll-pool-test.toml", True, True, "build-read doc, game live without me3"),
 ]
 
 
@@ -91,14 +95,14 @@ def main() -> int:
     fails = 0
     with tempfile.TemporaryDirectory() as tmp:
         profile = Path(tmp) / "signal-test.me3"
-        profile.write_text('profileVersion = "v1"\n\n[[natives]]\npath = "C:/x/er_r3_view.dll"\n')
+        profile.write_text('profileVersion = "v1"\n\n[[natives]]\npath = "C:/x/er_invasion_warp.dll"\n')
         tree_b = Path(tmp) / "tree-b"
         (tree_b / "target/x86_64-pc-windows-msvc/release").mkdir(parents=True)
         (tree_b / "Cargo.toml").write_text("")
         foreign = Path(tmp) / "foreign-tree.me3"
         foreign.write_text(
             'profileVersion = "v1"\n\n[[natives]]\n'
-            f'path = "{tree_b}/target/x86_64-pc-windows-msvc/release/er_r3_view.dll"\n'
+            f'path = "{tree_b}/target/x86_64-pc-windows-msvc/release/er_invasion_warp.dll"\n'
         )
         runs = (
             [(c, profile) for c in CASES]

@@ -4,15 +4,14 @@
 //!
 //! Elden Ring has no rename UI. A character is named once, at creation, and the name then lives in
 //! three places inside `PlayerGameData` plus two places on disk. The complete map, established by
-//! static RE of the 1.16.2 image on 2026-08-30 and carried to 1.17 through
-//! `docs/recon/rva-map-1162-to-1170.needed-verified.tsv`:
+//! static RE of the 1.16.2 image on 2026-08-30; the addresses below are the 2.7.2.0 ones:
 //!
 //! | where | who reads it | how it is written |
 //! |---|---|---|
 //! | `PGD+0x9c`, `wchar_t[17]` | serialized into the save; this repo's own stats/portrait readers | `CopyChrName`'s copy loop |
-//! | `PGD+0x8e8`, `CSWordCheckedStringInternal*` | `FUN_14025f8e0`, and through it `CS::ProfileSummary`'s slot update (`0x140262270`) and `CS::GetPlayerChrName` (the overhead nameplate) | refreshed by `CopyChrName` from `+0x9c` |
+//! | `PGD+0x8e8`, `CSWordCheckedStringInternal*` | `0x14025f8f0`, and through it `CS::ProfileSummary`'s slot update (2.7.2.0 `0x140262280`) and `CS::GetPlayerChrName` (the overhead nameplate) | refreshed by `CopyChrName` from `+0x9c` |
 //! | `PGD+0x8f8`, a second such string | main-player variant, word-check flag set | refreshed by `CopyChrName` from `+0x9c` |
-//! | `CS::ProfileSummary` record `+0x00`, `0x22` bytes | the save-slot list, the title Continue row, the loading-screen portrait | `wcsncpy`'d out of `FUN_14025f8e0` by the game, at every save |
+//! | `CS::ProfileSummary` record `+0x00`, `0x22` bytes | the save-slot list, the title Continue row, the loading-screen portrait | `wcsncpy`'d out of `0x14025f8f0` by the game, at every save |
 //! | `.sl2` slot body `+0x94`, and `USER_DATA010` record `+0x02` | a container's slot list, including a foreign one | serialized by the game, at every save |
 //!
 //! Only the first three are ours to touch, and only through the one native below. The last two are
@@ -58,7 +57,8 @@ pub enum NameOutcome {
     AlreadyNamed(String),
     /// The build carries no name that survives cleaning, so the character keeps its own.
     NothingToAdopt,
-    /// `CopyChrName` has no verified mapping for the running build. The character keeps its name.
+    /// `CopyChrName` is refused on the running build (only 2.7.2.0 is measured). The character
+    /// keeps its name.
     Refused,
     /// The call was made and the field does not hold what was asked for. Never reported as a
     /// success: this crate derives no result from a call having returned, and a name is the one
@@ -94,8 +94,8 @@ impl NameOutcome {
                 "the build names nothing usable, character keeps its name".to_owned()
             }
             NameOutcome::Refused => {
-                "NOT APPLIED -- `CS::PlayerGameData::CopyChrName` has no verified mapping for the \
-                 running build. The character keeps the name it had."
+                "NOT APPLIED -- `CS::PlayerGameData::CopyChrName` is refused on the running build \
+                 (only 2.7.2.0 is measured). The character keeps the name it had."
                     .to_owned()
             }
             NameOutcome::ReadBackDisagreed { wanted, got } => {

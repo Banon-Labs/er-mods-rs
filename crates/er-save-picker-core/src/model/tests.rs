@@ -1714,7 +1714,7 @@ fn picker_status_clears_on_direct_page_drive_and_up_navigation() {
 ///
 /// `save_picker_menu_pump_native_scrollbar` sends `total = entry_count().max(entries_per_page())`
 /// and `position = scroll_offset()`. Both of the game's setters clamp the position into
-/// `[0, total - page]` (`FUN_14074dad0` / `FUN_14074db60`, page at `ScrollBarV + 0x1a8`), so the
+/// `[0, total - page]` (`FUN_14074edd0` / `FUN_14074ee60`, page at `ScrollBarV + 0x1a8`), so the
 /// model can only express its own full range if `total - page == scroll_max`. That identity is what
 /// lets the pump write the page rather than leave whatever `ProfileSelect` built for a ten-row
 /// character list; with a stale page the clamp bites before the model's last offset and the thumb

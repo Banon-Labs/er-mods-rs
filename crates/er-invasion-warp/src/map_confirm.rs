@@ -20,7 +20,7 @@ pub(crate) static ORIG_WARP_JOB_ASSEMBLER: AtomicUsize = AtomicUsize::new(0);
 static CONFIRMS_INTERCEPTED: AtomicUsize = AtomicUsize::new(0);
 static CONFIRMS_WARPED: AtomicUsize = AtomicUsize::new(0);
 
-/// Union handler for the warp-job assembler `FUN_1407a04f0`.
+/// Union handler for the warp-job assembler `FUN_1407a04f0` (2.7.2.0 `0x1407a1820`).
 ///
 /// This is the SOFTLOCK fix. All five confirm routes funnel through here, and `R8` points at the
 /// bonfire entity id before any MenuJob is allocated. Without this hook, selecting an injected
@@ -29,9 +29,9 @@ static CONFIRMS_WARPED: AtomicUsize = AtomicUsize::new(0);
 /// and the game hangs on the loading screen. That is exactly what a live run did.
 ///
 /// On recognising one of ours we ask [`er_invasion_warp_core::warp::request_invasion_warp`] and return a
-/// NULL job. Swallowing is safe: the callers' `Clone` (0x1407a7b60) and enqueue (0x1407a9250) both
-/// NULL-check, and the engine itself returns a NULL job on its own no-SpecialEffect path -- so a
-/// NULL out-slot is a state the callers already handle.
+/// NULL job. Swallowing is safe: the callers' `Clone` (1.16.2 0x1407a7b60) and enqueue (1.16.2
+/// 0x1407a9250) both NULL-check, and the engine itself returns a NULL job on its own
+/// no-SpecialEffect path -- so a NULL out-slot is a state the callers already handle.
 ///
 /// # The swallow is not the warp being disabled
 ///

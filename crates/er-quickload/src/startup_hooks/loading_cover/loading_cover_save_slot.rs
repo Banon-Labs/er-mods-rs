@@ -7,9 +7,9 @@ use super::*;
 /// telemetry/parity. Fault-guarded.
 pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // `read_global_ptr` resolves the global for the running build and then reads it
-    // fault-tolerantly. The raw `base + RVA` form read the 1.16.2 slot, and this singleton moved
-    // (0x3d60ec8 -> 0x3d64f28) -- so the read succeeded and returned a neighbouring global.
+    // `read_global_ptr` checks the running build and then reads the global fault-tolerantly. The
+    // singleton is a 2.7.2.0 rva (0x3d67f48); a raw `base + RVA` read on another build succeeds
+    // and returns a neighbouring global, so there it reads 0 instead.
     let helper = er_game_base::mem::read_global_ptr(
         base,
         RuntimeGlobalRva::NowLoadingSingleton as usize,
@@ -28,8 +28,8 @@ pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
 /// `*(base + FakeLoadingScreenSingleton)`. Fault-guarded.
 pub(crate) unsafe fn fake_loading_screen_ptr(base: usize) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Resolved, for the reason given on `now_loading_active`: this singleton moved too
-    // (0x3d74868 -> 0x3d788d8), and a stale read of it succeeds with the wrong pointer.
+    // Resolved, for the reason given on `now_loading_active`: this singleton (2.7.2.0 0x3d7b8f8)
+    // moves between builds too, and a stale read of it succeeds with the wrong pointer.
     let helper = er_game_base::mem::read_global_ptr(
         base,
         RuntimeGlobalRva::FakeLoadingScreenSingleton as usize,
@@ -176,7 +176,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // screen" signal than waiting for the profile renderer table to become empty. Prior behavior waited for
     // the stale native table to drain, building at +19011ms even though Gauge_3 was visible at +16650ms; the
     // async model then came live ~560ms later. Once this native screen is ticking, rebuilding the table is
-    // just the game's own builder's first step (FUN_1409b2db0 delay-deletes the old 10 renderers before
+    // just the game's own builder's first step (0x1409b44b0, 1.16.2 FUN_1409b2db0, delay-deletes the old 10 renderers before
     // constructing new ones), so do it immediately instead of burning the leading portrait gap.
     let loading_screen_started = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
         && LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
@@ -835,7 +835,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     // Map is only a second discriminator, and only when the record is ours. Both sides are the
     // same type but not always the same QUANTITY: our foreign-save preview writes record+0x30 from
     // the slot body's saved `BlockId` (= exactly what deserializes into c30), whereas a
-    // game-written record is filled from `GetCurrentMapId` (`FUN_140262270`). Measured on the
+    // game-written record is filled from `GetCurrentMapId` (by 0x140262280; 1.16.2 `FUN_140262270`). Measured on the
     // corpus: 65 of 726 active slots have body+0x04 = 0x0e000000 while the game's own record says
     // 0x1c000000 -- a systematic, entirely legitimate difference that would fire this semaphore on
     // every one of those characters. `PROFILE_PREVIEW_FACE_HASH[slot] != 0` marks a record our

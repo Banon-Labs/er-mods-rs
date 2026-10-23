@@ -59,20 +59,16 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// `SummonMsgQueue::AddEntry(&fe->summonMsgQueue, &local)`, so a message that does not reach it
 /// does not become a popup.
 ///
-/// The rva is 1.16.2, like every seam here, and the build gate translates it: on the installed
-/// 1.17 build this function is at `0x14076f190`, which `scripts/map-rvas-1162-to-1170.py` found as
-/// a unique 47-byte signature match with 26 fixed bytes. Writing that 1.17 address here instead
-/// was tried first and refused at runtime on `br-20260918-180825-3ece` -- `no verified detour
-/// mapping for the running build` -- because `verify_seam` reads a seam's rva as 1.16.2 and looks
-/// the pair up in the ledger rather than trusting a number. The prologue is the 1.17 one, since
-/// the translated address is where those bytes are read back from.
+/// The rva is a 2.7.2.0 one, like every seam here: `0x14076f640` (1.16.2 `0x14076e310`, 1.17.0
+/// `0x14076f190`). The prologue below opens the function on every one of those builds, and
+/// `verify_seam` reads it back from that address before anything is patched.
 ///
 /// Five arguments, so this seam must not ride `er_hook`'s four-argument union dispatcher -- see
 /// the argument-count trap in `map_seams`. It gets its own typed trampoline instead.
 #[cfg(windows)]
 const SHOW_NETWORK_MESSAGE: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
     name: "CS::CSFeMan::ShowNetworkMessage",
-    rva: 0x0076_e310,
+    rva: 0x0076_f640,
     prologue: &[
         0x40, 0x53, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00, 0x48, 0xc7, 0x44, 0x24, 0x30,
     ],

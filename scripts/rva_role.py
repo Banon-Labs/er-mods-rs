@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Which `*RVA*`-named constants are not game addresses, proven from how the workspace uses them.
 
+Who asks
+--------
+`check-expression-constants.py` builds the game-address population from the `*RVA*` name filter
+and `rva_usage`, and drops [`NOT_AN_ADDRESS`] from it; the same exclusion is what kept bounds out
+of the 1.17 ledgers while they existed. The ledgers and their harvesters were deleted on
+2026-10-23 with the carry, and the history below is theirs; the name filter, and the reason a
+name filter needs this module, are not.
+
 The door this closes
 --------------------
-`select-needed-1170-rows.py` and `map-data-rvas-1162-to-1170.py` both decide what to translate
-with the same regex:
+`select-needed-1170-rows.py` and `map-data-rvas-1162-to-1170.py` (both deleted 2026-10-23) decided
+what to translate with the same regex:
 
     const\\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\\s*:\\s*(usize|u32|u64)\\s*=\\s*0x...
 
@@ -14,9 +22,9 @@ things follow, both measured on this tree on 2026-08-31:
   * `INTERVAL` contains `RVA`. Every `*INTERVAL*` constant in the workspace -- 35 of them, from
     `OWN_STEPPER_LOG_INTERVAL` to `SNAPSHOT_INTERVAL_MS` to `PATCH_RETRY_LOG_INTERVAL` -- matches
     the name filter. Not one of them is an address; all are tick counts and millisecond periods.
-    They stay out of the ledgers for one reason only: they are written in decimal, and the regex
-    demands `0x`. Rewrite `const LOG_INTERVAL: usize = 30;` as `0x1e` and it is harvested.
-  * Three constants that are written in hex are harvested today: `FIRST_SECTION_RVA` (0x1000),
+    They stayed out of the ledgers for one reason only: they are written in decimal, and the regex
+    demanded `0x`. Rewritten as `0x1e`, `const LOG_INTERVAL: usize = 30;` would have been harvested.
+  * Three constants that are written in hex were harvested: `FIRST_SECTION_RVA` (0x1000),
     `GAME_TEXT_RVA_LIMIT` (0x4000000) and `SW_BP_RVA_LIMIT` (0x5000000). Only the first reached a
     ledger, and only because 0x1000 happens to be a `.pdata`-declared function start in both
     builds; the other two sit past `.text`, so `functions.tsv` had no pair to give them. Luck,
@@ -28,7 +36,7 @@ FIRST_SECTION_RVA`), it entered `rva-map-1162-to-1170.needed.tsv` as `0x1000 -> 
 comparison then scored it `IDENTICAL-WHOLE` / `BOTH-ENTRIES` -- because the bytes at 0x1000 really
 are identical across the two builds -- and `er-game-base/build.rs` admitted it to
 `DETOUR_SAFE_1162_TO_1170`, the table detour targets are drawn from. Nothing detours it, so it is
-inert. It is still a non-address in the address table, and a confident verdict is exactly what a
+inert. It was still a non-address in the address table, and a confident verdict is exactly what a
 meaningless row earns.
 
 Which direction this is allowed to be wrong in
@@ -50,13 +58,15 @@ A constant used only as the right-hand side of `<`, `<=`, `>`, `>=`, `==` or `!=
 threshold or a sentinel. It is not something the workspace resolves or offsets from a module base
 -- and resolving or offsetting is the only thing one does with an address. One use this module
 cannot classify is enough to withhold the verdict: the answer becomes `None`, the constant stays
-in the ledger exactly as before, and nothing breaks. There is no heuristic fallback and no
-value threshold; a value test was already measured and rejected upstream, because `>= 0x1000`
+in the game-address population exactly as before, and nothing breaks. There is no heuristic
+fallback and no value threshold; a value test was measured and rejected, because `>= 0x1000`
 admits eleven non-addresses, ten of them exactly `0x1000`.
 
-Run against this tree the proof fires on three constants and no others: out of 694 constants whose
-name carries `RVA`, 515 that the harvesters can admit, and 477 that already occupy a row in
-`rva-map-1162-to-1170.{needed,needed-verified,data}.tsv`.
+Run against the tree the ledgers were built from, the proof fired on three constants and no
+others: out of 694 constants whose name carried `RVA`, 515 that the harvesters could admit, and
+477 that occupied a row in `rva-map-1162-to-1170.{needed,needed-verified,data}.tsv` (deleted
+2026-10-23 with the carry; the last committed copies are at `41d6a363`). On the 2.7.2.0 tree of
+2026-10-23 it still proves three, out of 589 constants the literal-hex shape admits.
 
 Usage:
     python3 scripts/rva_role.py             # report every proven non-address in crates/
@@ -100,23 +110,6 @@ NOT_AN_ADDRESS: dict[str, str] = {
         "crash-log RVA is accepted in (`if rva < GAME_TEXT_RVA_LIMIT`). 0x4000000 is past the "
         "game's first .text section entirely; it stayed out of the ledgers only because "
         "functions.tsv has no pair that far out, not because anything refused it."
-    ),
-    "TEXT_RVA_END": (
-        "crates/er-game-base/src/game_build.rs -- one past the end of the primary .text section, "
-        "used only as `rva < TEXT_RVA_END` to keep the 1.17.1 carry from moving addresses that "
-        "are not code. It is the section's extent, which both 1.17 builds share, and not the "
-        "address of anything: the byte at that rva belongs to the next section. Carrying it "
-        "forward as a function would be meaningless, and dropping it from a ledger silently "
-        "would hide that the bound exists at all."
-    ),
-    "CARRY_1171_BOUNDARY_RVA": (
-        "crates/er-game-base/src/game_build.rs -- the lowest rva that ELDEN RING 1.17.1 moved, "
-        "used once and only as `rva >= CARRY_1171_BOUNDARY_RVA && rva < TEXT_RVA_END`. It names "
-        "the seam between the code the 1.17.0 to 1.17.1 patch left alone and the code it slid by "
-        "0x70, so it is a boundary between two builds rather than the address of anything: no "
-        "function starts there in either image, and nothing resolves or offsets from it. Putting "
-        "it in an address ledger would ask the mapper to carry a threshold forward as if it were "
-        "a function."
     ),
     "SW_BP_RVA_LIMIT": (
         "crates/er-quickload/src/constants/software_breakpoints.rs -- the same shape one crate "
@@ -376,9 +369,9 @@ pub fn drive(sink: &mut Vec<usize>, probe: usize) {
 def control_failures() -> list[str]:
     """The fixture-only half of the selftest, so another gate can run it without a tree sweep.
 
-    `select-needed-1170-rows.py --selftest` is what `check.sh` actually runs, and it calls this;
-    a control set that only ever executes when somebody types `rva_role.py --selftest` by hand is
-    a control set nobody runs.
+    `select-needed-1170-rows.py --selftest` used to be what `check.sh` ran, and it called this.
+    With that file deleted, `rva_role.py --selftest` has to be a step of its own: a control set
+    that only ever executes when somebody types it by hand is a control set nobody runs.
     """
     failures: list[str] = []
 
@@ -478,9 +471,9 @@ def selftest(verbose: bool = True) -> int:
 def audit(population, sources: dict[str, str]) -> list[str]:
     """Both consistency directions between [`NOT_AN_ADDRESS`] and the proof, as failure strings.
 
-    Callable from another gate with its own population -- `select-needed-1170-rows.py` passes the
-    exact constant set it is about to write into a ledger, which is the population that actually
-    matters. The standalone selftest passes [`harvestable_names`].
+    Callable from another gate with its own population -- the deleted
+    `select-needed-1170-rows.py` passed the exact constant set it was about to write into a ledger.
+    The standalone selftest passes [`harvestable_names`].
     """
     failures: list[str] = []
     listed = set(NOT_AN_ADDRESS)

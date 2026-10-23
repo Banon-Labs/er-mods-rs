@@ -16,8 +16,9 @@
 //! for this feature, on three independent counts, each of which is fatal on its own:
 //!
 //! 1. **Its prologues are already claimed, with bare hooks.** `er-quickload` detours the
-//!    ProfileSelect list builder (`0x875590`), the row-populate (`0x8757e0`), the row-model build
-//!    (`0x8752c0`), `MenuItemList::SetCursor` (`0x73bc10`) and the pointer hit test (`0x736c90`)
+//!    ProfileSelect list builder (2.7.2.0 `0x876a30`), the row-populate (`0x876c80`), the
+//!    row-model build (`0x876760`), `MenuItemList::SetCursor` (`0x73cf10`) and the pointer hit
+//!    test (`0x737f90`)
 //!    through `MhHook::new` -- a private MinHook instance, not the `er-hook` union. A second DLL
 //!    claiming any of them overwrites the first one's trampoline and the loser goes silent with
 //!    no error: measured on 2026-08-23 as `file_open_hits = 0` for an entire session with every

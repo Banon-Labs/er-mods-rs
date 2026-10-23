@@ -18,23 +18,22 @@ use prologue_build::{Assemble, Image, PrologueSpec, Shape, generate};
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// "A menu has the mouse", `bool(CSMenuManImp*)`, 1.17 `0x140766650`. Below the `0xafefe9`
-/// boundary, so 1.17.0 and 1.17.1 have it at the same address with the same bytes.
-const MENU_HAS_MOUSE_1170_VA: u64 = 0x140766650;
+/// "A menu has the mouse", `bool(CSMenuManImp*)`, 2.7.2.0 `0x140766b00`.
+const MENU_HAS_MOUSE_VA: u64 = 0x140766b00;
 
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
     generate(
         &[(
             PrologueSpec {
-                name: "MENU_HAS_MOUSE_1171_PROLOGUE",
+                name: "MENU_HAS_MOUSE_PROLOGUE",
                 doc: "`mov [rsp+0x10],rbx; mov [rsp+0x18],rbp; mov [rsp+0x20],rsi; push rdi;\n\
-                      sub rsp,0x20; cmp byte [rcx+0x1a],0` -- the opening of the 1.17\n\
+                      sub rsp,0x20; cmp byte [rcx+0x1a],0` -- the opening of the 2.7.2.0\n\
                       menu-has-the-mouse predicate.",
                 visibility: "pub(crate)",
                 shape: Shape::Array,
-                image: Image::EldenRing1170,
-                va: MENU_HAS_MOUSE_1170_VA,
+                image: Image::EldenRing2720,
+                va: MENU_HAS_MOUSE_VA,
                 take: 0,
                 pin: &[
                     0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74,

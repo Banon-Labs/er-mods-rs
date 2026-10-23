@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emulation-driven Arxan dispatch resolver for eldenring-deobf.bin.
+"""Emulation-driven Arxan dispatch resolver for eldenring-deobf-1.17.2.bin.
 
 Static following (scripts/deobf-read.py) cannot resolve Arxan's opaque dispatch:
 the real control transfers are `jmp qword [rsp-8]` ret-gadgets whose target was
@@ -22,12 +22,16 @@ interpreter loop and hit the loop guard — that is the signal they need real
 devirtualization.
 
 Usage
-  scripts/deobf-emulate.py 0x140110820          # resolve one function's real flow
+  scripts/deobf-emulate.py 0x140416830          # resolve one function's real flow
   scripts/deobf-emulate.py --budget 400 0x...   # allow more executed instructions
   scripts/deobf-emulate.py --arxan 0x...        # also print the [arxan] scaffolding insns
 unicorn + capstone auto-provision via `uv run --with unicorn --with capstone`.
+
+The image is `eldenring-deobf-1.17.2.bin`, the installed build (2.7.2.0), unless `ER_DEOBF`
+names another; the game and Arxan code ranges come from its section table, and the thunk
+annotations of `arxan-thunks.tsv` (measured on 1.16.2) are shown only for the 1.16.2 image.
 """
-import argparse, os, sys
+import argparse, os, struct, sys
 from collections import Counter
 
 try:
@@ -47,8 +51,12 @@ from unicorn.x86_const import (UC_X86_REG_RSP, UC_X86_REG_RIP, UC_X86_REG_RAX,
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 
 BASE = 0x140000000
-ARX = [(0x1429a3000, 0x1429af000), (0x144c0e000, 0x145e01800)]
-GAME = (0x140001000, 0x1429a3000)
+IMAGE_NAME = "eldenring-deobf-1.17.2.bin"
+#: PE TimeDateStamp of the 1.16.2 image `arxan-thunks.tsv` was measured on.
+THUNKS_BUILD_STAMP = 0x69E21187
+#: Game code and Arxan code ranges, taken from the image by `set_ranges`.
+ARX = []
+GAME = (0, 0)
 STACK, SSIZE = 0x7f0000000000, 0x200000
 SCRATCH = 0x600000000000
 SENTINEL = 0x1337133713370000
@@ -60,21 +68,49 @@ def in_game(v): return GAME[0] <= v < GAME[1]
 
 def find_deobf():
     here = os.path.dirname(os.path.abspath(__file__))
-    # `ER_DEOBF` first, then the image at the repo root. The third entry used to be an
-    # absolute path into `~/projects/er-effects-rs`, this repo's name before it was renamed to
-    # er-mods-rs: a directory that no longer exists on any machine, so it resolved to nothing and
-    # read as "the image is missing" rather than "that fallback is dead".
-    for p in (os.environ.get("ER_DEOBF"),
-              os.path.join(os.path.dirname(here), "eldenring-deobf.bin")):
+    # `ER_DEOBF` first, then the installed build's image at the repo root and in each directory
+    # above it: the image is gitignored, so a linked worktree under `.worktrees/` has no copy and
+    # finds the main checkout's.
+    candidates = [os.environ.get("ER_DEOBF")]
+    d = os.path.dirname(here)
+    while True:
+        candidates.append(os.path.join(d, IMAGE_NAME))
+        if os.path.dirname(d) == d:
+            break
+        d = os.path.dirname(d)
+    for p in candidates:
         if p and os.path.exists(p):
             return p
-    sys.exit("eldenring-deobf.bin not found (set ER_DEOBF=/path)")
+    sys.exit(f"{IMAGE_NAME} not found (set ER_DEOBF=/path)")
 
 
-def load_thunks():
+def pe_stamp(img):
+    return struct.unpack_from("<I", img, struct.unpack_from("<I", img, 0x3C)[0] + 8)[0]
+
+
+def set_ranges(img):
+    """Game code is the first `.text` up to `.interpr`; Arxan's is `.interpr` and the second `.text`."""
+    global ARX, GAME
+    pe = struct.unpack_from("<I", img, 0x3C)[0]
+    count = struct.unpack_from("<H", img, pe + 6)[0]
+    opt = struct.unpack_from("<H", img, pe + 20)[0]
+    sections = []
+    for i in range(count):
+        o = pe + 24 + opt + 40 * i
+        vsize, va = struct.unpack_from("<II", img, o + 8)
+        sections.append((img[o:o + 8].rstrip(b"\0"), BASE + va, BASE + va + vsize))
+    texts = [s for s in sections if s[0] == b".text"]
+    interp = next(s for s in sections if s[0] == b".interpr")
+    GAME = (texts[0][1], interp[1])
+    ARX = [(interp[1], interp[2]), (texts[1][1], texts[1][2])]
+
+
+def load_thunks(img):
     here = os.path.dirname(os.path.abspath(__file__))
     p = os.path.join(here, "arxan-thunks.tsv")
     m = {}
+    if pe_stamp(img) != THUNKS_BUILD_STAMP:
+        return m
     if os.path.exists(p):
         for line in open(p).read().splitlines()[1:]:
             f = line.split("\t")
@@ -92,8 +128,9 @@ def main():
     va = int(args.va, 16)
 
     img = open(find_deobf(), "rb").read()
+    set_ranges(img)
     md = Cs(CS_ARCH_X86, CS_MODE_64)
-    thunks = load_thunks()
+    thunks = load_thunks(img)
 
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     imgsz = (len(img) + 0xFFF) & ~0xFFF

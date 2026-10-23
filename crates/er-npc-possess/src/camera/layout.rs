@@ -6,101 +6,50 @@
 //!
 //! # What was measured, and how
 //!
-//! All seven offsets below were byte-proven identical on 1.16.2 (`eldenring-deobf.bin`) and 1.17
-//! (`eldenring-deobf-1.17.bin`), which is the build actually installed. The evidence, in the order
-//! a reader would want to re-run it:
+//! Every offset below was read out of the 2.7.2.0 image (`eldenring-deobf-1.17.2.bin`); the same
+//! sites were byte-proven on 1.16.2 and 1.17 before that. The evidence, in the order a reader
+//! would want to re-run it:
 //!
-//! * **`WorldChrMan+0x1ece0 chrCam`** -- the 1.16.2 named dump types the field. `FUN_1404a6c30`
-//!   (92 bytes: `UpdateRecursive`, then `GLOBAL_WorldChrMan`, then `[+0x1ece0]`, then a 4x4 matrix
-//!   copy) matches uniquely in the 1.17 image at `0x1404a7190` with the displacement still
-//!   `0x1ece0`, off the 1.17 `GLOBAL_WorldChrMan` at `0x143d69ff8`.
-//! * **`ChrCam+0x60 chrExFollowCam`** -- `CS::ChrCam::Update` matches uniquely in 1.17 at
-//!   `0x1403b11d0` (its 0x60-byte prologue is byte-identical bar one rip-relative operand), and
-//!   three sites in it do `MOV RCX,[RDI+0x60]` immediately before `CALL 0x1403b5ad0`, which is
-//!   `ChrExFollowCam::Update`. The crate's `ChrCam` models the same field; the `const` assertion
-//!   in [`crate::camera::game`] pins the two together through `size_of::<CSPersCam>()`.
+//! * **`WorldChrMan+0x1ecf0 chrCam`** -- the 1.16.2 named dump types the field (`FUN_1404a6c30`
+//!   there, 92 bytes: `UpdateRecursive`, then `GLOBAL_WorldChrMan`, then `[+chrCam]`, then a 4x4
+//!   matrix copy). The same function is 2.7.2.0 `0x1404a7270`, loading `[rax+0x1ecf0]` at
+//!   `0x1404a728e` off `GLOBAL_WorldChrMan` at `0x143d6d018`; see [`world_chr_man::CHR_CAM`].
+//! * **`ChrCam+0x60 chrExFollowCam`** -- `CS::ChrCam::Update` is `0x1403b11d0`, and four sites in
+//!   it (`0x1403b12b4`, `0x1403b1359`, `0x1403b137d`, `0x1403b145b`) do `MOV RCX,[RDI+0x60]`
+//!   ahead of `ChrExFollowCam::Update` (`0x1403b5ad0`). The crate's `ChrCam` models the same
+//!   field; the `const` assertion in [`crate::camera::game`] pins the two together through
+//!   `size_of::<CSPersCam>()`.
 //! * **`ChrExFollowCam+0x468`** -- see [`chr_ex_follow_cam::LOCK_CAM_PARAM_OVERRIDE`].
-//! * **`ChrExFollowCam+0x460`** -- written by `ApplyZoomLerp` at 1.17 `0x1403b76da`.
+//! * **`ChrExFollowCam+0x460`** -- written by `ApplyZoomLerp` at `0x1403b76da`
+//!   (`mov [rbx+0x460],edx`).
 //! * **`ChrExFollowCam+0x150/+0x154 anglesEuler`** -- see
-//!   [`chr_ex_follow_cam::ANGLES_EULER_YAW`], whose 73-byte window is unique in both images.
+//!   [`chr_ex_follow_cam::ANGLES_EULER_YAW`]; `ChrExFollowCam::Update` reads them at
+//!   `0x1403b62f8` / `0x1403b62e4` (`movss xmm1,[rsi+0x150]` / `movss xmm1,[rsi+0x154]`).
 //! * **`CSChrPhysicsModule+0x340/+0x344`** -- `ChrIns::GetPhysicsHitHeight` is
-//!   `[ChrIns+0x190] -> [+0x68] -> MOVSS XMM0,[RCX+0x340]; RET` in the 1.16.2 named dump, and the
-//!   same three-instruction chain sits at 1.17 `0x1403efe50 -> 0x14045e590` with the same `0x340`.
-//!   Its neighbour `0x1403efe60 -> 0x14045e5a0` reads `0x344`, the radius.
+//!   `[ChrIns+0x190] -> [+0x68] -> MOVSS XMM0,[RCX+0x340]; RET` in the 1.16.2 named dump; on
+//!   2.7.2.0 the chain is `0x1403efe50 -> 0x14045e670`, and its neighbour
+//!   `0x1403efe60 -> 0x14045e680` reads `0x344`, the radius.
 //!
-//! # 1.17.1 and 2.7.2.0
-//!
-//! Re-read on 2026-10-21 out of `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`.
-//! Every site below except the two physics leaves sits in a carry segment of delta zero, so each
-//! instruction is at the same address in both images; the leaves moved `+0xe0`. Each range was
-//! compared instruction for instruction with rip-relative displacements masked and every call and
-//! branch target checked against the carry:
-//!
-//! | offset | site, 1.17.1 = 2.7.2.0 | instruction in both |
-//! |---|---|---|
-//! | `ChrCam+0x60` | `0x1403b12b4`, `0x1403b1359`, `0x1403b137d`, `0x1403b145b` in `ChrCam::Update` (0x1c0 bytes, 107 instructions agree) | `mov rcx,[rdi+0x60]` |
-//! | `ChrExFollowCam+0x468` | `0x1403b7668` in `ApplyZoomLerp` (0x180 bytes, 86 agree) | `mov eax,[rbx+0x468]` |
-//! | `ChrExFollowCam+0x460` | `0x1403b76da`, same range | `mov [rbx+0x460],edx` |
-//! | `ChrExFollowCam+0x150/+0x154` | `0x1403b62f8` / `0x1403b62e4` in `ChrExFollowCam::Update` | `movss xmm1,[rsi+0x150]` / `movss xmm1,[rsi+0x154]` |
-//! | `CSChrPhysicsModule+0x340` | `0x1403efe50` -> `jmp`, leaf 1.17.1 `0x14045e590` / 2.7.2.0 `0x14045e670` | `mov rax,[rcx+0x190]` ; `mov rcx,[rax+0x68]` ; leaf `movss xmm0,[rcx+0x340]` ; `ret` |
-//! | `CSChrPhysicsModule+0x344` | `0x1403efe60` -> `jmp`, leaf 1.17.1 `0x14045e5a0` / 2.7.2.0 `0x14045e680` | same chain, leaf `movss xmm0,[rcx+0x344]` ; `ret` |
-//!
-//! The `jmp` in each physics accessor lands on the leaf named in its own image, and the leaf is
-//! the carried 1.17.1 one. The "nothing writes `+0x468`" claim holds on 2.7.2.0 as well: across
-//! every `.pdata` function starting in `0x1403b0000..0x1403c0000`, each image has exactly one
-//! instruction with displacement `0x468`, the load at `0x1403b7668`. The ctor's `+0x464|+0x468`
-//! qword store is at `0x1403b3b93` in both, and `FUN_1403b1140`'s `+0x464` store at `0x1403b5950`.
-//! `chrCam` is the one field that moved, and [`world_chr_man::CHR_CAM_1172`] carries that.
-//!
-//! Identical on both is not the same as identical forever, which is why this module still gates:
-//! a third build gets `None`, the camera is left alone, and the derived file says
-//! `unmeasured-build` rather than the mod writing a float into whatever now lives at `+0x468`.
+//! This module still gates: a build other than 2.7.2.0 gets `None`, the camera is left alone, and
+//! the derived file says `unmeasured-build` rather than the mod writing a float into whatever now
+//! lives at `+0x468`.
 
 // Pure arithmetic; ungated so its tests run on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use er_game_base::game_build::{
-    FileVersion, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, SUPPORTED_FILE_VERSION,
-};
-
-use crate::possess::layout::FILE_VERSION_1170;
+use er_game_base::game_build::{FileVersion, SUPPORTED_FILE_VERSION};
 
 /// `WorldChrManImp`.
 pub(crate) mod world_chr_man {
-    use er_game_base::game_build::{
-        FileVersion, MAPPED_FILE_VERSION, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172,
-        SUPPORTED_FILE_VERSION,
-    };
-
-    /// `WorldChrManImp.chrCam` on 1.16.2, 1.17.0 and 1.17.1. Cross-checked against
-    /// `offset_of!(WorldChrMan, chr_cam)`, which models this layout.
-    pub(crate) const CHR_CAM: usize = 0x1ece0;
-
-    /// `WorldChrManImp.chrCam` on 2.7.2.0, where it is `+0x10` further on.
+    /// `WorldChrManImp.chrCam` on 2.7.2.0.
     ///
     /// 2.7.2.0 inserted two qwords at `+0x1e5f0` (the new spEffect sync queue and its partner
-    /// object), so every member from there on moved `+0x10`. Measured in both de-Arxan'd images:
-    /// the `WorldChrManImp` allocation in `_Common_Initialize` went `mov ecx,0x1f3e0` (1.17.1
-    /// `0x140aeedd2`) to `mov ecx,0x1f3f0` (2.7.2.0 `0x140aef292`), and the 92-byte chrCam reader
-    /// this module's doc cites loads `[rax+0x1ece0]` at 1.17.1 `0x1404a71ae` and `[rax+0x1ecf0]`
-    /// at 2.7.2.0 `0x1404a728e`. The fromsoftware-rs `WorldChrMan.chr_cam` field still sits at the
-    /// old offset, so on 2.7.2.0 the typed field must not be read.
-    pub(crate) const CHR_CAM_1172: usize = 0x1ecf0;
-
-    /// `chrCam` for `version`, or `None` on a build nobody measured.
-    #[must_use]
-    pub(crate) fn chr_cam(version: FileVersion) -> Option<usize> {
-        match version {
-            v if v == SUPPORTED_FILE_VERSION
-                || v == MAPPED_FILE_VERSION
-                || v == MAPPED_FILE_VERSION_1171 =>
-            {
-                Some(CHR_CAM)
-            }
-            v if v == MAPPED_FILE_VERSION_1172 => Some(CHR_CAM_1172),
-            _ => None,
-        }
-    }
+    /// object), so every member from there on is `+0x10` past where 1.17.1 had it. Measured: the
+    /// `WorldChrManImp` allocation in `_Common_Initialize` is `mov ecx,0x1f3f0` (2.7.2.0
+    /// `0x140aef292`; 1.17.1 had `0x1f3e0`), and the 92-byte chrCam reader this module's doc cites
+    /// loads `[rax+0x1ecf0]` at `0x1404a728e`. The fromsoftware-rs `WorldChrMan.chr_cam` field
+    /// still sits at the 1.17.1 offset, so the typed field must not be read.
+    pub(crate) const CHR_CAM: usize = 0x1ecf0;
 }
 
 /// `ChrCam`, the object `WorldChrMan.chrCam` points at.
@@ -115,26 +64,26 @@ pub(crate) mod chr_cam {
 pub(crate) mod chr_ex_follow_cam {
     /// `ChrExFollowCam+0x468` -- The lever, and the reason this layer needs no detour.
     ///
-    /// `CS::ChrExFollowCam::ApplyZoomLerp` (1.17 `0x1403b7570`) runs every frame out of
+    /// `CS::ChrExFollowCam::ApplyZoomLerp` (2.7.2.0 `0x1403b7570`) runs every frame out of
     /// `ChrExFollowCam::Update` and opens its param-id resolution by loading this field, before
     /// the branch that picks lock-on or normal framing. It is first in both chains:
     ///
     /// * normal: `+0x468` -> `GameMan+0x40` -> `GameMan+0x48` -> `GameMan+0x4c` -> `+0x464` -> 0
     /// * lock-on: `+0x468` -> `GameMan+0x44` -> `GameMan+0x54` -> `+0x464` -> 0
     ///
-    /// **Nothing in the game ever writes it.** A byte scan of the whole camera code range
-    /// (`0x1403b0000`-`0x1403c0000`) in the 1.17 image finds exactly one access at displacement
-    /// `0x468` and it is the `MOV EAX,[RBX+0x468]` load at `0x1403b766a`; image-wide there are
-    /// only eight 32-bit stores at that displacement and every one is in unrelated code far
-    /// outside the camera module (several are `[RBP+0x468]` stack frames). The constructor sets it
-    /// with a single qword store covering `+0x464|+0x468` -- `MOV qword [RDI+0x464],-1` at 1.17
-    /// `0x1403b3b94` -- and never touches it again.
+    /// **Nothing in the game ever writes it.** Across every `.pdata` function starting in the
+    /// camera code range (`0x1403b0000`-`0x1403c0000`) of the 2.7.2.0 image there is exactly one
+    /// instruction with displacement `0x468`, the `MOV EAX,[RBX+0x468]` load at `0x1403b7668`;
+    /// image-wide (measured on 1.17) there were only eight 32-bit stores at that displacement and
+    /// every one is in unrelated code far outside the camera module (several are `[RBP+0x468]`
+    /// stack frames). The constructor sets it with a single qword store covering `+0x464|+0x468`
+    /// -- `MOV qword [RDI+0x464],-1` at 2.7.2.0 `0x1403b3b93` -- and never touches it again.
     ///
     /// `+0x464` is not free and must not be used instead: `FUN_1403b1140` writes it from the map
-    /// region (`MOV [RCX+0x464],EDX` at 1.17 `0x1403b5950`).
+    /// region (`MOV [RCX+0x464],EDX` at 2.7.2.0 `0x1403b5950`).
     pub(crate) const LOCK_CAM_PARAM_OVERRIDE: usize = 0x468;
     /// `ChrExFollowCam+0x460` -- the id `ApplyZoomLerp` actually resolved last frame, mirrored out
-    /// for free (`MOV [RBX+0x460],EDX` at 1.17 `0x1403b76da`).
+    /// for free (`MOV [RBX+0x460],EDX` at 2.7.2.0 `0x1403b76da`).
     ///
     /// Read once at possession start to learn which row the camera was using a frame ago, so the
     /// fields the size law does not decide can be copied from it rather than from a guess.
@@ -176,8 +125,8 @@ pub(crate) mod chr_ex_follow_cam {
     /// proofs in [`crate::possess::intent`] -- so the body heading for this look direction is this
     /// field plus PI. [`crate::possess::intent::aim`] is the one place that conversion happens.
     ///
-    /// Byte-proven: the 73-byte window carrying `+0xe0`, `+0x150` and `+0x154` matches uniquely in
-    /// both images -- 1.16.2 `0x1403b62c9`, 1.17 `0x1403b62d9`.
+    /// Byte-proven: the 73-byte window carrying `+0xe0`, `+0x150` and `+0x154` matched uniquely in
+    /// 1.16.2 and 1.17, and on 2.7.2.0 it opens with `movaps xmm0,[rsi+0xe0]` at `0x1403b62d9`.
     pub(crate) const ANGLES_EULER_YAW: usize = ANGLES_EULER + core::mem::size_of::<f32>();
 }
 
@@ -198,9 +147,8 @@ pub(crate) mod chr_physics_module {
 
 /// The offsets for the running build, or `None` on one nobody has measured.
 ///
-/// Every field is the same on both measured builds, which is exactly why this returns a struct
-/// rather than a bool: when one of them does move, the difference belongs here and every caller
-/// picks it up without changing.
+/// A struct rather than a bool: when a field moves on a later build, the difference belongs here
+/// and every caller picks it up without changing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Offsets {
     pub(crate) chr_cam: usize,
@@ -215,16 +163,11 @@ pub(crate) struct Offsets {
 /// The measured offsets, or `None`.
 #[must_use]
 pub(crate) fn offsets(version: Option<FileVersion>) -> Option<Offsets> {
-    let version = version?;
-    let measured = version == SUPPORTED_FILE_VERSION
-        || version == FILE_VERSION_1170
-        || version == MAPPED_FILE_VERSION_1171
-        || version == MAPPED_FILE_VERSION_1172;
-    if !measured {
+    if version? != SUPPORTED_FILE_VERSION {
         return None;
     }
     Some(Offsets {
-        chr_cam: world_chr_man::chr_cam(version)?,
+        chr_cam: world_chr_man::CHR_CAM,
         ex_follow_cam: chr_cam::EX_FOLLOW_CAM,
         lock_cam_param_override: chr_ex_follow_cam::LOCK_CAM_PARAM_OVERRIDE,
         resolved_lock_cam_param: chr_ex_follow_cam::RESOLVED_LOCK_CAM_PARAM,
@@ -239,70 +182,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_measured_builds_answer_and_nothing_else_does() {
-        assert!(offsets(Some(SUPPORTED_FILE_VERSION)).is_some(), "1.16.2");
-        assert!(offsets(Some(FILE_VERSION_1170)).is_some(), "1.17");
-        assert_eq!(
-            offsets(Some(SUPPORTED_FILE_VERSION)),
-            offsets(Some(FILE_VERSION_1170)),
-            "byte-proven identical on both; a divergence belongs in the table, not here"
-        );
-        assert_eq!(
-            offsets(Some(MAPPED_FILE_VERSION_1171)),
-            offsets(Some(FILE_VERSION_1170)),
-            "1.17.1 is instruction-identical to 1.17.0 at every camera site"
-        );
-        // 2.7.2.0 differs from 1.17.1 in `chrCam` alone.
-        let on_1172 = offsets(Some(MAPPED_FILE_VERSION_1172)).expect("2.7.2.0 is measured");
-        assert_eq!(
-            on_1172,
-            Offsets {
-                chr_cam: world_chr_man::CHR_CAM_1172,
-                ..offsets(Some(MAPPED_FILE_VERSION_1171)).expect("1.17.1 is measured")
-            }
-        );
-        assert_eq!(
-            offsets(Some(FileVersion {
+    fn the_measured_build_answers_and_nothing_else_does() {
+        let measured = offsets(Some(SUPPORTED_FILE_VERSION)).expect("2.7.2.0 is measured");
+        assert_eq!(measured.chr_cam, 0x1ecf0);
+        for other in [
+            FileVersion {
+                major: 2,
+                minor: 7,
+                build: 1,
+                revision: 0,
+            },
+            FileVersion {
                 major: 2,
                 minor: 8,
                 build: 0,
                 revision: 0,
-            })),
-            None,
-            "a build nobody measured"
-        );
+            },
+        ] {
+            assert_eq!(
+                offsets(Some(other)),
+                None,
+                "a build nobody measured: {other}"
+            );
+        }
         // The host, where there is no game image at all.
         assert_eq!(offsets(None), None);
-    }
-
-    /// `chrCam` moved `+0x10` on 2.7.2.0 and nowhere else; an unmeasured build has no answer.
-    #[test]
-    fn chr_cam_moves_on_1172_only() {
-        use er_game_base::game_build::{
-            MAPPED_FILE_VERSION, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172,
-        };
-        assert_eq!(
-            world_chr_man::chr_cam(SUPPORTED_FILE_VERSION),
-            Some(0x1ece0)
-        );
-        assert_eq!(world_chr_man::chr_cam(MAPPED_FILE_VERSION), Some(0x1ece0));
-        assert_eq!(
-            world_chr_man::chr_cam(MAPPED_FILE_VERSION_1171),
-            Some(0x1ece0)
-        );
-        assert_eq!(
-            world_chr_man::chr_cam(MAPPED_FILE_VERSION_1172),
-            Some(0x1ecf0)
-        );
-        assert_eq!(
-            world_chr_man::chr_cam(FileVersion {
-                major: 2,
-                minor: 8,
-                build: 0,
-                revision: 0,
-            }),
-            None
-        );
     }
 
     /// The override slot and the mirror are adjacent `i32`s and must not be confused: writing the

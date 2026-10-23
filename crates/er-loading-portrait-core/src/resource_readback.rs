@@ -80,14 +80,6 @@ pub const READBACK_FENCE_WAIT_MS: u32 = 2000;
 /// The fence value our single command-list submission signals.
 pub const READBACK_FENCE_TARGET: u64 = 1;
 
-/// GX swapchain command-queue global: deobf RVA of the qword holding the game's `ID3D12CommandQueue` (the
-/// `pDevice` arg the GX backend passes to `IDXGIFactory::CreateSwapChain` -- for a D3D12 swapchain that arg
-/// is the command queue). Dump `0x1448012a8` (= `&DAT_1448012a0 + 8`, resolved from the swapchain creator
-/// `FUN_141e9cc70` via `FUN_141e888c0`). Retained for reference ONLY: submitting our composite on the
-/// game's queue from the Present hook caused a vkd3d access violation, so we now use our own private queue.
-#[allow(dead_code)]
-const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
-
 // Monotonic fence value for the shared execute_and_wait submit helper (gpu_draw_shared.rs).
 pub static OVERLAY_FENCE_VAL: AtomicU64 = AtomicU64::new(0); // monotonically incremented per submit
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
@@ -213,14 +205,15 @@ pub use er_telemetry_core::counters::PROFILE_DEPTH_FROM_CHAIN;
 /// Keyed+clean frames not displayed because their color was scan-resolved (no bundle provenance).
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED;
 
-// Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
-// black-background-on-reload root fix). The CSEzOffscreenRend stores its GXSgCompositeScene facade
-// at +0x48 (FUN_140bb7440 wraps the GXSgSceneFactory product into `field9_0x48`); the facade's
-// vt+0x18 getter (FUN_141b64640) is the trivial member read `*(facade+0x38)` = the 0xc4b0-byte
-// GXSceneContext; the context's render-target bundle sits at +0x248 (FUN_140bb73a0 clears its RTV
-// via the FUN_141a1adc0 accessor) with the color RTV view at bundle+0x30 and the depth DSV view at
-// bundle+0x40 -- proven by the engine's own target bind FUN_141a086c0:
-// `FUN_1419ea4c0(cmdlist, 1, &*(bundle+0x30), *(bundle+0x40))` (count, RTV array, DSV).
+// Static-RE'd offscreen scene-target member chain (1.16.1 Ghidra dump decompiles, 2026-07-03 -- the
+// black-background-on-reload root fix; the addresses are the 2.7.2.0 functions except the one
+// labelled 1.16.1). The CSEzOffscreenRend stores its GXSgCompositeScene facade
+// at +0x48 (0x140bb8f30 wraps the GXSgSceneFactory product into `field9_0x48`); the facade's
+// vt+0x18 getter (1.16.1 dump FUN_141b64640) is the trivial member read `*(facade+0x38)` = the
+// 0xc4b0-byte GXSceneContext; the context's render-target bundle sits at +0x248 (0x140bb8e90 clears
+// its RTV via the 0x141a1e300 accessor) with the color RTV view at bundle+0x30 and the depth DSV view
+// at bundle+0x40 -- proven by the engine's own target bind 0x141a0bc00:
+// `0x1419eda00(cmdlist, 1, &*(bundle+0x30), *(bundle+0x40))` (count, RTV array, DSV).
 // bundle+0x548 is the redirect-to-global-target flag the accessor checks; when set the local views
 // are not authoritative, so the chain fails closed.
 const OFFSCREEN_SCENE_FACADE_OFFSET: usize = 0x48;
@@ -290,7 +283,7 @@ pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize
 }
 
 /// Native alpha-0 clear of the offscreen scene's color RT (scene-alpha keying, strategy pivot
-/// 2026-07-03). Replicates the engine's own per-slot offscreen clear (dump FUN_140bb73a0) with
+/// 2026-07-03). Replicates the engine's own per-slot offscreen clear (0x140bb8e90) with
 /// clear color {0,0,0,0} instead of the shared opaque-black constant: pop a GX frame context,
 /// ClearRTV the scene bundle's own RTV through the frame's subcontext, release the frame context.
 /// Called by the pump on the render thread immediately before the model update+draw, so each
@@ -335,7 +328,7 @@ pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     if !valid(gx) {
         return false;
     }
-    // All three through the 1.17 gate, resolved before the pop: pop and release must balance
+    // All three through the build gate, resolved before the pop: pop and release must balance
     // exactly like the engine's own body, so refusing halfway would leak a frame context.
     let (Ok(pop_addr), Ok(clear_addr), Ok(release_addr)) = (
         er_game_base::mem::game_rva_named(GX_FRAME_CTX_POP_RVA as u32, "GX_FRAME_CTX_POP_RVA"),

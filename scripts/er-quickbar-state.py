@@ -38,15 +38,11 @@ that cannot be a suspect is worth more than one that has to be cleared.
          quickSlotEntries  + 0x08     EquipDataEntry[10], 8 bytes each
          selectedQuickSlot + 0xa0
 
-`GameDataMan` is the one address that needs translating. `er-game-base` stores rvas against 1.16.2
-on purpose and `er_game_base::mem::game_data_addr` carries them to the running build; a script has
-no such layer, so the 1.17 value is written here:
-
-    docs/recon/rva-map-1162-to-1170.data.tsv:88   0x3d5df38 -> 0x3d61f98   642/642 witnesses
-
-1.17.0 to 1.17.1 moved nothing outside `.text`, so the 1.17.0 data address was the running one
-until 2.7.2.0 moved `.data`: `scripts/map-rvas-1171-to-1172.py` carries it to `0x3d64fb8`, and
-`scripts/frida-carry-1172.py` checked that against the instructions that read it in both images. The
+`GameDataMan` is the one address in the chain. Every address in the workspace is a native 2.7.2.0
+rva since the 2026-10-23 port, and this is the same value as `GAME_DATA_MAN_GLOBAL_RVA` in
+`crates/er-game-base/src/rva.rs`. Its history: `0x3d5df38` on 1.16.2, `0x3d61f98` on 1.17.0 and
+1.17.1 (1.17.1 moved nothing outside `.text`), and `0x3d64fb8` once 2.7.2.0 moved `.data`, where it
+was checked against the instructions that read it in both images. The
 struct offsets are field offsets from the named 1.16.2 dump, which the `.text` shift does not
 reach. `0x348` is the same constant `EQUIP_GAME_DATA_EQUIPMENT_ENTRIES` in `equip_native.rs`, and
 that one is already runtime-proven by its neighbour `physicTears` at `840 + 156`.

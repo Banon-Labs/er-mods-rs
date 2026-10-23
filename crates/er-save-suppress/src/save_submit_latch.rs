@@ -19,53 +19,53 @@
 // carries: for the `SLSaveContent` sitting on the device at the wedge, which submit put it there,
 // what did that submit's builder return, and did the lane that called it go on to accept?
 //
-// The three sites, and why these three (1.16.2 decompiles, shift 0; the 1.17 bodies are byte-equal
-// under the alignment key -- see the derivation block below):
+// The three sites, and why these three (read from the 1.16.2 decompiles; the 2.7.2.0 bodies match
+// them instruction for instruction, and the names below are the 2.7.2.0 addresses -- see the
+// derivation block below):
 //
-//   `FUN_140e6ef60`  the combined lane's submit builder. Sole caller `FUN_14067b940`, the lane the
+//   `FUN_140e724c0`  the combined lane's submit builder. Sole caller `FUN_14067cc40`, the lane the
 //                    2026-08-31 wedge sample names (`lane = 3`). Writes `iodev+0x10` before its
 //                    heap-capability guard and can return 0 afterwards.
-//   `FUN_140e6ec70`  the CHARACTER/SYSTEM builder -- a 15-byte tail-call dispatcher, `cmp
-//                    byte [rcx+0x40],0 / jne FUN_140e6f760 / jmp FUN_140e6f940`, so hooking it sees
-//                    both sub-builders and all three of its lanes (`FUN_14067b750`,
-//                    `FUN_14067b570`, `FUN_14067bc10`) in one place.
-//   `FUN_140e6fb50`  the ENQUEUE, and the reason a negative here still means something: it is the
+//   `FUN_140e721d0`  the CHARACTER/SYSTEM builder -- a 15-byte tail-call dispatcher, `cmp
+//                    byte [rcx+0x40],0 / jne FUN_140e72cc0 / jmp FUN_140e72ea0`, so hooking it sees
+//                    both sub-builders and all three of its lanes (`FUN_14067ca50`,
+//                    `FUN_14067c870`, `FUN_14067cf10`) in one place.
+//   `FUN_140e730b0`  the ENQUEUE, and the reason a negative here still means something: it is the
 //                    only writer of `iodev+0x20` and every builder in the subsystem funnels through
-//                    it, including `FUN_140e6ec80` (the preview lane's builder, which is not
+//                    it, including `FUN_140e721e0` (the preview lane's builder, which is not
 //                    hooked). A device holding a non-zero `+0x20` that this site never saw was
 //                    latched by something outside the whole SL submit path.
 //
 // What the static read already settles, so a run is not asked to re-derive it. Every builder's
 // failure path was decompiled rather than assumed:
 //
-//   * `FUN_140e6fb50` stores its job into `iodev+0x20` and, when `FUN_14240ae10` hands back null,
-//     calls `FUN_140e6f200` -- the full release -- before returning false. An enqueue that fails
+//   * `FUN_140e730b0` stores its job into `iodev+0x20` and, when `FUN_14240edc0` hands back null,
+//     calls `FUN_140e72760` -- the full release -- before returning false. An enqueue that fails
 //     therefore leaves the device clean, and "the enqueue failed and stranded the content" is
 //     false for every lane.
-//   * `FUN_140e6ec70`'s `param_3 >= 0xc` fall-out calls `FUN_140e6f200` too. bd
+//   * `FUN_140e721d0`'s `param_3 >= 0xc` fall-out calls `FUN_140e72760` too. bd
 //     `e6ec70-can-latch-the-device-without-accepting-so-savestate-is-never-written-2026-08-31`
 //     records that arm as a latch-without-accept hole with no release; the 1.16.2 decompile read
 //     for this file has the release, so that memory's rendering is wrong about this build. It is
 //     recorded here rather than silently dropped, because the two readings disagree and the code
 //     is the one that runs.
-//   * `FUN_140e6f940`'s deferred arm (`iodev+0x28 != 0`) returns 1 with `+0x20` still null -- an
+//   * `FUN_140e72ea0`'s deferred arm (`iodev+0x28 != 0`) returns 1 with `+0x20` still null -- an
 //     accept with no job. That is a real latch shape, and it is the one the 2026-08-31 sample
 //     excludes on its own evidence (`+0x28 == 0`, `+0x20` a live pointer).
 //
 // None of that names the frame. A builder that returns 0 with `+0x10` still populated is a fact
 // about one call, and the only way to have it is to be standing there when it happens.
 //
-// Address derivation, and why it is not a constant. `0x140e6ef60` and `0x140e6ec70` are not rows in
-// `rva-map-1162-to-1170.verified.tsv` or `...needed-verified.tsv`, so `resolve_detour_address`
-// would refuse them and the hooks would silently not exist. Rather than widen a ledger this branch
-// does not own, each builder is derived from the running image, which is what
+// Address derivation, and why it is not a constant. The two builders (`0x140e724c0` and
+// `0x140e721d0`) are not on the 2.7.2.0 detour allowlist, so `resolve_detour_address` would refuse
+// them and the hooks would silently not exist. Rather than widen a list this crate does not own,
+// each builder is derived from the running image, which is what
 // `MhHook::new_runtime_derived` / `register_union_hook_runtime_derived` exist for:
 //
-//   1. its calling lane is in the ledger and is `IDENTICAL-WHOLE` with identical `.pdata` extents
-//      (`0x67b940 -> 0x67c790` PDATA:0x2cc/0x2cc; `0x67b750 -> 0x67c5a0` 0x1e3/0x1e3;
-//      `0x67b570 -> 0x67c3c0` 0x1d6/0x1d6; `0x67bc10 -> 0x67ca60` 0x11f/0x11f), so the offset of a
-//      call inside it survives the move;
-//   2. `resolve_call_site_rva` places that call on the running build;
+//   1. its calling lane is a 2.7.2.0 constant (`0x67cc40`, `0x67ca50`, `0x67c870`, `0x67cf10`)
+//      whose body matches the 1.16.2 one instruction for instruction, so the offset of a call
+//      inside it is the one the decompile names;
+//   2. `resolve_call_site_rva` places that call on the running build (and refuses any other);
 //   3. the `E8 rel32` there is DECODED, so the address comes out of the image rather than out of
 //      arithmetic on a base;
 //   4. `write_site_is_sound` then asks the running image's own `.pdata` whether the destination is
@@ -74,45 +74,38 @@
 // The char builder is derived from all three of its lanes and the three answers must agree, which
 // is a check no single derivation can make on itself.
 //
-// Offline evidence for the pairs, recorded here because it cannot go in a ledger this branch may
-// not write. `scripts/diff-function-bodies-1162-1170.py`, `.pdata` extents from
-// `scripts/pdata-lookup-1162-1170.py`, and the `E8` decode from both images:
+// Offline evidence, read out of `eldenring-deobf-1.17.2.bin`: the `E8` at each lane plus its offset
+// decodes to `0x140e724c0` for the combined lane and to `0x140e721d0` for all three char lanes. The
+// combined builder (134 instructions) and the enqueue (59) match the 1.16.2 bodies mnemonic for
+// mnemonic, and the char builder is the same 15-byte tail-call stub byte for byte. `0xe730b0`, the
+// enqueue, is on the allowlist and resolves like any other constant.
 //
-//   1.16.2      1.17        verdict                          entry evidence        patch site
-//   0xe6ef60    0xe70d60    identical-whole 1.000/134 insns  both-entries 0x210    7B relocatable
-//   0xe6ec70    0xe70a70    identical-leaf  1.000/3 insns    neither-entry 0xf     10B relocatable
-//   0xe6fb50    0xe71950    identical-whole 1.000/59 insns   both-entries 0xe2     8B relocatable
-//
-// Both new verdicts are in `EXHAUSTIVE_VERDICTS`, so neither is a loosened score; they are recorded
-// as prose here only because the row cannot be added to `docs/recon/rva-map-*.tsv` from this branch.
-// `0xe6fb50` is already an audited row and resolves through the table like any other constant.
-//
-// The preview lane is deliberately not hooked. `FUN_140e6ec80` (`0xe70a80` on 1.17) is the fourth
-// builder, called only by `FUN_14067b4e0`. Its 1.17 entry sits exactly 0x10 bytes past the char
-// stub's, which is the overlap window `scripts/audit-1170-hook-targets.py` refuses -- two detours
+// The preview lane is deliberately not hooked. `FUN_140e721e0` is the fourth builder, called only
+// by `FUN_14067c7e0`. Its entry sits exactly 0x10 bytes past the char stub's, which is the
+// overlap window `scripts/audit-hook-targets.py` refuses -- two detours
 // that close together share MinHook's patch/relocation neighbourhood. The enqueue observer covers
 // its `+0x20` write instead, and a latch that reaches no site at all is reported as
 // [`LATCH_MATCH_NO_OBSERVATION`] rather than as an absence.
 
-/// `FUN_14067b940` (1.16.2), the combined save dispatch lane; `0x67c790` on 1.17.
-const SUBMIT_LANE_COMBINED_RVA: usize = 0x67b940;
-/// Offset of `call FUN_140e6ef60` inside it (`0x14067bb2e - 0x14067b940`). Decodes to `0x140e6ef60`
-/// in 1.16.2 and `0x140e70d60` in 1.17 at the same offset, checked against both image files.
+/// `FUN_14067cc40`, the combined save dispatch lane.
+const SUBMIT_LANE_COMBINED_RVA: usize = 0x67cc40;
+/// Offset of `call FUN_140e724c0` inside it (`0x14067ce2e - 0x14067cc40`). Decodes to `0x140e724c0`
+/// on 2.7.2.0, the same offset as on 1.16.2, checked against both image files.
 const SUBMIT_LANE_COMBINED_CALL_OFFSET: usize = 0x1ee;
 
-/// `FUN_14067b750` (1.16.2), the character-slot lane; `0x67c5a0` on 1.17.
-const SUBMIT_LANE_CHAR_RVA: usize = 0x67b750;
-/// Offset of its `call FUN_140e6ec70` (`0x14067b877 - 0x14067b750`).
+/// `FUN_14067ca50`, the character-slot lane.
+const SUBMIT_LANE_CHAR_RVA: usize = 0x67ca50;
+/// Offset of its `call FUN_140e721d0` (`0x14067cb77 - 0x14067ca50`).
 const SUBMIT_LANE_CHAR_CALL_OFFSET: usize = 0x127;
 
-/// `FUN_14067b570` (1.16.2), the system-slot lane; `0x67c3c0` on 1.17.
-const SUBMIT_LANE_SYSTEM_RVA: usize = 0x67b570;
-/// Offset of its `call FUN_140e6ec70` (`0x14067b6c4 - 0x14067b570`).
+/// `FUN_14067c870`, the system-slot lane.
+const SUBMIT_LANE_SYSTEM_RVA: usize = 0x67c870;
+/// Offset of its `call FUN_140e721d0` (`0x14067c9c4 - 0x14067c870`).
 const SUBMIT_LANE_SYSTEM_CALL_OFFSET: usize = 0x154;
 
-/// `FUN_14067bc10` (1.16.2), the third caller of the char builder; `0x67ca60` on 1.17.
-const SUBMIT_LANE_ENTRY0B_RVA: usize = 0x67bc10;
-/// Offset of its `call FUN_140e6ec70` (`0x14067bc94 - 0x14067bc10`).
+/// `FUN_14067cf10`, the third caller of the char builder.
+const SUBMIT_LANE_ENTRY0B_RVA: usize = 0x67cf10;
+/// Offset of its `call FUN_140e721d0` (`0x14067cf94 - 0x14067cf10`).
 const SUBMIT_LANE_ENTRY0B_CALL_OFFSET: usize = 0x84;
 
 /// `E8` -- a near `call rel32`, the only encoding any of the four call sites uses. Decoding refuses
@@ -123,19 +116,19 @@ const CALL_REL32_LEN: usize = 5;
 
 /// No submit site has been observed latching anything.
 pub const SUBMIT_SITE_NONE: usize = 0;
-/// `FUN_140e6ef60`, the combined lane's builder.
+/// `FUN_140e724c0`, the combined lane's builder.
 pub const SUBMIT_SITE_COMBINED_BUILDER: usize = 1;
-/// `FUN_140e6ec70`, the CHARACTER/SYSTEM builder (both tail-call arms).
+/// `FUN_140e721d0`, the CHARACTER/SYSTEM builder (both tail-call arms).
 pub const SUBMIT_SITE_CHAR_BUILDER: usize = 2;
-/// `FUN_140e6fb50`, the enqueue -- the sole writer of `iodev+0x20`.
+/// `FUN_140e730b0`, the enqueue -- the sole writer of `iodev+0x20`.
 pub const SUBMIT_SITE_ENQUEUE: usize = 3;
 
 /// Name the site that latched a request.
 pub fn submit_site_label(site: usize) -> &'static str {
     match site {
-        SUBMIT_SITE_COMBINED_BUILDER => "combined-builder-0xe6ef60",
-        SUBMIT_SITE_CHAR_BUILDER => "char-builder-0xe6ec70",
-        SUBMIT_SITE_ENQUEUE => "enqueue-0xe6fb50",
+        SUBMIT_SITE_COMBINED_BUILDER => "combined-builder-0xe724c0",
+        SUBMIT_SITE_CHAR_BUILDER => "char-builder-0xe721d0",
+        SUBMIT_SITE_ENQUEUE => "enqueue-0xe730b0",
         _ => "none",
     }
 }
@@ -174,11 +167,11 @@ pub fn latch_match_label(code: usize) -> &'static str {
 /// How many of the three submit sites chained. **Zero means nothing was watching**, and every other
 /// counter in this block reads zero for that reason rather than for a measured one. Read it first.
 static SUBMIT_SITES_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Calls forwarded through `FUN_140e6ef60`.
+/// Calls forwarded through `FUN_140e724c0`.
 static SUBMIT_COMBINED_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Calls forwarded through `FUN_140e6ec70`.
+/// Calls forwarded through `FUN_140e721d0`.
 static SUBMIT_CHAR_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Calls forwarded through `FUN_140e6fb50`.
+/// Calls forwarded through `FUN_140e730b0`.
 static SUBMIT_ENQUEUE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Observed transitions of `iodev+0x10` from 0 to a pointer -- the latch itself.
 static SUBMIT_LATCHES: AtomicU64 = AtomicU64::new(0);
@@ -186,7 +179,7 @@ static SUBMIT_LATCHES: AtomicU64 = AtomicU64::new(0);
 /// the whole file exists to count**: a submit that owns the device and whose lane will therefore
 /// never write `saveState = 1`.
 static SUBMIT_LATCHES_WITHOUT_ACCEPT: AtomicU64 = AtomicU64::new(0);
-/// Builder calls that latched and then released before returning (`FUN_140e6f200` on a failure
+/// Builder calls that latched and then released before returning (`FUN_140e72760` on a failure
 /// path). Counted so a zero in [`SUBMIT_LATCHES_WITHOUT_ACCEPT`] can be read as "no builder
 /// stranded one" rather than "no builder ever failed".
 static SUBMIT_LATCHES_SELF_RELEASED: AtomicU64 = AtomicU64::new(0);
@@ -286,10 +279,10 @@ pub fn wedge_latch_verdict(
         }
         LATCH_MATCH_NO_OBSERVATION =>
             "a wedge was born and NOT ONE latch was observed at any watched submit site -- the \
-             content on the device was put there outside FUN_140e6ef60/FUN_140e6ec70/FUN_140e6fb50",
+             content on the device was put there outside FUN_140e724c0/FUN_140e721d0/FUN_140e730b0",
         LATCH_MATCH_DIFFERENT =>
             "a wedge was born holding content that no observed latch installed -- it predates the \
-             observers or came from the unhooked PREVIEW builder FUN_140e6ec80; the builder and \
+             observers or came from the unhooked PREVIEW builder FUN_140e721e0; the builder and \
              lane fields describe a DIFFERENT submit and are not its attribution",
         _ => match (builder_return & 0xff != 0, lane_accepted(lane_return, lane_state)) {
             (true, Some(true)) =>
@@ -306,7 +299,7 @@ pub fn wedge_latch_verdict(
                  wedge needs no zero-writer at all",
             (true, None) =>
                 "the wedged content was latched by a builder that returned non-zero, but no \
-                 observed lane closed it (FUN_14067bc10 / FUN_14067b4e0 are not wrapped), so \
+                 observed lane closed it (FUN_14067cf10 / FUN_14067c7e0 are not wrapped), so \
                  whether the commit tail ran is unmeasured this run",
         },
     }
@@ -317,17 +310,17 @@ pub fn submit_sites_installed() -> usize {
     SUBMIT_SITES_INSTALLED.load(Ordering::SeqCst)
 }
 
-/// Calls forwarded through `FUN_140e6ef60`, the combined lane's builder.
+/// Calls forwarded through `FUN_140e724c0`, the combined lane's builder.
 pub fn submit_combined_calls() -> u64 {
     SUBMIT_COMBINED_CALLS.load(Ordering::SeqCst)
 }
 
-/// Calls forwarded through `FUN_140e6ec70`, the CHARACTER/SYSTEM builder.
+/// Calls forwarded through `FUN_140e721d0`, the CHARACTER/SYSTEM builder.
 pub fn submit_char_calls() -> u64 {
     SUBMIT_CHAR_CALLS.load(Ordering::SeqCst)
 }
 
-/// Calls forwarded through `FUN_140e6fb50`, the enqueue.
+/// Calls forwarded through `FUN_140e730b0`, the enqueue.
 pub fn submit_enqueue_calls() -> u64 {
     SUBMIT_ENQUEUE_CALLS.load(Ordering::SeqCst)
 }
@@ -343,7 +336,7 @@ pub fn submit_latches_without_accept() -> u64 {
     SUBMIT_LATCHES_WITHOUT_ACCEPT.load(Ordering::SeqCst)
 }
 
-/// Latches the site itself undid before returning, via `FUN_140e6f200`. Counted so a zero in
+/// Latches the site itself undid before returning, via `FUN_140e72760`. Counted so a zero in
 /// [`submit_latches_without_accept`] means "none was stranded", not "none ever failed".
 pub fn submit_latches_self_released() -> u64 {
     SUBMIT_LATCHES_SELF_RELEASED.load(Ordering::SeqCst)
@@ -467,7 +460,7 @@ fn note_submit_call(site: usize, before: Option<SlRequestSlot>, answer: usize) {
     let Some(after) = read_sl_slot() else { return };
     if after.save_content == 0 {
         // Refused at its own precondition, or latched and released again inside the call
-        // (`FUN_140e6f200` on a failure path). Both leave the device as it was found.
+        // (`FUN_140e72760` on a failure path). Both leave the device as it was found.
         if answer & 0xff == 0 {
             SUBMIT_LATCHES_SELF_RELEASED.fetch_add(1, Ordering::Relaxed);
         }
@@ -593,9 +586,9 @@ static ORIG_SUBMIT_CHAR_BUILDER: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static ORIG_SUBMIT_ENQUEUE: AtomicUsize = AtomicUsize::new(0);
 
-/// `FUN_140e6ef60`'s real shape, checked at the call site rather than taken from the decompiler.
+/// `FUN_140e724c0`'s real shape, checked at the call site rather than taken from the decompiler.
 ///
-/// Ghidra types the callee with five parameters; `FUN_14067b940` passes six --
+/// Ghidra types the callee with five parameters; `FUN_14067cc40` passes six --
 /// `mov [rsp+0x28], r12d` and `mov dword [rsp+0x20], 0xa` sit immediately before the `call` in both
 /// images. The callee only reads the fifth (`param_5 == 10` is one of its five preconditions), so
 /// a five-argument detour would have worked by luck; forwarding both stack slots means the
@@ -604,11 +597,11 @@ static ORIG_SUBMIT_ENQUEUE: AtomicUsize = AtomicUsize::new(0);
 type SubmitCombinedBuilderFn =
     unsafe extern "system" fn(usize, usize, u32, usize, u32, u32) -> usize;
 
-/// Observe `FUN_140e6ef60`, the combined lane's submit builder. Forwards all six arguments and the
+/// Observe `FUN_140e724c0`, the combined lane's submit builder. Forwards all six arguments and the
 /// full return value; writes nothing.
 ///
 /// # Safety
-/// Installed only on an address decoded from `FUN_14067b940`'s own `call` and audited by
+/// Installed only on an address decoded from `FUN_14067cc40`'s own `call` and audited by
 /// `write_site_is_sound`; the signature is the call site's, verified in both images.
 #[cfg(windows)]
 unsafe extern "system" fn submit_combined_builder_observer(
@@ -636,7 +629,7 @@ unsafe extern "system" fn submit_combined_builder_observer(
     answer
 }
 
-/// Observe `FUN_140e6ec70`, the CHARACTER/SYSTEM builder. Four register arguments, verified at all
+/// Observe `FUN_140e721d0`, the CHARACTER/SYSTEM builder. Four register arguments, verified at all
 /// three of its call sites; the union's shape is exact for it.
 ///
 /// # Safety
@@ -665,16 +658,16 @@ unsafe extern "system" fn submit_char_builder_observer(
     answer
 }
 
-/// Observe `FUN_140e6fb50`, the enqueue -- the only writer of `iodev+0x20`.
+/// Observe `FUN_140e730b0`, the enqueue -- the only writer of `iodev+0x20`.
 ///
 /// It runs inside a builder, after that builder has already written `iodev+0x10`, so its "before"
 /// sample almost always shows the content already latched and [`note_submit_call`] returns without
 /// attributing anything. That is correct: this site's value is coverage of the builders that are
-/// not hooked (the preview lane's `FUN_140e6ec80`), where it is the only observer that will see the
+/// not hooked (the preview lane's `FUN_140e721e0`), where it is the only observer that will see the
 /// request at all.
 ///
 /// # Safety
-/// `SL_ENQUEUE_SAVE_JOB_RVA` is an audited ledger row; the union resolves it once.
+/// `SL_ENQUEUE_SAVE_JOB_RVA` is on the detour allowlist; the union checks it once.
 #[cfg(windows)]
 unsafe extern "system" fn submit_enqueue_observer(
     a: usize,
@@ -700,9 +693,9 @@ unsafe extern "system" fn submit_enqueue_observer(
 
 /// Decode the callee of one `call rel32` in the running image.
 ///
-/// The containing function is translated through the CALL/READ table (`resolve_call_site_rva`),
-/// the offset rides along because the body is `IDENTICAL-WHOLE` with identical `.pdata` extents,
-/// and then the displacement is read rather than assumed. Every step refuses rather than guesses:
+/// The containing function is a 2.7.2.0 rva placed by `resolve_call_site_rva` (which refuses any
+/// other build), the offset was read out of the 2.7.2.0 image, and then the displacement is read
+/// rather than assumed. Every step refuses rather than guesses:
 /// a non-`E8` opcode means the offset no longer points at the call and the answer is `None`.
 #[cfg(windows)]
 fn decode_call_target(lane_rva: usize, call_offset: usize, what: &str) -> Option<usize> {
@@ -743,17 +736,17 @@ fn derive_char_builder() -> Option<usize> {
         (
             SUBMIT_LANE_CHAR_RVA,
             SUBMIT_LANE_CHAR_CALL_OFFSET,
-            "char submit builder via FUN_14067b750",
+            "char submit builder via FUN_14067ca50",
         ),
         (
             SUBMIT_LANE_SYSTEM_RVA,
             SUBMIT_LANE_SYSTEM_CALL_OFFSET,
-            "char submit builder via FUN_14067b570",
+            "char submit builder via FUN_14067c870",
         ),
         (
             SUBMIT_LANE_ENTRY0B_RVA,
             SUBMIT_LANE_ENTRY0B_CALL_OFFSET,
-            "char submit builder via FUN_14067bc10",
+            "char submit builder via FUN_14067cf10",
         ),
     ];
     let mut agreed: Option<usize> = None;
@@ -780,17 +773,17 @@ fn derive_char_builder() -> Option<usize> {
 /// Chain the three submit observers. Never fatal: a failure costs attribution, not saving.
 ///
 /// The two builders are runtime-derived (`decode_call_target` above), so they go through the
-/// entry points that audit against the running image's own `.pdata` instead of the 1.16.2
-/// translation table, which has no row for either. The enqueue is an audited ledger row and takes
-/// the ordinary translating path.
+/// entry points that audit against the running image's own `.pdata` instead of the detour
+/// allowlist, which has no row for either. The enqueue is on the allowlist and takes the ordinary
+/// path.
 #[cfg(windows)]
 pub fn install_save_submit_latch() {
     if let Some(target) = decode_call_target(
         SUBMIT_LANE_COMBINED_RVA,
         SUBMIT_LANE_COMBINED_CALL_OFFSET,
-        "combined submit builder via FUN_14067b940",
+        "combined submit builder via FUN_14067cc40",
     ) {
-        // A bare hook, not the union: `FUN_140e6ef60` takes six arguments and the union's shared
+        // A bare hook, not the union: `FUN_140e724c0` takes six arguments and the union's shared
         // shape forwards four, which would leave the callee's two stack operands -- including the
         // `param_5 == 10` precondition -- reading whatever the dispatcher's frame happened to hold.
         // That is not an observer, it is a save-breaking rewrite of the arguments.
@@ -810,8 +803,8 @@ pub fn install_save_submit_latch() {
                     Ok(()) => {
                         SUBMIT_SITES_INSTALLED.fetch_add(1, Ordering::SeqCst);
                         log_message(format_args!(
-                            "suppress: submit observer on the COMBINED builder FUN_140e6ef60 \
-                             (0x{target:x}, derived from FUN_14067b940+0x{:x}) -- observer only, \
+                            "suppress: submit observer on the COMBINED builder FUN_140e724c0 \
+                             (0x{target:x}, derived from FUN_14067cc40+0x{:x}) -- observer only, \
                              all six arguments forwarded",
                             SUBMIT_LANE_COMBINED_CALL_OFFSET
                         ));
@@ -843,7 +836,7 @@ pub fn install_save_submit_latch() {
             Ok(()) => {
                 SUBMIT_SITES_INSTALLED.fetch_add(1, Ordering::SeqCst);
                 log_message(format_args!(
-                    "suppress: submit observer on the CHARACTER/SYSTEM builder FUN_140e6ec70 \
+                    "suppress: submit observer on the CHARACTER/SYSTEM builder FUN_140e721d0 \
                      (0x{target:x}, agreed by three call sites) -- observer only"
                 ));
             }
@@ -867,7 +860,7 @@ pub fn install_save_submit_latch() {
             Ok(()) => {
                 SUBMIT_SITES_INSTALLED.fetch_add(1, Ordering::SeqCst);
                 log_message(format_args!(
-                    "suppress: submit observer chained on the ENQUEUE FUN_140e6fb50 \
+                    "suppress: submit observer chained on the ENQUEUE FUN_140e730b0 \
                      (0x{address:x}) -- observer only"
                 ));
             }
@@ -881,7 +874,7 @@ pub fn install_save_submit_latch() {
             )),
         },
         Err(error) => log_message(format_args!(
-            "suppress: submit enqueue observer could not resolve FUN_140e6fb50: {error}; \
+            "suppress: submit enqueue observer could not resolve FUN_140e730b0: {error}; \
              iodev+0x20 writes will stay unattributed this run"
         )),
     }

@@ -1,7 +1,7 @@
 // Watch an invasion happen: the query going out, the session walking its states, the lobby joining.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # What this is the oracle for
 //

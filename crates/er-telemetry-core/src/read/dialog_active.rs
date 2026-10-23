@@ -28,22 +28,21 @@ use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_game_image};
 
-// --- Dialog vtable RVAs off the game image base (0x140000000). Data RVAs are
-// version-stable between the dump and the live/deobf image (the piecewise .text
-// shift does not apply to .rdata vtables), so these live RVAs are used directly. ---
+// --- Dialog vtable RVAs off the game image base (0x140000000), 2.7.2.0 values. Each
+// was checked by its RTTI CompleteObjectLocator in `eldenring-deobf-1.17.2.bin`;
+// `.rdata` moves between patches, so a wrong one fails silently (never matches). ---
 /// `CS::MessageBoxDialog` base vftable RVA. Source: product
-/// constants/autoload_state.rs `MsgBoxRva::DialogVtable`; RE-confirmed in the
-/// 1.16.2 dump -- the builder `FUN_1409275b0` writes `*obj =
-/// CS::MessageBoxDialog::vftable` at this RVA (dump 0x142b03550, xref from
-/// 0x140927601/0x140927608).
+/// constants/autoload_state.rs `MsgBoxRva::DialogVtable`; the builder `0x140928c00`
+/// writes `*obj = CS::MessageBoxDialog::vftable` at this RVA
+/// (VA 0x142b086c0, xref from 0x140928c51/0x140928c58).
 use er_game_base::rva::MSGBOX_DIALOG_VTABLE_RVA;
 /// `CS::SaveRetryDialog` vftable RVA -- a MessageBoxDialog subclass whose wrapper
 /// overrides the base vtable after the builder runs; it is the offline title flow's
 /// "save/load failed -- Retry?" boot prompt. Source: product
-/// constants/autoload_state.rs `SAVE_RETRY_DIALOG_VTABLE_RVA`; RE-confirmed in the
-/// 1.16.2 dump -- referenced by the SaveRetry wrapper `FUN_1407af8b0` (dump
-/// 0x142aaabf8), which is also a caller of the base builder `FUN_1409275b0`.
-const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
+/// constants/autoload_state.rs `SAVE_RETRY_DIALOG_VTABLE_RVA`; referenced by the
+/// SaveRetry wrapper `0x1407b0be0`, which is also a caller of
+/// the base builder.
+const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aafd68;
 
 // --- MessageBoxDialog instance fields (version-stable struct offsets; dump ==
 // live). ---
@@ -54,7 +53,7 @@ const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
 /// reads.
 const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
 /// `button_count` (i32, `dialog+0x25e8`). Corrected 2026-07-28: this is not a
-/// "decided" state. The ctor (`FUN_1409275b0`) writes it as
+/// "decided" state. The ctor (`0x140928c00`) writes it as
 /// `(*(i64*)(cfg+0x38) - *(i64*)(cfg+0x30)) / 0x210`, the length of the button
 /// descriptor vector, so a Yes/No confirm reads 2 here from the frame it is built.
 /// The old `state >= 2 == decided` test therefore rejected every two-button confirm
@@ -72,7 +71,7 @@ const MSGBOX_BUTTON_COUNT_MAX: i32 = 16;
 /// already resolved it. Source: product constants/autoload_state.rs
 /// `MSGBOX_JOB_RESULT_STATE_1E8_OFFSET`.
 const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize = 0x1e8;
-/// `MenuJobResult::ShouldContinue` (0x1407a9200) is `cmp [rcx],1; seta al`.
+/// `MenuJobResult::ShouldContinue` (0x1407aa530) is `cmp [rcx],1; seta al`.
 const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
 
 // --- CSMenuMan singleton diagnostics (supporting evidence only, not the
@@ -160,7 +159,7 @@ fn enabled() -> bool {
 /// vtable. Also the authoritative "this pointer is a live dialog vtable" test.
 fn dialog_class(vt: usize, base: usize) -> Option<&'static str> {
     // A refused RVA resolves to 0, so without this a null vtable pointer would be reported as a
-    // MessageBoxDialog on any build where the constant has no 1.17 mapping.
+    // MessageBoxDialog on any build other than 2.7.2.0, where every constant is refused.
     if vt == 0 {
         return None;
     }
@@ -284,12 +283,12 @@ fn scan_chunk(
 /// Bounded, fault-safe full address-space walk for a currently-displayed dialog.
 /// Only called on the throttle boundary while no active dialog is cached.
 fn scan_for_dialog(base: usize) -> Option<ActiveDialog> {
-    // Both vtable addresses go through the resolver. `want_a` used to be a raw
+    // Both vtable addresses go through the build gate. `want_a` used to be a raw
     // `base + <1.16.2 RVA>`, which never reaches `er-game-base` and therefore never logs a
-    // refusal: on 1.17 `MSGBOX_DIALOG_VTABLE_RVA` moved 0x2b03550 -> 0x2b065d0, so the scan was
-    // comparing every qword against an address that is not the object any more and this oracle
-    // could not see a `CS::MessageBoxDialog` at all. Silently, with `want_b` resolved correctly
-    // four lines below it.
+    // refusal: on 1.17 `MSGBOX_DIALOG_VTABLE_RVA` had moved, so the scan was comparing every
+    // qword against an address that is not the object any more and this oracle could not see a
+    // `CS::MessageBoxDialog` at all. Silently, with `want_b` resolved correctly four lines below
+    // it.
     let want_a = er_game_base::mem::game_data_addr(
         base,
         MSGBOX_DIALOG_VTABLE_RVA,

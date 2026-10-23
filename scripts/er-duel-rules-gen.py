@@ -51,15 +51,14 @@ CE_LUA = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.lua')
 CE_TABLE = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.CT')
 LUA_BEGIN = '-- --- BEGIN GENERATED (scripts/er-duel-rules-gen.py --write) ---'
 LUA_END = '-- --- END GENERATED ---'
-# The hook sits right after SpecialEffect::Apply's inner apply call (1.17.1 0x1404fb799, 2.7.2.0
-# 0x1404fb879), where EAX is the result, EBP the effect id and R14 the owner -- the values the
-# Frida agent reads off the function's arguments and return. The 17 bytes it replaces run to the
-# `jmp` to the epilogue, short of 1.17.1 0x1404fb7af (2.7.2.0 0x1404fb88f), which the
-# early-failure branch jumps to; nothing jumps inside them (the function's whole listing on the
-# 1.17 dump, 2026-10-16). Both RVAs are 2.7.2.0 ones, carried from 1.17.1 with
-# scripts/map-rvas-1171-to-1172.py: hook 0x4fb79e -> 0x4fb87e, resume 0x4fb7b3 -> 0x4fb893. The
-# replaced bytes, the resume bytes and the rest of the function match between
-# eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin, branch targets carried.
+# The hook sits right after SpecialEffect::Apply's inner apply call (0x1404fb879 on 2.7.2.0),
+# where EAX is the result, EBP the effect id and R14 the owner -- the values the Frida agent reads
+# off the function's arguments and return. The 17 bytes it replaces run to the `jmp` to the
+# epilogue, short of 0x1404fb88f, which the early-failure branch (`je` at 0x1404fb7c1) jumps to;
+# nothing jumps inside them. Measured on eldenring-deobf-1.17.2.bin 2026-10-23 over the whole
+# function (three chained .pdata records, 0x4fb790..0x4fb8a9, 71 instructions): the only branches
+# into 0x4fb87e..0x4fb893 are that `je` and the replaced `jmp` itself, and the 17 bytes at the
+# hook are CE_HOOK_BYTES.
 CE_HOOK_RVA = 0x4fb87e
 CE_HOOK_BYTES = '48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04'
 CE_HOOK_RESUME_RVA = 0x4fb893

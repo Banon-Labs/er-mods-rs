@@ -131,8 +131,8 @@ struct Api {
 }
 
 fn api(pcall: PcallFn) -> Result<Api, String> {
-    // SAFETY: each is the Lua 5.0.2 function with the declared signature; resolution refuses an
-    // address with no verified mapping.
+    // SAFETY: each is the Lua 5.0.2 function with the declared signature; resolution refuses
+    // every address on a build other than 2.7.2.0.
     unsafe {
         Ok(Api {
             pcall,

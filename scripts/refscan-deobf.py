@@ -2,17 +2,17 @@
 """Scan the dearxan-DEOBFUSCATED ER mapped image for references to a target VA.
 Mapped image: file offset == RVA, image base 0x140000000 (VA = offset + base).
 Finds E8/E9 rel32 call/jmp sites and 8-byte le pointer occurrences to the target.
-The image defaults to the 1.16.2 deobf, but `--img` is required for any 1.17 question:
-the two builds are separate files (`eldenring-deobf-1.17.bin`), and a scan that silently
-answers from 1.16.2 while the caller is asking about 1.17 is the exact stale-address
-failure this migration exists to close.
+The image defaults to `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build; `--img`
+picks another (`eldenring-deobf.bin` is 1.16.2). Each build is a separate file, and a scan
+that silently answers from one build while the caller is asking about another is a
+stale-address failure, so the chosen image is printed with the results.
 
-Usage: refscan-deobf.py 0x1409b46b5 [--img eldenring-deobf-1.17.bin]
+Usage: refscan-deobf.py 0x14075ebf0 [--img eldenring-deobf.bin]
 """
 import argparse, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf-1.17.2.bin")
 
 
 def main():

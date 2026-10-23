@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 // A save the user picks after boot has no `CS::ProfileSummary` record: the boot save-data job that
 // would have read one already ran and passed through. Without a record the native Continue row has
 // nothing to load, which is why every picked save used to be routed into a title-time deserialize
-// -- `0x14067b290`, a function whose only caller in the whole image is `CS::MoveMapStep::DoSaveStuff`
+// -- `0x14067c590`, a function whose only caller in the whole image is `CS::MoveMapStep::DoSaveStuff`
 // (in-world). These counters make both halves of that visible.
 
 /// Total autoload ticks that entered the direct-source summary refresh (throttle denominator).
@@ -52,12 +52,13 @@ pub static PICKED_SUMMARY_BODY_LEVEL: AtomicUsize = AtomicUsize::new(0);
 /// `PICKED_SUMMARY_REFRESH_TICKS` at the refresh that armed the watch, plus 1 (`0` = unarmed).
 pub static PICKED_SUMMARY_WATCH_ARMED_TICK: AtomicUsize = AtomicUsize::new(0);
 
-/// Calls into the title-time save deserialize `0x14067b290` from the full-read chain.
+/// Calls into the title-time save deserialize `0x14067c590` from the full-read chain.
 ///
 /// **A correct run reports 0.** Non-zero means a save was deserialized at the boot title rather
 /// than in-world from `CS::MoveMapStep::DoSaveStuff`, which is the crash this counter exists to
-/// stop being silent about (`gaitemInsTable[-1]` AV at `0x67141a`). It counts the call being made,
-/// not the call surviving, so a run that dies inside the deserialize still leaves the 1 behind.
+/// stop being silent about (`gaitemInsTable[-1]` AV at 1.16.2 `0x67141a`, 2.7.2.0 `0x67271a`).
+/// It counts the call being made, not the call surviving, so a run that dies inside the
+/// deserialize still leaves the 1 behind.
 pub static TITLE_TIME_DESER_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// Slot (+1, so 0 means "never") passed to the most recent title-time deserialize.
 pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);

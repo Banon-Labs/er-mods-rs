@@ -2,28 +2,29 @@
 """Frame advantage, hitstun and true combos for player-vs-player hits.
 
 Write-up: `docs/er-mechanics/frame-advantage.md`. Labels follow `docs/er-mechanics/*.md`:
-`VERIFIED` = regulation value or code read out of the 1.16.2 executable (addresses below),
+`VERIFIED` = regulation value or code read out of the 2.7.2.0 executable (addresses below,
+VAs in `eldenring-deobf-1.17.2.bin`),
 `TAE` = decoded TimeAct or behavior-graph data, `COMMUNITY` = the curated decompile of
 `c0000.hks` (ER 1.08.1, ividyon/EldenRingHKS via Smithbox) or another outside source,
 `INFERRED` = consistent with the data but the consumer was not traced.
 
-Which reaction a player defender plays (`VERIFIED`, 1.16.2):
+Which reaction a player defender plays (`VERIFIED`):
 
-    HitChr 0x1404445e0: level = ChrIns::GetDamageLevel 0x1406901d0
+    HitChr 0x140444bd0: level = ChrIns::GetDamageLevel 0x1406914d0
         = AtkParam.dmgLevel, or remap(AtkParam.dmgLevel_vsPlayer) when that is nonzero
-    ApplyDamage 0x1404497d0: poise damage is applied first (FUN_140486bf0), then the reaction
-        is written by FUN_140445b20 -> actionFlag->damageLevel = FUN_140690250(level):
-      poise holds (toughness slot 6 0x140486ba0: max > 0 and current > 0)
+    ApplyDamage 0x140449e10: poise damage is applied first (FUN_140487230), then the reaction
+        is written by FUN_140446160 -> actionFlag->damageLevel = FUN_140691550(level):
+      poise holds (toughness slot 6 0x1404871e0: max > 0 and current > 0)
           -> v = SpEffectParam[ToughnessParam[row].spEffectId].dmgLv_*[level]   (row +0x148)
       poise broken
           -> v = category-1001 SpEffect override, 0 when there is none
-      level = REMAP[v] if 0 < v < 13 else level            (FUN_140d22e90, table 0x142bafc88)
+      level = REMAP[v] if 0 < v < 13 else level            (FUN_140d25cc0, table 0x142bb5028)
 
 ToughnessParam row 0 (no hyperarmor) and every weapon hyperarmor row name SpEffect 6352, which
 maps small, middle, large, push and minimum to 0: with poise intact those hits leave only the
 additive flinch. The HKS (`COMMUNITY`) plays `ExecAddDamage` for level 0 on an additive layer
 and returns without changing state, so the defender is not interrupted. A broken poise refills
-to max two toughness updates later (0x140486e50, `field_0x2a` -> `field_0x2b`).
+to max two toughness updates later (0x140487490, `field_0x2a` -> `field_0x2b`).
 
 When the defender can act again (`TAE` windows, `COMMUNITY` gates): R1/R2/guard/move use the
 same JumpTable input and cancel pairs as `er-mechanics-attacks.py`. Rolling out of small,
@@ -67,23 +68,27 @@ INSTALLED_HKS = os.environ.get(
     'ER_PLAYER_HKS',
     os.path.expanduser('~/er-extract/LOOK_HERE_ALL_ASSETS_20260713/action/script/c0000.hks'))
 
-# 1.16.2 addresses (named Ghidra dump on :8765, shift 0 against eldenring-deobf.bin).
-GET_DAMAGE_LEVEL = 0x1406901d0       # CS::ChrIns::GetDamageLevel
-REACTION_LEVEL = 0x140690250         # FUN_140690250, poise-dependent remap
-REACTION_WRITER = 0x140445b20        # writes actionFlag->damageLevel (+0x1c)
-TOUGHNESS_HOLDS = 0x140486ba0        # toughness vtable slot 6
-TOUGHNESS_SPEFFECT = 0x1404878c0     # player toughness vtable slot 9
-TOUGHNESS_DAMAGE = 0x140486bf0       # subtracts poise, sets the broken flags
-TOUGHNESS_UPDATE = 0x140486e50       # refill after a break
-PLAYER_TOUGHNESS_VTABLE = 0x142a3bf00
-#: `FUN_140d22e90`: SpEffect dmgLv_* value -> damage level. 0 means keep the level.
-REMAP_TABLE_VA = 0x142bafc88
+# 2.7.2.0 addresses in `eldenring-deobf-1.17.2.bin`. Names come from the named 1.16.2 Ghidra
+# dump on :8765; each function here decodes to the same instructions as its 1.16.2 namesake
+# (1.16.2 0x1406901d0, 0x140690250, 0x140445b20, 0x140486ba0, 0x1404878c0, 0x140486bf0,
+# 0x140486e50), and the vtable is the one `.rdata` table holding slots 6 and 9 below.
+GET_DAMAGE_LEVEL = 0x1406914d0       # CS::ChrIns::GetDamageLevel
+REACTION_LEVEL = 0x140691550         # FUN_140691550, poise-dependent remap
+REACTION_WRITER = 0x140446160        # writes actionFlag->damageLevel (+0x1c)
+TOUGHNESS_HOLDS = 0x1404871e0        # toughness vtable slot 6
+TOUGHNESS_SPEFFECT = 0x140487f00     # player toughness vtable slot 9
+TOUGHNESS_DAMAGE = 0x140487230       # subtracts poise, sets the broken flags
+TOUGHNESS_UPDATE = 0x140487490       # refill after a break
+PLAYER_TOUGHNESS_VTABLE = 0x142a40f30
+#: `FUN_140d25cc0`: SpEffect dmgLv_* value -> damage level. 0 means keep the level.
+REMAP_TABLE_VA = 0x142bb5028
 REMAP = (0, 0, 8, 1, 2, 3, 7, 4, 6, 9, 5, 10, 11)
 #: Slot 9 fallback when the ToughnessParam row is missing: SpEffect base id and the
-#: `toughnessDurablityUnk` thresholds (floats at 0x143b179f0, int base at 0x143b17a00).
-FALLBACK_THRESHOLDS_VA, FALLBACK_BASE_VA = 0x143b179f0, 0x143b17a00
+#: `toughnessDurablityUnk` thresholds (floats at 0x143b1e9f0, int base at 0x143b1ea00, the
+#: targets of slot 9's `comiss` and `mov eax`).
+FALLBACK_THRESHOLDS_VA, FALLBACK_BASE_VA = 0x143b1e9f0, 0x143b1ea00
 FALLBACK_THRESHOLDS, FALLBACK_BASE = (30.0, 50.0, 70.0, 100.0), 6350
-#: `SP_EFFECT_PARAM_ST` offset read by `FUN_140d4ffa0` (`row + 0x148 + level`).
+#: `SP_EFFECT_PARAM_ST` offset read by `FUN_140d53440` (`row + 0x148 + level`).
 DMG_LV_OFFSET = 0x148
 DMG_LV_FIELDS = ('dmgLv_None', 'dmgLv_S', 'dmgLv_M', 'dmgLv_L', 'dmgLv_BlowM', 'dmgLv_Push',
                  'dmgLv_Strike', 'dmgLv_BlowS', 'dmgLv_Min', 'dmgLv_Uppercut', 'dmgLv_BlowLL',
@@ -251,7 +256,7 @@ class Tables:
 
 
 def remap(value, level):
-    """`FUN_140d22e90`: a dmgLv_* value to a damage level; 0 or out of range keeps `level`."""
+    """`FUN_140d25cc0`: a dmgLv_* value to a damage level; 0 or out of range keeps `level`."""
     return REMAP[value] if 0 < value < len(REMAP) else level
 
 
@@ -324,19 +329,19 @@ def advantage(slot, react, count=1, delay=0):
 #: charge-start clip's lead-in (`er-mechanics-attacks.release_lead_in`: first frame of SpEffect
 #: 100280 in the Start clip) to the gap; `R2_LEAD_IN_VIA` names the follow-ups that pay it.
 #:
-#: The flag half of the gate cannot open earlier (`VERIFIED`, 1.16.2): `GetGeneralTAEFlag`
-#: (HksEnv case, `FUN_1404167b0`) tests bit n of `CSChrBehaviorDataModule+0x308`, which
-#: `PreBehaviorSafe` clears every frame (`FUN_1404146b0`) and whose only setter
-#: (`0x140416930`, `bts`) is reached from `CSChrTaeAnimEvent::ExecuteThreadOne` for TAE event
-#: 600 (`cmp eax, 0x258; je 0x14042e764`), bit = the event's first argument. None of the 1164
+#: The flag half of the gate cannot open earlier (`VERIFIED`): `GetGeneralTAEFlag`
+#: (HksEnv case, `FUN_140416d70`) tests bit n of `CSChrBehaviorDataModule+0x308`, which
+#: `PreBehaviorSafe` clears every frame (`FUN_140414c70`) and whose only setter
+#: (`0x140416ef0`, `bts`) is reached from `CSChrTaeAnimEvent::ExecuteThreadOne` for TAE event
+#: 600 (`cmp eax, 0x258; je 0x14042ed44`), bit = the event's first argument. None of the 1164
 #: player R2 Start/End clips (0305xx, 0325xx, 0405xx, 0425xx in every `a*.tae`) carries an event
 #: 600 (`TAE`), so the flag is never set there and SpEffect 100280 is the only way through.
-#: Both TAE 66 and 67 reach `CSChrTaeAnimEvent::AddSpEffect` (0x14042bfd0, 67 with
+#: Both TAE 66 and 67 reach `CSChrTaeAnimEvent::AddSpEffect` (0x14042c5b0, 67 with
 #: `doNotSync` set), so the event-67 windows the Start clips use do apply it.
 R2_LEAD_IN_VIA = 'r2'
 TAE_SET_GENERAL_FLAG = 600
-SET_GENERAL_TAE_FLAG = 0x140416930   # bts [CSChrBehaviorDataModule+0x308], edx
-GET_GENERAL_TAE_FLAG = 0x1404167b0   # HksEnv GetGeneralTAEFlag -> bit test of +0x308
+SET_GENERAL_TAE_FLAG = 0x140416ef0   # bts [CSChrBehaviorDataModule+0x308], edx
+GET_GENERAL_TAE_FLAG = 0x140416d70   # HksEnv GetGeneralTAEFlag -> bit test of +0x308
 def follow_ups(keys):
     pairs = []
     for key in keys:
@@ -432,7 +437,7 @@ def slot_profile(reg, tables, weapon_id, grip='one', slots=None, delay=0, count=
 def pvp_poise_damage(tables, entry, defender_ha_row=None):
     """Poise damage one hit deals to a player defender, in the attacks module's units.
 
-    `FUN_140486bf0`, both sides players, multiplies `hit[+0x100] * hit[+0x244]` by
+    `FUN_140487230`, both sides players, multiplies `hit[+0x100] * hit[+0x244]` by
     `FinalDamageRateParam[atk.finalDamageRateId].saRate` and, while the defender's window is
     active, by `ToughnessParam[row].unk1`. That `+0x100` is the attacks module's
     `poise_damage` is inferred; `+0x244` is taken as 1.0 (unknown), and armor/SpEffect
@@ -517,7 +522,7 @@ def print_profile(name, rows):
 # ---------------------------------------------------------------- selftest
 
 
-def _image(va, size, path=ATTACKS.DEOBF_1162):
+def _image(va, size, path=ATTACKS.DEOBF):
     with open(path, 'rb') as handle:
         handle.seek(va - 0x140000000)
         return handle.read(size)
@@ -530,35 +535,36 @@ def selftest():
         (passes if got == want else failures).append(
             f'{name}: got {got!r} want {want!r} [{source}]')
 
-    # 1. Constants read out of the 1.16.2 image rather than restated from this file.
-    if os.path.exists(ATTACKS.DEOBF_1162):
-        src = 'EXE eldenring-deobf.bin (1.16.2)'
-        check('remap table 0x142bafc88', tuple(_image(REMAP_TABLE_VA, 13)), REMAP, src)
-        check('fallback thresholds 0x143b179f0',
+    # 1. Constants read out of the image rather than restated from this file.
+    if os.path.exists(ATTACKS.DEOBF):
+        src = 'EXE ' + os.path.basename(ATTACKS.DEOBF)
+        check(f'remap table {REMAP_TABLE_VA:#x}', tuple(_image(REMAP_TABLE_VA, 13)), REMAP, src)
+        check(f'fallback thresholds {FALLBACK_THRESHOLDS_VA:#x}',
               struct.unpack('<4f', _image(FALLBACK_THRESHOLDS_VA, 16)), FALLBACK_THRESHOLDS, src)
-        check('fallback SpEffect base 0x143b17a00',
+        check(f'fallback SpEffect base {FALLBACK_BASE_VA:#x}',
               struct.unpack('<i', _image(FALLBACK_BASE_VA, 4))[0], FALLBACK_BASE, src)
         vt = struct.unpack('<10Q', _image(PLAYER_TOUGHNESS_VTABLE, 80))
         check('player toughness vtable slot 6 is the poise-holds test', vt[6], TOUGHNESS_HOLDS, src)
         check('player toughness vtable slot 9 is the SpEffect-id getter', vt[9],
               TOUGHNESS_SPEFFECT, src)
         # The general TAE flag: one setter, reached only from TAE event 600, cleared per frame.
-        check('0x140416930 sets bit edx of +0x308 (cmp edx,0x3f; ja; movsxd; mov; bts; mov)',
+        check(f'{SET_GENERAL_TAE_FLAG:#x} sets bit edx of +0x308 (cmp edx,0x3f; ja; movsxd; mov;'
+              ' bts; mov)',
               _image(SET_GENERAL_TAE_FLAG, 26).hex(),
               '83fa3f771548' '63c2' '488b9108030000' '480fabc2' '48899108030000', src)
         check('GetGeneralTAEFlag tests the same field (test [rsi+0x308], rax)',
               _image(GET_GENERAL_TAE_FLAG + 0x86, 7).hex(), '48858608030000', src)
         check('ExecuteThreadOne: event 600 (cmp eax,0x258) jumps to the setter branch',
-              (_image(0x14042e4dc, 5).hex(), _image(0x14042e4e7, 2).hex(),
-               0x14042e4ed + struct.unpack('<i', _image(0x14042e4e9, 4))[0],
-               0x14042e790 + struct.unpack('<i', _image(0x14042e78c, 4))[0]),
-              ('3d58020000', '0f84', 0x14042e764, SET_GENERAL_TAE_FLAG), src)
-        check('PreBehaviorSafe helper 0x1404146b0 clears +0x308',
-              _image(0x1404146df, 11).hex(), '48c78108030000' '00000000', src)
+              (_image(0x14042eabc, 5).hex(), _image(0x14042eac7, 2).hex(),
+               0x14042eacd + struct.unpack('<i', _image(0x14042eac9, 4))[0],
+               0x14042ed70 + struct.unpack('<i', _image(0x14042ed6c, 4))[0]),
+              ('3d58020000', '0f84', 0x14042ed44, SET_GENERAL_TAE_FLAG), src)
+        check('PreBehaviorSafe helper 0x140414c70 clears +0x308',
+              _image(0x140414c9f, 11).hex(), '48c78108030000' '00000000', src)
     else:
-        skips.append('EXE constants: ' + ATTACKS.DEOBF_1162 + ' absent')
+        skips.append('EXE constants: ' + ATTACKS.DEOBF + ' absent')
 
-    # 2. The paramdef puts dmgLv_None where FUN_140d4ffa0 reads (row + 0x148 + level).
+    # 2. The paramdef puts dmgLv_None where FUN_140d53440 reads (row + 0x148 + level).
     for modern in (True, False):
         fields, _ = PR.layout(PR.paramdef('SP_EFFECT_PARAM_ST', modern))
         offs = {f['name']: f['off'] for f in fields}

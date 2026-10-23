@@ -220,8 +220,7 @@ pub unsafe fn apply_build_order(
         GET_EQUIP_INVENTORY_DATA_RVA,
         "CS::EquipGameData::GetEquipInventoryData",
     ) else {
-        outcome.unavailable =
-            Some("`GetEquipInventoryData` has no verified mapping for the running build");
+        outcome.unavailable = Some("`GetEquipInventoryData` is refused on the running build");
         return outcome;
     };
     // Safety: resolved for the running build on the line above.

@@ -7,7 +7,7 @@
 // frames from the player's own behavior update: sent while the player moves, and once when they
 // have stood still for 80 frames.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked
+// Addresses are 2.7.2.0, carried from 1.17.1 and checked
 // against eldenring-deobf-1.17.2.bin: WorldChrMan 0x143d69ff8 -> 0x143d6d018 (its readers agree,
 // and as many of them go on to read +0x1e508 in each build), the pre-behavior hook 0x140401f30 ->
 // 0x140401fc0 (whole function byte-identical). The offsets read unchanged in 2.7.2.0 game code:

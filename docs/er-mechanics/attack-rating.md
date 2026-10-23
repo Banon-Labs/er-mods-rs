@@ -13,9 +13,9 @@ Labels:
   `src/regulationData.ts`, `src/buildData.ts`).
 
 Every EXE address is a 1.16.2 VA from the named Ghidra dump on :8765. For 1.16.2 the dump, the
-de-Arxan'd image and the live process all use the same VA. The installed game is 1.17.1, and all of
-these functions sit below the rva `0xafefe9` boundary. `docs/recon/rva-map-1162-to-1170.functions.tsv`
-maps them to 1.17: `0x690870`->`0x6916c0`, `0x690f30`->`0x691d80`, `0x690390`->`0x6911e0`,
+de-Arxan'd image and the live process all use the same VA. The installed game was 1.17.1 when this
+was written, and all of these functions sit below the rva `0xafefe9` boundary. The 1.16.2 -> 1.17
+function map (deleted with the address carry on 2026-10-23) put them at: `0x690870`->`0x6916c0`, `0x690f30`->`0x691d80`, `0x690390`->`0x6911e0`,
 `0x6832a0`->`0x6840f0`, `0x686670`->`0x6874c0`, `0x686ff0`->`0x687e40`, `0x7c0390`->`0x7c1210` and
 `0x7c0430`->`0x7c12b0`. With capstone, 1.16.2 and `eldenring-deobf-1.17.1.bin` give the same
 instruction count and the same mnemonics for `PerformCalcCorrection` (151/151) and `FUN_140690390`

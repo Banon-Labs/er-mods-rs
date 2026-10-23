@@ -39,8 +39,9 @@ license MinHook to write five bytes into a function body. Teaching a tool to fol
 teaching it to skip `#[cfg(test)]` items would have converted that documented safety property into
 a detour licence -- the folder making things worse than the regex it replaced.
 
-Used BY: scripts/select-needed-1170-rows.py (function RVAs), scripts/detect-struct-field-drift.py
-(field offsets), scripts/check-expression-constants.py (the gate).
+Used BY: scripts/detect-struct-field-drift.py (field offsets), scripts/check-expression-constants.py
+(the gate). The 1.17 ledger selector that used it for function RVAs was deleted with the address
+carry on 2026-10-23.
 """
 
 from __future__ import annotations
@@ -142,8 +143,8 @@ class Folded:
     the way down through named constants and enum variants. They exist because the address
     harvesters need a rule where they previously had an accident.
 
-    The accident, and why it has to become a rule. `select-needed-1170-rows.py` selects on a name
-    substring, and "INTERVAL" contains "RVA" -- all 35 `*INTERVAL*` constants in this workspace pass
+    The accident, and why it has to become a rule. The 1.17 ledger selector (deleted 2026-10-23)
+    selected on a name substring, and "INTERVAL" contains "RVA" -- all 35 `*INTERVAL*` constants in this workspace pass
     the name test. They stayed out of the ledgers for one reason: the old regex demanded `= 0x...`
     and they are written in decimal. Folding removes that accident, so 30-odd tick counters would
     walk straight in, two of them valued 0x1000 -- which is where `.text` begins, so they pair

@@ -50,7 +50,7 @@ use crate::{
     },
 };
 
-/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, deobf 0x14021bbf0).
+/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, 2.7.2.0 0x14021bbf0).
 static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline for the msb-parse trace. 0 = not hooked.
 static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);

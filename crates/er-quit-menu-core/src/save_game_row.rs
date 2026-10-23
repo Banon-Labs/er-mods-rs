@@ -27,7 +27,6 @@ use crate::save_flow_boxes::{
 use er_game_base::mem::game_rva;
 use er_game_base::mem::safe_read_usize;
 use er_game_base::mem::wide_equals_ascii;
-use er_game_base::stack::callstack_contains_game_rva;
 use er_telemetry_core::counters::SAVE_FLOW_DIALOG;
 use er_telemetry_core::counters::SAVE_FLOW_STAGE;
 use er_telemetry_core::counters::SAVE_FLOW_STAGE_TICKS;
@@ -269,11 +268,11 @@ pub unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, b
 ///
 /// Close-then-fire (save-game-flow WP1, 2026-07-28): the save request is never fired here.
 /// Firing while menus are open is a dispatch-split hazard -- `ShouldSave` (the b72 lane)
-/// requires `!CanShowSaveMenu()` (`CSMenuMan+0x13c == 0`) but the b73 gate `FUN_140679370`
+/// requires `!CanShowSaveMenu()` (`CSMenuMan+0x13c == 0`) but the b73 gate `0x14067a670`
 /// does not, so an open-menu fire lets the b73-only lane dispatch a system-only submit first,
 /// that submit consumes the one-shot suppression-bypass token, and the later char-slot submit
 /// is swallowed. Staging the commit and firing at stage 7 produces a single combined
-/// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
+/// `b72 && b73` -> `0x14067cc40` -> one `0x140e724c0` submit -> one enqueue -> one token.
 ///
 /// WP1/WP2 commit plan: overwrite the loaded save (WP3 adds a destination target).
 /// # Safety
@@ -430,66 +429,16 @@ pub unsafe fn system_quit_save_game_deferred_close_tick() {
     }
 }
 
-/// A 1.16.2-only stack band, and one that cannot be carried forward.
-///
-/// The pair below is a 4 KB window of `.text`, not a function plus an offset, so there is nothing
-/// for the 1.16.2 -> 1.17 map to key on. That is not a gap in the map; it is a property of the
-/// band. Measured across the 33 `.pdata` functions it overlaps: 12 are unmapped outright and the
-/// 21 that map move by seven different deltas (`+0xdf0`, `+0xe20`, `+0xe30`, `+0xe40`, `+0xe80`,
-/// `+0xe90`, `+0x1560`). A band whose contents move apart has no translated width, so no anchor
-/// rescues it -- unlike the GX transport band, whose 12 functions all move `+0x1e00` together and
-/// which is therefore anchored rather than refused.
-///
-/// It is also the weakest-evidenced comparison in the tree. `SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA`
-/// (`0x67a3a0`) has exactly one direct caller in the whole 1.16.2 image, at `0x59d90e` inside
-/// `FUN_14059d8b0`, which is nowhere near this band; nothing records what the band was measured
-/// from. So the honest treatment is to decline on any build it was not measured on and say so,
-/// rather than invent a 1.17 window. The branch it guards is documented dormant -- the product row
-/// path clears the arming latch before this hook runs -- so declining costs a safety net that
-/// nothing currently reaches, and 1.16.2 behaviour is unchanged.
-const LEGACY_CONFIRM_CALLER_BAND: core::ops::Range<usize> = 0x7a3000..0x7a4000;
-
-/// Say once, and at most a handful of times, that a build comparison has no answer on this build.
-///
-/// The same shape `crate::row_cloner` uses for the row-return addresses: a refusal that
-/// is loud, bounded, and names the constant rather than going quiet.
-fn note_unsupported_build_comparison(what: &str) {
-    use std::sync::atomic::AtomicUsize;
-    static SAID: AtomicUsize = AtomicUsize::new(0);
-    const SAY_AT_MOST: usize = 8;
-    if SAID.fetch_add(1, Ordering::SeqCst) < SAY_AT_MOST {
-        append_autoload_debug(format_args!(
-            "system-quit: {what} cannot be compared on {}; treating it as no match",
-            er_game_base::game_build::describe_build()
-        ));
-    }
-}
-
 /// # Safety
 ///
 /// A detour: the game calls it, never call it directly.
+///
+/// There used to be a dormant "legacy confirm" branch here, gated on a 4 KB `.text` stack band
+/// that was only ever measured on 1.16.2 and was already declined on every later build. It is
+/// gone: on 2.7.2.0 it never fired, and the product row path clears the arming latch before this
+/// hook runs.
 pub unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
-    let legacy_confirm_caller = if er_game_base::game_build::is_supported_build() {
-        callstack_contains_game_rva(
-            LEGACY_CONFIRM_CALLER_BAND.start,
-            LEGACY_CONFIRM_CALLER_BAND.end,
-        )
-    } else {
-        note_unsupported_build_comparison(
-            "the legacy Save Game confirm caller band (0x7a3000..0x7a4000, untranslatable)",
-        );
-        false
-    };
-    if dialog >= 0x10000 && legacy_confirm_caller {
-        // Dormant safety net (the product row path clears the arming latch). It keeps the
-        // WP1 semantics -- close-then-fire straight to the commit, no confirm chain.
-        unsafe { system_quit_save_game_close_menus(dialog, "legacy_confirm", true) };
-        append_autoload_debug(format_args!(
-            "system-quit-save: legacy confirmation path suppressed native return-title request dialog=0x{dialog:x}"
-        ));
-        return;
-    }
     if dialog != 0 {
         SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
     }

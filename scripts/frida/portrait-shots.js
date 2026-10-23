@@ -26,7 +26,7 @@ const STREAM_S = cfg.stream_s === undefined ? 3 : cfg.stream_s;
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py and checked against
+// 2.7.2.0 addresses, carried from 1.17.1 and checked against
 // eldenring-deobf-1.17.2.bin. The renderer table 0x143d71940 -> 0x143d74960 has the same 8 readers
 // in both builds; the vtable 0x142b831d8 -> 0x142b852c8 still carries the RTTI name
 // `CSMenuProfModelRend`. The view-matrix builder 0x140bbfad0 -> 0x140bbff90 and the camera push

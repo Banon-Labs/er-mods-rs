@@ -2,8 +2,10 @@
 """Powerstance, off-hand attacks and blocking, per attack, from the installed regulation.
 
 Write-up: `docs/er-mechanics/powerstance-guard.md`. Labels follow `docs/er-mechanics/attacks.md`:
-`VERIFIED` = regulation value or code read out of the 1.16.2 executable (named Ghidra dump on
-:8765, shift 0), `TAE` = decoded animation event or behavior-graph state, `MEASURED` = counted
+`VERIFIED` = regulation value or code read out of the executable (named 1.16.2 Ghidra dump on
+:8765; the addresses cited are the 2.7.2.0 ones in `eldenring-deobf-1.17.2.bin`, each function
+decoding to the same instructions as its 1.16.2 namesake), `TAE` = decoded animation event or
+behavior-graph state, `MEASURED` = counted
 over the planner corpus, `INFERRED` = fits the data, consumer not traced, `COMMUNITY` = outside
 claim (here: Smithbox's decompiled `c0000.hks` and WitchyBND's TAE template).
 
@@ -14,15 +16,15 @@ Powerstance and off-hand:
   034570 (`TAE`). Their hits are judges 800-895. Judges 600-7xx are mounted: `RideAttack_R_*`
   plays 0380xx and `RideAttack_L_*` 0390xx (`TAE`).
 * Each AttackBehavior event names its hand in byte +0xd, `Source` (0 default, 1 right, 2 left).
-  `CSChrTaeAnimEvent::AttackBehavior` 0x1404266d0 turns 1/2 into the right/left weapon slot and
+  `CSChrTaeAnimEvent::AttackBehavior` 0x140426cb0 turns 1/2 into the right/left weapon slot and
   resolves the judge against that slot's weapon (`VERIFIED`). A powerstance L1 is therefore two or
   three separate hits, each with its own weapon's base, scaling, poise and stamina damage.
 * Off-hand L1 (`AttackLeft_SM`) plays 035000..035050 with judges 400..450 and Source 0, i.e. the
   reference hand, which is the left weapon for these states. The hit then uses the left weapon
   for base, reinforce, scaling, poise and guard numbers, and the 2H STR bonus is off because
-  `+0xf5` is set only from `ChrIns::IsTwoHanding` (`FUN_14068ffa0`, `VERIFIED`).
+  `+0xf5` is set only from `ChrIns::IsTwoHanding` (`FUN_1406912a0`, `VERIFIED`).
 * `attacks.md` section 1's "second weapon's base" term is the bow added to an arrow, not a
-  powerstance term (`VERIFIED` in 0x1406832a0 and the status screen `FUN_14065c120`).
+  powerstance term (`VERIFIED` in 0x1406845a0 and the status screen `FUN_14065d420`).
 * Eligibility is the behavior script's `IsEnableDualWielding` (`COMMUNITY` decompile; the compiled
   vanilla HKS carries the same identifiers): not while two-handing, and the two hands'
   `GetEquipWeaponCategory` values equal, from a fixed list. Dagger: a weapon with
@@ -30,42 +32,42 @@ Powerstance and off-hand:
   104 pairs only with another 104; a katana also pairs with a 104 in the left hand. The HKS enum
   values 20..52 equal `wepmotionCategory` (dagger 20, straight sword 23, colossal sword 26,
   colossal weapon 31), and env 225 returns `wepmotionCategory` (`VERIFIED` 2026-10-19): `HksEnv`
-  0x140410820 sends 225 through jump table 0x1404133a4 (index env - 0xdf) to 0x140410e05, a
-  call to ChrIns vtable slot 0x248, which on `PlayerIns` (vtable 0x142a7cb40) is 0x1406568b0:
-  the int at index `hand` of the 12-byte array PlayerIns+0x630 points to. `FUN_1404d0eb0` fills
-  slots 0 and 1 from `FUN_1403beae0`, which reads `EquipParamWeapon+0xe7`, `wepmotionCategory`
-  (1.16.2; in 1.17.1 the same read is at 0x1403beaf0). So the Pickaxe (`wepType` 23, great
-  hammer) powerstances with greataxes: its motion category is 32.
+  0x140410de0 sends 225 through jump table 0x140413964 (index env - 0xdf) to 0x1404113c5, a
+  call to ChrIns vtable slot 0x248, which on `PlayerIns` (vtable 0x142a81cb0) is 0x140657bb0:
+  the int at index `hand` of the 12-byte array PlayerIns+0x630 points to. `FUN_1404d1d60` fills
+  slots 0 and 1 from `FUN_1403beaf0`, which reads `EquipParamWeapon+0xe7`, `wepmotionCategory`.
+  So the Pickaxe (`wepType` 23, great hammer) powerstances with greataxes: its motion category
+  is 32.
 
-Blocking (1.16.2 code, `VERIFIED` unless marked):
+Blocking (`VERIFIED` unless marked):
 
-* Repel (the attacker bounces), `FUN_140447180` from `CalculateDamage`: attacker value
+* Repel (the attacker bounces), `FUN_1404477c0` from `CalculateDamage`: attacker value
   `int(attackBaseRepel * guardAtkRateCorrection / 100 [+ guardAtkRate] + clamp(STR - overStrength,
-  0, 10) + durability term)` (0x14068c080) against defender `int(guardBreakCorrection / 100 *
+  0, 10) + durability term)` (0x14068d380) against defender `int(guardBreakCorrection / 100 *
   guardBaseRepel * SpEffect rate) + clamp(STR - overStrength, 0, 10) + durability term`
-  (`FUN_14068c3c0`, 0 when the defender lacks the stats). Repelled when defender >= attacker.
+  (`FUN_14068d6c0`, 0 when the defender lacks the stats). Repelled when defender >= attacker.
   The -5/-10 term is weapon durability status (AtRisk/Broken), not a hand. `overStrength` is 99
   on every weapon read, so the STR term is 0. A repelled hit keeps
   `GameSystemCommonParam.flickDamageCutRateSuccessGurad` (0.5) of its HP damage
-  (`FUN_1404f7280`), and its stamina charge and guard-break test are untouched: both run before
+  (`FUN_1404f8130`), and its stamina charge and guard-break test are untouched: both run before
   the repel multiplier, and `CalculateDamage2` deducts ADI+0x22c with no repel check.
 * Guard break is stamina only: `stamina <= stamina damage` breaks the guard. On a player the
   breaking hit stays guarded (`CSPlayerDamageModule` vtable slot 6 returns 0), so chip applies.
-* Stamina damage to the blocker (`FUN_140684540`):
+* Stamina damage to the blocker (`FUN_140685840`):
   `g = clamp((statBonus + staminaGuardDef * staminaGuardDefRate + 1.0) * (1 + guard
   AtkParam.guardStaminaCutRate / 100) * SpEffect, 0, 100)`, `0` without the stats;
   `damage = (1 - g / 100) * info+0x28 + guard BehaviorParam.stamina`,
   `* 0.9` when the blocker two-hands, `* 0.7` when that weapon's `weaponCategory` is 12 (shields);
   then `* FinalDamageRateParam.staminaRate` (1.25) when both are players. info+0x28 is the
   attacker's stamina damage times the product of its SpEffect `staminaAttackRate`
-  (`FUN_14068aa80`; Hammer Talisman 1.4, Determination 3, Royal Knight's Resolve 4, Cragblade
+  (`FUN_14068bd80`; Hammer Talisman 1.4, Determination 3, Royal Knight's Resolve 4, Cragblade
   1.5).
-* Chip damage (`CalculateGuardDamage` 0x140689460): fraction of each element that passes
+* Chip damage (`CalculateGuardDamage` 0x14068a760): fraction of each element that passes
   `= (100 - (1 + typeCut / 100) * (cut * reinforce cut rate + statBonus) * durability * (1 +
   guard AtkParam.guardRate / 100) * info+0x5c) / 100`, multiplied onto the per-element damage
-  after defense (`CalculateDamageBasic` 0x1406849d0). info+0x5c is the attacker's guard-cut
+  after defense (`CalculateDamageBasic` 0x140685cd0). info+0x5c is the attacker's guard-cut
   cancel `(1 + weapon guardCutCancelRate / 100) (1 + attack guardCutCancelRate / 100)`
-  (`FUN_140652610`): -50 on 88 weapon rows (shotels, scythes, sickles), nonzero on 168 attack rows.
+  (`FUN_140653910`): -50 on 88 weapon rows (shotels, scythes, sickles), nonzero on 168 attack rows.
 * Guard reaction: `GUARD_REACTION_TABLE[guardLevel][damage level]`, small / middle / large, with
   the blocker's R1 at f5 / f10 / f50 and its 20% guard regeneration paused for 10 / 27 / 49
   frames. A repelled attacker can roll at f22 (small repel), which is the blocker's punish window.
@@ -132,7 +134,7 @@ ATK = _load('er_mechanics_attacks', 'er-mechanics-attacks.py')
 PR = ATK.PR
 
 #: AttackBehavior (event 1) arguments (WitchyBND `TAE.Template.ER.xml`, `COMMUNITY`, with the
-#: +0xd hand byte `VERIFIED` in 0x1404266d0): s32 AttackType, s32 AttackIndex, s32 judge,
+#: +0xd hand byte `VERIFIED` in 0x140426cb0): s32 AttackType, s32 AttackIndex, s32 judge,
 #: u8 DirectionType, u8 Source.
 TAE_ARG_ATTACK_INDEX, TAE_ARG_JUDGE, TAE_ARG_SOURCE = 4, 8, 13
 SOURCE_DEFAULT, SOURCE_RIGHT, SOURCE_LEFT = 0, 1, 2
@@ -191,13 +193,21 @@ SPECIAL_CATEGORY_262 = 262
 #: Heater 67, every towershield/greatshield 69).
 SHIELD_TYPES = {65: 'small shield', 67: 'medium shield', 69: 'greatshield'}
 #: `EquipParamWeapon.weaponCategory` 12: every shield row (`VERIFIED` regulation); the two-hand
-#: guard factor in `FUN_140684540` tests it.
+#: guard factor in `FUN_140685840` tests it.
 WEAPON_CATEGORY_SHIELD = 12
-#: `FUN_140684540` two-handed guard factors (`VERIFIED`, 0x142a1a64c and 0x14329e66c).
+#: `FUN_140685840` two-handed guard factors (`VERIFIED`, 0x142a1f66c and 0x1432a3bec, read by
+#: its chunk 0x140685b0b).
 TWO_HAND_GUARD, TWO_HAND_SHIELD_GUARD = 0.9, 0.7
-#: The +1.0 inside the guard-boost sum (`ADDSS XMM2, XMM6` at 0x140684735, XMM6 = 1.0).
+#: The +1.0 inside the guard-boost sum (`ADDSS XMM2, XMM6` at 0x140685a35, XMM6 = 1.0 loaded
+#: from 0x1432a3bf8 at 0x140685953; the sum is then compared with 100.0 at 0x1432a3c58).
 GUARD_BOOST_ADD = 1.0
-#: Guard behavior judges set by TAE JumpTable 3 (`_ChrActionFlag` 0x1404275e0 at 0x140427683 raises
+#: The guard formulas' floats as read by their instructions in chunk 0x1406858a2 / 0x140685b0b,
+#: and the repel function's durability terms (see `er-mechanics-attacks.CONST`).
+GUARD_FLOATS = ((0x142a1f66c, TWO_HAND_GUARD), (0x1432a3bec, TWO_HAND_SHIELD_GUARD),
+                (0x1432a3bf8, GUARD_BOOST_ADD), (0x1432a3c58, 100.0),
+                (0x1429eac30, -5.0), (0x1429d3438, -10.0))
+GUARD_BOOST_ADDSS = 0x140685a35
+#: Guard behavior judges set by TAE JumpTable 3 (`_ChrActionFlag` 0x140427bc0 at 0x140427c63 raises
 #: the guard flag and stores ArgB as the judge in one write). Every one-handed `GuardOn` /
 #: `GuardStart` / guard-reaction clip (a00/a02/a03) sets 460; the same clips in a10..a16 set 470,
 #: and that a1x is the two-handed guard is `INFERRED` from the 2H attack clips there (`TAE`).
@@ -207,9 +217,9 @@ GUARD_BOOST_ADD = 1.0
 GUARD_JUDGE_DEFAULT = 460
 GUARD_JUDGE_TWO_HAND = 470
 
-#: Guard reaction (`HksEnv` env 237 `GetGuardLevelAction` -> `FUN_140686f00`): the 5x12 int table at
-#: 0x143b340b0 (1.16.2) / 0x143b380c0 (1.17.1), row = the guard weapon's `guardLevel`, column = the
-#: hit's damage level. The selftest reads both images. The behavior script (`COMMUNITY` c0000.hks
+#: Guard reaction (`HksEnv` env 237 `GetGuardLevelAction` -> `FUN_140688200`): the 5x12 int table at
+#: 0x143b3b0d0 (its `LEA RAX` at 0x14068821a), row = the guard weapon's `guardLevel`, column = the
+#: hit's damage level. The selftest reads the image. The behavior script (`COMMUNITY` c0000.hks
 #: l.4585) plays 1 `GuardDamageSmall`, 3 `Middle`, 4 `Large`, and no reaction for 0. SpEffect 171
 #: raising a result below 3 to 3 is not modelled.
 GUARD_REACTION_TABLE = (
@@ -219,7 +229,7 @@ GUARD_REACTION_TABLE = (
     (0, 1, 1, 3, 3, 1, 3, 3, 1, 3, 4, 3),
     (0, 1, 1, 1, 3, 1, 3, 3, 1, 3, 4, 3),
 )
-GUARD_REACTION_TABLE_VA = {'1.16.2': 0x143b340b0, '1.17.1': 0x143b380c0}
+GUARD_REACTION_TABLE_VA = 0x143b3b0d0
 GUARD_REACTION_NAME = {0: 'none', 1: 'small', 3: 'middle', 4: 'large'}
 #: Per guard reaction, the first frame the blocker can R1 out of it, and the frames its stamina
 #: regeneration stays at 0% (clips 19200/19210/19220, TAE 225 = 0 over that span; disengage.md
@@ -227,11 +237,11 @@ GUARD_REACTION_NAME = {0: 'none', 1: 'small', 3: 'middle', 4: 'large'}
 GUARD_REACTION_R1 = {'none': 0, 'small': 5, 'middle': 10, 'large': 50}
 GUARD_REACTION_REGEN_PAUSE = {'none': 0, 'small': 10, 'middle': 27, 'large': 49}
 GUARD_BREAK_R1, GUARD_BREAK_REGEN_PAUSE = 55, 50
-#: `FUN_140d22e90` (table 0x142bafc88): a player defender reacts to `dmgLevel_vsPlayer` through
+#: `FUN_140d25cc0` (table 0x142bb5028): a player defender reacts to `dmgLevel_vsPlayer` through
 #: this remap when it is nonzero, else to `dmgLevel`; a guarded hit keeps that level
-#: (`FUN_140690250`). Same table as `er-mechanics-frame-advantage.REMAP` (the selftest compares).
+#: (`FUN_140691550`). Same table as `er-mechanics-frame-advantage.REMAP` (the selftest compares).
 DAMAGE_LEVEL_REMAP = (0, 0, 8, 1, 2, 3, 7, 4, 6, 9, 5, 10, 11)
-#: Stamina regeneration while guarding (`FUN_1404016d0`): `GetStaminaRecoverySpeed` (45 + talisman
+#: Stamina regeneration while guarding (`FUN_140401ac0`): `GetStaminaRecoverySpeed` (45 + talisman
 #: adds) x `ctrlModifier+0x14` / 100 per second. Every `GuardOn`/`GuardStart` clip carries TAE 225
 #: (`SetSPRegenRatePercent`) = 20 for its whole length (`TAE`), so a raised guard regenerates 20%.
 #: Per second is `INFERRED`; talisman adds are not read for blockers.
@@ -290,7 +300,7 @@ class Tables(ATK.Regulation):
         self.atk_guard = {r['id']: r for r in rows}
         rows, _, _ = PR.rows(PR.param_bytes(files, 'FinalDamageRateParam'), None)
         self.final_rate = {r['id']: r for r in rows}
-        # The HP share a repelled hit keeps (`FUN_1404f7280`: min with 1 - the defender's largest
+        # The HP share a repelled hit keeps (`FUN_1404f8130`: min with 1 - the defender's largest
         # SpEffect flickDamageCutRate / 100, no such SpEffect modelled): 0.5 in 1.17.1.
         rows, _, _ = PR.rows(PR.param_bytes(files, 'GameSystemCommonParam'),
                              ['flickDamageCutRateSuccessGurad'])
@@ -376,7 +386,7 @@ def _slot_row(reg, key, label, anim, state, anims, category, hand_weapon, level,
     rec = ATK.recovery_details(reg.weapon[hand_weapon(SOURCE_RIGHT)], anim, anims[anim],
                                [h['frames'] for h in hits])
     next_l1 = _l1_recovery(anims[anim])
-    # FUN_1404428f0 charges BehaviorParam stamina when it creates a hitbox and returns early only
+    # FUN_140442ee0 charges BehaviorParam stamina when it creates a hitbox and returns early only
     # when the event's damage slot (AttackIndex) already holds the same behavior id (attacks.md
     # s.4), so every distinct (slot, judge) pays (INFERRED: the charge order was read, the early
     # return's effect on the charge was not).
@@ -473,7 +483,7 @@ def shield_guard(reg, shield, level=0, guard_judge=None, two_handed=False):
         'weapon': shield, 'name': reg.name(shield), 'level': level, 'wepType': s['wepType'],
         'guard_behavior_row': bid,
         'guard_base_repel': s['guardBaseRepel'],
-        # FUN_14068c3c0 without SpEffects and durability loss; the STR term is 0 because
+        # FUN_14068d6c0 without SpEffects and durability loss; the STR term is 0 because
         # overStrength is 99 on every row.
         'repel_value': int(g_atk.get('guardBreakCorrection', 100) / 100.0 * s['guardBaseRepel']),
         'stamina_guard_def': s['staminaGuardDef'] * rf.get('staminaGuardDefRate', 1.0),
@@ -489,7 +499,7 @@ def shield_guard(reg, shield, level=0, guard_judge=None, two_handed=False):
 
 
 def attacker_repel(reg, hit, strength=0):
-    """0x14068c080 without durability loss: int(base + clamp(STR - overStrength, 0, 10))."""
+    """0x14068d380 without durability loss: int(base + clamp(STR - overStrength, 0, 10))."""
     over = reg.weapon[hit['weapon']]['overStrength'] if 'weapon' in hit else 99
     return int(hit['guard_level_base'] + max(0, min(10, strength - over)))
 
@@ -501,7 +511,7 @@ def pvp_stamina_rate(reg, hit):
 
 
 def guard_cut_cancel(reg, hit):
-    """info+0x5c (`FUN_140652610`): (1 + weapon guardCutCancelRate / 100) x (1 + attack
+    """info+0x5c (`FUN_140653910`): (1 + weapon guardCutCancelRate / 100) x (1 + attack
     guardCutCancelRate / 100). It multiplies the guard's cut of every element. The attack's
     AttackInfo+0xf4 bypass (1.0) is not identified and not modelled. 1.0 without a weapon id."""
     w = reg.weapon.get(hit.get('weapon'), {}).get('guardCutCancelRate', 0) if 'weapon' in hit else 0
@@ -529,7 +539,7 @@ def block_hit(reg, hit, ar, guard, strength=0, pvp=True, stamina_rate=1.0):
     """One hit into a raised guard. `ar` {element: attack rating} of the hitting weapon.
 
     `stamina_rate` is the attacker's product of SpEffect `staminaAttackRate` (Hammer Talisman 1.4,
-    Determination 3, Royal Knight's Resolve 4, Cragblade 1.5): `FUN_14068aa80` multiplies it into
+    Determination 3, Royal Knight's Resolve 4, Cragblade 1.5): `FUN_14068bd80` multiplies it into
     info+0x28, the stamina damage, before the blocker's guard boost.
 
     `chip_fraction` is the share of each element the guard passes, with the attacker's
@@ -655,7 +665,7 @@ GUARD_LEFT_ONE_HAND = frozenset({21, 47, 48, 49, 57})
 GUARD_REFUSED_TWO_HAND = frozenset({44, 45, 46, 51, 52})
 #: `EquipParamWeapon.weaponCategory` -> a label for the left hand that cannot guard.
 LEFT_KIND = {8: 'catalyst', 10: 'bow', 11: 'bow', 13: 'bow', 14: 'bow'}
-#: 2H strength for a requirement check (`FUN_140690390` applies x1.5 while two-handing; that the
+#: 2H strength for a requirement check (`FUN_140691690` applies x1.5 while two-handing; that the
 #: guard's own requirement test reads the same value is `INFERRED`).
 TWO_HAND_STR = 1.5
 PERCENTILES = (10, 25, 50, 75, 90)
@@ -732,7 +742,7 @@ class Blockers:
     """The guard every build of a PvP corpus raises, as arrays aligned with the corpus order.
 
     Per build: the guard weapon (left hand one-handed, right hand two-handed), its affinity row
-    and level, whether the build meets its stat requirements (`FUN_14068c3c0` and `FUN_140684540`
+    and level, whether the build meets its stat requirements (`FUN_14068d6c0` and `FUN_140685840`
     drop repel and guard boost to 0 otherwise), max stamina, flat defense and absorption.
     `curve(attack, defenses)` is the defense curve over an array; the ranking passes its own
     `er-builds-pvp.defense_curve` (the default vectorises the scalar one and is slow).
@@ -894,9 +904,9 @@ class Blockers:
         Per blocker: stamina summed over the hits (`block_hit`: attacker `staminaAttackRate`, PvP
         rate and 2H factor in), `broken` when it reaches max stamina (one attack from full; a
         repel still charges it and can still break, `CalculateDamage` order), `repelled` when any
-        hit bounces (`FUN_140447180`: defender repel >= attacker repel), chip = each element's
+        hit bounces (`FUN_1404477c0`: defender repel >= attacker repel), chip = each element's
         unguarded damage x the share the guard passes with the attacker's guard-cut cancel in
-        (`CalculateDamageBasic` 0x1406849d0 multiplies `victimGuardDefRate` into the same product
+        (`CalculateDamageBasic` 0x140685cd0 multiplies `victimGuardDefRate` into the same product
         as armor absorption, `VERIFIED`), times `Tables.repel_chip` on a repelled hit.
         With `cycle`, the guard regenerates `GUARD_REGEN_PER_FRAME` over the frames between two
         throws that are past its guard reaction's 0% window (`blocker_ready`), and `drain` is the
@@ -1524,17 +1534,15 @@ def selftest():
     else:
         skips.append('compiled c0000.hks or common_define.hks absent')
 
-    # 5. EXE constants of the guard formulas, read out of the 1.16.2 flat image.
-    img = ATK.DEOBF_1162
+    # 5. EXE constants of the guard formulas, read out of the flat image.
+    img = ATK.DEOBF
     if os.path.exists(img):
-        src = 'EXE eldenring-deobf.bin (1.16.2)'
-        for va, want in ((0x142a1a64c, TWO_HAND_GUARD), (0x14329e66c, TWO_HAND_SHIELD_GUARD),
-                         (0x14329e678, GUARD_BOOST_ADD), (0x14329e6d8, 100.0),
-                         (0x1429e5c30, -5.0), (0x1429ce438, -10.0)):
+        src = 'EXE ' + os.path.basename(img)
+        for va, want in GUARD_FLOATS:
             check(f'float at {va:#x}', round(ATK._read_f32(img, va), 6), want, src)
-        # The guard-boost sum adds XMM6 (= 1.0) at 0x140684735: F3 0F 58 D6 = ADDSS XMM2, XMM6.
-        check('ADDSS XMM2, XMM6 at 0x140684735', ATK._image_read(img, 0x140684735, 4).hex(),
-              'f30f58d6', src)
+        # The guard-boost sum adds XMM6 (= 1.0): F3 0F 58 D6 = ADDSS XMM2, XMM6.
+        check(f'ADDSS XMM2, XMM6 at {GUARD_BOOST_ADDSS:#x}',
+              ATK._image_read(img, GUARD_BOOST_ADDSS, 4).hex(), 'f30f58d6', src)
     else:
         skips.append('EXE image absent: ' + img)
 
@@ -1735,15 +1743,15 @@ def selftest():
     fa = _load('er_mechanics_frame_advantage_for_selftest', 'er-mechanics-frame-advantage.py')
     check('DAMAGE_LEVEL_REMAP == frame-advantage REMAP', DAMAGE_LEVEL_REMAP, fa.REMAP,
           'er-mechanics-frame-advantage.py')
-    for build, path in (('1.16.2', ATK.DEOBF_1162), ('1.17.1', ATK.DEOBF_1171)):
-        if os.path.exists(path):
-            raw = ATK._image_read(path, GUARD_REACTION_TABLE_VA[build], 5 * 12 * 4)
-            vals = struct.unpack('<60i', raw)
-            check(f'guard reaction table at {GUARD_REACTION_TABLE_VA[build]:#x} ({build})',
-                  tuple(tuple(vals[r * 12:(r + 1) * 12]) for r in range(5)), GUARD_REACTION_TABLE,
-                  f'EXE {os.path.basename(path)}')
-        else:
-            skips.append(f'guard reaction table: {path} absent')
+    path = ATK.DEOBF
+    if os.path.exists(path):
+        raw = ATK._image_read(path, GUARD_REACTION_TABLE_VA, 5 * 12 * 4)
+        vals = struct.unpack('<60i', raw)
+        check(f'guard reaction table at {GUARD_REACTION_TABLE_VA:#x}',
+              tuple(tuple(vals[r * 12:(r + 1) * 12]) for r in range(5)), GUARD_REACTION_TABLE,
+              f'EXE {os.path.basename(path)}')
+    else:
+        skips.append(f'guard reaction table: {path} absent')
     src = 'sanity only: expected direction, no outside number'
     check('a repel the blocker can punish raises its own guard\'s value',
           bl.own_guard(shield_guard(reg, brass, 25), [dg], startup=10.0)

@@ -135,7 +135,8 @@ not work alone: it is also used at launch by `0x1404f52f0` [`FUN_1404f4520`] and
 receives the ADI. Extending `SpEffectSubCategoryMaskData` (`0x1404ffc30` [`FUN_1404fee60`]) with
 ADI+0x144 would work but changes a struct three callers share.
 
-Address carrying: `scripts/map-rvas-1162-to-1170.py` gave unique matches for the reader,
+Address carrying: the masked-signature map (deleted with the address carry on 2026-10-23) gave
+unique matches for the reader,
 `CalculateDamage2` `0x140448910` [`0x1404483b0`], `IsApplicableForCategory`, the mask builder
 and both removers' callers; the ADI builder came from the nearest-anchor delta and was confirmed by
 its writes to +0xda, +0x48, +0x144 and +0x13c in the 1.17.0 dump. All are below rva `0xafefe9`
@@ -222,7 +223,7 @@ hit's ADI+0x144 is the bow, crossbow or unbuffable weapon, never the buffed one.
 ## Smoke spawn gate and re-hit cadence
 
 Static RE, 2026-10-04. Addresses are 1.17.1 [1.16.2]. Every 1.17.1 address below was read in
-`eldenring-deobf-1.17.1.bin`. The ones `map-rvas-1162-to-1170.py` left ambiguous (2 or more shape
+`eldenring-deobf-1.17.1.bin`. The ones the signature map left ambiguous (2 or more shape
 candidates: the gate, the on-hit spawn, the child creator, the shape cast, the attack issue) were
 settled by call graph and by the :8767 dump returning each as a function entry. The call graph in
 1.17.1: `0x14039bb00` calls `0x14039da50` then `0x14039bbb0`; `KillBullet` `0x14039f0c0` calls

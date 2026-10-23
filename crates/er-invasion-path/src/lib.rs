@@ -246,11 +246,11 @@ struct TaskState {
 ///
 /// Dropping a `PendingRequest` looks free and is not. The engine allocates each request from a
 /// fixed-size ring on the `CSHkAiWorld` -- `world+0x130` is the slot array (stride `0x68`),
-/// `world+0x138` its capacity, `world+0x13c` a round-robin cursor -- and `FUN_140be1bb0` walks
-/// that ring for a slot whose `+0x40` is zero, returning 0 when every slot is taken. A slot is
-/// cleared in exactly one place: `FUN_140bf3320`, reachable only from the fetch this crate calls
-/// in `poll`. That release is also what `hkUnref`s the Havok path and frees the two heap buffers
-/// hanging off `+0x50` and `+0x58`.
+/// `world+0x138` its capacity, `world+0x13c` a round-robin cursor -- and 1.16.2 `FUN_140be1bb0`
+/// walks that ring for a slot whose `+0x40` is zero, returning 0 when every slot is taken. A slot
+/// is cleared in exactly one place: 1.16.2 `FUN_140bf3320`, reachable only from the fetch this
+/// crate calls in `poll`. That release is also what `hkUnref`s the Havok path and frees the two
+/// heap buffers hanging off `+0x50` and `+0x58`.
 ///
 /// So an unfetched request holds its slot, its Havok reference and its allocations forever. And
 /// the ring is not ours -- it is the one every NPC in the map allocates from, so filling it stops
@@ -452,7 +452,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
     for remote in &roster.remotes {
         // Matches the game's own compass rule -- `MenuCommonParam` row 0
         // `compassEnemyHostInnerDistance` at `+0xa4` is 30.0 m, squared at runtime in
-        // `FUN_140775f30` -- with the one deliberate difference that matters:
+        // 1.16.2 `FUN_140775f30` -- with the one deliberate difference that matters:
         //
         // The compass compares in 2D. Its `dx`/`dy` are the map-plane components and there is no
         // vertical term, so a player five metres away and forty metres straight down reads as

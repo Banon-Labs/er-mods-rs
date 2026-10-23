@@ -53,18 +53,18 @@
 //!
 //! ## What the binary shows, and what it does not
 //!
-//! Measured against the 1.16.2 named Ghidra image (shift zero, so the addresses are also the
-//! runtime's):
+//! Read on the 1.16.2 named Ghidra image; the addresses below are the same functions on 2.7.2.0,
+//! the build the DLL runs on:
 //!
-//! * `ArchetypeToInitParamId` @ `0x140d34bf0` is literally `return archetype + 3000`, so the row
+//! * `ArchetypeToInitParamId` @ `0x140d37a60` is literally `return archetype + 3000`, so the row
 //!   this table indexes is the row the game indexes.
-//! * `0x1407c6560` reads `PlayerGameData::archetype`, calls `ArchetypeToInitParamId` and
+//! * `0x1407c7890` reads `PlayerGameData::archetype`, calls `ArchetypeToInitParamId` and
 //!   `GetCharaInitParam`, and fills a ten-slot array from the row -- `soulLv`, `baseVit`,
 //!   `baseEnd`, `baseWil`, `baseStr`, `baseDex`, `baseDurability`, `baseMag`, `baseFai`,
 //!   `baseLuc`. That is the same ten-slot layout `GetMainPlayerStats`/`ApplyMainPlayerStats` use.
-//! * `CS::PlayerLevelUpDialog::PlayerLevelUpDialog` @ `0x14096daa0` keeps that array and builds a
+//! * `CS::PlayerLevelUpDialog::PlayerLevelUpDialog` @ `0x14096f0f0` keeps that array and builds a
 //!   **second** `CS::LevelPlayerStatusSimulator` from it, held separately from the live-stats
-//!   simulator that `0x1407c6440` populates from `GetMainPlayerStats`. A dedicated base-stats
+//!   simulator that `0x1407c7770` populates from `GetMainPlayerStats`. A dedicated base-stats
 //!   object beside the live one is the shape a floor has.
 //!
 //! **Not confirmed**: the literal compare-and-reject instruction. It is presumably in a virtual
@@ -72,7 +72,7 @@
 //! structurally and by the planner's arithmetic, not by a decompiled clamp.
 //!
 //! **Confirmed, and it is why this module has to do the work**: `ApplyMainPlayerStats` @
-//! `0x140788cf0` -- the native the importer calls -- does **not** clamp. It writes all ten ints
+//! `0x14078a020` -- the native the importer calls -- does **not** clamp. It writes all ten ints
 //! straight into `PlayerGameData` with no comparison against `CharaInitParam` or anything else;
 //! its only clamps are on the derived HP/FP/stamina deltas. Whatever the level-up UI enforces, it
 //! is a UI-layer restriction that this code path goes around. Nothing downstream will catch a

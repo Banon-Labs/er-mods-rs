@@ -11,7 +11,7 @@
 Written for docs/er-mechanics/ashes-of-war.md; the labels (`VERIFIED`, `TAE`, `INFERRED`,
 `COMMUNITY`, `MEASURED`) mean what they mean there and in attacks.md. The chain:
 
-    weapon (+ mounted EquipParamGem) --GetSwordArtsParamIdForWeapon 0x140673f70--> SwordArtsParam id
+    weapon (+ mounted EquipParamGem) --GetSwordArtsParamIdForWeapon 0x140675270--> SwordArtsParam id
       (a mounted gem's swordArtsParamId wins over EquipParamWeapon.swordArtsParamId, `VERIFIED`)
     SwordArtsParam.swordArtsTypeNew --> TimeAct a<600 + swordArtsTypeNew>.tae, anims 04xxxx (`TAE`)
     each animation's events:
@@ -22,7 +22,7 @@ Written for docs/er-mechanics/ashes-of-war.md; the labels (`VERIFIED`, `TAE`, `I
       331 AddSpEffect_WeaponArts(a, b)   SpEffect a with enough FP, b without
       66/67/401 AddSpEffect(id)          SpEffect on self while the event runs
       795 hyperarmor window (ToughnessParam row), JumpTable 8 invincibility frames
-    judge --PlayerIns::ResolveBehaviorId 0x140652280 with the weapon's behaviorVariationId-->
+    judge --PlayerIns::ResolveBehaviorId 0x140653580 with the weapon's behaviorVariationId-->
       BehaviorParam_PC row: refType 0 AtkParam_Pc, 1 Bullet (-> atkId_Bullet, spEffectId0-4,
       HitBulletID, intervalCreateBulletId), 2 SpEffectParam
 
@@ -44,7 +44,7 @@ The scored form (ashes-of-war.md sections 13-15): `mountable_skills` per weapon 
 skill scored with its own reach and coverage, `skill_reach_factors`), the corpus-weighted value
 beside it, and the corpus skills' buff roots for `er-mechanics-buffs.expected_attack`.
 
-`attack` follows `hit_attack` (the verified 0x1406832a0 formula). `pvp_damage` applies the
+`attack` follows `hit_attack` (the verified 0x1406845a0 formula). `pvp_damage` applies the
 defense curve, absorption, vsPlayerDmgCorrectRate and the hit's FinalDamageRateParam the way
 er-builds-pvp.py does for R1s, and writes `pvp_damage` into each hit. `skill_profile` gives the
 full event list (buffs, hyperarmor, i-frames) for anything that is not a hit.
@@ -86,7 +86,7 @@ SKILL_TAE_BASE = 600
 # Which animation of the skill TimeAct plays depends on the weapon and grip. The one-shot skill
 # state `SwordArtsOneShot` (c0000.behbnd) picks one CustomManualSelectorGenerator by the behavior
 # variable `SwordArtsOneShotCategory`; every CMSG resolves `a<600 + swordArtsTypeNew>_<animId>`
-# (offsetType 0x12, `FUN_14041aba0`), so the clip always comes from the skill's own a6xx file
+# (offsetType 0x12, `FUN_14041b160`), so the clip always comes from the skill's own a6xx file
 # and only the animId moves. `ExecAttack` (c0000.hks lines 1853-1886, 1.17.1) writes the variable
 # from `GetSwordArtsDiffCategory(c_SwordArtsID, env(358), env(225, hand))` (common_define.hks
 # lines 888-956), and the follow-up states read `SwordArtsOneShotComboCategory` (line 1901).
@@ -122,7 +122,7 @@ EV_SPEFFECT = (66, 67, 401)
 EV_PC_BEHAVIOR, EV_FP, EV_WA_SPEFFECT, EV_TOUGHNESS = 307, 330, 331, 795
 JT_INVINCIBLE = 8          # `_ChrActionFlag` case 8: actionModifiersFlags |= 2 (attacks.md)
 #: Event 1 Args+0 (AttackType) 64 marks a parry hitbox: the 307 handler's own error text calls
-#: damage type 64 parry (0x14042a580), and Parry/Buckler Parry/Golden Parry fire event 1 with
+#: damage type 64 parry (0x14042ab60), and Parry/Buckler Parry/Golden Parry fire event 1 with
 #: 64 where attacks carry 0 (`INFERRED` for event 1).
 ATTACK_TYPE_PARRY = 64
 #: BehaviorParam_PC rows 500/504 (AtkParam 300/304): the generic body hitbox of steps and leaps.
@@ -142,7 +142,7 @@ MV_FIELD = {'physical': 'atkPhysCorrection', 'magic': 'atkMagCorrection',
 FLAT_FIELD = {'physical': 'atkPhys', 'magic': 'atkMag', 'fire': 'atkFire',
               'lightning': 'atkThun', 'holy': 'atkDark'}
 
-#: `CheckIfWepTypeCanEquipGem` 0x140d29e00 (`VERIFIED`, 1.16.2): EquipParamWeapon.wepType ->
+#: `CheckIfWepTypeCanEquipGem` 0x140d2cc70 (`VERIFIED`): EquipParamWeapon.wepType ->
 #: the EquipParamGem flag it reads.
 WEP_TYPE_MOUNT_FLAG = {
     1: 'Dagger', 3: 'SwordNormal', 5: 'SwordLarge', 7: 'SwordGigantic', 9: 'SaberNormal',
@@ -307,14 +307,14 @@ class AshTables:
 
     # -- the equipped item -> skill ----------------------------------------------------------
     def weapon_skill(self, weapon_id, gem_id=None):
-        """`GetSwordArtsParamIdForWeapon` 0x140673f70 (`VERIFIED`): the mounted gem's
+        """`GetSwordArtsParamIdForWeapon` 0x140675270 (`VERIFIED`): the mounted gem's
         swordArtsParamId when a gem is mounted, else EquipParamWeapon.swordArtsParamId."""
         if gem_id is not None and gem_id in self.gem:
             return self.gem[gem_id]['swordArtsParamId']
         return self.reg.weapon[weapon_id]['swordArtsParamId']
 
     def active_skill(self, right_skill, left_skill, two_handed_right=True):
-        """Which hand's skill L2 fires, `FUN_14047f770` (`VERIFIED`): two-handing uses that
+        """Which hand's skill L2 fires, `FUN_14047fdb0` (`VERIFIED`): two-handing uses that
         weapon's skill; one-handing uses the left weapon's, unless the left skill row has
         isRefRightArts set (the `No Skill` row 10 does, so seals, torches and bare left hands
         defer to the right weapon). Arguments are SwordArtsParam ids (None = nothing held)."""
@@ -326,7 +326,7 @@ class AshTables:
         return left_skill
 
     def fp_cost(self, sword_arts_id, cast='L2', arts_consumption_rate=1.0):
-        """`CalculateFpConsumption` 0x14068b220 (`VERIFIED`): ceil(rate x useMagicPoint_<cast>),
+        """`CalculateFpConsumption` 0x14068c520 (`VERIFIED`): ceil(rate x useMagicPoint_<cast>),
         rate = product of active SpEffectParam.artsConsumptionRate. The behavior script picks
         `cast` (R1, R2, L1, L2). -1 in the param means that input does not cast the skill."""
         base = self.arts[sword_arts_id][f'useMagicPoint_{cast}']
@@ -334,16 +334,16 @@ class AshTables:
 
     @staticmethod
     def has_enough_fp(fp, cost):
-        """`CanCastAow` 0x14047fa20 / `HaveEnoughFP` 0x14047fc60 (`VERIFIED`; 1.17.1 has the same
-        code at 0x1404801c0 reading 0.5 at 0x1432a1920): the full skill plays when fp > 0 and
+        """`CanCastAow` 0x140480060 / `HaveEnoughFP` 0x1404802a0 (`VERIFIED`; it reads the 0.5 at
+        0x1432a3be0): the full skill plays when fp > 0 and
         int(cost * 0.5) <= fp. Event 330 then spends min(cost, fp)
         (FP is clamped at 0), so between half and full cost the skill is full and FP ends at 0."""
         return fp > 0 and int(cost * 0.5) <= fp
 
     def can_mount(self, weapon_id, gem_id, affinity=0, level=0):
-        """`CanMountGemWithAffinityOnWeapon` 0x140d549d0 (`VERIFIED`). Returns (ok, reason).
+        """`CanMountGemWithAffinityOnWeapon` 0x140d57e70 (`VERIFIED`). Returns (ok, reason).
 
-        Not modelled: `_CanMountGem` 0x14078a3f0 first requires the whetblade event flag
+        Not modelled: `_CanMountGem` 0x14078b720 first requires the whetblade event flag
         for `affinity`; without it only defaultWepAttr is offered."""
         w = self.reg.weapon.get(weapon_id)
         g = self.gem.get(gem_id)
@@ -538,7 +538,7 @@ def diff_category(arts_type, idle_category, weapon_category, categories, one_han
     `env(225, hand)` is that hand's `wepmotionCategory` and `env(358)` the idle category: the
     right weapon's `wepmotionOneHandId` while one-handing, the two-handed weapon's
     `wepmotionBothHandId` otherwise (`VERIFIED`: both are `PlayerIns` vtable +0x248
-    `0x1406568b0`, reading the int[3] that `0x1404d0eb0` [1.17.1 `0x1404d1c80`] fills from
+    `0x140657bb0`, reading the int[3] that `0x1404d1d60` fills from
     EquipParamWeapon +0xe7 / +0xf0 / +0xf1 by ChrAsm arm style). The left-hand shield branch
     (`c_SwordArtsHand == HAND_LEFT` while one-handing, shield skills cast from the off hand) is not
     modelled."""
@@ -583,9 +583,9 @@ def resolve_judge(t, weapon_id, judge, level=0, literal=False, via_bullet=False,
     """What a behavior judge fires for this weapon: melee, bullet (with its tree) or SpEffect.
 
     `literal`: the judge is a BehaviorParam_PC row id as is (event 5 CommonBehavior and 307 with
-    flag 4, `VERIFIED` 0x1404269e0 / 0x140652470). `via_bullet`: the event is 2 BulletBehavior,
+    flag 4, `VERIFIED` 0x140426fc0 / 0x140653770). `via_bullet`: the event is 2 BulletBehavior,
     the only path that honours refType 1 and 2 (`VERIFIED`: events 1/5/307 hand a refType other
-    than 0 to `FUN_1404428f0`, which finds no AtkParam and creates nothing)."""
+    than 0 to `FUN_140442ee0`, which finds no AtkParam and creates nothing)."""
     w = t.reg.weapon[weapon_id]
     bid = judge if literal else t.reg.resolve_behavior_id(judge, w['behaviorVariationId'])
     b = t.reg.behavior.get(bid)
@@ -601,7 +601,7 @@ def resolve_judge(t, weapon_id, judge, level=0, literal=False, via_bullet=False,
         flat = {el: (a.get('atkPhys', 0) if el == 'physical' else extra.get(FLAT_FIELD[el], 0))
                 for el in ELEMENTS}
         mv = {el: a.get(MV_FIELD[el], 0) for el in ELEMENTS}
-        # `0x14068ffa0`: attackNotFromWeapon = (flags & 0x68) == 0 && hitSourceType != 0.
+        # `0x1406912a0`: attackNotFromWeapon = (flags & 0x68) == 0 && hitSourceType != 0.
         from_weapon = bool(event_flags & 0x68) or not extra.get('hitSourceType', 0)
         # The not-from-weapon branch reads only the flat fields: MV 100 on such a row (Raptor of
         # the Mists' 550, the body rows 300/304) multiplies nothing.
@@ -626,7 +626,7 @@ def resolve_judge(t, weapon_id, judge, level=0, literal=False, via_bullet=False,
     if b['refType'] == 1:
         return {**base, 'kind': 'bullet', 'bullet': bullet_tree(t, b['refId'])}
     if b['refType'] == 2:
-        # Applied to the attacker itself (`VERIFIED` 0x1403c1020 -> FUN_1403e8b70).
+        # Applied to the attacker itself (`VERIFIED` 0x1403c1030 -> FUN_1403e8d50).
         sid = b['refId']
         return {**base, 'kind': 'speffect', 'speffect': t.speffect_summary(sid), 'effect': t.effect_kind(sid)}
     return {**base, 'kind': f"refType {b['refType']}"}
@@ -694,13 +694,13 @@ def anim_actions(t, weapon_id, events, level=0):
                         **resolve_judge(t, weapon_id, struct.unpack_from('<i', p, 4)[0], level,
                                         literal=True)})
         elif e.type == EV_PC_BEHAVIOR:
-            # +4 u32 flags, +8 judge (0x14042a580). Flag 8 resolves like event 1; flag 4 reads
+            # +4 u32 flags, +8 judge (0x14042ab60). Flag 8 resolves like event 1; flag 4 reads
             # BehaviorParam_PC[judge] as is (judge - 100 while a roll-trigger state is set).
             flags, judge = struct.unpack_from('<Ii', p, 4)
             res = resolve_judge(t, weapon_id, judge, level, literal=not flags & 8, event_flags=flags)
             out.append({'event': f'pc-behavior {flags}', 'frames': fr, **res})
         elif e.type == EV_FP:
-            # `CSChrSwordArtsModule::ConsumeFp` 0x14047f640 spends the cost reserved when the
+            # `CSChrSwordArtsModule::ConsumeFp` 0x14047fc80 spends the cost reserved when the
             # behavior script started the skill, once per reservation (`VERIFIED`).
             out.append({'event': 'fp', 'frames': fr, 'kind': 'fp'})
         elif e.type == EV_WA_SPEFFECT:
@@ -1009,7 +1009,7 @@ def main_anim(profile):
 
 class WeaponContext:
     """The firing weapon as the attack-power builder sees it: base attack per element, the stat
-    scaling multiplier per element (`FUN_140690390`) and ReinforceParamWeapon.baseAtkRate."""
+    scaling multiplier per element (`FUN_140691690`) and ReinforceParamWeapon.baseAtkRate."""
 
     def __init__(self, weapon, affinity='Standard', level=None, stats=None, two_handed=False,
                  ar_tables=None):
@@ -1042,14 +1042,14 @@ class WeaponContext:
 
 
 def hit_attack(ctx, row, from_weapon=True):
-    """Attack per element before defense for one AtkParam row, `0x1406832a0` (`VERIFIED`):
+    """Attack per element before defense for one AtkParam row, `0x1406845a0` (`VERIFIED`):
 
         from the weapon:  (base_el x MV/100 + (isAddBaseAtk ? flat_el x baseAtkRate : 0)) x scaling_el
         not from weapon:  flat_el x scaling of the weapon at AttackInfo+0xf0 (melee: none, so 1)
 
     base_el is the weapon's upgraded base attack (EquipParamWeapon.attackBase* x
     ReinforceParamWeapon.*AtkRate) and scaling_el the stat multiplier, so base_el x scaling_el is
-    the AR. Bullets always take the first branch (`0x14038e380` never sets
+    the AR. Bullets always take the first branch (`0x14038e390` never sets
     `attackNotFromWeapon`); a melee hit takes the second when AtkParam.hitSourceType != 0 and
     the event did not pass flag 8 (event 307 flag 8 forces the weapon branch). The durability,
     counter and SpEffect factors are left out."""
@@ -1147,7 +1147,7 @@ PHYS_TYPE = {0: 'slash', 1: 'strike', 2: 'pierce', 3: 'standard'}
 
 def phys_type(t, weapon_id, atk_row):
     """AtkParam.atkAttribute; 253 takes the weapon's `atkAttribute`, 252 its `atkAttribute2`
-    (`VERIFIED`, `er-mechanics-attacks.WEAPON_ATTRIBUTE_REF`: 1.17.1 0x1406869ad-0x1406869ca,
+    (`VERIFIED`, `er-mechanics-attacks.WEAPON_ATTRIBUTE_REF`: 0x140686e5d-0x140686e7a,
     `cmp cl,0xfd` -> +0x104, `cmp cl,0xfc` -> +0x191). This read them swapped until 2026-10-19,
     so a claw's Impaling Thrust (252, the claw's pierce) was scored as slash."""
     attr = t.reg.atk.get(atk_row, {}).get('atkAttribute', 3)
@@ -1214,7 +1214,7 @@ def describe_speffect(s):
 
 def pvp_damage(t, weapon_id, hits, defender, defense_module, damage_fn=None):
     """Sum of `hits` against `defender` with the weapon's vsPlayer rates and the hit's own
-    FinalDamageRateParam row (`VERIFIED` 0x1406852f2: both sides players; skills mostly use row
+    FinalDamageRateParam row (`VERIFIED` 0x1406865f2: both sides players; skills mostly use row
     10000, 0.8 on every element, where R1s use 1.0).
 
     `damage_fn(attack, phys_type, final_rate_row) -> damage` replaces the one-defender model:
@@ -1438,7 +1438,7 @@ _MOUNTABLE = {}
 
 def mountable_skills(t, weapon_id, affinity=0, level=25):
     """[SwordArtsParam id] a weapon can fire as built: its own skill, then every ash-of-war item
-    (`ash_gems`) that `can_mount` accepts at this affinity and level (`VERIFIED` 0x140d549d0,
+    (`ash_gems`) that `can_mount` accepts at this affinity and level (`VERIFIED` 0x140d57e70,
     which also applies the affinities the ash itself allows). A weapon that takes no ash
     (`gemMountType` 0) has only its own skill. Cached."""
     key = (weapon_id, affinity, level)
@@ -1454,7 +1454,7 @@ def mountable_skills(t, weapon_id, affinity=0, level=25):
 
 def fp_uses(fp_bar, cost):
     """Casts one FP bar pays for: the full ones, plus one more when what is left passes
-    `has_enough_fp` (half the cost, `VERIFIED` 0x14047fc60). None when the skill costs nothing."""
+    `has_enough_fp` (half the cost, `VERIFIED` 0x1404802a0). None when the skill costs nothing."""
     if cost <= 0:
         return None
     n, rest = divmod(int(fp_bar), int(cost))
@@ -1701,17 +1701,18 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
 
 
 # Bullet flight (ashes-of-war.md section 15). The per-frame rule and the child hand-over are
-# `VERIFIED` in the 1.16.2 code (bd bullet-launch-geometry-for-skill-reach-2026-09-29):
-#   FUN_14039ac20 / FUN_14039f850  v += (-g Y + a v_hat) dt, |v| clamped to [minV, maxV],
+# `VERIFIED` in the 1.16.2 code (bd bullet-launch-geometry-for-skill-reach-2026-09-29); the
+# addresses are those functions in the 2.7.2.0 image:
+#   FUN_14039ac30 / FUN_14039f860  v += (-g Y + a v_hat) dt, |v| clamped to [minV, maxV],
 #                                  p += v dt; `gravity/accelInRange` while the distance flown is
 #                                  <= `dist`, the `OutRange` pair after; acceleration starts after
 #                                  `accelTime` s
-#   FUN_14039bba0                  HitBulletID is created when the parent hits or expires, at the
+#   FUN_14039bbb0                  HitBulletID is created when the parent hits or expires, at the
 #                                  contact point or the parent's position
-#   FUN_14039da40                  the child's `launchConditionType`: 0/3 always, 5 on a hit,
+#   FUN_14039da50                  the child's `launchConditionType`: 0/3 always, 5 on a hit,
 #                                  4 on expiry, 1/2 on water, 254/255 never
-#   FUN_140390c20                  `EmittePosType` 2 = 1.0 m above the emit point, flying level
-#   FUN_14039ab10                  an interval child starts at the parent's position when it spawns
+#   FUN_140390c30                  `EmittePosType` 2 = 1.0 m above the emit point, flying level
+#   FUN_14039ab20                  an interval child starts at the parent's position when it spawns
 # Placement of the root bullet (the launch dummy poly) is not decoded: `BULLET_ORIGIN_M` ahead at
 # `BULLET_ORIGIN_HEIGHT_M` (`INFERRED`). The ground is flat, no character is hit on the way, and
 # homing is off (no target), so the reach is how far the skill carries when it misses.
@@ -1721,13 +1722,13 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
 BULLET_ORIGIN_M = 1.0
 #: Height of that emit point above the ground (`INFERRED` placeholder).
 BULLET_ORIGIN_HEIGHT_M = 1.0
-#: `EmittePosType` 2 raises the emit point by this much (`VERIFIED` .data 0x143b15b5c, read only by
-#: FUN_140390c20).
+#: `EmittePosType` 2 raises the emit point by this much (`VERIFIED` .data 0x143b1cb5c, read only by
+#: FUN_140390c30).
 EMIT_RAISE_M = 1.0
 EMIT_RAISED_LEVEL = 2
 #: `FollowType` values that attach the bullet to the shooter or target instead of free flight.
 FOLLOW_ATTACHED = (1, 2, 3, 5)
-#: `launchConditionType` of a child: which parent endings create it (`VERIFIED` FUN_14039da40;
+#: `launchConditionType` of a child: which parent endings create it (`VERIFIED` FUN_14039da50;
 #: 6 depends on a hit-record flag and is taken as always, `INFERRED`).
 LAUNCH_ON = {0: ('hit', 'expire'), 3: ('hit', 'expire'), 6: ('hit', 'expire'), 5: ('hit',),
              4: ('expire',)}
@@ -1767,7 +1768,7 @@ def bullet_flight(r, pos, heading, speed=None):
     path = [tuple(p)]
     flown, t = 0.0, 0.0
     radius = max(r['hitRadius'], 0.0)
-    # The bullet also moves on the frame its life runs out (`VERIFIED` KillBullet 0x14039f0b0
+    # The bullet also moves on the frame its life runs out (`VERIFIED` KillBullet 0x14039f0c0
     # path): life / dt frames plus that one.
     for _ in range(max(1, round(life / dt)) + 1):
         inside = flown <= r['dist']
@@ -1929,21 +1930,21 @@ def skill_reach_factors(t, weapon_id, sword_arts_id, option, grip='one'):
 # ---------------------------------------------------------------------------------------------
 # per-hit landing of a multi-hit skill (section 15)
 #
-# `VERIFIED` in 1.16.2 (shift 0, named dump on :8765):
-#   FUN_140d24b10          AttackDamageInfo+0x58 = AtkParam.knockbackDist (+0x10); the same
+# `VERIFIED` in 1.16.2 (named dump on :8765); the addresses are those functions in 2.7.2.0:
+#   FUN_140d27980          AttackDamageInfo+0x58 = AtkParam.knockbackDist (+0x10); the same
 #                          function writes +0x40 attackParamId and +0x44 the pc/npc type.
-#   FUN_140446750          called from ApplyDamage 0x1404497d0 after the poise damage. With
-#                          lv = FUN_140690250(level) (the poise remap, frame-advantage.md) the
+#   FUN_140446d90          called from ApplyDamage 0x140449e10 after the poise damage. With
+#                          lv = FUN_140691550(level) (the poise remap, frame-advantage.md) the
 #                          defender's knockback is started only when lv != 0:
 #                              dist = (1 - clamp(resist, 0, 1)) x max(dot, 0.4) x info+0x58 x info+0x200
 #                          resist = knockback module vtable slot 2; lv == 0 sets resist to 1.
-#   FUN_140689ad0          player slot 2: chest EquipParamProtector.knockBack x 0.01. Every
+#   FUN_14068add0          player slot 2: chest EquipParamProtector.knockBack x 0.01. Every
 #                          protector row has knockBack 0 and knockbackParamId 1 (regulation).
-#   FUN_1404504e0          on the damage animation (HksAct 0x14040d31d): ContTime c and DecTime d of
-#                          KnockBackParam[row] for the animation type (FUN_140d3c900 row+4i,
-#                          FUN_140d3c920 row+0x3c+4i), speed v = dist x clamp(c / (0.5 d + c), 0, 1) / c,
-#                          total time c + d (FUN_1404506a0).
-#   FUN_1404508c0          per frame: the speed while more than d is left, then scaled by
+#   FUN_140450b20          on the damage animation (HksAct 0x14040d8dd): ContTime c and DecTime d of
+#                          KnockBackParam[row] for the animation type (FUN_140d3f7b0 row+4i,
+#                          FUN_140d3f7d0 row+0x3c+4i), speed v = dist x clamp(c / (0.5 d + c), 0, 1) / c,
+#                          total time c + d (FUN_140450ce0).
+#   FUN_140450f00          per frame: the speed while more than d is left, then scaled by
 #                          remaining / d. So the defender moves exactly `dist`, at v for c seconds
 #                          and slowing linearly to 0 over d.
 # `MEASURED` (er-hkx-pose): the small, middle, large, push and minimum damage clips carry no root
@@ -1953,7 +1954,7 @@ def skill_reach_factors(t, weapon_id, sword_arts_id, option, grip='one'):
 # multiplier (+0x48) are taken as 1.0; the animation type the behavior script passes for each
 # damage level is paired by name below; a knockback and the clip's root motion add.
 #
-# The attacker's hit stop (FUN_140448310 -> FUN_14044fce0) freezes the attacker, scaled by the
+# The attacker's hit stop (FUN_140448950 -> FUN_140450320) freezes the attacker, scaled by the
 # defender's NpcParam.hitStopType; rows 0 and 1 (`Human`) have type 0, so a player target is taken
 # to cause none (`INFERRED`: which NpcParam row a player reads was not traced).
 
@@ -1967,7 +1968,7 @@ KNOCKBACK_COLUMN = {1: 'damage_S', 2: 'damage_M', 3: 'damage_L', 4: 'damage_Blow
 #: carry knockBack 0, knockbackParamId 1; the selftest re-reads it).
 KNOCKBACK_PLAYER_ROW = 1
 KNOCKBACK_RESIST = 0.0
-#: FUN_140446750 floors the facing term at .rdata 0x14329e65c = 0.4 (`VERIFIED`); the dot itself
+#: FUN_140446d90 floors the facing term at .rdata 0x1432a3bdc = 0.4 (`VERIFIED`); the dot itself
 #: is 1 for a defender straight ahead (`INFERRED`, above).
 KNOCKBACK_FACING_FLOOR = 0.4
 KNOCKBACK_FACING_DOT = 1.0
@@ -1994,7 +1995,7 @@ _ROOT = {}
 
 def knockback_offset(dist, cont, dec, tau):
     """Metres a defender has been pushed `tau` seconds after a knockback of `dist` with the
-    KnockBackParam times `cont` and `dec` started (`VERIFIED` FUN_1404504e0 / FUN_1404508c0).
+    KnockBackParam times `cont` and `dec` started (`VERIFIED` FUN_140450b20 / FUN_140450f00).
     A negative `dist` pulls him in (Gravitas's bullets carry -1.6 to -5.0)."""
     if dist == 0 or cont <= 0 or tau <= 0:
         return 0.0
@@ -2397,7 +2398,7 @@ ENGAGE_DISTANCE_M = 2.5
 #: No chained R1 #2 is assumed for them.
 OPPONENT_FALLBACK = {'active': 3.2, 'recovery': 10.7, 'reach': 3.69, 'hp': 388.0, 'startup': 16.6}
 #: SpEffect category whose dmgLv_* override the reaction when poise breaks
-#: (`er-mechanics-frame-advantage.py`, `VERIFIED` 0x140690250 path).
+#: (`er-mechanics-frame-advantage.py`, `VERIFIED` 0x140691550 path).
 REACTION_OVERRIDE_CATEGORY = 1001
 _MOTION = {}
 _POSE = []
@@ -4226,7 +4227,7 @@ def _selftest_openings(t, check):
     bastard = t.find_weapon('Bastard Sword')
     check('Bastard Sword idle categories (wepmotionOneHandId, wepmotionBothHandId)',
           (t.reg.weapon[bastard]['wepmotionOneHandId'], t.reg.weapon[bastard]['wepmotionBothHandId']), (2, 12),
-          'REGULATION EquipParamWeapon +0xf0/+0xf1, read by EXE 0x1404d0eb0 into env(358)')
+          'REGULATION EquipParamWeapon +0xf0/+0xf1, read by EXE 0x1404d1d60 into env(358)')
     want = {('Longsword', 'one'): (40000, 18), ('Longsword', 'both'): (40000, 18),
             ('Bastard Sword', 'one'): (40200, 26), ('Bastard Sword', 'both'): (40200, 26),
             ('Halberd', 'one'): (40300, 27), ('Twinblade', 'both'): (42400, 18),
@@ -4276,9 +4277,9 @@ def selftest():
     check('Claymore built-in skill', t.arts_name(t.weapon_skill(claymore)), "Lion's Claw",
           'COMMUNITY: Claymore ships with Lion\'s Claw')
     check('mounted gem wins', t.weapon_skill(claymore, t.ash_gems()[bstep]), bstep,
-          'EXE 0x140673f70')
+          'EXE 0x140675270')
     check('wepType->flag: Greatsword is colossal', WEP_TYPE_MOUNT_FLAG[t.reg.weapon[greatsword]['wepType']],
-          'SwordGigantic', 'EXE 0x140d29e00 + COMMUNITY class')
+          'SwordGigantic', 'EXE 0x140d2cc70 + COMMUNITY class')
     # er-effects-rs-8uha: the jump family's opener is synthesized, so the stored slots alone drop
     # it; the shares that remain are renormalised, and a supplied jump opener starts at its
     # `neutral_in` strike from the jump input, not the landed clip's 2.5 m contact.
@@ -4315,7 +4316,7 @@ def selftest():
         hits = skill_hits(t, claymore, lion, ctx, 25)
         check("Lion's Claw FP hit MV", [h['mv']['physical'] for h in hits], [240], 'REGULATION row 300300820')
         check("Lion's Claw attack = AR x 2.4", abs(hits[0]['attack']['physical'] - ctx.ar_by['physical'] * 2.4) < 0.5,
-              True, 'EXE 0x1406832a0 with MV 240')
+              True, 'EXE 0x1406845a0 with MV 240')
         storm = t.find_arts('Storm Stomp')
         check('Storm Stomp classes', skill_profile(t, storm, claymore)['classes'], ['bullet'],
               'COMMUNITY: a stomp that releases a wind burst')
@@ -4323,19 +4324,19 @@ def selftest():
         check('Storm Stomp bullet = 50 x baseAtkRate x scaling (AECP 51030)',
               round(sh[0]['attack']['physical'], 1),
               round(50 * ctx.base_atk_rate * ctx.multiplier('physical', 51030), 1),
-              'EXE 0x1406832a0 flag-clear branch, k = baseAtkRate (FUN_140d53bf0); '
+              'EXE 0x1406845a0 flag-clear branch, k = baseAtkRate (FUN_140d57090); '
               'REGULATION AtkParam 30300870 overwriteAttackElementCorrectId')
         check('Storm Stomp PvP rate row', sh[0]['final_rate_id'], 10000, 'REGULATION AtkParam 30300870')
         check('FP: 20-cost skill with 10 FP plays in full', t.has_enough_fp(10, 20), True,
-              'EXE 0x14047fc60, 0.5 at 0x1432a1920 (1.17.1)')
+              'EXE 0x1404802a0, 0.5 at 0x1432a3be0')
         check('FP: 20-cost skill with 9 FP plays the no-FP version', t.has_enough_fp(9, 20), False,
-              'EXE 0x14047fc60')
+              'EXE 0x1404802a0')
         check('FP cost with Carian Filigreed-style 0.75 rate', t.fp_cost(lion, 'L2', 0.75), 15,
-              'EXE 0x14068b220 ceil(rate x base)')
+              'EXE 0x14068c520 ceil(rate x base)')
         check('one-handed, seal in left: right skill fires', t.active_skill(lion, 10, False), lion,
-              'EXE 0x14047f770, SwordArtsParam 10 isRefRightArts')
+              'EXE 0x14047fdb0, SwordArtsParam 10 isRefRightArts')
         check('one-handed, shield with Parry in left: left skill fires',
-              t.active_skill(lion, t.find_arts('Parry'), False), t.find_arts('Parry'), 'EXE 0x14047f770')
+              t.active_skill(lion, t.find_arts('Parry'), False), t.find_arts('Parry'), 'EXE 0x14047fdb0')
         endure = t.find_arts('Endure')
         pe = skill_profile(t, endure, claymore)
         check('Endure classes', pe['classes'], ['buff'], 'COMMUNITY: a poise buff')
@@ -4379,8 +4380,8 @@ def selftest():
               'COMMUNITY: a buff to the next attack')
         # Section 13, the skill term.
         check('FP bar 88 pays for 6 casts of 16 (the last on half cost)', fp_uses(88, 16), 6,
-              'EXE 0x14047fc60: 5 x 16 = 80, 8 left >= int(16 x 0.5)')
-        check('FP bar 85 pays for 5 casts of 16', fp_uses(85, 16), 5, 'EXE 0x14047fc60: 5 left < 8')
+              'EXE 0x1404802a0: 5 x 16 = 80, 8 left >= int(16 x 0.5)')
+        check('FP bar 85 pays for 5 casts of 16', fp_uses(85, 16), 5, 'EXE 0x1404802a0: 5 left < 8')
         check('a free skill has no FP limit', fp_uses(85, 0), None, 'SwordArtsParam -1/0 cost')
         check("Lion's Claw on Claymore: roll / R1 free after the hit",
               {k: v for k, v in skill_commit(t, claymore, lion, skill_profile(t, lion, claymore, 25), hits).items()
@@ -4391,7 +4392,7 @@ def selftest():
               [(t.reg.weapon[star]['swordArtsParamId'], 1.0)], 'EquipParamWeapon gemMountType')
         ch = dict(skill_choice(t, pair, dagger, 0, 25))
         check("Lion's Claw cannot go on a Dagger, so its corpus mass goes to the dagger's own skill",
-              (lion in ch, round(sum(ch.values()), 6)), (False, 1.0), 'EXE 0x140d549d0 via can_mount')
+              (lion in ch, round(sum(ch.values()), 6)), (False, 1.0), 'EXE 0x140d57e70 via can_mount')
         pair['weapon'][claymore] = collections.Counter({storm: 20})
         ch = dict(skill_choice(t, pair, claymore, 1, 25))
         check('20 own-weapon pairings outweigh the corpus prior', round(ch[storm], 3),
@@ -4484,22 +4485,22 @@ def selftest():
         cm, dm = mountable_skills(t, claymore, 1, 25), mountable_skills(t, dagger, 0, 25)
         check("Claymore Heavy mounts Lion's Claw and Stormcaller; a Dagger mounts neither",
               (lion in cm, t.find_arts('Stormcaller') in cm, lion in dm, t.find_arts('Stormcaller') in dm),
-              (True, True, False, False), 'EXE 0x140d549d0 via can_mount')
+              (True, True, False, False), 'EXE 0x140d57e70 via can_mount')
         glint = t.gem[t.ash_gems()[t.find_arts('Glintblade Phalanx')]]
         wrong = next(i for i in range(13) if not glint[f'configurableWepAttr{i:02d}'] and i != glint['defaultWepAttr'])
         check('an affinity the ash does not allow keeps it off (Glintblade Phalanx)',
               t.find_arts('Glintblade Phalanx') in mountable_skills(t, claymore, wrong, 25), False,
-              'EquipParamGem configurableWepAttr, EXE 0x140d549d0')
+              'EquipParamGem configurableWepAttr, EXE 0x140d57e70')
         level = {**{k: 0 for k in BULLET_FIELDS}, 'life': 0.5, 'initVellocity': 10.0, 'maxVellocity': 10.0,
                  'minVellocity': 10.0, 'hitRadius': 0.1, 'dist': 0.0}
         path, ending, _, _ = bullet_flight(level, (0.0, 1.0, 0.0), (0.0, 0.0))
         check('bullet flight: 10 m/s level, no gravity, 0.5 s -> 31 frames (the expiry frame moves too), expires',
               (round(path[-1][2], 6), ending), (round(31 * 10 / 60, 6), 'expire'),
-              'FUN_14039ac20 per-frame rule, 60 fps')
+              'FUN_14039ac30 per-frame rule, 60 fps')
         path, ending, _, _ = bullet_flight({**level, 'gravityOutRange': 20.0}, (0.0, 1.0, 0.0), (0.0, 0.0))
         check('with gravity 20 it lands before its life ends (hit at height <= radius)',
               (ending, path[-1][1] <= 0.1, 2.5 < path[-1][2] < 3.5), ('hit', True, True),
-              'FUN_14039f850; flat ground (INFERRED)')
+              'FUN_14039f860; flat ground (INFERRED)')
         lsl = skill_profile(t, t.find_arts('Lightning Slash'), claymore)
         lb = next(x['bullet'] for x in lsl['anims'][main_anim(lsl)] if x['kind'] == 'bullet')
         check("Lightning Slash's 200 m/s bolt drops, it does not fly 30 m: reach under 4 m",
@@ -4533,10 +4534,10 @@ def selftest():
         check('knockback: v for ContTime, then linear to 0 over DecTime, totals the AtkParam distance',
               (round(knockback_offset(0.6, 0.09, 1.2, 5.0), 9), round(knockback_offset(0.6, 0.09, 1.2, 0.09), 4),
                knockback_offset(0.6, 0.0, 1.2, 1.0)),
-              (0.6, round(0.6 * 0.09 / (0.6 + 0.09), 4), 0.0), 'FUN_1404504e0 / FUN_1404508c0')
+              (0.6, round(0.6 * 0.09 / (0.6 + 0.09), 4), 0.0), 'FUN_140450b20 / FUN_140450f00')
         check('every protector row: knockBack 0 (no resist), knockbackParamId 1',
               set(t.protector_knockback.values()), {(KNOCKBACK_RESIST, KNOCKBACK_PLAYER_ROW)},
-              'EquipParamProtector; FUN_140689ad0 / FUN_140451390')
+              'EquipParamProtector; FUN_14068add0 / FUN_1404519d0')
         kb = t.knockback[KNOCKBACK_PLAYER_ROW]
         check('KnockBackParam 1 large: ContTime 0.09 s, DecTime 1.2 s',
               (round(kb['damage_L_ContTime'], 3), round(kb['damage_L_DecTime'], 3)), (0.09, 1.2), 'regulation')
@@ -4569,7 +4570,7 @@ def selftest():
         lsl_tree = fly_tree(t, lb)
         check("Lightning Slash: the falling bolt stops on the ground, so its blast starts there",
               round(lsl_tree[2][1][0][1], 3), round(t.bullet[lsl_tree[1][0]['bullet']]['hitRadius'], 3),
-              'Bullet 2091 -> 2092 (HitBulletID at the contact point, FUN_14039bba0)')
+              'Bullet 2091 -> 2092 (HitBulletID at the contact point, FUN_14039bbb0)')
         # Section 16: reaction, follow-ups, buffs as options.
         delays = reaction_delays()
         check('reaction delay: median (0.25 + 2 x 0.05) s = 10.5 real frames',

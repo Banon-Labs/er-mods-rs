@@ -2,8 +2,8 @@
 // It is loaded once per process by `scripts/er-frida-watch.py --role ... --pid ...`.
 // The watcher prepends `__ER_FRIDA_EXPECTED` and aborts if the Windows pid is wrong.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 
 const SCHEMA = 'npc_netsync_proof.v1';
 const ROLE = (globalThis.__ER_FRIDA_EXPECTED && globalThis.__ER_FRIDA_EXPECTED.role) || 'unknown';

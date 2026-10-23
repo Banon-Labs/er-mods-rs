@@ -3,9 +3,9 @@
 //! # What this is
 //!
 //! The game deserializes this table once per boot -- `CS::ProfileSummary::Deserialize`
-//! (`0x140261f00` -> `0x140261f10`: ten occupancy bytes into `summary+0x8`, then ten records of
-//! `0x2a0` from `summary+0x18` via `0x140261cf0`), reached from the boot common-data load
-//! (`0x1402570c0`). Everything the player then sees about which characters exist reads that
+//! (`0x140261f10` -> `0x140261f20`: ten occupancy bytes into `summary+0x8`, then ten records of
+//! `0x2a0` from `summary+0x18` via `0x140261d00`), reached from the boot common-data load
+//! (`0x140257090`). Everything the player then sees about which characters exist reads that
 //! table: the title's native Continue row, the System>Quit "Load Character" /
 //! "Load Character from File" rows, the `05_010_ProfileSelect` list, and the loading-screen
 //! portrait.

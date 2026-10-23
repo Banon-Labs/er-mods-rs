@@ -356,12 +356,15 @@ def selftest() -> int:
         failed += 0 if ok else 1
 
     print("\n  the WorldChrMan witness, address and read path:")
-    hop, hop_detail = er_run_lib.recorded_1162_to_1170_hop()
-    if hop is None:
-        print(f"  ....  the 1.16.2 to 1.17.0 hop went unchecked -- {hop_detail}")
+    found, found_detail = er_run_lib.world_chr_man_in_image()
+    if found is None:
+        print(f"  ....  the 2.7.2.0 WorldChrMan rva went unchecked -- {found_detail}")
     else:
-        print(f"  {'ok  ' if hop else 'FAIL'}  the map still carries the first hop -- {hop_detail}")
-        failed += 0 if hop else 1
+        print(
+            f"  {'ok  ' if found else 'FAIL'}  the 2.7.2.0 image still loads the WorldChrMan rva "
+            f"-- {found_detail}"
+        )
+        failed += 0 if found else 1
     for name, ok in er_run_lib.world_read_selftest():
         print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
         failed += 0 if ok else 1

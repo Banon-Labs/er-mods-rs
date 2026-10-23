@@ -70,12 +70,12 @@ pub static SAVE_FLOW_DISPATCH_CALLS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::dispatch_declines()` sampled at the fire.
 pub static SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::serialize_failures()` sampled at the fire. A post-fire increase means
-/// the character serializer `FUN_14067dc00` is what refused, which is upstream of both the
-/// submit builder and the suppressor.
+/// the character serializer `0x14067ef00` (1.16.2 `FUN_14067dc00`) is what refused, which is
+/// upstream of both the submit builder and the suppressor.
 pub static SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
 /// `er_save_suppress::serialize_calls()` sampled at the fire. This is the allocation oracle:
 /// both character lanes allocate their MainHeap buffers (`0x280000`, plus `0x60000` on the
-/// combined lane) and null-check them before calling `FUN_14067dc00`, so a post-fire
+/// combined lane) and null-check them before calling the serializer (`0x14067ef00`), so a post-fire
 /// increase proves the allocations succeeded and the lane got as far as the serializer. No
 /// increase, with declines climbing, means the lane bailed earlier -- an allocation
 /// returned null, or one of the pre-allocation gates (`CanShowSaveMenu()`, `saveState != 0`,
@@ -184,7 +184,8 @@ pub static SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT: AtomicUsize = AtomicUsize::n
 /// Dialog the confirm box is built against and submitted to (its MenuJob queue at +0x10 and
 /// MenuWindow list at +0x50). 0 = the System/Quit dialog captured at the row press. The in-game
 /// destination browser sets the live `05_010` ProfileLoadDialog instead, exactly like the game's
-/// own load-confirm (`FUN_1409a4670` submits its confirm to `profile_load_dialog+0x10`), so the
+/// own load-confirm (`0x1409a5cc0`, 1.16.2 `FUN_1409a4670`, submits its confirm to
+/// `profile_load_dialog+0x10`), so the
 /// confirm never contends with the System dialog queue that still owns the open picker window job.
 pub static SAVE_FLOW_BOX_HOST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 
@@ -213,9 +214,10 @@ pub static SAVE_DEST_COMMIT_PENDING: AtomicUsize = AtomicUsize::new(0);
 /// a `CreateFileW` write-open of the live save leaf is diverted to the chosen destination.
 pub static SAVE_DEST_REDIRECT_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Write-opens diverted to the destination during the armed window. One per dirty block, not one
-/// per commit: the native save takes the in-place path (`FUN_1424142e0`) whenever every supplied
-/// block still fits its existing entry, and that opens the container once per block. Only the full
-/// rebuild (`FUN_142413860`) is a single whole-buffer write. Measured 2026-07-28: 2 hits for one
+/// per commit: the native save takes the in-place path (`0x142418290`, 1.16.2 `FUN_1424142e0`)
+/// whenever every supplied block still fits its existing entry, and that opens the container once
+/// per block. Only the full rebuild (`0x142417810`, 1.16.2 `FUN_142413860`) is a single
+/// whole-buffer write. Measured 2026-07-28: 2 hits for one
 /// Save Game commit. Zero hits is the failure -- any positive count is normal.
 pub static SAVE_DEST_REDIRECT_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Destinations pre-seeded with a byte copy of the live container before the fire. The in-place
@@ -235,9 +237,9 @@ pub static SAVE_DEST_TARGET_STRUCTURE_OK: AtomicUsize = AtomicUsize::new(0);
 /// anonymous mutation or a suppression leak.
 pub static SAVE_DEST_LIVE_OVERWRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 if the loaded save's `.bak` twin moved during this destination commit. Not a failure: the
-/// native backup step (`FUN_142410830`) is not redirected and can only copy the untouched live
-/// container over its own backup. Named so the movement is never unattributed. Per-commit: cleared
-/// by [`save_dest_reset_commit_verdicts`] at every arm.
+/// native backup step (`0x1424147e0`, 1.16.2 `FUN_142410830`) is not redirected and can only copy
+/// the untouched live container over its own backup. Named so the movement is never
+/// unattributed. Per-commit: cleared by [`save_dest_reset_commit_verdicts`] at every arm.
 pub static SAVE_DEST_LIVE_BAK_MUTATED: AtomicUsize = AtomicUsize::new(0);
 /// Destination browsers opened (one per Save Game row press, plus a re-open after a declined
 /// overwrite on the OS surface).

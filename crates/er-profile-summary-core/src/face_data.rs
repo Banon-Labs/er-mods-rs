@@ -22,16 +22,17 @@ pub const FACE_DATA_BUFFER_PAYLOAD_SIZE: usize =
     core::mem::size_of::<FaceDataBuffer>() - FACE_DATA_BUFFER_PAYLOAD_OFFSET;
 pub const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
     FACE_DATA_BUFFER_PAYLOAD_OFFSET + FACE_DATA_BUFFER_PAYLOAD_SIZE;
-/// Native `FaceData::CopyFromBuffer` (mirrored from the native row builder `FUN_14025f9b0`): copies an
+/// Native `FaceData::CopyFromBuffer` (mirrored from the native row builder `FUN_14025f910`): copies an
 /// inner `FaceDataBuffer` (`FACE` magic) into a live `FaceData` wrapper (e.g. a ProfileSummary record's
 /// +0x38 block). The saved wrapper header does not match the live one (2026-06-27 native row dumps), so
 /// records must be filled through this helper, never by memcpy'ing the saved wrapper.
-pub const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
+pub const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f40;
 /// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
 /// the source the profile renderer reads to dress the portrait model.
 ///
-/// Not a MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
-/// `GaitemHandle::copy` (0x140682580) 22 times over `+0x24`, i.e. a REFCOUNTING assign that
+/// Not a MEMCPY (byte-verified 2026-07-31 on 1.16.2; the 2.7.2.0 function at 0x140245c00 calls the
+/// same copy): it runs `GaitemHandle::copy` (0x140683880) 22 times over `+0x24`, i.e. a REFCOUNTING
+/// assign that
 /// increments the incoming handle and releases the previous occupant, and only then does a plain
 /// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a foreign save's handles
 /// therefore touches live refcount state on a `gaitemInsTable` this process owns -- which is why

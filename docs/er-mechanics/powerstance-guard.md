@@ -2,9 +2,9 @@
 
 Labels as in `attacks.md`. **VERIFIED** = a regulation value (installed 1.17.1 `regulation.bin`)
 or code read out of the executable. EXE addresses are 1.16.2 VAs from the named Ghidra dump on
-:8765, identical to `eldenring-deobf.bin` (shift 0). Carry an address through
-`scripts/map-rvas-1162-to-1170.py` and `scripts/map-rvas-1170-to-1171.py` before using it
-against the running 1.17.1 game. **TAE** = decoded from `c0000.anibnd -> tae/a<cat>.tae` or the
+:8765, identical to `eldenring-deobf.bin` (shift 0). The running game is 2.7.2.0, so find an
+address on `eldenring-deobf-1.17.2.bin` by its bytes before using it there
+(`docs/game-build.md`). **TAE** = decoded from `c0000.anibnd -> tae/a<cat>.tae` or the
 `c0000.behbnd` behavior graph (`scripts/er-behbnd-attack-map.py`). **MEASURED** = counted over
 the planner corpus `~/.cache/er-build-planner/builds.jsonl`. **INFERRED** = consistent with the
 data, consumer not traced. **COMMUNITY** = outside source: Smithbox's decompiled `c0000.hks`
@@ -410,7 +410,7 @@ them in the background.
 | `staminaAttackRate` of 320700 (1.4), 1691/1693 (3.0), 1701/1703 (4.0), 1821 (1.5), 1826 (1.2) | regulation |
 | Greatsword R1 into Brass 45 / 4 hits, 63 / 3 with Hammer; Giant-Crusher 2H R1 78 -> 109; a repelled Dagger R1 still costs 17 | the section 3 table |
 | 88 weapon rows at guardCutCancelRate -50, 168 nonzero attack rows; Shotel R1 into Brass passes 50% (gcc 0.5); repel chip 0.5 | regulation |
-| guard reaction table at 0x143b340b0 (1.16.2) and 0x143b380c0 (1.17.1); `DAMAGE_LEVEL_REMAP` equals frame-advantage's | EXE images (`ER_DEOBF_1162`, `ER_DEOBF_1171`), `er-mechanics-frame-advantage.py` |
+| guard reaction table at 0x143b3b0d0 (2.7.2.0, the target of the `LEA RAX` at 0x14068821a; 1.16.2 had it at 0x143b340b0); `DAMAGE_LEVEL_REMAP` equals frame-advantage's | EXE image (`ER_DEOBF_BIN`, default `eldenring-deobf-1.17.2.bin`), `er-mechanics-frame-advantage.py` |
 | no regen inside a short cycle, less drain over a long one; a punishable repel raises own guard; x4 drains more than x1 | definition / sanity only |
 | synthetic carry rates: the pooled share skips two-handers, 2 of 2 shrinks to 7/12 and 0 of 2 to 5/12 with a 0.5 pool, an unseen class gets the pool, carried own guard = best shield's x p | definition |
 | RL 140-160 pooled shield-carry rate inside 12.9-17.8% | MEASURED corpus (calibration, 121 of 797) |

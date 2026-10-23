@@ -3,7 +3,7 @@
 
 Why `.pdata` alone MISLEADS here
 --------------------------------
-`scripts/classify-1170-entry-kind.py` answers "does this image's `.pdata` declare a function to
+`scripts/classify-entry-kind.py` answers "does this image's `.pdata` declare a function to
 begin at this address", and that is the right question for most addresses. But MSVC splits one
 function's unwind data across several `RUNTIME_FUNCTION` records whenever the compiler moves a
 chunk of it (cold-path outlining, `/OPT:ICF` runs, region-based unwind). Every chunk after the

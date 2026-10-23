@@ -19,8 +19,8 @@
 //!
 //! # The entry that makes this work
 //!
-//! `ConvertLegacyDungeonPositionToOverworldPositionForMap` (`0x1408775e0`) is, for a
-//! non-overworld block, a lookup followed by a pure ADD:
+//! `ConvertLegacyDungeonPositionToOverworldPositionForMap` (2.7.2.0 `0x140878a80`, 1.16.2
+//! `0x1408775e0`) is, for a non-overworld block, a lookup followed by a pure ADD:
 //!
 //! ```text
 //! *blockIdOut = node->overrideBlockId;

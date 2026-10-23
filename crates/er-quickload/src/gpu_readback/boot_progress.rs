@@ -1734,7 +1734,7 @@ fn boot_view_starting_up_submilestone() -> (&'static str, usize, usize) {
 /// dword), at the offset owned by `er_game_base::rva`.
 /// The global staying null very early, or an out-of-range value, falls back to the coarse label so a
 /// state number is never fabricated. RVA/state names from the Ghidra 1.16.2 dump (CSSystemStep
-/// ctor @0x140dec7c0, singleton @base+0x3d85680) and the game's own 21-entry StepperFn table
+/// ctor @0x140dec7c0, singleton @base+0x3d85680 -- 2.7.2.0 base+0x3d8c720) and the game's own 21-entry StepperFn table
 /// (initializer 0x1400b16f0); the offset is measured, see
 /// `er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` -- it was 0x40 here until 2026-08-31,
 /// which read a pointer field and pinned this sub-progression to its fallback label.

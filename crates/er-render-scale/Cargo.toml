@@ -6,7 +6,7 @@ publish = false
 
 # A lower 3D render resolution with the UI left at native resolution, as one me3 native, set from a
 # small in-game menu (F5 by default). It holds Elden Ring's own dynamic resolution at a fixed scale:
-# the per-frame update (1.17.1 `0x141b2e9b0`) is detoured to pin the controller's minimum and
+# the per-frame update (2.7.2.0 `0x141b300a0`) is detoured to pin the controller's minimum and
 # maximum to `1/divisor`, which the view setup turns into a smaller scene viewport, and the final
 # composite already upsamples the scene under a native-resolution UI. Mechanism: bd
 # `er-dynamic-resolution-chain-static-2026-10-15` and `er-dynamic-resolution-runtime-proof-2026-10-15`,

@@ -11,10 +11,11 @@ Everything below was byte-proven against `eldenring-deobf.bin` (1.16.2),
 except where a line says it was measured at runtime. The one runtime claim that matters is
 marked as such and is the reason the feature's first rule was wrong.
 
-Related records that outlive this note: the 1.16.2 -> 1.17 pair for the detour target is row
-`0x140713db0 -> 0x140714c00` in `docs/recon/rva-map-1162-to-1170.verified.tsv`, and
-`scripts/er-character-type-tables.py` still prints both classification tables and re-derives both
-constant sets from the image (`--selftest`).
+Related records: the 1.16.2 -> 1.17 pair for the detour target was row
+`0x140713db0 -> 0x140714c00` in `docs/recon/rva-map-1162-to-1170.verified.tsv`, deleted with the
+address carry on 2026-10-23 (`git show 41d6a363:docs/recon/rva-map-1162-to-1170.verified.tsv`),
+and `scripts/er-character-type-tables.py` still prints both classification tables and re-derives
+both constant sets from the image (`--selftest`).
 
 ## 1. Where the lock-on system decides who is a candidate
 
@@ -86,7 +87,7 @@ The first 13 bytes at that entry are **identical in 1.16.2 and 1.17**:
 up to and including the load of the point's `FieldInsHandle`. The crate generated these from
 named `iced-x86` instructions via `build-support/prologue_build.rs` rather than hand-typing them,
 because two of the encodings have a plausible alternative spelling that differs by one byte and
-would have disarmed the byte check on every launch. `rva-map-1162-to-1170.verified.tsv` records
+would have disarmed the byte check on every launch. `rva-map-1162-to-1170.verified.tsv` recorded
 the pair as `IDENTICAL-WHOLE` over 27 compared instructions, which is why one pin covered both
 builds.
 
@@ -294,8 +295,10 @@ the question is closed.
 * **Hand the hook an unresolved address.** `er_hook::register_union_hook` resolves the target for
   the running build itself. Passing it an already-resolved address resolves twice -- silently --
   and lands the detour on a third function whenever a region's shift equals the local spacing
-  between two entries. `scripts/check-double-resolved-hook-targets.py` is the gate for this. The
-  byte-check of the prologue, by contrast, *must* read the resolved address.
+  between two entries. `check-double-resolved-hook-targets.py` gated this until the address carry
+  was deleted on 2026-10-23; on 2.7.2.0 a second resolve is the identity, so the rule now only
+  keeps one resolve per hook. The byte-check of the prologue, by contrast, *must* read the
+  resolved address.
 * **Fail closed in three distinguishable ways**, so a log line says which: `REFUSED` (no
   detour-safe mapping for the running build; nothing read, nothing installed), `DISARMED` (the
   address resolved but the bytes are not the verified prologue -- most likely another mod detoured

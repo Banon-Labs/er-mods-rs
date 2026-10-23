@@ -4,10 +4,10 @@
 //!
 //! Seamless decides the destination server-side and pushes it to the client in a
 //! `ServerPushJoinData`; the block id is at `+0x00` of that struct, and it is written to
-//! `GameMan+0xAC8` by `CS::SosSignMan::SetMultiplayJoinData` (`0x1406FB520`). Measured live
-//! 2026-08-05: `+0x00` was the only offset in all 128 bytes whose u32 equalled the destination, so
-//! the field is identified by correlation, not by the reversed field name (`matchPlayerCount`,
-//! which would have pointed elsewhere).
+//! `GameMan+0xAC8` by `CS::SosSignMan::SetMultiplayJoinData` (2.7.2.0 `0x1406fc820`, 1.16.2
+//! `0x1406fb520`). Measured live 2026-08-05: `+0x00` was the only offset in all 128 bytes whose
+//! u32 equalled the destination, so the field is identified by correlation, not by the reversed
+//! field name (`matchPlayerCount`, which would have pointed elsewhere).
 //!
 //! That is the whole basis for a location filter: at the moment `SetMultiplayJoinData` runs, the
 //! destination is decided and the player has not moved. A predicate there can accept or reject
@@ -189,10 +189,10 @@ pub struct LocalInvasionConfig {
     /// moved into the game's own Map Functions menu, so excluding it now means excluding the DLL.
     ///
     /// Worth knowing while that A/B is open: both are installed through
-    /// `er_hook::register_union_hook`, the entry point for a 1.16.2 game constant, even though
-    /// their addresses are derived from the running `ersc.dll`. That path audits the destination
-    /// by translating it through a table keyed by eldenring.exe RVAs, which has nothing to say
-    /// about a module based at 0x180000000 -- so unlike every runtime-derived hook in this crate,
+    /// `er_hook::register_union_hook`, the entry point for a game constant, even though their
+    /// addresses are derived from the running `ersc.dll`. That path audits the destination against
+    /// an allowlist keyed by eldenring.exe RVAs, which has nothing to say about a module based at
+    /// 0x180000000 -- so unlike every runtime-derived hook in this crate,
     /// these two never face `detour_site::write_site_is_sound`. The only thing standing behind
     /// them is `prologue_matches` against the pinned build's recorded bytes.
     ///

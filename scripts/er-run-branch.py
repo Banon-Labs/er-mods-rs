@@ -869,12 +869,25 @@ def resolve_configured_save() -> dict:
     code, out, err = run_script(
         "er-pick-save.py", "--json", "--slot", str(slot), "--root", str(search_dir)
     )
+    # A non-zero exit carries er-pick-save's own one-line cause (an unreadable container, a short
+    # read, a slot that would not decode), and that cause is what this refusal must say. An empty
+    # `targets` below means the bitmap bit is clear and nothing else.
     if code != 0:
         raise RuntimeError(f"could not decode saves under {search_dir}: {err.strip() or out.strip()}")
-    targets = json.loads(out)["targets"]
+    decoded = json.loads(out)["targets"]
+    targets = decoded
     if save_file is not None:
         source = save_file.resolve()
         targets = [t for t in targets if Path(t["save_file"]) == source]
+        # er-pick-save decodes the newest eligible container under the directory, which need not
+        # be the configured one. Reporting that as an empty slot would be the same misattribution
+        # as reporting a failed read as one.
+        if decoded and not targets:
+            raise RuntimeError(
+                f"the container decoded under {search_dir} is {decoded[0]['save_file']}, not the "
+                f"configured {save_file}, so the configured slot {slot} was never read. This "
+                "launch is refused."
+            )
     targets = [t for t in targets if t["slot"] == slot]
     if not targets:
         where = f"{save_file} slot {slot}" if save_file else f"{search_dir} slot {slot}"
@@ -1706,6 +1719,52 @@ def selftest() -> int:
     check(
         "artifacts above are kept" in redirect_block,
         "the block states that cleanup does NOT remove the artifacts, so they can be relied on",
+    )
+
+    # The save gate's refusals must name what actually happened. On 2026-10-23 a read of a save on
+    # an autofs CIFS share failed and the launch was refused as "no occupied character" for a slot
+    # that decoded as "Vagabond" a minute later. er-pick-save now exits non-zero with the cause;
+    # these pin that the cause reaches the refusal, and that "no occupied character" is left for the
+    # one case it describes.
+    gate_save = Path("/selftest/corpus/ER0000.sl2")
+    pick_cause = (
+        f"er-pick-save: cannot decode slot 0: read 4096 bytes of {gate_save}, expected 28967888"
+    )
+
+    def gate_refusal(code: int, out: str, err: str) -> str | None:
+        saved = {
+            name: globals()[name] for name in ("run_script", "configured_save_selection", "game_dir")
+        }
+        globals()["run_script"] = lambda *_args: (code, out, err)
+        globals()["configured_save_selection"] = lambda: (gate_save, 0)
+        globals()["game_dir"] = lambda: Path("/selftest/game")
+        try:
+            resolve_configured_save()
+            return None
+        except RuntimeError as refusal:
+            return str(refusal)
+        finally:
+            globals().update(saved)
+
+    refusal = gate_refusal(1, "", pick_cause + "\n")
+    check(
+        refusal is not None
+        and pick_cause in refusal
+        and "no occupied character" not in refusal,
+        f"a failed save read is refused with er-pick-save's cause, not as an empty slot ({refusal})",
+    )
+    refusal = gate_refusal(0, json.dumps({"count": 0, "targets": []}), "")
+    check(
+        refusal is not None and "no occupied character" in refusal,
+        "a slot er-pick-save found unoccupied is still refused as no occupied character",
+    )
+    other = {"save_file": "/selftest/corpus/sub/ER0000.co2", "slot": 0, "name": "Other", "level": 1}
+    refusal = gate_refusal(0, json.dumps({"count": 1, "targets": [other]}), "")
+    check(
+        refusal is not None
+        and other["save_file"] in refusal
+        and "no occupied character" not in refusal,
+        f"a decode of a different container than the configured one says so ({refusal})",
     )
 
     check(LAUNCHER.is_file(), f"the user launcher this delegates to exists ({LAUNCHER})")

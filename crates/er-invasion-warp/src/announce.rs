@@ -22,7 +22,8 @@
 //! # How the message gets in without the queue
 //!
 //! `FeSystemAnnounceView::Update` drains the view-model's queue only when its own embedded message
-//! is inactive, disassembled at `0x1408c481a`:
+//! is inactive, disassembled on 1.16.2 at `0x1408c481a` (this file's notes quote the 1.16.2 dump,
+//! where it was reversed, except where an address is labelled 2.7.2.0):
 //!
 //! ```text
 //!   cmpb $0x0, 0xb10(%rbx)     ; if (!view->msg.is_active)
@@ -49,7 +50,7 @@
 //!
 //! # Where the text comes from, and why not the embedded `DLString`
 //!
-//! The display step's `Load` case picks the string like this (`0x1408c48c0`):
+//! The display step's `Load` case picks the string like this (1.16.2 `0x1408c48c0`):
 //!
 //! ```text
 //!   text = msg->field8_0x8;                       // +0x08, a raw wchar_t*
@@ -87,45 +88,19 @@
 #[cfg(windows)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// `CS::FeSystemAnnounceView::Update`. Hooked to learn the live view, which is otherwise reachable
-/// only by walking `CSMenuMan`'s window list.
+/// `CS::FeSystemAnnounceView::Update`, 2.7.2.0 `0x1408c5e10` (1.16.2 `0x1408c47c0`). Hooked to
+/// learn the live view, which is otherwise reachable only by walking `CSMenuMan`'s window list.
 ///
-/// # 1.17: `0x8c5960`, and the prologue does not need regenerating
-///
-/// It is easy to assume this needs a fresh `UPDATE_PROLOGUE` generated from the 1.17 image, since
-/// the existing one is assembled and pin-checked against `eldenring-deobf.bin` (1.16.2). It does
-/// not. The function's opening is byte-identical in both builds --
+/// The opening is byte-identical across every build since 1.16.2 --
 /// `40 53 48 83 ec 30 0f 29 74 24 20` (`push rbx; sub rsp,0x30; movaps [rsp+0x20],xmm6`) -- and
-/// the pin the generator asserts is the first eight of those. What is missing is the address, and
-/// only the address.
-///
-/// The 1.17 counterpart is `0x8c5960` (`+0x11a0`), derived four ways and each one independent:
-///
-/// * the masked signature `40 53 48 83 ec 30 0f 29 74 24 20 48 8b d9 0f 28 f1 e8 ?? ?? ?? ?? 48
-///   8b 05 ?? ?? ?? ?? 48 85 c0` occurs EXACTLY ONCE in each image -- at `0x8c47c0` in 1.16.2 and
-///   at `0x8c5960` in 1.17;
-/// * the `.pdata` run around it has the same five consecutive record sizes in both images
-///   (`0x6a, 0x34, 0x6, 0x5b, 0x3e`), and the whole-image map already pairs the four neighbours:
-///   `0x8c4710 -> 0x8c58b0`, `0x8c4780 -> 0x8c5920`, `0x8c47c6 -> 0x8c5966`,
-///   `0x8c4821 -> 0x8c59c1`. This one record sits between two mapped ones and ends exactly where
-///   the next begins, in both images, so its own pair is fixed arithmetically;
-/// * the call at `+0x11` targets `0x7459d0` in 1.16.2 and `0x746820` in 1.17, which the map
-///   already carries as a pair;
-/// * the `CSMenuMan` global it reads moves `0x3d6b7b0 -> 0x3d6f820`, the documented `+0x4070`
-///   `.data` shift.
-///
-/// The mapper missed it because the record is six bytes -- an MSVC chained-unwind prologue record,
-/// which has no body to build a masked signature from. That is a property of this function's
-/// unwind encoding, not a gap in the evidence.
-///
-/// So the one thing still needed is a row `0x8c47c0 -> 0x8c5960` in the 1.16.2 -> 1.17 map, which
-/// `docs/recon/` owns. Until it lands, `verified_fn` refuses AUDIBLY (it used to refuse in
-/// silence) and the announcement banner is simply absent on 1.17.
-pub const UPDATE_RVA: usize = 0x8c_47c0;
+/// on 2.7.2.0 the body still reads `CSMenuMan+0x798` and `view+0xb10` at the same offsets, so the
+/// struct offsets below did not move. The other addresses quoted in this file's comments are
+/// 1.16.2 dump addresses, where it was reversed.
+pub const UPDATE_RVA: usize = 0x8c_5e10;
 
 // `UPDATE_PROLOGUE`: the opening bytes, so a game update that moves this fails closed instead of
 // jumping mid-instruction. Assembled from named `iced-x86` instructions by this crate's
-// `build.rs`, which also checks them against `eldenring-deobf.bin` when a copy is present.
+// `build.rs`, which also checks them against `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(env!("OUT_DIR"), "/generated_announce_prologues.rs"));
 
 /// Offsets into `FeSystemAnnounceView`, from the 1.16.2 dump's own struct definition.
@@ -148,9 +123,9 @@ pub const PLAY_STATE_OFFSET: usize = 0x0b50;
 ///
 /// # What this actually is, corrected after reading it live
 ///
-/// The `Load` case stores `FUN_14074a140`'s result here and the `Scrolling` case advances a scroll
-/// offset toward it, which is what makes it a real measurement rather than a status code. It was
-/// first taken for the text's width. It is not: `FUN_140d82660` returns
+/// The `Load` case stores 1.16.2 `FUN_14074a140`'s result here and the `Scrolling` case advances a
+/// scroll offset toward it, which is what makes it a real measurement rather than a status code. It
+/// was first taken for the text's width. It is not: 1.16.2 `FUN_140d82660` returns
 /// `textWidth - (fieldRight - fieldLeft)`, i.e. the overflow, and a live read proved it —
 /// "Rejected Castle Front (elsewhere)" measured **-1418** on a 1728 px field, so the text itself is
 /// 310 px wide and the value is negative whenever the line comfortably fits.
@@ -299,23 +274,20 @@ pub fn tally() -> (usize, usize) {
 ///
 /// # The order matters, and it used to be wrong
 ///
-/// This computed `base + rva` and byte-checked there. On 1.17 that address is not the function --
-/// `0x1408c47c0` holds `and $0x38,%al`, the tail of an unrelated instruction -- so the check
-/// failed and `install` returned `false` having logged nothing at all. The refusal was correct
-/// and completely invisible: the byte check is what kept it from being a corruption, but nothing
-/// downstream ever ran, so `er-hook`'s own `HOOK REFUSED` line never got the chance to appear.
-/// Worse, checking before resolving meant that even a correct map row could not rescue it -- the
-/// stale bytes decide first.
+/// This computed `base + rva` and byte-checked there without asking the resolver. On 1.17 the
+/// 1.16.2 address `0x1408c47c0` held `and $0x38,%al`, the tail of an unrelated instruction -- so
+/// the check failed and `install` returned `false` having logged nothing at all. The refusal was
+/// correct and completely invisible: nothing downstream ever ran, so `er-hook`'s own
+/// `HOOK REFUSED` line never got the chance to appear.
 ///
 /// Resolving first and checking at the resolved address makes the two claims independent: the
-/// resolver says where the function is on this build, and the prologue says the code there really
-/// is that function. The byte check is not redundant with the resolver -- it is the belt to its
-/// braces, and the pattern `apply_splash_skip` established (a signature check turns a stale
-/// address into a refusal rather than a corruption).
+/// resolver says the build is 2.7.2.0 and the rva is on the detour allowlist, and the prologue
+/// says the code there really is that function. The byte check is not redundant with the resolver
+/// -- it is the belt to its braces, and the pattern `apply_splash_skip` established (a signature
+/// check turns a stale address into a refusal rather than a corruption).
 ///
 /// `resolve_detour_address`, not the call resolver: the address is about to carry a MinHook
-/// detour. `er_hook::register_union_hook` resolves again internally, which is harmless -- the
-/// resolver's `already_translated` shortcut hands a 1.17 destination straight back.
+/// detour. `er_hook::MhHook::new` checks it again, which answers the same.
 /// How many times a refusal here may be logged. `install` runs every tick and clears its own
 /// latch on failure, so an unbounded line would be one per frame forever -- the 339,764-refusal
 /// failure `scripts/check-no-rva-zero.py` exists to stop. Twice is enough to be found.
@@ -331,7 +303,7 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
     let Some(address) = er_game_base::game_build::resolve_detour_address(base + rva, what) else {
         if say() {
             crate::standalone_log(format_args!(
-                "announce: {what} (1.16.2 rva {rva:#x}) has no detour-safe address for {} -- the \
+                "announce: {what} (2.7.2.0 rva {rva:#x}) has no detour-safe address for {} -- the \
                  view-capture hook is NOT installed on this build",
                 er_game_base::game_build::describe_build()
             ));
@@ -349,13 +321,8 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
             return None;
         }
     }
-    // The unresolved address, deliberately. The prologue was checked at `address`, but
-    // `register_union_hook` resolves what it is given, and it must be the one resolve that places
-    // the detour. Handing it `address` would resolve a second time -- normally a no-op, but on an
-    // address that is both a 1.17 destination and some other row's 1.16.2 source it silently
-    // returns a third, unrelated function (measured on three live detours, 2026-08-30). Resolving
-    // the same 1.16.2 input twice is fine; resolving the output is the bug.
-    // `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    // `base + rva`, which on 2.7.2.0 is `address`: the resolver no longer translates, it only
+    // refuses. The hook API checks this same native address once more.
     Some(base + rva)
 }
 
@@ -368,15 +335,15 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
 ///
 /// # The second argument is a float, which is why this is not on the union
 ///
-/// `Update(this /*rcx*/, float deltaSeconds /*xmm1*/)`, read out of the image rather than
-/// assumed. At `0x1408c47c6` the function spills `xmm6`, at `0x1408c47ce` it does
-/// `movaps xmm6, xmm1` -- an incoming register read before anything writes it -- and at
-/// `0x1408c485f` it hands the same value back out as argument 2 with `movaps xmm1, xmm6`. It is
-/// single precision, not double: the helper it forwards to stores it `movss [rsp+0x30], xmm1`
-/// (`0x140745a08`), and the display step counts a `float` timer down with `subss xmm1, xmm6`
-/// (`0x1408c4a43`). There are only two arguments -- `rdx`, `r8` and `r9` are written before any
-/// read, and `[rsp+0x48]`, argument 2's home slot, is used to spill `rdi`, which a compiler does
-/// not do to a live incoming argument.
+/// `Update(this /*rcx*/, float deltaSeconds /*xmm1*/)`, read out of the 1.16.2 image rather than
+/// assumed (the addresses here are 1.16.2). At `0x1408c47c6` the function spills `xmm6`, at
+/// `0x1408c47ce` it does `movaps xmm6, xmm1` -- an incoming register read before anything writes
+/// it -- and at `0x1408c485f` it hands the same value back out as argument 2 with
+/// `movaps xmm1, xmm6`. It is single precision, not double: the helper it forwards to stores it
+/// `movss [rsp+0x30], xmm1` (`0x140745a08`), and the display step counts a `float` timer down with
+/// `subss xmm1, xmm6` (`0x1408c4a43`). There are only two arguments -- `rdx`, `r8` and `r9` are
+/// written before any read, and `[rsp+0x48]`, argument 2's home slot, is used to spill `rdi`,
+/// which a compiler does not do to a live incoming argument.
 ///
 /// `er_hook::UnionFn` is four `usize`s and the union dispatcher forwards integer registers only,
 /// so a handler on it neither receives `xmm1` nor passes it on; the compiler is free to clobber
@@ -428,8 +395,8 @@ pub fn install() -> bool {
             return false;
         }
     }
-    // `address` is the unresolved 1.16.2 address on purpose: `MhHook::new` owns the single
-    // 1.16.2 -> 1.17 resolve, exactly as `register_union_hook` did before it.
+    // `address` is the native 2.7.2.0 address; `MhHook::new` checks it against the build and the
+    // detour allowlist itself, exactly as `register_union_hook` did before it.
     let hook = match unsafe {
         er_hook::MhHook::new(
             address as *mut core::ffi::c_void,
@@ -676,7 +643,16 @@ mod tests {
             .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        for banned in ["SHOW_POPUP_MENU", "showPopupMenu", "0x5f_5e80", "0x5f5e80"] {
+        // `showPopupMenu` is 2.7.2.0 `0x1405f7180` (1.16.2 `0x1405f5e80`): same body, and its
+        // `CSMenuMan` load lands on the native global `0x143d72840`.
+        for banned in [
+            "SHOW_POPUP_MENU",
+            "showPopupMenu",
+            "0x5f_7180",
+            "0x5f7180",
+            "0x5f_5e80",
+            "0x5f5e80",
+        ] {
             assert!(
                 !code.contains(banned),
                 "{banned}: the modal is the bug this module replaces"

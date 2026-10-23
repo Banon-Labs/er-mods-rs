@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Disassemble a function in the on-disk decrypted eldenring.exe by virtual address.
-# Usage: disas-va.sh <VA hex, e.g. 0x140792460> [num_bytes_dec, default 256]
+# Usage: disas-va.sh <VA hex, e.g. 0x14074ae20 (2.7.2.0)> [num_bytes_dec, default 256]
 # .text mapping (verified): VA = file_offset + 0x140000a00  =>  foff = VA - 0x140000a00
 set -euo pipefail
 EXE="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/eldenring.exe"

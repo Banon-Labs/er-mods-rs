@@ -24,11 +24,11 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 // Each virtual address is written as `GAME_IMAGE_BASE + (rva + offset) as u64` rather than through
 // a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
 const LOCK_CAM_FRAME_VA: u64 =
-    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_1171_RVA + LOCK_CAM_FRAME_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_RVA + LOCK_CAM_FRAME_WINDOW_OFFSET) as u64;
 const LOCK_CAM_TABLE_VA: u64 =
-    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_1171_RVA + LOCK_CAM_TABLE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_RVA + LOCK_CAM_TABLE_WINDOW_OFFSET) as u64;
 const LOCK_CAM_OUT_STORE_VA: u64 =
-    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_1171_RVA + LOCK_CAM_OUT_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (LOOKUP_LOCK_CAM_PARAM_RVA + LOCK_CAM_OUT_STORE_WINDOW_OFFSET) as u64;
 
 /// `mov qword [rsp+0x20],-2`, the frame marker the getter stores third.
 const FRAME_MARKER_SLOT: i32 = 0x20;
@@ -46,10 +46,10 @@ fn main() {
             (
                 PrologueSpec {
                     name: "LOCK_CAM_FRAME_WINDOW",
-                    doc: "1.17.1 `LookupLockCamParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    doc: "2.7.2.0 `LookupLockCamParam+0x6`: `MOV qword [RSP+0x20],-2`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: LOCK_CAM_FRAME_VA,
                     take: 0,
                     pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
@@ -63,11 +63,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "LOCK_CAM_TABLE_WINDOW",
-                    doc: "1.17.1 `LookupLockCamParam+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x1f]`, the\n\
+                    doc: "2.7.2.0 `LookupLockCamParam+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x1f]`, the\n\
                           `LockCamParam` table index handed to `GetParamResCap`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: LOCK_CAM_TABLE_VA,
                     take: 0,
                     pin: &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x1f],
@@ -83,11 +83,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "LOCK_CAM_OUT_STORE_WINDOW",
-                    doc: "1.17.1 `LookupLockCamParam+0x145`: `MOV [RSI+8],EDI; MOV [RSI],RBX`, the\n\
+                    doc: "2.7.2.0 `LookupLockCamParam+0x145`: `MOV [RSI+8],EDI; MOV [RSI],RBX`, the\n\
                           id into `out+8` and the row pointer into `out+0`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: LOCK_CAM_OUT_STORE_VA,
                     take: 0,
                     pin: &[0x89, 0x7e, 0x08, 0x48, 0x89, 0x1e],

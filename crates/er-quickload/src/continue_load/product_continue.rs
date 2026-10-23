@@ -94,23 +94,14 @@ pub(crate) unsafe fn product_continue_action_ready(
 /// `CS::MenuItem`'s constant-false accept predicate: a 3-byte `xor eax,eax; ret` leaf a row carries
 /// at `+0xf8` while it is not accept-ready.
 ///
-/// Mapped 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
-/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less leaf, invisible to
-/// the whole-image function-table alignment, and nothing calls IT: its address is only ever taken,
-/// so the caller-vote tools were blind to it too until they learned to count `lea`s. The evidence
-/// is a unanimous 1-of-1 -- each image contains exactly one rip-relative reference to its address,
-/// both at byte offset +0xa5 inside `0x7acf80 -> 0x7ade00` (`IDENTICAL-WHOLE`, 151 insns, `.pdata`
-/// 0x232 in both), both spelled `48 8d 05 44 0d 00 00`.
-///
-/// Its ledger verdict is `IDENTICAL-LEAF-NOPATCH`: both 3-byte bodies compared in full and equal,
-/// and MinHook's own rules refuse the site, so `er-game-base` admits the row to the CALL/READ map
-/// and never to the detour one. That is exactly the shape this site needs -- it only compares.
-/// The verdict exists because the two used to be one decision: `IDENTICAL-SHORT` refused the hook
-/// and withdrew the address from comparing, and this constant was what paid for it.
-const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
+/// 2.7.2.0 rva `0x7af0a0` (`33 c0 c3`). It is a `.pdata`-less leaf and nothing calls it: its
+/// address is only ever taken, by the one rip-relative `lea` (`48 8d 05 44 0d 00 00`) at +0xa5
+/// inside the idle ctor `0x1407ae2b0`. A 3-byte body is too short for MinHook, so it is only ever
+/// compared, never hooked -- which is all this site needs.
+const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007af0a0;
 
-/// `CS::MenuItem`'s real accept predicate: the row is selectable. `0x7ad810 -> 0x7ae690`.
-const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+/// `CS::MenuItem`'s real accept predicate: the row is selectable. 2.7.2.0 rva.
+const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007aeb40;
 
 /// Is `accept_predicate` the constant-false idle predicate? Resolved, and never satisfied by zero:
 /// a refusal resolves to 0 and an uninitialised row reads 0 at `+0xf8`.
@@ -187,10 +178,9 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     }
     let functor_vt = unsafe { safe_read_usize(functor) }?;
     let do_call = unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }?;
-    // Resolved, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
-    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and every native Continue
-    // MenuWindowJob was rejected here -- the autoload's own path to the Continue row, refused on a
-    // stale address rather than on anything about the item, and silently.
+    // Resolved, and never satisfied by zero (`game_data_addr` answers 0 on a build other than
+    // 2.7.2.0). An unresolved raw comparison once rejected every native Continue MenuWindowJob here
+    // silently, on a stale address rather than on anything about the item.
     let expected_do_call = er_game_base::mem::game_data_addr(
         base,
         MENU_TITLE_CONTINUE_DOCALL_RVA,
@@ -289,8 +279,7 @@ pub(crate) unsafe fn submit_native_continue_item_action(
         MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
         "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
     );
-    // Logged, not called -- but printing a 1.16.2 address as though it described the running build
-    // is how a stale constant survives review. `0x7a91e0 -> 0x7aa060` on 1.17.
+    // Logged, not called -- resolved anyway, so the log names the running build's address.
     let fd4_event_constructor = er_game_base::mem::game_data_addr(
         base,
         FD4_EVENT_CONSTRUCTOR_RVA,
@@ -507,7 +496,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         // Switch-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
         // autoload), the return-title chain we submitted is still tearing down the old world. Firing
         // the Continue-load now sets `GameMan::saveState=2` and DoSaveStuff deserializes the picked
-        // slot into the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
+        // slot into the still-live world -> crash in CSGaitemImp::Deserialize (live 1.16.2 0x67141a). Defer
         // until the old world is actually gone (local player absent), so the load runs at a clean
         // title exactly like the boot autoload does. The boot path has no System-Quit phase, and at a
         // fresh title there is no local player, so this gate passes immediately there.
@@ -600,12 +589,13 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             // The continue latch is UNSATISFIABLE at the title, so this is not a wait -- it is the
             // path. `MENU_CONTINUE_ITEM` latches only on a MenuWindowJob whose docall matches
             // `MENU_TITLE_CONTINUE_DOCALL_RVA` and whose accept predicate is
-            // `MENU_ITEM_ACCEPT_NATIVE_RVA`, and the 1.16.2 curated dump names both:
-            //   * 0x140764b80 is an adjustor thunk (`ADD RCX,8 ; JMP 0x140763fc0`) onto a function
+            // `MENU_ITEM_ACCEPT_NATIVE_RVA`, and the 1.16.2 curated dump names both (2.7.2.0
+            // addresses here):
+            //   * 0x140765e80 is an adjustor thunk (`ADD RCX,8 ; JMP 0x1407652c0`) onto a function
             //     that allocates 0xaa0 and constructs **CS::BackScreen** (a CS::FullScreenMenu)
             //     with a "Fade" proxy -- the black fade screen, built by the `L"01_900_Black"`
-            //     factory 0x140764290 whose only code xref is CSMenuManImp::Update;
-            //   * 0x1407ad810 is `GLOBAL_CSMenuMan != 0 && !FUN_140765f20(GLOBAL_CSMenuMan)` -- a
+            //     factory 0x140765590 whose only code xref is CSMenuManImp::Update;
+            //   * 0x1407aeb40 is `GLOBAL_CSMenuMan != 0 && !FUN_140765f20(GLOBAL_CSMenuMan)` (1.16.2 callee) -- a
             //     global "menu manager not busy" check, stored by the generic MenuWindowJob ctors,
             //     so it says nothing about Continue.
             // Measured 2026-09-05 21:32: 416/416 candidate observations idle,
@@ -614,7 +604,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             // `title_menu_action_ready` is the identification that is grounded: TitleTopDialog
             // vtable, the [dialog+0xa48] registry, a MenuMemberFuncJob vtable, and a member_fn that
             // resolves through at most six thunk hops to the live Load-Game dialog factory. Firing
-            // its node through the native run 0x1409aaba0 is the game's own path -- no forged
+            // its node through the native run 0x1409ac1f0 is the game's own path -- no forged
             // context, no input, no direct deserialize.
             let owner = {
                 let latched = TITLE_OWNER_PTR.load(Ordering::SeqCst);
@@ -857,14 +847,13 @@ pub(crate) unsafe fn fire_product_title_load_action(
     OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
     reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
     // Check the resolution before it becomes a function pointer. `game_data_addr` answers 0 when
-    // the running build has no verified mapping for the RVA, and `mem.rs` says of it in as many
+    // the running build is not 2.7.2.0, and `mem.rs` says of it in as many
     // words: "never use this for a call target. Zero is a safe address to fail a read at and a
     // fatal one to jump to." This transmuted the result straight into a fn pointer and called it.
     //
-    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) is mapped for 1.17
-    // (-> 0x9abd40), so the address that arrives here is the right one. It is the contract that was
-    // broken: nothing at this site established that, and the day the row leaves the map this jumps
-    // to address 0.
+    // On 2.7.2.0 MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9ac1f0) resolves, so the address that arrives here
+    // is the right one; on any other build it is 0, and without this check the call would jump to
+    // address 0.
     let run_addr = er_game_base::mem::game_data_addr(
         base,
         MENU_MEMBER_FUNC_JOB_RUN_RVA,
@@ -872,7 +861,7 @@ pub(crate) unsafe fn fire_product_title_load_action(
     );
     if run_addr == null {
         append_autoload_debug(format_args!(
-            "product-core-autoload: native TitleTopDialog Load-Game run REFUSED for this build (MENU_MEMBER_FUNC_JOB_RUN_RVA has no verified mapping) node=0x{node:x} slot={slot} tick={tick} -- NOT firing; the one-shot is consumed because a refusal does not become a hit on a later tick"
+            "product-core-autoload: native TitleTopDialog Load-Game run REFUSED for this build (MENU_MEMBER_FUNC_JOB_RUN_RVA is a 2.7.2.0 rva and the running build is not 2.7.2.0) node=0x{node:x} slot={slot} tick={tick} -- NOT firing; the one-shot is consumed because a refusal does not become a hit on a later tick"
         ));
         return;
     }
@@ -901,11 +890,11 @@ pub(crate) unsafe fn fire_product_title_load_action(
 /// instead of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
 /// so the native title machine advances untouched (the user drives past press-any-button + modals).
 /// Keep vs the normal own_stepper: it does not SetState(owner,2/3), does not clear the beginlogo
-/// gate, does not self-fire the registrar 0x1409b24e0, does not run direct_build / cold_char_mount.
+/// gate, does not self-fire the registrar 0x1409b3be0, does not run direct_build / cold_char_mount.
 /// It ONLY: (1) read-only checks whether the live TitleTopDialog menu/action is rendered and
 /// semantically validated (TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game
 /// MenuMemberFuncJob node/action chain); (2) one-SHOT: fires that native run
-/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the live registered
+/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409ac1f0, rcx=node) -- which builds the live registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
 #[allow(dead_code)] // Retained: Staged-save slot seeder for the deprecated staged-save probe path; the RE it encodes (ProfileSummary slot layout, FaceData::CopyFromBuffer, ChrAsm copy) is the reason it stays.

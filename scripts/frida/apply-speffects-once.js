@@ -3,8 +3,8 @@
 // tick so the call runs on the game thread; the hook does nothing after that and goes when the
 // script is unloaded.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 //   3160  [Item] Fire Grease - Right, spCategory 162, 60 s: on Unarmed (isEnhance 0) it is the
 //         end state of a buff transfer.

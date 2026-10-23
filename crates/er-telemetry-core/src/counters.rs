@@ -159,7 +159,7 @@ pub static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
-/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the
+/// Times the LoadGame job builder (0x1408279b0) was asked to build for a slot other than the
 /// explicit boot selection (user pick first, configured autoload slot second), and we redirected
 /// it to that selection. Nonzero means the save container's persisted last-used slot
 /// (`CSMenuSystemSaveLoad+0x1200`) would have loaded the wrong character. Was 1 in the 2026-08-03
@@ -237,8 +237,8 @@ pub static PROFILE_TEARDOWN_FENCE_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_RENDER_DRIVE_HITS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 /// Window mark for [`PORTRAIT_PUMP_BLOCK_OFF_RESOURCE`]. Its per-window delta is the attribution for
 /// a zero pose-drive count: the offscreen nest had a null native GX resource wrapper, so the pose
-/// drive was skipped deliberately (to avoid the FUN_141e90290 rcx=0x20 AV) rather than the head
-/// having "frozen early". Without this delta beside it, `animated 0` reads as a freeze.
+/// drive was skipped deliberately (to avoid the 1.16.1 dump FUN_141e90290 rcx=0x20 AV) rather than
+/// the head having "frozen early". Without this delta beside it, `animated 0` reads as a freeze.
 pub static PORTRAIT_PUMP_BLOCK_OFF_RESOURCE_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PUBLISH_CLEAN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
@@ -758,8 +758,9 @@ pub static PROFILE_CAM_LAST_MATRIX_OK: AtomicUsize = AtomicUsize::new(0);
 /// into the renderer (engine baseline * the PROFILE_CAM_*_SCALE/DELTA transform), not the baseline.
 ///
 /// Why these exist (2026-08-21): the portrait camera was believed to be identical for every character,
-/// because the engine baseline is read from `MenuOffscrRendParam` row `DAT_143b39858[slot * 0x20]` and
-/// that row id is 20 for all ten slots (dumped from `eldenring-deobf.bin`, RVA 0x3b39848, stride 0x20).
+/// because the engine baseline is read from `MenuOffscrRendParam` row `DAT_143b40878[slot * 0x20]` and
+/// that row id is 20 for all ten slots (dumped from `eldenring-deobf-1.17.2.bin`, RVA 0x3b40868,
+/// stride 0x20).
 /// Believed, but never confirmed from a RUN: no oracle reported a single camera value, so an artifact
 /// set could not distinguish "every character is framed the same" from "the framing differs and the
 /// difference is what we are chasing". These seven make the applied camera comparable across runs.
@@ -834,11 +835,11 @@ pub static OUTGOING_TEARDOWN_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static OUTGOING_TEARDOWN_FAILSOFT: AtomicUsize = AtomicUsize::new(0);
 // ---- WORLDRESWAIT streaming-settle hold (bd reload-overlap-fix-design-worldreswait-defer-release-on-
 //      streaming-settle-2026-07-24) -- the armed switch-reload movable-while-streaming dip fix. A hook on
-//      CS::MoveMapStep::STEP_WorldResWait's residency predicate FUN_140624bd0 (deobf 0x624bd0; that step
+//      CS::MoveMapStep::STEP_WorldResWait's residency predicate 0x140625ed0 (that step
 //      is its sole code caller) defers STEP_WorldResWait's player warp + step advance (i.e. the coupled
 //      movability/loading-close release) until CS::CSWorldGeomMan geometry streaming settles, scoped to
 //      the System-Quit switch reload only. Bounded fail-soft; never writes WorldBlockRes phase/gate bytes. ----
-/// One-shot install guard for the STEP_WorldResWait gate (FUN_140624bd0) defer-release hook.
+/// One-shot install guard for the STEP_WorldResWait gate (0x140625ed0) defer-release hook.
 pub static WORLDRESWAIT_GATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Total gate-hook invocations (per-frame during any world load). Telemetry oracle_worldreswait_gate_calls.
 pub static WORLDRESWAIT_GATE_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -848,7 +849,7 @@ pub static WORLDRESWAIT_GATE_HOOK_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// gate hook is a pure passthrough there (the anti-softlock crux).
 pub static WORLDRESWAIT_HOLD_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Per-switch latch: WorldBlockRes residency was reached while armed (so the gate's one legit
-/// `FUN_14066d610` residency-pop already ran). Once set, the hook stops calling the original (no repeat
+/// `0x14066e910` residency-pop already ran). Once set, the hook stops calling the original (no repeat
 /// pop / no repeat pending-vector erase) and holds on geometry-settle instead.
 pub static WORLDRESWAIT_RESIDENCY_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// Frames since residency was reached (the hold window length); bounds the fail-soft cap.
@@ -1071,12 +1072,12 @@ pub static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::ne
 pub static MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS: AtomicUsize = AtomicUsize::new(0);
 
-/// One-shot install guard for the `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40).
+/// One-shot install guard for the `MenuWindowJob` FINALIZE hook (0x1407aed70).
 pub static MENU_WINDOW_JOB_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline for the finalize hook. 0 / `usize::MAX` = not hooked.
 pub static MENU_WINDOW_JOB_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// Times the finalize hook nulled a doomed `owningMenuWindow` before the native code virtual-called
-/// it. The `~MenuWindowJob` guard covers only the destructor call site (0x7ac720); the finalize has
+/// it. The `~MenuWindowJob` guard covers only the destructor call site (0x7ada50); the finalize has
 /// five callers and the observed switch crash arrives via `MenuWindowJob::Run`, so this counter is
 /// the one that moves on the crashing path. Exposed as `oracle_menu_window_finalize_guards`.
 pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
@@ -1091,7 +1092,7 @@ pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(
 // `DLC_ROOTS_REFILL_ORIG` below is the one that stayed: the DLC-root self-heal in
 // `er-title-flow/src/dlc_roots_self_heal.rs` reads it, and it belongs beside that self-heal's own
 // state rather than with the departed traces.
-/// Trampoline for the DLC-root refill (`FUN_140e05fb0`), stored by whichever image detoured it.
+/// Trampoline for the DLC-root refill (`0x140e09510`), stored by whichever image detoured it.
 ///
 /// Now always 0 in the product, and that is the intended reading. The `er-diag-harness` trace that
 /// used to fill it in lives in another image, so the self-heal takes the `game_rva` fallback it has

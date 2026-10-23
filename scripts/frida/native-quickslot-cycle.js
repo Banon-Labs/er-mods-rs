@@ -1,7 +1,7 @@
 // Use an item the way a player does: cycle the quick-slot cursor onto it, then press use.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why this replaces every synthetic drive
 //

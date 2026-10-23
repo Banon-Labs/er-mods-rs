@@ -1,7 +1,7 @@
 // What does ersc's `show` actually hand over, and what did our DLL resolve instead?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // One question only: the menu object and session at the instant Seamless builds its option menu,
 // printed beside the pointer `er_invasion_warp` picked by scanning. No writes, no replacements.

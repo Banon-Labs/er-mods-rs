@@ -1,5 +1,8 @@
 //! Where the possessed creature is told to go, and the four fields that takes.
 //!
+//! An address or `FUN_`/`DAT_` name in this module's comments is a 1.16.2 dump one, where it was
+//! reversed, unless labelled with another build. The module calls none of them.
+//!
 //! # The one field that decides whether anything happens
 //!
 //! This module used to emit two writes and the creature did not move. The reason was not the two

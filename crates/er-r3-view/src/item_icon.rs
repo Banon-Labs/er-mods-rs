@@ -3,11 +3,12 @@
 //! # The chain
 //!
 //! Measured live on 1.17.1 with Frida (`scripts/frida/r3-icon-lookup.js`, bd
-//! `item-icon-runtime-chain-1171-2026-10-02`), inside `MenuWindowJob::Run` of the item list:
+//! `item-icon-runtime-chain-1171-2026-10-02`), inside `MenuWindowJob::Run` of the item list, with
+//! the 2.7.2.0 rvas:
 //!
 //! ```text
-//! repo  = *(u64*)(base + 0x3d86580)                       ; Scaleform texture repository
-//! res   = lookup(repo, &out, L"MENU_ItemIcon_%05d")      ; base + 0xd65c00, out = res
+//! repo  = *(u64*)(base + 0x3d895a0)                       ; Scaleform texture repository
+//! res   = lookup(repo, &out, L"MENU_ItemIcon_%05d")      ; base + 0xd672f0, out = res
 //! res+0x70  -> wchar* symbol                             ; CS::ScaleformImageResource
 //! res+0x18  -> CS::CSTextureImage
 //!   +0x2c/+0x30  atlas width, height                     ; 4096, 2048
@@ -23,12 +24,10 @@
 //!
 //! # Addresses
 //!
-//! Both are written as 1.16.2 rvas and translated for the running build by `er_game_base`, which
-//! refuses a build it has no verified mapping for; a refusal logs and the board draws no icon. The
-//! lookup is the function map's pair (1.16.2 `0xd63e50`, 1.17.0 `0xd65b90`), and the repository
-//! global the data map's, agreed by all 35 references (1.16.2 `0x3d82510`, 1.17 `0x3d86580`).
-//! Both translated addresses were read live on 1.17.1 by `scripts/frida/r3-icon-addresses.js`:
-//! the global holds a `CS::ScaleformTexRepositoryImp` and the lookup starts with its prologue.
+//! Both are 2.7.2.0 rvas (lookup `0xd672f0`, repository global `0x3d895a0`), defined in
+//! `er_game_base::rva`, which refuses them on any other build; a refusal logs and the board draws
+//! no icon. Their 1.17.1 counterparts were read live by `scripts/frida/r3-icon-addresses.js`: the
+//! global holds a `CS::ScaleformTexRepositoryImp` and the lookup starts with its prologue.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -172,7 +171,7 @@ unsafe fn lookup(game_base: usize, icon_id: u32) -> Result<IconSource, String> {
         "SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA",
     );
     if repo_global == 0 {
-        return Err("texture repository global has no mapping for this build".to_string());
+        return Err("texture repository global is refused on this build".to_string());
     }
     let repo = unsafe { safe_read_usize(repo_global) }.unwrap_or(0);
     if repo == 0 {

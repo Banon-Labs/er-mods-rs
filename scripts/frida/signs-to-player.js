@@ -9,8 +9,8 @@
 //    position argument, so a sign placed after a grace rest lands at the player as well.
 // The knight warps to the sign's position when it is touched, so it arrives here too.
 //
-// Every address below is the 2.7.2.0 one, carried from 1.17.1 with
-// scripts/map-rvas-1171-to-1172.py and written "old -> new" beside it. Each function body matches
+// Every address below is the 2.7.2.0 one, carried from 1.17.1 and written "old -> new" beside it.
+// Each function body matches
 // between eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin with its rip-relative and
 // branch operands carried, and each global is what its 2.7.2.0 readers load. Addresses that only
 // appear in comments are the 1.17.1 ones the bd notes use, with the 2.7.2.0 one beside them.

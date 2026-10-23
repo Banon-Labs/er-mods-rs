@@ -44,19 +44,21 @@ CS::MapItemManImpl::DropItem(MapItemManImpl *self, ItemDropData *item,
 | `GLOBAL_MapItemMan` (pointer slot) | `0x143d67a50` | `0x143d6bac0` | already in the data ledger, 131/131 |
 
 Seven of the eight functions sit below rva `0xafefe9` and keep their 1.17.0 address on 1.17.1.
-`SetDroppedItemFxr` is above it and moves `+0x70`. That was confirmed with
-`scripts/map-rvas-1170-to-1171.py`, not asserted from the boundary rule.
+`SetDroppedItemFxr` is above it and moves `+0x70`. That was confirmed with the 1.17.0 -> 1.17.1
+mapper (since deleted), not asserted from the boundary rule.
 
 All ten new pairs were re-verified in one run (`verify-rva-map-1170.py --map <pairs>`, no `--tsv`,
 so nothing was truncated): **10 accepted, 0 rejected**, every one `IDENTICAL-WHOLE 1.000`,
-`BOTH-ENTRIES`, with matching `.pdata` extents. They are now rows of
-`docs/recon/rva-map-1162-to-1170.verified.tsv`, so `er_game_base::mem::game_rva_named` will
-translate them for the running build instead of refusing.
+`BOTH-ENTRIES`, with matching `.pdata` extents. They became rows of
+`docs/recon/rva-map-1162-to-1170.verified.tsv`, which is how the carry layer translated them for
+1.17.1 at the time; the ledger was deleted with that layer (its last copy is at `41d6a363`). That layer is gone: the constants the code uses (`MAP_ITEM_MAN_DROP_ITEM_RVA`,
+`ITEM_DROP_DATA_FROM_GAITEM_RVA`, `GLOBAL_MAP_ITEM_MAN_RVA` in `er-game-base`'s `rva.rs`) are
+2.7.2.0 rvas (`docs/game-build.md`).
 
 Two of the eight are **not** identified by bytes and must never be re-derived by signature alone:
 `RegisterDroppedItem` (143 shape matches at the default window) is identified by its sole caller,
 and `SetDroppedItemFxr` has three byte-identical siblings in the image and is identified by its
-call site's `rel32`. Both derivations are written into their ledger rows.
+call site's `rel32`. Both derivations were written into their ledger rows.
 
 ## Q1 -- where the instance lives, and whether it is reachable
 

@@ -22,46 +22,43 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
 /// The MSVC `/GS` cookie slot every one of these frames seeds with `-2` before anything else.
 const GS_COOKIE_SEED: i32 = -2;
-/// `GLOBAL_CSGameMan` at its 1.17 address, the singleton the quit-phase settle loads RIP-relative.
+/// `GLOBAL_CSGameMan` on 2.7.2.0, the singleton the quit-phase settle loads RIP-relative.
 /// Naming the absolute address lets iced compute the displacement for the VA being assembled at,
-/// instead of a transcribed `+0x36f21b1` that means nothing on its own.
+/// instead of a transcribed `+0x36f4d21` that means nothing on its own.
 ///
-/// 1.16.2 had it at `0x143d69918`; 1.17 moved it `+0x4070` with the rest of `.data`
-/// (`GAME_MAN_SINGLETON_RVA` in the tracked data map, 136 of 137 references agreeing). Only
-/// `QUIT_PHASE_SETTLE_SIG` uses it, and that signature is what decides whether the settle patch
-/// is applied at all -- see the spec for why the address has to be the 1.17 one.
-const GAME_MAN_SINGLETON_VA: u64 = 0x143d6d988;
+/// Same value as `er_game_base::rva::GAME_MAN_SINGLETON_RVA`. Only `QUIT_PHASE_SETTLE_SIG` uses
+/// it, and that signature is what decides whether the settle patch is applied at all.
+const GAME_MAN_SINGLETON_VA: u64 = 0x143d709a8;
 /// `GameMan+0xbc4`, the quit-to-title phase field.
 const GAME_MAN_QUIT_PHASE_OFFSET: i64 = 0xbc4;
 /// The phase value the settle function tests for.
 const QUIT_PHASE_WAITING: i32 = 2;
 
 /// `SaveLoad2::SLSystemImpl::EnqueueSaveJob` -- every save request funnels through it.
-const SL_ENQUEUE_SAVE_JOB_VA: u64 = 0x140e6fb50;
+const SL_ENQUEUE_SAVE_JOB_VA: u64 = 0x140e730b0;
 /// `SaveLoad2::SLSystemImpl::PollSaveStatus`.
-const SL_POLL_SAVE_STATUS_VA: u64 = 0x140e6e430;
-/// The only code that moves `GameMan+0xbc4` from 2 to 3, at its 1.17 address. 1.16.2
-/// `FUN_14067a980`; 1.17 `0x14067b7d0`, `+0xe50`, the whole-region delta for this part of `.text`.
-const QUIT_PHASE_SETTLE_VA: u64 = 0x14067b7d0;
+const SL_POLL_SAVE_STATUS_VA: u64 = 0x140e71990;
+/// The only code that moves `GameMan+0xbc4` from 2 to 3.
+const QUIT_PHASE_SETTLE_VA: u64 = 0x14067bc80;
 /// Where it jumps when the phase is not 2 -- the branch is inside the checked window, so its
-/// destination is part of the prologue. Still exactly `+0x1a` from the entry in 1.17.
-const QUIT_PHASE_SETTLE_NOT_WAITING_VA: u64 = 0x14067b7ea;
+/// destination is part of the prologue. `+0x1a` from the entry.
+const QUIT_PHASE_SETTLE_NOT_WAITING_VA: u64 = 0x14067bc9a;
 /// `SaveLoad2::SLSystemImpl::ReleaseRequest`.
-const SL_RELEASE_REQUEST_VA: u64 = 0x140e6f200;
-/// `FUN_14067b940`, the combined character+system save lane.
-const SAVE_DISPATCH_COMBINED_VA: u64 = 0x14067b940;
-/// `FUN_14067b750`, the character-slot-only lane.
-const SAVE_DISPATCH_CHAR_VA: u64 = 0x14067b750;
-/// `FUN_14067b570`, the system-slot-only lane.
-const SAVE_DISPATCH_SYSTEM_VA: u64 = 0x14067b570;
-/// `FUN_14067dc00`, the character serializer.
-const SAVE_SERIALIZE_CHAR_VA: u64 = 0x14067dc00;
-/// `FUN_142413860`, the full save-container rebuild.
-const SAVE_WRITE_FULL_REBUILD_VA: u64 = 0x142413860;
-/// `FUN_1424142e0`, the per-block in-place patcher.
-const SAVE_WRITE_IN_PLACE_VA: u64 = 0x1424142e0;
-/// `FUN_14240fd70`, `SaveLoad2::SLSaveSession`'s job body.
-const SL_SAVE_JOB_BODY_VA: u64 = 0x14240fd70;
+const SL_RELEASE_REQUEST_VA: u64 = 0x140e72760;
+/// `FUN_14067cc40`, the combined character+system save lane.
+const SAVE_DISPATCH_COMBINED_VA: u64 = 0x14067cc40;
+/// `FUN_14067ca50`, the character-slot-only lane.
+const SAVE_DISPATCH_CHAR_VA: u64 = 0x14067ca50;
+/// `FUN_14067c870`, the system-slot-only lane.
+const SAVE_DISPATCH_SYSTEM_VA: u64 = 0x14067c870;
+/// `FUN_14067ef00`, the character serializer.
+const SAVE_SERIALIZE_CHAR_VA: u64 = 0x14067ef00;
+/// `FUN_142417810`, the full save-container rebuild.
+const SAVE_WRITE_FULL_REBUILD_VA: u64 = 0x142417810;
+/// `FUN_142418290`, the per-block in-place patcher.
+const SAVE_WRITE_IN_PLACE_VA: u64 = 0x142418290;
+/// `FUN_142413d20`, `SaveLoad2::SLSaveSession`'s job body.
+const SL_SAVE_JOB_BODY_VA: u64 = 0x142413d20;
 
 /// How much of each write branch is compared. Both open with the same seven-instruction
 /// multi-push prologue and diverge only at the frame-pointer `lea`, so the window has to reach
@@ -95,7 +92,7 @@ fn main() {
                           window and contains no relative branch, so it is safe to patch.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SL_ENQUEUE_SAVE_JOB_VA,
                     take: 0,
                     pin: &[
@@ -120,7 +117,7 @@ fn main() {
                     doc: "`push rdi; sub rsp,0x70; <GS cookie>; mov [rsp+0x88],rbx`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SL_POLL_SAVE_STATUS_VA,
                     take: 0,
                     pin: &[
@@ -142,19 +139,15 @@ fn main() {
                     doc: "`mov rax,[rip+..]; cmp dword [rax+0xbc4],2; jne`. The whole function is\n\
                           `if (bc4 == 2) bc4 = 3;`, so the checked window covers its only test.\n\
                           \n\
-                          Assembled for 1.17. The instructions, the field offset and the tested\n\
-                          value are all unchanged from 1.16.2 -- only the RIP displacement moved,\n\
-                          because both the function and the singleton did. That is three bytes,\n\
-                          and until 2026-08-30 they were 1.16.2's: the signature failed at its\n\
-                          own site on the installed game, the settle patch declined to apply, and\n\
-                          nothing said so.",
+                          Assembled at the 2.7.2.0 VA against the 2.7.2.0 singleton, so the RIP\n\
+                          displacement is the one the installed game carries.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1170,
+                    image: Image::EldenRing2720,
                     va: QUIT_PHASE_SETTLE_VA,
                     take: 0,
                     pin: &[
-                        0x48, 0x8B, 0x05, 0xB1, 0x21, 0x6F, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00,
+                        0x48, 0x8B, 0x05, 0x21, 0x4D, 0x6F, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00,
                         0x00, 0x02, 0x75, 0x0A,
                     ],
                 },
@@ -175,7 +168,7 @@ fn main() {
                           xor ebp,ebp; mov rdi,rcx; cmp [rcx+0x28],rbp`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SL_RELEASE_REQUEST_VA,
                     take: 0,
                     pin: &[
@@ -197,11 +190,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_DISPATCH_COMBINED_SIG",
-                    doc: "`FUN_14067b940`: `mov rax,rsp; mov [rax+0x18],r8b; push rdi/r12/r13/r14/r15;\n\
+                    doc: "`FUN_14067cc40`: `mov rax,rsp; mov [rax+0x18],r8b; push rdi/r12/r13/r14/r15;\n\
                           sub rsp,0xb0`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_DISPATCH_COMBINED_VA,
                     take: 0,
                     pin: &[
@@ -224,11 +217,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_DISPATCH_CHAR_SIG",
-                    doc: "`FUN_14067b750`: `mov [rsp+0x20],rbx; push rdi/r12/r15; sub rsp,0x30;\n\
+                    doc: "`FUN_14067ca50`: `mov [rsp+0x20],rbx; push rdi/r12/r15; sub rsp,0x30;\n\
                           movzx r15d,r8b; movzx r12d,dl; mov edi,ecx`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_DISPATCH_CHAR_VA,
                     take: 0,
                     pin: &[
@@ -251,11 +244,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_DISPATCH_SYSTEM_SIG",
-                    doc: "`FUN_14067b570`: `mov rax,rsp; push rdi; sub rsp,0xa0; <GS cookie>;\n\
+                    doc: "`FUN_14067c870`: `mov rax,rsp; push rdi; sub rsp,0xa0; <GS cookie>;\n\
                           mov [rax+8],rbx`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_DISPATCH_SYSTEM_VA,
                     take: 0,
                     pin: &[
@@ -275,12 +268,12 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_SERIALIZE_CHAR_SIG",
-                    doc: "`FUN_14067dc00`: `push rbp/rbx/rsi/rdi; lea rbp,[rsp-0x58];\n\
+                    doc: "`FUN_14067ef00`: `push rbp/rbx/rsi/rdi; lea rbp,[rsp-0x58];\n\
                           sub rsp,0x158; <GS cookie>`. The window stops one byte inside the\n\
                           cookie store, which is why the assembled sequence is longer.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_SERIALIZE_CHAR_VA,
                     take: SAVE_SERIALIZE_CHAR_CHECKED_BYTES,
                     pin: &[
@@ -308,12 +301,12 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_WRITE_FULL_REBUILD_SIG",
-                    doc: "`FUN_142413860`: the shared seven pushes, then `lea rbp,[rsp-0x60]`\n\
+                    doc: "`FUN_142417810`: the shared seven pushes, then `lea rbp,[rsp-0x60]`\n\
                           and a 0x160 frame. The `lea` is where it diverges from the in-place\n\
                           patcher, so a shorter window would match both functions.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_WRITE_FULL_REBUILD_VA,
                     take: SAVE_WRITE_CHECKED_BYTES,
                     pin: &[
@@ -331,11 +324,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SAVE_WRITE_IN_PLACE_SIG",
-                    doc: "`FUN_1424142e0`: the shared seven pushes, then `lea rbp,[rsp-0xd0]`\n\
+                    doc: "`FUN_142418290`: the shared seven pushes, then `lea rbp,[rsp-0xd0]`\n\
                           and a 0x1d0 frame. The window stops inside that `sub`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SAVE_WRITE_IN_PLACE_VA,
                     take: SAVE_WRITE_CHECKED_BYTES,
                     pin: &[
@@ -358,11 +351,11 @@ fn main() {
         &[(
             PrologueSpec {
                 name: "SL_SAVE_JOB_BODY_SIG",
-                doc: "`FUN_14240fd70`: `mov rax,rsp; push rbp/rdi/r12/r14/r15;\n\
+                doc: "`FUN_142413d20`: `mov rax,rsp; push rbp/rdi/r12/r14/r15;\n\
                       lea rbp,[rax-0x5f]; sub rsp,0xb0`.",
                 visibility: "",
                 shape: Shape::Slice,
-                image: Image::EldenRing,
+                image: Image::EldenRing2720,
                 va: SL_SAVE_JOB_BODY_VA,
                 take: 0,
                 pin: &[

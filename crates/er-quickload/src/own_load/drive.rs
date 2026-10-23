@@ -19,50 +19,52 @@ use super::*;
 
 // ===== save-safe verify-only own-load buffer-feed probe (bd er-effects-rs-lds) ===============
 //
-// Mechanism (static-validated 2026-06-22): hook the FSM-gated save read 0x67b100(rcx=out_buf,
+// Mechanism (static-validated 2026-06-22 on 1.16.2; 2.7.2.0 addresses below): hook the FSM-gated
+// save read 0x67c400(rcx=out_buf,
 // edx=size). When the one-shot gate `OWN_LOAD_GATE` is set, memcpy our sliced PLAINTEXT BND4 slot
 // body (from `er_save_loader::bnd4::slot_body`) into out_buf for min(edx, body.len()) bytes and
-// return al=1; otherwise call the original. Then call the native parser 0x67b290(slot) in-process
-// unchanged -- it allocs the buffer, invokes our hooked 0x67b100 (gets our bytes), and runs the
-// real native parse (c30 write 0x67bd70 + stream deserialize + char-apply) with zero
-// re-implementation. The gate is MANDATORY: 0x67b100 is shared with the native menu loader (4
+// return al=1; otherwise call the original. Then call the native parser 0x67c590(slot) in-process
+// unchanged -- it allocs the buffer, invokes our hooked 0x67c400 (gets our bytes), and runs the
+// real native parse (c30 write 0x67d070 + stream deserialize + char-apply) with zero
+// re-implementation. The gate is MANDATORY: 0x67c400 is shared with the native menu loader (4
 // callers, only one is ours); we must never intercept the menu path. Verify is read-back only:
 // GameMan+0xc30 (map id) + the PlayerGameData fingerprint. No SetState5, no autosave.
 
-/// FSM-gated save read 0x67b100(rcx=out_buf, edx=size) -> al. The leaf read helper our parser
-/// 0x67b290 invokes (and the native menu loader -- hence the mandatory gate).
-const READ_67B100_RVA: usize = 0x67b100;
+/// FSM-gated save read 0x67c400(rcx=out_buf, edx=size) -> al. The leaf read helper our parser
+/// 0x67c590 invokes (and the native menu loader -- hence the mandatory gate). 2.7.2.0 rva.
+const GATED_SAVE_READ_RVA: usize = 0x67c400;
 
-/// One-shot gate: true only for the single 0x67b290(slot) call we make from `own_load_drive`. The
+/// One-shot gate: true only for the single 0x67c590(slot) call we make from `own_load_drive`. The
 /// hook feeds our body + returns al=1 only while this is set; every other (native menu) read passes
 /// straight through to the original.
 pub(super) static OWN_LOAD_GATE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// Trampoline to the original 0x67b100 (set on hook install).
-static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Trampoline to the original 0x67c400 (set on hook install).
+static GATED_SAVE_READ_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::OWN_LOAD_BODY_LEN;
 /// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
 /// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set before arming the gate.
 pub(crate) use er_telemetry_core::counters::OWN_LOAD_BODY_PTR;
 /// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
 pub(crate) use er_telemetry_core::counters::OWN_LOAD_FED_BYTES;
-/// One-shot install guard for the 0x67b100 detour.
+/// One-shot install guard for the 0x67c400 detour.
 pub(crate) use er_telemetry_core::counters::OWN_LOAD_HOOK_INSTALLED;
 
 /// Destination handed to the pass-through consumer call in [`run_native_load_consumer`].
 ///
-/// `FUN_140e6e380` copies `min(dest_size, content_size)` bytes and then calls
-/// `FUN_140e6f200` unconditionally, so the release does not depend on the destination being
+/// The consumer (1.16.2 `FUN_140e6e380`) copies `min(dest_size, content_size)` bytes and then calls
+/// the release (`SL_RELEASE_REQUEST_RVA`, 0x140e72760; 1.16.2 `FUN_140e6f200`) unconditionally, so
+/// the release does not depend on the destination being
 /// big enough to hold the payload -- and the payload is discarded here regardless, because
 /// the whole point of the feed is that the engine parses our bytes instead. Sized only to
 /// keep the copy trivially bounded and stack-resident.
 const CONSUMER_SCRATCH_BYTES: usize = 64;
 
-/// Run the original `0x67b100` against a scratch destination, purely for the device side
+/// Run the original `0x67c400` against a scratch destination, purely for the device side
 /// effect the feed would otherwise swallow, and measure what it did to the shared job slot.
 ///
-/// Why this exists. `0x67b100` is not just a read -- it is the consumer of a completed
-/// load, and the only unconditional caller of the device's request teardown:
+/// Why this exists. `0x67c400` is not just a read -- it is the consumer of a completed
+/// load, and the only unconditional caller of the device's request teardown (1.16.2 call tree):
 ///
 /// ```text
 ///   FUN_14067b100(out, size)              gate: saveState == 3 && GameMan+0xdf0 == 0
@@ -74,7 +76,7 @@ const CONSUMER_SCRATCH_BYTES: usize = 64;
 /// ```
 ///
 /// The load side never releases itself: `FUN_140e6e080` case 0x14 with a zero `param_2` --
-/// exactly the shape the b80 poll `0x679180(0, 0)` produces -- returns 0 having called
+/// exactly the shape the b80 poll `0x67a480(0, 0)` produces -- returns 0 having called
 /// nothing, and it is that return which drives `GameMan+0xb80` to resident(3). So the
 /// switch reload's submit -> drain(b80 == 3) sequence ends with a completed load still
 /// holding `iodev+0x18`/`+0x20`, and the release is owed by the very call this detour was
@@ -98,7 +100,7 @@ const CONSUMER_SCRATCH_BYTES: usize = 64;
 /// including whatever lies past `body.len()`. Pointing the copy at 64 bytes of stack leaves
 /// the engine's allocation untouched while still paying the device debt.
 unsafe fn run_native_load_consumer(origin: &str) {
-    let orig = READ_67B100_ORIG.load(Ordering::SeqCst);
+    let orig = GATED_SAVE_READ_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         // Only reachable if the detour ran before `install_own_load_hook` bound the
         // trampoline, which the install order rules out. Left silent rather than logged:
@@ -125,7 +127,7 @@ unsafe fn run_native_load_consumer(origin: &str) {
         // nothing, so this now reports the instant and prints the save-side operand -- the one
         // field that decides whether a save can still be built -- rather than a verdict.
         append_autoload_debug(format_args!(
-            "own-load: native load consumer 0x67b100 ran before the feed (ret={consumed}) and \
+            "own-load: native load consumer 0x67c400 ran before the feed (ret={consumed}) and \
              RELEASED this load's iodev job. Device AT THIS INSTANT: {}. This says nothing \
              about later saves: the save side is orphaned by a separate mechanism, and \
              `oracle_save_orphan_detections` / `oracle_save_dispatch_declines` are what report \
@@ -135,13 +137,13 @@ unsafe fn run_native_load_consumer(origin: &str) {
     }
 }
 
-/// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, runs the original against a
+/// Gated detour for 0x67c400. While `OWN_LOAD_GATE` is set, runs the original against a
 /// scratch destination so the native load consumer performs its device teardown, then copies
 /// our sliced plaintext slot body into the engine-allocated out_buf (`rcx`) for
 /// `min(size, body.len())` bytes and returns al=1 -- the engine parses our bytes while the
 /// device is left in the state the native read would have left it. Otherwise it is a pure
 /// pass-through to the original (the native menu loader's reads are never disturbed).
-pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32) -> u8 {
+pub(crate) unsafe extern "system" fn gated_save_read_hook(out_buf: usize, size: u32) -> u8 {
     const FEED_SUCCESS_RET: u8 = 1;
     if OWN_LOAD_GATE.load(Ordering::SeqCst) {
         let body_ptr = OWN_LOAD_BODY_PTR.load(Ordering::SeqCst);
@@ -151,7 +153,7 @@ pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32)
             // terms. Ordering matters only for readability -- the consumer writes to its own
             // scratch, never to `out_buf` -- but it puts the release where the native body
             // would have run it, before the payload the engine actually parses is decided.
-            unsafe { run_native_load_consumer("own-load 0x67b100 feed") };
+            unsafe { run_native_load_consumer("own-load 0x67c400 feed") };
             // Data-driven length: copy the smaller of the engine's requested size (its own edx) and
             // our body length -- never assume the 0x280000 literal (bd dont-hardcode-savefile-tied).
             let n = core::cmp::min(size as usize, body_len);
@@ -162,7 +164,7 @@ pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32)
             return FEED_SUCCESS_RET;
         }
     }
-    let orig = READ_67B100_ORIG.load(Ordering::SeqCst);
+    let orig = GATED_SAVE_READ_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         return FEED_SUCCESS_RET;
     }
@@ -170,7 +172,7 @@ pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32)
     unsafe { orig(out_buf, size) }
 }
 
-/// Install the gated 0x67b100 detour (MhHook + MH_Initialize + queue_enable + MH_ApplyQueued),
+/// Install the gated 0x67c400 detour (MhHook + MH_Initialize + queue_enable + MH_ApplyQueued),
 /// mirroring the `install_c30_writer_hook` precedent. Idempotent. The detour is harmless until the
 /// gate is armed (pure pass-through), so installing it early is safe.
 pub(crate) fn install_own_load_hook() -> bool {
@@ -184,13 +186,20 @@ pub(crate) fn install_own_load_hook() -> bool {
             return false;
         }
     }
-    let Ok(read_addr) = game_rva_for_hook(READ_67B100_RVA as u32) else {
-        append_autoload_debug(format_args!("own-load: failed to resolve 0x67b100 rva"));
+    let Ok(read_addr) = game_rva_for_hook(GATED_SAVE_READ_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "own-load: failed to resolve 0x{GATED_SAVE_READ_RVA:x} rva"
+        ));
         return false;
     };
-    match unsafe { MhHook::new(read_addr as *mut c_void, read_67b100_hook as *mut c_void) } {
+    match unsafe {
+        MhHook::new(
+            read_addr as *mut c_void,
+            gated_save_read_hook as *mut c_void,
+        )
+    } {
         Ok(hook) => {
-            READ_67B100_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            GATED_SAVE_READ_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
                 append_autoload_debug(format_args!("own-load: queue_enable failed: {status:?}"));
                 return false;
@@ -222,7 +231,7 @@ pub(crate) fn install_own_load_hook() -> bool {
 // ===== WorldBlockRes::Update diagnostic detour (worldblockres-phase-machine-drives-loadstate-to-0xa)
 //
 // PURPOSE: discriminate why the requested map block never reaches loadstate phase 0xa on the menu-free
-// own-load path. `WorldBlockRes::Update` (deobf 0x140614870) is the per-block phase state-machine
+// own-load path. `WorldBlockRes::Update` (2.7.2.0 0x140615b70) is the per-block phase state-machine
 // (switch on the phase byte [this+0x35]); the 9->0xa transition fires only when the FD4 file-load
 // completion gate [this+0x2f]!=0. It is ticked per-block-per-frame by the FieldArea/WorldAreaRes
 // block-update loop (FUN_14062f840 / FUN_14063a930) which our menu-free path may never run.
@@ -236,7 +245,7 @@ pub(crate) fn install_own_load_hook() -> bool {
 //         calls>0 but max_phase<0xa & any_gate_set=false => loop ticks but the FD4 file-load never
 //         completes -> the IO/CSFile path is the gap (cause 2).
 
-/// `CS::WorldBlockRes::Update` real entry (deobf-grounded; the dump entry FUN_1406148e0 is +0x10).
+/// `CS::WorldBlockRes::Update` real entry (2.7.2.0 rva via `WORLDBLOCKRES_UPDATE_RE_RVA`).
 const WORLDBLOCKRES_UPDATE_RVA: usize = WORLDBLOCKRES_UPDATE_RE_RVA;
 /// Phase byte the switch dispatches on: `this+0x35` (9 -> 0xa is the residency transition).
 const WBR_PHASE_35_OFFSET: usize = 0x35;
@@ -408,12 +417,9 @@ pub(crate) fn install_wbr_update_hook() -> bool {
             return false;
         }
     }
-    // Unresolved, so `MhHook::new` owns the single 1.16.2 -> 1.17 resolve. This was `game_rva`,
-    // which resolves too -- and on 2026-08-30 18:42 the pair was measured landing the detour on a
-    // different function: `game_rva` 0x140614870 -> 0x1406156c0, then `MhHook::new` 0x1406156c0 ->
-    // 0x140616510, because 0x1406156c0 is both this row's 1.17 destination and another row's
-    // 1.16.2 source. Nothing errored and this feature still logged 0x1406156c0, the address it
-    // meant. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+    // Unresolved, so `MhHook::new` owns the single build check (the 2.7.2.0 detour allowlist).
+    // When the hook API still translated, resolving here as well once landed the detour on a
+    // different function (2026-08-30).
     let Ok(update_addr) = game_rva_for_hook(WORLDBLOCKRES_UPDATE_RVA as u32) else {
         append_autoload_debug(format_args!(
             "wbr-update: failed to resolve 0x{WORLDBLOCKRES_UPDATE_RVA:x} rva"
@@ -453,8 +459,8 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 
 // ===== _Common_Finalize observe-only teardown oracle (Phase-3, bd PHASE3-render-release-is-CommonFinalize)
 //
-// `CS::InGameStep::_Common_Finalize` is at live/dump/deobf 0x140aed380 == RVA 0xaed380, byte-identical
-// across the 1.16.2 dump, the deobf image, and the live module (shift 0). Ghidra-MCP ground-truthed on the
+// `CS::InGameStep::_Common_Finalize` is at 2.7.2.0 0x140aeeb50 == RVA 0xaeeb50 (1.16.2 0x140aed380).
+// Ghidra-MCP ground-truthed on the
 // 1.16.2 dump: STEP_MoveMap_Finish (0x140aec050) lists callee `_Common_Finalize@140aed380`, whose body
 // frees GLOBAL_WorldChrMan, GLOBAL_CSDistViewManager (LOD), g_GxDrawContext (FUN_1419eaf90),
 // GLOBAL_CSBulletManager/DmgMan/MapItemMan, WorldRes::ResetAreaInfoLists, unloads the loadlistlist
@@ -467,16 +473,16 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 // step-setter FUN_140aed270 (the "移動先ステップ未定義" MoveMap step-index helper, also called by
 // STEP_MoveMap_Finish). The prior RVA 0xaed290 made MinHook write a 5-byte jmp over FUN_140aed270's live
 // body, so when load1's MoveMap-finish executed it the corrupted stream crashed (bd
-// phase3-v2-load1-crash-is-wrong-hook-rva-mid-instruction-not-env-2026-07-23). The 0xaed380 entry's first
-// instruction is `mov [rsp+0x10],rbx` (a clean 5 bytes), so the trampoline relocation is safe.
+// phase3-v2-load1-crash-is-wrong-hook-rva-mid-instruction-not-env-2026-07-23). The 2.7.2.0 0xaeeb50 entry's
+// first instruction is `mov [rsp+0x10],rbx` (a clean 5 bytes), so the trampoline relocation is safe.
 //
 // This detour is observe-ONLY: it bumps COMMON_FINALIZE_CALLS then always calls the original. The counter
 // is the Phase-3 teardown oracle -- flat across a broken in-place switch reload (0 finalizes), incrementing
 // once per switch once the outgoing world is routed through the release. Never alters teardown behavior.
-/// `_Common_Finalize` real entry (Ghidra-MCP-grounded on the 1.16.2 dump; base 0x140000000). Not 0xaed290:
-/// that was a false dump-deobf-shift match, mid-instruction in the neighbor FUN_140aed270 -- it crashed
+/// `_Common_Finalize` real entry, 2.7.2.0 rva. A 1.16.2 value 0xf0 lower was a false
+/// dump-deobf-shift match, mid-instruction in the neighbor FUN_140aed270 -- it crashed
 /// load1's MoveMap-finish on 2026-07-23.
-const COMMON_FINALIZE_RVA: usize = 0xaed380;
+const COMMON_FINALIZE_RVA: usize = 0xaeeb50;
 /// Trampoline to the original `_Common_Finalize` (set on hook install).
 static COMMON_FINALIZE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 
@@ -724,16 +730,16 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
 //
 // Root (bd reload-overlap-fix-design-worldreswait-defer-release-on-streaming-settle-2026-07-24, RE
 // synthesis Candidate A, ermaporch 1.16.2): the armed in-place switch reload releases movability at
-// CS::MoveMapStep::STEP_WorldResWait (dump 0x140af9cf0) the instant the target WorldBlockRes reaches
+// CS::MoveMapStep::STEP_WorldResWait (2.7.2.0 0x140afb4d0) the instant the target WorldBlockRes reaches
 // residency phase 0xa -- which does not wait on CS::CSWorldGeomMan geometry streaming. Because the mod's
 // lightweight return-title skips _Common_Finalize (persistent world), the geometry re-stream is deferred
 // past that residency release, so the player becomes movable while CSWorldGeomMan is still streaming =
 // the ~20fps movable-while-streaming dip (stream_overlap oracle: epoch2 5/5 overlap @20fps).
 //
-// Fix LEVER: STEP_WorldResWait gates its entire ready branch (player warp FUN_140622d20 +0xb7b0/b7b8=pos
-// +0xb7c0=1, and step advance FUN_140af9d90 requestedState++) on `FUN_140624bd0(fieldArea) != 0`. That
-// gate (deobf 0x624bd0, byte-identical to the dump; the shift tool's -0xe0/-0xf0 is a false match in this
-// low-.text region -- resolved instead by unique prologue byte-search) is called exclusively from
+// Fix LEVER: STEP_WorldResWait gates its entire ready branch (1.16.2: player warp FUN_140622d20
+// +0xb7b0/b7b8=pos +0xb7c0=1, and step advance FUN_140af9d90 requestedState++) on the residency gate
+// (2.7.2.0 `FUN_140625ed0(fieldArea) != 0`, found by unique prologue byte-search). That gate is called
+// exclusively from
 // STEP_WorldResWait (xrefs: 1 code caller + 1 table ref), so hooking it affects only the WorldResWait
 // release and nothing else. While a switch reload is armed and geometry has not settled, we return AL=0
 // (not-ready) so STEP_WorldResWait takes its own not-ready branch (native _CheckEternityLoading pumps the
@@ -757,11 +763,10 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
 //     anyway (today's in-place behavior) and latch RELEASED_ON_FAILSOFT -- a stalled settle can never
 //     softlock the switch.
 
-/// `FUN_140624bd0` real entry -- STEP_WorldResWait's residency gate. DEOBF RVA (base 0x140000000),
-/// byte-identical to the 1.16.2 dump (shift 0). Not the shift tool's 0x624af0 (-0xe0 mid-instruction
-/// false match in this low-.text staircase region); resolved by unique prologue byte-search
-/// (`48 89 5c 24 08 57 48 83 ec 30 48 8b d9 0f 29 74 24 20 48 8d 51 2c 0f 28 f1 48 8b 49 10`, 1 hit) and
-/// disasm-verified (first insn `mov %rbx,0x8(%rsp)` = a clean 5-byte MinHook boundary).
+/// `FUN_140625ed0` real entry -- STEP_WorldResWait's residency gate, 2.7.2.0 rva (base 0x140000000).
+/// The prologue `48 89 5c 24 08 57 48 83 ec 30 48 8b d9 0f 29 74 24 20 48 8d 51 2c 0f 28 f1 48 8b 49 10`
+/// has exactly 1 hit in `eldenring-deobf-1.17.2.bin`, at this rva, as it did in 1.16.2 (first insn
+/// `mov %rbx,0x8(%rsp)` = a clean 5-byte MinHook boundary).
 const WORLDRESWAIT_GATE_RVA: usize = WORLDRESWAIT_FIELDAREA_GATE_RVA;
 /// Consecutive settled frames required before releasing the hold (the design's K~8-16; mirrors the game's
 /// own FieldArea stabilization countdown). Filters a one-frame settle blip on the persistent world.
@@ -772,7 +777,7 @@ const WORLDRESWAIT_HOLD_SETTLE_FRAMES: usize = 12;
 const WORLDRESWAIT_HOLD_WAIT_MAX: usize = 900;
 /// Lowest plausible heap pointer -- filters null / freed CSWorldGeomMan singleton slots.
 const WORLDRESWAIT_GEOM_HEAP_LO: usize = 0x10000;
-/// CS::CSWorldGeomMan::Update field offsets (GHIDRA-confirmed @0x1406d31f0; version-stable dump==live;
+/// CS::CSWorldGeomMan::Update field offsets (GHIDRA-confirmed @1.16.2 0x1406d31f0;
 /// the exact fields crates/er-telemetry-core stream_overlap.rs samples). `+0xd0`(u8)=did-work-this-frame,
 /// `+0xf0/0xf4/0xf8/0x100`(i32)=per-frame work accumulators, `+0x108/0x109`(u8)=all-blocks-ready flags.
 /// (`+0x104` registered-block count is NONZERO at rest -- deliberately not gated on.)
@@ -783,7 +788,7 @@ const GEOM_WORK_ACC_F8_OFFSET: usize = 0xf8;
 const GEOM_WORK_ACC_100_OFFSET: usize = 0x100;
 const GEOM_ALL_READY_A_108_OFFSET: usize = 0x108;
 const GEOM_ALL_READY_B_109_OFFSET: usize = 0x109;
-/// Trampoline to the original `FUN_140624bd0` (set on hook install).
+/// Trampoline to the original `FUN_140625ed0` (set on hook install).
 static WORLDRESWAIT_GATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 
 /// True iff CS::CSWorldGeomMan reports geometry streaming settled this frame: no work done this frame,
@@ -824,10 +829,10 @@ fn worldreswait_hold_armed_and_scoped() -> bool {
             == 0
 }
 
-/// Call the original `FUN_140624bd0(rcx=FieldArea*, xmm1=f32) -> AL` (residency gate). Returns 0 if the
+/// Call the original `FUN_140625ed0(rcx=FieldArea*, xmm1=f32) -> AL` (residency gate). Returns 0 if the
 /// trampoline is not yet set (fail-safe not-ready). NOTE the second argument is the xmm1 float
 /// STEP_WorldResWait passes in (`MOVSS XMM1,[param2+8]`), not an integer -- the gate saves it to xmm6 and
-/// forwards it to FUN_14066da60. On Win64 an `f32` at argument position 1 is placed in xmm1 by the ABI,
+/// forwards it to 1.16.2 FUN_14066da60. On Win64 an `f32` at argument position 1 is placed in xmm1 by the ABI,
 /// so this signature forwards the float verbatim (the incoming rdx is unused by the gate, which recomputes
 /// `&currentBlockId` = fieldArea+0x2c). Declaring it `f32` is what keeps the float from being clobbered
 /// across our atomic/logging work before we call the original.
@@ -840,7 +845,7 @@ unsafe fn worldreswait_gate_call_orig(field_area: usize, load_delta: f32) -> u8 
     unsafe { orig(field_area, load_delta) }
 }
 
-/// `__fastcall FUN_140624bd0(rcx=FieldArea*, xmm1=f32 load_delta) -> AL` defer-release detour. Pure
+/// `__fastcall FUN_140625ed0(rcx=FieldArea*, xmm1=f32 load_delta) -> AL` defer-release detour. Pure
 /// passthrough unless a switch reload is armed + scoped. While held it returns AL=0 so STEP_WorldResWait
 /// keeps looping in its native not-ready branch (loading cover pumped, no warp, no advance); it releases
 /// with AL=1 once CSWorldGeomMan settles for K frames or the fail-soft cap expires. See the section
@@ -856,7 +861,7 @@ pub(crate) unsafe extern "system" fn worldreswait_gate_hook(
         return unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
     }
     // Armed. Until residency is seen, run the real gate every frame so maintenance runs + residency
-    // progresses (native-identical), and the gate's one-shot FUN_14066d610 residency-pop fires exactly
+    // progresses (native-identical), and the gate's one-shot (1.16.2 FUN_14066d610) residency-pop fires exactly
     // once (on the frame residency is first reached).
     if er_telemetry_core::counters::WORLDRESWAIT_RESIDENCY_SEEN.load(Ordering::SeqCst) == 0 {
         let real = unsafe { worldreswait_gate_call_orig(field_area, load_delta) };
@@ -1004,7 +1009,7 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
 }
 
 /// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
-/// The directory is built by the native builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
+/// The directory is built by the native builder 0x140e11be0 (`SAVE_DIR_BUILDER_RVA`) -- the same
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
 /// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
 /// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
@@ -1145,7 +1150,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
         *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
         *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
     }
-    // Two frames down the builder calls through the qword at 0x143b48ff0 (0x140e8d550 ->
+    // Two frames down the builder calls through the qword at 2.7.2.0 0x143b50060 (1.16.2: 0x140e8d550 ->
     // 0x140e8d510 -> `MOV RAX,[0x143b48ff0]; CALL RAX`, its only reference in the image), so a
     // null there is `CALL 0`. Bail with a log rather than crash.
     let steam_id_call_slot = unsafe {
@@ -1337,9 +1342,8 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
         None => OWN_LOAD_STREAM_FIELD_UNREAD,
     };
     // IO device inflight / started-request handle.
-    // RESOLVED: a `.data` global, and they all moved on 1.17 (0x4589390 -> 0x458d3f0). Read raw,
-    // `deref` succeeds on whatever now occupies the old slot and the IO telemetry reports another
-    // object's inflight/handle as the loader's. A refusal is 0, which `deref` answers `None` for.
+    // RESOLVED: a `.data` global (2.7.2.0 0x4590430). On any other build `game_data_addr` refuses
+    // with 0, which `deref` answers `None` for, rather than reading another object's slot.
     let iodev = deref(er_game_base::mem::game_data_addr(
         base,
         IODEV_GLOBAL_RVA,
@@ -1418,8 +1422,8 @@ unsafe fn own_load_m28_dispatch(
     // The resmgr 0xb3030 array entry `block` is a wrapper (WorldBlockData), not the WorldBlockRes --
     // its +0x40/+0x48 are unrelated wrapper fields (observed null at runtime). The real WorldBlockRes
     // (FD4FileCaps at +0x40/+0x48, phase byte at +0x35) is what the engine reaches via the native
-    // getter `block->vtable[+0x10](block)` (canonical scanner 0x14066d3e0; phase handlers 0x1406157f0 /
-    // 0x140615340). SAFETY pivot (confirmed 2x: process_exited_before_ready @ ~767 game-task ticks with
+    // getter `block->vtable[+0x10](block)` (1.16.2: canonical scanner 0x14066d3e0; phase handlers
+    // 0x1406157f0 / 0x140615340). SAFETY pivot (confirmed 2x: process_exited_before_ready @ ~767 game-task ticks with
     // no diag line written -> the getter call itself AV-faulted before any logging; a hardware AV is not
     // a Rust panic so catch_unwind cannot contain it; matches the prior menu-free getter-fault memory).
     // So we do not call the getter. This pass is verify-only / read-ONLY: capture the getter address
@@ -1461,7 +1465,7 @@ unsafe fn own_load_m28_dispatch(
             q(0xa0),
             q(0xa8)
         ));
-        // Container layout (decoded from getter 0x14062f470): WorldBlockRes elements live in an inline
+        // Container layout (decoded from getter 2.7.2.0 0x140630770): WorldBlockRes elements live in an inline
         // array at *(block+0xce0), count *(block+0xcd8), stride 0xb98; caps at element+0x40/+0x48. Dump
         // count, array base, and element-0's phase/caps + cap0's loadState(+0x88)/lp(+0x78) read-only to
         // confirm the layout before enabling the array-iteration dispatch.
@@ -1711,7 +1715,7 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
         };
         // Job state sweep (menujob-lever-is-start-not-build): owner+0x130 is non-null on our path, so
         // the job is pre-built; the gap is whether the Continue-confirm started it. Dump the job's
-        // header (state field is ~+0x10 per FUN_1407915b0's dispatch on *(this+0x10); sweep neighbors to
+        // header (state field is ~+0x10 per 1.16.1 dump FUN_1407915b0's dispatch on *(this+0x10); sweep neighbors to
         // be offset-robust). If the state never advances on our path (stays idle) while native advances
         // 0->1->2->3->5->6, the lever is the start, not a build. Read-only.
         let js = |off: usize| {

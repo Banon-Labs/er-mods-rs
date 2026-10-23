@@ -3,7 +3,8 @@
 //! # The crash
 //!
 //! A tester's Elden Ring died the same way twice, a day apart (2026-08-22 18:27Z and
-//! 2026-08-23 04:35Z), on a profile carrying only this DLL and the crash logger. The fatal record
+//! 2026-08-23 04:35Z), on a profile carrying only this DLL and the crash logger. Both were 1.16.2
+//! sessions, so the VAs in this section and the next are 1.16.2 ones. The fatal record
 //! is a NULL write at `eldenring.exe+0x1eb9999` -- but that address is inside `DLPanic`'s body,
 //! not inside the code with the bug. The access violation is the panic's death rattle.
 //!
@@ -32,15 +33,15 @@
 //!
 //! This guard does not invent a value; it takes the branch the function already has. When
 //! `GetParamResCap` returns null, or when the binary search misses, control falls to
-//! `0x140d3d755`:
+//! `0x140d40605` (2.7.2.0; the body is laid out exactly as on 1.16.2):
 //!
 //! ```text
-//! 140d3d755: MOV dword ptr [RSI + 0x8], EBP    ; out->tag   = param_2
-//! 140d3d758: MOV qword ptr [RSI], RBX          ; out->value = 0   (EBX was XORed at 0x140d3d634)
+//! 140d40605: MOV dword ptr [RSI + 0x8], EBP    ; out->tag   = param_2
+//! 140d40608: MOV qword ptr [RSI], RBX          ; out->value = 0   (EBX was XORed at 0x140d404e4)
 //! ```
 //!
 //! with `RSI` holding the out pointer (`rcx` on entry) and `EBP` holding `param_2` (`edx` on
-//! entry, saved at `0x140d3d613`). The stub writes those two fields and returns, which is
+//! entry, saved at `0x140d404c3`). The stub writes those two fields and returns, which is
 //! byte-for-byte the "no row for this platform" outcome the caller is already written against --
 //! the same rule the sibling guards follow.
 //!
@@ -53,12 +54,13 @@ use core::sync::atomic::{AtomicU64, AtomicUsize};
 
 use super::Guard;
 
-/// `FUN_140d3d5f0(out, platformKind)` -- resolves the `LoadBalancerParam` row for a platform and
-/// writes `{ row, platformKind }` into `out`. Named for what it does rather than by its address,
-/// because the address is the thing most likely to change.
-pub(crate) const LOAD_BALANCER_PARAM_RVA: usize = 0xd3_d5f0;
+/// `FUN_140d3d5f0(out, platformKind)` (1.16.2 dump name; 2.7.2.0 rva below) -- resolves the
+/// `LoadBalancerParam` row for a platform and writes `{ row, platformKind }` into `out`. Named for
+/// what it does rather than by its address, because the address is the thing most likely to
+/// change.
+pub(crate) const LOAD_BALANCER_PARAM_RVA: usize = 0xd4_04a0;
 
-/// `GLOBAL_SoloParamRepository` -- the singleton slot this function dereferences at `0x140d3d636`
+/// `GLOBAL_SoloParamRepository` -- the singleton slot this function dereferences at `0x140d404e6`
 /// before it may touch any param. This is the pointer that was null.
 ///
 /// Declared once in `er-game-base::rva`, because the product DLL guards the sibling
@@ -79,7 +81,7 @@ pub(crate) static ORIG_LOAD_BALANCER_PARAM: AtomicUsize = AtomicUsize::new(super
 pub(crate) static BLOCKED_LOAD_BALANCER_PARAM: AtomicU64 = AtomicU64::new(0);
 
 // The expected prologue, assembled from named `iced-x86` instructions by this crate's `build.rs`
-// and verified there against `eldenring-deobf.bin` when a copy is present.
+// and verified there against `eldenring-deobf-1.17.2.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_null_param_repository_prologues.rs"
@@ -121,7 +123,7 @@ pub(crate) unsafe extern "system" fn load_balancer_param_guard() {
         // Atomic so the count stays exact when several threads miss at once, and memory-only so
         // nothing else is disturbed on the way to the return.
         "lock inc qword ptr [rip + {blocked}]",
-        // The original's own miss path at 0x140d3d755, in its order: tag first, then value.
+        // The original's own miss path at 0x140d40605, in its order: tag first, then value.
         "mov dword ptr [rcx + 8], edx",
         "mov qword ptr [rcx], 0",
         "ret",
@@ -148,7 +150,7 @@ pub(crate) const LOAD_BALANCER_PARAM_GUARD: Guard = Guard {
     blocked: &BLOCKED_LOAD_BALANCER_PARAM,
     prepare: Some(publish_repository_slot),
     rationale: "null SoloParamRepository -> write the function's own no-row result ({value:0, \
-                tag:param_2}, its branch at 0x140d3d755) instead of letting FD4Singleton.h:180 \
+                tag:param_2}, its branch at 0x140d40605) instead of letting FD4Singleton.h:180 \
                 DLPanic and take the process with it",
 };
 
@@ -162,9 +164,9 @@ mod tests {
     /// are produced, in `build.rs`, so repeating them here would only be a transcription to keep
     /// in step.
     #[test]
-    fn rvas_match_er_1162_static_re() {
-        assert_eq!(LOAD_BALANCER_PARAM_RVA, 0xd3_d5f0);
-        assert_eq!(SOLO_PARAM_REPOSITORY_GLOBAL_RVA, 0x3d8_1ee8);
+    fn rvas_match_the_2720_static_re() {
+        assert_eq!(LOAD_BALANCER_PARAM_RVA, 0xd4_04a0);
+        assert_eq!(SOLO_PARAM_REPOSITORY_GLOBAL_RVA, 0x3d8_8f78);
     }
 
     /// MinHook relocates the first five bytes of the entry, so the signature must cover at least

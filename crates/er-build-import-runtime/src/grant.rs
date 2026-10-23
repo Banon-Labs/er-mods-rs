@@ -59,24 +59,24 @@ const ADD_INVENTORY_EQUIP_BY_ITEM_ID_RVA: usize = 0x246840;
 /// hand the inventory an instance that already carries a gem.
 pub const ADD_INVENTORY_EQUIP_RVA: usize = 0x246480;
 /// `CS::CSGaitemImp::GetGaItemHandleWeaponWithGem(CSGaitemImp*, uint *out, int weaponId,
-/// int gemId)` (Ghidra `FUN_140671ce0`).
+/// int gemId)` (1.16.2 Ghidra `FUN_140671ce0`).
 ///
 /// Mints a weapon gaitem and, when `gemId >= 0`, a gem gaitem mounted in its slot 0 -- the exact
 /// pair `EquipParamCustomWeapon` drops go through. A negative `gemId` skips the gem entirely, so
 /// this one entry point covers armaments with and without an ash.
-const GET_GAITEM_HANDLE_WEAPON_WITH_GEM_RVA: usize = 0x671ce0;
+const GET_GAITEM_HANDLE_WEAPON_WITH_GEM_RVA: usize = 0x672fe0;
 /// `GaItemHandle::~GaItemHandle(uint *handle)`.
 ///
 /// Releases the reference the mint took. `CSGaitemImp` is a bounded refcounted table (0x1400
 /// entries) and every native caller of the mint destructs its local handle once the inventory has
 /// taken its own reference; skipping it leaks table entries until the free queue is exhausted,
 /// which this repository has already crashed on once.
-const GAITEM_HANDLE_DTOR_RVA: usize = 0x682480;
+const GAITEM_HANDLE_DTOR_RVA: usize = 0x683780;
 /// `CS::GaitemLookupResult::SetReinforcement(GaitemLookupResult*, int)` -- `vtable + 0x20` on the
 /// resolved instance, the same virtual `EquipInventoryData::InsertItem` calls.
-const SET_REINFORCEMENT_RVA: usize = 0x672e00;
+const SET_REINFORCEMENT_RVA: usize = 0x674100;
 /// `CS::GaitemLookupResult::GetReinforcement(GaitemLookupResult*) -> int` -- `vtable + 0x18`.
-const GET_REINFORCEMENT_RVA: usize = 0x672740;
+const GET_REINFORCEMENT_RVA: usize = 0x673a40;
 // Declared once in `er-game-base::rva`; `er-better-refills` and `equip_native` read the
 // same values from there.
 use er_game_base::rva::{
@@ -92,7 +92,7 @@ use crate::gaitem::GaitemLookupResult;
 /// loaded this slot really is null, so it is read as a plain pointer and checked.
 ///
 /// The offset itself is measured, not read off that declaration: `GetMainPlayerGameData`
-/// (`0x140e9fc30`) is `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret`, and the
+/// (`0x140ea3190`) is `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret`, and the
 /// `GameDataMan` constructor pairs 351/351 with zero moved offsets across 1.16.2/1.17. Full
 /// witness in `storage::GAME_DATA_MAN_PLAYER_OFFSET`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
@@ -112,7 +112,7 @@ const ACCESSORY_CATEGORY: u32 = 0x2000_0000;
 
 /// Whether the engine files a repeat of this id as an inventory entry of its own.
 ///
-/// This is the negation of `IsStackable` (`0x14068ddc0`) over the categories a plan grants. That
+/// This is the negation of `IsStackable` (`0x14068f0c0`) over the categories a plan grants. That
 /// function dispatches on the category nibble alone and answers false for both nibbles below, so
 /// `AddInventoryEquip` (`0x140246480`) never runs its existing-entry lookup and reaches
 /// `EquipInventoryData::InsertItem` (`0x14024cfd0`), which calls `InsertNormalItem` with no
@@ -121,7 +121,7 @@ const ACCESSORY_CATEGORY: u32 = 0x2000_0000;
 ///
 /// Asking for N in a single call does not work, and that is why the count has to be carried
 /// across grants instead of folded into one quantity. `InsertItem` clamps the amount to
-/// `GetMaxQuantityForItemEntry` -> `GetMaxItemQuantity` (`0x140674680`), whose protector and
+/// `GetMaxQuantityForItemEntry` -> `GetMaxItemQuantity` (`0x140675980`), whose protector and
 /// accessory branches look the row up, read nothing out of it, and return a literal 1. Neither
 /// `EquipParamProtector` nor `EquipParamAccessory` declares a stack field for it to read.
 fn entry_per_copy(item_id: u32) -> bool {
@@ -253,8 +253,8 @@ impl Requested {
 /// Confirmed on both images rather than carried over: the 1.16.2 dump names the field at that
 /// offset, and `AddInventoryEquip`'s entry sequence writes it as
 /// `XOR ESI,ESI / MOV dword ptr [RCX + 0x3fc],ESI` -- the bytes `33 f6 89 b1 fc 03 00 00`, which
-/// occur at `0x1402464b8` in `eldenring-deobf.bin` (1.16.2) and at the same address in
-/// `eldenring-deobf-1.17.bin`.
+/// occur at `0x1402464bc` in `eldenring-deobf.bin` (1.16.2) and at the same address in
+/// `eldenring-deobf-1.17.2.bin`.
 const LAST_ITEM_ADD_RESULT_OFFSET: usize = 0x3fc;
 
 /// `lastItemAddResult` when the engine flagged nothing.
@@ -379,11 +379,11 @@ const WORLD_CHR_MAN_MAIN_PLAYER_INS: usize = 0x1e508;
 ///
 /// This is deliberately stricter than "PlayerGameData is non-null". That pointer goes live
 /// during the loading screen, long before a `PlayerIns` exists -- and the equip path's own
-/// gate (`FUN_140788a90`) dereferences `WorldChrMan->mainPlayerIns` unconditionally. Running
+/// gate (`0x140789dc0`) dereferences `WorldChrMan->mainPlayerIns` unconditionally. Running
 /// the import on the weaker check crashed the game with a null-deref inside that gate
-/// (access violation at game+0x788adb, 2026-08-22). Granting only needs `EquipGameData`, but
-/// there is no reason to grant into a character that cannot yet wear anything, so the whole
-/// import waits for this.
+/// (access violation at 1.16.2 game+0x788adb, 2026-08-22; 2.7.2.0 `0x789e0b`). Granting only
+/// needs `EquipGameData`, but there is no reason to grant into a character that cannot yet wear
+/// anything, so the whole import waits for this.
 ///
 /// # Safety
 ///
@@ -470,8 +470,9 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         return outcome;
     };
 
-    // Resolved for the running build. All three are direct calls into game code at 1.16.2
-    // addresses; on 1.17 an unresolved one transfers control into whatever moved there. Refusing
+    // Resolved for the running build. All three are direct calls into game code at 2.7.2.0 RVAs;
+    // `crate::native::resolve_all` refuses them on any other build, where a call would transfer
+    // control into unrelated code. Refusing
     // takes the same path a null EquipGameData already takes -- every item reported missing,
     // which is exactly what happens when nothing is granted.
     let natives = crate::native::resolve_all(
@@ -876,7 +877,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                         } else if !storage.can_discard() {
                             crate::log_line(&format!(
                                 "[build-import]   STUCK item 0x{other:08X}: the box refused it and \
-                                 the discard natives have no verified mapping for this build, so \
+                                 the discard natives are refused on this build, so \
                                  pot group {group} cannot be freed for {:?}",
                                 grant.label
                             ));

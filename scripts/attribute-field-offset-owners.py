@@ -10,7 +10,7 @@ forever, with no fault and no log line.
 
 Two gates already measure that class, and both bottom out in the same place:
 
-  * `scripts/check-object-field-offsets-1170.py` re-measures 31 frozen witness rows across six
+  * `scripts/check-object-field-offsets.py` re-measures its frozen witness rows across the
     objects: `CS::PlayerGameData` and `CS::PlayerIns`, the two the migration actually took apart;
     `FD4::FD4PadDevice` / `FD4::FD4PadManager`, where the question was which object a write lands
     in; and `CS::CSSystemStep`, where the question was whether an offset had ever been a field
@@ -45,7 +45,7 @@ Exactly what the two existing gates already consult, imported rather than copied
      still an owner and the offset is still measurable.
 
 Naming an owner is not a clearance. `CS::CSMenuProfModelRend + 0x756` is attributed and still
-returns still-unknown from `scripts/clear-fields-by-object.py`. Attribution is what makes the
+has no witness row in `scripts/check-object-field-offsets.py`. Attribution is what makes the
 offset measurable; the measurement is a separate step and is reported separately.
 
 What this file asserts
@@ -61,10 +61,10 @@ What this file asserts
       through the floor the gate goes red and says the matcher went blind, not that the set got
       smaller.
 
-  Witnesses (runs when the two de-Arxan'd images are present, SKIPs loudly when they are not).
-      Frozen function-pair alignments re-measured from the images on every run, in the shape
-      `scripts/check-object-field-offsets-1170.py` established: a row that cannot be measured is a
-      failure, not a pass.
+  Witnesses (runs when the de-Arxan'd 2.7.2.0 image is present, skips loudly when it is not).
+      Frozen witness functions re-measured on the image every run, with the matcher
+      `scripts/check-object-field-offsets.py` uses: a row that cannot be measured is a failure,
+      not a pass.
 
 Usage
     scripts/attribute-field-offset-owners.py                  # the gate
@@ -87,11 +87,13 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "scripts"))
+import er_game_image  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
+
 RATCHET = REPO / "docs" / "recon" / "unattributed-field-offsets.txt"
-IMAGE_1162 = REPO / "eldenring-deobf.bin"
-IMAGE_1170 = REPO / "eldenring-deobf-1.17.bin"
-MATCHER = REPO / "scripts" / "pair-object-field-drift.py"
-IMAGE_BASE = 0x140000000
+# The single-image field measurement, shared with the struct-field gate rather than copied.
+OFFSETS_GATE = REPO / "scripts" / "check-object-field-offsets.py"
+IMAGE_BASE = er_game_image.BASE
 
 # ---------------------------------------------------------------------------------------------
 # Blindness floors.
@@ -111,13 +113,13 @@ MIN_ATTRIBUTED = 320
 # ---------------------------------------------------------------------------------------------
 # Frozen witnesses.
 #
-# Each row: (object, label, offset_1162, offset_1170, witness, how). The witness is a pair of
-# function bodies that align instruction-for-instruction across the two images, so instruction k
-# on each side is the same access to the same field and a displacement difference is that field
-# moving, by exactly that much. `bases` restricts what is counted to registers that provably hold
-# the object -- never left empty. An empty base filter means "count every register base", which is
-# how foreign objects leak in as false held witnesses; it produced spurious "held" readings at
-# PlayerIns 0x480/0x508/0x530, all inside a band that had demonstrably moved.
+# Each row: (object, label, offset_1162, offset, witness, how). The witness is a 2.7.2.0 function
+# (`va`, `len` bytes from it) that touches the field through `bases`; it was first a pair of 1.16.2
+# and 1.17 bodies aligned instruction for instruction, then carried to 2.7.2.0 on 2026-10-23 and
+# re-measured. `bases` restricts what is counted to registers that provably hold the object --
+# never left empty. An empty base filter means "count every register base", which is how foreign
+# objects leak in as false witnesses; it produced spurious readings at PlayerIns
+# 0x480/0x508/0x530, all inside a band that had demonstrably moved.
 # ---------------------------------------------------------------------------------------------
 
 # `CS::CSMenuProfModelRend::CSMenuProfModelRend`. `mov %rcx,%r14` in the prologue and then
@@ -126,23 +128,17 @@ MIN_ATTRIBUTED = 320
 # The 1.17 body stores 0x142b831d8 at the corresponding instruction, which is exactly the 1.17
 # vtable `scripts/rtti-classmap-both.py` pairs to the same mangled class name. 64/64 instructions
 # align with zero inserts, deletes or replacements.
-PROF_MODEL_REND_CTOR = dict(
-    va16=0x140BBDF20, len16=0x111, va17=0x140BBF5F0, len17=0x111, bases=("r14",)
-)
+PROF_MODEL_REND_CTOR = dict(va=0x140BBFB20, len=0x111, bases=("r14",))
 # The orbit -> view-matrix builder the camera prose names (`PROFILE_CAM_BUILD_MATRIX_RVA`), a pure
 # math leaf: `fn(renderer /rcx/, out /rdx/)`. 295/295 instructions align, again with no structural
 # difference, and `rcx` is the renderer by the x64 calling convention.
-PROF_MODEL_REND_BUILD_MATRIX = dict(
-    va16=0x140BBE390, len16=0x4C2, va17=0x140BBFA60, len17=0x4C2, bases=("rcx",)
-)
+PROF_MODEL_REND_BUILD_MATRIX = dict(va=0x140BBFF90, len=0x4C2, bases=("rcx",))
 # The FD4PadDevice per-frame poll. Its interesting property here is the BASE: two instructions
 # above the read it does `mov rax,[rip -> 0x14485dc18]`, the DLUID input-device-manager singleton
-# whose 1.17 counterpart 0x4861d28 carries 84/84 agreeing references in
-# docs/recon/rva-map-1162-to-1170.data.tsv. So `rax` holds that singleton by construction, not by
-# inference, and 0x88d is a field of whatever object lives in it.
-DLUID_INPUT_GATE = dict(
-    va16=0x141F6BAD0, len16=0x86, va17=0x141F6D8D0, len17=0x86, bases=("rax",)
-)
+# whose 1.17 counterpart 0x4861d28 carried 84/84 agreeing references in the data map of the time.
+# So `rax` holds that singleton by construction, not by inference, and 0x88d is a field of
+# whatever object lives in it.
+DLUID_INPUT_GATE = dict(va=0x141F6F030, len=0x86, bases=("rax",))
 
 WITNESSES = (
     (
@@ -336,7 +332,7 @@ HEADER = """\
 # check-singleton-field-offsets.py and adjudicate-autoload-offsets.py all import. Use `None`
 # there, with a reason in NON_GAME_STRUCT_REASONS, for a Windows / MSVC / PE ABI structure a
 # FromSoftware patch cannot move. Then measure it:
-#     python3 scripts/clear-fields-by-object.py --class CS::SomeClass --offsets 0xNN
+#     add a witness row for it to scripts/check-object-field-offsets.py
 # and re-run --refresh.
 #
 # NAMING THE OWNER IS NOT A CLEARANCE. It is what makes the offset measurable. Several attributed
@@ -442,49 +438,29 @@ def load_ratchet() -> set[str] | None:
 _MATCHER: list = []
 
 
-def load_matcher(fresh=False):
-    if _MATCHER and not fresh:
-        return _MATCHER[0]
-    spec = importlib.util.spec_from_file_location("_afoo_pair_object_field_drift", MATCHER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if not fresh:
-        _MATCHER.append(module)
-    return module
+def load_matcher():
+    """`check-object-field-offsets.py`'s `Matcher`, one instance per process."""
+    if not _MATCHER:
+        _MATCHER.append(_load("_afoo_offsets_gate", OFFSETS_GATE).load_matcher())
+    return _MATCHER[0]
 
 
 def images_present() -> bool:
-    return IMAGE_1162.is_file() and IMAGE_1170.is_file()
+    return er_game_image.image_path() is not None
 
 
-def image_findings(matcher, capstone, md, rows=WITNESSES):
+def image_findings(matcher, rows=WITNESSES):
     findings, measured = [], 0
-    for obj, label, old, new, witness, how in rows:
-        pairs, _ins, _del, _rep = matcher.compare(
-            capstone,
-            md,
-            witness["va16"] - IMAGE_BASE,
-            witness["len16"],
-            witness["va17"] - IMAGE_BASE,
-            witness["len17"],
-            witness["bases"],
-            label,
-            quiet=True,
-        )
-        seen = {o: n for o, n, _a, _b, _t in pairs}
-        if old not in seen:
+    for obj, label, _old, new, witness, how in rows:
+        seen = matcher.displacements(witness)
+        if new not in seen:
             findings.append(
-                f"{obj} :: {label}: the witness ({how}) no longer reads {old:#x} through "
-                f"{'/'.join(witness['bases'])} at all -- the measurement went blind, which is "
-                "not the same as a clean result"
+                f"{obj} :: {label}: the witness {witness['va']:#x} ({how}) no longer touches "
+                f"{new:#x} through {'/'.join(witness['bases'])} -- either the field moved or the "
+                "measurement went blind, and neither is a clean result"
             )
             continue
         measured += 1
-        if seen[old] != new:
-            findings.append(
-                f"{obj} :: {label}: measured {old:#x} -> {seen[old]:#x}, but this gate is frozen "
-                f"at {old:#x} -> {new:#x}. Witness: {how}"
-            )
     return findings, measured
 
 
@@ -581,16 +557,13 @@ def run(out=sys.stdout, rows=None, owner_table=None, read_text=None, ratchet=Non
     findings += witnessed_constant_findings(by_name_un, by_name_at, read_text=read_text)
 
     if images_present():
-        matcher = load_matcher()
-        capstone, md = matcher._capstone()
-        image, measured = image_findings(matcher, capstone, md)
+        image, measured = image_findings(load_matcher())
         findings += image
-        print(f"  witnesses re-measured from the two images: {measured}/{len(WITNESSES)}", file=out)
+        print(f"  witnesses re-measured on 2.7.2.0: {measured}/{len(WITNESSES)}", file=out)
     else:
         print(
-            "  SKIP: eldenring-deobf.bin / eldenring-deobf-1.17.bin absent (they are game-derived "
-            "and gitignored), so the frozen witnesses were NOT re-measured. This run did not "
-            "check the images.",
+            f"  SKIP: {er_game_image.missing_reason()} (it is game-derived and gitignored), so "
+            "the frozen witnesses were not re-measured. This run did not check the image.",
             file=out,
         )
 
@@ -770,13 +743,13 @@ def selftest() -> int:
     red, note = _red("edited constant", read_text=mutate, ratchet=baseline)
     check(red, f"editing {target} to a wrong literal did not go red ({note})")
 
-    # 5. The image half, and the frozen negatives that go with it. Every witness row above is a
-    #    held row, so perturbing its 1.17 value to old+8 is precisely the mutant a matcher that
-    #    blanket-reported "+8 above the insertion" would be. Each must go red on its own.
+    # 5. The image half, and the perturbations that go with it. Moving a row's offset by +8 is the
+    #    mutant a matcher that blanket-reported "+8 above the insertion" would produce, and +3 is
+    #    an offset nothing reads. Each must go red on its own, unless the witness genuinely
+    #    touches that offset too, in which case the mutant is not a mutant and is skipped.
     if images_present():
         matcher = load_matcher()
-        capstone, md = matcher._capstone()
-        findings, measured = image_findings(matcher, capstone, md)
+        findings, measured = image_findings(matcher)
         check(not findings, f"the frozen witnesses do not reproduce: {findings}")
         check(
             measured == len(WITNESSES),
@@ -785,24 +758,25 @@ def selftest() -> int:
         )
         for index, row in enumerate(WITNESSES):
             obj, label, old, new, witness, how = row
-            mutant = list(WITNESSES)
-            mutant[index] = (obj, label, old, new + 8, witness, how)
-            bad, _m = image_findings(matcher, capstone, md, rows=tuple(mutant))
-            check(bad, f"frozen negative: {obj}::{label} frozen at old+8 was not caught")
-            mutant[index] = (obj, label, old + 3, new, witness, how)
-            bad, _m = image_findings(matcher, capstone, md, rows=tuple(mutant))
-            check(bad, f"blind witness: {obj}::{label} at an offset nothing reads was not caught")
+            seen = matcher.displacements(witness)
+            for step, what in ((8, "+8 frozen negative"), (3, "blind offset")):
+                if new + step in seen:
+                    continue
+                mutant = list(WITNESSES)
+                mutant[index] = (obj, label, old, new + step, witness, how)
+                bad, _m = image_findings(matcher, rows=tuple(mutant))
+                check(bad, f"{what}: {obj}::{label} moved to {new + step:#x} was not caught")
 
-        # 6. A LOBOTOMISED MATCHER. `compare` returning nothing must be a failure, not a pass.
+        # 6. A lobotomised matcher. Measuring nothing must be a failure, not a pass.
         class Blind:
             @staticmethod
-            def compare(*_a, **_k):
-                return [], [], [], []
+            def displacements(_witness):
+                return set()
 
-        bad, _m = image_findings(Blind, capstone, md)
+        bad, _m = image_findings(Blind)
         check(len(bad) == len(WITNESSES), "a matcher that reports nothing did not fail every row")
     else:
-        print("SKIP: images absent; the witness half of the selftest did not run")
+        print("SKIP: image absent; the witness half of the selftest did not run")
 
     check(len(real_rows) >= MIN_INCLUDED_SITES, "the real inventory is below its own floor")
     check(len(attributed) >= MIN_ATTRIBUTED, "the real attributed count is below its own floor")

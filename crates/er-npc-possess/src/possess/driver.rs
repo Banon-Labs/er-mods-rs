@@ -244,14 +244,14 @@ impl NpcPossessionEngine {
     ///
     /// **the INVINCIBILITY bit covers more than this comment used to say, and that is the
     /// correction it now carries.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather
-    /// than assumed -- `ChrIns::IsImmuneToAttack` at `0x1403f3dc0` is `TESTB $0x10,0x1c5(%r9)`, the
-    /// same instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5` sits below the `+0x3b8` insertion
-    /// that grew `ChrIns` on this build, so it could not have moved. This block used to claim the
-    /// bit gates hit resolution "and nothing else", and that the fall path never asks whether the
-    /// victim is immune. It does: `CSChrFallModule::Update`'s damage block is gated on
-    /// `FUN_14044e730`, which calls exactly that vtable slot and returns false when it answers yes
-    /// (`0x14044e866`; the byte trace is in [`crate::possess::fall`]). So a possessed body cannot
-    /// be charged for a fall at all while the bit is on.
+    /// than assumed -- `ChrIns::IsImmuneToAttack` at 1.17 `0x1403f3dc0` is
+    /// `TESTB $0x10,0x1c5(%r9)`, the same instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5`
+    /// sits below the `+0x3b8` insertion that grew `ChrIns` on 1.17, so it could not have moved.
+    /// This block used to claim the bit gates hit resolution "and nothing else", and that the fall
+    /// path never asks whether the victim is immune. It does: `CSChrFallModule::Update`'s damage block is gated on
+    /// 1.16.2 `FUN_14044e730`, which calls exactly that vtable slot and returns false when it
+    /// answers yes (1.16.2 `0x14044e866`; the byte trace is in [`crate::possess::fall`]). So a
+    /// possessed body cannot be charged for a fall at all while the bit is on.
     ///
     /// The `lastGroundedPosition` write below is therefore not what keeps the body alive during a
     /// possession -- it is what keeps the field honest for the frames after one, when the bit comes
@@ -353,8 +353,8 @@ impl NpcPossessionEngine {
             "colocation: {phase} -- wrote lastGroundedPosition <- {after_grounded} (target \
              {target}, was {before_grounded}, write={pinned}) | body at {body} | fall charge \
              lastGrounded.y - position.y = {charge} m before, {charge_after} m after. That \
-             subtraction IS `CS::CSChrFallModule::GetFallDeathTime` (1.16.2 0x14044dce0, the SUBSS \
-             at 0x14044dd1f); `CSChrFallModule::Update` evaluates it only on a frame where \
+             subtraction IS `CS::CSChrFallModule::GetFallDeathTime` (2.7.2.0 0x14044e320, the \
+             SUBSS at 0x14044e382); `CSChrFallModule::Update` evaluates it only on a frame where \
              standingOnSolidGround is set, and charges hpMax * ratio(it) through \
              `CSChrDataModule::ChangeHP` with deathType=Fall. Positive means the engine believes \
              the body fell that far, and the pin holds it at or below zero at every subject size, \
@@ -1193,8 +1193,8 @@ impl NpcPossessionEngine {
         // Where the player is aiming, and the reason it has to be turned into a facing rather
         // than handed to the attack.
         //
-        // A player's own attacks get their spawn orientation from `FUN_1403fb0b0`, which starts
-        // from `ChrCtrl::GetPhysicsOrientation` and only bends it toward the camera when
+        // A player's own attacks get their spawn orientation from 1.16.2 `FUN_1403fb0b0`, which
+        // starts from `ChrCtrl::GetPhysicsOrientation` and only bends it toward the camera when
         // `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a vtable predicate on the class, so
         // an `EnemyIns` can never take that branch and `camOverrideChrIns` cannot help -- the
         // override moves a pointer, not a type. Whatever the possessed creature fires therefore
@@ -1222,7 +1222,7 @@ impl NpcPossessionEngine {
         if state.net.due(state.frames) {
             let creature_category = if state.creature.is_live() {
                 // Both NPC categories route identically against a remote player, so the crate
-                // never has to resolve `FUN_1403f3e30` to answer the question. See
+                // never has to resolve 1.16.2 `FUN_1403f3e30` to answer the question. See
                 // `netdamage::Category::is_npc`.
                 netdamage::Category::LocalNpc
             } else {
@@ -1240,18 +1240,19 @@ impl NpcPossessionEngine {
         // The manual stage is gone, and its removal is the fix rather than a simplification.
         //
         // It was written when the vtable override starved the locomotion consumers: `[vt+0x50]`
-        // published into the real manipulator and `FUN_1403cbff0` read the override's zeroes, so
-        // nothing the engine computed ever reached the body and staging the vector ourselves was
-        // the only way to move it. The swizzle removed that starvation -- one object, so the
-        // publish and the consume are the same field -- and the workaround outlived its reason.
+        // published into the real manipulator and 1.16.2 `FUN_1403cbff0` read the override's
+        // zeroes, so nothing the engine computed ever reached the body and staging the vector
+        // ourselves was the only way to move it. The swizzle removed that starvation -- one
+        // object, so the publish and the consume are the same field -- and the workaround outlived
+        // its reason.
         //
         // Leaving it in is what made the movement unnatural, and the user named the symptom
         // exactly: "literally every animation causes the player to move the exact same way in the
         // same direction". A staged vector translates the body itself, so the clip playing over
         // the top is decorative and the body slides identically whatever it is. It also bypasses
         // the TURN: `[vt+0x50]` derives the facing inside `AiIns::UpdateMovement` ->
-        // `FUN_1402c9410`, from `walkType` and `wantToMoveTo`, and a body moved by a staged vector
-        // is never asked to rotate at all.
+        // 1.16.2 `FUN_1402c9410`, from `walkType` and `wantToMoveTo`, and a body moved by a staged
+        // vector is never asked to rotate at all.
         //
         // So the AI write below is now the whole mechanism, which is what the native path was
         // always supposed to be: we fill the move request, and the engine computes the direction,
@@ -1721,8 +1722,8 @@ impl NpcPossessionEngine {
         if debug_flags_offset.is_none() {
             possess_log(format_args!(
                 "neuter: ChrIns.debugFlags has no known offset for {} -- the no-attack flag is \
-                 being SKIPPED rather than written to a guessed address (it is +0x530 on 1.16.2 \
-                 and +0x538 on 1.17, and the wrong one lands on a live neighbouring field)",
+                 being SKIPPED rather than written to a guessed address (it is +0x538 on 2.7.2.0 \
+                 and was +0x530 on 1.16.2, and the wrong one lands on a live neighbouring field)",
                 describe_build()
             ));
         }

@@ -142,7 +142,7 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
 /// Is a foreign save's summary currently on screen (previewed, not yet committed)?
 ///
 /// The row presentation needs this to answer one question correctly: whose name belongs on slot 0.
-/// The transient current-player row is built with slot index 0 (`FUN_1408753f0` ->
+/// The transient current-player row is built with slot index 0 (1.16.2 `FUN_1408753f0` ->
 /// `FUN_1408759e0(summary, 0, &name, pgd->level)`), so slot 0 normally prefers the live character's
 /// name. While a foreign save is previewed, slot 0 is that save's slot 0 instead, and preferring the
 /// live name puts the loaded character's name on another save's character -- observed 2026-08-07 as

@@ -3,9 +3,11 @@
 
 # The question
 
-`eldenring-deobf-1.17.bin` is dearxan's output for the installed build, and everything this
-workspace does on 1.17 -- every ledger row, every hook target, every gate that reads the flat
-image -- assumes it is a faithful rendering of the game's code. dearxan proves the correctness of
+`eldenring-deobf-1.17.2.bin` is dearxan's output for the installed build (eldenring.exe 2.7.2.0)
+and the default `--image`, and everything this workspace does on it -- every hook target, every
+gate that reads the flat image -- assumes it is a faithful rendering of the game's code. The
+classifier below was calibrated on 1.17.0 (`eldenring-deobf-1.17.bin`), the build this scan was
+first written for; every measured number in this text is from that build. dearxan proves the correctness of
 what it decrypted (the plaintext is real code). It cannot prove COMPLETENESS: a region whose
 guarding stub it never found would stay ciphertext, and every downstream verdict taken from those
 bytes would be a verdict about noise, silently.
@@ -64,7 +66,7 @@ a dense run of flags inside one address range, not a scatter.
 
     uv run --with capstone python3 scripts/arxan-residual-scan.py --selftest
     uv run --with capstone python3 scripts/arxan-residual-scan.py \\
-        --image eldenring-deobf-1.17.bin --functions <funcs.tsv> --out <out.tsv>
+        --functions <funcs.tsv> --out <out.tsv>
 
 capstone is not installed system-wide and there is no system pip; `uv run --with capstone`
 provisions it ephemerally.
@@ -353,7 +355,7 @@ def selftest() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--image", default=str(ROOT / "eldenring-deobf-1.17.bin"))
+    ap.add_argument("--image", default=str(ROOT / "eldenring-deobf-1.17.2.bin"))
     ap.add_argument("--functions", help="Ghidra function list TSV (entry, size, name)")
     ap.add_argument("--regions", help="dearxan-profile region TSV, to mark decrypted spans")
     ap.add_argument("--out", help="write flagged functions here")

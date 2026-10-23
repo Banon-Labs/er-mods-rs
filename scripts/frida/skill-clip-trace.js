@@ -9,7 +9,7 @@
 //           0x1419bcc20) [0x1419b96c0] stores, categories minCat..maxCat (default all, so weapon
 //           clips a0xx-a2xx show too) at node+0xec (a<category>_<anim>), with the frame,
 //           the right-hand weapon and FP. Repeats of the same clip on consecutive frames are folded.
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
+// Addresses are 2.7.2.0, carried from 1.17.1.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');

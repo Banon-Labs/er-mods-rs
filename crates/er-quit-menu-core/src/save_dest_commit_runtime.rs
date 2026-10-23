@@ -6,20 +6,22 @@
 //
 // # What the native writer actually does (1.16.2 decompile, corrected 2026-07-28)
 //
-// The save job body `FUN_14240fd70` formats the container path (`L"%s\\%s%s"`) and then picks one
+// The addresses in this section are the 2.7.2.0 functions; the decompile was read on 1.16.2.
+//
+// The save job body `0x142413d20` formats the container path (`L"%s\\%s%s"`) and then picks one
 // of two write paths itself -- the `if`/`else` is its own code. (Attribution corrected 2026-07-29:
-// this comment used to say the choice came "from `FUN_142413230`". That function is a third,
+// this comment used to say the choice came from the probe `0x1424171e0`. That function is a third,
 // separate call the body makes first, and the branch tests its result code, read back out of the
-// job via `FUN_14240dbf0`/`FUN_14240d8d0`.) `FUN_142413230` mounts the container already on disk at
+// job via `0x142411ba0`/`0x142411880`.) `0x1424171e0` mounts the container already on disk at
 // that path and checks whether every block the request supplies still fits its existing entry,
 // returning 6 when everything fits and 0 when it does not -- the inverse of the writers' own
 // 0 = success convention:
 //
-//   * probe returns 0: no usable container / a block outgrew its entry -> `FUN_142413860`, the
+//   * probe returns 0: no usable container / a block outgrew its entry -> `0x142417810`, the
 //     full REBUILD: it rebuilds the whole image in memory and emits it as one `WriteBytes` from
 //     offset 0.
 //   * probe returns 6: every block fits (the steady state for a save over an existing container)
-//     -> `FUN_1424142e0`, the per-block in-place writer, called once per supplied block:
+//     -> `0x142418290`, the per-block in-place writer, called once per supplied block:
 //     `OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> optionally
 //     `Seek(entryHeaderOffset)` + `WriteBytes(0x20)` -> `Seek(0, END)` -> `CloseStream`.
 //
@@ -29,10 +31,11 @@
 //
 // The in-place writer never writes the bytes it did not change, and
 // `MicrosoftDiskFileOperator::OpenFile` opens write-mode handles with `OPEN_ALWAYS` (`dwCreation
-// Disposition = 4`, `0x141fc13f0`) -- it creates a missing file and does not truncate. So diverting
-// only the write-opens onto an empty destination produced exactly what run 4 measured: a sparse
-// file, zero from byte 0, ending at the highest written block (`USER_DATA010`'s end, 26,608,560 of
-// the live container's 28,967,888), with no `BND4` magic. Catching the opens was never enough.
+// Disposition = 4`, 1.16.2 `0x141fc13f0`, 2.7.2.0 `0x141fc4950`) -- it creates a missing file and
+// does not truncate. So diverting only the write-opens onto an empty destination produced exactly
+// what run 4 measured: a sparse file, zero from byte 0, ending at the highest written block
+// (`USER_DATA010`'s end, 26,608,560 of the live container's 28,967,888), with no `BND4` magic.
+// Catching the opens was never enough.
 //
 // # Why this seeds the destination
 //
@@ -160,7 +163,7 @@ pub struct SaveDestRedirect {
     live_len: u64,
     live_modified_ns: u128,
     /// `(len, modified_ns)` of the live save's `.bak` twin before the fire. The native backup step
-    /// (`FUN_142410830`, `CopyFileW` live -> live.bak) is not redirected, so this is how a commit
+    /// (`0x1424147e0`, `CopyFileW` live -> live.bak) is not redirected, so this is how a commit
     /// that was supposed to leave the loaded save's folder alone reports that it did not.
     live_bak_before: Option<(u64, u128)>,
     /// Pre-fire bytes of the live save. Doubles as the destination seed (written to the target
@@ -432,7 +435,7 @@ pub enum SaveDestWriterState {
     /// A save-job body ran and returned after the fire, and none is executing now. The container
     /// will not be opened again for this commit.
     Settled,
-    /// A save-job body is executing right now. The in-place writer (`FUN_1424142e0`) opens the
+    /// A save-job body is executing right now. The in-place writer (`0x142418290`) opens the
     /// container once per dirty block, so the window must stay armed across all of them: closing
     /// it between block k and k+1 sends blocks k+1..N to whatever the unredirected path resolves
     /// to, which is the loaded save the user chose not to overwrite -- and it happens after the
@@ -557,7 +560,7 @@ pub fn save_dest_redirect_for_open(path: &[u16], access: u32) -> Option<Vec<u16>
 }
 
 /// Record a diverted write-open. First occurrence plus power-of-two milestones. A commit produces
-/// one open per dirty block on the native in-place path (`FUN_1424142e0`) and one for a full
+/// one open per dirty block on the native in-place path (`0x142418290`) and one for a full
 /// rebuild, so several hits are normal -- Zero is the anomaly, and the commit verification is what
 /// catches that.
 pub fn save_dest_note_redirect_hit(handle_ok: bool) {
@@ -646,7 +649,7 @@ pub fn save_dest_verify_destination(state: &SaveDestRedirect, reason: &str) -> S
     }
     let live_state = save_dest_score_live_file(state, reason);
     let live_mutated = matches!(live_state, SaveDestLiveState::Changed);
-    // The native `.bak` copy (`FUN_142410830`) is not redirected, so it is the one remaining way a
+    // The native `.bak` copy (`0x1424147e0`) is not redirected, so it is the one remaining way a
     // "save somewhere else" commit can still touch the loaded save's folder. Named rather than
     // scored: it can only ever copy the untouched live container over its own backup.
     let bak_path = save_dest_bak_path(&state.live_path);

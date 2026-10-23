@@ -50,7 +50,7 @@ use super::map_hooks::{
 ///
 /// # Why writing the icon alone was not enough
 ///
-/// The icon field is not re-read on its own. `SetTo` (0x14087ae20) is what issues the clip's
+/// The icon field is not re-read on its own. `SetTo` (0x14087c2c0) is what issues the clip's
 /// `GotoAndStop(frame)`, and a clip slot is re-bound only when the draw's cached id differs from
 /// `row+0x08`. Rewriting `row+0x248` therefore updated a field nothing would look at again. Each
 /// repaint below bumps `row+0x08` to a fresh generation as well, which is the write that actually
@@ -311,8 +311,9 @@ fn clear_refusal_latch() {
 ///
 /// Nothing here appends. The rows were appended by the constructor; this writes fields in rows that
 /// already exist:
-///   `+0x10` position   -- read per frame through vtable slot `+0x20` (`FUN_14087c210` is literally
-///                          `return this+0x10`), so a live write is seen.
+///   `+0x10` position   -- read per frame through vtable slot `+0x20` (`0x14087d6b0`, 1.16.2
+///                          `FUN_14087c210`, is literally `return this+0x10`), so a live write
+///                          is seen.
 ///   `+0x50` entity id  -- what the confirm interceptor maps back to a warp target.
 ///   `+0x60` layer mask -- 0 while dormant; the converter's bit once claimed. This is the field
 ///                          `UpdateVisible` gates the draw flag on.
@@ -334,11 +335,11 @@ pub unsafe fn top_up_live_pins() -> usize {
     };
     // Gate 1: the ViewModel from the engine's slot, and it must be the one our span describes.
     let Some(view_model) = authoritative_view_model() else {
-        // `+0x250` is written only from `MoveMapStep`'s constructor (`FUN_1407ed840`, store at
-        // 0x1407ed8d9) and nulled only from `~MoveMapStep` (`FUN_1407ed790`, null-store at
-        // 0x1407ed821), so this null also covers the loading screen of an in-session area change.
-        // Refusing through that window is correct; the gate reopens by itself once the constructor
-        // hook re-stamps LIVE_VIEW_MODEL on the other side.
+        // `+0x250` is written only from `MoveMapStep`'s constructor (1.16.2 `FUN_1407ed840`, store
+        // at 0x1407ed8d9) and nulled only from `~MoveMapStep` (1.16.2 `FUN_1407ed790`, null-store
+        // at 0x1407ed821), so this null also covers the loading screen of an in-session area
+        // change. Refusing through that window is correct; the gate reopens by itself once the
+        // constructor hook re-stamps LIVE_VIEW_MODEL on the other side.
         return refuse(
             "CSPopupMenu+0x250 is null -- no WorldMapViewModel exists right now (no world loaded, \
              or an area change is mid-flight)",
@@ -388,6 +389,14 @@ pub unsafe fn top_up_live_pins() -> usize {
         unsafe { &*(registry_ptr as *const _) };
     let Some(slab) = param_slab_bounds() else {
         return refuse("the synthetic param slab bounds are not published");
+    };
+    // `project_to_map` calls this address, so it must be the converter itself. Passing `base` here
+    // called `eldenring.exe+0` and faulted at `+0x5` on the first top-up after a character switch
+    // (run br-20261023-180817-0f2a).
+    let Some(convert_address) =
+        crate::map_seams::call_target(base, &crate::map_seams::CONVERT_MSB_COORDS_TO_MAP_COORDS)
+    else {
+        return refuse("ConvertMsbCoordsToMapCoords has no verified address on the running build");
     };
 
     // Identity is (block, point), not block -- and getting that wrong is what made this function a
@@ -475,9 +484,14 @@ pub unsafe fn top_up_live_pins() -> usize {
             break;
         };
         // Project through the ViewModel's own converters, exactly as the constructor does.
-        let Some((coords, converter_index, _)) =
-            (unsafe { project_to_map(base, view_model, target.block.raw(), target.position) })
-        else {
+        let Some((coords, converter_index, _)) = (unsafe {
+            project_to_map(
+                convert_address,
+                view_model,
+                target.block.raw(),
+                target.position,
+            )
+        }) else {
             unprojectable += 1;
             super::map_hooks::record_top_up_refusal(target.block.raw(), target.point_index);
             continue;
@@ -592,7 +606,7 @@ pub unsafe fn top_up_live_pins() -> usize {
 /// Stop drawing the injected row that carries `param_index`, and report whether one was found.
 ///
 /// Used to retire a whole-dungeon marker once the dungeon's real points are on the map. The layer
-/// mask is the field `WorldMapPinData::UpdateVisible` (0x14087afa0) ANDs into the draw flag, so
+/// mask is the field `WorldMapPinData::UpdateVisible` (0x14087c440) ANDs into the draw flag, so
 /// clearing it is how a row stops being drawn without being removed -- and removal is exactly what
 /// is forbidden here, because shrinking the list would move every row after it.
 ///

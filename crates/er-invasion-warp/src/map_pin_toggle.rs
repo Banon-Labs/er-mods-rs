@@ -23,11 +23,11 @@
 //!
 //! # The flag, measured rather than remembered
 //!
-//! `WorldMapViewModel + 0x3c5`, one byte, default zero. Its writer `FUN_140887580` opens
-//! `mov [rcx+0x3c5], dl` followed by `mov [rax+0xff1], bl` -- the second store is the copy inside
-//! `CSMenuProfileSaveLoad` (`0xfc8 + 0x29`) that makes the row remember its position across
-//! sessions, which is why this module never writes the byte: the row owns it, and a write here
-//! would desynchronise the screen from what the game has saved.
+//! `WorldMapViewModel + 0x3c5`, one byte, default zero. Its writer `FUN_140887580` (2.7.2.0
+//! `0x140888a20`) opens `mov [rcx+0x3c5], dl` followed by `mov [rax+0xff1], bl` -- the second
+//! store is the copy inside `CSMenuProfileSaveLoad` (`0xfc8 + 0x29`) that makes the row remember
+//! its position across sessions, which is why this module never writes the byte: the row owns
+//! it, and a write here would desynchronise the screen from what the game has saved.
 //!
 //! Read live on 1.17.1 through Frida in run `br-20260919-063332-c93b`: ViewModel `0x212de180`,
 //! `+0x3c5` reading `0` with the map shut and no input driven, reached through
@@ -169,9 +169,10 @@ pub(crate) static ORIG_NATIVE_MARKER_BUILD: AtomicUsize = AtomicUsize::new(0);
 /// built it -- empty -- and leaves its sprite pool at zero. That is why this handler writes
 /// nothing and frees nothing: there is no state to undo, only work not done.
 ///
-/// It also sidesteps the hazard on this prologue. `FUN_1409c6730` opens `mov rax, rsp` and every
-/// later frame reference derives from that anchor, so entering its trampoline with a pushed return
-/// address shifts the frame; a handler that never enters cannot be wrong about it.
+/// It also sidesteps the hazard on this prologue. `FUN_1409c6730` (2.7.2.0 `0x1409c7e30`) opens
+/// `mov rax, rsp` and every later frame reference derives from that anchor, so entering its
+/// trampoline with a pushed return address shifts the frame; a handler that never enters cannot
+/// be wrong about it.
 #[cfg(windows)]
 unsafe extern "system" fn native_marker_build_hook(
     _map_menu: usize,
@@ -268,9 +269,9 @@ mod tests {
 
     #[test]
     fn the_toggle_offset_is_the_one_the_setter_writes() {
-        // `FUN_140887580` opens `mov [rcx+0x3c5], dl`, and the seam's recorded prologue carries
-        // those bytes. Reading the offset back out of the signature is what keeps the constant
-        // and the address that proves it from drifting apart.
+        // `FUN_140887580` (2.7.2.0 `0x140888a20`) opens `mov [rcx+0x3c5], dl`, and the seam's
+        // recorded prologue carries those bytes. Reading the offset back out of the signature is
+        // what keeps the constant and the address that proves it from drifting apart.
         let prologue = crate::map_seams::WORLDMAP_PIN_TOGGLE_SETTER.prologue;
         let store = prologue
             .windows(3)

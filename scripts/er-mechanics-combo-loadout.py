@@ -1128,7 +1128,7 @@ def powerstance_offs(records, tables, roles, cr):
             return False
         # The rule compares the hands' `wepmotionCategory` (and `spAtkcategory`), not `wepType`:
         # env 225 `GetEquipWeaponCategory` returns the PlayerIns+0x630 per-hand array, filled from
-        # EquipParamWeapon+0xe7 (`FUN_1403beae0`, 1.16.2; the same read at 0x1403beaf0 in 1.17.1).
+        # EquipParamWeapon+0xe7 (`FUN_1403beaf0`).
         # A row without the field is a loader that dropped it, never "cannot powerstance": raise.
         for w in (r, lw):
             if tables.weapons[w].get("wepmotionCategory") is None:

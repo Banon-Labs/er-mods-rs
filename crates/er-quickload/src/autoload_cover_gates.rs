@@ -26,7 +26,7 @@
 //! ```text
 //! [+91ms]  online-disable: patched IsOnlineMode getter 0x14067ae80 -> xor eax,eax;ret (forces offline)
 //! [+91ms]  splash-skip: patched 0x140b0da6d 0x74->0x7f
-//! [+264ms] sound-post-event: hooked AK::SoundEngine::PostEvent core 0x14223a130
+//! [+264ms] sound-post-event: hooked AK::SoundEngine::PostEvent core 0x14223a130 (a 1.16.2 log)
 //! [+12224ms] sound-post-event: hit=1 muted=true ... quickload_phase=0 player_present=false
 //! ```
 //!

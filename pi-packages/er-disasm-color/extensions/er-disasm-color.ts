@@ -24,10 +24,10 @@ const DISASM_PARAMS = Type.Object({
 	kind: Type.Optional(
 		StringEnum(KINDS, {
 			description:
-				"Disassembly source: deobf = repo-local mapped eldenring-deobf.bin, va = on-disk eldenring.exe .text, data = on-disk .data/.rdata hex dump.",
+				"Disassembly source: deobf = repo-local mapped eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build; ER_DEOBF_BIN in the environment picks another image), va = on-disk eldenring.exe .text, data = on-disk .data/.rdata hex dump.",
 		}),
 	),
-	va: Type.String({ description: "Virtual address to disassemble or dump, for example 0x140739e20." }),
+	va: Type.String({ description: "Virtual address to disassemble or dump, for example 0x14074ae20 (a 2.7.2.0 VA)." }),
 	nbytes: Type.Optional(Type.String({ description: "Byte count as decimal or hex. Defaults by kind." })),
 });
 
@@ -193,11 +193,11 @@ export default function (pi: ExtensionAPI) {
 		name: "er_disasm",
 		label: "ER Disasm",
 		description:
-			"Disassemble Elden Ring virtual addresses with Pi-rendered color. Use kind=deobf for eldenring-deobf.bin, kind=va for on-disk .text, kind=data for .data/.rdata dumps.",
+			"Disassemble Elden Ring virtual addresses with Pi-rendered color. Use kind=deobf for eldenring-deobf-1.17.2.bin (2.7.2.0), kind=va for on-disk .text, kind=data for .data/.rdata dumps.",
 		promptSnippet: "Disassemble Elden Ring addresses with colored Pi TUI rendering and plaintext output for reasoning.",
 		promptGuidelines: [
 			"Use er_disasm instead of bash when the user asks for colored Elden Ring disassembly output in Pi.",
-			"Use er_disasm kind=deobf for repo-local eldenring-deobf.bin static RE unless the user asks for the on-disk exe or data dump path.",
+			"Use er_disasm kind=deobf for repo-local eldenring-deobf-1.17.2.bin static RE unless the user asks for the on-disk exe or data dump path.",
 		],
 		parameters: DISASM_PARAMS,
 

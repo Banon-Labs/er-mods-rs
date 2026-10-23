@@ -648,7 +648,7 @@ fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
 /// Save-existence-check redirects: the game stats/enumerates the save file before opening it; if
 /// these hit the (wiped) default dir the game concludes "no save" and never CreateFileW's it.
 ///
-/// Primary redirect: the save-dir builder (FUN_140e0e680) calls SHGetFolderPathW(CSIDL_APPDATA) to
+/// Primary redirect: the save-dir builder (`SAVE_DIR_BUILDER_RVA`, 0x140e11be0; 1.16.2 FUN_140e0e680) calls SHGetFolderPathW(CSIDL_APPDATA) to
 /// get %APPDATA%, then formats `%APPDATA%/EldenRing/<steamid>/`. Returning our staged root here makes
 /// the game build and open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.

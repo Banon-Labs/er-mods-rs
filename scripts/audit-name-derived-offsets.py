@@ -18,12 +18,12 @@ came from, by reading the comment block above each definition and bucketing it:
   none       -- no provenance at all (weaker than wrong provenance, not stronger)
 
 Run it to re-derive the sweep; it is a report, not a gate. The gate that owns the findings is
-`scripts/check-object-field-offsets-1170.py`.
+`scripts/check-object-field-offsets.py`.
 
 Byte coverage, the second question
 ----------------------------------
-`pair-object-field-drift.py` reports the displacement of each memory operand, which is the right
-unit for "did the field move". It is the wrong unit for "is this byte a field at all": a
+The field-offset gate reads the displacement of each memory operand, which is the right unit for
+"is this field touched". It is the wrong unit for "is this byte a field at all": a
 `mov word [rbx+0xbc8],0` initialises 0xbc8 and 0xbc9, and only 0xbc8 appears in the displacement
 set. Absence from that set is therefore not absence of a field -- unless nothing wide enough
 covers the byte either. `--cover` answers that: for one function extent and one list of byte
@@ -59,8 +59,8 @@ trace of which rows went.
 
 And one more provenance source
 ------------------------------
-`scripts/check-object-field-offsets-1170.py::PINNED_CONSTANTS` is a table of constants that gate
-has already measured against both images and re-measures every run. A bare comment above such a
+`scripts/check-object-field-offsets.py::PINNED_CONSTANTS` is a table of constants that gate has
+already measured against the 2.7.2.0 image and re-measures every run. A bare comment above such a
 constant is not missing provenance -- the provenance lives in the gate. Those rows are imported
 (not copied) and bucketed `PINNED`.
 
@@ -69,8 +69,11 @@ Usage
     python3 scripts/audit-name-derived-offsets.py --kind game     # just the counted population
     python3 scripts/audit-name-derived-offsets.py --show-excluded # what the shape rule dropped
     python3 scripts/audit-name-derived-offsets.py --selftest
-    python3 scripts/audit-name-derived-offsets.py --cover 0x140675ea0:6895:0x140676cf0:6895 \
-        --base rbx --base rcx --byte 0xbc8 --byte 0xbc9
+    python3 scripts/audit-name-derived-offsets.py --cover 0x1406771a0:6895 \
+        --base rsi --base rcx --byte 0xbc8 --byte 0xbc9
+
+`--cover` and the selftest's known-answer test read `eldenring-deobf-1.17.2.bin`, located by
+`scripts/er_game_image.py`; without it the known-answer test skips and says so.
 
 `--all` is accepted and ignored. It used to mean "also scan the file-format crates"; those rows
 are now always scanned and bucketed `FORMAT`, because a row that is silently not scanned is a row
@@ -86,6 +89,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import er_game_image  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
 REPO = Path(__file__).resolve().parent.parent
@@ -105,7 +109,7 @@ FILE_FORMAT_CRATES = (
 )
 
 KINDS_TSV = Path(__file__).resolve().parent / "offset-census-kinds.tsv"
-GATE = Path(__file__).resolve().parent / "check-object-field-offsets-1170.py"
+GATE = Path(__file__).resolve().parent / "check-object-field-offsets.py"
 
 # Name shapes that are really offsets. `_AT` and `OFF` as SUBSTRINGS are what dragged
 # `DLL_PROCESS_ATTACH`, `NO_PATCH_ATTEMPTS`, `SESSION_STATE_OFFER_RECEIVED` and `MAX_BACK_OFF_SHIFT`
@@ -234,9 +238,7 @@ def classify(block, same_line_comment):
     return "NONE", text.strip()[:200]
 
 
-IMAGE_BASE = 0x140000000
-IMAGE_1162 = REPO / "eldenring-deobf.bin"
-IMAGE_1170 = REPO / "eldenring-deobf-1.17.bin"
+IMAGE_BASE = er_game_image.BASE
 
 
 def _capstone():
@@ -415,28 +417,27 @@ def cover_one(capstone, md, blob, va, length, bases, bytes_wanted):
 
 def run_cover(spec, bases, bytes_wanted):
     capstone, md = _capstone()
-    va16, len16, va17, len17 = spec
-    for label, path, va, length in (
-        ("1.16.2", IMAGE_1162, va16, len16),
-        ("1.17  ", IMAGE_1170, va17, len17),
-    ):
-        blob = path.read_bytes()
-        hits, end = cover_one(capstone, md, blob, va, length, bases, bytes_wanted)
-        print(f"--- {label}  {va:#x} +{end - (va - IMAGE_BASE)}")
-        for b in bytes_wanted:
-            if not hits[b]:
-                print(f"    {b:#x}: NO COVERING ACCESS")
-                continue
-            for addr, text, disp, size, chain, is_addr_of in hits[b]:
-                what = "address-of" if is_addr_of else f"size={size}"
-                if chain is None:
-                    print(f"    {b:#x}: {addr:#x}  {text}   [disp={disp:#x} {what}]")
-                else:
-                    base_name, base_disp, own_disp, lea_text = chain
-                    print(
-                        f"    {b:#x}: {addr:#x}  {text}   [via {lea_text}  "
-                        f"disp={base_disp:#x}+{own_disp:#x}={disp:#x} {what}]"
-                    )
+    va, length = spec
+    path = er_game_image.image_path()
+    if path is None:
+        raise SystemExit(f"--cover needs the image: {er_game_image.missing_reason()}")
+    blob = path.read_bytes()
+    hits, end = cover_one(capstone, md, blob, va, length, bases, bytes_wanted)
+    print(f"--- 2.7.2.0  {va:#x} +{end - (va - IMAGE_BASE)}")
+    for b in bytes_wanted:
+        if not hits[b]:
+            print(f"    {b:#x}: NO COVERING ACCESS")
+            continue
+        for addr, text, disp, size, chain, is_addr_of in hits[b]:
+            what = "address-of" if is_addr_of else f"size={size}"
+            if chain is None:
+                print(f"    {b:#x}: {addr:#x}  {text}   [disp={disp:#x} {what}]")
+            else:
+                base_name, base_disp, own_disp, lea_text = chain
+                print(
+                    f"    {b:#x}: {addr:#x}  {text}   [via {lea_text}  "
+                    f"disp={base_disp:#x}+{own_disp:#x}={disp:#x} {what}]"
+                )
     return 0
 
 
@@ -472,7 +473,7 @@ def collect():
 
             if bucket != "MEASURED" and kind == "GAME" and name in pinned:
                 bucket = "PINNED"
-                why = "measured by scripts/check-object-field-offsets-1170.py::PINNED_CONSTANTS"
+                why = "measured by scripts/check-object-field-offsets.py::PINNED_CONSTANTS"
             rows.append((bucket, kind, rel, i + 1, name, value, why))
     return rows, overrides
 
@@ -495,7 +496,7 @@ LEA_KNOWN_ANSWER = (0xBA0, 0xDF0)
 def selftest_lea_following(out=sys.stdout):
     """Prove the alias walk finds the two fields a `this`-relative census cannot see.
 
-    The constructor's VA and extent come from `check-object-field-offsets-1170.py::GAME_MAN_CTOR`,
+    The constructor's VA and extent come from `check-object-field-offsets.py::GAME_MAN_CTOR`,
     imported rather than retyped: two copies of an address are two things to keep in step, and
     this file already imports that module for `PINNED_CONSTANTS`.
     """
@@ -507,17 +508,14 @@ def selftest_lea_following(out=sys.stdout):
     spec.loader.exec_module(module)
     ctor = module.GAME_MAN_CTOR
 
-    missing = [p.name for p in (IMAGE_1162, IMAGE_1170) if not p.exists()]
-    if missing:
-        print(f"skip: lea-following known-answer test needs {', '.join(missing)}", file=out)
+    path = er_game_image.image_path()
+    if path is None:
+        print(f"skip: lea-following known-answer test needs the image ({er_game_image.missing_reason()})", file=out)
         return 0
 
     capstone, md = _capstone()
     failures = []
-    for label, path, va, length in (
-        ("1.16.2", IMAGE_1162, ctor["va16"], ctor["len16"]),
-        ("1.17", IMAGE_1170, ctor["va17"], ctor["len17"]),
-    ):
+    for label, va, length in (("2.7.2.0", ctor["va"], ctor["len"]),):
         blob = path.read_bytes()
         end = function_extent.body_slice_end(blob, va, cap=length)
         if end is None:
@@ -550,7 +548,7 @@ def selftest_lea_following(out=sys.stdout):
             print(f"    {f}", file=out)
         return 1
     print(
-        f"ok: lea-following exposes {', '.join(hex(b) for b in LEA_KNOWN_ANSWER)} in both images, "
+        f"ok: lea-following exposes {', '.join(hex(b) for b in LEA_KNOWN_ANSWER)} on 2.7.2.0, "
         "neither of which any `this`-relative access covers",
         file=out,
     )
@@ -613,7 +611,7 @@ def main():
     ap.add_argument("--show-excluded", action="store_true",
                     help="list the rows the name-shape rule dropped, so none is invisible")
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--cover", help="VA162:LEN:VA170:LEN -- report byte coverage, not provenance")
+    ap.add_argument("--cover", help="VA:LEN on 2.7.2.0 -- report byte coverage, not provenance")
     ap.add_argument("--base", action="append", default=[])
     ap.add_argument("--byte", action="append", default=[])
     args = ap.parse_args()

@@ -6,21 +6,25 @@ Why this exists
 ---------------
 Scaleform/UI reversing in this game is almost entirely "which child name does this binder
 resolve?", and that name is always a RIP-relative `LEA reg,[rip+disp]` into `.rdata`. Reading
-the disassembly alone shows `LEA R8,[0x142ad25c8]` and nothing else; the Ghidra MCP daemon
+the disassembly alone shows `LEA R8,[0x142ad7738]` and nothing else; the Ghidra MCP daemon
 exposes no memory-read method (`readMemory`/`getBytes`/... are all "Unknown method"), so the
 string had to be chased by hand every time. This resolves them inline.
 
-Both ER images in the repo root are flat memory images based at 0x140000000 -- `offset = va -
+The ER images in the repo root are flat memory images based at 0x140000000 -- `offset = va -
 base` with no section walk needed (same convention as `scripts/dantelion-static-scraper.py`).
 
-  eldenring-deobf.bin  1.16.2, authoritative for addresses (what the DLL hooks/patches)
-  dump-exec.bin        1.16.1, matches the older Ghidra dump -- semantics only
+  deobf      eldenring-deobf-1.17.2.bin  2.7.2.0, the installed build, authoritative for addresses
+  deobf1162  eldenring-deobf.bin         1.16.2, the named Ghidra dump's build
+  dump       dump-exec.bin               1.16.1, matches the older Ghidra dump -- semantics only
 
 Usage
 -----
-  python3 scripts/disas-annotate-strings.py 0x1408d1e30 [--bytes 0x400] [--image deobf|dump]
-  python3 scripts/disas-annotate-strings.py 0x1408d1e30 --calls      # only CALL/LEA lines
-  python3 scripts/disas-annotate-strings.py --at 0x142ad25c8         # just read one string
+  python3 scripts/disas-annotate-strings.py 0x1408d3480 [--bytes 0x400] [--image deobf|deobf1162|dump]
+  python3 scripts/disas-annotate-strings.py 0x1408d3480 --calls      # only CALL/LEA lines
+  python3 scripts/disas-annotate-strings.py --at 0x142ad7738         # just read one string
+
+The 2.7.2.0 examples are the function that is `0x1408d1e30` on 1.16.2 (`--image deobf1162`) and
+its `ItemIcon/IconImage` string (`0x142ad25c8` on 1.16.2).
 
 Capstone is not installed system-wide; the script re-execs itself under `uv run --with
 capstone`, the same self-bootstrap the other capstone-using tools here use.
@@ -39,7 +43,11 @@ import subprocess
 import sys
 
 IMAGE_BASE = 0x140000000
-IMAGES = {"deobf": "eldenring-deobf.bin", "dump": "dump-exec.bin"}
+IMAGES = {
+    "deobf": "eldenring-deobf-1.17.2.bin",
+    "deobf1162": "eldenring-deobf.bin",
+    "dump": "dump-exec.bin",
+}
 
 
 def _bootstrap():
@@ -141,7 +149,7 @@ def main() -> None:
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("va", nargs="?", help="function VA, e.g. 0x1408d1e30")
+    ap.add_argument("va", nargs="?", help="function VA, e.g. 0x1408d3480")
     ap.add_argument("--at", help="just print the string at this VA and exit")
     ap.add_argument("--bytes", default="0x400", help="max bytes to decode (default 0x400)")
     ap.add_argument("--image", choices=sorted(IMAGES), default="deobf")

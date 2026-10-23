@@ -1,8 +1,8 @@
 // Un-grey the Multiplayer row on the Escape menu under Seamless, by answering the one predicate
 // that row asks. Writes no param byte, so the Seamless `lobby_key` preimage cannot move.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Which function decides it
 //
@@ -44,13 +44,15 @@
 // This particular entry was read live in that same session and began `48 83 ec 28`, the image
 // bytes, so it was not stubbed in that process. Arxan heals on its own schedule and a later launch
 // may differ, which is why the follow stays in rather than being dropped as measured-unnecessary.
-// 1.16.2 `0x140911f60` -> 1.17.1 `0x140913100`, agreed on by two independent methods:
-// `scripts/map-rvas-1162-to-1170.py` calls it unique on a 35-byte signature, and the masked
+// 1.16.2 `0x140911f60` -> 1.17.1 `0x140913100`, agreed on by two independent methods: the
+// 1.16.2 -> 1.17 signature pairing called it unique on a 35-byte signature, and the masked
 // pattern `4883ec28e8????????84c07516e8????????488bc8e8????????84c07505 4883c428c3b0014883c428c3`
 // has exactly one hit in `eldenring-deobf-1.17.1.bin`. Its rva 0x913100 is below 0xafefe9, so
 // 1.17.0 and 1.17.1 put it at the same address. The bytes there are
 // `48 83 ec 28 e8 77 7d d6 ff 84 c0 75 16 e8 0e 80 d6 ff 48 8b c8 e8 d6 74 0e 00 84 c0 75 05
 //  48 83 c4 28 c3 b0 01 48 83 c4 28 c3`.
+// On 2.7.2.0 the same masked pattern has exactly one hit in `eldenring-deobf-1.17.2.bin`, at
+// `0x1409135b0` (2026-10-23), with the same bytes but for the third call's rel32.
 const MULTIPLAYER_ROW_ENABLED = '0x1409135b0'; // 1.17.1 0x140913100
 // `GameMan`, from the one `mov rax,[rip+d]` inside `IsInOnlineMode`. The module base measured on
 // this machine is 0x140000000, so the image address is the live address.
@@ -182,11 +184,11 @@ function selftest () {
   };
 
   // An unstubbed entry: the first byte is the real prologue, so the address is used as given.
-  // These are the 1.17.1 bytes of the predicate, read out of `eldenring-deobf-1.17.1.bin`.
-  poke(0x140913100, [0x48, 0x83, 0xec, 0x28, 0xe8]);
-  const plain = followStub(makePtr(0x140913100));
+  // These are the 2.7.2.0 bytes of the predicate, read out of `eldenring-deobf-1.17.2.bin`.
+  poke(0x1409135b0, [0x48, 0x83, 0xec, 0x28, 0xe8]);
+  const plain = followStub(makePtr(0x1409135b0));
   check('unstubbed followed', plain.followed, false);
-  check('unstubbed address', plain.address.toString(), '0x140913100');
+  check('unstubbed address', plain.address.toString(), '0x1409135b0');
 
   // A stubbed entry, using the `CanUseGoods` stub measured live on 2026-09-16: bytes
   // `e9 ee 15 96 ff` at 0x14068ee60 resolved to 0x13fff0453, below the module base. A sign error

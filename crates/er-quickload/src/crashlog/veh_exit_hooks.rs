@@ -381,8 +381,8 @@ pub(crate) unsafe extern "system" fn assert_wrapper_hook(
 }
 
 /// Upper bound on a plausible game-module `.text` RVA. The DLL's own anti-antidebug
-/// pass logs the scanned code range as `0x140001000..0x1429a2c00`, so a return address
-/// into game code has an RVA below ~0x29a2c00. Used to filter a raw stack scan down to
+/// pass logged the scanned code range on 1.16.2 as `0x140001000..0x1429a2c00` (2.7.2.0's `.text`
+/// ends at rva 0x29a7400), so a return address into game code has an RVA below ~0x29a8000. Used to filter a raw stack scan down to
 /// game-side return addresses.
 const AV_GAME_TEXT_RVA_MAX: usize = 0x2a0_0000;
 const AV_GAME_TEXT_RVA_MIN: usize = 0x1000;
@@ -706,7 +706,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                         trace_callers_summary()
                     ));
                 }
-                // (Reverted: an overflow-guard here that reset [rcx+0x48] on the 0x7ad53b push was
+                // (Reverted: an overflow-guard here that reset [rcx+0x48] on the 1.16.2 0x7ad53b push was
                 // based on a wrong premise -- that field is a pointer (~0x7fff...), not a small count,
                 // so dialog+0x50 is not a valid DLFixedVector in our context; zeroing it corrupted the
                 // dialog -> a new AV. The real issue is the load job's mis-contextualized push target,
@@ -742,7 +742,7 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
         // Hardware watchpoint (DR0) on GameMan+0xc30: a data-write trap surfaces as a
         // single-step exception with DR6 bit0 set. Log the writing instruction's RIP +
         // call stack -- this pins the exact function that mounts the save (vanilla
-        // 0x67b290-class or Seamless/ERSC), no guessing -- then one-shot disarm DR7 in
+        // 0x67c590-class or Seamless/ERSC), no guessing -- then one-shot disarm DR7 in
         // the context that gets restored and resume execution.
         if !record.is_null()
             && !context.is_null()
@@ -1100,6 +1100,15 @@ fn normalize_sw_breakpoint_rva(
 /// register/stack context and re-arms it (persistent breakpoint).
 pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
     if SW_BP_INSTALLED.swap(SW_BP_HIT_INCREMENT, Ordering::SeqCst) != SW_BP_REARM_NONE {
+        return;
+    }
+    // The listed rvas were measured on 2.7.2.0; on another build each names other code, and the
+    // INT3 below would be written into it.
+    if !er_game_base::game_build::is_supported_build() {
+        append_crash_log(format_args!(
+            "sw-bp: not armed -- {}",
+            er_game_base::game_build::describe_build()
+        ));
         return;
     }
     let Some(path) = sw_breakpoints_file() else {

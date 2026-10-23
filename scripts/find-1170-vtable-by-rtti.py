@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Locate a C++ vtable in either ELDEN RING image by its RTTI class name. Exact, not a vote.
 
-Why the vote was not enough. `locate-1170-vtable.py` infers a vtable's new address from how many
-of its slots hold already-mapped functions. That works until sibling classes enter the picture.
+Why the vote was not enough. `locate-1170-vtable.py` (deleted with the address carry on
+2026-10-23) inferred a vtable's new address from how many of its slots hold already-mapped
+functions. That works until sibling classes enter the picture.
 `RideManipulator`, `ComManipulator`, `PadManipulator` and `NetAIManipulator` all derive from
 `ChrManipulator` and therefore share most of their slots -- so a wrong sibling's vtable scores
 almost as well as the right one. Measured on 1.16.2 `RideManipulator` (`0x142a2c108`): the top two

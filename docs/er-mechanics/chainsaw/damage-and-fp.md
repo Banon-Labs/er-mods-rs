@@ -13,8 +13,8 @@ Labels: `VERIFIED` = read in the executable (1.16.2 Ghidra :8765 decompile, then
 follows from verified pieces, not traced end to end; `HKS` = the installed compiled `c0000.hks`
 read with `scripts/er-hks-disasm.py`. Every address is 1.17.1 with 1.16.2 in brackets. All of
 them sit below rva `0xafefe9`, so 1.17.1 equals 1.17.0 here; the 1.16.2 -> 1.17 step went through
-`scripts/map-rvas-1162-to-1170.py`, and every 1.17.1 instruction quoted below was read out of the
-1.17.1 image.
+the masked-signature map (deleted with the address carry on 2026-10-23), and every 1.17.1
+instruction quoted below was read out of the 1.17.1 image.
 
 ## Answer
 

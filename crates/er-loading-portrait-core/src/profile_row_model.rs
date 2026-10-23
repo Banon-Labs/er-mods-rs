@@ -23,13 +23,14 @@
 //! The model is `CS::MenuSaveDataSummary`, and each staged field is a `CS::MenuString`:
 //! `{ wchar_t* rawString; DLString<wchar_t> dLString; }`, 0x38 bytes (Ghidra, 1.16.2). Every
 //! reader takes `rawString` when it is non-null and falls back to the inline `DLString` buffer
-//! otherwise -- the row populate `FUN_1408757e0` and the FMG static pass `FUN_14074c540` spell the
-//! same accessor. `FUN_1408757e0` reads the raw pointer at `rowModel + 0x50` for `PlayerName`, and
+//! otherwise -- the row populate `FUN_140876c80` and the FMG static pass `FUN_14074d840` spell the
+//! same accessor. `FUN_140876c80` reads the raw pointer at `rowModel + 0x50` for `PlayerName`, and
 //! the inline buffer at `rowModel + 0x60` only when the capacity at `rowModel + 0x78` says it is
 //! heap-backed. Staging the raw pointer therefore wins over the fallback without touching it.
 //!
-//! Offsets measured on the row model `FUN_1408759e0` composes (`eldenring-deobf.bin`, 1.16.2;
-//! unmoved on 1.17.1, which shifted only `.text`).
+//! Offsets measured on the row model `FUN_140876e80` composes (measured on the 1.16.2 image
+//! `eldenring-deobf.bin`, where that function is `FUN_1408759e0`; unmoved on 1.17.1, which shifted
+//! only `.text`).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

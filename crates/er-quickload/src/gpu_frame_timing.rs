@@ -14,7 +14,7 @@
 //! render cost vs present-wait -- and the localization tool the parity goal's §4 delta protocol uses.
 //!
 //! Why shared-VTABLE hook + runtime latch (no RVA). The game's render queue pointer is not read from a
-//! hardcoded RVA (a prior `GX_COMMAND_QUEUE_RVA=0x8012a8` was stale/unpopulated at runtime -> the
+//! hardcoded RVA (a prior 1.16.2-era `GX_COMMAND_QUEUE_RVA=0x8012a8` was stale/unpopulated at runtime -> the
 //! oracle never left state 0). Instead we ride the already-RE'd present path: the game device comes
 //! RVA-free from the found swapchain's backbuffer (`GetBuffer(0).GetDevice()`), a probe queue on that
 //! device gives the shared `ID3D12CommandQueue` vtable, we swap its `ExecuteCommandLists` slot (all

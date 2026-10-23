@@ -7,6 +7,10 @@
 //!
 //! # The routing matrix
 //!
+//! This was reversed on the 1.16.2 dump: an unlabelled address or `FUN_`/`DAT_` name in this
+//! module is a 1.16.2 one, and the 1.17 counterparts are labelled. The module transcribes the
+//! game's tables and calls none of these functions.
+//!
 //! A chr-vs-chr hit that survives the team/immunity filter reaches the victim's
 //! `CSChrDamageModule` vtable slot 7. For an ordinary character that is `FUN_140445060` (1.16.2
 //! `0x140445060`, 1.17 candidate `0x1404455c0`); the player's `CSPlayerDamageModule` overrides it
@@ -24,7 +28,9 @@
 //! ```
 //!
 //! Both tables were located in `eldenring-deobf-1.17.bin` by an exact 196-byte content match with
-//! a unique hit, so the installed build routes damage the same way 1.16.2 does. What each mode
+//! a unique hit, and the same match is unique in `eldenring-deobf-1.17.2.bin` (2.7.2.0
+//! `0x142a3b3f0` and `0x142a3b4c0`), so the installed build routes damage the same way 1.16.2
+//! does. What each mode
 //! does is a second, tiny table (`DAT_142a36598`) plus the `if/else` chain around it -- transcribed
 //! into [`Route`].
 //!
@@ -262,7 +268,7 @@ impl Route {
 /// `DAT_142a36400`, row-major as `[victimCategory][attackerCategory]`.
 ///
 /// Read out of `eldenring-deobf.bin` at `0x142a36400` and byte-identical at `0x142a39430` in
-/// `eldenring-deobf-1.17.bin`.
+/// `eldenring-deobf-1.17.bin` and at `0x142a3b3f0` in `eldenring-deobf-1.17.2.bin`.
 const ROUTE_TABLE: [[u32; 7]; 7] = [
     [0, 0, 0, 0, 0, 0, 0],
     [1, 1, 0, 1, 1, 1, 1],
@@ -558,7 +564,7 @@ impl Ledger {
                     lines.push(
                         "net-damage: the Packet15 receive buffer could not be read on this \
                          build, so a damage packet that never arrived and one that arrived and \
-                         was ignored cannot be told apart. See layout::packet15_receive_rva."
+                         was ignored cannot be told apart. See layout::packet15_receive."
                             .to_owned(),
                     );
                 }

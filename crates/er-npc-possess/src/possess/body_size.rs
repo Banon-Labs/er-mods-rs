@@ -1,5 +1,8 @@
 //! Why the lock-on RETICLE sat at the creature'S feet, and the one number that moves it.
 //!
+//! Read on 1.16.2: an address or `FUN_` name in this module is a 1.16.2 one unless labelled with
+//! another build. None of them is called; the module only scales a field.
+//!
 //! # What the reticle is actually on
 //!
 //! Not the creature. **The player's own body**, and that is settled rather than suspected.

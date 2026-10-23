@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 /// Imports that reached the portrait refresh at all (one per applied import).
 pub static BUILD_URL_PORTRAIT_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 /// `LiveSync::code()` of the most recent record sync: 0 never attempted, 1 synced, 2 no summary,
-/// 3 slot out of range, 4 the native has no verified mapping for this build. Tri-plus-state on
-/// purpose -- a counter that was never written must not read as a successful sync.
+/// 3 slot out of range, 4 the native is refused on this build (it is not 2.7.2.0). Tri-plus-state
+/// on purpose -- a counter that was never written must not read as a successful sync.
 pub static BUILD_URL_PORTRAIT_RECORD_SYNC_STATE: AtomicUsize = AtomicUsize::new(0);
 /// Syncs whose equipment fingerprint actually moved. Lower than the attempt count is not a
 /// failure: re-importing the build already worn changes nothing, and neither does a sync that
@@ -72,7 +72,7 @@ pub static BUILD_URL_PORTRAIT_MODEL_INS_AFTER: AtomicUsize = AtomicUsize::new(0)
 /// old model just freed, on which a pointer comparison alone would report no rebuild.
 pub static BUILD_URL_PORTRAIT_MODEL_ABSENT_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// FNV-1a over the model's part-node array (`model_ins+0x28..+0x100`, the 27 slots the model submit
-/// `FUN_1409e9ac0` walks and draws) before the rebuild was asked for.
+/// 1.16.1 dump `FUN_1409e9ac0` walks and draws) before the rebuild was asked for.
 pub static BUILD_URL_PORTRAIT_PARTS_BEFORE: AtomicU64 = AtomicU64::new(0);
 /// The same fingerprint at the last sample. Different from `_BEFORE` means the model came back
 /// wearing something else, which is the closest thing in RAM to "the picture changed".
@@ -100,10 +100,10 @@ pub static BUILD_URL_PORTRAIT_DRAW_BITS: AtomicUsize = AtomicUsize::new(0);
 /// The renderer the build-import refresh asked to rebuild, so the draw task's detour can recognise
 /// its own calls without walking the ten-slot table on every frame.
 pub static BUILD_URL_PORTRAIT_TARGET_RENDERER: AtomicUsize = AtomicUsize::new(0);
-/// Executions of the per-frame draw task `FUN_140bba7d0` for that renderer -- the function that
-/// propagates the model's bones into every submodel and enqueues them into the offscreen pass, i.e.
-/// the one that actually rasterizes. Counted unconditionally in the detour, unlike
-/// `PROFILE_PERFRAME_HOOK_HITS`, which only counts frames where a look-at pose was applied.
+/// Executions of the per-frame draw task (1.16.1 dump `FUN_140bba7d0`) for that renderer -- the
+/// function that propagates the model's bones into every submodel and enqueues them into the
+/// offscreen pass, i.e. the one that actually rasterizes. Counted unconditionally in the detour,
+/// unlike `PROFILE_PERFRAME_HOOK_HITS`, which only counts frames where a look-at pose was applied.
 ///
 /// Registration is not execution, and that distinction is the whole reason this exists: run
 /// `br-20260911-005533-858a` had the task registered, the offscreen scene registered and the parts

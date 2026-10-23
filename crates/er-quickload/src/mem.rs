@@ -23,21 +23,17 @@ pub(crate) use er_game_base::pgd::{
 };
 // safe_read_usize/i32/f32/u8/u16 moved to er_game_base::mem (re-exported above).
 
-/// `base + rva`, resolved for the running build, or `None` when this build moved the function and
-/// nothing verified where to.
+/// `base + rva` for a 2.7.2.0 rva when the running build is 2.7.2.0, or `None` on any other build.
 ///
 /// # Why every direct call has to come through here
 ///
-/// A detour installed by `er-hook` already asks: it translates a known 1.16.2 address for the
-/// running build, or refuses, which is why a moved function now produces a log line instead of a
-/// corrupted image. A hand-built function pointer asks nothing. On ELDEN RING 1.17 it transfers
-/// control into whatever now occupies the 1.16.2 address -- routinely the middle of an unrelated
-/// function, which faults with no unwind information and an exception record naming nothing of
-/// ours. That is the worse of the two failures: a refused detour makes one feature inert and says
-/// so, a stale call takes the process down.
-///
-/// A mapped constant is not safer this way. The map knows exactly where the function went;
-/// `base + rva` simply never asks it.
+/// A detour installed by `er-hook` already asks: it refuses a game-image target on any build but
+/// 2.7.2.0, which is why a different build produces a log line instead of a corrupted image. A
+/// hand-built function pointer asks nothing. On another build it transfers control into whatever
+/// occupies that address there -- routinely the middle of an unrelated function, which faults with
+/// no unwind information and an exception record naming nothing of ours. That is the worse of the
+/// two failures: a refused detour makes one feature inert and says so, a stale call takes the
+/// process down.
 #[cfg(windows)]
 pub(crate) fn gated_game_fn(rva: usize, what: &'static str) -> Option<usize> {
     er_game_base::mem::game_rva_named(rva as u32, what).ok()

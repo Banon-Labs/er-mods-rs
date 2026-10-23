@@ -1,7 +1,7 @@
 // Is the Festering Bloody Finger ON right now, and therefore which prompt will using it raise?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The discriminator, measured 2026-09-16
 //

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot persistent import of the ER runtime dump gzf into the reusable `ermaporch` project
 # (the semantics project: real symbols/types, but addresses carry the ~0x10 dump-vs-deobf shift).
-# The MCP daemon defaults to this project. Companion to import-deobf.sh (which builds erdeobf).
+# The MCP daemon defaults to this project. Companion to import-deobf.sh (which builds erdeobf2720).
 #
 # The gzf is a pre-analyzed export, so this is just an import (-noanalysis) -- fast (~2 min) vs
 # the deobf binary's multi-hour raw analysis. Supply your own gzf (copyrighted game data, not in

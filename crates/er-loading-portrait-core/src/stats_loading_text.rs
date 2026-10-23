@@ -555,7 +555,7 @@ pub fn install_tip_suppression_hook() {
         }
     }
     // Two independent DETOURS (2026-08-30). This was a bare `let Ok(..) else { return; }` with no
-    // log, so a refused tip-refresh RVA on 1.17 silently took the tip-advance detour with it -- the
+    // log, so a refused tip-refresh RVA silently took the tip-advance detour with it -- the
     // one whose own comment says its failure is meant to "log and continue rather than abort the
     // batch". A refusal is now local and named, and the pair is honestly reported.
     // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
@@ -563,7 +563,7 @@ pub fn install_tip_suppression_hook() {
         Ok(addr) => Some(addr),
         Err(_) => {
             append_autoload_debug(format_args!(
-                "stats-text: REFUSED tip-suppression -- rva 0x{KNOWLEDGE_TIP_REFRESH_RVA:x} has no verified mapping for the running build; the tip-advance detour is unaffected"
+                "stats-text: REFUSED tip-suppression -- rva 0x{KNOWLEDGE_TIP_REFRESH_RVA:x} was measured on another build than the running one; the tip-advance detour is unaffected"
             ));
             None
         }

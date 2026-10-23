@@ -54,7 +54,7 @@ Commands confirmed active dumps:
 - `python3 scripts/ghidra/mcp_query.py getContext --port 8765` -> `pc_eldenring_runtime.1.16.2.exe`, 367183 functions.
 - `python3 scripts/ghidra/mcp_query.py getContext --port 8767` -> `pc_eldenring_runtime.1.17.0.exe`, 366673 functions.
 
-Installed game is 1.17.1. For `.text` functions with RVA `>= 0xafefe9`, add `+0x70` to 1.17.0 function addresses for live runtime. Data RVAs do not shift.
+The installed game is now 2.7.2.0: find each 1.16.2 or 1.17.0 address below on `eldenring-deobf-1.17.2.bin` by its bytes before using it against the live process (`docs/game-build.md`). When this handoff was written the installed game was 1.17.1, which moved `.text` functions at rva `>= 0xafefe9` by `+0x70` from 1.17.0.
 
 ### `CSPlayerDamageModule` slot 21 / player PvP sender
 
@@ -318,7 +318,7 @@ Context/evidence:
 
 - Start from `crates/er-npc-possess/src/possess/netdamage.rs` and this handoff.
 - Relevant 1.16.2 functions: `FUN_14044ce40`, `FUN_140443c40`, `FUN_1404434f0`, `FUN_140ca6280`, `FUN_14050e4a0`, `SendHitPacket 0x140cc5540/0x140c9e580`.
-- Ghidra :8765 is named 1.16.2; :8767 is 1.17.0 structure. Installed runtime 1.17.1 adds `+0x70` only for `.text` RVAs at/above `0xafefe9`.
+- Ghidra :8765 is named 1.16.2; :8767 is 1.17.0 structure. The installed game is 2.7.2.0, so find each address on `eldenring-deobf-1.17.2.bin` by its bytes before using it (`docs/game-build.md`).
 
 Success criteria:
 
@@ -400,7 +400,9 @@ python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{"address":"140c
 python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{"address":"140ca1600"}' --port 8765
 python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{"address":"14050aaf0"}' --port 8765
 python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{"address":"140ca6280"}' --port 8765
-uv run --with capstone python3 scripts/map-rvas-1162-to-1170.py 0x14044ce40 0x140443c40 0x1404434f0 0x140c9e580 0x140cc5540 0x140c9f370 0x140ca1600 0x14050aaf0 0x140c9f3d0 0x140446bb0 0x14043fee0 0x140c9dab0 0x140ca6280 0x140c99ba0 0x140c99c40 0x140c991d0
+# scripts/map-rvas-1162-to-1170.py was deleted on 2026-10-23 with the cross-build carry; its last
+# committed copy is at 41d6a363 (git show 41d6a363:scripts/map-rvas-1162-to-1170.py). The run was:
+# uv run --with capstone python3 scripts/map-rvas-1162-to-1170.py 0x14044ce40 0x140443c40 0x1404434f0 0x140c9e580 0x140cc5540 0x140c9f370 0x140ca1600 0x14050aaf0 0x140c9f3d0 0x140446bb0 0x14043fee0 0x140c9dab0 0x140ca6280 0x140c99ba0 0x140c99c40 0x140c991d0
 python3 scripts/ghidra/mcp_query.py getFunctionByAddress --params '{"address":"14044d3a0"}' --port 8767
 python3 scripts/ghidra/mcp_query.py getFunctionByAddress --params '{"address":"140c9fcc0"}' --port 8767
 $HOME/.local/bin/bd recall possession-pvp-damage-blocked-by-net-routing-matrix-2026-09-02

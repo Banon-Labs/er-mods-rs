@@ -10,7 +10,8 @@
 //! armament-icons-boot-preload-swap-not-reach-createmovie-name-empty).
 //!
 //! Instead we hook the GFx tag-parse function `FUN_1411cf1a0(loadProcess /*rcx*/,
-//! File* /*rdx*/)`. Every menu movie -- preload or on-demand -- funnels through it to
+//! File* /*rdx*/)` (1.16.2 dump names here and below; the 2.7.2.0 entry is found by scan).
+//! Every menu movie -- preload or on-demand -- funnels through it to
 //! build its MovieDataDef, and its 2nd arg is the File the tag reader (`FUN_141162800`)
 //! consumes via the MemoryFile vtable Read (which memcpy's from File+0x18 using the
 //! +0x24 cursor, clamped to +0x20 len). When that File fingerprints as one of the vanilla
@@ -42,7 +43,8 @@ const MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 /// GFx tag-parse entry `FUN_1411cf1a0(loadProcess /*rcx*/, File* /*rdx*/) -> bool`
 /// (verified 1.16.2: passes param_2 as the File to the tag reader `FUN_141162800`,
 /// which reads it via vtable +0x50 Read / +0x20 Tell). Unique 30-byte
-/// position-independent prologue (verified count==1 in the 1.16.2 image).
+/// position-independent prologue (count==1 in the 1.16.2 image; bytes 5..30 count==1 in the
+/// 2.7.2.0 image, entry 0x1411d2700).
 ///
 /// Kept as documentation of the whole opening; the scan matches [`parse_sig_after_patch`].
 const PARSE_SIG: &str =
@@ -72,7 +74,7 @@ fn parse_sig_after_patch() -> String {
 }
 
 /// File-open observer (logs the `.gfx` open sequence and provides a live loader to resolve
-/// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
+/// FileOpener::OpenFile from). A 2.7.2.0 rva declared in `er-game-base`.
 ///
 /// Shared with the product DLL. `er-quickload` detours this same prologue for its title / stats /
 /// System>Quit / text-input GFx swaps. Because a statically linked crate's statics are per-DLL,
@@ -542,9 +544,10 @@ unsafe fn try_install_openfile_hook(loader: usize) {
         return;
     }
     // Runtime-derived, like the parse hook: `openfile` was just read out of the live
-    // `FileOpener` vtable a few lines up, so it is this build's address by construction and the
-    // 1.16.2 -> 1.17 table has no key for it. `MhHook::new` refused it for that reason, which cost
-    // this DLL its async tag-dict swap on 1.17 with a log line that blamed the address map.
+    // `FileOpener` vtable a few lines up, so it is this build's address by construction and no
+    // constant allowlist describes it. On 1.17, under the cross-build address map this tree no
+    // longer has, `MhHook::new` refused it for lack of a row, which cost this DLL its async
+    // tag-dict swap with a log line that blamed the address map.
     let hook = match unsafe {
         MhHook::new_runtime_derived(openfile as *mut c_void, openfile_hook as *mut c_void)
     } {

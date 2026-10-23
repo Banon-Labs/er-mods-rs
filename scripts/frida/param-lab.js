@@ -18,7 +18,7 @@
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
-// 2.7.2.0 .data rva, carried from 1.17.1 0x3d85f58 with scripts/map-rvas-1171-to-1172.py (933 of
+// 2.7.2.0 .data rva, carried from 1.17.1 0x3d85f58 (933 of
 // its 961 readers carry onto it; the rest are in code Arxan re-mutates per build). The repository
 // layout is unchanged in eldenring-deobf-1.17.2.bin: GetParamResCap (0x140d500f0) still bounds the
 // index at 0xc2 params and reads +0x80 + index * 0x48 and +0x88, GetParamResCapRowCount

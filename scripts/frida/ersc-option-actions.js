@@ -1,7 +1,7 @@
 // Which of Seamless's option actions the Dried Fingers row runs, and what it writes.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # What this answers that a rebuild cannot
 //
@@ -82,8 +82,8 @@ const WORLD_CHR_MAN_MAIN_PLAYER = 0x1e508;
 // and using it here was wrong: on 1.17.1 it holds `0x143d65fa0`, an address inside
 // `eldenring.exe` rather than a heap pointer, and the goods behind it read `4259961`.
 //
-// The route that works: `CanMainPlayerUseGoods` `0x14068dee0` -> `0x14068ed30` (1.17.0, delta
-// `+0xe50`, `map-rvas-1162-to-1170.py`), unchanged into 1.17.1 because it sits below the
+// The route that worked: `CanMainPlayerUseGoods` `0x14068dee0` -> `0x14068ed30` (1.17.0, delta
+// `+0xe50`, paired by signature), unchanged into 1.17.1 because it sits below the
 // `0xafefe9` boundary, and at `0x14068edac` it loads `[0x143d69ff8]` -- the same null-singleton
 // guard, one instruction before the `DLPanic` branch.
 //
@@ -461,8 +461,8 @@ if (ersc === null) {
   // by their param row -- which is the thing that has been missing all along. Nothing in this
   // repo knows the Dried Fingers' id; the locale file gives it a NAME and no number.
   //
-  // `0x14068dee0` on the 1.16.2 named dump -> `0x14068ed30` (delta `+0xe50`,
-  // `map-rvas-1162-to-1170.py`), unchanged into 1.17.1 as it sits below the `0xafefe9` boundary.
+  // `0x14068dee0` on the 1.16.2 named dump -> `0x14068ed30` (delta `+0xe50`, paired by
+  // signature), unchanged into 1.17.1 as it sits below the `0xafefe9` boundary.
   const CAN_USE_GOODS = ptr('0x14068f1e0'); // 1.17.1 0x14068ed30
   try {
     Interceptor.attach(CAN_USE_GOODS, {

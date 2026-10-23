@@ -28,11 +28,11 @@
 //! used to do -- put the player in a matchmaking pool of one for that long. The resident tables are
 //! only ever read here.
 //!
-//! It costs **one detour**, on `LookupLockCamParam` (1.17.1 `0x140d3f4b0`, 2.7.2.0 `0x140d40ba0`),
-//! installed the first time a possession wants an adapted camera. Its address comes from
-//! `er_game_base::game_build::carry_1171_rva`, so it exists on 1.17.1 and 2.7.2.0 only; every other
-//! build keeps the vanilla framing and the derived file says why. Both singletons still come from
-//! `fromsoftware-rs`'s DLRF name resolution and everything else is a struct field.
+//! It costs **one detour**, on `LookupLockCamParam` (2.7.2.0 `0x140d40ba0`), installed the first
+//! time a possession wants an adapted camera. Its address is a 2.7.2.0 rva, so it exists on 2.7.2.0
+//! only; every other build keeps the vanilla framing and the derived file says why. Both
+//! singletons still come from `fromsoftware-rs`'s DLRF name resolution and everything else is a
+//! struct field.
 //!
 //! # What it deliberately does not do, named so nobody goes looking
 //!
@@ -92,7 +92,7 @@ pub(crate) mod game;
 #[cfg(windows)]
 mod getter;
 
-// The getter's 1.17.1 address and window offsets, shared with build.rs; see `getter_sites.rs`.
+// The getter's 2.7.2.0 address and window offsets, shared with build.rs; see `getter_sites.rs`.
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 
 #[cfg(windows)]

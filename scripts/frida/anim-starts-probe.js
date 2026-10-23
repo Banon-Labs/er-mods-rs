@@ -3,8 +3,8 @@
 // Read-only: one hook on the game's frame tick, the same one er-duel-rules.js uses, reading the
 // TimeAct ring that file reads (offsets from there, measured on 1.17.1).
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 'use strict';
 
 const game = Process.getModuleByName('eldenring.exe');

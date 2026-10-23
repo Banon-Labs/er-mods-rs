@@ -1,63 +1,132 @@
 #!/usr/bin/env python3
 """Static sanity checks for native Continue/menu edges used by zero-input autoload.
 
-The repo-local eldenring-deobf.bin is gitignored and may be absent in CI. When absent this
-check skips cleanly. When present, it validates small byte windows at exact RVAs so product
-constants do not silently drift away from the reverse-engineered native ABI.
+The de-Arxan'd 2.7.2.0 image (`eldenring-deobf-1.17.2.bin`, located by `scripts/er_game_image.py`)
+is gitignored and may be absent in CI. When absent this check skips cleanly. When present, it
+validates small byte windows at exact 2.7.2.0 VAs so product constants do not silently drift away
+from the reverse-engineered native ABI, and it checks that the crates still define each address
+this file has a crate constant for (`CRATE_CONSTANTS`) as the value the windows were proven at.
+
+Every VA below was carried from its 1.16.2 measurement on 2026-10-23 and proven on the 2.7.2.0
+image by the windows this file checks: a function entry by a masked signature that is unique in
+`.text`, a callee by the call it is reached through, a vtable slot and its RTTI locator by the
+pointer to the thunk they hold.
 """
 
 from __future__ import annotations
 
+import re
 import struct
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-IMAGE = REPO_ROOT / "eldenring-deobf.bin"
-IMAGE_BASE = 0x140000000
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import er_game_image  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
-MENU_CONTINUE_WRAPPER = 0x14082BAC0
-CONTINUE_LOAD = 0x14067B750
-FD4_EVENT_CONSTRUCTOR = 0x1407A91E0
-MENU_WINDOW_JOB_CTOR = 0x1407AC8C0
-MENU_WINDOW_JOB_VTABLE = 0x142AA97E8
-MENU_ACCEPT_IDLE = 0x1407ADD70
-MENU_ACCEPT_NATIVE = 0x1407AD810
-INPUT_MANAGER_READY = 0x140765F20
-MENU_SUBMIT = 0x1407AC890
-MENU_MEMBER_FUNC_JOB_RUN = 0x1409AABA0
-MENU_REGISTRY_INSERT_COPY = 0x1407A7B60
-RESULT_EVENT_HANDLER = 0x140746E80
-RESULT_ACTION_BUILDER = 0x140746A00
-RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
-RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
-POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
-POLICY_TOS_TITLE_CTOR = 0x1409B5970
-POLICY_TOS_TITLE_CTOR_WRAPPER = 0x1409B6070
-POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK = 0x1409B7380
-POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT = 0x142B28318
-POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL = 0x143329B58
-POLICY_TOS_SELECTOR_RTTI_COL = 0x143329BD8
-POLICY_TOS_SELECTOR_WRAPPER = 0x1409B6140
-POLICY_TOS_SELECTOR_CTOR = 0x1409B49F0
-POLICY_TOS_SELECTOR_WRAPPER_THUNK = 0x1409B7390
-POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT = 0x142B28350
-POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B60DA
-POLICY_TOS_FLAG_SETTER = 0x1409B6B30
-POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
-POLICY_TOS_REQUESTED_FLAG_INIT = 0x1409B5A9F
-POLICY_TOS_REQUESTED_FLAG_BIND = 0x1409B61A7
-POLICY_TOS_REQUESTED_FLAG_COMMIT = 0x1409B7289
-POLICY_TOS_BIND_SELECTOR = 0x1409B49F0
-POLICY_TOS_GATE = 0x140E4FDA0
-MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
-MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
-MENU_OUT_IS_ACTIVE = 0x1407A9200
-MENU_OUT_IS_ADVANCE = 0x1407A9210
+IMAGE = er_game_image.image_path()
+IMAGE_BASE = er_game_image.BASE
+
+MENU_CONTINUE_WRAPPER = 0x14082CF60
+CONTINUE_LOAD = 0x14067CA50
+FD4_EVENT_CONSTRUCTOR = 0x1407AA510
+MENU_WINDOW_JOB_CTOR = 0x1407ADBF0
+MENU_WINDOW_JOB_VTABLE = 0x142AAE958
+MENU_ACCEPT_IDLE = 0x1407AF0A0
+MENU_ACCEPT_NATIVE = 0x1407AEB40
+INPUT_MANAGER_READY = 0x140767250
+MENU_SUBMIT = 0x1407ADBC0
+MENU_MEMBER_FUNC_JOB_RUN = 0x1409AC1F0
+MENU_REGISTRY_INSERT_COPY = 0x1407A8E90
+RESULT_EVENT_HANDLER = 0x140748180
+RESULT_ACTION_BUILDER = 0x140747D00
+RESULT_EVENT_WRAPPER_BUILDER = 0x140745D60
+RESULT_EVENT_WRAPPER_INNER_BUILD = 0x140745CE0
+POLICY_TOS_STATUS_PREDICATE = 0x1409B89B0
+POLICY_TOS_TITLE_CTOR = 0x1409B7070
+POLICY_TOS_TITLE_CTOR_WRAPPER = 0x1409B7770
+POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK = 0x1409B8A80
+POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT = 0x142B2D488
+POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL = 0x14332F0D8
+POLICY_TOS_SELECTOR_RTTI_COL = 0x14332F158
+POLICY_TOS_SELECTOR_WRAPPER = 0x1409B7840
+POLICY_TOS_SELECTOR_CTOR = 0x1409B60F0
+POLICY_TOS_SELECTOR_WRAPPER_THUNK = 0x1409B8A90
+POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT = 0x142B2D4C0
+POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B77DA
+POLICY_TOS_FLAG_SETTER = 0x1409B8230
+POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B744C
+POLICY_TOS_REQUESTED_FLAG_INIT = 0x1409B719F
+POLICY_TOS_REQUESTED_FLAG_BIND = 0x1409B78A7
+# The tail-call thunk's own entry. The 1.16.2 window began 7 bytes earlier, in the bytes before
+# the thunk; every pattern it checks is inside the thunk, so the window now starts where it does.
+POLICY_TOS_REQUESTED_FLAG_COMMIT = 0x1409B8990
+POLICY_TOS_BIND_SELECTOR = 0x1409B60F0
+POLICY_TOS_GATE = 0x140E53300
+MENU_JOB_SINGLE_CONSUMER = 0x1407AA930
+MENU_JOB_LIST_CONSUMER = 0x1407AB520
+MENU_OUT_IS_ACTIVE = 0x1407AA530
+MENU_OUT_IS_ADVANCE = 0x1407AA540
+
+# `(gate constant, crate file, definition regex)`: the crates' own spelling of an address this
+# file proves. The regex captures the literal; it must equal the gate's rva.
+CRATE_CONSTANTS = (
+    ("MENU_CONTINUE_WRAPPER", "crates/er-title-flow/src/constants_moved.rs",
+     r"\bContinueWrapper\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("FD4_EVENT_CONSTRUCTOR", "crates/er-quickload/src/constants/stage2_menu_drive.rs",
+     r"const\s+FD4_EVENT_CONSTRUCTOR_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_WINDOW_JOB_CTOR", "crates/er-title-flow/src/constants_own_load_pump.rs",
+     r"const\s+MENU_WINDOW_JOB_CTOR_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_WINDOW_JOB_VTABLE", "crates/er-title-flow/src/constants_own_load_pump.rs",
+     r"const\s+MENU_WINDOW_JOB_VTABLE_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_ACCEPT_IDLE", "crates/er-quickload/src/continue_load/product_continue.rs",
+     r"const\s+MENU_ITEM_ACCEPT_IDLE_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_ACCEPT_NATIVE", "crates/er-quickload/src/continue_load/product_continue.rs",
+     r"const\s+MENU_ITEM_ACCEPT_NATIVE_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    # The crate names the submit function by what it does on a failed close.
+    ("MENU_SUBMIT", "crates/er-game-base/src/rva.rs",
+     r"const\s+MENU_WINDOW_CLOSE_WITH_FAILED_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("RESULT_EVENT_HANDLER", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+MENU_JOB_EMIT_RESULT_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("RESULT_ACTION_BUILDER", "crates/er-quickload/src/constants/anti_debug.rs",
+     r"const\s+RESULT_ACTION_BUILDER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("RESULT_EVENT_WRAPPER_BUILDER", "crates/er-quickload/src/constants/anti_debug.rs",
+     r"const\s+RESULT_EVENT_WRAPPER_BUILDER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_STATUS_PREDICATE", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_STATUS_PREDICATE_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_TITLE_CTOR", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_TITLE_CTOR_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_TITLE_CTOR_WRAPPER", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_TITLE_CTOR_WRAPPER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_SELECTOR_WRAPPER", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_SELECTOR_WRAPPER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_SELECTOR_CTOR", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_SELECTOR_CTOR_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("POLICY_TOS_FLAG_SETTER", "crates/er-title-flow/src/constants_autoload_state.rs",
+     r"const\s+POLICY_TOS_FLAG_SETTER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_JOB_SINGLE_CONSUMER", "crates/er-title-flow/src/constants_moved.rs",
+     r"const\s+EXECUTE_MENU_JOB_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+    ("MENU_JOB_LIST_CONSUMER", "crates/er-title-flow/src/constants_own_load_pump.rs",
+     r"const\s+SEQUENCE_ITER_RVA\s*:\s*\w+\s*=\s*(0x[0-9a-fA-F_]+)"),
+)
 
 
 def fail(message: str) -> None:
     raise AssertionError(message)
+
+
+def check_crate_constants() -> None:
+    """Every crate spelling in `CRATE_CONSTANTS` still holds the address this file proves."""
+    for name, file, pattern in CRATE_CONSTANTS:
+        path = REPO_ROOT / file
+        text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        match = re.search(pattern, text)
+        if match is None:
+            fail(f"{name}: its crate constant is no longer defined in {file}")
+        value = int(match.group(1).replace("_", ""), 16)
+        want = globals()[name] - IMAGE_BASE
+        if value != want:
+            fail(f"{name}: {file} says {value:#x}, the byte windows here were proven at {want:#x}")
 
 
 def image_bytes(va: int, size: int) -> bytes:
@@ -123,8 +192,9 @@ def rtti_type_name_from_col(col_va: int) -> str:
 
 
 def main() -> int:
-    if not IMAGE.exists():
-        print(f"native Continue static check skipped: {IMAGE} is absent")
+    check_crate_constants()
+    if IMAGE is None:
+        print(f"native Continue static check skipped: {er_game_image.missing_reason()}")
         return 0
 
     fd4_ctor = image_bytes(FD4_EVENT_CONSTRUCTOR, 0x10)
@@ -137,13 +207,13 @@ def main() -> int:
     contains(wrapper, b"\x33\xd2", "Continue wrapper passes flags=0")
     wrapper_calls = rel32_targets(MENU_CONTINUE_WRAPPER, wrapper)
     if CONTINUE_LOAD not in wrapper_calls:
-        fail("Continue wrapper no longer calls continue_load_67b750")
+        fail(f"Continue wrapper no longer calls continue_load {CONTINUE_LOAD:#x}")
     if FD4_EVENT_CONSTRUCTOR not in wrapper_calls:
         fail("Continue wrapper no longer posts an FD4 result event")
 
     ctor = image_bytes(MENU_WINDOW_JOB_CTOR, 0x220)
     if not ctor.startswith(b"\x40\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57"):
-        fail("MenuWindowJob ctor prologue at 0x1407ac8c0 changed")
+        fail(f"MenuWindowJob ctor prologue at {MENU_WINDOW_JOB_CTOR:#x} changed")
     ctor_leas = rip_lea_targets(MENU_WINDOW_JOB_CTOR, ctor)
     if MENU_WINDOW_JOB_VTABLE not in ctor_leas:
         fail("MenuWindowJob ctor no longer installs the expected vtable")
@@ -188,7 +258,7 @@ def main() -> int:
     contains(result_handler, b"\xc6\x83\xb0\x03\x00\x00\x01", "result handler marks result+0x3b0 after building actions")
     result_calls = rel32_targets(RESULT_EVENT_HANDLER, result_handler)
     if RESULT_ACTION_BUILDER not in result_calls:
-        fail("result handler no longer calls result action builder 0x140746a00")
+        fail(f"result handler no longer calls result action builder {RESULT_ACTION_BUILDER:#x}")
 
     action_builder = image_bytes(RESULT_ACTION_BUILDER, 0x360)
     contains(action_builder, b"\x45\x33\xe4", "action builder zeroes r12 before FD4 event code 2 construction")
@@ -197,9 +267,9 @@ def main() -> int:
     if FD4_EVENT_CONSTRUCTOR not in action_calls:
         fail("result action builder no longer constructs downstream FD4 event code 2")
     if RESULT_EVENT_WRAPPER_BUILDER not in action_calls:
-        fail("result action builder no longer wraps downstream FD4 event via 0x140744a60")
+        fail(f"result action builder no longer wraps downstream FD4 event via {RESULT_EVENT_WRAPPER_BUILDER:#x}")
     if MENU_REGISTRY_INSERT_COPY not in action_calls:
-        fail("result action builder no longer inserts downstream action node through 0x1407a7b60")
+        fail(f"result action builder no longer inserts downstream action node through {MENU_REGISTRY_INSERT_COPY:#x}")
 
     wrapper_builder = image_bytes(RESULT_EVENT_WRAPPER_BUILDER, 0x1d0)
     contains(wrapper_builder, b"\x4c\x89\x44\x24\x18", "wrapper builder preserves r8 stack argument at entry")
@@ -210,7 +280,7 @@ def main() -> int:
     contains(wrapper_builder, b"\x48\x8b\xc7", "wrapper builder returns the original output wrapper pointer")
     wrapper_calls = rel32_targets(RESULT_EVENT_WRAPPER_BUILDER, wrapper_builder)
     if RESULT_EVENT_WRAPPER_INNER_BUILD not in wrapper_calls:
-        fail("result event wrapper builder no longer finalizes payload through 0x1407449e0")
+        fail(f"result event wrapper builder no longer finalizes payload through {RESULT_EVENT_WRAPPER_INNER_BUILD:#x}")
 
     policy_predicate = image_bytes(POLICY_TOS_STATUS_PREDICATE, 0x40)
     contains(policy_predicate, b"\x48\x8b\x59\x08", "policy ToS status predicate reads owner from this+0x8")
@@ -220,7 +290,7 @@ def main() -> int:
     contains(policy_predicate, b"\x0f\x95\xc0", "policy ToS status predicate returns fallback flag as bool")
     policy_calls = rel32_targets(POLICY_TOS_STATUS_PREDICATE, policy_predicate)
     if POLICY_TOS_GATE not in policy_calls:
-        fail("policy ToS status predicate no longer calls 0x140e4fda0 gate")
+        fail(f"policy ToS status predicate no longer calls {POLICY_TOS_GATE:#x} gate")
 
     policy_setter = image_bytes(POLICY_TOS_FLAG_SETTER, 0xa0)
     contains(policy_setter, b"\x48\x8b\x81\xc0\x29\x00\x00", "policy ToS flag setter reads flag pointer at owner+0x29c0")
@@ -235,7 +305,7 @@ def main() -> int:
     contains(policy_setter_caller, b"\x49\x8b\xce", "policy ToS flag setter caller passes owner in rcx")
     setter_caller_calls = rel32_targets(POLICY_TOS_FLAG_SETTER_CALLER, policy_setter_caller)
     if POLICY_TOS_FLAG_SETTER not in setter_caller_calls:
-        fail("policy ToS flag setter caller no longer calls 0x1409b6b30")
+        fail(f"policy ToS flag setter caller no longer calls {POLICY_TOS_FLAG_SETTER:#x}")
 
     policy_requested_init = image_bytes(POLICY_TOS_REQUESTED_FLAG_INIT, 0x40)
     contains(policy_requested_init, b"\x48\x8b\x85\x88\x01\x00\x00", "policy ToS constructor reads backing flag pointer from stack arg1")
@@ -244,9 +314,14 @@ def main() -> int:
     contains(policy_requested_init, b"\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor initializes requested flag owner+0x29c8 from current flag")
 
     if qword_at(POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK:
-        fail("policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380")
+        fail(f"policy ToS ctor wrapper vtable slot no longer points at {POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK:#x}")
     if qword_at(POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_SELECTOR_WRAPPER_THUNK:
-        fail("policy ToS selector wrapper vtable slot no longer points at 0x1409b7390")
+        fail(f"policy ToS selector wrapper vtable slot no longer points at {POLICY_TOS_SELECTOR_WRAPPER_THUNK:#x}")
+    # Each slot is entry 2 of its vtable, so the CompleteObjectLocator is the qword 0x18 above it.
+    if qword_at(POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT - 0x18) != POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL:
+        fail("policy ToS ctor wrapper vtable no longer carries the expected RTTI locator")
+    if qword_at(POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT - 0x18) != POLICY_TOS_SELECTOR_RTTI_COL:
+        fail("policy ToS selector wrapper vtable no longer carries the expected RTTI locator")
     ctor_wrapper_type = rtti_type_name_from_col(POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL)
     if "CommandSelectDialog" not in ctor_wrapper_type or "SceneProxy" not in ctor_wrapper_type or "MenuWindow" not in ctor_wrapper_type:
         fail("policy ToS ctor wrapper RTTI no longer identifies CommandSelectDialog/SceneProxy/MenuWindow lambda")
@@ -257,12 +332,12 @@ def main() -> int:
     contains(policy_ctor_thunk, b"\x48\x83\xc1\x08", "policy ToS ctor wrapper thunk adjusts this pointer by +0x8")
     ctor_thunk_jumps = rel32_targets(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, policy_ctor_thunk, opcode=0xE9)
     if POLICY_TOS_TITLE_CTOR_WRAPPER not in ctor_thunk_jumps:
-        fail("policy ToS ctor wrapper thunk no longer jumps to 0x1409b6070")
+        fail(f"policy ToS ctor wrapper thunk no longer jumps to {POLICY_TOS_TITLE_CTOR_WRAPPER:#x}")
     policy_selector_thunk = image_bytes(POLICY_TOS_SELECTOR_WRAPPER_THUNK, 0x10)
     contains(policy_selector_thunk, b"\x83\xc1\x08", "policy ToS selector wrapper thunk adjusts this pointer by +0x8")
     selector_thunk_jumps = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER_THUNK, policy_selector_thunk, opcode=0xE9)
     if POLICY_TOS_SELECTOR_WRAPPER not in selector_thunk_jumps:
-        fail("policy ToS selector wrapper thunk no longer jumps to 0x1409b6140")
+        fail(f"policy ToS selector wrapper thunk no longer jumps to {POLICY_TOS_SELECTOR_WRAPPER:#x}")
 
     policy_selector_ctor = image_bytes(POLICY_TOS_SELECTOR_CTOR, 0x220)
     contains(policy_selector_ctor, b"\x48\x8b\xb5\xb0\x01\x00\x00", "policy ToS selector ctor loads requested flag pointer from stack arg0")
@@ -276,7 +351,7 @@ def main() -> int:
     contains(policy_selector_wrapper, b"\x4c\x8d\x8a\xd0\x29\x00\x00", "policy ToS selector wrapper passes owner+0x29d0 selector argument")
     selector_calls = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER, policy_selector_wrapper, opcode=0xE8)
     if POLICY_TOS_SELECTOR_CTOR not in selector_calls:
-        fail("policy ToS selector wrapper no longer calls 0x1409b49f0")
+        fail(f"policy ToS selector wrapper no longer calls {POLICY_TOS_SELECTOR_CTOR:#x}")
 
     policy_title_ctor = image_bytes(POLICY_TOS_TITLE_CTOR, 0x180)
     contains(policy_title_ctor, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores backing flag pointer at owner+0x29c0")
@@ -298,7 +373,7 @@ def main() -> int:
     contains(policy_ctor_caller, b"\x44\x8b\x0e", "policy ToS ctor caller passes record+0x0 as r9d")
     ctor_caller_calls = rel32_targets(POLICY_TOS_TITLE_CTOR_CALLER, policy_ctor_caller)
     if POLICY_TOS_TITLE_CTOR not in ctor_caller_calls:
-        fail("policy ToS ctor caller no longer calls 0x1409b5970")
+        fail(f"policy ToS ctor caller no longer calls {POLICY_TOS_TITLE_CTOR:#x}")
 
     policy_requested_bind = image_bytes(POLICY_TOS_REQUESTED_FLAG_BIND, 0x40)
     contains(policy_requested_bind, b"\x48\x8b\x16", "policy ToS requested-flag binder loads owner from holder")
@@ -306,7 +381,7 @@ def main() -> int:
     contains(policy_requested_bind, b"\x4c\x8d\x8a\xd0\x29\x00\x00", "policy ToS requested-flag binder passes owner+0x29d0 selector state")
     requested_bind_calls = rel32_targets(POLICY_TOS_REQUESTED_FLAG_BIND, policy_requested_bind)
     if POLICY_TOS_BIND_SELECTOR not in requested_bind_calls:
-        fail("policy ToS requested-flag binder no longer calls selector binding 0x1409b49f0")
+        fail(f"policy ToS requested-flag binder no longer calls selector binding {POLICY_TOS_BIND_SELECTOR:#x}")
 
     policy_requested_commit = image_bytes(POLICY_TOS_REQUESTED_FLAG_COMMIT, 0x30)
     contains(policy_requested_commit, b"\x48\x8b\x49\x08", "policy ToS requested-flag commit loads owner from this+0x8")
@@ -314,13 +389,13 @@ def main() -> int:
     contains(policy_requested_commit, b"\x8b\x91\xc8\x29\x00\x00", "policy ToS requested-flag commit loads requested flag from owner+0x29c8")
     requested_commit_jumps = rel32_targets(POLICY_TOS_REQUESTED_FLAG_COMMIT, policy_requested_commit, opcode=0xE9)
     if POLICY_TOS_FLAG_SETTER not in requested_commit_jumps:
-        fail("policy ToS requested-flag commit no longer tail-calls 0x1409b6b30")
+        fail(f"policy ToS requested-flag commit no longer tail-calls {POLICY_TOS_FLAG_SETTER:#x}")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")
     single_calls = rel32_targets(MENU_JOB_SINGLE_CONSUMER, single_consumer)
     if MENU_OUT_IS_ACTIVE not in single_calls:
-        fail("single native menu consumer no longer classifies update out-state via 0x1407a9200")
+        fail(f"single native menu consumer no longer classifies update out-state via {MENU_OUT_IS_ACTIVE:#x}")
 
     list_consumer = image_bytes(MENU_JOB_LIST_CONSUMER, 0x180)
     contains(list_consumer, b"\xff\x50\x10", "list native menu consumer calls job vtable +0x10 update")
@@ -328,7 +403,10 @@ def main() -> int:
     contains(list_consumer, b"\xff\x47\x10", "list native menu consumer advances item cursor only after active/advance out-state")
     list_calls = rel32_targets(MENU_JOB_LIST_CONSUMER, list_consumer)
     if MENU_OUT_IS_ACTIVE not in list_calls or MENU_OUT_IS_ADVANCE not in list_calls:
-        fail("list native menu consumer no longer validates update out-state via 0x1407a9200/0x1407a9210")
+        fail(
+            f"list native menu consumer no longer validates update out-state via "
+            f"{MENU_OUT_IS_ACTIVE:#x}/{MENU_OUT_IS_ADVANCE:#x}"
+        )
 
     print("native Continue static checks passed")
     return 0

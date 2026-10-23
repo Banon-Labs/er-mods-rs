@@ -111,8 +111,8 @@ pub unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> b
     }
     // Native title/menu route callers pass `owner + 0x50` as the MenuWindowJob's
     // field2_0x50 list argument. MenuWindowJob::Run later appends the loaded
-    // owning MenuWindow to this DLFixedVector via FUN_140733ff0. Passing the
-    // SceneObjProxy backref here is wrong: it lets the resource load start, then
+    // owning MenuWindow to this DLFixedVector via 0x1407351f0 (1.16.1 dump FUN_140733ff0).
+    // Passing the SceneObjProxy backref here is wrong: it lets the resource load start, then
     // asserts in DLFixedVector.inl line 0x296 when Run appends to a full/wrong
     // object.
     let menu_window_list = system_dialog + 0x50;
@@ -124,16 +124,17 @@ pub unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> b
         return false;
     }
     // The window this is about to submit renders character models, and the refresh that draws them
-    // (`PROFILE_RENDERER_REFRESH_RVA`, 1.17.1 `0x1409ab820`) walks the profile model renderer table
+    // (`PROFILE_RENDERER_REFRESH_RVA`, 2.7.2.0 `0x1409abcd0`) walks the profile model renderer table
     // at `PROFILE_MODEL_REND_TABLE_RVA` without checking it. When that table is null the refresh
     // reads `[null + 0x754]` and the process dies.
     //
-    // Measured 2026-09-11, three runs on a shell-only profile: press Load Character, and the game
-    // takes `0xc0000005` at `eldenring.exe+0x9ab874` reading `0x754`, with `rdi = *(0x143d71940) =
-    // 0` in the crash record. The table is built by the loading-cover pipeline, which reaches this
-    // crate only through `QuitMenuHost::maybe_build_profile_table_for_loading` -- a product-owned
-    // entry whose neutral default does nothing. So a load with no product behind it submits a
-    // window that cannot draw.
+    // Measured 2026-09-11 on 1.17.1, three runs on a shell-only profile: press Load Character, and
+    // the game takes `0xc0000005` at `eldenring.exe+0x9ab874` (1.17.1 refresh `0x1409ab820` +
+    // `0x54`; 2.7.2.0 `+0x9abd24`) reading `0x754`, with `rdi = *(0x143d71940) = 0` in the crash
+    // record (the 1.17.1 table global; 2.7.2.0 `0x143d74960`). The table is built by the
+    // loading-cover pipeline, which reaches this crate only through
+    // `QuitMenuHost::maybe_build_profile_table_for_loading` -- a product-owned entry whose neutral
+    // default does nothing. So a load with no product behind it submits a window that cannot draw.
     //
     // Ask the host to build it before refusing: a product whose table is simply not up yet gets it
     // built and proceeds exactly as before, and only a load that has no way to produce one declines.

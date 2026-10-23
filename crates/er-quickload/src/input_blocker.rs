@@ -331,7 +331,7 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     // detour this same `GetDeviceState` slot, and each links its own MinHook instance -- two
     // instances on one prologue overwrite each other's trampolines and the loser silently never
     // runs. Owning it in the union is also what lets those DLLs chain in through this DLL's
-    // `er_effects_union_register` export. See the [[shared]] rows in
+    // `er_effects_union_register_2720` export. See the [[shared]] rows in
     // scripts/me3-dll-conflicts.toml.
     unsafe {
         register_union_hook(

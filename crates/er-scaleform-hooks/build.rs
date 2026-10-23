@@ -16,12 +16,13 @@ use prologue_build::{Image, PrologueSpec, Shape, generate, mov_r64_mem};
 
 const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
-/// The Scaleform CBV_SRV_UAV descriptor-ring advance, `advance(ring, count)`. 1.17.1 `0x140ecb3a0`.
-const DESCRIPTOR_ADVANCE_VA: u64 = 0x140ec9530;
-/// Offsets into the advance, identical in 1.16.2 and 1.17.1 (the body is `IDENTICAL-WHOLE`).
+/// The Scaleform CBV_SRV_UAV descriptor-ring advance, `advance(ring, count)`, 2.7.2.0.
+const DESCRIPTOR_ADVANCE_VA: u64 = 0x140ecca90;
+/// Offsets into the advance, identical in 1.16.2 and 2.7.2.0 (the 0x18b-byte body differs only
+/// in one rip-relative `lea` displacement at `+0x9d`).
 const DESCRIPTOR_ADVANCE_PAGE_ROLL_LOAD: u64 = 0x8c;
 const DESCRIPTOR_ADVANCE_EPILOGUE_JOIN: u64 = 0x157;
-/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+/// Each window's address, named so `verify-aob-patterns.py` can read the spec's `va:`.
 const PAGE_ROLL_LOAD_VA: u64 = DESCRIPTOR_ADVANCE_VA + DESCRIPTOR_ADVANCE_PAGE_ROLL_LOAD;
 const EPILOGUE_JOIN_VA: u64 = DESCRIPTOR_ADVANCE_VA + DESCRIPTOR_ADVANCE_EPILOGUE_JOIN;
 /// `ring+0x38`, the current page.
@@ -63,11 +64,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "PAGE_ROLL_LOAD_WINDOW",
-                    doc: "1.16.2 descriptor advance `+0x8c`, the page-roll branch's page load:\n\
+                    doc: "2.7.2.0 descriptor advance `+0x8c`, the page-roll branch's page load:\n\
                           `MOV RAX,[RBX+0x38]; LEA R8,[RSP+0x30]; MOV [RSP+0x30],RSI`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: PAGE_ROLL_LOAD_VA,
                     take: 0,
                     pin: &[
@@ -80,12 +81,12 @@ fn main() {
             (
                 PrologueSpec {
                     name: "EPILOGUE_JOIN_WINDOW",
-                    doc: "1.16.2 descriptor advance `+0x157`, the join both page-selection branches\n\
+                    doc: "2.7.2.0 descriptor advance `+0x157`, the join both page-selection branches\n\
                           reach: `MOV RCX,[RSP+0x30]; MOV RDI,[RSP+0x48]; MOV RSI,[RSP+0x38];\n\
                           TEST RCX,RCX`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: EPILOGUE_JOIN_VA,
                     take: 0,
                     pin: &[

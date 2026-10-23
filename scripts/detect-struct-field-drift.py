@@ -13,14 +13,15 @@ refusal, no crash and no log line. It silently reads, or writes, the wrong membe
 How it is measured (not guessed)
 --------------------------------
 A field offset is used by instructions. So take a function whose 1.16.2 -> 1.17 identity is
-already established (`docs/recon/rva-map-1162-to-1170.functions.tsv`, ~128k pairs; the
-hand-verified subset is in `...verified.tsv`), decode both bodies, and keep only the pairs
+already established (a `--pairs` file; the ~128k-pair whole-image map and its hand-verified
+subset this was first run against were deleted with the address carry on 2026-10-23), decode
+both bodies, and keep only the pairs
 that are instruction-for-instruction identical except for memory displacements on a register
 base. In such a pair the code did not change, so every displacement that did change is a
 field that moved, and by exactly how much. That set is the struct drift, measured.
 
-`scripts/map-rvas-1162-to-1170.py::build_masked_pattern` masks precisely these bytes so its
-signatures survive the drift. This tool is the inverse: it keeps what that one discards.
+The deleted carry's signature matcher masked precisely these bytes so its signatures survived
+the drift. This tool is the inverse: it keeps what that one discarded.
 
 What is deliberately not counted as STRUCT drift
 -----------------------------------------------
@@ -47,17 +48,17 @@ lookup; a wrong one writes.
 Usage
     --selftest                     assert the parser, the classifier and a known 1.17 field move
     --inventory                    part 1: count and classify every *_OFFSET constant
-    --scan                         part 2: measure drift across every mapped pair   (~1 min)
+    --scan --pairs <tsv>           part 2: measure drift across every pair in the file   (~1 min)
     --attribute                    ask Ghidra which type each drifting function operates on
     --regions [--min-fields N]     cluster the raw rows into candidate structures
     --report [--autoload-only]     cross-reference the inventory against the measurement
     --explain 0xc30                everything measured about one displacement
-    --find-displacement 0xc30 --names 8
-                                   the decisive per-constant check: every mapped function that
+    --find-displacement 0xc30 --pairs <tsv> --names 8
+                                   the decisive per-constant check: every paired function that
                                    reads at that offset, and what happened to each   (~1 min)
-    --pairs docs/recon/rva-map-1162-to-1170.verified.tsv --names 1
-                                   compare only the functions this mod actually hooks
-    --check-extents                prove the DECODED leaf extents against two independent
+    --pairs <tsv> --names 1        compare only the pairs in the file (the functions this mod
+                                   actually hooks, for example)
+    --check-extents --pairs <tsv>  prove the DECODED leaf extents against two independent
                                    witnesses: the linker's own `.pdata` table and Ghidra 1.16.2
 
 ORDER: --scan, then --attribute (needs `bash scripts/ghidra/mcp-up-1162.sh`), then --report.
@@ -68,7 +69,7 @@ Where a function ends is part of the measurement
 -----------------------------------------------
 MSVC emits no unwind record for a leaf or a thunk, so `.pdata` cannot say where those end -- and
 they are exactly the shape a field getter takes. Their extent is DECODED (forward-branch
-watermark; the implementation is shared with `scripts/verify-rva-map-1170.py` rather than written
+watermark; the implementation is shared with `scripts/function_extent.py` rather than written
 twice), never guessed at the next `.pdata` start. Guessing ran each such comparison through the
 inter-function padding -- 0xCC in one build, 0x90 in the other -- and into unrelated neighbours,
 which desynchronises the two decodes and reports the function as changed. On 2026-08-30 that
@@ -95,9 +96,23 @@ ROOT = Path(__file__).resolve().parent.parent
 BASE = 0x140000000
 IMAGE_1162 = ROOT / "eldenring-deobf.bin"
 IMAGE_1170 = ROOT / "eldenring-deobf-1.17.bin"
-FUNCTION_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.functions.tsv"
-VERIFIED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.verified.tsv"
-NEEDED_MAP = ROOT / "docs/recon/rva-map-1162-to-1170.needed-verified.tsv"
+# The pair ledgers this tool used to default to -- the whole-image 1.16.2 -> 1.17 function map,
+# its hand-verified rows and the selected needed rows -- were deleted with the address carry on
+# 2026-10-23. Every mode that compares pairs now reads them from `--pairs`, and refuses without it
+# rather than reading a file that is no longer there.
+
+
+def pair_files(args, mode: str) -> list[Path]:
+    """The pair file(s) a pair-comparing mode reads: `--pairs`, or a refusal naming why."""
+    if getattr(args, "pairs", None):
+        return [Path(args.pairs)]
+    raise SystemExit(
+        f"detect-struct-field-drift: {mode} needs --pairs <tsv> (a 1.16.2 VA and a 1.17 VA per "
+        "line); the 1.16.2 -> 1.17 pair ledgers it defaulted to were deleted with the address "
+        "carry on 2026-10-23 (docs/game-build.md)"
+    )
+
+
 # Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
 # containing an agent session UUID, which is correct for exactly one session and wrong for
 # every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
@@ -285,22 +300,19 @@ NO_EXTENT = "NO-EXTENT"
 # function extents
 # --------------------------------------------------------------------------------------------
 def _sibling_leaf_extent():
-    """`leaf_extent` from `scripts/verify-rva-map-1170.py`, imported rather than reimplemented.
+    """`leaf_extent` from `scripts/function_extent.py`, imported rather than reimplemented.
 
-    That file already solved this exact problem and paid for the solution: the obvious rule --
-    stop at the first `ret` -- is wrong for a range-checked getter, whose fast-path `ret` sits
-    in front of the branch target of its own bounds check (`cmp / ja / <compute> / ret /
-    xor eax,eax / ret`). Its sweep therefore carries a watermark of the furthest forward branch
-    target and only accepts a terminator beyond it. Two implementations of a rule that subtle
-    would drift apart, and the second one would be the one nobody re-checked against Ghidra.
+    It came from `verify-rva-map-1170.py` until that file was deleted with the carry on
+    2026-10-23; the rule moved to `function_extent.py` unchanged. The obvious rule -- stop at
+    the first `ret` -- is wrong for a range-checked getter, whose fast-path `ret` sits in front of
+    the branch target of its own bounds check (`cmp / ja / <compute> / ret / xor eax,eax / ret`).
+    The sweep therefore carries a watermark of the furthest forward branch target and only
+    accepts a terminator beyond it. Two implementations of a rule that subtle would drift apart.
     """
-    import importlib.util
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import function_extent  # noqa: PLC0415 - lazy, like the import it replaces
 
-    path = ROOT / "scripts" / "verify-rva-map-1170.py"
-    spec = importlib.util.spec_from_file_location("_verify_rva_map_1170", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.leaf_extent
+    return function_extent.leaf_extent
 
 
 def extent_of(rva: int, ends: dict[int, int], image: bytes, starts: set[int], leaf_extent):
@@ -466,7 +478,7 @@ def scan(args) -> int:
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     old, new = Image(IMAGE_1162), Image(IMAGE_1170)
     ends_old, ends_new = old.function_ends(), new.function_ends()
-    pairs = load_pairs(FUNCTION_MAP)
+    pairs = load_pairs(pair_files(args, "--scan")[0])
     if args.limit:
         pairs = pairs[: args.limit]
 
@@ -603,9 +615,10 @@ def pairs_mode(args) -> int:
     """Compare an explicit list of function pairs and print every displacement, moved or not.
 
     `--scan` answers "what moved in the game". This answers the narrower and more useful question
-    "did anything move in the functions THIS MOD hooks", using
-    `docs/recon/rva-map-1162-to-1170.verified.tsv` -- pairs established by hand, which are exactly
-    the code the product detours and therefore exactly the objects its offsets index.
+    "did anything move in the functions THIS MOD hooks", given a `--pairs` file of pairs
+    established by hand -- the code the product detours and therefore exactly the objects its
+    offsets index. (The hand-verified 1.16.2 -> 1.17 ledger it was first run on was deleted with
+    the address carry on 2026-10-23.)
 
     Both the moved and the unchanged displacements are printed. An unchanged one is the only
     positive clearance available: it says this specific function still reads this specific field
@@ -755,7 +768,7 @@ def check_extents(args) -> int:
     print()
 
     # Witness 2: Ghidra's independent flow analysis, on the leaves that actually matter.
-    sources = [Path(args.pairs)] if args.pairs else [VERIFIED_MAP, NEEDED_MAP]
+    sources = pair_files(args, "--check-extents")
     rvas: set[int] = set()
     for path in sources:
         if path.is_file():
@@ -820,7 +833,7 @@ def find_displacement(args) -> int:
     moved: dict[int, list[tuple[str, int]]] = collections.defaultdict(list)
     unknown: dict[int, list[str]] = collections.defaultdict(list)
 
-    for a_rva, b_rva in load_pairs(FUNCTION_MAP):
+    for a_rva, b_rva in load_pairs(pair_files(args, "--find-displacement")[0]):
         a_end, b_end = ends_old.get(a_rva), ends_new.get(b_rva)
         if a_end is None or b_end is None or a_end - a_rva > MAX_FUNCTION_BYTES:
             continue
@@ -1698,8 +1711,11 @@ def diff_pair(args) -> int:
     return 0
 
 
-def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
+def hooked_holds(out_dir: Path, pair_paths: list[Path]) -> dict[int, list[str]]:
     """Displacement -> the functions this mod hooks that still read it at that offset in 1.17.
+
+    `pair_paths` is `--pairs`, or nothing: the hand-verified pair ledgers this read by default were
+    deleted with the address carry on 2026-10-23, and with no pairs this clearance is simply empty.
 
     The only positive clearance that does not need a structure name. Every other line of evidence
     here is about a number: how often it moved, how often it held, in objects nobody named. This
@@ -1728,7 +1744,7 @@ def hooked_holds(out_dir: Path) -> dict[int, list[str]]:
     # base so a span is an argument about one object; see `diff_pair`.
     spans: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
     span_moves: dict[tuple[str, str], set[int]] = collections.defaultdict(set)
-    for path in (VERIFIED_MAP, NEEDED_MAP):
+    for path in pair_paths:
         if not path.is_file():
             continue
         for a_rva, b_rva in load_pairs(path):
@@ -1823,7 +1839,9 @@ def resolve_unknown(args) -> int:
         moves[row["old"]].append(row)
 
     sites = offset_use_sites()
-    hooked, spans, span_moves = hooked_holds(args.out_dir)
+    hooked, spans, span_moves = hooked_holds(
+        args.out_dir, [Path(args.pairs)] if args.pairs else []
+    )
     rows = [
         r
         for r in inventory()
@@ -2468,13 +2486,6 @@ def selftest(args) -> int:
             if not ok:
                 failures.append(f"false positive {a_va:#x}")
 
-        print("\nfunction table")
-        pairs = load_pairs(FUNCTION_MAP) if FUNCTION_MAP.is_file() else []
-        ok = len(pairs) > 100000
-        print(f"  {'ok  ' if ok else 'FAIL'} {len(pairs)} mapped function pairs available")
-        if not ok:
-            failures.append("function map")
-
     print("\ninventory rule")
     rows = inventory()
     ok = len(rows) > 500
@@ -2556,7 +2567,8 @@ def main() -> int:
     ap.add_argument(
         "--pairs",
         metavar="TSV",
-        help="compare only these 1.16.2/1.17 pairs (e.g. docs/recon/rva-map-1162-to-1170.verified.tsv)",
+        help="the 1.16.2/1.17 pairs to compare (two VA columns); required by --scan, "
+        "--find-displacement and --check-extents",
     )
     ap.add_argument("--min-fields", type=int, default=1, help="--regions: hide clusters below this")
     ap.add_argument("--min-functions", type=int, default=0, help="--regions: drop thin rows")
@@ -2604,6 +2616,9 @@ def main() -> int:
         return check_extents(args)
     if args.find_displacement:
         return find_displacement(args)
+    # Before the bare `--pairs` mode, because `--scan` now takes its pairs from `--pairs` too.
+    if args.scan:
+        return scan(args)
     if args.pairs:
         return pairs_mode(args)
     if args.attribute:
@@ -2612,8 +2627,6 @@ def main() -> int:
         return regions(args)
     if args.report:
         return report(args)
-    if args.scan:
-        return scan(args)
     ap.print_help()
     return 2
 

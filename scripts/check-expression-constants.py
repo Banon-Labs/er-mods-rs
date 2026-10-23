@@ -132,11 +132,13 @@ def load_drift():
 
 
 def address_population(repo: Path, constants: const_fold.Constants) -> dict[str, const_fold.Decl]:
-    """The constants the 1.17 address harvest will look at: `*RVA*`-named, or handed to a resolver.
+    """The game-address constants: `*RVA*`-named, or handed to a resolver (`rva_usage`).
 
-    Mirrors `select-needed-1170-rows.py::declared_rvas` deliberately -- same name filter, same
-    `BOUND` and `NOT_AN_ADDRESS` choke points, same `#[cfg(test)]` blindness -- so that "this gate
-    is green" means "that harvester can see a value for everything it will consider".
+    The same name filter, `BOUND` and `NOT_AN_ADDRESS` choke points and `#[cfg(test)]` blindness
+    the deleted 1.17 ledger harvester (`select-needed-1170-rows.py::declared_rvas`) used, kept
+    because the question outlived it: every tool that reads an address constant by value --
+    `rva_symbols`, `check-rva-alias-drift.py`, `check-detour-rva-coverage.py` -- needs a number
+    for it, and "this gate is green" means each of them gets one.
     """
     used = rva_usage.workspace_usage(repo)
     out: dict[str, const_fold.Decl] = {}
@@ -382,12 +384,15 @@ def selftest(repo: Path) -> int:
         failures.append(
             f"a #[cfg(test)] declaration became visible: FREELIST_SHUTDOWN_ASSERT_RVA -> {guarded}"
         )
-    # The address the whole exercise is about must resolve, and to the RVA, not the VA.
+    # The address the whole exercise is about must resolve, and to the RVA, not the VA. Since the
+    # port to 2.7.2.0 its declaration is the plain rva `0x265cc10` rather than the `VA - base`
+    # expression the frozen `A_RVA` control above still exercises, so this half now proves the
+    # real tree is read at all and that no VA is recorded for it.
     real = constants.resolve("ADD_DEFAULT_FILE_LOAD_PROCESS_RVA")
-    if real.value != 0x2658C60:
+    if real.value != 0x265CC10:
         failures.append(
-            f"ADD_DEFAULT_FILE_LOAD_PROCESS_RVA folded to {real} -- expected 0x2658c60; "
-            "0x142658c60 means the first-literal read is back"
+            f"ADD_DEFAULT_FILE_LOAD_PROCESS_RVA folded to {real} -- expected 0x265cc10; "
+            "0x14265cc10 means a VA was recorded where the RVA belongs"
         )
 
     # --- the gate must be green on the tree as it stands, or every mutant below proves nothing

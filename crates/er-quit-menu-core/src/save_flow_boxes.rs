@@ -125,7 +125,7 @@ pub static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
 /// the literal every native Yes/No confirm passes.
 pub static SAVE_FLOW_YES_DESC_LABEL_W: [u16; 3] = [0x6c7a, 0x5b9a, 0];
 
-/// The 24-byte descriptor the Yes adder copies out (`FUN_1407b1d40` reads three qwords from
+/// The 24-byte descriptor the Yes adder copies out (`0x1407b3070` reads three qwords from
 /// it). Values are byte-identical to every native Yes/No confirm: `{100, 2, 1, <pad>, label}`.
 #[repr(C)]
 pub struct SaveFlowYesButtonDesc {
@@ -302,17 +302,18 @@ use er_game_base::fnv1a::fnv1a64_mix;
 // overwrite confirm attached to a file the user just pointed at cannot be answered by reflex about
 // some other file.
 //
-// Recipe (disassembled from `eldenring-deobf.bin` 2026-07-28; the native Yes/No confirm
-// wrapper `FUN_1407b73d0`, which is what the quit confirm at `FUN_14079d700` calls):
+// Recipe (disassembled from the 1.16.2 image `eldenring-deobf.bin` 2026-07-28; the rvas below
+// are the 2.7.2.0 ones `build.rs` pins. The native Yes/No confirm wrapper is `0x1407b8700`,
+// which is what the quit confirm at `0x14079ea30` calls):
 //
 //     movl $0x17, mode                        ; MSGBOX_BUILDER_MODE_CONFIRM
 //     movb $0,  <5th stack arg>
 //     ctor(builder /*0x1140 stack bytes*/, ctx = dialog+0x50, prompt, &mode, 0)
-//     add_yes(builder, &yes_desc)             ; 0x7b1c70, localized "Yes"
-//     add_no(builder)                         ; 0x7b1900, localized "No"
-//     default_last(builder)                   ; 0x7b1b60, *(i32*)(builder+0x28) = count-1
-//     finalize(builder, &job_slot, 0)         ; 0x7b10f0, writes the MenuJob reference
-//     dtor(builder)                           ; 0x7b0140
+//     add_yes(builder, &yes_desc)             ; 0x7b2fa0, localized "Yes"
+//     add_no(builder)                         ; 0x7b2c30, localized "No"
+//     default_last(builder)                   ; 0x7b2e90, *(i32*)(builder+0x28) = count-1
+//     finalize(builder, &job_slot, 0)         ; 0x7b2420, writes the MenuJob reference
+//     dtor(builder)                           ; 0x7b1470
 //
 // then the resulting MenuJob is submitted to a dialog's own queue (dialog+0x10) with
 // `MENU_JOB_SUBMIT_RVA`, exactly like the profile-load route. The one place we differ from the
@@ -333,7 +334,7 @@ use er_game_base::fnv1a::fnv1a64_mix;
 // MessageBoxBuilder integration joined them here on 2026-09-12 instead of staying in the product.
 
 /// Stack scratch for `CS::MessageBoxBuilder`. 16-byte aligned: the builder ctor stores xmm
-/// registers into its own body (`movups` in the sub-ctor `FUN_1407af5b0`).
+/// registers into its own body (`movups` in the sub-ctor `0x1407b08e0`).
 #[repr(C, align(16))]
 pub struct SaveFlowMsgBoxBuilderScratch {
     bytes: [u8; MSGBOX_BUILDER_SIZE],
@@ -395,12 +396,11 @@ pub fn save_flow_verify_rva(rva: u32, expected: &[u8], mask: &[u8], name: &str) 
 /// `register_union_hook` resolve what they are given, and they must be the one resolve that decides
 /// where the five bytes land.
 ///
-/// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
-/// prologue and once inside the hook API, both reaching the same address. Resolving the output is
-/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 source of another
-/// (the shift equalling the local function spacing, `B - A == C - B`), and then the second resolve
-/// silently returns a third, unrelated function. Three live detours were measured landing that way
-/// on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
+/// Resolving the same 2.7.2.0 rva twice is harmless -- that is what happens here, once to read the
+/// prologue and once inside the hook API, both reaching the same address. Handing the hook API an
+/// already-resolved address is the shape that went wrong while a 1.16.2-to-1.17 translation layer
+/// existed (three live detours measured landing on unrelated functions on 2026-08-30); with no
+/// translation left, a second check of a native address returns the same address.
 pub fn save_flow_verify_rva_for_hook(
     rva: u32,
     expected: &[u8],
@@ -476,8 +476,8 @@ pub fn save_flow_box_recipe_available() -> bool {
 /// Dialog the next box is built against and submitted to. Defaults to the System/Quit dialog
 /// captured at the Save Game row press; Box3 overrides it with the live `05_010` picker dialog.
 ///
-/// Why the override exists (RE, 1.16.2 `FUN_1409a4670`, the native ProfileLoadDialog slot
-/// activation): the game submits its own "load this profile?" confirm to
+/// Why the override exists (RE on the 1.16.2 dump of the native ProfileLoadDialog slot activation,
+/// 2.7.2.0 `0x1409a5cc0`): the game submits its own "load this profile?" confirm to
 /// `profile_load_dialog + 0x10` with the context `profile_load_dialog + 0x50` -- i.e. a confirm
 /// raised over the picker belongs to the PICKER's job queue, not the System dialog's, whose queue
 /// is still busy with the open picker window job.
@@ -678,11 +678,11 @@ pub struct SaveFlowBoxSnapshot {
 /// What actually carries the answer:
 ///   * each button gets a `MenuJobResult` from the builder -- `add_yes` -> `Success` (2),
 ///     `add_no` -> `Failed` (3);
-///   * a press runs `FUN_14078e030` -> `FUN_14078ef20`, which pulls that result out of the
+///   * a press runs `0x14078f360` -> `0x140790250`, which pulls that result out of the
 ///     button's command struct (`+0x180`) and either emits it through
 ///     `CS::MenuJob::EmitResult` (vtable `+0x60`, which then sets the `+0x3b0` latch) or
 ///     stores it at `dialog+0x1e8`, depending on `*(u8*)(dialog+0x127c)`;
-///   * cancel/auto-close (`FUN_1407ac890`) emits `Failed` through the same slot.
+///   * cancel/auto-close (`0x1407adbc0`) emits `Failed` through the same slot.
 ///
 /// So we read `+0x1e8` and latch what the emit hook saw for this exact dialog. Both are the
 /// game's own verdict; neither exists until the user answers.
@@ -879,7 +879,7 @@ pub static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FL
 /// `+0x60`). Pure OBSERVATION: it records the emitted `MenuJobResult` when `this` is the live
 /// confirm box and always forwards, so no other MenuJob in the game is affected.
 ///
-/// Why it exists: `FUN_14078ee20` -- the lambda a pressed button runs -- branches on
+/// Why it exists: `0x140790150` -- the lambda a pressed button runs -- branches on
 /// `*(u8*)(dialog+0x127c)`. On one branch the button's result is stored at `dialog+0x1e8`
 /// (pollable); on the other it goes straight into this emit and the field is never written.
 /// Nothing in the whole image writes `+0x127c` with an immediate, so which branch a given

@@ -9,7 +9,10 @@ skips plain stores, and prints it with the next few instructions so the consumer
 bits is visible.
 
     uv run --with capstone python3 scripts/find-deobf-covering-loads.py 0x15f
-    uv run --with capstone python3 scripts/find-deobf-covering-loads.py 0x15f --image eldenring-deobf-1.17.1.bin
+    uv run --with capstone python3 scripts/find-deobf-covering-loads.py 0x15f --image eldenring-deobf.bin
+
+The image defaults to `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build (`ER_DEOBF_BIN`
+or `--image` picks another; `eldenring-deobf.bin` is 1.16.2).
 
 A displacement is not a struct: every hit is some register plus that offset. Narrow the
 survivors by reading the function in Ghidra.
@@ -28,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import function_extent  # noqa: E402
 
 DEFAULT_IMG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf.bin"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf-1.17.2.bin"
 )
 BASE = 0x140000000
 

@@ -1,6 +1,17 @@
 # ELDEN RING 1.17 address table for the possession / spawn / net / i-frames work
 
-**Status: uncommitted. Every row below is byte-evidence, not permission — read the 1.17 function
+> Historical, kept as reverse-engineering notes (2026-10-23). Every address in this file is a
+> 1.16.2 or a 1.17.0 (2.7.0.0) address, as its column says. The installed and only supported build
+> is 2.7.2.0 (`docs/game-build.md`), so a row here names a function to find on
+> `eldenring-deobf-1.17.2.bin`, not an address to use. The tools that wrote this table
+> (`verify-rva-map-1170.py`, `map-rvas-1162-to-1170.py`, `resolve-1170-by-caller-rel32.py`,
+> `locate-1170-vtable.py`) were deleted with the 1.16.2 carry, and so were the machine-readable
+> pair tables they wrote beside it (`npc-possess-rva-map-1170.verified.tsv`,
+> `npc-possess-candidates-1170.tsv`, `-bridges-1170`, `-resolved-1170`, `-vtslots-1170`,
+> `-candidates-recheck`), which nothing read; the last copies of all of them are at commit
+> `41d6a363`. The sections below describe how the table was built at the time.
+
+**Status: uncommitted. Every row below is byte-evidence, not permission -- read the 1.17 function
 before you hook it.**
 
 The installed game has been **1.17** since 2026-08-27, but essentially all of this project's
@@ -8,9 +19,10 @@ reverse engineering was done against the **1.16.2** named Ghidra dump. Individua
 their own addresses ad hoc and with inconsistent rigour. This file is the single authoritative,
 byte-verified 1.17 table for the addresses those agents left behind.
 
-Machine-readable companion: `npc-possess-rva-map-1170.verified.tsv` (152 rows, written by
-`scripts/verify-rva-map-1170.py --tsv`). Input list with provenance:
-`npc-possess-1162-addresses.tsv` — every address, and which `bd` memory it came from.
+Its machine-readable companion was `npc-possess-rva-map-1170.verified.tsv` (152 rows, written by
+the since-deleted `scripts/verify-rva-map-1170.py --tsv`). Input list with provenance, still in
+`docs/recon`: `npc-possess-1162-addresses.tsv` -- every address, and which `bd` memory it came
+from.
 
 Both images are FLAT: file offset == RVA, `VA = 0x140000000 + offset`, `.rdata` included, and the
 **shift is ZERO** in both directions (dump VA == deobf VA == runtime VA).
@@ -30,7 +42,7 @@ The 152 verified pairs move by **more than a dozen different deltas**:
 
 A neighbouring function's delta is a HINT for the search, never an answer. An estimated shift that
 lands mid-instruction is exactly the failure that got `scripts/dump-deobf-shift.py` deleted from
-this repo, and it recurred during this sweep in a new disguise — see the RideManipulator entry
+this repo, and it recurred during this sweep in a new disguise -- see the RideManipulator entry
 under *Corrections*.
 
 ## How each row was established
@@ -38,20 +50,20 @@ under *Corrections*.
 Four independent techniques, in descending order of how often they were needed. A row's `how
 resolved` column names the one that produced it.
 
-1. **Relocation-masked byte signature** (`scripts/map-rvas-1162-to-1170.py`) — 120/153. Masks
+1. **Relocation-masked byte signature** (`scripts/map-rvas-1162-to-1170.py`) -- 120/153. Masks
    displacements, immediates and branch targets, so it survives struct drift. **Every `e8`/`e9`
    rel32 MUST be wildcarded**: a raw prologue copy returns 0 hits on any function containing a
    call, which reads as "the function is gone" rather than "your pattern is wrong". Signatures are
-   28–40 bytes; 12 bytes of common frame setup returns 64 hits (the cap) and identifies nothing.
-2. **Caller rel32 decoding** (`scripts/resolve-1170-by-caller-rel32.py`, written for this sweep) —
+   28-40 bytes; 12 bytes of common frame setup returns 64 hits (the cap) and identifies nothing.
+2. **Caller rel32 decoding** (`scripts/resolve-1170-by-caller-rel32.py`, written for this sweep) --
    +18. If a caller C is already mapped to C', then F' is whatever C' calls in the same position.
    Alignment is by **call index**, not byte offset, and both bodies must contain the same number of
-   calls, or the tool declines. Several targets got 2–10 independently agreeing callers.
-3. **RTTI vtable slot** (`scripts/find-1170-vtable-by-rtti.py`, written for this sweep) — +11.
+   calls, or the tool declines. Several targets got 2-10 independently agreeing callers.
+3. **RTTI vtable slot** (`scripts/find-1170-vtable-by-rtti.py`, written for this sweep) -- +11.
    Follows the compiler's own record: decorated class name -> TypeDescriptor -> Complete Object
    Locator -> the qword at `vtable-8`. Exact, with no similarity metric anywhere in the chain. It
    re-derives all ten known 1.16.2 vtables correctly, which is its self-test.
-4. **Call-graph topology** (`scripts/resolve-1170-by-topology.py`, written for this sweep) — +4.
+4. **Call-graph topology** (`scripts/resolve-1170-by-topology.py`, written for this sweep) -- +4.
    For a function with a generic body, no mapped caller and no vtable slot: require an EXACT
    `.pdata` size match plus equal caller and callee counts among the shape-alike candidates.
 
@@ -68,9 +80,9 @@ claims in the `bd` memories were wrong.**
 | `IDENTICAL-WHOLE` | 100 | whole declared body, normalised, agrees |
 | `IDENTICAL-LEAF` | 29 | whole decoded body of a function with no `.pdata` entry |
 | `BYTE-IDENTICAL` | 9 | whole body, byte for byte |
-| `IDENTICAL-LEAF-NOPATCH` | 4 | body proved; too short to hold a 5-byte jump — **CALL/READ only** |
+| `IDENTICAL-LEAF-NOPATCH` | 4 | body proved; too short to hold a 5-byte jump -- **CALL/READ only** |
 | `PATCH-SITE-IDENTICAL` | 1 | body differs past the patch site; detour still safe |
-| `NEAR` | 4 | **1.17 genuinely changed this code** — see below |
+| `NEAR` | 4 | **1.17 genuinely changed this code** -- see below |
 | `IDENTICAL` | 1 | prefix match |
 
 112 rows are `BOTH-ENTRIES` (both images' `.pdata` declares a function there, so a detour may be
@@ -78,8 +90,8 @@ installed); 34 are leaves that may be **called or read but never hooked**.
 
 ## The four functions 1.17 actually changed
 
-These four are correctly mapped — two of them by the exact RTTI/vtable route, which cannot be
-wrong about identity — and the `NEAR` verdict means the **body** was edited in 1.17. Anything
+These four are correctly mapped -- two of them by the exact RTTI/vtable route, which cannot be
+wrong about identity -- and the `NEAR` verdict means the **body** was edited in 1.17. Anything
 depending on their internals must be re-read, not carried across.
 
 | 1.16.2 | 1.17 | ratio / insns | why it matters |
@@ -87,7 +99,7 @@ depending on their internals must be re-read, not carried across.
 | `0x1404275e0` | `0x140427b30` | 0.96 / 911 | **`0ChrActionFlag`, the TAE i-frame jumptable dispatcher.** 4% of it changed. |
 | `0x140425ba0` | `0x1404260f0` | 0.99 / 452 | `ActivateChrActionFlagEarly`, its sibling. |
 | `0x140660120` | `0x140660f70` | 0.99 / 489 | `PlayerIns` vtable `+0x88` Update. |
-| `0x1403b11c0` | `0x1403b11d0` | 1.00 / 688, first diff at insn 684 | `ChrCam::Update` — diverges only at the very end. |
+| `0x1403b11c0` | `0x1403b11d0` | 1.00 / 688, first diff at insn 684 | `ChrCam::Update` -- diverges only at the very end. |
 
 **The i-frame path still works on 1.17.** The dispatcher moved and changed, but the mechanism did
 not: all six jumptable case bodies re-derive uniquely in the 1.17 image at a uniform `+0x550`, and
@@ -104,7 +116,7 @@ each still writes the same bit into `CSChrActionFlagModule+0x40 actionModifiersF
 
 Structural confirmation that the dispatcher pair is right: 1.16.2 `0x1404275e0` is reached from
 `ExecuteThreadOne` (`0x14042e1a0`) at `0x14042e1fe`; 1.17 `0x140427b30` is reached from
-`FUN_14042e6f0` at `0x14042e74e` — the same slot of the same dispatch table.
+`FUN_14042e6f0` at `0x14042e74e` -- the same slot of the same dispatch table.
 
 ## Class vtables, located by RTTI (exact)
 
@@ -141,7 +153,7 @@ decompiler prints as `(*param_2->_vfptr->thunk_FUN_140433fe0)(param_2)`. The rea
 | `EnemyIns` | `0x1404cf4c0` | `0x1404d0290` |
 | `PlayerIns` | `0x140654540` | `0x140655390` |
 
-**2. `scratchpad/dump_funcs.tsv` is the 1.16.1 image — not 1.16.2, and not 1.17.** `bd
+**2. `scratchpad/dump_funcs.tsv` is the 1.16.1 image -- not 1.16.2, and not 1.17.** `bd
 per-frame-chrins-move-without-fall-damage-2026-09-01` warns it is "NOT 1.17", which understates
 the problem by a whole patch. Measured: 972 sampled functions match `dump-exec.bin` **972/972 =
 100%**, against **5/972 (0.5%)** for `eldenring-deobf.bin` (1.16.2) and **2/972 (0.2%)** for
@@ -165,7 +177,7 @@ records `0x14048c310` as "still returns 0 hits ... remains UNMAPPED for 1.17". I
 **5. A slot-agreement VOTE cannot separate a class from its parent.** While locating vtables,
 `scripts/locate-1170-vtable.py` TIED at 42 agreeing slots between `0x142a2c8e8` and `0x142a2f118`
 for `RideManipulator` and returned the first. That was **wrong**: RTTI shows `0x142a2f118` is
-`RideManipulator` and `0x142a2c8e8` is **`ChrManipulator`, its base class** — which of course
+`RideManipulator` and `0x142a2c8e8` is **`ChrManipulator`, its base class** -- which of course
 shares nearly every slot. Inheritance produces slot agreement, so slot agreement cannot measure
 identity. The tool now carries that warning and defers to the RTTI chain. This is the same failure
 mode as an extrapolated shift, wearing different clothes.
@@ -176,12 +188,12 @@ mode as an extrapolated shift, wearing different clothes.
 
 **1.17 inserts a new 8-byte pointer at `ChrIns+0x3b8`. Every field at `>= 0x3b8` shifts `+8`;
 every field at `<= 0x3b0` is unchanged.** Total size stays `0x580` because tail padding absorbs
-it — so a stale offset does **not** fault. It silently returns the neighbouring field forever.
+it -- so a stale offset does **not** fault. It silently returns the neighbouring field forever.
 
 | field | 1.16.2 | 1.17 | evidence |
 |---|---|---|---|
 | `debugFlags` (bit `0x10` no-attack, `0x20` no-move) | `+0x530` | **`+0x538`** | 1.17 `0x1403d0008 test byte [rax+0x538],0x10`; `0x1403cc235 test byte [rax+0x538],0x20` |
-| `staminaRecovery` | `+0x534` | **`+0x53c`** | `0x140401b0d mov [rdi+0x53c],eax` — the sole diff in 296 insns of `ChrIns::Update` |
+| `staminaRecovery` | `+0x534` | **`+0x53c`** | `0x140401b0d mov [rdi+0x53c],eax` -- the sole diff in 296 insns of `ChrIns::Update` |
 
 Confirmed independently by an encoding census over the whole image, and the flip is **exclusive,
 not additive**: `f6 80 <disp32> 10/20` (`test byte [rax+disp],bit`) occurs in 1.16.2 **twice at
@@ -201,7 +213,7 @@ is extended at the **top**: 1.16.2 releases `0x3b0, 0x3a8, 0x3a0, 0x398`; 1.17 r
 
 | struct | fields checked | verdict |
 |---|---|---|
-| `ChrCtrl` | `+0x10 +0x18 +0x20 +0xc0 +0xE8 +0xFC +0x100 +0x110 +0x120 +0x140 +0x2d4 +0x3b0`, size `0x3D0` | **all unchanged** — ctor `0x1403c4d50`->`0x1403c4d60` 0 diffs / 157 insns; `UpdatePositions` `0x1403cd180`->`0x1403cd190` 0 diffs / 44 insns |
+| `ChrCtrl` | `+0x10 +0x18 +0x20 +0xc0 +0xE8 +0xFC +0x100 +0x110 +0x120 +0x140 +0x2d4 +0x3b0`, size `0x3D0` | **all unchanged** -- ctor `0x1403c4d50`->`0x1403c4d60` 0 diffs / 157 insns; `UpdatePositions` `0x1403cd180`->`0x1403cd190` 0 diffs / 44 insns |
 | `ChrIns` | `+0x28 +0x58 +0x178 +0x190 +0x1c5 +0x1ca`, size `0x580` | all unchanged (see above for `+0x530`/`+0x534`) |
 | `ChrInsModuleContainer` | `+0x0 data, +0x8 actionFlag, +0x28 behavior, +0x38 ai, +0x58 event, +0x68 physics, +0x80 actionRequest, +0x98 damage` | all unchanged; `+0x68 physics` confirmed four independent ways |
 | `CSChrDataModule` | `+0x138 +0x13c +0x140 +0x148 +0x14c +0x154 +0x158` | all unchanged |
@@ -214,12 +226,12 @@ is extended at the **top**: 1.16.2 releases `0x3b0, 0x3a8, 0x3a0, 0x398`; 1.17 r
 
 Globals: `GLOBAL_WorldChrMan` `0x143d65f88` -> **`0x143d69ff8`**; `GLOBAL_WorldChrManDbg`
 `0x143d66198` -> **`0x143d6a208`**. (Note the second happens to equal the *1.16.2* `LockTgtMan`
-address — do not let that coincidence mislead a reader.)
+address -- do not let that coincidence mislead a reader.)
 
 ### Corrections to the field names the brief carried
 
 * `CSChrPhysicsModule` `needsChrMatrixUpdate` is **`+0x90`** and `chrProxyPosUpdateNeeded` is
-  **`+0x91`** — not `+0x150`/`+0x1b0` as the brief listed.
+  **`+0x91`** -- not `+0x150`/`+0x1b0` as the brief listed.
 * `CSChrDataModule hpBase` is **`+0x144`**, which was missing from the list entirely.
 * `EnemyIns` vtable `+0x88` does **not** tail-jump *unguarded*. It runs guarded pre-work (reads
   `ChrIns+0x190`, tests `ChrIns+0x1c4 & 0x20`, calls the manipulators at `+0x5a8`/`+0x5b0`) and
@@ -227,7 +239,7 @@ address — do not let that coincidence mislead a reader.)
 
 ## Item 2: the two explicitly-unverified items
 
-**(a) `WorldChrManDbgImp+0xb8 camOverrideChrIns` — CONFIRMED, still `+0xb8`.** The 1.17 accessor is
+**(a) `WorldChrManDbgImp+0xb8 camOverrideChrIns` -- CONFIRMED, still `+0xb8`.** The 1.17 accessor is
 `0x142066514` (reached via thunk `0x140514010`), and it is **byte-identical** to 1.16.2
 `0x140df35f7`: `48 8b 81 b8 00 00 00` = `mov rax,[rcx+0xb8]`. The 16-byte thunk pattern is unique
 in both images. The **reader set is still exactly 5**, at identical intra-function offsets:
@@ -240,7 +252,7 @@ in both images. The **reader set is still exactly 5**, at identical intra-functi
 | `WorldChrManImp::RemoveChrIns` | `0x14050a570` (+0x133) | `0x14050b340` (+0x133) |
 | `WorldChrMan_Update_RideCheck` | `0x14050eb31` | `0x14050f931` |
 
-**(b) `EnemyIns` layout / vtable — CONFIRMED.** 1.17 vtable `0x142a47090` is **RTTI-proven** (COL
+**(b) `EnemyIns` layout / vtable -- CONFIRMED.** 1.17 vtable `0x142a47090` is **RTTI-proven** (COL
 `0x1432d7d90` -> TypeDescriptor `0x143c84e60` -> `.?AVEnemyIns@CS@@`), **203 slots on both**.
 
 | slot | 1.16.2 | 1.17 | 1.17 shape read |
@@ -258,7 +270,7 @@ in both images. The **reader set is still exactly 5**, at identical intra-functi
 ## Item 4: anchors added, and the four dialog functions mapped
 
 Seven new anchors in the previously empty regions, each a **unique** relocation-masked match, each
-whole-body verified, all now in `rva-map-1162-to-1170.verified.tsv` (103 -> 114 data rows, none lost):
+whole-body verified, all added to `rva-map-1162-to-1170.verified.tsv` (103 -> 114 data rows, none lost):
 
 | region | 1.16.2 | 1.17 | delta | verdict |
 |---|---|---|---|---|
@@ -275,28 +287,28 @@ All four targets resolve, all `IDENTICAL-WHOLE` ratio 1.000, `BOTH-ENTRIES`, `.p
 | function | 1.16.2 | 1.17 | delta | what the 1.17 read confirmed |
 |---|---|---|---|---|
 | list builder | `0x140875590` | `0x140876580` | `+0xff0` | same 10-slot `GetProfileSummary` loop, same three vftable stores (`MenuViewItemListBase`, `MenuViewItemList<MenuSaveDataSummary>`, `BasicViewItemList<MenuSaveDataSummary,10>`), same `0xbd0` frame |
-| activate | `0x1409a4670` | `0x1409a5810` | `+0x11a0` | same MSVC **lambda identity hash** `lambda_4c99f2aa9be82b9e77290caf9df1593f`, same FMG ids `0x61edb`/`0x631fb`, same 決定 caption, same `+0x147`/`[0x161]`/`[0x399]`/`+0x295` offsets |
+| activate | `0x1409a4670` | `0x1409a5810` | `+0x11a0` | same MSVC **lambda identity hash** `lambda_4c99f2aa9be82b9e77290caf9df1593f`, same FMG ids `0x61edb`/`0x631fb`, same Jue Ding  caption, same `+0x147`/`[0x161]`/`[0x399]`/`+0x295` offsets |
 | list rebuild | `0x1409a4ed0` | `0x1409a6070` | `+0x11a0` | same vftable stores, same `0x21`-stride dtor loop; calls the mapped list builder |
 | `AddCancelButton` | `0x140920c90` | `0x140921e30` | `+0x11a0` | same lambda hash `lambda_633960ee0b3fb409d37bb910424db95f`, byte-identical frame |
 
-### The `+0xe50` warning was load-bearing — extrapolating it fails on all four
+### The `+0xe50` warning was load-bearing -- extrapolating it fails on all four
 
 | target | real delta | `+0xe50` would have landed on |
 |---|---|---|
-| `0x140875590` | `+0xff0` | `0x1408763e0` — **a valid, declared 1.17 function entry, but the counterpart of a DIFFERENT 1.16.2 function.** A detour installs cleanly and silently hooks the wrong function: no crash, no log line, wrong behaviour. |
-| `0x1409a4670` | `+0x11a0` | `0x1409a54c0` — `0x1b0` bytes *inside* `FUN_1409a5310` |
-| `0x1409a4ed0` | `+0x11a0` | `0x1409a5d20` — `0x510` bytes *inside* the activate target |
-| `0x140920c90` | `+0x11a0` | `0x140921ae0` — `0x10` bytes *inside* `0x140921ad0` |
+| `0x140875590` | `+0xff0` | `0x1408763e0` -- **a valid, declared 1.17 function entry, but the counterpart of a DIFFERENT 1.16.2 function.** A detour installs cleanly and silently hooks the wrong function: no crash, no log line, wrong behaviour. |
+| `0x1409a4670` | `+0x11a0` | `0x1409a54c0` -- `0x1b0` bytes *inside* `FUN_1409a5310` |
+| `0x1409a4ed0` | `+0x11a0` | `0x1409a5d20` -- `0x510` bytes *inside* the activate target |
+| `0x140920c90` | `+0x11a0` | `0x140921ae0` -- `0x10` bytes *inside* `0x140921ad0` |
 
 ## Two tool defects found and fixed during this sweep
 
 **1. `scripts/map-rvas-1162-to-1170.py` truncated its candidate list at 9.** `bytes.find` walks the
 image low-to-high, so the list handed to the anchor pass was "the first nine matches", not "the
 matches". `0x1409a4670`'s true counterpart is **hit 39 of 51** and was discarded before any anchor
-could be consulted — so the familiar note `9 shape matches, none at the nearest anchor's delta` was
+could be consulted -- so the familiar note `9 shape matches, none at the nearest anchor's delta` was
 a **truncation, not a disagreement**. Cap raised to 512. Re-running this sweep's 153 addresses
 against the fixed tool maps 132 (up from 120) and **agrees with every pair in the table below,
-zero disagreements** — the table is robust to the fix.
+zero disagreements** -- the table is robust to the fix.
 
 **2. `scripts/verify-rva-map-1170.py --tsv` destroyed comment lines.** Its carry-forward guard
 counted **rows only**. One write preserved all 103 data rows and deleted **181 of the ledger's 209
@@ -305,23 +317,24 @@ records why addresses were removed or deliberately refused. Fixed: comments and 
 original order, and `--tsv` twice is byte-idempotent.
 
 **3. `scripts/pair-object-field-drift.py` reports the wrong insertion point.** For `ChrIns` it says
-`0x390` and claims `0x390/0x398/0x3a0/0x3a8/0x3b0` all moved `+8`. They did not — following it
+`0x390` and claims `0x390/0x398/0x3a0/0x3a8/0x3b0` all moved `+8`. They did not -- following it
 would mis-shift five live pointer fields. It masks numeric literals before `difflib`, so a run of
 identical `mov qword [rdi+X], r15` null stores is unalignable and it charges the extra store to the
 *first* position rather than the last. Prefer ctor+dtor pairing until it is fixed.
 
-**Coverage gap**: `scripts/check-object-field-offsets-1170.py` covers 12 classes and **none** of
+**Coverage gap** (at the time): `scripts/check-object-field-offsets-1170.py`, since renamed
+`scripts/check-object-field-offsets.py`, covered 12 classes and **none** of
 `ChrIns`/`ChrCtrl`/`EnemyIns`/`PlayerIns`/`WorldChrManDbgImp`. `ChrIns +0x530 -> +0x538` is exactly
-the silent failure that gate exists to catch, and it is currently uncaught.
+the silent failure that gate exists to catch, and it was uncaught then.
 
 ## Other stale sources found
 
-* `crates/er-quickload/src/constants/profile_render.rs` lines 66–96 cite **`dump-deobf-shift`** as
-  provenance — the tool AGENTS.md bans as actively wrong — and name `FUN_140875680` and
+* `crates/er-quickload/src/constants/profile_render.rs` lines 66-96 cite **`dump-deobf-shift`** as
+  provenance -- the tool AGENTS.md bans as actively wrong -- and name `FUN_140875680` and
   `FUN_1409a2e40`, both **mid-function** in 1.16.2. Doc comments only; the live constants are correct.
 * `WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1e508` is centralised in `crates/er-game-base/src/rva.rs:381`
   but re-declared privately in `crates/er-build-import-runtime/src/equip_native.rs:135` and
-  `.../grant.rs:337`. The value is correct on 1.17, so this is hygiene, not a bug — but it is a
+  `.../grant.rs:337`. The value is correct on 1.17, so this is hygiene, not a bug -- but it is a
   struct offset, so nothing translates it, and the day it moves those copies will not follow.
 
 ## Verified table

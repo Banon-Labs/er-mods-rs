@@ -9,13 +9,13 @@
 //! `install_profile_and_system_quit_hooks` -> `install_system_quit_duplicate_button_hook`, with no
 //! gate of any kind:
 //!
-//! | address    | what it is                                   | how often it fires        |
+//! | 2.7.2.0 rva | what it is (`FUN_` names are 1.16.2 labels) | how often it fires        |
 //! |------------|----------------------------------------------|---------------------------|
 //! | `0x21bbf0` | the sole `MsbFileCap::msbResCap` writer       | once per MSB, every boot  |
-//! | `0xaf1800` | `CS::MoveMapListStep::STEP_LoadListWait`      | every frame               |
-//! | `0xe06490` | DLC virtual-root blank (`FUN_140e06490`)      | per title start-game pass |
-//! | `0xe05fb0` | DLC virtual-root refill (`FUN_140e05fb0`)     | per refill attempt        |
-//! | `0x836f30` | the refill job body (`FUN_140836f30`)         | per job dispatch          |
+//! | `0xaf2fd0` | `CS::MoveMapListStep::STEP_LoadListWait`      | every frame               |
+//! | `0xe099f0` | DLC virtual-root blank (`FUN_140e06490`)      | per title start-game pass |
+//! | `0xe09510` | DLC virtual-root refill (`FUN_140e05fb0`)     | per refill attempt        |
+//! | `0x8383d0` | the refill job body (`FUN_140836f30`)         | per job dispatch          |
 //!
 //! Every one of them is observe-and-forward, and none of them feeds an `oracle_*` field -- so
 //! nothing in the product read the results back either. They were pure agent diagnostics riding in
@@ -76,7 +76,7 @@ static START: Once = Once::new();
 fn install() {
     log::reset_log_file();
     diag_log!(
-        "er-diag-harness attach: msb-parse (0x21bbf0), STEP_LoadListWait (0xaf1800) and DLC virtual-root blank/refill/job (0xe06490/0xe05fb0/0x836f30) traces -- all observe-and-forward, evicted from the product DLL where they installed unconditionally"
+        "er-diag-harness attach: msb-parse (0x21bbf0), STEP_LoadListWait (0xaf2fd0) and DLC virtual-root blank/refill/job (0xe099f0/0xe09510/0x8383d0) traces -- all observe-and-forward, evicted from the product DLL where they installed unconditionally"
     );
     // Wait for the game image to be mapped before resolving any RVA. No sleep: yield + re-poll,
     // the product's own wait pattern. `game_module_base` is a PE-header read, not a loader call,

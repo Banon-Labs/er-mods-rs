@@ -1,7 +1,7 @@
 // Bisect the center panel: each entry into view 3 fades ONE group of the objects still drawn there.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `r3-panel-survey.js` found 128 `SceneObjProxy` objects drawn in view 3 (visible, alpha > 0), almost
 // all of them drawn in views 0-2 too, so state alone cannot name the center panel. The player can:

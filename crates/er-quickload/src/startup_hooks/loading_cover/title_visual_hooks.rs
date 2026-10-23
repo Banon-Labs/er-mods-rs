@@ -13,8 +13,8 @@
 
 use super::*;
 
-/// Install the row-populate hook (`FUN_1408758d0`). Runs at most once per process -- the claim is
-/// the first statement -- and mirrors the named-child binder install.
+/// Install the row-populate hook (2.7.2.0 `FUN_140876c80`). Runs at most once per process -- the
+/// claim is the first statement -- and mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
     // One claim, not a check-then-act read of the success latches -- this installer has two owners
     // (`title_visual_startup.rs:31` synchronously, then `:37` on the thread that call spawns), and
@@ -34,7 +34,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
     }
     // Four independent rows, each skipping only itself (2026-08-30). Every block below used a
-    // bare `return` for its own refusal, so one unmapped RVA on 1.17 took the remaining rows with
+    // bare `return` for its own refusal, so one refused RVA took the remaining rows with
     // it -- e.g. a refused player-name getter also cost the ProfileSelect row-populate and the
     // row-model builder, which are unrelated functions serving unrelated rows. A labelled block
     // per row keeps a refusal local. bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
@@ -44,7 +44,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
         let Ok(addr) = game_rva_for_hook(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: REFUSED player-name getter -- rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
+                "stats-text: REFUSED player-name getter -- no game module base for rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x}; the other three rows are unaffected"
             ));
             break 'name_getter;
         };
@@ -68,7 +68,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                         crate::mh::leak_installed_hook(hook);
                         PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
-                            "stats-text: hooked main-player name getter FUN_14025f8e0 0x{addr:x}; raw PGD name overrides word-checked summary name"
+                            "stats-text: hooked main-player name getter FUN_14025f8f0 0x{addr:x}; raw PGD name overrides word-checked summary name"
                         ));
                     }
                     status => append_autoload_debug(format_args!(
@@ -87,7 +87,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
         let Ok(addr) = game_rva_for_hook(PROFILE_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: REFUSED row-populate -- rva 0x{PROFILE_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
+                "stats-text: REFUSED row-populate -- no game module base for rva 0x{PROFILE_ROW_POPULATE_RVA:x}; the other three rows are unaffected"
             ));
             break 'row_populate;
         };
@@ -110,7 +110,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                         crate::mh::leak_installed_hook(hook);
                         PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
-                            "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                            "stats-text: hooked ProfileSelect row-populate FUN_140876c80 0x{addr:x}; per-slot attributes push before each row's native populate"
                         ));
                     }
                     status => append_autoload_debug(format_args!(
@@ -133,7 +133,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
         let Ok(addr) = game_rva_for_hook(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: REFUSED row-model-build -- rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
+                "stats-text: REFUSED row-model-build -- no game module base for rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}; the other three rows are unaffected"
             ));
             break 'row_model_build;
         };
@@ -156,7 +156,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                         crate::mh::leak_installed_hook(hook);
                         PROFILE_ROW_MODEL_BUILD_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
-                            "stats-text: hooked ProfileSelect row-model builder FUN_1408752c0 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
+                            "stats-text: hooked ProfileSelect row-model builder FUN_140876760 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
                         ));
                     }
                     status => append_autoload_debug(format_args!(
@@ -175,7 +175,7 @@ pub(crate) fn install_profile_row_populate_hook() {
         }
         let Ok(addr) = game_rva_for_hook(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
-                "stats-text: REFUSED title-load row-populate -- rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x} has no verified mapping for the running build; the other three rows are unaffected"
+                "stats-text: REFUSED title-load row-populate -- no game module base for rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x}; the other three rows are unaffected"
             ));
             break 'current_row;
         };
@@ -198,7 +198,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                     MH_STATUS::MH_OK => {
                         crate::mh::leak_installed_hook(hook);
                         append_autoload_debug(format_args!(
-                            "stats-text: hooked title-load current row-populate FUN_140951220 0x{addr:x}; pushes ErCharStats after native current-row populate"
+                            "stats-text: hooked title-load current row-populate FUN_140952870 0x{addr:x}; pushes ErCharStats after native current-row populate"
                         ));
                     }
                     status => append_autoload_debug(format_args!(
@@ -228,10 +228,11 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
         target != null && target != 0 && value == target
     });
     let caller_rva = trace_first_game_caller_rva();
-    // The call site is resolved for the running build, not compared against the raw 1.16.2
-    // `0x744e02`. Reached raw, this comparison never matched on 1.17 and the title FadeIn
-    // suppression was inert with nothing in any log to say so -- no hook to refuse, no address to
-    // resolve, so no refusal line either.
+    // The call site comes from `resolve_call_site_rva` (2.7.2.0 0x746102), so on another build it
+    // is `None` and never matches. Compared raw against another build's constant (1.16.2's
+    // `0x744e02` on 1.17), this comparison never matched and the title FadeIn suppression was
+    // inert with nothing in any log to say so -- no hook to refuse, no address to resolve, so no
+    // refusal line either.
     let title_fadein_call_site = title_gfx_visible_title_fadein_caller_rva();
     let title_fadein_visible_ordinal = if title_fadein_call_site == Some(caller_rva) && visible != 0
     {
@@ -307,13 +308,13 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         // Report the call site this build will actually compare against. Printing
-                        // the 1.16.2 constant made the line read as armed on builds where the
-                        // comparison could never match.
+                        // a constant made the line read as armed on builds where the comparison
+                        // could never match.
                         "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva {} false",
                         match title_gfx_visible_title_fadein_caller_rva() {
                             Some(rva) => format!("0x{rva:x}"),
                             None =>
-                                "UNRESOLVED on this build -- the FadeIn flash will not be suppressed"
+                                "refused on this build (not 2.7.2.0) -- the FadeIn flash will not be suppressed"
                                     .to_owned(),
                         }
                     ));
@@ -619,7 +620,7 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
                         "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva {}",
                         match title_native_menu_visual_window_fadein_run_caller_rva() {
                             Some(rva) => format!("0x{rva:x}"),
-                            None => "UNRESOLVED on this build".to_owned(),
+                            None => "refused on this build (not 2.7.2.0)".to_owned(),
                         }
                     ));
                 }

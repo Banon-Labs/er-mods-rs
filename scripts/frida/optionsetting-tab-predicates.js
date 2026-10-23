@@ -1,7 +1,7 @@
 // Why does an injected tab-left never reach the OptionSetting pager?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # The question
 //
@@ -33,10 +33,9 @@
 //
 // # Addresses
 //
-// 1.16.2 `0x966f30` / `0x7392f0` / `0x758050` / `0x75d970`, carried to 1.17.0 through
-// `docs/recon/rva-map-1162-to-1170.tsv` as `0x9680d0` / `0x73a140` / `0x758ea0` / `0x75e7c0`. All
-// four sit below `0xafefe9`, so the 1.17.0 -> 1.17.1 step leaves them where they are
-// (`docs/er-1.17-migration.md`).
+// 1.16.2 `0x966f30` / `0x7392f0` / `0x758050` / `0x75d970` were `0x9680d0` / `0x73a140` /
+// `0x758ea0` / `0x75e7c0` on 1.17.0 and, all four below `0xafefe9`, on 1.17.1. The literals below
+// are 2.7.2.0.
 
 'use strict';
 

@@ -11,12 +11,13 @@
     python3 scripts/er-mechanics-disengage.py --selftest
 
 Write-up: `docs/er-mechanics/disengage.md`. Labels as in the sibling docs: `VERIFIED` (regulation
-value or code read out of the 1.16.2 executable, shift 0), `TAE` (decoded TimeAct), `MEASURED`
+value or code read out of the executable, traced in the named 1.16.2 dump; addresses are
+2.7.2.0 VAs), `TAE` (decoded TimeAct), `MEASURED`
 (computed here from game files), `COMMUNITY` (the Smithbox decompile of `c0000.hks`, or the
 Smithbox TAE template's event names), `INFERRED` (a modelling choice).
 
-What an action needs to leave an animation (`VERIFIED`, `_ChrActionFlag` 0x1404275e0 read on the
-named 1.16.2 dump): an input window and a cancel window that overlap.
+What an action needs to leave an animation (`VERIFIED`, `_ChrActionFlag` 0x140427bc0, read on the
+named 1.16.2 dump as 0x1404275e0): an input window and a cancel window that overlap.
 
     roll   input 25 / 87, cancel 26 (`SP_MOVE`, `BACKSTEP`, `ROLLING`)
     skill  L2 (ChrActionType 3). Cancel 16 and 118 allow L2 only when actionAnimationFlags & 0x7f8

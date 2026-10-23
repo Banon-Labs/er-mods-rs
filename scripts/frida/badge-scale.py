@@ -28,9 +28,11 @@ import threading
 
 import frida
 
-#: `FUN_140d82060(CSScaleformValue*, float* out4)` -- Local bounds {xmin,ymin,xmax,ymax}
-#: in px. deobf 0x140d81fb0. This is the rect the icon setter divides the texture by.
-PROXY_LOCAL_RECT_RVA = 0xD81FB0
+#: `(CSScaleformValue*, float* out4)` -- Local bounds {xmin,ymin,xmax,ymax} in px. This is
+#: the rect the icon setter divides the texture by. ELDEN RING 2.7.2.0 rva
+#: (`eldenring-deobf-1.17.2.bin`): a .pdata entry whose 14 instructions match 1.16.2
+#: `0x140d81fb0` with only rip and rel32 displacements differing.
+PROXY_LOCAL_RECT_RVA = 0xD85450
 #: Tile-local origin of the `ArtsIcon` slot (decoded from its PlaceObject2 matrix in
 #: 02_011_equip.gfx: translate (-32, +37)). Used as the badge's identifying signature.
 BADGE_ORIGIN_X, BADGE_ORIGIN_Y = -32.0, 37.0

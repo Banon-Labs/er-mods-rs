@@ -112,7 +112,8 @@ static DEAD_OWNER_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// game constructor that dereferences `window+0x188`. Measured on run br-20260912-183117-e19a: the
 /// tracked `02_000_IngameTop` read a vtable of 0 and the tracked `02_040_OptionSetting` read
 /// 0x884ac480, a heap address 0xc400 from the window itself. A live one reads a game vtable
-/// (0x142b00620 / 0x142b16b48 / 0x142b25a78 on run br-20260912-034506-45db), which is the screen.
+/// (0x142b00620 / 0x142b16b48 / 0x142b25a78 on 1.17.1 run br-20260912-034506-45db; 2.7.2.0
+/// 0x142b02710 / 0x142b18c38 / 0x142b27b68), which is the screen.
 fn live_menu_window(owner: usize) -> usize {
     if owner == 0 {
         return 0;

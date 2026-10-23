@@ -22,7 +22,6 @@ import argparse, importlib.util, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = 0x140000000
-GAME = (0x140001000, 0x1429a3000)
 
 
 def load_recover():
@@ -121,7 +120,7 @@ def capture_frame(va, img):
 
 
 def reassemble(va, paths=200, budget=1500):
-    img = open(DR.find_deobf(), "rb").read()
+    img = DR.load_image()
     r = DR.Recover(img)
     r.explore(va, paths, budget)
     if va not in r.text:
@@ -131,8 +130,7 @@ def reassemble(va, paths=200, budget=1500):
     md.detail = True
 
     in_fn = set(r.text)                     # addresses that are our labels
-    ARX = [(0x1429a3000, 0x1429af000), (0x144c0e000, 0x145e01800)]
-    is_arx = lambda v: any(lo <= v < hi for lo, hi in ARX)
+    is_arx = DR.in_arx   # the Arxan ranges `load_image` read from the image's section table
 
     # recovered control-flow edges (deobf-recover already emulated through the Arxan
     # dispatch, so the real successor of an Arxan-directed branch is recorded here).

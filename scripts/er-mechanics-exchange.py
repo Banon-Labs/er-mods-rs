@@ -67,6 +67,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import unicodedata
 from collections import Counter
@@ -114,19 +115,19 @@ EXCHANGE_WEIGHT = 0.25
 STAMINA_EXP = 0.25
 STAMINA_CLAMP = (0.8, 1.1)
 
-#: Stamina regeneration (docs/er-mechanics/exchange.md section 3). `FUN_1404016d0` (1.16.2) adds
+#: Stamina regeneration (docs/er-mechanics/exchange.md section 3). `FUN_140401ac0` adds
 #: `GetStaminaRecoverySpeed x SPRegenRatePercent / 100 x staminaRecoveryModifier` scaled by the
 #: frame's `FD4Time` each tick, carrying the fraction, unless `ChrCtrlModifier` `actionFlags` bit
-#: 0x40 is set. `PlayerIns::GetStaminaRecoverySpeed` 0x1406566b0 returns the float at 0x143b33c08
+#: 0x40 is set. `PlayerIns::GetStaminaRecoverySpeed` 0x1406579b0 returns the float at 0x143b3ac20
 #: (45.0, its only reader) plus the SpEffect `staminaRecoverChangeSpeed` sum; NpcParam
-#: `staminaRecoverBaseVel` feeds only `EnemyIns::GetStaminaRecoverySpeed` 0x1404cf9e0, never a
+#: `staminaRecoverBaseVel` feeds only `EnemyIns::GetStaminaRecoverySpeed` 0x1404d0890, never a
 #: player. `VERIFIED`; that `FD4Time` counts seconds is `INFERRED`.
 STAMINA_REGEN_PER_S = 45.0
-#: TAE event 225 `SetSPRegenRatePercent`: the inline case at 0x14042e3b1 of `ExecuteThreadOne`
+#: TAE event 225 `SetSPRegenRatePercent`: the inline case at 0x14042e991 of `ExecuteThreadOne`
 #: stores Args[0] into `ChrCtrlModifier+0x14` (`SPRegenRatePercent`), which
-#: `ChrCtrlModifierData::Reset` 0x1403c3b60 sets back to 100 every frame (`VERIFIED`).
+#: `ChrCtrlModifierData::Reset` 0x1403c3b70 sets back to 100 every frame (`VERIFIED`).
 TAE_SP_REGEN = 225
-#: Lowest stamina `CSChrDataModule::SetStamina` 0x140438490 stores (-0x32, `VERIFIED`): an action
+#: Lowest stamina `CSChrDataModule::SetStamina` 0x140438a80 stores (-0x32, `VERIFIED`): an action
 #: started with 1 stamina left can dig down to -50, and the hole must regenerate before a roll.
 STAMINA_FLOOR = -50
 #: Stamina the entry of an entry slot costs on top of the attack: HKS `common_define.hks`
@@ -197,7 +198,7 @@ def _right_hand(build: dict, positions=RIGHT_HAND) -> list[str]:
 
 class SaRates:
     """`FinalDamageRateParam[AtkParam_Pc.finalDamageRateId].saRate` per AtkParam row (`VERIFIED`
-    consumer 0x140486bf0, docs/er-mechanics/attacks.md section 2)."""
+    consumer 0x140487230, docs/er-mechanics/attacks.md section 2)."""
 
     def __init__(self):
         files = PR.load(None)
@@ -227,7 +228,7 @@ def first_hit(atk: dict) -> float | None:
 
 
 def stamina_total(reg, weapon_id: int, atk: dict) -> int:
-    """Stamina one use of the attack charges. `FUN_1404428f0` charges `stamina_cost` each time an
+    """Stamina one use of the attack charges. `FUN_140442ee0` charges `stamina_cost` each time an
     AttackBehavior event creates a hitbox (`VERIFIED`, attacks.md section 3), so the main judge's
     cost is counted once per window and every extra damaging hitbox adds its own (the summation
     is `INFERRED` from that; 53 of 1515 one-handed slots have more than one event)."""
@@ -938,28 +939,35 @@ def selftest() -> int:
     check(RegenProfile([(0.0, 60.0, 20.0)], 0.0, None).gain(0.0, 60.0, False) == 60 * 1.5 * 0.2,
           "a 20% window regenerates a fifth of the base rate")
 
-    # The regeneration constants, byte for byte (1.16.2 and the installed 1.17.1 when present).
-    for image, fn in (("eldenring-deobf.bin", 0x1406566B0), ("eldenring-deobf-1.17.1.bin", 0x140657500)):
-        path = HERE.parent / image
-        if not path.exists():
-            print("skip regeneration constant:", image, "absent")
-            continue
+    # The regeneration constants, byte for byte, in the installed build's image (2.7.2.0 VAs:
+    # `GetStaminaRecoverySpeed` 0x1406579b0, the TAE 225 case of `ExecuteThreadOne` at 0x14042e9a3,
+    # `ChrCtrlModifierData::Reset` 0x1403c3b70, and `HksAct` 0x14040d190 with its byte index
+    # table at rva 0x40e80c and dword table at rva 0x40e754).
+    # `ER_DEOBF_BIN`, else the image at the repo root or the nearest directory above it (the
+    # images are gitignored, so a linked worktree reads the main checkout's).
+    image = "eldenring-deobf-1.17.2.bin"
+    path = Path(os.environ.get("ER_DEOBF_BIN") or next(
+        (d / image for d in (HERE.parent, *HERE.parent.parents) if (d / image).exists()),
+        HERE.parent / image))
+    if not path.exists():
+        print("skip regeneration constant:", image, "absent")
+    else:
         img = path.read_bytes()
+        fn = 0x1406579B0
         at = fn - 0x140000000 + 0x1C
         disp = int.from_bytes(img[at + 4:at + 8], "little", signed=True)
         target = fn + 0x1C + 8 + disp - 0x140000000
         rate = float(np.frombuffer(img[target:target + 4], "<f4")[0])
         check(img[at:at + 4] == bytes.fromhex("f30f1015") and rate == STAMINA_REGEN_PER_S,
               f"{image}: GetStaminaRecoverySpeed loads {rate} (movss at +0x1c)")
-        if image == "eldenring-deobf.bin":
-            check(img[0x42E3C3:0x42E3C6] == bytes.fromhex("884214"),
-                  "TAE 225 stores Args[0] at ChrCtrlModifier+0x14 (0x14042e3c3)")
-            check(img[0x3C3B89:0x3C3B8F] == bytes.fromhex("66c7410c6464"),
-                  "ChrCtrlModifierData::Reset puts SP and FP regeneration back to 100 (0x1403c3b89)")
-            case = [i + 9 for i in range(0x9B) if 0x140000000 + int.from_bytes(
-                img[0x40E194 + img[0x40E24C + i] * 4:0x40E198 + img[0x40E24C + i] * 4], "little") == 0x14040CD9C]
-            check(case == [110] and img[0x40CDAA:0x40CDAE] == bytes.fromhex("83481840"),
-                  f"HksAct {case} (SetStaminaRecoveryDisabled) sets actionFlags bit 0x40")
+        check(img[0x42E9A3:0x42E9A6] == bytes.fromhex("884214"),
+              "TAE 225 stores Args[0] at ChrCtrlModifier+0x14 (0x14042e9a3)")
+        check(img[0x3C3B99:0x3C3B9F] == bytes.fromhex("66c7410c6464"),
+              "ChrCtrlModifierData::Reset puts SP and FP regeneration back to 100 (0x1403c3b99)")
+        case = [i + 9 for i in range(0x9B) if 0x140000000 + int.from_bytes(
+            img[0x40E754 + img[0x40E80C + i] * 4:0x40E758 + img[0x40E80C + i] * 4], "little") == 0x14040D35C]
+        check(case == [110] and img[0x40D36A:0x40D36E] == bytes.fromhex("83481840"),
+              f"HksAct {case} (SetStaminaRecoveryDisabled) sets actionFlags bit 0x40")
 
     reg = ATK.Regulation(None)
     ids = weapon_ids()

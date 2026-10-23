@@ -19,13 +19,15 @@
 // A term that is set for one frame is invisible to any sampler that runs on a later frame. Entry
 // to the evaluator is the only place the inputs are the ones the decision is made from.
 //
-// How the address was established, because the usual route refuses it.
-// `scripts/map-rvas-1162-to-1170.py 0x140afa6d0` returns UNMAPPED (111 shape matches, none at the
-// nearest anchor's delta). It was identified by call GRAPH: `L"EnableBot"` occurs twice in the 1.17
-// image and only `0x142bfdfd0` has xrefs; of its two referents the 137-byte `0x140e7e580` is an
+// How the address was established, because the usual route refused it (it is now the native
+// 2.7.2.0 `0x140afbeb0`, carried once from the 1.17 pair below when the port made it a literal).
+// The signature search on `0x140afa6d0` (the 1.16.2 entry) returned UNMAPPED (111 shape
+// matches, none at the nearest anchor's delta). It was identified by call GRAPH: `L"EnableBot"`
+// occurs twice in the 1.17 image and only 1.17 `0x142bfdfd0` has xrefs; of its two referents the
+// 137-byte 1.17 `0x140e7e580` is an
 // exact size match for 1.16.2 `CS::CSEzSelectBot::IsBotEnabled` (137 B), and the single caller of
 // that in the MoveMap region decompiles carrying `L"CSEzSelectBot.MoveMapStep"`.
-// `scripts/verify-rva-map-1170.py` then confirmed the pair on bytes, independently of how it was
+// The 1.17 pair verifier then confirmed the pair on bytes, independently of how it was
 // found: Identical-whole, ratio 1.000 over 972 instructions, both-entries, `PDATA:0x11b0/0x11b0`.
 //
 // Read-only. The detour samples, calls the original unchanged, and writes nothing. It cannot
@@ -145,8 +147,8 @@ fn sample_inputs(base: usize) -> Cvar10Inputs {
         force: unsafe {
             safe_read_u8(er_game_base::mem::game_data_addr(
                 base,
-                ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
-                "ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA",
+                ENDING_REQUEST_FORCE_FLAG_RVA,
+                "ENDING_REQUEST_FORCE_FLAG_RVA",
             ))
         }
         .map_or(-1, i32::from),
@@ -236,7 +238,7 @@ pub fn install_movemap_advancer_probe() -> bool {
     }
     let Ok(addr) = er_game_base::mem::game_rva_for_hook(MOVEMAP_ADVANCER_RVA as u32) else {
         append_autoload_debug(format_args!(
-            "cvar10-entry: REFUSED -- no verified 1.17 mapping for the MoveMap advancer rva 0x{MOVEMAP_ADVANCER_RVA:x}; not hooking"
+            "cvar10-entry: REFUSED -- no game module base for the MoveMap advancer rva 0x{MOVEMAP_ADVANCER_RVA:x}; not hooking"
         ));
         return false;
     };
@@ -260,12 +262,10 @@ pub fn install_movemap_advancer_probe() -> bool {
                     let _installed_and_owned_by_minhook = hook;
                     HOOK_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        // `addr` is the pre-translation 1.16.2 address: `game_rva_for_hook` returns
-                        // base+rva by design and `MhHook::new` owns the single 1.16.2 -> 1.17
-                        // resolve. Printing `addr` alone reads as "hooked the stale address" and
-                        // cost a teardown on 2026-09-06 before the `HOOK TRANSLATED` line was
-                        // checked. Say which number this is.
-                        "cvar10-entry: hooked the MoveMap ending-request evaluator, requested 1.16.2 0x{addr:x} -- MhHook::new resolves it for the running build, see the HOOK TRANSLATED line above for the address actually detoured (read-only; logs the inputs on the call that raises menuData+0x5e)"
+                        // `addr` is base + the native 2.7.2.0 rva: `game_rva_for_hook` returns it
+                        // unchecked by design and `MhHook::new` owns the build/allowlist check, so
+                        // reaching this line means the detour went in at exactly this address.
+                        "cvar10-entry: hooked the MoveMap ending-request evaluator at 0x{addr:x} (2.7.2.0; read-only; logs the inputs on the call that raises menuData+0x5e)"
                     ));
                     true
                 }

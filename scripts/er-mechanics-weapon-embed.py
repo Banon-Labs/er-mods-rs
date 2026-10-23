@@ -155,7 +155,7 @@ WEAPON_BUFF_FIELDS = ("magicAttackPower", "fireAttackPower", "thunderAttackPower
 #: event, so a weapon's feints are its R2 hold.
 FEINT_ACTIONS = ("r1", "r2", "dodge", "guard")
 #: The left hand reads `a048` when neither the weapon's `spAtkcategory` nor its
-#: `wepmotionCategory` TAE binds the animation (`FUN_1403f1d40`, `VERIFIED` in
+#: `wepmotionCategory` TAE binds the animation (`FUN_1403f1f70`, `VERIFIED` in
 #: er-mechanics-attacks; `er-mechanics-combo.LEFT_HAND_FALLBACK_CATEGORY`).
 LEFT_HAND_FALLBACK_CATEGORY = 48
 #: A mechanic is fun when at most this share of all (weapon, affinity) options has it. Measured

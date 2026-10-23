@@ -2,15 +2,15 @@
 """Cross-hand true combos: a right-hand attack cancelled into the left weapon's off-hand L1.
 
 Write-up: `docs/er-mechanics/combo.md`. Labels as in the other `docs/er-mechanics/*.md`:
-`VERIFIED` = regulation value or code read out of the 1.16.2 executable (shift 0 against
-`eldenring-deobf.bin`), `TAE` = decoded TimeAct / behavior graph, `COMMUNITY` = Smithbox's decompiled
+`VERIFIED` = regulation value or code read out of the 2.7.2.0 executable (addresses are VAs in
+`eldenring-deobf-1.17.2.bin`), `TAE` = decoded TimeAct / behavior graph, `COMMUNITY` = Smithbox's decompiled
 `c0000.hks` (ER 1.08.1) or WitchyBND's TAE template, `MEASURED` = counted over the corpus or read out
 of a clip, `INFERRED` = fits the data, consumer not traced.
 
 How an L1 press leaves a right-hand attack:
 
-    TAE JumpTable (`_ChrActionFlag` 0x1404275e0, jump table 0x140428650), `VERIFIED`:
-      9  -> AllowInputLHAttack 0x140430070: SetPossibleInputState(L1 = 2), and L2 = 3 unless
+    TAE JumpTable (`_ChrActionFlag` 0x140427bc0, jump table 0x140428c30), `VERIFIED`:
+      9  -> AllowInputLHAttack 0x140430650: SetPossibleInputState(L1 = 2), and L2 = 3 unless
             actionAnimationFlags & 0x7f8
       87 -> AllowInputRHAttack, AllowInputLHAttack, AllowInputDodge, ...   ("Input - Common")
       16 -> SetAllowedCancelToActionState(2) and (3)                     ("Cancel - LH Attack")
@@ -110,10 +110,11 @@ def pvp_module():
 #: L1 (ChrActionType 2) input and cancel JumpTable ids, `VERIFIED` (module docstring).
 L1_INPUT_IDS, L1_CANCEL_IDS = (9, 87), (16, 117)
 ACT_L1 = 2
-ALLOW_INPUT_LH_ATTACK = 0x140430070     # CS::CSChrTaeAnimEvent::AllowInputLHAttack
-SET_POSSIBLE_INPUT = 0x140407b80        # CSChrActionRequestModule::SetPossibleInputState
+#: 2.7.2.0 VAs (1.16.2 0x140430070, 0x140407b80 and 0x1404277dc; same instructions in both).
+ALLOW_INPUT_LH_ATTACK = 0x140430650     # CS::CSChrTaeAnimEvent::AllowInputLHAttack
+SET_POSSIBLE_INPUT = 0x140408140        # CSChrActionRequestModule::SetPossibleInputState
 #: `_ChrActionFlag` case 115's shared tail: `mov r8b, 1; mov rcx, rbx; call SetAllowedCancel...`.
-CANCEL_TAIL_115 = 0x1404277dc
+CANCEL_TAIL_115 = 0x140427dbc
 
 #: Off-hand chain (`TAE` + behavior graph): W_AttackLeftHeavy1 plays 035000 for a one-handed left
 #: weapon (its other two clips 032010/032020 are two-handed ones, `INFERRED` selector), and each
@@ -124,7 +125,7 @@ OFFHAND = [(k, lab, j, anim) for k, lab, j, anim, _ in [
     ('left_3', 'off-hand L1 #3', 420, 35020, None), ('left_4', 'off-hand L1 #4', 430, 35030, None),
     ('left_5', 'off-hand L1 #5', 440, 35040, None), ('left_6', 'off-hand L1 #6', 450, 35050, None)]]
 #: The left hand falls back to a048 when neither its spAtkcategory nor wepmotionCategory TAE binds
-#: the animation (`FUN_1403f1d40`, `VERIFIED` in er-mechanics-attacks).
+#: the animation (`FUN_1403f1f70`, `VERIFIED` in er-mechanics-attacks).
 LEFT_HAND_FALLBACK_CATEGORY = 48
 
 #: Right-hand states whose R1 goes through W_AttackRightLightSubStart (`COMMUNITY` onUpdate
@@ -200,9 +201,9 @@ def _clip_ref(row):
 def animated_category(w, anim):
     """The TAE category the right hand plays `anim` from, by the EXE's own rule, or None.
 
-    `FUN_1403f1d40` (`VERIFIED` 1.16.2, unmoved in 1.17.1) tries `spAtkcategory`, then
+    `FUN_1403f1f70` (`VERIFIED`) tries `spAtkcategory`, then
     `wepmotionCategory`, then for the right hand `a023`, and takes the first for which
-    `FUN_1403c4b80` holds: the anim's `HvkAnimTaeBinding` has a non-null `hkaAnimationBinding`
+    `FUN_1403c4b90` holds: the anim's `HvkAnimTaeBinding` has a non-null `hkaAnimationBinding`
     (+0x8), so a havok clip is bound, not merely a TAE entry present. `motion_category` reads
     "bound" as "the TAE has an entry", which differs on an empty placeholder entry: a026 (colossal
     swords) has entries 030080..030091 with no events and no clip (no `a026_0300xx.hkx` in the
@@ -1108,9 +1109,9 @@ def selftest():
         (passes if got == want else failures).append(f'{name}: got {got!r} want {want!r} [{source}]')
 
     # 1. The EXE: which JumpTable cases open L1 (ChrActionType 2).
-    path = ATK.DEOBF_1162
+    path = ATK.DEOBF
     if os.path.exists(path):
-        src = 'EXE eldenring-deobf.bin 1.16.2'
+        src = 'EXE ' + os.path.basename(path)
         calls = ATK._jump_table_case_calls(path)
         check('JumpTable 16 sets allowed cancel 2 and 3',
               {(ATK.SET_ALLOWED_CANCEL, 2), (ATK.SET_ALLOWED_CANCEL, 3)} <= calls[16], True, src)
@@ -1218,7 +1219,7 @@ def selftest():
           [[animated_category(reg.weapon[w], a) for a in SUBSTART_ANIMS] for w in (gs, clay, hal_, dag)]
           + [[substart_lead(reg.weapon[w]) is not None for w in (gs, clay, hal_, dag)]],
           [[23] * 4, [23, 23, 23, 25], [23, 38, 23, 23], [23] * 4, [True] * 4],
-          'FUN_1403f1d40 / FUN_1403c4b80 + TAE + anibnd')
+          'FUN_1403f1f70 / FUN_1403c4b90 + TAE + anibnd')
     # 4. The ranking hook: a colossal sword's one-handed rolling R1 gets the axe's L1 put first.
     slots = {'roll_r1': {'dmg': 100.0, 'next': 40, 'roll': 40, 'stagger': 1.0, 'combos': []}}
     got = paired_slots(model, gs, axe, slots, lambda row: {'dmg': 50.0, 'next': 22, 'roll': 24})

@@ -2,14 +2,16 @@
 //!
 //! The window this crate's opener submits renders one character model per save slot, and the
 //! native refresh that draws them ([`er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`],
-//! 1.17.1 `0x1409ab820`) walks all ten entries of the renderer table and dereferences
+//! 2.7.2.0 `0x1409abcd0`) walks all ten entries of the renderer table and dereferences
 //! `table[slot] + 0x754` for every slot whose profile record exists -- with no null check. That is
 //! the `er-effects-rs-j3r` access violation.
 //!
 //! The table is set up by exactly one native site, the `TitleTopDialog` constructor, so an in-world
 //! ProfileSelect opened by this crate runs the refresh against whatever the last teardown left
-//! behind. Measured 2026-09-11 on a product-less profile: pressing Load Character took
-//! `0xc0000005` at `eldenring.exe+0x9ab874` reading `0x754`, with `rdi = *(0x143d71940) = 0`.
+//! behind. Measured 2026-09-11 on 1.17.1 with a product-less profile: pressing Load Character took
+//! `0xc0000005` at `eldenring.exe+0x9ab874` (1.17.1 refresh `0x1409ab820` + `0x54`; 2.7.2.0
+//! `+0x9abd24`) reading `0x754`, with `rdi = *(0x143d71940) = 0` (the 1.17.1 table global; 2.7.2.0
+//! `0x143d74960`).
 //!
 //! # What this does about it
 //!
@@ -208,10 +210,11 @@ pub unsafe fn profile_table_guard_body() -> bool {
     // object against the generation it displaced: `+0x94` is `2` on a drawing renderer and `0` on
     // a built one, `+0xa0` holds a handle and is `0`, and so are `+0x48`, `+0x60` and `+0x78`.
     //
-    // `TitleTopDialog` is the builder's only caller -- one call site, `0x1409a8444` -- and it
-    // calls it inside the run of `SceneObjProxy::assignComponentWithName` binds that attach the
-    // title's Scaleform components. Each renderer's offscreen target is constructed from a
-    // per-slot name at `DAT_143b39840 + slot * 0x20`, and the builder's teardown hands the
+    // `TitleTopDialog` is the builder's only caller -- one call site, 1.16.2 `0x1409a8444`, 2.7.2.0
+    // `0x1409a9a94` -- and it calls it inside the run of `SceneObjProxy::assignComponentWithName`
+    // binds that attach the title's Scaleform components. Each renderer's offscreen target is constructed from a
+    // per-slot name at `0x143b40860 + slot * 0x20` (`L"SYSTEX_Menu_Profile00"` onwards), and the
+    // builder's teardown hands the
     // previous ten to `CSDelayDeleteMan` instead of deleting them, so a generation built while
     // another still holds those ten names is never bound to anything and can never draw.
     //

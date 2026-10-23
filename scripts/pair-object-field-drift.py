@@ -33,15 +33,16 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# The same overrides `check-object-field-offsets-1170.py` reads, so a worktree without the
-# gitignored images can point both at one copy.
+# Overrides for the two older images, so a worktree without the gitignored files can point at one
+# copy. (`check-object-field-offsets.py` read the same variables until it moved to the 2.7.2.0
+# image alone on 2026-10-23.)
 IMAGE_1162 = os.environ.get("ER_DEOBF_1162", os.path.join(ROOT, "eldenring-deobf.bin"))
 IMAGE_1170 = os.environ.get("ER_DEOBF_1170", os.path.join(ROOT, "eldenring-deobf-1.17.bin"))
 BASE = 0x140000000
 # Frame and instruction-pointer bases are never game-object fields.
 NON_FIELD_BASES = ("rip", "rsp", "rbp", "esp", "ebp")
 # GetScadutreeBlessing: the one 1.16.2 -> 1.17 field move established independently of this tool
-# (scripts/map-rvas-1162-to-1170.py::KNOWN_MAPPINGS carries the same pair as ground truth), so it
+# (the deleted 1.16.2 -> 1.17 carry's KNOWN_MAPPINGS carried the same pair as ground truth), so it
 # is the selftest's positive control.
 SELFTEST_PAIR = (0x14025F5F0, 24, 0x14025F5D0, 24)
 SELFTEST_EXPECTED = {0xAB5: 0xABD, 0xAB4: 0xABC, 0xFC: 0xFC}

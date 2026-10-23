@@ -11,9 +11,9 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/weapon-buff-bullet-hits.js
 //
-// Addresses are 2.7.2.0. Mapped from 1.16.2 to 1.17.1 with scripts/map-rvas-1162-to-1170.py and
-// read on :8767 (below the 0xafefe9 shift boundary, so 1.17.0 == 1.17.1), then to 2.7.2.0 with
-// scripts/map-rvas-1171-to-1172.py; each opens with the same bytes in both images:
+// Addresses are 2.7.2.0. Paired from 1.16.2 to 1.17.1 by signature and read on :8767 (below the
+// 0xafefe9 shift boundary, so 1.17.0 == 1.17.1), then carried to 2.7.2.0; each opens with the same
+// bytes in both images:
 //   CalculateDamage2      1.16.2 0x1404483b0 -> 0x140448910 -> 0x1404489f0
 //   buff reader call site 1.16.2 0x140448dd5 -> 0x140449335 -> 0x140449415 (CALL 0x1404f8090)
 //   FUN_1404f71e0         1.16.2 0x1404f71e0 -> 0x1404f7fb0 -> 0x1404f8090 (returns atkOccurrenceSpEffectId or -1)

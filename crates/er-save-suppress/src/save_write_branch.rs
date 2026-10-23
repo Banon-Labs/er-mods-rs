@@ -2,23 +2,23 @@
 //
 // `include!`d into `lib.rs` (same module, same imports) like `save_job_completion.rs`.
 //
-// `SaveLoad2::SLSaveSession`'s job body `FUN_14240fd70` has two mutually exclusive write
+// `SaveLoad2::SLSaveSession`'s job body `FUN_142413d20` has two mutually exclusive write
 // paths, and until these two counters existed nothing in the process could say which one a
 // save took. Every claim about the steady state -- that a save over an existing container
 // patches blocks in place and never rebuilds -- was read out of the decompile, not measured.
 // These observers measure it.
 //
-// The choice is made inside `FUN_14240fd70` (the `if`/`else` is its own), on the result code
-// of a third, separate call, `FUN_142413230` @line 114 of the decompile:
+// The choice is made inside `FUN_142413d20` (the `if`/`else` is its own), on the result code
+// of a third, separate call, `FUN_1424171e0` @line 114 of the decompile:
 //
-//   uVar4 = FUN_142413230(job+0x280, session, path);  // probe: is in-place viable?
-//   FUN_14240dbf0(job, uVar4);                        // publish into job+0x9c
-//   iVar5 = FUN_14240d8d0(job);                       // read it back out
-//   if (iVar5 == 0) { FUN_142413860(job+0x281, ..) }  // -> full rebuild
-//   else            { FUN_1424142b0(job+0x282, ..);   // -> per-block in-place,
-//                     FUN_1424142e0(job+0x283, ..) }  //    once per supplied block
+//   uVar4 = FUN_1424171e0(job+0x280, session, path);  // probe: is in-place viable?
+//   FUN_142411ba0(job, uVar4);                        // publish into job+0x9c
+//   iVar5 = FUN_142411880(job);                       // read it back out
+//   if (iVar5 == 0) { FUN_142417810(job+0x281, ..) }  // -> full rebuild
+//   else            { FUN_142418260(job+0x282, ..);   // -> per-block in-place,
+//                     FUN_142418290(job+0x283, ..) }  //    once per supplied block
 //
-// `FUN_142413230` mounts the container already on disk at the save path and walks every
+// `FUN_1424171e0` mounts the container already on disk at the save path and walks every
 // block the request supplies, testing `entry.size + entry.padding >= needed`. It returns `6`
 // when the mount succeeded and every block still fits, and `0` when the mount failed or any
 // block outgrew its entry. Note that polarity is the inverse of the writers' own convention
@@ -33,24 +33,24 @@
 //
 // Both are pure observers: forward, count, return the callee's value unchanged.
 
-/// `FUN_142413860` -- the full container rebuild branch, the `iVar5 == 0` arm. One
+/// `FUN_142417810` -- the full container rebuild branch, the `iVar5 == 0` arm. One
 /// whole-buffer write from offset 0 after reading back every block the request did not
 /// supply. Expected to be rare (a block outgrew its entry, or no usable container).
 ///
 /// Takes exactly four register arguments and nothing on the stack. Its only call site
-/// `0x142410158` is `lea rcx,[rbx+0x281]; mov rdx,[rbx+0xe0]; lea r8,[rbp-1]; xor r9d,r9d;
+/// `0x142414108` is `lea rcx,[rbx+0x281]; mov rdx,[rbx+0xe0]; lea r8,[rbp-1]; xor r9d,r9d;
 /// call` -- there is no write to `[rsp+0x20]`, so the union's 4-argument shape describes it
 /// exactly and it goes through the shared union like the dispatch observers.
 #[cfg(windows)]
-const SAVE_WRITE_FULL_REBUILD_RVA: usize = 0x2413860;
+const SAVE_WRITE_FULL_REBUILD_RVA: usize = 0x2417810;
 
-/// `FUN_1424142e0` -- the per-block in-place PATCHER, the `else` arm. Called once per
+/// `FUN_142418290` -- the per-block in-place PATCHER, the `else` arm. Called once per
 /// supplied block: `OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> maybe
 /// rewrite the 0x20-byte entry header -> `Seek(0,END)` -> close. Expected to be the steady
 /// state, so this counter normally climbs by more than one per save.
 ///
 /// Takes five arguments, the fifth on the stack, and the union's 4-argument shape must not be
-/// used for it. Its call site `0x1424102d6` writes the fifth explicitly --
+/// used for it. Its call site `0x142414286` writes the fifth explicitly --
 /// `mov [rsp+0x20], r12` between the `lea rcx` and the `call` -- and the callee both keeps it
 /// (`local_1a8 = param_5`) and, when it is non-null, DEREFERENCES and writes through it with
 /// two qwords at the end of a successful write. A 4-argument detour would hand the callee
@@ -59,12 +59,12 @@ const SAVE_WRITE_FULL_REBUILD_RVA: usize = 0x2413860;
 /// therefore gets its own `MhHook` with a 5-argument type, for the same reason the
 /// quit-settle (0-argument) and save-job-body (1-argument void) observers do.
 #[cfg(windows)]
-const SAVE_WRITE_IN_PLACE_RVA: usize = 0x24142e0;
+const SAVE_WRITE_IN_PLACE_RVA: usize = 0x2418290;
 
 /// The result code both writers return for "the write did NOT happen" -- `uVar13 = 6` on
-/// every failure path of `FUN_1424142e0`, and 6 = open/write/short-write failure in
-/// `FUN_142413860`. It is what a missing-trampoline observer must return, because the other
-/// value in that space, `0`, means success to `FUN_14240dbf0`/`FUN_14240d8d0` and would tell
+/// every failure path of `FUN_142418290`, and 6 = open/write/short-write failure in
+/// `FUN_142417810`. It is what a missing-trampoline observer must return, because the other
+/// value in that space, `0`, means success to `FUN_142411ba0`/`FUN_142411880` and would tell
 /// the game a save was written when nothing was.
 ///
 /// Ungated like the prologue signatures so the host-side unit tests can assert it.
@@ -80,7 +80,7 @@ include!(concat!(
     "/generated_save_write_branch_prologues.rs"
 ));
 
-/// `FUN_1424142e0`'s real shape. The fifth argument lives at `[rsp+0x28]` on entry and at
+/// `FUN_142418290`'s real shape. The fifth argument lives at `[rsp+0x28]` on entry and at
 /// `[rsp+0x20]` of the frame we build to forward it, so an `extern "system"` five-argument
 /// call hands the callee the same qword it would have received undetoured -- which matters,
 /// because it is an out-parameter the callee writes two qwords through.
@@ -92,9 +92,9 @@ static ORIG_SAVE_WRITE_FULL_REBUILD: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static ORIG_SAVE_WRITE_IN_PLACE: AtomicUsize = AtomicUsize::new(0);
 
-/// Entries into `FUN_142413860`, the full container rebuild.
+/// Entries into `FUN_142417810`, the full container rebuild.
 static WRITE_FULL_REBUILD_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Entries into `FUN_1424142e0`, the per-block in-place patcher. Climbs once per supplied
+/// Entries into `FUN_142418290`, the per-block in-place patcher. Climbs once per supplied
 /// block, not once per save.
 static WRITE_IN_PLACE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Observers bound (0..=2). Zero makes both counters above meaningless -- they can only read
@@ -113,7 +113,7 @@ pub fn write_branch_observers_installed() -> usize {
     WRITE_BRANCH_OBSERVERS_INSTALLED.load(Ordering::SeqCst)
 }
 
-/// Completed entries into `FUN_142413860`, the full container rebuild write branch -- one
+/// Completed entries into `FUN_142417810`, the full container rebuild write branch -- one
 /// whole-buffer write from offset 0, taken when a block outgrew its entry or no usable
 /// container was on disk. One per save that took it.
 ///
@@ -123,7 +123,7 @@ pub fn write_full_rebuild_calls() -> u64 {
     WRITE_FULL_REBUILD_CALLS.load(Ordering::SeqCst)
 }
 
-/// Completed entries into `FUN_1424142e0`, the per-block in-place write branch.
+/// Completed entries into `FUN_142418290`, the per-block in-place write branch.
 ///
 /// Climbs once per supplied block, not once per save, so this is not a save count and the two
 /// branch counters are not comparable as magnitudes -- only as zero/non-zero.
@@ -138,9 +138,9 @@ pub fn write_branch_no_trampoline() -> u64 {
     WRITE_BRANCH_NO_TRAMPOLINE.load(Ordering::SeqCst)
 }
 
-/// Observer on `FUN_142413860`, the full container rebuild write branch.
+/// Observer on `FUN_142417810`, the full container rebuild write branch.
 ///
-/// Four register arguments, no stack argument (call site `0x142410158`), so the union's shape
+/// Four register arguments, no stack argument (call site `0x142414108`), so the union's shape
 /// is exact and all four are forwarded verbatim. Counts after the call so the counter means
 /// "a rebuild ran to completion", and returns the callee's result untouched.
 #[cfg(windows)]
@@ -170,7 +170,7 @@ unsafe extern "system" fn save_write_full_rebuild_hook(
     ret
 }
 
-/// Observer on `FUN_1424142e0`, the per-block in-place write branch.
+/// Observer on `FUN_142418290`, the per-block in-place write branch.
 ///
 /// Five arguments -- see [`SAVE_WRITE_IN_PLACE_RVA`] for why the four-argument union shape
 /// would corrupt the fifth, which is an out-parameter the callee writes through. All five are
@@ -205,9 +205,9 @@ unsafe extern "system" fn save_write_in_place_hook(
 /// costs this run the answer to "which write path ran" and nothing else, so every failure is
 /// logged, counted out through [`write_branch_observers_installed`], and stepped over.
 ///
-/// The two go through different mechanisms on purpose. `FUN_142413860` takes four register
+/// The two go through different mechanisms on purpose. `FUN_142417810` takes four register
 /// arguments and nothing on the stack, so it rides the shared union like the dispatch
-/// observers and a future second registrant on that address stays safe. `FUN_1424142e0` takes
+/// observers and a future second registrant on that address stays safe. `FUN_142418290` takes
 /// five, and the union's four-argument shape would drop an out-parameter the callee writes
 /// through -- so it gets its own `MhHook` with a correctly shaped type, exactly as the
 /// quit-settle and save-job-body observers do for their own shapes.

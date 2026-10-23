@@ -57,11 +57,12 @@
 //! PlayerGameData + 0xe2                     ->  matching_weapon_level, u8
 //! ```
 //!
-//! The rva is a 1.16.2 one and `er_game_base::mem::game_data_addr` is what translates it for the
-//! running build -- reading it raw on 1.17.1 lands on `0xfffffffffffffff7` and faults. Measured
-//! 2026-09-18 by `scripts/frida/own-bracket-from-pgd.js`, which hit exactly that before it was
-//! given the mapped address, then agreed with the wire: it predicted `0_0` from `RL9 +2` and the
-//! query Seamless sent a moment later carried `0_0`.
+//! The rva is a 2.7.2.0 one and `er_game_base::mem::game_data_addr` is what refuses it on any
+//! other build -- a global read at another build's slot lands on whatever is there: reading the
+//! 1.16.2 slot raw on 1.17.1 landed on `0xfffffffffffffff7` and faulted. Measured 2026-09-18 by
+//! `scripts/frida/own-bracket-from-pgd.js`, which hit exactly that before it was given the mapped
+//! address, then agreed with the wire: it predicted `0_0` from `RL9 +2` and the query Seamless
+//! sent a moment later carried `0_0`.
 
 #![cfg(windows)]
 
@@ -160,9 +161,9 @@ const MAX_WEAPON_UPGRADE: u8 = 25;
 #[must_use]
 pub fn own_bands() -> Option<(u32, u32)> {
     let base = er_game_base::mem::game_module_base().ok()?;
-    // `game_data_addr` is the translation layer, and skipping it is the whole trap: the rva is a
-    // 1.16.2 one, every `.data` global moved on 1.17, and `base + rva` read raw lands on a
-    // pointer into the image rather than on `GameDataMan`.
+    // `game_data_addr` is the build gate, and skipping it is the whole trap: the rva is a 2.7.2.0
+    // one, every `.data` global moves between patches, and `base + rva` read raw on another build
+    // lands on a pointer into the image rather than on `GameDataMan`.
     let slot = er_game_base::mem::game_data_addr(
         base,
         er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA,

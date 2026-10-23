@@ -6,9 +6,8 @@
 //!
 //! # What is hooked, and why it is the right seam
 //!
-//! `CS::CSFeManImp::UpdatePlayerComponents` -- 1.16.2 `0x140772a80`, 1.17 `0x140773900`, 2.7.2.0
-//! `0x140773db0` -- is the
-//! per-frame pass that fills the HUD's `FrontEndViewValues` from the local player. It reads the
+//! `CS::CSFeManImp::UpdatePlayerComponents` -- 2.7.2.0 `0x140773db0` -- is the per-frame pass
+//! that fills the HUD's `FrontEndViewValues` from the local player. It reads the
 //! raw `WorldChrManImp+0x1e508` exactly once, into `r12`, and carries it through all 1,366
 //! instructions; `WorldChrManDbg+0xb8 camOverrideChrIns` (which is how possession moves the
 //! camera) is not consulted, so without this the bars keep showing the abandoned body.
@@ -87,26 +86,14 @@ const _: () = {
     assert!(core::mem::offset_of!(CSChrDataModule, recoverable_hp) == measured.recoverable_hp);
 };
 
-/// `CS::CSFeManImp::UpdatePlayerComponents`, 1.16.2 RVA `0x772a80`.
+/// `CS::CSFeManImp::UpdatePlayerComponents`, 2.7.2.0 RVA.
 ///
-/// The 1.17 counterpart is `0x773900`, and the pair is registered in
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv` with the verdict
-/// `IDENTICAL-WHOLE 1.000 over 1366 insns BOTH-ENTRIES PDATA:0x16c2/0x16c2` -- an exhaustive
-/// comparison of both bodies, with each image's own `.pdata` confirming the address is a function
-/// start in both. That is what `er-game-base/build.rs` requires before an address may carry a
-/// detour rather than merely a call, and it is what makes the translation exist at all.
-///
-/// The 21-byte prologue
-/// `48 8b c4 55 56 57 41 54 41 55 41 56 41 57 48 8d a8 a8 fd ff ff` is byte-identical in both
-/// images and its first five bytes are a clean rel32-free detour window. Extended to 51 bytes it
-/// matches uniquely in each image, at exactly these two addresses.
-///
-/// 1.17.1 keeps `0x773900` (it is below the `0xafefe9` boundary), and `er-game-base` carries that
-/// to `0x773db0` on 2.7.2.0 through `docs/recon/carry-1171-to-1172.tsv`. That destination is a
-/// `.pdata` start in `eldenring-deobf-1.17.2.bin` with the same `0x16c2` length, the same 21-byte
-/// prologue, and the same 1,366 instructions once rip-relative displacements are masked; see
-/// `crate::hud::layout` for the site table.
-const UPDATE_PLAYER_COMPONENTS_RVA: u32 = 0x0077_2a80;
+/// A `.pdata` start in `eldenring-deobf-1.17.2.bin` of length `0x16c2`, on the 2.7.2.0 detour
+/// allowlist. The 21-byte prologue
+/// `48 8b c4 55 56 57 41 54 41 55 41 56 41 57 48 8d a8 a8 fd ff ff` is the one 1.16.2 and 1.17
+/// had, and its first five bytes are a clean rel32-free detour window. See `crate::hud::layout`
+/// for the site table.
+const UPDATE_PLAYER_COMPONENTS_RVA: u32 = 0x0077_3db0;
 
 /// MinHook's trampoline back to the real function.
 ///
@@ -134,8 +121,8 @@ static LAYOUT: std::sync::OnceLock<Layout> = std::sync::OnceLock::new();
 /// thread-affine: all three are process-lifetime addresses in mapped executable memory, and
 /// MinHook's own API is called from arbitrary threads throughout this repo. The claim is spelled
 /// out here rather than worked around, because the alternative is stashing the resolved address
-/// separately, and the only way to obtain it is to resolve a second time -- which is exactly the
-/// silent wrong-function bug `scripts/check-double-resolved-hook-targets.py` exists to prevent.
+/// separately and resolving it a second time; keeping the one `MhHook` keeps a single owner of the
+/// address.
 struct InstalledHook(MhHook);
 // SAFETY: see the doc comment above -- the three pointers are process-lifetime, non-thread-affine
 // addresses in mapped memory, and MinHook's own enable/disable API is thread-agnostic.
@@ -152,7 +139,7 @@ pub(crate) enum Install {
     Disabled,
     /// The running build has no measured offsets; nothing was written to the game image.
     UnmeasuredBuild,
-    /// The address had no verified mapping for this build, or MinHook declined. `er-hook` has
+    /// The address was refused for this build, or MinHook declined. `er-hook` has
     /// already logged `HOOK REFUSED` naming the address and the build.
     Refused,
 }
@@ -207,8 +194,8 @@ fn record(outcome: Install) -> Install {
 /// Install the detour. Called once, from the DLL's install thread.
 ///
 /// Returns without touching the game image on any build whose offsets nobody has measured -- the
-/// address translation would still be refused a step later, but refusing here means the reason in
-/// the log is the true one ("no measured offsets") rather than the downstream one.
+/// hook address would still be refused a step later, but refusing here means the reason in the
+/// log is the true one ("no measured offsets") rather than the downstream one.
 pub(crate) fn install(enabled: bool) -> Install {
     if !enabled {
         possess_log(format_args!(
@@ -222,7 +209,7 @@ pub(crate) fn install(enabled: bool) -> Install {
         possess_log(format_args!(
             "hud: no measured FrontEndViewValues/CSChrDataModule offsets for {} -- the HP/FP/\
              stamina retarget is DISABLED and no detour was installed. The offsets were measured \
-             on 1.16.2, 1.17.0, 1.17.1 and 2.7.2.0 and on no other build. ChrIns grew 8 bytes at \
+             on 2.7.2.0 and on no other supported build. ChrIns grew 8 bytes at \
              +0x3b8 on 1.17 with its size unchanged, so a stale offset on a new build can read \
              the neighbouring field instead of \
              faulting -- there is nothing to notice at runtime, which is why this refuses rather \
@@ -241,11 +228,8 @@ pub(crate) fn install(enabled: bool) -> Install {
         }
     }
 
-    // Unresolved on purpose. `MhHook::new` translates 1.16.2 -> 1.17 internally through the
-    // detour map, and resolving here first would hand it an already-resolved address to resolve
-    // again -- which is not merely redundant: a 1.17 destination can also be some other row's
-    // 1.16.2 source, and the second lookup then lands on a third, unrelated function with no
-    // error and no log line. `game_rva_for_hook` is the module-base lookup and nothing else.
+    // Unchecked on purpose: `MhHook::new` checks the build and the 2.7.2.0 detour allowlist
+    // itself. `game_rva_for_hook` is the module-base lookup and nothing else.
     let target = match game_rva_for_hook(UPDATE_PLAYER_COMPONENTS_RVA) {
         Ok(address) => address,
         Err(why) => {

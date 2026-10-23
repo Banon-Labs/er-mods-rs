@@ -11,7 +11,7 @@
 //      same call. That is the crash the tester hit; both hooks should divert, and the DLL logs
 //      `DIVERTED` lines. If the pointer never reads null, that is measured too.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The offsets
+// Addresses are 2.7.2.0, carried from 1.17.1. The offsets
 // into GiveItems are unchanged: its whole body (0x56d bytes) is the same in both images apart from
 // rel32/rip displacements. Golden Runes are the only thing it gives, once per phase.
 'use strict';

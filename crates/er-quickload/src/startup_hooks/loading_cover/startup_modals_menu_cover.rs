@@ -12,7 +12,8 @@ use super::*;
 // OK-handler dismiss path remains only for non-product probes". A composition is not a probe. A
 // build made with `--no-default-features --features quit-rows,menu-trace` has no boot autoload,
 // so nothing arms `PRODUCT_AUTOLOAD_ARMED`, so the negation was true for a player sitting at the
-// keyboard with no probe anywhere. Measured in run br-20260913-154820-c63f, that build's own log:
+// keyboard with no probe anywhere. Measured in run br-20260913-154820-c63f (game 1.17), that build's
+// own log:
 //
 //   `[+13980ms] msgbox-builder #0: dialog=0x202ab880 ... captured=true in_world=false`
 //   `[+13993ms] auto-accept: OK-handler 0x14078eeb0(MessageBoxDialog 0x202ab880) -- real OK-press`
@@ -42,7 +43,7 @@ use super::*;
 // looks like.
 
 /// Install the startup-popup capture hook once (minhook on the MessageBoxDialog builder
-/// 0x1409275b0). The builder hook captures each created MessageBoxDialog into
+/// 0x140928c00). The builder hook captures each created MessageBoxDialog into
 /// CONNECTION_ERROR_DIALOG, which the startup-modal blocking oracle and the save-flow confirm
 /// poll read. Nothing in this crate answers a captured dialog. Idempotent; safe to call every
 /// frame from the game task until it succeeds.
@@ -112,20 +113,17 @@ pub(crate) fn grsysmsg_log_enabled() -> bool {
 pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_COUNT;
 pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_INSTALLED;
 pub(crate) use er_telemetry_core::counters::GR_SYSMSG_LOG_ORIG;
-/// `CS::GetGR_System_Message` (deobf entry 0x140762e30): `MenuString* (rcx=out, edx=int messageId)`.
-/// The dump labels it 0x140762e40 but that is mid-instruction (inside `movq $-2,[rsp+0x28]`); the real
-/// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- Verified by deobf
-/// boundary disasm (prev fn ret+int3 at 0x140762e26/27, then this prologue). Body reads FMG repo
-/// [0x143d7d4f8], applies the +0x384 variant, builds the MenuString.
-// Corrected 2026-06-23 (corrupted-save-re-findings): 0x762e30 is GetTextEmbedImageName (it does
-// id += 900, uses a different singleton) -- Not GetGR_System_Message. The real getter is deobf
-// 0x140762d50 (dump 0x140762e40 - 0xf0 region shift): it loads L"GR_System_Message"+L"SM" and calls
-// MsgRepository::GetAndFormat with the id in edx. Hooking the wrong fn is why the 401106 corrupted-
+/// `CS::GetGR_System_Message` (2.7.2.0 entry 0x140764050): `MenuString* (rcx=out, edx=int messageId)`.
+/// It loads L"GR_System_Message"+L"SM" and calls `MsgRepository::GetAndFormat` (0x1407646d0) with
+/// the id in edx.
+// Corrected 2026-06-23 (corrupted-save-re-findings): the nearby function at 2.7.2.0
+// 0x140764130 is GetTextEmbedImageName -- it does id += 900 (+0x384) and reads the FMG repo
+// global [0x143d84588] -- not GetGR_System_Message. Hooking that one is why the 401106 corrupted-
 // save id was never seen (oracle stayed 0). This RVA must be the real getter for the semaphore.
 pub(crate) const GR_SYSTEM_MESSAGE_RVA: u32 = er_game_base::rva::GR_SYSTEM_MESSAGE_RVA as u32;
 pub(crate) const GR_SYSMSG_LOG_MAX: usize = 64;
 
-/// Diagnostic detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the
+/// Diagnostic detour for GetGR_System_Message 0x140764050. Once the main menu has opened (skip the
 /// boot-time message flood), log the integer message id (the `edx`/`rdx` arg) + first game caller RVA
 /// for each call, capped. The id maps 1:1 to GR_System_Message_win64 (e.g. 4101 "Cannot connect to
 /// network", 4102 "connection to game server lost", 4190 "network error", 70000 save-data notice,
@@ -194,7 +192,7 @@ pub(crate) unsafe extern "system" fn gr_sysmsg_log_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
-/// Install the GR_System_Message id-logger once (MinHook on 0x140762e40), mirroring the auto-accept
+/// Install the GR_System_Message id-logger once (MinHook on 0x140764050), mirroring the auto-accept
 /// builder-hook precedent. Caller-gated by `grsysmsg_log_enabled()`.
 pub(crate) fn install_gr_sysmsg_log_hook() {
     if GR_SYSMSG_LOG_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -242,13 +240,13 @@ pub(crate) fn install_gr_sysmsg_log_hook() {
     }
 }
 
-/// CS::NetworkCheckJob::Run RVA (deobf entry 0x140821310). Signature
+/// CS::NetworkCheckJob::Run RVA (2.7.2.0 entry 0x140822640). Signature
 /// `MenuJobResult*(rcx=job, rdx=MenuJobResult* result, r8=FD4Time*)`. Entry prologue
 /// (push rbp/rsi/rdi/r14/r15; lea rbp; sub rsp) is a clean MinHook target (disasm-verified).
-pub(crate) const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
-/// `FD4::FD4TimeTemplate<float>::vftable` (deobf 0x1429c8e48) -- the value Run's common-return path
+pub(crate) const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x822640;
+/// `FD4::FD4TimeTemplate<float>::vftable` (2.7.2.0 0x1429cde48) -- the value Run's common-return path
 /// writes to `*(param_3)` in every leaf (RVA read from the deobf disasm of the clean leaf).
-pub(crate) const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
+pub(crate) const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29cde48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 pub(crate) const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
@@ -259,7 +257,8 @@ pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED
 
 /// The milestone-3 fix (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains unconditionally at menu-open. Offline, its Steam-holder check
-/// (FUN_140cab320: all 3 holders field@0x10==2) and EOS check (FUN_140ddfb90) never pass, so every
+/// (1.16.1 dump FUN_140cab320: all 3 holders field@0x10==2) and EOS check (1.16.1 dump FUN_140ddfb90)
+/// never pass, so every
 /// decision-tree leaf builds a GR_System_Message MessageBoxDialog -- Except one leaf that does
 /// `MenuJobResult::SetResult(Continue)` with no modal (decompile-verified). This detour replaces Run
 /// with exactly that clean leaf, skipping the entire tree, so zero modals are ever enqueued regardless
@@ -289,7 +288,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     // (i.e. After the boot read has populated the slot). bd autoload-regression-lookat-breaks-bootread-2026-06-30.
     let state = MENU_JOB_STATE_CONTINUE;
     // MenuJobResult::SetResult(result, state, 0): state @ +0 (i32), field1 @ +4 (i32). The native
-    // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.
+    // SetResult 0x1407aa510 only writes these two fields, so replicate inline. Readability-guarded.
     if result > null && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
             *(result as *mut i32) = state;
@@ -302,7 +301,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         && unsafe { safe_read_usize(r8) }.is_some()
     {
         // Never store a refusal. `game_data_addr` answers 0 when the running build
-        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // is not 2.7.2.0, the build this vftable rva belongs to, and a 0 here is not a
         // degraded value -- it is a NULL vptr in an object the engine will later
         // call through. Leaving the field as the native left it is strictly safer.
         let vftable = er_game_base::mem::game_data_addr(
@@ -323,7 +322,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     result
 }
 
-/// Install the NetworkCheckJob::Run short-circuit once (MinHook on 0x140821310), mirroring the
+/// Install the NetworkCheckJob::Run short-circuit once (MinHook on 0x140822640), mirroring the
 /// auto-accept builder-hook precedent. Must arm before menu-open; caller-gated (offline only).
 pub(crate) fn install_network_check_shortcircuit_hook() {
     if NETWORK_CHECK_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -377,11 +376,11 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
     }
 }
 
-/// CS::ShowProgressJob::Run RVA (deobf entry 0x1408349c0; dump 0x140834ab0, region shift -0xf0,
-/// clean prologue disasm-verified). Signature `MenuJobResult*(rcx=ShowProgressJob, rdx=MenuJobResult*
-/// result, r8=FD4Time*)` -- Identical to NetworkCheckJob::Run.
-pub(crate) const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
-/// `MenuJobState::Success` (=2; Continue=1). Verified from FUN_1407a7340's `SetResult(.,Success,0)`
+/// CS::ShowProgressJob::Run RVA (2.7.2.0 entry 0x140835e60, clean prologue disasm-verified).
+/// Signature `MenuJobResult*(rcx=ShowProgressJob, rdx=MenuJobResult* result, r8=FD4Time*)` --
+/// Identical to NetworkCheckJob::Run.
+pub(crate) const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x835e60;
+/// `MenuJobState::Success` (=2; Continue=1). Verified from 1.16.1 dump FUN_1407a7340's `SetResult(.,Success,0)`
 /// clean leaf (deobf `lea edx,[r8+2]`). A passing check returns Success -> `ShouldContinue` (state>1)
 /// true -> ShowProgressJob::Run propagates it -> flow advances (no modal). Forcing Continue(1) would
 /// loop the timed job; Success(2) completes it cleanly.
@@ -401,13 +400,13 @@ pub(crate) const SHOW_PROGRESS_SAVE_TYPE: u32 =
     er_title_flow::boot_hold::SHOW_PROGRESS_SAVE_CHECK_TYPE;
 pub(crate) use er_telemetry_core::counters::SHOW_PROGRESS_TYPE_LOGGED;
 
-/// The milestone-3 fix, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
+/// The milestone-3 fix, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (2.7.2.0 0x140835e60)
 /// is the shared Run for the offline title-flow check steps (save=10/network=20/sign-in=30,31/
 /// login=60) the registrar chains at menu-open. Each runs a check delegate (job+0x20, slot +0x10);
 /// offline the delegate returns an error result, which ShowProgressJob::Run propagates so the pump
 /// enqueues a GR_System_Message MessageBox. The 3 observed menu-open modals all come from these
 /// ShowProgressJobs (not NetworkCheckJob, which is a separate job already hooked). This detour replaces
-/// Run with a passing-check exit: result = {state=Success, field1=0} (exactly what FUN_1407a7340's
+/// Run with a passing-check exit: result = {state=Success, field1=0} (exactly what 1.16.1 dump FUN_1407a7340's
 /// SetResult(Success) clean leaf yields) + the FD4Time vtable, skipping the delegate -> the job
 /// completes successfully, the flow advances, and zero modals are enqueued. One hook covers all the
 /// check steps. Offline-gated (no effect on an online Seamless Co-op check). bd er-effects-rs-0ye.
@@ -528,7 +527,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                 && unsafe { safe_read_usize(r8) }.is_some()
             {
                 // Never store a refusal. `game_data_addr` answers 0 when the running build
-                // moved this vftable and nothing verified where to, and a 0 here is not a
+                // is not 2.7.2.0, the build this vftable rva belongs to, and a 0 here is not a
                 // degraded value -- it is a NULL vptr in an object the engine will later
                 // call through. Leaving the field as the native left it is strictly safer.
                 let vftable = er_game_base::mem::game_data_addr(
@@ -581,7 +580,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         && unsafe { safe_read_usize(r8) }.is_some()
     {
         // Never store a refusal. `game_data_addr` answers 0 when the running build
-        // moved this vftable and nothing verified where to, and a 0 here is not a
+        // is not 2.7.2.0, the build this vftable rva belongs to, and a 0 here is not a
         // degraded value -- it is a NULL vptr in an object the engine will later
         // call through. Leaving the field as the native left it is strictly safer.
         let vftable = er_game_base::mem::game_data_addr(
@@ -602,7 +601,7 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
     result
 }
 
-/// Install the ShowProgressJob::Run short-circuit once (MinHook on 0x1408349c0). Must arm before
+/// Install the ShowProgressJob::Run short-circuit once (MinHook on 0x140835e60). Must arm before
 /// menu-open; caller-gated (offline only).
 pub(crate) fn install_show_progress_shortcircuit_hook() {
     if SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -751,7 +750,7 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     unsafe { call(rcx, rdx, r8, r9) }
 }
 
-/// Install the `TitleTopDialog::open_menu` suppression detour once (MinHook on 0x1409b24e0). Must arm
+/// Install the `TitleTopDialog::open_menu` suppression detour once (MinHook on 0x1409b3be0). Must arm
 /// before the native auto-menu-open (~+38s). Harmless when no picker is pending (pass-through).
 pub(crate) fn install_title_open_menu_suppress_hook() {
     if TITLE_OPEN_MENU_SUPPRESS_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
@@ -807,9 +806,9 @@ pub(crate) fn install_title_open_menu_suppress_hook() {
     }
 }
 
-/// Latch detour for the CS::SceneObjProxy ctor 0x14074a700 (rcx=proxy[this], rdx=MenuWindow*,
-/// r8/r9 forwarded). Disasm-verified: the ctor does `mov %rdx,%rbx` (0x14074a720) then
-/// `mov %rbx,0x20(%rsi)` (0x14074a735) -- so the incoming RDX is the engine-verified MenuWindow it
+/// Latch detour for the CS::SceneObjProxy ctor 0x14074ba00 (rcx=proxy[this], rdx=MenuWindow*,
+/// r8/r9 forwarded). Disasm-verified: the ctor does `mov %rdx,%rbx` (0x14074ba20) then
+/// `mov %rbx,0x20(%rsi)` (0x14074ba35) -- so the incoming RDX is the engine-verified MenuWindow it
 /// stores at proxy+0x20 (probe-6 proved the old TitleTopDialog-factory rdx was a std::function
 /// delegate, not the MenuWindow). Runtime showed the old MenuWindow/MenuWindowProxy vtable constants
 /// are stale for this ctor's engine-provided rdx, but static disassembly still proves the game stores
@@ -842,12 +841,12 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
         LATCHED_MENU_WINDOW.store(menu_window, Ordering::SeqCst);
         if hit < SCENE_OBJ_PROXY_CTOR_LOG_MAX {
             append_autoload_debug(format_args!(
-                "menuwindow-latch: 0x14074a700 ACCEPT #{hit} rdx=0x{menu_window:x} first=0x{pvt:x} (engine-stored proxy+0x20 candidate)"
+                "menuwindow-latch: 0x14074ba00 ACCEPT #{hit} rdx=0x{menu_window:x} first=0x{pvt:x} (engine-stored proxy+0x20 candidate)"
             ));
         }
     } else if hit < SCENE_OBJ_PROXY_CTOR_LOG_MAX {
         append_autoload_debug(format_args!(
-            "menuwindow-latch: 0x14074a700 REJECT #{hit} rdx=0x{menu_window:x} first=0x{pvt:x} (not heap-aligned)"
+            "menuwindow-latch: 0x14074ba00 REJECT #{hit} rdx=0x{menu_window:x} first=0x{pvt:x} (not heap-aligned)"
         ));
     }
     let orig = SCENE_OBJ_PROXY_CTOR_ORIG.load(Ordering::SeqCst);
@@ -984,9 +983,9 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     native_ret
 }
 
-/// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
+/// Detour for BeginTitle's `05_000_Title` visual wrapper (2.7.2.0 0x140820d20). Static RE shows the
 /// wrapper constructs a CSScaleformLoadInfo with filename `05_000_Title` and calls factory
-/// 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we now preserve
+/// 0x1407ade30 to allocate/return a MenuWindowJob. For the title-cover masquerade we now preserve
 /// that native MenuWindowJob and only latch it for the render-only FadeIn suppressor below. This keeps
 /// TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, and the resident-UI CSMenuMan+0x21
 /// gate untouched; the draw bit is cleared later only for this preserved native title window.
@@ -1074,15 +1073,15 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
         // address to resolve -- it does not live in the game image at all.
         orig
     } else {
-        // The FALLBACK that crashed the 1.17 boot at ~11s, three runs running. This called
-        // `base + 0x9a62c0` raw. On 1.16.2 that is a thunk (`add rcx,0x70; jmp ...`); on 1.17 the
-        // same RVA holds `lea eax,[rsp+0x40]; cmp rcx,rax; setne dl` -- the middle of an unrelated
-        // function, and the address has no verified mapping. The crash record proves the landing:
-        // return address 0x1409a62ce, exactly +0xe into it, with rcx holding `logo`, and RIP ending
-        // up at heap 0x1d107080 -- an execute fault (access kind 8) in no module.
+        // The FALLBACK that crashed the 1.17 boot at ~11s, three runs running. It called the
+        // 1.16.2 rva of this thunk raw: on 2.7.2.0 `TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA` is
+        // the thunk (`add rcx,0x70; jmp ...` at 0x1409a7910), but on another build the same rva
+        // is the middle of an unrelated function. The 1.17 crash record proved the landing: the
+        // return address was +0xe into it, with rcx holding `logo`, and RIP ended up on the heap
+        // -- an execute fault (access kind 8) in no module.
         //
-        // Resolving means an unmapped address refuses and the logo simply is not hidden. A title
-        // logo left visible is a cosmetic defect; this was a boot-killer.
+        // Resolving means another build refuses and the logo simply is not hidden. A title logo
+        // left visible is a cosmetic defect; this was a boot-killer.
         match er_game_base::game_build::resolve_game_address(
             base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
             "title-logo SetVisible",
@@ -1090,7 +1089,7 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
             Some(address) => address,
             None => {
                 append_autoload_debug(format_args!(
-                    "title-cover-part-a: SKIPPED hiding {TITLE_LOGO_BACK_VIEW_PARTS_NAME} via {source} --                      SetVisible has no verified mapping for the running build (logo stays visible)"
+                    "title-cover-part-a: SKIPPED hiding {TITLE_LOGO_BACK_VIEW_PARTS_NAME} via {source} -- SetVisible is refused on the running build (not 2.7.2.0; logo stays visible)"
                 ));
                 return;
             }

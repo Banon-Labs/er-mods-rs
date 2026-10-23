@@ -12,7 +12,7 @@
 #   3. standalone-first co-load remains outside S6 proof and must be covered by the
 #      later save-redirect/feature-ownership slices before claiming the full matrix; and
 #   4. anything that ever does hook a game address must go through the `er-hook` union
-#      (`register_union_hook` / the `er_effects_union_register` C export), never a bare
+#      (`register_union_hook` / the `er_effects_union_register_2720` C export), never a bare
 #      `MhHook::new`, so one MinHook instance owns each address and handlers chain.
 # See docs/plans/save-picker-crate-extraction.md, "Hook-ownership election".
 [package]

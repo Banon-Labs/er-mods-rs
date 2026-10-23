@@ -69,7 +69,8 @@ Nothing outside `crates/er-quit-rows/` names a symbol from any of the nine. Ther
 references to the fork elsewhere in the tree, and every one of them addresses the crate as a whole:
 build lists (`scripts/check-rust-build.sh:140`, `scripts/check.sh:2611`), the conflict table
 (`scripts/me3-dll-conflicts.toml`, four pairs), gate baselines
-(`scripts/audit-1170-gate-bypass.baseline.json`, 26 entries), log filenames
+(`scripts/audit-1170-gate-bypass.baseline.json`, 26 entries; deleted with that audit on
+2026-10-23), log filenames
 (`er-quit-rows-debug.log`, in five scripts), and the workspace member list. None of that reaches
 into the nine.
 

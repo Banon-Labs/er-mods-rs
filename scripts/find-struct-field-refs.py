@@ -17,7 +17,7 @@ The image is flat (file offset == RVA), so `VA = 0x140000000 + offset` -- see AG
 Run under uv so capstone is provisioned ephemerally:
 
     uv run --with capstone python3 scripts/find-struct-field-refs.py 0x88d
-    uv run --with capstone python3 scripts/find-struct-field-refs.py 0x88d --image eldenring-deobf-1.17.bin
+    uv run --with capstone python3 scripts/find-struct-field-refs.py 0x88d --image eldenring-deobf.bin
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ def main() -> int:
     parser.add_argument("displacement", help="struct field offset, e.g. 0x88d")
     parser.add_argument(
         "--image",
-        default="eldenring-deobf.bin",
-        help="flat de-Arxan'd image, relative to the repo root (default: the 1.16.2 one)",
+        default="eldenring-deobf-1.17.2.bin",
+        help="flat de-Arxan'd image, relative to the repo root (default: the installed 2.7.2.0 one)",
     )
     args = parser.parse_args()
 

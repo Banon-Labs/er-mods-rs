@@ -3,8 +3,17 @@
 
 This ports the process-friendly parts of the donated Ghidra Java scripts so an
 agent can run them from the normal repo workflow without opening a shared Ghidra
-project. The default input is the repo-local dearxan mapped image where
-file offset == RVA and VA == image_base + offset.
+project. The default input is the repo-local dearxan mapped image of the installed build
+(`eldenring-deobf-1.17.2.bin`, 2.7.2.0) where file offset == RVA and VA == image_base + offset.
+
+`ER_DEOBF_BIN` names another image. Without it the image is looked up at the repo root and then in
+each directory above it, because the images are gitignored and a linked worktree under
+`.worktrees/` has no copy of its own.
+
+An RTTI classmap lists one build's vtable addresses, so the default `--rtti` is picked by the
+image's PE TimeDateStamp: `docs/recon/deobf-rtti-classmap-2720.tsv` for 2.7.2.0 and
+`docs/recon/deobf-rtti-classmap.tsv` for 1.16.2. Any other image gets no RTTI column unless
+`--rtti` names a classmap made from it with `scripts/rtti-scan-all.py <out.tsv> --image <image>`.
 """
 
 from __future__ import annotations
@@ -12,6 +21,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import struct
 import sys
 from collections.abc import Iterable, Iterator
@@ -20,9 +30,31 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_IMAGE = REPO_ROOT / "eldenring-deobf.bin"
-DEFAULT_RTTI = REPO_ROOT / "docs/recon/deobf-rtti-classmap.tsv"
+IMAGE_NAME = "eldenring-deobf-1.17.2.bin"
+
+
+def find_image(name: str = IMAGE_NAME) -> Path:
+    """`ER_DEOBF_BIN` when set, else `name` at the repo root or the nearest directory above it."""
+    if os.environ.get("ER_DEOBF_BIN"):
+        return Path(os.environ["ER_DEOBF_BIN"])
+    for directory in (REPO_ROOT, *REPO_ROOT.parents):
+        if (directory / name).exists():
+            return directory / name
+    return REPO_ROOT / name
+
+
+DEFAULT_IMAGE = find_image()
+#: The committed classmaps, keyed by the PE TimeDateStamp of the image each was made from.
+RTTI_BY_STAMP = {
+    0x6AABF7E7: REPO_ROOT / "docs/recon/deobf-rtti-classmap-2720.tsv",  # 2.7.2.0
+    0x69E21187: REPO_ROOT / "docs/recon/deobf-rtti-classmap.tsv",  # 1.16.2
+}
 DEFAULT_IMAGE_BASE = 0x140000000
+#: `event-flags` default target: the getter of the `CSEventFlagResStep` runtime class
+#: (`DLRuntimeClassImpl<FD4StepTemplateBase<CSEventFlagResStep>>`, vtable 0x142a73620). Its
+#: init is the one function storing that vtable, and the getter is that init's only caller; in
+#: 1.16.2 the getter was 0x1405d7f60.
+EVENT_FLAG_GETTER_VA = 0x1405D9260
 MAX_STRING_BYTES = 512
 MAX_STEPPER_RECORDS = 512
 MIN_WIDE_STRING_CHARS = 2
@@ -495,7 +527,12 @@ def add_output_options(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", type=Path, default=DEFAULT_IMAGE, help="mapped PE image to scan")
-    parser.add_argument("--rtti", type=Path, default=DEFAULT_RTTI, help="optional RTTI classmap TSV")
+    parser.add_argument(
+        "--rtti",
+        type=Path,
+        default=None,
+        help="optional RTTI classmap TSV (default: the committed one made from the image's build, if any)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     dlmethod = subparsers.add_parser("dlmethod", help="scan DLRF/DLMethod invoker setup patterns")
     add_output_options(dlmethod)
@@ -503,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_output_options(steppers)
     event_flags = subparsers.add_parser("event-flags", help="scan event-flag getter caller names")
     add_output_options(event_flags)
-    event_flags.add_argument("--target-va", type=lambda value: int(value, 0), default=0x1405D7F60)
+    event_flags.add_argument("--target-va", type=lambda value: int(value, 0), default=EVENT_FLAG_GETTER_VA)
     event_flags.add_argument("--lookback-bytes", type=lambda value: int(value, 0), default=40)
     const_args = subparsers.add_parser("const-args", help="scan direct calls and recover simple constant Windows x64 argument setup")
     add_output_options(const_args)
@@ -515,7 +552,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     image = MappedPeImage(args.image)
-    rtti = load_rtti(args.rtti)
+    rtti_path = args.rtti
+    if rtti_path is None:
+        stamp = struct.unpack_from("<I", image.data, struct.unpack_from("<I", image.data, 0x3C)[0] + 8)[0]
+        rtti_path = RTTI_BY_STAMP.get(stamp)
+    rtti = load_rtti(rtti_path) if rtti_path is not None else {}
     if args.command == "dlmethod":
         rows = scan_dlmethod(image, rtti, args.limit)
     elif args.command == "steppers":

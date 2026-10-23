@@ -1,8 +1,8 @@
 // Which term refuses the invasion fingers in a zone the vanilla game calls non-pvp, and can the
 // refusal be lifted without touching anything else?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Every game address the agent uses is a 2.7.2.0 rva. The disassembly quoted below was read out
+// of 1.17.1, and each literal's trailing comment gives its 1.17.1 address in that quote.
 //
 // `CS::PlayerIns::CanUseBreakInItem` is the term `crates/er-invasion-warp/src/can_use_goods_gate.rs`
 // deliberately keeps: when it says no, that module hands the engine's refusal back and the fingers
@@ -30,10 +30,10 @@
 // `FORCE` off: every call is counted and its first distinct shape reported -- which caller, which
 // region id, which answer. That names the refusing term instead of assuming it.
 //
-// `FORCE` on: a `false` from `0x140a61980` is answered `true`, and nothing else is touched. A
-// `true` is handed back untouched, so a region that already permits invading stays the engine's
-// call. The switch is this constant, because the resident watcher has no rpc channel and editing
-// the file is the only switch it has.
+// `FORCE` on: a `false` from `IsBreakInLimitedByEventFlagId` is answered `true`, and nothing else
+// is touched. A `true` is handed back untouched, so a region that already permits invading stays
+// the engine's call. The switch is this constant, because the resident watcher has no rpc channel
+// and editing the file is the only switch it has.
 // Measured with `FORCE` off, on the user's live session, walking between two regions:
 //
 //   region 1400011  isInSafePosRange=1 canStartBreakIn=1 isBreakInLimitedByEventFlagId=1 canUseBreakInItem=1
@@ -56,8 +56,8 @@ function followStub (address) {
 
 const game = Process.findModuleByName('eldenring.exe');
 
-// Every address below is an rva into `eldenring.exe`, read off the disassembly quoted above. All
-// are under the `0xafefe9` boundary, so 1.17.0 and 1.17.1 agree and no mapping step applies.
+// Every address below is a 2.7.2.0 rva; the trailing comment is the 1.17.1 address in the
+// disassembly quoted above.
 const RVA = {
   isBreakInLimitedByEventFlagId: 0xa61e40, // 1.17.1 0xa61980
   canUseBreakInItem: 0x658200, // 1.17.1 0x657d50
@@ -198,13 +198,10 @@ Interceptor.attach(followStub(game.base.add(RVA.canUseBreakInItem)).address, {
 // rather than on Frida's own thread -- these predicates read singletons and event flags, and the
 // wrong thread is the difference between a read and a race.
 
-// Both globals are read off the rip-relative operands in the 1.17.1 disassembly quoted at the top
-// of this file, not from `crates/er-game-base/src/rva.rs`. That file carries `0x3d65f88` for
-// `WorldChrMan` and `0x3d691d8` for `FieldArea`, each exactly `0x4070` below what 1.17.1 loads at
-// these two call sites, so those constants are 1.16.2 addresses. Both are printed below so the
-// disagreement is measured here rather than argued about.
+// Both globals are the 2.7.2.0 rvas, carried from the rip-relative operands in the 1.17.1
+// disassembly quoted at the top of this file. `crates/er-game-base/src/rva.rs` now holds the same
+// `WorldChrMan` rva, so the old side-by-side read of its 1.16.2 value is gone.
 const WORLD_CHR_MAN_GLOBAL_RVA = 0x3d6d018; // 1.17.1 0x3d69ff8
-const WORLD_CHR_MAN_GLOBAL_RVA_FROM_RVA_RS = 0x3d65f88;
 const FIELD_AREA_GLOBAL_RVA = 0x3d70268; // 1.17.1 0x3d6d248
 const WORLD_CHR_MAN_PLAYER_INS_OFFSET = 0x1e508;
 const PLAYER_INS_PLAY_REGION_ID_OFFSET = 0x6e8;
@@ -224,12 +221,8 @@ function readPointerOrNull (rva) {
 
 function askDirectly () {
   const lines = [];
-  const fromRvaRs = readPointerOrNull(WORLD_CHR_MAN_GLOBAL_RVA_FROM_RVA_RS);
-  lines.push(`rva.rs WorldChrMan global +0x${WORLD_CHR_MAN_GLOBAL_RVA_FROM_RVA_RS.toString(16)} `
-             + `-> ${fromRvaRs}`);
-
   const worldChrMan = readPointerOrNull(WORLD_CHR_MAN_GLOBAL_RVA);
-  lines.push(`1.17.1 WorldChrMan global +0x${WORLD_CHR_MAN_GLOBAL_RVA.toString(16)} `
+  lines.push(`WorldChrMan global +0x${WORLD_CHR_MAN_GLOBAL_RVA.toString(16)} `
              + `-> ${worldChrMan}`);
   if (worldChrMan === null) {
     send({ kind: 'direct', line: lines.join(' | ') + ' | no WorldChrMan, asked nothing' });

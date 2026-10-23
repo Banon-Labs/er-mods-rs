@@ -4,7 +4,7 @@
 //! `docs/bnd4-save-format.md`, proven by MD5). Each `USER_DATA00N` entry is
 //! `[16-byte MD5 of the body][plaintext body]`. The 10 character slots
 //! (`USER_DATA000`..`USER_DATA009`) each have a `0x280000`-byte body — exactly
-//! the buffer the engine save parser (`0x67b290`) consumes. This module locates a
+//! the buffer the engine save parser (`0x67c590`) consumes. This module locates a
 //! slot's plaintext body so the DLL can hand it straight to the engine parser:
 //! no decryption, no key, no crypto deps.
 //!
@@ -14,7 +14,7 @@
 //! and the structural strides from the header — the `SLOT_*` literals below are
 //! only the *expected* char-slot values, used for sanity checks, never as the
 //! slicing source of truth. (Runtime side: the buffer size the engine allocs is
-//! likewise read from the engine's own `0x67b100(size)` call, not a literal.)
+//! likewise read from the engine's own `0x67c400(size)` call, not a literal.)
 
 /// Expected plaintext body size of a *character* slot (`USER_DATA000`..`009`).
 /// Sanity reference only — actual slices derive length from each entry's size.
@@ -30,12 +30,12 @@ pub const SLOT_ENTRY_LEN: usize = ENTRY_MD5_LEN + SLOT_BODY_LEN; // 0x280010
 /// **This is `0x04`, not `0x14`** — re-verified against the 1.16.2 Ghidra dump 2026-08-02
 /// and again 2026-08-03, both directions:
 ///
-/// * SERIALIZER `FUN_14067dc00` builds the 16-byte body header as
+/// * SERIALIZER `FUN_14067ef00` (2.7.2.0 entry) builds the 16-byte body header as
 ///   `local_150 = CONCAT44(BVar3, GetGameDataVersion()); Write(&local_150, 0x10)` — little-endian,
 ///   so the data version lands at body+0x00 and the `BlockId` at body+0x04. It then writes four
 ///   `CS::CSRandXorshift::NextInt` dwords as the *next* 0x10 bytes, so **body+0x10..0x20 is random
 ///   noise** and body+0x14 is merely the second random dword.
-/// * DESERIALIZER `FUN_14067bd70` mirrors it: `ReadBytes(&local_50, 0x10)` then
+/// * DESERIALIZER `FUN_14067d070` (2.7.2.0 entry) mirrors it: `ReadBytes(&local_50, 0x10)` then
 ///   `param_1->stayInMultipleAreaBlockId = local_50._4_4_` (bytes 4..8 of that read), then
 ///   `SkipBytes(0x10)` straight over the random block.
 /// * `GameMan::stayInMultipleAreaBlockId` sits at struct offset 3120 = `0xC30`, which is exactly

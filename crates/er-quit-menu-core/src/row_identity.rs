@@ -240,7 +240,7 @@ pub unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Option<Quit
 }
 
 /// Classify a dispatched activation event with the game's own predicates -- the same two tests
-/// `PropertyNewButtonController`'s should-invoke predicate (`FUN_140974b00`) runs. The pad predicate
+/// `PropertyNewButtonController`'s should-invoke predicate (`0x140976150`) runs. The pad predicate
 /// short-circuits with no positional test; the mouse predicate is the one whose result the native
 /// code then hit-tests against a display object.
 ///

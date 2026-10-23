@@ -195,7 +195,8 @@ SIGNATURE_LADDER = (64, 48, 40, 32, 24)
 def masked_pattern(image, offset, want):
     """`(pattern, mask)` from `offset` with every version-fragile operand byte wildcarded.
 
-    Same three classes as `scripts/map-rvas-1162-to-1170.py`: RIP-relative displacements, memory
+    The same three classes the deleted 1.16.2 -> 1.17 game signature carry masked: RIP-relative
+    displacements, memory
     displacements on a register base (struct fields move between builds -- v2.0.0 moved the ERSC
     session state from `+0x110` to `+0x150`), and immediates. What survives is opcode shape and
     register allocation, which is what identifies a function across a recompile.

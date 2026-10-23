@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """Every DLL that installs detours must install a log sink, or its refusals are invisible.
 
-Each cdylib STATICALLY links its own copy of `er-hook` and `er-game-base`, so the logger those
+Each cdylib statically links its own copy of `er-hook` and `er-game-base`, so the logger those
 crates call through is a per-DLL static. A DLL that never installs one is not quiet about
-unimportant things -- it is silent about the two lines that say a feature just went inert:
+unimportant things -- it is silent about the lines that say a feature just went inert:
 
-    Hook refused (...)      a detour was not installed, because the address has no verified
-                            mapping for the running build
-    address refused (...)   a game address was not used, for the same reason
+    `hook failed (..): refused on ..`         from `er_hook::resolve_target`: a detour was not
+                                              installed
+    `ADDRESS REFUSED FOR DETOUR (..): 0x..`   from `resolve_detour_address`: the rva is not on the
+                                              2.7.2.0 detour allowlist
+    `UNSUPPORTED GAME BUILD (..)`             the running game is not 2.7.2.0, so every game
+                                              address in the DLL is refused, once, loudly
 
 What that costs, measured on 2026-08-28: `er-armament-icons` logged four
 `MH_ERROR_UNSUPPORTED_FUNCTION` failures. That code is both MinHook's genuine "I cannot hook this
 function" and the code `MhHook::new` returns when the build gate refuses the address -- and one of
-the four was `0x1411ced80`, which is in the verified translation table and therefore should have
-been translated, not refused. With no sink installed there was no line distinguishing the two, so
-a real question about whether the audit was wrong could not be answered from a whole game run.
+the four was an address the gate should have admitted. With no sink installed there was no line
+distinguishing the two, so a real question about whether the gate was wrong could not be answered
+from a whole game run.
 
-`er_hook::set_hook_logger` installs both sinks, so one call satisfies this. A crate that resolves
-addresses without hooking (no `er-hook` dependency) installs
-`er_game_base::game_build::set_address_logger` directly.
+`er_hook::set_hook_logger` installs both sinks (it forwards to
+`er_game_base::game_build::set_address_logger`), so one call satisfies this. A crate that resolves
+addresses without hooking (no `er-hook` dependency) installs `set_address_logger` directly. The
+selftest reads both setters and the three refusal lines out of the two crates, so a rename of the
+API this gate keys on turns it red instead of leaving it matching a name nothing calls.
 
     python3 scripts/check-hook-log-sink.py
     python3 scripts/check-hook-log-sink.py --selftest
@@ -60,9 +65,9 @@ EXEMPT = {
 }
 
 
-def crate_dirs():
-    for name in sorted(os.listdir(CRATES)):
-        path = os.path.join(CRATES, name)
+def crate_dirs(root=CRATES):
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
         if os.path.isdir(os.path.join(path, "src")):
             yield name, path
 
@@ -138,9 +143,9 @@ def is_cdylib(crate_path):
     return "cdylib" in open(manifest, encoding="utf-8").read()
 
 
-def audit():
+def audit(root=CRATES):
     missing, ok, skipped = [], [], []
-    for name, path in crate_dirs():
+    for name, path in crate_dirs(root):
         if not is_cdylib(path):
             continue
         text = strip_comments(
@@ -190,8 +195,66 @@ def selftest():
     hooking = [n for n, p in crate_dirs() if is_cdylib(p) and HOOKS.search(strip_comments(
         "".join(open(f, encoding="utf-8", errors="replace").read() for f in sources(p))))]
     assert hooking, "the tree has hooking cdylibs; finding none means the walk is broken"
-    print(f"selftest OK ({len(hooking)} hooking cdylib(s) visible)")
+
+    # The API this gate keys on, read out of the two crates that own it. `INSTALLS` names two
+    # setters; if either is renamed, or `set_hook_logger` stops forwarding to the address sink,
+    # every match above is a match on a name nothing installs a sink through.
+    hook_rs = strip_comments(read_text(os.path.join(CRATES, "er-hook", "src", "lib.rs")))
+    build_rs = strip_comments(read_text(os.path.join(CRATES, "er-game-base", "src", "game_build.rs")))
+    setter = re.search(r"pub fn set_hook_logger\s*\([^)]*\)\s*\{(.*?)\n\}", hook_rs, re.S)
+    assert setter, "er-hook no longer defines `pub fn set_hook_logger`; INSTALLS names a ghost"
+    assert "set_address_logger(" in setter.group(1), (
+        "set_hook_logger no longer installs the address sink too, so one call no longer covers "
+        "the ADDRESS REFUSED / UNSUPPORTED GAME BUILD lines"
+    )
+    assert re.search(r"pub fn set_address_logger\s*\(", build_rs), (
+        "er-game-base no longer defines `pub fn set_address_logger`; INSTALLS names a ghost"
+    )
+    for line, text in (
+        ("ADDRESS REFUSED FOR DETOUR", build_rs),
+        ("UNSUPPORTED GAME BUILD", build_rs),
+        ("hook failed (", hook_rs),
+    ):
+        assert line in text, (
+            f"the refusal line {line!r} is gone from the crate that writes it; re-read the refusal "
+            "path and update the docstring and this list together"
+        )
+
+    # The gate can fail. A fixture tree with one hooking cdylib that installs a sink, one that does
+    # not, and one whose only hook is in prose: exactly the silent one is reported.
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+
+    scratch = tempfile.mkdtemp()
+    fixtures = {
+        "fixture-sink": "fn attach() { er_hook::set_hook_logger(log); unsafe { MhHook::new(a, b) }; }",
+        "fixture-silent": "fn attach() { unsafe { er_hook::register_union_hook(a, b, &S) }; }",
+        "fixture-prose": "//! hooks go through er_hook::register_shared_hook\nfn attach() {}",
+    }
+    for name, body in fixtures.items():
+        os.makedirs(os.path.join(scratch, name, "src"))
+        with open(os.path.join(scratch, name, "Cargo.toml"), "w", encoding="utf-8") as handle:
+            handle.write('[lib]\ncrate-type = ["cdylib"]\n')
+        with open(os.path.join(scratch, name, "src", "lib.rs"), "w", encoding="utf-8") as handle:
+            handle.write(body + "\n")
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        code = audit(scratch)
+    assert code == 1, f"a hooking cdylib with no sink passed the gate:\n{captured.getvalue()}"
+    reported = re.findall(r"^\s+(\S+): installs detours", captured.getvalue(), re.M)
+    assert reported == ["fixture-silent"], f"expected only fixture-silent reported, got {reported}"
+    os.remove(os.path.join(scratch, "fixture-silent", "src", "lib.rs"))
+    with redirect_stdout(io.StringIO()):
+        assert audit(scratch) == 0, "the fixture with its silent crate emptied still fails"
+
+    print(f"selftest OK ({len(hooking)} hooking cdylib(s) visible; fixture tree fails on the silent one)")
     return 0
+
+
+def read_text(path):
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        return handle.read()
 
 
 def main():

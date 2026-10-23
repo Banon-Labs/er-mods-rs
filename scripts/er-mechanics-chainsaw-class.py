@@ -92,7 +92,7 @@ def hks_eq_constants(fn_name, path=HKS.DEFAULT_FILE):
 def clip_hits(t, sword_arts_id, weapon_id, clip):
     """What a skill clip hits with on this weapon: [(event, frames, judge, behavior row, atk row,
     kind)] for every attack/bullet event, resolved through the weapon's behaviorVariationId the
-    way `PlayerIns::ResolveBehaviorId` 0x140652280 does (`VERIFIED` in er-mechanics-attacks)."""
+    way `PlayerIns::ResolveBehaviorId` 0x140653580 does (`VERIFIED` in er-mechanics-attacks)."""
     tae = ASH.skill_tae(t, sword_arts_id) or {}
     if clip not in tae:
         return None
@@ -126,7 +126,7 @@ def carriers(t, sword_arts_id, weapons):
     innate: weapons whose EquipParamWeapon.swordArtsParamId is the skill, with gemMountType
     (0 = no ash slot, the skill is locked; 2 = an ash can replace it).
     ash: the ash-of-war item that grants the skill (`AshTables.ash_gems`) and every weapon
-    `can_mount` accepts it on (`CanMountGemWithAffinityOnWeapon` 0x140d549d0, `VERIFIED`),
+    `can_mount` accepts it on (`CanMountGemWithAffinityOnWeapon` 0x140d57e70, `VERIFIED`),
     at the gem's defaultWepAttr and the weapon's highest upgrade level."""
     innate = []
     for wid in weapons:

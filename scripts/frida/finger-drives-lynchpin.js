@@ -1,7 +1,7 @@
 // Make a vanilla invasion finger run Seamless's Challenger's Lynchpin action.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The finger and the Lynchpin end in the same place -- `ersc+0x25850`, which reads `[rcx+0x58]` as
 // the session and touches `rcx` nowhere else -- so the only thing the vanilla item is missing is
@@ -43,8 +43,8 @@ const MAX_GOODS_ID = 0x0fffffff;
 const FINGERS = { 102: 'Bloody Finger', 111: 'Festering Bloody Finger', 112: 'Recusant Finger' };
 
 // `EquipParamGoods::GetEntry(out, goodsId)` on 1.17.1, where `out` is
-// `{ int paramId; int pad; _EQUIP_PARAM_GOODS_ST *row; }`. Mapped from 1.16.2 `0x140d39df0` and
-// recorded in `docs/recon/rva-map-1162-to-1170.verified.tsv` as `IDENTICAL-WHOLE`; that row also
+// `{ int paramId; int pad; _EQUIP_PARAM_GOODS_ST *row; }`. Mapped from 1.16.2 `0x140d39df0` with
+// the whole function identical (`IDENTICAL-WHOLE`); that mapping's record also
 // notes this exact address was already called live through Frida and returned correct rows for
 // five ids, including the two `ersc.dll` synthesises at runtime.
 const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3cca0'); // 1.17.1 0x140d3b5b0

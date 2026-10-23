@@ -35,16 +35,16 @@ const DLL_MAIN_SUCCESS: i32 = 1;
 const LOG_FILE_NAME: &str = "er-better-refills.log";
 
 /// `SetItemReplenishState(int *itemId)`, called by the DepositoryDialog toggle handler.
-/// Static RE / 1.16.2 MCP: `FUN_1408d87d0 -> SetItemReplenishState`.
-const SET_ITEM_REPLENISH_STATE_RVA: usize = 0x786430;
+/// Static RE / 1.16.2 MCP: `FUN_1408d87d0 -> SetItemReplenishState`. 2.7.2.0 rva.
+const SET_ITEM_REPLENISH_STATE_RVA: usize = 0x787760;
 /// `IsItemReplanishFromChestRequested()`: reads `GameMan->itemReplanishFromChestRequested`.
-const IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA: usize = 0x67a050;
+const IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA: usize = 0x67b350;
 /// `CS::MoveMapStep::UpdatePlayerInfo(this)`: native post-load player handoff. The function tail
 /// already consumes the vanilla chest-refill request flag, so a post-hook here is the load-complete
 /// point for deaths, map warps, continue/load, and other MoveMapStep-backed loading screens.
-const MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA: usize = 0xafc160;
+const MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA: usize = 0xafd940;
 /// `CS::CSLuaEventScriptImitation::OnEvent_BonfireFirstLvUp(this, proxy)`: first grace activation.
-const BONFIRE_FIRST_LVUP_RVA: usize = 0x59c1e0;
+const BONFIRE_FIRST_LVUP_RVA: usize = 0x59d4e0;
 /// `CS::EquipGameData::GetEquipInventoryData(equipGameData)` -> main `EquipInventoryData*`.
 /// Declared once in `er-game-base`; a second crate now needs the same address.
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
@@ -60,8 +60,8 @@ use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 // This crate deposits into the box on first grace; `er-build-import-runtime` now pulls back out
 // of it and deposits pot-group members to free capacity for an imported build. Two crates, one
 // set of addresses, and a second literal copy of each is exactly the alias drift
-// `check-rva-alias-drift.py` refuses. The 1.16.2 values stay pinned by this crate's own
-// `rvas_match_er_1162_static_re` test, which is now the check that the shared declaration did not
+// `check-rva-alias-drift.py` refuses. The 2.7.2.0 values stay pinned by this crate's own
+// `rvas_match_er_2720_static_re` test, which is now the check that the shared declaration did not
 // move under it.
 use er_game_base::rva::{
     CHANGE_AMOUNT_IN_BOX_RVA, GET_ITEM_INVENTORY_IDX_RVA,
@@ -329,9 +329,8 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
     }
 
     type ShouldReplenishItemFn = unsafe extern "system" fn(usize, *mut i32) -> bool;
-    // Through the 1.17 gate. `base + rva` calls the 1.16.2 address on a build that moved the
-    // function, and nothing refuses it -- the map knowing the new address is no help to a call
-    // that never asks.
+    // Through the build gate. `base + rva` on another patch calls whatever now occupies the
+    // 2.7.2.0 address, and nothing refuses it.
     let Ok(should_replenish_addr) = er_game_base::mem::game_rva_named(
         SHOULD_REPLENISH_ITEM_RVA as u32,
         "SHOULD_REPLENISH_ITEM_RVA",
@@ -409,7 +408,7 @@ unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core:
                     unsafe { std::mem::transmute(address) };
                 unsafe { is_requested() }
             }
-            // No verified address means we cannot know; "no vanilla request pending" is the
+            // Another build means we cannot know; "no vanilla request pending" is the
             // conservative answer, and it is what an unhooked build reports anyway.
             Err(_) => false,
         }
@@ -504,7 +503,7 @@ fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
         unsafe extern "system" fn(i32, usize, usize, i32, bool);
     type UpdateTrophyStatsFn = unsafe extern "system" fn(usize, *mut i32);
 
-    // All seven through the 1.17 gate, resolved together and before any of them runs: this
+    // All seven through the build gate, resolved together and before any of them runs: this
     // function moves items between inventories, so half a deposit is worse than none.
     let (
         Ok(get_main_inventory_addr),
@@ -546,7 +545,7 @@ fn deposit_inventory_item_to_storage(raw_item_id: i32) -> DepositBackResult {
     )
     else {
         return DepositBackResult::Skipped {
-            reason: "inventory transfer functions have no verified address for this build",
+            reason: "inventory transfer functions are 2.7.2.0 addresses and this build is another",
         };
     };
     let get_main_inventory: GetEquipInventoryDataFn =
@@ -696,15 +695,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rvas_match_er_1162_static_re() {
-        assert_eq!(SET_ITEM_REPLENISH_STATE_RVA, 0x786430);
+    fn rvas_match_er_2720_static_re() {
+        assert_eq!(SET_ITEM_REPLENISH_STATE_RVA, 0x787760);
         assert_eq!(REPLANISH_ITEMS_FROM_CHEST_RVA, 0x24dff0);
         assert_eq!(SHOULD_REPLENISH_ITEM_RVA, 0x23d990);
-        assert_eq!(IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA, 0x67a050);
-        assert_eq!(MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA, 0xafc160);
-        assert_eq!(BONFIRE_FIRST_LVUP_RVA, 0x59c1e0);
+        assert_eq!(IS_ITEM_REPLANISH_FROM_CHEST_REQUESTED_RVA, 0x67b350);
+        assert_eq!(MOVE_MAP_STEP_UPDATE_PLAYER_INFO_RVA, 0xafd940);
+        assert_eq!(BONFIRE_FIRST_LVUP_RVA, 0x59d4e0);
         assert_eq!(GET_EQUIP_INVENTORY_DATA_RVA, 0x247b30);
-        assert_eq!(GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, 0x786810);
+        assert_eq!(GET_MAIN_PLAYER_STORAGE_BOX_INVENTORY_RVA, 0x787b40);
         assert_eq!(GET_QUANTITY_BY_ITEM_ID_RVA, 0x24c1b0);
         assert_eq!(GET_ITEM_INVENTORY_IDX_RVA, 0x24c560);
         assert_eq!(CHANGE_AMOUNT_IN_BOX_RVA, 0x24e3d0);

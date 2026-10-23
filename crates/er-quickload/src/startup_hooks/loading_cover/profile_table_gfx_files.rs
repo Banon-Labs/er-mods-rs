@@ -161,7 +161,7 @@ pub(crate) fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
 /// simply retries next tick and never crashes. Idempotent per slot via `STATS_PANEL_TEX_REGISTERED_MASK`.
 /// The visible-surface redirect is a separate step in the Scaleform bind observer, gated on each slot's
 /// registered bit. A texture upload is cheap (no per-frame render), so all 10 slots register with no
-/// GX-queue cost -- unlike driving 10 concurrent CSMenuProfModelRend renderers (the 0x1aeaf05 crash).
+/// GX-queue cost -- unlike driving 10 concurrent CSMenuProfModelRend renderers (the 0x1aee465 crash).
 pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
     if !stats_panel_enabled() {
         return;
@@ -177,10 +177,10 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
     }
     // Both repos non-null == graphics/repos initialized. Bail (retry next tick) if not ready yet; do
     // not consume any register attempt, so boot-time nulls never burn a slot.
-    // Resolved, not added. These are 1.16.2 data addresses and every `.data` global moved on
-    // 1.17; read raw, the pointer that comes back is whatever now occupies the old slot, and it
-    // went into `CreateTpfResCap` and divided by zero 894ms into boot. `safe_read_usize` cannot
-    // catch that -- the read succeeds, it is the answer that is wrong.
+    // Resolved, not added. These are 2.7.2.0 data addresses and every `.data` global moves between
+    // builds; read raw on another build, the pointer that comes back is whatever occupies that
+    // slot there (on 1.17 it went into `CreateTpfResCap` and divided by zero 894ms into boot).
+    // `safe_read_usize` cannot catch that -- the read succeeds, it is the answer that is wrong.
     let Some(tpf_repo_slot) = er_game_base::game_build::resolve_game_address(
         base + GLOBAL_TPF_REPOSITORY_RVA,
         "GLOBAL_TPF_REPOSITORY_RVA",
@@ -205,11 +205,10 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
         return;
     }
-    // Measured, 2026-08-29: called raw, this took the game down ~925ms after load. 0xb83680 is
-    // `CreateTpfResCap` on 1.16.2 and a different function on 1.17, which faulted reading
-    // [null+0x25] -- and the crash's own caller frames were 0xb83680 / 0xb836a0, naming the stale
-    // address outright. The translation exists (0xb83680 -> 0xb84d30), so resolving here does not
-    // cost the feature; it is what makes the feature work on this build at all.
+    // Measured, 2026-08-29: called raw on 1.17 with the 1.16.2 rva, this took the game down
+    // ~925ms after load -- that rva was a different function there, which faulted reading
+    // [null+0x25]. `CREATE_TPF_RESCAP_RVA` is the 2.7.2.0 `CreateTpfResCap` (0xb85260); resolving
+    // refuses it on any other build instead of calling whatever occupies those bytes.
     let Some(create_rescap_address) = er_game_base::game_build::resolve_game_address(
         base + CREATE_TPF_RESCAP_RVA,
         "CREATE_TPF_RESCAP_RVA",
@@ -759,7 +758,7 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
 /// too, and two MinHook instances on one prologue overwrite each other's trampolines -- measured:
 /// the product reported `installed = true` with zero hits for a whole session while every GFx swap
 /// it owns went silently vanilla. Both DLLs now chain through this DLL's single instance via the
-/// `er_effects_union_register` export, whose handler ABI is four `usize` args. The game passes
+/// `er_effects_union_register_2720` export, whose handler ABI is four `usize` args. The game passes
 /// three, so the fourth register is ignored; `flags` is narrowed straight back to the `u32` the
 /// game really passed, so neither the log nor the forwarded call sees a register whose high half
 /// is undefined.

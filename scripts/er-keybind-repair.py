@@ -38,10 +38,10 @@ import sys
 
 PROC = "/proc"
 
-# `qword ptr [0x143d61f08]` in the key-config accessor's caller on 1.17. The global moved with
-# every other `.data` symbol between 1.16.2 and 1.17.0 and did not move again for 1.17.1
-# (docs/recon/rva-map-1162-to-1170.data.tsv). 2.7.2.0 moved `.data` again; the value below is
-# the carried one, checked by `scripts/frida-carry-1172.py` against the instructions that read it.
+# The 2.7.2.0 key-config singleton global, the same rva as `CS_PC_KEY_CONFIG_SINGLETON_RVA` in
+# crates/er-game-base/src/rva.rs. It was `qword ptr [0x143d61f08]` in the key-config accessor's
+# caller on 1.17.0 and 1.17.1; 2.7.2.0 moved `.data` again, and the value below was checked
+# against the instructions that read it in both images when the workspace was ported.
 KEY_CONFIG_GLOBAL_VA = 0x143D64F28  # 1.17.1 0x143D61F08
 
 # Both tables, from `lea rcx,[rcx + idx*0x14 + 0x440]`.

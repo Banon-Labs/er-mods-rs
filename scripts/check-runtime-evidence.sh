@@ -99,9 +99,13 @@ evidence_for() {
 # tool already forgives the latter two on their own; this exists for the diff that also touches
 # `.github/`, which drags the whole answer to "everything".
 #
-# `docs/` is deliberately absent. `crates/er-game-base/build.rs` reads `docs/recon/*.tsv`, so a
-# docs diff can change a DLL, which is why the safe set is a short measured list rather than a
-# guess at what looks harmless.
+# `docs/` is deliberately absent. Crates compile files under it in: `er-invasion-warp-core`
+# embeds its setup guide and example configs with `include_str!`. Those reads sit in test modules
+# today, but nothing here would notice one that moved into shipped code, which is why the safe set
+# is a short measured list rather than a guess at what looks harmless. A docs diff the scope tool
+# can prove compiles into nothing (every path but its exact `BUILD_INPUT_EXCEPTIONS`) already
+# carries forward through `scope_says_no_cargo_work`. (Until the 2.7.2.0 port
+# `crates/er-game-base/build.rs` also compiled `docs/recon/*.tsv` into every product DLL.)
 # Split out so the selftest can assert the two halves separately: the second case below is only
 # meaningful if the first one would have refused on its own.
 scope_says_no_cargo_work() { # scope_says_no_cargo_work <base> <rev>

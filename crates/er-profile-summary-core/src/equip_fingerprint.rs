@@ -36,7 +36,7 @@ pub enum LiveSync {
     /// The slot is not one of the ten. The native refuses these itself; refusing them first is what
     /// makes the refusal attributable to the caller that asked.
     SlotOutOfRange(i32),
-    /// This build has no verified mapping for the native, so nothing was called.
+    /// The running build is not 2.7.2.0, so the native was refused and nothing was called.
     NativeUnmapped,
 }
 

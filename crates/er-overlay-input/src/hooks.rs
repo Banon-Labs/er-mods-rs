@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 
-use er_game_base::game_build::{carry_1171_rva, game_file_version};
+use er_game_base::game_build::{describe_build, is_supported_build};
 use er_game_base::mem::{game_module_base, read_bytes};
 use er_hook::UnionFn;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -12,10 +12,9 @@ use crate::{InputCounters, LogFn, PadRead, pad_after, taking};
 
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
-/// The 1.17.1 rva of "a menu has the mouse", `bool(CSMenuManImp*)`. 1.17 changed its body, so it
-/// has no ledger row to translate through; it is used on 1.17.1 only, after its opening bytes are
-/// compared with `MENU_HAS_MOUSE_1171_PROLOGUE`.
-const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
+/// The 2.7.2.0 rva of "a menu has the mouse", `bool(CSMenuManImp*)`. It is used on 2.7.2.0 only,
+/// after its opening bytes are compared with `MENU_HAS_MOUSE_PROLOGUE`.
+const MENU_HAS_MOUSE_RVA: usize = 0x0076_6b00;
 
 // The cursor predicate.
 
@@ -45,21 +44,19 @@ unsafe extern "system" fn menu_has_mouse_union(
     unsafe { call(menu_man, b, c, d) }
 }
 
-/// Hook the predicate on 1.17.1. Any other build, or other bytes at the address, leaves the cursor
+/// Hook the predicate on 2.7.2.0. Any other build, or other bytes at the address, leaves the cursor
 /// to the game and says so: the menu still opens and still takes the buttons, but the camera turns
 /// with the mouse and the cursor stays hidden. Returns whether the predicate is hooked.
 pub fn install_cursor(log: LogFn) -> bool {
     if CURSOR_HOOKED.load(Ordering::Acquire) {
         return true;
     }
-    // Measured on 1.17.1 and carried from there, not from 1.16.2: `game_rva` has no ledger row
-    // for this function because 1.17 changed its body. The opening bytes are compared below
-    // before anything is hooked.
-    let Some(rva) = carry_1171_rva(MENU_HAS_MOUSE_1171_RVA) else {
+    // Measured on 2.7.2.0. The opening bytes are compared below before anything is hooked.
+    let Some(rva) = is_supported_build().then_some(MENU_HAS_MOUSE_RVA) else {
         log(format_args!(
-            "cursor: no carry of the 1.17.1 menu-mouse predicate to {:?}; the menu gets no free \
-             cursor",
-            game_file_version()
+            "cursor: the menu-mouse predicate was measured on 2.7.2.0 and this build is another \
+             ({}); the menu gets no free cursor",
+            describe_build()
         ));
         return false;
     };
@@ -67,13 +64,14 @@ pub fn install_cursor(log: LogFn) -> bool {
         return false;
     };
     let entry = base + rva;
-    let mut bytes = [0u8; MENU_HAS_MOUSE_1171_PROLOGUE.len()];
+    let mut bytes = [0u8; MENU_HAS_MOUSE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
-    // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
+    // Byte 0 may be a `jmp rel32` another module's detour wrote, which the hub follows; the rest
+    // must match.
     let matches = read
-        && (bytes == MENU_HAS_MOUSE_1171_PROLOGUE
-            || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_1171_PROLOGUE[5..]));
+        && (bytes == MENU_HAS_MOUSE_PROLOGUE
+            || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_PROLOGUE[5..]));
     if !matches {
         log(format_args!(
             "cursor: 0x{entry:x} does not open like the menu-mouse predicate ({bytes:02x?}); not \
@@ -81,19 +79,20 @@ pub fn install_cursor(log: LogFn) -> bool {
         ));
         return false;
     }
-    // SAFETY: a runtime-derived 1.17.1 entry whose bytes were just checked; the handler calls its
+    // Through the elected hub, not this DLL's own union. Every menu DLL answers this predicate, and
+    // each registering on its own union put one MinHook instance per DLL on the entry: on
+    // 2026-10-22 three of four read the pristine prologue before any had written its jump, and only
+    // the last to enable was ever called. One hub, one detour, every handler in its chain.
+    // SAFETY: a runtime-derived 2.7.2.0 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
     match unsafe {
-        er_hook::register_union_hook_runtime_derived_following_arxan(
-            entry,
-            menu_has_mouse_union,
-            &MENU_MOUSE_ORIG,
-        )
+        er_hook::register_shared_hook_following_arxan(entry, menu_has_mouse_union, &MENU_MOUSE_ORIG)
     } {
-        Ok(()) => {
+        Ok(route) => {
             CURSOR_HOOKED.store(true, Ordering::Release);
             log(format_args!(
-                "cursor: menu-mouse predicate at 0x{entry:x} answered while the menu is open"
+                "cursor: menu-mouse predicate at 0x{entry:x} answered while the menu is open \
+                 ({route:?})"
             ));
             true
         }

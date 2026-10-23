@@ -30,20 +30,21 @@ pub const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
 /// propertyController +0x78, size 0x88).
 pub const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
 /// `CS::CSEzMenuViewerPad` predicates that `PropertyNewButtonController`'s should-invoke predicate
-/// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
-/// short-circuits the predicate with no positional test (pad/keyboard confirm); the second is the one
-/// whose result the native code then hit-tests against the row's display object (mouse click).
+/// (1.16.2 `FUN_140974b00`, 2.7.2.0 0x976150) itself calls to classify the dispatched event. The
+/// first short-circuits the predicate with no positional test (pad/keyboard confirm); the second is
+/// the one whose result the native code then hit-tests against the row's display object (mouse
+/// click).
 pub const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 =
     er_game_base::rva::MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA;
 pub const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 =
     er_game_base::rva::MENU_VIEWER_PAD_MOUSE_CLICKED_RVA;
-/// The `CS::GridControl` (0x7c8 bytes, vtable dump `0x142a913b8`) embedded in every
+/// The `CS::GridControl` (0x7c8 bytes, vtable `0x142a96528`) embedded in every
 /// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
-/// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which
+/// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `0x140738f60`) from which
 /// `Item_<row>_<col>` components the movie actually contains:
 ///   `+0xd0` item count, `+0xd4` cursor, `+0xd8` columns, `+0xdc` rows.
-/// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
-/// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
+/// `GridControl::Update` (`0x14073a5f0`) enables up/down only at `rows >= 2` and left/right only at
+/// `cols != 1 || rows < 2`, and the mouse hit test (`0x140737f90`) walks exactly `cols * rows`
 /// cells -- so these two numbers are the whole navigation and hover model of the dialog.
 pub const DIALOG_GRID_CONTROL_A38_OFFSET: usize = 0xa38;
 pub const GRID_CONTROL_COLS_D8_OFFSET: usize = 0xd8;

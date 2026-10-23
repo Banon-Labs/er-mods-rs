@@ -13,8 +13,9 @@ pub struct RequestedSlotIdentity {
 }
 
 /// Own-the-STEPPER idx6 (STEP_GameStepWait) handler: runs in-context after idx10's
-/// placeholder SetState(5) builds the MoveMapStep, whose native update 0x140aff640 ticks
-/// the b80 dispatchers (disp1 0x140afbad0 + disp2 0x140afb880). idx6 does not call the
+/// placeholder SetState(5) builds the MoveMapStep, whose native update 0x140b01000 ticks
+/// the b80 dispatchers (disp1 0x140afd2b0 + disp2 0x140afd060, `B80_DISPATCHER1_RVA` /
+/// `B80_DISPATCHER2_RVA`; 1.16.2 0x140aff640, 0x140afbad0, 0x140afb880). idx6 does not call the
 /// deserialize itself -- it keeps the b78-route armed (re-plant GameMan+0xb78=slot, clear
 /// b72, only while b80 is idle) so the native disp2 b78-route initiates and disp1
 /// deserializes the real slot into GameMan+0xc30. When c30 turns real, idx6 re-targets
@@ -104,7 +105,8 @@ pub unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     pass6();
 }
 
-// (The 0x1407b0cf0 "finished-poll" auto-accept hook was removed: RE showed 0x1407b0cf0 is a
-// "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
+// (The 0x1407b2020 "finished-poll" auto-accept hook (1.16.2 0x1407b0cf0) was removed: RE showed
+// it is a "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
 // connection-error dialog, and writing +0x25e0/+0x25e8 corrupts the dialog (+0x25e8 is the
-// button count). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)
+// button count). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x1409291f0
+// (`MsgBoxRva::OnDecide`; 1.16.2 0x140927ba0).)

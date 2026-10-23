@@ -1,10 +1,9 @@
 //! Undo the two mutilations the native profile feed performs on the ChrAsm it is handed.
 //!
-//! `FUN_140bbe1a0` -- what `PROFILE_RENDERER_SET_MODEL_SOURCE_RVA` names and what the loading
+//! `FUN_140bbfda0` -- what `PROFILE_RENDERER_SET_MODEL_SOURCE_RVA` names and what the loading
 //! portrait's per-slot build kick calls -- is not a plain "install this character's equipment".
-//! Decompiled from the 1.16.2 named dump (and byte-identical on 1.17: `docs/recon/
-//! rva-map-1162-to-1170.needed-verified.tsv` maps `0x140bbe1a0 -> 0x140bbf870` identical-whole,
-//! score 1.000 over 119 instructions), it does exactly three things:
+//! Decompiled from the 1.16.2 named dump (whose names the listing keeps; the 2.7.2.0 body matches
+//! it mnemonic for mnemonic over all 119 instructions), it does exactly three things:
 //!
 //! ```text
 //!   FUN_140bb9850(renderer, source)   -> ChrAsm::Copy(renderer+0x548, source)   // our record
@@ -17,16 +16,16 @@
 //!   EquipProtectorOrAccessory(chrAsm, 3, handle(GetDefaultProtectorParamId(3)))  // legs
 //! ```
 //!
-//! `EquipItemBySpecialIndex` (0x1403bf660) is `EquipItem(chrAsm, GetBySpecialIndex(chrAsm, i), &h)`
+//! `EquipItemBySpecialIndex` (0x1403bf670) is `EquipItem(chrAsm, GetBySpecialIndex(chrAsm, i), &h)`
 //! and `EquipItem` stores `-1` into `equipment_param_ids[slot]` when the handle resolves to nothing,
-//! so those eight calls with a zeroed entry are erasures. `EquipProtectorOrAccessory` (0x1403bf490)
+//! so those eight calls with a zeroed entry are erasures. `EquipProtectorOrAccessory` (0x1403bf4a0)
 //! is `EquipItem(chrAsm, slot + ProtectorHead, h)`, so the last two overwrite the character's own
 //! gauntlets and greaves with the bare-body rows 10200/10300.
 //!
 //! That is the whole bug, both halves of it. The portrait shows no arm or leg armour because the
 //! feed replaced them, and it shows no weapon -- and therefore no handedness -- because the feed
 //! erased them. Neither is a limitation of the render path: the per-frame model-resource request
-//! `FUN_1409e6fb0` resolves armaments as thoroughly as armour (`EquipParamWeapon::GetEntry`,
+//! `FUN_1409e86f0` resolves armaments as thoroughly as armour (`EquipParamWeapon::GetEntry`,
 //! `weaponCategory` tests) and reads handedness straight out of the ChrAsm
 //! (`getSelectedWeaponSlotIndex(&param_2->equipment.armStyle, 0|1)` -> `selectedWeaponSlotIndex`).
 //! Hand it a ChrAsm that still has its weapons and it draws them.
@@ -49,7 +48,7 @@ use crate::portrait_equip::{PORTRAIT_EQUIP_SLOT_HANDS, PORTRAIT_EQUIP_SLOT_LEGS}
 pub const PORTRAIT_EQUIP_ENTRY_COUNT: usize = 22;
 
 /// First `equipment_param_ids` index of the six armament slots -- left/right x primary/secondary/
-/// tertiary. `GetBySpecialIndex` (0x1403be430) returns `selected*2` for `LeftWeaponSlot` and
+/// tertiary. `GetBySpecialIndex` (0x1403be440) returns `selected*2` for `LeftWeaponSlot` and
 /// `selected*2 + 1` for `RightWeaponSlot`, so the pairing is left-even / right-odd from zero.
 pub const PORTRAIT_EQUIP_WEAPON_FIRST: usize = 0;
 pub const PORTRAIT_EQUIP_WEAPON_COUNT: usize = 6;
@@ -147,13 +146,13 @@ pub const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
 pub const PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED: [i32; 4] = [12000000, 3000000, 100022, 99900];
 
 /// `ChrAsmArmStyle` values that mean two-handing. Not a guess and not a name: `CS::ChrIns::
-/// IsTwoHanding` (deobf 0x1403f4930) is the whole function `add EAX,-0x2 ; CMP EAX,0x1 ; SETBE`,
+/// IsTwoHanding` (0x1403f4b60) is the whole function `add EAX,-0x2 ; CMP EAX,0x1 ; SETBE`,
 /// so exactly `{2, 3}` -- `LeftBothHands` and `RightBothHands` -- answer true.
 pub const CHR_ASM_ARM_STYLE_TWO_HANDED: [i32; 2] = [2, 3];
 
 /// Which idle to try on the portrait, given the arm style of the `ChrAsm` it is being built from.
 ///
-/// The stance is not something the model build derives: `FUN_1409e6fb0` reads the equipment array
+/// The stance is not something the model build derives: `FUN_1409e86f0` reads the equipment array
 /// and `selectedSlots`, and the only caller of `PlayerIns::GetArmStyle` in the whole image is
 /// `UpdatePlayerComponents` -- the live player. So a two-handed portrait has to come from the
 /// animation, which is why this is a list of anim ids and not a flag.
@@ -234,7 +233,7 @@ mod tests {
         record
     }
 
-    /// What `FUN_140bbe1a0` leaves behind when handed [`dressed_record`]: weapons erased, hands and
+    /// What `FUN_140bbfda0` leaves behind when handed [`dressed_record`]: weapons erased, hands and
     /// legs replaced with the bare-body rows, head and chest untouched.
     fn after_native_feed() -> [i32; PORTRAIT_EQUIP_ENTRY_COUNT] {
         let mut fed = dressed_record();

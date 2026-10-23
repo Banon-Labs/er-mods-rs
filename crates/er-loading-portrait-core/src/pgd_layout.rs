@@ -4,13 +4,12 @@
 
 use eldenring::cs::{GameDataMan, PlayerGameData};
 
-/// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
-/// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
-/// at +0x08. Corrected 2026-06-17: the prior value 0x4588268 was the wrong global (read garbage:
-/// level=805829232, name="翿"). The real GameDataMan is 0x3d5df38 -- confirmed by fromsoftware-rs
-/// (`rva::game_data_man = 0x3d5df38`, `GameDataMan::main_player_game_data` at struct +0x08) and the
-/// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
-/// sites). Validated against the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
+/// The all-player save data GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d64fb8)`;
+/// PlayerGameData hangs off it at +0x08. Corrected 2026-06-17 on 1.16.2, where an unrelated global
+/// had been read in its place (garbage: level=805829232, name="翿"); the real one was confirmed by
+/// fromsoftware-rs (`GameDataMan::main_player_game_data` at struct +0x08) and by the binary's own
+/// `mov reg,[rip->GameDataMan]; mov reg,[rax+0x8]; test; je` accessor sites, and validated against
+/// the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
 /// GameDataMan -> PlayerGameData (the active/main player's save data) sub-object pointer.
 /// Offsets are bound to the upstream `eldenring` typed layout via `offset_of!` so they
 /// track `fromsoftware-rs` automatically and fail the build if the struct layout drifts
@@ -22,9 +21,10 @@ pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
 /// (`FD4StepTemplateBase::unk48` is at 0x50, and back-solving off it put
 /// `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 for its whole life), so the value is also pinned
 /// to a number the game's own instructions produce: `CS::GameDataMan::~GameDataMan` (1.16.2
-/// 0x140254d40, 1.17 0x140254d10, 1103 bytes) aligns 359/359 with 0x8 among its held offsets, and
+/// 0x140254d40; 1.17 and 2.7.2.0 0x140254d10, 1103 bytes) aligns 359/359 with 0x8 among its held
+/// offsets, and
 /// Ghidra's 1.16.2 type names it `mainPlayerGameData` there. This is the sibling of PlayerGameData
-/// that `check-object-field-offsets-1170.py`'s `offset_of!` guard does not cover, because that
+/// that `check-object-field-offsets.py`'s `offset_of!` guard does not cover, because that
 /// guard matches on `PlayerGameData` alone.
 const _: () = assert!(GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET == 0x08);
 
@@ -49,7 +49,7 @@ pub const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData,
 
 /// `matching_weapon_level` -- the character's highest weapon upgrade level, maintained by the game
 /// for multiplayer matchmaking. Raw `+0..=+25`, NOT a matchmaking bucket: `CS::ChrIns::
-/// CheckWeaponLevelMismatch` (1.16.2 `0x14068fd30`) guards it with `< 0x1a` and clamps to `0x19`,
+/// CheckWeaponLevelMismatch` (`0x140691030`) guards it with `< 0x1a` and clamps to `0x19`,
 /// then feeds it to the `GetMatchingWeaponLevelUpper*` param lookups that do the bucketing.
 ///
 /// Taking this instead of walking equipment or inventory means no item-record stride, no reliance

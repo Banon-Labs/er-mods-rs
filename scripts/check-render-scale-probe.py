@@ -109,7 +109,7 @@ def common_checks(document: dict, now_ms: float, max_age_seconds: float) -> list
         Check(
             "game build",
             document.get("game_build_ok") is True,
-            "the DLL refuses every build but 1.17.1 and 2.7.2.0",
+            "the DLL refuses every build but 2.7.2.0",
         ),
     ]
     written = document.get("written_unix_ms")

@@ -37,9 +37,9 @@ const GRANT_LOOP_CMP_RVA = 0x860f6;   // 48 83 fe 07  cmp rsi, 7
 const GAME = 'eldenring.exe';
 const ERSC = 'ersc.dll';
 
-// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; the 1.17.1 value is
-// in each comment. The 1.17.1 function rvas were below the 0xafefe9 boundary, so 1.16.2 == 1.17.0
-// == 1.17.1 (`scripts/map-rvas-1170-to-1171.py`), each disassembled in eldenring-deobf-1.17.1.bin
+// 2.7.2.0 addresses, carried from 1.17.1; the 1.17.1 value is in each comment. The 1.17.1 function
+// rvas were below the 0xafefe9 boundary, so 1.16.2 == 1.17.0 == 1.17.1, each disassembled in
+// eldenring-deobf-1.17.1.bin
 // first; every function below opens with the same bytes in eldenring-deobf-1.17.2.bin, and every
 // global is read by the same instructions at their 2.7.2.0 places.
 const GAME_DATA_MAN_GLOBAL_RVA = 0x3d64fb8;   // 1.17.1 0x3d61f98, read off CanMainPlayerUseGoods+0xd

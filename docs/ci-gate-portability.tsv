@@ -78,8 +78,8 @@ portable	-	check-panic-reporter-installed.py --selftest	source/AST/text analysis
 portable	-	check-panic-reporter-installed.py	source/AST/text analysis only	source
 portable	-	check-counter-writers.py --selftest	source/AST/text analysis only	source
 portable	-	check-counter-writers.py	source/AST/text analysis only	source
-partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped	addresses
-partial	image-1162,image-1170	check-oracle-singleton-globals.py	still audits ungated module-base arithmetic; the IMAGE half prints that it was skipped	addresses
+partial	image-1172	check-oracle-singleton-globals.py --selftest	the source half and the planted-address controls still assert; the image half prints that it was skipped	addresses
+partial	image-1172	check-oracle-singleton-globals.py	the source half (one agreed value per singleton across crates/) still asserts; the image half prints that it was skipped	addresses
 partial	game-install	ersc_identify.py --selftest	the five synthetic banner assertions run everywhere and say '0 failure(s)'; the four real-image assertions are replaced by 'no ersc.dll at <path>; synthetic checks only'. Measured with ER_GAME_DIR pointed at a directory that does not exist.	runtime-tools
 portable	-	check-fromsoftware-symbols.py --selftest	source/AST/text analysis only	source
 portable	-	check-fromsoftware-symbols.py	source/AST/text analysis only	source
@@ -106,8 +106,8 @@ portable	-	test-ifpe-finalization-proof.py	source/AST/text analysis only	product
 portable	-	check-save-suppression.py --selftest	source/AST/text analysis only	product
 portable	-	check-yk0j-runtime-proof.py --selftest	source/AST/text analysis only	product
 portable	-	check-user-release-package.py	source/AST/text analysis only	product
-blocked	image-1162	check-native-continue-static.py	one line: 'skipped: image is absent'. No byte window is checked	addresses
-blocked	image-1162	check-menu-constructor-static.py	one line: 'skipped: image is absent'. No byte window is checked	addresses
+partial	image-1172	check-native-continue-static.py	the crate-constant half (18 crate spellings of the proven addresses) still runs; the byte windows print 'skipped: ... is absent'	addresses
+blocked	image-1172	check-menu-constructor-static.py	one line: 'skipped: ... is absent'. No byte window is checked	addresses
 portable	-	check-no-rva-zero.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-no-rva-zero.py	source/AST/text analysis only	addresses
 portable	-	check-env-gate-comments.py	source/AST/text analysis only	policy
@@ -176,47 +176,31 @@ portable	-	check-stale-rva-calls.py --selftest	source/AST/text analysis only	add
 portable	-	check-stale-rva-calls.py	source/AST/text analysis only	addresses
 portable	-	check-expression-constants.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-expression-constants.py	source/AST/text analysis only	addresses
-blocked	rva-map-tsv	select-needed-1170-rows.py --selftest	selects rows OUT OF the gitignored 128k-row .pdata alignment	addresses
-portable	-	map-data-rvas-1162-to-1170.py --selftest-source	source/AST/text analysis only	addresses
-portable	-	check-no-stale-callsite-rva.py --selftest	source/AST/text analysis only	addresses
-portable	-	check-no-stale-callsite-rva.py	source/AST/text analysis only	addresses
-portable	-	derive-callsite-1170.py --selftest	source/AST/text analysis only	addresses
+portable	-	rva_role.py --selftest	source/AST/text analysis only	addresses
+portable	-	rva_usage.py	source/AST/text analysis only	addresses
 portable	-	check-hook-log-sink.py --selftest	source/AST/text analysis only	source
 portable	-	check-hook-log-sink.py	source/AST/text analysis only	source
-blocked	image-1162,image-1170,uv	audit-1170-hook-targets.py --selftest	FileNotFoundError on the 1.17 image before any assertion	addresses
+blocked	image-1172,uv	audit-hook-targets.py --selftest	asserts the empty-allowlist refusal, then exits 1 with 'selftest needs the image' before any byte fixture	addresses
 portable	-	check-decode-extent-bounds.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-decode-extent-bounds.py	source/AST/text analysis only	addresses
-blocked	uv	verify-prologue-masks-1170.py --selftest	re-derives every mask with capstone; os.execvp('uv') raises before the first assertion	addresses
-portable	-	verify-aob-patterns-1170.py --selftest	source/AST/text analysis only	addresses
-portable	-	verify-prologue-coverage-1170.py --selftest	source/AST/text analysis only	addresses
-portable	-	verify-prologue-coverage-1170.py --section	source/AST/text analysis only	addresses
-partial	image-1162,image-1170	classify-1170-entry-kind.py --selftest	synthetic half reports '0 failure(s)'; the image-backed half prints SKIPPED	addresses
-blocked	image-1162,image-1170	classify-1170-entry-kind.py --fail-on-mid	one line: 'entry-kind classification skipped'. Nothing is classified	addresses
-blocked	image-1162	check-leaf-extent-pdata-coverage.py	one line: 'skipped: missing image'. No extent is covered. (Measured to survive a missing uv, so uv is not listed.)	addresses
-blocked	image-1162,image-1170	check-no-chained-continuation-rows.py --selftest	says it itself: 'NOT A PASS: no row was checked'	addresses
-blocked	image-1162,image-1170	check-no-chained-continuation-rows.py	says it itself: 'NOT A PASS: no row was checked'	addresses
-portable	-	check-no-duplicate-ledger-rows.py --selftest	source/AST/text analysis only	docs
-portable	-	check-no-duplicate-ledger-rows.py	source/AST/text analysis only	docs
-portable	-	check-ledger-section-kind.py --selftest	source/AST/text analysis only	docs
-portable	-	check-1170-translation-collisions.py --selftest	source/AST/text analysis only	addresses
-portable	-	check-1170-translation-collisions.py	source/AST/text analysis only	addresses
-portable	-	check-double-resolved-hook-targets.py --selftest	source/AST/text analysis only	addresses
-blocked	image-1162,image-1170,rva-map-tsv	verify-data-rvas-by-rtti.py --selftest	one line: 'SKIP: missing <image>'. No RTTI is verified. rva-map-tsv added 2026-09-01: without the whole-image map TRACE_MENU_TASK_UPDATE_TABLE_RVA's FNPTR anchor cannot be computed, the row falls to NO-ANCHOR and the UNANCHORED pin fails -- a false red, not a finding. The plain run below does not need it	addresses
-blocked	image-1162,image-1170	verify-data-rvas-by-rtti.py	one line: 'SKIP: missing <image>'. No RTTI is verified	addresses
-blocked	image-1162,image-1170	map-rvas-1162-to-1170.py --selftest	exits 1 with 'missing image: <path>' before the selftest runs; nothing is asserted	addresses
-blocked	ghidra-8765,ghidra-8767	confirm-1170-pair-in-dumps.py --selftest	one line: 'skipped: no <build> Ghidra MCP daemon on :<port>'. No pair is confirmed or refused	addresses
-blocked	image-1162,!uv	check-singleton-field-offsets.py --selftest	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
-blocked	image-1162,!uv	check-singleton-field-offsets.py	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
-blocked	image-1162,image-1170	check-object-field-offsets-1170.py --selftest	refuses to run: a green selftest without the images would be vacuous	addresses
-partial	image-1162,image-1170	check-object-field-offsets-1170.py	73 constant pins and 9 write-reach bounds still recomputed; 'image: SKIPPED'	addresses
-partial	image-1162,image-1170	audit-name-derived-offsets.py --selftest	60 kinds rows and 43 OS-ABI values still checked; only the lea known-answer test is skipped	addresses
-blocked	generated-address-map	audit-1170-coverage-inventory.py --selftest	'no generated address_map_1170.rs to compare against; build er-game-base first'	addresses
-portable	-	check-detour-rva-coverage.py --selftest	source/AST/text analysis only	addresses
-portable	-	check-detour-rva-coverage.py	source/AST/text analysis only	addresses
+blocked	uv	verify-prologue-masks.py --selftest	re-derives every mask with capstone; os.execvp('uv') raises before the first assertion	addresses
+portable	-	verify-aob-patterns.py --selftest	source/AST/text analysis only	addresses
+partial	image-1172	verify-aob-patterns.py	sync and the needle source half still run; patterns, the needle image half and prologues print 'SKIPPED -- ... is absent'	addresses
+portable	-	verify-prologue-coverage.py --selftest	source/AST/text analysis only	addresses
+portable	-	verify-prologue-coverage.py --section	source/AST/text analysis only	addresses
+partial	image-1172	classify-entry-kind.py --selftest	synthetic half reports '0 failure(s)'; the image-backed half prints SKIPPED	addresses
+blocked	image-1172	classify-entry-kind.py --fail-on-mid	one line: 'entry-kind classification skipped'. Nothing is classified	addresses
+partial	image-1172	verify-data-rvas-by-rtti.py --selftest	the synthetic controls and the source half (every pinned definition at its rva) still run; the image half prints 'image half SKIPPED'	addresses
+partial	image-1172	verify-data-rvas-by-rtti.py	the source half still runs ('source half only'); the image half prints 'image: SKIPPED'	addresses
+blocked	image-1172,!uv	check-singleton-field-offsets.py --selftest	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
+blocked	image-1172,!uv	check-singleton-field-offsets.py	says it itself: 'SKIPPED (NOT A PASS) ... no field offset was checked at all'	addresses
+blocked	image-1172	check-object-field-offsets.py --selftest	refuses to run: a green selftest without the image would be vacuous	addresses
+partial	image-1172	check-object-field-offsets.py	78 constant pins and 9 write-reach bounds still recomputed; 'image: SKIPPED'	addresses
+partial	image-1172	audit-name-derived-offsets.py --selftest	57 kinds rows and 43 OS-ABI values still checked; only the lea known-answer test is skipped	addresses
+partial	image-1172	check-detour-rva-coverage.py --selftest	the source half and the allowlist checks still run; the image half prints 'skipped the image half: ... absent' (it re-execs under uv for capstone only when the image is present)	addresses
+partial	image-1172	check-detour-rva-coverage.py	every constant detour still checked against the allowlist; the image half prints 'skipped the image half: ... absent'	addresses
 portable	-	check-hook-batch-abort.py --selftest	source/AST/text analysis only	source
 portable	-	check-hook-batch-abort.py	source/AST/text analysis only	source
-blocked	rva-map-tsv	check-native-call-rva-coverage.py --selftest	its ledger pin names the gitignored .pdata alignment	addresses
-blocked	rva-map-tsv	check-native-call-rva-coverage.py	its ledger pin names the gitignored .pdata alignment	addresses
 blocked	game-install	check-game-version-supported.py --selftest	'PE reader not exercised' -- the selftest reads the INSTALLED exe, it has no synthetic PE	addresses
 blocked	game-install	check-game-version-supported.py	'SKIP: no game at ...' -- the installed build is the entire subject	addresses
 partial	game-install	check-ersc-version-supported.py --selftest	both parsers still assert on synthetic banners and the real constant; 'installed reader not exercised'	product
@@ -229,12 +213,10 @@ portable	-	test-frida-evidence-wiring.py	drives run() against a stubbed device i
 portable	-	er-launch-gate.py --selftest	source/AST/text analysis only	runtime-tools
 blocked	game-install	diff-regulation-params.py --effects-json	exits 2 on purpose: 'could not look' is not evidence the effects.json ids agree	product
 blocked	game-install	check-starting-classes.py	exits 2 on purpose: the starting-class table drifts silently	product
-portable	-	audit-1170-readiness.py --selftest	source/AST/text analysis only	addresses
-portable	-	audit-1170-readiness.py --check	source/AST/text analysis only	addresses
-portable	-	audit-1170-gate-bypass.py --selftest	source/AST/text analysis only	addresses
-portable	-	audit-1170-gate-bypass.py --baseline	source/AST/text analysis only, compared against the committed baseline JSON beside it	addresses
 portable	-	audit-ungated-image-writes.py --selftest	source/AST/text analysis only	addresses
 portable	-	audit-ungated-image-writes.py	source/AST/text analysis only	addresses
+portable	-	audit-ungated-game-addresses.py --selftest	source/AST/text analysis only; reads crates/**/*.rs and its tracked baseline	addresses
+portable	-	audit-ungated-game-addresses.py	source/AST/text analysis only; reads crates/**/*.rs and its tracked baseline	addresses
 portable	-	check-test-target-coverage.py --selftest	synthetic fixture workspaces in tmp plus a source-only read of the live crates	suite
 portable	-	check-test-target-coverage.py --prove-selftest-catches-regression	source/AST/text analysis only	suite
 portable	-	check-test-target-coverage.py	source/AST/text analysis only	suite
@@ -271,7 +253,7 @@ portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	ad
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses
 portable	-	er_run_lib.py	source/AST/text analysis only	runtime-tools
 blocked	git-baseline	er-dll-closure.py --selftest	calls git merge-base origin/main HEAD; on a shallow clone three --with/--without cases FAIL rather than skip	suite
-portable	-	er-change-scope.py --selftest	pure: reads the build scripts, check.sh and scripts/ only -- no git baseline, unlike the closure tool above	suite
+portable	-	er-change-scope.py --selftest	pure: reads the build scripts, check.sh, scripts/ and the include!-family literals in crates/**/*.rs -- no git baseline, unlike the closure tool above	suite
 partial	build-artifact	er-dll-provenance.py --selftest	10 closure cases still run; 'fingerprint checks not exercised'	product
 blocked	crash-logging-dll	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest -- named by FILE, not by 'some dll exists': a partly-built tree passed build-artifact and the gate then exited 1 about the missing build	cargo-build
 partial	save-corpus	er-pick-save.py --selftest	argument and size-invariant cases still PASS; 'skip no save corpus found'	runtime-tools

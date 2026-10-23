@@ -51,7 +51,7 @@ GATES: tuple[tuple[str, str, tuple], ...] = (
     ("check-prologue-bytes", "rust_files", (REPO_ROOT,)),
     # Not a bare enumerator: this one's file selection lives inside `repo_spec_files`, which
     # returns `{path: spec_count}`. Iterating it yields the paths, which is what is compared.
-    ("verify-prologue-coverage-1170", "repo_spec_files", ()),
+    ("verify-prologue-coverage", "repo_spec_files", ()),
 )
 
 # A declared coverage change: `{gate: (top-level segments the base enumerated and the working

@@ -255,9 +255,9 @@ pub(crate) fn input_trace_record_real_poll(state: *const u8) {
 fn game_input_accept_now() -> bool {
     const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
     if let Ok(base) = game_module_base() {
-        // Resolved for the running build: DLUID moved 0x485dc18 -> 0x4861d28 on 1.17, and the raw
-        // read succeeded against the old slot -- so the input-accept byte was being taken from
-        // whatever now lives there, at +0x88d into it.
+        // Resolved for the running build (2.7.2.0 DLUID global 0x4864d48): a raw read on another
+        // build would succeed against whatever lives at that slot and take the input-accept byte
+        // from +0x88d into it.
         let dluid = er_game_base::mem::read_global_ptr(
             base,
             RuntimeGlobalRva::DluidInputManager as usize,
@@ -288,7 +288,7 @@ struct TraceSem {
     player: bool,
     world_chr_man: usize,
     main_player: usize,
-    /// WorldChrMan+0x1e524 == 2 (FUN_140508d30): world genuinely stable/ready (RE-verified oracle).
+    /// WorldChrMan+0x1e524 == 2 (1.16.1 dump FUN_140508d30): world genuinely stable/ready (RE-verified oracle).
     world_stable: bool,
     /// MoveMap destination BlockId (GameMan+0x14 moveMapStepBlockId, GameMan+0xac8 loadTargetMapId);
     /// -1/0xffffffff = no destination -> STEP_MoveMap_Update skips the load and reverts to title.
@@ -490,7 +490,7 @@ fn input_trace_semaphores() -> TraceSem {
         (-1, -1, -1, -1, -1, -1, -1, -1)
     };
     // Finalize substate (MoveMapStep+0x12a): the inner sub-progression of the move map (18) step,
-    // driven by the advancer FUN_140afa7c0. The warm reload parks at 7 (REMO/SAVE-drain wait). Read the
+    // driven by the advancer (0x140afbeb0; 1.16.1 dump FUN_140afa7c0). The warm reload parks at 7 (REMO/SAVE-drain wait). Read the
     // game-task-published switch-oracle atomic, not input_trace's own mms_ptr: at mms18 (in-world) the
     // title-owner-based mms_ptr resolution here goes stale and misreads 0x12a as 0, disagreeing with
     // the loading-bar/telemetry value (proven 2026-07-19). The atomic is the live MoveMapStep read.

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Recover MSVC RTTI class names -> vtable addresses from a flat ELDEN RING image.
 
-Why this exists. The Ghidra dump served on :8767 is the installed build (1.17) and has zero class
-names -- `searchFunctionsByName` answers 0 for GridControl, MenuWindow and CSMenuMan alike -- so
-every name-driven lookup has had to detour through the 1.16.2 dump on :8765 and then translate the
-address back. That detour is the single reason anything in this repo still references 1.16.2, and it
-is avoidable: the RTTI is present in the 1.17 image (`.?AVGridControl@CS@@` sits at 0x143c93728),
-it was simply never parsed, because `scripts/ghidra/import-runtime-gzf.sh` imports with
-`-noanalysis` on the reasoning that a .gzf carries its own analysis. That reasoning held for the
-curated 1.16.2 export and does not hold for this file.
+Why this exists. The installed build is eldenring.exe 2.7.2.0, whose flat image is
+`eldenring-deobf-1.17.2.bin`, the default here. No Ghidra dump of that build has class names: the
+dump on :8767 is 1.17.0 and has none (`searchFunctionsByName` answers 0 for GridControl, MenuWindow
+and CSMenuMan alike), and the named dump on :8765 is 1.16.2. The RTTI is in the image itself
+(`.?AVGridControl@CS@@` sits at 0x143c96738 on 2.7.2.0), so parsing it answers name -> vtable for
+the running build without going through an older one.
 
 Parsing it here rather than re-running Ghidra's analyzer is a minutes-vs-hours choice on a 94 MB
 image, and it produces exactly the artifact the lookups need: a name -> vtable table for the build
@@ -30,7 +28,24 @@ import re
 import struct
 import sys
 
-DEFAULT_IMAGE = os.environ.get("ER_DEOBF_BIN") or os.environ.get("ER_DEOBF_IMAGE") or "eldenring-deobf-1.17.bin"
+def find_image(name: str = "eldenring-deobf-1.17.2.bin") -> str:
+    """`ER_DEOBF_BIN` (or `ER_DEOBF_IMAGE`) when set, else `name` at the repo root or the nearest
+    directory above it. The images are gitignored, so a linked worktree under `.worktrees/` reads
+    the main checkout's."""
+    env = os.environ.get("ER_DEOBF_BIN") or os.environ.get("ER_DEOBF_IMAGE")
+    if env:
+        return env
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    d = root
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(root, name)
+        d = os.path.dirname(d)
+
+
+DEFAULT_IMAGE = find_image()
 IMAGE_BASE = 0x140000000
 COL_SIGNATURE_X64 = 1
 TYPE_DESCRIPTOR_NAME_OFFSET = 0x10
@@ -38,7 +53,7 @@ TYPE_DESCRIPTOR_NAME_OFFSET = 0x10
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--image", default=DEFAULT_IMAGE, help="flat de-Arxan'd image (default: $ER_DEOBF_BIN)")
+    ap.add_argument("--image", default=DEFAULT_IMAGE, help="flat de-Arxan'd image (default: $ER_DEOBF_BIN, else eldenring-deobf-1.17.2.bin)")
     ap.add_argument("--base", type=lambda v: int(v, 0), default=IMAGE_BASE)
     ap.add_argument("--filter", default="", help="only report classes whose name contains this substring")
     ap.add_argument("--selftest", action="store_true", help="assert a known class resolves, then exit")

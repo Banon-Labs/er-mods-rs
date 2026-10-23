@@ -26,7 +26,7 @@
 // Every nulled slot is restored at the epilogue and again in dispose(). No timers: phases advance
 // on refreshes only.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. The offsets
+// Addresses are 2.7.2.0, carried from 1.17.1. The offsets
 // into the refresh are unchanged: its whole body (0xf8 bytes) is the same in both images apart
 // from rel32/rip displacements, and the slot reads +0x754/+0x755 are in that body.
 'use strict';

@@ -50,10 +50,10 @@ stateInfo` the same way. Read the decompiled name as `isDisableNetSync` everywhe
 
 Every address is labelled with the image it came from. The 1.16.2 dump (MCP daemon on `:8765`,
 program `ermaporch1162`) is the only one with symbols; `eldenring-deobf.bin` is the same build at
-the same addresses (shift 0). The installed game is 1.17.1 (`eldenring-deobf-1.17.1.bin`); those
-addresses are carried with `docs/recon/rva-map-1162-to-1170.functions.tsv` then
-`scripts/map-rvas-1170-to-1171.py`, and the two that matter are byte-proven and `.pdata`-proven
-rather than merely mapped.
+the same addresses (shift 0). The installed game was 1.17.1 (`eldenring-deobf-1.17.1.bin`) when
+this was written; those addresses were carried with the 1.16.2 -> 1.17 function map and then the
+1.17.0 -> 1.17.1 `+0x70` rule (both deleted with the address carry on 2026-10-23), and the two
+that matter are byte-proven and `.pdata`-proven rather than merely mapped.
 
 | role | 1.16.2 | 1.17.1 |
 |---|---|---|
@@ -409,7 +409,7 @@ FromSoftware.
   `bash scripts/ghidra/mcp-up-1162.sh`, queried with `python3 scripts/ghidra/mcp_query.py`.
   The 1.17 dump on `:8767` was not needed: everything here is named 1.16.2 code that survives to
   1.17.1 byte-identically, which the byte scans prove more cheaply than a second dump would.
-- Address carrying: `docs/recon/rva-map-1162-to-1170.functions.tsv` for 1.16.2 to 1.17.0, then
-  `scripts/map-rvas-1170-to-1171.py`. Both key results were then independently confirmed by byte
-  pattern and by 1.17.1 `.pdata` function starts, so they do not rest on the map.
+- Address carrying: the 1.16.2 -> 1.17 function map for 1.16.2 to 1.17.0, then the 1.17.0 ->
+  1.17.1 `+0x70` rule (both since deleted). Both key results were then independently confirmed by
+  byte pattern and by 1.17.1 `.pdata` function starts, so they do not rest on the map.
 - No game launch. Nothing here needed one.

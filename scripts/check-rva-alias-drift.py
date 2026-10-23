@@ -142,6 +142,23 @@ IMAGE_BASE = 0x140000000
 RVA_MIN = 0x100000
 RVA_MAX = 0x8000000
 
+# Tables that hold addresses by value as licences, not as declarations of what an address is.
+# `DETOUR_ALLOWLIST` (2026-10-23) is the set of 2.7.2.0 rvas a constant detour may target: 535 bare
+# hex rows, one per detour target, each of which is also declared under its own name in the crate
+# that hooks it -- by design, because the list is a second, independent claim ("measured, a safe
+# entry") rather than the address's identity. Read as declarations, every row became a duplicate
+# group and the gate reported 400-odd "aliases" that no centralisation could remove. Keyed by file
+# and symbol, so the same name anywhere else is still read, and the selftest fails if the entry
+# stops matching a live table of at least `LICENCE_TABLE_FLOOR` rows -- an exemption that guards
+# nothing is a hole, not a rule.
+LICENCE_TABLES = {
+    ("crates/er-game-base/src/detour_allowlist.rs", "DETOUR_ALLOWLIST"): (
+        "the 2.7.2.0 detour allowlist: resolve_detour_address binary-searches it, and each row is "
+        "declared again under its feature's name where it is hooked"
+    ),
+}
+LICENCE_TABLE_FLOOR = 500
+
 # The whole MATCHER this file used to be, frozen as a literal so `--selftest` can prove the
 # replacement is load-bearing. Every case below is asserted to be invisible to this and visible to
 # the resolver; a case both see would pass on the broken gate and prove nothing.
@@ -186,7 +203,7 @@ DEC_LITERAL = re.compile(r"(?<![\w.])[0-9][0-9_]*(?![\w.])")
 
 # `FOO_RVA`, `GAME_HEAP_ALLOC_VA`, `CS_INGAME_PAD_TYPEID_RVAS`, `MenuTraceRva::MenuJobWait`.
 #
-# Tokens, not a SUBSTRING. The repo's own selector (`scripts/select-needed-1170-rows.py`) matches
+# Tokens, not a SUBSTRING. The repo's old 1.17 ledger selector (deleted 2026-10-23) matched
 # `[A-Z0-9_]*RVA[A-Z0-9_]*`, which also matches OBSE-RVA-TION and RESE-RVA-TION; manufacturing a
 # fresh false positive while removing one would be a poor trade. CamelCase is split as well,
 # because the enum spelling puts the marker in the owner (`MenuTraceRva`), not in the variant.
@@ -262,6 +279,8 @@ def _walk(
         if not (hex_literals or decimal_literals):
             continue
         rel = os.path.relpath(decl.path, str(root)).replace(os.sep, "/")
+        if (rel, decl.symbol) in LICENCE_TABLES:
+            continue
         for value in decl.value or ():
             rva = value - IMAGE_BASE if value >= IMAGE_BASE else value
             if not (RVA_MIN <= rva < RVA_MAX):
@@ -472,6 +491,47 @@ def selftest() -> int:
                 "sites, so this case proves nothing -- pick a spelling it genuinely could not read"
             )
 
+    # The licence table. `DETOUR_ALLOWLIST` repeats every detour target by value, so read as a
+    # declaration it would make each one a duplicate group. The exemption is keyed by file and
+    # symbol: the same table spelled anywhere else is still a declaration, and so is a named
+    # constant beside the real table.
+    licence_path, licence_symbol = next(iter(LICENCE_TABLES))
+    licence = [
+        ("the detour allowlist repeating a named address is not a duplicate", 0, {
+            licence_path: f"pub(crate) const {licence_symbol}: [u32; 2] = [0x3d5df38, 0x3d6b7b0];\n",
+            "crates/b/src/lib.rs": "const FOO_RVA: usize = 0x3d5df38;\n",
+        }),
+        ("...but the same table in another file is", 2, {
+            "crates/other/src/lib.rs": f"pub(crate) const {licence_symbol}: [u32; 1] = [0x3d5df38];\n",
+            "crates/b/src/lib.rs": "const FOO_RVA: usize = 0x3d5df38;\n",
+        }),
+        ("...and two named constants beside the table still are", 2, {
+            licence_path: f"pub(crate) const {licence_symbol}: [u32; 1] = [0x3d5df38];\n",
+            "crates/a/src/lib.rs": "const FOO_RVA: usize = 0x3d5df38;\n",
+            "crates/b/src/lib.rs": "const BAR_RVA: usize = 0x3d5df38;\n",
+        }),
+    ]
+    for label, expected, files in licence:
+        total = sum(len(v) for v in duplicates(sites_of(files)).values())
+        if total != expected:
+            failures.append(f"{label}: expected {expected} duplicate sites, got {total}")
+    # An exemption that matches no live table guards nothing and would hide a rename.
+    live_index = rva_symbols.index(str(REPO_ROOT / "crates"))
+    for (path, symbol), _reason in LICENCE_TABLES.items():
+        rows = {
+            value
+            for decl in live_index.decls
+            if decl.symbol == symbol
+            and os.path.relpath(decl.path, str(REPO_ROOT)).replace(os.sep, "/") == path
+            for value in (decl.value or ())
+        }
+        if len(rows) < LICENCE_TABLE_FLOOR:
+            failures.append(
+                f"LICENCE_TABLES names {symbol} in {path}, which holds {len(rows)} value(s) on this "
+                f"tree (floor {LICENCE_TABLE_FLOOR}); the exemption no longer matches the table it "
+                "was written for"
+            )
+
     # The alarm on the blind spot the HEX rule creates. Reading hex only is right for every
     # declaration in this tree today -- measured, not assumed -- but it is silent by construction
     # the day somebody writes a real address in decimal, and silence is how instrument after
@@ -505,7 +565,7 @@ def selftest() -> int:
                 "const REFUSAL_MILESTONES: [u64; 8] = [100, 1_000, 10_000_000];\n",
         }),
         # Why the alarm splits name tokens instead of searching for the substring `RVA` the way
-        # scripts/select-needed-1170-rows.py does: OBSE-RVA-TION contains it, and a fresh false
+        # the deleted 1.17 ledger selector did: OBSE-RVA-TION contains it, and a fresh false
         # positive would be a poor trade for the one being removed.
         ("a name that merely CONTAINS the letters is not address-named", 0, {
             "crates/a/src/lib.rs": "const OBSERVATION_WINDOW_NS: u64 = 10_000_000;\n",

@@ -418,8 +418,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // tick already runs degraded fail-open and fires native saves without a bypass token.
     // Spawned on its own thread (no hook work inside DllMain); when enabled, the attach-time
     // spawn beats the boot-time system-slot save (proven by the standalone
-    // er-save-disable's validated run). No product code hooks 0xe6fb50/0xe6e430/0x67a980
-    // elsewhere, so there is no ordering constraint; the product only *calls* 0xe6f200 as a
+    // er-save-disable's validated run). No product code hooks 0xe730b0/0xe71990/0x67bc80 (2.7.2.0)
+    // elsewhere, so there is no ordering constraint; the product only *calls* 0xe72760 as a
     // finalizer, which is compatible. GraphicsConfig.xml is untouched: suppression sits on
     // the SL container funnel only. Never load er_save_disable.dll together with this DLL in
     // one me3 profile -- two MinHook instances would double-detour the same prologues.
@@ -434,7 +434,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         // `install`, which arms suppression. So in the default configuration, which is the one every
         // user runs, `oracle_save_dispatch_last_decline_reason` read `unsampled`: the single field
         // that names why the lane refused a save was unavailable precisely where the refusal
-        // matters. `GameMan+0xb72`/`+0xb73` latching after a reload is the `FUN_140afa6d0` case-7
+        // matters. `GameMan+0xb72`/`+0xb73` latching after a reload is the advancer's (1.16.2 `FUN_140afa6d0`) case-7
         // blocker, and without this the only way to explain it is to guess.
         START_SAVE_OBSERVERS.call_once(spawn_save_observers_only);
     }

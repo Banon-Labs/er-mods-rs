@@ -3,8 +3,8 @@
 //!
 //! # The step
 //!
-//! R3 in `CS::GaitemSelectDialog` calls a 39-byte function (1.16.2 `0x1409970c0`, 1.17.1
-//! `0x140998260`, found by a write watchpoint on the mode it changes):
+//! R3 in `CS::GaitemSelectDialog` calls a 39-byte function (2.7.2.0 `0x140998710`, found by a
+//! write watchpoint on the mode it changes):
 //!
 //! ```text
 //! r8 = *(u64*)(this+0xb48)          ; pane count, 3 for the item list
@@ -14,8 +14,8 @@
 //! ```
 //!
 //! `apply` calls each pane's `vtable+0x10(pane, &shown)` with `shown = (i == index)`. The detour
-//! replaces the step with the same arithmetic over `count + 1`. It has no translation row, so it is
-//! found by its bytes in the running image, and `apply` is read out of its own tail jump.
+//! replaces the step with the same arithmetic over `count + 1`. It is found by its bytes in the
+//! running image, and `apply` is read out of its own tail jump.
 //!
 //! # View 3
 //!
@@ -27,11 +27,11 @@
 //! brought back on the next view. Alpha and not `Visible`, because a hidden item list stops taking
 //! R3.
 //!
-//! R3's enable predicate (1.16.2 `0x140995990`, 1.17.1 `0x140996b30`) returns false unless
+//! R3's enable predicate (2.7.2.0 `0x140996fe0`) returns false unless
 //! `0 <= mode < count`, which disables R3 in view 3; it is detoured to return true there.
 //!
-//! `MenuWindowJob::Run` (1.16.2 `0x1407ad1c0`) names the item list's window (`job+0x130`) and notices
-//! when it closes in view 3. It is shared with er-quit-menu and the product, so it is registered
+//! `MenuWindowJob::Run` (2.7.2.0 `0x1407ae4f0`) names the item list's window (`job+0x130`) and
+//! notices when it closes in view 3. It is shared with er-quit-menu and the product, so it is registered
 //! through the hook union.
 //!
 //! # Drawing

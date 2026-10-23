@@ -2,9 +2,9 @@
 //!
 //! # The crash
 //!
-//! The Scaleform CBV_SRV_UAV descriptor-ring advance, `advance(ring, count)` (1.16.2 rva
-//! `0xec9530`, 1.17.1 `0x140ecb3a0`; `IDENTICAL-WHOLE` between them), faults on a ring whose
-//! current page `ring+0x38` is null. That is the state the ring's reset (`0x140ec9470`) leaves:
+//! The Scaleform CBV_SRV_UAV descriptor-ring advance, `advance(ring, count)` (2.7.2.0 rva
+//! `0xecca90`; the same body as 1.16.2 `0xec9530`), faults on a ring whose
+//! current page `ring+0x38` is null. That is the state the ring's reset (`0x140ecc9d0`) leaves:
 //! it destroys the current page, nulls `+0x38` and drains the free list, and leaves the cursor and
 //! the CPU/GPU handles where they were. The fault is on the new-page branch only:
 //!
@@ -14,7 +14,7 @@
 //! +0x90: LEA R8,[RSP+0x30]
 //! +0x95: MOV [RSP+0x30],RSI                                      ; RSI is zero here
 //! +0x9a: LEA RDX,[RIP+..]
-//! +0xa1: MOV RCX,[RAX+0x20]                                      ; faults (crash rva 0xec95d1)
+//! +0xa1: MOV RCX,[RAX+0x20]                                      ; faults (crash rva 0xeccb31)
 //! +0xa5: MOV RAX,[RCX]; CALL [RAX+0x38]                          ; page heap -> GetDevice
 //! ```
 //!
@@ -34,7 +34,7 @@
 //!   is empty and circular, so the tail is the ring itself. The reuse branch at `+0xe2` would
 //!   unlink the ring from its own list, store the ring as its own current page and call through
 //!   `[ring+0x20]` -- the capacity integer -- as a heap object.
-//! * Otherwise it calls `0x140ec97a0(ring, device)` with the device the skipped call would have
+//! * Otherwise it calls `0x140eccd00(ring, device)` with the device the skipped call would have
 //!   produced, here null. That function zeroes `+0x50`/`+0x58` before it tests the device and
 //!   returns null without creating a heap, so the ring stays without a page and the next caller
 //!   reads a zero CPU handle and hands it to `CreateShaderResourceView`.
@@ -54,7 +54,7 @@
 //!
 //! The diverted call leaves the ring exactly as the entry guard did except for the cursor, which
 //! the function had already advanced at `+0x0b`. That keeps every later call on the page-roll
-//! branch until the ring's init (`0x140ec93e0`) gives it a page and resets the cursor.
+//! branch until the ring's init (`0x140ecc940`) gives it a page and resets the cursor.
 //!
 //! The 14 bytes ilhook overwrites at `+0x8c` are the three instructions above, none of them
 //! RIP-relative. No branch in the function lands inside `+0x8c..+0x9a`: every jump target in the
@@ -68,9 +68,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use er_telemetry_core::counters::SCALEFORM_DESC_ADVANCE_INSTALLED;
 use er_telemetry_core::counters::SCALEFORM_DESC_PROVIDER_NULL_HITS;
 
-/// 1.16.2 rva of the descriptor-ring advance, the `.pdata` function containing both hook
-/// addresses. 1.17.1 `0x140ecb3a0`.
-pub(crate) const SCALEFORM_DESC_ADVANCE_RVA: usize = 0x00ec_9530;
+/// 2.7.2.0 rva of the descriptor-ring advance, the `.pdata` function containing both hook
+/// addresses.
+pub(crate) const SCALEFORM_DESC_ADVANCE_RVA: usize = 0x00ec_ca90;
 /// `ring+0x38`, the current page.
 pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
 /// The page-roll branch's load of the current page, where the hook goes.
@@ -140,7 +140,8 @@ pub enum DescriptorGuardInstall {
 pub enum DescriptorGuardInstallError {
     /// No game module base yet.
     ModuleBase(String),
-    /// The running build has no mapping for the containing function. Nothing was read.
+    /// The running build is not 2.7.2.0, the build the containing function was measured on.
+    /// Nothing was read.
     Refused { build: String },
     /// The address resolved and the bytes there are not the verified ones.
     Disarmed {
@@ -196,8 +197,7 @@ pub fn install_scaleform_descriptor_guard()
     }
     let base =
         er_game_base::mem::game_module_base().map_err(DescriptorGuardInstallError::ModuleBase)?;
-    // Named `at_offset`, not `resolve`: `scripts/check-native-call-rva-coverage.py` reads every
-    // `resolve(` argument as a game address, and these are offsets into the advance.
+    // Named `at_offset`, not `resolve`: these are offsets into the advance, not game addresses.
     let at_offset = |offset: usize| {
         er_game_base::game_build::resolve_call_site_rva(
             SCALEFORM_DESC_ADVANCE_RVA,
@@ -244,8 +244,8 @@ mod tests {
     static RESUME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn offsets_match_er_1162_static_re() {
-        assert_eq!(SCALEFORM_DESC_ADVANCE_RVA, 0xec_9530);
+    fn offsets_match_er_2720_static_re() {
+        assert_eq!(SCALEFORM_DESC_ADVANCE_RVA, 0xec_ca90);
         assert_eq!(SCALEFORM_DESC_PROVIDER_OFFSET, 0x38);
         assert_eq!((PAGE_ROLL_LOAD, EPILOGUE_JOIN), (0x8c, 0x157));
         assert_eq!(DEVICE_OUT_STACK_SLOT, 0x30);

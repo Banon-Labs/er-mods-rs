@@ -17,34 +17,36 @@
 //!
 //! # Version pinning, and the order it has to happen in
 //!
-//! Guard and patch addresses are 1.16.2 RVAs, and the shipped game has been 1.17 since
-//! 2026-08-27. So every address is first resolved for the running build -- through
-//! [`er_game_base::game_build`] -- and only then re-checked against the live image's bytes.
+//! Guard, patch and mid-hook addresses are 2.7.2.0 RVAs. Every address is first checked against
+//! the running build -- through [`er_game_base::game_build`], which refuses every game address on
+//! any other build -- and only then re-checked against the live image's bytes.
 //!
 //! That order is the whole of this section, because it was the other way round and the cost is
-//! measured. The byte check ran at a raw `base + rva`, which on 1.17 is unrelated code: all three
-//! guards and the one patch failed the comparison and disarmed, reporting `byte mismatch` --
-//! wording that reads as a stale signature when the fault was an untranslated address. The
+//! measured. When these were 1.16.2 RVAs and the game was 1.17, the byte check ran at a raw
+//! `base + rva`, which was unrelated code: all three guards and the one patch failed the
+//! comparison and disarmed, reporting `byte mismatch` -- wording that reads as a stale signature
+//! when the fault was an untranslated address. The
 //! `LoadBalancerParam` guard was among them, and on 2026-08-30 the exact crash it exists to stop
 //! killed a session that had it "installed": `install complete: 0/3 guard(s) armed` at attach,
 //! `DLPanic` at `FD4Singleton.h:180` twenty-five hours later.
 //!
-//! With resolution first, three outcomes are distinguishable in the log and they send a reader to
-//! three different places:
+//! With the build check first, three outcomes are distinguishable in the log and they send a
+//! reader to three different places:
 //!
-//! * `REFUSED` -- this build moved the address and nothing here knows where to. Nothing was read,
-//!   nothing was written, and the fix is a ledger row, not a new signature.
+//! * `REFUSED` -- the running build is not 2.7.2.0, or a guard's entry is not on the 2.7.2.0
+//!   detour allowlist. Nothing was read, nothing was written, and the fix is a re-measurement,
+//!   not a new signature.
 //! * `DISARMED` -- the address resolved and the bytes there are not the ones it was verified
-//!   against. Something else owns the address, or the mapping is wrong.
+//!   against. Something else owns the address, or the constant is wrong.
 //! * `ARMED` / `PATCHED` -- installed.
 //!
-//! A refusal is per row. One guard with no mapping costs that guard and nothing else; see bd
+//! A refusal is per row. One refused guard costs that guard and nothing else; see bd
 //! `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
 //!
 //! # Why a private MinHook instance, and why that is safe here
 //!
 //! The repo's usual rule is to route a companion DLL's detours through the product's
-//! `er_effects_union_register` export, so a single MinHook instance owns every shared prologue.
+//! `er_effects_union_register_2720` export, so a single MinHook instance owns every shared prologue.
 //! That is not available to these guards: the union's handler type is
 //! `fn(usize, usize, usize, usize) -> usize`, and `er-hook` states plainly that it is "not for
 //! float-arg or >4-stack-arg targets". `CS::SpecialEffect::Apply` takes eight arguments, four of
@@ -197,11 +199,11 @@ enum Outcome {
 /// group that cannot be found whole is not a group to half-arm; it is a group to skip.
 ///
 /// [`warn_on_partial_groups`] reports a half-armed group after the fact. This prevents the half
-/// that is predictable in advance, and on 1.17 it is not hypothetical:
-/// `SpecialEffect::HasSpecialEffectId` is `IDENTICAL-SHORT` / `NEITHER-ENTRY` in
-/// `docs/recon/rva-map-1162-to-1170.verified.tsv` and so carries no detour row at all, while
-/// `SpecialEffect::Apply` is `BYTE-IDENTICAL` / `BOTH-ENTRIES` and does. Resolving before the byte
-/// check is what makes that asymmetry reachable -- before it, both simply failed the comparison.
+/// that is predictable in advance: a member whose entry is missing from the 2.7.2.0 detour
+/// allowlist is refused on its own while its partner is not. (On 1.17 that was not hypothetical:
+/// `SpecialEffect::HasSpecialEffectId` carried no detour row while `SpecialEffect::Apply` did.)
+/// Checking addresses before the byte check is what makes that asymmetry reachable -- before it,
+/// both simply failed the comparison.
 ///
 /// `resolved` is indexed against [`REGISTRY`], so the two must be the same length and order; the
 /// only producer is [`install_guards`], and `a_group_is_skipped_whole_when_one_member_has_no_address`
@@ -216,7 +218,7 @@ fn unmapped_group_member(resolved: &[Option<usize>], guard: &Guard) -> Option<&'
 
 /// Confirm the live bytes at `address` still match what an RVA was verified against.
 ///
-/// `address` is expected to have been resolved for the running build already. That is what makes
+/// `address` is expected to have been checked against the running build already. That is what makes
 /// this check mean what it says: a mismatch here is now evidence about the bytes, because the
 /// address question was answered first and separately.
 ///
@@ -257,7 +259,7 @@ fn code_window_matches(label: &str, address: usize, expected: &[u8], drift_hint:
 /// is that another hook already replaced the entry with its own jump.
 ///
 /// `address` has already been through [`er_game_base::game_build::resolve_detour_address`], so
-/// "this is not the build these RVAs came from" is no longer one of the explanations: a moved
+/// "this is not the build these RVAs came from" is no longer one of the explanations: another
 /// build is a `REFUSED` and is reported as one, above.
 #[cfg(windows)]
 fn prologue_matches(guard: &Guard, address: usize) -> bool {
@@ -265,8 +267,9 @@ fn prologue_matches(guard: &Guard, address: usize) -> bool {
         guard.name,
         address,
         guard.expected_prologue,
-        "this address was already resolved for the running build, so the likeliest cause is that \
-         another hook replaced the entry first; the other is that the mapping is wrong",
+        "the running build is 2.7.2.0, the build this address was measured on, so the likeliest \
+         cause is that another hook replaced the entry first; the other is that the constant is \
+         wrong",
     )
 }
 
@@ -288,16 +291,17 @@ fn install_guards(base: usize) {
         }
     }
 
-    // Pass ONE: where does each guarded function live on the running build?
+    // Pass one: may each guarded function be hooked on the running build?
     //
-    // Every guard is resolved before any of them is installed, for two reasons. The byte check
-    // needs a real address to read (that is the bug this ordering fixes), and one guard's answer
-    // decides whether another may arm at all -- `unmapped_group_member` cannot be asked until all
-    // the answers are in.
+    // Every guard is checked before any of them is installed, for two reasons. The byte check
+    // needs an address the running build vouches for (that is the bug this ordering fixes), and
+    // one guard's answer decides whether another may arm at all -- `unmapped_group_member` cannot
+    // be asked until all the answers are in.
     //
     // `resolve_detour_address`, not `resolve_game_address`: MinHook is about to write five bytes
-    // at each of these, and a row good enough to call a function says nothing about whether its
-    // 1.17 destination is a function entry with a relocatable prologue.
+    // at each of these, and only the 2.7.2.0 detour allowlist says an address is a function entry
+    // with a relocatable prologue. Its answer is `base + rva` itself or a refusal, so
+    // `MhHook::new`'s own check of the same address in `install_guard` answers the same way.
     let resolved: Vec<Option<usize>> = REGISTRY
         .iter()
         .map(|guard| er_game_base::game_build::resolve_detour_address(base + guard.rva, guard.name))
@@ -313,8 +317,9 @@ fn install_guards(base: usize) {
     }
 
     log_message(format_args!(
-        "install complete: {armed}/{} guard(s) ARMED, {refused} REFUSED (no address on the running \
-         build), {disarmed} DISARMED (address resolved, bytes there are not the verified ones)",
+        "install complete: {armed}/{} guard(s) ARMED, {refused} REFUSED (not hookable on the \
+         running build), {disarmed} DISARMED (address checked, bytes there are not the verified \
+         ones)",
         REGISTRY.len()
     ));
 
@@ -340,9 +345,9 @@ fn install_one_guard(
 ) -> Outcome {
     let Some(address) = address else {
         log_message(format_args!(
-            "REFUSED {} (1.16.2 rva 0x{:x}): no detour-safe mapping for the running build -- {}. \
-             There is no address to check bytes at, so nothing was read and nothing installed. \
-             This is a missing ledger row, not a stale signature.",
+            "REFUSED {} (2.7.2.0 rva 0x{:x}): not hookable on the running build -- {}. There is \
+             no address to check bytes at, so nothing was read and nothing installed. This is a \
+             build or detour-allowlist refusal, not a stale signature.",
             guard.name,
             guard.rva,
             er_game_base::game_build::describe_build()
@@ -351,8 +356,8 @@ fn install_one_guard(
     };
     if let Some(missing) = unmapped_group_member(resolved, guard) {
         log_message(format_args!(
-            "REFUSED {} @0x{address:x}: this address resolved, but '{missing}' in its group '{}' \
-             did not, and these guards are only correct armed together -- arming this one alone \
+            "REFUSED {} @0x{address:x}: this address is hookable, but '{missing}' in its group \
+             '{}' is not, and these guards are only correct armed together -- arming this one alone \
              would send the crashing caller into the unguarded half. Skipping the whole group.",
             guard.name, guard.group
         ));
@@ -370,7 +375,7 @@ fn install_one_guard(
         return Outcome::Disarmed;
     }
     log_message(format_args!(
-        "ARMED {} @0x{address:x} (1.16.2 rva 0x{:x}): {}",
+        "ARMED {} @0x{address:x} (2.7.2.0 rva 0x{:x}): {}",
         guard.name, guard.rva, guard.rationale
     ));
     Outcome::Armed
@@ -400,9 +405,8 @@ fn install_patches(base: usize) {
     }
 
     log_message(format_args!(
-        "patch complete: {applied}/{} patch(es) PATCHED, {refused} REFUSED (no address on the \
-         running build), {disarmed} DISARMED (address resolved, bytes there are not the verified \
-         ones)",
+        "patch complete: {applied}/{} patch(es) PATCHED, {refused} REFUSED (wrong build), \
+         {disarmed} DISARMED (address checked, bytes there are not the verified ones)",
         patches::REGISTRY.len()
     ));
 }
@@ -414,16 +418,13 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
     // MinHook overwrite five bytes at this function entry", and this address is not an entry and
     // is not being detoured: it is a single byte inside a function, read and then written.
     //
-    // Why it resolves the function and adds the offset afterwards. The maps are keyed on `.pdata`
-    // function starts, so the window's own address (1.16.2 `0xc57670`) can never appear in one and
-    // `docs/recon/rva-map-1162-to-1170.verified.tsv` records that refusal. What is mappable is the
-    // enclosing function, `0xc575e0 -> 0xc58cb0`, already carried by `functions.tsv` and selected
-    // into the call map -- and the window sits `0x90` bytes into it in both builds. Adding that
-    // offset in Rust, after resolution, is what `resolve_call_site_rva` exists for; the offset
-    // never enters a table, so nothing can read it as a licence to detour a mid-function address.
+    // Why it checks the function and adds the offset afterwards. The window's own address
+    // (2.7.2.0 `0xc59270`) is mid-function; spelling it as the enclosing function `0xc591e0` plus
+    // `0x90` is what `resolve_call_site_rva` exists for. The offset never enters a table, so
+    // nothing can read it as a licence to detour a mid-function address.
     //
-    // A refusal is still possible and is still the honest answer: it means the containing function
-    // has no row on the running build.
+    // A refusal is still possible and is still the honest answer: it means the running build is
+    // not 2.7.2.0.
     let Some(window) = er_game_base::game_build::resolve_call_site_rva(
         patch.function_rva,
         patch.offset_in_function,
@@ -431,9 +432,9 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
     )
     .map(|rva| base + rva) else {
         log_message(format_args!(
-            "REFUSED {} (1.16.2 window rva 0x{:x} = fn 0x{:x} + 0x{:x}): no mapping for the \
-             CONTAINING function on the running build -- {}. Nothing read, nothing written. This \
-             is a missing mapping, not a stale signature.",
+            "REFUSED {} (2.7.2.0 window rva 0x{:x} = fn 0x{:x} + 0x{:x}): the running build is \
+             not the one this window was measured on -- {}. Nothing read, nothing written. This \
+             is a build refusal, not a stale signature.",
             patch.name,
             patch.rva(),
             patch.function_rva,
@@ -446,8 +447,8 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
         patch.name,
         window,
         patch.expected_window,
-        "this address was already resolved for the running build, so the likeliest cause is that \
-         another mod rewrote these bytes; the other is that the mapping is wrong",
+        "the running build is 2.7.2.0, the build this window was measured on, so the likeliest \
+         cause is that another mod rewrote these bytes; the other is that the constant is wrong",
     ) {
         return Outcome::Disarmed;
     }
@@ -495,7 +496,7 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
     }
     patch.applied.store(true, Ordering::SeqCst);
     log_message(format_args!(
-        "PATCHED {} @0x{target:x} (1.16.2 rva 0x{:x}): 0x{replaced:02x} -> 0x{:02x}, read back. {}",
+        "PATCHED {} @0x{target:x} (2.7.2.0 rva 0x{:x}): 0x{replaced:02x} -> 0x{:02x}, read back. {}",
         patch.name,
         patch.rva() + patch.offset,
         patch.replacement,
@@ -525,9 +526,8 @@ fn install_mid_hooks(base: usize) {
         }
     }
     log_message(format_args!(
-        "mid hook complete: {armed}/{} mid hook(s) ARMED, {refused} REFUSED (no address on the \
-         running build), {disarmed} DISARMED (address resolved, bytes there are not the verified \
-         ones)",
+        "mid hook complete: {armed}/{} mid hook(s) ARMED, {refused} REFUSED (wrong build), \
+         {disarmed} DISARMED (address checked, bytes there are not the verified ones)",
         mid_hooks::REGISTRY.len()
     ));
     if armed > 0 {
@@ -546,8 +546,8 @@ fn install_mid_hook(hook: &mid_hooks::MidHook, base: usize) -> Outcome {
     let (Some(site), Some(resume)) = (resolve(hook.hook_offset), resolve(hook.resume_offset))
     else {
         log_message(format_args!(
-            "REFUSED {} (fn 0x{:x} + 0x{:x}, resume + 0x{:x}): no mapping for the containing \
-             function on the running build -- {}. Nothing read, nothing written.",
+            "REFUSED {} (2.7.2.0 fn 0x{:x} + 0x{:x}, resume + 0x{:x}): the running build is not \
+             the one this function was measured on -- {}. Nothing read, nothing written.",
             hook.name,
             hook.function_rva,
             hook.hook_offset,
@@ -556,8 +556,9 @@ fn install_mid_hook(hook: &mid_hooks::MidHook, base: usize) -> Outcome {
         ));
         return Outcome::Refused;
     };
-    let drift = "this address was already resolved for the running build, so the likeliest cause \
-                 is that another mod rewrote these bytes; the other is that the mapping is wrong";
+    let drift = "the running build is 2.7.2.0, the build this window was measured on, so the \
+                 likeliest cause is that another mod rewrote these bytes; the other is that the \
+                 constant is wrong";
     if !code_window_matches(hook.name, site, hook.expected_window, drift)
         || !code_window_matches(hook.name, resume, hook.expected_resume, drift)
     {
@@ -576,7 +577,7 @@ fn install_mid_hook(hook: &mid_hooks::MidHook, base: usize) -> Outcome {
             // The hook lives as long as the process; dropping the point would unhook it.
             core::mem::forget(point);
             log_message(format_args!(
-                "ARMED {} @0x{site:x} (resume 0x{resume:x}; 1.16.2 fn 0x{:x} + 0x{:x}): {}",
+                "ARMED {} @0x{site:x} (resume 0x{resume:x}; 2.7.2.0 fn 0x{:x} + 0x{:x}): {}",
                 hook.name, hook.function_rva, hook.hook_offset, hook.rationale
             ));
             Outcome::Armed
@@ -757,8 +758,8 @@ mod tests {
         }
     }
 
-    /// Resolution has to be able to answer no per guard, and the answer has to be a group
-    /// property. On 1.17 exactly one member of `null_special_effect` has a detour row, and arming
+    /// The address check has to be able to answer no per guard, and the answer has to be a group
+    /// property. On 1.17 exactly one member of `null_special_effect` had a detour row, and arming
     /// that half alone is the failure that module's header exists to describe.
     #[test]
     fn a_group_is_skipped_whole_when_one_member_has_no_address() {

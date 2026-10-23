@@ -3,8 +3,8 @@
 // 2026-10-17), so the tables stay vanilla and the game is handed a private copy of the rows instead.
 //
 // Where the rows are consumed (static RE, 1.16.2 :8765 names, 1.17.1 addresses byte-checked in
-// eldenring-deobf-1.17.1.bin). The agent runs on 2.7.2.0: each 1.17.1 address below was carried
-// with scripts/map-rvas-1171-to-1172.py, and each function is byte-identical in
+// eldenring-deobf-1.17.1.bin). The agent runs on 2.7.2.0: each 1.17.1 address below was carried,
+// and each function is byte-identical in
 // eldenring-deobf-1.17.2.bin apart from relocated operands, so the param indices 0x42 and 0x44 and
 // both prologues are unchanged. 1.17.1 -> 2.7.2.0: GetPartsDrawParam 0x140d44790 -> 0x140d45e80,
 // LookupGrassLodRangeParam 0x140d3c6a0 -> 0x140d3dd90, resource builder 0x140ba1b50 ->

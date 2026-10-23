@@ -36,7 +36,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     );
     // NUDE-portrait armor oracle (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
     // Sampled every game tick off the profile renderer's live stage-0 ChrAsm (+0x130 -- Not the
-    // +0x548 inbox), replicating FUN_1409e6fb0's override arithmetic, so these are the
+    // +0x548 inbox), replicating 1.16.2 FUN_1409e6fb0's override arithmetic, so these are the
     // EquipParamProtector rows the model build actually requests.
     //
     // Read it like this. `bad_frames > 0` = fail, and no later frame can erase it.
@@ -365,7 +365,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_optionsetting_game_options_quit_label_hits",
         OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS.load(Ordering::SeqCst),
     );
-    // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
+    // GX command-queue overflow forensics (repeated-switch crash at 1.16.2 0x1aeaf05): max_fill climbing
     // toward cap across switches = the accumulating-producer signature; top_producers names the
     // caller RVAs (entries tagged +self passed through our DLL).
     push_json_usize(
@@ -644,7 +644,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     // divergence-phase3 + PHASE3-render-release-is-CommonFinalize). The switch reload renders ~+40ms/
     // frame heavier than firstload at idle with flat GX cmdqueue fill and flat entity counts, so the
     // extra cost is render execution the reload leaves live: own_load_switch_reload_fire skips the native
-    // return-title render-resource release that `CS::InGameStep::_Common_Finalize` (RVA 0xaed380)
+    // return-title render-resource release that `CS::InGameStep::_Common_Finalize` (2.7.2.0 RVA 0xaeeb50)
     // performs -- that teardown resets g_GxDrawContext's per-window render outputs (FUN_1419eaf90) and
     // frees GLOBAL_CSDistViewManager / GLOBAL_WorldChrMan / GLOBAL_MapItemMan / bullet+dmg managers.
     // These are passive reads (no hooks -- per bd gpu-frame-us-ecl-piggyback-oracle-crashes-native-path
@@ -668,9 +668,9 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         // bytes, first qword = the per-window output object). Used only to derive a human-readable count;
         // the raw byte span is emitted alongside so the signal survives if the stride is ever corrected.
         const GXDC_OUTPUT_ENTRY_STRIDE: usize = 0x170;
-        // GLOBAL_* render managers _Common_Finalize frees (data RVAs read straight off the 0xaed380
-        // disasm; 0-shift data-global convention, same 0x143d_xxxx block as GameDataMan/CSSystemStep).
-        const GLOBAL_CS_DIST_VIEW_MANAGER_RVA: usize = 0x3d675c0;
+        // GLOBAL_* render managers _Common_Finalize frees (data RVAs read off the 1.16.2 0xaed380
+        // disasm; the constant is the 2.7.2.0 rva, same 0x143d_xxxx block as GameDataMan/CSSystemStep).
+        const GLOBAL_CS_DIST_VIEW_MANAGER_RVA: usize = 0x3d6e650;
         const GLOBAL_MAP_ITEM_MAN_RVA: usize = er_game_base::rva::GLOBAL_MAP_ITEM_MAN_RVA;
         const RENDER_READ_FAIL: i64 = -1;
         const MIN_VALID_PTR: usize = 0x10000;
@@ -738,7 +738,8 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     // Idle-ANIM BIND semaphores (bd portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03):
     // bind_state 1 = an engine-grounded idle anim bound (handle real), 2 = no candidate resolved;
     // handle_before != sentinel proves the native static-pose anim-0 bind had resolved (anim
-    // resources are loaded); sentinel is the DAT_143b39470 null-handle global (constant if the
+    // resources are loaded); sentinel is the null-handle global (0x143b40490; 1.16.2 DAT_143b39470;
+    // constant if the
     // corrected RE is right). Motion vs FLICKER: motion_metric diffs the depth-keyed alpha
     // silhouette (lighting-immune), luma_flicker diffs luma on the same grid (quantifies the
     // per-frame lighting change). Product proof of "portrait animates" = bind_state 1 and

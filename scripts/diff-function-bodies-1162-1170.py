@@ -3,8 +3,9 @@
 
 Why this exists
 ---------------
-`scripts/verify-rva-map-1170.py` answers "is the 1.17 address the same function?" and
-`scripts/detect-struct-field-drift.py` answers "did a struct field move?".  Neither answers the
+`verify-rva-map-1170.py` (deleted with the address carry on 2026-10-23) answered "is the 1.17
+address the same function?" and `scripts/detect-struct-field-drift.py` answers "did a struct
+field move?".  Neither answers the
 question that follows a shape-diff verdict: *what actually changed inside the body*.  The RVA gate
 in `er-game-base` installs a detour as soon as an address maps, so a hooked function whose address
 is fine but whose body changed passes every existing check silently.  This is the tool for reading
@@ -120,8 +121,8 @@ class Image:
         # `leaf_extent` watermark rule (via `function_extent.body_end`).
         #
         # This arm used to run to the next `.pdata` start, capped at 0x400 -- the retired guess
-        # that `pair-leaf-functions-1162-1170.py` keeps as its `--mutate extent` control precisely
-        # because it walks through inter-function padding whose bytes differ between builds, so
+        # that the since-deleted `pair-leaf-functions-1162-1170.py` kept as its `--mutate extent`
+        # control because it walks through inter-function padding whose bytes differ between builds, so
         # everything after the first pad compares unequal. Measured on the pair
         # `verify-thunk-rva-1170.py` exists for, 0x14090a0a0 -> 0x14090b240 (two 23-byte
         # `CS::KnowledgeLoadingScreen` `_Func_impl` thunks, identical but for a moved `.rdata`

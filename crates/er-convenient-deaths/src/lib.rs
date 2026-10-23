@@ -24,9 +24,9 @@
 //! same for the original. That is a weaker claim than a hook's call counter: the instruction a
 //! patch redirects around never runs, so nothing can count it. Evidence that a patch *did*
 //! anything has to come from playing -- dying and still having your runes. What the log can prove
-//! is the negative, and it does so loudly: `REFUSED` (the containing function has no mapping on
-//! this build) and `DISARMED` (the address resolved, but the bytes there are not the measured
-//! ones) both mean the game is untouched.
+//! is the negative, and it does so loudly: `REFUSED` (the running game is not the 2.7.2.0 build
+//! the sites were measured on) and `DISARMED` (the address resolved, but the bytes there are not
+//! the measured ones) both mean the game is untouched.
 
 // The install path is `cfg(windows)`: on the host there is no game to patch, so the registry
 // rows and the logging they feed have no caller. That is a cfg artifact, not dead code -- and
@@ -80,7 +80,7 @@ fn config_path_in(game_directory: &Path) -> PathBuf {
 enum Outcome {
     /// The byte was written and read back as intended.
     Patched,
-    /// No mapping for the containing function on the running build. Nothing read, nothing written.
+    /// The running build is not the one the sites were measured on. Nothing read, nothing written.
     Refused,
     /// The address resolved but the bytes there are not the measured ones. Nothing written.
     Disarmed,
@@ -348,9 +348,8 @@ fn apply_patch(patch: &Patch, base: usize) -> (Outcome, Option<Live>) {
     )
     .map(|rva| base + rva) else {
         log_message(format_args!(
-            "REFUSED {} (1.16.2 window rva 0x{:x} = fn 0x{:x} + 0x{:x}): no mapping for the \
-             containing function on the running build -- {}. Nothing read, nothing written. This \
-             is a missing mapping, not a stale signature.",
+            "REFUSED {} (2.7.2.0 window rva 0x{:x} = fn 0x{:x} + 0x{:x}): the running build is \
+             not the one this site was measured on -- {}. Nothing read, nothing written.",
             patch.name,
             patch.rva(),
             patch.function_rva,
@@ -517,7 +516,7 @@ fn code_window_matches(label: &str, address: usize, expected: &[u8]) -> bool {
             "DISARMED {label} @0x{address:x}: byte mismatch (got {window:02x?}, want \
              {expected:02x?}). This address was already resolved for the running build, so the \
              likeliest cause is that another mod rewrote these bytes; the other is that the \
-             mapping is wrong. Not patching."
+             measured site is wrong. Not patching."
         ));
         return false;
     }

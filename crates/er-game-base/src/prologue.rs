@@ -7,10 +7,10 @@
 //! disarms with a log line when the bytes differ. That is the right default -- calling unknown
 //! code costs the process. But three of those pins open with `mov rax, [rip+disp32]`, and a
 //! rip-relative displacement is the delta from the end of the instruction to the global it names.
-//! Both ends move when the game is patched. Measured on ELDEN RING 1.17: `FUN_140678740`,
-//! `FUN_140678710` and `FUN_14067a980` are the same three instructions doing the same job at
-//! correctly translated addresses, and all three gates disarmed -- on four bytes that could not
-//! have survived. The features were silently off, and the log line blamed the game build.
+//! Both ends move when the game is patched. Measured on ELDEN RING 1.17: the three functions the
+//! 1.16.2 dump names `FUN_140678740`, `FUN_140678710` and `FUN_14067a980` are the same three
+//! instructions doing the same job at their 1.17 addresses, and all three gates disarmed -- on four
+//! bytes that could not have survived. The features were silently off, and the log line blamed the game build.
 //!
 //! So the pin has to test instruction shape at those four bytes and exact identity everywhere
 //! else. The mask that says which is which is derived at build time from the same named
@@ -90,30 +90,30 @@ mod tests {
 
     /// The three real 1.16.2 pins that disarmed on 1.17, and the bytes 1.17 actually has at the
     /// mapped address. Read out of `eldenring-deobf.bin` / `eldenring-deobf-1.17.bin` by
-    /// `scripts/verify-aob-patterns-1170.py --section prologues`; they are the shape of the
+    /// `scripts/verify-aob-patterns.py --section prologues`; they are the shape of the
     /// problem, not a synthetic one.
     // Not a prologue: test input. These are the bytes as they exist in the two images, fed to
     // `prologue_matches` to prove the comparison notices the RIP displacement changing. Nothing
     // here is ever written into the game or compared against a hook site, so there is no
     // assembler for a build.rs to get one byte wrong.
-    const B72_1162: &[u8] = &[
+    const B72_SITE: &[u8] = &[
         0x48, 0x8b, 0x05, 0xd1, 0x11, 0x6f, 0x03, 0xc6, 0x80, 0x72, 0x0b, 0x00, 0x00, 0x00, 0xc3,
     ];
     // Not a prologue: the same site read out of the 1.17 image, the expected half of that test.
-    const B72_1170: &[u8] = &[
+    const B72_SITE_RELOCATED: &[u8] = &[
         0x48, 0x8b, 0x05, 0xf1, 0x43, 0x6f, 0x03, 0xc6, 0x80, 0x72, 0x0b, 0x00, 0x00, 0x00, 0xc3,
     ];
     // Not a prologue: a second 1.16.2 site, present so one passing case cannot carry the test.
-    const B73_1162: &[u8] = &[
+    const B73_SITE: &[u8] = &[
         0x48, 0x8b, 0x05, 0x01, 0x12, 0x6f, 0x03, 0xc6, 0x80, 0x73, 0x0b, 0x00, 0x00, 0x00, 0xc3,
     ];
     // Not a prologue: the settle-gate site in 1.16.2, read from the image as test input.
-    const SETTLE_1162: &[u8] = &[
+    const SETTLE_SITE: &[u8] = &[
         0x48, 0x8b, 0x05, 0x91, 0xef, 0x6e, 0x03, 0x83, 0xb8, 0xc4, 0x0b, 0x00, 0x00, 0x02, 0x75,
         0x0a,
     ];
     // Not a prologue: the same settle-gate site in 1.17, the expected half of that comparison.
-    const SETTLE_1170: &[u8] = &[
+    const SETTLE_SITE_RELOCATED: &[u8] = &[
         0x48, 0x8b, 0x05, 0xb1, 0x21, 0x6f, 0x03, 0x83, 0xb8, 0xc4, 0x0b, 0x00, 0x00, 0x02, 0x75,
         0x0a,
     ];
@@ -129,22 +129,22 @@ mod tests {
 
     #[test]
     fn exact_mask_is_a_plain_comparison() {
-        let mask = vec![BYTE_COMPARED; B72_1162.len()];
-        assert!(matches_masked(B72_1162, B72_1162, &mask));
-        assert!(!matches_masked(B72_1170, B72_1162, &mask));
+        let mask = vec![BYTE_COMPARED; B72_SITE.len()];
+        assert!(matches_masked(B72_SITE, B72_SITE, &mask));
+        assert!(!matches_masked(B72_SITE_RELOCATED, B72_SITE, &mask));
     }
 
     #[test]
     fn relocated_displacement_is_accepted() {
         assert!(matches_masked(
-            B72_1170,
-            B72_1162,
-            &rip_disp_mask(B72_1162.len())
+            B72_SITE_RELOCATED,
+            B72_SITE,
+            &rip_disp_mask(B72_SITE.len())
         ));
         assert!(matches_masked(
-            SETTLE_1170,
-            SETTLE_1162,
-            &rip_disp_mask(SETTLE_1162.len())
+            SETTLE_SITE_RELOCATED,
+            SETTLE_SITE,
+            &rip_disp_mask(SETTLE_SITE.len())
         ));
     }
 
@@ -152,12 +152,12 @@ mod tests {
     /// mask covers the operand, never the identity of the instruction carrying it.
     #[test]
     fn a_changed_opcode_still_disarms() {
-        let mask = rip_disp_mask(B72_1162.len());
+        let mask = rip_disp_mask(B72_SITE.len());
         for position in [0, 1, 2] {
-            let mut mutated = B72_1170.to_vec();
+            let mut mutated = B72_SITE_RELOCATED.to_vec();
             mutated[position] ^= 0x01;
             assert!(
-                !matches_masked(&mutated, B72_1162, &mask),
+                !matches_masked(&mutated, B72_SITE, &mask),
                 "byte {position} is opcode/ModRM and must never be ignored"
             );
         }
@@ -168,34 +168,38 @@ mod tests {
     /// pin must keep telling them apart.
     #[test]
     fn the_two_retractions_do_not_accept_each_other() {
-        let mask = rip_disp_mask(B72_1162.len());
-        assert!(!matches_masked(B73_1162, B72_1162, &mask));
-        assert!(!matches_masked(B72_1162, B73_1162, &mask));
+        let mask = rip_disp_mask(B72_SITE.len());
+        assert!(!matches_masked(B73_SITE, B72_SITE, &mask));
+        assert!(!matches_masked(B72_SITE, B73_SITE, &mask));
     }
 
     #[test]
     fn a_wildcard_mask_is_refused_rather_than_matching_everything() {
-        let all_ignored = vec![BYTE_IGNORED; B72_1162.len()];
-        assert!(!matches_masked(&[0u8; 15], B72_1162, &all_ignored));
+        let all_ignored = vec![BYTE_IGNORED; B72_SITE.len()];
+        assert!(!matches_masked(&[0u8; 15], B72_SITE, &all_ignored));
     }
 
     #[test]
     fn malformed_inputs_refuse() {
-        let mask = rip_disp_mask(B72_1162.len());
+        let mask = rip_disp_mask(B72_SITE.len());
         // Short read.
-        assert!(!matches_masked(&B72_1162[..4], B72_1162, &mask));
+        assert!(!matches_masked(&B72_SITE[..4], B72_SITE, &mask));
         // Mask describing a different byte string.
-        assert!(!matches_masked(B72_1162, B72_1162, &mask[..4]));
+        assert!(!matches_masked(B72_SITE, B72_SITE, &mask[..4]));
         // Empty pin.
-        assert!(!matches_masked(B72_1162, &[], &[]));
+        assert!(!matches_masked(B72_SITE, &[], &[]));
     }
 
     #[test]
     fn mismatch_count_ignores_masked_positions() {
-        let mask = rip_disp_mask(B72_1162.len());
-        assert_eq!(compared_mismatches(B72_1170, B72_1162, &mask), 0);
+        let mask = rip_disp_mask(B72_SITE.len());
+        assert_eq!(compared_mismatches(B72_SITE_RELOCATED, B72_SITE, &mask), 0);
         assert_eq!(
-            compared_mismatches(B72_1170, B72_1162, &vec![BYTE_COMPARED; B72_1162.len()]),
+            compared_mismatches(
+                B72_SITE_RELOCATED,
+                B72_SITE,
+                &vec![BYTE_COMPARED; B72_SITE.len()]
+            ),
             2
         );
         assert_eq!(ignored_count(&mask), 4);

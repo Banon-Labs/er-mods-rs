@@ -243,7 +243,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // er-effects-rs-um9g / render-handoff-freeze-worldreswait-loadlist-root-2026-07-18).
     install_request_move_map_fix_hook();
     // Armed switch-reload dip fix (bd reload-overlap-fix-design-worldreswait-defer-release-on-streaming-
-    // settle-2026-07-24): install the STEP_WorldResWait gate (FUN_140624bd0) defer-release detour once. It
+    // settle-2026-07-24): install the STEP_WorldResWait gate (0x140625ed0; 1.16.2 FUN_140624bd0) defer-release detour once. It
     // is a pure passthrough unless a genuine in-world System->Quit switch reload is armed + the default-off
     // opt-in marker (er-quickload-enable-worldreswait-hold.txt) is present, so it never affects boot, load1,
     // or normal map transitions; when armed it holds movability/loading-close until CSWorldGeomMan geometry
@@ -314,13 +314,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         unsafe { own_load_pump_tick(base, gm, frame_delta) };
     }
     // Golden-path zero-input boot -> open menu: the
-    // readiness-gated press-any-button advance (hook 0x1407ad1c0 -> set [job+0x1e8]=2)
+    // readiness-gated press-any-button advance (hook 0x1407ae4f0 -> set [job+0x1e8]=2)
     // gets past press-any-button with no input, then the menu opens with no selector fire,
     // so an observe run can reach the menu cleanly. bd
     // press-any-button-golden-lever-job1e8-readiness-2026-06-23.
     //
     // The menu open is driven the native way: set the decoded global accept byte
-    // 0x144589bdc=1 once at the settled title so the game's own TitleTopDialog::update
+    // 0x144590c7c=1 once at the settled title so the game's own TitleTopDialog::update
     // accept-gate runs the open-menu registrar in its native frame -- which posts the
     // Continue/Load/NewGame MenuJob chain and drains it (MenuWindow::Update) in the same
     // flow, so the rows actually build. A direct registrar self-fire (maybe_auto_open_menu)
@@ -331,7 +331,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     //
     // The install and the two presses are two different questions, and reading them as one is
     // what left the Save Game row with no menu pump. The detour this installs is the product's
-    // only handler on 0x7ad1c0, and three consumers ride it -- see
+    // only handler on 0x7ae4f0, and three consumers ride it -- see
     // `crate::menu_window_run_gate`, which asks one term per consumer. The presses below belong
     // to the boot autoload alone and stay behind its own term, so a build that carries the rows
     // and not the autoload gets the pump without anything opening the title menu for it.
@@ -387,7 +387,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
         unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
         // Child-done-query override: prevent the premature MoveMapStep child teardown that strands
-        // load2 (FUN_140eb5550 returns done at field25=0 -> STEP_MoveMap_Update tears the child down
+        // load2 (the child-done query, 1.16.1 dump FUN_140eb5550, returns done at field25=0 -> STEP_MoveMap_Update tears the child down
         // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
         // reload; load1 untouched. bd complete-chain-load2-child-torndown-early-fun140eb5550-done.
         unsafe { install_child_done_query_override_hook(base) };

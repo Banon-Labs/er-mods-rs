@@ -20,7 +20,9 @@
 // base-game `mapstudio` still resolves, so the m28 msb read returns 0 bytes (bd
 // `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty-2026-07-30`).
 //
-// Two functions own that state, and this traces both so one run says which ran and which did not:
+// Two functions own that state, and this traces both so one run says which ran and which did not
+// (every `FUN_` name in this file is a 1.16.2 Ghidra label; the hooked rvas are the 2.7.2.0 ones in
+// `rva.rs`):
 //
 //   Blank   FUN_140e06490(CSDlcImp*, true) -- re-registers the 13 `*_dlc2` aliases with root L"" and
 //           clears ~50 DLC ownership flags. Sole code caller: the title start-game flow FUN_1409b24e0.
@@ -107,10 +109,10 @@ pub(crate) fn install_dlc_roots_trace() {
     install_shared_dlc_roots_job_hook();
 }
 
-/// Register the job-body trace (`0x836f30`) on the process's single MinHook instance.
+/// Register the job-body trace (2.7.2.0 `0x8383d0`) on the process's single MinHook instance.
 ///
 /// Why this one is not `install_one_dlc_roots_hook`. `er-reload-trace` detours the same prologue
-/// (`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, .. }`, its `lib.rs`), and both shells
+/// (its `map_request_do_*` `HookSpec` in `lib.rs`), and both shells
 /// are co-loaded by hand-written profiles -- `~/Elden/group-1170.me3` carries `er_quickload`,
 /// `er_diag_harness`, `er_reload_trace` and `er_armament_icons` together. A bare `MhHook` here is a
 /// second MinHook instance on that prologue: each instance is a per-DLL static, so neither can see
@@ -120,15 +122,12 @@ pub(crate) fn install_dlc_roots_trace() {
 /// `er-armament-icons` on `TITLE_SCALEFORM_FILE_OPEN_RVA`), re-created on a different address.
 ///
 /// `register_shared_hook` is the repo's answer: it resolves `er_quickload.dll`'s
-/// `er_effects_union_register` export and chains this handler onto the product's one instance,
+/// `er_effects_union_register_2720` export and chains this handler onto the product's one instance,
 /// falling back to this DLL's own union when the product is absent (a standalone
 /// `sweep-er-diag-harness.me3` run is therefore unchanged). Install order stops deciding who runs.
 ///
-/// The address is handed over UNTRANSLATED on purpose. `game_rva` resolves 1.16.2 -> the running
-/// build, and so does `register_shared_hook`; passing an already-resolved address would translate
-/// twice, and a 1.17 destination can itself be another row's 1.16.2 source (see
-/// `er_hook::register_shared_hook_with_budget`'s own note). So this passes `base + rva` and lets the
-/// registrar own the single resolve -- exactly what `er-reload-trace`'s `install_one` does.
+/// The address is handed over as plain `base + rva`, a 2.7.2.0 rva, and `register_shared_hook`
+/// owns the build and detour-allowlist check -- exactly what `er-reload-trace`'s `install_one` does.
 fn install_shared_dlc_roots_job_hook() {
     let Ok(base) = game_module_base() else {
         diag_log!("dlc-roots-trace: failed to resolve module base for the job trace");

@@ -1,7 +1,6 @@
 // Does TestNetStep::STEP_Update (the in-game network step that owns SosSignMan) run, and does it
-// reach the sign update? Measured on 1.17.1 and carried to 2.7.2.0 with
-// scripts/map-rvas-1171-to-1172.py; every body matches between the two de-Arxan'd images with its
-// rip-relative and branch operands carried:
+// reach the sign update? Measured on 1.17.1 and carried to 2.7.2.0; every body matches between the
+// two de-Arxan'd images with its rip-relative and branch operands carried:
 //   STEP_Update                0x140b082c0 -> 0x140b08780 (1.16.2 0x140b06bb0)
 //   CSRemoImp::IsInCutscene    0x140a9e000 -> 0x140a9e4c0, called at 0x140b0843a -> 0x140b088fa
 //   sign update wrapper        0x1406fc590 -> 0x1406fca40

@@ -11,7 +11,8 @@
 // against nothing and returns 0 bytes (bd
 // `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty-2026-07-30`).
 //
-// Those roots are refilled from exactly one live place -- inside `CS::MoveMapListStep::STEP_LoadListWait`:
+// Those roots are refilled from exactly one live place -- inside `CS::MoveMapListStep::STEP_LoadListWait`
+// (the `FUN_` names here are 1.16.2 Ghidra labels):
 //
 //     if ((loadList == NULL || *(int*)loadList - 2u < 2) && *(this+0xb8) == 0)      // gates A and B
 //         if (FUN_140e6e6c0(FUN_140e6e060()) != 1) {                                // gate C
@@ -52,7 +53,7 @@ use crate::{
     },
 };
 
-/// One-shot install guard for the `STEP_LoadListWait` gate trace (deobf 0x140af1800).
+/// One-shot install guard for the `STEP_LoadListWait` gate trace (2.7.2.0 0x140af2fd0).
 static LOADLIST_WAIT_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline for the `STEP_LoadListWait` gate trace. 0 = not hooked.
 static LOADLIST_WAIT_TRACE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);

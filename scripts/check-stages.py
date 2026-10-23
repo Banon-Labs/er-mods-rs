@@ -139,6 +139,13 @@ STAGES: tuple[Stage, ...] = (
             "data/*",
             "docs/ci-gate-portability.tsv",
             "docs/recon/**/*",
+            # `er-change-scope.py` classifies these as build inputs by exact path, because
+            # `er-invasion-warp-core`'s test modules `include_str!` them, and its selftest proves
+            # the list agrees with a scan of the crates' include literals. A push that renames or
+            # removes one changes what that selftest asserts.
+            "docs/er-invasion-warp.dll-pool-test.toml",
+            "docs/er-invasion-warp.invader-example.toml",
+            "docs/invasion-warp-second-player-setup.md",
             # Named by a suite gate in code, and found by `--audit-inputs` rather than by reading:
             # the vendored MinHook source is checked out by the workflow, so it resolves on a runner
             # and in any tree that has cloned it, and a change under it must select this stage.
@@ -265,25 +272,21 @@ STAGES: tuple[Stage, ...] = (
             # under node. It names the file through a path join the literal scan cannot read, so
             # a push that edits only the agent has to select this stage through this line.
             "scripts/frida/*",
-            # `scripts/er_run_lib.py` carries the `WorldChrMan` global its world-read witness walks,
-            # and reads this row back to prove the 1.16.2 to 1.17.0 hop that produced it. A push
-            # that regenerates the map moves the provenance of a constant this stage gates on, so
-            # the stage has to be selected for it.
-            "docs/recon/rva-map-1162-to-1170.data.tsv",
             # `er-stale-run-sentinel.sh --selftest` classifies the real build inputs: the
-            # `docs/recon` maps `er-game-base/build.rs` reads, the `docs/*.md` that
-            # `er-invasion-warp-core` embeds, and `build-support/prologue_build.rs`, through which
-            # build scripts reach further files. A push that moves any of them changes what that
-            # selftest proves.
+            # `docs/*.md` and `docs/*.toml` that `er-invasion-warp-core` compiles into its tests,
+            # the `docs/recon` files it uses as inputs no build reads, and
+            # `build-support/prologue_build.rs`, through which build scripts reach further files. A
+            # push that moves any of them changes what that selftest proves.
             "docs/*.md",
+            "docs/*.toml",
             "docs/recon/**/*",
             "build-support/**/*.rs",
         ),
     ),
     Stage(
         "addresses",
-        "the game image: RVAs, prologue bytes, struct offsets, the 1.16.2 to 1.17 map. "
-        "Most of it cannot run on a runner and says so.",
+        "the game image: RVAs, the detour allowlist, prologue bytes, vtables and struct offsets, "
+        "checked against the 2.7.2.0 image. Most of it cannot run on a runner and says so.",
         (
             "crates/**/*",
             "docs/recon/**/*",
@@ -294,12 +297,13 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.txt",
             "scripts/*.tsv",
             "scripts/check.sh",
-            "scripts/audit-1170-gate-bypass.baseline.json",
-            # `audit-1170-coverage-inventory.py --selftest` reads this script to learn which
-            # `target/` subdirectory holds builds of other commits, so that it compares this
-            # tree's ledger against a build of this tree. A rename of that directory is a change
-            # to what this stage checks, so the push that makes it has to select the stage.
-            "scripts/check-committed-compiles.sh",
+            # `audit-ungated-game-addresses.py` ratchets against this file, so a push that only
+            # adds or deletes a row has to run the gate that reads it.
+            "scripts/audit-ungated-game-addresses.baseline.json",
+            # The one-build model this stage holds the tree to. `check-game-version-supported.py`
+            # and `check-stale-rva-calls.py` name it in code, as the procedure their failures point
+            # at, so a push that edits the procedure selects the gates that cite it.
+            "docs/game-build.md",
         ),
     ),
     Stage(

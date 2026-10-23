@@ -1,7 +1,7 @@
 // Hand the player the three vanilla invasion fingers, through the engine's own inventory call.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why this is not a written record and a signature-scanned routine
 //
@@ -13,11 +13,11 @@
 //
 // # The addresses, and why they are safe to use on the installed build
 //
-// Every one is a 1.16.2 address carried onto 1.17 by `scripts/map-rvas-1162-to-1170.py`, which
-// reported delta +0x0 for all three, and each sits below the `0xafefe9` boundary where 1.17.1
-// slides everything by +0x70 -- so 1.16.2, 1.17.0 and the installed 1.17.1 share them. Each was
-// then read in `eldenring-deobf-1.17.1.bin` before being called, because a mapping is a candidate
-// and calling a wrong address is worse than hooking one:
+// Every one began as a 1.16.2 address; the 1.16.2 -> 1.17 signature pairing reported delta +0x0
+// for all three, and each sits below the `0xafefe9` boundary where 1.17.1 slid everything by +0x70
+// -- so 1.16.2, 1.17.0 and 1.17.1 shared them. Each was then read in `eldenring-deobf-1.17.1.bin`
+// before being called, because a mapping is a candidate and calling a wrong address is worse than
+// hooking one. None of the three moved in 2.7.2.0 either:
 //
 //   0x246840  push rdi / sub rsp,0x40 / movq [rsp+38],-2      a real frame
 //   0x247b30  lea rax,[rcx+0x158] / ret                       the accessor it should be

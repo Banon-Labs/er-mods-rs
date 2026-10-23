@@ -5,10 +5,10 @@
 //! Static reverse engineering against the 1.16.2 Ghidra dump, 2026-08-25. The whole binding
 //! configuration -- keyboard, mouse and gamepad together -- lives in one FD4 singleton whose
 //! global pointer sits at [`CS_PC_KEY_CONFIG_SINGLETON_RVA`]. Ghidra names that global
-//! `GLOBAL_CSPcKeyConfig`.
+//! `GLOBAL_CSPcKeyConfig`. The rvas below are 2.7.2.0.
 //!
 //! ```text
-//!   CSPcKeyConfig* cfg = *(u64*)(game_base + 0x3d5dea8);   // NULL until the game initialises it
+//!   CSPcKeyConfig* cfg = *(u64*)(game_base + 0x3d64f28);   // NULL until the game initialises it
 //!
 //!   cfg + 0x000   u8    input-device source (title screen writes 0 = pad, 1 = keyboard/mouse)
 //!   cfg + 0x004   u32   ACTIVE input device: 0 -> pad bindings, 1 -> keyboard then mouse
@@ -32,11 +32,11 @@
 //! # The keyboard key id is not a scancode
 //!
 //! `keyboardKeyId` is a game-internal enum in `0x46..=0xd5`, turned into a DirectInput scancode by
-//! a lookup table in the game's own image. From `KeyboardDevice::IsKeyDown` (RVA `0x1f6d0f0`):
+//! a lookup table in the game's own image. From `KeyboardDevice::IsKeyDown` (RVA `0x1f70650`):
 //!
 //! ```text
 //!   if ((unsigned)(keyId - 0x46) < 0x90) {
-//!       int dik = ((i32*)(base + 0x3c449a0))[keyId - 0x46];
+//!       int dik = ((i32*)(base + 0x3c4ba10))[keyId - 0x46];
 //!       if (dik >= 0) return (diState[0x7e8 + dik] & 0x80) != 0;
 //!   }
 //! ```
@@ -76,10 +76,9 @@ pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: u32 =
 /// The game's internal-key-id to DirectInput-scancode lookup table, indexed by
 /// `keyId - KEY_ID_FIRST`. Read, never written.
 ///
-/// A 1.16.2 rva like every other here: `game_rva` carries it through the row in
-/// `docs/recon/rva-map-1162-to-1170.data.tsv` (1.17.0 and 1.17.1 `0x3c48a00`, 2.7.2.0 `0x3c4ba10`).
-/// Before 2026-10-21 that row was withheld and every 1.17 build refused the address.
-pub const KEYBOARD_KEY_TO_DIK_GLOBAL_RVA: u32 = 0x3c4_49a0;
+/// A 2.7.2.0 rva: the `lea rax,[rip+..]` in `KeyboardDevice::IsKeyDown` (`0x141f70650`) names
+/// `0x143c4ba10`.
+pub const KEYBOARD_KEY_TO_DIK_GLOBAL_RVA: u32 = 0x3c4_ba10;
 
 /// `cfg + 0x440`: the table the player's own configuration lives in.
 const CURRENT_TABLE_OFFSET: usize = 0x440;
@@ -442,7 +441,7 @@ mod tests {
         assert_eq!(ENTRY_COUNT, 0x36, "cmp r8d,0x35; ja fail");
         assert_eq!(KEYBOARD_KEY_OFFSET, 0x04);
         assert_eq!(KEYBOARD_MODIFY_OFFSET, 0x08);
-        assert_eq!(CS_PC_KEY_CONFIG_SINGLETON_RVA, 0x3d5_dea8);
-        assert_eq!(KEYBOARD_KEY_TO_DIK_GLOBAL_RVA, 0x3c4_49a0);
+        assert_eq!(CS_PC_KEY_CONFIG_SINGLETON_RVA, 0x3d6_4f28);
+        assert_eq!(KEYBOARD_KEY_TO_DIK_GLOBAL_RVA, 0x3c4_ba10);
     }
 }

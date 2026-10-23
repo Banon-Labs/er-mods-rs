@@ -18,8 +18,11 @@ GUI and no MCP, and fits the existing `ghidra-query.sh` headless pattern.
   is safe under `-process -readOnly`.
 - Wrapper: `scripts/ghidra/find-functions-rf.sh`
   ```bash
-  # default target is the deobf-native project (erdeobf): DEOBF-NATIVE VAs, no ~0x10 shift
+  # default target is the deobf-native project of the installed 2.7.2.0 build (erdeobf2720):
+  # DEOBF-NATIVE VAs, the addresses the game runs at. It refuses with exit 2 until
+  # scripts/ghidra/import-deobf.sh has built that project.
   scripts/ghidra/find-functions-rf.sh --threshold 0.85
+  # the 1.16.2 project is still on disk: --proj-dir $HOME/ghidra_maporch/proj-deobf --proj-name erdeobf
   # the run logs RF_PROGRESS lines during the slow gather+classify phase
   ```
   (The dump `ermaporch` is a poor RF target -- slow to classify and exclusively locked
@@ -39,9 +42,17 @@ and carries the ~0x10 dump-vs-deobf shift. Build a deobf-native project once:
 scripts/ghidra/import-deobf.sh   # raw BinaryLoader, base 0x140000000, x86-64; SLOW (~94MB analysis)
 ```
 
-Output project: `/home/banon/ghidra_maporch/proj-deobf` program `erdeobf`. Then run
-the finder against it (command above). VAs are deobf-native -- ready for
-`er_disasm` / `scripts/disas-deobf.sh` without shifting.
+It imports `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build (`ER_DEOBF_BIN` names
+another image). Output project: `$HOME/ghidra_maporch/proj-deobf-2720` program `erdeobf2720`.
+Then run the finder against it (command above). VAs are deobf-native -- ready for
+`er_disasm` / `scripts/disas-deobf.sh` without shifting. The older `proj-deobf` / `erdeobf`
+project holds the 1.16.2 image (`eldenring-deobf.bin`) and is left as it is.
+
+The chunked finder (`scripts/ghidra/find-functions-rf-chunked.sh`) writes
+`$HOME/ghidra_maporch/tmp/<project>-rf.jsonl` and a `.state` resume file beside it, one pair per
+project. A resume file records an offset in one program, so it is never shared between projects:
+the 1.16.2 run's `erdeobf-rf.jsonl.state` ends at 0x145e017ff, past the end of the 2.7.2.0 image,
+and would skip every address in it.
 
 ## 2. 13bm GhidraMCP, served PRE-WARMED and HEADLESS (no GUI, no Xvfb)
 
@@ -121,8 +132,8 @@ scripts/ghidra/mcp-ghidra-daemon.sh start          # warms ermaporch (semantics)
 scripts/ghidra/mcp-ghidra-daemon.sh status
 scripts/ghidra/mcp-ghidra-daemon.sh stop
 # second, address-accurate instance on another port (multi-instance: pass target_port to route):
-scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir /home/banon/ghidra_maporch/proj-deobf \
-    --proj-name erdeobf --port 8766
+scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir $HOME/ghidra_maporch/proj-deobf-2720 \
+    --proj-name erdeobf2720 --port 8766
 ```
 
 The daemon detaches (`setsid`) so the warm program survives across client/session
@@ -156,9 +167,9 @@ read-only buys no concurrency -- which is why the default is writable. Practical
 - For warm queries on the daemon's program, use the **MCP tools** (that's the point).
 - To run a one-shot Java analysis on the **same** project, `mcp-ghidra-daemon.sh stop`
   first (or pause/restart around it), then `start` again.
-- The RF finder targets the **`erdeobf`** project, not `ermaporch`, so it does not
+- The RF finder targets the **`erdeobf2720`** project, not `ermaporch`, so it does not
   conflict with the default ermaporch daemon -- but don't run a second daemon on
-  `erdeobf` while RF-finding it.
+  `erdeobf2720` while RF-finding it.
 
 Verified end-to-end (headless daemon -> bridge -> MCP): `initialize` ok, 70 tools
 listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.1`,
@@ -167,7 +178,7 @@ listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.
 > Caveat that does not change: the MCP queries the loaded program. Addresses from
 > the dump (`ermaporch`) carry the ~0x10 shift -- ground-truth anything you will
 > call/patch against the deobf binary (`er_disasm` / `disas-deobf.sh`, or the
-> `erdeobf` instance), exactly as before. The two GUI-cursor tools
+> `erdeobf2720` instance), exactly as before. The two GUI-cursor tools
 > (`get_current_address` / `get_current_function`) are unavailable headless; pass
 > explicit addresses instead.
 
@@ -175,19 +186,21 @@ listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.
 
 Three kinds of "result", with different distribution stories:
 
-1. **RF findings** (`scripts/ghidra/erdeobf-rf.json`) -- discovered function-start **VAs +
-   confidence scores**, deobf-native (base `0x140000000`, no shift). Pure addresses, not game
-   code, so shareable as research data; useful to anyone with the **same** ER 1.16.1 deobf image.
+1. **RF findings** -- discovered function-start **VAs + confidence scores**, deobf-native
+   (base `0x140000000`, no shift). Pure addresses, not game code, so shareable as research data;
+   useful only to someone with the **same** deobf image, since they are one build's addresses.
+   No findings file has ever been committed (git history has no `scripts/ghidra/erdeobf-rf.json`,
+   which this page used to name); the 1.16.2 run's output is
+   `$HOME/ghidra_maporch/tmp/erdeobf-rf.jsonl`.
 2. **Tooling** -- every script/dict/patch/doc here is in the repo. Another user clones
    `er-quickload` and runs `scripts/ghidra/bootstrap.sh` to rebuild the whole stack (installs the
    Ghidra ML extension, clones+builds 13bm GhidraMCP with our patch, installs it, points at the
    deobf project). One command instead of reconstructing the steps.
-3. **Heavy analyzed artifacts** -- the `erdeobf`/`ermaporch` Ghidra projects, the 94MB deobf
+3. **Heavy analyzed artifacts** -- the `erdeobf2720`/`ermaporch` Ghidra projects, the 94MB deobf
    binary, and the gzf dump are the expensive part (~107-min analysis) **but are derived from
    copyrighted Elden Ring code**, so they are NOT in the repo (gitignored) and should not be
    redistributed publicly. Each user supplies their own binary/dump; `bootstrap.sh` +
    `import-deobf.sh` rebuild the project locally (slow, but automated).
 
-So a new user's path is: clone repo -> supply `eldenring-deobf.bin` -> `bootstrap.sh` ->
-`import-deobf.sh` (once, slow) -> `mcp-ghidra-daemon.sh start` -> reload MCP client. The
-committed `erdeobf-rf.json` lets them skip even the RF run if they only want the function list.
+So a new user's path is: clone repo -> supply `eldenring-deobf-1.17.2.bin` -> `bootstrap.sh` ->
+`import-deobf.sh` (once, slow) -> `mcp-ghidra-daemon.sh start` -> reload MCP client.

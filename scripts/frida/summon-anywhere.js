@@ -1,8 +1,8 @@
 // Let the local player summon Spirit Ashes anywhere, so the duel-rules referee's Spirit Ashes rule
 // can be seen live on a character with no Rebirth Monument in reach.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // What vanilla needs, read out of the 1.16.2 dump (`CS::SummonBuddyManager`):
 //
@@ -21,9 +21,9 @@
 // Noble Sorcerer Ashes (BuddyParam 24100000) has `appearOnAroundSekihi` 0, so it spawns beside the
 // player through `FUN_1404b9950` and never needs the stone's position.
 //
-// Addresses are 1.17.1's: each 1.16.2 function was mapped by `scripts/map-rvas-1162-to-1170.py` and
-// read back out of `eldenring-deobf-1.17.1.bin` (the 0x175 and +0x38/+0x3c compares, the +0xb5..+0xb8
-// stores, the same 72-instruction body). All are below the `0xafefe9` boundary.
+// Each 1.16.2 function was paired with 1.17.1 by its bytes and read back out of
+// `eldenring-deobf-1.17.1.bin` (the 0x175 and +0x38/+0x3c compares, the +0xb5..+0xb8 stores, the
+// same 72-instruction body); the literals below are their 2.7.2.0 addresses.
 'use strict';
 
 const GAME = 'eldenring.exe';

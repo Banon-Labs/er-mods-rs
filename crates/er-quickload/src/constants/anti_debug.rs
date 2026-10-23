@@ -50,11 +50,11 @@ pub(crate) const PE_SECTION_SCAN_START: usize = 0;
 /// Current-process pseudo-handle (-1) for FlushInstructionCache, + whole-process flush size.
 pub(crate) const ER_CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 pub(crate) const FLUSH_WHOLE_PROCESS_SIZE: usize = 0;
-/// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
-/// default mode, deliberately crashes via a null write at 0x141eb9999). Hooking
+/// FromSoft assert wrapper 0x141ebcd00 (calls the core 0x141ebce30 which, in the
+/// default mode, deliberately crashes via a null write at 0x141ebcef9). Hooking
 /// it captures the failing assertion's expr/message/file (its rcx/rdx/r8 are
-/// .rdata wide-string pointers) before the crash.
-pub(crate) const ASSERT_WRAPPER_RVA: usize = 0x1eb97a0;
+/// .rdata wide-string pointers) before the crash. 2.7.2.0 rva.
+pub(crate) const ASSERT_WRAPPER_RVA: usize = 0x1ebcd00;
 pub(crate) const MAX_ASSERT_LOG_LINES: usize = 16;
 pub(crate) const BOOTSTRAP_TELEMETRY_UNSEEN: usize = 0;
 pub(crate) const BOOTSTRAP_TELEMETRY_SEEN_VALUE: usize = 1;
@@ -106,10 +106,10 @@ pub(crate) const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 pub(crate) const HRESULT_SUCCESS_FLOOR: i32 = 0;
 #[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
-// The TitleStep ctor (0x140b0b1c0) stores this derived vtable to owner+0
-// (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
-// 0x02b63ba0 was off by 0x10 (the base/parent vtable), so the owner scan never
-// matched the live object.
+// The 2.7.2.0 TitleStep ctor (0x140b0cd90) stores this derived vtable to owner+0
+// (`lea rax,[0x142b68d40]; mov [rdi],rax` at 0x140b0cdb5). A vtable 0x10 lower
+// is the base/parent one, which an earlier value used by mistake, so the owner
+// scan never matched the live object.
 pub(crate) use er_title_flow::TitleSessionRva;
 
 pub(crate) use er_title_flow::TitleOwnerLayout;
@@ -137,18 +137,17 @@ pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
 pub(crate) const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = MenuTraceRva::TaskUpdateTable as u32;
 pub(crate) const TRACE_TASK_ENQUEUE_RVA: u32 = MenuTraceRva::TaskEnqueue as u32;
 pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = MENU_JOB_EMIT_RESULT_RVA;
-pub(crate) const RESULT_ACTION_BUILDER_RVA: u32 = 0x00746a00;
-pub(crate) const RESULT_EVENT_WRAPPER_BUILDER_RVA: u32 = 0x00744a60;
+pub(crate) const RESULT_ACTION_BUILDER_RVA: u32 = 0x00747d00;
+pub(crate) const RESULT_EVENT_WRAPPER_BUILDER_RVA: u32 = 0x00745d60;
 pub(crate) const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
 /// How far into `RESULT_ACTION_BUILDER_RVA` the trace treats a captured frame as "from the result
-/// action builder". Its `.pdata` extent is `0x746a00..0x746e80` (0x480 bytes), so this covers most
-/// of the body; it is a diagnostic attribution window, not a product gate.
+/// action builder". Its 2.7.2.0 `.pdata` extent is `0x747d00..0x748180` (0x480 bytes), so this
+/// covers most of the body; it is a diagnostic attribution window, not a product gate.
 pub(crate) const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
 
 /// The result-action-builder attribution band as RVAs on the running build.
 ///
-/// The band's endpoints are both offsets from one function entry, and that entry is in the address
-/// map, so unlike a free-floating `.text` window this one translates exactly.
+/// Both endpoints are offsets from one 2.7.2.0 function entry; `None` on any other build.
 pub(crate) fn result_action_builder_trace_band() -> Option<std::ops::Range<usize>> {
     er_game_base::game_build::resolve_call_site_band(
         RESULT_ACTION_BUILDER_RVA as usize,
@@ -158,39 +157,19 @@ pub(crate) fn result_action_builder_trace_band() -> Option<std::ops::Range<usize
     )
 }
 
-/// The function containing the disabled-`Continue` idle-insert call site, `FUN_140764290`
-/// (`.pdata` extent `0x764290..0x7643bc`).
+/// The function containing the disabled-`Continue` idle-insert call site, `FUN_140765590`
+/// (2.7.2.0 `.pdata` extent `0x765590..0x7656bc`).
 ///
-/// # 1.17 is `0x7650e0`, but the map does not carry it yet
-///
-/// `0x76432c` was a bare return address compared against a live stack frame -- unmappable by
-/// construction, and dead in silence on any build that moved. Declaring the containing function
-/// puts it in front of `scripts/select-needed-1170-rows.py`, which is the only way it can ever
-/// acquire a 1.17 pair.
-///
-/// The whole-image `.pdata` signature map does not pair `0x764290`, and the reason is visible in
-/// the neighbourhood: `0x764290`, `0x7643c0` and `0x7644f0` are three consecutive `0x12c`-byte
-/// functions with the same shape -- template instantiations the masked-signature matcher cannot
-/// tell apart, so it declines all three rather than guess.
-///
-/// The pair is still derivable, by BRACKETING rather than by signature. The run is bounded on both
-/// sides by functions the map does carry, at the same delta -- `0x7641e0 -> 0x765030` and
-/// `0x764620 -> 0x765470`, both `+0xe50` -- and between those anchors each image has the identical
-/// `.pdata` size sequence `0xa3, 0x12c, 0x12c, 0x12c, 0x190`. Second-of-five maps to
-/// second-of-five: `0x764290 -> 0x7650e0`. Confirmed at the call site itself, where both images
-/// hold the same three instructions at `+0x9c` (`lea; lea; call`) and both callees move together
-/// (`0x7acf80 -> 0x7ade00` and `0x7a7b60 -> 0x7a89e0`, `+0xe80`).
-///
-/// Until a row `0x764290 -> 0x7650e0` lands in `docs/recon/` (which this crate does not own),
-/// [`menu_continue_idle_insert_call_site`] returns `None` on 1.17 and the trace falls through to
-/// its object-identity matches (`arg0`/`arg1` against the idle ctor's own pointers), which are
-/// version-independent and were always the stronger evidence anyway.
-pub(crate) const MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA: usize = 0x764290;
+/// At `+0x97` it calls the idle ctor `0x1407ae2b0`, so `+0x9c` is the return address a live stack
+/// frame carries. When the build is not 2.7.2.0, [`menu_continue_idle_insert_call_site`] returns
+/// `None` and the trace falls through to its object-identity matches (`arg0`/`arg1` against the
+/// idle ctor's own pointers).
+pub(crate) const MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA: usize = 0x765590;
 /// Offset of the idle-insert call's return within [`MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA`].
 pub(crate) const MENU_CONTINUE_IDLE_INSERT_CALL_OFFSET: usize = 0x9c;
 /// Start of the looser "somewhere in this caller" window, as an offset within the same function.
 pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_START_OFFSET: isize = 0x20;
-/// End of that window: the function's own end (`0x7643bc`), rounded to the next entry.
+/// End of that window: the function's own end (`0x7656bc`), rounded to the next entry.
 pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_END_OFFSET: isize = 0x130;
 
 /// The exact idle-insert call site as an RVA on the running build, or `None` when unmapped.
@@ -252,7 +231,7 @@ pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
 
 // ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
 // The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
-// STEP_MenuJobWait tick (0x140b0d400) reads from its task_data+0x08 and forwards to
+// STEP_MenuJobWait tick (2.7.2.0 0x140b0efd0) reads from its task_data+0x08 and forwards to
 // CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count checked
 // (current==total), not time-gated, so scaling this delta makes the animation reach its end frame
 // in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
@@ -267,26 +246,14 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
 /// Part-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
-/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acb00. Suppressing
+/// 0x140820d20 building the `05_000_Title` MenuWindowJob through factory 0x1407ade30. Suppressing
 /// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
 /// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
-/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait).
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0;
+/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait). 2.7.2.0 rvas.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x820d20;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x820c00;
 /// The factory is `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA`, and is spelled as that constant rather than
-/// as a second literal.
-///
-/// This was 0x7acbf0 until 2026-08-30, which is mid-instruction. `0xf0` into `FUN_1407acb00` lands
-/// on the third byte of the `mov %rbx,0x38(%rsp)` at 0x1407acbee -- not a function entry, not an
-/// instruction boundary, not an address anything may call or patch. The comment that used to sit
-/// here named the cause in passing: "Ghidra dump addresses are +0xf0". They are not. The 1.16.2
-/// dump, `eldenring-deobf.bin` and live memory all share one address space and the shift is zero
-/// (AGENTS.md, "SUPERSEDED FOR 1.16.2"), so subtracting a shift that does not exist moved a
-/// correct address 0xf0 bytes into the middle of its own function.
-///
-/// It survived because its only consumer is the log line below, which formatted a number nobody
-/// dereferenced. As `0x7acbf0` it is also absent from every 1.17 map, so on the current game it
-/// would print a translation refusal; `0x7acb00` is mapped to `0x7ad980` and verified.
+/// as a second literal. Its only consumer is a log line.
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize =
     MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA as usize;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
@@ -327,33 +294,20 @@ pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Render-only Part-A suppression: `MenuWindowJob::Run` writes the native window visible flags at
 /// `GLOBAL_CSMenuMan->field106_0x90[id]`: the Run body sets `|=1` before calling FadeIn, and the
-/// FadeIn helper at deobf 0x140744dd0 sets `|=3`. User-visible runtime falsified the old `0x2`
+/// FadeIn helper at 0x1407460d0 sets `|=3`. User-visible runtime falsified the old `0x2`
 /// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
 /// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
+/// 2.7.2.0 rva.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x7460d0;
 /// Offset, within `MenuWindowJob::Run` ([`MENU_WINDOW_JOB_RUN_RVA`]), of the return after its call
-/// to the FadeIn helper above. Same offset in 1.16.2 and 1.17; the callee is
-/// `0x744dd0 -> 0x745c20` in both, which is how the two calls are known to be the same call
-/// (`scripts/derive-callsite-1170.py 0x7ad530`).
+/// to the FadeIn helper above: 2.7.2.0 has `call 0x1407460d0` at `0x1407ae85b`, ending at
+/// `0x7ae4f0 + 0x370`.
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET: usize = 0x370;
 /// Current-branch GFx SetVisible return site inside the native title MenuWindowJob FadeIn helper,
 /// as an offset within [`TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA`].
 ///
-/// Ordered log proof for the site itself: `user-visible-gfx-visible-logonly-current-branch-
-/// 20260713-140820` -- the first title-window visible calls were
-/// `value=0x10f6a0/0x10f350 caller_rva=0x744e02`, i.e. `0x744dd0 + 0x32`.
-///
-/// # Why it stopped being the single RVA `0x744e02`
-///
-/// It is a return address compared against a live stack frame. A return address is mid-function,
-/// so it can never be in the 1.16.2 -> 1.17 map (keyed on `.pdata` function starts), and on 1.17
-/// the comparison in `title_gfx_value_set_visible_hook` simply never matched: no hook refused, no
-/// address resolved, nothing logged, and the title FadeIn suppression was dead in silence.
-///
-/// Naming the containing function makes it mappable. Corroborated by
-/// `scripts/derive-callsite-1170.py 0x744e02`: the map carries `0x744dd0 -> 0x745c20`, and at
-/// `+0x32` both images hold an `E8` whose callee is the mapped pair of the GFx SetVisible setter
-/// (`0x733340 -> 0x734190`).
+/// It is a return address compared against a live stack frame: 2.7.2.0 has the `E8` to the GFx
+/// SetVisible setter `0x140734640` at `0x1407460fd`, ending at `0x7460d0 + 0x32`.
 pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET: usize = 0x32;
 
 /// The GFx-SetVisible call site inside the title FadeIn helper, as an RVA on the running build.
@@ -378,7 +332,7 @@ pub(crate) fn title_native_menu_visual_window_fadein_run_caller_rva() -> Option<
 /// underlying Scaleform object identity is still unknown.
 pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
-/// OptionSetting tab-select visibility pass `FUN_14093b850` (deobf 0x93b760):
+/// OptionSetting tab-select visibility pass `FUN_14093cdb0` (2.7.2.0 rva 0x93cdb0):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
 /// pane (`composite+0xb8 = cache[tabIndex]`, building via the switch dispatch only if the cache slot is
 /// null), then iterates the 10 cached pane dialogs at `composite+0x68` and calls `SetVisible(dialog+0x1200,
@@ -386,7 +340,7 @@ pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_
 /// own per-tab visibility application. Re-invoking it on restore re-shows the active OptionSetting pane
 /// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
+pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93cdb0;
 // The OptionSetting composite layout now lives in `er-title-flow`, so the standalone quit-menu
 // shells can read the same offsets the product does rather than keeping a second copy.
 // The three composite offsets below are walked only by the rows' OptionSetting pane
@@ -417,16 +371,16 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
 /// Part-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
 /// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
 /// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
-/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
-/// (not a shift: 0x14081f7e0 and 0x14081f6f0 are two different functions. 1.16.2 shift is 0; 0x14081f7e0 (size 235) builds L"05_000_Title", 0x14081f6f0 (size 239) builds L"05_010_ProfileSelect". The old parenthetical came from dump-deobf-shift.py against the 1.16.1 dump and would send you to the Title-movie builder. Corrected 2026-08-01.). We use it as the initial custom cover surface
-/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
+/// below is the native `05_010_ProfileSelect` MenuWindowJob builder (its neighbour that builds
+/// L"05_000_Title" is a different function, not a shifted copy). We use it as the initial custom
+/// cover surface instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = PROFILE_SELECT_WRAPPER_RVA as usize;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
-/// Native full-screen black Scaleform/MenuWindowJob surface. Ghidra dump 0x140793c10 ->
-/// deobf/live 0x140793b20 (content-unique) builds `01_900_Black` with the same
-/// MenuWindow/SceneProxy host ABI as the title wrappers. This is the first diagnostic carrier for
-/// proving an engine-owned custom surface can stay above press any button / Continue.
-pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x793b20;
+/// Native full-screen black Scaleform/MenuWindowJob surface. 2.7.2.0 0x140794e50 builds
+/// `01_900_Black` with the same MenuWindow/SceneProxy host ABI as the title wrappers. This is the
+/// first diagnostic carrier for proving an engine-owned custom surface can stay above press any
+/// button / Continue.
+pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x794e50;
 pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_SYSTEX_TARGET;
@@ -446,16 +400,17 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// MenuWindowJob::Run (dump 0x1407ad2b0 -> deobf/live 0x1407ad1c0). Part B uses the native
+/// MenuWindowJob::Run (2.7.2.0 0x1407ae4f0). Part B uses the native
 /// title job's own pump context to run the separately-built ProfileSelect cover job alongside the
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ae4f0;
 /// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at
-/// `TitleStep+0xe0` that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
+/// `TitleStep+0xe0` that `STEP_MenuJobWait` pumps through 1.16.2 `FUN_140733f20`.
 ///
 /// Zeroed in the `TitleStep` constructor, grown as the title builds its windows, decremented by
-/// `FUN_140733d70` inside the teardown. Read in a live world it is the whole defect as a number: a
+/// `MENU_WINDOW_LIST_REMOVE_RVA` (0x140735070; 1.16.2 `FUN_140733d70`) inside the teardown. Read in
+/// a live world it is the whole defect as a number: a
 /// non-zero count while a real map is mounted means title windows are still being updated over it,
 /// which is what the drain in `own_load::loaders::load_drive` waits on before it lets a switch
 /// commit. Derived from `er-title-flow`'s `TitleOwnerLayout` rather than re-declared, so the two
@@ -510,8 +465,8 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
 /// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover plate the game draws during a map load to
-/// hide the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
-/// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
+/// hide the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (1.16.2 0x140bbeee0,
+/// vtable 0x142b803b8; not re-measured on 2.7.2.0) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
 /// the menu system. `visible` (+0x8) is the byte the draw step checks to decide whether to draw the cover;
 /// the ctor inits it to 0 and the map-load system raises it while a load is in flight. Clearing it exposes
 /// whatever the renderer is drawing underneath (the "disable the loading screen, watch the world pop in"
@@ -531,31 +486,31 @@ pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize =
 const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 0x8);
 /// Now-loading background portrait forge. The pseudorandom loading-screen background is
 /// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), produced for symbol `MENU_Load_%05d` by
-/// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
-/// 0x140d697d0, shift -0xb0). We full-replace that bind for `MENU_Load_*`: build an er-tpf TPF named
+/// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d6cc70` (2.7.2.0). We
+/// full-replace that bind for `MENU_Load_*`: build an er-tpf TPF named
 /// exactly the requested symbol, turn it into a TpfResCap container via the game's in-memory
 /// `CreateTpfResCap` factory, wrap it in a TpfFileCap, and hand it back on the rti so the unmodified
 /// per-frame CSScaleform pump registers our texture name and GFx composites the portrait as the
 /// loading background. `fn(rti: *mut CSScaleformReplaceTexInfo /rcx/, symbol: *mut DLString<u16>
 /// /rdx/) -> u8` (1 = bound; producer then lists the rti).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
+pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd6cc70;
 // `CREATE_TPF_RESCAP_RVA` moved to `er_loading_portrait_core::tpf_textures` with the loading-cover
 // crate extraction, beside `CREATE_TPF_RES_CAP_RVA` (its only alias) and the cover texture keys
 // that are its only readers. `constants.rs`'s glob puts it back in this flat namespace.
-/// `CS::TpfFileCap::TpfFileCap` ctor (dump 0x140226010 -> deobf 0x140225f60). `fn(this: *mut /0x98
+/// `CS::TpfFileCap::TpfFileCap` ctor (2.7.2.0 0x140225f60, same rva as 1.16.2). `fn(this: *mut /0x98
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
 // `GAME_HEAP_ALLOC_RVA` moved to `er_game_base::rva` with the software keyboard, its only caller,
 // which now lives in `er-quit-menu-core` so a standalone quit-menu shell can open the link field.
-/// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
+/// `DLString<wchar_t>::substr` (2.7.2.0 0x140116c70, same rva as 1.16.2). `fn(dest /rcx/, src /rdx/,
 /// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
 // `GLOBAL_TpfRepository` singleton pointer (deref -> rcx for CreateTpfResCap) is defined below as
-// the existing `GLOBAL_TPF_REPOSITORY_RVA` (0x3d73fb8).
-/// `GLOBAL_MainHeapAllocator` singleton pointer (data, 0x143d872e0; identical RVA to the repo's
+// the existing `GLOBAL_TPF_REPOSITORY_RVA` (2.7.2.0 0x3d7b048).
+/// `GLOBAL_MainHeapAllocator` singleton pointer (data, 2.7.2.0 0x143d8e380; identical RVA to the repo's
 /// `runtime_heap_allocator`). Deref -> the allocator object for the 0x98-byte TpfFileCap allocation.
 pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize =
     er_game_base::rva::GLOBAL_MAIN_HEAP_ALLOCATOR_RVA;
@@ -591,10 +546,10 @@ pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
 // Relocated from constants/portrait_lookat.rs (portrait crate split): the title-cover
 // Scaleform bind-observer block is title-cover domain and stays product-side.
 /// Passive observer for native Scaleform image-symbol -> system texture bindings.
-/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
+/// 2.7.2.0 `FUN_1407464c0`. It receives an owning resource/list field
 /// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
 /// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
-pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
+pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7464c0;
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED;

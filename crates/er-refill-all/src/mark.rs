@@ -2,7 +2,7 @@
 //!
 //! # Why this does not call the function the storage box calls
 //!
-//! `SetItemReplenishState` (1.16.2 `0x140786430`) is what the storage-box UI invokes, and it is a
+//! `SetItemReplenishState` (2.7.2.0 `0x140787760`) is what the storage-box UI invokes, and it is a
 //! toggle, not a setter:
 //!
 //! ```c

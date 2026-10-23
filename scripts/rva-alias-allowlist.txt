@@ -9,44 +9,53 @@
 #                1.16.2 Ghidra dump, then the value is declared once and the aliases derived.
 #
 # See docs/plans/experiments-module-split-audit.md section 2.
+#
+# Re-keyed 2026-10-23, when every address in crates/ became a native 2.7.2.0 rva. Each row's
+# value is the 2.7.2.0 address its declarations now hold; `(was 0x..)` keeps the value the row
+# was adjudicated under (1.16.2 unless the note says 1.17), so the adjudication is traceable. The
+# notes are unchanged except where the carry they described is gone: FUN_ names and VAs in them
+# are 1.16.2 Ghidra addresses (the named dump's build), never 2.7.2.0 ones.
+# `DETOUR_ALLOWLIST` (crates/er-game-base/src/detour_allowlist.rs) repeats every detour target by
+# value; the gate reads it as a licence table, not as a declaration (LICENCE_TABLES), so its rows
+# are not aliases and do not appear here.
 
-0x100000    exempt:not-an-address     # ALLOW_INVADERS (Seamless rulebook bit), INVASION_ENTITY_ID_COUNT (a count) || Neither is a game RVA; they collide numerically.
-0x100001    exempt:not-an-address     # CONTEXT_CONTROL_AMD64 || Windows CONTEXT_FLAGS bitmask, not a game RVA.
-0x67b200    exempt:role-alias         # B80_LOAD_SAVE_DATA_INITIATOR_RVA, NATIVE_LOAD_SAVE_DATA_RVA, SYSTEM_QU  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
-0x67b290    exempt:role-alias         # DESERIALIZE_SLOT_RVA, SYSTEM_QUIT_INWORLD_LOAD_RVA  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
-0x67b750    exempt:role-alias         # SAVE_DISPATCH_CHAR_RVA, SAVE_WRITE_TO_SLOT_RVA  || FUN_14067b750(uint slot /*-1 = GameMan->saveSlot*/, char flush,
-0x67bc10    todo:centralize-function-rva  # SAVE_DISPATCH_ENTRY0B_RVA || FUN_14067bc10 allocates 0x240010, serializes via FUN_1402585c0, submits IO request kind 0xb, then sets GameMan.saveState=1.
-0x733150    exempt:role-alias         # PROXY_IS_BOUND_RVA, TITLE_NATIVE_READY_PREDICATE_RVA  || `bool FUN_140733150(SceneObjProxy *param_1)` -- a 21-byte generi
-0x733340    exempt:role-alias         # PROXY_SET_VISIBLE_RVA, TITLE_PRESS_START_SET_VISIBLE_RVA  || `void FUN_140733340(SceneObjProxy *param_1, undefined1 visible)`
-0x74a2f0    exempt:role-alias         # ASSIGN_COMPONENT_WITH_NAME_RVA, TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND  || `SceneObjProxy * CS::SceneObjProxy::assignComponentWithName(Scen
-0x7ad1c0    exempt:role-alias         # LEAF_UPDATE_RVA, MENU_WINDOW_JOB_RUN_RVA, PAB_NODE_UPDATE_RVA  || `CS::MenuWindowJob::Run` -- vtable slot 2 (+0x10) of the MenuWin
-0x7ad810    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
-0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
-0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
-0x9aa680    exempt:role-alias         # PROFILE_RENDERER_REFRESH_RVA, PROFILE_RENDERER_REFRESH_VA  || er-quit-menu-core: build.rs VA assembles the refresh's latch-check and next-slot windows for the profile-table mid hook; the er-loading-portrait-core RVA is the containing function the runtime resolves.
-0x449280    exempt:role-alias         # DAMAGE_UPDATE_UI, DAMAGE_UPDATE_UI_VA  || er-npc-summons: build.rs VA assembles CSChrDamageModule::UpdateUI's enemy-bar window and shared tail; src addr.rs RVA is the containing function the mid hook resolves.
-0x777380    exempt:role-alias         # FRIENDLY_TAG_PRODUCER, FRIENDLY_TAG_PRODUCER_VA  || er-npc-summons: build.rs VA assembles the friendly tag producer's slot, colour and resume windows; src addr.rs RVA is the containing function the mid hooks resolve.
-0x3d65f88   exempt:role-alias         # WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_GLOBAL_VA  || er-npc-summons: build.rs VA is only the RIP operand of the MOV RCX,[WorldChrMan] it assembles to pin the tag-slot resume window; the runtime side stays centralised in er-game-base.
-0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
-0xb0d960    exempt:role-alias         # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
-0xd7f850    exempt:role-alias         # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SC  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
-0xeb5530    exempt:role-alias         # CHILD_DONE_QUERY_RVA, MOVEMAP_CHILD_FINISHED_POLL_RVA  || Generic `EzChildStepBase` 'is the child step finished?' predicat
-0x29c8e48   todo:centralize-vtable-rva   # FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA || Ghidra decompile of NetworkCheckJob::Run writes FD4::FD4TimeTemplate<float>::vftable on all returns.
-0x2a94a70   todo:centralize-vtable-rva   # SCENE_OBJ_PROXY_VTABLE_RVA || SceneObjProxy vtable; 36 xrefs, constructor/initializer refs in FUN_14074bb50/FUN_14074cb10/FUN_14074b280.
-0x2aa97e8   exempt:role-alias         # ITEM_VTABLE_RVA, MENU_WINDOW_JOB_VTABLE_RVA  || CS::MenuWindowJob::vftable (VA 0x142aa97e8) -- the primary vtabl
-0x2aaabf8   todo:centralize-vtable-rva   # SAVE_RETRY_DIALOG_VTABLE_RVA || SaveRetry dialog vtable; two constructor refs from FUN_1407af8b0.
-0x2ac7f20   exempt:role-alias         # OWNER_OBJ_VTABLE_RVA, TITLE_FLOW_CONTEXT_VTABLE_RVA  || CS::TitleFlowContext::vftable (VA 0x142ac7f20).
-0x2b265d0   todo:centralize-vtable-rva   # MEMBERFUNCJOB_VTABLE_RVA || CS::MenuMemberFuncJob<TitleTopDialog> vtable; two refs from FUN_1409a6c70, used as row-registry node fingerprint.
-0x2b63bb0   todo:centralize-vtable-rva   # TITLE_OWNER_VTABLE_RVA || TitleStep owner vtable; refs from TitleStep ctor and FUN_140b0b440, used by title owner scanners.
-0x3000000   exempt:not-an-address     # MODULE_SPAN_FALLBACK, TEXT_SIZE  || A SPAN/EXTENT bound (0x3000000 = 48 MiB), used as a fallback for
-0x3d6c5e8   todo:centralize-global-rva   # RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA, RETURN_TITLE_REBUILD_FLAG_DAT_RVA || one-byte DAT_143d6c5e8 set by FUN_1407a3900 after CSMenuMan->menuData->field_0x5d=1.
-0x3d71580   todo:centralize-data-rva     # INNER_TITLE_STATE_TABLE_RVA || TitleStep state-name table initialized by FUN_1400a4f50; TitleStep stores a pointer to it at owner+0x10.
-0x4000000   exempt:not-an-address     # GAME_TEXT_RVA_LIMIT, SELF_DLL_SIZE_FALLBACK  || A 64 MiB LIMIT, not an RVA -- and the two names are GENUINELY DI
-0x4589ad8   todo:centralize-global-rva   # CS_FLIPPER_SINGLETON_RVA || GLOBAL_CSFlipper singleton; 116 xrefs including CleanupUpdate/MainUpdate lazy construction and timing reads/writes.
-0x4589bdc   todo:centralize-global-rva   # TITLE_GLOBAL_ACCEPT_BYTE_RVA || DAT_144589bdc is a 1-byte global with getter FUN_140e85f50 and setter FUN_140e85f70.
-0x485dc18   todo:centralize-global-rva   # DLUID_SINGLETON_RVA || GLOBAL_DLUserInputManager singleton; 84 xrefs including DLUID::DLUserInputManagerImpl::_Initialize.
-0x485dc20   todo:centralize-global-rva   # FD4_PAD_MANAGER_RVA || GLOBAL_FD4PadManager singleton; 168 xrefs including pad manager update/read paths.
-0x7230203   exempt:not-an-address     # MAGIC, SPIRV_MAGIC  || The SPIR-V module MAGIC WORD 0x07230203 (first word of every SPI
+0x100000    exempt:not-an-address         # ALLOW_INVADERS, CS_OWNING_THREAD_MAX, INVASION_ENTITY_ID_COUNT  || Neither is a game RVA; they collide numerically.
+0x100001    exempt:not-an-address         # CONTEXT_CONTROL_AMD64  || Windows CONTEXT_FLAGS bitmask, not a game RVA.
+0x67c500    exempt:role-alias             # B80_LOAD_SAVE_DATA_INITIATOR_RVA, PRODUCT_OWNED_SKIP_RVAS, SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA (was 0x67b200)  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
+0x67c590    exempt:role-alias             # DESERIALIZE_SLOT_RVA, PRODUCT_OWNED_SKIP_RVAS, SYSTEM_QUIT_INWORLD_LOAD_RVA (was 0x67b290)  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
+0x67ca50    exempt:role-alias             # SAVE_DISPATCH_CHAR_RVA, SAVE_DISPATCH_CHAR_VA, SAVE_WRITE_TO_SLOT_RVA, SUBMIT_LANE_CHAR_RVA (was 0x67b750)  || FUN_14067b750(uint slot /*-1 = GameMan->saveSlot*/, char flush,
+0x67cf10    todo:centralize-function-rva  # SAVE_DISPATCH_ENTRY0B_RVA, SUBMIT_LANE_ENTRY0B_RVA (was 0x67bc10)  || FUN_14067bc10 allocates 0x240010, serializes via FUN_1402585c0, submits IO request kind 0xb, then sets GameMan.saveState=1.
+0x734450    exempt:role-alias             # PROXY_IS_BOUND_RVA, TITLE_NATIVE_READY_PREDICATE_RVA (was 0x733150)  || `bool FUN_140733150(SceneObjProxy *param_1)` -- a 21-byte generi
+0x734640    exempt:role-alias             # PROXY_SET_VISIBLE_RVA, TITLE_PRESS_START_SET_VISIBLE_RVA (was 0x733340)  || `void FUN_140733340(SceneObjProxy *param_1, undefined1 visible)`
+0x74b5f0    exempt:role-alias             # ASSIGN_COMPONENT_WITH_NAME_RVA, TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA (was 0x74a2f0)  || `SceneObjProxy * CS::SceneObjProxy::assignComponentWithName(Scen
+0x7ae4f0    exempt:role-alias             # LEAF_UPDATE_RVA, MENU_WINDOW_JOB_RUN_RVA, MenuItemUpdate, PAB_NODE_UPDATE_RVA (was 0x7ad1c0)  || `CS::MenuWindowJob::Run` -- vtable slot 2 (+0x10) of the MenuWin
+0x7aeb40    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA (was 0x7ad810)  || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
+0x8279b0    exempt:role-alias             # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_BUILDER_RVA (was 0x826510)  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
+0x93cdb0    exempt:role-alias             # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA (was 0x93b760)  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
+0x9abcd0    exempt:role-alias             # PROFILE_RENDERER_REFRESH_RVA, PROFILE_RENDERER_REFRESH_VA (was 0x9aa680)  || er-quit-menu-core: build.rs VA assembles the refresh's latch-check and next-slot windows for the profile-table mid hook; the er-loading-portrait-core RVA is the containing function the runtime resolves.
+0x4498c0    exempt:role-alias             # DAMAGE_UPDATE_UI, DAMAGE_UPDATE_UI_VA (was 0x449280)  || er-npc-summons: build.rs VA assembles CSChrDamageModule::UpdateUI's enemy-bar window and shared tail; src addr.rs RVA is the containing function the mid hook resolves.
+0x7786b0    exempt:role-alias             # FRIENDLY_TAG_PRODUCER, FRIENDLY_TAG_PRODUCER_VA (was 0x777380)  || er-npc-summons: build.rs VA assembles the friendly tag producer's slot, color and resume windows; src addr.rs RVA is the containing function the mid hooks resolve.
+0x3d6d018   exempt:role-alias             # WORLD_CHR_MAN_GLOBAL_RVA, WORLD_CHR_MAN_GLOBAL_VA (was 0x3d65f88)  || er-npc-summons: build.rs VA is only the RIP operand of the MOV RCX,[WorldChrMan] it assembles to pin the tag-slot resume window; the runtime side stays centralised in er-game-base.
+0x9a5cc0    exempt:role-alias             # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, ProfileLoadActivate (was 0x9a4670)  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
+0xb0f530    exempt:role-alias             # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA (was 0xb0d960)  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
+0xd82cf0    exempt:role-alias             # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SCALEFORM_VALUE_DTOR_RVA (was 0xd7f850)  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
+0xeb8a90    exempt:role-alias             # CHILD_DONE_QUERY_RVA, MOVEMAP_CHILD_FINISHED_POLL_RVA (was 0xeb5530)  || Generic `EzChildStepBase` 'is the child step finished?' predicat
+0x29cde48   todo:centralize-vtable-rva    # FD4_TIME_FLOAT_VTABLE_RVA, FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA (was 0x29c8e48)  || Ghidra decompile of NetworkCheckJob::Run writes FD4::FD4TimeTemplate<float>::vftable on all returns.
+0x2a99be0   todo:centralize-vtable-rva    # SCENE_OBJ_PROXY_VTABLE_RVA (was 0x2a94a70)  || SceneObjProxy vtable; 36 xrefs, constructor/initializer refs in FUN_14074bb50/FUN_14074cb10/FUN_14074b280.
+0x2aae958   exempt:role-alias             # ITEM_VTABLE_RVA, MENU_WINDOW_JOB_VTABLE_RVA (was 0x2aa97e8)  || CS::MenuWindowJob::vftable (VA 0x142aa97e8) -- the primary vtabl
+0x2aafd68   todo:centralize-vtable-rva    # SAVE_RETRY_DIALOG_VTABLE_RVA (was 0x2aaabf8)  || SaveRetry dialog vtable; two constructor refs from FUN_1407af8b0.
+0x2acd090   exempt:role-alias             # TITLE_FLOW_CONTEXT_VTABLE_RVA (was 0x2ac7f20)  || CS::TitleFlowContext::vftable (VA 0x142ac7f20).
+0x2b2b740   todo:centralize-vtable-rva    # MEMBERFUNCJOB_VTABLE_RVA (was 0x2b265d0)  || CS::MenuMemberFuncJob<TitleTopDialog> vtable; two refs from FUN_1409a6c70, used as row-registry node fingerprint.
+0x2b68d40   todo:centralize-vtable-rva    # TITLE_OWNER_VTABLE_RVA, TitleOwnerVtable (was 0x2b63bb0)  || TitleStep owner vtable; refs from TitleStep ctor and FUN_140b0b440, used by title owner scanners.
+0x3000000   exempt:not-an-address         # MODULE_SPAN_FALLBACK, TEXT_SIZE  || A SPAN/EXTENT bound (0x3000000 = 48 MiB), used as a fallback for
+0x3d73678   todo:centralize-global-rva    # RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA, RETURN_TITLE_REBUILD_FLAG_DAT_RVA (was 0x3d6c5e8)  || one-byte DAT_143d6c5e8 set by FUN_1407a3900 after CSMenuMan->menuData->field_0x5d=1.
+0x3d78610   todo:centralize-data-rva      # INNER_TITLE_STATE_TABLE_RVA (was 0x3d71580)  || TitleStep state-name table initialized by FUN_1400a4f50; TitleStep stores a pointer to it at owner+0x10.
+0x4000000   exempt:not-an-address         # GAME_TEXT_RVA_LIMIT, SELF_DLL_SIZE_FALLBACK  || A 64 MiB LIMIT, not an RVA -- and the two names are GENUINELY DI
+0x4590b78   todo:centralize-global-rva    # CS_FLIPPER_SINGLETON_RVA (was 0x4589ad8)  || GLOBAL_CSFlipper singleton; 116 xrefs including CleanupUpdate/MainUpdate lazy construction and timing reads/writes.
+0x4590c7c   todo:centralize-global-rva    # TITLE_GLOBAL_ACCEPT_BYTE_RVA (was 0x4589bdc)  || DAT_144589bdc is a 1-byte global with getter FUN_140e85f50 and setter FUN_140e85f70.
+0x4864d48   todo:centralize-global-rva    # DLUID_SINGLETON_RVA, DluidInputManager (was 0x485dc18)  || GLOBAL_DLUserInputManager singleton; 84 xrefs including DLUID::DLUserInputManagerImpl::_Initialize.
+0x4864d50   todo:centralize-global-rva    # FD4_PAD_MANAGER_RVA (was 0x485dc20)  || GLOBAL_FD4PadManager singleton; 168 xrefs including pad manager update/read paths.
+0x7230203   exempt:not-an-address         # MAGIC, SPIRV_MAGIC  || The SPIR-V module MAGIC WORD 0x07230203 (first word of every SPI
 
 # ---------------------------------------------------------------------------------------------
 # ADJUDICATED 2026-08-30, after `check-rva-alias-drift.py` was widened from the single-`DECL`
@@ -54,75 +63,75 @@
 # none is new debt. Each was read at BOTH declaration sites before being classified.
 #
 # The exempt bucket below is ONE mechanism, not a shape: `build-support/prologue_build.rs`.
-# A crate's `build.rs` names a VA to READ BYTES OUT OF A NAMED IMAGE FILE (`Image::EldenRing` =
-# eldenring-deobf.bin, `Image::EldenRing1170` = eldenring-deobf-1.17.bin) and ASSEMBLE the
-# expected `*_SIG` / `*_PROLOGUE`; the `*_RVA` in `src/` is the address the DLL detours or calls
-# at runtime, and the generated constant is byte-checked against live memory there before the
-# hook installs (er-hook refuses audibly on a mismatch rather than corrupting the detour).
-# The two are therefore required to be INDEPENDENTLY VERSIONABLE -- `GAME_MAN_SINGLETON_VA` is
-# already spelled at its 1.17 address in two build scripts while `er-game-base`'s
-# `GAME_MAN_SINGLETON_RVA` is still 1.16.2. Deriving one from the other would forbid exactly the
-# split `Image::EldenRing1170` exists to express. Every pair below was confirmed to be a real
-# generate/call pair: the generated name has a live consumer, and that consumer is the module
-# that declares the paired `*_RVA`.
+# A crate's `build.rs` names a VA to READ BYTES OUT OF THE IMAGE FILE (`Image::EldenRing2720` =
+# eldenring-deobf-1.17.2.bin since 2026-10-23) and ASSEMBLE the expected `*_SIG` / `*_PROLOGUE`;
+# the `*_RVA` in `src/` is the address the DLL detours or calls at runtime, and the generated
+# constant is byte-checked against live memory there before the hook installs (er-hook refuses
+# audibly on a mismatch rather than corrupting the detour). A build script is compiled before
+# and apart from its crate, so it cannot import the `src/` constant; the build-time literal is
+# the price of the pin, not a second claim. (Until the port the two were also on different
+# builds -- the pin on a 1.17 image, the runtime constant 1.16.2 and carried -- which is why the
+# rows below say "independently versionable" in places.) Every pair below was confirmed to be a
+# real generate/call pair: the generated name has a live consumer, and that consumer is the
+# module that declares the paired `*_RVA`.
 #
-# NOT exempted: two build scripts writing the SAME name (0x3d6d988) -- same role, no second
+# NOT exempted: two build scripts writing the SAME name (0x3d709a8) -- same role, no second
 # viewpoint -- and every enum-discriminant-beside-a-const pair, which is one address written out
 # twice with nothing distinguishing the two writers.
 # ---------------------------------------------------------------------------------------------
 
-0x2610c0    exempt:role-alias         # PLAYER_GAME_DATA_COPY_CHR_NAME_RVA, PLAYER_GAME_DATA_COPY_CHR_NAME_VA  || er-player-name-filter: build.rs VA assembles PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE from the image; src RVA is the detour target it guards.
-0x4f9940    exempt:role-alias         # HAS_SPECIAL_EFFECT_ID_RVA, HAS_SPECIAL_EFFECT_ID_VA  || er-seamless-bugfixes: build.rs VA assembles HAS_SPECIAL_EFFECT_ID_PROLOGUE (incl. the in-window JZ target); src RVA is the guarded detour.
-0x4fa8e0    exempt:role-alias         # APPLY_RVA, APPLY_VA  || er-seamless-bugfixes: build.rs VA assembles APPLY_PROLOGUE; src RVA is the tail-jump detour on CS::SpecialEffect::Apply.
-0x5605b0    exempt:role-alias         # GIVE_ITEMS_RVA, GIVE_ITEMS_VA  || er-seamless-bugfixes: build.rs VA assembles GIVE_ITEMS_PROLOGUE; src RVA is the null-main-player guard on CS::MapItemManImpl::GiveItems.
-0xec9530    exempt:role-alias         # DESCRIPTOR_ADVANCE_VA, SCALEFORM_DESC_ADVANCE_RVA  || er-scaleform-hooks: build.rs VA assembles the page-roll and epilogue-join windows of the descriptor-ring advance; src RVA is the containing function resolve_call_site_rva carries to the running build.
-0x67b570    exempt:role-alias         # SAVE_DISPATCH_SYSTEM_RVA, SAVE_DISPATCH_SYSTEM_VA  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_SYSTEM_SIG; the runtime side is ALREADY centralised in er-game-base and re-derived at lib.rs:783.
-0x67b940    exempt:role-alias         # SAVE_DISPATCH_COMBINED_RVA, SAVE_DISPATCH_COMBINED_VA  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_COMBINED_SIG; runtime side centralised in er-game-base/src/rva.rs:28.
-0x67dc00    exempt:role-alias         # SAVE_SERIALIZE_CHAR_RVA, SAVE_SERIALIZE_CHAR_VA  || er-save-suppress: build.rs VA assembles SAVE_SERIALIZE_CHAR_SIG; src RVA is the observed call target.
-0x746e80    exempt:role-alias         # MENU_JOB_EMIT_RESULT_RVA, MENU_JOB_EMIT_RESULT_VA  || er-quickload/build.rs assembles MENU_JOB_EMIT_RESULT_SIG; er-title-flow declares the RVA; save_flow_boxes.rs:628-630 consumes RVA+SIG+MASK together.
-0x75f800    exempt:role-alias         # GET_PLAYER_CHR_NAME_RVA, GET_PLAYER_CHR_NAME_VA  || er-player-name-filter: build.rs VA assembles GET_PLAYER_CHR_NAME_PROLOGUE (the `48 8b c4` encoding case); src RVA is the detour target.
-0x7af730    exempt:role-alias         # MSGBOX_BUILDER_CTOR_VA, SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA  || er-quickload/build.rs assembles SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG; er-title-flow declares the call RVA; save_flow_boxes.rs uses both.
-0x7b0140    exempt:role-alias         # MSGBOX_DTOR_VA, SYSTEM_QUIT_MSGBOX_DTOR_RVA  || same MessageBoxBuilder recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_DTOR_SIG, er-title-flow declares the call RVA.
-0x7b10f0    exempt:role-alias         # MSGBOX_FINALIZE_VA, SYSTEM_QUIT_MSGBOX_FINALIZE_RVA  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_FINALIZE_SIG, er-title-flow declares the call RVA.
-0x7b1900    exempt:role-alias         # MSGBOX_ADD_NO_VA, SYSTEM_QUIT_MSGBOX_ADD_NO_RVA  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_ADD_NO_SIG, er-title-flow declares the call RVA.
-0x7b1b60    exempt:role-alias         # MSGBOX_DEFAULT_LAST_VA, SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG, er-title-flow declares the call RVA.
-0x7b1c70    exempt:role-alias         # MSGBOX_ADD_YES_VA, SYSTEM_QUIT_MSGBOX_ADD_YES_RVA  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_ADD_YES_SIG, er-title-flow declares the call RVA.
-0x81be30    exempt:role-alias         # SOFTWARE_KEYBOARD_JOB_CTOR_RVA, SOFTWARE_KEYBOARD_JOB_CTOR_VA  || er-quickload: build.rs VA assembles SOFTWARE_KEYBOARD_JOB_CTOR_SIG; save_picker_path_editor.rs declares the call RVA and checks it.
-0x81d220    exempt:role-alias         # SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA, SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0x81d3d0    exempt:role-alias         # SOFTWARE_KEYBOARD_RESULT_GATE_RVA, SOFTWARE_KEYBOARD_RESULT_GATE_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0x8c47c0    exempt:role-alias         # ANNOUNCE_UPDATE_VA, UPDATE_RVA  || er-invasion-warp: build.rs VA assembles UPDATE_PROLOGUE; announce.rs:109 is the runtime target. THE PAIR IS ALREADY MID-SPLIT -- announce.rs records the 1.17 entry as 0x8c5960 and `verified_fn` refuses audibly until the map row lands. That is the versioning split, not drift.
-0xd10b60    exempt:role-alias         # PLACE_NAME_LOOKUP_RVA, PLACE_NAME_LOOKUP_VA  || er-invasion-warp: build.rs VA assembles PLACE_NAME_LOOKUP_PROLOGUE; place_name.rs:40 is the call target it guards.
-0xd3d5f0    exempt:role-alias         # LOAD_BALANCER_PARAM_RVA, LOAD_BALANCER_PARAM_VA  || er-seamless-bugfixes: build.rs VA assembles LOAD_BALANCER_PARAM_PROLOGUE; src RVA is the guarded detour.
-0xe6e430    exempt:role-alias         # SL_POLL_SAVE_STATUS_RVA, SL_POLL_SAVE_STATUS_VA  || er-save-suppress: build.rs VA assembles SL_POLL_SAVE_STATUS_SIG; src RVA is the runtime target.
-0xe6f200    exempt:role-alias         # SL_RELEASE_REQUEST_RVA, SL_RELEASE_REQUEST_VA  || build.rs (er-save-suppress) assembles SL_RELEASE_REQUEST_SIG; the runtime side is centralised in er-game-base and re-derived at lib.rs:191.
-0xe6fb50    exempt:role-alias         # SL_ENQUEUE_SAVE_JOB_RVA, SL_ENQUEUE_SAVE_JOB_VA  || er-save-suppress: build.rs VA assembles SL_ENQUEUE_SAVE_JOB_SIG; src RVA is the runtime target.
-0xe70920    exempt:role-alias         # SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA, SOFTWARE_KEYBOARD_VALIDATOR_INIT_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0xe70960    exempt:role-alias         # SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA, SOFTWARE_KEYBOARD_VALIDATOR_DTOR_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0xe709f0    exempt:role-alias         # SOFTWARE_KEYBOARD_SET_INITIAL_RVA, SOFTWARE_KEYBOARD_SET_INITIAL_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0xe70c00    exempt:role-alias         # SOFTWARE_KEYBOARD_ENTER_NAME_RVA, SOFTWARE_KEYBOARD_ENTER_NAME_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
-0x1eb9ed0   exempt:role-alias         # GAME_HEAP_ALLOC_RVA, GAME_HEAP_ALLOC_VA  || er-quickload: build.rs VA assembles GAME_HEAP_ALLOC_SIG for the allocator thunk; anti_debug.rs:530 is the call target. Ghidra 1.16.2 names it HeapAlloc@141eb9ed0.
-0x23f1bf0   exempt:role-alias         # SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA  || er-player-name-filter: build.rs VA assembles the PROLOGUE, src RVA is the detour target.
-0x240fd70   exempt:role-alias         # SL_SAVE_JOB_BODY_RVA, SL_SAVE_JOB_BODY_VA  || er-save-suppress: build.rs VA assembles SL_SAVE_JOB_BODY_SIG; save_job_completion.rs:41 is the observed job body.
-0x2413860   exempt:role-alias         # SAVE_WRITE_FULL_REBUILD_RVA, SAVE_WRITE_FULL_REBUILD_VA  || er-save-suppress: build.rs VA assembles SAVE_WRITE_FULL_REBUILD_SIG; save_write_branch.rs:45 is the 4-arg detour target.
-0x24142e0   exempt:role-alias         # SAVE_WRITE_IN_PLACE_RVA, SAVE_WRITE_IN_PLACE_VA  || er-save-suppress: build.rs VA assembles SAVE_WRITE_IN_PLACE_SIG; save_write_branch.rs:62 is the 5-arg detour target.
-0x2416ee0   exempt:role-alias         # SOFTWARE_KEYBOARD_SET_MAX_RVA, SOFTWARE_KEYBOARD_SET_MAX_VA  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0x2610d0    exempt:role-alias             # PLAYER_GAME_DATA_COPY_CHR_NAME_RVA, PLAYER_GAME_DATA_COPY_CHR_NAME_VA (was 0x2610c0)  || er-player-name-filter: build.rs VA assembles PLAYER_GAME_DATA_COPY_CHR_NAME_PROLOGUE from the image; src RVA is the detour target it guards.
+0x4fa7f0    exempt:role-alias             # HAS_SPECIAL_EFFECT_ID_RVA, HAS_SPECIAL_EFFECT_ID_VA (was 0x4f9940)  || er-seamless-bugfixes: build.rs VA assembles HAS_SPECIAL_EFFECT_ID_PROLOGUE (incl. the in-window JZ target); src RVA is the guarded detour.
+0x4fb790    exempt:role-alias             # APPLY_RVA, APPLY_VA (was 0x4fa8e0)  || er-seamless-bugfixes: build.rs VA assembles APPLY_PROLOGUE; src RVA is the tail-jump detour on CS::SpecialEffect::Apply.
+0x5618b0    exempt:role-alias             # GIVE_ITEMS_RVA, GIVE_ITEMS_VA (was 0x5605b0)  || er-seamless-bugfixes: build.rs VA assembles GIVE_ITEMS_PROLOGUE; src RVA is the null-main-player guard on CS::MapItemManImpl::GiveItems.
+0xecca90    exempt:role-alias             # DESCRIPTOR_ADVANCE_VA, SCALEFORM_DESC_ADVANCE_RVA (was 0xec9530)  || er-scaleform-hooks: build.rs VA assembles the page-roll and epilogue-join windows of the descriptor-ring advance; src RVA is the containing function resolve_call_site_rva places the two sites in.
+0x67c870    exempt:role-alias             # SAVE_DISPATCH_SYSTEM_RVA, SAVE_DISPATCH_SYSTEM_VA, SUBMIT_LANE_SYSTEM_RVA (was 0x67b570)  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_SYSTEM_SIG; the runtime side is ALREADY centralised in er-game-base and re-derived at lib.rs:783.
+0x67cc40    exempt:role-alias             # SAVE_DISPATCH_COMBINED_RVA, SAVE_DISPATCH_COMBINED_VA, SUBMIT_LANE_COMBINED_RVA (was 0x67b940)  || build.rs (er-save-suppress) assembles SAVE_DISPATCH_COMBINED_SIG; runtime side centralised in er-game-base/src/rva.rs:28.
+0x67ef00    exempt:role-alias             # SAVE_SERIALIZE_CHAR_RVA, SAVE_SERIALIZE_CHAR_VA (was 0x67dc00)  || er-save-suppress: build.rs VA assembles SAVE_SERIALIZE_CHAR_SIG; src RVA is the observed call target.
+0x748180    exempt:role-alias             # MENU_JOB_EMIT_RESULT_RVA, MENU_JOB_EMIT_RESULT_VA (was 0x746e80)  || er-quickload/build.rs assembles MENU_JOB_EMIT_RESULT_SIG; er-title-flow declares the RVA; save_flow_boxes.rs:628-630 consumes RVA+SIG+MASK together.
+0x760b00    exempt:role-alias             # GET_PLAYER_CHR_NAME_RVA, GET_PLAYER_CHR_NAME_VA (was 0x75f800)  || er-player-name-filter: build.rs VA assembles GET_PLAYER_CHR_NAME_PROLOGUE (the `48 8b c4` encoding case); src RVA is the detour target.
+0x7b0a60    exempt:role-alias             # MSGBOX_BUILDER_CTOR_VA, SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA (was 0x7af730)  || er-quickload/build.rs assembles SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG; er-title-flow declares the call RVA; save_flow_boxes.rs uses both.
+0x7b1470    exempt:role-alias             # MSGBOX_DTOR_VA, SYSTEM_QUIT_MSGBOX_DTOR_RVA (was 0x7b0140)  || same MessageBoxBuilder recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_DTOR_SIG, er-title-flow declares the call RVA.
+0x7b2420    exempt:role-alias             # MSGBOX_FINALIZE_VA, SYSTEM_QUIT_MSGBOX_FINALIZE_RVA (was 0x7b10f0)  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_FINALIZE_SIG, er-title-flow declares the call RVA.
+0x7b2c30    exempt:role-alias             # MSGBOX_ADD_NO_VA, SYSTEM_QUIT_MSGBOX_ADD_NO_RVA (was 0x7b1900)  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_ADD_NO_SIG, er-title-flow declares the call RVA.
+0x7b2e90    exempt:role-alias             # MSGBOX_DEFAULT_LAST_VA, SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA (was 0x7b1b60)  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG, er-title-flow declares the call RVA.
+0x7b2fa0    exempt:role-alias             # MSGBOX_ADD_YES_VA, SYSTEM_QUIT_MSGBOX_ADD_YES_RVA (was 0x7b1c70)  || same recipe: build.rs assembles SYSTEM_QUIT_MSGBOX_ADD_YES_SIG, er-title-flow declares the call RVA.
+0x81d160    exempt:role-alias             # SOFTWARE_KEYBOARD_JOB_CTOR_RVA, SOFTWARE_KEYBOARD_JOB_CTOR_VA (was 0x81be30)  || er-quickload: build.rs VA assembles SOFTWARE_KEYBOARD_JOB_CTOR_SIG; save_picker_path_editor.rs declares the call RVA and checks it.
+0x81e550    exempt:role-alias             # SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_RVA, SOFTWARE_KEYBOARD_TERMINAL_CALLBACK_VA (was 0x81d220)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0x81e700    exempt:role-alias             # SOFTWARE_KEYBOARD_RESULT_GATE_RVA, SOFTWARE_KEYBOARD_RESULT_GATE_VA (was 0x81d3d0)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0x8c5e10    exempt:role-alias             # ANNOUNCE_UPDATE_VA, UPDATE_RVA (was 0x8c47c0)  || er-invasion-warp: build.rs VA assembles UPDATE_PROLOGUE; announce.rs is the runtime target. (The 1.17 mid-split this row once described ended with the port: both now hold the 2.7.2.0 entry.)
+0xd13990    exempt:role-alias             # PLACE_NAME_LOOKUP_RVA, PLACE_NAME_LOOKUP_VA (was 0xd10b60)  || er-invasion-warp: build.rs VA assembles PLACE_NAME_LOOKUP_PROLOGUE; place_name.rs:40 is the call target it guards.
+0xd404a0    exempt:role-alias             # LOAD_BALANCER_PARAM_RVA, LOAD_BALANCER_PARAM_VA (was 0xd3d5f0)  || er-seamless-bugfixes: build.rs VA assembles LOAD_BALANCER_PARAM_PROLOGUE; src RVA is the guarded detour.
+0xe71990    exempt:role-alias             # SL_POLL_SAVE_STATUS_RVA, SL_POLL_SAVE_STATUS_VA (was 0xe6e430)  || er-save-suppress: build.rs VA assembles SL_POLL_SAVE_STATUS_SIG; src RVA is the runtime target.
+0xe72760    exempt:role-alias             # SL_RELEASE_REQUEST_RVA, SL_RELEASE_REQUEST_VA (was 0xe6f200)  || build.rs (er-save-suppress) assembles SL_RELEASE_REQUEST_SIG; the runtime side is centralised in er-game-base and re-derived at lib.rs:191.
+0xe730b0    exempt:role-alias             # SL_ENQUEUE_SAVE_JOB_RVA, SL_ENQUEUE_SAVE_JOB_VA (was 0xe6fb50)  || er-save-suppress: build.rs VA assembles SL_ENQUEUE_SAVE_JOB_SIG; src RVA is the runtime target.
+0xe73e80    exempt:role-alias             # SOFTWARE_KEYBOARD_VALIDATOR_INIT_RVA, SOFTWARE_KEYBOARD_VALIDATOR_INIT_VA (was 0xe70920)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0xe73ec0    exempt:role-alias             # SOFTWARE_KEYBOARD_VALIDATOR_DTOR_RVA, SOFTWARE_KEYBOARD_VALIDATOR_DTOR_VA (was 0xe70960)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0xe73f50    exempt:role-alias             # SOFTWARE_KEYBOARD_SET_INITIAL_RVA, SOFTWARE_KEYBOARD_SET_INITIAL_VA (was 0xe709f0)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0xe74160    exempt:role-alias             # SOFTWARE_KEYBOARD_ENTER_NAME_RVA, SOFTWARE_KEYBOARD_ENTER_NAME_VA (was 0xe70c00)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
+0x1ebd430   todo:centralize-function-rva  # ALLOC, GAME_HEAP_ALLOC_RVA, GAME_HEAP_ALLOC_VA (was 0x1eb9ed0)  || GAME_HEAP_ALLOC_VA (er-quit-menu-core/build.rs) assembles GAME_HEAP_ALLOC_SIG for the allocator thunk, and that half is the exempt build-script pin. The debt is `ALLOC` in er-positional-voice-core/src/sites.rs, a second runtime literal of er-game-base's GAME_HEAP_ALLOC_RVA that joined the group when the port made both 2.7.2.0 (it was a 1.17.1 value carried at runtime before). Ghidra 1.16.2 names it HeapAlloc@141eb9ed0.
+0x23f5ba0   exempt:role-alias             # SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_RVA, SESSION_MANAGER_PLAYER_ENTRY_BASE_COPY_VA (was 0x23f1bf0)  || er-player-name-filter: build.rs VA assembles the PROLOGUE, src RVA is the detour target.
+0x2413d20   exempt:role-alias             # SL_SAVE_JOB_BODY_RVA, SL_SAVE_JOB_BODY_VA (was 0x240fd70)  || er-save-suppress: build.rs VA assembles SL_SAVE_JOB_BODY_SIG; save_job_completion.rs:41 is the observed job body.
+0x2417810   exempt:role-alias             # SAVE_WRITE_FULL_REBUILD_RVA, SAVE_WRITE_FULL_REBUILD_VA (was 0x2413860)  || er-save-suppress: build.rs VA assembles SAVE_WRITE_FULL_REBUILD_SIG; save_write_branch.rs:45 is the 4-arg detour target.
+0x2418290   exempt:role-alias             # SAVE_WRITE_IN_PLACE_RVA, SAVE_WRITE_IN_PLACE_VA (was 0x24142e0)  || er-save-suppress: build.rs VA assembles SAVE_WRITE_IN_PLACE_SIG; save_write_branch.rs:62 is the 5-arg detour target.
+0x241ae90   exempt:role-alias             # SOFTWARE_KEYBOARD_SET_MAX_RVA, SOFTWARE_KEYBOARD_SET_MAX_VA (was 0x2416ee0)  || same SoftwareKeyboard recipe: build-time SIG generator vs runtime call target.
 
 # --- todo: one address written out twice with NO second viewpoint. This set must only SHRINK. ---
-0x262250    todo:centralize-function-rva  # PROFILE_MARK_SLOT_USED_RVA (er-loading-portrait-core), ProfileLoadMenuRva::ProfileSlotActivate (er-title-flow)  || 1.16.2 Ghidra: `bool MarkProfileIndexAsUsed(ProfileSummary*, int)`, 19 bytes. The RVA name is right; the enum name is a looser claim for the same function. Centralise on the Ghidra name.
-0x679510    todo:centralize-function-rva  # B80_LANE1_DRIVER_RVA (er-title-flow), NativeSaveMenuRva::SaveLoadPumpDefault (er-save-loader)  || FUN_140679510 calls the iodev getter 0x140e6e060 then PollSaveStatus 0x140e6e430; both names describe that pump from different call sites. Two literals, no version split.
-0x67a420    todo:centralize-function-rva  # SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA (er-title-flow), NativeSaveMenuRva::SaveRequestProfile (er-save-loader)  || same function, agreeing names, written out twice in two crates.
-0x67a520    todo:centralize-function-rva  # SYSTEM_QUIT_REQUEST_SAVE_RVA (er-title-flow), NativeSaveMenuRva::RequestSave (er-save-loader)  || same function, agreeing names, written out twice in two crates.
-0x81ead0    todo:centralize-function-rva  # FACTORY_RVA (er-quickload menu_observation.rs, fn-local const), TitleDialogRva::LiveDialogFactory (er-title-flow)  || FUN_14081ead0 calls constructScaleformObject + HeapAlloc + FUN_1409aa680; both names mean the dialog factory. The fn-local const should import the enum.
-0x826d50    todo:centralize-function-rva  # LoadJobRun (er-title-flow stage2_menu_drive.rs), SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA (er-quickload)  || RESOLVED 2026-08-30: both are `CS::MenuJobWithContext<LoadJobContext>::Run` (vt[2] of MenuJobLoadContextVtable @ 0x2ac71e0), not a "selector tick" -- no callers, DATA-only xrefs, body calls MenuJobResult::SetResult(out, Failed, 0). Names now agree; still two literal declarations to centralize.
-0x2ac3ea8   todo:centralize-vtable-rva    # FUNCTOR_VTABLE_RVA (er-quickload menu_observation.rs, fn-local const), ProfileLoadMenuRva::MenuLoadGameFunctorVtable (er-title-flow)  || same vtable, two literals; the fn-local const should import the enum.
-0x2ac71e0   todo:centralize-vtable-rva    # MENUJOB_LOADGAME_VTABLE_DUMP_VA (er-quickload), ProfileLoadMenuRva::MenuJobLoadContextVtable (er-title-flow)  || RESOLVED 2026-08-30 by RTTI, not inference: vtable[-1]@0x142ac71d8 -> COL 0x1432fc230 -> TD 0x143ca5d40 -> `.?AV?$MenuJobWithContext@VLoadJobContext@...`. It is the MenuJob vtable, not a "SelectorStep" vtable; vt[2]=0x140826d50 is LoadJobRun. Names now agree; still two literal declarations to centralize.
-0x2b26468   todo:centralize-vtable-rva    # TITLE_TOP_DIALOG_VTABLE_RVA (er-game-base/src/rva.rs), TitleDialogRva::Vtable (er-title-flow)  || er-game-base is already the central home for this value; the enum re-writes the literal instead of deriving. Straight one-line fix.
-0x3d60ec8   todo:centralize-global-rva    # NOW_LOADING_SINGLETON_RVA (er-input-harness), RuntimeGlobalRva::NowLoadingSingleton (er-title-flow)  || same CSNowLoadingHelperImp singleton, agreeing names; er-input-harness already derives GAME_MAN_SINGLETON_RVA from er-game-base and should do the same here.
-0x3d6d8d0   todo:centralize-data-rva      # TitleDialogRva::ProfileModelRendTable (er-title-flow), TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA (er-loading-portrait-core)  || RESOLVED 2026-08-30: 10 contiguous `CS::CSMenuProfModelRend*` slots, not a screen array. 0x1409af3a0 builds it (HeapAlloc+ctor x10), 0x1409b2db0 clears it via CSDelayDeleteMan, 0x1409aa680 pumps it from GetProfileSummary(). er-loading-portrait-core's name was the accurate one; er-title-flow renamed to agree. Still two literal declarations to centralize.
-0x3d6d988   todo:centralize-global-rva    # GAME_MAN_SINGLETON_VA declared in BOTH er-quickload/build.rs:34 and er-save-suppress/build.rs:33  || NOT a role alias: same name, same role, same 1.17 address, two build scripts. This is the "one name re-declared independently in several crates" shape. A 1.18 move updated in one build.rs and missed in the other silently disarms only the other crate's patch.
-0x4589390   todo:centralize-global-rva    # RuntimeGlobalRva::IoDeviceSingleton (er-title-flow), SL_IODEV_GLOBAL_RVA (er-game-base)  || er-game-base's own doc says both aliases "now derive from here (2026-08-01)" -- but the enum discriminant still writes the literal, so that dedupe was incomplete. Finish it.
-0x47ef360   todo:centralize-global-rva    # GX_DRAW_CONTEXT_RVA (er-loading-portrait-core), TitleSessionRva::GxDrawContextSingleton (er-title-flow)  || RESOLVED 2026-08-30 (was "NAMES ARE IRRECONCILABLE"): 1.16.2 dump names the global `g_GxDrawContext`, typed `GxDrawContext*`. Of 1242 xrefs exactly 2 are writes (ctor/dtor pair @0x1419e6340/0x1419e63a0, HeapAlloc size 0x1010 == sizeof(GxDrawContext)); zero writers in the move-map/load region. Never null at the title -- CSMovieGxTexture's ctor derefs it with no null check for the title background movie. NOT the session/readiness singleton; that is the unrelated 0x4588e98 (TitleSessionRva::SaveSafeBeginLogoSession), which title_tick_cover.rs correctly gates on. Names now agree; still two literal declarations to centralize.
-0x4853048   todo:centralize-global-rva    # FD4_IO_POOL_RVA (er-title-flow constants_autoload_state.rs), RuntimeGlobalRva::Fd4IoPool (er-title-flow constants_moved.rs)  || SAME CRATE, two tables, same name, two literals. Purely mechanical to collapse.
+0x262260    todo:centralize-function-rva  # PROFILE_MARK_SLOT_USED_RVA, ProfileSlotActivate (was 0x262250)  || 1.16.2 Ghidra: `bool MarkProfileIndexAsUsed(ProfileSummary*, int)`, 19 bytes. The RVA name is right; the enum name is a looser claim for the same function. Centralise on the Ghidra name.
+0x67a810    todo:centralize-function-rva  # SL_SAVE_LANE_WRAPPER_RVA, SaveLoadPumpDefault (was 0x679510, then B80_LANE1_DRIVER_RVA)  || FUN_140679510 calls the iodev getter 0x140e6e060 then PollSaveStatus 0x140e6e430; both names describe that pump from different call sites. Two literals, no version split.
+0x67b720    todo:centralize-function-rva  # SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA, SaveRequestProfile (was 0x67a420)  || same function, agreeing names, written out twice in two crates.
+0x67b820    todo:centralize-function-rva  # RequestSave, SYSTEM_QUIT_REQUEST_SAVE_RVA (was 0x67a520)  || same function, agreeing names, written out twice in two crates.
+0x81fe00    todo:centralize-function-rva  # FACTORY_RVA, LiveDialogFactory (was 0x81ead0)  || FUN_14081ead0 calls constructScaleformObject + HeapAlloc + FUN_1409aa680; both names mean the dialog factory. The fn-local const should import the enum.
+0x8281f0    todo:centralize-function-rva  # LoadJobRun, SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA (was 0x826d50)  || RESOLVED 2026-08-30: both are `CS::MenuJobWithContext<LoadJobContext>::Run` (vt[2] of MenuJobLoadContextVtable @ 0x2ac71e0), not a "selector tick" -- no callers, DATA-only xrefs, body calls MenuJobResult::SetResult(out, Failed, 0). Names now agree; still two literal declarations to centralize.
+0x2ac9018   todo:centralize-vtable-rva    # FUNCTOR_VTABLE_RVA, MenuLoadGameFunctorVtable (was 0x2ac3ea8)  || same vtable, two literals; the fn-local const should import the enum.
+0x2acc350   todo:centralize-vtable-rva    # MENUJOB_LOADGAME_VTABLE_VA, MenuJobLoadContextVtable (was 0x2ac71e0)  || RESOLVED 2026-08-30 by RTTI, not inference: vtable[-1]@0x142ac71d8 -> COL 0x1432fc230 -> TD 0x143ca5d40 -> `.?AV?$MenuJobWithContext@VLoadJobContext@...`. It is the MenuJob vtable, not a "SelectorStep" vtable; vt[2]=0x140826d50 is LoadJobRun. Names now agree; still two literal declarations to centralize.
+0x2b2b5d8   todo:centralize-vtable-rva    # TITLE_TOP_DIALOG_VTABLE_RVA, Vtable (was 0x2b26468)  || er-game-base is already the central home for this value; the enum re-writes the literal instead of deriving. Straight one-line fix.
+0x3d67f48   todo:centralize-global-rva    # NOW_LOADING_SINGLETON_RVA, NowLoadingSingleton (was 0x3d60ec8)  || same CSNowLoadingHelperImp singleton, agreeing names; er-input-harness already derives GAME_MAN_SINGLETON_RVA from er-game-base and should do the same here.
+0x3d74960   todo:centralize-data-rva      # ProfileModelRendTable, TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA (was 0x3d6d8d0)  || RESOLVED 2026-08-30: 10 contiguous `CS::CSMenuProfModelRend*` slots, not a screen array. 0x1409af3a0 builds it (HeapAlloc+ctor x10), 0x1409b2db0 clears it via CSDelayDeleteMan, 0x1409aa680 pumps it from GetProfileSummary(). er-loading-portrait-core's name was the accurate one; er-title-flow renamed to agree. Still two literal declarations to centralize.
+0x3d709a8   todo:centralize-global-rva    # GAME_MAN_SINGLETON_RVA, GAME_MAN_SINGLETON_VA (was 0x3d6d988, the 1.17 value of the two build scripts)  || NOT a role alias: GAME_MAN_SINGLETON_VA is the same name in the same role in er-quit-menu-core/build.rs and er-save-suppress/build.rs -- the "one name re-declared independently in several crates" shape. A next-patch move updated in one build.rs and missed in the other silently disarms only the other crate's pin. er-game-base's GAME_MAN_SINGLETON_RVA joined the group when the port made it 2.7.2.0 too.
+0x4590430   todo:centralize-global-rva    # IoDeviceSingleton, SL_IODEV_GLOBAL_RVA (was 0x4589390)  || er-game-base's own doc says both aliases "now derive from here (2026-08-01)" -- but the enum discriminant still writes the literal, so that dedupe was incomplete. Finish it.
+0x47f6400   todo:centralize-global-rva    # GX_DRAW_CONTEXT_GLOBAL_RVA, GX_DRAW_CONTEXT_RVA, GxDrawContextSingleton (was 0x47ef360)  || RESOLVED 2026-08-30 (was "NAMES ARE IRRECONCILABLE"): 1.16.2 dump names the global `g_GxDrawContext`, typed `GxDrawContext*`. Of 1242 xrefs exactly 2 are writes (ctor/dtor pair @0x1419e6340/0x1419e63a0, HeapAlloc size 0x1010 == sizeof(GxDrawContext)); zero writers in the move-map/load region. Never null at the title -- CSMovieGxTexture's ctor derefs it with no null check for the title background movie. NOT the session/readiness singleton; that is the unrelated 0x4588e98 (TitleSessionRva::SaveSafeBeginLogoSession), which title_tick_cover.rs correctly gates on. Names now agree; still two literal declarations to centralize.
+0x485a178   todo:centralize-global-rva    # FD4_IO_POOL_RVA, Fd4IoPool (was 0x4853048)  || SAME CRATE, two tables, same name, two literals. Purely mechanical to collapse.
 
 # ---------------------------------------------------------------------------------------------
 # `er-quit-rows`, the second copy of the product's source: 83 rows, all deleted 2026-09-20
@@ -139,12 +148,26 @@
 # bd er-effects-rs-ejfl measured -- 5,000 to 10,500 lines, blocked on splitting
 # `system_quit_menu_window_run_post` -- is still undone and is still what a SECOND row shell would
 # need; it is no longer what this file is waiting on.
-0x3f0bf0    todo:centralize-function-rva  # GET_PHYSICS_POS (er-npc-summons), CHR_INS_GET_PHYSICS_POSITION_RVA (er-invasion-warp-core) || 1.16.2 `ChrIns::GetPhysicsPosition(ChrIns*, FloatVector4*)`. er-npc-summons does not depend on er-invasion-warp-core; centralise both on the Ghidra name.
-0x61e120    todo:centralize-function-rva  # BLOCK_TO_PHYSICS (er-npc-summons), CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA (er-invasion-warp-core) || 1.16.2 `ConvertBlockCoordsToPhysicsCoords(out, blockLocal, BlockId*)`. Same function, two crates with no dependency between them.
-0x68ee60    todo:centralize-function-rva  # CAN_USE_GOODS (er-npc-summons), CAN_USE_GOODS_RVA (er-invasion-warp) || 1.17 `CS::CanUseGoods`, both crates hook it through the runtime-derived installer with the 1.17 address; both DLLs chain on it, listed as `[[shared]]` in scripts/me3-dll-conflicts.toml.
-0x766650    exempt:role-alias         # MENU_HAS_MOUSE_1170_VA, MENU_HAS_MOUSE_1171_RVA  || er-npc-summons: build.rs VA assembles MENU_HAS_MOUSE_1171_PROLOGUE from the 1.17 image; src RVA is the version-gated detour target it guards.
-0x6442a0    exempt:role-alias         # REQUEST_TIME_1170_VA, REQUEST_TIME_1171_RVA  || er-cel-shade Sky tab: build.rs VA assembles REQUEST_TIME_1171_PROLOGUE from the 1.17 image; src/sky/game.rs RVA is the 1.17.1 address, carried to the running build by carry_1171_rva, of the call it checks before calling WorldAreaTime::RequestTime.
-0x647940    exempt:role-alias         # CHANGE_WEATHER_1170_VA, CHANGE_WEATHER_1171_RVA  || er-cel-shade Sky tab: build.rs VA assembles CHANGE_WEATHER_1171_PROLOGUE; src/sky/game.rs RVA is the 1.17.1 address, carried by carry_1171_rva, of the call to WorldAreaWeather::ChangeWeather it guards.
-0x1b2e9b0   exempt:role-alias         # DRS_UPDATE_1171_RVA, DRS_UPDATE_1171_VA  || er-render-scale: build.rs VA assembles DRS_UPDATE_1171_PROLOGUE from the 1.17.1 image; src RVA is the version-gated detour target it guards (the dynamic resolution update).
-0x2441453   exempt:not-an-address     # K (er-save-loader bnd4.rs), MD5_K (er-cel-shade dxbc.rs)  || An MD5 round constant (RFC 1321 table K[i]); both crates implement MD5, neither value is a game address.
-0x4881d05   exempt:not-an-address     # K (er-save-loader bnd4.rs), MD5_K (er-cel-shade dxbc.rs)  || An MD5 round constant (RFC 1321 table K[i]); both crates implement MD5, neither value is a game address.
+0x3f0e20    todo:centralize-function-rva  # CHR_INS_GET_PHYSICS_POSITION_RVA, GET_PHYSICS_POS (was 0x3f0bf0)  || 1.16.2 `ChrIns::GetPhysicsPosition(ChrIns*, FloatVector4*)`. er-npc-summons does not depend on er-invasion-warp-core; centralise both on the Ghidra name.
+0x61f420    todo:centralize-function-rva  # BLOCK_TO_PHYSICS, CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA (was 0x61e120)  || 1.16.2 `ConvertBlockCoordsToPhysicsCoords(out, blockLocal, BlockId*)`. Same function, two crates with no dependency between them.
+0x68f310    todo:centralize-function-rva  # CAN_USE_GOODS, CAN_USE_GOODS_RVA (was 0x68ee60, a 1.17.1 value)  || `CS::CanUseGoods`; both crates hook it through the runtime-derived installer with the 2.7.2.0 address; both DLLs chain on it, listed as `[[shared]]` in scripts/me3-dll-conflicts.toml.
+0x766b00    todo:centralize-function-rva  # MENU_HAS_MOUSE_RVA, MENU_HAS_MOUSE_VA (was 0x766650, a 1.17.1 value)  || "a menu has the mouse", bool(CSMenuManImp*). Each crate's build.rs VA assembles MENU_HAS_MOUSE_PROLOGUE and its src RVA is the detour target it guards -- that pairing is the exempt build-script mechanism. The debt is that er-npc-summons and er-overlay-input both declare the pair under the same names: one function, same role, two crates. Classified exempt until 2026-10-23, when the row named only the er-npc-summons pair.
+0x644750    exempt:role-alias             # REQUEST_TIME_RVA, REQUEST_TIME_VA (was 0x6442a0, a 1.17.0/1.17.1 value)  || er-cel-shade Sky tab: build.rs VA assembles REQUEST_TIME_PROLOGUE from the image; src/sky/game.rs RVA is the address of WorldAreaTime::RequestTime that the call checks against it first.
+0x647df0    exempt:role-alias             # CHANGE_WEATHER_RVA, CHANGE_WEATHER_VA (was 0x647940, a 1.17.0/1.17.1 value)  || er-cel-shade Sky tab: build.rs VA assembles CHANGE_WEATHER_PROLOGUE; src/sky/game.rs RVA is the address of WorldAreaWeather::ChangeWeather the call guards.
+0x1b300a0   exempt:role-alias             # DRS_UPDATE_RVA, DRS_UPDATE_VA (was 0x1b2e9b0, a 1.17.1 value)  || er-render-scale: build.rs VA assembles DRS_UPDATE_PROLOGUE from the image; src RVA is the detour target it guards (the dynamic resolution update).
+0x2441453   exempt:not-an-address         # K, MD5_K  || An MD5 round constant (RFC 1321 table K[i]); both crates implement MD5, neither value is a game address.
+0x4881d05   exempt:not-an-address         # K, MD5_K  || An MD5 round constant (RFC 1321 table K[i]); both crates implement MD5, neither value is a game address.
+
+# ---------------------------------------------------------------------------------------------
+# Joined 2026-10-23 by the port to 2.7.2.0. Before it, each pair below held two different numbers:
+# a build-time VA (or a `getter_sites.rs` copy) on a 1.17 image and a runtime rva on 1.16.2 that
+# the gate carried. Once both became the one native value they read as one address written twice,
+# which is what they are. Each was read at both declaration sites.
+# ---------------------------------------------------------------------------------------------
+0x679a10    exempt:role-alias             # SAVE_REQUEST_RETRACT_B73_RVA, SAVE_REQUEST_RETRACT_B73_VA  || er-quit-menu-core/build.rs VA assembles SAVE_REQUEST_RETRACT_B73_SIG (the whole body of the retraction); er-title-flow constants_autoload_state.rs declares the runtime RVA it checks.
+0x679a40    exempt:role-alias             # SAVE_REQUEST_RETRACT_B72_RVA, SAVE_REQUEST_RETRACT_B72_VA  || same recipe: build.rs assembles SAVE_REQUEST_RETRACT_B72_SIG, er-title-flow declares the runtime RVA.
+0x67bc80    exempt:role-alias             # QUIT_PHASE_SETTLE_RVA, QUIT_PHASE_SETTLE_VA  || er-save-suppress: build.rs VA assembles QUIT_PHASE_SETTLE_SIG (`if (bc4 == 2) bc4 = 3;`, the only writer of GameMan+0xbc4 2 -> 3); src/lib.rs RVA is the runtime target.
+0x1a4fe90   exempt:role-alias             # PARAM_DB_UPDATE_RVA, PARAM_DB_UPDATE_VA  || er-cel-shade: build.rs VA assembles PARAM_DB_UPDATE_PROLOGUE for GXParamDB::Update; src/sky/light.rs RVA is the detour target it guards.
+0xd29700    todo:centralize-function-rva  # GET_BUDDY_PARAM, GET_BUDDY_PARAM_RVA  || er-npc-summons: GetBuddyParam(out, id). getter_sites.rs spells GET_BUDDY_PARAM_RVA for build.rs and is include!d by src as well, so src/addr.rs's GET_BUDDY_PARAM can derive from it: one crate, one function, two literals.
+0xd53a90    todo:centralize-function-rva  # GET_SP_EFFECT_PARAM_RVA  || GetSpEffectParam(out, id), the same name in er-game-base/src/rva.rs and er-death-persist/getter_sites.rs. The getter_sites.rs copy is include!d by er-death-persist's build.rs, which cannot import er-game-base, so collapsing it needs the build script to take the value from er-game-base's source rather than its own literal.
+0x3d81560   todo:centralize-global-rva    # CS_SESSION_MANAGER_GLOBAL_RVA, SESSION_MANAGER_RVA  || CSSessionManager*: er-game-base declares it, er-cel-shade/src/sky/game.rs writes the literal again instead of deriving. Straight one-line fix.

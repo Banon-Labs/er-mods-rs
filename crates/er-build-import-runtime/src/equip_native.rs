@@ -41,7 +41,7 @@ use er_build_import_core::equip::{
 use er_build_import_core::plan::ArmamentSkill;
 
 /// `EquipItemToChrAsmSlot(ChrAsmSlot slot, MenuGaitem *item)`.
-const EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA: usize = 0x787c30;
+const EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA: usize = 0x788f60;
 /// `UnequipItem(ChrAsmSlot slot, bool removeItem)` -- the engine's own "take this off".
 ///
 /// It is what `EquipItemToChrAsmSlot` itself calls when the menu hands it a gaitem whose
@@ -63,7 +63,7 @@ const EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA: usize = 0x787c30;
 /// It reads `GLOBAL_CSMenuMan`, `GLOBAL_GameDataMan->mainPlayerGameData` and `GLOBAL_WorldChrMan`
 /// for itself, and takes the `DLPanic` path on the first and third when they are null -- which is
 /// why [`vacate_all`] proves the player is in the world before it calls this at all.
-const UNEQUIP_ITEM_RVA: usize = 0x789e60;
+const UNEQUIP_ITEM_RVA: usize = 0x78b190;
 // Both addresses are declared once in `er-game-base::rva`, which `er-better-refills` also
 // reads them from.
 use er_game_base::rva::{
@@ -75,17 +75,17 @@ use er_game_base::rva::{
 };
 /// `CS::EquipGameData::GetSlotIndexByItemIndex(egd, itemIdx) -> ChrAsmSlot`.
 const GET_SLOT_INDEX_BY_ITEM_INDEX_RVA: usize = 0x248440;
-/// `FUN_140788a90(ChrAsmSlot) -> bool` -- the permission gate `EquipItemToChrAsmSlot` consults
+/// `0x140789dc0(ChrAsmSlot) -> bool` -- the permission gate `EquipItemToChrAsmSlot` consults
 /// before doing anything. Probed only, never relied on: when it says no, that function returns
 /// void having silently done nothing.
-const EQUIP_PERMISSION_GATE_RVA: usize = 0x788a90;
+const EQUIP_PERMISSION_GATE_RVA: usize = 0x789dc0;
 /// `CS::EquipInventoryData::GetGaItemHandleByIndex(inv, uint *out, uint itemIdx) -> uint*`.
 const GET_GAITEM_HANDLE_BY_INDEX_RVA: usize = 0x24c7b0;
 /// `CS::EquipInventoryData::GetItemIndexByGaitemHandle(EquipInventoryData*, uint *gaitemHandle)
 /// -> int` -- the inventory question that can tell two copies of one armament apart.
 ///
-/// Verified against the 1.16.2 dump and byte-checked in `eldenring-deobf.bin` (shift zero;
-/// `41 56 48 83 EC 40 48 C7 44 24 20 FE FF FF FF`). It resolves the handle into a
+/// Verified against the 1.16.2 dump and byte-checked in `eldenring-deobf-1.17.2.bin` at the same
+/// rva (`41 56 48 83 EC 40 48 C7 44 24 20 FE FF FF FF`). It resolves the handle into a
 /// `GaitemLookupResult`, reads the instance's item id, and then splits:
 ///
 /// * **stackable** ids -- consumables, which have no per-instance identity -- fall back to the
@@ -125,7 +125,7 @@ const SET_EQUIPMENT_ENTRIES_RVA: usize = 0x249160;
 /// `FUN_140249a90(egd)` -- the post-write refresh the menu path always calls.
 const EQUIP_REFRESH_RVA: usize = 0x249a90;
 /// `BroadCastEquipmentChange(PlayerIns*)` -- tells the rest of the engine the loadout moved.
-const BROADCAST_EQUIPMENT_CHANGE_RVA: usize = 0x658c90;
+const BROADCAST_EQUIPMENT_CHANGE_RVA: usize = 0x659f90;
 /// `FUN_140249a50(egd, index, uint *gaitemHandle, uint itemIdx)` -- the single native entry for
 /// the quickbar, the pouch and the great rune. It dispatches internally:
 /// `index < 10` -> `EquipItemData::SetQuickSlotItem`, `10..16` -> the pouch writer, `16` ->
@@ -399,7 +399,7 @@ pub struct EquipOutcome {
     /// `(slot, item id, inventory index, the slot that already claimed it)` for every position
     /// whose inventory index was already spoken for by an earlier position in the same pass.
     ///
-    /// Equipping one entry twice strips the first slot. `EquipItemToChrAsmSlot` (`0x140787c30`)
+    /// Equipping one entry twice strips the first slot. `EquipItemToChrAsmSlot` (`0x140788f60`)
     /// calls `FUN_140247160(egd, oldSlot, true)` -- unequip it from where it already sits --
     /// before writing the new slot, so a later position naming an entry an earlier position is
     /// already wearing tears the earlier one back off. The per-position read-back cannot see it:
@@ -423,11 +423,11 @@ pub struct EquipOutcome {
     pub stripped_after_verifying: Vec<(i32, i32, i32)>,
     /// The equip game data pointer was unusable, so nothing at all was attempted.
     pub no_inventory: bool,
-    /// Game functions with no verified mapping for the running build, so the positions that
-    /// needed them were not attempted.
+    /// Game functions refused on the running build (only 2.7.2.0 is measured), so the positions
+    /// that needed them were not attempted.
     ///
-    /// Kept as names rather than a bool because the useful next action is a `docs/recon` row for
-    /// each one, and a bool names none of them. Empty is the normal state.
+    /// Kept as names rather than a bool because the useful next action is re-measuring each one on
+    /// that build, and a bool names none of them. Empty is the normal state.
     pub unresolved_natives: Vec<&'static str>,
 }
 
@@ -601,7 +601,7 @@ impl EquipNatives {
         let gate = crate::native::resolve(
             module_base,
             EQUIP_PERMISSION_GATE_RVA,
-            "equip permission gate (FUN_140788a90)",
+            "equip permission gate (0x140789dc0)",
         )
         // Safety: resolved for the running build immediately above.
         .map(|address| unsafe { core::mem::transmute::<usize, GateFn>(address) });
@@ -684,8 +684,8 @@ unsafe fn read_quick_position(
 ///
 /// `GetDefaultUnarmedParamId` (`0x140248270`) is a three-instruction leaf whose whole body is
 /// `mov dword ptr [rcx], 0x1adb0 ; mov rax, rcx ; ret`, so the value is the function. It is a
-/// constant rather than an eleventh resolved native because an address that has to be carried
-/// across game builds to fetch a compile-time constant is a liability with no upside: clearing a
+/// constant rather than an eleventh resolved native because an address that has to be re-measured
+/// on every game build to fetch a compile-time constant is a liability with no upside: clearing a
 /// hand does not put nothing in it, it puts the fist in it, and this is the id that says so.
 ///
 /// Derived from the core crate's tagged id rather than written out again. The same five values
@@ -697,7 +697,7 @@ const UNARMED_PARAM_ID: i32 = (er_build_import_core::sweep::UNARMED_ITEM_ID
 /// What each armour slot reads back as once it holds nothing, in `ChrAsmSlot` order from
 /// [`CHR_ASM_SLOT_PROTECTOR_HEAD`]: head, chest, arms, legs.
 ///
-/// `GetDefaultItemIdForEmptyProtectorSlot` (`0x140d473d0`) is a four-way constant switch returning
+/// `GetDefaultItemIdForEmptyProtectorSlot` (`0x140d4a620`) is a four-way constant switch returning
 /// the category-tagged item ids the core crate holds. `GetParamIdInSlot` answers with the param
 /// row rather than the tagged id, so the category nibble comes off here and the rows are what
 /// remain: `10000`, `10100`, `10200`, `10300`.
@@ -820,13 +820,12 @@ pub unsafe fn vacate_all(
     let natives = match EquipNatives::resolve(module_base) {
         Ok(natives) => natives,
         Err(_) => {
-            outcome.unavailable =
-                Some("the equip natives have no verified mapping for the running build");
+            outcome.unavailable = Some("the equip natives are refused on the running build");
             return outcome;
         }
     };
     let Some(unequip) = natives.unequip else {
-        outcome.unavailable = Some("`UnequipItem` has no verified mapping for the running build");
+        outcome.unavailable = Some("`UnequipItem` is refused on the running build");
         return outcome;
     };
 
@@ -953,9 +952,9 @@ pub unsafe fn equip_all(
     // entries, and holding a borrow of the thing being recorded into is not worth the saving.
     let planned: Vec<PlannedPosition> = ledger.planned().to_vec();
 
-    // Resolved for the running build, not added blind. Every address below is a 1.16.2 RVA and
-    // the installed game is 1.17: a call through an unresolved one lands wherever that code moved
-    // to, which is a control transfer into the middle of an unrelated function.
+    // Resolved for the running build, not added blind. Every address below is a 2.7.2.0 RVA;
+    // `crate::native::resolve` passes it through on 2.7.2.0 and refuses it on any other build,
+    // where a call through it would transfer control into the middle of an unrelated function.
     //
     // A refusal here costs the equip pass and nothing else -- the grants, the stats and the
     // spells are separate steps and still run. Every planned position is recorded as not
@@ -971,7 +970,7 @@ pub unsafe fn equip_all(
                 ledger.record(
                     at,
                     PositionResult::NotAttempted(
-                        "the equip natives have no verified mapping for the running build",
+                        "the equip natives are refused on the running build",
                     ),
                 );
             }
@@ -1170,8 +1169,7 @@ pub unsafe fn equip_all(
                 ledger.record(
                     at,
                     PositionResult::NotAttempted(
-                        "the quick/pouch/rune natives have no verified mapping for the running \
-                         build",
+                        "the quick/pouch/rune natives are refused on the running build",
                     ),
                 );
                 continue;
@@ -1540,8 +1538,7 @@ pub unsafe fn audit_placement(
     let natives = match EquipNatives::resolve(module_base) {
         Ok(natives) => natives,
         Err(_) => {
-            audit.unavailable =
-                Some("the equip natives have no verified mapping for the running build");
+            audit.unavailable = Some("the equip natives are refused on the running build");
             return audit;
         }
     };
@@ -1724,11 +1721,11 @@ pub unsafe fn equipped_great_rune(module_base: usize, egd: usize) -> Option<i32>
 mod tests {
     use super::*;
 
-    /// The two addresses the vacate pass adds, pinned to the static RE that established them.
+    /// The two addresses the vacate pass adds, pinned to their 2.7.2.0 values.
     #[test]
-    fn the_unequip_rva_matches_the_1162_static_re() {
-        assert_eq!(UNEQUIP_ITEM_RVA, 0x789e60);
-        assert_eq!(EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA, 0x787c30);
+    fn the_unequip_rva_matches_the_2720_static_re() {
+        assert_eq!(UNEQUIP_ITEM_RVA, 0x78b190);
+        assert_eq!(EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA, 0x788f60);
     }
 
     /// Clearing a slot does not leave it holding nothing, and two of the four families say so.

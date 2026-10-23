@@ -64,12 +64,12 @@ Ranged (`RangedModel`), every wieldable light bow, bow, greatbow, crossbow and b
   the fire clip's roll cancel; `cycle` = start clip length + the fire clip's R1 cancel, plus for
   a crossbow `AttackCrossbowBothRightReload` (037130) to its R1 cancel (the order is `INFERRED`
   from the state names; a ballista has no reload clip, its fire clip holds it).
-* Shot damage (`VERIFIED` attack-power builder 0x1406832a0, attacks.md section 1): each fire
+* Shot damage (`VERIFIED` attack-power builder 0x1406845a0, attacks.md section 1): each fire
   event's judge resolves against the ammunition's behavior variation (BehaviorParam_PC 105000300
   for Arrow), and each element's attack = (bow base + ammo base) x motion value x the bow's stat
   scaling, then the RL 150 reference defender (`er-mechanics-ash-table.Table`), plus the ammo's
   status as HP (`Table.hit_buildup`). Every ungated bullet event at the first fire frame fires
-  (`BulletBehavior` 0x140426e60 gates only on its repeat byte and a SpEffect stateInfo,
+  (`BulletBehavior` 0x140427440 gates only on its repeat byte and a SpEffect stateInfo,
   `VERIFIED`): the Spread Crossbow's three fans, the Black Bow's and Ansbach's Longbow's two
   arrows. Copies of one bullet row on one frame count once (`same_frame_once`).
 * Landing (`RangedModel.copies_landed`): each bullet copy flies at a defender standing at
@@ -849,7 +849,7 @@ class RangedModel:
         bullets = sorted((e for e in fev if e.type == EV_BULLET), key=lambda e: e.start)
         if not bullets:
             return None
-        # Every bullet event at the first fire frame fires: `BulletBehavior` (0x140426e60) gates
+        # Every bullet event at the first fire frame fires: `BulletBehavior` (0x140427440) gates
         # an event only on firstExecution / its repeat byte (+0xd) and on a SpEffect stateInfo
         # (+0xe, ushort), so the Spread Crossbow's three fans and the Black Bow's and Ansbach's
         # Longbow's two arrows all launch (`VERIFIED` decompile). An event gated on a stateInfo

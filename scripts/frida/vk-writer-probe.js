@@ -7,7 +7,7 @@
 //           0x140408220 [0x140407c60]: on entry +0x10 holds the raw action bits the manipulator
 //           wrote this frame (+0x18 previous, +0x40 disabled), whichever device produced them.
 //
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
+// Addresses are 2.7.2.0, carried from 1.17.1.
 // Reported every 60 action-module updates while anything is set. Read-only.
 'use strict';
 

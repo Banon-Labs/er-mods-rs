@@ -4,7 +4,8 @@ effective attributes after talismans/armor/great runes, equip-load tier, and run
 
 Everything numeric is read from `regulation.bin` through `scripts/er-param-read.py`. The formulas
 are the executable's, traced in the 1.16.2 named Ghidra dump and checked byte-for-byte against the
-installed 1.17.1 image; see `docs/er-mechanics/resources.md` for the addresses and the evidence
+installed build's image (`eldenring-deobf-1.17.2.bin`, whose 2.7.2.0 addresses are the ones cited
+here); see `docs/er-mechanics/resources.md` for the evidence
 labels (`VERIFIED`, `INFERRED`, `SITE`).
 
 Arithmetic is emulated in single precision where the game uses `float`, so truncation boundaries
@@ -33,16 +34,16 @@ _spec.loader.exec_module(PR)
 
 CORPUS = os.path.expanduser('~/.cache/er-build-planner/builds.jsonl')
 
-# CalcCorrectGraph rows the executable passes to `PerformCalcCorrection` (1.16.2 addresses; each
-# constant is re-found in the 1.17.1 image by `scripts/find-deobf-bytes.py`).
-GRAPH_HP = 100          # PerformVigorCalcCorrection   0x140687570, `mov edx,0x64`
-GRAPH_FP = 101          # PerformMindCalcCorrection    0x140687640, `mov edx,0x65`
-GRAPH_STAMINA = 104     # PerformStaminaCalcCorrection 0x1406876d0, `mov edx,0x68`
-GRAPH_EQUIP_LOAD = 220  # CalculateEffectiveEndurance  0x14068d000, `mov edx,0xdc`
-GRAPH_LEVEL_COST = 200  # CalculateLevelUpCost         0x140686370, `mov edx,0xc8`
+# CalcCorrectGraph rows the executable passes to `PerformCalcCorrection` (2.7.2.0 addresses; each
+# `mov edx` is in that function in `eldenring-deobf-1.17.2.bin`).
+GRAPH_HP = 100          # PerformVigorCalcCorrection   0x140688870, `mov edx,0x64`
+GRAPH_FP = 101          # PerformMindCalcCorrection    0x140688940, `mov edx,0x65`
+GRAPH_STAMINA = 104     # PerformStaminaCalcCorrection 0x1406889d0, `mov edx,0x68`
+GRAPH_EQUIP_LOAD = 220  # CalculateEffectiveEndurance  0x14068e300, `mov edx,0xdc`
+GRAPH_LEVEL_COST = 200  # CalculateLevelUpCost         0x140687670, `mov edx,0xc8`
 
-# GetWeightType 0x14068c630 compares burden/maxLoad against these `.rdata` floats
-# (0x14329e678, 0x143b33d50, 0x143b33d54; 1.17.1: 0x1432a1938, 0x143b37d60, 0x143b37d64).
+# GetWeightType 0x14068d930 compares burden/maxLoad against these `.rdata` floats
+# (0x1432a3bf8, 0x143b3ad70, 0x143b3ad74).
 WEIGHT_OVER = 1.0
 WEIGHT_HEAVY = 0.699999988079071
 WEIGHT_MEDIUM = 0.30000001192092896
@@ -58,7 +59,7 @@ def from_planner(st):
     """A planner `stats` object with its keys in this module's spelling (`vit` -> `end`)."""
     return {STAT_ALIASES.get(k, k): v for k, v in st.items()}
 
-# SpEffectParam field per attribute, in `CollectStatBuffs` 0x1404f3fd0 order. `addVitalityStatus`
+# SpEffectParam field per attribute, in `CollectStatBuffs` 0x1404f4e80 order. `addVitalityStatus`
 # is also summed there but feeds the unused fifth slot, so it is left out.
 STAT_FIELDS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'end': 'addEndureStatus',
                'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
@@ -119,12 +120,12 @@ class Model:
 
     # -- CalcCorrectGraph --------------------------------------------------------------------
     def calc_correct(self, graph_id, x):
-        """`PerformCalcCorrection` 0x140690f30, in single precision.
+        """`PerformCalcCorrection` 0x140692230, in single precision.
 
         Clamp x to stageMaxVal4; x <= 0 returns stageMaxGrowVal0; pick the first stage i with
         x <= stageMaxVal[i+1]; t = (x - lo) / span; exponent e = adjPt_maxGrowVal[i]:
         e >= 0 -> t**e, e < 0 -> 1 - (1 - t)**(-e); value = grow[i] + curve * (grow[i+1] - grow[i]),
-        then clamped between grow[i] and grow[i+1] (the minss/maxss block at 0x1406910ce..0x140691175).
+        then clamped between grow[i] and grow[i+1] (the minss/maxss block at 0x1406923ce..0x140692475).
         """
         r = self.graphs[graph_id]
         sv = [f32(r[f'stageMaxVal{i}']) for i in range(5)]
@@ -191,7 +192,7 @@ class Model:
 
     @staticmethod
     def rate(effects, field):
-        """Product over entries, skipping rates <= 0 (`CS::SpecialEffect::GetMaxHpRate` 0x1404fbe60
+        """Product over entries, skipping rates <= 0 (`CS::SpecialEffect::GetMaxHpRate` 0x1404fcd10
         and siblings). The multiplayer factor `GetMPLevelCorrection` is 1 unless SpEffect 590/592
         is active, i.e. solo play."""
         r = 1.0
@@ -203,7 +204,7 @@ class Model:
 
     @staticmethod
     def effective_stats(base, effects):
-        """`CalculateStatus` 0x1407c3670: base + summed add*Status, capped at 99 (no lower clamp).
+        """`CalculateStatus` 0x1407c49a0: base + summed add*Status, capped at 99 (no lower clamp).
         `base` may spell Endurance the planner's way (`vit`): callers pass planner stats as well."""
         base = from_planner(base)
         out = {}
@@ -254,7 +255,7 @@ class Model:
     # -- equip load tiers ---------------------------------------------------------------------
     @staticmethod
     def weight_type(burden, max_load):
-        """`CalculatePlayerWeight` 0x14068bda0 + `GetWeightType` 0x14068c630 for a player (the
+        """`CalculatePlayerWeight` 0x14068d0a0 + `GetWeightType` 0x14068d930 for a player (the
         stateInfo 115/102 overrides are not carried by any 1.17.1 SpEffect row)."""
         ratio = f32(burden / max_load) if max_load > 0.0 else 0.0
         if ratio > WEIGHT_OVER:
@@ -284,8 +285,8 @@ class Model:
 
     # -- runes --------------------------------------------------------------------------------
     def level_up_cost(self, level):
-        """`CalculateLevelUpCost` 0x140686370, `level` being the level bought: the stat screen
-        calls it with `PlayerGameData.level + 1` (0x1407c83a0, field 0x271a)."""
+        """`CalculateLevelUpCost` 0x140687670, `level` being the level bought: the stat screen
+        calls it with `PlayerGameData.level + 1` (0x1407c96d0, field 0x271a)."""
         r = self.graphs[GRAPH_LEVEL_COST]
         x = f32(float(level + 80))
         t = f32(x - f32(r['boundry_value']))

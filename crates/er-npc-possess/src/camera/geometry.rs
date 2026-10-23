@@ -104,9 +104,10 @@
 //! * **It writes no pitch limit.** `rotRangeMinX` used to be lerped from -40 to -15 degrees as the
 //!   subject grew, on the theory that a tall creature needs the camera to swing higher. It does
 //!   not do that. The sign was measured: `ChrExFollowCam.anglesEuler.x` comes from
-//!   `angleFromXZPlane` (`0x1403b0b70`), which returns `atan2(v.y, |v.xz|)` NEGATED for `v` the
-//!   camera-to-target vector -- so **positive means the camera is above the subject looking
-//!   down**. `applyControlMovement` (`0x1403b7be0`) clamps that angle below by `+0x258`, which is
+//!   `angleFromXZPlane` (1.16.2 `0x1403b0b70`), which returns `atan2(v.y, |v.xz|)` NEGATED for
+//!   `v` the camera-to-target vector -- so **positive means the camera is above the subject
+//!   looking down**. `applyControlMovement` (1.16.2 `0x1403b7be0`) clamps that angle below by
+//!   `+0x258`, which is
 //!   where `ApplyZoomLerp` writes `rotRangeMinX`, and above by `+0x25c`, which the constructor
 //!   fixes at `0x3f9c61aa` = 1.2217 rad = **+70 degrees** and nothing else ever writes (all three
 //!   fields, the same constants and the same shape, are present on the installed 1.17 build at
@@ -238,8 +239,7 @@ pub(crate) struct Framing {
 pub(crate) enum Refusal {
     /// `[camera].enabled = false`.
     Disabled,
-    /// The running build is not one of 1.16.2, 1.17.0, 1.17.1 or 2.7.2.0, so no offset table
-    /// applies.
+    /// The running build is not 2.7.2.0, so no offset table applies.
     UnmeasuredBuild,
     /// `CSChrPhysicsModule+0x340` did not read, or read as zero/NaN.
     NoHeight,
@@ -251,11 +251,10 @@ pub(crate) enum Refusal {
     NoFreeId,
     /// The row the camera was using, which the copy starts from, is not in `LockCamParam`.
     BaseRowMissing,
-    /// `LookupLockCamParam` could not be hooked: the build is not 1.17.1 or 2.7.2.0, its bytes do
-    /// not match the windows `build.rs` generated, or MinHook declined. The log says which.
+    /// `LookupLockCamParam` could not be hooked: the build is not 2.7.2.0, its bytes do not match
+    /// the windows `build.rs` generated, or MinHook declined. The log says which.
     HookUnavailable,
-    /// `WorldChrMan.chrCam` (`+0x1ece0`, `+0x1ecf0` on 2.7.2.0) or `ChrCam+0x60 chrExFollowCam`
-    /// did not resolve.
+    /// `WorldChrMan.chrCam` (`+0x1ecf0`) or `ChrCam+0x60 chrExFollowCam` did not resolve.
     NoFollowCam,
     /// `ChrExFollowCam+0x468` would not take the write.
     WriteFailed,
@@ -267,8 +266,7 @@ impl Refusal {
         match self {
             Self::Disabled => "[camera].enabled is false".to_owned(),
             Self::UnmeasuredBuild => {
-                "this build is not 1.16.2, 1.17.0, 1.17.1 or 2.7.2.0, and the camera offsets were \
-                 only measured on those four"
+                "this build is not 2.7.2.0, the only build the camera offsets were measured on"
                     .to_owned()
             }
             Self::NoHeight => {

@@ -42,30 +42,30 @@ const PLACEHOLDER_PREFIX: char = '?';
 /// `python3 scripts/er-item-name.py ProtectorName 1000` answers `'[ERROR]Type 1'`.
 const ERROR_PLACEHOLDER_PREFIX: &str = "[error]";
 
-/// RVAs of the game's per-category name getters, verified in the 1.16.2 dump.
+/// 2.7.2.0 RVAs of the game's per-category name getters (named in the 1.16.2 dump).
 ///
 /// Each takes `(MsgRepositoryImp*, u32 row_id)` and returns a NUL-terminated `wchar_t*`.
 mod rva {
     /// `MsgRepositoryImp::GetWeaponName` -- base bundle `0x136`.
-    pub const GET_WEAPON_NAME_RVA: usize = 0xd11370;
+    pub const GET_WEAPON_NAME_RVA: usize = 0xd141a0;
     /// `MsgRepositoryImp::GetProtectorName` -- base bundle `0x139`.
-    pub const GET_PROTECTOR_NAME_RVA: usize = 0xd10d90;
+    pub const GET_PROTECTOR_NAME_RVA: usize = 0xd13bc0;
     /// `MsgRepositoryImp::GetAccessoryName` -- base bundle `0x13c`, DLC `0x1a0`.
-    pub const GET_ACCESSORY_NAME_RVA: usize = 0xd0fda0;
+    pub const GET_ACCESSORY_NAME_RVA: usize = 0xd12bd0;
     /// `MsgRepositoryImp::GetGoodsName` -- bundles `0x6f`, `0xa`, `0x13f`, `0x1a3`.
-    pub const GET_GOODS_NAME_RVA: usize = 0xd10600;
+    pub const GET_GOODS_NAME_RVA: usize = 0xd13430;
     /// `MsgRepositoryImp::GetGemName` -- base bundle `0x142`, DLC `0x1a6`.
     ///
     /// Names the *gem item* ("Ash of War: Lion's Claw"), which is not what a build's
     /// `weaponArt` says -- so it is not what the catalog keys on. It is used as the test for
     /// whether a gem row is a real, obtainable ash rather than a development placeholder,
     /// which is how the ash catalog picks between several gems carrying one skill.
-    pub const GET_GEM_NAME_RVA: usize = 0xd103d0;
+    pub const GET_GEM_NAME_RVA: usize = 0xd13200;
     /// `MsgRepositoryImp::GetArtsName` -- base bundle `0x14b`.
     ///
     /// Names the *skill* ("Lion's Claw"), keyed by `SwordArtsParam` row id -- which is
     /// exactly what a build's `weaponArt` carries and what `weaponSkill` encodes.
-    pub const GET_ARTS_NAME_RVA: usize = 0xd0ff70;
+    pub const GET_ARTS_NAME_RVA: usize = 0xd12da0;
 }
 
 /// The category tag the game ORs into the high nibble of an item id.
@@ -167,7 +167,7 @@ const SOURCES: &[Source] = &[
 
 /// The only goods rows the game accepts as great runes.
 ///
-/// `GetGreatruneEnumByGoodsId` (0x140d39ab0) switches on exactly `0xbf..=0xc4` -- Godrick,
+/// `GetGreatruneEnumByGoodsId` (0x140d3c960) switches on exactly `0xbf..=0xc4` -- Godrick,
 /// Radahn, Morgott, Rykard, Mohg, Malenia -- and returns "none" for everything else. The goods
 /// table holds other rows with the same display names, so restricting the catalog to this
 /// range is what makes the name lookup land on a rune the engine will actually equip.
@@ -716,8 +716,8 @@ unsafe fn insert_ashes_of_war(
 /// # What a pot group is, and why an importer has to know
 ///
 /// `EquipParamGoods.potGroupId` (壺グループID, `s8`, `-1..15`) ties a crafted consumable to the
-/// vessel it needs. `EquipInventoryData::UpdatePotsStates` (1.16.2 `0x14024e930`, same address on
-/// 1.17) walks the carried inventory once and builds two `int[16]` tables on the inventory
+/// vessel it needs. `EquipInventoryData::UpdatePotsStates` (2.7.2.0 `0x14024e930`) walks the
+/// carried inventory once and builds two `int[16]` tables on the inventory
 /// itself: `potItemsCapacity` at `+0xc8`, summed from the group's regenerative materials (the
 /// Cracked Pots), and `potItemsCount` at `+0x88`, summed from its CONSUMABLES (the pots you
 /// throw). `GetMaxAmountForItem` (`0x14024e570`) then answers `capacity[g] - count[g]`.
@@ -732,8 +732,8 @@ unsafe fn insert_ashes_of_war(
 /// # Consumables only
 ///
 /// The predicate is the engine's own `EquipParamGoodsLookupResult::IsPotConsumable`
-/// (1.16.2 `0x140d3a190`, 1.17 `0x140d3b8e0`; the two are byte-for-byte identical, which is how
-/// the field offsets below were confirmed to survive the patch):
+/// (2.7.2.0 `0x140d3d040`; its instructions are the 1.16.2 ones, which is how the field offsets
+/// below were confirmed to survive the patches):
 ///
 /// ```text
 /// CMP byte ptr [RDX + 0x3e], 0x0   ; goodsType == NORMAL_ITEM
@@ -742,7 +742,7 @@ unsafe fn insert_ashes_of_war(
 /// ```
 ///
 /// The Cracked Pot itself is `goodsType == 0x0b` (REGENERATIVE_MATERIAL, per
-/// `IsRegenerativeMaterial` at `0x140d3a1c0` / `0x140d3b910`) and is deliberately not in here.
+/// `IsRegenerativeMaterial` at 2.7.2.0 `0x140d3d070`) and is deliberately not in here.
 /// It is what supplies the capacity, so a caller that deposited it to free space would be
 /// removing the space. Measured against the installed regulation by
 /// `scripts/regulation-potgroup-census.py`: 67 consumable rows across 4 groups, each group with
@@ -828,9 +828,9 @@ impl PotGroups {
 /// Arrows and bolts are `EquipParamWeapon` rows -- which is why they equip into dedicated
 /// `ChrAsmSlot` positions rather than the quickbar -- so [`MaxHeld`], which reads
 /// `EquipParamGoods.maxNum`, cannot answer for them and the engine never asks it to.
-/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 and 1.17 both `0x14024e570`) handles the
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (2.7.2.0 `0x14024e570`) handles the
 /// goods category inline and tail-jumps every other category to `::GetMaxItemQuantity`
-/// (1.16.2 `0x140674680`, 1.17 `0x1406754d0`), whose weapon branch is the whole of the answer:
+/// (2.7.2.0 `0x140675980`), whose weapon branch is the whole of the answer:
 ///
 /// ```text
 /// EquipParamWeapon::GetEntry(&lookup, itemId & 0x0FFFFFFF);
@@ -854,7 +854,8 @@ impl PotGroups {
 /// * 1.17 confirms them by reading the function that consumes them. The instruction bytes are
 ///   identical between builds --
 ///   `0f b6 91 e6 00 00 00 / 80 fa 0d / 74 09 / 80 fa 0e / 0f 85 .. / 0f b6 81 35 02 00 00` --
-///   at `0x140674887` in `eldenring-deobf.bin` and `0x1406756d7` in `eldenring-deobf-1.17.bin`.
+///   at `0x140674887` in `eldenring-deobf.bin`, `0x1406756d7` in `eldenring-deobf-1.17.bin` and
+///   `0x140675b87` in `eldenring-deobf-1.17.2.bin`.
 /// * The installed 1.17 `regulation.bin` corroborates by value
 ///   (`scripts/regulation-ammo-census.py`): it derives the same 664-byte stride, finds 73 rows in
 ///   categories 13 and 14, and reads `maxArrowQuantity` `{1: 2, 20: 5, 30: 8, 99: 58}` -- the 20s
@@ -986,7 +987,7 @@ impl Quivers {
 ///
 /// # The engine's own answer, not a stack size chosen here
 ///
-/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 `0x14024e570`, same address on 1.17) is
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (2.7.2.0 `0x14024e570`) is
 /// the whole of the engine's opinion on "how many more of this may be added". For an item id in
 /// the goods category its body is:
 ///

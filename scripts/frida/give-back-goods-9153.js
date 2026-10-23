@@ -4,8 +4,8 @@
 // DirectlyGivePlayerItem [3, 9153, 710880, 1], and undo-seamless-grace-grant.js removed it by
 // mistake. The call is the one that EMEVD command ends in: `AddOrRemoveItem` (1.16.2 0x1405ea980)
 // gives a not-yet-held item with `CS::EquipGameData::AddInventoryEquipByItemId(egd, &id, quantity,
-// true, true)`. 0x246840 is below the 0xafefe9 boundary, so 1.16.2 == 1.17.1, and
-// scripts/map-rvas-1171-to-1172.py leaves it unmoved in 2.7.2.0; its prologue was read in
+// true, true)`. 0x246840 is below the 0xafefe9 boundary, so 1.16.2 == 1.17.1, and it did not
+// move in 2.7.2.0 either; its prologue was read in
 // eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin and is checked again here before the
 // call. Of the addresses below only the GameDataMan global moved (1.17.1 0x3d61f98 -> 2.7.2.0
 // 0x3d64fb8); the four inventory functions are unmoved and open with the same bytes.

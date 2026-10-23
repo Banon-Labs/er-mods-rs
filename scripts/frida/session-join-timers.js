@@ -1,8 +1,8 @@
 // How long is the ENGINE prepared to wait for a join, and is its connect still running when this
 // mod calls one lost?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `attempt_verdict::CONNECT_DEADLINE_MS` is 1500ms, derived from 313 successes all measured on one
 // machine reaching hosts it could almost touch. Run br-20260917-195855-46cf found a real remote
@@ -22,8 +22,8 @@
 // The sampling event is Steam's own matchmaking call rather than a game function: those exports
 // attach cleanly, whereas `Interceptor.attach` on `MenuWindowJob::Run` fails with `unable to
 // intercept function at 00000001407AD1C0` because our own union detour already owns that address,
-// and `scripts/map-rvas-1162-to-1170.py` cannot sign `CSSessionManager::JoinSession` (3 shape
-// matches, no anchor). A search calls Steam constantly, which is exactly the window the connect
+// and `CSSessionManager::JoinSession` could not be paired with 1.17 by its bytes (3 shape matches,
+// no anchor). A search calls Steam constantly, which is exactly the window the connect
 // lives in. No timer of this script's own, so nothing here can go stale or flood.
 //
 // Read-only: six reads of one singleton per sampled call.

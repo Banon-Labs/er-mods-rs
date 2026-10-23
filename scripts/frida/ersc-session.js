@@ -1,7 +1,7 @@
 // Cancel an invasion whose destination is not the block the player is standing in.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # What this proves
 //
@@ -36,8 +36,9 @@ const INVADE = 0x25850;
 const CANCEL = 0x258d0;
 const NEXT_OBJECT = 0x58;
 const STATE = 0x150;
-// 1.17.1 relative virtual addresses, taken from the DLL's own translation lines and subtracted
-// from the image base rather than eyeballed: the log prints
+// Measured as 1.17.1 relative virtual addresses, taken from the translation lines the DLL logged
+// then and subtracted from the image base rather than eyeballed (the literals are 2.7.2.0 now): the
+// log printed
 // `SetMultiplayJoinData: 0x1406fb520 -> 0x1406fc370` and `GetCurrentMapId: 0x1405eefb0 ->
 // 0x1405efe00`, and the base is 0x140000000. Getting that subtraction wrong is silent -- an
 // `Interceptor` on the wrong address installs cleanly and simply never fires, which is what a

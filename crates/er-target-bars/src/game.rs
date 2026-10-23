@@ -54,13 +54,13 @@ const _: () = assert!(offset_of!(TagHudData, screen_pos_x) == TAG_SCREEN_X);
 const _: () = assert!(offset_of!(TagHudData, screen_pos_y) == TAG_SCREEN_Y);
 
 /// `ChrIns+0x8`, the character's own `FieldInsHandle`; `LockTgtMan` copies it to the player's
-/// lock-on slot (1.17.1 `0x1407180d2`).
+/// lock-on slot (2.7.2.0 `0x140718582`).
 const CHR_HANDLE: usize = 0x8;
 /// `ChrIns+0x178`, the `SpecialEffect` container.
 const CHR_SPECIAL_EFFECT: usize = 0x178;
 /// `ChrIns+0x190`, the module container.
 const CHR_MODULES: usize = 0x190;
-/// `PlayerIns+0x6b0`, the lock-on target handle (read at 1.17.1 `0x140344e3a`).
+/// `PlayerIns+0x6b0`, the lock-on target handle (read at 2.7.2.0 `0x140344e3a`).
 const PLAYER_LOCKED_ON_ENEMY: usize = 0x6b0;
 
 /// Module container slots: data `+0x0`, resist `+0x20`, super armor `+0x40`. The resist slot is
@@ -69,13 +69,13 @@ const MODULE_DATA: usize = 0x0;
 const MODULE_RESIST: usize = 0x20;
 const MODULE_SUPER_ARMOR: usize = 0x40;
 
-/// `CSChrResistModule`: gauge `i32[7]` at `+0x10` (1.17.1 `0x14043de14`), resistance `i32[7]` at
-/// `+0x2c` (`0x14043e9c5`).
+/// `CSChrResistModule`: gauge `i32[7]` at `+0x10` (2.7.2.0 `0x14043dea4`), resistance `i32[7]` at
+/// `+0x2c` (`0x14043ea55`).
 const RESIST_GAUGE: usize = 0x10;
 const RESIST_RESISTANCE: usize = 0x2c;
 
 /// `SpecialEffect` head at `+0x8`; an entry carries its param row at `+0x0`, next at `+0x30`, its
-/// remaining time at `+0x40` and flags at `+0x60` (the engine's own walk, 1.17.1 `0x1404fd490`).
+/// remaining time at `+0x40` and flags at `+0x60` (the engine's own walk, 2.7.2.0 `0x1404fd570`).
 const SPECIAL_EFFECT_HEAD: usize = 0x8;
 const ENTRY_PARAM_ROW: usize = 0x0;
 const ENTRY_NEXT: usize = 0x30;
@@ -83,7 +83,7 @@ const ENTRY_TIMER: usize = 0x40;
 const ENTRY_FLAGS: usize = 0x60;
 /// Entries with any of these flags are skipped by the engine's walk; they are being removed.
 const ENTRY_DEAD_FLAGS: u32 = 0x800c_0003;
-/// `SpEffectParam.stateInfo`, `u16` at `+0x156` (1.17.1 `0x14043e7e5`).
+/// `SpEffectParam.stateInfo`, `u16` at `+0x156` (2.7.2.0 `0x14043e875`).
 const PARAM_STATE_INFO: usize = 0x156;
 /// Upper bound on a SpEffect list walk, so a list torn mid-edit cannot loop forever.
 const ENTRY_WALK_LIMIT: usize = 512;

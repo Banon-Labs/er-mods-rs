@@ -2,7 +2,7 @@ use super::*;
 
 /// Restore `GLOBAL_CSGaitem` to constructor-pristine (empty gaitemInsTable + full free-queue) at a
 /// clean title before the switch reload's fresh deserialize, so char#2's deserialize does not
-/// exhaust the free-queue on char#1's leaked items (the AV at live 0x67141a, bd
+/// exhaust the free-queue on char#1's leaked items (the AV at live 1.16.2 0x67141a, bd
 /// system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02). Mechanism: sweep all
 /// 0x1400 gaitemInsTable slots; for each occupied slot call the native per-item release
 /// RemoveCSGaitemIns(gaitem, &entries[i].unindexedGaItemHandle) -- it destructs+deallocates the ins
@@ -90,8 +90,8 @@ pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32
 /// the picked slot -- bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
 /// Same proven mechanism as `own_load_drive` steps 1-4: read the on-disk save (native save-DIR
 /// builder path -- post-first-load the redirect has reverted, so this is the file the quit-save
-/// just wrote), slice slot `want_slot`'s plaintext body, arm the gated 0x67b100 read detour, call
-/// the native parser 0x67b290(slot) in-process. Returns true only when the parse produced a real
+/// just wrote), slice slot `want_slot`'s plaintext body, arm the gated 0x67c400 read detour, call
+/// the native parser 0x67c590(slot) in-process. Returns true only when the parse produced a real
 /// c30 + a real PlayerGameData fingerprint. Save-safe: read-only on the .sl2 (no SetState5, no
 /// save write; the deserialize also repoints GameMan+0xac0 to `want_slot` as its normal byproduct).
 pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot: i32) -> bool {
@@ -244,7 +244,7 @@ pub(crate) fn reset_switch_reload_latches() {
 /// as the boot native-fullread submit phase (slot_resolution.rs). Mirrors its calls/RVAs. On accept it
 /// sets GameMan+0xb80=2 (the deserialize arm) and the drain tick then advances it to resident(3).
 ///
-/// Returns the INITIATOR'S answer, and the caller must act on it: `0x67b1a0` is
+/// Returns the INITIATOR'S answer, and the caller must act on it: `0x67c4a0` is
 /// `if (b80 == 0) { r = builder(dev, 10, flag); if (r) b80 = 2; return r; } return 0;`, so a zero
 /// means no request exists and `b80` stays 0 forever -- a drain armed on it waits for
 /// `b80 == RESIDENT(3)` that nothing can produce. The device is sampled immediately before and
@@ -314,7 +314,7 @@ unsafe fn own_load_fd4io_submit(base: usize, gm: usize, picked: i32, gate: &str)
 
 /// One drain tick of the load we submitted: pump the b80 poll and return GameMan+0xb80 so the caller
 /// can detect resident(3). Pumps only the lane we own -- `er_save_suppress::load_poll_may_run` carries
-/// why, and why the 0x679510 call that stood here could only tick somebody else's request.
+/// why, and why the lane-tick (2.7.2.0 0x67a810) call that stood here could only tick somebody else's request.
 unsafe fn own_load_fd4io_drain_tick(_base: usize, gm: usize) -> i32 {
     let b80 = || unsafe { safe_read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.unwrap_or(-1);
     if !er_save_suppress::load_poll_may_run_now() {
@@ -493,7 +493,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 // Who actually clears b78 (corrected 2026-08-01, bd er-effects-rs-0nie): Not the
                 // continue_confirm hook -- that stopped writing OWN_STEPPER_SLOT_NONE at 1a0ad8e4.
                 // The remaining clearer on this path is system_quit_inworld_load_skip_hook
-                // (system_quit_repro_guards.rs), which hooks SYSTEM_QUIT_INWORLD_LOAD_RVA 0x67b290 --
+                // (system_quit_repro_guards.rs), which hooks SYSTEM_QUIT_INWORLD_LOAD_RVA 0x67c590 --
                 // the same address as DESERIALIZE_SLOT_RVA that own_load_feed_deserialize calls
                 // directly, so despite the "inworld" name it runs on this commit feed. The other
                 // writer, er-title-flow's b78 guard, cannot reach here: the line below sets
@@ -521,7 +521,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
             return false;
         }
     }
-    // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 0x67141a): char#1's leaked gaitem
+    // (c) Defuse the CSGaitemImp free-queue exhaustion AV (live 1.16.2 0x67141a): char#1's leaked gaitem
     // entries still populate the gaitem singleton at the clean title (the lightweight return-title
     // chain skips the native inventory teardown). Safe now because the old world is torn down.
     let _ = unsafe { own_load_reset_gaitem_singleton(base) };
@@ -605,7 +605,8 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
     // Retire the warp our own DESERIALIZE armed (2026-09-05).
     //
-    // `FUN_14067b290` -- the native slot deserialize this switch just drove -- ends with
+    // `DESERIALIZE_SLOT_RVA` (0x14067c590; 1.16.2 `FUN_14067b290`) -- the native slot deserialize
+    // this switch just drove -- ends with
     // `SetMoveMapStepBlockId(GameMan+0xc30)`, `initialAreaEntityId = 0` and `warpRequested = true`.
     // On the native title->Continue path that warp is the load: the InGameStep consumes it as it
     // creates the world. On our path the world already exists, and `own_load_continue_fire` above has
@@ -661,7 +662,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     //
     // Why the existing RE-arm did not run. It lives in `system_quit_continue_confirm_hook`, behind
     // `switch_active` (phase in confirmed..=AUTOLOAD_HANDOFF). Our own `own_load_feed_deserialize`
-    // above calls the native parser at 0x67b290 -- the same address `system_quit_inworld_load_skip_hook`
+    // above calls the native parser at 0x67c590 -- the same address `system_quit_inworld_load_skip_hook`
     // guards -- and on a proven deserialize that hook stores phase = idle. It runs milliseconds before
     // `own_load_continue_fire`, so by the time the confirm arrives the phase is already idle, the hook
     // classifies it non-switch, and the whole commit branch is skipped. Confirmed across all 40 runs
@@ -695,8 +696,9 @@ unsafe fn resolve_menu_data(base: usize) -> Option<usize> {
 }
 
 /// Resolve `mss = GameDataMan->menuSystemSaveLoad = *(*(base + GAME_DATA_MAN_GLOBAL_RVA) +
-/// GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET)` (static-verified: `GetMenuSystemSaveLoad` 0x140256410 is
-/// exactly `GLOBAL_GameDataMan->menuSystemSaveLoad`). Returns `None` (never `null`/`0`) on any
+/// GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET)` (static-verified: `GetMenuSystemSaveLoad`, 1.16.2
+/// 0x140256360, is exactly `GLOBAL_GameDataMan->menuSystemSaveLoad`; the 0x140256410 this note used
+/// to cite is not that function on 1.16.2). Returns `None` (never `null`/`0`) on any
 /// fault-tolerant read failure. Pure reads.
 pub(crate) unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -751,7 +753,7 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
     if !(ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
         return false;
     }
-    // Native `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
+    // Native (1.16.1 dump) `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
     // predicate must not claim the title/load context is usable before the same singleton exists.
     let regulation_manager = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(

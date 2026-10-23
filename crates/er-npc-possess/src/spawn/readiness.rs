@@ -15,7 +15,8 @@
 //! # The gate order is a safety property, not a presentation choice
 //!
 //! [`Gate::ORDER`] is evaluated front to back and stops at the first one that is not satisfied.
-//! That matters for [`Gate::AssetsResident`]: the predicate it mirrors, `FUN_1404ca4a0`, does not
+//! That matters for [`Gate::AssetsResident`]: the predicate it mirrors, 1.16.2 `FUN_1404ca4a0`
+//! (2.7.2.0 `0x1404cb050`), does not
 //! null-check its `EneDat*`, and the only thing that establishes there is an `EneDat` is
 //! [`Gate::ChrResLoaded`] -- `ChrIns::GetEneDat` returns null unless the step is in `3..6`. The
 //! live reader defends itself as well, but the ordering is where the contract lives and
@@ -225,9 +226,10 @@ mod tests {
         assert_eq!(readiness.reached(), Some(Gate::Drivable));
     }
 
-    /// The ordering contract. `FUN_1404ca4a0` does not null-check its `EneDat*`, and the only thing
-    /// that establishes there is one is the step gate before it. A poll that asked for assets while
-    /// the step said "not loaded" would be reading through a pointer the game has not published.
+    /// The ordering contract. 1.16.2 `FUN_1404ca4a0` does not null-check its `EneDat*`, and the
+    /// only thing that establishes there is one is the step gate before it. A poll that asked for
+    /// assets while the step said "not loaded" would be reading through a pointer the game has not
+    /// published.
     #[test]
     fn no_gate_is_asked_once_an_earlier_one_has_said_no() {
         let mut recorder = Recorder::new([Some(true), Some(false), Some(true), Some(true)]);

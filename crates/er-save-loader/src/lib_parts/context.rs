@@ -16,23 +16,23 @@ const DIRECT_SEQUENCE_PHASE_FINAL_COMBINED: u8 = 2;
 #[repr(u32)]
 enum NativeSaveMenuRva {
     MenuOtherLoadStatePtr = 0x0010f060,
-    SaveLoadPumpDefault = 0x00679510,
-    SaveRequestProfile = 0x0067a420,
-    RequestSave = 0x0067a520,
-    SetSaveSlot = 0x0067a810,
-    SaveLoadStateInit = 0x0067b030,
-    MenuOtherLoadWrapper = 0x0082bb00,
+    SaveLoadPumpDefault = 0x0067a810,
+    SaveRequestProfile = 0x0067b720,
+    RequestSave = 0x0067b820,
+    SetSaveSlot = 0x0067bb10,
+    SaveLoadStateInit = 0x0067c330,
+    MenuOtherLoadWrapper = 0x0082cfa0,
 }
 
 const MENU_OTHER_LOAD_STATE_PTR: usize = NativeSaveMenuRva::MenuOtherLoadStatePtr as usize;
 pub const SET_SAVE_SLOT_RVA: u32 = NativeSaveMenuRva::SetSaveSlot as u32;
 pub const SAVE_REQUEST_PROFILE_RVA: u32 = NativeSaveMenuRva::SaveRequestProfile as u32;
 pub const REQUEST_SAVE_RVA: u32 = NativeSaveMenuRva::RequestSave as u32;
-// 0x67b940 writes a combined character+system save (serialises via 0x67dc00 and a
+// 0x67cc40 writes a combined character+system save (serialises via 0x67ef00 and a
 // DLMemoryOutputStream, submits both entries, sets GameMan->saveState = 1). It does not
 // load. Renamed 2026-08-01; matches er-save-suppress's SAVE_DISPATCH_* family.
 const SAVE_DISPATCH_COMBINED_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA as u32;
-const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
+const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067b610;
 const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = NativeSaveMenuRva::SaveLoadPumpDefault as u32;
 pub const SAVE_LOAD_STATE_INIT_RVA: u32 = NativeSaveMenuRva::SaveLoadStateInit as u32;
 pub const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = NativeSaveMenuRva::MenuOtherLoadWrapper as u32;
@@ -62,8 +62,8 @@ pub struct SaveLoadRequest {
     /// Arm the menu-free cold-char-mount save-IO load through the same reliable channel.
     pub cold_char_mount: bool,
     /// Arm the save-safe verify-only own-load buffer-feed probe through the same reliable channel.
-    /// When set, the DLL hooks the FSM-gated save read (`0x67b100`), feeds it our sliced plaintext
-    /// `.sl2` slot body, calls the native parser (`0x67b290`), and reads back GameMan+0xc30 + the
+    /// When set, the DLL hooks the FSM-gated save read (`0x67c400`), feeds it our sliced plaintext
+    /// `.sl2` slot body, calls the native parser (`0x67c590`), and reads back GameMan+0xc30 + the
     /// PlayerGameData fingerprint -- no `SetState5`, no autosave, no `continue_confirm`.
     pub own_load: bool,
     /// Arm the final own-load step: after the proven verify-only parse yields a real c30 + real
@@ -80,8 +80,8 @@ pub struct SaveLoadRequest {
     pub own_dispatch: bool,
     /// Arm the menu-free LoadGame-job install lever: instead of the guarded `continue_confirm`/
     /// `SetState5`, build the native LoadGame `MenuJobWithContext<LoadJobContext>` (factory
-    /// `FUN_140826510`) and install it into the title owner's `+0x130` MenuJob slot (assign helper
-    /// `FUN_1407a9560`), replacing the idle `IfElseJob`. `STEP_MenuJobWait` then ticks it each frame,
+    /// `FUN_1408279b0`) and install it into the title owner's `+0x130` MenuJob slot (assign helper
+    /// `FUN_1407aa890`), replacing the idle `IfElseJob`. `STEP_MenuJobWait` then ticks it each frame,
     /// self-builds, deserializes the save, and streams the world -- no `SetState5`, no save write.
     /// Save-safe (build + first-tick deser only read the save). Off by default; double-gated -- it
     /// also requires `OWN_LOAD_CONTINUE_FIRED`-style arming via `own_load`. Env
@@ -158,11 +158,11 @@ pub trait GameManSaveAccess {
     fn new_game_plus_requested(&self) -> bool;
     /// `GameMan::warp_requested` -- the map-move/warp trigger consumed by `MoveMapStep`.
     fn warp_requested(&self) -> bool;
-    /// Clear/set `GameMan::warp_requested`. The native full deserialize (`0x67b290`) sets this true
-    /// as a "warp reload pending" flag; `MoveMapStep::CheckReturnToTitle` (dump `FUN_140afa7c0`)
+    /// Clear/set `GameMan::warp_requested`. The native full deserialize (`0x67c590`) sets this true
+    /// as a "warp reload pending" flag; `MoveMapStep::CheckReturnToTitle` (`0x140afbeb0`)
     /// reads it every frame as a return-to-title trigger. A fresh title->world stream (our reload's
     /// SetState5) never consumes it, so it must be cleared or the freshly-loaded world bounces back
-    /// to the title. Mirrors `SetCallForWarp` (dump `0x14067af90`).
+    /// to the title. Mirrors `SetCallForWarp` (`0x14067c1a0`).
     fn set_warp_requested(&mut self, requested: bool);
 }
 

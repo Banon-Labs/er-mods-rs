@@ -3,8 +3,8 @@
 // (`vtable+8`) and, in view 0's layout that view 3 borrows, skips the naming. Measured 2026-10-03:
 // two cursor moves in view 3 reached parts-b and never reached the record naming at 0x99a5a0.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // This version reads that gate: the class of `parts+0x180`, the rva of its `vtable+8`, that
 // function's first instructions, and what it returns in each view (the R3 step at 0x998260 reports

@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Scan eldenring-deobf.bin .text for instructions whose immediate/displacement
+"""Scan a flat ER image's .text for instructions whose immediate/displacement
 operand equals one of the ToS/Privacy FMG text IDs, and print the VA + bytes so
 we can identify the dialog-builder functions. Pure-static, no game launch.
 
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
+
 Run: uv run --with capstone python3 scripts/scan-textid-imm.py
 """
+import os
 import struct
 import sys
 
-BIN = "/home/banon/projects/er-mods-rs/eldenring-deobf.bin"
+BIN = os.environ.get(
+    "ER_DEOBF_BIN",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "eldenring-deobf-1.17.2.bin"),
+)
 IMAGE_BASE = 0x140000000
 
 # Privacy-specific (607200/607201/607202), EULA (607100/607102), buttons/footer,

@@ -17,10 +17,10 @@ concurrency:
 
 env:
   # Keep in lockstep with .github/workflows/check.yml, which carries the reasoning:
-  # this pin decides which game builds the DLLs survive, because every upstream
-  # singleton (`T::instance_ptr()`) resolves through upstream's own version-keyed
-  # RVA bundle and PANICS on a build that bundle does not list. `1027d24` is the
-  # first revision that knows 2.7.0.0 (patch 1.17) while keeping 2.6.2.0.
+  # the supported game build is er-game-base's SUPPORTED_FILE_VERSION (2.7.2.0),
+  # and this pin has to agree with it, because every singleton
+  # (`T::instance_ptr()`) resolves through the sibling's own version-keyed RVA
+  # bundle and panics on a build that bundle does not list. `4612952` lists 2.7.2.0.
   FROMSOFTWARE_RS_REV: 4612952a71bfbd123445c805c0c7145e66e80229
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON -- and the half of "lockstep with
   # check.yml" that this file was missing until 2026-09-01. `1027d24` and its parent
@@ -33,7 +33,8 @@ env:
   # Point this back at https://github.com/vswarte/fromsoftware-rs.git the moment
   # FROMSOFTWARE_RS_REV names a commit that is merged upstream. It is a clone URL
   # for a read-only checkout and nothing else; the rev pin above still decides
-  # which game builds the DLLs survive, and it is unchanged.
+  # which game builds `instance_ptr()` resolves on, and it is unchanged. The
+  # current pin, `4612952`, is likewise on the fork and not on upstream `main`.
   FROMSOFTWARE_RS_REMOTE: https://github.com/chozandrias76/fromsoftware-rs.git
   CARGO_XWIN_VERSION: 0.23.0
 

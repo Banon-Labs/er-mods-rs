@@ -26,7 +26,7 @@ pub(crate) static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::n
 #[cfg(feature = "quit-rows")]
 pub(crate) static OPTIONS_02_040_QUIT6_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 
-/// Diagnostic detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
+/// Diagnostic detour for the dialog builder 0x140928c00 (4 register args rcx/rdx/r8/r9 -> dialog
 /// in rax). Calls the original, then (pre-world, capped) logs the built dialog's vtable/class +
 /// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
 /// connection-error dialog without guessing. Read-only; never mutates the dialog.
@@ -54,7 +54,7 @@ pub(crate) unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, u
 /// Seamless co-OP (2026-07-06): auto-enabled under Seamless when the product autoload is armed.
 /// ERSC re-establishes the game's online service after our offline patches, so ~1.4s after the
 /// forced Continue the base game builds the online-service ToS (`06_000_TermOfService_BNE`,
-/// TosTitle ctor 0x1409b5970) -- gated by a "ToS-accepted" flag our offline forcing never touches
+/// TosTitle ctor 0x1409b7070) -- gated by a "ToS-accepted" flag our offline forcing never touches
 /// (GameMan+0xBC8 only gates connection-loss popups). With no path past it the zero-input autoload
 /// stalls forever at the title. Suppressing the redundant re-prompt (the user's profile has already
 /// accepted the ToS) lets the autoload reach Continue and load the .co2 save. Evaluated per-call at
@@ -79,9 +79,9 @@ pub(crate) fn policy_tos_suppress_enabled() -> bool {
     // Suppressing the build removes the prompt without answering it, so the title waits on a
     // dialog that will never return. Forging an acceptance is not available either: the record
     // fields this hook reads are message ids (200/201), and the function this repo calls the "ToS
-    // flag setter" (`0x1409b6b30`) is a language setter -- it writes the localisation code at
+    // flag setter" (`0x1409b8230`) is a language setter -- it writes the localisation code at
     // `+0x29c0` and refreshes the scaleform text, which is also all the "status predicate"
-    // `0x1409b72b0` reads back. Neither is an acceptance flag.
+    // `0x1409b89b0` reads back. Neither is an acceptance flag.
     //
     // So the dialog is built. A prompt the player can answer is strictly better than a title that
     // never moves, and the wrapper stays hooked so the oracles still record every build.
@@ -111,7 +111,7 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     let ret = if policy_tos_suppress_enabled() {
         // Replace the native "show ToS" stepper with our own no-op: skip building the
         // TosMultiLangDialog and return null, mimicking the wrapper's native allocation-
-        // failure path (caller-tolerated). The ToS ctor 0x1409b5970 -- whose only caller is
+        // failure path (caller-tolerated). The ToS ctor 0x1409b7070 -- whose only caller is
         // this wrapper -- never runs, so the policy/ToS ctor hook never fires and
         // POLICY_TOS_TITLE_TOTAL_BUILDS stays 0: the unnecessary startup modal is never
         // constructed. Zero input, no auto-accept.
@@ -400,8 +400,9 @@ pub(crate) fn install_policy_tos_title_hook() {
     // installer; see bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
     //
     // Armed / refused / failed are three different outcomes and are logged as three different
-    // words: Refused means the 1.17 map has no row for that RVA (a migration gap, fix the map),
-    // failed means MinHook would not take the address it was given (a different problem entirely).
+    // words: refused means there is no game module base to add the RVA to, failed means
+    // `MhHook::new` would not take the address -- which includes er-hook refusing it on a build
+    // other than 2.7.2.0 or off the detour allowlist.
     let plan: [(&str, u32, *mut c_void, &AtomicUsize); 6] = [
         (
             "ToS ctor wrapper",
@@ -446,7 +447,7 @@ pub(crate) fn install_policy_tos_title_hook() {
     for (label, rva, detour, orig) in plan {
         let Ok(addr) = game_rva_for_hook(rva) else {
             append_autoload_debug(format_args!(
-                "policy-oracle: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the running build; the other rows are unaffected"
+                "policy-oracle: REFUSED {label} -- no game module base for rva 0x{rva:x}; the other rows are unaffected"
             ));
             refused.push(label);
             continue;
@@ -642,7 +643,7 @@ pub(crate) unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<Strin
 }
 
 /// Diagnostic: dump a builder argument to name the modal. Pass both `r8` and `r9`: the wrapper
-/// `FUN_1407b03f0` (1.16.2) / `FUN_1407b1270` (1.17) calls `builder(dialog, sfObj, param_3, text)`,
+/// (2.7.2.0 0x1407b1720) calls `builder(dialog, sfObj, param_3, text)`,
 /// so `r8` is `param_3` and the message is `r9` -- dumping only `r8` is why run
 /// br-20260831-160354-2513 logged a suppressed build with no `spec #0:` line. Tries the reported
 /// MenuString offset (+0x8e0) plus a scan of early offsets. Read-only; logs each decoded string.

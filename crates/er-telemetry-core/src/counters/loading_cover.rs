@@ -285,7 +285,7 @@ pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize:
 //
 // The signal. Not a new hook and not a state poll: the game's own `02_000_IngameTop`
 // `MenuWindowJob` running. The product `MenuWindowJob::Run` detour (the PAB one, the deterministic
-// winner at 0x7ad1c0) already dispatches on that wide resource name to maintain
+// winner at 0x7ae4f0) already dispatches on that wide resource name to maintain
 // `SYSTEM_QUIT_INGAME_TOP_WINDOW`, and `02_000_IngameTop` is the game's own name for the in-world
 // pause/System menu -- the window Escape opens. The job runs once per frame while that menu is up
 // and not at all otherwise, so a tick after a gap is the open. Ground truth for both halves of

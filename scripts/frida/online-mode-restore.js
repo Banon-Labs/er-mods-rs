@@ -1,7 +1,7 @@
 // Put back the two online predicates er_quickload stubs, live, without a rebuild.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // Both are patched to `xor eax,eax; ret` at DllMain so the autoload reaches the title with no
 // login attempt. The product restores the first one once a player exists; the second has never

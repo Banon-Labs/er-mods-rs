@@ -76,7 +76,7 @@ VALID_KINDS = {
 # written into the field that licenses two DLLs to hook one prologue.
 VALID_MECHANISMS = {
     # Both handlers register through one MinHook instance -- the product's union, reached from a
-    # companion image through the `er_effects_union_register` export -- and chain.
+    # companion image through the `er_effects_union_register_2720` export -- and chain.
     "hook-union",
 }
 

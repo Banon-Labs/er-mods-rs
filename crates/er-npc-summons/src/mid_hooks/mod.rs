@@ -25,12 +25,11 @@
 //! 3. **Pin the resume target too**, so a target that moved fails closed rather than sending a
 //!    thread into the middle of an instruction.
 //! 4. **Resolve as call sites, never as detours.** Both addresses are an offset into a function,
-//!    so they go through [`er_game_base::game_build::resolve_call_site_rva`], which maps the
-//!    enclosing function and adds the offset afterwards.
+//!    so they go through [`er_game_base::game_build::resolve_call_site_rva`], which checks the
+//!    build and adds the offset to the enclosing function.
 //!
-//! Comparisons honour the generated `_MASK`: a RIP-relative displacement re-encodes on every build
-//! because both the instruction and the global it names move, and ilhook relocates whatever the
-//! live instruction actually names.
+//! Comparisons honour the generated `_MASK`: a RIP-relative displacement is not compared, and
+//! ilhook relocates whatever the live instruction actually names.
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
@@ -48,7 +47,7 @@ pub(crate) struct Window {
 pub(crate) struct MidHook {
     /// Name used in the install log and the telemetry line.
     pub(crate) name: &'static str,
-    /// 1.16.2 RVA of the `.pdata` function entry that contains both addresses.
+    /// 2.7.2.0 RVA of the `.pdata` function entry that contains both addresses.
     pub(crate) function_rva: usize,
     /// Offset of the hooked instruction within [`Self::function_rva`].
     pub(crate) hook_offset: usize,
@@ -150,8 +149,8 @@ mod install {
             summons_log(format_args!(
                 "mid hooks: DISARMED {name} ({what} @0x{address:x}): byte mismatch (got \
                  {read:02x?}, want {:02x?} under mask {:02x?}). The address was resolved for the \
-                 running build, so another mod rewrote these bytes or the mapping is wrong. Not \
-                 installing.",
+                 running build, so another mod rewrote these bytes or the measured site is wrong. \
+                 Not installing.",
                 window.bytes, window.mask
             ));
             return false;
@@ -168,8 +167,8 @@ mod install {
         };
         let Some(site) = resolve(hook.hook_offset) else {
             summons_log(format_args!(
-                "mid hooks: REFUSED {} (1.16.2 fn 0x{:x} + 0x{:x}): no mapping for the containing \
-                 function on the running build -- {}. Nothing read, nothing written.",
+                "mid hooks: REFUSED {} (2.7.2.0 fn 0x{:x} + 0x{:x}): the running build is not the \
+                 one this site was measured on -- {}. Nothing read, nothing written.",
                 hook.name,
                 hook.function_rva,
                 hook.hook_offset,
@@ -211,7 +210,7 @@ mod install {
                 // The hook lives as long as the process; dropping the point would unhook it.
                 core::mem::forget(point);
                 summons_log(format_args!(
-                    "mid hooks: ARMED {} @0x{site:x} (resume 0x{resume:x}; 1.16.2 fn 0x{:x} + \
+                    "mid hooks: ARMED {} @0x{site:x} (resume 0x{resume:x}; 2.7.2.0 fn 0x{:x} + \
                      0x{:x}): {}",
                     hook.name, hook.function_rva, hook.hook_offset, hook.rationale
                 ));

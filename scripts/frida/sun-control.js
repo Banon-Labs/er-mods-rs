@@ -1,8 +1,8 @@
 // Overrides the sun's light after the game blends its lighting parameters each frame, and reports
 // the blended values, as the prototype for the Sky tab's Sun section (er-effects-rs-pjyh).
 //
-// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give with
-// scripts/map-rvas-1171-to-1172.py. Each code address is the entry of a function whose bytes match
+// Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give. Each code address is the
+// entry of a function whose bytes match
 // the 1.17.1 one once rip-relative and branch operands are masked, every masked target carrying to
 // the new operand; each global is the carried target of those same readers.
 //

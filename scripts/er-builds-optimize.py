@@ -26,7 +26,7 @@ What "best" means here, stated so it can be argued with:
   condition the same way, walking an RL again on its own when its floors rise (`_snapshots`).
 * Roll tier is a floor too (`--roll medium`, default): Endurance rises until the weapon plus the pool's
   median rest-of-kit load (armor, talismans, the other weapons) is at most 70% of max load
-  (`GetWeightType` 0x14068c630). Load talismans are not assumed.
+  (`GetWeightType` 0x14068d930). Load talismans are not assumed.
 * Every requirement of the weapon is met, two-handing's STR x1.5 included. An unmet requirement
   costs the whole element 40% (`docs/er-mechanics/attack-rating.md`), which no spread recovers.
 * Every other point goes where it buys the most `--objective`:
@@ -129,7 +129,7 @@ ABSORB_KEY = {"physical": "physical", "magic": "magic", "fire": "fire", "lightni
 PVP_TAGS = {"Invasions", "Duels", "Co-op/Gank", "2v2", "Ladder", "Fishing"}
 #: Weapon positions 0-2 of a planner set are the right hand, 3-5 the left.
 RIGHT_HAND = (0, 1, 2)
-#: Burden / max load above this is heavy roll (`GetWeightType` 0x14068c630, resources.md section 5).
+#: Burden / max load above this is heavy roll (`GetWeightType` 0x14068d930, resources.md section 5).
 MEDIUM_ROLL_MAX = RES.WEIGHT_HEAVY
 FLOOR_SOURCES = ("pvp", "all")
 

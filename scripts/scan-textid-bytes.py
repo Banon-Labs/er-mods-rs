@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
-"""Raw byte-pattern scan of eldenring-deobf.bin for the 4-byte little-endian
+"""Raw byte-pattern scan of a flat ER image for the 4-byte little-endian
 encoding of ToS/Privacy FMG text IDs appearing as imm32 operands. For each hit,
 decode a small window with capstone to confirm it is a real instruction operand
 and report the VA + instruction. file offset == RVA, base 0x140000000.
 
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
+
 Run: uv run --with capstone python3 scripts/scan-textid-bytes.py
 """
+import os
 import struct
 import sys
 
-BIN = "/home/banon/projects/er-mods-rs/eldenring-deobf.bin"
+BIN = os.environ.get(
+    "ER_DEOBF_BIN",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "eldenring-deobf-1.17.2.bin"),
+)
 IMAGE_BASE = 0x140000000
 
 IDS = {

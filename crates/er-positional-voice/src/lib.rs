@@ -18,7 +18,7 @@
 //! Seamless Co-op. Nothing in `ersc.dll` is hooked, patched, read or written, and none of its
 //! calls are intercepted. Seamless's own voice chat stays as it ships (off). No game code is
 //! patched either: every game function is called as the game calls it, after its first eight
-//! bytes have been checked against 1.17.1 (`er_positional_voice_core::sites`).
+//! bytes have been checked against 2.7.2.0 (`er_positional_voice_core::sites`).
 //!
 //! # The log is the oracle
 //!
@@ -440,7 +440,7 @@ fn install() {
     }
     let config = load_config();
     voice_log(format_args!(
-        "attach: game base {base:#x}, all {} sites carried from 1.17.1 and matched on {}; gain {} \
+        "attach: game base {base:#x}, all {} 2.7.2.0 sites matched on {}; gain {} \
          loopback {}; nothing in ersc.dll is touched",
         er_positional_voice_core::sites::SITES.len(),
         er_game_base::game_build::describe_build(),

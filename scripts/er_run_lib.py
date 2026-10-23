@@ -253,57 +253,35 @@ def game_pid() -> int | None:
 # assumed, so a build that ever did relocate answers "cannot tell" instead of reading rubble.
 GAME_PREFERRED_IMAGE_BASE = 0x140000000
 
-# `WorldChrMan`, the singleton the game builds when a world loads, as an rva into the 1.17.1 image.
-# The installed build is 2.7.2.0 now; `WORLD_CHR_MAN_GLOBAL_RVA` below is this, carried once more.
-#
-# Two hops from the 1.16.2 constant `er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA` (`0x3d65f88`),
-# because an rva in that file is 1.16.2 by design and is translated at use rather than being stale:
-#
-#   1.16.2 -> 1.17.0   `docs/recon/rva-map-1162-to-1170.data.tsv`, row `WORLD_CHR_MAN_GLOBAL_RVA`:
-#                      `0x3d65f88` -> `0x3d69ff8` on 2325 agreeing references out of 2330. The same
-#                      pair is written out independently in
-#                      `docs/recon/npc-possess-1170-address-table.md`.
-#   1.17.0 -> 1.17.1   `python3 scripts/map-rvas-1170-to-1171.py 0x143d69ff8` answers `unchanged,
-#                      .data did not move between the two builds`. That patch grew one function
-#                      inside `.text` and left the section table alone, so no global moved.
-#
-# Then read back out of the images instead of trusted. In `eldenring-deobf-1.17.1.bin`, `0x1401bac8c`
-# is `mov rax, qword ptr [rip + 0x3baf365]`, which resolves to `0x143d69ff8`, immediately followed by
-# `mov r13, qword ptr [rax + 0x1e508]` and `test r13, r13` -- the game performing this exact walk and
-# null-check. The same three instructions sit at the same address in `eldenring-deobf.bin` reading
-# `0x143d65f88`, so the two builds are paired at one site rather than by two separate guesses. 2469
-# instructions in 1.17.1 load this global, against 2464 loading the 1.16.2 one.
-#
-# It lives here rather than in either caller because two scripts gate on it. A constant of this
-# provenance copied into a second file is a constant that goes stale in one of them silently, and
-# the failure it produces -- an address that resolves to something that is not a world -- reads as
-# an empty world forever rather than as a wrong address.
-WORLD_CHR_MAN_GLOBAL_RVA_1171 = 0x3D69FF8
+# The one game build these scripts read: eldenring.exe FileVersion 2.7.2.0, whose PE header
+# `TimeDateStamp` is this. `eldenring-deobf-1.17.2.bin` carries the same stamp, and a live 2.7.2.0
+# game read the same one on 2026-10-22. The walk asks the running process for its stamp and refuses
+# any other build, since every address below belongs to this one.
+GAME_TIME_DATE_STAMP = 0x6AABF7E7
 
-# The same global on the installed 2.7.2.0, a third hop. That build moved `.data`, so the carry is
-# the segment table `docs/recon/carry-1171-to-1172.tsv` (`scripts/map-rvas-1171-to-1172.py`) rather
-# than a constant, and `scripts/frida-carry-1172.py` checked the result against the images: the
-# 1.17.1 instructions that load `0x143d69ff8`, carried to 2.7.2.0, load `0x143d6d018`. The
-# selftests read this hop back out of the table, as they do the first one.
+# `WorldChrMan`, the singleton the game builds when a world loads, as a 2.7.2.0 rva.
+#
+# Measured in `eldenring-deobf-1.17.2.bin` (flat image, VA = 0x140000000 + offset): 2475
+# `mov r64, qword ptr [rip + disp32]` instructions in `.text` load `0x143d6d018`, and 238 of them are
+# followed at once by a read of `[reg + 0x1e508]`, the game performing this exact walk.
+# `world_chr_man_in_image` below re-reads both numbers out of the image. Measured live on 2026-10-22
+# in a world: `0x143d6d018` held a `WorldChrMan` whose `+0x1e508` was a player.
+#
+# It lives here rather than in either caller because two scripts gate on it. A constant copied into
+# a second file is a constant that goes stale in one of them silently, and the failure it produces
+# -- an address that resolves to something that is not a world -- reads as an empty world forever
+# rather than as a wrong address.
 WORLD_CHR_MAN_GLOBAL_RVA = 0x3D6D018
 
-# The same global in each build this repo has carried it to, keyed by the PE header's
-# `TimeDateStamp` as the running image reports it, so the walk asks the process which build it is
-# rather than assuming. 1.17.2 (FileVersion 2.7.2.0) moved `.data`:
-# `python3 scripts/map-rvas-1171-to-1172.py 0x143d69ff8` answers `0x143d6d018`. Measured 2026-10-22
-# against a live 1.17.2 game in a world: the 1.17.1 address read null, so `er-frida-up.py` refused
-# with "no world is loaded", while `0x143d6d018` held a `WorldChrMan` whose `+0x1e508` was a
-# player. The stamps are the ones `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`
-# carry, and the live 1.17.2 image read the same one.
-WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP = {
-    0x6A96B418: 0x3D69FF8,  # 1.17.1, FileVersion 2.7.1.0
-    0x6AABF7E7: 0x3D6D018,  # 1.17.2, FileVersion 2.7.2.0
-}
+# What `world_chr_man_in_image` expects to find, measured 2026-10-23.
+WORLD_CHR_MAN_IMAGE_LOADS = 2475
+WORLD_CHR_MAN_IMAGE_MAIN_PLAYER_WALKS = 238
+# The image the constants were measured on, a gitignored file at the repo root.
+GAME_IMAGE_NAME = "eldenring-deobf-1.17.2.bin"
 
 # `WorldChrMan::mainPlayerIns`, the local player inside that singleton. A struct offset, so nothing
-# translates it and nothing would notice the day it moves: recorded unchanged from 1.16.2 through
-# 1.17 in `docs/recon/npc-possess-1170-address-table.md`, and 410 instructions read `[reg+0x1e508]`
-# in each 1.17 image against 411 in 1.16.2.
+# would notice the day it moves except the image check: on 2.7.2.0 it is the offset 238 of the
+# `WorldChrMan` loads above read next, which `world_chr_man_in_image` counts.
 WORLD_CHR_MAN_MAIN_PLAYER_OFFSET = 0x1E508
 
 # What a qword has to look like to be an object pointer at all. The canonical-address split puts
@@ -389,21 +367,17 @@ def player_in_a_world_at(pid: int, base: int) -> tuple[bool | None, str]:
     `base` is a parameter rather than a lookup so the selftest can point the same walk at a planted
     chain in a child process and exercise the arithmetic, the read and all three verdicts.
 
-    The global's rva comes from the PE header at `base` (`WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP`). A
-    header that cannot be read -- the selftest's planted chain has none -- keeps the 1.17.1 rva; a
-    header that reads as a build not in the table is refused, since any address would be a guess.
+    The PE header at `base` must carry `GAME_TIME_DATE_STAMP`; a header that reads as any other
+    build is refused, since the address would be a guess. A header that cannot be read at all --
+    the selftest's planted chain has none -- is walked with the 2.7.2.0 rva.
     """
     stamp = image_time_date_stamp(pid, base)
-    if stamp is None:
-        rva = WORLD_CHR_MAN_GLOBAL_RVA
-    elif stamp in WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP:
-        rva = WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP[stamp]
-    else:
+    if stamp is not None and stamp != GAME_TIME_DATE_STAMP:
         return None, (
-            f"the image at 0x{base:x} in pid {pid} is a build this script has no WorldChrMan "
-            f"address for (PE TimeDateStamp 0x{stamp:x})"
+            f"the image at 0x{base:x} in pid {pid} is not eldenring.exe 2.7.2.0 (PE TimeDateStamp "
+            f"0x{stamp:x}, want 0x{GAME_TIME_DATE_STAMP:x}), so it has no known WorldChrMan address"
         )
-    address = base + rva
+    address = base + WORLD_CHR_MAN_GLOBAL_RVA
     world = read_qword(pid, address)
     if world is None:
         return None, f"WorldChrMan at 0x{address:x} could not be read in pid {pid}"
@@ -441,54 +415,87 @@ def player_in_a_world(pid: int) -> tuple[bool | None, str]:
     return player_in_a_world_at(pid, base)
 
 
-def recorded_1162_to_1170_hop() -> tuple[bool | None, str]:
-    """Re-read the first translation hop out of the map that produced it.
+def game_image_path() -> Path | None:
+    """The 2.7.2.0 flat image, or None when it is not on this machine.
 
-    `WORLD_CHR_MAN_GLOBAL_RVA_1171` above is the far end of a two-hop carry, and the near end is a
-    generated file that gets regenerated. If a refresh ever moves the row, this constant is wrong
-    and nothing else here would notice, so the selftests read the row back. A missing map file is
-    reported as unchecked rather than as a pass: these scripts also run from outside a checkout.
+    `ER_DEOBF_BIN_1172` overrides, the variable the build's prologue pins read for this same
+    image. `ER_DEOBF_BIN` is deliberately not read: the other image helpers take it to point at an
+    older build, and a check that only means anything on 2.7.2.0 must not follow it there. The
+    name (the override, or `GAME_IMAGE_NAME`) is looked up as given, then at the repo root, then
+    from a linked worktree at the main checkout: the image is gitignored, and git never copies a
+    gitignored file into a worktree.
     """
-    row_file = Path(__file__).resolve().parent.parent / "docs/recon/rva-map-1162-to-1170.data.tsv"
-    if not row_file.is_file():
-        return None, f"{row_file.name} is not here, so the 1.16.2 to 1.17.0 hop went unchecked"
-    for line in row_file.read_text(encoding="utf-8", errors="replace").splitlines():
-        fields = line.split("\t")
-        if len(fields) >= 3 and fields[2].strip() == "WORLD_CHR_MAN_GLOBAL_RVA":
-            mapped = int(fields[1].strip(), 16)
-            if mapped == WORLD_CHR_MAN_GLOBAL_RVA_1171:
-                return True, f"{fields[0].strip()} -> 0x{mapped:x}, votes {fields[3].strip()}"
-            return False, (
-                f"the map now carries {fields[0].strip()} -> 0x{mapped:x}, not "
-                f"0x{WORLD_CHR_MAN_GLOBAL_RVA_1171:x}"
-            )
-    return False, "the map has no WORLD_CHR_MAN_GLOBAL_RVA row any more"
+    name = os.environ.get("ER_DEOBF_BIN_1172") or GAME_IMAGE_NAME
+    given = Path(name)
+    if given.is_absolute():
+        return given if given.is_file() else None
+    repo = Path(__file__).resolve().parent.parent
+    candidates = [given, repo / given]
+    git = repo / ".git"
+    if git.is_file():
+        # A worktree's `.git` names its private git dir, whose `commondir` leads to the main one.
+        text = git.read_text(encoding="utf-8", errors="replace").strip()
+        if text.startswith("gitdir:"):
+            private = Path(text.split(":", 1)[1].strip())
+            common = private / "commondir"
+            if common.is_file():
+                main_git = (private / common.read_text(encoding="utf-8").strip()).resolve()
+                candidates.append(main_git.parent / given)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
-def recorded_1171_to_1172_hop() -> tuple[bool | None, str]:
-    """Re-read the third hop, 1.17.1 to 2.7.2.0, out of the segment table that carries it.
+def world_chr_man_in_image(image: Path | None = None) -> tuple[bool | None, str]:
+    """Re-read `WORLD_CHR_MAN_GLOBAL_RVA` out of the 2.7.2.0 image it was measured on.
 
-    The table is regenerated by `scripts/map-rvas-1171-to-1172.py --write`, so the same reasoning
-    as the first hop applies: if a refresh moves the segment this global sits in, the constant is
-    wrong and only this read would say so. A row is `kind lo hi delta`; an rva in no row is refused.
+    Three things must hold: the image carries `GAME_TIME_DATE_STAMP`, `.text` holds exactly
+    `WORLD_CHR_MAN_IMAGE_LOADS` rip-relative qword loads of the global, and exactly
+    `WORLD_CHR_MAN_IMAGE_MAIN_PLAYER_WALKS` of them are followed within 8 bytes by the
+    `WORLD_CHR_MAN_MAIN_PLAYER_OFFSET` displacement. A constant edited to a neighbouring global, or
+    an image of another build, fails one of them. A missing image is reported as unchecked rather
+    than as a pass: these scripts also run where the image is not.
     """
-    table = Path(__file__).resolve().parent.parent / "docs/recon/carry-1171-to-1172.tsv"
-    if not table.is_file():
-        return None, f"{table.name} is not here, so the 1.17.1 to 2.7.2.0 hop went unchecked"
-    rva = WORLD_CHR_MAN_GLOBAL_RVA_1171
-    for line in table.read_text(encoding="utf-8", errors="replace").splitlines():
-        fields = line.split("\t")
-        if line.startswith("#") or len(fields) < 4:
+    import re
+    import struct
+
+    image = image or game_image_path()
+    if image is None:
+        wanted = os.environ.get("ER_DEOBF_BIN_1172") or GAME_IMAGE_NAME
+        return None, f"{wanted} is not here, so the WorldChrMan rva went unchecked"
+    data = image.read_bytes()
+    lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+    stamp = struct.unpack_from("<I", data, lfanew + 8)[0]
+    if stamp != GAME_TIME_DATE_STAMP:
+        return False, f"{image.name} has PE TimeDateStamp 0x{stamp:x}, not 0x{GAME_TIME_DATE_STAMP:x}"
+    sections = lfanew + 24 + struct.unpack_from("<H", data, lfanew + 20)[0]
+    _, text_size, text_rva = struct.unpack_from("<8sII", data, sections)
+    text = data[: text_rva + text_size]
+    target = GAME_PREFERRED_IMAGE_BASE + WORLD_CHR_MAN_GLOBAL_RVA
+    walk = struct.pack("<I", WORLD_CHR_MAN_MAIN_PLAYER_OFFSET)
+    loads = walks = 0
+    # REX.W (with or without REX.R) `8b`, mod 00 r/m 101: `mov r64, qword ptr [rip + disp32]`.
+    for match in re.finditer(rb"[\x48\x4c]\x8b[\x05\x0d\x15\x1d\x25\x2d\x35\x3d]", text):
+        at = match.start()
+        if at < text_rva:
             continue
-        lo, hi, delta = (int(f.strip(), 16) for f in fields[1:4])
-        if lo <= rva < hi:
-            carried = rva + delta
-            if carried == WORLD_CHR_MAN_GLOBAL_RVA:
-                return True, f"0x{rva:x} -> 0x{carried:x} in the {fields[0]} segment 0x{lo:x}..0x{hi:x}"
-            return False, (
-                f"the table now carries 0x{rva:x} -> 0x{carried:x}, not 0x{WORLD_CHR_MAN_GLOBAL_RVA:x}"
-            )
-    return False, f"the table refuses 0x{rva:x}: no segment holds it"
+        end = at + 7
+        if GAME_PREFERRED_IMAGE_BASE + end + struct.unpack_from("<i", text, at + 3)[0] != target:
+            continue
+        loads += 1
+        if walk in text[end : end + 8]:
+            walks += 1
+    detail = (
+        f"0x{target:x}: {loads} loads in {image.name}, {walks} followed by "
+        f"+0x{WORLD_CHR_MAN_MAIN_PLAYER_OFFSET:x}"
+    )
+    if (loads, walks) != (WORLD_CHR_MAN_IMAGE_LOADS, WORLD_CHR_MAN_IMAGE_MAIN_PLAYER_WALKS):
+        return False, (
+            f"{detail}; measured {WORLD_CHR_MAN_IMAGE_LOADS} and "
+            f"{WORLD_CHR_MAN_IMAGE_MAIN_PLAYER_WALKS}"
+        )
+    return True, detail
 
 
 def world_read_selftest() -> list[tuple[str, bool]]:

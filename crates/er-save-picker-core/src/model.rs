@@ -44,7 +44,7 @@
 //! through [`SavePickerModel::row_meaning`], and [`SavePickerModel::row_file_characters`] proves
 //! the entry it read is the same file the label named before returning it.
 //!
-//! Second, blank rows. The native list builder (`FUN_140875590`, 1.16.2) appends a row only for
+//! Second, blank rows. The native list builder (`FUN_140876a30`) appends a row only for
 //! slots whose `ProfileSummary::saveSlotsStates[slot]` byte is set, and it appends them in slot
 //! order -- so occupying a contiguous prefix keeps `slot index == visible list index == model row`
 //! (the row-populate hook reads the slot back from `rowModel+0x8`, which is that slot index). Rows

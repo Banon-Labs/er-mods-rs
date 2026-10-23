@@ -1,8 +1,8 @@
 // Issue the Steam lobby query ourselves, shaped the way Seamless shapes its own, and read back
 // what comes home.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // # Why this exists rather than another observer
 //
@@ -33,12 +33,12 @@
 
 'use strict';
 
-// `CS::GetCurrentMapId(BlockId *out)` on 1.17, below the 1.17.0 to 1.17.1 shift boundary at rva
-// 0xafefe9, so the same address serves both builds.
+// `CS::GetCurrentMapId(BlockId *out)`. On 1.17 it sat below the 1.17.0 to 1.17.1 shift boundary at
+// rva 0xafefe9, so one address served both builds; the literal below is its 2.7.2.0 rva.
 //
-// Not the 0x5eefb0 that `er_invasion_warp_core::warp::GET_CURRENT_MAP_ID_RVA` carries -- that is a
-// 1.16.2 address which the dll translates at runtime, and a frida agent has no translator. Carried
-// across with `scripts/map-rvas-1162-to-1170.py` (unique, 44 byte signature) and then read rather
+// When this was written, the 0x5eefb0 that `er_invasion_warp_core::warp::GET_CURRENT_MAP_ID_RVA`
+// carried was a 1.16.2 address the DLL translated at runtime, and a frida agent had no translator.
+// The function was paired with 1.17 by its bytes (unique, 44 byte signature) and then read rather
 // than trusted: the mapped entry opens `mov [rcx], 0xffffffff`, the sentinel this getter writes
 // into its out-parameter before it resolves anything, which is the shape and not a coincidence.
 const GET_CURRENT_MAP_ID_RVA = 0x5f02b0; // 1.17.1 0x5efe00

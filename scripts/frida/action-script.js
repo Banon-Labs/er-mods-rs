@@ -25,8 +25,7 @@
 // APPLY_SPEFFECT_FROM) on every other character within 12 m every 60 frames.
 // Clips: every TimeAct the CustomManualSelectorGenerator writer CMSG_SET_TAE stores at node+0xec.
 //
-// Addresses are 2.7.2.0, measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py; each
-// is written `1.17.1 -> 2.7.2.0`. Every function's body matches eldenring-deobf-1.17.2.bin apart
+// Addresses are 2.7.2.0, measured on 1.17.1 and carried; each is written `1.17.1 -> 2.7.2.0`. Every function's body matches eldenring-deobf-1.17.2.bin apart
 // from rip-relative and branch operands, and each global was checked through its readers (the same
 // instruction at the carried place reads the carried address).
 'use strict';

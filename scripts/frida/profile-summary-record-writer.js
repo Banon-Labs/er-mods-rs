@@ -1,14 +1,14 @@
 // Who writes CS::ProfileSummary's records during a System > Quit character switch?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `picked-summary` in er-profile-summary-core says, every time it re-asserts, that "something else
 // writes these records after we do (the game's own boot ProfileSummary read is the known one)". That
 // sentence has been in the log for weeks and names no function. This agent names one or clears it.
 //
 // The candidate is `CS::ProfileSummary::UpdateRecordFromLivePlayer`, 1.16.2 0x140262270 -> 1.17
-// 0x140262280 (docs/recon/rva-map-1162-to-1170.verified.tsv, IDENTICAL-WHOLE over 99 insns). It
+// 0x140262280 (the whole function identical, 99 instructions). It
 // writes one record from `GameDataMan->mainPlayerGameData` -- name, level +0x24, runeMemory +0x2c,
 // playtime +0x28 -- and its only two native callers are the GameMan save lanes FUN_14067b750 and
 // FUN_14067b940. A switch runs a return-title save, so those lanes do fire; the open question is

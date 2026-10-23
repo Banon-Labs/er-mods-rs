@@ -5,18 +5,21 @@ use er_game_base::fnv1a::fnv1a64;
 //
 // Proven cause (bd `FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30`):
 // the title start-game flow re-registers the 13 `*_dlc2` DLIO aliases with an empty root on every
-// pass (`FUN_140e06490`), but the job that repopulates them (`FUN_140e05fb0` via the MenuFunctorJob
-// whose `_Do_call` is `FUN_140836f30`) is enqueued only on boot. Measured, one run:
+// pass (`0x140e099f0`, `DLC_ROOTS_BLANK_RVA`), but the job that repopulates them (`0x140e09510`,
+// `DLC_ROOTS_REFILL_RVA`, via the MenuFunctorJob whose `_Do_call` is `0x1408383d0`,
+// `DLC_ROOTS_JOB_RVA`) is enqueued only on boot. The RE was done on 1.16.2, where the three are
+// `FUN_140e06490`, `FUN_140e05fb0` and `FUN_140836f30`. Measured, one run:
 //     Blank #1 (boot) -> job #1 -> refill #1 -> roots populated
 //     blank #2 (reload) -> no job #2, no refill #2 -> roots empty
 // A `mapstudio_dlc2:/m28_*.msb` read then resolves against an empty root and returns 0 bytes, the
 // sole `msbResCap` writer short-circuits on null content, and `WorldBlockRes` case 2 waits forever.
 //
 // Why this calls a native function instead of ENQUEUEING the native JOB: the enqueue chain is a
-// closed loop -- `FUN_140836f30` is the `_Do_call` of a functor that `FUN_14082faf0` builds, and
-// `FUN_14082faf0` is reachable only from that same loop. Every link is data-dispatched with no
-// static call site, so there is no enqueue owner to invoke (independently reproduces the July
-// finding "dynamically-built std::function, no static registration"). `FUN_140e05fb0` is
+// closed loop -- `0x1408383d0` is the `_Do_call` of a functor that `0x140830f90` (1.16.2
+// `FUN_14082faf0`) builds, and that builder is reachable only from that same loop. Every link is
+// data-dispatched with no static call site, so there is no enqueue owner to invoke (independently
+// reproduces the July finding "dynamically-built std::function, no static registration").
+// The refill `0x140e09510` is
 // self-contained -- it re-queries Steam DLC ownership through `dlcPlatform` vtable[8]/[0xb]/[0xc],
 // rewrites every root 0..0x31 via `AddVirtualFileRoots`, and sets the `+0x45` valid latch -- so
 // calling it is not a private per-frame pump of a MenuJob queue.
@@ -103,9 +106,9 @@ pub unsafe fn dlc_roots_self_heal_tick() {
         return;
     }
 
-    // Resolved for the running build. CSDLC moved 0x3d86bd8 -> 0x3d8ac58 on 1.17; the raw read
-    // would have succeeded against the 1.16.2 slot and handed a neighbouring global to the
-    // native roots refill below, which writes through it.
+    // Build-checked read. CSDLC is 0x3d8dc78 on 2.7.2.0 (1.16.2 0x3d86bd8); a raw read on another
+    // build would succeed against the wrong slot and hand a neighbouring global to the native
+    // roots refill below, which writes through it.
     let csdlc = match er_game_base::mem::read_global_ptr(base, CSDLC_SINGLETON_RVA, "CSDLC_SINGLETON_RVA") {
         p if p > 0x10000 => p,
         _ => return,

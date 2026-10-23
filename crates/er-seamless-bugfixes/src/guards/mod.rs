@@ -14,7 +14,7 @@
 //!    what a caller does with a wrong answer. `null_special_effect` exists in two halves precisely
 //!    because guarding only the query would have sent the crashing caller into an apply path that
 //!    faults on the same field -- see that module's header.
-//! 3. **Pin the address by its bytes.** Every RVA here is a 1.16.2 address. `expected_prologue` is
+//! 3. **Pin the address by its bytes.** Every RVA here is a 2.7.2.0 address. `expected_prologue` is
 //!    checked against the live image before the hook is installed, so a different build disarms
 //!    that guard loudly instead of detouring whatever now lives at the address.
 //! 4. **Never clobber the ABI.** Detours are naked stubs that either return a constant or tail-jump
@@ -45,7 +45,7 @@ pub(crate) struct Guard {
     /// own. Without this the install log called a run UNGUARDED whenever any one guard in the whole
     /// registry failed, which is false as soon as two unrelated guards exist.
     pub(crate) group: &'static str,
-    /// 1.16.2 RVA of the guarded function's entry.
+    /// 2.7.2.0 RVA of the guarded function's entry.
     pub(crate) rva: usize,
     /// Bytes this address was verified against, re-checked against the live image before hooking.
     /// A mismatch disarms this guard alone; the others still install.

@@ -4,7 +4,8 @@
 Everything is read from the installed regulation through `scripts/er-param-read.py`. The formulas
 are the ones traced in the executable; `docs/er-mechanics/defense.md` carries the addresses and the
 evidence label of each step. Labels used in comments here: `EXE` (read from the 1.16.2 Ghidra dump
-and re-checked in `eldenring-deobf-1.17.1.bin`), `REGULATION` (param values), `INFERRED`, `SITE`
+and re-checked in the 1.17.1 image; the addresses are the 2.7.2.0 ones in
+`eldenring-deobf-1.17.2.bin`), `REGULATION` (param values), `INFERRED`, `SITE`
 (the build planner's JS).
 
   python3 scripts/er-mechanics-defense.py --stats vig=40,mnd=20,end=30,str=50,dex=12,int=9,fth=9,arc=9 \\
@@ -34,14 +35,14 @@ TYPES = ('physical', 'strike', 'slash', 'pierce', 'magic', 'fire', 'lightning', 
 # lightning, dark). The game's "dark" is the menu's holy.
 ELEMENTS = ('physical', 'magic', 'fire', 'lightning', 'holy')
 
-# `EXE` 0x1406883e0 (1.17.1: 0x140689230): defense[t] = trunc(CC(sum of stats, 102) + CC(stat, g)).
+# `EXE` 0x1406896e0: defense[t] = trunc(CC(sum of stats, 102) + CC(stat, g)).
 # Lightning has no stat term. Stat identities come from the PlayerGameData offsets
 # +0x298/+0x2a0/+0x288/+0x2a8 (`INFERRED` from the fromsoftware-rs / Ghidra type layout).
 LEVEL_DEF_GRAPH = 102
 STAT_DEF_GRAPH = {'physical': ('str', 130), 'magic': ('int', 132), 'fire': ('vig', 133),
                   'lightning': None, 'holy': ('arc', 135)}
 
-# `EXE` 0x140688b40 (1.17.1: 0x140689990): resist[t] = trunc(CC(sum, lvl) + CC(stat, g)).
+# `EXE` 0x140689e40: resist[t] = trunc(CC(sum, lvl) + CC(stat, g)).
 RESISTS = {
     #          level graph, stat, stat graph, EquipParamProtector field, SpEffect rate, SpEffect add
     'poison':  (110, 'vig', 120, 'resistPoison', 'registPoizonChangeRate', 'changePoisonResistPoint'),
@@ -70,7 +71,7 @@ GREAT_RUNE_SPEFFECT = {"Godrick's Great Rune": 600, "Radahn's Great Rune": 610,
                        "Morgott's Great Rune": 620, "Rykard's Great Rune": 630,
                        "Mohg's Great Rune": 640, "Malenia's Great Rune": 650}
 
-# Physical sub-type index the damage code uses (AttackDamageInfo.damageType, `EXE` 0x140689c80):
+# Physical sub-type index the damage code uses (AttackDamageInfo.damageType, `EXE` 0x14068af80):
 # 0 slash, 1 strike (blow), 2 pierce (thrust), 3 standard (neutral).
 PHYS_SUBTYPE = {'slash': 0, 'strike': 1, 'pierce': 2, 'physical': 3, 'standard': 3}
 
@@ -79,7 +80,7 @@ def f32(x):
     return struct.unpack('<f', struct.pack('<f', x))[0]
 
 
-# `EXE` CalculateDefense 0x140690cf0 (1.17.1: 0x140691b40); constants at 1.17.1 0x143b37da8..dc4.
+# `EXE` CalculateDefense 0x140691ff0; constants at 0x143b3adb8..dd4.
 _R_LO, _R_ONE, _R_MID, _R_HI = f32(0.12), 1.0, 2.5, 8.0
 _P_LO, _P_ONE, _P_MID, _P_HI = 90.0, 60.0, 30.0, 10.0
 _EPS = f32(1.1920928955078125e-07)
@@ -102,7 +103,7 @@ def defense_curve(attack, defense):
 
 
 def calc_correct(row, x):
-    """`EXE` PerformCalcCorrection 0x140690f30 (1.17.1: 0x140691d80) over a CalcCorrectGraph row."""
+    """`EXE` PerformCalcCorrection 0x140692230 over a CalcCorrectGraph row."""
     v = [row[f'stageMaxVal{i}'] for i in range(5)]
     g = [row[f'stageMaxGrowVal{i}'] for i in range(5)]
     a = [row[f'adjPt_maxGrowVal{i}'] for i in range(5)]
@@ -282,7 +283,7 @@ def defender(t, stats, armor=(), talismans=(), great_rune=None, pvp=False, extra
 
 def damage(ar_by_type, motion_value, defender_info, phys_type='physical', final_rate=None,
            mp_correction=1.0):
-    """One hit on a defender, `EXE` CalculateDamageBasic 0x1406849d0 (1.17.1: 0x140685820).
+    """One hit on a defender, `EXE` CalculateDamageBasic 0x140685cd0.
 
     ar_by_type: {'physical'|'magic'|'fire'|'lightning'|'holy': attack rating}.
     motion_value: percent (100 = 1.0x). Applying it to AR before the defense step is `INFERRED`.
@@ -291,7 +292,7 @@ def damage(ar_by_type, motion_value, defender_info, phys_type='physical', final_
       `CalculateAbsorptions` and `GetPhysicalDamageCutRateByType` fall through to 1.0 (`EXE`,
       defense.md section 2a).
     final_rate: FinalDamageRateParam row (dict with physRate..darkRate) or None; the game applies it
-      only when attacker and defender are both players (`EXE` 0x140684d70).
+      only when attacker and defender are both players (`EXE` 0x140686070).
     """
     fr = {'physical': 'physRate', 'magic': 'magRate', 'fire': 'fireRate',
           'lightning': 'thunRate', 'holy': 'darkRate'}

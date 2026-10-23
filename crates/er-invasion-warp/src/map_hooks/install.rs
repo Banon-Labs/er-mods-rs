@@ -36,12 +36,12 @@ pub unsafe fn install_map_observers() -> usize {
     // that had nothing to do with it, and did so silently -- the log carried the ctor's refusal
     // and not a word about the two installs that never happened.
     //
-    // The ctor seam is not expected to refuse on 1.17 as things stand: its row is in the map
-    // (0x8855b0 -> 0x8865a0) and its recorded 12-byte prologue was byte-checked against
-    // `eldenring-deobf-1.17.bin` at the destination and matches, as do the other two. That is
-    // precisely why the coupling has to go now rather than after it bites: a chain that happens
-    // to work is one map regeneration, one recompiled prologue or one MinHook error away from
-    // taking the softlock fix down with it, and the failure would be silent.
+    // The ctor seam is not expected to refuse on 2.7.2.0 as things stand: its rva (0x886a50) is on
+    // the detour allowlist and its recorded 12-byte prologue was byte-checked against
+    // `eldenring-deobf-1.17.2.bin` there and matches, as do the other two. That is precisely why
+    // the coupling has to go now rather than after it bites: a chain that happens to work is one
+    // patch, one recompiled prologue or one MinHook error away from taking the softlock fix down
+    // with it, and the failure would be silent.
     //
     // The confirm interceptor is the one that makes the chaining actively harmful. It is the
     // SOFTLOCK FIX: it swallows a confirm carrying an id in our private 0x7F000000 band, which

@@ -58,9 +58,9 @@ pub const GFX_TEXT_OBJECT_KIND_TEXT_FIELD: i32 = 4;
 
 /// Where a `GFx` text field keeps the document it renders, and how that document stores characters.
 ///
-/// Read out of the length getter `FUN_1411874b0` and its caller, the `SetSelection` this module
+/// Read out of the length getter `0x14118aa10` and its caller, the `SetSelection` this module
 /// already calls: `SetSelection` clamps its indices against
-/// `FUN_1411874b0(*(*(field + 0xe0) + 0x10))`, and that function walks an array of paragraph
+/// `0x14118aa10(*(*(field + 0xe0) + 0x10))`, and that function walks an array of paragraph
 /// pointers, summing each one's length and dropping a trailing `NUL` that is not part of the text.
 /// Each paragraph is `{ wchar_t* buffer; usize length; }`.
 ///
@@ -107,7 +107,7 @@ pub fn gfx_value_type_is_resolved(datatype: usize) -> bool {
     datatype != GFX_VALUE_TYPE_UNDEFINED && datatype != GFX_VALUE_TYPE_NULL
 }
 
-/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the native visibility setter `FUN_140d844d0`
+/// GFx value type (`CSScaleformValue+0x20 & 0x8f`) the native visibility setter `0x140d87970`
 /// requires: it returns without doing anything unless the resolved value is a display object (10).
 /// Recorded per call as an oracle, so "the fields are still on screen" is diagnosable from
 /// telemetry rather than guesswork -- a type other than this means the hide silently did nothing.
@@ -281,9 +281,10 @@ fn row_text_hooks() -> RowTextHooks {
 /// Push `utf16` onto the row's `name` field with the game's own machinery, exactly as the native
 /// row-populate does per field: resolve the named child (`assignComponentWithName`, via the
 /// installed hook's trampoline when there is one so the resolve is not double-instrumented),
-/// SetText through the null-guarded wrapper `FUN_14074a0f0`, then release the resolved value with
-/// `CSScaleformValue::~CSScaleformValue` on the proxy's embedded value at `+0x28` -- mirroring the
-/// native `~CSScaleformValue(&SStack_70.scaleformValue)`. Returns whether SetText was accepted.
+/// SetText through the null-guarded wrapper `0x14074b300` (1.16.1 dump `FUN_14074a0f0`), then
+/// release the resolved value with `CSScaleformValue::~CSScaleformValue` on the proxy's embedded
+/// value at `+0x28` -- mirroring the native `~CSScaleformValue(&SStack_70.scaleformValue)`.
+/// Returns whether SetText was accepted.
 ///
 /// # Two guards, each of which was a crash or a lie
 ///

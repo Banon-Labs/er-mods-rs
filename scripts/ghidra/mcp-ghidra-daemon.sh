@@ -13,8 +13,9 @@
 # GhidraScript's wrapping transaction (see MCPServeHeadless.java) so mutations commit and a
 # periodic save (default every 60s, plus a flush on clean stop) writes them back. A crash loses
 # at most the last <save-interval seconds of edits. Pass --readonly for a query-only server, or
-# --save-interval 0 to disable periodic save. To serve the deobf-native project instead:
-#   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
+# --save-interval 0 to disable periodic save. To serve the installed build's deobf-native project
+# (scripts/ghidra/import-deobf.sh) instead:
+#   ... start --proj-dir $HOME/ghidra_maporch/proj-deobf-2720 --proj-name erdeobf2720
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

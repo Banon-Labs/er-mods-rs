@@ -28,7 +28,7 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/patch_sites.rs"));
 // one became unresolved residue -- and residue that wide makes every `.text` address look
 // possibly-claimed, which broke that gate's `proven_unclaimed` selftest.
 
-/// `FUN_1405fc0c0` -- the bloodstain writer. Its first instruction is the `param_2 == null`
+/// `FUN_1405fd3c0` -- the bloodstain writer. Its first instruction is the `param_2 == null`
 /// test, so the window starts at the entry.
 const BLOODSTAIN_WRITER_VA: u64 =
     GAME_IMAGE_BASE + (BLOODSTAIN_WRITER_RVA + BLOODSTAIN_WRITER_WINDOW_OFFSET) as u64;
@@ -36,7 +36,7 @@ const BLOODSTAIN_WRITER_VA: u64 =
 const BLOODSTAIN_WRITER_EMPTY_RETURN_VA: u64 =
     GAME_IMAGE_BASE + (BLOODSTAIN_WRITER_RVA + BLOODSTAIN_WRITER_EMPTY_RETURN_OFFSET) as u64;
 
-/// The `MOV` inside `FUN_14025e1e0(PlayerGameData *)` that clears the rune arc.
+/// The `MOV` inside `FUN_14025e1c0(PlayerGameData *)` that clears the rune arc.
 ///
 /// One 16-bit store covers two adjacent fields -- `runeArcActive` at `0xff` and the trigger flag
 /// at `0x100` -- which is why the patch changes an immediate rather than removing an instruction.
@@ -69,13 +69,13 @@ fn main() {
             (
                 PrologueSpec {
                     name: "KEEP_RUNES_WINDOW",
-                    doc: "1.16.2 entry of the bloodstain writer:\n\
+                    doc: "2.7.2.0 entry of the bloodstain writer:\n\
                           `TEST RDX,RDX; JZ +0x2d1`.\n\
                           The `JZ` is in the window because it is the argument for the patch: the\n\
                           function already returns without touching anything when `RDX` is null.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: BLOODSTAIN_WRITER_VA,
                     take: 0,
                     pin: &[0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd1, 0x02, 0x00, 0x00],
@@ -90,14 +90,14 @@ fn main() {
             (
                 PrologueSpec {
                     name: "KEEP_RUNE_ARC_WINDOW",
-                    doc: "1.16.2 bytes of the rune-arc clear:\n\
+                    doc: "2.7.2.0 bytes of the rune-arc clear:\n\
                           `MOV word [RCX+0xff],0`.\n\
                           A 16-bit store over `runeArcActive` and the trigger flag beside it, so\n\
                           the patch raises the immediate's low byte instead of removing the store\n\
                           -- the flag still has to be cleared or the caller re-enters here.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: RUNE_ARC_CLEAR_VA,
                     take: 0,
                     pin: &[0x66, 0xc7, 0x81, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -111,13 +111,13 @@ fn main() {
             (
                 PrologueSpec {
                     name: "INSTANT_FADE_OUT_WINDOW",
-                    doc: "1.16.2 bytes of the fade-out time lookup in `SoloPlayDeath`:\n\
+                    doc: "2.7.2.0 bytes of the fade-out time lookup in `SoloPlayDeath`:\n\
                           `MOV RCX,[RAX]; TEST RCX,RCX; JZ +6; MOVSS XMM3,[RCX]; JMP +3`.\n\
                           Both arms are in the window because they are the argument for the\n\
                           patch: the taken arm is the game's own `0.0` for a missing param row.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: SOLO_PLAY_DEATH_FADE_LOOKUP_VA,
                     take: 0,
                     pin: &[

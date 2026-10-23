@@ -5,7 +5,7 @@
 //! (`register_union_hook` + the cross-DLL chaining) now live here so the three game cdylibs share one
 //! copy and MinHook's C source is compiled once (build.rs) instead of in each crate.
 //!
-//! The product-specific `#[no_mangle] er_effects_union_register` C export is deliberately not here --
+//! The product-specific `#[no_mangle] er_effects_union_register_2720` C export is deliberately not here --
 //! it stays defined in `er-quickload` so only `er_quickload.dll` exports that cross-DLL symbol.
 // PARITY: this crate transcribes MinHook's C ABI, so its names, casing and the items it
 // declares-but-does-not-call are the upstream header's shape rather than this repo's.
@@ -18,9 +18,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Whether an absolute address is a legitimate place to write into the running image, asked of
-/// that image's own function table. It is what a runtime-derived address gets instead of a
-/// version translation -- see the module docs for why an AOB hit needs the second question and
-/// cannot answer the first.
+/// that image's own function table. It is what a runtime-derived address gets instead of the
+/// constant detour allowlist -- see the module docs for why an AOB hit needs the second question
+/// and cannot answer the first.
 mod detour_site;
 
 // ============================================================================
@@ -44,8 +44,8 @@ static HOOK_LOGGER: AtomicUsize = AtomicUsize::new(0);
 /// copy of both crates, so an uninstalled sink is silent per DLL -- and on 2026-08-28 that cost a
 /// diagnosis: `er-armament-icons` logged `MH_ERROR_UNSUPPORTED_FUNCTION`, which is both MinHook's
 /// genuine "cannot hook this" and the code `MhHook::new` returns when the build gate refuses an
-/// address. With no sink installed there was no line saying which, for an address that is in the
-/// verified translation table and so should not have been refused at all. One sink, one call.
+/// address. With no sink installed there was no line saying which, for an address that the
+/// address map of the time held and so should not have been refused at all. One sink, one call.
 pub fn set_hook_logger(logger: HookLogFn) {
     HOOK_LOGGER.store(logger as usize, Ordering::Release);
     er_game_base::game_build::set_address_logger(logger);
@@ -175,12 +175,17 @@ impl UnionArity {
 }
 // 96 slots: this DLL's own union targets plus a companion DLL's (the log-only
 // er-reload-trace routes its ~40 native load/menu hooks through this DLL's union via
-// the `er_effects_union_register` export, so a single MinHook instance owns every shared
+// the `er_effects_union_register_2720` export, so a single MinHook instance owns every shared
 // address instead of two instances corrupting each other's trampolines). One slot per
 // unique game address; chained handlers on the same address share a slot.
 const MAX_UNION_SLOTS: usize = 96;
 
 struct UnionEntry {
+    /// The address the first registrant named. It is `target` unless that registrant asked for a
+    /// jump at the entry to be followed, in which case the detour sits on the code the jump lands
+    /// on and this keeps the entry the later registrants will name.
+    entry: usize,
+    /// Where the dispatcher's detour is written.
     target: usize,
     trampoline: usize,
     /// Which dispatcher pool holds this slot, and therefore how many arguments every handler on
@@ -189,6 +194,15 @@ struct UnionEntry {
     /// handler fn ptr + its caller-owned `orig` slot, in chain order.
     handlers: Vec<(usize, &'static AtomicUsize)>,
 }
+
+impl UnionEntry {
+    /// Does a registration naming `address` belong to this slot? Either address does: the entry a
+    /// registrant names, or the place the detour went.
+    fn claims(&self, address: usize) -> bool {
+        self.entry == address || self.target == address
+    }
+}
+
 static UNIONS: Mutex<Vec<UnionEntry>> = Mutex::new(Vec::new());
 /// Lock-free head-handler per slot, read on every dispatch (no mutex in the hot path).
 #[allow(clippy::declare_interior_mutable_const)]
@@ -297,7 +311,7 @@ fn union_admission(
     if let Some((index, entry)) = unions
         .iter()
         .enumerate()
-        .find(|(_, entry)| entry.target == target)
+        .find(|(_, entry)| entry.claims(target))
     {
         if entry.arity != arity {
             return UnionAdmission::ArityConflict(entry.arity);
@@ -314,6 +328,35 @@ fn union_admission(
         return UnionAdmission::Exhausted;
     }
     UnionAdmission::Create(slot)
+}
+
+/// [`union_admission`] for a registrant that names a function entry and leaves it to `locate` to
+/// say where the detour is written. Returns the admission and the address it concerns, or `None`
+/// when `locate` refuses the entry.
+///
+/// The table is asked about the entry before `locate` runs, and the order is the point. Once this
+/// image has detoured an entry, the entry opens with this image's own `jmp rel32`; a locator that
+/// follows jumps would follow that one to this image's relay and claim a second slot there, so one
+/// function would carry two dispatchers from one image. Asking the table first chains the
+/// newcomer onto the slot that already owns the entry instead.
+///
+/// `locate` runs only when no slot claims the entry, and the caller holds the table lock across
+/// both, so no other registration can detour the entry between the question and the answer.
+fn located_admission(
+    unions: &[UnionEntry],
+    entry: usize,
+    locate: &dyn Fn(usize) -> Option<usize>,
+    handler_addr: usize,
+    arity: UnionArity,
+) -> Option<(UnionAdmission, usize)> {
+    if let Some(owner) = unions.iter().find(|slot| slot.claims(entry)) {
+        return Some((
+            union_admission(unions, entry, handler_addr, arity),
+            owner.target,
+        ));
+    }
+    let target = locate(entry)?;
+    Some((union_admission(unions, target, handler_addr, arity), target))
 }
 
 /// Append `handler_addr` to `entry`'s chain and wire the two `orig` slots it changes: the previous
@@ -347,9 +390,9 @@ pub unsafe fn register_union_hook(
     handler: UnionFn,
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
-    // Resolved before anything else: `target` is the union's identity key, so a translated
-    // address must be the key too -- otherwise one feature unions on the 1.16.2 address and
-    // another on the 1.17 one, and MinHook ends up with two instances on the same function.
+    // Checked before anything else: `target` is the union's identity key, and an address the build
+    // gate refuses must never become one. The check hands the address back unchanged, so every
+    // feature that names one function keys the same union.
     let target = match resolve_target(target, &format!("register_union_hook 0x{target:x}")) {
         Some(resolved) => resolved,
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
@@ -361,26 +404,27 @@ pub unsafe fn register_union_hook(
 ///
 /// The precondition, in one line: the caller found this address by scanning or reading the image
 /// that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a live vtable
-/// -- so it is already correct for this build and there is nothing to translate.
+/// -- so it is already correct for this build and needs no allowlist row.
 ///
 /// # Why this is not [`register_union_hook`] with the gate turned off
 ///
-/// It is a different gate, not a missing one. The translating entry point asks a table keyed by
-/// 1.16.2 RVAs where an address moved to; a 1.17 address is not one of that table's keys, so the
-/// honest answer for a scanned address is refused -- and on 2026-08-30 that refusal was turning
-/// off `er-armament-icons`' and `er-invasion-warp`' GFx tag-parse hooks for an address the scan
-/// had got right. Adding a ledger row would have been worse: the scan already returns the 1.17
-/// address, so a row would translate it a second time, `+0x1e00` into the middle of a live body.
+/// It is a different gate, not a missing one. The constant entry point asks the 2.7.2.0 detour
+/// allowlist, which lists rvas measured offline; a scanned address has no row there, so the
+/// honest answer from that gate is refused. On 2026-08-30, when that gate was a 1.16.2 -> 1.17
+/// translation table, the refusal was turning off `er-armament-icons`' and `er-invasion-warp`'
+/// GFx tag-parse hooks for an address the scan had got right, and a table row would have been
+/// worse: it would have translated the already-correct address a second time, `+0x1e00` into
+/// the middle of a live body.
 ///
-/// What replaces the translation is `detour_site::write_site_is_sound`, which asks the running
+/// What stands in for the allowlist is `detour_site::write_site_is_sound`, which asks the running
 /// image's own `.pdata` whether this is a function entry (or an unwind-less leaf) with room for
 /// MinHook's five bytes, and refuses an address inside another function's body. A wrong absolute
 /// address is exactly as fatal as a stale one, so something has to ask.
 ///
 /// # Safety
 /// Same contract as [`register_union_hook`], plus: `target` must have been derived from the
-/// running image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2
-/// address asserted to be a 1.17 one.
+/// running image. Passing a constant here is a bug this cannot detect -- the constant skips the
+/// allowlist that was its only check.
 pub unsafe fn register_union_hook_runtime_derived(
     target: usize,
     handler: UnionFn,
@@ -407,6 +451,16 @@ pub unsafe fn register_union_hook_runtime_derived(
 /// function rather than the same one -- a four-argument target reached through a seven-argument
 /// dispatcher gets garbage where its stack arguments would be.
 ///
+/// The jump is followed inside the registration, under the table lock and the process-wide hook
+/// lock, and only when no slot in this image already owns `entry`. Following it before taking
+/// either lock is what let this image's own detour be read back as a stub: a second registrant
+/// arriving after the first had enabled found the first one's `jmp rel32` at the entry and claimed
+/// a second slot on the relay behind it. See [`located_admission`].
+///
+/// This registers on this image's own union. A predicate several DLLs answer belongs on
+/// [`register_shared_hook_following_arxan`], which hands the entry to the elected hub so one
+/// MinHook instance owns it.
+///
 /// # Safety
 /// Same contract as [`register_union_hook_runtime_derived`]: `handler` must be a valid [`UnionFn`]
 /// matching the target's ABI, `orig_slot` must be the static the handler reads to call its
@@ -419,10 +473,16 @@ pub unsafe fn register_union_hook_runtime_derived_following_arxan(
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
     let what = format!("register_union_hook_runtime_derived_following_arxan 0x{entry:x}");
-    let Some(target) = detour_target_following_arxan(entry, &what) else {
-        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
-    };
-    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+    let locate = |address: usize| detour_target_following_arxan(address, &what);
+    unsafe {
+        register_union_hook_located(
+            entry,
+            &locate,
+            handler as usize,
+            orig_slot,
+            UnionArity::Four,
+        )
+    }
 }
 
 /// Register a seven-argument handler on a game function entry, following an Arxan stub if the
@@ -446,11 +506,15 @@ pub unsafe fn register_union_hook7_runtime_derived(
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
     let what = format!("register_union_hook7_runtime_derived 0x{entry:x}");
-    let Some(target) = detour_target_following_arxan(entry, &what) else {
-        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
-    };
+    let locate = |address: usize| detour_target_following_arxan(address, &what);
     unsafe {
-        register_union_hook_resolved_with(target, handler as usize, orig_slot, UnionArity::Seven)
+        register_union_hook_located(
+            entry,
+            &locate,
+            handler as usize,
+            orig_slot,
+            UnionArity::Seven,
+        )
     }
 }
 
@@ -510,9 +574,9 @@ pub unsafe fn register_union_hook5(
 
 /// [`register_union_hook5`] for an address the caller derived at runtime on the running build.
 ///
-/// The precondition and the audit that replaces the version gate are
+/// The precondition and the audit that stands in for the allowlist are
 /// [`register_union_hook_runtime_derived`]'s, unchanged -- read that one for why a scanned address
-/// is refused by the translating entry point and what `.pdata` is asked instead.
+/// is refused by the constant entry point and what `.pdata` is asked instead.
 ///
 /// # Safety
 /// Same contract as [`register_union_hook5`], plus: `target` must have been derived from the
@@ -534,23 +598,23 @@ pub unsafe fn register_union_hook5_runtime_derived(
 
 /// [`register_union_hook`] on an address that has already been resolved for the running build.
 ///
-/// Resolution is not IDEMPOTENT, and assuming it was is what made this split necessary. The
-/// translation table is keyed by 1.16.2 RVA and its values are 1.17 RVAs, so feeding a translated
-/// address back in asks "where did 0x11d0b80 move to" -- a question with no entry, whose honest
-/// answer is refused. Measured 2026-08-28: `register_shared_hook` resolved, then handed the result
-/// to `register_shared_hook_with_budget`, which resolved again; `er-armament-icons` lost its
-/// file-open observer at 0x1411ced80 to `MH_ERROR_UNSUPPORTED_FUNCTION` even though that address is
-/// in the verified table and its 1.17 prologue is byte-identical and perfectly hookable.
+/// The split dates from the cross-build translation table, under which resolution was not
+/// IDEMPOTENT: the table was keyed by 1.16.2 RVA with 1.17 values, so feeding a translated address
+/// back in asked "where did 0x11d0b80 move to" -- a question with no entry, answered refused.
+/// Measured 2026-08-28: `register_shared_hook` resolved, then handed the result to
+/// `register_shared_hook_with_budget`, which resolved again, and `er-armament-icons` lost its
+/// 1.17 file-open observer (1.16.2 0x1411ced80) to `MH_ERROR_UNSUPPORTED_FUNCTION`. The 2.7.2.0
+/// gate hands an address back unchanged, but one check per target is still the contract.
 ///
 /// # It stays private, and the two ways in are the point
 ///
 /// "Already correct for the running build" is true for two different reasons, and a caller has to
 /// say which, because the checks they owe are different:
 ///
-/// * [`register_union_hook`] resolved a 1.16.2 constant through the translation table, which is
-///   also what audits the destination as a detour target;
-/// * [`register_union_hook_runtime_derived`] took an address out of the running image, where there
-///   is nothing to translate, and audits it against that image's own function table instead.
+/// * [`register_union_hook`] checked a 2.7.2.0 constant against the build and the detour
+///   allowlist, which is what audits the destination as a detour target;
+/// * [`register_union_hook_runtime_derived`] took an address out of the running image, which no
+///   allowlist describes, and audits it against that image's own function table instead.
 ///
 /// A `pub` un-audited entry point here would be a third way -- one that skips both -- and it would
 /// look exactly like the two legitimate ones at a call site. The shared path no longer resolves
@@ -604,6 +668,46 @@ unsafe fn register_union_hook_resolved_with(
     orig_slot: &'static AtomicUsize,
     arity: UnionArity,
 ) -> Result<(), MH_STATUS> {
+    let as_given = |address: usize| Some(address);
+    unsafe { register_union_hook_located(target, &as_given, handler_addr, orig_slot, arity) }
+}
+
+/// The registration body every union entry point shares: `entry` is the address the caller named,
+/// and `locate` says where on the running image the detour for it is written.
+///
+/// # Reading the prologue and patching it is one step across every image
+///
+/// `MH_CreateHook` copies the target's opening instructions into the trampoline, and
+/// `MH_EnableHook` later writes `jmp rel32` over them without looking at what is there now
+/// (`vendor/minhook/src/hook.c`, `EnableHookLL`). Every DLL of this workspace links its own MinHook,
+/// and each installs from its own thread at boot, so two images could both copy a pristine
+/// prologue before either wrote its jump. The second write then replaced the first, and the first
+/// image's handlers were never called again while its log said `hook ok`.
+///
+/// Measured 2026-10-22, profile `all-mods-enabled.me3`, on the cursor predicate at
+/// `0x140766b00`: er-duel-rules, er-cel-shade and er-invasion-warp each logged `SITE OK` and
+/// `hook ok` with no jump at the entry when they read it, er-duel-rules and er-invasion-warp spent
+/// 356 and 445 ms between `hook attempt` and `hook ok` (another image's thread freezes hold the lock
+/// `MH_EnableHook` waits on), and the live entry jumped to er-invasion-warp's relay, whose
+/// trampoline held the game's own `48 89 5c 24 10`. er-duel-rules took input for 82 menu frames and
+/// its handler counted zero calls.
+///
+/// So the process-wide hook lock that serialises MinHook's thread freezes is held here from before
+/// `locate` reads the entry until the detour is enabled. A second image then reads the first
+/// image's jump rather than the pristine bytes, and MinHook stacks onto it: its trampoline carries
+/// the first jump, and both detours run.
+///
+/// # Safety
+/// `handler_addr` must be a live function of exactly `arity` arguments matching the target's ABI,
+/// `orig_slot` must be the static that handler reads to call its original, and `locate` must answer
+/// an address that is correct for the running build.
+unsafe fn register_union_hook_located(
+    entry: usize,
+    locate: &dyn Fn(usize) -> Option<usize>,
+    handler_addr: usize,
+    orig_slot: &'static AtomicUsize,
+    arity: UnionArity,
+) -> Result<(), MH_STATUS> {
     // Three lines, not one, and the reason is a whole afternoon (user directive 2026-09-13). The
     // old single line said `hooked X at 0x...` at install time, which only reports that MinHook
     // accepted an address -- so a detour carrying a stale 1.16.2 constant against a 1.17.1 game
@@ -611,19 +715,27 @@ unsafe fn register_union_hook_resolved_with(
     // separate records, and the failure line names the build-drift question by hand rather than
     // leaving a reader to infer it.
     hook_log(format_args!(
-        "hook attempt: {} wants game addr 0x{target:x} ({})",
+        "hook attempt: {} wants game addr 0x{entry:x} ({})",
         as_dll_off(handler_addr),
         arity.label()
     ));
+    // Taken before the table lock and before anything reads the entry, and released after the
+    // enable below. `MH_EnableHook` takes it again on this thread, which a Win32 mutex allows.
+    let _registration = freeze_guard::hold("union registration");
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => {
-            hook_failed(target, handler_addr, s, "MinHook could not initialise");
+            hook_failed(entry, handler_addr, s, "MinHook could not initialise");
             return Err(s);
         }
     }
     let mut unions = UNIONS.lock().unwrap_or_else(|e| e.into_inner());
-    let slot = match union_admission(&unions, target, handler_addr, arity) {
+    let Some((admission, target)) = located_admission(&unions, entry, locate, handler_addr, arity)
+    else {
+        // `locate` has logged which check refused the entry.
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    };
+    let slot = match admission {
         UnionAdmission::AlreadyPresent => return Ok(()),
         UnionAdmission::Exhausted => return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC),
         UnionAdmission::ArityConflict(existing) => {
@@ -698,13 +810,14 @@ unsafe fn register_union_hook_resolved_with(
     // asset it asked for. The dispatcher is unreachable until the detour is enabled, so publishing
     // the head first is free.
     UNION_HEADS[slot].store(handler_addr, Ordering::Release);
-    let mut entry = UnionEntry {
+    let mut owned = UnionEntry {
+        entry,
         target,
         trampoline: trampoline as usize,
         arity,
         handlers: Vec::new(),
     };
-    chain_append(&mut entry, handler_addr, orig_slot); // sole handler -> game orig
+    chain_append(&mut owned, handler_addr, orig_slot); // sole handler -> game orig
     match unsafe { MH_EnableHook(target as *mut c_void) } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
         s => {
@@ -720,24 +833,44 @@ unsafe fn register_union_hook_resolved_with(
             return Err(s);
         }
     }
-    unions.push(entry);
-    hook_log(format_args!(
-        "hook ok: {} now owns game addr 0x{target:x} ({}) -- the detour is installed and enabled",
-        as_dll_off(handler_addr),
-        arity.label()
-    ));
+    unions.push(owned);
+    if target == entry {
+        hook_log(format_args!(
+            "hook ok: {} now owns game addr 0x{target:x} ({}) -- the detour is installed and \
+             enabled",
+            as_dll_off(handler_addr),
+            arity.label()
+        ));
+    } else {
+        hook_log(format_args!(
+            "hook ok: {} now owns 0x{target:x}, where the jump at game addr 0x{entry:x} lands \
+             ({}) -- the detour is installed and enabled",
+            as_dll_off(handler_addr),
+            arity.label()
+        ));
+    }
     Ok(())
 }
 
 /// The failure half of the attempt/outcome pair.
 ///
-/// Every caller reaches here with a target it chose from a constant or a scan, and the most common
-/// reason a chosen address fails is that it was measured against a different game build. The
-/// question is asked in the line rather than left for a reader to think of, because the failure
-/// mode it names is silent otherwise: the feature simply never happens.
+/// The line names the likely cause for the status it carries, because the failure mode is silent
+/// otherwise: the feature simply never happens. A build mismatch is refused before MinHook is
+/// asked (see `resolve_target`), so it is not the cause offered for an address collision.
 fn hook_failed(target: usize, handler_addr: usize, status: MH_STATUS, what: &str) {
+    let likely = match status {
+        MH_STATUS::MH_ERROR_ALREADY_CREATED => {
+            "another detour in this DLL's MinHook instance already owns this address; register \
+             both handlers through the union instead"
+        }
+        _ => {
+            "the address may not be a function entry on the running build; re-measure it on \
+             eldenring-deobf-1.17.2.bin before trusting it"
+        }
+    };
     hook_log(format_args!(
-        "hook failed: {} could not take game addr 0x{target:x} -- {what} ({status:?}). Address          mismatch? This hook's address may have been measured against an older Elden Ring build          than the one running; re-measure it against the installed build before trusting it.",
+        "hook failed: {} could not take game addr 0x{target:x} -- {what} ({status:?}). Likely \
+         cause: {likely}.",
         as_dll_off(handler_addr)
     ));
 }
@@ -758,7 +891,7 @@ fn hook_failed(target: usize, handler_addr: usize, status: MH_STATUS, what: &str
 // GFx swap it owns went silently vanilla, while the same build loaded alone reported 113 hits
 // (bd armament-icons-and-product-share-scaleform-fileopen-rva-2026-08-23).
 //
-// A hub DLL publishes its union as the `er_effects_union_register` C export, so the fix is for
+// A hub DLL publishes its union as the `er_effects_union_register_2720` C export, so the fix is for
 // every other DLL to register through that export instead of its own instance -- one MinHook
 // instance owns the prologue and both handlers chain. [`register_shared_hook`] is that call: it
 // uses the hub's union when one is in the process and this DLL's own union when none is, so a
@@ -768,12 +901,12 @@ fn hook_failed(target: usize, handler_addr: usize, status: MH_STATUS, what: &str
 // the exports themselves; [`elect_union_host`] carries the measurement that forced the change.
 // ============================================================================
 
-/// C-ABI shape of the product DLL's `er_effects_union_register` export
+/// C-ABI shape of the product DLL's `er_effects_union_register_2720` export
 /// (`crates/er-quickload/src/mh.rs`): `(target, handler, *mut orig_slot) -> 0 ok | -1 null slot |
 /// positive `MH_STATUS` on MinHook failure`.
 pub type UnionRegisterFn = unsafe extern "system" fn(usize, UnionFn, *mut usize) -> i32;
 
-/// C-ABI shape of the product DLL's `er_effects_union_register5` export: the same contract with a
+/// C-ABI shape of the product DLL's `er_effects_union_register5_2720` export: the same contract with a
 /// [`UnionFn5`] handler.
 ///
 /// # Why the arity is in the export name and not in an argument
@@ -814,26 +947,44 @@ pub enum HookRoute {
 /// freshly built product.
 #[cfg(windows)]
 const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
-// Deliberately still `er_effects_`, after the 2026-08-26 rename of the crate to `er-quickload`
-// and the repo to `er-mods-rs`. This name is an ABI, not branding: seven crates resolve it out of
-// the product DLL by string through GetProcAddress, and users install these DLLs one at a time
-// from separate releases. Renaming it would make an already-downloaded `er_invasion_warp.dll`
-// fail to find the union next to a freshly built product, fall back to its own MinHook instance,
-// and corrupt the shared trampoline -- with nothing in any gate to say so. The exports that did
-// move (`er_quickload_loading_screen_data`) have exactly one consumer, built in the same pass.
+// This name is an ABI, not branding: companions resolve it out of the hub by string through
+// GetProcAddress, and users install these DLLs one at a time from separate releases. It kept the
+// `er_effects_` prefix through the 2026-08-26 crate rename for that reason.
+//
+// It took the `_2720` suffix on 2026-10-23, when every address in the workspace became a native
+// 2.7.2.0 rva, because the address a companion hands over changed meaning without changing type.
+// An older companion passes an address measured on 1.16.2 and expects the hub to translate it; a
+// native hub would instead take it at face value, and where a 1.16.2 rva happens to equal another
+// function's 2.7.2.0 rva (`0x67a810` is one) it would chain the companion onto the wrong
+// prologue. A new name makes that mix a null `GetProcAddress` and a logged local fallback instead.
 #[cfg(windows)]
-const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
-/// The five-argument sibling of [`UNION_REGISTER_EXPORT`]. Same `er_effects_` prefix and the same
-/// reasoning: it is an ABI other images resolve by string, not branding.
+const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register_2720\0";
+/// The five-argument sibling of [`UNION_REGISTER_EXPORT`], versioned for the same reason.
 #[cfg(windows)]
-const UNION_REGISTER5_EXPORT: &[u8] = b"er_effects_union_register5\0";
-
-/// Define the two C-ABI registrar exports that make the calling cdylib a hook union hub.
+const UNION_REGISTER5_EXPORT: &[u8] = b"er_effects_union_register5_2720\0";
+/// The export that takes a game function entry read out of the running image and follows a jump at
+/// it in the hub. Same `er_effects_` prefix and the same reasoning as the two above, and its own
+/// name for the reason [`UnionRegister5Fn`] has one: an older hub lacks it, and a missing export
+/// is a null `GetProcAddress` and a logged fallback, where an extra argument on an existing export
+/// would be decoded wrongly with nothing logged.
 ///
-/// # Why a macro, and not two functions in this crate
+/// It exists because neither of the others follows a jump at the entry. The cursor predicate at
+/// 2.7.2.0 `0x766b00` may open with Arxan's `jmp rel32`, so every DLL answering it called
+/// [`register_union_hook_runtime_derived_following_arxan`] on its own union instead, one MinHook
+/// instance each -- the configuration `register_union_hook_located` records losing three handlers
+/// of four on 2026-10-22, and er-npc-summons' picker losing its handler on 2026-10-23.
+#[cfg(windows)]
+const UNION_REGISTER_FOLLOWING_ARXAN_EXPORT: &[u8] =
+    b"er_effects_union_register_following_arxan_2720\0";
+
+/// Define the C-ABI registrar exports that make the calling cdylib a hook union hub: four
+/// arguments, five arguments, and four arguments on a runtime-derived entry whose jump is followed
+/// in the hub.
+///
+/// # Why a macro, and not functions in this crate
 ///
 /// An `unsafe(no_mangle)` definition in an rlib is retained and re-exported by every cdylib that
-/// links it. Putting the pair here directly would make every companion in the workspace advertise
+/// links it. Putting them here directly would make every companion in the workspace advertise
 /// itself as a hub, which inverts the election rather than feeding it: a hub is the image that owns
 /// a MinHook instance the others chain onto, and eleven of them is eleven instances.
 /// `crates/er-quickload/src/mh.rs` has recorded that constraint since the extraction, which is why
@@ -870,7 +1021,7 @@ macro_rules! export_union_registrar {
         /// # Safety
         /// See `er_hook::export_union_registrar`.
         #[unsafe(no_mangle)]
-        pub unsafe extern "system" fn er_effects_union_register(
+        pub unsafe extern "system" fn er_effects_union_register_2720(
             target: usize,
             handler: $crate::UnionFn,
             orig_slot_ptr: *mut usize,
@@ -888,7 +1039,7 @@ macro_rules! export_union_registrar {
             }
         }
 
-        /// C-ABI export: the five-argument sibling of `er_effects_union_register`.
+        /// C-ABI export: the five-argument sibling of `er_effects_union_register_2720`.
         ///
         /// A separate export rather than an arity argument on the one above, because a companion
         /// resolves these by string and users install these DLLs one at a time from separate
@@ -900,7 +1051,7 @@ macro_rules! export_union_registrar {
         /// # Safety
         /// See `er_hook::export_union_registrar`.
         #[unsafe(no_mangle)]
-        pub unsafe extern "system" fn er_effects_union_register5(
+        pub unsafe extern "system" fn er_effects_union_register5_2720(
             target: usize,
             handler: $crate::UnionFn5,
             orig_slot_ptr: *mut usize,
@@ -911,6 +1062,38 @@ macro_rules! export_union_registrar {
             let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
                 unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
             match unsafe { $crate::register_union_hook5(target, handler, orig_slot) } {
+                Ok(()) => 0,
+                Err(status) => status as i32,
+            }
+        }
+
+        /// C-ABI export: `er_effects_union_register_2720` for a game function entry the companion
+        /// read out of the running image, with a jump at the entry followed here, in the hub.
+        ///
+        /// `entry` is an absolute address on the running image, not an rva. The hub audits it
+        /// against the running image's own function table and follows a jump at it under its table
+        /// lock, so the hub's own detour on the entry is never read back as a jump to follow.
+        ///
+        /// # Safety
+        /// See `er_hook::export_union_registrar`, and
+        /// `er_hook::register_union_hook_runtime_derived_following_arxan`: `entry` must have been
+        /// derived from the running image.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "system" fn er_effects_union_register_following_arxan_2720(
+            entry: usize,
+            handler: $crate::UnionFn,
+            orig_slot_ptr: *mut usize,
+        ) -> i32 {
+            if orig_slot_ptr.is_null() {
+                return -1;
+            }
+            let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
+                unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
+            match unsafe {
+                $crate::register_union_hook_runtime_derived_following_arxan(
+                    entry, handler, orig_slot,
+                )
+            } {
                 Ok(()) => 0,
                 Err(status) => status as i32,
             }
@@ -946,7 +1129,7 @@ unsafe extern "system" {
 // The resolver below used to ask the loader one question -- is `er_quickload.dll` mapped -- and
 // treat the answer as the whole of it. That made a file name an undeclared ABI, and it was already
 // wrong for a shipped pair. With `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and
-// no product, that fork did export `er_effects_union_register` (it carried a copy of the product's
+// no product, that fork did export `er_effects_union_register_2720` (it carried a copy of the product's
 // `mh.rs`), the companion looked only for the product, and both took their own MinHook instance on
 // `TITLE_SCALEFORM_FILE_OPEN_RVA` -- the 2026-08-23 configuration that reported
 // `file_open_observer_installed = true` beside `file_open_hits = 0` for a whole session.
@@ -984,7 +1167,7 @@ pub struct UnionCandidate {
     /// Whether this module answers `GetProcAddress` for the registrar being resolved.
     ///
     /// Each arity is elected on its own export, so a hub that predates
-    /// `er_effects_union_register5` is simply not a candidate for the five-argument path -- which
+    /// `er_effects_union_register5_2720` is simply not a candidate for the five-argument path -- which
     /// is the whole reason the arity lives in the export name, see [`UnionRegister5Fn`].
     pub exports_registrar: bool,
 }
@@ -1125,7 +1308,7 @@ fn probe_named_product(name: &[u8]) -> NamedProbe {
     }
 }
 
-/// Resolve the elected hub's `er_effects_union_register` export, polling `tries` times at
+/// Resolve the elected hub's `er_effects_union_register_2720` export, polling `tries` times at
 /// `sleep_ms` intervals. `None` means no other loaded module exports it (a standalone companion
 /// run) or this DLL is itself the hub -- in both cases the caller owns the address.
 ///
@@ -1239,21 +1422,20 @@ pub unsafe fn register_shared_hook(
 /// # the single resolve, and why it happens after the branch (2026-08-30)
 ///
 /// `target` arrives unresolved and each branch resolves it exactly once, in the image that will
-/// own the detour. This used to resolve first and hand the resolved address to both branches --
-/// and the product branch then resolved it a second time, inside `er_quickload.dll`, because the
-/// `er_effects_union_register` export calls [`register_union_hook`] like any other caller.
+/// own the detour: a check against the build and the 2.7.2.0 detour allowlist that hands the
+/// address back unchanged.
 ///
-/// A second resolve normally misses and `already_translated_in` hands the address back unchanged,
-/// which is why this survived. But a 1.17 destination can also be some other row's 1.16.2 source,
-/// and then the second lookup does not miss -- it translates again, to a third, unrelated
-/// function. Measured on er-reload-trace's own hook set: `native_submit` `0x7ac890 -> 0x7ad710`,
-/// and `0x7ad710` is itself a tracked source, `-> 0x7ae590`. Three detour rows have that collision
-/// shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and `already_translated_in`'s own doc names two of
-/// them, because from a bare address the two cases are INDISTINGUISHABLE: the table cannot tell
-/// whether it is being asked about a source or about a destination that happens to look like one.
-///
-/// That is why the fix is structural rather than a smarter table. Resolve once, at one layer, and
-/// leave no path that hands an already-resolved address to something that resolves again.
+/// The rule is older than the native model, and the reason for it is history. Under the deleted
+/// 1.16.2 -> 1.17 translation table this function resolved first and handed the result to both
+/// branches -- and the product branch resolved it a second time, inside `er_quickload.dll`,
+/// because the hub's export calls [`register_union_hook`] like any other caller. A second resolve
+/// normally missed and came back unchanged, but a 1.17 destination could also be some other row's
+/// 1.16.2 source, and then it translated again, to a third, unrelated function. Measured on
+/// er-reload-trace's own hook set: `native_submit` `0x7ac890 -> 0x7ad710`, and `0x7ad710` was
+/// itself a tracked source, `-> 0x7ae590`. From a bare address the two cases were
+/// indistinguishable, which is why the fix was structural rather than a smarter table: resolve
+/// once, at one layer, and leave no path that hands an already-resolved address to something that
+/// resolves again.
 ///
 /// # Safety
 /// Same contract as [`register_shared_hook`].
@@ -1318,11 +1500,11 @@ pub unsafe fn register_shared_hook5(
 /// [`register_shared_hook5`] with an explicit resolve budget.
 ///
 /// The single resolve happens after the branch, in the image that will own the detour, for the
-/// reason spelled out in full on [`register_shared_hook_with_budget`]: an address can be both a
-/// 1.17 destination and some other row's 1.16.2 source, so resolving twice can translate it again
-/// into a third, unrelated function.
+/// reason spelled out in full on [`register_shared_hook_with_budget`]: under the deleted
+/// cross-build translation an address could be both a 1.17 destination and some other row's
+/// 1.16.2 source, so resolving twice could translate it into a third, unrelated function.
 ///
-/// A product that does not export `er_effects_union_register5` sends this down the local branch,
+/// A product that does not export `er_effects_union_register5_2720` sends this down the local branch,
 /// which is a real downgrade rather than a neutral fallback -- two MinHook instances on one
 /// prologue is the trampoline corruption this API exists to avoid -- so it gets its own line. It
 /// is still the better failure: the alternative, one export carrying an arity argument, is the
@@ -1361,7 +1543,7 @@ pub unsafe fn register_shared_hook5_with_budget(
         // call site.
         hook_log(format_args!(
             "HOOK SHARED 5-ARG (0x{target:x}): a union hub is loaded but exports no \
-             er_effects_union_register5, so this handler takes its own MinHook instance -- if the \
+             er_effects_union_register5_2720, so this handler takes its own MinHook instance -- if the \
              hub also detours this prologue the two instances will corrupt each other's \
              trampolines. Rebuild the hub DLL from the same tree as this shell."
         ));
@@ -1375,6 +1557,87 @@ pub unsafe fn register_shared_hook5_with_budget(
         None => return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION),
     };
     unsafe { register_union_hook5_resolved(target, handler, orig_slot) }
+        .map(|()| HookRoute::LocalUnion)
+}
+
+/// Register `handler` on a game function entry read out of the running image, through the elected
+/// hub's union, with a jump at the entry followed in the hub.
+///
+/// This is [`register_union_hook_runtime_derived_following_arxan`] for an entry several DLLs
+/// detour. Each DLL calling that one directly drives its own MinHook instance on the entry; this
+/// hands the entry to the hub, so one instance owns it and every DLL's handler chains in one
+/// table. With no hub in the process, or when this image is the hub, it registers on this image's
+/// own union, as [`register_shared_hook`] does.
+///
+/// # Safety
+/// Same contract as [`register_union_hook_runtime_derived_following_arxan`]: `handler` must be a
+/// valid [`UnionFn`] matching the target's ABI and must call its `orig` slot through [`UnionFn`],
+/// because the slot may hold the next handler in the chain, and `entry` must have been derived
+/// from the running image.
+#[cfg(windows)]
+pub unsafe fn register_shared_hook_following_arxan(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<HookRoute, MH_STATUS> {
+    unsafe {
+        register_shared_hook_following_arxan_with_budget(
+            entry,
+            handler,
+            orig_slot,
+            PRODUCT_RESOLVE_TRIES,
+            PRODUCT_RESOLVE_SLEEP_MS,
+        )
+    }
+}
+
+/// [`register_shared_hook_following_arxan`] with an explicit resolve budget; see
+/// [`register_shared_hook_with_budget`] for when one probe is the right budget.
+///
+/// A hub that predates `er_effects_union_register_following_arxan_2720` sends this down the local
+/// branch, and that gets its own line, as it does for the five-argument path: the hub and this
+/// image then each own a MinHook instance on any entry both detour. They no longer overwrite each
+/// other, because every union registration holds the process-wide hook lock from its read of the
+/// entry to its enable, but the handlers then sit in two chains, one detour stacked on the other,
+/// rather than in one table.
+///
+/// # Safety
+/// Same contract as [`register_shared_hook_following_arxan`].
+#[cfg(windows)]
+pub unsafe fn register_shared_hook_following_arxan_with_budget(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+    tries: u32,
+    sleep_ms: u32,
+) -> Result<HookRoute, MH_STATUS> {
+    if let Some(proc) =
+        resolve_union_register_export(UNION_REGISTER_FOLLOWING_ARXAN_EXPORT, tries, sleep_ms)
+    {
+        // SAFETY: the export's C-ABI shape is fixed by `export_union_registrar!`, and both images
+        // stay mapped for the process lifetime.
+        let register = unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) };
+        hook_log(format_args!(
+            "HOOK SHARED ENTRY (0x{entry:x}): handing the runtime-derived entry to the elected \
+             hub's union, which follows a jump at it and owns the one detour"
+        ));
+        // AtomicUsize is a repr(transparent) usize, so handing the hub a `*mut usize` into our
+        // own static is sound; our image outlives every dispatch.
+        let slot_ptr = orig_slot.as_ptr();
+        return match unsafe { register(entry, handler, slot_ptr) } {
+            0 => Ok(HookRoute::ProductUnion),
+            code if code < 0 => Err(MH_STATUS::MH_UNKNOWN),
+            code => Err(mh_status_from_i32(code)),
+        };
+    }
+    if resolve_product_union_register(1, 0).is_some() {
+        hook_log(format_args!(
+            "HOOK SHARED ENTRY (0x{entry:x}): a union hub is loaded but exports no \
+             er_effects_union_register_following_arxan_2720, so this handler takes this image's own \
+             MinHook instance. Rebuild the hub DLL from the same tree as this shell."
+        ));
+    }
+    unsafe { register_union_hook_runtime_derived_following_arxan(entry, handler, orig_slot) }
         .map(|()| HookRoute::LocalUnion)
 }
 
@@ -1410,9 +1673,9 @@ fn mh_status_from_i32(code: i32) -> MH_STATUS {
 /// # union-installed hooks are recorded here too (2026-08-31)
 ///
 /// Until that date they were not, and the collision line therefore named an empty owner set in
-/// exactly the configuration it exists to explain. Measured in run `br-20260831-160354-2513`: the
-/// union took `0x14067c050` and `0x14067c0e0` at boot (+1172ms/+1288ms) for the menu trace's
-/// `b80_loadsavedata_67b200` / `b80_deserialize_67b290` observers; the system-quit in-world load
+/// exactly the configuration it exists to explain. Measured in run `br-20260831-160354-2513`, on
+/// 1.17.0: the union took `0x14067c050` and `0x14067c0e0` at boot (+1172ms/+1288ms) for the menu
+/// trace's `b80_loadsavedata` / `b80_deserialize` observers; the system-quit in-world load
 /// guard and RequestLoadSlot guard then bare-`MhHook::new`'d those same two addresses, got
 /// `MH_ERROR_ALREADY_CREATED`, and the registry reported `already hooked by detour(s) []`. The
 /// counterparty was in the same log five thousand lines earlier under a different message, so the
@@ -1487,7 +1750,7 @@ fn registry_verdict(
     // that races itself, e.g. two `Once` gates calling one install fn). A collision is two
     // different detours contesting one address, where the loser's handler genuinely never fires
     // and the fix is the shared/union registry. Measured 2026-08-30: `title-cover-part-a`'s
-    // named-child binder logged the collision wording against itself at 0x14074b140 and read
+    // named-child binder logged the collision wording against itself at 1.17.0 0x14074b140 and read
     // exactly like the real `title-cover-part-b` conflict from the run before it.
     if !prior.is_empty() && prior.iter().all(|(d, o)| *d == detour && *o == owner) {
         return RegistryVerdict::Duplicate;
@@ -1668,7 +1931,13 @@ pub unsafe fn MH_Uninitialize() -> MH_STATUS {
     unsafe { MH_Uninitialize_unguarded() }
 }
 
-/// One process-wide lock around every MinHook entry point that suspends threads.
+/// One process-wide lock around every MinHook entry point that suspends threads, and around every
+/// union registration from its first read of the target to its enable.
+///
+/// The second use is the read-then-patch race `register_union_hook_located` documents: a
+/// registration holds this from before it reads the entry until `MH_EnableHook` returns, so no
+/// other image can copy the same pristine prologue in between. It nests: `MH_EnableHook` takes it
+/// again on the same thread.
 ///
 /// # The deadlock this exists to prevent
 ///
@@ -1788,8 +2057,8 @@ mod freeze_guard {
                 crate::hook_log(format_args!(
                     "HOOK FREEZE LOCK: {what} waited {FREEZE_LOCK_TIMEOUT_MS}ms for the \
                      process-wide MinHook lock and got {other:#x}; proceeding UNSERIALISED. \
-                     Another module has been inside a thread freeze for longer than any real \
-                     freeze takes -- see er-effects-rs-1742."
+                     Another module has been inside a thread freeze or a hook registration for \
+                     longer than any real one takes -- see er-effects-rs-1742."
                 ));
                 Held(None)
             }
@@ -1821,69 +2090,46 @@ impl MH_STATUS {
 }
 
 // ============================================================================
-// build gate (2026-08-28). Every game address in this workspace is a 1.16.2 RVA. ELDEN RING 1.17
-// moved code, and a detour installed at a stale RVA does not fail -- it lands mid-function and
-// corrupts the game: `0x1407ada40` is a real prologue in 1.16.2 and `xor r15d, r15d` in 1.17, and
-// hooking it killed a boot with an access violation whose backtrace blames game code.
+// build gate (2026-08-28). Every game address in this workspace is a 2.7.2.0 rva. A detour
+// installed at an address from another patch does not fail -- it lands mid-function and corrupts
+// the game: when 1.17 shipped, `0x1407ada40` went from a real prologue to `xor r15d, r15d`, and
+// hooking it killed a boot with an access violation whose backtrace blamed game code.
 //
-// MinHook cannot catch this. It refuses only what it cannot decode (several hooks did come back
-// MH_ERROR_UNSUPPORTED_FUNCTION on 1.17); mid-function bytes that happen to decode are installed
-// happily. So the check has to be "is this the build these addresses came from", asked once, here,
-// where every detour in every DLL of this workspace passes through.
+// MinHook cannot catch this. It refuses only what it cannot decode; mid-function bytes that happen
+// to decode are installed happily. So the check has to be "is this the build these addresses were
+// measured on, and is this address a detour target", asked once, here, where every detour in every
+// DLL of this workspace passes through.
 //
-// Scope is the detour installers plus the two RVA-taking byte primitives. `patch_3byte_stub` and
-// `apply_xor_ret_stub` were ungated until 2026-08-30 on the theory that validating the overwritten
-// byte was gate enough; it is not. They take a 1.16.2 `rva`, and on 1.17 all three call sites hit a
-// byte that is simply different, so each aborted reporting a signature mismatch while the map knew
-// exactly where the function had gone. They now resolve first and refuse when nothing knows.
+// Scope is the detour installers plus the two rva-taking byte primitives, `patch_3byte_stub` and
+// `apply_xor_ret_stub`, which refuse on another build rather than write into whatever is there.
 //
 // `write_code_byte` stays ungated on purpose: it takes an absolute address that its callers
-// discover themselves, so there is no RVA to translate and a gate could only refuse work that is
-// already version-agnostic. The caller that established this was `er-ersc-sigshim`, retired
+// discover themselves, so there is no RVA whose build matters and a gate could only refuse work
+// that is already version-agnostic. The caller that established this was `er-ersc-sigshim`, retired
 // 2026-09-03 with support for old Seamless builds; the property is about the argument, not it.
 // ============================================================================
 
-// Verified 1.16.2 -> 1.17 address pairs, generated by `build.rs` from
-// `docs/recon/rva-map-1162-to-1170.verified.tsv`.
-
-/// Where a detour should actually go, given the build that is running.
+/// Whether a detour may go at `target` on the build that is running.
 ///
-/// Three answers, and the middle one is the point of this whole migration:
-///
-/// * the address as given -- the running build is the one the RVA came from, or the address is
-///   outside the game image (a Win32 detour, correct on every build);
-/// * a translated address -- the running build moved the function, and this pair was verified as
-///   the same function: `scripts/map-rvas-1162-to-1170.py` found it by masked signature and
-///   `scripts/verify-rva-map-1170.py` then confirmed the normalised instruction sequences are
-///   identical over the body, not just the prologue;
-/// * `None` -- the build moved the function and nothing here knows where to. Refusing is the only
-///   safe answer: `0x1407ada40` is a real prologue in 1.16.2 and `xor r15d, r15d` in 1.17, and
-///   detouring it killed a boot.
-///
-/// A translation is logged with both addresses, because a hook silently landing somewhere other
-/// than where the source says is exactly the kind of thing a reader of a crash log needs told.
+/// * the address as given -- it is outside the game image (a Win32 detour, correct on every
+///   build), or the running build is 2.7.2.0 and the rva is on the detour allowlist;
+/// * `None` -- another build, or a game address nothing has licensed as a detour target. Refusing
+///   is the only safe answer: an address from another patch is routinely mid-instruction, and a
+///   data global or a call site is never a prologue.
 fn resolve_target(target: usize, what: &str) -> Option<usize> {
-    // The table and the decision both live in `er-game-base`, because a stale address is just as
-    // reachable as a direct call as it is as a detour, and one copy of the rule is the only way
-    // both paths can agree. The hook log keeps its own line so a reader of the hook log is not
-    // sent to a second file to find out that an address was moved.
-    // The detour resolver, not the call one. A row good enough to call is not automatically a
-    // safe place for MinHook to write five bytes; see `resolve_detour_address`.
+    // The decision lives in `er-game-base`, because a stale address is just as reachable as a
+    // direct call as it is as a detour, and one copy of the build rule is the only way both paths
+    // can agree. The hook log keeps its own line so a reader of the hook log is not sent to a
+    // second file to find out why a hook is missing.
     let resolved = er_game_base::game_build::resolve_detour_address(target, what);
-    match resolved {
-        Some(address) if address != target => {
-            hook_log(format_args!(
-                "hook attempt ({what}): translated 0x{target:x} -> 0x{address:x} for the running build"
-            ));
-        }
-        None => hook_log(format_args!(
-            "hook failed ({what}): refused on {} -- this address has no verified mapping for the \
-             running build, so installing here would detour whatever code now occupies it. \
-             Address mismatch? The address was most likely measured against an older Elden Ring \
-             build than the one running; re-measure it against the installed build.",
+    if resolved.is_none() {
+        hook_log(format_args!(
+            "hook failed ({what}): refused on {} -- this address was measured on another build or \
+             is not on the 2.7.2.0 detour allowlist, so installing here could detour whatever code \
+             occupies it. Measure it on eldenring-deobf-1.17.2.bin and add its allowlist row, or \
+             hook it through a `*_runtime_derived` entry point.",
             er_game_base::game_build::describe_build()
-        )),
-        Some(_) => {}
+        ));
     }
     resolved
 }
@@ -1912,19 +2158,18 @@ impl MhHook {
     ///
     /// The precondition, in one line: the caller found this address by scanning or reading the
     /// image that is actually loaded -- an AOB hit in `.text`, a function pointer read out of a
-    /// live vtable -- so it is already correct for this build and there is nothing to translate.
+    /// live vtable -- so it is already correct for this build and needs no allowlist row.
     ///
     /// This is the [`MhHook`] half of [`register_union_hook_runtime_derived`], and the reasoning
-    /// is all there: translation is refused for a scanned address rather than skipped, adding a
-    /// ledger row for one would translate it a second time, and what stands in for the version
-    /// gate is the running image's own `.pdata` -- entry or unwind-less leaf with room for
+    /// is all there: the constant allowlist cannot describe a scanned address, and what stands in
+    /// for it is the running image's own `.pdata` -- entry or unwind-less leaf with room for
     /// MinHook's five bytes, never an address inside another function's body.
     ///
     /// # Safety
     ///
     /// Same contract as [`MhHook::new`], plus: `addr` must have been derived from the running
-    /// image. Passing a constant here is a bug this cannot detect -- it would be a 1.16.2 address
-    /// asserted to be a 1.17 one.
+    /// image. Passing a constant here is a bug this cannot detect -- the constant skips the
+    /// allowlist that was its only check.
     pub unsafe fn new_runtime_derived(
         addr: *mut c_void,
         hook_impl: *mut c_void,
@@ -2142,10 +2387,10 @@ impl CodePageOps for Win32CodePage {
 /// byte landed: a caller patching game code should read it back, because another mod can own the
 /// same address, and a successful `VirtualProtect` says nothing about that.
 ///
-/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this neither resolves the address for
-/// the running build nor validates the byte it overwrites. Those two take a 1.16.2 RVA and so can
-/// do both; this one takes an absolute address its caller discovered at runtime -- often in a
-/// foreign module -- so there is nothing to translate, and the caller owns the check.
+/// Unlike [`patch_3byte_stub`] and [`apply_xor_ret_stub`], this neither checks the build nor
+/// validates the byte it overwrites. Those two take a 2.7.2.0 RVA and so can do both; this one
+/// takes an absolute address its caller discovered at runtime -- often in a foreign module -- so
+/// there is no build to check it against, and the caller owns the check.
 ///
 /// # Safety
 ///
@@ -2163,16 +2408,16 @@ pub unsafe fn write_code_byte(address: usize, value: u8) -> bool {
 ///
 /// # Why the address is resolved first (2026-08-30)
 ///
-/// `rva` is a 1.16.2 RVA like every other address in this workspace, and the expected-first-byte
-/// check was doing double duty as a version gate. It is not one. Measured against
-/// `eldenring-deobf-1.17.bin`: at the stale 1.16.2 RVAs the three callers use, 1.17 holds `40 53`,
-/// `02 00` and `d5 00` where `0x40`, `0x40` and `0x4c` were expected -- so all three patches abort
-/// and report `byte ... is 0x02, expected 0x40`, which reads as a stale signature and sends the
-/// reader hunting for a changed prologue. The real cause is that the function moved, and the map
-/// already knows where: 0xe56310 -> 0xe58110, 0x24129b0 -> 0x24151c0, 0x240f490 -> 0x2411ca0, each
-/// `IDENTICAL` over 71-90 instructions, and each destination starts with the byte the caller
-/// expects. Resolving first turns three silently dead features back on and makes an unmappable
-/// address say refused instead of impersonating a signature change.
+/// `rva` is a 2.7.2.0 RVA like every other address in this workspace, and `resolve_game_address`
+/// refuses it on any other build. The expected-first-byte check is not a version gate, and it
+/// used to be doing double duty as one. Measured against `eldenring-deobf-1.17.bin`, when the
+/// callers still spelled 1.16.2 RVAs: at those stale RVAs 1.17 held `40 53`, `02 00` and `d5 00`
+/// where `0x40`, `0x40` and `0x4c` were expected -- so all three patches aborted and reported
+/// `byte ... is 0x02, expected 0x40`, which reads as a stale signature and sends the reader
+/// hunting for a changed prologue. The real cause was that the functions had moved (to 1.17
+/// 0xe58110, 0x24151c0 and 0x2411ca0, each `IDENTICAL` over 71-90 instructions). Asking the build
+/// first makes an address from another build say refused instead of impersonating a signature
+/// change.
 ///
 /// The byte check stays and still earns its place: it is what confirms the resolved destination is
 /// the entry the caller means. `resolve_game_address` (not `resolve_detour_address`) is the right
@@ -2193,8 +2438,8 @@ pub fn patch_3byte_stub(
 ) -> bool {
     let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
         hook_log(format_args!(
-            "{label}: REFUSED -- rva 0x{rva:x} has no verified mapping for the running build, so \
-             writing a 3-byte stub there would overwrite whatever now occupies it"
+            "{label}: REFUSED -- rva 0x{rva:x} was measured on 2.7.2.0 and the running build is \
+             not that, so writing a 3-byte stub there would overwrite whatever now occupies it"
         ));
         return false;
     };
@@ -2202,7 +2447,8 @@ pub fn patch_3byte_stub(
     // is `0x48`, `0x40`, `0x40` and `0x4c` at the four live call sites -- REX prefixes, which open
     // a large fraction of the image, so on a build that moved the function the check passes by
     // coincidence far more often than it fails and three bytes go into unrelated code. Measured
-    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are mid-function.
+    // 2026-08-30: at the stale 1.16.2 RVAs the callers then spelled, on 1.17, all four targets
+    // were mid-function.
     if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
         return false;
     }
@@ -2271,8 +2517,9 @@ pub fn restore_3byte_stub(
 ) -> bool {
     let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
         hook_log(format_args!(
-            "{label}: REFUSED restore -- rva 0x{rva:x} has no verified mapping for the running \
-             build, so the bytes to put back cannot be aimed at the function they came from"
+            "{label}: REFUSED restore -- rva 0x{rva:x} was measured on 2.7.2.0 and the running \
+             build is not that, so the bytes to put back cannot be aimed at the function they \
+             came from"
         ));
         return false;
     };
@@ -2344,8 +2591,9 @@ pub fn apply_xor_ret_stub(
     // function it reports a byte mismatch that reads as a changed signature.
     let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
         hook_log(format_args!(
-            "online-disable: REFUSED {label} -- rva 0x{rva:x} has no verified mapping for the \
-             running build, so writing xor eax,eax;ret there would neuter whatever now occupies it"
+            "online-disable: REFUSED {label} -- rva 0x{rva:x} was measured on 2.7.2.0 and the \
+             running build is not that, so writing xor eax,eax;ret there would neuter whatever now \
+             occupies it"
         ));
         return;
     };
@@ -2397,680 +2645,4 @@ pub fn apply_xor_ret_stub(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A page operation, recorded rather than performed.
-    #[derive(Debug, PartialEq, Eq)]
-    enum Op {
-        Protect {
-            addr: usize,
-            len: usize,
-            new_protect: u32,
-        },
-        Store {
-            addr: usize,
-            value: u8,
-        },
-        Flush {
-            addr: usize,
-            len: usize,
-        },
-    }
-
-    /// Stands in for a real code page. `original_protect` is what it reports as the page's previous
-    /// protection, so a test can assert that exact value is handed back on the second call.
-    struct FakePage {
-        ops: Vec<Op>,
-        original_protect: u32,
-        protect_allowed: bool,
-    }
-
-    impl FakePage {
-        fn allowing(original_protect: u32) -> Self {
-            Self {
-                ops: Vec::new(),
-                original_protect,
-                protect_allowed: true,
-            }
-        }
-
-        fn refusing() -> Self {
-            Self {
-                ops: Vec::new(),
-                original_protect: 0,
-                protect_allowed: false,
-            }
-        }
-    }
-
-    impl CodePageOps for FakePage {
-        fn protect(
-            &mut self,
-            addr: usize,
-            len: usize,
-            new_protect: u32,
-            old_protect: &mut u32,
-        ) -> bool {
-            self.ops.push(Op::Protect {
-                addr,
-                len,
-                new_protect,
-            });
-            if !self.protect_allowed {
-                return false;
-            }
-            *old_protect = self.original_protect;
-            true
-        }
-
-        unsafe fn store(&mut self, addr: usize, value: u8) {
-            self.ops.push(Op::Store { addr, value });
-        }
-
-        fn flush(&mut self, addr: usize, len: usize) {
-            self.ops.push(Op::Flush { addr, len });
-        }
-    }
-
-    const PAGE_EXECUTE_READ: u32 = 0x20;
-    const TEST_ADDR: usize = 0x1234_5678;
-    const TEST_BYTE: u8 = 0xcc;
-
-    /// The whole sequence, in order: unlock to RWX, store, relock, flush.
-    #[test]
-    fn writes_between_unlocking_and_relocking_then_flushes() {
-        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
-
-        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
-
-        assert!(wrote);
-        assert_eq!(
-            page.ops,
-            vec![
-                Op::Protect {
-                    addr: TEST_ADDR,
-                    len: ONE_CODE_BYTE,
-                    new_protect: PAGE_EXECUTE_READWRITE,
-                },
-                Op::Store {
-                    addr: TEST_ADDR,
-                    value: TEST_BYTE,
-                },
-                Op::Protect {
-                    addr: TEST_ADDR,
-                    len: ONE_CODE_BYTE,
-                    new_protect: PAGE_EXECUTE_READ,
-                },
-                Op::Flush {
-                    addr: TEST_ADDR,
-                    len: ONE_CODE_BYTE,
-                },
-            ]
-        );
-    }
-
-    /// The hazard: a patched page left writable-and-executable for the rest of the process. The
-    /// relock must name the protection the page actually had, not a guess and not RWX.
-    #[test]
-    fn does_not_leave_the_page_executable_and_writable() {
-        for original in [PAGE_EXECUTE_READ, 0x02, 0x04, 0x80] {
-            let mut page = FakePage::allowing(original);
-
-            unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
-
-            let last_protect = page
-                .ops
-                .iter()
-                .filter_map(|op| match op {
-                    Op::Protect { new_protect, .. } => Some(*new_protect),
-                    _ => None,
-                })
-                .next_back()
-                .expect("a protection change");
-            assert_eq!(
-                last_protect, original,
-                "page relocked to the wrong protection"
-            );
-            assert_ne!(last_protect, PAGE_EXECUTE_READWRITE, "page left RWX");
-        }
-    }
-
-    /// A refused protection change must abort before the store. Writing anyway would fault, or
-    /// worse, succeed on a page that was already writable and hide the refusal.
-    #[test]
-    fn refused_protection_change_writes_nothing() {
-        let mut page = FakePage::refusing();
-
-        let wrote = unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
-
-        assert!(!wrote);
-        assert_eq!(
-            page.ops,
-            vec![Op::Protect {
-                addr: TEST_ADDR,
-                len: ONE_CODE_BYTE,
-                new_protect: PAGE_EXECUTE_READWRITE,
-            }],
-            "nothing may follow a refused VirtualProtect"
-        );
-    }
-
-    /// What the `ONE_CODE_BYTE` doc claims: the protection, the store and the flush cover the same
-    /// one byte at the same address. A length that disagreed would unlock or flush a range the
-    /// caller never asked about.
-    #[test]
-    fn every_page_operation_covers_the_same_single_byte() {
-        let mut page = FakePage::allowing(PAGE_EXECUTE_READ);
-
-        unsafe { write_code_byte_with(&mut page, TEST_ADDR, TEST_BYTE) };
-
-        assert_eq!(ONE_CODE_BYTE, size_of::<u8>());
-        for op in &page.ops {
-            let (addr, len) = match op {
-                Op::Protect { addr, len, .. } | Op::Flush { addr, len } => (*addr, *len),
-                Op::Store { addr, .. } => (*addr, ONE_CODE_BYTE),
-            };
-            assert_eq!(addr, TEST_ADDR, "{op:?} touched a different address");
-            assert_eq!(len, ONE_CODE_BYTE, "{op:?} covered a different length");
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Registry ownership. The recording half needs `dll_base` (a Win32 call), so these drive the
-    // pure decision + rendering halves and inject the offset formatter. What they pin is the
-    // defect from run `br-20260831-160354-2513`: a bare detour colliding with a union-owned
-    // address reported `already hooked by detour(s) []`.
-    // ------------------------------------------------------------------
-
-    /// Stand-in for `as_dll_off` that does not touch `GetModuleHandleExW`.
-    fn fake_off(p: usize) -> String {
-        format!("dll+0x{p:x}")
-    }
-
-    const INCUMBENT_DETOUR: usize = 0xdef60;
-    const NEWCOMER_DETOUR: usize = 0xdf1d0;
-
-    #[test]
-    fn a_union_incumbent_is_named_rather_than_reported_as_an_empty_set() {
-        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
-        assert_eq!(
-            registry_verdict(
-                &prior,
-                NEWCOMER_DETOUR,
-                HookOwner::Bare,
-                MH_STATUS::MH_ERROR_ALREADY_CREATED,
-            ),
-            RegistryVerdict::Collision
-        );
-        let off: &dyn Fn(usize) -> String = &fake_off;
-        assert_eq!(
-            render_prior_owners(&prior, off),
-            "union handler dll+0xdef60",
-            "the incumbent's installer must be named, not just its offset"
-        );
-    }
-
-    #[test]
-    fn a_bare_incumbent_still_renders_as_the_plain_offset() {
-        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
-        let off: &dyn Fn(usize) -> String = &fake_off;
-        assert_eq!(render_prior_owners(&prior, off), "dll+0xdef60");
-    }
-
-    #[test]
-    fn one_owner_installing_twice_is_a_duplicate_not_a_collision() {
-        let prior = [(INCUMBENT_DETOUR, HookOwner::Bare)];
-        assert_eq!(
-            registry_verdict(
-                &prior,
-                INCUMBENT_DETOUR,
-                HookOwner::Bare,
-                MH_STATUS::MH_ERROR_ALREADY_CREATED,
-            ),
-            RegistryVerdict::Duplicate
-        );
-    }
-
-    #[test]
-    fn the_same_detour_under_a_different_installer_is_a_collision() {
-        // Same function pointer, but one came through the union and one through a bare `MhHook`:
-        // they are contesting the MinHook slot, so calling it a duplicate would say "nothing is
-        // lost" about a case where something is.
-        let prior = [(INCUMBENT_DETOUR, HookOwner::Union)];
-        assert_eq!(
-            registry_verdict(
-                &prior,
-                INCUMBENT_DETOUR,
-                HookOwner::Bare,
-                MH_STATUS::MH_ERROR_ALREADY_CREATED,
-            ),
-            RegistryVerdict::Collision
-        );
-    }
-
-    #[test]
-    fn an_uncontested_first_registration_logs_nothing() {
-        assert_eq!(
-            registry_verdict(&[], NEWCOMER_DETOUR, HookOwner::Bare, MH_STATUS::MH_OK),
-            RegistryVerdict::Fresh
-        );
-    }
-
-    #[test]
-    fn already_created_with_no_recorded_owner_is_still_a_collision() {
-        // MinHook knows an owner this registry never saw -- another DLL's instance, or a hook
-        // installed before the log sink existed. An empty owner list now means exactly that.
-        assert_eq!(
-            registry_verdict(
-                &[],
-                NEWCOMER_DETOUR,
-                HookOwner::Bare,
-                MH_STATUS::MH_ERROR_ALREADY_CREATED,
-            ),
-            RegistryVerdict::Collision
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // The five-argument union. Everything below runs on the host, where `MH_CreateHook` does not
-    // exist, so it drives the two halves that do not need it: [`union_admission`] (the decision,
-    // including the arity refusal) and [`union_dispatch5`] + [`chain_append`] (the wiring and the
-    // call itself). What no host test can prove is the Microsoft x64 stack forwarding of the fifth
-    // argument -- `extern "system"` on this host is SysV, which passes five arguments entirely in
-    // registers. The protection against getting that wrong is not a test but the type: the
-    // dispatcher and the handler are both declared `fn(usize, usize, usize, usize, usize)`, so
-    // rustc emits the caller side, and there is no hand-written `[rsp+0x20]` anywhere to be wrong.
-    //
-    // `UNION_HEADS` is process-wide and the harness runs tests in parallel threads, so each test
-    // below owns a distinct slot index and its own statics.
-    // ------------------------------------------------------------------
-
-    /// A test handler's address, taken the way the registrar takes one: through the fn-pointer
-    /// type the union will call it by. A direct fn-item cast is a lint error, and rightly -- it is
-    /// the step at which an arity could be lost with no diagnostic at all.
-    fn addr_of(f: UnionFn5) -> usize {
-        f as usize
-    }
-
-    // Deliberately not a real game address. This used to be `0x1_4092_0c90`, the Quit row
-    // cloner's `AddCancelButton` -- flavour, since these tests only manipulate the admission
-    // table and never hook anything. It was also a second literal declaration of an address
-    // `er-title-flow` already owns, which `scripts/check-rva-alias-drift.py` reads as two claims
-    // about one function. A value below the image's `.text` cannot be either.
-    const FAKE_TARGET: usize = 0x1_4000_0c90;
-    const OTHER_TARGET: usize = 0x1_4074_6e80;
-    const HANDLER_A: usize = 0xaaa0;
-    const HANDLER_B: usize = 0xbbb0;
-    const FAKE_TRAMPOLINE: usize = 0x7ffe_0000;
-
-    /// A table entry as `register_union_hook_resolved_with` would have left it after one
-    /// registration, without the `MH_CreateHook` that produced the trampoline.
-    fn entry_with(target: usize, arity: UnionArity, handler: usize) -> UnionEntry {
-        static SOLE_ORIG: AtomicUsize = AtomicUsize::new(0);
-        let mut entry = UnionEntry {
-            target,
-            trampoline: FAKE_TRAMPOLINE,
-            arity,
-            handlers: Vec::new(),
-        };
-        chain_append(&mut entry, handler, &SOLE_ORIG);
-        entry
-    }
-
-    #[test]
-    fn an_unclaimed_address_takes_the_next_slot_at_either_arity() {
-        assert_eq!(
-            union_admission(&[], FAKE_TARGET, HANDLER_A, UnionArity::Five),
-            UnionAdmission::Create(0)
-        );
-        let taken = [entry_with(OTHER_TARGET, UnionArity::Four, HANDLER_B)];
-        assert_eq!(
-            union_admission(&taken, FAKE_TARGET, HANDLER_A, UnionArity::Five),
-            UnionAdmission::Create(1),
-            "a five-argument target draws from the same slot index space as a four-argument one"
-        );
-    }
-
-    #[test]
-    fn a_second_handler_at_the_same_arity_chains() {
-        let unions = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
-        assert_eq!(
-            union_admission(&unions, FAKE_TARGET, HANDLER_B, UnionArity::Five),
-            UnionAdmission::Chain(0)
-        );
-    }
-
-    #[test]
-    fn the_same_five_argument_handler_registering_twice_is_a_no_op() {
-        let unions = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
-        assert_eq!(
-            union_admission(&unions, FAKE_TARGET, HANDLER_A, UnionArity::Five),
-            UnionAdmission::AlreadyPresent,
-            "appending a handler to its own chain would make it call itself"
-        );
-    }
-
-    /// The rule this whole arity split exists to hold: one prologue, one dispatcher. A second
-    /// arity on a claimed address must be refused where it can still be reported, not discovered
-    /// as an `MH_ERROR_ALREADY_CREATED` after one of the two has already lost.
-    #[test]
-    fn a_target_claimed_at_one_arity_is_refused_at_the_other() {
-        let four = [entry_with(FAKE_TARGET, UnionArity::Four, HANDLER_A)];
-        assert_eq!(
-            union_admission(&four, FAKE_TARGET, HANDLER_B, UnionArity::Five),
-            UnionAdmission::ArityConflict(UnionArity::Four)
-        );
-        let five = [entry_with(FAKE_TARGET, UnionArity::Five, HANDLER_A)];
-        assert_eq!(
-            union_admission(&five, FAKE_TARGET, HANDLER_B, UnionArity::Four),
-            UnionAdmission::ArityConflict(UnionArity::Five),
-            "the refusal has to run in both directions or it is just install-order luck"
-        );
-    }
-
-    #[test]
-    fn a_full_table_is_exhausted_rather_than_indexing_past_the_pool() {
-        let unions: Vec<UnionEntry> = (0..MAX_UNION_SLOTS)
-            .map(|i| entry_with(FAKE_TARGET + i, UnionArity::Four, HANDLER_A))
-            .collect();
-        assert_eq!(
-            union_admission(&unions, OTHER_TARGET, HANDLER_B, UnionArity::Five),
-            UnionAdmission::Exhausted
-        );
-    }
-
-    // -------- the dispatcher, called for real --------
-
-    /// Slot 95 belongs to `forwards_all_five_arguments`, 94 to `a_null_head_returns_zero`, 93 to
-    /// the chaining test. Production never reaches them in a test binary, which installs no hooks.
-    const DISPATCH_SLOT: usize = 95;
-    const NULL_HEAD_SLOT: usize = 94;
-    const CHAIN_SLOT: usize = 93;
-
-    static SEEN: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
-    const SOLE_HANDLER_RETURN: usize = 0x5011;
-
-    unsafe extern "system" fn record_five(
-        a: usize,
-        b: usize,
-        c: usize,
-        d: usize,
-        e: usize,
-    ) -> usize {
-        for (cell, value) in SEEN.iter().zip([a, b, c, d, e]) {
-            cell.store(value, Ordering::SeqCst);
-        }
-        SOLE_HANDLER_RETURN
-    }
-
-    /// The fifth argument is the whole point: a four-argument dispatcher drops it, and for
-    /// `AddCancelButton` the dropped value is the keyguide function pointer the game then calls.
-    #[test]
-    fn the_five_argument_dispatcher_forwards_all_five_arguments() {
-        UNION_HEADS[DISPATCH_SLOT].store(addr_of(record_five), Ordering::Release);
-
-        let returned = unsafe { union_dispatch5::<DISPATCH_SLOT>(11, 22, 33, 44, 55) };
-
-        assert_eq!(returned, SOLE_HANDLER_RETURN);
-        let seen: Vec<usize> = SEEN.iter().map(|c| c.load(Ordering::SeqCst)).collect();
-        assert_eq!(seen, vec![11, 22, 33, 44, 55]);
-        UNION_HEADS[DISPATCH_SLOT].store(0, Ordering::Release);
-    }
-
-    /// An unarmed slot returns 0 without calling anything, exactly as [`union_dispatch`] does.
-    #[test]
-    fn a_null_five_argument_head_returns_zero() {
-        UNION_HEADS[NULL_HEAD_SLOT].store(0, Ordering::Release);
-        assert_eq!(
-            unsafe { union_dispatch5::<NULL_HEAD_SLOT>(1, 2, 3, 4, 5) },
-            0
-        );
-    }
-
-    // -------- two handlers on one five-argument target --------
-
-    static OUTER_ORIG: AtomicUsize = AtomicUsize::new(0);
-    static INNER_ORIG: AtomicUsize = AtomicUsize::new(0);
-    static CALL_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-    static GAME_SAW: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
-
-    const GAME_RETURN: usize = 0x6a3e;
-
-    unsafe extern "system" fn fake_game(a: usize, b: usize, c: usize, d: usize, e: usize) -> usize {
-        CALL_ORDER.lock().unwrap().push("game");
-        for (cell, value) in GAME_SAW.iter().zip([a, b, c, d, e]) {
-            cell.store(value, Ordering::SeqCst);
-        }
-        GAME_RETURN
-    }
-
-    unsafe extern "system" fn inner_handler(
-        a: usize,
-        b: usize,
-        c: usize,
-        d: usize,
-        e: usize,
-    ) -> usize {
-        CALL_ORDER.lock().unwrap().push("inner");
-        let orig: UnionFn5 =
-            unsafe { std::mem::transmute::<usize, UnionFn5>(INNER_ORIG.load(Ordering::SeqCst)) };
-        unsafe { orig(a, b, c, d, e) }
-    }
-
-    unsafe extern "system" fn outer_handler(
-        a: usize,
-        b: usize,
-        c: usize,
-        d: usize,
-        e: usize,
-    ) -> usize {
-        CALL_ORDER.lock().unwrap().push("outer");
-        let orig: UnionFn5 =
-            unsafe { std::mem::transmute::<usize, UnionFn5>(OUTER_ORIG.load(Ordering::SeqCst)) };
-        let from_chain = unsafe { orig(a, b, c, d, e) };
-        CALL_ORDER
-            .lock()
-            .unwrap()
-            .push(if from_chain == GAME_RETURN {
-                "outer-saw-game-return"
-            } else {
-                "outer-saw-something-else"
-            });
-        // The outermost handler writes the return value last, so this is what the game's caller
-        // gets. Deliberately not `from_chain`, or the assertion below could not tell the two apart.
-        OUTER_RETURN
-    }
-
-    const OUTER_RETURN: usize = 0x0075e4;
-
-    /// Two handlers on one five-argument address: strictly nested, first registrant outermost,
-    /// every argument reaching the game unchanged, and the outermost handler's return value the
-    /// one that survives.
-    ///
-    /// The wiring is done by [`chain_append`], the same function the registrar calls -- only the
-    /// `MH_CreateHook` that would have produced the trampoline is stood in for.
-    #[test]
-    fn two_handlers_on_one_five_argument_target_nest_with_the_first_outermost() {
-        let mut entry = UnionEntry {
-            target: FAKE_TARGET,
-            trampoline: addr_of(fake_game),
-            arity: UnionArity::Five,
-            handlers: Vec::new(),
-        };
-        // First registrant: becomes the head, and its orig is the game.
-        assert_eq!(
-            chain_append(&mut entry, addr_of(outer_handler), &OUTER_ORIG),
-            1
-        );
-        UNION_HEADS[CHAIN_SLOT].store(addr_of(outer_handler), Ordering::Release);
-        // Second registrant: the first now calls it, and its own orig becomes the game.
-        assert_eq!(
-            chain_append(&mut entry, addr_of(inner_handler), &INNER_ORIG),
-            2
-        );
-
-        assert_eq!(
-            OUTER_ORIG.load(Ordering::SeqCst),
-            addr_of(inner_handler),
-            "the first registrant must now call the second, not the game"
-        );
-        assert_eq!(INNER_ORIG.load(Ordering::SeqCst), addr_of(fake_game));
-        assert_eq!(
-            UNION_HEADS[CHAIN_SLOT].load(Ordering::SeqCst),
-            addr_of(outer_handler),
-            "chaining must not move the head off the first registrant"
-        );
-
-        let returned = unsafe { union_dispatch5::<CHAIN_SLOT>(0x11, 0x22, 0x33, 0x44, 0x55) };
-
-        assert_eq!(
-            *CALL_ORDER.lock().unwrap(),
-            vec!["outer", "inner", "game", "outer-saw-game-return"],
-            "the chain must be strictly nested, not a fan-out"
-        );
-        let game_saw: Vec<usize> = GAME_SAW.iter().map(|c| c.load(Ordering::SeqCst)).collect();
-        assert_eq!(
-            game_saw,
-            vec![0x11, 0x22, 0x33, 0x44, 0x55],
-            "all five arguments must survive two handlers"
-        );
-        assert_eq!(
-            returned, OUTER_RETURN,
-            "the first registrant writes the return value last"
-        );
-        UNION_HEADS[CHAIN_SLOT].store(0, Ordering::Release);
-    }
-
-    // ------------------------------------------------------------------ electing the hub
-    // The rule is a pure function over a candidate list precisely so it can be asserted here,
-    // on a host with no loader list, no modules and no MinHook. What stays behind `cfg(windows)`
-    // is `loaded_module_bases` and the `GetProcAddress` that fills `exports_registrar` in -- the
-    // enumeration, not the decision.
-
-    /// Three module bases spread far enough apart to read as distinct addresses, deliberately
-    /// declared out of numeric order so a test that passes by list position rather than by base
-    /// cannot hide.
-    const HIGH_BASE: usize = 0x7fff_0000;
-    const LOW_BASE: usize = 0x1800_0000;
-    const MIDDLE_BASE: usize = 0x4000_0000;
-    /// A base belonging to none of the candidates: the caller is a companion that exports nothing
-    /// and does not appear in the lists below.
-    const COMPANION_BASE: usize = 0x6000_0000;
-
-    fn hub(base: usize) -> UnionCandidate {
-        UnionCandidate {
-            base,
-            exports_registrar: true,
-        }
-    }
-
-    fn plain(base: usize) -> UnionCandidate {
-        UnionCandidate {
-            base,
-            exports_registrar: false,
-        }
-    }
-
-    /// One exporter among several modules: that one, whatever its position in the list and
-    /// whatever bases the non-exporters hold. A lower base that exports nothing must not win --
-    /// the walk hands over every loaded module, most of which are the game's own.
-    #[test]
-    fn the_single_exporter_is_the_hub_however_low_the_other_bases_are() {
-        let candidates = [plain(LOW_BASE), hub(HIGH_BASE), plain(MIDDLE_BASE)];
-
-        assert_eq!(
-            elect_union_host(&candidates, COMPANION_BASE),
-            Some(HIGH_BASE)
-        );
-    }
-
-    /// Several exporters: the lowest base wins. This is the clause that lets every image decide
-    /// alone -- a caller reaching a different answer here would file its handlers in a second
-    /// MinHook instance, which is the whole failure.
-    #[test]
-    fn several_exporters_elect_the_lowest_base() {
-        let candidates = [
-            hub(HIGH_BASE),
-            plain(0x1000_0000),
-            hub(LOW_BASE),
-            hub(MIDDLE_BASE),
-        ];
-
-        assert_eq!(
-            elect_union_host(&candidates, COMPANION_BASE),
-            Some(LOW_BASE)
-        );
-    }
-
-    /// No exporter: the caller owns the address on its own union. A standalone companion run, and
-    /// also the state a companion sees while me3 is still mapping the rest of the profile -- which
-    /// is why the resolver keeps polling on this answer rather than settling.
-    #[test]
-    fn no_exporter_leaves_the_caller_on_its_own_union() {
-        let candidates = [plain(LOW_BASE), plain(MIDDLE_BASE), plain(HIGH_BASE)];
-
-        assert_eq!(elect_union_host(&candidates, COMPANION_BASE), None);
-    }
-
-    /// An empty list is the same answer, reached without an exporter to compare against. The walk
-    /// returns this when the loader list cannot be read at all.
-    #[test]
-    fn an_empty_candidate_list_is_not_a_hub() {
-        assert_eq!(elect_union_host(&[], COMPANION_BASE), None);
-    }
-
-    /// Self-exclusion: the elected hub gets `None` for itself rather than its own export address,
-    /// so it registers straight into its local table instead of round-tripping through a C ABI
-    /// back into the lock it already holds.
-    #[test]
-    fn the_hub_does_not_elect_itself() {
-        let candidates = [hub(LOW_BASE), plain(MIDDLE_BASE), hub(HIGH_BASE)];
-
-        assert_eq!(elect_union_host(&candidates, LOW_BASE), None);
-    }
-
-    /// Self-exclusion is a test on the winner, not a filter on the input -- so an exporter that
-    /// loses the election still delegates, to the winner rather than to itself.
-    ///
-    /// Removing this image from the candidates instead would invert exactly this case: the lowest
-    /// hub would elect the next one up while that one elected the lowest back, and each would file
-    /// its handlers in the other's table. Two instances on one prologue, which is the condition
-    /// this whole path exists to prevent.
-    #[test]
-    fn an_exporter_that_loses_still_delegates_to_the_winner() {
-        let candidates = [hub(LOW_BASE), hub(HIGH_BASE)];
-
-        assert_eq!(elect_union_host(&candidates, HIGH_BASE), Some(LOW_BASE));
-    }
-
-    /// The configuration the election was written for: a non-product shell exports the registrar,
-    /// `er_armament_icons.dll` does not, and no product is loaded. Under the old name-only lookup
-    /// the companion saw nothing and took `HookRoute::LocalUnion`, so two MinHook instances landed
-    /// on `TITLE_SCALEFORM_FILE_OPEN_RVA`.
-    ///
-    /// The shell that made it a configuration anyone could install was `er_quit_rows.dll`, deleted
-    /// 2026-09-20, and no artifact in this workspace exports the registrar today except the
-    /// product -- measured on the live module table, not read off the source tree, on run
-    /// br-20260920-211125-8c75. The test stays and no longer names that shell: the property is
-    /// about a candidate list, any future shell carrying `mh.rs` produces such a list again, and a
-    /// test deleted because its last real configuration cleared is a test rewritten after the next
-    /// incident.
-    #[test]
-    fn a_companion_beside_a_hub_with_no_product_finds_the_hub() {
-        let hub_shell = hub(LOW_BASE);
-        let armament_icons = plain(COMPANION_BASE);
-        let candidates = [hub_shell, armament_icons];
-
-        assert_eq!(
-            elect_union_host(&candidates, armament_icons.base),
-            Some(hub_shell.base),
-            "the companion must route to the shell that exports the registrar"
-        );
-        assert_eq!(
-            elect_union_host(&candidates, hub_shell.base),
-            None,
-            "and that shell must own the prologue itself, so exactly one instance exists"
-        );
-    }
-}
+mod tests;

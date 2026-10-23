@@ -3,9 +3,9 @@
 
 Why this exists
 ---------------
-The 1.16.2 -> 1.17 migration has a gate for code addresses (`er_game_base::game_build`, fed by
-`docs/recon/rva-map-1162-to-1170.needed-verified.tsv`). It does not cover VTABLE and other `.rdata`
-addresses, and those moved too. Measured 2026-08-29: `TITLE_OWNER_VTABLE_RVA = 0x2b63bb0`, hard
+The 1.16.2 -> 1.17 migration had a gate for code addresses (`er_game_base::game_build`, fed by a
+needed-verified pair ledger; both were replaced by native 2.7.2.0 rvas on 2026-10-23). It did not
+cover VTABLE and other `.rdata` addresses, and those moved too. Measured 2026-08-29: `TITLE_OWNER_VTABLE_RVA = 0x2b63bb0`, hard
 coded in three crates, is `CS::TitleStep` in 1.16.2 and is not a vtable at all in 1.17. The scans
 that use it are read-only and fault-safe, so nothing crashes -- they silently find nothing, and the
 features behind them are quietly dead. A silent wrong answer is worse than a refusal, which is why

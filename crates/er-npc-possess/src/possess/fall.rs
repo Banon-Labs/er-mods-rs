@@ -3,14 +3,17 @@
 //!
 //! # The arithmetic the engine actually kills on
 //!
-//! `CS::CSChrFallModule::GetFallDeathTime` (1.16.2 `0x14044dce0`, the `SUBSS` at `0x14044dd1f`)
-//! is one subtraction:
+//! This was read on 1.16.2: an address in this module without a build label is a 1.16.2 one.
+//!
+//! `CS::CSChrFallModule::GetFallDeathTime` (2.7.2.0 `0x14044e320`, the `SUBSS` at `0x14044e382`;
+//! 1.16.2 `0x14044dce0` and `0x14044dd42`) is one subtraction:
 //!
 //! ```text
 //! fallHeight = physics->lastGroundedPosition.y - CSChrPhysicsModule::GetPosition(physics).y
 //! ```
 //!
-//! and its caller `CSChrFallModule::Update` (`0x14044df00`) evaluates it only on a frame where
+//! and its caller `CSChrFallModule::Update` (2.7.2.0 `0x14044e540`, 1.16.2 `0x14044df00`)
+//! evaluates it only on a frame where
 //! `physics->standingOnSolidGround` is set and `IsSliding` is false -- i.e. on the frame the body
 //! lands -- then charges `hpMax * ratio(fallHeight)` through `CSChrDataModule::ChangeHP` and
 //! stamps `serverLogDataTracker->deathType = Fall`.
@@ -18,8 +21,9 @@
 //! Two facts follow, and this module exists because of the second one.
 //!
 //! **The invincibility bit does cover it, contrary to what this crate used to say.** The damage
-//! block is gated on `FUN_14044e730`, whose tail is byte-read here rather than guessed
-//! (`0x14044e79a` is `XOR EAX,EAX; RET`, `0x14044e8f1` is `MOV AL,1; RET`):
+//! block is gated on 1.16.2 `FUN_14044e730` (2.7.2.0 `0x14044ed70`), whose tail is byte-read here
+//! rather than guessed (`0x14044e79a` is `XOR EAX,EAX; RET`, `0x14044e8f1` is `MOV AL,1; RET`; the
+//! listing is 1.16.2, and each site sits `+0x640` later on 2.7.2.0):
 //!
 //! ```text
 //! 14044e866  MOV RCX,RAX ; MOV R9,[RAX] ; CALL [R9+0x1d8]   ; ChrIns::IsImmuneToAttack

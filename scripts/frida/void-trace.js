@@ -19,10 +19,9 @@
 //   python3 scripts/er-frida-up.py
 //   uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/void-trace.js
 //
-// Addresses are 2.7.2.0. They were mapped from the named 1.16.2 dump to 1.17.1 with
-// scripts/map-rvas-1162-to-1170.py (create-or-reuse read back on the 1.17 dump, :8767), then
-// carried to 2.7.2.0 with scripts/map-rvas-1171-to-1172.py; every body below matches
-// eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands.
+// Addresses are 2.7.2.0. They were paired with the named 1.16.2 dump by signature on 1.17.1
+// (create-or-reuse read back on the 1.17 dump, :8767), then carried to 2.7.2.0; every body below
+// matches eldenring-deobf-1.17.2.bin apart from rip-relative and branch operands.
 //                           1.16.2         1.17.1         2.7.2.0
 //   attack create-or-reuse  0x1404428f0 -> 0x140442e50 -> 0x140442ee0  (CSChrDamageModule*, out,
 //                           behaviorId, dmgType, slot, ...)

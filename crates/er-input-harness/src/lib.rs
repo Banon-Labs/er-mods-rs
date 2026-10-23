@@ -6,7 +6,7 @@
 //!
 //! MECHANISM: ER input is driven by writing the game's own input memory -- the CSMenuMan keystate
 //! bitmap (`inputmgr+0x90+eventId`), the DLUID input-active flag (`+0x88d`), and the title global
-//! accept byte (`base+0x4589bdc`) -- on the game thread each frame. SendInput/XInput/window-focus was a
+//! accept byte (`base+0x4590c7c`) -- on the game thread each frame. SendInput/XInput/window-focus was a
 //! dead path and is not carried over.
 //!
 //! Title-active hook (2026-07-22): the per-frame callback is a `CSTaskImp` `FrameBegin` recurring task

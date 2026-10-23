@@ -1,27 +1,27 @@
 //! Is this address a legitimate place to write into the running image?
 //!
-//! # The question the version gate cannot answer
+//! # The question the constant gate cannot answer
 //!
-//! `er_game_base::game_build::resolve_detour_address` answers "where did this 1.16.2 address go on
-//! the running build". That is the right question for an address that came from a constant, and it
-//! is a question with no meaning for an address the caller found by scanning the running image --
-//! an AOB hit, a function pointer read out of a live vtable. Those addresses are already correct
-//! for the build in front of them; asking the table where they moved to gets a refusal, because
-//! the table is keyed by 1.16.2 RVAs and a 1.17 address is not one of its keys.
+//! `er_game_base::game_build::resolve_detour_address` answers "may a detour go at this constant":
+//! the running build must be 2.7.2.0 and the rva must be on the detour allowlist. That is the
+//! right question for an address that came from a constant, and it has no useful answer for an
+//! address the caller found by scanning the running image -- an AOB hit, a function pointer read
+//! out of a live vtable. Those addresses are already correct for the build in front of them, and
+//! no allowlist row describes them.
 //!
-//! Measured 2026-08-30: `er-armament-icons` and `er-invasion-warp` both locate the GFx tag-parse
-//! function by a unique 30-byte `.text` signature -- *precisely because* hardcoded RVAs drift
-//! between patches -- and the scan is correct on 1.17 (`0x1411cf1a0` -> `0x1411d0fa0`,
-//! byte-identical body, `.pdata` extent `0x68` in both images). Both then handed the hit to the
-//! translating installer, which refused it, and both features were off on a build where the
-//! address was right all along. The one mechanism built to survive a patch was the one the
-//! migration gate turned off.
+//! Measured 2026-08-30, when that gate was a 1.16.2 -> 1.17 translation table: `er-armament-icons`
+//! and `er-invasion-warp` both locate the GFx tag-parse function by a unique 30-byte `.text`
+//! signature -- *precisely because* hardcoded RVAs drift between patches -- and the scan was
+//! correct on 1.17 (1.16.2 `0x1411cf1a0` -> 1.17 `0x1411d0fa0`, byte-identical body, `.pdata`
+//! extent `0x68` in both images). Both then handed the hit to the translating installer, which
+//! refused it, and both features were off on a build where the address was right all along. The
+//! one mechanism built to survive a patch was the one the migration gate turned off.
 //!
-//! # What replaces translation, because something must
+//! # What stands in for the allowlist, because something must
 //!
-//! Skipping translation must not mean skipping validation. A wrong absolute address is exactly as
-//! fatal as a stale one: MinHook overwrites five bytes, and five bytes written into the middle of
-//! a live function corrupt the image with no error anywhere.
+//! Skipping the allowlist must not mean skipping validation. A wrong absolute address is exactly
+//! as fatal as a stale one: MinHook overwrites five bytes, and five bytes written into the middle
+//! of a live function corrupt the image with no error anywhere.
 //!
 //! So a runtime-derived address is checked against the running image's own function table -- the
 //! `.pdata` exception directory, which the linker wrote and which the OS itself binary-searches on
@@ -31,16 +31,18 @@
 //! * `Leaf` -- no `.pdata` record covers it. The x64 ABI lets a function omit unwind data when it
 //!   allocates no stack and calls nothing, so the game's many small getters and `jmp` thunks have
 //!   no record at all. Hooking one is fine, and refusing them would throw away a large, legitimate
-//!   population -- including `ONLINE_DISABLE_RVA` (`0x67a030`), a leaf in 1.16.2.
+//!   population -- including `ONLINE_DISABLE_RVA` (2.7.2.0 `0x67b330`, 1.16.2 `0x67a030`), a
+//!   leaf.
 //! * `MidFunction` -- the address is inside some other function's declared extent. Refuse.
 //!
 //! # Why the middle of a function is the case worth a whole module
 //!
 //! Because it verifies beautifully. A mid-function address sits in the middle of a stable
 //! neighbourhood, so every similarity metric agrees at length about the wrong thing:
-//! `scripts/classify-1170-entry-kind.py` records six such addresses reaching or nearly reaching
-//! the verified map on 2026-08-30, each `IDENTICAL` over 20-94 instructions. `0x140aec480` scored
-//! `IDENTICAL 1.000` over 56 instructions and is `+0x360` inside `0x140aec120..0x140aec567`. That
+//! `scripts/classify-entry-kind.py` records six such addresses reaching or nearly reaching
+//! the 1.16.2 -> 1.17 address map of 2026-08-30, each `IDENTICAL` over 20-94 instructions. 1.16.2
+//! `0x140aec480` scored `IDENTICAL 1.000` over 56 instructions and is `+0x360` inside
+//! `0x140aec120..0x140aec567`. That
 //! script is this check's offline twin, run against the image files; this is the same question
 //! asked of the image that is actually loaded, which is the only image a runtime caller can be
 //! wrong about.
@@ -391,9 +393,9 @@ pub const ARXAN_STUB_LEN: usize = 5;
 ///
 /// Arxan rewrites the first five bytes of roughly a quarter of this game's function entries into a
 /// `jmp rel32`, leaving bytes `5..` of the original prologue in place -- which is what makes the
-/// damage subtle. Measured 2026-09-16 over 60 entries taken from the verified rva map and read out
-/// of `/proc/<pid>/mem`: 43 byte-identical to the image, 17 opening with `0xe9`, none differing any
-/// other way.
+/// damage subtle. Measured 2026-09-16 on 1.17.1, over 60 entries taken from the cross-build rva
+/// map of the time and read out of `/proc/<pid>/mem`: 43 byte-identical to the image, 17 opening
+/// with `0xe9`, none differing any other way.
 ///
 /// Both failure modes this prevents are real and neither announces itself:
 ///
@@ -424,13 +426,76 @@ pub fn follow_arxan_stub(entry: usize) -> Option<usize> {
     }
     let relative = i32::from_le_bytes(displacement) as isize;
     let target = (entry + ARXAN_STUB_LEN).wrapping_add_signed(relative);
+    let mut opening = [0u8; LANDING_OPENING_BYTES];
+    let landing = match unsafe { er_game_base::mem::read_bytes(target, &mut opening) } {
+        true => classify_landing(&opening),
+        false => Landing::Other,
+    };
     // The displacement prints in decimal. `{:+#x}` on a negative `isize` prints its two's
     // complement, so a backward jump of 6941202 read as `+0xffffffffff9615ee` on run
     // br-20260916-193045-979a -- sixteen digits that look like an address and are not one.
-    hook_log(format_args!(
-        "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
-    ));
+    match landing {
+        Landing::HookRelay { to } => hook_log(format_args!(
+            "HOOKED ENTRY at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}, a MinHook relay \
+             (jmp [rip+0] -> 0x{to:x}) another module's detour left there, not an Arxan stub. The \
+             detour chains on at the relay"
+        )),
+        Landing::Jump => hook_log(format_args!(
+            "HOOKED ENTRY at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}, which opens with \
+             another jmp rel32: a hook relay a later detour has patched, not an Arxan stub. The \
+             detour chains on at 0x{target:x}"
+        )),
+        Landing::Other => hook_log(format_args!(
+            "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
+        )),
+    }
     Some(target)
+}
+
+/// How many opening bytes of a jump's landing [`classify_landing`] reads: a whole MinHook relay.
+const LANDING_OPENING_BYTES: usize = 14;
+/// `jmp qword ptr [rip+0]`, the six bytes MinHook's x64 relay opens with; the absolute address it
+/// jumps to follows them.
+// Not a prologue: the opening of MinHook's own relay, compared against a jump's landing to tell a
+// hook relay from an Arxan stub; no game function opens with it.
+const HOOK_RELAY_OPCODE: [u8; 6] = [0xff, 0x25, 0x00, 0x00, 0x00, 0x00];
+
+/// What the `jmp rel32` at a function entry lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Landing {
+    /// MinHook's x64 relay: `jmp qword ptr [rip+0]` and the absolute address after it, which is
+    /// the detour of whichever module wrote the jump at the entry.
+    HookRelay { to: usize },
+    /// Another `jmp rel32`: a relay whose first five bytes a later detour replaced, which is what
+    /// stacking a second MinHook onto a relay leaves.
+    Jump,
+    /// Neither, which is the case an Arxan stub's body is expected to fall in.
+    Other,
+}
+
+/// Classify a jump's landing from its opening bytes.
+///
+/// Pure, so the rule is asserted on the host. It exists because every jump this module reported
+/// as `ARXAN STUB` on 2026-10-22 was a hook. The cursor predicate's entry jumped to
+/// er-invasion-warp's relay at `0x13ff80fd3`, and `CanUseGoods`' entry jumped to `0x13fff0453`,
+/// whose MinHook slot at `0x13fff0440` held `CanUseGoods`' own `44 89 4c 24 20` and a jump back to
+/// the entry plus five. Following such a jump is still how a detour chains on safely; calling it
+/// anti-tamper sent readers looking for an obfuscator where there was another module's hook.
+pub(crate) fn classify_landing(opening: &[u8]) -> Landing {
+    if opening.starts_with(&HOOK_RELAY_OPCODE) {
+        let absolute = opening
+            .get(HOOK_RELAY_OPCODE.len()..HOOK_RELAY_OPCODE.len() + 8)
+            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok());
+        if let Some(absolute) = absolute {
+            return Landing::HookRelay {
+                to: u64::from_le_bytes(absolute) as usize,
+            };
+        }
+    }
+    if opening.first() == Some(&ARXAN_STUB_OPCODE) {
+        return Landing::Jump;
+    }
+    Landing::Other
 }
 
 #[cfg(test)]
@@ -589,6 +654,44 @@ mod tests {
             ),
             Err(Refusal::Padding(0))
         );
+    }
+
+    /// The relay the cursor predicate's entry jumped to on 2026-10-22 before a third detour patched
+    /// it: `jmp [rip+0]` to er-invasion-warp's dispatcher at `0x6ffff81bada0`.
+    #[test]
+    fn a_minhook_relay_is_a_hook_not_an_arxan_stub() {
+        let relay = [
+            0xff, 0x25, 0x00, 0x00, 0x00, 0x00, 0xa0, 0xad, 0x1b, 0xf8, 0xff, 0x6f, 0x00, 0x00,
+        ];
+        assert_eq!(
+            classify_landing(&relay),
+            Landing::HookRelay {
+                to: 0x6fff_f81b_ada0
+            }
+        );
+    }
+
+    /// The same relay after er-npc-summons stacked its own detour on it: five bytes of `jmp rel32`,
+    /// then the tail of the original relay. Measured at `0x13ff80fd3`.
+    #[test]
+    fn a_relay_another_detour_patched_is_a_jump() {
+        let patched = [
+            0xe9, 0x6e, 0xfc, 0xfd, 0xff, 0x00, 0xa0, 0xad, 0x1b, 0xf8, 0xff, 0x6f, 0x00, 0x00,
+        ];
+        assert_eq!(classify_landing(&patched), Landing::Jump);
+    }
+
+    /// Code that is neither shape stays the Arxan case, and a relay cut short is not read past its
+    /// end.
+    #[test]
+    fn other_code_and_a_short_read_are_neither() {
+        let code = [0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18];
+        assert_eq!(classify_landing(&code), Landing::Other);
+        assert_eq!(
+            classify_landing(&[0xff, 0x25, 0x00, 0x00, 0x00, 0x00, 0xa0]),
+            Landing::Other
+        );
+        assert_eq!(classify_landing(&[]), Landing::Other);
     }
 
     /// Every refusal says something different. One shared string would send four different

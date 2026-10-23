@@ -1,8 +1,8 @@
 // er-frida-watch: no-reload
 //
 // Read-only: stream the player's position for an arena-extent survey. Same reads as
-// player-where.js (ChrIns +0x30 block id, physics module +0x70 position), carried to 2.7.2.0
-// with scripts/map-rvas-1171-to-1172.py: WorldChrMan 0x143d69ff8 -> 0x143d6d018, the
+// player-where.js (ChrIns +0x30 block id, physics module +0x70 position), at their 2.7.2.0
+// addresses: WorldChrMan 0x143d69ff8 -> 0x143d6d018, the
 // pre-behavior hook 0x140401f30 -> 0x140401fc0 (same prologue bytes in both images). Sends a
 // point every 4 player frames while the player has moved more than 0.1 m since the last one;
 // scripts/arena-extents.py turns the log into per-block hull diameters and bounds.

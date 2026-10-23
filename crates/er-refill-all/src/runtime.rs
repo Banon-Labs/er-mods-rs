@@ -11,7 +11,8 @@
 //!
 //! # Why not the shared `MenuWindow::Update`
 //!
-//! The first version hooked `FUN_140745570` -- the `MenuWindow` update every dialog inherits -- and
+//! The first version hooked 1.16.2 `FUN_140745570` (2.7.2.0 `0x140746870`) -- the `MenuWindow`
+//! update every dialog inherits -- and
 //! identified the storage box by comparing `*this` against its vtable. That worked live, but it was
 //! the wrong prologue to own, for two independent reasons:
 //!
@@ -33,8 +34,10 @@
 //!
 //! | | address | signature | uniqueness |
 //! |---|---|---|---|
-//! | constructor | `0x1408d54a0` | `(this, SceneObjProxy*, u8) -> this` | one call site, the factory |
-//! | scalar-deleting destructor | `0x1408d6430` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
+//! | constructor | `0x1408d6af0` | `(this, SceneObjProxy*, u8) -> this` | one call site, the factory |
+//! | scalar-deleting destructor | `0x1408d7a80` | `(this, u64 flags) -> this` | vtable slot 1, this class only |
+//!
+//! (2.7.2.0 addresses; the `FUN_` names elsewhere in this file are 1.16.2 labels.)
 //!
 //! Both are registered through [`er_hook::register_shared_hook`], which chains into
 //! `er_quickload.dll`'s single union when the product is co-loaded and uses this DLL's own union
@@ -69,29 +72,32 @@ const GAME_DATA_MAN_MAIN_PLAYER_GAME_DATA_OFFSET: usize = 0x8;
 const PLAYER_GAME_DATA_ITEM_REPLENISH_TRACKER_OFFSET: usize = 0x5e8;
 
 /// `CS::DepositoryDialog::DepositoryDialog(this, SceneObjProxy*, u8) -> this`. Integer arguments
-/// only, and reached from exactly one call site (the dialog factory `FUN_1408d6470`), so owning
+/// only, and reached from exactly one call site (the dialog factory, 2.7.2.0 `0x1408d7ac0`, 1.16.2
+/// `FUN_1408d6470`), so owning
 /// this prologue contends with nothing.
-const DEPOSITORY_DIALOG_CTOR_RVA: usize = 0x8d54a0;
+const DEPOSITORY_DIALOG_CTOR_RVA: usize = 0x8d6af0;
 /// `DepositoryDialog`'s scalar-deleting destructor, `(this, u64 flags) -> this` -- vtable slot 1,
 /// referenced by this class's vtable and nothing else. It calls `operator_delete(this, 0x3190)`,
 /// which is also the evidence the dialog is heap-owned rather than pooled: construction and
 /// destruction really do bracket "the storage box is open".
-const DEPOSITORY_DIALOG_DTOR_RVA: usize = 0x8d6430;
-/// `FUN_1408f13b0(DepositoryDialog*, int)` -- Rebuild the displayed item list.
+const DEPOSITORY_DIALOG_DTOR_RVA: usize = 0x8d7a80;
+/// 1.16.2 `FUN_1408f13b0(DepositoryDialog*, int)` (2.7.2.0 `0x1408f2a00`) -- Rebuild the displayed
+/// item list.
 ///
-/// Writing replenish state changes nothing on screen by itself. The vanilla toggle
-/// (`FUN_1408d87d0`) calls `SetItemReplenishState` and then immediately calls this with `1`; it
-/// tail-calls `FUN_1408f6dc0`, which resets the dialog's gaitem list and re-runs the row-build
-/// lambda through vtable slots `0xf`/`0x10`. Without it the rows keep whatever refill icon they
-/// were built with, so the tracker and the screen disagree -- which is indistinguishable, from the
-/// player's side, from the hotkey having done nothing at all. Measured 2026-08-25: a run wrote all
-/// 449 entries and the icons did not move.
-const DEPOSITORY_DIALOG_REFRESH_RVA: usize = 0x8f13b0;
+/// Writing replenish state changes nothing on screen by itself. The vanilla toggle (1.16.2
+/// `FUN_1408d87d0`, 2.7.2.0 `0x1408d9e20`) calls `SetItemReplenishState` and then immediately calls
+/// this with `1`; it tail-calls 1.16.2 `FUN_1408f6dc0` (2.7.2.0 `0x1408f8410`), which resets the
+/// dialog's gaitem list and re-runs the row-build lambda through vtable slots `0xf`/`0x10`.
+/// Without it the rows keep whatever refill icon they were built with, so the tracker and the
+/// screen disagree -- which is indistinguishable, from the player's side, from the hotkey having
+/// done nothing at all. Measured 2026-08-25: a run wrote all 449 entries and the icons did not
+/// move.
+const DEPOSITORY_DIALOG_REFRESH_RVA: usize = 0x8f2a00;
 
 /// `CS::DepositoryDialog::vftable`. Assigned only by that class's constructor (verified: two
 /// references in the image, both in `DepositoryDialog::DepositoryDialog`), so `*this == this`
 /// is a sound identity test for "the storage box dialog is the one updating".
-const DEPOSITORY_DIALOG_VFTABLE_RVA: usize = 0x2aebba0;
+const DEPOSITORY_DIALOG_VFTABLE_RVA: usize = 0x2af0d10;
 
 /// `ItemReplenishStateTracker.count`, a `longlong` after `ItemReplenishStateEntry[2048]`.
 const TRACKER_COUNT_OFFSET: usize = 0x4008;
@@ -156,8 +162,9 @@ pub(crate) fn install(base: usize) {
     // `register_shared_hook` enables immediately -- it is not MinHook's deferred queue -- so the
     // first successful registration in this loop is live the instant it returns. The pair is only
     // safe as a pair: the ctor latches `LIVE_DEPOSITORY_DIALOG` and the dtor is the sole code that
-    // clears it. Registered ctor-first, a refused dtor address (which is exactly what 1.17 hands
-    // back for an RVA with no verified mapping) left the ctor detour armed with no way to unlatch,
+    // clears it. Registered ctor-first, a refused dtor address (what any build other than 2.7.2.0
+    // hands back, and what 1.17 handed back for an rva its address map lacked) left the ctor
+    // detour armed with no way to unlatch,
     // and the `Err` arm's `return` did not undo it -- `er_hook` has no unregister. The caller then
     // registers the `FrameBegin` task regardless of this function returning early, so `tick()` went
     // on calling `live_depository_dialog()` every frame and reading through a freed
@@ -173,21 +180,17 @@ pub(crate) fn install(base: usize) {
         (
             // Raw `base + rva`, not `game_data_addr` -- matching the ctor row below.
             //
-            // `register_shared_hook` takes its target unresolved, deliberately, and resolves it
-            // exactly once in whichever image will own the detour (`er-hook/src/lib.rs`, the
-            // comment beginning "UNRESOLVED, deliberately"). This row used to hand it
-            // `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`, which is
-            // `resolve_game_address(base + rva).unwrap_or(0)` -- so the address was translated
-            // 1.16.2 -> 1.17 here and then handed to a registrar that translates it again. The
-            // second translation looks up a 1.17 address in a table keyed by 1.16.2 addresses:
-            // it either refuses (the feature silently never installs) or, where a 1.17 address
-            // happens to collide with a 1.16.2 key, lands on an unrelated function. Its own
-            // sibling one row down always passed raw, so the two rows disagreed about the
-            // contract of the API they both call.
+            // `register_shared_hook` takes its target unresolved and checks it once itself, against
+            // the build and the detour allowlist (`er-hook/src/lib.rs`, the comment beginning
+            // "UNRESOLVED, deliberately"). Both rows hand it the native 2.7.2.0 address, so there
+            // is one check per target and nothing in between that could stand in for it.
             //
-            // `scripts/check-double-resolved-hook-targets.py` is the gate for this class and did
-            // not catch it: its taint follows `let` bindings, and this target is an element of an
-            // array literal destructured by the `for` pattern, never bound to a local.
+            // History: this row used to pass `game_data_addr(base, DEPOSITORY_DIALOG_DTOR_RVA, ..)`
+            // while the cross-build address map existed, which translated the address once here
+            // and again in the registrar -- a refusal or an unrelated function. The ctor row always
+            // passed raw. The gate that looked for that shape (deleted with the address map) did
+            // not catch it: its taint followed `let` bindings, and this target is an element of
+            // an array literal destructured by the `for` pattern, never bound to a local.
             "DepositoryDialog::dtor",
             base + DEPOSITORY_DIALOG_DTOR_RVA,
             depository_dtor_union as er_hook::UnionFn,
@@ -549,9 +552,8 @@ unsafe fn run_cycle(
         return;
     }
 
-    // Through the 1.17 gate, not `base + rva`: the map knowing where a function went is no help
-    // if the call never asks it. A refusal here costs the press; calling the 1.16.2 address on a
-    // build that moved the function costs the process.
+    // Through the build gate, not `base + rva`. A refusal here costs the press; calling the
+    // 2.7.2.0 address on another patch costs the process.
     let (Ok(should_replenish_addr), Ok(set_state_addr)) = (
         game_rva_named(
             SHOULD_REPLENISH_ITEM_RVA as u32,
@@ -560,7 +562,7 @@ unsafe fn run_cycle(
         game_rva_named(SET_STATE_RVA as u32, "SET_STATE_RVA"),
     ) else {
         refill_log(format_args!(
-            "{source}: press ignored: ShouldReplenishItem/SetState have no verified address for this build"
+            "{source}: press ignored: ShouldReplenishItem/SetState are 2.7.2.0 addresses and this build is another"
         ));
         return;
     };

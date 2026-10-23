@@ -1,6 +1,7 @@
 //! The Duelist's Furled Finger, turned into "pick an NPC to duel".
 //!
-//! Static RE, 1.16.2 names carried to 1.17.1 (bd `duelist-finger-use-path-1171-2026-10-06`):
+//! Static RE, with the 1.16.2 dump's names matched to the 1.17.1 functions and then to the 2.7.2.0
+//! ones the constants hold (bd `duelist-finger-use-path-1171-2026-10-06`):
 //! goods 101 applies SpEffect 10, the "request a red sign" flag; `PlayerIns::UpdateMultiplayData`
 //! sees it and calls `PlayerIns::StartMultiplayProcedureWithMountData(player, MultiplayType)` with
 //! type 2 (`RED_SUMMON`), which builds the player's sign and sends the request to the server.
@@ -28,18 +29,12 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::addr::{CAN_START_MULTIPLAY, RED_SIGN_TERM};
 use crate::log::summons_log;
 
-/// `PlayerIns::StartMultiplayProcedureWithMountData(PlayerIns*, MultiplayType)`, 1.16.2
-/// `0x1406587b0`, 1.17.1 `0x140659600` (`IDENTICAL-WHOLE`, recorded in the verified ledger).
-const START_MULTIPLAY_PROCEDURE: u32 = 0x0065_87b0;
-/// `CS::CanUseGoods`, 1.17.x `0x14068ee60` (1.16.2 `0x14068e010`, `IDENTICAL-WHOLE` in the
-/// verified ledger). The hook API audits a runtime-derived entry against the running image's own
-/// function table, so it takes the 1.17 address, as `er-invasion-warp` does; the 1.16.2 one is
-/// refused with `MH_ERROR_UNSUPPORTED_FUNCTION`.
-///
-/// Being a 1.17.1 address, it reaches the running build through `game_rva_measured_on`, which no
-/// runtime-derived hook API does for it. On 2.7.2.0 it carries to `0x68f310`, where the first 24
-/// bytes and the `.pdata` length (`0x169c`) are 1.17.1's (`scripts/compare-carry-bytes-1172.py`).
-const CAN_USE_GOODS: u32 = 0x0068_ee60;
+/// `PlayerIns::StartMultiplayProcedureWithMountData(PlayerIns*, MultiplayType)`, 2.7.2.0 rva.
+const START_MULTIPLAY_PROCEDURE: u32 = 0x0065_9ab0;
+/// `CS::CanUseGoods`, 2.7.2.0 rva (`.pdata` length `0x169c`). The hook API audits a
+/// runtime-derived entry against the running image's own function table, as `er-invasion-warp`
+/// does; it resolves through `game_rva_named`, which refuses it on any other build.
+const CAN_USE_GOODS: u32 = 0x0068_f310;
 
 /// `MultiplayType` of the Duelist's Furled Finger.
 const RED_SUMMON: u8 = 2;
@@ -109,7 +104,7 @@ unsafe extern "system" fn can_use_goods_hook(
     verdict
 }
 
-/// `FUN_140656f90` / `WorldChrManImp::CanStartMultiplay`: both `bool(this)`.
+/// `FUN_140658290` / `WorldChrManImp::CanStartMultiplay`: both `bool(this)`.
 type TermFn = unsafe extern "system" fn(usize) -> u8;
 
 /// The last answer [`summoning_allowed_here`] logged: 0 none yet, else `1 + red + 2 * multiplay`.
@@ -190,17 +185,7 @@ pub(crate) fn install() {
         }
         Err(why) => summons_log(format_args!("finger: no game module: {why}")),
     }
-    let can_use_goods = er_game_base::mem::game_rva_measured_on(
-        CAN_USE_GOODS as usize,
-        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
-    )
-    .ok_or_else(|| {
-        format!(
-            "the 1.17.1 CanUseGoods has no carry to {}",
-            er_game_base::game_build::describe_build()
-        )
-    });
-    match can_use_goods {
+    match game_rva_named(CAN_USE_GOODS, "CAN_USE_GOODS") {
         // SAFETY: a seven-argument handler on the seven-argument target; the handler calls the
         // slot through `UnionFn7`.
         Ok(entry) => match unsafe {

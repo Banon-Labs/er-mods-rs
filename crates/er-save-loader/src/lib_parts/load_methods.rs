@@ -25,7 +25,7 @@ where
 {
     // The menu wrapper's state pointer is stable across collected title-menu
     // traces. Calling the native wrapper preserves its task-state write at
-    // 0x1407a91e0 instead of calling save_write_entry_0b in isolation.
+    // 0x1407aa510 instead of calling save_write_entry_0b in isolation.
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
@@ -121,10 +121,10 @@ where
     // Runtime/static RE shows the real Continue path is not a direct call to
     // the load primitives. Menu code queues GameMan flags, and the MoveMapList
     // task consumes those flags at safe scheduler points.
-    // 0x67bc10 writes save-container entry 0xb (allocates 0x240010, DLMemoryOutputStream,
+    // 0x67cf10 writes save-container entry 0xb (allocates 0x240010, DLMemoryOutputStream,
 // submits through the write lane, sets GameMan->saveState = 1). It does not load.
 // Renamed 2026-08-01.
-const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
+const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067cf10;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
@@ -243,15 +243,16 @@ where
     G: GameManSaveAccess,
     F: FnMut(String),
 {
-    // Warning (corrected 2026-08-01 against the 1.16.2 Ghidra dump): 0x67b750 is
+    // Warning (corrected 2026-08-01 against the 1.16.2 Ghidra dump; the addresses below are the
+    // 2.7.2.0 ones): 0x67ca50 is
     // `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot)` -- it writes a save, it does
     // not read one. It was named `CONTINUE_LOAD_RVA` here and in er-quickload, but
     // `SAVE_DISPATCH_CHAR_RVA` in er-save-suppress (which hooks it precisely to swallow
     // saves); er-save-suppress had it right. Decompile: bails on `CanShowSaveMenu()`,
     // requires `saveState == 0`, resolves slot -1 to `GameMan->saveSlot`, allocates
     // 0x280000, calls `MarkProfileIndexAsUsed`, serializes game state into the buffer via
-    // 0x14067dc00 (`DLMemoryOutputStream` + `Write`), stamps `DLDateTime`, writes the buffer
-    // through the IO device (0xe6e060 -> 0x140e6ec70), then sets `saveState = 1`.
+    // 0x14067ef00 (`DLMemoryOutputStream` + `Write`), stamps `DLDateTime`, writes the buffer
+    // through the IO device (0xe715c0 -> 0x140e721d0), then sets `saveState = 1`.
     //
     // Consequence, not yet CHANGED: the DIRECT_SEQUENCE_PHASE_CONTINUE arm below invokes it
     // as `(-1, 0, 0)`, which resolves to the active save slot and takes the serialize branch
@@ -261,7 +262,7 @@ where
     // removing it is a behavior change that needs a runtime proof run, not a rename pass.
     // `DirectTraceSequence` is opt-in (default is `SaveLoadMethod::SaveRequested`), selected
     // only via config/request `method = direct_trace_sequence`. Tracked in bd.
-    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067b750;
+    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067ca50;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
@@ -388,14 +389,14 @@ unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String
     Ok(!save_buffer_allocator.is_null())
 }
 
-/// `module_base + rva`, resolved for the running build.
+/// `module_base + rva`, refused on any build but 2.7.2.0.
 ///
 /// Takes the base as an argument rather than resolving it (callers already hold one and the
 /// tests pass a fake), which is the only reason this is not `er_game_base::mem::game_rva`
-/// outright. The build resolution is the same call, so a 1.16.2 RVA on a build that moved the
-/// code is translated when a mapping is verified and an `Err` when it is not -- these results
-/// are transmuted into function pointers and called, and a stale one transfers control into
-/// whatever now occupies those bytes.
+/// outright. The build check is the same call, so a 2.7.2.0 rva on another build is an `Err` --
+/// these results are transmuted into function pointers and called, and a stale one transfers
+/// control into whatever now occupies those bytes. Host builds pass the address through, which
+/// is what the tests below rely on.
 fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
     if module_base == NULL_MODULE_BASE {
         return Err("failed to resolve game module: null module base".to_owned());
@@ -404,7 +405,7 @@ fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
     er_game_base::game_build::resolve_game_address(raw, "er-save-loader game_rva").ok_or_else(
         || {
             format!(
-                "rva 0x{rva:x} has no verified mapping for the running build: {}",
+                "rva 0x{rva:x} was measured on another build than the running one: {}",
                 er_game_base::game_build::describe_build()
             )
         },

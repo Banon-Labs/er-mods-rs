@@ -25,19 +25,19 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 // Each virtual address is written as `GAME_IMAGE_BASE + (rva + offset) as u64` rather than through
 // a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
 const SP_EFFECT_FRAME_VA: u64 =
-    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
 const SP_EFFECT_TABLE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_1171_RVA + SP_EFFECT_TABLE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_RVA + SP_EFFECT_TABLE_WINDOW_OFFSET) as u64;
 const SP_EFFECT_ROW_STORE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_1171_RVA + SP_EFFECT_ROW_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_PARAM_RVA + SP_EFFECT_ROW_STORE_WINDOW_OFFSET) as u64;
 const SP_EFFECT_VFX_FRAME_VA: u64 =
-    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
 const SP_EFFECT_VFX_TABLE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_1171_RVA + SP_EFFECT_VFX_TABLE_WINDOW_OFFSET) as u64;
-const SP_EFFECT_VFX_HIT_STORE_VA: u64 = GAME_IMAGE_BASE
-    + (GET_SP_EFFECT_VFX_PARAM_1171_RVA + SP_EFFECT_VFX_HIT_STORE_WINDOW_OFFSET) as u64;
-const SP_EFFECT_VFX_MISS_STORE_VA: u64 = GAME_IMAGE_BASE
-    + (GET_SP_EFFECT_VFX_PARAM_1171_RVA + SP_EFFECT_VFX_MISS_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_RVA + SP_EFFECT_VFX_TABLE_WINDOW_OFFSET) as u64;
+const SP_EFFECT_VFX_HIT_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_RVA + SP_EFFECT_VFX_HIT_STORE_WINDOW_OFFSET) as u64;
+const SP_EFFECT_VFX_MISS_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_SP_EFFECT_VFX_PARAM_RVA + SP_EFFECT_VFX_MISS_STORE_WINDOW_OFFSET) as u64;
 
 /// `mov qword [rsp+0x20],-2`, the frame marker both getters store third.
 const FRAME_MARKER_SLOT: i32 = 0x20;
@@ -65,10 +65,10 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_FRAME_WINDOW",
-                    doc: "1.17.1 `GetSpEffectParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    doc: "2.7.2.0 `GetSpEffectParam+0x6`: `MOV qword [RSP+0x20],-2`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_FRAME_VA,
                     take: 0,
                     pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
@@ -82,11 +82,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_TABLE_WINDOW",
-                    doc: "1.17.1 `GetSpEffectParam+0x6f`: `XOR R8D,R8D; LEA EDX,[R8+0xf]`, the\n\
+                    doc: "2.7.2.0 `GetSpEffectParam+0x6f`: `XOR R8D,R8D; LEA EDX,[R8+0xf]`, the\n\
                           SpEffectParam table index handed to `GetParamResCap`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_TABLE_VA,
                     take: 0,
                     pin: &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x0f],
@@ -101,11 +101,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_ROW_STORE_WINDOW",
-                    doc: "1.17.1 `GetSpEffectParam+0x15d`: `MOV [R14],RBX`, the row pointer into\n\
+                    doc: "2.7.2.0 `GetSpEffectParam+0x15d`: `MOV [R14],RBX`, the row pointer into\n\
                           `out+0`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_ROW_STORE_VA,
                     take: 0,
                     pin: &[0x49, 0x89, 0x1e],
@@ -119,10 +119,10 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_VFX_FRAME_WINDOW",
-                    doc: "1.17.1 SpEffectVfxParam getter `+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    doc: "2.7.2.0 SpEffectVfxParam getter `+0x6`: `MOV qword [RSP+0x20],-2`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_VFX_FRAME_VA,
                     take: 0,
                     pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
@@ -136,11 +136,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_VFX_TABLE_WINDOW",
-                    doc: "1.17.1 SpEffectVfxParam getter `+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x10]`,\n\
+                    doc: "2.7.2.0 SpEffectVfxParam getter `+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x10]`,\n\
                           the SpEffectVfxParam table index handed to `GetParamResCap`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_VFX_TABLE_VA,
                     take: 0,
                     pin: &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x10],
@@ -155,11 +155,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_VFX_HIT_STORE_WINDOW",
-                    doc: "1.17.1 SpEffectVfxParam getter `+0xbd`: `MOV [RBX+8],RAX`, the row pointer\n\
+                    doc: "2.7.2.0 SpEffectVfxParam getter `+0xbd`: `MOV [RBX+8],RAX`, the row pointer\n\
                           into `out+8` on a hit.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_VFX_HIT_STORE_VA,
                     take: 0,
                     pin: &[0x48, 0x89, 0x43, 0x08],
@@ -173,11 +173,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "SP_EFFECT_VFX_MISS_STORE_WINDOW",
-                    doc: "1.17.1 SpEffectVfxParam getter `+0xc5`: `MOV [RBX+8],RBP`, the same slot\n\
+                    doc: "2.7.2.0 SpEffectVfxParam getter `+0xc5`: `MOV [RBX+8],RBP`, the same slot\n\
                           on a miss.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: SP_EFFECT_VFX_MISS_STORE_VA,
                     take: 0,
                     pin: &[0x48, 0x89, 0x6b, 0x08],

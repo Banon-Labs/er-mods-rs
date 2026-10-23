@@ -63,7 +63,7 @@ this paragraph keeps them apart rather than calling both "collisions":
   er-armament-icons' per-tile calls) -- see the comment where that HookSpec row used to be.
 
 So the key is now the resolved value, through `scripts/rva_symbols.py` -- the same resolver
-`check-stale-rva-calls.py` and `check-1170-translation-collisions.py` use, which reads enum
+`check-rva-alias-drift.py` and `check-detour-rva-coverage.py` use, which reads enum
 discriminants, aliases, `use ... as ...` renames and const arithmetic rather than one regex shape.
 A token whose value cannot be resolved keeps its name as the key: an unreadable claim must stay a
 claim, because dropping it would turn "I could not resolve this" into "this collides with
@@ -87,7 +87,7 @@ MinHook instance is then a red gate, not another silent session.
 
 That is how the measured pair above was closed on 2026-08-23: the product's observer moved to
 `er_hook::register_union_hook`, and `er-armament-icons` moved to `er_hook::register_shared_hook`,
-which resolves the product's `er_effects_union_register` export and chains into its instance
+which resolves the product's `er_effects_union_register_2720` export and chains into its instance
 (falling back to its own union when the product is absent). Install order no longer decides it.
 
 Which module owns that instance is elected, not named (2026-09-19)
@@ -95,7 +95,7 @@ Which module owns that instance is elected, not named (2026-09-19)
 `register_shared_hook` used to find the owner by one file name, `GetModuleHandleA` on
 `er_quickload.dll`. That left a `[[shared]]` row in this table asserting more than the code did:
 with `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and no product, the fork exported
-`er_effects_union_register` and the companion never looked for it, so both took their own MinHook
+`er_effects_union_register_2720` and the companion never looked for it, so both took their own MinHook
 instance on one prologue -- the configuration measured at the top of this file. `er-hook` now asks
 every loaded module for the registrar and takes the lowest load base among those that answer
 (`er_hook::elect_union_host`), keeping the `er_quickload.dll` probe first so a companion built
@@ -170,7 +170,7 @@ RVA_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:RVA|ADDRESS|PROLOGUE))\b")
 RVA_LITERAL = re.compile(r"\b0x1[0-9a-fA-F]{6,8}\b")
 
 # An address with no constant name at all. `er-reload-trace` keeps its 40-odd detours in a table of
-# `HookSpec { name: "child_teardown_eb54c0", rva: 0x836f30, detour: hook_map_request_do, .. }`, and
+# `HookSpec { name: "map_request_do", rva: 0x8383d0, detour: hook_map_request_do, .. }`, and
 # most of those `rva:` fields are bare literals. `RVA_NAME` cannot see them (no name), `RVA_LITERAL`
 # cannot see them (it requires the leading digit to be `1`, so it matches the VA spelling and RVAs
 # that happen to start with 1, and misses 0x836f30 / 0x733150 / 0xb0d400 entirely), and the
@@ -343,7 +343,7 @@ def declared_pairs() -> set[frozenset[str]]:
 
 # A line that hands a detour to a union registrar -- the product's own union, the cross-DLL helper,
 # or the product's C export resolved from a companion image.
-UNION_REGISTER = re.compile(r"register_union_hook|register_shared_hook|er_effects_union_register")
+UNION_REGISTER = re.compile(r"register_union_hook|register_shared_hook|er_effects_union_register_2720")
 # A line that creates a private MinHook detour. On a `[[shared]]` handler this is the regression the
 # whole entry exists to prevent, so its presence is a failure rather than a warning.
 BARE_HOOK = re.compile(r"MhHook::new|MH_CreateHook")
@@ -746,7 +746,7 @@ def shared_mechanism_failures(crates: dict[str, Path]) -> list[str]:
             if not unioned:
                 failures.append(
                     f"{where}: {package}'s handler '{handler}' never reaches a union registrar "
-                    "(register_union_hook / register_shared_hook / er_effects_union_register)"
+                    "(register_union_hook / register_shared_hook / er_effects_union_register_2720)"
                 )
     return failures
 
@@ -1002,38 +1002,38 @@ def selftest() -> int:
         case("a handler installed through a bare wrapper fails", bool(bare) and not unioned)
 
     # ------------------------------------------------------------------ The value key
-    # the control this fix exists for, and the one address in this tree that proves it. 0xb0d400
-    # is declared only as an enum discriminant -- `MenuJobWait = 0x00b0d400` inside
-    # `#[repr(u32)] pub enum MenuTraceRva` -- and reached as
+    # the control this fix exists for, and the one address in this tree that proves it. 0xb0efd0
+    # (0xb0d400 before the 2.7.2.0 port) is declared only as an enum discriminant --
+    # `MenuJobWait = 0x00b0efd0` inside `#[repr(u32)] pub enum MenuTraceRva` -- and reached as
     # `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;`. So a crate
     # that claims it by name and a crate that claims it as a bare `rva:` table field share one
     # address and no spelling, which is exactly the pair the old key could not join. Note the
-    # literal form is `0x00b0d400`: `RVA_LITERAL` requires the leading digit to be `1`, so the
+    # literal form is `0x00b0efd0`: `RVA_LITERAL` requires the leading digit to be `1`, so the
     # old matcher did not even record it as a target.
     values = constant_values()
     case(
-        "the resolver reads an enum-discriminant address (0xb0d400 via TITLE_MENU_JOB_WAIT_RVA)",
-        values.get("TITLE_MENU_JOB_WAIT_RVA") == 0xB0D400,
+        "the resolver reads an enum-discriminant address (0xb0efd0 via TITLE_MENU_JOB_WAIT_RVA)",
+        values.get("TITLE_MENU_JOB_WAIT_RVA") == 0xB0EFD0,
     )
     by_name = LEGACY_COLLIDE(
-        {"a": {"TITLE_MENU_JOB_WAIT_RVA": "a.rs:1"}, "b": {"0x00b0d400": "b.rs:2"}}
+        {"a": {"TITLE_MENU_JOB_WAIT_RVA": "a.rs:1"}, "b": {"0x00b0efd0": "b.rs:2"}}
     )
     case("the OLD name key does NOT join them (control is non-vacuous)", by_name == [])
     by_value = collide(
         {
             "a": resolve_targets({"TITLE_MENU_JOB_WAIT_RVA": "a.rs:1"}, values),
-            "b": resolve_targets({"0x00b0d400": "b.rs:2"}, values),
+            "b": resolve_targets({"0x00b0efd0": "b.rs:2"}, values),
         }
     )
-    case("the VALUE key joins them", [k for k, _ in by_value] == [0xB0D400])
+    case("the VALUE key joins them", [k for k, _ in by_value] == [0xB0EFD0])
     # ...and the VA spelling of the same address is the same address.
     va_form = collide(
         {
             "a": resolve_targets({"TITLE_MENU_JOB_WAIT_RVA": "a.rs:1"}, values),
-            "b": resolve_targets({"0x140b0d400": "b.rs:2"}, values),
+            "b": resolve_targets({"0x140b0efd0": "b.rs:2"}, values),
         }
     )
-    case("a VA and its RVA are one key", [k for k, _ in va_form] == [0xB0D400])
+    case("a VA and its RVA are one key", [k for k, _ in va_form] == [0xB0EFD0])
     # A name nothing declares must not collapse onto some other name. Unresolved keys on itself.
     unknown = resolve_targets({"NEVER_DECLARED_ANYWHERE_RVA": "a.rs:1"}, values)
     case("an unresolvable name keeps its spelling as the key",
@@ -1084,8 +1084,8 @@ def selftest() -> int:
             resolved.setdefault(key, {})[crate_name] = value
     case(
         "the scan still SEES the measured pair, under BOTH its spellings",
-        {"er-quickload", "er-armament-icons"} <= set(resolved.get(0x11CED80, {}))
-        and {resolved[0x11CED80][c][0] for c in ("er-quickload", "er-armament-icons")}
+        {"er-quickload", "er-armament-icons"} <= set(resolved.get(0x11D22E0, {}))
+        and {resolved[0x11D22E0][c][0] for c in ("er-quickload", "er-armament-icons")}
         == {"TITLE_SCALEFORM_FILE_OPEN_RVA", "FILE_OPEN_RVA"},
     )
     # Non-VACUITY of the inputs. Every set the verdict rests on is asserted non-empty and of the
@@ -1130,9 +1130,11 @@ def selftest() -> int:
     #   two crates share key on their spelling on both sides here, so they cannot move the
     #   difference either way.)
     #
-    #   Nothing short of the value key finds the rest -- the difference is non-empty. Both
-    #   addresses in it today (0x836f30, 0x7acb00) are claimed by a named constant in one crate and
-    #   a bare `rva:` table field in another, which is the blind spot that cost this project a day
+    #   Nothing short of the value key finds the rest -- the difference is non-empty. The two
+    #   addresses in it when this was written (1.16.2 0x836f30 and 0x7acb00, now 0x8383d0 and
+    #   0x7ade30; it held 32 after the 2.7.2.0 port, mostly er-reload-trace's bare `rva:` fields
+    #   meeting the product's constants) are each claimed by a named constant in one crate and a
+    #   bare `rva:` table field in another, which is the blind spot that cost this project a day
     #   and which the name key cannot close by construction. Blinding the scan to bare `rva:`
     #   fields, or reverting the key to the spelling, empties the difference and fails this.
     shared_by_value = {key for key, owners in resolved.items() if len(owners) > 1}

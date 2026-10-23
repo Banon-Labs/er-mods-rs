@@ -74,7 +74,9 @@ er-refill-all  er-reload-trace
 Two consequences, and the second is a live defect rather than a design opinion:
 
 1. **The product DLL cannot be renamed** while the hub is looked up by file name. The export name
-   `er_effects_union_register` is deliberately an ABI and must not move; the *module* name has
+   `er_effects_union_register` is deliberately an ABI and must not move (renamed to
+   `er_effects_union_register_2720` / `er_effects_union_register5_2720` on 2026-10-23, when the
+   address contract changed; `docs/game-build.md`); the *module* name has
    become one by accident, which nothing says and nothing gates.
 2. **`[[shared]] er-quit-rows + er-armament-icons` claims a mechanism that cannot engage.** Its
    `reason` says "whichever shell reaches the prologue first creates the dispatcher and the other
@@ -336,7 +338,9 @@ Hard constraints on the rename, all of them measured:
 
 * **`er_effects_union_register` and `er_effects_union_register5` do not move.** They are resolved by
   string from seven other images, and `er-hook`'s comment already records why the `er_effects_`
-  prefix survived the 2026-08-26 crate rename.
+  prefix survived the 2026-08-26 crate rename. (Renamed to `er_effects_union_register_2720` /
+  `er_effects_union_register5_2720` on 2026-10-23, when the address contract changed;
+  `docs/game-build.md`.)
 * **`er_quit_rows_register` / `er_quit_rows_armed` do not move** either, for the same reason: they
   are the row registry's ABI.
 * **Phase 1 must be in the same release or earlier.** Renaming `er_quickload.dll` before the hub is

@@ -435,7 +435,7 @@ def compute(
         )
 
     # Product first, then the rest alphabetically. me3 loads natives in profile order, and the
-    # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
+    # companions resolve the product's `er_effects_union_register_2720` export to chain onto prologues it
     # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
     # `er-armament-icons` ahead of `er-quickload`, so the companion's install thread could run
     # before the product image was even loaded -- it would then find no export, fall back to its own

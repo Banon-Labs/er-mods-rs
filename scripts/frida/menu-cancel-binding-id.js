@@ -1,7 +1,7 @@
 // Which menu binding id is "cancel", asked of the game rather than of a keyboard.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Every game address in this file is a 2.7.2.0 rva (`eldenring-deobf-1.17.2.bin`, VA =
+// 0x140000000 + rva).
 //
 // # Why a binding id and not a virtual key
 //
@@ -13,74 +13,64 @@
 // The game has the rebind-aware answer already:
 //
 // ```text
-//   FUN_14075d8f0(pad, bindingId) -> repeat count
-//     FUN_140756000(&{pad, bindingId})        ; analog magnitude, and the reason this is the
+//   FUN_14075ebf0(pad, bindingId) -> repeat count
+//     FUN_140757300(&{pad, bindingId})        ; analog magnitude, and the reason this is the
 //       GLOBAL_CSPcKeyConfig                  ; rebind-aware layer -- the config IS consulted
 //       FUN_140242ab0(cfg, out, bindingId, 2)
-//     FUN_140758b30(pad, bindingId)           ; the boolean half
+//     FUN_140759e30(pad, bindingId)           ; the boolean half
 // ```
 //
 // So a BINDING id is the logical action and `CSPcKeyConfig` maps the player's physical key or
 // button onto it. Bake the binding id and a rebind is followed for free; bake a virtual key and it
 // is not. Two ids in this namespace are already measured and both are confirmed above by their own
-// wrappers -- `0x2c` list-down (`FUN_140758e70`) and `0x2d` list-up (`FUN_140758e50`).
+// wrappers -- `0x2c` list-down (`FUN_14075a170`) and `0x2d` list-up (`FUN_14075a150`).
 //
 // # What this agent does
 //
 // It never guesses which id cancel is. It captures a live `CSEzMenuViewerPad` from the game's own
-// per-frame call, then asks the game `FUN_14075d8f0(pad, id)` for every id in the namespace and
+// per-frame call, then asks the game `FUN_14075ebf0(pad, id)` for every id in the namespace and
 // reports the ones that answer nonzero, on change. Whatever the player presses to back out lights
 // up its own id, whatever they have it bound to.
 //
 // The sweep runs inside a hook on the game's menu thread rather than from Frida's own thread,
 // because the function it calls reads menu state that thread owns.
 //
-// Installed build 1.17.1; every rva is below `0xafefe9`, so the 1.17.0 dump, the deobf image and
-// the live process agree with no translation.
+// Measured on `eldenring-deobf-1.17.2.bin` 2026-10-23. `0x14075ebf0` is the only match for the
+// whole repeat-count body (`48895c2408 57 4883ec30 488bf9 48894c2420 488d4c2420 89542428 8bda
+// e8 .. 0f57c9 0f2ec1 7a20 751e 8bd3 488bcf e8 .. 33c9 84c0 0f95c1`); its first call lands on
+// `0x140757300` (the analog half, which calls `FUN_140242ab0(cfg, out, [rbx+8], 2)`) and its
+// second on `0x140759e30`. `0x140759e30` is the only match for the boolean half's prologue, and at
+// `+0x65` it calls `0x14075ec70`, the `bindingForward` hook below. The list wrappers
+// `0x14075a170` / `0x14075a150` load `edx = 0x2c` / `0x2d` and call `0x14075ebf0`.
 //
-// Read back out of the images on 2026-10-21, the three binding rvas are 1.16.2 values: the `FUN_`
-// names above match the 1.16.2 named dump, not 1.17.1. In `eldenring-deobf-1.17.1.bin`
-// `0x14075d8f0` holds the qword `0x1408e4660` rather than code, `0x140758b30` is not an
-// instruction boundary, and the recorded map moves 1.16.2 `0x14075d970` to 1.17 `0x14075e7c0`
-// (`docs/recon/rva-map-1162-to-1170.verified.tsv`). Only that one has a recorded row, so it is
-// carried and the other two stop the agent.
-// Not verified on 2.7.2.0, so this agent refuses to load: 0x14075d8f0 a 1.16.2 value, and no
-// recorded 1.16.2 -> 1.17.0 row names it; 0x140758b30 a 1.16.2 value, and no recorded 1.16.2 ->
-// 1.17.0 row names it
-throw new Error('frida-carry-1172: not verified on 2.7.2.0: 0x14075d8f0 (1.16.2, bindingPressed), 0x140758b30 (1.16.2, bindingBoolean)');
+// Every capture and intercept failure in this agent's history -- the `0x35` read, both `unable to
+// intercept` errors, and the `bindingForward` hook -- was taken in a 1.17.1 process at the 1.16.2
+// addresses `0x140756000`, `0x14075d8f0`, `0x14075d970` and `0x140758b30`. In
+// `eldenring-deobf-1.17.1.bin` each of those lies inside a different function (`.pdata`: `+0x20`,
+// `+0x30`, `+0x30`, `+0x70`), so those runs measured nothing about the functions named here, and
+// the history is not repeated below. Whether `bindingPressed` and `bindingBoolean` can take a
+// trampoline on 2.7.2.0 is unmeasured; `0x14075ebf0` opens with 10 bytes of plain instructions
+// (`mov [rsp+8], rbx; push rdi; sub rsp, 0x30`). The agent only calls them.
 
 const RVA = {
   // (pad, bindingId) -> repeat count. The question this agent asks the game. Called, never
-  // hooked: Frida answers `unable to intercept function at 000000014075D8F0` on it, which is what
-  // a prologue too short to take a trampoline looks like. Calling it needs no trampoline.
-  bindingPressed: 0x75d8f0,
-  // `FUN_14075d970(pad, lambda, ...)`, the function `FUN_140758b30` forwards to. The pad is `rcx`
-  // and the binding id is the dword at `lambda + 8` -- `FUN_140758b30` builds that lambda as
+  // hooked. Whether it can take a trampoline on 2.7.2.0 is unmeasured; see the header. Calling it
+  // needs no trampoline.
+  bindingPressed: 0x75ebf0,
+  // `FUN_14075ec70(pad, lambda, ...)`, the function `FUN_140759e30` forwards to. The pad is `rcx`
+  // and the binding id is the dword at `lambda + 8` -- `FUN_140759e30` builds that lambda as
   // `local_48 = CONCAT44(uStackX_1c, param_2) & 0xffffff00ffffffff`, so the id it was asked for
   // travels inside it.
   //
-  // This is the THIRD capture site tried, and the two failures are worth keeping. Reading the pad
-  // out of `FUN_140756000`'s argument pair captured `0x35`, a small integer rather than a pointer,
-  // so every swept id answered zero while the run looked like a clean negative. Hooking
-  // `FUN_14075d8f0` and then `FUN_140758b30` directly both failed with Frida's `unable to
-  // intercept function at ...`, which is what a prologue too short to hold a trampoline looks
-  // like -- neither is a missing function and neither is an Arxan stub. Forwarding one call deeper
-  // reaches a function big enough to hook.
-  bindingForward: 0x75ec70, // 1.16.2 0x75d970, 1.17.1 0x75e7c0
-  // The boolean half, `FUN_140758b30(pad, bindingId)`. Called, never hooked, for the reason above.
-  //
-  // This is the capture source, and it is the second one tried. The first read the pad out of
-  // `FUN_140756000`'s `&{pad, bindingId}` pair, on the strength of the decompiler's `local_18 =
-  // param_1`, and captured `0x35` -- a small integer, not a pointer, so every swept id answered
-  // zero and the run measured nothing while looking like a clean negative. Taking the argument
-  // where the game passes it needs no assumption about a caller's stack layout.
-  //
-  // It also reports the ids the menu system asks for by itself, which is the answer outright if
-  // any menu polls cancel while the popup is up.
-  bindingBoolean: 0x758b30,
+  // This is the capture site: the pad is taken where the game passes it, which needs no
+  // assumption about a caller's stack layout. It also reports the ids the menu system asks for by
+  // itself, which is the answer outright if any menu polls cancel while the popup is up.
+  bindingForward: 0x75ec70,
+  // The boolean half, `FUN_140759e30(pad, bindingId)`. Called, never hooked.
+  bindingBoolean: 0x759e30,
   // The bounds popup's step-2 handler: runs once a frame while the dialog is up, on the menu
   // thread, and is where the sweep is driven from.
-  startInvasion: 0x7c3100, // 1.17.1 0x7c2c50
+  startInvasion: 0x7c3100,
 };
 
 // The namespace the known ids sit in. `0x2c`/`0x2d` are list down/up, `0x3d` confirm, `0x30`/`0x31`
@@ -180,7 +170,7 @@ Interceptor.attach(follow(base.add(RVA.startInvasion)), {
       pad: pad.toString(),
       askedByTheGame: Object.keys(asked).join(',') || 'none',
       sweeps,
-      note: 'Bindings the game itself reports as pressed, asked through FUN_14075d8f0 which consults GLOBAL_CSPcKeyConfig. The id that lights up beside your cancel key is the rebind-safe constant the product should carry.',
+      note: 'Bindings the game itself reports as pressed, asked through FUN_14075ebf0 which consults GLOBAL_CSPcKeyConfig. The id that lights up beside your cancel key is the rebind-safe constant the product should carry.',
     });
   },
 });

@@ -79,7 +79,7 @@ const NEVER_GRANT: &[&str] = &["Flask of Crimson Tears", "Flask of Cerulean Tear
 /// # Why this number and not a comfortable one
 ///
 /// 99 is the engine's own ceiling, not one chosen here. It is the only literal in
-/// `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 `0x14024e570`, same address on 1.17),
+/// `CS::EquipInventoryData::GetMaxAmountForItem` (2.7.2.0 `0x14024e570`),
 /// which returns it twice: once when a goods row declares no `maxNum` at all, and again for a
 /// pot-group item in a session that is not enforcing pot limits. Clamping to it costs nothing in
 /// any realistic case -- boluses declare exactly 99 and are untouched, a Fire Pot declares 10 --
@@ -123,9 +123,9 @@ fn consumable_quantity(entry: Option<Entry>) -> u32 {
 /// Arrows and bolts are `EquipParamWeapon` rows, not `EquipParamGoods` -- which is why they equip
 /// into dedicated `ChrAsmSlot` positions instead of the quickbar -- so `maxNum`, the number behind
 /// [`consumable_quantity`], does not describe them and is not even read for them. The engine says
-/// so itself: `CS::EquipInventoryData::GetMaxAmountForItem` (1.16.2 and 1.17 both `0x14024e570`)
+/// so itself: `CS::EquipInventoryData::GetMaxAmountForItem` (2.7.2.0 `0x14024e570`)
 /// handles the goods category inline and tail-jumps every other category to `::GetMaxItemQuantity`
-/// (1.16.2 `0x140674680`, 1.17 `0x1406754d0`), whose weapon branch is:
+/// (2.7.2.0 `0x140675980`), whose weapon branch is:
 ///
 /// ```text
 /// movzbl 0xe6(%rcx),%edx   ; EquipParamWeapon.weaponCategory

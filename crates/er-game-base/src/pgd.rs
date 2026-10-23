@@ -54,7 +54,7 @@ const _: () = assert!(PGD_NAME_LEN_U16 == 17);
 //        scripts/check-singleton-field-offsets.py --pgd-offsets
 //   B. functions called with that chain's PGD pointer in an argument register, one level deep.
 //   C. `CS::PlayerGameData`'s constructor (1.16.2 0x14025d580 -> 1.17 0x14025d550, paired by
-//      scripts/map-rvas-1162-to-1170.py) and the methods of the vtable that constructor stores at
+//      signature) and the methods of the vtable that constructor stores at
 //      `[this+0]` (1.16.2 0x1429e15f8 / 0x1429e5fa8, 1.17 0x1429e45f8 / 0x1429e8fa8).
 //
 // Together those witness 109 PGD field offsets in both images, and all 25 values pinned below are
@@ -67,7 +67,7 @@ const _: () = assert!(PGD_NAME_LEN_U16 == 17);
 // 0x18, 0x28, 0x38, 0x60 and 0x66 are one-sided coverage gaps.
 //
 // Corrected 2026-08-31 by aligning the CONSTRUCTOR'S two bodies rather than intersecting two
-// witness sets (scripts/check-object-field-offsets-1170.py, whose 18 frozen rows re-measure this
+// witness sets (scripts/check-object-field-offsets.py, whose 18 frozen rows re-measure this
 // on every run; scripts/pair-object-field-drift.py is the matcher). The earlier reading of "+4
 // from 0x9c8" and "0x964 read by 1.17 alone" was a coverage artifact of the census: 0x9c8 was
 // merely the lowest moved offset that scan happened to witness, and 0x964 is not a new 1.17
@@ -160,11 +160,6 @@ const _: () = assert!(core::mem::offset_of!(PlayerGameData, max_fp_flask) == 0x1
 const _: () = assert!(core::mem::offset_of!(PlayerGameData, equipment) == 0x2b0);
 const _: () = assert!(core::mem::offset_of!(PlayerGameData, face_data) == 0x760);
 
-/// Lowest `CS::PlayerGameData` offset that ELDEN RING 1.17 moved, measured from the two images
-/// (see the band table above). Everything below it is the same field in both builds; a field at
-/// or above it would need a version-aware offset, and this workspace has none.
-pub const PGD_FIRST_MOVED_OFFSET_1170: usize = 0x960;
-
 // The pins above protect individual fields. This protects the shape, and it has now fired once,
 // which is what it was written for.
 //
@@ -183,11 +178,13 @@ pub const PGD_FIRST_MOVED_OFFSET_1170: usize = 0x960;
 // and take `found one with a size of 2800` out of the type error. Do that on the next refresh
 // instead of editing the constant until the build passes -- a guess that happens to be right and a
 // measurement look identical afterwards. So the literal moves to 0xaf0 and the tripwire is armed
-// again for the next binding edit. The highest offset actually referenced stays asserted under
-// `PGD_FIRST_MOVED_OFFSET_1170` so such an edit cannot walk a field across the boundary unnoticed.
+// again for the next binding edit.
+//
+// A bound that sat here, `face_data` below the lowest offset 1.17 moved against 1.16.2 (0x960),
+// was deleted with the port to 2.7.2.0: it guarded a version-aware offset this workspace no longer
+// needs, since 2.7.2.0 is the only build it reads, and the `face_data == 0x760` pin above already
+// holds that field exactly.
 const _: () = assert!(core::mem::size_of::<PlayerGameData>() == 0xaf0);
-const _: () =
-    assert!(core::mem::offset_of!(PlayerGameData, face_data) < PGD_FIRST_MOVED_OFFSET_1170);
 
 /// Treat the game's empty-name sentinels as empty character identities.
 pub fn utf16_name_empty_like(units: &[u16], len: usize) -> bool {

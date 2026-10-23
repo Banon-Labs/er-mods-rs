@@ -4,7 +4,8 @@
 //!
 //! Some diagnostics sit on a polled path: the game asks the same question every frame and
 //! the hook answers it identically every frame. Measured on run `br-20260831-160354-2513`
-//! (8m39s), `combined_load_67b940` was entered 8,639 times with `slot=-1 arg1=0 arg2=1`
+//! (8m39s), `save_dispatch_combined` (then labelled with its 1.16.2 address) was entered
+//! 8,639 times with `slot=-1 arg1=0 arg2=1`
 //! every single time, from one caller stack, and the 8,639 `ENTER` lines had exactly
 //! **seven** distinct contents between them. The trace cost 5.43 MB (37 MB/h) to carry
 //! seven facts.
@@ -13,7 +14,7 @@
 //!
 //! The suppression predicate is **full-message byte equality against the previous message
 //! under the same key** -- the value, not a label. This is the same governing rule as the
-//! address-translation memo (bd
+//! address-translation memo that `game_build` kept until the 2.7.2.0 port deleted it (bd
 //! `memoise-on-the-value-not-the-label-one-label-covered-9-addresses-2026-08-30`), where
 //! keying on the human-readable label would have suppressed 8 of 9 genuinely different
 //! addresses that shared one label. Here the key selects only which slot remembers the last
@@ -302,12 +303,12 @@ mod tests {
     fn an_identical_run_collapses_but_its_total_is_reported() {
         let filter = RepeatFilter::new();
         assert_eq!(
-            filter.observe("ENTER combined_load_67b940 slot=-1"),
+            filter.observe("ENTER save_dispatch_combined slot=-1"),
             Verdict::Emit { note: None }
         );
         let mut written = 1;
         for _ in 0..8_638 {
-            match filter.observe("ENTER combined_load_67b940 slot=-1") {
+            match filter.observe("ENTER save_dispatch_combined slot=-1") {
                 Verdict::Suppress => {}
                 Verdict::Note(note) => {
                     assert!(note.contains("occurrences so far"), "{note}");
@@ -321,7 +322,7 @@ mod tests {
             "8,639 identical lines collapsed to {written}, which is not a bound"
         );
         let Verdict::Emit { note: Some(note) } =
-            filter.observe("ENTER combined_load_67b940 slot=2")
+            filter.observe("ENTER save_dispatch_combined slot=2")
         else {
             panic!("a changed line must be emitted, and must close out the run it ended");
         };
@@ -339,7 +340,7 @@ mod tests {
         let filter = RepeatFilter::new();
         let mut last_reported = 0u64;
         for _ in 0..8_639 {
-            if let Verdict::Note(note) = filter.observe("ENTER combined_load_67b940 slot=-1") {
+            if let Verdict::Note(note) = filter.observe("ENTER save_dispatch_combined slot=-1") {
                 last_reported = note
                     .split_whitespace()
                     .find_map(|word| word.parse::<u64>().ok())
@@ -360,7 +361,7 @@ mod tests {
     fn a_changed_message_under_one_key_is_never_suppressed() {
         let filter = RepeatFilter::new();
         for slot in 0..64 {
-            let line = format!("ENTER combined_load_67b940 slot={slot}");
+            let line = format!("ENTER save_dispatch_combined slot={slot}");
             assert!(
                 matches!(filter.observe(&line), Verdict::Emit { .. }),
                 "slot={slot} shares a family key with its predecessors and was suppressed; \
@@ -377,8 +378,8 @@ mod tests {
         let mut emitted = 0;
         for _ in 0..1_000 {
             for line in [
-                "ENTER combined_load_67b940 a=1",
-                "LEAVE combined_load_67b940 ret=0",
+                "ENTER save_dispatch_combined a=1",
+                "LEAVE save_dispatch_combined ret=0",
             ] {
                 if !matches!(filter.observe(line), Verdict::Suppress) {
                     emitted += 1;
@@ -426,20 +427,20 @@ mod tests {
     #[test]
     fn family_keys_collapse_digit_runs_and_split_on_the_second_token() {
         assert_eq!(
-            family_key("ENTER combined_load_67b940 slot=-1"),
-            "ENTER combined_load_#"
+            family_key("ENTER cap_menu_item_update_7ae4f0 slot=-1"),
+            "ENTER cap_menu_item_update_#"
         );
         assert_eq!(
-            family_key("LEAVE combined_load_67b940 ret=0"),
-            "LEAVE combined_load_#"
+            family_key("LEAVE cap_menu_item_update_7ae4f0 ret=0"),
+            "LEAVE cap_menu_item_update_#"
         );
         assert_eq!(
             family_key("menu_task_enqueue seq=12 phase=ENTER"),
             "menu_task_enqueue seq=#"
         );
         assert_ne!(
-            family_key("ENTER combined_load_67b940 x"),
-            family_key("ENTER continue_load_67b750 x"),
+            family_key("ENTER save_dispatch_combined x"),
+            family_key("ENTER save_write_to_slot x"),
             "two different hooks must not share a family"
         );
     }
@@ -449,8 +450,8 @@ mod tests {
     #[test]
     fn the_allocation_free_hash_matches_the_printable_key() {
         for message in [
-            "ENTER combined_load_67b940 slot=-1 arg1=0",
-            "LEAVE combined_load_67b940 ret=0 gm=0x8406c080",
+            "ENTER save_dispatch_combined slot=-1 arg1=0",
+            "LEAVE save_dispatch_combined ret=0 gm=0x8406c080",
             "menu_task_enqueue seq=1234 phase=ENTER",
             "SEQ-ITER-DBG #3 seq=0x1",
             "save-override: save-picker mode from ERSC module latch",

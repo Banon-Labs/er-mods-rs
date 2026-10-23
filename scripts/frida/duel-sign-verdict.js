@@ -13,7 +13,7 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py; each body matches
+// 2.7.2.0 addresses, carried from 1.17.1; each body matches
 // between the two de-Arxan'd images with its rip-relative and branch operands carried.
 // 1.16.2 0x1406ff190, 1.17.1 0x1406fffe0 -> 0x140700490
 const SIGN_UPDATE = va('0x140700490');

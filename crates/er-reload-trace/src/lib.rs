@@ -14,30 +14,28 @@ const LOG_PATH: &str = "er-reload-trace.log";
 
 const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
 const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
-/// Mounted-EBL-archive registry -- the `DLIO::DLFileDeviceManager` singleton, whose deobf VA is
-/// `0x1448464a8`.
+/// Mounted-EBL-archive registry -- the `DLIO::DLFileDeviceManager` singleton, whose 2.7.2.0 VA is
+/// `0x14484d548`.
 ///
 /// It was `0x448464a8` here until 2026-08-30, and that was a transcription SLIP, not a migration
-/// casualty. `0x1448464a8 - 0x140000000 = 0x48464a8`; the old constant had dropped a leading `0x14`
-/// instead of the full image base, leaving an RVA of 0x448464a8 -- about 1.1 GB past the end of a
-/// 0x5e08000-byte image, on every build. `read_usize` is `ReadProcessMemory`-backed and the call
-/// site ended in `.unwrap_or(0)`, so the read never faulted and never logged: the mount census in
-/// every trace line this DLL has ever written reported `mounted_registry=0x0` because the address
-/// was unmappable, not because nothing was mounted. `docs/recon/rva-map-1162-to-1170.data.tsv`
-/// records the wrong value as "no usable reference" while the real one carries 6/6 and is already
-/// mapped for 1.17 (0x48464a8 -> 0x484a528).
+/// casualty. The 1.16.2 VA was `0x1448464a8`, an RVA of `0x48464a8`; the old constant had dropped a
+/// leading `0x14` instead of the full image base, leaving an RVA of 0x448464a8 -- about 1.1 GB past
+/// the end of a 0x5e08000-byte image, on every build. `read_usize` is `ReadProcessMemory`-backed
+/// and the call site ended in `.unwrap_or(0)`, so the read never faulted and never logged: the
+/// mount census in every trace line this DLL wrote until then reported `mounted_registry=0x0`
+/// because the address was unmappable, not because nothing was mounted.
 const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = er_game_base::rva::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA;
 
-// MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
-// unique, scripts/dump-deobf-shift.py). param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
+// MoveMapStep finalize advancer, 2.7.2.0 rva 0xafbeb0 (1.16.1 dump name FUN_140afa7c0).
+// param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
 // sub-state (0..9). cVar10 (the ending request it computes) is written to menuData+0x5e; its rt5d input
 // is menuData+0x5d. Hooking this proves whether the advancer is even ticked for load2 and what it reads.
 const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
-/// Child teardown FUN_140eb54e0 (dump) -> deobf 0x140eb54c0 / rva 0xeb54c0. STEP_MoveMap_Update calls
+/// Child teardown, 2.7.2.0 rva 0xeb8a20 (1.16.1 dump name FUN_140eb54e0). STEP_MoveMap_Update calls
 /// it to tear down the MoveMapStep child (whose EzChildStepBase = MoveMapStep + 0x108). Hooking it +
 /// logging the child_base-0x108 MoveMapStep state(+0x48)/field25(+0x12a) shows whether load2's
 /// MoveMapStep child (state==18) is torn down at field25<9 (teardown mechanism) or never appears here
-/// (never re-scheduled). rva 0xafa6d0 = the advancer; the mms= pointer in each log distinguishes loads.
+/// (never re-scheduled). rva 0xafbeb0 = the advancer; the mms= pointer in each log distinguishes loads.
 const CHILD_TEARDOWN_RVA: usize = er_game_base::rva::EZ_CHILDSTEP_RESET_RVA;
 const MOVEMAPSTEP_CHILD_EZSTEP_OFFSET: usize = 0x108;
 const MOVEMAPSTEP_STATE_48_OFFSET: usize = 0x48;
@@ -46,9 +44,9 @@ const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
 const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
 
-// Case-7 (7->8) save-drain gate flags read by the finalize advancer (1.16.2 FUN_140afa6d0):
-// ShouldSave() reads GameMan->saveRequested (0xb72); FUN_140679370() reads GameMan+0xb73 (gated by
-// bc4!=3). The suppressed in-world quit-save leaves these set, so !ShouldSave()/!FUN_140679370() fail
+// Case-7 (7->8) save-drain gate flags read by the finalize advancer (0x140afbeb0):
+// ShouldSave() reads GameMan->saveRequested (0xb72); 0x14067a670() reads GameMan+0xb73 (gated by
+// bc4!=3). The suppressed in-world quit-save leaves these set, so !ShouldSave()/!0x14067a670() fail
 // and load2 parks at field25=7 even after rt5d unblocks case 0. The rt5d drive clears them natively.
 #[allow(
     dead_code,
@@ -69,10 +67,10 @@ const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
 /// `CS::GameMan::stayInMultipleAreaBlockId` -- Not "the current map", which is what this constant
 /// claimed until 2026-08-31. The map-move target is `moveMapStepBlockId` at **+0x14**, and
-/// `SetMoveMapStepBlockId` (`0x14067abd0`) writes it from this field via the getter
-/// `FUN_140679560`. So +0xc30 is the source of the next map move: seeded from slot body+0x04 by
-/// the deserializer `FUN_14067bd70` on load, and maintained by the stay-in-multiplay path
-/// (`FUN_14067afa0`, `FUN_14067aac0`) during play. See
+/// `SetMoveMapStepBlockId` (`0x14067bed0`) writes it from this field via the getter
+/// `0x14067a860`. So +0xc30 is the source of the next map move: seeded from slot body+0x04 by
+/// the deserializer `0x14067d070` on load, and maintained by the stay-in-multiplay path
+/// (`0x14067c2a0`, `0x14067bdc0`) during play. See
 /// `er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET` for the complete access set.
 const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// `GameMan + 0xdf0` -- the length of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
@@ -85,7 +83,7 @@ const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// whole life. The interior is written through that `lea`'s register instead:
 ///
 /// ```text
-///   14067644b  lea  rdi, [rsi+0xdd0]      ; FD4FilePathBase, 1.17 0x14067729b
+///   14067644b  lea  rdi, [rsi+0xdd0]      ; FD4FilePathBase, 1.16.2; 2.7.2.0 0x14067774b
 ///   140676456  lea  rbx, [rdi+8]          ; the DLString's allocator slot at 0xdd8
 ///   140676461  call 0x140120390           ; DLString<wchar_t>* InitAllocator(DLString<wchar_t>*)
 ///   140676466  mov  qword [rbx+0x20], 7   ; capacity  -> GameMan+0xdf8
@@ -103,8 +101,8 @@ const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// as a string length, not as a handle:
 ///
 /// ```text
-///   FUN_140679180: if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 3; return 0; }
-///   FUN_14067b100: if (saveState != 3) return 0;
+///   0x14067a480: if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 3; return 0; }
+///   0x14067c400: if (saveState != 3) return 0;
 ///                  if ((GLOBAL_GameMan->field479_0xdd0).string.length != 0) { saveState = 0; return 1; }
 /// ```
 ///
@@ -113,31 +111,31 @@ const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// indistinguishable from an empty path, i.e. from the gate being open.
 const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
 // Load-submit gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
-// combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
-// flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
-// stuck window) pins which gate is the sole load2 divergence vs load1, without Ghidra and without
-// forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
+// save_dispatch_combined -> submit 0x14067ef00 bails (0x14067f42f) unless these GameMan[0x143d709a8]
+// flags are clear/set (2.7.2.0 VAs). Logging them at the finalize-advancer heartbeat (which fires
+// for load2 in the stuck window) pins which gate is the sole load2 divergence vs load1, without
+// Ghidra and without forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d6f108 must be non-null.
 const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
 /// `CS::GameMan::eventWorldType`, a byte. Renamed 2026-08-31 from
-/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path does read it (`FUN_14067dc00` branches on
+/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path does read it (`0x14067ef00` branches on
 /// `GLOBAL_GameMan->eventWorldType != 0`), but naming a field after one consumer buried the fact
-/// that it is a named field with its own accessor pair -- `EventWorldType` (`0x140679820`,
-/// `movzx eax, byte ptr [rax+0xbca]`) and `SetWorldEventType` (`0x14067aeb0`,
+/// that it is a named field with its own accessor pair -- `EventWorldType` (`0x14067ab20`,
+/// `movzx eax, byte ptr [rax+0xbca]`) and `SetWorldEventType` (`0x14067c1b0`,
 /// `mov byte ptr [rax+0xbca], cl`) -- and grouped it with cb1/cb2/b5e, which genuinely have no
-/// name in either the Ghidra type or `fromsoftware-rs`. `IsMyWorld` (`0x140679f90`) is the third
+/// name in either the Ghidra type or `fromsoftware-rs`. `IsMyWorld` (`0x14067b290`) is the third
 /// reader and tests it against 0. `fromsoftware-rs` declares it as the enum
 /// `pub event_world_type: EventWorldType`.
 const GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET: usize = 0xbca;
 const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
-const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
+const SUBMIT_GATE_GLOBAL_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 
 const HOOK_ORIGINAL_UNSET: usize = 0;
 
 type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
-/// Bounded wait for the product DLL to map + export `er_effects_union_register`, asked once so the
+/// Bounded wait for the product DLL to map + export `er_effects_union_register_2720`, asked once so the
 /// answer is settled before any hook is registered. ~1s at 25ms, matching `er-hook`'s own budget.
 ///
 /// This is a presence question only -- `er_hook::register_shared_hook` does the routing. The old
@@ -149,15 +147,16 @@ const PRODUCT_RESOLVE_TRIES: u32 = 40;
 const PRODUCT_RESOLVE_SLEEP_MS: u32 = 25;
 
 /// Addresses the product DLL owns with a bare `MhHook` (not its union) in the sq-repro reload mode
-/// this trace runs alongside: 0x67b200 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67b290 =
-/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Registering our observer
-/// there would create the union dispatcher on that address first if our install thread wins the
+/// this trace runs alongside: 0x67c500 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67c590 =
+/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). These are the product's
+/// 2.7.2.0 rvas and must equal the HookSpec rows below, since the skip compares by value.
+/// Registering our observer there would create the union dispatcher on that address first if our install thread wins the
 /// race, making the product's later `MhHook::new` return ALREADY_CREATED and silently dropping the
 /// product's critical reload hook. So whenever the product DLL is in the process we skip these two --
 /// the product's own menu-trace union hooks + its inworld-load debug line already log the same
 /// deserialize events. A standalone trace run, with no product DLL present, still installs them
-/// (through this DLL's own gated union, so the address is still resolved for the running build).
-const PRODUCT_OWNED_SKIP_RVAS: &[usize] = &[0x67b200, 0x67b290];
+/// (through this DLL's own gated union, so the address is still checked against the running build).
+const PRODUCT_OWNED_SKIP_RVAS: &[usize] = &[0x67c500, 0x67c590];
 
 static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -184,7 +183,7 @@ static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
 /// reach a large global count). Also lets the same logic catch load3 after load2 completes.
 static COMPLETION_SEEN_MMS: AtomicUsize = AtomicUsize::new(0);
 static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Child-teardown instrumentation (FUN_140eb54e0): every teardown logs the child + its MoveMapStep
+/// Child-teardown instrumentation (rva 0xeb8a20): every teardown logs the child + its MoveMapStep
 /// state/field25, so load2's MoveMapStep child teardown (if any) is visible.
 static ORIG_CHILD_TEARDOWN: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static CHILD_TEARDOWN_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -355,7 +354,7 @@ unsafe fn read_u8(addr: usize) -> Option<u8> {
 }
 
 /// Dump a window of qwords from the MoveMapStep header (own process, guarded reads). Why: load2's
-/// MoveMapStep Update (FUN_140aff640) stops being ticked by the FD4 scheduler after ~6 ticks while
+/// MoveMapStep Update (0x140b01000) stops being ticked by the FD4 scheduler after ~6 ticks while
 /// load1 ticks it ~145x to completion (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
 /// The advancer fires 1:1 with that Update, so dumping the mms header at each tick lets a run diff
 /// load1 (keeps ticking) vs load2 (drops out) and reveal which header field (step-machine state /
@@ -382,7 +381,7 @@ fn mms_header_window(a: usize) -> String {
     s
 }
 
-/// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
+/// Custom detour for the MoveMapStep finalize advancer (0xafbeb0). Logs field25_0x12a before/after the
 /// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- Only on a sub-state change or every 600th
 /// call (heartbeat), so a frozen load2 (field25 stuck at 0) is visible without per-frame flooding while
 /// a healthy walk 0->9 logs every transition. rcx (`a`) = MoveMapStep.
@@ -424,14 +423,14 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
     // diagnostic (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
     let _ = (fin_before, last);
     log_line(format_args!(
-        "finalize_advancer_afa6d0 call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {} {}",
+        "finalize_advancer call#{calls} mms=0x{a:x} field25_12a {fin_before}->{fin_after} menuData_5d={m5d} 5e={m5e} {} {}",
         mms_header_window(a),
         snapshot()
     ));
     ret
 }
 
-/// Log-only detour for the child teardown FUN_140eb54e0 (rva 0xeb54c0). Logs every teardown with the
+/// Log-only detour for the child teardown (rva 0xeb8a20). Logs every teardown with the
 /// child_base-0x108 MoveMapStep state/field25 so load2's MoveMapStep child teardown (state==18) is
 /// visible -- or its absence proves the child is never re-scheduled rather than torn down. mms= ptr
 /// distinguishes load1 vs load2.
@@ -441,7 +440,7 @@ unsafe extern "system" fn hook_child_teardown(a: usize, b: usize, c: usize, d: u
     let st = unsafe { read_i32(mms + MOVEMAPSTEP_STATE_48_OFFSET) }.unwrap_or(-999);
     let fin = unsafe { read_u8(mms + MOVEMAPSTEP_FINALIZE_12A_OFFSET) }.map_or(-1, i32::from);
     log_line(format_args!(
-        "child_teardown_eb54c0 call#{n} child_base=0x{a:x} mms=0x{mms:x} state={st} field25={fin} {}",
+        "child_teardown call#{n} child_base=0x{a:x} mms=0x{mms:x} state={st} field25={fin} {}",
         snapshot()
     ));
     unsafe { call_original(&ORIG_CHILD_TEARDOWN, a, b, c, d) }
@@ -467,8 +466,8 @@ fn snapshot() -> String {
         ))
     }
     .unwrap_or(0);
-    // Resolved, then checked for zero. `game_data_addr` answers 0 when the running build has no
-    // mapping for the address, and `read_usize(0)` fails the same way a genuinely null global
+    // Through the build gate, then checked for zero. `game_data_addr` answers 0 when the running
+    // build is not 2.7.2.0, and `read_usize(0)` fails the same way a genuinely null global
     // reads -- so without this branch a refusal and "nothing is mounted" print identically, which
     // is the confident-false-negative this whole migration keeps producing.
     let mounted_addr = er_game_base::mem::game_data_addr(
@@ -498,14 +497,14 @@ fn snapshot() -> String {
     let g_cb2 = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_CB2_OFFSET) };
     let g_bca = unsafe { read_u8(gm + GAME_MAN_EVENT_WORLD_TYPE_BCA_OFFSET) };
     let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
-    // RESOLVED: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17 (0x3d68078 -> 0x3d6c0e8).
-    // Read raw, this trace line prints the contents of an unrelated global as the submit gate --
+    // Through the build gate: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17, and again on
+    // 2.7.2.0. Read raw on another build, this line prints an unrelated global as the submit gate --
     // and the whole point of the line is to diff load1 against load2 to find the gate that is
     // holding, which a wrong-but-plausible value makes actively misleading.
     let g_glob = unsafe {
         read_usize(er_game_base::mem::game_data_addr(
             base,
-            SUBMIT_GLOBAL_PTR_3D68078_RVA,
+            SUBMIT_GATE_GLOBAL_RVA,
             "SAVE_DATA_SUBSYSTEM_GATE_RVA",
         ))
     }
@@ -605,375 +604,357 @@ macro_rules! define_trace_hook {
     };
 }
 
+// Each label names the hooked function, never its address. Until the 2.7.2.0 port every label
+// ended in the function's 1.16.2 address (`native_submit_7ac890`), which named an address the game
+// no longer had. `scripts/summarize-reload-trace-log.py` maps those old labels onto these, so a log
+// from before the port still summarizes. The four save-path functions carry the name their
+// constants have had since 2026-08-01, because none of them loads anything: `save_dispatch_system`
+// (`SAVE_DISPATCH_SYSTEM_RVA`, once `current_slot_load`), `save_write_to_slot`
+// (`SAVE_WRITE_TO_SLOT_RVA`, once `continue_load`), `save_dispatch_combined`
+// (`SAVE_DISPATCH_COMBINED_RVA`, once `combined_load`) and `save_dispatch_entry0b`
+// (`SAVE_DISPATCH_ENTRY0B_RVA`, once `map_load`). `er-quickload`'s continue trace spells these four
+// save-path labels the same way; its other labels are its own.
 define_trace_hook!(
     hook_menu_continue_wrapper,
     ORIG_MENU_CONTINUE_WRAPPER,
-    "menu_continue_wrapper_82bac0"
+    "menu_continue_wrapper"
 );
 define_trace_hook!(
     hook_menu_new_or_load_wrapper,
     ORIG_MENU_NEW_OR_LOAD_WRAPPER,
-    "menu_new_or_load_wrapper_82ba80"
+    "menu_new_or_load_wrapper"
 );
 define_trace_hook!(
     hook_menu_other_load_wrapper,
     ORIG_MENU_OTHER_LOAD_WRAPPER,
-    "menu_other_load_wrapper_82bb00"
+    "menu_other_load_wrapper"
 );
-define_trace_hook!(
-    hook_native_submit,
-    ORIG_NATIVE_SUBMIT,
-    "native_submit_7ac890"
-);
+define_trace_hook!(hook_native_submit, ORIG_NATIVE_SUBMIT, "native_submit");
 define_trace_hook!(
     hook_result_event_handler,
     ORIG_RESULT_EVENT_HANDLER,
-    "result_event_handler_746e80"
+    "result_event_handler"
 );
 define_trace_hook!(
     hook_result_action_builder,
     ORIG_RESULT_ACTION_BUILDER,
-    "result_action_builder_746a00"
+    "result_action_builder"
 );
 define_trace_hook!(
     hook_result_event_wrapper_builder,
     ORIG_RESULT_EVENT_WRAPPER_BUILDER,
-    "result_event_wrapper_builder_744a60"
+    "result_event_wrapper_builder"
 );
-define_trace_hook!(hook_task_enqueue, ORIG_TASK_ENQUEUE, "task_enqueue_7a7b60");
-define_trace_hook!(
-    hook_set_save_slot,
-    ORIG_SET_SAVE_SLOT,
-    "set_save_slot_67a810"
-);
+define_trace_hook!(hook_task_enqueue, ORIG_TASK_ENQUEUE, "task_enqueue");
+define_trace_hook!(hook_set_save_slot, ORIG_SET_SAVE_SLOT, "set_save_slot");
 define_trace_hook!(
     hook_save_request_profile,
     ORIG_SAVE_REQUEST_PROFILE,
-    "save_request_profile_67a420"
+    "save_request_profile"
 );
-define_trace_hook!(hook_request_save, ORIG_REQUEST_SAVE, "request_save_67a520");
+define_trace_hook!(hook_request_save, ORIG_REQUEST_SAVE, "request_save");
 define_trace_hook!(
     hook_current_slot_load,
     ORIG_CURRENT_SLOT_LOAD,
-    "current_slot_load_67b570"
+    "save_dispatch_system"
 );
-define_trace_hook!(
-    hook_continue_load,
-    ORIG_CONTINUE_LOAD,
-    "continue_load_67b750"
-);
+define_trace_hook!(hook_continue_load, ORIG_CONTINUE_LOAD, "save_write_to_slot");
 define_trace_hook!(
     hook_combined_load,
     ORIG_COMBINED_LOAD,
-    "combined_load_67b940"
+    "save_dispatch_combined"
 );
-define_trace_hook!(hook_map_load, ORIG_MAP_LOAD, "map_load_67bc10");
+define_trace_hook!(hook_map_load, ORIG_MAP_LOAD, "save_dispatch_entry0b");
 define_trace_hook!(
     hook_save_load_state_init,
     ORIG_SAVE_LOAD_STATE_INIT,
-    "save_load_state_init_67b030"
+    "save_load_state_init"
 );
-define_trace_hook!(hook_b80_preview, ORIG_B80_PREVIEW, "b80_preview_67b4e0");
-define_trace_hook!(
-    hook_title_confirm,
-    ORIG_TITLE_CONFIRM,
-    "title_confirm_b0e180"
-);
+define_trace_hook!(hook_b80_preview, ORIG_B80_PREVIEW, "b80_preview");
+define_trace_hook!(hook_title_confirm, ORIG_TITLE_CONFIRM, "title_confirm");
 define_trace_hook!(
     hook_request_load_slot,
     ORIG_REQUEST_LOAD_SLOT,
-    "request_load_slot_67b200"
+    "request_load_slot"
 );
 define_trace_hook!(
     hook_request_profile_read,
     ORIG_REQUEST_PROFILE_READ,
-    "request_profile_read_67b1a0"
+    "request_profile_read"
 );
-define_trace_hook!(hook_b80_poll, ORIG_B80_POLL, "b80_poll_679180");
-define_trace_hook!(hook_slot_deser, ORIG_SLOT_DESER, "slot_deser_67b290");
-define_trace_hook!(
-    hook_dispatcher2,
-    ORIG_DISPATCHER2,
-    "movemap_dispatcher2_afb880"
-);
+define_trace_hook!(hook_b80_poll, ORIG_B80_POLL, "b80_poll");
+define_trace_hook!(hook_slot_deser, ORIG_SLOT_DESER, "slot_deser");
+define_trace_hook!(hook_dispatcher2, ORIG_DISPATCHER2, "movemap_dispatcher2");
 define_trace_hook!(
     hook_dosave_stuff,
     ORIG_DOSAVE_STUFF,
-    "movemap_do_save_stuff_afbad0"
+    "movemap_do_save_stuff"
 );
-define_trace_hook!(
-    hook_map_request_do,
-    ORIG_MAP_REQUEST_DO,
-    "map_request_do_836f30"
-);
-define_trace_hook!(hook_map_work, ORIG_MAP_WORK, "map_work_82faf0");
-define_trace_hook!(hook_cap_setstate, ORIG_CAP_SETSTATE, "cap_setstate_b0d960");
+define_trace_hook!(hook_map_request_do, ORIG_MAP_REQUEST_DO, "map_request_do");
+define_trace_hook!(hook_map_work, ORIG_MAP_WORK, "map_work");
+define_trace_hook!(hook_cap_setstate, ORIG_CAP_SETSTATE, "cap_setstate");
 define_trace_hook!(
     hook_cap_load_activate,
     ORIG_CAP_LOAD_ACTIVATE,
-    "cap_load_activate_9a4670"
+    "cap_load_activate"
 );
 define_trace_hook!(
     hook_cap_load_activate2,
     ORIG_CAP_LOAD_ACTIVATE2,
-    "cap_load_activate2_9ac760"
+    "cap_load_activate2"
 );
-define_trace_hook!(hook_cap_builder, ORIG_CAP_BUILDER, "cap_builder_826510");
+define_trace_hook!(hook_cap_builder, ORIG_CAP_BUILDER, "cap_builder");
 define_trace_hook!(
     hook_cap_selector_tick,
     ORIG_CAP_SELECTOR_TICK,
-    "cap_selector_tick_826d50"
+    "cap_selector_tick"
 );
-define_trace_hook!(
-    hook_cap_menu_deser,
-    ORIG_CAP_MENU_DESER,
-    "cap_menu_deser_82c240"
-);
+define_trace_hook!(hook_cap_menu_deser, ORIG_CAP_MENU_DESER, "cap_menu_deser");
 define_trace_hook!(
     hook_cap_dialog_factory,
     ORIG_CAP_DIALOG_FACTORY,
-    "cap_dialog_factory_81ead0"
+    "cap_dialog_factory"
 );
 define_trace_hook!(
     hook_menu_window_job_ctor,
     ORIG_MENU_WINDOW_JOB_CTOR,
-    "menu_window_job_ctor_7ac8c0"
+    "menu_window_job_ctor"
 );
 define_trace_hook!(
     hook_menu_window_job_native_ctor_b,
     ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
-    "menu_window_job_native_ctor_b_7acb00"
+    "menu_window_job_native_ctor_b"
 );
 define_trace_hook!(
     hook_menu_window_job_idle_ctor,
     ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
-    "menu_window_job_idle_ctor_7acf80"
+    "menu_window_job_idle_ctor"
 );
 
 static HOOKS: &[HookSpec] = &[
     HookSpec {
-        name: "menu_continue_wrapper_82bac0",
-        rva: 0x82bac0,
+        name: "menu_continue_wrapper",
+        rva: 0x82cf60,
         detour: hook_menu_continue_wrapper,
         original: &ORIG_MENU_CONTINUE_WRAPPER,
     },
     HookSpec {
-        name: "menu_new_or_load_wrapper_82ba80",
-        rva: 0x82ba80,
+        name: "menu_new_or_load_wrapper",
+        rva: 0x82cf20,
         detour: hook_menu_new_or_load_wrapper,
         original: &ORIG_MENU_NEW_OR_LOAD_WRAPPER,
     },
     HookSpec {
-        name: "menu_other_load_wrapper_82bb00",
-        rva: 0x82bb00,
+        name: "menu_other_load_wrapper",
+        rva: 0x82cfa0,
         detour: hook_menu_other_load_wrapper,
         original: &ORIG_MENU_OTHER_LOAD_WRAPPER,
     },
     HookSpec {
-        name: "native_submit_7ac890",
-        rva: 0x7ac890,
+        name: "native_submit",
+        rva: 0x7adbc0,
         detour: hook_native_submit,
         original: &ORIG_NATIVE_SUBMIT,
     },
     HookSpec {
-        name: "result_event_handler_746e80",
-        rva: 0x746e80,
+        name: "result_event_handler",
+        rva: 0x748180,
         detour: hook_result_event_handler,
         original: &ORIG_RESULT_EVENT_HANDLER,
     },
     HookSpec {
-        name: "result_action_builder_746a00",
-        rva: 0x746a00,
+        name: "result_action_builder",
+        rva: 0x747d00,
         detour: hook_result_action_builder,
         original: &ORIG_RESULT_ACTION_BUILDER,
     },
     HookSpec {
-        name: "result_event_wrapper_builder_744a60",
-        rva: 0x744a60,
+        name: "result_event_wrapper_builder",
+        rva: 0x745d60,
         detour: hook_result_event_wrapper_builder,
         original: &ORIG_RESULT_EVENT_WRAPPER_BUILDER,
     },
     HookSpec {
-        name: "task_enqueue_7a7b60",
-        rva: 0x7a7b60,
+        name: "task_enqueue",
+        rva: 0x7a8e90,
         detour: hook_task_enqueue,
         original: &ORIG_TASK_ENQUEUE,
     },
     HookSpec {
-        name: "set_save_slot_67a810",
-        rva: 0x67a810,
+        name: "set_save_slot",
+        rva: 0x67bb10,
         detour: hook_set_save_slot,
         original: &ORIG_SET_SAVE_SLOT,
     },
     HookSpec {
-        name: "save_request_profile_67a420",
-        rva: 0x67a420,
+        name: "save_request_profile",
+        rva: 0x67b720,
         detour: hook_save_request_profile,
         original: &ORIG_SAVE_REQUEST_PROFILE,
     },
     HookSpec {
-        name: "request_save_67a520",
-        rva: 0x67a520,
+        name: "request_save",
+        rva: 0x67b820,
         detour: hook_request_save,
         original: &ORIG_REQUEST_SAVE,
     },
     HookSpec {
-        name: "current_slot_load_67b570",
-        rva: 0x67b570,
+        name: "save_dispatch_system",
+        rva: 0x67c870,
         detour: hook_current_slot_load,
         original: &ORIG_CURRENT_SLOT_LOAD,
     },
     HookSpec {
-        name: "continue_load_67b750",
-        rva: 0x67b750,
+        name: "save_write_to_slot",
+        rva: 0x67ca50,
         detour: hook_continue_load,
         original: &ORIG_CONTINUE_LOAD,
     },
     HookSpec {
-        name: "combined_load_67b940",
-        rva: 0x67b940,
+        name: "save_dispatch_combined",
+        rva: 0x67cc40,
         detour: hook_combined_load,
         original: &ORIG_COMBINED_LOAD,
     },
     HookSpec {
-        name: "map_load_67bc10",
-        rva: 0x67bc10,
+        name: "save_dispatch_entry0b",
+        rva: 0x67cf10,
         detour: hook_map_load,
         original: &ORIG_MAP_LOAD,
     },
     HookSpec {
-        name: "save_load_state_init_67b030",
-        rva: 0x67b030,
+        name: "save_load_state_init",
+        rva: 0x67c330,
         detour: hook_save_load_state_init,
         original: &ORIG_SAVE_LOAD_STATE_INIT,
     },
     HookSpec {
-        name: "b80_preview_67b4e0",
-        rva: 0x67b4e0,
+        name: "b80_preview",
+        rva: 0x67c7e0,
         detour: hook_b80_preview,
         original: &ORIG_B80_PREVIEW,
     },
     HookSpec {
-        name: "title_confirm_b0e180",
-        rva: 0xb0e180,
+        name: "title_confirm",
+        rva: 0xb0fd50,
         detour: hook_title_confirm,
         original: &ORIG_TITLE_CONFIRM,
     },
     HookSpec {
-        name: "request_load_slot_67b200",
-        rva: 0x67b200,
+        name: "request_load_slot",
+        rva: 0x67c500,
         detour: hook_request_load_slot,
         original: &ORIG_REQUEST_LOAD_SLOT,
     },
     HookSpec {
-        name: "request_profile_read_67b1a0",
-        rva: 0x67b1a0,
+        name: "request_profile_read",
+        rva: 0x67c4a0,
         detour: hook_request_profile_read,
         original: &ORIG_REQUEST_PROFILE_READ,
     },
     HookSpec {
-        name: "b80_poll_679180",
-        rva: 0x679180,
+        name: "b80_poll",
+        rva: 0x67a480,
         detour: hook_b80_poll,
         original: &ORIG_B80_POLL,
     },
     HookSpec {
-        name: "slot_deser_67b290",
-        rva: 0x67b290,
+        name: "slot_deser",
+        rva: 0x67c590,
         detour: hook_slot_deser,
         original: &ORIG_SLOT_DESER,
     },
     HookSpec {
-        name: "movemap_dispatcher2_afb880",
-        rva: 0xafb880,
+        name: "movemap_dispatcher2",
+        rva: 0xafd060,
         detour: hook_dispatcher2,
         original: &ORIG_DISPATCHER2,
     },
     HookSpec {
-        name: "movemap_do_save_stuff_afbad0",
-        rva: 0xafbad0,
+        name: "movemap_do_save_stuff",
+        rva: 0xafd2b0,
         detour: hook_dosave_stuff,
         original: &ORIG_DOSAVE_STUFF,
     },
     HookSpec {
-        name: "map_request_do_836f30",
-        rva: 0x836f30,
+        name: "map_request_do",
+        rva: 0x8383d0,
         detour: hook_map_request_do,
         original: &ORIG_MAP_REQUEST_DO,
     },
     HookSpec {
-        name: "map_work_82faf0",
-        rva: 0x82faf0,
+        name: "map_work",
+        rva: 0x830f90,
         detour: hook_map_work,
         original: &ORIG_MAP_WORK,
     },
     HookSpec {
-        name: "cap_setstate_b0d960",
-        rva: 0xb0d960,
+        name: "cap_setstate",
+        rva: 0xb0f530,
         detour: hook_cap_setstate,
         original: &ORIG_CAP_SETSTATE,
     },
     HookSpec {
-        name: "cap_load_activate_9a4670",
-        rva: 0x9a4670,
+        name: "cap_load_activate",
+        rva: 0x9a5cc0,
         detour: hook_cap_load_activate,
         original: &ORIG_CAP_LOAD_ACTIVATE,
     },
     HookSpec {
-        name: "cap_load_activate2_9ac760",
-        rva: 0x9ac760,
+        name: "cap_load_activate2",
+        rva: 0x9ade60,
         detour: hook_cap_load_activate2,
         original: &ORIG_CAP_LOAD_ACTIVATE2,
     },
     HookSpec {
-        name: "cap_builder_826510",
-        rva: 0x826510,
+        name: "cap_builder",
+        rva: 0x8279b0,
         detour: hook_cap_builder,
         original: &ORIG_CAP_BUILDER,
     },
     HookSpec {
-        name: "cap_selector_tick_826d50",
-        rva: 0x826d50,
+        name: "cap_selector_tick",
+        rva: 0x8281f0,
         detour: hook_cap_selector_tick,
         original: &ORIG_CAP_SELECTOR_TICK,
     },
     HookSpec {
-        name: "cap_menu_deser_82c240",
-        rva: 0x82c240,
+        name: "cap_menu_deser",
+        rva: 0x82d6e0,
         detour: hook_cap_menu_deser,
         original: &ORIG_CAP_MENU_DESER,
     },
     HookSpec {
-        name: "cap_dialog_factory_81ead0",
-        rva: 0x81ead0,
+        name: "cap_dialog_factory",
+        rva: 0x81fe00,
         detour: hook_cap_dialog_factory,
         original: &ORIG_CAP_DIALOG_FACTORY,
     },
     HookSpec {
-        name: "menu_window_job_ctor_7ac8c0",
-        rva: 0x7ac8c0,
+        name: "menu_window_job_ctor",
+        rva: 0x7adbf0,
         detour: hook_menu_window_job_ctor,
         original: &ORIG_MENU_WINDOW_JOB_CTOR,
     },
     HookSpec {
-        name: "menu_window_job_native_ctor_b_7acb00",
-        rva: 0x7acb00,
+        name: "menu_window_job_native_ctor_b",
+        rva: 0x7ade30,
         detour: hook_menu_window_job_native_ctor_b,
         original: &ORIG_MENU_WINDOW_JOB_NATIVE_CTOR_B,
     },
     HookSpec {
-        name: "menu_window_job_idle_ctor_7acf80",
-        rva: 0x7acf80,
+        name: "menu_window_job_idle_ctor",
+        rva: 0x7ae2b0,
         detour: hook_menu_window_job_idle_ctor,
         original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     },
     // title_native_ready_733150 removed 2026-08-30. The address is real and unchanged (1.16.2
     // `bool FUN_140733150(SceneObjProxy*)` -> `(scaleformValue.dataType & 0x8f) != 0`, "is this
-    // proxy bound to a real GFx display object"; Byte-identical at 1.17 0x733fa0). It was dropped
+    // proxy bound to a real GFx display object"; byte-identical at 2.7.2.0 0x734450). It was dropped
     // because observing it here was duplicative and, co-loaded, actively misleading:
     //
     //   DUPLICATIVE. `er-quickload` detours the same prologue for the same purpose as
-    //   `cap_title_native_ready_733150` (its `experiments/trace/menu_trace_hooks.rs`, via
+    //   `cap_title_native_ready` (its `trace/menu_trace_hooks.rs`, via
     //   `er_title_flow::TITLE_NATIVE_READY_PREDICATE_RVA`), gated by `trace_continue_enabled()` =
     //   `product_autoload_enabled()` -- i.e. On in a default product run. Every profile that
     //   carries this DLL also carries the product (`~/Elden/group-1170.me3`,
@@ -994,8 +975,8 @@ static HOOKS: &[HookSpec] = &[
     // armament-icons); if you do, expect the gate to ask for a conflict-table entry naming
     // er-armament-icons, and read that entry's reasoning before writing one.
     HookSpec {
-        name: "finalize_advancer_afa6d0",
-        rva: 0xafa6d0,
+        name: "finalize_advancer",
+        rva: 0xafbeb0,
         detour: hook_finalize_advancer,
         original: &ORIG_FINALIZE_ADVANCER,
     },
@@ -1003,20 +984,21 @@ static HOOKS: &[HookSpec] = &[
     // function entry on any build. On 1.16.2 it is inside `mov word ptr [rbp-0x28], r12w`
     // (`66 44 89 65 d8`, 0x140aec47f..0x140aec483), so the five-byte JMP truncated a live
     // instruction, and the crate's own 1.16.2 trace -- 323,338 lines -- never logged this hook
-    // once. The real entry is 0xaec570 (`er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA`); the
+    // once. The real entry was 0xaec570 on 1.16.2 (`er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA`,
+    // 0xaedd40 on 2.7.2.0); the
     // shift tool mislanded at 0xaec480 in its -0xf0 sub-region, as
     // `er-title-flow/src/title_load_step_hooks.rs` already recorded. That entry is a product hook
     // (the union chains a base MinHook the product owns and the trace-DLL copy never fired), so
     // this crate does not re-derive it -- it drops the wrong address rather than carrying it.
     HookSpec {
-        name: "child_teardown_eb54c0",
+        name: "child_teardown",
         rva: CHILD_TEARDOWN_RVA,
         detour: hook_child_teardown,
         original: &ORIG_CHILD_TEARDOWN,
     },
-    // child_done_query_eb5530 (FUN_140eb5550 in the dump / deobf 0x140eb5530 / rva 0xeb5530 -- the
-    // child-done query STEP_MoveMap_Update calls, tearing the MoveMapStep child down when it returns
-    // nonzero) removed: the product DLL now owns 0xeb5530 with its override hook
+    // child_done_query_eb5530 (2.7.2.0 rva 0xeb8a90, 1.16.2 0xeb5530 -- the child-done query
+    // STEP_MoveMap_Update calls, tearing the MoveMapStep child down when it returns nonzero)
+    // removed: the product DLL now owns that prologue with its override hook
     // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
     // Its log-only trace detour + statics were deleted with the spec entry rather than left parked.
 ];
@@ -1024,24 +1006,18 @@ static HOOKS: &[HookSpec] = &[
 /// Install every trace observer, through `er-hook`'s gated registrar -- and resolve exactly once.
 ///
 /// There used to be two paths here and only one of them was safe. The "unioned" path handed the
-/// address to the product DLL's `er_effects_union_register`, which resolves it; the standalone
+/// address to the product DLL's `er_effects_union_register_2720`, which resolves it; the standalone
 /// fallback called the raw MinHook externs on `base + spec.rva`, which does not. Which one a boot
 /// took depended on a poll of the product module, so the single-DLL sweep profile -- and any
 /// multi-DLL run where the product loaded late -- patched 34 stale 1.16.2 addresses into the live
-/// 1.17 image. Both paths now resolve.
+/// 1.17 image. Both paths now go through the gate.
 ///
-/// Why not `er_hook::register_shared_hook`, which exists to collapse this into one call: it
-/// resolves and then hands the resolved address to the product's export, which resolves it again.
-/// Resolution is not idempotent, and it is not merely non-idempotent -- it can silently succeed
-/// with the wrong answer. The translation table is keyed by 1.16.2 RVA, so a 1.17 destination that
-/// happens to equal some other row's 1.16.2 source gets translated a second time. Measured on this
-/// hook set 2026-08-30: `native_submit_7ac890` translates to `0x7ad710`, and `0x7ad710` is itself a
-/// tracked source mapping to `0x7ae590` (both rows byte-identical in
-/// `rva-map-1162-to-1170.needed-verified.tsv`), so the second resolve would move the detour into a
-/// different function and report success. Three detour rows in the current table have that shape
-/// (`0x6156c0`, `0x7ad710`, `0xbbbd90`). So each branch below is given the unresolved address and
-/// resolves it once: the product's export resolves for the product-present branch,
-/// `register_union_hook` resolves for the standalone one.
+/// Every `spec.rva` is a 2.7.2.0 rva. Each branch below is given `base + rva` and checks it once:
+/// the product's export checks it for the product-present branch, `register_union_hook` for the
+/// standalone one. Each check is the build test plus the 2.7.2.0 detour allowlist, so an address
+/// is either hooked as written or refused, never moved. (While the rvas were 1.16.2 and the check
+/// translated them, a second resolve could move a detour into a different function and report
+/// success; that is why this code never resolves twice.)
 fn install_hooks() {
     reset_log_file();
     log_line(format_args!(
@@ -1059,7 +1035,7 @@ fn install_hooks() {
     log_line(format_args!(
         "hook routing: product DLL {} -- all {} addresses are resolved for the running build (or REFUSED) before MinHook sees them",
         if product.is_some() {
-            "present; handlers chain on its single MinHook instance via er_effects_union_register"
+            "present; handlers chain on its single MinHook instance via er_effects_union_register_2720"
         } else {
             "absent; this DLL's own er_hook union owns the prologues"
         },
@@ -1102,14 +1078,14 @@ fn install_one(base: usize, spec: &HookSpec, product: Option<er_hook::UnionRegis
     let outcome = match product {
         // SAFETY: the export's C-ABI shape is fixed by the product DLL, `spec.detour` is exactly
         // its `UnionFn`, and `spec.original` is a live `'static` cell in this image. The address is
-        // handed over unresolved on purpose -- the export resolves it, and resolving here too would
-        // translate twice (see `install_hooks`).
+        // handed over unchecked on purpose -- the export checks it, so it is checked once (see
+        // `install_hooks`).
         Some(register) => match unsafe { register(requested, spec.detour, spec.original.as_ptr()) }
         {
             0 => Ok("product union"),
-            code => Err(format!("er_effects_union_register rc={code}")),
+            code => Err(format!("er_effects_union_register_2720 rc={code}")),
         },
-        // SAFETY: same handler/slot contract; `register_union_hook` resolves the address for the
+        // SAFETY: same handler/slot contract; `register_union_hook` checks the address against the
         // running build before MinHook is given it, and refuses rather than patching a stale one.
         None => {
             match unsafe { er_hook::register_union_hook(requested, spec.detour, spec.original) } {

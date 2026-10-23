@@ -19,7 +19,7 @@
 //           player hit on it from CalculateDamage2 1.17.1 0x140448910 -> 2.7.2.0 0x1404489f0
 //           [0x1404483b0] with the victim's position at that moment. A smoke hit has atk 0, which
 //           shows the smoke spawned where the enemies are.
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py.
+// Addresses are 2.7.2.0, carried from 1.17.1.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');

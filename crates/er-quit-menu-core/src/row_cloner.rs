@@ -490,7 +490,7 @@ pub unsafe fn system_quit_record_grid_geometry(dialog: usize) {
     unsafe { crate::row_identity::system_quit_record_grid_geometry(dialog, count) };
 }
 
-/// Route one Quit-tab row action thunk (`FUN_140961640` for the first native row, `FUN_1409610d0`
+/// Route one Quit-tab row action thunk (`0x140962c30` for the first native row, `0x140962720`
 /// for the second and every row cloned from it).
 ///
 /// `action_obj` is the thunk's `this`, and it is only `controller + 0x70` -- the controller's own
@@ -521,7 +521,7 @@ pub unsafe fn system_quit_route_button_action_or_forward(
     } else {
         -1
     };
-    // This `_Func_impl` thunk vtable (dump 0x142b125d0 slot +0x10) is shared by several construction
+    // This `_Func_impl` thunk vtable (0x142b17740 slot +0x10) is shared by several construction
     // sites, so the hook also sees cancel/confirm rows of dialogs that are not the patched Quit tab.
     // Forward those untouched -- and before resolving, so foreign dialogs never pollute the row
     // oracles.
@@ -802,7 +802,7 @@ pub unsafe fn system_quit_route_button_action_or_forward(
 ///
 /// # Safety
 ///
-/// Installed by `er-hook` on `FUN_140961640`; the game calls it on the menu thread with a live
+/// Installed by `er-hook` on `0x140962c30`; the game calls it on the menu thread with a live
 /// thunk `this`.
 pub unsafe extern "system" fn system_quit_noop_desktop_action_hook(action_obj: usize) -> usize {
     let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
@@ -813,7 +813,7 @@ pub unsafe extern "system" fn system_quit_noop_desktop_action_hook(action_obj: u
 ///
 /// # Safety
 ///
-/// Installed by `er-hook` on `FUN_1409610d0`; the game calls it on the menu thread with a live
+/// Installed by `er-hook` on `0x140962720`; the game calls it on the menu thread with a live
 /// thunk `this`.
 pub unsafe extern "system" fn system_quit_return_desktop_action_hook(action_obj: usize) -> usize {
     let orig = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG.load(Ordering::SeqCst);
@@ -870,7 +870,7 @@ pub unsafe fn system_quit_controller_should_invoke_action(
     unsafe { predicate(controller, event_a) != 0 }
 }
 
-/// `PropertyNewButtonController::Activate` (dump `FUN_1409749f0`, vtable slot 2). Called once per
+/// `PropertyNewButtonController::Activate` (`0x140976040`, vtable slot 2). Called once per
 /// frame per dispatched row with the live event; the controller's own should-invoke predicate decides
 /// whether that event is a real confirm.
 ///
@@ -1119,7 +1119,7 @@ pub unsafe fn system_quit_build_static_label_component(
     label_ok && help_ok
 }
 
-/// Say once, per process, that a 1.16.2-only comparison has declined on this build.
+/// Say once, per process, that a call-site comparison has declined on this build.
 ///
 /// Once and not per-call: these sit on hook paths that run at frame rate, and the failure mode
 /// this whole change exists to fix is a silent one -- the cure for silence is a line a reader can
@@ -1133,18 +1133,17 @@ fn note_unsupported_build_comparison(what: &str) {
         return;
     }
     append_autoload_debug(format_args!(
-        "callsite-gate: {what} compares a live return address against a 1.16.2 RVA that has no \
-         verified address for this build -- the comparison is DECLINED rather than run against \
+        "callsite-gate: {what} compares a live return address against a 2.7.2.0 RVA, and the \
+         running game is not that build -- the comparison is DECLINED rather than run against \
          the wrong bytes, so the feature behind it is inert on this build"
     ));
 }
 
-/// The System>Quit row detection could not be placed on this build. Separate wording from the
-/// band above because the fix is different: this one needs a map row for `FUN_140958910`, and the
-/// band needs someone to re-derive what it was ever watching.
+/// The System>Quit row detection could not be placed on this build: the Quit-tab builder
+/// (2.7.2.0 `0x140959f60`, 1.16.2 `FUN_140958910`) is only measured on 2.7.2.0.
 fn system_quit_row_returns_unavailable_once() {
     note_unsupported_build_comparison(
-        "System>Quit row cloning (SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA 0x958910)",
+        "System>Quit row cloning (SYSTEM_QUIT_QUIT_TAB_BUILDER_RVA 0x959f60)",
     );
 }
 
@@ -1168,8 +1167,8 @@ pub unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
     }
     let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    // Both return addresses come from one resolution of the containing function
-    // (`FUN_140958910`), because they are two offsets into it. Reached raw, these were 1.16.2
+    // Both return addresses are offsets into the containing function (`0x140959f60`), so they
+    // pass one build check together. Reached raw, these were once 1.16.2
     // RVAs compared against live stack frames: on 1.17 neither ever matched, nothing was hooked
     // or resolved so nothing was logged, and all three cloned rows silently vanished from the
     // System>Quit tab. A refusal here is loud, once, and names the constant.
@@ -1400,7 +1399,7 @@ pub unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
         }
         // Raise the list widget's item count through the native setter, not by poking the field.
         // `GridControl::SetItemCount` writes `+0xd0` and recomputes the scroll/page row count on the
-        // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `FUN_140975040`
+        // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `0x140976690`
         // calls. A raw field write left that scroll control still describing the two-row list, which
         // is the state the vertical movement clamp reads.
         let prior_bound =
@@ -1610,8 +1609,7 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
     }
     merge_registration(rows, actions);
 
-    // Unresolved on purpose: `register_union_hook5` owns the single 1.16.2 -> 1.17 resolve, so
-    // there is no second translation for `scripts/check-double-resolved-hook-targets.py` to find.
+    // Unresolved on purpose: `register_union_hook5` owns the single build and allowlist check.
     let Ok(cloner) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"

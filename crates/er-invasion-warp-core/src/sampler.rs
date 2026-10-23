@@ -2,7 +2,7 @@
 //!
 //! # Why a sampler and not a single read
 //!
-//! `CS::InGameStayStep::STEP_InGameStayLoad` (`0x140ae9860`) requests both
+//! `CS::InGameStayStep::STEP_InGameStayLoad` (`0x140aeb030`) requests both
 //! `other:/AutoInvadePoint.aipbnd` and `_dlc02` at boot, and each is parsed asynchronously by
 //! `AutoInvadePointBndFileCap::Process` (`0x140201660`) one `AddForBlockId` at a time. So a
 //! read taken at an arbitrary tick can legitimately see: nothing (`CatalogEmpty`), a partly

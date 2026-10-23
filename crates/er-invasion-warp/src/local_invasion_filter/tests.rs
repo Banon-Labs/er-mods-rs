@@ -2347,12 +2347,12 @@ fn the_bracket_rows_are_applied_before_the_config_is_touched() {
 ///
 /// The panel greys out everything below it on the frame it opens, which is typically long before
 /// any query has gone out -- so a band learned from a search arrives too late to grey anything.
-/// The pointer chain must also go through `game_data_addr`: the rva is a 1.16.2 one, every `.data`
-/// global moved on 1.17, and a raw `base + rva` read lands on a pointer into the image. Measured
-/// 2026-09-18 by `scripts/frida/own-bracket-from-pgd.js`, which faulted on exactly that before it
-/// was given the mapped address.
+/// The pointer chain must also go through `game_data_addr`: the rva is a 2.7.2.0 one, every `.data`
+/// global moves between patches, and a raw `base + rva` read on another build lands on a pointer
+/// into the image. Measured 2026-09-18 by `scripts/frida/own-bracket-from-pgd.js`, which faulted
+/// on exactly that (on 1.17.1, with a 1.16.2 rva) before it was given the mapped address.
 #[test]
-fn the_players_own_bracket_is_read_through_the_rva_translation() {
+fn the_players_own_bracket_is_read_through_the_build_gate() {
     let source = include_str!("../invade_difficulty.rs");
     let body = source
         .split_once("pub fn own_bands()")
@@ -2363,7 +2363,7 @@ fn the_players_own_bracket_is_read_through_the_rva_translation() {
         .0;
     assert!(
         body.contains("game_data_addr("),
-        "the global must be translated for the running build, not read at its 1.16.2 rva:\n{body}"
+        "the global must be read through the build gate, not at a raw `base + rva`:\n{body}"
     );
     assert!(
         body.contains("MAX_RUNE_LEVEL") && body.contains("MAX_WEAPON_UPGRADE"),

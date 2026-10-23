@@ -33,8 +33,8 @@ import re
 import struct
 import sys
 
-# CS::GridControl on 1.17, from scripts/er-rtti-map.py walking MSVC RTTI in eldenring-deobf-1.17.bin.
-GRID_CONTROL_VTABLE = 0x142A96528  # 1.17.1 0x142A94438
+# CS::GridControl's vftable on 2.7.2.0 (RTTI in eldenring-deobf-1.17.2.bin, scripts/er-rtti-map.py).
+GRID_CONTROL_VTABLE = 0x142A96528
 # Selected cell, off the pager's comparisons against the extents at +0xd0/+0xd8/+0xdc.
 GRID_SELECTED_OFFSET = 0xD4
 # Skip the game's own PE image and anything below the heap: a vtable value appears inside .rdata as

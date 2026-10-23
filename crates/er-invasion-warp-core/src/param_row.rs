@@ -30,6 +30,9 @@
 //! The param lookups are binary searches that yield a NULL row on a miss, and every caller
 //! null-checks. A pin whose param row is missing renders with an empty name and a zero entity
 //! id rather than crashing -- so a mistake here degrades, it does not fault.
+//!
+//! An address quoted in this file's comments is 2.7.2.0 unless labelled with another build. This
+//! was reversed on the 1.16.2 dump, and its `FUN_` names are labelled 1.16.2.
 
 /// Bytes of a `BonfireWarpParam` row this crate authors.
 ///
@@ -52,7 +55,7 @@ pub const PARAM_CATEGORY_BITS_OFFSET: usize = 0x1E;
 pub const PARAM_FORBIDDEN_ICON_ID_OFFSET: usize = 0x10;
 /// `+0xE8` -- Alternate icon id (u16). Copied to pin `+0x2C8`.
 ///
-/// `CS::WorldMapWarpPinData::GetIconId` (0x14088bb60) returns this one instead of `+0x1C` whenever
+/// `CS::WorldMapWarpPinData::GetIconId` (0x14088d000) returns this one instead of `+0x1C` whenever
 /// any enabled label carries kind `1` (`NpcName`). Every label this crate writes is kind `0`, so
 /// the alternate is not reached today -- but leaving it zero means a single stray kind byte would
 /// call `gotoAndStop(0)` on a 1-based clip and draw nothing, with the row still flagged visible and
@@ -81,7 +84,7 @@ pub const LABEL_TEXT_ID_NONE: i32 = -1;
 /// The icon id is a **1-based GFx frame number**, not a texture id.
 ///
 /// `BonfireWarpParam+0x1C` is copied to pin `+0x248`, and `CS::WorldMapPinData::SetTo`
-/// (`0x14087ae20`) hands it to Scaleform as `Icon_0.gotoAndStop(id)`. `Icon_0` is a 348-frame
+/// (`0x14087c2c0`) hands it to Scaleform as `Icon_0.gotoAndStop(id)`. `Icon_0` is a 348-frame
 /// MovieClip (sprite 171) inside `menu:/02_120_WorldMap.gfx`, and frame N places one
 /// `MENU_MAP_*` bitmap. There is no lookup table, no atlas indirection and no clamp: an id
 /// outside the populated frames lands on one of the 230 empty frames and draws nothing.
@@ -230,7 +233,7 @@ pub const AREA_SHADOW_LANDS: u8 = 61;
 /// Area byte the engine treats as the underground layer (Siofra, Ainsel, Deeproot, Mohgwyn).
 ///
 /// It is `12`, not `60`. An earlier comment here asserted that area 60 covered both the surface
-/// and the underground; the binary says otherwise (`0x140886c40` / `0x140887870` promote a
+/// and the underground; the binary says otherwise (`0x1408880e0` / `0x140888d10` promote a
 /// layer-0 block to layer 1 only when its area byte is `0x0C`). The shipped auto-invade-point
 /// corpus holds no area-12 blocks at all, so the underground map legitimately has no invasion
 /// pins -- an absence to report honestly, not to paper over by setting extra bits.
@@ -238,9 +241,10 @@ pub const AREA_UNDERGROUND: u8 = 12;
 
 /// How `row+0x60` decides which map a pin is drawn on.
 ///
-/// `+0x60` is a per-layer visibility BITMAP, not a category: `FUN_14087afa0` sets a row's drawn
-/// flag (`row+0xc`) only when `(row+0x60 >> bitIdx) & 1`, where
-/// `bitIdx = FUN_140887e90(currentLayerId)` maps layer `0` -> bit 0, `1` -> bit 1, `10` -> bit 2,
+/// `+0x60` is a per-layer visibility BITMAP, not a category: `UpdateVisible` (`0x14087c440`,
+/// 1.16.2 `FUN_14087afa0`) sets a row's drawn flag (`row+0xc`) only when
+/// `(row+0x60 >> bitIdx) & 1`, where `bitIdx = FUN_140889330(currentLayerId)` (1.16.2
+/// `FUN_140887e90`) maps layer `0` -> bit 0, `1` -> bit 1, `10` -> bit 2,
 /// and anything else -> `-1` (invisible).
 ///
 /// **A row carries exactly one coordinate** (`row+0x10`), produced by one area converter. Setting
@@ -275,9 +279,9 @@ pub struct SyntheticParamSpec {
 ///
 /// # Why all four, and why this is a function
 ///
-/// A pin row does not hold one icon. `CS::WorldMapWarpPinData`'s constructor (`0x14088b7b0`) seeds
-/// four 0x40-byte icon descriptors from four separate fields of this param row -- byte-verified
-/// against its own loads:
+/// A pin row does not hold one icon. `CS::WorldMapWarpPinData`'s constructor (2.7.2.0
+/// `0x14088cc50`, 1.16.2 `0x14088b7b0`) seeds four 0x40-byte icon descriptors from four separate
+/// fields of this param row -- byte-verified against its own loads on both builds:
 ///
 /// | param offset | row descriptor |
 /// |--------------|----------------|
@@ -286,7 +290,7 @@ pub struct SyntheticParamSpec {
 /// | `0xe8`       | `0x2c8`        |
 /// | `0xea`       | `0x308`        |
 ///
-/// At draw time `SetTo` asks vtable slot `0xc` (`0x14088bb60`) which descriptor to use, and that
+/// At draw time `SetTo` asks vtable slot `0xc` (`0x14088d000`) which descriptor to use, and that
 /// choice depends on an event-flag predicate over the param row -- state a synthetic row does not
 /// model. So the only way to be sure the pin draws the intended icon is for all four to agree.
 ///
@@ -395,7 +399,8 @@ mod tests {
     }
 
     /// The four param offsets are byte-verified against the row constructor's own loads at
-    /// 0x14088b7b0: `MOVZX EAX,word ptr [RAX + 0x1c]` -> `MOV [RSI + 0x248]`, and likewise
+    /// 2.7.2.0 0x14088cc50 (1.16.2 0x14088b7b0), the same on both builds:
+    /// `MOVZX EAX,word ptr [RAX + 0x1c]` -> `MOV [RSI + 0x248]`, and likewise
     /// 0x10 -> 0x288, 0xe8 -> 0x2c8, 0xea -> 0x308. If one of these constants is edited, the
     /// stamper writes somewhere the engine never reads and the map silently stops responding.
     #[test]

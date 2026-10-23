@@ -84,9 +84,9 @@ pub static USER32_GET_CURSOR_POS_FIRES: AtomicUsize = AtomicUsize::new(0);
 /// arrived at a device the game had already decided to skip". `FD4PadManager+0x2f8` is the
 /// inactive-window request `CS::CSPadStep::STEP_Update` raises on an unfocused frame;
 /// `FD4PadManager::Update` latches it forward into `+0x2f9`; and every `CSInGamePad` query
-/// (`FUN_142664380`/`142664280`/`1426640f0`, all from `PollInput@0x142665060`) opens with
+/// (2.7.2.0 `0x142668330`/`142668230`/`1426680a0`, all from `PollInput@0x142669010`) opens with
 /// `if (field625_0x2f9 == false)`. `GAME_DEBUG_BYTE` is the `.data` byte
-/// `Game.Debug.IsEnableControlOnDisactiveWindow` reads (1.16.2 0x144588af1), which `er-focus-input`
+/// `Game.Debug.IsEnableControlOnDisactiveWindow` reads (2.7.2.0 0x14458fb91), which `er-focus-input`
 /// holds at 1 -- sampling it says whether that hold is actually in effect at the instant we inject,
 /// rather than assuming it from the DLL being loaded. 0xff = could not read.
 pub static PAD_GATE_MGR_2F8: AtomicUsize = AtomicUsize::new(0xff);

@@ -22,8 +22,8 @@
 //!
 //! **never load this DLL together with `er_quickload.dll` in one me3 profile.** The
 //! product DLL now installs the same `er-save-suppress` hooks itself; each DLL carries
-//! its own MinHook instance, so loading both would double-detour `0x140e6fb50` /
-//! `0x140e6e430` and corrupt each other's trampolines. The census probe profile stays
+//! its own MinHook instance, so loading both would double-detour `0x140e730b0` /
+//! `0x140e71990` and corrupt each other's trampolines. The census probe profile stays
 //! product-DLL-free (`scripts/build-save-census-profile.sh`).
 //!
 //! **Census** (`hooks` + `witness`) hooks the Win32 file APIs *below* every FromSoft

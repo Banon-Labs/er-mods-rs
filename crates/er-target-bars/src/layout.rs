@@ -9,7 +9,7 @@
 //!
 //! Positions are the game's own: `CSFeManImp+0x80` holds the `FrontEndViewValues` the HUD movie
 //! reads, with `chrNameHudEnemy[8]` at `+0x11d0` and `chrNameHudBoss[3]` at `+0x1b10`, `0x128`
-//! bytes each (1.16.2 named dump; on 1.17.1 `UpdateEnemyTags` 0x1407724f0 still addresses the
+//! bytes each (1.16.2 named dump; on 2.7.2.0 `UpdateEnemyTags` 0x1407729a0 still addresses the
 //! sibling `chrEnemyTagDisplays` at `+0x59f0`). Measured live 2026-10-04 with
 //! `scripts/frida/target-bars-tag-probe.js`: the locked-on enemy's entry carried its handle,
 //! `isVisible` 1, and `screenX/Y` as `i32` (959, 567 and onward, tracking the enemy) -- the same

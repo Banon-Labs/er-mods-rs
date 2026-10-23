@@ -350,12 +350,13 @@ pub fn adopt_search_range(range: SearchRange, _remembered_radius: u8) -> bool {
 /// 5 tears down. The step-2 handler reads the pressed row once and switches on `opmeMenuType`, and
 /// all three fingers converge here when no search is already running.
 ///
-/// The 1.16.2 -> 1.17 mapping was the weak kind, so the prologue is the gate rather than a
-/// formality: `verify_seam` refuses outright if the bytes are not these.
+/// 2.7.2.0 `0x1407c3100` (1.16.2 `0x1407c1dd0`). Its pairing across builds rested on a masked
+/// signature rather than an instruction-by-instruction comparison, so the prologue is the gate
+/// rather than a formality: `verify_seam` refuses outright if the bytes are not these.
 #[cfg(windows)]
 const START_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
     name: "CS::CSPlayerMenuCtrl::StartInvasionFromBoundsPopup",
-    rva: 0x007c_1dd0,
+    rva: 0x007c_3100,
     prologue: &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20],
     arg_count: 3,
 };
@@ -377,8 +378,8 @@ static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
 ///   case INVADE_BLOODY_FINGER:   active = IsSearchActive_RedInvasionA(netMan->breakInManager);
 ///   case INVADE_WORLD_RECUSANT:  active = IsSearchActive_RedIvasionB(...);
 ///   case INVADE_WORLD_FESTERING: active = IsSearchActive_RedInvasionALimited(...);
-///     if (!active) { StartInvasionFromBoundsPopup(ctrl, ..); return; }   // 0x1407c1dd0
-///     ConfirmCancelInvasionSearch(ctrl, ..);                             // 0x1407c1f90
+///     if (!active) { StartInvasionFromBoundsPopup(ctrl, ..); return; }   // 2.7.2.0 0x1407c3100
+///     ConfirmCancelInvasionSearch(ctrl, ..);                             // 2.7.2.0 0x1407c32c0
 /// ```
 ///
 /// So the second press of a finger never reaches [`START_VANILLA_INVASION`] at all -- it lands
@@ -391,20 +392,20 @@ static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
 /// # The prologue cannot tell the two apart, so something else has to
 ///
 /// These two functions are near-identical twins -- the same opening `0x46` bytes, byte for byte,
-/// in both builds -- so the signature that guards every other seam here is a drift check and
-/// nothing more. What identifies them is the address, and the address comes from the
-/// 1.16.2 -> 1.17 map. A row that pointed this seam at its twin would put the call-off handler on
-/// the start path, where its gate fires on the first row the player ever presses and stands the
-/// search down a frame after arming it: a silent, total failure of the feature.
+/// in every build -- so the signature that guards every other seam here is a drift check and
+/// nothing more. What identifies them is the address. An address that pointed this seam at its
+/// twin would put the call-off handler on the start path, where its gate fires on the first row
+/// the player ever presses and stands the search down a frame after arming it: a silent, total
+/// failure of the feature.
 ///
 /// [`the_cancel_seam_is_not_its_twin`] closes that off with the one byte sequence the twins do not
 /// share. `c6 43 3d` (`mov byte [rbx+0x3d], imm8`, the `isBreakInMultiRegion` write) sits at
-/// `+0x87` and `+0xa7` of the start handler and nowhere at all in this one, in 1.16.2 and in
-/// 1.17.1 alike.
+/// `+0x87` and `+0xa7` of the start handler and nowhere at all in this one, in 1.16.2, 1.17.1 and
+/// 2.7.2.0 alike. 2.7.2.0 `0x1407c32c0` (1.16.2 `0x1407c1f90`).
 #[cfg(windows)]
 const CANCEL_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
     name: "CS::CSPlayerMenuCtrl::ConfirmCancelInvasionSearch",
-    rva: 0x007c_1f90,
+    rva: 0x007c_32c0,
     prologue: &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20],
     arg_count: 3,
 };
@@ -427,10 +428,11 @@ const IS_BREAK_IN_MULTI_REGION_WRITE: [u8; 3] = [0xc6, 0x43, 0x3d];
 
 /// How far into the resolved function the twin test reads: this seam's own `.pdata` extent.
 ///
-/// `verify-rva-map-1170.py` reports `PDATA:0xae/0xae` for this pair and `PDATA:0xd2/0xd2` for the
+/// The 1.17 pair verifier reported `PDATA:0xae/0xae` for this pair and `PDATA:0xd2/0xd2` for the
 /// twin, so a window of `0xae` stays inside the function being tested and still reaches both of
 /// the twin's writes -- the first is at `+0x87`, measured at that offset in `eldenring-deobf.bin`,
-/// `eldenring-deobf-1.17.bin` and `eldenring-deobf-1.17.1.bin` alike, with none in this one.
+/// `eldenring-deobf-1.17.bin`, `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`
+/// alike, with none in this one.
 #[cfg(windows)]
 const TWIN_TEST_WINDOW: usize = 0xae;
 
@@ -476,13 +478,14 @@ const CTRL_STEP_BOUNDS_POPUP_OPEN: i32 = 2;
 ///
 /// Not a keystate array and not indexed by an input event id, which is the correction this whole
 /// block exists to record. Ghidra's curated `CSMenuManImp` declares it `byte[70]`, sitting between
-/// `windowJob` at `+0x88` and the next field at `+0xd6`, and both readers in the 1.17 image index
-/// it by a menu-window index they first resolve from a menu KIND:
+/// `windowJob` at `+0x88` and the next field at `+0xd6`, and both of its readers index it by a
+/// menu-window index they first resolve from a menu kind (2.7.2.0 addresses; they were read as
+/// 1.16.2 `0x1407664f0` / `FUN_140767df0` and 1.17.0 `FUN_1407c3210` / `FUN_140768c70`):
 ///
 /// ```text
-///   getShownMenuFlags 0x1407664f0:  idx = FUN_140767df0(scratch, kind); if (idx < 0x47)
+///   getShownMenuFlags 0x140767820:  idx = FUN_140769120(scratch, kind); if (idx < 0x47)
 ///                                   flags |= ... (field99_0x90[idx] & 1)
-///   FUN_1407c3210:                  idx = FUN_140768c70(scratch, 2 / 0x1c / 0x1f / 0x20);
+///   FUN_1407c36c0:                  idx = FUN_140769120(scratch, 2 / 0x1c / 0x1f / 0x20);
 ///                                   ... (field99_0x90[idx] & 3) == 3
 /// ```
 ///
@@ -502,11 +505,12 @@ const SHOWN_MENU_WINDOW_COUNT: usize = 0x46;
 static SHOWN_MENU_WINDOWS_SAID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// `GLOBAL_CSPcKeyConfig` -- the singleton holding what the player has each action bound to.
 ///
-/// Read out of the game's own menu-input layer rather than picked: `FUN_140756e50` loads
+/// Read out of the game's own menu-input layer rather than picked: on 1.17 `FUN_140756e50` loads
 /// `qword ptr [0x143d61f08]`, null-checks it against the `FD4Singleton` assert, and passes it
-/// straight to [the action lookup](`KEY_CONFIG_ACTION_TABLE_OFFSET`).
+/// straight to [the action lookup](`KEY_CONFIG_ACTION_TABLE_OFFSET`). On 2.7.2.0 the global is
+/// `0x143d64f28`.
 ///
-/// The shared 1.16.2 constant, not the 1.17 literal this used to spell. Both named the same
+/// The shared constant, not the 1.17 literal this used to spell. Both named the same
 /// object -- measured on run `br-20260919-053046-86c0` with
 /// `scripts/frida/keyconfig-two-spellings-agree.js`, the local literal and the translated shared
 /// constant both read `0x3ec4680` and hand back the same row -- so this is a deduplication and
@@ -787,7 +791,10 @@ unsafe extern "system" fn start_invasion_entry(
     //
     // # Where the real back-out lives, measured since
     //
-    // The `dl` this detour receives as `cancelled` is not computed where the earlier note said. The
+    // The `dl` this detour receives as `cancelled` is not computed where the earlier note said.
+    // (The names and addresses in this section are from the 1.17.0 dump; on 2.7.2.0 the tick is
+    // `0x1407c2f90`, `FUN_1407c3210` is `0x1407c36c0`, `FUN_140660f70` is `0x140661420` and
+    // `FUN_1404fa370` is `0x1404fa450`.) The
     // ctrl tick `FUN_1407c2ae0` takes `(ctrl, param_2)` and, at step 2, calls
     // `FUN_1407c3210(ctrl, param_2)`, whose whole body is
     //
@@ -1038,10 +1045,10 @@ unsafe extern "system" fn start_invasion_entry(
 /// # What this is for
 ///
 /// Two of the four terms that make the popup close are in this array, and the census is how a run
-/// says which. `FUN_1407c3210` -- the function whose return value arrives at this module as
-/// `cancelled` -- ORs the tick's own back-out argument with three shown-window tests, so a window
-/// coming up is a legitimate reason for this dialog to tear itself down and is worth telling apart
-/// from a press in the log.
+/// says which. 2.7.2.0 `0x1407c36c0` (1.17.0 `FUN_1407c3210`) -- the function whose return value
+/// arrives at this module as `cancelled` -- ORs the tick's own back-out argument with three
+/// shown-window tests, so a window coming up is a legitimate reason for this dialog to tear itself
+/// down and is worth telling apart from a press in the log.
 ///
 /// # What it is not, and the build that proved it
 ///
@@ -1063,7 +1070,7 @@ fn report_shown_menu_windows(cancelled: usize) {
     let Ok(module_base) = er_game_base::mem::game_module_base() else {
         return;
     };
-    // SAFETY: fault-closed read of a data global whose address is translated for the running build.
+    // SAFETY: fault-closed read of a data global whose address is build-checked.
     let Some(manager) = (unsafe {
         er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
             module_base,
@@ -1531,21 +1538,16 @@ pub unsafe fn install_cancel_prompt_takeover() -> bool {
             return false;
         }
     };
-    // `verify_seam` hands back the unresolved 1.16.2 address, which is what MinHook is given and
-    // what it resolves itself. The twin test has to read the bytes that will actually be patched,
-    // so it asks the same resolver for the same answer -- a second call, and a quiet one: the
-    // translation ledger logs an address once.
-    let resolved =
-        er_game_base::game_build::resolve_detour_address(address, CANCEL_VANILLA_INVASION.name)
-            .unwrap_or(address);
+    // `verify_seam` hands back the native 2.7.2.0 address, which is both what MinHook is given and
+    // where the bytes that will be patched are, so the twin test reads there.
     // SAFETY: game task thread; the reader is fault-closed and the window is bounded.
-    if !unsafe { the_cancel_seam_is_not_its_twin(resolved) } {
+    if !unsafe { the_cancel_seam_is_not_its_twin(address) } {
         if REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
-                "vanilla-fingers: refused {} @0x{resolved:x} -- the body writes \
-                 `isBreakInMultiRegion`, which only the start-path twin does, so the address map \
-                 has pointed this seam at {}. Installing here would stand every search down one \
-                 frame after arming it. Printed once.",
+                "vanilla-fingers: refused {} @0x{address:x} -- the body writes \
+                 `isBreakInMultiRegion`, which only the start-path twin does, so this seam's rva \
+                 points at {}. Installing here would stand every search down one frame after \
+                 arming it. Printed once.",
                 CANCEL_VANILLA_INVASION.name, START_VANILLA_INVASION.name
             ));
         }

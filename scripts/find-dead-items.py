@@ -21,8 +21,9 @@ an identifier consumed only by one of them was reported ``dead`` -- a wrong answ
 straight to `scripts/delete-rust-items.py`, which used to delete on that advice with no proof of
 its own. Real consumer classes this repo has, all of which were being missed:
 
-* the RVA ledgers -- ``docs/recon/rva-map-1162-to-1170.{needed,data,verified}.tsv`` carry Rust
-  constant names in a column (e.g. ``RESMGR_EXPECTED_VTABLE_RVA``);
+* recon ledgers -- ``docs/recon/*.tsv`` tables that carry Rust constant names in a column (the
+  1.16.2 -> 1.17 address ledgers that first exposed this, deleted on 2026-10-23, named
+  ``RESMGR_EXPECTED_VTABLE_RVA`` that way);
 * ``scripts/*.py`` -- 359 of them, many naming Rust constants (e.g.
   ``SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET`` in ``adjudicate-autoload-offsets.py``);
 * ``build-support/**/*.rs`` -- ``prologue_build.rs`` is 641 lines ``include!``d by crate build
@@ -199,7 +200,7 @@ MAX_SITES_PER_IDENT = 16
 
 #: This tool and its executor name real repository identifiers in their docstrings and control
 #: tables (`REAL_CONTROLS` below). Counting those as consumers would let the lint keep its own
-#: controls alive: delete `docs/recon/rva-map-1162-to-1170.data.tsv` and
+#: controls alive: delete `scripts/verify-data-rvas-by-rtti.py` and
 #: `RESMGR_EXPECTED_VTABLE_RVA` would still read alive-elsewhere, rescued by this file. A
 #: measuring instrument must not be part of what it measures.
 SELF_EXCLUDE_RELPATHS = frozenset(
@@ -489,11 +490,14 @@ def _classify_under(root: str, globs, ident: str, def_site) -> str:
 #: control is a fact about the repo, not a fact about the tool.
 REAL_CONTROLS = (
     # ident, definition file, the consumer that rescues it, consumer class
+    # Rescued by the 1.16.2 -> 1.17 data ledger until that ledger was deleted with the address
+    # carry on 2026-10-23; the vtable pin table in the RTTI gate is its one consumer now. The
+    # ledger class itself is still proven, on the synthetic tree below (`docs/recon/demo-map.tsv`).
     (
         "RESMGR_EXPECTED_VTABLE_RVA",
         "crates/er-quickload/src/constants/gaitem_restore.rs",
-        "docs/recon/rva-map-1162-to-1170.data.tsv",
-        "RVA ledger (.tsv)",
+        "scripts/verify-data-rvas-by-rtti.py",
+        "scripts/*.py (vtable pin table)",
     ),
     (
         "SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET",

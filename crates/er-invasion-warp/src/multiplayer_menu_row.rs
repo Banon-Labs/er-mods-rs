@@ -12,9 +12,9 @@
 //!
 //! The Multiplayer row is index 5, text id `0x18a90` in `GR_MenuText.fmg`. Its `b` is
 //! `mov al,1; ret`, so the dynamic path is always taken, and its `c` is the function this module
-//! hooks. `c` appears exactly once in the whole image -- at `0x142b00b68 + 0x10`, the `_Do_call`
-//! slot of that row's own `_Func_impl` vftable -- so answering its return touches this row and
-//! nothing else in the game.
+//! hooks. `c` appears exactly once in the whole image -- at 1.17.1 `0x142b00b68 + 0x10`, the
+//! `_Do_call` slot of that row's own `_Func_impl` vftable -- so answering its return touches this
+//! row and nothing else in the game.
 //!
 //! # The two terms, and which one is false here
 //!
@@ -38,8 +38,8 @@
 //! # The masking trap
 //!
 //! The predicate returns `bool` in `al`, and neither tail clears the upper 24 bits of `eax` -- the
-//! fall-through `ret` at `0x14091311e` hands back whatever `IsNotAlone` left there. Reading the
-//! full register live gave `0x10d200`, `0x10df00` and `0x10e200` across 45 calls, every one of
+//! fall-through `ret` at 1.17.1 `0x14091311e` hands back whatever `IsNotAlone` left there. Reading
+//! the full register live gave `0x10d200`, `0x10df00` and `0x10e200` across 45 calls, every one of
 //! them `al = 0`, so a comparison against zero never matched and nothing was ever forced while the
 //! row sat visibly greyed. Mask to the byte the caller tests.
 //!
@@ -51,23 +51,18 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// The Multiplayer row's enable predicate on 1.17.
+/// The Multiplayer row's enable predicate on 2.7.2.0 (1.17.1 `0x140913100`, 1.16.2
+/// `0x140911f60`). The other addresses in this module's comments are 1.16.2 and 1.17.1 ones,
+/// labelled, where it was measured.
 ///
-/// Carried from 1.16.2 `0x140911f60` and then read rather than trusted. Two independent methods
-/// agree: `scripts/map-rvas-1162-to-1170.py` calls it unique on a 35-byte signature, and the
-/// masked pattern
+/// Read rather than trusted: the masked pattern
 /// `4883ec28e8????????84c07516e8????????488bc8e8????????84c075054883c428c3b0014883c428c3` has
-/// exactly one hit in `eldenring-deobf-1.17.1.bin`, at this address. Its rva is below the
-/// `0xafefe9` boundary, so 1.17.0 and 1.17.1 put it in the same place.
+/// exactly one hit in `eldenring-deobf-1.17.2.bin`, at this address, inside a `.pdata` entry of
+/// the same `0x2a` length as the 1.17.1 one (where the same pattern also hits once).
 ///
 /// The 42 bytes there disassemble to the two-term predicate this module's header describes, ending
 /// in the `mov al,1` tail at `+0x23` and the bare `ret` at `+0x22`.
-///
-/// A 1.17.1 rva, so it reaches the running build through
-/// `game_rva_measured_on(.., MAPPED_FILE_VERSION_1171)`. On 2.7.2.0 it carries to `0x9135b0`, the
-/// one hit of the same masked pattern in `eldenring-deobf-1.17.2.bin`, inside a `.pdata` entry of
-/// the same `0x2a` length.
-const MULTIPLAYER_ROW_ENABLED_RVA: u32 = 0x91_3100;
+const MULTIPLAYER_ROW_ENABLED_RVA: u32 = 0x91_35b0;
 
 /// Trampoline to the original predicate, or the next handler in the union chain.
 static ORIG_ROW_ENABLED: AtomicUsize = AtomicUsize::new(0);
@@ -134,17 +129,16 @@ pub unsafe fn install() -> bool {
         return true;
     }
 
-    // The address above is a 1.17.1 one, and the runtime-derived hook API below translates
-    // nothing, so it is carried here. Until 2.7.2.0 this was `game_rva_for_hook`, plain
-    // `base + rva`, which put 2.7.2.0's detour `0x4b0` short of the function.
-    let Some(entry) = er_game_base::mem::game_rva_measured_on(
-        MULTIPLAYER_ROW_ENABLED_RVA as usize,
-        er_game_base::game_build::MAPPED_FILE_VERSION_1171,
+    // The runtime-derived hook API below checks only the live `.pdata`, not the build, so the
+    // build check happens here: `game_rva_named` refuses this 2.7.2.0 rva on any other build.
+    let Ok(entry) = er_game_base::mem::game_rva_named(
+        MULTIPLAYER_ROW_ENABLED_RVA,
+        "MULTIPLAYER_ROW_ENABLED_RVA",
     ) else {
         if REFUSAL_LOGGED.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
-                "multiplayer-row: enable predicate has no carry from 1.17.1 to {} -- the row stays \
-                 greyed",
+                "multiplayer-row: enable predicate was measured on 2.7.2.0, not on {} -- the row \
+                 stays greyed",
                 er_game_base::game_build::describe_build()
             ));
         }
@@ -216,15 +210,10 @@ mod tests {
         }
     }
 
-    /// The address is the one two independent methods agreed on, and it stays below the
-    /// `0xafefe9` boundary that separates 1.17.0 from 1.17.1.
+    /// The address is the single hit of the masked predicate pattern in the 2.7.2.0 image.
     #[test]
-    fn the_rva_is_the_measured_one_and_below_the_1171_boundary() {
-        assert_eq!(MULTIPLAYER_ROW_ENABLED_RVA, 0x913100);
-        // A `const` block, because both sides are constants and `-D clippy::all` makes a runtime
-        // assertion over them an error. Checking it at compile time is what the claim wanted
-        // anyway: the boundary cannot stop holding between building this test and running it.
-        const { assert!(MULTIPLAYER_ROW_ENABLED_RVA < 0xafefe9) };
+    fn the_rva_is_the_measured_one() {
+        assert_eq!(MULTIPLAYER_ROW_ENABLED_RVA, 0x91_35b0);
     }
 
     /// This module lifts a menu grey and nothing else. The online flag is what the game reports to

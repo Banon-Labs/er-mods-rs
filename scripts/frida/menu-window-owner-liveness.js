@@ -1,7 +1,7 @@
 // Does `live_menu_window`'s vtable screen ever reject a window that is still in use?
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // `menu_pump.rs::profile_select_window_run` reads `job+0x130`, screens it with a "is the vtable
 // inside the game image" test, and stores the RESULT in the tracker. When the screen says no it
@@ -28,8 +28,8 @@
 
 'use strict';
 
-// 1.16.2 `0x7ad1c0` is `0x7ae040` on 1.17 (`docs/recon/rva-map-1162-to-1170.needed-verified.tsv`),
-// and below the `0xafefe9` boundary, so the same on the installed 1.17.1.
+// 1.16.2 `0x7ad1c0` was `0x7ae040` on 1.17.0 and 1.17.1 (below the `0xafefe9` boundary); the
+// literal is its 2.7.2.0 rva.
 const MENU_WINDOW_JOB_RUN_RVA = 0x7ae4f0; // 1.17.1 0x7ae040
 const MENU_WINDOW_JOB_WINDOW_130_OFFSET = 0x130;
 const MENU_WINDOW_JOB_RESOURCE_NAME_OFFSET = 0x138; // probed below, reported either way

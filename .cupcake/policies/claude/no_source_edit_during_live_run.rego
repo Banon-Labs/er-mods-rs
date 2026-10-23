@@ -18,7 +18,9 @@
 #     `verdict` mode about the pending path, and this policy denies exactly a
 #     `VERDICT TEARDOWN`. Until 2026-10-02 this file matched `crates/` alone and
 #     promised docs stay editable mid-run, while the sentinel tore down for the
-#     `docs/recon/*.tsv` that `er-game-base/build.rs` compiles in.
+#     `docs/recon/*.tsv` that `er-game-base/build.rs` then compiled in (it reads
+#     nothing under `docs/` since the 2.7.2.0 port; `er-invasion-warp-core` still
+#     embeds docs with `include_str!`).
 #
 #     On 2026-09-12 the edit-kills-run pattern ran all session: the user drove a
 #     run, the agent edited `er-quit-menu-core` to fix the next thing it had

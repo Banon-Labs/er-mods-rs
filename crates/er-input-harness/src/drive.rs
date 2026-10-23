@@ -11,7 +11,7 @@
 //!
 //! LAYERS: the title screen produces the inputmgr+0x90 keystate bitmap (bd title-continue-is-accept-byte-
 //! not-keystate), so the title (press any button -> menu -> Continue) is driven by the global accept byte
-//! `base+0x4589bdc` and gated on the title-owner semaphores (title_scan). The in-world pause menu
+//! `base+0x4590c7c` and gated on the title-owner semaphores (title_scan). The in-world pause menu
 //! (System->Quit) is a consumer of +0x90 and is driven by keystate, gated on the popup top-job pane
 //! semaphores (bd quit-to-menu-semaphores): HasTopMenuJob, menu_id (0xffff IngameTop / 0x25 OptionSetting),
 //! OptionSetting tab index (Quit tab = 8), return-title request.
@@ -460,7 +460,7 @@ impl Phase {
                 //
                 // The recipe that phase reverses is: at the open menu, write the row cursor
                 // `dialog+0xb0c` to the Continue row, then write the global accept byte; the title's
-                // Continue selector (1.16.2 `0x1409a8eb0`) consumes the byte and dispatches the
+                // Continue selector (2.7.2.0 `0x1409aa500`) consumes the byte and dispatches the
                 // load. The body this replaced wrote only the byte, so it depended on the cursor
                 // already sitting on Continue, and it advanced on `sem.load_started()`, whose
                 // `save_state > 0` clause is satisfied by the title reading its own profile list.
@@ -677,11 +677,11 @@ impl Phase {
                 //
                 // # The route, and it is a keyboard one
                 //
-                // `GridControl::Update` consults two predicates -- 1.16.2 `FUN_1407586d0`
-                // (page-left) and `FUN_140758c90` (page-right), 1.17 `0x140759520` and
-                // `0x140759ae0`. Each builds a `std::function<bool(CS::CSEzMenuViewerPad const&)>`
-                // over `{code, kind}` = `{0x30, 2}` / `{0x31, 2}` and hands it to `FUN_14075d970`,
-                // gated by the `CSMenuMan` cursor-live check at `FUN_140758050`.
+                // `GridControl::Update` consults two predicates -- `0x1407599d0` (page-left) and
+                // `0x140759f90` (page-right). Each builds a
+                // `std::function<bool(CS::CSEzMenuViewerPad const&)>` over `{code, kind}` =
+                // `{0x30, 2}` / `{0x31, 2}` and hands it to `0x14075ec70`,
+                // gated by the `CSMenuMan` cursor-live check at `0x140759350`.
                 //
                 // Hooking `GetAssign` (`0x242ab0`) in a live session on 2026-09-20 named the
                 // device: `0x30` and `0x31` are resolved at mode 1, the keyboard pair, 271 calls
@@ -695,7 +695,7 @@ impl Phase {
                 // reads. What is still missing is the translation, and it has to be read out of
                 // the game rather than transcribed here: `CS_KEYBOARD_KEY` is an enum resolved
                 // through the
-                // table at `base + 0x3c449a0`, indexed by `keyId - 0x46`.
+                // table at `base + 0x3c4ba10`, indexed by `keyId - 0x46`.
                 //
                 // `optionsetting_tab_index` reads `option_window+0x1870+0x10[deref]+0xd4`, a 1.16.2
                 // offset chain that has drifted on 1.17 exactly as `top_menu_id` did. Measured on
@@ -721,12 +721,12 @@ impl Phase {
                 // `game_mem::optionsetting_current_pane` reads.
                 //
                 // Why none of that is a native tab-select. `_SettingTabControl`'s only real virtual
-                // (1.16.2 `FUN_140966f30`) reads the cursor, calls the `GridControl` pager
-                // `FUN_1407392f0`, re-reads the cursor and forwards to the composite if it moved --
+                // (`0x140968580`) reads the cursor, calls the `GridControl` pager
+                // `0x14073a5f0`, re-reads the cursor and forwards to the composite if it moved --
                 // and that pager takes no direction argument. It decides by asking the menu input
-                // predicates (`FUN_14075d970`, gated by `FUN_140758050`), the same predicates the
+                // predicates (`0x14075ec70`, gated by `0x140759350`), the same predicates the
                 // 2026-09-12 session measured as never firing for either injected channel. So
-                // calling it does exactly what pressing does: nothing. And `FUN_14093c440`, the
+                // calling it does exactly what pressing does: nothing. And `0x14093da90`, the
                 // call it forwards to, is not a pane switch either -- it is four instructions that
                 // pump `composite->currentPane`'s own handler.
                 //
@@ -802,7 +802,7 @@ impl Phase {
                 // `[0]` a keyboard DIK scancode when it is a `CS_PAD_KEY`, and `[3]`/`[4]` a pad
                 // pair when they are the mouse. `keyboardKeyId` is not a scancode either -- it is
                 // a game-internal enum over `0x46..=0xd5`, resolved through a table at
-                // `base + 0x3c449a0`.
+                // `base + 0x3c4ba10`.
                 //
                 // The default table is printed beside the player's own, because the two differing
                 // is the difference between "this build does not bind that" and "this player
@@ -1013,7 +1013,7 @@ impl Phase {
 /// keystate channel `inputmgr+0x90+eventId` (`tap_menu_event`). Same edge cadence the retired pad driver used
 /// (or the edge bit for `TAP_SET_FRAMES`, then gap -- the game's own input producer rewrites +0x90 to 0 on
 /// the gap frames, giving one clean 0->1 edge with no auto-repeat). This is the in-world menu nav lever
-/// (open->OptionSetting->tab-switch->quit): getShownMenuFlags (0x1407665e0) reads +0x90[id]&1, so the menu
+/// (open->OptionSetting->tab-switch->quit): getShownMenuFlags (0x140767820) reads +0x90[id]&1, so the menu
 /// consumes exactly what this writes. Replaces the retired raw-pad `source+0x88` driver, which was
 /// BISECT-disabled and never drove the menu (removed 2026-08-21; the negative sweep evidence is recorded
 /// on `crate::pad_inject::set_vk_id`). The phase's advance is its own RAM semaphore, so an event that
@@ -1333,7 +1333,7 @@ impl DriveMode {
 /// `currentTopMenuJob` as it stood on the root pause-menu pane. The nav phase advances when the game
 /// replaces it, which is how this module already defines "entered a submenu".
 /// The menu codes whose pad bindings decide whether a drive can navigate: the list cursor pair the
-/// scroller FUN_14074f3c0 reads (0x2c down / 0x2d up) and the tab pair the OptionSetting pager reads
+/// scroller 0x1407506c0 reads (0x2c down / 0x2d up) and the tab pair the OptionSetting pager reads
 /// (0x30 left / 0x31 right). Confirm is deliberately absent: 0x3d is >= the table's 0x36 bound, so it
 /// cannot be a binding index and its identity has to be re-derived rather than assumed.
 const MENU_CODES_OF_INTEREST: &[(&str, u32)] = &[

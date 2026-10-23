@@ -10,7 +10,7 @@
 //!
 //! Where it renders. The merged text goes into the row model's `PlayerName` `CS::MenuString`
 //! (`rowModel + 0x50`) before the native row populate reads it, so the game's own writer
-//! (`FUN_1408757e0` -> `FUN_140749ed0`) draws it. That is why this module emits plain text and not
+//! (`FUN_140876c80` -> `FUN_14074b1d0`) draws it. That is why this module emits plain text and not
 //! Scaleform HTML: `ErCharStats` is pushed through our own SetText and may be marked-up, but
 //! `PlayerName` is written by the native path, which does not enable HTML on that field. A `<` in a
 //! character name therefore stays a literal `<`, exactly as it does today on the unmerged field.

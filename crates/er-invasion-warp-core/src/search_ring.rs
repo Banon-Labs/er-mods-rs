@@ -31,7 +31,8 @@ use crate::invasion_warp::BlockKey;
 /// The overworld grid pitch, in metres.
 ///
 /// Read out of `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords`, which adds
-/// `(blockByte - converterBlock) * DAT_1429ce8b4` to a position before scaling it into map space;
+/// `(blockByte - converterBlock) * DAT_1429ce8b4` (a 1.16.2 dump label) to a position before
+/// scaling it into map space;
 /// that constant is `256.0`. Recorded here because it is the reason a neighbouring tile is a
 /// neighbouring *place* rather than an arbitrary id: the grid is regular and one step is 256m.
 pub const OVERWORLD_TILE_METRES: f32 = 256.0;

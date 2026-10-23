@@ -29,8 +29,8 @@ pub(crate) fn install_scaleform_descriptor_guard() {
             "scaleform-guard: REFUSED descriptor advance mid hook: no game module base: {err}"
         )),
         Err(DescriptorGuardInstallError::Refused { build }) => append_autoload_debug(format_args!(
-            "scaleform-guard: REFUSED descriptor advance mid hook: no mapping for the \
-                 advance on the running build -- {build}. Nothing read, nothing written."
+            "scaleform-guard: REFUSED descriptor advance mid hook: the advance is a 2.7.2.0 \
+                 address and the running build is {build}. Nothing read, nothing written."
         )),
         Err(DescriptorGuardInstallError::Disarmed {
             window,

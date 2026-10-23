@@ -15,18 +15,18 @@ greatsword categories import `a032_*`.
     backstab  ThrowParam 10000000 (throwType 1)  attacker 031710  victim a000_070000
     riposte   ThrowParam 30000000 (throwType 20) attacker 031700  victim a000_070010
 
-Crit damage per hit, per element (`VERIFIED`, attack-power builder 0x1406832a0, 1.17.1
-0x1406840f0; the read of EquipParamWeapon+0xe0 is at 0x140683453 / 0x1406842a3):
+Crit damage per hit, per element (`VERIFIED`, attack-power builder 0x1406845a0; the read of
+EquipParamWeapon+0xe0 is at 0x140684753):
 
     AR_el * MV_el / 100 * (throwAtkRate + 100) * 0.01    then the ordinary defense step
 
 The factor is taken only when `AttackInfo+0x109` is set, which the `ThrowAttackBehavior`
-(TAE 304) damage path sets to 1 (`FUN_14043fc30`, 1.17.1 0x140440190); guard counters and
+(TAE 304) damage path sets to 1 (`FUN_140440220`); guard counters and
 every other swing do not get it. SpEffects with `throwAttackParamChange` apply their attack
-modifiers only to hits with that byte set (`IsApplicableForCategory` 0x140500930, 1.17.1
-0x140501700): the Dagger Talisman's 1.17 `*AttackRate` is crit-only.
+modifiers only to hits with that byte set (`IsApplicableForCategory` 0x1405017e0): the Dagger
+Talisman's 1.17 `*AttackRate` is crit-only.
 
-Parrying (`VERIFIED`, `FUN_14044a910`, 1.17.1 0x14044ae70). Both routes end in the same test
+Parrying (`VERIFIED`, `FUN_14044af50`). Both routes end in the same test
 on the attacker: its `actionModifiersFlags & 0x400`, set while its animation has TAE type 0
 JumpTable 5 open, plus an angle check. So an attack is parryable exactly while JT5 is open.
 
@@ -290,10 +290,10 @@ CRIT_SPEFFECT_FIELDS = {'physical': 'physicsAttackRate', 'magic': 'magicAttackRa
                         'fire': 'fireAttackRate', 'lightning': 'thunderAttackRate',
                         'holy': 'darkAttackRate'}
 DAGGER_TALISMAN_SPEFFECT = 320900
-#: `VERIFIED` (EXE, CalculateDamage 0x1404472b0 / 1.17.1 0x140447810; the compare
-#: `cmp byte [r15+0xd9], 2` at 0x140447c08 / 0x140448168 is byte-checked in both images): when the
+#: `VERIFIED` (EXE, CalculateDamage 0x1404478f0; the compare `cmp byte [r15+0xd9], 2` at
+#: 0x140448248, the instruction 1.16.2 had at 0x140447c08 and 1.17.1 at 0x140448168): when the
 #: hit's throwFlag copy is 2 and its AtkParam row has throwDamageAttribute 1, the victim's
-#: `CalculateDamageCutRates` (0x1404f5210 / 0x1404f5fe0) multiplies each element by the cut rates
+#: `CalculateDamageCutRates` (0x1404f60c0) multiplies each element by the cut rates
 #: of its SpEffects with stateInfo 335. Regulation: 335 is carried by the Crucible Scale Talisman
 #: (340600) and the Talisman of All Crucibles (20382402), 0.7 on every element; the crit rows with
 #: throwDamageAttribute 1 are the backstab judges 500/501/505/506, never a riposte 510/511.

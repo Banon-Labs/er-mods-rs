@@ -3,9 +3,9 @@
 Labels: **VERIFIED** = read from the regulation (`scripts/er-param-read.py`, Smithbox paramdefs,
 installed 1.17.1 regulation) or from the executable; below it is written **REGULATION** or **EXE**
 to say which. Executable reads come from the named 1.16.2
-Ghidra dump on `localhost:8765`, and every function cited was carried to 1.17 with
-`scripts/map-rvas-1162-to-1170.py` (all sit below the 1.17.1 boundary `0xafefe9`, so the 1.17.0 and
-1.17.1 addresses are equal). The ones marked "(1.17.1 bytes)" were disassembled again out of
+Ghidra dump on `localhost:8765`, and every function cited was carried to 1.17 by the
+masked-signature map, since deleted (all sit below the 1.17.1 boundary `0xafefe9`, so the 1.17.0
+and 1.17.1 addresses are equal). The ones marked "(1.17.1 bytes)" were disassembled again out of
 `eldenring-deobf-1.17.1.bin` and read the same constants and graph ids. **INFERRED** = consistent
 with the data or names, but the code path was not traced. **SITE** = the build planner's JS
 (`~/.cache/er-build-planner/js/notifications-BSZ1DATO.js`, where the character model lives;

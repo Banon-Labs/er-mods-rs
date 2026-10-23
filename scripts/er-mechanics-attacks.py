@@ -5,57 +5,59 @@ Reads the installed regulation.bin through `scripts/er-param-read.py` and, when 
 unpacked player TimeAct is on disk, the weapon's `a<wepmotionCategory>.tae` for hit
 windows, hit counts and hyperarmor windows. Write-up: `docs/er-mechanics/attacks.md`.
 
-Labels follow that document: `VERIFIED` = regulation value or read out of the 1.16.2
-executable (addresses below), `TAE` = decoded animation event, `INFERRED` = fits the
+Labels follow that document: `VERIFIED` = regulation value or read out of the
+executable (traced in the named 1.16.2 dump; the addresses below are the 2.7.2.0 ones in
+`eldenring-deobf-1.17.2.bin`, each function decoding to the same instructions as its 1.16.2
+namesake), `TAE` = decoded animation event, `INFERRED` = fits the
 data but the consumer was not traced, `COMMUNITY` = outside claim.
 
-The chain (`VERIFIED`, `PlayerIns::ResolveBehaviorId` 0x140652280):
+The chain (`VERIFIED`, `PlayerIns::ResolveBehaviorId` 0x140653580):
 
-    judge   = TAE event type 1 (AttackBehavior 0x1404266d0) Args[2]
+    judge   = TAE event type 1 (AttackBehavior 0x140426cb0) Args[2]
     kind    = max(1, judge // 1000)
     row     = (kind * 100000 + EquipParamWeapon.behaviorVariationId) * 1000 + judge % 1000
     missing -> (variation // 100 + kind * 1000) * 100000 + judge % 1000   (family row)
     missing and judge >= 1000 -> kind * 100000000 + judge % 1000
     BehaviorParam_PC[row].refType 0 -> AtkParam_Pc[refId]
 
-Per-hit numbers (`VERIFIED`, 1.16.2 addresses):
+Per-hit numbers (`VERIFIED`):
 
     physical   = (attackBasePhysics * physicsAtkRate) * atkPhysCorrection / 100
                  [+ atkPhys if isAddBaseAtk], then times the stat-scaling factor
-                 (0x1406832a0; the scaling factor is FUN_140690390)
+                 (0x1406845a0; the scaling factor is FUN_140691690)
     poise      = saWeaponDamage * saWeaponAtkRate * atkSuperArmorCorrection / 100
-                 [+ atkSuperArmor if isAddBaseAtk], times durability and SpEffect (0x14068af30)
+                 [+ atkSuperArmor if isAddBaseAtk], times durability and SpEffect (0x14068c230)
     stamina    = int(BehaviorParam_PC.stamina * staminaConsumptionRate * SpEffect rate
                  * lowStatus rate) charged when the hitbox is created
-                 (0x1404428f0 -> 0x140651e90 -> 0x140684430)
+                 (0x140442ee0 -> 0x140653190 -> 0x140685730)
     stam. dmg  = attackBaseStamina * staminaAtkRate * atkStamCorrection / 100
-                 [+ atkStam if isAddBaseAtk], times SpEffect (0x14068abd6..0x14068ac34)
+                 [+ atkStam if isAddBaseAtk], times SpEffect (0x14068bed6..0x14068bf34)
     guard lvl  = attackBaseRepel * guardAtkRateCorrection / 100 [+ guardAtkRate]
-                 + clamp(STR - overStrength, 0, 10) + hand term (0x14068c080)
+                 + clamp(STR - overStrength, 0, 10) + hand term (0x14068d380)
 
-Hyperarmor (`VERIFIED` handler, `TAE` windows): event 795 (0x14042c2e0) turns the
+Hyperarmor (`VERIFIED` handler, `TAE` windows): event 795 (0x14042c8c0) turns the
 toughness module on with ToughnessParam row = arg byte 0, damageRatio = arg f32 at +4,
 and the weapon's `toughnessCorrectRate`. Max toughness is then
 `100 * (sum(armor toughnessCorrectRate) * proCorrectionRate + correctionRate * weapon
-toughnessCorrectRate)` (0x140487d10, constant 100.0 at 0x142bb55d8).
+toughnessCorrectRate)` (0x140488350, constant 100.0 at 0x142bba9a8).
 
 Recovery (`VERIFIED` consumer, `TAE` windows). TAE event type 0 (`_ChrActionFlag`
-0x1404275e0) switches on Args[0], the JumpTable id. Input ids set
-`CSChrActionRequestModule::possibleActionInputs` (`SetPossibleInputState` 0x140407b80),
-cancel ids set `possibleActionCancels` (`SetAllowedCancelToActionState` 0x140407af0), and
-`CancelMovement` 0x140407c00 sets `taeCancels` bit 2. Both masks are cleared every frame in
-`UpdateFromManipulator` 0x140407c60, which queues a new press only while its input bit is set
-and marks it ready only while its cancel bit is set; `ActionRequest` 0x140407400 (HKS env
+0x140427bc0) switches on Args[0], the JumpTable id. Input ids set
+`CSChrActionRequestModule::possibleActionInputs` (`SetPossibleInputState` 0x140408140),
+cancel ids set `possibleActionCancels` (`SetAllowedCancelToActionState` 0x1404080b0), and
+`CancelMovement` 0x1404081c0 sets `taeCancels` bit 2. Both masks are cleared every frame in
+`UpdateFromManipulator` 0x140408220, which queues a new press only while its input bit is set
+and marks it ready only while its cancel bit is set; `ActionRequest` 0x1404079c0 (HKS env
 `ActionRequest`) returns that ready bit. So an action can start on the first frame where one
 of its input windows and one of its cancel windows overlap:
 
     R1     input 1 or 87, cancel 4 or 115        R2    input 1 or 87, cancel 4 or 116
     dodge  input 25 or 87, cancel 26              guard input 21 or 87, cancel 22
-    move   cancel 11 or 78 (no input gate; `MovementRequest` 0x1404078b0)
+    move   cancel 11 or 78 (no input gate; `MovementRequest` 0x140407e70)
 
-TAE event 300 (`ActivateChrActionFlagEarly` 0x140425ba0) opens the same ids early: while
+TAE event 300 (`ActivateChrActionFlagEarly` 0x140426180) opens the same ids early: while
 `WeightAtEventStart + (WeightAtEventEnd - WeightAtEventStart) * progress` exceeds the value
-picked by its second field (`GetJuptableEarlyActivateValue` 0x14042f950: 0 -> 0.0,
+picked by its second field (`GetJuptableEarlyActivateValue` 0x14042ff30: 0 -> 0.0,
 2 -> EquipParamWeapon.weaponWeightRate). Types 1, 3, 4, 5 read runtime state (equip load,
 damage module, casting speed) and are left out. Animation length is read from the clip's
 `hkaSplineCompressedAnimation` in the unpacked `c0000_a*x.anibnd` shards.
@@ -103,30 +105,49 @@ PLAYER_HKX_ROOT = os.environ.get(
 TAE_TEMPLATE_ER = os.environ.get(
     'ER_TAE_TEMPLATE_ER',
     os.path.expanduser('~/projects/WitchyBND/WitchyBND/Assets/Templates/TAE.Template.ER.xml'))
-#: The 1.16.2 flat image the EXE constants were read from (file offset == RVA).
-DEOBF_1162 = os.environ.get('ER_DEOBF_1162', os.path.join(ROOT, 'eldenring-deobf.bin'))
-#: The installed build's flat image (1.17.1), for checks of code that must hold on it.
-DEOBF_1171 = os.environ.get('ER_DEOBF_1171', os.path.join(ROOT, 'eldenring-deobf-1.17.1.bin'))
+def _find_image(name='eldenring-deobf-1.17.2.bin'):
+    """`ER_DEOBF_BIN` when set, else `name` at the repo root or the nearest directory above it.
 
-#: Physical damage type. `AtkParam.atkAttribute` is resolved by 0x140685a90 (1.17.1
-#: 0x1406868e0, `VERIFIED` in both images): 253 (`cmp cl, 0xfd`) takes the weapon's
-#: `EquipParamWeapon.atkAttribute` (row +0x104), 252 (`0xfc`) its `atkAttribute2` (+0x191); any
-#: other value stands. The caller 0x140d24b10 stores the result at `AttackDamageInfo+0x25`
-#: (`damageType`), which `CalculateAbsorptions` 0x140689c80 and the SpEffect cut rates read:
-#: 0 slash, 1 strike, 2 pierce, 3 standard (neutral); anything else, such as 254, meets no
-#: physical absorption at all. A weapon buff can only replace it with 255 (SpEffect
-#: `atkAttribute == 0xff`, 0x1404f42e0), and no SpEffect row carries 255, so greases, buffs and
-#: affinities never change it (every affinity row repeats the base weapon's pair).
+    The images are gitignored, so a linked worktree under `.worktrees/` has no copy of its own
+    and reads the main checkout's.
+    """
+    if os.environ.get('ER_DEOBF_BIN'):
+        return os.environ['ER_DEOBF_BIN']
+    d = ROOT
+    while True:
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+        if os.path.dirname(d) == d:
+            return os.path.join(ROOT, name)
+        d = os.path.dirname(d)
+
+
+#: The installed build's flat image (2.7.2.0, file offset == RVA). Every EXE address this module
+#: reads is a 2.7.2.0 VA in it. The other `er-mechanics-*` readers take it from here.
+DEOBF = _find_image()
+
+#: Physical damage type. `AtkParam.atkAttribute` is resolved by 0x140686d90 (`VERIFIED`):
+#: 253 (`cmp cl, 0xfd`) takes the weapon's `EquipParamWeapon.atkAttribute` (row +0x104), 252
+#: (`0xfc`) its `atkAttribute2` (+0x191); any other value stands. The caller 0x140d27980 stores
+#: the result at `AttackDamageInfo+0x25` (`damageType`), which `CalculateAbsorptions`
+#: 0x14068af80 and the SpEffect cut rates read: 0 slash, 1 strike, 2 pierce, 3 standard
+#: (neutral); anything else, such as 254, meets no physical absorption at all. A weapon buff can
+#: only replace it with 255 (SpEffect `atkAttribute == 0xff`, 0x1404f5190), and no SpEffect row
+#: carries 255, so greases, buffs and affinities never change it (every affinity row repeats
+#: the base weapon's pair).
 PHYS_TYPE_NAMES = {0: 'slash', 1: 'strike', 2: 'pierce', 3: 'standard'}
 WEAPON_ATTRIBUTE_REF = {253: 'atkAttribute', 252: 'atkAttribute2'}
-#: `SpEffectParam.stateInfo` that `SpecialEffect::CalculateDefenseModifiers` 0x1404f53e0 (1.17.1
-#: 0x1404f61b0) buckets as the counter-hit factor on the defender (`cmp ax, 0x6e`, `VERIFIED`).
+ATK_ATTRIBUTE_RESOLVER = 0x140686d90
+#: `SpEffectParam.stateInfo` that `SpecialEffect::CalculateDefenseModifiers` 0x1404f6290
+#: buckets as the counter-hit factor on the defender (`cmp ax, 0x6e` at 0x1404f63fe,
+#: `VERIFIED`).
 COUNTER_STATE_INFO = 110
-#: Attacker SpEffects with this state info scale that factor when it is above 1: 0x1404f5310
-#: (1.17.1 0x1404f60e0) multiplies it by `physicsAttackRate` and the element `*AttackRate`
-#: (`VERIFIED`). Spear Talisman (SpEffect 320600) is the only row, physics 1.15.
+COUNTER_STATE_INFO_CMP = 0x1404f63fe
+#: Attacker SpEffects with this state info scale that factor when it is above 1: 0x1404f61c0
+#: multiplies it by `physicsAttackRate` and the element `*AttackRate` (`VERIFIED`). Spear
+#: Talisman (SpEffect 320600) is the only row, physics 1.15.
 COUNTER_BOOST_STATE_INFO = 197
-#: TAE event 66: `CSChrTaeAnimEvent::AddSpEffect` 0x14042bfd0 applies SpEffect Args[0] to the
+#: TAE event 66: `CSChrTaeAnimEvent::AddSpEffect` 0x14042c5b0 applies SpEffect Args[0] to the
 #: animating character (`VERIFIED` decompile; dispatch from `scripts/er-tae-dispatch-decode.py`).
 TAE_ADD_SPEFFECT = 66
 
@@ -138,16 +159,16 @@ def resolve_phys_type(atk_attribute, weapon):
     return PHYS_TYPE_NAMES.get(atk_attribute, 'none')
 
 #: TAE event types used here (dispatch decoded by `scripts/er-tae-dispatch-decode.py`).
-TAE_JUMP_TABLE = 0          # 0x1404275e0 `_ChrActionFlag`, Args[0] = JumpTable id
-TAE_ATTACK_BEHAVIOR = 1     # 0x1404266d0, Args[2] = behavior judge id
-TAE_JUMP_TABLE_EARLY = 300  # 0x140425ba0 `ActivateChrActionFlagEarly`
-TAE_TOUGHNESS = 795         # 0x14042c2e0, hyperarmor window
+TAE_JUMP_TABLE = 0          # 0x140427bc0 `_ChrActionFlag`, Args[0] = JumpTable id
+TAE_ATTACK_BEHAVIOR = 1     # 0x140426cb0, Args[2] = behavior judge id
+TAE_JUMP_TABLE_EARLY = 300  # 0x140426180 `ActivateChrActionFlagEarly`
+TAE_TOUGHNESS = 795         # 0x14042c8c0, hyperarmor window
 #: Type-0 Args+0xe: a SpEffect state-info id; nonzero skips the event unless the character
-#: has it (`VERIFIED`, top of 0x1404275e0). No cancel event in the weapon TAEs sets it.
+#: has it (`VERIFIED`, top of 0x140427bc0). No cancel event in the weapon TAEs sets it.
 JUMP_TABLE_STATE_GATE_OFFSET = 0xe
-#: Type-1 Args+0xe: the same kind of gate on a hitbox. `AttackBehavior` 0x1404266d0 skips the
+#: Type-1 Args+0xe: the same kind of gate on a hitbox. `AttackBehavior` 0x140426cb0 skips the
 #: event unless the u16 there is 0 or the attacker has a SpEffect with that stateInfo
-#: (`VERIFIED`, 1.16.2). 189 of the 8930 type-1 events in the 639 player TAEs are gated (a207
+#: (`VERIFIED`). 189 of the 8930 type-1 events in the 639 player TAEs are gated (a207
 #: 103, a037 76, a031 8, a788 2), all on stateInfo 187, which only SpEffect 1908 carries and
 #: nothing known applies, so gated hitboxes are left out (this drops the Lance / Messmer
 #: Soldier's Spear judge 5000-5005 extras).
@@ -155,28 +176,28 @@ ATTACK_STATE_GATE_OFFSET = 0xe
 #: Type-1 Args[1]: the attack index, a slot in `CSChrDamageModule`'s 0x10-byte table.
 ATTACK_INDEX_OFFSET = 4
 
-#: How often one swing can hit the same target (`VERIFIED`, 1.16.2):
+#: How often one swing can hit the same target (`VERIFIED`):
 #:
-#: - A target is hit once per hit record. `FUN_140523710` (per contact) returns early when the
+#: - A target is hit once per hit record. `FUN_1405247b0` (per contact) returns early when the
 #:   victim's handle is in the attack's record at +0x278 (or the bullet-shared one at +0x280,
-#:   `FUN_14051c5d0`), and after a hit `FUN_140524910` adds it to the record of the root
+#:   `FUN_14051d670`), and after a hit `FUN_1405259b0` adds it to the record of the root
 #:   attack and every attack linked under it (+0x290 parent, +0x2a0 child, +0x298 sibling).
-#:   The linked attacks are the hitbox shapes one `FUN_140526430` call creates for one
-#:   AtkParam row (`FUN_140525ef0` / `FUN_1405273f0` -> `FUN_14051ec90`), so all shapes of one
-#:   row share one record. `FUN_140523540` creates the record with lifetime 0.0
-#:   (`xorps xmm2, xmm2` at 0x140523638), so it never expires while the attack lives.
-#: - An attack lives in one attack index. `FUN_1404428f0` keeps the index's attack only when
-#:   its behavior id (`AttackDamageInfo+0x38`, `cmp [rax+0x38], esi` at 0x1404429f6) equals the
-#:   event's; otherwise it removes it (`FUN_140527140`), writes -1 to the handle (0x140442a6f)
+#:   The linked attacks are the hitbox shapes one `FUN_140527610` call creates for one
+#:   AtkParam row (`FUN_1405270d0` / `FUN_1405285e0` -> `FUN_14051fd30`), so all shapes of one
+#:   row share one record. `FUN_1405245e0` creates the record with lifetime 0.0
+#:   (`xorps xmm2, xmm2` at 0x1405246d8), so it never expires while the attack lives.
+#: - An attack lives in one attack index. `FUN_140442ee0` keeps the index's attack only when
+#:   its behavior id (`AttackDamageInfo+0x38`, `cmp [rax+0x38], esi` at 0x140442fe6) equals the
+#:   event's; otherwise it removes it (`FUN_140528320`), writes -1 to the handle (0x14044305f)
 #:   and creates a new attack from -1, so the new one starts with an empty record. An index
-#:   already claimed this frame (`cmp byte [rbx+4], 0` at 0x14044299d) drops the event.
-#: - `FUN_140445d30`, run from the per-character update `FUN_140401d80`, removes every index
+#:   already claimed this frame (`cmp byte [rbx+4], 0` at 0x140442f8d) drops the event.
+#: - `FUN_140446370`, run from the per-character update `FUN_140402180`, removes every index
 #:   no event claimed that frame and clears the claim bytes. So a gap of one frame ends the
 #:   record even when the same judge fires again afterwards.
 #: - Records of different indices are separate, and nothing on the victim side (the team and
-#:   immunity checks `FUN_1404443e0` / `IsImmuneToAttack` 0x1403f3b90, the stagger write
-#:   `FUN_140445b20`) remembers an earlier hit from the same attacker. Pooled attacks release
-#:   their records on retirement (`FUN_14051eef0`).
+#:   immunity checks `FUN_1404449d0` / `IsImmuneToAttack` 0x1403f3dc0, the stagger write
+#:   `FUN_140446160`) remembers an earlier hit from the same attacker. Pooled attacks release
+#:   their records on retirement (`FUN_14051ff90`).
 #:
 #: Consequence: one hit record per run of consecutive frames in which one index is held by one
 #: behavior id. A different judge taking over an index, a gap, or another index each give the
@@ -187,19 +208,19 @@ ATTACK_INDEX_OFFSET = 4
 #: (`follows_judge` set). `INFERRED`: such an event is the next segment of the same blade
 #: sweep (Milady splits nearly every swing this way, 120 after 123 on index 0), so a target the
 #: earlier segment hit is taken to be behind the blade by then. A runtime count of
-#: `FUN_140524910` calls per swing against a stationary target would prove or break it.
+#: `FUN_1405259b0` calls per swing against a stationary target would prove or break it.
 #:
-#: The team gate is `getTeamTypeRelationshipWithAtkParam` 0x14051a980 ->
+#: The team gate is `getTeamTypeRelationshipWithAtkParam` 0x14051ba20 ->
 #: `canTeamTypeHitAnother`, fed AtkParam `opposeTarget` / `friendlyTarget` / `selfTarget`.
 #: That a row with all three 0 hits nobody is `INFERRED`: the per-team-pair
 #: `CSTeamTypeRelation::Validate` implementations were not read.
-HIT_RECORD_NOTE = 'VERIFIED 1.16.2: FUN_1404428f0, FUN_140523710, FUN_140524910, FUN_140445d30'
+HIT_RECORD_NOTE = 'VERIFIED: FUN_140442ee0, FUN_1405247b0, FUN_1405259b0, FUN_140446370'
 #: Sampling step for the hit-record walk: 60 Hz, evaluated at the middle of each step. Every
 #: type-1 event in the player TAEs starts and ends on a 1/30 s boundary (counted 2026-09-29).
 HIT_RECORD_STEP = 1 / 60
-#: `FUN_1403f1d40` resolves an attack animation as `spAtkcategory * 1000000 + anim` when bound,
+#: `FUN_1403f1f70` resolves an attack animation as `spAtkcategory * 1000000 + anim` when bound,
 #: else `wepmotionCategory * 1000000 + anim`, else, for the right hand, `a023_<anim>` (the left
-#: hand falls back to a048) (`VERIFIED`, 1.16.2).
+#: hand falls back to a048) (`VERIFIED`).
 RIGHT_HAND_FALLBACK_CATEGORY = 23
 
 #: Crouch R1 gate, `c0000.hks` `IsUseStealthAttack` (called from `ExecAttack` lines 1406-1408 and
@@ -230,7 +251,7 @@ STEALTH_ATTACK_SP_REFUSED = {'one': frozenset({110}),
 DUAL_STEALTH_ATTACK_CATEGORIES = frozenset({23, 24, 27, 28, 36, 37, 58})
 
 #: Per action: (label, input JumpTable ids, cancel JumpTable ids). `VERIFIED` from the
-#: decompile of 0x1404275e0 and the jump table at 0x140428650 (see the module docstring).
+#: decompile of 0x140427bc0 and the jump table at 0x140428c30 (see the module docstring).
 #: Move has no input ids: `MovementRequest` only needs the stick and `taeCancels` bit 2.
 RECOVERY_ACTIONS = [
     ('r1', 'R1', (1, 87), (4, 115)),
@@ -239,46 +260,58 @@ RECOVERY_ACTIONS = [
     ('guard', 'guard', (21, 87), (22,)),
     ('move', 'move', None, (11, 78)),
 ]
-#: `GetJuptableEarlyActivateValue` 0x14042f950 cases this tool can evaluate offline:
+#: `GetJuptableEarlyActivateValue` 0x14042ff30 cases this tool can evaluate offline:
 #: 0 falls through to 0.0, 2 is the attack hand's EquipParamWeapon.weaponWeightRate.
 EARLY_DEFAULT, EARLY_WEAPON_WEIGHT_RATE = 0, 2
 #: TAE times are seconds; frames here assume 30 fps (`INFERRED`, the usual FromSoft rate).
 TAE_FPS = 30
 
-#: Toughness scale (`VERIFIED`: `CSChrToughnessModule` slot 3 0x1404870d0 returns the
-#: float at 0x142bb55d8, which is 100.0 in the 1.16.2 image; in 1.17.1 slot 3 is 0x140487630
-#: and the float is at 0x142bb86f8).
+#: Toughness scale (`VERIFIED`: `CSChrToughnessModule` slot 3 returns the float its
+#: `movss xmm0, [rip+X]` at 0x140487710 reads, 0x142bba9a8, which is 100.0).
 TOUGHNESS_SCALE = 100.0
 
-#: The `behaviorDataFactor` term of `CSChrBehaviorModule::Update` (1.16.2 0x14041d760, 1.17.1
-#: 0x14041dca0): graph dt = dt * factor * debug anim speed * TAE 608 speed. The factor comes
-#: from 0x140416270 (1.17.1 0x1404167a0), which returns `CSChrBehaviorDataModule+0x310` only
-#: when a debug byte is set (`GlobalDebugFlags` +0x2e for other characters, +0x32 for the
-#: player) and 1.0 otherwise. Both bytes are zero-initialised `.data` with no writer outside
-#: the chain that registers them as named settings, so the factor is 1.0 in the
-#: shipped game and frames here do not carry it (`VERIFIED` code shape, `INFERRED` that no
-#: setting turns the byte on). +0x310 is written by TAE 603 `DebugAnimSpeed`.
+#: The `behaviorDataFactor` term of `CSChrBehaviorModule::Update` (0x14041dd30): graph dt =
+#: dt * factor * debug anim speed * TAE 608 speed. The factor comes from 0x140416830 (the 4th
+#: and 8th call of `Update`), which returns `CSChrBehaviorDataModule+0x310` only when a debug
+#: byte is set (`GlobalDebugFlags` +0x2e for other characters, +0x32 for the player) and 1.0
+#: otherwise. Both bytes are zero-initialised `.data` with no writer outside the chain that
+#: registers them as named settings, so the factor is 1.0 in the shipped game and frames here do
+#: not carry it (`VERIFIED` code shape, `INFERRED` that no setting turns the byte on). +0x310 is
+#: written by TAE 603 `DebugAnimSpeed`.
 BEHAVIOR_DATA_FACTOR = 1.0
 
-#: EXE sites the selftest reads for the factor (1.16.2 image, 1.17.1 image).
+#: EXE sites the selftest reads for the factor. 0x140416830 is an Arxan entry whose body the
+#: de-Arxan'd image keeps in scattered blocks, so the first three were found by walking from
+#: that entry through its jumps and gadget targets (the gate is one call down): each pattern
+#: occurs once on that walk, as it does on the same walk in the 1.16.2 and 1.17.1 images, and
+#: the gate's two bytes are the 1.17.1 ones carried. The TAE 603 sequence occurs once in the
+#: whole image.
 FACTOR_SITES = {
     # movss xmm0, [rdi+0x310]: the branch taken when the debug byte is set.
-    'factor_load_310': (0x145b7d662, 0x14575b2b0),
+    'factor_load_310': 0x140e4d939,
     # movss xmm0, [rip+X]: the branch taken otherwise; X holds 1.0.
-    'factor_default': (0x145c9235e, 0x14528085f),
+    'factor_default': 0x145028b85,
     # movzx edx, [rip+X] / movzx ecx, [rip+Y]: the two debug bytes the gate reads.
-    'flag_reads': (0x140534df5, 0x140e463cd),
+    'flag_reads': 0x1457b30dd,
     # TAE 603: +0x310 = (end - start) * 30.0 / Args[0] (Args[0] > 0), else 1.0.
-    'tae603_store': (0x14554a64d, 0x14204c155),
+    'tae603_store': 0x145277f4d,
 }
 
-#: 1.17.1 addresses of the constants the formulas use (re-found through the instructions that
-#: read them; see `docs/er-mechanics/attacks.md` section 9).
-CONST_1171 = {
-    'percent': (0x1432a18e4, 0.01),        # 1.16.2 0x14329e624
-    'toughness': (0x142bb86f8, 100.0),     # 1.16.2 0x142bb55d8
-    'repel_at_risk': (0x1429e8c30, -5.0),  # 1.16.2 0x1429e5c30
-    'repel_broken': (0x1429d1438, -10.0),  # 1.16.2 0x1429ce438
+#: Addresses of the constants the formulas use, each the target of the instruction that reads
+#: it (see `CONST_READERS` and `docs/er-mechanics/attacks.md` section 9).
+CONST = {
+    'percent': (0x1432a3ba4, 0.01),
+    'toughness': (0x142bba9a8, 100.0),
+    'repel_at_risk': (0x1429eac30, -5.0),
+    'repel_broken': (0x1429d3438, -10.0),
+}
+#: The readers: stamina damage's `mulss`, `CSChrToughnessModule` slot 3, and the repel
+#: function's two durability terms (8-byte `movss`/`mulss` with a rip-relative operand).
+CONST_READERS = {
+    'percent': 0x14068bf01,
+    'toughness': 0x140487710,
+    'repel_broken': 0x14068d587,
+    'repel_at_risk': 0x14068d591,
 }
 
 #: Attack slots. Judge id and TimeAct animation are `TAE` (read from a20/a23/a26/a31);
@@ -323,7 +356,7 @@ WEP_FIELDS = ['behaviorVariationId', 'wepmotionCategory', 'reinforceTypeId',
               'saWeaponDamage', 'staminaConsumptionRate', 'toughnessCorrectRate',
               'isValidTough_ProtSADmg', 'weaponCategory', 'wepType', 'weaponWeightRate',
               'spAtkcategory', 'atkAttribute', 'atkAttribute2']
-#: SpEffect cut-rate columns by damage type, in `GetPhysicalDamageCutRateByType` 0x140d4fe90 order.
+#: SpEffect cut-rate columns by damage type, in `GetPhysicalDamageCutRateByType` 0x140d53330 order.
 COUNTER_CUT_FIELDS = {'slash': 'slashDamageCutRate', 'strike': 'blowDamageCutRate',
                       'pierce': 'thrustDamageCutRate', 'standard': 'neutralDamageCutRate',
                       'magic': 'magicDamageCutRate', 'fire': 'fireDamageCutRate',
@@ -378,8 +411,8 @@ class Regulation:
         return hits[0]
 
     def resolve_behavior_id(self, judge, variation):
-        """`PlayerIns::ResolveBehaviorId` 0x140652280, including both fallbacks."""
-        if not 0 <= judge < 10000 or variation >= 100000:  # IsValidBehaviorJudgeID 0x1406577b0
+        """`PlayerIns::ResolveBehaviorId` 0x140653580, including both fallbacks."""
+        if not 0 <= judge < 10000 or variation >= 100000:  # IsValidBehaviorJudgeID 0x140658ab0
             return -1
         kind = 1 if judge < 1000 else judge // 1000
         low = judge % 1000
@@ -504,7 +537,7 @@ def resolve_events(category, anim):
 def clip_to_real(events):
     """Map clip seconds to real seconds under the animation's TAE 608 play-speed windows.
 
-    TAE 608 `AnimSpeedGradient` (0x140426420, re-found in 1.17.1 at 0x140426970; decoded and
+    TAE 608 `AnimSpeedGradient` (0x140426a00; decoded and
     checked in `scripts/er-mechanics-reach.py`) sets speed = start + (end - start) * progress,
     and `CSChrBehaviorModule::Update` multiplies the graph's dt by it, so a clip interval of
     length dx takes dx / speed real seconds. The integral of 1 / (s0 + k x) is exact here
@@ -607,7 +640,7 @@ def hkx_duration(path):
 
 
 def _early_interval(event, threshold):
-    """Seconds during which a type-300 event opens its id, or None (0x140425ba0).
+    """Seconds during which a type-300 event opens its id, or None (0x140426180).
 
     Weight runs from WeightAtEventStart to WeightAtEventEnd over the event; the id is set
     while `threshold < weight`.
@@ -674,7 +707,7 @@ def _bound(category, anim):
 
 
 def motion_category(w, anim, right_hand_fallback=True):
-    """The TAE file an attack animation is read from, in `FUN_1403f1d40`'s order.
+    """The TAE file an attack animation is read from, in `FUN_1403f1f70`'s order.
 
     A weapon with a unique moveset carries `EquipParamWeapon.spAtkcategory` (Erdsteel Dagger 103,
     Dagger 0), and `a<spAtkcategory>.tae` holds only the animations that moveset replaces:
@@ -715,7 +748,7 @@ def slot_animation(w, key, anim, grip='one'):
     """(anim, TAE category, note) a slot plays: the crouch R1 of a weapon `IsUseStealthAttack`
     refuses is the rolling R1 (note 'rolling R1'), every other slot is its own animation.
 
-    The a023 fallback of `FUN_1403f1d40` is not taken. Whether a slot's behavior state is entered
+    The a023 fallback of `FUN_1403f1f70` is not taken. Whether a slot's behavior state is entered
     at all is the behavior script's call, and for the slots it would fill it gives rows the game
     does not show: bows an a023 R1 chain, staves and seals an a023 jump R1."""
     note = None
@@ -773,7 +806,7 @@ def hit_records(claims):
     """Hit records opened by each type-1 event, following `HIT_RECORD_NOTE`.
 
     `claims` is [(start s, end s, judge, attack index)] in TAE order, for events the game hands
-    to `FUN_1404428f0` (not gated, judge resolved). Returns, per event, (records it opens, the
+    to `FUN_140442ee0` (not gated, judge resolved). Returns, per event, (records it opens, the
     different judge whose record on the same index it directly replaced or None). An event is
     active while start <= t < end; in a step where several events want one index the first in
     TAE order holds it (`INFERRED`: the events are taken to run in stored order).
@@ -835,7 +868,7 @@ def tae_details(reg, weapon_id, anim, judge, category=None):
         j, index = struct.unpack_from('<i', e.params, 8)[0], \
             struct.unpack_from('<i', e.params, ATTACK_INDEX_OFFSET)[0]
         if reg.resolve_behavior_id(j, variation) < 0:
-            continue  # AttackBehavior never reaches FUN_1404428f0 for it
+            continue  # AttackBehavior never reaches FUN_140442ee0 for it
         claimed.append((e, j, index))
     records = hit_records([(e.start, e.end, j, index) for e, j, index in claimed])
     own = attack_numbers(reg, weapon_id, judge)
@@ -953,8 +986,8 @@ R2_RELEASE_ANIM_OFFSET = 5
 #: `GetGeneralTAEFlag(TAE_FLAG_CHARGING) == 1 or GetSpEffectID(100280)` (Smithbox `c0000.hks`
 #: line 7768, `COMMUNITY` decompile). The flag is bit n of `CSChrBehaviorDataModule+0x308`, cleared
 #: every frame and set only by TAE event 600, and no player R2 Start/End clip carries an event 600
-#: (1164 clips checked), so the SpEffect's first frame is the earliest release (`VERIFIED`, 1.16.2
-#: image; docs/er-mechanics/frame-advantage.md). Whether the script sees the SpEffect on the frame
+#: (1164 clips checked), so the SpEffect's first frame is the earliest release (`VERIFIED` in the
+#: image by `er-mechanics-frame-advantage --selftest`; docs/er-mechanics/frame-advantage.md). Whether the script sees the SpEffect on the frame
 #: it is applied or the next is not traced.
 R2_RELEASE_SPEFFECT = 100280
 #: The Start clips carry that SpEffect on TAE event 67 (Golem's Halberd a198_032500 f17-29);
@@ -1020,21 +1053,24 @@ def _read_f32(path, va):
         return struct.unpack('<f', handle.read(4))[0]
 
 
-#: 1.16.2 helpers the JumpTable cases call (names from the named Ghidra dump on :8765).
-SET_ALLOWED_CANCEL = 0x140407af0     # CSChrActionRequestModule::SetAllowedCancelToActionState
-CANCEL_MOVEMENT = 0x140407c00        # CSChrActionRequestModule::CancelMovement
-ALLOW_INPUT_RH_ATTACK = 0x1404300e0  # CSChrTaeAnimEvent::AllowInputRHAttack
-ALLOW_INPUT_DODGE = 0x140430150      # CSChrTaeAnimEvent::AllowInputDodge
+#: Helpers the JumpTable cases call (names from the named 1.16.2 Ghidra dump on :8765, where
+#: they are 0x140407af0, 0x140407c00, 0x1404300e0 and 0x140430150; each 2.7.2.0 body decodes
+#: to the same instructions).
+SET_ALLOWED_CANCEL = 0x1404080b0     # CSChrActionRequestModule::SetAllowedCancelToActionState
+CANCEL_MOVEMENT = 0x1404081c0        # CSChrActionRequestModule::CancelMovement
+ALLOW_INPUT_RH_ATTACK = 0x1404306c0  # CSChrTaeAnimEvent::AllowInputRHAttack
+ALLOW_INPUT_DODGE = 0x140430730      # CSChrTaeAnimEvent::AllowInputDodge
 #: ChrActionType values passed in EDX (same dump: `R1` 0, `R2` 1, `ROLLING` 0x11).
 ACT_R1, ACT_R2, ACT_ROLLING = 0, 1, 0x11
-#: `_ChrActionFlag` dispatch: `dec eax; cmp eax, 0x8e; jmp [0x140428650 + eax*4]`.
-JT_TABLE, JT_COUNT = 0x140428650, 0x8f
-#: `ActivateChrActionFlagEarly` dispatch: `add eax, -4; cmp eax, 0x78`, byte index table
-#: then dword table; 0x140426333 is the shared no-op exit.
-EARLY_INDEX, EARLY_TABLE, EARLY_FIRST_ID, EARLY_COUNT = 0x14042639c, 0x140426348, 4, 0x79
-EARLY_NOOP = 0x140426333
-#: `GetJuptableEarlyActivateValue` dispatch: `dec eax; cmp eax, 5; jmp [0x14042f9f0 + eax*4]`.
-EARLY_VALUE_TABLE = 0x14042f9f0
+#: `_ChrActionFlag` (0x140427bc0) dispatch: `dec eax; cmp eax, 0x8e; jmp [0x140428c30 + eax*4]`.
+JT_TABLE, JT_COUNT = 0x140428c30, 0x8f
+#: `ActivateChrActionFlagEarly` (0x140426180) dispatch: `add eax, -4; cmp eax, 0x78`, byte index
+#: table then dword table; 0x140426913 is the shared no-op exit.
+EARLY_INDEX, EARLY_TABLE, EARLY_FIRST_ID, EARLY_COUNT = 0x14042697c, 0x140426928, 4, 0x79
+EARLY_NOOP = 0x140426913
+#: `GetJuptableEarlyActivateValue` (0x14042ff30) dispatch: `dec eax; cmp eax, 5;
+#: jmp [0x14042ffd0 + eax*4]`.
+EARLY_VALUE_TABLE = 0x14042ffd0
 IMAGE_BASE = 0x140000000
 #: A case body is read up to the next case entry, and never further than this.
 CASE_SPAN_CAP = 0x100
@@ -1065,33 +1101,33 @@ def _in_bss(path, va):
 
 
 def _factor_checks(check, skips):
-    """The `behaviorDataFactor` gate and TAE 603, byte for byte in both images."""
-    for idx, (build, path) in enumerate((('1.16.2', DEOBF_1162), ('1.17.1', DEOBF_1171))):
-        if not os.path.exists(path):
-            skips.append(f'behaviorDataFactor {build}: {path} absent')
-            continue
-        src = f'EXE {os.path.basename(path)}'
-        site = FACTOR_SITES['factor_load_310'][idx]
-        check(f'{build} factor debug branch is movss xmm0, [rdi+0x310]',
-              _image_read(path, site, 8).hex(), 'f30f108710030000', src)
-        site = FACTOR_SITES['factor_default'][idx]
-        check(f'{build} factor default branch loads 1.0',
-              (_image_read(path, site, 4).hex(), _read_f32(path, _rip_target(path, site, 8))),
-              ('f30f1005', 1.0), src)
-        site = FACTOR_SITES['flag_reads'][idx]
-        code = _image_read(path, site, 19)
-        flag_all, flag_player = _rip_target(path, site, 7), _rip_target(path, site + 9, 7)
-        check(f'{build} gate reads two debug bytes 4 apart, player one under cmovne',
-              (code[:3].hex(), code[7:12].hex(), code[16:19].hex(), flag_player - flag_all),
-              ('0fb615', '84c00fb60d', '0f45d1', 4), src)
-        check(f'{build} gate bytes are zero-filled .data',
-              (_in_bss(path, flag_all), _in_bss(path, flag_player)), (True, True), src)
-        site = FACTOR_SITES['tae603_store'][idx]
-        code = _image_read(path, site, 41)
-        check(f'{build} TAE 603 stores (end - start) * 30 / Args[0] at +0x310',
-              (code[:24].hex(), code[28:].hex(), _read_f32(path, _rip_target(path, site + 20, 8))),
-              ('488b4220660f6ec10f5bc0f30f104808f30f5c08f30f590d',
-               'f30f5ec8f3410f118810030000', 30.0), src)
+    """The `behaviorDataFactor` gate and TAE 603, byte for byte in the image."""
+    path = DEOBF
+    if not os.path.exists(path):
+        skips.append(f'behaviorDataFactor: {path} absent')
+        return
+    src = f'EXE {os.path.basename(path)}'
+    site = FACTOR_SITES['factor_load_310']
+    check('factor debug branch is movss xmm0, [rdi+0x310]',
+          _image_read(path, site, 8).hex(), 'f30f108710030000', src)
+    site = FACTOR_SITES['factor_default']
+    check('factor default branch loads 1.0',
+          (_image_read(path, site, 4).hex(), _read_f32(path, _rip_target(path, site, 8))),
+          ('f30f1005', 1.0), src)
+    site = FACTOR_SITES['flag_reads']
+    code = _image_read(path, site, 19)
+    flag_all, flag_player = _rip_target(path, site, 7), _rip_target(path, site + 9, 7)
+    check('gate reads two debug bytes 4 apart, player one under cmovne',
+          (code[:3].hex(), code[7:12].hex(), code[16:19].hex(), flag_player - flag_all),
+          ('0fb615', '84c00fb60d', '0f45d1', 4), src)
+    check('gate bytes are zero-filled .data',
+          (_in_bss(path, flag_all), _in_bss(path, flag_player)), (True, True), src)
+    site = FACTOR_SITES['tae603_store']
+    code = _image_read(path, site, 41)
+    check('TAE 603 stores (end - start) * 30 / Args[0] at +0x310',
+          (code[:24].hex(), code[28:].hex(), _read_f32(path, _rip_target(path, site + 20, 8))),
+          ('488b4220660f6ec10f5bc0f30f104808f30f5c08f30f590d',
+           'f30f5ec8f3410f118810030000', 30.0), src)
 
 
 def _jump_table_case_calls(path):
@@ -1160,8 +1196,8 @@ def selftest():
     def check(name, got, want, source):
         (passes if got == want else failures).append(f'{name}: got {got!r} want {want!r} [{source}]')
 
-    # 1. ResolveBehaviorId, formula read from the decompile of 0x140652280.
-    exe = 'EXE 0x140652280'
+    # 1. ResolveBehaviorId, formula read from the decompile of 0x140653580.
+    exe = 'EXE 0x140653580'
     check('dagger R1 behavior row', reg.resolve_behavior_id(0, 100), 100100000, exe)
     check('greatsword R1 falls back to family 400',
           reg.resolve_behavior_id(0, 401), 100400000, exe)
@@ -1207,37 +1243,33 @@ def selftest():
         check('Longsword R1 hyperarmor windows', len(ls['hyperarmor']), 0, src)
         check('Greatsword R1 hyperarmor windows', len(gs['hyperarmor']) > 0, True, src)
 
-    # 6. The constants the formulas use, read out of the 1.16.2 image.
-    if os.path.exists(DEOBF_1162):
-        check('0.01 at 0x14329e624', round(_read_f32(DEOBF_1162, 0x14329e624), 6), 0.01,
-              'EXE eldenring-deobf.bin')
-        check('toughness scale at 0x142bb55d8', _read_f32(DEOBF_1162, 0x142bb55d8),
-              TOUGHNESS_SCALE, 'EXE eldenring-deobf.bin')
+    # 6. The constants the formulas use, each read through an instruction of the function that
+    #    uses it (rather than trusting the table): stamina damage's mulss, toughness slot 3, and
+    #    the repel function's durability terms.
+    if os.path.exists(DEOBF):
+        src = 'EXE ' + os.path.basename(DEOBF)
+        for name, (va, value) in CONST.items():
+            check(f'{name} at {va:#x}', round(_read_f32(DEOBF, va), 6), value, src)
+        check(f'toughness scale at {CONST["toughness"][0]:#x}',
+              _read_f32(DEOBF, CONST['toughness'][0]), TOUGHNESS_SCALE, src)
+        check(f'stamina damage mulss {CONST_READERS["percent"]:#x} reads the 0.01',
+              _rip_target(DEOBF, CONST_READERS['percent'], 8), CONST['percent'][0], src)
+        check(f'toughness slot 3 {CONST_READERS["toughness"]:#x} returns the 100.0',
+              _rip_target(DEOBF, CONST_READERS['toughness'], 8), CONST['toughness'][0], src)
+        check(f'repel {CONST_READERS["repel_broken"]:#x} / {CONST_READERS["repel_at_risk"]:#x}'
+              ' read -10.0 / -5.0',
+              (_rip_target(DEOBF, CONST_READERS['repel_broken'], 8),
+               _rip_target(DEOBF, CONST_READERS['repel_at_risk'], 8)),
+              (CONST['repel_broken'][0], CONST['repel_at_risk'][0]), src)
     else:
-        skips.append('EXE constants: ' + DEOBF_1162 + ' absent')
-    # 6b. The same constants in 1.17.1, each read through an instruction of the re-found
-    #     function (rather than trusting the table): stamina damage's mulss, toughness slot 3,
-    #     and the repel function's durability terms.
-    if os.path.exists(DEOBF_1171):
-        src = 'EXE eldenring-deobf-1.17.1.bin'
-        for name, (va, value) in CONST_1171.items():
-            check(f'1.17.1 {name} at {va:#x}', round(_read_f32(DEOBF_1171, va), 6), value, src)
-        check('1.17.1 stamina damage mulss 0x14068ba51 reads the 0.01',
-              _rip_target(DEOBF_1171, 0x14068ba51, 8), CONST_1171['percent'][0], src)
-        check('1.17.1 toughness slot 3 0x140487630 returns the 100.0',
-              _rip_target(DEOBF_1171, 0x140487630, 8), CONST_1171['toughness'][0], src)
-        check('1.17.1 repel 0x14068d0d7 / 0x14068d0e1 read -10.0 / -5.0',
-              (_rip_target(DEOBF_1171, 0x14068d0d7, 8), _rip_target(DEOBF_1171, 0x14068d0e1, 8)),
-              (CONST_1171['repel_broken'][0], CONST_1171['repel_at_risk'][0]), src)
-    else:
-        skips.append('1.17.1 constants: ' + DEOBF_1171 + ' absent')
+        skips.append('EXE constants: ' + DEOBF + ' absent')
     _factor_checks(check, skips)
 
-    # 7. Recovery ids, read out of the 1.16.2 image rather than from RECOVERY_ACTIONS'
-    #    own reasoning: which helper each JumpTable case calls, and with which action.
-    if os.path.exists(DEOBF_1162):
-        src = 'EXE jump table 0x140428650 in eldenring-deobf.bin'
-        calls = _jump_table_case_calls(DEOBF_1162)
+    # 7. Recovery ids, read out of the image rather than from RECOVERY_ACTIONS' own reasoning:
+    #    which helper each JumpTable case calls, and with which action.
+    if os.path.exists(DEOBF):
+        src = f'EXE jump table {JT_TABLE:#x} in {os.path.basename(DEOBF)}'
+        calls = _jump_table_case_calls(DEOBF)
         want = {
             4: {(SET_ALLOWED_CANCEL, ACT_R1), (SET_ALLOWED_CANCEL, ACT_R2)},
             115: {(SET_ALLOWED_CANCEL, ACT_R1)},
@@ -1256,15 +1288,16 @@ def selftest():
                   needed <= calls[jid], True, src)
         check('JumpTable 115 does not open R2', (SET_ALLOWED_CANCEL, ACT_R2) in calls[115],
               False, src)
-        early = _early_jump_table_ids(DEOBF_1162)
+        early = _early_jump_table_ids(DEOBF)
         check('type-300 handles cancel ids 4, 11, 26, 115, 116',
-              {4, 11, 26, 115, 116} <= early, True, 'EXE jump table 0x140426348/0x14042639c')
+              {4, 11, 26, 115, 116} <= early, True,
+              f'EXE jump table {EARLY_TABLE:#x}/{EARLY_INDEX:#x}')
         check('early type 2 reads PlayerIns vtable +0x400 (GetWeaponWeightRate)',
-              _early_value_case(DEOBF_1162, EARLY_WEAPON_WEIGHT_RATE),
+              _early_value_case(DEOBF, EARLY_WEAPON_WEIGHT_RATE),
               b'\x48\xff\xa0\x00\x04\x00\x00',  # rex.w jmp qword ptr [rax + 0x400]
-              'EXE jump table 0x14042f9f0')
+              f'EXE jump table {EARLY_VALUE_TABLE:#x}')
     else:
-        skips.append('EXE recovery ids: ' + DEOBF_1162 + ' absent')
+        skips.append('EXE recovery ids: ' + DEOBF + ' absent')
 
     # 8. The same ids named by the community TimeAct template (authored apart from this tool).
     if os.path.exists(TAE_TEMPLATE_ER):
@@ -1290,16 +1323,16 @@ def selftest():
     # 10. The atkAttribute resolver in the installed build's image: 253 reads the weapon row at
     #     +0x104 and 252 at +0x191. Which fields sit there comes from the paramdef layout, not
     #     from this module's WEAPON_ATTRIBUTE_REF, and the Smithbox enum names them independently.
-    if os.path.exists(DEOBF_1171):
-        src = 'EXE 0x1406868e0 in eldenring-deobf-1.17.1.bin'
-        code = _image_read(DEOBF_1171, 0x1406868e0, 0x100)
+    if os.path.exists(DEOBF):
+        src = f'EXE {ATK_ATTRIBUTE_RESOLVER:#x} in {os.path.basename(DEOBF)}'
+        code = _image_read(DEOBF, ATK_ATTRIBUTE_RESOLVER, 0x100)
         for off, want, text in ((0xcd, '80f9fd', 'cmp cl, 0xfd'),
                                 (0xd7, '0fb68804010000', 'movzx ecx, byte [rax+0x104]'),
                                 (0xe0, '80f9fc', 'cmp cl, 0xfc'),
                                 (0xea, '0fb68891010000', 'movzx ecx, byte [rax+0x191]')):
             check(f'resolver +{off:#x} is {text}', code[off:off + len(want) // 2].hex(), want, src)
     else:
-        skips.append('atkAttribute resolver: ' + DEOBF_1171 + ' absent')
+        skips.append('atkAttribute resolver: ' + DEOBF + ' absent')
     fields, _ = PR.layout(PR.paramdef('EQUIP_PARAM_WEAPON_ST'))
     at = {f['off']: f['name'] for f in fields if not f['bits']}
     check('EquipParamWeapon +0x104 / +0x191', (at.get(0x104), at.get(0x191)),
@@ -1319,10 +1352,10 @@ def selftest():
 
     # 11. Counter frames. The regulation's stateInfo-110 rows are what the EXE buckets as the
     #     counter factor (image byte check), and Smithbox names the TAE's row "Counter Frames".
-    if os.path.exists(DEOBF_1171):
+    if os.path.exists(DEOBF):
         check('CalculateDefenseModifiers compares stateInfo 0x6e',
-              _image_read(DEOBF_1171, 0x1404f631e, 4).hex(), '6683f86e',
-              'EXE 0x1404f631e in eldenring-deobf-1.17.1.bin')
+              _image_read(DEOBF, COUNTER_STATE_INFO_CMP, 4).hex(), '6683f86e',
+              f'EXE {COUNTER_STATE_INFO_CMP:#x} in {os.path.basename(DEOBF)}')
     names = PR.row_names('SpEffectParam')
     check('SpEffect 45 row name', names.get(45), '[HKS] Counter Frames',
           'COMMUNITY: Smithbox Param Row Names, SpEffectParam')
@@ -1400,21 +1433,19 @@ def selftest():
         check('Lance R1 keeps no judge 5000-5005 extra', [o['judge'] for o in lance['other_hitboxes']
                                                          if 5000 <= o['judge'] <= 5005], [], src)
 
-    # 15. The a023 right-hand fallback of FUN_1403f1d40: in motion_category, not in the slot
+    # 15. The a023 right-hand fallback of FUN_1403f1f70: in motion_category, not in the slot
     #     rows (see weapon_attacks). In the
     #     image: hand 1 (`cmp esi, 1`) adds 23000000 (`lea edi, [rax+0x15ef3c0]`), hand 0 adds
-    #     48000000 (`lea edi, [rax+0x2dc6c00]`). 1.17.1 has the function 0x230 higher (the two
-    #     `lea` encodings each occur once in that image).
-    for build, path, shift in (('1.16.2', DEOBF_1162, 0), ('1.17.1', DEOBF_1171, 0x230)):
-        if not os.path.exists(path):
-            skips.append(f'FUN_1403f1d40 {build}: {path} absent')
-            continue
-        src = f'EXE {hex(0x1403f1d40 + shift)} in {os.path.basename(path)}'
-        check(f'{build} right hand falls back to 23000000 + anim',
-              (_image_read(path, 0x1403f1eb2 + shift, 3).hex(),
-               _image_read(path, 0x1403f1ee1 + shift, 6).hex()), ('83fe01', '8db8c0f35e01'), src)
-        check(f'{build} left hand falls back to 48000000 + anim',
-              _image_read(path, 0x1403f1ea7 + shift, 6).hex(), '8db8006cdc02', src)
+    #     48000000 (`lea edi, [rax+0x2dc6c00]`).
+    if not os.path.exists(DEOBF):
+        skips.append(f'FUN_1403f1f70: {DEOBF} absent')
+    else:
+        src = f'EXE 0x1403f1f70 in {os.path.basename(DEOBF)}'
+        check('right hand falls back to 23000000 + anim',
+              (_image_read(DEOBF, 0x1403f20e2, 3).hex(),
+               _image_read(DEOBF, 0x1403f2111, 6).hex()), ('83fe01', '8db8c0f35e01'), src)
+        check('left hand falls back to 48000000 + anim',
+              _image_read(DEOBF, 0x1403f20d7, 6).hex(), '8db8006cdc02', src)
     if tae_animations(23) is None or tae_animations(31) is None:
         skips.append('a023 fallback: a23/a31 absent')
     else:
@@ -1456,18 +1487,18 @@ def selftest():
         r1 = next((r for r in weapon_attacks(reg, bow) if r['slot'] == 'r1_1'), None)
         check('Longbow R1 does not take a023_030000', r1 and r1['tae_entry'], 'a044_030000', src)
 
-    # 16. Hit records. The EXE sites HIT_RECORD_NOTE rests on, as bytes in the 1.16.2 image,
-    #     then the walk on synthetic events and on Milady's running R1 (a060_030200: judge 998 on
-    #     index 1 and 123 on index 0 over clip f16-18, then 120 on index 0 over f18-19).
-    if os.path.exists(DEOBF_1162):
-        src = 'EXE eldenring-deobf.bin (1.16.2)'
-        for va, want, text in ((0x14044299d, '807b0400', 'cmp byte [rbx+4], 0 (index claimed)'),
-                               (0x1404429f6, '397038', 'cmp [rax+0x38], esi (same behavior id)'),
-                               (0x140442a6f, 'c703ffffffff', 'mov dword [rbx], -1 before create'),
-                               (0x140523638, '0f57d2', 'xorps xmm2, xmm2 (record lifetime 0)')):
-            check(f'{hex(va)} is {text}', _image_read(DEOBF_1162, va, len(want) // 2).hex(), want, src)
+    # 16. Hit records. The EXE sites HIT_RECORD_NOTE rests on, as bytes in the image, then the
+    #     walk on synthetic events and on Milady's running R1 (a060_030200: judge 998 on index 1
+    #     and 123 on index 0 over clip f16-18, then 120 on index 0 over f18-19).
+    if os.path.exists(DEOBF):
+        src = 'EXE ' + os.path.basename(DEOBF)
+        for va, want, text in ((0x140442f8d, '807b0400', 'cmp byte [rbx+4], 0 (index claimed)'),
+                               (0x140442fe6, '397038', 'cmp [rax+0x38], esi (same behavior id)'),
+                               (0x14044305f, 'c703ffffffff', 'mov dword [rbx], -1 before create'),
+                               (0x1405246d8, '0f57d2', 'xorps xmm2, xmm2 (record lifetime 0)')):
+            check(f'{hex(va)} is {text}', _image_read(DEOBF, va, len(want) // 2).hex(), want, src)
     else:
-        skips.append('hit-record EXE sites: ' + DEOBF_1162 + ' absent')
+        skips.append('hit-record EXE sites: ' + DEOBF + ' absent')
     f = 1 / TAE_FPS
     src = 'HIT_RECORD_NOTE rule, synthetic events'
     check('same judge, same index, back to back: one record',

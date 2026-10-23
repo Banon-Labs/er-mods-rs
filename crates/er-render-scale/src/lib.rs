@@ -29,9 +29,9 @@
 //! [`config`]). The divisor saved there is applied at boot, and an edit to the file takes effect
 //! within a second.
 //!
-//! # 1.17.1 only
+//! # 2.7.2.0 only
 //!
-//! The update's address and opening bytes were read out of 1.17.1, and the DLL refuses every other
+//! The update's address and opening bytes were read out of 2.7.2.0, and the DLL refuses every other
 //! build and any other bytes rather than write through a stale address; the menu then shows why.
 //!
 //! # Telemetry
@@ -94,9 +94,7 @@ const WORKER_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 /// One telemetry document, as of now.
 #[cfg(windows)]
 fn snapshot(serial: u64) -> report::Report {
-    use er_game_base::game_build::{
-        MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, game_file_version,
-    };
+    use er_game_base::game_build::is_supported_build;
     let readings = drs::read();
     let hook = drs::hook_state();
     let view = report::view(drs::selected(), drs::applied(), &readings);
@@ -108,11 +106,8 @@ fn snapshot(serial: u64) -> report::Report {
                 u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
             }),
         serial,
-        // The builds `carry_1171_rva` reaches: 1.17.1 itself and 2.7.2.0.
-        game_build_ok: matches!(
-            game_file_version(),
-            Some(v) if v == MAPPED_FILE_VERSION_1171 || v == MAPPED_FILE_VERSION_1172
-        ),
+        // The one build the update's address was measured on, 2.7.2.0.
+        game_build_ok: is_supported_build(),
         hook,
         readings,
         view,

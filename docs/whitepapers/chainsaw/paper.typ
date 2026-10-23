@@ -485,7 +485,8 @@ the rule and the five skills' TimeActs are unchanged
 *Executable.* Every 1.17.1 address was read in the de-Arxan'd 1.17.1 image. Names come from a
 #link("https://github.com/NationalSecurityAgency/ghidra")[Ghidra] dump of 1.16.2 and were carried
 forward with
-#link(repo + "/blob/main/scripts/map-rvas-1162-to-1170.py")[`scripts/map-rvas-1162-to-1170.py`];
+#link(repo + "/blob/41d6a363558edf5716303802b54d1b07956937bb/scripts/map-rvas-1162-to-1170.py")[`scripts/map-rvas-1162-to-1170.py`]
+(removed from the tree with the address carry on 2026-10-23; the link is to the last commit that has it);
 all of them except the selector functions sit below rva 0xafefe9, where 1.17.0 and 1.17.1 agree.
 
 #figure(

@@ -31,14 +31,16 @@
 
 use core::fmt;
 
-/// `GLOBAL_GameMan` -- `0x143d69918`. Holds the join destination `SetMultiplayJoinData` writes
-/// and the flag `WarpNextStageKick_` sets when a warp is committed.
+/// `GLOBAL_GameMan` -- `0x143d709a8` on 2.7.2.0 (1.16.2 `0x143d69918`). Holds the join
+/// destination `SetMultiplayJoinData` writes and the flag `WarpNextStageKick_` sets when a warp is
+/// committed.
 ///
 /// Derived, not restated: the address is declared once in `er-game-base`, so a future correction
 /// there cannot leave this module pointing at a stale global.
 pub use er_game_base::rva::GAME_MAN_SINGLETON_RVA as GAME_MAN_GLOBAL_RVA;
-/// `GameMan::callForWarp`, written `true` by `WarpNextStageKick_` (`0x1405f7b70`) via
-/// `SetCallForWarp` (`0x14067aea0`), whose whole body is `*(u8*)(gameMan + 0x10) = arg`.
+/// `GameMan::callForWarp`, written `true` by `WarpNextStageKick_` (2.7.2.0 `0x1405f8e70`, 1.16.2
+/// `0x1405f7b70`) via `SetCallForWarp` (2.7.2.0 `0x14067c1a0`, 1.16.2 `0x14067aea0`), whose whole
+/// body is `*(u8*)(gameMan + 0x10) = arg`.
 ///
 /// This is the point of no return: the loading screen follows. One byte, and it cannot be
 /// confused with a session state.

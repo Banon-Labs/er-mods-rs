@@ -562,8 +562,8 @@ struct ObserverHook {
     /// Names this hook in every log line and in the `game_rva_named` refusal, so a reader can tell
     /// which observer went inert without counting arguments in a summary line.
     what: &'static str,
-    /// The 1.16.2 RVA, left untranslated on purpose: `MhHook::new` owns the detour-safe
-    /// translation, and resolving one address twice is its own documented hazard.
+    /// The 2.7.2.0 RVA, left unresolved on purpose: `MhHook::new` owns the build and
+    /// detour-allowlist check.
     rva: u32,
     detour: *mut c_void,
     /// Trampoline sink the detour body calls the original through.
@@ -622,7 +622,7 @@ fn observer_hooks() -> [ObserverHook; OBSERVER_HOOK_COUNT] {
 ///
 /// Only two can. `MH_ERROR_NOT_INITIALIZED` and `MH_ERROR_MEMORY_ALLOC` describe MinHook's own
 /// transient state. Every other status is a statement about the address -- the build gate declining
-/// to translate it, a target that is not a relocatable function entry, bytes that are not
+/// it, a target that is not a relocatable function entry, bytes that are not
 /// executable -- and no number of retries moves a function somewhere else. That is why the old hot
 /// loop logged 8,430 times and changed nothing.
 fn observer_status_is_retryable(status: MH_STATUS) -> bool {
@@ -738,11 +738,7 @@ pub fn install_now_loading_helper_observer_hooks() {
             _ => {}
         }
         let rva = hook.rva;
-        // Unresolved, and `MhHook::new` below owns the single 1.16.2 -> 1.17 resolve. This used to
-        // be `game_rva_named`, which resolves too -- and resolving an already-resolved address is
-        // not idempotent on a collision row (a 1.17 destination that is also some other row's
-        // 1.16.2 source), where the second resolve silently returns a third, unrelated function.
-        // Three live detours were measured landing that way on 2026-08-30.
+        // Unresolved, and `MhHook::new` below owns the single build and detour-allowlist check.
         //
         // Where the address refusal went. It moved down one line, into `MhHook::new`, whose
         // `Err(status)` arm latches `OBSERVER_HOOK_PERMANENTLY_REFUSED` for exactly the statuses
@@ -961,7 +957,7 @@ unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
     Some((out, encoding))
 }
 
-/// Absolute address of the profile renderer table entry for `slot` (`DAT_143d6d8d0[slot]`, the
+/// Absolute address of the profile renderer table entry for `slot` (`DAT_143d74960[slot]`, the
 /// `CSMenuProfModelRend*` for that absolute save slot; offscreen tex index `slot*2`). Out-of-range
 /// slots fall back to entry 0, preserving the historical table[0] behavior for `slot == 0` or unknown.
 pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
@@ -1053,7 +1049,7 @@ fn portrait_dump_enabled(dir: &std::path::Path) -> bool {
 
 /// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model
 /// finishes loading. After Continue the menu-owned offscreen-draw MenuJob stops, so we drive the
-/// spared renderer's offscreen render ourselves each frame (`FUN_140bb8d90`); the global ResMan task
+/// spared renderer's offscreen render ourselves each frame (`0x140bba880`); the global ResMan task
 /// keeps loading/animating the model (`renderer+0x778`) automatically. Once the model has latched and
 /// the GPU texture is uploaded, AddRef the `CSGxTexture` (+ its GPU child) so it survives, and cache
 /// it for the now-loading forge (the next MENU_Load rotation displays the real portrait). One-shot.
@@ -1115,7 +1111,7 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
     {
         return;
     }
-    // NOTE: driving the menu offscreen render (FUN_140bb8d90) post-Continue crashes during world-load
+    // NOTE: driving the menu offscreen render (0x140bba880) post-Continue crashes during world-load
     // (g_GxDrawContext invalid out of menu phase), and the character model never loads once the menu
     // phase ends -- so the in-loading-screen drive is disabled. The real no-delay path is to make the
     // ProfileSelect portrait render during the title phase (valid menu context) and capture it before
@@ -1236,7 +1232,7 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 // menu-phase frame (no local player). One-shot: mark the target slot used
 // (`MarkProfileIndexAsUsed` -- the only gate the refresh checks per step-0 RE: it sets
 // `ProfileSummary->saveSlotsStates[slot]=true` with no other side effect), then call the argless
-// profile-render refresh (`0x9aa680`), which equips ChrAsm + copies FaceData + kicks the async
+// profile-render refresh (`0x9abcd0`), which equips ChrAsm + copies FaceData + kicks the async
 // character-model build that eventually sets `renderer+0x778`. The menu's own per-frame callbacks
 // then composite the live 3D head into the renderer's offscreen (no compositor call from us).
 // `maybe_capture_portrait_gxtexture` keeps the rendered gx once `+0x778` latches. Menu-phase only

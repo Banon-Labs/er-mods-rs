@@ -1,8 +1,8 @@
 # Critical hits and parrying
 
 Calculator: `scripts/er-mechanics-crits.py`. Labels as in the other docs here: **VERIFIED**
-(regulation value, or read out of the named 1.16.2 Ghidra dump and carried to 1.17.1 with
-`map-rvas-1162-to-1170.py` + `map-rvas-1170-to-1171.py`), **TAE** (decoded animation event,
+(regulation value, or read out of the named 1.16.2 Ghidra dump and carried to 1.17.1 by the
+signature map and the +0x70 rule, both since deleted), **TAE** (decoded animation event,
 player TimeAct unpacked from `c0000.anibnd.dcx`), **INFERRED**, **COMMUNITY**, **SITE**
 (er-build-planner corpus). Nothing was launched. Frames are TAE seconds x 30 (the same
 convention as attacks.md). Addresses are 1.16.2 / 1.17.1; "byte-checked" means the 1.17.1

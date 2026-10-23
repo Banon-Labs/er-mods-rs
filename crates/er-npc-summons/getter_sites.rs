@@ -1,14 +1,12 @@
 // The two typed param getters this DLL serves row copies through, declared exactly once.
 //
-// `include!`d by both `build.rs`, which assembles each pinned window against the 1.17.1 image at
+// `include!`d by both `build.rs`, which assembles each pinned window against the 2.7.2.0 image at
 // `GAME_IMAGE_BASE + rva + offset`, and `src/mimic_hooks.rs`, which compares the same windows at
 // the same offsets on the running build before it trusts a getter's out struct. Neither spells an
 // offset of its own, so a corrected one moves every window with it.
 //
 // Both getters are the same template instantiated for two tables: `(out, id)`, a binary search of
 // the table `GetParamResCap` returns, then `out = {id @+0, row* @+8}` with a null row on a miss.
-// Every byte at these offsets is identical in eldenring-deobf-1.17.1.bin and
-// eldenring-deobf-1.17.2.bin (2.7.2.0).
 //
 // Every constant carries `#[allow(dead_code)]` because each includer uses only part of the file.
 
@@ -17,16 +15,15 @@
 #[allow(dead_code)]
 const GAME_IMAGE_BASE: u64 = 0x1_4000_0000;
 
-/// `GetBuddyParam(out, id)` on 1.17.1 (2.7.2.0 `0x140d29700`, 1.16.2 `0x140d26890`). The DLL
-/// detours it through the 1.16.2 ledger (`addr::GET_BUDDY_PARAM`) and checks these windows at the
-/// address that ledger resolves.
+/// `GetBuddyParam(out, id)`, 2.7.2.0 rva. The DLL detours it through `addr::GET_BUDDY_PARAM`
+/// (the same rva) and checks these windows at that address; this copy is what `build.rs` pins.
 #[allow(dead_code)]
-const GET_BUDDY_PARAM_1171_RVA: usize = 0xd2_8010;
+const GET_BUDDY_PARAM_RVA: usize = 0xd2_9700;
 
-/// `GetCharaInitParam(out, id)` on 1.17.1 (2.7.2.0 `0x140d37660`, 1.16.2 `0x140d347f0`). No
-/// ledger row carries it, so it is hooked at this address carried by `carry_1171_rva`.
+/// `GetCharaInitParam(out, id)`, 2.7.2.0 rva. It is not on the detour allowlist, so it is hooked
+/// through the runtime-derived entry point after these windows match.
 #[allow(dead_code)]
-const GET_CHARA_INIT_PARAM_1171_RVA: usize = 0xd3_5f70;
+const GET_CHARA_INIT_PARAM_RVA: usize = 0xd3_7660;
 
 /// Both getters open `push rdi; sub rsp,0x40; mov qword [rsp+0x20],-2`. The window starts at the
 /// third instruction, past the five bytes an Arxan stub may have replaced at the entry.

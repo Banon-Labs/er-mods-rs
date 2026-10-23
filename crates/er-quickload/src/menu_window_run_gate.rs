@@ -1,6 +1,6 @@
 //! Who needs the product's `CS::MenuWindowJob::Run` detour, asked one consumer at a time.
 //!
-//! `pab_node_update_detour` is the product's only handler on `PAB_NODE_UPDATE_RVA` (0x7ad1c0),
+//! `pab_node_update_detour` is the product's only handler on `PAB_NODE_UPDATE_RVA` (0x7ae4f0),
 //! which is the same address as `MENU_WINDOW_JOB_RUN_RVA` -- the game's menu pump executing one
 //! window. Three separate pieces of the product ride that one detour:
 //!

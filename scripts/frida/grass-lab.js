@@ -25,7 +25,7 @@
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-// Every address below is 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py. Each
+// Every address below is 2.7.2.0, carried from 1.17.1. Each
 // code address is a function byte-identical across the two builds apart from relocated operands
 // (GetGrassType's jump table moves with it), and each global has the same readers in both. The
 // offsets this file walks read unchanged in byte-identical 2.7.2.0 code: CSMsbParts +0x18, part

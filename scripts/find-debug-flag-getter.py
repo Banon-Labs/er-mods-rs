@@ -10,20 +10,23 @@ FromSoft's debug switches compile to a three-instruction stub:
     jmp   qword ptr [rsp - 8]
 
 The stub is byte-identical between builds except for that one relocated displacement, so
-`scripts/map-rvas-1162-to-1170.py` cannot map it -- it reported *52* shape matches for
+the 1.16.2 -> 1.17 signature carry (`map-rvas-1162-to-1170.py`, deleted with the address carry on
+2026-10-23) could not map it -- it reported *52* shape matches for
 `Game.Debug.IsEnableControlOnDisactiveWindow` and refused to pick one, which is the correct
 refusal and also a dead end. The caller is not ambiguous, though: a 3 KB function maps
-uniquely, and `docs/recon/rva-map-1162-to-1170.functions.tsv` already carries the pair.
+uniquely, and the whole-image function map of the time already carried the pair.
 
 So: decode the caller, follow each `call rel32` (through a one-instruction `jmp rel32`
 thunk, which is how these accessors are reached), and report every callee that is such a
 stub together with the absolute VA of the flag byte it reads. Run it on both images and the
-1.16.2 answer identifies which stub is which, while the 1.17 answer is the address to use.
+1.16.2 answer identifies which stub is which, while the 2.7.2.0 answer is the address to use.
+The image defaults to `eldenring-deobf-1.17.2.bin`, the installed build; that caller is
+`0x140e37000` there, the same 659 instructions as 1.16.2 `0x140e33aa0`.
 
 Usage
-    uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e33aa0
-    uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e358a0 \\
-        --image eldenring-deobf-1.17.bin
+    uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e37000
+    uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e33aa0 \\
+        --image eldenring-deobf.bin
 """
 
 from __future__ import annotations
@@ -70,8 +73,8 @@ def _decode_stub(decoder, data: bytes, va: int):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("caller", help="VA of the calling function, e.g. 0x140e33aa0")
-    parser.add_argument("--image", default="eldenring-deobf.bin", help="flat de-Arxan'd image")
+    parser.add_argument("caller", help="VA of the calling function, e.g. 0x140e37000")
+    parser.add_argument("--image", default="eldenring-deobf-1.17.2.bin", help="flat de-Arxan'd image")
     args = parser.parse_args()
 
     try:

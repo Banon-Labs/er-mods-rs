@@ -599,8 +599,8 @@ pub unsafe fn tick() -> Option<Report> {
                     .to_owned()
             } else {
                 format!(
-                    "{} game function(s) have no verified mapping for this build and every call \
-                     to them was refused: {}",
+                    "{} game function(s) are refused on this build (only 2.7.2.0 is measured) and \
+                     every call to them was skipped: {}",
                     inert.len(),
                     inert.join(", ")
                 )
@@ -1152,12 +1152,12 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             );
         }
         if !worn.unresolved_natives.is_empty() {
-            // Named one by one on purpose: each one is a `docs/recon/rva-map-1162-to-1170` row
-            // that does not exist yet, and a count names none of them.
+            // Named one by one on purpose: each one is a constant to re-measure on the build that
+            // refused it, and a count names none of them.
             log_line(&format!(
-                "[build-import] EQUIP: NOTHING WAS ATTEMPTED -- {} game function(s) have no \
-                 verified mapping for the running build: {}. Every planned position is recorded \
-                 as not attempted rather than dropped from the denominator.",
+                "[build-import] EQUIP: NOTHING WAS ATTEMPTED -- {} game function(s) are refused \
+                 on the running build (only 2.7.2.0 is measured): {}. Every planned position is \
+                 recorded as not attempted rather than dropped from the denominator.",
                 worn.unresolved_natives.len(),
                 worn.unresolved_natives.join(", ")
             ));
@@ -1304,9 +1304,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // they were written and could not be read back.
         let render = |flask: Option<[i32; 2]>| match flask {
             Some(values) => format!("{:?}", values.map(|value| format!("0x{value:08X}"))),
-            None => {
-                "UNREADABLE (GetPhysicTearBySlot has no verified mapping for this build)".to_owned()
-            }
+            None => "UNREADABLE (GetPhysicTearBySlot is refused on this build)".to_owned(),
         };
         log_line(&format!(
             "[build-import] PHYSICK: {} verified out of {}. wants {:?}; flask was {} -> now {} \
@@ -1334,8 +1332,8 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 // Written, unprovable. Not `Mismatch { actual: -1 }`, which would claim the
                 // engine reported an empty slot.
                 None => PositionResult::NotAttempted(
-                    "the tear was written but GetPhysicTearBySlot has no verified mapping for \
-                     the running build, so nothing read it back",
+                    "the tear was written but GetPhysicTearBySlot is refused on the running \
+                     build, so nothing read it back",
                 ),
             };
             if !ledger.record_kind(PositionKind::Physick, index, result) {
@@ -1357,8 +1355,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 rune.name,
                 match equipped {
                     Some(equipped) => equipped.to_string(),
-                    None => "NOTHING -- the getter has no verified mapping for the running build"
-                        .to_owned(),
+                    None => "NOTHING -- the getter is refused on the running build".to_owned(),
                 }
             ));
         }
@@ -1514,8 +1511,9 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             // Said, not skipped. The stat pass going inert on a build that moved the code is
             // exactly the case a silent default outcome would have reported as a clean import.
             None => log_line(
-                "[build-import] STATS: NOT APPLIED -- the level/attribute natives have no \
-                 verified mapping for the running build. The character keeps the stats it had.",
+                "[build-import] STATS: NOT APPLIED -- the level/attribute natives are refused on \
+                 the running build (only 2.7.2.0 is measured). The character keeps the stats it \
+                 had.",
             ),
         }
     }

@@ -66,8 +66,10 @@ def main() -> int:
             last_switch_oracle = l.strip()
         if "STEP-3 STALL DETECTED" in l or ("blk_ls=0x0" in l and "mms_step=3" in l):
             worldres_stall += 1
-        for marker in ("access-violation rva", "0x1eb9999", "deliberate-abort",
-                       "game ASSERT", "a0_rva=0x29c7aa0", "DL_PANIC"):
+        # The rvas are 2.7.2.0: DLPanic's deliberate `mov dword ptr [0], 0xdeadba` fault, and the
+        # FD4Singleton.h path string the uninitialised-singleton asserts hand it as rcx.
+        for marker in ("access-violation rva", "0x1ebcef9", "deliberate-abort",
+                       "game ASSERT", "a0_rva=0x29ccaa0", "DL_PANIC"):
             if marker in l and "safe_input hook" not in l:
                 crashes.append(l.strip()[:160])
 

@@ -112,18 +112,18 @@ pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
 /// call IngameInit (its state-2 handler) with a synthetic `this`: it only reads
 /// +0xc0 (the InGameStep) and +0x130 (the map -- != -1 = continue, -1 = new
 /// game), primes the world subsystems, and SetupLoad-submits the load. Never
-/// touches the force flag 0x143d856a0. The map id is produced by the same parser
-/// (0x71fd60) over the default map string the new-game path uses.
+/// touches the force flag 0x143d8c740. The map id is produced by the same parser
+/// (0x721060) over the default map string the new-game path uses. 2.7.2.0 rvas.
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const OUTER_STEP_INGAMESTEP_OFFSET: usize = 0xc0;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const OUTER_STEP_MAP_OVERRIDE_130_OFFSET: usize = 0x130;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const INGAMEINIT_HANDLER_RVA: usize = 0xb0a1f0;
+pub(crate) const INGAMEINIT_HANDLER_RVA: usize = 0xb0bdc0;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const INGAMEINIT_MAP_PARSER_RVA: usize = 0x71fd60;
+pub(crate) const INGAMEINIT_MAP_PARSER_RVA: usize = 0x721060;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const DEFAULT_MAP_STRING_RVA: usize = 0x2b62c70;
+pub(crate) const DEFAULT_MAP_STRING_RVA: usize = 0x2b67e00;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMEINIT_SYNTHETIC_QWORDS: usize = 0x40;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
@@ -134,23 +134,22 @@ pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;
 /// InGameStep manual-tick experiment (lever / "direct drive the load"). The
 /// load job at `owner+0x2e8` is a `CS::InGameStep` whose step machine only
-/// advances while its FD4StepTemplate::Execute pump (`0x140b0bd60`) is ticked
+/// advances while its FD4StepTemplate::Execute pump (1.16.2 `0x140b0bd60`) is ticked
 /// each frame. `force_play_game` submits the load (`job+0xd8=1`) but never ticks
-/// the step, so it orphans. The engine already calls `0x140b0bd60` every frame
-/// on the inner TitleStep, so we detour it and, when it fires for the inner
-/// TitleStep at GameStepWait, also call the original on the InGameStep with the
+/// the step, so it orphans. The engine already calls that pump every frame
+/// on the inner TitleStep, so the experiment detoured it and, when it fired for the inner
+/// TitleStep at GameStepWait, also called the original on the InGameStep with the
 /// same live ctx — reusing the engine's real per-frame context (float dt at
 /// ctx+0x8) instead of fabricating one. The InGameStep's own state lives at
-/// `+0x48` (`-1` == finished); we tick only while `+0xd8 != 0` and `+0x48 != -1`.
-#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const STEP_PUMP_DRIVER_RVA: u32 = 0x00b0bd60;
+/// `+0x48` (`-1` == finished); it ticked only while `+0xd8 != 0` and `+0x48 != -1`.
+/// The pump's address was never paired to 2.7.2.0 and had no reader, so its constant is gone.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_FINISHED_SENTINEL: i32 = -1;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_LOAD_DONE: i32 = 0;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_PUMP_D8_UNOBSERVED: i32 = -2;
-/// FD4StepTemplate force-state override fields (pump `0x140b0bd60` @ 0xb0be01:
+/// FD4StepTemplate force-state override fields (1.16.2 pump `0x140b0bd60` @ 0xb0be01:
 /// `if byte[+0x69]!=0 && byte[+0xa8]==0 { +0x48 = +0x4c = [+0xac]; +0xa8=0 }`).
 /// If `+0x69` is set and `+0xac` pins the step index, the machine never advances.
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
@@ -240,36 +239,36 @@ pub(crate) static CAP_LOAD_ACTIVATE2_ORIG: AtomicUsize = AtomicUsize::new(HOOK_O
 pub(crate) static CAP_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_SELECTOR_TICK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_MENU_DESER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// ProfileLoadDialog lambda factory 0x14081ead0 (op-new 0x1cd0 + ctor 0x1409a3d90). Hooking
+/// ProfileLoadDialog lambda factory 0x14081fe00 (2.7.2.0; op-new 0x1cd0 + ctor, 1.16.2 0x1409a3d90). Hooking
 /// it with a caller backtrace captures the full construction chain: press-any-key -> main
 /// menu -> "Load Game" activated -> dialog built, plus the rcx/rdx context the factory needs
 /// (so the dialog can be built zero-input in the replay).
 pub(crate) static CAP_DIALOG_FACTORY_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Title CSMenu-controller ("router_this") ctor 0x1409060d8: installs the controller vtable
-/// (runtime 0x142afa070) and the +0x1290 selectable-row vector. Hooking it captures the live
+/// Title CSMenu-controller ("router_this") ctor (`CSMENU_CTOR_RVA`): installs the controller vtable
+/// (2.7.2.0 0x142aff1e0) and the +0x1290 selectable-row vector. Hooking it captures the live
 /// router_this -- the object that owns the Continue/Load-Game/NewGame rows -- which is not
 /// field-linked from the TitleTopDialog (a dialog-struct scan misses it). Latched into
 /// MENU_ROUTER_THIS so the own-stepper can read its rows + drive the Load-Game select zero-input.
 pub(crate) static CAP_CSMENU_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_CSMENU_CTOR_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_CSMENU_CTOR_LOG_FIRST: usize = TraceSampleLimit::Value8 as usize;
-/// The captured title CSMenu controller (router_this). 0 until its ctor 0x1409060d8 latches it.
+/// The captured title CSMenu controller (router_this). 0 until its ctor hook latches it.
 pub(crate) static MENU_ROUTER_THIS: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The title-menu "Load Game" row entry (stride-0x210 row whose action functor [entry+0xf8]
-/// chains to dialog_factory 0x14081ead0). Captured by the row-push hook's post-build scan. Its
+/// chains to dialog_factory 0x14081fe00). Captured by the row-push hook's post-build scan. Its
 /// layout is the CSMenu-row layout (action at +0xf8), distinct from the FD4 MenuWindowJob d180
 /// (+0xa8). Invoking its action builds the ProfileLoadDialog zero-input.
 pub(crate) static MENU_LOADGAME_ROW_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// The matching "Continue" row entry (action -> continue_confirm 0x140b0e180), for reference.
+/// The matching "Continue" row entry (action -> continue_confirm 0x140b0fd50), for reference.
 pub(crate) static MENU_CONTINUE_ROW_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Native title-menu task node whose update wrapper is ContinueWrapper 0x14082bac0. Captured by
+/// Native title-menu task node whose update wrapper is ContinueWrapper 0x14082cf60. Captured by
 /// the FD4 registry enqueue hook after TitleTopDialog::open_menu materializes the native menu.
 pub(crate) static MENU_CONTINUE_TASK_NODE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Native TitleTopDialog Continue MenuMemberFuncJob node whose member function reaches
-/// ContinueWrapper 0x14082bac0. This is a passive semantic latch only; product proof must still
+/// ContinueWrapper 0x14082cf60. This is a passive semantic latch only; product proof must still
 /// advance through native accept/submit semantics, not direct-load shortcuts.
 pub(crate) static MENU_CONTINUE_MEMBER_NODE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -322,22 +321,21 @@ pub(crate) static RESULT_ACTION_LAST_WRAPPER_BUILDER_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
-/// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
-/// Real function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's
-/// 0x9060d8 lands after 5 pushes (push rbp/rsi/rdi/r12/r13) -- hooking there installs a
-/// trampoline mid-prologue and corrupts the stack, so the prior capture was unreliable.
+/// router_this ctor RVA and its installed (runtime) primary vtable RVA (2.7.2.0).
+/// Real function entry is 0x140907720 (2.7.2.0, `rex push rbp` prologue); an address 8 bytes in
+/// lands after 5 pushes (push rbp/rsi/rdi/r12/r13) -- hooking there installs a
+/// trampoline mid-prologue and corrupts the stack, so an earlier capture was unreliable.
 pub(crate) const CSMENU_CTOR_RVA: u32 = ProfileLoadMenuRva::CsMenuCtor as u32;
-pub(crate) const ROUTER_THIS_VTABLE_RVA: usize = 0x02afa070;
-/// Row-push functions (reliable .text RVAs, no .rdata skew): rebuild_rows 0x14078d2c0 (bulk
-/// emplace) and append_one 0x14078eea0 (single). If either fires headless the Continue/Load rows
+pub(crate) const ROUTER_THIS_VTABLE_RVA: usize = 0x02aff1e0;
+/// Row-push functions: rebuild_rows 0x14078e5f0 (bulk emplace) and append_one 0x1407901d0
+/// (single), 2.7.2.0. If either fires headless the Continue/Load rows
 /// are materialized zero-input (and rcx reaches router_this); if neither fires the interactive
 /// menu controller is input-instantiated (the architectural floor). rcx = list-model container;
 /// [container+8] = router_this back-ptr.
 pub(crate) static CAP_REBUILD_ROWS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_APPEND_ONE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// FD4/menu registry insertion helper 0x1407a7b60, called directly by TitleTopDialog::open_menu
-/// after each menu entry descriptor is built. The existing task_enqueue_7a7b60 hook logs
+/// FD4/menu registry insertion helper 0x1407a8e90 (2.7.2.0), called directly by TitleTopDialog::open_menu
+/// after each menu entry descriptor is built. The existing task_enqueue hook logs
 /// rcx/rdx/ret fingerprints to map where the opened Continue/Load-Game entries are stored.
 pub(crate) static CAP_MENU_INSERT_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_MENU_INSERT_LOG_FIRST: usize = TraceSampleLimit::Value24 as usize;
@@ -374,14 +372,14 @@ pub(crate) const CAP_ROW_PUSH_LOG_FIRST: usize = 12;
 /// content-gated `inspect_row_container` log would miss it; this captures who triggers populate.
 pub(crate) static CAP_ROW_PUSH_ALLFIRE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_ROW_PUSH_ALLFIRE_LOG_FIRST: usize = 24;
-pub(crate) const REBUILD_ROWS_RVA: u32 = 0x0078d2c0;
-pub(crate) const APPEND_ONE_RVA: u32 = 0x0078eea0;
+pub(crate) const REBUILD_ROWS_RVA: u32 = 0x0078e5f0;
+pub(crate) const APPEND_ONE_RVA: u32 = 0x007901d0;
 pub(crate) const ROW_CONTAINER_BACKPTR_8: usize = 0x8;
 pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = TraceSampleLimit::Value4 as usize;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = CAP_SELECTOR_TICK_LOG_INTERVAL_TICKS;
-/// Selector-owner step (0x140826d50) install-flag field: 0 on the first tick (fires the
-/// delegate-installer 0x140828270), 1 afterwards.
+/// Selector-owner step (2.7.2.0 0x1408281f0) install-flag field: 0 on the first tick (fires the
+/// delegate-installer, 1.16.2 0x140828270), 1 afterwards.
 #[repr(C)]
 pub(crate) struct SelectorStepLayout {
     pub(crate) unknown_000: [u8; 0x68],

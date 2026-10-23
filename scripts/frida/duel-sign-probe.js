@@ -9,7 +9,7 @@ const game = Process.findModuleByName('eldenring.exe');
 const BASE = ptr('0x140000000');
 const va = (s) => game.base.add(ptr(s).sub(BASE));
 
-// 2.7.2.0 addresses, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: each function body
+// 2.7.2.0 addresses, carried from 1.17.1: each function body
 // matches between eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin with its rip-relative
 // and branch operands carried, and each global is what its 2.7.2.0 readers load.
 const FRAME_TICK = va('0x140773db0');       // frame tick 0x140773900 -> 0x140773db0

@@ -16,8 +16,9 @@ what it found, all of it.
     python3 scripts/find-deobf-field-access.py 0x340 --range 0x1403f0000-0x140480000
     python3 scripts/find-deobf-field-access.py 0x468 --stores-only
 
-The image is flat (file offset == RVA, base 0x140000000); override it with `ER_DEOBF_BIN`, which
-is how you point this at 1.17 (`ER_DEOBF_BIN=eldenring-deobf-1.17.bin`).
+The image is flat (file offset == RVA, base 0x140000000). It defaults to
+`eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build; override it with `ER_DEOBF_BIN` or
+`--image` to read another (`ER_DEOBF_BIN=eldenring-deobf.bin` is 1.16.2, the named dump's build).
 
 **A displacement is not a struct.** Every hit is "some instruction uses displacement N off some
 register", and most large structs have something at any given offset -- a 0x1a0 scan finds
@@ -33,7 +34,7 @@ import os
 import sys
 
 DEFAULT_IMG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf.bin"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf-1.17.2.bin"
 )
 BASE = 0x140000000
 

@@ -18,10 +18,10 @@ because the default has to stay usable on a branch where the finding is expected
 It must not be wired into `scripts/check.sh` on an address-migration branch. Its
 premise is "a refactor must not change the numeric contract"; the premise of
 `fix/repoint-rvas-to-1170` is that every game address changes. All six mismatches
-it reports there are the intentional 1.16.2 -> 1.17 repoints, four of them
-verbatim rows in `docs/recon/rva-map-1162-to-1170*.tsv` and the fifth
-(`0x14067a99a -> 0x14067b7ea`) an entry+0x1a callsite carried by the
-offset-from-entry convention that `check-no-stale-callsite-rva.py` owns. The two
+it reported there were the intentional 1.16.2 -> 1.17 repoints, four of them
+verbatim rows of the 1.16.2 -> 1.17 address ledgers (deleted with the carry on
+2026-10-23) and the fifth (`0x14067a99a -> 0x14067b7ea`) an entry+0x1a callsite
+carried by the offset-from-entry convention. The same holds for the 2.7.2.0 port. The two
 premises are mutually exclusive. Use `--gate` on a pure-refactor branch, where a
 changed number really is a defect.
 """

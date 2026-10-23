@@ -5,11 +5,13 @@ Catches: E8 (call) / E9 (jmp) rel32 code xrefs, and absolute 8-byte le pointer
 occurrences (function-pointer tables / vtables -> indirect dispatch). Mapped
 image: file offset == RVA, image base 0x140000000 (see disas-deobf.sh).
 Usage: find-xrefs.py <target_va_hex> [more_targets...]
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build).
 """
+import os
 import sys
 
 BASE = 0x140000000
-IMG = __file__.rsplit("/", 1)[0] + "/../eldenring-deobf.bin"
+IMG = os.environ.get("ER_DEOBF_BIN", __file__.rsplit("/", 1)[0] + "/../eldenring-deobf-1.17.2.bin")
 
 
 def main() -> int:

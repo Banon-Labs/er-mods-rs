@@ -1,7 +1,7 @@
 // Two questions this session cannot answer from a static image.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // 1. The GFx tag-parse prologue is unique in eldenring-deobf-1.17.1.bin and unique in the shipped
 //    eldenring.exe, and yet the DLL's boot-time scan of the LIVE .text calls it "absent or not

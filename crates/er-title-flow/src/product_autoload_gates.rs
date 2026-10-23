@@ -159,8 +159,8 @@ pub fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
 /// empty/inactive in the retail build. Before reversing the registry write API
 /// and attempting an injection, this samples the live state each frame: the
 /// SimpleTitleStep owner state (+0x4c), title queue (+0x128), parsed selection
-/// (+0x130), the registry root pointer ([0x143d87360]) and the load-active gate
-/// byte ([0x143d856a0]). It never writes game memory. A non-null registry with
+/// (+0x130), the registry root pointer ([0x143d8e400]) and the load-active gate
+/// byte ([0x143d8c740]). It never writes game memory. A non-null registry with
 /// an idle pump (state stable, queue/selection empty, gate 0) confirms the
 /// injection target is real and reachable; a null registry means the SelectBot
 /// harness is not initialized and the lane needs a different entry.
@@ -172,11 +172,12 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     // advances the inner TitleStep to Finish (state 11 -> -1) the inner owner is
     // torn down, but `pump_ran` (does the outer MenuLoop spin up?) and the latch
     // byte live in module globals, so we must still capture them post-cascade.
-    // Every one of these three is a resolved address read through a fault-tolerant reader, and
-    // both halves are load-bearing on 1.17. Resolution stops the read landing on whatever now
-    // occupies a moved global; the fault-tolerant reader is what makes a refusal survivable,
-    // because `game_data_addr` answers 0 when it will not translate and a raw `*(0 as *const _)`
-    // turns a refusal into a crash. A probe must not be able to kill the boot it is observing.
+    // Every one of these three is a build-checked address read through a fault-tolerant reader,
+    // and both halves are load-bearing. The build check stops the read landing on whatever
+    // occupies the slot on another build; the fault-tolerant reader is what makes a refusal
+    // survivable, because `game_data_addr` answers 0 on any build other than 2.7.2.0 and a raw
+    // `*(0 as *const _)` turns a refusal into a crash. A probe must not be able to kill the boot
+    // it is observing.
     let registry = read_global_ptr(
         module_base,
         SELECTBOT_REGISTRY_GLOBAL_RVA,
@@ -210,7 +211,7 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     append_autoload_debug(format_args!(
         "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} input_mgr={input_manager:#x} pump_ran={pump_ran} tick={tick}"
     ));
-    // Lever-1 title-accept experiment: set the proceed latch [0x143d856a0]=1 once,
+    // Lever-1 title-accept experiment: set the proceed latch [0x143d8c740]=1 once,
     // only while the inner owner is confirmed at MenuJobWait (state 10), so the
     // native MenuJobWait handler advances itself to state 11 (Finish) on its next
     // tick. Sampling continues above so the cascade (state, pump_ran, registry) is
@@ -237,7 +238,7 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
         ));
     }
     // Lever-2 (option c): satisfy the global menu-accept side-effect zero-input. At the parked
-    // press-any-button title (state 10), set the global accept byte 0x144589bdc=1 once so the
+    // press-any-button title (state 10), set the global accept byte 0x144590c7c=1 once so the
     // native TitleTopDialog::update runs the open-menu registrar on its own next tick -- the
     // natural advance (builds Continue/Load + transfers focus -> select-layer/router_this), which
     // a direct registrar self-fire could not do without spawning a competing dialog that reverted.
@@ -267,11 +268,11 @@ pub unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
 }
 /// Recipe A: arm the game's own built-in title autoload with zero input.
 ///
-/// The save-manager per-frame update `0x14067f5d0` performs an autoload when the
-/// save slot (`GameMan+0xac0`) is set and the force flag `0x143d856a0` is non-zero
+/// The save-manager per-frame update (1.16.2 `0x14067f5d0`) performs an autoload when the
+/// save slot (`GameMan+0xac0`) is set and the force flag `0x143d8c740` is non-zero
 /// — it primes the world/streaming subsystems through the game's own state
 /// machine (which `force_play_game` bypassed). So we set the slot via the native
-/// setter `0x67a810` and raise the force flag once, then let the engine load.
+/// setter `0x67bb10` and raise the force flag once, then let the engine load.
 /// The earlier crash from raising that flag came from leaving the slot at -1 (a
 /// Finish teardown with no load armed); arming the slot first is the fix.
 pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
@@ -317,7 +318,7 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
         return;
     }
     // Corrected recipe (native-continue-and-slotn-recipe-2026): the latch
-    // 0x143d856a0 must stay clear; the arm flag is [GameMan+0xb72]=1. (The old
+    // 0x143d8c740 must stay clear; the arm flag is [GameMan+0xb72]=1. (The old
     // code set the latch to 1, which the disasm proves aborts the load.)
     let latch_before = read_global_u8(
         module_base,
@@ -359,11 +360,11 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
 /// It called `TITLE_TOP_DIALOG_CLEANUP_RVA` (1.16.2 `0x1409a8890`) on the dialog at owner+0xe0.
 /// That function is `CS::TitleTopDialog::~TitleTopDialog`: it stores the `TitleTopDialog` vtable
 /// back into the object, frees the +0xd60 allocation, destroys six `CSScaleformValue`s and chains
-/// to `~MenuWindow` at `FUN_1407430c0`. It deregisters nothing and closes nothing. The object
+/// to `~MenuWindow` at 1.16.2 `FUN_1407430c0`. It deregisters nothing and closes nothing. The object
 /// stays in the owner's `DLFixedVector<MenuWindow*>` at owner+0xe0 with its reference count still
 /// 1, so the engine keeps pumping an object whose destructor has run.
 ///
-/// Measured on the live process 2026-09-11 19:44 (pid 3031799, the 19:39 run): the call ran at
+/// Measured on the live process 2026-09-11 19:44 (1.17.1, pid 3031799, the 19:39 run): the call ran at
 /// +27947ms on `dialog=0x318ca880` and returned `0x1429d11d8`, which is the vtable it had just
 /// written back. Six minutes later owner+0xe0 still held `0x318ca880`, owner+0x128 still read 1,
 /// and `0x318ca880+0x3b0` -- the `MenuWindow::Close` re-entry latch -- still read 0, so the window
@@ -376,7 +377,8 @@ pub unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
 /// that was tried live the same evening. It did exactly half a teardown and the half it did was
 /// worse than doing nothing: `title-dialog-close: ... dialog=0x16a66280 owner_window_count 1->1`.
 /// `CloseAsFailed` sets a terminal result and calls `MenuWindow::Close`; the deregistration lives
-/// in `FUN_1407ada40`, which runs only when the window's `MenuWindowJob` is run, and after a switch
+/// in `MENU_WINDOW_JOB_FINALIZE_RVA` (`0x1407aed70`; 1.16.2 `FUN_1407ada40`), which runs only when
+/// the window's `MenuWindowJob` is run, and after a switch
 /// commits that job is not run at all. So `PRESS ANY BUTTON` and the footer went away and a
 /// registered, undrawn window stayed behind holding the player's input. The user's report of that
 /// build: "I got spat into the title screen with the logo, but the footer and the press any button
@@ -466,7 +468,7 @@ pub unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u
 /// Autonomous press-any-button -> open-menu (zero-input): drive the title to the open main menu
 /// ourselves so a run needs no real button press. When the live TitleTopDialog (owner+0xe0) is settled
 /// in the FD4 `Loop` state with the menu-opened latch (dialog+0xa40) still 0, call the native open-menu
-/// registrar `0x1409b24e0(rcx=dialog)` -- the exact action a button press triggers -- to open the menu
+/// registrar `0x1409b3be0(rcx=dialog)` -- the exact action a button press triggers -- to open the menu
 /// (sets a40=1). Requires online-disable (`er-quickload-offline.txt`) so the connection modal is skipped
 /// and the SM reaches Loop. One-shot. Then `maybe_fire_tfc_continue` (gated a40==1) fires Continue. No
 /// input. (Same self-fire the own_stepper STAGE1d uses, extracted for the tfc flow.)
@@ -532,7 +534,8 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     }
     // Route the registrar in-place (zero-input): the native open-menu call sites write a "mode" byte at
     // [*(base+TITLE_MENU_TRANSITION_SINGLETON_RVA)]+0 before jumping to the registrar -- press-accept
-    // 0x1409b1260 sets it =1 (open main menu in place), pump/back paths set it =0. A bare open_menu with
+    // (1.16.2 0x1409b1260) sets it =1 (open main menu in place), pump/back paths set it =0. A bare
+    // open_menu with
     // the byte left stale may route the registrar into an error-modal branch. Replicate the press-accept
     // set (subagent-C static RE: product native-open with this byte set reached the menu with 0 msgbox).
     // Null-/readability-guarded; no save write, no input. bd er-effects-rs-0ye + title-accept-to-registrar-narrow-path-143d5dea8.
@@ -583,10 +586,10 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
 }
 /// Zero-input natural menu-open (the row-building path). At the parked press-any-button title
 /// (TitleTopDialog settled in "Loop", menu not yet open a40==0), set the decoded global menu-accept
-/// byte 0x144589bdc=1 once so the game's own `TitleTopDialog::update` accept-gate runs the open-menu
+/// byte 0x144590c7c=1 once so the game's own `TitleTopDialog::update` accept-gate runs the open-menu
 /// registrar in its native frame -- which posts the Continue/Load/NewGame MenuJob chain and drains it
-/// (MenuWindow::Update 0x140745520) in the same native flow, so the rows actually build. A direct
-/// registrar self-fire (`maybe_auto_open_menu`) only posts the chain; the native update does not drain
+/// (MenuWindow::Update, 1.16.1 dump 0x140745520) in the same native flow, so the rows actually
+/// build. A direct registrar self-fire (`maybe_auto_open_menu`) only posts the chain; the native update does not drain
 /// a chain it did not open itself, so the rows never build (continue-scan = 0 nodes; bd
 /// rowbuild-mechanism-incontext-openmenu-2026-06-23 + title-global-accept-byte-144589bdc). This is the
 /// decoded accept flag the input pipeline sets on press -- Not a synthesized DInput/keystate/XInput
@@ -599,10 +602,11 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
 /// opened the menu.
 ///
 /// The menu-open write above is one press; this is the second. `CS::TitleTopDialog`'s command-list
-/// builder `FUN_1409abc30` appends Continue first when the `ProfileSummary` gate passes, so the
-/// list comes up with the cursor already on it, and the row's own action
+/// builder (1.16.2 `FUN_1409abc30`) appends Continue first when the `ProfileSummary` gate passes, so
+/// the list comes up with the cursor already on it, and the row's own action
 /// (`_Func_impl` vtable [`TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA`]) is the function that
-/// builds the load job through `FUN_140826510`. Delivering the accept is therefore the whole
+/// builds the load job through `0x1408279b0` (1.16.2 `FUN_140826510`). Delivering the accept is
+/// therefore the whole
 /// remaining step: the game selects, builds, chains and submits its own job, exactly as it does for
 /// a player pressing the button.
 ///
@@ -614,7 +618,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
 ///
 ///   * the menu-open one-shot has fired and the `a40` latch says the menu is genuinely open;
 ///   * `GameMan+0xac0` carries a slot the summary has a record for -- the same pair
-///     `FUN_140875750` asks about before it will add the row;
+///     `0x140876bf0` (1.16.2 `FUN_140875750`) asks about before it will add the row;
 ///   * no missing-save selection is pending, so the redirect this run will load through is live.
 ///
 /// One-shot via [`TITLE_COMMAND_LIST_ACCEPT_FIRED`]: a per-frame repeat would keep accepting rows
@@ -676,8 +680,8 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // chosen a save. This accept byte makes the native registrar build the Continue/Load/NewGame
     // rows in its own update frame; if that happens before the pick installs the save redirect, the
     // game's save-check finds no loadable save and constructs the Continue row through the disabled
-    // MenuWindowJob ctor (idle accept predicate 0x1407add70) instead of the native-accept ctor
-    // (0x1407ad810). product_continue then refuses that idle Continue forever ("ignoring diagnostic
+    // MenuWindowJob ctor (idle accept predicate 0x1407af0a0) instead of the native-accept ctor
+    // (0x1407aeb40). product_continue then refuses that idle Continue forever ("ignoring diagnostic
     // Continue candidate ... waiting for semantic native-accept MENU_CONTINUE_ITEM") and the row is
     // never rebuilt -> soft-lock at the title right after the pick. Deferring the arm until the pick
     // clears `missing_save_selection_pending()` (redirect active, save-check hold released) makes the
@@ -796,7 +800,8 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // Fill the records the command list reads, before the command list is built.
     //
     // `CS::TitleTopDialog`'s command-list builder (1.16.2 `FUN_1409abc30`, the one that binds
-    // `01_070_CommandList`) adds the Continue row only inside
+    // `01_070_CommandList`; the names below are the 1.16.2 decompile's) adds the Continue row only
+    // inside
     // `if (IsAnySavedCharacterPresent()) { if (FUN_140875750(GetMenuSystemSaveLoad()->saveSlot)) ... }`,
     // and both predicates read `CS::GameDataMan::GetProfileSummary()`:
     // `IsAnySavedCharacterPresent` walks slots 0..9 asking `FUN_140261cd0(summary, i)`, and
@@ -875,7 +880,7 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
 /// raises at menu-open. Each handler is guarded by `if (IsInOnlineMode()) { if
 /// (IsServerConnectionEnabled() && ...) { build popup } }`, which reduces to two `GameMan` bytes:
 /// `isInOnlineMode = [GameMan+0xBC8]`, `serverConnectionEnabled = [GameMan+0xBC9]`
-/// (`GameMan = *(base+GAME_SAVE_SLOT_SINGLETON_RVA)`; getter `0x14067a030` is `mov rax,[0x143d69918];
+/// (`GameMan = *(base+GAME_SAVE_SLOT_SINGLETON_RVA)`; getter `0x14067b330` is `mov rax,[GameMan];
 /// movzx eax,[rax+0xBC8]; ret` -- Verified by deobf disasm). NOTE the existing online-disable patches
 /// that getter's return value, but the handlers consult the bytes (directly / via getters our patch
 /// does not cover), so the patch alone does not gate them. Forcing both bytes to 0 each title frame
@@ -919,7 +924,7 @@ pub unsafe fn force_offline_connection_bytes(base: usize) {
 }
 /// See `fire_tfc_continue_enabled`. Runs from the recurring game task; self-gates and fires once.
 /// Pure in-process field writes (no input, no native call) -- the native menu pump's selector
-/// (`0x1409a8eb0`) picks up `tfc+0x14c==1` on its next tick and dispatches the load through the
+/// (`0x1409aa500`, `TITLE_CONTINUE_SELECTOR_RVA`) picks up `tfc+0x14c==1` on its next tick and dispatches the load through the
 /// engine's own job pump (the proven user-Continue path, which avoids the FixOrderJobSequence
 /// overflow that killed the factory-direct `own_load_pump`). Logs before/after so a probe sees the
 /// exact write.
@@ -942,7 +947,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     if committed != TITLE_STEP_MENU_JOB_WAIT {
         return;
     }
-    // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d69918)) non-null.
+    // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d709a8)) non-null.
     let gm_singleton = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
             base,
@@ -972,7 +977,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         return;
     }
     // Require the main menu to be open, not the bare press-any-button screen. State 10
-    // (MenuJobWait) occurs at both; the open-menu registrar 0x1409b24e0 sets the menu-opened latch
+    // (MenuJobWait) occurs at both; the open-menu registrar 0x1409b3be0 sets the menu-opened latch
     // [dialog+0xa40]=1. Firing the bit at the closed press-any-button screen is dormant (the selector
     // that consumes tfc+0x14c is a Continue-item funclet not pumped until the menu is open) -- bd
     // tfc-14c-bit-dormant-without-menu-open-or-selector-invoke-2026-06-22.
@@ -1015,7 +1020,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     ));
     let before = unsafe { safe_read_i32(tfc + TFC_DISPATCH_STATE_14C_OFFSET) }.unwrap_or(-1);
     // Set the save slot on mss first (builder reads mss+0x1200 as the factory r8), then the dispatch
-    // bit -- mirroring the native confirm handler 0x1409a9250's two key writes.
+    // bit -- mirroring the native confirm handler's two key writes (1.16.2 0x1409a9250).
     // Guard (user spec 3+4 "any slot active" / "never load a slot if none active"): resolve the active
     // slot holding a real character instead of blindly loading the configured slot. The gold save's
     // configured slot 0 is a NULL slot -> loading it spawns the new-game intro cutscene + a null character.
@@ -1042,10 +1047,10 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         unsafe { *((mss + MSS_SAVE_SLOT_1200_OFFSET) as *mut i32) = want_slot };
     }
     unsafe { *((tfc + TFC_DISPATCH_STATE_14C_OFFSET) as *mut i32) = TFC_DISPATCH_STATE_LOAD };
-    // Force the dispatcher's build branch: clear tfc+0x18c (IsNotReleaseFlag55 0x14082cd60 `cmpb
-    // $0,0x18c(rcx)`). The open-menu path sets this nonzero after press-any-button, which makes the
-    // load dispatcher 0x1409b3070 take its abort branch (empty job, no load -- the builder 0x9ac760
-    // never fired). Clearing it guarantees the real LoadGame build. bd dispatcher-abort-branch-force-
+    // Force the dispatcher's build branch: clear tfc+0x18c (IsNotReleaseFlag55, 1.16.2 0x14082cd60
+    // `cmpb $0,0x18c(rcx)`). The open-menu path sets this nonzero after press-any-button, which
+    // makes the load dispatcher 0x1409b4770 take its abort branch (empty job, no load -- the
+    // builder 0x9ade60 never fired). Clearing it guarantees the real LoadGame build. bd dispatcher-abort-branch-force-
     // tfc-18c-zero-2026-06-23.
     let nrf_before = unsafe { safe_read_usize(tfc + TFC_NOT_RELEASE_FLAG_18C_OFFSET) }
         .map(|v| (v & 0xff) as u8)
@@ -1064,9 +1069,9 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
         )
     ));
     // Invoke the Continue-item selector that consumes tfc+0x14c (it is not pumped from the idle menu).
-    // Selector 0x1409a8eb0(rcx = &dialog_slot = owner+0xe0, rdx = out MenuJobResult*): reads
+    // Selector 0x1409aa500(rcx = &dialog_slot = owner+0xe0, rdx = out MenuJobResult*): reads
     // *(rcx)->dialog, *(dialog+0xa38)->tfc, *(tfc+0x14c)==1 -> load branch -> sets r8=dialog+0x50 +
-    // calls the load dispatcher 0x1409b3070 (proper ChainMenuJobs enqueue). Wrapped in catch_unwind
+    // calls the load dispatcher 0x1409b4770 (proper ChainMenuJobs enqueue). Wrapped in catch_unwind
     // (a Rust panic is caught; a hardware AV is not). Keeps simulated_button_presses_total = 0.
     let dialog_slot = owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
     let mut out_job: [usize; 4] = [0; 4];
@@ -1169,12 +1174,14 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
 ///
 /// # A bare detour, because argument 2 is a float
 ///
-/// `update(this /*rcx*/, float delta /*xmm1*/, const u8* input /*r8*/)`, read out of the image:
-/// `0x1409aac2a` spills `xmm6`, `0x1409aac40` does `movaps xmm6, xmm1` before anything writes
-/// that register, and the value goes back out as argument 2 at `0x1409aae21` and `0x1409aae2c`.
-/// It is single precision -- one callee stores it `movss [rbp-0x20], xmm6` (`0x1407457ec`) and
-/// the other accumulates it `addss xmm6, [rdi+0x188]` (`0x14082d79f`). Argument 3 is a pointer,
-/// dereferenced at `0x1409aac4e` (`movzx eax, byte ptr [r8]`) before any write. There is no
+/// `update(this /*rcx*/, float delta /*xmm1*/, const u8* input /*r8*/)`, read out of the image
+/// (entry `0x1409ac260`): `0x1409ac27a` spills `xmm6`, `0x1409ac290` does `movaps xmm6, xmm1`
+/// before anything writes that register, and the value goes back out as argument 2 at
+/// `0x1409ac471` and `0x1409ac47c`. It is single precision -- one callee stores it
+/// `movss [rbp-0x20], xmm6` (`0x140746aec`) and the other accumulates it
+/// `addss xmm6, [rdi+0x188]` (`0x14082ec3f`). Argument 3 is a pointer, dereferenced at
+/// `0x1409ac29e` (`movzx eax, byte ptr [r8]`) before any write. (Read first on 1.16.2, entry
+/// `0x1409aac10`; every offset from the entry is the same on 2.7.2.0.) There is no
 /// argument 4: its home slot holds a spilled `rbx`.
 ///
 /// This used to go through `create_continue_trace_hook`, which transmuted the detour to
@@ -1201,9 +1208,8 @@ pub unsafe fn install_title_update_hook(base: usize) {
             return;
         }
     }
-    // Unresolved on purpose: `MhHook::new` owns the single 1.16.2 -> 1.17 resolve, which is why
-    // this is `game_rva_for_hook` and not `game_data_addr`. Resolving here and again inside the
-    // hook API is the double-resolve `scripts/check-double-resolved-hook-targets.py` refuses.
+    // Unresolved on purpose: `MhHook::new` owns the 2.7.2.0 build/allowlist check, which is why
+    // this is `game_rva_for_hook` and not `game_data_addr`; the hook API reports the refusal.
     let Ok(address) = er_game_base::mem::game_rva_for_hook(TITLE_TOP_DIALOG_UPDATE_RVA as u32)
     else {
         append_autoload_debug(format_args!(
@@ -1258,7 +1264,8 @@ pub unsafe fn install_title_update_hook(base: usize) {
 }
 /// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
 /// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets
-/// `[job+0x1e8]=2` so the job's own predicate (0x1407a9200) completes it through the native path. Logs
+/// `[job+0x1e8]=2` so the job's own predicate (1.16.2 0x1407a9200) completes it through the native
+/// path. Logs
 /// the job struct on first sighting so the run self-confirms the offsets. Zero input.
 pub unsafe fn pab_advance_try(step: usize) {
     if !pab_advance_enabled() || PAB_ADVANCE_FIRED.load(Ordering::SeqCst) != 0 {
@@ -1372,7 +1379,7 @@ pub unsafe fn install_pab_advance_hook(base: usize) {
     unsafe {
         create_continue_trace_hook(
             &mut hooks,
-            "pab_node_update_7ad1c0",
+            "pab_node_update_7ae4f0",
             PAB_NODE_UPDATE_RVA,
             pab_node_update_detour as *mut c_void,
             &PAB_ADVANCE_ORIG,

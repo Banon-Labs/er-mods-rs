@@ -917,7 +917,7 @@ pub unsafe fn install_gfx_swap_hook_for(serve: GfxServeSet) -> bool {
     // two instances raced and this one lost: run br-20260913-022901-f395 logged the registration
     // and then not one `served` line, not even the canonical url capture, while the Quit tab came
     // up `cols=2 rows=1 navigable_cells=2` against `item_count=6` -- four cloned rows in the list
-    // with no cell to be drawn or hit in. The shared form resolves `er_effects_union_register` out
+    // with no cell to be drawn or hit in. The shared form resolves `er_effects_union_register_2720` out
     // of the product and chains into the union it already owns, and falls back to the local one
     // when the product is absent.
     match unsafe {

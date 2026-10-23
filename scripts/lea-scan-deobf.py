@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Find any rip-relative reference (lea reg,[rip+d] = 8D; mov reg,[rip+d] = 8B) to a target VA
-in the deobfuscated ER image. base 0x140000000, file off == RVA. Reports insn VA + opcode kind."""
+in the deobfuscated ER image. base 0x140000000, file off == RVA. Reports insn VA + opcode kind.
+The image is ER_DEOBF_BIN, default eldenring-deobf-1.17.2.bin (the installed 2.7.2.0 build)."""
 import sys, struct, os
 
 BASE = 0x140000000
-IMG = os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf.bin")
+IMG = os.environ.get(
+    "ER_DEOBF_BIN", os.path.join(os.path.dirname(__file__), "..", "eldenring-deobf-1.17.2.bin")
+)
 RIPREL_MODRM = {0x05, 0x0D, 0x15, 0x1D, 0x2D, 0x35, 0x3D}  # mod=00 rm=101 reg=0..7
 REX = {0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F}
 

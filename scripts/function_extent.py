@@ -37,8 +37,8 @@ Three sources, most authoritative first
   3. Neither: an unwindless leaf. The x64 ABI omits unwind data for a function that allocates no
      stack and calls nothing, so ELDEN RING's small getters have no `.pdata` entry at all --
      `.pdata` is blind across 146,715 holes and a missing entry is not a missing function. Its
-     end is DECODED by `verify-rva-map-1170.py::leaf_extent`, the watermark rule that refuses to
-     stop at a `ret` some earlier branch reaches past.
+     end is DECODED by `leaf_extent` below, the watermark rule that refuses to stop at a `ret`
+     some earlier branch reaches past.
 
 Measured over the 425 rows both detour ledgers admit, in both images: 359 declared, 0 enclosed,
 66 decoded leaves, 0 unknown. `body_end` returning None is a fallback nothing in the current
@@ -46,20 +46,29 @@ tables takes, and a caller that gets None must refuse rather than substitute a b
 
 Why it lives here and not in the tool that first needed it
 ----------------------------------------------------------
-It was written inside `scripts/audit-1170-hook-targets.py`. Four more tools then needed the same
+It was written inside `scripts/audit-1170-hook-targets.py` (now `scripts/audit-hook-targets.py`).
+Four more tools then needed the same
 answer, and a second implementation of extent resolution is the next divergence bug -- the rule's
 own history is two earlier wrong versions (first-`ret` truncation, and a padding-only tail-`jmp`
 test that walked straight through the de-Arxan'd images' leftover gap bytes). So the primitive
 moved to a module with a plain importable name and no import side effects, and every consumer --
-`audit-1170-hook-targets.py` included -- imports it from here.
+`audit-hook-targets.py` included -- imports it from here.
 
 `scripts/check-decode-extent-bounds.py` is the gate that keeps instance six from being written.
+
+Where the primitives came from
+------------------------------
+The `.pdata` reader, the chunk-run merge, the leaf sweep and the PE section-table reader used to
+be imported from `verify-rva-map-1170.py` and `check-ledger-section-kind.py`. Both were tools of
+the 1.16.2 -> 1.17 carry and were deleted with it on 2026-10-23, so the four primitives moved
+here, unchanged, rather than leaving every extent consumer importing a deleted file.
+`verify_rules()` and `section_rules()` still exist and now answer with this module, so a caller
+that reached the rules through them keeps working.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
+import struct
 import sys
 
 BASE = 0x140000000
@@ -68,56 +77,201 @@ BASE = 0x140000000
 # 0x20000-byte function when a caller has no interest past the first kilobyte.
 DEFAULT_SCAN_CAP = 0x400
 
-_VERIFY = None
-
 
 def verify_rules():
-    """`scripts/verify-rva-map-1170.py`, imported for its function extent rules.
-
-    Imported, not RE-derived. That file already imports `audit-1170-hook-targets.py` for
-    `trampoline_walk`; both imports are lazy -- inside a function, on first use -- so neither
-    module executes the other at import time and the cycle never closes. The sibling's name has
-    hyphens in it, so it is loaded by path rather than by `import`.
-    """
-    global _VERIFY
-    if _VERIFY is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-rva-map-1170.py")
-        spec = importlib.util.spec_from_file_location("_verify_rva_map_1170", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {path}, which holds the function-extent rules")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        _VERIFY = module
-    return _VERIFY
-
-
-_SECTION_KIND = None
+    """The module holding `function_regions` and `leaf_extent`: this one."""
+    return sys.modules[__name__]
 
 
 def section_rules():
-    """`scripts/check-ledger-section-kind.py`, imported for its PE section table reader.
+    """The module holding `sections`, `classify` and `Refuse`: this one."""
+    return sys.modules[__name__]
 
-    Imported, not RE-derived, for the same reason `verify_rules` is: that file already owns the
-    "is this VA executable" question for ledger rows, including the detail that decides the whole
-    thing -- section size is `max(virtual, raw)`, so the 1.17 `.data`'s zero-filled tail (VSZ
-    0xd51bc4 against RSZ 0x249e00) counts as inside `.data` rather than outside every section.
-    Loaded by path, and lazily, because the name has hyphens and because that module must not run
-    at import time.
+
+# --------------------------------------------------------------------------------------------
+# `.pdata`: what the image itself declares about where functions are
+# --------------------------------------------------------------------------------------------
+
+
+def runtime_functions(image):
+    """Every `RUNTIME_FUNCTION` in the image's exception directory: `(begin, end, unwind)` RVAs.
+
+    x86-64 PE stores one of these per function region for stack unwinding. Regions, not
+    functions -- a split function has one per chunk, and `function_regions` merges them.
     """
-    global _SECTION_KIND
-    if _SECTION_KIND is None:
-        path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "check-ledger-section-kind.py"
-        )
-        spec = importlib.util.spec_from_file_location("_check_ledger_section_kind", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {path}, which holds the section-table reader")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        _SECTION_KIND = module
-    return _SECTION_KIND
+    e_lfanew = struct.unpack_from("<I", image, 0x3C)[0]
+    magic = struct.unpack_from("<H", image, e_lfanew + 24)[0]
+    # PE32+ optional header is 112 bytes before the data directories; PE32 is 96.
+    directories = e_lfanew + 24 + (112 if magic == 0x20B else 96)
+    # Data directory 3 is IMAGE_DIRECTORY_ENTRY_EXCEPTION.
+    table_rva, table_size = struct.unpack_from("<II", image, directories + 3 * 8)
+    out = []
+    for offset in range(table_rva, table_rva + table_size, 12):
+        begin, end, unwind = struct.unpack_from("<III", image, offset)
+        if begin or end:
+            out.append((begin, end, unwind))
+    return out
+
+
+# `UNW_FLAG_CHAININFO` in `UNWIND_INFO`. Byte 0 packs `Version` in bits 0-2 and `Flags` in bits
+# 3-7; the flag says "this region is a continuation of another function, and my unwind data is the
+# other one's". It is the image's own statement that a `.pdata` entry is not a function.
+UNWIND_CHAINED = 0x4
+
+
+def unwind_is_chained(image, unwind_rva):
+    if unwind_rva <= 0 or unwind_rva >= len(image):
+        return False
+    return bool(((image[unwind_rva] >> 3) & 0x1F) & UNWIND_CHAINED)
+
+
+def function_regions(image):
+    """`({begin: end of the whole chunk run}, {every primary begin})`, chunk runs merged.
+
+    MSVC splits a function into chunks and gives each chunk its own `.pdata` entry. Only the
+    first is a real function start; the rest carry `UNW_FLAG_CHAININFO`. Reading the table without
+    that flag makes two errors at once: the extent of a chunked function becomes its first chunk
+    (measured: 0x16 bytes of a 0x25c-byte run), and a continuation's begin -- the middle of a
+    function -- reads as a function start.
+
+    The run is extended only while the next entry is both contiguous with the current end and
+    flagged as a continuation. Contiguity alone is not enough: two unrelated functions packed
+    flush against each other satisfy it, and merging them would over-extend the body.
+    """
+    entries = sorted(runtime_functions(image))
+    chained = [unwind_is_chained(image, unwind) for _, _, unwind in entries]
+    extents, starts = {}, set()
+    for index, (begin, end, _unwind) in enumerate(entries):
+        if chained[index]:
+            continue
+        run_end = end
+        follower = index + 1
+        while follower < len(entries) and chained[follower] and entries[follower][0] == run_end:
+            run_end = entries[follower][1]
+            follower += 1
+        extents[begin] = run_end
+        starts.add(begin)
+    return extents, starts
+
+
+def chained_begins(image):
+    """Every `.pdata` begin that is a chained continuation rather than a function start."""
+    return {
+        begin
+        for begin, _end, unwind in runtime_functions(image)
+        if unwind_is_chained(image, unwind)
+    }
+
+
+def branch_target(insn):
+    """The rel8/rel32 destination of a capstone branch, or `None` for anything that is not one.
+
+    Only a branch whose destination is an immediate has a destination this module can see. An
+    indirect `jmp` -- a switch dispatch through a table in `.rdata` -- does not, and treating it as
+    visible would let the leaf sweep conclude nothing follows it and truncate the function at its
+    own switch.
+    """
+    from capstone.x86 import X86_OP_IMM
+
+    if not insn.mnemonic.startswith("j"):
+        return None
+    operands = insn.operands
+    if operands and operands[0].type == X86_OP_IMM:
+        return operands[0].imm
+    return None
+
+
+# Inter-function padding the linker writes. The de-Arxan'd images often hold the deobfuscator's
+# leftover bytes between functions instead, which is why a tail `jmp` out of the sweep window ends
+# a leaf on its own (see `leaf_extent`).
+FUNCTION_PAD_BYTES = frozenset((0xCC, 0x90))
+
+
+def leaf_extent(image, va, starts, limit=0x100):
+    """Where a `.pdata`-less leaf function ends, decoded rather than declared.
+
+    The first `ret` is not the end: a getter with a range check is `cmp / ja / <compute> / ret /
+    xor eax,eax / ret`, so the early `ret` is the fast path and the branch target sits behind it.
+    The sweep carries a watermark of the furthest forward branch target seen, and only a
+    `ret`/tail-`jmp` beyond every such target ends the function. The extent never includes the
+    padding that follows. Returns `None` when no terminator is reached inside `limit`.
+
+    A direct `jmp` whose target lies outside the sweep window ends the body on its own: it leaves
+    the function by construction, and the bytes after it are unreachable by fall-through whether
+    they are padding, deobfuscator leftovers or the next function. An intra-function jump targets
+    an address inside the window and still has to satisfy the padding/start test.
+    """
+    from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+
+    md = Cs(CS_ARCH_X86, CS_MODE_64)
+    md.detail = True
+    rva = va - BASE
+    if rva < 0 or rva >= len(image):
+        return None
+    watermark = rva
+    for insn in md.disasm(bytes(image[rva : rva + limit]), rva):
+        after = insn.address + insn.size
+        target = branch_target(insn)
+        if target is not None and rva <= target < rva + limit:
+            watermark = max(watermark, target)
+        if insn.mnemonic == "ret" and after > watermark:
+            return after
+        if insn.mnemonic == "jmp" and after > watermark:
+            if target is not None and not (rva <= target < rva + limit):
+                return after
+            if after in starts or (after < len(image) and image[after] in FUNCTION_PAD_BYTES):
+                return after
+    return None
+
+
+# --------------------------------------------------------------------------------------------
+# The PE section table
+# --------------------------------------------------------------------------------------------
+
+
+class Refuse(Exception):
+    """A condition under which no verdict is available, as distinct from a clean answer."""
+
+
+def sections(blob):
+    """`[(name, rva, size, executable)]` from the PE headers of a flat image.
+
+    Flat means file offset == RVA for every section, so the headers sit where the loader would
+    have put them. Size is `max(virtual, raw)`: a `.data` whose virtual size exceeds its raw size
+    has a zero-filled tail that is still inside `.data`, and taking the raw size alone would place
+    an address there outside every section.
+    """
+    if len(blob) < 0x40:
+        raise Refuse("image is too short to carry a PE header")
+    e_lfanew = struct.unpack_from("<I", blob, 0x3C)[0]
+    if e_lfanew + 24 > len(blob) or blob[e_lfanew : e_lfanew + 4] != b"PE\0\0":
+        raise Refuse("image does not start with a PE signature at e_lfanew")
+    count = struct.unpack_from("<H", blob, e_lfanew + 6)[0]
+    opt_size = struct.unpack_from("<H", blob, e_lfanew + 20)[0]
+    table = e_lfanew + 24 + opt_size
+    out = []
+    for i in range(count):
+        off = table + i * 40
+        if off + 40 > len(blob):
+            raise Refuse(f"section header {i} runs past the end of the image")
+        name = blob[off : off + 8].rstrip(b"\0").decode("ascii", "replace")
+        virtual_size, rva, raw_size, _raw_ptr = struct.unpack_from("<IIII", blob, off + 8)
+        characteristics = struct.unpack_from("<I", blob, off + 36)[0]
+        # IMAGE_SCN_MEM_EXECUTE: the page protection the loader applies is what decides whether
+        # a detour can run there.
+        out.append((name, rva, max(virtual_size, raw_size), bool(characteristics & 0x20000000)))
+    if not out:
+        raise Refuse("image declares no sections")
+    return out
+
+
+def classify(secs, va):
+    """`(section name, executable)` for a VA, or `('<outside>', False)`."""
+    rva = va - BASE
+    for name, start, size, executable in secs:
+        if start <= rva < start + size:
+            return name, executable
+    return "<outside>", False
 
 
 _SECTIONS = {}

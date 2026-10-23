@@ -9,9 +9,9 @@ struct field is reached through a heap pointer, never through the frame pointer.
   uv run --with capstone python3 scripts/scan-struct-field-access.py \
       --range 0x1403b0000-0x1403c0000 --disp 0x258,0x2d4
 
-Defaults to `eldenring-deobf.bin` (1.16.2); point `--image` or ER_DEOBF_BIN at
-`eldenring-deobf-1.17.bin` for the installed build. The image is FLAT: file offset ==
-RVA, so VA = 0x140000000 + offset for every section.
+Defaults to `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build; point `--image` or
+ER_DEOBF_BIN at another image for an older build (`eldenring-deobf.bin` is 1.16.2). The image
+is FLAT: file offset == RVA, so VA = 0x140000000 + offset for every section.
 """
 
 from __future__ import annotations
@@ -33,14 +33,14 @@ def default_image() -> str:
     env = os.environ.get("ER_DEOBF_BIN")
     if env:
         return env
-    here = os.path.join(REPO, "eldenring-deobf.bin")
+    here = os.path.join(REPO, "eldenring-deobf-1.17.2.bin")
     if os.path.exists(here):
         return here
     # `<main>/.claude/worktrees/<agent>` -> `<main>`
     parts = REPO.split(os.sep)
     if ".claude" in parts:
         main = os.sep.join(parts[: parts.index(".claude")])
-        candidate = os.path.join(main, "eldenring-deobf.bin")
+        candidate = os.path.join(main, "eldenring-deobf-1.17.2.bin")
         if os.path.exists(candidate):
             return candidate
     return here

@@ -27,21 +27,21 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
 // Each getter window's virtual address, written as `GAME_IMAGE_BASE + (rva + offset) as u64`
 // rather than through a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
 const BUDDY_PARAM_FRAME_VA: u64 =
-    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
 const BUDDY_PARAM_TABLE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
 const BUDDY_PARAM_OUT_STORE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
 const BUDDY_PARAM_NEGATIVE_ID_STORE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_1171_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_BUDDY_PARAM_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
 const CHARA_INIT_PARAM_FRAME_VA: u64 =
-    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_RVA + GETTER_FRAME_WINDOW_OFFSET) as u64;
 const CHARA_INIT_PARAM_TABLE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_RVA + GETTER_TABLE_WINDOW_OFFSET) as u64;
 const CHARA_INIT_PARAM_OUT_STORE_VA: u64 =
-    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
-const CHARA_INIT_PARAM_NEGATIVE_ID_STORE_VA: u64 = GAME_IMAGE_BASE
-    + (GET_CHARA_INIT_PARAM_1171_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_RVA + GETTER_OUT_STORE_WINDOW_OFFSET) as u64;
+const CHARA_INIT_PARAM_NEGATIVE_ID_STORE_VA: u64 =
+    GAME_IMAGE_BASE + (GET_CHARA_INIT_PARAM_RVA + GETTER_NEGATIVE_ID_STORE_WINDOW_OFFSET) as u64;
 
 /// `mov qword [rsp+0x20],-2`, the frame marker both getters store third.
 const FRAME_MARKER_SLOT: i32 = 0x20;
@@ -52,14 +52,13 @@ const CHARA_INIT_PARAM_TABLE: i32 = 0x17;
 /// The out struct's row pointer, as a displacement.
 const OUT_ROW: i32 = GETTER_OUT_ROW_SLOT as i32;
 
-/// "A menu has the mouse", `bool(CSMenuManImp*)`, 1.17 `0x140766650`. Below the `0xafefe9`
-/// boundary, so 1.17.0 and 1.17.1 have it at the same address with the same bytes.
-const MENU_HAS_MOUSE_1170_VA: u64 = 0x140766650;
+/// "A menu has the mouse", `bool(CSMenuManImp*)`, 2.7.2.0 `0x140766b00`
+/// (`addr::MENU_HAS_MOUSE_RVA`).
+const MENU_HAS_MOUSE_VA: u64 = 0x140766b00;
 
-/// 1.16.2 `FUN_140777380`, the producer of the seven `ChrFriendlyTagEntry` rows at
-/// `CSFeManImp+0x5c60` (1.17.1 `0x140778200`). The body is `IDENTICAL-WHOLE` between the builds,
-/// so every offset below holds in both.
-const FRIENDLY_TAG_PRODUCER_VA: u64 = 0x140777380;
+/// 2.7.2.0 `FUN_1407786b0`, the producer of the seven `ChrFriendlyTagEntry` rows at
+/// `CSFeManImp+0x5c60` (`addr::tags::FRIENDLY_TAG_PRODUCER`).
+const FRIENDLY_TAG_PRODUCER_VA: u64 = 0x1407786b0;
 /// `test r15d,r15d`: the start of the per-slot "is slot i a party member" test.
 const TAG_SLOT_TEST: u64 = 0x2f8;
 /// The slot-empty branch both halves of that test jump to.
@@ -68,16 +67,16 @@ const TAG_SLOT_EMPTY: u64 = 0xa7a;
 const TAG_SLOT_HANDLE_READY: u64 = 0x31c;
 /// `mov [rsp+0x33],al`, storing what `GetRoleNameColor` returned.
 const TAG_COLOUR_STORE: u64 = 0x607;
-/// 1.16.2 `CSChrDamageModule::UpdateUI` (1.17.1 `0x1404497e0`), `IDENTICAL-WHOLE` as well.
-const DAMAGE_UPDATE_UI_VA: u64 = 0x140449280;
+/// 2.7.2.0 `CSChrDamageModule::UpdateUI` (`addr::tags::DAMAGE_UPDATE_UI`).
+const DAMAGE_UPDATE_UI_VA: u64 = 0x1404498c0;
 /// `cmp [rsp+0x31],r12b`: the first test of the enemy-bar selection.
 const ENEMY_BAR_TEST: u64 = 0x26e;
 /// `test bpl,bpl`: the tail the enemy-bar call and every no-bar branch share.
 const ENEMY_BAR_TAIL: u64 = 0x375;
-/// The 1.16.2 `WorldChrManImp*` global the handle-ready instruction reads
+/// The 2.7.2.0 `WorldChrManImp*` global the handle-ready instruction reads
 /// (`er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA`).
-const WORLD_CHR_MAN_GLOBAL_VA: u64 = 0x143d65f88;
-/// Each window's address, named so `verify-aob-patterns-1170.py` can read the spec's `va:`.
+const WORLD_CHR_MAN_GLOBAL_VA: u64 = 0x143d6d018;
+/// Each window's address, named so `verify-aob-patterns.py` can read the spec's `va:`.
 const TAG_SLOT_TEST_VA: u64 = FRIENDLY_TAG_PRODUCER_VA + TAG_SLOT_TEST;
 const TAG_SLOT_EMPTY_VA: u64 = FRIENDLY_TAG_PRODUCER_VA + TAG_SLOT_EMPTY;
 const TAG_SLOT_HANDLE_READY_VA: u64 = FRIENDLY_TAG_PRODUCER_VA + TAG_SLOT_HANDLE_READY;
@@ -171,14 +170,14 @@ fn main() {
     generate(
         &[(
             PrologueSpec {
-                name: "MENU_HAS_MOUSE_1171_PROLOGUE",
+                name: "MENU_HAS_MOUSE_PROLOGUE",
                 doc: "`mov [rsp+0x10],rbx; mov [rsp+0x18],rbp; mov [rsp+0x20],rsi; push rdi;\n\
-                      sub rsp,0x20; cmp byte [rcx+0x1a],0` -- the opening of the 1.17\n\
+                      sub rsp,0x20; cmp byte [rcx+0x1a],0` -- the opening of the 2.7.2.0\n\
                       menu-has-the-mouse predicate.",
                 visibility: "pub(crate)",
                 shape: Shape::Array,
-                image: Image::EldenRing1170,
-                va: MENU_HAS_MOUSE_1170_VA,
+                image: Image::EldenRing2720,
+                va: MENU_HAS_MOUSE_VA,
                 take: 0,
                 pin: &[
                     0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74,
@@ -200,17 +199,17 @@ fn main() {
 
     // The companions' overhead tags. Each hook's window is every instruction ilhook's 14-byte jump
     // overwrites, in full, so the bytes it moves are exactly the bytes checked; a resume target is
-    // pinned too. All five were read in both images on 2026-10-19 (`mid_hooks/tag_list.rs`).
+    // pinned too. All five are read in the 2.7.2.0 image (`mid_hooks/tag_list.rs`).
     generate(
         &[
             (
                 PrologueSpec {
                     name: "TAG_SLOT_TEST_WINDOW",
-                    doc: "1.16.2 `FUN_140777380+0x2f8`, the friendly tag producer's per-slot test:\n\
+                    doc: "2.7.2.0 `FUN_1407786b0+0x2f8`, the friendly tag producer's per-slot test:\n\
                           `TEST R15D,R15D; JS +0xa7a; CMP R15D,[RSP+0x50]`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: TAG_SLOT_TEST_VA,
                     take: 0,
                     pin: &[
@@ -223,25 +222,25 @@ fn main() {
             (
                 PrologueSpec {
                     name: "TAG_SLOT_HANDLE_READY_WINDOW",
-                    doc: "1.16.2 `FUN_140777380+0x31c`, the instruction after\n\
+                    doc: "2.7.2.0 `FUN_1407786b0+0x31c`, the instruction after\n\
                           `GetFieldInsHandleByMemberIndex` returns: `MOV RCX,[WorldChrMan]`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: TAG_SLOT_HANDLE_READY_VA,
                     take: 0,
-                    pin: &[0x48, 0x8b, 0x0d, 0xe5, 0xe8, 0x5e, 0x03],
+                    pin: &[0x48, 0x8b, 0x0d, 0x45, 0x46, 0x5f, 0x03],
                 },
                 tag_slot_handle_ready as Assemble,
             ),
             (
                 PrologueSpec {
                     name: "TAG_COLOUR_STORE_WINDOW",
-                    doc: "1.16.2 `FUN_140777380+0x607`, the store of `GetRoleNameColor`'s answer:\n\
+                    doc: "2.7.2.0 `FUN_1407786b0+0x607`, the store of `GetRoleNameColor`'s answer:\n\
                           `MOV [RSP+0x33],AL; LEA RDX,[RBP+0x30]; MOV R12,[RBP-0x70]; MOV RCX,R12`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: TAG_COLOUR_STORE_VA,
                     take: 0,
                     pin: &[
@@ -254,11 +253,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "ENEMY_BAR_TEST_WINDOW",
-                    doc: "1.16.2 `CSChrDamageModule::UpdateUI+0x26e`, the enemy-bar selection:\n\
+                    doc: "2.7.2.0 `CSChrDamageModule::UpdateUI+0x26e`, the enemy-bar selection:\n\
                           `CMP [RSP+0x31],R12B; JNE +0x375; CMP [RSP+0x32],R12B`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: ENEMY_BAR_TEST_VA,
                     take: 0,
                     pin: &[
@@ -271,11 +270,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "ENEMY_BAR_TAIL_WINDOW",
-                    doc: "1.16.2 `CSChrDamageModule::UpdateUI+0x375`, the shared tail after the\n\
+                    doc: "2.7.2.0 `CSChrDamageModule::UpdateUI+0x375`, the shared tail after the\n\
                           enemy-bar call: `TEST BPL,BPL`.",
                     visibility: "pub(crate)",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing2720,
                     va: ENEMY_BAR_TAIL_VA,
                     take: 0,
                     pin: &[0x40, 0x84, 0xed],
@@ -289,16 +288,16 @@ fn main() {
     // The two typed getters the Mimic Tear's row copies are served through (`getter_sites.rs`).
     // Each window is checked at the running getter before its out struct is trusted: the frame
     // marker, the table index that names the table, and both stores of `out = {id, row*}`.
-    // Byte-identical in eldenring-deobf-1.17.1.bin and eldenring-deobf-1.17.2.bin (2026-10-22).
+    // Read in eldenring-deobf-1.17.2.bin.
     generate(
         &[
             (
                 PrologueSpec {
                     name: "BUDDY_PARAM_FRAME_WINDOW",
-                    doc: "1.17.1 `GetBuddyParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    doc: "2.7.2.0 `GetBuddyParam+0x6`: `MOV qword [RSP+0x20],-2`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: BUDDY_PARAM_FRAME_VA,
                     take: 0,
                     pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
@@ -308,11 +307,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "BUDDY_PARAM_TABLE_WINDOW",
-                    doc: "1.17.1 `GetBuddyParam+0x67`: `XOR R8D,R8D; MOV EDX,0x80`, the BuddyParam\n\
+                    doc: "2.7.2.0 `GetBuddyParam+0x67`: `XOR R8D,R8D; MOV EDX,0x80`, the BuddyParam\n\
                           table index handed to `GetParamResCap`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: BUDDY_PARAM_TABLE_VA,
                     take: 0,
                     pin: &[0x45, 0x33, 0xc0, 0xba, 0x80, 0x00, 0x00, 0x00],
@@ -322,11 +321,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "BUDDY_PARAM_OUT_STORE_WINDOW",
-                    doc: "1.17.1 `GetBuddyParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the id\n\
+                    doc: "2.7.2.0 `GetBuddyParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the id\n\
                           and the row pointer into the out struct.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: BUDDY_PARAM_OUT_STORE_VA,
                     take: 0,
                     pin: &[0x89, 0x3e, 0x48, 0x89, 0x5e, 0x08],
@@ -336,11 +335,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "BUDDY_PARAM_NEGATIVE_ID_STORE_WINDOW",
-                    doc: "1.17.1 `GetBuddyParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the same\n\
+                    doc: "2.7.2.0 `GetBuddyParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the same\n\
                           stores for a negative id.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: BUDDY_PARAM_NEGATIVE_ID_STORE_VA,
                     take: 0,
                     pin: &[0x89, 0x39, 0x48, 0x89, 0x59, 0x08],
@@ -350,10 +349,10 @@ fn main() {
             (
                 PrologueSpec {
                     name: "CHARA_INIT_PARAM_FRAME_WINDOW",
-                    doc: "1.17.1 `GetCharaInitParam+0x6`: `MOV qword [RSP+0x20],-2`.",
+                    doc: "2.7.2.0 `GetCharaInitParam+0x6`: `MOV qword [RSP+0x20],-2`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: CHARA_INIT_PARAM_FRAME_VA,
                     take: 0,
                     pin: &[0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff],
@@ -363,11 +362,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "CHARA_INIT_PARAM_TABLE_WINDOW",
-                    doc: "1.17.1 `GetCharaInitParam+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x17]`, the\n\
+                    doc: "2.7.2.0 `GetCharaInitParam+0x67`: `XOR R8D,R8D; LEA EDX,[R8+0x17]`, the\n\
                           CharaInitParam table index handed to `GetParamResCap`.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: CHARA_INIT_PARAM_TABLE_VA,
                     take: 0,
                     pin: &[0x45, 0x33, 0xc0, 0x41, 0x8d, 0x50, 0x17],
@@ -377,11 +376,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "CHARA_INIT_PARAM_OUT_STORE_WINDOW",
-                    doc: "1.17.1 `GetCharaInitParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the\n\
+                    doc: "2.7.2.0 `GetCharaInitParam+0x145`: `MOV [RSI],EDI; MOV [RSI+8],RBX`, the\n\
                           id and the row pointer into the out struct.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: CHARA_INIT_PARAM_OUT_STORE_VA,
                     take: 0,
                     pin: &[0x89, 0x3e, 0x48, 0x89, 0x5e, 0x08],
@@ -391,11 +390,11 @@ fn main() {
             (
                 PrologueSpec {
                     name: "CHARA_INIT_PARAM_NEGATIVE_ID_STORE_WINDOW",
-                    doc: "1.17.1 `GetCharaInitParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the\n\
+                    doc: "2.7.2.0 `GetCharaInitParam+0x14d`: `MOV [RCX],EDI; MOV [RCX+8],RBX`, the\n\
                           same stores for a negative id.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing1171,
+                    image: Image::EldenRing2720,
                     va: CHARA_INIT_PARAM_NEGATIVE_ID_STORE_VA,
                     take: 0,
                     pin: &[0x89, 0x39, 0x48, 0x89, 0x59, 0x08],

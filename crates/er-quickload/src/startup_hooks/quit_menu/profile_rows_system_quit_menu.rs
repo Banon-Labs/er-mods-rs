@@ -128,12 +128,13 @@ pub(crate) unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &s
 
 /// Drive the return-title predicate `GameMan+0xbc4` straight to ready(3) right after the native request
 /// set it to 1. Saving is disabled by design (the in-game "Save Game" button is the only save writer),
-/// so the game's quit-save -- which is the only thing that natively pumps bc4 1->2->3 (dump
+/// so the game's quit-save -- which is the only thing that natively pumps bc4 1->2->3 (1.16.1 dump
 /// FUN_14067b840: the bc4 1->2 advance is welded to a successful disk write `cVar4 != 0`) -- will never
 /// run. Forcing bc4=ready here is the single deterministic write that completes the switch without a
 /// save: (a) it satisfies the final-functor gate in `product_core_autoload_tick` (which needs bc4==ready
 /// to submit the return-title job that sets rt5d and tears the old world down), and (b) it SUPPRESSES the
-/// quit-save itself -- the orchestrator's `ShouldSave` and `FUN_140679460` both require bc4 != 3, so no
+/// quit-save itself -- the orchestrator's `ShouldSave` and `FUN_140679460` (1.16.1 dump) both require
+/// bc4 != 3, so no
 /// disk write is attempted and no "failed to save" popup can appear. Returns the pre-force bc4 value
 /// (-1 if GameMan unavailable). The incoming world's STEP_MoveMap(18) finalize gate (blocked while
 /// bc4 != 0) is released later by the deterministic streamed-and-parked bc4->0 clear on the game task.
@@ -164,7 +165,7 @@ pub(crate) unsafe fn system_quit_force_return_title_bc4_ready(base: usize, sourc
 
 /// Diagnostic (switch-2 save-freeze): the quit-save orchestrator `FUN_140afb970` (RE of the 1.16.1 dump)
 /// gates the save on three conditions, any of which blocks it and freezes `bc4` at 1: (a) `BOOL_143d856a0`
-/// -- the load-active / title-accept latch, RVA `0x3d856a0` -- must be 0 (it returns early otherwise); (b)
+/// -- the load-active / title-accept latch, 2.7.2.0 RVA `0x3d8c740` -- must be 0 (it returns early otherwise); (b)
 /// `GameMan->save_state` (== our b80 offset) must be 0 (`FUN_14067a170`); (c) the menu gate `FUN_14080d660`:
 /// `*(CSMenuMan+0x80)->0x290` (byte) == 0 and `->0x298` (qword) == 0. `save_state` is already 0 at the
 /// freeze, so this logs all three per-frame during the switch to name the actual blocker. Read-only.
@@ -227,7 +228,7 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     };
     let menu_gate_ok = m290 == 0 && m298 == 0;
     let blocker = if force != 0 {
-        "FORCE_LATCH(0x143d856a0!=0)"
+        "FORCE_LATCH(0x143d8c740!=0)"
     } else if save_state != 0 {
         "save_state!=0"
     } else if !menu_gate_ok {
@@ -290,14 +291,15 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
         }
         return false;
     }
-    // Fire the native return-title request (FUN_14067a490, live 0x67a3a0) -- the missing piece. It sets
+    // Fire the native return-title request (2.7.2.0 0x67b6a0) -- the missing piece. It sets
     // GameMan.saveRequested = true and GameMan+0xbc4 = 1 (== GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY).
     // Without it, bc4 stays 0, so (a) the game never recognizes a return-to-title is pending and never
     // saves+tears down the world, and (b) our final functor (title.rs, gated on bc4==ready) never fires,
     // leaving the submitted chain job orphaned in a queue that stops being pumped once the menus close.
     // Observed 2026-07-01: OK -> menus closed but still in-world, same char, functor_call_count=0,
     // bc4=0, native_quit_action_count=0. The native Quit-Game does this request and the build+submit
-    // below; we were doing only the build+submit. It is a plain GameMan field write (+ FUN_14080dd00),
+    // below; we were doing only the build+submit. It is a plain GameMan field write (+ 1.16.1 dump
+    // FUN_14080dd00),
     // safe to call from this menu-pump-owned path. Fire once. See bd
     // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
     if SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst) == 0 {
@@ -310,7 +312,8 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
                 // The request just set saveRequested + bc4=1. Saving is disabled by design (only the in-game
                 // "Save Game" button writes), so the game's quit-save -- the only native pump of bc4 1->2->3 --
                 // must not run. Drive bc4 straight to ready(3) ourselves: this fires the final functor (which
-                // needs bc4==ready) and suppresses the quit-save (ShouldSave/FUN_140679460 require bc4 != 3), so
+                // needs bc4==ready) and suppresses the quit-save (ShouldSave/1.16.1 dump FUN_140679460
+                // require bc4 != 3), so
                 // the switch completes with no disk write and no "failed to save" popup. Deterministic, keyed on
                 // the request we just fired -- not a frame counter. See system_quit_force_return_title_bc4_ready.
                 let bc4_prev = unsafe { system_quit_force_return_title_bc4_ready(base, source) };
@@ -324,15 +327,16 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
         }
     }
     // No native confirm chain is submitted (P0 fix, run br-20260831-160354-2513).
-    // `SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA` (1.16.2 0x79d700 == 1.17 0x79e580) builds a
-    // FixOrderJobSequence of five jobs whose head is a MessageBox job (FUN_1407b73d0) carrying
+    // `SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA` (2.7.2.0 0x79ea30) builds a
+    // FixOrderJobSequence of five jobs whose head is a MessageBox job (1.16.2 FUN_1407b73d0) carrying
     // `GetGR_Dialogues(110000)` -- engus "Save the game and return to title menu?", anchor
     // L"\u{6c7a}\u{5b9a}" -- the vanilla Quit-Game confirm. Submitting it is the sole reason a
     // `CS::MessageBoxDialog` was ever built on the switch path (`msgbox-skip #0
-    // scope=switch-active`; game callers 0x1407b1347 = the dialog factory FUN_1407b1270,
-    // 0x1407ae13c = CS::MenuWindowJob::Run, 0x1407ab13b = FixOrderJobSequence::Run).
+    // scope=switch-active`; game callers, as 2.7.2.0 return addresses: 0x1407b17f7 = the dialog
+    // factory 0x1407b1720, 0x1407ae5ec = CS::MenuWindowJob::Run, 0x1407ab5eb = FixOrderJobSequence::Run).
     // The box's only semantic side effect is the user's yes/no gate on advancing that sequence to
-    // its final job, FUN_14079f690 == `SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA` -- which we
+    // its final job, `SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA` (2.7.2.0 0x1407a09c0; 1.16.2
+    // FUN_14079f690) -- which we
     // already build and submit ourselves, without UI, from the bc4==ready path (that path also owns
     // `system_quit_save_swap_recommit_after_return_title_save`, so it must stay where it is).
     // With the head suppressed its factory returns null, and `MenuWindowJob::Run`'s
@@ -713,11 +717,11 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     // holds that constructor's trampoline, four parameters with the first two the other way round,
     // so the three-argument transmute below resolved a name that was not a string. Opening System
     // then died at `0xc0000005` reading `0xffffffffffffffff`, `er_quickload.dll+0xc359c` ->
-    // `eldenring.exe+0x74b66a` -> the game's `strchr(text, '/')` (run br-20260924-005955-a1fb,
-    // 2026-09-23; er-quit-menu-core's `scaleform_proxy.rs` lost its slot in #475 and this site was
-    // missed). `gated_game_fn` refuses an unmapped address rather than guessing, so where the bind
-    // has moved and not been re-measured this oracle does not sample -- which is what a bare
-    // `base + RVA` got wrong on 1.17, pointing into unrelated code (`0x74a2f0` -> `0x74b140`).
+    // `eldenring.exe+0x74b66a` (1.17.1) -> the game's `strchr(text, '/')` (run
+    // br-20260924-005955-a1fb, 2026-09-23; er-quit-menu-core's `scaleform_proxy.rs` lost its slot in
+    // #475 and this site was missed). `gated_game_fn` refuses on a build other than 2.7.2.0 rather
+    // than guessing, so there this oracle does not sample -- a bare `base + RVA` on another build
+    // points into unrelated code, which is what 1.16.2's binder rva did on 1.17.
     let assign_addr = match crate::gated_game_fn(
         TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
         "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
@@ -767,7 +771,7 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
             .map(|v| v != 0)
             .unwrap_or(false);
 
-    // The real SIGNAL: the game's tab-select (FUN_14093b850) toggles SetVisible on the current tab
+    // The real SIGNAL: the game's tab-select (1.16.1 dump FUN_14093b850) toggles SetVisible on the current tab
     // dialog's embedded proxy at dialog+0x1200 -- Not the named WindowList children (which stay
     // Visible=0 always). current dialog = *(composite+0xb8).
     let current_dialog =
@@ -915,7 +919,8 @@ static ORPHAN_TITLE_NO_ADDRESS_LOGGED: std::sync::atomic::AtomicBool =
 ///
 /// The act is `MENU_WINDOW_CLOSE_WITH_FAILED_RVA`, the game's own `CloseAsFailed(MenuWindow*)`. We
 /// do not tear anything down: the window sets its own result, its `MenuWindowJob` reads that on a
-/// later tick and runs `FUN_1407ada40`, and `ExecuteMenuJob` reaps the chain above it. Every step
+/// later tick and runs the finalize (`MENU_WINDOW_JOB_FINALIZE_RVA`, 2.7.2.0 0x1407aed70; 1.16.2
+/// `FUN_1407ada40`), and `ExecuteMenuJob` reaps the chain above it. Every step
 /// but the request is the engine's -- and the reaper is guaranteed a pass here in a way it is not
 /// from the game task, because reaching this function at all means the job is being run.
 ///
@@ -963,9 +968,9 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
     // sibling shell and that cost a whole measurement: a switch left the title over the world with
     // `oracle_title_surface_run_ticks_in_world` at 43 and `oracle_orphan_title_window_close_requests`
     // at 0, and the log carried not one line explaining the gap. The cause was the second refusal --
-    // the close address had no row in `docs/recon/rva-map-1162-to-1170.verified.tsv`, so the
-    // translator correctly refused a 1.16.2 address on 1.17.1 and this function did nothing,
-    // invisibly. A gate that declines has to be distinguishable from a gate that was never asked.
+    // the address translation of the time had no row for the close address, so it correctly
+    // refused it on 1.17.1 and this function did nothing, invisibly. A gate that declines has to be
+    // distinguishable from a gate that was never asked.
     let window =
         unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
     if window == 0 {
@@ -982,14 +987,15 @@ unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
     ) else {
         if !ORPHAN_TITLE_NO_ADDRESS_LOGGED.swap(true, Ordering::SeqCst) {
             append_autoload_debug(format_args!(
-                "orphan-title-window: refused -- MENU_WINDOW_CLOSE_WITH_FAILED_RVA 0x{MENU_WINDOW_CLOSE_WITH_FAILED_RVA:x} did not resolve on this build, so '{filename}' stays over the world. Add a verified row for it to docs/recon/rva-map-1162-to-1170.verified.tsv"
+                "orphan-title-window: refused -- MENU_WINDOW_CLOSE_WITH_FAILED_RVA 0x{MENU_WINDOW_CLOSE_WITH_FAILED_RVA:x} is refused on this build (not 2.7.2.0), so '{filename}' stays over the world"
             ));
         }
         return;
     };
-    // Justify the transmute: `MENU_WINDOW_CLOSE_WITH_FAILED_RVA` is resolved through the same
-    // build-verified translator every other direct call in this crate uses, and the signature
-    // matches the static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+    // Justify the transmute: `MENU_WINDOW_CLOSE_WITH_FAILED_RVA` is a 2.7.2.0 rva (0x7adbc0),
+    // checked against the running build by the same `gated_game_fn` every other direct call in this
+    // crate uses, and the signature matches the static decompile of `FUN_1407ac890` (1.16.2) -- one
+    // `MenuWindow*` in rcx, no return.
     let close: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
     let requested = er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS
         .fetch_add(1, Ordering::SeqCst)
@@ -1053,7 +1059,8 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     //
     // Done here because here is the menu pump. This function runs inside `CS::MenuWindowJob::Run`,
     // which is the thread and the frame the game issues its own window closes from, and reaching it
-    // proves the job is still being run -- so the deregistration in `FUN_1407ada40` gets its pass.
+    // proves the job is still being run -- so the deregistration in the finalize (1.16.2
+    // `FUN_1407ada40`) gets its pass.
     // The drain in `own_load::loaders::load_drive` is the first line of the same fix, one step
     // earlier; this is the backstop for a window that survived it.
     if crate::orphan_title_window::is_title_surface(filename.as_str()) {
@@ -1241,7 +1248,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         }
     }
     // Abort the half-started in-world load transition. Pressing OK on ProfileSelect natively arms
-    // GameMan.saveState/b80=2 (in-world load via deserialize 0x67b290) before any hook we control; our
+    // GameMan.saveState/b80=2 (in-world load via deserialize 0x67c590) before any hook we control; our
     // load guard skips the deserialize so nothing loads, but the game still advances to saveState=3
     // ("loading") and sticks at a loading screen -- and that stuck load blocks the game/menu pump from
     // running the queued return-title chain (observed: functor_call_count=0, player still present).

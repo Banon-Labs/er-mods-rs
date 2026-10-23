@@ -1542,8 +1542,8 @@ fn iat_anomalies(modules: &[(usize, usize, String)]) -> String {
 /// function, whose trampoline sends control to an address that is not an instruction boundary.
 ///
 /// That is checkable and this is the check. Compare these bytes against the same VA in
-/// `eldenring-deobf-1.17.bin` (file offset == RVA, VA = 0x140000000 + offset). Equal means the
-/// call site is pristine and the transfer came from somewhere else entirely; different means
+/// `eldenring-deobf-1.17.2.bin` for 2.7.2.0 (file offset == RVA, VA = 0x140000000 + offset).
+/// Equal means the call site is pristine and the transfer came from somewhere else entirely; different means
 /// somebody patched it, and the difference names who.
 ///
 /// Only frames inside the main executable are dumped -- a return address in `ntdll` is the

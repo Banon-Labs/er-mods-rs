@@ -8,12 +8,12 @@
 //! visible field is a Scaleform `DefineEditText` inside `02_990`, driven by the game's own
 //! keyboard-event handling, and nothing in that handling consults a clipboard.
 //!
-//! The image does contain a working `CF_UNICODETEXT` reader -- `FUN_1426760c0`, which opens the
-//! clipboard on an HWND held at `this+0x8b0` and copies the wide string into a `DLString`. It is
-//! not reachable from here: it occupies slot `+0x100` of exactly one vtable (`0x143296bb8`, the
-//! only vtable in the whole image that holds it), whose siblings measure text through
-//! `GLOBAL_FD4FontManager`, and no call site for that slot exists. The software keyboard's own
-//! stack is a different object graph entirely -- `SoftwareKeyboard::detail::
+//! The image does contain a working `CF_UNICODETEXT` reader -- 1.16.2 `FUN_1426760c0`, which opens
+//! the clipboard on an HWND held at `this+0x8b0` and copies the wide string into a `DLString`. It
+//! is not reachable from here: it occupies slot `+0x100` of exactly one vtable (1.16.2
+//! `0x143296bb8`, the only vtable in the whole image that holds it), whose siblings measure text
+//! through `GLOBAL_FD4FontManager`, and no call site for that slot exists. The software keyboard's
+//! own stack is a different object graph entirely -- `SoftwareKeyboard::detail::
 //! SoftwareKeyboardManagerImpl` (Steam gamepad text input) with a Scaleform `02_990` MenuWindow
 //! fallback -- and neither half touches that vtable.
 //!

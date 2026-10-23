@@ -1,7 +1,7 @@
 // Forces Elden Ring's own dynamic resolution to a fixed scene scale while the UI stays native.
 //
 // The chain is in bd `er-dynamic-resolution-chain-static-2026-10-15` (issue er-effects-rs-6tu5).
-// Addresses are 2.7.2.0, carried from 1.17.1 with scripts/map-rvas-1171-to-1172.py: the update
+// Addresses are 2.7.2.0, carried from 1.17.1: the update
 // and its caller (the view setup, which loads the config from GXRenderingSystem+0x13a70 and reads
 // +0x13a78) match the 1.17.1 functions once rip-relative and branch operands are masked, and every
 // masked target carries to the new operand, the two globals below included.

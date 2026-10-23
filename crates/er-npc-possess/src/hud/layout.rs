@@ -8,45 +8,36 @@
 //! common -- `CSChrDataModule.hp` -- is asserted equal to its counterpart there by a test below,
 //! so the duplication cannot drift into a disagreement without failing.
 //!
-//! # The offsets did not move between the measured builds, and that is measured rather than assumed
+//! # Where the offsets were read
 //!
-//! Every constant here was read out of both `eldenring-deobf.bin` (1.16.2) and
-//! `eldenring-deobf-1.17.bin` (1.17) at the corresponding site inside
-//! `CSFeManImp::UpdatePlayerComponents`, and the two disassemblies agree instruction for
-//! instruction across the whole vitals span -- 1.16.2 `0x140772b83..c4d`, 1.17
-//! `0x140773a03..acd`.
+//! Every constant here was read out of `eldenring-deobf-1.17.2.bin` (2.7.2.0) at its site inside
+//! `CSFeManImp::UpdatePlayerComponents` (`0x140773db0`, a `.pdata` start of length `0x16c2`); the
+//! same span was read on 1.16.2, 1.17.0 and 1.17.1 before, and agreed instruction for instruction
+//! each time. The vitals span:
 //!
-//! 1.17.1 (2.7.1.0) and 2.7.2.0 were read the same way on 2026-10-21, out of
-//! `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`. The function is at 1.17.1
-//! `0x140773900` and 2.7.2.0 `0x140773db0`, both `.pdata` starts of length `0x16c2`, and all 1,366
-//! instructions agree once rip-relative displacements are masked, with every call and branch
-//! target in 2.7.2.0 equal to its 1.17.1 target carried through
-//! `docs/recon/carry-1171-to-1172.tsv`. The vitals span, 1.17.1 first and 2.7.2.0 second:
+//! | field | 2.7.2.0 | instruction |
+//! |---|---|---|
+//! | `ChrIns+0x190`, `+0x00` | `0x140773eb3` | `mov rcx,[r12+0x190]` ; `mov rax,[rcx]` |
+//! | `playerHp` <- `hp` | `0x140773ebe` | `mov ecx,[rax+0x138]` ; `mov [rsi+0x84],ecx` |
+//! | `maxRecoverableHp` | `0x140773eda` | `mov [rsi+0x88],eax` after `call GetMaxRecoverableHp` |
+//! | `hpMax` <- `hpMax` | `0x140773eeb` | `mov ebx,[rcx+0x13c]` ... `sub eax,ebx` ; `mov [rsi+0x8c],eax` |
+//! | `hpMaxUncapped` | `0x140773f0e` | `mov [rsi+0x90],eax` after `call GethpMaxUncapped` |
+//! | `fp` <- `fp` | `0x140773f26` | `mov eax,[rcx+0x148]` ; `mov [rsi+0x98],eax` |
+//! | `fpMax` <- `fpMax` | `0x140773f3d` | `mov eax,[rcx+0x14c]` ; `mov [rsi+0xa4],eax` |
+//! | `stamina` <- `stamina` | `0x140773f5b` | `mov eax,[rcx+0x154]` ; `mov [rsi+0xac],eax` |
+//! | `staminaMax` <- `staminaMax` | `0x140773f72` | `mov eax,[rcx+0x158]` ; `mov [rsi+0xb8],eax` |
 //!
-//! | field | 1.17.1 | 2.7.2.0 | instruction in both |
-//! |---|---|---|---|
-//! | `ChrIns+0x190`, `+0x00` | `0x140773a03` | `0x140773eb3` | `mov rcx,[r12+0x190]` ; `mov rax,[rcx]` |
-//! | `playerHp` <- `hp` | `0x140773a0e` | `0x140773ebe` | `mov ecx,[rax+0x138]` ; `mov [rsi+0x84],ecx` |
-//! | `maxRecoverableHp` | `0x140773a2a` | `0x140773eda` | `mov [rsi+0x88],eax` after `call GetMaxRecoverableHp` |
-//! | `hpMax` <- `hpMax` | `0x140773a3b` | `0x140773eeb` | `mov ebx,[rcx+0x13c]` ... `sub eax,ebx` ; `mov [rsi+0x8c],eax` |
-//! | `hpMaxUncapped` | `0x140773a5e` | `0x140773f0e` | `mov [rsi+0x90],eax` after `call GethpMaxUncapped` |
-//! | `fp` <- `fp` | `0x140773a76` | `0x140773f26` | `mov eax,[rcx+0x148]` ; `mov [rsi+0x98],eax` |
-//! | `fpMax` <- `fpMax` | `0x140773a8d` | `0x140773f3d` | `mov eax,[rcx+0x14c]` ; `mov [rsi+0xa4],eax` |
-//! | `stamina` <- `stamina` | `0x140773aab` | `0x140773f5b` | `mov eax,[rcx+0x154]` ; `mov [rsi+0xac],eax` |
-//! | `staminaMax` <- `staminaMax` | `0x140773ac2` | `0x140773f72` | `mov eax,[rcx+0x158]` ; `mov [rsi+0xb8],eax` |
+//! `rsi` is the `CSFeManImp` (`mov rsi,rcx` at `0x140773df4`). The two callees are the leaves
+//! [`crate::hud::vitals`] transcribes: `GetMaxRecoverableHp` at `0x140437870` is
+//! `cvttss2si eax,[rcx+0x160]` ; `add eax,[rcx+0x138]` ; `ret`, which pins `recoverableHpLeft` at
+//! `+0x160`, and `GethpMaxUncapped` at `0x1404378b0` is `mov eax,[rcx+0x140]` ; `ret`.
 //!
-//! `rsi` is the `CSFeManImp` in both (`mov rsi,rcx` at 1.17.1 `0x140773944`, 2.7.2.0
-//! `0x140773df4`). The two callees are the leaves [`crate::hud::vitals`] transcribes, and their
-//! whole bodies are unchanged: `GetMaxRecoverableHp` at 1.17.1 `0x1404377e0` / 2.7.2.0
-//! `0x140437870` is `cvttss2si eax,[rcx+0x160]` ; `add eax,[rcx+0x138]` ; `ret`, which pins
-//! `recoverableHpLeft` at `+0x160`, and `GethpMaxUncapped` at 1.17.1 `0x140437820` / 2.7.2.0
-//! `0x1404378b0` is `mov eax,[rcx+0x140]` ; `ret`.
+//! The last-write-wins claim in `crate::hud::detour` was checked the same way: `CSFeManImp::Update`
+//! (`0x140772f00`, length `0x195`) and all eighteen of its direct callees that have a `.pdata`
+//! start agreed with 1.17.1 instruction for instruction once rip-relative displacements were
+//! masked.
 //!
-//! The last-write-wins claim in `crate::hud::detour` carries too: `CSFeManImp::Update` (1.17.1
-//! `0x140772a50`, 2.7.2.0 `0x140772f00`, length `0x195` in both) and all eighteen of its direct
-//! callees that have a `.pdata` start agree instruction for instruction under the same masking.
-//!
-//! A second, independent witness agrees for 1.16.2 and 1.17:
+//! A second, independent witness agreed for 1.16.2 and 1.17:
 //! `scripts/re117_module_field_scan.py` sweeps every `componentContainer+0x190` ->
 //! `module+0x00` -> `[module+disp]` chain in both flat images and finds the same six
 //! data-module offsets in both with identical site counts -- `+0x138` 47/47, `+0x13c` 15/15,
@@ -76,11 +67,7 @@
 // Pure arithmetic and constants; ungated so the tests below run on the host.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use er_game_base::game_build::{
-    FileVersion, MAPPED_FILE_VERSION_1171, MAPPED_FILE_VERSION_1172, SUPPORTED_FILE_VERSION,
-};
-
-use crate::possess::layout::FILE_VERSION_1170;
+use er_game_base::game_build::{FileVersion, SUPPORTED_FILE_VERSION};
 
 /// `CSFeManImp+0x80`, where the `FrontEndViewValues` sub-object begins.
 ///
@@ -142,8 +129,8 @@ pub(crate) struct SourceOffsets {
     pub(crate) hp: usize,
     /// `hpMax`. The effective maximum, i.e. `GetHpRate`'s denominator.
     pub(crate) hp_max: usize,
-    /// `hpMaxUncapped`. Populated for NPCs: `FUN_140438a50` writes it from `NpcParam.hp`, the
-    /// same value it gives `hpBase`.
+    /// `hpMaxUncapped`. Populated for NPCs: 1.16.2 `FUN_140438a50` writes it from `NpcParam.hp`,
+    /// the same value it gives `hpBase`.
     pub(crate) hp_max_uncapped: usize,
     /// `recoverableHpLeft`, a `f32`. The rally pool.
     pub(crate) recoverable_hp: usize,
@@ -164,12 +151,7 @@ pub(crate) struct Layout {
     pub(crate) source: SourceOffsets,
 }
 
-/// The offsets as measured on 1.16.2, 1.17.0, 1.17.1 and 2.7.2.0.
-///
-/// One constant shared by every arm of [`Layout::for_build`], on purpose. Writing it once per build
-/// would invite the copies to drift and would imply the builds were measured to differ, which they
-/// were not -- they were measured to agree, and a single shared value says that where equal
-/// literals would merely repeat it.
+/// The offsets as measured on 2.7.2.0 (the same values 1.16.2, 1.17.0 and 1.17.1 had).
 pub(crate) const MEASURED: Layout = Layout {
     view: ViewOffsets {
         player_hp: 0x84,
@@ -202,14 +184,8 @@ impl Layout {
     /// player's HP bar from whatever happens to sit eight bytes along.
     #[must_use]
     pub(crate) fn for_build(version: Option<FileVersion>) -> Option<Self> {
-        match version? {
-            v if v == SUPPORTED_FILE_VERSION => Some(MEASURED),
-            v if v == FILE_VERSION_1170 => Some(MEASURED),
-            // Read out of the 1.17.1 and 2.7.2.0 images; see the module docs for the sites.
-            v if v == MAPPED_FILE_VERSION_1171 => Some(MEASURED),
-            v if v == MAPPED_FILE_VERSION_1172 => Some(MEASURED),
-            _ => None,
-        }
+        // Read out of the 2.7.2.0 image; see the module docs for the sites.
+        (version? == SUPPORTED_FILE_VERSION).then_some(MEASURED)
     }
 }
 
@@ -217,21 +193,22 @@ impl Layout {
 mod tests {
     use super::*;
 
-    /// The gate: four measured builds, and `None` for everything else including the host.
+    /// The gate: the measured build, and `None` for everything else including the host.
     #[test]
-    fn the_layout_is_known_for_the_measured_builds_and_nothing_else() {
+    fn the_layout_is_known_for_the_measured_build_and_nothing_else() {
         assert_eq!(
             Layout::for_build(Some(SUPPORTED_FILE_VERSION)),
             Some(MEASURED)
         );
-        assert_eq!(Layout::for_build(Some(FILE_VERSION_1170)), Some(MEASURED));
         assert_eq!(
-            Layout::for_build(Some(MAPPED_FILE_VERSION_1171)),
-            Some(MEASURED)
-        );
-        assert_eq!(
-            Layout::for_build(Some(MAPPED_FILE_VERSION_1172)),
-            Some(MEASURED)
+            Layout::for_build(Some(FileVersion {
+                major: 2,
+                minor: 7,
+                build: 1,
+                revision: 0,
+            })),
+            None,
+            "1.17.1 is no longer measured"
         );
         assert_eq!(
             Layout::for_build(Some(FileVersion {

@@ -1,9 +1,9 @@
 // The two param getters this DLL hooks, declared exactly once.
 //
-// `include!`d by both `build.rs`, which assembles each pinned window against the 1.17.1 image at
-// `GAME_IMAGE_BASE + rva + offset`, and `src/lib.rs`, which carries the rva to the running build
-// and compares the same windows at the same offsets before hooking. Neither spells an address of
-// its own, so a corrected entry moves every window with it.
+// `include!`d by both `build.rs`, which assembles each pinned window against the 2.7.2.0 image at
+// `GAME_IMAGE_BASE + rva + offset`, and `src/lib.rs`, which uses the rva on the running 2.7.2.0
+// build and compares the same windows at the same offsets before hooking. Neither spells an
+// address of its own, so a corrected entry moves every window with it.
 //
 // Every constant carries `#[allow(dead_code)]` because each includer uses only part of the file.
 
@@ -12,15 +12,15 @@
 #[allow(dead_code)]
 const GAME_IMAGE_BASE: u64 = 0x1_4000_0000;
 
-/// `GetSpEffectParam(out, id)` on 1.17.1 (2.7.2.0 `0x140d53a90`, 1.16.2 `0x140d505f0`).
+/// `GetSpEffectParam(out, id)`, 2.7.2.0 rva.
 /// `out = {row* @+0, id @+8, u8 @+0xc}`.
 #[allow(dead_code)]
-const GET_SP_EFFECT_PARAM_1171_RVA: usize = 0xd5_23a0;
+const GET_SP_EFFECT_PARAM_RVA: usize = 0xd5_3a90;
 
-/// The SpEffectVfxParam getter `(out, id)` on 1.17.1 (2.7.2.0 `0x140d54070`, 1.16.2
-/// `FUN_140d50bd0`). `out = {id @+0, row* @+8, u16 @+0x10}`.
+/// The SpEffectVfxParam getter `(out, id)`, 2.7.2.0 rva (1.16.2 `FUN_140d50bd0`).
+/// `out = {id @+0, row* @+8, u16 @+0x10}`.
 #[allow(dead_code)]
-const GET_SP_EFFECT_VFX_PARAM_1171_RVA: usize = 0xd5_2980;
+const GET_SP_EFFECT_VFX_PARAM_RVA: usize = 0xd5_4070;
 
 /// Both getters open `push <reg>; sub rsp,0x40; mov qword [rsp+0x20],-2`. The window starts at
 /// the third instruction because the running `GetSpEffectParam` has an Arxan `jmp rel32` stub over

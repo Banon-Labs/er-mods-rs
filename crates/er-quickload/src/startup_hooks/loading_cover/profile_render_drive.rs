@@ -59,8 +59,8 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
         return true;
     }
     // Resolved, not added (2026-08-30): this is a `.data` table and it is written below. A stale
-    // RVA on 1.17 does not fault -- the `cur == PROFILE_OFFSCREEN_SIZE_INIT` check would have to
-    // false-positive first -- but the value check is a filter, not a build gate, and the cost of
+    // RVA on another build does not fault -- the `cur == PROFILE_OFFSCREEN_SIZE_INIT` check would
+    // have to false-positive first -- but the value check is a filter, not a build gate, and the cost of
     // it passing on the wrong table is a 16-byte store into an unknown global. `_offset` keeps the
     // refusal answering 0 for every row rather than turning it into the address `row_index * 16`.
     let row = er_game_base::mem::game_data_addr_offset(
@@ -72,7 +72,7 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     if row == 0 {
         append_autoload_debug(format_args!(
             "portrait-res: REFUSED -- PROFILE_OFFSCREEN_SIZE_TABLE_RVA 0x{PROFILE_OFFSCREEN_SIZE_TABLE_RVA:x} \
-             has no verified mapping for this build; the offscreen size stays native for slot {target}"
+             is refused on this build (not 2.7.2.0); the offscreen size stays native for slot {target}"
         ));
         return false;
     }
@@ -178,8 +178,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     }
     // Guard (crash fix): only call refresh once the renderer table is live -- it is populated at
     // TitleTopDialog ctor (main menu), not at early title. Calling refresh before the table exists
-    // AVs inside refresh (observed crash rva 0x9aa6d4 = refresh+0x54 at +8939ms). Require slot-0's
-    // table entry to be a valid CSMenuProfModelRend before marking/refreshing.
+    // AVs inside refresh (observed crash rva 0x9aa6d4 on 1.16.2 = refresh+0x54 at +8939ms; the same
+    // instruction is 0x9abd24 on 2.7.2.0). Require slot-0's table entry to be a valid
+    // CSMenuProfModelRend before marking/refreshing.
     let probe = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     if !valid(probe)
         || unsafe { safe_read_usize(probe) }.unwrap_or(0)
@@ -231,7 +232,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // completed. The old gate was `portrait_loaded_slot_confirmed() == Some(target_slot)` -- i.e.
     // it asked ac0 (`GameMan.save_slot`) whether the target slot was resident. That gate is
     // defeated by our own write: `own_load/loaders.rs` calls the native `SetSaveSlot(picked)`
-    // (Ghidra 0x14067a810 -- a pure field store with no load semantics) before submitting, ~5s
+    // (2.7.2.0 0x14067bb10 -- a pure field store with no load semantics) before submitting, ~5s
     // before the deserialize. Three milliseconds later ac0 already equalled the target, the gate
     // opened, and the semaphore compared our incoming record against the character still resident
     // from the previous session. Gate on the deserialize instead:
@@ -340,10 +341,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let mut marked = 0u32;
         for s in 0..10i32 {
             // One slot (GX-overflow revert, user 2026-07-03): build only the autoload target. Rendering
-            // every saved slot overran the 192-slot GX command queue (0x1aeaf05 null-slot-write crash) --
-            // 10 concurrent live renderers' draw tasks, independent of RT size (target-only 1024 didn't
-            // help). All-slots menu portraits will be handled at the GFX/surface layer (remove the
-            // DummyProfileFace surface) instead of driving all 10 renderers.
+            // every saved slot overran the 192-slot GX command queue (null-slot-write crash at
+            // 0x1aeaf05 on 1.16.2, 0x1aee465 on 2.7.2.0) -- 10 concurrent live renderers' draw tasks,
+            // independent of RT size (target-only 1024 didn't help). All-slots menu portraits will be
+            // handled at the GFX/surface layer (remove the DummyProfileFace surface) instead of
+            // driving all 10 renderers.
             if s != target_slot {
                 continue;
             }
@@ -572,7 +574,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     }
 }
 
-/// Hook on the CSMenuProfModelRend teardown-all (`FUN_1409b2f00`). One-shot: before the original
+/// Hook on the CSMenuProfModelRend teardown-all (`PROFILE_RENDERER_TEARDOWN_RVA`, 0x1409b44b0;
+/// 1.16.1 dump `FUN_1409b2f00`, 1.16.2 0x1409b2db0 -- 1.16.2 0x1409b2f00 is a different function).
+/// One-shot: before the original
 /// runs, save slot-0's renderer and null its table entry so the original's null-guarded delete
 /// enqueue skips it -- sparing the loaded character's portrait renderer from the Continue teardown so
 /// we can keep rendering it into the now-loading screen. The original then tears down slots 1-9.
@@ -603,7 +607,7 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
             attempt += 1;
         }
     }
-    // Repeated-switch GX overflow fix (0x1aeaf05, ~switch #4): destroy the prior window's spared
+    // Repeated-switch GX overflow fix (0x1aee465, ~switch #4): destroy the prior window's spared
     // renderer now, on the game thread, before sparing this switch's renderer. The load-complete
     // reset (render thread) moved it into PROFILE_SPARE_ORPHAN instead of dropping it; the spare
     // excluded it from the native delete (nulled its table slot), so without this it stayed alive
@@ -624,7 +628,8 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     // If the native title/menu code tries to run the teardown-all again after we have already rebuilt the
     // loading-screen-owned portrait table, do not let it delete the live animated source mid-load. This is
     // the exact failure exposed by the leading-gap fix: early build at LoadingScreen start, model animates,
-    // then a later stale native teardown clears DAT_143d6d8d0 and the overlay keeps displaying the last
+    // then a later stale native teardown clears the renderer table (0x143d74960; 1.16.2 DAT_143d6d8d0)
+    // and the overlay keeps displaying the last
     // snapshot frozen (r_bad climbs, drive/display diverges). The builder's own internal teardown still runs
     // normally because PROFILE_LOADSCREEN_TABLE_OWNED is set only after the builder returns.
     if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) != 0
@@ -643,7 +648,7 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         && (product_autoload_enabled() || portrait_overlay_enabled())
         // Disable-on-reload FALLBACK (user 2026-07-23): do not spare the portrait renderer on a
         // System->Quit->Load switch reload. A spared renderer whose GX resource goes stale across the
-        // reload crashed load2 near completion (null native GX resource wrapper -> FUN_141e90290 rcx=0x20
+        // reload crashed load2 near completion (null native GX resource wrapper -> 1.16.2 FUN_141e90290 rcx=0x20
         // AV; spared[model_ok=0]; lookat off_resource_bad climbing 68->128). Skipping the spare lets the
         // native teardown free it with the world -- no stale spared renderer, so the per-frame profile-draw
         // never runs against a dead resource. LOAD1/first-load is unaffected (switch_reload_active()==false
@@ -724,9 +729,10 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     PROFILE_RENDERER_TEARDOWN_FENCE.store(0, Ordering::SeqCst);
 }
 
-/// Diagnostic + repair detour on the native profile-portrait builder (`FUN_1409aa7d0` =
-/// `PROFILE_RENDERER_REFRESH_RVA`). The builder derefs `table[slot]+0x754` with no null check for
-/// every slot whose profile record exists (Ghidra: `FUN_140261c30(summary,slot) != 0` gates the
+/// Diagnostic + repair detour on the native profile-portrait builder (`PROFILE_RENDERER_REFRESH_RVA`,
+/// 0x1409abcd0; 1.16.1 dump `FUN_1409aa7d0`, 1.16.2 0x1409aa680 -- 1.16.2 0x1409aa7d0 is a different
+/// function). The builder derefs `table[slot]+0x754` with no null check for every slot whose profile
+/// record exists (Ghidra, 1.16.1 dump: `FUN_140261c30(summary,slot) != 0` gates the
 /// walk, the entry itself is never checked), and its 10-slot table setup is called from exactly one
 /// native site -- the TitleTopDialog constructor -- so our cloned in-world ProfileSelect reopens run
 /// it against whatever the last teardown left; the 3rd in-session open found the table fully empty

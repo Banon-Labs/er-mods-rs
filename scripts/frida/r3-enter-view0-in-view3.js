@@ -1,7 +1,7 @@
 // In view 3, run pane 0's own "enter view" callback, so the game hides its right and center panels.
 //
-// Game addresses carried to 2.7.2.0 by scripts/frida-carry-1172.py; each moved literal keeps its
-// old value in its comment.
+// Game addresses are 2.7.2.0. A literal that moved from 1.17.1 keeps its old value in its
+// comment.
 //
 // The player reports that one native view hides the right and center panels and leaves only the
 // left list. Each pane's callback is `vtable+0x10(pane, &shown)` on the slot objects at

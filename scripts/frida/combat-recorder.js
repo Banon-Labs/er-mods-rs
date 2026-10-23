@@ -13,8 +13,7 @@
 //
 // Passive: no hook here changes what the game does.
 //
-// Addresses are 2.7.2.0, measured on 1.17.1 and carried with scripts/map-rvas-1171-to-1172.py,
-// written `1.17.1 -> 2.7.2.0`. Both hooked bodies match eldenring-deobf-1.17.2.bin apart from
+// Addresses are 2.7.2.0, measured on 1.17.1 and carried, written `1.17.1 -> 2.7.2.0`. Both hooked bodies match eldenring-deobf-1.17.2.bin apart from
 // rip-relative and branch operands; WorldChrMan was checked through its readers.
 'use strict';
 
