@@ -358,4 +358,11 @@ rpc.exports = {
   },
 };
 
+// Queries handed in through `er-frida-watch.py --config-json '{"queries": [{"label": .., "spec": ..}]}'`,
+// queued at load so a measurement needs no rpc client. Same shape as the `query` export takes.
+for (const q of ((globalThis.__ER_FRIDA_CONFIG || {}).queries || [])) {
+  queue.push({ label: q.label, spec: q.spec || {}, call: null, failed: null });
+  out.queued += 1;
+}
+
 console.log('lobby-search-proof: ' + (out.ready ? 'ready' : 'inert -- ' + out.why));
