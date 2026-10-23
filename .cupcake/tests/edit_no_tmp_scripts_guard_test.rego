@@ -185,3 +185,75 @@ test_deny_bash_install_into_tmp_script if {
 test_deny_bash_pathlib_write_text_tmp_script if {
 	denied(bash_event("python3 -c \"from pathlib import Path; Path('/tmp/probe.py').write_text('print(1)')\""))
 }
+
+# ---------------------------------------------------------------------------
+# Extracting a committed file into /tmp is not authoring it (2026-10-22). The
+# first case is the measured refusal, with the session id filled in.
+# ---------------------------------------------------------------------------
+
+scratchpad := "/tmp/claude-1000/-home-banon-projects-er-mods-rs/fbbd7ff7-ace9-472a-bf63-ad98e5e1feca/scratchpad"
+
+test_allow_bash_git_show_rev_path_into_scratchpad if {
+	not denied(bash_event(concat("", [
+		"git show main:.cupcake/tests/teardown_must_relaunch_test.rego > ",
+		scratchpad, "/old_test.rego",
+	])))
+}
+
+test_allow_bash_git_cat_file_rev_path_into_tmp if {
+	not denied(bash_event("git cat-file -p HEAD~3:scripts/check.sh > /tmp/old-check.sh"))
+}
+
+test_allow_bash_git_dash_c_show_rev_path_into_tmp if {
+	not denied(bash_event("git -C /home/u/repo show origin/main:scripts/x.py >/tmp/x.py"))
+}
+
+# The same extraction with anything else in the command still denies.
+
+test_deny_bash_git_show_then_chained_run if {
+	denied(bash_event("git show main:scripts/x.py > /tmp/x.py && bash /tmp/x.py"))
+}
+
+test_deny_bash_git_show_then_hand_written_append if {
+	denied(bash_event("git show main:scripts/x.py > /tmp/x.py; echo 'print(1)' >> /tmp/x.py"))
+}
+
+test_deny_bash_git_show_then_newline_command if {
+	denied(bash_event("git show main:scripts/x.py > /tmp/x.py\nprintf 'x' >> /tmp/x.py"))
+}
+
+test_deny_bash_git_show_piped_through_an_edit if {
+	denied(bash_event("git show main:scripts/x.py | sed 's/a/b/' > /tmp/x.py"))
+}
+
+test_deny_bash_git_show_command_substitution if {
+	denied(bash_event("git show main:$(cat /tmp/name) > /tmp/x.py"))
+}
+
+test_deny_bash_git_show_backtick_substitution if {
+	denied(bash_event("git show main:`cat /tmp/name` > /tmp/x.py"))
+}
+
+test_deny_bash_git_show_append_redirect if {
+	denied(bash_event("git show main:scripts/x.py >> /tmp/x.py"))
+}
+
+# `:<path>` reads the index, which `git add` fills with whatever the agent wrote.
+test_deny_bash_git_show_index_blob if {
+	denied(bash_event("git show :scripts/x.py > /tmp/x.py"))
+}
+
+# A leading dash is an option, not a revision.
+test_deny_bash_git_show_option_shaped_rev if {
+	denied(bash_event("git show --output=/tmp/a.txt:x > /tmp/x.py"))
+}
+
+# Only `show` and `cat-file -p` of a `<rev>:<path>` blob are extraction.
+test_deny_bash_git_log_patch_into_tmp_script if {
+	denied(bash_event("git log -p > /tmp/x.py"))
+}
+
+# The shape has to be the command, not words inside one.
+test_deny_bash_echo_of_git_show_text_into_tmp_script if {
+	denied(bash_event("echo git show main:x.py > /tmp/x.py"))
+}

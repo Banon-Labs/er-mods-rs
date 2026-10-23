@@ -38,6 +38,7 @@ deny contains decision if {
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	bash_tool
+	not versioned_blob_extraction
 	some path in tmp_written_script_paths
 
 	decision := tmp_script_decision(path)
@@ -159,3 +160,20 @@ tmp_written_script_paths contains path if {
 	is_script_path(path)
 	not in_current_repo(path)
 }
+
+# Extracting a committed file is not authoring one. Measured false positive (2026-10-22):
+#
+#   git show main:.cupcake/tests/teardown_must_relaunch_test.rego > <scratchpad>/old_test.rego
+#
+# was refused as a script authored into /tmp, but every byte came out of git, where the file is
+# already versioned and reviewable -- the two things this guard exists to protect. So one shape
+# is admitted, and only as the whole command: `git [-C <dir>] show <rev>:<path>` or
+# `git [-C <dir>] cat-file -p <rev>:<path>`, its stdout sent with a single `>` to one path under
+# /tmp. Each token excludes whitespace, `;&|<>`, `$`, backticks, parentheses, quotes and
+# backslashes, so nothing can be chained, piped, substituted or appended to the file in the same
+# command. The rev must be non-empty and must not start with `-`: an empty rev (`:<path>`) reads
+# the index, which any `git add` can fill with hand-written bytes, and a leading dash would be an
+# option such as `--output=` rather than a revision.
+versioned_blob_extraction_pattern := `^git(?:[ \t]+-C[ \t]+[^\s;&|<>$\x60()'"\\]+)?[ \t]+(?:show|cat-file[ \t]+-p)[ \t]+[^\s;&|<>$\x60()'"\\:\-][^\s;&|<>$\x60()'"\\:]*:[^\s;&|<>$\x60()'"\\]+[ \t]*>[ \t]*/tmp/[^\s;&|<>$\x60()'"\\]+$`
+
+versioned_blob_extraction if regex.match(versioned_blob_extraction_pattern, trim_space(command))
