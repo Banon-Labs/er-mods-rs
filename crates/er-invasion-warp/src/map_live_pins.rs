@@ -390,6 +390,14 @@ pub unsafe fn top_up_live_pins() -> usize {
     let Some(slab) = param_slab_bounds() else {
         return refuse("the synthetic param slab bounds are not published");
     };
+    // `project_to_map` calls this address, so it must be the converter itself. Passing `base` here
+    // called `eldenring.exe+0` and faulted at `+0x5` on the first top-up after a character switch
+    // (run br-20261023-180817-0f2a).
+    let Some(convert_address) =
+        crate::map_seams::call_target(base, &crate::map_seams::CONVERT_MSB_COORDS_TO_MAP_COORDS)
+    else {
+        return refuse("ConvertMsbCoordsToMapCoords has no verified address on the running build");
+    };
 
     // Identity is (block, point), not block -- and getting that wrong is what made this function a
     // permanent no-op.
@@ -476,9 +484,14 @@ pub unsafe fn top_up_live_pins() -> usize {
             break;
         };
         // Project through the ViewModel's own converters, exactly as the constructor does.
-        let Some((coords, converter_index, _)) =
-            (unsafe { project_to_map(base, view_model, target.block.raw(), target.position) })
-        else {
+        let Some((coords, converter_index, _)) = (unsafe {
+            project_to_map(
+                convert_address,
+                view_model,
+                target.block.raw(),
+                target.position,
+            )
+        }) else {
             unprojectable += 1;
             super::map_hooks::record_top_up_refusal(target.block.raw(), target.point_index);
             continue;

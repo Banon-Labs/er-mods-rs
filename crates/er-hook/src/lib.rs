@@ -181,6 +181,11 @@ impl UnionArity {
 const MAX_UNION_SLOTS: usize = 96;
 
 struct UnionEntry {
+    /// The address the first registrant named. It is `target` unless that registrant asked for a
+    /// jump at the entry to be followed, in which case the detour sits on the code the jump lands
+    /// on and this keeps the entry the later registrants will name.
+    entry: usize,
+    /// Where the dispatcher's detour is written.
     target: usize,
     trampoline: usize,
     /// Which dispatcher pool holds this slot, and therefore how many arguments every handler on
@@ -189,6 +194,15 @@ struct UnionEntry {
     /// handler fn ptr + its caller-owned `orig` slot, in chain order.
     handlers: Vec<(usize, &'static AtomicUsize)>,
 }
+
+impl UnionEntry {
+    /// Does a registration naming `address` belong to this slot? Either address does: the entry a
+    /// registrant names, or the place the detour went.
+    fn claims(&self, address: usize) -> bool {
+        self.entry == address || self.target == address
+    }
+}
+
 static UNIONS: Mutex<Vec<UnionEntry>> = Mutex::new(Vec::new());
 /// Lock-free head-handler per slot, read on every dispatch (no mutex in the hot path).
 #[allow(clippy::declare_interior_mutable_const)]
@@ -297,7 +311,7 @@ fn union_admission(
     if let Some((index, entry)) = unions
         .iter()
         .enumerate()
-        .find(|(_, entry)| entry.target == target)
+        .find(|(_, entry)| entry.claims(target))
     {
         if entry.arity != arity {
             return UnionAdmission::ArityConflict(entry.arity);
@@ -314,6 +328,35 @@ fn union_admission(
         return UnionAdmission::Exhausted;
     }
     UnionAdmission::Create(slot)
+}
+
+/// [`union_admission`] for a registrant that names a function entry and leaves it to `locate` to
+/// say where the detour is written. Returns the admission and the address it concerns, or `None`
+/// when `locate` refuses the entry.
+///
+/// The table is asked about the entry before `locate` runs, and the order is the point. Once this
+/// image has detoured an entry, the entry opens with this image's own `jmp rel32`; a locator that
+/// follows jumps would follow that one to this image's relay and claim a second slot there, so one
+/// function would carry two dispatchers from one image. Asking the table first chains the
+/// newcomer onto the slot that already owns the entry instead.
+///
+/// `locate` runs only when no slot claims the entry, and the caller holds the table lock across
+/// both, so no other registration can detour the entry between the question and the answer.
+fn located_admission(
+    unions: &[UnionEntry],
+    entry: usize,
+    locate: &dyn Fn(usize) -> Option<usize>,
+    handler_addr: usize,
+    arity: UnionArity,
+) -> Option<(UnionAdmission, usize)> {
+    if let Some(owner) = unions.iter().find(|slot| slot.claims(entry)) {
+        return Some((
+            union_admission(unions, entry, handler_addr, arity),
+            owner.target,
+        ));
+    }
+    let target = locate(entry)?;
+    Some((union_admission(unions, target, handler_addr, arity), target))
 }
 
 /// Append `handler_addr` to `entry`'s chain and wire the two `orig` slots it changes: the previous
@@ -408,6 +451,16 @@ pub unsafe fn register_union_hook_runtime_derived(
 /// function rather than the same one -- a four-argument target reached through a seven-argument
 /// dispatcher gets garbage where its stack arguments would be.
 ///
+/// The jump is followed inside the registration, under the table lock and the process-wide hook
+/// lock, and only when no slot in this image already owns `entry`. Following it before taking
+/// either lock is what let this image's own detour be read back as a stub: a second registrant
+/// arriving after the first had enabled found the first one's `jmp rel32` at the entry and claimed
+/// a second slot on the relay behind it. See [`located_admission`].
+///
+/// This registers on this image's own union. A predicate several DLLs answer belongs on
+/// [`register_shared_hook_following_arxan`], which hands the entry to the elected hub so one
+/// MinHook instance owns it.
+///
 /// # Safety
 /// Same contract as [`register_union_hook_runtime_derived`]: `handler` must be a valid [`UnionFn`]
 /// matching the target's ABI, `orig_slot` must be the static the handler reads to call its
@@ -420,10 +473,16 @@ pub unsafe fn register_union_hook_runtime_derived_following_arxan(
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
     let what = format!("register_union_hook_runtime_derived_following_arxan 0x{entry:x}");
-    let Some(target) = detour_target_following_arxan(entry, &what) else {
-        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
-    };
-    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+    let locate = |address: usize| detour_target_following_arxan(address, &what);
+    unsafe {
+        register_union_hook_located(
+            entry,
+            &locate,
+            handler as usize,
+            orig_slot,
+            UnionArity::Four,
+        )
+    }
 }
 
 /// Register a seven-argument handler on a game function entry, following an Arxan stub if the
@@ -447,11 +506,15 @@ pub unsafe fn register_union_hook7_runtime_derived(
     orig_slot: &'static AtomicUsize,
 ) -> Result<(), MH_STATUS> {
     let what = format!("register_union_hook7_runtime_derived 0x{entry:x}");
-    let Some(target) = detour_target_following_arxan(entry, &what) else {
-        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
-    };
+    let locate = |address: usize| detour_target_following_arxan(address, &what);
     unsafe {
-        register_union_hook_resolved_with(target, handler as usize, orig_slot, UnionArity::Seven)
+        register_union_hook_located(
+            entry,
+            &locate,
+            handler as usize,
+            orig_slot,
+            UnionArity::Seven,
+        )
     }
 }
 
@@ -605,6 +668,46 @@ unsafe fn register_union_hook_resolved_with(
     orig_slot: &'static AtomicUsize,
     arity: UnionArity,
 ) -> Result<(), MH_STATUS> {
+    let as_given = |address: usize| Some(address);
+    unsafe { register_union_hook_located(target, &as_given, handler_addr, orig_slot, arity) }
+}
+
+/// The registration body every union entry point shares: `entry` is the address the caller named,
+/// and `locate` says where on the running image the detour for it is written.
+///
+/// # Reading the prologue and patching it is one step across every image
+///
+/// `MH_CreateHook` copies the target's opening instructions into the trampoline, and
+/// `MH_EnableHook` later writes `jmp rel32` over them without looking at what is there now
+/// (`vendor/minhook/src/hook.c`, `EnableHookLL`). Every DLL of this workspace links its own MinHook,
+/// and each installs from its own thread at boot, so two images could both copy a pristine
+/// prologue before either wrote its jump. The second write then replaced the first, and the first
+/// image's handlers were never called again while its log said `hook ok`.
+///
+/// Measured 2026-10-22, profile `all-mods-enabled.me3`, on the cursor predicate at
+/// `0x140766b00`: er-duel-rules, er-cel-shade and er-invasion-warp each logged `SITE OK` and
+/// `hook ok` with no jump at the entry when they read it, er-duel-rules and er-invasion-warp spent
+/// 356 and 445 ms between `hook attempt` and `hook ok` (another image's thread freezes hold the lock
+/// `MH_EnableHook` waits on), and the live entry jumped to er-invasion-warp's relay, whose
+/// trampoline held the game's own `48 89 5c 24 10`. er-duel-rules took input for 82 menu frames and
+/// its handler counted zero calls.
+///
+/// So the process-wide hook lock that serialises MinHook's thread freezes is held here from before
+/// `locate` reads the entry until the detour is enabled. A second image then reads the first
+/// image's jump rather than the pristine bytes, and MinHook stacks onto it: its trampoline carries
+/// the first jump, and both detours run.
+///
+/// # Safety
+/// `handler_addr` must be a live function of exactly `arity` arguments matching the target's ABI,
+/// `orig_slot` must be the static that handler reads to call its original, and `locate` must answer
+/// an address that is correct for the running build.
+unsafe fn register_union_hook_located(
+    entry: usize,
+    locate: &dyn Fn(usize) -> Option<usize>,
+    handler_addr: usize,
+    orig_slot: &'static AtomicUsize,
+    arity: UnionArity,
+) -> Result<(), MH_STATUS> {
     // Three lines, not one, and the reason is a whole afternoon (user directive 2026-09-13). The
     // old single line said `hooked X at 0x...` at install time, which only reports that MinHook
     // accepted an address -- so a detour carrying a stale 1.16.2 constant against a 1.17.1 game
@@ -612,19 +715,27 @@ unsafe fn register_union_hook_resolved_with(
     // separate records, and the failure line names the build-drift question by hand rather than
     // leaving a reader to infer it.
     hook_log(format_args!(
-        "hook attempt: {} wants game addr 0x{target:x} ({})",
+        "hook attempt: {} wants game addr 0x{entry:x} ({})",
         as_dll_off(handler_addr),
         arity.label()
     ));
+    // Taken before the table lock and before anything reads the entry, and released after the
+    // enable below. `MH_EnableHook` takes it again on this thread, which a Win32 mutex allows.
+    let _registration = freeze_guard::hold("union registration");
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         s => {
-            hook_failed(target, handler_addr, s, "MinHook could not initialise");
+            hook_failed(entry, handler_addr, s, "MinHook could not initialise");
             return Err(s);
         }
     }
     let mut unions = UNIONS.lock().unwrap_or_else(|e| e.into_inner());
-    let slot = match union_admission(&unions, target, handler_addr, arity) {
+    let Some((admission, target)) = located_admission(&unions, entry, locate, handler_addr, arity)
+    else {
+        // `locate` has logged which check refused the entry.
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    };
+    let slot = match admission {
         UnionAdmission::AlreadyPresent => return Ok(()),
         UnionAdmission::Exhausted => return Err(MH_STATUS::MH_ERROR_MEMORY_ALLOC),
         UnionAdmission::ArityConflict(existing) => {
@@ -699,13 +810,14 @@ unsafe fn register_union_hook_resolved_with(
     // asset it asked for. The dispatcher is unreachable until the detour is enabled, so publishing
     // the head first is free.
     UNION_HEADS[slot].store(handler_addr, Ordering::Release);
-    let mut entry = UnionEntry {
+    let mut owned = UnionEntry {
+        entry,
         target,
         trampoline: trampoline as usize,
         arity,
         handlers: Vec::new(),
     };
-    chain_append(&mut entry, handler_addr, orig_slot); // sole handler -> game orig
+    chain_append(&mut owned, handler_addr, orig_slot); // sole handler -> game orig
     match unsafe { MH_EnableHook(target as *mut c_void) } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
         s => {
@@ -721,12 +833,22 @@ unsafe fn register_union_hook_resolved_with(
             return Err(s);
         }
     }
-    unions.push(entry);
-    hook_log(format_args!(
-        "hook ok: {} now owns game addr 0x{target:x} ({}) -- the detour is installed and enabled",
-        as_dll_off(handler_addr),
-        arity.label()
-    ));
+    unions.push(owned);
+    if target == entry {
+        hook_log(format_args!(
+            "hook ok: {} now owns game addr 0x{target:x} ({}) -- the detour is installed and \
+             enabled",
+            as_dll_off(handler_addr),
+            arity.label()
+        ));
+    } else {
+        hook_log(format_args!(
+            "hook ok: {} now owns 0x{target:x}, where the jump at game addr 0x{entry:x} lands \
+             ({}) -- the detour is installed and enabled",
+            as_dll_off(handler_addr),
+            arity.label()
+        ));
+    }
     Ok(())
 }
 
@@ -840,13 +962,29 @@ const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register_2720\0";
 /// The five-argument sibling of [`UNION_REGISTER_EXPORT`], versioned for the same reason.
 #[cfg(windows)]
 const UNION_REGISTER5_EXPORT: &[u8] = b"er_effects_union_register5_2720\0";
-
-/// Define the two C-ABI registrar exports that make the calling cdylib a hook union hub.
+/// The export that takes a game function entry read out of the running image and follows a jump at
+/// it in the hub. Same `er_effects_` prefix and the same reasoning as the two above, and its own
+/// name for the reason [`UnionRegister5Fn`] has one: an older hub lacks it, and a missing export
+/// is a null `GetProcAddress` and a logged fallback, where an extra argument on an existing export
+/// would be decoded wrongly with nothing logged.
 ///
-/// # Why a macro, and not two functions in this crate
+/// It exists because neither of the others follows a jump at the entry. The cursor predicate at
+/// 2.7.2.0 `0x766b00` may open with Arxan's `jmp rel32`, so every DLL answering it called
+/// [`register_union_hook_runtime_derived_following_arxan`] on its own union instead, one MinHook
+/// instance each -- the configuration `register_union_hook_located` records losing three handlers
+/// of four on 2026-10-22, and er-npc-summons' picker losing its handler on 2026-10-23.
+#[cfg(windows)]
+const UNION_REGISTER_FOLLOWING_ARXAN_EXPORT: &[u8] =
+    b"er_effects_union_register_following_arxan_2720\0";
+
+/// Define the C-ABI registrar exports that make the calling cdylib a hook union hub: four
+/// arguments, five arguments, and four arguments on a runtime-derived entry whose jump is followed
+/// in the hub.
+///
+/// # Why a macro, and not functions in this crate
 ///
 /// An `unsafe(no_mangle)` definition in an rlib is retained and re-exported by every cdylib that
-/// links it. Putting the pair here directly would make every companion in the workspace advertise
+/// links it. Putting them here directly would make every companion in the workspace advertise
 /// itself as a hub, which inverts the election rather than feeding it: a hub is the image that owns
 /// a MinHook instance the others chain onto, and eleven of them is eleven instances.
 /// `crates/er-quickload/src/mh.rs` has recorded that constraint since the extraction, which is why
@@ -924,6 +1062,38 @@ macro_rules! export_union_registrar {
             let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
                 unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
             match unsafe { $crate::register_union_hook5(target, handler, orig_slot) } {
+                Ok(()) => 0,
+                Err(status) => status as i32,
+            }
+        }
+
+        /// C-ABI export: `er_effects_union_register_2720` for a game function entry the companion
+        /// read out of the running image, with a jump at the entry followed here, in the hub.
+        ///
+        /// `entry` is an absolute address on the running image, not an rva. The hub audits it
+        /// against the running image's own function table and follows a jump at it under its table
+        /// lock, so the hub's own detour on the entry is never read back as a jump to follow.
+        ///
+        /// # Safety
+        /// See `er_hook::export_union_registrar`, and
+        /// `er_hook::register_union_hook_runtime_derived_following_arxan`: `entry` must have been
+        /// derived from the running image.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "system" fn er_effects_union_register_following_arxan_2720(
+            entry: usize,
+            handler: $crate::UnionFn,
+            orig_slot_ptr: *mut usize,
+        ) -> i32 {
+            if orig_slot_ptr.is_null() {
+                return -1;
+            }
+            let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
+                unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
+            match unsafe {
+                $crate::register_union_hook_runtime_derived_following_arxan(
+                    entry, handler, orig_slot,
+                )
+            } {
                 Ok(()) => 0,
                 Err(status) => status as i32,
             }
@@ -1390,6 +1560,87 @@ pub unsafe fn register_shared_hook5_with_budget(
         .map(|()| HookRoute::LocalUnion)
 }
 
+/// Register `handler` on a game function entry read out of the running image, through the elected
+/// hub's union, with a jump at the entry followed in the hub.
+///
+/// This is [`register_union_hook_runtime_derived_following_arxan`] for an entry several DLLs
+/// detour. Each DLL calling that one directly drives its own MinHook instance on the entry; this
+/// hands the entry to the hub, so one instance owns it and every DLL's handler chains in one
+/// table. With no hub in the process, or when this image is the hub, it registers on this image's
+/// own union, as [`register_shared_hook`] does.
+///
+/// # Safety
+/// Same contract as [`register_union_hook_runtime_derived_following_arxan`]: `handler` must be a
+/// valid [`UnionFn`] matching the target's ABI and must call its `orig` slot through [`UnionFn`],
+/// because the slot may hold the next handler in the chain, and `entry` must have been derived
+/// from the running image.
+#[cfg(windows)]
+pub unsafe fn register_shared_hook_following_arxan(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<HookRoute, MH_STATUS> {
+    unsafe {
+        register_shared_hook_following_arxan_with_budget(
+            entry,
+            handler,
+            orig_slot,
+            PRODUCT_RESOLVE_TRIES,
+            PRODUCT_RESOLVE_SLEEP_MS,
+        )
+    }
+}
+
+/// [`register_shared_hook_following_arxan`] with an explicit resolve budget; see
+/// [`register_shared_hook_with_budget`] for when one probe is the right budget.
+///
+/// A hub that predates `er_effects_union_register_following_arxan_2720` sends this down the local
+/// branch, and that gets its own line, as it does for the five-argument path: the hub and this
+/// image then each own a MinHook instance on any entry both detour. They no longer overwrite each
+/// other, because every union registration holds the process-wide hook lock from its read of the
+/// entry to its enable, but the handlers then sit in two chains, one detour stacked on the other,
+/// rather than in one table.
+///
+/// # Safety
+/// Same contract as [`register_shared_hook_following_arxan`].
+#[cfg(windows)]
+pub unsafe fn register_shared_hook_following_arxan_with_budget(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+    tries: u32,
+    sleep_ms: u32,
+) -> Result<HookRoute, MH_STATUS> {
+    if let Some(proc) =
+        resolve_union_register_export(UNION_REGISTER_FOLLOWING_ARXAN_EXPORT, tries, sleep_ms)
+    {
+        // SAFETY: the export's C-ABI shape is fixed by `export_union_registrar!`, and both images
+        // stay mapped for the process lifetime.
+        let register = unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) };
+        hook_log(format_args!(
+            "HOOK SHARED ENTRY (0x{entry:x}): handing the runtime-derived entry to the elected \
+             hub's union, which follows a jump at it and owns the one detour"
+        ));
+        // AtomicUsize is a repr(transparent) usize, so handing the hub a `*mut usize` into our
+        // own static is sound; our image outlives every dispatch.
+        let slot_ptr = orig_slot.as_ptr();
+        return match unsafe { register(entry, handler, slot_ptr) } {
+            0 => Ok(HookRoute::ProductUnion),
+            code if code < 0 => Err(MH_STATUS::MH_UNKNOWN),
+            code => Err(mh_status_from_i32(code)),
+        };
+    }
+    if resolve_product_union_register(1, 0).is_some() {
+        hook_log(format_args!(
+            "HOOK SHARED ENTRY (0x{entry:x}): a union hub is loaded but exports no \
+             er_effects_union_register_following_arxan_2720, so this handler takes this image's own \
+             MinHook instance. Rebuild the hub DLL from the same tree as this shell."
+        ));
+    }
+    unsafe { register_union_hook_runtime_derived_following_arxan(entry, handler, orig_slot) }
+        .map(|()| HookRoute::LocalUnion)
+}
+
 /// Reconstruct an [`MH_STATUS`] from the `i32` the cross-DLL export returns.
 fn mh_status_from_i32(code: i32) -> MH_STATUS {
     match code {
@@ -1680,7 +1931,13 @@ pub unsafe fn MH_Uninitialize() -> MH_STATUS {
     unsafe { MH_Uninitialize_unguarded() }
 }
 
-/// One process-wide lock around every MinHook entry point that suspends threads.
+/// One process-wide lock around every MinHook entry point that suspends threads, and around every
+/// union registration from its first read of the target to its enable.
+///
+/// The second use is the read-then-patch race `register_union_hook_located` documents: a
+/// registration holds this from before it reads the entry until `MH_EnableHook` returns, so no
+/// other image can copy the same pristine prologue in between. It nests: `MH_EnableHook` takes it
+/// again on the same thread.
 ///
 /// # The deadlock this exists to prevent
 ///
@@ -1800,8 +2057,8 @@ mod freeze_guard {
                 crate::hook_log(format_args!(
                     "HOOK FREEZE LOCK: {what} waited {FREEZE_LOCK_TIMEOUT_MS}ms for the \
                      process-wide MinHook lock and got {other:#x}; proceeding UNSERIALISED. \
-                     Another module has been inside a thread freeze for longer than any real \
-                     freeze takes -- see er-effects-rs-1742."
+                     Another module has been inside a thread freeze or a hook registration for \
+                     longer than any real one takes -- see er-effects-rs-1742."
                 ));
                 Held(None)
             }
@@ -2698,15 +2955,135 @@ mod tests {
     /// A table entry as `register_union_hook_resolved_with` would have left it after one
     /// registration, without the `MH_CreateHook` that produced the trampoline.
     fn entry_with(target: usize, arity: UnionArity, handler: usize) -> UnionEntry {
+        followed_entry_with(target, target, arity, handler)
+    }
+
+    /// A table entry whose registrant named `entry` and whose detour went to `target`, the shape a
+    /// followed jump leaves.
+    fn followed_entry_with(
+        entry: usize,
+        target: usize,
+        arity: UnionArity,
+        handler: usize,
+    ) -> UnionEntry {
         static SOLE_ORIG: AtomicUsize = AtomicUsize::new(0);
-        let mut entry = UnionEntry {
+        let mut owned = UnionEntry {
+            entry,
             target,
             trampoline: FAKE_TRAMPOLINE,
             arity,
             handlers: Vec::new(),
         };
-        chain_append(&mut entry, handler, &SOLE_ORIG);
-        entry
+        chain_append(&mut owned, handler, &SOLE_ORIG);
+        owned
+    }
+
+    // -------- naming an entry and letting a locator say where the detour goes --------
+
+    /// Where the jump at `FAKE_TARGET` lands in the tests below: a relay outside the image.
+    const RELAY: usize = 0x1_3ff8_0fd3;
+
+    /// A locator that must not be asked: the table already owns the entry.
+    fn never_asked(address: usize) -> Option<usize> {
+        panic!("the locator ran for 0x{address:x}, which the table already owns")
+    }
+
+    /// The failure this guards, as measured on 2026-10-22: this image's own detour is the jump at
+    /// the entry, and a locator that follows jumps would send the second registrant onto this
+    /// image's own relay -- a second dispatcher on one function. The table answers first.
+    #[test]
+    fn an_owned_entry_chains_without_asking_the_locator() {
+        let unions = [entry_with(FAKE_TARGET, UnionArity::Four, HANDLER_A)];
+        assert_eq!(
+            located_admission(
+                &unions,
+                FAKE_TARGET,
+                &never_asked,
+                HANDLER_B,
+                UnionArity::Four
+            ),
+            Some((UnionAdmission::Chain(0), FAKE_TARGET))
+        );
+    }
+
+    /// A slot that followed a jump is still found by the entry its registrant named, and the
+    /// address reported is where the detour went.
+    #[test]
+    fn a_followed_slot_is_found_by_its_entry() {
+        let unions = [followed_entry_with(
+            FAKE_TARGET,
+            RELAY,
+            UnionArity::Four,
+            HANDLER_A,
+        )];
+        assert_eq!(
+            located_admission(
+                &unions,
+                FAKE_TARGET,
+                &never_asked,
+                HANDLER_B,
+                UnionArity::Four
+            ),
+            Some((UnionAdmission::Chain(0), RELAY))
+        );
+        assert_eq!(
+            union_admission(&unions, FAKE_TARGET, HANDLER_A, UnionArity::Four),
+            UnionAdmission::AlreadyPresent,
+            "the first registrant naming its entry again is a retry, not a second handler"
+        );
+    }
+
+    /// An entry nothing owns goes where the locator says, and a locator that lands on a slot the
+    /// table already owns chains onto it.
+    #[test]
+    fn an_unowned_entry_goes_where_the_locator_says() {
+        let to_relay = |_: usize| Some(RELAY);
+        assert_eq!(
+            located_admission(&[], FAKE_TARGET, &to_relay, HANDLER_A, UnionArity::Four),
+            Some((UnionAdmission::Create(0), RELAY))
+        );
+        let relay_owned = [entry_with(RELAY, UnionArity::Four, HANDLER_A)];
+        assert_eq!(
+            located_admission(
+                &relay_owned,
+                FAKE_TARGET,
+                &to_relay,
+                HANDLER_B,
+                UnionArity::Four
+            ),
+            Some((UnionAdmission::Chain(0), RELAY))
+        );
+    }
+
+    /// A locator that refuses is a refusal, never a slot.
+    #[test]
+    fn a_refusing_locator_admits_nothing() {
+        let refuse = |_: usize| None;
+        assert_eq!(
+            located_admission(&[], FAKE_TARGET, &refuse, HANDLER_A, UnionArity::Four),
+            None
+        );
+    }
+
+    /// The arity rule holds for an entry found through its followed slot too.
+    #[test]
+    fn an_owned_entry_at_another_arity_is_refused() {
+        let unions = [followed_entry_with(
+            FAKE_TARGET,
+            RELAY,
+            UnionArity::Seven,
+            HANDLER_A,
+        )];
+        assert_eq!(
+            located_admission(
+                &unions,
+                FAKE_TARGET,
+                &never_asked,
+                HANDLER_B,
+                UnionArity::Four
+            ),
+            Some((UnionAdmission::ArityConflict(UnionArity::Seven), RELAY))
+        );
     }
 
     #[test]
@@ -2884,6 +3261,7 @@ mod tests {
     #[test]
     fn two_handlers_on_one_five_argument_target_nest_with_the_first_outermost() {
         let mut entry = UnionEntry {
+            entry: FAKE_TARGET,
             target: FAKE_TARGET,
             trampoline: addr_of(fake_game),
             arity: UnionArity::Five,

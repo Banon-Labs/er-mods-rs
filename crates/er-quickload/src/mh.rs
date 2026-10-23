@@ -33,7 +33,7 @@ pub use er_hook::*;
 /// type that *does* implement `Drop` and really run its destructor.
 pub fn leak_installed_hook(_hook: MhHook) {}
 
-// The two registrar exports, defined by the shared macro rather than written out here.
+// The registrar exports, defined by the shared macro rather than written out here.
 //
 // What they are for, which the macro's own docs do not repeat: a companion loaded into the same
 // process -- the log-only `er-reload-trace` is the original one -- hooks ~40 native load and menu

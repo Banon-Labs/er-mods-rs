@@ -613,8 +613,16 @@ reason = """Both DLLs answer the game's "a menu has the mouse" predicate with tr
 panel is open -- the duel picker, the cel-shading menu -- which is what makes the game show and \
 free the cursor and stop turning the camera with the mouse. Each asks the next handler otherwise, \
 so either panel open is enough and neither closes the other's. Both register through \
-`er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
-2.7.2.0 prologue, so one MinHook instance owns the entry and the two handlers chain."""
+`er_hook::register_shared_hook_following_arxan` after checking the same generated 2.7.2.0 prologue, \
+which hands the entry to the elected hub, so one MinHook instance owns it and the two handlers chain.
+
+Until 2026-10-22 both called `er_hook::register_union_hook_runtime_derived_following_arxan`, which \
+is each DLL's own union: one MinHook instance per DLL on one entry. In profile \
+`all-mods-enabled.me3` that day four menu DLLs installed at once, three read the pristine prologue \
+before any had written its jump, and only the last to enable was ever called; er-duel-rules took \
+82 frames of menu input with its handler at zero calls. Every union registration now also holds \
+the process-wide hook lock from its read of the entry to its enable, so a DLL left on its own \
+union stacks onto the jump before it instead of overwriting it."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-cel-shade/src/lib.rs; both prologues generated from the \
 same spec, in crates/er-npc-summons/build.rs and crates/er-overlay-input/build.rs."""
@@ -728,9 +736,10 @@ handler_b = "menu_has_mouse_union"
 reason = """er-render-scale answers the game's "a menu has the mouse" predicate with true while its \
 menu is open, which frees and shows the cursor and stops the camera turning with the mouse, and \
 asks the next handler otherwise, as er-npc-summons' picker and er-cel-shade's Shaders panel do. \
-All register through `er_hook::register_union_hook_runtime_derived_following_arxan` after checking \
-the same generated 2.7.2.0 prologue, so one MinHook instance owns the entry and the handlers chain: \
-any one menu open is enough and none closes another's."""
+All register through `er_hook::register_shared_hook_following_arxan` after checking the same \
+generated 2.7.2.0 prologue, which hands the entry to the elected hub, so one MinHook instance owns \
+it and the handlers chain: any one menu open is enough and none closes another's. See the \
+er-npc-summons / er-cel-shade row for what each DLL's own union did on 2026-10-22."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-render-scale/src/lib.rs; the prologue generated from the \
 same spec in crates/er-overlay-input/build.rs."""
@@ -1041,9 +1050,11 @@ handler_b = "menu_has_mouse_union"
 reason = """er-duel-rules answers the game's "a menu has the mouse" predicate with true while its \
 rules menu is open, which frees and shows the cursor and stops the camera turning with the mouse, \
 and asks the next handler otherwise, as er-npc-summons' picker does. Both register through \
-`er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
-2.7.2.0 prologue, so one MinHook instance owns the entry and the handlers chain: either menu open \
-is enough and neither closes the other's."""
+`er_hook::register_shared_hook_following_arxan` after checking the same generated 2.7.2.0 prologue, \
+which hands the entry to the elected hub, so one MinHook instance owns it and the handlers chain: \
+either menu open is enough and neither closes the other's. er-duel-rules' handler is the one \
+measured never called on 2026-10-22, while each DLL still registered on its own union: see the \
+er-npc-summons / er-cel-shade row."""
 evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
 `install_cursor`, called from crates/er-duel-rules/src/lib.rs; the prologue generated from the \
 same spec in crates/er-overlay-input/build.rs."""

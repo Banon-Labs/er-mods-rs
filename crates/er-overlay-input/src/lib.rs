@@ -5,8 +5,9 @@
 //! * **Cursor and camera.** The game frees and shows the cursor, and stops turning the camera with
 //!   the mouse, whenever its "a menu has the mouse" predicate answers true (2.7.2.0 `0x140766b00`;
 //!   see `er-npc-summons/src/cursor.rs`, where it was measured live). [`install_cursor`] hooks it
-//!   to answer true while the menu takes input. It chains through `er-hook`'s union, so every other
-//!   DLL hooking the same predicate for its own menu still works, and either menu open is enough.
+//!   to answer true while the menu takes input. It registers on the elected hub's union through
+//!   `er_hook::register_shared_hook_following_arxan`, so one MinHook instance owns the entry, every
+//!   DLL hooking the predicate for its own menu chains there, and any one menu open is enough.
 //! * **Mouse buttons and wheel.** Read through DirectInput, so `er-dinput-suppress-core` zeroes
 //!   every mouse read while the menu takes input. imgui still gets the mouse: hudhook feeds it from
 //!   the window procedure.
@@ -20,11 +21,19 @@
 //!
 //! This was er-cel-shade's `input.rs`; er-render-scale's menu needed the same four pieces, so they
 //! moved here. Every DLL linking this crate has its own copy of its statics, so each menu takes and
-//! gives back input for itself, and the hook unions chain the handlers: the game sees input taken
-//! while any menu takes it. The handler names (`menu_has_mouse_union`, `xinput_get_state`, and
-//! `keyboard_get_state_hook` in `er-dinput-suppress-core`) are the ones the `[[shared]]` rows of
-//! `scripts/me3-dll-conflicts.toml` name, so `scripts/check-shared-hook-rvas.py` proves each DLL
-//! that links this crate registers them on a union and never on a private MinHook instance.
+//! gives back input for itself, and the hub's union chains the handlers: the game sees input taken
+//! while any menu takes it. All three hooks go through the cross-image registrars
+//! (`register_shared_hook_following_arxan`, `register_shared_hook_with_budget`), which hand them to
+//! the elected hub and fall back to this DLL's own union only when no hub is loaded. The handler
+//! names (`menu_has_mouse_union`, `xinput_get_state`, and `keyboard_get_state_hook` in
+//! `er-dinput-suppress-core`) are the ones the `[[shared]]` rows of `scripts/me3-dll-conflicts.toml`
+//! name, so `scripts/check-shared-hook-rvas.py` proves each DLL that links this crate registers them
+//! on a union and never on a bare MinHook detour.
+//!
+//! The cursor predicate went through `register_union_hook_runtime_derived_following_arxan` until
+//! 2026-10-22, which is this DLL's own union: one MinHook instance per menu DLL on one entry. That
+//! run, three of four read the pristine prologue before any wrote its jump, and only the last to
+//! enable was ever called -- er-duel-rules took 82 frames of input with its handler at zero calls.
 
 // The host build compiles the pure half only.
 #![cfg_attr(not(windows), allow(dead_code))]

@@ -17,7 +17,10 @@
 //!
 //! Measured live 2026-10-06 with `scripts/frida/npc-summons-gaps-probe.js`: the predicate answers
 //! 0 in the world and 1 while a game menu is open. It is hooked by its 2.7.2.0 address on 2.7.2.0
-//! only, after its opening bytes are checked, through the runtime-derived installer.
+//! only, after its opening bytes are checked, through the elected hub's runtime-derived registrar
+//! so it shares one detour with every other menu DLL's handler. On its own union it lost the
+//! read-then-patch race to the menu DLLs on 2026-10-23: the picker was open 88 seconds and the
+//! handler answered 0 calls.
 
 #![cfg(windows)]
 
@@ -82,7 +85,8 @@ pub(crate) fn install() {
     let mut bytes = [0u8; MENU_HAS_MOUSE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
-    // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
+    // Byte 0 may be a `jmp rel32` another module's detour wrote, which the hub follows; the rest
+    // must match.
     let matches = read
         && (bytes == MENU_HAS_MOUSE_PROLOGUE
             || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_PROLOGUE[5..]));
@@ -93,17 +97,16 @@ pub(crate) fn install() {
         ));
         return;
     }
+    // Through the elected hub, as `er-overlay-input`'s `install_cursor` does for every other menu
+    // DLL: one MinHook instance on the entry, every handler in its chain.
     // SAFETY: a runtime-derived 2.7.2.0 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
     match unsafe {
-        er_hook::register_union_hook_runtime_derived_following_arxan(
-            entry,
-            menu_has_mouse_union,
-            &ORIG,
-        )
+        er_hook::register_shared_hook_following_arxan(entry, menu_has_mouse_union, &ORIG)
     } {
-        Ok(()) => summons_log(format_args!(
-            "cursor: menu-mouse predicate at 0x{entry:x} answered while the picker is open"
+        Ok(route) => summons_log(format_args!(
+            "cursor: menu-mouse predicate at 0x{entry:x} answered while the picker is open \
+             ({route:?})"
         )),
         Err(status) => summons_log(format_args!(
             "cursor: menu-mouse predicate at 0x{entry:x} refused: {status:?}"

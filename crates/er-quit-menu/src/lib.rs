@@ -75,7 +75,7 @@ use std::path::{Path, PathBuf};
 
 use er_quit_menu_core::row_config::{QuitRowsConfig, SaveGameShape};
 
-// The two registrar exports, so a companion in a product-less profile has a hub to chain onto.
+// The registrar exports, so a companion in a product-less profile has a hub to chain onto.
 // See the module docs above for what was measured, and the macro's own for why a hub is an export
 // rather than a package. Windows-only: the macro expands to `no_mangle` bodies that reach
 // `er-hook`'s `MH_*` externs, which a host build has nothing to link them against.

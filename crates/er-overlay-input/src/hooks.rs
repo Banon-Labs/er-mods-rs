@@ -67,7 +67,8 @@ pub fn install_cursor(log: LogFn) -> bool {
     let mut bytes = [0u8; MENU_HAS_MOUSE_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.
     let read = unsafe { read_bytes(entry, &mut bytes) };
-    // Byte 0 may be Arxan's `jmp rel32`, which the installer follows; the rest must match.
+    // Byte 0 may be a `jmp rel32` another module's detour wrote, which the hub follows; the rest
+    // must match.
     let matches = read
         && (bytes == MENU_HAS_MOUSE_PROLOGUE
             || (bytes[0] == 0xe9 && bytes[5..] == MENU_HAS_MOUSE_PROLOGUE[5..]));
@@ -78,19 +79,20 @@ pub fn install_cursor(log: LogFn) -> bool {
         ));
         return false;
     }
+    // Through the elected hub, not this DLL's own union. Every menu DLL answers this predicate, and
+    // each registering on its own union put one MinHook instance per DLL on the entry: on
+    // 2026-10-22 three of four read the pristine prologue before any had written its jump, and only
+    // the last to enable was ever called. One hub, one detour, every handler in its chain.
     // SAFETY: a runtime-derived 2.7.2.0 entry whose bytes were just checked; the handler calls its
     // slot through `UnionFn`.
     match unsafe {
-        er_hook::register_union_hook_runtime_derived_following_arxan(
-            entry,
-            menu_has_mouse_union,
-            &MENU_MOUSE_ORIG,
-        )
+        er_hook::register_shared_hook_following_arxan(entry, menu_has_mouse_union, &MENU_MOUSE_ORIG)
     } {
-        Ok(()) => {
+        Ok(route) => {
             CURSOR_HOOKED.store(true, Ordering::Release);
             log(format_args!(
-                "cursor: menu-mouse predicate at 0x{entry:x} answered while the menu is open"
+                "cursor: menu-mouse predicate at 0x{entry:x} answered while the menu is open \
+                 ({route:?})"
             ));
             true
         }

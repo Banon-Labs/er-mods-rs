@@ -426,13 +426,74 @@ pub fn follow_arxan_stub(entry: usize) -> Option<usize> {
     }
     let relative = i32::from_le_bytes(displacement) as isize;
     let target = (entry + ARXAN_STUB_LEN).wrapping_add_signed(relative);
+    let mut opening = [0u8; LANDING_OPENING_BYTES];
+    let landing = match unsafe { er_game_base::mem::read_bytes(target, &mut opening) } {
+        true => classify_landing(&opening),
+        false => Landing::Other,
+    };
     // The displacement prints in decimal. `{:+#x}` on a negative `isize` prints its two's
     // complement, so a backward jump of 6941202 read as `+0xffffffffff9615ee` on run
     // br-20260916-193045-979a -- sixteen digits that look like an address and are not one.
-    hook_log(format_args!(
-        "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
-    ));
+    match landing {
+        Landing::HookRelay { to } => hook_log(format_args!(
+            "HOOKED ENTRY at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}, a MinHook relay \
+             (jmp [rip+0] -> 0x{to:x}) another module's detour left there, not an Arxan stub. The \
+             detour chains on at the relay"
+        )),
+        Landing::Jump => hook_log(format_args!(
+            "HOOKED ENTRY at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}, which opens with \
+             another jmp rel32: a hook relay a later detour has patched, not an Arxan stub. The \
+             detour chains on at 0x{target:x}"
+        )),
+        Landing::Other => hook_log(format_args!(
+            "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
+        )),
+    }
     Some(target)
+}
+
+/// How many opening bytes of a jump's landing [`classify_landing`] reads: a whole MinHook relay.
+const LANDING_OPENING_BYTES: usize = 14;
+/// `jmp qword ptr [rip+0]`, the six bytes MinHook's x64 relay opens with; the absolute address it
+/// jumps to follows them.
+const HOOK_RELAY_OPCODE: [u8; 6] = [0xff, 0x25, 0x00, 0x00, 0x00, 0x00];
+
+/// What the `jmp rel32` at a function entry lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Landing {
+    /// MinHook's x64 relay: `jmp qword ptr [rip+0]` and the absolute address after it, which is
+    /// the detour of whichever module wrote the jump at the entry.
+    HookRelay { to: usize },
+    /// Another `jmp rel32`: a relay whose first five bytes a later detour replaced, which is what
+    /// stacking a second MinHook onto a relay leaves.
+    Jump,
+    /// Neither, which is the case an Arxan stub's body is expected to fall in.
+    Other,
+}
+
+/// Classify a jump's landing from its opening bytes.
+///
+/// Pure, so the rule is asserted on the host. It exists because every jump this module reported
+/// as `ARXAN STUB` on 2026-10-22 was a hook. The cursor predicate's entry jumped to
+/// er-invasion-warp's relay at `0x13ff80fd3`, and `CanUseGoods`' entry jumped to `0x13fff0453`,
+/// whose MinHook slot at `0x13fff0440` held `CanUseGoods`' own `44 89 4c 24 20` and a jump back to
+/// the entry plus five. Following such a jump is still how a detour chains on safely; calling it
+/// anti-tamper sent readers looking for an obfuscator where there was another module's hook.
+pub(crate) fn classify_landing(opening: &[u8]) -> Landing {
+    if opening.starts_with(&HOOK_RELAY_OPCODE) {
+        let absolute = opening
+            .get(HOOK_RELAY_OPCODE.len()..HOOK_RELAY_OPCODE.len() + 8)
+            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok());
+        if let Some(absolute) = absolute {
+            return Landing::HookRelay {
+                to: u64::from_le_bytes(absolute) as usize,
+            };
+        }
+    }
+    if opening.first() == Some(&ARXAN_STUB_OPCODE) {
+        return Landing::Jump;
+    }
+    Landing::Other
 }
 
 #[cfg(test)]
@@ -591,6 +652,44 @@ mod tests {
             ),
             Err(Refusal::Padding(0))
         );
+    }
+
+    /// The relay the cursor predicate's entry jumped to on 2026-10-22 before a third detour patched
+    /// it: `jmp [rip+0]` to er-invasion-warp's dispatcher at `0x6ffff81bada0`.
+    #[test]
+    fn a_minhook_relay_is_a_hook_not_an_arxan_stub() {
+        let relay = [
+            0xff, 0x25, 0x00, 0x00, 0x00, 0x00, 0xa0, 0xad, 0x1b, 0xf8, 0xff, 0x6f, 0x00, 0x00,
+        ];
+        assert_eq!(
+            classify_landing(&relay),
+            Landing::HookRelay {
+                to: 0x6fff_f81b_ada0
+            }
+        );
+    }
+
+    /// The same relay after er-npc-summons stacked its own detour on it: five bytes of `jmp rel32`,
+    /// then the tail of the original relay. Measured at `0x13ff80fd3`.
+    #[test]
+    fn a_relay_another_detour_patched_is_a_jump() {
+        let patched = [
+            0xe9, 0x6e, 0xfc, 0xfd, 0xff, 0x00, 0xa0, 0xad, 0x1b, 0xf8, 0xff, 0x6f, 0x00, 0x00,
+        ];
+        assert_eq!(classify_landing(&patched), Landing::Jump);
+    }
+
+    /// Code that is neither shape stays the Arxan case, and a relay cut short is not read past its
+    /// end.
+    #[test]
+    fn other_code_and_a_short_read_are_neither() {
+        let code = [0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18];
+        assert_eq!(classify_landing(&code), Landing::Other);
+        assert_eq!(
+            classify_landing(&[0xff, 0x25, 0x00, 0x00, 0x00, 0x00, 0xa0]),
+            Landing::Other
+        );
+        assert_eq!(classify_landing(&[]), Landing::Other);
     }
 
     /// Every refusal says something different. One shared string would send four different
