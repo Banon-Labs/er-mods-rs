@@ -287,6 +287,19 @@ WORLD_CHR_MAN_GLOBAL_RVA_1171 = 0x3D69FF8
 # selftests read this hop back out of the table, as they do the first one.
 WORLD_CHR_MAN_GLOBAL_RVA = 0x3D6D018
 
+# The same global in each build this repo has carried it to, keyed by the PE header's
+# `TimeDateStamp` as the running image reports it, so the walk asks the process which build it is
+# rather than assuming. 1.17.2 (FileVersion 2.7.2.0) moved `.data`:
+# `python3 scripts/map-rvas-1171-to-1172.py 0x143d69ff8` answers `0x143d6d018`. Measured 2026-10-22
+# against a live 1.17.2 game in a world: the 1.17.1 address read null, so `er-frida-up.py` refused
+# with "no world is loaded", while `0x143d6d018` held a `WorldChrMan` whose `+0x1e508` was a
+# player. The stamps are the ones `eldenring-deobf-1.17.1.bin` and `eldenring-deobf-1.17.2.bin`
+# carry, and the live 1.17.2 image read the same one.
+WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP = {
+    0x6A96B418: 0x3D69FF8,  # 1.17.1, FileVersion 2.7.1.0
+    0x6AABF7E7: 0x3D6D018,  # 1.17.2, FileVersion 2.7.2.0
+}
+
 # `WorldChrMan::mainPlayerIns`, the local player inside that singleton. A struct offset, so nothing
 # translates it and nothing would notice the day it moves: recorded unchanged from 1.16.2 through
 # 1.17 in `docs/recon/npc-possess-1170-address-table.md`, and 410 instructions read `[reg+0x1e508]`
@@ -351,6 +364,20 @@ def read_qword(pid: int, address: int) -> int | None:
     return int.from_bytes(data, "little")
 
 
+def image_time_date_stamp(pid: int, base: int) -> int | None:
+    """The PE `TimeDateStamp` of the image mapped at `base` in `pid`, or `None` when the header is
+    not there to read: `e_lfanew` at `+0x3c`, then `+8` past the `PE\\0\\0` signature."""
+    lfanew = read_qword(pid, base + 0x3C)
+    if lfanew is None:
+        return None
+    lfanew &= 0xFFFF_FFFF
+    signature = read_qword(pid, base + lfanew)
+    stamp = read_qword(pid, base + lfanew + 8)
+    if signature is None or stamp is None or signature & 0xFFFF_FFFF != 0x4550:
+        return None
+    return stamp & 0xFFFF_FFFF
+
+
 def player_in_a_world_at(pid: int, base: int) -> tuple[bool | None, str]:
     """Walk `WorldChrMan -> mainPlayerIns` in `pid`, given where the image sits.
 
@@ -361,8 +388,22 @@ def player_in_a_world_at(pid: int, base: int) -> tuple[bool | None, str]:
 
     `base` is a parameter rather than a lookup so the selftest can point the same walk at a planted
     chain in a child process and exercise the arithmetic, the read and all three verdicts.
+
+    The global's rva comes from the PE header at `base` (`WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP`). A
+    header that cannot be read -- the selftest's planted chain has none -- keeps the 1.17.1 rva; a
+    header that reads as a build not in the table is refused, since any address would be a guess.
     """
-    address = base + WORLD_CHR_MAN_GLOBAL_RVA
+    stamp = image_time_date_stamp(pid, base)
+    if stamp is None:
+        rva = WORLD_CHR_MAN_GLOBAL_RVA
+    elif stamp in WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP:
+        rva = WORLD_CHR_MAN_GLOBAL_RVA_BY_STAMP[stamp]
+    else:
+        return None, (
+            f"the image at 0x{base:x} in pid {pid} is a build this script has no WorldChrMan "
+            f"address for (PE TimeDateStamp 0x{stamp:x})"
+        )
+    address = base + rva
     world = read_qword(pid, address)
     if world is None:
         return None, f"WorldChrMan at 0x{address:x} could not be read in pid {pid}"
