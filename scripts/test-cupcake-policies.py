@@ -2484,6 +2484,23 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # Extracting a committed file is not authoring it: the measured 2026-10-22 refusal,
+        # admitted through the whole rulebook, and the same extraction with a hand-written line
+        # appended still refused. The append is `echo`, not a `python3` run, because
+        # `bash_no_python_file_write` answers a python run first and this guard's reason never
+        # reaches the output.
+        PolicyCase(
+            "allow-git-show-rev-path-into-scratchpad",
+            "git show main:.cupcake/tests/teardown_must_relaunch_test.rego > "
+            "/tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad/old_test.rego",
+            True,
+        ),
+        PolicyCase(
+            "deny-git-show-into-tmp-then-append",
+            "git show main:scripts/probe.sh > /tmp/probe.sh && echo 'exit 0' >> /tmp/probe.sh",
+            False,
+            "authoring a script into /tmp",
+        ),
         # `ER-EFFECTS-TRANSCRIPT-WRITE-GUARD`, live: the push authorization is read from the session
         # transcript, so the agent may read transcripts and never rewrite one.
         PolicyCase(
