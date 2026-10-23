@@ -117,7 +117,7 @@ for arg in "$@"; do
 		*) revs+=("$arg") ;;
 	esac
 done
-[[ ${#revs[@]} -eq 0 ]] && revs=(head)
+[[ ${#revs[@]} -eq 0 ]] && revs=(HEAD)
 
 # --- serialise -------------------------------------------------------------------------------
 mkdir -p "$(dirname -- "$worktree")" "$target_dir"
