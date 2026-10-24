@@ -2051,7 +2051,7 @@ pub const CONFIGS: &[ConfigFile] = &[
     },
     ConfigFile {
         file: "er-positional-voice.toml",
-        default_text: "# Volume applied to every voice (1 = as received). 8 is about +18 dB.\ngain = 8.0\n# Play your own microphone at your own character, to test alone.\nloopback = false\n",
+        default_text: "# Volume applied to every voice (1 = as received). 8 is about +18 dB.\ngain = 8.0\n# Play your own microphone at your own character, to test alone.\nloopback = false\n# The key that turns voice chat on and off: the game's own Network > Voice Chat setting.\n# A name such as \"F7\", \"ctrl+V\" or \"KP_Plus\"; \"\" for no key.\ntoggle_key = \"F7\"\n# Say \"voice chat on\" / \"voice chat off\" after the key: \"en\", or \"\" for silence.\nannounce = \"en\"\n",
         settings: &[
             Setting {
                 key: "gain",
@@ -2070,6 +2070,29 @@ pub const CONFIGS: &[ConfigFile] = &[
                 choices: &[],
                 optional: false,
                 prose: &["# Play your own microphone at your own character, to test alone."],
+            },
+            Setting {
+                key: "toggle_key",
+                table: "",
+                default: "\"F7\"",
+                kind: Kind::Text,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# The key that turns voice chat on and off: the game's own Network > Voice Chat setting.",
+                    "# A name such as \"F7\", \"ctrl+V\" or \"KP_Plus\"; \"\" for no key.",
+                ],
+            },
+            Setting {
+                key: "announce",
+                table: "",
+                default: "\"en\"",
+                kind: Kind::Text,
+                choices: &[],
+                optional: false,
+                prose: &[
+                    "# Say \"voice chat on\" / \"voice chat off\" after the key: \"en\", or \"\" for silence.",
+                ],
             },
         ],
     },

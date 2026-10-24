@@ -3267,6 +3267,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-game-base",
+ "er-hotkey-config",
  "er-positional-voice-core",
  "fromsoftware-shared",
  "windows 0.62.2",
@@ -3277,6 +3278,7 @@ name = "er-positional-voice-core"
 version = "0.1.0"
 dependencies = [
  "er-game-base",
+ "er-hotkey-config",
 ]
 
 [[package]]
