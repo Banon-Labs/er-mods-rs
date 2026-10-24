@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0](https://github.com/Banon-Labs/er-mods-rs/compare/0.3.0...1.0.0) (2026-10-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* write every game address as a native 2.7.2.0 rva and drop the build carry ([#607](https://github.com/Banon-Labs/er-mods-rs/issues/607))
+* write every game address as a native 2.7.2.0 rva and drop the build carry
+
+### Features
+
+* write every game address as a native 2.7.2.0 rva and drop the build carry ([#607](https://github.com/Banon-Labs/er-mods-rs/issues/607)) ([358ed03](https://github.com/Banon-Labs/er-mods-rs/commit/358ed035b434d80d3bce29aac3a227f55615bfe1))
+
+
+### Bug Fixes
+
+* **cupcake:** extracting a committed file into /tmp is not authoring a script ([#603](https://github.com/Banon-Labs/er-mods-rs/issues/603)) ([bb4d813](https://github.com/Banon-Labs/er-mods-rs/commit/bb4d8133430da57af648e309297e8e37f5af8a99))
+* **er-hook:** every menu DLL answers the cursor predicate through the hub's one detour ([44aac75](https://github.com/Banon-Labs/er-mods-rs/commit/44aac759a194dd452456215f88b316212a883e73))
+* record the port's drive.rs growth and name save decode failures ([fe543f2](https://github.com/Banon-Labs/er-mods-rs/commit/fe543f2f796a139cb3c191325ff3ccb2a504a77f))
+
+
+### Code Refactoring
+
+* write every game address as a native 2.7.2.0 rva and drop the build carry ([36a9d43](https://github.com/Banon-Labs/er-mods-rs/commit/36a9d4320535cd5e859c9bb42ed745b54bf658ba))
+
 ## [0.3.0](https://github.com/Banon-Labs/er-mods-rs/compare/0.2.0...0.3.0) (2026-10-23)
 
 
