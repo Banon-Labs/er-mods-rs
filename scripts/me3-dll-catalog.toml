@@ -243,7 +243,10 @@ label = "Positional voice chat"
 blurb = "Every player's voice comes out of their character, fading with distance and echoing in caves, over Steam voice. Everyone in the session needs it."
 category = "multiplayer"
 audience = "player"
-default = false
+# On by default: Seamless's own voice chat cannot sound, because its Play_VoiceChat event is in
+# no bank the game loads (bd er-play-voicechat-event-not-loaded-1171-2026-10-17), so with this
+# off the in-game voice setting does nothing.
+default = true
 needs_seamless = true
 config = "er-positional-voice.toml"
 
