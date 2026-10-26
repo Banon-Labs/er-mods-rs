@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [lints]
 workspace = true
