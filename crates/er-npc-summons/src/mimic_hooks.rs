@@ -499,7 +499,16 @@ unsafe extern "system" fn create_detour(
         )
     };
     if from_network != 0 && !hijacking() {
-        return remote_create(steam_id, handle, Triple { npc, think, chara_init }, call);
+        return remote_create(
+            steam_id,
+            handle,
+            Triple {
+                npc,
+                think,
+                chara_init,
+            },
+            call,
+        );
     }
     if !hijacking() {
         return call();
@@ -570,7 +579,11 @@ unsafe extern "system" fn create_detour(
         gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
     ));
     if chr != 0 {
-        apply_face(&format!("companion {slot}"), crate::dress::face_for(slot), chr);
+        apply_face(
+            &format!("companion {slot}"),
+            crate::dress::face_for(slot),
+            chr,
+        );
     }
     chr
 }
@@ -637,7 +650,10 @@ fn remote_create(
         (Ok(found), Ok(id)) => Ok((found, id)),
     };
     let (chr, outcome) = match dressed {
-        Err(why) => (call(), format!("not dressed ({why}), wears charaInit {chara_init}'s own gear")),
+        Err(why) => (
+            call(),
+            format!("not dressed ({why}), wears charaInit {chara_init}'s own gear"),
+        ),
         Ok(((gear, build), id)) => {
             begin_dress(id, gear);
             let chr = call();
@@ -701,10 +717,7 @@ fn apply_face(who: &str, face: Option<er_build_import_core::sliders::SliderMap>,
     // character the call just built.
     let outcome =
         unsafe { er_build_import_runtime::face::adopt_build_face(base, pgd, Some(&face)) };
-    summons_log(format_args!(
-        "dress: {who}: face {}",
-        outcome.label()
-    ));
+    summons_log(format_args!("dress: {who}: face {}", outcome.label()));
 }
 
 /// Compare `pins` against the code at `entry` on the running build.
