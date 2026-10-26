@@ -41,8 +41,11 @@ pub(crate) fn apply(config: &Config) {
 
 #[link(name = "winmm")]
 unsafe extern "system" {
-    fn PlaySoundW(sound: *const core::ffi::c_void, module: *mut core::ffi::c_void, flags: u32)
-    -> i32;
+    fn PlaySoundW(
+        sound: *const core::ffi::c_void,
+        module: *mut core::ffi::c_void,
+        flags: u32,
+    ) -> i32;
 }
 
 /// `SND_ASYNC | SND_NODEFAULT | SND_MEMORY`: return at once, never fall back to the system beep,
