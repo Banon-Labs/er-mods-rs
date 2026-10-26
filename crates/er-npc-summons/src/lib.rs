@@ -58,6 +58,8 @@ mod finger;
 #[cfg(windows)]
 mod game;
 #[cfg(windows)]
+mod gear_sync;
+#[cfg(windows)]
 mod mimic_hooks;
 #[cfg(windows)]
 mod names;
@@ -342,6 +344,7 @@ fn tick(state: &mut TaskState) {
     state.frames = state.frames.wrapping_add(1);
     dress::tick();
     net::tick();
+    gear_sync::tick();
     brains::tick();
     void_tech::tick();
     if finger::take_finger_use() {

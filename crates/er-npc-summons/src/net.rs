@@ -259,7 +259,7 @@ pub(crate) fn record_remote(
 }
 
 /// The other players in the session, from `CSSessionManager`.
-fn session_peers(local: u64) -> Vec<u64> {
+pub(crate) fn session_peers(local: u64) -> Vec<u64> {
     let mut out = Vec::new();
     // SAFETY: game thread.
     let Ok(session) = (unsafe { CSSessionManager::instance() }) else {

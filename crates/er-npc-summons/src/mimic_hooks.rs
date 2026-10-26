@@ -47,6 +47,12 @@
 //! announced to them from inside this detour ([`crate::net::announce_built`]), and a copy built
 //! here from someone else's packet is dressed and named from what that player announced
 //! ([`remote_create`]), through the same row copy and the same `GetCharaInitParam` handler.
+//!
+//! A player without this DLL is reached through the game itself. Every human companion's request
+//! names the sync-target row [`mimic::SYNC_CHARA_INIT`] in place of its body's row, and this
+//! player's lookup of that row is answered with a copy of the body's row, so the summoner's
+//! companion is built as before. The other player's copy is built from their own row 26050, which
+//! lets their game accept the outfit [`crate::gear_sync`] broadcasts afterwards.
 
 #![cfg(windows)]
 
@@ -138,8 +144,13 @@ static COPIES: Mutex<RowCopies> = Mutex::new(RowCopies::new());
 
 /// The `CharaInitParam` row one `CreateSummonChr` call is dressing, and in what.
 struct Dress {
+    /// The row the call asks for.
     id: u32,
-    gear: CharaInitGear,
+    /// The row whose contents the copy starts from: the body's own, when the request names
+    /// [`mimic::SYNC_CHARA_INIT`] in its place, otherwise `id`.
+    source: u32,
+    /// The build's gear, or `None` to keep the source row's own.
+    gear: Option<CharaInitGear>,
 }
 /// Set for exactly the length of one dressed `CreateSummonChr` call.
 static DRESS: Mutex<Option<Dress>> = Mutex::new(None);
@@ -328,11 +339,23 @@ fn serve_copy(
     size: usize,
     change: impl FnOnce(&mut [u8]) -> bool,
 ) -> Result<usize, String> {
+    serve_copy_of(out, None, size, change)
+}
+
+/// [`serve_copy`], starting from the resident row at `source` instead of the one the getter found
+/// when it is given.
+fn serve_copy_of(
+    out: usize,
+    source: Option<usize>,
+    size: usize,
+    change: impl FnOnce(&mut [u8]) -> bool,
+) -> Result<usize, String> {
     let slot = out + GETTER_OUT_ROW_SLOT;
     // SAFETY: fault-tolerant read of the out struct the getter just filled.
-    let row = unsafe { safe_read_usize(slot) }
+    let found = unsafe { safe_read_usize(slot) }
         .filter(|&row| row != 0)
         .ok_or("the getter found no row")?;
+    let row = source.unwrap_or(found);
     let mut bytes = vec![0u8; size];
     // SAFETY: a fault-tolerant read of the resident row; nothing is written to it.
     if !unsafe { read_bytes(row, &mut bytes) } {
@@ -402,21 +425,49 @@ unsafe extern "system" fn chara_init_getter(out: usize, id: usize, c: usize, d: 
     let dressing = DRESS_TID.load(Ordering::Acquire);
     if dressing != 0 && out != 0 && dressing == this_thread() {
         // The id arrives in `edx`; the upper half of `rdx` is not part of it.
-        serve_dressed(out, id as u32);
+        serve_dressed(out, id as u32, call);
     }
     result
 }
 
+/// The resident `CharaInitParam` row `id`, looked up through `next` (the handler after this one,
+/// or the getter itself) into a lookup struct of this function's own.
+fn resident_chara_init_row(next: UnionFn, id: u32) -> Option<usize> {
+    let mut lookup = [0usize; 4];
+    // SAFETY: the getter fills `{id @+0, row* @+8}` of a lookup struct it is handed; this one is
+    // 32 bytes on this stack and outlives the call.
+    unsafe { next(lookup.as_mut_ptr() as usize, id as usize, 0, 0) };
+    Some(lookup[GETTER_OUT_ROW_SLOT / core::mem::size_of::<usize>()]).filter(|&row| row != 0)
+}
+
 /// Answer the dressing call's lookup of its companion's row with the dressed copy.
-fn serve_dressed(out: usize, id: u32) {
-    let gear = match DRESS.lock() {
+fn serve_dressed(out: usize, id: u32, next: UnionFn) {
+    let (source, gear) = match DRESS.lock() {
         Ok(dress) => match dress.as_ref() {
-            Some(dress) if dress.id == id => dress.gear,
+            Some(dress) if dress.id == id => (dress.source, dress.gear),
             _ => return,
         },
         Err(_) => return,
     };
-    match serve_copy(out, CHARA_INIT_ROW_SIZE, |row| gear.write_into(row)) {
+    let source_row = if source == id {
+        None
+    } else {
+        match resident_chara_init_row(next, source) {
+            Some(row) => Some(row),
+            None => {
+                summons_log(format_args!(
+                    "dress: GetCharaInitParam({id}): the body's row {source} was not found; this \
+                     lookup gets row {id}'s own contents"
+                ));
+                return;
+            }
+        }
+    };
+    let sync = source_row.is_some();
+    let change = |row: &mut [u8]| {
+        gear.is_none_or(|gear| gear.write_into(row)) && (!sync || mimic::mark_sync_target(row))
+    };
+    match serve_copy_of(out, source_row, CHARA_INIT_ROW_SIZE, change) {
         Ok(copy) => {
             DRESS_SERVED.fetch_add(1, Ordering::AcqRel);
             DRESS_COPY.store(copy, Ordering::Release);
@@ -428,9 +479,9 @@ fn serve_dressed(out: usize, id: u32) {
 }
 
 /// Dress the next `GetCharaInitParam(id)` lookups on this thread, until [`end_dress`].
-fn begin_dress(id: u32, gear: CharaInitGear) {
+fn begin_dress(id: u32, source: u32, gear: Option<CharaInitGear>) {
     if let Ok(mut dress) = DRESS.lock() {
-        *dress = Some(Dress { id, gear });
+        *dress = Some(Dress { id, source, gear });
     }
     DRESS_SERVED.store(0, Ordering::Release);
     DRESS_COPY.store(0, Ordering::Release);
@@ -531,17 +582,23 @@ unsafe extern "system" fn create_detour(
             // Before `BuddyGenerator` broadcasts packet 78 for it, so a peer usually holds the
             // announcement when its own `CreateSummonChr` runs.
             crate::net::announce_built(slot, chr);
+            // After it, so every other player's copy exists when its outfit arrives.
+            crate::gear_sync::companion_built(slot, chr);
         }
         chr
     };
-    let (gear, build) = match crate::dress::gear_for(slot) {
-        Ok(found) => found,
+    // The body's own row, which the request names the sync row in place of.
+    let body = plan()
+        .iter()
+        .find(|values| values.slot == slot)
+        .map_or(chara_init, |values| values.body_chara_init);
+    let gear = match crate::dress::gear_for(slot) {
+        Ok(found) => Some(found),
         Err(why) => {
             summons_log(format_args!(
-                "dress: companion {slot}: not dressed ({why}); built in charaInit {chara_init}'s own \
-                 gear"
+                "dress: companion {slot}: no build ({why}); it wears charaInit {body}'s own gear"
             ));
-            return named(call());
+            None
         }
     };
     if !CHARA_INIT_HOOKED.load(Ordering::Acquire) {
@@ -551,14 +608,17 @@ unsafe extern "system" fn create_detour(
         ));
         return named(call());
     }
-    let Ok(id) = u32::try_from(chara_init) else {
+    let (Ok(id), Ok(source)) = (u32::try_from(chara_init), u32::try_from(body)) else {
         summons_log(format_args!(
             "dress: companion {slot}: not dressed (charaInit {chara_init} builds no human, so \
              there is no row); built as configured"
         ));
         return named(call());
     };
-    begin_dress(id, gear);
+    if gear.is_none() && source == id {
+        return named(call());
+    }
+    begin_dress(id, source, gear.as_ref().map(|(gear, _)| *gear));
     let chr = call();
     let (served, copy) = end_dress();
     let chr = named(chr);
@@ -569,15 +629,31 @@ unsafe extern "system" fn create_detour(
         ));
         return chr;
     }
-    if chr != 0 {
-        DRESSED.fetch_add(1, Ordering::AcqRel);
+    let from = if source == id {
+        format!("a copy of charaInit {id}")
+    } else {
+        format!(
+            "a copy of its body's charaInit {source}, marked a sync target and served as row {id} \
+             so other players accept its outfit"
+        )
+    };
+    match gear {
+        Some((gear, build)) => {
+            if chr != 0 {
+                DRESSED.fetch_add(1, Ordering::AcqRel);
+            }
+            summons_log(format_args!(
+                "dress: companion {slot}: built 0x{chr:x} from {from} (0x{copy:x}, served {served} \
+                 time(s)) wearing build {build:?} (R {:?}, L {:?}, armour {:?}, talismans {:?}, \
+                 ammo {:?}); the resident row was not written",
+                gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
+            ));
+        }
+        None => summons_log(format_args!(
+            "dress: companion {slot}: built 0x{chr:x} from {from} (0x{copy:x}, served {served} \
+             time(s)) in that row's own gear; the resident row was not written"
+        )),
     }
-    summons_log(format_args!(
-        "dress: companion {slot}: built 0x{chr:x} from a copy of charaInit {id} (0x{copy:x}, \
-         served {served} time(s)) wearing build {build:?} (R {:?}, L {:?}, armour {:?}, talismans \
-         {:?}, ammo {:?}); the resident row was not written",
-        gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
-    ));
     if chr != 0 {
         apply_face(
             &format!("companion {slot}"),
@@ -655,7 +731,7 @@ fn remote_create(
             format!("not dressed ({why}), wears charaInit {chara_init}'s own gear"),
         ),
         Ok(((gear, build), id)) => {
-            begin_dress(id, gear);
+            begin_dress(id, id, Some(gear));
             let chr = call();
             let (served, copy) = end_dress();
             let outcome = if served == 0 {
