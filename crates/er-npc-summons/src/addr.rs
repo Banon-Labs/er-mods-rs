@@ -65,6 +65,10 @@ pub(crate) mod chr_ins {
     /// Event entity id; the key `GetChrInsByEntityId` and a sign use. Summon-path spawns carry
     /// 35000 (measured).
     pub(crate) const EVENT_ENTITY: usize = 0x1e8;
+    /// The SteamID of the player who summoned a spirit, eight bytes. `CreateSummonChr` stores its
+    /// `creator steam id` argument here (2.7.2.0 `0x1404bb633`), on the summoner's own copy and
+    /// on every peer's copy built from packet 78 alike.
+    pub(crate) const OWNER_STEAM_ID: usize = 0x218;
 }
 
 /// `ChrSetEntry` offsets.
