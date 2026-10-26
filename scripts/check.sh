@@ -2479,12 +2479,16 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # er-seamless-bugfixes' registries. The crate's own docs already said the `cfg(not(windows))` allow
 # exists so `cargo test -p er-seamless-bugfixes` can build -- but no gate ever ran it, so all 23
 # tests were inert: `default-members` pins the workspace to er-quickload, and check-rust-build.sh
-# only links this shell. What that left unchecked is the whole safety argument for the code patch.
-# The freelist patch rewrites one byte of live game code, and its licence to do so is that the `JZ`
-# two bytes earlier already lands past the `INT3`; these tests recompute that landing address the
-# way the CPU does, and require the write to be one NOP at the `INT3`'s own offset. The window
-# bytes are ground-truthed separately, against eldenring-deobf-1.17.2.bin, by the crate's build.rs.
+# only links this shell.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
+
+# er-crash-logging's vanilla-crash patches (moved out of er-seamless-bugfixes on 2026-10-26: the
+# freelist shutdown `INT3` fires with no Seamless loaded). The freelist patch rewrites one byte of
+# live game code, and its licence to do so is that the `JZ` two bytes earlier already lands past
+# the `INT3`; these tests recompute that landing address the way the CPU does, and require the
+# write to be one NOP at the `INT3`'s own offset. The window bytes are ground-truthed separately,
+# against eldenring-deobf-1.17.2.bin, by the crate's build.rs.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-crash-logging --lib
 
 # er-r3-view's scroll arithmetic for the weapon board's gear list. The six tests are pure
 # integer/float logic with no `cfg(windows)`, so the windows-target `cargo xwin test --lib` in

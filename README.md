@@ -64,7 +64,7 @@ Not for normal play. Several change behaviour merely by being present.
 
 | DLL | What it does |
 | --- | --- |
-| `er_crash_logging.dll` | First-chance exceptions to `er-crash-log.txt`. |
+| `er_crash_logging.dll` | First-chance exceptions to `er-crash-log.txt`. Also removes the vanilla `CSFreeListMemorySystem` shutdown `INT3` that crashes the game on every quit to desktop. |
 | `er_telemetry.dll` | Read-only RAM oracles to JSON on a FrameBegin task. No hooks. |
 | `er_build_watermark.dll` | Draws which mods are loaded in the top-right, and whether any is an older published release than main. |
 | `er_diag_harness.dll` | Trace detours that used to ship unconditionally in the product DLL. |

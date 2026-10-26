@@ -526,7 +526,7 @@ settle for an entry guard that skips the whole function: use **`ilhook`'s jmp-re
   CallbackOption::None, 0, HookFlags::empty()).hook()` and keep the returned `HookPoint` alive
   (dropping it unhooks).
 - Not for a whole-function detour (keep MinHook there) and not for a one-instruction removal the
-  function already skips (that is a one-byte patch, see `er-seamless-bugfixes/src/patches/`).
+  function already skips (that is a one-byte patch, see `er-crash-logging/src/patches/`).
 
 #### Offline Python decoding (`capstone`)
 

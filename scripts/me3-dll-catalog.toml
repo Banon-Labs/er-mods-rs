@@ -165,7 +165,7 @@ default = false
 
 [er-seamless-bugfixes]
 label = "Co-op and quit-to-desktop crash fixes"
-blurb = "Fixes four crashes: two on quit to desktop, one when a spirit ash is summoned in co-op, and one when a co-op item pickup arrives during a load."
+blurb = "Fixes three crashes: one on quit to desktop, one when a spirit ash is summoned in co-op, and one when a co-op item pickup arrives during a load."
 category = "multiplayer"
 audience = "player"
 default = true
@@ -289,7 +289,7 @@ caution = "changes how your character looks"
 
 [er-crash-logging]
 label = "Crash and freeze logging"
-blurb = "Logs crashes, freezes and long frame drops to files beside eldenring.exe, plus a minidump when the game crashes or freezes."
+blurb = "Logs crashes, freezes and long frame drops to files beside eldenring.exe, plus a minidump when the game crashes or freezes. Also stops the game's own crash on every quit to desktop."
 category = "diagnostics"
 audience = "player"
 default = true

@@ -164,7 +164,7 @@ test_allow_generated_source_inside_a_string_literal if {
 # too. The listing is the one in `freelist_shutdown_assert.rs` that this guard refused on
 # 2026-10-23.
 test_allow_edit_with_a_fenced_listing_in_a_module_doc if {
-	not denied(edit_event("crates/er-seamless-bugfixes/src/patches/freelist_shutdown_assert.rs", concat("\n", [
+	not denied(edit_event("crates/er-crash-logging/src/patches/freelist_shutdown_assert.rs", concat("\n", [
 		"//! `+0x20` and breaks on any node whose byte at `+0x18` is still set:",
 		"//!",
 		"//! ```text",
@@ -210,7 +210,7 @@ test_allow_edit_that_rewrites_a_line_and_keeps_its_shouted_word if {
 		"hook_event_name": "PreToolUse",
 		"tool_name": "Edit",
 		"tool_input": {
-			"file_path": "crates/er-seamless-bugfixes/src/patches/freelist_shutdown_assert.rs",
+			"file_path": "crates/er-crash-logging/src/patches/freelist_shutdown_assert.rs",
 			"old_string": "//! 140c57677: 48 8b 4f 08     MOV RCX, [RDI + 0x8]      ; free the node -- on BOTH paths\n",
 			"new_string": "//! 140c59277: 48 8b 4f 08     MOV RCX, [RDI + 0x8]      ; free the node -- on BOTH paths\n",
 		},

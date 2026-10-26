@@ -17,5 +17,17 @@ er-crash-logging-core = { path = "../er-crash-logging-core" }
 # er-game-base -- so this shell has to install it itself even though its core already depends on it.
 er-game-base = { path = "../er-game-base" }
 
+# Assembles the patched window from NAMED instructions in `build.rs`, so a hand-typed byte can
+# never disarm the patch. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
+# `write_code_byte` for the vanilla-crash patches in `src/patches/`. No detours are installed.
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+
 [lints]
 workspace = true
