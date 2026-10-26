@@ -32,6 +32,8 @@ mod log;
 mod game;
 #[cfg(windows)]
 mod steam;
+#[cfg(windows)]
+mod toggle;
 
 #[cfg(windows)]
 use std::{
@@ -158,6 +160,14 @@ fn load_config() -> Config {
     }
 }
 
+/// The toggle key as the log names it.
+#[cfg(windows)]
+fn key_name(config: &Config) -> String {
+    config
+        .toggle_key
+        .map_or_else(|| "(none)".to_owned(), er_hotkey_config::chord_name)
+}
+
 /// When the config file was last written, or `None` when it cannot be read.
 #[cfg(windows)]
 fn config_stamp() -> Option<std::time::SystemTime> {
@@ -227,9 +237,13 @@ fn voice_thread(config: Config, frames: Receiver<()>) {
                 let next = load_config();
                 if next != config {
                     voice_log(format_args!(
-                        "config: reloaded, gain {} loopback {}",
-                        next.gain, next.loopback
+                        "config: reloaded, gain {} loopback {} toggle_key {} announce {:?}",
+                        next.gain,
+                        next.loopback,
+                        key_name(&next),
+                        next.announce
                     ));
+                    toggle::apply(&next);
                     config = next;
                 }
             }
@@ -325,6 +339,8 @@ struct TaskState {
     settings: (bool, u8),
     /// The last status line written.
     last_status: String,
+    /// Whether the voice chat key was down last frame.
+    key_down: bool,
 }
 
 /// One game frame.
@@ -335,6 +351,9 @@ fn tick(state: &mut TaskState) {
         // Full means the voice thread has a wake-up pending already.
         let _ = frame.try_send(());
     }
+    // Before the settings read below, so a press is obeyed this same frame.
+    // SAFETY: the task runs on the game thread.
+    unsafe { toggle::tick(&mut state.key_down) };
     // SAFETY: the task runs on the game thread.
     let in_world = unsafe { game::in_world() };
     // SAFETY: game thread.
@@ -422,8 +441,44 @@ fn tick(state: &mut TaskState) {
     }
 }
 
+/// Whether this is the first copy of this DLL in the process.
+///
+/// Two me3 entries naming the DLL by different paths load it twice (seen in a profile on
+/// 2026-10-24: one from a worktree build, one from the all-mods build). Two copies would each read
+/// the microphone and the network channel, so each would get part of every stream and play its
+/// half through a voice object of its own. The second copy stands down instead. The name carries
+/// the process id because `Local\` is per login session, not per process.
+#[cfg(windows)]
+fn first_copy() -> bool {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = format!("Local\\er-positional-voice-{}", std::process::id())
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: a named-mutex creation; the handle is never closed, so the claim lasts as long as
+    // the process.
+    match unsafe { CreateMutexW(None, false, windows::core::PCWSTR(name.as_ptr())) } {
+        Ok(_) => {
+            // SAFETY: read straight after the call that set it.
+            let last = unsafe { GetLastError() };
+            last != ERROR_ALREADY_EXISTS
+        }
+        // No mutex at all: nothing to compare against, so run rather than leave voice off.
+        Err(_) => true,
+    }
+}
+
 #[cfg(windows)]
 fn install() {
+    if !first_copy() {
+        // The first copy owns the log; append, do not rotate it away.
+        voice_log(format_args!(
+            "attach: another copy of er_positional_voice.dll is already running in this \
+             process (the me3 profile names it twice); this copy stays off"
+        ));
+        return;
+    }
     reset_log_file();
     let base = match er_game_base::mem::game_module_base() {
         Ok(b) => b,
@@ -439,13 +494,16 @@ fn install() {
         return;
     }
     let config = load_config();
+    toggle::apply(&config);
     voice_log(format_args!(
         "attach: game base {base:#x}, all {} 2.7.2.0 sites matched on {}; gain {} \
-         loopback {}; nothing in ersc.dll is touched",
+         loopback {} toggle_key {} announce {:?}; nothing in ersc.dll is touched",
         er_positional_voice_core::sites::SITES.len(),
         er_game_base::game_build::describe_build(),
         config.gain,
-        config.loopback
+        config.loopback,
+        key_name(&config),
+        config.announce
     ));
     let (frame, frames) = sync_channel(1);
     let _ = FRAME.set(frame);
@@ -470,6 +528,7 @@ fn install() {
         peers: Vec::new(),
         settings: (false, u8::MAX),
         last_status: String::new(),
+        key_down: false,
     };
     voice_log(format_args!("game task registering FrameBegin tick"));
     task.run_recurring(
