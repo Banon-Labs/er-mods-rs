@@ -661,7 +661,13 @@ mod tests {
     #[test]
     fn an_announced_handle_resolves_to_its_slot() {
         let mut book = book_with_turtles();
-        book.apply(OWNER, Message::Built(Built { handle: 77, slot: 2 }));
+        book.apply(
+            OWNER,
+            Message::Built(Built {
+                handle: 77,
+                slot: 2,
+            }),
+        );
         let resolved = book.resolve(OWNER, 77, MOONGRUM, &[]).expect("announced");
         assert_eq!(resolved.entry.name, "Donatello");
         assert_eq!(resolved.basis, Basis::Announced);
@@ -763,7 +769,13 @@ mod tests {
         let guess = book.resolve(OWNER, 10, MOONGRUM, &[]);
         assert_eq!(guess.as_ref().map(|r| r.entry.slot), Some(1));
         spawns.record(spawn(10, guess));
-        book.apply(OWNER, Message::Built(Built { handle: 10, slot: 3 }));
+        book.apply(
+            OWNER,
+            Message::Built(Built {
+                handle: 10,
+                slot: 3,
+            }),
+        );
         let late = spawns.reconcile(&book);
         assert_eq!(late.len(), 1);
         assert_eq!((late[0].was, late[0].now.entry.slot), (Some(1), 3));
@@ -775,7 +787,13 @@ mod tests {
     #[test]
     fn an_announced_spawn_does_not_fall_back_to_a_guess() {
         let mut book = book_with_turtles();
-        book.apply(OWNER, Message::Built(Built { handle: 10, slot: 2 }));
+        book.apply(
+            OWNER,
+            Message::Built(Built {
+                handle: 10,
+                slot: 2,
+            }),
+        );
         let mut spawns = Spawns::default();
         spawns.record(spawn(10, book.resolve(OWNER, 10, MOONGRUM, &[])));
         // A state with an empty live list drops the announcement; the guess would be slot 1.
