@@ -21,6 +21,10 @@
 //!   ([`names`]) and, with `ai = { brain = "x" }`, runs a Lua brain loaded into the AI state
 //!   ([`brains`]). No param row is written: the changed BuddyParam and `CharaInitParam` rows are
 //!   copies this DLL serves through the two getters, so Seamless's `lobby_key` is unchanged.
+//! * In a Seamless session, each companion is announced to the other players running this DLL
+//!   over Steam ([`net`], [`steam`]), and their copies of it are built in the same gear and
+//!   shown under the same name. No detour is added for this: it rides the `CreateSummonChr` and
+//!   `GetChrName` detours above.
 //! * Companions get a friendly overhead name and HP plate with a friendly name colour, and no red
 //!   enemy damage bar when hit: three `ilhook` mid hooks and one detour ([`mid_hooks`]).
 //!
@@ -58,6 +62,8 @@ mod mimic_hooks;
 #[cfg(windows)]
 mod names;
 #[cfg(windows)]
+mod net;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod pad;
@@ -65,6 +71,8 @@ mod pad;
 mod picker;
 #[cfg(windows)]
 mod squad_facts;
+#[cfg(windows)]
+mod steam;
 #[cfg(windows)]
 mod team;
 #[cfg(windows)]
@@ -176,6 +184,7 @@ fn refresh_config(state: &mut TaskState) {
             .map(|companion| (companion.slot, companion.name.clone()))
             .collect(),
     );
+    net::set_roster(companions);
     brains::configure(
         companions
             .iter()
@@ -332,6 +341,7 @@ fn tick(state: &mut TaskState) {
     }
     state.frames = state.frames.wrapping_add(1);
     dress::tick();
+    net::tick();
     brains::tick();
     void_tech::tick();
     if finger::take_finger_use() {

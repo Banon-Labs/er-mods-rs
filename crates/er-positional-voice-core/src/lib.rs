@@ -11,8 +11,10 @@
 //! - [`gain`]: the volume applied to decoded PCM;
 //! - [`slots`]: which SteamID owns which of the sixteen voice objects;
 //! - [`sites`]: the game bytes checked before any game function is called;
-//! - [`config`]: `er-positional-voice.toml` beside the game.
+//! - [`config`]: `er-positional-voice.toml` beside the game;
+//! - [`announce`]: the clip spoken after the voice chat key.
 
+pub mod announce;
 pub mod bank;
 pub mod config;
 pub mod gain;

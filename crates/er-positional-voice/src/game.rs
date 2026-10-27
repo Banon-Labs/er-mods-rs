@@ -171,6 +171,20 @@ pub(crate) unsafe fn voice_settings() -> (bool, u8) {
     (s.voice_chat, s.voice_volume)
 }
 
+/// Invert Network > Voice Chat and return what the game holds afterwards. `None` until the
+/// settings exist.
+///
+/// # Safety
+///
+/// Game thread.
+pub(crate) unsafe fn flip_voice_chat() -> Option<bool> {
+    // SAFETY: game thread; the settings block is plain bytes the menu also writes from this thread.
+    let data = unsafe { GameDataMan::instance_mut() }.ok()?;
+    let s = &mut data.game_settings;
+    s.voice_chat = !s.voice_chat;
+    Some(s.voice_chat)
+}
+
 /// Whether the local player is in a world, which is when the bank and voices can be set up.
 ///
 /// # Safety

@@ -1809,6 +1809,13 @@ It costs nothing to carry. It is `compatible` against every entry in this table 
 exception handler that installs one vectored handler and writes a file -- and it is the one package \
 whose absence is only discovered when it is already too late to add it."""
 
+"er-positional-voice" = """Without it no Seamless session has voice at all: Seamless's own voice \
+chat cannot sound, because its `Play_VoiceChat` event is in no bank the game loads (bd \
+er-play-voicechat-event-not-loaded-1171-2026-10-17), so the in-game voice setting does nothing. \
+A diff never reaches this crate, so a branch run left it out: run br-20261024-141300-0302 invaded \
+a host who also ran the mods, both had voice on and turned up, and neither heard the other. It \
+detours nothing and is `compatible` against every entry in this table."""
+
 # Two hosts arming the Quit tab's row router is one router too many, whichever rows each carries.
 # A host can clone nothing -- the Save Game row's take-over shape arms `RowSet::NONE` -- and still
 # register an action table and put its handlers on the union, and `er-quit-menu-core`'s statics are
