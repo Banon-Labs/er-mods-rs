@@ -81,14 +81,18 @@ def already_spent(message_uuid: str) -> bool:
         lines = push_auth.STATE_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
         return False
+    # Spent means the reply's newest record is a holder, not a refund: a push the pre-push hook
+    # refused before any gate judged it (`scripts/er-pre-push-clear.py refund`) sent nothing, and
+    # the game being up is the commonest such refusal, so the teardown it needs must stay open.
+    spent = False
     for line in lines:
         try:
             rec = json.loads(line)
         except ValueError:
             continue
         if isinstance(rec, dict) and rec.get("message_uuid") == message_uuid:
-            return True
-    return False
+            spent = not rec.get("refunded")
+    return spent
 
 
 def decide(event: dict, started: float) -> str | None:
@@ -221,6 +225,15 @@ def selftest() -> int:
         ok = got.startswith("DENIED") and "already paid" in got
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'} a reply that paid for a push denies: {got}")
+
+        push_auth.STATE_FILE.write_text(
+            json.dumps({"message_uuid": "refunded-reply", "tool_use_id": "toolu_p"}) + "\n"
+            + json.dumps({"message_uuid": "refunded-reply", "tool_use_id": "toolu_p",
+                          "refunded": "game-running"}) + "\n", encoding="utf-8")
+        got = run(f"authorize {tip}", reply_uuid="refunded-reply")
+        ok = got.startswith("AUTHORIZED")
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} a reply whose push the hook refunded admits: {got}")
     print("selftest:", "FAILED" if failures else "ok")
     return 1 if failures else 0
 

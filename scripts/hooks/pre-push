@@ -81,6 +81,23 @@ bash scripts/git-pre-push-block-main.sh "$@" <<<"$pushed"
 mapfile -t pushed_refs < <(printf '%s\n' "$pushed" | awk 'NF >= 2 { print $3 }')
 mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
 
+# THE USER'S `authorize <sha>` REPLY IS SPENT AT PreToolUse, BEFORE THIS HOOK RUNS.
+#
+# scripts/cupcake_push_authorization.py records the spend before git starts, so a push this hook
+# refuses still used up the reply. 2026-10-27: an agent pushed 6e313ae7 with its own stamping run
+# still up, check.sh refused ("Elden Ring is running"), nothing reached origin, and the retry and
+# the `--reason=push-` teardown were both refused as already paid for. So each refusal below that
+# is about a precondition the agent can clear -- not about the pushed content -- hands the reply
+# back with scripts/er-pre-push-clear.py, and the same `git push` can run again. The helper finds
+# nothing to refund for a push the user typed themselves. An older checkout without the helper
+# refuses exactly as before.
+mapfile -t pushed_pair_argv < <(printf '%s\n' "$pushed" |
+	awk 'NF >= 2 && $1 ~ /^refs\/heads\// && $2 !~ /^0+$/ { print "--pair"; print $1; print $2 }')
+refund_authorization() { # refund_authorization <one-token reason>
+	[[ -f scripts/er-pre-push-clear.py && ${#pushed_pair_argv[@]} -gt 0 ]] || return 0
+	python3 scripts/er-pre-push-clear.py refund --reason "$1" "${pushed_pair_argv[@]}" || true
+}
+
 # A push that only deletes refs has no question for a gate to answer, so none of them run.
 #
 # Every gate below judges content: what the pushed commits compile to, whether the code in them
@@ -147,6 +164,7 @@ for sha in "${pushed_shas[@]:-}"; do
 	printf '  scripts/check.sh reads the working tree, so its verdict would describe content\n' >&2
 	printf '  that is not in this push. Commit it, stash it, or push with --no-verify.\n' >&2
 	printf '%s\n' "$dirty" | sed 's/^/    /' >&2
+	refund_authorization dirty-tree
 	exit 1
 done
 
@@ -241,6 +259,7 @@ fi
 # old that happened to still be running -- newer file, older code. Reading a clock and calling it
 # provenance is the mistake being guarded, made inside the guard.
 if ! bash scripts/check-runtime-evidence.sh "${pushed_shas[@]:-}"; then
+	refund_authorization no-runtime-evidence
 	exit 1
 fi
 
@@ -381,6 +400,7 @@ if [[ $need_gate_tree -eq 1 ]]; then
 			printf 'pre-push: REFUSED -- another push is already gating a commit in %s.\n' "$gate_tree" >&2
 			printf '  Wait for that push and read its result; this one would re-pin the same tree\n' >&2
 			printf '  under it. The lock is %s.lock.\n' "$gate_tree" >&2
+			refund_authorization gate-tree-busy
 			exit 1
 		fi
 	fi
@@ -522,6 +542,27 @@ tip_already_green() { # tip_already_green <sha>
 		"${1:0:12}" "$((($(date +%s) - $(stat -c %Y "$marker")) / 60))" "$scope" >&2
 	printf '          ER_PRE_PUSH_NO_CACHE=1 git push runs it again.\n' >&2
 }
+
+# A RUNNING GAME IS CLEARED HERE, NOT LEFT FOR check.sh TO REFUSE ON.
+#
+# check.sh exits 2 while `er-teardown.py --status` reports a game, and every agent push of crate
+# code follows a run launched to stamp it, so the game being up at this point is the normal case,
+# not a mistake. User directive 2026-10-22: "to authorize a push sha is to authorize a teardown".
+# scripts/er-pre-push-clear.py closes the game itself when it is a live er-run-branch.py launch and
+# this push holds a live `authorize <sha>` record; for a game the user started, or a push the user
+# typed, it refuses and refunds the reply instead. Asked only when some tip will actually run the
+# suite: a tip already green in this checkout runs nothing a game could disturb.
+needs_suite=0
+if [[ ${#pushed_shas[@]} -eq 0 ]]; then
+	needs_suite=1
+else
+	for sha in "${pushed_shas[@]}"; do
+		tip_already_green "$sha" >/dev/null 2>&1 || needs_suite=1
+	done
+fi
+if [[ $needs_suite -eq 1 && ${ER_CHECK_FORCE:-} != 1 && -f scripts/er-pre-push-clear.py ]]; then
+	python3 scripts/er-pre-push-clear.py clear-game "${pushed_pair_argv[@]}" || exit 1
+fi
 
 suite_failed=0
 failed_tips=()

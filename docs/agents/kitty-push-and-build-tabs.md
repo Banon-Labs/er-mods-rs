@@ -25,6 +25,22 @@ the closing back to the user: while that reply is still their last message, clos
 teardown guard admits it only while the `push_teardown` signal (`scripts/cupcake_push_teardown.py`)
 reads the reply as an unspent `authorize <sha>` for a local branch tip.
 
+If the agent forgets, the push does not burn the reply (fixed after 2026-10-27, when an authorized
+push of 6e313ae7 died on "check.sh: REFUSED -- Elden Ring is running" with the agent's own
+stamping run still up, and the reply counted as spent anyway). The pre-push hook now does two
+things through `scripts/er-pre-push-clear.py`:
+
+- Just before the check suite, if a game is up, the hook closes it itself with
+  `er-teardown.py --reason=push-<tip12>` -- but only when the game is a live `er-run-branch.py`
+  launch (the newest `br-*` run still has its `run.json` and a live launcher) and this push holds
+  a fresh `authorize <sha>` record in `.cupcake/state/push-authorizations.jsonl`. A game the user
+  started themselves, or a push the user typed in their own terminal, is never closed by the hook.
+- When the hook refuses a push for something that is not about the pushed code -- a game it may
+  not close, a dirty working tree, another push holding the gate tree, missing runtime evidence --
+  it marks the reply refunded. The push guard and the `push-` teardown both treat a refunded reply
+  as unspent, so the agent clears the problem and runs the same `git push` again without asking
+  the user for a new reply. A push that reached the suite and failed it still spends the reply.
+
 ## A long background build is tailed in a kitty tab (user directive 2026-10-19)
 
 When the agent starts a long background build -- a duel or invasion build from

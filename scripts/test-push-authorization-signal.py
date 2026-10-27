@@ -16,6 +16,7 @@ authorization record it writes lands there, not in this checkout's `.cupcake/sta
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
@@ -371,6 +372,32 @@ def main() -> int:
         c.use("toolu_e2x", PUSH)
         expect("a push that ran and failed (pre-push hook) spent it",
                sb.run(c, "toolu_e2x", PUSH), "DENIED", "already spent")
+
+        # --- a push the pre-push hook refused for a precondition hands the reply back (2026-10-27)
+        # check.sh refused an authorized push with "Elden Ring is running"; nothing reached the
+        # remote, yet the reply was spent. The hook now records a refund with
+        # scripts/er-pre-push-clear.py, and the same push may run again on the same reply.
+        clear = importlib.util.spec_from_file_location(
+            "er_pre_push_clear", READER.parent / "er-pre-push-clear.py")
+        clear_mod = importlib.util.module_from_spec(clear)
+        clear.loader.exec_module(clear_mod)
+        state = sb.root / ".cupcake" / "state" / "push-authorizations.jsonl"
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_g1", PUSH)
+        expect("the first push takes the authorization", sb.run(c, "toolu_g1", PUSH), "AUTHORIZED")
+        rec = clear_mod.refund([state], [("feat/x", sb.tip)], "game-running", time.time(),
+                               clear_mod.MAX_AGE_MINUTES)
+        check("the hook's refund names the holder", bool(rec) and rec["tool_use_id"] == "toolu_g1",
+              repr(rec))
+        c.failed("toolu_g1")
+        c.use("toolu_g2", PUSH)
+        expect("after a refund the same push may run again on the same reply",
+               sb.run(c, "toolu_g2", PUSH), "AUTHORIZED")
+        c.result("toolu_g2", "pushed")
+        c.use("toolu_g3", PUSH)
+        expect("and the push that then ran spends it",
+               sb.run(c, "toolu_g3", PUSH), "DENIED", "already spent")
 
         c = Chain()
         c.human(f"authorize {sb.tip}")
