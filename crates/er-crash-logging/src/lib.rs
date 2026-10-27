@@ -16,6 +16,7 @@
 // er-crash-logging` build.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
+pub(crate) mod dred;
 pub(crate) mod patches;
 
 use std::sync::Once;
@@ -71,6 +72,8 @@ pub unsafe extern "system" fn DllMain(
                 format_args!("standalone loaded"),
             );
             #[cfg(windows)]
+            spawn_dred_task();
+            #[cfg(windows)]
             spawn_patch_task();
         });
     }
@@ -79,6 +82,18 @@ pub unsafe extern "system" fn DllMain(
         er_crash_logging_core::note_process_detach();
     }
     DLL_MAIN_SUCCESS
+}
+
+/// Switch on D3D12's crash diagnostics off the loader thread.
+///
+/// Its own thread, not the patch task's: that one waits for the game module, and DRED has to be on
+/// before the game creates its device. A thread spawned here starts once the loader lock is
+/// released, well before the game reaches its renderer.
+#[cfg(windows)]
+fn spawn_dred_task() {
+    let _ = std::thread::Builder::new()
+        .name("er-crash-logging-dred".to_owned())
+        .spawn(|| dred::start(er_crash_logging_core::append_log));
 }
 
 /// Apply the vanilla-crash patches off the loader thread, once the crash logger is installed.
