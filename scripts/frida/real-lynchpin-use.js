@@ -19,7 +19,7 @@ const EQUIP_PARAM_GOODS_GET_ENTRY = ptr('0x140d3cca0'); // 1.17.1 0x140d3b5b0
 const OPEN_CONVERSATION_CHOICES_MENU = ptr('0x140ea1a50'); // 1.16.2 0x140e9e4f0, 1.17.1 0x140ea0360
 const CHALLENGERS_LYNCHPIN = 0x407fde63 >>> 0;
 const LYNCHPIN_GOODS_ID = 0x7fde63;
-const ERSC_MATCHMAKING_SLOT = 0x21b610;
+const ERSC_MATCHMAKING_SLOT = 0x21d610; // Seamless v2.0.2 (v2.0.1 0x21b610)
 const LOBBY_NAMES = { 4: 'RequestLobbyList', 5: 'AddFilter', 6: 'GetLobbyByIndex', 13: 'CreateLobby', 14: 'JoinLobby' };
 
 const out = { rowReads: [], menuOpens: [], steam: [], hooked: [] };

@@ -80,7 +80,7 @@ pub struct Abi {
     pub invade_action_rva: usize,
     /// The "Cancel search" option action. Reads `rcx` only.
     pub cancel_action_rva: usize,
-    /// `OPTIONSELECT_LEAVEWORLD`'s action -- see [`V201_LEAVE_WORLD_ACTION_RVA`].
+    /// `OPTIONSELECT_LEAVEWORLD`'s action -- see [`V202_LEAVE_WORLD_ACTION_RVA`].
     pub leave_world_action_rva: usize,
     /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
     ///
@@ -105,9 +105,12 @@ pub struct Abi {
     /// never altered: publishing a key of our own would change what every other Seamless
     /// client matches, which is not ours to do.
     pub build_lobby_key_rva: usize,
-    /// Seamless's item handler -- see [`V201_ITEM_HANDLER_RVA`]. Never called by this module; its
+    /// Seamless's item handler -- see [`V202_ITEM_HANDLER_RVA`]. Never called by this module; its
     /// address is used as a search needle to find the owner object without opening a dialog.
     pub item_handler_rva: usize,
+    /// Where the item handler reads its owner from the object its closure captured -- see
+    /// [`V202_ITEM_HANDLER_OWNER_OFFSET`]. The owner-to-session hop is [`NEXT_OBJECT_OFFSET`].
+    pub item_handler_owner_offset: usize,
     pub show_prologue: &'static [u8],
     /// Also the one-shot version DISCRIMINATOR -- see [`SUPPORTED`].
     pub invade_prologue: &'static [u8],
@@ -201,19 +204,20 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     // most misleading possible place for it, since this string is what a reader trusts to say
     // which build the addresses on the same line belong to.
     version: SUPPORTED_VERSION,
-    show_rva: V201_SHOW_RVA,
-    invade_action_rva: V201_INVADE_ACTION_RVA,
-    cancel_action_rva: V201_CANCEL_ACTION_RVA,
-    leave_world_action_rva: V201_LEAVE_WORLD_ACTION_RVA,
-    build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
-    item_handler_rva: V201_ITEM_HANDLER_RVA,
-    show_prologue: V201_SHOW_PROLOGUE,
-    invade_prologue: V201_INVADE_PROLOGUE,
-    cancel_prologue: V201_CANCEL_PROLOGUE,
-    leave_world_prologue: V201_LEAVE_WORLD_PROLOGUE,
-    build_lobby_key_prologue: V201_BUILD_LOBBY_KEY_PROLOGUE,
-    session_state_offset: V201_SESSION_STATE_OFFSET,
-    session_guard_offset: V201_SESSION_GUARD_OFFSET,
+    show_rva: V202_SHOW_RVA,
+    invade_action_rva: V202_INVADE_ACTION_RVA,
+    cancel_action_rva: V202_CANCEL_ACTION_RVA,
+    leave_world_action_rva: V202_LEAVE_WORLD_ACTION_RVA,
+    build_lobby_key_rva: V202_BUILD_LOBBY_KEY_RVA,
+    item_handler_rva: V202_ITEM_HANDLER_RVA,
+    item_handler_owner_offset: V202_ITEM_HANDLER_OWNER_OFFSET,
+    show_prologue: V202_SHOW_PROLOGUE,
+    invade_prologue: V202_INVADE_PROLOGUE,
+    cancel_prologue: V202_CANCEL_PROLOGUE,
+    leave_world_prologue: V202_LEAVE_WORLD_PROLOGUE,
+    build_lobby_key_prologue: V202_BUILD_LOBBY_KEY_PROLOGUE,
+    session_state_offset: V202_SESSION_STATE_OFFSET,
+    session_guard_offset: V202_SESSION_GUARD_OFFSET,
     state_idle: 0x01,
     state_searching: 0x0e,
     state_cancelling: 0x23,
@@ -229,10 +233,10 @@ pub const SUPPORTED: &[Abi] = &[Abi {
 // that a re-pin lands as a new set of names beside the old ones for exactly one commit, rather
 // than as an in-place edit of numbers nobody diffed.
 
-/// Seamless v2.0.1, the supported build. See this module's docs for what identifies each one.
-pub const V201_SHOW_RVA: usize = 0x2_41a0;
-pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
-pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
+/// Seamless v2.0.2, the supported build. See this module's docs for what identifies each one.
+pub const V202_SHOW_RVA: usize = 0x2_41c0;
+pub const V202_INVADE_ACTION_RVA: usize = 0x2_5870;
+pub const V202_CANCEL_ACTION_RVA: usize = 0x2_58f0;
 /// `OPTIONSELECT_LEAVEWORLD` -- menu 3's only row, and the escape Seamless leaves open in states
 /// where its Cancel row is withdrawn.
 ///
@@ -242,8 +246,8 @@ pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
 /// take the session mutex at `session+0x100`, check the recursion count, write `0x23` to
 /// `session+0x150`, unlock. Driving it is therefore driving a row the player could have clicked,
 /// which is the invariant the cancel-row refusal exists to protect.
-pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
-pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
+pub const V202_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59f0;
+pub const V202_BUILD_LOBBY_KEY_RVA: usize = 0xa_ec50;
 /// Seamless's own item handler, and the only reliable way to find its owner object.
 ///
 /// # Why an address nothing calls is worth pinning
@@ -253,20 +257,26 @@ pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
 /// `ersc_session=SessionNotIdentified` on every heartbeat and can drive nothing -- and the
 /// fallback scan crosses only `ersc.dll`'s own writable sections, where the object is not.
 ///
-/// This address is a needle instead. The handler is registered at `ersc+0x7c423` as a heap
-/// closure, allocated `0x40` bytes at `ersc+0x7c444` and filled in as `{vtable 0x1801dabf0,
-/// captured object, this function, .., pointer to itself}` -- so the function pointer sits one
-/// qword after the captured object, and nothing else in the process writes that value. The
-/// handler's own first instructions say what the captured object is for: `owner = [captured +
-/// 0x58]`, then `session = [owner + 0x58]`, both of them [`NEXT_OBJECT_OFFSET`].
+/// This address is a needle instead. The handler is registered (v2.0.2: the `lea` at
+/// `ersc+0x7d445`) as a `0x40`-byte heap closure filled in as `{vtable, captured object, this
+/// function, .., pointer to itself}` -- so the function pointer sits one qword after the captured
+/// object, and nothing else in the process writes that value. The handler's own first
+/// instructions say what the captured object is for: `owner = [captured +
+/// V202_ITEM_HANDLER_OWNER_OFFSET]`, then `session = [owner + NEXT_OBJECT_OFFSET]`.
 ///
-/// Measured live on run `br-20260917-024109-9973` across 1019 regions and 4285 MB: exactly one
+/// Measured live on run `br-20260917-024109-9973` (v2.0.1) across 1019 regions and 4285 MB: exactly one
 /// hit, resolving `captured 0x469af3a0 -> owner 0x469ad518 -> session 0x469ac930` reading state
 /// `0x1` idle. The pair cross-checks against a different process -- run `br-20260916-100817-3fe0`
 /// recorded `OSM=0x469ad518` and `session=0x469ac930` from `show` itself.
-pub const V201_ITEM_HANDLER_RVA: usize = 0x9_2820;
-pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
-pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
+pub const V202_ITEM_HANDLER_RVA: usize = 0x9_3960;
+/// The item handler's captured-object-to-owner hop. v2.0.2 reads `mov rsi,[rcx+0x60]` at
+/// `ersc+0x9397b`; v2.0.1 read `[rcx+0x58]` at `ersc+0x9283b`, and the handler's other read of the
+/// object moved `+0xc0` -> `+0xd0` with it. Assuming `+0x58` here left the needle at "matched 0"
+/// for the whole of run `br-20261027-160220-2e56`, while a read of that process found one closure
+/// whose `+0x60` is the menu object the run logged and whose `+0x60+0x58` is its session.
+pub const V202_ITEM_HANDLER_OWNER_OFFSET: usize = 0x60;
+pub const V202_SESSION_STATE_OFFSET: usize = 0x150;
+pub const V202_SESSION_GUARD_OFFSET: usize = 0x14c;
 
 /// `LOBBY_KEY_HEX_LEN` lowercase hex characters: a SHA-256 digest, so 32 bytes rendered as 64
 /// characters. The digest width, so it survives an update; the SHA-256 IV has not moved.
@@ -352,8 +362,8 @@ pub const SESSION_STATE_MAX: u32 = 0xff;
 #[cfg(test)]
 mod tests {
     use super::{
-        SESSION_GUARD_POISON, V201_CANCEL_PROLOGUE, V201_SESSION_GUARD_OFFSET,
-        V201_SESSION_STATE_OFFSET,
+        SESSION_GUARD_POISON, V202_CANCEL_PROLOGUE, V202_SESSION_GUARD_OFFSET,
+        V202_SESSION_STATE_OFFSET,
     };
 
     /// Find `pattern` in `haystack` and answer the little-endian dword at `at` past its start.
@@ -377,7 +387,7 @@ mod tests {
     ///
     /// # Why this is a test and not a comment
     ///
-    /// `V201_SESSION_GUARD_OFFSET`, `V201_SESSION_STATE_OFFSET` and `SESSION_GUARD_POISON` are
+    /// `V202_SESSION_GUARD_OFFSET`, `V202_SESSION_STATE_OFFSET` and `SESSION_GUARD_POISON` are
     /// three numbers typed by hand beside a pin generated from the shipped `ersc.dll`. Nothing
     /// connected them: a re-pin at the next Seamless build regenerates the bytes and leaves the
     /// three constants describing the previous one, and the failure is silent -- an action driven
@@ -388,14 +398,14 @@ mod tests {
     /// from the bytes themselves.
     #[test]
     fn the_guard_and_state_offsets_are_the_ones_the_cancel_action_addresses() {
-        let compare = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 2)
+        let compare = dword_after(V202_CANCEL_PROLOGUE, &[0x81, 0xbf], 2)
             .expect("the pin carries the guard comparison");
-        assert_eq!(compare as usize, V201_SESSION_GUARD_OFFSET);
-        let sentinel = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 6)
+        assert_eq!(compare as usize, V202_SESSION_GUARD_OFFSET);
+        let sentinel = dword_after(V202_CANCEL_PROLOGUE, &[0x81, 0xbf], 6)
             .expect("the pin carries the sentinel");
         assert_eq!(sentinel, SESSION_GUARD_POISON);
-        let write = dword_after(V201_CANCEL_PROLOGUE, &[0xc7, 0x87], 2)
+        let write = dword_after(V202_CANCEL_PROLOGUE, &[0xc7, 0x87], 2)
             .expect("the pin carries the state write");
-        assert_eq!(write as usize, V201_SESSION_STATE_OFFSET);
+        assert_eq!(write as usize, V202_SESSION_STATE_OFFSET);
     }
 }

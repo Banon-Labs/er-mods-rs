@@ -9,8 +9,9 @@
 // So do not check the object harder. Watch `_Mtx_lock` and record what ersc itself passes: the
 // session's mutex is locked by Seamless's own code on its own schedule, and `rcx - 0x100` is then
 // the session by construction rather than by resemblance.
-const MTX_LOCK_RVA = 0xf9828;
-const INVADE_RVA = 0x25850;
+// Seamless v2.0.2 rvas (v2.0.1: `_Mtx_lock` 0xf9828, invade 0x25850).
+const MTX_LOCK_RVA = 0xfc038;
+const INVADE_RVA = 0x25870;
 const SESSION_MUTEX_OFFSET = 0x100;
 const SESSION_STATE_OFFSET = 0x150;
 const SESSION_GUARD_OFFSET = 0x14c;
@@ -85,7 +86,8 @@ if (ersc !== null) {
 // locks anything" and "the hook did not take" stop looking alike, and a hook on the lock BODY at
 // `ersc+0xf98c0` -- the frame our parked worker is actually sitting in, so that address is known
 // to be live code on the path.
-const LOCK_BODY_RVA = 0xf98c0;
+// Seamless v2.0.2 (v2.0.1 0xf98c0): `_Mtx_do_lock`+0x70 in both builds, the same `jmp` loop head.
+const LOCK_BODY_RVA = 0xfc0d0;
 let lockHits = 0;
 let bodyHits = 0;
 if (ersc !== null) {

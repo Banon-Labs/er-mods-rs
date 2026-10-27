@@ -83,7 +83,7 @@ IMAGE_ROLE = {
     "EldenRing2720": "game",
     # Seamless Co-op's `ersc.dll`.  A real image with real pins, ground-truthed by the build script
     # against the supported `ersc.dll`; this script loads only the game image and says so.
-    "Ersc201": None,
+    "Ersc202": None,
 }
 _UNMODELLED = object()
 
@@ -882,7 +882,7 @@ def selftest():
     check("a pin on other bytes is a bad pin", classify_prologue(game, bytes(0x20))[0], "BAD-PIN")
     check("a pin past the image end is a bad pin", classify_prologue(game, bytes(0x11))[0], "BAD-PIN")
     check("an ersc pin is a named skip",
-          classify_prologue(("c", "S", "Ersc201", BASE, "V", pin), b"")[0], "SKIP")
+          classify_prologue(("c", "S", "Ersc202", BASE, "V", pin), b"")[0], "SKIP")
     check("an unknown variant is refused",
           classify_prologue(("c", "S", "EldenRing1171", BASE, "V", pin), b"")[0], "UNKNOWN-IMAGE")
     check("an unresolved va is a named skip",

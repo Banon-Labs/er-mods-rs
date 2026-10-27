@@ -678,8 +678,9 @@ pub(super) fn owner_among(candidates: &[usize]) -> Option<(usize, usize)> {
 /// `ersc_session=SessionNotIdentified` on every heartbeat with Seamless perfectly healthy.
 ///
 /// This looks for [`ersc::Abi::item_handler_rva`] instead: Seamless stores that function pointer
-/// one qword after the object it captured, and the handler reads the owner and the session from
-/// that object through two [`ersc::NEXT_OBJECT_OFFSET`] hops. A stray copy of the pointer cannot
+/// one qword after the object it captured, and the handler reads the owner from that object at
+/// [`ersc::Abi::item_handler_owner_offset`] and the session from the owner at
+/// [`ersc::NEXT_OBJECT_OFFSET`]. A stray copy of the pointer cannot
 /// pass, because a copy has no object behind it that resolves to something calling itself a
 /// session.
 ///
@@ -720,7 +721,7 @@ pub(super) fn cached_owner_from_item_handler_closure(
         // identical in every one.
         let still = unsafe { er_game_base::mem::safe_read_usize(at - 8) }
             .and_then(|captured| unsafe {
-                er_game_base::mem::safe_read_usize(captured + ersc::NEXT_OBJECT_OFFSET)
+                er_game_base::mem::safe_read_usize(captured + abi.item_handler_owner_offset)
             })
             .and_then(|owner| {
                 unsafe { er_game_base::mem::safe_read_usize(owner + ersc::NEXT_OBJECT_OFFSET) }
@@ -897,7 +898,8 @@ fn closure_resolves_to_a_session(abi: &ersc::Abi, at: usize) -> Option<(usize, u
     if captured == 0 || !unsafe { er_game_base::mem::is_heap_aligned_ptr(captured) } {
         return None;
     }
-    let owner = unsafe { er_game_base::mem::safe_read_usize(captured + ersc::NEXT_OBJECT_OFFSET) }?;
+    let owner =
+        unsafe { er_game_base::mem::safe_read_usize(captured + abi.item_handler_owner_offset) }?;
     if owner == 0 || !unsafe { er_game_base::mem::is_heap_aligned_ptr(owner) } {
         return None;
     }

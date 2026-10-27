@@ -641,8 +641,8 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     // identifies each address; none was taken from a byte match alone. There is one build here
     // and there is never more than one: a build that is no longer latest leaves nothing behind.
     let expected = [Measured {
-        version: "2.0.1",
-        rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d6e0],
+        version: "2.0.2",
+        rvas: [0x2_41c0, 0x2_5870, 0x2_58f0, 0xa_ec50],
         fields: [0x150, 0x14c],
         states: [0x01, 0x0e, 0x23, 0x13],
     }];

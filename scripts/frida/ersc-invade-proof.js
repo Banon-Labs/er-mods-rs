@@ -18,8 +18,10 @@
 
 'use strict';
 
-const ERSC_INVADE = 0x25850;
-const ERSC_CANCEL = 0x258d0;
+// Seamless v2.0.2 rvas (v2.0.1: invade 0x25850, cancel 0x258d0). Addresses in the prose of this
+// file are the v2.0.1 ones they were measured at.
+const ERSC_INVADE = 0x25870;
+const ERSC_CANCEL = 0x258f0;
 const SESSION_STATE = 0x150;
 const SESSION_GUARD = 0x14c;
 const SESSION_LOCK = 0x100;
@@ -234,7 +236,7 @@ rpc.exports = {
     state.references = byCount[pick.session.toString()] || 1;
 
     // The matchmaking interface, so the oracle can be installed on its vtable.
-    const iface = readPtr(ersc.base.add(0x21b610));
+    const iface = readPtr(ersc.base.add(0x21d610)); // SteamMatchMaking009 slot, v2.0.2 (v2.0.1 0x21b610)
     if (iface && !iface.isNull()) state.matchmaking = iface;
 
     return {

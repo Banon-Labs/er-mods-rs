@@ -18,7 +18,7 @@ const PAD_A = 0x1000;
 // The use-item binding, which is what an item drive should be pressing. Labelled separately so a
 // trace shows at a glance whether the press under test was the real binding or `A`.
 const PAD_USE_ITEM = 0x4000;
-const ERSC_MATCHMAKING_SLOT = 0x21b610;
+const ERSC_MATCHMAKING_SLOT = 0x21d610; // Seamless v2.0.2 (v2.0.1 0x21b610)
 const LOBBY_NAMES = {
   4: 'RequestLobbyList',
   5: 'AddRequestLobbyListStringFilter',

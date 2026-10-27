@@ -8,7 +8,9 @@
 //
 // The pointers are read from `ersc.dll`'s own data rather than resolved here, so each one is the
 // interface Seamless itself was handed.
-const HELD = [0x21b570, 0x21b590, 0x21b5b0, 0x21b5d0, 0x21b5f0, 0x21b610, 0x21b630, 0x21b650, 0x21b670];
+// Seamless v2.0.2 `.data` slots. v2.0.1 had the same nine-slot table 0x2000 lower
+// (0x21b570..0x21b670), following `.data` itself from 0x21a000 to 0x21c000.
+const HELD = [0x21d570, 0x21d590, 0x21d5b0, 0x21d5d0, 0x21d5f0, 0x21d610, 0x21d630, 0x21d650, 0x21d670];
 const SLOTS_PER_IFACE = 30;
 
 const ersc = Process.findModuleByName('ersc.dll');

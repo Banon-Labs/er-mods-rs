@@ -479,6 +479,14 @@ def selftest(img: Image) -> int:
     Written as checks rather than prose so the verdict cannot rot silently: a Seamless
     build whose protector emits a different table fails here instead of being described
     by a stale paragraph.
+
+    Every rva below is a Seamless v2.0.1 measurement, not yet re-measured for v2.0.2, and
+    against the installed v2.0.2 four checks fail. What v2.0.2 shows statically: its one
+    unreadable directory record is 0x2522c (`mov rdi, rax`, not v2.0.1's `call [rax+8]` at
+    0x249e0), and the blanket `ERSC` entry is 0x242000..0x325f12 with unwind 0xd23974. The
+    two frame pcs (0x28a85b, 0x636e75) were captured at runtime and need a v2.0.2 run, and
+    the v2.0.1 ThrowInfo 0x201658 does not parse in v2.0.2. `--dll` with
+    `vendor-archive/seamless/ersc-2.0.1.dll` still passes.
     """
     fails = []
 

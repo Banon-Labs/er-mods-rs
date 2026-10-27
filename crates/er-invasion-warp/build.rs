@@ -61,12 +61,12 @@ const PLACE_NAME_LOOKUP_VA: u64 = 0x140d13990;
 
 /// Entry points of the supported build. See `local_invasion_filter.rs` for the evidence that
 /// identifies each one; none of them was taken from a prologue match alone.
-const ERSC201_SHOW_VA: u64 = 0x1800241a0;
-const ERSC201_INVADE_ACTION_VA: u64 = 0x180025850;
-const ERSC201_CANCEL_ACTION_VA: u64 = 0x1800258d0;
-const ERSC201_LEAVE_WORLD_ACTION_VA: u64 = 0x1800259d0;
-const ERSC201_BUILD_LOBBY_KEY_VA: u64 = 0x1800ad6e0;
-const ERSC201_SESSION_LOCK_VA: u64 = 0x1800f9828;
+const ERSC202_SHOW_VA: u64 = 0x1800241c0;
+const ERSC202_INVADE_ACTION_VA: u64 = 0x180025870;
+const ERSC202_CANCEL_ACTION_VA: u64 = 0x1800258f0;
+const ERSC202_LEAVE_WORLD_ACTION_VA: u64 = 0x1800259f0;
+const ERSC202_BUILD_LOBBY_KEY_VA: u64 = 0x1800aec50;
+const ERSC202_SESSION_LOCK_VA: u64 = 0x1800fc038;
 
 /// `OSM+0x58`, the session object every option action loads first. All five actions that share
 /// the opening still start `mov rdi,[rcx+0x58]`.
@@ -77,46 +77,46 @@ const ERSC_SESSION_GUARD_POISON: i32 = 0x7fff_ffff;
 /// The session field group. The three move together and keep their relative spacing
 /// (`guard = mutex+0x4c`, `state = mutex+0x50`), so a Seamless update that shifts the group is one
 /// re-measurement with three consequences rather than three independent ones.
-const ERSC201_SESSION_MUTEX_OFFSET: i64 = 0x100;
-const ERSC201_SESSION_GUARD_OFFSET: i64 = 0x14c;
-const ERSC201_SESSION_STATE_OFFSET: i64 = 0x150;
+const ERSC202_SESSION_MUTEX_OFFSET: i64 = 0x100;
+const ERSC202_SESSION_GUARD_OFFSET: i64 = 0x14c;
+const ERSC202_SESSION_STATE_OFFSET: i64 = 0x150;
 
 /// The session-state enum. Read exhaustively rather than inferred from the two actions: a scan of
 /// every `mov dword [reg+STATE], imm32` in the build's real code enumerates the whole enum, which
 /// is what a re-measurement has to redo -- Seamless has renumbered these before.
 /// `scripts/ersc-disas.py states 0x150` reproduces it.
-const ERSC201_STATE_IDLE: i32 = 0x01;
-const ERSC201_STATE_SEARCHING: i32 = 0x0e;
-const ERSC201_STATE_CANCELLING: i32 = 0x23;
+const ERSC202_STATE_IDLE: i32 = 0x01;
+const ERSC202_STATE_SEARCHING: i32 = 0x0e;
+const ERSC202_STATE_CANCELLING: i32 = 0x23;
 
-const ERSC201_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
+const ERSC202_LOBBY_KEY_CTX_OFFSET: i64 = 0xc8;
 
 /// The early-return block the inverted idle guard branches to, past the state write.
-const ERSC201_INVADE_RETURN: u64 = 0x4e;
+const ERSC202_INVADE_RETURN: u64 = 0x4e;
 
 /// The option actions this repo pins, with every measured number in one place. `fatal_5` and
 /// `fatal_6` are byte offsets from the function entry to the two error blocks the tail branches
 /// to; both sit past the end of the pinned window, so they are named as offsets read off the
 /// disassembly rather than as encoded displacements.
-const ERSC201_INVADE: ErscAction = ErscAction {
-    va: ERSC201_INVADE_ACTION_VA,
-    lock_va: ERSC201_SESSION_LOCK_VA,
-    mutex: ERSC201_SESSION_MUTEX_OFFSET,
-    guard: ERSC201_SESSION_GUARD_OFFSET,
-    state: ERSC201_SESSION_STATE_OFFSET,
-    code: ERSC201_STATE_SEARCHING,
+const ERSC202_INVADE: ErscAction = ErscAction {
+    va: ERSC202_INVADE_ACTION_VA,
+    lock_va: ERSC202_SESSION_LOCK_VA,
+    mutex: ERSC202_SESSION_MUTEX_OFFSET,
+    guard: ERSC202_SESSION_GUARD_OFFSET,
+    state: ERSC202_SESSION_STATE_OFFSET,
+    code: ERSC202_STATE_SEARCHING,
     // Eight bytes past where the shared tail would put them: exactly the relocated return block
     // above, which sits between the guard check and these two error blocks.
     fatal_5: 0x56,
     fatal_6: 0x60,
 };
-const ERSC201_CANCEL: ErscAction = ErscAction {
-    va: ERSC201_CANCEL_ACTION_VA,
-    lock_va: ERSC201_SESSION_LOCK_VA,
-    mutex: ERSC201_SESSION_MUTEX_OFFSET,
-    guard: ERSC201_SESSION_GUARD_OFFSET,
-    state: ERSC201_SESSION_STATE_OFFSET,
-    code: ERSC201_STATE_CANCELLING,
+const ERSC202_CANCEL: ErscAction = ErscAction {
+    va: ERSC202_CANCEL_ACTION_VA,
+    lock_va: ERSC202_SESSION_LOCK_VA,
+    mutex: ERSC202_SESSION_MUTEX_OFFSET,
+    guard: ERSC202_SESSION_GUARD_OFFSET,
+    state: ERSC202_SESSION_STATE_OFFSET,
+    code: ERSC202_STATE_CANCELLING,
     fatal_5: 0x45,
     fatal_6: 0x4f,
 };
@@ -252,15 +252,15 @@ fn main() {
         &[
             (
                 PrologueSpec {
-                    name: "V201_SHOW_PROLOGUE",
+                    name: "V202_SHOW_PROLOGUE",
                     doc: "`show`, the option-menu builder, at `0x241a0`. The pin stops at the\n\
                           frame setup and is never used to identify anything: this is the one\n\
                           function the module HOOKS, so its bytes stop being the shipped bytes\n\
                           once the detour is in.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc201,
-                    va: ERSC201_SHOW_VA,
+                    image: Image::Ersc202,
+                    va: ERSC202_SHOW_VA,
                     take: 0,
                     pin: &[
                         0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
@@ -275,7 +275,7 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V201_INVADE_PROLOGUE",
+                    name: "V202_INVADE_PROLOGUE",
                     doc: "\"Invade world\" at `0x25850`, through `mov [rdi+0x150],0xe` -- the\n\
                           ONE site that writes that value into that field, which is what makes\n\
                           this pin an identification rather than a shape match. Unlike `show` it\n\
@@ -289,13 +289,13 @@ fn main() {
                           did not even move.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc201,
-                    va: ERSC201_INVADE_ACTION_VA,
+                    image: Image::Ersc202,
+                    va: ERSC202_INVADE_ACTION_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
                         0x79, 0x58, 0x83, 0xbf, 0x50, 0x01, 0x00, 0x00, 0x01, 0x75, 0x37, 0x48,
-                        0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1, 0xe8, 0xb2, 0x3f,
+                        0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1, 0xe8, 0xa2, 0x67,
                         0x0d, 0x00, 0x85, 0xc0, 0x75, 0x2c, 0x81, 0xbf, 0x4c, 0x01, 0x00, 0x00,
                         0xff, 0xff, 0xff, 0x7f, 0x74, 0x2a, 0xc7, 0x87, 0x50, 0x01, 0x00, 0x00,
                         0x0e, 0x00, 0x00, 0x00,
@@ -304,37 +304,37 @@ fn main() {
                 (|asm| {
                     ersc_option_action_opening(asm)?;
                     asm.cmp(
-                        dword_ptr(rdi + ERSC201_SESSION_STATE_OFFSET),
-                        ERSC201_STATE_IDLE,
+                        dword_ptr(rdi + ERSC202_SESSION_STATE_OFFSET),
+                        ERSC202_STATE_IDLE,
                     )?;
-                    asm.jne(ERSC201_INVADE_ACTION_VA + ERSC201_INVADE_RETURN)?;
-                    ersc_option_action_tail(asm, &ERSC201_INVADE)
+                    asm.jne(ERSC202_INVADE_ACTION_VA + ERSC202_INVADE_RETURN)?;
+                    ersc_option_action_tail(asm, &ERSC202_INVADE)
                 }) as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
-                    name: "V201_CANCEL_PROLOGUE",
+                    name: "V202_CANCEL_PROLOGUE",
                     doc: "\"Cancel search\" at `0x258d0`, through `mov [rdi+0x150],0x23`. The\n\
                           unguarded option-action shape: no state precondition, straight into the\n\
                           shared mutex/guard tail.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc201,
-                    va: ERSC201_CANCEL_ACTION_VA,
+                    image: Image::Ersc202,
+                    va: ERSC202_CANCEL_ACTION_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
                         0x79, 0x58, 0x48, 0x8d, 0xb7, 0x00, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf1,
-                        0xe8, 0x3b, 0x3f, 0x0d, 0x00, 0x85, 0xc0, 0x75, 0x24, 0x81, 0xbf, 0x4c,
+                        0xe8, 0x2b, 0x67, 0x0d, 0x00, 0x85, 0xc0, 0x75, 0x24, 0x81, 0xbf, 0x4c,
                         0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0x7f, 0x74, 0x22, 0xc7, 0x87, 0x50,
                         0x01, 0x00, 0x00, 0x23, 0x00, 0x00, 0x00,
                     ],
                 },
-                (|asm| ersc_cancel_action(asm, &ERSC201_CANCEL)) as prologue_build::Assemble,
+                (|asm| ersc_cancel_action(asm, &ERSC202_CANCEL)) as prologue_build::Assemble,
             ),
             (
                 PrologueSpec {
-                    name: "V201_LEAVE_WORLD_PROLOGUE",
+                    name: "V202_LEAVE_WORLD_PROLOGUE",
                     doc: "`OPTIONSELECT_LEAVEWORLD` at `0x259d0`: the shared option-action\n\
                           opening, and nothing more. Deliberately short, because these fourteen\n\
                           bytes are BYTE-IDENTICAL to the invade action\'s opening -- every\n\
@@ -345,8 +345,8 @@ fn main() {
                           with this row.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc201,
-                    va: ERSC201_LEAVE_WORLD_ACTION_VA,
+                    image: Image::Ersc202,
+                    va: ERSC202_LEAVE_WORLD_ACTION_VA,
                     take: 0,
                     pin: &[
                         0xf3, 0x0f, 0x1e, 0xfa, 0x56, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b,
@@ -357,7 +357,7 @@ fn main() {
             ),
             (
                 PrologueSpec {
-                    name: "V201_BUILD_LOBBY_KEY_PROLOGUE",
+                    name: "V202_BUILD_LOBBY_KEY_PROLOGUE",
                     doc: "`BuildLobbyKey` at `0xad6e0`: eight callee-saved pushes, a `0x108`\n\
                           frame, the out-param in `rsi`, and the ctx field at `+0xc8`.\n\n\
                           Method note for the next re-pin: at the previous update this pin\'s\n\
@@ -367,8 +367,8 @@ fn main() {
                           candidate before pinning it.",
                     visibility: "pub",
                     shape: Shape::Slice,
-                    image: Image::Ersc201,
-                    va: ERSC201_BUILD_LOBBY_KEY_VA,
+                    image: Image::Ersc202,
+                    va: ERSC202_BUILD_LOBBY_KEY_VA,
                     take: 0,
                     pin: &[
                         0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x56, 0x57, 0x53,
@@ -385,7 +385,7 @@ fn main() {
                     asm.movaps(xmmword_ptr(rbp + 0x70), xmm6)?;
                     asm.mov(qword_ptr(rbp + 0x68), -2)?;
                     asm.mov(rsi, rdx)?;
-                    asm.cmp(qword_ptr(rcx + ERSC201_LOBBY_KEY_CTX_OFFSET), 0)?;
+                    asm.cmp(qword_ptr(rcx + ERSC202_LOBBY_KEY_CTX_OFFSET), 0)?;
                     Ok(())
                 }) as prologue_build::Assemble,
             ),

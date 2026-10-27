@@ -27,7 +27,7 @@
 // Read-only until it fires: it locates the session, reports what it found, and calls cancel once.
 'use strict';
 
-const CANCEL = 0x258d0;
+const CANCEL = 0x258f0; // Seamless v2.0.2 (v2.0.1 0x258d0)
 const STATE = 0x150;
 const GUARD = 0x14c;
 const MUTEX = 0x100;

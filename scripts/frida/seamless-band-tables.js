@@ -71,10 +71,13 @@ const STRING_FILTER_SLOT = 5;
 // readiness the DLL already waits on, which is the pattern `scripts/check-no-timeouts.py` exists
 // to refuse; reload the agent file to ask again, which is the workflow `er-frida-watch.py` is for.
 
-// Measured against `vendor-archive/seamless/ersc-2.0.1.dll`. A different Seamless build moves this
-// and the read below would be pointed at whatever code now lives there, so the banner prints the
-// module size as the build's fingerprint and the caller checks it before believing the numbers.
-const BAND_RVA = 0xa97b0;
+// Measured against `vendor-archive/seamless/ersc-2.0.1.dll` at 0xa97b0 and carried to Seamless
+// v2.0.2 (`vendor-archive/seamless/ersc-2.0.2.dll`) by a unique `.pdata` neighbour-size match; the
+// v2.0.2 body reads the same `[rcx+0x70/0x78]` and `[rcx+0x88/0x90]` vectors. A different Seamless
+// build moves this and the read below would be pointed at whatever code now lives there, so the
+// banner prints the module size as the build's fingerprint and the caller checks it before
+// believing the numbers.
+const BAND_RVA = 0xaad20;
 
 // The object's two vectors, as byte offsets from `rcx`.
 const LEVEL_BEGIN = 0x70;

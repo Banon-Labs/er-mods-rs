@@ -2,16 +2,19 @@
 """Recover the exact bytes Seamless hashes into `lobby_key`, and re-derive the key from them.
 
 Read statically out of the decrypted image (`ersc+0xad6e0`, the builder the `lobby_key` filter call
-at `ersc+0xac4d1` calls):
+at `ersc+0xac4d1` calls; Seamless v2.0.1 addresses, v2.0.2 has them at 0xaec50 and 0xada41):
 
     lobby_key = sha256_hex( B + A + SALT32 )
 
     B      built from the object at settings+0xc8 -- two byte ranges, [+0x08,+0x10) and [+0x20,+0x28)
     A      decimal string of bit 2 of settings+0x281, so "0" or "1"
-    SALT32 "2XfW3z/+eN0vdnEFP8pGxtoHpJ/4bxdC", a constant baked into ersc 2.0.1
+    SALT32 "2XfW3z/+eN0vdnEFP8pGGtoHpJ/4bxdC", a constant baked into ersc 2.0.2 at 0x1801e43b8,
+           loaded by the builder's `movups` at 0x1800aee25. v2.0.1 had
+           "2XfW3z/+eN0vdnEFP8pGxtoHpJ/4bxdC" at 0x1801e20d8: one byte differs, so v2.0.1 and
+           v2.0.2 keys never match.
 
-This hooks the one `sha256_update` call in that builder (`ersc+0xe29a0`, return address
-`ersc+0xad911`) and captures its buffer. Hashing that buffer here and matching the key the search
+This hooks the one `sha256_update` call in that builder (`ersc+0xe51b0`, return address
+`ersc+0xaee81`; v2.0.1 0xe29a0 / 0xad911) and captures its buffer. Hashing that buffer here and matching the key the search
 actually sends turns the static reading into a closed proof rather than a plausible one.
 """
 from __future__ import annotations
@@ -34,12 +37,13 @@ _cap = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(_cap)
 
-SALT32 = b"2XfW3z/+eN0vdnEFP8pGxtoHpJ/4bxdC"
+SALT32 = b"2XfW3z/+eN0vdnEFP8pGGtoHpJ/4bxdC"  # Seamless v2.0.2 (v2.0.1 ...P8pGxto...)
 HOOK = """
 const ersc = Process.findModuleByName('ersc.dll');
 const steam = Process.findModuleByName('lsteamclient.dll');
-const RET_IN_BUILDER = ersc.base.add(0xad911);
-Interceptor.attach(ersc.base.add(0xe29a0), {
+// Seamless v2.0.2 (v2.0.1 0xad911, 0xe29a0).
+const RET_IN_BUILDER = ersc.base.add(0xaee81);
+Interceptor.attach(ersc.base.add(0xe51b0), {
   onEnter (args) {
     if (!this.returnAddress.equals(RET_IN_BUILDER)) return;
     const len = args[2].toUInt32();
@@ -89,7 +93,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.selftest:
         assert hashlib.sha256(b"a" + SALT32).hexdigest()
-        assert "0xad911" in HOOK
+        assert "0xaee81" in HOOK
         print("selftest: ok")
         return 0
 

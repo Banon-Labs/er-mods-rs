@@ -80,7 +80,8 @@ rpc.exports = {
   adoptCached () {
     const ersc = Process.findModuleByName('ersc.dll');
     if (ersc === null) return false;
-    try { hookVtable(ersc.base.add(0x21b610).readPointer(), 'ersc-cached'); return true; }
+    // SteamMatchMaking009 slot, Seamless v2.0.2 (v2.0.1 0x21b610).
+    try { hookVtable(ersc.base.add(0x21d610).readPointer(), 'ersc-cached'); return true; }
     catch (e) { return false; }
   },
 };

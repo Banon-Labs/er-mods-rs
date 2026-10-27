@@ -13,8 +13,9 @@
 'use strict';
 
 const SET_MULTIPLAY_JOIN_DATA = 0x6fc820;   // 1.17.1 runtime rva (1.17.1 0x6fc370)
-const ERSC_INVADE = 0x25850;
-const ERSC_CANCEL = 0x258d0;
+// Seamless v2.0.2 rvas (v2.0.1: invade 0x25850, cancel 0x258d0).
+const ERSC_INVADE = 0x25870;
+const ERSC_CANCEL = 0x258f0;
 
 const game = Process.enumerateModules()[0];
 const ersc = Process.findModuleByName('ersc.dll');

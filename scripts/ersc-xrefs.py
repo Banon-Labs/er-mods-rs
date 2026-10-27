@@ -6,15 +6,15 @@ every function `.pdata` declares, decodes it, and records every direct `call`/`j
 whose target is an immediate, so a question like "who locks this mutex" is answered by
 reading the binary rather than by guessing from one site.
 
-    uv run --with capstone python3 scripts/ersc-xrefs.py --to 0xf9828
-    uv run --with capstone python3 scripts/ersc-xrefs.py --to 0xf9828 --depth 2
+    uv run --with capstone python3 scripts/ersc-xrefs.py --to 0xfc038      # `_Mtx_lock`, v2.0.2 (v2.0.1 0xf9828)
+    uv run --with capstone python3 scripts/ersc-xrefs.py --to 0xfc038 --depth 2
     uv run --with capstone python3 scripts/ersc-xrefs.py --data-xrefs 0x1f2a30
 
 `--to` lists direct callers. `--depth N` walks callers-of-callers N levels up.
 `--data-xrefs` finds `lea reg,[rip+disp]` and `mov reg,[rip+disp]` operands that resolve
 to an rva, which is how a function pointer handed to a hook installer is found.
 
-    uv run --with capstone python3 scripts/ersc-xrefs.py --sweep-refs 0x258d0
+    uv run --with capstone python3 scripts/ersc-xrefs.py --sweep-refs 0x258f0   # cancel, v2.0.2 (v2.0.1 0x258d0)
     uv run --with capstone python3 scripts/ersc-xrefs.py --field 0x150
     uv run --with capstone python3 scripts/ersc-xrefs.py --field-values 0x150
 

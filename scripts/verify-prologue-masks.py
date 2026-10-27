@@ -378,7 +378,7 @@ def selftest() -> int:
     expect("a hand-written seam is compared exactly, so the relocated body disarms",
            classify_masked(seam, data, {})[0] == "DISARMS")
     expect("an ersc pin is a named skip",
-           classify_masked(("c", "S", "Ersc201", BASE, "V", B72_PIN), data, {})[0] == "SKIP")
+           classify_masked(("c", "S", "Ersc202", BASE, "V", B72_PIN), data, {})[0] == "SKIP")
     print(f"\nselftest: {problems} problem(s)")
     return problems
 

@@ -36,7 +36,7 @@ const REPORT_READS = false;
 
 // `ersc!show(OSM, groupId)` -- Seamless building any of its option menus. The one place the
 // option-menu object is handed over without a row having been clicked.
-const SHOW = 0x241a0;
+const SHOW = 0x241c0; // Seamless v2.0.2 (v2.0.1 0x241a0)
 // `OSM+0x58` is the session; `session+0x00` is the game-rule flags qword.
 const NEXT_OBJECT = 0x58;
 // `session+0x150` is the state. The codes this build reverses, plus `6`, which the three toggle
@@ -133,26 +133,28 @@ const PAD_BUILDER_RVA = 0x240e70;
 
 // The plaintext option actions, read out of `.pdata` in `vendor-archive/seamless/ersc-2.0.1.dll`
 // (`0x25800 <= start < 0x26e00`). Four already have names, from `local_invasion_filter::ersc`.
+// These are the Seamless v2.0.2 entries: every one sits 0x20 above its v2.0.1 address (0x25850,
+// 0x258d0, ... 0x26dc0), each a unique `.pdata` neighbour-size match.
 const ACTIONS = [
-  [0x25850, 'invade'],
-  [0x258d0, 'cancel'],
-  [0x25940, null],
-  [0x259d0, 'leave-world'],
-  [0x25a50, 'toggle-pvp'],
-  [0x25bd0, 'toggle-pvp-teams'],
-  [0x25d50, 'toggle-friendly-fire'],
-  [0x25f00, null],
-  [0x26030, null],
-  [0x26180, null],
-  [0x26210, null],
-  [0x262c0, null],
-  [0x26370, null],
-  [0x264e0, null],
-  [0x26650, null],
-  [0x267c0, null],
-  [0x26930, null],
-  [0x26b80, null],
-  [0x26dc0, null],
+  [0x25870, 'invade'],
+  [0x258f0, 'cancel'],
+  [0x25960, null],
+  [0x259f0, 'leave-world'],
+  [0x25a70, 'toggle-pvp'],
+  [0x25bf0, 'toggle-pvp-teams'],
+  [0x25d70, 'toggle-friendly-fire'],
+  [0x25f20, null],
+  [0x26050, null],
+  [0x261a0, null],
+  [0x26230, null],
+  [0x262e0, null],
+  [0x26390, null],
+  [0x26500, null],
+  [0x26670, null],
+  [0x267e0, null],
+  [0x26950, null],
+  [0x26ba0, null],
+  [0x26de0, null],
 ];
 
 let SESSION = NULL;
@@ -442,6 +444,8 @@ if (ersc === null) {
   // `rbp`, so one address serves every write the VM performs. Instruction-level attribution is
   // therefore dead on this target, and the field has to be identified by which value changes
   // across a clean window instead.
+  // A Seamless v2.0.1 address inside the Themida `ERSC` section, not yet re-measured for v2.0.2
+  // (that section is packed in the file, so it cannot be carried statically).
   const WRITER = 0x2646e6;
   try {
     const at = ersc.base.add(WRITER);
@@ -643,6 +647,7 @@ if (ersc === null) {
       say({ kind: 'search-hooks-failed', error: e.message });
     }
 
+    // Seamless v2.0.1 addresses inside the Themida `ERSC` section, not yet re-measured for v2.0.2.
     const PUBLISH_SITES = [0x612d8a, 0x623448, 0x624289];
     const SITE_WINDOW = 0x180;
     PUBLISH_SITES.forEach(function (rva) {
@@ -808,7 +813,7 @@ if (ersc === null) {
   // So it copies two small things instead: the module's real `.data` section, and the session
   // object. Seamless's own per-session state is in one of those or it is somewhere this has to be
   // widened to DELIBERATELY, with the cost measured first.
-  const ERSC_DATA_RVA = 0x21a000;
+  const ERSC_DATA_RVA = 0x21c000; // `.data`, Seamless v2.0.2 (v2.0.1 0x21a000); same 0x809c size
   const ERSC_DATA_SIZE = 0x809c;
   const SESSION_BYTES = 0x1000;
 
@@ -837,6 +842,7 @@ if (ersc === null) {
   // Everything wider has now been measured and is not worth its cost: `.data` and the session
   // answered zero, all 11.5 MB of the module's writable pages answered zero, and copying that much
   // is what made the game sluggish and, on a timer, killed it outright.
+  // A Seamless v2.0.1 address inside the Themida `ERSC` section, not yet re-measured for v2.0.2.
   const LEAD_RVA = 0x24de00;
   const LEAD_SIZE = 0x200;
 
@@ -1186,7 +1192,9 @@ if (ersc === null) {
   // would keep advertising after the game had stopped honouring the rule, which is the exact
   // failure the key must not have. So watch it, and watch the rules qword beside it, and say every
   // change with its neighbours -- what matters is not that it went up but whether it comes down.
-  const RULE_BYTE_RVA = 0x21ad70;
+  // Seamless v2.0.2 (v2.0.1 0x21ad70, measured above): `.data+0xd70` in both builds, and the two
+  // CRT functions that `lea` it in v2.0.1 do the same to 0x21cd70 in v2.0.2.
+  const RULE_BYTE_RVA = 0x21cd70;
   const RULE_BYTE_CONTEXT = 8;
   let lastRuleBytes = null;
   let lastRules = null;
