@@ -12,16 +12,18 @@ const CONFIG = globalThis.__ER_FRIDA_CONFIG || {};
 const SESSION_ID = CONFIG.session_id || globalThis.NPC_NETSYNC_SESSION_ID || 'manual';
 const TARGET = CONFIG.npc_netsync_target || globalThis.NPC_NETSYNC_TARGET || null;
 const IMAGE_BASE = ptr('0x140000000');
+// Seamless v2.0.2 `.data` slots. v2.0.1 had the same nine-slot table 0x2000 lower
+// (0x21b570..0x21b670), following `.data` itself from 0x21a000 to 0x21c000.
 const ERSC_STEAM_IFACES = {
-  0x21b570: 'SteamClient020',
-  0x21b590: 'SteamUtils010',
-  0x21b5b0: 'STEAMAPPS_INTERFACE_VERSION008',
-  0x21b5d0: 'SteamUser021',
-  0x21b5f0: 'SteamFriends017',
-  0x21b610: 'SteamMatchMaking009',
-  0x21b630: 'SteamNetworking006',
-  0x21b650: 'SteamNetworkingUtils003',
-  0x21b670: 'SteamNetworkingMessages002',
+  0x21d570: 'SteamClient020',
+  0x21d590: 'SteamUtils010',
+  0x21d5b0: 'STEAMAPPS_INTERFACE_VERSION008',
+  0x21d5d0: 'SteamUser021',
+  0x21d5f0: 'SteamFriends017',
+  0x21d610: 'SteamMatchMaking009',
+  0x21d630: 'SteamNetworking006',
+  0x21d650: 'SteamNetworkingUtils003',
+  0x21d670: 'SteamNetworkingMessages002',
 };
 const STEAM_NETWORKING_MESSAGES_SLOTS = {
   0: 'SendMessageToUser',

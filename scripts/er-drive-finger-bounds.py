@@ -55,9 +55,9 @@ def main(argv: list[str]) -> int:
                          "before raising the bounds prompt")
     ap.add_argument("--redirect", metavar="OWNER",
                     help="hex pointer whose +0x58 is the Seamless session; a Both-near-and-far "
-                         "answer then calls ersc+0x25850 with it instead of the vanilla request")
+                         "answer then calls ersc+0x25870 with it instead of the vanilla request")
     ap.add_argument("--ersc-trace", action="store_true",
-                    help="count calls to Seamless's option actions. This hooks ersc+0x25850, which "
+                    help="count calls to Seamless's option actions. This hooks ersc+0x25870, which "
                          "er_invasion_warp byte-checks before calling, so the DLL's own invade "
                          "drive is refused for as long as it is armed. Diagnostic only.")
     ap.add_argument("--selftest", action="store_true")

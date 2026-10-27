@@ -19,7 +19,8 @@
 //
 // Nothing is hooked inside `ersc.dll`: its action is CALLED, never patched, because a trampoline on
 // that entry breaks the prologue check `er_invasion_warp.dll` makes before every call to it.
-const INVADE_RVA = 0x25850;
+// Seamless v2.0.2 (v2.0.1 0x25850). Addresses in the prose of this file are the v2.0.1 ones.
+const INVADE_RVA = 0x25870;
 const SESSION_MUTEX_OFFSET = 0x100;
 const SESSION_STATE_OFFSET = 0x150;
 const OWNER_SESSION_OFFSET = 0x58;
@@ -521,7 +522,7 @@ void watch (void) {
       waitSaid = true;
       console.log(
         'finger: no session yet -- use the Challenger\'s Lynchpin ONCE so Seamless hands its own ' +
-          'object through ersc+0x25850, then the fingers will drive it'
+          'object through ersc+0x25870, then the fingers will drive it'
       );
       return;
     }
@@ -577,7 +578,7 @@ void watch (void) {
   // read from the interface `ersc.dll` itself holds at `ersc+0x21b610`, not from one resolved here,
   // because a wrapper of our own would be a different object and the count would mean nothing.
   const SLOTS = { RequestLobbyList: 4, AddRequestLobbyListStringFilter: 5, CreateLobby: 13, JoinLobby: 14 };
-  const ERSC_MATCHMAKING_SLOT = 0x21b610;
+  const ERSC_MATCHMAKING_SLOT = 0x21d610; // Seamless v2.0.2 (v2.0.1 0x21b610)
   try {
     const iface = ersc.base.add(ERSC_MATCHMAKING_SLOT).readPointer();
     const vtable = iface.readPointer();
@@ -640,7 +641,7 @@ void watch (void) {
   //
   // So any Seamless menu the player opens arms this, and the invade hook below is only a second
   // chance.
-  const SHOW_RVA = 0x241a0;
+  const SHOW_RVA = 0x241c0; // Seamless v2.0.2 (v2.0.1 0x241a0)
   Interceptor.attach(ersc.base.add(SHOW_RVA), {
     onEnter (args) {
       if (!cfg.add(0x08).readPointer().isNull()) {

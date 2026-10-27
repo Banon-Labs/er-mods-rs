@@ -85,9 +85,11 @@ let autoConfirm = true;
 // alone. Once the in-invasion menu's group is in the transcript it can be excluded by name.
 let invadeMenuGroup = null;
 
-const SHOW = 0x241a0;
-const INVADE = 0x25850;
-const CANCEL = 0x258d0;
+// Seamless v2.0.2 rvas (v2.0.1: show 0x241a0, invade 0x25850, cancel 0x258d0). Addresses in the
+// prose of this file are the v2.0.1 ones they were measured at.
+const SHOW = 0x241c0;
+const INVADE = 0x25870;
+const CANCEL = 0x258f0;
 const STATES = [0x01, 0x0e, 0x13, 0x23];
 // MSVC's `_Mtx_internal_imp_t::_Type`: plain, try, or recursive. Anything else is not a mutex and
 // the object is not a session, which is what keeps a look-alike qword out of the answer.

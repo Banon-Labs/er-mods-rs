@@ -12,6 +12,9 @@
 //   0x18007c423   lea rax,[rip+0x163f6]          -> 0x180092820
 //   0x18007c42a   mov [rbp+0xf0], rax            <- the function, one qword after it
 //
+// That listing is Seamless v2.0.1. In v2.0.2 the same three instructions sit at 0x18007d43e /
+// 0x18007d445 (`lea rax,[rip+0x16514]` -> 0x180093960) / 0x18007d44c.
+//
 // and the handler reads `owner = [captured+0x58]`, `session = [owner+0x58]`. So the function
 // pointer is a unique 8-byte needle: find it in writable memory, read the qword BEFORE it, and the
 // owner chain follows. No menu, no item, no heuristic.
@@ -20,7 +23,7 @@
 // wrong hit is visible as an implausible state rather than being adopted silently.
 'use strict';
 
-const HANDLER_RVA = 0x92820;
+const HANDLER_RVA = 0x93960; // Seamless v2.0.2 (v2.0.1 0x92820)
 const OWNER_AT_CAPTURED_OFFSET = 0x58;
 const SESSION_AT_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;

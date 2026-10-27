@@ -12,7 +12,7 @@
 // action, so it cannot come from anywhere else.
 'use strict';
 
-const INVADE = 0x25850;
+const INVADE = 0x25870; // Seamless v2.0.2 (v2.0.1 0x25850)
 const NEXT_OBJECT = 0x58;
 const TAG_OFFSET = 0x68;
 const STATE = 0x150;

@@ -58,7 +58,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--rounds", type=int, default=30,
                     help="how many settle rounds to wait for four filters")
     ap.add_argument("--redirect", metavar="OWNER",
-                    help="drive the finger's confirm into ersc+0x25850 with this owner, so the "
+                    help="drive the finger's confirm into ersc+0x25870 with this owner, so the "
                          "search it starts can be compared against a Lynchpin search's filters")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)

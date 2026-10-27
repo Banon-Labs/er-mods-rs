@@ -32,8 +32,10 @@
 // reporting either way, so this file stays the microscope while the DLL is under test.
 const ENFORCE = false;
 
-const INVADE = 0x25850;
-const CANCEL = 0x258d0;
+// Seamless v2.0.2 rvas (v2.0.1: invade 0x25850, cancel 0x258d0). Addresses in the prose of this
+// file are the v2.0.1 ones they were measured at.
+const INVADE = 0x25870;
+const CANCEL = 0x258f0;
 const NEXT_OBJECT = 0x58;
 const STATE = 0x150;
 // Measured as 1.17.1 relative virtual addresses, taken from the translation lines the DLL logged

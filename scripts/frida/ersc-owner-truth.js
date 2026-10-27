@@ -7,8 +7,9 @@
 // printed beside the pointer `er_invasion_warp` picked by scanning. No writes, no replacements.
 'use strict';
 
-const ERSC_SHOW_RVA = 0x241a0;
-const ERSC_INVADE_RVA = 0x25850;
+// Seamless v2.0.2 rvas (v2.0.1: show 0x241a0, invade 0x25850).
+const ERSC_SHOW_RVA = 0x241c0;
+const ERSC_INVADE_RVA = 0x25870;
 const SESSION_AT_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;
 const OPEN_DIALOG_RVA = 0xea1a50; // 1.17.1 0xea0360

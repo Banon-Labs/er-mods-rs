@@ -40,8 +40,9 @@
 // `eldenring.exe+0x10043` fault at +35.7s on 2026-09-09.
 'use strict';
 
-const SHOW = 0x241a0;
-const INVADE = 0x25850;
+// Seamless v2.0.2 rvas (v2.0.1: show 0x241a0, invade 0x25850).
+const SHOW = 0x241c0;
+const INVADE = 0x25870;
 const NEXT_OBJECT = 0x58;
 const STATE = 0x150;
 const EXPORT_MODULE = 'er_invasion_warp.dll';

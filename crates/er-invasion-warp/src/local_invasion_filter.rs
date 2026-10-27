@@ -2141,8 +2141,18 @@ pub fn judge_incoming_match(join_data: usize) {
     // The join has started, so the real session has just left idle. Re-read the addresses recorded
     // while nothing was happening and keep only the ones that moved -- see `differential_scan` for
     // why that is the only test a look-alike object cannot pass.
+    //
+    // Only when nothing has identified the session already. The scan is a heuristic for runs with
+    // no menu object and no needle hit, and its test is the invade action's transition: a co-op
+    // join leaves the real session at `0x0d`, which `is_active_state` does not accept. Run
+    // br-20261027-163119-9946 had the needle's session `0x469ac790` sitting at `0x0d` holding the
+    // host's lobby, and the scan still adopted `0x8477c1c8`, whose state field read `0xb8171c6e`.
     #[cfg(windows)]
     if let Some(abi) = resolve_ersc_abi()
+        && OSM.load(Ordering::SeqCst) == 0
+        && ersc_module_base()
+            .and_then(|base| session_scan::cached_owner_from_item_handler_closure(base, abi))
+            .is_none()
         && let Some(session) = differential_scan::narrow_to_changed(abi)
     {
         crate::standalone_log(format_args!(

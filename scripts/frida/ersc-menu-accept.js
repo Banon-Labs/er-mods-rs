@@ -13,7 +13,7 @@
 //
 // Nothing in either module holds its address and no rel32 reaches it, so the caller lives in the
 // Themida-virtualized region.  A hook is the only way to name it, and it names it exactly.
-const HANDLER = 0x82600;
+const HANDLER = 0x83710; // Seamless v2.0.2 (v2.0.1 0x82600, the address the prose above was read at)
 const SESSION_OWNER = 0x58;
 const ROWS_BEGIN = 0x108;
 const ROWS_END = 0x110;

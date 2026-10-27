@@ -7,7 +7,7 @@ out of the vtable it sits in. `.rdata` stores vtable slots as absolute 64-bit vi
 addresses, so a qword scan finds the slot; slot -1 is the `RTTICompleteObjectLocator`,
 whose type descriptor carries the decorated class name.
 
-    uv run --with capstone python3 scripts/ersc-vtable.py 0x71dc0 0x73630
+    uv run --with capstone python3 scripts/ersc-vtable.py 0x72d10 0x74580   # v2.0.2; v2.0.1 0x71dc0 0x73630
     uv run --with capstone python3 scripts/ersc-vtable.py --dump-vtable 0x1a2b30
 """
 

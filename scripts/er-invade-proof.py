@@ -195,7 +195,7 @@ def main(argv: list[str]) -> int:
         print(f"watching for a query, up to {args.seconds}s, without driving", flush=True)
     else:
         print(
-            "DRIVING ersc+0x25850 on the live session now -- the same call Seamless's own "
+            "DRIVING ersc+0x25870 on the live session now -- the same call Seamless's own "
             "Invade row makes",
             flush=True,
         )

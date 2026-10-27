@@ -21,6 +21,8 @@ import struct
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Seamless v2.0.1: no v2.0.2 runtime dump exists yet, so the default image, and the v2.0.1 example
+# address in the docstring that goes with it, are not yet re-measured for v2.0.2.
 DEFAULT_IMAGE = ROOT / "vendor-archive" / "seamless" / "ersc-2.0.1.runtime.bin"
 BASE = 0x180000000
 
