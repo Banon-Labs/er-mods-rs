@@ -366,7 +366,7 @@ pub const CATALOG: &[Mod] = &[
         blurb: "Every player's voice comes out of their character, fading with distance and echoing in caves, over Steam voice. Everyone in the session needs it.",
         category: "multiplayer",
         audience: "player",
-        default_on: false,
+        default_on: true,
         needs_seamless: true,
         caution: None,
         included_in: &[],

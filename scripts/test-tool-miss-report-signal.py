@@ -53,10 +53,22 @@ def event_for(path: Path, tool_use_id: str, prompt: str, tool: str = "Agent", **
     return ev
 
 
-def run_signal(event: dict) -> str:
-    proc = subprocess.run(["bash", str(SIGNAL)], input=json.dumps(event), text=True,
-                          capture_output=True, timeout=20)
-    return proc.stdout.strip()
+def run_signal(event: dict, expect_line: bool = True) -> str:
+    """Run the signal once, or up to three times when a line is expected and none came back.
+
+    The signal caps its reader at 4.5 s and fails open on the cap, printing nothing. Under the
+    pre-push suite's load that cap was reached once: the policy stage of the 08596b69 push failed
+    `an ordinary prompt reads reported=0` with an empty output, and the test passed five times
+    out of five when run alone. An empty line from a timeout is not the verdict under test, so it
+    is retried; a case that expects nothing runs once.
+    """
+    for _ in range(3 if expect_line else 1):
+        proc = subprocess.run(["bash", str(SIGNAL)], input=json.dumps(event), text=True,
+                              capture_output=True, timeout=20, check=False)
+        out = proc.stdout.strip()
+        if out or not expect_line:
+            return out
+    return out
 
 
 def chain_after(prompt: str, tool_use_id: str) -> Chain:
@@ -91,15 +103,15 @@ def main() -> int:
         check("a notification is not the user's report", out.startswith("TOOLMISS|reported=0|"), out)
 
         p = chain_after(REPORT, "toolu_d").write(tmp / "d.jsonl")
-        out = run_signal(event_for(p, "toolu_d", PRODUCT, agent_id="sub-1"))
+        out = run_signal(event_for(p, "toolu_d", PRODUCT, agent_id="sub-1"), expect_line=False)
         check("a subagent's dispatch is not judged", out == "", out)
 
         p = chain_after(REPORT, "toolu_e").write(tmp / "e.jsonl")
         out = run_signal({**event_for(p, "toolu_e", PRODUCT), "tool_name": "Bash",
-                          "tool_input": {"command": "ls"}})
+                          "tool_input": {"command": "ls"}}, expect_line=False)
         check("a non-dispatch tool prints nothing", out == "", out)
 
-        out = run_signal(event_for(tmp / "missing.jsonl", "toolu_f", PRODUCT))
+        out = run_signal(event_for(tmp / "missing.jsonl", "toolu_f", PRODUCT), expect_line=False)
         check("an unreadable transcript fails open", out == "", out)
 
         if shutil.which("cupcake") is None:

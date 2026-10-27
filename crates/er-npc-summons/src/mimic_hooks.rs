@@ -39,6 +39,14 @@
 //!
 //! Each companion built is also named for its slot ([`crate::names`]); a companion's Lua brain is
 //! loaded by [`crate::brains`], keyed by the think id the plan gives it.
+//!
+//! # Other players
+//!
+//! The same `CreateSummonChr` detour runs on every other player's machine when the game builds
+//! their copy of a companion from packet 78 (`fromNetwork = 1`). Each companion built here is
+//! announced to them from inside this detour ([`crate::net::announce_built`]), and a copy built
+//! here from someone else's packet is dressed and named from what that player announced
+//! ([`remote_create`]), through the same row copy and the same `GetCharaInitParam` handler.
 
 #![cfg(windows)]
 
@@ -54,6 +62,7 @@ use er_game_base::mem::{
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn};
 use er_npc_summons_core::dress::{CHARA_INIT_ROW_SIZE, CharaInitGear};
 use er_npc_summons_core::mimic::{self, BUDDY_ROW_SIZE, HUMAN_ROW, MIMIC_TRIGGER, RowValues};
+use er_npc_summons_core::net::{Basis, Triple};
 use er_npc_summons_core::row_copy::RowCopies;
 use windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -489,6 +498,18 @@ unsafe extern "system" fn create_detour(
             mogh,
         )
     };
+    if from_network != 0 && !hijacking() {
+        return remote_create(
+            steam_id,
+            handle,
+            Triple {
+                npc,
+                think,
+                chara_init,
+            },
+            call,
+        );
+    }
     if !hijacking() {
         return call();
     }
@@ -507,6 +528,9 @@ unsafe extern "system" fn create_detour(
         if chr != 0 {
             crate::names::name_companion(slot, chr);
             crate::team::adopt(slot, chr);
+            // Before `BuddyGenerator` broadcasts packet 78 for it, so a peer usually holds the
+            // announcement when its own `CreateSummonChr` runs.
+            crate::net::announce_built(slot, chr);
         }
         chr
     };
@@ -555,8 +579,109 @@ unsafe extern "system" fn create_detour(
         gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
     ));
     if chr != 0 {
-        apply_face(slot, chr);
+        apply_face(
+            &format!("companion {slot}"),
+            crate::dress::face_for(slot),
+            chr,
+        );
     }
+    chr
+}
+
+/// A character the game builds from another player's packet 78 (`fromNetwork = 1`, from
+/// `SummonBuddyManager::CreateBuddyFromPacket`, 2.7.2.0 `0x1404b7d80`, call at `0x1404b7eed`).
+/// `steam_id` points at the summoner's SteamID and `handle` at the `FieldInsHandle` the packet
+/// carried, which the character is built under (`ChrSet::SpawnSummonBuddy`, `0x1404932f0`). That
+/// spawn reaches `ChrInsFactory::CreateCharacter` (`0x140403e60`, called at `0x1404933dd`) before
+/// it returns, so the companion's `CharaInitParam` lookup happens inside this call on this thread,
+/// exactly as on the summoner's side.
+///
+/// When the summoner told this player which companion it is ([`crate::net`]), it is built from a
+/// copy of its row wearing the summoner's build and named as the summoner named it. Anything else
+/// is built exactly as the packet says, and recorded so a roster arriving later still names it.
+fn remote_create(
+    steam_id: usize,
+    handle: usize,
+    triple: Triple,
+    call: impl FnOnce() -> usize,
+) -> usize {
+    // SAFETY: fault-tolerant reads of the caller's two eight-byte arguments.
+    let owner = unsafe { safe_read_usize(steam_id) }.map(|v| v as u64);
+    let handle = unsafe { safe_read_usize(handle) }.map(|v| v as u64);
+    let (Some(owner), Some(handle)) = (owner, handle) else {
+        return call();
+    };
+    let Triple {
+        npc,
+        think,
+        chara_init,
+    } = triple;
+    let who = format!("owner {owner:#018x} handle 0x{handle:x}");
+    let Some(resolved) = crate::net::resolve_remote(owner, handle, triple) else {
+        let chr = call();
+        crate::net::record_remote(owner, handle, triple, chr, None);
+        summons_log(format_args!(
+            "net: remote CreateSummonChr {who} (npc {npc}, think {think}, charaInit {chara_init}) \
+             built 0x{chr:x} as the packet says: its summoner has announced no companion on this \
+             body"
+        ));
+        return chr;
+    };
+    let entry = resolved.entry.clone();
+    let label = format!(
+        "remote companion {who} slot {} \"{}\" ({})",
+        entry.slot,
+        entry.name,
+        match resolved.basis {
+            Basis::Announced => "announced",
+            Basis::Guessed => "guessed from its body",
+        }
+    );
+    let gear = match entry.share_id.as_deref() {
+        None => Err("its summoner gives it no build".to_owned()),
+        Some(id) => crate::dress::remote_gear_for(id),
+    };
+    let dressed = match (gear, u32::try_from(chara_init)) {
+        (Err(why), _) => Err(why),
+        (Ok(_), Err(_)) => Err(format!("charaInit {chara_init} builds no human")),
+        (Ok(_), Ok(_)) if !CHARA_INIT_HOOKED.load(Ordering::Acquire) => {
+            Err("GetCharaInitParam is not hooked on this build".to_owned())
+        }
+        (Ok(found), Ok(id)) => Ok((found, id)),
+    };
+    let (chr, outcome) = match dressed {
+        Err(why) => (
+            call(),
+            format!("not dressed ({why}), wears charaInit {chara_init}'s own gear"),
+        ),
+        Ok(((gear, build), id)) => {
+            begin_dress(id, gear);
+            let chr = call();
+            let (served, copy) = end_dress();
+            let outcome = if served == 0 {
+                format!(
+                    "not dressed: GetCharaInitParam was never asked for row {id} on this thread \
+                     during the call, so it wears the row's own gear"
+                )
+            } else {
+                format!(
+                    "dressed from a copy of charaInit {id} (0x{copy:x}, served {served} time(s)) \
+                     wearing build {build:?}; the resident row was not written"
+                )
+            };
+            (chr, outcome)
+        }
+    };
+    crate::net::record_remote(owner, handle, triple, chr, Some(resolved));
+    if chr != 0 {
+        crate::names::set(chr, &entry.name);
+        let face = entry
+            .share_id
+            .as_deref()
+            .and_then(crate::dress::remote_face_for);
+        apply_face(&label, face, chr);
+    }
+    summons_log(format_args!("net: {label}: built 0x{chr:x}, {outcome}"));
     chr
 }
 
@@ -571,10 +696,10 @@ const CHR_PLAYER_GAME_DATA: usize = 0x580;
 /// on the same frame gave three companions their blindfold colours.
 ///
 /// [`adopt_build_face`]: er_build_import_runtime::face::adopt_build_face
-fn apply_face(slot: u8, chr: usize) {
-    let Some(face) = crate::dress::face_for(slot) else {
+fn apply_face(who: &str, face: Option<er_build_import_core::sliders::SliderMap>, chr: usize) {
+    let Some(face) = face else {
         summons_log(format_args!(
-            "dress: companion {slot}: its build names no face; it keeps the body's own"
+            "dress: {who}: its build names no face; it keeps the body's own"
         ));
         return;
     };
@@ -584,7 +709,7 @@ fn apply_face(slot: u8, chr: usize) {
         unsafe { safe_read_usize(chr + CHR_PLAYER_GAME_DATA) }.filter(|&p| p != 0),
     ) else {
         summons_log(format_args!(
-            "dress: companion {slot}: 0x{chr:x} has no PlayerGameData; face not applied"
+            "dress: {who}: 0x{chr:x} has no PlayerGameData; face not applied"
         ));
         return;
     };
@@ -592,10 +717,7 @@ fn apply_face(slot: u8, chr: usize) {
     // character the call just built.
     let outcome =
         unsafe { er_build_import_runtime::face::adopt_build_face(base, pgd, Some(&face)) };
-    summons_log(format_args!(
-        "dress: companion {slot}: face {}",
-        outcome.label()
-    ));
+    summons_log(format_args!("dress: {who}: face {}", outcome.label()));
 }
 
 /// Compare `pins` against the code at `entry` on the running build.
