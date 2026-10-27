@@ -152,7 +152,7 @@ const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
 /// `d3d12` must be the loaded `d3d12.dll`.
 #[cfg(windows)]
 unsafe fn hook_create_device(d3d12: *mut c_void) -> Result<(), String> {
-    use er_hook::{MH_CreateHook, MH_EnableHook, MH_Initialize, MH_STATUS};
+    use er_hook::{MH_EnableHook, MH_Initialize, MH_STATUS, MhHook};
 
     let target = unsafe { GetProcAddress(d3d12, c"D3D12CreateDevice".as_ptr().cast()) };
     if target.is_null() {
@@ -162,16 +162,12 @@ unsafe fn hook_create_device(d3d12: *mut c_void) -> Result<(), String> {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => return Err(format!("MH_Initialize: {status:?}")),
     }
-    // `MhHook::new_runtime_derived` audits the address against the game's `.text`, and this one is
-    // in `d3d12.dll`. An export address is a function entry by definition, so MinHook is called
-    // directly.
-    let mut original: *mut c_void = core::ptr::null_mut();
+    // `MhHook::new` checks the game allowlist only for addresses inside the game image; this one
+    // is a `d3d12.dll` export, which is a function entry by definition.
     let detour = create_device_detour as CreateDeviceFn as *mut c_void;
-    let status = unsafe { MH_CreateHook(target, detour, &mut original) };
-    if status != MH_STATUS::MH_OK {
-        return Err(format!("MH_CreateHook: {status:?}"));
-    }
-    CREATE_DEVICE_ORIGINAL.store(original as usize, Ordering::SeqCst);
+    let hook = unsafe { MhHook::new(target, detour) }
+        .map_err(|status| format!("MhHook::new: {status:?}"))?;
+    CREATE_DEVICE_ORIGINAL.store(hook.trampoline() as usize, Ordering::SeqCst);
     let status = unsafe { MH_EnableHook(target) };
     if status != MH_STATUS::MH_OK {
         return Err(format!("MH_EnableHook: {status:?}"));
