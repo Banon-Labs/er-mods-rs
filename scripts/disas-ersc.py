@@ -6,14 +6,16 @@ rva and every lookup has to go through the section table -- the mistake this exi
 prevent. Function bounds come from `.pdata`, so a return address recovered from a crash
 log resolves to the whole function that owns it.
 
-    uv run --with capstone python3 scripts/disas-ersc.py 0x2591f 0xf8e7e 0x158827
-    uv run --with capstone python3 scripts/disas-ersc.py --before 0x200 --after 0x40 0x2591f
+    uv run --with capstone python3 scripts/disas-ersc.py 0x2593f 0xfb68e 0x15b037
+    uv run --with capstone python3 scripts/disas-ersc.py --before 0x200 --after 0x40 0x2593f
+
+(Seamless v2.0.2 rvas; the same sites were 0x2591f, 0xf8e7e, 0x158827 in v2.0.1.)
 
 `--raw` decodes from the address itself instead of refusing it. Not every function has a `.pdata`
 entry -- Seamless\'s small option predicates are `endbr64`, four instructions and a `ret`, with no
 unwind info at all -- and without this they cannot be read here.
 
-    uv run --with capstone python3 scripts/disas-ersc.py --raw --after 0x40 0x26b40
+    uv run --with capstone python3 scripts/disas-ersc.py --raw --after 0x40 0x26b60   # v2.0.1 0x26b40
 
 Whole-module questions ("who calls this", "who touches this field") live in the companion
 `scripts/ersc-xrefs.py`, which walks every function once and keeps the result.

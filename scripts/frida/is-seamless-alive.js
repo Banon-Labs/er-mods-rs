@@ -10,9 +10,10 @@
 // builds its option menu; both are its own code on its own schedule. A counter on each separates
 // "Seamless is not advertising" from "we are not watching the right thing", and `this` from either
 // one is a Seamless-owned object to walk rather than a candidate to resemble.
-const BUILD_LOBBY_KEY_RVA = 0xad6e0;
-const SHOW_RVA = 0x241a0;
-const INVADE_RVA = 0x25850;
+// Seamless v2.0.2 rvas (v2.0.1, as named above: 0xad6e0, 0x241a0, 0x25850).
+const BUILD_LOBBY_KEY_RVA = 0xaec50;
+const SHOW_RVA = 0x241c0;
+const INVADE_RVA = 0x25870;
 
 const ersc = Process.findModuleByName('ersc.dll');
 if (ersc === null) {

@@ -7,8 +7,9 @@ a `_Mtx_lock` failure raises, neither of which a single window can settle:
 
 `--locks` reports, for every call to `_Mtx_lock` and `_Mtx_unlock`, which object is
 being locked -- the `lea reg,[base + disp]` that fed `rcx` is resolved by walking
-backwards from the call, so `ersc+0x258d0` is reported as locking `[rcx+0x58] + 0x100` and
-`ersc+0x241a0` as locking a different mutex at `[rcx] + 0x120`. Confusing the two is how a
+backwards from the call, so `ersc+0x258f0` is reported as locking `[rcx+0x58] + 0x100` and
+`ersc+0x241c0` as locking a different mutex at `[rcx] + 0x120` (Seamless v2.0.2; v2.0.1 0x258d0 and
+0x241a0). Confusing the two is how a
 recursive-lock story gets told about a mutex that was never the one involved.
 
 `--ctors` reports every place a `_Mtx_internal_imp_t` is constructed in place, and the
@@ -43,17 +44,19 @@ _spec.loader.exec_module(_disas)
 Image = _disas.Image
 DEFAULT_DLL = _disas.DEFAULT_DLL
 
-# `_Mtx_internal_imp_t` on x64, recovered from this build's own unlock at 0xf9830:
+# `_Mtx_internal_imp_t` on x64, recovered from this build's own unlock at 0xfc040 (Seamless v2.0.2;
+# v2.0.1 0xf9830):
 #   `sub dword [rcx+0x4c],1 ; jne out ; or dword [rcx+0x48],-1 ; add rcx,0x10 ; LeaveCriticalSection`
 THREAD_ID_OFFSET = 0x48
 COUNT_OFFSET = 0x4C
 
-# The two entry points, by rva in the supported build. `_Mtx_lock` is the `xor edx,edx` thunk in
-# front of `_Mtx_do_lock` at 0xf9850, and `_Mtx_unlock` is the whole of 0xf9830. There is no
-# third: 0xf9840 is inside `_Mtx_unlock`, not a `_Mtx_trylock` beside it.
+# The two entry points, by rva in the supported build (Seamless v2.0.2). `_Mtx_lock` is the
+# `xor edx,edx` thunk in front of `_Mtx_do_lock` at 0xfc060, and `_Mtx_unlock` is the whole of
+# 0xfc040. There is no third: 0xfc050 is inside `_Mtx_unlock`, not a `_Mtx_trylock` beside it.
+# v2.0.1 had the same layout 0x2810 lower: 0xf9828, 0xf9830, 0xf9850, 0xf9840.
 KNOWN_ENTRIES = {
-    0xF9828: "_Mtx_lock",
-    0xF9830: "_Mtx_unlock",
+    0xFC038: "_Mtx_lock",
+    0xFC040: "_Mtx_unlock",
 }
 
 

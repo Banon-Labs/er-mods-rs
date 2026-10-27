@@ -10,8 +10,10 @@
 // way the actions do. Those are the candidate consumers. Hooking them says whether that code runs
 // at all while a search is nominally in flight, which separates "the state is the wrong signal"
 // from "the worker that watches it is not running".
-const READERS = [0x41edd, 0x42974, 0x429ef];
-const WRITERS = { 0x25886: 'invade sets 0x0e', 0x25806: 'sets 0x07', 0x24f26: 'sets 0x02' };
+// Seamless v2.0.2 sites, each the same instruction at the same offset into its carried function as
+// in v2.0.1 (readers 0x41edd, 0x42974, 0x429ef; writers 0x25886, 0x25806, 0x24f26).
+const READERS = [0x4288d, 0x43324, 0x4339f];
+const WRITERS = { 0x258a6: 'invade sets 0x0e', 0x25826: 'sets 0x07', 0x24f46: 'sets 0x02' };
 const SESSION = ptr('0x952a1350');
 const STATE_OFFSET = 0x150;
 
@@ -67,7 +69,7 @@ if (ersc === null) {
 // Integrity control, on this module. A silent reader hook is not evidence on its own.
 let mtxHits = 0;
 if (ersc !== null) {
-  Interceptor.attach(ersc.base.add(0xf9828), {
+  Interceptor.attach(ersc.base.add(0xfc038), { // `_Mtx_lock`, v2.0.2 (v2.0.1 0xf9828)
     onEnter() {
       mtxHits += 1;
       if (mtxHits === 1 || mtxHits === 500) {

@@ -181,6 +181,8 @@ try {
 // data at 0x180c64c88" -- ersc+0xc64c88 with the module at its preferred base. Read that slot and
 // the session head it points at, which says whether the pointer is absent or the resolver is
 // rejecting something real.
+// A Seamless v2.0.1 address in the Themida `ERSC` section's writable pages, not yet re-measured for
+// v2.0.2 (the section is packed in the file, so it cannot be carried statically).
 const SESSION_SLOT_RVA = 0xc64c88;
 const ersc = Process.findModuleByName('ersc.dll');
 if (ersc === null) {

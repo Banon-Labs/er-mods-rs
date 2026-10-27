@@ -6,22 +6,25 @@
 // fully readable function of identical shape -- read `[rcx+0x58]` as the session, take the
 // `std::mutex` at `session+0x100`, write one constant to `session+0x150`, unlock:
 //
-//   0x180025850  state -> 0x0e   the invade action  (guarded: returns unless state == 1)
-//   0x1800258d0  state -> 0x23   cancel
-//   0x180024ef0  state -> 0x02
-//   0x1800257d0  state -> 0x07
-//   0x1800259d0  state -> 0x23
+//   0x180025870  state -> 0x0e   the invade action  (guarded: returns unless state == 1)
+//   0x1800258f0  state -> 0x23   cancel
+//   0x180024f10  state -> 0x02
+//   0x1800257f0  state -> 0x07
+//   0x1800259f0  state -> 0x23
+//
+// Those are Seamless v2.0.2, carried from v2.0.1 (0x25850, 0x258d0, 0x24ef0, 0x257d0, 0x259d0) by
+// `.pdata` neighbour sizes and an identical body in both builds.
 //
 // The RETURN ADDRESS is the finding. A caller inside `ersc.dll` names Seamless's own menu handler
 // -- which is the function the vanilla finger's `Both near and far` has to reach in order to do
 // what the Lynchpin does. Vanilla's own path instead dead-ends in `?NetworkMessage?`, an FMG id
 // with no entry, because the game's network layer is the one Seamless replaced.
 const ACTIONS = {
-  '0x25850 invade': 0x25850,
-  '0x258d0 cancel': 0x258d0,
-  '0x24ef0 state2': 0x24ef0,
-  '0x257d0 state7': 0x257d0,
-  '0x259d0 state23': 0x259d0,
+  '0x25870 invade': 0x25870,
+  '0x258f0 cancel': 0x258f0,
+  '0x24f10 state2': 0x24f10,
+  '0x257f0 state7': 0x257f0,
+  '0x259f0 state23': 0x259f0,
 };
 const SESSION_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;

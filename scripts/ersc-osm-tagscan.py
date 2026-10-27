@@ -40,7 +40,8 @@ import re
 import sys
 from pathlib import Path
 
-# Both measured against Seamless v2.0.1 and recorded in
+# Both measured against Seamless v2.0.1 (the session offsets +0x58/+0x100/+0x150 are unchanged in
+# v2.0.2; the `seamless` tag at +0x68 is not re-measured) and recorded in
 # `crates/er-invasion-warp/src/local_invasion_filter/ersc.rs`, which is the authority; they are
 # repeated here rather than parsed out of the Rust because this tool has to run against a game the
 # repo may not currently build for.

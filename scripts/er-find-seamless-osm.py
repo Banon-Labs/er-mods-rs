@@ -11,8 +11,8 @@ From a tag hit at `H` the chain is fixed by `crates/er-invasion-warp/src/local_i
 
     osm      = H - 0x68
     session  = *(osm + 0x58)            NEXT_OBJECT_OFFSET
-    state    = *(session + 0x150)       V201_SESSION_STATE_OFFSET, 0x01 idle / 0x0e searching
-    mutex    =   session + 0x100        the `_Mtx_internal_imp_t` `ersc+0x25850` locks
+    state    = *(session + 0x150)       V202_SESSION_STATE_OFFSET, 0x01 idle / 0x0e searching
+    mutex    =   session + 0x100        the `_Mtx_internal_imp_t` `ersc+0x25870` locks (v2.0.1 0x25850)
 
 The session is then put to the same `CRITICAL_SECTION` test that `lock_report.rs` uses, because
 that is the test the bounding box failed: `_Mtx_internal_imp_t` carries `int _Type` at +0, the

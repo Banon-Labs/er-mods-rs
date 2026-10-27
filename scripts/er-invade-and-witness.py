@@ -4,9 +4,10 @@
 Three things at once, because they are three views of one event and a separate run for each would
 compare different searches:
 
-  the key      `lobby_key` is `sha256_hex(B + A + SALT32)`, read out of `ersc+0xad6e0`. The
-               `sha256_update` call at `ersc+0xad90c` carries the whole preimage, so hashing it
-               here and matching the string the search sends closes the reading.
+  the key      `lobby_key` is `sha256_hex(B + A + SALT32)`, read out of `ersc+0xaec50`. The
+               `sha256_update` call at `ersc+0xaee7c` carries the whole preimage, so hashing it
+               here and matching the string the search sends closes the reading. (Seamless
+               v2.0.2; v2.0.1 had them at 0xad6e0 and 0xad90c.)
   the filters  every `AddRequestLobbyListStringFilter` the search queries with.
   the landing  a foreign world shows as a new main-player pointer with the session past `0x16`;
                the SpEffect list says which side of the invasion the player is on.
@@ -41,7 +42,7 @@ assert _spec.loader is not None
 _spec.loader.exec_module(_cap)
 
 ITEMS = {"lynchpin": 0x407FDE63, "finger": 0x4000006F}
-SALT32 = b"2XfW3z/+eN0vdnEFP8pGxtoHpJ/4bxdC"
+SALT32 = b"2XfW3z/+eN0vdnEFP8pGGtoHpJ/4bxdC"  # Seamless v2.0.2 @0x1801e43b8 (v2.0.1 ...P8pGxto...)
 FINGER_ACTIVE_SPEFFECT = 541
 ROUND_FRAMES = 600
 HOOK = """
@@ -49,8 +50,9 @@ const ersc = Process.findModuleByName('ersc.dll');
 const steam = Process.findModuleByName('lsteamclient.dll');
 const WORLD_CHR_MAN = ptr('0x143d6d018'); // 1.17.1 0x143d69ff8
 const SESSION = ptr('0x143d81560'); // 1.17.1 0x143d7e540
-const RET_IN_BUILDER = ersc.base.add(0xad911);
-Interceptor.attach(ersc.base.add(0xe29a0), {
+// Seamless v2.0.2: return address in BuildLobbyKey, and sha256_update (v2.0.1 0xad911, 0xe29a0).
+const RET_IN_BUILDER = ersc.base.add(0xaee81);
+Interceptor.attach(ersc.base.add(0xe51b0), {
   onEnter (args) {
     if (!this.returnAddress.equals(RET_IN_BUILDER)) return;
     send({ kind: 'preimage' }, args[1].readByteArray(Math.min(args[2].toUInt32(), 4096)));
@@ -125,7 +127,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
-        assert "0xad911" in HOOK and "0x8ac80" in HOOK and "0x1e508" in HOOK
+        assert "0xaee81" in HOOK and "0x8ac80" in HOOK and "0x1e508" in HOOK
         assert _cap.runtime_timeout_cap_seconds() > 0
         print(f"selftest: ok (deadline {_cap.runtime_timeout_cap_seconds()}s)")
         return 0

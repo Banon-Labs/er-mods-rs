@@ -8,6 +8,8 @@
 // A pointer ersc stores is not a resemblance. `ersc+0xc64c88` was identified as the slot it keeps
 // the session in; that address is inside the Themida-packed `ERSC` section, which stops a detour
 // from being written there but does not stop a read.
+// A Seamless v2.0.1 address in the Themida `ERSC` section's writable pages, not yet re-measured for
+// v2.0.2 (the section is packed in the file, so it cannot be carried statically).
 const SLOT_RVA = 0xc64c88;
 const SESSION_STATE_OFFSET = 0x150;
 const SESSION_GUARD_OFFSET = 0x14c;

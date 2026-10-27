@@ -83,6 +83,54 @@ type SendMessageToUser =
 type ReceiveMessages = unsafe extern "C" fn(*mut c_void, i32, *mut *mut Message, i32) -> i32;
 type AcceptSession = unsafe extern "C" fn(*mut c_void, *const Identity) -> bool;
 type ReleaseMessage = unsafe extern "C" fn(*mut Message);
+/// `GetSessionConnectionInfo(identity, SteamNetConnectionInfo_t*, SteamNetConnectionRealTimeStatus_t*)`,
+/// returning `ESteamNetworkingConnectionState`. The status pointer may be null.
+type SessionInfo = unsafe extern "C" fn(*mut c_void, *const Identity, *mut u8, *mut c_void) -> i32;
+
+/// `SteamNetConnectionInfo_t` is 696 bytes; read into a larger buffer so a newer SDK's growth
+/// cannot overrun it.
+const CONNECTION_INFO_BYTES: usize = 1024;
+/// `SteamNetConnectionInfo_t` offsets: identity (136), user data (8), listen socket (4), the
+/// 18-byte remote address and 2 bytes of padding, two relay point-of-presence ids, then these.
+const INFO_END_REASON: usize = 180;
+const INFO_END_DEBUG: usize = 184;
+const INFO_DESCRIPTION: usize = 312;
+const INFO_TEXT_BYTES: usize = 128;
+
+/// What Steam says about our session with one player.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct SessionState {
+    /// `ESteamNetworkingConnectionState`.
+    pub(crate) state: i32,
+    /// `ESteamNetConnectionEnd`, 0 while the session is open.
+    pub(crate) end_reason: i32,
+    pub(crate) end_debug: String,
+    pub(crate) description: String,
+}
+
+impl SessionState {
+    pub(crate) fn state_name(&self) -> &'static str {
+        match self.state {
+            0 => "none",
+            1 => "connecting",
+            2 => "finding-route",
+            3 => "connected",
+            4 => "closed-by-peer",
+            5 => "problem-detected-locally",
+            -1 => "fin-wait",
+            -2 => "linger",
+            -3 => "dead",
+            _ => "unknown",
+        }
+    }
+}
+
+fn info_text(info: &[u8], at: usize) -> String {
+    let field = &info[at..at + INFO_TEXT_BYTES];
+    let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    // UTF-8 Lossy: Steam's own diagnostic text, written to the log and never parsed.
+    String::from_utf8_lossy(&field[..end]).into_owned()
+}
 
 /// Every export resolved, and the two interfaces once Steam is up.
 pub(crate) struct Steam {
@@ -97,6 +145,7 @@ pub(crate) struct Steam {
     receive: ReceiveMessages,
     accept: AcceptSession,
     release: ReleaseMessage,
+    session_info: SessionInfo,
 }
 
 // SAFETY: the Steam client interfaces are process-wide objects Steam documents as callable from
@@ -156,6 +205,10 @@ impl Steam {
                 AcceptSession
             ),
             release: get!("SteamAPI_SteamNetworkingMessage_t_Release", ReleaseMessage),
+            session_info: get!(
+                "SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo",
+                SessionInfo
+            ),
         };
         // SAFETY: getters that return null before SteamAPI_Init.
         let (user, messages) = unsafe { (user_fn(), messages_fn()) };
@@ -250,6 +303,28 @@ impl Steam {
         let id = Identity::steam_id(from);
         // SAFETY: a live ISteamNetworkingMessages.
         unsafe { (self.accept)(self.messages, &id) }
+    }
+
+    /// Steam's own view of the session with this player: whether it is connected, and if it has
+    /// ended, why. The only place that says whether a message reported sent ever left.
+    pub(crate) fn session_state(&self, with: u64) -> SessionState {
+        let id = Identity::steam_id(with);
+        let mut info = [0u8; CONNECTION_INFO_BYTES];
+        // SAFETY: a live ISteamNetworkingMessages; `info` is larger than SteamNetConnectionInfo_t,
+        // and the real-time status is optional.
+        let state = unsafe {
+            (self.session_info)(self.messages, &id, info.as_mut_ptr(), std::ptr::null_mut())
+        };
+        SessionState {
+            state,
+            end_reason: i32::from_le_bytes(
+                info[INFO_END_REASON..INFO_END_REASON + 4]
+                    .try_into()
+                    .expect("four bytes"),
+            ),
+            end_debug: info_text(&info, INFO_END_DEBUG),
+            description: info_text(&info, INFO_DESCRIPTION),
+        }
     }
 
     /// Hand every message waiting on [`CHANNEL`] to `each(sender, bytes)`, at most `max`.

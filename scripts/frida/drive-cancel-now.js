@@ -15,8 +15,9 @@
 // and cancels from the game's own thread the way `ersc-session.js` already drives its cancel.
 'use strict';
 
-const INVADE = 0x25850;
-const CANCEL = 0x258d0;
+// Seamless v2.0.2 rvas (v2.0.1: invade 0x25850, cancel 0x258d0).
+const INVADE = 0x25870;
+const CANCEL = 0x258f0;
 const NEXT_OBJECT = 0x58;
 const STATE = 0x150;
 const GUARD = 0x14c;

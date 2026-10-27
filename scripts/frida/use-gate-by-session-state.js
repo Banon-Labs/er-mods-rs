@@ -23,7 +23,7 @@ const CONSUME_RVA = 0x42cad0; // 1.17.1 0x42ca40
 // The control. Extraordinarily hot (~1M calls in 7s), so it is counted and never logged from.
 const GOODS_GET_ENTRY_RVA = 0xd3cca0; // 1.17.1 0xd3b5b0
 
-const ERSC_ITEM_HANDLER_RVA = 0x92820;
+const ERSC_ITEM_HANDLER_RVA = 0x93960; // Seamless v2.0.2 (v2.0.1 0x92820)
 const NEXT_OBJECT_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;
 

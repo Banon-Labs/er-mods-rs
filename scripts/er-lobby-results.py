@@ -60,9 +60,9 @@ SLOTS = {
 # returned -- so if arming them here stops invasions landing, the harm is the detour itself and not
 # anything the DLL decided.
 ERSC_RVAS = {
-    "show": 0x241A0,
-    "invade_action": 0x25850,
-    "build_lobby_key": 0xAD6E0,
+    "show": 0x241C0,
+    "invade_action": 0x25870,
+    "build_lobby_key": 0xAEC50,
 }
 
 HOOK = """
@@ -139,9 +139,9 @@ def selftest() -> int:
         encoding="utf-8"
     )
     for name, rva, const in (
-        ("show", 0x241A0, "V201_SHOW_RVA"),
-        ("invade_action", 0x25850, "V201_INVADE_ACTION_RVA"),
-        ("build_lobby_key", 0xAD6E0, "V201_BUILD_LOBBY_KEY_RVA"),
+        ("show", 0x241C0, "V202_SHOW_RVA"),
+        ("invade_action", 0x25870, "V202_INVADE_ACTION_RVA"),
+        ("build_lobby_key", 0xAEC50, "V202_BUILD_LOBBY_KEY_RVA"),
     ):
         assert ERSC_RVAS[name] == rva, f"{name} moved in this script without a re-measurement"
         underscored = f"{rva:#x}".replace("0x", "")

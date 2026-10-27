@@ -579,8 +579,9 @@ def selftest() -> int:
 
     checks = session_log_behaves() + [
         ("the agent file exists", DEFAULT_AGENT.is_file()),
-        ("the agent hooks the invade action", "0x25850" in DEFAULT_AGENT.read_text()),
-        ("the agent hooks the cancel action", "0x258d0" in DEFAULT_AGENT.read_text()),
+        # Seamless v2.0.2 rvas (v2.0.1 0x25850 / 0x258d0).
+        ("the agent hooks the invade action", "INVADE = 0x25870" in DEFAULT_AGENT.read_text()),
+        ("the agent hooks the cancel action", "CANCEL = 0x258f0" in DEFAULT_AGENT.read_text()),
         ("the log path is user-owned, not a repo path", "er-mods-rs" not in str(DEFAULT_LOG)),
         (
             "a hung enumerate_processes is bounded rather than waited on forever",

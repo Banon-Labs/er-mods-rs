@@ -83,12 +83,14 @@ try {
 }
 
 // What is `ersc+0xf98c0`? Its opening bytes say whether it is a lock wrapper or something else.
+// That is the Seamless v2.0.1 address; in v2.0.2 the same `_Mtx_do_lock`+0x70 loop head is 0xfc0d0.
+const LOCK_BODY_RVA = 0xfc0d0;
 if (ersc !== null) {
-  const at = ersc.base.add(0xf98c0);
+  const at = ersc.base.add(LOCK_BODY_RVA);
   const bytes = Array.from(new Uint8Array(at.readByteArray(16)), (b) =>
     b.toString(16).padStart(2, '0')
   ).join(' ');
-  console.log(`parked: ersc+0xf98c0 @${at} opens ${bytes}`);
+  console.log(`parked: ersc+0x${LOCK_BODY_RVA.toString(16)} @${at} opens ${bytes}`);
 }
 
 // What object is the wait predicated on?

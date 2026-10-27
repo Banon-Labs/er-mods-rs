@@ -224,6 +224,8 @@ fn voice_thread(config: Config, frames: Receiver<()>) {
     let mut polls: u64 = 0;
     let mut config = config;
     let mut config_seen = config_stamp();
+    let mut sessions: std::collections::HashMap<u64, steam::SessionState> =
+        std::collections::HashMap::new();
     loop {
         if frames.recv().is_err() {
             return;
@@ -263,10 +265,25 @@ fn voice_thread(config: Config, frames: Receiver<()>) {
         let gain = gain::with_volume(config.gain, volume);
         // A player who speaks first opens a session we have not sent on yet; accepting it is
         // what lets their voice through before ours has gone the other way. Once a second.
+        //
+        // `AcceptSessionWithUser` also answers true for a session that is already open, so its
+        // answer is not logged: on run br-20261027-163837-dfd3 that printed every peer every
+        // second while not one message arrived. What is logged is Steam's own state for each
+        // session, when it changes -- the one record of whether "sent" ever reached anyone.
         if polls.is_multiple_of(ONCE_A_SECOND) {
             for &p in &peers {
-                if steam.accept(p) {
-                    voice_log(format_args!("steam: accepted session from {p:#018x}"));
+                steam.accept(p);
+                let now = steam.session_state(p);
+                if sessions.get(&p) != Some(&now) {
+                    voice_log(format_args!(
+                        "steam: session with {p:#018x} {} (state {}) end {} '{}' -- {}",
+                        now.state_name(),
+                        now.state,
+                        now.end_reason,
+                        now.end_debug,
+                        now.description
+                    ));
+                    sessions.insert(p, now);
                 }
             }
         }

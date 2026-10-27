@@ -26,7 +26,8 @@
 // answer", which proves the mechanism without needing the highlight solved first.  Setting it to 1
 // is the whole difference between the prototype and the product rule.
 const POPUP_RESULT_READER = ptr('0x1407eea00'); // 1.17.1 0x1407ee550
-const ERSC_INVADE = 0x25850;
+// Seamless v2.0.2 (v2.0.1 0x25850). Addresses in the prose of this file are the v2.0.1 ones.
+const ERSC_INVADE = 0x25870;
 const SESSION_OWNER = 0x58;
 const SESSION_STATE = 0x150;
 const SESSION_STATE_IDLE = 1;
@@ -96,12 +97,13 @@ if (ersc !== null) {
       }
       armed = false;   // one shot per arming, so a wedged dialog cannot spam the session
       out.fired += 1;
-      note('confirm result=' + result + ' row=' + row + ' -- calling ersc+0x25850 on this thread');
+      const at = 'ersc+0x' + ERSC_INVADE.toString(16);
+      note('confirm result=' + result + ' row=' + row + ' -- calling ' + at + ' on this thread');
       try {
         new NativeFunction(ersc.base.add(ERSC_INVADE), 'void', ['pointer'])(owner);
-        note('ersc+0x25850 returned; session state is now ' + sessionState(owner));
+        note(at + ' returned; session state is now ' + sessionState(owner));
       } catch (e) {
-        note('ersc+0x25850 threw: ' + e.message);
+        note(at + ' threw: ' + e.message);
       }
     },
   });

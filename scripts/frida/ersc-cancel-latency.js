@@ -1,18 +1,21 @@
 // How long the 0x23 -> 0x24 wait really is, and what issues the request.
 //
-// Static reading (ersc.dll, Seamless v2.0.1) says the wait is a network completion, not a timer:
-//   ersc+0x038a41  lea rax,[rip+0x5d598]     -> the std::function target is ersc+0x95fe0
-//   ersc+0x038ab5  call qword ptr [rip+..]   -> issues the request (edx=8, r8d=0x40)
-//   ersc+0x0960d6  cmp [r15+0x1d0], rsi      -> the completion must carry the matching handle
-//   ersc+0x09610b  mov [r15+0x150], 0x24     -> the only 0x24 write in the module
+// Static reading (ersc.dll, Seamless v2.0.1; v2.0.2 addresses in brackets) says the wait is a
+// network completion, not a timer:
+//   ersc+0x038a41 [0x0391e1]  lea rax,[rip+..]          -> the std::function target is ersc+0x95fe0 [0x97590]
+//   ersc+0x038ab5 [0x039255]  call qword ptr [rip+..]   -> issues the request (edx=8, r8d=0x40)
+//   ersc+0x0960d6 [0x097686]  cmp [r15+0x1d0], rsi      -> the completion must carry the matching handle
+//   ersc+0x09610b [0x0976bb]  mov [r15+0x150], 0x24     -> the only 0x24 write in the module
 // This measures request -> completion and names the call target from live memory, where it is a
 // resolved pointer rather than an import slot.
 'use strict';
 
-const REQUEST_SITE_RVA = 0x038ab5;      // the indirect call
-const CALL_SLOT_RVA = 0x1f65b8;         // where its target pointer lives
-const COMPLETION_RVA = 0x95fe0;         // the callback that writes 0x24
-const CANCEL_RVA = 0x258d0;             // ersc cancel: writes 0x23
+// Seamless v2.0.2. The request site is the `call [rip+..]` 0x74 bytes after the `lea` of the
+// completion callback in both builds, and its slot is that call's own rip target.
+const REQUEST_SITE_RVA = 0x039255;      // the indirect call (v2.0.1 0x038ab5)
+const CALL_SLOT_RVA = 0x1f8a68;         // where its target pointer lives (v2.0.1 0x1f65b8)
+const COMPLETION_RVA = 0x97590;         // the callback that writes 0x24 (v2.0.1 0x95fe0)
+const CANCEL_RVA = 0x258f0;             // ersc cancel: writes 0x23 (v2.0.1 0x258d0)
 const SESSION_AT_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;
 const SESSION_HANDLE_OFFSET = 0x1d0;
@@ -127,7 +130,9 @@ if (ersc === null) {
     // handlers. Its matching invocation came from ersc+0x28a85e -- inside the Themida-packed ERSC
     // section, which has no .pdata and no static readability, so what schedules it can only be
     // measured here.
-    const EMITTER_RVA = 0x93be0;
+    // Seamless v2.0.2 (v2.0.1 0x93be0): the `lea rcx` 0x2a bytes before the request call
+    // names it in both builds.
+    const EMITTER_RVA = 0x952a0;
     let cancelSeen = null;
     // Learned, not seeded. The previous version hardcoded 0x466ac930, which was correct for one
     // process and meaningless for the next: a session is heap-allocated per run. It is learned
@@ -228,7 +233,7 @@ if (ersc === null) {
     }
 
     // `show(rcx = menu object)` is the earliest place the session is knowable: +0x58 leads to it.
-    Interceptor.attach(ersc.base.add(0x241a0), {
+    Interceptor.attach(ersc.base.add(0x241c0), { // show, Seamless v2.0.2 (v2.0.1 0x241a0)
         onEnter: function (args) {
             try {
                 const session = args[0].add(SESSION_AT_OWNER_OFFSET).readPointer();

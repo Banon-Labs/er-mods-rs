@@ -18,8 +18,10 @@
 // from what the character actually used rather than guessed from their numeric value.
 'use strict';
 
-const ITEM_USE_HANDLER_RVA = 0x92820;
-const SHOW_RVA = 0x241a0;
+// Seamless v2.0.2 rvas (v2.0.1, as read above: handler 0x92820, show 0x241a0). In v2.0.2 the
+// handler is 0x180093960 and its closure is registered at 0x18007d445.
+const ITEM_USE_HANDLER_RVA = 0x93960;
+const SHOW_RVA = 0x241c0;
 const OWNER_AT_MOD_OFFSET = 0x58;
 const SESSION_AT_OWNER_OFFSET = 0x58;
 const SESSION_STATE_OFFSET = 0x150;

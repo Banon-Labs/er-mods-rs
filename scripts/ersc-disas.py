@@ -58,6 +58,7 @@ BUILD_MARKERS = {
     "v199": "Seamless Co-op v1.9.9 by Yui",
     "v200": "Seamless Co-op v2.0.0 by Yui",
     "v201": "Seamless Co-op v2.0.1 by Yui",
+    "v202": "Seamless Co-op v2.0.2 by Yui",
 }
 
 
@@ -239,6 +240,30 @@ def pdata_entries(pe):
     return []
 
 
+def size_signature_matches(old_entries, new_entries, rva, radius=4):
+    """Where a function from one build sits in another, by the sizes of its `.pdata` neighbours.
+
+    Returns `(old_index, [(new_index, new_rva)])`. The signature is the sizes of the
+    `2 * radius + 1` entries centred on the function, so it survives a uniform address shift and
+    an index shift alike -- v2.0.2 moved `BuildLobbyKey` 19 entries along with its neighbourhood
+    intact. More than one hit means the window is too narrow to identify anything.
+    """
+    index = next((i for i, (b, _) in enumerate(old_entries) if b == rva), None)
+    if index is None or index < radius or index + radius >= len(old_entries):
+        return index, []
+
+    def sizes(entries, i):
+        return [end - begin for begin, end in entries[i - radius : i + radius + 1]]
+
+    signature = sizes(old_entries, index)
+    hits = [
+        (i, new_entries[i][0])
+        for i in range(radius, len(new_entries) - radius)
+        if sizes(new_entries, i) == signature
+    ]
+    return index, hits
+
+
 def align_report(old, new, rvas, tolerance=4):
     """Cross-build function mapping by `.pdata` index rather than by bytes.
 
@@ -381,10 +406,11 @@ def main():
             "pdata",
             "states",
             "crossmatch",
+            "pdatamatch",
         ],
     )
     parser.add_argument("argument", nargs="*")
-    parser.add_argument("--build", default="v201", choices=sorted(BUILD_MARKERS))
+    parser.add_argument("--build", default="v202", choices=sorted(BUILD_MARKERS))
     parser.add_argument("-n", "--nbytes", default="0x120")
     parser.add_argument("--no-stop", action="store_true", help="do not stop the listing at `ret`")
     parser.add_argument("--utf16", action="store_true")
@@ -393,6 +419,11 @@ def main():
         action="store_true",
         help="xref: also report rip-relative `lea` (how an option-table entry takes a callback's"
         " address). Costs a full capstone pass over the code sections.",
+    )
+    parser.add_argument(
+        "--to",
+        choices=sorted(BUILD_MARKERS),
+        help="pdatamatch: the build to find `--build`'s functions in",
     )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -436,6 +467,28 @@ def main():
             print(f"0x{va:x} [{nbytes} bytes]  {verdict}")
             print(f"  in {args.build}: " + (", ".join(f"0x{h:x}" for h in here) or "none"))
             print(f"  in {other_name}: " + (", ".join(f"0x{h:x}" for h in there) or "none"))
+        return 0
+
+    if args.command == "pdatamatch":
+        # Carry a function from `--build` to `--to` by the sizes of its `.pdata` neighbours. A
+        # unique hit is evidence independent of the function's bytes; it still wants the body
+        # compared before anything is pinned to it.
+        if not args.to:
+            parser.error("pdatamatch needs --to <build>")
+        old, old_path = load(args.build)
+        new, new_path = load(args.to)
+        print(f"# from {args.build}: {old_path}\n# to   {args.to}: {new_path}")
+        old_entries, new_entries = pdata_entries(old), pdata_entries(new)
+        for argument in args.argument:
+            value = int(argument, 0)
+            rva = value - BASE if value >= BASE else value
+            index, hits = size_signature_matches(old_entries, new_entries, rva)
+            if index is None:
+                print(f"0x{rva:x}: not a .pdata entry in {args.build}")
+                continue
+            found = ", ".join(f"[{i}] 0x{BASE + r:x}" for i, r in hits) or "none"
+            verdict = "unique" if len(hits) == 1 else f"{len(hits)} hits"
+            print(f"0x{BASE + rva:x} [{index}] -> {found}  ({verdict})")
         return 0
 
     if args.command == "states":

@@ -67,7 +67,8 @@ def selftest() -> int:
     """The agent and the exports it drives have to agree, or a silent run proves nothing."""
     trace = TRACE_AGENT.read_text(encoding="utf-8")
     assert "er_quickload_hold_xinput_pad" in trace, "the trace must watch the pad export"
-    assert "0x21b610" in trace, "the trace must watch ersc's own matchmaking interface"
+    # Seamless v2.0.2 slot (v2.0.1 0x21b610).
+    assert "ERSC_MATCHMAKING_SLOT = 0x21d610" in trace, "the trace must watch ersc's own matchmaking interface"
     repo = HERE.parent
     quickload = (repo / "crates/er-quickload/src/mh.rs").read_text(encoding="utf-8")
     assert "er_quickload_hold_xinput_pad" in quickload, "er-quickload must export it"

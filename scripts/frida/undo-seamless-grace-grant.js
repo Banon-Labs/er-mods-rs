@@ -32,7 +32,8 @@ const PHASE = 'read';
 // dispose() puts the 7 back unless KEEP_BLOCK_AFTER_DETACH; an already-patched 0 is accepted.
 const BLOCK_REGRANT = true;
 const KEEP_BLOCK_AFTER_DETACH = true;
-const GRANT_LOOP_CMP_RVA = 0x860f6;   // 48 83 fe 07  cmp rsi, 7
+// The ersc addresses in the prose above are Seamless v2.0.1; the constants are v2.0.2.
+const GRANT_LOOP_CMP_RVA = 0x87206;   // 48 83 fe 07  cmp rsi, 7 (v2.0.1 0x860f6)
 
 const GAME = 'eldenring.exe';
 const ERSC = 'ersc.dll';
@@ -72,8 +73,8 @@ const FLAGS_TO_READ = [11102790, 11102845, 11102848, 11100020, 105, 6951,
   9153, 10530, 510530, 710880, 9150, 10500, 510500, 710850, 69480];
 const FLAGS_TO_CLEAR = [];
 
-const GRANT_LAMBDA_RVA = 0x86060;
-const STUB_DISPATCH_RVA = 0x94210;
+const GRANT_LAMBDA_RVA = 0x87170;   // Seamless v2.0.2 (v2.0.1 0x86060)
+const STUB_DISPATCH_RVA = 0x95820;  // Seamless v2.0.2 (v2.0.1 0x94210)
 
 const game = Process.getModuleByName(GAME);
 const ersc = Process.findModuleByName(ERSC);

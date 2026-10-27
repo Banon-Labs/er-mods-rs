@@ -8,7 +8,7 @@
 // This does not write any field. It calls the game's own action and reads the state the action is
 // supposed to set, which is the only evidence that the native owner advanced rather than that we
 // pushed it.
-const INVADE_RVA = 0x25850;
+const INVADE_RVA = 0x25870; // Seamless v2.0.2 (v2.0.1 0x25850)
 const SESSION_STATE_OFFSET = 0x150;
 const SESSION_MUTEX_OFFSET = 0x100;
 const OWNER_SESSION_OFFSET = 0x58;

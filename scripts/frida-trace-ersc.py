@@ -14,7 +14,7 @@ invasion path, which is the thing static analysis could not produce.
 Modes
 -----
   --hooks     Intercept ersc RVAs and record args + backtrace on each hit. Cheap; start here.
-              Defaults to the one ersc address already established: +0x8f4b0, the callback that
+              Defaults to the one ersc address already established: +0x926b0 (v2.0.2), the callback that
               writes GameMan's lastLoadPosition/lastLoadOrientation, i.e. where a joiner lands.
   --stalker   Follow threads and record every basic block executed inside ersc.dll. Heavier and
               a packer may object, so it is opt-in -- use it when hook backtraces come back
@@ -41,7 +41,7 @@ normal invasion-warp Seamless profile plus the gadget DLL.
 
 Run it (frida is provisioned ephemerally by uv; nothing is installed system-wide):
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks
-    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks --rva 0x8f4b0
+    uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --hooks --rva 0x926b0
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-trace-ersc.py --stalker
 
 SELFTEST (no game, no frida):
@@ -72,8 +72,13 @@ DEFAULT_MODULE = "ersc.dll"
 # selector's call site, which writes GameMan+0xaa0 (lastLoadPosition) and +0xab0
 # (lastLoadOrientation). If Seamless decides where an invader materializes, it decides it here,
 # so this is the highest-value hook to start from. Its backtrace should name the caller chain.
+# v1.9.9 0x8f4b0 -> v2.0.1 0x91580 by a unique `.pdata` neighbour-size match -> v2.0.2 0x926b0.
+# The last hop: each build has exactly one reference to it, `lea r8` at 0x18007b70f / 0x18007c73f in
+# the same registering function, and the masked body diff is displacements only. Its `call
+# [rsi+0x1d0]` -> `+0x1e0` and `[rsi+0x60]` -> `+0x68` are the captured object growing by a qword
+# below +0x88 and two above +0x98 (docs/recon/seamless-2.0.2-patch-notes.md).
 DEFAULT_HOOKS = [
-    {"rva": 0x8F4B0, "label": "ersc-spawn-position-callback", "argCount": 4},
+    {"rva": 0x926B0, "label": "ersc-spawn-position-callback", "argCount": 4},
 ]
 
 def summarize(records: list[dict]) -> list[str]:
@@ -148,7 +153,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hooks", action="store_true", help="intercept ersc RVAs (cheap; start here)")
     parser.add_argument("--stalker", action="store_true", help="record every block executed in ersc.dll")
-    parser.add_argument("--rva", action="append", default=[], help="extra ersc RVA to hook, e.g. 0x8f4b0")
+    parser.add_argument("--rva", action="append", default=[], help="extra ersc RVA to hook, e.g. 0x926b0")
     parser.add_argument("--module", default=DEFAULT_MODULE, help=f"module to trace (default {DEFAULT_MODULE})")
     parser.add_argument("--out", help="output JSONL (default target/runtime-probe/ersc-trace.jsonl)")
     parser.add_argument("--gadget", default=DEFAULT_GADGET, help=f"frida-gadget address (default {DEFAULT_GADGET})")
