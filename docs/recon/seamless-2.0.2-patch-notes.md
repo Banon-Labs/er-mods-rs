@@ -131,7 +131,9 @@ same layout. `.data` itself starts at `0x21c000` (was `0x21a000`), and the rule 
 It was found by following `BuildLobbyKey`'s `movups` load (v2.0.1 `0x1800ad8b5`, v2.0.2
 `0x1800aee25`). `BuildLobbyKey` (`0x1800aec50`) hashes B + A + this salt through its one
 `sha256_update` call at `0x1800aee7c`, where A is bit 2 of `[settings+0x281]` written as `"0"`/`"1"`
-and B is the output of `0x1800a6990` on the object at `[settings+0xc8]`.
+and B is the output of `0x1800a6990` on the object at `[settings+0xc8]`. `settings` is the session
+object itself: in run `br-20261027-174224-22a9` the call's first argument was `0x469ac790`, the
+session the item-handler needle resolved in the same run.
 
 The search filter is an exact match on that key: at `0x1800ada3e` Seamless calls
 `ISteamMatchmaking` slot `+0x28` (`AddRequestLobbyListStringFilter`) with `"lobby_key"`, the
@@ -146,7 +148,7 @@ character as run `br-20261027-160220-2e56`):
 | | Value |
 |---|---|
 | B | `76DFB8C5A838F5A6`, the AES-128-ECB plaintext of the object at `0x469aea38` |
-| A | `"0"` (from the hash match; `settings+0x281` itself was not read) |
+| A | `"0"`: `settings+0x281` read `0xd3`, bit 2 clear, by a Frida `Interceptor` on `BuildLobbyKey`'s entry (`scripts/frida/ersc-lobby-key-settings.js`, run `br-20261027-174224-22a9`) |
 | sha256(B + A + v2.0.2 salt) | `add953e086980dc8badb4fb372a36f80ff230eb6dfad2759dccdf102cf4441da`, byte for byte the `lobby_key` run `br-20261027-160220-2e56` published on lobby `0x1860000603e87fc` |
 | sha256(B + A + v2.0.1 salt) | `724e9aa8f1cdbc5b4f57d08ab6bda5a455d6e22fdae6b3b0185f0899e5054615` |
 
