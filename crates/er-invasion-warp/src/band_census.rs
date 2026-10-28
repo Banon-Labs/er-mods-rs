@@ -20,7 +20,7 @@
 #![cfg(windows)]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
@@ -64,6 +64,8 @@ pub(crate) struct PanelView {
     pub(crate) pool_known: bool,
     /// A search is running, so the census is holding off the interface.
     pub(crate) waiting_for_search: bool,
+    /// This ersc.dll has shown its band and availability key names, which every count filters on.
+    pub(crate) keys_known: bool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -167,7 +169,9 @@ pub(crate) fn tick() {
 
 /// Write the arrivals after a finished sweep. Once a minute at most, from the game task.
 fn save(text: &str, total: usize) {
-    static FIRST_SAID: AtomicBool = AtomicBool::new(false);
+    // Every sweep whose total differs from the last one said, not only the first: a panel reading 0
+    // after an invasion could not be told apart from a query that stopped matching (2026-10-28).
+    static LAST_SAID: AtomicUsize = AtomicUsize::new(usize::MAX);
     if let Err(error) = er_hotkey_config::write_atomic(&path(), text) {
         crate::standalone_log(format_args!(
             "band-census: could not save {}: {error}",
@@ -175,10 +179,18 @@ fn save(text: &str, total: usize) {
         ));
         return;
     }
-    if !FIRST_SAID.swap(true, Ordering::Relaxed) {
+    let previous = LAST_SAID.swap(total, Ordering::Relaxed);
+    if previous != total {
+        let was = if previous == usize::MAX {
+            "first sweep".to_owned()
+        } else {
+            format!("was {previous}")
+        };
         crate::standalone_log(format_args!(
-            "band-census: first sweep finished, {total} open host(s) across every band; saved to \
-             {}",
+            "band-census: sweep finished, {total} open host(s) across every band ({was}); filters: \
+             match_key={} advert_marker={}; saved to {}",
+            crate::lobby_publish::seamless_match_key().is_some(),
+            crate::lobby_publish::advertisement_key().is_some(),
             path().display()
         ));
     }
@@ -209,6 +221,8 @@ pub(crate) fn publish(config: Option<&er_invasion_warp_core::local_invasion::Loc
                 .map(|(level, weapon)| census::band_index(level as usize, weapon as usize)),
             pool_known: crate::lobby_publish::seamless_match_key().is_some(),
             waiting_for_search: !crate::local_invasion_filter::session_is_idle(),
+            keys_known: crate::lobby_publish::seamless_band_key().is_some()
+                && crate::lobby_publish::seamless_available_key().is_some(),
         }
     };
     *lock(&VIEW) = Some(view);
