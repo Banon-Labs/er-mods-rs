@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.1.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.0.0...1.1.0) (2026-10-28)
+
+
+### Features
+
+* **crash-logging:** record D3D12 DRED and stack-overflow call chains ([a44bc06](https://github.com/Banon-Labs/er-mods-rs/commit/a44bc06b081ef074dda4453594e5315ac3150842))
+* **npc-summons:** show companion gear to players without the DLL ([#612](https://github.com/Banon-Labs/er-mods-rs/issues/612)) ([360acbc](https://github.com/Banon-Labs/er-mods-rs/commit/360acbc18625e0ec9d4bbc1a89a2fda7d3e32975))
+* **npc-summons:** show companions' gear to players without the DLL ([fceabe8](https://github.com/Banon-Labs/er-mods-rs/commit/fceabe8a4d02f52c592a6df604752fb4d289ddf8))
+* **positional-voice:** F7 toggles voice chat and says which way it went ([325e6b7](https://github.com/Banon-Labs/er-mods-rs/commit/325e6b763d0633e5ac4eec93454232c5905c5d8c))
+
+
+### Bug Fixes
+
+* **crash-logging:** carry the quit freelist patch and record D3D12 DRED ([#611](https://github.com/Banon-Labs/er-mods-rs/issues/611)) ([a028756](https://github.com/Banon-Labs/er-mods-rs/commit/a028756b3434631ced4c33931e7e61365a26805a))
+* **crash-logging:** carry the quit-to-desktop freelist patch ([e79a9f4](https://github.com/Banon-Labs/er-mods-rs/commit/e79a9f406d447cd751ac6d508729582d1a8f26b7))
+* **crash-logging:** install the D3D12CreateDevice detour through MhHook::new ([6e313ae](https://github.com/Banon-Labs/er-mods-rs/commit/6e313ae726b67a6e94ad2fb4e80c49218a355766))
+* **er-invasion-warp:** support Seamless Co-op v2.0.2 ([08596b6](https://github.com/Banon-Labs/er-mods-rs/commit/08596b6941e4f8bb7e6d8351aba38a51e8f22da6))
+* **er-invasion-warp:** support Seamless Co-op v2.0.2 ([#613](https://github.com/Banon-Labs/er-mods-rs/issues/613)) ([4c7237d](https://github.com/Banon-Labs/er-mods-rs/commit/4c7237d868c7394115f36a68b8b34bf31ea422ad))
+* **er-npc-summons:** send each companion build to the other players ([a362201](https://github.com/Banon-Labs/er-mods-rs/commit/a362201b12b239d3a33c7e8e194ec1a012d3ed3e))
+* **er-npc-summons:** send each companion build to the other players ([#609](https://github.com/Banon-Labs/er-mods-rs/issues/609)) ([3f1d675](https://github.com/Banon-Labs/er-mods-rs/commit/3f1d67524e6617dc3b8f895c2ab67984ce7f8e44))
+* **invasion-warp:** re-pin ersc.dll entry points for Seamless Co-op v2.0.2 ([d165a5f](https://github.com/Banon-Labs/er-mods-rs/commit/d165a5f4b0379d2dd74977c2e7c9ed33998082fa))
+* **npc-summons:** declare CopyAnother once and gate it on the build ([394763f](https://github.com/Banon-Labs/er-mods-rs/commit/394763f6a9b09d4f317b3c73295209fe60d0556f))
+* **pre-push:** clear an agent game for an authorized push, refund refused ones ([15d453c](https://github.com/Banon-Labs/er-mods-rs/commit/15d453cde429102063de5356d93761316f1a0e60))
+* **runtime-evidence:** read er_crash_logging.dll's own log ([fb16df9](https://github.com/Banon-Labs/er-mods-rs/commit/fb16df9179447e30c9697de7ac99accc8631c293))
+* **voice:** always load the voice DLL ([e4f3a9a](https://github.com/Banon-Labs/er-mods-rs/commit/e4f3a9a8462a305f1e05501b5aa8afb4bc773a66))
+* **voice:** always load the voice DLL ([#608](https://github.com/Banon-Labs/er-mods-rs/issues/608)) ([0114440](https://github.com/Banon-Labs/er-mods-rs/commit/0114440da56c3b565c0be7f591c96f59a0cd0f5b))
+
 ## [1.0.0](https://github.com/Banon-Labs/er-mods-rs/compare/0.3.0...1.0.0) (2026-10-23)
 
 
