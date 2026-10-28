@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/Banon-Labs/er-mods-rs/compare/1.1.0...1.1.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([a5a9a5f](https://github.com/Banon-Labs/er-mods-rs/commit/a5a9a5f8f0d5d67e0a5359815abab775d6d913a9))
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([#614](https://github.com/Banon-Labs/er-mods-rs/issues/614)) ([c107d31](https://github.com/Banon-Labs/er-mods-rs/commit/c107d3132230926191a25fb29fc4605d2fdad793))
+
 ## [1.1.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.0.0...1.1.0) (2026-10-28)
 
 
