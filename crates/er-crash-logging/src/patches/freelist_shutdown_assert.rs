@@ -3,8 +3,7 @@
 //! # The crash
 //!
 //! deto's Elden Ring died the same way twice on 2026-08-25 (20:16:43Z and 20:19:55Z), on a profile
-//! carrying only this DLL and the crash logger. Unlike every other crash this DLL answers, it is
-//! not an access violation: `exception_code=0x80000003` is `STATUS_BREAKPOINT`, and
+//! carrying only `er_seamless_bugfixes.dll` and this crash logger. It is not an access violation: `exception_code=0x80000003` is `STATUS_BREAKPOINT`, and
 //! `exception_address == context_rip == eldenring.exe+0xc57676` is a literal `INT3` the game
 //! executes on purpose. Both records are identical apart from thread id and stack pointer. That
 //! crash was on 1.16.2, so every address in this section and the next is a 1.16.2 VA as the log
@@ -59,10 +58,19 @@
 //! allocator is already being destroyed and the game frees the node regardless. What it removes is
 //! an unhandled `STATUS_BREAKPOINT` that kills the process while it was already quitting.
 //!
+//! # Why it lives in the crash logger
+//!
+//! It is a vanilla bug. On 2026-10-26 the same `INT3` at `eldenring.exe+0xc59276` was reproduced
+//! on 2.7.2.0 with no Seamless Co-op loaded and `er_crash_logging.dll` as the only DLL (bd
+//! `er-effects-rs-843o`). It used to live in `er-seamless-bugfixes`, so every user who did not
+//! load that DLL crashed on every quit. The crash logger loads on its own, with or without Seamless, and it is
+//! a shell over `er-crash-logging-core`: the product `er-quickload` links the core, not this
+//! shell, so the byte is written by exactly one DLL.
+//!
 //! # Evidence this is not ours to begin with
 //!
-//! Every frame in the chain is `eldenring.exe`, and this DLL's sibling
-//! [`null_param_repository`](crate::guards::null_param_repository) guard cannot reach it: that stub
+//! Every frame in the chain is `eldenring.exe`, and `er-seamless-bugfixes`'s
+//! `null_param_repository` guard cannot reach it: that stub
 //! tail-jumps to the original unless `GLOBAL_SoloParamRepository` is already null, so it can only
 //! act after that singleton is destroyed -- later than any thread-join step. What it did do is
 //! remove the *earlier* fatal stop. deto's 2026-08-22 and 2026-08-23 crashes died in this same

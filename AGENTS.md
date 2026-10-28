@@ -2,6 +2,25 @@
 
 This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
+## Read on demand
+
+The rest of the project rules live in `docs/agents/`. Nothing there is loaded automatically: read
+the file that matches the work before starting it.
+
+| Before you ... | read |
+|---|---|
+| push, or start a long background build, board run or check suite | `docs/agents/kitty-push-and-build-tabs.md` |
+| touch a live game: probe, hook, watchpoint, "who wrote this field" | `docs/agents/frida.md` |
+| launch Elden Ring: autoload, Steam preflight, user-inspection runs | `docs/agents/runtime-launch.md` |
+| claim a runtime or visual result, add an oracle, set a probe timeout | `docs/agents/runtime-evidence.md` |
+| touch the supported Seamless Co-op version or its archive | `docs/agents/seamless.md` |
+| any RE lookup: names, decompiles, struct layouts, which image an address is on | `docs/agents/ghidra.md` |
+| disassemble, decode in-process, hook mid-function, attach or inject | `docs/agents/disassembly-and-hooking.md` |
+| networking RE (network params, session pointer paths) | `docs/agents/networking-cheat-table.md` |
+| work on Load Character / repeat-load, or name the quit-menu rows | `docs/agents/no-compromises.md` |
+| build, test, run `check.sh`, or brief a subagent on which checks to run | `docs/agents/build-and-test.md` |
+| write Rust, Python or comments, or draw an in-game overlay | `docs/agents/conventions.md` |
+
 ## A command for the user goes into a kitty tab, never into the reply (user directive 2026-10-13)
 
 When the agent wants the user to run a command, it does not paste a bash block into its
@@ -29,51 +48,7 @@ A long command goes in a file passed as `--command-file <path>`: a `git push && 
 create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
 The Stop hook refuses a closing message that carries a shell code block.
 
-## Every push gets a kitty tab that follows it (user request 2026-10-19)
-
-An authorized `git push` runs in the background, because the pre-push hook runs the whole check
-suite. Right after starting it, open a tab that shows it to the user:
-
-```bash
-python3 scripts/kitty-tail-push.py --log <the push task's output file> --title 'push <branch>'
-```
-
-The tab follows the log with `tail --pid` on the newest `git push` process (or `--pid <n>`), so it
-lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
-output, waits 5 seconds, and closes. `--selftest` covers the verdict and the tab script's quoting.
-Close Elden Ring before pushing: check.sh refuses while it runs. When the game up is the run that
-stamped the tip, close it with `python3 scripts/er-teardown.py --reason=stamped-<one-token-why>` as
-the whole command (a trailing `| tail -<n>` is allowed), which the teardown guard admits only while
-the `stamped_run` signal (`scripts/cupcake_stamped_run.py`) proves that run's own log carries
-evidence `scripts/check-runtime-evidence.sh` accepts for the tip.
-
-The user's `authorize <sha>` reply pays for the teardown its push needs, whatever the run up was
-for (user directive 2026-10-22: "to authorize a push sha is to authorize a teardown"). Do not hand
-the closing back to the user: while that reply is still their last message, close the game with
-`python3 scripts/er-teardown.py --reason=push-<one-token-why>` as the whole command, then push. The
-teardown guard admits it only while the `push_teardown` signal (`scripts/cupcake_push_teardown.py`)
-reads the reply as an unspent `authorize <sha>` for a local branch tip.
-
-## A long background build is tailed in a kitty tab (user directive 2026-10-19)
-
-When the agent starts a long background build -- a duel or invasion build from
-`scripts/er-weapon-build.py`, or any other pipeline run the user will want to follow -- it opens a
-kitty tab that tails the task's output until the task's process exits, and closes 5 seconds
-later. The agent opens it itself, in the same turn the task starts; the user runs nothing:
-
-```bash
-python3 scripts/kitty-tail-task.py --title 'duel build' \
-    --file <task output file> --match er-weapon-build.py --match '--fight duel'
-```
-
-The tab opens with `--keep-focus`, refuses when the match names no process or several, and is the
-user's view only: the agent still reads the outcome from the task's completion and its files. The
-`tail-build-task` skill carries the details. A board regeneration (`gen-r3-weapon-boards.py`) writes
-its progress to per-shard logs, so its tab is `python3 scripts/kitty-tail-task.py --boards --title
-boards --file <task output file>`, which follows those. The Stop guard
-`.cupcake/policies/claude/no_untailed_long_run.rego` halts a turn that backgrounded a run from its
-signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
-such a tab.
+A push and a long background build each also get a kitty tab: `docs/agents/kitty-push-and-build-tabs.md`.
 
 ## A command written for the user is spelled absolutely
 
@@ -107,223 +82,17 @@ $HOME/.local/bin/bd close <id>         # Complete work
 $HOME/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
-## Offline Game-Asset Investigation Boundary
-
-When the user explicitly says to continue until a game run is required, do not stop at a plan-only checkpoint. Continue all available non-runtime work first: unpack/localize assets, inspect binders, run static/Ghidra/tooling probes, validate exports/imports offline, and update Beads as evidence accumulates. Treat archive extraction/unpacking of installed game files as offline asset work, not as a game run; do it before claiming the next step requires running a game. Report back only when the next material step truly requires launching/running a game, needs subjective user choice, or hits a concrete capability blocker.
-
-## Runtime Failure Attribution Before Retest
-
-When a user-visible asset/runtime test shows no change, do not answer with a "most likely" cause or ask for another blind run. First determine exactly what was wrong from offline evidence whenever possible: verify the profile/package paths, map the in-game mechanism to the exact regulation rows/part IDs/asset filenames, and only then build the next package or ask for a runtime retest. If a previous run was not instrumented or configured to capture enough evidence, treat that as a validation failure and fix the evidence path before retrying.
-
-## User-Visible Launch Follow-Up Gate
-
-After launching Elden Ring, Blender, or any other user-visible app for the user's live inspection, do not immediately pivot into unrelated edits, checks, or background work. First perform and report a bounded post-launch state check: launched profile/artifact path, launcher/process state, matched top-level window when applicable, latest relevant launcher/log evidence, and crash/modal/error-window scan when the tool can provide it. If the launch remains open for the user, explicitly record it as a tracked live resource with PID/title/profile path and then stop mutating until the user's next observation or an agreed monitor/teardown step. A process/window appearing is not enough by itself to claim the launch is safe or review-ready.
-
-## Asset Deformation Feedback Before More Slider Tuning
-
-When user feedback shows that offline slider changes are not producing the intended deformation, stop continuing blind slider iterations. Establish a direct authoring/feedback surface first: load the ER donor/player body and the imported source model together in a 3D tool, compare literal model bounds/proportions, inspect weights/bone ownership, and make the next edit from that evidence. Prefer Blender plus a Souls/FLVER-capable importer/exporter or another direct FLVER authoring tool over more runtime-only guesswork. Do not propose skeleton or weapon-socket edits as the next step until the model-scale/fit comparison has been made or proven unavailable.
-
-When the issue becomes visual/material-specific (for example texture placement, UVs, seams, normals, or lighting), do not continue blind exporter changes from verbal descriptions alone. Ask for a focused, non-desktop visual artifact/crop as the fastest evidence path, while respecting screenshot sensitivity: request the smallest crop that shows the defect and avoid full-desktop capture unless the user explicitly permits it.
-
 For task startup in this repo, read relevant `bd` memories (`$HOME/.local/bin/bd memories <topic>` and `$HOME/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
-## Elden Ring Runtime Probe Hygiene
-
-**Frida is the first tool to reach for on this target, and it works -- through a Wine-side server,
-never a plain `frida.attach()`.** Proven live 2026-09-08: a non-local invasion was detected and
-cancelled through Frida, which `er_invasion_warp.dll` has never once managed. Prototype and
-investigate here before writing DLL code, because a hook answers in seconds what a memory scan
-cannot answer at all.
-
-**The order is Frida, then Frida, then Frida, and only then a DLL: prototype with it, run the
-experiment with it, and fix the thing with it if a hook can. Build a DLL when the mechanism is
-already known and the code is the product, never to find something out.** A build is 3 minutes of
-the user's session per attempt and it puts a polling oracle where an event belongs; the agent file
-reloads in place and costs nothing. Two tests for reaching for the wrong one:
-
-- The question is **who wrote this**, **when did it change**, or **which function ran**. Polling
-  can only sample the value afterwards and guess at the cause; `Interceptor` and a watchpoint name
-  the instruction. A rebuild is the wrong instrument here by construction, not merely a slow one.
-- The answer will arrive through a **log line you then have to read**. That is a poll wearing a
-  different hat -- and a `tail -f` of the game's log is not an oracle, it is the absence of one.
-
-Failure this was written from (2026-09-15): asked which field Seamless's Dried Fingers rule writes,
-the agent ran four build/teardown/relaunch/tail cycles and produced a diff so unsound it reported
-eight qwords moving on a host who had touched nothing. `scripts/er-frida-up.py` was two commands
-away the entire time, and the section above already said so.
-
-- **Bring it up with `python3 scripts/er-frida-up.py`.** It runs the Windows `frida-server.exe`
-  INSIDE the game's pressure-vessel container via `nsenter`, which is the whole trick. Measured
-  namespaces: game `mnt:[4026533261]` / `user:[4026533260]` against the host's `mnt:[4026531832]` /
-  `user:[4026531837]`, while `pid:` and `net:` are SHARED -- so entering needs no privilege and the
-  port is reachable from the host afterwards. A server started BESIDE the container talks to a
-  different wineserver: it accepts the TCP connection and then never answers `enumerate_processes`,
-  so a watcher sits silent instead of failing. An open port is not proof of a working server, and
-  `--force` replaces one that has gone stale.
-- **Attach once and hot-reload the agent file:** `uv run --with frida python3
-  scripts/er-frida-watch.py --agent scripts/frida/<agent>.js`. Editing the `.js` reloads it in
-  place. That is Frida's intended workflow and it is also the safer one here -- every attach/detach
-  cycle installs and reverts trampolines under running game threads.
-- **A plain `frida.attach()` still fails**: `NotSupportedError: bootstrapper crashed with signal 11`
-  on Frida 17.17.0, because it injects a Linux bootstrapper into a Windows process. The game
-  SURVIVES the attempt -- the older claim that it kills the session instantly was overstated -- but
-  a crashed bootstrapper can leave the process damaged, so there is no reason to do it.
-  `scripts/er-frida-attach-probe.py` re-measures this in 30 seconds rather than asking anyone to
-  trust the paragraph.
-- **Never arm `MemoryAccessMonitor` on a live game object.** It revokes access to a whole 4 KB page
-  and turns every access by every thread into a fault Frida must resume; on this target one was
-  not. Measured 2026-09-15: a guard page on Seamless's session killed the game with `0xc0000005`
-  at `ersc+0x89e23` -- one of ersc's own readers of that page -- while the player used an item.
-  Use a hardware watchpoint instead: four per thread, eight bytes each, no protection change, and
-  only the address asked for traps. When the field is unknown, an `Interceptor` on the writer's
-  caller is cheaper than widening the watch.
-  - **It is a method on a THREAD OBJECT, not on `Thread`.** This line said
-    `Thread.setHardwareWatchpoint` until 2026-09-19 and that spelling does not exist: on Frida
-    17.17.0 `Object.getOwnPropertyNames(Thread)` is `length, name, prototype, _backtrace, sleep,
-    backtrace`, and the call raises `TypeError: not a function`. The real one comes off
-    `Process.enumerateThreads()`, whose entries carry `setHardwareBreakpoint`,
-    `unsetHardwareBreakpoint`, `setHardwareWatchpoint`, `unsetHardwareWatchpoint`, with the slot id
-    (0..3) first:
-
-    ```js
-    for (const thread of Process.enumerateThreads()) {
-      thread.setHardwareWatchpoint(0, address, 4, 'w');   // slot, address, size, 'r'|'w'|'rw'
-    }
-    Process.setExceptionHandler(function (details) { /* details.address is the writer */ });
-    ```
-
-    Measured the same day: 116 of 116 threads armed with the correct spelling, 0 of 116 with the
-    old one. **Count the successes and report the failures** -- an agent that only counted armed
-    threads printed `threadsArmed: 0` while the player pressed the button, which reads as "nothing
-    writes this field" when it means "nothing is watching". An instrument that reports an absence
-    it cannot detect is worse than no instrument.
-  - **Arm ONE thread -- the one that would do the write. Arming every thread kills the game.**
-    This is the mistake to avoid, and it is not an argument against watchpoints: four registers per
-    thread is cheap, but `Process.enumerateThreads()` on this target returns 115+, and putting a
-    debug register on all of them means every thread traps into a handler whose resume has to be
-    correct, which it only has to get wrong once. Measured 2026-09-19 on two consecutive sessions:
-    115 and 116 threads armed, both games dead, the second **24.6 seconds after arming** with the
-    watcher still alive and attached, and no crash record either time. Inside an `Interceptor`,
-    `Process.getCurrentThreadId()` is the thread that just ran the function you care about, and it
-    is usually the only one worth asking. If the writer turns out to be a different thread, that is
-    a second, narrower question -- not a reason to widen the watch to the whole process.
-  - **A watchpoint that catches nothing has told you nothing. Rule out the near end first.** Zero
-    writes means either the writer is broken or the chain that would reach it never began, and the
-    instrument cannot tell those apart -- so an agent that reads it as the first spends a session
-    under the wrong half of the question. Measured 2026-09-19: a player's right-hand weapon stopped
-    switching, `ChrAsm.right_weapon_slot` never moved, a single-thread write watchpoint on it saw
-    nothing, and the cause was that the d-pad direction had no button bound to it at all
-    (`CSPcKeyConfig+0x440` action `0x0f` held `-1` against a default of `2003`). Before arming
-    anything for an input that "does nothing", diff the player's binding table against the game's
-    own defaults: `python3 scripts/er-keybind-repair.py --diff --pad-only` is one read of a live
-    process, needs no server and no hook, and it answers in a line what the watchpoint cannot
-    answer at all. The same shape generalises -- confirm the press becomes a logical event before
-    asking which instruction wrote a field. `CSMenuMan+0x90` does NOT answer that: it is a
-    shown-menu-window bitmap, so a world action leaves no trace there and an empty diff of it is
-    not evidence.
-  - **A watchpoint outlives the agent that set it, so NEVER hard-kill a watcher holding one.** It
-    lives in the thread's debug registers, not in the script. Once the agent is gone nothing
-    services the exception, and the next write to that address kills the game leaving NOTHING in
-    the crash log -- an unhandled hardware-debug exception is not a fault `er-crash-logging` can
-    catch, so it reads as a spontaneous crash. Measured 2026-09-19: a watcher with 116 armed
-    threads was launched as `timeout 900 uv run ... er-frida-watch.py`, hit that cap at 18:38:50,
-    and the game's last log write is 18:38:49 -- one line after a healthy heartbeat at tick 67200,
-    with the player touching nothing. Both halves are required: the agent exports `dispose` and
-    unsets every slot there (Frida calls it on unload, covering a clean detach, a reload in place
-    and the watcher's own `SIGTERM`), and the CALLER does not wrap the watcher in `timeout` or any
-    other hard kill. `er-frida-watch.py` already ends on detach and handles `SIGTERM` itself; an
-    outer cap only bypasses the thing that would have cleaned up. Nothing in-process survives
-    `SIGKILL`, so there is no code fix for the second half -- only not doing it.
-  - **Give the watcher its own background task. Never chain it after anything.** The hard kill does
-    not only arrive as an explicit `timeout`: a command that waits for something and THEN starts the
-    watcher is one command, so the harness's own cap applies to the whole chain and lands on the
-    watcher at the end of it. Measured 2026-09-19, minutes after the rule above was written: an
-    `until` loop waiting for `oracle_player_present` followed by `er-frida-up.py` followed by
-    `er-frida-watch.py` was killed with `SIGTERM` at the two-minute cap, seconds after the probe
-    attached. That game survived only because the watchpoint had not armed yet -- it arms on the
-    first pad poll. Wait in one backgrounded command that EXITS when the condition is true, then
-    start the watcher as a second, separate background task with no cap on it.
-
-- **For a read-only question with no game running**, `/proc/<pid>/mem` via
-  `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
-- **Watch the event stream with the `Monitor` tool** rather than asking the user what happened.
-
-When using Frida (only where it is already proven to work) or the injected DLL to scrape runtime Elden Ring
-data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
-
-When a runtime probe is explicitly meant to stay live for manual interaction / `read` follow-up, do **not** use a watcher path that owns process shutdown (`.auto/runtime_probe.sh`, `er-readiness-watch.py`, or helpers that wait on them) unless the user explicitly asks for an agent-owned bounded run. A user-inspection probe must be genuinely live: launch the approved offline/direct `eldenring.exe` path and leave it running for the user.
-
-For user-inspection runs, do **not** enable autopilot/repro drivers, fabricated input, or input-blocking modes unless the user explicitly asks for self-driving. If a probe must drive menus automatically, treat it as an agent-owned runtime experiment with bounded telemetry and do not claim the user is in control. Before saying the user can take over, verify via telemetry that the input block/repro driver has released and that the game process is still alive.
-
-Standing user order (2026-07-17): do not stop or yield merely because the proper next runtime step will launch Elden Ring on the current desktop or may capture input. When launching Elden Ring or capturing input is appropriate for the current objective and uses an approved launch/probe path, proceed instead of asking for generic permission. Tell the user immediately before the launch/input-capture step exactly what will happen and why, then run it. Do **not** emit reminders or reassurance that no launch/input capture is happening; if the current step is non-launching, just do the non-launching work without a no-launch disclaimer. Still respect the forbidden Steam/EAC launch forms, save-safety rules, visual-oracle restrictions, and any truly destructive/irreversible boundary.
-
-Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
-
-If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why. The teardown guard (`teardown_must_relaunch.rego`) admits this stop without a measurement only in this form, as the whole command: `python3 scripts/er-teardown.py --reason=invalid-run-<one-token-why>` (a trailing `| tail -<n>` / `| head -<n>` is allowed; chained work and multi-word reasons are still refused).
+## Elden Ring launch, bundle and save boundaries
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
 Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL under the Elden Ring install's `Game/SeamlessCoop/ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL. **Resolve that install path, do not copy one from these notes.** This machine now runs a NATIVE LINUX Steam install -- `$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/` -- which is what every `.me3` profile in `~/Elden/` actually references, and `$HOME/Elden/launch.sh` derives from `ME3_STEAM_DIR`. The `C:\SteamLibrary\...` path this line used to name belongs to the retired WSL2 setup: there is no `/mnt/c` here (the Windows partitions mount as `/mnt/win-c`, `/mnt/win-d`), so every such path silently resolves to nothing and a `find` over it returns empty rather than erroring -- which reads as "the file is missing" instead of "you looked in the wrong place".
 
-**ONE supported Seamless Co-op build, recorded in one place (user directive 2026-09-03).** This
-repo does not support multiple Seamless versions and does not search for whichever build happens to
-be installed. The supported version is `ERSC_SUPPORTED_VERSION` in
-`build-support/prologue_build.rs`, and it is the ONLY place the number is written -- the runtime
-refusal in `local_invasion_filter.rs` names it through the generated `ersc::SUPPORTED_VERSION`
-constant rather than a second literal. Moving to a new Seamless build is a re-measurement (see
-`scripts/locate-ersc-entry-points.py`; a signature match is a candidate, never an identification),
-followed by editing that one line. Two checks enforce it and neither degrades quietly:
-`build-support/prologue_build.rs` reads the `Seamless Co-op vX.Y.Z by Yui` banner out of the file it
-is about to ground-truth against and PANICS before comparing a single byte if it is a different
-build, and `scripts/check-ersc-version-supported.py` (wired into `check.sh`) does the same for the
-INSTALLED module and is deliberately not overridable by `ER_ERSC_DLL`. An ABSENT module is not a
-mismatch and still skips -- same line `scripts/check-game-version-supported.py` draws for the game.
-`ER_ERSC_DLL` points the build at a copy of the supported build (the gitignored
-`vendor-archive/seamless/ersc-<version>.dll` archive is the intended source) and is itself
-version-checked, so it cannot wave a mismatch through.
-
-**The one exception, added 2026-09-02 by user directive: a gitignored REFERENCE ARCHIVE.**
-Both Seamless builds now live at `vendor-archive/seamless/` (`ersc-1.9.9.dll`,
-`ersc-2.0.0.dll`), which `.gitignore` covers, so they are never committed, never named by
-a `.me3` profile, never staged into `target/`, and never released. That is the same
-category as `eldenring-deobf*.bin`: a read-only RE input this repo keeps untracked. The
-reason it has to exist is concrete -- v2.0.0 replaced v1.9.9 on 2026-09-02 and the
-launcher *happened* to leave the old build at `Game/_SeamlessCoop/`; the next launcher run
-may not, and every Seamless address this repo pins was measured against a specific build,
-so losing the previous one leaves the next update with nothing to diff against. Prefer the
-archive over the game-install backup path. The guard enforces the carve-out with a
-fail-closed shape (`ersc_reference_archive_copy_command` in
-`.cupcake/policies/claude/bash_elden_ring_launch_guard.rego`): the WHOLE command must be a
-single quoted `cp`, no chaining, no substitution, no redirects, source ending `/ersc.dll`,
-destination `vendor-archive/seamless/ersc-<version>.dll`. A `mkdir -p ... && cp ...` is
-correctly refused -- run the `mkdir` as its own command first. Every other destination
-denies exactly as before.
-
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
 User-provided or configured save files are read-only sources, including repo/local `save-files` inputs and arbitrary picked `.sl2`/`.co2` paths. Runtime/profile-switch writes must go only to the game-owned active default save copy/staged tree. The narrow exception is the live game-owned `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` path itself, which must remain writable because Elden Ring owns it and may crash or fail if it is forced read-only.
-
-For custom title/loading cover surfaces, use a native D3D12/game-render-layer path or direct game UI/render primitive path only, with proof that the surface is above `PRESS ANY BUTTON` / `CONTINUE`.
-
-Hyprland `grim -g` captures a screen region, not a window backing store. Runtime OCR/screenshot checks must first validate an exact Elden Ring target window (`class == steam_app_1245620`) that is mapped, not hidden, focused/topmost (`focusHistoryID == 0`), and has sane geometry. If that validation fails, fail closed without taking or trusting a screenshot; do not crop an occluded region that may contain another app.
-
-### Loading-screen-portrait screenshot -> semaphore loop (MANDATORY diagnostic protocol)
-
-Every title-cover/autoresearch probe must capture the **loading-screen-portrait / portrait-cover moment**. Do not delay this screenshot to make the artifact prettier: capture the exact moment where the USER can see whether the feature is failing, because that failure view is the evidence to convert into a stricter semaphore. `scripts/er-readiness-watch.py` invokes `scripts/capture-er-window.py` when the in-process portrait-cover oracle first asserts, writing `<ARTIFACT_DIR>/loading-screen-portrait-screenshot.jpg` (or `.txt` if capture fail-closes). Later screenshots have no value for this objective: world-stable state is already known-good and does not show whether the loading-screen portrait looked correct. Keep the event capture wired into runtime probes; if a new harness is added, capture the loading-screen-portrait moment, not just process exit.
-
-Here "semaphore" means an **in-process memory-read telemetry oracle** -- a value the DLL derives by reading the game's PE/RAM (the `oracle_*` fields in `er-quickload-telemetry.json`: e.g. `oracle_msgbox_total_builds`, `oracle_player_present`, `oracle_saved_map_c30`, `oracle_server_status_any_seen`, `oracle_char_name`), NOT a `bd` memory and NOT the screenshot. RAM-read oracles remain the run-stopping/product-proof detectors. Agent-generated captures are artifacts FOR THE USER to review by default: do not read/open/visually interpret agent-generated screenshots or captured image/video frames without explicit user permission. If inspecting an agent-generated visual artifact would materially improve correctness, say why and encourage the user to authorize that specific inspection. If the user provides, pastes, attaches, or directly names an image in the prompt, read and inspect that user-provided image as supporting evidence for the current diagnostic unless the user says not to or a concrete privacy/policy boundary blocks it. Visual-acceptability judgments should still be resolved into RAM/native/pixel telemetry semaphores whenever possible.
-
-Screenshots/visual state must **never** be used as the run-stopping oracle. Stop/continue decisions must come from RAM/in-process telemetry semaphores, structured progress, explicit failure semaphores, process exit, or the hard runtime cap. The event screenshot is a diagnostic artifact for the USER to evaluate; the agent's job is to resolve reported phenomena into stronger RAM/native/pixel telemetry. During the current title-cover/autoload autoresearch, seeing the `LOAD GAME` / profile-select screen with no finished product is an expected unfinished state because it masks the old title menu; do not classify that view itself as a blocker, success, or unexpected condition unless a RAM semaphore says the underlying state is wrong.
-
-When the USER reports or provides a loading-screen-portrait screenshot/image that shows anything unexpected or insufficient, use the user report and/or user-provided image as supporting evidence, then resolve the described/observed phenomenon into RAM/native/pixel telemetry so the image is never the run-stopping oracle. If a memory-read semaphore should have caught it but false-negatived, fix/extend that `oracle_*` field; if it is a genuinely new visual phenomenon, add a new in-process or pixel/native surface semaphore and classify it good/bad. Never let "the image showed X" stay a one-off visual observation: every on-screen phenomenon must end up detectable from PE/RAM/native/pixel telemetry. Record the resulting RE finding in `bd` for the next agent, but the durable semaphore itself lives in DLL/watcher telemetry, not in `bd`.
-
-**Behavioral-feature proof requires a DIRECT objective measurement of the rendered output, never indirect signals.** A rendered/visual feature (look-at tracking, pose change, camera move, deformation, overlay text placement/sharpness, loading-cover composition) is NOT proven by: build success, launch success, cleanup/teardown, no crash, hook counters (`hook_hits`), label buckets, "the draw task ran" counters, "the Present hook fired", or eyeballing one or two frames. Those prove the harness/input path fired, not that the *pixels* changed as claimed. Teardown is fine for agent-owned diagnostic probes, but the obligatory runtime evidence for a user-facing feature must be either a live/manual-inspection run or a captured feature-specific pixel/RAM/native oracle before cleanup; a bounded probe that exits cleanly with zero feature-specific oracle hits is **negative or unproven evidence**, never product proof. Say that plainly and either add the missing oracle or keep investigating. A bone write is not a rendered pixel: the per-frame profile `draw_step` is a `ClearRTV`, NOT a rasterize (and post-table-build it is skipped), so the model is **not** re-rasterized per pose unless a real model DRAW is driven -- the captured head is the engine's last genuine render, static, regardless of how many times the look-at fires. **Concrete gate for pose/look-at tracking: capture the rendered RT at the input extremes and the middle, then PIXEL-DIFF them; the opposite extremes (e.g. cursor LEFT vs RIGHT) must differ MORE than adjacent ones AND a head/face centroid must shift monotonically with the input.** If the opposite extremes are ~identical, the feature is NOT working -- declare it broken, not proven. (Failure that prompted this, 2026-06-30: cursor LEFT vs RIGHT dumps were 95% identical pixels yet "tracking" was claimed from distinct bucket labels + hook counters.) Build this diff into the proof harness as a RAM/file semaphore so no "tracking works" claim can be made without it; and never assemble a comparison contact sheet from MIXED runs (only same-run frames are apples-to-apples).
-
-Legal/EULA/privacy popup detection must not rely on OCR as the only oracle. Prefer packed-asset/native evidence (`msg/engus/menu.msgbnd.dcx` -> `ToS_win64.fmg` text IDs, in-process dialog/state telemetry, or stronger static/runtime hooks); OCR may only be supplemental after exact target-window validation.
-
-For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion or structured failure signals for evidence. Every agent-run shell/runtime operation must also be time-bounded, but by the regime that fits it: non-game ops (scripts, Ghidra, builds, any subprocess) are hard-capped at 30s (`scripts/check-no-timeouts.py`, `MAX_TIMEOUT_SECONDS`) so mistakes fail fast; the GAME runtime portion is bounded by the semaphore-progress model whose idle/stall backstop is the canonical runtime-probe cap. In both cases the time bound is a safety backstop, NOT the primary synchronization mechanism -- the primary teardown signal is an in-memory RAM oracle (tear down a small delay after the last semaphore the specific test cares about). The cap is a single source of truth in `.auto/runtime_timeout_cap_seconds`. **To see the timeout cap, look here: `.auto/runtime_timeout_cap_seconds` (read it directly with `cat`, or call `scripts/runtime_timeout_cap.py`) -- do not duplicate the number elsewhere; it drifts.** That reader is the only place the value is interpreted; its fail-safe fallback (missing/unreadable file) and its absolute clamp are both pinned to the same value in `scripts/runtime_timeout_cap.py`, so the file remains the lone hard truth and no other value can leak in. The value is read through `scripts/runtime_timeout_cap.py` and the bash probes and passed through to `er-readiness-watch.py --max-runtime-seconds`. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds` exceeds that cap and must be scored/treated as failure. Do not use sleeps as synchronization.
-
-Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates.
 
 ## Never instruct the user in their own game (user directive 2026-09-15)
 
@@ -359,36 +128,7 @@ and that every runtime test had to be agent-driven end to end. It no longer hold
 the user playing their own game is an ordinary way for a run to proceed. The rule above it still
 stands and is the one that governs -- ask for an OUTCOME, never recite a button sequence.
 
-Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than the canonical cap in `.auto/runtime_timeout_cap_seconds` (the single source of truth; the contract checker asserts the policy literal equals it); the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible. To change the cap, edit `.auto/runtime_timeout_cap_seconds`, the rego literal, and the fallback/ceiling in `scripts/runtime_timeout_cap.py` together (they are all pinned to the same single value) and re-run the contract checker/test.
-
-For Pi `run_experiment` in this repo, the cap is the same single hard truth as everything else: `timeout_seconds` and `checks_timeout_seconds` for the GAME runtime portion must be no greater than the value in `.auto/runtime_timeout_cap_seconds` (currently 300s / 5 min; original user directive 2026-07-17). That value is NOT a wall-clock target -- it is the GAME idle/stall backstop of a **semaphore-progress teardown model**: a live run should tear down a small delay after the last in-memory RAM oracle the specific test cares about (so most runs finish far under the backstop), and the 300s only bounds a run that makes no semaphore progress. This is distinct from, and much larger than, the non-game timeout: every non-game/agent-shell op is separately hard-capped at 30s by `scripts/check-no-timeouts.py` (`MAX_TIMEOUT_SECONDS`), so a mistaken/unbounded Ghidra query still fails fast in seconds, never after minutes. See bd `runtime-teardown-semaphore-progress-watchdog-2026-07-17`. Do not call `run_experiment` with a larger tool timeout. RESOLVED 2026-08-31 (this was the "drift to clean up" this paragraph used to flag): `.auto/run_experiment_policy.rego` never existed, so `scripts/check-run-experiment-contract.py` could only ever print `missing run_experiment policy` and exit 1, and nothing invoked it. The checker has been DELETED rather than revived, for two reasons. It hard-coded `MAX_TIMEOUT_SECONDS = 45` and required the literal `max_timeout_seconds := 45` in the policy it validated -- a second, contradictory copy of the cap, which is exactly the duplication `.auto/runtime_timeout_cap_seconds` is the single source of truth to prevent. And `run_experiment` is a Pi harness tool: no runner in this repo calls it, so the policy would have gated nothing. The live runtime policy is `.auto/runtime_experiment_policy.rego`, validated by `scripts/check-runtime-probe-contract.py --audit`, which check.sh does run and which reads the cap from the canonical file. If `run_experiment` is ever reintroduced, gate it there instead of resurrecting a parallel cap.
-
-Standing user order (2026-07-19, LOOSENED 2026-07-20): during loading-bar runtime probes, if the loading bar stops making observable progress, treat a sufficiently long flat window as a stall semaphore and tear the run down promptly with a failed/incomplete verdict and preserved artifacts. The flat-window threshold was raised from 10s to 60s (`LOADING_PROGRESS_STALL_SECONDS`, then in `scripts/capture-samechar-3x.py` -- deleted 2026-09-05 with the menu-free switch driver, so the threshold now has no implementation and a new watcher must reintroduce one; boot timeout 110s->300s) because the early asset-load bootup window can legitimately crawl (bar increases, labels/numerator advance slowly) rather than truly hang, and a 10s flat window tore down on that legitimate slow progress. The real fix is to TUNE the early boot semaphores so they do not tear down too early during the asset-load bootup window (single-core-contention is a NOTHINGBURGER -- see bd `LOBOTOMIZE-single-core-contention-is-a-nothingburger-tune-early-semaphores-2026-07-22`; do NOT invoke core starvation as a cause). Distinguish a real hang (the `oracle_system_step_label` / loading substep FROZEN) from slow progress (label still advancing); tear down only on a genuinely frozen substep. The 300s cap remains a final idle/stall backstop.
-
-Standing user order (2026-07-19): the loading-bar progress oracle and user-visible loading-bar label must use the shape `<text label> N/M (<sub milestone label> X/Y)` for every loading-screen phase. The main `N/M` is the current visible/semantic loading phase sequence. The parenthesized subprogression belongs to that active main phase and must use labels that correspond to substeps of that phase. If a phase has known granular RAM/native substeps, expose them as distinct labels in the parentheses as they are reached; if a phase has no known substep granularity, codify that ignorance with a single explicit parenthesized step for that phase (for example `<phase-specific label> 1/1`) rather than borrowing unrelated labels. Sub-milestone labels must be phase-relevant: do not show a label whose prerequisite semantics cannot apply in the current main phase (for example `PLAYER PRESENT` is not a relevant substep during boot/resource acquisition before the player can exist, and a label like `Some label 1/Y (PLAYER PRESENT 1/N)` is invalid). Do not use one generic repeated label such as `HANDOFF` or `WAIT ...` for every phase or every substep. Prefer concrete field/owner labels such as `INGAMESTEP+0xD8 REQUEST`, `MOVEMAPSTEP+0x244 DONE`, or another real RAM/native semaphore only inside phases where that field/owner is actually the current phase's loading/handoff gate. Keep the machine-readable loading-progress signature aligned with the visible main/subprogression steps, and do not treat a visible phase's nominal final frame as total completion if its phase-relevant parenthesized substeps remain.
-
-### Autoload Identity Launch Gate
-
-If a launch is expected to autoload, do not launch Elden Ring until the exact active character identity and slot are known from current save evidence. `ER0000.sl2` / the default APPDATA save path alone is not sufficient: record the decoded character name and slot used by the autoload. If either is unknown, stop before the launch boundary and say it is unknown. Do not substitute post-load menu automation, picker navigation, or a generic `Continue` action for this pre-launch identity check.
-
-#### Autoload discovery before every launch
-
-Read the game-directory `er-quickload.toml` and the newest `er-quickload-autoload-debug.log` before an expected-autoload launch. The two decisive log records are:
-
-- `runtime-config: loaded ... save_file=... slot=...` -- the configured source/slot request;
-- `save-override: DEFAULT-USER-SAVE` or an explicit staged source -- a usable autoload source was selected; `no usable autoload save ... Arming the IN-GAME missing-save picker` means **no save will autoload**.
-
-To select another save, set `save_file` and `slot` in `er-quickload.toml`; the source stays read-only and is staged privately. `os_native_save_picker = true` chooses the OS picker surface only after a missing-save picker is triggered. There is no `require_save_picker` setting: never fake one by configuring an invalid source. The shipped README's `Save-source behavior` section and the DLL-generated config comments are the detailed reference.
-
-Steam MUST be running before every agent-owned Elden Ring runtime proof/probe by default, but agents must not use raw `pgrep -x steam` for that check. Use the sanctioned helper path instead: source `scripts/steam-running.sh` and call `steam_running`, or run a repo script whose preflight already does that. If the helper reports Steam absent, ask the user to start Steam (interactive login) before launching that proof/probe. Reason: manual `pgrep -x steam` false-negatives on this WSL2 + Windows Steam setup, and the Cupcake/Claude `block_manual_pgrep` Rego policy that catches it is wired into Pi/Claude shell calls and will block raw pgrep. The offline `eldenring.exe` Proton launch reuses Steam's environment (wineprefix, CWD, account/save-dir id); with Steam down the game still boots but in a different environment, so the DLL debug log lands elsewhere and Steam-dependent state degrades into a non-representative run (observed 2026-06-21: a run came back `cold_char_mount_phase=5` yet appended zero debug lines and the default level-9 character). `scripts/run-product-continue-direct-probe.sh` now fails closed in `preflight()` when Steam is down. Narrow exception: when the user explicitly requests the main/user product ME3 profile launch for live inspection or log gathering and explicitly says to launch anyway / skip the Steam check in the current turn, treat that as a launch-environment override for that run only. In that case do **not** run raw `pgrep`, `scripts/steam-running.sh`, or any other Steam-process check, do not block launch on Steam absence, launch the prepared ME3 profile directly, and record in the artifact/summary that Steam preflight was intentionally skipped by user order and the resulting logs may be non-representative as product proof.
-
-Standing runtime-validation order: after a successful build that materially increases confidence in a runtime-affecting Elden Ring change and the next proof requires live validation, launch the approved direct/offline Elden Ring probe immediately (after the applicable preflight for that run, or after recording a current-turn user override of that preflight) instead of waiting for another prompt. Still use the loud launch banner and exact artifact reporting.
-
-Standing user order (2026-07-08): the staged-save/explicit `save_file` agent probe path is deprecated for release/autoload validation. It exercises different save-redirect internals than the user/product launcher and can softlock when `~/Elden/launch.sh` works. For release/autoload proof, use the user method (`~/Elden/launch.sh` with `/home/banon/Elden/quicksave.me3` and the real/default APPDATA save) or ask the user to run it; do not treat `ER_QUICKLOAD_SAVE_FILE`/gold-save staging probes as product proof. Only use the deprecated staged path for targeted save-redirect internals with an explicit opt-in such as `ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1`.
-
-Release/default behavior must not depend on agent-only environment variables. Any runtime-affecting feature intended for product use must work from a normal `cargo xwin build --release --target x86_64-pc-windows-msvc` DLL loaded by ME3 with no hidden `RUNTIME_*`, `ER_QUICKLOAD_*`, or smoke-driver env vars. Env vars may be diagnostic overrides only; do not use env-gated behavior as product proof, and do not add behind-the-scenes env vars to make a smoke pass unless the user explicitly asked for a diagnostic mode. A release smoke that only passes with env vars is a failed product smoke.
-
-Default runtime research mode is telemetry-only/non-fatal diagnostics. Treat deliberate fail-fast faults on semaphore mismatch as "release-mode" proof gates, not the default research/debug posture. Unless the user explicitly asks for fail-fast/release behavior, runtime probes should collect/report semaphores and leave diagnosable evidence without intentionally crashing the game. Do not confuse this workflow rule with the existing `ER_QUICKLOAD_TELEMETRY_ONLY=1` save-source exemption, which currently means no character load; if needed, add/enable a separate non-fatal semaphore mode rather than abusing no-load telemetry-only.
+## User steering and prose
 
 User steering is not evidence. When the user proposes a concrete technical hypothesis or fallback during RE/runtime work, treat it as a lead to verify, not as ground truth and not as permission to skip research. Before implementing a user-steered objective claim, inspect the current static/runtime evidence that could confirm or falsify it, state the verified delta in the work artifacts/logs, and only then choose the next code change. If the evidence contradicts part of the steering, preserve the valid intent but correct the mechanism instead of reflexively agreeing.
 
@@ -396,152 +136,9 @@ User steering is not evidence. When the user proposes a concrete technical hypot
 
 If and only if the agent's recent user-facing prose referred to an entity, identifier, plan node, claim, or term as meaningful but the agent did not have enough information to communicate what that prose meant, the agent must say plainly that it does not know what the referenced thing is **before** starting any search, lookup, or inspection to clarify it. The admission must be user-visible in the same turn and precede every relevant tool call. Do not replace it with a tentative definition, a plan built on the unknown term, or search narration. If that admission was not made first, do not perform the clarifying lookup in that turn.
 
-## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)
-
-`linux-x86-debug` main landed runtime DLL injection support on 2026-06-27. Use it as a sibling toolkit for Wine/Proton Elden Ring runtime inspection when an attach-based path is safer than baking a probe into the chainloader:
-
-- Capabilities: `inject_library`, `remove_library`, and `list_modules` load/unload/list DLLs in an already-running Wine/Proton process by calling `LoadLibraryA` through the existing `winedbg --gdb` attach path. It detaches and leaves the target running; no native ptrace addon is required.
-- er-quickload use case: attach to approved offline/direct `eldenring.exe`, inject `er_quickload.dll` without the me3 loader path, and use `list_modules` for live PE module bases that help telemetry/oracle work. This rides the same Wine attach mechanism already used for tracebreakpoint evidence.
-- Access paths: MCP server `linux-x86-debug-attach`, or import `#library-injection` / `#pe-export-table` from the linux-x86-debug package.
-- Hard safety boundary: x86-64 only. Do **not** attach to or inject into `start_protected_game.exe` / EAC launcher processes. Only use the approved offline/direct `eldenring.exe` target.
-- Hang caveat: the inferior `LoadLibraryA` call runs while target threads are frozen; a blocking `DllMain` or a thread holding the loader lock can hang the attach/inject operation. Keep injected DLL attach paths bounded and non-blocking.
-
 ## Reusable Tooling / Hard-Coded Path Corrections
 
 Persistent user directive (2026-07-17): when a tool, script, helper, or documented workflow fails because of a hard-coded local path, username, machine layout, or one-off assumption, fix the reusable tool/instruction at the point of failure before continuing the one-off task. Prefer env-overridable, current-user-aware defaults (`$HOME`, discovered repo root, explicit `*_DIR`/`*_BIN` overrides, bounded known-location fallbacks) over `/home/banon`, `/home/choza`, or other user-specific literals. Do not paper over the failure by running an ad-hoc command that only works in the current session; preserve the reusable fix with validation so future identical use cases benefit.
-
-## UnitCrew's Cheat Table -- Networking Reference, Never Committed
-
-`third_party/better connections all good3.CT` is a Cheat Engine table by **UnitCrew**, kept as a
-read-only reverse-engineering reference for anything touching this mod's networking (user
-directive 2026-09-15).
-
-**It must never be checked in.** It is 8.5 MB of another author's work carrying their own embedded
-scripts and structure definitions. `.gitignore` covers `third_party/*.CT` and `third_party/*.ct`;
-that is the same carve-out the de-Arxan'd images and the Seamless archive get -- an input this repo
-reads and never redistributes.
-
-Measured contents: 8411 entries, 142 of them networking-related. It is a general Elden Ring table,
-not a Seamless-internals one -- its `Seamless Co-op` group holds no addresses, and `Current Session`
-resolves `WorldChrMan + 9C -> 580 -> 0*10 -> 10EF8`, which is the game's own session object and not
-Steam's lobby. Do not go looking there for where `ersc.dll` keeps its advertisement lobby.
-
-What it is good for: param structure names (`NetworkAreaParam`, `NetworkParam`, `NetworkMsgParam`,
-`MultiPlayCorrectionParam`), the multiplayer request entry points (`requestSOS`, `requestBlackSOS`,
-`requestForceJoinBlackSOS`, `requestKickSession`, `requestLeaveSession`), and `WorldChrMan`-rooted
-pointer paths into session state. It is XML: entries are `<Description>"name"</Description>` with
-`<Address>` and `<Offset>` siblings, and a large Ascii85 logo blob at the top to skip.
-
-## Ghidra Runtime Dump: First-Pass RE Source
-
-**For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
-
-- **The installed game is 2.7.2.0, and it is the only build this workspace supports.** ELDEN RING PE `FileVersion` 2.7.2.0 (Steam patch 1.17.2, installed 2026-10-20); its de-Arxan'd flat image is `eldenring-deobf-1.17.2.bin` (generated by `scripts/dearxan-deobfuscate.rs`; gitignored, so it exists only in the main checkout). Every game address in the workspace is a 2.7.2.0 rva measured on that image, and `er_game_base::game_build` translates nothing: on 2.7.2.0 an address is used as written, and on any other build every game-image address is refused with one `UNSUPPORTED GAME BUILD` log line, and the `fromsoftware-rs` singleton lookups (`T::instance_ptr()`) panic on a build their bundle does not list. A constant detour must also be on `crates/er-game-base/src/detour_allowlist.rs` (535 rows, the carried former `DETOUR_SAFE` set; data globals, vtables, signature-only pairings and two 3-byte leaves stay callable but never hookable). An address found at runtime is hooked through `er_hook`'s `*_runtime_derived` entry points, which check the live `.pdata` instead. Prologue pins use `Image::EldenRing2720` and are ground-truthed against `eldenring-deobf-1.17.2.bin` (`ER_DEOBF_BIN_1172` overrides the path). The hub exports are `er_effects_union_register_2720` / `er_effects_union_register5_2720`, renamed from the suffixless names because the address a companion hands the hub changed meaning without changing type. A future patch is a re-measurement of the constants against the new image, not a carry table. `docs/game-build.md` has the model, the next-patch procedure and the history.
-  - **`crates/er-game-base/src/rva.rs` holds native 2.7.2.0 rvas, like every other address constant.** `game_base + rva` is the running game's address on 2.7.2.0, computed by hand or through `er_game_base::mem::game_data_addr`, which adds the build check and nothing else. A constant that does not match `eldenring-deobf-1.17.2.bin` is a real bug: fix the constant. The opposite rule stood here until 2026-10-23 (the constants were 1.16.2 and translated at use, and computing `base + rva` by hand was the mistake, which cost two sessions: bd `rva-rs-worldchrman-and-fieldarea-globals-are-stale-1162-2026-09-18`). That layer is gone, and its ledgers and carry scripts went with it (their last committed copies are at `41d6a363`), so never carry a literal again: it is already a 2.7.2.0 rva, and carrying it a second time can land on another function (`0x67a810` is both a 2.7.2.0 destination and another row's 1.16.2 source).
-- **The older builds are read-only RE inputs, not targets.** 1.16.2 (2.6.2.0, `eldenring-deobf.bin`), 1.17.0 (2.7.0.0, `eldenring-deobf-1.17.bin`) and 1.17.1 (2.7.1.0, `eldenring-deobf-1.17.1.bin`) are no longer installed and are refused at runtime. An address in a `bd` memory, a `docs/recon` or `docs/er-mechanics` note, or an older comment is labelled with the build it was measured on; until it has been found on the 2.7.2.0 image it is a name for a function, not an address. `eldenring-deobf.bin` still matters because it is the same build as the named dump: it is where a 2.7.2.0 function is matched back to its 1.16.2 name (item 2 below).
-- **The 1.17.0 Ghidra dump on `localhost:8767` (2026-08-30) is for structure only.** Bring it up with `bash scripts/ghidra/mcp-up-1170.sh` (project `$HOME/ghidra_maporch/proj1170`, program `ermaporch1170`, imported from `/home/banon/pc_eldenring_runtime.1.17.0.exe.gzf` via `scripts/ghidra/import-runtime-gzf.sh`). 1.16.2 stays up on :8765 at the same time. Do **not** use :8766; it is an unrelated live `DarkSoulsII.exe` daemon and taking it collides with a user session. Its dump VA equals the `eldenring-deobf-1.17.bin` VA (`getFunctionByAddress("14074a970")` returns a function whose entry is `14074a970`), so every address it hands you is a 1.17.0 address and never a 2.7.2.0 one: find the function on `eldenring-deobf-1.17.2.bin` by its bytes before using it. It has no names (`searchFunctionsByName` totalCount, 1.16.2 vs 1.17 -- Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0); everything is `FUN_<addr>`. What it adds is a call graph that is not blind to leaves: `.pdata` declares nothing for 5.55 MB of `.text` across 146,715 holes, while Ghidra's analysis finds 366,673 functions in 1.17 against 367,183 in 1.16.2, so call-graph topology can pair functions where bytes cannot.
-- **THE NAMED DUMP IS 1.16.2, AND ITS `.gzf` NO LONGER EXISTS ON THIS MACHINE.** The named dump MUST be 1.16.2, NOT 1.16.1 (a 1.16.1 dump gives drifted addresses that crash-hook -- see bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`). It survives ONLY as the already-imported project `ermaporch1162` @ `$HOME/ghidra_maporch/proj1162`, served on :8765. **Do not go looking for `pc_eldenring_runtime.1.16.2.exe.gzf`** -- this line used to name it at `/mnt/c/Users/choza/...`, a WSL2 path that does not exist here: there is no `/mnt/c` at all, and `/mnt/win-c` is an empty unmounted point, so a search there returns nothing and reads as "the dump is missing" rather than "you looked on a machine that is gone". Verified 2026-08-31: the only `.gzf` files under `$HOME` are `pc_eldenring_runtime.1.16.1.exe.gzf` (1.5 GB, in `projects/reverse/ghidra-projects/`) and `pc_eldenring_runtime.1.17.0.exe.gzf` (4.1 GB). Losing `proj1162` loses the only named ELDEN RING image this workspace has; it cannot be re-imported from anything local. It **requires Ghidra 12.1.2** (x86 language V4.7+ -- 12.1 fails, bd `1162-gzf-needs-ghidra-1212-not-121-2026-07-20`). The 12.1.2 install lives at `$HOME/tools/ghidra_12.1.2_PUBLIC`; the previously-documented `/mnt/d/ghidra/ghidra_12.1.2_PUBLIC` **no longer exists** (`/mnt/d` is unmounted), so set `GHIDRA_INSTALL_DIR` or rely on `scripts/ghidra/mcp-up-1162.sh`, which resolves env-first then falls back through `$HOME/tools` -> `/mnt/d` -> `/opt`.
-- **The MCP daemon on `localhost:8765` serves 1.16.2.** Bring it up / validate with `bash scripts/ghidra/mcp-up-1162.sh` (pins 12.1.2 + `ermaporch1162`). Query lock-free with `python3 scripts/ghidra/mcp_query.py <method>` -- daemon methods are **camelCase**: `getContext`, `getDecompiledCode`, `decompileFunctionByName`, `disassembleFunction`, `getFunctionByAddress`, `getXrefsTo/From`, `searchFunctionsByName`, `getStructure`, ... (NOT snake_case `get_program_info`). The Pi `ghidra` MCP bridge forwards to :8765, so its tools also serve 1.16.2. To switch the daemon: `scripts/ghidra/mcp-ghidra-daemon.sh stop` (frees :8765) then `mcp-up-1162.sh`. Every address it returns is a 1.16.2 address. Carry it to 2.7.2.0 before using it, by byte matching against `eldenring-deobf-1.17.2.bin` (`docs/game-build.md`, "Names come from 1.16.2").
-- **SUPERSEDED FOR 1.16.2 (2026-07-28) -- THE SHIFT IS ZERO; DO NOT RUN `dump-deobf-shift.py`.** For the 1.16.2 dump now served by the MCP, the dump VA and the `eldenring-deobf.bin` VA are identical (image base `0x140000000`, shift `0`), and so was the live runtime VA while 1.16.2 was the installed game. Byte-verified independently on 30+ functions spanning `0x14025xxxx`-`0x14266xxxx`, plus a live capture: a runtime stack walk out of the game's save-write path resolved all 8 frames through the 1.16.2 MCP `getFunctionByAddress` onto clean functions (`TryWrite`, `WriteBytes`, `ThreadFunction(DLThread*)`, ...) with no adjustment. Practical consequences, in order of how badly each bites:
-  1. **`scripts/dump-deobf-shift.py` is now actively WRONG and will crash-hook you.** Its DUMP side (`dump-exec.bin`) is still the 1.16.1 image, so it maps 1.16.1-dump -> 1.16.2-deobf and invents a nonzero shift where none exists. Measured failures: it reported `0x142413860 -> 0x142413870` (+0x10) and flagged `0x142410830` as a "+0x10 estimate"; **both land mid-instruction**. Trust a byte check, never this tool. `dump-exec.bin` **cannot be regenerated** -- the 1.16.2 `.gzf` it would come from does not exist on this machine (see the named-dump bullet above), so the fix is deletion, not repair. Tracked in bd `er-effects-rs-q9jd`.
-  2. **An address observed at runtime is a 2.7.2.0 address, and :8765 describes 1.16.2.** A stack-capture return address, a hook callback's caller, a pointer read out of live memory: subtract the module base and `eldenring-deobf-1.17.2.bin` answers for that rva directly. To get its name, match it back to 1.16.2 by bytes: take the enclosing function's opening instructions from `eldenring-deobf-1.17.2.bin` (its 2.7.2.0 `.pdata` entry, not the return address), replace rel32 branch targets and rip-relative displacements with `??`, and search the 1.16.2 image with `ER_DEOBF_BIN=eldenring-deobf.bin python3 scripts/find-deobf-bytes.py '<pattern>'`. One hit at a function entry is the 1.16.2 VA to give `getFunctionByAddress` / `getDecompiledCode`; several hits mean the window is too short, and none means the function changed, so pair it by its callers or strings instead. Measured 2026-10-23: the 34 bytes at 2.7.2.0 `0x14074ae20` (the pattern in `docs/game-build.md`) hit once in `eldenring-deobf.bin`, at `0x140749b20`, which is the 1.16.2 entry the old carry mapped to it. Feeding a runtime address to :8765 unchanged lands on whatever 1.16.2 has there, which is usually a real function and the wrong one.
-  3. The piecewise `-0x20`/`-0xf0`/`+0x10` staircase described below was real, but it was an artifact of the **old 1.16.1 dump vs the 1.16.2 deobf**. Concrete confirmation: bd `fe-autosave-icon-boot-overlay-mechanism-2026-07-08` records `CSFeManImp::Update` as 1.16.1-dump `0x140771cc0` -> deobf `0x140771bd0` (shift `-0xf0`); in the **1.16.2** dump that function's entry simply *is* `0x140771bd0`.
-  4. Still byte-check anything you will CALL or PATCH, against the installed build's image, `eldenring-deobf-1.17.2.bin`: `ER_DEOBF_BIN=eldenring-deobf-1.17.2.bin python3 scripts/find-deobf-bytes.py '<hex, ?? wildcards>'` prints matching VAs in one command. Name the image whenever the build matters: the scripts' default moved from the 1.16.2 image to the 2.7.2.0 one with the port, each build has a plausible function at most of the other's addresses, and output from the wrong image looks right. The images exist only in the main checkout (gitignored). (The script takes bare patterns only -- `--help` raises a `ValueError` rather than printing usage.) `python3 scripts/check-dump-deobf-identity.py 0x<va>` compares a dump's disassembly against an image's at the same VA, folding aliased spellings, so it only applies where dump and image are one build: :8765 with `eldenring-deobf.bin` (its default), or `--port 8767 --image eldenring-deobf-1.17.bin`. There is no Ghidra project of 2.7.2.0 on this machine (checked 2026-10-23: `$HOME/ghidra_maporch` holds 1.16.1, 1.16.2, 1.17.0 and an import of `eldenring-deobf.bin`).
-  - **`.rdata` IS shift-0 too (corrected 2026-08-01).** The previous note here claimed string literals sat at deobf = dump `+0xE00`. That is wrong, and it is falsified by its own cited example: `u"%s/EldenRing/%s/"` occurs exactly once in `eldenring-deobf.bin`, at file offset `0x2bda858` -> VA `0x142bda858`, which is the address the old note called the DUMP address. Reading its claimed deobf address `0x142bdb658` yields pointers, not the string. Independently confirmed on four more literals, each landing exactly at `offset == RVA`: `0x2a8f9e8` `"Loop"`, `0x2a8fa00` `"Grayout"`, `0x2a90508` `"FadeOut"`, `0x2b264f0` `"TextFadeOut"`. The `+0xE00` was manufactured by applying a PE section raw-pointer mapping to a file that does not need one -- `eldenring-deobf.bin` is a FLAT image, so **file offset == RVA for every section**, and `VA = 0x140000000 + file_offset` everywhere. Anyone who followed the old note when resolving a string or vtable operand read `0xE00` bytes off target, which is hook-adjacent rather than cosmetic.
-- **DELETED 2026-08-31: the piecewise-shift narrative and its tool.** Two bullets used to sit here. One described the dump/deobf shift as a piecewise `-0x20`/`-0xf0`/`+0x10` staircase; the other told you to ground-truth every CALL/PATCH address with `scripts/dump-deobf-shift.py`. Both were TRUE against the **1.16.1** dump and became traps the moment the MCP started serving 1.16.2: the shift is now ZERO (see the bullet above), and the tool still reads the 1.16.1 `dump-exec.bin`, so it manufactures a nonzero shift out of a zero one. They are deleted rather than annotated because a correction sitting under a still-present instruction gets read as ambiguity, and the wrong half is the one that costs a boot. The single useful residue is already item 4 above: byte-check anything you will CALL or PATCH against the image you will run against.
-- The standalone `.gzf` is separate from the shared `From Software.rep` project, which is often open in the user's Ghidra GUI (locked). NEVER open `.rep` headless; import the `.gzf` into a throwaway temp project instead. This is also why the dump is "user-approved single program," not the forbidden whole-repo scan.
-- **`$HOME/ghidra_maporch/proj` IS THE 1.16.1 PROGRAM. NEVER TAKE AN ADDRESS FROM IT.** Verified 2026-08-31 by reading the project index files: `proj/ermaporch.rep` holds `pc_eldenring_runtime.1.16.1.exe`, `proj1162/ermaporch1162.rep` holds `1.16.2`, `proj1170/ermaporch1170.rep` holds `1.17.0`. This bullet used to open "PERSISTENT PROJECT (use this; no re-import)" and present `proj`/`ermaporch` as THE default project, which is how a 1.16.1 address gets taken for a current one -- exactly the failure in bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`. **Default to the MCP daemons: :8765 for names/types (1.16.2), :8767 for structure (1.17).** The headless wrapper `scripts/ghidra-query.sh <postScript>.java [args...]` is kept only for Java postScripts the MCP cannot express -- it runs `analyzeHeadless <project> <program> -process -noanalysis -readOnly -postScript ...` and reopens a saved program in **~5s** (vs the ~2-min import). It still DEFAULTS to `proj`/`ermaporch`, i.e. 1.16.1, so **always name the project**: `GHIDRA_INSTALL_DIR=$HOME/tools/ghidra_12.1.2_PUBLIC GHIDRA_PROJ_DIR=$HOME/ghidra_maporch/proj1162 GHIDRA_PROJ_NAME=ermaporch1162` (or `proj1170`/`ermaporch1170`). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra), and batch all lookups for one question into one script. A single known program per query, never a whole-repo scan.
-- **If EVERY decompile returns "Decompilation failed" but disasm/xrefs/symbols still work**, the cause is the install's native `decompile` helper losing its executable bit (a re-copied Ghidra tree restores `+x` on the shell scripts but not on `Ghidra/Features/Decompiler/os/linux_x86_64/decompile`). `DecompInterface` spawns it per request, so the exec failure fails every decompile uniformly while pure-Java queries are unaffected, and the GhidraMCP extension swallows the real cause so nothing appears in `daemon.log`. `scripts/ghidra/mcp-ghidra-daemon.sh start` now re-applies `+x` across `*/os/linux_x86_64/` on every start (live-effective, no restart needed). Ignore the recurring `MissingBuiltInDataType.<init>()` log error -- it is cosmetic and decompilation works with it present.
-  - If `scripts/ghidra-query.sh` or headless Ghidra reports the persistent project is locked, **do not fall back to offline scans/disassembly just because of the lock**. Use the Ghidra MCP tools against the already-open project first (`ghidra_decompile_function_by_address`, xrefs, disassembly, etc.). If the MCP is unavailable or stale, fix/reconnect the MCP bridge as the next step; only use offline disassembly as a fallback after the MCP path is proven unavailable for the specific query.
-  - The earlier "a `BadDataType` JPMS save error prevents persisting" claim was **WRONG**: the real blocker was `/tmp` (a near-full 32G tmpfs) running out of space while unpacking the gzf. Fix (baked into the wrapper): force `java.io.tmpdir` onto a current-user writable directory such as `$HOME/ghidra_maporch/tmp` via `GHIDRA_JAVA_OPTIONS`; plain `TMPDIR` is ignored for `java.io.tmpdir`. The `BadDataType`/`IllegalAccessException` log line still prints on JDK 26 but is **cosmetic/non-fatal** (Save + Import both succeed). See bd `ghidra-persistent-project-reuse-2026-06-22`.
-  - To re-import from scratch (rarely needed, e.g. a new dump version): use the current user's `ghidra_maporch/scripts/import_persistent.sh` if present, or set explicit paths rather than hard-coding `/home/banon`.
-  - **Where to put GhidraScripts: `scripts/ghidra/` (version-controlled), NOT `/tmp/ghidra_scripts/`.** Reusable Java postScripts (and their helper shell wrappers) belong in the repo's `scripts/ghidra/` directory so they survive reboots, are reviewable, and are shared across agents/sessions. `ghidra-query.sh` copies the requested repo script into the current user's stable Ghidra script cache (`$HOME/ghidra_maporch/gscripts` by default, override `GHIDRA_SCRIPT_CACHE`) before execution, so a script in `scripts/ghidra/` runs as: `bash scripts/ghidra-query.sh scripts/ghidra/MyQuery.java [args...]`. Do NOT scatter new query scripts into `/tmp/ghidra_scripts/` -- that path is volatile (lost on reboot) and unversioned; older helpers still living there should be migrated into `scripts/ghidra/` when touched.
-- Still respect the bounded-query hygiene below (single known program, no multi-program/whole-repo enumeration).
-
-## Ghidra Shared Project Hygiene
-
-Do not run broad headless Ghidra enumeration that opens every candidate program in the shared repository. A prior `ListEldenRingPrograms.java` attempt over the shared `From Software` repo had to be interrupted after nearly two hours. Use exact known project paths, repository file listings that do not open programs, or a small user-approved target list. If a new shared Ghidra query might open multiple large programs or scan the whole repository, stop and propose the bounded query first.
-
-Do not use whole-file MD5 as the Ghidra identity oracle for Elden Ring. The shared program is expected to be a runtime dump and local `eldenring.exe` may be intentionally PE-header patched, so whole-file hashes are at best provenance metadata. Use small bounded anchor byte windows, function-boundary evidence, and section/window fingerprints at exact RVAs instead.
-
-## Colored Elden Ring Disassembly
-
-For Elden Ring disassembly in Pi, prefer the project Pi tool `er_disasm` instead of shelling out to `scripts/disas-*.sh` when colored/reviewable output is useful.
-
-Examples, at 2.7.2.0 VAs:
-- `er_disasm kind=deobf va=0x14074ae20 nbytes=0x40`
-- `er_disasm kind=va va=0x14074ae20 nbytes=0x100`
-
-`kind=deobf` runs `scripts/disas-deobf.sh`, which disassembles `eldenring-deobf-1.17.2.bin` unless
-`ER_DEOBF_BIN` (or `ER_DEOBF_IMAGE`) in the environment Pi runs it from names another image. The
-tool has no image parameter, so a stray `ER_DEOBF_BIN=eldenring-deobf.bin` in that environment
-makes a 2.7.2.0 VA disassemble whatever 1.16.2 has there. `kind=va` reads the
-installed `eldenring.exe` itself, whose first `.text` maps at `VA = file_offset + 0x140000a00` on
-2.7.2.0 (its bytes at `0x14074ae20` match the flat image). `kind=data` (`scripts/dump-data-va.sh`)
-reads the installed exe and maps the VA through the exe's own section table, because the exe is
-not flat: on 2.7.2.0 `.rdata` and `.data` sit `0x1600` and `0x2400` below their rvas in the file
-(on 1.16.2 it was `0xe00` and `0x1200`). Until 2026-10-23 it read at file offset == rva, which was
-off target for `.rdata` and `.data` on every build. The flat image holds the same bytes at
-offset == rva:
-`xxd -s 0x3d00000 -l 0xb0 /home/banon/projects/er-mods-rs/eldenring-deobf-1.17.2.bin`.
-
-Use `scripts/disas-deobf.sh --color=always ...` only for direct terminal/Kitty use.
-
-### In-Process Decoding (`iced-x86`)
-
-The `er_disasm` tool and `disas-*.sh` scripts (objdump-backed) are for **offline,
-agent-facing** disassembly. For **in-process, runtime** x86-64 decoding *inside the
-DLL* (instruction-length stepping for the INT3 single-step engine, function-prologue
-validation, byte-pattern confirmation), use the **`iced-x86`** crate -- it is now a
-direct dependency of the root `er-quickload` crate (pure-Rust, decoder-only feature
-set, zero cross-compile overhead under cargo-xwin). Do **not** hard-code instruction byte lengths or
-prologue byte sequences in new code when `iced-x86` can decode them, and do **not**
-add a second disassembler (e.g. capstone/zydis) **into the DLL / in-process Rust** --
-`iced-x86` already covers in-process needs and avoids a C cross-compile burden.
-
-### Hooking the middle of a function: `ilhook` (user directive 2026-10-19)
-
-MinHook (`er-hook`) patches function **entries** only, and
-`er_game_base::game_build::resolve_detour_address` accepts a game address only when its rva is a
-function entry on `crates/er-game-base/src/detour_allowlist.rs`, so a mid-function address is
-refused on purpose. When
-a fault or decision sits partway through a function whose other work must still happen, do not
-settle for an entry guard that skips the whole function: use **`ilhook`'s jmp-ret hook**.
-
-- It writes a 14-byte absolute jump at any instruction boundary, relocates the instructions it
-  covers into a trampoline, hands the routine every register as a mutable `Registers` block, and
-  jumps to whatever address the routine returns. Return `ori_func_ptr` to run the moved
-  instructions unchanged; return a join point the function already has to take that branch, with
-  your register edits applied.
-- Pure Rust on `iced-x86`, builds on the Linux host too (so routines get host unit tests), no C.
-- The worked example is `crates/er-seamless-bugfixes/src/mid_hooks/` (2026-10-19): two hooks inside
-  `CS::MapItemManImpl::GiveItems` that divert to the function's own "no storage chest" and "someone
-  else's item" branches when there is no local player. It replaced an entry guard that lost the
-  item. `mid_hooks/mod.rs` states the rules: resume only on an existing branch and set every
-  register it reads; pin the whole 14+-byte moved window and the resume target by bytes generated
-  in `build.rs`; check that no branch in the function lands inside the window; resolve both
-  addresses with `resolve_call_site_rva` (function entry plus offset), never as detours.
-- The routine type is `unsafe extern "win64" fn(*mut Registers, ori_func_ptr: usize, user_data:
-  usize) -> usize`. Install with `Hooker::new(addr, HookType::JmpToRet(routine),
-  CallbackOption::None, 0, HookFlags::empty()).hook()` and keep the returned `HookPoint` alive
-  (dropping it unhooks).
-- Not for a whole-function detour (keep MinHook there) and not for a one-instruction removal the
-  function already skips (that is a one-byte patch, see `er-seamless-bugfixes/src/patches/`).
-
-#### Offline Python decoding (`capstone`)
-
-The above `iced-x86`-only rule is about **in-process Rust**. For **offline,
-agent-facing Python tooling** (the `scripts/*.py` helpers), `capstone` is the
-sanctioned x86-64 decoder and is **kept available on purpose** -- it exposes
-per-instruction operand byte offsets (`insn.encoding.disp_offset/disp_size`,
-`imm_offset/imm_size`) that make relocation-aware byte matching trivial. The worked
-example is `scripts/locate-ersc-entry-points.py`, which masks displacements and immediates
-to find this repo's pinned Seamless Co-op functions again in a new `ersc.dll`: the same
-re-measurement a game patch needs (`docs/game-build.md`). (`scripts/dump-deobf-shift.py`
-is banned, see the Ghidra section.) There is no system `pip`; do
-**not** try to install it globally. Run capstone-using scripts under uv, which
-provisions it ephemerally (cached, ~ms):
-`uv run --with capstone python3 scripts/<tool>.py ...`.
 
 ## Non-Interactive Shell Commands
 
@@ -570,7 +167,10 @@ cp -rf source dest          # NOT: cp -r source dest
 ### Rules
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Never End A Turn The User Would Answer With Nothing (user directive 2026-09-09)
+- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
+- Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+
+## Never End A Turn The User Would Answer With Nothing (user directive 2026-09-09)
 
 Before ending a turn, ask what the ideal user reply is. If the honest answer is **nothing** -- they
 would have to say "ok, go on" -- the turn must not end. Ending there costs the user a round trip
@@ -624,9 +224,6 @@ is still needed. Still running means no finished notification, no Monitor expiry
 it in the transcript. Enforced by `.cupcake/policies/claude/no_unexplained_running_tasks.rego` over
 `.cupcake/signals/last_assistant_unexplained_running_tasks.sh`, tested by
 `scripts/test-unexplained-running-tasks-signal.py` and `scripts/test-cupcake-stop-guards.py`.
-
-## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
-- Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
 
@@ -800,64 +397,6 @@ no longer governs commits.
 
 When the user asks whether a runtime-affecting refactor is possible/easy/safe, investigate first before answering. Do not guess from source shape alone. Minimum feasibility check: inspect the runtime entrypoints, loader/export expectations, staging scripts, existing probes, and the current known-working runtime proof path; identify what could break and what smoke would prove non-regression. Do not call the refactor non-breaking until a live runtime smoke passes. Never commit or push a runtime-affecting refactor to `main` before the required smoke proof exists.
 
-## No Compromises
-
-We accept **no compromises** on the stated objective: a same-character repeat load
-(System->Quit->**Load Character**) that reaches **genuine world readiness** (character rendered
-AND the player can move).
-
-**THE BUTTON NAMES, AND THE OLD ONES THIS REPO IS STILL FULL OF.** Both load rows on the
-Quit Game tab are OURS -- vanilla ships only *Save Game* and *Return to Desktop*, and the
-mod clones the row twice. They were renamed on 2026-07-31 after a review found the original
-pair indistinguishable, but the old words survive in prose, in `bd` memories and in the
-constant names, so read them as synonyms rather than as a second feature:
-
-| old name (still in memories/symbols) | ON SCREEN since 2026-07-31 | takes as input |
-|---|---|---|
-| Load Profile | **Load Character** | a character from the save container already loaded |
-| Load Save Profiles | **Load Character from File** | a save file off the disk |
-
-A THIRD cloned row, **Load Build from URL**, was added later and has never had another name.
-It is the odd one out on the tab: it neither returns to the title nor touches a save container,
-but rebuilds the character you are already playing from the `build_url` set in the game-directory
-`er-quickload.toml` (items granted, gear worn, spells memorised, level and attributes matched). The
-importer behind it is `er-build-import-runtime`, shared with the standalone `er-build-import`
-shell -- which must therefore never be loaded in the same me3 profile as the product DLL. Its label
-bytes live in `SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W`, beside the two above.
-
-The label bytes live in `SYSTEM_QUIT_LOAD_PROFILE_LABEL_W` and
-`SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W` (`system_quit_dialog_handlers.rs`) -- the symbols
-kept the old names while their contents changed, which is exactly the trap this table
-exists to close. An agent that quotes the old name "Load Profile" at the user is naming a
-button that has not been on screen since July. Do not settle for a weaker solution that technically "works"
-but does not actually reach that bar. When a path looks blocked, that is a signal to
-find the *real* solution at a deeper layer -- not to lower the bar.
-
-**Validate the way a USER would (reframe 2026-07-19, supersedes the old "zero-input"
-framing -- do NOT reintroduce `simulated_button_presses_total = 0` / "no simulated input"
-as the goal).** The point is confidence that a real user can drive the feature to world
-readiness, so the TEST must follow a path CLOSE to how a user does it: navigate the menu
-**with input**, respecting the game's real input-enable **delays** (the game gates when
-you can move / open the menu / press a button after a load). Drive that navigation via the
-input-harness DLL's **direct-memory native-binding injection** (`inputmgr+0x90+eventId`,
-which mimics a user's presses at the native binding) -- NOT a menu-bypassing direct-arm
-shortcut (that skips the exact user path being validated) and NOT synthesized OS-layer
-input (XInput/DInput/SendInput, which native ER does not route). The deliverable is still a
-single DLL loaded through me3 as a `[[natives]]` profile entry (LazyLoader removed
-2026-07-04), compatible with offline-vanilla, Seamless Co-op, and other mods (see bd memory
-`autoload-dll-product-requirements`), with the load2 flow decoupled into the input-harness
-DLL (toggled by profile inclusion). "Architecturally hard" is not "impossible" -- keep
-reverse-engineering until the real mechanism is found. Surface trade-offs honestly, but the
-bar is the actual goal, never a fallback.
-
-When a native menu/load path appears to need a manually pumped `MenuJob`, treat that as a red flag
-that the integration boundary is wrong. Do **not** build a recurring private pump as the product fix.
-Instead, reverse the native ownership path: create/build the correct job, store/retain it in the same
-kind of native slot the game uses, enqueue/submit it through the proper MenuJob queue/owner, and trigger
-that queued job from the native OK/confirm transition when the verified semaphores say the press would
-hit the intended option. Manual per-frame pumping is only a bounded diagnostic to prove job behavior;
-the product path must be native enqueue + native pump ownership.
-
 ## Upstream (`fromsoftware-rs`)
 
 **Never file, open, or propose filing an upstream issue/PR/report** (against
@@ -867,153 +406,11 @@ it **in this repo**: confirm the correct value via static RE of the binary, fix 
 side, and record the finding in `bd` for the next agent. Treat upstream as a read-only
 reference we adopt from, never as a place we contribute back to.
 
-## Build & Test
-
-This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses `../fromsoftware-rs` path dependencies).
-
-```bash
-# Full quality gate: lossy-UTF8 lint, cargo fmt --all -- --check,
-# and a windows-target cargo check (cross-compiled from Linux via cargo-xwin).
-#
-# ORCHESTRATOR-ONLY, IN THE MAIN TREE. check.sh fails closed inside an agent
-# worktree -- `repo_root == */.claude/worktrees/agent-*` exits 2 with
-# "REFUSED -- this is an agent worktree" before the summary trap installs -- and
-# it refuses a second concurrent run anywhere. So do NOT write `bash
-# scripts/check.sh` into a subagent brief when that agent has worktree
-# isolation: the instruction is unrunnable, and an agent that reaches for the
-# ER_CHECK_FORCE=1 override burns the ~30 minutes of sleep-polling the guard
-# exists to prevent (bd subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02,
-# bd never-tell-a-worktree-subagent-to-run-check-sh-2026-09-10).
-#
-# A subagent never lints, formats or commits (user directive 2026-10-17; refused by
-# `no_lint_before_commit` and `git_commit_authorization`). Give a worktree subagent
-# tests only, naming its crates and the checks its edit actually touches:
-#   cargo test -p <crate>
-#   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
-#   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
-#   python3 scripts/check-stages.py --selftest     # whenever a scripts/*.py gate is added
-#   python3 scripts/check-comment-caps.py --selftest   # selftests are tests, not lints
-# The lints -- `cargo clippy -p <crate> --all-targets` (`cargo test` never invokes clippy,
-# and the workspace denies warnings), `cargo fmt -p <crate> -- --check`,
-# `python3 scripts/check-comment-caps.py <files>`, `python3 scripts/check-no-lossy-utf8.py`
-# -- are the main session's, run only after the user replies `authorize commit` and
-# before the commit that reply pays for.
-# THE MODE MATTERS AS MUCH AS THE NAME. check.sh runs most gates twice -- `--selftest` first,
-# then the gate itself -- and the selftest is the half that proves the gate can still fail.
-# Running only the plain form passes while a gate is broken. Both halves of PR #456's red CI
-# were gates that had been run in the wrong mode: `check-stages.py --check` instead of
-# `--selftest` (which knows every path a stage reads must be declared by that stage), and
-# `cargo test` instead of `cargo clippy` (which denied a `max().min()` as a clamp pattern).
-# The whole-workspace verdict is the orchestrator's, run once at integration.
-bash scripts/check.sh
-
-# ...which is now ELEVEN STAGES fanned out as child processes, not one long process. The step
-# list is unchanged and still lives in check.sh alone; what changed is that each step belongs to
-# a named stage, so a failure lands somewhere named and the fast stages answer first. Measured on
-# this tree: `lint` is 14s and `policy` 104s, against 887s for the whole suite run one step at
-# a time. The fan-out at four jobs does the same work in 614s, and the number that really moved
-# is time-to-first-failure: a formatting mistake is red in 14s instead of after 121s of
-# unrelated gates.
-bash scripts/check.sh --list-stages         # the stages, and how many steps each holds
-bash scripts/check.sh --stage lint          # one stage, in this process, no children
-bash scripts/check.sh --jobs 1              # every stage, one at a time
-ER_CHECK_STAGES=lint,policy bash scripts/check.sh   # a deliberate subset (NOT a push shortcut)
-
-# A stage takes a SHARED lock and a whole-suite run an EXCLUSIVE one, so two stage runs coexist
-# and a whole-suite run excludes everything. The stage of every step comes from the fifth column
-# of docs/ci-gate-portability.tsv (gate steps) or from seven rules in scripts/check-stages.py
-# (toolchain steps); `check-stages.py --check` is a step of the suite and refuses a step that
-# belongs to no stage or to two. .github/workflows/check.yml generates its matrix from the same
-# command, so a GitHub run page shows the same eleven names.
-#
-# Same suite under act, in containers: bash scripts/act-check.sh --stage lint
-
-# Host-buildable workspace members (no game dependencies):
-cargo test -p er-soulsformats -p er-param-inspect
-cargo check -p er-soulsformats -p er-param-inspect
-
-# The game DLL itself (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
-cargo xwin build --release --target x86_64-pc-windows-msvc
-# Output: target/x86_64-pc-windows-msvc/release/er_quickload.dll
-
-# ...but that builds ONLY er-quickload. The workspace sets
-#     default-members = ["crates/er-quickload"]
-# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp,
-# er-loading-portrait, er-save-picker, and the rest. It exits 0 in a fraction of a
-# second having compiled nothing, which reads exactly like a successful incremental build.
-# For any other DLL, name it:
-cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp
-```
-
-**Check the output hash before staging or launching.** A build that "succeeded" without
-recompiling leaves the previous DLL in place, and a runtime run against it produces evidence for
-code that is not the code under test -- a failure mode indistinguishable from the feature not
-working. `sha256sum target/x86_64-pc-windows-msvc/release/<name>.dll` before and after is enough.
-
-**Prefer `scripts/er-build-dlls.sh <package>...` (or `--all`) over a bare `cargo xwin build`
-whenever the DLL is going to be RUN.** It is the same cargo invocation with the `-p` flags filled
-in from `scripts/me3-dll-list.py`, plus one thing bare cargo cannot do afterwards: it records
-`<artifact>.provenance.json`, a content hash over the package's compiled dependency closure taken
-while that tree was the one being compiled. Every launch script gates on that record
-(`scripts/er-dll-freshness.sh` -> `scripts/er-dll-provenance.py verify`) and REFUSES rather than
-launch an artifact it cannot tie to this tree. A DLL produced by a bare `cargo xwin build` carries
-no such record, so those scripts will refuse it -- correctly, since nothing proves what it is.
-`scripts/check-rust-build.sh` re-attests all 26 shells after its own relink for the same reason.
-
-## Architecture Overview
-
-- `crates/er-quickload/src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, runtime probes, and native title/load instrumentation.
-- `data/effects.json` -- the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
-- `crates/soulsformats` (`er-soulsformats`) -- host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
-- `tools/er-param-inspect` -- CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
-- `docs/` -- reference-tree research notes and recon data (`docs/recon/`).
-
 ## Conventions & Patterns
 
-- Prefer named `const`/`static` declarations for reverse-engineered RVAs, offsets, and structure sizes when that improves reviewability; use `scripts/audit-fromsoft-candidates.py` for inventory/triage instead of a blanket magic-number lint.
-- **Capitals in a comment name something; they never add emphasis** (user directive 2026-09-07,
-  `scripts/check-comment-caps.py`). Write a word in capitals only when the thing is spelled that
-  way: a `const`/`static`, an env var, an acronym (`DLL`, `RVA`, `ABI`), an x86 register or
-  mnemonic, a file or section name, an upstream symbol such as `FUN_140679180`. Never to raise
-  your voice -- `this is NOT the same pointer`, `the ONLY writer`, `MEASURED 2026-08-30` are all
-  banned, and so is a whole shouted sentence used as a heading. Emphasis-caps are not a style
-  preference: these comments carry the reverse engineering, and when a third of the words shout,
-  the shouting marks nothing. Put the load-bearing fact in the first sentence instead, or make it
-  a `#` heading in a module doc comment. The rule covers every line of prose in the source --
-  `//`, `///`, `//!`, `/* */`, `#`, and Python docstrings, which are documentation the moment
-  anyone reads them and were carrying 6,886 shouted words of their own.
-  - The escape hatch is backticks, and it is also better writing: the gate does not read inside
-    `` ` ` `` or inside a double-quoted span, so the x86 `NOT`, a `"NOT RUN"` status string and a
-    constant that happens to be an English word are all fine, spelled as the quotations they are.
-    Tokens attached to identifier or path characters (`SAVE_OWNS`, `AGENTS.md`, `crate::THE_ONE`)
-    are names already and are never read.
-  - **The tree is swept and the gate holds it there.** `--fix` took all 38,682 out of 1,025 files
-    on 2026-09-07 (21,947 lines rewritten, nothing outside comments and docstrings touched), and
-    `scripts/comment-caps.baseline.json` now records exactly one category of survivor: **139
-    words in 37 files that another gate reads as contract text**. `check-windows-proof-render.py`
-    asserts the literal `SEPARATE top-level window` is in `native_overlay.rs`;
-    `check-autoload-happy-path.py` asserts `do NOT call TitleTopDialog::open_menu from this
-    game-task` is in `product_core_autoload_tick`. Downcasing those disarmed both gates, and
-    backticks cannot rescue them because the assertion is a substring match. So they are recorded
-    in the baseline: deliberate, in the diff, reviewable. Everything else must be at zero -- a
-    file with no entry may not have a single shouted word, and a file that drops below its number
-    must record that too, so nothing reads as owing more than it does. Re-sweep (main session
-    only, after the user's `authorize commit`) with
-    `scripts/check-comment-caps.py --fix <path>` and then read the diff: `--fix` lowercases, and
-    a shouted word is occasionally load-bearing and wants a rewritten sentence, a pair of
-    backticks, or a baseline entry instead.
-  - Two enforcement points, deliberately unequal. `scripts/check-comment-caps.py` in `check.sh` is
-    the authority: the full English list, every comment and docstring, the exemptions.
-    `.cupcake/policies/claude/edit_no_comment_caps_guard.rego` refuses the Write/Edit itself, while
-    the author still has the sentence in hand, using a short list of English function words that
-    are never acronyms here and stopping at the first backtick or double quote on a line. It
-    under-reports on purpose: a miss costs a red gate later, a false positive costs an edit nobody
-    can make.
-  - The banned words are ordinary English, listed in `scripts/comment-caps-words.txt` and
-    regenerated by `scripts/gen-comment-caps-words.py` (needs `uv run --with wordfreq`). An
-    allowlist of technical vocabulary was rejected on purpose: registers, mnemonics, param names,
-    FromSoft types and `FUN_<addr>` symbols are an open set that grows every session, so an
-    allowlist would reject new correct writing every week. English is the closed set.
+The full list is `docs/agents/conventions.md`. This entry stays here because
+`scripts/color-spelling.baseline.json` counts its spelling in this file.
+
 - **Write `color`, never `colour`** (user request 2026-10-20), in prose, identifiers, config keys
   and messages alike. `scripts/check-color-spelling.py` (in check.sh's `lint` stage) is a ratchet
   over every tracked text file: `scripts/color-spelling.baseline.json` records each file's count,
@@ -1026,16 +423,3 @@ no such record, so those scripts will refuse it -- correctly, since nothing prov
   migration rather than a respelling; a reason never lets its file grow. The Edit guard
   `.cupcake/policies/claude/edit_color_spelling_guard.rego` refuses an edit that adds one outside a
   double-quoted span; it does not judge `Write`, whose previous count it cannot see.
-- **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
-- **Every in-game overlay draws with `crates/er-overlay-theme`** (user directive 2026-10-16: one
-  look across every hudhook DLL, now and for every new one). A crate that draws with imgui --
-  or takes the host's `Ui` through `adopt_frame` -- depends on the theme and writes no color,
-  font size or style push of its own: it enters a frame theme the way `er-render-scale`'s
-  `draw_ui` does, asks the host for the theme's faces, begins windows with `window_style` /
-  `apply_font_scale` / `panel_style`, and draws with the tokens and helpers. A color the theme
-  lacks is added to the theme under a name. Never size text against an assumed 13px face: the
-  host's default face is whatever the hosting DLL built. `scripts/check-overlay-theme.py` in
-  `check.sh` enforces it; `scripts/overlay-theme.baseline.json` records what was not yet ported
-  and may only shrink, so a new crate starts at zero.
-- Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
-- The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.

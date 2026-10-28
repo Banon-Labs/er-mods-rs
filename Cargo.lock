@@ -2901,6 +2901,8 @@ version = "0.1.0"
 dependencies = [
  "er-crash-logging-core",
  "er-game-base",
+ "er-hook",
+ "iced-x86",
 ]
 
 [[package]]

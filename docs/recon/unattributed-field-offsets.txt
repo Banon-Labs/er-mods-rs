@@ -107,10 +107,10 @@
 #      4  er-invasion-path
 #      3  er-build-import-runtime
 #      3  er-quit-menu-core
+#      2  er-crash-logging
 #      2  er-player-name-filter
 #      2  er-refill-all
 #      2  er-reload-trace
-#      2  er-seamless-bugfixes
 #      1  er-better-refills
 #      1  er-inventory-sort
 #      1  er-net-effects
@@ -226,7 +226,7 @@ FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET	crates/er-game-base/src/filecap.
 FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET	crates/er-quickload/src/constants/system_quit.rs	0xb28
 FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET	crates/er-quickload/src/constants/system_quit.rs	0x12d
 FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET	crates/er-quickload/src/constants/system_quit.rs	0x12e
-FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET	crates/er-seamless-bugfixes/src/patches/freelist_shutdown_assert.rs	0x90
+FREELIST_SHUTDOWN_ASSERT_WINDOW_OFFSET	crates/er-crash-logging/src/patches/freelist_shutdown_assert.rs	0x90
 FULLREAD_OWNER_GDM_08_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x8
 GEOM_ALL_READY_A_108_OFFSET	crates/er-quickload/src/own_load/drive.rs	0x108
 GEOM_ALL_READY_A_108_OFFSET	crates/er-telemetry-core/src/read/stream_overlap.rs	0x108
@@ -284,7 +284,7 @@ INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET	crates/er-title-flow/src/constant
 INGAMESTEP_WORLDLOADLIST_VPATH_OFFSET	crates/er-title-flow/src/title_load_step_hooks.rs	0x108
 INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x220
 INPUTMGR_PENDING_13C_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x13c
-INT3_OFFSET	crates/er-seamless-bugfixes/src/patches/freelist_shutdown_assert.rs	0x6
+INT3_OFFSET	crates/er-crash-logging/src/patches/freelist_shutdown_assert.rs	0x6
 IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET	crates/er-title-flow/src/constants_return_title.rs	0xe0
 IODEV_INFLIGHT_10_OFFSET	crates/er-title-flow/src/constants_moved.rs	0x10
 IODEV_OS_HANDLE_30_OFFSET	crates/er-title-flow/src/constants_autoload_state.rs	0x30

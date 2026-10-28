@@ -49,8 +49,10 @@ at this tool call, and nothing else:
    `.cupcake/state/push-authorizations.jsonl` (gitignored) with the tool call holding it. The same
    tool call again is allowed, because more than one hook may evaluate the same event; it is still
    the same push. A different tool call is refused, unless the chain shows Claude Code refused the
-   holder before it ran (another policy denied it, or the user rejected it): then the new call takes
-   the authorization over and the record says which call it replaces. See `spend`.
+   holder before it ran (another policy denied it, or the user rejected it), or the pre-push hook
+   recorded a refund for it (it refused the push for a precondition such as a running game, before
+   any gate judged the content; `scripts/er-pre-push-clear.py`): then the new call takes the
+   authorization over and the record says which call it replaces. See `spend`.
 
 What this cannot stop, stated plainly: the transcript is a file owned by the same user the agent's
 shell runs as. Appending to it achieves nothing (point 1), and
@@ -442,6 +444,7 @@ def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str,
         fcntl.flock(fh, fcntl.LOCK_EX)
         fh.seek(0)
         holders: list[str] = []
+        refunded = False
         for line in fh:
             try:
                 rec = json.loads(line)
@@ -449,12 +452,22 @@ def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str,
                 continue
             if isinstance(rec, dict) and rec.get("message_uuid") == message_uuid:
                 holders.append(rec.get("tool_use_id"))
+                refunded = bool(rec.get("refunded"))
         record = {"message_uuid": message_uuid, "tool_use_id": tool_use_id,
                   "branch": branch, "tip": tip, "at": time.time()}
         if holders:
             holder = holders[-1]
             if holder == tool_use_id:
                 return None  # the same call evaluated again, by a second hook
+            if refunded:
+                # The pre-push hook refused the holder's push for a precondition the agent can
+                # clear (game running, dirty tree, ...) before any gate judged the content, and
+                # recorded that with `scripts/er-pre-push-clear.py refund`. Nothing reached the
+                # remote, so the reply is still the user's one push of this tip.
+                record["replaces"] = holder
+                fh.seek(0, os.SEEK_END)
+                fh.write(json.dumps(record) + "\n")
+                return None
             if tool_use_id in holders:
                 return "that authorization has moved on from this tool call to a later one"
             outcome = ran(holder) if isinstance(holder, str) else True

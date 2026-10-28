@@ -16,6 +16,9 @@ use std::{
 };
 
 mod hang;
+// Only the Windows fault path calls into it; on the host only its tests do.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod overflow;
 
 /// Reading `er-crash-latest.txt` back: whose crash was it, and was it this run's?
 ///
@@ -750,6 +753,8 @@ pub fn install(new_config: CrashLogConfig, self_module_base: usize) {
         // A hang raises no exception, so the handlers above are blind to it. The watchdog is the
         // only path that produces evidence when the game stops rather than crashes.
         hang::start(config().hang_stall_seconds);
+        // A thread that overflows has no stack left to describe itself with; this one walks it.
+        overflow::start();
     });
 }
 
@@ -1120,12 +1125,19 @@ fn exception_report(snapshot: &ExceptionSnapshot, reason: &str, repeat: usize) -
     if snapshot.code == EXCEPTION_CPP_THROW {
         write_cpp_throw_fields(&mut out, snapshot, &modules);
     }
+    write_report_extension(&mut out);
     if snapshot.code == EXCEPTION_STACK_OVERFLOW {
-        // Everything below here formats into deeper stack; on an overflow there is none to spend.
-        let _ = writeln!(
-            out,
-            "stack_note=stack-overflow; skipped stack scan/backtrace"
-        );
+        // Everything below here formats into deeper stack; on an overflow there is none to spend,
+        // so the helper thread walks this thread's stack instead. See `overflow`.
+        match overflow::request(snapshot.rsp) {
+            Some(lines) => out.push_str(&lines),
+            None => {
+                let _ = writeln!(
+                    out,
+                    "stack_note=stack-overflow; the stack-walk helper did not answer, no frames"
+                );
+            }
+        }
         return out;
     }
     let _ = writeln!(out, "site_histogram={}", exception_site_histogram(&modules));
@@ -1164,6 +1176,31 @@ fn exception_report(snapshot: &ExceptionSnapshot, reason: &str, repeat: usize) -
         fault_site_bytes(snapshot.rip, &modules)
     );
     out
+}
+
+/// Fields a shell DLL adds to every exception record, written right after the exception's own.
+///
+/// The core cannot know about the GPU: `er-quickload` links it too, and only the standalone
+/// `er-crash-logging` shell captures the game's D3D12 device. A lost device shows up here only as
+/// a `_com_error` throw, so without a way for the shell to add what the device itself says, a GPU
+/// crash leaves a report that names the null pointer it ended on and nothing that hung the GPU.
+pub type ReportExtension = fn(&mut String);
+
+static REPORT_EXTENSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Install the [`ReportExtension`]. The last call wins; there is one shell per DLL.
+pub fn set_report_extension(extension: ReportExtension) {
+    REPORT_EXTENSION.store(extension as usize, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(windows)]
+fn write_report_extension(out: &mut String) {
+    let raw = REPORT_EXTENSION.load(Ordering::SeqCst);
+    if raw != 0 {
+        // SAFETY: only `set_report_extension` stores here, and it stores a `ReportExtension`.
+        let extension: ReportExtension = unsafe { core::mem::transmute(raw) };
+        extension(out);
+    }
 }
 
 pub fn is_reportable_exception(code: u32) -> bool {

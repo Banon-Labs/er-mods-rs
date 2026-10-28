@@ -140,6 +140,7 @@ portable	-	cupcake_push_target_repo.py --selftest	builds a linked working tree a
 portable	-	cupcake_python_script_writes.py --selftest	scans python files it writes to a temp dir; no game image, no network	policy
 portable	-	cupcake_stamped_run.py --selftest	builds three fixture repositories and run roots in a temp dir and points the evidence scan at them; no game image, no network	policy
 portable	-	cupcake_push_teardown.py --selftest	fixture transcripts and a throwaway git repo in a temp dir; no game image, no network	policy
+portable	-	er-pre-push-clear.py --selftest	fixture spent-authorization files in a temp dir and injected game/teardown callbacks; no game, no network	policy
 portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin	product
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint
@@ -279,6 +280,7 @@ portable	-	test-pre-push-deletion-only.sh	builds its own bare remote plus workin
 portable	-	test-pre-push-dirty-tree.sh	builds its own single-branch repo under mktemp, stubs the one script the hook calls before the check, and drives the hook with a ref list on stdin	suite
 portable	-	test-pre-push-gates-pushed-ref.sh	builds its own two-commit repo under mktemp with every gate stubbed, drives the real hook with a ref list on stdin, and lets it pin its gate worktree inside that fixture	suite
 portable	-	test-pre-push-green-cache.sh	builds its own repo under mktemp with every gate stubbed and drives the real hook; markers land in that fixture's own git directory	suite
+portable	-	test-pre-push-authorized-teardown.sh	builds its own repo under mktemp with every gate and er-teardown.py stubbed, points the run root at the fixture, and drives the real hook; no game is looked at or touched	suite
 portable	-	test-er-push-watched-ref-carries-work.sh	builds its own bare remote plus working clone under mktemp; every fetch and push names that fixture, so it needs no network and no origin/main	suite
 portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1	suite
 portable	-	check-save-disable-warnings.py	lint-checks two crates with cargo-xwin under the check profile, after the cargo xwin check warm-up step before it	cargo-build

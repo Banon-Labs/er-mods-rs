@@ -202,6 +202,18 @@ def game_dir() -> pathlib.Path | None:
         return None
 
 
+def identity_logs(directory: pathlib.Path) -> list[pathlib.Path]:
+    """The logs in one directory that open with a `build git=` line.
+
+    Every shell writes `er-<name>.log` except `er_crash_logging.dll`, whose log is
+    `er-crash-log.txt` (`er-crash-logging-core`'s `DEFAULT_LOG_FILE`). Without it a push that
+    changes er-crash-logging could never find its run, however many times it ran.
+    """
+    found = set(directory.glob("er-*.log"))
+    found.update(directory.glob("er-crash-log.txt"))
+    return sorted(found)
+
+
 def read_identity(path: pathlib.Path, where: str) -> Entry | None:
     try:
         mtime = int(path.stat().st_mtime)
@@ -237,7 +249,7 @@ def collect(head: str, exhaustive: bool) -> tuple[list[Entry], list[str]]:
         for run in directories:
             if not exhaustive and len(distinct) >= CANDIDATES:
                 break
-            for artifact in sorted(run.glob("er-*.log")):
+            for artifact in identity_logs(run):
                 entry = read_identity(artifact, f"{run.name}/{artifact.name}")
                 if entry is None:
                     continue
@@ -248,7 +260,7 @@ def collect(head: str, exhaustive: bool) -> tuple[list[Entry], list[str]]:
     game = game_dir()
     if game is not None and game.is_dir():
         roots.append(str(game))
-        for artifact in sorted(game.glob("er-*.log")):
+        for artifact in identity_logs(game):
             entry = read_identity(artifact, f"game-dir/{artifact.name}")
             if entry is not None:
                 entries.append(entry)
