@@ -289,14 +289,8 @@ pub(crate) mod ai_lua {
 /// `0x140e2cb40`: return 0 while it is true). It is checked by its opening bytes before it is
 /// hooked.
 pub(crate) const MENU_HAS_MOUSE_RVA: usize = 0x0076_6b00;
-/// `CS::PlayerIns::CopyAnother(PlayerIns* to, PlayerIns* from)`, 2.7.2.0 rva (1.16.2
-/// `0x1406537c0`). Fills a 0x400-byte `PcInfo` from `from`'s `PlayerGameData`
-/// (`PopulatePcInfoBuffer`, `0x140260550`), applies it to `to` (`PopulateFromPcInfo`,
-/// `0x140654430`), and when `to`'s `PlayerGameData+0xab8` and `+0xab9` are both set broadcasts
-/// it as packet 0x29 subtype 4 (`BroadCastPacket41`, `0x1404e71c0`). With `to == from` it
-/// re-applies a companion's own outfit and sends it to every other player. It is checked by its
-/// opening bytes before it is called.
-pub(crate) const COPY_ANOTHER_RVA: usize = 0x0065_4ac0;
+// `COPY_ANOTHER_RVA`, shared with build.rs.
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/copy_another_site.rs"));
 
 /// `PlayerGameData` sync flags `CopyAnother` reads: `+0xab8` from the `CharaInitParam` row's sync
 /// bit (row applier, 2.7.2.0 `0x140258ea9`), `+0xab9` set by the first `PcInfo` applied.

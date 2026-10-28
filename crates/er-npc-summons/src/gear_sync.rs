@@ -24,6 +24,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use er_game_base::game_build::is_supported_build;
 use er_game_base::mem::{game_module_base, read_bytes, safe_read_u8, safe_read_usize};
 
 use crate::addr::{COPY_ANOTHER_PROLOGUE, COPY_ANOTHER_RVA, pgd_sync};
@@ -92,7 +93,9 @@ pub(crate) fn companion_built(slot: u8, chr: usize) {
 
 /// `CopyAnother`, once its opening has been compared with the pinned bytes.
 fn copy_another() -> Option<CopyAnotherFn> {
-    let entry = game_module_base().ok()? + COPY_ANOTHER_RVA;
+    // The opening bytes are compared below before anything is called.
+    let rva = is_supported_build().then_some(COPY_ANOTHER_RVA)?;
+    let entry = game_module_base().ok()? + rva;
     match CHECKED.load(Ordering::Acquire) {
         1 => {}
         2 => return None,

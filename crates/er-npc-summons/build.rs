@@ -23,6 +23,9 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 const SITES: &str = "getter_sites.rs";
 
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
+/// The one place `CopyAnother`'s address is written down.
+const COPY_ANOTHER_SITE: &str = "copy_another_site.rs";
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/copy_another_site.rs"));
 
 // Each getter window's virtual address, written as `GAME_IMAGE_BASE + (rva + offset) as u64`
 // rather than through a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
@@ -57,8 +60,8 @@ const OUT_ROW: i32 = GETTER_OUT_ROW_SLOT as i32;
 const MENU_HAS_MOUSE_VA: u64 = 0x140766b00;
 
 /// `CS::PlayerIns::CopyAnother(PlayerIns* to, PlayerIns* from)`, 2.7.2.0 `0x140654ac0`
-/// (`addr::COPY_ANOTHER_RVA`; 1.16.2 `0x1406537c0`).
-const COPY_ANOTHER_VA: u64 = 0x140654ac0;
+/// (`copy_another_site.rs`; 1.16.2 `0x1406537c0`).
+const COPY_ANOTHER_VA: u64 = GAME_IMAGE_BASE + COPY_ANOTHER_RVA as u64;
 /// Its early return when `from` is null.
 const COPY_ANOTHER_NULL_RETURN_VA: u64 = 0x140654c5e;
 
@@ -192,6 +195,7 @@ fn getter_negative_id_store(asm: &mut CodeAssembler) -> Result<(), IcedError> {
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
     prologue_build::declare_rerun(SITES);
+    prologue_build::declare_rerun(COPY_ANOTHER_SITE);
     generate(
         &[
             (
