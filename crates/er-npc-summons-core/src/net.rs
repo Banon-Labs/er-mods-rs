@@ -124,7 +124,7 @@ pub fn roster(companions: &[Companion]) -> Vec<RosterEntry> {
             triple: Triple {
                 npc: companion.body.npc_param,
                 think: companion.think(),
-                chara_init: companion.body.chara_init,
+                chara_init: crate::mimic::wire_chara_init(companion.body.chara_init),
             },
             share_id: match dressing(companion) {
                 Dressing::Build(id) => Some(id).filter(|id| valid_share_id(id)),
@@ -541,10 +541,11 @@ mod tests {
     use super::*;
     use crate::config::Config;
 
+    /// Moongrum's body as its summon request carries it: the sync row in place of 23590.
     const MOONGRUM: Triple = Triple {
         npc: 523_590_024,
         think: 523_590_100,
-        chara_init: 23_590,
+        chara_init: crate::mimic::SYNC_CHARA_INIT,
     };
     const OWNER: u64 = 0x0110_0001_0000_0001;
 

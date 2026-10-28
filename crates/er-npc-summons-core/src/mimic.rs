@@ -21,6 +21,49 @@ pub const MIMIC_TRIGGER: i32 = 207_000;
 /// arms.
 pub const HUMAN_ROW: i32 = 20_700_001;
 
+/// The `CharaInitParam` row every human companion's summon request names, in place of its body's
+/// own row. Row 26050 is the vanilla Mimic Tear's, one of the 61 rows with `isSyncTarget` set.
+///
+/// The id decides what another player's game does with the companion. Packet 78 carries the
+/// request's charaInit (`BuddyGenerator` copies it into the entry's `+0x34` at 2.7.2.0
+/// `0x1404bc749`), and the other player builds their copy from their own resident row of that id.
+/// Their row applier (2.7.2.0 `0x140258ea9`) sets `PlayerGameData+0xab8` from the row's sync bit,
+/// and only then does their packet 0x29 handler (2.7.2.0 `0x1404e8080`) accept the outfit this
+/// player's companion broadcasts. So a player without this DLL sees the companion's gear, face and
+/// stats; the name stays the one their own `NpcParam` gives the body (bd
+/// `npc-pcinfo-packet41-gear-sync-to-vanilla-peers-2720-2026-10-26`).
+///
+/// On this player's side the lookup of this row during the companion's build is answered with a
+/// copy of the body's own row (its stats and face), marked as a sync target and wearing the
+/// companion's build, so the summoner sees what the body row would have given.
+pub const SYNC_CHARA_INIT: i32 = 26_050;
+
+/// `CHARACTER_INIT_PARAM` byte holding `isSyncTarget`, and its bit, as the 2.7.2.0 row applier
+/// reads them (`movzx eax,byte [rax+0xe5]; shr al,4; and al,1` at `0x140258ea9`). fromsoftware-rs
+/// names bit 1 of this byte instead; the applier is what decides.
+pub const SYNC_TARGET_BYTE: usize = 0xe5;
+pub const SYNC_TARGET_BIT: u8 = 1 << 4;
+
+/// The charaInit a summon request carries for a companion whose body row is `body`: the sync row
+/// for a human body, and `body` unchanged for a negative id, which builds no human.
+#[must_use]
+pub fn wire_chara_init(body: i32) -> i32 {
+    if body >= 0 { SYNC_CHARA_INIT } else { body }
+}
+
+/// Mark a copy of a `CharaInitParam` row as a sync target. Returns `false`, with `row` untouched,
+/// when it is too short to hold the byte.
+#[must_use]
+pub fn mark_sync_target(row: &mut [u8]) -> bool {
+    match row.get_mut(SYNC_TARGET_BYTE) {
+        Some(byte) => {
+            *byte |= SYNC_TARGET_BIT;
+            true
+        }
+        None => false,
+    }
+}
+
 /// Highest Mimic Tear upgrade level.
 const MAX_LEVEL: i32 = 10;
 
@@ -91,7 +134,10 @@ pub struct RowValues {
     pub slot: u8,
     pub npc_param: i32,
     pub think: i32,
+    /// What the request carries: [`wire_chara_init`] of the body's row.
     pub chara_init: i32,
+    /// The body's own `CharaInitParam` row, whose contents the companion is built from.
+    pub body_chara_init: i32,
     pub offset: Offset,
 }
 
@@ -133,7 +179,8 @@ pub fn plan(companions: &[Companion]) -> Vec<RowValues> {
                 slot: companion.slot,
                 npc_param: companion.body.npc_param,
                 think: companion.think(),
-                chara_init: companion.body.chara_init,
+                chara_init: wire_chara_init(companion.body.chara_init),
+                body_chara_init: companion.body.chara_init,
                 offset: FORMATION[slot.min(FORMATION.len() - 1)],
             }
         })
@@ -198,17 +245,18 @@ mod tests {
         );
         let mut pending = plan(&config.mimic.companions);
         let human = MIMIC_HUMAN_BODY;
+        let wire = wire_chara_init(human.chara_init);
         // Companion 1's request was dropped between the loops; the first call builds companion 2.
         assert_eq!(
-            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            claim(&mut pending, human.npc_param, human.think, wire),
             Some(2)
         );
         assert_eq!(
-            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            claim(&mut pending, human.npc_param, human.think, wire),
             Some(3)
         );
         assert_eq!(
-            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            claim(&mut pending, human.npc_param, human.think, wire),
             None
         );
         assert_eq!(pending.len(), 1);
@@ -232,7 +280,8 @@ mod tests {
             slot: 2,
             npc_param: 523_590_024,
             think: 523_590_100,
-            chara_init: 23_590,
+            chara_init: SYNC_CHARA_INIT,
+            body_chara_init: 23_590,
             offset: FORMATION[1],
         };
         let mut copy = resident.clone();
@@ -240,7 +289,7 @@ mod tests {
 
         assert_eq!(i32_at(&copy, buddy_field::NPC), 523_590_024);
         assert_eq!(i32_at(&copy, buddy_field::THINK), 523_590_100);
-        assert_eq!(i32_at(&copy, buddy_field::CHARA_INIT), 23_590);
+        assert_eq!(i32_at(&copy, buddy_field::CHARA_INIT), SYNC_CHARA_INIT);
         assert_eq!(f32_at(&copy, buddy_field::X), FORMATION[1].x);
         assert_eq!(f32_at(&copy, buddy_field::Z), FORMATION[1].z);
         assert_eq!(f32_at(&copy, buddy_field::YAW), FORMATION[1].yaw);
@@ -270,6 +319,24 @@ mod tests {
         let mut short = vec![0xaa; BUDDY_ROW_SIZE - 1];
         assert!(!values.write_into(&mut short));
         assert!(short.iter().all(|&b| b == 0xaa));
+    }
+
+    #[test]
+    fn human_requests_name_the_sync_row_and_keep_the_body() {
+        let config = Config::parse("[mimic.companion.1]\nchara_init = 23590\n");
+        let entry = plan(&config.mimic.companions)[0];
+        assert_eq!(entry.chara_init, SYNC_CHARA_INIT);
+        assert_eq!(entry.body_chara_init, 23_590);
+        assert_eq!(wire_chara_init(-1), -1);
+    }
+
+    #[test]
+    fn marking_sets_only_the_applier_bit() {
+        let mut row = vec![0u8; 0xf0];
+        row[SYNC_TARGET_BYTE] = 0x0f;
+        assert!(mark_sync_target(&mut row));
+        assert_eq!(row[SYNC_TARGET_BYTE], 0x1f);
+        assert!(!mark_sync_target(&mut [0u8; SYNC_TARGET_BYTE]));
     }
 
     #[test]

@@ -23,6 +23,9 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 const SITES: &str = "getter_sites.rs";
 
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/getter_sites.rs"));
+/// The one place `CopyAnother`'s address is written down.
+const COPY_ANOTHER_SITE: &str = "copy_another_site.rs";
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/copy_another_site.rs"));
 
 // Each getter window's virtual address, written as `GAME_IMAGE_BASE + (rva + offset) as u64`
 // rather than through a helper, because `scripts/rva_symbols.py` evaluates arithmetic and not calls.
@@ -56,6 +59,12 @@ const OUT_ROW: i32 = GETTER_OUT_ROW_SLOT as i32;
 /// (`addr::MENU_HAS_MOUSE_RVA`).
 const MENU_HAS_MOUSE_VA: u64 = 0x140766b00;
 
+/// `CS::PlayerIns::CopyAnother(PlayerIns* to, PlayerIns* from)`, 2.7.2.0 `0x140654ac0`
+/// (`copy_another_site.rs`; 1.16.2 `0x1406537c0`).
+const COPY_ANOTHER_VA: u64 = GAME_IMAGE_BASE + COPY_ANOTHER_RVA as u64;
+/// Its early return when `from` is null.
+const COPY_ANOTHER_NULL_RETURN_VA: u64 = 0x140654c5e;
+
 /// 2.7.2.0 `FUN_1407786b0`, the producer of the seven `ChrFriendlyTagEntry` rows at
 /// `CSFeManImp+0x5c60` (`addr::tags::FRIENDLY_TAG_PRODUCER`).
 const FRIENDLY_TAG_PRODUCER_VA: u64 = 0x1407786b0;
@@ -88,6 +97,25 @@ const TAG_MEMBER_COUNT_LOCAL: i32 = 0x50;
 /// UpdateUI's `DrawTagOffscreen` and party-member locals, `[rsp+0x31]` and `[rsp+0x32]`.
 const ENEMY_BAR_OFFSCREEN_LOCAL: i32 = 0x31;
 const ENEMY_BAR_PARTY_LOCAL: i32 = 0x32;
+
+/// `test rdx,rdx; je <return>; mov rax,rsp; push rdi; sub rsp,0x70; mov qword [rax-0x58],-2;
+/// mov [rax+8],rbx; mov [rax+0x20],rsi`: `CopyAnother`'s null check and frame.
+fn copy_another(asm: &mut CodeAssembler) -> Result<(), IcedError> {
+    asm.test(rdx, rdx)?;
+    asm.je(COPY_ANOTHER_NULL_RETURN_VA)?;
+    // The game encodes it `8b c4` (`mov r64, r/m64`); the assembler would pick `89 e0`.
+    asm.add_instruction(Instruction::with2(
+        Code::Mov_r64_rm64,
+        Register::RAX,
+        Register::RSP,
+    )?)?;
+    asm.push(rdi)?;
+    asm.sub(rsp, 0x70)?;
+    asm.mov(qword_ptr(rax - 0x58), -2)?;
+    asm.mov(qword_ptr(rax + 8), rbx)?;
+    asm.mov(qword_ptr(rax + 0x20), rsi)?;
+    Ok(())
+}
 
 /// `test r15d,r15d; js <empty>; cmp r15d,[rsp+0x50]`: the 14 bytes the tag-slot hook moves.
 fn tag_slot_test(asm: &mut CodeAssembler) -> Result<(), IcedError> {
@@ -167,33 +195,55 @@ fn getter_negative_id_store(asm: &mut CodeAssembler) -> Result<(), IcedError> {
 fn main() {
     prologue_build::declare_rerun(SUPPORT);
     prologue_build::declare_rerun(SITES);
+    prologue_build::declare_rerun(COPY_ANOTHER_SITE);
     generate(
-        &[(
-            PrologueSpec {
-                name: "MENU_HAS_MOUSE_PROLOGUE",
-                doc: "`mov [rsp+0x10],rbx; mov [rsp+0x18],rbp; mov [rsp+0x20],rsi; push rdi;\n\
+        &[
+            (
+                PrologueSpec {
+                    name: "MENU_HAS_MOUSE_PROLOGUE",
+                    doc: "`mov [rsp+0x10],rbx; mov [rsp+0x18],rbp; mov [rsp+0x20],rsi; push rdi;\n\
                       sub rsp,0x20; cmp byte [rcx+0x1a],0` -- the opening of the 2.7.2.0\n\
                       menu-has-the-mouse predicate.",
-                visibility: "pub(crate)",
-                shape: Shape::Array,
-                image: Image::EldenRing2720,
-                va: MENU_HAS_MOUSE_VA,
-                take: 0,
-                pin: &[
-                    0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74,
-                    0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x1a, 0x00,
-                ],
-            },
-            (|asm| {
-                asm.mov(qword_ptr(rsp + 0x10), rbx)?;
-                asm.mov(qword_ptr(rsp + 0x18), rbp)?;
-                asm.mov(qword_ptr(rsp + 0x20), rsi)?;
-                asm.push(rdi)?;
-                asm.sub(rsp, 0x20)?;
-                asm.cmp(byte_ptr(rcx + 0x1a), 0)?;
-                Ok(())
-            }) as Assemble,
-        )],
+                    visibility: "pub(crate)",
+                    shape: Shape::Array,
+                    image: Image::EldenRing2720,
+                    va: MENU_HAS_MOUSE_VA,
+                    take: 0,
+                    pin: &[
+                        0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89,
+                        0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x1a, 0x00,
+                    ],
+                },
+                (|asm| {
+                    asm.mov(qword_ptr(rsp + 0x10), rbx)?;
+                    asm.mov(qword_ptr(rsp + 0x18), rbp)?;
+                    asm.mov(qword_ptr(rsp + 0x20), rsi)?;
+                    asm.push(rdi)?;
+                    asm.sub(rsp, 0x20)?;
+                    asm.cmp(byte_ptr(rcx + 0x1a), 0)?;
+                    Ok(())
+                }) as Assemble,
+            ),
+            (
+                PrologueSpec {
+                    name: "COPY_ANOTHER_PROLOGUE",
+                    doc: "`test rdx,rdx; je <return>; mov rax,rsp; push rdi; sub rsp,0x70;\n\
+                      mov qword [rax-0x58],-2; mov [rax+8],rbx; mov [rax+0x20],rsi` -- the\n\
+                      opening of the 2.7.2.0 `CS::PlayerIns::CopyAnother`.",
+                    visibility: "pub(crate)",
+                    shape: Shape::Array,
+                    image: Image::EldenRing2720,
+                    va: COPY_ANOTHER_VA,
+                    take: 0,
+                    pin: &[
+                        0x48, 0x85, 0xd2, 0x0f, 0x84, 0x95, 0x01, 0x00, 0x00, 0x48, 0x8b, 0xc4,
+                        0x57, 0x48, 0x83, 0xec, 0x70, 0x48, 0xc7, 0x40, 0xa8, 0xfe, 0xff, 0xff,
+                        0xff, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x20,
+                    ],
+                },
+                copy_another as Assemble,
+            ),
+        ],
         "generated_prologues.rs",
     );
 
