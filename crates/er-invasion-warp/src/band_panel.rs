@@ -341,6 +341,17 @@ fn draw_body(ui: &Ui, view: Option<&PanelView>, menu_key: &str, view_key: &str) 
         draw_footer(ui, menu_key, view_key, rate);
         return;
     };
+    if !view.keys_known {
+        theme::text_wrapped(
+            ui,
+            Font::Label,
+            theme::WARNING_TEXT,
+            "Not counting yet: Seamless renames its lobby keys every build, and this one has not \
+             shown them. Starting a search or opening your world shows them.",
+        );
+        draw_footer(ui, menu_key, view_key, rate);
+        return;
+    }
     theme::note(ui, &status_line(view, rate));
     if !view.pool_known {
         theme::text_wrapped(

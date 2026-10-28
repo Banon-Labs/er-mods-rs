@@ -330,32 +330,10 @@ mod live {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
-    /// Fetch the lobbies a finished query matched, with their keys.
-    ///
-    /// Until now this module asked Steam for a count and threw the answer away: `poll_query` read
-    /// the single `uint32` of `LobbyMatchList_t` and nothing here ever called `GetLobbyByIndex`.
-    /// A count is what let the banner say "found a host in Highroad Cross" while nobody held the
-    /// lobby that sentence was about.
-    ///
-    /// Proven live before it was written, which is the order this repo works in
-    /// (`scripts/er-prove-lobby-handoff.py`, run `br-20260918-003310-606c`): the same flat exports
-    /// in the same sequence returned lobby `109775241801277563` carrying
-    /// `er_invasion_warp_map = m61_48_45_00` and `er_invasion_warp_effects = allow_invaders`.
-    /// Seamless's advertised-availability flag, hashed like the rest of its key names.
-    ///
-    /// Matched by name because the name is stable for the one Seamless build this repo supports.
-    /// A host publishing `false` here is excluded from every query this game sends, whatever its
-    /// band or block says, so it is the one key worth re-reading before trusting an old hit.
-    const AVAILABLE_KEY: &str = "91489e05e1c2c5e7701b2d92ec209a8acd594349f1e21e73422430b114a7c467";
-
-    /// Seamless's `<level band>_<weapon band>` key, hashed like its others.
-    ///
-    /// Matched by name for the one build this repo supports. The value's `<digits>_<digits>` shape
-    /// is what identifies it across builds, and
-    /// `er_invasion_warp_core::band_ladder::looks_like_band` is where that test lives -- this
-    /// constant only saves reading every key off a lobby to find the one matching it.
-    const SEAMLESS_BAND_KEY: &str =
-        "21c40388cba69692c865c11604f6e340fb8f0df83bebea279e802ccc0d46de8e";
+    // Seamless's band and availability key names are not constants here: 2.0.x hashes them per
+    // build, and the 2.0.1 spellings this module used to carry match nobody on 2.0.2.
+    // `lobby_publish` learns them from Seamless's own calls (`seamless_band_key`,
+    // `seamless_available_key`); until it has, a query that needs one is not sent.
 
     /// The band the host the sweep found publishes, when there is one and it is band-shaped.
     ///
@@ -393,13 +371,27 @@ mod live {
         let Some(get_data) = export(GET_LOBBY_DATA) else {
             return true;
         };
+        let Some(available_key) = crate::lobby_publish::seamless_available_key() else {
+            return true;
+        };
         // SAFETY: an export resolved by name from a module that is loaded.
         let read = unsafe { core::mem::transmute::<usize, GetLobbyDataFn>(get_data) };
         lobbies
             .iter()
-            .any(|id| lobby_value(iface, read, *id, AVAILABLE_KEY) == "true")
+            .any(|id| lobby_value(iface, read, *id, &available_key) == "true")
     }
 
+    /// Fetch the lobbies a finished query matched, with their keys.
+    ///
+    /// Until now this module asked Steam for a count and threw the answer away: `poll_query` read
+    /// the single `uint32` of `LobbyMatchList_t` and nothing here ever called `GetLobbyByIndex`.
+    /// A count is what let the banner say "found a host in Highroad Cross" while nobody held the
+    /// lobby that sentence was about.
+    ///
+    /// Proven live before it was written, which is the order this repo works in
+    /// (`scripts/er-prove-lobby-handoff.py`, run `br-20260918-003310-606c`): the same flat exports
+    /// in the same sequence returned lobby `109775241801277563` carrying
+    /// `er_invasion_warp_map = m61_48_45_00` and `er_invasion_warp_effects = allow_invaders`.
     #[must_use]
     pub fn fetch_lobbies(matching: u32) -> Vec<FoundLobby> {
         let Some(iface) = matchmaking() else {
@@ -413,6 +405,7 @@ mod live {
         let by_index = unsafe { core::mem::transmute::<usize, GetLobbyByIndexFn>(by_index) };
         // SAFETY: as above.
         let read = unsafe { core::mem::transmute::<usize, GetLobbyDataFn>(get_data) };
+        let band_key = crate::lobby_publish::seamless_band_key();
 
         let mut found = Vec::new();
         for index in 0..matching.min(RESULT_COUNT.unsigned_abs()) {
@@ -434,7 +427,9 @@ mod live {
                     crate::lobby_publish::LOBBY_HOST_EFFECTS_KEY,
                 ),
                 lobby_key: lobby_value(iface, read, id, crate::lobby_publish::LOBBY_KEY_NAME),
-                band: lobby_value(iface, read, id, SEAMLESS_BAND_KEY),
+                band: band_key
+                    .as_deref()
+                    .map_or_else(String::new, |key| lobby_value(iface, read, id, key)),
             });
         }
         found
@@ -831,12 +826,28 @@ mod live {
     /// (`crate::band_census`), through the same staging as every other query here, so the hunt
     /// detour leaves it alone and Seamless's request cannot consume its filters.
     ///
-    /// The open flag is the one every search of Seamless's carries (`AVAILABLE_KEY`), so a host
-    /// counted here is one a search of this player's could return.
+    /// The open flag is the one every search of Seamless's carries, so a host counted here is one
+    /// a search of this player's could return. Both key names are the ones this process's
+    /// ersc.dll used; `None` until it has shown them, which the census treats as a turn not yet
+    /// taken rather than an empty band.
     pub fn send_band_query(band: &str, dlc: Option<&str>) -> Option<u64> {
+        let (Some(band_key), Some(available_key)) = (
+            crate::lobby_publish::seamless_band_key(),
+            crate::lobby_publish::seamless_available_key(),
+        ) else {
+            static SAID: AtomicBool = AtomicBool::new(false);
+            if !SAID.swap(true, Ordering::Relaxed) {
+                crate::standalone_log(format_args!(
+                    "band-census: not counting yet -- this ersc.dll has not named its band and \
+                     availability keys (2.0.x hashes them per build). Its own search filter or an \
+                     open world's lobby names them, and counting starts then."
+                ));
+            }
+            return None;
+        };
         let mut filters = vec![
-            (SEAMLESS_BAND_KEY, band, COMPARISON_EQUAL),
-            (AVAILABLE_KEY, "true", COMPARISON_EQUAL),
+            (band_key.as_str(), band, COMPARISON_EQUAL),
+            (available_key.as_str(), "true", COMPARISON_EQUAL),
         ];
         if let Some(dlc) = dlc {
             filters.push(("ykssr_dlc", dlc, COMPARISON_EQUAL));

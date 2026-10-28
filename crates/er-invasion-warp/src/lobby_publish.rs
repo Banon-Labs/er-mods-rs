@@ -1014,6 +1014,18 @@ mod live {
     const OBSERVED_WRITE_BUDGET: usize = 12;
     /// How many have been printed.
     static OBSERVED_WRITES: AtomicUsize = AtomicUsize::new(0);
+    /// Seamless's `<level band>_<weapon band>` key name, as this process's ersc.dll spells it.
+    ///
+    /// Learned from Seamless's own calls, never written down: 2.0.x hashes its key names per
+    /// build. The 2.0.1 names this module carried as constants (`21c40388...` for the band,
+    /// `91489e05...` for availability) appear nowhere on a 2.0.2 lobby -- run
+    /// `br-20261027-160220-2e56` saw the marker filed under `ca596760...` where 2.0.1 used
+    /// `700f7f50...` -- so every census query asked about 2.0.1 hosts only and counted one host
+    /// worldwide while the search was finding others (2026-10-28).
+    static SEAMLESS_BAND_KEY: Mutex<Option<String>> = Mutex::new(None);
+    /// Seamless's advertised-availability key name, learned the same way: the key whose value is
+    /// `true` or `false`.
+    static SEAMLESS_AVAILABLE_KEY: Mutex<Option<String>> = Mutex::new(None);
 
     /// Render bytes Seamless wrote, exactly as they are.
     fn show(bytes: Option<&[u8]>) -> String {
@@ -1050,6 +1062,71 @@ mod live {
         ));
     }
 
+    /// Learn Seamless's band and availability key names from one of its own `SetLobbyData` or
+    /// `AddRequestLobbyListStringFilter` calls, by the shape of the value.
+    ///
+    /// A band value is `<digits>_<digits>` (`band_ladder::looks_like_band`) and availability is
+    /// `true` or `false`; no other key Seamless was seen writing on 2.0.1 or 2.0.2 carries either
+    /// shape. Our own keys are refused by name so a coincidence cannot rename them. A later call
+    /// naming a different key replaces the earlier one and says so, because Seamless's current
+    /// call is the better witness than a stale one.
+    fn learn_seamless_key(key: usize, value: usize, via: &str) {
+        let Some(key_bytes) =
+            (unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) })
+        else {
+            return;
+        };
+        let Some(value_bytes) =
+            (unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) })
+        else {
+            return;
+        };
+        let (Ok(key), Ok(value)) = (
+            std::str::from_utf8(&key_bytes),
+            std::str::from_utf8(&value_bytes),
+        ) else {
+            return;
+        };
+        if key.starts_with("er_invasion_warp") || key == LOBBY_KEY_NAME {
+            return;
+        }
+        let (slot, what) = if er_invasion_warp_core::band_ladder::looks_like_band(value) {
+            (&SEAMLESS_BAND_KEY, "band")
+        } else if value == "true" || value == "false" {
+            (&SEAMLESS_AVAILABLE_KEY, "availability")
+        } else {
+            return;
+        };
+        let mut learned = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if learned.as_deref() == Some(key) {
+            return;
+        }
+        let previous = learned.replace(key.to_owned());
+        drop(learned);
+        crate::standalone_log(format_args!(
+            "lobby-keys: Seamless names its {what} key {key} (value {value:?}, via {via}){}",
+            previous.map_or(String::new(), |old| format!(", replacing {old}"))
+        ));
+    }
+
+    /// Seamless's band key name for this ersc.dll, once one of its calls has shown it.
+    #[must_use]
+    pub fn seamless_band_key() -> Option<String> {
+        SEAMLESS_BAND_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Seamless's availability key name for this ersc.dll, once one of its calls has shown it.
+    #[must_use]
+    pub fn seamless_available_key() -> Option<String> {
+        SEAMLESS_AVAILABLE_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Watch Seamless declare its advertisement lobby. Observation only: every call is passed
     /// straight through, nothing is altered, and our own writes are ignored.
     unsafe extern "system" fn set_lobby_data_hook(
@@ -1070,6 +1147,7 @@ mod live {
         if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) {
             let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) };
             report_observed_write(lobby as u64, key_bytes.as_deref(), value);
+            learn_seamless_key(key, value, "SetLobbyData");
             // Matched on the value alone, because the key is not stable across Seamless builds.
             //
             // This tested `key == "lobby_type"` until 2026-09-15, and on the installed 2.0.0 build
@@ -1488,6 +1566,10 @@ mod live {
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
+        // Read before either rewrite below, so the name is learned from Seamless's own value.
+        if !own_query_in_flight() {
+            learn_seamless_key(key, value, "search filter");
+        }
         // Our own queries carry the finished value already -- `seamless_match_key` applied the
         // pool transform when it handed the key over. Substituting again would hash an
         // already-hashed key and put our search in a pool of one.
@@ -2416,7 +2498,8 @@ pub use live::{
     install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
     matchmaking_interface, note_current_block, persona_name, publish_current_map,
     reapply_pool_if_toggled, report_persona_plumbing_once, reset_band, restart_search_ladder,
-    seamless_match_key, stage_own_query, tallies as publish_tallies, tally,
+    seamless_available_key, seamless_band_key, seamless_match_key, stage_own_query,
+    tallies as publish_tallies, tally,
 };
 
 /// Host-target stand-in, so `local_invasion_filter` compiles under `cargo test` on Linux.
