@@ -124,29 +124,37 @@ is_script_path(path) if {
 # direction -- and each pattern below binds a real write operator DIRECTLY to the path it writes,
 # capturing that path in group 1. Every command word is anchored on both sides ((^|[\s;&|(]) before,
 # required whitespace after) so a substring inside an unrelated word can never arm the rule.
+#
+# The target group takes either a literal `/tmp/...` path or a shell variable reference, `$NAME...`
+# or `${NAME}...`, which `variable_tmp_paths` below resolves. Measured escape (2026-11-07): with the
+# group literal-only, `cat > <scratchpad>/probe_magic.py <<'EOF'` was refused and
+# `S=<scratchpad> && cat > $S/probe_ash.py <<'EOF'` wrote the script, because `$S/probe_ash.py`
+# is not spelled `/tmp/`. A target may also sit in quotes, `> "$S/x.py"` or `> "/tmp/x.py"`. A
+# single-quoted variable is not expanded by the shell and so names a literal `$S` directory; the
+# pattern does not tell the two quotes apart, which can only refuse a command nobody writes.
 write_indicator_patterns := [
 	# Shell redirection INTO the path: `> /tmp/x.py`, `>> /tmp/x.py`, `2>/tmp/x.py`, `&>/tmp/x.py`,
 	# `>| /tmp/x.py`. This is also what covers a heredoc / `echo` / `printf` redirected into it.
-	`>>?\|?\s*(/tmp/[^\s"'\\;&|<>]+)`,
+	`>>?\|?\s*["']?(/tmp/[^\s"'\\;&|<>]+|\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)[^\s"'\\;&|<>]*)`,
 
 	# `| tee /tmp/x.sh`, `tee -a /tmp/x.sh`.
-	`(?:^|[\s;&|(])tee(?:\s+-{1,2}[^\s]+)*\s+(/tmp/[^\s"'\\;&|<>]+)`,
+	`(?:^|[\s;&|(])tee(?:\s+-{1,2}[^\s]+)*\s+["']?(/tmp/[^\s"'\\;&|<>]+|\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)[^\s"'\\;&|<>]*)`,
 
 	# Download/output flags: `curl -o /tmp/x.js`, `curl --output /tmp/x.js`, `wget -O /tmp/x.js`.
-	`(?:^|[\s;&|(])(?:-o|-O|--output|--output-document)[=\s]*(/tmp/[^\s"'\\;&|<>]+)`,
+	`(?:^|[\s;&|(])(?:-o|-O|--output|--output-document)[=\s]*["']?(/tmp/[^\s"'\\;&|<>]+|\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)[^\s"'\\;&|<>]*)`,
 
 	# Copy/move/install DESTINATION. The /tmp path must be the LAST argument of its command
 	# segment, which is what separates `cp a /tmp/x.py` (writes into /tmp) from
 	# `cp /tmp/x.py a` and `cp -f /tmp/planner/*.js target/` (both read OUT of /tmp).
-	`(?m)(?:^|[\s;&|(])(?:cp|mv|install|rsync|scp|ln)\s+(?:[^\s;&|<>]+\s+)+?(/tmp/[^\s"'\\;&|<>]+)\s*(?:$|[;&|)])`,
+	`(?m)(?:^|[\s;&|(])(?:cp|mv|install|rsync|scp|ln)\s+(?:[^\s;&|<>]+\s+)+?["']?(/tmp/[^\s"'\\;&|<>]+|\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)[^\s"'\\;&|<>]*)["']?\s*(?:$|[;&|)])`,
 
 	# In-language writes inside a heredoc / -c snippet: `open('/tmp/x.py', 'w')`. The mode must be
 	# the second positional argument and must contain w/a/x, so a READ -- `open('/tmp/a.js')`, or
 	# `open('/tmp/a.js', encoding='utf-8')` -- does not match.
-	`open\(\s*['"](/tmp/[^'"]+)['"]\s*,\s*['"][^'"]*[wax][^'"]*['"]`,
+	`open\(\s*['"]((?:/tmp/|\$\{?[A-Za-z_])[^'"]+)['"]\s*,\s*['"][^'"]*[wax][^'"]*['"]`,
 
 	# `Path('/tmp/x.py').write_text(...)` / `.write_bytes(...)`.
-	`['"](/tmp/[^'"]+)['"]\s*\)\s*\.\s*write`,
+	`['"]((?:/tmp/|\$\{?[A-Za-z_])[^'"]+)['"]\s*\)\s*\.\s*write`,
 ]
 
 tmp_written_script_paths contains path if {
@@ -156,10 +164,65 @@ tmp_written_script_paths contains path if {
 	# path captured by the write-indicator pattern's single group.
 	some pattern in write_indicator_patterns
 	some m in regex.find_all_string_submatch_n(pattern, command, -1)
+	startswith(m[1], "/tmp/")
 	path := m[1]
 	is_script_path(path)
 	not in_current_repo(path)
 }
+
+tmp_written_script_paths contains path if {
+	some pattern in write_indicator_patterns
+	some m in regex.find_all_string_submatch_n(pattern, command, -1)
+	startswith(m[1], "$")
+	some path in variable_tmp_paths(m[0], m[1])
+	is_script_path(path)
+	not in_current_repo(path)
+}
+
+# A WRITE TARGET REACHED THROUGH A VARIABLE, added 2026-11-07.
+#
+# `$NAME<suffix>` resolves to `<value><suffix>` when the latest binding of NAME before the write,
+# in this same command, is `NAME=<value>` with a value of `/tmp` or under it -- the session
+# scratchpad lives there too. The binding may be plain, double- or single-quoted, and may follow
+# `export`/`declare`/`typeset`/`local`/`readonly`. "Before the write" is measured per occurrence:
+# the command is split on the write's own text and each prefix ending at an occurrence is searched,
+# so `S=/tmp/a; ... > $S/x.py` resolves and `> $S/x.py; S=/tmp/a` does not, the shell having
+# expanded an inherited value this command does not show. A later rebinding wins, so
+# `S=/tmp/a; S=scripts; > $S/x.py` lands in the repo and stays allowed.
+#
+# Residue, stated rather than hidden: an unbound or inherited variable (`$TMPDIR`), a value that
+# is itself an expansion (`S=$(mktemp -d)`), and a binding inside a subshell or function body that
+# the write cannot see are not resolved. A `NAME=value cmd` prefix binding counts here although
+# bash expands `$NAME` before it takes effect; for a deny rule that only over-refuses.
+variable_tmp_paths(write, target) := {concat("", [value, ref.suffix]) |
+	some ref in variable_references(target)
+	pieces := split(command, write)
+	some k, _ in pieces
+	k > 0
+	prefix := concat(write, array.slice(pieces, 0, k))
+	bindings := regex.find_all_string_submatch_n(binding_pattern(ref.name), prefix, -1)
+	count(bindings) > 0
+	value := concat("", array.slice(bindings[count(bindings) - 1], 1, 4))
+	regex.match(`^/tmp(?:/|$)`, value)
+}
+
+# `$NAME<suffix>` or `${NAME}<suffix>`. Exactly one of the two name groups is non-empty.
+variable_references(target) := {{"name": concat("", [m[1], m[2]]), "suffix": m[3]} |
+	some m in regex.find_all_string_submatch_n(
+		`^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(.*)$`,
+		target,
+		1,
+	)
+}
+
+# NAME is a shell name, so it needs no escaping inside the pattern. The separator class in front
+# keeps `XS=` and `$S=` from binding `S`; the three value groups are the double-quoted,
+# single-quoted and bare spellings, and the unused two capture "".
+binding_pattern(name) := concat("", [
+	`(?:^|[\s;&|(])(?:(?:export|declare|typeset|local|readonly)(?:\s+-[A-Za-z]+)*\s+)?`,
+	name,
+	`=(?:"([^"]*)"|'([^']*)'|([^\s;&|<>()"']*))`,
+])
 
 # Extracting a committed file is not authoring one. Measured false positive (2026-10-22):
 #

@@ -2501,6 +2501,36 @@ def main() -> int:
             False,
             "authoring a script into /tmp",
         ),
+        # A write target spelled through a variable bound to /tmp earlier in the command
+        # (2026-11-07): the measured escape, minus its `python3 $S/...` run for the reason given
+        # above. Driven through the engine because the resolution rests on unmatched regex groups
+        # reading as "" and on `split`/`array.slice`, which is where the wasm runtime and
+        # `opa test` can disagree.
+        PolicyCase(
+            "deny-heredoc-script-into-scratchpad-through-variable",
+            "cd /home/banon/projects/er-mods-rs && "
+            "S=/tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad && "
+            "cat > $S/probe_ash.py <<'EOF'\nimport sys\nEOF",
+            False,
+            "authoring a script into /tmp",
+        ),
+        PolicyCase(
+            "deny-redirect-script-through-braced-variable",
+            "S=/tmp/work; echo 'exit 0' > ${S}/probe.sh",
+            False,
+            "authoring a script into /tmp",
+        ),
+        PolicyCase(
+            "deny-redirect-script-through-variable-with-quoted-value",
+            "export S=\"/tmp/work\"; echo 'exit 0' >> \"$S/probe.sh\"",
+            False,
+            "authoring a script into /tmp",
+        ),
+        PolicyCase(
+            "allow-redirect-data-artifact-through-tmp-variable",
+            "S=/tmp/work; echo hi > $S/notes.txt",
+            True,
+        ),
         # `ER-EFFECTS-TRANSCRIPT-WRITE-GUARD`, live: the push authorization is read from the session
         # transcript, so the agent may read transcripts and never rewrite one.
         PolicyCase(
