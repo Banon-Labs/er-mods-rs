@@ -188,6 +188,7 @@ def main() -> int:
         not_the_phrase(sb)
         refused_shapes(sb)
         forgery_and_subagents(sb)
+        queued_replies(sb)
         end_to_end(sb)
     finally:
         sb.close()
@@ -535,6 +536,59 @@ def forgery_and_subagents(sb: Sandbox) -> None:
     c.use("toolu_o2", COMMIT)
     expect("a record from before this rule, whose call ran, counts as spent",
            sb.run(c, "toolu_o2", COMMIT), "DENIED", "DENIED", "already spent")
+
+
+def queued_replies(sb: Sandbox) -> None:
+    """A message typed while a turn was running reaches the chain only as a queued_command
+    attachment (2026-11-08, session 5f9be448), and it is the user's typing like any other: it
+    authorizes, and it revokes."""
+    mid_turn = push_tests.mid_turn
+
+    c = Chain()
+    c.human("commit it")
+    mid_turn(c, AUTH, "toolu_q0")
+    expect("`authorize commit` typed mid-turn authorizes (line absent)",
+           sb.run(c, "toolu_q1", COMMIT), "AUTHORIZED", None)
+
+    c = Chain()
+    c.human("commit it")
+    mid_turn(c, AUTH, "toolu_q2")
+    c.use("toolu_q3", COMMIT)
+    expect("`authorize commit` typed mid-turn authorizes (line present)",
+           sb.run(c, "toolu_q3", COMMIT), "AUTHORIZED", None)
+
+    c = Chain()
+    c.human("commit it")
+    mid_turn(c, AUTH, "toolu_q4")
+    c.use("toolu_q5", LINT)
+    expect("a lint after `authorize commit` typed mid-turn is LIVE", sb.run(c, "toolu_q5", LINT),
+           "-", "LIVE")
+
+    c = Chain()
+    c.human(AUTH)
+    mid_turn(c, "actually, also fix the docs", "toolu_q6")
+    expect("a message typed mid-turn after `authorize commit` revokes it",
+           sb.run(c, "toolu_q7", COMMIT), "DENIED", "DENIED", "not `authorize commit`")
+
+    for i, (name, kind, mode) in enumerate([("a peer agent's message", "peer", "prompt"),
+                                            ("a task notification", None, "task-notification"),
+                                            ("an origin kind other than human", "agent", "prompt")]):
+        c = Chain()
+        c.human("go on")
+        c.queued(AUTH, kind=kind, mode=mode)
+        c.use(f"toolu_qn{i}", COMMIT)
+        expect(f"a queued_command that is not the user's typing denies: {name}",
+               sb.run(c, f"toolu_qn{i}", COMMIT), "DENIED", "DENIED", "not `authorize commit`")
+
+    c = Chain()
+    c.human("go on")
+    c.use("toolu_qe0", "git status")
+    c.queue_operation("enqueue", AUTH)
+    c.queue_operation("remove", AUTH)
+    c.result("toolu_qe0", "")
+    c.last_prompt(AUTH)
+    expect("an enqueue with no queued_command delivered denies", sb.run(c, "toolu_qe1", COMMIT),
+           "DENIED", "DENIED", "not `authorize commit`")
 
 
 def end_to_end(sb: Sandbox) -> None:
