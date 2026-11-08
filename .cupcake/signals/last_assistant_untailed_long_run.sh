@@ -2,7 +2,7 @@
 # Cupcake signal: last_assistant_untailed_long_run
 #
 # Emits `UNTAILEDRUN:<command> => <tail command>; ...` when the turn being stopped started a long
-# run in the background and opened no kitty tab tailing it. Empty otherwise (fail-open).
+# run in the background and opened no kitty split (or tab) tailing it. Empty otherwise (fail-open).
 #
 # User request 2026-10-19: "When we regenerate the board, is there a skill we can make and an agent
 # instruction or rego guard to remind you to open a kitty tab tailing the real output from the run?"
@@ -17,8 +17,9 @@
 # scripts/kitty-tail-task.py or scripts/kitty-tail-push.py -- and, for a tool in REAL_OUTPUT whose
 # progress goes somewhere other than its own output (the board generator's shard logs), only when
 # that call follows those files. A tail call that failed still counts
-# when the closing message mentions the tab or kitty, so a refusal the agent reports is not
-# punished twice. A run that already finished inside the turn needs no tab.
+# when the closing message mentions the split, the tab or kitty, so a refusal the agent reports is
+# not punished twice. A run that already finished inside the turn needs no tail. The tail helpers
+# open a split in the agent's tab by default since 2026-11-07, and a tab with --tab.
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT
@@ -64,7 +65,7 @@ REAL_OUTPUT = {
 OUTPUT_FILE_RE = re.compile(r"Output is being written to:\s*(\S+)")
 # The file a command's own stdout redirect names, which is where its output is when it has one.
 REDIRECT_RE = re.compile(r"(?:^|\s)(?:1|&)?>>?\s*(?!&)([^\s;&|]+)")
-TAB_WORD_RE = re.compile(r"\b(?:tab|kitty)\b", re.IGNORECASE)
+TAB_WORD_RE = re.compile(r"\b(?:split|tab|kitty)\b", re.IGNORECASE)
 
 
 def long_run(cmd: str):

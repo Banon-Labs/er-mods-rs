@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""Show a running `git push` in a new kitty tab, and close the tab 5 seconds after it ends.
+"""Show a running `git push` in a new kitty split, and close the split 5 seconds after it ends.
 
 User request 2026-10-19: "tail pushes in a new kitty tab until they complete, where terminal will
 exit after a 5 second delay". A push here runs the pre-push hook's whole check suite, ten minutes
-or more, and the agent runs it as a background task whose output only the agent could see.
+or more, and the agent runs it as a background task whose output only the agent could see. Since
+2026-11-07 ("Can we do kitty split instead of tab by default?") the window is a split in the
+agent session's own tab; `--tab` opens a new tab as before.
 
     python3 scripts/kitty-tail-push.py --log <the background task's output file>
     python3 scripts/kitty-tail-push.py --log <file> --pid <git push pid>
-    python3 scripts/kitty-tail-push.py --verdict <file>     # what the tab prints at the end
+    python3 scripts/kitty-tail-push.py --verdict <file>     # what the window prints at the end
     python3 scripts/kitty-tail-push.py --selftest
 
 Without `--pid`, the newest `git ... push` process this user owns is the one followed, found by
-reading `/proc` (raw `pgrep` is guard-denied here). The tab runs `tail --pid`, so it follows the
+reading `/proc` (raw `pgrep` is guard-denied here). The window runs `tail --pid`, so it follows the
 log exactly as long as that process lives -- the end of the push is the event, not a timer. It
 then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own output, waits the 5 seconds the user
-asked for so the verdict can be read, and exits, which closes the tab.
+asked for so the verdict can be read, and exits, which closes the window (and a tab with it).
 
-kitty is reached through `$KITTY_LISTEN_ON`, as in scripts/kitty-user-command.py: kitty.conf
-listens on a random port.
+kitty is reached through `$KITTY_LISTEN_ON`, and the split placed, as in
+scripts/kitty-user-command.py: kitty.conf listens on a random port.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import shlex
@@ -32,6 +35,16 @@ import tempfile
 from pathlib import Path
 
 CLOSE_DELAY_SECONDS = 5
+
+
+def _kuc():
+    """scripts/kitty-user-command.py, for the split-or-tab placement every kitty helper shares."""
+    spec = importlib.util.spec_from_file_location(
+        "kitty_user_command", Path(__file__).resolve().parent / "kitty-user-command.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 # git's summary line for a ref it updated: ` * [new branch]  a -> a`, or `   1a2b3c4..5d6e7f8  a -> a`.
 # A fast-forward or a new branch is the only shape a push here can take: force is guard-denied.
@@ -67,7 +80,7 @@ def newest_push_pid() -> int | None:
     return best[1] if best else None
 
 
-# The tab paints the log as it reads it (user, 2026-10-19: "Our skill doesn't provide color output
+# The window paints the log as it reads it (user, 2026-10-19: "Our skill doesn't provide color output
 # for the push in the kitty tab?"). A push's output goes to a file, so neither git nor check.sh
 # colours it, and check.sh writes its stage verdicts as plain words even on a terminal. Painting in
 # the viewer covers every producer at once. Order matters: a line that is red is red even if it also
@@ -107,7 +120,16 @@ def tab_script(log: Path, pid: int | None) -> str:
     )
 
 
-def open_tab(log: Path, pid: int | None, title: str, focus: bool) -> int:
+def launch_argv(log: Path, pid: int | None, title: str, focus: bool, kind: str) -> tuple[list[str], str]:
+    """The `kitty @ launch` arguments after `--to`, and where the window lands in words."""
+    where_argv, where = _kuc().placement(kind, title)
+    argv = ["launch", *where_argv]
+    if not focus:
+        argv.append("--keep-focus")
+    return [*argv, "bash", "-c", tab_script(log, pid)], where
+
+
+def open_window(log: Path, pid: int | None, title: str, focus: bool, kind: str) -> int:
     listener = os.environ.get("KITTY_LISTEN_ON", "").strip()
     if not listener:
         print(
@@ -115,16 +137,17 @@ def open_tab(log: Path, pid: int | None, title: str, focus: bool) -> int:
             file=sys.stderr,
         )
         return 2
-    argv = ["kitty", "@", "--to", listener, "launch", "--type=tab", f"--tab-title={title}"]
-    if not focus:
-        argv.append("--keep-focus")
-    argv += ["bash", "-c", tab_script(log, pid)]
+    launch, where = launch_argv(log, pid, title, focus, kind)
+    argv = ["kitty", "@", "--to", listener, *launch]
     result = subprocess.run(argv, capture_output=True, text=True, timeout=20, check=False)
     if result.returncode != 0:
         print(f"kitty @ launch failed ({result.returncode}): {result.stderr.strip()}", file=sys.stderr)
         return 1
     following = f"pid {pid}" if pid else "no live push process; showing the finished log"
-    print(f"opened kitty tab {title!r} (window {result.stdout.strip()}), following {log} ({following})")
+    print(
+        f"opened kitty {kind} {title!r} (window {result.stdout.strip()}, in {where}), "
+        f"following {log} ({following})"
+    )
     return 0
 
 
@@ -170,16 +193,49 @@ def selftest() -> int:
     if "'/tmp/a log with spaces.txt'" not in script or "--pid=7" not in script:
         failures.append(("quoting", "quoted", script))
         print(f"FAIL the log path is not quoted or the pid is missing:\n{script}")
+    failures += launch_selftest()
     print("selftest:", "FAIL" if failures else "ok")
     return 1 if failures else 0
+
+
+def launch_selftest() -> list:
+    """A split goes in the tab of the window named by `$KITTY_WINDOW_ID`; `--tab` opens a tab;
+    `--focus` drops `--keep-focus`."""
+    failures = []
+    saved = os.environ.get("KITTY_WINDOW_ID")
+    os.environ["KITTY_WINDOW_ID"] = "9"
+    try:
+        log = Path("/tmp/p.log")
+        cases = [
+            ("split", False, ["launch", "--type=window", "--location=split", "--window-title=push",
+                              "--match=window_id:9", "--next-to=id:9", "--keep-focus"]),
+            ("split", True, ["launch", "--type=window", "--location=split", "--window-title=push",
+                             "--match=window_id:9", "--next-to=id:9"]),
+            ("tab", False, ["launch", "--type=tab", "--tab-title=push", "--keep-focus"]),
+        ]
+        for kind, focus, want in cases:
+            argv, where = launch_argv(log, 7, "push", focus, kind)
+            got = argv[: argv.index("bash")]
+            if got != want or argv[argv.index("bash"):] != ["bash", "-c", tab_script(log, 7)]:
+                failures.append(("launch", kind, got))
+                print(f"FAIL launch argv for {kind} focus={focus}: {argv[:8]}")
+            else:
+                print(f"ok   {kind} focus={focus} -> {got[1:]} ({where})")
+    finally:
+        if saved is None:
+            os.environ.pop("KITTY_WINDOW_ID", None)
+        else:
+            os.environ["KITTY_WINDOW_ID"] = saved
+    return failures
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--log", type=Path, help="the push's output file (a background task's output)")
     parser.add_argument("--pid", type=int, help="the git push process; default: the newest one this user owns")
-    parser.add_argument("--title", default="git push", help="the tab's title")
-    parser.add_argument("--focus", action="store_true", help="switch to the new tab instead of staying put")
+    parser.add_argument("--title", default="git push", help="the window's title (the tab's with --tab)")
+    parser.add_argument("--focus", action="store_true", help="switch to the new window instead of staying put")
+    parser.add_argument("--tab", action="store_true", help="open a new tab instead of a split in the agent's own tab")
     parser.add_argument("--verdict", type=Path, metavar="LOG", help="print PUSH SUCCEEDED/FAILED for a log and exit")
     parser.add_argument("--paint", action="store_true", help="colour stdin's verdict words onto stdout (the tab's filter)")
     parser.add_argument("--selftest", action="store_true")
@@ -197,7 +253,8 @@ def main(argv: list[str]) -> int:
         return 0
     if not args.log:
         parser.error("--log is required")
-    return open_tab(args.log, args.pid or newest_push_pid(), args.title, args.focus)
+    kind = "tab" if args.tab else "split"
+    return open_window(args.log, args.pid or newest_push_pid(), args.title, args.focus, kind)
 
 
 if __name__ == "__main__":
