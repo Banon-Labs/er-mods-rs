@@ -41,7 +41,7 @@ reason := concat("", [
 	"` exits 1 in ", checkout, " (", note, "). ",
 	"The push it would authorize is refused by the pre-push hook and by ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE until a DLL log carries `build git=", sha, "`, ",
 	"and producing that log needs nothing from the user. Stamp the run first: commit, build the changed shells at the tip with `bash scripts/er-build-dlls.sh <package>` (in the background; a cold cross-compile takes minutes), ",
-	"launch them with `python3 scripts/er-run-branch.py --with <package>` and let the DLL write its log, then confirm `bash scripts/check-runtime-evidence.sh ", sha, "` exits 0. ",
+	"launch them with `python3 scripts/er-run-branch.py --with <package> --stamp-only` (in the background), which waits for the DLL's stamp and then closes the game, then confirm `bash scripts/check-runtime-evidence.sh ", sha, "` exits 0. ",
 	"Only then ask for the authorization: run the changed DLL built at that commit in game first, then ask. ",
 	"User, 2026-10-16: 'I knew it needed a run stamp to push. I was hoping you would figure it out (again) prior to asking me to authorize a push'. ",
 	"User, 2026-10-19: 'to authorize a push, you must have runtime evidence'.",

@@ -33,7 +33,7 @@ test_reason_names_the_stamping_steps if {
 	halts := guard.halt with input as stop_event(tagged)
 	some d in halts
 	contains(d.reason, "scripts/er-build-dlls.sh <package>")
-	contains(d.reason, "scripts/er-run-branch.py --with <package>")
+	contains(d.reason, "scripts/er-run-branch.py --with <package> --stamp-only")
 	contains(d.reason, "bash scripts/check-runtime-evidence.sh b7f475f2d9e5` exits 0")
 	contains(d.reason, "Only then ask for the authorization")
 }

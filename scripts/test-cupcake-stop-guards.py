@@ -581,6 +581,26 @@ CASES = [
         "instrument is needed and the ask must NOT halt",
     ),
     Case(
+        "ask_authorize_commit_reply.jsonl",
+        None,
+        "the 2026-10-26 false positive, verbatim: 'I need your `authorize commit` reply before I "
+        "can fix either PR'. The only answer is the user's typed reply phrase, so no instrument is "
+        "needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_past_tense_report.jsonl",
+        None,
+        "the 2026-10-28 false positive, verbatim: 'As soon as you opened your world, Seamless "
+        "created your advertisement lobby, ...'. A bare simple-past verb after the temporal 'you' "
+        "narrates what the user already did -- a report, not an ask, so it must NOT halt",
+    ),
+    Case(
+        "ask_as_soon_as_you_open.jsonl",
+        "You asked the user for something you have no receiver for",
+        "the same clause in the present tense, 'As soon as you open your world, the probe records "
+        "the lobby key', with nothing armed -- must still halt",
+    ),
+    Case(
         "ask_game_mechanic_you.jsonl",
         None,
         "the 2026-10-04 false positive, verbatim: a finished report saying the axes catch a roll "

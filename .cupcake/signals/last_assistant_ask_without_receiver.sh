@@ -71,6 +71,19 @@ def scrub(text):
 
 _NOT_PAST = r"(?!said\b|asked\b|wrote\b|mentioned\b|told\b|were\b|was\b|did\b|meant\b|described\b)"
 
+# A bare simple-past verb after a temporal "you" narrates what the user already did, so it is a
+# report, not an ask: on 2026-10-28 "As soon as you opened your world, Seamless created your
+# advertisement lobby, ..." halted a finished report. Only the bare form is excused: "once you've
+# opened" and "once you have opened" are present perfect and still ask. Present-tense verbs that end
+# in -ed ("need", "proceed", "embed") stay asks.
+_SIMPLE_PAST = (
+    r"(?!(?!(?:need|feed|proceed|succeed|exceed|bleed|breed|heed|seed|speed|weed|shed|shred|embed"
+    r"|wed|bed)\b)\w+ed\b)"
+    r"(?!(?:went|ran|came|got|made|took|saw|left|began|brought|bought|caught|chose|drew|drove|fell"
+    r"|fought|found|gave|held|kept|knew|lost|met|paid|rode|rose|sent|sat|spoke|stood|struck|swung"
+    r"|threw|thought|understood|woke|won|had)\b)"
+)
+
 ASK_RE = re.compile(
     r"\bneed\s+you\s+to\b"
     r"|\bi(?:'d|\s+would|\s+still)?\s+need\s+(?!to\b|nothing\b|no\b|not\b)\w+"
@@ -89,12 +102,13 @@ ASK_RE = re.compile(
     # roll-out escapes his later hits." halted a finished report on a game mechanic. It counts only
     # when the sentence also speaks in the first person ("once you're in, I'll read it", "tell me").
     r"|(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
-    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'ve|\s+have)?\s+(?!are\b)" + _NOT_PAST + r"\w+"
+    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:(?:'ve|\s+have)\s+|\s+(?!are\b)" + _SIMPLE_PAST + r")"
+    + _NOT_PAST + r"\w+"
     r"|(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
     r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'re|\s+are)\s+\w+"
     r"(?=[^.!?]*\b(?:i|i'll|i'm|i'd|me|my|we|we'll|us|our)\b)"
     r"|\b(?:i'll|i\s+will|i\s+can|we'll|we\s+will)\b[^.!?]*?\b(?:once|when|after|as\s+soon\s+as)\s+"
-    r"you(?:'re|'ve|\s+have|\s+are)?\s+" + _NOT_PAST + r"\w+"
+    r"you(?:(?:'re|'ve|\s+have|\s+are)\s+|\s+" + _SIMPLE_PAST + r")" + _NOT_PAST + r"\w+"
     r"|\b(?:can|could|would)\s+you\s+(?:please\s+)?\w+"
     r"|\bover\s+to\s+you\b|\byour\s+turn\b|\bin\s+your\s+court\b",
     re.IGNORECASE,
@@ -131,9 +145,23 @@ RULE_CONDITIONAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# An ask whose object is the user's typed reply ("I need your `authorize commit` reply", "I need the
+# `authorize <sha>` phrase", "please reply") is answered by typing, so it needs no instrument: on
+# 2026-10-26 "I need your `authorize commit` reply before I can fix either PR" halted a turn whose
+# only possible next step was that reply. The phrase is blanked rather than exempting the sentence,
+# so an action ask riding along ("I need your reply once you've used the item") is still seen.
+TYPED_REPLY_ASK_RE = re.compile(
+    r"\bi(?:'d|\s+would|\s+still)?\s+need\s+(?:your|the|an?|one|that|this)\s+"
+    r"(?:[^\s.!?]+\s+){0,4}?"
+    r"(?:reply|replies|answer|phrase|go-ahead|authori[sz]ation)\b"
+    r"|\bplease\s+(?:reply|respond|answer)\b",
+    re.IGNORECASE,
+)
+
 offending = None
 for sentence in re.split(r"(?<=[.!?])\s+|\n+", TABLE_ROW_RE.sub(" ", scrub(closing))):
-    s = RULE_CONDITIONAL_RE.sub(" ", sentence).strip()
+    s = RULE_CONDITIONAL_RE.sub(" ", sentence)
+    s = TYPED_REPLY_ASK_RE.sub(" ", s).strip()
     if not s or not ASK_RE.search(s):
         continue
     if EXEMPT_RE.search(s):

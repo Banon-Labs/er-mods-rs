@@ -23,7 +23,7 @@ fatal() { echo "run-golden-observe: $*" >&2; exit 2; }
 # with "Steam is not running" while Steam was running.
 # shellcheck source=scripts/steam-running.sh disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fatal "Steam is not running; start Steam first (interactive login)"
+steam_running || fatal "Steam is not running; start Steam first"
 me3_preflight || fatal "me3 preflight failed"
 me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
 [[ -f "$GAME_DIR/eldenring.exe" ]] || fatal "missing eldenring.exe: $GAME_DIR/eldenring.exe"

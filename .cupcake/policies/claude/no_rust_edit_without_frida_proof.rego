@@ -1104,13 +1104,105 @@ deny contains decision if {
 	}
 }
 
-# A waiver is the user's to issue (2026-10-22). Written as plain substring tests rather than a
-# regex over the whole command, for the wasm regex-cache defect described above. It over-refuses a
-# command that merely mentions both words, which costs a Read instead of a grep.
-waiver_command if {
-	command := object.get(object.get(input, "tool_input", {}), "command", "")
+# A waiver is the user's to issue (2026-10-22). What is refused is the agent RUNNING
+# `er-frida-evidence.py --waive`, not the agent naming it.
+#
+# Until 2026-10-27 this was two substring tests over the raw command, and it refused the exact
+# handover its own message asks for: a heredoc writing the waiver command into a file, and that
+# file handed to `scripts/kitty-user-command.py --command-file`. It also refused a read-only
+# python one-liner searching the script's `--help` for the word. Both name the script and the
+# flag; neither runs them.
+#
+# So the reading is the one `no_whole_check_sh` uses, token operations over the executed
+# decomposition (no regex, for the wasm defect described above), in two halves:
+#
+#   * the script in a command slot, outside any heredoc body no shell reads, with `--waive`
+#     among the words of its own statement. That covers a direct run, a `bash -c` payload and a
+#     body fed to `bash <<EOF`, because `executed_texts` unwraps the first and
+#     `data_heredoc_spans` leaves the second as program.
+#   * the raw command names both, and a shell, `source`, `.` or `eval` stands in a command slot
+#     (or straight after a heredoc's terminator, where the production engine has already turned
+#     the newline into a space). That covers `echo '...' | bash` and a heredoc written to a file
+#     and then run, whose contents the guard cannot read from the file.
+#
+# The cheap substring gate comes first so no other command pays for the token walk.
+waiver_mentioned(command) if {
 	contains(command, "er-frida-evidence.py")
 	contains(command, "--waive")
+}
+
+waiver_raw_command := object.get(object.get(input, "tool_input", {}), "command", "")
+
+waiver_command if {
+	some words in waiver_word_lists
+	runs_waiver_in(words)
+}
+
+waiver_command if {
+	some words in waiver_word_lists
+	runs_a_shell_in(words)
+}
+
+# Each executed text read twice, as `no_whole_check_sh` does: split on spaces alone, and with a
+# newline ending a statement as `;` does.
+waiver_word_lists contains words if {
+	waiver_mentioned(waiver_raw_command)
+	some text in commands.input_executed_texts
+	words := commands.command_slot_words(text)
+}
+
+waiver_word_lists contains words if {
+	waiver_mentioned(waiver_raw_command)
+	some text in commands.input_executed_texts
+	words := commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; "))
+}
+
+runs_waiver_in(words) if {
+	spans := commands.data_heredoc_spans(words)
+	some index, word in words
+	endswith(word, "er-frida-evidence.py")
+	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
+	commands.word_in_command_slot(words, index)
+	some flag_index, flag in words
+	flag_index > index
+	waive_flag(flag)
+	no_separator_between(words, index, flag_index)
+}
+
+waive_flag(word) if trim(word, "\"'") == "--waive"
+
+waive_flag(word) if startswith(trim(word, "\"'"), "--waive=")
+
+no_separator_between(words, from, to) if {
+	count([i |
+		some i, w in words
+		i > from
+		i < to
+		w == commands.command_slot_separator
+	]) == 0
+}
+
+runs_a_shell_in(words) if {
+	spans := commands.data_heredoc_spans(words)
+	some index, word in words
+	shell_runner(word)
+	not commands.index_inside(spans, index)
+	in_slot_or_after_heredoc(words, spans, index)
+}
+
+shell_runner(word) if commands.shell_program(word)
+
+shell_runner(word) if word in {"source", ".", "eval"}
+
+in_slot_or_after_heredoc(words, _, index) if commands.word_in_command_slot(words, index)
+
+in_slot_or_after_heredoc(words, spans, index) if {
+	some span in spans
+	span[1] < index
+	every offset, _ in array.slice(words, span[1] + 1, index) {
+		commands.command_slot_wrapper_at(words, (span[1] + 1) + offset)
+	}
 }
 
 deny contains decision if {

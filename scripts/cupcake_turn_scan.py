@@ -74,8 +74,18 @@ def hook_transcript(raw_event: str | None = None) -> str | None:
     return None
 
 
+# Events the harness logs about the API requests it sent, not about the conversation. An
+# `api-request-blob` carries a copy of an assistant or user message that was already logged as its own
+# event, and it is written after that message's tool_result, so a scan in file order reads it as the
+# tool call being made a second time. Measured 2026-10-30 on harness 2.1.306: a `run_in_background`
+# Bash finished with "exit 0", then its blob copy booked it as a backgrounded job that never got a
+# result, and the closing report (826 chars) halted as a verbose pause with nothing running.
+REPLAY_EVENT_TYPES = ("api-request-blob", "api-request-shape")
+
+
 def load_events(path: str) -> list[dict]:
-    """Parse a transcript into events, skipping unparseable lines. Returns [] on any read error."""
+    """Parse a transcript into events, skipping unparseable lines and the harness's request copies
+    (`REPLAY_EVENT_TYPES`). Returns [] on any read error."""
     events: list[dict] = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -87,7 +97,7 @@ def load_events(path: str) -> list[dict]:
                     ev = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(ev, dict):
+                if isinstance(ev, dict) and ev.get("type") not in REPLAY_EVENT_TYPES:
                     events.append(ev)
     except OSError:
         return []
