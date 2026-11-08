@@ -924,3 +924,107 @@ test_deny_the_agent_issuing_a_waiver if {
 test_allow_the_agent_reading_the_verdict if {
 	count(guard.deny) == 0 with input as bash_event("python3 scripts/er-frida-evidence.py --check", UNPROVEN_NOTHING)
 }
+
+# --- the waiver guard reads execution, not mention (2026-10-27) ----------------------------------
+#
+# The handover the guard's own message asks for: the waiver written into a file by a heredoc and
+# the file handed to the kitty helper. Refused by the substring rule this replaced.
+WAIVE_LINE := "python3 /home/banon/projects/er-mods-rs/scripts/er-frida-evidence.py --waive --crate er-npc-summons --reason 'pure move'"
+
+KITTY_LINE := "python3 scripts/kitty-user-command.py --title 'waive npc-summons' --why 'The waiver is the user to issue.' --command-file $S/waive.sh"
+
+waiver_handover(sep) := concat("", [
+	"S=/tmp/claude-1000/x/scratchpad; cat > $S/waive.sh <<'EOF'", sep,
+	WAIVE_LINE, sep,
+	"EOF", sep,
+	KITTY_LINE,
+])
+
+waived(cmd) if {
+	some decision in guard.deny with input as bash_event(cmd, PROVEN)
+	contains(decision.reason, "issuing a waiver")
+}
+
+test_allow_waiver_heredoc_handed_to_kitty_helper if {
+	not waived(waiver_handover("\n"))
+}
+
+# The production engine turns every unquoted newline into a space before a policy runs.
+test_allow_waiver_heredoc_handed_to_kitty_helper_as_delivered if {
+	not waived(waiver_handover(" "))
+}
+
+test_allow_waiver_inline_to_kitty_helper if {
+	not waived(concat("", [
+		"python3 scripts/kitty-user-command.py --title t --why w -- ",
+		"'python3 /home/banon/projects/er-mods-rs/scripts/er-frida-evidence.py --waive --crate x --reason y'",
+	]))
+}
+
+test_allow_searching_the_help_for_the_flag if {
+	not waived(`python3 -c "import re,subprocess; h=subprocess.run(['python3','scripts/er-frida-evidence.py','--help'],capture_output=True,text=True).stdout; print(re.findall(r'--waive.*', h))"`)
+}
+
+test_allow_piping_the_help_into_a_search if {
+	not waived(`python3 scripts/er-frida-evidence.py --help | python3 -c "import sys; print([l for l in sys.stdin if '--waive' in l])"`)
+}
+
+test_allow_a_memory_naming_the_waiver if {
+	not waived("$HOME/.local/bin/bd remember 'the user issues waivers with python3 scripts/er-frida-evidence.py --waive --crate <c>'")
+}
+
+test_allow_the_flag_in_another_statement if {
+	not waived("python3 scripts/er-frida-evidence.py --check; echo --waive")
+}
+
+test_deny_waiver_by_absolute_path if {
+	waived(WAIVE_LINE)
+}
+
+test_deny_waiver_with_equals_flag if {
+	waived("python3 scripts/er-frida-evidence.py --waive=yes --crate x --reason y")
+}
+
+test_deny_waiver_run_directly if {
+	waived("./scripts/er-frida-evidence.py --crate x --waive --reason y")
+}
+
+test_deny_waiver_behind_wrappers if {
+	waived("cd /home/banon/projects/er-mods-rs && timeout 30 env X=1 python3 scripts/er-frida-evidence.py --waive --crate x --reason y")
+}
+
+test_deny_waiver_in_bash_c if {
+	waived("bash -c 'python3 scripts/er-frida-evidence.py --waive --crate x --reason y'")
+}
+
+test_deny_waiver_in_sh_c_double_quoted if {
+	waived(`sh -c "python3 scripts/er-frida-evidence.py --waive --crate x --reason y"`)
+}
+
+test_deny_waiver_echoed_into_a_shell if {
+	waived("echo 'python3 scripts/er-frida-evidence.py --waive --crate x --reason y' | bash")
+}
+
+test_deny_waiver_heredoc_piped_into_a_shell if {
+	waived(concat("\n", ["cat <<'EOF' | sh", WAIVE_LINE, "EOF"]))
+}
+
+test_deny_waiver_heredoc_fed_to_a_shell if {
+	waived(concat("\n", ["bash <<'EOF'", WAIVE_LINE, "EOF"]))
+}
+
+test_deny_waiver_heredoc_fed_to_a_shell_as_delivered if {
+	waived(concat(" ", ["bash <<'EOF'", WAIVE_LINE, "EOF"]))
+}
+
+test_deny_waiver_written_then_run if {
+	waived(concat("\n", ["cat > /tmp/w.sh <<'EOF'", WAIVE_LINE, "EOF", "bash /tmp/w.sh"]))
+}
+
+test_deny_waiver_written_then_run_as_delivered if {
+	waived(concat(" ", ["cat > /tmp/w.sh <<'EOF'", WAIVE_LINE, "EOF", "bash /tmp/w.sh"]))
+}
+
+test_deny_waiver_written_then_sourced if {
+	waived(concat("\n", ["cat > /tmp/w.sh <<'EOF'", WAIVE_LINE, "EOF", "source /tmp/w.sh"]))
+}

@@ -33,7 +33,7 @@ fi
 # shellcheck source=scripts/steam-running.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+steam_running || fail "Steam is not running. Start Steam first."
 # Fail closed if an ER is already running -- a second launch on top double-loads the DLLs and
 # contaminates the run (observed 2026-07-22). tasklist.exe not resolving just yields no match (safe);
 # do not guard on `command -v` (it failed in the script path and silently skipped this check).

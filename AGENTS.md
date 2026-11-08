@@ -373,9 +373,14 @@ no longer governs commits.
    (again) prior to asking me to authorize a push"; and 2026-10-19: "to authorize a push, you must
    have runtime evidence"). Before asking, run `bash scripts/check-runtime-evidence.sh <full tip
    sha>` from that checkout. If it exits 1, build the changed shells at the tip
-   (`bash scripts/er-build-dlls.sh <package>`, in the background), launch them
-   (`python3 scripts/er-run-branch.py --with <package>`), let the DLL write its log, and check
-   again. A push that changes no crate needs no run. The Stop hook enforces this:
+   (`bash scripts/er-build-dlls.sh <package>`, in the background), launch them with
+   `python3 scripts/er-run-branch.py --with <package> --stamp-only` (in the background), and read
+   its last line. `--stamp-only` waits up to 120 s for `check-runtime-evidence.sh <HEAD>` to exit 0,
+   then closes the game through er-teardown (`--reason=stamped-<run-id>`) whether or not the stamp
+   landed, and says which; it exits 5 when the stamp did not land. A stamp-only run holds the game
+   for nothing once its stamp is in, which is why nothing is left to close by hand (2026-10-27, an
+   er-npc-summons stamp landed in seconds and the game stayed up for minutes). A push that changes
+   no crate needs no run. The Stop hook enforces this:
    `.cupcake/policies/claude/no_authorize_without_run_stamp.rego` over the
    `last_assistant_authorize_without_run_stamp` signal halts a closing message that asks for
    `authorize <sha>` while that check exits 1, and allows when it cannot measure.

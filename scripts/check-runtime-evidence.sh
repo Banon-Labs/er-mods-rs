@@ -605,7 +605,7 @@ judge_tip() {
 		printf '  were read. Build it, launch it, and let the DLL write:\n'
 		printf '\n'
 		printf '    bash scripts/er-build-dlls.sh <package>\n'
-		printf '    python3 scripts/er-run-branch.py --with <package>\n'
+		printf '    python3 scripts/er-run-branch.py --with <package> --stamp-only\n'
 		printf '\n'
 		printf '  A launcher run counts too -- its logs land in the game directory rather than the\n'
 		printf '  run root. Commit before you build: the sha is stamped at build time, so building\n'

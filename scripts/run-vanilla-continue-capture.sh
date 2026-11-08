@@ -39,7 +39,7 @@ fi
 # shellcheck source=scripts/steam-running.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+steam_running || fail "Steam is not running. Start Steam first."
 [[ -f "$PRODUCT_DLL" ]] || fail "product DLL not built: $PRODUCT_DLL"
 [[ -f "$TRACE_DLL" ]] || fail "trace DLL not built: $TRACE_DLL"
 

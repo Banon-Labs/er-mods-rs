@@ -237,6 +237,13 @@ def stamped_run_env(runs: Path) -> tuple[tuple[str, str], ...]:
 
 STAMPED_RUN_EVENT = {"cwd": STAMPED_FIXTURE["repo"]}
 
+# A project dir with no `.cupcake`, the shape of a Claude session started in the home directory
+# (2026-10-28: `CLAUDE_PROJECT_DIR=/home/banon`). The rulebook's signal entries used to append
+# `/.cupcake/signals/<name>.sh` to it whenever it was set, so every one exited 127 and the stamped
+# and push teardown forms were denied with no answer quoted.
+STAMPED_FOREIGN_PROJECT_DIR = _STAMPED_RUN_DIR / "project-dir-without-cupcake"
+STAMPED_FOREIGN_PROJECT_DIR.mkdir()
+
 
 def _make_conflict_fixture(root: Path) -> tuple[Path, Path]:
     """A repo stopped in a merge with one crate source conflicted and one clean.
@@ -777,6 +784,58 @@ def run_signal_executable_checks() -> None:
             )
 
 
+def run_rulebook_signal_path_checks() -> None:
+    """Every rulebook signal that runs a `.cupcake/signals/` script finds it from a foreign project dir.
+
+    A Claude session started in the home directory hands the hook `CLAUDE_PROJECT_DIR=/home/banon`.
+    The global wrapper then passes no `--policy-dir`, cupcake reads this rulebook from the cwd, and
+    an entry spelled `${CLAUDE_PROJECT_DIR:-...}/.cupcake/signals/<name>.sh` names a script that is
+    not there: exit 127, no output, and the policy reading it falls back to its failure direction.
+    Measured 2026-10-28: `er-teardown.py --reason=stamped-a5a9a5f8` and `--reason=push-a5a9a5f8`
+    were denied with no signal answer, after run br-20261028-180526-7e85 had stamped a5a9a5f8.
+
+    Each such command is run through `sh -c` with a `bash` on `PATH` that only prints the script path
+    it was handed, so the check reads where the entry resolves without running the signal.
+    """
+    import yaml  # noqa: PLC0415 -- only this check reads the rulebook as YAML
+
+    rulebook = yaml.safe_load((REPO_ROOT / ".cupcake" / "rulebook.yml").read_text(encoding="utf-8"))
+    entries = {
+        name: spec["command"]
+        for name, spec in (rulebook.get("signals") or {}).items()
+        if isinstance(spec, dict) and ".cupcake/signals/" in str(spec.get("command", ""))
+    }
+    if not entries:
+        raise AssertionError(
+            ".cupcake/rulebook.yml registers no `.cupcake/signals/` command. Either the entries "
+            "moved or this check is reading the wrong file; an empty walk proves nothing."
+        )
+    with tempfile.TemporaryDirectory(prefix="cupcake-signal-path-") as raw:
+        tmp = Path(raw)
+        shim_dir = tmp / "bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "bash"
+        shim.write_text('#!/bin/sh\nprintf "%s" "$1"\n', encoding="utf-8")
+        shim.chmod(0o755)
+        foreign = tmp / "project-dir-without-cupcake"
+        foreign.mkdir()
+        for project_dir in (str(foreign), "", str(REPO_ROOT)):
+            env = {**os.environ, "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                   "CLAUDE_PROJECT_DIR": project_dir}
+            for name, command in entries.items():
+                want = str(REPO_ROOT / ".cupcake" / "signals" / f"{name}.sh")
+                got = subprocess.run(
+                    ["sh", "-c", command], cwd=REPO_ROOT, env=env, input="", text=True,
+                    capture_output=True, timeout=10, check=False,
+                ).stdout
+                if got != want:
+                    raise AssertionError(
+                        f"rulebook signal `{name}` with CLAUDE_PROJECT_DIR={project_dir!r} runs "
+                        f"{got!r}, not {want!r}. A path that does not exist exits 127 with no "
+                        "output, and the policy reading it acts as if the signal never answered."
+                    )
+
+
 def run_orphaned_rego_suites() -> None:
     if not shutil.which("opa"):
         print("skip: orphaned rego suites (no opa on PATH)")
@@ -828,6 +887,7 @@ def main() -> int:
     # every other gate here stays green, so there is no point spending 237 CPU-seconds before
     # asking whether the signals can run at all.
     run_signal_executable_checks()
+    run_rulebook_signal_path_checks()
     run_host_platform_signal_checks()
     run_orphaned_rego_suites()
     run_runtime_evidence_signal_checks()
@@ -2866,6 +2926,27 @@ def main() -> int:
             True,
             extra_event=STAMPED_RUN_EVENT,
             extra_env=stamped_run_env(STAMPED_RUNS_PROVEN),
+        ),
+        # The same allow from a session whose project dir has no `.cupcake`: the signal has to be
+        # found in the checkout cupcake runs in, or it prints nothing and the form is refused.
+        PolicyCase(
+            "allow-stamped-teardown-when-project-dir-has-no-cupcake",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-a5a9a5f8 | tail -3",
+            True,
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_PROVEN)
+            + (("CLAUDE_PROJECT_DIR", str(STAMPED_FOREIGN_PROJECT_DIR)),),
+        ),
+        PolicyCase(
+            "deny-stamped-teardown-when-project-dir-has-no-cupcake-and-no-run",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=stamped-a5a9a5f8 | tail -3",
+            False,
+            "`stamped_run` signal: UNPROVEN no-run",
+            extra_event=STAMPED_RUN_EVENT,
+            extra_env=stamped_run_env(STAMPED_RUNS_ABSENT)
+            + (("CLAUDE_PROJECT_DIR", str(STAMPED_FOREIGN_PROJECT_DIR)),),
         ),
         PolicyCase(
             "deny-stamped-teardown-when-the-run-did-not-stamp-the-tip",

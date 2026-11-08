@@ -54,7 +54,7 @@ fi
 # shellcheck source=scripts/steam-running.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+steam_running || fail "Steam is not running. Start Steam first."
 
 [[ -f "$BADGE_DLL" ]] || fail "badge DLL not built: $BADGE_DLL (cargo xwin build --release --target x86_64-pc-windows-msvc -p er-armament-icons)"
 
