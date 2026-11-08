@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.1.0...1.2.0) (2026-11-08)
+
+
+### Features
+
+* **kitty:** open handed-over commands and tails as a split in the agent's tab ([bd7bd1e](https://github.com/Banon-Labs/er-mods-rs/commit/bd7bd1eb7cd8c6b88c53a94a7b09476f46e2abef))
+* **kitty:** open handed-over commands and tails as a split in the agent's tab ([#617](https://github.com/Banon-Labs/er-mods-rs/issues/617)) ([a887846](https://github.com/Banon-Labs/er-mods-rs/commit/a8878469a5ae736cecccafc602ab6c7bbb189632))
+* **planner:** account-wide item sync and equip-load report for planner builds ([8bf1941](https://github.com/Banon-Labs/er-mods-rs/commit/8bf1941e446728848493b446a53d560bc9e73ec0))
+* **planner:** account-wide item sync and equip-load report for planner builds ([#618](https://github.com/Banon-Labs/er-mods-rs/issues/618)) ([6f04578](https://github.com/Banon-Labs/er-mods-rs/commit/6f045783d6762dfb447fa580d0c5e17037cd7859))
+* **planner:** give each armament in a planner build its hardest-hitting affinity ([1f61b0c](https://github.com/Banon-Labs/er-mods-rs/commit/1f61b0c12b096b05dd8d4e0e5aac57aace97a6f5))
+* **planner:** give each armament in a planner build its hardest-hitting affinity ([#620](https://github.com/Banon-Labs/er-mods-rs/issues/620)) ([9024166](https://github.com/Banon-Labs/er-mods-rs/commit/9024166ab37b9d57534f9186334f95f90f7e7293))
+
+
+### Bug Fixes
+
+* **cupcake:** count a reply typed mid-turn as the user's latest prompt ([6cafebd](https://github.com/Banon-Labs/er-mods-rs/commit/6cafebd51b3a81f1b5adc579411aa6c1f1655166))
+* **cupcake:** count a reply typed mid-turn as the user's latest prompt ([#619](https://github.com/Banon-Labs/er-mods-rs/issues/619)) ([19754e8](https://github.com/Banon-Labs/er-mods-rs/commit/19754e87d934cd5f0b995991b569f56e5fa4dba8))
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([a5a9a5f](https://github.com/Banon-Labs/er-mods-rs/commit/a5a9a5f8f0d5d67e0a5359815abab775d6d913a9))
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([#614](https://github.com/Banon-Labs/er-mods-rs/issues/614)) ([c107d31](https://github.com/Banon-Labs/er-mods-rs/commit/c107d3132230926191a25fb29fc4605d2fdad793))
+* **tooling:** stamp-only runs, Steam sign-in preflight, and four guard false positives ([c9161f5](https://github.com/Banon-Labs/er-mods-rs/commit/c9161f57d0294c2147dff144fe0337a9b2ef7faf))
+* **tooling:** stamp-only runs, Steam sign-in preflight, and four guard false positives ([#616](https://github.com/Banon-Labs/er-mods-rs/issues/616)) ([91dc218](https://github.com/Banon-Labs/er-mods-rs/commit/91dc218e43e2feaf25b86e73a5d6ed64d59edb91))
+
 ## [1.1.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.0.0...1.1.0) (2026-10-28)
 
 
