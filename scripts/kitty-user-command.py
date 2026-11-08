@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Open a kitty tab with a command pre-pasted for the user to run, and a comment saying why.
+"""Open a kitty split with a command pre-pasted for the user to run, and a comment saying why.
 
 User directive 2026-10-13: a command the agent wants the user to run is never handed over as an
-inline bash block. It goes into its own kitty tab, focused, typed in but not submitted, under a
-`#` comment block that says why it should be run. One tab per command block.
+inline bash block. It goes into its own kitty window, focused, typed in but not submitted, under a
+`#` comment block that says why it should be run. One window per command block.
 
     python3 scripts/kitty-user-command.py --title "push loading PR" \
         --why "The agent may not push; this publishes fix/load-character-from-file." \
         --why "Review the branch first: git log origin/main..fix/load-character-from-file" \
         -- 'git -C /abs/worktree push -u origin fix/load-character-from-file'
 
-What lands in the tab, in order:
+The window is a split: a new kitty window in the tab the agent session runs in (user request
+2026-11-07: "Can we do kitty split instead of tab by default?"). `--tab` opens a new tab instead,
+as every handed-over command did before. `placement` below says how the split finds that tab.
 
-  * each `--why` line, prefixed `# ` -- the interactive tabs run fish, where a line starting with
+What lands in the window, in order:
+
+  * each `--why` line, prefixed `# ` -- the interactive shells run fish, where a line starting with
     `#` is a comment, so it runs nothing and leaves the reason on screen;
   * the command, wrapped as `bash -c '<command>'`.
 
 Both go in as one paste and nothing is submitted: the whole block waits at the prompt until the
 user presses enter.
 
-The wrap is there because the tabs run fish and the commands are written in bash: `$(...)`,
+The wrap is there because the shells run fish and the commands are written in bash: `$(...)`,
 `&&` chains and `VAR=value cmd` all mean something different, or nothing, to fish. The quoting is
 `shlex.quote`, whose `'"'"'` spelling for an embedded single quote parses identically in bash and
 fish, so a title like "account's" survives both shells. `--raw` skips the wrap for a command that
@@ -30,7 +34,8 @@ The listener is `$KITTY_LISTEN_ON`, never a fixed port: `kitty.conf` says
 A hard-coded 45678 in the global instructions was refused with "connection refused" on 2026-10-13.
 
 `--dry-run` prints exactly what would be sent. `--selftest` proves the wrap round-trips the
-awkward characters through both bash and fish without opening anything.
+awkward characters through both bash and fish without opening anything. `--live-selftest` (with
+`--tab` for a tab) opens a real window the same way and also checks which tab it landed in.
 """
 
 from __future__ import annotations
@@ -46,11 +51,60 @@ import sys
 import time
 
 # Upper bounds on polls of kitty's own state, not waits: each loop returns the moment kitty reports
-# the condition. A new tab's fish runs its config (fastfetch, direnv) before the first prompt, and
-# text sent during that window is consumed by startup and never reaches the line editor -- measured
+# the condition. A new window's fish runs its config (fastfetch, direnv) before the first prompt, and
+# text sent during that time is consumed by startup and never reaches the line editor -- measured
 # 2026-10-13, when two handed-over tabs showed bare prompts with neither comment nor command.
 SHELL_READY_DEADLINE_S = 20.0
 SCREEN_DEADLINE_S = 5.0
+
+#: What a helper opens: a split (a new window in the agent's own tab) by default, or a tab.
+SPLIT = "split"
+TAB = "tab"
+
+
+def agent_window_id() -> str | None:
+    """The kitty window this agent session runs in: `$KITTY_WINDOW_ID`, which kitty exports to the
+    shells it starts. None when it is unset or not a number."""
+    value = os.environ.get("KITTY_WINDOW_ID", "").strip()
+    return value if value.isdigit() else None
+
+
+def placement(kind: str, title: str) -> tuple[list[str], str]:
+    """The `kitty @ launch` options that open the new window as `kind`, and where it lands, in words.
+
+    A split is `--type=window`, a new window in an existing tab. Which tab is `--match`, a tab
+    match for a launch: `window_id:<n>` is the tab holding window n, where `id:<n>` would look for a
+    tab numbered n first. `--next-to` puts the new window beside the agent's own, and kitty ignores
+    it unless that window is in the target tab (`kitty @ launch --help`, kitty 0.49.2), so both are
+    given. `--location=split` splits the agent's window along its longer side in the `splits`
+    layout; every other layout, including `fat`, the one the user's tabs start in, places the new
+    window after it (kitty/layout/base.py). Without `$KITTY_WINDOW_ID` the split goes to the
+    focused tab, and the words returned say so.
+    """
+    if kind == TAB:
+        return ["--type=tab", f"--tab-title={title}"], "a new tab"
+    argv = ["--type=window", "--location=split", f"--window-title={title}"]
+    agent = agent_window_id()
+    if agent is None:
+        return argv, "the focused tab: KITTY_WINDOW_ID is not set, so the agent's own tab is unknown"
+    return [*argv, f"--match=window_id:{agent}", f"--next-to=id:{agent}"], (
+        f"the agent's tab, next to window {agent}"
+    )
+
+
+def tab_ids(listener: str, window_ids: list[int]) -> dict[int, int]:
+    """Window id to tab id, for these windows only. `kitty @ ls` is matched to them, and only ids
+    are read from it, so no other window's title or command line is listed."""
+    query = " or ".join(f"id:{w}" for w in window_ids)
+    listing = json.loads(kitty(listener, "ls", f"--match={query}"))
+    wanted = set(window_ids)
+    return {
+        w["id"]: tab["id"]
+        for os_window in listing
+        for tab in os_window["tabs"]
+        for w in tab["windows"]
+        if w["id"] in wanted
+    }
 
 # Characters a handed-over command actually carried on 2026-10-13: an apostrophe in a PR title,
 # a `$(...)` substitution, double quotes, `&&`, a backslash and a dollar sign.
@@ -139,9 +193,11 @@ def poll(what: str, deadline_s: float, probe) -> None:
             raise SystemExit(f"gave up after {deadline_s:.0f}s waiting for {what}")
 
 
-def launch_ready_tab(listener: str, title: str, cwd: str, keep_focus: bool) -> str:
-    """Open a tab and return its match spec once its shell has drawn a prompt."""
-    argv = ["launch", "--type=tab", f"--tab-title={title}", f"--cwd={cwd}"]
+def launch_ready_window(listener: str, title: str, cwd: str, keep_focus: bool, kind: str) -> tuple[str, str]:
+    """Open a split or a tab, and return its match spec and where it landed once its shell has
+    drawn a prompt."""
+    where_argv, where = placement(kind, title)
+    argv = ["launch", *where_argv, f"--cwd={cwd}"]
     if keep_focus:
         argv.append("--keep-focus")
     window_id = kitty(listener, *argv).strip()
@@ -149,7 +205,7 @@ def launch_ready_tab(listener: str, title: str, cwd: str, keep_focus: bool) -> s
         raise SystemExit(f"kitty @ launch did not return a window id: {window_id!r}")
     match = f"id:{window_id}"
     poll(f"the first prompt in window {window_id}", SHELL_READY_DEADLINE_S, lambda: at_prompt(listener, match))
-    return match
+    return match, where
 
 
 def without_whitespace(text: str) -> str:
@@ -177,26 +233,45 @@ def paste_and_confirm(listener: str, match: str, comments: list[str], prompt_tex
     )
 
 
-def open_tab(title: str, cwd: str, comments: list[str], prompt_text: str) -> int:
+def open_window(title: str, cwd: str, comments: list[str], prompt_text: str, kind: str) -> int:
     listener = listener_or_exit()
-    match = launch_ready_tab(listener, title, cwd, keep_focus=False)
+    match, where = launch_ready_window(listener, title, cwd, keep_focus=False, kind=kind)
     paste_and_confirm(listener, match, comments, prompt_text)
     kitty(listener, "focus-window", f"--match={match}")
     window_id = int(match.removeprefix("id:"))
-    print(json.dumps({"window_id": window_id, "title": title, "cwd": cwd, "pre_pasted": prompt_text, "on_screen": True}))
+    print(json.dumps({
+        "window_id": window_id, "window_type": kind, "placement": where, "title": title, "cwd": cwd,
+        "pre_pasted": prompt_text, "on_screen": True,
+    }))
     return 0
 
 
-def live_selftest() -> int:
-    """Run the production paste path against a real fish tab and read back what fish executed.
+def placement_check(listener: str, new_id: int, kind: str) -> tuple[bool | None, str]:
+    """Whether the new window is where `kind` puts it: a split in the agent window's tab, a tab
+    anywhere else. None when there is no agent window to compare with."""
+    agent = agent_window_id()
+    if agent is None:
+        return None, "placement not checked: KITTY_WINDOW_ID is not set"
+    tabs = tab_ids(listener, [int(agent), new_id])
+    same = tabs.get(int(agent)) is not None and tabs.get(int(agent)) == tabs.get(new_id)
+    ok = same if kind == SPLIT else not same
+    return ok, (
+        f"new window {new_id} is in tab {tabs.get(new_id)}, agent window {agent} in tab "
+        f"{tabs.get(int(agent))}"
+    )
+
+
+def live_selftest(kind: str) -> int:
+    """Run the production paste path against a real fish window and read back what fish executed.
 
     The offline selftest proves the wrap parses; it cannot prove the text arrives in the line
     editor intact, and on 2026-10-13 it did not, twice: first through keystroke typing, then
     because text sent before fish's first prompt was eaten by its startup. So this goes through
-    the same launch, readiness wait, paste and on-screen check `open_tab` uses -- comments with an
-    apostrophe, then a command whose arguments carry one -- and only then submits the command and
-    compares the printed arguments. The scratch tab opens without taking focus and is closed
-    afterwards, and the probe command only prints its own arguments.
+    the same launch, readiness wait, paste and on-screen check `open_window` uses -- comments with
+    an apostrophe, then a command whose arguments carry one -- and only then submits the command
+    and compares the printed arguments. It also reads which tab the window opened in: a split must
+    share the agent window's tab, a tab must not. The scratch window opens without taking focus and
+    is closed afterwards, and the probe command only prints its own arguments.
     """
     listener = listener_or_exit()
     # The padding makes the command longer than any window is wide, so fish breaks it across
@@ -206,8 +281,9 @@ def live_selftest() -> int:
     probe = f"p=\"{padding}\"; printf '[%s]\\n' \"account's\" \"tail.md\" \"${{#p}}\" && echo '[done]'"
     expected = f"[account's]\n[tail.md]\n[{len(padding)}]\n[done]\n"
     comments = comment_lines(["why it's run", "second line"])
-    match = launch_ready_tab(listener, "quote-probe", "/tmp", keep_focus=True)
+    match, _ = launch_ready_window(listener, "quote-probe", "/tmp", keep_focus=True, kind=kind)
     try:
+        placed, placed_words = placement_check(listener, int(match.removeprefix("id:")), kind)
         paste_and_confirm(listener, match, comments, wrap(probe, raw=False))
         # The block must still be waiting at the prompt: a pasted newline that ran the buffer
         # early would hand the user a command that had already gone.
@@ -228,6 +304,9 @@ def live_selftest() -> int:
         f"{'ok  ' if ok else 'FAIL'} fish executed -> {got!r}; comments shown={comments_shown}; "
         f"ran before enter={ran_early}"
     )
+    expect = "the agent window's tab" if kind == SPLIT else "a tab of its own"
+    print(f"{'FAIL' if placed is False else 'ok  '} {kind} in {expect}: {placed_words}")
+    ok = ok and placed is not False
     print("live selftest:", "PASS" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -253,22 +332,56 @@ def selftest() -> int:
     ok = lines == ["# first reason", "# two", "# lines"]
     failures += not ok
     print(f"{'ok  ' if ok else 'FAIL'} comment lines {lines!r}")
+    failures += placement_selftest()
     print("selftest:", "PASS" if failures == 0 else f"{failures} FAILED")
     return 0 if failures == 0 else 1
 
 
+def placement_selftest() -> int:
+    """The launch options for a split with and without `$KITTY_WINDOW_ID`, and for a tab."""
+    saved = os.environ.get("KITTY_WINDOW_ID")
+    cases = [
+        ("7", SPLIT, ["--type=window", "--location=split", "--window-title=t",
+                      "--match=window_id:7", "--next-to=id:7"], "the agent's tab, next to window 7"),
+        (None, SPLIT, ["--type=window", "--location=split", "--window-title=t"], "the focused tab"),
+        ("7", TAB, ["--type=tab", "--tab-title=t"], "a new tab"),
+    ]
+    failures = 0
+    try:
+        for env, kind, want_argv, want_words in cases:
+            if env is None:
+                os.environ.pop("KITTY_WINDOW_ID", None)
+            else:
+                os.environ["KITTY_WINDOW_ID"] = env
+            got_argv, words = placement(kind, "t")
+            ok = got_argv == want_argv and words.startswith(want_words)
+            failures += not ok
+            print(f"{'ok  ' if ok else 'FAIL'} {kind} with KITTY_WINDOW_ID={env} -> {got_argv} ({words})")
+    finally:
+        if saved is None:
+            os.environ.pop("KITTY_WINDOW_ID", None)
+        else:
+            os.environ["KITTY_WINDOW_ID"] = saved
+    return failures
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Open a kitty tab with a command pre-pasted (not run) under a '# why' comment."
+        description="Open a kitty split with a command pre-pasted (not run) under a '# why' comment."
     )
-    parser.add_argument("--title", help="tab title")
+    parser.add_argument("--title", help="window title (the tab title with --tab)")
+    parser.add_argument(
+        "--tab",
+        action="store_true",
+        help="open a new tab instead of a split in the agent's own tab",
+    )
     parser.add_argument(
         "--why",
         action="append",
         default=[],
         help="a reason line for the comment block; repeat for more lines (required)",
     )
-    parser.add_argument("--cwd", default=os.path.expanduser("~"), help="tab working directory")
+    parser.add_argument("--cwd", default=os.path.expanduser("~"), help="the shell's working directory")
     parser.add_argument(
         "--command-file",
         help="read the command from this file instead of after --; for commands long enough that "
@@ -280,15 +393,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--live-selftest",
         action="store_true",
-        help="open a real fish tab the way a handed-over tab is opened, and check what fish ran",
+        help="open a real fish window the way a handed-over one is opened, and check what fish ran "
+        "and which tab it landed in",
     )
     parser.add_argument("command", nargs="*", help="the command, after --")
     args = parser.parse_args(argv)
+    kind = TAB if args.tab else SPLIT
 
     if args.selftest:
         return selftest()
     if args.live_selftest:
-        return live_selftest()
+        return live_selftest(kind)
     if args.command_file and args.command:
         parser.error("give the command after -- or in --command-file, not both")
     if args.command_file:
@@ -299,16 +414,18 @@ def main(argv: list[str]) -> int:
     if not command:
         parser.error("a command is required, after -- or in --command-file")
     if not args.why:
-        parser.error("--why is required: the tab must say why the command should be run")
+        parser.error("--why is required: the window must say why the command should be run")
     if not args.title:
         parser.error("--title is required")
 
     comments = comment_lines(args.why)
     prompt_text = wrap(command, args.raw)
     if args.dry_run:
+        where_argv, where = placement(kind, args.title)
+        print(f"# kitty @ launch {shlex.join([*where_argv, f'--cwd={args.cwd}'])}  ({kind}: {where})")
         print("\n".join([*comments, prompt_text]))
         return 0
-    return open_tab(args.title, args.cwd, comments, prompt_text)
+    return open_window(args.title, args.cwd, comments, prompt_text, kind)
 
 
 if __name__ == "__main__":

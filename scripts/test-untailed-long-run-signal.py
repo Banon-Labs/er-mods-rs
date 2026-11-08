@@ -3,7 +3,8 @@
 
 The signal emits `UNTAILEDRUN:<command> => <tail command>` when the turn being stopped sent a long
 run to the background (board regeneration, a weapon or DLL build, the check suite, a push, ...)
-and no later call in the same turn opened a kitty tab tailing its real output; empty otherwise.
+and no later call in the same turn opened a kitty split (or tab) tailing its real output; empty
+otherwise.
 Each case writes a crafted transcript, hands its path to the signal on stdin the way cupcake does,
 and asserts the verdict.
 """
@@ -62,7 +63,7 @@ def moved(uid: str, cmd: str, task: str = "bq1") -> list[dict]:
 
 
 def tail(uid: str, cmd: str, ok: bool = True) -> list[dict]:
-    text = "tab 'boards' (window 7) tails ..." if ok else "Exit code 1\nKITTY_LISTEN_ON is unset"
+    text = "split 'boards' (window 7) tails ..." if ok else "Exit code 1\nKITTY_LISTEN_ON is unset"
     return [use(uid, "Bash", {"command": cmd}), result(uid, text, not ok)]
 
 
@@ -162,6 +163,11 @@ CASES = [
     ("failed tab call reported in the closing message",
      [user("go"), *bg("b1", BOARDS), *tail("t1", BOARDS_TAB, ok=False),
       say("The kitty tab did not open: KITTY_LISTEN_ON is unset in this shell.")], ALLOW, []),
+    ("failed split call reported in the closing message without the word kitty",
+     [user("go"), *bg("b1", BOARDS), *tail("t1", BOARDS_TAB, ok=False),
+      say("The split did not open: KITTY_LISTEN_ON is unset in this shell.")], ALLOW, []),
+    ("a run tailed in a tab with --tab",
+     [user("go"), *bg("b1", BOARDS), *tail("t1", f"{BOARDS_TAB} --tab"), say(REPORT)], ALLOW, []),
     ("failed tab call not reported",
      [user("go"), *bg("b1", BOARDS), *tail("t1", BOARDS_TAB, ok=False), say(REPORT)], HALT, []),
     ("launch refused by a hook",

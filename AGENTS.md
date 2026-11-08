@@ -21,11 +21,13 @@ the file that matches the work before starting it.
 | build, test, run `check.sh`, or brief a subagent on which checks to run | `docs/agents/build-and-test.md` |
 | write Rust, Python or comments, or draw an in-game overlay | `docs/agents/conventions.md` |
 
-## A command for the user goes into a kitty tab, never into the reply (user directive 2026-10-13)
+## A command for the user goes into a kitty split, never into the reply (user directive 2026-10-13)
 
 When the agent wants the user to run a command, it does not paste a bash block into its
-message. It opens one kitty tab per command block, focused, with the command typed in but not
-submitted, under a `#` comment block that says why it should be run:
+message. It opens one kitty split per command block, focused, with the command typed in but not
+submitted, under a `#` comment block that says why it should be run. A split is a new kitty
+window in the agent session's own tab (user request 2026-11-07: "Can we do kitty split instead of
+tab by default?"); `--tab` opens a new tab instead:
 
 ```bash
 python3 scripts/kitty-user-command.py --title 'push loading PR' \
@@ -33,22 +35,25 @@ python3 scripts/kitty-user-command.py --title 'push loading PR' \
     -- 'git -C /home/banon/projects/er-mods-rs/.worktrees/pr-x push -u origin fix/x'
 ```
 
-The reply then says in prose which tabs it opened and what each one does. The helper wraps
-the command as `bash -c '...'` because the tabs run fish, and it finds kitty through
-`$KITTY_LISTEN_ON` because `kitty.conf` uses a random port (`listen_on tcp:127.0.0.1:0`).
+The reply then says in prose which splits it opened and what each one does. The helper wraps
+the command as `bash -c '...'` because the shells run fish, and it finds kitty through
+`$KITTY_LISTEN_ON` because `kitty.conf` uses a random port (`listen_on tcp:127.0.0.1:0`). It
+finds the agent's tab through `$KITTY_WINDOW_ID` (`--match=window_id:<id> --next-to=id:<id>`);
+without it the split opens in the focused tab and the helper's output says so.
 `--dry-run` shows what it would send; `--selftest` proves the quoting in bash and fish;
-`--live-selftest` sends that quoting through a real fish tab and checks what fish ran. Run the
+`--live-selftest` sends that quoting through a real fish split and checks what fish ran and that
+the split shares the agent window's tab. Run the
 live one after touching the helper: on 2026-10-13 the offline test passed while keystroke-typed
 text reached fish mangled, which is why everything now goes in as a bracketed paste. The same day
 two handed-over tabs came up as bare prompts, because the text was sent before fish drew its first
 prompt and its startup ate it; the helper now waits for kitty's `at_prompt` and exits non-zero
-unless the comments and the command are on screen, so a tab it reports is a tab with the command
-in it.
+unless the comments and the command are on screen, so a window it reports is a window with the
+command in it.
 A long command goes in a file passed as `--command-file <path>`: a `git push && gh pr
 create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
 The Stop hook refuses a closing message that carries a shell code block.
 
-A push and a long background build each also get a kitty tab: `docs/agents/kitty-push-and-build-tabs.md`.
+A push and a long background build each also get a kitty split: `docs/agents/kitty-push-and-build-tabs.md`.
 
 ## A command written for the user is spelled absolutely
 

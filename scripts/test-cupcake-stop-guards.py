@@ -606,7 +606,7 @@ CASES = [
     ),
     Case(
         "untailed_long_run.jsonl",
-        "opened no kitty tab tailing its real output",
+        "opened no kitty split tailing its real output",
         "the 2026-10-19 shape: `gen-r3-weapon-boards.py --jobs 3` backgrounded for half an hour "
         "and no kitty-tail-task.py call after it, although AGENTS.md and the tail-build-task skill "
         "both said to open one",
