@@ -165,6 +165,21 @@ time factor. A bolus is a candidate only for that: it is live when it ends such 
 then costs the ticks before the cure, and it is pressed once per heal (Neutralizing Boluses beside
 the dumpling, as the user's own template carries them).
 
+**Attack spells.** A sorcery or incantation whose bullets do damage is scored on the punishes it
+lands, not as a buff. The situations are `er-mechanics-spells.punish_situations`: each pool
+build's R1 #1 thrown from its own reach and backed out of on reaction (neutral.md section 7), the
+opponent stuck in his recovery at the gap the run left. In each, the kit's best spell lands what
+`er-mechanics-spells.punish_values` gives (its bullets flown at him, rolled on reaction from his
+dodge cancel), over what the focus weapon's own R1 #1 lands there: its mean hit when it runs in and
+strikes before that dodge cancel, else nothing (`spell_punish`). An engagement offers
+`er-mechanics-ashes.REACT_SHARE` (0.5, `INFERRED`) x the whiff share of these punishes: one opener
+per engagement, met by a defender who reacts and runs back. The gain joins `offense` in units of
+the hit the build lands per engagement (`win` of its hit); each punish's cast goes into the FP plan
+at the FP of the variant that lands; no frames are charged (`INFERRED`: the cast fills the
+opponent's recovery). It needs a held catalyst of its school, never a swap, and its requirements
+met; the catalyst's level is its top one (`INFERRED`). The race puts the attacker at his reach, so
+the whiff share, and with it this term, is an upper bound (neutral.md section 7).
+
 **The rest of the quickbar.** After the kit, `pots` takes the best pot of each pot group the kit
 holds no member of, by HP a throw on the median defender (flat attack plus each on-hit status
 row's proc, a status the focus weapon already builds up counting nothing), with the group's whole
@@ -178,8 +193,7 @@ takes the quickbar, not the pouch, and a buff the build holds one of (Gourmet Sc
 `Full Body Transform VFX`): Rock Heart and Priestess Heart turn the player into an ancient dragon
 until death and are used disrobed (their GoodsCaption), so they replace the build being scored
 rather than buff it, and their damage cut belongs to the dragon, not to this armor. Cure spells: only consumable cures are scored
-(above). Thrown items (a damaging bullet) and attack spells: no thrown-item or spell damage term
-in the kit score (`er-mechanics-armor-targets` leaves spells out for the same reason); pot-group
+(above). Thrown items (a damaging bullet): no thrown-item damage term in the kit score; pot-group
 throwables are ranked apart (`pots`). Heal spells, and heals with no one-shot row: not modeled.
 Status greases: their build-up needs the weapon's
 attack chain (`er-mechanics-status.hit_buildup`), not wired here. Effect columns no term reads:
@@ -279,7 +293,6 @@ SKIP_REASON = {
                    'and as the window\'s bolus fill)',
     'projectile': 'no thrown-item term in the kit score (a damaging bullet); pot-group throwables '
                   'are ranked apart, best per group (pots)',
-    'attack spell': 'no spell damage model (er-mechanics-armor-targets leaves spells out too)',
     'instant heal': 'a heal spell, or a heal with no one-shot row (instant_spec): not modeled',
     'status weapon buff': 'status build-up per hit needs the attack chain '
                           '(er-mechanics-status.hit_buildup), not wired here',
@@ -293,6 +306,16 @@ def combine(offense, cut_hp, heal_hp, loss_hp, time_factor):
     """offense x (L + cut + heal) / L x time factor, `L` the HP the build loses per engagement with
     no kit: the damage it deals before it dies, to first order (module docstring)."""
     return offense * (loss_hp + cut_hp + heal_hp) / loss_hp * time_factor if loss_hp > 0 else 0.0
+
+
+def spell_punish(best, weapon, weight, chances):
+    """HP per engagement an attack-spell kit adds (module docstring): per spaced-whiff situation,
+    what the kit's best spell lands over what the focus weapon's own punish lands there, weighted,
+    times the spaced whiffs an engagement offers."""
+    total = sum(weight)
+    if not total:
+        return 0.0
+    return chances * sum(w * max(0.0, b - x) for w, b, x in zip(weight, best, weapon)) / total
 
 
 def flask_split(fp_need, fp_bar, total, per_flask=CERULEAN_FP, paid=0.0):
@@ -427,6 +450,8 @@ class Pouch:
         self._fight()
         self._catalogue()
         self._att, self._dfn, self._up, self._spell_fp = {}, {}, {}, {}
+        self.regulation = regulation
+        self._spells, self._spell_vals, self._spaced = None, {}, None
 
     # -- the fight, as er-builds-pvp.Mechanics.set_fight (flasks 'corpus') ----------------------
     def _fight(self):
@@ -725,7 +750,11 @@ class Pouch:
             elif any(r['changeHpPoint'] < 0 or r['changeHpRate'] < 0 for r in sp):
                 cls = 'instant heal'
             elif refs and self._bullet_damages(refs[2]):
-                cls = 'attack spell' if kind == 'spell' else 'projectile'
+                if kind == 'spell':
+                    # Scored on the spaced whiffs it punishes (`attack_term`).
+                    self.cands[key] = dict(c, attack=True)
+                    continue
+                cls = 'projectile'
             else:
                 cls = 'no PvP term'
             self.unscored.setdefault(cls, []).append(name)
@@ -786,6 +815,7 @@ class Pouch:
                'skill': skill if skill is not None else (self.wflag.get(wid) or {}).get('swordArtsParamId'),
                'cache': {}, 'ratio_cache': {}, 'ratio_fn': ratio, 'plan_weapons': list(plan_weapons),
                'roles': dict(roles or {'host': 1.0}), 'flask_total': int(flask_total),
+               'talismans': list(talismans),
                # The flask fights' engagements: the build lands its hit in `win` of them (the flasks).
                'engagements': self.crimson_hits / win if win > 0 else self.crimson_hits,
                'loss': (1.0 - win) * self.attackers * sum(incoming.values())}
@@ -812,6 +842,11 @@ class Pouch:
         in `ctx['swap_spells']`, which holds the spell to one cast before contact (`_limit`)."""
         if c['kind'] != 'spell':
             return True
+        if c.get('attack'):
+            # Cast mid-fight from a held catalyst, never swapped in.
+            mg = self.magic.get(c['goods']) or {}
+            return (c['school'] in ctx['schools'] and mg.get('slotLength', 1) <= ctx['memory_slots']
+                    and all(ctx['stats'][k] >= mg.get(col, 0) for k, col in SPELL_REQUIREMENTS.items()))
         how = self.swap_for(ctx, c)
         if how:
             ctx['swap_spells'][c['key']] = how
@@ -979,6 +1014,12 @@ class Pouch:
             rows_used.append((sid, src, round(u, 4)))
         ratio = self._ratio(ctx, stats, rate_points)
         offense = self.hit(ctx, pre, flat, post, ratio) / ctx['base_hit'] if ctx['base_hit'] else 1.0
+        atk = self.attack_term(ctx, keys)
+        if atk['gain'] and ctx['base_hit'] and ctx['win']:
+            # The spells' punishes beside the weapon's hits: the build lands its hit in `win` of the
+            # engagements, so that is the hit-per-engagement unit `offense` is in.
+            offense += atk['gain'] / (ctx['base_hit'] * ctx['win'])
+        extra_live |= atk['live']
         win = ctx['win']
         cut = (1.0 - win) * self.attackers * sum(ctx['incoming'][ty] * (1.0 - kept[ty]) for ty in DAMAGE_KEYS)
         heal = heal_s * self.ST.ENGAGEMENT_SECONDS + inst_hp
@@ -1022,6 +1063,8 @@ class Pouch:
             c = self.cands.get(k)
             if c is None:
                 continue
+            if c.get('attack'):
+                continue
             if c['kind'] == 'spell':
                 mp, casts = self.spell_fp(k)
                 if k in ctx['swap_spells']:
@@ -1032,6 +1075,12 @@ class Pouch:
                 per, n = self.fp_per_use(c, ctx['fp_bar']), self._limit(k, keys)[0]
                 restores.append(per * n)
                 sources.append({'source': k, 'restores': round(per, 1), 'uses': n})
+        atk = self.attack_term(ctx, keys)
+        if atk['casts']:
+            casts = atk['casts'] * ctx['engagements']
+            need += atk['fp'] * ctx['engagements']
+            sources.append({'source': 'attack spells', 'fp': round(atk['fp'] / atk['casts'], 1),
+                            'casts': round(casts, 2)})
         paid = min(max(0.0, need - ctx['fp_bar']), sum(restores))
         crimson, cerulean = flask_split(need, ctx['fp_bar'], ctx['flask_total'], paid=paid)
         return {'need': need, 'paid': paid, 'crimson': crimson, 'cerulean': cerulean, 'sources': sources}
@@ -1077,6 +1126,110 @@ class Pouch:
         pts = B.recast_points(max(timed, default=-1.0), self.points, None, self.hits, one_hit=one)
         mp = (self.magic.get(self.cands[key]['goods']) or {}).get('mp', 0)
         return mp, sum(1 + n for _, n in pts) / len(pts)
+
+    # -- attack spells on spaced whiffs (module docstring) ---------------------------------------
+    def spell_model(self):
+        if self._spells is None:
+            SP = _mod('er_mechanics_spells', 'er-mechanics-spells.py')
+            self._spells = (SP, SP.SpellModel(self.regulation))
+        return self._spells
+
+    def spaced(self):
+        """`er-mechanics-spells.punish_situations` of this RL window: the spaced whiffs."""
+        if self._spaced is None:
+            self._spaced = self.spell_model()[0].punish_situations(self.rl)
+        return self._spaced
+
+    def catalyst_for(self, ctx, school):
+        """The held weapon (focus or plan) that casts `school`, by name, or None."""
+        flag = 'enableMagic' if school == 'sorcery' else 'enableMiracle'
+        for name in [ctx['weapon']] + ctx['plan_weapons']:
+            wid = ctx['wid'] if name == ctx['weapon'] else self.tables.find_weapon(name)
+            if (self.wflag.get(wid) or {}).get(flag):
+                return name
+        return None
+
+    def spell_values(self, ctx, key):
+        """(damage landed per spaced-whiff situation, FP of the variant that lands it) of attack
+        spell `key` from the held catalyst at its top level (`INFERRED`: the plan names no level),
+        or None when it has no flight or no catalyst holds it."""
+        c = self.cands[key]
+        cat = self.catalyst_for(ctx, c['school'])
+        if cat is None:
+            return None
+        ck = (key, cat, tuple(sorted(ctx['stats'].items())), tuple(ctx['talismans']))
+        if ck not in self._spell_vals:
+            _, sm = self.spell_model()
+            pairs = [(s['distance'], s['recovery']) for s in self.spaced()['situations']]
+            got = None
+            try:
+                got = sm.punish_values(c['goods'], sm.catalyst(cat), ctx['stats'], pairs, ctx['talismans'], None,
+                                       sm.defender(self.rl))
+            except (KeyError, TypeError, SystemExit):
+                got = None
+            if got:
+                vals, label = got
+                m = sm.magic[c['goods']]
+                got = (vals, m['mp_charge'] if label == 'charged' and m['mp_charge'] > 0 else m['mp'])
+            self._spell_vals[ck] = got
+        return self._spell_vals[ck]
+
+    def own_punish(self, ctx):
+        """(strike frame, world reach) of the focus weapon's R1 #1, read as the exchange pool reads an
+        opponent's (`er-mechanics-exchange.attack_profile`, the reach module's world reach), or None."""
+        if 'own_punish' not in ctx:
+            EX = _mod('er_mechanics_exchange', 'er-mechanics-exchange.py')
+            prof = EX.attack_profile(self.reg, EX.SaRates(), ctx['wid'], ctx['two'])
+            reach_mod = EX._reach_module()
+            g = 'both' if ctx['two'] else 'one'
+            slot = ('2h_' if ctx['two'] else '') + EX.OPPONENT_SLOT
+            row = reach_mod.reach_summary(ctx['wid'], g).get(slot) or {}
+            reach = row.get('world_reach_m') or reach_mod.class_fallback(ctx['wid'], g, slot).get('world_reach_m')
+            ctx['own_punish'] = (prof['startup'], reach) if prof and reach else None
+        return ctx['own_punish']
+
+    def weapon_punish(self, ctx, situations):
+        """Per spaced-whiff situation, what the focus weapon's own punish lands: its mean hit when
+        its R1 #1, after running in at run speed (`er-mechanics-neutral.frames_per_metre`), strikes
+        before the opponent's dodge cancel; else nothing (`INFERRED`: after it he rolls)."""
+        own = self.own_punish(ctx)
+        if own is None:
+            return [0.0] * len(situations)
+        strike, reach = own
+        k = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py').frames_per_metre()
+        return [ctx['base_hit'] if max(0.0, s['distance'] - reach) * k + strike <= s['recovery'] else 0.0
+                for s in situations]
+
+    def attack_term(self, ctx, keys):
+        """{'gain', 'fp', 'casts', 'live'} of the kit's attack spells, per engagement: `spell_punish`
+        over the spaced whiffs, the FP and casts of the best spell in each, and the spells that are
+        the best somewhere."""
+        atk = tuple(sorted(k for k in keys if (self.cands.get(k) or {}).get('attack')))
+        if not atk:
+            return {'gain': 0.0, 'fp': 0.0, 'casts': 0.0, 'live': set()}
+        ck = ('attack', atk)
+        if ck in ctx['cache']:
+            return ctx['cache'][ck]
+        sp = self.spaced()
+        sit = sp['situations']
+        weight = [s['weight'] for s in sit]
+        total = sum(weight) or 1.0
+        weapon = self.weapon_punish(ctx, sit)
+        best, fp, who = list(weapon), [0.0] * len(sit), [None] * len(sit)
+        for k in atk:
+            got = self.spell_values(ctx, k)
+            if not got:
+                continue
+            for i, x in enumerate(got[0]):
+                if x > best[i]:
+                    best[i], fp[i], who[i] = x, got[1], k
+        chances = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py').REACT_SHARE * sp['whiff_share']
+        out = {'gain': spell_punish(best, weapon, weight, chances),
+               'fp': chances * sum(w * f for w, f in zip(weight, fp)) / total,
+               'casts': chances * sum(w for w, k in zip(weight, who) if k) / total,
+               'live': {k for k in who if k}}
+        ctx['cache'][ck] = out
+        return out
 
     # -- the quickbar's thrown pots and boluses --------------------------------------------------
     def _status_tables(self):
@@ -1490,6 +1643,11 @@ def selftest():
     check('flasks: FP items pay before the flasks, 646 over 72 with 240 paid needs 5',
           (flask_split(646.0, 72.0, 14), flask_split(646.0, 72.0, 14, paid=240.0)), ((6, 8), (9, 5)))
     check('flasks: FP items that cover the need leave no cerulean', flask_split(646.0, 72.0, 14, paid=574.0), (14, 0))
+    # spell_punish: only what a spell lands over the weapon's own punish counts.
+    check('spell punish: the excess over the weapon, weighted, per chance',
+          spell_punish([900.0, 300.0], [400.0, 400.0], [3.0, 1.0], 0.5), 0.5 * (3.0 * 500.0 + 0.0) / 4.0)
+    check('spell punish: nothing where the weapon lands more, nothing with no chance',
+          (spell_punish([300.0], [400.0], [1.0], 0.5), spell_punish([900.0], [0.0], [1.0], 0.0)), (0.0, 0.0))
     # layout.
     lay = layout(['A', 'B'], ['Crimson', 'Cerulean'], {'Crimson': 12, 'Cerulean': 11, 'Old': 0}, uses={'A': 1, 'B': 5})
     check('layout: flasks keep the base positions, the most used pick takes the first free pouch slot',

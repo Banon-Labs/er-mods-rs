@@ -400,6 +400,29 @@ def slot_neutral(npool: NeutralPool, slot: dict, atk: dict | None, entry: float 
 
 
 # --------------------------------------------------------------------------------------------
+# spacing: backing away from a committed opener
+
+
+def backoff_whiffs(reach: float, live: tuple, cue: float = 0.0, speed: float | None = None) -> list:
+    """[(weight, whiffed, metres between them when its live window closes)] per reaction quantile:
+    a defender who meets an opener thrown from its own `reach` (the race's rule: the attacker
+    stands at his reach and strikes) by running back on reaction instead of rolling. He starts at
+    `cue` plus his reaction (`er-mechanics-ashes.reaction_delays`: the reaction time and two network
+    legs) and runs straight back at `speed` (locked-on run, `locomotion`). `live` is the opener's
+    first and last live frame, counted like `cue` from its start. At its reach the opener just
+    touches him, so any distance gained by its first live frame is a whiff (`INFERRED`: the reach
+    is where every live frame's contact ends, as the race treats it)."""
+    speed = locomotion()["run"] if speed is None else speed
+    out = []
+    for delay, w in _mod("er-mechanics-ashes").reaction_delays():
+        press = cue + delay
+        whiff = press < live[0]
+        gap = reach + speed * max(0.0, live[1] - press) / TAE_FPS
+        out.append((w, whiff, gap))
+    return out
+
+
+# --------------------------------------------------------------------------------------------
 # self test
 
 
@@ -505,6 +528,16 @@ def selftest() -> int:
           and neutral_exchange(npool, 16.0, 4.0, 100.0, [])["f_neutral"] == 1.0,
           f"priced trades: net 1/3 with an 800 hit ({pr['net_hp']:.4f}); no damage given, unpriced")
     p.trade_clamp = None
+    # Spacing: a slow opener is backed out of at every reaction, a fast one at none, and the gap
+    # at the whiff grows by the run over the frames between his start and the window's close.
+    slow, quick = backoff_whiffs(3.0, (60.0, 63.0)), backoff_whiffs(3.0, (5.0, 8.0))
+    check(all(wf for _, wf, _ in slow) and not any(wf for _, wf, _ in quick)
+          and abs(sum(w for w, _, _ in slow) - 1.0) < 1e-9,
+          "spacing: an opener live from f60 is backed out of at every reaction, one live from f5 at none")
+    gaps = [g for _, _, g in slow]
+    first = _mod("er-mechanics-ashes").reaction_delays()[0][0]
+    check(gaps == sorted(gaps, reverse=True) and abs(gaps[0] - (3.0 + loco["run"] * (63.0 - first) / TAE_FPS)) < 1e-9,
+          f"spacing: the quickest reaction gains the most ground ({gaps[0]:.2f} m at f63)")
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 

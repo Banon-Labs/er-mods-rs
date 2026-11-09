@@ -204,10 +204,25 @@ prior ranking (a second pass). The flag is the more faithful model of what the p
 it when that matters more than comparability with earlier runs. A full RL 150 run with it and
 `--trades priced` together is in exchange.md section 2a.
 
-## 7. Not established
+## 7. Spacing: running back from a committed opener (`backoff_whiffs`)
 
-- Feints, spacing inside the other's reach, chasing a retreating player (equal run speeds cancel),
-  more than one engagement.
+The race has the attacker stand at his reach and strike. A defender who sees it coming can run
+back instead of rolling. At its reach the opener only just touches him, so any ground he gains
+before its first live frame makes it whiff. He starts at its cue plus his reaction (ashes-of-war.md
+section 16a: lognormal around 0.25 s plus two 0.05 s network legs, `INFERRED` constants) and runs
+straight back at the locked-on run, 4.01 m/s (`INFERRED` for the back direction, section 1). Per
+reaction quantile the function returns whether the opener whiffs and the gap when its live window
+closes. The attacker is then in his recovery until his dodge cancel, out of the defender's melee
+reach, which is the punish `er-mechanics-spells.py --kit` scores for spells.
+
+The attacker's distance is the race's rule, not an observation: a player who closes inside his
+reach before committing is not modelled, so the whiff share is an upper bound on how often a
+back-off works.
+
+## 8. Not established
+
+- Feints, the attacker closing inside his own reach before he commits, chasing a retreating player
+  (equal run speeds cancel), more than one engagement.
 - That locked-on back and side movement is at run speed (no clip).
 - What a corpus player actually throws: the family pool takes the ranking's own use shares, not
   recorded button use. Skills and powerstance openers are not in it (the corpus records neither

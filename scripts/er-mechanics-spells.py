@@ -92,10 +92,11 @@ One damage number per cast always picks one spell. A second spell earns its slot
 first does not reach, and the situations that decide it here are punishes:
 
 - Each build of the RL window's opponent pool (`er-mechanics-exchange.opponent_pool`) throws its R1
-  #1 and misses at its own world reach (`er-mechanics-neutral.pool_reaches`). The caster presses at
-  the end of its last hit window (`INFERRED`: a whiff he spaced and planned to punish). The defender
-  stands at that distance and cannot roll before his swing's dodge cancel (`TAE`); one situation per
-  distinct (reach, recovery), weighted by the builds that throw it.
+  #1 from its own world reach, and the caster runs back on reaction (`er-mechanics-neutral`
+  `backoff_whiffs`, neutral.md section 7). Where that whiffs, the caster presses at the end of its
+  last hit window (`INFERRED`), at the distance the run left between them, and the opponent cannot
+  roll before his swing's dodge cancel (`TAE`). One situation per distinct (distance, recovery),
+  weighted by builds x reaction quantile, so an opener that is rarely backed out of counts little.
 - From then on he rolls on reaction to the cast: the ash model's `reaction_outcome`
   (ashes-of-war.md section 16a: reaction lognormal around 0.25 s plus two 0.05 s network legs, the
   medium roll's four directions, `INFERRED` constants), held back to that dodge cancel.
@@ -106,9 +107,10 @@ first does not reach, and the situations that decide it here are punishes:
   the pouch's greedy: add the spell that raises it most while its `slotLength` fits the memory
   slots, stop when nothing raises it by more than `KIT_EPS`.
 
-The rounds show where the gain flattens. A slot's real price is the buff it displaces, which only
-`er-mechanics-pouch` weighs, so the count is not final until the kit is scored there. A spell that
-hits an AtkParam directly (Carian Slicer) has no flight and is left out.
+The rounds show where the gain flattens. A slot's real price is the buff it displaces:
+`er-mechanics-pouch` scores the same punishes per engagement against the buffs and items a build
+could carry instead (its module doc, "Attack spells"), and that is where the count is decided. A
+spell that hits an AtkParam directly (Carian Slicer) has no flight and is left out.
 
 # Not established
 
@@ -564,8 +566,8 @@ class SpellModel:
         """The greedy attack-spell kit by punish coverage (module doc): rounds of (spell, its
         slots, kit value after it, gain), and the spells left out with why."""
         slots = MEMORY_SLOTS if slots is None else slots
-        sit = punish_situations(rl)
-        pairs = [(s['reach'], s['recovery']) for s in sit]
+        sit = punish_situations(rl)['situations']
+        pairs = [(s['distance'], s['recovery']) for s in sit]
         weight = [s['weight'] for s in sit]
         total = sum(weight)
         dfn = self.defender(rl)
@@ -589,7 +591,7 @@ MEMORY_SLOTS = 10
 #: Relative gain below which the kit search stops: `er-mechanics-pouch.EPS`.
 KIT_EPS = 1e-6
 #: Bump when `punish_situations` changes what it caches.
-SITUATIONS_VERSION = 1
+SITUATIONS_VERSION = 2
 
 
 def greedy_kit(values, weight, total, slot_cost, slots, labels=None, names=None):
@@ -623,10 +625,13 @@ def greedy_kit(values, weight, total, slot_cost, slots, labels=None, names=None)
 
 
 def punish_situations(rl):
-    """[{'reach', 'recovery', 'weight'}]: one per distinct (reach, recovery) of the RL window's
-    opponent pool (`er-mechanics-exchange.opponent_pool`): his R1 #1 world reach
-    (`er-mechanics-neutral.pool_reaches`) and the real frames from the end of its last hit window to
-    its dodge cancel, weighted by the builds that throw it. Cached beside the pool."""
+    """{'situations': [{'distance', 'recovery', 'weight'}], 'whiff_share'}: the spaced whiffs of the
+    RL window's opponent pool (`er-mechanics-exchange.opponent_pool`). Each build's R1 #1 is thrown
+    from its world reach (`er-mechanics-neutral.pool_reaches`) at a defender who runs back on
+    reaction (`er-mechanics-neutral.backoff_whiffs`); a whiff leaves him the real frames from the
+    end of its last hit window to its dodge cancel, at the distance the run left between them.
+    One situation per distinct (distance, recovery), weighted by builds x reaction quantile;
+    `whiff_share` is the share of the pool's openers that whiff. Cached beside the pool."""
     EX = _mod('er_mechanics_exchange', 'er-mechanics-exchange.py')
     NEU = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py')
     reg = ATK.Regulation(None)
@@ -636,13 +641,13 @@ def punish_situations(rl):
     if path.exists():
         got = json.loads(path.read_text())
         if got.get('stamp') == stamp:
-            return got['situations']
+            return got['spaced']
     reaches = NEU.pool_reaches(raw)
     ids = EX.weapon_ids()
     count = {}
     for key, _ in raw['builds']:
         count[key] = count.get(key, 0) + 1
-    merged = {}
+    merged, thrown, whiffed = {}, 0.0, 0.0
     for key, n in sorted(count.items()):
         name, grip = key.rsplit('|', 1)
         two = grip == '2h'
@@ -651,14 +656,22 @@ def punish_situations(rl):
         reach = (reaches.get(key) or {}).get('reach')
         if atk is None or not atk.get('hit_windows') or reach is None:
             continue
+        start = min(w[0] for w in atk['hit_windows'])
         end = max(w[1] for w in atk['hit_windows'])
         gate = atk['cancel_frame'].get('dodge')
         if gate is None:
             continue
-        k = (round(reach, 1), round(max(gate - end, 0.0) * 2) / 2)
-        merged[k] = merged.get(k, 0) + n
-    out = [{'reach': r, 'recovery': f, 'weight': n} for (r, f), n in sorted(merged.items())]
-    path.write_text(json.dumps({'stamp': stamp, 'situations': out}))
+        thrown += n
+        for w, whiff, gap in NEU.backoff_whiffs(reach, (start, end)):
+            if not whiff:
+                continue
+            whiffed += n * w
+            k = (round(gap, 1), round(max(gate - end, 0.0) * 2) / 2)
+            merged[k] = merged.get(k, 0.0) + n * w
+    out = {'situations': [{'distance': d, 'recovery': f, 'weight': round(n, 6)}
+                          for (d, f), n in sorted(merged.items())],
+           'whiff_share': round(whiffed / thrown, 6) if thrown else 0.0}
+    path.write_text(json.dumps({'stamp': stamp, 'spaced': out}))
     return out
 
 
@@ -777,8 +790,9 @@ def main():
         if a.json:
             print(json.dumps({'rounds': rounds, 'skipped': skipped}, indent=1))
             return 0
-        print(f"punish kit vs the RL {a.rl - WINDOW}-{a.rl + WINDOW} pool's R1 whiffs"
-              f"{'' if a.pve else ', PvP rates'}; value = mean damage landed per punish")
+        share = punish_situations(a.rl)['whiff_share']
+        print(f"punish kit vs the RL {a.rl - WINDOW}-{a.rl + WINDOW} pool's R1 #1, backed out of on reaction "
+              f"({100 * share:.1f}% whiff){'' if a.pve else ', PvP rates'}; value = mean damage landed per whiff")
         print(f"{'#':>2s} {'spell':34s} {'variant':8s} {'slots':>5s} {'value':>7s} {'gain':>7s} {'best':>6s}")
         for i, r in enumerate(rounds, 1):
             print(f"{i:>2d} {r['name'][:34]:34s} {r['variant'] or '':8s} {r['slots']:>5d} {r['value']:>7.1f} "
