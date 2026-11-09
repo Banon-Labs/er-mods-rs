@@ -2998,12 +2998,13 @@ def _runs(ok):
     return out
 
 
-def dodge_presses(ok, cue, step=DODGE_STEP):
+def dodge_presses(ok, cue, step=DODGE_STEP, floor=0.0):
     """[(dodge start, real frames from the attack's start; weight)]: when a defender who waits and
     reacts starts his dodge.
 
     `ok[i]` says whether a dodge started at i x `step` escapes the attack. He cannot start before
-    `cue` + his reaction delay (`reaction_delays`). Among the escaping runs still open then he
+    `cue` + his reaction delay (`reaction_delays`), nor before `floor` (the frame his own recovery
+    lets him roll, for a defender caught in it). Among the escaping runs still open then he
     takes the one he is likeliest to hit and aims at its middle, with a normal timing error
     (`DODGE_TIMING_SD_S`); a press that would come before he can react comes at the reaction
     instead. When no run is left he dodges at the reaction anyway, too late. So an early roll
@@ -3013,7 +3014,7 @@ def dodge_presses(ok, cue, step=DODGE_STEP):
     errors = [sd * _ND.inv_cdf((k + 0.5) / TIMING_POINTS) for k in range(TIMING_POINTS)]
     out = []
     for delay, w in reaction_delays():
-        t = cue + delay
+        t = max(cue + delay, floor)
         best = None
         for lo, hi in runs:
             if hi < t:
@@ -3085,7 +3086,7 @@ def _catches(geoms, dist, move, starts):
 
 
 def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, advance=0.0,
-                     strikes=None):
+                     strikes=None, floor=0.0):
     """A defender `dist` m ahead who waits for this attack and dodges on reaction (section 16).
 
     `geoms` is one `contact_geometry` per hit (None where a hit has no shapes), `hit_value[h]` what
@@ -3094,7 +3095,7 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
     becomes readable: its clip's start, or for a hit whose timing the attacker picks (an R2's
     release, a skill follow-up, a stance) the start of that part. Each of the medium roll's four
     directions (`roll_motion`) is taken equally (`INFERRED`, as section 14a), and for each the
-    dodge starts where `dodge_presses` puts it.
+    dodge starts where `dodge_presses` puts it, no earlier than `floor`.
 
     Returns `value` (expected worth when he reacts), `p_evade`, and, when `strikes` (the pool's
     R1 strike frames) and `my_roll` (the attacker's first roll frame from the same clip start)
@@ -3117,7 +3118,7 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
         ready = m['ready'] if m['ready'] is not None else len(m['path'])
         x, z = m['path'][min(int(ready), len(m['path']) - 1)]
         near = math.hypot(x, dist + z - advance) <= PUNISH_REACH_M
-        for s, w in dodge_presses(ok, cue):
+        for s, w in dodge_presses(ok, cue, floor=floor):
             i = int(round(s / DODGE_STEP))
             hit = int(h[i]) if 0 <= i < len(h) else int(base_h[0])
             w /= len(moves)
