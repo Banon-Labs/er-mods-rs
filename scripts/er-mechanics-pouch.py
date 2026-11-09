@@ -167,8 +167,9 @@ the dumpling, as the user's own template carries them).
 
 **Attack spells.** A sorcery or incantation whose bullets do damage is scored on the punishes it
 lands, not as a buff. The situations are `er-mechanics-spells.punish_situations`: each pool
-build's R1 #1 thrown from its own reach and backed out of on reaction (neutral.md section 7), the
-opponent stuck in his recovery at the gap the run left. In each, the kit's best spell lands what
+build's R1, R2, running and jump openers (the families `offense` already averages over) thrown
+from their own reach and backed out of on reaction (neutral.md section 7), the opponent stuck in
+his recovery at the gap the run left. In each, the kit's best spell lands what
 `er-mechanics-spells.punish_values` gives (its bullets flown at him, rolled on reaction from his
 dodge cancel), over what the focus weapon's own R1 #1 lands there: its mean hit when it runs in and
 strikes before that dodge cancel, else nothing (`spell_punish`). An engagement offers

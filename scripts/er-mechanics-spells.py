@@ -91,9 +91,10 @@ the release clip's first R1 or roll gate (`er-mechanics-disengage.clip`).
 One damage number per cast always picks one spell. A second spell earns its slots only where the
 first does not reach, and the situations that decide it here are punishes:
 
-- Each build of the RL window's opponent pool (`er-mechanics-exchange.opponent_pool`) throws its R1
-  #1 from its own world reach, and the caster runs back on reaction (`er-mechanics-neutral`
-  `backoff_whiffs`, neutral.md section 7). Where that whiffs, the caster presses at the end of its
+- Each build of the RL window's opponent pool (`er-mechanics-exchange.opponent_pool`) throws the
+  openers of the four attack families the pouch files its own hit under (R1, R2, running, jump;
+  equal shares, `INFERRED`), each from its own world reach, and the caster runs back on reaction
+  (`er-mechanics-neutral` `backoff_whiffs`, neutral.md section 7). Where that whiffs, the caster presses at the end of its
   last hit window (`INFERRED`), at the distance the run left between them, and the opponent cannot
   roll before his swing's dodge cancel (`TAE`). One situation per distinct (distance, recovery),
   weighted by builds x reaction quantile, so an opener that is rarely backed out of counts little.
@@ -591,7 +592,7 @@ MEMORY_SLOTS = 10
 #: Relative gain below which the kit search stops: `er-mechanics-pouch.EPS`.
 KIT_EPS = 1e-6
 #: Bump when `punish_situations` changes what it caches.
-SITUATIONS_VERSION = 2
+SITUATIONS_VERSION = 3
 
 
 def greedy_kit(values, weight, total, slot_cost, slots, labels=None, names=None):
@@ -626,14 +627,18 @@ def greedy_kit(values, weight, total, slot_cost, slots, labels=None, names=None)
 
 def punish_situations(rl):
     """{'situations': [{'distance', 'recovery', 'weight'}], 'whiff_share'}: the spaced whiffs of the
-    RL window's opponent pool (`er-mechanics-exchange.opponent_pool`). Each build's R1 #1 is thrown
-    from its world reach (`er-mechanics-neutral.pool_reaches`) at a defender who runs back on
-    reaction (`er-mechanics-neutral.backoff_whiffs`); a whiff leaves him the real frames from the
-    end of its last hit window to its dodge cancel, at the distance the run left between them.
-    One situation per distinct (distance, recovery), weighted by builds x reaction quantile;
-    `whiff_share` is the share of the pool's openers that whiff. Cached beside the pool."""
+    RL window's opponent pool (`er-mechanics-exchange.opponent_pool`). Each build throws the openers
+    of the four attack families the pouch files its own hit under (`er-mechanics-armor-targets`
+    `FAMILY_JUDGES`: R1, R2, running, jump; equal family shares, `INFERRED` as there), each from its
+    world reach (`er-mechanics-reach.reach_summary`, the class median when unposed) at a defender
+    who runs back on reaction (`er-mechanics-neutral.backoff_whiffs`). A whiff leaves him the real
+    frames from the end of its last hit window to its dodge cancel, at the distance the run left
+    between them. One situation per distinct (distance, recovery), weighted by builds x family share
+    x reaction quantile; `whiff_share` is the share of the openers that whiff. Cached beside the
+    pool."""
     EX = _mod('er_mechanics_exchange', 'er-mechanics-exchange.py')
     NEU = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py')
+    AT = _mod('er_mechanics_armor_targets', 'er-mechanics-armor-targets.py')
     reg = ATK.Regulation(None)
     raw = EX.opponent_pool(reg, EX.CACHE / 'builds.jsonl', rl - WINDOW, rl + WINDOW)
     stamp = [SITUATIONS_VERSION] + list(raw['stamp'])
@@ -642,32 +647,47 @@ def punish_situations(rl):
         got = json.loads(path.read_text())
         if got.get('stamp') == stamp:
             return got['spaced']
-    reaches = NEU.pool_reaches(raw)
+    reach_mod = EX._reach_module()
     ids = EX.weapon_ids()
     count = {}
     for key, _ in raw['builds']:
         count[key] = count.get(key, 0) + 1
     merged, thrown, whiffed = {}, 0.0, 0.0
-    for key, n in sorted(count.items()):
+    print(f'spell punish situations: reading {len(count)} pool weapons ({path.name} is stale or missing)',
+          file=sys.stderr, flush=True)
+    for i, (key, n) in enumerate(sorted(count.items()), 1):
+        if i % 25 == 0:
+            print(f'  {i}/{len(count)} pool weapons', file=sys.stderr, flush=True)
         name, grip = key.rsplit('|', 1)
         two = grip == '2h'
-        rows = ATK.weapon_attacks(reg, ids[name], 'both' if two else 'one')
-        atk = next((r for r in rows if r['slot'] == ('2h_' if two else '') + EX.OPPONENT_SLOT), None)
-        reach = (reaches.get(key) or {}).get('reach')
-        if atk is None or not atk.get('hit_windows') or reach is None:
-            continue
-        start = min(w[0] for w in atk['hit_windows'])
-        end = max(w[1] for w in atk['hit_windows'])
-        gate = atk['cancel_frame'].get('dodge')
-        if gate is None:
-            continue
-        thrown += n
-        for w, whiff, gap in NEU.backoff_whiffs(reach, (start, end)):
-            if not whiff:
-                continue
-            whiffed += n * w
-            k = (round(gap, 1), round(max(gate - end, 0.0) * 2) / 2)
-            merged[k] = merged.get(k, 0.0) + n * w
+        g = 'both' if two else 'one'
+        off = ATK.TWO_HAND_JUDGE_OFFSET if two else 0
+        rows = ATK.weapon_attacks(reg, ids[name], g)
+        summary = reach_mod.reach_summary(ids[name], g)
+        fams = []
+        for judges in AT.FAMILY_JUDGES.values():
+            got = [r for r in rows if r.get('judge') in {j + off for j in judges} and r.get('hit_windows')
+                   and r['cancel_frame'].get('dodge') is not None]
+            if got:
+                fams.append(got)
+        for got in fams:
+            for atk in got:
+                share = n / len(fams) / len(got)
+                reach = (summary.get(atk['slot']) or {}).get('world_reach_m')
+                if reach is None:
+                    reach = reach_mod.class_fallback(ids[name], g, atk['slot']).get('world_reach_m')
+                if reach is None:
+                    continue
+                start = min(w[0] for w in atk['hit_windows'])
+                end = max(w[1] for w in atk['hit_windows'])
+                gate = atk['cancel_frame']['dodge']
+                thrown += share
+                for w, whiff, gap in NEU.backoff_whiffs(reach, (start, end)):
+                    if not whiff:
+                        continue
+                    whiffed += share * w
+                    k = (round(gap, 1), round(max(gate - end, 0.0) * 2) / 2)
+                    merged[k] = merged.get(k, 0.0) + share * w
     out = {'situations': [{'distance': d, 'recovery': f, 'weight': round(n, 6)}
                           for (d, f), n in sorted(merged.items())],
            'whiff_share': round(whiffed / thrown, 6) if thrown else 0.0}
@@ -791,7 +811,7 @@ def main():
             print(json.dumps({'rounds': rounds, 'skipped': skipped}, indent=1))
             return 0
         share = punish_situations(a.rl)['whiff_share']
-        print(f"punish kit vs the RL {a.rl - WINDOW}-{a.rl + WINDOW} pool's R1 #1, backed out of on reaction "
+        print(f"punish kit vs the RL {a.rl - WINDOW}-{a.rl + WINDOW} pool's openers, backed out of on reaction "
               f"({100 * share:.1f}% whiff){'' if a.pve else ', PvP rates'}; value = mean damage landed per whiff")
         print(f"{'#':>2s} {'spell':34s} {'variant':8s} {'slots':>5s} {'value':>7s} {'gain':>7s} {'best':>6s}")
         for i, r in enumerate(rounds, 1):
