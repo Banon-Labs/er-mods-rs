@@ -164,19 +164,28 @@ DODGE_SHARE = AI.AS.REACT_SHARE
 FP_FIGHT = "duel"
 
 
-def afford(cost: float, fight: str = FP_FIGHT) -> float:
+def fp_pool(bar: float = AI.AS.FP_BAR_DEFAULT) -> float:
+    """FP a fight gives him: one bar `bar` plus the ladder's blue flasks (`CERULEAN_FLASKS`), each
+    restoring `er-mechanics-buffs.CERULEAN_FP` but never past the bar, so the smaller of the two
+    (`er-mechanics-pouch.flask_split`'s rule): bar 78 with 2 flasks is 234 FP, not 78 + 440."""
+    B, lad = AI._sib("er-mechanics-buffs"), AI._sib("er-builds-ladder")
+    return bar + lad.CERULEAN_FLASKS * min(B.CERULEAN_FP, bar)
+
+
+def afford(cost: float, fight: str = FP_FIGHT, bar: float = AI.AS.FP_BAR_DEFAULT) -> float:
     """Share of his waiting replies in a fight that a movement skill of `cost` FP can be, 1 for a
-    free one. His FP is the corpus median bar (`er-mechanics-ashes.FP_BAR_DEFAULT`, RL 140-160, the
-    opponent pool's window) plus the ladder's blue flasks (`CERULEAN_FLASKS` x
-    `er-mechanics-buffs.CERULEAN_FP`), cast as `fp_uses` counts them. Over each fight length of
-    `fight` he waits for `f / ENGAGEMENT_SECONDS x DODGE_SHARE` casts (an engagement every
-    `ENGAGEMENT_SECONDS`, `INFERRED` there, and this reply's share of them); the share is the mean
-    over the lengths of min(1, casts paid / casts waited for). The rest fall back to rolls and
-    strafes (`_whiff_moving`). His FP spent on anything else is not counted."""
+    free one. His FP is `fp_pool` at bar `bar` (default the corpus median,
+    `er-mechanics-ashes.FP_BAR_DEFAULT`, RL 140-160, the opponent pool's window), cast as `fp_uses`
+    counts them. Over each fight length of `fight` he waits for
+    `f / ENGAGEMENT_SECONDS x DODGE_SHARE` casts (an engagement every `ENGAGEMENT_SECONDS`, `INFERRED` there, and this
+    reply's share of them); the share is the mean over the lengths of min(1, casts paid / casts
+    waited for). The rest fall back to rolls and strafes (`_whiff_moving`). His FP spent on
+    anything else is not counted. Before 2026-11-12 each flask counted its full 220 FP, so the
+    median bar's pool was 528 FP where the game gives 264."""
     if cost <= 0:
         return 1.0
-    B, lad = AI._sib("er-mechanics-buffs"), AI._sib("er-builds-ladder")
-    uses = AI.AS.fp_uses(AI.AS.FP_BAR_DEFAULT + lad.CERULEAN_FLASKS * B.CERULEAN_FP, cost) or 0
+    B = AI._sib("er-mechanics-buffs")
+    uses = AI.AS.fp_uses(fp_pool(bar), cost) or 0
     fs = B.fight_kind_points(fight)
     return statistics.fmean(min(1.0, uses / max(f / B.ENGAGEMENT_SECONDS * DODGE_SHARE, 1e-9)) for f in fs)
 
@@ -1039,6 +1048,11 @@ def moving_selftest(check, f) -> None:
     shares = [afford(c) for c in (0, 10, 30, 100, 1e6)]
     check(shares[0] == 1.0 and shares[-1] == 0.0 and all(a >= b for a, b in zip(shares, shares[1:])),
           f"the share of the fight a skill is paid for falls with its cost: {[round(s, 3) for s in shares]}")
+    # A blue flask never fills past the bar: bar 78 with the ladder's 2 is 234 FP, not 518.
+    small, big = afford(30.0, bar=78.0), afford(30.0, bar=300.0)
+    check(fp_pool(78.0) == 234.0 and fp_pool(300.0) == 740.0 and small < big,
+          f"a flask restores at most the bar: pool {fp_pool(78.0):g} at bar 78, {fp_pool(300.0):g} at 300; "
+          f"a 30 FP skill paid in {small:.3f} at bar 78, {big:.3f} at 300")
     half = whiff(f, [(18.0, 50.0, 100.0, 0.0)], [], 100.0, 6.0, 40.0, bs_hp=1000.0,
                  escape={**mesc, "fp": [30.0] * len(mesc["moves"])})
     check(abs(half["skill"] - 0.5 * afford(30.0)) < 1e-9, "the paid share of the fast quantile casts the skill")

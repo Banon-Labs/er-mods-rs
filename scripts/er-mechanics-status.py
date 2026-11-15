@@ -349,8 +349,9 @@ def hits_to_proc(per_hit, resistance, interval=None, recover=0.0, limit=200):
     """Hits until the gauge drops below 1 (`FUN_14043de90`).
 
     `per_hit` is the int build-up of one hit. With `interval` (seconds between hits) the gauge
-    refills by `recover` points per second between hits (`FUN_14043ea30`; seconds are
-    `INFERRED` from `FD4Time::SetScaled` on the frame delta)."""
+    refills by `recover` points per second between hits (`FUN_14043ea30`; the frame delta the
+    refill scales by is the one the stamina tick `FUN_1404016d0` passes it, seconds of game time,
+    `VERIFIED` and byte-checked in `er-mechanics-exchange.STAMINA_REGEN_PER_S`)."""
     if per_hit <= 0 or resistance <= 0:
         return None
     gauge = float(resistance)

@@ -68,16 +68,8 @@ class AshScorer(OPT.Scorer):
         self.cap = OPT.stat_caps(levers.ar_tables, weapon, affinity)
 
     def hits(self, st):
-        _, hits, _ = self.levers.cast(self.weapon, self.affinity, self.sid,
-                                      {k: st[k] for k in DAMAGE_STATS}, self.two_handed, self.stance)
-        if self.grease:
-            el, flat = self.grease
-            for h in hits:
-                if h['kind'] == 'melee' and h['from_weapon']:
-                    by_point = self.levers.t.atk_extra.get(h['atk_row'], {}).get(
-                        'spEffectAtkPowerCorrectRate_byPoint', 100) / 100.0
-                    h['attack'] = dict(h['attack'], **{el: h['attack'].get(el, 0.0) + flat * by_point})
-        return hits
+        return OPT.skill_cast_hits(self.levers, self.weapon, self.affinity, self.sid, st, self.two_handed,
+                                   self.grease, self.stance)
 
     def score(self, st):
         key = tuple(st[k] for k in DAMAGE_STATS)
@@ -223,6 +215,354 @@ def optimal(weapon, skill=None, rl=RL, two_handed=False, levers=None):
     }
 
 
+# --------------------------------------------------------------------------------------------
+# conflict: the stats a weapon's normal hit wants against the stats its skill wants
+
+#: `er-mechanics-ash-table.py`'s `--armor` default. Armor moves only the table's hyperarmor
+#: columns, not the `score` the conflict picks an ash by.
+ASH_TABLE_ARMOR = ('Verdigris Gauntlets', 'Verdigris Armor', 'Verdigris Greaves')
+
+
+def sweep_pick(row):
+    """(affinity, grease element or None, class, stats, damage) of an RL sweep row's configuration
+    with the most damage, the one `er-mechanics-infusions.sweep_best` ranks the weapon by."""
+    best = None
+    for key in ('elemental', 'greased', 'quality'):
+        c = row.get(key)
+        if c and (best is None or c['dmg'] > best[1]['dmg']):
+            best = (key, c)
+    if best is None:
+        return None
+    key, c = best
+    return (c.get('aff') or ('Quality' if key == 'quality' else 'Standard'), c.get('grease'), c.get('class'),
+            {k: c['stats'][k] for k in OPT.STATS}, c['dmg'])
+
+
+class Conflict:
+    """What a weapon's normal hit and its skill each give up at the other's best stats, at RL 150,
+    one-handed, on the affinity and grease the RL 150 hit ranking picked for it
+    (`er-mechanics-infusions.load_sweep`, the rows the R3 boards rank by).
+
+    Every spread here comes from the optimizer's own spend (`OPT.spend_floored` from each starting
+    class, with the sweep's floors `OPT.sweep_floor` and the conditioning pool), so the hit and the
+    skill are spent the same way and differ only in what they score:
+
+    - S_hit: the most damage per hit (`OPT.Scorer` `damage`, the sweep's grease added).
+    - The skill: the weapon's own when it takes no ash (`gemMountType` 0), whether or not the ash
+      table can time it (a stance skill on the button whose cast deals more at S_hit). Otherwise
+      every damaging ash `er-mechanics-ash-table.Table.rows` lists at S_hit (its own filters:
+      blacklist, unique, unobtainable, untimed), each spent for its cast damage (`AshScorer`, one
+      plain spend from S_hit's class) and scored by the table at that spread
+      (`Table.rows(only=...)`); the ash with the highest score there is the skill. A
+      no-damage ash (a step, a buff) is never picked: the table values it by the weapon hit out of
+      it, which wants S_hit by construction, and the `hit_skill` objective counts a cast's damage
+      only. The pick is then re-scored exactly at its own spread (`Table.rows(only=...)`).
+    - S_skill: the chosen skill's cast damage, spent from S_hit's class and Wretch, then from the
+      class `spend_two` finds; from every class with `every_class`.
+    - S_comb: the `hit_skill` objective (`OPT.SKILL_SHARE` unless given), spent from S_hit's and
+      S_skill's classes and `spend_two`'s; from every class with `every_class`. An ash weapon is
+      also spent with the damaging ash the table ranks first at S_hit, and keeps the better.
+
+    The hit is the sweep's damage objective; the cast is `AshScorer`'s (vsPlayer rates and each
+    hit's FinalDamageRateParam row), both on the RL 140-160 median defender.
+
+    A cast's own HP cost (Bloody Slash's 1763: 5% of max HP + 50, `er-mechanics-self-damage`) is
+    charged in the two places that pick: the table's `score` (`table_rows`, at the spread's max HP)
+    and the `hit_skill` objective's skill term (`skill_hp_cost`, reported as `skill_hp_cost`).
+    `AshScorer` stays the cast's damage: the cost reads VIG alone, which no damage spend moves."""
+
+    def __init__(self, rl=RL, skill_weight=None, every_class=False):
+        self.every_class = every_class
+        if rl != RL:
+            raise SystemExit(f'the ash table scores on the RL {RL} defender only')
+        # The ash table imports this module by name; run as a script, this module is `__main__`.
+        sys.modules.setdefault('er_mechanics_ash_stats', sys.modules[__name__])
+        self.T = sys.modules.get('er_mechanics_ash_table') or _mod('er_mechanics_ash_table',
+                                                                  'er-mechanics-ash-table.py')
+        self.rl = rl
+        self.weight = OPT.SKILL_SHARE if skill_weight is None else skill_weight
+        rows = OPT.corpus_rows(OPT.CACHE / 'builds.jsonl', rl - 10, rl + 10)
+        self.dfn = OPT.bracket_defender(rows)
+        self.pool, _ = OPT.conditioning_pool(rows, 'pvp')
+        self.tables = AR.Tables(None)
+        fl, load = OPT.sweep_corpus_stats({rl: rows}, [rl], 15, 'pvp')
+        OPT._SWEEP.update(tables=self.tables, rls=[rl], floors=fl, other_load=load, roll='medium',
+                          pools={rl: self.pool})
+        self.tab = self.T.Table('Dagger', 'Keen', {k: 10 for k in DAMAGE_STATS}, list(ASH_TABLE_ARMOR), True)
+        self.lv = self.tab.lev
+        OPT.skill_levers(self.lv)
+        self.model = OPT.RES.Model()
+
+    def spend(self, scorer, floor, need, classes):
+        """(score, class, spread) of the best spread `scorer` reaches from any of `classes`."""
+        best = None
+        for cls in classes:
+            cls_level, base = self.model.class_base(cls)
+            if self.rl < cls_level:
+                continue
+            start = {k: max(base[k], floor.get(k, 0), need.get(k, 0)) for k in OPT.STATS}
+            got = OPT.spend_floored(start, self.rl, scorer, self.pool)
+            if got is None:
+                continue
+            s = scorer.score(got[0])
+            if best is None or s > best[0]:
+                best = (s, cls, got[0])
+        return best
+
+    def spend_two(self, scorer, floor, need, first):
+        """`spend` from the classes in `first`, then from the one other class whose base frees the
+        most points under the best of those spreads, when any frees one. Freed: in each stat the
+        spread leaves at its class's base, what the other class's base is lower by; less what its
+        base forces above the spread elsewhere. Every class has the same stat total at one RL, so a
+        class matters only through the stats it lets a spread drop (`INFERRED` shortcut for the
+        sweep's every-class search; `--every-class` measures with that search instead)."""
+        best = self.spend(scorer, floor, need, first)
+        if best is None:
+            return None
+        _, cls0, st = best
+        b0 = self.model.class_base(cls0)[1]
+
+        def freed(cls):
+            b = self.model.class_base(cls)[1]
+            return (sum(max(0, b0[k] - b[k]) for k in OPT.STATS if st[k] <= b0[k])
+                    - sum(max(0, b[k] - st[k]) for k in OPT.STATS))
+
+        other = max((c for c in OPT.RES.CLASS_ROWS if c not in first), key=freed)
+        if freed(other) > 0:
+            again = self.spend(scorer, floor, need, [other])
+            if again and again[0] > best[0]:
+                best = again
+        return best
+
+    def table_rows(self, weapon, affinity, stats, only=None):
+        """The ash table's rows at spread `stats`, each cast's own HP cost charged at that spread's
+        max HP (`er-mechanics-ash-table.apply_hp_cost`; VIG read off `stats`, no talismans)."""
+        self.tab.stats = {k: stats[k] for k in DAMAGE_STATS}
+        self.tab.max_hp = float(self.model.resources(dict(stats))['max_hp']) if 'vig' in stats else \
+            float(self.T.TARGET_HP)
+        self.tab.set_weapon(weapon, affinity)
+        return self.tab.rows((False,), only)
+
+    def one(self, row):
+        import time
+        t0 = time.time()
+        w = row['weapon']
+        pick = sweep_pick(row)
+        if pick is None:
+            return {'weapon': w, 'skipped': 'no configuration in the sweep row'}
+        aff, gel, cls_sweep, s_sweep, _ = pick
+        grease = (gel, OPT.GREASES[INF.TIER]) if gel else None
+        tb, t = self.tables, self.lv.t
+        lvl = tb.max_level(tb.weapons[tb.find_weapon(w, aff)]['reinforceTypeId'])
+        need = OPT.requirements(tb, w, aff, lvl, False)
+        floor = OPT.sweep_floor(tb.find_weapon(w), aff, lvl, False, need, self.rl)
+        classes = list(OPT.RES.CLASS_ROWS)
+        hit = OPT.Scorer(tb, w, aff, lvl, False, 'damage', self.dfn, grease)
+        # S_hit re-spent today, so both sides meet today's floors; the sweep's own is kept beside.
+        hit_best, cls_hit, s_hit = self.spend(hit, floor, need, classes)
+        took = {'hit': time.time() - t0}
+        twid = t.find_weapon(w)
+        fixed = t.reg.weapon[twid].get('gemMountType') == 0
+        names = {t.arts_name(s): s for s in A.mountable_skills(t, twid, AR.AFFINITIES.index(aff), lvl)}
+        own = t.reg.weapon[twid]['swordArtsParamId']
+        t1 = time.time()
+        rows = [] if fixed else self.table_rows(w, aff, s_hit)
+        took['table'] = time.time() - t1
+        t1 = time.time()
+        best_row = max(rows, key=lambda r: r['score'], default=None)
+        if fixed:
+            # The weapon's own skill is the only one it fires, so the table is not read: it also
+            # leaves out a cast it cannot time (`untimed_hits`, Death's Poker's Ghostflame
+            # Ignition), and timing does not move which stats a cast wants. A stance skill takes
+            # the button whose cast deals more at S_hit, as the table keeps a row per button.
+            btns = A.skill_profile(t, own, twid, lvl, False)['stance_buttons'] or [None]
+            pool = [{'ash': t.arts_name(own), 'cat': None, 'score': None, 'stance': b} for b in btns]
+        else:
+            pool = [r for r in rows if r['cat'] != 'utility']
+        cands = []
+        for r in pool:
+            sid = own if fixed else names.get(r['ash'])
+            if sid is None or r['cat'] == 'utility':
+                continue
+            sc = AshScorer(self.lv, w, aff, sid, False, self.dfn, grease, r.get('stance'))
+            at_hit = sc.score(s_hit)
+            if at_hit <= 0:
+                continue
+            est = at_hit
+            if not fixed:
+                # A screen, so one plain spend (no conditioned floors) from S_hit's class, then the
+                # table's own score of the ash at that spread. Not the score at S_hit scaled by the
+                # cast's rise: a quick weapon's score is the cast plus its R1 string, which falls
+                # where the R1s stop scaling (Star Fist on Heavy: Blinkbolt 616 so estimated, 248
+                # scored, in the 2026-11-14 sample).
+                got = OPT.spend_floored({k: max(self.model.class_base(cls_hit)[1][k], floor.get(k, 0),
+                                                 need.get(k, 0)) for k in OPT.STATS}, self.rl, sc)
+                if got is None:
+                    continue
+                again = [x for x in self.table_rows(w, aff, got[0], only={sid})
+                         if x['ash'] == r['ash'] and x.get('stance') == r.get('stance')]
+                if not again:
+                    continue
+                est = again[0]['score']
+            cands.append({'row': r, 'sid': sid, 'scorer': sc, 'at_hit': at_hit, 'est': est})
+        took['screen'] = time.time() - t1
+        out = {'weapon': w, 'kind': row.get('kind'), 'fixed': fixed, 'affinity': aff, 'level': lvl,
+               'grease': OPT.GREASE_NAMES[INF.TIER][gel] if gel else None,
+               'sweep': {'class': cls_sweep, 'stats': s_sweep, 'same_spread': all(s_sweep[k] == s_hit[k]
+                                                                                 for k in OPT.STATS)},
+               'hit': {'class': cls_hit, 'stats': s_hit, 'damage': round(hit_best, 2)},
+               'table_best_at_hit': {'ash': best_row['ash'], 'cat': best_row['cat'], 'score': best_row['score']}
+               if best_row else None,
+               'candidates': len(cands)}
+        if not cands:
+            sk = AshScorer(self.lv, w, aff, own, False, self.dfn, grease)
+            d = sk.score(s_hit)
+            comb = OPT.Scorer(tb, w, aff, lvl, False, 'hit_skill', self.dfn, grease, skill=own,
+                              skill_weight=self.weight)
+            out.update(skill={'name': t.arts_name(own), 'sid': own, 'kind': 'utility' if d <= 0 else 'none',
+                              'class': cls_hit,
+                              'stats': s_hit, 'damage': round(d, 2)},
+                       cross={'hit_at_skill': round(hit_best, 2), 'skill_at_hit': round(d, 2)},
+                       loss={'hit': 0.0, 'skill': 0.0},
+                       comb={'skill': t.arts_name(own), 'class': cls_hit, 'stats': s_hit,
+                             'value': round(comb.score(s_hit), 2), 'at_hit': round(comb.score(s_hit), 2),
+                             'hit': round(hit_best, 2), 'skill_damage': round(d, 2)},
+                       seconds=round(time.time() - t0, 1), took={k: round(v, 1) for k, v in took.items()})
+            return out
+        ch = max(cands, key=lambda c: c['est'])
+        sc, sid, r0 = ch['scorer'], ch['sid'], ch['row']
+        t1 = time.time()
+        if self.every_class:
+            skill_best, cls_skill, s_skill = self.spend(sc, floor, need, classes)
+        else:
+            skill_best, cls_skill, s_skill = self.spend_two(sc, floor, need, list(dict.fromkeys([cls_hit, 'Wretch'])))
+        took['skill'] = time.time() - t1
+        t1 = time.time()
+        again = [] if fixed else [r for r in self.table_rows(w, aff, s_skill, only={sid})
+                                  if r['ash'] == r0['ash'] and r.get('stance') == r0.get('stance')]
+        took['rescore'] = time.time() - t1
+        t1 = time.time()
+        # The objective counts one skill. An ash weapon mounts whichever pays most, so it is spent
+        # for the pick above and for the damaging ash the table ranks first at S_hit, and the
+        # better of the two stands.
+        at_hit_pick = max(cands, key=lambda c: c['row']['score'] if c['row']['score'] is not None else c['est'])
+        combs = []
+        for c, first in ((ch, [cls_hit, cls_skill]), (at_hit_pick, [cls_hit])):
+            if combs and c is ch:
+                continue
+            cs = OPT.Scorer(tb, w, aff, lvl, False, 'hit_skill', self.dfn, grease, skill=c['sid'],
+                            skill_weight=self.weight, stance=c['row'].get('stance'))
+            if self.every_class:
+                got = self.spend(cs, floor, need, classes)
+            else:
+                got = self.spend_two(cs, floor, need, list(dict.fromkeys(first)))
+            combs.append({'skill': c['row']['ash'], 'stance': c['row'].get('stance'), 'class': got[1],
+                          'stats': got[2], 'value': round(got[0], 2), 'at_hit': round(cs.score(s_hit), 2),
+                          'hit': round(cs.hit_score(got[2]), 2), 'skill_damage': round(cs.skill_score(got[2]), 2),
+                          'skill_hp_cost': round(cs.skill_hp_cost(got[2]), 2)})
+        took['comb'] = time.time() - t1
+        hit_at_skill, skill_at_hit = hit.score(s_skill), sc.score(s_hit)
+        best_comb = max(combs, key=lambda c: c['value'])
+        out.update(
+            skill={'name': r0['ash'], 'sid': sid, 'stance': r0.get('stance'), 'cat': r0['cat'], 'kind': 'damaging',
+                   'class': cls_skill, 'stats': s_skill, 'damage': round(skill_best, 2),
+                   'table_score_at_hit': r0['score'],
+                   'table_score_at_screen': None if fixed else ch['est'],
+                   'table_score_at_skill': again[0]['score'] if again else None},
+            cross={'hit_at_skill': round(hit_at_skill, 2), 'skill_at_hit': round(skill_at_hit, 2)},
+            loss={'hit': round(1.0 - hit_at_skill / hit_best, 4) if hit_best else 0.0,
+                  'skill': round(1.0 - skill_at_hit / skill_best, 4) if skill_best else 0.0},
+            comb=dict(best_comb, at_hit=max(c['at_hit'] for c in combs)), comb_by_skill=combs,
+            seconds=round(time.time() - t0, 1), took={k: round(v, 1) for k, v in took.items()})
+        return out
+
+
+def conflict_run(out_path, weapons=None, limit=None, skill_weight=None, every_class=False):
+    """`Conflict.one` over the RL 150 sweep's one-handed rows (or the `weapons` named), appended to
+    `out_path` one JSON line per weapon as each ends; a weapon already in the file is skipped, so
+    a stopped run resumes."""
+    import time
+    rows = [r for r in INF.load_sweep() if not r['two']]
+    if weapons:
+        want = set(weapons)
+        rows = [r for r in rows if r['weapon'] in want]
+        missing = want - {r['weapon'] for r in rows}
+        if missing:
+            raise SystemExit(f'not in the RL {RL} sweep: {sorted(missing)}')
+    done = set()
+    if os.path.exists(out_path):
+        with open(out_path) as fh:
+            done = {json.loads(line)['weapon'] for line in fh if line.strip()}
+    todo = [r for r in rows if r['weapon'] not in done][:limit]
+    t0 = time.time()
+    c = Conflict(skill_weight=skill_weight, every_class=every_class)
+    print(f'setup {time.time() - t0:.1f}s; {len(todo)} weapons to measure, {len(done)} already in {out_path}',
+          file=sys.stderr, flush=True)
+    with open(out_path, 'a') as fh:
+        for i, r in enumerate(todo, 1):
+            try:
+                res = c.one(r)
+            except (Exception, SystemExit) as e:  # named in the report's `skipped`, never dropped
+                res = {'weapon': r['weapon'], 'skipped': repr(e)}
+            fh.write(json.dumps(res) + '\n')
+            fh.flush()
+            print(f"[{i}/{len(todo)}] {r['weapon']}: {res.get('seconds', '-')}s"
+                  + (f" skipped {res['skipped']}" if 'skipped' in res else
+                     f" skill {res['skill']['name']}, loss hit {res['loss']['hit']:.1%} skill {res['loss']['skill']:.1%}"),
+                  file=sys.stderr, flush=True)
+    import resource
+    print(f'measured {len(todo)} weapons in {time.time() - t0:.0f}s, peak resident '
+          f'{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.0f} MB', file=sys.stderr, flush=True)
+
+
+def conflict_report(path, top=25):
+    """The weapons whose hit and skill want the most different stats, and how the ranking moves.
+
+    Ranks are over the weapons in `path` (`INF.CARD.rank`, 1 = best): by the hit at S_hit (today's
+    ranking), by the `hit_skill` objective at S_hit (the skill counted, stats unchanged) and at
+    S_comb (the skill counted and the stats re-spent for it). `gain` is S_comb's objective over
+    S_hit's: what re-spending for the skill recovers, zero when the hit's stats already serve it."""
+    with open(path) as fh:
+        rows = [json.loads(line) for line in fh if line.strip()]
+    ok = [r for r in rows if 'skipped' not in r]
+    hits = [r['hit']['damage'] for r in ok]
+    at_hit = [r['comb']['at_hit'] for r in ok]
+    comb = [r['comb']['value'] for r in ok]
+    for r in ok:
+        r['rank_hit'] = INF.CARD.rank(hits, r['hit']['damage'], 'high')[0]
+        r['rank_at_hit'] = INF.CARD.rank(at_hit, r['comb']['at_hit'], 'high')[0]
+        r['rank_comb'] = INF.CARD.rank(comb, r['comb']['value'], 'high')[0]
+        r['gain'] = r['comb']['value'] / r['comb']['at_hit'] - 1.0 if r['comb']['at_hit'] else 0.0
+    out = {'weapons': len(rows), 'measured': len(ok), 'skipped': [(r['weapon'], r['skipped']) for r in rows
+                                                                   if 'skipped' in r],
+           'seconds': round(sum(r.get('seconds', 0) for r in ok), 1),
+           'damaging_skill': sum(r['skill']['kind'] == 'damaging' for r in ok),
+           'skill_moves_stats': sum(r['loss']['skill'] > 0.005 for r in ok),
+           'sweep_spread_drift': sum(not r['sweep']['same_spread'] for r in ok),
+           'rows': sorted(ok, key=lambda r: -r['gain'])[:top]}
+    return out
+
+
+def _spread(st):
+    return '/'.join(str(st[k]) for k in DAMAGE_STATS)
+
+
+def print_conflict_report(rep):
+    print(f"{rep['measured']} of {rep['weapons']} weapons measured in {rep['seconds']:.0f}s of weapon time; "
+          f"{rep['damaging_skill']} carry a damaging skill, {rep['skill_moves_stats']} of them lose over 0.5% of "
+          f"the skill at the hit's stats; {rep['sweep_spread_drift']} re-spent S_hit differ from the cached sweep's")
+    if rep['skipped']:
+        print('skipped: ' + '; '.join(f'{w} ({why})' for w, why in rep['skipped']))
+    print(f"{'weapon':<26} {'aff':<9} {'skill':<24} {'S_hit STR/DEX/INT/FTH/ARC':<26} {'S_skill':<16} "
+          f"{'hit loss':>8} {'skill loss':>10} {'gain':>6}  rank hit > +skill > re-spent  [objective's skill: S_comb]")
+    for r in rep['rows']:
+        c = r['comb']
+        print(f"{r['weapon'][:26]:<26} {r['affinity'][:9]:<9} {r['skill']['name'][:24]:<24} "
+              f"{_spread(r['hit']['stats']):<26} {_spread(r['skill']['stats']):<16} "
+              f"{r['loss']['hit']:>8.1%} {r['loss']['skill']:>10.1%} {r['gain']:>6.1%}  "
+              f"{r['rank_hit']} > {r['rank_at_hit']} > {r['rank_comb']}  [{c['skill']}: {_spread(c['stats'])}]")
+
+
 def selftest():
     lv = LEV.Levers()
     r = optimal('Lance', rl=RL, levers=lv)
@@ -266,10 +606,31 @@ def main():
     ap.add_argument('--rl', type=int, default=RL)
     ap.add_argument('--two-handed', action='store_true')
     ap.add_argument('--json', action='store_true')
+    ap.add_argument('--conflict', metavar='OUT.jsonl',
+                    help='measure every RL 150 sweep weapon (or --weapons) into this file (`Conflict`), resuming')
+    ap.add_argument('--weapons', help='--conflict: comma-separated weapons instead of the whole sweep')
+    ap.add_argument('--limit', type=int, help='--conflict: measure at most this many more weapons')
+    ap.add_argument('--skill-weight', type=float, help="--conflict: the hit_skill objective's skill share")
+    ap.add_argument('--every-class', action='store_true',
+                    help='--conflict: spend the skill and the hit_skill objective from every class (about 10x '
+                         'the spends), not through `Conflict.spend_two`')
+    ap.add_argument('--conflict-report', metavar='OUT.jsonl', help='rank and print a --conflict file')
+    ap.add_argument('--top', type=int, default=25)
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.conflict:
+        conflict_run(a.conflict, [w.strip() for w in a.weapons.split(',')] if a.weapons else None, a.limit,
+                     a.skill_weight, a.every_class)
+        return 0
+    if a.conflict_report:
+        rep = conflict_report(a.conflict_report, a.top)
+        if a.json:
+            json.dump(rep, sys.stdout, indent=1)
+        else:
+            print_conflict_report(rep)
+        return 0
     if not a.weapon:
         ap.error('weapon required')
     r = optimal(a.weapon, a.skill, a.rl, a.two_handed)

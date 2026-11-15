@@ -3361,9 +3361,16 @@ def set_self_costs(rows, build_path=None, got=None, report=False, wear=None):
     effect: the interrupt profile's `fx` in the attack-into reply, every cast in the waiting one
     (`er-mechanics-ash-whiff.DODGE_SHARE`); 1 without profiles. A skill whose SpEffects take
     nothing gets no `self_cost`, so its value is unchanged. `wear` (max HP, worn talismans)
-    stands in for `build_path`."""
+    stands in for `build_path`.
+
+    A sweep row the ash table already charged (`hp_cost`, `er-mechanics-ash-table.apply_hp_cost`,
+    at the table's max HP and every cast) has that charge taken back out first, so the cost is
+    paid once, here, at the build's max HP and `land`."""
     SD = _self_mod()
     T, t = _self_tables()
+    for x in rows:
+        if x.get("hp_cost"):
+            T.unapply_hp_cost(x)
     names = {x["ash"] for x in rows if x.get("ash")}
     sids = skill_ids(t, names)
     hurt = {n for n, s in sids.items() if SD.skill_hurts_user(t, s)}
@@ -4057,6 +4064,13 @@ def selftest() -> int:
     check("self cost: the switched-off talisman makes the cast cost more than it does alone",
           value(sep2) < value(alone), True)
     check("self cost: a non-damaging buff leaves a full-HP talisman alone", "self_cost" in cry2, False)
+    # A sweep row the ash table already charged (`apply_hp_cost`, at its 1900 max HP) pays once.
+    pre = util("Seppuku", 2000, 450, 139.0, 33.1)
+    _table_mod().apply_hp_cost(pre, 0.15 * 1900 + 100, 1900.0, [1753])
+    set_self_costs([pre], wear=(2594, []))
+    check("self cost: a row the ash table charged is charged once, at the build's max HP",
+          ("hp_cost" in pre, pre["score"], pre["self_cost"]["hp"], round(value(pre), 3)),
+          (False, alone["score"], alone["self_cost"]["hp"], round(value(alone), 3)))
 
     def mk(w, aff, ash, cat="bullet", norm=1.0, theme="Classes", grab=False):
         return {"weapon": w, "affinity": aff, "ash": ash, "skill": ash, "cat": cat, "norm": norm,
@@ -4453,7 +4467,7 @@ def selftest() -> int:
     cnt.skip(n_main - len(hs[0]))
     best_c, cov_c = cover_sets(hs, ws_g, lambda m, o: set_score(m, o), count=cnt)
     check("cover: counted, same sets, ending at N/N",
-          (cov_c == cov_g, cnt.i == cnt.total > 0, err.getvalue().splitlines()[-1] == f"  {cnt.total}/{cnt.total} weapons"),
+          (cov_c == cov_g, cnt.i == cnt.total > 0, err.getvalue().splitlines()[-1].startswith(f"  {cnt.total}/{cnt.total} weapons  ")),
           (True, True, True))
     # `Count` itself: the first item and the last always print, the rest at most once per
     # `COUNT_SECONDS` of its clock.
@@ -4465,7 +4479,9 @@ def selftest() -> int:
         cnt()
     cnt.skip(1)
     check("Count: first, one per COUNT_SECONDS, last; lines in the watcher's counter format",
-          err.getvalue().splitlines(), ["  1/10 weapons", "  5/10 weapons", "  9/10 weapons", "  10/10 weapons"])
+          err.getvalue().splitlines(),
+          ["  1/10 weapons  0s, 0 s/item, ~0s left", "  5/10 weapons  2s, 0.4 s/item, ~2s left",
+           "  9/10 weapons  4s, 0.444 s/item, ~0s left", "  10/10 weapons  4s, 0.4 s/item"])
 
     # Better hand per feature (`SetScorer`, user 2026-10-19), on the real class-roles features. A STR
     # main hand: 2H AR 150, reach 3.2, R1 string 100 MV/s; 1H AR 100, reach 3.0, string 80. Knife
@@ -4708,7 +4724,8 @@ def selftest() -> int:
     ends = {u: x for x, u in zip(got, units)}
     check("combos progress: same picks, counters over hands, mains and caps, each finished",
           ([p[2] for p in pairs_p], list(dict.fromkeys(units)),
-           all(re.fullmatch(r"(\d+)/\1 \w+", ends[u]) for u in ends)),
+           # `er-mechanics-progress` ends a counter "N/N unit", then its elapsed time and rate.
+           all(re.match(r"(\d+)/\1 \w+(\s|$)", ends[u]) for u in ends)),
           (["Club C", "Halberd H"], ["hands", "mains", "caps"], True))
 
     # The speed term (`SetSpeed`, `_set_value`): a slow main hand (R1 #1 at f20) and a quick one

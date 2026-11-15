@@ -153,6 +153,31 @@ the new run only, and moved no chosen skill on a five-weapon check.
 
 Outputs: `/tmp/claude-1000/-home-banon-projects-er-mods-rs/d2b82757-dbef-4576-8664-fb4d80352bf7/scratchpad/next/full/{ab-ref,full-new}.json`.
 
+**That top 2 does not survive the hit priority records (MEASURED 2026-11-10).** Both throw two
+fists per strike, and both fists of a strike sit in one TAE 341 record, so one lands (bd
+er-effects-rs-dnok, attacks.md). `er-builds-pvp.py --rl 150 --sort score --json --jobs 2 --sweep
+~/.cache/er-build-planner/grease-sweep-dlc-drawstring-150-200.jsonl` (the plain run, neither
+flag; the both-flags run was not repeated), once on the main tree's code and once with the
+records, the only difference (820 scored rows each):
+
+| row | without the records | with them |
+|---|---|---|
+| Dryleaf Arts 2H | 1 (859.1) | 35 (589.2) |
+| Dane's Footwork 2H | 2 (853.3) | 288 (472.3) |
+| Dane's Footwork 1H | 4 (699.9) | 524 (390.6) |
+| Dryleaf Arts 1H | 10 (644.1) | 547 (377.2) |
+| Backhand Blade 2H | 27 (608.0) | 321 (462.9) |
+| Great Epee 2H | 3 (711.8) | 1 (711.8) |
+| Pata 2H | 5 (694.4) | 2 (694.4) |
+
+The fist rows fall through their moveset (Dane's Footwork 2H base 831.4 -> 468.1). Backhand Blade
+falls through its skill term alone (base 443.4 both): Swift Slash's four bursts share one record
+and its two blades another, so its credited value drops from 329.0 to 38.9 and Royal Knight's
+Resolve becomes the best mountable skill. 102 of the 820 rows move by more than 0.05 and none
+rises. Eight move through their moveset: the four fist rows and Carian Thrusting Shield and
+Dueling Shield, both grips (running R2 halved, base down 4-10). The rest move through skill terms
+(Night-and-Flame Stance, Shadow Sunflower Headbutt and others).
+
 Also reported: `trade_through` = of the exchanges the opponent strikes first, the share the slot
 keeps swinging through; `interrupts` = of the exchanges it strikes first, the share it staggers.
 
@@ -166,6 +191,70 @@ first hit and to the hyperarmor windows. For example, Giant-Crusher's 2H crouch 
 14, so it counts as 22 against the standing R1's 17.9 (14 if the player is already crouched; that
 the exchange starts before the crouch or sprint is INFERRED). The entry cost also stays in the
 slot's commitment.
+
+### 2b. The slot's own guard (2026-11-13)
+
+The user: "Do you place any value on being able to block and attack simultaneously?", after the
+2H Carian Thrusting Shield was ranked by damage per second; and, ground truth, "Thrusting shields
+can block and attack at the same time". Until now no exchange read it.
+
+A thrusting shield's attack clips hold TAE JumpTable 3, the guard flag a raised shield sets,
+from the hit frame through the recovery (R1 #1: hit f13-16, guard f14-45; 2H R1 #1 f13-17,
+f14-55) and through its R2s' windup (charged R2 #1 f10-37, hit f47), and a few shield slots hold
+short windows before their hit (powerstance-guard.md section
+3a has every clip, how each is reached and what a guarded hit does). `guard_windows(atk, shift)`
+reads them off the slot's clip (ungated events, real frames, moved by the lead-in and entry as the
+hyperarmor windows are), and `exchange(..., guard=...)` reads them:
+
+```
+his hit lands in my guard          blocked: no poise break; he lands its guarded chip (taken as 0)
+  after my hit landed              my hit stands unanswered                 -> win (as a whiff)
+  before it, the state goes on     my hit lands later, unanswered           -> win
+  before it, the state ends        the guard reaction ends my attack        -> void: neither lands
+```
+
+Every slot is a state the guard reaction ends (`guard_goes_on` False; only the two guard-poke
+states, which no slot names, go on, VERIFIED c0000.hks). `void` is neither a trade nor a loss: it
+counts 0 in `net` as a trade does, and `priced_net` leaves it out of the trades (`void_b`). The
+chip is left out: through the Carian Thrusting Shield +25 the RL 150 pool's R1s pass a median 6% of
+their damage (p90 31%), and one never breaks the guard (at most 35 stamina of the pool's 146 bar),
+MEASURED with `er-mechanics-spells.guard_block`. The pool's own guards are not read: an opponent
+thrusting shield's R1 that hits me first and does not break me still trades with my hit, though
+my hit may land in his guard (INFERRED that it is rare: it needs his strike before mine and mine
+inside his f14-45).
+
+What it moves (MEASURED 2026-11-13, `slot_exchange` as the `--weapon` CLI calls it, RL 140-160
+pool of 890 builds, unpriced trades, no entry frames; "before" is `.worktrees/sim-interrupt`'s
+code, the same pool). The three thrusting shields give the same numbers to the third decimal:
+
+| slot (Carian / Dueling / Ritual Thrusting Shield) | strike | win / trade / loss before | after (void) | blocked | f_exchange |
+|---|---|---|---|---|---|
+| R1 #1 | 13.0 | 0.635 / 0.352 / 0.014 | 0.931 / 0.055 / 0.014 | 0.884 | 1.155 -> 1.230 |
+| R1 #2 | 15.5 | 0.337 / 0.461 / 0.202 | 0.631 / 0.166 / 0.202 | 0.536 | 1.034 -> 1.107 |
+| R1 #4 | 18.0 | 0.089 / 0.390 / 0.521 | 0.288 / 0.192 / 0.521 | 0.288 | 0.892 -> 0.942 |
+| 2H R1 #1 | 14.5 | 0.493 / 0.490 / 0.016 | 0.884 / 0.099 / 0.016 | 0.884 | 1.119 -> 1.217 |
+| 2H R1 #2 | 15.0 | 0.440 / 0.524 / 0.035 | 0.782 / 0.182 / 0.035 | 0.782 | 1.101 -> 1.187 |
+| running R1 | 17.0 | 0.175 / 0.377 / 0.447 | 0.374 / 0.178 / 0.447 | 0.288 | 0.932 -> 0.982 |
+| R2 #1 (released) | 27.0 | 0 / 0.121 / 0.879 | 0 / 0.043 / 0.091 (0.866) | 0.866 | 0.780 -> 0.977 |
+| charged R2 #1 | 47.0 | 0 / 0.121 / 0.879 | 0 / 0 / 0 (1.000) | 1.000 | 0.780 -> 1.000 |
+| 2H R2 #2 | 23.0 | 0 / 0.371 / 0.629 | 0 / 0.006 / 0.057 (0.937) | 0.937 | 0.843 -> 0.986 |
+| jump R1 | 11.0 | 0.661 / 0.339 / 0.001 | 0.957 / 0.042 / 0.001 | 0.931 | 1.165 -> 1.239 |
+| 2H backstep R1 | 23.0 | 0 / 0.339 / 0.661 | 0 / 0.276 / 0.655 (0.069) | 0.069 | 0.835 -> 0.836 |
+
+Longsword R1 #1 and 2H R1 #1 and the Kite Shield's R1s are unchanged (no window); the Kite Shield's
+running R1 (guard before its hit) goes 0.811 -> 0.922 and its backstep R1 0.991 -> 1.007, all void.
+
+So the thrusting shield's R1 turns most of its trades into wins: its f13 thrust already wins
+63.5% (first and breaking), and the pool R1 that answers it (median strike frame 16.5) lands
+inside the f14-45 guard. Its R2s, guarded through the windup, stop losing to the R1s that
+used to break them and lose their own hit instead (void). The rank this moves is the PvP
+ranking's (`er-builds-pvp.py`), which multiplies `f_exchange` into each slot. That ranking was not
+re-run: `er-builds-pvp.py --weapon "Carian Thrusting Shield"` stops on the missing sweep cache
+`grease-sweep-dlc-drawstring-150-200-cond-floors.jsonl` (2026-11-13).
+
+Not read: the R2's lead-in clip's own guard (the slot's clip is read, the lead-in shifts it, as
+the hyperarmor windows are), the chip and stamina of a blocked hit, a guard break, and the pool's
+own guards (above).
 
 ## 3. Stamina
 
@@ -195,8 +284,27 @@ for 53 of 1515 one-handed slots. The entry costs are HKS `common_define.hks`
   returns `45.0` (float at 0x143b33c08, its only reader; 1.17.1 0x140657500 -> 0x143b37c18, also
   45.0) plus the SpEffect `staminaRecoverChangeSpeed` sum (turtle talismans, Greenburst).
   NpcParam `staminaRecoverBaseVel` (row 1: 21) is read only by `EnemyIns::GetStaminaRecoverySpeed`
-  0x1404cf9e0; it never reaches a player. The unit is per second (INFERRED: `FD4Time` holds
-  seconds), so 1.5 per real 30 fps frame.
+  0x1404cf9e0; it never reaches a player. The unit is per second of game time, so 1.5 per real
+  30 fps frame (VERIFIED 1.16.2 named dump, every hop byte-matched in 2.7.2.0 and checked by
+  `er-mechanics-exchange.py --selftest`; 2.7.2.0 addresses):
+  - the tick multiplies its rate by `FD4Time::SetScaled` 0x140188b80, `rate x frameDelta.time`
+    (`mulss xmm1, [r8+8]`, called at 0x140401bad);
+  - `frameDelta` is `ChrIns+0xb0`, loaded into the `FD4Time` the vtable slot 0x88 update gets
+    (0x1403f9434); `WorldChrMan_ConstructUpdateList` copies it from its task's
+    `FD4TaskData.delta_time` (0x14051151a; an omitted far character gets N x it every Nth frame);
+  - `FD4TaskGroup::ExecuteTask` builds that `FD4TaskData` from a global (0x1426d94ce) that
+    `FD4TaskManager` stores from the time `MainUpdate` hands it each frame (0x14265933d):
+    `CSFlipper.gameSpeed x taskDelta` (0x140deda87), or a fixed 1/30 s while `dynamicFpsActive`
+    is clear or in transition; `gameSpeed` is 1.0, its only store the `CSFlipperImp` constructor;
+  - `CSFlipperImp::UpdateFlipTiming` sets `lastFrameTime` = (QPC now - QPC before) /
+    `QueryPerformanceFrequency` (0x140e865d2), seconds, and `taskDelta` = the sum of the last
+    16 `lastFrameTime`s x 0.0625 (0x140e867c1).
+- **Equip load scales it.** `staminaRecoveryModifier` (`ChrIns+0xe8`) is 0.8 at heavy load
+  (`GetWeightType` 3), 0.7 overloaded (4) and 1.0 below (the `PlayerIns` update, store
+  0x140661a2d in 2.7.2.0, VERIFIED; the tick's multiply is `mulss xmm6, [rdi+0xe8]` at
+  0x140401b81, powerstance-guard.md section 7). The lines this module scores are at medium roll,
+  so 1.0. The guard model's corpus blockers take theirs from the load their own rows hold
+  (powerstance-guard.md section 8, 2026-11-13).
 - **There is no timer-style delay.** The pause is the animation's own TAE event 225
   `SetSPRegenRatePercent`: the inline case at 0x14042e3b1 of `ExecuteThreadOne` stores Args[0]
   into `ChrCtrlModifier+0x14`, and `ChrCtrlModifierData::Reset` 0x1403c3b60 (from
@@ -215,13 +323,55 @@ for 53 of 1515 one-handed slots. The entry costs are HKS `common_define.hks`
 - **Stopped outright** by HKS `act(110)` (`HksAct` case 110 `SetStaminaRecoveryDisabled`, `or
   actionFlags, 0x40`, which `FUN_1404016d0` tests): in every `GuardDamage*` state, in
   `SpeedUpdate` (sprinting) and in HKS `AddStamina` (rolls, backsteps, jumps, quickstep). Guard
-  stamina damage itself is the guard module's (powerstance-guard.md).
+  stamina damage itself is the guard module's (powerstance-guard.md). A guard reaction holds
+  `act(110)` until a blocker holding L1 is let back into the guard on the reaction clip's first
+  TAE JumpTable 22 frame, f16 / f32 / f53, later than its TAE 0% span (powerstance-guard.md
+  section 7, 2026-11-13).
 - **Floor and gates.** `CSChrDataModule::SetStamina` 0x140438490 clamps to [-50, max]: an action
   started with 1 stamina left can end at -49. `GetEvasionRequest` and `ExecGuard` refuse at
   stamina <= 0 (`STAMINA_MINIMUM` 0), so a roll needs stamina above 0, not above 12.
   `ExecAttack` only resets the combo at <= 0; that the attack itself needs > 0 is INFERRED.
 - **Bar.** The corpus median `computed.maxStamina`, 145 in RL 140-160 (resources.md section 2,
   curve 104: Endurance 30 -> 130, 50 -> 155; 145 is Endurance 42).
+- **The build's add (2026-11-13).** The budget regenerates at `regen_per_frame(add)` = (45 + add) /
+  30 a real frame at 100%, `add` the attacker's SpEffect `staminaRecoverChangeSpeed` sum
+  (`slot_stamina` / `slot_exchange` `regen_add`), read off his own equipment only: the talismans the
+  caller names (`stamina_regen_add`, through `er-mechanics-talismans.stamina_regen_add`;
+  `er-builds-pvp.py --talismans`, its skills' budget too, and this module's `--weapon ...
+  --talismans`) and the weapon he scores (`weapon_regen_add`). A regen item is a choice, never a
+  default (the user, 2026-11-13: "Its not like people will always use either talisman, or the
+  shield for increased regen"): the sweep rows the ranking scores carry no talisman, so a run
+  without the flag regenerates 45/s unless the scored weapon is the shell. The items, REGULATION
+  scan of every equipment param: Green Turtle Talisman 8 (SpEffect 311500), Two-Headed Turtle
+  Talisman 10 (20370300), the Great Turtle Shell 3 in every affinity (resident SpEffect 5311400,
+  "[Weapon] Great Turtle Shell - Boost Stamina Recovery"), no armor. Not applied, since no model
+  here applies a buff's regeneration: Braggart's Roar +10 (+7 with no FP, ashes-of-war.md section
+  5), Flame, Grant Me Strength +5, the Greenburst Crystal Tear +15, the Pickled and Well-Pickled
+  Turtle Necks +10 / +13. A model that picks talismans for a line prices none of these:
+  `er-mechanics-line-fit` offers only talismans that move a term its D reads (HP, FP, equip load,
+  stats, cuts, poise, the spell), and stamina is not one; `er-weapon-build.py` ranks talismans by
+  corpus co-occurrence (`er-mechanics-gear-synergy`) and bans the regen items in a duel
+  (`REGEN_EQUIPMENT`).
+
+  What one would change, side by side and not applied (MEASURED 2026-11-13, `slot_stamina` on the
+  RL 140-160 pool's 146 bar, W = 10 s; the plain column equals `.worktrees/sim-interrupt`'s code to
+  the last digit):
+
+  | slot | f_stamina plain | with Green Turtle (+8) | with Two-Headed Turtle (+10) | roll lock after the burst |
+  |---|---|---|---|---|
+  | Giant-Crusher 2H R1 | 0.606 | 0.618 | 0.623 | 31.25 -> 30.25 / 30.04 |
+  | Giant-Crusher 2H charged R2 | 0.654 | 0.654 | 0.654 | 59.98 -> 54.85 / 53.80 |
+  | Greatsword 2H R1 | 0.763 | 0.763 | 0.763 | 30.32 -> 28.61 / 28.26 |
+  | Dagger R1 | 0.862 | 0.871 | 0.873 | 13.33 -> 12.53 / 12.36 |
+  | Carian Thrusting Shield R1 | 0.842 | 0.854 | 0.856 | 11.33 -> 10.83 / 10.73 |
+  | Carian Thrusting Shield charged R2 | 0.889 | 0.901 | 0.903 | 33.33 -> 29.81 / 29.09 |
+  | Claymore R1 | 0.900 | 0.900 | 0.900 | 16.29 -> 15.78 / 15.68 |
+  | Claymore rolling R1 | 0.702 | 0.726 | 0.731 | 29.37 -> 27.05 / 26.58 |
+
+  Where the window ends on a whole swing the factor does not move (Greatsword 2H R1, Claymore R1);
+  elsewhere a turtle adds 1-3%. The regeneration a slot's clip blocks (TAE 225 at 0% from frame 0)
+  is blocked for the turtle too: the add speeds only the frames the clip leaves above 0% and the
+  walk-off waits.
 
 ### 3c. The budget and the new factor
 
@@ -294,6 +444,11 @@ What the data says about the lead (Giant-Crusher's cost against its damage):
 
 Top 10, new stamina x exchange: Dane's Footwork 1H/2H, Dryleaf Arts 2H, Backhand Blade 2H,
 Dryleaf Arts 1H, Backhand Blade 1H, Pata 2H, Raptor Talons 2H, Venomous Fang 2H, Jawbone Axe 2H.
+Not rerun: `er-mechanics-exchange.py` no longer has `--rank`. In the 2026-11-10 default
+`er-builds-pvp.py --rl 150 --sort score` ranking, which carries `f_exchange x f_stamina` among
+its later factors (section 2a's last table, with the hit priority records), those rows are
+Dane's Footwork 1H/2H 524th/288th, Dryleaf Arts 2H/1H 35th/547th, Backhand Blade 2H/1H
+321st/534th, Pata 2H 2nd, Raptor Talons 2H 12th, Venomous Fang 2H 30th, Jawbone Axe 2H 17th.
 Colossal and great weapons move up against light axes and clubs; the hand-to-hand and claw R2s
 move up most.
 
@@ -387,9 +542,10 @@ a few places.
   start; in a real chain the opponent already reacted to the first hit.
 - Stamina (section 3): the fight window `W`, the keep-a-roll policy, walking (100%) rather than
   guarding (20%) while waiting, and repeating one slot rather than mixing. The punish exposure
-  after an empty bar is measured in frames but not priced. `FD4Time` counting seconds is
-  INFERRED; the attack-start gate at stamina > 0 is INFERRED (HKS `ExecAttack` only resets the
-  combo). NpcParam `staminaRecoverBaseVel` is NPC-only (section 3b).
+  after an empty bar is measured in frames but not priced. The attack-start gate at stamina > 0
+  is INFERRED (HKS `ExecAttack` only resets the combo). A slot whose clip the TAE does not hold
+  regenerates 100% after its entry, as the game does through a clip with no TAE 225 event
+  (`RegenProfile`); no scored slot has no clip. NpcParam `staminaRecoverBaseVel` is NPC-only (section 3b).
 - Section 4's `f_stamina` column and section 5 are the retired factor.
 
 ## Commands

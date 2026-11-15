@@ -12,17 +12,22 @@ and `-powerstance-guard` read-only and edits none of them.
 
 ## Answer
 
+Figures from the 2026-11-10 rerun (section 3), which models hit priority records (bd
+er-effects-rs-dnok).
+
 - **Who stops the pool mid-swing** is decided by the strike frame first and poise second. With
   `saRate` (the code path), almost every R1 above dagger class breaks most of the pool in one hit,
-  so the ranking is a startup ranking: daggers (R2 at frame 11, 158 poise), Dane's Footwork, then
-  the 13-14 frame axe and club R1s. Without `saRate`, one-hit breaks are rare and fists, caestus
-  and thrusting shields lead. Colossal weapons stop 17-24% of the pool and are stopped least
-  (Giant-Crusher 2H: 7.8% with `saRate`, 34th lowest of 820; 1.7% without, third lowest).
+  so the ranking is a startup ranking: daggers (R2 at frame 11, 158 poise), then the 12.9-13.4
+  frame hatchet and axe R1s. Dane's Footwork led it (42.2%) until its two fists were found to share
+  one hit priority record per strike; at one hit per strike it is 39th (35.5%). Without `saRate`,
+  one-hit breaks are rare and fists, caestus and thrusting shields lead. Colossal weapons stop
+  17-24% of the pool and are stopped least (Giant-Crusher 2H: 7.7% with `saRate`, 29th lowest of
+  820; 1.6% without, third lowest).
 - **The user's Cleanrot claim does not hold as a Cleanrot property.** Cleanrot Knight's Sword 1H
-  ranks 201st of 820 weapon-grips (29.5% of the pool stopped) with `saRate` and 481st (17.6%)
-  without; 2H 73rd / 286th; Cleanrot Spear 1H 151st / 405th, 2H 704th / 689th. Against low-poise
+  ranks 200th of 820 weapon-grips (29.5% of the pool stopped) with `saRate` and 485th (17.5%)
+  without; 2H 71st / 285th; Cleanrot Spear 1H 143rd / 405th, 2H 704th / 654th. Against low-poise
   builds (armor poise 53 or less, the pool's bottom quarter) Cleanrot Knight's Sword 1H stops 31%
-  (195th) / 25% (369th); daggers stop 44% / 40%. The mechanism the claim describes is real, and
+  (189th) / 26% (333rd); daggers stop 44% / 41%. The mechanism the claim describes is real, and
   with `saRate` it is universal: a Cleanrot R1 #1 deals 104, above every low-poise build, but so
   does every straight sword, katana and axe R1. What decides the interrupt is landing first, and
   Cleanrot's R1 reaches 2.5 m on frame 15.5, behind daggers (11), axes (12.9) and claws (14).
@@ -33,7 +38,7 @@ and `-powerstance-guard` read-only and edits none of them.
   hyperarmor and trades do. Counter hits do not raise poise damage.
 - **What carried chip changes** (fresh -> carried, stop share): with `saRate`, the median weapon
   gains nothing and fast chains gain in their R1 (dagger 1H R1 12 -> 24%, twinblades 18 -> 28%);
-  without `saRate`, the median R1 gains 5.7 points and the best answer 2.4. Dagger 1H 22 -> 31%,
+  without `saRate`, the median R1 gains 5.9 points and the best answer 2.6. Dagger 1H 21 -> 31%,
   Hookclaws 1H 16 -> 22%, Cleanrot Knight's Sword 1H 18 -> 22% (R1 5 -> 13%). Giant-Crusher and
   Greatsword gain 0: their hits break outright or not at all, and the defender's weapon-window
   floor heals chip above 20% of the boosted pool.
@@ -147,20 +152,24 @@ the counter state at all.
 
 ## 3. Top 20 by `stop_best` (MEASURED, RL 140-160 pool, fresh / carried, percent)
 
-945 pool builds, 2832 distinct attack sequences, 7719 defender rows (sequence x armor poise), 820
-weapon-grips (the 411 sweep weapons, both grips). Weapons with identical movesets tie; the rows
-below are ranks 1-20 as the tool prints them.
+Rerun 2026-11-10 in the worktree with the hit priority records (bd er-effects-rs-dnok):
+`er-mechanics-interrupt.py --build-cache` then `--run [--no-sa-rate] --jobs 3 --sweep
+~/.cache/er-build-planner/grease-sweep-dlc-drawstring-150-200.jsonl` (the default `--sweep`,
+`...-150-200-cond-floors.jsonl`, does not exist on this machine; `--run` reads only the weapon
+names from it). 890 pool builds, 2743 distinct attack sequences, 7218 defender rows (sequence x
+armor poise), 820 scored weapon-grips of 822 (the 411 sweep weapons, both grips). Section 1's
+counts are the 2026-09-30 run's. Weapons with identical movesets tie; the rows below are ranks
+1-20 as the tool prints them.
 
 With `saRate` (`interrupt-150.json`):
 
 | # | weapon | best | low poise | R1 chain | stopped | R1 strike, first-hit poise |
 |---|---|---|---|---|---|---|
-| 1 | Dane's Footwork 1H | 42.2 / 44.0 | 42.4 | 31.0 | 12.3 | 14.0, 132 |
-| 2-8 | Bloodstained Dagger, Cinquedea, Crystal Knife, Dagger, Parrying Dagger, Reduvia, Wakizashi 2H | 40.9 / 40.9 | 44.3 | 16.3 / 27.0 | 7.7 | 11.0, 53 |
-| 9-11 | Main-gauche, Misericorde, Scorpion's Stinger 2H | 39.8 / 40.3 | 44.2 | 16.3 / 27.0 | 8.0 | 11.0, 53 |
-| 12 | Glintstone Kris 2H | 38.4 / 39.5 | 44.1 | 16.3 / 27.0 | 8.0 | 11.0, 53 |
-| 13 | Dane's Footwork 2H | 38.3 / 40.4 | 44.5 | 28.5 / 36.4 | 9.1 | 11.0, 36 |
-| 14-20 | Ivory Sickle, Bloodstained Dagger, Celebrant's Sickle, Cinquedea, Crystal Knife, Dagger, Great Knife 1H | 38.0 / 40.3 | 43.6 | 11.8 / 23.5 | 10.2 | 11.0, 41 |
+| 1-7 | Bloodstained Dagger, Cinquedea, Crystal Knife, Dagger, Parrying Dagger, Reduvia, Wakizashi 2H | 41.0 / 41.0 | 44.7 | 16.0 / 26.9 | 7.7 | 11.0, 53 |
+| 8-10 | Main-gauche, Misericorde, Scorpion's Stinger 2H | 39.9 / 40.4 | 44.6 | 16.0 / 26.9 | 8.0 | 11.0, 53 |
+| 11 | Glintstone Kris 2H | 38.4 / 39.6 | 44.5 | 16.0 / 26.9 | 8.0 | 11.0, 53 |
+| 12 | Ivory Sickle 1H | 38.2 / 40.5 | 44.4 | 11.8 / 23.5 | 9.5 | 11.0, 41 |
+| 13-20 | Bloodstained Dagger, Celebrant's Sickle, Cinquedea, Crystal Knife, Dagger, Great Knife, Parrying Dagger, Reduvia 1H | 38.1 / 40.4 | 44.3 | 11.8 / 23.5 | 9.7 | 11.0, 41 |
 
 The dagger lead comes from the uncharged R2 (strike frame 11, 158 poise, breaks every pool
 build) more than the R1.
@@ -169,34 +178,52 @@ Without `saRate` (`interrupt-150-nosarate.json`):
 
 | # | weapon | best | low poise | R1 chain | stopped |
 |---|---|---|---|---|---|
-| 1 | Dane's Footwork 1H | 34.6 / 36.7 | 38.1 | 27.8 | 9.1 |
-| 2 | Dryleaf Arts 1H | 29.6 / 32.1 | 33.1 | 6.5 / 16.1 | 9.1 |
-| 3-4 | Caestus, Spiked Caestus 2H | 28.7 / 30.6 | 34.6 | 4.2 / 10.8 | 6.4 |
-| 5-6 | Carian Thrusting Shield, Dueling Shield 1H | 28.3 / 30.3 | 34.6 | 25.9 / 29.1 | 12.8 |
-| 7-11 | Grafted Dragon, Iron Ball, Madding Hand, Poisoned Hand, Star Fist 2H | 26.8 / 27.3 | 29.0 | 4.2 / 10.8 | 6.3-6.8 |
-| 12 | Dane's Footwork 2H | 26.6 / 34.7 | 42.7 | 26.4 / 34.6 | 6.6 |
-| 13-14 | Caestus, Spiked Caestus 1H | 26.2 / 33.2 | 37.6 | 11.0 / 21.0 | 8.3 |
-| 15 | Dueling Shield 2H | 25.8 / 26.7 | 29.1 | 23.8 / 25.5 | 7.3 |
-| 16 | Ornamental Straight Sword 2H | 25.8 / 28.5 | 32.8 | 11.0 / 20.7 | 8.3 |
-| 17 | Carian Thrusting Shield 2H | 25.7 / 26.6 | 29.0 | 23.8 / 25.5 | 7.3 |
-| 18-20 | Pata, Grafted Dragon, Iron Ball 1H | 25.3 / 32.8 | 37.5 | 10.6-11.0 / 20.7-21.0 | 8.4 |
+| 1 | Dane's Footwork 1H | 31.8 / 34.4 | 36.8 | 11.7 / 20.1 | 8.6 |
+| 2-3 | Caestus, Spiked Caestus 2H | 28.6 / 30.6 | 35.1 | 4.2 / 10.8 | 6.3 |
+| 4-5 | Carian Thrusting Shield, Dueling Shield 1H | 28.2 / 30.3 | 35.0 | 25.6 / 29.0 | 12.7 |
+| 6 | Dryleaf Arts 1H | 27.2 / 30.2 | 32.0 | 6.5 / 16.1 | 8.5 |
+| 7-11 | Grafted Dragon, Iron Ball, Madding Hand, Poisoned Hand, Star Fist 2H | 26.8 / 27.4 | 29.4 | 4.2 / 10.8 | 6.2-6.7 |
+| 12-13 | Caestus, Spiked Caestus 1H | 26.1 / 33.2 | 38.4 | 10.8 / 20.8 | 7.7 |
+| 14 | Dueling Shield 2H | 25.8 / 26.8 | 29.5 | 23.7 / 25.5 | 7.1 |
+| 15 | Ornamental Straight Sword 2H | 25.7 / 28.5 | 33.1 | 10.6 / 20.6 | 8.3 |
+| 16 | Carian Thrusting Shield 2H | 25.7 / 26.7 | 29.4 | 23.7 / 25.5 | 7.1 |
+| 17 | Pickaxe 1H | 25.3 / 25.4 | 27.3 | 25.0 / 25.1 | 11.3 |
+| 18-21 | Pata, Grafted Dragon, Iron Ball, Star Fist 1H | 25.2 / 32.7-32.8 | 38.3 | 10.3-10.8 / 20.6-20.8 | 7.8 |
 
-## 4. The named weapons (MEASURED, fresh / carried, percent; rank of 820 in brackets)
+**What the hit priority records moved** (MEASURED 2026-11-10: `--run --only` on the main tree's
+code, which differs from the worktree's only by bd er-effects-rs-dnok, against the rerun). Dane's
+Footwork and Dryleaf Arts throw both fists on most strikes, both fists of a strike sit in one TAE
+341 record, and one of them lands (attacks.md, hit priority records). The thrusting shields'
+running R2 halves too, but it is not their best answer, so they do not move. Best, fresh /
+carried (rank of 820):
+
+| weapon | `saRate` before | after | no `saRate` before | after |
+|---|---|---|---|---|
+| Dane's Footwork 1H | 42.2 / 43.9 (1) | 35.5 / 37.5 (39) | 34.7 / 36.7 (1) | 31.8 / 34.4 (1) |
+| Dane's Footwork 2H | 38.3 / 40.4 (13) | 26.7 / 32.9 (336) | 26.3 / 34.6 (12) | 13.5 / 24.7 (718) |
+| Dryleaf Arts 1H | 37.1 / 39.0 | 31.5 / 33.6 (111) | 29.7 / 32.2 (2) | 27.2 / 30.2 (6) |
+| Dryleaf Arts 2H | 30.7 / 33.7 | 29.6 / 32.9 (194) | 17.6 / 25.1 | 17.1 / 24.8 (523) |
+
+Every other row moved by 0.5 points or less against the 2026-09-30 tables, and the main-tree run
+gives the same values for those it covers (Dagger 1H and 2H, both modes), so those moves come
+from the code between the two dates, not from the records.
+
+## 4. The named weapons (MEASURED 2026-11-10 rerun, fresh / carried, percent; rank of 820 in brackets)
 
 | weapon | best, `saRate` | best, no `saRate` | R1 chain, `saRate` | R1 chain, no `saRate` | stopped, `saRate` / no | R1 strike | R1 #1 poise `saRate` / no |
 |---|---|---|---|---|---|---|---|
-| Cleanrot Knight's Sword 1H | 29.5 / 29.8 (201) | 17.6 / 21.6 (481) | 19.8 / 21.9 | 4.7 / 12.8 | 10.7 / 7.7 | 15.5 | 104 / 40 |
-| Cleanrot Knight's Sword 2H | 33.5 / 33.5 (73) | 20.5 / 25.4 (286) | 30.8 / 30.8 | 9.9 / 19.5 | 10.1 / 7.3 | 13.5 | 135 / 52 |
-| Cleanrot Spear 1H | 30.7 / 30.7 (151) | 18.4 / 24.5 (405) | 14.0 / 15.7 | 4.1 / 10.1 | 13.8 / 10.0 | 18.0 | 105 / 50 |
-| Cleanrot Spear 2H | 20.8 / 20.8 (704) | 15.6 / 16.7 (689) | 17.4 / 17.4 | 6.9 / 12.1 | 13.1 / 9.4 | 18.0 | 137 / 65 |
-| Giant-Crusher 1H | 23.7 / 23.7 (583) | 17.8 / 17.8 (433) | 23.5 | 17.6 | 10.3 / 3.3 | 18.0 | 630 / 180 |
-| Giant-Crusher 2H | 22.0 / 22.0 (654) | 17.2 / 17.2 (521) | 22.0 | 17.0 | 7.8 / 1.7 | 18.9 | 819 / 234 |
-| Greatsword 1H | 21.8 / 21.8 (681) | 16.5 / 16.5 (565) | 21.2 | 16.4 | 10.2 / 4.2 | 18.7 | 504 / 144 |
-| Greatsword 2H | 23.6 / 23.6 (601) | 17.7 / 17.7 (451) | 23.5 | 17.6 | 8.3 / 3.2 | 18.2 | 655 / 187 |
-| Hand Axe 1H | 36.3 / 36.3 (31) | 20.9 / 27.0 (251) | 34.2 | 10.4 / 21.4 | 15.2 / 11.3 | 12.9 | 150 / 50 |
-| Hand Axe 2H | 32.8 / 32.8 (81) | 23.4 / 26.1 (74) | 29.4 | 13.9 / 21.3 | 12.8 / 9.5 | 14.0 | 195 / 65 |
-| Lance 1H | 21.5 / 21.5 (687) | 16.6 / 17.1 (537) | 18.1 | 13.7 / 15.5 | 15.6 / 11.6 | 18.0 | 224 / 102 |
-| Lance 2H | 22.1 / 22.1 (643) | 17.7 / 17.8 (439) | 19.1 | 17.3 | 10.3 / 4.8 | 18.0 | 290 / 132 |
+| Cleanrot Knight's Sword 1H | 29.5 / 29.8 (200) | 17.5 / 21.6 (485) | 19.7 / 21.9 | 4.7 / 12.8 | 10.7 / 7.7 | 15.5 | 104 / 40 |
+| Cleanrot Knight's Sword 2H | 33.5 / 33.5 (71) | 20.3 / 25.3 (285) | 30.9 / 30.9 | 9.6 / 19.4 | 10.0 / 7.2 | 13.5 | 135 / 52 |
+| Cleanrot Spear 1H | 30.7 / 30.7 (143) | 18.2 / 24.4 (405) | 13.8 / 15.6 | 3.9 / 10.0 | 13.8 / 9.9 | 18.0 | 105 / 50 |
+| Cleanrot Spear 2H | 20.8 / 20.8 (704) | 15.6 / 16.7 (654) | 17.4 / 17.4 | 6.6 / 12.0 | 13.1 / 9.3 | 18.0 | 137 / 65 |
+| Giant-Crusher 1H | 23.7 / 23.7 (583) | 17.9 / 17.9 (423) | 23.4 | 17.7 | 9.6 / 2.9 | 18.0 | 630 / 180 |
+| Giant-Crusher 2H | 22.0 / 22.0 (652) | 17.2 / 17.2 (518) | 22.0 | 17.1 | 7.7 / 1.6 | 18.9 | 819 / 234 |
+| Greatsword 1H | 21.8 / 21.8 (681) | 16.5 / 16.5 (552) | 21.2 | 16.4 | 9.5 / 3.8 | 18.7 | 504 / 144 |
+| Greatsword 2H | 23.5 / 23.5 (601) | 17.8 / 17.8 (445) | 23.4 | 17.6 | 8.1 / 3.1 | 18.2 | 655 / 187 |
+| Hand Axe 1H | 36.3 / 36.3 (27) | 20.7 / 27.0 (266) | 34.3 | 10.1 / 21.3 | 14.6 / 10.7 | 12.9 | 150 / 50 |
+| Hand Axe 2H | 32.7 / 32.7 (81) | 23.3 / 26.1 (70) | 29.4 | 13.5 / 21.1 | 12.8 / 9.4 | 14.0 | 195 / 65 |
+| Lance 1H | 21.4 / 21.4 (687) | 16.6 / 17.1 (540) | 18.1 | 13.6 / 15.5 | 15.6 / 11.5 | 18.0 | 224 / 102 |
+| Lance 2H | 22.0 / 22.0 (643) | 17.8 / 17.8 (434) | 19.1 | 17.4 | 10.2 / 4.7 | 18.0 | 290 / 132 |
 
 Why Cleanrot sits where it does (Cleanrot Knight's Sword 1H, from `--weapon`):
 
@@ -224,29 +251,30 @@ model: its thrust tracking and reach at other distances than 2.5 m, the Sacred O
 Phalanx buffs, scarlet rot pressure changing what opponents press, or opponents' armor at the
 low end being lower than the corpus.
 
-## 5. Chip, weapon by weapon (MEASURED)
+## 5. Chip, weapon by weapon (MEASURED 2026-11-10 rerun)
 
 `--report <file> --chip`. The carried column assumes every landed hit within 30 s of the last.
 
 | weapon | best, no `saRate`, fresh -> carried | R1 chain, no `saRate` | R1 chain, `saRate` |
 |---|---|---|---|
-| Dagger 1H | 21.7 -> 31.0 | 6.2 -> 19.4 | 11.8 -> 23.5 |
-| Misericorde 1H | 21.3 -> 30.7 | 6.2 -> 19.4 | 11.8 -> 23.5 |
-| Hookclaws 1H | 16.2 -> 22.2 | 4.2 -> 13.8 | 13.9 -> 21.3 |
-| Bloodhound Claws 2H | 24.3 -> 27.7 | 7.6 -> 18.4 | 25.9 -> 28.4 |
-| Cleanrot Knight's Sword 1H | 17.6 -> 21.6 | 4.7 -> 12.8 | 19.8 -> 21.9 |
-| Uchigatana 1H | 21.1 -> 24.0 | 7.5 -> 16.6 | 23.0 -> 25.1 |
-| Hand Axe 1H | 20.9 -> 27.0 | 10.4 -> 21.4 | 34.2 -> 34.2 |
-| Giant-Crusher 2H | 17.2 -> 17.2 | 17.0 -> 17.0 | 22.0 -> 22.0 |
-| Greatsword 2H | 17.7 -> 17.7 | 17.6 -> 17.6 | 23.5 -> 23.5 |
+| Dagger 1H | 21.3 -> 30.9 | 6.2 -> 19.3 | 11.8 -> 23.5 |
+| Misericorde 1H | 21.0 -> 30.5 | 6.2 -> 19.3 | 11.8 -> 23.5 |
+| Hookclaws 1H | 16.0 -> 22.1 | 4.2 -> 13.7 | 13.4 -> 21.1 |
+| Bloodhound Claws 2H | 24.1 -> 27.6 | 7.4 -> 18.3 | 25.8 -> 28.4 |
+| Cleanrot Knight's Sword 1H | 17.5 -> 21.6 | 4.7 -> 12.8 | 19.7 -> 21.9 |
+| Uchigatana 1H | 21.1 -> 24.1 | 7.3 -> 16.5 | 22.9 -> 25.1 |
+| Hand Axe 1H | 20.7 -> 27.0 | 10.1 -> 21.3 | 34.3 -> 34.3 |
+| Giant-Crusher 2H | 17.2 -> 17.2 | 17.1 -> 17.1 | 22.0 -> 22.0 |
+| Greatsword 2H | 17.8 -> 17.8 | 17.6 -> 17.6 | 23.4 -> 23.4 |
 
-Over all 820 weapon-grips the carried chip raises `stop_best` by a median 2.4 points and the R1
-chain by 5.7 without `saRate`; with `saRate` the medians are 0 (mean 0.4 and 1.1), because most
-first hits already break outright. The largest gains are the light fast hits: Black Knife /
-Erdsteel Dagger 1H 17.9 -> 28.1, Smithscript Cirque 1H 15.8 -> 29.0, Claws of Night 2H 10.2 ->
-20.3 (no `saRate`). Fast chains against slow single hits: chip moves daggers and claws up by 6-13
-points and Giant-Crusher by 0, but Giant-Crusher is the weapon least stopped in return (1.7-7.8%
-against 7-11% for the fast chains), because its hyperarmor turns the fast chains' chip into trades.
+Over all 820 weapon-grips the carried chip raises `stop_best` by a median 2.6 points and the R1
+chain by 5.9 without `saRate`; with `saRate` the medians are 0 (mean 0.4 and 1.1), because most
+first hits already break outright. The largest gains are the light fast hits: Smithscript Cirque
+1H 15.3 -> 28.8, Dane's Footwork 2H 13.5 -> 24.7 (one fist per strike since the hit priority
+records), Black Knife / Erdsteel Dagger 1H 17.8 -> 28.1, Claws of Night 2H 9.9 -> 20.2 (no
+`saRate`). Fast chains against slow single hits: chip moves daggers and claws up by 6-13 points
+and Giant-Crusher by 0, but Giant-Crusher is the weapon least stopped in return (1.6-7.7% against
+7-11% for the fast chains), because its hyperarmor turns the fast chains' chip into trades.
 
 ## 6. Proposed wiring into the ranking (not applied)
 

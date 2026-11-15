@@ -554,24 +554,35 @@ STAMP_DEPS: dict[str, tuple[str, ...]] = {
         'window_defender'
     ),
     'er-mechanics-ashes.py': (
-        '<class>Opponents', 'AshTables.__init__', 'AshTables._mode', 'AshTables.arts_name',
-        'AshTables.effect_kind', 'AshTables.find_arts', 'AshTables.find_weapon', 'AshTables.fp_cost',
-        'AshTables.is_buff', 'AshTables.marker_ids', 'AshTables.speffect_summary', 'WeaponContext.__init__',
-        'WeaponContext.multiplier', '_bullet_damages_self', '_frames', '_hit_contacts', '_hit_contacts_raw',
-        '_jt8_unconditional', '_load', '_opening', '_pose', '_skill_profile', '_unit', 'anim_actions',
-        'anim_recovery', 'bullet_buffs', 'bullet_damages', 'bullet_flight', 'bullet_harms', 'bullet_tree',
-        'contact_geometry', 'ctx_grip', 'diff_category', 'evasion_motion', 'fly_tree', 'hit_attack',
-        'improves', 'is_two_handed', 'lead_in', 'lead_in_hyperarmor', 'main_anim', 'no_fp_twins', 'phys_type',
-        'plain', 'pvp_damage', 'resolve_judge', 'roll_motion', 'skill_hits', 'skill_profile', 'skill_tae',
-        'stance_buttons', 'stance_windup', 'sword_arts_categories', 'weapon_diff_category'
+        '<class>CaughtModel', '<class>FollowupModel', '<class>Opponents', '<class>_LazyWorth',
+        '<class>_PoseClip', '<class>_TouchTable', 'AshTables.__init__', 'AshTables._mode',
+        'AshTables.arts_name', 'AshTables.effect_kind', 'AshTables.find_arts', 'AshTables.find_weapon',
+        'AshTables.fp_cost', 'AshTables.is_buff', 'AshTables.marker_ids', 'AshTables.speffect_summary',
+        'WeaponContext.__init__', 'WeaponContext.multiplier', '_Entries.__init__', '_baim', '_bchild_frame',
+        '_dedup_weights',
+        '_bcross', '_bdot', '_blevel', '_blook', '_bmix', '_bnorm', '_brotate', '_bshot', '_bspread',
+        '_bullet_damages_self', '_carrier_touch', '_dummy_axes', '_first_axes', '_flight', '_flight_frame',
+        '_fly_loop', '_fly_loop_one', '_fly_rows', '_frames', '_frames_at', '_hit_contacts', '_hit_contacts_raw',
+        '_jt8_unconditional', '_launch_key', '_launch_start', '_lay_rows', '_load', '_lock_at', '_opening',
+        '_place_dummy', '_pose', '_profile', '_skill_profile', '_speed_profile', '_standing', '_touch_samples',
+        '_unit', '_vadd', '_vcross', '_vdot', '_vnorm', '_vscale', 'anim_actions', 'anim_recovery',
+        'bullet_buffs', 'bullet_damages', 'bullet_flight', 'bullet_harms', 'bullet_launch', 'bullet_tree',
+        'carrier', 'contact_geometry', 'ctx_grip', 'diff_category', 'disc_radii', 'draw_quantile',
+        'evasion_motion', 'flight_moves', 'fly_members', 'fly_shots', 'fly_tree', 'held_models', 'hit_attack',
+        'homes', 'improves', 'interval_frames', 'is_two_handed', 'launches', 'lead_in', 'lead_in_hyperarmor',
+        'lock_point', 'look_frame', 'main_anim', 'no_fp_twins', 'phys_type', 'plain', 'pvp_damage',
+        'reaction_delays', 'resolve_judge', 'roll_motion', 'root_offset', 'row_shots', 'shot_draws',
+        'skill_bullet_launch', 'skill_hits', 'skill_profile', 'skill_tae', 'stance_buttons', 'stance_windup',
+        'sword_arts_categories', 'weapon_diff_category', 'yaw_frame'
     ),
     'er-mechanics-attacks.py': (
         'Regulation.__init__', 'Regulation.find_weapon', 'Regulation.resolve_behavior_id', '_bound',
-        '_early_interval', '_first_open', '_load', '_reach', '_tidy', 'attack_numbers', 'clip_frame',
-        'clip_length', 'clip_to_real', 'hit_records', 'hkx_duration', 'hkx_path', 'motion_category',
-        'real_frame', 'recovery_details', 'recovery_windows', 'release_lead_in', 'resolve_events',
-        'resolve_phys_type', 'slot_animation', 'tae_animations', 'tae_details', 'uses_stealth_attack',
-        'weapon_attacks'
+        '_early_interval', '_find_image', '_first_open', '_load', '_reach', '_s8', '_tidy', 'attack_numbers',
+        'clip_frame', 'clip_length', 'clip_to_real', 'event_record', 'hit_records', 'hkx_duration',
+        'hkx_path', 'motion_category', 'priority_records', 'real_frame', 'record_attach_time', 'record_contact',
+        'recovery_details', 'recovery_windows', 'release_lead_in', 'resolve_events', 'resolve_phys_type',
+        'shared_landings', 'slot_animation', 'tae_animations', 'tae_content_version', 'tae_details',
+        'uses_stealth_attack', 'weapon_attacks'
     ),
     'er-mechanics-backstab.py': (
         '_mod', 'skill_blocks_backstab', 'throw_limits'
@@ -662,7 +673,7 @@ STAMP_SIM_DEPS: dict[str, tuple[str, ...]] = {
         '_stagger_of', '_window_step', 'carried_states', 'poise_carries', 'sim_key', 'simulate'
     ),
     'er-mechanics-attacks.py': (
-        '_load',
+        '_find_image', '_load'
     ),
     'er-mechanics-exchange.py': (
         '_sibling',

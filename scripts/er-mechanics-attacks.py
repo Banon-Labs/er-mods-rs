@@ -69,7 +69,9 @@ Usage:
     python3 scripts/er-mechanics-attacks.py --selftest
 """
 import argparse
+import collections
 import functools
+import glob
 import importlib.util
 import json
 import math
@@ -218,6 +220,74 @@ HIT_RECORD_NOTE = 'VERIFIED: FUN_140442ee0, FUN_1405247b0, FUN_1405259b0, FUN_14
 #: Sampling step for the hit-record walk: 60 Hz, evaluated at the middle of each step. Every
 #: type-1 event in the player TAEs starts and ends on a 1/30 s boundary (counted 2026-09-29).
 HIT_RECORD_STEP = 1 / 60
+
+#: Hit priority records (bd er-effects-rs-dnok; `VERIFIED` in the named 1.16.2 dump, so the
+#: addresses of this block are 1.16.2 ones, not 2.7.2.0 ones):
+#:
+#: - TAE event 341 (FUN_1404298d0, run by `ExecuteThreadOne`) keeps one `DmgHitRecord`
+#:   ("priorityRecord") in the caster's `HitPriorityRecord` slot Args byte 0 for as long as the
+#:   event runs without a gap (FUN_14049ad80 -> FUN_1404a49c0, carried from frame to frame by
+#:   FUN_1404a5090); the per-frame cleanup FUN_1404a4cb0 (`ChrSlotSys::Update`, from
+#:   `ChrIns::PrePhysicsSafe1`, task group 81) runs after both TAE passes (HavokBehavior 74,
+#:   ChrIns_BehaviorSafe 76) and before DmgMan (120-122).
+#: - An attack takes the record of the slot whose window covers its event time when its signed
+#:   priority byte is not negative: a swing (FUN_1404428f0) slot 0 (`xor edx,edx` at 0x140442d61)
+#:   with Args byte 0xc, retried every frame while its +0x288 is empty; a skill bullet
+#:   (FUN_1403c2d60) slot Args byte 0x10 with Args byte 0x12, at its spawn; a cast bullet (event
+#:   64, FUN_1403c1450) slot 0 (`xor edx,edx` at 0x1403c14fd) with Args byte 0xc. A bullet's
+#:   children (hit, expiry and interval) copy its record and priority byte (FUN_14039bba0 ->
+#:   FUN_14038b740 copies `BulletAttackInfo` +0x640 and +0x648; the attack takes the byte at
+#:   bullet +0xaf8 = +0x4b0 +0x648 through FUN_1403960a0 -> FUN_140526230 -> FUN_140d245a0 ->
+#:   FUN_140d24b10, `*(params+0x11d) = *prio`, nothing from the child's own Bullet or AtkParam row).
+#: - Each attack carries an id into the record (attack +0x148 = params +0x110). A swing's is -1
+#:   (FUN_14051d380's default; nothing on the FUN_1404428f0 -> FUN_140526430 path writes it). A
+#:   bullet's is its launch: FUN_140d245a0 writes bullet +0xb08 (`BulletAttackInfo` +0x658), which
+#:   FUN_14038fe80 sets to the launch entry's own id when it is -1 (a root: FUN_14038b9a0 stores -1)
+#:   and which a child keeps (FUN_14038b740 / FUN_14038d130 copy it). So a launch's `numShoot`
+#:   copies and all its descendants are one attack to the record.
+#: - Each DmgMan frame (FUN_140527c10) registers every attack's contacts in its record first
+#:   (FUN_140521bf0: record +0x288 set, contact priority +0x34 not negative, victim a `Chr`; no
+#:   team or damage test) -> FUN_14051b210: per victim the first registrant at the lowest priority
+#:   and its id; a strictly lower one replaces both and clears the landed flag (`jge` at
+#:   0x14051b304). Then it resolves them in the same list order (FUN_140522590 -> FUN_140523710
+#:   -> FUN_14051b870): an attack whose id is the entry's (not -1, 0x14051b8c9) passes even after
+#:   the flag is set; any other passes only while the flag is clear and its priority equals the
+#:   entry's. A pass sets the flag (FUN_14051b370, 0x140523aac) before FUN_14051af50 applies the
+#:   hit, so a hit the team gate (FUN_1404443e0) or immunity then refuses, or one that deals
+#:   nothing, still spends the record. A refusal marks the victim in the attack's own lists (root
+#:   +0x278 and the bullet-shared +0x280, linked shapes too: FUN_140524910 -> FUN_140523540), so
+#:   it never hits him.
+#: - Ties: registration and resolution walk DmgMan's list in one order, so of one frame's
+#:   equal-priority contacts the first in the list lands. FUN_140525ef0 head-inserts a new
+#:   attack and every FUN_140527d40 pass (which queues the shape casts FUN_140527c10 resolves)
+#:   rebuilds the list by head-inserting as it walks, reversing it; so of attacks created between
+#:   two passes the one created first is walked first (`VERIFIED` from those three functions; that
+#:   nothing else reorders the list is `INFERRED`). For attacks created on different frames the
+#:   order flips every pass; the model's ties are created-together contacts and go to the first.
+#:   In TAE order, events run by event group (GetActiveAnimEvent 0x14264e420), which matches the
+#:   stored order for 3248 of the 3249 same-frame pairs of type 1, 2 and 64 events (`MEASURED`
+#:   over the 13839 multi-event player animations, 2026-11-10; the exception is a56_032210).
+#: So the attacks of one record land one hit per victim between them, plus one for each later
+#: contact with a strictly lower priority, and a bullet launch counts as one attack: all its
+#: copies and descendants land through their own lists once one of them holds the entry. Not
+#: modelled: a hitbox that deals nothing to the victim (team gate, zero damage) never appears as
+#: a hit, so it never spends the record here (bd er-effects-rs-xb3i: none of the skills' such
+#: hitboxes can pre-empt a damaging one; Night-and-Flame Stance's judge 3920 is dropped by the
+#: attack index claim, 0x14044299d).
+TAE_HIT_PRIORITY_RECORD = 341
+#: Header byte `FD4::TaeFileResolver::Resolve` (0x14264e860, `movzx ebp, byte [rdx+0x30]`) copies
+#: into every animation's `contentVersion`; all 639 player TAEs carry 0x25 (counted 2026-11-10).
+TAE_CONTENT_VERSION_OFFSET = 0x30
+#: From this content version event 341 reads its slot from Args byte 0 (FUN_1404298d0: below 0x25
+#: the slot is 0) and `BulletBehavior` its slot from Args byte 0x10 (`0x24 < contentVersion`).
+RECORD_SLOT_VERSION = 0x25
+RECORD_SLOT_ARG = 0
+BULLET_RECORD_SLOT_ARG = 0x10
+TAE_BULLET_BEHAVIOR, TAE_CAST_MAGIC = 2, 64
+#: The signed priority byte of each event kind that can take a record.
+RECORD_PRIORITY_ARG = {TAE_ATTACK_BEHAVIOR: 0xc, TAE_BULLET_BEHAVIOR: 0x12, TAE_CAST_MAGIC: 0xc}
+#: Seconds of slack in the window tests (event times are 1/30 s multiples stored as floats).
+RECORD_EPS = 1e-4
 #: `FUN_1403f1f70` resolves an attack animation as `spAtkcategory * 1000000 + anim` when bound,
 #: else `wepmotionCategory * 1000000 + anim`, else, for the right hand, `a023_<anim>` (the left
 #: hand falls back to a048) (`VERIFIED`).
@@ -837,6 +907,106 @@ def hit_records(claims):
     return list(zip(opened, follows))
 
 
+_TAE_VERSION = {}
+
+
+def tae_content_version(category):
+    """The content version byte of `a<category>.tae` (`TAE_CONTENT_VERSION_OFFSET`), or None when
+    the file is absent."""
+    if category not in _TAE_VERSION:
+        path = os.path.join(PLAYER_TAE_DIR, f'a{category:02d}.tae')
+        v = None
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                head = f.read(TAE_CONTENT_VERSION_OFFSET + 1)
+            if len(head) > TAE_CONTENT_VERSION_OFFSET:
+                v = head[TAE_CONTENT_VERSION_OFFSET]
+        _TAE_VERSION[category] = v
+    return _TAE_VERSION[category]
+
+
+def _s8(params, off):
+    return struct.unpack_from('<b', params, off)[0]
+
+
+def priority_records(events, version=RECORD_SLOT_VERSION):
+    """The hit priority records an animation's TAE 341 events open (`TAE_HIT_PRIORITY_RECORD`):
+    [(slot, start s, end s)] in stored order, one per event (a gap or a new event opens a new
+    record: FUN_1404a5090 carries an entry only into the frame after one that ran on)."""
+    out = []
+    for e in events or []:
+        if e.type != TAE_HIT_PRIORITY_RECORD:
+            continue
+        slot = _s8(e.params, RECORD_SLOT_ARG) if (version or 0) >= RECORD_SLOT_VERSION else 0
+        out.append((slot, e.start, e.end))
+    return out
+
+
+def event_record(e, records, version=RECORD_SLOT_VERSION):
+    """(index into `records` or None, priority byte or None) for an attack (type 1), skill bullet
+    (type 2) or cast (type 64) event: a swing takes the first slot-0 record its window overlaps
+    (its lookup is retried every frame while it has none), a bullet or cast the record of its
+    slot whose window covers its spawn. A negative priority takes none."""
+    off = RECORD_PRIORITY_ARG.get(e.type)
+    if off is None or len(e.params) <= off:
+        return None, None
+    prio = _s8(e.params, off)
+    if prio < 0:
+        return None, prio
+    if e.type == TAE_ATTACK_BEHAVIOR:
+        for i, (slot, s, end) in enumerate(records):
+            if slot == 0 and max(s, e.start) < min(end, e.end) - RECORD_EPS:
+                return i, prio
+        return None, prio
+    slot = 0
+    if e.type == TAE_BULLET_BEHAVIOR and (version or 0) >= RECORD_SLOT_VERSION:
+        slot = _s8(e.params, BULLET_RECORD_SLOT_ARG)
+    for i, (sl, s, end) in enumerate(records):
+        if sl == slot and s - RECORD_EPS <= e.start < end - RECORD_EPS:
+            return i, prio
+    return None, prio
+
+
+def record_attach_time(e, records, index):
+    """Seconds at which event `e` first holds record `index` (a swing that opens before the record
+    takes it when the record opens)."""
+    return max(e.start, records[index][1]) if index is not None else e.start
+
+
+def record_contact(entries, rec, prio, launch):
+    """One attack's first contact with one victim under hit priority record `rec` (`HIT_RECORD`
+    block above): registration (FUN_14051b210) then resolution (FUN_14051b870 / FUN_14051b370).
+    `entries` ({record: [priority, launch, landed]}) is the victim's state, updated in place;
+    `launch` is the attack's id: one value for every row of one bullet launch (its copies and
+    descendants), a value of its own for a swing (whose game id is -1, which never passes as the
+    entry's own; a swing's list never expires, so it never touches twice). Returns whether it
+    lands."""
+    e = entries.get(rec)
+    if e is None or prio < e[0]:
+        e = entries[rec] = [prio, launch, False]
+    if e[1] == launch or (not e[2] and prio == e[0]):
+        e[2] = True
+        return True
+    return False
+
+
+def shared_landings(items):
+    """Which of `items` land on one victim under the hit priority records (`HIT_RECORD` block
+    above): `items` is [(time, record key or None, priority, created)] for attacks that each
+    touch him at `time`; returns [bool] in the same order. `created` is also the launch: rows that
+    share it are one bullet launch (`record_contact`). An attack with no record always lands; of
+    one record's attacks the first to touch lands, with every other row of its launch, and a later
+    one only with a strictly lower priority than the entry. Ties at one time go to the lower
+    priority, then to the attack created first (the smaller `created`)."""
+    order = sorted(range(len(items)), key=lambda i: (items[i][0], items[i][2] if items[i][2] is not None
+                                                     else 0, items[i][3]))
+    entries, out = {}, [False] * len(items)
+    for i in order:
+        _, rec, prio, created = items[i]
+        out[i] = True if rec is None else record_contact(entries, rec, prio, created)
+    return out
+
+
 def tae_details(reg, weapon_id, anim, judge, category=None):
     """Hit windows, hit count and hyperarmor windows of one animation.
 
@@ -871,27 +1041,47 @@ def tae_details(reg, weapon_id, anim, judge, category=None):
             continue  # AttackBehavior never reaches FUN_140442ee0 for it
         claimed.append((e, j, index))
     records = hit_records([(e.start, e.end, j, index) for e, j, index in claimed])
+    prio_records = priority_records(events, tae_content_version(src_cat))
     own = attack_numbers(reg, weapon_id, judge)
     own_enemy = bool(own and own['can_hit_enemy'])
     windows, windows_clip, window_detail, other = [], [], [], []
-    for (e, j, index), (opened, follows) in zip(claimed, records):
+    entries = []                        # (entry, event, its hit priority record, priority, TAE position)
+    for pos, ((e, j, index), (opened, follows)) in enumerate(zip(claimed, records)):
+        rec, prio = event_record(e, prio_records)
         if j == judge:
             windows.append(frames(e))
             windows_clip.append(frames_clip(e))
             hits = opened if own_enemy else 0
-            window_detail.append({'frames': frames(e), 'attack_index': index,
-                                  'hit_records': opened, 'follows_judge': follows,
-                                  'hits': hits, 'sweep_hit': bool(hits) and follows is None})
+            d = {'frames': frames(e), 'attack_index': index,
+                 'hit_records': opened, 'follows_judge': follows, 'priority_record': rec, 'priority': prio,
+                 'hits': hits, 'sweep_hit': bool(hits) and follows is None}
+            window_detail.append(d)
+            entries.append((d, e, rec, prio, pos))
             continue
         extra = attack_numbers(reg, weapon_id, j)
         if extra and extra['mv_phys'] + extra['mv_mag'] + extra['mv_fire'] \
                 + extra['mv_light'] + extra['mv_holy'] > 0:
-            other.append({'judge': j, 'frames': frames(e), 'frames_clip': frames_clip(e),
-                          'mv_phys': extra['mv_phys'], 'poise_damage': extra['poise_damage'],
-                          'attack_index': index, 'hit_records': opened, 'follows_judge': follows,
-                          'can_hit_enemy': extra['can_hit_enemy'],
-                          'hits': opened if extra['can_hit_enemy'] else 0,
-                          'sweep_hit': extra['can_hit_enemy'] and bool(opened) and follows is None})
+            d = {'judge': j, 'frames': frames(e), 'frames_clip': frames_clip(e),
+                 'mv_phys': extra['mv_phys'], 'poise_damage': extra['poise_damage'],
+                 'attack_index': index, 'hit_records': opened, 'follows_judge': follows,
+                 'priority_record': rec, 'priority': prio,
+                 'can_hit_enemy': extra['can_hit_enemy'],
+                 'hits': opened if extra['can_hit_enemy'] else 0,
+                 'sweep_hit': extra['can_hit_enemy'] and bool(opened) and follows is None}
+            other.append(d)
+            entries.append((d, e, rec, prio, pos))
+    # Hit priority records (`TAE_HIT_PRIORITY_RECORD`): the hit records of every event that takes
+    # one record land once per target between them, the first to hold it first (one frame's tie:
+    # the event created first), plus one for each later event with a strictly lower priority. A
+    # swing's id is -1, so an event's later runs (new attacks on its index) land nothing. The
+    # ceiling counts every event as touching.
+    shared = [(d, e, rec, prio, pos) for d, e, rec, prio, pos in entries if rec is not None and d['hits']]
+    if shared:
+        lands = shared_landings([(record_attach_time(e, prio_records, rec), rec, prio, pos)
+                                 for _, e, rec, prio, pos in shared])
+        for (d, _, _, _, _), ok in zip(shared, lands):
+            d['hits'] = 1 if ok else 0
+            d['sweep_hit'] = ok and d['follows_judge'] is None
     own_hits = sum(d['hits'] for d in window_detail)
     own_sweep = sum(d['sweep_hit'] for d in window_detail)
     hyper = []
@@ -934,6 +1124,7 @@ def tae_details(reg, weapon_id, anim, judge, category=None):
             'own_sweep_hits': own_sweep,
             'sweep_hits': own_sweep + sum(o['sweep_hit'] for o in other),
             'other_hitboxes': other, 'hyperarmor': hyper, 'counter_windows': counter,
+            'priority_records': [(slot, clip_frame(s), clip_frame(e)) for slot, s, e in prio_records],
             'speed_windows': speed, **real,
             **{f'{k}_clip': clip[k] for k in ('cancel_frame', 'recovery_after_hit',
                                               'input_open_frame', 'anim_frames')}}
@@ -1519,15 +1710,83 @@ def selftest():
         check('Milady running R1 extras (judge, index, can hit enemy, hits)',
               [(o['judge'], o['attack_index'], o['can_hit_enemy'], o['hits'])
                for o in run['other_hitboxes']], [(998, 1, False, 0), (123, 0, True, 1)], src)
-        check('Milady running R1 judge 120 replaces 123 on index 0',
-              [(d['attack_index'], d['follows_judge'], d['hits']) for d in run['hit_window_detail']],
-              [(0, 123, 1)], src)
+        # Judge 120 opens a new hit record on index 0 (1 before bd er-effects-rs-dnok), but both
+        # judges sit in the a060_030200 event 341 record f16-19 at priority 0: it lands nothing on
+        # a target judge 123 has hit, so max_hits went from 2 to 1 (measured 2026-11-10).
+        check('Milady running R1 judge 120 replaces 123 on index 0 inside 123\'s priority record',
+              [(d['attack_index'], d['follows_judge'], d['hit_records'], d['priority_record'], d['hits'])
+               for d in run['hit_window_detail']], [(0, 123, 1, 0, 0)], src)
         check('Milady running R1 max_hits / sweep_hits', (run['max_hits'], run['sweep_hits']),
-              (2, 1), src)
+              (1, 1), src)
         check('Milady running R1 sweep hit is judge 123',
               [o['judge'] for o in run['other_hitboxes'] if o['sweep_hit']]
               + [judge for d in run['hit_window_detail'] if d['sweep_hit']
                  for judge in (run['judge'],)], [123], src)
+
+    # Hit priority records (bd er-effects-rs-dnok, the `HIT_RECORD` block).
+    src = 'hit priority record rule (FUN_14051b210 / FUN_14051b870, 1.16.2), synthetic attacks'
+    check('one record: the first to touch lands, an equal or higher priority later lands nothing',
+          shared_landings([(0.1, 0, 0, 0), (0.2, 0, 0, 1), (0.3, 0, 1, 2)]), [True, False, False], src)
+    check('a later attack with a strictly lower priority re-opens the record and lands',
+          shared_landings([(0.1, 0, 1, 0), (0.2, 0, 1, 1), (0.3, 0, 0, 2), (0.4, 0, 0, 3)]),
+          [True, False, True, False], src)
+    check('one frame, equal priority: the attack created first lands; another record and no record land',
+          shared_landings([(0.1, 0, 0, 0), (0.1, 0, 0, 1), (0.1, 1, 0, 2), (0.1, None, None, 3)]),
+          [True, False, True, True],
+          src + '; FUN_140525ef0 head-inserts, FUN_140527d40 reverses the list each pass')
+    check('one launch is one attack: its rows (copies, children) all land once one holds the entry, '
+          'another launch at the same priority lands nothing, and a launch refused before stays refused',
+          shared_landings([(0.1, 0, 1, 5), (0.2, 0, 1, 6), (0.3, 0, 1, 5), (0.4, 0, 1, 5), (0.5, 0, 1, 6)]),
+          [True, False, True, True, False],
+          'FUN_14051b870 0x14051b8c9 (the entry id test); bullet id = BulletAttackInfo +0x658, copied '
+          'by FUN_14038b740 (1.16.2)')
+    check('a lower-priority swing re-opens a launch\'s record, and the launch\'s later rows land nothing',
+          shared_landings([(0.1, 0, 1, 5), (0.2, 0, 0, 7), (0.3, 0, 1, 5)]), [True, True, False],
+          'FUN_14051b210 replaces the entry id with the swing\'s (-1), 1.16.2')
+    ent = {}
+    check('record_contact keeps one victim\'s entries between calls',
+          [record_contact(ent, 'r', 0, 1), record_contact(ent, 'r', 0, 2), record_contact(ent, 'r', 0, 1),
+           ent['r']], [True, False, True, [0, 1, True]], src)
+    ev = collections.namedtuple('Ev', 'type start end params')
+    f = 1 / TAE_FPS
+    rec_ev = [ev(TAE_HIT_PRIORITY_RECORD, 10 * f, 20 * f, bytes([1] + [0] * 31)),
+              ev(TAE_HIT_PRIORITY_RECORD, 10 * f, 30 * f, bytes(32))]
+    recs = priority_records(rec_ev)
+    swing = bytearray(32)
+    swing[0xc] = 0xff
+    bullet = bytearray(32)
+    bullet[0x10] = 1
+    check('a swing with priority -1 takes no record; at 0 it takes slot 0; a slot-1 bullet slot 1',
+          (event_record(ev(TAE_ATTACK_BEHAVIOR, 12 * f, 15 * f, bytes(swing)), recs),
+           event_record(ev(TAE_ATTACK_BEHAVIOR, 25 * f, 28 * f, bytes(32)), recs),
+           event_record(ev(TAE_BULLET_BEHAVIOR, 12 * f, 13 * f, bytes(bullet)), recs),
+           event_record(ev(TAE_BULLET_BEHAVIOR, 21 * f, 22 * f, bytes(bullet)), recs)),
+          ((None, -1), (1, 0), (0, 0), (None, 0)), src)
+    check('below content version 0x25 every slot is 0', [r[0] for r in priority_records(rec_ev, 0x24)],
+          [0, 0], 'FUN_1404298d0 (1.16.2)')
+    versions = {tae_content_version(int(os.path.basename(p)[1:-4]))
+                for p in glob.glob(os.path.join(PLAYER_TAE_DIR, 'a*.tae')) if os.path.basename(p)[1:-4].isdigit()}
+    if versions:
+        check('every player TAE carries content version 0x25 (the slot bytes are read)', versions, {0x25},
+              'TAE header byte 0x30, FD4::TaeFileResolver::Resolve (1.16.2)')
+    if tae_animations(55) is None:
+        skips.append('Dryleaf Arts L1 #2: a55 absent')
+    else:
+        src = 'TAE a055_034010 (two 341 records, f11-14 and f19-22, priority 0)'
+        d = tae_details(reg, reg.find_weapon('Dryleaf Arts'), 34010, 810, category=55)
+        check('Dryleaf Arts powerstance L1 #2: both fists of each strike share one record, so 2 hits, '
+              'not 4, and the fist created first lands (810, then 815)',
+              (d['max_hits'], d['sweep_hits'], [x['hits'] for x in d['hit_window_detail']],
+               [o['judge'] for o in d['other_hitboxes'] if o['hits']]),
+              (2, 2, [1], [815]), src)
+    if tae_animations(26) is None:
+        skips.append('Greatsword L1 #1: a26 absent')
+    else:
+        src = 'TAE a026_034000 (341 f23-30: judge 805 priority 1 at f23, judge 800 priority 0 at f27)'
+        d = tae_details(reg, reg.find_weapon('Greatsword'), 34000, 800, category=26)
+        check('Greatsword powerstance L1 #1: judge 800 re-opens the record judge 805 holds (0 below 1)',
+              (d['max_hits'], [(o['judge'], o['hits']) for o in d['other_hitboxes']],
+               [x['hits'] for x in d['hit_window_detail']]), (2, [(805, 1)], [1]), src)
 
     for line in passes:
         print('PASS', line)

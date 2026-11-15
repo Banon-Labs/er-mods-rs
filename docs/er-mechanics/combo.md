@@ -919,6 +919,35 @@ Full re-rank under the default (`--rl 150 --one-handed --setup --setup-lefts all
   right, hatchet 0.008 -> -0.007; per pair 0.015 -> 0.014; within right (21) 0.061 -> 0.061.
   Still no agreement with what the corpus pairs.
 
+### The six leading setups under the hit priority records (MEASURED 2026-11-10)
+
+Dane's Footwork and Dryleaf Arts throw both fists on most strikes, and both fists of a strike sit
+in one TAE 341 hit priority record, so one of them lands (bd er-effects-rs-dnok, attacks.md). Not
+the whole 411-row run: the six rows above only, `er-builds-pvp.py --rl 150 --one-handed --setup
+--setup-lefts "Hand Axe,Iron Cleaver" --weapon "Dane's Footwork,Dryleaf Arts,Banished Knight's
+Halberd,Halberd,Milady,Nightrider Flail" --json --jobs 2 --sweep
+~/.cache/er-build-planner/grease-sweep-dlc-drawstring-150-200.jsonl --opponents-from <that tree's
+full RL 150 ranking>`, once on the main tree's code and once with the records (the only
+difference). The opponents come from a full `--sort score` ranking of the same tree, where the
+2026-10-01 run took them from its own one-handed setup rows, so the absolute scores are not that
+table's; the code between the two dates also raised every row.
+
+| # | without the records | score | with them | score |
+|---|---|---|---|---|
+| 1 | Dane's Footwork + Hand Axe Keen / Royal Knight's Resolve | 936.0 | Banished Knight's Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 934.1 |
+| 2 | Banished Knight's Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 934.1 | Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 932.9 |
+| 3 | Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 932.9 | Milady + Hand Axe Keen / Royal Knight's Resolve | 885.2 |
+| 4 | Milady + Hand Axe Keen / Royal Knight's Resolve | 885.2 | Nightrider Flail + Hand Axe Keen / Royal Knight's Resolve | 724.1 |
+| 5 | Dryleaf Arts + Hand Axe Keen / Royal Knight's Resolve | 854.1 | Dane's Footwork + Hand Axe Keen / Royal Knight's Resolve | 584.5 |
+| 6 | Nightrider Flail + Hand Axe Keen / Royal Knight's Resolve | 724.1 | Dryleaf Arts + Hand Axe Keen / Royal Knight's Resolve | 552.7 |
+
+- Without the records the order is the 2026-10-01 table's. With them only the two fist weapons
+  move: Dane's Footwork's no-left moveset 684.8 -> 388.8 and Dryleaf Arts' 628.8 -> 371.0, and
+  the same left and buff are kept. Milady holds 885.2: its shared records cut only `max_hits`,
+  never a hit `sweep_hits` counts (the cut hits are judges taking over another judge's index,
+  which the ranking already left out).
+- Where they now fall among the other 405 rows was not run.
+
 The flag stays off by default.
 
 ## 12. The hit-to-reaction delay (static RE, 1.16.2, 2026-09-30)

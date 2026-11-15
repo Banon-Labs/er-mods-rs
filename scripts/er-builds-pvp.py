@@ -687,7 +687,8 @@ class Mechanics:
                "tae_entry": ci["tae_entry"], "cancel_frame": option.get("cancel_frame") or {}}
         hit = {"next": option.get("next"), "roll": option.get("roll"), "dmg": option.get("dmg")}
         try:
-            st = EXCH.slot_stamina(self.pool, self.reg, base_id, atk, hit)
+            st = EXCH.slot_stamina(self.pool, self.reg, base_id, atk, hit,
+                                   regen_add=getattr(self, "regen_add", 0.0) + EXCH.weapon_regen_add(base_id))
         except (KeyError, TypeError, ValueError, FileNotFoundError, OSError):
             st = {"f_stamina": 1.0}
         return {**ex, **st, "factor": ex["f_exchange"] * st["f_stamina"], "poise": ci["poise"], "hyper": ci["hyper"]}
@@ -2254,6 +2255,11 @@ def main() -> int:
     talismans = [n.strip() for n in (a.talismans or "").split(",") if n.strip()]
     if a.spear_talisman and talismans and "Spear Talisman" not in talismans:
         talismans.append("Spear Talisman")
+    # The attacker's stamina regeneration add: his `--talismans` (`EXCH.stamina_regen_add`), plus the
+    # scored weapon's own (`EXCH.weapon_regen_add`, at each call). The sweep rows name no talisman, so
+    # a line without the flag regenerates 45/s unless the weapon it holds adds to it.
+    regen_add = EXCH.stamina_regen_add(talismans)
+    mech.regen_add = regen_add
     gtab = GUARD.Tables()
     gbuilds = GUARD.blocker_corpus(a.mirror, a.rl - a.window, a.rl + a.window)
     blockers = GUARD.Blockers(gtab, gbuilds, curve=defense_curve)
@@ -2404,7 +2410,8 @@ def main() -> int:
                           "crit_hp": crit["crit_hp"] if crit else 0.0,
                           "parry_hp": crit["parry_hp"] if crit else 0.0, "f_weight": f_weight}
             if pool is not None:
-                slots[key]["exchange"] = EXCH.slot_exchange(pool, reg, base_id, atk, slots[key], entry_frames(key))
+                slots[key]["exchange"] = EXCH.slot_exchange(pool, reg, base_id, atk, slots[key], entry_frames(key),
+                                                            regen_add=regen_add + EXCH.weapon_regen_add(base_id))
                 if mech.npool is not None and (slots[key]["exchange"] or {}).get("strike_frame") is not None:
                     # A rolling or backstep attack keeps its neutral exchange (no strike frame).
                     held = {}

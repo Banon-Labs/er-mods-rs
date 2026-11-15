@@ -704,7 +704,8 @@ Settled 2026-10-01 (guard dig, powerstance-guard.md section 3):
   section used to name, is the poise value (`FUN_14068ad90`, read by `ApplySuperArmorDamage`).
 - **Guard regen.** Every `GuardOn`/`GuardStart` clip sets TAE 225 `SetSPRegenRatePercent` to 20
   for its whole length, so a raised guard regenerates 20% of the normal rate, turtle-talisman adds
-  included, and 0% through a guard reaction's first 10/27/49 frames.
+  included, and nothing through a guard reaction until the guard comes back, f16/f32/f53
+  (powerstance-guard.md section 7, 2026-11-13; this line said the TAE 0% spans, f10/27/49).
 
 Still open:
 

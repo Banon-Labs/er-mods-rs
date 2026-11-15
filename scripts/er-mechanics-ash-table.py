@@ -268,6 +268,51 @@ def _buffs_mod():
     return _sibling("er_mechanics_buffs", "er-mechanics-buffs.py")
 
 
+def _self_mod():
+    return _sibling("er_mechanics_self_damage", "er-mechanics-self-damage.py")
+
+
+def apply_hp_cost(x, hp, max_hp=None, rows=(), unpriced=()):
+    """Charge the HP a cast takes from its own user (`er-mechanics-self-damage.skill_cost`, `hp` at
+    `max_hp`) against a cast-relative row: off the cast's damage per second over `last` (`dps`),
+    off the string's over its `end` when it has one, and so off `score`, whichever clock it is
+    read on. `dmg` and the string's `dmg` stay what the cast delivers. The game takes it at the
+    TimeAct event that applies the row, whether or not the cast hits (`VERIFIED`,
+    er-mechanics-self-damage module docstring), so every cast pays it. A row already carrying
+    `hp_cost` is left alone; a cast that takes nothing gets none. Applied before `apply_buff`."""
+    if "hp_cost" in x or (not hp and not unpriced):
+        return x
+    on_string = string_scored(x)
+    st = x.get("string")
+    cast_rate = hp / (x["last"] / FPS) if x.get("last") else float(hp)
+    string_rate = (hp / (st["end"] / FPS) if st.get("end") else float(hp)) if st else 0.0
+    x["dps"] = round(x["dps"] - cast_rate)
+    if st:
+        x["string"] = dict(st, dps=round(st["dps"] - string_rate))
+    x["score"] = x["string"]["dps"] if on_string else round(x["score"] - cast_rate)
+    x["hp_cost"] = {"hp": round(float(hp), 1), "max_hp": max_hp, "rows": list(rows), "unpriced": list(unpriced),
+                    "cast_rate": round(cast_rate, 3), "string_rate": round(string_rate, 3)}
+    return x
+
+
+def unapply_hp_cost(x):
+    """Take `apply_hp_cost` back out of a row, for a caller that prices the cost itself
+    (`er-mechanics-combo-loadout.set_self_costs`, at its build's max HP). A buff's `share` is
+    re-read against the restored `score`. Rounded figures can come back 1 off."""
+    c = x.pop("hp_cost", None)
+    if not c:
+        return x
+    on_string = bool(x["cat"] != "utility" and x.get("quick") and x.get("string") and x["score"] == x["string"]["dps"])
+    x["dps"] = round(x["dps"] + c["cast_rate"])
+    if x.get("string"):
+        x["string"] = dict(x["string"], dps=round(x["string"]["dps"] + c["string_rate"]))
+    x["score"] = x["string"]["dps"] if on_string else round(x["score"] + c["cast_rate"])
+    b = x.get("buff")
+    if b and b.get("rate"):
+        b["share"] = round(b["rate"] / x["score"], 4) if x["score"] else 0.0
+    return x
+
+
 def string_scored(x):
     """True when the row's `score` is its string's damage per second (a quick weapon's damaging
     ash), so its clock ends at the string's last roll cancel instead of at `last`."""
@@ -403,6 +448,22 @@ class Table:
         #: `hits` [(frame, poise dealt, HP)] and `windows` as `er-mechanics-ash-interrupt.simulate`
         #: takes them; None compares raw HP (`special_string`).
         self.chain_net = None
+        #: The caster's max HP a cast's own HP cost is a share of (`apply_hp_cost`). The table's
+        #: stats carry no VIG, so it defaults to `TARGET_HP`, the 60 VIG RL150 player the table's
+        #: status values are read against (`INFERRED`: a mirror of that player);
+        #: `er-mechanics-ash-stats.Conflict.table_rows` sets each spread's own.
+        self.max_hp = float(TARGET_HP)
+        #: False leaves the HP cost out (the selftest's plain rows).
+        self.price_hp = True
+
+    def hp_cost(self, sid, two, stance):
+        """(HP, cost rows, unpriced) one cast of skill `sid` takes from its user at `max_hp`
+        (`er-mechanics-self-damage.skill_cost`, its paid-for animation on this weapon and grip)."""
+        if not self.price_hp:
+            return 0.0, [], []
+        SD = _self_mod()
+        c = SD.skill_cost(self.t, sid, self.wid, self.level, two, stance)
+        return SD.cost_at(c, self.max_hp), [r["id"] for r in c["rows"]], [u["why"] for u in c["unpriced"]]
 
     def set_weapon(self, weapon, affinity=None):
         self.weapon = weapon
@@ -1039,7 +1100,10 @@ class Table:
         return {"start": A.lead_in_ha_start(p, e["frames"][0] + lead) if lead else e["frames"][0],
                 "end": max(h["frames"][1] for h in ha) + lead, "poise": round(poise)}
 
-    def rows(self, grips):
+    def rows(self, grips, only=None):
+        """The table's rows for this weapon, affinity and stats; `only` (SwordArtsParam ids)
+        scores just those skills, which `er-mechanics-ash-stats.py --conflict` uses to re-score
+        one ash at other stats."""
         out = []
         for two in grips:
             need = OPT.requirements(self.art, self.weapon, self.affinity, self.level, two)
@@ -1053,6 +1117,8 @@ class Table:
             # unique and unobtainable rules are about mounting a gem onto some other weapon.
             fixed = self.fixed_skill()
             for sid in A.mountable_skills(self.t, self.wid, AR.AFFINITIES.index(self.affinity), self.level):
+                if only is not None and sid not in only:
+                    continue
                 name = self.t.arts_name(sid)
                 if name in self.blacklist or (not fixed and (self.classes.get(sid, 0) < 2
                                                              or sid not in self.obtainable)):
@@ -1102,6 +1168,9 @@ class Table:
                                     **A.stance_row(prof)})
                         if lead:
                             out[-1]["lead"] = lead
+                        # What the cast takes from its user (Seppuku, Assassin's Gambit).
+                        hp, ids, why = self.hp_cost(sid, two, stance)
+                        apply_hp_cost(out[-1], hp, self.max_hp, ids, why)
                         # A buff adds what it buffs on this carrier (`BUFF_MODEL`).
                         if not step:
                             apply_buff(out[-1], self.buff_gain(sid, prof, two, ctx, *buff_hits(out[-1], slots)))
@@ -1168,6 +1237,9 @@ class Table:
                                 **A.stance_row(prof)})
                     if lead:
                         out[-1]["lead"] = lead
+                    # What the cast takes from its user (Bloody Slash, Blood Blade), off its clock.
+                    hp, ids, why = self.hp_cost(sid, two, stance)
+                    apply_hp_cost(out[-1], hp, self.max_hp, ids, why)
                     # A damaging ash that also buffs its user (Cragblade) adds what the buff adds to
                     # the hits after the cast (`BUFF_MODEL`).
                     bh = buff_hits(out[-1], slots)
@@ -1359,7 +1431,42 @@ def selftest() -> int:
     check("Unsheathe sweep rows: one per button, each with its own lead-in and first hit (8 + 13 / 6 + 15)",
           sorted((x.get("variant"), (x.get("stance"), x.get("lead"), x["first"]) == want.get(x.get("variant")))
                  for x in un), [(v, True) for v in sorted(want)])
+    hp_cost_selftest(tab, check)
     return 1 if fails else 0
+
+
+def hp_cost_selftest(tab, check):
+    """`apply_hp_cost` on a made-up row, then Bloody Slash and a no-cost ash on Keen Uchigatana."""
+    x = {"cat": "non-bullet", "quick": False, "string": None, "dmg": 600, "dps": 300, "score": 300, "last": 60.0}
+    apply_hp_cost(x, 150.0, 2000.0, [1763])
+    check("apply_hp_cost: 150 HP off a 2 s cast clock is 75 a second off dps and score, dmg kept",
+          (x["dps"], x["score"], x["dmg"], x["hp_cost"]["hp"]), (225, 225, 600, 150.0))
+    unapply_hp_cost(x)
+    check("unapply_hp_cost: the row is back to its plain clock", (x["dps"], x["score"], "hp_cost" in x), (300, 300, False))
+    q = {"cat": "non-bullet", "quick": True, "dmg": 300, "dps": 300, "score": 400, "last": 30.0,
+         "string": {"dps": 400, "r1s": 2, "dmg": 1200, "end": 90.0}}
+    apply_hp_cost(q, 150.0, 2000.0)
+    check("apply_hp_cost: a string-scored row pays on the string's 3 s clock",
+          (q["score"], q["string"]["dps"], q["dps"]), (350, 350, 150))
+    n = {"cat": "non-bullet", "quick": False, "string": None, "dmg": 600, "dps": 300, "score": 300, "last": 60.0}
+    check("apply_hp_cost: a cast that takes nothing is unchanged", apply_hp_cost(n, 0.0, 2000.0), dict(n))
+    tab.set_weapon("Uchigatana", "Keen")
+    keep = tab.blacklist
+    tab.blacklist = {tab.t.arts_name(s) for s in tab.t.arts} - {"Bloody Slash", "Double Slash"}
+    tab.max_hp = 2000.0
+    priced = {x["ash"]: x for x in tab.rows([False])}
+    tab.price_hp = False
+    plain = {x["ash"]: x for x in tab.rows([False])}
+    tab.price_hp, tab.blacklist, tab.max_hp = True, keep, float(TARGET_HP)
+    bs, bs0 = priced.get("Bloody Slash"), plain.get("Bloody Slash")
+    clock = (bs["string"]["end"] if string_scored(bs0) else bs["last"]) / FPS if bs else 1.0
+    check("Bloody Slash at 2000 max HP costs 5% + 50 = 150 HP (1763 at f15)",
+          (bs or {}).get("hp_cost", {}).get("hp"), 150.0)
+    check("Bloody Slash's score falls by its 150 HP over its own clock (within the row's rounding)",
+          bool(bs) and abs((bs0["score"] - bs["score"]) - 150.0 / clock) <= 1.0, True)
+    ds, ds0 = priced.get("Double Slash"), plain.get("Double Slash")
+    check("Double Slash, which takes no HP, is unchanged", (ds or {}).get("score") == (ds0 or {}).get("score")
+          and "hp_cost" not in (ds or {}) and ds is not None, True)
 
 
 def buff_selftest(check):

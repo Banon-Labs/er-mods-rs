@@ -44,11 +44,17 @@ known for a sweep build, so it is drawn from the same corpus poise distribution.
 `f_startup * f_hyper == f_exchange`, so the score multiplies `f_exchange` once (or the two parts,
 never all three).
 
+A slot that holds its own guard up (TAE JumpTable 3, `guard_windows`: a thrusting shield's attacks
+from their hit frame on) blocks an opponent's hit that lands inside it (`exchange` `guard`,
+exchange.md section 2b): after my hit landed, mine stands unanswered (a win); before it, the guard
+reaction ends my attack and neither lands (`void`, 0 in `net`).
+
 Stamina (`stamina_budget`, exchange.md section 3): the share of the slot's time-limited damage
 rate that one stamina bar plus regeneration sustains over a fight window. The attacker repeats
 the slot from a full bar (corpus median `computed.maxStamina`), chaining at its commitment `T`
-while the bar allows and keeping enough to roll out afterwards; regeneration is 45/s
-(`VERIFIED`, `PlayerIns::GetStaminaRecoverySpeed`), scaled per frame by the animation's TAE 225
+while the bar allows and keeping enough to roll out afterwards; regeneration is 45/s plus his own
+regen items' `staminaRecoverChangeSpeed` (`VERIFIED`, `PlayerIns::GetStaminaRecoverySpeed`; the
+items he wears or holds, none by default: `regen_per_frame`), scaled per frame by the animation's TAE 225
 `SetSPRegenRatePercent` (`VERIFIED`: 0% over most of every attack clip, 20% while guarding):
 
     N(W)      = swings started inside the window W (the last one pro rata)
@@ -121,7 +127,23 @@ STAMINA_CLAMP = (0.8, 1.1)
 #: 0x40 is set. `PlayerIns::GetStaminaRecoverySpeed` 0x1406579b0 returns the float at 0x143b3ac20
 #: (45.0, its only reader) plus the SpEffect `staminaRecoverChangeSpeed` sum; NpcParam
 #: `staminaRecoverBaseVel` feeds only `EnemyIns::GetStaminaRecoverySpeed` 0x1404d0890, never a
-#: player. `VERIFIED`; that `FD4Time` counts seconds is `INFERRED`.
+#: player. `VERIFIED`. The `FD4Time` is seconds of game time (`VERIFIED` 1.16.2 named dump, each
+#: site byte-matched in 2.7.2.0, selftest): `FD4Time::SetScaled` 0x140188b80 is `rate x
+#: frameDelta.time` (`mulss xmm1, [r8+8]`), the tick's `frameDelta` is `ChrIns+0xb0`
+#: (slot-0x88 caller 0x1403f9434), which `WorldChrMan_ConstructUpdateList` 0x14051151a copies from
+#: its task's `FD4TaskData.delta_time`; `FD4TaskGroup::ExecuteTask` 0x1426d94ce builds that from
+#: the global `FD4TaskManager` 0x14265933d stores from `MainUpdate`'s `gameSpeed x taskDelta`
+#: (0x140deda87; `gameSpeed` 1.0, its only store the `CSFlipperImp` constructor); and
+#: `CSFlipperImp::UpdateFlipTiming` sets `lastFrameTime` = QPC ticks / `QueryPerformanceFrequency`
+#: (0x140e865d2) and `taskDelta` = the mean of the last 16 (x 0.0625, 0x140e867c1). Its third
+#: factor, `staminaRecoveryModifier` (`ChrIns+0xe8`), is 1.0 up to medium load, 0.8 at heavy
+#: (`GetWeightType` 3) and 0.7 overloaded (4) (`PlayerIns` update, store 0x140661a2d, `VERIFIED`);
+#: the lines this models are at medium roll, so it is 1.0 here. The SpEffect sum is the build's
+#: (`regen_per_frame`): its worn talismans' (`er-mechanics-talismans.stamina_regen_add`: Green Turtle
+#: 8, Two-Headed Turtle 10, `REGULATION`) where the caller names them (`slot_stamina` `regen_add`,
+#: `er-builds-pvp.py --talismans`), and the weapon he holds (`weapon_regen_add`: the Great Turtle
+#: Shell +3). A build with none of them regenerates 45/s: a regen item is a choice, never a default.
+#: A buff that adds one (Braggart's Roar +10, Flame, Grant Me Strength +5) is not applied.
 STAMINA_REGEN_PER_S = 45.0
 #: TAE event 225 `SetSPRegenRatePercent`: the inline case at 0x14042e991 of `ExecuteThreadOne`
 #: stores Args[0] into `ChrCtrlModifier+0x14` (`SPRegenRatePercent`), which
@@ -217,6 +239,34 @@ def hyper_windows(atk: dict, shift: float = 0.0) -> list[tuple]:
     windows, real frames, moved by `shift`."""
     return [(h["frames"][0] + shift, h["frames"][1] + shift, h["poise_bonus"] * POISE_MENU,
              h.get("pvp_poise_damage_taken") or 1.0) for h in atk.get("hyperarmor") or []]
+
+
+#: TAE event type 0 `ChrActionFlag` with Args[0] 3 raises the guard flag for its span, ArgB the guard
+#: judge (`VERIFIED`, powerstance-guard.md section 3); Args+0xe nonzero gates it on a SpEffect state.
+TAE_CHR_ACTION_FLAG, JUMP_TABLE_GUARD, JUMP_TABLE_STATE_GATE = 0, 3, 0xE
+_GUARD_MEMO: dict = {}
+
+
+def guard_windows(atk: dict, shift: float = 0.0) -> list[tuple]:
+    """[(start, end)] real frames, moved by `shift`, over which the slot's own clip holds its guard
+    up (TAE JumpTable 3, ungated): the thrusting shields' attacks (judge 461 / 471; R1 #1 f14-45
+    over its f13-16 hit), and among shield slots the running and backstep R1s' short windows before
+    their hit (`TAE`). [] when the clip has none or no TAE."""
+    key = atk.get("tae_entry")
+    if key not in _GUARD_MEMO:
+        out = []
+        if key:
+            cat, anim = (int(x) for x in key[1:].split("_"))
+            _, _, events = ATK.resolve_events(cat, anim)
+            real = ATK.clip_to_real(events) if events else None
+            for e in events or []:
+                p = bytes(e.params)
+                if (e.type != TAE_CHR_ACTION_FLAG or len(p) < 16 or int.from_bytes(p[0:4], "little", signed=True)
+                        != JUMP_TABLE_GUARD or int.from_bytes(p[JUMP_TABLE_STATE_GATE:JUMP_TABLE_STATE_GATE + 2], "little")):
+                    continue
+                out.append((real(e.start) * ATK.TAE_FPS, real(e.end) * ATK.TAE_FPS))
+        _GUARD_MEMO[key] = sorted(out)
+    return [(s + shift, e + shift) for s, e in _GUARD_MEMO[key]]
 
 
 def first_hit(atk: dict) -> float | None:
@@ -531,43 +581,65 @@ def _window_at(windows, frame):
 # --------------------------------------------------------------------------------------------
 # one slot
 
-def priced_net(pool, win_b, loss_b, dmg: float) -> float:
+def priced_net(pool, win_b, loss_b, dmg: float, void_b=0.0) -> float:
     """The contest's net with trades priced by damage (exchange.md section 2a): per entry k,
     `hp_k = (win_k + trade_k) x dmg - (loss_k + trade_k) x D_k` over the pair's mean hit
     `(dmg + D_k) / 2`, then the pool mean. Equal hits give `win - loss` exactly; a trade is worth
     what my hit outdamages theirs by.
 
     A loss also pays his follow-up out of the stagger it put me in: `loss_k x follow_k x D_k`
-    (`Pool.follow`, `follow_up`: being broken costs what he can do with it, user 2026-10-19)."""
+    (`Pool.follow`, `follow_up`: being broken costs what he can do with it, user 2026-10-19).
+    `void_b`, where neither hit lands (his blocked by my guard, mine ended by its guard reaction,
+    `exchange` `guard`), is neither a trade nor anything else: 0."""
     d_k = pool.dmg[pool.build_prof]
     win_b, loss_b = np.asarray(win_b, float), np.asarray(loss_b, float)
-    trade_b = 1.0 - win_b - loss_b
+    trade_b = 1.0 - win_b - loss_b - np.asarray(void_b, float)
     follow = getattr(pool, "follow", None)
     f_k = np.asarray(follow, float)[pool.build_prof] if follow is not None else 0.0
     hp = (win_b + trade_b) * dmg - (loss_b + trade_b) * d_k - loss_b * f_k * d_k
     return pool.mean(hp / ((dmg + d_k) / 2.0))
 
 
-def contest_factor(pool, win_b, loss_b, dmg: float | None) -> tuple[float, float | None]:
+def contest_factor(pool, win_b, loss_b, dmg: float | None, void_b=0.0) -> tuple[float, float | None]:
     """(factor, priced net or None): `1 + EXCHANGE_WEIGHT x net`, the net priced and bounded by
     `pool.trade_clamp` when that is set and the attack's `dmg` is known, else `win - loss`."""
     clamp = getattr(pool, "trade_clamp", None)
     if clamp is None or not dmg:
         return 1.0 + EXCHANGE_WEIGHT * (pool.mean(win_b) - pool.mean(loss_b)), None
-    net = priced_net(pool, win_b, loss_b, float(dmg))
+    net = priced_net(pool, win_b, loss_b, float(dmg), void_b)
     return 1.0 + EXCHANGE_WEIGHT * max(-clamp, min(clamp, net)), net
 
 
 def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple], dmg: float | None = None,
-             invuln: float = 0.0) -> dict:
+             invuln: float = 0.0, guard: list[tuple] = (), guard_goes_on: bool = False) -> dict:
     """Outcome shares of the simultaneous exchange of one attack against the pool. `dmg` is the
     attack's own hit, read only when the pool prices trades (`Pool.trade_clamp`). `invuln`: frames
     from the exchange's start I am invincible for (a rolling attack's entry, `entry_iframes`); an
     opponent whose first hit lands inside them whiffs it, and my hit then lands unanswered
-    (`INFERRED`: the pool keeps only each attack's first hit, so a later hit of his is not tried)."""
+    (`INFERRED`: the pool keeps only each attack's first hit, so a later hit of his is not tried).
+
+    `guard`: [(start, end)] frames my attack holds its own guard up (`guard_windows`, TAE JumpTable
+    3; the user, 2026-11-13: "Thrusting shields can block and attack at the same time"). His hit
+    landing inside it is blocked: it breaks no poise and he lands only its guarded chip (taken as
+    nothing, `INFERRED`: the guard model passes a median 6% of a pool R1 through the Carian
+    Thrusting Shield, powerstance-guard.md section 3). Blocked after my hit landed, my hit stands
+    unanswered: a win, as a whiff is. Blocked before it, my attack ends in the guard reaction the
+    behavior script plays from an attack state (`guard_goes_on` False, every slot) and neither hit
+    lands (`void`), or goes on through it and lands unanswered (`guard_goes_on`, the two guard-poke
+    states; er-mechanics-spells `Guard`). One R1 never breaks the guard here: it takes at most 35
+    stamina of the pool's 146 bar through that shield (`MEASURED` 2026-11-13). His own guard is not
+    read (the pool keeps no guard windows)."""
     whiff = pool.startup < invuln       # per profile: his first hit falls in my i-frames
+    blocked = np.zeros(len(pool.startup), bool)
+    for gs, ge in guard or ():
+        blocked |= (gs <= pool.startup) & (pool.startup < ge)
+    blocked &= ~whiff
+    # Blocked after my hit, or before it in a state that goes on: my hit lands unanswered.
+    clear = blocked & ((pool.startup >= startup) | guard_goes_on)
+    void = blocked & ~clear
+    whiff = whiff | clear
     first = (pool.startup > startup) | whiff     # per profile: I hit first
-    second = (pool.startup < startup) & ~whiff
+    second = (pool.startup < startup) & ~whiff & ~void
     # I hit first at `startup`: the opponent's window at that frame decides.
     their = [_window_at(h, startup) for h in pool.hyper]
     their_bonus = np.array([b for b, _ in their])[pool.build_prof]
@@ -582,17 +654,21 @@ def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple],
     f_b, s_b = first[pool.build_prof], second[pool.build_prof]
     win_b = (f_b & breaks_them) | whiff[pool.build_prof]
     loss_b = np.where(s_b, p_break_me[pool.build_prof], 0.0)
+    void_b = void[pool.build_prof].astype(float)
     win, loss = pool.mean(win_b), pool.mean(loss_b)
     p_first, p_second = pool.mean(f_b), pool.mean(s_b)
-    trade = 1.0 - win - loss
+    v = pool.mean(void_b) if void.any() else 0.0
+    trade = 1.0 - win - loss - v
     net, naive = win - loss, p_first - p_second
-    f_ex, net_hp = contest_factor(pool, win_b, loss_b, dmg)
+    f_ex, net_hp = contest_factor(pool, win_b, loss_b, dmg, void_b if void.any() else 0.0)
     if net_hp is None:
         f_ex = 1.0 + EXCHANGE_WEIGHT * net
     f_st = 1.0 + EXCHANGE_WEIGHT * naive
     priced = {} if net_hp is None else {"net_hp": net_hp}
     return {"p_first": p_first, "p_second": p_second, "p_same": 1.0 - p_first - p_second,
             "win": win, "loss": loss, "trade": trade, "net": net, **priced,
+            # His hits my guard blocked, and of them those where neither hit lands.
+            "blocked": pool.mean(blocked[pool.build_prof]) if blocked.any() else 0.0, "void": v,
             # Of the exchanges the opponent strikes first, the share I keep swinging through.
             "trade_through": (1.0 - loss / p_second) if p_second else None,
             # Of the exchanges I strike first, the share my hit interrupts.
@@ -614,6 +690,47 @@ def stamina_factor_swings(pool: Pool, cost: float) -> dict:
 
 REGEN_PER_FRAME = STAMINA_REGEN_PER_S / 30.0    # real frames are 1/30 s (`ATK.TAE_FPS`)
 _REGEN_MEMO: dict = {}
+_TALISMANS: list = []
+
+
+def regen_per_frame(add: float = 0.0) -> float:
+    """Stamina a real frame regenerates at 100%: `GetStaminaRecoverySpeed` = 45 + the build's SpEffect
+    `staminaRecoverChangeSpeed` sum `add`, per second, over 30 frames (`STAMINA_REGEN_PER_S`)."""
+    return (STAMINA_REGEN_PER_S + add) / 30.0
+
+
+def _talismans():
+    if not _TALISMANS:
+        _TALISMANS.extend([_sibling("er-mechanics-talismans"), None])
+    return _TALISMANS[0]
+
+
+def stamina_regen_add(talismans) -> float:
+    """`er-mechanics-talismans.stamina_regen_add` of the worn `talismans` (names), 0.0 for none. The
+    talisman tables are read once, on the first call that names one."""
+    names = [n for n in talismans or () if n]
+    if not names:
+        return 0.0
+    tm = _talismans()
+    if _TALISMANS[1] is None:
+        _TALISMANS[1] = tm.Talismans()
+    return tm.stamina_regen_add(_TALISMANS[1], names)
+
+
+def weapon_regen_add(weapon_id: int | None) -> float:
+    """The `staminaRecoverChangeSpeed` weapon `weapon_id` adds while held, from its resident
+    SpEffects (`er-mechanics-talismans.equipment_regen_adds`: the Great Turtle Shell +3, `REGULATION`);
+    0.0 for every other weapon. The attacker's own weapon carries it into his budget; nothing else
+    is added to a build that does not hold or wear it.
+
+    "Held" means the weapon is in the selected slot of either hand, whatever the grip. This is
+    `VERIFIED` on 2.7.2.0: `WepSpEffectEquipCtrl` reads ChrAsm special indices -2 and -1 through
+    `ChrAsm::GetBySpecialIndex` 0x1403be440, which never reads the arm style. A shield on the back
+    while the right weapon is two-handed still counts, and the other two slots of a hand never do
+    (`er-mechanics-powerstance-guard.weapon_regen_add` has the addresses)."""
+    if weapon_id is None:
+        return 0.0
+    return _talismans().equipment_regen_adds()["weapon"].get(weapon_id, 0.0)
 
 
 def regen_windows(atk: dict) -> list[tuple] | None:
@@ -660,21 +777,29 @@ class RegenProfile:
     """Regeneration percent against time since a swing started: 0 over the entry and the R2
     charge lead-in (`INFERRED` for crouch and running entries; the roll and backstep clips set
     0% for 30 and 26 clip frames, `VERIFIED` in a000), then the slot clip's TAE 225 windows, and
-    100% once the attacker walks off at the move-cancel frame. A slot with no TAE is taken to
-    block regeneration until it can move (`INFERRED`)."""
+    100% once the attacker walks off at the move-cancel frame. A slot whose clip the TAE does not
+    hold (`windows` None) regenerates as the game regenerates through a clip with no TAE 225
+    event: 100% after the entry. `ChrCtrlModifierData::Reset` writes 100 every frame and only a
+    running 225 event lowers it (`TAE_SP_REGEN`, `VERIFIED`); HKS `act(110)`, the one other stop,
+    is called only by `AddStamina`, the six `GuardDamage*` updates, `SpeedUpdate` and
+    `RideMoveStaminaConsume` (`er-hks-disasm.py --calls-to act` on c0000.hks), no attack state.
+    Until 2026-11-13 such a slot was held at 0% until it could move (`INFERRED`, not what the
+    game does). No scored slot reaches the branch: the 478 of 15,210 weapon rows with no clip are
+    throwables, bows' R1 / R2 rows and the staves' and seals' jump R1, none with both a stamina
+    cost and a commitment, so `slot_stamina` builds no profile for them (`MEASURED` 2026-11-13).
+    `per_frame` is the build's rate at 100% (`regen_per_frame`: 45/s plus its talismans' adds)."""
 
-    def __init__(self, windows, pre: float, move: float | None):
+    def __init__(self, windows, pre: float, move: float | None, per_frame: float = REGEN_PER_FRAME):
         self.pre = pre
         self.move = move
-        self.windows = [(s + pre, e + pre, p) for s, e, p in windows] if windows is not None else None
+        self.per_frame = per_frame
+        self.windows = [(s + pre, e + pre, p) for s, e, p in windows or ()]
 
     def pct(self, t: float, walked: bool) -> float:
         if t < self.pre:
             return 0.0
         if walked and self.move is not None and t >= self.move:
             return 100.0
-        if self.windows is None:
-            return 0.0 if self.move is None or t < self.move else 100.0
         got = 100.0
         for s, e, p in self.windows:
             if s <= t < e:
@@ -691,7 +816,7 @@ class RegenProfile:
         """Stamina regenerated between t0 and t1 frames after the swing started."""
         total, x = 0.0, t0
         for b in [c for c in self.cuts() if t0 < c < t1] + [t1]:
-            total += (b - x) * REGEN_PER_FRAME * self.pct((x + b) / 2, walked) / 100.0
+            total += (b - x) * self.per_frame * self.pct((x + b) / 2, walked) / 100.0
             x = b
         return total
 
@@ -701,7 +826,7 @@ class RegenProfile:
             return 0.0
         x = t0
         for b in [c for c in self.cuts() if c > t0] + [float("inf")]:
-            rate = REGEN_PER_FRAME * self.pct(x if b == float("inf") else (x + b) / 2, True) / 100.0
+            rate = self.per_frame * self.pct(x if b == float("inf") else (x + b) / 2, True) / 100.0
             if rate > 0 and (b == float("inf") or (b - x) * rate >= amount):
                 return x + amount / rate - t0
             amount -= (b - x) * rate if b != float("inf") else 0.0
@@ -757,10 +882,11 @@ def stamina_budget(bar: float, cost: float, commit: float, prof: RegenProfile,
 
 
 def slot_stamina(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: float = 0.0,
-                 window_s: float | None = None) -> dict:
+                 window_s: float | None = None, regen_add: float = 0.0) -> dict:
     """Stamina numbers of one slot: its cost (the entry's included), commitment, when its clip
     lets regeneration run again, the budget over the window, and the retired swings-per-bar
-    factor beside it for comparison."""
+    factor beside it for comparison. `regen_add` is the attacker's SpEffect
+    `staminaRecoverChangeSpeed` sum (`stamina_regen_add` of his talismans), added to the 45/s base."""
     key = atk["slot"].removeprefix("2h_")
     cost = stamina_total(reg, weapon_id, atk) + ENTRY_STAMINA.get(key, 0)
     commit = commit_frames(atk, hit, entry)
@@ -771,11 +897,11 @@ def slot_stamina(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: f
     move = (atk.get("cancel_frame") or {}).get("move")
     pre = entry + lead
     windows = regen_windows(atk)
-    prof = RegenProfile(windows, pre, None if move is None else move + pre)
+    prof = RegenProfile(windows, pre, None if move is None else move + pre, regen_per_frame(regen_add))
     b = stamina_budget(pool.bar, cost, commit, prof, FIGHT_WINDOW_S if window_s is None else window_s)
     regen_from = next((c for c in prof.cuts() if c >= pre and prof.pct(c + 1e-6, False) >= 100.0), None)
     out = {**old, "cost": cost, "commit": commit, "regen_blocked_until": regen_from,
-           "move_frame": prof.move, **b}
+           "move_frame": prof.move, "regen_add": regen_add, **b}
     dmg = hit.get("dmg")
     if dmg:
         out["dmg_per_stamina"] = dmg / cost
@@ -821,7 +947,8 @@ def _has_contact(fc: dict | None) -> bool:
     return fc.get(STRIKE_DISTANCE_M, fc.get(str(STRIKE_DISTANCE_M))) is not None
 
 
-def slot_exchange(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: float = 0.0) -> dict | None:
+def slot_exchange(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: float = 0.0,
+                  regen_add: float = 0.0) -> dict | None:
     """The three factors of one `er-builds-pvp` slot.
 
     `atk` is the `er-mechanics-attacks.weapon_attacks` row, `hit` the slot dict (`startup` with
@@ -832,15 +959,17 @@ def slot_exchange(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: 
     R1's 17.9; `INFERRED` that the exchange starts before the crouch or sprint). A rolling or
     backstep attack's entry also carries its i-frames (`entry_iframes`, TAE): an opponent's hit
     inside them whiffs (`exchange` `invuln`); the medium roll has 13, the backstep none. Its
-    stamina factor applies either way. None when the slot has no hit frame."""
+    stamina factor applies either way, its regeneration 45/s plus `regen_add` (the attacker's
+    talismans, `stamina_regen_add`). None when the slot has no hit frame."""
     if hit.get("startup") is None:
         return None
     lead = atk.get("release_lead_in") or 0.0
-    st = slot_stamina(pool, reg, weapon_id, atk, hit, entry)
+    st = slot_stamina(pool, reg, weapon_id, atk, hit, entry, regen_add=regen_add)
     inv = entry_iframes(atk["slot"]) if entry else 0.0
     delay = None if _has_contact(hit.get("front_contact")) else _fallback_delay(weapon_id, atk["slot"])
     start, source = strike_frame(hit, lead, delay)
-    ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry), hit.get("dmg"), inv)
+    ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry), hit.get("dmg"), inv,
+                  guard_windows(atk, lead + entry))
     ex["strike_frame"], ex["strike_source"], ex["entry_iframes"] = start + entry, source, inv
     return {**ex, **st, "factor": ex["f_exchange"] * st["f_stamina"]}
 
@@ -938,6 +1067,22 @@ def selftest() -> int:
           > b["f_stamina"], "a shorter 0% window sustains more")
     check(RegenProfile([(0.0, 60.0, 20.0)], 0.0, None).gain(0.0, 60.0, False) == 60 * 1.5 * 0.2,
           "a 20% window regenerates a fifth of the base rate")
+    # The build's own staminaRecoverChangeSpeed (Green Turtle +8): 53 a second at 100%, so the same
+    # budget's first walk-off wait is 30 + 21 x 30 / 53 frames instead of 30 + 21 / 1.5, and the
+    # window holds more swings.
+    turtle = RegenProfile([(0.0, 60.0, 0.0)], 0.0, 60.0, regen_per_frame(8.0))
+    bt = stamina_budget(100.0, 40.0, 30.0, turtle, 10.0)
+    check(abs(regen_per_frame(8.0) - 53.0 / 30.0) < 1e-12 and abs(turtle.gain(60.0, 120.0, True) - 106.0) < 1e-9
+          and abs(turtle.time_to_gain(30.0, 21.0) - (30.0 + 21.0 * 30.0 / 53.0)) < 1e-9 and bt["swings"] > b["swings"],
+          f"Green Turtle +8: 53/s at 100%, the wait for 21 stamina {turtle.time_to_gain(30.0, 21.0):.3f} frames, "
+          f"{b['swings']:.4f} -> {bt['swings']:.4f} swings in 10 s")
+    # The attacker's own weapon: only the Great Turtle Shell adds (+3); a Longsword or a Carian
+    # Thrusting Shield regenerates the base. Nothing is added without the item.
+    ids_ = weapon_ids()
+    check(weapon_regen_add(ids_["Great Turtle Shell"]) == 3.0 and weapon_regen_add(ids_["Longsword"]) == 0.0
+          and weapon_regen_add(ids_["Carian Thrusting Shield"]) == 0.0 and stamina_regen_add([]) == 0.0,
+          "the Great Turtle Shell held adds 3/s (SpEffect 5311400); a Longsword, a Carian Thrusting Shield and "
+          "no talisman add none")
 
     # The regeneration constants, byte for byte, in the installed build's image (2.7.2.0 VAs:
     # `GetStaminaRecoverySpeed` 0x1406579b0, the TAE 225 case of `ExecuteThreadOne` at 0x14042e9a3,
@@ -968,6 +1113,45 @@ def selftest() -> int:
             img[0x40E754 + img[0x40E80C + i] * 4:0x40E758 + img[0x40E80C + i] * 4], "little") == 0x14040D35C]
         check(case == [110] and img[0x40D36A:0x40D36E] == bytes.fromhex("83481840"),
               f"HksAct {case} (SetStaminaRecoveryDisabled) sets actionFlags bit 0x40")
+
+        # The tick's `FD4Time` is seconds of game time (`STAMINA_REGEN_PER_S`), each hop at its
+        # 2.7.2.0 address.
+        def at_(va, hexbytes):
+            return img[va - 0x140000000:va - 0x140000000 + len(hexbytes) // 2] == bytes.fromhex(hexbytes)
+
+        def rip(va, ilen, disp_at):
+            o = va - 0x140000000 + disp_at
+            return va + ilen + int.from_bytes(img[o:o + 4], "little", signed=True)
+
+        def f32(va):
+            return float(np.frombuffer(img[va - 0x140000000:va - 0x140000000 + 4], "<f4")[0])
+        check(at_(0x140401BAD, "e8") and rip(0x140401BAD, 5, 1) == 0x140188B80
+              and at_(0x140188B94, "f3410f594808f30f114908c3"),
+              "the regeneration tick scales its rate by FD4Time::SetScaled 0x140188b80: rate x [frameDelta+8]")
+        check(at_(0x1403F9434, "f30f1089b0000000") and at_(0x1403F946B, "ff9088000000")
+              and at_(0x14051151A, "f3410f104708") and at_(0x140511542, "f3410f1186b0000000"),
+              "the tick's frameDelta is ChrIns+0xb0, which ConstructUpdateList copies from FD4TaskData")
+        check(at_(0x14265933D, "f30f104708f30f1105") and at_(0x1426D94DA, "f30f1005")
+              and rip(0x142659342, 8, 4) == rip(0x1426D94DA, 8, 4),
+              "FD4TaskGroup::ExecuteTask's FD4TaskData time is the global FD4TaskManager stores per update")
+        check(at_(0x140DEDA87, "f30f10b0cc020000f30f59b068020000"),
+              "MainUpdate passes CSFlipper gameSpeed (+0x2cc) x taskDelta (+0x268) to the task manager")
+        check(at_(0x140E865D2, "4c8b4b284c2b4b20") and at_(0x140E8661A, "f30f5ec1")
+              and at_(0x140E86623, "f30f118364020000"),
+              "UpdateFlipTiming: lastFrameTime (+0x264) = QPC ticks / QueryPerformanceFrequency")
+        check(f32(rip(0x140E867C1, 8, 4)) == 0.0625 and at_(0x140E867C9, "f30f11b368020000"),
+              "UpdateFlipTiming: taskDelta (+0x268) = the sum of the last 16 frame times x 0.0625")
+        check([round(f32(rip(0x1406619F7 + 10 * k, 8, 4)), 6) for k in range(3)] == [1.0, 0.7, 0.8]
+              and at_(0x140661A2D, "f30f1186e8000000"),
+              "staminaRecoveryModifier (ChrIns+0xe8): 0.8 heavy, 0.7 overloaded, else 1.0 (0x140661a2d)")
+
+    # A slot whose clip the TAE does not hold regenerates as a clip with no TAE 225 event does:
+    # 0% over the entry, then 100% (`RegenProfile`).
+    nod = RegenProfile(None, 10.0, 40.0)
+    check(nod.pct(5.0, False) == 0.0 and nod.pct(20.0, False) == 100.0
+          and nod.gain(0.0, 40.0, False) == 30 * REGEN_PER_FRAME
+          and nod.gain(0.0, 40.0, False) == RegenProfile([], 10.0, 40.0).gain(0.0, 40.0, False),
+          "a slot with no TAE: 0% over its entry, 100% after it, as an empty TAE 225 list")
 
     reg = ATK.Regulation(None)
     ids = weapon_ids()
@@ -1047,6 +1231,23 @@ def selftest() -> int:
     ei = exchange(syn, 30.0, 100.0, [], invuln=12.0)
     check(abs(ei["win"] - 0.5) < 1e-9 and abs(ei["loss"] - 0.5) < 1e-9 and ei["p_first"] == 0.5,
           f"invuln 12: the f10 hit whiffs and is a win, the f20 hit still breaks me ({ei['win']}, {ei['loss']})")
+    # Synthetic: my own guard. A frame-15 hit that breaks nobody (poise 0) trades with both builds
+    # (the fast one's f10 hit, 60 poise, does not break 80 either). Guarded f14-45 (a thrusting
+    # shield R1's shape), the slow build's f20 hit is blocked after mine landed: a win. The f10 hit
+    # comes before the guard and still trades.
+    g0 = exchange(syn, 15.0, 0.0, [])
+    g1 = exchange(syn, 15.0, 0.0, [], guard=[(14.0, 45.0)])
+    check(abs(g0["trade"] - 1.0) < 1e-9 and abs(g1["win"] - 0.5) < 1e-9 and abs(g1["trade"] - 0.5) < 1e-9
+          and g1["loss"] == 0.0 and abs(g1["blocked"] - 0.5) < 1e-9 and g1["void"] == 0.0,
+          f"guard f14-45 on an f15 hit: the f20 hit is blocked after mine lands (trade {g0['trade']} -> win {g1['win']})")
+    # Guarded from f0 (the two-handed guard poke's f0-42): the f10 hit lands before my f15 hit; in a
+    # state that goes on through it my hit lands unanswered (a win), in one the guard reaction ends,
+    # neither lands (void), so the loss it was is gone either way.
+    g2 = exchange(syn, 15.0, 0.0, [], guard=[(0.0, 42.0)], guard_goes_on=True)
+    g3 = exchange(syn, 15.0, 0.0, [], guard=[(0.0, 42.0)])
+    check(abs(g2["win"] - 1.0) < 1e-9 and g2["loss"] == 0.0 and abs(g3["void"] - 0.5) < 1e-9
+          and abs(g3["win"] - 0.5) < 1e-9 and g3["loss"] == 0.0 and abs(g3["trade"]) < 1e-9,
+          f"guard f0-42: going on wins both ({g2['win']}), ended by the reaction the f10 hit is void ({g3['void']})")
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -1143,6 +1344,9 @@ def main() -> int:
     ap.add_argument("--pool", action="store_true", help="print the opponent pool")
     ap.add_argument("--weapon", help="print every slot of one weapon")
     ap.add_argument("--grip", choices=("one", "both"), default="both")
+    ap.add_argument("--talismans", default="",
+                    help="comma-separated talismans the attacker wears; their staminaRecoverChangeSpeed "
+                         "joins the 45/s regeneration (Green Turtle Talisman +8)")
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
@@ -1166,15 +1370,16 @@ def main() -> int:
         ids = weapon_ids()
         wid = ids[a.weapon]
         sa = SaRates()
+        add = stamina_regen_add([n.strip() for n in a.talismans.split(",") if n.strip()]) + weapon_regen_add(wid)
         print(f"\n{a.weapon} {a.grip}: exchange against the pool (win/trade/loss, P first, trade-through, "
-              f"factors)")
+              f"factors); stamina regeneration {STAMINA_REGEN_PER_S + add:g}/s")
         for atk in ATK.weapon_attacks(reg, wid, a.grip):
             t = first_hit(atk)
             if t is None:
                 continue
             hit = {"startup": t + (atk.get("release_lead_in") or 0.0),
                    "poise": atk["poise_damage"] * POISE_MENU * sa(atk["atk_row"])}
-            x = slot_exchange(pool, reg, wid, atk, hit)
+            x = slot_exchange(pool, reg, wid, atk, hit, regen_add=add)
             tt = "-" if x.get("trade_through") is None else f"{100 * x['trade_through']:.0f}%"
             print(f"  {atk['slot']:<16} first {hit['startup']:>5.1f}  poise {hit['poise']:>5.0f}  "
                   f"win {100 * x['win']:>3.0f}% trade {100 * x['trade']:>3.0f}% loss {100 * x['loss']:>3.0f}%  "

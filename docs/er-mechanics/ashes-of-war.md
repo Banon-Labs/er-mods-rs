@@ -6,7 +6,8 @@ named Ghidra dump on :8765, shift 0 against `eldenring-deobf.bin`) or a value in
 consistent with the data, consuming code not traced; **COMMUNITY** = outside claim (Smithbox row
 names, wiki); **MEASURED** = counted in the planner corpus. Nothing was launched.
 
-Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 97/97.
+Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 149/149
+(2026-11-10).
 
 ## 0. In plain words
 
@@ -163,7 +164,11 @@ not from the weapon (melee row with hitSourceType != 0, event without flag 8):
 - `k` in attacks.md is resolved: `FUN_140d53bf0` returns `ReinforceParamWeapon.baseAtkRate`
   (+0 1.0, +10 standard 2.2, +25 or somber +10 4.0), the same for every affinity.
 - Bullets: `0x14038e380` fills the bullet's attack from the firing hand's weapon and never sets
-  `attackNotFromWeapon`, so a bullet always takes the first branch. Skill bullet rows have MV 0
+  `attackNotFromWeapon` at build time. A sorcery, incantation or consumable bullet does get it, at
+  the hit: `FUN_14038e540` sets `BulletAttackInfo+0x198` for a spawn with a magic or goods id and
+  `FUN_1403960a0` copies it into `+0xf4`, so those take the flat branch (attack-rating.md section
+  4). A skill bullet (no magic or goods id) takes the first branch unless its spawn sets bit 2 of
+  `+0x44`; which spawns set that bit is not read. Skill bullet rows have MV 0
   and a flat value, so **a bullet's damage is flat x baseAtkRate x scaling, and the weapon's own
   attack rating does not enter**. Storm Stomp 30300870 is 50 physical, Hoarfrost 30300863 40
   magic, Ice Spear 300200075 230 magic, Flame of the Redmanes 30020930 180 fire.
@@ -934,17 +939,189 @@ into `slot_score`, the same columns a slot carries:
     shootAngleXInterval`. That positive elevation means up is INFERRED: Thunderbolt's 2081 at -90
     is the bolt coming down.
   - **Children.** A `HitBulletID` child is created when its parent hits or expires, at that point
-    (FUN_14039bba0), and only if the child's `launchConditionType` allows that ending: 0 and 3
-    always, 5 on a hit, 4 on expiry, 1 and 2 only on water. `EmittePosType` 2 starts 1.0 m higher
+    (FUN_14039bba0), and only if the gate allows that ending: 0 and 3 always, 5 on a hit, 4 on
+    expiry, 6 on a hit only, 1 and 2 only on water. On a hit the gate reads the parent's own
+    `launchConditionType`, on expiry the child's, or the parent's again when its
+    `attachEffectType` is 4 to 6 (FUN_14039da40 reads the state index +0x4a0, which `KillBullet`
+    moves to the explosion state first; FUN_140d34100; bd er-effects-rs-rggx, `launches`). A
+    parent that passes through characters makes no child on one (FUN_1403aba90). So Stars of
+    Ruin's first legs (4) make their second leg only when they expire. `EmittePosType` 2 starts 1.0 m higher
     and flies level (FUN_140390c20, constant .data 0x143b15b5c). An `intervalCreateBulletId`
     child starts at the parent's position when it spawns.
   - **Reach.** The farthest horizontal point any damaging bullet reaches, plus `max(hitRadius,
     hitRadiusMax)`.
-  - **Placement (INFERRED).** The root starts 1.0 m ahead and 1.0 m up (`BULLET_ORIGIN_M`,
-    `BULLET_ORIGIN_HEIGHT_M`). The launch dummy poly is not decoded.
+  - **Placement (`bullet_launch`, bd er-effects-rs-doax).** A root shot leaves the caster's
+    DummyPoly (VERIFIED: its base matrix is the live dummy-poly matrix, FUN_140391850 ->
+    FUN_1403f13c0). The bullet event (TAE 2) and the cast event (TAE 64) name it in their first int
+    (TAE: 9 on all four Swift Slash bursts). It is placed by the clip's pose at the event's clip
+    time, root motion and yaw included (MEASURED, er-hkx-pose): an id under 10000 that c0000.flver
+    carries rides its attach bone (the reach model's body-shape rule; Swift Slash's 9 is 0.23 m ahead
+    of the Pelvis), a 10xxx / 11xxx id is dummy xxx of the right / left weapon model on R_Weapon /
+    L_Weapon (the weapon-shape rule). Anything else, or a shield's skill (cast from the off hand,
+    which the skill model does not play, so the hand is not known), falls back to the root's
+    position at the event plus 1.0 m ahead (`BULLET_ORIGIN_M`, INFERRED placeholder). A follow-up
+    clip is placed from its own start, as its melee hits are.
+  - **Which model an id names (VERIFIED 2026-11-10, 1.16.2).** `PlayerIns::GetLocationMdlDmypolyModifier`
+    -> `CSChrAsmModelIns::GetDmyPoly` -> FUN_140b659a0: with t = (id / 1000) % 100, 0 is the body
+    model (c0000), 1-4 ChrAsm slots 2-5, 10-13 (and 30-33) slots 11-14, 20-23 slots 7-10, and with
+    `chrAsmArmStyle` 2 the 10-13 ids read the 20-23 slots; the dummy is id % 1000. That 10-13 are the
+    right-hand weapon's models and 20-23 the left hand's, model 1 of a dual blade its twin, is
+    INFERRED from that redirect and from AtkParam 600000071's 11120/11100 on a dual blade's left
+    blade. So Bear Witness! 040040's 20300 is the left-hand weapon's dummy 300: unknown for the
+    right-hand cast the model plays (placeholder), the Grafted Dragon's when it is in the left hand.
+  - **Which way it starts (VERIFIED, 1.16.2).** The event's orientation byte (TAE 2 Args byte 0xc,
+    `BulletBehavior` 0x140426e60; TAE 64 Args byte 5, FUN_140429db0) reaches FUN_1403f13c0 through
+    FUN_1403c0730 / FUN_1403c0320. Through FUN_1403fb5f0 (the branch a player takes, INFERRED: the
+    other two need the main player's `chrFlags1c5` bits or an event-entity check) byte 0 heads along
+    the character's physics orientation, level (a bow's aim angles when `IsBulletAimAngleSet`), and
+    any other byte along the dummy's own frame (FUN_1403f51a0: its matrix's third row). FUN_140390c20
+    then turns the shot toward the lock-on target in 3D within `lockShootLimitAng` (FUN_14038f120)
+    unless the byte is 1 (the aim point is the target's lock-on DummyPoly 220, 1.24 m up on an idle
+    player, plus `targetYOffsetRange`, decoded 2026-11-12; since round 4 of bd er-effects-rs-7bye
+    every flight of the model, the punish geometry's with the spell record counts', turns the whole
+    3D frame). Skill bullet events: 625 with 0, 76 with 2; spell casts: 696 with 0, 62
+    with 2 (the breaths, Comet Azur, Placidusax's Ruin), Dragonmaw's 1. A byte-2 shot leaves the dummy
+    itself, height and pitch included, along its posed forward axis; that the matrix's third row is
+    the FLVER dummy's forward vector (+0x10) carried by its bones is INFERRED (the FD4 location
+    modifier that builds the matrix was not read) and agrees with what the attacks do: the bow
+    skills' arrows leave within 5 degrees of the facing, Sky Shot's 80 degrees up, Light's eight
+    beams spread round the caster and down, Firebreather's 28 degrees aside and mirrored on its
+    other-side clip, the breaths within a few degrees of the facing. A byte-0 shot keeps the
+    placeholder height, 1.0 m above the root (`BULLET_ORIGIN_HEIGHT_M`, INFERRED): the 3D lock-on
+    turn would pitch it at the lock-on target's aim point, whose height is not decoded (the
+    lock-on bullet below), and from a raised hand a level shot passes over every defender
+    (Thunderbolt's DummyPoly 1 is 2.0 m up at its event, Glintblade Phalanx's 2.1 m). A byte-2 shot
+    flies its decoded pitch with no vertical turn, so where that turn would bring it down onto the
+    target the model under-credits it (Magma Breath's blob, `lockShootLimitAng` 35, now pitched
+    5.7 degrees up from 1.37 m, lands at 9.3 m instead of 7.1 m).
+  - **One shot per event (VERIFIED 2026-11-10, 1.16.2).** `BulletBehavior` keeps running on the
+    calls after an event's first when Args byte 0xd is 1 (91 skill bullet events: Bear Witness!'s
+    f49-80 breath, Firebreather, Dragonform Flame, Regal Roar, Light), but the shooter it calls,
+    FUN_1403c2d60, spawns only when the request's `firstExecution` byte (+0x10) is set; on the
+    later calls it skips the spawn and only calls `SetRendererVisibility(chr, 5)` (the same byte
+    0xd). The cast handler FUN_140429db0 runs on every call with no such return, and its shooter
+    FUN_1403c1450 has the same `firstExecution` gate. So each event fires its bullet once, at its
+    start, as modelled; my 2026-11-10 note that such events respawn every update was wrong.
+  - **Hit priority records (VERIFIED 1.16.2; modelled, bd er-effects-rs-dnok).**
+    - *Slots and windows.* TAE event 341 (FUN_1404298d0, run by `ExecuteThreadOne`) finds or
+      creates the `HitPriorityRecord` slot Args byte 0 of the caster's `ChrSlotSys` (0 below TAE
+      version 0x25) and gives it an entry: a fresh `DmgHitRecord` ("priorityRecord",
+      FUN_1404a47f0) with this frame's part of the event as its window (FUN_14049ad80 ->
+      FUN_1404a49c0). On the event's later frames FUN_1404a5090 finds the same entry, so one record
+      lives as long as the event runs without a gap; FUN_1404a4cb0 drops entries not refreshed.
+    - *Who takes it.* An attack looks up the record whose window covers its event time
+      (FUN_14049ad30 -> FUN_1404a4940) when its priority byte is not negative. A swing
+      (`AttackBehavior` -> FUN_1404428f0, and the goods and magic paths FUN_140442eb0 and
+      FUN_140443180) always uses slot 0 (`xor edx,edx` at 0x140442d61) with priority Args byte 0xc.
+      A skill bullet (`BulletBehavior` -> FUN_1403c2d60) uses slot Args byte 0x10, which is the low
+      byte of Args[4], with priority Args byte 0x12. A cast bullet (FUN_1403c1450) uses slot 0
+      (`xor edx,edx` at 0x1403c14fd). A bullet carries the record from spawn data +0xa0
+      (FUN_1403c10b0) through `BulletAttackInfo` +0x640 (FUN_14038e540) to bullet +0xaf0, and its
+      attack takes it at +0x288 (FUN_1405271a0 in FUN_1403960a0). A swing sets +0x288 through
+      FUN_140521970, and only while it is empty. The priority byte travels the same way into the
+      attack's +0x155. The debug overlay prints it as "damage priority", and it is copied into
+      every contact at +0x34 (FUN_140521c80).
+    - *What a hit does.* Each frame, DmgMan (FUN_140527c10) first registers every attack's contacts
+      in its record (FUN_140521bf0 -> FUN_14051b210). FUN_140521bf0 asks only that the attack
+      holds a record (+0x288), that the contact's priority is not negative, and that the victim
+      is a `Chr`: no team test, no damage test (bd er-effects-rs-xb3i). Per victim the record
+      keeps the first registrant at the lowest priority and that attack's id; a strictly lower
+      one replaces them and clears the landed flag (`jge` at 0x14051b304). Then DmgMan resolves
+      the contacts in the same list order (FUN_140522590 -> FUN_140523710 -> FUN_14051b870). The
+      entry's own id passes even after the flag is set (0x14051b8c9, when the id is not -1); any
+      other attack passes only while the flag is clear and its priority equals the entry's. A
+      pass sets the flag (FUN_14051b370, 0x140523aac) before FUN_14051af50 applies the hit
+      (0x140523ab6), so a hit that the team gate (FUN_1404443e0), immunity or a zero-damage row
+      then turns into nothing still spends the record. A refused attack marks the victim in its
+      own lists (+0x278, and the bullet-shared +0x280; FUN_140524910 -> FUN_140523540, for its
+      linked shapes too), so it never hits him later.
+    - *Ids.* The id is attack +0x148 (params +0x110). A swing's is -1: FUN_14051d380's default,
+      which nothing on the FUN_1404428f0 -> FUN_140526430 path writes, so a swing never passes as
+      the entry's own. A bullet's is its launch: FUN_140d245a0 writes bullet +0xb08
+      (`BulletAttackInfo` +0x658), which FUN_14038fe80 sets to the launch entry's id when it is
+      -1 (a root: FUN_14038b9a0 stores -1) and which children keep. So a launch's `numShoot`
+      copies and all its descendants are one attack to the record: once one of them holds the
+      entry, every other lands through its own lists.
+    - *Ties.* Registration and resolution walk DmgMan's list in one order, so of one frame's
+      equal-priority contacts the first in the list lands. FUN_140525ef0 head-inserts a new
+      attack and every FUN_140527d40 pass, which queues the shape casts FUN_140527c10 resolves,
+      rebuilds the list by head-inserting as it walks, reversing it: of attacks created between
+      two passes the one created first comes first (`INFERRED` only in that nothing else reorders
+      the list). For attacks created on different frames the order flips every pass. Events of
+      one frame are created in event-group order (GetActiveAnimEvent 0x14264e420), which is the
+      stored order for 3248 of 3249 same-frame pairs of type 1, 2 and 64 events (`MEASURED`).
+      So the attacks of one record land one hit per victim (a launch: all its rows), plus one
+      more for each later contact with a strictly lower priority. The bullet-shared record at
+      +0x280 that attacks.md names is a different one: the
+      bullet's +0xae8 list, which it inherits from spawn data +0x98 or creates as
+      "share|bulletId" when `isUseSharedHitList` or `attachEffectType` is set (FUN_14038fe80).
+    - *Swift Slash (a877 040000).* The four bursts take slot 1's record (event 341 f27-34). Both
+      blades (indices 0 and 1) take slot 0's (f28-38). Every priority is 0. So one burst and one
+      blade reach a defender, where the model credits four bursts and two blades. Bursts and
+      blades never share a record: a swing cannot use slot 1.
+    - *Order.* Thread one runs in the `HavokBehavior` task (group 0x4a, through
+      `RunTaeAndUpdateAnimQueue`). Thread two runs in `ChrIns_BehaviorSafe` (0x4c), whose first
+      call is `RunTaeMulthreadThread2`, and no `WorldChrMan` task sits between them. This holds
+      while `Behavior.EnableMultiThread` is on; `CSHkBehManager` reads it with default true.
+    - *Cleanup.* The slot's per-frame cleanup FUN_1404a4cb0 (slot vtable +0x20) is called by
+      `ChrSlotSys::Update` (0x1403f7ca0, which calls each attached slot's +0x20), from
+      `ChrIns::PrePhysicsSafe1` (0x1404021a0) in task group 81 (`ChrIns_PrePhysicsSafe`): after
+      both TAE passes (74, 76) and before DmgMan (120 `DmgMan_Pre`, 121 `DmgMan_ShapeCast`, 122
+      `DmgMan_Post`), in the step table at 0x142c030e0. Read through Unicorn emulation of the
+      Arxan stubs. The record is reference-counted, so the attacks that took it keep it after
+      the slot drops its entry. Not read: the scheduler loop that walks the step table, and
+      whether a debug property (`game.properties`, none in the install) turns the multithread
+      flag off.
+    - *Children.* A bullet's hit, expiry and interval children (`KillBullet`, FUN_14039ab10,
+      FUN_14039baf0 -> FUN_14039bba0) copy the parent's `BulletAttackInfo` (FUN_14038b740), its
+      record (+0x640), priority byte (+0x648) and launch id (+0x658) with it; FUN_14038d130
+      copies them into the new bullet (+0xaf0 / +0xaf8 / +0xb08). The child's attack takes the
+      byte at +0xaf8 as its priority (FUN_1403960a0 passes it to FUN_140526230 -> FUN_140d245a0
+      -> FUN_140d24b10, `*(params+0x11d) = *prio`); nothing in the child's own Bullet or AtkParam
+      row overrides it. Only the shared list (+0x638) is dropped, and only when the parent's row
+      has `attachEffectType`: FUN_14039bba0 reads it on the row of the parent's current state
+      (+0x4a4, which `KillBullet` never writes, so on the expiry path it is still the fly or wait
+      state, whose row FUN_14039ee00 sets to the parent's own; bd er-effects-rs-7bye). Prelate's Charge (a613 040000, priority 2): the carrier Bullet 2311
+      (AtkParam_Pc row 0, nothing to deal) and its fire 2312 are one launch, so a carrier that
+      touches the defender first does not keep the fire off him; the f36 swing (priority 0) or
+      the f39 bullet (1) landing first does.
+    - *Casts.* Event 64's request +5 is Args byte 0xc (`movsx eax, byte [rbx+0xc]`, stored at
+      0x140429f2b); its slot is 0. Of 1028 cast events in the spell TAEs, 835 carry -1, 193 carry
+      0-2; 74 start inside a slot-0 window, in 33 animations with two or more (Meteorite and
+      Meteorite of Astel 045010: f6 at 0 and f11 at 1 share one record, f15 is outside).
+    - *What the model does.* Each skill hit row carries its record (`record`: (animation, record
+      index)), `priority` and `record_s` (`anim_actions`, `skill_hits`); a bullet event's root and
+      child rows share its record and its `created`, which stands for the launch id.
+      `skill_option`'s `dmg` counts the rows that land when every row touches (`record_mask`);
+      `skill_landing` skips a hit whose record another launch holds at an equal or lower
+      priority (`er-mechanics-attacks.record_contact`); `CaughtModel` gives each geometry its
+      record (`HPR`, whose third field is the launch), and a later geometry of a record another
+      launch holds lands only with a strictly lower priority, while the holding launch's
+      geometries land and tick on. A shot that holds a record keeps all its copies and lists in
+      its `CAUGHT` record (until 2026-11-10 one, the root's: `one_record_list`, removed with bd
+      er-effects-rs-xb3i). One frame's tie goes to the attack created first. Swift Slash on a
+      Backhand Blade: one burst and one blade land (200 of 600 with every hit at 100); Stormcaller:
+      each swing (priority 0) reaches him before or with its bullet (1), which lands nothing.
+      Savage Claws and Thundercloud Form carry priority -1 or no event 341 and keep every hit.
+  - **The lock-on target of a player's shot (VERIFIED, 1.16.2).** FUN_14038e740 takes the shot's
+    target from the owner's manipulator (vtable +0xa0); for a player (`PadManipulator`, vtable
+    0x142a2b778) that is FUN_140394f90: target kind 1, the `LockTgtMan` entry. For kind 1 with an
+    entry FUN_140394910 aims at the entry's own stored position; where the lock-on manager writes it
+    was not read (the struct's offset at creation, FUN_140395590, is the target's dummy 220-227, or
+    0.75 x its hit height up when it has none). A player's hit height is 1.5 m (`InitForPlayer`
+    0x140460050 writes 1.5 to the init data's `hitHeight` and `chrHitHeight`, radius 0.4). The 0.8 x
+    hit height of kind 5 is a follow target's, not the lock-on's. So the vertical part of the turn is
+    still not modelled, and no height is assumed for it.
+  - **The defender's body.** The caster's root gets no nearer than `dist - 2 x 0.4 m` (the reach
+    model's push-capsule rule, `front_contact_times`), so a shot leaves where the held-back caster
+    is: each bullet sample carries the clip's peak forward root motion up to the launch and the
+    launch time, and `_catches` takes off `max(0, peak - (d - 0.8))` with `d` where the defender
+    stood when the shot left. Swift Slash at 1.5 m: the dash would launch the f33 burst 5.3 m out,
+    past him; held back at 0.7 m it catches him (selftest).
   - **The world (INFERRED).** The ground is flat, a bullet hits it when falling at a height of
-    `hitRadius` or less, and no character or target is hit on the way (no homing). The reach is
-    how far the skill carries when it misses.
+    `hitRadius` or less, and no character or target is hit on the way (with no target there is
+    no homing turn either: FUN_140398270 needs one). The reach is how far the skill carries when
+    it misses.
   - **Cap.** `BULLET_REACH_CAP_M` = 25 m. `slot_score`'s reach factor saturates at 5.6 m, so the
     cap changes only the shown value.
   - **Coverage.** The arc comes from the tree's `numShoot` fan plus the angle the radius subtends
@@ -1302,13 +1479,129 @@ the exchange factor already scores).
   f0-13 from its first frame, its root motion per real frame, R1 from f20. A start escapes when no
   sample touches him outside the i-frames, with the roll's path applied (`_catches`). Invincibility
   is not a shield that consumes the hit: a live window still open when the i-frames end catches
-  him, so an early roll loses to a long or late live window.
+  him, so an early roll loses to a long or late live window. For a bullet this is `VERIFIED`
+  (1.16.2 named dump, 2026-11-10): a bullet's contact with a character goes through
+  FUN_14038b2f0 (from FUN_14051af50 -> FUN_14051acc0), which returns before the bullet's own
+  character-hit handler FUN_140398ba0 when the damage gate FUN_1404443e0 refuses the target, and
+  that gate refuses one whose `IsImmuneToAttack` holds (the roll's JumpTable 8, combo.md section
+  12). So a shot touching him during his i-frames is not killed, makes no `HitBulletID` child
+  (FUN_14039dcc0 is not reached), and flies on, homing included. Whether its hit list records him,
+  which would stop it touching him again after the i-frames, is not traced.
 - **When he rolls (INFERRED constants).** He cannot press before the cue plus his reaction:
   lognormal, median `REACTION_MEDIAN_S` 0.25 s, log sd 0.2, plus two network legs of
   `NETWORK_ONE_WAY_S` 0.05 s (he sees the attack late, and his roll reaches the attacker's machine
-  late; that the attacker's machine decides the hit is community knowledge, not traced). Among the
-  runs of escaping starts still open he aims at the middle of the one he is likeliest to hit, with a
-  normal timing error `DODGE_TIMING_SD_S` 0.05 s (`dodge_presses`). Median delay: 10.5 real frames.
+  late; the attacker's machine decides the damage against its replica of him, `VERIFIED` combo.md
+  section 12). Among the runs of escaping starts still open he aims at the middle of the one he is
+  likeliest to hit, with a normal timing error `DODGE_TIMING_SD_S` 0.05 s (`dodge_presses`). Median
+  delay: 10.5 real frames. The runs are read off the attack's own geometry at the true distance, so
+  he knows exactly when every shot reaches him (`VERIFIED` reading of `dodge_presses` /
+  `reaction_outcome`), and the error is integrated over `TIMING_POINTS` 7 quantiles, which reach
+  +-1.47 sd (+-2.2 real frames): a run wider than about 4.5 frames is a certain escape.
+  What that does to a single fast bolt read from the cast's start (`MEASURED` 2026-11-10, the
+  spell kit's `net_parts` at RL 150, the Intelligence line {str 16, dex 18, int 65, fth 9, arc 9},
+  Glintstone Staff +25 and the Glintstone Kris at its top level, all 1,208 punish situations): Glintstone
+  Cometshard's bolt (18 m/s rising to 25, `REGULATION` Bullet 10402000) is made at f38.7 (tap) or
+  f60.7 (charged) and reaches a standing defender 2.4 to 15 frames later; the Glintstone Dart's
+  (Bullet 2590 / 2591, 50 / 40 m/s) at f57 (full charge) or f33 (release at f13). Every roll
+  direction keeps an escaping run of at least 8 real frames up to that arrival (at 3 m, Cometshard's
+  tap: forward f26-41, back f33-41; the Dart's tap: forward f20.5-33.5, back f24-33.5), and his
+  presses fall inside it, so he evades them in every situation (`p_evade` 1.0; the Dart's tap 0.996,
+  where the whiff's recovery holds him past the run). The recovery floor never binds otherwise
+  (situations' recovery: median 13 frames, 99% under 28, at most 41). The punish he lands after is
+  near nothing because the caster's roll gate (f50.7 tap, f75.7 charged) comes first: mean net
+  Cometshard tap 0.0, charged -0.55 (-14.7 since the aim below), the Dart -0.6, its tap 2.08. The
+  zero comes from this defender, not from the flight. The punish model (`net_parts` ->
+  `sequence_outcome`) reads every attack from cue 0, not by the cue rule below, which the PvP
+  ranking applies (its follow-up model likewise plans for the earliest press), and the cue is what
+  moves the zero, an `INFERRED` choice: read from the hand-off (f23.7 at DEX 18, where the tap and
+  the charge part, both having played 045000 to there) the tap nets 39.4 (`p_evade` 0.92) and the
+  charge still 0.0; read from the bolt's creation both land their whole worth (495.9, 648.3); the
+  Dart read from its release (f13) or from the end of its release window (f26, full charge) still
+  nets 2.1 and 0.0. Neither a 0.05 s spread with full tails (61 points: Cometshard's tap 0.0, the
+  Dart's tap 2.12) nor the aim below moves them. What he can tell apart, and so when he reads the
+  cast, is now taken from what is on screen (next bullet).
+- **What is on screen (spell kit and its rivals, 2026-11-10).** The punish model's defender no longer
+  knows the attack from its first frame; he knows what he can see (`er-mechanics-spells`
+  `Lookalikes`, `er-mechanics-ashes.lookalike_plan`; the comment above `er-mechanics-ashes._escape`).
+  Two spells whose `Magic.refType` names one TimeAct play the same clips (`TAE`), and with one
+  `castSfxId` the same casting SFX (`REGULATION`: Glintstone Cometshard, Comet, Shard Spiral and
+  Night Comet are all refType 2, castSfxId 523060, 523070, 523070 and 523200; that equal ids look
+  alike and a different id is told apart from the first frame is `INFERRED`, only the ids are read).
+  A tap and its charge hand off together and play 045010 alike up to the tap's release (`VERIFIED`
+  c0000.hks: `MagicLaunchRight_Upper_onUpdate` leaves 045000 on the JumpTable 93 opening with no
+  input test; `MagicFireRight_Upper_onUpdate` plays 045011 on the first frame of 045010's SpEffect
+  100610 window with the cast button up; bd spell-tap-vs-charge-speffect-100610-in-045010), and a
+  charged skill's hold and its early release play the opening alike up to the release
+  (`SwordArtsOneShot_onUpdate`: L2 up inside SpEffect 100285; bd
+  skill-tap-vs-hold-speffect-100285-l2-up). So the casts of one (refType, castSfxId) among the
+  spells the caster can cast and a player can hold are one group (`spell_lookalikes`), each pair
+  parting at the first frame what he sees differs (`look_split`: one switches clip and the other
+  does not, or a cast event fires a different ref, the shot's spawn); a charged skill's hold and
+  release are one group parting at the release (`skill_lookalikes`). Comet and Shard Spiral, tap and
+  charged, are one group of four: at DEX 18 a tap and a charge part at f27.7 (the release, at
+  045010's first frame, f23.7, showing 4 frames later), the two taps at f38.7 and the two charges at
+  f60.7, their shots' spawns.
+  Until a split he either times one roll against every member still alike (`group_presses`: the
+  stretch of starts whose weighted chance of a press escaping each member is largest; members
+  weighted equally, `INFERRED`: the model has no source of how often each is cast) or waits for the
+  split and reacts from it with his usual reaction delay; deciding at a split he knows the members
+  still alike then, so in the group of four "wait for the release, then one timing against both
+  taps" is an option, and the one he takes on 99.3% of the weight (the rest waits for the spawn).
+  He takes the decision time that escapes the group most often in the situation, averaged over the
+  roll directions as the outcome averages them; only his first dodge is planned so, the bursts after it
+  coming after the split. A cast alone in its group, and an attack with no tap or hold, are read
+  exactly as before (selftest: Swift Glintstone Shard, refType 79, castSfxId 522000). He chooses on
+  escape alone, not on what lands, so less information can leave the caster less where every
+  timing is caught anyway and the plan's timing is caught by a smaller hit (Midra's Flame of
+  Frenzy's tap: 194.8 read from its start, 86.7 seen only, both `p_evade` 0). The release frame is
+  the caster's choice and he cannot see it coming (2026-11-11): a release is one member of the group
+  per real frame of its window (`release_frames` in `er-mechanics-ashes`: [first, last), each
+  weighed alike, `INFERRED` uniform), the release's weight split over them; each parts from the
+  hold or charge where its release shows and from a later release where the earlier one shows, and
+  the release nets the members' weighted mean (the kit's `punish_values`, attack-similarity's
+  `mix_arrays`). A release shows on the first frame after its switch at which the blend into the
+  release clip (the TAE type-16 end as its blend time, `VERIFIED` through
+  `CustomTransitionEffect`, bd player-blend-time-is-tae-type16-end-2026-11-11) puts a bone
+  `VISIBLE_M` 0.10 m from where the held clip has it (`release_visible`, `INFERRED` threshold:
+  attack-similarity.md section 2c gives 5 and 20 cm); a spell's shots still part two casts where
+  they differ, at their spawn. Every member is in the group; the release's own nets are read at
+  the window's ends, every `RELEASE_STEP` 5th frame and, bisecting, wherever two read frames' mean
+  nets differ by more than `RELEASE_TOL` 4 HP, and filled linearly between (`release_read`,
+  `release_fill`): within 3% or 5 HP of reading every frame on the names measured, where no fixed
+  grid was (attack-similarity.md section 2c). That is the kit's reading, over its few situations;
+  attack-similarity, over 1,208 situations and every attacker build, holds only nodes of the window
+  in the group (its ends, every 5th frame and every frame where two of them differ by over 1 HP,
+  `release_nodes`, `release_fill_in`), within 0.2 HP of every frame on the 20 entities measured. A window of one real frame is the earliest release
+  alone, as before, number for number (selftests). A hold spell whose 045010 has the window is let
+  go early too, its 'early' variant
+  (`er-mechanics-spells` module doc, "One cast": the breaths, Crystal Barrage, Gelmir's Fury). The
+  members' mean, not the caster's best frame, is the rule (`INFERRED`): the defender weighs the
+  members as the caster mixes them, and a best frame would be one his plan does not expect.
+  Attack-similarity keeps a charged skill's release with an opening hit before it (Black Flame
+  Tornado, Jori's Inquisition, Moore's Charge, Shield Crash, Thundercloud Form, Wall of Sparks) a
+  press the caster delays only on a roll he saw before the window opened (`FollowupForm`), since
+  there the first burst is the opening's, the same for every member; its release frames still sit
+  in its hold's group. Numbers: the table under this list, and attack-similarity.md section 2c.
+  Attack-similarity reads every profile and every build's net the same way, the group taken per
+  line (attack-similarity.md section 2b). The PvP ranking's waiting defender (`skill_reaction`)
+  reads a charged skill cast as it opens, the hold, against its early release let go on each
+  release frame of its window (`skill_release_part` 'releases', `lookalike_pair`); its other
+  attacks, which have no lookalike there, are read as before. The survey below is the release at
+  its first frame alone (the 2026-11-10 rule); spread over the window the hold is told apart more
+  often, since a hold not yet released is likelier the longer it goes (selftest: Revenger's Blade
+  [Falx], escape 0.50 at the first frame alone, 1.00 over its 22 release frames; the Glintstone
+  Dart's hold, escaped every time either way, is punished 0.006 at the first frame alone and 0
+  over its 13, as he waits for the last release before rolling it; the Dart's release at f13
+  shows 3 frames after its switch, as the 2026-11-11 survey has it). On each skill's own weapon (an ash on the first weapon that mounts it), every
+  damage stat 99, 100 HP a hit, R1 strikes at 15 and 20 frames, the landing's distances
+  (`MEASURED` 2026-11-10: 28 openings with the window, 27 read, Moore's Charge with no reaction to
+  read; 10 move): the hold's escape falls on Revenger's Blade [Falx] (1.00 -> 0.50, land share
+  0.50 -> 0.75), Flame Spear [Dagger] (1.00 -> 0.63, 0.50 -> 0.65), Divine Beast Frost Stomp
+  [Dagger] (0.75 -> 0.50, 0.63 -> 0.75), Dragonwound Slash (1.00 -> 0.90) and Torch Attack
+  (1.00 -> 0.97); Black Flame Tornado, Thundercloud Form and Shield Crash keep their escape and are
+  caught by a larger hit (land 0.625 -> 0.669, 0.670 and 0.626); the Glintstone Dart and Flower
+  Dragonbolt are still escaped every time but rolled later, so punished less (0.12 -> 0.006, 0.016
+  -> 0); the other 17 do not move.
 - **The cue (TAE, COMMUNITY HKS).** The clip's start, except where the attacker picks the timing:
   an R2 is read from its release clip (the charge is held as long as he likes), a skill follow-up
   from its own press, a stance or input-driven hand-over from the animation it hands to. Leaps and
@@ -1321,8 +1614,256 @@ the exchange factor already scores).
   strike frame (exchange pool, per build) comes before the attacker can roll, and he ends within
   `PUNISH_REACH_M` 3.69 m of where the attacker's root motion left him; it costs `PUNISH_HP` 388
   (both the pool means of `OPPONENT_FALLBACK`, MEASURED). `whiff_hp` is subtracted like `parry_hp`.
-- **Feints and delays.** Only the evidence above is used: the R2 charge hold and the sword-art
-  follow-up windows. No other feint is modelled.
+  With `run` (the spell kit, `er-mechanics-spells`, whose caster stays at range), a dodger who ends
+  further away runs the rest in at run speed first (`frames_per_metre`, as `dodge_value` does) and
+  punishes when that still beats the caster's roll.
+- **Bursts and the jump (spell kit only).** `sequence_outcome` dodges an attack whose hits come in
+  separate bursts one burst at a time, and adds the jump in place (`jump_motion`) as a second
+  family of moves when a burst's AtkParams all carry `isInvalidatedByNoDamageInAir` (moveset.md
+  section 6a): the jump clip is immune to them from frame 0 to frame 25. The defender keeps to the
+  family that leaves the attacker least. Skills are not scored this way yet, so a shockwave skill
+  with that flag (Earthshaker, Hoarfrost Stomp) is still taken to be rolled.
+- **The strike instead of the roll (spell kit and attack similarity, 2026-11-13).** Until then the
+  only answer to an attack was the roll (or the jump), so a free defender 1.5 m from a 55-frame
+  cast never hit the caster first and every slow cast landed as if he could only dodge it. Now,
+  where he is free before the attack first touches him, he may run in and throw the pool's R1 #1
+  instead (`er-mechanics-spells.net_parts`, the comment above its `STRIKE_CARRIED`): pressed no
+  sooner than `dodge_presses` lets him roll (`max(cue + reaction delay, floor)`, the delay with
+  its two network legs, cue 0 as every attack in the punish model), run in at run speed to
+  `PUNISH_REACH_M` 3.69 m and landed the R1's strike frames later (`punish_strikes`, per build),
+  when that is before the attack first touches him (standing where he is, or where his run ends)
+  and before the attacker's roll gate. Whether it interrupts is the interrupt module's poise rule
+  on that one hit (`er-mechanics-interrupt.simulate`, `chip_states` carried as line-fit's
+  default): the R1's poise damage (the exchange pool's `poise_dealt`, `saRate` applied: 24 to
+  819, median 222 at RL 140-160, `MEASURED`) against the attacker's menu poise, through the
+  attack's TAE 795 window open on that frame (a spell's cast clips, `SpellModel.cast_windows`; a
+  skill's clips, `SpellModel.skill_windows`; `er-mechanics-interrupt._window`, `VERIFIED` there).
+  Broken, every shot launched at or after the strike is lost (a melee window always is) and the
+  shots already out fly on and land on him standing; held, the attack lands whole. Either way the
+  attacker pays `PUNISH_HP`; a strike too late (after the first touch or the roll gate) lands
+  nothing while the attack lands whole, which is standing still: a defender whom rolling leaves
+  worse off than standing now stands, as the spell kit's re-aimed casts already let him
+  (`dynamic_outcome`). Knowing the attack, he strikes or rolls (or jumps),
+  whichever leaves the attacker less, a tie to the roll, as he picks the roll or the jump; the
+  choice is made knowing the attack even where his roll's timing is planned against lookalikes
+  (`INFERRED`, `er-mechanics-spells` module doc, "Not established"). The attacker's poise is each
+  attacker line's own in attack similarity (`line_poise`) and the RL window's median build's (62
+  at RL 150, the defender's own) elsewhere (`INFERRED`). The PvP ranking's `skill_reaction` is
+  unchanged.
+- **The attacker's own guard meets the strike (spell kit and attack similarity, 2026-11-13).** An
+  attack whose clips hold TAE JumpTable 3 (the guard flag a raised shield sets; which attacks,
+  how they are reached and what a guarded hit does: powerstance-guard.md section 3a) has those
+  windows on every geometry (`GUARD`: `SpellModel.skill_guard` for a skill, `slot_attack` for a
+  weapon's own attack). A strike that lands inside one is blocked by the guard model's rules
+  (`er-mechanics-spells.strike_guard`, `guard_block`: `shield_guard` of the guarding weapon at the
+  window's judge, `block_hit`, PvP): the attacker pays `PUNISH_HP` times the share of the R1's raw
+  damage his guard passes, not `PUNISH_HP`, the R1 breaks no poise, and the attack ends only where
+  the behavior script's guard reaction ends it (every skill and plain attack state; the two
+  guard-poke states go on) or the guard breaks (stamina left at or under the guarded stamina:
+  chip, the attack ends, one more R1). The stamina left is the bar less the stamina the attack's
+  hits have taken by the frame the strike lands, each hit's on the frame its hitbox is created
+  (`FUN_1404428f0`, attacks.md section 3, `VERIFIED`; `Guard.charges`, `guard_phases`, since
+  2026-11-13; before that all of it was taken before the guard opened, `INFERRED`, which the game
+  does not do). A strike outside the windows is read as before, and an
+  attack with no guard nets what it did, number for number (`strike_shares`' third part is 0.0).
+  What it moves is in attack-similarity.md section 2e. The roll's punish (`reaction_outcome`) does
+  not read the guard; on the guarded attacks measured, the punish after a roll lands before the
+  attacker's roll gate for at most 1.16 HP per whiff (Roaring Bash; 0.0 on the thrusting shield's
+  R1s, `MEASURED` 2026-11-13, attack-similarity.md section 2e).
+- **Lock-on aim and independent threats (spell kit only).** `fly_tree(t, bt, target)` aims every
+  shot at the target when it is created, root or child, when its `EmittePosType` is 0 or 2: onto
+  the target within `lockShootLimitAng` degrees, else by that angle toward it, before the shoot
+  angles (`VERIFIED` 2026-11-09, 1.16.2 named dump: FUN_140390c20 -> FUN_14038f120, the cone read
+  from BulletParam +0x91; a child keeps the parent's target, FUN_14039bba0; the comment above
+  `AIM_EMIT_TYPES` has the chain). So an expiry chain re-aims at every link: Glintstone Nails'
+  speed-0 stops (cone 90) and moving legs (13). The stops' `homingAngle` 999 does nothing, since
+  the in-flight homing FUN_140398270 needs the bullet to have flown past `homingBeginDist` and a
+  speed above 1e-4.
+  The aim is the 3D turn onto the lock-on point, DummyPoly 220 plus `targetYOffsetRange` (round 4
+  of bd er-effects-rs-7bye; `er-mechanics-ashes` "Launch frames": until then this geometry turned
+  the horizontal heading only, while the spell record counts already turned the 3D frame).
+  `volley_outcome`
+  scores threats that land independently, once each (a fan whose shots keep their own hit lists):
+  each threat is a geometry, a burst is dodged as `sequence_outcome` dodges it, and the punish is
+  paid once per cast (`INFERRED`: being hit by one shot neither lands the others nor stops him
+  dodging them). A chain that re-aims between damaging legs is not scored on fixed geometry: the
+  leg after a rolled one, flown at a defender standing still, comes back through the spot he left.
+  `fly_dynamic` flies it against his roll instead, each link aimed where he is when it is created
+  (the spell kit's `CastThreats.dynamic_outcome`). Skills still fly straight, with no target.
+  `sequence_outcome` and `volley_outcome` hold his next dodge back only after a burst he dodged:
+  a burst that does not reach him standing is not dodged (2026-11-09; before, it held the next
+  dodge back too).
+- **In-flight homing (bd er-effects-rs-rw25).** `VERIFIED` 2026-11-10 on the 1.16.2 named dump
+  and `eldenring-deobf.bin` (the comment above `homes` in `er-mechanics-ashes.py` has every
+  address): from its second frame, once it has flown more than `homingBeginDist`, a shot whose
+  `FollowType & 3` is 0 and whose speed is above 1e-4 turns its velocity toward its target's
+  position that frame by at most `homingAngle` degrees per second of frame time (the rotation keeps
+  its speed), until it comes within `hormingStopRange` of the aim point (the target's position plus
+  `targetYOffsetRange` up), after which it flies straight for good. Every bullet starts with the
+  enabling flag (CSBulletIns+0xd80 bit 3, set by the constructor and the reset, cleared only at the
+  stop range). Modelled in 3D toward his lock-on point plus `targetYOffsetRange` since round 4 of
+  bd er-effects-rs-7bye (before, in the horizontal plane, `INFERRED`): `bullet_flight` /
+  `fly_shots` turn toward a standing target, `fly_dynamic` / `fly_members` toward one that moves,
+  and a contact geometry with a damaging shot that homes (or that a homing shot creates, or a
+  carrier: below) carries a `HOMING` record, so `_catches` flies those shots again against each
+  dodge start. Flown again, a spell's shot is aimed at where he is on the frame it is created
+  (2026-11-10; before, at where he stood): the lock-on aim reads the target's position then
+  (FUN_140390c20 -> FUN_140394910, the comment above `AIM_EMIT_TYPES`; `predictionShootObserveTime`,
+  which would lead him, is 0 on every bullet a player spell, skill or goods reaches, traced in that
+  comment), so a roll he started before the shot
+  exists moves its aim, within `lockShootLimitAng` (45 on both). A weapon skill's shot flown again
+  is aimed the same way since 2026-11-13 (`er-mechanics-spells.SpellModel.skill_attack`): the same
+  flight already homed it after him and killed its carriers on him, which needs him in its target
+  slot, and a shot with a target is aimed at creation (FUN_140390c20). Left on its launch heading,
+  the Glintblade Phalanx ash landed twice the spell's run-in share from the same blades. A roll timed through the shot
+  still clears it; a roll that is over before the shot exists no longer does unless it took him
+  outside the cone; a turn fast enough for the remaining flight lands after the invincibility
+  (spells selftest, INT 65, 8 m, half-frame sideways-roll starts: Gravity Well's tap 109 clear it
+  aimed where he stood, 26 flown again, every new catch after the 13 i-frames; Glintstone
+  Cometshard's tap 95 in each direction aimed where he stood, 52 and 43 flown again, every start
+  newly caught in f0-25.5, so his i-frames ended before the bolt exists at f38.7, and none newly
+  cleared). What the aim moves (`MEASURED` 2026-11-10, the kit's `net_parts` mean net per cast at
+  RL 150, each spell on the first of the Intelligence, Faith, Hybrid and Arcane lines of
+  attack-similarity.md section 1 that can cast it, Glintstone Staff +25 / Finger Seal +25; 111
+  variants of the spells with a homing damaging shot, 'dynamic' casts left out as they were already
+  aimed where he is, and 8 spells none of those lines casts): 36 move by more than 10%. Up: Star Shower 363.8 -> 1425.0 charged and
+  405.3 -> 1215.8 tap, Glintstone Stars 326.4 -> 1150.2 and 300.5 -> 870.3, Knight's Lightning
+  Spear's tap 459.8 -> 928.3, Gelmir's Fury -165.3 -> 96.2, Divine Beast Tornado charged 4.5 ->
+  230.5, Glintblade Trio 201.4 -> 403.3 / 80.5 -> 169.1, Unendurable Frenzy charged -2.2 -> 172.6,
+  Crystal Barrage -0.5 -> 53.8: each was escaped by a roll begun early enough to be out of the
+  shots' line before they existed. Down: a few whose evasion does not change but whose sideways run
+  is now cut where the early roll stops escaping, so the run he takes (`dodge_presses`: the first
+  of equally sure runs, aimed at its middle) ends earlier, he rolls earlier and his punish beats the
+  caster's roll (Glintstone Cometshard charged at 3 m: one sideways run f0-63 becomes f0-44.5 and
+  f49-63, the run left early being the roll that ends outside the 45 degree cone; punish 17.7 ->
+  102.5 there; Frenzied Burst's tap -44.5 -> -91.4, Multilayered Ring of Light charged -3.3 ->
+  -28.1, Comet charged -0.6 -> -20.3). Glintstone Cometshard's tap, Gravity Well's tap, Glintblade
+  Phalanx, Carian Phalanx and Glintstone Pebble do not move. A geometry with no homing shot is not
+  flown again and keeps its stored aim at where he stood (not modelled). `INFERRED` / not modelled:
+  `PlayerCommonParam`'s flare override (CSBulletIns+0xd81 bit 2, setter not read), and the caught
+  defender's later hits (read on the flight against him standing). These measurements are from
+  before round 4.
+- **Map contact and free aim (bd er-effects-rs-rw25).** `VERIFIED` 2026-11-10, 1.16.2 named dump
+  (the comment above `floor_bursts` in `er-mechanics-ashes.py` has the chain): a hit record goes
+  through FUN_140399e50, which hands a map contact (no entity handle) to FUN_140398f90; that calls
+  FUN_14039dcc0, which counts the hit only when the row's `isPenetrateMap` (+0x9b bit 0) is 0
+  (FUN_1403aba90; a character contact likewise only when `isPenetrateChr` is 0), creates the
+  HitBulletID child at the contact point (FUN_14039baf0 -> the launch gate FUN_14039da40 ->
+  FUN_14039bba0), and the bullet is killed unless its `FollowType` is 4. So a carrier that does
+  no damage itself bursts where it meets the ground: Great Oracular Bubble's bubble (10511000, no
+  damage) makes its 3 m burst (10511001) there. The flat-ground contact rule (falling, at
+  `hitRadius` or less) is the model's, `INFERRED`; the contact with the defender's body is flown
+  since round 4 for a carrier (next item). Free aim is the user's game fact (2026-11-10: the bubble "can be free aimed directly
+  at the floor"; the launch's aim angles, `IsBulletAimAngleSet` in FUN_1403fb0b0, were not traced
+  to their setter): `floor_launch` pitches a spell's shot so its carrier lands 1 to 8 m ahead
+  (`FLOOR_AIM_M`), with no lock-on and so no homing (`INFERRED`), wherever the damage is only on
+  that child (`floor_bursts`, 45 spells), and the outcome takes the better aim per situation
+  (`er-mechanics-spells.net_parts_aims`, the kit's `punish_values` and attack-similarity's
+  profile alike; attack-similarity.md section 8 lists which aim each one's best net took).
+  Applying it to every spell and to no weapon skill is `INFERRED`: nothing read shows a skill's
+  bullet taking the aim pitch.
+- **One flight model (round 4 of bd er-effects-rs-7bye, 2026-11-12).** The punish geometry flies
+  the bullets the spell record counts fly (`fly_members`, one batched implementation of the rules
+  "Launch frames in 3D" in `er-mechanics-ashes.py` lists, `VERIFIED` on the 1.16.2 named dump):
+  the shoot angles turned in the parent's 3D frame (FUN_140390c20), `isOwnerOverrideInitAngle`,
+  `sfxPostureType`, `EmittePosType` 1's ground point, the aim at creation turned in 3D within
+  `lockShootLimitAng` onto the lock-on point (DummyPoly 220, 1.243 m up on the idle pose,
+  FUN_140394910, plus `targetYOffsetRange`), the 3D homing onto the same point, attached bullets
+  following their point (FUN_14039afc0, FUN_1403995b0), each child launched from its parent's frame
+  of that moment, and the touch swept along the whole move (FUN_1405226e0). `fly_shots` is that
+  flight against one defender standing still, `fly_dynamic` against one who moves, and
+  `_homing_entries` against every distance, roll and start at once, each member flown as alone
+  (selftest: every shot of five trees, three defenders together against each alone). Members whose
+  shot reads the same (its spawn and his place over its flight) share one flight. A dodge grid from
+  0 is flown rounded up to 40 starts (`HOMING_START_BUCKET`): the 3D aim makes a geometry's live
+  frames, and so the callers' grids, differ by distance, and the rounding lets one flight serve many
+  distances again (`_homing_batch`). A part is flown from the fraction of a step in its fire time,
+  against the starts taken back by the whole steps, so parts that differ only by a whole number of
+  steps share a flight.
+  - **Carriers.** A bullet that does no damage of its own (no flat attack field, the spell price),
+    targets opponents and stops on a character dies on its first landed touch and makes its child
+    at the contact (`carrier`; the game kills every such bullet, damaging or not, FUN_1403aba90 ->
+    KillBullet(4)). A damaging one flies through him in the punish flight: its first landed touch is
+    the catch, and nothing after it moves the catch. A geometry under a carrier is flown again
+    after each dodge, as a homing one is. Cannon of Haima's ball now blasts on a defender standing
+    10 m (6 m) out and catches him 9.5 (4.5) real frames after the cast; before, it flew through
+    him to the ground 21.1 m out and caught no one standing. Light of Miquella's 999 m/s seeker
+    stops on him and its pillar catches him at 58.5 (its child used to be made 66 m out). Great
+    Oracular Bubble's bubble is one too: aimed at a defender 4 m out it homes in, stops on him and
+    its burst catches him at 82.3, sooner than the free aim at the ground (89.8), so the outcome
+    now takes the aim at him where it took the floor aim for a long recovery.
+  - **Random draws, as their expected layout.** The spread FUN_140390210 (`shootAngleXMaxRandom` /
+    `YMaxRandom`: a pitch about the frame's right, then a turn about the pitched up, each uniform
+    over the field's full width), the life (`life` + rand[0, 1] x `lifeRandomRange`, SetBulletLife)
+    and the interval timers (rand[min, max] at the launch and at every refill, FUN_14039e8a0,
+    FUN_14039ed30) are `VERIFIED`. The model flies the n draws one bullet makes of a row at the n
+    strata of each range (`draw_quantile`), one draw at its mean, and every interval after the first
+    at the mean: a modelling choice, so a fan's count and catch are those of its shots spread as the
+    draws spread them on average, and a single shot's are those of its mean draw.
+  - **Hit counts that moved** (`MEASURED`, hits per cast over the variant's events, every player
+    spell, 13 of 306 variants): Ancient Dragons' Light Strike charged 5 -> 4, tap 4 -> 3; Aspects
+    of the Crucible: Bloom 13 -> 6 both (its 26 spawns are thrown 360 degrees, 0 to 5 m: before, all
+    on one point); Elden Stars 34 -> 27; Gelmir's Fury 6 -> 5 both; Land of Shadow 14 -> 13; Rain of
+    Fire charged 18 -> 13, tap 18 -> 14; Roiling Magma charged 6 -> 2, tap 7 -> 2; Theodorix's
+    Magma 14 -> 15. Each of the 13 flies rows with a random spread or a random life (`REGULATION`
+    scan); that the draws are what moved each, and not one of the other rules this round touched
+    (the exact contact disc in place of heights rounded to 1 cm, the end child's frame along its final
+    velocity), is `INFERRED`. Founding Rain of Stars keeps 9: its 17 clouds now lie
+    around the full turn, their stars on a ring about the caster, and the best spot (1 m) still
+    lands 9, not the 25 its 0.2 s record would allow over 5 s.
+  - **What it moves and costs** (`MEASURED`, attack-similarity `--only "Glintstone Stars" --only
+    Comet --only "Carian Grandeur" --jobs 2`, round 3 code against round 4, with r16 running
+    beside both). Mean net: Glintstone Stars tap 198.1 -> 256.0 and charged 277.5 -> 354.6 (both
+    run-in only -> live: 3D aim and homing on the lock-on point bring the stars down onto him, so
+    they reach a defender standing at all of 1.5-12 m, not 8 of those 22 half-metre steps); Comet
+    tap 484.7 -> 486.4, charged 200.3 -> 234.8; Carian Grandeur's four unchanged (a skill flies
+    with no target). Worker CPU seconds per attack set: Glintstone Stars tap 15.1 -> 294.6 (a dodge
+    is read at every distance it now reaches), charged 0.9 -> 1.4; Comet tap 208.2 -> 733.2,
+    charged 54.3 -> 68.3; Carian Grandeur 1.0-2.1 -> 1.2-2.6; the attacks stage 282 -> 1,102 CPU s.
+  - **Left out, as nothing reaches them.** `predictionShootObserveTime`, which would lead him, is 0
+    on every bullet a player reaches (21 rows set it, none reached; ashes selftest). The normal a
+    `sfxPostureType` 2 child takes on a character hit is the hknp contact normal of the attack's
+    cast against his body (chain in "Launch frames"); none of the 398 such children a character
+    hit can make has a moving or angled bullet under it, so +Y stays.
+  - **Open.** `EmittePosType` 1's ground point is still the spot nearest him, not its expected
+    value (a point cannot stand for a 2D draw); the flights again take no DmgHitRecord (a carrier a
+    record would let fly on dies); a weapon skill's stored samples still fly with no target (its
+    flight again has him, as a spell's has); the punish flight keeps at most `BULLET_INTERVAL_CAP` interval children per bullet and
+    samples touches every 0.1 m, the record counts all of them every 0.05 m.
+- **A caught defender (spell kit and attack similarity, `CaughtModel`, bd er-effects-rs-doax /
+  er-effects-rs-n7dd).** `sequence_outcome` used to credit a defender caught by one hit with every
+  later hit and every tick of a lingering area: he never left, and every later burst reached him
+  wherever it landed. Now he is played out on what section 15a already measures. He stands at the
+  situation's distance when the catching hit first touches a defender standing there (INFERRED for
+  one caught mid-roll). Each hit that lands applies its poise (cumulative against the defender's,
+  refilled on a break) and plays its level's reaction: a locking one carries him back by
+  `displacement_fn` (knockback VERIFIED, damage-clip root motion MEASURED) and holds him until its
+  roll cancel (DamageCount chaining included) or its move cancel (TAE damage clips,
+  `er-mechanics-frame-advantage.reaction`); level 0 neither holds nor moves him. When it lets him
+  he leaves straight back, by the medium back roll from the roll cancel (its invincibility
+  included) and then at run speed, or at run speed from the move cancel, whichever lands the
+  smaller share of the attack's hits. A later hit lands only where its own geometry touches him on
+  that path, and a hit list that re-hits every `dmgHitRecordLifeTime` (the `full` count's ticks)
+  lands each tick only while a sample within one update touches him. INFERRED: a geometry's lists
+  start together at its first touch and it reacts as its list with the most poise; the instances
+  of one list tick together; he leaves along the attack's axis; the knockback left at his escape is
+  dropped. The defender is the RL window's median build (`SpellModel.defender`): poise 62 at RL 150.
+  Magma Breath's 13-tick pool: he takes 3-5 ticks (the second stagger's DamageCount roll cancel at
+  10 frames beats the 15-frame tick). Swift Slash: the blades break any poise and their middle
+  reaction holds him through the f40-43 bursts, so a blade catch takes all six hits at 1.5-2.5 m
+  (five of six for the right blade's catch at 4 m, four at 6 m); a burst (level 0) lets him go, so
+  a burst catch takes that burst alone. INFERRED and not yet modelled: a defender caught mid-roll
+  is played as if standing, free to roll out at once, though his own roll's recovery would hold
+  him to its dodge cancel; that under-credits the later bursts on a dodger.
+- **What one cast can land** is capped at the defender's health: CalcCorrectGraph row 100 at the
+  RL window's median Vigor (60 at RL 150: 1900 HP). The punish he lands is not capped. In
+  `volley_outcome` the cap is exact when the threats' worths sum to no more than his health and a
+  bound otherwise.
+- **Feints and delays.** Only the evidence above is used: the R2 charge hold, the sword-art
+  follow-up windows, a charged skill's release window (SpEffect 100285) and a spell's tap window
+  (SpEffect 100610), each release spread over its window (`release_frames`, 'What is on screen'
+  above). No other feint is modelled; a follow-up's press stays the attacker's reactive choice
+  (`FollowupModel`), not a frame the defender cannot see coming (attack-similarity.md section 2c).
 - **Not counted twice with the contest.** The exchange factor's startup and hyperarmor part, or
   the interrupt factor that replaces it for the openers it covers (`--interrupt`, interrupt.md
   section 6), also rewards a fast startup. So the two split the defenders instead of multiplying:
@@ -1330,6 +1871,52 @@ the exchange factor already scores).
   stamina part multiplies the whole score. Without a reaction term the contest multiplies the
   whole score, as before. A jump is read from its jump input, 6 frames before the landed clip
   (`SCORE_ENTRY_FRAMES`, moveset.md 6c).
+
+What is on screen moves (`MEASURED` 2026-11-10, the spell kit's `net_parts` mean net per cast over
+the 1,208 punish situations at RL 150, each attack on the first of the Intelligence, Faith, Hybrid
+and Arcane lines of attack-similarity.md section 1 that can use it, Glintstone Staff +25 / Finger
+Seal +25, no free aim; skills at the weapon's top level with `priced_bullets` and `flown_only`; 200
+attacks, 150 of them in a group, 49 moved by more than a tenth of their net or 1 HP). "Before" is
+the old tap path read from the first frame, "tap path" the c0000.hks tap path read from the first
+frame (it moves only the taps whose release plays 045010 first, `er-mechanics-spells.tap_release`),
+"seen" the tap path seen as on screen; "he decides at" is the share of the weight on which he
+committed at the cue, waited for the split at that frame, or was not reached pressing at once.
+
+| attack | line | before | tap path | seen | p_evade before -> seen | he decides at |
+|---|---|---|---|---|---|---|
+| Glintstone Cometshard tap | Int | 0.0 | 0.0 | 39.4 | 1.00 -> 0.92 | f23.7 100% |
+| Glintstone Cometshard charged | Int | -14.7 | -14.7 | 0.0 | 1.00 -> 1.00 | f23.7 100% |
+| Comet tap | Int | 0.0 | 0.0 | 116.2 | 1.00 -> 0.80 | f23.7 99%, f38.7 1% |
+| Comet charged | Int | -20.3 | -20.3 | 80.1 | 1.00 -> 0.89 | f23.7 99%, f38.7 1% |
+| Shard Spiral tap | Int | 42.8 | 42.8 | 81.3 | 0.68 -> 0.39 | f23.7 99%, f38.7 1% |
+| Shard Spiral charged | Int | 42.7 | 42.7 | 123.1 | 0.75 -> 0.28 | f23.7 99%, f38.7 1% |
+| Night Comet tap | Int | 0.0 | 0.0 | 6.8 | 1.00 -> 0.98 | f23.7 100% |
+| Night Comet charged | Int | -14.8 | -14.8 | 0.0 | 1.00 -> 1.00 | f23.7 100% |
+| Glintstone Dart (Glintstone Kris) hold | Int | -0.6 | -0.6 | 0.0 | 1.00 -> 1.00 | f13 100% |
+| Glintstone Dart (Glintstone Kris) tap | Int | 2.1 | 2.1 | 2.1 | 1.00 -> 1.00 | f13 100% |
+| Unendurable Frenzy tap | Fai | -368.8 | 277.9 | 277.9 | 0.97 -> 0.00 | cue 100% |
+| Midra's Flame of Frenzy tap | Fai | 8.1 | 194.8 | 86.7 | 0.89 -> 0.00 | cue 100% |
+| Messmer's Orb tap | Fai | 568.2 | 410.5 | 410.5 | 0.00 -> 0.16 | cue 100% |
+| Comet Azur tap | Int | -63.8 | -69.1 | -59.6 | 1.00 -> 0.50 | cue 100% |
+| Crystal Torrent tap | Int | none | -272.9 | -272.9 | - -> 1.00 | cue 100% |
+| Wrath of Gold charged | Fai | 191.5 | 191.5 | 812.8 | 0.71 -> 0.00 | cue 73%, unreached 27% |
+| Giantsflame Take Thee charged | Fai | 0.0 | 0.0 | 481.9 | 0.14 -> 0.33 | f22.3 99% |
+| The Flame of Frenzy tap | Fai | -121.2 | -121.2 | 235.2 | 0.97 -> 0.05 | f31.7 100% |
+| Collapsing Stars tap | Int | 43.1 | 43.1 | 219.3 | 0.61 -> 0.43 | f27.2 86%, unreached 13% |
+| Divine Beast Frost Stomp (Club) tap | Int | 4.7 | 4.7 | 176.7 | 0.97 -> 0.51 | cue 89%, f21 9% |
+| Flame Spear (Dagger) tap | Int | 1.1 | 1.1 | 119.1 | 0.99 -> 0.50 | cue 72%, f20 28% |
+| Glintstone Nail tap | Int | 84.1 | 84.1 | 183.6 | 0.79 -> 0.54 | f22.3 97%, cue 3% |
+| Gravity Well tap | Int | 22.8 | 22.8 | 109.7 | 0.86 -> 0.55 | f27.2 100% |
+| Carian Sovereignty (Dagger) hold | Int | -149.0 | -149.0 | -22.7 | 1.00 -> 1.00 | f35 80%, cue 20% |
+| Frenzied Burst charged | Fai | -180.1 | -180.1 | -37.9 | 1.00 -> 1.00 | f37.3 100% |
+
+Crystal Torrent's tap had no damaging hit before (its 045011 fires an empty ref); it now fires its
+045010 beam first, which he rolls every time. The tap path moves only the taps it reaches (Rock Blaster's 570.4 and Divine
+Beast Tornado's 201.8 stay, the first because its tap still lands one rock and the final 498-HP
+hit, the second because its earlier 045010 cast does no damage and the bolt only comes 25 frames
+later). p_evade is the chosen option's: a cast that reaches nobody pressed at once can move to a
+run-in he now escapes less (Palm Blast's tap, Dryleaf Arts: 0.9 -> 9.8 with p_evade 0.15 -> 0.97,
+the run-in to 1.5 m taking over).
 
 The follow-ups themselves are options now (`skill_followups`, `skill_option(follow=...)`): TAE event
 66 applying SpEffect 100050 / 100051 (R2) or 100054 / 100055 (R1) in the opening is what
@@ -1341,6 +1928,40 @@ then 4 from f35, so R2 pressed at f30-44 plays 040010: the MV 178 swing (f18-20)
 buff 1775/1777 at f6. The activation 040000 only fires the six 2003 flames (0.17 s at 8 m/s, 1.36 m)
 and their 2004 patches (0.8 m radius, 0.6 s). The option "opening then R2" is scored with both
 parts, each landed and reacted to from its own cue, the follow-up pressed at f30, FP 4 + 10.
+
+**A follow-up pressed late (bd er-effects-rs-me5p; the punish model: attack similarity, through
+`FollowupModel`).** User, 2026-11-10: "you can delay your followup slightly if you think your
+opponent will attempt to roll a projectile from the first part". Any frame of the window starts the
+follow-up: a press inside an input window and a cancel window is ready on that frame (`VERIFIED`,
+attacks.md section 4, `CSChrActionRequestModule::UpdateFromManipulator`); that the behavior script
+changes state the same frame, and that the TAE window's last frame is not in it, are `INFERRED`.
+Every follow-up hit is clip time from the press (`skill_option` offsets the part by it), so a late
+press moves its hits, its launches and the attacker's roll frame together. `sequence_outcome` cannot
+show the trick: a burst the defender evaded holds his next dodge back to that burst's last live frame
+plus his roll's recovery, whatever frame he rolled at (Glintblade Phalanx: the opening volley lives
+f33-63.5, so a defender who rolled it met the R2 volley at f65-69 with a floor of f71.5, and it
+caught him wherever it reached him). `FollowupModel`
+meets the follow-up with the roll he made instead:
+
+- he rolls the opening as `sequence_outcome` dodges it (timed on the opening alone, `INFERRED`);
+  the follow-up catches him when it touches him outside that roll's invincibility before its dodge
+  cancel (`_catches` on the roll's path), else he is free from the cancel and the follow-up's
+  earlier samples do not count again;
+- he knows the attack as pressed at once (cue 0, as every attack in the model) and dodges the
+  follow-up from there as `sequence_outcome` would. A late press meets that planned dodge that
+  many frames early: it catches him in the same way, else he is free again and reacts to the press
+  itself (the part's cue). `INFERRED`: he reads no delay ahead;
+- the attacker presses at once unless the roll showed on his machine his own reaction before the
+  window opened (`attacker_reactions`: `REACTION_MEDIAN_S` and its spread without the network legs,
+  since `dodge_presses` already places the roll on his machine; `INFERRED` symmetry); having seen
+  it, he presses at the frame that leaves him most against that roll. A defender caught by the
+  opening, or who does not roll it, meets the press at once, so the delay never helps against a
+  defender who stays.
+
+The PvP ranking's `skill_term` keeps the press at the window's first frame: it reacts to each part
+on its own from its own cue with no floor between them (`skill_reaction`), so a late press moves the
+part's hits and its cue together and changes only the attacker's roll frame, which can only add
+punish (`VERIFIED` reading of `skill_reaction`). Numbers: attack-similarity.md section 2.
 
 ### 16b. Buff ashes in the option pool (`--no-buff-options`)
 
@@ -1482,16 +2103,21 @@ roll at 55, reach 8.9 m). Checked against the data:
   entry (`CSBulletManager0x20Entry`, one per launch, `FUN_1403a5a10`) one DmgHitRecord named
   `share|bulletId:%d` when the flag or `attachEffectType` is set; `FUN_14051ced0` takes a fresh
   record from the free list every call, with no lookup by name. A `HitBulletID` child is launched
-  through `FUN_1403a2c40` -> `FUN_1403a5a10`, a new entry with its own record. So the flag makes a
-  `numShoot` fan hit a target once; it does not join the four separate launches. All four 2074s
-  can hit.
+  through `FUN_1403a2c40` -> `FUN_1403a5a10`, a new entry, which keeps the record its parent's
+  attack info carries (`FUN_14038b740` copies +0x638) and makes one only when it inherited none
+  (corrected 2026-11-12: bd dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12; the
+  parent's `attachEffectType` drops the inherited one, `FUN_14039bba0`). So the flag makes a
+  `numShoot` fan hit a target once; it does not join the four separate launches, whose markers
+  2070-2073 have neither the flag nor `attachEffectType` (`REGULATION`). All four 2074s can hit.
 - **Landing (section 15a).** On a defender who holds still all six land at 1.5-3.0 m: the f28
   blades break every corpus poise (150 x saRate), the middle reaction's lock outlasts f43, and the
   0.8 m knockback does not carry him out of a 2.2 m burst. Against the reaction dodge 60.7% evade
   (a lateral roll clears the bursts; a back roll is caught), land 0.696.
-- **Reach.** The 8.9 m is the melee reach: the 6.4 m dash between f27 and f39 plus the blade. The
-  bullet model places its roots 1 m ahead of the start (section 15, `INFERRED`), not along the
-  dash, which would put the markers at 0.5-5.1 m; `f_reach` saturates at 5.6 m either way.
+- **Reach.** The 8.9 m is the melee reach: the 6.4 m dash between f27 and f39 plus the blade. Until
+  2026-11-10 the bullet model placed its roots 1 m ahead of the start, not along the dash; now each
+  burst leaves DummyPoly 9 where the dash has carried the caster, 0.7 / 1.7 / 3.0 / 5.3 m out
+  (section 15, `bullet_launch`), which carries the bursts to 5.1-9.7 m; `f_reach` saturates at
+  5.6 m either way.
 
 So the six hits are the data's. The modelling error was elsewhere: a skill option was scored with
 contest and stamina factors of 1.0 and no equip-weight factor, which every slot pays. Swift Slash
@@ -1676,6 +2302,108 @@ primary-adoption check and the 1v1 model. No scoring term was added. A multi-opp
 (two pursuers, the step's invisibility and distance) is the unmodelled mechanism; scoring it would
 need a 2v1 engagement model, and the score it feeds would be a build-level swap-slot pick, not the
 primary weapon's.
+
+## 19. What a skill or spell costs its own user in HP
+
+User, 2026-11-14: "The model should price HP cost of spells/ashes." Before this, nothing that picks
+an ash priced it: the ash table's `score`, the `hit_skill` objective of `er-builds-optimize` and
+the attack-similarity nets all scored Bloody Slash's cast as if it were free, and Bloody Slash
+was the `--conflict` skill pick of 13 Keen and Heavy weapons (the `hit_skill` objective's of 11). `er-mechanics-ashes.py` read the cost
+rows only to classify them (`AshTables.is_buff` / `harms_target`), and attack-similarity only as an
+on-hit 'hp drain' token (`speffect_tokens`).
+
+### 19a. How the game takes it (`VERIFIED`, 2.7.2.0 `eldenring-deobf-1.17.2.bin`)
+
+No Magic, SwordArtsParam or BehaviorParam field costs HP (paramdefs read: their only cost fields
+are FP, stamina, durability and SA). The cost is a SpEffect row the cast applies to its own user,
+with a positive `changeHpRate` (row +0x9c) or `changeHpPoint` (+0xa0):
+
+- `0x1405008f0` / `0x140500920` read the two fields per ticking entry; `0x1404fc7d0` sums them;
+  `0x1404f8bb0` makes the HP change `trunc(-(maxHP x changeHpRate x 0.01 + changeHpPoint))`. So
+  `changeHpRate` is percent of the user's own max HP and `changeHpPoint` is flat.
+- `0x140436ad0` adds it to HP and clamps to 1 only when `0x140437d30` holds (debug no-death flags,
+  a ChrDataModule flag, or an active `stateInfo` 143 / 235 SpEffect). No cost row carries those or
+  `noDead`: the cost can kill its user.
+- TAE event 66 applies its row on the event's first frame (section 5), hit or not. A spell's
+  `Bullet.spEffectIDForShooter` lands on the caster at launch (`INFERRED`: the field's consumer is
+  not traced).
+- A status row applied to the caster goes through the caster's own resist gauge: the event-66
+  handler `0x14042c5b0` -> `0x1403e8dc0` -> `0x1403e8e70` -> `0x1403fb0a0`, which applies
+  (`0x1404fb790`) and then runs `CSChrResistModule` (`0x14043e0e0`), removing the entry when the
+  gauge held. So a status row costs its HP change only on the cast that procs.
+- How many times one application ticks (one, for every cost row below) is `INFERRED`: the tick
+  code `0x140501ed0` fires whenever the entry's timer (+0x4c) is <= 0 and then adds
+  `motionInterval`, but the timer's start was not traced.
+
+Addresses and the full chain: `scripts/er-mechanics-self-damage.py`'s module docstring.
+
+### 19b. Every skill and spell that costs HP (`REGULATION`, `er-mechanics-self-damage.py --list`)
+
+| item | row | cost per cast | when |
+|---|---|---|---|
+| Bloody Slash (ash) | 1763 | 5% of max HP + 50 | TAE 66, f15 of every opening clip |
+| Blood Blade (ash) | 1760 | 4% of max HP | TAE 66, f18 |
+| Assassin's Gambit (ash) | 1765 | 35 | TAE 66, f44 |
+| Seppuku (ash) | 1753 | 15% + 100, a bleed proc (`bloodAttackPower` 9999) | TAE 66, f31 |
+| Frenzyflame Thrust (Vyke's War Spear) | 1782 | madness 4 per event, 5 events (f10-f18): 15% + 100 HP and 10% + 30 FP on a proc | TAE 66 |
+| Feeble Lord's Frenzied Flame (Nanaya's Torch) | 20000802 | madness 3 per bullet | shooter |
+| Briars of Sin (sorcery 4900) | 1490000 -> 1490001 | 80, then bleed 30 | each launch (f11, f22, f33 clips) |
+| Briars of Punishment (sorcery 4910) | 1491000 -> 1491001 | 50, then bleed 25 | each launch |
+| Mantle of Thorns (sorcery 2004900) | 21490002 -> 21490003 | 50, then bleed 25 | ref 3 SpEffect, f18 |
+| Impenetrable Thorns (sorcery 2004910) | 21491000 -> 21491001 | 50, then bleed 25 | each launch (f18, f52) |
+| Inescapable Frenzy / The Flame of Frenzy / Unendurable Frenzy / Frenzied Burst / Midra's Flame of Frenzy | 1730001-2 / 1731002-3 / 1731101 / 1732002-3 / 21730001 | madness 14 and 9 / 4 / 3 / 20 (30 charged) / 6 per launch | shooter |
+| Fire's Deadly Sin | 1790000 -> 1790002 | 3 HP ticks while its 40 s aura cycles them | ref SpEffect |
+
+The NPC copies (Magic 8000, 8001, 53043, 53044, 53181, 53182, 53852, 2050090) carry the same or
+smaller rows and are not player spells.
+
+### 19c. Where each model prices it
+
+One rule, `er-mechanics-self-damage.cost_rows` / `cost_at`: `pct` percent of the user's max HP plus
+`flat`, per application. Status rows (`status_cost`): build-up of at least 9999 is one proc
+(Seppuku, `INFERRED`: no player resistance reaches it); a smaller build-up is the share of a proc
+it buys against the caster's own resistance, and with no such resistance it is left unpriced and
+listed. No model carries its attacker line's resistances (the corpus median is a usage figure, not
+a line's), so every small status build-up in the table above is unpriced today.
+
+- Ash table (`er-mechanics-ash-table.apply_hp_cost`): the cost comes off the clock the row is
+  scored on, `score` and `dps` (and the string's `dps`), never `dmg`. Max HP is `Table.max_hp`:
+  `TARGET_HP` (the 60 VIG RL150 player the table's status is read against, `INFERRED` mirror) on
+  its own, each spread's own under `--conflict` (`Conflict.table_rows`).
+  `er-mechanics-combo-loadout.set_self_costs` takes that charge back out (`unapply_hp_cost`) and
+  charges its own, at its build's max HP and land share, so the loadout pays once.
+- `hit_skill` (`er-builds-optimize.Scorer.skill_score`): the cast's damage less
+  `skill_hp_cost`, the cost at the build's own VIG (no talismans).
+- Attack similarity (version 13): every net, at each line's max HP (`line_hp`; the distance basis
+  at the median defender's, `INFERRED`), from the record's 'hp_cost'.
+
+### 19d. What it changed in `--conflict` (`MEASURED` 2026-11-14)
+
+`er-mechanics-ash-stats.py --conflict` on the 14 weapons whose pick was an HP-cost skill, against
+the earlier full run. At VIG 58-60 (1871 HP at 58) Bloody Slash costs 143.6 a cast; its table score
+at S_hit fell 669 -> 525. `gain` is S_comb's objective over S_hit's.
+
+| weapon | skill pick | objective's skill | gain | S_comb STR/DEX/ARC |
+|---|---|---|---|---|
+| Bastard Sword (Heavy) | Bloody Slash -> Troll's Roar | Troll's Roar (same) | 0.0% -> 0.0% | unchanged |
+| Black Steel Twinblade (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 9.7% -> 0.0% | 18/33/57 -> 18/76/9 |
+| Gargoyle's Twinblade (Heavy) | Bloody Slash (same) | Bloody Slash -> Giant Hunt | 6.3% -> 0.0% | 43/15/45 -> 77/15/9 |
+| Godskin Peeler (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 8.3% -> 0.0% | 17/44/52 -> 19/80/9 |
+| Godskin Stitcher (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 8.2% -> 0.0% | 15/45/52 -> 19/80/9 |
+| Great Epee (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 8.5% -> 0.0% | 15/44/53 -> 19/80/9 |
+| Idus Sword (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 11.8% -> 0.0% | 10/21/80 -> 19/80/9 |
+| Milady (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 9.5% -> 0.0% | 15/42/55 -> 19/80/9 |
+| Queelign's Greatsword (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 8.2% -> 0.0% | 15/42/52 -> 15/80/9 |
+| Smithscript Dagger (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 18.2% -> 0.2% | 10/20/77 -> 10/79/10 |
+| Sword Lance (Heavy) | Bloody Slash -> Giant Hunt | Giant Hunt (same) | 0.0% -> 0.0% | unchanged |
+| Twinblade (Keen) | Bloody Slash -> Beast's Roar | Bloody Slash -> Beast's Roar | 9.7% -> 0.0% | 15/41/56 -> 19/80/9 |
+| Twinned Knight Swords (Heavy) | Bloody Slash (same) | Bloody Slash -> Giant Hunt | 7.1% -> 0.0% | 36/18/49 -> 74/18/9 |
+| Vyke's War Spear (Standard) | Frenzyflame Thrust (same) | same | 8.9% -> 8.9% | unchanged (its madness is unpriced) |
+
+On Gargoyle's Twinblade and Twinned Knight Swords the skill pick stays Bloody Slash: the pick is
+the ash whose table score is highest at its own spend, and at an ARC-heavy spread Bloody Slash
+still beats Giant Hunt after its cost. The objective, which spends for hit and skill together,
+takes Giant Hunt on both.
 
 ## Commands
 

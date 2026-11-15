@@ -24,9 +24,55 @@ lands on whoever the weapon hits), with a positive `changeHpRate` (percent of ma
 
 Applications per event: 1 + floor(span / `motionInterval`), the span being the longer of the
 TimeAct window and the row's `effectEndurance` (`INFERRED` from the field names: no tick in a row
-whose span is shorter than its interval, which is every self-damage row in the regulation).
-Seppuku's 1753 also carries `bloodAttackPower` 9999; that build-up is taken as this same row's
-HP change (its `stateInfo` 6, the blood-loss state), not a second proc (`INFERRED`).
+whose span is shorter than its interval, which is every self-damage row in the regulation). A row
+reached through a `cycleOccurrenceSpEffectId` link is counted the same way, once per event, not
+once per interval of its parent (`INFERRED`; it undercounts Fire's Deadly Sin, whose 40 s aura
+1790000 cycles its 3 HP row 1790002 every 0.25 s, and that spell scores no hit anyway).
+
+## How the game takes the HP (`VERIFIED`, 2.7.2.0 `eldenring-deobf-1.17.2.bin`, 2026-11-14)
+
+- Per ticking entry, `0x1405008f0` reads `changeHpRate` (row +0x9c) and `0x140500920`
+  `changeHpPoint` (row +0xa0), each times the entry's four rates (+0x50..+0x5c). `0x1404fc7d0`
+  (1.16.2 `FUN_1404fb920`) sums them over the entries whose flag bit 4 is set this frame, scaling
+  only rows of `stateInfo` 14, 6, 260, 436 and 437 by the holder's damage rates (status.md
+  section 3: 100 on players).
+- `0x1404f8bb0` (1.16.2 `FUN_1404f7d00`) turns the sums into `trunc(-(maxHP x rate x 0.01 +
+  point))` (0.01 at `0x1432a3ba4`). So `changeHpRate` is a share of the holder's own max HP and
+  `changeHpPoint` is flat; there is no PvP branch.
+- `0x1404413b0` hands that to `0x140436ad0`: new HP = HP (+0x138) + delta, and only when that is
+  <= 0 and `0x140437d30` holds is it set to 1. `0x140437d30` holds for a ChrDataModule flag
+  (+0x19b bit 0, +0x19a bit 7), the global debug no-death flags (`0x140437a60`), or an active
+  SpEffect of `stateInfo` 143, or 235 on a player. No HP-cost row below carries either stateInfo
+  or `noDead`, so a skill's or spell's own cost can kill its user.
+- When: TAE event 66 applies its SpEffect on the event's first frame (ashes-of-war.md section 5),
+  whether or not the cast hits: Bloody Slash's 1763 at f15 of its opening, Blood Blade's 1760 at
+  f18, Seppuku's 1753 at f31, Assassin's Gambit's 1765 at f44. A spell's
+  `Bullet.spEffectIDForShooter` lands on the caster when the bullet is made (`INFERRED` from the field
+  name, consumer not traced), so Briars of Sin pays at each of its casts' launches.
+- A status row on the caster is gauged like a hit's: the event-66 handler `0x14042c5b0` ->
+  `0x1403e8dc0` -> `0x1403e8e70` -> `0x1403fb0a0`, which runs `SpecialEffect::Apply`
+  (`0x1404fb790`) and then the holder's `CSChrResistModule` dispatch `0x14043e0e0`, removing the
+  entry (`0x1404f7970`) when the gauge held. Every ChrIns apply wrapper found (`0x1403e8e70`,
+  `0x1403e91c0`, `0x1403e92b0`) goes through `0x1403fb0a0`. So such a row costs its HP only on
+  the application whose build-up empties the caster's gauge (`status_cost`).
+- Ticks: `0x140501ed0` fires a tick (flags 4, `0x140502070`, which adds `motionInterval` to the
+  entry's timer at +0x4c) whenever that timer is <= 0. Whether a new entry's timer starts at 0 was
+  not traced, so the applications rule above stays `INFERRED`.
+
+## Status rows (`status_cost`)
+
+A row whose `stateInfo` names a status and whose build-up field for it is positive costs its HP
+change only on a proc:
+
+- build-up of at least `SURE_BUILDUP` (Seppuku's 1753, `bloodAttackPower` 9999): it procs on
+  application, one proc (`INFERRED`: no player resistance reaches 9999);
+- otherwise, given the caster's resistance to that status, the cast's build-up over it is the
+  share of a proc it buys, at most one (`INFERRED`: the gauge's refill between casts and the
+  build-up past a proc, which the game throws away, are left out);
+- with no resistance given, it is not priced and is listed in `unpriced` with its build-up. No
+  model here carries its attacker line's own resistances, and the corpus median is a usage figure,
+  never a line's (AGENTS.md), so Vyke's Frenzyflame Thrust (1782, madness 4 a tick), the frenzy
+  incantations and the bleed half of Briars of Sin and the thorn sorceries are unpriced today.
 
 # Full-HP gear (`hp_gated_rows`, `gated_loss`)
 
@@ -94,6 +140,14 @@ EL_SUFFIX = ("Physics", "Magic", "Fire", "Thunder", "Dark")
 #: SpEffect links followed to the rows that land on the holder: `er-mechanics-ashes.SPEFFECT_LINKS`
 #: without `atkOccurrenceSpEffectId`, which lands on whoever the weapon hits.
 SELF_LINKS = ("replaceSpEffectId", "cycleOccurrenceSpEffectId")
+#: The build-up field of each status `stateInfo` (status.md: a row applies only the status its
+#: `stateInfo` names, `VERIFIED`).
+STATUS_FIELD = {2: "poizonAttackPower", 5: "diseaseAttackPower", 6: "bloodAttackPower", 116: "curseAttackPower",
+                260: "freezeAttackPower", 436: "sleepAttackPower", 437: "madnessAttackPower"}
+#: A status row with at least this build-up procs on application (module docstring, `INFERRED`).
+SURE_BUILDUP = 9999
+#: `Magic.refCategory` values (`er-mechanics-spells.REF_*`): a Bullet row, a SpEffect row.
+REF_BULLET, REF_SPEFFECT = 1, 2
 
 
 def _sib(name: str, fname: str):
@@ -140,21 +194,123 @@ def self_rows(sp: dict, sid: int, seen=None, depth: int = 0) -> list[int]:
     return out
 
 
-def self_damage(sp: dict, events, max_hp: float) -> dict:
-    """{`hp`, `rows` [{id, frame, per, n}], `frame` (first)}: the HP a cast's own SpEffect events
-    take from its user. `events` are `er-mechanics-ashes.skill_profile` entries of the paid-for
-    animation; `sp` is the raw SpEffectParam table."""
-    rows, hp = [], 0.0
+def row_status(row: dict):
+    """(build-up field, build-up per application) of a status row (module docstring), or None for
+    a row that takes its HP on every tick."""
+    f = STATUS_FIELD.get(row.get("stateInfo", 0))
+    b = (row.get(f, 0) or 0) if f else 0
+    return (f, b) if b > 0 else None
+
+
+def status_cost(row: dict, n: int, resist: dict | None):
+    """(procs bought, why unpriced or None) for `n` applications of status row `row` on its caster
+    (`status_cost` in the module docstring): 1 at `SURE_BUILDUP`, else the build-up over the
+    caster's `resist[field]` up to 1, else 0 and the reason."""
+    f, b = row_status(row)
+    if b >= SURE_BUILDUP:
+        return 1.0, None
+    r = (resist or {}).get(f)
+    if r:
+        return min(1.0, n * b / float(r)), None
+    return 0.0, f"{f} {b} x {n} on the caster: a proc needs the caster's own resistance"
+
+
+def cost_rows(sp: dict, applied, resist: dict | None = None) -> dict:
+    """{`pct`, `flat`, `rows` [{id, frame, n, pct, flat, procs?}], `unpriced` [{id, frame, why}]}:
+    what `applied` [(SpEffect id, first frame, span in s)] take from their holder, as `pct` percent
+    of max HP plus `flat` (`cost_at`). Each id is followed to the rows that land on the holder
+    (`self_rows`); a status row is priced by `status_cost`."""
+    rows, unpriced, pct, flat = [], [], 0.0, 0.0
+    for sid, f0, span in applied:
+        for i in self_rows(sp, sid):
+            r = sp[i]
+            n = applications(r, span)
+            rate, point = max(0.0, r.get("changeHpRate", 0.0) or 0.0), max(0, r.get("changeHpPoint", 0) or 0)
+            k, why = (1.0, None) if row_status(r) is None else status_cost(r, n, resist)
+            if why:
+                unpriced.append({"id": i, "frame": f0, "why": why})
+                continue
+            # A status row's HP is its proc's, once per proc; any other row's is per tick.
+            m = n if row_status(r) is None else k
+            rows.append({"id": i, "frame": f0, "n": n, "pct": rate * m, "flat": point * m,
+                         **({} if row_status(r) is None else {"procs": round(k, 4)})})
+            pct += rate * m
+            flat += point * m
+    return {"pct": pct, "flat": flat, "rows": rows, "unpriced": unpriced}
+
+
+def cost_at(cost: dict | None, max_hp: float | None) -> float:
+    """HP `cost` (`cost_rows`' `pct` and `flat`) takes from a holder of `max_hp`: 0 for no cost."""
+    if not cost:
+        return 0.0
+    return cost.get("pct", 0.0) / 100.0 * float(max_hp or 0.0) + cost.get("flat", 0.0)
+
+
+def event_applied(events) -> list:
+    """[(SpEffect id, first frame, span in s)] of the TimeAct SpEffect events in `events`
+    (`er-mechanics-ashes.skill_profile` entries)."""
+    out = []
     for e in events:
         if e.get("kind") != "speffect" or not e.get("speffect"):
             continue
         f0, f1 = e["frames"][0], e["frames"][1] if e["frames"][1] is not None else e["frames"][0]
-        for i in self_rows(sp, e["speffect"]["id"]):
-            n = applications(sp[i], (f1 - f0) / FPS)
-            per = row_hp(sp[i], max_hp)
-            rows.append({"id": i, "frame": f0, "per": round(per, 1), "n": n})
-            hp += per * n
-    return {"hp": round(hp, 1), "rows": rows, "frame": min((r["frame"] for r in rows), default=None)}
+        out.append((e["speffect"]["id"], f0, (f1 - f0) / FPS))
+    return out
+
+
+def self_damage(sp: dict, events, max_hp: float, resist: dict | None = None) -> dict:
+    """{`hp`, `rows` [{id, frame, per, n}], `frame` (first), `pct`, `flat`, `unpriced`}: the HP a
+    cast's own SpEffect events take from its user. `events` are `er-mechanics-ashes.skill_profile`
+    entries of the paid-for animation; `sp` is the raw SpEffectParam table; `resist` the caster's
+    status resistances ({build-up field: resistance}), for `status_cost`."""
+    c = cost_rows(sp, event_applied(events), resist)
+    rows = [{"id": r["id"], "frame": r["frame"], "n": r["n"],
+             "per": round(cost_at(r, max_hp) / (r["n"] if "procs" not in r else 1), 1)} for r in c["rows"]]
+    return {"hp": round(cost_at(c, max_hp), 1), "rows": rows, "pct": c["pct"], "flat": c["flat"],
+            "unpriced": c["unpriced"], "frame": min((r["frame"] for r in rows), default=None)}
+
+
+_SKILL_COST = {}
+
+
+def skill_cost(t, sid: int, wid: int, level: int = 0, grip="one", stance=None, follow_anim=None) -> dict:
+    """`cost_rows` of one cast of skill `sid` on weapon `wid`: the TimeAct SpEffect events of its
+    paid-for animation (`er-mechanics-ashes.main_anim`) and, for a follow-up, of the follow-up's
+    clip `follow_anim`, plus the `spEffectIDForShooter` of each bullet those clips launch (once per
+    launch, as `spell_cost`). Memoised per (sid, wid, level, grip, stance, follow_anim)."""
+    key = (sid, wid, level, str(grip), stance, follow_anim)
+    if key not in _SKILL_COST:
+        A = _sib("er_mechanics_ashes", "er-mechanics-ashes.py")
+        prof = A.skill_profile(t, sid, wid, level, grip, stance)
+        events = list(prof["anims"].get(A.main_anim(prof), []))
+        if follow_anim is not None and follow_anim != A.main_anim(prof):
+            events += prof["anims"].get(follow_anim, [])
+        applied = event_applied(events)
+        for e in events:
+            b = e.get("bullet") if e.get("kind") == "bullet" else None
+            if isinstance(b, dict) and b.get("shooter_speffect"):
+                applied.append((b["shooter_speffect"], e["frames"][0], 0.0))
+        _SKILL_COST[key] = cost_rows(t.speffect, applied)
+    return _SKILL_COST[key]
+
+
+def spell_cost(sp: dict, bullets: dict, magic: dict, fired) -> dict:
+    """`cost_rows` of one spell cast: for each fired `CastHighlightedMagic` event (frame, ref n),
+    the `spEffectIDForShooter` of the ref's Bullet row (`refCategory` 1, applied once per event,
+    `INFERRED`: the field's consumer was not traced) or the ref's own SpEffect (`refCategory` 2).
+    `bullets` and `magic` are the Bullet and Magic rows by id (`magic` the spell's own row)."""
+    applied = []
+    for f, n in fired:
+        cat, ref = magic.get(f"refCategory{n}"), magic.get(f"refId{n}", -1)
+        if not ref or ref <= 0:
+            continue
+        if cat == REF_BULLET:
+            s = (bullets.get(ref) or {}).get("spEffectIDForShooter", -1)
+            if s and s > 0:
+                applied.append((s, f, 0.0))
+        elif cat == REF_SPEFFECT:
+            applied.append((ref, f, 0.0))
+    return cost_rows(sp, applied)
 
 
 def skill_hurts_user(t, sid: int) -> bool:
@@ -328,7 +484,8 @@ def selftest() -> int:
             fails.append(msg)
 
     # Self-damage rows: Seppuku's 1753 shape, a heal and a linked self-damage row.
-    sp = {1753: {"changeHpRate": 15.0, "changeHpPoint": 100, "effectEndurance": 0.1, "motionInterval": 0.2},
+    sp = {1753: {"changeHpRate": 15.0, "changeHpPoint": 100, "effectEndurance": 0.1, "motionInterval": 0.2,
+                 "stateInfo": 6, "bloodAttackPower": 9999},
           1755: {"changeHpRate": 0.0, "changeHpPoint": 0, "effectEndurance": 60.0, "motionInterval": 0.0,
                  "cycleOccurrenceSpEffectId": 1756, "atkOccurrenceSpEffectId": 1753},
           1756: {"changeHpRate": 0.0, "changeHpPoint": 10, "effectEndurance": 1.0, "motionInterval": 0.25},
@@ -344,6 +501,34 @@ def selftest() -> int:
           "a heal takes no HP")
     check(self_damage(sp, [{"kind": "melee", "frames": (31.0, 34.0)}], 2594.0)["hp"] == 0.0,
           "a non-damaging cast (no self row) costs nothing")
+    # HP cost as a share of max HP plus flat (`cost_rows`, `cost_at`): Bloody Slash's 1763 shape.
+    sp.update({1763: {"changeHpRate": 5.0, "changeHpPoint": 50, "effectEndurance": 0.1, "motionInterval": 0.2,
+                      "stateInfo": 0},
+               1782: {"changeHpRate": 15.0, "changeHpPoint": 100, "effectEndurance": 1.0, "motionInterval": 5.0,
+                      "stateInfo": 437, "madnessAttackPower": 4},
+               1490000: {"changeHpRate": 0.0, "changeHpPoint": 80, "effectEndurance": 0.0, "motionInterval": 0.0,
+                         "replaceSpEffectId": 1490001},
+               1490001: {"changeHpRate": 15.0, "changeHpPoint": 100, "effectEndurance": 0.0, "motionInterval": 0.0,
+                         "stateInfo": 6, "bloodAttackPower": 30}})
+    c = cost_rows(sp, [(1763, 15.0, 0.0)])
+    check((c["pct"], c["flat"], cost_at(c, 2000.0), cost_at(c, 1000.0)) == (5.0, 50, 150.0, 100.0),
+          "Bloody Slash's 1763: 5% of max HP plus 50, so 150 at 2000 HP and 100 at 1000")
+    check(cost_at(cost_rows(sp, [(1641, 0.0, 0.0)]), 2000.0) == 0.0 and cost_at(None, 2000.0) == 0.0,
+          "a heal or no cost row prices 0")
+    mad = cost_rows(sp, [(1782, f, 0.0) for f in (10.0, 12.0, 14.0, 16.0, 18.0)])
+    check(cost_at(mad, 2000.0) == 0.0 and len(mad["unpriced"]) == 5,
+          "a small madness build-up on the caster is unpriced without the caster's resistance, never charged in full")
+    mad = cost_rows(sp, [(1782, f, 0.0) for f in (10.0, 12.0, 14.0, 16.0, 18.0)], {"madnessAttackPower": 400})
+    check(abs(cost_at(mad, 2000.0) - 5 * 4 / 400 * (0.15 * 2000 + 100)) < 1e-9 and not mad["unpriced"],
+          "with a resistance it is the build-up's share of one proc")
+    br = cost_rows(sp, [(1490000, 11.0, 0.0)])
+    check((br["flat"], [r["id"] for r in br["rows"]], [u["id"] for u in br["unpriced"]]) == (80, [1490000], [1490001]),
+          "Briars of Sin's shooter row: 80 HP, and its replace link's bleed build-up is unpriced")
+    mg = {"refCategory1": REF_BULLET, "refId1": 10490000, "refCategory2": REF_SPEFFECT, "refId2": 1763,
+          "refCategory3": 0, "refId3": 300}
+    sc = spell_cost(sp, {10490000: {"spEffectIDForShooter": 1490000}}, mg, [(11.0, 1), (22.0, 2), (30.0, 3)])
+    check((sc["pct"], sc["flat"]) == (5.0, 130),
+          "spell_cost: a bullet ref's shooter row and a SpEffect ref's row, an AtkParam ref nothing")
 
     # Full-HP gear: Ritual Shield's shape, the opponent hit 388.
     shield = [{"name": "Ritual Shield Talisman", "id": 340900, "gate": 1.0, "cut": 0.7, "bonus": 1.0}]
@@ -412,9 +597,60 @@ def selftest() -> int:
     return 1 if fails else 0
 
 
+def list_costs(max_hp: float) -> list[dict]:
+    """Every skill and spell of the regulation whose cast takes HP from its user: skills by their
+    TimeAct (`skill_hurts_user`, every clip of `a<600 + swordArtsTypeNew>` read), spells by their
+    `CastHighlightedMagic` refs (every clip of `a<400 + refType>`, `spell_cost`). Each row:
+    {kind, id, name, clips: {clip: {pct, flat, unpriced}}, hp (the dearest clip at `max_hp`)}."""
+    A = _sib("er_mechanics_ashes", "er-mechanics-ashes.py")
+    import struct
+    t = A.AshTables()
+    files = A.PR.load(None)
+    rows_, _, _ = A.PR.rows(A.PR.param_bytes(files, "Magic"))
+    magic = {r["id"]: r for r in rows_}
+    bullets = t.bullet
+    mnames = A.PR.row_names("Magic")
+    out = []
+
+    def summary(c):
+        return {"pct": c["pct"], "flat": c["flat"],
+                "unpriced": sorted({u["why"] for u in c["unpriced"]})}
+    for sid in sorted(t.arts):
+        if not skill_hurts_user(t, sid):
+            continue
+        clips = {}
+        for anim, events in sorted((A.skill_tae(t, sid) or {}).items()):
+            applied = [(s, round(e.start * FPS, 1), max(0.0, e.end - e.start))
+                       for e in events if e.type in A.EV_SPEFFECT
+                       for s in struct.unpack_from("<ii", e.params, 0) if s > 0]
+            c = cost_rows(t.speffect, applied)
+            if c["rows"] or c["unpriced"]:
+                clips[anim] = summary(c)
+        out.append({"kind": "skill", "id": sid, "name": t.arts_name(sid), "clips": clips})
+    for mid, m in sorted(magic.items()):
+        refs = {n for n in range(1, 11) if m.get(f"refId{n}", -1) > 0}
+        c0 = spell_cost(t.speffect, bullets, m, [(0.0, n) for n in sorted(refs)])
+        if not (c0["rows"] or c0["unpriced"]):
+            continue
+        clips = {}
+        cat = 400 + m["refType"]
+        for anim in sorted(A.ATK.tae_animations(cat) or {}):
+            fired = [(round(e.start * FPS, 1), e.params[8] + 1)
+                     for e in (A.ATK.resolve_events(cat, anim)[2] or []) if e.type == 64 and len(e.params) > 8]
+            c = spell_cost(t.speffect, bullets, m, fired)
+            if c["rows"] or c["unpriced"]:
+                clips[anim] = summary(c)
+        out.append({"kind": "spell", "id": mid, "name": mnames.get(mid) or str(mid), "clips": clips})
+    for r in out:
+        r["hp"] = round(max((cost_at(c, max_hp) for c in r["clips"].values()), default=0.0), 1)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("skill", nargs="?")
+    ap.add_argument("--list", action="store_true",
+                    help="every skill and spell whose cast takes HP from its user, per clip (--max-hp prices it)")
     ap.add_argument("--weapon", default="Estoc")
     ap.add_argument("--grip", default="2H", choices=("1H", "2H"))
     ap.add_argument("--talismans", default="", help="comma-separated worn talismans")
@@ -423,6 +659,13 @@ def main() -> int:
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.list:
+        for r in list_costs(a.max_hp):
+            print(f"{r['kind']:<5} {r['id']:>8} {r['name']}: {r['hp']:.0f} HP at {a.max_hp:g} max HP (dearest clip)")
+            for anim, c in r["clips"].items():
+                print(f"      {anim:06d}  {c['pct']:g}% of max HP + {c['flat']:g}"
+                      + (f"; unpriced: {'; '.join(c['unpriced'])}" if c["unpriced"] else ""))
+        return 0
     if not a.skill:
         ap.error("name a skill, or --selftest")
     A = _sib("er_mechanics_ashes", "er-mechanics-ashes.py")

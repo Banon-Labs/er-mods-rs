@@ -171,8 +171,13 @@ build's R1, R2, running and jump openers (the families `offense` already average
 from their own reach and backed out of on reaction (neutral.md section 7), the opponent stuck in
 his recovery at the gap the run left. In each, the kit's best spell lands what
 `er-mechanics-spells.punish_values` gives (its bullets flown at him, rolled on reaction from his
-dodge cancel), over what the focus weapon's own R1 #1 lands there: its mean hit when it runs in and
-strikes before that dodge cancel, else nothing (`spell_punish`). An engagement offers
+dodge cancel by a defender who cannot tell it from the spells of its TimeAct and casting SFX the
+build casts, nor a tap from its charge before the release, `Lookalikes`; less his R1 when he rolls
+it and runs in before the caster's roll cancel), over the
+better of two things the build already throws there: the focus weapon's own R1 #1 (its mean hit
+when it runs in and strikes before that dodge cancel, else nothing) and the best skill of the
+weapons it holds, scored as a cast is (`held_skills`, `er-mechanics-spells.rival_values`), so a
+spell that only matches a held weapon's skill earns nothing (`spell_punish`). An engagement offers
 `er-mechanics-ashes.REACT_SHARE` (0.5, `INFERRED`) x the whiff share of these punishes: one opener
 per engagement, met by a defender who reacts and runs back. The gain joins `offense` in units of
 the hit the build lands per engagement (`win` of its hit); each punish's cast goes into the FP plan
@@ -431,7 +436,8 @@ class Pouch:
             return {r['id']: r for r in PR.rows(PR.param_bytes(files, stem), set(fields))[0]}
 
         self.gflag = rows('EquipParamGoods', ('goodsType', 'goodsUseAnim', 'maxNum', 'isEnhance', 'enable_multi',
-                                              'enable_live', 'enable_hostile', 'enable_friendly', 'potGroupId'))
+                                              'enable_live', 'enable_hostile', 'enable_friendly', 'potGroupId',
+                                              'refVirtualWepId'))
         self.magic = rows('Magic', ('mp', 'slotLength', 'requirementIntellect', 'requirementFaith',
                                     'requirementLuck', 'enable_multi', 'enable_live', 'enable_hostile',
                                     'enable_friendly'))
@@ -743,7 +749,8 @@ class Pouch:
                 continue
             if (kind == 'consumable' and c['pot_group'] >= 0 and refs and refs[2]
                     and self._bullet_damages(refs[2])):
-                self.throwables[key] = dict(c, bullets=[b for b in refs[2] if b and b > 0])
+                self.throwables[key] = dict(c, bullets=[b for b in refs[2] if b and b > 0],
+                                            virtual_weapon=f['refVirtualWepId'])
             if any(r[col] < 0 for r in sp for col in B.STATUS.values()):
                 cls = 'status cure'
             elif f['isEnhance'] or any(r['spCategory'] in B.WEAPON_BUFF_CATS for r in sp):
@@ -1151,7 +1158,8 @@ class Pouch:
         return None
 
     def spell_values(self, ctx, key):
-        """(damage landed per spaced-whiff situation, FP of the variant that lands it) of attack
+        """(worth per spaced-whiff situation: damage landed less the punish of a rolled cast, FP of
+        the variant that lands it) of attack
         spell `key` from the held catalyst at its top level (`INFERRED`: the plan names no level),
         or None when it has no flight or no catalyst holds it."""
         c = self.cands[key]
@@ -1160,12 +1168,15 @@ class Pouch:
             return None
         ck = (key, cat, tuple(sorted(ctx['stats'].items())), tuple(ctx['talismans']))
         if ck not in self._spell_vals:
-            _, sm = self.spell_model()
+            SP, sm = self.spell_model()
             pairs = [(s['distance'], s['recovery']) for s in self.spaced()['situations']]
             got = None
             try:
+                # The defender cannot tell it from the spells of its TimeAct and casting SFX this
+                # build casts with the same catalyst (`er-mechanics-spells.lookalike_group`).
                 got = sm.punish_values(c['goods'], sm.catalyst(cat), ctx['stats'], pairs, ctx['talismans'], None,
-                                       sm.defender(self.rl))
+                                       sm.defender(self.rl), strikes=SP.punish_strikes(self.rl),
+                                       cats=[sm.catalyst(cat)])
             except (KeyError, TypeError, SystemExit):
                 got = None
             if got:
@@ -1201,6 +1212,20 @@ class Pouch:
         return [ctx['base_hit'] if max(0.0, s['distance'] - reach) * k + strike <= s['recovery'] else 0.0
                 for s in situations]
 
+    def held_skills(self, ctx, situations):
+        """Per spaced-whiff situation, the best punish among the skills of the weapons the build
+        holds (`er-mechanics-spells.rival_values`): the focus weapon's (`ctx['skill']`) and each plan
+        weapon's own at its top level (`INFERRED`: the plan names no level or affinity)."""
+        if 'held_skills' not in ctx:
+            SP, sm = self.spell_model()
+            weapons = [{'weapon': ctx['weapon'], 'affinity': ctx['affinity'], 'level': ctx['level'],
+                        'skill': ctx['skill'], 'two_handed': ctx['two']}]
+            weapons += [{'weapon': n} for n in ctx['plan_weapons']]
+            pairs = [(s['distance'], s['recovery']) for s in situations]
+            ctx['held_skills'] = sm.rival_values(weapons, ctx['stats'], pairs, sm.defender(self.rl),
+                                                 SP.punish_strikes(self.rl))[0]
+        return ctx['held_skills']
+
     def attack_term(self, ctx, keys):
         """{'gain', 'fp', 'casts', 'live'} of the kit's attack spells, per engagement: `spell_punish`
         over the spaced whiffs, the FP and casts of the best spell in each, and the spells that are
@@ -1215,7 +1240,7 @@ class Pouch:
         sit = sp['situations']
         weight = [s['weight'] for s in sit]
         total = sum(weight) or 1.0
-        weapon = self.weapon_punish(ctx, sit)
+        weapon = [max(r, s) for r, s in zip(self.weapon_punish(ctx, sit), self.held_skills(ctx, sit))]
         best, fp, who = list(weapon), [0.0] * len(sit), [None] * len(sit)
         for k in atk:
             got = self.spell_values(ctx, k)
@@ -1252,13 +1277,27 @@ class Pouch:
             ctx['own_statuses'] = {s['status'] for s in ws['sources']}
         return ctx['own_statuses']
 
+    def pot_scale(self, ctx, key, atk_row):
+        """{element: `FUN_140690390` multiplier} of thrown item `key`'s virtual weapon for one of
+        its bullet's AtkParam rows at the build's stats (the AtkParam's
+        `overwriteAttackElementCorrectId` swapped in when set), or {} when it names none."""
+        vw = self.throwables[key].get('virtual_weapon', -1)
+        _, sm = self.spell_model()
+        w = sm.ar.weapons.get(vw) if vw and vw > 0 else None
+        if w is None:
+            return {}
+        cat = {'wep': w, 'reinf': sm.ar.reinforce[w['reinforceTypeId']]}
+        return {el: sm.multiplier(cat, el, ctx['stats'], sm.atk.get(atk_row)) for el in ELEMENTS}
+
     def pot_hp(self, ctx, key):
         """{'hp', 'damage', 'status'} of one throw of pot `key` on the window's median defender.
 
         Damage: the flat attack of the bullet chain's most damaging node (`atkPhys` and the
-        elemental `atk*` columns; a pot's AtkParam scales with no attribute), through the median
-        defender's defense and absorption (`er-mechanics-defense.damage`, as `hit` takes the
-        focus weapon's). The thrown bullet and its burst are both damaging nodes on some pots (Hefty
+        elemental `atk*` columns) times the stat scaling of the item's virtual weapon
+        (`refVirtualWepId`, `pot_scale`; `VERIFIED` 2026-11-09: a goods bullet takes
+        `FUN_1406832a0`'s flat branch with that weapon, attack-rating.md section 4), through the
+        median defender's defense and absorption (`er-mechanics-defense.damage`, as `hit` takes
+        the focus weapon's). The thrown bullet and its burst are both damaging nodes on some pots (Hefty
         Rock Pot: 370 each); only the larger is counted, whether one target takes both is not
         traced (`INFERRED`). Status: each on-hit row's build-up over the median resistance of its
         group times its proc HP, a damage-over-time proc cut to one battle, as
@@ -1277,6 +1316,8 @@ class Pouch:
                 return
             flat = {el: float(bt['flat'].get(el, 0)) for el in ELEMENTS}
             if any(flat.values()):
+                scale = self.pot_scale(ctx, key, bt['atk_row'])
+                flat = {el: v * scale.get(el, 1.0) for el, v in flat.items()}
                 phys = self.ATK.PHYS_TYPE_NAMES.get(bt['atk_attribute'], 'standard')
                 best = max(best, sum(self.DEF.damage(flat, 100.0, self.defender, phys)['by_type'].values()))
             for sid in bt['on_hit_speffects']:
@@ -1744,6 +1785,12 @@ def _real(p, check):
           {g: p.pot_capacity[g] for g in sorted(p.pot_capacity)}, {1: 20, 2: 10, 3: 10, 4: 10})
     check('Freezing Pot and Fire Pot are pot throwables',
           ('consumable:Freezing Pot' in p.throwables, 'consumable:Fire Pot' in p.throwables), (True, True))
+    A_, t_ = p._ash_tables()
+    fire_atk = A_.bullet_tree(t_, p.throwables['consumable:Fire Pot']['bullets'][0])['atk_row']
+    weak, strong = (p.pot_scale({'stats': {'str': s, 'dex': 10}}, 'consumable:Fire Pot', fire_atk)['fire']
+                    for s in (10, 60))
+    check('a pot scales with the stats of its virtual weapon: Fire Pot hits harder at STR 60 than at 10',
+          strong > weak >= 1.0, True)
     boluses = p.bolus_fill()
     check('bolus fill: no death blight (no window weapon inflicts it), bleed first',
           ('death_blight' in {b['status'] for b in boluses}, boluses[0]['status'] if boluses else None),
