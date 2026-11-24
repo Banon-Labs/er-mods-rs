@@ -164,12 +164,12 @@ def selftest() -> int:
     # silently stops finding anything and reports "not re-pinnable" forever.
     sample = (
         "thread 'main' panicked at build-support/prologue_build.rs:1192:9:\n"
-        "assertion `left == right` failed: V202_INVADE_PROLOGUE: the named instructions "
+        "assertion `left == right` failed: V203_INVADE_PROLOGUE: the named instructions "
         "encode to f3 0f 1e fa but the pinned bytes are f3 0f 1e fb -- the assembler picked"
     )
     found = FAILURE.search(sample)
     check("the build-script failure wording parses", bool(found), True)
-    check("...and yields the spec name", found.group("spec"), "V202_INVADE_PROLOGUE")
+    check("...and yields the spec name", found.group("spec"), "V203_INVADE_PROLOGUE")
     check(
         "...and the ASSEMBLED bytes, not the pinned ones",
         found.group("bytes"),

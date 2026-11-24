@@ -31,7 +31,7 @@ test_reason_quotes_detail_directive_and_helper if {
 	contains(d.reason, "git push -u origin fix/x")
 	contains(d.reason, "you open a kitty tab for each inline bash block you want me to run")
 	contains(d.reason, "python3 scripts/kitty-user-command.py --title '<short title>' --why '<why it should be run>' -- '<command>'")
-	contains(d.reason, "names which tabs you opened")
+	contains(d.reason, "names which splits you opened")
 }
 
 test_halt_on_object_signal if {

@@ -73,8 +73,8 @@ def selftest():
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("rva", nargs="*")
-    parser.add_argument("--build", default="v201")
-    parser.add_argument("--to", default="v202")
+    parser.add_argument("--build", default="v202")
+    parser.add_argument("--to", default="v203")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
