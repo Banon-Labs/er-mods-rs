@@ -88,7 +88,8 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends clang lld llvm \
             || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
-          rustup toolchain install stable --profile minimal
+          # No name: installs the version rust-toolchain.toml pins, with its components.
+          rustup toolchain install --profile minimal
           rustup target add x86_64-pc-windows-msvc
 
       - name: Install cargo-xwin

@@ -374,7 +374,8 @@ jobs:
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
           }
-          rustup toolchain install stable --profile minimal --component rustfmt
+          # No name: installs the version rust-toolchain.toml pins, with its components.
+          rustup toolchain install --profile minimal
           rustup target add x86_64-pc-windows-msvc
       - uses: taiki-e/install-action@v2
         with:
@@ -533,7 +534,8 @@ jobs:
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
           }
-          rustup toolchain install stable --profile minimal --component rustfmt
+          # No name: installs the version rust-toolchain.toml pins, with its components.
+          rustup toolchain install --profile minimal
           rustup target add x86_64-pc-windows-msvc
 
       # PINNED shellcheck, replacing whatever the runner image ships. Measured on run 33468994945:
