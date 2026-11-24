@@ -39,7 +39,7 @@ fatal() { echo "portrait-dll-smoke: $*" >&2; exit 2; }
 
 [[ -f "$DLL_SRC" ]] || fatal "missing DLL: $DLL_SRC (build: cargo xwin build --release --target x86_64-pc-windows-msvc -p er-loading-portrait)"
 [[ -d "$GAME_DIR" ]] || fatal "missing GAME_DIR: $GAME_DIR"
-steam_running || fatal "Steam is not running -- start Steam first (interactive login)"
+steam_running || fatal "Steam is not running -- start Steam first"
 me3_preflight || fatal "me3 preflight failed"
 me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
 python3 - <<'PY' || fatal "live game/launcher process present -- refusing a second instance"

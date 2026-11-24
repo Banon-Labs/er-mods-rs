@@ -611,7 +611,48 @@ def main() -> int:
         "a TaskStop that errored must not count as ending the task",
     )
 
-    print("idle-hold signal tests passed (26 cases)")
+    # (24) 2026-10-30: the harness logs an `api-request-blob` copy of each message it sends, written
+    # after that message's tool_result. A `run_in_background` Bash that finished ("exit 0") was booked
+    # again from its blob copy, never got a second result, and stayed "live"; the closing report after
+    # the later task's notification halted as an 826-char verbose pause with nothing running.
+    def blob_copy(ev: dict) -> dict:
+        return {"type": "api-request-blob", "hash": "h", "message": {"role": "assistant",
+                                                                       **ev["message"]}}
+
+    finished_bg = {
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "id": "toolu_x", "name": "Bash",
+                                 "input": {"command": "python3 scripts/x.py > /tmp/x/o.txt",
+                                           "run_in_background": True}}]},
+    }
+    blob_incident = (
+        [user("Sort the talismans."), finished_bg,
+         {"type": "user", "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "toolu_x", "content": "exit 0"}]}},
+         blob_copy(finished_bg)]
+        + bg_launch("toolu_y", "b972d96y5", foreground_moved=True)
+        + [{"type": "queue-operation", "operation": "enqueue",
+            "content": notification("toolu_y", "b972d96y5")},
+           user(notification("toolu_y", "b972d96y5"))]
+        + peek_turn()
+        + [assistant_text(report)]
+    )
+    expect(
+        "report-after-api-request-blob-replay-is-clean",
+        blob_incident,
+        lambda o: o == "",
+        "an api-request-blob copy of a finished background Bash is not a new launch",
+    )
+    # Control: without the real result the same launch is still live, blob or no blob.
+    expect(
+        "verbose-long-blob-copy-of-unfinished-launch-flags",
+        [user("Sort the talismans."), finished_bg, blob_copy(finished_bg),
+         user("Anything yet?"), assistant_text(report)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "dropping blob copies must not hide a launch that never returned",
+    )
+
+    print("idle-hold signal tests passed")
     return 0
 
 

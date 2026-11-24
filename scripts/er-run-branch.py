@@ -44,6 +44,7 @@ Usage:
     python3 scripts/er-run-branch.py --vanilla            # no ersc; .sl2 saves only
     python3 scripts/er-run-branch.py --monitor DP-1       # move the ER window when it appears
     python3 scripts/er-run-branch.py --dry-run            # stage and report, launch nothing
+    python3 scripts/er-run-branch.py --with <pkg> --stamp-only   # stamp `HEAD` for a push, then close
     python3 scripts/er-run-branch.py --status <run-id>
     python3 scripts/er-run-branch.py --selftest
 """
@@ -134,6 +135,17 @@ TESTIMONY_SLICE_SECONDS = 4.0
 # must be run in the background by the caller, since an agent shell is capped at 30s.
 TESTIMONY_BUDGET_SECONDS = 90.0
 SUBPROCESS_TIMEOUT = 28
+
+# `--stamp-only`: a run launched only so `scripts/check-runtime-evidence.sh` can pass for the tip
+# before a push. Nothing closed such a run, so on 2026-10-27 an er-npc-summons stamp landed within
+# seconds and the game stayed up for minutes until the user pointed out it was being held for
+# nothing. The budget is the wait for the stamp, measured from the launch block; the game is closed
+# when it lands or when the budget runs out, whichever is first.
+STAMP_BUDGET_SECONDS = 120.0
+# One wait between evidence checks, re-armed until the budget is spent. It returns early on any
+# write in the watched directories, which is when a stamp can have appeared.
+STAMP_SLICE_SECONDS = 4.0
+EXIT_NO_STAMP = 5
 
 
 # The cdylib that actually presses buttons. `--harness-drive` selects a phase table inside it, so
@@ -253,13 +265,19 @@ def missing_fetched(packages: list[str]) -> list[str]:
     return problems
 
 
-def steam_running() -> bool:
-    """Ask the sanctioned helper. A bare `pgrep -x steam` false-negatives here and is guarded."""
+def steam_ensure_signed_in() -> tuple[bool, str]:
+    """Start Steam if it is down and wait for it to sign in, through the sanctioned helper.
+
+    A bare `pgrep -x steam` is guarded, and a running client is not enough: one that lost its
+    session keeps running while logged off. The helper reads the logon state from Steam's log.
+    """
     helper = SCRIPTS / "steam-running.sh"
     if not helper.is_file():
-        return True
-    proc = subprocess.run(["bash", str(helper)], capture_output=True, timeout=20)
-    return proc.returncode == 0
+        return True, "steam-running.sh absent"
+    proc = subprocess.run(
+        ["bash", str(helper), "--ensure"], capture_output=True, text=True, timeout=30
+    )
+    return proc.returncode == 0, proc.stdout.strip()
 
 
 def x11_headroom() -> tuple[int, str]:
@@ -704,11 +722,16 @@ def preflight(args) -> tuple[dict, dict | None]:
                 + "\nClear it first:  python3 scripts/er-teardown.py --reason stale-launcher"
             )
 
-    if not args.skip_steam_check and not steam_running():
-        raise RuntimeError(
-            "Steam is not running. Start it (it needs an interactive login), or pass "
-            "--skip-steam-check to accept a non-representative environment."
-        )
+    if not args.skip_steam_check:
+        signed_in, steam_state = steam_ensure_signed_in()
+        if not signed_in:
+            raise RuntimeError(
+                f"BLOCKED ON THE USER: Steam is not signed in ({steam_state}). Ask the user to "
+                "sign in to Steam, and wait for it in the background:\n"
+                f"  until bash {SCRIPTS / 'steam-running.sh'} --signed-in; do sleep 5; done\n"
+                "Then rerun this launch. --skip-steam-check accepts a non-representative "
+                "environment instead."
+            )
 
     if not getattr(args, "skip_x11_check", False):
         headroom, report = x11_headroom()
@@ -1096,6 +1119,11 @@ def launch(args) -> int:
             detail += ["", "Process is gone; staged files were removed."]
 
         print(failed_block(run_id, reason, detail))
+        if getattr(args, "stamp_only", False) and alive:
+            # Silence from the testimony witness does not mean no shell stamped its log, and a game
+            # left up here is held for nothing, which is the case this flag exists to end.
+            sys.stdout.flush()
+            stamp_and_close(run_id, process.pid, [artifact_dir, game_dir()])
         return EXIT_NO_TESTIMONY
 
     _spawn_reaper(run_id, args.monitor)
@@ -1129,6 +1157,9 @@ def launch(args) -> int:
             }
         )
     )
+    if getattr(args, "stamp_only", False):
+        sys.stdout.flush()
+        return stamp_and_close(run_id, process.pid, [artifact_dir, game_dir()])
     return EXIT_OK
 
 
@@ -1148,6 +1179,148 @@ def _spawn_reaper(run_id: str, monitor: str | None) -> None:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+
+def checkout_head() -> str:
+    """The full `HEAD` sha of the checkout this script runs from, which is what a push from it sends."""
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=SUBPROCESS_TIMEOUT,
+    ).stdout.strip()
+
+
+def stamp_evidence(sha: str) -> tuple[bool, str]:
+    """Ask `check-runtime-evidence.sh` whether `sha` is proven, and return its own one-line reason.
+
+    The script decides where the logs are -- the run root and the game directory both count, and a
+    shell like er-npc-summons logs only to the game directory -- so this never names a log path.
+    """
+    proc = subprocess.run(
+        ["bash", str(SCRIPTS / "check-runtime-evidence.sh"), sha],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    lines = [line.strip() for line in (proc.stderr + proc.stdout).splitlines() if line.strip()]
+    passed = proc.returncode == 0
+    if passed:
+        # Silent success is the script's answer for a tip that changes no crate.
+        note = lines[-1] if lines else "check-runtime-evidence.sh exited 0 with nothing to say"
+    else:
+        # The refusal is a paragraph; its `evidence` row is the line that says what is missing.
+        note = next(
+            (line for line in lines if line.startswith("evidence")),
+            lines[-1] if lines else f"exit {proc.returncode}",
+        )
+    return passed, note
+
+
+def await_stamp(
+    sha: str,
+    watch_dirs: list[Path],
+    launcher_pid: int,
+    budget: float = STAMP_BUDGET_SECONDS,
+    check=stamp_evidence,
+    clock=time.monotonic,
+) -> dict:
+    """Re-run the evidence check after each write in `watch_dirs` until it passes or `budget` ends.
+
+    Event-driven like the testimony waits: a stamp can only appear when a DLL writes a log, so the
+    check is repeated on writes, and a quiet slice re-checks once before waiting again. The launcher
+    exiting ends the wait too -- a game that is gone writes no stamp.
+    """
+    started = clock()
+    deadline = started + budget
+    with WatchSet(watch_dirs) as watch:
+        while True:
+            passed, note = check(sha)
+            if passed:
+                return {"landed": True, "note": note, "seconds": clock() - started}
+            if not er_run_lib.process_alive(launcher_pid):
+                return {"landed": False, "note": note, "seconds": clock() - started,
+                        "launcher_exited": True}
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return {"landed": False, "note": note, "seconds": clock() - started}
+            slice_seconds = min(STAMP_SLICE_SECONDS, remaining)
+            if watch.available:
+                watch.wait(slice_seconds)
+            else:
+                er_run_lib.wait_for_exit(launcher_pid, slice_seconds)
+
+
+def _teardown_module():
+    """`scripts/er-teardown.py`, imported, so the close goes through its own sweep and outcome stamp.
+
+    In-process rather than a subprocess because its SIGTERM grace alone is 12 s and a subprocess
+    here must stay under `SUBPROCESS_TIMEOUT`.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("er_teardown", SCRIPTS / "er-teardown.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def stamp_teardown(reason: str, module=None) -> tuple[bool, str]:
+    """Close the game the way `er-teardown.py --reason=<reason>` would. Returns (closed, detail).
+
+    It keeps that script's one refusal: a WEDGED game whose threads were never walked is left up,
+    because killing it destroys the only evidence that names the deadlock.
+    """
+    module = module or _teardown_module()
+    prefix = module.DEFAULT_PREFIX
+    if module.wedged_and_walkable(module.game_health(prefix)) and module.recent_walk_report() is None:
+        return False, (
+            "the game is WEDGED and its threads were never walked, so er-teardown refuses to kill "
+            "it; walk it with scripts/er-frida-stall-walk.py, then run "
+            f"scripts/er-teardown.py --reason={reason}"
+        )
+    module.teardown(prefix, verbose=False, reason=reason)
+    remaining = module.survey(prefix)
+    if remaining:
+        return False, f"{len(remaining)} prefix process(es) survived the teardown"
+    return True, f"er-teardown --reason={reason}"
+
+
+def stamp_line(sha: str, budget: float, waited: dict, closed: bool, detail: str) -> str:
+    """The one line `--stamp-only` ends with."""
+    short = sha[:8]
+    if waited["landed"]:
+        head = f"stamp-only: the stamp for {short} landed after {waited['seconds']:.0f}s ({waited['note']})"
+    elif waited.get("launcher_exited"):
+        head = (
+            f"stamp-only: the game exited after {waited['seconds']:.0f}s and the stamp for {short} "
+            f"never landed ({waited['note']})"
+        )
+    else:
+        head = (
+            f"stamp-only: the stamp for {short} did NOT land within {budget:.0f}s "
+            f"({waited['note']})"
+        )
+    if closed:
+        tail = "and the game was closed" if waited["landed"] else "and the game was closed anyway"
+        return f"{head}, {tail} ({detail})."
+    return f"{head}, and the game was NOT closed: {detail}."
+
+
+def stamp_and_close(run_id: str, launcher_pid: int, watch_dirs: list[Path]) -> int:
+    """`--stamp-only`'s tail: wait for the tip's stamp, then close the game whatever happened."""
+    sha = checkout_head()
+    if not sha:
+        waited = {"landed": False, "note": "git rev-parse HEAD named no commit", "seconds": 0.0}
+    else:
+        waited = await_stamp(sha, watch_dirs, launcher_pid)
+    closed, detail = stamp_teardown(f"stamped-{run_id}")
+    print(stamp_line(sha or "<no-head>", STAMP_BUDGET_SECONDS, waited, closed, detail))
+    if not closed:
+        return EXIT_ERROR
+    return EXIT_OK if waited["landed"] else EXIT_NO_STAMP
 
 
 def status(run_id: str) -> int:
@@ -1767,6 +1940,98 @@ def selftest() -> int:
         f"a decode of a different container than the configured one says so ({refusal})",
     )
 
+    # `--stamp-only`. Each fake evidence check writes into the watched directory, so every wait
+    # returns on that write rather than on its slice, and the fake clock moves a second per read.
+    with tempfile.TemporaryDirectory() as raw:
+        watched = Path(raw)
+        ticks = iter(range(10_000))
+        calls: list[str] = []
+
+        def fake_check(results):
+            def check_sha(sha: str) -> tuple[bool, str]:
+                calls.append(sha)
+                (watched / f"write-{len(calls)}.log").write_text("x", encoding="utf-8")
+                passed = results[min(len(calls), len(results)) - 1]
+                return passed, "found" if passed else "no log names it"
+            return check_sha
+
+        waited = await_stamp(
+            "a" * 40, [watched], os.getpid(), budget=60,
+            check=fake_check([False, False, True]), clock=lambda: float(next(ticks)),
+        )
+        check(
+            waited["landed"] and len(calls) == 3 and calls[0] == "a" * 40,
+            f"the stamp wait re-checks after each write and stops at the first pass ({waited})",
+        )
+        calls.clear()
+        waited = await_stamp(
+            "b" * 40, [watched], os.getpid(), budget=5,
+            check=fake_check([False]), clock=lambda: float(next(ticks)),
+        )
+        check(
+            not waited["landed"] and 1 < len(calls) < 10 and not waited.get("launcher_exited"),
+            f"a stamp that never lands ends the wait at the budget ({len(calls)} checks)",
+        )
+
+    landed_line = stamp_line("c" * 40, 120, {"landed": True, "note": "n", "seconds": 7}, True, "td")
+    missed_line = stamp_line("c" * 40, 120, {"landed": False, "note": "n", "seconds": 120}, True, "td")
+    stuck_line = stamp_line("c" * 40, 120, {"landed": False, "note": "n", "seconds": 120}, False, "why")
+    check(
+        "landed" in landed_line and "game was closed" in landed_line and "\n" not in landed_line,
+        f"a landed stamp reports one line saying the game was closed ({landed_line})",
+    )
+    check(
+        "did NOT land within 120s" in missed_line and "closed anyway" in missed_line,
+        f"a missed stamp says so and that the game was closed anyway ({missed_line})",
+    )
+    check("NOT closed: why" in stuck_line, "a teardown that failed is not reported as a close")
+
+    class FakeTeardown:
+        DEFAULT_PREFIX = "/prefix"
+
+        def __init__(self, wedged: bool) -> None:
+            self.wedged = wedged
+            self.reasons: list[str] = []
+
+        def game_health(self, _prefix):
+            return "husk" if self.wedged else "ok"
+
+        def wedged_and_walkable(self, health):
+            return health == "husk"
+
+        def recent_walk_report(self):
+            return None
+
+        def teardown(self, _prefix, verbose=True, reason=""):
+            self.reasons.append(reason)
+            return 1
+
+        def survey(self, _prefix):
+            return []
+
+    fake = FakeTeardown(wedged=False)
+    closed, _detail = stamp_teardown("stamped-br-x", fake)
+    check(closed and fake.reasons == ["stamped-br-x"], "the close goes through er-teardown with reason stamped-<run-id>")
+    fake = FakeTeardown(wedged=True)
+    closed, _detail = stamp_teardown("stamped-br-x", fake)
+    check(not closed and fake.reasons == [], "an unwalked WEDGED game is left up, as er-teardown would")
+    check(
+        callable(getattr(_teardown_module(), "teardown", None)),
+        "the real er-teardown.py imports and exposes teardown()",
+    )
+    refused = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--stamp-only", "--dry-run"],
+        text=True, capture_output=True, timeout=SUBPROCESS_TIMEOUT,
+    )
+    check(
+        refused.returncode == 2 and "--dry-run launches nothing" in refused.stderr,
+        "--stamp-only with --dry-run is refused before anything is staged",
+    )
+    check(
+        "--stamp-only" in (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+        "AGENTS.md's push section names --stamp-only",
+    )
+
     check(LAUNCHER.is_file(), f"the user launcher this delegates to exists ({LAUNCHER})")
     check((SCRIPTS / "er-run-reaper.py").is_file(), "the reaper it detaches exists")
 
@@ -1859,12 +2124,22 @@ def main() -> int:
         help="launch even though another me3 launcher is alive (it will probably fail)",
     )
     parser.add_argument("--dry-run", action="store_true", help="stage everything, launch nothing")
+    parser.add_argument(
+        "--stamp-only",
+        action="store_true",
+        help="the run exists only to stamp this checkout's HEAD for a push: after the launch block, "
+        f"wait up to {STAMP_BUDGET_SECONDS:.0f}s for scripts/check-runtime-evidence.sh <HEAD> to "
+        "exit 0, then close the game through er-teardown (reason stamped-<run-id>) whether or not "
+        f"it did. Exits {EXIT_NO_STAMP} when the stamp did not land. Run it in the background.",
+    )
     parser.add_argument("--status", metavar="RUN_ID")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
     if args.selftest:
         return selftest()
+    if args.stamp_only and args.dry_run:
+        parser.error("--stamp-only waits for a run's stamp, and --dry-run launches nothing")
     if args.status:
         return status(args.status)
 
