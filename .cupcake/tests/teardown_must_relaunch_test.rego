@@ -19,13 +19,9 @@ bash_event(cmd) := {
 	"tool_input": {"command": cmd, "description": "test case"},
 }
 
-bash_event_with_evidence(cmd, evidence) := object.union(bash_event(cmd), {
-	"signals": {"frida_evidence": evidence},
-})
+bash_event_with_evidence(cmd, evidence) := object.union(bash_event(cmd), {"signals": {"frida_evidence": evidence}})
 
-bash_event_with_stamp(cmd, stamp) := object.union(bash_event(cmd), {
-	"signals": {"stamped_run": stamp},
-})
+bash_event_with_stamp(cmd, stamp) := object.union(bash_event(cmd), {"signals": {"stamped_run": stamp}})
 
 rule_ids(denials) := {d.rule_id | some d in denials}
 
@@ -392,6 +388,15 @@ test_allow_short_help if {
 	not denied("python3 scripts/er-teardown.py -h")
 }
 
+# `--selftest` returns before any teardown code runs (refused on 2026-11-23).
+test_allow_selftest if {
+	not denied("python3 /home/banon/projects/er-mods-rs/.worktrees/x/scripts/er-teardown.py --selftest")
+}
+
+test_deny_selftest_then_a_real_teardown if {
+	denied("python3 scripts/er-teardown.py --selftest; python3 scripts/er-teardown.py; cargo build")
+}
+
 # The exact command refused on 2026-10-05: reads chained with a usage read.
 test_allow_help_chained_with_reads if {
 	not denied(`ls -la /x/er_allow_hostile_actions.dll 2>&1; grep -nE "ME3_PROFILE|profile" /home/banon/Elden/launch.sh | head -12; cd /home/banon/projects/er-mods-rs && $HOME/.local/bin/bd memories "lab launch" 2>/dev/null | head -5; python3 scripts/er-teardown.py --help 2>&1 | head -15`)
@@ -496,9 +501,7 @@ test_deny_status_then_a_real_teardown if {
 # day as `--reason=cursor-test-done-for-push` while the user's `authorize 58a59772...` waited on a
 # game that stamped nothing, so the `stamped-` form could not admit it.
 
-bash_event_with_push_auth(cmd, answer) := object.union(bash_event(cmd), {
-	"signals": {"push_teardown": answer},
-})
+bash_event_with_push_auth(cmd, answer) := object.union(bash_event(cmd), {"signals": {"push_teardown": answer}})
 
 denied_with_push_auth(cmd, answer) if {
 	denials := guard.deny with input as bash_event_with_push_auth(cmd, answer)

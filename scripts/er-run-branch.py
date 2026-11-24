@@ -1267,11 +1267,32 @@ def _teardown_module():
     return module
 
 
-def stamp_teardown(reason: str, module=None) -> tuple[bool, str]:
+def reap_own_child(pid: int | None) -> None:
+    """Collect `pid`'s exit status if it is this process's exited child; never blocks.
+
+    The launcher this script spawns is its own child, and `launch.sh` execs into `me3`, so after
+    the teardown that pid is an exited `me3` nobody has reaped. Left alone it stays in `/proc`
+    until this script exits, which is what `er-teardown.survivors` exists to see through; reaping
+    it removes it outright. A pid that is not our child, or not exited yet, is left as it is.
+    """
+    if not pid:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+
+
+def stamp_teardown(reason: str, module=None, own_child: int | None = None) -> tuple[bool, str]:
     """Close the game the way `er-teardown.py --reason=<reason>` would. Returns (closed, detail).
 
     It keeps that script's one refusal: a WEDGED game whose threads were never walked is left up,
     because killing it destroys the only evidence that names the deadlock.
+
+    "Closed" is judged by `er-teardown.survivors`, which waits on each process's exit, not by
+    `survey`, which also lists exited processes nobody has reaped. Counting those failed both
+    stamp-only closes on 2026-11-23: the survivor was `own_child`, this script's own unreaped
+    `me3`. A survivor that really runs is named in the detail, so the next failure says which.
     """
     module = module or _teardown_module()
     prefix = module.DEFAULT_PREFIX
@@ -1282,9 +1303,11 @@ def stamp_teardown(reason: str, module=None) -> tuple[bool, str]:
             f"scripts/er-teardown.py --reason={reason}"
         )
     module.teardown(prefix, verbose=False, reason=reason)
-    remaining = module.survey(prefix)
+    reap_own_child(own_child)
+    remaining = module.survivors(prefix)
     if remaining:
-        return False, f"{len(remaining)} prefix process(es) survived the teardown"
+        named = ", ".join(f"{row['comm']} {row['pid']} ({row['state']})" for row in remaining)
+        return False, f"{len(remaining)} prefix process(es) survived the teardown: {named}"
     return True, f"er-teardown --reason={reason}"
 
 
@@ -1316,7 +1339,7 @@ def stamp_and_close(run_id: str, launcher_pid: int, watch_dirs: list[Path]) -> i
         waited = {"landed": False, "note": "git rev-parse HEAD named no commit", "seconds": 0.0}
     else:
         waited = await_stamp(sha, watch_dirs, launcher_pid)
-    closed, detail = stamp_teardown(f"stamped-{run_id}")
+    closed, detail = stamp_teardown(f"stamped-{run_id}", own_child=launcher_pid)
     print(stamp_line(sha or "<no-head>", STAMP_BUDGET_SECONDS, waited, closed, detail))
     if not closed:
         return EXIT_ERROR
@@ -2006,7 +2029,7 @@ def selftest() -> int:
             self.reasons.append(reason)
             return 1
 
-        def survey(self, _prefix):
+        def survivors(self, _prefix):
             return []
 
     fake = FakeTeardown(wedged=False)
@@ -2015,6 +2038,88 @@ def selftest() -> int:
     fake = FakeTeardown(wedged=True)
     closed, _detail = stamp_teardown("stamped-br-x", fake)
     check(not closed and fake.reasons == [], "an unwalked WEDGED game is left up, as er-teardown would")
+
+    # The false "1 prefix process(es) survived" of both 2026-11-23 stamp-only closes, reproduced
+    # with a real launcher child: this interpreter run under the name `me3`, spawned by this
+    # process and not reaped, as `launch.sh`'s exec'd `me3` is. The fake teardown asks it to exit
+    # the way SIGTERM does; the verdict comes from the real er-teardown, judging only that pid's
+    # rows, so a real `me3` running beside the selftest is never touched or counted.
+    real_teardown = _teardown_module()
+    with tempfile.TemporaryDirectory() as raw:
+        me3 = Path(raw) / "me3"
+        me3.symlink_to(sys.executable)
+        children: list[subprocess.Popen] = []
+
+        def launcher_child() -> subprocess.Popen:
+            child = subprocess.Popen(
+                [str(me3), "-c", "import sys; sys.stdin.read()"],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            children.append(child)
+            return child
+
+        class LauncherTeardown(FakeTeardown):
+            def __init__(self, launcher: subprocess.Popen, exits: bool, grace_ms: int) -> None:
+                super().__init__(wedged=False)
+                self.launcher, self.exits, self.grace_ms = launcher, exits, grace_ms
+                self.listed: list[dict] = []
+
+            def teardown(self, prefix, verbose=True, reason=""):
+                self.reasons.append(reason)
+                if self.exits:
+                    self.launcher.stdin.close()
+                    real_teardown.wait_for_exit([self.launcher.pid], real_teardown.KILL_GRACE_MS)
+                return 1
+
+            def survivors(self, prefix):
+                self.listed = [
+                    row for row in real_teardown.survey(prefix) if row["pid"] == self.launcher.pid
+                ]
+                return real_teardown.survivors(prefix, grace_ms=self.grace_ms, rows=self.listed)
+
+        try:
+            no_prefix = str(Path(raw) / "no-prefix")
+            launcher = launcher_child()
+            fake = LauncherTeardown(launcher, exits=True, grace_ms=real_teardown.KILL_GRACE_MS)
+            fake.DEFAULT_PREFIX = no_prefix
+            closed, detail = stamp_teardown("stamped-br-x", fake)
+            check(
+                closed and [row["state"] for row in fake.listed] == ["Z"],
+                "an exited launcher this process never reaped is listed as a zombie and does not "
+                f"fail the close ({detail})",
+            )
+            reap_own_child(launcher.pid)
+            check(
+                not Path(f"/proc/{launcher.pid}").exists(),
+                "reap_own_child removes this process's exited launcher from /proc",
+            )
+
+            launcher = launcher_child()
+            fake = LauncherTeardown(launcher, exits=True, grace_ms=real_teardown.KILL_GRACE_MS)
+            fake.DEFAULT_PREFIX = no_prefix
+            closed, detail = stamp_teardown("stamped-br-x", fake, own_child=launcher.pid)
+            check(
+                closed and fake.listed == [],
+                f"with own_child the exited launcher is reaped before the survivor check ({detail})",
+            )
+
+            launcher = launcher_child()
+            fake = LauncherTeardown(launcher, exits=False, grace_ms=50)
+            fake.DEFAULT_PREFIX = no_prefix
+            closed, detail = stamp_teardown("stamped-br-x", fake, own_child=launcher.pid)
+            check(
+                not closed and f"me3 {launcher.pid}" in detail and "survived" in detail,
+                f"a launcher that really keeps running fails the close and is named ({detail})",
+            )
+        finally:
+            for child in children:
+                if child.stdin and not child.stdin.closed:
+                    child.stdin.close()
+            real_teardown.wait_for_exit([child.pid for child in children], real_teardown.KILL_GRACE_MS)
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait()
     check(
         callable(getattr(_teardown_module(), "teardown", None)),
         "the real er-teardown.py imports and exposes teardown()",
