@@ -34,11 +34,17 @@ at this tool call, and nothing else:
    when it never arrives.
 2. A genuine prompt is a `type: user` entry with `origin.kind == "human"` and `promptSource` of
    `typed` or `queued`, not `isMeta`, not `isCompactSummary`, not a sidechain, whose content is a
-   string or text blocks only. Measured over every transcript in this project: tool results,
+   string or blocks. Measured over every transcript in this project: tool results,
    task notifications (`origin.kind == "task-notification"`), peer messages, hook and
    system-reminder carriers, compaction summaries and slash-command caveats all fail that test.
    `suggestion_accepted` is refused on purpose: its text was written by the model and the user only
-   pressed enter.
+   pressed enter. A message the user types while a turn is running is not written as a `type:
+   user` entry at all: it reaches the chain as an `attachment` whose `attachment` is
+   `{"type": "queued_command", "commandMode": "prompt", "origin": {"kind": "human"}, ...}`, and
+   that is a genuine prompt too, with `attachment.prompt` as its text, when neither the entry nor
+   the attachment is `isMeta` and the entry is not a sidechain (`queued_prompt_text`). Queue
+   operations and `last-prompt` entries never count. A block that is not text (a pasted image)
+   still makes the message the user's last one, but no phrase can match it.
 3. The walk stops at the first genuine prompt. Its whole text, trimmed, must be `authorize <sha>`
    with 7 to 40 hex digits. Anything else in the message denies.
 4. The command must be exactly `git [-C <dir>] push [-u|--set-upstream] <remote> <branch>`: no
@@ -259,7 +265,16 @@ def holds_tool_use(entry: dict, tool_use_id: str) -> bool:
 
 
 def prompt_text(entry: dict) -> str | None:
-    """The text of a genuine user prompt, or None when the entry is anything else."""
+    """The text of a genuine user prompt, or None when the entry is anything else.
+
+    The user's own typing reaches the transcript in two shapes (point 2 of the module docstring):
+    a `type: user` entry, and a `queued_command` attachment for a message typed while a turn was
+    running (`queued_prompt_text`).
+    """
+    if entry.get("isMeta") or entry.get("isCompactSummary") or entry.get("isSidechain"):
+        return None
+    if entry.get("type") == "attachment":
+        return queued_prompt_text(entry.get("attachment"))
     if entry.get("type") != "user":
         return None
     origin = entry.get("origin")
@@ -267,17 +282,52 @@ def prompt_text(entry: dict) -> str | None:
         return None
     if entry.get("promptSource") not in HUMAN_PROMPT_SOURCES:
         return None
-    if entry.get("isMeta") or entry.get("isCompactSummary") or entry.get("isSidechain"):
+    message = entry.get("message")
+    return typed_text(message.get("content") if isinstance(message, dict) else None)
+
+
+def queued_prompt_text(attachment: object) -> str | None:
+    """The text of a message the user typed while a turn was running, or None.
+
+    Claude Code writes no `type: user` entry for such a message. It logs a `queue-operation`
+    `enqueue` when the user sends it and a `remove` when the running turn takes it, then puts it on
+    the chain as an attachment `{"type": "queued_command", "commandMode": "prompt", "origin":
+    {"kind": "human"}, "prompt": <text>}`. On 2026-11-08 (session 5f9be448) the user's
+    `authorize 8bf1941e` reached the transcript only that way, and the push it paid for was refused
+    against the older `authorize bd7bd1eb` before it.
+
+    Only that attachment counts. A queue operation is off the chain, and an enqueued message can be
+    removed without being delivered; the `last-prompt` entry written after it still named the older
+    reply. The same attachment type carries other senders, told apart by these fields (measured
+    over the 200 newest transcripts and subagent transcripts in this project): peer agents'
+    messages are `commandMode: prompt` with `origin.kind == "peer"`, the coordinator's have
+    `isMeta` and `origin.kind == "coordinator"`, and task notifications are `commandMode:
+    task-notification`. All 54 with `origin.kind == "human"` were the user's typing.
+    """
+    if not isinstance(attachment, dict) or attachment.get("type") != "queued_command":
         return None
-    content = (entry.get("message") or {}).get("content")
+    if attachment.get("commandMode") != "prompt" or attachment.get("isMeta"):
+        return None
+    origin = attachment.get("origin")
+    if not isinstance(origin, dict) or origin.get("kind") != "human":
+        return None
+    return typed_text(attachment.get("prompt"))
+
+
+# Stands in for a block of a typed message that is not text, such as a pasted image (7 queued
+# messages in this project's transcripts carry one). The message still ends the walk as the user's
+# last one, and with this in its text no reply phrase can match it.
+NON_TEXT_BLOCK = "\n[a block that is not text]"
+
+
+def typed_text(content: object) -> str | None:
+    """A typed message's text: a string, or its blocks' text joined. None for anything else."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list) and content and all(
-        isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
-        for b in content
-    ):
-        return "".join(b["text"] for b in content)
-    return None
+    if not isinstance(content, list) or not content:
+        return None
+    return "".join(b["text"] if isinstance(b, dict) and b.get("type") == "text"
+                   and isinstance(b.get("text"), str) else NON_TEXT_BLOCK for b in content)
 
 
 def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]:

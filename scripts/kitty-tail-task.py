@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
-"""Open a kitty tab that tails a running task's output until the task's process exits, then
-closes the tab 5 seconds later.
+"""Open a kitty split that tails a running task's output until the task's process exits, then
+closes the split 5 seconds later.
 
     python3 scripts/kitty-tail-task.py --title 'duel build' \\
         --file <task output file> --match 'er-weapon-build.py' --match '--fight duel'
 
-The tab runs `tail -n +1 -F --pid=<pid> <file>; sleep 5` directly (no shell prompt, nothing for
-the user to submit): `tail --pid` ends once that process is gone, and kitty closes a tab whose
-program exits. `--pid` names the process; otherwise every `--match` substring must appear in its
-command line, and exactly one live process may match. The tab opens with `--keep-focus`, so it
-does not take the keyboard from whatever the user is doing. When several processes match, the one
-working in this checkout (`--cwd` names another) is kept.
+The split is a new kitty window in the agent session's own tab (user request 2026-11-07); `--tab`
+opens a new tab instead, as it did before. It runs `tail -n +1 -F --pid=<pid> <file>; sleep 5`
+directly (no shell prompt, nothing for the user to submit): `tail --pid` ends once that process is
+gone, and kitty closes a window whose program exits, and a tab with it when it was the tab's only
+window. `--pid` names the process; otherwise every `--match` substring must appear in its command
+line, and exactly one live process may match. The window opens with `--keep-focus`, so it does not
+take the keyboard from whatever the user is doing. When several processes match, the one working
+in this checkout (`--cwd` names another) is kept.
 
     python3 scripts/kitty-tail-task.py --boards --title boards [--file <task output file>]
 
 follows a board regeneration (`gen-r3-weapon-boards.py`): its wrapper prints four setup lines and
 the progress goes to one `shard-<n>.log` per worker in the cache directory its first line names,
-so this mode finds the wrapper process and the tab runs `--boards-view` instead of `tail`: a bar
+so this mode finds the wrapper process and the split runs `--boards-view` instead of `tail`: a bar
 for the whole pass and one per shard, with %, time left at the rate the shards are showing, the
 last step's age and a red stall mark, as the duel build's view draws them
 (`er-mechanics-pipeline-watch.py`). It reads only the logs and the cache, never the generator.
@@ -26,7 +28,7 @@ The guard `.cupcake/policies/claude/no_untailed_long_run.rego` asks for this for
 
 This is the watcher counterpart of `kitty-user-command.py`, which hands the user a command to
 run; this one runs nothing for the user to approve. It reuses that helper's listener lookup
-(`$KITTY_LISTEN_ON`) and `kitty @` wrapper.
+(`$KITTY_LISTEN_ON`), `kitty @` wrapper and split-or-tab placement.
 """
 from __future__ import annotations
 
@@ -43,7 +45,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-#: Seconds the tab stays open after the task's process exits (user, 2026-10-19).
+#: Seconds the window stays open after the task's process exits (user, 2026-10-19).
 LINGER_S = 5
 
 
@@ -55,12 +57,12 @@ def _kuc():
 
 
 def tail_argv(path: str | list[str], pid: int, linger: int = LINGER_S) -> list[str]:
-    """The program the tab runs.
+    """The program the window runs.
 
     Several paths are for a run whose real progress is spread over worker logs: the board
     generator's wrapper prints four setup lines, and every line after that goes to one
     `shard-<n>.log` per worker in its cache directory (2026-10-19). `tail` heads each file's
-    lines with its name, so the shards stay apart in one tab.
+    lines with its name, so the shards stay apart in one window.
     """
     paths = [path] if isinstance(path, str) else list(path)
     script = f"tail -n +1 -F --pid={pid} {' '.join(shlex.quote(p) for p in paths)}; sleep {linger}"
@@ -382,7 +384,7 @@ def boards_frame(cache: Path, wrapper_out: str, shards: int, started: float, now
 def boards_view(wrapper_out: str, pid: int | None, jobs: int, once: bool = False,
                 linger: int = LINGER_S) -> int:
     """Redraw `boards_frame` until the wrapper `pid` exits, then hold the last frame `linger`
-    seconds; the tab running this closes when it returns."""
+    seconds; the window running this closes when it returns."""
     cache = boards_cache(wrapper_out)
     started = (process_started(pid) if pid else None) or _mtime(wrapper_out) or time.time()
 
@@ -423,16 +425,22 @@ def boards_view(wrapper_out: str, pid: int | None, jobs: int, once: bool = False
 
 
 def boards_argv(wrapper_out: str, pid: int, jobs: int) -> list[str]:
-    """The program a board tab runs: this script's own view of the run."""
+    """The program a board window runs: this script's own view of the run."""
     return [sys.executable, str(Path(__file__).resolve()), "--boards-view", "--file", wrapper_out,
             "--pid", str(pid), "--jobs", str(jobs)]
 
 
-def open_tab(title: str, path: str | list[str], pid: int, dry_run: bool,
-             program: list[str] | None = None) -> int:
-    """`program` replaces the `tail` the tab runs otherwise (the board view)."""
-    argv = ["launch", "--type=tab", "--keep-focus", f"--tab-title={title}",
-            *(program or tail_argv(path, pid))]
+def launch_argv(title: str, path: str | list[str], pid: int, program: list[str] | None,
+                kind: str) -> tuple[list[str], str]:
+    """The `kitty @ launch` arguments, and where the window lands in words. `program` replaces the
+    `tail` the window runs otherwise (the board view)."""
+    where_argv, where = _kuc().placement(kind, title)
+    return ["launch", *where_argv, "--keep-focus", *(program or tail_argv(path, pid))], where
+
+
+def open_window(title: str, path: str | list[str], pid: int, dry_run: bool,
+                program: list[str] | None = None, kind: str = "split") -> int:
+    argv, where = launch_argv(title, path, pid, program, kind)
     if dry_run:
         print("kitty @ " + shlex.join(argv))
         return 0
@@ -441,7 +449,8 @@ def open_tab(title: str, path: str | list[str], pid: int, dry_run: bool,
     if not window_id.isdigit():
         raise SystemExit(f"kitty @ launch did not return a window id: {window_id!r}")
     what = f"shows the board progress of {path}" if program else f"tails {path}"
-    print(f"tab {title!r} (window {window_id}) {what} until pid {pid} exits, then closes after {LINGER_S} s")
+    print(f"{kind} {title!r} (window {window_id}, in {where}) {what} until pid {pid} exits, "
+          f"then closes after {LINGER_S} s")
     return 0
 
 
@@ -499,8 +508,33 @@ def boards_view_selftest(check) -> None:
         Path(out).write_text(f"cache {cache}\nwrote crates/er-r3-view/src/weapon_boards.rs: 547 boards\n")
         done = plain.sub("", boards_frame(cache, out, 2, 1000.0, 1110.0, alive=False))
         check("an exited wrapper with no failure is finished", done.splitlines()[0].endswith("finished"), True)
-        check("the tab runs the view with the wrapper's output, pid and jobs",
+        check("the window runs the view with the wrapper's output, pid and jobs",
               boards_argv(out, 42, 3)[2:], ["--boards-view", "--file", out, "--pid", "42", "--jobs", "3"])
+
+
+def launch_selftest(check) -> None:
+    """A split goes in the tab of the window named by `$KITTY_WINDOW_ID`; `--tab` opens a tab."""
+    saved = os.environ.get("KITTY_WINDOW_ID")
+    os.environ["KITTY_WINDOW_ID"] = "9"
+    try:
+        argv, where = launch_argv("t", "/tmp/a b.out", 42, None, "split")
+        check("a split launches a window in the agent's tab, beside the agent's window",
+              (argv[:7], where), (["launch", "--type=window", "--location=split", "--window-title=t",
+                                   "--match=window_id:9", "--next-to=id:9", "--keep-focus"],
+                                  "the agent's tab, next to window 9"))
+        check("and runs the tail", argv[7:], tail_argv("/tmp/a b.out", 42))
+        argv, where = launch_argv("t", "/tmp/a b.out", 42, ["view"], "tab")
+        check("--tab launches a tab with the old title option",
+              (argv, where), (["launch", "--type=tab", "--tab-title=t", "--keep-focus", "view"], "a new tab"))
+        os.environ.pop("KITTY_WINDOW_ID")
+        argv, where = launch_argv("t", "/tmp/a b.out", 42, None, "split")
+        check("without KITTY_WINDOW_ID the split goes to the focused tab and says so",
+              ("--match=window_id:9" in argv, where.startswith("the focused tab")), (False, True))
+    finally:
+        if saved is None:
+            os.environ.pop("KITTY_WINDOW_ID", None)
+        else:
+            os.environ["KITTY_WINDOW_ID"] = saved
 
 
 def selftest() -> int:
@@ -619,6 +653,7 @@ def selftest() -> int:
         except SystemExit:
             check("boards refuses an output with no cache line", True, True)
     boards_view_selftest(check)
+    launch_selftest(check)
     print("selftest ok" if not bad else "selftest FAILED")
     return 1 if bad else 0
 
@@ -636,8 +671,10 @@ def main(argv: list[str]) -> int:
                          "every <cache>/shard-<n>.log, where the progress actually goes; --file and "
                          "--pid are optional here")
     ap.add_argument("--boards-view", action="store_true",
-                    help="draw the board run's progress bar here (what a --boards tab runs); "
+                    help="draw the board run's progress bar here (what a --boards window runs); "
                          "--file is the wrapper output, --pid the wrapper")
+    ap.add_argument("--tab", action="store_true",
+                    help="open a new tab instead of a split in the agent's own tab")
     ap.add_argument("--jobs", type=int, default=3,
                     help="--boards-view: the --jobs the run was asked for, used until its output "
                          "says how many shards it was granted")
@@ -660,14 +697,15 @@ def main(argv: list[str]) -> int:
             # The wrapper has exited: draw what the finished run left.
             pid, out, jobs = None, a.file[0], a.jobs
         return boards_view(out, pid, jobs, once=a.once)
+    kind = "tab" if a.tab else "split"
     if a.boards:
         pid, out, jobs = boards_target(a.pid, a.file, root)
-        boards_cache(out)  # refuse now, not inside the tab, an output that is not a board run's
-        return open_tab(a.title, out, pid, a.dry_run, program=boards_argv(out, pid, jobs))
+        boards_cache(out)  # refuse now, not inside the window, an output that is not a board run's
+        return open_window(a.title, out, pid, a.dry_run, program=boards_argv(out, pid, jobs), kind=kind)
     if not a.file or not (a.pid or a.match):
         ap.error("--file and one of --pid / --match are required")
     pid = a.pid or find_pid(a.match, root=root, stdout=a.file[0])
-    return open_tab(a.title, a.file[0] if len(a.file) == 1 else a.file, pid, a.dry_run)
+    return open_window(a.title, a.file[0] if len(a.file) == 1 else a.file, pid, a.dry_run, kind=kind)
 
 
 if __name__ == "__main__":
