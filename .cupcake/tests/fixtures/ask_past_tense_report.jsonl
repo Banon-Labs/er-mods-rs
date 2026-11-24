@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "did the warp key reach the lobby?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Yes. As soon as you opened your world, Seamless created your advertisement lobby, and your DLL wrote `er_invasion_warp_map = m13_00_00_00` to it, then read the value back from Steam."}]}}
