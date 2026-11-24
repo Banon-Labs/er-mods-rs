@@ -1444,16 +1444,31 @@ TOML
   if printf 'not json' | cmd_hook >/dev/null 2>&1; then echo "  ok   hook tolerates non-JSON stdin";
   else echo "  FAIL hook errored on non-JSON stdin"; fails=$((fails + 1)); fi
   # A name longer than the kernel's 15-char comm cap is still matched. Proven end to end against a
-  # real process rather than by re-deriving the truncation in the test: a copy of /bin/sleep named
+  # real process rather than by re-deriving the truncation in the test: a copy of this bash named
   # `start_protected_game.exe` gets comm `start_protected`, which the verbatim comparison this
   # replaced could never have matched. Detection only -- the process is killed by pid, never by
   # calling teardown, so this case cannot touch a live game.
-  local longbin longpid
+  #
+  # The stand-in is bash, waiting in its `read` builtin, and not a copy of /bin/sleep. On Ubuntu
+  # 26.04 (the CI runner) /bin/sleep is uutils' multicall `coreutils`, which picks the utility from
+  # its own executable name and refuses any other name ("Security violation: Requested utility
+  # `start_protected_game` does not match executable name"), so the copy exited at once and the
+  # case failed there (run 42551166377). A builtin keeps the process alive without an exec that
+  # would change its comm. The FIFO opened read-write gives `read` something that blocks: the
+  # `read -t 1 </dev/null` this replaced returned at EOF in microseconds, so the scan raced the
+  # child's exec. The scan now waits until /proc says the child is running the stand-in.
+  local longbin longpid longfifo
   longbin="$tmpdir/start_protected_game.exe"
-  if cp -f /bin/sleep "$longbin" 2>/dev/null; then
-    "$longbin" 5 &
+  longfifo="$tmpdir/stand-in.fifo"
+  if cp -f "$BASH" "$longbin" 2>/dev/null && mkfifo "$longfifo" 2>/dev/null; then
+    # shellcheck disable=SC2016  # $1 is the stand-in's own argument, expanded by it
+    "$longbin" -c 'read -r -t 5 <>"$1"' _ "$longfifo" &
     longpid=$!
-    read -r -t 1 </dev/null 2>/dev/null || true
+    local tries=0 want
+    want="$(readlink -f "$longbin")"
+    while [[ "$(readlink "/proc/$longpid/exe" 2>/dev/null)" != "$want" ]] && ((tries++ < 100)); do
+      read -r -t 0.01 <>"$longfifo" || true
+    done
     local seen=0 live_pid
     while read -r live_pid _; do
       [[ "$live_pid" == "$longpid" ]] && seen=1

@@ -1,6 +1,6 @@
 # METADATA
 # scope: package
-# title: Ban ending a turn that started a long background run without a kitty tab tailing it
+# title: Ban ending a turn that started a long background run without a kitty split tailing it
 # authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
@@ -35,9 +35,9 @@ halt contains decision if {
 
 reason_for(r) := msg if {
 	msg := concat("", [
-		"This turn started a long run in the background and opened no kitty tab tailing its real output: ", r,
-		". Run the tail command named after each one now, in this turn (it opens with --keep-focus and closes itself 5 s after the run ends; see the tail-build-task skill). ",
-		"If the tab command fails, say so in the closing message with its error.",
+		"This turn started a long run in the background and opened no kitty split tailing its real output: ", r,
+		". Run the tail command named after each one now, in this turn (it opens a split in the agent's tab with --keep-focus and closes itself 5 s after the run ends; see the tail-build-task skill). ",
+		"If the tail command fails, say so in the closing message with its error.",
 	])
 }
 

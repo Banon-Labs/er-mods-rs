@@ -581,6 +581,26 @@ CASES = [
         "instrument is needed and the ask must NOT halt",
     ),
     Case(
+        "ask_authorize_commit_reply.jsonl",
+        None,
+        "the 2026-10-26 false positive, verbatim: 'I need your `authorize commit` reply before I "
+        "can fix either PR'. The only answer is the user's typed reply phrase, so no instrument is "
+        "needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_past_tense_report.jsonl",
+        None,
+        "the 2026-10-28 false positive, verbatim: 'As soon as you opened your world, Seamless "
+        "created your advertisement lobby, ...'. A bare simple-past verb after the temporal 'you' "
+        "narrates what the user already did -- a report, not an ask, so it must NOT halt",
+    ),
+    Case(
+        "ask_as_soon_as_you_open.jsonl",
+        "You asked the user for something you have no receiver for",
+        "the same clause in the present tense, 'As soon as you open your world, the probe records "
+        "the lobby key', with nothing armed -- must still halt",
+    ),
+    Case(
         "ask_game_mechanic_you.jsonl",
         None,
         "the 2026-10-04 false positive, verbatim: a finished report saying the axes catch a roll "
@@ -606,7 +626,7 @@ CASES = [
     ),
     Case(
         "untailed_long_run.jsonl",
-        "opened no kitty tab tailing its real output",
+        "opened no kitty split tailing its real output",
         "the 2026-10-19 shape: `gen-r3-weapon-boards.py --jobs 3` backgrounded for half an hour "
         "and no kitty-tail-task.py call after it, although AGENTS.md and the tail-build-task skill "
         "both said to open one",
@@ -886,6 +906,17 @@ def run_hook_once(
             os.utime(other, (later, later))
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
+        # The repo's guards are under test, not the user's global ones. The throwaway home was
+        # meant to keep ~/.config/cupcake out too, but the hook resolves the global root as
+        # ${CUPCAKE_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cupcake}, and a desktop session
+        # exports XDG_CONFIG_HOME, so the user's global policies loaded anyway. A global Stop guard
+        # added there on 2026-11-16 (background_task_needs_tail) then halted first on every fixture
+        # with a backgrounded task, and five cases failed on a guard this repo does not ship. An
+        # empty global root with a `policies/claude` directory is what the hook needs to evaluate
+        # quietly: a missing one makes it print a "global policies are NOT loaded" warning instead.
+        global_root = Path(tmp) / "global-cupcake"
+        (global_root / "policies" / "claude").mkdir(parents=True)
+        env["CUPCAKE_GLOBAL_CONFIG"] = str(global_root)
         # A stub left in the caller's environment would decide the authorize-run-stamp verdict
         # for every case; only a case that names one gets one.
         env.pop("CUPCAKE_AUTHORIZE_EVIDENCE_CHECK", None)
