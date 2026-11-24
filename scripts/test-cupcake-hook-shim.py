@@ -847,7 +847,17 @@ def check_abort_is_not_an_allow() -> list[str]:
 # full /tmp of 2026-10-16 did, and its stderr names that cause:
 #
 #     Fatal: Cupcake engine failed to initialize: Failed to create temp directory for OPA ...
-FAILING_ENGINE = {"TMPDIR": "/nonexistent-cupcake-hook-test-dir"}
+#
+# TMPDIR alone stopped doing that on 2026-11-18. The cupcake build installed that day (fork
+# commit c407265, "keep temp files off /tmp") overwrites TMPDIR at startup with CUPCAKE_TMPDIR,
+# or with $XDG_CACHE_HOME/cupcake/tmp, and leaves it alone only when that directory cannot be
+# created. So every engine-failure case got a working engine and an ordinary verdict back. A
+# CUPCAKE_TMPDIR under /dev/null can never be created (ENOTDIR), which hands the dead TMPDIR
+# back to the engine. On a build without the relocation the extra variable is ignored.
+FAILING_ENGINE = {
+    "TMPDIR": "/nonexistent-cupcake-hook-test-dir",
+    "CUPCAKE_TMPDIR": "/dev/null/cupcake-hook-test-dir",
+}
 FAILURE_CAUSE = "Failed to create temp directory"
 
 

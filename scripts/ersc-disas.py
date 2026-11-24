@@ -59,6 +59,7 @@ BUILD_MARKERS = {
     "v200": "Seamless Co-op v2.0.0 by Yui",
     "v201": "Seamless Co-op v2.0.1 by Yui",
     "v202": "Seamless Co-op v2.0.2 by Yui",
+    "v203": "Seamless Co-op v2.0.3 by Yui",
 }
 
 
@@ -365,6 +366,122 @@ def state_stores(pe, field_offset):
     return out
 
 
+def _normalised(insn, start, size):
+    """`(text, external_target)` with build-dependent numbers taken out of one instruction.
+
+    A branch or call into the same function is rendered as `fn+<offset>`, one out of it as
+    `EXT` (its target is returned so the caller can carry it separately), and every RIP-relative
+    operand as `[RIP]`. What is left -- opcodes, registers, field offsets, immediates -- is what a
+    re-pin has to prove unchanged.
+    """
+    import re
+
+    text = f"{insn.mnemonic} {insn.op_str}".strip()
+    external = None
+    from capstone import CS_GRP_CALL, CS_GRP_JUMP
+
+    if insn.group(CS_GRP_JUMP) or insn.group(CS_GRP_CALL):
+        found = re.fullmatch(r"(\w+) (0x[0-9a-f]+)", text)
+        if found:
+            target = int(found.group(2), 16)
+            if start <= target < start + size:
+                text = f"{found.group(1)} fn+0x{target - start:x}"
+            else:
+                text = f"{found.group(1)} EXT"
+                external = target
+    text = re.sub(r"\[rip [+-] 0x[0-9a-f]+\]", "[RIP]", text)
+    return text, external
+
+
+def body_diff(old, new, old_va, new_va, limit=40):
+    """Compare one function's body in two builds, instruction by instruction.
+
+    Both bodies are bounded by their own `.pdata` entry. Prints every instruction whose
+    normalised text differs (up to `limit`), and every external branch/call target pair, which is
+    how a callee such as the session lock is carried. Returns the number of differing
+    instructions, or None when either address is not a `.pdata` entry.
+    """
+    sizes = []
+    for pe, va in ((old, old_va), (new, new_va)):
+        entry = next((e - b for b, e in pdata_entries(pe) if b == va - BASE), None)
+        sizes.append(entry)
+    print(
+        f"=== 0x{old_va:x} (size {sizes[0] and hex(sizes[0])}) vs"
+        f" 0x{new_va:x} (size {sizes[1] and hex(sizes[1])}) ==="
+    )
+    if None in sizes:
+        print("  not a .pdata entry on one side")
+        return None
+    left = disas(old, old_va, sizes[0], stop_at_ret=False)
+    right = disas(new, new_va, sizes[1], stop_at_ret=False)
+    print(f"  {len(left)} vs {len(right)} instructions")
+    differing, externals = 0, {}
+    for a, b in zip(left, right):
+        text_a, ext_a = _normalised(a, old_va, sizes[0])
+        text_b, ext_b = _normalised(b, new_va, sizes[1])
+        if ext_a is not None or ext_b is not None:
+            externals[(ext_a, ext_b)] = externals.get((ext_a, ext_b), 0) + 1
+        if text_a != text_b:
+            differing += 1
+            if differing <= limit:
+                print(f"  DIFF 0x{a.address:x} {text_a:<48} | 0x{b.address:x} {text_b}")
+    print(f"  {differing} differing instruction(s)")
+    for (ext_a, ext_b), count in externals.items():
+        print(f"  external 0x{ext_a or 0:x} -> 0x{ext_b or 0:x} x{count}")
+    return differing
+
+
+def carry_all(old, new, radius=4):
+    """`{old_rva: new_rva}` for every `.pdata` entry whose neighbour-size signature is unique.
+
+    The same evidence as `size_signature_matches`, computed for the whole table at once through a
+    dictionary rather than one quadratic scan per function, so a re-pin can diff every function
+    the two builds share instead of only the ones somebody thought to ask about.
+    """
+    old_entries, new_entries = pdata_entries(old), pdata_entries(new)
+
+    def signature(entries, i):
+        return tuple(end - begin for begin, end in entries[i - radius : i + radius + 1])
+
+    where = {}
+    for i in range(radius, len(new_entries) - radius):
+        where.setdefault(signature(new_entries, i), []).append(new_entries[i][0])
+    carried = {}
+    for i in range(radius, len(old_entries) - radius):
+        hits = where.get(signature(old_entries, i), [])
+        if len(hits) == 1:
+            carried[old_entries[i][0]] = hits[0]
+    return carried
+
+
+def body_diff_all(old, new):
+    """Body-diff every function `carry_all` maps, printing only the ones that differ.
+
+    "Differ" is after `_normalised`: a function that only moved, or whose callees moved, is
+    silent. What is printed is the residue a re-pin has to explain -- changed field offsets,
+    immediates, opcodes, or a different instruction count.
+    """
+    import contextlib
+    import io
+
+    carried = carry_all(old, new)
+    print(f"# {len(pdata_entries(old))} old / {len(pdata_entries(new))} new .pdata entries;"
+          f" {len(carried)} carried uniquely")
+    changed = 0
+    for old_rva, new_rva in sorted(carried.items()):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            count = body_diff(old, new, BASE + old_rva, BASE + new_rva, limit=12)
+        text = buffer.getvalue()
+        lines = text.splitlines()
+        counts = lines[1].split() if len(lines) > 1 else []
+        mismatched_length = len(counts) >= 3 and counts[0] != counts[2]
+        if count or mismatched_length:
+            changed += 1
+            print("\n".join(line for line in lines if not line.startswith("  external")))
+    print(f"# {changed} carried function(s) differ beyond relocation")
+
+
 def selftest():
     failures = []
     payload = bytes([0xF3, 0x0F, 0x1E, 0xFA, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x28, 0xC3])
@@ -407,10 +524,11 @@ def main():
             "states",
             "crossmatch",
             "pdatamatch",
+            "bodydiff",
         ],
     )
     parser.add_argument("argument", nargs="*")
-    parser.add_argument("--build", default="v202", choices=sorted(BUILD_MARKERS))
+    parser.add_argument("--build", default="v203", choices=sorted(BUILD_MARKERS))
     parser.add_argument("-n", "--nbytes", default="0x120")
     parser.add_argument("--no-stop", action="store_true", help="do not stop the listing at `ret`")
     parser.add_argument("--utf16", action="store_true")
@@ -489,6 +607,27 @@ def main():
             found = ", ".join(f"[{i}] 0x{BASE + r:x}" for i, r in hits) or "none"
             verdict = "unique" if len(hits) == 1 else f"{len(hits)} hits"
             print(f"0x{BASE + rva:x} [{index}] -> {found}  ({verdict})")
+        return 0
+
+    if args.command == "bodydiff":
+        # `OLD:NEW` pairs: the same function's entry in `--build` and in `--to`, carried by
+        # `pdatamatch` first. This is the "body compared in both builds" half of a re-pin.
+        if not args.to:
+            parser.error("bodydiff needs --to <build>")
+        old, old_path = load(args.build)
+        new, new_path = load(args.to)
+        print(f"# from {args.build}: {old_path}\n# to   {args.to}: {new_path}")
+        if args.argument == ["all"]:
+            body_diff_all(old, new)
+            return 0
+        for argument in args.argument:
+            left, _, right = argument.partition(":")
+            if not right:
+                parser.error(f"bodydiff wants OLD:NEW pairs, got {argument!r}")
+            old_va, new_va = (int(v, 0) for v in (left, right))
+            old_va += BASE if old_va < BASE else 0
+            new_va += BASE if new_va < BASE else 0
+            body_diff(old, new, old_va, new_va)
         return 0
 
     if args.command == "states":

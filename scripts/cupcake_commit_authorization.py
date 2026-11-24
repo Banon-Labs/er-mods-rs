@@ -46,16 +46,19 @@ commits that way in sessions a66cf759, 7d2f4a9b and e75d8996). So:
 Either way a transcript repeating an entry uuid is refused, the walk ends at a compaction summary or
 a root, and it stops at the first genuine typed prompt as `cupcake_push_authorization.prompt_text`
 defines one: a `type: user` entry with `origin.kind == "human"`, `promptSource` of `typed` or
-`queued`, not meta, not a compaction summary, not a sidechain. Nothing else is a prompt. In
-particular the harness nudge "The user hasn't heard from you in a while" is a `type: attachment`
-entry with `attachment.type == "silent_turn_reminder"` (1,518 of them in the 40 newest transcripts,
-none ever recorded any other way), and task notifications, system reminders, hook output and tool
-results fail the test too. `suggestion_accepted` fails on purpose: the model wrote that text and the
-user pressed enter. That, not the nudge, is what refused the 2026-10-21 commit in session 7d2f4a9b,
-so a refusal says so when it walked past an accepted `authorize commit` suggestion. A message the
-user types mid-turn reaches the transcript as a `queued_command` attachment, not a prompt entry, so
-it neither authorizes nor revokes (no such message in the 80 newest transcripts was an
-`authorize ...`).
+`queued`, not meta, not a compaction summary, not a sidechain; or a message the user typed while a
+turn was running, which reaches the chain only as an attachment with `attachment.type ==
+"queued_command"`, `commandMode == "prompt"` and `origin.kind == "human"` (see
+`cupcake_push_authorization.queued_prompt_text`). Nothing else is a prompt. In particular the
+harness nudge "The user hasn't heard from you in a while" is a `type: attachment` entry with
+`attachment.type == "silent_turn_reminder"` (1,518 of them in the 40 newest transcripts, none ever
+recorded any other way), and task notifications, system reminders, hook output, tool results and
+peer agents' messages fail the test too. `suggestion_accepted` fails on purpose: the model wrote
+that text and the user pressed enter. That, not the nudge, is what refused the 2026-10-21 commit in
+session 7d2f4a9b, so a refusal says so when it walked past an accepted `authorize commit`
+suggestion. A mid-turn message both authorizes and revokes, like any other the user types: until
+2026-11-08 it did neither, and an `authorize <sha>` typed mid-turn was refused for that (session
+5f9be448).
 
 What the second path gives up, stated plainly: with no `tool_use_id` to anchor on, an entry
 appended to the transcript by something other than Claude Code would be read as the newest one.

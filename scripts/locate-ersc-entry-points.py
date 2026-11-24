@@ -248,6 +248,33 @@ def map_by_body(reference, installed, va):
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def archive_roots(repo_root=REPO_ROOT):
+    """Checkouts whose gitignored `vendor-archive/seamless/` may hold earlier builds.
+
+    This checkout first, then the main checkout when this one is a linked worktree. The archive is
+    gitignored, so a worktree under `.worktrees/` starts without one, and a re-pin -- which is
+    exactly the job that wants a worktree -- then cannot find the build it is diffing from. A linked
+    worktree's `.git` is a file reading `gitdir: <main>/.git/worktrees/<name>`, so the main
+    checkout is read off it with no subprocess and no hard-coded path.
+    """
+    roots = [repo_root]
+    marker = os.path.join(repo_root, ".git")
+    if os.path.isfile(marker):
+        try:
+            with open(marker, encoding="utf-8") as handle:
+                line = handle.readline().strip()
+        except OSError:
+            line = ""
+        if line.startswith("gitdir:"):
+            gitdir = os.path.normpath(os.path.join(repo_root, line.split(":", 1)[1].strip()))
+            # <main>/.git/worktrees/<name> -> <main>
+            if os.path.basename(os.path.dirname(gitdir)) == "worktrees":
+                main = os.path.dirname(os.path.dirname(os.path.dirname(gitdir)))
+                if main not in roots:
+                    roots.append(main)
+    return roots
+
+
 def steam_roots():
     roots = []
     if os.environ.get("ME3_STEAM_DIR"):
@@ -298,11 +325,12 @@ def ersc_candidates(explicit_installed, explicit_reference):
     # point of the archive is that `_SeamlessCoop/` is a courtesy the next update may not
     # repeat, and a pin set with nothing to diff against cannot be re-measured at all.
     # Sorted so the ordering is stable rather than filesystem order.
-    archive = os.path.join(REPO_ROOT, "vendor-archive", "seamless")
-    if os.path.isdir(archive):
-        for name in sorted(os.listdir(archive)):
-            if name.startswith("ersc-") and name.endswith(".dll"):
-                candidates.append(os.path.join(archive, name))
+    for root in archive_roots():
+        archive = os.path.join(root, "vendor-archive", "seamless")
+        if os.path.isdir(archive):
+            for name in sorted(os.listdir(archive)):
+                if name.startswith("ersc-") and name.endswith(".dll"):
+                    candidates.append(os.path.join(archive, name))
     seen, ordered = set(), []
     for candidate in candidates:
         real = os.path.realpath(candidate)
@@ -475,6 +503,21 @@ def selftest():
 
     if pe.bytes_at_va(payload_va, len(payload)) != payload:
         failures.append("bytes_at_va did not read back the payload it was given")
+
+    # A linked worktree must also reach the main checkout's gitignored archive.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main = os.path.join(tmp, "main")
+        linked = os.path.join(main, ".worktrees", "pin")
+        os.makedirs(os.path.join(main, ".git", "worktrees", "pin"))
+        os.makedirs(linked)
+        with open(os.path.join(linked, ".git"), "w", encoding="utf-8") as handle:
+            handle.write(f"gitdir: {os.path.join(main, '.git', 'worktrees', 'pin')}\n")
+        if archive_roots(linked) != [linked, main]:
+            failures.append(f"archive_roots({linked!r}) gave {archive_roots(linked)}, want [linked, main]")
+        if archive_roots(main) != [main]:
+            failures.append(f"archive_roots on a main checkout gave {archive_roots(main)}")
 
     mask = b"\x01" * 3 + b"\x00" * (len(payload) - 3)
     if len(pe.find(payload[:3] + b"\xff" * (len(payload) - 3), mask)) != 1:

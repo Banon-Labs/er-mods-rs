@@ -78,10 +78,17 @@ env:
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
   CUPCAKE_REV: 27b94b8
-  # cargo-xwin release to install. Pinned because it also keys the cache of the
-  # Windows CRT/SDK that cargo-xwin downloads (defaults such as the bundled
-  # xwin manifest version only move when this version moves).
-  CARGO_XWIN_VERSION: 0.23.0
+  # cargo-xwin release to install. It also keys the cache of the Windows CRT/SDK
+  # that cargo-xwin downloads. The pin does NOT fix what that download contains:
+  # cargo-xwin reads Microsoft's live Visual Studio 17 manifest and takes the
+  # newest SDK and CRT listed there, so a cache miss (GitHub evicts an entry
+  # after a week unused) fetches whatever Microsoft publishes that day.
+  # 0.23.0 bundled xwin 0.9.0, which matches SDK payloads only by the
+  # `Installers\` prefix; the 10.0.26100.18 SDK in the VS 17.14.45 manifest names
+  # them `Installers/...`, so every fresh download failed with "unable to find
+  # x86_64 headers for Win11SDK_10.0.26100" (run 45319764068). 0.23.1 bundles
+  # xwin 0.10.0, which accepts either separator (xwin PR #179).
+  CARGO_XWIN_VERSION: 0.23.1
   # ShellCheck release to install, and it is a PIN rather than a preference:
   # `shellcheck` findings are version-dependent, so an unpinned linter is a gate
   # whose verdict drifts with whatever the runner image happens to ship. Measured
@@ -367,7 +374,8 @@ jobs:
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
           }
-          rustup toolchain install stable --profile minimal --component rustfmt
+          # No name: installs the version rust-toolchain.toml pins, with its components.
+          rustup toolchain install --profile minimal
           rustup target add x86_64-pc-windows-msvc
       - uses: taiki-e/install-action@v2
         with:
@@ -526,7 +534,8 @@ jobs:
             echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
           }
-          rustup toolchain install stable --profile minimal --component rustfmt
+          # No name: installs the version rust-toolchain.toml pins, with its components.
+          rustup toolchain install --profile minimal
           rustup target add x86_64-pc-windows-msvc
 
       # PINNED shellcheck, replacing whatever the runner image ships. Measured on run 33468994945:
@@ -550,8 +559,9 @@ jobs:
       # On first use cargo-xwin downloads and unpacks the MSVC CRT and Windows SDK into
       # ~/.cache/cargo-xwin. That download comes from Microsoft's CDN and its duration is wildly
       # variable -- 40 s on a good run and 12 m 44 s on a throttled one (run 28757404582) -- so it
-      # is restored from the Actions cache instead. The content is fully determined by the pinned
-      # cargo-xwin version, so an exact-key hit is expected every run.
+      # is restored from the Actions cache instead. The key is the pinned cargo-xwin version, but
+      # the content of a fresh download follows Microsoft's live manifest (see CARGO_XWIN_VERSION
+      # above), so a miss after eviction can fetch a newer SDK than the one last cached.
       - name: Cache xwin Windows CRT/SDK
         if: steps.tools.outputs.xwin == '1'
         uses: actions/cache@v5

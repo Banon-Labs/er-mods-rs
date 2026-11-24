@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "find out what the lobby key says"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "As soon as you open your world, the probe records the lobby key and the warp map it carries."}]}}

@@ -59,7 +59,7 @@ fi
 # shellcheck source=scripts/steam-running.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+steam_running || fail "Steam is not running. Start Steam first."
 # Freshness, not existence. The loop here used to assert only that four files exist -- but the
 # profile below points me3 straight at target/.../release, so existence says nothing about which
 # code loads. This run produces the vanilla baseline that oracle-steadystate-diff.py subtracts
