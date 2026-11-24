@@ -355,8 +355,9 @@ rate-neutral); no talismans, no off-hand, one-handed, PvP rates; the median defe
   meet the carrier's requirements, or the spell's and its catalyst's (a catalyst whose requirement
   is not met casts nothing, **COMMUNITY**). Whether the game's requirement check counts talisman
   or great-rune stat boosts is **not established**, so base stats are read. A build's skill rides
-  the weapon of least total requirement in the opening group that it can wield, at the affinity
-  whose skill damage is largest at its stats; its spells cast at its own DEX, which moves every
+  the weapon of the opening group that it can wield whose skill damage, the opening and each
+  follow-up summed, is largest at its stats (ties to the least total requirement; version 19), at
+  the affinity whose skill damage is largest there; its spells cast at its own DEX, which moves every
   hit frame (`casting_value` between `analogDexterityMin` and `Max`). The populations come only
   from the attacker lines, so an attack no line can use is in none of them (full run r5, on the
   corpus-median lines before version 10, **MEASURED**: Tremendous Phalanx, Rancor Slash and Great
@@ -433,8 +434,10 @@ rate-neutral); no talismans, no off-hand, one-handed, PvP rates; the median defe
   top level, plus the weapons that ship with it (Meteoric Ore Blade for Gravitas); a unique
   skill's are its own weapons. They are bucketed by weapon class and skill diff category, one
   weapon per bucket is probed for its opening clip, and buckets with the same opening merge. Each
-  opening is one entity group (`skill:<sid>:<opening>`), carried by its weapon of least total
-  requirement, at the mountable affinity whose skill damage is largest (ties to Standard). An
+  opening is one entity group (`skill:<sid>:<opening>`), carried on the distance basis by its weapon
+  of least total requirement, and at an attacker line or objective line by the group weapon the
+  line can wield whose skill damage is largest there (`build_job`, version 19), each at the
+  mountable affinity whose skill damage is largest (ties to Standard). An
   affinity the model raises on is recorded on the entity (`affinity_errors`): none in the full
   run. A stance skill gives one entity per button. A weapon that ships with the ash and mounts no
   gem (`gemMountType` not 1 or 2: the Meteoric Ore Blade's Gravitas) is a carrier nobody can swap
@@ -516,7 +519,11 @@ distance basis's nets; each attacker build lists its own members netting at most
 ## 2. The outcome per situation
 
 The situations are `er-mechanics-spells.punish_situations(150)`: 1,208 rows, W = 779.833, n_eff =
-(sum w)^2 / sum w^2 = 466.2 (**MEASURED**). Per situation `er-mechanics-spells.net_parts` gives:
+(sum w)^2 / sum w^2 = 466.2 (**MEASURED**). Since version 16 each row also carries the whiff's move
+cancel (section 2d), which splits them into 3,482 rows, the same W, n_eff 1034.5 (**MEASURED**
+2026-11-15); version 17's free aim makes it 3,483 rows, n_eff 1029.0 (**MEASURED**,
+`punish_situations(150)`); the counts quoted below for 1,208 rows are from before. Per situation
+`er-mechanics-spells.net_parts` gives:
 
 - **now**: pressed at once at the situation's distance and floor: what lands (`land_now` = landed
   worth / full worth), the punish chance after a roll (`pun_now`), what lands on a defender who
@@ -564,9 +571,14 @@ wherever it reached him (**MEASURED**, round 5 geometry). A follow-up entity is 
 `FollowupForm` (`er-mechanics-ashes.FollowupModel`; the rules are in ashes-of-war.md section 16a):
 
 - his roll of the opening is played as `sequence_outcome` plays it, and the follow-up meets that
-  roll: it catches him outside the roll's invincibility before its dodge cancel, else he is free;
-- he knows the attack as pressed at once (cue 0, as every attack here) and dodges the follow-up
-  from his dodge cancel on; a late press meets that planned dodge early, then he reacts to the
+  roll: it catches him outside the roll's invincibility before its dodge cancel, else he is free.
+  Since version 25 he aims that roll for what it leaves him against the follow-up pressed at once
+  (`_open_vals`; section 2h), and a catch made in it, by the opening or by the follow-up, is played
+  from the roll (`_mid`);
+- he knows the attack as pressed at once (cue 0, as every attack here, except a burst a search
+  launches, read from its launch: 'The defender's cue at a search launch' below, and a skill the
+  attacker starts with a timed press, read from it: section 2g) and dodges the
+  follow-up from his dodge cancel on; a late press meets that planned dodge early, then he reacts to the
   press (**INFERRED**: he reads no delay ahead);
 - the attacker presses late only on a roll that showed on his machine his own reaction before the
   window opened (`attacker_reactions`, **INFERRED** symmetry), at the frame of the window that
@@ -574,7 +586,9 @@ wherever it reached him (**MEASURED**, round 5 geometry). A follow-up entity is 
   (**VERIFIED** press rule, attacks.md section 4; `skill_option` offsets the part by the press).
 
 So the stayer (`base_now`, `t_first`) meets the earliest press, and per situation the policy nets
-at least what the press at once nets (selftest 30). The earliest-press entity is replaced, not
+at least what the press at once nets (selftest 30). Since version 20 the scored net is the mixup's
+value over this policy ('The follow-up as a mixup' below), and the policy alone is its fixed
+sequence. The earliest-press entity is replaced, not
 kept: it is one choice of the same attack at the same FP, so keeping it would make each follow-up
 dominate or twin itself. `FollowupModel.outcome(read=True)` also measures a read, a default delay
 taken before any roll shows; it is not scored, because the planned-dodge defender never expects a
@@ -617,6 +631,136 @@ shows can never touch), and a trimmed or delayed read is an
 index into that table. A caught defender is played only for the (delay, geometry) pairs the
 policy can read.
 
+**The defender's cue at a search launch (version 20).** A Glintblade Phalanx or Carian Phalanx
+blade is not launched by a timer. Its root (spell 10430000/100/200, think 1000100; ash 2300, think
+1000102: life -1, `FollowType` 1, `autoSearchNPCThinkID` above 0) hovers at least 2.0 s
+(`er-mechanics-ashes.SEARCH_ARM_S`). After that the bullet's own targeting system, facing the
+caster's facing, launches it when it finds the target (**VERIFIED** 1.16.2: bd
+`phalanx-launch-is-caster-facing-target-search-1162-2026-11-16`, ashes-of-war.md above
+`SEARCH_ARM_S`). So the caster chooses the launch frame, and the defender cannot time his roll from
+the cast. A shot a search launches, and every shot below it, is read from that launch
+(`er-mechanics-ashes.search_cues`). A geometry whose every shot is such a shot carries the launch's
+real frame as `CUE` (`tree_cue`, set by `er-mechanics-spells.SpellModel.flight`, the volley legs
+of `CastThreats.bursts` and `er-mechanics-ashes._hit_contacts`). A burst whose every geometry
+carries one is dodged from the earliest of them, never before the part's own cue (`burst_cue`).
+`reaction_outcome`, `_volley_burst`, `_burst_presses` (the follow-up's opening and follow-up) and
+`OutcomeForm` (`_reaction_form`) all read it, and the run's form check still compares the form with
+`net_parts`. The model launches at the earliest, 121 moves at 60 fps after the event. The hovering
+root's own samples set no cue: they stay at the cast point (`INFERRED`; the ash's root carries its
+blades' AtkParam). Which eye fields of the think row the search reads is not traced (**INFERRED**).
+
+**One stage, one rule (version 22, 2026-11-16).** The user, 2026-11-16: "I don't know what the
+model is doing, I just want it to be accurate, and logically consistent". An audit found four
+places where two stages of the model read one thing two ways:
+
+- **A Phalanx blade is one hit list.** The hovering root and the `HitBulletID` row it flies are
+  one bullet (**VERIFIED**, FUN_14039ee00), one list, one hit. `SpellModel.bullet_lists` made them
+  two, so `value` priced every blade twice while `CaughtModel` could land only the flight's list:
+  land shares topped out at 0.5, and the pouch's volley (`volley_outcome`, full worth per threat)
+  netted twice what attack-similarity did (Glintblade Phalanx 756.5 against 378.3, Carian
+  Phalanx 891.7 against 445.9, the ash's `full` 897.6 against 448.8, **MEASURED** by the audit).
+  Now `full`, `value`, the land shares and the pouch read 378.3 and 445.9 (ashes-of-war.md section
+  20).
+- **He picks his roll's direction.** He picked the jump over the roll and the strike over both
+  knowing the attack, but pressed the four roll directions a quarter each. Each direction is now a
+  family of its own (`er-mechanics-ashes.dodge_families`), in `sequence_outcome`,
+  `volley_outcome`, `FollowupModel`, `OutcomeForm` and the spell kit's `dynamic_outcome`. His
+  lookalike group still times the press within the family, one plan per family, as it did for the
+  roll and the jump (ashes-of-war.md section 16a).
+- **The punish reads where the attacker ended.** The hits were held back by the defender's body
+  using the attacker's root motion (`PK`), but every punish path here read the attacker standing
+  where he started (`advance` 0). Now one rule (`attack_advance`, `advance_at`) gives where his
+  whole clip's root motion leaves him, stopped 2 x `PUSH_CAPSULE_RADIUS` short of the defender as
+  the hits are. `sequence_outcome`, `volley_outcome`, `FollowupModel`, `dynamic_outcome` and
+  `_reaction_form` read it; the form check still compares `OutcomeForm` with `net_parts`, whose
+  `sequence_outcome` reads the same advance. The defender's strike runs in short of the
+  attacker's travel by his first touch (`StrikeReach.advance`). Geometries carry the clip's travel
+  as `ADV`, which `geo_fingerprint` reads.
+- **A follow-up is read in its opening's lookalike group** (section 2b).
+
+Version 20 against version 22, mean net per situation weight at the 'Intelligence' and
+'Intelligence + melee' attacker builds (**MEASURED** 2026-11-16, `--only` subset of the ten names
+below, `--jobs 3`; version 20 from the same code before these fixes, `dominance.builds[*].mean_net`
+of each run's `--json`; the run's form check passed on 39 forms):
+
+| entity | Intelligence | Intelligence + melee |
+| --- | --- | --- |
+| Savage Claws | 448.3 -> 448.3 | 433.3 -> 433.3 |
+| Rosus's Summons | - | 494.1 -> 493.6 |
+| Swift Slash (charged / tap at f10) | 397.4 -> 244.3 / 368.6 -> 282.5 | 397.3 -> 244.3 / 368.2 -> 282.3 |
+| Divine Beast Frost Stomp (charged / tap at f21) | 273.0 -> 132.6 / 130.8 -> -41.4 | 290.5 -> 145.9 / 139.7 -> -40.2 |
+| Glintstone Pebble then R2 (040010, f38) | 433.3 -> 345.2 | 413.4 -> 349.9 |
+| Glintstone Pebble then R2 (045910, f38) | - | 413.6 -> 324.1 |
+| Ghostflame Ignition then R1 / then R2 | - | 408.6 -> 393.6 / 47.1 -> -79.5 |
+| Glintblade Phalanx (spell) | -35.2 -> -35.2 | -39.8 -> -39.8 |
+| Glintblade Phalanx (ash 040000 / then R2 f45) | -8.3 -> -18.2 / 105.4 -> -163.8 | -6.7 -> -16.8 / 86.9 -> -170.3 |
+| Carian Phalanx | (not in the v20 subset) -> 7.6 | -> -14.1 |
+| Stars of Ruin (tap / charged) | 132.4 -> 91.9 / 68.9 -> 5.4 | 59.2 -> 25.9 / 13.1 -> -40.6 |
+| Glintstone Icecrag | 27.4 -> 0.0 | 24.9 -> 0.0 |
+
+The Glintblade Phalanx spell's net does not move: its `full` halves (864.6 -> 432.3) and its land
+share doubles (`land_mass` 0.315 -> 0.630), the blades' second list never having landed. Which fix
+moves what, read on two skills with `net_parts` at the Intelligence + melee stats, every situation,
+switching each fix on alone (**MEASURED** the same day; weights as the run's): Swift Slash on the
+Backhand Blade (its clip carries the attacker 7.23 m) 357.5 -> 357.2 with the direction alone,
+239.4 with the travel alone (the punish chance 0.058 -> 0.304), 239.2 with both; Divine Beast Frost
+Stomp on Clayman's Harpoon (1.79 m) 273.3 -> 213.6 / 186.7 / 146.1. Glintstone Icecrag goes to 0
+because a roll direction escapes it at every distance, which the quarter-each blend never let him
+take.
+
+**The follow-up as a mixup (version 20).** The user, 2026-11-16: "I think the pebble/R2
+interaction is what is called a 50/50". A follow-up entity's scored net is the value of a zero-sum
+game (`FollowupForm.mixup` over `er-mechanics-ashes.FollowupModel.mixup`, solved exactly by
+`zero_sum_game`), not one fixed sequence. The defender's pure strategies are rolling the opening
+as above, per move family, or standing to take the opening's first catch and being played out of
+the rest (`CaughtModel`). The attacker's are the press policy above at each default delay of the
+window, pressed blind. The defender's strike stays a row the attacker's choice does not move, so
+each situation nets the smaller of the game's value and the strike's. The run-in is picked on the
+game's value, so `gap` is the game's run-in. `land`, `pun`, `base_now`, `land_now` and `delayed`
+stay the fixed sequence's: what lands when he rolls. A third defender row, strafing from his move
+cancel (`strafe_escape`), is scaled by `STRAFE_SHARE`. That share is **INFERRED** and set to 0.0,
+so the strafe row is the stand row and the mixup moves only the roll or stand choice and the blind
+delays. Since version 23 the strafe starts at a dodge's reaction and two network legs (section 2g);
+no param or measurement says how often desync and execution let a strafe through;
+the user is to give a realistic share. Even then the strafe row is offered only against an opening
+whose shots are aimed when created (`FollowupModel.strafe_ok`), never a search launch: the strafe
+walks 150 frames, and the search fires when he is in the caster's cone, which the strafe's
+geometry does not model. Glintstone Pebble then R2 on Intelligence + melee netted 413.1 / 342.4 /
+320.4 at shares 0 / 0.5 / 1.0 (**MEASURED** 2026-11-16, before this version). The selftest (check
+30) holds the game's value under what the defender's best pure reply concedes in every situation,
+and at least the fixed sequence's mean on Ghostflame Ignition then R1, where the blind delays help.
+
+Version 20 against r21's code (version 19, whose Phalanx roots still hovered the 5 s
+`BULLET_LIFE_CAP_S`, so the 2.0 s hover is in these numbers too), mean net per situation weight on
+'Intelligence + melee' and `land_now` on the distance basis (**MEASURED** 2026-11-16,
+`scripts/perf-similarity-dump.py` on both checkouts, names Glintblade Phalanx, Carian Phalanx,
+Glintstone Pebble and Ghostflame Ignition, 3,483 situations):
+
+| entity | Intelligence + melee net | distance-basis `land_now` |
+| --- | --- | --- |
+| Glintblade Phalanx (spell) | -65.4 -> -39.8 | 0.025 -> 0.132 |
+| Carian Phalanx | -57.9 -> -14.1 | 0.015 -> 0.158 |
+| Glintblade Phalanx (ash, 040000) | -41.1 -> -6.7 | 0.022 -> 0.102 |
+| Glintblade Phalanx (ash, 045900) | -37.3 -> 69.7 | 0.022 -> 0.184 |
+| Glintblade Phalanx then R2 (040010, f45) | 96.7 -> 86.9 | 0.256 -> 0.256 |
+| Glintblade Phalanx then R2 (045910, f45) | 90.9 -> 86.5 | 0.262 -> 0.262 |
+| Ghostflame Ignition then R1 (f43.2) | 393.5 -> 415.0 | 0.131 -> 0.131 |
+| Ghostflame Ignition then R2 (f43.2) | 47.2 -> 47.8 | 0.009 -> 0.009 |
+| Glintstone Pebble then R2 (040010, f38) | 413.4 -> 413.4 | 0.287 -> 0.287 |
+| Glintstone Pebble then R2 (045910, f38) | 413.4 -> 413.6 | 0.328 -> 0.328 |
+| Glintstone Pebble then R2 (fixed 2250000, f38) | 331.1 -> 331.2 | 0.317 -> 0.317 |
+
+The Glintstone Pebble and Ghostflame Ignition rows have no search launch, so their change is the
+mixup's alone. A follow-up's `land_now` is the fixed sequence's and does not move. The run's form
+check passed on every entity of these names. The mixup is not always above the fixed sequence:
+standing is a row the fixed sequence never offered the defender. Read alone at that line
+(`FollowupForm.mixup` at the line's stats, the defender's own poise for the strike, no HP cost,
+**MEASURED** the same day), the two Glintblade Phalanx R2 follow-ups net 82.2 against a fixed
+91.8 (Iron Greatsword; he stands on 0.92 of the weight) and 82.1 against 86.3 (Carian Thrusting
+Shield; 0.786), with no blind delay played. Ghostflame Ignition then R1 nets 386.1 against 361.5
+(stand 0.089; a delay above 0 on 0.348). Glintstone Pebble then R2 on the Omen Cleaver nets 413.1
+both ways (stand 0.991).
+
 ### 2b. What is on screen (version 8)
 
 Until version 7 the reacting defender knew the attack he faced from its first frame and when each
@@ -646,11 +790,26 @@ member's geometry is phase 1's at that line; a spell no item ran there (one `--o
 an objective line casts) is run there for the group alone (the 'lookalike inputs' stage). A
 component is read as its whole entity, against the whole's lookalikes. The group is part of the
 form's fingerprint (`look_sig`), so an `OutcomeForm` is shared, and checked against `net_parts`,
-only between builds whose group is the same. An attack alone in its group, every follow-up and
-an early release with an opening hit before it (`FollowupForm`, whose defender still plans his
-roll of the opening for the press at once) are read as before (since version 9 any other early
-release is read in its hold's group, section 2c); each record names its distance-basis group
-('lookalikes').
+only between builds whose group is the same. An attack alone in its group and an early release
+with an opening hit before it (`FollowupForm`, whose defender still plans his roll of the opening
+for the press at once) are read as before (since version 9 any other early release is read in its
+hold's group, section 2c); each record names its distance-basis group ('lookalikes').
+
+Since version 22 a follow-up (an R1 or R2 after the skill, not a release) is read in its
+opening's group, as its opening (`look_specs` via `LookStore.opening`; `FollowupForm` hands the
+member to `er-mechanics-ashes.FollowupModel`, whose `_shape` times the first opening burst that
+reaches him standing by the group's plan). Until the press the attack is its opening, and the
+group's plan times only that first dodge, so this is the opening's own treatment and nothing more.
+Before, `profile_arrays` built every `FollowupForm` without the group, and a defender facing a
+charged opening's follow-up knew it from the hold's first frame. What the code's group does not
+cover: an opening that is in no group stays alone, so Glintstone Pebble's ash then R2 and
+Ghostflame Ignition then R1 are read as before. Their openings are neither a spell nor a charged
+skill's hold, the two kinds `look_spec` groups. Putting the opening alone, its R1 follow-up and its
+R2 follow-up into one group would change nothing where the opening reaches him standing: all three
+open on the same first burst, so the plan of the first dodge is the opening's (**INFERRED** from
+`lookalike_plan`: members with equal escaping starts give the presses one member gives; where the
+opening does not reach him, `FollowupModel` plans no opening dodge at all). Whether a follow-up
+comes at all, and when, is the mixup's question (section 2a), not the group's.
 
 What it moves at the distance basis (**MEASURED** 2026-11-10, `profile_arrays` with and without the
 group, weighted mean net over the 1,208 situations; every spell candidate with a tap and a charge
@@ -1118,7 +1277,9 @@ attacker's roll gate. `er-mechanics-interrupt.simulate` on that one hit, through
 window open then (`TOUGHNESS` on every geometry: a spell's cast clips, a skill's hit clips), says
 whether the attacker's poise breaks; broken, what has not left him is lost, and what has left
 lands on the defender standing. He takes whichever of the strike and the roll leaves the attacker
-less, a tie to the roll, per (distance, floor), as he takes the roll or the jump.
+less, a tie to the roll, per (distance, floor), as he takes the roll or the jump. The first touch
+is read on him standing at his start or at the end of his run in, whichever is sooner, and since
+version 23 what lands is priced at that same place (`StrikeReach.where`, section 2g).
 
 Here, the forms that price every build and objective line (`OutcomeForm`, `FollowupForm`) read it
 through `_StrikeForm`: the runs of strikes that land per key (`strike_segments`, no worth, no
@@ -1195,6 +1356,28 @@ cancel), and up to 12 frames later on the rest (**MEASURED** 2026-11-13, the mer
 `punish_situations` loop). So the dodge cancel leaves the strike a little late on most of the
 weight, not early. A press at the R1 cancel plays the string's next R1, not the R1 #1 whose
 frames the strike uses; that is not modelled.
+
+**Version 16: the run starts at the move cancel.** A defender who has to run in before he strikes
+(past `PUNISH_REACH_M`, 3.69 m) cannot walk or run before his whiff's move cancel: the behavior
+script starts a walk only through the move-cancel check (env 2000, **VERIFIED**). Each situation
+now carries 'run', the frames from the end of the whiff's last hit to its move cancel, beside the
+dodge-cancel floor (`punish_situations`, situations version 4; `strike_segments` reads it past
+`PUNISH_REACH_M`, the floor in reach, and the attacker's own run in uses up both alike). Longsword
+R1 #1 one-handed, its hit ending at f16: dodge cancel f24, guard f27, move f29, so floor 8 and run
+13 (**MEASURED**, `ATK.weapon_attacks`). Over the RL 150 pool's spaced whiffs the move cancel comes
+6, 8 and 14 frames after the dodge cancel at the weighted quartiles, and the 1,208 (distance,
+floor) situations become 3,482 (**MEASURED** 2026-11-15). The roller who punishes a rolled attack
+runs from his roll's move cancel the same way (f22, against its R1 cancel f20; a roll that carries
+him into reach first still presses at the R1 cancel; `er-mechanics-ashes.punish_lead`, neutral.md
+section 3).
+
+A known gap (**INFERRED**): a player who can guard (stamina above 0 and a two-handed melee weapon,
+or a shield or torch, types 47/48/49/57, in the left hand when one-handing: HKS env 243 at
+0x14041151d, **VERIFIED**) may start walking at the guard cancel with L1 held, a few frames before
+the move cancel (Longsword R1 #1: f27 against f29). Nothing read here establishes how fast a
+guarding player walks (`SpeedUpdate` sets no guard speed and the behavior graph has no guard
+locomotion state; the speed would come from a SpEffect, a TAE event or the EXE), so the guard
+cancel is not used and every row runs from the move cancel.
 
 ### 2e. The attacker's own guard (version 12)
 
@@ -1286,6 +1469,381 @@ Sin 80 a launch; the status half of a cost (Briars' bleed 30, the frenzy incanta
 listed in 'unpriced', since no line carries its own resistances (ashes-of-war.md section 19c). A
 release member pays its variant's own fired refs (`INFERRED`), and a component pays nothing: the
 whole entity pays once.
+
+### 2g. One option set and one reaction rule for the defender (version 23)
+
+User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+logically consistent". A read-only audit that day found stages of the outcome model giving the
+defender different options, or different reaction timing, for the same attack. Each fix below is
+read from the code (**VERIFIED** reading); the reaction and network constants stay **INFERRED**
+(ashes-of-war.md section 16a). The ashes-of-war.md 16a paragraph 'One reaction rule and one option
+set' has the same list from the ash model's side.
+
+- **Stand everywhere.** `CastThreats.dynamic_outcome` let him stand where rolling cost him more,
+  and the follow-up mixup has a 'stand' row, but `sequence_outcome`, `volley_outcome` and
+  `OutcomeForm` had none. All of them now end in `er-mechanics-ashes.stand_or`: he takes the
+  attack as a defender who never dodges (`base`, the first reaching catch played out by
+  `CaughtModel`, never punished) when that leaves the attacker less than his best evasion family;
+  a tie keeps the evasion. `OutcomeForm.net` takes the same minimum per situation, so the form
+  check still compares like with like. The follow-up's fixed sequence ('fixed',
+  `FollowupModel.outcome`) stays the roll rows by its definition; its scored net is the mixup's.
+- **One cue.** `er-mechanics-ashes.burst_cue` is the one reader of when a dodge may start: the
+  later of the part's cue and the earliest frame a geometry of the burst is readable from, each
+  geometry readable from the later of its search launch (`CUE`) and the attacker's timed press
+  that starts the skill (`PRESS_CUE`). A stance's button or a hand-over the attacker times is
+  `skill_commit`'s 'cue'; `skill_reaction` read it as part 0's cue, `net_parts` and the forms did
+  not, so a stance skill was dodged as if its press were known from frame 0.
+  `er-mechanics-spells.SpellModel.skill_attack` now puts it on every geometry of the skill (Unsheathe
+  R1 on the Uchigatana, spells selftest), and `geo_fingerprint` reads it. A re-aimed cast's first
+  roll (`CastThreats.dynamic_outcome`) was timed from frame 0 whatever its geometries carried; it
+  reads `burst_cue` of the first burst that reaches him standing now. A follow-up's own press is
+  not a `PRESS_CUE`: `FollowupModel` plays it (planned at once, reacted to when late), and an early
+  release's timing belongs to its `Lookalikes` group. The strike and the strafe still run from the
+  attack's start: neither needs to read the timing, only that an attack is coming (**INFERRED**).
+- **One latency.** The strafe (`FollowupModel.strafe_escape`) started at the attacker's reaction
+  quantiles, no network leg, while every other defender move starts at `reaction_delays`: the
+  reaction plus two legs (he sees the attack one leg late, his move reaches the attacker's machine
+  one leg late). No game reason sets a walk apart from a roll there, so it pays the same now. At
+  `STRAFE_SHARE` 0 the scored nets do not read the strafe.
+- **The strike's place.** `StrikeReach.touch` timed the attack's first touch at the sooner of his
+  start and the end of his run in to `PUNISH_REACH_M`, but `kept` and `CaughtModel.worth_of`
+  priced what lands at his start. Both now read the place the touch was timed at
+  (`StrikeReach.where`; `CastThreats.strike_reach` and `_StrikeForm` alike). What this still
+  leaves out (**INFERRED**): along the run in he is read at its two ends only, and `CaughtModel`
+  starts the caught defender standing there, not running in. To play him running in it would need
+  a starting motion (from his start at run speed toward the attacker, from the strike's press
+  frame) in place of its standing first segment.
+
+Version 20 against version 23, mean net per situation weight (**MEASURED** 2026-11-16: an `--only`
+run of Savage Claws, Glintstone Pebble, Swift Slash, Rosus's Summons, Ghostflame Ignition, Glintblade
+Phalanx, Divine Beast Frost Stomp, Stars of Ruin and Glintstone Icecrag, `--jobs 3`, each version on
+an opponent members cache built from its own sources, 1h41m and 50 min). Of the 40 (line, entity)
+nets on 'Intelligence' and 'Intelligence + melee', one moved:
+
+| entity | line | v20 | v23 |
+| --- | --- | --- | --- |
+| Ghostflame Ignition [Death's Poker] then R1 (f43.2) | Intelligence + melee | 408.6 | 391.0 |
+
+It is the strike's place: the opening first touches a defender at f28.2 wherever he starts, and from
+4 m out that touch is now priced at the end of his run in (3.69 m), inside the ghostflame trail, so
+the strike leaves the attacker less in more situations (`StrikeReach.where` on its geometry,
+**MEASURED** the same day). The other 39 nets are equal to 0.01, so on these names the stand, the
+cue and the strafe latency move nothing (the strafe is unscored at `STRAFE_SHARE` 0; Ghostflame
+Ignition's opening carries no timed press, `PRESS_CUE` none, checked the same way).
+
+Two suspicions of the audit, checked:
+
+- **The attacker's press at a whiff** (`er-mechanics-spells.punish_situations`: the caster
+  presses the instant the whiff's last hit window ends). Not an inconsistency in latency: the
+  caster reacted to the swing when he ran back (`er-mechanics-neutral.backoff_whiffs`, the
+  reaction and both legs), so this press is scheduled on an event he has already read, as the
+  defender's dodge is scheduled once he reads the attack (`dodge_presses`). The whiff's end and
+  the whiffer's roll each reach the caster's machine one leg late, so the floor between them
+  carries no leg. Left as it was. What it lacks against the defender's scheduled dodge is the
+  timing error (`DODGE_TIMING_SD_S`); adding it would spread every situation over its quantiles
+  (**INFERRED** that it is small).
+- **The attacker against a caught defender's escape.** Verified as a gap (version 23) and fixed in
+  version 25: in the mixup's stand row the attacker pressed at the column's default delay whatever
+  the caught defender did, while in a roll row he delays on a roll he saw before the window
+  opened. `CaughtModel.escape_table` now gives, for a catch by geometry h at a distance held by the
+  situation's floors, per pool poise and escape (`_escapes`) the real frame that escape first
+  starts (`_play` 'te'), its score and what lands, for each press delay (`FollowupForm._worths`
+  `escapes`, each delay's own shifted model). The stand row (`FollowupModel._stand_values`) reads
+  `seen_at` for that start as the roll rows do: the attacker presses at the column's delay unless
+  he saw the escape (`attacker_reactions` past its start) before then, else at the delay from then
+  on that lands most against it; per poise the defender takes the escape whose score is least so
+  pressed (the first of equals, as `CaughtModel._best_at`). With no reaction in time the row is
+  `worth_of` exactly. The strafe row's caught share reads the same values. A press of a roll row
+  caught by the opening was still priced at the column's delay; version 26 applies the same rule
+  there (section 2i).
+
+### 2h. Version 25: the press he aims, and the catch in his own dodge
+
+User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+logically consistent". Three defects of version 24, each read in the code first:
+
+- **The press policy (`er-mechanics-ashes.dodge_presses`, `_AimTable`).** He aimed at the middle
+  of the escaping run he was likeliest to land in, whatever his punish, and a lookalike group's plan
+  at the middle of the likeliest stretch. A defender who could not tell the Glintstone Dart from
+  its release punished it 0.5000, one who knew it 0.3294 (**MEASURED**, the PvP ranking's selftest
+  in version 24): knowing the attack hurt him, which no best response allows. Now every path that
+  plans presses (`dodge_presses`, `group_presses`, `lookalike_plan` with its decision time, and the
+  outcomes that call them: `reaction_outcome`, `_volley_burst`, `_burst_presses`,
+  `CastThreats.dynamic_outcome`, `_reaction_form`) aims where his presses are worth most to him: one
+  per press that escapes, plus, on the burst that decides his punish, its share of punishing
+  strikes (`PressGain`). The timing error (`DODGE_TIMING_SD_S`, 7 quantiles) is kept; the choice is
+  exact over every aim under it. The measure reads no attacker worth (`INFERRED`: he weighs a hit
+  he lands as one he avoids), so the forms stay linear in the worths and one plan serves every
+  build. A lookalike member's punish is read from its own roll frame (`look_entry` 'roll', part of
+  `look_sig`). A follow-up's opening roll is aimed for what it leaves him against the follow-up
+  pressed at once (`FollowupModel._open_vals`). The Dart now punishes 0.5000 known and unknown
+  (selftests: ashes "the Glintstone Dart cast as it opens", spells "knowing the Glintstone Dart is
+  the hold is never worse"). Not changed: `Opponents._table` (the exchange model's rating of a
+  dodge skill) still times the pool's openers by escape alone, since the strike it would aim for
+  is read after the table is made.
+- **A catch in his own dodge (`CaughtModel` `dodge_key`).** A press caught at or after its dodge's
+  start was priced as a catch of a defender who stood at the distance, free at once. It is now played
+  from that dodge: on its root motion, held by its own dodge and move cancels as the whiff's floors
+  hold him (ashes-of-war.md 16a, "Caught in his own dodge"). `OutcomeForm` keeps one play per
+  (distance, geometry, move, start, catch frame) beside its per-geometry weights and prices it per
+  build; `FollowupModel` gives each catch in his roll of the opening a column (`_mid`), a follow-up
+  catch made after the opening is over shared by every delay, and its stages' dodges likewise
+  (`_stage` / `_late` 'mids', `_stage_values`). The form against `net_parts` (**MEASURED**
+  2026-11-16, the distance basis, every 8th of the 3,483 situations, one core): `form_error` 0.0
+  for Savage Claws (0 plays; form 9.1 s, `net_parts` 21.9 s), Rosus's Summons (154 plays; 4.2 s,
+  3.0 s), Swift Slash (12 plays) and its tap, Divine Beast Frost Stomp (3,357 plays; 2.0 s, 1.3 s)
+  and its tap, Ghostflame Ignition and Glintstone Pebble; the follow-up forms of Ghostflame Ignition's
+  R1 and Glintstone Pebble's R2 kept 1,761 and 74 columns (35.9 s and 62.3 s). Left for version 26
+  (section 2i): each later burst placed him back at the distance and floored him at the burst's end
+  plus his roll's recovery.
+- **The stand row's escape.** Above (section 2g's last item).
+
+### 2i. Version 26: the roll he escaped with, and the remaining inconsistencies
+
+User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+logically consistent". Four places where one stage honored a constraint another ignored, each read in
+the code first (**VERIFIED** reading); ashes-of-war.md 16a, "The roll he escaped with", has the
+detail and the selftests.
+
+1. **The next burst met on the roll that escaped the one before.** Every path that chains bursts
+   (`sequence_outcome` and `OutcomeForm` through one worth-free reader, `er-mechanics-ashes.dodge_chain`;
+   `volley_outcome`; `FollowupModel`'s opening, its follow-up stages and its planned dodges) put an
+   escaped defender back at the distance, free from the burst's end plus his roll's recovery past
+   its invincibility (**INFERRED** then), while the dodge read of that burst followed his roll and
+   the spell kit's re-aimed casts carried him from roll to roll. Now each escaping press leaves him
+   on its roll from its start (on the update grid, from where earlier rolls had carried him), free
+   to dodge again only from its start plus its dodge cancel, standing where the first whole frame
+   of that cancel (f21) left him (**INFERRED**: the slide a clip goes on with past its cancel is not
+   carried; the back roll's place is 3.71 m back at f21, 3.17 m at its end; a side roll's 3.42 m at
+   f21, 4.41 m at f56). A later burst that touches him outside that roll's invincibility before he
+   can dodge again catches him in it (a play from that roll, priced by `CaughtModel`). Before each
+   later burst the attacker turns to face him (`face_track`, **INFERRED**: a locked-on attacker
+   turns at 720 deg/s, `er-mechanics-reach.DEFAULT_TURN_DEG_PER_S`, where no TAE 224 sets another
+   rate and no JumpTable 7 stops him; the clips' own windows are not read; the turn faces where his
+   last roll leaves him, so a roll still under way turns with him, the same turn whenever the next
+   burst comes, which lets the follow-up keep one read per roll, `FollowupModel._faced_roll`). His punish is the last
+   escaping press's, from where its roll started, against the attacker's root as the whole attack
+   left it: `punish_lead` reads the defender's carried place (`origin`) and `attack_advance` the
+   attacker's, the gap between the two.
+2. **A follow-up catch while an opening sample could still touch him** (`FollowupModel._stage`,
+   `_late`) is a play of that delay, priced from his roll, not a catch of a defender standing.
+3. **A roll row's press the opening caught** meets the stand row's version 25 rule: the attacker
+   presses for the caught defender's escape (`FollowupModel._CaughtRows`, `FollowupForm`'s
+   `col_escapes` over `CaughtModel.escape_table`, a catch in his roll with its `dodge`).
+4. **`Opponents._table`** (the exchange model's rating of a dodge skill) times the pool's openers
+   by escape and punish together, the version 25 aim (`_ExchangeGain`: `dodge_value`'s own punish
+   count, read with the strike and reach the table is now kept per).
+
+**Version 26 measured** (**MEASURED** 2026-11-16, `scripts/er-mechanics-form-check.py`: the distance
+basis at 99 in every damage stat, every 8th of the 3,483 RL 150 situations, one core, `taskset -c
+6`; v25 from the same tool on the unchanged v25 sources). `OutcomeForm` equals `net_parts` on every
+entity (`form_error` 0.0, largest |difference| 1.1e-13). Mean net per situation weight, v25 -> v26:
+
+| entity | bursts | v25 | v26 |
+| --- | --- | --- | --- |
+| Rosus's Summons | f46-49; f53-75 (homing) | 883.26 | -47.03 |
+| Savage Claws | six, f17 to f75 | 507.97 | -169.87 |
+| Swift Slash | f28-38; f40-50 | 335.01 | 52.89 |
+| Swift Slash, tap | f14-22; f28-36 | 380.03 | 380.03 |
+| Glintblade Phalanx (skill), Glintblade Phalanx and Carian Phalanx (spells) | one | -13.76, 12.57, 41.35 | unchanged |
+| Divine Beast Frost Stomp and its tap | one | 192.54, 42.34 | unchanged |
+| Glintblade Phalanx then R2 | opening; f65-69 | -201.82 | -212.55 |
+| Glintstone Pebble then R2 | f24-42; f58-64 | 4.68 | -379.19 |
+| Ghostflame Ignition then R1 / then R2 | f28-81; f70-267 / f68-72 | -36.42 / -70.91 | 0.00 / 0.00 |
+
+Every single-burst entity is unchanged to the bit. Where the attack's later part comes while the
+defender's roll is still carrying him off, or after it settled 3.4-3.7 m from where he stood, the
+later part now has to reach him there: Rosus's Summons' homing wave and the Pebble's R2 no longer
+find the roller version 25 put back on the spot (the Pebble's R2 at 3.0 m: 0.00 -> -388.00, he
+escapes and punishes). Per roll direction at floor 0 (same tool, `--families 2,3,4`): Savage Claws
+still catches a forward roll (479 at 2 and 3 m, as before), while a back roll at 3-4 m escapes all
+six bursts and punishes every time and a side roll evades two thirds at 2-3 m (version 25: every
+direction 508, caught by the second burst before his floor let him roll); Rosus's Summons' wave
+catches no direction at 2-4 m; Swift Slash's bursts catch forward and back rolls (348.5) and no side
+roll (evaded whole, no punish in time). Ghostflame Ignition's follow-ups go the other way for
+the side roll: faced, his settled place is on the attacker's line again, inside the R1's trail,
+which he then rolls out of too late to punish (a side roll's row at 3.1 m: -306 -> 0); every
+situation then has a roll or a run-in at 0, which is its mean. Cost, the same runs: `net_parts`
+and the form for Savage Claws 6.9 s and 5.2 s -> 24.2 s and 13.5 s, Swift Slash 3.2 s and 1.9 s ->
+27.5 s and 13.5 s; the follow-up forms of Glintblade Phalanx's R2 212.5 s -> 267.6 s, Glintstone
+Pebble's R2 113.9 s -> 135.9 s, Ghostflame Ignition's R1 48.6 s -> 95.3 s.
+
+### 2j. Version 27: the roll's slide, the attacker's facing, and the stages still apart
+
+User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+logically consistent". What version 26 left `INFERRED` or listed as apart, each read in the code
+first; ashes-of-war.md 16a, "The slide, the attacker's facing, and the stages still apart", has the
+detail and the selftests (`er-mechanics-ashes._selftest_v27`, 11 checks; the ashes selftest 222
+checks, the spells selftest 100, the interrupt selftest passes).
+
+1. **His slide.** A roll that escapes carries him on its whole clip until he next presses
+   (`track_extend`; version 26 stood him where its dodge cancel, f21, left him: the back roll 3.71 m
+   back there, 3.17 m at its end; a side roll 3.42 m aside there, 4.41 m at f56, `MEASURED` from
+   `roll_motion`). The follow-up's late press, read as his dodge that much early, moves his track
+   with it (`_shift_track`).
+2. **The attacker's facing.** Read from each clip's own TAE every update (`clip_turn`,
+   `er-mechanics-reach.turn_rate_at`, `VERIFIED` handlers: 0 under JumpTable 7, else the last usable
+   TAE 224 rate, else 720 deg/s, which the player keeping is `INFERRED`): locked on, he turns toward
+   the defender at most that rate, within a burst and between bursts, from facing him at the clip's
+   start (`_facing`), and his forward root motion goes along his facing (`_turn_track`'s drift).
+   Each sample is read in the facing it was made in (`_turn_apply`; a melee sample at its frame, a
+   shot at its launch). `TAE`, 2026-11-16: Savage Claws 300 deg/s f0-15, 600 deg/s f15-63, 720
+   f63-70, locked f70-150; Swift Slash locked f5-25, 450 deg/s f25-38, 120 f38-45, locked from f45;
+   Rosus's Summons locked to f34.9 and from f41.1; Glintstone Pebble locked from f23, its R2 720 deg/s
+   at clip f3-10, locked f10-14, 180 deg/s f14-20, locked from f20; Divine Beast Frost Stomp 720
+   deg/s f10-17 and f36-44, locked from f44. Tracks stay in the attack's start frame and a roll out
+   of one faces the attacker from where it ends (`oriented`; version 26's full turn before each
+   later burst, `face_track`, is gone). Not applied: a flight flown again (homing or aimed, its aim
+   at creation follows him) and a geometry built with no clip (a spell's cast geometry), which read
+   as before.
+3. **The volley** runs on the shared chain (`dodge_chain` `units`, `_volley_chain`): its states
+   carry which threats landed together, so each set's chance and the cap at his health are exact.
+4. **A caught defender's play** reads the attacker's facing along his path (`CaughtModel._touch_all`).
+5. **`FollowupModel`'s tables** fly a homing geometry after him (`_TouchTable`, as `_catches`).
+6. **An opening burst after the last that reaches him standing** is read against where his rolls
+   carried him (`FollowupModel._shape`).
+7. **The spell kit's re-aimed casts** keep their own re-roll rule (`CastThreats._rolled`), not
+   changed: the shared rule needs a flight per candidate re-roll start, and each re-roll's presses
+   branch (`MEASURED` 2026-11-16, one core: a Glintstone Nail flight 7.4 ms, a Glintstone Nails
+   flight 44-65 ms; `dynamic_outcome` at 6 m 2.0 s and 16.9 s over 42 and 50 first starts. The
+   shared rule reads every 2-frame start from the last roll's start plus its dodge cancel to the
+   last live frame, 15-30 flights a re-roll, and up to 7 distinct presses branch each of up to three
+   rolls: about 200 flights a first start against 1-3 now, a cost not run).
+8. **The exchange model** (`Opponents.dodge_value`) takes per opener the direction worth most to
+   him, and meets a chained hit his first roll does not escape with a second roll out of the first
+   (`_second_roll`), punishing from it when it escapes.
+
+The strafe row stays as it was: unscored (`STRAFE_SHARE` 0), and its free defender still meets the
+follow-up back where he started.
+
+**Version 27 measured** (**MEASURED** 2026-11-16, `scripts/er-mechanics-form-check.py`, the
+distance basis at 99 in every damage stat, every 8th of the 3,483 RL 150 situations, one core,
+`taskset -c 6`; v26 from the same tool on the v26 sources). `OutcomeForm` and `FollowupForm` equal
+`net_parts` on every entity (`form_error` 0.0, largest |difference| 1.1e-13). Mean net per situation
+weight, v26 -> v27:
+
+| entity | bursts | v26 | v27 |
+| --- | --- | --- | --- |
+| Rosus's Summons | f46-49; f53-75 (homing) | -47.03 | -281.74 |
+| Savage Claws | six, f17 to f75 | -169.87 | 30.17 |
+| Swift Slash | f28-38; f40-50 | 52.89 | 267.41 |
+| Swift Slash, tap | f14-22; f28-36 | 380.03 | 347.43 |
+| Divine Beast Frost Stomp | f43-98 | 192.54 | 274.18 |
+| Divine Beast Frost Stomp, tap | f25-73 | 42.34 | 381.45 |
+| Glintblade Phalanx (skill), Glintblade Phalanx and Carian Phalanx (spells) | one, homing | -13.76, 12.57, 41.35 | unchanged |
+| Glintblade Phalanx then R2 | opening; f65-69 | -212.55 | -201.82 |
+| Glintstone Pebble | f24-42 (homing) | 4.72 | 4.72 |
+| Glintstone Pebble then R2 | f24-42; f58-64 | -379.19 | 4.72 |
+| Ghostflame Ignition, then R1, then R2 | | 0.00 each | 0.00 each |
+
+Per roll direction (same tool, `--families 2,3,4`, floor 0, every 64th situation; forward, back,
+right, left):
+
+- **Savage Claws**: the side rolls no longer escape: at 2 m 479.0 and 342.1 (v26 -60.9, -61.1), at
+  3 and 4 m they evade two thirds and never punish, 91.5 (v26 -56.5 / -228.9 at 3 m, -174.7 / -388 at
+  4 m). The attacker turns 600 deg/s through the first five claws with his lunge bending toward the
+  roller; the sixth comes after his JumpTable 7 at f70. The back roll still escapes and punishes at
+  3-4 m (-388), and is 25.5 at 2 m (v26 12.7); forward is 479 at 2-3 m and 247 at 4 m, as before.
+- **Swift Slash**: a side roll is caught, 495.9 at 2-4 m (v26 0: evaded whole); forward and back
+  537.4 at 2 m and 495.9 at 3-4 m, as before. The attacker turns 450 deg/s over the first burst.
+- **Rosus's Summons**: locked from f41.1, so its facing changes nothing; a side roll at 2 m now
+  punishes every time (-388, v26 -260.7). The direction rows at 3-4 m are as before. The mean moves
+  in 247 of 436 situations, mostly 2.6-3.1 m from -61.5 to -388: the defender takes a side roll
+  whose slide (to 4.41 m aside) carries him out of the homing wave, so his first roll is his last
+  and its punish counts (the slide's reading of the chain; the wave's flights against his track
+  were not dumped one by one, so which wave sample stopped reaching him is `INFERRED`).
+- **Glintstone Pebble then R2** at 3.1 m (`--games`): forward 616 and both side rolls 616 at every
+  press delay (v26 -163, 0, 0): the R2 clip turns 720 deg/s at its f3-10 and 180 deg/s at f14-20
+  after a roller; the back roll escapes everything with no punish in time, 0 (v26 -388), and the
+  defender takes it; standing 454. At 3.8 m the back roll still punishes (-388).
+
+Cost (**MEASURED**, the same runs; `net_parts` then the form, seconds): Rosus's Summons 7.3 / 3.6 ->
+4.2 / 2.3; Swift Slash 27.5 / 13.5 -> 27.1 / 18.1; Savage Claws 24.2 / 13.5 -> 164.0 / 90.7 (61 of
+96 profiled seconds were the caught defender's facing, one path through numpy; `_turn_track_one`
+now runs that path in floats: 84.4 / 48.7, the nets unchanged in all 436 situations, in a rerun
+whose context took 37 s against 19 s, Swift Slash 37.1 / 20.1 in it, so the machine was busier);
+the follow-up forms: Glintblade Phalanx's R2 267.6 ->
+230.4, Glintstone Pebble's R2 135.9 -> 406.2, Ghostflame Ignition's R1 95.3 -> 984.1 and R2 18.5 ->
+26.5. The follow-up cost is the slide: version 26's settled track was the same for every start of
+the opening roll and every press delay, so the follow-up's touch tables were shared; a sliding
+track is its own for each start and delay until its clip ends, and each one builds its own tables.
+One exact saving is in (`FollowupModel._burst_starts`: a burst table out of a roll starts at that
+roll's start plus its dodge cancel, since no press comes earlier).
+
+### 2k. Version 28: every press carries his timing error
+
+User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+logically consistent". Until version 28 the defender's press was `max(t, a + e)`, his aim a and
+timing error e clamped at the earliest frame t he could react (`_AimTable.presses`, **VERIFIED**
+reading). A press at once came at t with no error, so a defender who decided later, reacting to a
+lookalike's release or to the frame a release would have shown, pressed exactly on time where one
+who knew the attack from the cue could only aim with the error: on a 1.5-frame escaping run 27/63
+of the presses escape knowing it, 34/63 reacting from f20.1 (**MEASURED** with the clamp put back in
+the process). Knowing the attack could leave him worse off, which no best response allows. The
+v27 agent's Glintstone Dart numbers (known: escape 0.929, punish 0.125; against every release:
+0.968, 0.139) are from v27's selftest runs at 20:52-21:06; its final run (21:59) reads 1.000 and 0
+both ways, as version 28 does.
+
+The rule now (`er-mechanics-ashes.pressed`): he means to press at a, no sooner than his reaction
+t, and presses at max(F, a + e) for each of the 7 errors, F his recovery's floor. The error is his
+hand's on every press, at his reaction too; only the floor truncates (a press made while the
+recovery holds him comes out at its end, `INFERRED` as before). Of the two possible rules (the
+error applied after his reaction, or a clamp at the reaction that truncates it), the clamp is the
+one that broke it: it removes the early half of the spread at t and nowhere
+else. With the error everywhere, for each reaction quantile the knowing defender may aim at any
+a >= t and a later decision only raises t, so his worth by the plan's own measure is never less
+(selftests below). `er-mechanics-ash-whiff` ("an early error is not clipped to his reaction") and
+`er-mechanics-timing-mixup.anticipation_evade` already pressed this way. Applied in every stage:
+the dodges (`dodge_presses`, `group_presses`, `lookalike_plan`, and through them `reaction_outcome`,
+`dodge_chain` and the volley, `FollowupModel`, `CastThreats.dynamic_outcome`'s first roll,
+`Opponents._table` and `_second_roll`), the strike (`er-mechanics-spells.strike_segments`), the strafe
+(`FollowupModel.strafe_escape`) and the exchange model's buff answer
+(`Opponents.buff_answer_value`). `CaughtModel` presses nothing on reaction (a caught defender leaves
+at his floors), so it is unchanged. What reads his earliest press moved with it: `_SOONEST_PRESS`
+(shortest reaction plus earliest error) in `lookalike_plan`'s floor test and `burst_after`.
+
+Selftests: ashes 225 (3 new: `pressed`'s presses; the 1.5-frame run, 27/63 from the cue and 23/63
+from f20.1, no decision time f0-29.9 above the cue with or without a punish gain; 320 member moves
+of two toy groups none worse off knowing, 32 with the clamp put back), with the Dart's full check
+restored (knowing never worse against the first release and against every release, by his escape
+plus punish and by the attacker's net) and Revenger's Blade's 0.679 not told from its release now
+0.929 (at 3 m his plan had waited for the release to react to it exactly and met the hold too
+late); the strafe check reads 47 of 63 starts (version 27: 7 of 9 reactions). Spells 101 (one new:
+an R1 10 frames from its press lands before a touch at f21 from 37 of 63 presses, 42 in version
+27); its Comet and Cometshard taps now punish some at 3 m knowing the spell (net -3.1, 0 before).
+Interrupt passes.
+
+**Version 28 measured** (**MEASURED** 2026-11-16, `scripts/er-mechanics-form-check.py`, the
+distance basis, every 8th of the 3,483 RL 150 situations, one core, `taskset -c 6`, against v27's
+dump; `--compare`). `OutcomeForm` and `FollowupForm` equal `net_parts` on every entity
+(`form_error` 0.0, largest |difference| 1.7e-13). Mean net per situation weight, v27 -> v28:
+
+| entity | v27 | v28 | situations moved |
+| --- | --- | --- | --- |
+| Rosus's Summons | -281.74 | -281.68 | 37 |
+| Savage Claws | 30.17 | 30.17 | 0 |
+| Swift Slash | 267.41 | 276.15 | 322 |
+| Swift Slash, tap | 347.43 | 313.55 | 370 |
+| Glintstone Pebble, and then R2 | 4.72, 4.72 | 4.72, 4.72 | 0 |
+| Divine Beast Frost Stomp | 274.18 | 274.30 | 21 |
+| Divine Beast Frost Stomp, tap | 381.45 | 381.23 | 54 |
+| Glintblade Phalanx (skill) | -13.76 | -10.14 | 108 |
+| Glintblade Phalanx then R2 | -201.82 | -198.77 | 216 |
+| Glintblade Phalanx (spell) | 12.57 | 13.15 | 255 |
+| Carian Phalanx | 41.35 | 77.57 | 401 |
+| Ghostflame Ignition, then R1, then R2 | 0.00 each | 0.00 each | 0 |
+
+Most moves are small and go both ways: a press at his reaction now spreads 2.2 frames either side,
+so it escapes a run it used to miss and misses one it used to hit. Carian Phalanx moves most (largest
+at 4.4 m: 57.25 -> 106.32); which share of that is the dodge and which the strike was not split.
+
+Cost (**MEASURED**, `net_parts` / form seconds, v27 -> v28; the machine was also running the main
+session's kit run): Rosus's Summons 4.2 / 2.3 -> 12.2 / 6.1; Savage Claws 84.4 / 48.7 -> 154.0 /
+91.2 (caught plays 793 -> 1,117); Swift Slash 27.1 / 18.1 -> 38.5 / 20.3, its tap 14.8 / 9.9 ->
+30.0 / 15.8; Divine Beast Frost Stomp 3.3 / 0.4 -> 7.6 / 1.2; Carian Phalanx 35.6 / 0.3 -> 40.0 /
+1.9; the follow-up forms: Glintstone Pebble's R2 406.2 -> 502.7, Glintblade Phalanx's R2 230.4 ->
+552.5, Ghostflame Ignition's R1 984.1 -> 1,724.4 and R2 26.5 -> 47.3. A press at once was one press
+per reaction quantile and is now up to seven, each its own roll track and catch.
 
 
 ## 3. The distances and their properties
@@ -1691,6 +2249,68 @@ health, CalcCorrectGraph 100 at the RL window's median Vigor (1900 HP at RL 150)
 capped. The fingerprint that shares one `OutcomeForm` across builds covers the `CAUGHT` lists'
 shape and the launch times; the worth weights are each build's own (`OutcomeForm.net(value, geo)`).
 
+**His whiff's recovery and his own poise (version 21, 2026-11-16).** The user: "So you're saying
+that the opponent has to swing, and wiff before your first claw attack lands, and all the other 5
+will also land?" The rules are in ashes-of-war.md section 16a, "His whiff's recovery and his own
+poise". In short: a caught defender whose catch comes before the situation's dodge floor or move
+floor stands in his whiff's recovery until it lets that escape start. A locking reaction ends the
+recovery. He holds with each pool build's own poise (Bull-Goat's `altered`, else `original`) and
+not the median `original`. What one cast lands is capped at each build's own health, taken with its
+poise inside `CaughtModel`. A hit breaks him at `>=`. After a roll he runs on from its move cancel.
+He may jump out of `AIR` hits. A same-frame tie in one hit priority record goes by priority in
+`_catches` as in the play.
+Here the floors are the situation's after the run-in (`net_parts`' `choose`), so the roll's
+outcome is keyed by the move floor too wherever it can hold a catch (`CaughtModel.held_run`;
+`net_parts`' `roll_key`). `OutcomeForm` keys its options the same way (`CK`: the situation key and
+that move floor, `ROLL` and `SK` naming its roll form and its strike), so the two stay equal.
+`FollowupForm` keys by the situation key and the move floor rounded to half a frame. Its strafe
+row (`FollowupModel.strafe_escape`) now reads that move floor. Until now it read the situation
+key's `run`, which `situation_key` sets to the dodge floor within `PUNISH_REACH_M`, so up close a
+strafe started at the dodge cancel.
+
+Version 21 against version 20, mean net per situation weight over 3,483 situations (**MEASURED**
+2026-11-16, `scripts/perf-similarity-dump.py` on both trees, names Savage Claws, Glintstone Pebble,
+Swift Slash and Ghostflame Ignition). Every entity of these names not listed moved by 0.0:
+
+| entity | Intelligence | Intelligence + melee |
+| --- | --- | --- |
+| Savage Claws [Beast Claw] | 448.3 -> 407.8 | 433.3 -> 394.3 |
+| Ghostflame Ignition then R1 (f43.2) | not wielded | 415.0 -> 384.7 |
+| Swift Slash, tap (040001, f10) | 368.6 -> 368.5 | 368.2 -> 368.1 |
+
+Savage Claws' six claws deal 108, 108, 54, 54, 54 and 216 poise (menu units with `saRate`,
+AtkParam_Pc 700000290-295). So the first claw breaks the median 62 and its stagger holds him for
+claws 2 and 3, and the recovery floors never bind for him. What moved the claws is the pool: the
+14.3% who hold above 108 are only flinched by claw 1 and leave. Claws landed per catch by the first
+claw, pressed at once at each situation's own distance and floors (Intelligence geometry, Beast Claw
+Magic at INT 80):
+
+| model | mean claws per catch |
+| --- | --- |
+| version 20 (median 62, no floors) | 2.575 |
+| version 21, median 62, floors | 2.575 |
+| version 21, pool, no floors | 2.350 |
+| version 21, pool and floors | 2.353 |
+
+The run took 30m09s against 15m27s on the same names, single process (`taskset -c 6`). Each play
+is now made once per run of pool poises that play alike.
+
+The second half of version 21 (the per-build health cap, the jump escape, the priority tie in
+`_catches`, `>=` in `skill_landing`) moves these by at most 1.6 (**MEASURED** 2026-11-16, the same
+dump on six names; round 1 then round 2):
+
+| entity | Intelligence | Intelligence + melee |
+| --- | --- | --- |
+| Savage Claws [Beast Claw] | 407.8 -> 407.7 | 394.3 -> 394.2 |
+| Rosus's Summons | not wielded | 493.6 -> 492.0 |
+| Divine Beast Frost Stomp | 273.0 -> 272.6 | 290.5 -> 290.1 |
+| Divine Beast Frost Stomp, tap (f21) | 130.8 -> 130.8 | 139.7 -> 139.7 |
+| Ghostflame Ignition then R1 (f43.2) | not wielded | 384.7 -> 384.1 |
+| Glintstone Pebble then R2 (040010, f38) | 433.3 -> 433.2 | 413.4 -> 413.4 |
+| Swift Slash | 397.4 -> 397.2 | 397.3 -> 397.2 |
+
+Those 37 items took 20m01s against 14m22s.
+
 **Launch points (2026-11-10).** A skill's or spell's root bullet now leaves the event's DummyPoly
 where the clip has carried the caster (`er-mechanics-ashes.bullet_launch`, ashes-of-war.md
 section 15), held back by the defender's body as the caster is; until then every root left 1 m
@@ -1926,6 +2546,82 @@ what the skill nets is the storm's alone, and the same at every line. The model 
 with the params it reads (`er-mechanics-ashes.hit_attack`, **VERIFIED** against `0x1406845a0`);
 that the game applies AECP 50000 this way is that function's reading, not a separate trace.
 
+## 6b. Ghostflame Ignition's R1 follow-up (2026-11-14)
+
+r19 (cache stamp 31d975306bc91cf1) put Ghostflame Ignition [Death's Poker] then R1 040010 at f43.2
+at the top of the 'Intelligence + melee' line (INT 60, STR 26, DEX 25): mean net 926.04, above 0 in
+all 1,208 situations, where the skill alone nets 0.26. A harness over `FollowupForm.parts` at that
+line reproduces the cached nets to 5e-5 HP; what they were made of (**MEASURED** unless marked):
+
+- The press. TAE 66 SpEffect 100054 (the R1 follow-up) and the R1 cancel window on the opening
+  040000 (TimeAct 600 + `swordArtsTypeNew` 21000) overlap at clip 1.8333-1.9 s, real f43.2-45.2,
+  inside the R1 input window f23.2-90.2 (**TAE**, `skill_followups`). FP 15 + `useMagicPoint_R1`
+  10 = 25 (`SwordArtsParam` 1048, **REGULATION**).
+- The worth at the line, one record a bullet tree: the opening's pillar (Bullet 2290, 1.46 s,
+  AtkParam_Pc 303401303, 112.6) and the explosion it leaves (2291, 303401304, 366.9) at f28.2, five
+  hits priced as 1,834.5; the R1 swing (303401301) 239.2 at f70.2; the R1's hop chain (2292 and its
+  `HitBulletID` hops, 303401310, 399.6) and the ghostflame trail the hops drop (2294, 5.0 s, 1.0 m,
+  303401305, 127.3), flown 2.8 to 19.7 m ahead along the attack axis until f267, eleven hits priced
+  as 4,395.6 at f72.2.
+- Landing. The defender rolls the opening and plans his roll of the follow-up. The four roll
+  directions count equally (**INFERRED**, `roll_motion`); the side rolls end 3.3 m off the trail
+  line, the forward and back rolls on it, and 0.496 of his rolls are caught after their
+  invincibility (p_evade 0.504; 0.5 where only the follow-up reaches him, which is that split).
+- A catch. The caught defender left straight back, along the line, and took 4 to 7 of its 11 hits
+  at the hop's 399.6, each staggering him as the hop does (poise 135 against his 62): 2,400 to
+  3,200 HP within 7.2 m, 1,600 at 11.3 m, capped at his 1,900.
+- So a situation netted about 0.496 x 1,900 = 942, less a punish of 1.4 HP (p_punish 0.004): 940.43,
+  times the 0.9847 share of its casts the line's FP pays: 926.04. Frostbite adds nothing: status is a
+  token (section 8); the hits' SpEffect 6903 and the weapon's 6702 (`freezeAttackPower` 65) are not
+  priced.
+
+Two of those were wrong and are fixed:
+
+- **Pricing** (`er-mechanics-spells.bullet_lists`): every hit of a record was priced at its
+  strongest member's AtkParam. A bullet hits with its own `atkId_Bullet` row (**VERIFIED**,
+  ashes-of-war.md section 4: `CalculateDamageCorrections` reads the hit's own row), and the record
+  flight already knows which member lands each hit (`_fly_records`), so each hit is now its member's:
+  the R1 tree is 1 hop (399.6) and 10 trail ticks (127.3), 1,672.6 at the line; the opening 4 pillar
+  ticks and the explosion, 817.3. The trail's ticks also react as their own row now (dmgLevel 0, no
+  poise damage), not as the hop's stagger. The selftest of `er-mechanics-spells` checks record 2292.
+  The fix is model-wide: 38 spell refs hold more than one AtkParam in one record (Glintstone Stars,
+  Stars of Ruin, the Phalanxes, Magma Shot, Bloodboon, Elden Stars, Rain of Fire and others), and
+  Magma Breath's ball and 12-tick pool (70100, 70101) went from 6,886 HP a cast to 1,216 at
+  Erdtree Seal 99/99/99 (**MEASURED**), so every frontier those spells sit on moves.
+- **The escape** (`er-mechanics-ashes._escapes`): a caught defender now leaves by whichever of the
+  back roll, the two side rolls, running back and running to either side lands the least, where he
+  had only the two back escapes. The selftest of `er-mechanics-ashes` plays a lingering line along
+  the axis: 1 of 10 ticks to the side, 8 rolling or 9 running back.
+
+After both (an `--only "Ghostflame Ignition"` run, 1 worker, 322 s): at 'Intelligence + melee' the R1
+variant nets 408.51 (FP 25, 0.9847 paid), the skill alone 0.34, the R2 variant 49.96; on the
+distance basis 415.2. What is left in the 408: the attacker runs in to 2.6 m and the defender's best
+reply there is to strike through the opening (p_evade 0.007): its pillar and explosion are worth
+704.7 on him standing there, 646.5 lands on average (his strike stops some casts short), and his
+strike lands on 0.597 of them (231.7 HP), so 414.9 before the FP share. Rolling would cost him
+0.491 x 1,261 = 619, because half his rolls (forward and back) still end in the trail, and a catch
+there lands the hop explosion with the first trail tick even when the hop passed during his
+invincibility: a bullet tree is one geometry, whose lists start at its first touch (**INFERRED**,
+section 8). Both assumptions under it (the four roll directions taken equally, a tree's lists
+starting together) are model-wide and are left as they are. A defender who chose a side roll would
+leave the trail line, as the side rolls already do (**INFERRED** from that split; not run).
+
+Ruinous Ghostflame [Helphen's Steeple] nets exactly 0 wherever it is priced (the distance basis,
+'Intelligence + melee', the only attacker line that wields it, and both objective lines) for a
+different reason. Its
+a821 040000 (`swordArtsTypeNew` 221) charges 20 FP, applies the weapon buff SpEffects 1805/1807
+(cycle 1806/1808: 60 s of `magicAttackPower` 110 on R1 and R2, `wepParamChange` 1 and 2; on hit
+1809, `freezeAttackPower` 80; **REGULATION**), and swings once, AtkParam_Pc 303401400 at clip frame
+24, 391.1 at that line. The model prices the swing alone: the buff is a 'buff' class it does not
+value. The swing reaches 2.08 m (the furthest point straight ahead that any of the posed window's
+100 samples' contact discs covers), and it touches a standing defender at 1.0 m (f24.5), 1.5 and
+2.0 m (f25.5) but not at 2.2 m or beyond. The nearest punish situation is
+2.6 m, so pressed at once it never touches him, and its whiff is punished (p_punish 0.32 on average
+at the distance basis). Run in to 1.5 m (picked in 559 of 1,208 situations at the distance basis)
+it touches him at f25.5 and he rolls it every time, and he punishes none of it (p_punish 0; the
+attacker's roll frame is f40): value 0, punish 0. That option nets 0.0 and is the best in every
+situation.
+
 ## 7. What is left out, by reason
 
 Spell events without a flight, first match wins: 'direct AtkParam ref (refCategory 0)' (Carian
@@ -1979,6 +2675,37 @@ Sling's on-hit child, and Roiling Magma's two variants) and 8 skills (a melee hi
 window, or a bullet with no flight).
 
 ## 8. Not established
+
+- **The carried roll and the attacker's facing** (sections 2i, 2j, 2k), what version 28 still takes as
+  **INFERRED**: the player's attacks with no TAE 224 window turn at 720 deg/s (the joint
+  modifier's stored `turnVelocity`, `VERIFIED` store; that the player's modifier keeps it is not
+  traced); the attacker faces the defender on his clip's first update (a follow-up's clip, at its
+  press); his root goes his clip's forward root motion along his facing, the clip's lateral root
+  motion not read, and is held 2 x push radius short of the defender along his facing; a shot with
+  no launch read takes its geometry's first sample's facing; a flight flown again (homing or aimed)
+  and a spell's cast geometry read no facing; a roll out of a track faces the attacker from where
+  that track's last roll ends (at most 7 degrees off the bearing at a press made during the slide,
+  `MEASURED` on `roll_motion` at 2.5 m), its escape rolls out of a caught play still go along the
+  attack's axis; the follow-up's attacker faces the defender at its press whatever the opening's
+  windows did before it (every follow-up clip read here turns within its first 10 frames, `TAE`).
+  He keeps one roll direction for every burst of an attack: the family is picked by the attacker's
+  net over the whole attack, and a pick per burst would need a rule for what each state weighs at
+  that burst, which no stage defines, plus every later burst read in four directions per state (not
+  measured). His aim for the punish is taken on the last burst that reaches a defender standing at
+  the distance, while the punish counted is the last escaping press's wherever his rolls took him:
+  aiming each press for the punish only when no later burst touches him needs every later burst
+  read for every candidate press before the press is chosen (not measured). The timing error
+  (section 2k, version 28): that it is symmetric about the frame he means, so a press meant at his
+  reaction lands up to 2.2 frames before it (the reaction quantiles already spread when he can
+  react, and the error is taken as his hand's on top), that a press before his recovery's floor
+  comes out at the floor (a buffered input, not traced), and that his strike, strafe and buff
+  answer carry the dodge's sd (0.05 s) are `INFERRED`; the attacker's own press at a whiff's end
+  still carries none (section 2g). The spell kit's re-aimed
+  casts (`CastThreats.dynamic_outcome`) keep their own re-roll rule (`_rolled`: at the next touch
+  it can still cover), not `dodge_presses` (section 2j, item 7, the cost). Stages still apart: the
+  strafe row's free defender meets the follow-up back where he started (the strafe is unscored,
+  `STRAFE_SHARE` 0). The exchange model's second roll faces an attacker who stands at
+  `ENGAGE_DISTANCE_M` (its whole model takes him so).
 
 - Homing is flown in the horizontal plane only (bd er-effects-rs-rw25; the rule is `VERIFIED`,
   ashes-of-war.md 'In-flight homing'): a geometry with a damaging shot that homes is read against
@@ -2044,8 +2771,13 @@ window, or a bullet with no flight).
   token under the regdata gate; where its sleep comes from is not read.
 - The full count is no longer credited whole to a caught defender (`CaughtModel`, above), but the
   instances of one hit list (a fan, interval children) tick together, a geometry's lists start at
-  its first touch, he leaves straight back (not to the side), and he is placed at the situation's
-  distance when caught even when caught mid-roll (**INFERRED**). A threat of a volley or a
+  its first touch (a bullet tree is one geometry: Ghostflame Ignition's R1 hop explosion lands with
+  the first trail tick that catches him, even after the hop has passed), he leaves straight back or
+  straight to a side (since 2026-11-14; before, straight back only); caught in his own dodge he
+  is played from it since version 25 (section 2h; until then placed at the situation's distance,
+  **INFERRED**), and since version 26 caught in the roll that escaped the burst before, from that
+  roll (section 2i). The defender picks his roll's direction knowing the attack since version 22
+  (`dodge_families`; section 6b's "half of his rolls" predates it). A threat of a volley or a
   re-aiming chain (`volley_outcome`, `dynamic_outcome`) is still worth its whole full count when it
   lands. The robust class still leaves out dominators live longer than 60 frames or channelled.
 - A shot whose event's orientation byte is 0 (most of them) heads level along the caster's facing
@@ -2222,7 +2954,9 @@ sample's.
 # release members made r10 run 110 s per attack set at its last pace (39 sets in 4,310 s), and it
 # was stopped. `--show` names the newest full run's time from the timing log when the cache
 # misses. A concurrent pooled run shares the same cores. Run it in the background. The attack
-# sets run the cheapest first and the rest in a seeded shuffle (`set_order`), so the counter's
+# sets run the cheapest first, then the sets the trail measured at 2% or more of all the sets'
+# seconds, dearest first (`LONG_SET_SHARE`: r21 dealt Flame Fall Upon Them's set 538th of 952 and
+# was still in it 5.6 h later), and the rest in a seeded shuffle (`set_order`), so the counter's
 # time left is a projection from a random sample of them; each item's seconds, and each key's
 # estimated cost, go to attack-similarity-timing.items.jsonl as they end, so a stopped run
 # leaves them too (r11, stopped at 10 of 944 sets, left none). Each set's row there also has the
@@ -2287,7 +3021,13 @@ file, the paramdef XMLs, the blacklist, every loaded script (er-mechanics-build-
 er_corpus among them), and the two HKS inputs that pick every skill's opening clip: the parser
 `scripts/er-hks-weapon-category-table.py` (which `er-mechanics-ashes.sword_arts_categories` loads
 into a local variable, out of reach of the loaded-module walk) and the `common_define.hks` it
-reads (`ER_COMMON_DEFINE_HKS`). It does not cover the TAE/HKX extraction or the FMG name cache:
+reads (`ER_COMMON_DEFINE_HKS`), and the opponent members cache the pool's run-ins are read from
+(`~/.cache/er-build-planner/interrupt-members.json`, `members_stamp`). A full run or the selftest
+refuses that cache when it was built from other sources than the current
+`er-mechanics-interrupt.SEQ_SOURCES`, and names `er-mechanics-interrupt.py --build-cache`: the
+2026-11-15 full run read one built on 2026-11-12, whose rebuild on that run's code moved 557 of
+5,919 members' front contact 0.4 to 10 frames earlier (**MEASURED** 2026-11-16), and runs r19 to
+r21 all read it with only a warning. It does not cover the TAE/HKX extraction or the FMG name cache:
 `--refresh` after re-extracting either. The cache JSON stores what went into it, so a miss says
 what moved, and records the thresholds of the run that wrote it; the cached profiles hold no
 threshold, and a later run recomputes the associations and dominance from them. Both files are

@@ -109,6 +109,27 @@ release land, 045011 casts nothing, and the caster rolls on 045011's own gate fr
 spell without the window (Meteorite, Meteorite of Astel, Spira, Divine Bird Feathers, Surge, O
 Flame) goes to 045011 only at 045010's end, after every cast the 'cast' scores, so it is not given
 one: it would differ from the cast only in the recovery clip.
+A quick spell (`IsQuickMagic`: `Magic.refType` 38, 79, 80 or 106, `QUICK_REF_TYPES`) cast while
+sprinting plays a cast of its own, 'dash' (`DASH`, 045040; `VERIFIED` c0000.hks `MoveCommonFunction`
+-> `ExecMagic(QUICKTYPE_DASH)` -> `ExecQuickMagic` -> `Event_QuickMagicFireRightDash`, and the
+player graph's `QuickMagicFireRightDash_CMSG`, animId 45040, offsetType 0x11). It is entered at the
+press with no 045000 in front, so cast speed does not move it: Carian Slicer's hits on its f15
+(044401, as the standing cast's f9 of 045010 after a hand-off of f12 at DEX 11) while its root motion
+carries the caster 4.14 m (`TAE` + hkx, 2026-11-21). The sprint begins once the dodge button has
+been held 0.4 s, counted from the press whatever the character does (`SPRINT_HOLD_S`, `VERIFIED`
+2.7.2.0). The caster runs back from the opener (`punish_situations`) and may hold the button through
+that run, since a hold under 0.4 s leaves his run as it was. So the dash waits only what his run back
+has not already held: 12 frames less the run, 3.76 frames on the pool's mean, none for 12% of the
+whiffs (`MEASURED` 2026-11-21, scratch `.worktrees/dash/target/dash/backrun.py`). It is pressed
+that much later and nearer, the run-in options counted from the window as before
+(`sprint_situations`). That wait carries most of its worth: Carian Slicer's dash for STR 15 / DEX
+11 / INT 80 covers 87.0 HP a whiff pressed as if sprinting already, 51.3 waiting what the run
+back left, and 6.3 waiting the whole hold every time (`MEASURED` 2026-11-21, scratch
+`.worktrees/dash/target/dash/sens_dash.py`). Its other casts are not scored: 045020 and 045030 (the
+same spell cast again in 045010's SpEffect 100600 window and 045020's 100601,
+`ExecComboMagic`), 045045 (out of a roll), 045050 (out of a backstep), 045013 and 045014 (out of an
+R1) and 045070 to 045078 (in a jump) all need an action before them that a press alone does not
+model.
 TAE type 64 `CastHighlightedMagic` fires `Magic.refId<n>`, n being its byte 8 plus one (COMMUNITY:
 WitchyBND `TAE.Template.ER.xml` names it `RefType`). A ref is an `AtkParam_Pc` row hit directly
 (`refCategory` 0, Carian Slicer), a `Bullet` row (1), or a SpEffect (2, no damage here).
@@ -139,7 +160,11 @@ player:
   `autoSearchNPCThinkID` that starts attached (`FollowType` 1, 2, 5: FUN_140399390) flies its
   `HitBulletID` row in the same bullet after its wait. Only Glintblade, Carian and Greatblade
   Phalanx do that among spell trees, and their rows carry no record. A bullet with no record has
-  a list of its own. Children: `HitBulletID` one per parent
+  a list of its own, so such a blade is one list over its hover and its flight, one hit at most
+  (neither row penetrates): its `HitBulletID` row is no child. Until 2026-11-16 the two rows were
+  two lists, which priced every blade twice in `full` and the pouch while the flight alone can
+  land (the hover stays at the caster, `er-mechanics-ashes.search_launched`). Children:
+  `HitBulletID` one per parent
   bullet when it hits or expires, `intervalCreateBulletId` none when the parent is made, the first
   one mean interval after `intervalCreateWaitTime` and one every mean interval after that while
   the parent has life left (`er-mechanics-ashes.interval_frames`, `VERIFIED`): a stationary
@@ -176,6 +201,13 @@ player:
     contact point; one a record blocks flies on. The count takes the best distance of
     `RECORD_TARGET_M`. A member that never reaches him adds nothing: Shard Spiral's trail shards
     touch only where he stands, so its record lands 3, not one per shard.
+  - Each of a record's hits is priced at the AtkParam of the member that landed it (its own
+    `atkId_Bullet`), and reacts as that row (`bullet_lists` gives one list per AtkParam). Until
+    2026-11-14 every hit of a list took its strongest member's row: Ghostflame Ignition's R1
+    follow-up (Bullet 2292) shares one record down its hop explosions (AtkParam 303401310, 150
+    magic, dmgLevel 2) and the 5 s ghostflame trail they drop (2294, AtkParam 303401305, 60 magic,
+    dmgLevel 0), so its 1 + 10 hits were priced as 11 hop explosions, 4,395.6 HP for 1,672.6 at
+    the Intelligence + melee line (`MEASURED`), each staggering him as the hop does.
   - A record whose shots do not aim at him (Explosive Ghostflame's five arms at fixed yaws,
     Meteorite's four unaimed meteors, Crystal Release's ref 3, two of Ancient Dragons' Light
     Strike's) lands nothing on the axis and is played with him off it too
@@ -218,13 +250,18 @@ first does not reach, and the situations that decide it here are punishes:
   opponent's lock runs down (`net_values`, `APPROACH_GAPS_M`), and takes the best of the two.
 - From then on he rolls on reaction to the cast: the ash model's `reaction_outcome`
   (ashes-of-war.md section 16a: reaction lognormal around 0.25 s plus two 0.05 s network legs, the
-  medium roll's four directions, `INFERRED` constants), held back to that dodge cancel. A cast
+  medium roll's direction that leaves the caster least, `INFERRED` constants; until 2026-11-16 the
+  four directions a quarter each), held back to that dodge cancel. His punish runs from where the
+  attack's root motion left the attacker (`er-mechanics-ashes.attack_advance`). A cast
   whose cast events fly as separate bursts (live frames that do not overlap) is dodged burst by
   burst (`sequence_outcome`). Against a burst whose every AtkParam has
   `isInvalidatedByNoDamageInAir` he may jump instead: the jump clip makes him immune to it from
   its first frame to its last (`jump_motion`, moveset.md section 6a). Rellana's Twin Moons is the
   only player spell with such hits, and each of its moons lingers 16 frames against the jump's 25.
-  Knowing the spell, he takes whichever leaves the caster less.
+  Knowing the spell, he takes whichever leaves the caster less, or stands when that leaves less
+  still (`er-mechanics-ashes.stand_or`, every outcome alike since attack similarity's version 23).
+  Each dodge is read from `er-mechanics-ashes.burst_cue`: a search launch, or a skill's timed
+  press (`PRESS_CUE`, `SpellModel.skill_attack`), a re-aimed cast's first roll included.
 - He sees only what is on screen (`Lookalikes`, ashes-of-war.md section 16a, 'What is on screen'):
   the casts of one TimeAct and one `castSfxId` among the spells the caster can cast and a player
   can hold look alike until a shot that differs spawns, and a tap like its charge until the tap's
@@ -332,9 +369,10 @@ first does not reach, and the situations that decide it here are punishes:
 The rounds show where the gain flattens. A slot's real price is the buff it displaces:
 `er-mechanics-pouch` scores the same punishes per engagement against the buffs and items a build
 could carry instead (its module doc, "Attack spells"), and that is where the count is decided. A
-spell that hits an AtkParam directly (Carian Slicer) has no flight and is left out; a cast event
-with no flight is left out of a cast that has others (Bayle's Flame Lightning's f69 stomp, its
-bolt scored).
+spell that hits an AtkParam directly (Carian Slicer) is a melee hit of the caster's own hitbox
+over its cast event's window (`SpellModel.direct_geometry`), given a release clip to pose it on;
+without one it has no flight and is left out. A cast event with no flight is left out of a cast
+that has others (Bayle's Flame Lightning's f69 stomp, its bolt scored).
 
 # Parts other tools read (`er-mechanics-attack-similarity`)
 
@@ -390,7 +428,12 @@ bolt scored).
   against a re-aiming chain (`_rolled`: roll at each
   pass he can still meet, the same direction, up to three), and where a roll leaves him for the
   next burst of a cast that does not re-aim (each burst places him back at the distance); the
-  caster's own reaction to the whiff, and every punish other than a whiffed R1 #1 (a blocked
+  caster's press at the end of the whiff's last hit window with no fresh reaction (he reacted to
+  the swing when he ran back, `er-mechanics-neutral.backoff_whiffs`, paying the reaction and both
+  network legs then, so the press is one he schedules, as the defender schedules his dodge; the
+  whiff's end and the whiffer's roll each reach his machine one leg late, so those legs cancel;
+  what is left out is a scheduled press's timing error, `DODGE_TIMING_SD_S` on the defender's
+  dodge), and every punish other than a whiffed R1 #1 (a blocked
   string, a roll read at range). What a game run would settle for Glintstone Nails: how many of
   the six nails a defender who rolls on reaction takes.
 - For the strike: that he picks it knowing the attack, as he picks the roll or the jump, even where
@@ -404,7 +447,9 @@ bolt scored).
   modelled); his strike reaching the caster's
   machine one network leg after he sees the cast plus one more (the roll's two legs, `INFERRED`:
   which machine decides his hit is not traced); the cast's first touch on him read standing at
-  either end of his run, not along it; the shots already launched landing on him as on a
+  either end of his run, not along it, and what lands priced on him standing at the end that
+  touch was timed at (`StrikeReach.where`; a caught defender's play, `CaughtModel`, starts him
+  standing there, not running in); the shots already launched landing on him as on a
   defender who stands; a strike that comes after the first touch counting as caught, never as a
   trade; and the caster's poise state (`STRIKE_CARRIED`; fresh breaks less).
 - For the attacker's guard: the pool R1's guarded share is read from its base weapon's attack
@@ -600,6 +645,40 @@ def tae_regen_frames(events, upto, to_real=None):
 
 
 START, RELEASE, TAP, LOOP = 45000, 45010, 45011, 45012
+#: The cast a quick spell plays when it is cast while sprinting (module doc, "One cast"): c0000.hks
+#: `MoveCommonFunction` calls `ExecMagic(QUICKTYPE_DASH)` at `MoveSpeedIndex` 2, and
+#: `ExecQuickMagic` plays `Event_QuickMagicFireRightDash` for a spell `IsQuickMagic` names
+#: (`VERIFIED` 1.17.2 decompile); the player graph's `QuickMagicFireRightDash_CMSG` (offsetType
+#: 0x11, animId 45040) picks a<400 + refType>_045040 (`VERIFIED` c0000.hkx 1.17.1,
+#: `er-behbnd-cmsg-fallbacks.Cmsgs`). It is entered at once, with no 045000 in front.
+DASH = 45040
+#: The `Magic.refType`s c0000.hks `IsQuickMagic` names (common_define.hks): STONE_SHOTGUN 38,
+#: QUICKENBULLET 79, QUICKSLASH 80 (Carian Slicer) and QUICK_FLAME 106. WEAPON_ENCHANT2 (32, and
+#: only right-handed) is a buff with no hit, so it is left out.
+QUICK_REF_TYPES = frozenset({38, 79, 80, 106})
+#: The release clips a cast enters with no start clip in front (`evaluate`: no hand-off).
+QUICK_CLIPS = frozenset({DASH})
+#: Seconds the dodge button is held before the character sprints. `VERIFIED` 2.7.2.0: the
+#: PadManipulator's movement step (1.16.2 `FUN_1403dd4d0`, named dump) keeps the button's held time
+#: at PadManipulator+0x120, adding the frame's time each update it is held and clearing it when it
+#: is let go. Each update it first compares that time with the float at 0x143b1cdbc, 0.4
+#: (`comiss` at 0x1403dda84; 1.16.2 0x1403dda74 with 0x143b15dbc, 258 of 270 bytes equal, the rest
+#: rip offsets). Above 0.4 it sets bit 2 of `CSChrActionRequestModule.movementRequestFlags`
+#: (+0xfc). Let go between 0 and 0.4 with the stick tilted, it requests rolling; at neutral, a
+#: backstep. The ChrCtrl move step makes that bit speed 2.0 while the stick is tilted and stamina
+#: is above 0 (bd npc-sprint-dash-bit-and-speed-index-2720-2026-10-21, measured live on 2.7.2.0).
+#: c0000.hks `SpeedUpdate` reads speed above 1.1 as `MoveSpeedIndex` 2. So the time counts from the
+#: button going down, whatever the character is doing. Holding it for less than 0.4 s changes
+#: nothing about how he moves, and no run is needed first.
+SPRINT_HOLD_S = 0.4
+#: `SPRINT_HOLD_S` in real (30 fps) frames, 12.0. `MEASURED`: at 60 updates a second, the float32
+#: sum of 24 updates of 1/60 is 0.40000013 > 0.4f. So the bit is set on the 25th update counted from
+#: the press, 24 updates (0.4 s) after it. The cast press is taken to count on that same update
+#: (`INFERRED`: the ChrCtrl step runs after the pad update in one tick (bd
+#: movement-input-injection-1171-2026-10-05), but which of `Move_onUpdate` (`SpeedUpdate`) and
+#: `Move_Upper_onUpdate` (`MoveCommonFunction`) runs first in the graph is not read, so it may be
+#: one 60 fps update, half a frame, later).
+SPRINT_HOLD_FRAMES = SPRINT_HOLD_S * 30.0
 #: SpEffect whose TAE window in 045010 lets a cast button let go play 045011, the tap (`VERIFIED`
 #: c0000.hks `MagicFireRight_Upper_onUpdate`: `env(1116, 100610)` and the button's
 #: `env(1108, ...)` <= 0 -> `Event_MagicFireRightCancel`; bd spell-tap-vs-charge-speffect-100610).
@@ -609,6 +688,9 @@ HOLD_REF_TYPE = 35
 #: CalcCorrectGraph row of max HP against Vigor (`er-mechanics-defense.calc_correct`: 300 at 1,
 #: 1450 at 40, 1900 at 60, 2100 at 99).
 HP_GRAPH = 100
+#: The planner's `computed.resistances` groups, the order `SpellModel.defender`'s `status_pool`
+#: keys them by (`er-mechanics-status.GROUPS`: each status reads one, `STATUSES`' last column).
+STATUS_GROUPS = ('immunity', 'robustness', 'focus', 'vitality')
 #: The charged release of a spell whose 045010 fires nothing: Loretta's Greatbow and Mastery
 #: (TAE a405: 045021 fires ref 5, `refId5` 10438050 / 10438150; 045010 has no cast event).
 CHARGED_ALT = 45021
@@ -649,6 +731,12 @@ MISS_LAUNCH = 'damage only in a bullet the straight flight never launches'
 MISS_OTHER = 'other'
 #: One hit list on a bullet the straight flight never launches, under a tree that does fly.
 MISS_UNFLOWN = 'hit on a bullet the straight flight never launches'
+#: Metres ahead of the caster a defender stands for the stored samples of a cast whose damaging
+#: shots reach hurtbox height only aimed at him (`SpellModel.aimed_down`); the middle of
+#: `AIM_PROBE_M`, the distances `CastThreats` probes an aim with (`INFERRED`: a choice; each dodge is
+#: read against the shots flown again after him, the geometry's `HOMING` record, so the distance
+#: sets only where the stored samples lie).
+AIMED_TARGET_M = 6.0
 #: `launchConditionType` values no flight over dry, flat ground meets: 1 and 2 on water, 254 and
 #: 255 never (`VERIFIED` FUN_14039da50, `er-mechanics-ashes.LAUNCH_ON`). A hit on such a bullet is
 #: dropped, not missing: it has no reach to model.
@@ -753,6 +841,10 @@ class SpellModel:
         self._goods = None
         self._taps = {}
         self._records = {}
+        #: AtkParam_Pc ids a hit with no flat damage still counts by (`_damaging`): the rows only
+        #: status-building bullets hit with, which attack-similarity sets (`status_hit_atks`,
+        #: version 30) so a status-only spell is flown and scored. Empty, the spell rule as before.
+        self.status_atks = frozenset()
 
     # -- the catalyst ------------------------------------------------------------------------
 
@@ -828,8 +920,17 @@ class SpellModel:
         Divine Bird Feathers: `REGULATION` + `TAE`): it is not a tap release, so they get one cast
         (module doc, "One cast"). Such a spell whose 045010 has the `TAP_SPEFFECT` window also gets
         'early' (045011): the cast let go inside that window, which plays 045010 up to the release
-        and then that release-out (`tap_release`; module doc, "One cast")."""
+        and then that release-out (`tap_release`; module doc, "One cast"). A quick spell
+        (`QUICK_REF_TYPES`) whose `DASH` clip casts also gets 'dash': the cast pressed while
+        sprinting, which plays that clip at once (module doc, "One cast")."""
         cat = SPELL_TAE_BASE + self.magic[mid]['refType']
+        out = self._standing_variants(mid, cat)
+        if self.magic[mid]['refType'] in QUICK_REF_TYPES and self._casts(cat, DASH):
+            out.append(('dash', DASH))
+        return out
+
+    def _standing_variants(self, mid, cat):
+        """`variants` cast from standing, walking or running: through 045000."""
         out = []
         if self.chargeable(mid) and self._events(cat, TAP)[1] and (
                 self._casts(cat, TAP) or self.magic[mid]['consumeLoopMP_forMenu'] <= 0) \
@@ -991,7 +1092,10 @@ class SpellModel:
         dict): the clip it switches to (045000 from the press, 045010 at the hand-off, 045011 at a
         tap's release, `tap_release`) and the ref each cast event fires (none when `refId<n>` is
         empty)."""
-        marks = [(0.0, ('clip', START)), (c['hand'], ('clip', RELEASE))]
+        # A quick cast plays its own clip from the press (`QUICK_CLIPS`), so it parts from a cast
+        # through 045000 at once.
+        marks = [(0.0, ('clip', c['anim']))] if c['anim'] in QUICK_CLIPS else \
+            [(0.0, ('clip', START)), (c['hand'], ('clip', RELEASE))]
         if c['anim'] == TAP:
             # The switch to 045011 shows once the blend into it has moved a bone far enough
             # (`release_shows`), not on the switch frame.
@@ -1080,9 +1184,22 @@ class SpellModel:
         m = self.magic.get(mid) if mid is not None else None
         for g, frame in geo or ():
             ev = g.get('EVENT')
-            if ev is None:
+            if ev is None or g.get('CHAIN') is not None:
+                # A chain part holds its own list already (`er-mechanics-ashes.split_chains`).
                 continue
             f, n = ev
+            if g.get('DIRECT') is not None:
+                # A direct AtkParam hit (`direct_geometry`): one list of its row, one hit, as a
+                # skill's melee hit holds (`skill_attack`).
+                atk = g['DIRECT']
+                worth = sum(h['damage'] * h['count'] for h in hits
+                            if (h['frame'], h['ref']) == (f, n) and h['atk'] == atk and h['bullet'] is None)
+                if worth > 0:
+                    # 'bullet' and 'hits': what a status reading needs of the list (version 30,
+                    # the comment above `STATUS_WORTH_FLOOR`).
+                    g['CAUGHT'] = {'lists': [dict(A.caught_list(t, atk, self.spell_poise(atk)), bullet=None, hits=1.0)],
+                                   'wf': worth / value[frame] if value.get(frame) else 0.0}
+                continue
             rid = roots.get((f, n)) if roots is not None else m[f'refId{n}']
             pool = {}
             for h in hits:
@@ -1096,14 +1213,25 @@ class SpellModel:
                 h = got.pop(0)
                 worth += h['damage'] * h['count']
                 lists.append((li, h['damage']))
-            if worth <= 0:
+            # An event whose lists deal no damage is kept when they are status hits (`status_atks`,
+            # version 30): its lists then carry no worth weight and the status is priced per play
+            # (`StatusCaught`).
+            if worth <= 0 and not (lists and all(li['atk'] in self.status_atks for li, _ in lists)):
                 continue
             # A record (`HPR`) holds back none of the event's lists: its shots and their children
             # are one launch and carry its id (`HIT_RECORD` in er-mechanics-attacks).
-            g['CAUGHT'] = {'lists': [A.caught_list(t, li['atk'], self.spell_poise(li['atk']), li['ticks'], li['rec'],
-                                                   li['mult'] * d / worth) for li, d in lists],
+            # A carried list's bullets are made on him, so its samples are its carrier's (`carried_rows`).
+            car = g.get('CARRIED') or {}
+            g['CAUGHT'] = {'lists': [dict(A.caught_list(t, li['atk'], self.spell_poise(li['atk']), li['ticks'], li['rec'],
+                                                        li['mult'] * d / worth if worth > 0 else 0.0,
+                                                        tuple(dict.fromkeys(car.get(r, r) for r in li['rows']))
+                                                        if car and li.get('rows') else li.get('rows')),
+                                          bullet=li['bullet'], hits=float(li['mult'] * li['ticks']))
+                                     for li, d in lists],
                            'wf': worth / value[frame] if value.get(frame) else 0.0}
-        return geo
+        # A bullet chain is one geometry per list (`er-mechanics-ashes.split_chains`), in place:
+        # the callers keep `geo`.
+        return A.split_chains(t, geo)
 
     def release_events(self, mid, anim, lead=None):
         """[(real frame from the hand-off, ref index 1..10)] for the TAE 64 events release `anim`
@@ -1135,21 +1263,33 @@ class SpellModel:
     def bullet_lists(self, rid, damaging=None, base=None):
         """`bullet_hits` before the count is multiplied out: [{'atk', 'bullet', 'mult' (instances
         that each keep the list), 'ticks' (hits per instance on a target that stays in it), 'rec'
-        (`dmgHitRecordLifeTime` s between them)}], what `er-mechanics-ashes.CaughtModel` plays
-        tick by tick."""
+        (`dmgHitRecordLifeTime` s between them), 'rows' (the damaging Bullet rows whose hits are
+        the list's: `CaughtModel` lands a list with rows when those bullets touch him, `flight`'s
+        `B`; () for a record's, and for one whose bullets home or are aimed at him after they are
+        made, which follow him where the stored samples do not)}], what
+        `er-mechanics-ashes.CaughtModel` plays tick by tick."""
         damaging = self._damaging if damaging is None else damaging
         base = self._base if base is None else base
         A = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py')
         t = self.ash()[1]
         lists = []
 
-        def walk(b, instances, record, before, depth, shot=None, path=(), lifetime=0.0):
+        def walk(b, instances, record, before, depth, shot=None, path=(), lifetime=0.0, steer=False, same=False):
             """`record`: the list of the DmgHitRecord this launch inherits from its parent (module
             doc, "Hits on one target"), or None. `lifetime`: the record lifetime its attack info
-            carries down (`record_lifetime`)."""
+            carries down (`record_lifetime`). `steer`: a live ancestor (one that drops this row by
+            interval while it flies) homes, so where this row's bullets are depends on where he
+            goes after a catch. `same`: this row is the fly state of the bullet `shot` lists (a
+            searching row's `HitBulletID`, `er-mechanics-ashes.search_launched`), not a child."""
             r = self.bullet.get(b)
             if r is None or depth > MAX_DEPTH or instances <= 0 or b in path:
                 return
+            tb = t.bullet.get(b) or {}
+            # Where its bullets are depends on him after it is made: it homes, or (made later than
+            # the launch) it is aimed at him when made and moves.
+            steers = A.homes(tb) or (depth > 0 and tb.get('EmittePosType') in A.AIM_EMIT_TYPES
+                                     and (tb.get('lockShootLimitAng') or 0) > 0
+                                     and max(r['initVellocity'], r['maxVellocity']) > 0)
             parent = path[-1] if path else None
             path += (b,)
             shots = max(r['numShoot'], 1)
@@ -1159,6 +1299,10 @@ class SpellModel:
             if record is not None:
                 # The parent's record, whatever this row's own flag (FUN_14038b740 copies it).
                 own = record
+            elif same:
+                # The hovering bullet's own list, which it keeps into its fly state: one bullet,
+                # one list (module doc, "Hits on one target").
+                own = shot
             elif shot is not None and not A.launches(t, parent, b, 'hit'):
                 # Not made when the shot before it hits him (its gate is that shot's own value,
                 # `launches`), so made only when it missed: a shot that hit him ended there.
@@ -1167,7 +1311,7 @@ class SpellModel:
                 # A new record for the launch, which its whole `numShoot` volley shares
                 # (FUN_14038fe80), or none: a list for every bullet.
                 own = {'mult': instances * (1 if recorded else shots), 'rec': lifetime,
-                       'contact': 0.0, 'best': None, 'row': b, 'record': recorded}
+                       'contact': 0.0, 'best': None, 'row': b, 'record': recorded, 'rows': set()}
                 lists.append(own)
                 before = 0.0
             # What its children inherit: its record, unless its row's `attachEffectType` drops it
@@ -1175,12 +1319,25 @@ class SpellModel:
             down = own if (record is not None or recorded) and not r['attachEffectType'] else None
             touch = before + self.contact(r)
             if damaging(r['atkId_Bullet']):
+                own['rows'].add(b)
+                own['steered'] = own.get('steered', False) or steer or steers
                 own['contact'] = max(own['contact'], touch)
-                if own['best'] is None or base(r['atkId_Bullet']) > base(own['best'][0]):
+                # The fly state takes a tie: its hits are the ones that land (the hover stays at
+                # the caster, `search_launched`).
+                if own['best'] is None or base(r['atkId_Bullet']) > base(own['best'][0]) \
+                        or (same and base(r['atkId_Bullet']) >= base(own['best'][0])):
                     own['best'] = (r['atkId_Bullet'], b)
             hit = r['HitBulletID']
-            if hit > 0 and (A.launches(t, b, hit, 'hit') or A.launches(t, b, hit, 'expire')):
+            if hit > 0 and A.search_launched(tb):
+                # A searching attached row hovers, then flies its `HitBulletID` row in the same
+                # bullet (`VERIFIED` FUN_14039ee00, module doc): one bullet, its own hit list (a
+                # lifetime of 0 never lapses), dying on its first hit unless it penetrates. So a
+                # blade lands once, not once hovering and once flying (it was two lists: the pouch
+                # priced Glintblade Phalanx at 756.5 where its five blades land 378.3, 2026-11-16).
+                walk(hit, instances * shots, None, before, depth + 1, own, path, lifetime, steer or steers, True)
+            elif hit > 0 and (A.launches(t, b, hit, 'hit') or A.launches(t, b, hit, 'expire')):
                 ends = damaging(r['atkId_Bullet']) and not r['isPenetrateChr']
+                # Made when this one ends: nothing above it flies on to steer it.
                 walk(hit, instances * shots, down, 0.0, depth + 1, own if ends else shot, path, lifetime)
             iv = (r['intervalCreateTimeMin'] + r['intervalCreateTimeMax']) / 2
             if r['intervalCreateBulletId'] > 0 and iv > 0 and life > 0:
@@ -1188,7 +1345,8 @@ class SpellModel:
                 # after that while it has life left: one per 0.1 s timer at 0.05 s, not three.
                 k = len(A.interval_frames(r, interval=iv))
                 # A trail: the children dropped while the parent touched the target outlast it.
-                walk(r['intervalCreateBulletId'], instances * shots * k, down, touch, depth + 1, None, path, lifetime)
+                walk(r['intervalCreateBulletId'], instances * shots * k, down, touch, depth + 1, None, path, lifetime,
+                     steer or A.homes(tb))
 
         walk(rid, 1, None, 0.0, 0)
         flown = self.record_hits(rid, damaging) if any(li['record'] and li['best'] for li in lists) else None
@@ -1204,14 +1362,38 @@ class SpellModel:
                     continue
                 done.add(li['row'])
                 rec, per = flown['records'].get(li['row'], (li['rec'], []))
-                for hits, n in sorted(collections.Counter(h for h in per if h > 0).items()):
-                    out.append({'atk': li['best'][0], 'bullet': li['best'][1], 'mult': n, 'ticks': hits,
-                                'rec': rec if hits > 1 else 0.0})
+                by = (flown.get('members') or {}).get(li['row'])
+                if by is None or len(by) != len(per):
+                    by = [{li['best']: h} for h in per]
+                # Each hit at the AtkParam of the member that landed it: a bullet hits with its own
+                # `atkId_Bullet` row (`VERIFIED` ashes-of-war.md section 4, `CalculateDamageCorrections`
+                # reads the hit's own row), and a record is shared down the lineage, so one list can
+                # hold a strong short member and a weak long one. Ghostflame Ignition's R1 follow-up
+                # (Bullet 2292): the hop explosions (303401310) land once and the 5 s ghostflame
+                # trail (2294, 303401305) every 0.5 s after; priced all at the strongest, its 11
+                # hits were 4,395.6 HP at the Intelligence + melee line where they are 1,672.6
+                # (`MEASURED` 2026-11-14), and the trail's poise-0 ticks reacted as the hop's.
+                by_atk, rows_of = [], {}
+                for x in by:
+                    got = collections.Counter()
+                    for (atk, row), k in x.items():
+                        got[atk] += k
+                        rows_of.setdefault(atk, collections.Counter())[row] += k
+                    by_atk.append(got)
+                comps = collections.Counter(tuple(sorted(x.items())) for x in by_atk if sum(x.values()) > 0)
+                for comp, n in sorted(comps.items()):
+                    for atk, hits in comp:
+                        row = li['best'][1] if atk == li['best'][0] else rows_of[atk].most_common(1)[0][0]
+                        out.append({'atk': atk, 'bullet': row, 'mult': n, 'ticks': hits,
+                                    'rec': rec if hits > 1 else 0.0, 'rows': ()})
                 continue
             rec = li['rec']
             hits = 1 + int(li['contact'] // rec) if rec > 0 and li['contact'] > rec else 1
+            # A list whose bullets follow him after a catch is read on the whole geometry, as
+            # before: its stored samples are the flight against him standing.
             out.append({'atk': li['best'][0], 'bullet': li['best'][1], 'mult': li['mult'], 'ticks': hits,
-                        'rec': rec if hits > 1 else 0.0})
+                        'rec': rec if hits > 1 else 0.0,
+                        'rows': () if li.get('steered') else tuple(sorted(li['rows']))})
         return out
 
     def _tree_rows(self, rid):
@@ -1231,12 +1413,13 @@ class SpellModel:
         ahead, the `d` of `RECORD_TARGET_M` that lands the most: {'d', 'records': {creating row:
         (lifetime, [hits of each record that row makes])}, 'reached': the creating rows whose
         records land a hit at some spot, 'bearing': {creating row: (d, bearing)} for those taken off
-        the axis}. Every bullet of the tree is flown in 3D (`er-mechanics-ashes.bullet_flight`,
-        launch frames, aim at creation and homing on his lock-on point as `_fly_records` lists),
-        and the cast is played in frame order against him. A record that lands nothing at any `d`
-        on the axis (its shots do not aim at him) is played at `RECORD_BEARINGS_DEG` too, and the
-        spot that lands its records the most is taken for them. Cached per root and the set of its
-        AtkParams that `damaging` counts."""
+        the axis}, and 'members': {creating row: [per record, {(AtkParam, Bullet row): hits}]} at the
+        spot taken (`_fly_records`' `members`). Every bullet of the tree is flown in 3D
+        (`er-mechanics-ashes.bullet_flight`, launch frames, aim at creation and homing on his lock-on
+        point as `_fly_records` lists), and the cast is played in frame order against him. A record
+        that lands nothing at any `d` on the axis (its shots do not aim at him) is played at
+        `RECORD_BEARINGS_DEG` too, and the spot that lands its records the most is taken for them.
+        Cached per root and the set of its AtkParams that `damaging` counts."""
         damaging = self._damaging if damaging is None else damaging
         rows = self._tree_rows(rid)
         key = (rid, frozenset(self.bullet[b]['atkId_Bullet'] for b in rows
@@ -1244,13 +1427,14 @@ class SpellModel:
         if key not in self._records:
             best, reached, made = None, set(), set()
             for d in RECORD_TARGET_M:
-                got = self._fly_records(rid, damaging, d)
+                by = {}
+                got = self._fly_records(rid, damaging, d, members=by)
                 total = sum(sum(per) for _, per in got.values())
                 reached |= {row for row, (_, per) in got.items() if any(per)}
                 made |= set(got)
                 if best is None or total > best[0]:
-                    best = (total, d, got)
-            records, bearing = dict(best[2]), {}
+                    best = (total, d, got, by)
+            records, bearing, members = dict(best[2]), {}, dict(best[3])
             missing = made - reached
             if missing:
                 # Shots that do not aim at him (a fan at fixed yaws, a meteor at a fixed offset) miss
@@ -1259,24 +1443,29 @@ class SpellModel:
                 off = None
                 for b in RECORD_BEARINGS_DEG:
                     for d in RECORD_TARGET_M:
-                        got = self._fly_records(rid, damaging, d, b)
+                        by = {}
+                        got = self._fly_records(rid, damaging, d, b, members=by)
                         total = sum(sum(got[row][1]) for row in missing if row in got)
                         if total and (off is None or total > off[0]):
-                            off = (total, d, b, got)
+                            off = (total, d, b, got, by)
                 if off is not None:
                     for row in missing:
                         if row in off[3] and any(off[3][row][1]):
                             records[row] = off[3][row]
+                            members[row] = off[4].get(row, [])
                             reached.add(row)
                             bearing[row] = (off[1], off[2])
-            self._records[key] = {'d': best[1], 'records': records, 'reached': reached, 'bearing': bearing}
+            self._records[key] = {'d': best[1], 'records': records, 'reached': reached, 'bearing': bearing,
+                                  'members': members}
         return self._records[key]
 
-    def _fly_records(self, rid, damaging, d, bearing=0.0):
+    def _fly_records(self, rid, damaging, d, bearing=0.0, members=None):
         """{creating row: (lifetime, [hits per record])} of one cast of `rid` at a defender standing
         `d` m from the caster at `bearing` degrees off his facing (+x 90), facing him
-        (`record_hits`). The rules (`VERIFIED` 2026-11-12 unless marked, 1.16.2 named dump; module
-        doc, "Hits on one target"):
+        (`record_hits`). `members`, a dict, is filled with {creating row: [per record, {(AtkParam,
+        Bullet row): hits}]}: which member landed each hit, so `bullet_lists` prices it at that
+        member's own AtkParam. The rules (`VERIFIED` 2026-11-12 unless marked, 1.16.2 named dump;
+        module doc, "Hits on one target"):
 
         - a bullet touches him on a frame its sphere, swept from where it was the frame before to
           where it is (FUN_1405226e0: the attack's shape is cast from DmgIns +0x200, last frame's
@@ -1352,7 +1541,7 @@ class SpellModel:
             lifetime = record_lifetime(lifetime, r)
             if rec is None and (r['isUseSharedHitList'] or r['attachEffectType']):
                 rec = len(records)
-                records.append({'row': b, 'L': lifetime, 'ready': -math.inf, 'hits': 0})
+                records.append({'row': b, 'L': lifetime, 'ready': -math.inf, 'hits': 0, 'by': collections.Counter()})
             down = None if r['attachEffectType'] else rec
             radius = max(r['hitRadius'], r['hitRadiusMax'])
             iv = (r['intervalCreateTimeMin'] + r['intervalCreateTimeMax']) / 2
@@ -1416,6 +1605,7 @@ class SpellModel:
                     rc['ready'] = now + rc['L'] if rc['L'] > 0 else math.inf
                     if damaging(r['atkId_Bullet']):
                         rc['hits'] += 1
+                        rc['by'][(r['atkId_Bullet'], bl['b'])] += 1
                 if not r['isPenetrateChr']:
                     bl['alive'] = False
                     c = r['HitBulletID']
@@ -1431,6 +1621,8 @@ class SpellModel:
         out = {}
         for rc in records:
             out.setdefault(rc['row'], (rc['L'], []))[1].append(rc['hits'])
+            if members is not None:
+                members.setdefault(rc['row'], []).append(dict(rc['by']))
         return out
 
     def contact(self, r):
@@ -1451,7 +1643,7 @@ class SpellModel:
 
     def _damaging(self, atk_id):
         a = self.atk.get(atk_id)
-        return bool(a) and any(a[f] > 0 for f in ATK_FIELD.values())
+        return bool(a) and (any(a[f] > 0 for f in ATK_FIELD.values()) or atk_id in self.status_atks)
 
     def phys_type(self, atk_id, bullet_id, cat):
         attr = self.atk.get(atk_id, {}).get('atkAttribute', 3)
@@ -1487,9 +1679,35 @@ class SpellModel:
     def defender(self, rl):
         """The median defender of the RL window (`er-builds-optimize.bracket_defender`), plus his
         `vig` (the median Vigor of the same builds), `hp` (CalcCorrectGraph row 100 at it, the HP
-        curve `PerformCalcCorrection` reads, `er-mechanics-defense.calc_correct`) and `poise` (the
-        median `poise.original` the planner computes): what one cast can land on him at most, and
-        the poise a caught defender holds with (`er-mechanics-ashes.CaughtModel`)."""
+        curve `PerformCalcCorrection` reads, `er-mechanics-defense.calc_correct`), `poise` (the
+        median `poise.original` the planner computes) and `poise_pool`: what one cast can land on
+        him at most, and the poises a caught defender holds with (`er-mechanics-ashes.CaughtModel`).
+
+        `poise_pool` is [(poise, share of the builds)] over the same builds, each build's own poise:
+        `computed.poise.altered` when the planner gives it, else `original` (2026-11-16, version 21;
+        `CaughtModel` played every defender at the median `original` until then). Both are menu
+        units, the scale of a hit's `atkSuperArmor` x `POISE_MENU` x `saRate`: `original` is the
+        armor's `toughnessCorrectRate` sum x 1000 and `altered` that over the SpEffects'
+        `toughnessDamageCutRate` product (`er-mechanics-defense.defender` 'poise' and
+        'poise_effective', checked against the planner's numbers build by build in its corpus
+        check; attacks.md section 2: internal toughness is menu / 10, a hit's poise in menu units is
+        x 10, `VERIFIED` against the 1.17 PvP poise table). A planner row carries `altered` only when
+        a cut applies, which on this corpus is Bull-Goat's Talisman (x 1/0.75 = 1.333, `MEASURED`
+        2026-11-16 by the main session: 361 of the 370 RL 140-160 rows that carry it). So a cut
+        divides his poise rather than multiplying each hit, the same comparison. `poise` stays the
+        median `original`, which the defender's strike reads as the attacker's default poise.
+
+        `hp_pool` is [(health, share)], each build's CalcCorrectGraph 100 at its own Vigor, and
+        `pool` [(poise, share, health)] the two per build together: what one catch can take is
+        capped at that defender's own health (`er-mechanics-ashes.hp_cap`, `CaughtModel.worth_of`),
+        where `hp` capped every defender at the median Vigor's. A cap is not linear, so the median's
+        cap is not the pool's mean cap.
+
+        `status_pool` is [(poise, share, health, {resistance group: value})] over the same builds as
+        `pool`, each build's planner `computed.resistances` (immunity, robustness, focus, vitality:
+        armor and talismans included, `er-mechanics-status.Defenders`' reading, 92.6% agreement with
+        `CalcTotalResistance`, `MEASURED` there): the gauge a status's build-up empties before it
+        procs on that defender (`StatusPool`, `status_caught`)."""
         if rl not in self._defender:
             opt = _mod('er_builds_optimize', 'er-builds-optimize.py')
             rows = opt.corpus_rows(opt.CACHE / 'builds.jsonl', rl - WINDOW, rl + WINDOW)
@@ -1497,8 +1715,27 @@ class SpellModel:
             have = [r for r in rows if r['computed'].get('defenses') and r['computed'].get('absorption')]
             vig = statistics.median(r['stats']['vig'] for r in have)
             poise = [p for p in ((r['computed'].get('poise') or {}).get('original') for r in have) if p is not None]
-            d.update(vig=vig, hp=DEF.calc_correct(self.def_tables().graph[HP_GRAPH], vig),
-                     poise=statistics.median(poise) if poise else None)
+            graph = self.def_tables().graph[HP_GRAPH]
+            own, joint, health, resist = {}, {}, {}, {}
+            for r in have:
+                po = r['computed'].get('poise') or {}
+                p = po.get('altered', po.get('original'))
+                c = DEF.calc_correct(graph, r['stats']['vig'])
+                health[c] = health.get(c, 0) + 1
+                if p is not None:
+                    own[float(p)] = own.get(float(p), 0) + 1
+                    joint[(float(p), float(c))] = joint.get((float(p), float(c)), 0) + 1
+                    res = r['computed'].get('resistances') or {}
+                    rk = (float(p), float(c), tuple(float(res.get(g, 0.0)) for g in STATUS_GROUPS))
+                    resist[rk] = resist.get(rk, 0) + 1
+            n, nj, nh = sum(own.values()), sum(joint.values()), sum(health.values())
+            d.update(vig=vig, hp=DEF.calc_correct(graph, vig),
+                     poise=statistics.median(poise) if poise else None,
+                     poise_pool=[(p, c / n) for p, c in sorted(own.items())] if n else None,
+                     hp_pool=[(float(c), k / nh) for c, k in sorted(health.items())] if nh else None,
+                     pool=[(p, k / nj, c) for (p, c), k in sorted(joint.items())] if nj else None,
+                     status_pool=[(p, k / nj, c, dict(zip(STATUS_GROUPS, rs)))
+                                  for (p, c, rs), k in sorted(resist.items())] if nj else None)
             self._defender[rl] = d
         return self._defender[rl]
 
@@ -1532,9 +1769,12 @@ class SpellModel:
         m = self.magic[mid]
         sp = self.cast.spell(mid)
         value = CS.casting_value(stats.get('dex', 10), bonus, sp['lo'], sp['hi'])
-        hand = self.handoff(mid, value)
+        standing = self.handoff(mid, value)
         out = []
         for label, anim in self.variants(mid):
+            # A quick cast (`QUICK_CLIPS`) plays its own clip from the press: no 045000 to hand off
+            # from, so no cast speed.
+            hand = 0.0 if anim in QUICK_CLIPS else standing
             c, events = self.release_events(mid, anim, lead)
             hits, first = [], None
             for frame, n in events:
@@ -1688,6 +1928,14 @@ class SpellModel:
         test = self.spell_node_damaging if damaging is None else damaging
         out, grounded = [], False
         for frame, n in variant['events']:
+            if m[f'refCategory{n}'] == REF_ATTACK and variant.get('anim') is not None:
+                # The cast's own AtkParam hitbox (Carian Slicer): a melee hit of the caster's body
+                # over the event's window (`direct_geometry`). A free aim at the ground moves no
+                # hitbox he swings, so a floor-aimed cast keeps it as it is.
+                geom = self.direct_geometry(mid, variant, frame, n)
+                if geom is not None:
+                    out.append((geom, frame))
+                    continue
             if m[f'refCategory{n}'] != REF_BULLET:
                 if missing is None:
                     return None
@@ -1708,6 +1956,27 @@ class SpellModel:
                                                  'peak': -math.inf}), 'aim': False}
             geom = self.flight(bt, (variant['hand'] + frame) / FPS, damaging, launch=launch, homing=floor is None,
                                aim=True)
+            carried = self.carried_rows(bt, test) if geom is None and floor is None else {}
+            if carried:
+                # Its damage is only on children its carriers make where they touch a character
+                # (`carried_rows`: Loretta's Greatbow): the carriers' own flight is where it lands.
+                geom = self.flight(bt, (variant['hand'] + frame) / FPS,
+                                   lambda node: test(node) or node['bullet'] in set(carried.values()),
+                                   launch=launch, homing=True, aim=True)
+                if geom is not None:
+                    geom['CARRIED'] = carried
+            if geom is None and floor is None and self.aimed_down(bt, test):
+                # Its damaging shots are aimed at him when made and fly at hurtbox height only
+                # aimed (`aimed_down`: Magic Downpour); the stored samples are flown against him
+                # `AIMED_TARGET_M` ahead, and the geometry's `HOMING` record flies them again
+                # after each dodge.
+                geom = self.flight(bt, (variant['hand'] + frame) / FPS, damaging, target=(0.0, AIMED_TARGET_M),
+                                   launch=launch, homing=True, aim=True)
+                if geom is not None and 'HOMING' not in geom:
+                    # Without a flight again the samples would hold him at that one distance.
+                    geom = None
+                if geom is not None:
+                    geom['AIMED_AT'] = AIMED_TARGET_M
             if geom is not None:
                 geom['EVENT'] = (frame, n)
                 rec = self.cast_record(mid, variant['anim'], frame, n, variant.get('lead')) \
@@ -1723,6 +1992,219 @@ class SpellModel:
         for g, _ in out if wins else ():
             g['TOUGHNESS'] = wins
         return out or None
+
+    def aimed_down(self, bt, test=None):
+        """Whether tree `bt`'s untargeted straight flight puts no damaging point at hurtbox height
+        (`flight_miss` `MISS_HEIGHT`) while a damaging node of it is aimed at the target when made
+        (`lockShootLimitAng` above 0: FUN_140390c20 turns a shot with a target toward his lock-on
+        point within that angle, `VERIFIED`, `flight`'s note) and moves. Magic Downpour: its rain
+        10437002 (AtkParam 43702, 58 magic, 5 shots at 9 m/s) has `lockShootLimitAng` 180 and is
+        made every 0.48 s by 10437001, which hangs above the caster (`REGULATION`), so unaimed it
+        passes over a standing body and aimed it falls on him."""
+        A, t = self.ash()
+        test = self.spell_node_damaging if test is None else test
+        if bt is None or self.flight_miss(bt, test) != MISS_HEIGHT:
+            return False
+        todo = [bt]
+        while todo:
+            node = todo.pop()
+            if node is None:
+                continue
+            r = t.bullet.get(node['bullet']) or {}
+            if test(node) and (r.get('lockShootLimitAng') or 0) > 0 and \
+                    max(r.get('initVellocity') or 0, r.get('maxVellocity') or 0) > 0:
+                return True
+            todo += list(node['children'].values())
+        return False
+
+    def carried_rows(self, bt, test=None):
+        """{damaging Bullet row: the carrier row that makes it}: the damaging nodes of tree `bt`
+        (`test`, default `spell_node_damaging`) that hang by `HitBulletID` links made on a hit
+        (`er-mechanics-ashes.launches`) under a `er-mechanics-ashes.carrier` node, a bullet that
+        does no damage, targets opponents, stops on a character and makes its child where it
+        touches him. The game makes that child at the contact point on a counted character hit
+        (FUN_1403aba90 -> FUN_14039baf0 -> FUN_14039da40 -> FUN_14039bba0, `VERIFIED` 1.16.2,
+        `er-mechanics-ashes` "floor bursts" note), so the child's damage lands where and when the
+        carrier touches him; the straight flight hits no character and never makes it
+        (`flight_miss` `MISS_LAUNCH`, launchConditionType 5). Loretta's Greatbow: arrow 10438000
+        (AtkParam 79980, no attack, `opposeTarget` 1, `isPenetrateChr` 0) makes 10438001 (AtkParam
+        43801, 270 magic, radius 1.0 to 2.0 m, life 0.1 s, launchConditionType 5) on its hit
+        (`REGULATION`). The child's own reach past the contact is not added (`INFERRED`: its radius
+        of 1 m and more covers the body it was made on). {} when there is none."""
+        A, t = self.ash()
+        test = self.spell_node_damaging if test is None else test
+        out = {}
+
+        def under(node, carrier, depth):
+            if node is None or depth > MAX_DEPTH:
+                return
+            if test(node):
+                out.setdefault(node['bullet'], carrier)
+            for key, ch in node['children'].items():
+                if key == 'HitBulletID' and ch is not None and A.launches(t, node['bullet'], ch['bullet'], 'hit'):
+                    under(ch, carrier, depth + 1)
+
+        def walk(node, depth):
+            if node is None or depth > MAX_DEPTH:
+                return
+            if A.carrier(t, node) and not test(node):
+                under(node['children'].get('HitBulletID'), node['bullet'], depth + 1)
+            for ch in node['children'].values():
+                walk(ch, depth + 1)
+        walk(bt, 0)
+        return out
+
+    def direct_geometry(self, mid, variant, frame, n):
+        """`er-mechanics-ashes.contact_geometry` of the AtkParam hit the cast event (TAE 64) of ref
+        `n` plays at real frame `frame` from the hand-off, when `Magic.refCategory<n>` is 0 (an
+        AtkParam_Pc row, not a Bullet), in real frames from the press; None when its row does not
+        damage (`_damaging`), the event is not in the release, or no shape of it is posed.
+
+        What the game does with such a ref (`VERIFIED` 1.16.2 named dump, disassembly; the
+        decompiler of the :8765 daemon failed on every function 2026-11-20): the TAE 64 handler
+        FUN_140429db0 reads the ref (GetRefCategoryAndConsumeType 0x140d3df30, index = event byte
+        8) and on category 0 (`CMP byte ptr [RAX],0` at 0x140429eb8) calls FUN_1403c0680 with the
+        event's word +0xa as a slot index and its byte +0xc as the hit priority record; that calls
+        FUN_140443180 on the character's attack array (the module's +0x18..+0x20, 16-byte entries),
+        which keeps the slot's attack while its AtkParam id is the same and marks the entry claimed
+        (+4), else replaces it with a new one of that row (InitAttackStruct 0x14038cd60,
+        0x140526430), and attaches the record when byte +0xc is not negative (0x140443406). The
+        TAE 1 AttackBehavior handler FUN_1404428f0 fills the same array the same way (its
+        `[RDI+0x18]` entries, +4 claimed), and FUN_140445d30 removes each entry not claimed that
+        frame (0x140445dc9 -> 0x140527140). So the hit is the row's shapes, live while the event
+        is, one hit list for its window: what a skill's melee hit is (`er-mechanics-ashes`
+        `_hit_contacts`, `er-mechanics-reach.attack_reach`). Carian Slicer's rows are
+        `hitSourceType` 1 capsules on c0000 dummies 99..101 (right hand, R_Weapon bone) and 98..102
+        (left), radius 0.3 (`REGULATION` AtkParam_Pc 44400..44408).
+
+        The shapes are posed by the release clip the event is in (045010, or 045011 for a tap's
+        own) from that clip's first frame, moved ahead by the forward root motion of the clips
+        played before it (`_direct_base`: 045000 to the hand-off carries Carian Slicer 0.08 m,
+        Carian Greatsword and Adula's Moonblade 0.24 m, Carian Piercer 0.19 m at DEX 11,
+        `MEASURED` 2026-11-20 with `er-mechanics-ashes.root_offset`).
+        The geometry carries the clip's turn rules (`TURN`) and whole root motion (`ADV`), as a
+        skill's melee geometry does, the record (`HPR`, `cast_record`), the jump immunity (`AIR`)
+        and the `CAUGHT` list for the caught defender (`attach_caught`)."""
+        A, t = self.ash()
+        m = self.magic[mid]
+        atk = m[f'refId{n}']
+        if m[f'refCategory{n}'] != REF_ATTACK or not self._damaging(atk):
+            return None
+        got = self._cast_at(mid, variant['anim'], frame, n, variant.get('lead'))
+        if got is None:
+            return None
+        c, clip, ev, pos = got
+        e = ev[pos]
+        if variant.get('weapon') is None:
+            return None
+        entries = self.direct_contacts(variant['weapon'], c, clip, atk, (e.start, e.end))
+        if not entries:
+            return None
+        geom = A.contact_geometry(entries=entries, air=bool((self.atk.get(atk) or {}).get('isInvalidatedByNoDamageInAir')))
+        if geom is None:
+            return None
+        adv = A.clip_advance(c, clip)
+        if adv is not None:
+            geom['ADV'] = adv
+        geom['TURN'] = A.clip_turn(c, clip, ev)
+        # The clips played before this one carry the caster forward (045000 to the hand-off, and for
+        # a tap's 045011 045010 to its release): the samples, his root so far and the clip's
+        # advance move that far ahead, as `cast_launch` lays a bullet's launch on them.
+        base = self._direct_base(mid, clip, float(variant['hand']), variant.get('lead'))
+        if base is not None:
+            import numpy as np
+            fwd, peak = float(base['pos'][2]), float(base['peak'])
+            geom['Z'] = geom['Z'] - fwd
+            geom['PK'] = np.maximum(geom['PK'] + fwd, peak)
+            if geom.get('ADV') is not None:
+                geom['ADV'] = (max(geom['ADV'][0] + fwd, peak), geom['ADV'][1] + fwd)
+            if geom['TURN'].get('fwd') is not None:
+                geom['TURN'] = {**geom['TURN'], 'fwd': geom['TURN']['fwd'] + fwd,
+                                'sig': geom['TURN']['sig'] + (('base', round(fwd, 6)),)}
+        # The clip starts at the hand-off, and a tap's 045011 at its release into it.
+        off = float(variant['hand']) + (self.release_lead(mid, clip, variant.get('lead')) if clip == TAP else 0.0)
+        geom = A.shift_geometry(geom, off)
+        geom['EVENT'] = (frame, n)
+        geom['DIRECT'] = atk
+        rec = self.cast_record(mid, variant['anim'], frame, n, variant.get('lead'))
+        if rec is not None:
+            geom['HPR'] = rec
+        return geom
+
+    def _direct_base(self, mid, clip, hand, lead=None):
+        """`er-mechanics-ashes.root_offset` where release clip `clip` of spell `mid` starts: the
+        start clip (045000) played `hand` real frames, then for a tap's 045011 045010 to its
+        release (`release_lead`), chained as `cast_launch` chains them; None when nothing moves
+        him. Only its forward travel is used (`direct_geometry`): a turn or a sideways step in
+        those clips is not laid on (`INFERRED`; on Carian Slicer, Carian Greatsword, Adula's
+        Moonblade and Carian Piercer it is 0, `MEASURED` 2026-11-20, yaw 0 and x 0 at DEX 11)."""
+        A, _ = self.ash()
+        cat = SPELL_TAE_BASE + self.magic[mid]['refType']
+        base = None
+        c0, ev0 = self._events(cat, START)
+        if ev0 is not None and hand > 0:
+            base = A.root_offset(c0, START, self._clip_seconds(ev0, hand))
+        lead = self.release_lead(mid, clip, lead)
+        if lead > 0:
+            c1, ev1 = self._events(cat, RELEASE)
+            base = _chain_root(base, A.root_offset(c1, RELEASE, self._clip_seconds(ev1, lead)))
+        return base
+
+    def direct_contacts(self, weapon, category, anim, atk, window):
+        """`er-mechanics-reach.window_points` entries, in real seconds from the clip's start, of
+        AtkParam_Pc row `atk` hit from TimeAct entry (`category`, `anim`) over `window` (start,
+        end) clip seconds, with catalyst row `weapon` in hand: the samples `skill_reach` gives a
+        skill's melee hit (`er-mechanics-reach.attack_reach`, whose steps this takes one by one:
+        the row's shapes, `world_reach` on the clip's pose, the free-aim pick, the clip's TAE 608
+        play speed), for a row no judge names. A weapon-source shape is read off the catalyst's
+        model, a body-source one (`hitSourceType` 1) off c0000 (`body_shape_points`); a shape on
+        a rigged weapon bone is not posed. None when nothing is posed. Cached."""
+        key = (weapon, category, anim, atk, tuple(round(float(x), 6) for x in window))
+        memo = self.__dict__.setdefault('_direct', {})
+        if key in memo:
+            return memo[key]
+        A, _ = self.ash()
+        R = A._pose()[1]
+        if R._RC is None:
+            R._RC = R.Reach()
+        rc = R._RC
+        memo[key] = None
+        cat, src_anim, events = R.resolve_clip(category, anim)
+        row = rc.atk_shape.get(atk)
+        if events is None or row is None:
+            return None
+        model = rc.model.get(weapon)
+        dm = R.weapon_dummies(model) if model is not None else None
+        dummies = dm[0] if dm else {}
+        src = R.HIT_SOURCE.get(row['hitSourceType'], row['hitSourceType'])
+        judge = -atk
+        hitboxes = []
+        for shape in R.hit_shapes(row):
+            # A prefixed dummy (10xxx) names one on the held weapon's model, the catalyst's here, as
+            # `cast_launch` reads a cast event's (`INFERRED` for a `hitSourceType` 1 row: Shatter
+            # Earth's 41003, sphere at 10122, `REGULATION`; `body_shape_points` reads no prefixed id).
+            own = 'weapon' if src == 'weapon' or any(d >= 10000 for d in shape['dmy']) else src
+            ext = R.shape_extent(shape, dummies) if own == 'weapon' else None
+            body = R.body_shape_points(shape, src, dummies) if ext is None and (src == 'body' or dm) else None
+            hitboxes.append({'judge': judge, 'atk_row': atk, 'source': own, 'hand': 'right', 'state_info': 0,
+                             'damaging': True, **shape,
+                             **({'extent_m': ext['extent'], 'blade_m': ext['blade'], 'points': ext['points']}
+                                if ext else {'extent_m': None}),
+                             **({'body_points': body} if body else {})})
+        hit_windows = [(R._frame(window[0]), R._frame(window[1]), judge)]
+        windows = R.speed_windows(events)
+        clip_cat, clip_anim = R.hkx_source(cat, src_anim)
+        pose = R.world_reach(clip_cat, clip_anim, hit_windows, hitboxes, dummies)
+        if pose and 'world_reach_error' not in pose:
+            turns = R.turn_details(events, window[0], windows, window[1])
+            aim = R.free_aim_pick(clip_cat, clip_anim, events, windows, hit_windows, hitboxes, dummies, pose,
+                                  {k: turns.get(k) for k in ('turn_late_deg_locked', 'turn_late_deg_unlocked')})
+            if aim and aim['pose'] is not None:
+                pose = aim['pose']
+        points = ((pose or {}).get('window_points') or {}).get((hit_windows[0][0], judge))
+        if points:
+            memo[key] = [(R.real_seconds(t, windows), peak, pts) for t, peak, pts in points]
+        return memo[key]
 
     def flight_miss(self, bt, damaging=None):
         """Why `flight` of tree `bt` is None, the first of: `MISS_HEIGHT` (damaging nodes fly but
@@ -1886,13 +2368,27 @@ class SpellModel:
         `MEASURED` 2026-11-13)."""
         A, t = self.ash()
         test = self.spell_node_damaging if damaging is None else damaging
-        pts, air = [], True
-        for node, path, t0, _ in A.fly_tree(t, bt, target, launch):
+        pts, air, used = [], True, []
+        for i, (node, path, t0, _) in enumerate(A.fly_tree(t, bt, target, launch)):
             if not test(node):
                 continue
             air = air and self._air(node)
-            pts += self._path_points(node, path, t0, start, launch)
-        g = A.contact_geometry(bullet_points=sorted(pts), air=air)
+            # Each point carries its Bullet row last, which `contact_geometry` does not read: `B`.
+            got = [p + (node['bullet'],) for p in self._path_points(node, path, t0, start, launch)]
+            if got:
+                used.append(i)
+            pts += got
+        pts.sort()
+        g = A.contact_geometry(bullet_points=pts, air=air)
+        if g is not None:
+            # Which Bullet row each sample is (`er-mechanics-ashes.CaughtModel`: a hit list lands
+            # when its own bullets touch him, `bullet_lists` 'rows').
+            g['B'] = np.array([p[-1] for p in pts], int)
+            # Shots a search launches are read from that launch (`er-mechanics-ashes.tree_cue`,
+            # `burst_cue`): the caster picks it. `fly_tree` is `fly_shots` in the same order.
+            cue = A.tree_cue(t, A.fly_shots(t, bt, target, launch), used, start)
+            if cue is not None:
+                g['CUE'] = cue
         if g is not None and homing:
             # Flown again, an aimed shot is aimed at where he is when it is created (a roll he began
             # before it exists moves its aim) and then turns after him; an unaimed one keeps its
@@ -1995,7 +2491,7 @@ class SpellModel:
         return casts, looks
 
     def punish_values(self, mid, cat, stats, situations, talismans=(), left=None, defender=None,
-                      two_handed=False, pvp=True, strikes=None, casts=None, looks=None, cats=None):
+                      two_handed=False, pvp=True, strikes=None, casts=None, looks=None, cats=None, sprint=None):
         """Per situation: the damage one cast lands on a defender caught in his recovery at the
         situation's distance, less the punish he lands when he rolls it and runs in before the
         caster's roll cancel (`strikes`, `punish_strikes`; `kit` in the module doc), the best of the
@@ -2008,7 +2504,8 @@ class SpellModel:
         their weighted mean per situation: the attacker draws the release frame, each member read
         by the defender's plan against the whole group (`INFERRED`, `release_frames`); a member's
         own nets are read where they matter and filled in between (`er-mechanics-ashes`
-        `release_read`, `release_fill`)."""
+        `release_read`, `release_fill`). The 'dash' variant is read at `sprint`, the same situations
+        as a sprint cast meets them (`sprint_situations`, of `situations` when None)."""
         A = self.ash()[0]
         if cats is not None and looks is None:
             got, looks = self.lookalike_group(mid, cat, list(cats), stats, talismans, left, defender, two_handed, pvp)
@@ -2017,11 +2514,15 @@ class SpellModel:
         best, label = None, None
         for c in casts:
             units = [c] + list(c.get('members') or ())
+            if c['variant'] == 'dash':
+                sits = sprint if sprint is not None else sprint_situations(situations)
+            else:
+                sits = situations
 
-            def read(i, units=units, c=c):
+            def read(i, units=units, c=c, sits=sits):
                 x = units[i]
                 look = (looks or {}).get(release_key((mid, c['variant']), x, x is c))
-                return self._member_values(A, mid, x, situations, strikes, defender, look)
+                return self._member_values(A, mid, x, sits, strikes, defender, look)
             if len(units) == 1:
                 vals = read(0)
             else:
@@ -2151,6 +2652,14 @@ class SpellModel:
                 # are (`flight` `aim`): the same target slot homes them and kills its carriers on him.
                 geom = self.flight(bt, start + off / FPS, A._bullet_damages_self, launch=launch,
                                    aim=True) if bt else None
+                if geom is not None and g is not None and g.get('ADV') is not None:
+                    # The clip's whole root motion, where the caster ends for the punish
+                    # (`er-mechanics-ashes.attack_advance`).
+                    geom['ADV'] = g['ADV']
+                if geom is not None and g is not None and g.get('TURN') is not None:
+                    # The clip's turn rules, from the part's press (`er-mechanics-ashes._facing`,
+                    # version 27).
+                    geom['TURN'] = A.turn_shift(g['TURN'], off)
                 lists = self.bullet_lists(h['root_bullet'], **priced)
                 if flown_only and bt:
                     gaps, kept = self.launch_gaps(bt, launch), []
@@ -2176,16 +2685,29 @@ class SpellModel:
                         # The launch's copies and children all carry its id, so the record holds
                         # back none of its lists (`HIT_RECORD` in er-mechanics-attacks).
                         geom['HPR'] = (('skill', part_of.get(id(h)), h['record']), h['priority'], h['created'])
-                    geom['CAUGHT'] = {'lists': [A.caught_list(t, li['atk'], poise.get(li['atk'], 0.0), li['ticks'],
-                                                              li['rec'], li['mult'] * d / worth) for li, d in caught],
+                    # 'bullet', 'root' and 'hits': what a status reading needs (version 30, the comment
+                    # above `STATUS_WORTH_FLOOR`).
+                    geom['CAUGHT'] = {'lists': [dict(A.caught_list(t, li['atk'], poise.get(li['atk'], 0.0), li['ticks'],
+                                                                   li['rec'], li['mult'] * d / worth, li.get('rows')),
+                                                     bullet=li['bullet'], root=h['root_bullet'],
+                                                     hits=float(li['mult'] * li['ticks']))
+                                                for li, d in caught],
                                       'wf': worth}
             elif source == 'pose':
                 geom = {**g, 'T': g['T'] + off}
+                if g.get('TURN') is not None:
+                    # The clip's turn rules move with the part (version 27).
+                    geom['TURN'] = A.turn_shift(g['TURN'], off)
                 if (self.atk.get(h['atk_row']) or {}).get('isInvalidatedByNoDamageInAir'):
                     geom['AIR'] = True
                 worth = h['pvp_damage_total']
                 top = h['pvp_damage']
-                geom['CAUGHT'] = {'lists': [A.caught_list(t, h['atk_row'], poise_of(h))], 'wf': worth}
+                # `count`: the hits one row lands, its worth's multiplier (`er-mechanics-ashes`
+                # `pvp_damage_total`); 'bullet', 'hits' and 'from_weapon' are what a status
+                # reading needs (version 30).
+                geom['CAUGHT'] = {'lists': [dict(A.caught_list(t, h['atk_row'], poise_of(h)), bullet=None,
+                                                 hits=float(h.get('count', 1)),
+                                                 from_weapon=bool(h.get('from_weapon', True)))], 'wf': worth}
                 if h.get('record') is not None:
                     geom['HPR'] = (('skill', part_of.get(id(h)), h['record']), h['priority'], h['created'])
             else:
@@ -2204,6 +2726,18 @@ class SpellModel:
         for g, frame in geo:
             if 'CAUGHT' in g:
                 g['CAUGHT']['wf'] = g['CAUGHT']['wf'] / value[frame] if value[frame] > 0 else 0.0
+        # A bullet chain (each list's bullets made as the last one's end) is one geometry per list,
+        # so the burst that first touches a dodger is the catch (`er-mechanics-ashes.split_chains`).
+        A.split_chains(t, geo)
+        # The press the attacker times to start the skill (a stance's button, or a hand-over he
+        # times: `er-mechanics-ashes.skill_commit` 'cue', part 0's), on every geometry: the defender
+        # reads the attack's timing from it (`er-mechanics-ashes.burst_cue`), as
+        # `er-mechanics-ashes.skill_reaction` reads it from that part's cue (version 23; before, the
+        # reaction here ran from frame 0). A follow-up's own press is left to the model that plays
+        # its timing (`FollowupModel`'s press delays, an early release's `Lookalikes` group).
+        cue0 = float((o['parts'][0] if o.get('parts') else {}).get('cue') or 0.0)
+        for g, _ in geo if cue0 > 0 else ():
+            g['PRESS_CUE'] = cue0
         # The skill's TAE 795 windows, what the defender's strike reads (`strike_breaks`).
         wins = self.skill_windows(o, wid, sid) if geo else ()
         for g, _ in geo if wins else ():
@@ -2364,6 +2898,12 @@ class SpellModel:
                 continue
             geom = A.contact_geometry(entries=entries)
             geom['CAUGHT'] = {'lists': [A.caught_list(t, h['atk_row'], h['poise'])], 'wf': h['pvp_damage_total']}
+            adv = A.clip_advance(cat, anim)
+            if adv is not None:
+                # The clip's whole root motion, where he ends for the punish (`attack_advance`).
+                geom['ADV'] = adv
+            # The clip's turn rules, which his facing follows (`er-mechanics-ashes._facing`, version 27).
+            geom['TURN'] = A.clip_turn(cat, anim)
             if h.get('record') is not None:
                 geom['HPR'] = (('slot', 0, (anim, h['record'])), h['priority'], hits.index(h))
             frame = float(geom['T'].min())
@@ -2532,7 +3072,7 @@ class SpellModel:
         slots = MEMORY_SLOTS if slots is None else slots
         weapons = list(weapons) + (self.spell_like_skills(stats) if ash_rivals else [])
         sit = punish_situations(rl)['situations']
-        pairs = [(s['distance'], s['recovery']) for s in sit]
+        pairs = [(s['distance'], s['recovery'], s['run']) for s in sit]
         weight = [s['weight'] for s in sit]
         total = sum(weight)
         dfn = self.defender(rl)
@@ -2556,7 +3096,7 @@ class SpellModel:
         for mid in sorted(casts):
             cat = next(c for c in cats if self.can_cast(mid, c))
             got = self.punish_values(mid, cat, stats, pairs, talismans, left, dfn, two_handed, pvp, strikes,
-                                     casts=casts[mid], looks=looks)
+                                     casts=casts[mid], looks=looks, sprint=sprint_situations(sit))
             if got is None:
                 skipped[self.names[mid]] = 'no bullet flight (reach not modelled)'
                 continue
@@ -2715,6 +3255,10 @@ class CastThreats:
                         worth[(f, n, shot)] = self.worth.get((f, n), 0.0) / k
                 for (unit, _), (pts, air, idx) in sorted(legs.items(), key=lambda x: (str(x[0][0]), x[0][1])):
                     g = A.contact_geometry(bullet_points=sorted(pts), air=air[0])
+                    cue = A.tree_cue(t, entries, idx, start) if g is not None else None
+                    if cue is not None:
+                        # Read from the search launch (`er-mechanics-ashes.burst_cue`).
+                        g['CUE'] = cue
                     if g is not None:
                         # A leg with a homing shot, or one a carrier makes, is read against its shots
                         # flown again after each dodge (`er-mechanics-ashes._homing_touch`), named
@@ -2740,11 +3284,13 @@ class CastThreats:
         self._at[key] = out
         return out
 
-    def outcome(self, A, dist, floor, my_roll, strikes, catches=None, hp=None, poise=None, plan=None):
+    def outcome(self, A, dist, floor, my_roll, strikes, catches=None, hp=None, poise=None, plan=None,
+                run_floor=None):
         """`volley_outcome`, `sequence_outcome` or `dynamic_outcome` at `dist` (`net_parts`' `at`),
         what one cast lands capped at `hp`; an 'aimed' cast's caught defender is played out with
         `poise` (`er-mechanics-ashes.CaughtModel`) when the geometries carry their `CAUGHT`
-        records. `plan` times his first dodge (`er-mechanics-ashes.lookalike_plan`, `Lookalikes`)."""
+        records, his whiff's recovery holding him to `floor` and `run_floor` (`sequence_outcome`).
+        `plan` times his first dodge (`er-mechanics-ashes.lookalike_plan`, `Lookalikes`)."""
         if self.mode == 'dynamic':
             return self.dynamic_outcome(A, dist, floor, my_roll, strikes, hp, plan=plan)
         b = self.bursts(dist)
@@ -2755,7 +3301,7 @@ class CastThreats:
         if key not in self._caught:
             self._caught[key] = A.CaughtModel.of(self._geo.get(key), poise, self.value)
         return A.sequence_outcome(b, dist, floor=floor, my_roll=my_roll, strikes=strikes, run=True, catches=catches,
-                                  caught=self._caught[key], hp=hp, plan=plan)
+                                  caught=self._caught[key], hp=hp, plan=plan, run_floor=run_floor)
 
     def first_oks(self, A, dist, moves):
         """`Lookalikes`' read of this cast at `dist`: per move of `moves`, the escaping starts of
@@ -2922,7 +3468,8 @@ class CastThreats:
         key = round(round(dist / DYNAMIC_DIST_M) * DYNAMIC_DIST_M, 3)
         units = self._units()
         worth = {u: self.worth.get(u[:2], 0.0) / self.fans[u[:2]] for u in units}
-        cap = (lambda v: min(v, hp)) if hp is not None else (lambda v: v)
+        # A number or the pool's [(health, share)] (`er-mechanics-ashes.hp_cap`).
+        cap = (lambda v: A.hp_cap(v, hp)) if hp is not None else (lambda v: v)
         if (key, 'still') not in self._dyn:
             self._dyn[(key, 'still')] = self._touches(key, None)
         still = self._dyn[(key, 'still')]
@@ -2932,8 +3479,9 @@ class CastThreats:
         last = max(float(g['T'].max()) for g in self.geometries(key)) if self.geometries(key) else 0.0
         starts = np.arange(0.0, last + DYNAMIC_STEP, DYNAMIC_STEP)
         moves = A.roll_motion()
+        # Where the cast's root motion leaves the caster for the punish (`er-mechanics-ashes.attack_advance`).
+        advance = A.attack_advance(self.geometries(key))
         strikes = None if strikes is None else np.asarray(strikes, float)
-        value = p_evade = p_punish = 0.0
         # The dodge grid is `DODGE_STEP`; each step reads the start at or before it.
         grid = np.arange(0.0, last + 1.0, A.DODGE_STEP)
         oks = []
@@ -2943,33 +3491,54 @@ class CastThreats:
             rows = self._dyn[(key, k)]
             idx = np.minimum((grid // DYNAMIC_STEP).astype(int), len(rows) - 1)
             oks.append(np.array([not rows[i] for i in idx], bool))
-        planned = plan(moves, oks, 0.0, floor) if plan is not None else None
+        # His first roll is timed from where the first burst that reaches him standing shows its
+        # timing (`er-mechanics-ashes.burst_cue`: a search launch), as `volley_outcome` and
+        # `sequence_outcome` time theirs (version 23; it was frame 0 whatever the burst carried).
+        if (key, 'cue') not in self._dyn:
+            cue = 0.0
+            for gs, _ in self.bursts(key)[0]:
+                if int(A._catches(gs, key, None, [0.0])[0][0]) >= 0:
+                    cue = float(A.burst_cue(gs))
+                    break
+            self._dyn[(key, 'cue')] = cue
+        cue = self._dyn[(key, 'cue')]
+        # Knowing the spell he picks his roll's direction, as `er-mechanics-ashes.dodge_families`
+        # (each direction its own family, timed by its own plan), then stands if that is better.
+        best = None
+        # His first roll decides his punish (the re-rolls follow it), so he aims it for that too
+        # (`er-mechanics-ashes.dodge_presses` `gain`, version 25): the same count as `p_punish`
+        # below (with `run` his strike always comes, `punish_lead`).
+        ordered = None if strikes is None else A._ordered(strikes)
+        punish = A._punish_ctx(ordered, my_roll, True)
         for k, m in enumerate(moves):
+            ready, close, _ = A.punish_lead(m, key, advance, True)
+            gain = A.PressGain.of(m, key, advance, True, ordered, my_roll) if punish else None
+            planned = A._plan_call(plan, [m], [oks[k]], cue, floor, [gain], punish) if plan is not None else None
             rows = self._dyn[(key, k)]
             idx = np.minimum((grid // DYNAMIC_STEP).astype(int), len(rows) - 1)
             ok = oks[k]
-            ready = m['ready'] if m['ready'] is not None else len(m['path'])
-            x, z = m['path'][min(int(ready), len(m['path']) - 1)]
-            gap = math.hypot(x, key + z)
-            close = max(0.0, gap - A.PUNISH_REACH_M) * A._neutral().frames_per_metre()
+            value = p_evade = p_punish = 0.0
+            # His strike's press: the R1 cancel in reach, else the move cancel plus his run in
+            # (`er-mechanics-ashes.punish_lead`).
             arrive = np.sort(strikes + close) if strikes is not None and my_roll is not None and len(strikes) \
                 else None
-            for s, w in (planned[k] if planned is not None else A.dodge_presses(ok, 0.0, floor=floor)):
+            for s, w in (planned[0] if planned is not None else A.dodge_presses(ok, cue, floor=floor, gain=gain)):
                 i = int(round(s / A.DODGE_STEP))
                 got = rows[idx[i]] if 0 <= i < len(idx) else still
-                w /= len(moves)
                 if got:
                     value += w * cap(self._shared(worth, got))
                     continue
                 p_evade += w
                 if arrive is not None:
                     p_punish += w * (int(np.searchsorted(arrive, my_roll - s - ready, side='left')) / len(arrive))
-        if value - p_punish * A.PUNISH_HP > base:
-            # Rolling would leave the caster more than standing does (a re-aimed nail finds the roller
-            # that would have missed him standing): knowing the spell, he stands.
-            return {'value': base, 'base': base, 'p_evade': 0.0, 'p_punish': 0.0, 'punish_hp': 0.0, 'moves': None}
-        return {'value': value, 'base': base, 'p_evade': p_evade, 'p_punish': p_punish,
-                'punish_hp': p_punish * A.PUNISH_HP, 'moves': moves[0]['anim']}
+            o = {'value': value, 'base': base, 'p_evade': p_evade, 'p_punish': p_punish,
+                 'punish_hp': p_punish * A.PUNISH_HP, 'moves': m['anim']}
+            if best is None or o['value'] - o['punish_hp'] < best['value'] - best['punish_hp']:
+                best = o
+        # Rolling may leave the caster more than standing does (a re-aimed nail finds the roller that
+        # would have missed him standing): knowing the spell, he stands then, as in every other
+        # outcome (`er-mechanics-ashes.stand_or`).
+        return A.stand_or(best)
 
     def first_touch(self, A, dist):
         """The real frame the cast first touches a defender `dist` m ahead who does not dodge."""
@@ -2980,15 +3549,19 @@ class CastThreats:
         """(cuts, touch, kept, base): what the defender's strike reads of this cast at `dist`
         (`net_parts`, `StrikeReach` for a plain geometry list): the launches in order between which
         a strike can stop it, its first touch on him standing there or where his run in to
-        `PUNISH_REACH_M` ends, `kept(cut)` what lands on him standing when only the shots launched by
+        `PUNISH_REACH_M` ends, `kept(cut)` what lands on him standing where that touch was timed
+        (`StrikeReach.where`) when only the shots launched by
         `cuts[cut - 1]` fly, and `base` what lands with none stopped, each capped at `hp`. A
         'dynamic' or 'volley' threat lands once, alone, as `dynamic_outcome` and `volley_outcome`
         count it, launched at its event's fire frame or its shot's launch; an 'aimed' or 'static'
         cast is read as a plain list of this distance's geometries (`poise`: the defender's, its
         caught defender's, as `outcome` takes it)."""
-        cap = (lambda v: min(v, hp)) if hp is not None else (lambda v: v)
+        cap = (lambda v: A.hp_cap(v, hp)) if hp is not None else (lambda v: v)
         near = round(min(dist, A.PUNISH_REACH_M), 2)
-        touch = min(self.first_touch(A, dist), self.first_touch(A, near))
+        far, close = self.first_touch(A, dist), self.first_touch(A, near)
+        touch = min(far, close)
+        # What lands is read where that touch was timed (`StrikeReach.where`, version 23).
+        dist = near if close < far else dist
 
         def below(cuts, cut):
             return math.inf if cut is None else (cuts[cut - 1] if cut > 0 else -math.inf)
@@ -3031,7 +3604,8 @@ class CastThreats:
             self._caught[key] = A.CaughtModel.of(geo, poise, self.value)
         cm = self._caught[key]
         reach = StrikeReach(A, geo)
-        price = (lambda h, vk: cm.worth_of(key, h, vk)) if cm is not None else reach.raw_price
+        price = (lambda h, vk, cap_: cm.worth_of(key, h, vk, hp=cap_)) if cm is not None else \
+            (lambda h, vk, cap_: A.hp_cap(reach.raw_price(h, vk), cap_))
         return reach.cuts, touch, lambda cut: reach.kept(key, cut, self.value, price, hp), \
             reach.kept(key, None, self.value, price, hp)
 
@@ -3052,8 +3626,10 @@ def _threat_bursts(geoms):
 MEMORY_SLOTS = 10
 #: Relative gain below which the kit search stops: `er-mechanics-pouch.EPS`.
 KIT_EPS = 1e-6
-#: Bump when `punish_situations` changes what it caches.
-SITUATIONS_VERSION = 3
+#: Bump when `punish_situations` changes what it caches. 4: each situation carries 'run', the
+#: frames to the whiff's move cancel. 5: and 'sprint_wait', the frames a sprint cast still waits
+#: on the dodge-button hold when the window opens (`sprint_situations`).
+SITUATIONS_VERSION = 5
 #: Gaps an attacker may run in to before he presses (`net_values`; `INFERRED`: a 1 m grid from
 #: about body contact out to the pool's mean reach).
 APPROACH_GAPS_M = (1.5, 2.5, 3.5, 4.5)
@@ -3106,15 +3682,17 @@ def punish_situations(rl):
     who runs back on reaction (`er-mechanics-neutral.backoff_whiffs`). A whiff leaves him the real
     frames from the end of its last hit window to its dodge cancel, at the distance the run left
     between them. One situation per distinct (distance, recovery), weighted by builds x family share
-    x reaction quantile; `whiff_share` is the share of the openers that whiff. Cached beside the
-    pool."""
+    x reaction quantile; `whiff_share` is the share of the openers that whiff. Each also carries
+    'sprint_wait', the mean over its whiffs of the frames a sprint cast still waits on its hold when
+    the window opens (`sprint_situations`). Cached beside the pool."""
     EX = _mod('er_mechanics_exchange', 'er-mechanics-exchange.py')
     NEU = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py')
     AT = _mod('er_mechanics_armor_targets', 'er-mechanics-armor-targets.py')
     reg = ATK.Regulation(None)
     raw = EX.opponent_pool(reg, EX.CACHE / 'builds.jsonl', rl - WINDOW, rl + WINDOW)
     stamp = [SITUATIONS_VERSION] + list(raw['stamp'])
-    path = EX.CACHE / f"spell-punish-{rl - WINDOW}-{rl + WINDOW}-{raw['stamp'][-1]}.json"
+    # Named by the version too, so a checkout on another version keeps its own file.
+    path = EX.CACHE / f"spell-punish-v{SITUATIONS_VERSION}-{rl - WINDOW}-{rl + WINDOW}-{raw['stamp'][-1]}.json"
     if path.exists():
         got = json.loads(path.read_text())
         if got.get('stamp') == stamp:
@@ -3125,6 +3703,9 @@ def punish_situations(rl):
     for key, _ in raw['builds']:
         count[key] = count.get(key, 0) + 1
     merged, thrown, whiffed = {}, 0.0, 0.0
+    # Per situation the weighted frames a sprint cast still waits on its hold (`sprint_situations`).
+    waits = {}
+    per_m = NEU.frames_per_metre()
     print(f'spell punish situations: reading {len(count)} pool weapons ({path.name} is stale or missing)',
           file=sys.stderr, flush=True)
     for i, (key, n) in enumerate(sorted(count.items()), 1):
@@ -3139,7 +3720,7 @@ def punish_situations(rl):
         fams = []
         for judges in AT.FAMILY_JUDGES.values():
             got = [r for r in rows if r.get('judge') in {j + off for j in judges} and r.get('hit_windows')
-                   and r['cancel_frame'].get('dodge') is not None]
+                   and r['cancel_frame'].get('dodge') is not None and r['cancel_frame'].get('move') is not None]
             if got:
                 fams.append(got)
         for got in fams:
@@ -3153,17 +3734,58 @@ def punish_situations(rl):
                 start = min(w[0] for w in atk['hit_windows'])
                 end = max(w[1] for w in atk['hit_windows'])
                 gate = atk['cancel_frame']['dodge']
+                # He walks or runs no sooner than the move cancel (the HKS walk starts only
+                # through the move-cancel check, env 2000, `VERIFIED`).
+                walk = max(atk['cancel_frame']['move'], gate)
                 thrown += share
                 for w, whiff, gap in NEU.backoff_whiffs(reach, (start, end)):
                     if not whiff:
                         continue
                     whiffed += share * w
-                    k = (round(gap, 1), round(max(gate - end, 0.0) * 2) / 2)
+                    k = (round(gap, 1), round(max(gate - end, 0.0) * 2) / 2, round(max(walk - end, 0.0) * 2) / 2)
                     merged[k] = merged.get(k, 0.0) + share * w
-    out = {'situations': [{'distance': d, 'recovery': f, 'weight': round(n, 6)}
-                          for (d, f), n in sorted(merged.items())],
+                    # The frames he has been running back when the window opens: the run that took
+                    # him from the opener's reach to `gap` (`backoff_whiffs`, at run speed).
+                    back = max(0.0, gap - reach) * per_m
+                    waits[k] = waits.get(k, 0.0) + share * w * max(0.0, SPRINT_HOLD_FRAMES - back)
+    out = {'situations': [{'distance': d, 'recovery': f, 'run': r, 'weight': round(n, 6),
+                           'sprint_wait': round(waits[(d, f, r)] / n, 3) if n > 0 else SPRINT_HOLD_FRAMES}
+                          for (d, f, r), n in sorted(merged.items())],
            'whiff_share': round(whiffed / thrown, 6) if thrown else 0.0}
     path.write_text(json.dumps({'stamp': stamp, 'spaced': out}))
+    return out
+
+
+def sprint_situations(situations):
+    """The punish situations of a cast pressed while sprinting (the 'dash' variant, `DASH`), in
+    `net_parts`' (distance, floor, move floor) form. The sprint starts `SPRINT_HOLD_FRAMES` after
+    the dodge button goes down. The caster may press it while he is still running back from the
+    opener (`backoff_whiffs`). A hold shorter than that leaves his run as it was, and a longer one
+    would turn the run into a sprint away. So he presses it `SPRINT_HOLD_FRAMES` before the window
+    opens, or at the start of his run back if that came later. When the window opens he still waits
+    a situation's 'sprint_wait' frames: the mean over its whiffs of `SPRINT_HOLD_FRAMES` less his
+    run back, 0 where the run back was longer. He spends them running in at run speed, as the
+    run-ins do (`INFERRED`: the sprint needs the stick tilted, and toward the defender is the way
+    the cast goes). The press then comes `sprint_wait` frames into the window,
+    `sprint_wait / frames_per_metre` closer, and the defender's two floors are that much shorter.
+    Each run-in of `APPROACH_GAPS_M` short of that is then the run-in it was, with its frames
+    measured from the window. A run-in shorter than the wait is not offered: he cannot press
+    sooner. It is all run at run speed, so the frames he sprints after the hold come out slower
+    than they are (`INFERRED`: sprint is 6.04 m/s against 4.01, `er-mechanics-neutral.locomotion`).
+    The distance is rounded to 0.1 m, the situations' own grid (`punish_situations`), so a dash
+    reads the distances every other attack reads and no new ones (`INFERRED`: 0.05 m is 0.4 frames
+    of the run). Each entry of `situations` is a `punish_situations` situation, or a (distance,
+    floor[, move floor]) tuple, which waits the whole hold (no run back is known)."""
+    per_m = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py').frames_per_metre()
+    out = []
+    for s in situations:
+        if isinstance(s, dict):
+            d, f, r, w = s['distance'], s['recovery'], s['run'], s.get('sprint_wait', SPRINT_HOLD_FRAMES)
+        else:
+            d, f = s[0], s[1]
+            r = s[2] if len(s) > 2 else f
+            w = SPRINT_HOLD_FRAMES
+        out.append((max(0.0, round(d - w / per_m, 1)), max(0.0, f - w), max(0.0, r - w)))
     return out
 
 
@@ -3218,18 +3840,19 @@ def skill_lookalikes(A, hold, tap, later=(), shows=None):
     if hold is None or hold.get('why') or first is None:
         return None
     members, at, weights = {'hold': hold['geo'], 'tap': tap['geo']}, {'tap': first + shows[0]}, {'hold': 1.0, 'tap': 1.0}
+    rolls = {'hold': hold.get('roll'), 'tap': tap.get('roll')}
     for (x, w), s in zip(later, shows[1:]):
         p = press(x)
         if p is None:
             continue
         k = f'tap+{round(p - first, 3):g}'
-        members[k], at[k], weights[k] = x['geo'], p + s, float(w)
+        members[k], at[k], weights[k], rolls[k] = x['geo'], p + s, float(w), x.get('roll')
         weights['tap'] -= float(w)
     keys = list(at)
     splits = {('hold', k): at[k] for k in keys}
     splits.update({(a, b): min(at[a], at[b]) for i, a in enumerate(keys) for b in keys[i + 1:]})
     # Spread over its window, each release is one he reacts to as it shows (`release_events`).
-    return Lookalikes(A, members, splits, weights, dict(at) if len(keys) > 1 else None)
+    return Lookalikes(A, members, splits, weights, dict(at) if len(keys) > 1 else None, rolls)
 
 
 def _geo_digest(attack):
@@ -3289,9 +3912,16 @@ class Lookalikes:
     (`first_oks`), the attack's own handed in by the outcome (so a free-aimed alternative brings
     its own), and `er-mechanics-ashes.lookalike_plan` between them. `events` {key: real frame it
     releases} are the releases he reacts to as they come (`lookalike_plan` `events`; None, or a
-    key left out, none)."""
+    key left out, none).
 
-    def __init__(self, A, members, splits, weights=None, events=None):
+    `rolls` {key: the attacker's roll frame after it} (version 25): with them, when the outcome
+    counts his punish on the burst the plan times (`er-mechanics-ashes.reaction_outcome`
+    `aim_punish`), each member whose first reaching burst is also its last gains him its own punish
+    from an escaping press (`er-mechanics-ashes.PressGain`, from its own roll frame and root motion),
+    as the attack's own does; a member without a roll, or one with a later reaching burst, adds its
+    escape alone (`lookalike_plan` `gains`)."""
+
+    def __init__(self, A, members, splits, weights=None, events=None, rolls=None):
         self.A = A
         self.members = dict(members)
         self.keys = list(self.members)
@@ -3299,7 +3929,9 @@ class Lookalikes:
                         for b in self.keys] for a in self.keys]
         self.weights = [1.0 if weights is None else float(weights[k]) for k in self.keys]
         self.events = None if not events else [events.get(k) for k in self.keys]
+        self.rolls = [None if not rolls else rolls.get(k) for k in self.keys]
         self._oks, self._memo, self.chosen, self._digest, self._reads = {}, {}, {}, {}, {}
+        self._punish = {}
         self._content = False
 
     def __len__(self):
@@ -3337,9 +3969,32 @@ class Lookalikes:
             cache[fk] = (got, None if got is None else _oks_tag(got))
         return cache[fk]
 
-    def plan(self, key, dist, moves, oks, cue, floor):
+    def punish_of(self, key, dist):
+        """(the attacker's root motion over member `key`, `er-mechanics-ashes.attack_advance`;
+        whether its first burst that reaches him standing at `dist` is its last, so the dodge the plan
+        times decides his punish against it), kept per distance: what its `PressGain` reads."""
+        pk = (key, round(dist, 2))
+        if pk not in self._punish:
+            A, x = self.A, self.members[key]
+            if isinstance(x, CastThreats):
+                geoms = x.geometries(dist)
+                # A dynamic cast's first roll decides his punish (`dynamic_outcome`); the others
+                # are read as the bursts `outcome` meets.
+                bursts = [] if x.mode == 'dynamic' else [gs for gs, _ in (x.bursts(dist)[0] if x.mode == 'volley'
+                                                                           else x.bursts(dist))]
+            else:
+                geoms = [g for g, _ in x]
+                bursts = [gs for gs, _ in _bursts(x, {})]
+            reach = [bi for bi, gs in enumerate(bursts)
+                     if any(g is not None for g in gs) and A._catches(gs, dist, None, [0.0])[0][0] >= 0]
+            self._punish[pk] = (A.attack_advance(geoms), len(reach) <= 1)
+        return self._punish[pk]
+
+    def plan(self, key, dist, moves, oks, cue, floor, gains=None, punish=None):
         """`lookalike_plan`'s presses for member `key` at `dist`, its own escaping starts `oks`.
-        One memo per distance and family serves every member and floor (`lookalike_plan` `tags`)."""
+        One memo per distance and family serves every member and floor (`lookalike_plan` `tags`).
+        `gains` and `punish` as `er-mechanics-ashes.reaction_outcome` hands them (its own gains, and
+        what the others' are made from, `rolls`)."""
         me = self.keys.index(key)
         family = tuple(m['anim'] for m in moves)
         # The other members' reads and the memo at this distance and family are what every call of
@@ -3356,8 +4011,22 @@ class Lookalikes:
         tag = _oks_tag(oks)
         every = [oks if j == me else g[0] for j, g in enumerate(others)]
         tags = [tag if j == me else g[1] for j, g in enumerate(others)]
+        gl = None
+        if punish is not None:
+            ordered, run = punish
+            gl = []
+            for j, k in enumerate(self.keys):
+                if j == me:
+                    gl.append(gains)
+                    continue
+                if every[j] is None or self.rolls[j] is None:
+                    gl.append(None)
+                    continue
+                adv, single = self.punish_of(k, dist)
+                gl.append([self.A.PressGain.of(m, dist, adv, run, ordered, self.rolls[j]) for m in moves]
+                          if single else None)
         got = self.A.lookalike_plan(every, self.weights, self.splits, me, cue, floor, tags=tags, memo=memo,
-                                    events=self.events)
+                                    events=self.events, gains=gl)
         # When he decided, for the reports: the cue (he committed) or a split (he waited for it).
         self.chosen[(key, round(dist, 2), floor, family)] = got['at']
         return got['presses']
@@ -3375,7 +4044,8 @@ class _Lookalike:
 
     def plan(self, dist):
         group, key = self.group, self.key
-        return lambda moves, oks, cue, floor: group.plan(key, dist, moves, oks, cue, floor)
+        return lambda moves, oks, cue, floor, gains=None, punish=None: group.plan(key, dist, moves, oks, cue, floor,
+                                                                                  gains, punish)
 
 
 def release_key(key, member, first=False):
@@ -3404,6 +4074,14 @@ def release_events(sm, casts):
     return out
 
 
+def known_at_once(keys, splits):
+    """The members of a group of `keys` that a defender tells apart from every other one at the
+    press (`splits` {(a, b): `SpellModel.look_split`} at 0: a quick cast, `QUICK_CLIPS`, against
+    the casts through 045000). Each is read alone, as a cast alone in its group, and the others
+    without it."""
+    return {k for k in keys if all(s <= 0.0 for p, s in splits.items() if k in p)} if len(keys) > 1 else set()
+
+
 def spell_lookalikes(sm, A, casts):
     """{key: `Lookalikes` member view, or None} for the casts `casts` ({key: {'mid', 'anim' (its
     release clip), 'hand' (its hand-off frame), 'attack' (what `net_parts` scores), and from
@@ -3411,8 +4089,9 @@ def spell_lookalikes(sm, A, casts):
     (`Magic.refType`, `castSfxId`) are one group (`look_split` says when each pair parts), the casts
     weighted equally. A cast's release members (`cast_inputs` 'members': the same tap let go later)
     are members of the group too, keyed by `release_key`, the cast's weight split over them by
-    their 'weight' (`er-mechanics-ashes.release_frames`). A cast alone in its group gets None, which
-    leaves `net_parts` exactly as it was. `INFERRED`: equal `castSfxId` SFX look the same and a
+    their 'weight' (`er-mechanics-ashes.release_frames`). A cast alone in its group, or told from
+    every other one at the press (`known_at_once`), gets None, which leaves `net_parts` exactly as
+    it was. `INFERRED`: equal `castSfxId` SFX look the same and a
     different one is told apart from the first frame (only the ids are read)."""
     flat = {}
     for k, c in casts.items():
@@ -3425,18 +4104,572 @@ def spell_lookalikes(sm, A, casts):
         by.setdefault((m['refType'], m['castSfxId']), []).append(k)
     out = {}
     for keys in by.values():
-        if len(keys) < 2:
-            out[keys[0]] = None
-            continue
         splits = {(a, b): sm.look_split(flat[a], flat[b]) for i, a in enumerate(keys) for b in keys[i + 1:]}
+        # A cast he tells from every other at the press (a quick cast, `QUICK_CLIPS`) is alone.
+        alone = known_at_once(keys, splits)
+        for k in alone:
+            out[k] = None
+        keys = [k for k in keys if k not in alone]
+        splits = {p: s for p, s in splits.items() if not set(p) & alone}
+        if len(keys) < 2:
+            for k in keys:
+                out[k] = None
+            continue
         # A release spread over its window: every release of the group is one he reacts to as it
         # comes (`release_events`).
         group = Lookalikes(A, {k: flat[k]['attack'] for k in keys}, splits,
                            {k: float(flat[k].get('weight', 1.0)) for k in keys},
-                           release_events(sm, {k: flat[k] for k in keys}))
+                           release_events(sm, {k: flat[k] for k in keys}), {k: flat[k].get('roll') for k in keys})
         for k in keys:
             out[k] = group.member(k)
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# status build-up on a caught defender (attack-similarity version 30)
+#
+# A hit list of a geometry's `CAUGHT` record may carry 'hits' (the hits a defender who takes the
+# list whole takes: its instances x its ticks, the count its worth prices) and 'status', {status
+# name: {'b' (the int build-up one of its hits puts on the gauge, `er-mechanics-status.hit_buildup`'s
+# reading with the defender's own *DefDamageRate at 1, its default), 'group' (the resistance group
+# the gauge starts at, `er-mechanics-status.STATUSES`), 'row' (the proc row,
+# `er-mechanics-status.proc_row_for`), 'rate' and 'point' (its `changeHpRate` and `changeHpPoint`),
+# 'ticks' (proc ticks credited, `er-mechanics-status.proc_effect`'s, a damage over time cut at
+# `er-mechanics-status.BATTLE_SECONDS` as `er-mechanics-ash-table.Table.buildup_hp` cuts it), 'lock'
+# (its `effectEndurance`, s), 'recover' (`PlayerCommonParam.resistRecoverPoint_<s>_Player`, per s)}}.
+# attack-similarity's `annotate_status` fills them; nothing here reads the regulation.
+#
+# Per play of a caught defender (`er-mechanics-ashes.CaughtModel`'s runs: per run of pool poises, the
+# share of each list's hits that land) the build-up landed is the landed share of each list's hits
+# times its per-hit build-up, summed over the lists (`play_buildup`), less what the gauge refills
+# over the play: `recover` x the longest span of one list's landed ticks (`INFERRED`: the lists of
+# one play land together, a list's ticks `rec` frames apart; `FUN_14043ea30`'s refill per second is
+# `VERIFIED`, `er-mechanics-status.hits_to_proc`). A pool build procs when that empties his gauge,
+# which starts at his own resistance (`SpellModel.defender` `status_pool`) and procs when it drops
+# under 1 (`FUN_14043de90`, `er-mechanics-status` module doc), and then takes the proc row's HP at his
+# own max HP (`er-mechanics-status.proc_effect`: maxHP x `changeHpRate` / 100 + `changeHpPoint` per
+# tick). A further proc needs the gauge emptied again from full (`FUN_14043de90` refills it on a
+# proc) and no live proc of the status (`er-mechanics-status.EXCLUSIVE_CATEGORY_MIN`): counted as
+# one more per full resistance of build-up left, at most one per `lock` seconds of the span
+# (`INFERRED`: the build-up refused while a proc is live is not taken off). The proc's HP is added to
+# what the catch lands before the cap at his health (`er-mechanics-ashes.hp_cap`'s rule).
+#
+# The stun of a bleed or frost proc (version 32). HKS `ExecDamage` raises a hit whose own reaction is
+# level 0 (poise held, hyperarmor included) to `DAMAGE_LEVEL_SMALL` when the bleed or frost clear-flag
+# bit is set (`COMMUNITY`, the installed `c0000.hks` constants; `er-mechanics-proc-opening`, which
+# names the statuses and the exemptions: SpEffect 6340, 1650 or 1851 on him, or Seppuku), so the
+# proc holds a caught defender whose poise held in the small stagger's clips: a roll from frame 10
+# (7 / 4 / 0 for the 2nd to 4th stagger in a row), counted toward DamageCount (`er-mechanics-ashes.
+# stun_branch`, `measured` from the TAE). A hit that already staggers keeps its own level. The play
+# reads it as it reads any stagger (`CaughtModel._play`): his escape waits for the clip's cancel, the
+# later hits land on him held there, and every stage that plays the caught defender (`net_parts`,
+# attack-similarity's `OutcomeForm`, `FollowupForm` and land shares) reads the same plays. The proc
+# moment is the running gauge (`er-mechanics-proc-opening.first_proc`'s rule, `FUN_14043de90`): each
+# landed tick takes its build-up, the gauge refilling `recover` a second since the last tick of that
+# status (`FUN_14043ea30`), and it procs when what is taken reaches his resistance less 1; a proc
+# refills the gauge, and while one is live (`lock` seconds) the status builds nothing. The HP above
+# keeps its own reading of the whole play, so the two can differ near a threshold (`INFERRED`: the HP
+# formula is the older one, kept). A play therefore depends on his resistance as well as his poise:
+# per pool build of (poise, robustness) the play is read once per box of poises and resistances that
+# play alike (`StatusCaught._stun_best`). Bleed and frost share the robustness gauge's starting value
+# (`er-mechanics-status.STATUSES`), each with its own gauge.
+#
+# Every catch starts each gauge full, nothing carried from an earlier exchange (`play_buildup` and the
+# stun's `gauges` start at 0 taken): the defender who uses his bolus whenever he has room between
+# exchanges. A bolus refills its status's gauge (Stanching 910 -> SpEffect 3050 -> 3051 stateInfo 6
+# `bloodAttackPower` -99999; Thawfrost 920 -> 3092 -> 3093 stateInfo 260 `freezeAttackPower` -99999;
+# `er-mechanics-status.boluses`, `VERIFIED` regulation and `FUN_14043de90`'s clamp). It cannot cut
+# the stun short: the small stagger's clips open the goods input at frame 12 (`er-mechanics-status.
+# goods_ready(1)`, `TAE`), after their roll cancel at 10, and the cure lands 31 frames after the
+# press (`cure_frame`), so the 10-frame hold stands (`INFERRED` that the behavior script honors the
+# clip's goods window, the reading `goods_ready` already takes; `ExecItem` was not traced).
+#
+# Not priced: the HP the proc loses when it ticks while his roll's i-frames are on (`FUN_1404fb920`
+# zeroes it, `VERIFIED`; whether the tick comes before the stagger ends them is not settled, so the
+# HP stays whole, `INFERRED`), frost's 1.2x damage taken for 30 s on the hits after it (the caught
+# model prices a hit by its frame's worth and has no damage-taken multiplier to read), a network
+# delay on the stun's escape (the caught model adds none to any stagger), sleep and madness's forced
+# clips, death blight's kill by state (its row's 0 HP does not carry it), a carrier's bolus (one
+# engagement: `er-mechanics-status.status_expected` cures between engagements), and a catch by the
+# old rule (a geometry with no `CAUGHT` record: no hit counts are known there).
+
+#: What a catch that lands no damage and no proc is worth to `StatusCaught`, HP: a status-only
+#: attack's touching burst keeps a worth above 0, which the burst chain reads as a touch
+#: (`er-mechanics-ashes.dodge_chain`, attack-similarity's `OutcomeForm`). It prices nothing.
+STATUS_WORTH_FLOOR = 1e-9
+
+
+def has_status(geo):
+    """Whether a hit list of `geo` ([(geometry, frame)]) carries status build-up."""
+    return any(l.get('status') for g, _ in geo or () if g is not None and 'CAUGHT' in g
+               for l in g['CAUGHT']['lists'])
+
+
+def status_lists(geoms):
+    """Per geometry of `geoms` (in `CaughtModel` order), per list: (hits, `rec` frames, ticks,
+    'status' or {})."""
+    return [[(float(l.get('hits', l['n'])), float(l['rec']), float(l['n']), l.get('status') or {})
+             for l in g['CAUGHT']['lists']] for g in geoms]
+
+
+def play_buildup(rows, lists, floor=None, live=None):
+    """{status: (build-up landed less the refill, the span in seconds, the first list's constants)}
+    of one play: `rows` [per geometry: [per list: share of its hits that land]] over `lists`
+    (`status_lists`), the geometries `live` says are not (per geometry, None: all; a geometry an
+    interrupted attack never launches, `StrikeReach.kept`, is not). None when nothing builds, or
+    (with `floor`, {group: least resistance}) when no build-up reaches the least resistance of its
+    group, so no pool build procs."""
+    tot, span, const = {}, {}, {}
+    for gi, (row, ls) in enumerate(zip(rows, lists)):
+        if live is not None and not live[gi]:
+            continue
+        for r, (hits, rec, n, st) in zip(row, ls):
+            if not st or r <= 0:
+                continue
+            for s, d in st.items():
+                tot[s] = tot.get(s, 0.0) + r * hits * d['b']
+                span[s] = max(span.get(s, 0.0), max(0.0, r * n - 1.0) * rec)
+                const.setdefault(s, d)
+    if not tot:
+        return None
+    out = {s: (tot[s] - const[s]['recover'] * span[s] / FPS, span[s] / FPS, const[s]) for s in tot}
+    if floor is not None and all(b <= floor[d['group']] - 1.0 for b, _, d in out.values()):
+        return None
+    return out
+
+
+class StatusPool:
+    """`SpellModel.defender`'s `status_pool` per pool poise: (max HP, share of the whole pool,
+    {group: resistance}) as arrays, and each group's least resistance (`floor`)."""
+
+    def __init__(self, status_pool):
+        total = float(sum(e[1] for e in status_pool if e[1] > 0))
+        by = {}
+        for p, w, c, res in status_pool:
+            if w > 0:
+                by.setdefault(float(p), []).append((float(c), float(w) / total, res))
+        self.by = {p: (np.array([e[0] for e in es]), np.array([e[1] for e in es]),
+                       {g: np.array([float(e[2].get(g, 0.0)) for e in es]) for g in STATUS_GROUPS})
+                   for p, es in by.items()}
+        self.floor = {g: min(float(v[2][g].min()) for v in self.by.values()) for g in STATUS_GROUPS}
+
+    @staticmethod
+    def procs(C, R, built):
+        """Per pool build of max HP `C` and resistances `R` ({group: array}), the proc HP of the
+        build-up `built` (`play_buildup`)."""
+        out = np.zeros(len(C))
+        for b, el, d in built.values():
+            res = np.maximum(R[d['group']], 1.0)
+            first = b > res - 1.0
+            if not first.any():
+                continue
+            more = np.floor(np.maximum(b - res, 0.0) / res)
+            if d['lock'] > 0:
+                more = np.minimum(more, math.floor(el / d['lock']))
+            out += np.where(first, 1.0 + more, 0.0) * (C * d['rate'] / 100.0 + d['point']) * d['ticks']
+        return out
+
+    def worth(self, x, built, ps, hp=None, pooled=False):
+        """What a catch landing damage `x` and the build-up `built` leaves on the pool builds of
+        poises `ps`, each weighed by his share of the pool: his proc HP added, then capped at his
+        own max HP (`pooled`), else at `hp` (`er-mechanics-ashes.hp_cap`: None, a number or
+        [(health, share)])."""
+        tot = 0.0
+        for p in ps:
+            C, Wt, R = self.by[p]
+            got = x + self.procs(C, R, built)
+            if pooled:
+                tot += float(np.sum(Wt * np.minimum(got, C)))
+            elif hp is None:
+                tot += float(np.sum(Wt * got))
+            elif not isinstance(hp, (list, tuple)):
+                tot += float(np.sum(Wt * np.minimum(got, hp)))
+            else:
+                tot += float(sum(w * np.sum(Wt * np.minimum(got, c)) for c, w in hp))
+        return tot
+
+    def classes(self, group):
+        """[(poise, resistance of `group`, the indices of the builds of that poise holding it)],
+        sorted: the pool builds a stun play tells apart (`StatusCaught._stun_best`). Kept."""
+        memo = self.__dict__.setdefault('_classes', {})
+        if group not in memo:
+            out = []
+            for p in sorted(self.by):
+                R = self.by[p][2][group]
+                for r in np.unique(R):
+                    out.append((p, float(r), np.nonzero(R == r)[0]))
+            memo[group] = out
+        return memo[group]
+
+
+class StunRun:
+    """The pool builds one stun play holds (`StatusCaught._stun_best`): `ks` their classes
+    (`StatusPool.classes` indices), and per build its max HP `C`, share of the whole pool `W`,
+    resistances `R` ({group: array}) and class `cls`."""
+
+    def __init__(self, pool, classes, ks):
+        parts = [(classes[k][0], classes[k][2], k) for k in ks]
+        self.ks = list(ks)
+        self.C = np.concatenate([pool.by[p][0][ix] for p, ix, _ in parts])
+        self.W = np.concatenate([pool.by[p][1][ix] for p, ix, _ in parts])
+        self.R = {g: np.concatenate([pool.by[p][2][g][ix] for p, ix, _ in parts]) for g in STATUS_GROUPS}
+        self.cls = np.concatenate([np.full(len(ix), k) for _, ix, k in parts])
+
+    def values(self, x, built, hp=None, pooled=False):
+        """Per build, its share times what a catch landing `x` and the build-up `built` leaves on it:
+        `StatusPool.worth`'s terms."""
+        got = x + StatusPool.procs(self.C, self.R, built) if built is not None else np.full(len(self.C), float(x))
+        if pooled:
+            v = np.minimum(got, self.C)
+        elif hp is None:
+            v = got
+        elif not isinstance(hp, (list, tuple)):
+            v = np.minimum(got, hp)
+        else:
+            v = sum(w * np.minimum(got, c) for c, w in hp)
+        return self.W * v
+
+
+_STATUS_POOLS = {}
+
+
+def status_pool_of(status_pool):
+    """The `StatusPool` of `status_pool`, made once per list."""
+    key = id(status_pool)
+    got = _STATUS_POOLS.get(key)
+    if got is None or got[0] is not status_pool:
+        got = _STATUS_POOLS[key] = (status_pool, StatusPool(status_pool))
+    return got[1]
+
+
+_STATUS_CAUGHT = {}
+#: `StatusCaught.runs`' default: the model's own geometries' stun.
+_OWN_STUN = object()
+
+
+def proc_opening():
+    """`er-mechanics-proc-opening`, which names the statuses whose proc stuns and when it does not
+    (`PROMOTE`, `proc_reaction`, `promotion_exempt`)."""
+    return _mod('er_mechanics_proc_opening', 'er-mechanics-proc-opening.py')
+
+
+def _status_caught_class(A):
+    """`StatusCaught` over `A.CaughtModel`, made once per ashes module."""
+    if id(A) in _STATUS_CAUGHT:
+        return _STATUS_CAUGHT[id(A)]
+
+    class StatusCaught(A.CaughtModel):
+        """`er-mechanics-ashes.CaughtModel` with each play's status build-up priced (the comment
+        above `STATUS_WORTH_FLOOR`): per pool build its proc HP, added before his health's cap. A
+        play that builds nothing reaching the least resistance is the plain model's number,
+        computed by its own expressions."""
+
+        def __init__(self, geo, poise, value=None, status_pool=None, speffects=()):
+            super().__init__(geo, poise, value)
+            self.spool = status_pool_of(status_pool)
+            self._slists = {}
+            # The SpEffects on the pool's defenders that skip the stun (`er-mechanics-proc-opening.
+            # promotion_exempt`): none on a defender whiffing an attack (`inferred`: Stamp stance,
+            # Endure and Oath of Vengeance are his own skills' effects, not a whiff's).
+            self.speffects = tuple(speffects)
+            self._stun_sigs = {}
+            self._stun_landed = {}
+
+        def stun_sig(self, geo=None):
+            """What the stun plays read of `geo` (another build's geometries on the same shapes) or
+            this one's, kept per `geo`: (the resistance group, per geometry in `_bursts` order, per
+            list, ((status, build-up one tick takes, `recover`, `lock`), ...) of bleed and frost). None
+            when no proc can stun: no bleed or frost, every status's build-up over the whole attack
+            under the least resistance of its group, a model whose every catch lands at once
+            (`trivial`), or no small-stagger clips. None plays the model of version 31."""
+            key = id(geo)
+            got = self._stun_sigs.get(key)
+            if got is None or got[0] is not geo:
+                got = self._stun_sigs[key] = (geo, self._stun_sig_of(self.status_lists(geo)))
+            return got[1]
+
+        def _stun_sig_of(self, lists):
+            if self.trivial or A.stun_branch() is None:
+                return None
+            promote = proc_opening().PROMOTE
+            sig, tot, groups = [], {}, set()
+            for ls in lists:
+                row = []
+                for hits, rec, n, st in ls:
+                    e = tuple(sorted((s, hits / n * float(d['b']), float(d['recover']), float(d['lock']))
+                                     for s, d in st.items() if s in promote and d['b'] > 0))
+                    for s, b, _, _ in e:
+                        tot[s] = tot.get(s, 0.0) + b * n
+                        groups.add(st[s]['group'])
+                    row.append(e)
+                sig.append(tuple(row))
+            if not tot or len(groups) != 1:
+                return None
+            group = groups.pop()
+            if all(b <= self.spool.floor[group] - 1.0 for b in tot.values()):
+                return None
+            return group, tuple(sig)
+
+        def runs(self, dist, h, held=None, stun=_OWN_STUN):
+            """`CaughtModel.runs`, its plays read with the stun of a bleed or frost proc when `stun`
+            (`stun_sig`, default this model's own) gives one: then each run's third entry is its
+            `StunRun`, not its poises."""
+            stun = self.stun_sig() if stun is _OWN_STUN else stun
+            if not stun:
+                return super().runs(dist, h, held)
+            key = round(dist, 2)
+            rows = self._stun_landed.setdefault((key, held, stun), {})
+            if h not in rows:
+                rows[h] = self._stun_best(h, key, held, stun)
+            return rows[h]
+
+        def _stun_best(self, h, dist, held, stun):
+            """`runs`' plays with the stun: per class of pool builds (`StatusPool.classes`: a poise and
+            a resistance), the box of poises and resistances its play holds alike (`_best_at`'s
+            poise span and the stun's resistance span) is read once, and every later class inside
+            a box read already shares its play. [(row, share, `StunRun`, every escape's (first
+            escape start, score, row))], one per box."""
+            group, sig = stun
+            classes = self.spool.classes(group)
+            boxes = []
+            self._drawn = {}
+            try:
+                for k, (p, r, _) in enumerate(classes):
+                    for b in boxes:
+                        if b[0] < p <= b[1] and b[2] <= r < b[3]:
+                            b[5].append(k)
+                            break
+                    else:
+                        spec = self._stun_spec(sig, r)
+                        got, lo, hi, alls = self._best_at(h, dist, held, p, spec)
+                        boxes.append([lo, hi, spec['rb'][0], spec['rb'][1], (got, alls), [k]])
+            finally:
+                self._drawn = None
+            out = []
+            for _, _, _, _, (got, alls), ks in boxes:
+                run = StunRun(self.spool, classes, ks)
+                out.append((got, float(run.W.sum()), run, alls))
+            return out
+
+        def _stun_spec(self, sig, r):
+            """The `stun` `_play` takes for a defender of resistance `r` (the comment above
+            `STATUS_WORTH_FLOOR`): per landing, each bleed and frost gauge takes the ticks' build-up,
+            and a proc on a hit whose own branch is level 0 plays `er-mechanics-ashes.stun_branch`.
+            'rb' [lo, hi) is narrowed to the resistances every proc and no-proc of the play holds
+            for (a proc at taken D: r < D + 1)."""
+            PO = proc_opening()
+            branch = A.stun_branch()
+            exempt = PO.promotion_exempt(self.speffects)
+            rb = [-math.inf, math.inf]
+
+            def land(gauges, g, lis, T, br, l):
+                add = {}
+                for li in lis:
+                    for s, b, rec, lock in sig[g][li]:
+                        x = add.get(s)
+                        add[s] = (b, rec, lock) if x is None else (x[0] + b, rec, lock)
+                stun = False
+                for s, (b, rec, lock) in sorted(add.items()):
+                    dep, last, at = gauges.get(s, (0.0, T, None))
+                    dep = max(0.0, dep - rec * (T - last) / FPS)
+                    if at is not None and T - at < lock * FPS:
+                        # A proc of this status is live: the gauge takes nothing (`INFERRED`, as the HP).
+                        gauges[s] = (dep, T, at)
+                        continue
+                    taken = dep + b
+                    if r < taken + 1.0:
+                        rb[1] = min(rb[1], taken + 1.0)
+                        gauges[s] = (0.0, T, T)
+                        stun = stun or (not br['locks'] and br['level'] == 0
+                                        and PO.proc_reaction(s, 0, exempt) is not None)
+                    else:
+                        rb[0] = max(rb[0], taken + 1.0)
+                        gauges[s] = (taken, T, at)
+                return branch if stun else br
+            return {'land': land, 'rb': rb}
+
+        def status_lists(self, geo=None):
+            """`status_lists` of `geo` (another build's geometries on the same shapes) or this one's,
+            in `_bursts` order, cached as `weights` is."""
+            key = id(geo)
+            if key not in self._slists:
+                gs = self.geoms if geo is None else [g for g, _ in sorted(geo, key=lambda e: e[0]['T'].min())]
+                self._slists[key] = (geo, status_lists(gs))
+            return self._slists[key][1]
+
+        def worth_of(self, dist, h, value=None, geo=None, floors=None, hp=None, dodge=None):
+            """`CaughtModel.worth_of` with each play's proc HP (the class doc)."""
+            own = value is None and geo is None
+            held = self.dodge_key(*dodge) if dodge is not None else self.held(dist, h, floors)
+            capk = None if hp is None else ('pool' if self.pool_hp else
+                                            (tuple(map(tuple, hp)) if isinstance(hp, (list, tuple)) else float(hp)))
+            key = (round(dist, 2), h, held, capk)
+            if own and key in self._wmemo:
+                return self._wmemo[key]
+            value = self.value if value is None else value
+            weights = self.weights(geo)
+            lists = self.status_lists(geo)
+            # A geometry whose frame `value` leaves out is not launched (`StrikeReach.kept`).
+            live = [f in value for f in self.frames]
+            stun = self.stun_sig(geo)
+            s = 0.0
+            for rows, w_run, ps, _ in self.runs(dist, h, held, stun):
+                x = 0.0
+                for g, ws in enumerate(weights):
+                    v = value.get(self.frames[g], 0.0)
+                    for li, w in enumerate(ws):
+                        x += rows[g][li] * w * v
+                built = play_buildup(rows, lists, self.spool.floor, live)
+                if stun:
+                    s += float(ps.values(x, built, hp, bool(self.pool_hp) and hp is not None).sum())
+                elif built is not None:
+                    s += self.spool.worth(x, built, ps, hp, bool(self.pool_hp) and hp is not None)
+                elif hp is None:
+                    s += w_run * x
+                elif self.pool_hp:
+                    s += sum(w * min(x, c) for p in ps for c, w in self.pool_hp[p])
+                else:
+                    s += w_run * A.hp_cap(x, hp)
+            # A catch that lands no damage and no proc (a status-only list short of every gauge).
+            if s <= 0.0:
+                s = STATUS_WORTH_FLOOR
+            if own:
+                self._wmemo[key] = s
+            return s
+
+        def _escape_table(self, dist, h, value, geo, held, hp):
+            """`CaughtModel._escape_table` with each play's proc HP (the class doc)."""
+            weights = self.weights(geo)
+            lists = self.status_lists(geo)
+            stun = self.stun_sig(geo)
+            if stun:
+                return self._stun_escape_table(dist, h, value, held, hp, weights, lists, stun)
+            runs = self.runs(dist, h, held)
+            E = len(runs[0][3])
+            P = len(self.pool)
+            TE, S_, C = np.full((P, E), math.inf), np.zeros((P, E)), np.zeros((P, E))
+            at = {p: i for i, (p, _) in enumerate(self.pool)}
+            live = [f in value for f in self.frames]
+            for _, _, ps, alls in runs:
+                for e, (te, score, rows) in enumerate(alls):
+                    x = 0.0
+                    for g, ws in enumerate(weights):
+                        v = value.get(self.frames[g], 0.0)
+                        for li, w in enumerate(ws):
+                            x += rows[g][li] * w * v
+                    built = play_buildup(rows, lists, self.spool.floor, live)
+                    for p in ps:
+                        i = at[p]
+                        wp = self.pool[i][1]
+                        TE[i, e], S_[i, e] = te, score
+                        if built is not None:
+                            C[i, e] = self.spool.worth(x, built, [p], hp, bool(self.pool_hp) and hp is not None)
+                        elif hp is None:
+                            C[i, e] = wp * x
+                        elif self.pool_hp:
+                            C[i, e] = self._cap_sum(p, x)
+                        else:
+                            C[i, e] = wp * A.hp_cap(x, hp)
+            return TE, S_, C
+
+        def _stun_escape_table(self, dist, h, value, held, hp, weights, lists, stun):
+            """`_escape_table` of a stun model: one row per class of pool builds
+            (`StatusPool.classes`, the same rows for every `geo` and delay, which
+            `er-mechanics-ashes.FollowupModel._stand_values` stacks), each the escape its box's play
+            gives it and what lands on its builds, times their shares."""
+            classes = self.spool.classes(stun[0])
+            runs = self.runs(dist, h, held, stun)
+            E = len(runs[0][3])
+            K = len(classes)
+            TE, S_, C = np.full((K, E), math.inf), np.zeros((K, E)), np.zeros((K, E))
+            live = [f in value for f in self.frames]
+            pooled = bool(self.pool_hp) and hp is not None
+            for _, _, run, alls in runs:
+                ks = run.ks
+                for e, (te, score, rows) in enumerate(alls):
+                    x = 0.0
+                    for g, ws in enumerate(weights):
+                        v = value.get(self.frames[g], 0.0)
+                        for li, w in enumerate(ws):
+                            x += rows[g][li] * w * v
+                    built = play_buildup(rows, lists, self.spool.floor, live)
+                    TE[ks, e], S_[ks, e] = te, score
+                    C[ks, e] = np.bincount(run.cls, run.values(x, built, hp, pooled), minlength=K)[ks]
+            return TE, S_, C
+
+    _STATUS_CAUGHT[id(A)] = StatusCaught
+    return StatusCaught
+
+
+def status_caught(geo, poise, value=None, defender=None):
+    """`er-mechanics-ashes.CaughtModel.of`, pricing each play's status build-up (`StatusCaught`)
+    when a list of `geo` carries 'status' (`has_status`), `defender` (`SpellModel.defender`) gives
+    `status_pool` and `poise` is its `pool` ([(poise, share, health)]); else the plain model, so an
+    attack that builds no status reads the same numbers as before."""
+    A = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py')
+    sp = (defender or {}).get('status_pool')
+    if sp and isinstance(poise, (list, tuple)) and poise and len(poise[0]) > 2 and has_status(geo):
+        if any(g is None or 'CAUGHT' not in g for g, _ in geo):
+            return None
+        return _status_caught_class(A)(geo, poise, value, sp, (defender or {}).get('speffects', ()))
+    return A.CaughtModel.of(geo, poise, value)
+
+
+def record_landings(geo):
+    """Per entry of `geo` ([(contact geometry, frame)]): whether it lands on a defender every
+    geometry touches at its own frame, under the hit priority records the geometries carry (`HPR`:
+    (key, priority, created), the rule `er-mechanics-ashes.CaughtModel` plays, `ATK.shared_landings`;
+    bd er-effects-rs-dnok, er-effects-rs-xb3i, `VERIFIED` 1.16.2): of one record's geometries the
+    first to touch lands with every geometry of its launch (`created`), a later one only at a
+    strictly lower priority; one frame's ties go to the lower priority, then to the one created
+    first. A geometry with no record always lands. A chain's parts (`er-mechanics-ashes.split_chains`)
+    share their whole's frame and record, so they get one verdict."""
+    return ATK.shared_landings([(float(fr), *(g.get('HPR') if g is not None and g.get('HPR') is not None
+                                             else (None, None, i)))
+                                for i, (g, fr) in enumerate(geo or ())])
+
+
+def full_worth(geo, value):
+    """The HP of `value` ({frame: the worth of the hits that open then}) on a defender who takes
+    every hit `geo` can land on him: the sum, less the worth of every geometry `record_landings`
+    holds back (its `CAUGHT` 'wf' share of its frame's worth). Until version 31 attack-similarity
+    summed every geometry, so Starcaller Cry's five nested opening spheres (AtkParam_Pc
+    300405900-300405904, 2 to 10 m, one record of which one lands per victim) were its full worth
+    five times over (1879.9 HP, now 376.0), and Gavel of Haima's second cast event, held back by
+    the first's record, put its largest land share at 0.233 (now 0.417; `MEASURED` 2026-11-23,
+    perf-similarity-dump.py r21 against this). A chain part carries its whole's
+    'wf' (`er-mechanics-ashes._chain_parts`), so only its first part is counted. An attack with no
+    record held back reads `sum(value.values())` unchanged."""
+    full = float(sum(value.values()))
+    if not geo or not any(g is not None and g.get('HPR') is not None for g, _ in geo):
+        return full
+    lost = 0.0
+    for (g, fr), ok in zip(geo, record_landings(geo)):
+        if ok or g is None or (g.get('CHAIN') is not None and g['CHAIN'][0] != 0):
+            continue
+        wf = (g.get('CAUGHT') or {}).get('wf')
+        if wf is not None:
+            lost += float(wf) * float(value.get(fr, 0.0))
+    return full - lost if lost else full
+
+
+def status_full(geo, defender):
+    """The status HP of `geo` on a defender who takes every hit of every list `geo` can land on him
+    (`play_buildup` at every share 1, `StatusPool.worth` at no damage and no cap; the geometries
+    `record_landings` holds back left out, version 31), over `defender`'s `status_pool`: 0 when
+    nothing builds or there is no pool. attack-similarity's land shares divide by the full worth
+    with it (`profile_arrays`)."""
+    sp = (defender or {}).get('status_pool')
+    if not sp or not has_status(geo) or any(g is None or 'CAUGHT' not in g for g, _ in geo):
+        return 0.0
+    geo = [e for e, ok in zip(geo, record_landings(geo)) if ok]
+    gs = [g for g, _ in sorted(geo, key=lambda e: e[0]['T'].min())]
+    lists = status_lists(gs)
+    built = play_buildup([[1.0] * len(ls) for ls in lists], lists)
+    if built is None:
+        return 0.0
+    pool = status_pool_of(sp)
+    return pool.worth(0.0, built, list(pool.by))
 
 
 def net_values(A, geo, value, situations, my_roll, strikes=None, defender=None, look=None, attacker_poise=None):
@@ -3501,8 +4734,8 @@ def _bursts(geo, value):
 # A defender free before an attack first touches him need not roll it: he can run in and throw his
 # R1 at the attacker, and an attacker whose poise breaks under it loses whatever of the attack has
 # not left him yet. The strike is read with the punish's own pieces (`er-mechanics-ashes`
-# `reaction_outcome`): he presses no sooner than his reaction to the attack (cue 0) and no sooner
-# than his recovery floor (`dodge_presses`' rule, `max(cue + delay, floor)`, `VERIFIED` reading),
+# `reaction_outcome`): he presses at his reaction to the attack (cue 0) plus his timing error, no
+# sooner than his recovery floor (`dodge_presses`' rule since version 28, `er-mechanics-ashes.pressed`),
 # runs at run speed to `PUNISH_REACH_M` and lands the pool's R1 #1 its strike frames later
 # (`punish_strikes`), when that is before the attack first touches him (standing where he is, or
 # where his run ends) and before the attacker can roll (`my_roll`). Whether the attacker's poise
@@ -3741,41 +4974,61 @@ _STRIKE_RUNS = {}
 STRIKE_RUNS_CACHE = 16
 
 
-def strike_segments(A, strikes, dist, floor, touch, my_roll, cuts, windows, guard=()):
-    """The strikes of the defender at (`dist`, `floor`) that land (module comment above), as runs:
+def situation_key(A, dist, floor, run=None):
+    """(dist, floor, run) rounded as `net_parts` keys an outcome (0.01 m, half frames). `run` (None:
+    `floor`) is read only by a strike that has to run in (`strike_segments`, past
+    `PUNISH_REACH_M`), so up close it is `floor`'s and those keys are shared."""
+    d, f = round(dist, 2), round(floor * 2) / 2
+    return d, f, (f if run is None or d <= A.PUNISH_REACH_M else round(run * 2) / 2)
+
+
+def strike_segments(A, strikes, dist, floor, touch, my_roll, cuts, windows, guard=(), run=None, advance=0.0):
+    """The strikes of the defender at (`dist`, `floor`, `run`) that land (module comment above), as runs:
     [(weight of one strike of the run, first, end, cut, window)], `first` .. `end` - 1 in
     `strike_table` order, every strike of a run before the same number `cut` of `cuts` (sorted
     launches) and in the same window of `windows` (-1: none; `len(windows)` + its phase: inside one
     of the attacker's `guard` windows, `strike_window`). Each reaction quantile
     (`er-mechanics-ashes.reaction_delays`) is a run set of its own; a strike lands when it comes
     before `touch` (the attack's first touch on him) and `my_roll`. Reads no worth and no poise.
-    A quantile's runs are those of every strike pressed from its start (its reaction or his
-    recovery floor, whichever is later, plus his run in), cut where its strikes stop landing: kept
+    A quantile's runs are those of every strike pressed from its start (his reaction plus each
+    timing error, `er-mechanics-ashes.pressed`, no sooner than his recovery floor, plus his run in;
+    version 28: until then his reaction or floor exactly), cut where its strikes stop landing: kept
     per start (`_STRIKE_RUNS`), which the quantiles his floor outlasts share, and the keys up close
-    share across distances."""
+    share across distances. In reach (`PUNISH_REACH_M`) the floor is `floor`, his whiff's dodge
+    cancel; a defender who has to run in first starts no sooner than `run`, its move cancel (the
+    behavior script starts a walk or a run only through the move-cancel check, env 2000,
+    `VERIFIED`; `punish_situations`), None: `floor`. His run in is from `dist` less the attacker's
+    `advance` by his first touch (`StrikeReach.advance`, `er-mechanics-ashes.advance_at`: held
+    back by the defender's body); until version 22 it was from `dist`, which ran him in to an
+    attacker who had come to him."""
     s = strike_table(strikes)[0]
-    close = max(0.0, dist - A.PUNISH_REACH_M) * A._neutral().frames_per_metre()
+    close = max(0.0, dist - A.advance_at(advance, dist) - A.PUNISH_REACH_M) * A._neutral().frames_per_metre()
     late = min(touch, my_roll if my_roll is not None else math.inf)
     frames, memo = _strike_memo(s, cuts, windows, guard)
+    start = run if close > 0 and run is not None else floor
     out = []
-    for delay, w in A.reaction_delays():
-        base = max(delay, floor) + close
-        x = late - base
-        # The count `np.searchsorted(s, x, side='left')` gives (numpy orders a NaN last: a NaN
-        # bound is left to it).
-        b = bisect.bisect_left(frames, x) if x == x else int(np.searchsorted(s, x, side='left'))
-        if b <= 0:
-            continue
-        got = memo.get(base)
-        if got is None or got[0] < b:
-            got = memo[base] = _strike_runs(s, base, min(len(s), max(b, 2 * got[0])) if got else b, cuts, windows,
-                                            guard)
-        _, firsts, runs = got
-        # The runs that start before strike b, the last one ending there.
-        k = bisect.bisect_left(firsts, b)
-        out += [(w, a, e, ci, wi) for a, e, ci, wi in runs[:k - 1]]
-        a, _, ci, wi = runs[k - 1]
-        out.append((w, a, b, ci, wi))
+    for delay, wd in A.reaction_delays():
+        # Version 28: his press carries his timing error as a dodge's does (`er-mechanics-ashes.pressed`:
+        # his reaction plus each error, a press before his floor coming out at it); until then the
+        # strike was pressed exactly at the later of the two.
+        for press, w in A.pressed(delay, start, wd):
+            base = press + close
+            x = late - base
+            # The count `np.searchsorted(s, x, side='left')` gives (numpy orders a NaN last: a NaN
+            # bound is left to it).
+            b = bisect.bisect_left(frames, x) if x == x else int(np.searchsorted(s, x, side='left'))
+            if b <= 0:
+                continue
+            got = memo.get(base)
+            if got is None or got[0] < b:
+                got = memo[base] = _strike_runs(s, base, min(len(s), max(b, 2 * got[0])) if got else b, cuts,
+                                                windows, guard)
+            _, firsts, runs = got
+            # The runs that start before strike b, the last one ending there.
+            k = bisect.bisect_left(firsts, b)
+            out += [(w, a, e, ci, wi) for a, e, ci, wi in runs[:k - 1]]
+            a, _, ci, wi = runs[k - 1]
+            out.append((w, a, b, ci, wi))
     return out
 
 
@@ -3883,7 +5136,8 @@ class StrikeReach:
     `windows`, its TAE 795 windows (`TOUGHNESS`, the same on every geometry); `guard`, the attacker's
     own guard over the attack (`GUARD`, `Guard`, the same on every geometry; None: none) and
     `guard_windows` its windows cut into stamina phases (`guard_phase_windows`; () for none); the
-    first touch on a defender standing (`touch`), and what lands when it is stopped (`kept`)."""
+    first touch on a defender standing (`touch`) and the place it was timed at (`where`), and what
+    lands there when it is stopped (`kept`)."""
 
     def __init__(self, A, geo):
         order = sorted(geo, key=lambda e: e[0]['T'].min())
@@ -3917,16 +5171,36 @@ class StrikeReach:
         """The attack's first touch on him standing at `dist`, or at the end of his run in to
         `PUNISH_REACH_M` when he starts further out, whichever is sooner (`INFERRED`: the two ends
         of the run bracket where it meets him). Kept per distance."""
+        return self._met(dist)[0]
+
+    def where(self, dist):
+        """Where `touch` timed the first touch on a defender who starts at `dist`: `dist`, or the
+        end of his run in when that touch is sooner (a tie keeps `dist`). `kept` prices what lands
+        there (version 23; it priced at `dist` whichever end set the time)."""
+        return self._met(dist)[1]
+
+    def _met(self, dist):
         if dist not in self._touch:
             near = round(min(dist, self.A.PUNISH_REACH_M), 2)
-            self._touch[dist] = min(min(self.tau(dist), default=math.inf), min(self.tau(near), default=math.inf))
+            far, close = min(self.tau(dist), default=math.inf), min(self.tau(near), default=math.inf)
+            self._touch[dist] = (close, near) if close < far else (far, dist)
         return self._touch[dist]
+
+    def advance(self, dist):
+        """How far the attacker's root motion has carried him by his first touch (`touch`): the
+        largest `PK` of the samples up to it (`er-mechanics-ashes.attack_advance` `upto`), what the
+        defender's run in to strike him is short by (`strike_segments`). The strike lands before
+        that touch, so this is the most it can be (`INFERRED`: where he is at the strike's landing
+        is not read, the samples are only the hit windows')."""
+        return self.A.attack_advance(self.geoms, upto=self.touch(dist))
 
     def kept(self, dist, cut, value, price, hp=None):
         """What lands on him standing at `dist` from the geometries launched by `cuts[cut - 1]`
         (`cut` None: all of them, nothing stopped): the first burst one of them touches, its first
-        kept geometry there to touch him priced by `price(index, value kept)` (the hits of every
-        geometry stopped left out of `value`), capped at `hp`, as `sequence_outcome` takes the base."""
+        kept geometry there to touch him priced by `price(index, value kept, hp)` (the hits of every
+        geometry stopped left out of `value`), capped at `hp` by the price itself (a number or the
+        pool's [(health, share)]: a caught defender's cap is each pool build's own,
+        `er-mechanics-ashes.CaughtModel.worth_of`), as `sequence_outcome` takes the base."""
         lim = math.inf if cut is None else (self.cuts[cut - 1] if cut > 0 else -math.inf)
         keep = [cut is None or L <= lim for L in self.launch]
         lost = {fr for fr, k in zip(self.frames, keep) if not k}
@@ -3937,8 +5211,7 @@ class StrikeReach:
             if not hs:
                 continue
             h = min(hs, key=lambda i: (tau[i], i))
-            w = price(h, vk)
-            w = min(w, hp) if hp is not None else w
+            w = price(h, vk, hp)
             if w > 0:
                 return w
         return 0.0
@@ -3979,13 +5252,20 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
     threats = geo if isinstance(geo, CastThreats) else None
     bursts = _bursts(geo, value) if threats is None else None
     bursts1 = _bursts(geo, value_one) if value_one is not None and threats is None else None
-    hp = (defender or {}).get('hp')
+    # What one cast lands is capped at each pool build's own health (`SpellModel.defender`'s
+    # `hp_pool`, version 21), else the one `hp` given.
+    hp = (defender or {}).get('hp_pool') or (defender or {}).get('hp')
     poise = (defender or {}).get('poise')
-    caught = A.CaughtModel.of(geo, poise, value) if threats is None else None
+    # A caught defender holds with each pool build's own poise and health together (`pool`, version
+    # 21), else its own poise (`poise_pool`), else the one `poise` given.
+    cpoise = (defender or {}).get('pool') or (defender or {}).get('poise_pool') or poise
+    # Its status build-up priced per play when the attack builds any (`status_caught`, version 30).
+    caught = status_caught(geo, cpoise, value, defender) if threats is None else None
     caught1 = caught.with_value(value_one) if caught is not None and value_one is not None else None
     per_m = A._neutral().frames_per_metre()
     cat = memo if isinstance(memo, dict) else ({} if memo else None)
-    memos = ({}, {})
+    # Per `roll_key` the roll's outcome, per (`situation_key`, `roll_key`) the one he picks.
+    memos, chosen = ({}, {}), ({}, {})
     # The defender's strike (module comment above `STRIKE_CARRIED`): on when `strikes` carries the
     # R1s' poise damage (`Strikes`) and a poise is known, the attacker's (`attacker_poise`) or else
     # the RL window's median build's, the defender's own (`INFERRED`: one corpus for both).
@@ -4005,11 +5285,11 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
     segs, reached, held = {}, {}, {}
 
     def strike_at(key, which):
-        """The strike's outcome at `key` ((dist, floor) rounded as `at` rounds them)."""
-        dist, floor = key
+        """The strike's outcome at `key` ((dist, floor, run), `situation_key`)."""
+        dist, floor, run = key
         if threats is not None:
             if dist not in reached:
-                reached[dist] = threats.strike_reach(A, dist, hp, poise)
+                reached[dist] = threats.strike_reach(A, dist, hp, cpoise)
             cuts, touch, keep, _ = reached[dist]
         else:
             cuts = reach.cuts
@@ -4021,36 +5301,60 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
                     held[k] = keep(c)
                 else:
                     v, cm = (value_one, caught1) if which else (value, caught)
-                    price = (lambda h, vk: cm.worth_of(dist, h, vk)) if cm is not None else reach.raw_price
-                    held[k] = reach.kept(dist, c, v, price, hp)
+                    # Priced where the touch was timed (`StrikeReach.where`).
+                    at_ = reach.where(dist)
+                    price = (lambda h, vk, cap_: cm.worth_of(at_, h, vk, hp=cap_)) if cm is not None else \
+                        (lambda h, vk, cap_: A.hp_cap(reach.raw_price(h, vk), cap_))
+                    held[k] = reach.kept(at_, c, v, price, hp)
             return held[k]
         if key not in segs:
             if threats is None:
                 touch = reach.touch(dist)
+                adv = reach.advance(dist)
+            else:
+                adv = A.attack_advance(threats.geometries(dist), upto=touch)
             got = strike_segments(A, strikes, dist, floor, touch, my_roll, cuts, windows,
-                                  gwin if saved is not None else ())
+                                  gwin if saved is not None else (), run=run, advance=adv)
             segs[key] = (got, strike_shares(strikes, got, beta, len(cuts), cum, saved))
         got, shares = segs[key]
         return strike_outcome(A, strikes, got, beta, kept, kept(None), len(cuts), shares)
 
-    def at(dist, floor, which=0):
-        key = (round(dist, 2), round(floor * 2) / 2)
-        if key not in memos[which]:
-            plan = look.plan(key[0]) if look is not None else None
-            if threats is not None:
-                o = threats.outcome(A, key[0], key[1], my_roll, strikes, cat, hp=hp, poise=poise, plan=plan)
-            else:
-                o = A.sequence_outcome(bursts1 if which else bursts, key[0], floor=key[1], my_roll=my_roll,
-                                       strikes=strikes, run=True, catches=cat, caught=caught1 if which else caught,
-                                       hp=hp, plan=plan)
+    def roll_key(key, run):
+        """The key the roll's outcome reads at situation key `key` with move floor `run`: (dist,
+        floor, the move floor where it can hold a caught defender, `CaughtModel.held_run`). The
+        dodge reads no `run`; only a caught defender's run out does (version 21)."""
+        if threats is not None:
+            return key[:2] + (round(run * 2) / 2,)
+        return key[:2] + ((caught.held_run(key[0], run) if caught is not None else None),)
+
+    def at(dist, floor, run, which=0):
+        key = situation_key(A, dist, floor, run)
+        rkey = roll_key(key, run)
+        if (key, rkey) not in chosen[which]:
+            if rkey not in memos[which]:
+                plan = look.plan(key[0]) if look is not None else None
+                if threats is not None:
+                    o = threats.outcome(A, key[0], key[1], my_roll, strikes, cat, hp=hp, poise=cpoise, plan=plan,
+                                        run_floor=rkey[2])
+                else:
+                    o = A.sequence_outcome(bursts1 if which else bursts, key[0], floor=key[1], my_roll=my_roll,
+                                           strikes=strikes, run=True, catches=cat,
+                                           caught=caught1 if which else caught, hp=hp, plan=plan,
+                                           run_floor=rkey[2])
+                memos[which][rkey] = o
+            o = memos[which][rkey]
             if strike_on:
                 # Knowing the attack, he strikes or rolls (or jumps), whichever leaves the attacker
                 # less; a tie keeps the roll.
                 s = strike_at(key, which)
-                if s['value'] - s['punish_hp'] < o['value'] - o['punish_hp']:
+                # A tie keeps the roll, read with a hair of room: a strike that lands nothing before
+                # the attack lands whole is the roll's own worth summed in another order (version 21:
+                # the pool's health cap made Stars of Ruin's two differ by 2e-13).
+                rn = o['value'] - o['punish_hp']
+                if s['value'] - s['punish_hp'] < rn - 1e-9 * max(1.0, abs(rn)):
                     o = s
-            memos[which][key] = o
-        return memos[which][key]
+            chosen[which][(key, rkey)] = o
+        return chosen[which][(key, rkey)]
 
     def net(o):
         return o['value'] - o['punish_hp']
@@ -4068,20 +5372,25 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
             best = min(best, float(t))
         return best
 
-    def choose(dist, floor, which):
-        now = at(dist, floor, which)
+    def choose(dist, floor, run, which):
+        now = at(dist, floor, run, which)
         best, gap, v = now, None, net(now)
         for g in APPROACH_GAPS_M:
             if g < dist:
-                o = at(g, max(0.0, floor - (dist - g) * per_m), which)
+                # The attacker's run in uses up the defender's recovery, to both cancels alike.
+                o = at(g, max(0.0, floor - (dist - g) * per_m), max(0.0, run - (dist - g) * per_m), which)
                 if net(o) > v:
                     best, gap, v = o, g, net(o)
         return now, best, gap, v
 
     out = []
-    for dist, floor in situations:
-        now, best, gap, v = choose(dist, floor, 0)
-        one = choose(dist, floor, 1)[3] if bursts1 is not None else None
+    for sit in situations:
+        # (dist, floor) or (dist, floor, run) (`punish_situations`' 'run': his move cancel; a pair
+        # runs from the floor).
+        dist, floor = sit[0], sit[1]
+        run = sit[2] if len(sit) > 2 else floor
+        now, best, gap, v = choose(dist, floor, run, 0)
+        one = choose(dist, floor, run, 1)[3] if bursts1 is not None else None
         out.append({'net': v, 'value': best['value'], 'base': best['base'], 'p_evade': best['p_evade'],
                     'p_punish': best['p_punish'], 'punish_hp': best['punish_hp'], 'gap': gap,
                     'strike': bool(best.get('strike')),
@@ -4181,6 +5490,50 @@ def selftest():
     check('Pebble is one cast', [v for v, _ in m.variants(pebble)] == ['cast'])
     slicer = m.by_name['carian slicer']
     check('Carian Slicer hits an AtkParam directly', m.ref_hits(slicer, 1) == [(44400, None, 1.0)])
+    # A quick spell (`QUICK_REF_TYPES`) also casts while sprinting, 045040 from the press, with no
+    # hand-off: Carian Slicer's hits on its f15 at any DEX, while the standing cast's moves with it.
+    sl_vars = m.variants(slicer)
+    sl_dash = {d: {v['variant']: v['startup'] for v in m.evaluate(slicer, staff, {'int': 80, 'dex': d}, defender=m.defender(150))}
+               for d in (10, 70)}
+    check(f'Carian Slicer: cast and dash ({sl_vars}), the dash f15 at DEX 10 and 70, the cast earlier at 70 ({sl_dash})',
+          sl_vars == [('cast', RELEASE), ('dash', DASH)] and sl_dash[10]['dash'] == sl_dash[70]['dash'] == 15.0
+          and sl_dash[70]['cast'] < sl_dash[10]['cast'])
+    check('a spell that is not quick has no dash', not any(lab == 'dash' for lab, _ in m.variants(m.by_name['glintstone pebble'])))
+    # The sprint starts once the dodge button's held time passes 0.4 s (`SPRINT_HOLD_S`): at 60
+    # updates a second the float32 sum of 1/60 first passes 0.4f after 24 updates, 12.0 real frames.
+    import numpy as np
+    f60, held = np.float32(1.0 / 60.0), [np.float32(0.0)]
+    for _ in range(30):
+        held.append(np.float32(held[-1] + f60))
+    first = next(k for k, s in enumerate(held) if s > np.float32(SPRINT_HOLD_S))
+    check(f'the sprint hold passes 0.4 s after {first} updates at 60 a second, {SPRINT_HOLD_FRAMES} real frames',
+          first == 24 and first / 2.0 == SPRINT_HOLD_FRAMES == 12.0)
+    # A sprint cast waits what is left of the hold when the window opens (`sprint_situations`),
+    # running in meanwhile: closer by the wait at run speed, the defender's floors shorter by it.
+    pm = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py').frames_per_metre()
+    sp4 = sprint_situations([{'distance': 6.0, 'recovery': 20.0, 'run': 30.0, 'sprint_wait': 4.0},
+                             {'distance': 6.0, 'recovery': 20.0, 'run': 30.0, 'sprint_wait': 0.0}, (6.0, 20.0)])
+    check(f'sprint situations: 4 frames left run 0.5 m in, none leaves the situation, a bare pair waits the '
+          f'whole hold ({sp4}, {pm:.3f} frames a metre)',
+          sp4 == [(round(6.0 - 4.0 / pm, 1), 16.0, 26.0), (6.0, 20.0, 30.0), (round(6.0 - 12.0 / pm, 1), 8.0, 8.0)]
+          and sp4[0][0] == 5.5 and sp4[2][0] == 4.4)
+    # `punish_values` reads the dash at its sprint situations and nothing else there: with no wait
+    # left it nets what it netted pressed as if sprinting already, with a bare pair the whole hold.
+    sl_st, sl_dfn = {'int': 80, 'dex': 11}, m.defender(150)
+    sl_cs = [c for c in m.cast_inputs(slicer, staff, sl_st, defender=sl_dfn) if c['variant'] == 'dash']
+    sl_pair = [(5.0, 20.0, 20.0)]
+    sl_now = m.punish_values(slicer, staff, sl_st, sl_pair, defender=sl_dfn, strikes=[15.0], casts=sl_cs,
+                             sprint=sprint_situations([{'distance': 5.0, 'recovery': 20.0, 'run': 20.0,
+                                                        'sprint_wait': 0.0}]))[0]
+    sl_hold = m.punish_values(slicer, staff, sl_st, sl_pair, defender=sl_dfn, strikes=[15.0], casts=sl_cs)[0]
+    sl_A = m.ash()[0]
+    sl_want = (net_values(sl_A, sl_cs[0]['attack'], sl_cs[0]['value'], sl_pair, sl_cs[0]['roll'], [15.0], sl_dfn),
+               net_values(sl_A, sl_cs[0]['attack'], sl_cs[0]['value'], [(3.4, 8.0, 8.0)], sl_cs[0]['roll'], [15.0],
+                          sl_dfn))
+    # `MEASURED` 2026-11-21 (scratch .worktrees/dash/target/dash/pick.py): 281.9 and 4.5.
+    check(f'Carian Slicer dash at 5 m, floor 20: {sl_now[0]:.1f} with no wait left, {sl_hold[0]:.1f} waiting the '
+          f'whole hold (pressed at 3.4 m, floor 8)',
+          len(sl_cs) == 1 and sl_now == sl_want[0] and sl_hold == sl_want[1] and sl_now[0] > 100.0 > sl_hold[0])
     # A whole cast, end to end.
     got = m.evaluate(pebble, staff, {'int': 80, 'dex': 10}, defender=m.defender(150))
     check('Pebble: one variant, one hit, 7 FP', len(got) == 1 and len(got[0]['hits']) == 1 and got[0]['fp'] == 7)
@@ -4198,6 +5551,32 @@ def selftest():
     check('greedy: the slots cap the kit',
           [r['id'] for r in greedy_kit({'a': [10, 0], 'b': [0, 8]}, [1, 1], 2, {'a': 1, 'b': 2}, 2)] == ['a'])
     check('Carian Slicer has no flight', m.geometry(slicer, {'events': [(0.0, 1)], 'hand': 0.0}) is None)
+    # Given its release clip, its AtkParam hit (refCategory 0) is the caster's own capsule over the
+    # cast event's window (`direct_geometry`): 045010 fires ref 2 (AtkParam 44401) at f9-12, so the
+    # samples run from the hand-off plus 9 frames, ahead of him, with a one-hit caught list.
+    # Rounded as `evaluate` rounds a hit's frame, which the hits are matched on.
+    sl_ev = [(round(f, 1), r) for f, r in m.release_events(slicer, RELEASE)[1]]
+    sl_geo = m.geometry(slicer, {'events': sl_ev, 'hand': 12.0, 'anim': RELEASE,
+                                 'weapon': staff['base'], 'lead': 0.0}, missing=[])
+    sl_g = sl_geo[0][0] if sl_geo else None
+    check(f'Carian Slicer: its 045010 cast is ref 2 at f9 ({sl_ev}) and a melee geometry of AtkParam 44401 from '
+          f'f21 ({None if sl_g is None else (float(sl_g["T"].min()), float(sl_g["Z"].min()), sl_g.get("DIRECT"))})',
+          [(round(f, 1), r) for f, r in sl_ev] == [(9.0, 2)] and sl_g is not None and sl_g.get('DIRECT') == 44401
+          and abs(float(sl_g['T'].min()) - 21.0) < 0.5 and float(sl_g['Z'].min()) < -1.0 and 'TURN' in sl_g)
+    sl_hits = m.evaluate(slicer, staff, {'int': 80, 'dex': 10}, defender=m.defender(150))[0]['hits']
+    m.attach_caught(slicer, sl_geo, sl_hits, {9.0: sum(h['damage'] * h['count'] for h in sl_hits)})
+    check('Carian Slicer: the caught defender takes its one AtkParam list',
+          sl_g is not None and len(sl_g.get('CAUGHT', {}).get('lists', ())) == 1
+          and abs(sl_g['CAUGHT']['wf'] - 1.0) < 1e-9)
+    # A carrier that never meets the ground and makes its damage on a hit (`carried_rows`):
+    # Loretta's Greatbow's arrow 10438000 makes 10438001 where it touches him.
+    A_, t_ = m.ash()
+    check("Loretta's Greatbow: its damage rides on the arrow's touch (10438001 under 10438000)",
+          m.carried_rows(A_.bullet_tree(t_, 10438000)) == {10438001: 10438000}
+          and m.carried_rows(A_.bullet_tree(t_, 10400000)) == {})
+    # Shots aimed at him when made that fly over a standing body unaimed (`aimed_down`).
+    check('Magic Downpour: its rain is aimed down at him, Pebble is not',
+          m.aimed_down(A_.bullet_tree(t_, 10437000)) and not m.aimed_down(A_.bullet_tree(t_, 10400000)))
     geo = m.geometry(pebble, {'events': m.release_events(pebble, RELEASE)[1], 'hand': 20.0})
     check('Pebble flies', geo is not None and len(geo) == 1)
     A, _ = m.ash()
@@ -4212,9 +5591,21 @@ def selftest():
     check('a rolled cast is punished from 6 m when the caster rolls late, never when he rolls first',
           round(late['p_punish'], 6) == round(late['p_evade'], 6) > 0 and soon['p_punish'] == 0.0)
     moons = m.by_name["rellana's twin moons"]
-    check("Rellana's Twin Moons is the only spell a jump is immune to",
-          {m.names[s] for s in m.names for i in range(1, 11) for a, _, _ in m.ref_hits(s, i)
-           if (m.atk.get(a) or {}).get('isInvalidatedByNoDamageInAir')} == {"Rellana's Twin Moons"})
+    # Per spell, whether a ref's hit lists are all, some or none `isInvalidatedByNoDamageInAir`.
+    # Since each of a record's hits is priced at its own member's AtkParam (2026-11-14), the lists
+    # show the ground members the strongest member used to hide: Magma Breath's and Theodorix's
+    # Magma's pools (70101, 70111) and one of Bayle's Flame Lightning's ref-2 lists (210701001). A
+    # flight is jumpable only when every damaging node is (`flight` 'air'), so those three stay not.
+    air = {}
+    for s in m.names:
+        for i in range(1, 11):
+            flags = [bool((m.atk.get(a) or {}).get('isInvalidatedByNoDamageInAir')) for a, _, _ in m.ref_hits(s, i)]
+            if flags:
+                air.setdefault(m.names[s], set()).add('all' if all(flags) else 'some' if any(flags) else 'none')
+    check("Rellana's Twin Moons is the only spell a jump is immune to; Magma Breath, Theodorix's Magma and Bayle's "
+          "Flame Lightning have one jumpable hit list each",
+          ({k for k, v in air.items() if 'all' in v}, {k for k, v in air.items() if 'some' in v})
+          == ({"Rellana's Twin Moons"}, {"Bayle's Flame Lightning", 'Magma Breath', "Theodorix's Magma"}))
     mg = m.geometry(moons, {'events': m.release_events(moons, RELEASE)[1], 'hand': 50.0})
     check('its three moons fly as three jumpable events', mg is not None and len(mg) == 3
           and all(g.get('AIR') for g, _ in mg))
@@ -4281,6 +5672,31 @@ def selftest():
           (es['d'], es['records'][10672000], ss['records'][10403000][1],
            record_lifetime(record_lifetime(0.0, m.bullet[10672000]), m.bullet[10672001]))
           == (20.0, (es['records'][10672000][0], [27]), [3], m.bullet[10672000]['dmgHitRecordLifeTime']))
+    # Each of a record's hits at the AtkParam of the member that landed it (2026-11-14): Ghostflame
+    # Ignition's R1 follow-up root 2292 shares one 0.5 s record down its hop explosions (AtkParam_Pc
+    # 303401310: 150 magic, dmgLevel 2) and the 5 s ghostflame trail they drop (Bullet 2294,
+    # 303401305: 60 magic, dmgLevel 0, `REGULATION`). A defender standing in it takes one hop and
+    # then ten trail ticks; priced at the strongest member, the 11 were 11 hops.
+    gi = m.record_hits(2292)
+    check("a record's hits are priced at the member that lands each: Ghostflame Ignition's R1 record 2292 lands 1 "
+          "hop explosion (303401310) and 10 trail ticks (2294, 303401305), two lists, not 11 of 303401310",
+          (gi['records'][2292][1], gi['members'][2292],
+           sorted((li['atk'], li['bullet'], li['mult'], li['ticks'], li['rec']) for li in m.bullet_lists(2292)))
+          == ([11], [{(303401310, 2292): 1, (303401305, 2294): 10}],
+              [(303401305, 2294, 1, 10, m.bullet[2292]['dmgHitRecordLifeTime']), (303401310, 2292, 1, 1, 0.0)]))
+    # Version 22: a searching attached row (`er-mechanics-ashes.search_launched`) flies its
+    # `HitBulletID` row in the same bullet (FUN_14039ee00, module doc), so a Phalanx blade is one
+    # list over its hover and flight, one hit, not two: the pouch's `full` and the volley's worth
+    # agree with what attack-similarity's caught defender lands (378.3, not 756.5).
+    gp_mid = m.by_name['glintblade phalanx']
+    gp = m.evaluate(gp_mid, staff, {'int': 80, 'dex': 10}, defender=m.defender(150))[0]
+    check('Phalanx blades are one list each (spell 10430000 -> 10430001 x5, Carian 10430100 x9, ash 2300 -> 2301 x4), '
+          'and Glintblade Phalanx full is five hits',
+          [(li['atk'], li['bullet'], li['mult'], li['ticks']) for b in (10430000, 10430100, 2300)
+           for li in m.bullet_lists(b)] == [(43001, 10430001, 5, 1), (43011, 10430101, 9, 1),
+                                            (300200867, 2301, 4, 1)]
+          and len(gp['hits']) == 1 and gp['hits'][0]['count'] == 5.0
+          and abs(gp['full'] - 5 * gp['hits'][0]['damage']) < 0.15)
     # The flight gaps closed (bd er-effects-rs-7bye, round 3): every record is flown in 3D, none
     # keeps the formula. Founding Rain's cloud levels (sfxPostureType 1) and rains on him; the aimed
     # meteor (Meteorite ref 2) comes down at him once its marker hands it the caster's frame
@@ -4440,8 +5856,12 @@ def selftest():
     check('flown straight one nail of the fan passes a defender 6 m ahead; aimed, all six reach him',
           (len(near.get(None, ())), len(near.get((0.0, 6.0), ()))) == (1, 6))
     no = ct.outcome(A, 6.0, 10.0, nv['roll'], [15.0], {})
-    check('a defender who rolls avoids some nails but not all of them',
-          round(no['base'], 6) == round(sum(nw.values()), 6) and 0.0 < no['value'] < no['base'])
+    # Version 22: he picks his roll's direction (`er-mechanics-ashes.dodge_families`). Pressed a
+    # quarter each, the four directions avoided some nails but not all of them.
+    check('at 6 m the defender picks a roll direction that avoids every nail (MEASURED 2026-11-16: '
+          f"{no['moves']}, value {no['value']:.1f} of {no['base']:.1f})",
+          round(no['base'], 6) == round(sum(nw.values()), 6) and no['value'] == 0.0 and no['p_evade'] > 0.999
+          and no['moves'] in {mv['anim'] for mv in A.roll_motion()})
     one = m.by_name['glintstone nail']
     ov = next(v for v in m.evaluate(one, staff, {'int': 80, 'dex': 20}, defender=m.defender(150))
               if v['variant'] == 'tap')
@@ -4497,12 +5917,16 @@ def selftest():
           f"({[(x['src'], round(x['pitch'], 1)) for x in ml]}); Dragonmaw's byte 1 skips the lock-on turn",
           all(x['src'] == 'dummy axis' and x['aim'] for x in ml) and dl is not None and not dl['aim'])
     cm = A.CaughtModel.of(mgeo, dfn['poise'], mval)
-    pools = [li for g, _ in mgeo for li in g['CAUGHT']['lists'] if li['n'] > 1]
-    ticks = [round(x * pools[0]['n'], 2) for x in (cm.landed(4.0)[0][0][0], cm.landed(6.0)[0][0][0])] if pools else None
-    check(f"Magma Breath: a defender the breath catches takes {ticks} of its pool's {pools and pools[0]['n']} "
-          f"ticks at 4 / 6 m (he staggers, rolls out at the DamageCount roll cancel), not all of them",
-          pools and all(1 <= x < pools[0]['n'] for x in ticks))
-    plain = {k: v for k, v in dfn.items() if k not in ('hp', 'poise')}
+    # The pool's list by its place: since each of a record's hits is priced at its own member's
+    # AtkParam (2026-11-14) the breath's geometry holds the ball (70100, 1 hit, poise 324.7) and,
+    # second, the pool (70101, 12 ticks, no poise damage); until then one list of 13 hits at 70100.
+    pools = [(gi, li, x) for gi, (g, _) in enumerate(mgeo) for li, x in enumerate(g['CAUGHT']['lists']) if x['n'] > 1]
+    ticks = [round(cm.landed(d)[0][pools[0][0]][pools[0][1]] * pools[0][2]['n'], 2) for d in (4.0, 6.0)] if pools else None
+    check(f"Magma Breath: a defender the breath catches takes {ticks} of its pool's {pools and pools[0][2]['n']} "
+          f"ticks at 4 / 6 m (the ball staggers him, he rolls out at its DamageCount roll cancel), not all of them",
+          pools and all(1 <= x < pools[0][2]['n'] for x in ticks))
+    plain = {k: v for k, v in dfn.items() if k not in ('hp', 'poise', 'poise_pool', 'hp_pool', 'pool')}
+    top_hp = max(c for c, _ in dfn['hp_pool'])
     sit = [(2.6, 14.0), (6.0, 14.0)]
     old = m.punish_values(mb, seal99, st99, sit, defender=plain, strikes=[15.0])[0]
     new = m.punish_values(mb, seal99, st99, sit, defender=dfn, strikes=[15.0])[0]
@@ -4510,9 +5934,46 @@ def selftest():
     # misses a defender who rolls away at f60-66, so every roll direction has an escape and the
     # breath lands nothing there (1430.5 / 184.0 before, -291 both now): the caught model has no
     # landed tick to take off at 2.6 m, and takes them off at 6 m.
+    # Version 22: he picks his roll's direction (`er-mechanics-ashes.dodge_families`), and at 6 m too
+    # one direction escapes the breath, so both nets are his whole punish (-388, `MEASURED`
+    # 2026-11-16) and the caught model's ticks (the check above) take nothing off here.
     check(f"Magma Breath's punish at 2.6 / 6 m: {[round(x) for x in old]} with every tick credited -> "
-          f"{[round(x) for x in new]}, at most {dfn['hp']} HP",
-          all(b <= dfn['hp'] + 1e-6 and b <= a for a, b in zip(old, new)) and new[1] < old[1])
+          f"{[round(x) for x in new]}, at most the pool's largest health {top_hp} HP (each build's own cap)",
+          all(b <= top_hp + 1e-6 and b <= a for a, b in zip(old, new)))
+    # Version 21: his whiff's recovery holds a caught defender. Savage Claws (Beast Claw, Magic, INT
+    # 80): six claws at f17-71, menu poise with saRate 108, 108, 54, 54, 54, 216 (AtkParam_Pc
+    # 700000290-295). A 62-poise defender is broken by the first claw and held by its stagger, so
+    # the floors do not move him: hits 1-3. A 120-poise one is only flinched by the first: free at
+    # once he rolls out under it (hit 1 alone); still in his recovery to f36 he stands, the second
+    # claw breaks him (216 >= 120), its stagger ends the recovery and holds him to its roll cancel
+    # (f24.5 + 25): hits 1-4.
+    # Version 27: free at once he rolls aside (the least of his escapes), but the attacker tracks him
+    # at the clip's 600 deg/s (`TAE` 224 f15-63) with his lunge bending toward him, so claws 3-5 find
+    # him too; the sixth (f71-75) comes under JumpTable 7 (from f70) and misses (`MEASURED` 2026-11-16;
+    # until then the attacker never turned and the side roll left after claw 1).
+    claws = m.skill_attack('Beast Claw', {'str': 16, 'dex': 18, 'int': 80}, affinity='Magic', defender=dfn)
+    cpo = [round(l['poise'], 1) for g, _ in sorted(claws['geo'], key=lambda e: e[0]['T'].min())
+           for l in g['CAUGHT']['lists']]
+    ccm = {p: A.CaughtModel.of(claws['geo'], p, claws['value']) for p in (62.0, 120.0)}
+
+    def claws_hit(p, fl):
+        return [round(r[0], 3) for r in ccm[p].landed(2.5, fl)[0]]
+    got = (cpo, claws_hit(62.0, None), claws_hit(62.0, (36.0, 36.0)), claws_hit(120.0, None),
+           claws_hit(120.0, (36.0, 36.0)))
+    check(f"Savage Claws on a caught defender held by his whiff's recovery: {got}",
+          got == ([108.0, 108.0, 54.0, 54.0, 54.0, 216.0], [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                  [1.0, 1.0, 1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 1.0, 1.0, 1.0, 0.0], [1.0, 1.0, 1.0, 1.0, 0.0, 0.0]))
+    # The pool's own poises (`defender` `poise_pool`): Bull-Goat's `altered` where the planner gives
+    # it, shares summing to 1, its median at or above the median `original`.
+    pp = dfn['poise_pool']
+    acc, pmed = 0.0, None
+    for p, w in pp:
+        acc += w
+        if pmed is None and acc >= 0.5:
+            pmed = p
+    check(f"the RL 150 pool's own poises: {len(pp)} values, median {pmed} against the median original "
+          f"{dfn['poise']}", abs(sum(w for _, w in pp) - 1.0) < 1e-9 and pmed >= dfn['poise']
+          and pp == sorted(pp))
     # bd er-effects-rs-dnok: a two-cast hit priority record. a415_045010 runs event 341 slot 0 over
     # its f6 (Args 0xc 0) and f11 (1) casts; the f15 one is outside it.
     ast_ = m.by_name['meteorite of astel']
@@ -4620,7 +6081,10 @@ def selftest():
           f"and the outcome takes the aim at him ({[p['aim'] for p in bparts]})",
           m.floor_aims(gob, bspec) and math.isfinite(blt) and math.isfinite(bft) and blt < bft
           and any('HOMING' in g for g, _ in blevel) and not any('HOMING' in g for g, _ in bfloor)
-          and [p['aim'] for p in bparts] == ['target', 'target'] and bparts[0]['net'] > 0)
+          and [p['aim'] for p in bparts] == ['target', 'target'] and bparts[0]['net'] == 0.0)
+    # Version 22: that net is 0. Only the back roll is caught by the homing bubble at 4 m (587.8 of
+    # 587.8); forward and both sides escape it, aimed or free-aimed, and he now picks his direction
+    # (`er-mechanics-ashes.dodge_families`), where a quarter of his presses were caught before.
     # The tap path (c0000.hks MagicFireRight_Upper_onUpdate): 045010 up to the release, then 045011.
     cs_, rb_, az_ = (m.by_name[x] for x in ('glintstone cometshard', 'rock blaster', 'comet azur'))
     check(f"Glintstone Cometshard's 045010 opens SpEffect {TAP_SPEFFECT} at its first frame "
@@ -4702,11 +6166,17 @@ def selftest():
     planned = grp.plan(('Comet', 'tap'), 6.0, roll_, taps[0], 0.0, 10.0)
     check(f"the Comet tap at 3 / 6 / 9 m: the defender who knows it escapes every roll "
           f"({[round(p['p_evade'], 6) for p in lb]}); "
-          f"seeing only the cast he waits for the tap's release at the hand-off to show (decided at {when}, "
-          f"f{hand:.1f} + {cshows}) and then picks one timing against both taps (group_presses from there), so he "
-          f"takes some: net {[round(p['net'], 1) for p in lb]} -> {[round(p['net'], 1) for p in la]}",
-          all(round(p['p_evade'], 6) == 1.0 and p['net'] == 0.0 for p in lb) and all(p['net'] > 0 for p in la)
-          and when == [hand + cshows]
+          f"seeing only the cast he waits, in some roll direction, for the tap's release at the hand-off to show "
+          f"(f{hand:.1f} + {cshows}; since version 22 each direction is planned on its own and some commit "
+          f"earlier or later: decided at {when}) and then picks one timing against both taps (group_presses from "
+          f"there). Since version 25 he aims each press where it is worth most to him, and finds one that escapes "
+          f"both taps (until then he aimed at the middle of the likeliest stretch and took some); knowing the "
+          f"spell is never worse for him: net {[round(p['net'], 1) for p in lb]} -> {[round(p['net'], 1) for p in la]}. "
+          f"Version 28: with the timing error on a press at his reaction too, knowing it he punishes some at 3 m "
+          f"(p_punish {[round(p['p_punish'], 4) for p in lb]}; 0 and net 0 in version 27)",
+          all(round(p['p_evade'], 6) == 1.0 and p['net'] <= 0.0 for p in lb)
+          and all(b['net'] <= a['net'] + 1e-9 for a, b in zip(la, lb))
+          and any(abs(w - (hand + cshows)) < 1e-6 for w in when)
           and planned == [A.group_presses([taps[0][k], taps[1][k]], [1.0, 1.0], hand + cshows, floor=10.0)
                           for k in range(len(roll_))])
     cs_tap = lcasts[('Glintstone Cometshard', 'tap')]
@@ -4718,16 +6188,24 @@ def selftest():
         got = ctt.outcome(A, d, f, cs_tap['roll'], lstrike, {}, hp=dfn['hp'], poise=dfn['poise'], plan=cs_look.plan(d))
         cue = A.sequence_outcome(ctt.bursts(d), d, cue=cs_seen, floor=f, my_roll=cs_tap['roll'], strikes=lstrike,
                                  run=True, catches={}, caught=ctt._caught[round(d, 2)], hp=dfn['hp'])
-        same.append(all(abs(got[x] - cue[x]) < 1e-9 for x in ('value', 'p_evade', 'p_punish')))
+        # Since version 22 each roll direction is its own family with its own plan: he either waits
+        # for the release (the cast read from there, exactly) or commits earlier in a direction that
+        # escapes both casts.
+        same.append(all(abs(got[x] - cue[x]) < 1e-9 for x in ('value', 'p_evade', 'p_punish'))
+                    or (round(got['p_evade'], 6) == 1.0 and got['value'] == 0.0))
     cb = net_parts(A, ctt, cs_tap['value'], lsit, cs_tap['roll'], lstrike, defender=dfn)
     ca = net_parts(A, ctt, cs_tap['value'], lsit, cs_tap['roll'], lstrike, defender=dfn, look=cs_look)
     check(f"Glintstone Cometshard's tap against its own charge: the two play 045000 alike to the hand-off, and "
           f"the tap's release there shows {cs_seen - cs_tap['hand']:g} frames later, so the defender waits for it "
-          f"and reacts from f{cs_seen:.1f}, exactly the cast read from there "
-          f"({same}); its bolt is no longer rolled every time: net {[round(p['net'], 1) for p in cb]} -> "
-          f"{[round(p['net'], 1) for p in ca]}, p_evade {[round(p['p_evade'], 3) for p in ca]}",
+          f"and reacts from f{cs_seen:.1f}, exactly the cast read from there, or, since version 22 picks his "
+          f"roll direction, commits earlier in one that escapes both ({same}); knowing the spell is never worse "
+          f"for him (version 25): net {[round(p['net'], 1) for p in cb]} -> "
+          f"{[round(p['net'], 1) for p in ca]}, p_evade {[round(p['p_evade'], 3) for p in ca]}. Version 28: with the "
+          f"timing error on a press at his reaction too, escaping whole he punishes some at 3 m (net -3.1 both ways; "
+          f"0 in version 27)",
           all(same) and all(round(p['p_evade'], 6) == 1.0 for p in cb)
-          and all(round(p['p_evade'], 6) < 1.0 and p['net'] > 0 for p in ca))
+          and all((round(p['p_evade'], 6) < 1.0 and p['net'] > 0) or (round(p['p_evade'], 6) == 1.0 and p['net'] <= 0.0)
+                  for p in ca) and all(b['net'] <= a['net'] + 1e-9 for a, b in zip(ca, cb)))
     lg, ll = m.lookalike_group(m.by_name['comet'], staff, [staff], lst, defender=dfn)
     lsize = 2 + sum(len(lg[(x, 'tap')]['members']) + 1 for x in (m.by_name['comet'], m.by_name['shard spiral']))
     lwant = 2 + sum(len(m.releases(m.by_name[x], TAP)) for x in ('comet', 'shard spiral'))
@@ -4755,21 +6233,34 @@ def selftest():
     dtap = m.skill_attack('Glintstone Kris', kst, defender=dfn, follow=drel[0], priced_bullets=True, flown_only=True)
     dgrp = skill_lookalikes(A, dhold, dtap)
     hlook = dgrp.member('hold')
-    dsame = []
+    dsame, dknow = [], []
     for d, f in lsit:
         plan_ = A.sequence_outcome(_bursts(dhold['geo'], dhold['value']), d, floor=f, my_roll=dhold['roll'],
                                    strikes=lstrike, run=True, plan=hlook.plan(d))
+        # Knowing it is the hold (no plan): never worse for him than the plan that cannot tell it
+        # from its release (version 25).
+        know_ = A.sequence_outcome(_bursts(dhold['geo'], dhold['value']), d, floor=f, my_roll=dhold['roll'],
+                                   strikes=lstrike, run=True)
+        dknow.append((round(know_['value'] - know_['punish_hp'], 3), round(plan_['value'] - plan_['punish_hp'], 3)))
         cue = A.sequence_outcome(_bursts(dhold['geo'], dhold['value']), d, cue=float(drel[0]['first']), floor=f,
                                  my_roll=dhold['roll'], strikes=lstrike, run=True)
-        dsame.append(all(abs(plan_[x] - cue[x]) < 1e-9 for x in ('value', 'p_evade', 'p_punish')))
+        # Read from the release, or (version 22, a family per roll direction) committed earlier in a
+        # direction that escapes both.
+        dsame.append(all(abs(plan_[x] - cue[x]) < 1e-9 for x in ('value', 'p_evade', 'p_punish'))
+                     or (round(plan_['p_evade'], 6) == 1.0 and plan_['value'] == 0.0))
     check(f"the Glintstone Dart: its early release is let go at f{drel[0]['first']} (the {RELEASE_EARLY_SPEFFECT} "
           f"window's first frame, the id er-mechanics-ashes reads too), where the tap's clip starts (its press "
           f"f{dtap['option']['parts'][1]['offset']}); before it both play the opening, so that is the split "
-          f"({dgrp.splits[0][1]}), and the full charge is read from there ({dsame})",
+          f"({dgrp.splits[0][1]}), and the full charge is read from there or escaped whole in a direction that "
+          f"escapes both ({dsame})",
           RELEASE_EARLY_SPEFFECT == A.RELEASE_EARLY_SPEFFECT
           and drel and float(drel[0]['first']) == float(dtap['option']['parts'][1]['offset'])
           == dgrp.splits[0][1] and min(min(f for f in dhold['value']), min(f for f in dtap['value'])) > drel[0]['first']
           and all(dsame))
+    check(f"knowing the Glintstone Dart is the hold is never worse for the defender than the plan that cannot tell it "
+          f"from its release (version 25: he aims each press for what it is worth to him, escaping and punishing, in "
+          f"both; the PvP ranking's skill_reaction measured him punishing it 0.3294 knowing it and 0.5000 not in "
+          f"version 24): attacker net knowing / not {dknow}", all(k <= p + 1e-6 for k, p in dknow))
     # The release frame is the attacker's choice (`er-mechanics-ashes.release_frames`): a tap is one
     # member per release frame of its window, and what it nets is their weighted mean.
     csid = m.by_name['glintstone cometshard']
@@ -4839,6 +6330,17 @@ def selftest():
           and [round(x, 6) for x in dsp] == [float(k + s) for k, s in zip(range(13), dshow)]
           and dg.splits[2][3] == min(dg.splits[0][2], dg.splits[0][3]) and dg.splits[1][3] == min(dg.splits[0][1],
                                                                                                  dg.splits[0][3]))
+    # Version 28: the strike's press carries the dodge's timing error. One R1 landing 10 frames after
+    # its press, in reach (1 m), against a first touch at f21: it lands when pressed before f11. His
+    # reactions f8.45, 9.18, 9.67, 10.09, 10.50, 10.94, 11.44, 12.10, 13.31 plus the errors -2.20,
+    # -1.19, -0.55, 0, +0.55, +1.19, +2.20 come before f11 in 7, 6, 6, 5, 4, 4, 3, 2 and 0 of 7: 37 of
+    # 63. Version 27 pressed at the reaction exactly: the first six, 42 of 63.
+    tstr = Strikes([10.0], [500.0])
+    tsegs = strike_segments(A, tstr, 1.0, 0.0, 21.0, None, [], ())
+    check(f"v28: the strike is pressed at each reaction plus each timing error (er-mechanics-ashes.pressed): an R1 "
+          f"10 frames from its press lands before a touch at f21 from {sum(w * (e - a) for w, a, e, _, _ in tsegs) * 63:.6f} "
+          f"of 63 presses (37; version 27, the reaction exactly, 42)",
+          abs(sum(w * (e - a) for w, a, e, _, _ in tsegs) * 63 - 37.0) < 1e-9)
     # The defender's strike (module doc, "The kit"). Stars of Ruin's charged cast, INT 80: its stars
     # leave at its startup (f54.9 at DEX 10). Pressed at 1.5 m on a defender free at once, two R1s
     # that break any poise (500) reach the caster by f13.3 + 20 at the latest, before the stars
@@ -4866,6 +6368,64 @@ def selftest():
           sr_new[0]['strike'] and abs(sr_new[0]['value']) < 1e-6 and abs(sr_new[0]['p_punish'] - 1.0) < 1e-9
           and abs(sr_new[0]['net'] + A.PUNISH_HP) < 1e-6 and sr_old[0]['net'] > 0 and sr_launch > 13.31 + 20.0
           and not sr_new[1]['strike'] and not sr_new[1]['now']['strike'] and sr_new[1]['net'] == sr_old[1]['net'])
+    # A whiffer runs in no sooner than his whiff's move cancel (env 2000; `punish_situations`'
+    # 'run'): Longsword R1 #1 one-handed can roll at f24, guard at f27, walk at f29, its hit ending
+    # at f16, so a situation off it carries floor 8 and run 13. Up close the run is not read (the
+    # key shares the floor's); at 6 m he has to run, and from f40 his R1 comes too late for the
+    # stars that the same strike from f0 interrupts.
+    ls_r1 = next(r for r in ATK.weapon_attacks(ATK.Regulation(None), 2000000, 'one') if r['slot'] == 'r1_1')
+    ls_cf = {k: round(ls_r1['cancel_frame'][k]) for k in ('dodge', 'guard', 'move')}
+    ls_end = round(max(w[1] for w in ls_r1['hit_windows']))
+    sr_run = net_parts(A, sr_geo, sr_val, [(1.5, 0.0, 40.0), (6.0, 0.0), (6.0, 0.0, 0.0), (6.0, 0.0, 40.0)],
+                       sr_v['roll'], Strikes([15.0, 20.0], [500.0, 500.0]), defender=dfn)
+    check(f"Longsword R1 #1 cancels {ls_cf} after its hit's end f{ls_end}; Stars of Ruin's charged cast struck from "
+          f"floor 0 at 1.5 m with run f40 (net {sr_run[0]['net']:.1f}), at 6 m from f0 (net {sr_run[1]['net']:.1f}, "
+          f"strike {sr_run[1]['strike']}) and from run f40 (net {sr_run[3]['net']:.1f}, strike {sr_run[3]['strike']})",
+          ls_cf == {'dodge': 24, 'guard': 27, 'move': 29} and ls_end == 16
+          and situation_key(A, 1.5, 0.0, 40.0) == (1.5, 0.0, 0.0) and situation_key(A, 6.0, 8.0, 13.0) == (6.0, 8.0, 13.0)
+          and sr_run[0]['net'] == sr_new[0]['net'] and sr_run[0]['strike']
+          and sr_run[1] == sr_run[2] and sr_run[1]['strike'] and not sr_run[3]['strike']
+          and not sr_run[3]['now']['strike'])
+    # Version 23: the strike prices what lands where it timed the first touch (`StrikeReach.where`).
+    # From 8 m he runs in to `PUNISH_REACH_M`, where Stars of Ruin's charged stars meet him sooner
+    # than at 8 m, so the touch and the price are both read there; up close nothing moves. A cast's
+    # threats (`CastThreats.strike_reach`, the Nails) read their base by the same rule.
+    srr = StrikeReach(A, sr_geo)
+    sr_near = round(A.PUNISH_REACH_M, 2)
+    sr_far, sr_cl = min(srr.tau(8.0)), min(srr.tau(sr_near))
+    # The Nails' threats again (`ct` above is a synthetic one by now).
+    ct = m.cast_threats(nails, nev, nv['startup'] - min(f for f, _ in nev), nworth)
+    n_far, n_cl = ct.first_touch(A, 8.0), ct.first_touch(A, sr_near)
+    check(f"the strike reads Stars of Ruin's charged cast from 8 m where he meets it first: f{sr_cl:.1f} at "
+          f"{sr_near} m against f{sr_far:.1f} at 8 m, priced there ({srr.where(8.0)} m); at 1.5 m at 1.5 m; the "
+          f"Nails' base from 8 m is the one at the place their touch was timed (f{n_cl:.1f} / f{n_far:.1f})",
+          srr.where(1.5) == 1.5 and sr_cl < sr_far and srr.touch(8.0) == sr_cl and srr.where(8.0) == sr_near
+          and ct.strike_reach(A, 8.0)[3] == ct.strike_reach(A, sr_near if n_cl < n_far else 8.0)[3]
+          and ct.strike_reach(A, 8.0)[1] == min(n_far, n_cl))
+    # Version 23: a re-aimed cast's first roll is timed from where its first reaching burst shows its
+    # timing (`er-mechanics-ashes.burst_cue`), as a volley's is. Glintstone Nail at 6 m read from the
+    # cast rolls some of it away; its geometries given a search launch long after the flight, he
+    # cannot roll before it lands and takes it whole.
+    nk = round(round(6.0 / DYNAMIC_DIST_M) * DYNAMIC_DIST_M, 3)
+    na_ = m.cast_threats(one, oev, ov['startup'] - min(f for f, _ in oev), dict(ct1.worth))
+    nb_ = m.cast_threats(one, oev, ov['startup'] - min(f for f, _ in oev), dict(ct1.worth))
+    for gs_, _ in nb_.bursts(nk)[0]:
+        for g_ in gs_:
+            g_['CUE'] = 1e4
+    oa_, ob_ = na_.outcome(A, 6.0, 0.0, ov['roll'], [15.0]), nb_.outcome(A, 6.0, 0.0, ov['roll'], [15.0])
+    check(f"dynamic_outcome reads burst_cue: Glintstone Nail at 6 m read from the cast lands {oa_['value']:.1f} of "
+          f"{oa_['base']:.1f}; read from a launch at f10000 it lands whole ({ob_['value']:.1f})",
+          na_._dyn[(nk, 'cue')] == 0.0 and nb_._dyn[(nk, 'cue')] == 1e4 and oa_['value'] < oa_['base']
+          and ob_['base'] > 0 and abs(ob_['value'] - ob_['base']) <= 1e-9 * ob_['base'])
+    # Version 23: a stance skill's geometries carry the stance press (`PRESS_CUE`, part 0's cue, the
+    # one `er-mechanics-ashes.skill_reaction` reads), so `net_parts` reads the dodge from it too; a
+    # skill with no timed press carries none.
+    us_ = m.skill_attack('Uchigatana', {'str': 20, 'dex': 20}, defender=dfn, stance='r1')
+    us_cue = float(us_['option']['parts'][0]['cue'])
+    check(f"Unsheathe R1 on the Uchigatana: its {len(us_['geo'])} geometries carry the stance press f{us_cue:.1f}, "
+          f"Zamor Curved Sword's skill none",
+          us_cue > 0 and us_['geo'] and all(g.get('PRESS_CUE') == us_cue for g, _ in us_['geo'])
+          and not any('PRESS_CUE' in g for g, _ in za['geo']))
     # A TAE 795 window holds poise the R1 would break: Fortissax's Light Spear's 045010 f15-96
     # (row 180, `toughnessCorrectRate` 0.011: +3.3 menu poise, half the poise taken). A 100-poise R1
     # breaks 62 poise outside it and not inside (62 + 3.3 - 50 > 0).
@@ -4998,7 +6558,7 @@ def attack_scores(m, spec, stats, rl=150, slot='r1_1', guard_weapon='Kite Shield
     out['guard'] = guard and {'windows': list(guard.windows), 'weapon': guard.weapon, 'judge': guard.judge,
                               'continues': guard.continues}
     sit = punish_situations(rl)['situations']
-    pairs = [(x['distance'], x['recovery']) for x in sit]
+    pairs = [(x['distance'], x['recovery'], x['run']) for x in sit]
     wts = np.array([x['weight'] for x in sit], float)
     A = m.ash()[0]
     strikes = punish_strikes(rl)

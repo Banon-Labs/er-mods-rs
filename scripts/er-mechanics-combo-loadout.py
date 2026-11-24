@@ -4473,15 +4473,18 @@ def selftest() -> int:
     # `COUNT_SECONDS` of its clock.
     clk = [0.0]
     err = io.StringIO()
-    cnt = Count(10, "weapons", clock=lambda: clk[0], out=err)
+    cnt = Count(10, "weapons", clock=lambda: clk[0], out=err, wall=lambda: clk[0])
     for i in range(9):
         clk[0] = i * 0.5
         cnt()
     cnt.skip(1)
+    hms = lambda x: time.strftime("%H:%M:%S", time.localtime(x))  # noqa: E731
     check("Count: first, one per COUNT_SECONDS, last; lines in the watcher's counter format",
           err.getvalue().splitlines(),
-          ["  1/10 weapons  0s, 0 s/item, ~0s left", "  5/10 weapons  2s, 0.4 s/item, ~2s left",
-           "  9/10 weapons  4s, 0.444 s/item, ~0s left", "  10/10 weapons  4s, 0.4 s/item"])
+          [f"  1/10 weapons  0s, 0 s/item, ~0s left  [{hms(0)}, ends ~{hms(0)}]",
+           f"  5/10 weapons  2s, 0.4 s/item, ~2s left  [{hms(2)}, ends ~{hms(4)}]",
+           f"  9/10 weapons  4s, 0.444 s/item, ~0s left  [{hms(4)}, ends ~{hms(4.44)}]",
+           f"  10/10 weapons  4s, 0.4 s/item  [{hms(4)}]"])
 
     # Better hand per feature (`SetScorer`, user 2026-10-19), on the real class-roles features. A STR
     # main hand: 2H AR 150, reach 3.2, R1 string 100 MV/s; 1H AR 100, reach 3.0, string 80. Knife

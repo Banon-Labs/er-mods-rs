@@ -107,6 +107,22 @@ IGNORED_FILES = {
     # is the redraw period, which also advances the elapsed clocks it shows, and it stops on an
     # observation -- the log's header saying finished or failed -- never on a timer.
     Path("scripts/er-mechanics-pipeline-watch.py"),
+    # Offline model runs, not probes, and their sleeps wait on nothing that signals:
+    # - attack similarity's pool, with nothing running because its memory guard refuses a start,
+    #   re-reads `MemAvailable` at the guard's poll period. The kernel has no event for memory
+    #   coming back: PSI triggers fire when stalls pass a threshold, never when they fall below one.
+    #   Its selftest's toy items sleep as the stand-in for a set's work (the sleep is the item), and
+    #   its kill check polls a file and `/proc/<pid>/stat` under 10 s and 5 s deadlines.
+    # - the resume wrapper waits on the same `MemAvailable` before each attempt and samples it while
+    #   the command runs, to stop the group before the OOM killer picks a process. It also re-reads
+    #   the group's membership under a grace deadline after a signal (no event for "group empty").
+    # - the pooled-compute lock's selftest holds the lock for a set time in its other process (the
+    #   hold is what is being tested against).
+    # - the perf dump's progress line repeats at its report period, the same as the dashboard above.
+    Path("scripts/er-mechanics-attack-similarity.py"),
+    Path("scripts/er-mechanics-resume.py"),
+    Path("scripts/er-mechanics-pool-lock.py"),
+    Path("scripts/perf-similarity-dump.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",

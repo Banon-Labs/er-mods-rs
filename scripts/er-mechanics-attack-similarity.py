@@ -6,6 +6,8 @@ across the two kinds, families, nearest neighbours, and which attack makes anoth
     python3 scripts/er-mechanics-attack-similarity.py --out <dir>/attack-similarity.html --json <dir>/attack-similarity.json
     python3 scripts/er-mechanics-attack-similarity.py --only "Zamor Ice Storm" --only Gravitas --only "Rock Sling"
     python3 scripts/er-mechanics-attack-similarity.py --show "Glintblade Phalanx"
+    python3 scripts/er-mechanics-attack-similarity.py --only "Rock Sling" \
+        --line "Int/Faith 60:vig=36,mnd=20,end=20,str=12,dex=12,int=60,fth=60,arc=9"
     python3 scripts/er-mechanics-attack-similarity.py --timing
     python3 scripts/er-mechanics-attack-similarity.py --selftest
 
@@ -49,18 +51,29 @@ no off-hand, one-handed, PvP rates:
   attack only when
   its base stats meet the carrier's requirements, or the spell's and its catalyst's; whether the
   game's requirement check counts a talisman's or great rune's stat boost is not established, so
-  base stats are read. A build's skill rides the group weapon of least requirement it can wield,
-  at the affinity whose skill damage is largest at its stats, and its spells cast at its own DEX.
+  base stats are read. A build's skill rides the group weapon it can wield whose skill damage, its
+  opening and every follow-up summed, is largest at its stats (`build_job`, `carrier_damage`), at
+  the affinity whose skill damage is largest there, and its spells cast at its own DEX.
   Its nets are paid ones (`BuildView`): an attack's nets times the share of its casts the build's
   FP pays, the rest netting 0. Dominance is read per build (below). An attack no build can use is
   in no build's population; the objective evaluation (below) prices it all the same.
+- Each `--line` spread (`given_builds`): one more attacker build, after the made lines, at the
+  eight attributes it gives, none traded. It wears the lightest armor set at its `poise` (default
+  the melee poise floor, the set a line with no fit wears; 0 wears none), no HP piece and no
+  talismans, and its nets are read and paid as a made line's are, on its FP plan (`fp_plan`). What
+  it carries in its hands is not given, so its roll is reported on its armor alone. It moves no
+  other number: the objective lines start from the made lines alone (`MEASURED` bit for bit on the
+  Glintstone Pebble sorcery, check 36; `INFERRED` elsewhere: a spread's lookalike group can join two
+  attack sets, which can refine a release's frames further, `release_strata_of`).
 
 A spell variant is one entity per `SpellModel.evaluate` variant (cast, or tap and charged), flown
 with the spell rule as its node test (`SpellModel.spell_node_damaging`). A weapon skill is one
 entity per carrier opening: the weapons that carry it (an ash: every base weapon that mounts it at
 some affinity at its top level, plus the weapons that ship with it; a unique skill: its own
-weapons) are grouped by the clip they open with, and each opening rides the weapon of least total
-requirement in its group, at the mountable affinity whose skill damage is largest. A stance skill
+weapons) are grouped by the clip they open with. On the distance basis each opening rides the
+weapon of least total requirement in its group, and an attacker build or objective line the group
+weapon it can wield whose skill damage is largest (`build_job`), each at the mountable affinity
+whose skill damage is largest. A stance skill
 is one entity per button, and each follow-up its own entity. A charged skill (its opening carries
 the early-release window SpEffect 100285) is two: the default entity holds the charge to the end,
 its opening clip, which carries the `AtkParam.subCategory` 111 rows (`MEASURED` round 5: on every
@@ -101,6 +114,31 @@ basis, which has no VIG, at the RL window's median defender's (`INFERRED`). A ro
 only through a status proc on the caster (the frenzy incantations' madness, Briars of Sin's bleed
 half) is left unpriced, listed in 'hp_cost' 'unpriced': no line carries its own resistances
 (`er-mechanics-self-damage.status_cost`). A component carries no cost: the whole entity pays it.
+
+Every net and every catch's worth also carries the status the attack builds (version 30): each hit
+list of a caught defender's `CAUGHT` record carries the build-up one of its hits puts on the gauge,
+per status (`annotate_status`, `list_status`: the 13 hit SpEffect slots as
+`er-mechanics-ash-table.Table.hit_buildup` reads them and `er-mechanics-status._row_amount`'s
+formula, at the line's own stats and the carrier's affinity; a spell's hits read no weapon rows),
+and the proc row it would apply. Per play of the caught defender (`er-mechanics-ashes.CaughtModel`'s
+runs) the landed share of each list's hits gives the build-up landed, less the gauge's refill over
+the play; each pool build whose own resistance (`er-mechanics-spells.SpellModel.defender`
+`status_pool`, the planner's `computed.resistances`) that empties takes the proc row's HP at his own
+max HP, added to what the catch lands before the cap at his health
+(`er-mechanics-spells.StatusCaught`, the comment above `STATUS_WORTH_FLOOR` there has the rules and
+what is not priced). So a proc counts only when the hits landed in that situation cross the
+threshold, the defender's choices read it (he dodges what would proc him as he dodges damage), and
+an attack that builds nothing reads the plain caught model and the same numbers. A land share
+divides by the full worth with the status HP of every hit landing (`er-mechanics-spells.status_full`).
+A status-only spell's hits count as hits of no damage (`status_hit_atks`), so Freezing Mist is scored
+on the frost its field builds (`MEASURED` 2026-11-22, check 38: 20 a tick, 1,400 over the field's 70
+ticks, 213 HP on the pool when all land; no catch at the first 12 distances crosses a gauge, so its
+nets are what the defender's punish leaves). Poison Mist (poison, 1,400) and Fia's Mist (death
+blight, 260) are scored the same way (check 37); a death blight row costs 0 HP (its kill by state is
+not traced), so a death blight proc prices nothing. A weapon buff (Frozen Armament) is no attack
+and adds nothing to any other attack: an item that buys an effect is a choice, priced as a pick.
+A skill's status-only bullet (no damage) and a catch by the old rule (no `CAUGHT` record) build
+none, `INFERRED` as unpriced, and the one-hit nets (`net_one`) carry the whole status as `net` does.
 
 A follow-up (bd er-effects-rs-me5p) is scored by `FollowupForm` instead, on the same situations,
 run-in options and caught defender: its opening is dodged as `sequence_outcome` dodges it, and the
@@ -197,8 +235,8 @@ lands at least `--null`; runin_only when only the best option (a run-in) does; n
 neither does ('never reaches' when an idle defender is touched on less than `--null` of the weight,
 else 'always evaded'). A punish chance never makes an attack live. A live attack that nets at most
 `--hp` on average is flagged 'punished as much as it lands'; one that is not live and nets under
--`--hp` (Starcaller Cry, Flame Spit) 'lands little, punished more'. Both flags read the distance
-basis's nets; each attacker build lists its own (`build_dominance` 'punished').
+-`--hp` (the Zamor Ice Storm casts, Flame Spit) 'lands little, punished more'. Both flags read the
+distance basis's nets; each attacker build lists its own (`build_dominance` 'punished').
 
 # Associations
 
@@ -228,9 +266,9 @@ base rate as well as by the adjusted Rand index, which singletons hold down. Nei
 D_assoc, or by D_idle among the attacks that reach for one that is always evaded; a pair the gate
 keeps apart is marked, and its delivery shows with the tokens it does not share. Effect tokens
 (status, HP drain, defense down, pull / push / gravity, homing, unblockable, grab, jumpable)
-annotate entities and pairs; they never enter a distance, because the outcome model cannot see
-them. A skill's status tokens include its carrier's own status rows when a scored hit is from the
-weapon (`weapon_status_tokens`: `VERIFIED`, round 5 trace). An attack excluded for having no
+annotate entities and pairs; as tokens they never enter a distance (a status's build-up enters the
+nets and land shares, version 30, the outcome section; the rest the outcome model cannot see). A
+skill's status tokens include its carrier's own status rows when a scored hit is from the weapon (`weapon_status_tokens`: `VERIFIED`, round 5 trace). An attack excluded for having no
 damaging hit still has its tokens read, on every node and
 AtkParam it fires, and is listed in its effect families as an exclusion (Poison Mist, Deadly Poison
 Spray); a skill whose only hit is a grab the model does not price is excluded as 'grab not
@@ -297,8 +335,9 @@ damage stats, `OutcomeForm` nets per situation, their weighted mean as 'mean_net
   attribute at its base or its requirement, whichever is higher, and the class whose line has the
   lowest RL (`minimum_line`, 'from_class').
 
-A skill rides the group weapon `build_job` picks at the line (the distance basis's carrier, whose
-requirements both lines meet), at the affinity whose skill damage is largest there. A job is run
+A skill rides the group weapon `build_job` picks at the line (of the group weapons the line can
+wield, the one whose skill damage is largest there; both lines meet the distance basis's carrier's
+requirements, so there is always one), at the affinity whose skill damage is largest there. A job is run
 once per distinct line among its entities, and each entity is kept from the run at its own line;
 entities on one line share its `OutcomeForm` groups. The objective lines are not in any
 population: dominance stays per attacker build.
@@ -314,8 +353,9 @@ population: dominance stays per attacker build.
   attack nets most.
 - Homing is flown in the horizontal plane only (`er-mechanics-ashes` `homes`, FUN_140398270): the
   aim point's height is not decoded, and a caught defender's later hits are read on the straight
-  flight. Pull, knockback and status are invisible to the outcome model and are only annotated as
-  tokens. Whether a skill bullet's children keep the root's 'from the weapon', and so the
+  flight. Pull and knockback are invisible to the outcome model and are only annotated as tokens;
+  a status is priced only through a proc's HP (frost's damage-taken rise, sleep and a death blight
+  kill are not). Whether a skill bullet's children keep the root's 'from the weapon', and so the
   carrier's status, is not traced.
 - Whether letting a charged skill go before the opening's FP event still pays the FP is not traced;
   the late release (SpEffect 100286, Carian Grandeur alone) is not scored. The release frame is the
@@ -350,6 +390,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import copy
 import dataclasses
 import datetime
@@ -400,6 +441,22 @@ def _ai():
     return S._mod('er_mechanics_ash_interrupt', 'er-mechanics-ash-interrupt.py')
 
 
+def _pool_lock():
+    """`er-mechanics-pool-lock`: the one-pooled-run-at-a-time lock every checkout shares."""
+    return S._mod('er_mechanics_pool_lock', 'er-mechanics-pool-lock.py')
+
+
+def pool_held(jobs, what, wait=True, log=None):
+    """A context holding `er-mechanics-pool-lock` for a pooled compute (`jobs` above 1), naming the
+    run `what`; a single-core compute takes nothing (`contextlib.nullcontext`). Held by another run,
+    it waits and says who holds it (pid and working directory, to `log`, default stderr), or with
+    `wait` False exits 3."""
+    import contextlib
+    if jobs is None or jobs <= 1:
+        return contextlib.nullcontext()
+    return _pool_lock().held(what, wait=wait, log=log)
+
+
 def _build_tags():
     """`er-mechanics-build-tags`: the planner's archetype rule and the corpus reader it imports."""
     return S._mod('er_mechanics_build_tags', 'er-mechanics-build-tags.py')
@@ -408,6 +465,11 @@ def _build_tags():
 def _self_damage():
     """`er-mechanics-self-damage`: the HP a cast takes from its own user (`hp_cost_of`)."""
     return S._mod('er_mechanics_self_damage', 'er-mechanics-self-damage.py')
+
+
+def _status():
+    """`er-mechanics-status`: status build-up per hit and what a proc costs (`annotate_status`)."""
+    return S._mod('er_mechanics_status', 'er-mechanics-status.py')
 
 
 def hp_cost_of(cost):
@@ -484,7 +546,91 @@ def line_hp(c, line=None, build=None):
 #: Moore's Charge, Revenge of the Night, Golden Retaliation, Flame Spit, Tongues of Fire). 13: every
 #: net is less the HP the cast takes from its own user (Bloody Slash's 5% of max HP + 50, Briars of
 #: Sin's 80 a launch: 'hp_cost', `er-mechanics-self-damage`), at each line's own max HP (`line_hp`).
-SIMILARITY_VERSION = 13
+#: 14: each hit of a shared bullet record is priced at the AtkParam of the bullet that landed it, and
+#: a caught defender may also leave to either side (section 6b; Ghostflame Ignition then R1 926 -> 408).
+#: 15: a skill's bullets land once per shared hit list and its attacks once per hit priority record
+#: (`er-mechanics-ashes.cast_mask`, ashes-of-war.md section 20; Surge of Faith 4,275 -> 1,597 a cast).
+#: 16: a defender runs no sooner than his move cancel (the HKS walk starts only through it, env
+#: 2000): the whiffer who runs in to strike from his whiff's ('run' of each situation, Longsword
+#: R1 #1 f29 against its dodge cancel f24) and the roller who runs in to punish from his roll's
+#: (f22 against its R1 cancel f20; `er-mechanics-ashes.punish_lead`).
+#: 17: an attack's contacts take the attacker's best free-aim pitch off lock-on (TAE 700
+#: `EnableTwistModifier` over the camera pitch, `er-mechanics-reach.free_aim_pick`; Longsword
+#: powerstance L1 #1 at -35 degrees reaches 3.709 -> 3.844 m and lands f14.5 -> f13.0 at 1.5 m).
+#: 18: a caught defender takes a bullet list only where its own bullets touch him on his path, each
+#: with its own poise and reaction (`er-mechanics-ashes.CaughtModel`): Rosus's Summons' three bursts,
+#: 0.25 s apart at one spot, were all landed at once on any catch; now each breaks the pool's 62
+#: poise (202.5 PvP) and holds him for the next, and a 700-poise defender leaves after the first.
+#: Such a bullet chain is also one geometry per list (`er-mechanics-ashes.split_chains`, bd
+#: er-effects-rs-fse5), so a dodger first touched by burst 2 is credited bursts 2-3, not all three.
+#: 19: an attacker build or objective line rides the group weapon it can wield whose skill damage
+#: (opening and follow-ups summed, `carrier_damage`) is largest, not the one of least requirement:
+#: Glintstone Pebble then R2 on Intelligence + melee 964.2 on the Dagger -> 1245.1 on the Omen
+#: Cleaver, Double Slash 313.3 -> 519.9 on the Uchigatana (`skill_option` damage, `MEASURED`
+#: 2026-11-16).
+#: 20: a shot a search launches (the Glintblade Phalanx and Carian Phalanx blades: hover at least
+#: `er-mechanics-ashes.SEARCH_ARM_S`, then launch when the bullet's search, facing the caster's
+#: facing, finds the target, `VERIFIED`) is read by the defender from that launch, not the cast
+#: (`er-mechanics-ashes.burst_cue`); and a follow-up nets the mixup's value (`FollowupForm.mixup`:
+#: the defender's roll or stand against the attacker's press policy at every default delay, at
+#: `STRAFE_SHARE` 0, `INFERRED`), not one fixed sequence. Section 2a.
+#: 21: a caught defender stays in his whiff's recovery until its cancels let him go (a roll from the
+#: situation's dodge floor, a run from its move floor; a reaction that locks him ends it), and holds
+#: with each pool build's own poise (Bull-Goat's `altered`, else `original`), not the median
+#: `original` (`er-mechanics-ashes.CaughtModel`, section 6). The strafe row reads the move floor
+#: itself, not the situation key's, which is the dodge floor up close. One cast is capped at each
+#: pool build's own health, not the median Vigor's; a caught defender may jump out of `AIR` hits; a
+#: same-frame tie in one hit priority record goes by priority in `_catches` too; a hit breaks poise
+#: at `>=` (skill_landing as well).
+#: 22: a Phalanx blade is one hit list over its hover and flight; the defender picks his roll
+#: direction; the punish and the strike read where the attacker's root motion left him; a
+#: follow-up is read in its opening's lookalike group. 2a.
+#: 23: the defender's one option set and reaction rule (stand, cue, latency, strike place; section 2g).
+#: 24: 21, 22 and 23 together.
+#: 25: dodges aimed for escape and punish; catches in a dodge played from it; stand row sees him leave.
+#: 26: each escaping roll carries the defender into the next burst (`er-mechanics-ashes.dodge_chain`:
+#: on its root motion to its dodge cancel, where it leaves him, free to dodge again only from its
+#: start plus that cancel, the attacker turning to face him before each later burst); the same in
+#: the follow-up (`FollowupModel`, its opening roll and planned dodges) and the volley path; every
+#: follow-up catch in a dodge of his priced from that dodge; a roll row's press the opening caught
+#: met by the attacker who sees the caught defender leave (`FollowupModel._stand_values`'s rule);
+#: the exchange model's dodges aimed for the punish too (`Opponents._table`). Section 2i.
+#: 27: the roll's whole clip carries him until he next acts (no stop at its dodge cancel); the
+#: attacker's facing follows each clip's TAE 224 / JumpTable 7 turn rules every update, within a
+#: burst and between bursts, for every touch read and the caught defender's play
+#: (`er-mechanics-ashes.clip_turn`, `_facing`), a roll out of a track taken facing him (`oriented`);
+#: the volley on the shared chain with which threats landed together (`_volley_chain`); the
+#: follow-up's tables fly a homing geometry and its opening bursts past the last that reaches him
+#: standing are read; the exchange model picks his direction per opener and rolls again for the
+#: chained hit (`Opponents._second_roll`). Section 2j.
+#: 28: every press of the defender carries his timing error, one he presses at his reaction
+#: included (`er-mechanics-ashes.pressed`; until then an early error was clamped to the reaction, so
+#: a defender reacting to a later event pressed with none and could do better than one who knew the
+#: attack): his dodges in every stage (`_AimTable`), his strike (`er-mechanics-spells.strike_segments`)
+#: and his strafe. Only his recovery's floor truncates a press. Section 2k.
+#: 29: a quick spell's cast while sprinting ('dash') waits on the dodge-button hold (0.4 s) left
+#: when the window opens, after what his run back already held (`pairs_of`,
+#: `er-mechanics-spells.sprint_situations`); until then it was pressed as if sprinting already.
+#: 31: the full worth the land shares divide by counts a hit priority record's hits once
+#: (`er-mechanics-spells.full_worth`), as `CaughtModel` lands them: Starcaller Cry's five nested
+#: opening spheres were five times its worth there (1879.9 HP, now 376.0), and an attack whose later
+#: launches the record holds back had land shares below what lands (Gavel of Haima's largest 0.233,
+#: now 0.417). The status full worth leaves the held-back hits out too (`status_full`). The nets do
+#: not move (attack and build nets bit-identical, `MEASURED` 2026-11-23 with perf-similarity-dump.py).
+#: 32: a bleed or frost proc on a caught defender whose poise held stuns him: HKS `ExecDamage` raises
+#: the hit to `DAMAGE_LEVEL_SMALL` (`COMMUNITY`), so his escape waits for the small stagger's cancel
+#: (a roll from frame 10, 7 / 4 / 0 on the 2nd to 4th in a row) and the later hits land on him held
+#: there, in every stage that plays him (`er-mechanics-spells.StatusCaught`, the comment above
+#: `STATUS_WORTH_FLOOR` there). Until then a proc was priced as its HP alone. An attack that builds
+#: neither, or never enough to proc on the pool, reads the same plays as before. The nets of Zamor
+#: Ice Storm, Freezing Mist and Corpse Piler do not move (0 of 436 situations each, every 8th,
+#: `MEASURED` 2026-11-23 with er-mechanics-form-check.py): their procs come only in escapes the
+#: defender does not take (enough ticks to empty a robustness of 173 or more mean he stayed, and his
+#: best escape leaves first), or on a hit that already staggers him (Corpse Piler's second). The
+#: whole similarity output of those three, Bloody Slash, Stars of Ruin and Carian Slicer is bit-
+#: identical to version 31's (perf-similarity-dump.py, 120 arrays), at 1.5x to 2.5x the CPU on the
+#: stun attacks (Freezing Mist tap 2,377 -> 3,818 s, two dumps run side by side).
+SIMILARITY_VERSION = 32
 #: The distance basis: every damage stat 99, so every attack is wieldable and castable. No
 #: character at the RL window has it (with 10 `VIG`, `MND` and `END` it is RL 446), so nothing that
 #: compares damage or FP is read on it: dominance is read per attacker build (`attacker_builds`).
@@ -592,10 +738,16 @@ WEAPON_SCALING = {'str': 'correctStrength', 'dex': 'correctAgility', 'int': 'cor
 SCHOOL_STAT = {'enableMagic': 'int', 'enableMiracle': 'fth'}
 #: The objective evaluation's lines (`objective_lines`), in the order they are shown.
 OBJECTIVE_LINES = ('adjusted', 'minimum')
-BULLET_EXTRA = ['homingAngle', 'sfxId_Bullet']
+BULLET_EXTRA = ['homingAngle', 'sfxId_Bullet'] + [f'spEffectId{i}' for i in range(5)]
 ATK_EXTRA = ['disableGuard', 'throwTypeId', 'statusAilmentAtkPowerCorrectRate',
              'statusAilmentAtkPowerCorrectRate_byPoint', 'isInvalidatedByNoDamageInAir', 'knockbackDist',
-             'disableHitSpEffect']
+             'disableHitSpEffect', 'opposeTarget', 'friendlyTarget', 'selfTarget']
+#: `Magic.refCategory` of a SpEffect ref (er-mechanics-spells module doc: 0 AtkParam_Pc, 1 Bullet,
+#: 2 SpEffect).
+REF_SPEFFECT = 2
+#: `BehaviorParam_PC.refType` of an AtkParam_Pc row and of a Bullet row (er-mechanics-ashes module
+#: doc; er-duel-rules-gen reads 1 as a bullet the same way).
+BEH_ATTACK, BEH_BULLET = 0, 1
 #: Per-situation arrays of one profile (`profile_arrays`).
 ARRAYS = ('land_now', 'pun_now', 'base_now', 't_first', 'land', 'pun', 'net', 'net_one', 'gap')
 ERRORS = (KeyError, TypeError, ValueError, StopIteration, SystemExit, IndexError, ZeroDivisionError)
@@ -607,9 +759,12 @@ ERRORS = (KeyError, TypeError, ValueError, StopIteration, SystemExit, IndexError
 class Context:
     """The model, the distance basis build, the attacker builds and the situations every entity is
     scored in. `builds` None makes the attacker builds from the game's curves and the corpus's
-    usage (`attacker_builds`, `corpus_usage`)."""
+    usage (`attacker_builds`, `corpus_usage`), then one more per spread of `lines` ([`parse_line`],
+    `--line`; `given_builds`), which needs the line fit's world and so only goes with `builds`
+    None."""
 
-    def __init__(self, stats, catalysts=DEFAULT_CATALYSTS, rl=150, include_blacklisted=False, builds=None):
+    def __init__(self, stats, catalysts=DEFAULT_CATALYSTS, rl=150, include_blacklisted=False, builds=None,
+                 lines=()):
         self.SM = S.SpellModel()
         self.A, self.t = self.SM.ash()
         # Everything the outcome reads lazily, loaded now: the workers inherit it and the code stamp
@@ -623,12 +778,19 @@ class Context:
         self.rl = rl
         self.include_blacklisted = include_blacklisted
         self.situations = S.punish_situations(rl)['situations']
-        self.pairs = [(s['distance'], s['recovery']) for s in self.situations]
+        # (distance, dodge-cancel floor, move-cancel floor): `net_parts`' situations.
+        self.pairs = [(s['distance'], s['recovery'], s['run']) for s in self.situations]
+        # The same situations met by a cast pressed while sprinting (a quick spell's 'dash'
+        # variant, `sprint` in `profile_inputs`): `er-mechanics-spells.sprint_situations`.
+        self.sprint_pairs = S.sprint_situations(self.situations)
         self.w = np.array([s['weight'] for s in self.situations], float)
         self.W = float(self.w.sum())
         self.n_eff = n_eff(self.w)
         self.strikes = S.punish_strikes(rl)
         self.dfn = self.SM.defender(rl)
+        # The status chain (`annotate_status`, version 30): `er-mechanics-status`'s tables on the
+        # model's own attack-rating tables.
+        self.st = _status().Tables(ar_tables=self.SM.ar)
         self.F = (self.A.REACTION_MEDIAN_S + 2 * self.A.NETWORK_ONE_WAY_S) * S.FPS
         files = self.SM.cast.t._files
 
@@ -636,6 +798,11 @@ class Context:
             return {r['id']: r for r in PR.rows(PR.param_bytes(files, stem), fields)[0]}
         self.bx = by_id('Bullet', BULLET_EXTRA)
         self.ax = by_id('AtkParam_Pc', ATK_EXTRA)
+        # A status-only spell's hits count, flown and scored as hits of no damage (version 30).
+        self.status_atks, self.status_atks_shared = status_hit_atks(self)
+        self.SM.status_atks = frozenset(self.status_atks)
+        # What a SpEffect's `behaviorId` makes (`behavior_damage`).
+        self.beh = by_id('BehaviorParam_PC', ['refType', 'refId'])
         self.goods = by_id('EquipParamGoods', ['goodsType', 'sortId'])
         self.subcat = {mid: self.SM.cast.magic.get(mid, {}).get('subCategory1', 0) for mid in self.SM.names}
         self.black = blacklist()
@@ -647,6 +814,8 @@ class Context:
         #: Per attribute, the lowest base of any starting class: the floor of the objective lines.
         self.class_floor = {k: min(cl[k] for cl in self.classes.values()) for k in ATTRS}
         self.usage = None
+        #: The melee poise floor the made lines' armor is read at (`given_builds`' default).
+        self.poise_floor = None
         hp, load, fp = resource_curves()
         if builds is None:
             # Every line is line-fit's on its own kit (`fitted_lines`); the corpus gives usage: the
@@ -658,7 +827,9 @@ class Context:
                     weight.setdefault(wnames[wid], float(r['weight']))
             AT = S._mod('er_mechanics_armor_targets', 'er-mechanics-armor-targets.py')
             floor = AT.melee_poise_floor(AT.pool_rows(rl - S.WINDOW, rl + S.WINDOW)[0], AT.ATK.Regulation(None))[0]
-            self.armor = lightest_armor(AT.armor_candidates(AT.DEF.Tables()), floor)
+            cands = AT.armor_candidates(AT.DEF.Tables())
+            self.armor = lightest_armor(cands, floor)
+            self.poise_floor = floor
             self.usage = corpus_usage(rl, weight=weight)
             # One Mind and FP model: `er-mechanics-line-fit` fits the lines it can express and
             # prices every line's FP. The world is local, so it is gone once the lines are made and
@@ -671,7 +842,14 @@ class Context:
                 return fp_plan(F, world, stats, self.armor['pieces'] if self.armor else [])
             self.builds = attacker_builds(rl, self.usage, self.classes, hp, load, self.armor, floor,
                                           mind=self.mind_fitter(fp, plan), fitted=fitted, plan=plan)
+            if lines:
+                self.builds += given_builds(lines, self.classes, rl, load, lambda p: lightest_armor(cands, p),
+                                            lambda st, pieces: fp_plan(F, world, st, pieces), floor,
+                                            [b['name'] for b in self.builds])
         else:
+            if lines:
+                raise ValueError('attack similarity: --line spreads are made with the attacker builds, not beside '
+                                 'builds given whole')
             self.builds = [dict(b) for b in builds]
         for b in self.builds:
             b.update(reach=reachable(b['stats'], self.classes, rl))
@@ -1114,6 +1292,89 @@ def attacker_builds(rl, usage, classes, hp, load, armor, floor, lines=ATTACKER_L
     return sorted(out, key=lambda b: -b['n'])
 
 
+#: The keys a `--line` spread may give besides the eight attributes (`parse_line`).
+GIVEN_LINE_EXTRA = ('poise',)
+
+
+def parse_line(text):
+    """(name, {attribute: value}, {'poise': float or None}) of a `--line` spec
+    'NAME:vig=..,mnd=..,end=..,str=..,dex=..,int=..,fth=..,arc=..[,poise=..]': the name before the
+    last ':', every one of `ATTRS` (1 to `STAT_MAX`), and `poise`, the armor poise its set is the
+    lightest at (`given_builds`; default the run's melee floor). An exit naming what is wrong
+    otherwise."""
+    name, sep, body = (text or '').rpartition(':')
+    name = name.strip()
+    if not sep or not name:
+        raise SystemExit(f'attack similarity: --line {text!r}: want NAME:vig=..,mnd=..,end=..,str=..,dex=..,int=..,'
+                         f'fth=..,arc=..[,poise=..]')
+    st, extra = {}, {k: None for k in GIVEN_LINE_EXTRA}
+    for part in filter(None, (p.strip() for p in body.split(','))):
+        k, eq, v = part.partition('=')
+        k = k.strip().lower()
+        if not eq or (k not in ATTRS and k not in extra):
+            raise SystemExit(f'attack similarity: --line {name!r}: {part!r} is not one of '
+                             f"{', '.join(ATTRS + GIVEN_LINE_EXTRA)} = a number")
+        try:
+            if k in extra:
+                extra[k] = float(v)
+            else:
+                st[k] = int(v)
+        except ValueError:
+            raise SystemExit(f'attack similarity: --line {name!r}: {part!r} is not a number') from None
+    missing = [k for k in ATTRS if k not in st]
+    if missing:
+        raise SystemExit(f"attack similarity: --line {name!r} gives no {', '.join(missing)}: a spread names all "
+                         f"eight attributes")
+    bad = [k for k in ATTRS if not 1 <= st[k] <= STAT_MAX]
+    if bad:
+        raise SystemExit(f"attack similarity: --line {name!r}: {', '.join(f'{k} {st[k]}' for k in bad)} outside 1 to "
+                         f'{STAT_MAX}')
+    return name, {k: st[k] for k in ATTRS}, extra
+
+
+def given_builds(specs, classes, rl, load, armor_at, plan, floor, taken=()):
+    """The attacker builds of `--line` spreads `specs` ([`parse_line`]), after the made ones (names
+    `taken`), in the order given: [{'name', 'stats' (as given), 'n' 0 (no corpus usage), 'rl',
+    'given' True, 'rule'}]. What a fitted line's nets read of its line, made the way the lines with
+    no fit make it (`attacker_builds`' fallback):
+
+    - its stats as given: no VIG, `END`, MND or damage stat is traded;
+    - its armor `armor_at(poise)` (`lightest_armor`: the lightest set whose armor poise reaches
+      `poise`, default `floor`, the run's melee poise floor, the set every line with no fit wears;
+      `poise=0`, no armor), no HP piece and no talismans;
+    - its FP plan `plan(stats, pieces)` (`fp_plan`): max HP, max FP, the pool's mean hit and hits per
+      attack at the set's menu poise, which the nets read (`line_hp`, `line_poise`, `paid_share`).
+
+    Not derived for a spread (`INFERRED`, recorded in 'rule'): what it carries in its hands, so its
+    roll is read on the armor alone ('end' 'burden', and 'medium', whether the armor alone keeps
+    medium roll; the nets read no roll of the attacker's), and its starting class, the first by name
+    of those it is `reachable` from (any of them levels to it at the same RL). An exit when a spread
+    is reached from no class within RL `rl`, or its name is taken."""
+    out, names = [], set(taken)
+    RES = S._mod('er_mechanics_resources', 'er-mechanics-resources.py')
+    for name, st, extra in specs:
+        if name in names:
+            raise SystemExit(f'attack similarity: --line {name!r}: a build of that name is already in the run')
+        names.add(name)
+        reach = reachable(st, classes, rl)
+        if not reach['ok']:
+            raise SystemExit(f"attack similarity: --line {name!r} is RL {reach['rl']}, "
+                             + (f'past the run\'s RL {rl}' if reach['classes'] else 'below every starting class\'s base'
+                                ' in some attribute'))
+        poise = floor if extra.get('poise') is None else float(extra['poise'])
+        armor = armor_at(poise)
+        if armor is None:
+            raise SystemExit(f'attack similarity: --line {name!r}: no armor set reaches {poise:g} poise')
+        max_load = float(load(st['end']))
+        rule = {'class': reach['classes'][0], 'main': [], 'cap': None, 'spill': [], 'source': 'given',
+                'end': {'end': st['end'], 'armor': armor, 'poise_floor': poise, 'max_load': round(max_load, 2),
+                        'carried': None, 'burden': round(armor['weight'] / max_load, 4),
+                        'medium': RES.Model.weight_type(armor['weight'], max_load) <= 2},
+                'mind': None, 'fp_plan': plan(st, armor['pieces'])}
+        out.append({'name': name, 'stats': dict(st), 'n': 0, 'rl': reach['rl'], 'given': True, 'rule': rule})
+    return out
+
+
 def line_kit(F, world, name, main, cap, catalysts):
     """(`er-mechanics-line-fit.Line`, weapon archetype or None) for attacker line `name` of main
     stats `main` up to `cap`, no talismans or tears, carrying its kit alone (`Line.carried` None):
@@ -1407,14 +1668,76 @@ def skill_candidates(c):
     return jobs, out
 
 
+#: {(job parent, damage stats): (carrier, {weapon: `carrier_damage`})}: `build_job`'s picks, made in
+#: the main process (phase 0, the objective items, the Mind fit) before the workers fork.
+_CARRIERS = {}
+
+
+def carrier_damage(c, job, wid):
+    """The skill damage per cast of opening group `job` on group weapon `wid` at the context's
+    stats, which is what `build_job` ranks the group by: at the mountable affinity `best_affinity`
+    picks there (Standard on a weapon that mounts no gem), the `er-mechanics-ashes.skill_option`
+    damage of the default cast or each stance button, plus each follow-up the opening offers
+    (`skill_followups`) pressed after it, summed. A follow-up is counted because its swing is the
+    carrier's: Glintstone Pebble's bullet scales on the affinity alone (AtkParam 300200890: MV 0,
+    flat 137 magic, AttackElementCorrect 51080's fixed INT rate 25, `REGULATION`), so every Magic
+    carrier ties on the cast, while its R2 swing is the carrier's own AR (Dagger 540.7, Omen Cleaver
+    821.7 at STR 26 / DEX 25 / INT 60, `MEASURED` 2026-11-16). Summing the entities with equal
+    weight is `INFERRED`: how often a player presses the follow-up is not measured. None when the
+    model raises on every reading."""
+    A, t, SM = c.A, c.t, c.SM
+    weapon = SM.ar.names[wid]
+    try:
+        aff = best_affinity(c, {**job, 'carrier': wid}, weapon)[0] if wid in set(job['mount_members']) \
+            else 'Standard'
+        top = SM.ar.max_level(SM.ar.weapons[wid]['reinforceTypeId'])
+        prof = A.skill_profile(t, job['sid'], wid, 0, False)
+        ctx = A.WeaponContext(weapon, aff, None, c.stats, False, ar_tables=SM.ar)
+    except ERRORS:
+        return None
+    total, read = 0.0, False
+    for stance in [b for b, _ in A.stance_buttons(prof)] or [None]:
+        try:
+            follows = A.skill_followups(t, job['sid'], wid, top, 'one', stance)
+        except ERRORS:
+            follows = []
+        for f in [None] + follows:
+            try:
+                o = A.skill_option(t, wid, job['sid'], ctx, ctx.level, c.dfn, S.DEF, follow=f, stance=stance)
+            except ERRORS:
+                continue
+            read = True
+            total += float((o or {}).get('dmg') or 0.0)
+    return total if read else None
+
+
 def build_job(c, job, stats):
     """Opening group `job` for an attacker build of damage stats `stats`: carried by the group
-    weapon of least total requirement the build can wield (`Context.wields`), at the affinity
-    `skill_job` picks at its stats; None when it can wield none of them."""
+    weapon the build can wield (`Context.wields`) whose skill damage there is largest
+    (`carrier_damage`; a weapon the model raises on ranks last), ties to the least total
+    requirement and then the lower id, at the affinity `skill_job` picks at its stats; None when it
+    can wield none of them. The weapons of one opening group play the same clips with the same
+    follow-up buttons and windows (`MEASURED` 2026-11-16 on the eleven Intelligence-line kit skills'
+    groups, no member differing), so what the pick moves is the carrier's AR, reach and status:
+    the group weapon of least requirement it took before left Double Slash 66% and Glintstone
+    Pebble then R2 29% under the line's best carrier (Dagger against Uchigatana and Omen Cleaver at
+    STR 26 / DEX 25 / INT 60)."""
     ws = [w for w in job['members'] if c.wields(w, stats)]
     if not ws:
         return None
-    carrier = min(ws, key=lambda w: (c.requirement(w), w))
+    if len(ws) == 1:
+        carrier = ws[0]
+    else:
+        key = (job_parent(job), tuple(int(stats.get(k, 0)) for k in WEAPON_NEED))
+        if key not in _CARRIERS:
+            cl = at_build(c, damage_stats(stats))
+            _CARRIERS[key] = {w: carrier_damage(cl, job, w) for w in ws}
+        dmg = _CARRIERS[key]
+
+        def rank(w):
+            d = dmg.get(w)
+            return (d is not None, d or 0.0, -c.requirement(w), -w)
+        carrier = max(ws, key=rank)
     return {**job, 'carrier': carrier, 'mountable': carrier in set(job['mount_members']), 'group': len(ws),
             'requirement': c.requirement(carrier)}
 
@@ -1564,8 +1887,11 @@ def objective_lines(c, kind, x, affinity=None, rec=None, job_rec=None):
     scale, read = attack_scaling(c, kind, x, affinity, rec, job_rec)
     floor = c.class_floor
     out = {'adjusted': None}
-    if c.builds:
-        i, b = max(enumerate(c.builds), key=lambda ib: (line_fit(ib[1]['stats'], scale), -ib[0]))
+    # A `--line` spread (`given_builds`) adds its own nets and moves no other number: the adjusted
+    # line starts from the made lines alone.
+    made = [(i, b) for i, b in enumerate(c.builds) if not b.get('given')]
+    if made:
+        i, b = max(made, key=lambda ib: (line_fit(ib[1]['stats'], scale), -ib[0]))
         st, raised, paid = adjust_line(b['stats'], need, {k: max(floor[k], need[k]) for k in WEAPON_NEED}, scale)
         out['adjusted'] = {'stats': st, 'rl': sum(st[k] for k in ATTRS) - LEVEL_OFFSET, 'from_line': b['name'],
                            'from_rl': b['rl'], 'fit': round(line_fit(b['stats'], scale), 2), 'raised': raised,
@@ -1765,6 +2091,126 @@ def weapon_status_tokens(c, wid, affinity, hits):
     return sorted(tokens), sorted(rows)
 
 
+def status_hit_atks(c):
+    """(the AtkParam_Pc ids a hit with no flat damage counts by, the ones left out): an AtkParam
+    with no flat attack field (`er-mechanics-spells.SpellModel._damaging`'s spell rule) that a
+    Bullet row hits with while its own `spEffectId0..4` (hit slots 0..4 of a bullet hit,
+    `list_status`) put a status on a hostile victim (`er-mechanics-status.row_status`, no
+    `hostile_target_refusal`), and that `opposeTarget` lets hit him. Left out: AtkParam 0, and any
+    such row another bullet hits with that builds no status, since counting it would fly that
+    bullet's hits too (the second list, kept as `Context.status_atks_shared`). So Freezing Mist's
+    10442000, which carries AtkParam 0 and its frost, lands no counted hit as it travels (`INFERRED`
+    to cost little: it lives 1 s), while its 10442001 field's AtkParam 44200 counts.
+    `er-mechanics-spells.SpellModel.status_atks` takes the first."""
+    ST, st, SM = _status(), c.st, c.SM
+    status, plain = set(), set()
+    for b, r in SM.bullet.items():
+        a = r['atkId_Bullet']
+        sps = [(c.bx.get(b) or {}).get(f'spEffectId{i}', -1) for i in range(5)]
+        if any(sp > 0 and sp in st.sp and ST.row_status(st.sp[sp]) and not ST.hostile_target_refusal(st.sp[sp])
+               for sp in sps):
+            status.add(a)
+        else:
+            plain.add(a)
+    flat = {a for a in status if a in SM.atk and any(SM.atk[a][f] > 0 for f in S.ATK_FIELD.values())}
+    cand = {a for a in status - flat if a > 0 and a in SM.atk and (c.ax.get(a) or {}).get('opposeTarget')}
+    return sorted(cand - plain), sorted(cand & plain)
+
+
+def spell_status_ws(c):
+    """The weapon record (`er-mechanics-status.weapon_status`'s shape) a spell's hits read for their
+    status: no weapon rows and every factor 1. A spell's bullet carries `attackNotFromWeapon`
+    (`weapon_status_tokens`' trace: only a spell's or a goods bullet sets it), so hit slots 5..7 stay
+    empty (`VERIFIED` there); that the casting catalyst's arcane and `vsPlayerDmgCorrectRate_<s>`
+    factors do not apply to its rows is `INFERRED` (the 13-slot reader's caller was not traced for a
+    spell)."""
+    return {'finals': {n: {'arcane': 1.0, 'vs_player': 1.0} for n in _status().NAMES}, 'req': 1.0,
+            'sources': [], 'spell': True}
+
+
+def skill_status_ws(c, wid, affinity):
+    """`er-mechanics-status.weapon_status` of carrier `wid` at `affinity`, its top level (the level
+    `weapon_status_tokens` reads) and the context's stats, one-handed, PvP; None when the affinity
+    has no row."""
+    ar = c.SM.ar
+    try:
+        level = ar.max_level(ar.weapons[ar.find_weapon(ar.names[wid], affinity or 'Standard')]['reinforceTypeId'])
+        return _status().weapon_status(c.st, ar.names[wid], affinity or 'Standard', level, c.stats, False, True)
+    except (SystemExit, KeyError):
+        return None
+
+
+def list_status(c, l, ws):
+    """{status: constants} one `CAUGHT` hit list `l` builds (`er-mechanics-spells` comment above
+    `STATUS_WORTH_FLOOR`) with weapon record `ws`: per hit, the rows of the 13 hit SpEffect slots
+    (`er-mechanics-ash-table.Table.hit_buildup`, `VERIFIED` there: slots 0..4 are a bullet hit's
+    Bullet `spEffectId0..4`, a swing's AtkParam `spEffectId0..4`, scaled by the AtkParam's
+    `statusAilmentAtkPowerCorrectRate` x `_byPoint`; slots 5..7 the weapon's own rows, scaled by the
+    rate alone), each through `er-mechanics-status._row_amount` (the build-up formula, the hostile
+    target gate). The weapon's rows reach a melee hit from the weapon and a skill's root bullet,
+    never a spell's hit nor a bullet's children (`weapon_status_tokens`' rule). The proc row is the
+    weapon's own row for the status, else the first row that built it
+    (`er-mechanics-status.proc_row_for`); a damage over time is credited
+    `er-mechanics-status.BATTLE_SECONDS` of ticks at most (`er-mechanics-ash-table.Table.buildup_hp`)."""
+    ST, st = _status(), c.st
+    atk = st.atk.get(l.get('atk'))
+    if atk and atk['disableHitSpEffect']:
+        return {}
+    bullet = l.get('bullet')
+    if bullet is not None:
+        own = [(c.bx.get(bullet) or {}).get(f'spEffectId{i}', -1) for i in range(5)]
+    else:
+        own = [atk[f'spEffectId{i}'] for i in range(5)] if atk else []
+    weapon = not ws.get('spell') and (l.get('from_weapon', False) if bullet is None
+                                     else bullet == l.get('root'))
+    used = ws if weapon else dict(ws, sources=[])
+    rows = [(rid, True) for rid in own if rid and rid > 0] + [(s['speffect'], False) for s in used['sources']]
+    amount, first = {}, {}
+    for rid, both in rows:
+        r = ST._row_amount(st, used, rid, atk, both, 1.0, None)
+        if r and r[1] > 0:
+            amount[r[0]] = amount.get(r[0], 0) + r[1]
+            first.setdefault(r[0], rid)
+    out = {}
+    for name, b in amount.items():
+        rid = ST.proc_row_for(st, used, name, first[name])
+        row = st.sp.get(rid) if rid else None
+        if row is None:
+            continue
+        pe = ST.proc_effect(st, rid, 0.0)
+        ticks = pe['ticks']
+        if ticks > 1 and pe['interval'] > 0:
+            ticks = min(ticks, int(ST.BATTLE_SECONDS / pe['interval']))
+        out[name] = {'b': int(b), 'group': ST.GROUP_OF[name], 'row': int(rid), 'rate': float(row['changeHpRate']),
+                     'point': float(row['changeHpPoint']), 'ticks': int(ticks), 'lock': float(row['effectEndurance']),
+                     'recover': float(st.recover[name])}
+    return out
+
+
+def annotate_status(c, geo, ws):
+    """Give every `CAUGHT` hit list of `geo` its 'status' (`list_status`) with weapon record `ws`
+    (`spell_status_ws`, `skill_status_ws`), in place: what `er-mechanics-spells.StatusCaught` prices
+    (version 30). Returns {status: build-up of every hit of every list}, each list once (a bullet
+    chain's parts share their lists, `er-mechanics-ashes.split_chains`)."""
+    total, seen = {}, set()
+    if ws is None:
+        return total
+    for g, _ in geo or ():
+        cg = g.get('CAUGHT') if g is not None else None
+        for l in (cg or {}).get('lists') or ():
+            if id(l) in seen:
+                continue
+            seen.add(id(l))
+            got = list_status(c, l, ws)
+            if got:
+                l['status'] = got
+                for name, d in got.items():
+                    total[name] = total.get(name, 0.0) + d['b'] * float(l.get('hits', l['n']))
+            else:
+                l.pop('status', None)
+    return {k: round(v, 1) for k, v in sorted(total.items())}
+
+
 def _geo_facts(geo):
     if not geo:
         return {'live_frames': 0.0, 'jumpable': False, 'cost': 0.0}
@@ -1822,6 +2268,131 @@ def spell_ref_tokens(c, mid, anims):
     return {'tokens': tokens, 'flags': flags, 'sfx': sfx}
 
 
+def behavior_damage(c, sp, depth=0):
+    """[(BehaviorParam_PC id, Bullet id or None, AtkParam id)]: the damaging AtkParams (the spell
+    rule, `SpellModel._damaging`) SpEffect `sp` makes through its `behaviorId` (a Bullet tree or an
+    AtkParam, `BEH_BULLET` / `BEH_ATTACK`), and through the rows its `cycleOccurrenceSpEffectId` and
+    `replaceSpEffectId` name. The spell reader flies none of them: it follows a fired ref's Bullet
+    tree and AtkParam only (`SpellModel.ref_hits`)."""
+    row = c.t.speffect.get(sp)
+    if not row or depth > 6:
+        return []
+    out = []
+    bid = row.get('behaviorId', -1)
+    beh = c.beh.get(bid)
+    if beh and beh['refId'] > 0:
+        if beh['refType'] == BEH_BULLET:
+            bt = c.A.bullet_tree(c.t, beh['refId'])
+            out += [(bid, n['bullet'], n['atk_row']) for n in _walk(bt) if c.SM._damaging(n['atk_row'])] if bt else []
+        elif beh['refType'] == BEH_ATTACK and c.SM._damaging(beh['refId']):
+            out.append((bid, None, beh['refId']))
+    for k in ('cycleOccurrenceSpEffectId', 'replaceSpEffectId'):
+        v = row.get(k, -1)
+        if isinstance(v, int) and v > 0 and v != sp:
+            out += behavior_damage(c, v, depth + 1)
+    return list(dict.fromkeys(out))
+
+
+def hits_no_character(c, atk):
+    """Whether AtkParam `atk` hits no character: `opposeTarget`, `friendlyTarget` and `selfTarget`
+    all 0 (`INFERRED` from the field names; `opposeTarget` is the one the hit lists of every damaging
+    spell bullet set)."""
+    ax = c.ax.get(atk) or {}
+    return not (ax.get('opposeTarget') or ax.get('friendlyTarget') or ax.get('selfTarget'))
+
+
+def spell_hidden_damage(c, mid, anims):
+    """Damage a spell with no damaging hit by the spell rule still makes, read on the refs the
+    release clips `anims` fire: [{'ref', 'speffect', 'path' ([Bullet id] from the fired root to the
+    node that applies it; [] for a SpEffect ref), 'gate' (the first Bullet on that path whose child
+    is made only on a hit while its own AtkParam hits no character, `hits_no_character`: only another
+    bullet can end it so, or None), 'behind' (`behavior_damage`)}].
+
+    Carian Retaliation (Magic 4640, `REGULATION`): ref 1 fires Bullet 10464000 (0.35 s, radius 1.0,
+    AtkParam 79981 with no target flag set, `launchConditionType` 6: its `HitBulletID` child only on
+    a hit, `er-mechanics-ashes.LAUNCH_ON`); that child 10464001 (AtkParam 7, `selfTarget`) puts
+    SpEffect 1464000 on the caster, whose `behaviorId` 3010 is Bullet 10464002 (3 shots, `FollowType`
+    1, AtkParam 46400 `atkMag` 248) and its on-hit 10464003 (AtkParam 46401 `atkMag` 248). So its
+    damage needs something to hit 10464000, which no character can do: an incoming projectile
+    (`INFERRED` that a bullet hitting a bullet passes the type 6 gate, which `LAUNCH_ON` takes as
+    passing on any hit; user, 2026-11-22: "Carian Retaliation is a parry that also works for spell
+    projectiles")."""
+    SM, A, t = c.SM, c.A, c.t
+    m = SM.magic[mid]
+    refs = sorted({n for anim in anims for _, n in SM.release_events(mid, anim)[1]})
+    out = []
+    for n in refs:
+        kind, rid = m[f'refCategory{n}'], m[f'refId{n}']
+        if rid <= 0:
+            continue
+        if kind == REF_SPEFFECT:
+            got = behavior_damage(c, rid)
+            if got:
+                out.append({'ref': n, 'speffect': rid, 'path': [], 'gate': None, 'behind': got})
+            continue
+        if kind != S.REF_BULLET:
+            continue
+        todo = [(A.bullet_tree(t, rid), [])]
+        while todo:
+            node, path = todo.pop()
+            if node is None:
+                continue
+            here = path + [node]
+            sps = list(node['on_hit_speffects']) + [
+                s for s in ((t.atk_extra.get(node['atk_row']) or {}).get(f'spEffectId{i}', -1) for i in range(5)) if s > 0]
+            for sp in dict.fromkeys(sps):
+                got = behavior_damage(c, sp)
+                if not got:
+                    continue
+                gate = next((p['bullet'] for p, ch in zip(here, here[1:])
+                             if p['children'].get('HitBulletID') is ch and hits_no_character(c, p['atk_row'])
+                             and not A.launches(t, p['bullet'], ch['bullet'], 'expire')), None)
+                out.append({'ref': n, 'speffect': sp, 'path': [x['bullet'] for x in here], 'gate': gate,
+                            'behind': got})
+            todo += [(ch, here) for ch in node['children'].values()]
+    return out
+
+
+def no_hit_reason(c, mid, anims, tokens):
+    """(reason, extra fields) of a spell `evaluate` gives no damaging hit, read on the refs the release
+    clips `anims` fire, the first that holds:
+
+    - 'needs an incoming projectile (...)': its only damage is behind a `spell_hidden_damage` gate,
+      a bullet no character can hit. The punish situations are spaced whiffs of the opponent pool's
+      melee openers (`er-mechanics-spells.punish_situations`: R1, R2, running and jump attacks), so
+      none fires a projectile at the caster and none can make that damage. Carian Retaliation.
+    - 'damage only through a SpEffect behavior the spell reader does not fly (...)': the same with no
+      such gate; the reader would have to fly `behavior_damage`'s bullets. No player spell of the
+      2026-11-22 regulation is one (`MEASURED`, target/nodmg/scan.py in the nodmg worktree).
+    - 'status only (<status>): its status hits are not counted (...)': a fired node builds a
+      status on whoever it hits (`tokens`' 'status:' entries, `speffect_tokens`) and nothing deals
+      damage, and its AtkParams are not `status_hit_atks`' (another bullet hits with them and builds
+      none, or AtkParam 0), so `evaluate` has no hit to fly. Until version 30 every status-only spell
+      was this (Freezing Mist, Poison Mist, Fia's Mist); a counted one is scored on its build-up
+      (module doc, the outcome section).
+    - 'no damaging hit': none of these, a buff or a field with no damage and no status (Unseen
+      Blade's SpEffect 1466000, Scholar's Armament's 1446000)."""
+    try:
+        hidden = spell_hidden_damage(c, mid, anims)
+    except ERRORS as e:
+        return 'no damaging hit', {'hidden_error': repr(e)}
+    if hidden:
+        h = next((x for x in hidden if x['gate'] is not None), hidden[0])
+        beh, bul, atk = h['behind'][0]
+        chain = (f"SpEffect {h['speffect']} -> BehaviorParam_PC {beh} -> "
+                 f"{f'Bullet {bul} AtkParam {atk}' if bul is not None else f'AtkParam {atk}'}")
+        extra = {'hidden': [{**x, 'behind': [list(b) for b in x['behind']]} for x in hidden]}
+        if all(x['gate'] is not None for x in hidden):
+            return (f"needs an incoming projectile (its damage is made only after Bullet {h['gate']}, which hits no "
+                    f"character, is hit: {chain}; no punish situation fires one at the caster)"), extra
+        return f'damage only through a SpEffect behavior the spell reader does not fly ({chain})', extra
+    status = sorted(x.split(':', 1)[1] for x in tokens if x.startswith('status:'))
+    if status:
+        return (f"status only ({', '.join(status)}): its status hits are not counted (no AtkParam of its hits is "
+                f"one status_hit_atks counts)"), {}
+    return 'no damaging hit', {}
+
+
 def spell_job(c, mid):
     """[entity] for every variant of one spell: inputs, status, tokens."""
     SM, A, t = c.SM, c.A, c.t
@@ -1836,7 +2407,8 @@ def spell_job(c, mid):
     except ERRORS as e:
         return [_excl('spell', mid, nm, f'spell:{mid}', f'model error: {e!r}')]
     if not got:
-        tok = spell_ref_tokens(c, mid, [anim for _, anim in SM.variants(mid)])
+        anims = [anim for _, anim in SM.variants(mid)]
+        tok = spell_ref_tokens(c, mid, anims)
         # A spell whose every list is on a bullet dry ground never makes (`never_made`) says so.
         try:
             wet = [x for _, anim in SM.variants(mid)
@@ -1847,7 +2419,10 @@ def spell_job(c, mid):
             return [_excl('spell', mid, nm, f'spell:{mid}', 'every hit on a bullet that launches only on water or never',
                           None, dropped=[[h['frame'], h['ref'], h['atk'], h['bullet'], lc, round(h['damage'] * h['count'], 1)]
                                          for h, lc in wet], **tok)]
-        return [_excl('spell', mid, nm, f'spell:{mid}', 'no damaging hit', None, **tok)]
+        # Why there is none: damage the spell reader does not reach, a status it does not price, or
+        # nothing (`no_hit_reason`).
+        why, more = no_hit_reason(c, mid, anims, tok['tokens'])
+        return [_excl('spell', mid, nm, f'spell:{mid}', why, None, **tok, **more)]
     first = got[0]['variant']
     # `evaluate` skips a variant without a damaging hit while keeping the others (the tap of a loop
     # spell, the charged cast of Loretta's Greatbow): each one is an exclusion of its own.
@@ -1872,6 +2447,12 @@ def spell_job(c, mid):
         facts = _geo_facts(geo)
         if geo and facts['jumpable']:
             flags = sorted(set(flags) | {'jumpable'})
+        # A frame is melee where its geometry is the cast's own AtkParam hitbox
+        # (`er-mechanics-spells.SpellModel.direct_geometry`: Carian Slicer), bullet otherwise.
+        kinds = {}
+        for g, f in geo or ():
+            kinds.setdefault(f, set()).add('melee' if g.get('DIRECT') is not None else 'bullet')
+        kinds = {f: sorted(kinds.get(f) or {'bullet'}) for f in value}
         # The release clip, the hand-off frame and the 045010 frame a release is let go at: what
         # `SpellModel.look_split` reads to say when a defender can tell this cast from a lookalike
         # one (`look_specs`).
@@ -1881,14 +2462,17 @@ def spell_job(c, mid):
                'fp_loop': v['fp_loop'], 'fp_lower_bound': loop_lower_bound(v['variant'], v['fp_loop'], v['channel']),
                'roll': v['roll'],
                'startup': v['startup'], 'one_hit': round(max(one.values()), 1) if one else v['one_hit'],
-               'full': round(sum(value.values()), 1), 'missing_hp': missing_hp,
+               'full': round(S.full_worth(geo, value), 1), 'worth': S.full_worth(geo, value),
+               'missing_hp': missing_hp,
                'channel': channelled(v['variant'], v['channel']), 'loop_clip': v['channel'],
                'missing': [[round(f, 1), n, why] for f, n, why in missing],
                'dropped': [[h['frame'], h['ref'], h['atk'], h['bullet'], lc, round(h['damage'] * h['count'], 1)]
                            for h, lc in dropped],
                'dropped_hp': round(sum(h['damage'] * h['count'] for h, _ in dropped), 1),
-               'delivery': ['bullet'], 'kinds': {f: ['bullet'] for f in value},
-               'tokens': tokens, 'flags': flags, 'sfx': sfx, 'frames': len(value), **facts}
+               'delivery': sorted({k for ks in kinds.values() for k in ks}) or ['bullet'], 'kinds': kinds,
+               'tokens': tokens, 'flags': flags, 'sfx': sfx, 'frames': len(value), **facts,
+               # The status every hit builds, and its HP on the pool when every hit lands (version 30).
+               'status_buildup': sc['status'], 'status_full': round(S.status_full(geo, c.dfn), 1)}
         # What the cast takes from its caster (Briars of Sin's 80 HP a launch): each fired ref's
         # `spEffectIDForShooter` or SpEffect (`er-mechanics-self-damage.spell_cost`), charged in phase
         # 2 (`hp_charge`). A release member keeps the variant's own fired refs (`INFERRED`).
@@ -1933,7 +2517,11 @@ def spell_scoring(c, mid, cat, v):
     # launches, under an event that does fly (`unflown_hits`): `evaluate`'s `full` rule prices
     # every list of the tree, and the flown root's geometry would carry it.
     gone = {(f, n) for f, n, _ in missing}
+    # A list a carrier makes where it touches him is flown on the carrier's path
+    # (`er-mechanics-spells.SpellModel.carried_rows`: Loretta's Greatbow), not unflown.
+    carried = {g['EVENT']: set(g['CARRIED']) for g, _ in geo or () if g.get('CARRIED') and g.get('EVENT')}
     off, dropped = unflown_hits(c, mid, [h for h in v['hits'] if (h['frame'], h['ref']) not in gone])
+    off = [(h, why) for h, why in off if h['bullet'] not in carried.get((h['frame'], h['ref']), ())]
     # The lists `evaluate` no longer prices because dry ground never makes their bullet: recorded
     # as dropped, never in the worth (`never_made`).
     fired = [(round(f, 1), n) for f, n in SM.release_events(mid, v['anim'], v['lead'])[1]]
@@ -1950,8 +2538,11 @@ def spell_scoring(c, mid, cat, v):
     # An event that lost every hit to `unflown_hits` keeps no geometry: `_bursts` would credit
     # its catch with every later frame's worth.
     geo = [(g, f) for g, f in (geo or []) if f in value] or None
-    # Each event's hit lists, tick by tick, for the caught defender (`net_parts`).
+    # Each event's hit lists, tick by tick, for the caught defender (`net_parts`), with the status
+    # each builds (`annotate_status`, version 30).
     SM.attach_caught(mid, geo, kept, value)
+    ws = spell_status_ws(c)
+    status = annotate_status(c, geo, ws)
     # The same cast free-aimed at the ground, where a carrier's ground contact is its damage
     # (`er-mechanics-ashes.floor_launch`): the outcome takes the better aim per situation
     # (`er-mechanics-spells.net_parts_aims`).
@@ -1962,9 +2553,10 @@ def spell_scoring(c, mid, cat, v):
                                                    floor=g_m) or () if f in value]
             if fgeo:
                 SM.attach_caught(mid, fgeo, kept, value)
+                annotate_status(c, fgeo, ws)
                 aims.append((f'floor {g_m:g} m', fgeo))
     return {'events': events, 'spec': spec, 'geo': geo, 'value': value, 'value_one': one, 'aims': aims,
-            'missing': missing, 'dropped': dropped, 'gone': gone, 'off': off, 'kept': kept}
+            'missing': missing, 'dropped': dropped, 'gone': gone, 'off': off, 'kept': kept, 'status': status}
 
 
 def member_key(key, delay):
@@ -2220,6 +2812,11 @@ def skill_entity(c, head, weapon, aff, stance, follow, key, variant_of, two_only
     try:
         d = SM.skill_attack(weapon, c.stats, aff, None, sid, c.dfn, False, follow, stance, priced_bullets=True,
                             flown_only=True)
+        # The status each hit list builds on the carrier at its affinity and the line's stats
+        # (`annotate_status`, version 30).
+        ws = skill_status_ws(c, wid, aff)
+        rec['status_buildup'] = annotate_status(c, d['geo'], ws)
+        rec['status_full'] = round(S.status_full(d['geo'], c.dfn), 1)
     except ERRORS as e:
         return {**rec, 'status': 'excluded', 'reason': f'model error: {e!r}'}
     o = d['option'] or {}
@@ -2298,8 +2895,11 @@ def skill_entity(c, head, weapon, aff, stance, follow, key, variant_of, two_only
                 rec.update(fp_lower_bound=True,
                            fp_lower_why=f"opening {main:06d} has no hit; scored on the FP-charging clip "
                                         f"{', '.join(f'{x:06d}' for x in anims)}")
+    # The full worth counts a hit priority record's hits once (`er-mechanics-spells.full_worth`,
+    # version 31): `value` sums every geometry of a frame, which `CaughtModel` weighs, not lands.
+    worth = S.full_worth(d['geo'], value)
     rec.update(tokens=tokens, flags=flags, sfx=sfx, startup=round(min(value), 1),
-               one_hit=round(max(one.values()), 1), full=round(sum(value.values()), 1), frames=len(value),
+               one_hit=round(max(one.values()), 1), full=round(worth, 1), worth=worth, frames=len(value),
                missing=[[a, k, why] for a, k, why in d['skipped']],
                missing_hp=d['skipped_hp'] if d['skipped'] else None, geo=d['geo'], value=value, value_one=one,
                kinds=d['kinds'], delivery=sorted({k for ks in d['kinds'].values() for k in ks}),
@@ -2330,6 +2930,7 @@ def skill_entity(c, head, weapon, aff, stance, follow, key, variant_of, two_only
             p2 = (d2.get('option') or {}).get('parts') or []
             if d2['why'] or len(p2) < 2:
                 return None
+            annotate_status(c, d2['geo'], ws)
             return {'geo': d2['geo'], 'value': d2['value'], 'value_one': d2['value_one'], 'roll': d2['roll'],
                     'press': float(p2[1]['offset'])}
         try:
@@ -2365,15 +2966,21 @@ def components(rec):
     if rec.get('status') != 'scored' or len(rec['value']) < 2:
         return [], 0
     skip = set(inherited_frames(rec))
-    frames = sorted((f for f in rec['value'] if f not in skip), key=lambda f: (-rec['value'][f], f))
+    geos = {}
+    for g, fr in rec['geo']:
+        geos.setdefault(fr, []).append((g, fr))
+    # A frame's worth counts its hit priority records once (`er-mechanics-spells.full_worth`,
+    # version 31), for its rank as for its land shares.
+    worth = {f: S.full_worth(geos.get(f), {f: rec['value'][f]}) for f in rec['value']}
+    frames = sorted((f for f in rec['value'] if f not in skip), key=lambda f: (-worth[f], f))
     out = []
     for f in frames[:MAX_COMPONENTS]:
-        geo = [(g, fr) for g, fr in rec['geo'] if fr == f]
+        geo = geos.get(f)
         if not geo:
             continue
         out.append({'key': f"{rec['key']}@f{round(f, 2):g}", 'of': rec['key'], 'type': rec['type'], 'frame': f,
                     'geo': geo, 'value': {f: rec['value'][f]}, 'value_one': {f: rec['value_one'][f]},
-                    'roll': rec['roll'], 'full': round(rec['value'][f], 1), 'parent': rec['parent'],
+                    'roll': rec['roll'], 'full': round(worth[f], 1), 'worth': worth[f], 'parent': rec['parent'],
                     'delivery': list((rec.get('kinds') or {}).get(f) or rec.get('delivery') or []),
                     'cost': _geo_facts(geo)['cost']})
     return out, max(0, len(frames) - MAX_COMPONENTS)
@@ -2381,6 +2988,15 @@ def components(rec):
 
 # ---------------------------------------------------------------------------------------------
 # phase 2: the per-situation profile
+
+def pairs_of(c, x_or_sprint):
+    """The situations (`net_parts`' form) an entity's input `x` meets, or, given a bool, those of a
+    cast pressed while sprinting or not: `c.sprint_pairs` for a 'dash' (`profile_inputs` 'sprint',
+    `er-mechanics-spells.sprint_situations`), `c.pairs` for everything else. Index i of either is
+    the same whiff, weighing `c.w[i]`."""
+    sprint = x_or_sprint if isinstance(x_or_sprint, bool) else bool(x_or_sprint.get('sprint'))
+    return c.sprint_pairs if sprint else c.pairs
+
 
 def profile_arrays(c, x, form=None, look=None, catches=None):
     """{array: float32 per situation} of one entity or component (`net_parts`; a follow-up's,
@@ -2392,11 +3008,16 @@ def profile_arrays(c, x, form=None, look=None, catches=None):
     its first frame. `catches`, a dict, keeps the geometry's reads for the next call on the same
     inputs with another `look` (`er-mechanics-spells.net_parts_aims`)."""
     if x.get('press') is not None:
-        parts = (form or FollowupForm(c, x)).parts(x['value'], x['value_one'], x['geo'])
+        parts = (form or FollowupForm(c, x, look=look)).parts(x['value'], x['value_one'], x['geo'])
     else:
-        parts = S.net_parts_aims(c.A, x['geo'], x.get('aims'), x['value'], c.pairs, x['roll'], c.strikes,
+        parts = S.net_parts_aims(c.A, x['geo'], x.get('aims'), x['value'], pairs_of(c, x), x['roll'], c.strikes,
                                  x['value_one'], defender=c.dfn, look=look, catches=catches)
-    full = float(sum(x['value'].values())) or 1.0
+    # A hit priority record's hits count once (`er-mechanics-spells.full_worth`, version 31).
+    full = S.full_worth(x['geo'], x['value'])
+    # Its full worth carries the status HP of every hit landing (`er-mechanics-spells.status_full`,
+    # version 30), which what lands now carries: a share stays a share of the whole.
+    sf = S.status_full(x['geo'], c.dfn) if S.has_status(x['geo']) else 0.0
+    full = (full + sf if sf else full) or 1.0
     f32 = np.float32
     won = {}
     for p, w in zip(parts, c.w):
@@ -2413,7 +3034,7 @@ def profile_arrays(c, x, form=None, look=None, catches=None):
             'gap': np.array([np.nan if p['gap'] is None else p['gap'] for p in parts], f32)}
 
 
-def geo_fingerprint(geo, roll, aims=None, press=None, delays=None, look=None):
+def geo_fingerprint(geo, roll, aims=None, press=None, delays=None, look=None, sprint=False):
     """The first 16 hex digits of a sha256 over what `net_parts` reads of an attack besides its
     worth: every geometry's arrays (the launch times `TL` too), `AIR` mark and frame, its `CAUGHT`
     lists' shape, its hit priority record (`HPR`), its homing record's signature (`HOMING`: the
@@ -2422,8 +3043,22 @@ def geo_fingerprint(geo, roll, aims=None, press=None, delays=None, look=None):
     attacks the defender cannot tell it from (`look`, `look_sig`: none for an attack alone in its
     group, which fingerprints as it did before groups). Two inputs with one fingerprint share one
     `OutcomeForm` (a follow-up's: `FollowupForm`); the worth weights a `CAUGHT` record also holds
-    are each build's own (`OutcomeForm.net`)."""
+    are each build's own (`OutcomeForm.net`). A cast pressed while sprinting (`sprint`, `pairs_of`)
+    meets other situations, so it fingerprints apart; anything else fingerprints as before."""
     h = hashlib.sha256(repr(float(roll)).encode())
+    if sprint:
+        h.update(b'sprint')
+    if S.has_status(geo):
+        # A form's caught defender is the status model when the geometry it is made from builds a
+        # status (`er-mechanics-spells.status_caught`), so a geometry that builds none never shares
+        # its form (version 30). The 2026-11-22 selftest stopped on Sword Dance's 045800 opening, 0.159
+        # HP past `FORM_TOL`: the distance basis rides the Reverse-Bladed Sword at Cold (183 frost),
+        # the Strength, Faith and Intelligence lines the same sword at Fire, Sacred and Magic (no
+        # status, the same shapes), so a form made from one of their geometries (the plain caught
+        # model) netted the basis with its frost left out (`MEASURED` with perf-similarity-dump: the
+        # same 0.1585336 HP on that code, and no disagreement with this). Anything else
+        # fingerprints as before.
+        h.update(b'status')
     if look is not None:
         h.update(f'look {look}'.encode())
     if press is not None:
@@ -2435,17 +3070,37 @@ def geo_fingerprint(geo, roll, aims=None, press=None, delays=None, look=None):
     for g, fr in geo:
         # What `er-mechanics-ashes.CaughtModel` plays besides the worth weights (`caught_shape`).
         lists = (g.get('CAUGHT') or {}).get('lists')
-        shape = None if lists is None else [(l['n'], round(l['rec'], 4), round(l['poise'], 4), l['atk']) for l in lists]
+        # A list's own Bullet rows (`rows` over the geometry's `B`) decide when it lands.
+        shape = None if lists is None else [(l['n'], round(l['rec'], 4), round(l['poise'], 4), l['atk'])
+                                            + ((l['rows'],) if l.get('rows') and 'B' in g else ())
+                                            for l in lists]
         hom = (g.get('HOMING') or {}).get('sig')
         # The TAE 795 windows the defender's strike reads (`er-mechanics-spells.strike_breaks`), and
         # the attacker's own guard it meets (`er-mechanics-spells.strike_guard`).
         tough = g.get('TOUGHNESS') or None
         guard = g.get('GUARD') or None
+        # A bullet chain's part (`er-mechanics-ashes.split_chains`): the frame it shares with the next.
+        chain = g.get('CHAIN')
+        # The frame a search launches it, which the defender reacts from (`er-mechanics-ashes.burst_cue`).
+        cue = g.get('CUE')
+        # The press the attacker times to start a skill, which the defender reacts from too.
+        pcue = g.get('PRESS_CUE')
+        # The clip's whole root motion, which the punish reads (`er-mechanics-ashes.attack_advance`).
+        adv = g.get('ADV')
+        # The clip's turn rules the attacker's facing follows (`er-mechanics-ashes._facing`, version 27).
+        turn = g.get('TURN')
         h.update(repr((float(fr), bool(g.get('AIR')), shape, g.get('HPR'), hom) + ((tough,) if tough else ())
-                      + (('guard', guard) if guard else ())).encode())
+                      + (('guard', guard) if guard else ())
+                      + (('chain', tuple(float(x) for x in chain)) if chain is not None else ())
+                      + (('cue', float(cue)) if cue is not None else ())
+                      + (('press_cue', float(pcue)) if pcue is not None else ())
+                      + (('adv', tuple(round(float(x), 4) for x in adv)) if adv is not None else ())
+                      + (('turn', turn['sig'], float(turn['t0']), g.get('T0')) if turn is not None else ())).encode())
         for k in ('T', 'X', 'Z', 'R', 'PK', 'TL'):
             if k in g:
                 h.update(np.ascontiguousarray(np.asarray(g[k], float)).tobytes())
+        if shape and any(len(s) > 4 for s in shape):
+            h.update(np.ascontiguousarray(np.asarray(g['B'], float)).tobytes())
     return h.hexdigest()[:16]
 
 
@@ -2462,152 +3117,137 @@ def _geo_bursts(geo):
     return [(gs, frs) for gs, frs, _ in bursts]
 
 
-def _reaction_form(A, geoms, dist, moves, my_roll, strikes, floor, catches, plan=None):
-    """`er-mechanics-ashes.reaction_outcome` as `sequence_outcome` calls it (cue 0, no advance,
-    `run`), with the worths left open: (index of the geometry that catches a defender who does not
-    dodge, or -1; the weight of each geometry in `value`; `p_evade`; `p_punish`). With worths v the
-    outcome is `value` = coef @ v and `base` = v[index] when that is above 0, else all zeros, as
-    there: the catches, the dodge presses and the punish read the geometries, the distance, the
-    floor and the roll, never the worth. The same reads in the same order, so `p_evade` and
-    `p_punish` are the same floats; `value` is summed per geometry first, which moves it by
-    rounding only. `plan` as `reaction_outcome`'s (the presses of a defender who cannot tell the
-    attack from its lookalikes, `er-mechanics-ashes.lookalike_plan`): handed every move's escaping
-    starts once the burst reaches him standing, cue 0, as there; it reads no worth either."""
-    def caught(key, move, starts):
-        # `starts` a list, or a function that makes it: the dodge grid is made only for a read the
-        # memo does not hold.
-        if key not in catches:
-            catches[key] = A._catches(geoms, dist, move, starts() if callable(starts) else starts)
-        return catches[key]
-    base_h, _ = caught(('base', dist), None, [0.0])
-    bh = int(base_h[0])
-    coef = np.zeros(len(geoms))
-    if bh < 0 or all(g is None for g in geoms):
-        return -1, coef, 0.0, 0.0
-
-    def grid():
-        return np.arange(0.0, max(g['T'].max() for g in geoms if g is not None) + 1.0, A.DODGE_STEP)
-    # The strikes in order: a strike plus `close` is in time when it is below a bound, so a binary
-    # search counts what the mean of the comparison counted, the same number (as in
-    # `reaction_outcome`), and adding one `close` to each keeps the order. Sorted once per array
-    # (`er-mechanics-ashes._ordered`).
-    ordered = None if strikes is None else A._ordered(strikes)
-    strikes = None if strikes is None else np.asarray(strikes, float)
-    fpm = A._neutral().frames_per_metre()
-    p_evade = p_punish = 0.0
-    hs = [caught((dist, k), m, grid)[0] for k, m in enumerate(moves)]
-    planned = plan(moves, [h < 0 for h in hs], 0.0, floor) if plan is not None else None
-    # The weights summed per geometry as floats, as the array's elements were, and the catches read
-    # as a list: the same additions in the same order.
-    weights, step, nm = coef.tolist(), A.DODGE_STEP, len(moves)
-    for k, m in enumerate(moves):
-        h = hs[k]
-        # The catches read as a list, kept beside them in `catches`.
-        hl = catches.get(('list', dist, k))
-        if hl is None:
-            hl = catches[('list', dist, k)] = h.tolist()
-        nh = len(h)
-        ready = m['ready'] if m['ready'] is not None else len(m['path'])
-        x, z = m['path'][min(int(ready), len(m['path']) - 1)]
-        close = max(0.0, math.hypot(x, dist + z) - A.PUNISH_REACH_M) * fpm
-        ev_s, ev_w = [], []
-        presses = planned[k] if planned is not None else A.dodge_presses(h < 0, 0.0, floor=floor)
-        # Each press's grid index (as `int(round(s / step))` reads it) and weight, kept per plan's
-        # list (`er-mechanics-ashes._press_reads`).
-        idx, ws, starts = A._press_reads(presses, planned is not None)
-        for j in range(len(idx)):
-            s, i = presses[j][0], idx[j]
-            hit = hl[i] if 0 <= i < nh else bh
-            w = ws[j] / nm
-            if hit >= 0:
-                weights[hit] += w
-                continue
-            p_evade += w
-            ev_s.append(s)
-            ev_w.append(w)
-        if ev_s and strikes is not None and my_roll is not None and len(strikes):
-            counts = np.searchsorted(ordered + close, my_roll - np.asarray(ev_s, float) - ready, side='left')
-            for wi, ci in zip(ev_w, counts.tolist()):
-                p_punish += wi * (ci / len(strikes))
-    return bh, np.array(weights, float), p_evade, p_punish
+def _situation_keys(c, sprint=False):
+    """Per situation of `c.pairs` (`c.sprint_pairs` with `sprint`, `pairs_of`), the
+    `er-mechanics-spells.situation_key`s `net_parts` reads, each
+    with the move floor it is read at (the key drops it up close; a caught defender's run out reads
+    it, version 21): pressing at once, then each run-in of `APPROACH_GAPS_M` short of its distance,
+    whose run uses up the defender's two floors alike (his dodge cancel and his move cancel)."""
+    per_m = c.A._neutral().frames_per_metre()
+    out = []
+    for sit in pairs_of(c, sprint):
+        dist, floor = sit[0], sit[1]
+        run = sit[2] if len(sit) > 2 else floor
+        row = [(dist, floor, run)] + [(g, max(0.0, floor - (dist - g) * per_m), max(0.0, run - (dist - g) * per_m))
+                                      for g in S.APPROACH_GAPS_M if g < dist]
+        out.append([(S.situation_key(c.A, d, f, r), r) for d, f, r in row])
+    return out
 
 
 class OutcomeForm:
     """`er-mechanics-spells.net_parts`' `net` per situation as a function of an attack's worth per
     frame, for one geometry list and roll frame: what an attacker build with other stats lands from
-    the same reach at other damage. Within one burst a defender's outcome is linear in the worths
-    and its evasion and punish chances do not read them (`_reaction_form`); the bursts chain as in
-    `sequence_outcome`, the defender keeps to the move family that leaves the attacker least, and
+    the same reach at other damage. A defender's outcome is linear in the worths and his evasion
+    and punish chances do not read them: the bursts chain as `sequence_outcome` chains them
+    (`er-mechanics-ashes.dodge_chain`, worth-free), the defender keeps to the move family that leaves the attacker least or
+    stands where that leaves less (`er-mechanics-ashes.stand_or`), and
     the attacker takes the best of pressing at once and each run-in of `APPROACH_GAPS_M`, as in
     `net_parts`. So one pass over the geometries serves every worth, the one-hit worths included.
     Every run compares it with `net_parts` wherever a build shares the distance basis's geometry
     (`FORM_TOL`), and the selftest on a spell, a multi-burst skill and a jumpable attack. `look` (a
     `Lookalikes` member, `profile_arrays`') times his dodge of the first burst that reaches him
     standing in each family, as `sequence_outcome`'s `plan`; the form then belongs to that group as
-    well as to the geometry (`geo_fingerprint` `look`)."""
+    well as to the geometry (`geo_fingerprint` `look`). `sprint` reads the situations of a cast
+    pressed while sprinting (`pairs_of`), as `profile_arrays` reads a 'dash'."""
 
-    def __init__(self, c, geo, roll, look=None):
+    def __init__(self, c, geo, roll, look=None, sprint=False):
         A = c.A
         bursts = _geo_bursts(geo)
         self.frames = [float(fr) for _, frs in bursts for fr in frs]
         sizes = [len(gs) for gs, _ in bursts]
         offs = np.cumsum([0] + sizes)[:-1]
-        G, Bn = len(self.frames), len(bursts)
-        self.member = np.zeros((G, Bn))
-        for bi, (o, n) in enumerate(zip(offs, sizes)):
-            self.member[o:o + n, bi] = 1.0
-        families = [A.roll_motion()]
-        if any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs):
-            families.append([A.jump_motion()])
-        per_m = A._neutral().frames_per_metre()
-        keys, opts = {}, []
-
-        def key_of(dist, floor):
-            k = (round(dist, 2), round(floor * 2) / 2)
-            return keys.setdefault(k, len(keys))
-        for dist, floor in c.pairs:
-            opts.append([key_of(dist, floor)] + [key_of(g, max(0.0, floor - (dist - g) * per_m))
-                                                 for g in S.APPROACH_GAPS_M if g < dist])
+        G = len(self.frames)
+        families = A.dodge_families(any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs))
+        # Where the whole attack's root motion leaves the attacker for the punish, as
+        # `sequence_outcome` reads it (`er-mechanics-ashes.attack_advance`).
+        advance = A.attack_advance([g for gs, _ in bursts for g in gs])
+        # A caught defender played out (`er-mechanics-ashes.CaughtModel`, as `net_parts` plays him)
+        # and what one cast lands capped at his health: each pool build's own poise and health
+        # (`net_parts`' `cpoise` and `hp`, version 21).
+        # Its status build-up priced per play when it builds any (`er-mechanics-spells.status_caught`,
+        # version 30), as `net_parts` prices it.
+        self.caught = S.status_caught(geo, c.dfn.get('pool') or c.dfn.get('poise_pool') or c.dfn.get('poise'),
+                                      None, c.dfn)
+        self.hp = c.dfn.get('hp_pool') or c.dfn.get('hp')
+        # Per (dist, floor) the roll's form (`keys`): the dodge reads no `run`. Per `situation_key`
+        # (dist, floor, run) the strike's (`skeys`). Per (situation key, the move floor where it can
+        # hold a caught defender, `CaughtModel.held_run`) an option (`cks`), naming its roll form
+        # (`self.ROLL`) and its strike (`self.SK`): `net_parts`' (`situation_key`, `roll_key`).
+        keys, skeys, cks, opts = {}, {}, {}, []
+        for row in _situation_keys(c, sprint):
+            ids = []
+            for k, run in row:
+                if k not in skeys:
+                    skeys[k] = len(skeys)
+                    keys.setdefault(k[:2], len(keys))
+                ck = (k, self.caught.held_run(k[0], run) if self.caught is not None else None)
+                ids.append(cks.setdefault(ck, len(cks)))
+            opts.append(ids)
+        self.CK = list(cks)
+        self.ROLL = np.array([keys[k[:2]] for k, _ in self.CK], int)
+        self.SK = np.array([skeys[k] for k, _ in self.CK], int)
         K, Fm = len(keys), len(families)
-        self.BH = np.full((K, Fm, Bn), -1, int)
+        # Per roll key, the geometry that first catches a defender who never dodges (-1: none).
+        self.BH = np.full(K, -1, int)
         self.COEF = np.zeros((K, Fm, G))
-        self.PE = np.zeros((K, Fm, Bn))
-        self.PP = np.zeros((K, Fm, Bn))
+        self.PE = np.zeros((K, Fm))
+        self.PP = np.zeros((K, Fm))
         cat = {}
+        plays, mid_rows, self.moves_by_anim = {}, [], {}
+        gbursts = [gs for gs, _ in bursts]
         for (dist, floor), ki in keys.items():
             plan = look.plan(dist) if look is not None else None
+            # The last burst that reaches him standing decides his punish, so he aims it for that too
+            # (`er-mechanics-ashes.last_reaching`, version 25): with worths above 0 (`net` checks
+            # them), a burst reaches him when it touches him standing.
+            last = None
+            for bi, (gs, _) in enumerate(bursts):
+                memo = cat.setdefault((0, bi), {})
+                if ('base', dist) not in memo:
+                    memo[('base', dist)] = A._catches(gs, dist, None, [0.0])
+                if any(g is not None for g in gs) and int(memo[('base', dist)][0][0]) >= 0:
+                    last = bi
             for fi, moves in enumerate(families):
-                rec = max(max(0.0, (m['dodge'] or len(m['path'])) - m['iframes']) for m in moves)
-                t = floor
-                # The plan times the first burst that reaches him standing (`sequence_outcome`).
-                first = plan
-                for bi, (gs, _) in enumerate(bursts):
-                    bh, coef, pe, pp = _reaction_form(A, gs, dist, moves, roll, c.strikes, t, cat.setdefault((fi, bi), {}),
-                                                      first)
-                    o = int(offs[bi])
-                    if bh >= 0:
-                        first = None
-                        self.BH[ki, fi, bi] = o + bh
-                        # Only a burst that reaches him standing is dodged and holds back his next
-                        # dodge (`sequence_outcome`). It reaches him when its base is above 0,
-                        # which with worths above 0 (`net` checks them) is when it touches.
-                        t = max([t] + [g['T'].max() + rec for g in gs if g is not None])
-                    self.COEF[ki, fi, o:o + len(gs)] = coef
-                    self.PE[ki, fi, bi], self.PP[ki, fi, bi] = pe, pp
+                # The bursts chained as `sequence_outcome` chains them (`er-mechanics-ashes.dodge_chain`,
+                # version 26: each roll carries him into the next burst, which he can dodge again only
+                # from its start plus its dodge cancel); the plan times the first burst that reaches
+                # him standing. A burst touches him when it reaches him, which with worths above 0
+                # (`net` checks them) is when `sequence_outcome` counts it.
+                ch = A.dodge_chain(gbursts, dist, moves, floor, 0.0, roll, c.strikes, True, advance,
+                                   A._ChainMemo(cat, fi), plan, last)
+                if ch['first'] is not None:
+                    self.BH[ki] = int(offs[ch['first']]) + ch['first_h']
+                for bi, hh, play, w in ch['events']:
+                    g = int(offs[bi]) + hh
+                    if play is None or self.caught is None:
+                        self.COEF[ki, fi, g] += w
+                        continue
+                    # A catch in a dodge of his (version 25), or in the roll he is still on (version
+                    # 26): one play per (distance, geometry, move, start, catch frame), priced per
+                    # build in `net`.
+                    mv, s0, tc = play
+                    pk = (dist, g, mv['anim'], s0, tc)
+                    if pk not in plays:
+                        plays[pk] = len(plays)
+                        self.moves_by_anim[mv['anim']] = mv
+                    mid_rows.append((ki, fi, plays[pk], w))
+                self.PE[ki, fi], self.PP[ki, fi] = ch['p_evade'], ch['p_punish']
+        # The catches in his own dodge: per play (distance, geometry, move anim, start, catch
+        # frame), and per weight (roll key, family, play, weight).
+        self.plays = list(plays)
+        mr = np.array(mid_rows, float).reshape(len(mid_rows), 4)
+        self.MK, self.MF, self.MP = (mr[:, j].astype(int) for j in range(3))
+        self.MW = mr[:, 3]
         width = max(len(r) for r in opts) if opts else 1
-        self.OPT = np.array([r + [K] * (width - len(r)) for r in opts], int).reshape(len(opts), width)
+        self.OPT = np.array([r + [len(cks)] * (width - len(r)) for r in opts], int).reshape(len(opts), width)
         self.punish_hp = A.PUNISH_HP
-        # A caught defender played out (`er-mechanics-ashes.CaughtModel`, as `net_parts` plays him)
-        # and what one cast lands capped at his health.
         self.dists = [d for (d, _), _ in sorted(keys.items(), key=lambda e: e[1])]
-        self.caught = A.CaughtModel.of(geo, c.dfn.get('poise'))
-        self.hp = c.dfn.get('hp')
-        # Per key, the catches the outcome reads: a geometry with a dodge weight, or a base catch.
+        # Per roll key, the catches the outcome reads: a geometry with a dodge weight, or a base catch.
         self.need = [sorted(set(np.nonzero((self.COEF[ki] > 0).any(axis=0))[0].tolist())
-                            | {int(x) for x in self.BH[ki].ravel() if x >= 0}) for ki in range(K)]
+                            | ({int(self.BH[ki])} if self.BH[ki] >= 0 else set())) for ki in range(K)]
         # The defender's strike (`er-mechanics-spells.net_parts`): per key the runs of strikes that
         # land (`strike_segments`), which read no worth and no poise; `net` prices them per build.
-        self.strike = _StrikeForm(c, geo, roll, list(keys))
+        self.strike = _StrikeForm(c, geo, roll, list(skeys))
 
     def net(self, value, geo=None, poise=None):
         """Per situation: what an attack of worth `value` ({frame: damage}, as `net_parts` takes it)
@@ -2615,51 +3255,63 @@ class OutcomeForm:
         shapes), whose `CAUGHT` worth weights the caught defender's take is priced with; `poise`
         the attacker's menu poise the defender's strike reads (None: `net_parts`' default, the
         defender's own)."""
+        R = self.ROLL
         if self.caught is None:
-            worth = np.array([sum(value[f] for f in value if f >= fr) for fr in self.frames], float)
-            worth = np.broadcast_to(worth, (len(self.dists), len(self.frames)))
+            # `er-mechanics-ashes.hp_cap`: a number, or each pool build's own health.
+            hp = self.hp
+            worth = np.array([(lambda x: x if hp is None else min(x, hp) if not isinstance(hp, (list, tuple))
+                               else sum(w * min(x, c_) for c_, w in hp))(sum(value[f] for f in value if f >= fr))
+                              for fr in self.frames], float)
+            worth = np.broadcast_to(worth, (len(self.CK), len(self.frames)))
         else:
-            # The catches no outcome reads keep a placeholder worth of 1 (weight 0, never a base).
-            worth = np.ones((len(self.dists), len(self.frames)))
-            memo = {}                         # keys of one distance share its catches
-            for ki, d in enumerate(self.dists):
-                for g in self.need[ki]:
-                    if (d, g) not in memo:
-                        memo[(d, g)] = self.caught.worth_of(d, g, value, geo)
-                    worth[ki, g] = memo[(d, g)]
-        if self.hp is not None:
-            worth = np.minimum(worth, self.hp)
+            # Per option, held by its floors and capped at each defender's health (`worth_of`): the
+            # catches no outcome reads keep a placeholder worth of 1 (weight 0, never a base).
+            worth = np.ones((len(self.CK), len(self.frames)))
+            memo = {}                         # options that hold him alike share their catches
+            for ci, ((d, f, _), run) in enumerate(self.CK):
+                for g in self.need[R[ci]]:
+                    held = self.caught.held(d, g, (f, f if run is None else run))
+                    if (d, g, held) not in memo:
+                        memo[(d, g, held)] = self.caught.worth_of(d, g, value, geo, held, hp=self.hp)
+                    worth[ci, g] = memo[(d, g, held)]
         if not (worth > 0).all():
             # The dodge floors chained in `__init__` assume every touching burst has a base above 0.
             raise ValueError(f'OutcomeForm: a worth at or under 0 ({worth.min()}) breaks the burst chain')
-        VB = np.einsum('kfg,kg,gb->kfb', self.COEF, worth, self.member)
-        Fm = self.BH.shape[1]
-        base = np.where(self.BH >= 0, np.take_along_axis(np.broadcast_to(worth[:, None, :], (worth.shape[0], Fm,
-                                                                                            worth.shape[1])),
-                                                         np.maximum(self.BH, 0), axis=2), 0.0)
-        alive = np.ones(self.BH.shape[:2])
-        val = np.zeros(self.BH.shape[:2])
-        pun = np.zeros(self.BH.shape[:2])
-        for b in range(self.BH.shape[2]):
-            m = base[..., b] > 0
-            val = np.where(m, val + alive * VB[..., b], val)
-            pun = np.where(m, alive * self.PP[..., b], pun)
-            alive = np.where(m, alive * self.PE[..., b], alive)
-        netk = (val - pun * self.punish_hp).min(axis=1)
+        BH = self.BH[R]
+        # What lands per family: the catches weighed per geometry (their weights already carry the
+        # chance he got that far, `dodge_chain`), plus the catches in a dodge of his.
+        val = np.einsum('kfg,kg->kf', self.COEF[R], worth)
+        if len(self.MW):
+            # The catches in his own dodge, each played from that dodge (its cancels hold him, not the
+            # situation's floors) and capped at his health as the rest (version 25; version 26 the
+            # roll he is still on from an earlier burst too).
+            pw = np.array([self.caught.worth_of(d, g, value, geo, hp=self.hp, dodge=(self.moves_by_anim[a], s0, tc))
+                           for d, g, a, s0, tc in self.plays], float)
+            MV = np.zeros(self.COEF.shape[:2])
+            np.add.at(MV, (self.MK, self.MF), self.MW * pw[self.MP])
+            val = val + MV[R]
+        pun = self.PP[R]
+        # Or he stands, where that leaves the attacker less than every move family
+        # (`er-mechanics-ashes.stand_or`, as `sequence_outcome`): the first catch a defender who
+        # never dodges takes, the same in every family (0 where nothing reaches him). Rows are
+        # already per strike key (`R`), so no `ROLL` gather follows.
+        stand = np.where(BH >= 0, worth[np.arange(worth.shape[0]), np.maximum(BH, 0)], 0.0)
+        netk = np.minimum((val - pun * self.punish_hp).min(axis=1), stand)
         # He strikes where that leaves the attacker less than every move family (a tie keeps them).
-        netk = np.append(np.minimum(netk, self.strike.nets(value, geo, poise, self.caught, netk)), -np.inf)
+        netk = np.append(np.minimum(netk, self.strike.nets(value, geo, poise, self.caught)[self.SK]), -np.inf)
         return netk[self.OPT].max(axis=1)
 
 
 class _StrikeForm:
     """The defender's strike for a form (`OutcomeForm`, `FollowupForm`) on one geometry list and roll
-    frame, as `er-mechanics-spells.net_parts` reads it: per key (dist, floor) the runs of strikes
+    frame, as `er-mechanics-spells.net_parts` reads it: per key (dist, floor, run,
+    `er-mechanics-spells.situation_key`) the runs of strikes
     that land (`strike_segments`, read here once), then per build what they leave the attacker
     with its worth and its poise (`nets`, `outcome`). Off, every net is inf, when the run's strikes
     carry no poise damage (`er-mechanics-spells.Strikes`) or no poise is known."""
 
     def __init__(self, c, geo, roll, keys):
-        self.A, self.strikes, self.hp = c.A, c.strikes, c.dfn.get('hp')
+        self.A, self.strikes, self.hp = c.A, c.strikes, c.dfn.get('hp_pool') or c.dfn.get('hp')
         self.poise = c.dfn.get('poise')
         self.on = S.strike_table(c.strikes) is not None and self.poise is not None
         self.keys = list(keys)
@@ -2672,7 +3324,8 @@ class _StrikeForm:
         self.saved = S.strike_saved(c.A, c.strikes, self.reach.guard)
         gwin = self.reach.guard_windows if self.saved is not None else ()
         self.segs = [S.strike_segments(c.A, c.strikes, d, f, self.reach.touch(d), roll, self.reach.cuts,
-                                       self.reach.windows, gwin) for d, f in self.keys]
+                                       self.reach.windows, gwin, run=r, advance=self.reach.advance(d))
+                     for d, f, r in self.keys]
         # Per attacker poise as `strike_breaks` keys it, each key's shares of strikes that land and
         # break him (`er-mechanics-spells.strike_shares`), and those shares as `nets`' arrays: they
         # read no worth, so the value, the one-hit value and every line of that poise share them.
@@ -2681,17 +3334,20 @@ class _StrikeForm:
     def _kept(self, value, geo, caught):
         """kept(d, cut): what lands on him standing at distance `d` from the attack stopped before
         cut `cut` (None: none stopped), for worth `value` on geometries `geo` (their `CAUGHT`
-        weights, priced by `caught` as the form prices a catch). Read once per distance and cut."""
+        weights, priced by `caught` as the form prices a catch). Read once per distance and cut, at
+        the place the touch was timed (`er-mechanics-spells.StrikeReach.where`), as `net_parts`."""
         got = {}
 
         def kept(d, cut):
             if (d, cut) not in got:
+                at_ = self.reach.where(d)
                 if caught is not None:
-                    def price(h, vk):
-                        return caught.worth_of(d, h, vk, geo)
+                    def price(h, vk, cap):
+                        return caught.worth_of(at_, h, vk, geo, hp=cap)
                 else:
-                    price = self.reach.raw_price
-                got[(d, cut)] = self.reach.kept(d, cut, value, price, self.hp)
+                    def price(h, vk, cap):
+                        return self.A.hp_cap(self.reach.raw_price(h, vk), cap)
+                got[(d, cut)] = self.reach.kept(at_, cut, value, price, self.hp)
             return got[(d, cut)]
         return kept
 
@@ -2735,7 +3391,7 @@ class _StrikeForm:
         beta, shares = self._shares(poise)
         kept = self._kept(value, geo, caught)
         return [S.strike_outcome(self.A, self.strikes, self.segs[i], beta, lambda cut, d=d: kept(d, cut),
-                                 kept(d, None), len(self.reach.cuts), shares[i]) for i, (d, _) in enumerate(self.keys)]
+                                 kept(d, None), len(self.reach.cuts), shares[i]) for i, (d, *_) in enumerate(self.keys)]
 
     def nets(self, value, geo, poise, caught, against=None):
         """Per key, what the strike leaves the attacker (`outcomes`' value less its punish); inf
@@ -2746,7 +3402,7 @@ class _StrikeForm:
         if self.on:
             pun, rest, brk = self._arrays(poise)
             kept = self._kept(value, geo, caught)
-            dists = [d for d, _ in self.keys]
+            dists = [k[0] for k in self.keys]
             val = np.array([kept(d, None) for d in dists], float) * rest
             # Each cut a strike breaks him before adds what lands of the attack stopped there, in
             # the cuts' order.
@@ -2778,14 +3434,28 @@ def followup_delays(follow):
     return [float(d) for d in np.arange(0.0, span - 1e-9, 1.0)] or [0.0]
 
 
+#: The share of a strafing defender's escapes the scored mixup keeps (`FollowupForm.mixup`,
+#: `er-mechanics-ashes.FollowupModel.mixup` `strafe_share`). `INFERRED`: no param or measurement
+#: says how often desync and execution let a strafe through (his reaction and the two network legs
+#: are in the flown strafe since version 23, as a dodge's), and the user is to give a
+#: realistic share. At 0.0 the strafe row is the stand row, so the mixup moves only the defender's
+#: roll or stand and the attacker's blind delays. Glintstone Pebble then R2 on Intelligence + melee
+#: nets 413.1 / 342.4 / 320.4 at shares 0 / 0.5 / 1.0 (`MEASURED` 2026-11-16).
+STRAFE_SHARE = 0.0
+
+
 def profile_inputs(rec):
     """What phase 2 reads of entity or component `rec`: its geometry, worth, roll and free-aimed
     alternatives (`aims`), and for a follow-up its press frame and press delays (`FollowupForm`).
     A release scored as the mean of its release frames (a spell's, or a charged skill's 'mixture',
     `release_members`) carries its own 'weight' and its later releases as 'members' ([{'key',
     'weight', 'geo', 'value', 'value_one', 'roll', 'aims'}]), each read as a lookalike of its own
-    (`_profile_work`); a 'followup' release keeps its press and delays."""
+    (`_profile_work`); a 'followup' release keeps its press and delays. A spell's 'dash' variant
+    (`er-mechanics-spells.DASH`) carries 'sprint': it meets the situations of a cast pressed while
+    sprinting (`pairs_of`)."""
     out = {**{k: rec[k] for k in ('geo', 'value', 'value_one', 'roll')}, 'aims': rec.get('aims') or []}
+    if rec.get('type') == 'spell' and rec.get('variant') == 'dash':
+        out['sprint'] = True
     if rec.get('hp_cost'):
         # What one cast takes from its user; the caller adds the line's 'max_hp' (`hp_charge`).
         out['hp_cost'] = rec['hp_cost']
@@ -2793,7 +3463,8 @@ def profile_inputs(rec):
         out.update(press=rec['press'], delays=followup_delays(rec['follow']))
     elif rec.get('release_members'):
         out.update(weight=rec['release_weight'], members=[
-            {k: m[k] for k in ('key', 'weight', 'geo', 'value', 'value_one', 'roll', 'aims')}
+            {**{k: m[k] for k in ('key', 'weight', 'geo', 'value', 'value_one', 'roll', 'aims')},
+             **({'sprint': True} if out.get('sprint') else {})}
             for m in rec['release_members']])
     return out
 
@@ -2853,14 +3524,16 @@ def look_entry(rec):
     if rec.get('status') not in ('scored', 'partial') or not rec.get('geo'):
         return None
     w = float(rec.get('release_weight', 1.0))
+    # 'roll': the attacker's roll frame after it, from which a member's punish is read when the
+    # defender aims his dodge for it (`er-mechanics-spells.Lookalikes` `rolls`, version 25).
     if rec['type'] == 'spell':
         return {'geo': rec['geo'], 'mid': rec['id'], 'anim': rec['anim'], 'hand': rec['hand'], 'lead': rec.get('lead'),
-                'weight': w}
+                'weight': w, 'roll': rec.get('roll')}
     if rec.get('release') == 'full':
-        return {'geo': rec['geo'], 'hold': True, 'weight': w}
+        return {'geo': rec['geo'], 'hold': True, 'weight': w, 'roll': rec.get('roll')}
     if rec.get('release') == 'tap' and rec.get('press') is not None:
         return {'geo': rec['geo'], 'of': rec['variant_of'], 'press': float(rec['press']), 'weight': w,
-                'shows': float(rec.get('release_show', 0)), 'rule': rec.get('release_rule')}
+                'shows': float(rec.get('release_show', 0)), 'rule': rec.get('release_rule'), 'roll': rec.get('roll')}
     return None
 
 
@@ -2874,11 +3547,17 @@ class LookStore:
 
     def __init__(self):
         self.entries, self.ran, self.spells, self.taps = {}, set(), {}, {}
+        # {(line, follow-up key): its opening's key}: a follow-up (R1 / R2 after the skill, not a
+        # release) is its opening until the press, so it is read in its opening's group
+        # (`look_specs`).
+        self.opening = {}
 
     def add(self, line, recs):
         for rec in recs:
             if rec.get('type') == 'spell':
                 self.ran.add((line, rec['id']))
+            if rec.get('follow') and not rec.get('release') and rec.get('variant_of'):
+                self.opening[(line, rec['key'])] = rec['variant_of']
             e = look_entry(rec)
             if e is None:
                 continue
@@ -2888,7 +3567,7 @@ class LookStore:
             if group is not None:
                 group.add(rec['key'])
             for m in rec.get('release_members') or ():
-                me = {'geo': m['geo'], 'weight': float(m['weight'])}
+                me = {'geo': m['geo'], 'weight': float(m['weight']), 'roll': m.get('roll')}
                 if 'mid' in e:
                     me.update({k: m[k] for k in ('mid', 'anim', 'hand', 'lead')})
                 elif 'of' in e:
@@ -2939,6 +3618,13 @@ def look_spec(c, store, pool, line, key, memo=None):
                 if pair not in memo:
                     memo[pair] = c.SM.look_split(casts[a], casts[b])
                 splits[(a, b)] = memo[pair]
+        # A cast he tells from every other one at the press (a quick cast, `er-mechanics-spells.
+        # known_at_once`) is alone, and the others are a group without it.
+        alone = S.known_at_once(keys, splits)
+        if key in alone:
+            return None
+        keys = [k for k in keys if k not in alone]
+        splits = {p: s for p, s in splits.items() if not set(p) & alone}
         events = S.release_events(c.SM, {k: store.entries[(line, k)] for k in keys})
     elif e.get('hold') or ('of' in e and e.get('rule') == 'mixture'):
         hold = key if e.get('hold') else e['of']
@@ -2963,10 +3649,16 @@ def look_specs(c, store, wants, pool):
     """{(entity key, who): `look_spec`} for every (key, who, line, whole) of `wants` whose key is not
     alone at its line; a component (`whole` set) takes its whole entity's group, read as the whole
     (`look_spec` 'me'). `who` is None for the distance basis, an attacker build's index, or an
-    objective line's name (`_profile_work`)."""
+    objective line's name (`_profile_work`). A follow-up takes its opening's group, read as the
+    opening ('me'): until the press it is the opening, and the group times only the first dodge,
+    of the first burst that reaches him standing (`er-mechanics-ashes.FollowupModel` `look`). Until
+    version 22 a follow-up was read alone: a defender who could not tell a charged opening's hold
+    from its early release knew it once a follow-up came after it."""
     out, memo = {}, {}
     for k, who, line, of in wants:
         sp = look_spec(c, store, pool, line, of or k, memo)
+        if sp is None and (line, of or k) in store.opening:
+            sp = look_spec(c, store, pool, line, store.opening[(line, of or k)], memo)
         if sp is not None:
             out[(k, who)] = sp
     return out
@@ -2989,6 +3681,11 @@ def look_sig(spec, store, me=None):
         h.update(repr(ws).encode())
     if spec.get('events'):
         h.update(repr(sorted((idx[k], round(float(f), 6)) for k, f in spec['events'].items() if k in idx)).encode())
+    # The members' roll frames, from which each one's punish is read (`look_group` `rolls`, version 25).
+    rolls = [store.entries[(spec['line'], k)].get('roll') for k in spec['keys']]
+    if any(r is not None for r in rolls):
+        h.update(repr(['me' if k == me else (None if r is None else round(float(r), 6))
+                       for k, r in zip(spec['keys'], rolls)]).encode())
     return h.hexdigest()[:16]
 
 
@@ -2997,7 +3694,8 @@ def look_group(c, spec, store):
     line, its splits, its weights (a release's split over its release frames, every other member
     1) and its release events (a release spread over its window, `S.release_events`)."""
     return S.Lookalikes(c.A, {k: store.entries[(spec['line'], k)]['geo'] for k in spec['keys']}, spec['splits'],
-                        spec.get('weights'), spec.get('events'))
+                        spec.get('weights'), spec.get('events'),
+                        {k: store.entries[(spec['line'], k)].get('roll') for k in spec['keys']})
 
 
 class FollowupForm:
@@ -3008,13 +3706,16 @@ class FollowupForm:
     choice, the family choice and the worth of a caught defender (`CaughtModel`, capped at his
     health) are `net_parts`' own. One form serves every build on the same shapes (`geo_fingerprint`
     with the press); `parts` and `net` take that build's worth and geometries (their `CAUGHT`
-    weights). `see` False keeps every press at once: the earliest press under the same rules;
-    `read` lets the attacker also pick the delay he presses at unseen (a diagnostic, never scored:
-    `FollowupModel.outcome`)."""
+    weights). Scored, the net is the mixup's value (`mixup`, version 20): the defender's roll or
+    stand against the attacker's press policy at each default delay, at `STRAFE_SHARE`; `mix`
+    False scores the fixed sequence (the defender rolls the opening, the attacker presses by the
+    policy) instead. `see` False keeps every press at once: the earliest press under the same
+    rules, the fixed sequence's; `read` lets the attacker also pick the delay he presses at unseen
+    (a diagnostic, never scored: `FollowupModel.outcome`)."""
 
-    def __init__(self, c, x, see=True, read=False):
+    def __init__(self, c, x, see=True, read=False, mix=True, look=None):
         A = c.A
-        self.A, self.see, self.read = A, see, read
+        self.A, self.see, self.read, self.mix = A, see, read, mix
         geo = x['geo']
         self.press = float(x['press'])
         self.delays = [float(d) for d in x['delays']]
@@ -3023,20 +3724,28 @@ class FollowupForm:
         self.follows = [geo[i][1] >= self.press - 1e-9 for i in order]
         opening = [(geo[i][0], rank[i]) for i in order if not self.follows[rank[i]]]
         follow = [(geo[i][0], rank[i]) for i in order if self.follows[rank[i]]]
-        self.model = A.FollowupModel(opening, follow, self.press, self.delays, x['roll'], c.strikes)
-        self.poise, self.hp = c.dfn.get('poise'), c.dfn.get('hp')
-        per_m = A._neutral().frames_per_metre()
-        self.keys, self.opts = {}, []
-
-        def key_of(dist, floor):
-            k = (round(dist, 2), round(floor * 2) / 2)
-            return self.keys.setdefault(k, len(self.keys))
-        for dist, floor in c.pairs:
-            self.opts.append([key_of(dist, floor)] + [key_of(g, max(0.0, floor - (dist - g) * per_m))
-                                                      for g in S.APPROACH_GAPS_M if g < dist])
-        self.gaps = [[None] + [g for g in S.APPROACH_GAPS_M if g < dist] for dist, _ in c.pairs]
-        self.now_dist = [round(dist, 2) for dist, _ in c.pairs]
-        self.dists = sorted({d for d, _ in self.keys})
+        # `look`: the opening's lookalike group (`look_specs`), which times his first dodge of the
+        # opening (`er-mechanics-ashes.FollowupModel` `look`).
+        self.model = A.FollowupModel(opening, follow, self.press, self.delays, x['roll'], c.strikes, look=look)
+        # The poises and health a caught defender holds with (`net_parts`' `cpoise` and `hp`,
+        # version 21).
+        self.poise = c.dfn.get('pool') or c.dfn.get('poise_pool') or c.dfn.get('poise')
+        self.hp = c.dfn.get('hp_pool') or c.dfn.get('hp')
+        # Whose resistances a status build-up is read against (`er-mechanics-spells.status_caught`,
+        # version 30).
+        self.dfn = c.dfn
+        # Per (`er-mechanics-spells.situation_key` (dist, floor, run), the move floor rounded to half
+        # a frame): the key drops the move floor up close, which a caught defender's run out and the
+        # strafe row read (version 21). The strike reads the situation key alone (`skeys`, `SK`).
+        self.keys, self.opts, skeys = {}, [], {}
+        for row in _situation_keys(c):
+            self.opts.append([self.keys.setdefault((k, round(run * 2) / 2), len(self.keys)) for k, run in row])
+        for k, _ in self.keys:
+            skeys.setdefault(k, len(skeys))
+        self.SK = [skeys[k] for k, _ in self.keys]
+        self.gaps = [[None] + [g for g in S.APPROACH_GAPS_M if g < sit[0]] for sit in c.pairs]
+        self.now_dist = [round(sit[0], 2) for sit in c.pairs]
+        self.dists = sorted({k[0] for k, _ in self.keys})
         # The first touch of a defender who does not dodge, at the earliest press (`net_parts`).
         gs = [g for g, _ in geo]
         self.t_first = {d: float(A._catches(gs, d, None, [0.0])[1][0]) for d in self.dists}
@@ -3044,15 +3753,20 @@ class FollowupForm:
         # The defender's strike, as `net_parts` reads it: on the attack pressed at once (he does not
         # roll, so the attacker sees no roll to delay for, `FollowupModel`), priced on this shape's
         # caught defender.
-        self.strike = _StrikeForm(c, geo, x['roll'], list(self.keys))
-        self._strike_cm = A.CaughtModel.of(geo, self.poise) if self.strike.on else None
+        self.strike = _StrikeForm(c, geo, x['roll'], list(skeys))
+        self._strike_cm = S.status_caught(geo, self.poise, None, self.dfn) if self.strike.on else None
 
     def _with_strike(self, o, value, geo, poise):
         """`o` (per key) with the defender's strike taken wherever it leaves the attacker less, as
         `net_parts` takes it (`_StrikeForm`); the press then comes at once."""
-        for i, s in enumerate(self.strike.outcomes(value, geo, poise, self._strike_cm)):
-            if s['value'] - s['punish_hp'] < o[i]['value'] - o[i]['punish_hp']:
-                o[i] = {**s, 'delayed': 0.0}
+        so = self.strike.outcomes(value, geo, poise, self._strike_cm)
+        if so:
+            for i in range(len(o)):
+                s = so[self.SK[i]]
+                rn = o[i]['value'] - o[i]['punish_hp']
+                # A tie keeps the roll, with `net_parts`' hair of room.
+                if s['value'] - s['punish_hp'] < rn - 1e-9 * max(1.0, abs(rn)):
+                    o[i] = {**s, 'delayed': 0.0}
         return o
 
     def _shifted(self, value, geo, d):
@@ -3068,29 +3782,93 @@ class FollowupForm:
         """(dist, d, indices) -> per index of the attack (`FollowupModel`), what lands when it
         catches first with the press `delays[d]` late: `CaughtModel` on that build's worth and
         weights, or the old rule (that frame's worth and every later one's), capped at his health.
-        Each (dist, d, index) is priced once, when first asked for."""
+        `floors` (his dodge floor, his move floor; the attack's clock, which a late press does not
+        move) hold a caught defender in his whiff's recovery (`CaughtModel.held`, version 21). Each
+        (dist, d, index, the floors that hold him) is priced once, when first asked for, and kept
+        until `release(dist)`: `_outcomes` and `mixup` walk the distances once each and release each
+        one when its keys are done (2026-11-18). Until then a pass kept every distance's escape
+        tables to its end: Waves of Darkness then R2 f68's second mixup pass read 41,262 of them,
+        23 KB each, in its last 4,781 of 5,514 situation keys (`MEASURED`, `target/wf/waves/a1`)."""
         A = self.A
         shifted, got = {}, {}
 
-        def at(dist, d, idx):
+        def model(d):
             if d not in shifted:
                 shifted[d] = self._shifted(value, geo, d)
                 if d not in self._models:
-                    self._models[d] = A.CaughtModel.of(shifted[d][1], self.poise)
-            v, g = shifted[d]
-            cm = self._models[d]
+                    self._models[d] = S.status_caught(shifted[d][1], self.poise, None, self.dfn)
+            return self._models[d], shifted[d]
+
+        def escapes(dist, h, floors=None):
+            # `FollowupModel.mixup`'s `stand_escapes` for the catch by geometry `h` (version 25):
+            # per delay, `CaughtModel.escape_table` on that build's worth, held and capped as `at`
+            # prices it. None without a played caught defender (the old rule).
+            if model(0)[0] is None:
+                return None
+
+            def f(d):
+                cm, (v, g) = model(d)
+                return cm.escape_table(dist, h, v, g, floors, self.hp)
+            return f
+
+        def at(dist, d, idx, floors=None):
+            cm, (v, g) = model(d)
             out = np.empty(len(idx))
             for j, h in enumerate(np.asarray(idx).tolist()):
-                key = (dist, d, h)
+                held = cm.held(dist, h, floors) if cm is not None else None
+                key = (dist, d, h, held)
                 if key not in got:
                     if cm is not None:
-                        x = float(cm.worth_of(dist, h, v, g))
+                        got[key] = float(cm.worth_of(dist, h, v, g, held, hp=self.hp))
                     else:
                         fr = sorted(fr for _, fr in g)[h]
-                        x = float(sum(v[f] for f in v if f >= fr))
-                    got[key] = min(x, self.hp) if self.hp is not None else x
+                        got[key] = A.hp_cap(float(sum(v[f] for f in v if f >= fr)), self.hp)
                 out[j] = got[key]
             return out
+
+        def mid(dist, d, h, move, start, catch):
+            # `FollowupModel`'s `mid_worth` (version 25): a catch in his own dodge played from it on
+            # that delay's clock (`CaughtModel.worth_of` `dodge`), capped as `at` caps; the old rule
+            # without a played caught defender.
+            cm, (v, g) = model(d)
+            if cm is None:
+                return float(at(dist, d, [h])[0])
+            key = ('mid', dist, d, h, move['anim'], float(start), float(catch))
+            if key not in got:
+                got[key] = float(cm.worth_of(dist, h, v, g, hp=self.hp, dodge=(move, start, catch)))
+            return got[key]
+
+        def col_escapes(dist, col, floors=None):
+            # `FollowupModel.outcome`'s `catch_escapes` (version 26): for a catch by the opening, a
+            # whole-attack index held by the situation's floors or an 'open' play in his dodge,
+            # `CaughtModel.escape_table` per delay on that build's worth, capped as `at` caps (kept
+            # per delay); None for another column or without a played caught defender.
+            if model(0)[0] is None:
+                return None
+            if col < self.model.size:
+                if self.follows[col]:
+                    return None
+                h, dodge = col, None
+            else:
+                kind, h, move, s, tc, _ = self.model.plays[col - self.model.size]
+                if kind != 'open':
+                    return None
+                dodge = (move, s, tc)
+
+            def f(d):
+                key = ('esc', dist, col, None if dodge is not None else floors, d)
+                if key not in got:
+                    cm, (v, g) = model(d)
+                    got[key] = cm.escape_table(dist, h, v, g, None if dodge is not None else floors, self.hp,
+                                               dodge=dodge)
+                return got[key]
+            return f
+
+        def release(dist):
+            # Every key names its distance: first, or after a kind tag ('mid', 'esc').
+            for k in [k for k in got if (k[1] if isinstance(k[0], str) else k[0]) == dist]:
+                del got[k]
+        at.escapes, at.mid, at.col_escapes, at.release = escapes, mid, col_escapes, release
         return at
 
     def _outcomes(self, value, geo, see):
@@ -3099,41 +3877,159 @@ class FollowupForm:
         at = self._worths(value, geo)
         out = [None] * len(self.keys)
         by_dist = {}
-        for (dist, floor), i in self.keys.items():
-            by_dist.setdefault(dist, []).append((floor, i))
+        for ((dist, floor, _), run), i in self.keys.items():
+            by_dist.setdefault(dist, {}).setdefault((floor, run), []).append(i)
         for dist, rows in sorted(by_dist.items()):
-            for floor, i in rows:
-                out[i] = self.model.outcome(dist, floor, lambda d, idx, dist=dist: at(dist, d, idx), see, self.read)
+            for (floor, run), idx in rows.items():
+                o = self.model.outcome(dist, floor, lambda d, ix, dist=dist, fl=(floor, run): at(dist, d, ix, fl),
+                                       see, self.read,
+                                       mid_worth=lambda d, h, mv, s, tc, dist=dist: at.mid(dist, d, h, mv, s, tc),
+                                       catch_escapes=lambda col, dist=dist, fl=(floor, run): at.col_escapes(dist, col, fl))
+                for i in idx:
+                    out[i] = o
             self.model.release(dist)
+            at.release(dist)
         return out
 
-    def parts(self, value, value_one, geo, see=None, poise=None):
+    def _mixed(self, see, mix):
+        """Whether `parts` and `net` score the mixup: `mix` (default the form's), and never with
+        `see` False (the press at once is the fixed sequence's)."""
+        return (self.mix if mix is None else mix) and see
+
+    def parts(self, value, value_one, geo, see=None, poise=None, mix=None):
         """`net_parts`' list for this build: per situation `net`, the chosen option's `value`,
         `base`, `p_evade`, `p_punish`, `punish_hp`, `gap` and `delayed`, `now` (the run-in left
         out, at the situation's own distance and floor, with `t_first`) and `net_one`. `poise` is
-        the attacker's, which the defender's strike reads (`OutcomeForm.net`'s)."""
+        the attacker's, which the defender's strike reads (`OutcomeForm.net`'s). Scored as the
+        mixup (`_mixed`), `net`, `net_one` and `gap` are the mixup's (`mixup`: its value and the
+        run-in it picks), `fixed` is the fixed sequence's net, and `value`, `base`, `p_evade`,
+        `p_punish`, `punish_hp`, `delayed` and `now` stay the fixed sequence's at its own best
+        run-in: what lands when the defender rolls, the descriptive arrays."""
         see = self.see if see is None else see
         o = self._with_strike(self._outcomes(value, geo, see), value, geo, poise)
         o1 = self._with_strike(self._outcomes(value_one, geo, see), value_one, geo, poise) \
             if value_one is not None else None
+        mixed = self._mixed(see, mix)
+        m = self.mixup(value, geo, poise=poise) if mixed else None
+        m1 = self.mixup(value_one, geo, poise=poise) if mixed and value_one is not None else None
         out = []
         for i, opts in enumerate(self.opts):
             nets = [o[k]['value'] - o[k]['punish_hp'] for k in opts]
             j = int(np.argmax(nets))
             best, now = o[opts[j]], o[opts[0]]
             net_one = max(o1[k]['value'] - o1[k]['punish_hp'] for k in opts) if o1 is not None else None
-            out.append({'net': nets[j], 'value': best['value'], 'base': best['base'], 'p_evade': best['p_evade'],
-                        'p_punish': best['p_punish'], 'punish_hp': best['punish_hp'], 'gap': self.gaps[i][j],
-                        'delayed': best['delayed'],
+            net, gap = nets[j], self.gaps[i][j]
+            if m is not None:
+                net, gap = m[i]['net'], self.gaps[i][m[i]['opt']]
+                net_one = m1[i]['net'] if m1 is not None else None
+            out.append({'net': net, 'fixed': nets[j], 'value': best['value'], 'base': best['base'],
+                        'p_evade': best['p_evade'], 'p_punish': best['p_punish'], 'punish_hp': best['punish_hp'],
+                        'gap': gap, 'delayed': best['delayed'],
                         'now': {'net': nets[0], 'value': now['value'], 'base': now['base'], 'p_evade': now['p_evade'],
                                 'p_punish': now['p_punish'], 't_first': self.t_first[self.now_dist[i]]},
                         'net_one': net_one})
+        return out
+
+    def mixup(self, value, geo, open_roll=None, poise=None, blind=True, strafe_share=None):
+        """Per situation, the attack as a two-sided choice (`er-mechanics-ashes.FollowupModel.mixup`):
+        {'net': the game's value, the run-in the attacker picks taken as `parts` takes it, 'opt':
+        that run-in's index in the situation's options (`gaps`), 'fixed': the fixed sequence's net
+        (`parts` with `mix` False: the defender rolls the opening, the attacker presses by
+        `outcome`'s policy), 'pure': the most the defender's best pure reply concedes in the game
+        picked (min over his rows of the attacker's best column, under the strike as 'net' is), an
+        upper bound of 'net', 'stand' / 'strafe': the defender's mix on those rows, 'none': the
+        attacker's mix on no follow-up, 'late': on a default delay above 0}. `open_roll` is the
+        attacker's first roll frame when he does not press (the opening entity's `roll`; None
+        offers no 'none' column, as scored). `strafe_share` defaults to `STRAFE_SHARE`. The
+        defender's strike (`_StrikeForm`) is a row the attacker's choice does not move (`INFERRED`:
+        it lands before the press), so each key's value is the smaller of the game's and the
+        strike's."""
+        A = self.A
+        strafe_share = STRAFE_SHARE if strafe_share is None else strafe_share
+        at = self._worths(value, geo)
+        order = sorted(range(len(geo)), key=lambda i: geo[i][0]['T'].min())
+        opening = [i for i in order if geo[i][1] < self.press - 1e-9]
+        to_open = {order.index(i): j for j, i in enumerate(opening)}
+        ogeo = [geo[i] for i in opening]
+        oval = {f: v for f, v in value.items() if f < self.press - 1e-9}
+        ocm = S.status_caught(ogeo, self.poise, None, self.dfn)
+        ofr = sorted(fr for _, fr in ogeo)
+        omemo = {}
+
+        def open_worth(dist, floors):
+            def f(idx):
+                out = []
+                for h in np.asarray(idx).tolist():
+                    j = to_open[h]
+                    held = ocm.held(dist, j, floors) if ocm is not None else None
+                    k = (dist, h, held)
+                    if k not in omemo:
+                        omemo[k] = float(ocm.worth_of(dist, j, oval, ogeo, held, hp=self.hp)) if ocm is not None \
+                            else A.hp_cap(float(sum(oval[q] for q in oval if q >= ofr[j])), self.hp)
+                    out.append(omemo[k])
+                return np.array(out)
+            return f
+
+        def open_mid(dist):
+            # A catch in his roll of the opening priced by the opening alone, from that roll
+            # (`FollowupModel.mixup` `open_mid`, version 25).
+            def f(h, move, start, catch):
+                k = ('mid', dist, h, move['anim'], float(start), float(catch))
+                if k not in omemo:
+                    omemo[k] = float(ocm.worth_of(dist, to_open[h], oval, ogeo, hp=self.hp, dodge=(move, start, catch))) \
+                        if ocm is not None else float(open_worth(dist, None)([h])[0])
+                return omemo[k]
+            return f
+        games = [None] * len(self.keys)
+        by_dist = {}
+        for ((dist, floor, _), run), i in self.keys.items():
+            by_dist.setdefault(dist, []).append((floor, run, i))
+        for dist, rows in sorted(by_dist.items()):
+            for floor, run, i in rows:
+                # The strafe reads his move cancel itself: until version 21 it read the situation
+                # key's, which is the dodge floor up close (`situation_key`).
+                # The stand row's caught defender, whose escape the attacker sees as he sees a roll
+                # (`stand_escapes`, version 25).
+                stand = self.model._shape(dist, floor, 0)['base']
+                games[i] = self.model.mixup(dist, floor,
+                                            lambda d, ix, dist=dist, fl=(floor, run): at(dist, d, ix, fl),
+                                            open_worth(dist, (floor, run)) if open_roll is not None else None,
+                                            open_roll, run, strafe_share, blind,
+                                            stand_escapes=at.escapes(dist, stand, (floor, run))
+                                            if stand is not None else None,
+                                            mid_worth=lambda d, h, mv, s, tc, dist=dist: at.mid(dist, d, h, mv, s, tc),
+                                            open_mid=open_mid(dist) if open_roll is not None else None,
+                                            catch_escapes=lambda col, dist=dist, fl=(floor, run):
+                                            at.col_escapes(dist, col, fl))
+            self.model.release(dist)
+            at.release(dist)
+        strike = self.strike.outcomes(value, geo, poise, self._strike_cm) if self.strike.on else None
+        vals, fixed, pure = np.empty(len(games)), np.empty(len(games)), np.empty(len(games))
+        for i, g in enumerate(games):
+            vals[i], fixed[i], pure[i] = g['value'], g['fixed'], float(np.asarray(g['M']).max(axis=1).min())
+            if strike is not None:
+                s = strike[self.SK[i]]['value'] - strike[self.SK[i]]['punish_hp']
+                vals[i], fixed[i], pure[i] = min(vals[i], s), min(fixed[i], s), min(pure[i], s)
+        out = []
+        for opts in self.opts:
+            j = int(np.argmax(vals[opts]))
+            g = games[opts[j]]
+
+            def share(name):
+                return float(sum(x for r, x in zip(g['rows'], g['x']) if r == name))
+            out.append({'net': float(vals[opts[j]]), 'opt': j, 'fixed': float(fixed[opts].max()),
+                        'pure': float(pure[opts[j]]),
+                        'stand': share('stand'), 'strafe': share('strafe'),
+                        'none': float(sum(y for c_, y in zip(g['cols'], g['y']) if c_ == 'none')),
+                        'late': float(sum(y for c_, y in zip(g['cols'], g['y']) if c_ != 'none' and c_ > 0))})
         return out
 
     def net(self, value, geo, see=None, poise=None):
         """`OutcomeForm.net`'s shape: per situation, what an attack of worth `value` ({frame:
         damage}) and geometries `geo` nets, float64 (`poise` as `parts`')."""
         see = self.see if see is None else see
+        if self._mixed(see, None):
+            return np.array([p['net'] for p in self.mixup(value, geo, poise=poise)], float)
         o = self._with_strike(self._outcomes(value, geo, see), value, geo, poise)
         return np.array([max(o[k]['value'] - o[k]['punish_hp'] for k in opts) for opts in self.opts], float)
 
@@ -3437,13 +4333,13 @@ def _profile_work_shared(key, strata=None, basis=None):
 
     def fingerprint(x, sig=None):
         return geo_fingerprint(x['geo'], x['roll'], aims=x.get('aims'), press=x.get('press'), delays=x.get('delays'),
-                               look=sig)
+                               look=sig, sprint=bool(x.get('sprint')))
     base_units = units(base, None) if base is not None else []
     # A follow-up's distance-basis profile and the builds and objective lines on its shapes share
     # one `FollowupForm`.
     followup_forms = {}
     if base is not None and base.get('press') is not None:
-        followup_forms[fingerprint(base, base_units[0][2])] = FollowupForm(c, base)
+        followup_forms[fingerprint(base, base_units[0][2])] = FollowupForm(c, base, look=base_units[0][1])
 
     # The distance basis: a release is read at its nodes (those `release_strata_of` read already),
     # and its profile is their mix, weighed along the straight lines between them.
@@ -3465,7 +4361,7 @@ def _profile_work_shared(key, strata=None, basis=None):
         if fp not in forms_of:
             if x0.get('press') is not None:
                 # A follow-up: no free aim (free aim is a spell's), one `FollowupForm`.
-                form = followup_forms.get(fp) or FollowupForm(c, x0)
+                form = followup_forms.get(fp) or FollowupForm(c, x0, look=lk0)
                 followup_forms[fp] = form
 
                 def best(x, which, poise=None, form=form):
@@ -3474,8 +4370,9 @@ def _profile_work_shared(key, strata=None, basis=None):
                 # One form per aim (the lock-on aim, then each free aim, `profile_arrays`); a build
                 # or an objective line nets the better of them per situation. Every aim is met by
                 # the group's plan (`net_parts_aims` `look`).
-                forms = [OutcomeForm(c, x0['geo'], x0['roll'], lk0)] + [OutcomeForm(c, g, x0['roll'], lk0)
-                                                                        for _, g in x0.get('aims') or ()]
+                sp0 = bool(x0.get('sprint'))
+                forms = [OutcomeForm(c, x0['geo'], x0['roll'], lk0, sp0)] + [OutcomeForm(c, g, x0['roll'], lk0, sp0)
+                                                                             for _, g in x0.get('aims') or ()]
 
                 def best(x, which, poise=None, forms=forms):
                     geos = [x['geo']] + [g for _, g in x.get('aims') or ()]
@@ -3490,15 +4387,58 @@ def _profile_work_shared(key, strata=None, basis=None):
             errs.append(max(form_error(best(bu, 'value'), marrs[j]['net']),
                             form_error(best(bu, 'value_one'), marrs[j]['net_one'])))
         return best
+    lines = sorted(builds.items()) + sorted(objs.items())
+    # Each line's units and their fingerprints, read before the first form is made, so that each
+    # form is let go after the last unit that reads it (`last`: line, unit). A form keeps
+    # everything its `net` reads (the plays of a caught defender, the strike's runs), and every
+    # line of a key ran with all of them held: one process reading Fleeting Microcosm held 1,033
+    # MiB in `forms_of` 51 minutes into it, and grew from 3.3 to 7.9 GB in 64 (2026-11-17,
+    # `MEASURED` by target/memdiag/oneset.py). No form is asked for after its last unit, so none
+    # is made twice and no number moves. A line whose units raise is read again below, where it
+    # raises again.
+    read, last = {}, {}
+    for i, (who, x) in enumerate(lines):
+        try:
+            read[i] = [(u, lk, sig, w, fingerprint(u, sig)) for u, lk, sig, w, _ in units(x, who)]
+        except ValueError:
+            continue
+    # The lines are read form by form (2026-11-18): those whose first unit reads a form made before
+    # them (the distance basis's) first, then each other form's lines together, in the order the
+    # forms first appear, so a form is let go before the next one is made. Read in line order, a
+    # form lived from its first line to its last, across every form read in between: Waves of
+    # Darkness then R2 f68 held the basis's form (its line 'minimum' is the key's last) and the one
+    # its lines 1, 4 and 'adjusted' share beside each other form, and stopped at a 10 GiB cap
+    # (`MEASURED`, `target/wf/waves/a1`); read form by form it finished in 4,855 s of CPU with 5.5 GB
+    # at most (`target/wf/waves/a4`). Each line's nets read nothing another line leaves behind
+    # but forms and reads kept for reuse, which give the same numbers made afresh, and `nets` is
+    # handed back in line order.
+    first = {}
+    for i in sorted(read):
+        for *_, fp in read[i]:
+            first.setdefault(fp, len(first))
+    made = set(followup_forms)
+    order = sorted(range(len(lines)), key=lambda i: (0, -1, i) if i not in read else
+                   (0 if read[i][0][4] in made else 1, first[read[i][0][4]], i))
+    for i in order:
+        for k, (*_, fp) in enumerate(read.get(i, ())):
+            last[fp] = (i, k)
     nets = {}
-    for who, x in sorted(builds.items()) + sorted(objs.items()):
+    for i in order:
+        who, x = lines[i]
         try:
             # A release reads its nodes, the distance basis's (`strata_spec`). The defender's strike
             # reads the line's own poise (`line_poise`), every member of it alike.
             n0 = n1 = None
-            for u, lk, sig, w, _ in units(x, who):
-                best = best_of(fingerprint(u, sig), u, lk)
+            us = read.pop(i, None)
+            if us is None:
+                us = [(u, lk, sig, w, fingerprint(u, sig)) for u, lk, sig, w, _ in units(x, who)]
+            for k, (u, lk, sig, w, fp) in enumerate(us):
+                best = best_of(fp, u, lk)
                 e0, e1 = best(u, 'value', x.get('poise')), best(u, 'value_one', x.get('poise'))
+                best = None
+                if last.get(fp) == (i, k):
+                    forms_of.pop(fp, None)
+                    followup_forms.pop(fp, None)
                 n0 = w * e0 if n0 is None else n0 + w * e0
                 n1 = w * e1 if n1 is None else n1 + w * e1
             nets[who] = (n0.astype(np.float32), n1.astype(np.float32))
@@ -3506,6 +4446,7 @@ def _profile_work_shared(key, strata=None, basis=None):
             if not isinstance(who, str):
                 raise
             nets[who] = f'model error: {e}'
+    nets = {who: nets[who] for who, _ in lines if who in nets}
     # The HP the cast takes from its own user, paid on every press whatever the defender does (the
     # game takes it at a TimeAct event or a launch, hit or not: `er-mechanics-self-damage`): off
     # every net, each line at its own max HP (`hp_charge`, `line_hp`). After the form check, which
@@ -3544,6 +4485,268 @@ def mix_arrays(arrs, weights):
     return out
 
 
+def mem_available():
+    """The system's available memory in bytes (/proc/meminfo MemAvailable), None where there is none."""
+    try:
+        with open('/proc/meminfo') as f:
+            for ln in f:
+                if ln.startswith('MemAvailable:'):
+                    return int(ln.split()[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+#: `MemoryGuard`'s defaults: below `MEM_STOP_GIB` of available memory the attack set started last is
+#: stopped and dealt again later; a set starts only with `MEM_START_GIB` available. The stop is the
+#: 8 GiB `target/v28-mem/memwatch.py` stopped the 2026-11-18 kit run at; a worker of that run held
+#: 5 to 9 GiB for hours (its memory log), so a set starts with room for one such worker over the stop.
+MEM_STOP_GIB = 8.0
+MEM_START_GIB = 16.0
+
+
+class MemoryGuard:
+    """What `pooled` (`fresh`) asks before it starts an item and between items: start one only while
+    `available()` is at least `start` bytes, and when it falls under `stop`, stop the item started
+    last (`victim`), which `pooled` deals again once memory is back. A stop costs only that item's
+    work so far: the run keeps its process, its pooled-compute lock and every item it has done
+    (2026-11-18: the kit run's whole process was stopped at 139 of 218 sets, and a restart reads its
+    context and phase 1 again, 8 to 15 minutes in the timing log's runs of 2026-11-13 to 2026-11-18).
+    `log` names each stop and each wait."""
+
+    def __init__(self, stop=MEM_STOP_GIB * 2**30, start=MEM_START_GIB * 2**30, available=mem_available,
+                 poll_s=5.0, log=None):
+        self.stop, self.start, self.available, self.poll_s = float(stop), float(max(start, stop)), available, poll_s
+        self.log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
+        self.stops, self.waits = 0, 0
+        self._waiting = False
+
+    def _now(self):
+        got = self.available()
+        return math.inf if got is None else float(got)
+
+    def may_start(self):
+        """Whether an item may start now; says once per wait that it waits, and once that it goes on."""
+        ok = self._now() >= self.start
+        if not ok and not self._waiting:
+            self.waits += 1
+            self.log(f'memory guard: {self._now() / 2**30:.1f} GiB available, under {self.start / 2**30:g}; '
+                     f'no item starts until it is back')
+        elif ok and self._waiting:
+            self.log(f'memory guard: {self._now() / 2**30:.1f} GiB available again; items start')
+        self._waiting = not ok
+        return ok
+
+    def victim(self, running):
+        """Of `running` ({handle: start time}), the one to stop now (the one started last), or None
+        while available memory is at least `stop`."""
+        if not running or self._now() >= self.stop:
+            return None
+        self.stops += 1
+        return max(running, key=lambda h: running[h])
+
+
+#: How many times one item of `pooled` (`fresh`) may die without a result (a signal, the kernel's
+#: OOM killer) before the run stops with an error; a stop by `MemoryGuard` is not counted.
+FRESH_RETRIES = 2
+#: Seconds with no attack set ended after which `_fresh_pool` has the counter print a line per set
+#: still running (`PROG.Count.running`), and the seconds between those lines while none ends. A
+#: counter line counts a set only when it ends: on 2026-11-19 the run's last line read "207/208
+#: attack sets ... ~5m48s left" at 13:04, its last set running since 10:44, and nothing more was
+#: printed by 13:45 (`MEASURED` by the main session).
+RUNNING_QUIET_S = 300.0
+RUNNING_EVERY_S = 600.0
+
+
+@contextlib.contextmanager
+def gc_frozen():
+    """Every object this process holds moved to the collector's permanent generation for a fork made
+    inside it (`gc.freeze`), and back after it (`gc.unfreeze`, so this process collects as before).
+    A forked child shares its parent's pages until it writes one, and a collection writes into every
+    object it scans (`INFERRED` from CPython's collector, which keeps its marks in each object's
+    header): without this a set's process copied about half of the 3.1 GiB it inherited (the
+    context and phase 1). `MEASURED` 2026-11-18 by target/wf/memory/setmem.py, each set in a child
+    forked for it with its /proc smaps_rollup read every 0.5 s: Swift Slash's set kept 1.5 GiB of
+    it shared and peaked at 3.00 GiB of its own; frozen, 3.0 GiB shared and 2.69 GiB of its own.
+    Divine Beast Frost Stomp's set: 1.69 GiB of its own, frozen 1.33. A collection moves no number
+    (the two sets' results equal, frozen or not).
+    The parent stays frozen while its children run, not just across each fork: a page either side
+    writes is copied, and an unfrozen parent's full collection writes the same headers a child's
+    would. `MEASURED` 2026-11-18 by target/wf/verify-memory/gctoy.py (3 M dicts, 673 MiB shared, the
+    parent keeping 1.2 M new dicts for 8 s while its child slept): unfrozen right after the fork,
+    194 MiB of the child's pages went private, the same as with no freeze (186); kept frozen, none.
+    It yields `gc.freeze`, to call again right before each later fork, so what the parent made since
+    is shared as well; the cycles the parent drops meanwhile wait for the unfreeze at the end."""
+    import gc
+    gc.freeze()
+    try:
+        yield gc.freeze
+    finally:
+        gc.unfreeze()
+
+
+def _die_with_parent(ppid):
+    """Have the kernel kill this process when its parent ends (Linux `PR_SET_PDEATHSIG`), and end it
+    now if the parent `ppid` already has: a run stopped by a signal to its own process alone would
+    otherwise leave its set processes computing for hours, holding their memory and the inherited
+    pooled-compute lock, which the next run then waits for."""
+    import signal
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6', use_errno=True).prctl(1, int(signal.SIGKILL), 0, 0, 0)
+    except (OSError, AttributeError):
+        return
+    if os.getppid() != ppid:
+        os._exit(1)
+
+
+def _fresh_child(fn, item, core, conn, ppid=None):
+    """One item of `pooled` (`fresh`) in a process of its own on `core`: ('ok', `_timed`) or
+    ('error', traceback text) sent through `conn`. It ends with its parent `ppid`."""
+    if ppid is not None:
+        _die_with_parent(ppid)
+    try:
+        _ai().throttle([core])
+        got = ('ok', _timed(fn, item))
+    except BaseException:
+        import traceback
+        got = ('error', traceback.format_exc())
+    try:
+        try:
+            conn.send(got)
+        except Exception as e:
+            # A result that does not pickle is an error of the item, not a death to deal again.
+            conn.send(('error', f'its result could not be sent: {e!r}'))
+    finally:
+        conn.close()
+
+
+def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=None, running=None,
+                quiet_s=None, every_s=None, started=None):
+    """`_timed(fn, x)` of each of `rest` ([(index, item)]), each in a process forked from this one for
+    it alone and pinned to the core of `cores` fewest of them hold, at most `jobs` at once; results as
+    they end. Every process is forked from this thread with no other thread running, so none starts
+    holding a lock another thread held (a `multiprocessing.Pool` with `maxtasksperchild` forks from
+    its own thread: a toy run of it hung a worker within 3 to 19 tasks in 4 of 4 tries while another
+    thread wrote to stderr, and 0 of 3,000 with long-lived workers; target/wf/resume/forkhang.py,
+    2026-11-18). An item whose process dies without a result is dealt again, at most `retries` times;
+    `guard` (`MemoryGuard`) holds new items back and, while more than one runs, stops the one started
+    last, to be dealt again first; an item it stopped twice runs alone. With `running`, once no item
+    has ended for `quiet_s` (default `RUNNING_QUIET_S`), and every `every_s` (`RUNNING_EVERY_S`)
+    after that while none does, `running(item, seconds it has run)` for each item in flight, the
+    oldest first (`pooled` prints them under its counter). With `started`, `started(item)` as each
+    item's process starts (again, when it is dealt again)."""
+    import multiprocessing as mp
+    from collections import deque
+    from multiprocessing.connection import wait
+    log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
+    ctx = mp.get_context('fork')
+    todo = deque(rest)
+    run = {}
+    use = {c: 0 for c in cores}
+    lost, held = Counter(), Counter()
+    quiet_s = RUNNING_QUIET_S if quiet_s is None else quiet_s
+    every_s = RUNNING_EVERY_S if every_s is None else every_s
+    # When an item last ended (the pool's start before any), and when the items in flight were last
+    # told since then (None: not yet).
+    ended, told = time.monotonic(), None
+
+    def due():
+        return ended + quiet_s if told is None else told + every_s
+    # Frozen from the first fork to the last child's end (`gc_frozen`).
+    frozen = contextlib.ExitStack()
+    refreeze = frozen.enter_context(gc_frozen())
+    try:
+        while todo or run:
+            # An item the guard stopped twice runs alone, and is never stopped while it does: one
+            # that needs more than the room the guard leaves would otherwise be stopped and dealt
+            # again for ever.
+            while (todo and len(run) < max(1, jobs) and not any(x['alone'] for x in run.values())
+                   and not (held[todo[0][0]] >= 2 and run) and (guard is None or guard.may_start())):
+                item = todo.popleft()
+                core = min(cores, key=lambda c: (use[c], cores.index(c)))
+                r, w = ctx.Pipe(duplex=False)
+                p = ctx.Process(target=_fresh_child, args=(fn, item, core, w, os.getpid()))
+                refreeze()
+                p.start()
+                w.close()
+                use[core] += 1
+                run[r] = {'p': p, 'item': item, 'core': core, 't': time.monotonic(), 'stopped': False,
+                          'alone': held[item[0]] >= 2}
+                if started is not None:
+                    started(item)
+            if not run:
+                time.sleep(guard.poll_s if guard is not None else 0.1)
+                continue
+            timeout = guard.poll_s if guard is not None else None
+            if running is not None:
+                # Woken in time to tell the items in flight, which no result may come to do.
+                soon = max(0.0, due() - time.monotonic())
+                timeout = soon if timeout is None else min(timeout, soon)
+            wait(list(run) + [x['p'].sentinel for x in run.values()], timeout=timeout)
+            for conn in list(run):
+                x = run[conn]
+                got = None
+                if conn.poll():
+                    try:
+                        got = conn.recv()
+                    except (EOFError, OSError):
+                        got = None
+                elif x['p'].is_alive():
+                    continue
+                elif conn.poll():
+                    # It sent its result and ended between the two looks.
+                    try:
+                        got = conn.recv()
+                    except (EOFError, OSError):
+                        got = None
+                x['p'].join()
+                conn.close()
+                del run[conn]
+                use[x['core']] -= 1
+                if got is not None and got[0] == 'ok':
+                    ended, told = time.monotonic(), None
+                    yield got[1]
+                    continue
+                if got is not None:
+                    raise RuntimeError(f'attack similarity: item {x["item"][0]} failed in its process:\n{got[1]}')
+                i = x['item'][0]
+                if x['stopped']:
+                    held[i] += 1
+                else:
+                    lost[i] += 1
+                    if lost[i] > retries:
+                        raise RuntimeError(f'attack similarity: item {i} died without a result {lost[i]} times '
+                                           f'(last exit code {x["p"].exitcode})')
+                    log(f'attack similarity: item {i} died without a result (exit code {x["p"].exitcode}); '
+                        f'dealing it again ({lost[i]} of {retries})')
+                todo.appendleft(x['item'])
+            now = time.monotonic()
+            if running is not None and run and now >= due():
+                for x in sorted(run.values(), key=lambda x: x['t']):
+                    if not x['stopped']:
+                        running(x['item'], now - x['t'])
+                told = now
+            # One item running is left to run: the guard has already held every other back.
+            cands = {conn: x['t'] for conn, x in run.items() if not x['stopped']}
+            if guard is not None and len(cands) > 1:
+                v = guard.victim(cands)
+                if v is not None:
+                    x = run[v]
+                    x['stopped'] = True
+                    log(f'memory guard: {guard._now() / 2**30:.1f} GiB available, under {guard.stop / 2**30:g}; '
+                        f'stopping item {x["item"][0]} (pid {x["p"].pid}, {time.monotonic() - x["t"]:.0f} s in) '
+                        f'to deal it again')
+                    x['p'].kill()
+    finally:
+        for x in run.values():
+            x['p'].kill()
+        for conn, x in run.items():
+            x['p'].join()
+            conn.close()
+        frozen.close()
+
+
 def _timed(fn, item):
     """(index, `fn(x)`, wall seconds, CPU seconds of the process that ran it) for `item` = (index,
     x): one item of `pooled`, timed where it runs."""
@@ -3553,28 +4756,45 @@ def _timed(fn, item):
     return i, r, time.perf_counter() - t, time.process_time() - cpu
 
 
-def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None):
+def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None, fresh=False, guard=None,
+           expect=None, source='measurement', older=None, older_expect=None):
     """`fn` over `items`, results as they finish: the first in this process (what it reads first the
     workers inherit), the rest on `jobs` forked workers each on a core of its own
     (`er-mechanics-ash-interrupt` throttle); `jobs` 1 runs here. Counts `  i/N <unit>`, its time
     left by `weight(item)`, the item's estimated cost, when one is given (`PROG.Count`). With
-    `timing`, each item's seconds go to `Timing.item` under `unit`, named `label(item)`."""
+    `timing`, each item's seconds go to `Timing.item` under `unit`, named `label(item)`. With
+    `fresh`, each item after the first runs in a process of its own (`_fresh_pool`), held back and
+    stopped by `guard` (`MemoryGuard`) when memory runs short, and while none ends the counter
+    prints a line per item still running (`PROG.Count.running`), named `label(item)`, against
+    `expect(item)`, its expected seconds by `source`, or None; with none, against
+    `older_expect(item)` when given, (its seconds on older code, those scaled to this code) or None.
+    `older(item)` is the part of `weight(item)` taken from older code's times, whose share of the
+    time left the counter names. With a `weight` the time left is wall-clock (`PROG.Count` `jobs`,
+    `sizes`): each item's own seconds, at most `jobs` items at once (`_fresh_pool`, the pool's size),
+    the ones in flight from when they started; in a pool of long-lived workers (not `fresh`), whose
+    items' starts this process does not see, the items not ended count whole."""
     items = list(items)
     if not items:
         return
     ws = None if weight is None else [float(weight(x)) for x in items]
-    tick = PROG.Count(len(items), unit, weight=None if ws is None else sum(ws))
+    os_ = None if ws is None or older is None else [float(older(x)) for x in items]
+    tick = PROG.Count(len(items), unit, weight=None if ws is None else sum(ws),
+                      older=None if os_ is None else sum(os_), jobs=None if ws is None else max(1, jobs),
+                      sizes=ws)
 
     def note(got, here):
         i, r, wall, cpu = got
         if timing is not None:
             timing.item(unit, label(items[i]), wall, cpu, here)
-        tick(w=0.0 if ws is None else ws[i])
+        tick(w=0.0 if ws is None else ws[i], o=0.0 if os_ is None else os_[i], i=i, s=wall)
         return r
-    yield note(_timed(fn, (0, items[0])), True)
+    tick.started(0)
+    first = _timed(fn, (0, items[0]))
+    yield note(first, True)
     rest = list(enumerate(items))[1:]
     if jobs <= 1 or not rest:
         for x in rest:
+            tick.started(x[0])
             yield note(_timed(fn, x), True)
         return
     import multiprocessing as mp
@@ -3583,7 +4803,23 @@ def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None):
     workers = cpus[1:] or cpus
     ctx = mp.get_context('fork')
     with AI.caller_throttled(cpus[0]):
-        with ctx.Pool(max(1, jobs), initializer=AI._worker_init, initargs=(workers, ctx.Value('i', 0))) as pool:
+        if fresh:
+            # A process per attack set, forked from this one (so no read this process made is
+            # repeated): a worker kept its memos and freed heap from every set it had read. The
+            # 2026-11-18 kit run's workers sat at 5-9 GiB each for hours (its memory log); how much of
+            # that earlier sets held is not measured.
+            def running(item, ran):
+                x = item[1]
+                e = None if expect is None else expect(x)
+                tick.running(label(x), ran, e, source,
+                             older=None if e is not None or older_expect is None else older_expect(x))
+            for got in _fresh_pool(fn, rest, jobs, workers, guard, running=running,
+                                   started=lambda item: tick.started(item[0])):
+                yield note(got, False)
+            return
+        # The workers fork as the pool starts, and the parent stays frozen while they run (`gc_frozen`).
+        with gc_frozen(), ctx.Pool(max(1, jobs), initializer=AI._worker_init,
+                                   initargs=(workers, ctx.Value('i', 0))) as pool:
             for got in pool.imap_unordered(functools.partial(_timed, fn), rest, chunksize=1):
                 yield note(got, False)
 
@@ -3622,7 +4858,156 @@ def set_weight(keys, cost):
     return sum(max(float(cost.get(k, 0.0)), 1e-9) ** COST_TIME_POWER for k in keys)
 
 
-def set_order(sets, seed=SET_ORDER_SEED):
+#: A set whose measured seconds (`measured_seconds`, its keys' summed) are at least this share of
+#: every set's measured seconds is read before the shuffled rest, the dearest first (`set_order`).
+#: The run cannot end before its longest set does, and a long set handed out late ends late: r21's
+#: Flame Fall Upon Them set, dealt 538th of 952, was still running 5.6 h later when the run was
+#: stopped at 9 h (`MEASURED`, its trail: the worker's items end at set 536 and sum to 12,153 s of
+#: the 32,400 s stage), and Founding Rain of Stars' 26,364 s set was dealt 155th. Replaying r21's
+#: per-set seconds (set 537's from r11's, which ran it whole) on 3 workers: 17.8 h in the seeded
+#: shuffle, 14.4 h, the longest set's own, with the sets over 0.5% to 5% first (`INFERRED`: a
+#: replay, not a run).
+LONG_SET_SHARE = 0.02
+
+
+def measured_seconds(trail=None, code=None, other=False):
+    """{attack key: wall seconds of its newest 'attacks' item} in the timing log's trail (`trail`,
+    default `trail_path()`), any run and any version: what `set_order` deals the long sets by. {}
+    when there is no trail. Read for the order alone, which moves no number. With `code` (a
+    `code_tag`), only the rows measured on that code (`same_code_seconds`); with `other` as well,
+    only the rows measured on any other code, an unmarked run's included (`older_code_seconds`)."""
+    out = {}
+    try:
+        with Path(trail if trail is not None else trail_path()).open() as f:
+            for ln in f:
+                if '"attacks"' not in ln:
+                    continue
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if code is not None and (r.get('code') == code) == other:
+                    continue
+                if r.get('stage') == 'attacks' and isinstance(r.get('item'), str) and r.get('wall') is not None:
+                    # `Timing.item` names a key seen twice in one run '<key>#2'.
+                    out[r['item'].partition('#')[0]] = float(r['wall'])
+    except OSError:
+        return {}
+    return out
+
+
+def same_code_seconds(timing):
+    """{attack key: newest wall seconds} measured on the code `timing` runs (`code_tag` of its
+    `mark_code`) in its trail; {} when it keeps no trail or is not marked. Read once, before the
+    attack sets start, so this run's own sets count only on a later run of the same code (a resume)."""
+    if timing is None or timing.trail is None or timing.code is None:
+        return {}
+    return measured_seconds(timing.trail, code=code_tag(timing.code))
+
+
+def older_code_seconds(timing):
+    """{attack key: newest wall seconds} measured on any code but the one `timing` runs, in its
+    trail (an unmarked run's rows included, and every row when `timing` is not marked); {} when it
+    keeps no trail. What the counter weighs a key by when it has no same-code measurement
+    (`measured_weight`): 2026-11-21's run read none for the 125 keys it had left, weighed them by
+    the cost term at its 25 kept sets' pace, and after its 1.2 s first set read "~43m27s left" at
+    14:17:45 while Cannon of Haima, Founding Rain of Stars and Crystal Barrage ran past 1h15m; the
+    trail held spell:4080:tap at 9,807 s from older code (`MEASURED`, its wrap.log and the trail)."""
+    if timing is None or timing.trail is None:
+        return {}
+    if timing.code is None:
+        return measured_seconds(timing.trail)
+    return measured_seconds(timing.trail, code=code_tag(timing.code), other=True)
+
+
+#: How many keys measured on both this code and older code `older_code_ratio` needs before it scales
+#: older code's seconds by them; with fewer, older code's seconds are taken as they are.
+OLDER_RATIO_MIN = 3
+
+
+def older_code_ratio(same, older):
+    """The median, over the keys measured on this code (`same`) and on older code (`older`), of
+    their seconds on this code over their seconds on older code: what an older-code time is scaled
+    by before the counter weighs a key by it (`measured_weight`). 1.0 below `OLDER_RATIO_MIN` keys.
+    Scaled, not raw, because the code's speed moves between versions: on 2026-11-21 the 32 keys
+    measured on 60a09d70756e and on older code took a median 1.66 times their older seconds
+    (quartiles 1.32 and 1.79; 1.45 to 1.77 by older code; 1.57 over the 12 keys over 60 s on older
+    code; `MEASURED`, the trail). The median, so one key whose model changed (two took 5.3 and 5.6
+    times) moves it little. That the ratio of the keys measured both ways holds for the keys
+    measured only on older code is `INFERRED`."""
+    xs = [float(same[k]) / float(older[k]) for k in same if k in older and float(older[k]) > 0]
+    return statistics.median(xs) if len(xs) >= OLDER_RATIO_MIN else 1.0
+
+
+def seconds_per_weight(cost, same):
+    """The median, over the keys of `cost` with a measurement (`same`: the same-code seconds, or
+    with older code's scaled ones under them, `known_seconds`), of their seconds per
+    `COST_TIME_POWER` power of their cost: what a key with none weighs per unit of `set_weight`'s
+    term. None when no key of `cost` has one. `INFERRED`: the brief's "seconds-per-cost" read as
+    per unit of the powered cost, the unit `set_weight` is fitted in."""
+    xs = [float(same[k]) / max(float(cost[k]), 1e-9) ** COST_TIME_POWER for k in same if k in cost]
+    return statistics.median(xs) if xs else None
+
+
+def known_seconds(same, older=None, ratio=1.0):
+    """{key: seconds}: each key's same-code seconds (`same`), and a key with none its older code's
+    (`older`) times `ratio` (`older_code_ratio`)."""
+    return {**{k: float(v) * ratio for k, v in (older or {}).items()}, **same}
+
+
+def measured_weight(keys, cost, same, scale, older=None, ratio=1.0):
+    """The attack set of `keys`' share of the stage's time for its counter (`pooled` weight), in
+    seconds: each key's same-code measurement (`same`), a key with none its newest older-code
+    measurement (`older`) times `ratio` (`older_code_ratio`), and a key with neither its
+    `set_weight` term times `scale` (`seconds_per_weight` of `known_seconds`); with no `scale` (no
+    key measured on any code), `set_weight`. 2026-11-19's counter weighed by `set_weight` alone read
+    "207/208 attack sets ... 98.6% of the estimated work, ~5m48s left" at 13:04 while the last set
+    had run since 10:44 and ran on past 13:45 (`MEASURED` by the main session)."""
+    if scale is None:
+        return set_weight(keys, cost)
+    older = older or {}
+    return sum(float(same[k]) if k in same else float(older[k]) * ratio if k in older
+               else scale * max(float(cost.get(k, 0.0)), 1e-9) ** COST_TIME_POWER for k in keys)
+
+
+def older_weight(keys, same, scale, older=None, ratio=1.0):
+    """The part of `measured_weight(keys, ...)` taken from older code's seconds: the keys with no
+    same-code measurement and an older one, at `ratio`; 0 with no `scale` (then no part is seconds)."""
+    if scale is None or not older:
+        return 0.0
+    return sum(float(older[k]) * ratio for k in keys if k not in same and k in older)
+
+
+def expected_seconds(keys, same):
+    """The attack set of `keys`' seconds by its same-code measurements (`same`), summed, or None
+    unless every key has one. A set's keys reach the trail together, when the set ends (`compute`),
+    so on one code a set is measured whole or not at all."""
+    if not keys or any(k not in same for k in keys):
+        return None
+    return sum(float(same[k]) for k in keys)
+
+
+def older_expected(keys, same, older, ratio=1.0):
+    """(seconds, seconds scaled to this code) of the attack set of `keys` by its newest older-code
+    measurements (`older`, at `ratio`, `older_code_ratio`), a key measured on this code (`same`) by
+    that, for its still-running line when it has no same-code seconds (`expected_seconds`); None
+    unless every key has one or the other."""
+    if not keys or any(k not in same and k not in older for k in keys):
+        return None
+    raw = sum(float(same[k]) if k in same else float(older[k]) for k in keys)
+    return raw, sum(float(same[k]) if k in same else float(older[k]) * ratio for k in keys)
+
+
+def set_label(keys, records):
+    """An attack set as a still-running line names it: its first key's attack name (`records`), or
+    the key when it has no record, and how many keys more."""
+    if not keys:
+        return '?'
+    name = (records.get(keys[0]) or {}).get('name') or keys[0]
+    return name + (f' and {len(keys) - 1} more' if len(keys) > 1 else '')
+
+
+def set_order(sets, seed=SET_ORDER_SEED, measured=None):
     """`look_batches`' sets (dearest first) in the order the attack sets are read: the cheapest
     first, since `pooled` reads its first item before it starts the workers, which wait for it; then
     the rest shuffled. The geometric cost does not predict a set's time (r11's 2nd and 4th sets took
@@ -3630,9 +5015,21 @@ def set_order(sets, seed=SET_ORDER_SEED):
     a shuffled order the sets done are a random sample of them, and the count-linear time left is a
     projection from that sample. The order moves no number: no set reads another's (each empties the
     groups' shared reads, `_profile_batch`; the model's memos give what a fresh read gives) and
-    every result is filed by its key."""
+    every result is filed by its key.
+
+    With `measured` ({key: seconds}, `measured_seconds`) the sets of the shuffle whose measured
+    seconds are at least `LONG_SET_SHARE` of all of theirs come first, dearest first, and the rest
+    keep the shuffle's order: a long set dealt late is what the run waits on at its end."""
     rest = list(sets[:-1])
     random.Random(seed).shuffle(rest)
+    if measured:
+        secs = [sum(float(measured.get(k, 0.0)) for k in s) for s in rest]
+        total = sum(secs)
+        long_ = sorted((i for i, x in enumerate(secs) if total > 0 and x >= LONG_SET_SHARE * total),
+                       key=lambda i: (-secs[i], i))
+        if long_:
+            first = set(long_)
+            rest = [rest[i] for i in long_] + [s for i, s in enumerate(rest) if i not in first]
     return list(sets[-1:]) + rest
 
 
@@ -3707,13 +5104,20 @@ class Timing:
         self.note(stage=stage, item=key, wall=its[key][0], cpu=its[key][1], **extra)
 
     def note(self, **row):
-        """Append `row`, with when the run began, to `trail` at once as one JSON line."""
+        """Append `row`, with when the run began and, once it is marked (`mark_code`), the tag of
+        the code it ran (`code_tag`, 'code'), to `trail` at once as one JSON line. The tag is what
+        lets a later run of the same code weigh its counter by these seconds (`same_code_seconds`):
+        seconds measured on other code did not predict this code's (over the 229 keys the
+        2026-11-19 kit run, target/v28-mem/kit.py, finished, its seconds over each key's newest
+        earlier measurement had median 2.81, p10 1.36, p90 27.1, and summed 61,521 s against
+        10,902 s; `MEASURED` 2026-11-19 from the trail)."""
         if self.trail is None:
             return
         path = Path(self.trail)
         path.parent.mkdir(parents=True, exist_ok=True)
+        tag = {} if self.code is None else {'code': code_tag(self.code)}
         with path.open('a') as f:
-            f.write(json.dumps({'when': self.when, **row}, default=_json_default) + '\n')
+            f.write(json.dumps({'when': self.when, **tag, **row}, default=_json_default) + '\n')
 
     def lap(self, stage):
         """Close `stage`: the seconds since the previous lap or the start, and for a pooled stage
@@ -3936,8 +5340,9 @@ FLAT_EPS = 1e-4
 def flat_land(arr, i, land_mass_now, null):
     """The one share of its worth row i of profile arrays `arr` lands wherever its best option
     lands anything, when it lands under `null` pressing at once (its profile is the run-in alone)
-    and every such share is within `FLAT_EPS` of one value; else None. A run-in share is a sum of
-    roll directions (a quarter each) and timing points, and for many attacks it is the same
+    and every such share is within `FLAT_EPS` of one value; else None. A run-in share was a sum of
+    roll directions (a quarter each until version 22, which lets him pick one) and timing points,
+    and for many attacks it was the same
     number in every situation it is picked in (1/4: one direction of four caught; 3/14: one
     direction at six of seven timing points, the Glintblade Phalanx spell and ash, `MEASURED`
     round 4), so two such attacks agree on the land channels whatever they are."""
@@ -3964,14 +5369,19 @@ def input_label(c, item):
     return f"{job}@{c.builds[who]['name']}"
 
 
-def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=None, checkpoint=None):
+def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=None, checkpoint=None,
+            measured=None, guard=None, kinds=None):
     """Phase 0 to 2 (module doc): a `Result`, the distance basis and every attacker build. Each
     phase is a lap of `timing`, and each pooled item one of its items. `keep` (the selftest) leaves
     the groups phase 2 read on the result (`lookalikes`: {'looks': `look_specs`, 'store':
     `LookStore`}). `sets_cap` (--sets) reads only the first that many attack sets of their order and
     returns None after them: a sample of the stage's time and memory, with no result. With
     `checkpoint` (`set_dir`), the attack sets kept there are read from it and each set read is kept
-    there as it ends."""
+    there as it ends. `measured` ({key: seconds}, `measured_seconds`) deals the long attack sets
+    first (`set_order`), which moves no number. Each attack set after the first runs in a process of
+    its own (`pooled` `fresh`), and `guard` (`MemoryGuard`) holds sets back and stops the one started
+    last while memory runs short; neither moves a number. `kinds` (a subset of 'spell', 'skill')
+    keeps only those kinds of attack: 'Glintstone Pebble' names a sorcery and an ash of war."""
     timing = timing or Timing()
 
     def label(item):
@@ -3985,6 +5395,10 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
         spell_ids = [m for m in spell_ids if T._norm(c.SM.names[m]) in only]
         skill_jobs = [j for j in skill_jobs if T._norm(j['name']) in only]
         excluded = [e for e in excluded if T._norm(e['name']) in only]
+    if kinds is not None:
+        spell_ids = spell_ids if 'spell' in kinds else []
+        skill_jobs = skill_jobs if 'skill' in kinds else []
+        excluded = [e for e in excluded if e['type'] in kinds]
     bitems, usable = build_items(c, spell_ids, skill_jobs)
     items = [('spell', m, None) for m in spell_ids] + [('skill', j, None) for j in skill_jobs] + bitems
     _SIM.clear()
@@ -3996,7 +5410,8 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
     if len(seen) != len(excluded):
         raise ValueError(f'attack similarity: duplicate exclusion keys in phase 0: {_dups(e["key"] for e in excluded)}')
     builds = [{**{k: b[k] for k in ('name', 'stats', 'n', 'rl', 'reach')}, 'rule': b.get('rule'), 'usable': u, 'records': {},
-               'excluded': [], 'nets': {}} for b, u in zip(c.builds, usable)]
+               'excluded': [], 'nets': {}, **({'given': True} if b.get('given') else {})}
+              for b, u in zip(c.builds, usable)]
     bseen = [set() for _ in builds]
     binputs = {}
     # Each line's spells and charged skills as phase 1 reads them there, for the groups (`LookStore`).
@@ -4081,9 +5496,11 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
         sp = looks.get((k, None))
         # The distance basis's group: each other member and the real frame from which the defender
         # tells it from this one (None: never).
+        # A follow-up is read as its opening (`look_specs` 'me').
+        me = sp['me'] if sp is not None else k
         r['lookalikes'] = None if sp is None else [
             [m, None if not math.isfinite(f) else round(float(f), 2)]
-            for m in sp['keys'] if m != k for f in [sp['splits'].get((k, m), sp['splits'].get((m, k), math.inf))]]
+            for m in sp['keys'] if m != me for f in [sp['splits'].get((me, m), sp['splits'].get((m, me), math.inf))]]
     log(f'attack similarity: {len(looks)} of {len(wants)} profiles and nets read by a defender who cannot tell the '
         f'attack from others ({len(litems)} lookalike-only items)', file=sys.stderr)
     timing.lap('lookalike inputs')
@@ -4106,8 +5523,9 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
     # Every distance the outcomes read (each situation's and its run-in gaps', as `OutcomeForm` and
     # `net_parts` round them): a homing flight asked for at one is flown with the others in one batch
     # (`er-mechanics-ashes.HOMING_DISTS`), which gives the numbers of flying each alone.
-    c.A.HOMING_DISTS = tuple(sorted({round(d, 2) for d, _ in c.pairs} | {
-        round(g, 2) for d, _ in c.pairs for g in S.APPROACH_GAPS_M if g < d} | {
+    # A sprint cast's situations (`pairs_of`) are read too.
+    c.A.HOMING_DISTS = tuple(sorted({round(d, 2) for d, *_ in c.pairs + c.sprint_pairs} | {
+        round(g, 2) for d, *_ in c.pairs + c.sprint_pairs for g in S.APPROACH_GAPS_M if g < d} | {
         # where the defender's run to strike ends (`er-mechanics-spells.StrikeReach.touch`)
         round(c.A.PUNISH_REACH_M, 2)}))
     arrays, checked, bad, onets = {}, 0, [], {}
@@ -4115,9 +5533,15 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
     # (`look_batches`, `_profile_batch`); each key is timed as an item of its own.
     here = os.getpid()
 
-    sets = set_order(look_batches(order, looks, cost))
+    sets = set_order(look_batches(order, looks, cost), measured=measured)
     log(f'attack similarity: {len(sets)} attack sets, the cheapest first and the rest in a shuffled order, so '
         f'the time left is a projection from the random sample done', file=sys.stderr)
+    if measured:
+        secs = [sum(float(measured.get(k, 0.0)) for k in s) for s in sets[1:]]
+        long_ = [s for s, x in zip(sets[1:], secs) if x >= LONG_SET_SHARE * sum(secs) > 0]
+        if long_:
+            log(f'attack similarity: {len(long_)} long sets dealt first by their measured seconds '
+                f'({", ".join(s[0] for s in long_[:5])}{", ..." if len(long_) > 5 else ""})', file=sys.stderr)
     # The order the sets are handed out in: with the sets that ended, it names the ones a stopped run
     # was reading.
     timing.note(sets=sets)
@@ -4126,6 +5550,11 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
         sets = sets[:sets_cap]
         log(f'attack similarity: --sets {sets_cap}: reading the first {len(sets)}, then stopping', file=sys.stderr)
     kept, todo = [], []
+    if checkpoint is not None:
+        why = open_checkpoint(checkpoint)
+        if why:
+            log(f'attack similarity: the sets kept in {checkpoint} were made {why}; reading none of them',
+                file=sys.stderr)
     for s in sets:
         got = load_set(checkpoint, s) if checkpoint is not None else None
         if got is None:
@@ -4142,14 +5571,36 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
     # left unread can be any of them (r18 read r17's 532 sets and handed this process Founding Rain
     # of Stars, which ran alone here for hours with no worker started, 2026-11-13).
     todo = resume_order(todo, cost)
+    # The counter weighs each set by its keys' seconds measured on this code, a key with none by its
+    # newest older-code seconds scaled to this code (`older_code_ratio`), a key with neither by its
+    # `set_weight` term at the measured keys' median seconds per unit of it, and by `set_weight`
+    # alone when no key was measured on any code (`measured_weight`).
+    same = same_code_seconds(timing)
+    prior = older_code_seconds(timing)
+    ratio = older_code_ratio(same, prior)
+    scale = seconds_per_weight(cost, known_seconds(same, prior, ratio))
+    # The time left is wall-clock: at most `jobs` sets at once (`_fresh_pool`), the first alone.
+    if todo:
+        keys_ = [k for s in todo for k in s]
+        log(f'attack similarity: {sum(k in same for k in keys_)} of {len(keys_)} keys to read measured on this '
+            f'code{f" ({code_tag(timing.code)})" if timing.code is not None else ""}, '
+            f'{sum(k not in same and k in prior for k in keys_)} more on older code (its seconds x{ratio:.2f}); '
+            f'the counter weighs by {"their seconds" if scale is not None else "set_weight"}, '
+            f'{max(1, jobs)} sets at once', file=sys.stderr)
 
     def each():
         for got in kept:
             yield from got
-        # The time left is weighed by `set_weight`, fitted to r12's recorded seconds.
-        for got in pooled(_profile_batch, todo, jobs, 'attack sets', weight=lambda s: set_weight(s, cost)):
-            if checkpoint is not None:
-                save_set(checkpoint, got)
+        for got in pooled(_profile_batch, todo, jobs, 'attack sets',
+                          label=lambda s: set_label(s, records),
+                          weight=lambda s: measured_weight(s, cost, same, scale, prior, ratio),
+                          older=lambda s: older_weight(s, same, scale, prior, ratio),
+                          fresh=True, guard=guard, expect=lambda s: expected_seconds(s, same),
+                          source='same-code measurement',
+                          older_expect=lambda s: older_expected(s, same, prior, ratio)):
+            # A set whose form disagrees with `net_parts` stops the run as it finishes, before
+            # it is kept (`finished_set`).
+            finished_set(got, checkpoint, log)
             for key, arr, nets, errs, wall, cpu, mem in got:
                 timing.item('attacks', key, wall, cpu, mem['pid'] == here, **mem)
                 yield key, arr, nets, errs
@@ -4167,10 +5618,14 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
         bad += [(key, e) for e in errs if e > 0]
     for k in ('inputs', 'builds', 'objective', 'looks', 'look_store'):
         _SIM.pop(k, None)
+    if guard is not None:
+        # How often memory held the sets back or stopped one, beside the stage's time.
+        timing.facts['mem_guard'] = {'stops': guard.stops, 'waits': guard.waits}
     timing.lap('attacks')
     if bad:
-        raise ValueError(f'attack similarity: OutcomeForm and net_parts disagree beyond FORM_TOL {FORM_TOL} on '
-                         f'{len(bad)} keys (key, HP over the tolerance): {bad[:5]}')
+        # Only a set read back from the checkpoint can still carry one: a set read here stopped the
+        # run as it finished (`finished_set`).
+        form_stop(bad, log)
     if sets_cap is not None:
         return None
     for k, r in records.items():
@@ -4188,6 +5643,33 @@ def compute(c, only=None, jobs=1, log=print, timing=None, keep=False, sets_cap=N
         res.lookalikes = {'looks': looks, 'store': store}
     timing.lap('results')
     return res
+
+
+def form_errors(got):
+    """[(key, HP over `FORM_TOL`)] of one finished attack set's results ([(key, arrays, nets, form
+    errors, ...)], `_profile_batch`)."""
+    return [(g[0], e) for g in got for e in g[3] if e > 0]
+
+
+def form_stop(bad, log=print):
+    """Print `bad` ([(key, HP over `FORM_TOL`)]) and stop the run with it."""
+    msg = (f'attack similarity: OutcomeForm and net_parts disagree beyond FORM_TOL {FORM_TOL} on {len(bad)} keys '
+           f'(key, HP over the tolerance): {bad[:5]}')
+    log(msg, file=sys.stderr)
+    raise ValueError(msg)
+
+
+def finished_set(got, checkpoint=None, log=print, save=None):
+    """One attack set `got` as it finishes: a key whose form disagrees with `net_parts` stops the
+    run there, printed at once (`form_stop`) and not kept, so the next set never starts and no
+    resume reads it back; otherwise it is kept under `checkpoint` (`save_set`, or `save`). Until
+    2026-11-22 the check ran after every set: the selftest's one disagreement (Sword Dance's 045800)
+    stopped it after 7 hours of sets (`MEASURED`, r21 target/v34-status/selftest.log)."""
+    bad = form_errors(got)
+    if bad:
+        form_stop(bad, log)
+    if checkpoint is not None:
+        (save or save_set)(checkpoint, got)
 
 
 def run_meta(c, only=None):
@@ -4231,25 +5713,60 @@ def code_stamp():
     return dict(sorted(out.items()))
 
 
+def code_tag(code):
+    """A short name of a `code_stamp` (its first 12 hex digits of sha256 over the sorted JSON), which
+    each trail row carries (`Timing.note`): two rows with one tag were measured on the same code."""
+    return hashlib.sha256(json.dumps(code, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def members_stamp():
+    """The opponent members cache the pool's run-ins are read from (`er-mechanics-interrupt.load_cache`,
+    through `er-mechanics-ash-interrupt`): the sources stamp it was built under, the one its sources
+    give now, and the sha256 of its bytes; None when there is none. Its front-contact frames move the
+    cached numbers, and no loaded script's code holds them: the 2026-11-15 full run read a cache built
+    on 2026-11-12, and rebuilt on that run's code 557 of its 5,919 members reached front contact 0.4
+    to 10 frames earlier and 15 more had one (`MEASURED` 2026-11-16)."""
+    intr = _ai().INTR
+    path = intr.seq_cache_path()
+    if not path.exists():
+        return None
+    raw = path.read_bytes()
+    return {'built': json.loads(raw).get('stamp'), 'sources': intr._source_stamp(),
+            'sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def require_fresh_members(got=None):
+    """`members_stamp`, or an exit naming the rebuild when the cache is missing or was built from
+    other sources: a run on it would compute for hours on run-ins the current code does not give."""
+    got = members_stamp() if got is None else got
+    if got is None or got['built'] != got['sources']:
+        raise SystemExit('attack similarity: the opponent members cache '
+                         f"{'is missing' if got is None else 'was built from other sources'}; rebuild it first: "
+                         'python3 scripts/er-mechanics-interrupt.py --build-cache --jobs 3')
+    return got
+
+
 def stamp(stats, catalysts, rl, include_blacklisted, situations, strikes, defender, code=None,
-          version=SIMILARITY_VERSION, paramdefs=None, hks=None, builds=()):
+          version=SIMILARITY_VERSION, paramdefs=None, hks=None, builds=(), members=None):
     """(first 16 hex digits of the sha256, its inputs) over what the cached numbers depend on: the
     distance basis build, the attacker builds (name, attribute line, count), the situations, the
     regulation file, the paramdef XMLs that decide every field offset read from it
-    (`er-param-read.PARAMDEF_DIR`), the blacklist, every loaded script, and the HKS inputs that
+    (`er-param-read.PARAMDEF_DIR`), the blacklist, every loaded script, the HKS inputs that
     pick every skill's opening clip (`hks_stamp`; None leaves them out, for a caller with no ash
-    model)."""
+    model), and the opponent members cache (`members_stamp`)."""
     reg = Path(PR.RP.DEFAULT_REGULATION)
     st = reg.stat() if reg.exists() else None
     black = Path(S.ASH_BLACKLIST)
     inputs = {'version': version, 'stats': dict(sorted(stats.items())), 'catalysts': list(catalysts), 'rl': rl,
-              'builds': [[b['name'], [b['stats'][k] for k in ATTRS], b['n']] for b in builds],
+              # A `--line` spread's armor too (`given_builds`), which the made lines' code holds.
+              'builds': [[b['name'], [b['stats'][k] for k in ATTRS], b['n']]
+                         + ([['given', b['rule']['end']['poise_floor']]] if b.get('given') else []) for b in builds],
               'include_blacklisted': bool(include_blacklisted), 'situations': situations,
               'strikes': [float(x) for x in strikes], 'defender': defender,
               'regulation': [str(reg), st.st_size if st else None, st.st_mtime_ns if st else None],
               'paramdefs': paramdef_stamp() if paramdefs is None else paramdefs,
               'blacklist': hashlib.sha256(black.read_bytes()).hexdigest() if black.exists() else None,
-              'code': code_stamp() if code is None else code, 'hks': hks}
+              'code': code_stamp() if code is None else code, 'hks': hks, 'members': members}
     return hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:16], inputs
 
 
@@ -4304,6 +5821,44 @@ def set_dir(rl, h16, root=None):
     return cache_paths(rl, h16, root)[0].with_suffix('.sets')
 
 
+def checkpoint_versions():
+    """{'python', 'numpy'}: what a kept set's bits depend on that the stamp does not hold. CPython
+    sums plain floats compensated since 3.12 (`_cap_sum` keys its memo by the type for that), and a
+    rolling system can update either during a run that takes a day."""
+    import platform
+    return {'python': platform.python_version(), 'numpy': np.__version__}
+
+
+def open_checkpoint(root, versions=None):
+    """Make `root` ready to keep and read attack sets: delete the temporary files of writers no longer
+    running (a run stopped while `save_set` wrote), and when the sets in it were made under other
+    `checkpoint_versions` (its `versions.json`), delete them. Returns why they were deleted, or ''.
+    A directory with sets and no `versions.json` was made before the file was; its sets are kept."""
+    root = Path(root)
+    versions = checkpoint_versions() if versions is None else versions
+    root.mkdir(parents=True, exist_ok=True)
+    for p in root.glob('.*.tmp.npz'):
+        pid = p.name.rsplit('.tmp.npz', 1)[0].rsplit('.', 1)[-1]
+        if not (pid.isdigit() and Path(f'/proc/{pid}').exists()):
+            p.unlink(missing_ok=True)
+    vf = root / 'versions.json'
+    try:
+        old = json.loads(vf.read_text())
+    except (OSError, ValueError):
+        old = None
+    why = ''
+    if old is not None and old != versions:
+        why = f'under {old}, not {versions}'
+        for p in root.glob('*.npz'):
+            if not p.name.startswith('.'):
+                p.unlink(missing_ok=True)
+    if old != versions:
+        tmp = vf.with_name(f'.versions.{os.getpid()}.tmp')
+        tmp.write_text(json.dumps(versions))
+        os.replace(tmp, vf)
+    return why
+
+
 def _pack(x, arrs):
     """`x` as JSON data, each numpy array and scalar moved into `arrs` as it is (its dtype, its
     bits); dicts keep their keys' types, tuples stay tuples, floats are kept as hex. `_unpack`
@@ -4351,7 +5906,10 @@ def set_file(root, keys):
 
 def save_set(root, got):
     """Keep one attack set's [(key, arrays, nets, form errors)] under `root`, written to a temporary
-    name and moved into place, so a run stopped while writing leaves no file that reads."""
+    name, synced and moved into place, so a run stopped while writing, or a machine that loses power
+    after, leaves no file that reads part of a set. An empty set (`got` []) keeps nothing."""
+    if not got:
+        return
     arrs = {}
     keys = [g[0] for g in got]
     doc = json.dumps({'keys': keys, 'got': _pack([tuple(g[:4]) for g in got], arrs)})
@@ -4359,7 +5917,10 @@ def save_set(root, got):
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f'.{p.stem}.{os.getpid()}.tmp.npz')
     try:
-        np.savez(tmp, __doc__=np.array(doc), **arrs)
+        with open(tmp, 'wb') as f:
+            np.savez(f, __doc__=np.array(doc), **arrs)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, p)
     finally:
         if tmp.exists():
@@ -4368,7 +5929,7 @@ def save_set(root, got):
 
 def load_set(root, keys):
     """The kept results of the attack set of `keys`, or None when there are none or they cannot be
-    read."""
+    read (an empty file, which `np.load` meets with EOFError, among them)."""
     p = set_file(root, keys)
     if not p.exists():
         return None
@@ -4376,7 +5937,7 @@ def load_set(root, keys):
         with np.load(p, allow_pickle=False) as z:
             doc = json.loads(str(z['__doc__']))
             return _unpack(doc['got'], z) if doc['keys'] == list(keys) else None
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):
         return None
 
 
@@ -4574,8 +6135,11 @@ MATRICES = ('D_assoc', 'D_rel', 'D_land', 'D_now', 'D_best', 'D_idle')
 
 def exact_full(recs, keys):
     """The exact worth `profile_arrays` divides the land shares by; the record's `full` is rounded
-    to 0.1 HP, which put a 21.33 HP Kick's base share at 1.0014."""
-    return [float(sum(recs[k]['value'].values())) for k in keys]
+    to 0.1 HP, which put a 21.33 HP Kick's base share at 1.0014. `worth` is that sum with a hit
+    priority record's hits counted once (`er-mechanics-spells.full_worth`, version 31); a record
+    without it (a cache from before) reads the plain sum."""
+    return [float(recs[k]['worth']) if recs[k].get('worth') is not None else float(sum(recs[k]['value'].values()))
+            for k in keys]
 
 
 def raw_matrices(res):
@@ -4614,7 +6178,8 @@ def group_of(r, null, hp):
     """(group, sub-reason, flags) of one profiled entity, by its land masses (module doc
     'Groups'): what it lands, never how often it is punished. The flags read the mean net: a live
     attack netting at most `hp` is `PUNISHED_LIVE`; one that is not live and nets under -`hp`
-    (Starcaller Cry, Flame Spit) is `PUNISHED_NOT_LIVE`. Both read the distance basis's nets."""
+    (the Zamor Ice Storm casts, Flame Spit) is `PUNISHED_NOT_LIVE`. Both read the distance basis's
+    nets."""
     flags = []
     if r['land_mass_now'] >= null:
         if r['mean_net'] <= hp:
@@ -5571,6 +7136,16 @@ def rule_cells(b):
     if not r:
         return ['-', '-', '-', '-']
     main = ' and '.join(k.upper() for k in r['main'])
+    if r.get('source') == 'given':
+        e, p = r['end'], r.get('fp_plan') or {}
+        armor = e.get('armor') or {}
+        return [html.escape(f"{r['class']}; given (--line), no stat traded"),
+                html.escape(f"{b['stats']['vig']} (given): HP {p.get('hp', 0):g}, no HP piece"),
+                html.escape(f"{b['stats']['end']} (given): {', '.join(armor.get('pieces') or []) or 'no armor'}, "
+                            f"{armor.get('poise', 0):g} poise (the lightest at {e['poise_floor']:g}); armor alone "
+                            f"{armor.get('weight', 0.0)} of {e['max_load']} ({e['burden']}, "
+                            f"{'medium roll' if e['medium'] else 'past medium roll'}); hands not counted"),
+                html.escape(f"{b['stats']['mnd']} (given): bar {p.get('bar', 0):g}")]
     if r.get('source') == 'line-fit':
         f = r['fit']
         kit = '; '.join(f"{p['name']}" + (f" from {p['catalyst']}" if p['kind'] == 'spell' else
@@ -5925,7 +7500,8 @@ def render(res, an, a):
                '<b>Build-dependent</b>, read per build: '
                f"{esc(', '.join(BUILD_DEPENDENT))} (sections 4 to 6). A build uses an attack only when its base stats "
                'meet the carrier\'s or the spell\'s and its catalyst\'s requirements (whether talisman and great-rune '
-               'boosts count is not established), on the opening group weapon of least requirement it can wield, at '
+               'boosts count is not established), on the opening group weapon it can wield whose skill damage, '
+               'opening and follow-ups summed, is largest at its stats, at '
                'the affinity whose skill damage is largest at its stats, and casts at its own DEX. An attack no '
                'build can use is in no build\'s dominance; every scored attack is still priced at two lines that '
                'can use it, read off no build (<a href="#objective">section 15</a>).</p>'
@@ -6231,6 +7807,8 @@ def build_args(argv=None):
                     help=f"repeatable; default {', '.join(DEFAULT_CATALYSTS)}")
     ap.add_argument('--rl', type=int, default=150)
     ap.add_argument('--jobs', type=int, default=None, help='forked workers; default min(8, CPUs - 1); 1 runs here')
+    ap.add_argument('--no-wait', action='store_true',
+                    help='exit 3 when another pooled run holds er-mechanics-pool-lock instead of waiting for it')
     ap.add_argument('--refresh', action='store_true', help='recompute even when the cache stamp matches')
     ap.add_argument('--out', help='HTML page')
     ap.add_argument('--json', help='association JSON (no vectors, no matrices)')
@@ -6252,6 +7830,14 @@ def build_args(argv=None):
     ap.add_argument('--hp', type=float, default=1.0)
     ap.add_argument('--scale-band', type=float, default=1.0, help='twins: full worth within a factor 2^this')
     ap.add_argument('--only', action='append', default=[], help='score only spells and skills of this name; repeatable')
+    ap.add_argument('--line', action='append', default=[],
+                    metavar='NAME:vig=..,mnd=..,end=..,str=..,dex=..,int=..,fth=..,arc=..[,poise=..]',
+                    help='one more attacker build at this spread, beside the made lines; repeatable. All eight '
+                         'attributes are given and none is traded; it wears the lightest armor set at `poise` '
+                         '(default the run\'s melee poise floor; 0 wears none), no HP piece and no talismans '
+                         '(`given_builds`). It adds its own nets and moves no other number (the objective lines '
+                         'start from the made lines alone), but the run\'s stamp holds the builds, so a run with '
+                         'it keeps its own cache and sets')
     ap.add_argument('--show', action='append', default=[],
                     help="print one attack's associations from the cache (or, with --only, from that subset); repeatable")
     ap.add_argument('--include-blacklisted', action='store_true')
@@ -6259,10 +7845,34 @@ def build_args(argv=None):
                     help='read only the first N attack sets of their order and stop: their seconds and memory '
                          'go to the timing log and its trail, the sets are kept for a full run to resume from, '
                          'and no result is cached')
+    ap.add_argument('--mem-stop-gib', type=float, default=MEM_STOP_GIB,
+                    help=f'stop the attack set started last when available memory falls under this, and deal it '
+                         f'again later (default {MEM_STOP_GIB:g}); 0 never stops one')
+    ap.add_argument('--mem-start-gib', type=float, default=MEM_START_GIB,
+                    help=f'start an attack set only with this much memory available (default {MEM_START_GIB:g})')
     ap.add_argument('--no-heatmaps', action='store_true')
     ap.add_argument('--selftest', action='store_true')
     ap.add_argument('--keep-going', action='store_true',
                     help='with --selftest: run every check past a failure, print each, and exit 1 at the end')
+    ap.add_argument('--selftest-estimate', action='store_true',
+                    help="run only the checks of the attack sets' counter weights and still-running lines (31e), "
+                         'which need no game data, and exit 1 when one fails')
+    ap.add_argument('--selftest-reasons', action='store_true',
+                    help='run only the checks of why a spell with no damaging hit is excluded (37): '
+                         'Carian Retaliation, the status-only mists, the buffs, one process, and exit 1 when '
+                         'one fails')
+    ap.add_argument('--selftest-status', action='store_true',
+                    help='run only the status build-up checks (38): the proc rule on a made-up pool, then Stars of '
+                         'Ruin, Bloody Slash and Freezing Mist on every eighth situation, one process, and exit 1 '
+                         'when one fails')
+    ap.add_argument('--selftest-status-groups', action='store_true',
+                    help='run only the criteria of checks 8 and 9 that status build-up can move, on Zamor Ice '
+                         'Storm, Bloody Slash and Starcaller Cry scored alone (--jobs, default 1); with '
+                         '--selftest-status, both on one context; exit 1 when one fails')
+    ap.add_argument('--selftest-lines', action='store_true',
+                    help='run only the --line checks (36): the made-up spreads, then the Glintstone Pebble sorcery '
+                         'with and without a spread on an eighth of the situations (--jobs, default 1), and exit 1 '
+                         'when one fails')
     ap.add_argument('--timing', nargs='*', default=None, metavar='RUN',
                     help='compare two runs of the timing log and exit: none named, the newest and the newest '
                          'earlier run of its scope; one, that run and the newest earlier run of its scope; two, A '
@@ -6296,10 +7906,13 @@ def full_run_time(path=None):
 def run(a, log=print, timing=None):
     """(`Result`, analysis) for the arguments `a`, from the cache when its stamp matches; None with
     --show (and no --only) when it does not, since --show reads the cache and never computes.
-    Each step is a lap of `timing`, and what the run is goes in its facts."""
-    timing = timing or Timing()
+    Each step is a lap of `timing`, and what the run is goes in its facts. With no `timing`, each
+    set's seconds and memory still go to `trail_path()`: a caller that imported `run` dropped them,
+    and a run the harness then stopped for low memory left nothing saying what held it (2026-11-17)."""
+    timing = timing or Timing(trail=trail_path())
     stats = S.parse_stats(a.stats)
-    c = Context(stats, a.catalyst or DEFAULT_CATALYSTS, a.rl, a.include_blacklisted)
+    c = Context(stats, a.catalyst or DEFAULT_CATALYSTS, a.rl, a.include_blacklisted,
+                lines=[parse_line(x) for x in getattr(a, 'line', None) or ()])
     jobs = a.jobs if a.jobs is not None else default_jobs()
     only = {T._norm(x) for x in a.only} or None
     sets_cap = getattr(a, 'sets', None)
@@ -6309,22 +7922,42 @@ def run(a, log=print, timing=None):
     res = None
     h16 = inputs = None
     _ai()
+    # One pooled run at a time across every checkout (`er-mechanics-pool-lock`): each compute below
+    # holds it while its workers run; --no-wait exits 3 instead of waiting for another run.
+    what = (f"attack-similarity {'--only ' + ','.join(sorted(only)) if only else 'full'}"
+            f"{f' --sets {sets_cap}' if sets_cap is not None else ''} --jobs {jobs}")
+    wait = not getattr(a, 'no_wait', False)
+    guard = MemoryGuard(getattr(a, 'mem_stop_gib', MEM_STOP_GIB) * 2**30,
+                        getattr(a, 'mem_start_gib', MEM_START_GIB) * 2**30,
+                        log=lambda msg: log(msg, file=sys.stderr))
     if sets_cap is not None and only:
         # A sample of a subset has no result to cache and no sets a full run reads.
         timing.mark_code()
-        compute(c, only, jobs, log, timing, sets_cap=sets_cap)
+        with pool_held(jobs, what, wait):
+            compute(c, only, jobs, log, timing, sets_cap=sets_cap, guard=guard)
         return None
     if only:
-        timing.mark_code()
+        # A subset keeps its sets too, under the stamp of everything they depend on (the members
+        # cache as it is, fresh or not, since a subset may run on a stale one): the kit run of
+        # 2026-11-18 was stopped by its memory guard at 139 of 218 sets and, keeping none, lost them.
+        h16, inputs = stamp(stats, c.catalysts, a.rl, a.include_blacklisted, c.situations, c.strikes, c.dfn,
+                            hks=hks_stamp(c.A), builds=c.builds, members=members_stamp())
+        timing.facts['stamp'] = h16
+        timing.mark_code(inputs['code'])
+        if a.refresh:
+            # --refresh recomputes: a subset's kept sets are read no more than a full run's are.
+            log(f'attack similarity: --refresh, recomputing the subset (stamp {h16})', file=sys.stderr)
+            shutil.rmtree(set_dir(a.rl, h16).with_suffix('.only-sets'), ignore_errors=True)
     else:
         h16, inputs = stamp(stats, c.catalysts, a.rl, a.include_blacklisted, c.situations, c.strikes, c.dfn,
-                            hks=hks_stamp(c.A), builds=c.builds)
+                            hks=hks_stamp(c.A), builds=c.builds, members=require_fresh_members())
         timing.facts['stamp'] = h16
         timing.mark_code(inputs['code'])
         timing.lap('stamp')
         if sets_cap is not None:
             # A sample's sets are kept where a full run of this stamp resumes from.
-            compute(c, None, jobs, log, timing, sets_cap=sets_cap, checkpoint=set_dir(a.rl, h16))
+            with pool_held(jobs, what, wait):
+                compute(c, None, jobs, log, timing, sets_cap=sets_cap, checkpoint=set_dir(a.rl, h16), guard=guard)
             return None
         jp, _ = cache_paths(a.rl, h16)
         if a.refresh and not a.show:
@@ -6342,7 +7975,12 @@ def run(a, log=print, timing=None):
                 log('attack similarity: computing', file=sys.stderr)
     timing.facts['cache'] = 'computed' if res is None else 'hit'
     if res is None:
-        res = compute(c, only, jobs, log, timing, checkpoint=None if only else set_dir(a.rl, h16))
+        # The long sets go first by the seconds the trail measured (`set_order`); a --sets sample
+        # above keeps the shuffle, so its sets stay a random sample.
+        with pool_held(jobs, what, wait):
+            res = compute(c, only, jobs, log, timing,
+                          checkpoint=set_dir(a.rl, h16).with_suffix('.only-sets' if only else '.sets'),
+                          measured=measured_seconds(trail_path(a.timing_log)), guard=guard)
         an = analyze(res, a)
         timing.lap('analyze')
         if not only:
@@ -6367,6 +8005,56 @@ def main(argv=None):
     ap, a = build_args(argv)
     if a.selftest:
         return selftest(a.timing_log, a.keep_going)
+    if a.selftest_estimate:
+        failed = []
+
+        def check(name, ok):
+            print(f'{"ok" if ok else "FAIL"} {name}', file=sys.stderr, flush=True)
+            if not ok:
+                failed.append(name)
+        selftest_estimate(check)
+        selftest_form_stop(check)
+        return 1 if failed else 0
+    if a.selftest_reasons:
+        failed = []
+
+        def check(name, ok):
+            print(f'{"ok" if ok else "FAIL"} {name}', file=sys.stderr, flush=True)
+            if not ok:
+                failed.append(name)
+        selftest_no_hit(check, Context(S.parse_stats(DEFAULT_STATS)))
+        return 1 if failed else 0
+    if a.selftest_status:
+        failed = []
+
+        def check(name, ok):
+            print(f'{"ok" if ok else "FAIL"} {name}', file=sys.stderr, flush=True)
+            if not ok:
+                failed.append(name)
+        cs_ = Context(S.parse_stats(DEFAULT_STATS))
+        selftest_status(check, cs_)
+        if a.selftest_status_groups:
+            selftest_status_groups(check, cs_, a.jobs or 1)
+        return 1 if failed else 0
+    if a.selftest_status_groups:
+        failed = []
+
+        def check(name, ok):
+            print(f'{"ok" if ok else "FAIL"} {name}', file=sys.stderr, flush=True)
+            if not ok:
+                failed.append(name)
+        selftest_status_groups(check, Context(S.parse_stats(DEFAULT_STATS)), a.jobs or 1)
+        return 1 if failed else 0
+    if a.selftest_lines:
+        failed = []
+
+        def check(name, ok):
+            print(f'{"ok" if ok else "FAIL"} {name}', file=sys.stderr, flush=True)
+            if not ok:
+                failed.append(name)
+        selftest_lines_synthetic(check)
+        selftest_lines_run(check, Context(S.parse_stats(DEFAULT_STATS)), a.jobs or 1)
+        return 1 if failed else 0
     if a.timing is not None:
         ra, rb = timing_pick(timing_runs(a.timing_log), a.timing)
         if ra is None or rb is None:
@@ -6435,10 +8123,11 @@ SELFTEST_NAMES = ('Zamor Ice Storm', 'Glintblade Phalanx', 'Glintstone Pebble', 
                   # Round 5: a charged skill, its early release a variant of its own; a skill whose
                   # carrier's own status its melee hits apply.
                   'Carian Grandeur', "Bloodhound's Finesse",
-                  # The negative controls picked from the 2026-11-10 full run r7, then 2026-11-11 r9
-                  # (`NEGATIVE_CONTROLS`).
-                  'Charge Forth', 'Cherishing Fingers', 'Star Shower', 'Glintstone Stars',
-                  "Tibia's Summons", 'Tongues of Fire', 'Magma Shot', 'Spinning Weapon', 'Collapsing Stars',
+                  # The negative controls picked from the 2026-11-15 full run (`NEGATIVE_CONTROLS`).
+                  'Familial Rancor', 'Rain of Fire', 'Devourer of Worlds', "Loretta's Mastery",
+                  'Cannon of Haima', 'Collapsing Stars',
+                  # Check 32's lookalike group (in the set since the r7 controls).
+                  'Star Shower', 'Glintstone Stars',
                   # The objective evaluation: skills no attacker build of the 2026-11-10 full run r5
                   # could use (`OBJECTIVE_NAMES`).
                   'Tremendous Phalanx', 'Rancor Slash', 'Great Oracular Bubble')
@@ -6449,19 +8138,18 @@ SELFTEST_NAMES = ('Zamor Ice Storm', 'Glintblade Phalanx', 'Glintstone Pebble', 
 OBJECTIVE_NAMES = ('Tremendous Phalanx', 'Rancor Slash', 'Great Oracular Bubble')
 #: The live negative controls: (skill name, its carrier, its follow-up button or None) against
 #: (spell name, variant). Each pair is within --twin (0.1) on D_rel alone and past it on D_assoc,
-#: with no twin, match or contains between them, on the 2026-11-11 full run r9 (stamp
-#: f4971cc856bcd144): D_rel 0.042 / 0.065 / 0.079 / 0.082, D_assoc 0.321 / 0.340 / 0.280 / 0.239.
-#: r9 had 16 such pairs over 9 (skill, spell) names, 3 of them Charge Forth's; these are two of its
-#: nearest, of different spells
-#: (melee against bullets) and the two nearest of other skills, one bullets on both sides and one
-#: melee against bullets. The r7 set's Roaring Bash / Star Shower tap, Red Bear Hunt / Glintstone
-#: Stars tap and Glintblade Phalanx [Ritual Thrusting Shield] / Star Shower tap were at D_rel 0.668,
-#: 0.660 and 0.673 in r8, the first run with the lock-on aim at a shot's creation, and stayed there
-#: in r9.
-NEGATIVE_CONTROLS = ((('Charge Forth', 'Short Spear', 'l2'), ('Cherishing Fingers', 'tap')),
-                     (('Charge Forth', 'Torchpole', 'l2'), ("Tibia's Summons", 'cast')),
-                     (('Tongues of Fire', 'Visage Shield', None), ('Magma Shot', 'tap')),
-                     (('Spinning Weapon', 'Carian Regal Scepter', None), ('Collapsing Stars', 'tap')))
+#: with no twin, match or contains between them, on the 2026-11-15 full run (version 17, stamp
+#: 4a87d5408c1fba25): D_rel 0.040 / 0.045 / 0.088 / 0.092, D_assoc 0.308 / 0.365 / 0.697 / 0.429.
+#: That run had 8 such pairs over 3 skills; these are the two nearest of each of Familial Rancor and
+#: Devourer of Worlds, of four different spells (bullets on both sides). The eighth, Carian
+#: Sovereignty's L2 tap follow-up against Rock Sling, is the only melee one, at D_rel 0.0995, on
+#: the edge. The r9 set (Charge Forth [Short Spear] / Cherishing Fingers tap, Charge Forth
+#: [Torchpole] / Tibia's Summons cast, Tongues of Fire / Magma Shot tap, Spinning Weapon /
+#: Collapsing Stars tap) was at D_rel 0.587 / 0.742 / 0.735 / 0.710 in the version 17 selftest.
+NEGATIVE_CONTROLS = ((('Familial Rancor', 'Family Heads', None), ('Rain of Fire', 'tap')),
+                     (('Devourer of Worlds', "Devourer's Scepter", None), ("Loretta's Mastery", 'charged')),
+                     (('Familial Rancor', 'Family Heads', None), ('Cannon of Haima', 'charged')),
+                     (('Devourer of Worlds', "Devourer's Scepter", None), ('Great Oracular Bubble', 'tap')))
 #: The round-2 controls (each within D_rel 0.1 in the round-2 full run). Since the launches are
 #: placed and the caught defender walks out (bd er-effects-rs-doax / er-effects-rs-n7dd,
 #: 2026-11-10) none of them is within --twin on D_rel (0.14-0.73), so they no longer test that
@@ -6849,9 +8537,160 @@ def selftest_synthetic(check):
               same_(back_, [tuple(g[:4]) for g in set_]) and load_set(sd_, ['k2', 'k1']) is None
               and load_set(sd_, ['k3']) is None and load_set(Path(tmp) / 'none', ['k1']) is None
               and set_dir(150, 'ab', tmp) == Path(tmp) / f'attack-similarity-{150 - S.WINDOW}-{150 + S.WINDOW}-ab.sets')
+        # A stopped run's leftovers: an empty set file (power lost after the rename), a writer's
+        # temporary file whose pid ended and one whose writer still runs (this process), and sets made
+        # under other Python or numpy versions.
+        set_file(sd_, ['k4']).write_bytes(b'')
+        dead_ = sd_ / f'.abc.{2**22 + 7}.tmp.npz'
+        live_ = sd_ / f'.abc.{os.getpid()}.tmp.npz'
+        dead_.write_bytes(b'x')
+        live_.write_bytes(b'x')
+        save_set(sd_, [])
+
+        def sets_(d):
+            return [p for p in d.glob('*.npz') if not p.name.startswith('.')]
+        n_ = len(sets_(sd_))
+        why0_ = open_checkpoint(sd_, {'python': 'a', 'numpy': 'b'})
+        why1_ = open_checkpoint(sd_, {'python': 'a', 'numpy': 'b'})
+        kept_ = load_set(sd_, ['k1', 'k2']) is not None
+        why2_ = open_checkpoint(sd_, {'python': 'a', 'numpy': 'c'})
+        check(f"31. an empty set file reads as no set, an empty set keeps no file, a dead writer's temporary file "
+              f"is deleted and a live one's kept, sets made before versions.json are kept and sets of other "
+              f"versions deleted ({why2_!r})",
+              load_set(sd_, ['k4']) is None and n_ == 3 and not dead_.exists() and live_.exists()
+              and why0_ == '' and why1_ == '' and kept_ and 'numpy' in why2_
+              and not sets_(sd_) and json.loads((sd_ / 'versions.json').read_text())['numpy'] == 'c')
+        live_.unlink()
+    # `pooled` with `fresh`: each item after the first in a process of its own on a core no other
+    # holds; an item whose process dies is dealt again; the memory guard stops the item started last
+    # and starts none until memory is back. Toy items, no model.
+    import signal
+    cores_ = _ai().allowed_cpus()
+    cores_ = cores_[1:] or cores_
+
+    def toy_(x):
+        time.sleep(x[1])
+        return x[0] * 10, os.getpid(), sorted(os.sched_getaffinity(0))
+    toys_ = [(i, 0.3) for i in range(6)]
+    got_ = list(pooled(toy_, toys_, 2, 'toy', fresh=True))
+    pids_ = {g[1] for g in got_[1:]}
+    check(f'31. a fresh pool gives what a serial run gives, each item after the first in a process of its own '
+          f'pinned to one core ({[g[2] for g in got_]})',
+          sorted(g[0] for g in got_) == [i * 10 for i in range(6)] and len(pids_) == 5 and os.getpid() not in pids_
+          and all(len(g[2]) == 1 and g[2][0] in cores_ for g in got_[1:]))
+    with tempfile.TemporaryDirectory() as tmp_:
+        mark_ = Path(tmp_)
+
+        def dies_once_(x):
+            if x[0] == 3 and not (mark_ / 'once').exists():
+                (mark_ / 'once').write_text('')
+                os.kill(os.getpid(), signal.SIGKILL)
+            if x[0] == 4 and x[1] == 'always':
+                os.kill(os.getpid(), signal.SIGKILL)
+            return x[0]
+        msgs_ = []
+        try:
+            again_ = list(_fresh_pool(lambda x: dies_once_(x), [(i, (i, 'once')) for i in range(1, 6)], 2, cores_,
+                                      log=msgs_.append))
+        except RuntimeError as e_:
+            again_ = e_
+        try:
+            list(_fresh_pool(lambda x: dies_once_(x), [(4, (4, 'always'))], 1, cores_, retries=1, log=msgs_.append))
+            gave_up_ = False
+        except RuntimeError as e_:
+            gave_up_ = 'died without a result 2 times' in str(e_)
+    check(f'31. an item whose process dies without a result is dealt again, and one that always dies stops the run '
+          f'after its retries ({msgs_})',
+          not isinstance(again_, RuntimeError) and sorted(g[0] for g in again_) == [1, 2, 3, 4, 5]
+          and sum('item 3 died' in m for m in msgs_) == 1 and gave_up_)
+    t0_ = time.monotonic()
+    low_ = (t0_ + 0.4, t0_ + 1.2)
+    gmsgs_ = []
+    guard_ = MemoryGuard(8 * 2**30, 16 * 2**30, poll_s=0.05, log=gmsgs_.append,
+                         available=lambda: 2 * 2**30 if low_[0] <= time.monotonic() < low_[1] else 64 * 2**30)
+    gotg_ = list(_fresh_pool(toy_, [(i, (i, 1.0)) for i in range(1, 5)], 2, cores_, guard=guard_, log=gmsgs_.append))
+    stops_ = [m for m in gmsgs_ if m.startswith('memory guard') and 'stopping item' in m]
+    check(f'31. the memory guard stops the item started last first, starts none while memory is short, and every '
+          f'item ends ({gmsgs_})',
+          sorted(g[1][0] for g in gotg_) == [10, 20, 30, 40] and guard_.stops >= 1 and stops_
+          and 'stopping item 2 ' in stops_[0] and guard_.waits >= 1
+          and not any('died without a result' in m for m in gmsgs_))
+    # An item the guard stopped twice runs alone: it starts once nothing else runs, nothing starts
+    # beside it, and it is not stopped.
+    with tempfile.TemporaryDirectory() as tmp_:
+        st_ = Path(tmp_)
+
+        def timed_(x):
+            n = len(list(st_.glob(f'start-{x[0]}-*'))) + 1
+            (st_ / f'start-{x[0]}-{n}').write_text('')
+            t = time.monotonic()
+            time.sleep(x[1])
+            return x[0], t, time.monotonic()
+        box_ = {}
+
+        def avail2_():
+            s, n2 = box_['g'].stops, len(list(st_.glob('start-2-*')))
+            low = (s == 0 and n2 >= 1 and (st_ / 'start-1-1').exists()) or (s == 1 and n2 >= 2)
+            return 2 * 2**30 if low else 64 * 2**30
+        box_['g'] = MemoryGuard(8 * 2**30, 16 * 2**30, poll_s=0.02, log=lambda m: None, available=avail2_)
+        got2_ = {g[1][0]: g[1] for g in _fresh_pool(timed_, [(1, (1, 2.0)), (2, (2, 0.5)), (3, (3, 0.2))], 2,
+                                                     cores_, guard=box_['g'], log=lambda m: None)}
+        starts2_ = len(list(st_.glob('start-2-*')))
+    check(f'31. an item the memory guard stopped twice runs alone: item 2 started {starts2_} times, its last '
+          f'start {got2_[2][1] - got2_[1][2]:+.2f} s after item 1 ended, item 3 {got2_[3][1] - got2_[2][2]:+.2f} s '
+          f'after item 2 ended',
+          box_['g'].stops == 2 and starts2_ == 3 and got2_[2][1] >= got2_[1][2] and got2_[3][1] >= got2_[2][2])
+    # A run killed alone (a SIGKILL to its process, not its group): its set process ends with it.
+    with tempfile.TemporaryDirectory() as tmp_:
+        pidf_ = Path(tmp_) / 'child'
+
+        def long_(x):
+            pidf_.write_text(str(os.getpid()))
+            time.sleep(60)
+        mid_ = os.fork()
+        if mid_ == 0:
+            try:
+                list(_fresh_pool(long_, [(1, None)], 1, cores_, log=lambda m: None))
+            finally:
+                os._exit(0)
+        t1_ = time.monotonic()
+        while not pidf_.exists() and time.monotonic() - t1_ < 10:
+            time.sleep(0.05)
+        kid_ = int(pidf_.read_text()) if pidf_.exists() else None
+        os.kill(mid_, signal.SIGKILL)
+        os.waitpid(mid_, 0)
+        t1_ = time.monotonic()
+
+        def gone_(pid):
+            try:
+                return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'Z'
+            except OSError:
+                return True
+        while kid_ is not None and not gone_(kid_) and time.monotonic() - t1_ < 5:
+            time.sleep(0.05)
+    check(f'31. a set process ends when its run is killed alone ({kid_} gone '
+          f'{time.monotonic() - t1_:.2f} s after its run)', kid_ is not None and gone_(kid_))
     so_ = [set_order([['d'], ['c'], ['b'], ['a'], ['e'], ['f'], ['z']]) for _ in range(2)]
     check(f'31. the attack sets are read cheapest first, then the rest in one shuffled order ({so_[0]})',
           so_[0] == so_[1] == [['z'], ['b'], ['d'], ['c'], ['f'], ['e'], ['a']])
+    # The long sets by measured seconds first, dearest first, the rest in the shuffle's order; a
+    # key never measured counts 0, and no measure is the shuffle itself.
+    mo_ = set_order([['d'], ['c', 'x'], ['b'], ['a'], ['e'], ['f'], ['z']],
+                    measured={'a': 50.0, 'c': 10.0, 'x': 30.0, 'f': 1.0, 'z': 900.0})
+    check(f'31. with measured seconds the long sets come first, dearest first, then the shuffle ({mo_})',
+          mo_ == [['z'], ['a'], ['c', 'x'], ['b'], ['d'], ['f'], ['e']]
+          and set_order([['d'], ['c'], ['b'], ['a'], ['e'], ['f'], ['z']], measured={}) == so_[0])
+    with tempfile.TemporaryDirectory() as tmp_:
+        tr_ = Path(tmp_) / 'x.items.jsonl'
+        tr_.write_text('\n'.join([json.dumps({'when': 'w1', 'stage': 'attacks', 'item': 'k1', 'wall': 5.0, 'cpu': 4.0}),
+                                  json.dumps({'when': 'w1', 'stage': 'inputs', 'item': 'k2', 'wall': 9.0, 'cpu': 9.0}),
+                                  '{"stage": "attacks", "item": "torn',
+                                  json.dumps({'when': 'w2', 'stage': 'attacks', 'item': 'k1', 'wall': 7.0, 'cpu': 6.0}),
+                                  json.dumps({'when': 'w2', 'stage': 'attacks', 'item': 'k3#2', 'wall': 2.0, 'cpu': 2.0})])
+                       + '\n')
+        ms_ = measured_seconds(tr_)
+    check(f"31. a key's measured seconds are its newest 'attacks' item's in the trail, a torn line skipped ({ms_})",
+          ms_ == {'k1': 7.0, 'k3': 2.0} and measured_seconds(Path('/nonexistent/trail.jsonl')) == {})
     # A resumed run whose kept sets include the cheapest: the cheapest left goes first, the rest keep
     # their order (r18's first unread set was the 5th dearest of 952, read in this process).
     cost_ = {'z': 1.0, 'b': 5.0, 'd': 9.0, 'c': 3.0, 'f': 2.0, 'e': 7.0, 'a': 8.0}
@@ -6862,17 +8701,641 @@ def selftest_synthetic(check):
     # The attack sets' counter takes its time left from each set's estimated cost (`pooled` weight).
     buf_ = io.StringIO()
     orig_ = PROG.Count
-    PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'clock': lambda: 0.0, 'out': buf_})
+    PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'clock': lambda: 0.0, 'out': buf_, 'wall': lambda: 0.0})
     try:
         got_ = list(pooled(lambda x: x * 2, [3, 1, 1], 1, 'sets', weight=lambda x: x))
     finally:
         PROG.Count = orig_
     check(f'31. a weighted pool counts the share of the estimated work done ({buf_.getvalue().splitlines()})',
           got_ == [6, 2, 2] and buf_.getvalue().splitlines() == [
-              '  1/3 sets  0s, 0 s/item, 60.0% of the estimated work, ~0s left', '  3/3 sets  0s, 0 s/item'])
+              f'  1/3 sets  0s, 0 s/item, 60.0% of the estimated work, ~0s left  '
+              f'[{PROG.hms(0.0)}, ends ~{PROG.hms(0.0)}]', f'  3/3 sets  0s, 0 s/item  [{PROG.hms(0.0)}]'])
     sw_ = set_weight(['a', 'b', 'gone'], {'a': 1.0, 'b': 2.0 ** (1 / COST_TIME_POWER)})
     check(f'31. a set weighs its keys\' costs to the power COST_TIME_POWER, a key with none next to nothing ({sw_})',
           abs(sw_ - 3.0) < 1e-3)
+    selftest_estimate(check)
+    selftest_form_stop(check)
+
+
+def selftest_lines_synthetic(check):
+    """Check 36 on made-up classes and armor: a `--line` spread (`parse_line`, `given_builds`)."""
+    cls_s = {'A': {'vig': 10, 'mnd': 12, 'end': 10, 'str': 10, 'dex': 10, 'int': 14, 'fth': 8, 'arc': 8},
+             'B': {'vig': 12, 'mnd': 8, 'end': 12, 'str': 12, 'dex': 9, 'int': 10, 'fth': 9, 'arc': 9}}
+    cands_s = {0: [{'name': '-', 'weight': 0.0, 'poise': 0.0}, {'name': 'h', 'weight': 7.9, 'poise': 13.0}],
+               1: [{'name': '-', 'weight': 0.0, 'poise': 0.0}, {'name': 'b', 'weight': 18.9, 'poise': 39.0}],
+               2: [{'name': '-', 'weight': 0.0, 'poise': 0.0}, {'name': 'a', 'weight': 6.1, 'poise': 10.0}],
+               3: [{'name': '-', 'weight': 0.0, 'poise': 0.0}, {'name': 'l', 'weight': 14.8, 'poise': 27.0}]}
+    spread_s = 'vig=45,mnd=8,end=15,str=22,dex=21,int=10,fth=9,arc=9'
+
+    def given_s(*texts, taken=()):
+        return given_builds([parse_line(t) for t in texts], cls_s, 60, lambda e: 50.0 + 2 * e,
+                            lambda p: lightest_armor(cands_s, p),
+                            lambda st, pieces: {'hp': 900.0 + st['vig'], 'menu_poise': float(len(pieces)),
+                                                'pieces': list(pieces)}, 89.0, taken)
+
+    def refused(fn):
+        try:
+            fn()
+        except SystemExit:
+            return True
+        return False
+    g_s = given_s(f'Mine: {spread_s}', f'Bare:{spread_s},poise=0')
+    check('36. a --line spread is a build of its stats as given (Mine: ' + (line_text(g_s[0]['stats']) if g_s else '-')
+          + '), RL from them, on the first class it is reachable from (B), usage 0, the lightest set at the melee '
+          'floor (h, b, a, l) or at poise=0 (none), its burden that armor over max load at its END, and its FP plan '
+          "from its stats and that set, which line_hp and line_poise read; the name is the text before the last ':'; "
+          'a spread missing an attribute, with an unknown key, past the RL, below every class, or of a taken name is '
+          'refused',
+          len(g_s) == 2 and [b['name'] for b in g_s] == ['Mine', 'Bare']
+          and g_s[0]['stats'] == {'vig': 45, 'mnd': 8, 'end': 15, 'str': 22, 'dex': 21, 'int': 10, 'fth': 9, 'arc': 9}
+          and all(b['rl'] == 60 and b['n'] == 0 and b['given'] and b['rule']['source'] == 'given'
+                  and b['rule']['class'] == 'B' for b in g_s)
+          and g_s[0]['rule']['end']['armor']['pieces'] == ['h', 'b', 'a', 'l'] and g_s[0]['rule']['end']['poise_floor'] == 89.0
+          and g_s[0]['rule']['end']['burden'] == round(47.7 / 80.0, 4) and g_s[0]['rule']['end']['medium']
+          and g_s[1]['rule']['end']['armor']['pieces'] == [] and g_s[1]['rule']['end']['burden'] == 0.0
+          and g_s[0]['rule']['fp_plan'] == {'hp': 945.0, 'menu_poise': 4.0, 'pieces': ['h', 'b', 'a', 'l']}
+          and line_hp(None, build=g_s[0]) == 945.0 and line_poise(None, build=g_s[0]) == 4.0
+          and parse_line(f'a:b: {spread_s}')[0] == 'a:b'
+          and refused(lambda: parse_line('vig=45')) and refused(lambda: parse_line('x:vig=45,mnd=8'))
+          and refused(lambda: parse_line(f'x:{spread_s},luck=3')) and refused(lambda: parse_line(f'x:{spread_s},vig=0'))
+          and refused(lambda: given_s(f"x:{spread_s.replace('vig=45', 'vig=46')}"))
+          and refused(lambda: given_s(f"x:{spread_s.replace('mnd=8', 'mnd=7').replace('vig=45', 'vig=46')}"))
+          and refused(lambda: given_s(f'Quality:{spread_s}', taken=['Quality']))
+          and refused(lambda: given_s(f'x:{spread_s}', f'x:{spread_s}')))
+
+
+def selftest_lines_run(check, c, jobs=1):
+    """Check 36 in a run (`given_builds`) on Context `c` (made with its attacker builds): on the
+    Glintstone Pebble sorcery and an eighth of the situations, a run with a `--line` spread and one
+    without it give the made lines, the distance basis and the objective lines the same numbers bit
+    for bit, and the spread nets of its own on its own FP plan; a run without one stamps its builds as
+    before. `c.A.HOMING_DISTS`, which `compute` sets from the situations, is put back."""
+    F_ = _line_fit()
+    world_ = F_.GameWorld(c.rl)
+    AT_ = S._mod('er_mechanics_armor_targets', 'er-mechanics-armor-targets.py')
+    cands_ = AT_.armor_candidates(AT_.DEF.Tables())
+    spec_l = parse_line('Int/Faith 60:vig=36,mnd=20,end=20,str=12,dex=12,int=60,fth=60,arc=9')
+    given_ = given_builds([spec_l], c.classes, c.rl, resource_curves()[1], lambda p: lightest_armor(cands_, p),
+                          lambda st, pieces: fp_plan(F_, world_, st, pieces), c.poise_floor, [b['name'] for b in c.builds])
+    for b in given_:
+        b.update(reach=reachable(b['stats'], c.classes, c.rl))
+    cx_ = copy.copy(c)
+    cx_.pairs, cx_.sprint_pairs, cx_.w = c.pairs[::8], c.sprint_pairs[::8], c.w[::8]
+    cx_.W = float(cx_.w.sum())
+    cy_ = copy.copy(cx_)
+    cy_.builds = list(c.builds) + given_
+    dists_ = c.A.HOMING_DISTS
+    only_ = {T._norm('Glintstone Pebble')}
+
+    def quiet_(*args, **kwargs):
+        return None
+    # The sorcery alone: on one core and every situation its one attack set took 31 s, and with the
+    # ash of war of the name one set took 44 minutes and the subset was 4 of 10 sets in after 90
+    # (`MEASURED` 2026-11-20, scripts/perf-similarity-dump.py).
+    try:
+        r0_ = compute(cx_, only_, jobs, quiet_, Timing(), kinds=('spell',))
+        r1_ = compute(cy_, only_, jobs, quiet_, Timing(), kinds=('spell',))
+    finally:
+        c.A.HOMING_DISTS = dists_
+
+    def nets_equal_(x, y):
+        return x.keys() == y.keys() and all(np.array_equal(x[k][j], y[k][j]) for k in x for j in (0, 1))
+    gb_ = r1_.builds[-1] if len(r1_.builds) == len(c.builds) + 1 else {}
+    own_ = [b for b in r1_.builds[:-1] if set(b['nets']) & set(gb_.get('nets') or {})]
+    st_ = c.stats
+    check(f"36. a --line spread ({gb_.get('name')}, {line_text(gb_.get('stats') or {})}) in a run of the Glintstone "
+          f"Pebble sorcery: the {len(c.builds)} made lines' nets, the distance basis's arrays and the objective lines "
+          f"are the same bit for bit with it and without it; it has {len(gb_.get('nets') or {})} nets of its own (none "
+          f"equal to a made line's of the same key: {', '.join(b['name'] for b in own_)}), paid on its own FP plan "
+          f"(HP {((gb_.get('rule') or {}).get('fp_plan') or {}).get('hp')}); a run without one stamps its builds as before",
+          len(r0_.builds) == len(c.builds) and bool(gb_) and gb_.get('given') and gb_['name'] == 'Int/Faith 60'
+          and all(nets_equal_(a_['nets'], b_['nets']) for a_, b_ in zip(r0_.builds, r1_.builds))
+          and r0_.keys == r1_.keys and all(np.array_equal(r0_.A[m], r1_.A[m], equal_nan=True) for m in ARRAYS)
+          and json.dumps({k: r['objective'] for k, r in r0_.records.items()}, sort_keys=True, default=_json_default)
+          == json.dumps({k: r['objective'] for k, r in r1_.records.items()}, sort_keys=True, default=_json_default)
+          and bool(gb_['nets']) and set(gb_['nets']) <= set(r1_.records) and bool(own_)
+          and all(not np.array_equal(gb_['nets'][k][0], b['nets'][k][0]) for b in own_ for k in set(b['nets']) & set(gb_['nets']))
+          and line_hp(cy_, build=cy_.builds[-1]) == gb_['rule']['fp_plan']['hp']
+          and stamp(st_, c.catalysts, c.rl, False, c.situations, c.strikes, c.dfn, code={}, paramdefs={},
+                    builds=c.builds)[1]['builds'] == [[b['name'], [b['stats'][k] for k in ATTRS], b['n']] for b in c.builds]
+          and stamp(st_, c.catalysts, c.rl, False, c.situations, c.strikes, c.dfn, code={}, paramdefs={},
+                    builds=cy_.builds)[1]['builds'][-1][-1] == ['given', c.poise_floor])
+
+
+def selftest_no_hit(check, c):
+    """37. Why a spell with no damaging hit by the spell rule is excluded (`no_hit_reason`), on spells
+    off the subset, each read alone with `spell_job` (`--selftest-reasons` runs only these).
+    `REGULATION` 2026-11-22: Carian Retaliation's damage (Bullet 10464002, AtkParam 46400 `atkMag`
+    248) is behind its parry bullet 10464000, which hits no character; Freezing Mist's bullets
+    10442000/10442001 deal none and put SpEffect 1442000 (`freezeAttackPower` 20, stateInfo 260) on
+    whoever they hit; Unseen Blade fires only SpEffect 1466000 (a 45 s buff, `spCategory` 162 as
+    Scholar's Armament's 1446000)."""
+    SM = c.SM
+
+    def job(name):
+        return spell_job(c, SM.by_name[S.T._norm(name)])
+    cr = job('Carian Retaliation')
+    hid = [h for e in cr for h in e.get('hidden', [])]
+    check(f"37. Carian Retaliation: excluded as needing an incoming projectile, its damage behind Bullet 10464000 "
+          f"(SpEffect 1464000 -> BehaviorParam_PC 3010 -> Bullet 10464002 AtkParam 46400): "
+          f"{[(e['status'], e['reason']) for e in cr]}",
+          bool(cr) and all(e['status'] == 'excluded' and e['reason'].startswith('needs an incoming projectile')
+                           for e in cr)
+          and any(h['gate'] == 10464000 and h['speffect'] == 1464000 and [3010, 10464002, 46400] in h['behind']
+                  for h in hid))
+    # Version 30: a status-only spell whose hits `status_hit_atks` counts is scored on its build-up
+    # (38); one it does not count keeps the status-only exclusion.
+    for name, status, key in (('Freezing Mist', 'frost', 'frost'), ('Poison Mist', 'poison', 'poison'),
+                              ("Fia's Mist", 'death', 'death_blight')):
+        got = job(name)
+        check(f"37. {name}: scored on its {status} build-up, or excluded as status only ({status}) carrying "
+              f"'status:{status}': {[(e['status'], e.get('reason'), e.get('tokens'), e.get('status_buildup')) for e in got]}",
+              bool(got) and all((e['status'] in ('scored', 'partial') and (e.get('status_buildup') or {}).get(key, 0) > 0)
+                                or (e['status'] == 'excluded' and (e.get('reason') or '').startswith(f'status only ({status})')
+                                    and f'status:{status}' in e['tokens']) for e in got))
+    buffs = ('Unseen Blade', "Scholar's Armament", 'Frozen Armament', 'Terra Magicus', 'Lucidity', 'Eternal Darkness')
+    got = {nm: job(nm) for nm in buffs}
+    check(f"37. the buffs and fields with no damage and no status keep 'no damaging hit': "
+          f"{ {nm: sorted({e['reason'] for e in v}) for nm, v in got.items()} }",
+          all(v and all(e['status'] == 'excluded' and e['reason'] == 'no damaging hit' for e in v) for v in got.values()))
+
+
+def selftest_status_synthetic(check):
+    """38a. The proc rule of a status build-up (`er-mechanics-spells.play_buildup`,
+    `StatusPool`), on a made-up pool, with no game data: a proc counts only when the build-up
+    landed empties the gauge (resistance 100: 99 does not, 100 does), at that build's own max HP,
+    capped at it; the refill between ticks comes off."""
+    pool = [(100.0, 0.5, 1000.0, {'immunity': 300, 'robustness': 100, 'focus': 200, 'vitality': 200}),
+            (100.0, 0.25, 2000.0, {'immunity': 300, 'robustness': 150, 'focus': 200, 'vitality': 200}),
+            (200.0, 0.25, 1500.0, {'immunity': 300, 'robustness': 400, 'focus': 200, 'vitality': 200})]
+    sp = S.StatusPool(pool)
+    frost = {'b': 20, 'group': 'robustness', 'row': 0, 'rate': 10.0, 'point': 30.0, 'ticks': 1, 'lock': 30.0,
+             'recover': 0.0}
+    one = [[(10.0, 6.0, 10.0, {'frost': frost})]]
+    got = {r: S.play_buildup([[r]], one, sp.floor) for r in (0.4, 0.495, 0.5, 0.75)}
+    hp = {r: (sp.worth(0.0, b, list(sp.by)) if b else 0.0) for r, b in got.items()}
+    capped = sp.worth(950.0, got[0.5], [100.0], pooled=True)
+    check(f"38a. a proc counts only when the build-up crosses the gauge: 10 hits of 20 frost on resistances 100 / "
+          f"150 / 400, landing 40% {hp[0.4]}, 49.5% {hp[0.495]}, 50% {hp[0.5]}, 75% {hp[0.75]} HP (the 1000 HP build's "
+          f"130 at half its share, then the 2000 HP build's 230 at a quarter); 950 landed besides on the 1000 HP "
+          f"build caps at its health ({capped})",
+          got[0.4] is None and got[0.495] is None and abs(hp[0.5] - 65.0) < 1e-9 and abs(hp[0.75] - 122.5) < 1e-9
+          and abs(capped - (0.5 * 1000.0 + 0.25 * 950.0)) < 1e-9)
+    slow = S.play_buildup([[0.5]], [[(10.0, 6.0, 10.0, {'frost': dict(frost, recover=5.0)})]])
+    check(f"38a. the gauge refills 5 a second over the 4 x 6 frames between the 5 ticks landed: 100 less 4 is "
+          f"{slow['frost'][0]}, which leaves the resistance-100 build short", abs(slow['frost'][0] - 96.0) < 1e-9
+          and not S.StatusPool.procs(*sp.by[100.0][::2], slow).any())
+
+
+def selftest_status_stun(check, c):
+    """38b. The stun of a bleed proc (version 32, `er-mechanics-spells.StatusCaught`), on a made-up
+    attack: three level-0 hits (AtkParam_Pc 600000074, Swift Slash's burst row) at f30, f38 and f50
+    on a 1 m disc 2.5 m out, each building 100 bleed, on a pool defender of 1000 poise (none breaks)
+    and robustness 50, so the first hit procs. Played without the stun he rolls out at the catch
+    (f30); with it he is held in the small stagger to its DamageCount-1 roll cancel, 10 frames later
+    (`er-mechanics-proc-opening.proc_reaction`'s), so the f38 hit lands too; with SpEffect 6340 on
+    him (`promotion_exempt`) the hit stays level 0 and the play is the plain one. Robustness 100
+    and 101 are two plays: the first hit's 100 procs at under 101 (`first_proc`: int(gauge) - b < 1)."""
+    S_, A = S, c.A
+    PO = S_.proc_opening()
+
+    def disc(frame):
+        T = np.array([frame, frame + 0.5])
+        lst = A.caught_list(c.t, 600000074, 405.0)
+        lst['status'] = {'bleed': {'b': 100, 'group': 'robustness', 'row': 6400, 'rate': 15.0, 'point': 100.0,
+                                   'ticks': 1, 'lock': 0.0, 'recover': 0.0}}
+        return ({'T': T, 'X': np.zeros(2), 'Z': np.full(2, -2.5), 'R': np.full(2, 1.0), 'PK': np.full(2, -math.inf),
+                 'CAUGHT': {'lists': [lst], 'wf': 1.0}}, frame)
+    geo = [disc(30.0), disc(38.0), disc(50.0)]
+    value = {30.0: 100.0, 38.0: 100.0, 50.0: 100.0}
+    res = {'immunity': 300, 'robustness': 50, 'focus': 200, 'vitality': 200}
+    pool = [(1000.0, 1.0, 1500.0)]
+    dfn = {'status_pool': [(1000.0, 1.0, 1500.0, res)]}
+    plain = A.CaughtModel.of(geo, pool, value)
+    stun = S_.status_caught(geo, pool, value, dfn)
+    exempt = S_.status_caught(geo, pool, value, dict(dfn, speffects=(6340,)))
+    roll = next(i for i, e in enumerate(plain.escapes) if e[0] == 'roll')
+
+    def te(cm):
+        return float(cm.escape_table(2.5, 0)[0][0, roll])
+
+    def landed(cm):
+        return [round(x[0], 3) for x in cm.landed(2.5)[0]]
+    r = PO.proc_reaction('bleed', 0)
+    br = A.stun_branch()
+    hold = te(stun) - te(plain)
+    check(f"38b. a bleed proc on a held poise holds him 10 frames (proc-opening's small stagger: roll "
+          f"{r['roll']}, the caught branch {br['roll']}): he rolls out at f{te(plain):g} without it, f{te(stun):g} "
+          f"with it (+{hold:g}); hits landed {landed(plain)} -> {landed(stun)}; with SpEffect 6340 on him "
+          f"(exempt {PO.promotion_exempt((6340,))}) f{te(exempt):g} and {landed(exempt)}",
+          type(stun).__name__ == 'StatusCaught' and hold == 10.0 and r['roll'][1] == 10 and br['roll'][0] == 10
+          and te(exempt) == te(plain) and landed(exempt) == landed(plain)
+          and sum(landed(stun)) > sum(landed(plain)))
+    split = [(1000.0, 0.5, 1500.0, dict(res, robustness=100)), (1000.0, 0.5, 1500.0, dict(res, robustness=101))]
+    two = S_.status_caught(geo, [(1000.0, 1.0, 1500.0)], value, {'status_pool': split})
+    runs = two.runs(2.5, 0)
+    check(f"38b. robustness 100 procs on the first hit's 100 and 101 does not: two plays "
+          f"({[(round(w, 3), [two.spool.classes('robustness')[k][1] for k in run.ks], [round(x[0], 3) for x in got]) for got, w, run, _ in runs]})",
+          len(runs) == 2 and sum(x[0] for x in runs[0][0]) > sum(x[0] for x in runs[1][0]))
+
+
+def selftest_status(check, c):
+    """38. Status build-up in the net (version 30, `--selftest-status` runs only these): an attack
+    that builds none reads the plain caught defender and the same nets; Bloody Slash's bleed adds
+    HP only where a play's build-up crosses some pool build's resistance and never takes any away;
+    Freezing Mist, which deals no damage, is scored on its frost (`REGULATION`: Bullet 10442001,
+    AtkParam 44200, SpEffect 1442000 `freezeAttackPower` 20). Every eighth situation."""
+    selftest_status_synthetic(check)
+    selftest_status_stun(check, c)
+    SM, A = c.SM, c.A
+    pairs = c.pairs[::8]
+    plain = {k: v for k, v in c.dfn.items() if k != 'status_pool'}
+
+    def nets(x, dfn):
+        return np.array([p['net'] for p in S.net_parts(A, x['geo'], x['value'], pairs, x['roll'], c.strikes,
+                                                       x['value_one'], defender=dfn)])
+    sor = [r for r in spell_job(c, SM.by_name[S.T._norm('Stars of Ruin')]) if r.get('geo')]
+    cm = [S.status_caught(r['geo'], c.dfn['pool'], r['value'], c.dfn) for r in sor]
+    same = [np.array_equal(nets(r, c.dfn), nets(r, plain)) for r in sor]
+    check(f"38. Stars of Ruin builds no status ({[r.get('status_buildup') for r in sor]}): the plain caught model "
+          f"({sorted({type(m).__name__ for m in cm})}) and bit-identical nets with and without the status pool "
+          f"({same})", bool(sor) and all(not r.get('status_buildup') for r in sor)
+          and all(type(m) is A.CaughtModel for m in cm) and all(same))
+    def crossings(r):
+        """(catches whose status HP is above the plain model's exactly where a play's build-up crosses
+        some pool build's resistance, catches read, catches that cross): geometry by geometry at the
+        first 12 distances of `pairs`, the defender standing (no floors)."""
+        sc = S.status_caught(r['geo'], c.dfn['pool'], r['value'], c.dfn)
+        pc = A.CaughtModel.of(r['geo'], c.dfn['pool'], r['value'])
+        lists = sc.status_lists()
+        crossed = agree = n = 0
+        for d in sorted({p[0] for p in pairs})[:12]:
+            for h in range(len(sc.geoms)):
+                built = [S.play_buildup(rows, lists, sc.spool.floor) for rows, _, _, _ in sc.runs(d, h, None)]
+                procs = any(b is not None and any(S.StatusPool.procs(C, R, b).any() for C, _, R in sc.spool.by.values())
+                            for b in built)
+                # The plain model prices a catch of no damage at 0, the status model at its floor.
+                gain = sc.worth_of(d, h) - max(pc.worth_of(d, h), S.STATUS_WORTH_FLOOR)
+                crossed += procs
+                agree += (gain > 1e-9) == procs
+                n += 1
+        return agree, n, crossed
+    jobs, _ = skill_candidates(c)
+    bjob = next((j for j in jobs if j['name'] == 'Bloody Slash'), None)
+    bs = [r for r in (skill_job(c, bjob) if bjob else []) if r.get('geo') and not r.get('follow')][:1]
+    for r in bs:
+        with_, without = nets(r, c.dfn), nets(r, plain)
+        agree, n, crossed = crossings(r)
+        # `MEASURED` 2026-11-22: one Bloody Slash on the Dagger at the distance basis builds 60 bleed with
+        # every hit landed, under every pool build's robustness, so it procs on no one.
+        check(f"38. Bloody Slash ({r['key']}, {r['carrier']}) builds bleed ({r.get('status_buildup')}) short of every "
+              f"gauge of the pool ({r.get('status_full')} HP when every hit lands, robustness from "
+              f"{c.dfn and S.status_pool_of(c.dfn['status_pool']).floor['robustness']:g}): no catch gains HP "
+              f"({agree} of {n} agree, {crossed} cross), and its nets are bit-identical with and without the status "
+              f"pool ({np.array_equal(with_, without)}, mean {with_.mean():.1f})",
+              (r.get('status_buildup') or {}).get('bleed', 0) > 0 and agree == n and crossed == 0
+              and np.array_equal(with_, without))
+    check('38. Bloody Slash has a scored opening', bool(bs))
+    fm = spell_job(c, SM.by_name[S.T._norm('Freezing Mist')])
+    scored = [r for r in fm if r.get('status') in ('scored', 'partial')]
+    fnets = [nets(r, c.dfn) for r in scored]
+    fx = [crossings(r) for r in scored]
+    check(f"38. Freezing Mist, no damage, is scored on its frost: "
+          f"{[(r['key'], r['status'], r.get('reason'), r.get('status_buildup'), r.get('status_full')) for r in fm]}; "
+          f"a catch gains HP exactly where a play crosses some build's resistance ({fx}: agree, read, cross); "
+          f"mean nets {[round(float(x.mean()), 1) for x in fnets]}, best {[round(float(x.max()), 1) for x in fnets]}",
+          bool(scored) and all((r.get('status_buildup') or {}).get('frost', 0) > 0 and r.get('status_full', 0) > 0
+                               for r in scored) and all(a == n for a, n, _ in fx)
+          and all(np.isfinite(x).all() for x in fnets))
+    # A damaging attack whose one cast can cross a gauge: Zamor Ice Storm's frost (its storm ticks) and
+    # Corpse Piler's bleed (Rivers of Blood's many hits). Where a catch crosses, its nets rise with the
+    # status pool and never fall anywhere.
+    multi = [r for r in spell_job(c, SM.by_name[S.T._norm('Zamor Ice Storm')]) if r.get('geo')]
+    cjob = next((j for j in jobs if j['name'] == 'Corpse Piler'), None)
+    multi += [r for r in (skill_job(c, cjob) if cjob else []) if r.get('geo') and not r.get('follow')][:1]
+    rows_ = []
+    for r in multi:
+        agree, n, crossed = crossings(r)
+        w, wo = nets(r, c.dfn), nets(r, plain)
+        rows_.append((r['key'], r.get('status_buildup'), r.get('status_full'), agree, n, crossed,
+                      int((w > wo + 1e-6).sum()), int((w < wo - 1e-6).sum()), round(float(w.mean() - wo.mean()), 2)))
+    check(f"38. a status that crosses a gauge in a catch adds HP there and nowhere takes any away: "
+          f"(key, build-up, full HP, agree, read, cross, situations up, down, mean gain) {rows_}",
+          bool(rows_) and all(x[3] == x[4] and x[7] == 0 for x in rows_) and any(x[5] > 0 and x[6] > 0 for x in rows_))
+
+
+#: The attacks `selftest_status_groups` scores: the status attacks of the subset whose groups check 8
+#: and check 9 pin (Zamor Ice Storm's frost, Bloody Slash's bleed) and Starcaller Cry, which check 8
+#: reads beside them.
+STATUS_GROUP_NAMES = ('Zamor Ice Storm', 'Bloody Slash', 'Starcaller Cry')
+
+
+def selftest_one_record_worth(check, c, res, sc):
+    """39 (version 31): Starcaller Cry's opening counts its hit priority record once in the full
+    worth. Its five nested spheres (AtkParam_Pc 300405900-300405904, 2 to 10 m) are five launches of
+    one record, of which one lands per victim (bd er-effects-rs-dnok, er-effects-rs-xb3i;
+    `er-mechanics-spells.record_landings`). The record's `worth` is `full_worth` of its
+    geometries, the plain sum less the four spheres held back; every land share is at most 1."""
+    SM = c.SM
+    main = min(sc, key=lambda r: len(r['key']), default=None)
+    if main is None:
+        check('39. Starcaller Cry is scored', False)
+        return
+    d = SM.skill_attack(main['carrier'], c.stats, main['affinity'], None, main['id'], c.dfn, False, None,
+                        main.get('stance'), priced_bullets=True, flown_only=True)
+    keyed = {}
+    for (g, fr), ok in zip(d['geo'], S.record_landings(d['geo'])):
+        if g.get('HPR') is not None and (g.get('CHAIN') is None or g['CHAIN'][0] == 0):
+            keyed.setdefault(g['HPR'][0], []).append((fr, g['HPR'][2], ok, g['CAUGHT']['wf'] * d['value'][fr]))
+    big = max(keyed.values(), key=len, default=[])
+    launches, landed = {x[1] for x in big}, {x[1] for x in big if x[2]}
+    plain = float(sum(d['value'].values()))
+    lost = sum(x[3] for x in big if not x[2])
+    worth = S.full_worth(d['geo'], d['value'])
+    i = res.index.get(main['key'])
+    land = float(np.max([res.A[n][i] for n in LAND_CHANNELS])) if i is not None else math.inf
+    check(f"39. Starcaller Cry's worth counts its opening once: {len(launches)} launches of one record, "
+          f"{len(landed)} landing; worth {worth:.1f} = sum {plain:.1f} less {lost:.1f} held back (record "
+          f"{main.get('worth')}, full {main['full']}); largest land share {land:.4f}",
+          len(launches) >= 5 and len(landed) == 1 and lost > 0 and abs(plain - lost - worth) < 1e-6
+          and main.get('worth') is not None and abs(float(main['worth']) - worth) < 1e-6 and land <= 1.0 + 1e-5)
+
+
+def selftest_status_groups(check, c, jobs=1):
+    """8 and 9 on `STATUS_GROUP_NAMES` alone (`--selftest-status-groups`): the criteria of the full
+    selftest's checks that status build-up can move (version 30), each restated here on a subset of
+    three attacks so they run without the 7-hour subset: Bloody Slash is never live; the Zamor Ice
+    Storm casts and Starcaller Cry are not live, net under -hp and carry the not-live flag; the
+    Zamor tap and charged are siblings, never twins; the tap
+    and skill 1168 read alone to the roll alone are D_now 0.02 or less, the charged cast and the
+    skill over --twin pressed at once, the whole skill over --twin from the tap by D_assoc, and the
+    skill contains the tap exactly when a caught defender takes the same share of both storms."""
+    _, a = build_args(['--only', 'x'])
+    a.only = list(STATUS_GROUP_NAMES)
+    tm = Timing(out=sys.stderr)
+    res = compute(c, {T._norm(x) for x in STATUS_GROUP_NAMES}, jobs, print, tm, keep=True)
+    an = analyze(res, a)
+    R, SM = res.records, c.SM
+
+    def ents(name, kind=None, var=None):
+        return [r for r in R.values() if T._norm(r['name']) == T._norm(name) and (kind is None or r['type'] == kind)
+                and (var is None or r.get('variant') == var)]
+    bs = [r for r in ents('Bloody Slash', 'skill') if not r.get('follow')]
+    check(f"8 (status groups). Bloody Slash is never live ({[(r['key'], r['group'], round(r['live_now'], 3)) for r in bs]})",
+          bool(bs) and all(r['group'] == 'nets_nothing' for r in bs) and max(r['live_now'] for r in bs) > 0.5)
+    zid = SM.by_name['zamor ice storm']
+    ztap, zch = R.get(f'spell:{zid}:tap'), R.get(f'spell:{zid}:charged')
+    zsk = min((r for r in ents('Zamor Ice Storm', 'skill') if r['id'] == 1168 and not r.get('follow')),
+              key=lambda r: len(r['key']), default=None)
+    sc = [r for r in ents('Starcaller Cry', 'skill') if not r.get('follow')]
+    zsc = [r for r in (ztap, zch) if r is not None]
+    check(f"8 (status groups). Starcaller Cry not live, under -hp, with '{PUNISHED_NOT_LIVE}' (check 8's pin since "
+          f"version 22) ({[(r['group'], round(r['mean_net'], 1)) for r in sc]}); the Zamor casts not live, under -hp, "
+          f"with '{PUNISHED_NOT_LIVE}' "
+          f"({[(r['key'], r['group'], round(r['mean_net'], 1), r.get('status_full')) for r in zsc]})",
+          bool(sc) and all(r['group'] != 'live' and r['mean_net'] < -a.hp and PUNISHED_NOT_LIVE in r['group_flags']
+                           for r in sc)
+          and len(zsc) == 2 and all(r['group'] != 'live' and r['mean_net'] < -a.hp
+                                    and PUNISHED_NOT_LIVE in r['group_flags'] for r in zsc))
+    selftest_one_record_worth(check, c, res, sc)
+    if None in (ztap, zch, zsk):
+        check('9 (status groups). the Zamor tap, charged cast and skill 1168 are scored', False)
+        return
+    Mx = an['matrices']
+    Dn, Dam = Mx['D_now'], Mx['D_assoc']
+    twins = set(an['twins']) | {(b, a_) for a_, b in an['twins']}
+    i_t, i_c, i_s = res.index[ztap['key']], res.index[zch['key']], res.index[zsk['key']]
+    check('9 (status groups). Zamor tap and charged are sibling keys and never twins',
+          ztap['parent'] == zch['parent'] and (ztap['key'], zch['key']) not in twins)
+    cr = copy.copy(c)
+    cr.strikes = np.array(np.asarray(c.strikes), dtype=float)
+
+    def alone(cc, x):
+        return {n: np.asarray(v)[None] for n, v in profile_arrays(cc, x).items() if n in ARRAYS}
+    zt_in = profile_inputs(next(x for x in spell_job(c, ztap['id']) if x['key'] == ztap['key']))
+    d = SM.skill_attack(zsk['carrier'], c.stats, zsk['affinity'], None, zsk['id'], c.dfn, False, None, zsk.get('stance'),
+                        priced_bullets=True, flown_only=True)
+    annotate_status(c, d['geo'], skill_status_ws(c, zsk['carrier_id'], zsk['affinity']))
+    zs_in = {k: d[k] for k in ('geo', 'value', 'value_one', 'roll')}
+    zt1r, zs1r = alone(cr, zt_in), alone(cr, zs_in)
+    dn_roll = float(d_now_rows(zt1r['land_now'], zt1r['pun_now'], zs1r['land_now'], zs1r['pun_now'], res.w, res.W)[0, 0])
+    check(f'9 (status groups). D_now(Zamor tap, skill 1168) <= 0.02 read alone to the roll alone (got {dn_roll:.5f}; '
+          f'status build-up tap {ztap.get("status_buildup")}, skill {zsk.get("status_buildup")})', dn_roll <= 0.02)
+    check(f'9 (status groups). D_now(Zamor charged, skill) > --twin {a.twin} (got {Dn[i_c, i_s]:.4f})',
+          Dn[i_c, i_s] > a.twin)
+    zc = [k for k in res.comp_keys if res.comps[k]['of'] == zsk['key']]
+    late = max(zc, key=lambda k: res.comps[k]['frame']) if zc else None
+
+    def storm_ticks(x, frame=None):
+        return max((l['n'] for g, f in x['geo'] if frame is None or f == frame for l in g['CAUGHT']['lists']),
+                   default=None)
+    tick_t = storm_ticks(zt_in)
+    tick_s = storm_ticks(zs_in, res.comps[late]['frame'] if late else None)
+    alike = tick_t == tick_s
+    contained = any(x['x'] == zsk['key'] and x['y'] == ztap['key'] and x['component'] == late
+                    and x['D_contain'] <= a.twin for x in an['contains'])
+    check(f'9 (status groups). skill 1168 contains the Zamor tap exactly when a caught defender takes the same share '
+          f'of both storms (ticks: tap {tick_t}, skill {tick_s}; contained {contained}); the whole skill is D_assoc '
+          f'{Dam[i_t, i_s]:.3f} from the tap, over --twin', tick_t is not None and contained == alike
+          and Dam[i_t, i_s] > a.twin)
+
+
+def selftest_form_stop(check):
+    """31f. A set whose form disagrees with `net_parts` stops the run as it finishes (`finished_set`):
+    on made-up sets, the first kept, the second (one key 0.16 HP over `FORM_TOL`) printed and not
+    kept, the third never started."""
+    started, saved, printed = [], [], []
+
+    def sets():
+        for name, errs in (('a', [0.0]), ('b', [0.0, 0.1585]), ('c', [0.0])):
+            started.append(name)
+            yield [(f'{name}:key', None, {}, errs, 0.0, 0.0, {'pid': 0})]
+    err = None
+    try:
+        for got in sets():
+            finished_set(got, 'made-up', lambda *a, **k: printed.append(a[0]), save=lambda root, g: saved.append(g[0][0]))
+    except ValueError as e:
+        err = str(e)
+    check(f"31f. a form error stops the run when its set finishes: started {started}, kept {saved}, printed "
+          f"{printed}",
+          started == ['a', 'b'] and saved == ['a:key'] and err is not None and "('b:key', 0.1585)" in err
+          and printed == [err])
+
+
+def selftest_estimate(check):
+    """31e: the attack sets' counter weighed by seconds measured on the same code, and the line per
+    set still running when none ends (`--selftest-estimate` runs these alone, in seconds)."""
+    import re
+    import tempfile
+    pw_spec = importlib.util.spec_from_file_location('er_mechanics_pipeline_watch',
+                                                     HERE / 'er-mechanics-pipeline-watch.py')
+    pw = importlib.util.module_from_spec(pw_spec)
+    pw_spec.loader.exec_module(pw)
+    # Each trail row carries the tag of the code its run was marked with; an unmarked run's carry none.
+    with tempfile.TemporaryDirectory() as tmp_:
+        tr_ = Path(tmp_) / 'x.items.jsonl'
+        old_ = Timing(trail=tr_)
+        old_.mark_code({'a.py': 'old'})
+        old_.item('attacks', 'k1', 100.0, 90.0, False)
+        old_.item('attacks', 'k2', 100.0, 90.0, False)
+        new_ = Timing(trail=tr_)
+        new_.mark_code({'a.py': 'new'})
+        new_.item('attacks', 'k1', 7.0, 6.0, False)
+        new_.item('attacks', 'k3', 2.0, 2.0, False)
+        Timing(trail=tr_).item('attacks', 'k1', 50.0, 50.0, False)
+        rows_ = [json.loads(ln) for ln in tr_.read_text().splitlines()]
+        tag_ = code_tag({'a.py': 'new'})
+        again_ = Timing(trail=tr_)
+        again_.mark_code({'a.py': 'new'})
+        same_ = same_code_seconds(again_)
+        unmarked_ = same_code_seconds(Timing(trail=tr_))
+        any_ = measured_seconds(tr_)
+    check(f'31e. a trail row carries its run\'s code tag, and a run reads back only the seconds measured on its own '
+          f'code ({same_})',
+          [r.get('code') for r in rows_] == [code_tag({'a.py': 'old'})] * 2 + [tag_] * 2 + [None]
+          and len(tag_) == 12 and tag_ != code_tag({'a.py': 'old'})
+          and same_ == {'k1': 7.0, 'k3': 2.0} and unmarked_ == {} and same_code_seconds(Timing()) == {}
+          and any_ == {'k1': 50.0, 'k2': 100.0, 'k3': 2.0})
+    # A key with a same-code measurement weighs its seconds; one with none its `set_weight` term at
+    # the measured keys' median seconds per unit of it (10 and 15 here: 12.5); none measured is
+    # `set_weight` itself. A set's expected seconds need every key measured.
+    cost_ = {'a': 1.0, 'b': 2.0 ** (1 / COST_TIME_POWER), 'c': 4.0 ** (1 / COST_TIME_POWER)}
+    same_ = {'a': 10.0, 'b': 30.0, 'gone': 5.0}
+    scale_ = seconds_per_weight(cost_, same_)
+    ws_ = [measured_weight(s, cost_, same_, scale_) for s in (['a', 'c'], ['b'], ['c'])]
+    check(f'31e. a set weighs its keys\' same-code seconds, a key with none its cost term at their median seconds '
+          f'per term, and set_weight when none is measured ({scale_}, {ws_})',
+          abs(scale_ - 12.5) < 1e-9 and all(abs(x - y) < 1e-6 for x, y in zip(ws_, (60.0, 30.0, 50.0)))
+          and seconds_per_weight(cost_, {}) is None and seconds_per_weight(cost_, {'gone': 1.0}) is None
+          and measured_weight(['a', 'c'], cost_, {}, None) == set_weight(['a', 'c'], cost_)
+          and expected_seconds(['a', 'b'], same_) == 40.0 and expected_seconds(['a', 'c'], same_) is None
+          and expected_seconds([], same_) is None
+          and set_label(['k1', 'k2', 'k3'], {'k1': {'name': 'Founding Rain of Stars'}}) == 'Founding Rain of Stars and 2 more'
+          and set_label(['comp:1'], {}) == 'comp:1')
+    # The counter's share of the work done is the measured seconds' share: 10 of 90.
+    buf_ = io.StringIO()
+    orig_ = PROG.Count
+    PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'clock': lambda: 0.0, 'out': buf_, 'wall': lambda: 0.0})
+    try:
+        list(pooled(lambda s: s, [['a'], ['b'], ['c']], 1, 'sets', weight=lambda s: measured_weight(s, cost_, same_, scale_)))
+    finally:
+        PROG.Count = orig_
+    check(f'31e. the counter counts the share of the measured seconds done ({buf_.getvalue().splitlines()[0]})',
+          buf_.getvalue().splitlines()[0].startswith('  1/3 sets  0s, 0 s/item, 11.1% of the estimated work'))
+    # 2026-11-21's run: none of the keys left measured on this code, its kept sets' keys were (here
+    # k1-k3, which took twice their older seconds), the long sets were measured on older code, and
+    # the first set, a cheap one, ended after 1 s. Weighed by the cost term at the kept keys' pace
+    # it read "~43m27s left" while three sets ran past 1h15m; weighed by older code's seconds,
+    # doubled, a key never measured (u) at the median seconds per cost term of the keys measured on
+    # either code (2 here), the time left on 3 workers is the longest set's 20,002 s at the first
+    # set's own pace (1 s for its weight of 1), more than the 39,614 s left over 3. Its own seconds
+    # come from a stand-in for `_timed`, so the pace is not this machine's.
+    with tempfile.TemporaryDirectory() as tmp_:
+        tr_ = Path(tmp_) / 'x.items.jsonl'
+        old_ = Timing(trail=tr_)
+        old_.mark_code({'a.py': 'old'})
+        for k_, s_ in (('c', 0.5), ('L1', 9806.0), ('L2', 6000.0), ('L3', 4000.0), ('k1', 1.0), ('k2', 1.0),
+                       ('k3', 1.0)):
+            old_.item('attacks', k_, s_, s_, False)
+        new_ = Timing(trail=tr_)
+        new_.mark_code({'a.py': 'new'})
+        for k_ in ('k1', 'k2', 'k3'):
+            new_.item('attacks', k_, 2.0, 2.0, False)
+        again_ = Timing(trail=tr_)
+        again_.mark_code({'a.py': 'new'})
+        same_, prior_ = same_code_seconds(again_), older_code_seconds(again_)
+        unmarked_ = older_code_seconds(Timing(trail=tr_))
+    ratio_ = older_code_ratio(same_, prior_)
+    cost_ = {k_: 1.0 for k_ in ('c', 'L1', 'L2', 'L3', 'u', 'k1', 'k2', 'k3')}
+    todo_ = [['c'], ['L1'], ['L2', 'L3', 'u']]
+    scale_ = seconds_per_weight(cost_, known_seconds(same_, prior_, ratio_))
+    was_ = seconds_per_weight(cost_, same_)
+    ws_ = [measured_weight(s_, cost_, same_, scale_, prior_, ratio_) for s_ in todo_]
+    was_ws_ = [measured_weight(s_, cost_, same_, was_) for s_ in todo_]
+    lines_ = []
+    timed0_ = globals()['_timed']
+
+    def timed_(fn, item):
+        clk_[0] += 1.0
+        return item[0], fn(item[1]), 1.0, 1.0
+    for wt_, old_w_ in ((lambda s: measured_weight(s, cost_, same_, scale_, prior_, ratio_),
+                         lambda s: older_weight(s, same_, scale_, prior_, ratio_)),
+                        (lambda s: measured_weight(s, cost_, same_, was_), None)):
+        buf_, clk_ = io.StringIO(), [0.0]
+        PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'clock': lambda: clk_[0], 'out': buf_,
+                                                      'wall': lambda: 0.0})
+        globals()['_timed'] = timed_
+        try:
+            # The first set alone, read in this process before any worker starts; closing the pool
+            # there forks none.
+            gen_ = pooled(lambda s: s, todo_, 3, 'attack sets', weight=wt_, older=old_w_, fresh=True)
+            next(gen_)
+            gen_.close()
+        finally:
+            PROG.Count = orig_
+            globals()['_timed'] = timed0_
+        lines_.append(buf_.getvalue().splitlines()[0])
+    check(f'31e. a key with no same-code seconds weighs its newest older-code seconds at the keys measured on both '
+          f"codes' ratio, so a cheap first set leaves their total, not the cheap pace ({lines_}, {ws_}, {ratio_})",
+          prior_ == {'c': 0.5, 'L1': 9806.0, 'L2': 6000.0, 'L3': 4000.0, 'k1': 1.0, 'k2': 1.0, 'k3': 1.0}
+          and unmarked_ == {**prior_, 'k1': 2.0, 'k2': 2.0, 'k3': 2.0}
+          and ratio_ == 2.0 and older_code_ratio({'k1': 2.0}, {'k1': 1.0}) == 1.0 and scale_ == 2.0
+          and ws_ == [1.0, 19612.0, 20002.0] and was_ws_ == [2.0, 2.0, 6.0]
+          and [older_weight(s_, same_, scale_, prior_, ratio_) for s_ in todo_] == [1.0, 19612.0, 20000.0]
+          and measured_weight(['k1'], cost_, same_, scale_, prior_, ratio_) == 2.0
+          and older_weight(['k1'], same_, scale_, prior_, ratio_) == 0.0
+          and older_weight(['L1'], same_, None, prior_, ratio_) == 0.0
+          and lines_[0] == ("  1/3 attack sets  1s, 1 s/item, 0.0% of the estimated work, ~5h33m left, "
+                            f"100% of the estimate from older code's times  [{PROG.hms(0.0)}, "
+                            f"ends ~{PROG.hms(20002.0)}]")
+          and lines_[1].startswith('  1/3 attack sets  1s, 1 s/item, 20.0% of the estimated work, ~3s left')
+          and older_expected(['L2', 'L3'], same_, prior_, ratio_) == (10000.0, 20000.0)
+          and older_expected(['k1', 'L1'], same_, prior_, ratio_) == (9808.0, 19614.0)
+          and older_expected(['L1', 'u'], same_, prior_, ratio_) is None and older_expected([], same_, prior_) is None)
+    # While no set ends, a line per set still running, under the counter and never read as one; it
+    # names the set, how long it has run, and its expected seconds or that there are none. A pool
+    # whose sets end within the quiet time prints none.
+    global RUNNING_QUIET_S, RUNNING_EVERY_S
+    quiet0_ = (RUNNING_QUIET_S, RUNNING_EVERY_S)
+    buf_ = io.StringIO()
+    PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'out': buf_})
+
+    def nap_(x):
+        time.sleep(x[1])
+        return x[0]
+    try:
+        RUNNING_QUIET_S, RUNNING_EVERY_S = 0.3, 0.3
+        got_ = sorted(pooled(nap_, [('first', 0.0), ('slow', 1.4), ('blind', 1.4), ('aged', 1.4)], 3, 'sets',
+                             label=lambda x: x[0], fresh=True, expect=lambda x: 0.7 if x[0] == 'slow' else None,
+                             source='same-code measurement',
+                             older_expect=lambda x: None if x[0] == 'blind' else (0.4, 0.8)))
+        lines_ = buf_.getvalue().splitlines()
+        buf_ = io.StringIO()
+        RUNNING_QUIET_S, RUNNING_EVERY_S = 5.0, 5.0
+        quick_ = list(pooled(nap_, [('first', 0.0), ('a', 0.05), ('b', 0.05), ('c', 0.05)], 2, 'sets',
+                             label=lambda x: x[0], fresh=True))
+        quick_lines_ = buf_.getvalue().splitlines()
+    finally:
+        RUNNING_QUIET_S, RUNNING_EVERY_S = quiet0_
+        PROG.Count = orig_
+    slow_ = [x for x in lines_ if x.startswith('  still running: slow  ')]
+    blind_ = [x for x in lines_ if x.startswith('  still running: blind  ')]
+    aged_ = [x for x in lines_ if x.startswith('  still running: aged  ')]
+    heads_ = [x for x in lines_ if pw.COUNTER.match(x)]
+    check(f'31e. while no set ends, a line per set still running under the counter, never read as a counter line; '
+          f'a set with no same-code seconds but older code\'s says what older code took, scaled ({lines_})',
+          got_ == ['aged', 'blind', 'first', 'slow'] and len(slow_) >= 2 and len(blind_) == len(slow_) == len(aged_)
+          and ' of ~1s expected (same-code measurement)  [' in slow_[0]
+          and ', past the ~1s expected (same-code measurement)  [' in slow_[-1]
+          and all(', no same-code measurement  [' in x for x in blind_)
+          and all(', older code took 0s (scaled 1s)' in x for x in aged_)
+          and aged_[0].endswith(']') and ', ends ~' in aged_[0] and aged_[-1].count(', past it  [') == 1
+          and all(re.search(r'  \[\d\d:\d\d:\d\d(, ends ~\d\d:\d\d:\d\d)?\]$', x) for x in slow_ + blind_ + aged_)
+          and heads_ and heads_[0].startswith('  1/4 sets  ') and heads_[-1].startswith('  4/4 sets  ')
+          and len(heads_) + len(slow_) + len(blind_) + len(aged_) == len(lines_)
+          and lines_.index(slow_[0]) > lines_.index(heads_[0]))
+    check(f'31e. sets that end within the quiet time leave no still-running line ({quick_lines_})',
+          sorted(quick_) == ['a', 'b', 'c', 'first'] and not any('still running' in x for x in quick_lines_))
 
 
 def selftest(timing_log=None, keep_going=False):
@@ -6894,7 +9357,15 @@ def selftest(timing_log=None, keep_going=False):
         print(f'ok {name}', file=sys.stderr, flush=True)
 
     selftest_synthetic(check)
+    # One pooled run at a time (2026-11-16: a wait loop let a pooled --jobs run start while another
+    # was going): with another process holding the shared lock, a pooled compute's lock (`pool_held`,
+    # --jobs 2) under --no-wait exits 3 naming that process; one core takes none.
+    import contextlib
+    lok, ldetail = _pool_lock().exclusive_check(lambda w, log: pool_held(2, 'selftest', w, log))
+    check(f'34. --jobs 2 --no-wait meets a held er-mechanics-pool-lock: {ldetail}; --jobs 1 takes none',
+          lok and isinstance(pool_held(1, 'selftest', False), contextlib.nullcontext))
     tm.lap('synthetic')
+    require_fresh_members()
     _, a = build_args(['--only', 'x'])
     a.only = list(SELFTEST_NAMES)
     stats = S.parse_stats(DEFAULT_STATS)
@@ -6903,9 +9374,12 @@ def selftest(timing_log=None, keep_going=False):
     tm.mark_code()
     tm.lap('context')
     SM, A, t = c.SM, c.A, c.t
+    selftest_no_hit(check, c)
+    selftest_status(check, c)
 
     # 14. n_eff.
-    check('14. n_eff at RL 150 is 466.2 +- 0.1', abs(c.n_eff - 466.2) <= 0.1)
+    # 466.2 on 1,208 situations before version 16's move-cancel split, 1029.0 on 3,483 since 17.
+    check('14. n_eff at RL 150 is 1029.0 +- 0.1', abs(c.n_eff - 1029.0) <= 0.1)
     # 25. The attacker builds.
     check('25. RL is the eight attributes less 79 on every starting class (CharaInitParam soulLv): '
           + ', '.join(f"{nm} {cl['level']}" for nm, cl in sorted(c.classes.items())),
@@ -7156,6 +9630,7 @@ def selftest(timing_log=None, keep_going=False):
                               {'name': 'L', 'weight': 16.0, 'poise': 28.0000009}]}, 89)
     check('25. lightest_armor counts a float32 9.9999998 as 10 (h, b, a, l at 47.7, not L)',
           arm == {'pieces': ['h', 'b', 'a', 'l'], 'weight': 47.7, 'poise': 89.0})
+    selftest_lines_synthetic(check)
     lo_, hi_ = c.rl - S.WINDOW, c.rl + S.WINDOW
     counted = Counter()
     for row in BT.er_corpus.iter_rows(EX.CACHE / 'builds.jsonl'):
@@ -7201,7 +9676,7 @@ def selftest(timing_log=None, keep_going=False):
           and dom({**linger, 'channel': True}, {'net': v4})[0] == 'full_only'
           and dom({**linger, 'live_frames': 40}, {'net': v4})[0] == 'robust')
     wl = np.ones(100)
-    wl[0] = 0.1                                     # 0.1 / 99.1 = 0.001 of the weight, under delta
+    wl[0] = 0.05                                    # 0.05 / 99.05 = 0.0005 of the weight, under delta
     spike = np.zeros(100)
     spike[0] = 9.0
     check('13. b that nets something only on less weight than delta is on the nets-nothing list, never dominated',
@@ -7209,11 +9684,11 @@ def selftest(timing_log=None, keep_going=False):
     check('13. a that nets nothing dominates nothing, however cheap',
           dom({'net': np.full(100, 0.45), 'fp': 5}, {'net': np.where(np.arange(100) < 50, 0.9, 0.0)})[0] is None)
     w2 = np.ones(100)
-    w2[0] = 0.2                                     # 0.2 / 99.2 = 0.002 of the weight, under delta
+    w2[0] = 0.05                                    # 0.05 / 99.05 = 0.0005 of the weight, under delta
     big = np.full(100, 400.0)
     big_a = big.copy()
-    big_a[0] -= 50000.0
-    check('13. a cheaper a 50,000 HP worse on 0.2% of the weight (mean gain -100) does not dominate',
+    big_a[0] -= 200000.0
+    check('13. a cheaper a 200,000 HP worse on 0.05% of the weight (mean gain -101) does not dominate',
           dom({'net': big_a, 'fp': 9}, {'net': big}, w2)[0] is None)
     toy = _toy({'b': {'net': v4}, 'tap': {'net': v5, 'parent': 'P'}, 'charged': {'net': np.full(100, 6.0), 'parent': 'P'}},
                Wu)
@@ -7238,13 +9713,14 @@ def selftest(timing_log=None, keep_going=False):
         d = dominance(res_, list(specs), hp_, delta, set())
         e = [x for x in d['edges'] if (x['a'], x['b']) == ('a', 'b')]
         return e[0]['class'] if e else None
-    # The loss share is weighted: a 50 HP loss on a situation of weight 0.1 in 99.1 (0.001, under
-    # delta) is allowed; unweighted it is 1 situation in 100 (0.01, over delta).
-    wls = np.array([0.1] + [1.0] * 99)
+    # The loss share is weighted: a 50 HP loss on a situation of weight 0.05 in 99.05 (0.0005, under
+    # delta while n_eff is under 1,981) is allowed; unweighted it is 1 situation in 100 (0.01, over
+    # delta). At 0.1 in 99.1 (0.001) it went over delta when version 16 took n_eff from 466 to 1,035.
+    wls = np.array([0.05] + [1.0] * 99)
     nb_ = np.full(100, 4.0)
     na_ = nb_ + 2.0
     na_[0] = nb_[0] - 50.0
-    check('13. weighted loss share: a loss on 0.1 of 99.1 weight (0.001 <= 1/n_eff) still dominates; counted '
+    check('13. weighted loss share: a loss on 0.05 of 99.05 weight (0.0005 <= 1/n_eff) still dominates; counted '
           'per situation it would be 0.01 and fail', edge({'a': {'net': na_}, 'b': {'net': nb_}}, wls, 1.0) == 'robust')
     # The mean gain is weighted: -0.9 on a situation weighing 50 against +1.5 on 50 of weight 1 is
     # 0.3, not strict at hp 1; per situation it would be 1.45 and strict.
@@ -7306,6 +9782,31 @@ def selftest(timing_log=None, keep_going=False):
           all(e['id'] not in shipped for e in skill_out if e['reason'] == 'unobtainable'))
     check("6. the blacklist names are 'blacklisted'",
           all('blacklisted' in by_name.get(nm, []) for nm in c.black if nm in {t.arts_name(s) for s in cands}))
+    # 6b. A line's skill rides its best carrier (version 19). Glintstone Pebble's 040000 group at the
+    # Intelligence + melee line: its bullet (AtkParam 300200890: MV 0, flat 137 magic, AECP 51080's
+    # fixed INT rate) ties every Magic carrier, so only the R2 swing tells them apart; the Dagger, the
+    # group weapon of least requirement the line rode before, swings 540.7 against the Omen
+    # Cleaver's 821.7 (`MEASURED` 2026-11-16).
+    pj = next(j for j in skill_jobs if j['name'] == 'Glintstone Pebble' and j['opening'] == 40000 and not j['fixed'])
+    pst = {'str': 26, 'dex': 25, 'int': 60, 'fth': 8, 'arc': 9}
+    pjb = build_job(c, pj, pst)
+    pdm = _CARRIERS[(job_parent(pj), tuple(pst[k] for k in WEAPON_NEED))]
+    pws = [w for w in pj['members'] if c.wields(w, pst)]
+    plo = min(pws, key=lambda w: (c.requirement(w), w))
+    pcl = at_build(c, pst)
+
+    def pebble_bullet(name):
+        cx = A.WeaponContext(name, 'Magic', None, pst, False, ar_tables=SM.ar)
+        return round(sum(sum(h['attack'].values()) for h in A.skill_hits(t, t.find_weapon(name), pj['sid'], cx, cx.level)
+                         if h['kind'] == 'bullet'), 2)
+    check(f"6b. a line rides the group weapon it can wield whose skill damage is largest (build_job): Glintstone Pebble "
+          f"040000 at STR 26 / DEX 25 / INT 60 rides {SM.ar.names[pjb['carrier']]} ({pdm[pjb['carrier']]:.1f}, opening "
+          f"plus then-R2) over the least-requirement {SM.ar.names[plo]} ({pdm[plo]:.1f}), of {len(pws)} it can wield; "
+          f"the bullet before defense is {pebble_bullet('Dagger')} on the Dagger and {pebble_bullet('Omen Cleaver')} on "
+          "the Omen Cleaver, both Magic",
+          pjb['carrier'] != plo and all(pdm[pjb['carrier']] >= (pdm[w] or 0.0) for w in pws)
+          and pdm[pjb['carrier']] > 1.2 * pdm[plo] and pebble_bullet('Dagger') == pebble_bullet('Omen Cleaver')
+          and carrier_damage(pcl, pj, pjb['carrier']) == pdm[pjb['carrier']])
 
     # The subset, scored.
     jobs = default_jobs()
@@ -7531,6 +10032,8 @@ def selftest(timing_log=None, keep_going=False):
         geo = SM.geometry(mid, {'events': events, 'hand': v['startup'] - min(f for f, _ in events), 'anim': v['anim'],
                                 'weapon': cat_['base']}, damaging=SM.spell_node_damaging, missing=[])
         SM.attach_caught(mid, geo, v['hits'], value)
+        # The status each list builds, as `spell_scoring` gives it (version 30).
+        annotate_status(c, geo, spell_status_ws(c))
         return {'geo': geo, 'value': value, 'value_one': one, 'roll': v['roll']}
 
     def spell_inputs(r):
@@ -7542,6 +10045,8 @@ def selftest(timing_log=None, keep_going=False):
         """The run's own inputs of skill entity `r`: `skill_attack` as `skill_entity` calls it."""
         d = SM.skill_attack(r['carrier'], c.stats, r['affinity'], None, r['id'], c.dfn, False, r.get('follow'),
                             r.get('stance'), priced_bullets=True, flown_only=True)
+        # The status each list builds, as `skill_entity` gives it (version 30).
+        annotate_status(c, d['geo'], skill_status_ws(c, r['carrier_id'], r['affinity']))
         return {k: d[k] for k in ('geo', 'value', 'value_one', 'roll')}
     for r in (ztap, gps):
         x = inputs_of(r)
@@ -7604,7 +10109,15 @@ def selftest(timing_log=None, keep_going=False):
         for e in exs(name, 'spell'):
             out |= set(e['reason'].split(' + '))
         return out
-    check("7. Carian Slicer: 'direct AtkParam ref (refCategory 0)'", S.MISS_DIRECT in reasons('Carian Slicer'))
+    # Its AtkParam hit (refCategory 0) was 'direct AtkParam ref (refCategory 0)' until 2026-11-20: now
+    # a melee hit of the caster's own capsule over the cast event's window
+    # (`er-mechanics-spells.SpellModel.direct_geometry`, `VERIFIED` chain there), scored.
+    cs_ = ents('Carian Slicer', 'spell')
+    check(f"7. Carian Slicer: scored as a melee hit of its own AtkParam, nothing missing "
+          f"({[(r['variant'], r['status'], r.get('delivery'), r['full']) for r in cs_]}; reasons "
+          f"{sorted(reasons('Carian Slicer'))})",
+          bool(cs_) and all(r['status'] == 'scored' and not r['missing'] and r.get('delivery') == ['melee']
+                            for r in cs_) and S.MISS_DIRECT not in reasons('Carian Slicer'))
     # Rykard's Rancor reported 'never reaches hurtbox height' while the flight aimed level and low:
     # aimed at the lock point (Spine2 dummy 220, 1.243 m, `VERIFIED` bd er-effects-rs-7bye round 3)
     # its homing skulls reach him, as they do in the game, so it is scored. `MEASURED` 2026-11-12
@@ -7623,8 +10136,10 @@ def selftest(timing_log=None, keep_going=False):
     # excluded or partial, are scored with every hit in their worth (`MEASURED` 2026-11-13, ashes
     # 0babd02a..., spells b491d417...: Death Lightning 1246 tap / 1370 charged and Watchful Spirit 743
     # at the distance basis). The on-hit reason is still given where the carrier does not reach him:
-    # Lightning Spear's charged cast (checked here off the model, it is not in this subset), Wrath from
-    # Afar and Loretta's Greatbow (the same scan).
+    # Lightning Spear's charged cast (checked here off the model, it is not in this subset). A cast
+    # whose every damaging list is made by a carrier that never meets the ground (Loretta's Greatbow)
+    # is flown on its carrier's path since 2026-11-20
+    # (`er-mechanics-spells.SpellModel.carried_rows`): the game makes the child where it touches him.
     for nm_ in ('Death Lightning', 'Watchful Spirit'):
         got_, why_ = ents(nm_, 'spell'), reasons(nm_)
         check(f"7. {nm_}: scored, every hit in its worth now that the flight makes the child that carries its damage "
@@ -7701,10 +10216,26 @@ def selftest(timing_log=None, keep_going=False):
     check(f"8. Rock Sling: every variant reaches an idle defender in every situation and is live "
           f"({[(r['variant'], round(r['reach'], 3), round(r['land_mass_now'], 4), r['group']) for r in rsl]})",
           bool(rsl) and all(r['group'] == 'live' and r['reach'] >= 0.99 for r in rsl))
+    # Since version 11 a defender free before an attack first touches him may strike instead of
+    # rolling (attack-similarity.md section 2d, `er-mechanics-spells.net_parts`), and what has left
+    # the attacker before his strike breaks him lands on him standing. So an attack every roll
+    # evades can land pressed at once, but only where he trades his R1 for it: it is live, and
+    # nets at most --hp ('punished as much as it lands'). These pins were the roll-only defender's
+    # until the version 13 commit, whose selftest was not run (its commit message). With the
+    # strikes handed in as plain frames (the roll alone) every value pinned before comes back:
+    # Gravitas nets_nothing 'always evaded' on every carrier, the Gravity Well tap runin_only (land
+    # 0.0033 pressed at once, 0.3567 with a run-in), the Glintblade Phalanx spell runin_only
+    # (0.0001, 0.0357), Starcaller Cry nets_nothing at -87.8 (`MEASURED` 2026-11-15, `compute` on
+    # these names at the distance basis with and without the strike; identical on the committed
+    # version 13 code, so neither version 14 nor 15 moved them).
     gv = [r for r in ents('Gravitas', 'skill') if not r.get('follow')]
     gv = min(gv, key=lambda r: (r.get('requirement') or 0, r['key'])) if gv else None
-    check('8. Gravitas on its least-requirement carrier: nets nothing, always evaded',
-          gv is not None and gv['group'] == 'nets_nothing' and gv['group_reason'] == 'always evaded')
+    check(f"8. Gravitas on its least-requirement carrier ({gv and gv['carrier']}): every roll evades it, so the "
+          f"{gv and round(gv['land_mass_now'], 4)} of its worth it lands pressed at once is the defender's strike "
+          f"trading for it (live, '{PUNISHED_LIVE}'); its best option lands {gv and round(gv['land_mass_best'], 4)} "
+          f"and it nets {gv and round(gv['mean_net'], 1)}, nothing",
+          gv is not None and gv['group'] == 'live' and PUNISHED_LIVE in gv['group_flags']
+          and gv['land_mass_best'] < a.null and gv['mean_net'] <= a.hp)
     gw = ents('Gravity Well', 'spell', 'tap') or ents('Gravity Well', 'spell')
     cs_ = ents('Collapsing Stars', 'spell', 'tap') or ents('Collapsing Stars', 'spell')
     # Collapsing Stars' tap is live: its stars 10472105 leave each orb at 45 m/s on the orb's own
@@ -7712,25 +10243,51 @@ def selftest(timing_log=None, keep_going=False):
     # (`REGULATION`), so a back roll, which leaves him on their line, never clears them at 2.6 to
     # 5.8 m: one roll direction of four caught pressed at once, 0.25 of its worth to 4.0 m and 0.22
     # to 5.8 m (`MEASURED` 2026-11-13, its first release read alone). Gravity Well's tap (10472000,
-    # 90 deg/s) is cleared in every direction pressed at once and still lands only after a run-in.
-    check(f"8. Gravity Well's tap lands only after a run-in ({gw[0]['group'] if gw else None}); Collapsing Stars' "
-          f"tap is live, landing {cs_[0]['land_mass_now'] if cs_ else float('nan'):.4f} of its worth pressed at once",
-          bool(gw) and bool(cs_) and gw[0]['group'] == 'runin_only' and cs_[0]['group'] == 'live')
+    # 90 deg/s) is cleared in every direction pressed at once and lands only after a run-in to a
+    # rolling defender; what it lands pressed at once (0.2464, `MEASURED` 2026-11-15) is the strike's
+    # trade, and it nets -181.9.
+    check(f"8. Gravity Well's tap, which every roll pressed at once clears, is live only by the defender's strike "
+          f"({gw[0]['group'] if gw else None}, {gw and round(gw[0]['land_mass_now'], 4)} pressed at once, nets "
+          f"{gw and round(gw[0]['mean_net'], 1)}, '{PUNISHED_LIVE}'); Collapsing Stars' tap is live, landing "
+          f"{cs_[0]['land_mass_now'] if cs_ else float('nan'):.4f} of its worth pressed at once",
+          bool(gw) and bool(cs_) and gw[0]['group'] == 'live' and PUNISHED_LIVE in gw[0]['group_flags']
+          and gw[0]['mean_net'] < -a.hp and cs_[0]['group'] == 'live')
     gm = ents('Gravitational Missile', 'spell', 'tap')
     check('8. Gravitational Missile tap is live', bool(gm) and gm[0]['group'] == 'live')
     check(f"8. Glintblade Phalanx spell lands {gps['land_mass_now']:.4f} of its worth pressed at once, "
-          f"{gps['land_mass_best']:.4f} with a run-in: runin_only, not live", gps['group'] == 'runin_only')
+          f"{gps['land_mass_best']:.4f} with a run-in: live only by the defender's strike, which it pays for (nets "
+          f"{gps['mean_net']:.1f}, '{PUNISHED_LIVE}'); to the roll alone it is runin_only",
+          gps['group'] == 'live' and PUNISHED_LIVE in gps['group_flags'] and gps['mean_net'] <= a.hp)
     bs = [r for r in ents('Bloody Slash', 'skill') if not r.get('follow')]
     check('8. Bloody Slash, punished on most of the weight but landing almost nothing, is never live',
           bool(bs) and all(r['group'] == 'nets_nothing' for r in bs) and max(r['live_now'] for r in bs) > 0.5)
+    # Starcaller Cry was live by the defender's strike, -152.9 (`MEASURED` 2026-11-15), while he
+    # pressed the four roll directions a quarter each: the strike was his pick on 0.49 of the weight
+    # and traded into 0.044 of its worth pressed at once. Since version 22 he picks the roll direction
+    # that leaves the attacker least (`er-mechanics-ashes.dodge_families`, attack-similarity.md section
+    # 2a 'One stage, one rule'), one of which escapes it whole in every situation: evade 1.0, no strike,
+    # nothing lands, punished on 0.954 of the weight, -370.2, so it is not live and 'lands little,
+    # punished more' (`MEASURED` 2026-11-22: bisected single-process, v21 -120.7 and v22 -348.3 at
+    # land 0, then v25 on -370.2; on the current code with the four directions put back into one
+    # family, -151.8, land 0.0436, strike on 0.491). The pull it applies, which might hold him in a
+    # side roll, is not modelled (module doc, 'Not established'). The Zamor Ice Storm casts
+    # (nets_nothing, -220.0 tap, -350.9 charged) carry the not-live flag in the subset now.
     sc = [r for r in ents('Starcaller Cry', 'skill') if not r.get('follow')]
+    zsc = [r for r in (ztap, zch) if r is not None]
     notlive = [r for r in R.values() if r['group'] != 'live']
-    check(f"8. Starcaller Cry, not live, nets {', '.join(f'{r['mean_net']:.1f}' for r in sc)} on average and carries "
-          f"'{PUNISHED_NOT_LIVE}'; so does every attack of the subset that is not live and nets under -hp "
-          f"({sum(r['mean_net'] < -a.hp for r in notlive)} of {len(notlive)}), and no other",
+    live_ = [r for r in R.values() if r['group'] == 'live']
+    check(f"8. Starcaller Cry, evaded whole in some roll direction in every situation, nets "
+          f"{', '.join(f'{r['mean_net']:.1f}' for r in sc)} on average, is not live and carries "
+          f"'{PUNISHED_NOT_LIVE}'; the Zamor Ice Storm casts, not live, net "
+          f"{', '.join(f'{r['mean_net']:.1f}' for r in zsc)} and carry '{PUNISHED_NOT_LIVE}'; so does every attack of "
+          f"the subset that is not live and nets under -hp ({sum(r['mean_net'] < -a.hp for r in notlive)} of "
+          f"{len(notlive)}), and no other, and every live one netting at most hp carries '{PUNISHED_LIVE}'",
           bool(sc) and all(r['group'] != 'live' and r['mean_net'] < -a.hp and PUNISHED_NOT_LIVE in r['group_flags']
                            for r in sc)
-          and all((PUNISHED_NOT_LIVE in r['group_flags']) == (r['mean_net'] < -a.hp) for r in notlive))
+          and len(zsc) == 2 and all(r['group'] != 'live' and r['mean_net'] < -a.hp
+                                    and PUNISHED_NOT_LIVE in r['group_flags'] for r in zsc)
+          and all((PUNISHED_NOT_LIVE in r['group_flags']) == (r['mean_net'] < -a.hp) for r in notlive)
+          and all((PUNISHED_LIVE in r['group_flags']) == (r['mean_net'] <= a.hp) for r in live_))
     # 9. Zamor.
     Mx = an['matrices']
     Dn, Drm, Dam = Mx['D_now'], Mx['D_rel'], Mx['D_assoc']
@@ -7738,28 +10295,55 @@ def selftest(timing_log=None, keep_going=False):
     i_t, i_c, i_s = res.index[ztap['key']], res.index[zch['key']], res.index[zsk['key']]
     check('9. Zamor tap and charged are sibling keys and never twins',
           ztap['parent'] == zch['parent'] and (ztap['key'], zch['key']) not in twins)
-    check(f'9. D_now(Zamor tap, skill 1168) <= 0.02 (got {Dn[i_t, i_s]:.5f}): alike pressed at once', Dn[i_t, i_s] <= 0.02)
+    # The storms alike: read to the roll alone. Since version 11 the defender may strike instead of
+    # rolling (attack-similarity.md section 2d), and his strike reads each clip's own windup, TAE 795
+    # windows and guard, so it parts a 12-frame cast from a storm that leaves at f45 of a skill clip
+    # whatever the storms are. With the strike the tap read alone is punished pressed at once on
+    # 0.379 of the weight and the skill on 0.619, and the tap read alone is D_now 0.126 from the
+    # skill and its storm frame D_land 0.905 from it; to the roll alone (the strikes as plain frames,
+    # `er-mechanics-spells.Strikes`) D_now 0.00525, and the storm frame D_now 0.00459, D_land 0.0387,
+    # D_rel 0.377, the pins of the 2026-11-13 runs (`MEASURED` 2026-11-15; the run's tap, read with
+    # its charged cast, is D_now 0.0163 from the skill to the roll alone, 0.0382 with the strike).
+    cr = copy.copy(c)
+    cr.strikes = np.array(np.asarray(c.strikes), dtype=float)
+
+    def alone(cc, x):
+        return {n: np.asarray(v)[None] for n, v in profile_arrays(cc, x).items() if n in ARRAYS}
+    zt_in = profile_inputs(next(x for x in spell_job(c, ztap['id']) if x['key'] == ztap['key']))
+    zs_in = skill_inputs(zsk)
+    zt1, zt1r, zs1r = alone(c, zt_in), alone(cr, zt_in), alone(cr, zs_in)
+    dn_roll = float(d_now_rows(zt1r['land_now'], zt1r['pun_now'], zs1r['land_now'], zs1r['pun_now'], res.w, res.W)[0, 0])
+    check(f'9. D_now(Zamor tap, skill 1168) <= 0.02 read alone to the roll alone (got {dn_roll:.5f}): alike pressed at '
+          f'once; the run\'s pair, which the strike reads, is {Dn[i_t, i_s]:.5f}', dn_roll <= 0.02)
     zc = [k for k in res.comp_keys if res.comps[k]['of'] == zsk['key']]
     late = max(zc, key=lambda k: res.comps[k]['frame']) if zc else None
     # The tap read alone, as a defender who knows it from its first frame reads it: the skill's
-    # storm is read so (no group), and the run's tap is read with its charged cast (check 32).
-    zt1 = {n: np.asarray(v)[None] for n, v in profile_arrays(c, profile_inputs(
-        next(x for x in spell_job(c, ztap['id']) if x['key'] == ztap['key']))).items() if n in ARRAYS}
-    dl = dland = drel = dgrp = None
+    # storm is read so (no group), and the run's tap is read with its charged cast (check 32). The
+    # storm frame is made from the skill's own inputs as `components` makes it, and must read as the
+    # run's component does with the strike.
+    dl = dland = drel = dgrp = dland_s = same = None
     if late:
         ci = res.cindex[late]
-        dl = d_now_rows(res.C['land_now'][[ci]], res.C['pun_now'][[ci]], zt1['land_now'], zt1['pun_now'], res.w, res.W)[0, 0]
-        dland = float(d_rel_rows(rel_profile(res.C, ci, LAND_CHANNELS), rel_profile(zt1, 0, LAND_CHANNELS), res.w)[0, 0])
-        drel = float(d_rel_rows(rel_profile(res.C, ci), rel_profile(zt1, 0), res.w)[0, 0])
+        zf = res.comps[late]['frame']
+        zcomp = {'geo': [(g, fr) for g, fr in zs_in['geo'] if fr == zf], 'value': {zf: zs_in['value'][zf]},
+                 'value_one': {zf: zs_in['value_one'][zf]}, 'roll': zs_in['roll']}
+        zc1 = alone(c, zcomp)
+        same = all(np.allclose(zc1[n][0], res.C[n][ci], atol=1e-6, equal_nan=True) for n in ('land_now', 'pun_now', 'land', 'pun'))
+        zc1r = alone(cr, zcomp)
+        dl = float(d_now_rows(zc1r['land_now'], zc1r['pun_now'], zt1r['land_now'], zt1r['pun_now'], res.w, res.W)[0, 0])
+        dland = float(d_rel_rows(rel_profile(zc1r, 0, LAND_CHANNELS), rel_profile(zt1r, 0, LAND_CHANNELS), res.w)[0, 0])
+        drel = float(d_rel_rows(rel_profile(zc1r, 0), rel_profile(zt1r, 0), res.w)[0, 0])
+        dland_s = float(d_rel_rows(rel_profile(res.C, ci, LAND_CHANNELS), rel_profile(zt1, 0, LAND_CHANNELS), res.w)[0, 0])
         dgrp = float(d_rel_rows(rel_profile(res.C, ci, LAND_CHANNELS), rel_profile(res.A, i_t, LAND_CHANNELS), res.w)[0, 0])
     # Since the caught defender walks out (bd er-effects-rs-n7dd) he takes one tick of either storm,
     # 1 of the tap's 5 and 1 of the skill's 4 (`SpellModel.bullet_lists`), so their land shares part
     # by that much (D_land about 0.2) where the full count made them equal.
-    check(f'9. the Zamor skill storm component ({late}) lands what the tap read alone lands pressed at once (D_now '
-          f'{dl}, 0.01 or less), apart from the one tick of 5 or of 4 a caught defender takes (D_land {dland}, 0.25 or '
-          f'less), and differs most in the punish chance (D_rel {drel}): it rides the skill\'s recovery. The run\'s tap, '
-          f'read with its charged cast (version 8), is D_land {dgrp} from it',
-          dl is not None and dl <= 0.01 and dland <= 0.25 and drel > dland + 0.01)
+    check(f'9. the Zamor skill storm component ({late}, made from the skill\'s inputs: the run\'s {same}) lands, to the '
+          f'roll alone, what the tap read alone lands pressed at once (D_now {dl}, 0.01 or less), apart from the one '
+          f'tick of 5 or of 4 a caught defender takes (D_land {dland}, 0.25 or less), and differs most in the punish '
+          f'chance (D_rel {drel}): it rides the skill\'s recovery. The strike, which reads the skill\'s clip, parts them '
+          f'(D_land {dland_s}); the run\'s tap, read with its charged cast (version 8), is D_land {dgrp} from it',
+          dl is not None and same and dl <= 0.01 and dland <= 0.25 and drel > dland + 0.01 and dland_s > dland)
     # A caught defender takes one tick of either storm and walks out (bd er-effects-rs-n7dd): one of the
     # tap's ticks and one of the skill storm's (`SpellModel.bullet_lists`). Land shares are shares of
     # the full count, so the two storms are alike only when those counts are equal.
@@ -7812,20 +10396,28 @@ def selftest(timing_log=None, keep_going=False):
     # are one profile. The run reads the spell with the cast it cannot be told from (Carian Phalanx,
     # check 32), which halves its run-in share (0.0357, `MEASURED` the same day) and puts it under
     # --live, so the pair is no twin; that split is the lookalike group, not the flight.
+    # The flights are compared to the roll alone, as check 9 compares the storms: the defender's
+    # strike (version 11, attack-similarity.md section 2d) reads the cast clip and the skill clip,
+    # not the blades, and with it the spell read alone is D_rel 0.598 from the ash read alone, each
+    # landing about 0.026 pressed at once where he trades his R1 for it; to the roll alone D_rel 0.0,
+    # both one flat run-in share of 0.0714 (`MEASURED` 2026-11-15, the pins of 2026-11-13).
     i_g, i_k = res.index[gps['key']], res.index[gsk['key']]
     Dim = Mx['D_idle']
-    gp1 = {n: np.asarray(v)[None] for n, v in profile_arrays(c, profile_inputs(
-        next(x for x in spell_job(c, gps['id']) if x['key'] == gps['key']))).items() if n in ARRAYS}
+    gp_in = profile_inputs(next(x for x in spell_job(c, gps['id']) if x['key'] == gps['key']))
+    gp1 = alone(c, gp_in)
     gp1s = shares(gp1, 0, res.w, res.W)
-    d_alone = float(d_rel_rows(rel_profile(gp1, 0), rel_profile(res.A, i_k), res.w)[0, 0])
-    fl_alone = flat_land(gp1, 0, gp1s['land_mass_now'], a.null)
-    fl_ash = flat_land(res.A, i_k, gsk['land_mass_now'], a.null)
+    gp1r, gk1r = alone(cr, gp_in), alone(cr, skill_inputs(gsk))
+    d_alone = float(d_rel_rows(rel_profile(gp1r, 0), rel_profile(gk1r, 0), res.w)[0, 0])
+    d_strike = float(d_rel_rows(rel_profile(gp1, 0), rel_profile(res.A, i_k), res.w)[0, 0])
+    fl_alone = flat_land(gp1r, 0, shares(gp1r, 0, res.w, res.W)['land_mass_now'], a.null)
+    fl_ash = flat_land(gk1r, 0, shares(gk1r, 0, res.w, res.W)['land_mass_now'], a.null)
     # The cross-type match is mutual-nearest over every spell and skill of the subset; one of the
     # spell's is required only to be with a Glintblade Phalanx skill.
     gmatch = [x['skill'] for x in an['matches'] if x['spell'] == gps['key']]
     gtwin = (gps['key'], gsk['key']) in twins or (gsk['key'], gps['key']) in twins
-    check(f'10. Glintblade Phalanx spell and ash ({gsk["key"]}) fly alike: the spell read alone is D_rel {d_alone:.4f} '
-          f'from the ash, both landing one flat run-in share ({fl_alone}, {fl_ash}); read with its lookalike group '
+    check(f'10. Glintblade Phalanx spell and ash ({gsk["key"]}) fly alike: to the roll alone the spell read alone is '
+          f'D_rel {d_alone:.4f} from the ash, both landing one flat run-in share ({fl_alone}, {fl_ash}); the strike, '
+          f'which reads their clips, puts them D_rel {d_strike:.4f} apart; read with its lookalike group '
           f'the spell lands {gps["land_mass_best"]:.4f} with a run-in against {gp1s["land_mass_best"]:.4f} alone, and '
           f'they are twins ({gtwin}) exactly when both land at least --live ({gps["land_mass"]:.3f}, '
           f'{gsk["land_mass"]:.3f}) within --twin (D_assoc {Dam[i_g, i_k]:.4f}, D_rel {Drm[i_g, i_k]:.4f}, D_idle '
@@ -7854,6 +10446,31 @@ def selftest(timing_log=None, keep_going=False):
                              for r in gfol)
           and not [x for x in an['contains'] + an['component_twins']
                    if res.comps[x['component']]['frame'] in set(R[x['x']].get('inherited_frames') or [])])
+    # The mixup (bd er-effects-rs-me5p; the user, 2026-11-16: "what is called a 50/50"): on a
+    # Glintblade Phalanx R2 follow-up its fixed sequence is the net `parts` gives with `mix` False,
+    # the scored net (version 20) is the game's value, which adds the defender's stand and the
+    # attacker's default delays (no opening roll given, so no 'none' column), and the game is a
+    # distribution on both sides in every situation. Its opening's blades are search-launched, so
+    # it has no strafe row at any share (`er-mechanics-ashes.FollowupModel.strafe_ok`).
+    if gfol:
+        fr_ = gfol[0]
+        fx = {**skill_inputs(fr_), 'press': float(fr_.get('press', fr_['follow']['first'])),
+              'delays': followup_delays(fr_['follow'])}
+        ff = FollowupForm(c, fx)
+        fp_ = ff.parts(fx['value'], fx['value_one'], fx['geo'], mix=False)
+        fs_ = ff.parts(fx['value'], fx['value_one'], fx['geo'])
+        fm_ = ff.mixup(fx['value'], fx['geo'])
+        f1_ = ff.mixup(fx['value'], fx['geo'], strafe_share=1.0)
+        check(f"10. FollowupForm.mixup on {label(fr_)}: its fixed sequence is parts' net with mix False in every "
+              f"situation (max gap {max(abs(a['fixed'] - b['net']) for a, b in zip(fm_, fp_)):.2e}), the scored "
+              f"parts' net is the game's; the game's mean {float(c.w @ np.array([p['net'] for p in fm_]) / c.W):.1f} "
+              f"against the fixed {float(c.w @ np.array([p['fixed'] for p in fm_]) / c.W):.1f}; no strafe row at "
+              f"share 1 ({ff.model.strafe_ok()})",
+              all(abs(a['fixed'] - b['net']) <= 1e-6 * max(1.0, abs(b['net'])) for a, b in zip(fm_, fp_))
+              and all(a['net'] == b['net'] and a['fixed'] == q['net'] for a, b, q in zip(fs_, fm_, fp_))
+              and all(0.0 <= p['stand'] + p['strafe'] <= 1.0 + 1e-9 and p['none'] == 0.0 for p in fm_)
+              and not ff.model.strafe_ok()
+              and all(p['strafe'] == 0.0 and p['net'] == q['net'] for p, q in zip(f1_, fm_)))
     # Live negative controls: each pair lands at least --live of its worth on both sides, D_assoc
     # must keep them apart, and no association may link them. Each was within --twin on D_rel alone
     # on the full run it was picked from, so the control bites; the profiles move with the models
@@ -7905,7 +10522,12 @@ def selftest(timing_log=None, keep_going=False):
     # Carian Phalanx (D_contain 0.056); since the launches are placed and the caught defender walks
     # out (bd er-effects-rs-doax / er-effects-rs-n7dd) that pair is 0.51 apart, and the 2026-11-10
     # full run puts the Glintblade Phalanx cast nearest, at 0.089 (Troll's Roar's f43 against the
-    # charged Wrath of Gold, 0.082, is the only nearer melee frame).
+    # charged Wrath of Gold, 0.082, is the only nearer melee frame). Since the defender's strike
+    # (version 11) the pair is 0.76 to 0.93 apart, and the 2026-11-15 full run (stamp
+    # 4a87d5408c1fba25) has no melee-only skill frame within --twin by D_contain of any bullet spell
+    # (0 of 252 frames against 124 spells, all landing --live; `MEASURED` 2026-11-16), so no pair of
+    # the game tests the gate on the profiles alone any more: check 7 tests it on synthetic rows, and
+    # this pair is only kept apart.
     ps = [r for r in R.values() if r['name'] == 'Painful Strike' and r['carrier'] == 'Tooth Whip' and not r.get('follow')]
     cph = R.get(f"spell:{SM.by_name['glintblade phalanx']}:cast")
     pcomp = [k for k in res.comp_keys if ps and res.comps[k]['of'] == ps[0]['key'] and abs(res.comps[k]['frame'] - 34.0) < 0.6]
@@ -7921,9 +10543,9 @@ def selftest(timing_log=None, keep_going=False):
               | {(x['spell'], x['skill']) for x in an['matches']} | {(x['skill'], x['spell']) for x in an['matches']}
               | twins)
     check(f"10. negative control Painful Strike [Tooth Whip] (melee only) / Glintblade Phalanx cast (bullets): its "
-          f"f34 frame is D_contain {dpc} from the spell, within --twin on the profiles alone, and the delivery gate "
+          f"f34 frame is D_contain {dpc} from the spell, and the delivery gate "
           "keeps them out of every twin, match and contains",
-          bool(ps) and cph is not None and dpc is not None and dpc <= a.twin
+          bool(ps) and cph is not None and dpc is not None
           and ps[0]['delivery'] == ['melee'] and cph['delivery'] == ['bullet']
           and (ps[0]['key'], cph['key']) not in linked)
     bad_gate = [p for p in linked if p[0] in R and p[1] in R and not (delivery_bits(R[p[0]]) & delivery_bits(R[p[1]]))]
@@ -7971,8 +10593,21 @@ def selftest(timing_log=None, keep_going=False):
                                          and poison[e['key']]['group'].startswith('excluded: ') for e in pm + dps))
     pull = {x['key']: x for x in an['effect'].get('pull', [])}
     gmc = R.get(f"spell:{SM.by_name['gravitational missile']}:charged")
-    check("11. the pull family gives Gravitational Missile a D_idle neighbour, every skill of it netting nothing",
-          gmc is not None and ((pull.get(gmc['key']) or {}).get('nearest') or {}).get('by') == 'D_idle')
+    # Gravitational Missile's charged cast is live, so its family neighbour is by D_assoc among the
+    # skills of the family that land, and by D_idle only when none does. To the roll alone none did
+    # (Gravitas, Alabaster Lords' Pull, Starcaller Cry: nets_nothing, 'always evaded'); since the
+    # defender's strike (version 11, attack-similarity.md section 2d) each lands a share pressed at
+    # once where he trades his R1 for it, and none nets above --hp (`MEASURED` 2026-11-15: Gravitas
+    # 0.0 to -157.8, Alabaster Lords' Pull 0.0, Starcaller Cry -152.9; the neighbour Gravitas
+    # [Reverse-Bladed Sword], D_assoc 0.829).
+    pskills = [x for x in pull.values() if x['type'] == 'skill' and x['key'] in R]
+    gnear = ((pull.get(gmc['key']) if gmc else None) or {}).get('nearest') or {}
+    check(f"11. the pull family gives Gravitational Missile a D_assoc neighbour among its skills that land "
+          f"({gnear.get('key')}, {gnear.get('by')} {gnear.get('D')}), every skill of it landing only by the defender's "
+          f"strike and netting nothing ({[(x['name'], x['group'], x['mean_net']) for x in pskills]})",
+          gmc is not None and gnear.get('by') == 'D_assoc' and gnear.get('key') in R
+          and R[gnear['key']]['type'] == 'skill' and R[gnear['key']]['group'] in ('live', 'runin_only')
+          and bool(pskills) and all(x['mean_net'] <= a.hp for x in pskills))
     # 12. Loop FP.
     gf = ents("Gelmir's Fury", 'spell', 'cast')
     check(f"12. Gelmir's Fury, one held cast: FP {gf and gf[0]['fp']} (Magic.mp 16), loop {gf and gf[0]['fp_loop']} "
@@ -8060,6 +10695,20 @@ def selftest(timing_log=None, keep_going=False):
                 builds=moved)[0]
     check('16. the stamp moves with the attacker build set: one build fewer, or one attribute of one line, is another '
           'stamp; the same set is the same stamp', sb1 == sb2 and len({s1, sb1, sb3, sb4}) == 4)
+    ms = members_stamp()
+    sm1 = stamp(stats, c.catalysts, 150, False, c.situations, c.strikes, c.dfn, code={'x': '1'}, paramdefs=pd,
+                members=ms)[0]
+    sm2 = stamp(stats, c.catalysts, 150, False, c.situations, c.strikes, c.dfn, code={'x': '1'}, paramdefs=pd,
+                members={**(ms or {}), 'sha256': 'other'})[0]
+    stale = None
+    try:
+        require_fresh_members({**(ms or {}), 'built': 'other'})
+    except SystemExit as e:
+        stale = str(e)
+    check(f"16. the stamp moves with the opponent members cache (built {ms and ms['built']}, its sources "
+          f"{ms and ms['sources']}), which is fresh, and a run refuses one built from other sources",
+          ms is not None and ms['built'] == ms['sources'] and len({s1, sm1, sm2}) == 3
+          and stale is not None and '--build-cache' in stale)
     check(f"16. the HKS inputs are the parser {HKS_PARSER.name}, which no module attribute holds (so code_stamp "
           f"cannot see it), and {A.COMMON_DEFINE_HKS}",
           ins6['hks']['parser'] == hashlib.sha256(HKS_PARSER.read_bytes()).hexdigest()
@@ -8129,20 +10778,45 @@ def selftest(timing_log=None, keep_going=False):
           and all(e <= 1e-6 for *_, e in errs_))
     check('29. the inputs re-read for those entities are the run\'s', all(x['value'] == R[r['key']]['value'] for r, x in probes_))
     # 30. A follow-up is scored under the press the attacker picks (bd er-effects-rs-me5p): the
-    # run's profile is `FollowupForm`'s, never below the press at once in any situation, and a
-    # defender who does not dodge meets the press at once.
+    # run's profile is `FollowupForm`'s (version 20: the mixup's value, check 10), its fixed
+    # sequence never below the press at once in any situation, and a defender who does not dodge
+    # meets the press at once.
     fx = profile_inputs({**R[gfol[0]['key']], **skill_inputs(gfol[0])})
     ff = FollowupForm(c, fx)
     fa = ff.parts(fx['value'], fx['value_one'], fx['geo'])
     fe = ff.parts(fx['value'], fx['value_one'], fx['geo'], see=False)
     i_f = res.index[gfol[0]['key']]
     fnet, enet = np.array([p['net'] for p in fa]), np.array([p['net'] for p in fe])
+    fxd = np.array([p['fixed'] for p in fa])
     check(f"30. {label(gfol[0])}: press {fx['press']}, delays {fx['delays'][0]:g}-{fx['delays'][-1]:g}; the run's "
-          f"nets are FollowupForm's, at least the press at once's everywhere (mean {c.w @ fnet / c.W:.1f} against "
-          f"{c.w @ enet / c.W:.1f}, delayed on {c.w @ np.array([p['delayed'] for p in fa]) / c.W:.3f} of the weight), "
-          "and base_now is the press at once's",
-          np.array_equal(res.A['net'][i_f], fnet.astype(np.float32)) and bool((fnet >= enet - 1e-9).all())
+          f"nets are FollowupForm's (mean {c.w @ fnet / c.W:.1f}), its fixed sequence at least the press at once's "
+          f"everywhere (mean {c.w @ fxd / c.W:.1f} against {c.w @ enet / c.W:.1f}, delayed on "
+          f"{c.w @ np.array([p['delayed'] for p in fa]) / c.W:.3f} of the weight), and base_now is the press at once's",
+          np.array_equal(res.A['net'][i_f], fnet.astype(np.float32)) and bool((fxd >= enet - 1e-9).all())
           and np.array_equal(res.A['base_now'][i_f], np.array([p['now']['base'] for p in fe], np.float32)))
+    # 30. The mixup at `STRAFE_SHARE` 0 (version 20) against its bounds, on Ghostflame Ignition then R1 on
+    # Death's Poker, where the attacker's blind delays help: in every situation the game's value is at most
+    # what the defender's best pure reply concedes ('pure'), and over the situations it is at least the
+    # fixed sequence's (406.4 -> 432.5 on the distance basis this check reads, 361.5 -> 386.1 read
+    # alone at Intelligence + melee, `MEASURED` 2026-11-16).
+    gi_sid, gi_wid = t.find_arts('Ghostflame Ignition'), t.find_weapon("Death's Poker")
+    gi_fol = [f for f in A.skill_followups(t, gi_sid, gi_wid, SM.ar.max_level(SM.ar.weapons[gi_wid]['reinforceTypeId']),
+                                           'one', None) if f['button'] == 'r1'][:1]
+    if gi_fol:
+        gd = SM.skill_attack("Death's Poker", c.stats, 'Standard', None, gi_sid, c.dfn, False, gi_fol[0], None,
+                             priced_bullets=True, flown_only=True)
+        gx = {'geo': gd['geo'], 'value': gd['value'], 'value_one': gd['value_one'], 'roll': gd['roll'],
+              'press': float(gd['option']['parts'][1]['offset']), 'delays': followup_delays(gi_fol[0])}
+        gm = FollowupForm(c, gx).mixup(gx['value'], gx['geo'])
+        gnet, gfix = np.array([p['net'] for p in gm]), np.array([p['fixed'] for p in gm])
+        check(f"30. FollowupForm.mixup at STRAFE_SHARE {STRAFE_SHARE:g} on Ghostflame Ignition then R1 (press "
+              f"{gx['press']:g}, delays 0-{gx['delays'][-1]:g}): at most the defender's best pure reply in every "
+              f"situation (largest excess {float(max(p['net'] - p['pure'] for p in gm)):.2e}), and its mean "
+              f"{c.w @ gnet / c.W:.1f} at least the fixed sequence's {c.w @ gfix / c.W:.1f}",
+              STRAFE_SHARE == 0.0 and all(p['net'] <= p['pure'] + 1e-6 * max(1.0, abs(p['pure'])) for p in gm)
+              and float(c.w @ gnet) >= float(c.w @ gfix) - 1e-6)
+    else:
+        check("30. Ghostflame Ignition on Death's Poker has an R1 follow-up (skill_followups)", False)
     # 32. What is on screen (`look_specs`, `er-mechanics-spells.Lookalikes`): the groups the run read,
     # an attack alone in its group read number for number as before, the kit's rule on the same
     # casts, and the group in the fingerprint.
@@ -8210,7 +10884,7 @@ def selftest(timing_log=None, keep_going=False):
     sing = next((r for r in R.values() if r['type'] == 'spell' and r['status'] == 'scored' and r['lookalikes'] is None
                  and not run_inputs(r)['aims']), None)
     cx = copy.copy(c)
-    cx.pairs, cx.w = c.pairs[::8], c.w[::8]
+    cx.pairs, cx.sprint_pairs, cx.w = c.pairs[::8], c.sprint_pairs[::8], c.w[::8]
     cx.W = float(cx.w.sum())
     sx = run_inputs(sing) if sing else None
     lone = S.Lookalikes(A, {'x': sx['geo']}, {}).member('x') if sing else None
@@ -8233,8 +10907,9 @@ def selftest(timing_log=None, keep_going=False):
     kstore.add(line0, cs_recs)
     kit = S.spell_lookalikes(SM, A, {x['key']: {
         'mid': csid, 'anim': x['anim'], 'hand': x['hand'], 'lead': x['lead'], 'weight': x['release_weight'],
-        'attack': x['geo'], 'members': [{'mid': csid, 'anim': m['anim'], 'hand': m['hand'], 'lead': m['lead'],
-                                         'weight': m['weight'], 'attack': m['geo']} for m in x['release_members']]}
+        'attack': x['geo'], 'roll': x['roll'],
+        'members': [{'mid': csid, 'anim': m['anim'], 'hand': m['hand'], 'lead': m['lead'], 'weight': m['weight'],
+                     'attack': m['geo'], 'roll': m['roll']} for m in x['release_members']]}
         for x in cs_recs})
     djob = next((j for j in skill_jobs if j['name'] == 'Glintstone Dart'), None)
     d_recs = [x for x in (skill_job(c, djob) if djob else []) if x['status'] in ('scored', 'partial') and x.get('release')]
@@ -8329,7 +11004,7 @@ def selftest(timing_log=None, keep_going=False):
                                                                  np.float32(IDLE_RATE) * Mx['D_idle']), atol=1e-7)
           and np.array_equal(Mx['D_assoc'], Mx['D_assoc'].T) and not np.diag(Mx['D_assoc']).any())
     # 19. First touch.
-    dist = np.array([d for d, _ in c.pairs])
+    dist = np.array([d for d, *_ in c.pairs])
     tf_t, tf_c = res.A['t_first'][i_t], res.A['t_first'][i_c]
     check('19. Zamor tap: no first touch at any distance from 4.5 m', np.isinf(tf_t[dist >= 4.5]).all())
     check('19. Zamor charged: a first touch at some distance in (4.5, 6.0] m',
@@ -8401,6 +11076,7 @@ def selftest(timing_log=None, keep_going=False):
           f'cross-type match ({mname}), the probe rows and the per-build dominance (Glintblade Phalanx); the summary '
           f'names what is build-dependent and gives every build (missing: {[k for k, v in parts23.items() if not v]})',
           all(parts23.values()))
+    selftest_lines_run(check, c, jobs)
     tm.lap('later checks')
     tm.facts.update(scope='selftest', only=sorted({T._norm(x) for x in SELFTEST_NAMES}), jobs=jobs, cache='computed',
                     version=SIMILARITY_VERSION, argv=['--selftest'] + ['--keep-going'] * keep_going)

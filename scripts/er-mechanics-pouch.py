@@ -1169,14 +1169,15 @@ class Pouch:
         ck = (key, cat, tuple(sorted(ctx['stats'].items())), tuple(ctx['talismans']))
         if ck not in self._spell_vals:
             SP, sm = self.spell_model()
-            pairs = [(s['distance'], s['recovery']) for s in self.spaced()['situations']]
+            pairs = [(s['distance'], s['recovery'], s['run']) for s in self.spaced()['situations']]
             got = None
             try:
                 # The defender cannot tell it from the spells of its TimeAct and casting SFX this
                 # build casts with the same catalyst (`er-mechanics-spells.lookalike_group`).
                 got = sm.punish_values(c['goods'], sm.catalyst(cat), ctx['stats'], pairs, ctx['talismans'], None,
                                        sm.defender(self.rl), strikes=SP.punish_strikes(self.rl),
-                                       cats=[sm.catalyst(cat)])
+                                       cats=[sm.catalyst(cat)],
+                                       sprint=SP.sprint_situations(self.spaced()['situations']))
             except (KeyError, TypeError, SystemExit):
                 got = None
             if got:
@@ -1221,7 +1222,7 @@ class Pouch:
             weapons = [{'weapon': ctx['weapon'], 'affinity': ctx['affinity'], 'level': ctx['level'],
                         'skill': ctx['skill'], 'two_handed': ctx['two']}]
             weapons += [{'weapon': n} for n in ctx['plan_weapons']]
-            pairs = [(s['distance'], s['recovery']) for s in situations]
+            pairs = [(s['distance'], s['recovery'], s['run']) for s in situations]
             ctx['held_skills'] = sm.rival_values(weapons, ctx['stats'], pairs, sm.defender(self.rl),
                                                  SP.punish_strikes(self.rl))[0]
         return ctx['held_skills']

@@ -41,6 +41,13 @@ motion of the clip. `scripts/er-hkx-pose.py` decodes the player clips; when it i
 `world_reach` below poses the weapon bone at every hit frame and reports the forward distance of
 the farthest hit point from the character's position at animation start.
 
+Free aim (`VERIFIED` chain, see the "free aim" section): a clip's TAE 700 events pitch the
+upper body toward the lock-on target, or off lock-on toward the camera's look direction, within
+a behavior node's limits and outside its dead zone. Each row is measured level and at the
+camera pitches those limits allow (`aim_candidates`); the attacker's pick (`free_aim_pick`) is
+kept when it hits no later and sooner or farther, and is then priced as an unlocked attack.
+`aim_camera_pitch_deg` names it (0 = level) and `aim_flat` keeps the level numbers.
+
 Defender side (`MEASURED`): the player's hurtbox is the 18 ragdoll capsules of `c0000.HKX`, posed
 in idle. `defender_hurtbox()` gives per-direction radii; each reach row gains `target_centre_m`
 (world reach + idle front radius, an upper bound) and `contact_centre_m` (the farthest defender
@@ -883,6 +890,17 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand=
         clip_cat, clip_anim = hkx_source(cat, src_anim)
         out['hkx'] = f'a{clip_cat:03d}_{clip_anim:06d}'
         pose = world_reach(clip_cat, clip_anim, hit_windows, hitboxes, dummies)
+        aim = None
+        if pose and 'world_reach_error' not in pose:
+            turns = {k: out.get(k) for k in ('turn_late_deg_locked', 'turn_late_deg_unlocked')}
+            aim = free_aim_pick(clip_cat, clip_anim, events, windows, hit_windows, hitboxes,
+                                dummies, pose, turns)
+        # The camera pitch the attacker aims with off lock-on: 0 is level (locked on, or no
+        # pitch that helps). `aim_flat` keeps the level numbers of an aimed row.
+        out['aim_camera_pitch_deg'] = aim['pitch_deg'] if aim else 0.0
+        if aim and aim['pose'] is not None:
+            pose = aim['pose']
+            out['aim_flat'] = aim['flat']
         if pose:
             front = pose.pop('front_contact_t', None) or {}
             points = pose.pop('window_points', None) or {}
@@ -895,7 +913,7 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None, hand=
             out.update(pose)
             out['front_contact_frame_real'] = {
                 dist: round(real_seconds(t, windows) * TAE_FPS, 1) for dist, t in front.items()}
-        cover = coverage_factor(out)
+        cover = coverage_factor(out, locked_share=0.0 if out.get('aim_camera_pitch_deg') else None)
         if cover:
             out.update(cover)
     return out
@@ -1168,7 +1186,7 @@ def _shape_world_points(h, model, root, bind, rig_pose=None):
     return ends, ends[0], ends[0]
 
 
-def world_reach(category, anim, hit_windows, hitboxes, dummies):
+def world_reach(category, anim, hit_windows, hitboxes, dummies, twist=None):
     """Forward reach of the hit shapes while they are live, from the pose decoder, or None.
 
     Model space from `scripts/er-hkx-pose.py`: +Y up, the character faces -Z at animation start,
@@ -1177,6 +1195,9 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
     `-z + radius`. `standing` subtracts the root motion at that instant (reach from where the
     body is when the hit lands); `root_motion_to_hit_m` is the forward root motion at the first
     hit frame (the lunge).
+
+    `twist`, when given, is `twist(model, t, root) -> model`: the upper-body pitch a free-aimed
+    attack adds to the clip's pose (`free_aim_twist`).
     """
     pose = _pose_module()
     if pose is None or not hit_windows:
@@ -1216,6 +1237,8 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
                 t = (start + (end - start) * k / n) / TAE_FPS
                 model = pose.bone_model_transforms(category, anim, t, with_root_motion=True)
                 root = pose.root_motion(category, anim, t)
+                if twist is not None:
+                    model = twist(model, t, root)
                 rig_poses = {key: weapon_rig_pose(key[0], c[0], t, c[2])
                              for key, c in rig_clips.items() if c is not None}
                 for h in shapes:
@@ -1280,6 +1303,320 @@ def world_reach(category, anim, hit_windows, hitboxes, dummies):
                         'grip_forward_m': round(grip_fwd - root_fwd, 3), 'judge': judge,
                         'dmy': dmy},
     }
+
+
+# --------------------------------------------------------------------------- free aim
+
+# Off lock-on, a melee attack pitches the upper body toward the camera's look direction. Every
+# link is `VERIFIED` by disassembly of `eldenring-deobf-1.17.2.bin` (2.7.2.0) unless marked:
+#
+#     TAE 700 EnableTwistModifier (handler 0x14042a310) files a twist request with
+#         CSChrBehaviorDataModule (modules+0xc0, 0x140417200): params 0x00-0x0f up/down/right/
+#         left limit, 0x10 s32 ModifierID, 0x14 u8 TargetType, 0x18-0x27 up/down/right/left
+#         minimum. A value below 0 means the behavior node's own (0x1419bfea0 reads `>= 0 ?
+#         request : node`).
+#     CustomLookAtTwistModifier (c0000.hkx nodes, vtable 0x142f01c90): modify 0x1419bfad0 asks
+#         the registered callback 0x14041c100 -> CSChrBehaviorModule 0x14041c5e0 for the target.
+#         TargetType 0 (jump table 0x14041da24, case 0x14041c78a) -> ChrIns 0x1403ef680 ->
+#         manipulator vt+0x198.
+#     PadManipulator vt+0x198 (0x1403d9520): locked on (vt+0x190) -> the ChrIns lock-on target
+#         position (+0xd0); else an auto-homing target (modules+0x100, 0x14040aeb0) when one is
+#         set; else the character position + 100 m along the look angles at manipulator+0x60.
+#         vt+0x188 (0x1403d9490) says "has a target" for the main player always.
+#     ChrCam 0x1403b1ea0 writes those look angles from the camera's forward axis f each update:
+#         pitch = atan2(f.y, |f.xz|), yaw = atan2(-f.x, -f.z) (SetLookAngle 0x1403cda50).
+#     0x1419bfea0: no twist (target 0, state off) while -DownMin < pitch < UpMin, and the same
+#         test on the yaw with Left/RightMin (the dead zone), or past SensingAngle.
+#     0x1419bf6c0: target = clamp(angle, -Down, Up) * targetRotationRate; the twist moves toward
+#         it by max(0.5, |diff| * gain) * min(1, dt * 30) degrees an update (a gain >= 0.99 takes
+#         the whole step) and snaps within 0.5 degrees. The gain is newTargetGain in state 0,
+#         onGain in state 1, offGain in state 2 (off); off -> 1 when the request is live again,
+#         1 -> 0 within 0.5 degrees, 0 -> 1 when 180 or more away.
+#     0x1419bf9d0: each twistParam row gets an X child turning about model (1, 0, 0), the pitch,
+#         and a Y child about (0, 1, 0), over the startBone..endBone chain, additive.
+#
+# So locked on, a defender standing level with the attacker puts the target inside the dead zone
+# and the attack stays level; off lock-on the attacker sets the pitch with the camera. The aimed
+# variant is therefore priced as an unlocked attack (`coverage_factor` share 0).
+#
+# `INFERRED`: the angle is the camera pitch (the sensing dummy 261 is fixed in model space at
+# 1.17 m and the target is 100 m away, under 1 degree off); the twist is shared evenly over the
+# chain's bones, start bone included (Havok's linear angle method; the 50_Attack node's 7..7 row
+# would be empty otherwise); it is 0 and off when the attack starts; the camera can be pitched
+# to every candidate below (its range was not traced).
+
+#: The player's behavior graph, holding the CustomLookAtTwistModifier nodes (`MEASURED`).
+BEHAVIOR_HKX_PATH = os.environ.get(
+    'ER_PLAYER_BEHAVIOR_HKX',
+    os.path.expanduser('~/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/sharded/chr/'
+                       'c0000-behbnd-dcx/Behaviors/c0000.hkx'))
+TAE_TWIST_MODIFIER = 700
+#: TargetType 0: the manipulator's target, the camera off lock-on (jump table case 0).
+TWIST_TARGET_DEFAULT = 0
+#: 0x1432a3be0 (snap and smallest step), 0x142a7f24c (whole-step gain), 0x1432a3c4c (the gain's
+#: frame rate), 0x142a03f68 (state 0 -> 1 distance), all degrees or 1/s (`VERIFIED` constants).
+TWIST_SNAP_DEG, TWIST_FULL_GAIN, TWIST_GAIN_FPS, TWIST_RETARGET_DEG = 0.5, 0.99, 30.0, 180.0
+TWIST_UPDATE_HZ = POSE_SAMPLE_HZ
+#: An aimed variant must beat the level one by this much contact range when no contact is sooner.
+AIM_MIN_GAIN_M = 0.005
+_TWIST_NODES = []
+_CHILDREN = []
+
+
+def twist_nodes(path=None):
+    """{ModifierID: [node]} of the c0000 behavior's CustomLookAtTwistModifier nodes (`MEASURED`),
+    {} when the behavior file is not unpacked. A node: `name`, `limits` (up, down, right, left),
+    `minimums` (the same order), `sensing` (degrees) and `rows`, its twistParam rows
+    (start bone, end bone, targetRotationRate, newTargetGain, onGain, offGain)."""
+    if _TWIST_NODES and path is None:
+        return _TWIST_NODES[0]
+    out = {}
+    p = path or BEHAVIOR_HKX_PATH
+    if os.path.exists(p):
+        tagfile = _load('hkx_tagfile', 'hkx-tagfile.py')
+        with open(p, 'rb') as handle:
+            tf = tagfile.Tagfile(handle.read())
+        for it in tf.find_items('CustomLookAtTwistModifier'):
+            mm = tf.member_map(it['type'])
+            base = tf.data_off + it['off']
+
+            def f32(name):
+                return struct.unpack_from('<f', tf.d, base + mm[name][0])[0]
+            name_item = tf.ptch.get(it['off'] + mm['name'][0])
+            rows = []
+            arr = tf.ptch.get(it['off'] + mm['twistParam'][0])
+            if arr is not None:
+                ai = tf.items[arr]
+                stride = tf.types[ai['type']].size
+                for k in range(ai['count']):
+                    rows.append(struct.unpack_from('<hhffff', tf.d, tf.data_off + ai['off'] + k * stride))
+            node = {'name': tf.cstr(name_item) if name_item is not None else '',
+                    'limits': tuple(f32(f'{s}LimitAngle') for s in ('Up', 'Down', 'Right', 'Left')),
+                    'minimums': tuple(f32(f'{s}MinimumAngle') for s in ('Up', 'Down', 'Right', 'Left')),
+                    'sensing': struct.unpack_from('<h', tf.d, base + mm['SensingAngle'][0])[0],
+                    'rows': rows}
+            mid = struct.unpack_from('<i', tf.d, base + mm['ModifierID'][0])[0]
+            out.setdefault(mid, []).append(node)
+    if path is None:
+        _TWIST_NODES.append(out)
+    return out
+
+
+def twist_requests(events):
+    """[(start s, end s, ModifierID, TargetType, limits, minimums)] of a clip's TAE 700 events
+    (`TAE`, layout above); a limit or minimum below 0 defers to the node."""
+    out = []
+    for e in events or ():
+        if e.type != TAE_TWIST_MODIFIER:
+            continue
+        limits = struct.unpack_from('<4f', e.params, 0)
+        mid, target = struct.unpack_from('<iB', e.params, 16)
+        mins = struct.unpack_from('<4f', e.params, 24) if len(e.params) >= 40 else (-1.0,) * 4
+        out.append((e.start, e.end, mid, target, limits, mins))
+    return out
+
+
+def _own_or_node(request, node):
+    return tuple(r if r >= 0 else n for r, n in zip(request, node))
+
+
+def twist_engaged(pitch, minimums, sensing, yaw=0.0):
+    """0x1419bfea0 on both axes: the twist is on only outside the dead zone and inside the
+    sensing angle. `minimums` = (up, down, right, left)."""
+    up_min, down_min, right_min, left_min = minimums
+    if max(abs(pitch), abs(yaw)) > sensing:
+        return False
+    return (-down_min >= pitch or pitch >= up_min) and (-left_min >= yaw or yaw >= right_min)
+
+
+def twist_step(theta, target, state, live, gain_row, dt):
+    """One update of a twist child (0x1419bf6c0): (new angle, new state). `gain_row` =
+    (newTargetGain, onGain, offGain); `live` is whether the request is on and engaged."""
+    if not live:
+        target, state = 0.0, 2
+    diff = target - theta
+    if state == 0 and abs(diff) >= TWIST_RETARGET_DEG:
+        state = 1
+    elif state == 1 and abs(diff) < TWIST_SNAP_DEG:
+        state = 0
+    elif state == 2 and live:
+        state = 1
+    if abs(diff) < TWIST_SNAP_DEG:
+        return target, state
+    gain = gain_row[state]
+    scale = 1.0 if gain >= TWIST_FULL_GAIN else min(1.0, dt * TWIST_GAIN_FPS)
+    step = max(TWIST_SNAP_DEG, abs(diff) * gain) * scale
+    return theta + (step if diff > 0 else -step), state
+
+
+def pitch_series(requests, pitch, until, windows=(), hz=TWIST_UPDATE_HZ, nodes=None):
+    """[((start bone, end bone), [(clip s, pitch twist degrees)])] of a clip whose attacker holds
+    the camera at `pitch` degrees (down negative) off lock-on, one update every real 1/hz s from
+    the clip start to clip time `until`, or [] when no row turns."""
+    nodes = twist_nodes() if nodes is None else nodes
+    out = []
+    keyed = {}
+    for start, end, mid, target, limits, mins in requests:
+        if target != TWIST_TARGET_DEFAULT:
+            continue
+        for node in nodes.get(mid, ()):
+            keyed.setdefault(id(node), (node, []))[1].append((start, end, limits, mins))
+    for node, reqs in keyed.values():
+        for row in node['rows']:
+            first, last, rate = row[0], row[1], row[2]
+            gains = row[3:6]
+            theta, state, t, samples = 0.0, 2, 0.0, []
+            while t <= until + 1e-9:
+                live_req = [r for r in reqs if r[0] <= t < r[1]]
+                live, target = False, 0.0
+                if live_req:
+                    lim = _own_or_node(live_req[-1][2], node['limits'])
+                    mins = _own_or_node(live_req[-1][3], node['minimums'])
+                    if twist_engaged(pitch, mins, node['sensing']):
+                        live = True
+                        target = min(max(pitch, -lim[1]), lim[0]) * rate
+                theta, state = twist_step(theta, target, state, live, gains, 1.0 / hz)
+                samples.append((t, theta))
+                t += speed_at(t, windows) / hz
+            if any(abs(a) > 1e-6 for _, a in samples):
+                out.append(((first, last), samples))
+    return out
+
+
+def _children():
+    if not _CHILDREN:
+        sk = _pose_module().load_skeleton()
+        kids = {}
+        for i, p in enumerate(sk.parents):
+            if p >= 0:
+                kids.setdefault(p, []).append(i)
+        _CHILDREN.append((sk, kids))
+    return _CHILDREN[0]
+
+
+def _subtree(sk, kids, bone):
+    out, stack = [], [bone]
+    while stack:
+        b = stack.pop()
+        out.append(sk.names[b])
+        stack.extend(kids.get(b, ()))
+    return out
+
+
+def _qmul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz)
+
+
+def pitch_pose(model, chains, yaw):
+    """`model` with each ((start bone, end bone), degrees) of `chains` turned about the
+    character's lateral axis (model +X after the root yaw), the angle shared over the chain."""
+    sk, kids = _children()
+    model = dict(model)
+    axis = (math.cos(yaw), 0.0, -math.sin(yaw))
+    for (first, last), deg in chains:
+        if abs(deg) < 1e-9:
+            continue
+        chain = [last]
+        while chain[-1] != first and chain[-1] >= 0:
+            chain.append(sk.parents[chain[-1]])
+        if chain[-1] != first:
+            continue
+        half = math.radians(deg) / len(chain) / 2
+        q = (axis[0] * math.sin(half), 0.0, axis[2] * math.sin(half), math.cos(half))
+        for bone in reversed(chain):
+            pivot = model[sk.names[bone]][0]
+            for name in _subtree(sk, kids, bone):
+                p, r = model[name]
+                off = _qrot(q, tuple(p[i] - pivot[i] for i in range(3)))
+                model[name] = (tuple(pivot[i] + off[i] for i in range(3)), _qmul(q, r))
+    return model
+
+
+def free_aim_twist(series):
+    """The `world_reach` twist callable of a `pitch_series`."""
+    def at(samples, t):
+        best = 0.0
+        for when, deg in samples:
+            if when > t + 1e-9:
+                break
+            best = deg
+        return best
+
+    def twist(model, t, root):
+        return pitch_pose(model, [(chain, at(s, t)) for chain, s in series], root[3])
+    return twist
+
+
+def aim_candidates(requests, nodes=None):
+    """Camera pitches worth trying (degrees, down negative): each live node's down limit, the
+    edge of its dead zone below, and its up limit."""
+    nodes = twist_nodes() if nodes is None else nodes
+    out = set()
+    for _, _, mid, target, limits, mins in requests:
+        if target != TWIST_TARGET_DEFAULT:
+            continue
+        for node in nodes.get(mid, ()):
+            up, down = _own_or_node(limits, node['limits'])[:2]
+            up_min, down_min = _own_or_node(mins, node['minimums'])[:2]
+            if down > 0:
+                out.add(-down)
+                if 0 < down_min < down:
+                    out.add(-down_min)
+            if up > 0:
+                out.add(up)
+    return sorted(out)
+
+
+def _contacts_real(pose, windows):
+    return {d: round(real_seconds(t, windows) * TAE_FPS, 1)
+            for d, t in (pose.get('front_contact_t') or {}).items()}
+
+
+def free_aim_pick(category, anim, events, windows, hit_windows, hitboxes, dummies, flat, turns):
+    """The attacker's pick of camera pitch off lock-on for one clip, or None when level is as
+    good: {'pitch_deg', 'pose', 'flat', 'tried'}. A pitch is taken only when its contact frames
+    are no later at any distance level reaches and its contact range is no shorter (within
+    `AIM_MIN_GAIN_M`), it is sooner at one, reaches one more, or reaches `AIM_MIN_GAIN_M`
+    farther, and its coverage, priced unlocked, is no lower than level's (priced with
+    `COVER_TRACK_LOCKED_SHARE`). Among those, the soonest, then the farthest."""
+    requests = twist_requests(events)
+    if not requests or not hit_windows or not twist_nodes():
+        return None
+    until = max(e for _, e, _ in hit_windows) / TAE_FPS
+    base_fc = _contacts_real(flat, windows)
+    base_cc = flat.get('contact_centre_m') or 0.0
+    base_cover = (coverage_factor({**turns, **flat}) or {}).get('coverage_factor')
+    best, tried = None, []
+    for pitch in aim_candidates(requests):
+        series = pitch_series(requests, pitch, until, windows)
+        if not series:
+            continue
+        pose = world_reach(category, anim, hit_windows, hitboxes, dummies, free_aim_twist(series))
+        if not pose or 'world_reach_error' in pose:
+            continue
+        fc = _contacts_real(pose, windows)
+        cc = pose.get('contact_centre_m') or 0.0
+        cover = (coverage_factor({**turns, **pose}, locked_share=0.0) or {}).get('coverage_factor')
+        tried.append({'pitch_deg': pitch, 'front_contact_frame_real': fc, 'contact_centre_m': cc,
+                      'coverage_factor': cover})
+        if any(d not in fc or fc[d] > f for d, f in base_fc.items()) or cc < base_cc - AIM_MIN_GAIN_M:
+            continue
+        if not (any(fc[d] < f for d, f in base_fc.items()) or len(fc) > len(base_fc)
+                or cc >= base_cc + AIM_MIN_GAIN_M):
+            continue
+        if base_cover is not None and (cover is None or cover < base_cover - 1e-9):
+            continue
+        key = (sum(fc.get(d, 99.0) for d in FRONT_CONTACT_DISTANCES_M), -cc)
+        if best is None or key < best[0]:
+            best = (key, pitch, pose)
+    if best is None:
+        return {'pitch_deg': 0.0, 'pose': None, 'tried': tried} if tried else None
+    return {'pitch_deg': best[1], 'pose': best[2], 'tried': tried,
+            'flat': {'front_contact_frame_real': base_fc, 'contact_centre_m': flat.get('contact_centre_m'),
+                     'world_reach_m': flat.get('world_reach_m'), 'coverage_factor': base_cover}}
 
 
 # --------------------------------------------------------------------------- spatial coverage
@@ -1670,13 +2007,14 @@ COVER_EXP = 0.5
 COVER_CLAMP = (0.7, 1.4)
 
 
-def coverage_factor(row):
+def coverage_factor(row, locked_share=None):
     """{coverage_factor, coverage_arc_eff_deg, coverage_turn_deg} for one reach row, or None
-    when the row has no footprint."""
+    when the row has no footprint. `locked_share` overrides `COVER_TRACK_LOCKED_SHARE`: a
+    free-aimed attack is made off lock-on, so it turns at the unlocked rate (share 0)."""
     arc = row.get('sweep_row_arc_deg')
     if arc is None:
         return None
-    share = COVER_TRACK_LOCKED_SHARE
+    share = COVER_TRACK_LOCKED_SHARE if locked_share is None else locked_share
     turn = (share * (row.get('turn_late_deg_locked') or 0.0)
             + (1 - share) * (row.get('turn_late_deg_unlocked') or 0.0))
     arc_eff = min(360.0, arc + 2 * min(turn, COVER_TRACK_SAT_DEG))
@@ -1716,7 +2054,8 @@ SUMMARY_KEEP = ('weapon_reach_m', 'world_reach_m', 'root_motion_to_hit_m', 'firs
                 'sweep_area_m2', 'sweep_mean_width_m', 'sweep_arc_deg', 'sweep_row_arc_deg',
                 'swing_shape', 'hit_height_min_m', 'hit_height_max_m',
                 'blade_swept_volume_m3', 'blade_swept_deg', 'blade_section_m2',
-                'coverage_factor', 'coverage_arc_eff_deg', 'coverage_turn_deg')
+                'coverage_factor', 'coverage_arc_eff_deg', 'coverage_turn_deg',
+                'aim_camera_pitch_deg')
 _SKILL = {}
 
 
@@ -2288,6 +2627,74 @@ def selftest():
         check('a026_030000 turn budget skips the Disable Turning frames',
               (t['turn_budget_deg_locked'], t['turn_budget_deg_unlocked']), (want, want),
               'TAE a26.tae + JT7_READER')
+
+    # 8b. Free aim: the twist nodes, the TAE requests, the update rule and the aimed pick.
+    nodes = twist_nodes()
+    if not nodes:
+        skips.append('free aim: ' + BEHAVIOR_HKX_PATH + ' is not unpacked')
+    else:
+        src = 'MEASURED c0000.hkx CustomLookAtTwistModifier'
+        n100 = nodes[100][0]
+        check('100_Attack limits up/down 30/35, dead zone 18/20',
+              (n100['name'], n100['limits'][:2], n100['minimums'][:2]),
+              ('100_Attack', (30.0, 35.0), (18.0, 20.0)), src)
+        check('100_Attack turns RootPos..Spine1 at rate 1 with gains 0.9/0.1/0.01',
+              [(r[0], r[1], round(r[2], 2), round(r[3], 2), round(r[4], 2), round(r[5], 2))
+               for r in n100['rows']], [(7, 48, 1.0, 0.9, 0.1, 0.01)], src)
+        check('ModifierID 0 is two nodes, a yaw-only and a pitch-only one',
+              sorted((n['name'], n['limits'][:2]) for n in nodes[0]),
+              [('0_TwistLR', (0.0, 0.0)), ('0_TwistUD', (25.0, 25.0))], src)
+        # The dead-zone test of 0x1419bfea0 and the update of 0x1419bf6c0, by hand.
+        rule = 'VERIFIED 0x1419bfea0'
+        check('dead zone: -15 deg inside 20 down is off, -20 engages, +18 engages',
+              [twist_engaged(p, (18.0, 20.0, 0.0, 0.0), 180) for p in (-15.0, -20.0, 18.0)],
+              [False, True, True], rule)
+        theta, state = 0.0, 2
+        for _ in range(26):
+            theta, state = twist_step(theta, -35.0, state, True, (0.9, 0.1, 0.01), 1 / 60)
+        check('onGain 0.1 at 60 Hz: 26 updates reach -35 * (1 - 0.95^26) within 0.2 deg',
+              abs(theta - -35.0 * (1 - 0.95 ** 26)) < 0.2, True, 'VERIFIED 0x1419bf6c0 arithmetic')
+        check('an off request decays at offGain and stays off',
+              twist_step(-10.0, -35.0, 1, False, (0.9, 0.1, 0.01), 1 / 60),
+              (-10.0 + 0.5 * 0.5, 2), 'VERIFIED 0x1419bf6c0 arithmetic')
+        anims23 = ATK.tae_animations(23)
+        if anims23 is None:
+            skips.append('free aim: a23.tae absent')
+        else:
+            src = 'TAE a23.tae event 700 (40-byte params)'
+            check('a023_034000 (powerstance L1 #1) requests node 100, target 0, frames 0-18',
+                  [(_frame(s), _frame(e), m, t, lim, mins) for s, e, m, t, lim, mins
+                   in twist_requests(anims23[34000])],
+                  [(0.0, 18.0, 100, 0, (-1.0,) * 4, (-1.0,) * 4)], src)
+            check('a023_030000 (R1 #1) widens the dead zone to 35 down',
+                  [mins[1] for *_, mins in twist_requests(anims23[30000])], [35.0], src)
+            check('aim candidates of node 100: -35 down limit, -20 dead-zone edge, +30 up',
+                  aim_candidates(twist_requests(anims23[34000])), [-35.0, -20.0, 30.0], src)
+            if _pose_module() is None:
+                skips.append('free aim pick: pose decoder absent')
+            else:
+                ls = rc.reg.find_weapon('Longsword')
+                judge = min((e.start, struct.unpack_from('<i', e.params, 8)[0])
+                            for e in anims23[34000] if e.type == TAE_ATTACK_BEHAVIOR)[1]
+                row = attack_reach(rc, ls, 'dual_1', 'L1 #1', judge, 34000, 'one', clip=(23, 34000)) or {}
+                flat = row.get('aim_flat') or {}
+                fc, base = row.get('front_contact_frame_real') or {}, flat.get('front_contact_frame_real') or {}
+                src = 'MEASURED pose a023_034000 + Longsword'
+                check('Longsword powerstance L1 #1 aims down off lock-on',
+                      row.get('aim_camera_pitch_deg', 0.0) < 0, True, src)
+                check('the aimed L1 #1 is no later at any distance and sooner at one',
+                      bool(base) and all(fc.get(d, 99) <= f for d, f in base.items())
+                      and any(fc.get(d, 99) < f for d, f in base.items()), True, src)
+                check('the aimed L1 #1 reaches farther than level',
+                      (row.get('contact_centre_m') or 0) > (flat.get('contact_centre_m') or 0), True, src)
+                # Aiming the Claymore's R2 #2 up lands half a frame sooner at 2.5 m but takes
+                # 0.6 m off its contact range (`MEASURED` 2026-11-15), so it is not the pick.
+                cl = attack_reach(rc, rc.reg.find_weapon('Claymore'), 'r2_2', 'R2 #2', 110, 30515, 'one') or {}
+                cl_flat = cl.get('aim_flat') or cl
+                check('a pitch that shortens the contact range is not taken (Claymore R2 #2)',
+                      cl.get('aim_camera_pitch_deg', 0.0) <= 0
+                      and (cl.get('contact_centre_m') or 0) >= (cl_flat.get('contact_centre_m') or 0) - AIM_MIN_GAIN_M,
+                      True, 'MEASURED pose a025_030515 + Claymore')
 
     # 9. The executable, both builds.
     _exe_checks(check, skips)

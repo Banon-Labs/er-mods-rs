@@ -51,6 +51,10 @@ EVENT_HEADER_SIZE, OFF_EVENT_DATA = 24, 16
 EVENT_PARAMS_DELTA = 16
 #: How many param bytes to retain per event (enough for every ChrActionFlag case).
 PARAM_BYTES = 32
+#: Event types whose handler reads past `PARAM_BYTES`. 700 EnableTwistModifier: its handler
+#: (0x14042a310, 2.7.2.0) copies params 0x00-0x15 and 0x18-0x27 into the twist request, the
+#: second block being the up/down/right/left minimum (dead-zone) angles (`VERIFIED` disasm).
+PARAM_BYTES_BY_TYPE = {700: 40}
 #: Sanity ceilings -- a real chr TAE is nowhere near these.
 MAX_ANIMS, MAX_EVENTS, MAX_EVENT_TYPE = 100000, 100000, 100000
 
@@ -130,7 +134,8 @@ def parse(path):
             start = struct.unpack_from('<f', b, _i64(b, header))[0]
             end = struct.unpack_from('<f', b, _i64(b, header + 8))[0]
             types.append(TaeEvent(event_type, start, end,
-                                  b[params_offset:params_offset + PARAM_BYTES]))
+                                  b[params_offset:params_offset
+                                    + PARAM_BYTES_BY_TYPE.get(event_type, PARAM_BYTES)]))
         animations[anim_id] = types
     return tae_id, animations
 

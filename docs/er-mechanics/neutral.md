@@ -69,13 +69,20 @@ build `b`:
     my start = arrival(D - R)                       frames before my attack can start
     b start  = arrival(D - R_b)
     arrival(g) = min(g x k,                          running, k = 30 / 4.01 frames a metre
-                     R1 frame of a dodge + max(0, g - its distance at that frame) x k)
+                     a dodge: its R1 frame when its path has closed g by then, else the first
+                     frame before its move cancel that has, else its move cancel
+                     + max(0, g - its distance at the move cancel) x k)
     my hit   = my start + s,   b's hit = b start + s_b
 
 - **Both commit, both run (INFERRED).** Starting farther out adds the same running time to both
   while both run toward each other, so it cancels: only the difference in reach is run. A player
-  who dodges in instead pays the dodge's R1 frame; the medium roll pays off above 2.67 m, the step
-  above 2.27 m. Every player carries the medium roll (the sweep builds are at medium load); the
+  who dodges in instead pays the dodge's R1 frame, and where its path leaves him short, its move
+  cancel: no walk or run starts before it (the behavior script starts one only through the
+  move-cancel check, env 2000, **VERIFIED**; the medium roll's is f22 against its R1 at f20,
+  Bloodhound's Step's f29 against f17, **MEASURED** from the clips' TAE). So 5 m rolled in costs
+  f34.59, where running from the R1 frame cost f33.27. The medium roll pays off above 2.67 m, the
+  step above 2.27 m (both inside the distance its path covers by its R1 frame, so the move cancel
+  does not move them). Every player carries the medium roll (the sweep builds are at medium load); the
   step only when the ash is Bloodhound's Step (section 5).
 - **i-frames.** A hit whose whole live window falls inside the other's dodge i-frames misses him
   (the rule `er-mechanics-ashes.Opponents._escapes` uses, without the distance part: he is

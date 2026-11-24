@@ -181,7 +181,8 @@ BULLET_FIELDS = ['atkId_Bullet', 'HitBulletID', 'intervalCreateBulletId', 'numSh
                  'isPenetrateMap', 'isInheritSpeedToChild', 'intervalCreateWaitTime',
                  'lockShootLimitAng', 'homingAngle', 'homingBeginDist', 'hormingStopRange',
                  'attachEffectType', 'targetYOffsetRange', 'sfxPostureType', 'isOwnerOverrideInitAngle',
-                 'randomCreateRadius', 'shootAngleXMaxRandom', 'shootAngleYMaxRandom', 'lifeRandomRange']
+                 'randomCreateRadius', 'shootAngleXMaxRandom', 'shootAngleYMaxRandom', 'lifeRandomRange',
+                 'autoSearchNPCThinkID']
 #: A safety bound on bullet chains, `er-mechanics-spells.MAX_DEPTH`'s: the deepest Bullet chain is
 #: Wave of Gold's 4000, 59 links (`REGULATION`, 2026-11-12), which 32 cut at 33 of its 60 legs.
 BULLET_DEPTH_CAP = 64
@@ -671,6 +672,7 @@ def bullet_tree(t, bid, depth=0, path=()):
            'atk_attribute': a.get('atkAttribute'),
            'num_shoot': r['numShoot'], 'life_s': round(r['life'], 3),
            'shared_hit_list': bool(r['isUseSharedHitList']),
+           'attach_effect': r.get('attachEffectType', 0) or 0,
            'hit_record_s': round(r['dmgHitRecordLifeTime'], 3),
            'penetrates': bool(r['isPenetrateChr']), 'sticks_in_target': bool(r['isAttackSFX']),
            'on_hit_speffects': [r[f'spEffectId{i}'] for i in range(5) if r[f'spEffectId{i}'] > 0],
@@ -1130,14 +1132,17 @@ def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None, stance=None
                     'attack': {el: round(v, 2) for el, v in attack.items()},
                     'final_rate_id': row.get('final_rate_id', -1), **extra})
 
-    def walk_bullet(frame, bt, seen=None):
+    def walk_bullet(frame, bt, seen=None, rec=None):
         # A child bullet that carries the same AtkParam row as one already counted is the same
         # wave travelling on (Hoarfrost Stomp 2260 -> 2261 -> ... -> 2264, all atk 30300863),
-        # counted once. A target is taken to be hit once per AtkParam row per cast, and
-        # `numShoot` copies fan out rather than stack on one target (`INFERRED`).
+        # listed once, and `numShoot` copies fan out rather than stack on one target (`INFERRED`).
+        # `rec` is the DmgHitRecord the node inherits (`HIT_LIST_NOTE`): the Bullet id of the row
+        # that made it, which every row under it shares as `hit_list` (`cast_mask` lands one).
         seen = set() if seen is None else seen
         if not bt:
             return
+        own = rec if rec is not None else (
+            bt['bullet'] if bt.get('shared_hit_list') or bt.get('attach_effect') else None)
         if bt['atk_row'] not in seen:
             seen.add(bt['atk_row'])
             # Weapon-branch poise, attacks.md section 2: saWeaponDamage x correction/100 + flat.
@@ -1145,9 +1150,11 @@ def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None, stance=None
             poise = (w['saWeaponDamage'] * (bt['poise_correction'] or 0.0) * 0.01
                      + ((bt['poise_flat'] or 0.0) if bt['add_base_atk'] else 0.0))
             add('bullet', frame, bt, {'bullet': bt['bullet'], 'count': 1, 'num_shoot': bt['num_shoot'],
-                                      'poise': round(poise * POISE_MENU, 2)})
+                                      'poise': round(poise * POISE_MENU, 2), 'hit_list': own})
+        # A row with `attachEffectType` drops the record it would hand down (FUN_14039bba0).
+        down = own if not bt.get('attach_effect') else None
         for child in bt['children'].values():
-            walk_bullet(frame, child, seen)
+            walk_bullet(frame, child, seen, down)
 
     def tag(x, a):
         # The hit priority record the event takes (`HIT_RECORD` in er-mechanics-attacks): one key
@@ -1174,6 +1181,9 @@ def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None, stance=None
                     h['root_bullet'] = x['bullet']['bullet']
                     h.update(rt)
                     h['created'] = n
+                    # One record per launch (`HIT_LIST_NOTE`): the event's, not the row's alone.
+                    if h.get('hit_list') is not None:
+                        h['hit_list'] = (a, n, h['hit_list'])
 
     walk_anim(anim)
     if not out and anim is not None:
@@ -1196,7 +1206,7 @@ def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None, stance=None
 def record_time(h):
     """Real-clip seconds at which hit row `h` first holds its hit priority record: its window's
     start, or the record's when the record opens later (`ATK.record_attach_time`)."""
-    s = h['frame'] / TAE_FPS
+    s = h.get('frame', 0) / TAE_FPS
     return max(s, h['record_s']) if h.get('record_s') is not None else s
 
 
@@ -1208,6 +1218,44 @@ def record_mask(hits):
     record and its `created`, which is their launch, so they land together."""
     return ATK.shared_landings([(record_time(h), h.get('record'), h.get('priority'), h.get('created', i))
                                 for i, h in enumerate(hits)])
+
+
+#: The bullet's own hit list (`VERIFIED` 1.16.2 named dump, ashes-of-war.md "`isUseSharedHitList`";
+#: bd dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12, er-effects-rs-7bye): a launch
+#: whose Bullet row has `isUseSharedHitList` or `attachEffectType` makes one DmgHitRecord
+#: (FUN_14038fe80) that its whole `numShoot` volley shares, and every child it makes on hit, expiry
+#: or interval copies it with the attack info (FUN_14039bba0 -> FUN_14038b740, +0x638) unless the
+#: parent's row has `attachEffectType`. A victim in the record is not hit again by any of them for
+#: its `dmgHitRecordLifeTime` (handed down from the first row above 0, `er-mechanics-spells.
+#: record_lifetime`). So Wave of Gold's 4000 -> 4001 -> ... -> 4045 travelling wave, which changes
+#: AtkParam row as it goes (905, 907, 906, 908 at FinalDamageRate 0.8 / 0.7 / 0.65 / 0.6), and
+#: Surge of Faith's flame 2371 with the 2375 it leaves, are one hit per victim each. `skill_hits`
+#: listed every AtkParam row of such a tree and the sums priced them all, until 2026-11-14.
+#: Not modelled: a member that still touches him once the record lifetime runs out hits again.
+#: Where a member can be made after the lifetime (its parents' lives summed past it), that may
+#: under-count: Smithing Art Spears (200002313 then 200002314, both penetrating and standing, list
+#: 1.0 s), Discus Hurl (list 0.1 s, 200002852 made at up to 0.55 s), Spearcall Ritual (list 0.2 s).
+#: Familial Rancor's and Bear Witness!'s late members follow a parent that dies on the hit or has
+#: flown on, so one hit stands there (`INFERRED`, regulation read 2026-11-14).
+HIT_LIST_NOTE = 'VERIFIED: FUN_14038fe80, FUN_14039bba0, FUN_14038b740'
+
+
+def cast_mask(hits, value=None):
+    """Per `skill_hits` row: whether it lands on one defender every row reaches, in one cast. The
+    hit priority records first (`record_mask`), then the bullet hit lists (`HIT_LIST_NOTE`): of
+    the rows one record holds (`hit_list`) only the one worth most lands, `value(row)` (default the
+    attack before defense), the first on a tie. Rows with neither a record nor a list all land, so
+    a caller's own rows (no `record`, no `hit_list`) keep their plain sum."""
+    if not any(h.get('record') is not None or h.get('hit_list') is not None for h in hits):
+        return [True] * len(hits)
+    value = value or (lambda h: sum(h.get('attack', {}).values()))
+    ok = record_mask(hits)
+    best = {}
+    for i, h in enumerate(hits):
+        key = h.get('hit_list')
+        if key is not None and ok[i] and (key not in best or value(h) > value(hits[best[key]])):
+            best[key] = i
+    return [ok[i] and (h.get('hit_list') is None or best[h['hit_list']] == i) for i, h in enumerate(hits)]
 
 
 PHYS_TYPE = {0: 'slash', 1: 'strike', 2: 'pierce', 3: 'standard'}
@@ -1287,9 +1335,12 @@ def pvp_damage(t, weapon_id, hits, defender, defense_module, damage_fn=None):
 
     `damage_fn(attack, phys_type, final_rate_row) -> damage` replaces the one-defender model:
     er-builds-pvp.py passes its corpus mean (`corpus_hit`) so a skill hit and a slot hit meet the
-    same defenders."""
+    same defenders.
+
+    The sum is one cast on one defender: only the rows `cast_mask` lands count (the hit priority
+    records and the bullet hit lists), each marked `lands`. Every row still gets its own
+    `pvp_damage_total`, which `skill_landing` plays with geometry."""
     w = t.reg.weapon[weapon_id]
-    total = 0.0
     for h in hits:
         attack = {el: v * w.get(f'vsPlayerDmgCorrectRate_{VS_PLAYER[el]}', 1.0)
                   for el, v in h['attack'].items()}
@@ -1302,7 +1353,10 @@ def pvp_damage(t, weapon_id, hits, defender, defense_module, damage_fn=None):
             d = defense_module.damage(attack, 100.0, defender, h['phys_type'], fr)['total']
         h['pvp_damage'] = round(d, 1)
         h['pvp_damage_total'] = d * h.get('count', 1)
-        total += h['pvp_damage_total']
+    total = 0.0
+    for h, ok in zip(hits, cast_mask(hits, lambda h: h['pvp_damage_total'])):
+        h['lands'] = ok
+        total += h['pvp_damage_total'] if ok else 0.0
     return total
 
 
@@ -2039,7 +2093,9 @@ def skill_release_part(t, weapon_id, sword_arts_id, ctx, level, defender=None, d
         return None
     first = float(rel[0]['first'])
     frames = release_frames(first, rel[0]['last'])
-    return {**parts[1], 'releases': [(r - first, w) for r, w in frames],
+    # 'roll': the attacker's roll frame after the release let go at the window's first frame, which
+    # a later release moves with it (`lookalike_pair` `other_roll`, version 25).
+    return {**parts[1], 'releases': [(r - first, w) for r, w in frames], 'roll': o.get('roll'),
             'shows': [skill_release_visible(t, sword_arts_id, rel[0]['anim'], r) for r, _ in frames]}
 
 
@@ -2084,11 +2140,10 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
         fp += t.arts[sword_arts_id][f"useMagicPoint_{follow['button'].upper()}"]
         buffs += [s['id'] for s in skill_buffs(t, prof, anim=follow['anim'])
                   if s.get('effect') == 'buff' and s['id'] not in buffs]
+    # Hits that share a hit priority record land once between them, a bullet launch's rows
+    # together (bd er-effects-rs-dnok, er-effects-rs-xb3i), and one row per bullet hit list
+    # (`HIT_LIST_NOTE`): `pvp_damage` sums what `cast_mask` lands.
     dmg = pvp_damage(t, weapon_id, hits, defender, def_module, damage_fn) if hits else 0.0
-    if hits:
-        # Hits that share a hit priority record land once between them, a bullet launch's rows
-        # together (bd er-effects-rs-dnok, er-effects-rs-xb3i).
-        dmg = sum(h['pvp_damage_total'] for h, ok in zip(hits, record_mask(hits)) if ok)
     stagger = None
     if hits and poises:
         top = 0.0
@@ -2210,6 +2265,86 @@ def launches(t, parent, child, ending):
 BULLET_FPS = 60
 #: Flight time simulated for a bullet whose `life` is -1 (no timer).
 BULLET_LIFE_CAP_S = 5.0
+#: How long a searching attached bullet hovers before its search may launch it (`VERIFIED`
+#: 2026-11-16, 1.16.2 named dump :8765 + eldenring-deobf.bin; addresses 1.16.2, not yet found on
+#: 2.7.2.0). FUN_14039ee00 gives a bullet that FUN_140399390 starts attached (`FollowType` 1, 2 or 5)
+#: the state list .data 0x142a25838 [1, 2, 3] when its row's `autoSearchNPCThinkID` (+0x64) is
+#: above 0, else [1, 3]: state 1 (CSBulletIns +0xd90, ctor FUN_1403ab900) is the hover, 2 the fly
+#: state on the `HitBulletID` row, 3 the explosion. State 1's begin (vtable 0x142a274a0 slot 3,
+#: 0x1403ab9c0) sets its timer (+0x28) to 2.0 (.data 0x143b15c20); its update (slot 2,
+#: 0x1403abc00) follows the owner (FUN_14039afc0) and, while the timer is above 0, only counts it
+#: down; at 0 or below it runs the bullet's targeting system (+0xb60, a CSTargetingSystemBase
+#: 0x14033cf30 over the owner interface at +0xb30, FUN_140399b80) and, with a target, files a
+#: launch request with CSBulletManager (FUN_1403992b0 -> FUN_1403a43d0). CSBulletManager::
+#: UpdateNetworking (0x1403a7d50) moves it to the list FUN_14039ef00 reads each UpdateBullet: that
+#: sets the target, turns the bullet toward it (FUN_140397840) and sets +0xd81 bit 1, and the
+#: hover ends into the fly state. The targeting system's think row is the state row's
+#: `autoSearchNPCThinkID` (FUN_1403ac750 -> GetNpcThinkParam at the launch), and the owner
+#: interface gives the bullet's position with the caster's facing (slot 7, 0x1403ac2d0:
+#: GetPhysicsOrientation of the owner's ChrCtrl) and team. So an endless searching row launches
+#: no sooner than this, and then when the caster faces a target into its think row's sight
+#: (NpcThinkParam 1000100, the spells' blades: eye_dist 13, eye_angX 60, eye_angY 50; 1000102,
+#: the Glintblade Phalanx ash: 13, 30, 12; which eye fields the targeting system reads is
+#: `INFERRED`, the accessors 0x140d41f80-0x140d42000 feed the AI perception code, FUN_14032c2b0,
+#: not traced from +0xb60). The model launches it at the earliest, `flight_moves`.
+SEARCH_ARM_S = 2.0
+#: `FollowType` values FUN_140399390 starts attached ((FollowType & 7) - 1 & 0xfa == 0 and not 6).
+SEARCH_ATTACHED = (1, 2, 5)
+
+
+def search_launched(r):
+    """Whether Bullet row `r` hovers attached and is launched by its own target search
+    (`SEARCH_ARM_S`): an endless row (`life` -1) that starts attached with an `autoSearchNPCThinkID`."""
+    return r.get('life', 0) < 0 and int(r.get('FollowType') or 0) in SEARCH_ATTACHED \
+        and (r.get('autoSearchNPCThinkID') or 0) > 0
+
+
+def search_cues(t, entries):
+    """Per entry of `fly_shots` output (its order, its `keys`), the seconds after the bullet event
+    from which that shot's timing is readable to the defender: 0.0 (the cast shows it), or, for a
+    shot a searching row launches (`search_launched`: its `HitBulletID` child, made when the hover
+    ends) and every shot below it, that launch. The caster picks the launch (`VERIFIED` above
+    `SEARCH_ARM_S`: the search faces the caster's facing), so the defender's reaction runs from it,
+    not from the cast (`burst_cue`); the model launches at the earliest, `SEARCH_ARM_S`."""
+    out = []
+    for i, e in enumerate(entries):
+        p = e[5]
+        if p < 0:
+            out.append(0.0)
+            continue
+        launched = search_launched(t.bullet.get(entries[p][0]['bullet']) or {}) and entries.keys[i][-1][1] == 'h'
+        out.append(float(e[2]) if launched else out[p])
+    return out
+
+
+def tree_cue(t, entries, chosen, start):
+    """`CUE` of a geometry made of `fly_shots` entries `chosen` (indices) of a bullet event at
+    `start` real seconds: the real frame its timing is readable from when every chosen shot is
+    under a search launch (`search_cues`), the earliest of them; None when one is not (the cast
+    shows it). A hovering searching row's own samples are left out of that choice: they follow the
+    cast point (`FollowType` 1) for the whole hover and never come toward him, so they carry no
+    timing to read (`INFERRED`; the Glintblade Phalanx ash's root 2300 carries its blades'
+    AtkParam 300200867, so a hit's entries include it)."""
+    cues = search_cues(t, entries)
+    got = [cues[i] for i in chosen if not search_launched(t.bullet.get(entries[i][0]['bullet']) or {})]
+    if not got or min(got) <= 0.0:
+        return None
+    return (start + min(got)) * TAE_FPS
+
+
+def burst_cue(geoms, cue=0.0):
+    """The real frame a defender reads burst `geoms`' timing from: the latest of `cue` (the clip's
+    start, or the part's) and the earliest frame any geometry of the burst is readable from. A
+    geometry is readable from the later of its search launch (`CUE`, `tree_cue`) and the press
+    the attacker times to start the attack (`PRESS_CUE`: a stance's button or a hand-over he
+    times, `skill_commit` 'cue', which `er-mechanics-spells.SpellModel.skill_attack` puts on every
+    geometry of the skill, version 23), else from 0. So a burst is read from a search launch only
+    when every geometry of it carries one, as before. `reaction_outcome`, `_volley_burst`,
+    `_burst_presses`, `er-mechanics-spells.CastThreats.dynamic_outcome` and
+    `er-mechanics-attack-similarity._reaction_form` time the dodge from it; a strike or a strafe
+    needs no timing read and runs from the attack's start (`FollowupModel.strafe_escape`)."""
+    rs = [max(g.get('CUE') or 0.0, g.get('PRESS_CUE') or 0.0) for g in geoms if g is not None]
+    return max(cue, min(rs)) if rs else cue
 #: Interval children simulated per parent, spread over its flight.
 BULLET_INTERVAL_CAP = 12
 #: Slack on `interval_frames`' frame arithmetic, in frames: a child due on the very update its
@@ -3266,9 +3401,13 @@ def _lay_rows(r, start, d, v0, moves, ground):
 def flight_moves(r, life=None):
     """How many moves a bullet of row `r` makes over `life` seconds (default the row's): an endless
     one (life < 0) `BULLET_LIFE_CAP_S`' worth, one of life 0 a single update. The bullet also moves
-    on the frame its life runs out (`VERIFIED` KillBullet 0x14039f0c0 path): life / dt plus that one."""
+    on the frame its life runs out (`VERIFIED` KillBullet 0x14039f0c0 path): life / dt plus that one.
+    A searching attached row (`search_launched`) hovers `SEARCH_ARM_S`, the earliest its search
+    launches it."""
     dt = 1.0 / BULLET_FPS
     life = r['life'] if life is None else life
+    if life < 0 and search_launched(r):
+        life = SEARCH_ARM_S
     life = life if life > 0 else (BULLET_LIFE_CAP_S if life < 0 else dt)
     return max(1, round(life / dt)) + 1
 
@@ -3698,7 +3837,7 @@ def path_touches(path, radius, target):
 
 
 def fly_members(t, bt, n=1, fire=0.0, launch=None, defender=None, aim=True, held=None, cap=BULLET_INTERVAL_CAP,
-                margin=0.0):
+                margin=0.0, bound=None):
     """Every bullet of tree `bt`, fired at real frame `fire` from `launch` (`bullet_launch`; None the
     fixed placement), flown against `n` defenders at once: `defender(T, who)` -> (x, z, vulnerable),
     arrays of the shape of `T`, where member `who` is at real frames `T` and whether he can be hit
@@ -3733,7 +3872,15 @@ def fly_members(t, bt, n=1, fire=0.0, launch=None, defender=None, aim=True, held
       over its life (None: all).
     `held` (n,) moves each member's root shot that far back toward the caster (the defender's body
     holding him back, `contact_geometry`). `margin`: the most a member moves in one move of a bullet
-    (for `_carrier_touch`'s filter)."""
+    (for `_carrier_touch`'s filter).
+
+    `bound` (n,), None for none: per member, a real frame the caller already has a touch at (it
+    may lower it as entries come in, `_homing_entries` `least`). A child is made only for the
+    members whose bound is past the frame the child is made at: every touch of the child and of
+    what it makes comes at or after that frame (a shot's samples start at its `t0`, and a child's
+    `t0` is its parent's plus a part of its flight), so for a caller that keeps only each member's
+    earliest touch the children left out change nothing. The children made, and every other
+    member's flights, are the same: each member flies on its own."""
     import numpy as np
     pos0, yaw0, pitch0, root_aims = _launch_start(launch)
     owner = np.array(yaw_frame(yaw0))
@@ -3761,7 +3908,12 @@ def fly_members(t, bt, n=1, fire=0.0, launch=None, defender=None, aim=True, held
             # Where each member is, and whether he can be hit, at every position the row's shots
             # take (his place changes once a real frame, so these are all he does while they fly).
             T = fire + (t0[None, :] + np.arange(window + 1)[:, None] / BULLET_FPS) * TAE_FPS
-            track = tuple(np.reshape(a, (window + 1, m)) for a in defender(T.ravel(), np.tile(who, window + 1)))
+            # Read on `T` (positions, members) against the members as one row: `defender` is
+            # elementwise in (frame, member), so each entry is the one the flat read of `T` against
+            # the members tiled gives, without the tiled member arrays (until 2026-11-21 flat: the
+            # line was 29% of Founding Rain of Stars' set, py-spy, .worktrees/haima
+            # target/haima/prof-frs.txt). Laid out as the flat read's reshape was, C order.
+            track = tuple(np.ascontiguousarray(np.broadcast_to(a, T.shape)) for a in defender(T, who[None, :]))
         # Members whose shots read the same (where it is made, its frame, speed and time, and the
         # member's place and invincibility over its flight) fly the same and touch him alike: each
         # such set is flown once, by its first member (`fly`), and `inv` hands it back to all.
@@ -3841,25 +3993,60 @@ def fly_members(t, bt, n=1, fire=0.0, launch=None, defender=None, aim=True, held
                     cfr = _bchild_frame(t.bullet[hit['bullet']], _frames_at(P, end, fly, fr, D, S, natural, moves),
                                         owner)
                     u = inv[ms]
-                    yield from fire_row(hit, cpos[u], cfr[u], None if cs is None else cs[u], (ut0 + end / BULLET_FPS)[u],
+                    tc = (ut0 + end / BULLET_FPS)[u]
+                    if bound is not None:
+                        # Members already touched by the frame this child is made at (`bound`).
+                        live = bound[who[ms]] > fire + tc * TAE_FPS
+                        ms, u, tc = ms[live], u[live], tc[live]
+                    yield from fire_row(hit, cpos[u], cfr[u], None if cs is None else cs[u], tc,
                                         who[ms], depth + 1, rs, me, ekey, fan, (0, 1), ('h', 0))
             if ivl is not None:
+                # Each flight's interval children are its own (2026-11-18): the bullet makes them on
+                # its own timer over its own life (`interval_frames`, `VERIFIED` FUN_14039ab10), so
+                # the frames come from its own length `L[f]`, one due on the move it dies on its
+                # defender is not made, and the cap and the draw slots (`shot_draws`: the n draws one
+                # bullet makes take the n strata) count the children it makes. They were taken from
+                # `L.max()` over every flight of the call, so a flight's children and draws read its
+                # batch-mates: tree 10672000 against a roll carried 0.3 m back at 4 m from frame 72
+                # made 12 children alone and 20 in its 40-start bucket, and 51 answers of trees
+                # 10672000 and 10672005 read another number on a two-row grid than on the whole one
+                # (target/wf/verify-goldenland probe.py, solo2.py). Flights that make the same
+                # children are flown together, each set by its own slots; two sets yield entries of
+                # one key for disjoint members (`_homing_entries` takes the least).
                 lo, hi = r['intervalCreateTimeMin'], r['intervalCreateTimeMax']
-                full = interval_frames(r, int(L.max()), (lo + hi) / 2, first, life)
-                picks = range(len(full)) if cap is None or len(full) <= cap else \
-                    [round(q * (len(full) - 1) / (cap - 1)) for q in range(cap)]
                 crow = t.bullet[ivl['bullet']]
-                for jj in picks:
-                    pj = full[jj]
-                    ok = np.where(code == 2, pj < L - 1, pj <= L - 1)
-                    ms = np.nonzero(ok[inv])[0]
-                    if not len(ms):
+                made = {}
+                sets = {}
+                for f in range(len(fly)):
+                    lf = int(L[f])
+                    if lf not in made:
+                        made[lf] = interval_frames(r, lf, (lo + hi) / 2, first, life)
+                    full = made[lf]
+                    if code[f] == 2 and full and full[-1] == lf - 1:
+                        full = full[:-1]
+                    sets.setdefault(tuple(full), []).append(f)
+                for full, fs in sorted(sets.items(), key=lambda kv: (len(kv[0]), kv[0])):
+                    if not full:
                         continue
-                    sfr = _bchild_frame(crow, _frames_at(P, np.full(len(fly), pj), fly, fr, D, S,
-                                                         (pj == L - 1) & natural, moves), owner)
+                    picks = range(len(full)) if cap is None or len(full) <= cap else \
+                        [round(q * (len(full) - 1) / (cap - 1)) for q in range(cap)]
+                    mine = np.zeros(len(fly), bool)
+                    mine[fs] = True
+                    ms = np.nonzero(mine[inv])[0]
                     u = inv[ms]
-                    yield from fire_row(ivl, P[pj, u], sfr[u], None, ut0[u] + pj / BULLET_FPS, who[ms], depth + 1,
-                                        rs, me, ekey, fan, (jj, len(full)), ('i', jj))
+                    for jj in picks:
+                        pj = full[jj]
+                        mj, uj, tc = ms, u, ut0[u] + pj / BULLET_FPS
+                        if bound is not None:
+                            # Members already touched by the frame this child is made at (`bound`).
+                            live = bound[who[ms]] > fire + tc * TAE_FPS
+                            if not live.any():
+                                continue
+                            mj, uj, tc = ms[live], u[live], tc[live]
+                        sfr = _bchild_frame(crow, _frames_at(P, np.full(len(fly), pj), fly, fr, D, S,
+                                                             (pj == L - 1) & natural, moves), owner)
+                        yield from fire_row(ivl, P[pj, uj], sfr[uj], None, tc, who[mj],
+                                            depth + 1, rs, me, ekey, fan, (jj, len(full)), ('i', jj))
 
     P0 = np.tile(cast, (n, 1))
     if held is not None:
@@ -4293,15 +4480,28 @@ def _reaction(level):
 def _hit_contacts(t, weapon_id, sword_arts_id, hits):
     """Per hit: (start real seconds, contact(distance_at) -> real seconds or None, source,
     `contact_geometry` of the same samples). A hit with no pose or flight gets a geometry that
-    touches anyone at its window's start (`INFERRED`, the landing's own rule)."""
+    touches anyone at its window's start (`INFERRED`, the landing's own rule). A measured geometry
+    carries its clip's whole root motion as `ADV` (`clip_advance`), where the attacker ends up for
+    the punish (`attack_advance`)."""
     import numpy as np
     out = []
-    for start, contact, source, raw in _hit_contacts_raw(t, weapon_id, sword_arts_id, hits):
+    cat = SKILL_TAE_BASE + t.arts[sword_arts_id]['swordArtsTypeNew']
+    # A geometry carries its clip's turn rules (`TURN`): the attacker's facing follows them as he
+    # tracks the defender (`_facing`, version 27).
+    for h, (start, contact, source, raw, cue) in zip(hits, _hit_contacts_raw(t, weapon_id, sword_arts_id, hits)):
         geom = None
         if source == 'pose':
             geom = contact_geometry(entries=raw)
         elif source == 'flight':
             geom = contact_geometry(bullet_points=raw)
+            if geom is not None and cue is not None:
+                geom['CUE'] = cue
+        if geom is not None and h.get('anim') is not None:
+            adv = clip_advance(cat, h['anim'])
+            if adv is not None:
+                geom['ADV'] = adv
+            # The clip's turn rules, which the attacker's facing follows (`clip_turn`, version 27).
+            geom['TURN'] = clip_turn(cat, h['anim'], (skill_tae(t, sword_arts_id) or {}).get(h['anim']))
         if source == 'timing':
             geom = {'T': np.array([start * TAE_FPS]), 'X': np.zeros(1), 'Z': np.full(1, -99.0),
                     'R': np.full(1, 1e3), 'PK': np.full(1, -math.inf)}
@@ -4313,7 +4513,8 @@ def _hit_contacts_raw(t, weapon_id, sword_arts_id, hits):
     """Per hit: (start real seconds, contact(distance_at) -> real seconds or None, source, the
     samples behind it: `window_points` entries for 'pose', [(seconds, x, z, disc, peak, launch
     seconds)] for 'flight': each bullet launched where `skill_bullet_launch` puts it and held back
-    by the defender's body as the caster was at the launch (`bullet_launch`)."""
+    by the defender's body as the caster was at the launch (`bullet_launch`), and the flight's
+    `CUE` (`tree_cue`: the real frame a search launches its shots, None for the cast's timing)."""
     _, reach_mod, _ = _pose()
     cat = SKILL_TAE_BASE + t.arts[sword_arts_id]['swordArtsTypeNew']
     tae = skill_tae(t, sword_arts_id) or {}
@@ -4323,7 +4524,7 @@ def _hit_contacts_raw(t, weapon_id, sword_arts_id, hits):
     for h in hits:
         events = tae.get(h.get('anim')) or []
         start = ATK.clip_to_real(events)(h['frame'] / TAE_FPS) if events else h['frame'] / TAE_FPS
-        contact, source, raw = None, 'timing', None
+        contact, source, raw, cue = None, 'timing', None, None
         if h['kind'] == 'melee':
             row = reach_mod.skill_reach(weapon_id, cat, h['anim'], h['judge'])
             entries = ((row or {}).get('window_contacts') or {}).get((h['frame'], h['judge']))
@@ -4341,6 +4542,8 @@ def _hit_contacts_raw(t, weapon_id, sword_arts_id, hits):
                 pts = []
                 launch = skill_bullet_launch(t, weapon_id, sword_arts_id, h['anim'], h['frame'], h['root_bullet'])
                 peak = launch['peak'] if launch else -math.inf
+                entries = fly_shots(t, root, None, launch)
+                cue = tree_cue(t, entries, [i for i, e in enumerate(entries) if e[0]['atk_row'] == h['atk_row']], start)
                 for node, path, t0, _ in fly_tree(t, root, launch=launch):
                     if node['atk_row'] != h['atk_row']:
                         continue
@@ -4370,7 +4573,7 @@ def _hit_contacts_raw(t, weapon_id, sword_arts_id, hits):
             # No pose or no flight for this hit: it is taken to touch when its window opens.
             def contact(dist_at, start=start):
                 return start
-        out.append((start, contact, source, raw))
+        out.append((start, contact, source, raw, cue if source == 'flight' else None))
     return out
 
 
@@ -4419,6 +4622,7 @@ def skill_landing(t, weapon_id, sword_arts_id, hits, poises, distances=LANDING_D
                   for broken in (True, False)}
         info.append({'i': idx[k], 'contact': contacts[k][1], 'start': contacts[k][0],
                      'rec': h.get('record'), 'prio': h.get('priority'), 'created': h.get('created', idx[k]),
+                     'list': h.get('hit_list'),
                      'dmg': h.get('pvp_damage_total', 0.0),
                      'poise': (h.get('poise') or 0.0) * (fr['saRate'] if fr else 1.0),
                      'level': levels[True],
@@ -4442,6 +4646,7 @@ def skill_landing(t, weapon_id, sword_arts_id, hits, poises, distances=LANDING_D
 
         landed, cum, count, lock_end, last = [], 0.0, 0, None, None
         held = {}                           # hit priority record -> its entry (`ATK.record_contact`)
+        lists = set()                       # bullet hit lists that have hit him (`HIT_LIST_NOTE`)
         pending = list(info)
         while pending:
             # The next hit to reach him, from where the earlier ones left him (a swing whose
@@ -4454,6 +4659,10 @@ def skill_landing(t, weapon_id, sword_arts_id, hits, poises, distances=LANDING_D
                 break
             tc, k = timed[0]
             x = pending.pop(k)
+            # A bullet whose hit list already holds him does not touch him again
+            # (`HIT_LIST_NOTE`), so it registers nothing in a priority record either.
+            if x['list'] is not None and x['list'] in lists:
+                continue
             # A hit whose priority record another attack holds on him at an equal or lower
             # priority does nothing; a row of the holding launch lands (bd er-effects-rs-dnok,
             # er-effects-rs-xb3i).
@@ -4463,9 +4672,13 @@ def skill_landing(t, weapon_id, sword_arts_id, hits, poises, distances=LANDING_D
                     lock_end is None or tc * TAE_FPS >= lock_end):
                 break
             landed.append(x)
+            if x['list'] is not None:
+                lists.add(x['list'])
             last = tc
             cum += x['poise']
-            broken = cum > p
+            # Toughness at 0 or below breaks (`FUN_140486bf0`, `VERIFIED`; `CaughtModel` and
+            # `er-mechanics-interrupt` read it so); `>` until 2026-11-16.
+            broken = cum >= p
             if broken:
                 cum = 0.0
             react, move = x['on'][broken]
@@ -4550,15 +4763,17 @@ def skill_reaction(t, weapon_id, sword_arts_id, hits, land, offset=0.0, cue=0.0,
         return ix, [c[0] for c in con], [shift_geometry(g, at) for g in gs]
     idx, starts, geoms = shapes(hits, offset)
     other = shapes(look['hits'], float(look['offset']))[2] if look is not None and look.get('hits') else None
-    pk = [g['PK'][np.isfinite(g['PK'])] for g in geoms if g is not None]
-    advance = max((float(p.max()) for p in pk if len(p)), default=0.0)
+    # Where the part's root motion leaves the attacker, held back by his body (`attack_advance`,
+    # `advance_at`): the largest `PK` alone overshot him when the travel passed the distance
+    # (Savage Claws, 8.93 m, at 2 m).
+    advance = attack_advance(geoms)
     total, outs = 0.0, []
     for d in land['used']:
         sh = land['share_by_distance'][d]
         value = [sum(hits[idx[j]].get('pvp_damage_total', 0.0) * sh[idx[j]]
                      for j in range(len(idx)) if starts[j] >= starts[k]) for k in range(len(idx))]
-        plan = lookalike_pair(other, d, float(look['offset']), look.get('releases'), look.get('shows')) \
-            if other is not None else None
+        plan = lookalike_pair(other, d, float(look['offset']), look.get('releases'), look.get('shows'),
+                              look.get('roll')) if other is not None else None
         o = reaction_outcome(geoms, value, d, cue, my_roll=my_roll, advance=advance, strikes=strikes, plan=plan)
         outs.append(o)
         total += (1.0 - share) * land['by_distance'][d]['dmg'] + share * o['value']
@@ -4711,7 +4926,8 @@ def _jt8_unconditional(e):
 def evasion_motion(category, anim):
     """One dodge animation, in real frames from its first frame: `iframes` (the frame the
     unconditional invincibility from frame 0 ends), `ready` (first R1 cancel), `dodge` (first
-    dodge cancel), and `path` [(x, z)] root motion per real frame (-Z forward). Cached."""
+    dodge cancel), `move` (first move cancel: the first frame he can walk or run, `punish_lead`),
+    and `path` [(x, z)] root motion per real frame (-Z forward). Cached."""
     key = (category, anim)
     if key in _MOTION:
         return _MOTION[key]
@@ -4738,7 +4954,7 @@ def evasion_motion(category, anim):
         x, _, z, _ = samples[j][1]
         path.append((x, z))
     out = {'anim': f'a{category:03d}_{anim:06d}', 'iframes': round(end, 1), 'ready': real['r1'],
-           'dodge': real['dodge'], 'path': path,
+           'dodge': real['dodge'], 'move': real['move'], 'path': path,
            'distance': round(math.hypot(*path[-1]), 2)}
     _MOTION[key] = out
     return out
@@ -4747,6 +4963,22 @@ def evasion_motion(category, anim):
 def roll_motion():
     """`evasion_motion` of the four medium-roll directions."""
     return [m for m in (evasion_motion(ROLL_CATEGORY, a) for a in ROLL_ANIMS) if m]
+
+
+def dodge_families(air=False):
+    """The families of moves a reacting defender picks among (`sequence_outcome`, `volley_outcome`,
+    `FollowupModel`, attack-similarity's `OutcomeForm`): each medium-roll direction alone, and the
+    jump when a hit is `AIR`. Knowing the attack he takes the one that leaves the attacker least,
+    as he picks the jump over the roll; the directions are the lock-on's, relative to him facing
+    the attacker (`roll_motion`). His first dodge's timing within a family is still his lookalike
+    group's (`lookalike_plan`, one plan per family). Until version 22 the four directions were one
+    family pressed a quarter each (`INFERRED`, section 14a), which against Divine Beast Frost
+    Stomp, whose side rolls always escape and whose forward and back rolls never do, gave an evade
+    of 0.5 where any defender picks a side (`MEASURED` 2026-11-16)."""
+    out = [[m] for m in roll_motion()]
+    if air:
+        out.append([jump_motion()])
+    return out
 
 
 #: The jump in place, a000 `202000` (`er-mechanics-jump.JUMP_KINDS`, stick at rest: no travel).
@@ -4889,6 +5121,8 @@ class Opponents:
         self.mean_hp = float((self.w * self.hp).sum())
         self.mean_hp_landed = float((self.w * self.hp * self.land).sum())
         self._tables = {}
+        # {(row, move, first start, strike, reach): `_second_roll`} (version 27).
+        self._seconds = {}
 
     def _escapes(self, dist, iframes, start, active, reach, starts):
         """[len(starts)]: a dodge started at each of `starts` (real frames from the opener's start)
@@ -4903,22 +5137,46 @@ class Opponents:
         inv = (u >= 0) & (u < iframes)
         return np.all(inv | (d > reach), axis=1)
 
-    def _table(self, moves, key):
+    def _table(self, moves, key, strike=None, reach_me=None):
         """Every dodge the pool's attacks draw from a defender who waits, flattened: weight `W`
         (row x press x direction), start `S`, `FIRST` (the opener missed), `SECOND` (the chained
         hit missed too, or there is none), the direction's R1 frame `READY`, `NEAR` (the dodger's
-        distance at that frame from where the attacker's advance left him) and the row's `END`.
+        distance at that frame from where the attacker's advance left him), its move cancel `MOVE`
+        and `FAR` (that distance at the move cancel), `BF` / `BD` the frames between the two and
+        that distance on each (padded with nan / inf; `punish_lead`'s rule) and the row's `END`.
         The dodge starts where `dodge_presses` puts it over the grid of starts that escape the
-        opener. Cached on `key`."""
+        opener, aimed (version 26, the rule every outcome's dodge follows since version 25) for what
+        each press is worth to him: escaping the opener, plus his punish from it when `strike` (his
+        strike frames) and `reach_me` are given, read as `dodge_value` reads it (`_ExchangeGain`).
+        Until version 26 the openers were timed by escape alone. Cached on (`key`, `strike`,
+        `reach_me`).
+
+        Version 27: `MI` the direction's index in `moves` (he picks one per opener, `dodge_value`), and
+        for a press that escapes the opener but whose roll does not escape the chained hit, his second
+        roll of the same direction out of the first, as every outcome chains them (`dodge_chain`'s
+        rule, `_second_roll`): `ESC2` the share of its presses that escape the chained hit, `PUN2` the
+        share that escape it and punish from that roll (with `strike` and `reach_me`). Until then the
+        chained hit's second dodge was the opener's single-hit evade share (`single`, still kept)."""
         np = self.np
+        key = (key, strike, reach_me)
         if key in self._tables:
             return self._tables[key]
-        cols = {k: [] for k in ('W', 'S', 'FIRST', 'SECOND', 'READY', 'NEAR', 'END', 'ROW')}
+        cols = {k: [] for k in ('W', 'S', 'FIRST', 'SECOND', 'READY', 'NEAR', 'MOVE', 'FAR', 'BF', 'BD', 'END',
+                                'ROW', 'MI', 'ESC2', 'PUN2')}
         single = np.zeros(len(self.w))
-        for m in moves:
-            dist = np.array([math.hypot(x, ENGAGE_DISTANCE_M + z) for x, z in m['path']])
+
+        def frames(m):
             ready = m['ready'] if m['ready'] is not None else len(m['path'])
+            walk = ready if m.get('move') is None else max(float(m['move']), ready)
+            return ready, walk, list(range(int(ready) + 1, int(walk)))
+        width = max([len(frames(m)[2]) for m in moves] + [1])
+        for mi, m in enumerate(moves):
+            dist = np.array([math.hypot(x, ENGAGE_DISTANCE_M + z) for x, z in m['path']])
+            ready, walk, between = frames(m)
             rx, rz = m['path'][min(int(ready), len(m['path']) - 1)]
+            mx, mz = m['path'][min(int(walk), len(m['path']) - 1)]
+            bf = np.full(width, np.nan)
+            bf[:len(between)] = between
             for i in range(len(self.w)):
                 grid = np.arange(0.0, self.startup[i] + self.active[i] + 1.0, DODGE_STEP)
                 if self.timing == 'uniform':
@@ -4926,7 +5184,15 @@ class Opponents:
                                for tau in range(DODGE_TIMING_FRAMES)]
                 else:
                     ok = self._escapes(dist, m['iframes'], self.startup[i], self.active[i], self.reach[i], grid)
-                    presses = dodge_presses(ok, self.cue[i])
+                    if strike is not None and reach_me is not None:
+                        # What escaping from each start is worth to him: 1, plus 1 where he punishes
+                        # from it. That rises where a press first escapes the chained hit too, so it
+                        # goes in as values (`dodge_presses` `val`, every rise an aim tried), not as a
+                        # `PressGain`, whose search assumes a gain that only falls as the press comes later.
+                        val = ok * (1.0 + _ExchangeGain(self, i, m, dist, strike, reach_me)(grid))
+                        presses = dodge_presses(ok, self.cue[i], val=val)
+                    else:
+                        presses = dodge_presses(ok, self.cue[i])
                 s = np.array([p for p, _ in presses])
                 w = np.array([q for _, q in presses]) * self.w[i] / len(moves)
                 first = self._escapes(dist, m['iframes'], self.startup[i], self.active[i], self.reach[i], s)
@@ -4937,38 +5203,141 @@ class Opponents:
                 cols['SECOND'].append(second), cols['READY'].append(np.full(len(s), float(ready)))
                 adv = self.advance[i] if self.timing == 'react' else 0.0
                 cols['NEAR'].append(np.full(len(s), math.hypot(rx, ENGAGE_DISTANCE_M + rz - adv)))
+                cols['MOVE'].append(np.full(len(s), float(walk)))
+                cols['FAR'].append(np.full(len(s), math.hypot(mx, ENGAGE_DISTANCE_M + mz - adv)))
+                bd = np.full(width, np.inf)
+                bd[:len(between)] = [math.hypot(m['path'][f][0], ENGAGE_DISTANCE_M + m['path'][f][1] - adv)
+                                     for f in between]
+                cols['BF'].append(np.tile(bf, (len(s), 1))), cols['BD'].append(np.tile(bd, (len(s), 1)))
                 cols['END'].append(np.full(len(s), self.end[i])), cols['ROW'].append(np.full(len(s), i))
+                cols['MI'].append(np.full(len(s), mi))
+                # His second roll where the first escapes the opener and not the chained hit.
+                esc2, pun2 = np.zeros(len(s)), np.zeros(len(s))
+                for j in np.nonzero(first & ~second)[0].tolist():
+                    esc2[j], pun2[j] = self._second_roll(i, m, float(s[j]), strike, reach_me)
+                cols['ESC2'].append(esc2), cols['PUN2'].append(pun2)
         tab = {k: np.concatenate(v) for k, v in cols.items()}
         tab['single'] = single
         self._tables[key] = tab
         return tab
 
-    def dodge_value(self, moves, key, strike, reach_me, hp_me):
-        """Expected HP of answering one opponent string with `moves` (the directions equally used,
-        `INFERRED`), the dodge timed by a defender who waits and reacts (`_table`). Avoided: the
-        opener when `FIRST`; the chained hit when the opener was avoided and either `SECOND` or
-        another dodge of the same kind catches it (that opponent's single-hit evade share).
-        Punish: `hp_me` when the string needed one dodge, the dodger's R1 cancel plus `strike`
-        comes before the attacker's `END`, and he is within `reach_me` of the attacker then."""
+    def _second_roll(self, i, m, s, strike=None, reach_me=None):
+        """(share of his presses that escape row `i`'s chained hit, share that escape it and punish)
+        for a defender who escaped the opener with move `m` from real frame `s` and whose roll does not
+        escape the chained hit (`_table`, version 27): he rolls the same direction again, as every
+        outcome chains its rolls (`dodge_chain`): no sooner than `s` plus `m`'s dodge cancel, aimed by
+        `dodge_presses` from the row's cue over the starts that escape it, out of where the first roll
+        has him at that start (its whole clip, `track_extend`), facing the attacker (`oriented`; the
+        attacker `ENGAGE_DISTANCE_M` ahead, standing, as `_escapes` takes him). Before the second roll
+        starts he is on the first, which covers what its invincibility or distance covers. His punish
+        from it reads `_ExchangeGain`'s lead (the R1 cancel in reach, else in reach before the move
+        cancel, else the move cancel plus his run in), from where it starts, against the row's
+        advance and `END`."""
         np = self.np
-        tab = self._table(moves, key)
+        key = (i, m['anim'], round(s, 6), strike, reach_me)
+        got = self._seconds.get(key)
+        if got is not None:
+            return got
+        P = np.asarray(m['path'], float)
+        n = len(P)
+        iframes, reach2 = float(m['iframes']), self.reach2[i]
+        fl = s + dodge_end(m)
+        f0 = self.startup[i] + self.gap2[i]
+        frames = f0 + np.arange(max(1, int(self.active2[i])))
+        grid = np.arange(0.0, f0 + max(1, int(self.active2[i])) + 1.0, DODGE_STEP)
+        u1 = frames - s
+        p1 = P[np.clip(np.floor(u1).astype(int), 0, n - 1)]
+        cov1 = ((u1 >= 0) & (u1 < iframes)) | (np.hypot(p1[:, 0], ENGAGE_DISTANCE_M + p1[:, 1]) > reach2)
+        # Where the first roll has him at each second start, and the second's turn toward the attacker.
+        q = P[np.clip(np.floor(grid - s).astype(int), 0, n - 1)]
+        r = np.hypot(q[:, 0], ENGAGE_DISTANCE_M + q[:, 1])
+        c, sn = (ENGAGE_DISTANCE_M + q[:, 1]) / r, -q[:, 0] / r
+        u2 = frames[None, :] - grid[:, None]
+        k2 = np.clip(np.floor(u2).astype(int), 0, n - 1)
+        x2 = q[:, 0:1] + c[:, None] * P[k2, 0] - sn[:, None] * P[k2, 1]
+        z2 = q[:, 1:2] + sn[:, None] * P[k2, 0] + c[:, None] * P[k2, 1]
+        cov2 = (u2 < iframes) | (np.hypot(x2, ENGAGE_DISTANCE_M + z2) > reach2)
+        ok2 = np.all(np.where(u2 < 0, cov1[None, :], cov2), axis=1) & (grid >= fl - 1e-9)
+        presses = dodge_presses(ok2, self.cue[i], floor=fl)
+        esc = pun = 0.0
+        adv = self.advance[i] if self.timing == 'react' else 0.0
+        ready = m['ready'] if m['ready'] is not None else n
+        walk = ready if m.get('move') is None else max(float(m['move']), ready)
+        for s2, w in presses:
+            j = int(round(s2 / DODGE_STEP))
+            if not (0 <= j < len(grid)) or not ok2[j]:
+                continue
+            esc += w
+            if strike is None or reach_me is None:
+                continue
+            qx, qz, cj, sj = q[j, 0], q[j, 1], c[j], sn[j]
+
+            def gap(f):
+                px_, pz_ = P[min(int(f), n - 1)]
+                return math.hypot(qx + cj * px_ - sj * pz_, ENGAGE_DISTANCE_M + qz + sj * px_ + cj * pz_ - adv)
+            if gap(ready) <= reach_me:
+                lead = float(ready)
+            else:
+                between = [f for f in range(int(ready) + 1, int(walk)) if gap(f) <= reach_me]
+                lead = float(between[0]) if between else \
+                    float(walk) + max(0.0, gap(walk) - reach_me) * _neutral().frames_per_metre()
+            if s2 + lead + float(strike) < self.end[i]:
+                pun += w
+        self._seconds[key] = (esc, pun)
+        return esc, pun
+
+    def dodge_value(self, moves, key, strike, reach_me, hp_me):
+        """Expected HP of answering one opponent string with `moves`, the dodge timed by a defender
+        who waits and reacts (`_table`). Knowing the opener he takes, per opponent row, the
+        direction of `moves` that is worth most to him (version 27, as every outcome picks his
+        direction, `dodge_families`; until then the directions were equally used, `INFERRED`).
+        Avoided: the opener when `FIRST`; the chained hit when the opener was avoided and either
+        `SECOND` or his second roll out of the first escapes it (`ESC2`, version 27; until then the
+        opponent's single-hit evade share). Punish: `hp_me` from his last escaping roll when his
+        strike lands before the attacker's `END`: pressed at the dodge's R1 cancel when he is within
+        `reach_me` of the attacker then, else at its move cancel plus the run from there
+        (`punish_lead`'s rule); from the second roll, `PUN2`."""
+        np = self.np
+        tab = self._table(moves, key, strike, reach_me)
         row = tab['ROW'].astype(int)
         first, second = tab['FIRST'], tab['SECOND']
-        both = first * (second + ~second * tab['single'][row])
-        avoided = float((tab['W'] * (first * self.hp[row] + both * self.hp2[row])).sum())
+        both = first * (second + ~second * tab['ESC2'])
+        av_each = tab['W'] * (first * self.hp[row] + both * self.hp2[row])
         # A dodger left outside his own reach runs the rest before he strikes (the neutral model's
-        # run speed, `er-mechanics-neutral.frames_per_metre`), so a whiff can be punished from
+        # run speed, `er-mechanics-neutral.frames_per_metre`), from his dodge's move cancel and
+        # from where the dodge has put him then (`punish_lead`), so a whiff can be punished from
         # outside it when the attacker's recovery is long enough.
-        close = np.maximum(0.0, tab['NEAR'] - reach_me) * _neutral().frames_per_metre()
-        pun = first & second & (tab['S'] + tab['READY'] + close + strike < tab['END'])
-        p_punish = float((tab['W'] * pun).sum())
+        inside = tab['NEAR'] <= reach_me
+        # The first frame between the R1 and the move cancel the dodge has carried him into reach.
+        reached = tab['BD'] <= reach_me
+        between = reached.any(axis=1)
+        at = tab['BF'][np.arange(len(between)), np.argmax(reached, axis=1)]
+        lead = np.where(inside, tab['READY'], np.where(between, at, tab['MOVE']))
+        close = np.where(inside | between, 0.0,
+                         np.maximum(0.0, tab['FAR'] - reach_me) * _neutral().frames_per_metre())
+        pun = (first & second & (tab['S'] + lead + close + strike < tab['END'])) + (first & ~second) * tab['PUN2']
+        # Per opener, the direction worth most to him (avoided plus punished); the first of equals.
+        M = len(moves)
+        mi = tab['MI'].astype(int)
+        V = np.zeros((len(self.w), M))
+        np.add.at(V, (row, mi), av_each + tab['W'] * pun * hp_me)
+        best = np.zeros(len(self.w), int)
+        for r_ in range(len(self.w)):
+            for k_ in range(1, M):
+                if V[r_, k_] > V[r_, best[r_]] + 1e-12:
+                    best[r_] = k_
+        # The weights carried 1 / M for each direction: the one he takes carries the row's whole.
+        sel = (mi == best[row]) * float(M)
+        avoided = float((sel * av_each).sum())
+        p_punish = float((sel * tab['W'] * pun).sum())
         return {'hp': avoided + p_punish * hp_me, 'evade_hp': avoided, 'punish_hp': p_punish * hp_me,
-                'p_evade': float((tab['W'] * first).sum()), 'p_punish': p_punish}
+                'p_evade': float((sel * tab['W'] * first).sum()), 'p_punish': p_punish}
 
     def buff_answer_value(self, start, ready, duration_s, taken, uninterruptible, strike, reach_me, hp_me):
         """Expected HP of answering one opponent string with a defensive buff cast on reaction, the
         way `dodge_value` answers it with a dodge: he presses at the opener's cue plus his reaction
-        (`reaction_delays`), the buff is live from `start` frames later for `duration_s`; every hit
+        (`reaction_delays`) and his timing error (`press_errors`, version 28), the buff is live from
+        `start` frames later for `duration_s`; every hit
         whose first live frame falls inside it is taken at `taken`, the others whole (he does not
         dodge). Under an `uninterruptible` buff his own attack comes out at `ready` + `strike` (plus
         running to `reach_me` from where the attacker's advance left him) and punishes when that is
@@ -4978,7 +5347,8 @@ class Opponents:
         near = np.maximum(0.0, ENGAGE_DISTANCE_M - self.advance)
         close = np.maximum(0.0, near - reach_me) * k
         avoided = punish = 0.0
-        for delay, wd in reaction_delays():
+        # His reaction plus each timing error (`pressed`, version 28: every press of his carries it).
+        for delay, wd in [(r + e, w * q) for r, w in reaction_delays() for e, q in press_errors()]:
             press = self.cue + delay
             lo, hi = press + start, press + start + duration_s * TAE_FPS
             cut1 = (self.startup >= lo) & (self.startup < hi)
@@ -4990,6 +5360,47 @@ class Opponents:
                 punish += wd * float((self.w * pun).sum())
         return {'hp': avoided + punish * hp_me, 'avoided_hp': avoided, 'punish_hp': punish * hp_me,
                 'p_punish': punish}
+
+
+class _ExchangeGain:
+    """What a dodge of move `m` started at s against opponent row `i` gains the dodger beyond
+    escaping the opener (`Opponents._table`, version 26): 1 where `dodge_value` counts his punish from
+    it (the chained hit missed too, `SECOND`, and his strike, pressed at the R1 cancel in `reach_me`,
+    else between it and the move cancel, else at the move cancel plus his run in, lands before the
+    row's `END`), 0 elsewhere. `dist` is the dodger's distance per frame of the dodge
+    (`Opponents._escapes`). Called on an array of starts (`_table` hands it the grid of starts as
+    `dodge_presses`' values); `sig` names what it reads."""
+
+    __slots__ = ('opp', 'i', 'dist', 'iframes', 'lead', 'sig')
+
+    def __init__(self, opp, i, m, dist, strike, reach_me):
+        n = len(m['path'])
+        ready = m['ready'] if m['ready'] is not None else n
+        walk = ready if m.get('move') is None else max(float(m['move']), ready)
+        adv = opp.advance[i] if opp.timing == 'react' else 0.0
+
+        def gap(f):
+            x, z = m['path'][min(int(f), n - 1)]
+            return math.hypot(x, ENGAGE_DISTANCE_M + z - adv)
+        if gap(ready) <= reach_me:
+            lead, close = float(ready), 0.0
+        else:
+            between = [f for f in range(int(ready) + 1, int(walk)) if gap(f) <= reach_me]
+            lead, close = (float(between[0]), 0.0) if between else \
+                (float(walk), max(0.0, gap(walk) - reach_me) * _neutral().frames_per_metre())
+        self.opp, self.i, self.dist, self.iframes = opp, i, dist, m['iframes']
+        self.lead = lead + close + float(strike)
+        self.sig = ('xgain', m['anim'], float(self.lead), float(opp.startup[i]), float(opp.gap2[i]),
+                    float(opp.active2[i]), float(opp.reach2[i]), bool(opp.follow[i]), float(opp.end[i]))
+
+    def __call__(self, s):
+        import numpy as np
+        s = np.asarray(s, float)
+        flat = s.ravel()
+        o, i = self.opp, self.i
+        second = o._escapes(self.dist, self.iframes, o.startup[i] + o.gap2[i], o.active2[i], o.reach2[i], flat) \
+            if o.follow[i] else np.ones(len(flat), bool)
+        return (second & (flat + self.lead < o.end[i])).astype(float).reshape(s.shape)
 
 
 #: What the pool's players throw at a dodger (section 16c): `families`, each moveset family's best
@@ -5263,42 +5674,6 @@ FOLLOW_UP_SPEFFECTS = {100050: ('r2', 10), 100051: ('r2', 20), 100054: ('r1', 10
 _ND = statistics.NormalDist()
 
 
-def _plain_cdf():
-    """`_ND.cdf` as a plain function: `statistics.NormalDist.cdf`'s own arithmetic, 0.5 x
-    erfc((mu - x) / (sigma x sqrt 2)), without the method call (`group_presses` reads millions of
-    them). `_ND.cdf` itself when that arithmetic cannot be read off this Python's `statistics` or
-    gives any other number on the sample values checked here."""
-    from math import erfc
-    try:
-        mu, div = float(_ND._mu), float(_ND._sigma) * float(statistics._SQRT2)
-    except (AttributeError, TypeError):
-        return _ND.cdf
-
-    def cdf(x):
-        return 0.5 * erfc((mu - x) / div)
-    xs = [i / 64.0 for i in range(-640, 641)] + [k * 0.1234567891 for k in range(-400, 401)] + [-0.0, 1e-300, -1e-300]
-    return cdf if all(cdf(x) == _ND.cdf(x) for x in xs) else _ND.cdf
-
-
-_CDF = _plain_cdf()
-#: `_cdf_kept`'s values: {x: `_CDF(x)`}. `group_presses` reads the cdf of (end - aim) / sd, and a
-#: run's ends sit on the half-frame grid and a stretch's middle on the quarter-frame grid, so the
-#: same arguments come back across sets of attacks and earliest starts. Emptied past `CDF_KEPT`
-#: entries.
-_CDF_KEPT = {}
-CDF_KEPT = 1_000_000
-
-
-def _cdf_kept(x):
-    """`_CDF(x)`, kept per x: the same number."""
-    v = _CDF_KEPT.get(x)
-    if v is None:
-        if len(_CDF_KEPT) >= CDF_KEPT:
-            _CDF_KEPT.clear()
-        v = _CDF_KEPT[x] = _CDF(x)
-    return v
-
-
 _REACTION_DELAYS = []
 _TIMING_ERRORS = {}
 
@@ -5323,9 +5698,60 @@ def _timing_errors(sd):
     return _TIMING_ERRORS[sd]
 
 
-#: His shortest reaction (`reaction_delays`): a floor at or before a decision time plus this moves
-#: no press decided then (`lookalike_plan`).
+#: His shortest reaction (`reaction_delays`).
 _SOONEST_REACTION = min(d for d, _ in reaction_delays())
+#: His earliest press after a decision: his shortest reaction plus his earliest timing error
+#: (version 28: the error is his hand's on every press, one he presses at once included, so a press
+#: can come up to that error before the reaction he decided on). A floor at or before a decision
+#: time plus this moves no press decided then (`lookalike_plan`, `burst_after`).
+_SOONEST_PRESS = _SOONEST_REACTION + min(_timing_errors(DODGE_TIMING_SD_S * TAE_FPS))
+
+
+def press_errors():
+    """[(real frames a press lands off the moment he means it, weight)]: the `TIMING_POINTS`
+    quantiles of `DODGE_TIMING_SD_S`, equally weighted (version 28: every press of his carries them,
+    `_AimTable.presses`, the strike's `er-mechanics-spells.strike_segments`, the strafe's
+    `FollowupModel.strafe_escape`)."""
+    return [(e, 1.0 / TIMING_POINTS) for e in _timing_errors(DODGE_TIMING_SD_S * TAE_FPS)]
+
+
+def pressed(intent, floor, w):
+    """[(press, weight)] of one press he means at real frame `intent`, of weight `w`: `intent` plus
+    each timing error (`press_errors`), a press before `floor` (None: none) coming out at the floor,
+    equal presses merged (version 28's rule, `_AimTable.presses`): the error is his hand's whenever
+    he presses, at his reaction too, and only his recovery's floor, which no input beats, truncates
+    it (`INFERRED`: a press made while the recovery still holds him comes out at its end, as before)."""
+    out = []
+    for e, q in press_errors():
+        s = intent + e
+        if floor is not None and s < floor:
+            s = floor
+        if out and out[-1][0] == s:
+            out[-1][1] += 1
+        else:
+            out.append([s, 1])
+    return [(s, w if k == TIMING_POINTS else _press_weight(w, k)) for s, k in out]
+
+
+#: `_press_weight`'s floats, {(w, k): w * k / `TIMING_POINTS`}.
+_PRESS_W = {}
+
+
+def _press_weight(w, k):
+    """`w * k / TIMING_POINTS` as one float object per (w, k): the `lookalike_plan` memos hold
+    millions of presses, each a tuple with its own weight until 2026-11-18, 24 bytes apiece for a
+    handful of values (the weights are `reaction_delays`'). With it and `_AimTable.kept_presses`'
+    dropped aim memo, Swift Slash's set peaked at 1.94 GiB of its own instead of 2.12
+    (`MEASURED` 2026-11-18, target/wf/memory/setmem.py). The same number either way; a zero
+    weight is not kept, so -0.0 and 0.0 (equal keys) each keep their own sign."""
+    if w == 0.0 or w != w:
+        return w * k / TIMING_POINTS
+    got = _PRESS_W.get((w, k))
+    if got is None:
+        if len(_PRESS_W) >= 4096:
+            _PRESS_W.clear()
+        got = _PRESS_W[(w, k)] = w * k / TIMING_POINTS
+    return got
 
 
 #: A run of true bytes (`_runs`).
@@ -5338,88 +5764,577 @@ def _runs(ok):
     return [(m.start(), m.end() - 1) for m in _TRUE_RUN.finditer(np.asarray(ok, bool).tobytes())]
 
 
-#: `_runs_kept`'s runs: {id(array): (array, step, runs)}, the array kept so its id names it; emptied
-#: past `RUNS_KEPT` entries.
-_RUNS_KEPT = {}
-RUNS_KEPT = 50000
+#: `_strikes_key`'s digests: {id(array): (array, digest)}, the array kept so its id names it.
+_STRIKES_KEY = {}
 
 
-def _runs_kept(ok, step):
-    """[(first, last) x `step`] of the runs of `ok` (`_runs`), kept per array: `group_presses` reads
-    one member's escaping starts in every set he is alike in. An array is taken as unchanged while
-    it lives (nothing writes an escaping-starts array once made); anything else is read each time."""
+def _strikes_key(arrive):
+    """A key equal only for equal sorted strike arrays (`PressGain.sig`): a digest of their bytes,
+    read once per array (an array is taken as unchanged while it lives, as `_ordered` takes it)."""
+    import hashlib
     import numpy as np
-    if not isinstance(ok, np.ndarray):
-        return [(a * step, b * step) for a, b in _runs(ok)]
-    got = _RUNS_KEPT.get(id(ok))
-    if got is None or got[0] is not ok or got[1] != step:
-        if len(_RUNS_KEPT) >= RUNS_KEPT:
-            _RUNS_KEPT.clear()
-        got = _RUNS_KEPT[id(ok)] = (ok, step, [(a * step, b * step) for a, b in _runs(ok)])
-    return got[2]
+    got = _STRIKES_KEY.get(id(arrive))
+    if got is None or got[0] is not arrive:
+        if len(_STRIKES_KEY) >= 64:
+            _STRIKES_KEY.clear()
+        got = _STRIKES_KEY[id(arrive)] = (arrive, hashlib.blake2b(
+            np.ascontiguousarray(np.asarray(arrive, float)).tobytes(), digest_size=12).hexdigest())
+    return got[1]
 
 
-def dodge_presses(ok, cue, step=DODGE_STEP, floor=0.0):
+class PressGain:
+    """What a dodge press of his at real frame s that escapes is worth to him beyond escaping, in
+    hits: the share of the pool's strikes that punish from it, `reaction_outcome`'s count
+    (`searchsorted(strikes + close, (my_roll - s) - ready)` over their number, `punish_lead`'s
+    `ready` and `close`). `ordered` is the pool's strikes sorted (`_ordered`), `run` whether he runs
+    in, `my_roll` the attacker's roll frame: kept so a lookalike group can make each member's own
+    (`PressGain.of`). Called on an array of starts it gives their shares; `sig` is equal only for
+    equal gains (the plans' memos key on it)."""
+
+    __slots__ = ('arrive', 'my_roll', 'ready', 'n', 'sig', 'ordered', 'run')
+
+    def __init__(self, ordered, close, my_roll, ready, run):
+        self.ordered, self.run = ordered, run
+        self.arrive = ordered + close
+        self.my_roll, self.ready, self.n = float(my_roll), float(ready), len(ordered)
+        self.sig = ('gain', _strikes_key(ordered), float(close), self.my_roll, self.ready)
+
+    def __call__(self, s):
+        import numpy as np
+        # `np.searchsorted(self.arrive, x, side='left')` is this method call (`_wrapfunc`).
+        return self.arrive.searchsorted(self.my_roll - np.asarray(s, float) - self.ready) / self.n
+
+    @staticmethod
+    def of(m, dist, advance, run, ordered, my_roll):
+        """The gain of move `m` at `dist` against an attacker carried `advance` forward whose roll
+        frame is `my_roll`, the pool's strikes `ordered` (sorted): None when he does not punish from
+        it (`punish_lead`'s `near`, no strikes, no roll frame), as `reaction_outcome` counts none."""
+        if ordered is None or my_roll is None or not len(ordered):
+            return None
+        # Kept per what it reads (`_PRESS_GAINS`): a plan makes every member's again on each call.
+        try:
+            key = (id(m), id(ordered), dist, advance, run, my_roll)
+            got = _PRESS_GAINS.get(key)
+        except TypeError:
+            key = got = None
+        if got is not None and got[0] is m and got[1] is ordered:
+            return got[2]
+        ready, close, near = punish_lead(m, dist, advance, run)
+        g = PressGain(ordered, close, my_roll, ready, run) if near else None
+        if key is not None:
+            if len(_PRESS_GAINS) >= PRESS_GAINS_CACHE:
+                _PRESS_GAINS.clear()
+            _PRESS_GAINS[key] = (m, ordered, g)
+        return g
+
+
+#: `PressGain.of`'s gains: {(id(move), id(strikes), dist, advance, run, my_roll): (move, strikes, its
+#: gain)}, the move and the strikes kept so their ids name them (a move and a strikes array are taken
+#: as unchanged while they live, as `_move_key` and `_ordered` take them); emptied past
+#: `PRESS_GAINS_CACHE` entries (each may hold a strikes array alive, ~14 kB for the pool's).
+_PRESS_GAINS = {}
+PRESS_GAINS_CACHE = 4096
+
+
+class _TrackGain:
+    """`PressGain` of a press made out of an earlier roll (`carried`, version 26): the dodge starts
+    from where the track has him at its start (on the update grid, as the press is read), so its
+    `punish_lead` is read from there, per start. Called on an array of starts it gives their
+    shares; `sig` as `PressGain`'s."""
+
+    __slots__ = ('m', 'track', 'dist', 'advance', 'run', 'ordered', 'my_roll', 'n', 'sig', 'kept')
+
+    def __init__(self, m, track, dist, advance, run, ordered, my_roll):
+        self.m, self.track, self.dist, self.advance, self.run = m, track, dist, advance, run
+        self.ordered, self.my_roll, self.n = ordered, float(my_roll), len(ordered)
+        self.sig = ('tgain', _strikes_key(ordered), _move_key(m), track_key(track), float(dist),
+                    repr(advance), bool(run), self.my_roll)
+        self.kept = {}
+
+    def lead(self, s):
+        """`punish_lead` of a press at real frame `s` (read at its grid start)."""
+        g = _grid(float(s))
+        if g not in self.kept:
+            x, z, _ = track_at(self.track, [g])
+            self.kept[g] = punish_lead(self.m, self.dist, self.advance, self.run, (float(x[0]), float(z[0])))
+        return self.kept[g]
+
+    def __call__(self, s):
+        import numpy as np
+        s = np.asarray(s, float)
+        flat = s.ravel()
+        ug, inv = np.unique(np.round(flat / DODGE_STEP) * DODGE_STEP, return_inverse=True)
+        leads = [self.lead(v) for v in ug.tolist()]
+        ready = np.array([r for r, _, _ in leads], float)[inv]
+        close = np.array([c for _, c, _ in leads], float)[inv]
+        near = np.array([nr for _, _, nr in leads], bool)[inv]
+        res = np.searchsorted(self.ordered, self.my_roll - flat - ready - close, side='left') / self.n
+        return np.where(near, res, 0.0).reshape(s.shape)
+
+
+def press_gain(m, track, dist, advance, run, ordered, my_roll):
+    """What an escaping press of move `m` out of `track` gains him beyond escaping: `PressGain.of`
+    for an empty track (he dodges from where he stood), else a `_TrackGain`; None when no punish is
+    counted (no strikes, no roll frame)."""
+    if not track:
+        return PressGain.of(m, dist, advance, run, ordered, my_roll)
+    if ordered is None or my_roll is None or not len(ordered):
+        return None
+    return _TrackGain(m, track, dist, advance, run, ordered, my_roll)
+
+
+#: A press aimed this far past a run's left edge falls on the run's first start (`_AimTable`): far
+#: above float rounding, far below a frame.
+EDGE_EPS = 1e-6
+#: {digest of an `_AimTable`'s content: {floor: (first candidate, worths)}}: the worths `_aims` reads,
+#: shared by every table of that content (`_AimTable._shared`) and kept across the emptying of the
+#: `lookalike_plan` memos, so a table made again reads them again. Emptied past `AIM_WORTHS_BYTES`
+#: of worths and by `forget_reads`; a table holding one keeps it.
+_AIM_WORTHS = {}
+_AIM_WORTHS_HELD = [0]
+AIM_WORTHS_BYTES = 256 << 20
+#: What one kept worth at a reaction (`_AimTable._aims`' `ws[('at', floor)]`, a dict entry of a float
+#: key and a float) is counted as against `AIM_WORTHS_BYTES`.
+AIM_AT_BYTES = 100
+
+
+def forget_aim_worths():
+    """Empty `_AIM_WORTHS`: a table made later reads its worths afresh, the same numbers."""
+    _AIM_WORTHS.clear()
+    _AIM_WORTHS_HELD[0] = 0
+
+
+class _AimTable:
+    """Where a reacting defender aims his dodge against the attacks whose escaping starts are `oks`
+    (one bool array per attack on the `step` grid, a start past an array caught), attack j weighing
+    `weights[j]`, `gains[j]` (a `PressGain`, or None: no punish counted) what an escaping press is
+    worth to him beyond escaping (version 25; the comment above `dodge_presses`).
+
+    He means to press at a, no sooner than his reaction t, and his presses are max(F, a + e) over
+    the timing errors e (`_timing_errors`, `TIMING_POINTS` of them, equally weighted), F his floor
+    (his recovery; none: -inf). Version 28: the error applies to a press at his reaction too (a = t),
+    where until then max(t, a + e) clamped every early error to the reaction and a press at once
+    carried none; so a defender reacting to a later event (a lookalike's release, or the frame a
+    release would have shown) pressed exactly on time where a defender who knew the attack could
+    only aim with the error, and knowing it could leave him worse off (the Glintstone Dart, version
+    27: escape 0.929, punish 0.125 knowing it is the hold, 0.968 and 0.139 not). With the error on
+    every press the plans of a later decision are among the knowing defender's: for each reaction
+    he may aim at any a >= t, and a later decision only raises t.
+    He takes the aim that maximises
+    what they are worth to him: per attack its weight times, per press, 1 + its gain where the press
+    escapes (a start read as `reaction_outcome` reads it, `round(s / step)`), 0 where it is caught.
+    `vals[j]` (a float array on the grid, or None) replaces the 1 by what escaping from that start
+    leaves him (`FollowupModel`: the follow-up he then meets, `dodge_presses` `val`), the gain then
+    counted where `oks[j]` holds. Exact over every aim: as a grows each press moves later (or stays
+    at F), so between the frames where a press enters a start worth more than the one before (a =
+    that start's left edge - e) what he gets only falls (a press keeps its start or moves to one
+    worth no more, and a gain falls as the press comes later); so the best is at once (a = t) or
+    just past one of those entries, and those are the aims tried. The first of equally good ones in
+    time is taken. `aim(t, F)` is None for at once."""
+
+    def __init__(self, oks, weights, step, gains=None, vals=None):
+        import numpy as np
+        self.step = step
+        self.errors = np.array(_timing_errors(DODGE_TIMING_SD_S * TAE_FPS), float)
+        live = [j for j in range(len(oks)) if weights[j] != 0]
+        width = max([len(oks[j]) for j in live] + [0])
+        self.mat = np.zeros((len(live), width + 1), bool)
+        self.vals = []
+        edges = set()
+        for r, j in enumerate(live):
+            o = np.asarray(oks[j], bool)
+            self.mat[r, :len(o)] = o
+            v = None if vals is None or vals[j] is None else np.asarray(vals[j], float)
+            if v is None:
+                edges.update((lo - 0.5) * step for lo, _ in _runs(o))
+                self.vals.append(None)
+            else:
+                # Every start worth more to him than the one before it (gained or not), the first
+                # included: where a press entering it can raise what he gets.
+                full = np.zeros(width + 1)
+                full[:len(v)] = v
+                self.vals.append(full)
+                up = np.concatenate([[full[0] > 0 or self.mat[r, 0]],
+                                     (full[1:] > full[:-1]) | (self.mat[r, 1:] & ~self.mat[r, :-1])])
+                edges.update((i - 0.5) * step for i in np.nonzero(up)[0].tolist())
+        self.width = width
+        self.w = [float(weights[j]) for j in live]
+        self.gains = [None if gains is None else gains[j] for j in live]
+        self.edges = np.array(sorted(edges), float)
+        self.size = 0
+        self.plain = None
+        self.kept = {}
+        self.fast = None
+        self.cands = None
+        self.worths = None
+
+    def _shared(self):
+        """This table's worths per floor (`_aims`), in a dict every table of equal content shares
+        (`_AIM_WORTHS`): the `lookalike_plan` memos that hold the tables are emptied past
+        `LOOKALIKE_MEMO_ENTRIES`, and the plans asked again then make the same tables again (33,415
+        of the 90,244 tables of the first 25 min of Flame Fall Upon Them and Giantsflame Take Thee's
+        set, `MEASURED` 2026-11-21, .worktrees/ffut/target/ffut/old-pair.jsonl). Content
+        is everything `_worth` reads: the members' escaping starts and values, their weights, each
+        gain by its `sig` (a `PressGain`'s or a `_TrackGain`'s, equal only for equal gains), the step
+        and the timing errors. A table with any other gain keeps its own."""
+        import hashlib
+        if self.worths is None:
+            if all(g is None or type(g) in (PressGain, _TrackGain) for g in self.gains):
+                h = hashlib.blake2b(digest_size=16)
+                h.update(repr((self.step, self.width, self.mat.shape, self.w, self.errors.tolist(),
+                               [None if g is None else g.sig for g in self.gains],
+                               [None if v is None else len(v) for v in self.vals])).encode())
+                h.update(self.mat.tobytes())
+                for v in self.vals:
+                    if v is not None:
+                        h.update(v.tobytes())
+                key = h.digest()
+                if _AIM_WORTHS_HELD[0] > AIM_WORTHS_BYTES:
+                    forget_aim_worths()
+                got = _AIM_WORTHS.get(key)
+                if got is None:
+                    got = _AIM_WORTHS[key] = {}
+                self.worths = got
+            else:
+                self.worths = {}
+        return self.worths
+
+    def _cands(self):
+        """(every aim past a reaction `aim` may try, sorted, each once: an edge less a timing error
+        plus `EDGE_EPS`; per aim the latest of its edges plus `EDGE_EPS`, which `aim` tests against
+        t plus his earliest error): made once per table."""
+        import numpy as np
+        if self.cands is None:
+            e = self.errors
+            v = (self.edges[:, None] - e[None, :] + EDGE_EPS).ravel()
+            th = np.repeat(self.edges + EDGE_EPS, len(e))
+            order = np.lexsort((th, v))
+            v, th = v[order], th[order]
+            # The last of equal aims holds their latest edge.
+            last = np.concatenate((v[1:] != v[:-1], [True])) if len(v) else np.zeros(0, bool)
+            self.cands = (v[last], th[last])
+        return self.cands
+
+    def aim(self, t, floor=None):
+        """Where he aims from reaction `t` at floor `floor` (the class comment). Its candidates past
+        t are an edge less an error plus `EDGE_EPS` past t whose edge plus `EDGE_EPS` is past t plus
+        his earliest error (`_cands`, sorted and each once, as `np.unique` reads them). What an aim
+        is worth reads only that aim and the floor (`_worth`: elementwise per aim, the same numbers
+        in any batch), so each candidate's worth is kept per floor (`worths`) from the earliest t
+        asked on; a later t reads the kept ones, and only t itself is read again. Until 2026-11-20
+        every call read every candidate past t: `lookalike_plan` asks one table again at each
+        decision time and reaction delay, so Flame Fall Upon Them's set alone made 2,783,425 calls,
+        2,490,805 of them on a table and floor an earlier t had read, and read 182.7 million aims
+        of which 149.9 million had been read before (`MEASURED` 2026-11-20,
+        .worktrees/ffut/target/ffut/stats1.jsonl); with Giantsflame Take Thee, its set in a full
+        run, `aim` was 57% of the set's time (py-spy, prof2.txt there)."""
+        return self._aims([t], floor)[0]
+
+    def _aims(self, ts, floor=None):
+        """`aim(t, floor)` of each of `ts`, the worths at the reactions themselves read in one
+        `_worth` batch (elementwise per aim, so the numbers `aim` reads one at a time)."""
+        import numpy as np
+        e = self.errors
+        v, th = self._cands()
+        js = [int(v.searchsorted(t, 'right')) for t in ts]
+        sels = [th[j:] > t + e[0] for t, j in zip(ts, js)]
+        live = [i for i, s in enumerate(sels) if s.any()]
+        out = [None] * len(ts)
+        if not live:
+            return out
+        fk = None if floor is None else np.float64(floor).tobytes()
+        ws = self._shared()
+        got = ws.get(fk)
+        j0 = min(js[i] for i in live)
+        if got is None or got[0] > j0:
+            hi = len(v) if got is None else got[0]
+            # A copy: `_worth`'s answer may be a row of a larger array (its running sum over the
+            # members), which a kept view would hold whole (2026-11-21, kept as views: 19 GB resident
+            # 25 min into Flame Fall Upon Them and Giantsflame Take Thee's set, against 4.4 GB before
+            # this cache; `MEASURED`, .worktrees/ffut/target/ffut/new2-pair.jsonl).
+            W = self._worth(v[j0:hi], None).copy() if floor is None else self._floor_worths(v, j0, hi, floor, ws)
+            got = ws[fk] = (j0, W if got is None else np.concatenate([W, got[1]]))
+            _AIM_WORTHS_HELD[0] += W.nbytes
+        # The worths at the reactions themselves, kept per floor and reaction with the candidates'
+        # (`ws`, shared by every table of this content and kept past the `lookalike_plan` memos'
+        # emptying): `_worth` is elementwise per aim, so each is the number a batch of them gives.
+        # Why (2026-11-21, .worktrees/haima): with the candidates' worths shared, these reads were
+        # 80% of what `_worth` still took in Cannon of Haima's set (py-spy,
+        # target/haima/prof-haima-a.txt).
+        u0 = ws.get(('at', fk))
+        if u0 is None:
+            u0 = ws[('at', fk)] = {}
+        need = [t for t in dict.fromkeys(ts[i] for i in live) if t not in u0]
+        if need:
+            u0.update(zip(need, self._worth(np.array(need, float), floor).tolist()))
+            _AIM_WORTHS_HELD[0] += AIM_AT_BYTES * len(need)
+        for r, i in enumerate(live):
+            j, sel = js[i], sels[i]
+            A = np.concatenate([[ts[i]], v[j:][sel]])
+            U = np.concatenate([[u0[ts[i]]], got[1][j - got[0]:][sel]])
+            # The first aim within 1e-12 (relative) of the best: at once on a tie, else the earliest.
+            top = float(U.max())
+            best = int(np.argmax(U >= top - 1e-12 * max(1.0, abs(top))))
+            out[i] = None if best == 0 else float(A[best])
+        return out
+
+    def _none_worths(self, v, j, ws):
+        """The worths at no floor of candidates `v[j:]` (`_aims`' kept `ws[None]`, read down to `j`
+        first when it does not reach there)."""
+        import numpy as np
+        got = ws.get(None)
+        if got is None or got[0] > j:
+            hi = len(v) if got is None else got[0]
+            W = self._worth(v[j:hi], None).copy()
+            got = ws[None] = (j, W if got is None else np.concatenate([W, got[1]]))
+            _AIM_WORTHS_HELD[0] += W.nbytes
+        return got[1][j - got[0]:]
+
+    def _floor_worths(self, v, j0, hi, floor, ws):
+        """`_worth(v[j0:hi], floor)`, each aim whose presses all come after `floor` read off the
+        worths at no floor (`_none_worths`): `_worth` moves a press to the floor only where an aim
+        plus a timing error is under it (`np.maximum`), so for an aim with every one of its presses
+        past it the presses, and all `_worth` reads of them, are those with no floor; and `_worth`
+        is elementwise per aim (the same numbers in any batch, `aim`). Only the aims a press of which
+        the floor moves are read at the floor. Why (2026-11-21, .worktrees/haima): a lookalike
+        group's tables are read at each floor of the situations (Cannon of Haima's tap: 49,942
+        reads of 7,515 tables in the first 107 s of its set), and of the 1,509,681 aims read at a
+        floor 634 had a press the floor moved (`MEASURED`, target/haima/aimstats-haima.log)."""
+        import numpy as np
+        A = v[j0:hi]
+        moved = ~(A[:, None] + self.errors[None, :] > floor).all(axis=1)
+        if moved.all():
+            return self._worth(A, floor).copy()
+        free = np.nonzero(~moved)[0]
+        W = np.empty(len(A))
+        W[free] = self._none_worths(v, j0 + int(free[0]), ws)[free - free[0]]
+        if moved.any():
+            W[moved] = self._worth(A[moved], floor)
+        return W
+
+    def prime(self, reqs):
+        """Read the presses of each reaction of `reqs` [(t, w, floor)] that `kept` does not hold
+        yet, as `kept_presses` reads them, their aims in one `_aims` batch per floor: the callers'
+        reaction delays (`reaction_delays`) ask a table for nine at once."""
+        want = {}
+        for t, w, floor in reqs:
+            lo, fl = self.key(t, floor)
+            if (lo, fl, w) not in self.kept:
+                want.setdefault(fl, {}).setdefault((lo, w), None)
+        for fl, ks in want.items():
+            los = list(dict.fromkeys(lo for lo, _ in ks))
+            aims = dict(zip(los, self._aims(los, fl)))
+            for lo, w in ks:
+                a = aims[lo]
+                self.kept[(lo, fl, w)] = pressed(lo if a is None else a, fl, w)
+
+    def _worth(self, A, floor):
+        """What his presses are worth to him aiming at each of `A` (an array of aims) from floor
+        `floor`: per aim, the members' weighted escapes and gains at its presses."""
+        import numpy as np
+        e = self.errors
+        S = A[:, None] + e[None, :]
+        if floor is not None:
+            S = np.maximum(floor, S)
+        idx = np.round(S / self.step).astype(np.int64)
+        idx = np.where((idx >= 0) & (idx < self.width), idx, self.width)
+        # The members with neither a gain nor values as one weighted coverage per start (a large
+        # group's most), then the others one by one; the sum's order moves it by rounding only,
+        # under the 1e-12 margin.
+        if self.plain is None:
+            plain = [r for r in range(len(self.w)) if self.gains[r] is None and self.vals[r] is None]
+            self.plain = np.zeros(self.width + 1)
+            for r in plain:
+                self.plain += self.w[r] * self.mat[r]
+        U = self.plain[idx].sum(axis=1)
+        # The members with a `PressGain` and no values, read together (`_gain_rows`): each one's
+        # escaping presses at S, their count and their shares summed over his timing errors, the
+        # same numbers each member's own reads below give (a gain is elementwise in S; each
+        # member's row of a C-contiguous (members, aims, errors) array is summed as that member's
+        # (aims, errors) array alone is: `MEASURED` bit for bit on numpy 2.5.4, 1-1000 aims by 1-200
+        # members, 2026-11-17). They are added to U one by one in member order below, as before: the
+        # order of those additions is kept (numpy's sum over members does not keep it, `MEASURED`
+        # the same day: 5 of 1,742 such sums differ in their last bits).
+        pos, rows, groups, wv, every = self._gain_rows()
+        if pos:
+            OK = self.mat[rows][:, idx]
+            terms = np.empty((len(rows), len(A)))
+            for at, arrive, n, mr, rd, pick in groups:
+                GS = arrive.searchsorted((mr[:, None, None] - S[None]) - rd[:, None, None]) / n
+                terms[at] = (OK[at] * GS[pick]).sum(axis=2)
+            # Each member's w * (count + shares), elementwise as its own line computes it.
+            WB = wv[:, None] * (OK.sum(axis=2) + terms)
+            if every:
+                # Every member past the plain ones is one of these: U plus each row in member
+                # order, which is what `np.add.accumulate` adds (a running sum, one row after
+                # another; `MEASURED` bit for bit against the loop, 2026-11-17).
+                U = np.add.accumulate(np.concatenate([U[None], WB]), axis=0)[-1]
+        # Members whose `PressGain`s are equal read the same shares at S: read once per gain. Its
+        # `sig` names everything its call reads (the strikes' bytes, `close`, `my_roll`, `ready`);
+        # any other gain is read per object.
+        shares = {}
+        for r, w in enumerate(self.w if not (pos and every) else ()):
+            g, v = self.gains[r], self.vals[r]
+            if g is None and v is None:
+                continue
+            if r in pos:
+                U += WB[pos[r]]
+                continue
+            ok = self.mat[r][idx]
+            base = ok.sum(axis=1) if v is None else v[idx].sum(axis=1)
+            if g is None:
+                U += w * base
+                continue
+            gk = g.sig if type(g) is PressGain else id(g)
+            gs = shares.get(gk)
+            if gs is None:
+                gs = shares[gk] = g(S)
+            U += w * (base + (ok * gs).sum(axis=1))
+        return U
+
+    def _gain_rows(self):
+        """(position of each member with a `PressGain` and no values among them {member: i}, those
+        members in order as an index array, their groups, their weights as an array, whether every
+        member with a gain or values is one of them): a group is the members whose gains read one
+        strikes array (`arrive`: equal strikes' bytes and `close`, `sig`), as (their positions,
+        `arrive`, its length, the distinct (my_roll, ready) pairs as two arrays, each member's
+        pair). Made once per table."""
+        import numpy as np
+        if self.fast is None:
+            pos, rows, by = {}, [], {}
+            for r in range(len(self.w)):
+                g = self.gains[r]
+                if type(g) is not PressGain or self.vals[r] is not None:
+                    continue
+                pos[r] = len(rows)
+                rows.append(r)
+                by.setdefault((g.sig[1], g.sig[2]), []).append(r)
+            groups = []
+            for members in by.values():
+                g0 = self.gains[members[0]]
+                pairs = {}
+                pick = [pairs.setdefault((self.gains[r].my_roll, self.gains[r].ready), len(pairs)) for r in members]
+                groups.append((np.array([pos[r] for r in members], np.int64), g0.arrive, g0.n,
+                               np.array([p[0] for p in pairs], float), np.array([p[1] for p in pairs], float),
+                               np.array(pick, np.int64)))
+            every = all(r in pos for r in range(len(self.w)) if self.gains[r] is not None or self.vals[r] is not None)
+            self.fast = (pos, np.array(rows, np.int64), groups, np.array([self.w[r] for r in rows], float), every)
+        return self.fast
+
+    def key(self, t, floor=None):
+        """(the earliest he means to press, the floor as far as it moves a press, None for none) of
+        a reaction at `t` and `floor`: equal for any two that give the same presses. A floor at or
+        before his earliest press (t plus his earliest error) moves none; a floor past t plus his
+        latest error puts every press meant before `floor` - that error at the floor, so meaning
+        them from there is the same."""
+        e0, e1 = float(self.errors[0]), float(self.errors[-1])
+        if floor is None or not floor > t + e0:
+            return float(t), None
+        return max(float(t), float(floor) - e1), float(floor)
+
+    def presses(self, t, w, floor=None):
+        """The presses of one reaction delay of weight `w`: `t` the earliest he can mean to press
+        (his reaction), `floor` the frame before which a press comes out at it (None: none), as
+        `pressed` of the aim (`key`; kept per its key and `w`: a new list each call, so a caller may
+        change it)."""
+        return list(self.kept_presses(t, w, floor))
+
+    def kept_presses(self, t, w, floor=None):
+        """`presses`' list as `kept` holds it ({(`key`, `w`): presses}), not a copy: the caller must
+        not change it. `group_presses` and `_single_presses` hand out these lists, `kept` being their
+        memo of them (until 2026-11-18 each held a copy of every list beside this one: 99.5 and
+        50.2 MiB of copies at the end of Swift Slash's set, `MEASURED` by
+        target/wf/memory/setmem.py --look-census). The aim
+        reads no weight, and until 2026-11-18 it was kept per key as well, for a second weight on
+        one key; every caller's weights are `reaction_delays`', all 1 / `REACTION_POINTS`, so none
+        came, and that memo held 69.5 MiB at the end of Swift Slash's set (`MEASURED`,
+        target/wf/memory/setmem.py --look-census). A second weight reads the aim again, the same."""
+        lo, fl = self.key(t, floor)
+        got = self.kept.get((lo, fl, w))
+        if got is None:
+            a = self.aim(lo, fl)
+            got = self.kept[(lo, fl, w)] = pressed(lo if a is None else a, fl, w)
+        return got
+
+
+def dodge_presses(ok, cue, step=DODGE_STEP, floor=0.0, gain=None, val=None):
     """[(dodge start, real frames from the attack's start; weight)]: when a defender who waits and
     reacts starts his dodge.
 
-    `ok[i]` says whether a dodge started at i x `step` escapes the attack. He cannot start before
-    `cue` + his reaction delay (`reaction_delays`), nor before `floor` (the frame his own recovery
-    lets him roll, for a defender caught in it). Among the escaping runs still open then he
-    takes the one he is likeliest to hit and aims at its middle, with a normal timing error
-    (`DODGE_TIMING_SD_S`); a press that would come before he can react comes at the reaction
-    instead. When no run is left he dodges at the reaction anyway, too late. So an early roll
-    loses to a long or late live window and a late one to a fast startup."""
-    sd = DODGE_TIMING_SD_S * TAE_FPS
-    runs = [(a * step, b * step) for a, b in _runs(ok)]
-    errors = _timing_errors(sd)
+    `ok[i]` says whether a dodge started at i x `step` escapes the attack. He cannot mean to press
+    before `cue` + his reaction delay (`reaction_delays`), and a press before `floor` (the frame his
+    own recovery lets him roll, for a defender caught in it) comes out at the floor. He aims his
+    press with a normal timing error (`DODGE_TIMING_SD_S`, `TIMING_POINTS` quantiles), a press at
+    his reaction included (version 28, `pressed`: until then an error that would put a press before
+    the reaction was clamped to it, so a press at once carried none, and a defender reacting to a
+    later event could land presses a defender who knew the attack could not aim). He aims where his
+    presses are worth most to him
+    (`_AimTable`): one for each that escapes, plus, with `gain` (a `PressGain`: this burst is the
+    last of the attack that reaches him, so his punish is decided by this press), the share of the
+    pool's strikes that punish from it. So he weighs a hit he lands as one he avoids (`INFERRED`;
+    the attacker's own worth is not his to weigh, which keeps one plan per geometry for every build
+    that flies it), and an early press that escapes is worth more than a late one. `val` (a float
+    array on the grid, or None) is what escaping from each start leaves him, when that is not 1: the
+    follow-up an opening's roll meets (`FollowupModel._shape`), the gain then counted where `ok`
+    holds (`_AimTable`).
+
+    Until version 25 he took the escaping run he was likeliest to land in and aimed at its middle,
+    whatever his punish: a defender who could not tell the Glintstone Dart from its release punished
+    it 0.50, one who knew it 0.33 (`MEASURED`, the PvP ranking's selftest). When no run is left he
+    dodges at the reaction anyway (with his error), too late. So an early roll loses to a long or late live window
+    and a late one to a fast startup."""
+    table = _aim_table(ok, step, gain, val)
+    delays = reaction_delays()
+    table.prime([(cue + delay, w, floor) for delay, w in delays])
     out = []
-    for delay, w in reaction_delays():
-        t = max(cue + delay, floor)
-        best = None
-        for lo, hi in runs:
-            if hi < t:
-                continue
-            lo2 = max(lo, t)
-            half = (hi - lo2) / 2
-            p = _ND.cdf(half / sd) - (_ND.cdf(-half / sd) if lo2 > t else 0.0) if sd > 0 else 1.0
-            if best is None or p > best[0] + 1e-9:
-                best = (p, lo2 + half)
-        if best is None:
-            out.append((t, w))
-            continue
-        out += [(max(t, best[1] + e), w / TIMING_POINTS) for e in errors]
+    for delay, w in delays:
+        out += table.presses(cue + delay, w, floor)
     return out
 
 
-def _single_presses(ok, cue, step, floor, memo):
-    """`dodge_presses(ok, cue, step, floor)` with its runs and each reaction delay's presses kept in
-    `memo` (`group_presses`' memo of a set of one attack): a delay's presses read only the earliest
-    start it allows and its weight, so the same lists, read once per pair. `lookalike_plan` asks for
-    them again at every floor of a release seen alone (Black Flame's profile at its second release
-    node read them 5,780 times once the release had 27 members, 560 times with 7; 2026-11-13)."""
+#: `_aim_table`'s tables: {(the escaping starts' bytes, `step`, the gain's `sig`, the values' bytes):
+#: `_AimTable`}, emptied past `AIM_TABLES` entries.
+_AIM_TABLES = {}
+AIM_TABLES = 20000
+
+
+def _aim_table(ok, step, gain=None, val=None):
+    """`dodge_presses`' `_AimTable` of one attack, kept per what it reads (its escaping starts, the
+    grid step, the gain's `sig`, the values): an outcome hands the same starts again at every floor
+    and cue, and a table read again gives the same aims."""
+    import numpy as np
+    o = np.asarray(ok, bool)
+    key = (o.tobytes(), len(o), step, None if gain is None else gain.sig,
+           None if val is None else np.asarray(val, float).tobytes())
+    got = _AIM_TABLES.get(key)
+    if got is None:
+        if len(_AIM_TABLES) >= AIM_TABLES:
+            _AIM_TABLES.clear()
+        got = _AIM_TABLES[key] = _AimTable([o], [1.0], step, [gain], None if val is None else [val])
+    return got
+
+
+def _single_presses(ok, cue, step, floor, memo, gain=None):
+    """`dodge_presses(ok, cue, step, floor, gain)` with its aims and each reaction delay's presses
+    kept in `memo` (`group_presses`' memo of a set of one attack): a delay's presses read only the
+    earliest start it allows and its weight, so the same lists, read once per pair. `lookalike_plan`
+    asks for them again at every floor of a release seen alone (Black Flame's profile at its second
+    release node read them 5,780 times once the release had 27 members, 560 times with 7;
+    2026-11-13)."""
     held0 = len(memo) + len(memo.get('single', ()))
-    if 'single runs' not in memo:
-        memo['single runs'] = _runs_kept(ok, step)
-    runs = memo['single runs']
-    got = memo.setdefault('single', {})
-    sd = DODGE_TIMING_SD_S * TAE_FPS
+    if 'single aims' not in memo:
+        memo['single aims'] = _AimTable([ok], [1.0], step, [gain])
+    table = memo['single aims']
+    # The table's own lists, keyed as it keeps them (`_AimTable.kept_presses`).
+    got = memo.setdefault('single', table.kept)
+    delays = reaction_delays()
+    table.prime([(cue + delay, w, floor) for delay, w in delays])
     out = []
-    for delay, w in reaction_delays():
-        t = max(cue + delay, floor)
-        chunk = got.get((t, w))
+    for delay, w in delays:
+        k = table.key(cue + delay, floor) + (w,)
+        chunk = got.get(k)
         if chunk is None:
-            best = None
-            for lo, hi in runs:
-                if hi < t:
-                    continue
-                lo2 = max(lo, t)
-                half = (hi - lo2) / 2
-                p = _CDF(half / sd) - (_CDF(-half / sd) if lo2 > t else 0.0) if sd > 0 else 1.0
-                if best is None or p > best[0] + 1e-9:
-                    best = (p, lo2 + half)
-            chunk = got[(t, w)] = [(t, w)] if best is None else [(max(t, best[1] + e), w / TIMING_POINTS)
-                                                                 for e in _timing_errors(sd)]
+            chunk = table.kept_presses(cue + delay, w, floor)
         out += chunk
     # Counted with the `lookalike_plan` memo it lives in (`LOOKALIKE_MEMO_ENTRIES`).
     _LOOK_HELD[0] += len(memo) + len(got) - held0
@@ -5484,28 +6399,27 @@ def _escape_index(okb, n, idx, ws):
     return out
 
 
-def group_presses(oks, weights, cue, step=DODGE_STEP, floor=0.0, memo=None):
+def group_presses(oks, weights, cue, step=DODGE_STEP, floor=0.0, memo=None, gains=None):
     """`dodge_presses` for a defender who cannot tell apart the attacks whose escaping starts are
     `oks` (one bool array per attack on the `step` grid, a start past an array being caught), the
-    attack j weighing `weights[j]`: one timing chosen against all of them. He cannot start before
-    `cue` + his reaction delay, nor before `floor`; then he aims at the middle of a stretch of
-    starts, taking the stretch whose weighted chance of a press inside an escaping run of each
-    attack is largest (the first of equally sure ones), with `dodge_presses`' timing error. The
-    stretches are each attack's runs and the stretches over which the set of attacks a start
-    escapes stays the same, so a start that escapes two of them at once is found. One attack is
-    `dodge_presses` itself. `memo`, a dict, keeps the stretches and each earliest start's aim for
-    the next call on the same `oks` and `weights` (it is the caller's to key)."""
-    import numpy as np
+    attack j weighing `weights[j]` and his gain from an escaping press against it `gains[j]` (a
+    `PressGain` or None; `gains` None: none): one timing chosen against all of them. He cannot start
+    before `cue` + his reaction delay, nor before `floor`; then he aims where his presses are worth
+    most to him summed over the attacks by weight (`_AimTable`, the first of equally good aims), with
+    `dodge_presses`' timing error, so a start that escapes two of them at once is found. One attack
+    is `dodge_presses` itself. `memo`, a dict, keeps the aims for the next call on the same `oks`,
+    `weights` and `gains` (it is the caller's to key)."""
     if len(oks) == 1:
+        g = None if gains is None else gains[0]
         if memo is None:
-            return dodge_presses(oks[0], cue, step, floor)
-        return _single_presses(oks[0], cue, step, floor, memo)
+            return dodge_presses(oks[0], cue, step, floor, g)
+        return _single_presses(oks[0], cue, step, floor, memo, g)
     delays = reaction_delays()
     if memo is not None and 'chunks' in memo:
         # Every delay's presses kept already: the same list, read without the setup below.
-        chunks, out = memo['chunks'], []
+        chunks, out, tab = memo['chunks'], [], memo['aims']
         for delay, w in delays:
-            got = chunks.get((max(cue + delay, floor), w))
+            got = chunks.get(tab.key(cue + delay, floor) + (w,))
             if got is None:
                 break
             out += got
@@ -5515,181 +6429,21 @@ def group_presses(oks, weights, cue, step=DODGE_STEP, floor=0.0, memo=None):
     memo = {} if memo is None else memo
     table = memo.get('aims')
     if table is None:
-        table = memo['aims'] = _GroupAims(oks, weights, step)
+        table = memo['aims'] = _AimTable(oks, weights, step, gains)
     # The presses of one reaction delay read only the time he can press from and that delay's
-    # weight: kept per pair.
-    chunks = memo.setdefault('chunks', {})
+    # weight: kept per pair, in the table's own lists (`_AimTable.kept_presses`).
+    chunks = memo.setdefault('chunks', table.kept)
     held0 = table.size + len(chunks)
-    errors = _timing_errors(table.sd)
+    table.prime([(cue + delay, w, floor) for delay, w in delays])
     out = []
     for delay, w in delays:
-        t = max(cue + delay, floor)
-        if (t, w) not in chunks:
-            a = table.aim(t)
-            chunks[(t, w)] = [(t, w)] if a is None else [(max(t, a + e), w / TIMING_POINTS) for e in errors]
-        out += chunks[(t, w)]
+        k = table.key(cue + delay, floor) + (w,)
+        got = chunks.get(k)
+        out += got if got is not None else table.kept_presses(cue + delay, w, floor)
     if kept:
         # Counted with the `lookalike_plan` memo it lives in (`LOOKALIKE_MEMO_ENTRIES`).
         _LOOK_HELD[0] += table.size + len(chunks) - held0
     return out
-
-
-def _pick(cands, best=None):
-    """`group_presses`' choice over `cands` [(aim, chance)] in order, from `best` (chance, aim): an
-    aim is taken over the one so far when its chance is more than 1e-9 above it."""
-    for a, p in cands:
-        if best is None or p > best[0] + 1e-9:
-            best = (p, a)
-    return best
-
-
-class _GroupAims:
-    """`group_presses`' reads of one set of attacks (`oks`, `weights`): their escaping runs, the
-    stretches it aims within, and each earliest start's aim (`aim`).
-
-    The aims tried from earliest start t are the middles of the stretches with `hi` >= t, each from
-    the later of its start and t, in order (equal ones once); the one taken is the first whose
-    weighted chance of landing in an escaping run is more than 1e-9 above the best before it. That
-    chance (`landed`) sums, per attack with a run that holds the aim, its weight times the share of
-    a press aimed there with `dodge_presses`' timing error that lands inside the run, the part
-    before t cut off where the run starts after t. Which runs hold a point is the same for every
-    point of one place among the stretches' ends (`place`; every run is a stretch): kept per place
-    with their weights' sum. A stretch that starts at or after t aims at its own middle, whose two
-    `_ND.cdf` values per holding run are kept, and its chance per count of those runs' starts at
-    or before t; one that holds t aims at the middle of what is left of it, read afresh unless its
-    holding weights alone (each run's share is at most 1) cannot put it more than 1e-9 above the
-    best before it, when it would not be taken. The same chances, in the same order, as reading
-    every stretch with every call, so the same aim."""
-
-    def __init__(self, oks, weights, step):
-        import numpy as np
-        n = max(len(o) for o in oks)
-        pad = [np.concatenate([np.asarray(o, bool), np.zeros(n - len(o), bool)]) for o in oks]
-        # A padded array's runs are its own (the pad adds no start that escapes).
-        runs = [_runs_kept(o, step) for o in oks]
-        code = np.zeros(n, np.int64)
-        for j, o in enumerate(pad):
-            code |= o.astype(np.int64) << j
-        stretches = set(r for rs in runs for r in rs)
-        cut = np.flatnonzero(np.diff(code)) + 1
-        for a, b in zip(np.r_[0, cut], np.r_[cut, n]):
-            if code[a]:
-                stretches.add((int(a) * step, int(b - 1) * step))
-        self.runs, self.stretches = runs, sorted(stretches)
-        # Each attack's runs' starts: its runs are apart and in order, so the one that holds `a`, if
-        # any, is the last that starts at or before it.
-        self.starts = [[lo for lo, _ in rs] for rs in runs]
-        self.weights, self.total = list(weights), float(sum(weights))
-        self.sd = DODGE_TIMING_SD_S * TAE_FPS
-        self.ends = sorted({x for s in self.stretches for x in s})
-        self.middles = sorted((lo + (hi - lo) / 2, lo) for lo, hi in self.stretches)
-        self.middle_aims = [a for a, _ in self.middles]
-        self.los = [lo for lo, _ in self.stretches]
-        # {place: ([(weight, run)] holding a point there, in attack order; their weights' sum over
-        # the total)}, {aim: (the distinct starts of its runs, sorted; per run (weight, start, cdf
-        # at its end, cdf at its start); {how many of the starts are at or before t: chance};
-        # whether there is a timing error)}.
-        self.places, self.held = {}, {}
-        self.size = 0
-        # Every run in attack order, then start order, as arrays: an attack's runs are apart, so the
-        # runs with start <= x <= end are each holding attack's one run that holds x, in its order.
-        flat = [(j, r) for j, rs in enumerate(runs) for r in rs]
-        self.flat = [(self.weights[j], r) for j, r in flat]
-        self.flat_lo = np.array([r[0] for _, r in flat], float)
-        self.flat_hi = np.array([r[1] for _, r in flat], float)
-
-    def place(self, x):
-        i = bisect.bisect_left(self.ends, x)
-        return i, i < len(self.ends) and self.ends[i] == x
-
-    def holders(self, x):
-        pk = self.place(x)
-        got = self.places.get(pk)
-        if got is None:
-            import numpy as np
-            flat = self.flat
-            per = [flat[i] for i in np.flatnonzero((self.flat_lo <= x) & (self.flat_hi >= x)).tolist()]
-            got = self.places[pk] = (per, sum(wj for wj, _ in per) / self.total)
-            self.size += 1
-        return got
-
-    def landed(self, a, t):
-        # A run's share: `_ND.cdf((hi - a) / sd)` less, when the run starts after t,
-        # `_ND.cdf((lo - a) / sd)`; 1.0 with no timing error. An attack with no run holding `a`
-        # adds w * 0.0, a 0 that moves neither the sum nor its rounding, so only those with one
-        # are summed.
-        got = self.held.get(a)
-        if got is None:
-            per, _ = self.holders(a)
-            sd = self.sd
-            rows = [(wj, lo, _cdf_kept((hi - a) / sd), _cdf_kept((lo - a) / sd)) for wj, (lo, hi) in per] \
-                if sd > 0 else [(wj, lo, 1.0, 0.0) for wj, (lo, hi) in per]
-            got = self.held[a] = (sorted({lo for _, lo, _, _ in rows}), rows, {}, sd > 0)
-            self.size += 1
-        los, rows, vals, timed = got
-        at = bisect.bisect_right(los, t)
-        v = vals.get(at)
-        if v is None:
-            if timed:
-                v = sum(wj * (c1 - (c2 if lo > t else 0.0)) for wj, lo, c1, c2 in rows) / self.total
-            else:
-                v = sum(wj * 1.0 for wj, _, _, _ in rows) / self.total
-            vals[at] = v
-        return v
-
-    def landed_once(self, a, per, t):
-        # `landed` read afresh and not kept: an aim inside a stretch that holds t moves with t, so
-        # no later call asks for it again.
-        sd = self.sd
-        if sd <= 0:
-            return sum(wj * 1.0 for wj, _ in per) / self.total
-        cdf = _cdf_kept
-        return sum(wj * (cdf((hi - a) / sd) - (cdf((lo - a) / sd) if lo > t else 0.0))
-                   for wj, (lo, hi) in per) / self.total
-
-    def moving(self, a, t, best):
-        # An aim inside a stretch that holds t: read afresh, unless its holding weights cannot lift
-        # it more than 1e-9 over the best so far (a margin of 1e-12 under that, far above the
-        # rounding of either sum, keeps the chance itself from deciding it): it would not be taken.
-        per, bound = self.holders(a)
-        if best is not None and bound < best[0] + 1e-9 - 1e-12:
-            return best
-        p = self.landed_once(a, per, t)
-        return (p, a) if best is None or p > best[0] + 1e-9 else best
-
-    def aim(self, t):
-        # The aims of the stretches that hold t (start before it), in order: `t + x` keeps the
-        # order of `x`, and equal ones are one aim.
-        moving, prev = [], None
-        for hi in sorted({hi for lo, hi in self.stretches[:bisect.bisect_left(self.los, t)] if hi >= t}):
-            a = t + (hi - t) / 2
-            if a != prev:
-                moving.append(a)
-                prev = a
-        best, mi, nm, last = None, 0, len(moving), None
-        held, bisect_right = self.held, bisect.bisect_right
-        # The stretches that start at or after t, at their middles, in order (no middle under t
-        # starts at or after it), equal ones once, merged with the moving ones; a moving aim equal
-        # to one of them is that one. A middle's chance is `landed`'s, read inline.
-        for a, lo in self.middles[bisect.bisect_left(self.middle_aims, t):]:
-            if lo < t or a == last:
-                continue
-            last = a
-            while mi < nm and moving[mi] < a:
-                best = self.moving(moving[mi], t, best)
-                mi += 1
-            if mi < nm and moving[mi] == a:
-                mi += 1
-            got = held.get(a)
-            p = None if got is None else got[2].get(bisect_right(got[0], t))
-            if p is None:
-                p = self.landed(a, t)
-            if best is None or p > best[0] + 1e-9:
-                best = (p, a)
-        while mi < nm:
-            best = self.moving(moving[mi], t, best)
-            mi += 1
-        return None if best is None else best[1]
 
 
 #: Entries the `lookalike_plan` memos of this process may gain together, the `group_presses` memos
@@ -5727,21 +6481,25 @@ def _look_memo(memo):
 
 
 def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP, tags=None, memo=None,
-                   events=None):
+                   events=None, gains=None):
     """How a defender who sees only what is on screen times his first dodge of attack `me` of a
     group he cannot tell apart from its start (the comment above `_escape`).
 
     `oks[j]` is attack j's escaping starts per move (`reaction_outcome`'s `ok` for each of the
     family's moves, of its first burst that reaches him standing), None when nothing of it reaches
     him standing; `weights[j]` its weight; `splits[j][l]` the real frame from which j and l look
-    different (inf when they never do, and on the diagonal). His options are the info times: `cue`
-    and each split. Deciding at time f, facing j, he knows the group's members l with `splits[j][l]`
-    > f and presses as `group_presses` presses against them from cue f (alone: `dodge_presses` from
-    f, a reaction to the split). He takes the time whose presses escape the group most often,
-    weighted (the first of equally good ones), averaged over the moves as the outcomes average
-    them; a member that does not reach him is escaped whatever he does. Returns {'presses': per
-    move, `me`'s presses at that time, 'at': the time, 'escape': {time: the group's escape share}}.
-    One member and no split: `dodge_presses` from `cue`, exactly.
+    different (inf when they never do, and on the diagonal). `gains[j]` (per move a `PressGain` or
+    None; `gains` or `gains[j]` None: none) is what an escaping press is worth to him beyond
+    escaping against j (`dodge_presses`). His options are the info times: `cue` and each split.
+    Deciding at time f, facing j, he knows the group's members l with `splits[j][l]` > f and presses
+    as `group_presses` presses against them from cue f (alone: `dodge_presses` from f, a reaction to
+    the split). He takes the time whose presses are worth most to him over the group, weighted, by
+    the measure `group_presses` aims by (the first of equally good ones; version 25: until then the
+    escape share alone), averaged over the moves as the outcomes average them; a member that does
+    not reach him is escaped whatever he does and adds 1. Returns {'presses': per move, `me`'s
+    presses at that time, 'at': the time, 'escape': {time: the group's escape share}, 'worth':
+    {time: what the presses are worth to him, the measure he chose by}}. One member and no split:
+    `dodge_presses` from `cue`, exactly.
 
     `events[j]` (None: none) is the real frame member j releases (a tap's or an early release's
     clip switch, `release_frames`): something he sees happen, which he reacts to when it comes
@@ -5753,14 +6511,19 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
     plan is the one above, exactly.
 
     `tags[j]` (hashable, equal only for equal `oks[j]`) and `memo`, a dict, let calls at other
-    floors, or for another member of the same group, reuse each set's aims, presses and escapes. A
-    floor at or before his earliest press from a decision time (that time plus his shortest
-    reaction) moves no press (`group_presses` takes the later of the two), so the presses and the
-    escape decided then are shared by every such floor."""
+    floors, or for another member of the same group, reuse each set's aims, presses and escapes;
+    each tag is taken with its member's gains (`PressGain.sig`). A floor at or before his earliest
+    press from a decision time (that time plus his shortest reaction and his earliest timing error,
+    `_SOONEST_PRESS`) moves no press (`_AimTable.key`), so the presses and the escape decided then
+    are shared by every such floor."""
     import numpy as np
     n = len(oks)
     K = len(oks[me])
     tags = list(range(n)) if tags is None else tags
+    gl = [None] * n if gains is None else [None if g is None or all(x is None for x in g) else g for g in gains]
+    if any(g is not None for g in gl):
+        tags = [tags[j] if gl[j] is None else (tags[j], tuple(None if x is None else x.sig for x in gl[j]))
+                for j in range(n)]
     kept = memo is not None
     memo = _look_memo(memo) if kept else {}
     held0 = len(memo)
@@ -5769,7 +6532,7 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
         memo[('times', cue)] = sorted({cue} | {max(cue, s) for row in splits for s in row if math.isfinite(s)})
     times = memo[('times', cue)]
     total = float(sum(weights))
-    soonest = _SOONEST_REACTION
+    soonest = _SOONEST_PRESS
     # One small number per set of escaping starts the calls hand in (`tags`, and which members do
     # not reach him): the keys below name it instead of carrying the tuple.
     ids = memo.setdefault('tag ids', {})
@@ -5818,7 +6581,8 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
         got = memo.get(gk)
         if got is None:
             got = memo[gk] = [group_presses([oks[l][k] for l in seen], [weights[l] for l in seen], t, step, floor,
-                                            memo.setdefault(('aims', key, k), {})) for k in range(K)]
+                                            memo.setdefault(('aims', key, k), {}),
+                                            [None if gl[l] is None else gl[l][k] for l in seen]) for k in range(K)]
         return key, got
     # Each member's escaping starts per move as `_escape` reads them (bytes, length), and per move
     # every member's as one bool matrix padded with False to one length, plus a last False column
@@ -5833,18 +6597,51 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
         seen, key = seen_at(j, t)
         b = binds(t)
         # Each press's grid index and weight, as `_escape` reads them.
-        ix = [_press_index(p, step) for p in presses(j, f)[1]]
+        ps = presses(j, f)[1]
+        ix = [_press_index(p, step) for p in ps]
         rows, nos = [], set()
         for l in seen:
             if tno[l] not in nos and ('escape', tno[l], key, t, b, step) not in memo:
                 nos.add(tno[l])
                 rows.append(l)
+        # Each move's press starts, and each gain's shares at them (a gain is elementwise in its
+        # starts, so its shares at the escaping ones are these, picked): read once per call for
+        # every member alike that holds an equal `PressGain` (`sig`), any other gain per object.
+        starts_k, shares = {}, {}
+
+        def share_at(k, g):
+            gk = (k, g.sig if type(g) is PressGain else id(g))
+            got = shares.get(gk)
+            if got is None:
+                if k not in starts_k:
+                    starts_k[k] = np.array([s for s, _ in ps[k]], float)
+                got = shares[gk] = g(starts_k[k])
+            return got
+
+        def gained(l):
+            # What his escaping presses gain him against l beyond escaping, per move averaged as
+            # the escape is (0.0 without gains): the measure `group_presses` aims by.
+            if gl[l] is None:
+                return 0.0
+            out = 0.0
+            for k in range(K):
+                g = gl[l][k]
+                if g is None:
+                    continue
+                o = np.asarray(oks[l][k], bool)
+                _, _, idx, ws = ix[k]
+                hit = (idx >= 0) & (idx < len(o))
+                okv = np.zeros(len(idx), bool)
+                okv[hit] = o[idx[hit]]
+                if okv.any():
+                    out += float((ws[okv] * share_at(k, g)[okv]).sum())
+            return out / K
         if len(rows) <= 2:
             for l in rows:
                 if l not in okb:
                     okb[l] = [(np.asarray(o, bool).tobytes(), len(o)) for o in oks[l]]
-                memo[('escape', tno[l], key, t, b, step)] = sum(
-                    _escape_index(ob, nb, idx, ws) for (ob, nb), (idx, ws, _, _) in zip(okb[l], ix)) / K
+                e = sum(_escape_index(ob, nb, idx, ws) for (ob, nb), (idx, ws, _, _) in zip(okb[l], ix)) / K
+                memo[('escape', tno[l], key, t, b, step)] = (e, e + gained(l))
             return
         if not mats:
             live = [l for l in range(n) if oks[l] is not None]
@@ -5864,7 +6661,8 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
             v = np.where(mats[k][rows][:, cols], ws, 0.0)
             per.append(np.cumsum(v, axis=1)[:, -1].tolist() if v.shape[1] else [0.0] * len(rows))
         for r, l in enumerate(rows):
-            memo[('escape', tno[l], key, t, b, step)] = sum([per[k][r] for k in range(K)]) / K
+            e = sum([per[k][r] for k in range(K)]) / K
+            memo[('escape', tno[l], key, t, b, step)] = (e, e + gained(l))
     # The decision time is the same for every member of the group read with the same escaping starts
     # at one floor, and a floor no press can meet (at or before the cue plus his shortest reaction,
     # as `binds`) is no floor: one plan serves every such call, and each (member, time) escape every
@@ -5880,12 +6678,13 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
             memo[sk] = ([[(j, None, None) if oks[j] is None else (j, when(j, f), seen_at(j, when(j, f))[1])
                           for j in range(n)] for f in times], [tnos.setdefault(tg, len(tnos)) for tg in tags])
         rows, tno = memo[sk]
-        best, escape = None, {}
+        best, escape, worth = None, {}, {}
         for f, row in zip(times, rows):
-            esc = 0.0
+            esc = val = 0.0
             for j, t, key in row:
                 if t is None:
                     esc += weights[j]
+                    val += weights[j]
                     continue
                 # The escape reads j's escaping starts (`tags[j]`) and the presses of the set he
                 # cannot tell from j then (`seen_at`'s number, which names every member's starts
@@ -5897,19 +6696,20 @@ def lookalike_plan(oks, weights, splits, me, cue=0.0, floor=0.0, step=DODGE_STEP
                 if e is None:
                     fill(j, f, t)
                     e = memo[ek]
-                esc += weights[j] * e
-            escape[f] = esc / total
-            if best is None or escape[f] > best[1] + 1e-9:
-                best = (f, escape[f])
-        memo[pk] = (best[0], escape)
-    at, escape = memo[pk]
-    out = {'presses': presses(me, at)[1], 'at': at, 'escape': escape}
+                esc += weights[j] * e[0]
+                val += weights[j] * e[1]
+            escape[f], worth[f] = esc / total, val / total
+            if best is None or worth[f] > best[1] + 1e-9:
+                best = (f, worth[f])
+        memo[pk] = (best[0], escape, worth)
+    at, escape, worth = memo[pk]
+    out = {'presses': presses(me, at)[1], 'at': at, 'escape': escape, 'worth': worth}
     if kept:
         _LOOK_HELD[0] += len(memo) - held0
     return out
 
 
-def lookalike_pair(other, dist, split, releases=None, shows=None):
+def lookalike_pair(other, dist, split, releases=None, shows=None, other_roll=None):
     """`reaction_outcome`'s `plan` at `dist` for an attack a defender cannot tell from `other` (its
     contact geometries, met as one burst, as `skill_reaction` meets a part) until real frame
     `split`, the two weighted equally (`INFERRED`, as `lookalike_plan`'s callers): `lookalike_plan`
@@ -5922,7 +6722,12 @@ def lookalike_pair(other, dist, split, releases=None, shows=None):
     plays whole from its press, `skill_option`), its weights summing to the attack's, each told
     from the attack where it shows, its release plus `shows[i]` real frames (`release_visible`;
     None: 0), two of them where the first shows, and each a release he reacts to when he sees it
-    (`lookalike_plan` `events`). One entry at 0 showing at once is the pair above, exactly."""
+    (`lookalike_plan` `events`). One entry at 0 showing at once is the pair above, exactly.
+
+    `other_roll` is `other`'s roll frame at its earliest release (a later release's that much
+    later): with it, and a `punish` context the outcome hands in (`reaction_outcome`'s plan call),
+    each release's escaping presses gain him its punish as the attack's gain him its own
+    (`lookalike_plan` `gains`); without it none of the group's are counted (version 25)."""
     import numpy as np
     rel = [(0.0, 1.0)] if not releases else [(float(dl), float(w)) for dl, w in releases]
     n = len(rel)
@@ -5934,14 +6739,17 @@ def lookalike_pair(other, dist, split, releases=None, shows=None):
     events = [None] + [split + v for v in seen] if n > 1 else None
     # One memo per family: at this distance the attack's own escaping starts are its one geometry's,
     # so every floor's plan shares the escapes it can (`lookalike_plan` `memo`).
-    theirs, memos = {}, {}
+    theirs, memos, adv = {}, {}, {}
 
-    def plan(moves, oks, cue, floor):
+    def shifted(dl):
+        return other if dl == 0.0 else [shift_geometry(g, dl) for g in other]
+
+    def plan(moves, oks, cue, floor, gains=None, punish=None):
         fam = tuple(m['anim'] for m in moves)
         if fam not in theirs:
             got = []
             for dl, _ in rel:
-                gs = other if dl == 0.0 else [shift_geometry(g, dl) for g in other]
+                gs = shifted(dl)
                 live = [g['T'].max() for g in gs if g is not None]
                 if not live or _catches(gs, dist, None, [0.0])[0][0] < 0:
                     got.append(None)
@@ -5949,8 +6757,19 @@ def lookalike_pair(other, dist, split, releases=None, shows=None):
                     grid = np.arange(0.0, max(live) + 1.0, DODGE_STEP)
                     got.append([_catches(gs, dist, m, grid)[0] < 0 for m in moves])
             theirs[fam] = got
+        gl = None
+        if punish is not None and other_roll is not None:
+            ordered, run = punish
+            gl = [gains]
+            for i, (dl, _) in enumerate(rel):
+                if theirs[fam][i] is None:
+                    gl.append(None)
+                    continue
+                if dl not in adv:
+                    adv[dl] = attack_advance(shifted(dl))
+                gl.append([PressGain.of(m, dist, adv[dl], run, ordered, other_roll + dl) for m in moves])
         return lookalike_plan([oks] + theirs[fam], weights, splits, 0, cue, floor, memo=memos.setdefault(fam, {}),
-                              events=events)['presses']
+                              events=events, gains=gl)['presses']
     return plan
 
 
@@ -5996,6 +6815,19 @@ def shift_geometry(g, frames):
     out = {**g, 'T': g['T'] + frames}
     if 'TL' in g:
         out['TL'] = g['TL'] + frames
+    if g.get('CUE') is not None:
+        out['CUE'] = g['CUE'] + frames
+    if g.get('PRESS_CUE') is not None:
+        out['PRESS_CUE'] = g['PRESS_CUE'] + frames
+    if g.get('CHAIN') is not None:
+        # A chain part's frames move with it (`split_chains`).
+        i, n, lo, hi = g['CHAIN']
+        out['CHAIN'] = (i, n, lo + frames, hi + frames)
+    if g.get('TURN') is not None:
+        # The clip's turn rules move with it (`clip_turn`, version 27).
+        out['TURN'] = turn_shift(g['TURN'], frames)
+    if 'T0' in g:
+        out['T0'] = g['T0'] + frames
     if 'HOMING' in g:
         parts = [{**p, 'fire': p['fire'] + frames} for p in g['HOMING']['parts']]
         out['HOMING'] = {**g['HOMING'], 'parts': parts, 'sig': tuple(_part_sig(p) for p in parts)}
@@ -6033,14 +6865,19 @@ _HOMING_HELD = [0]
 
 
 def forget_reads():
-    """Empty the memos of flights and touch reads (`_HOMING_TOUCH`, `_HOMING_REACH`, `_CATCHES`) and
-    the lookalike plans' (`forget_look_memos`): every answer they give is the one a fresh read
+    """Empty the memos of flights and touch reads (`_HOMING_TOUCH`, `_HOMING_REACH`, `_CATCHES`), the
+    aim tables, the attacker's facings (`_FACING`, since 2026-11-18) and the lookalike plans'
+    (`forget_look_memos`): every answer they give is the one a fresh read
     gives, so this moves no number, only memory (attack-similarity empties them per attack set,
     whose attacks no other set reads)."""
     _HOMING_TOUCH.clear()
     _HOMING_REACH.clear()
     _HOMING_HELD[0] = 0
     _CATCHES.clear()
+    _AIM_TABLES.clear()
+    forget_aim_worths()
+    _FACING.clear()
+    _FACING_HELD[0] = 0
     forget_look_memos()
 _HOMING_TOUCH = {}
 _HOMING_PROFILE = []
@@ -6069,7 +6906,24 @@ def homing_lineage(t, entries):
 
 
 def _part_sig(p):
-    return (p['bt']['bullet'], round(p['fire'], 4), _launch_key(p['launch']), p['dmg'], p['index'], p['aim'])
+    sig = (p['bt']['bullet'], round(p['fire'], 4), _launch_key(p['launch']), p['dmg'], p['index'], p['aim'])
+    # A chain part's rows (`split_chains`) tell it from the whole tree's part; a part without them
+    # keeps the signature it had.
+    return sig + (p['rows'],) if p.get('rows') is not None else sig
+
+
+def _part_keys(part, tts):
+    """The keys of `tts` (one move's {lineage key: touches}, `_homing_entries`) that are shots of
+    `part`: every one when it names no shots, those of its `index`, and for a chain part
+    (`split_chains`, its `rows`) every shot of one of those Bullet rows that this flight makes. A
+    chain part is named by its rows, not by the keys one flight made: each flight's interval
+    children are its own (`fly_members`), so a flight whose parent makes another number of children
+    than the one the keys were read off, with more than `BULLET_INTERVAL_CAP` of them, keys its
+    children by other slots, and a key list read off one flight would leave them out."""
+    rows = part.get('rows')
+    if rows is not None:
+        return [k for k in tts if k[-1][0] in rows and (part['index'] is None or k in part['index'])]
+    return list(tts) if part['index'] is None else [k for k in part['index'] if k in tts]
 
 
 def _key_nodes(bt, key):
@@ -6156,13 +7010,492 @@ def _move_key(move):
     if got is not None and got[0] is move:
         return got[1]
     key = (float(move['iframes']), bool(move.get('air')), np.asarray(move['path'], float).tobytes())
+    if move.get('track'):
+        # A move he starts out of an earlier one (`carried`): where that leaves him reads too.
+        key = key + (track_key(move['track']),)
     if len(_MOVE_KEYS) > 4096:
         _MOVE_KEYS.clear()
     _MOVE_KEYS[id(move)] = (move, key)
     return key
 
 
-def _homing_entries(part, reg, dist, moves, air, starts):
+# ---------------------------------------------------------------------------------------------
+# the roll he is in (version 26)
+#
+# User, 2026-11-16: "I don't know what the model is doing, I just want it to be accurate, and
+# logically consistent". Until version 26 a defender who escaped one burst of an attack met the
+# next one back at the distance he started from, free to dodge again from the burst's last live
+# frame plus his roll's recovery past its invincibility (`INFERRED` then), whatever his roll did.
+# The spell kit's re-aimed casts already carried him (`er-mechanics-spells.CastThreats._touches`:
+# each roll from where the last one left him, the next no sooner than the last one's start plus its
+# dodge cancel). Now every outcome does: an escaping press leaves him on that roll's root motion
+# from its start, invincible for its own frames, standing where its clip leaves him, and able to
+# dodge again only from its start plus its dodge cancel; the next burst is read against that
+# (`dodge_chain`, `FollowupModel`, `volley_outcome`). A track is where he has been carried:
+# ((start, x, z, move), ...) in time order, each segment the root motion `move['path']` from real
+# frame `start` added to (x, z), the place it started from (sideways, back from where he first
+# stood); before the first segment he stands where he started.
+#
+# Version 27 (the same user words): two of version 26's stand-ins replaced by what the clips say.
+# * His place. Version 26 stood him where the first whole frame of his roll's dodge cancel (f21)
+#   left him; the clip goes on carrying him past it (the back roll 3.71 m back at f21, 3.17 m at
+#   its end; a side roll 3.42 m aside at f21, 4.41 m at f56, `MEASURED` from `roll_motion`). Now a
+#   segment is the whole clip (`track_extend`): free to dodge again from its dodge cancel, he is on
+#   its root motion until he next acts, a later press starting from where it has him then.
+# * The attacker's facing. Version 26 turned the attacker fully to face where the last roll left
+#   him before each later burst and not at all within one (`INFERRED`). Now his facing follows the
+#   clip's own turn rules every update (`clip_turn`, `_facing`): locked on, he turns toward the
+#   defender at most the rate the clip allows that frame, read by `er-mechanics-reach.turn_rate_at`
+#   from the TAE (0 under JumpTable 7 'Disable Turning', else the last usable TAE 224 SetTurnSpeed,
+#   else `DEFAULT_TURN_DEG_PER_S`, 720 deg/s; the handlers and the store `VERIFIED` there, that the
+#   player's modifier keeps 720 `INFERRED` there). Each sample is read in the facing it was made
+#   in (`_turn_apply`): a melee sample at its own frame, a shot at its launch (`TL`). Savage Claws
+#   turns at 600 deg/s through its first five claws and is locked from f70; Rosus's Summons is
+#   locked from f41.1, before its first burst (`TAE`, 2026-11-16). The tracks stay in the attack's
+#   start frame (no more turning the track, version 26's `face_track`), and a roll out of a track
+#   is taken facing the attacker (`oriented`).
+# A homing or aimed shot is flown again at where the track puts him (`_homing_touch`), with no
+# facing applied (its aim at creation follows him). The spell kit's re-aimed casts
+# (`er-mechanics-spells.CastThreats`) chain their re-rolls by `dodge_presses` too (version 27).
+
+#: A defender who stands where his track left him (`still_move`): one frame of no travel, no
+#: invincibility, every cancel at once.
+STILL = {'anim': 'still', 'iframes': 0.0, 'ready': 0.0, 'dodge': 0.0, 'move': 0.0, 'path': [(0.0, 0.0)],
+         'distance': 0.0}
+#: The start of a segment that has always held: a track whose rolls are over by the next burst,
+#: collapsed to where they left him (`collapse_track`).
+TRACK_EVER = -1e9
+#: {id(move): (move, px, pz)}: a move's root motion as arrays (`track_at`).
+_PATH_ARRAYS = {}
+#: {(id(move), track key): carried move}: one dict per carried move, so the memos that key on a
+#: move's identity or its `anim` see one move (`carried`).
+_CARRIED = {}
+CARRIED_CACHE = 50000
+
+
+def _path_arrays(m):
+    """(px, pz) of move `m`'s root motion, kept per dict."""
+    import numpy as np
+    got = _PATH_ARRAYS.get(id(m))
+    if got is None or got[0] is not m:
+        p = np.asarray(m['path'], float)
+        if len(_PATH_ARRAYS) > 4096:
+            _PATH_ARRAYS.clear()
+        got = _PATH_ARRAYS[id(m)] = (m, p[:, 0].copy(), p[:, 1].copy())
+    return got[1], got[2]
+
+
+def dodge_end(m):
+    """The real frame of move `m` he can dodge again from: its dodge cancel, else its clip's end."""
+    return float(m['dodge']) if m['dodge'] is not None else float(len(m['path']))
+
+
+def track_key(track):
+    """A key equal only for equal tracks: each segment's start, place and move."""
+    return tuple((float(t0), float(x), float(z), _move_key(m)) for t0, x, z, m in track)
+
+
+def track_at(track, T, air=False):
+    """(x, z, immune) of a defender carried along `track` at real frames `T` (any shape): sideways
+    and back from where he first stood, and whether the segment he is on still holds its
+    invincibility (only against an `AIR` hit for a move with `air`, `_catches`' rule). Each segment's
+    root motion is read as `_catches` reads a dodge (`path[floor(u)]`, its last frame after its
+    clip); before the first he stands where he started."""
+    import numpy as np
+    T = np.asarray(T, float)
+    x, z, imm = np.zeros(T.shape), np.zeros(T.shape), np.zeros(T.shape, bool)
+    for t0, ox, oz, m in track:
+        on = T >= t0
+        if not on.any():
+            continue
+        px, pz = _path_arrays(m)
+        u = T - t0
+        k = np.clip(np.floor(np.where(on, u, 0.0)).astype(np.int64), 0, len(px) - 1)
+        x = np.where(on, ox + px[k], x)
+        z = np.where(on, oz + pz[k], z)
+        hold = (u < float(m['iframes'])) & (not m.get('air') or bool(air))
+        imm = np.where(on, hold, imm)
+    return x, z, imm
+
+
+def track_extend(track, move, start):
+    """`track` with `move` started at real frame `start` from where the track has him then, as it
+    carries an escaped defender: on its whole root motion, standing at its last frame after the
+    clip, until a later segment (his next press) takes over from where this one has him then
+    (`track_at`). Version 27: until then the segment was cut at the clip's dodge cancel, which
+    stood him where f21 left him (`INFERRED` then)."""
+    x, z, _ = track_at(track, [float(start)])
+    return tuple(track) + ((float(start), float(x[0]), float(z[0]), move),)
+
+
+def collapse_track(track, at):
+    """`track` as one segment at where it leaves him, when every segment's clip is over by real
+    frame `at` (his place is then fixed and no invincibility is left: every read from `at` on is
+    the same), else `track` itself. Equal collapsed tracks merge (`dodge_chain`)."""
+    if not track:
+        return track
+    t0, _, _, m = track[-1]
+    if t0 <= TRACK_EVER or at < t0 + len(m['path']) - 1 or at < t0 + float(m['iframes']):
+        return track
+    x, z, _ = track_at(track, [float(at)])
+    return ((TRACK_EVER, float(x[0]), float(z[0]), STILL),)
+
+
+#: {(id(move), cos, sin): (move, the move turned)} (`_turned`).
+_TURNED = {}
+
+
+def _turned(m, c, s):
+    """Move `m` with its root motion turned by the angle of cosine `c` and sine `s` (x' = c x - s z,
+    z' = s x + c z), its `anim` naming the turn; `m` itself when it does not move (`STILL`)."""
+    import numpy as np
+    px, pz = _path_arrays(m)
+    if not (px.any() or pz.any()):
+        return m
+    key = (id(m), round(c, 12), round(s, 12))
+    got = _TURNED.get(key)
+    if got is not None and got[0] is m:
+        return got[1]
+    path = list(zip((c * px - s * pz).tolist(), (s * px + c * pz).tolist()))
+    out = {**m, 'path': path, 'anim': f"{m['anim']}@{math.degrees(math.atan2(s, c)):.6f}"}
+    if len(_TURNED) > 20000:
+        _TURNED.clear()
+    _TURNED[key] = (m, out)
+    return out
+
+
+def oriented(m, track, dist, ahead=0.0):
+    """Move `m` as he starts it out of `track` (version 27): its root motion turned so that its
+    forward (-z, toward the attacker) points at the attacker's root, `ahead` m up the attack's axis
+    (a number, or a function of (real frame, his z) giving it), from where the track's last segment
+    leaves him (its clip's end; a collapsed track, its one place, the same point). `m` itself for an
+    empty track or one that left him on the axis. The lock-on keeps him facing the attacker and
+    `roll_motion`'s directions are relative to that (`INFERRED`: read where his last roll ends, not
+    at each press; a press made during its slide sees a bearing at most 7 degrees off, a side roll's
+    3.42 m aside at its dodge cancel against 4.41 m at its end, 2.5 m out, `MEASURED` on
+    `roll_motion`). Until version 27 the track was turned instead (`face_track`), the attacker
+    facing where the last roll left him."""
+    if not track:
+        return m
+    t0, _, _, sm = track[-1]
+    f = 0.0 if t0 <= TRACK_EVER else float(t0) + len(sm['path']) - 1
+    x, z, _ = track_at(track, [f])
+    x, z = float(x[0]), float(z[0])
+    if abs(x) < 1e-12:
+        return m
+    a = ahead(f, z) if callable(ahead) else float(ahead)
+    r = math.hypot(x, dist + z - a)
+    return _turned(m, (dist + z - a) / r, -x / r)
+
+
+# ---------------------------------------------------------------------------------------------
+# the attacker's facing (version 27; the comment above `STILL`)
+
+#: {(category, anim): `clip_turn`'s profile}.
+_CLIP_TURN = {}
+#: Radians the attacker may turn in one update (`DODGE_STEP`) outside every TAE window of a clip
+#: (`er-mechanics-reach.DEFAULT_TURN_DEG_PER_S`, 720 deg/s: 12 degrees an update).
+_DEFAULT_TURN_STEP = []
+
+
+def _default_turn_step():
+    if not _DEFAULT_TURN_STEP:
+        _DEFAULT_TURN_STEP.append(math.radians(_pose()[1].DEFAULT_TURN_DEG_PER_S) * DODGE_STEP / TAE_FPS)
+    return _DEFAULT_TURN_STEP[0]
+
+
+def clip_turn(category, anim, events=None):
+    """The attacker's turn over TAE entry (`category`, `anim`), on the update grid from its first
+    real frame: {'t0': 0.0, 'rate': radians he may turn in each update (`DODGE_STEP` real frames)
+    from then, read at the update's middle by `er-mechanics-reach.turn_rate_at` (0 under JumpTable 7,
+    else the last usable TAE 224 rate, else 720 deg/s; locked on), 'fwd': his root's forward travel
+    at each update's start (the HKX root motion, -Z), None when the clip is not read, 'sig': what
+    names it}. Past 'rate' he turns at 720 deg/s (the clip's windows are over); past 'fwd' his root
+    stays at its last. Real frames follow the clip's TAE 608 play speed (`ATK.clip_to_real`).
+    `events` are the entry's (default `ATK.resolve_events`). Cached."""
+    import numpy as np
+    key = (category, anim)
+    if key in _CLIP_TURN:
+        return _CLIP_TURN[key]
+    R = _pose()[1]
+    if events is None:
+        try:
+            events = ATK.resolve_events(category, anim)[2] or []
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            events = []
+    turns, disabled = R.turn_windows(events)
+    to_real = ATK.clip_to_real(events) if events else (lambda s: s)
+    end_c = max([w['end'] for w in turns] + [e for _, e in disabled] + [0.0])
+    end_c = min(end_c, 1e3 / TAE_FPS)
+    h = DODGE_STEP
+    # Clip time against real time every 1/600 s of clip, inverted by interpolation (monotone).
+    cg = np.arange(0.0, end_c + 1.0 / 600, 1.0 / 600)
+    rg = np.array([to_real(float(c)) for c in cg]) * TAE_FPS
+    n = int(math.ceil(rg[-1] / h)) if len(rg) and rg[-1] > 0 else 0
+    mid = (np.arange(n) + 0.5) * h
+    cm = np.interp(mid, rg, cg) if n else np.zeros(0)
+    rate = np.array([R.turn_rate_at(float(c), turns, disabled) for c in cm], float)
+    rate = np.radians(rate) * h / TAE_FPS
+    fwd = None
+    try:
+        clip = _pose()[0].load_animation(category, anim)
+        dur = float(clip.duration)
+        # Real frames against clip time over the whole clip (608 windows past the turn events too).
+        cc = np.arange(0.0, dur + 1.0 / 600, 1.0 / 600)
+        rr = np.array([to_real(float(c)) for c in cc]) * TAE_FPS
+        m = int(math.ceil(rr[-1] / h)) + 1
+        ct = np.minimum(np.interp(np.arange(m) * h, rr, cc), dur)
+        fwd = np.array([-float(clip.root_motion(float(c))[2]) for c in ct], float)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        fwd = None
+    out = {'t0': 0.0, 'rate': rate, 'fwd': fwd, 'sig': ('clip', int(category), int(anim))}
+    _CLIP_TURN[key] = out
+    return out
+
+
+def turn_shift(turn, frames):
+    """`turn` (a `clip_turn` profile, or None) started `frames` real frames later."""
+    if turn is None or not frames:
+        return turn
+    return {**turn, 't0': float(turn['t0']) + float(frames)}
+
+
+#: {key: (theta array or None)} (`_facing`), the one read last at the end: past `FACING_CACHE`
+#: entries or `FACING_BYTES` of arrays the one read longest ago goes. Until 2026-11-18 it was emptied
+#: at 20,000 entries only, and kept across attack sets: one set of Ghostflame Ignition held 10,422
+#: entries and 718 MiB of arrays in it (the timing log's item of 2026-11-18 09:10), so a long set
+#: could hold about 1.4 GB in it. `MEASURED` 2026-11-18 by target/wf/memory/setmem.py: Swift
+#: Slash's set held 12,312 entries and 710 MiB at its largest; with 256 MiB it held at most 6,952
+#: and turned the attacker 9,040 times where keeping every facing turns him 5,735 times (43,472
+#: reads), and Divine Beast Frost Stomp's set read none of its 5,185 facings twice. Emptied with
+#: the other reads at each set's start and end (`forget_reads`): what it keeps is what a fresh read
+#: gives, so neither moves a number.
+_FACING = {}
+FACING_CACHE = 20000
+FACING_BYTES = 256 << 20
+#: The array bytes `_FACING` holds now.
+_FACING_HELD = [0]
+
+
+def _turn_track(turn, x, D, n):
+    """(facing, root drift x, root drift D), each [defender, update]: the attacker's facing (radians
+    toward +x from the attack's axis) at each update `turn['t0'] + j * DODGE_STEP`, j < `n`, for
+    defenders at (x, D) [defender, update] (sideways, ahead of the attacker's start), and how far
+    his turning has moved his root off where his clip's root motion would put it straight down the
+    axis. He faces each on the profile's first update (his clip starts facing him), then turns
+    toward where the defender is on the next update, by at most that update's rate (`clip_turn`).
+    His root goes each update's forward root motion (`fwd`'s step) along the facing he had then, so
+    a lunge made while he turns bends toward the defender; the drift is that path less the straight
+    one. His bearing is read from that root held 2 x `PUSH_CAPSULE_RADIUS` short of the defender
+    along his facing (the body stop every hit reads, `_held`). `INFERRED`: the root turns with the
+    facing (the HKX root motion is in the character's own frame); the clip's lateral root motion
+    is not read (`fwd` is its forward part, as `PK` and `ADV` take it)."""
+    import numpy as np
+    fwd = turn.get('fwd')
+    S = x.shape[0]
+    if fwd is not None and len(fwd):
+        f = np.asarray(fwd, float)[np.minimum(np.arange(n), len(fwd) - 1)]
+    else:
+        f = np.zeros(n)
+    step = np.diff(f, append=f[-1] if n else 0.0)
+    r2 = 2 * _pose()[1].PUSH_CAPSULE_RADIUS
+    rate = np.full(n, _default_turn_step())
+    r0 = np.asarray(turn['rate'], float)[:n]
+    rate[:len(r0)] = r0
+    if S == 1:
+        # One path (a caught defender's play, `CaughtModel._touch_all`): the same steps in plain
+        # floats, which numpy's per-call cost on one element made the dearest line of a play.
+        return _turn_track_one(x[0].tolist(), D[0].tolist(), f.tolist(), step.tolist(), rate.tolist(), r2, n)
+    th, dx, dz = np.empty((S, n)), np.zeros((S, n)), np.zeros((S, n))
+
+    def bearing(j, t):
+        # From his root (straight path plus drift), held short of the defender along facing `t`.
+        rx, rz = dx[:, j], f[j] + dz[:, j]
+        st, ct = np.sin(t), np.cos(t)
+        fd = (x[:, j] - rx) * st + (D[:, j] - rz) * ct
+        held = np.maximum(0.0, r2 - fd)
+        return np.arctan2(x[:, j] - (rx - held * st), D[:, j] - (rz - held * ct))
+    th[:, 0] = bearing(0, np.zeros(S))
+    for j in range(n - 1):
+        t = th[:, j]
+        if step[j] != 0.0:
+            dx[:, j + 1] = dx[:, j] + step[j] * np.sin(t)
+            dz[:, j + 1] = dz[:, j] + step[j] * (np.cos(t) - 1.0)
+        else:
+            dx[:, j + 1], dz[:, j + 1] = dx[:, j], dz[:, j]
+        r = rate[j]
+        if r <= 0.0:
+            th[:, j + 1] = t
+        else:
+            th[:, j + 1] = t + np.clip(bearing(j + 1, t) - t, -r, r)
+    return th, dx, dz
+
+
+def _turn_track_one(x, D, f, step, rate, r2, n):
+    """`_turn_track` of one defender path, in floats: the same operations in the same order (sin,
+    cos, the hold-back, the bearing, the clamp), returned as (1, n) arrays."""
+    import numpy as np
+    th, dx, dz = [0.0] * n, [0.0] * n, [0.0] * n
+
+    def bearing(j, t):
+        rx, rz = dx[j], f[j] + dz[j]
+        st, ct = math.sin(t), math.cos(t)
+        fd = (x[j] - rx) * st + (D[j] - rz) * ct
+        held = max(0.0, r2 - fd)
+        return math.atan2(x[j] - (rx - held * st), D[j] - (rz - held * ct))
+    th[0] = bearing(0, 0.0)
+    for j in range(n - 1):
+        t = th[j]
+        if step[j] != 0.0:
+            dx[j + 1] = dx[j] + step[j] * math.sin(t)
+            dz[j + 1] = dz[j] + step[j] * (math.cos(t) - 1.0)
+        else:
+            dx[j + 1], dz[j + 1] = dx[j], dz[j]
+        r = rate[j]
+        th[j + 1] = t if r <= 0.0 else t + min(max(bearing(j + 1, t) - t, -r), r)
+    return np.array([th]), np.array([dx]), np.array([dz])
+
+
+def _facing(turn, dist, move, starts, upto):
+    """(facing, root drift x, root drift D), each [start, update] (`_turn_track`), against a
+    defender `dist` m ahead who dodges `move` (`carried` on its track) from each of `starts`, read
+    as `_catches` reads his place (`path[floor(u)]`, on the track before the start), from the
+    profile's first update to `upto` (rounded up to a block of 32 updates); None when no facing is
+    read: no profile, no move, or a defender who never leaves the axis (then he faces him
+    throughout, his root goes straight, and every sample reads as before version 27)."""
+    import numpy as np
+    if turn is None or move is None:
+        return None
+    starts = np.asarray(starts, float).ravel()
+    h = DODGE_STEP
+    t0 = float(turn['t0'])
+    n = int(math.ceil(max(0.0, float(upto) - t0) / h / 32.0) * 32) + 1
+    key = (turn['sig'], t0, float(dist), _move_key(move), starts.tobytes(), n)
+    if key in _FACING:
+        # Read again: last to go.
+        got = _FACING[key] = _FACING.pop(key)
+        return got
+    tg = t0 + h * np.arange(n)
+    px, pz = _path_arrays(move)
+    u = tg[None, :] - starts[:, None]
+    k = np.clip(np.floor(u).astype(np.int64), 0, len(px) - 1)
+    on = u >= 0
+    trk = move.get('track')
+    if trk:
+        OX, OZ, _ = track_at(trk, starts)
+        tx, tz, _ = track_at(trk, tg)
+        x = np.where(on, OX[:, None] + px[k], tx[None, :])
+        z = np.where(on, OZ[:, None] + pz[k], tz[None, :])
+    else:
+        x = np.where(on, px[k], 0.0)
+        z = np.where(on, pz[k], 0.0)
+    out = _turn_track(turn, x, dist + z, n) if x.any() else None
+    if out is not None and not (out[0].any() or out[1].any() or out[2].any()):
+        out = None
+    size = 0 if out is None else sum(a.nbytes for a in out)
+    while _FACING and (len(_FACING) >= FACING_CACHE or _FACING_HELD[0] + size > FACING_BYTES):
+        old = _FACING.pop(next(iter(_FACING)))
+        _FACING_HELD[0] -= 0 if old is None else sum(a.nbytes for a in old)
+    _FACING[key] = out
+    _FACING_HELD[0] += size
+    return out
+
+
+def _drift_max(rot):
+    """None when `rot` (`_facing`'s) is None, else the farthest his turning moves his root (m)."""
+    import numpy as np
+    if rot is None:
+        return None
+    return float(np.hypot(rot[1], rot[2]).max())
+
+
+def _turn_when(g, J):
+    """The real frame each sample `J` of `g` takes its facing from: a shot's launch (`TL`), a melee
+    sample's own frame (a finite `PK`), else the geometry's first sample (a shot with no launch read,
+    `INFERRED`: it leaves on the facing of its first sample)."""
+    import numpy as np
+    if 'TL' in g:
+        return g['TL'][J]
+    T = g['T'][J]
+    return np.where(np.isfinite(g['PK'][J]), T, float(g['T0']) if 'T0' in g else float(np.nanmin(g['T'])))
+
+
+def _turn_index(turn, tq, n):
+    """Update index of `turn` each real frame of `tq` reads (clipped to the n computed)."""
+    import numpy as np
+    return np.clip(np.floor((np.asarray(tq, float) - float(turn['t0'])) / DODGE_STEP + 1e-9).astype(np.int64), 0, n - 1)
+
+
+def _turn_apply(x, D, th, pk, ddx=0.0, ddz=0.0):
+    """(x, D) of a defender as a sample made with the attacker facing `th` reads him: turned by -th
+    about the attacker's root as the sample has it, `pk` up the axis (a finite `PK`; else his
+    start) moved by his turning's drift (`ddx`, `ddz`, `_turn_track`), so a defender straight down
+    the facing is straight down the sample's axis at his distance from that root. Written so a
+    facing and drift of exactly 0 return (x, D) unchanged to the bit."""
+    import numpy as np
+    p = np.where(np.isfinite(pk), pk, 0.0)
+    c1, s = np.cos(th) - 1.0, np.sin(th)
+    vx, vz = x - ddx, D - p - ddz
+    return x + (c1 * vx - s * vz - ddx), D + (s * vx + c1 * vz - ddz)
+
+
+def carried(move, track):
+    """`move` started out of `track` (`_catches`' dodge move, its `track` key read by every touch
+    reader): from its start he moves on from where the track has him then; before it he is on the
+    track. An empty track is `move` itself, the defender who stood where he started. One dict per
+    (move, track) (`_CARRIED`); its `anim` names the track too, so a caught defender's play
+    (`CaughtModel.dodge_key`) and the forms' play keys tell carried moves apart."""
+    import hashlib
+    if not track:
+        return move
+    tk = track_key(track)
+    key = (id(move), tk)
+    got = _CARRIED.get(key)
+    if got is not None and got[0] is move:
+        return got[1]
+    tag = hashlib.blake2b(repr((move['anim'], tk)).encode(), digest_size=8).hexdigest()
+    out = {**move, 'anim': f"{move['anim']}~{tag}", 'track': tuple(track), 'base': move}
+    if len(_CARRIED) >= CARRIED_CACHE:
+        _CARRIED.clear()
+    _CARRIED[key] = (move, out)
+    return out
+
+
+def still_move(track):
+    """(move, start): the defender on `track` who does not dodge again, as `_catches` reads a dodge:
+    the track's last segment started at its own start out of the segments before it."""
+    t0, _, _, m = track[-1]
+    if t0 <= TRACK_EVER:
+        return carried(STILL, track), 0.0
+    return carried(m, track[:-1]), float(t0)
+
+
+def _shift_track(track, frames):
+    """`track` `frames` real frames later (a collapsed segment holds at every frame)."""
+    if not track or not frames:
+        return track
+    return tuple((t0 if t0 <= TRACK_EVER else t0 + frames, x, z, m) for t0, x, z, m in track)
+
+
+def _shift_move(move, frames):
+    """`move` with its track `frames` real frames later (a move with no track is itself)."""
+    trk = move.get('track') if move is not None else None
+    if not trk or not frames:
+        return move
+    return carried(move['base'], _shift_track(trk, frames))
+
+
+def _origins(move, starts):
+    """(x, z) arrays where `move` (`carried`) starts from at each of `starts`, None for a move with no
+    track (he starts where he stood)."""
+    trk = move.get('track') if move is not None else None
+    if not trk:
+        return None
+    x, z, _ = track_at(trk, starts)
+    return x, z
+
+
+def _homing_entries(part, reg, dist, moves, air, starts, keep=True, least=False):
     """Per move of `moves` (None: he stands): {lineage key of each hitting shot of `part`'s tree
     (`fly_members`): the first real frame that shot, flown again against the defender on each
     dodge start (every move and start at once), touches him outside his invincibility (inf where it
@@ -6172,33 +7505,54 @@ def _homing_entries(part, reg, dist, moves, air, starts):
     four roll directions one batch. A distance of `HOMING_DISTS` is flown in one batch with the
     others of them it will be asked for (`_homing_batch`): every defender's shots fly on their own
     and each one's touches are read off its own flight (`_entry_first_touch`), so the numbers are
-    those of flying it alone."""
+    those of flying it alone. `keep` False neither reads nor keeps the memo (`_homing_many`'s
+    batches, never asked for again).
+
+    `least` (with `keep` False only): the caller reads only each defender's earliest touch over the
+    part's shots (`_part_keys`, the least of them, as `_homing_many` reads them), so no shot is
+    made for a defender a counted shot already touched by the frame it would be made at
+    (`fly_members` `bound`). Each defender's least touch is the same; a later shot's own touches
+    may then read inf. Why (2026-11-19, .worktrees/gl-stall/target/glh): Golden Land then R2's shot
+    2792 (a 3.5 m burst) is followed by 2793-2797, whose interval children (2795) and their homing
+    2796 and 2797 were 76% of its flight time (py-spy, prof1), flown for every defender, those 2792
+    had touched included; with `least` the same 5,531 answers took 107 s where 165 (chk1)."""
     import numpy as np
-    sig = _part_sig({**part, 'index': None})
+    sig = _part_sig({**part, 'index': None, 'rows': None})
     mkeys = [_move_key(mv) for mv in moves]
-    sb = starts.tobytes()
+    # `starts` per move (a list, `keep` False only): each move flown from its own starts alone.
+    each = isinstance(starts, (list, tuple))
+    if each and keep:
+        raise ValueError('_homing_entries: starts per move are flown with keep False only')
+    sb = None if each else starts.tobytes()
 
     def keys_at(d):
         return [(sig, round(float(d), 4), mk, air, sb) for mk in mkeys]
     keys = keys_at(dist)
-    if all(k in _HOMING_TOUCH for k in keys):
+    if keep and all(k in _HOMING_TOUCH for k in keys):
         return [_HOMING_TOUCH[k] for k in keys]
-    dists = [dist] + _homing_batch(sig, dist, moves, air, len(starts), keys_at)
-    s = len(starts)
-    per = s * len(moves)
+    dists =[dist] + (_homing_batch(sig, dist, moves, air, len(starts), keys_at) if keep else [])
+    if each:
+        mstarts = [np.asarray(x, float).ravel() for x in starts]
+        offs = np.concatenate([[0], np.cumsum([len(x) for x in mstarts])]).astype(int)
+        per = int(offs[-1])
+        mi = np.repeat(np.arange(len(moves)), np.diff(offs))
+        S = np.concatenate(mstarts) if per else np.zeros(0)
+    else:
+        s = len(starts)
+        mstarts = [starts] * len(moves)
+        offs = s * np.arange(len(moves) + 1)
+        per = s * len(moves)
+        mi = np.tile(np.repeat(np.arange(len(moves)), s), len(dists))
+        S = np.tile(starts, len(moves) * len(dists))
     n = per * len(dists)
-    S = np.tile(starts, len(moves) * len(dists))
     # Each move's root motion, padded with its last frame to one length (he stands after his clip).
     paths = [np.zeros((1, 2)) if mv is None else np.array(mv['path'], float) for mv in moves]
     m = max(len(p) for p in paths)
     PX = np.array([np.concatenate([p[:, 0], np.full(m - len(p), p[-1, 0])]) for p in paths])
     PZ = np.array([np.concatenate([p[:, 1], np.full(m - len(p), p[-1, 1])]) for p in paths])
-    mi = np.tile(np.repeat(np.arange(len(moves)), s), len(dists))
-    still = np.tile(np.repeat(np.array([mv is None for mv in moves]), s), len(dists))
-    iframes = np.tile(np.repeat(np.array([0.0 if mv is None else float(mv['iframes']) for mv in moves]), s),
-                      len(dists))
-    immune = np.tile(np.repeat(np.array([mv is not None and (not mv.get('air') or air) for mv in moves]), s),
-                     len(dists))
+    still = np.array([mv is None for mv in moves])[mi]
+    iframes = np.array([0.0 if mv is None else float(mv['iframes']) for mv in moves])[mi]
+    immune = np.array([mv is not None and (not mv.get('air') or air) for mv in moves])[mi]
     # Where he stands: the distance of each defender's flight (one number when it is one distance).
     ahead = dist if len(dists) == 1 else np.repeat(np.array(dists, float), per)
     ahead_d = np.array(dists, float)
@@ -6208,19 +7562,39 @@ def _homing_entries(part, reg, dist, moves, air, starts):
     # at frame -1 (`moved`).
     PX1 = np.concatenate([np.zeros((len(moves), 1)), PX], axis=1)
     PZ1 = np.concatenate([np.zeros((len(moves), 1)), PZ], axis=1)
+    # A move out of an earlier one (`carried`, version 26): it starts from where its track has him
+    # at each start, and before it he is on the track. Per move, the origins at the starts.
+    tracks = [mv.get('track') if mv is not None else None for mv in moves]
+    origins = [track_at(trk, mstarts[j])[:2] if trk else None for j, trk in enumerate(tracks)]
+    if any(tracks):
+        OXs, OZs = np.zeros(n), np.zeros(n)
+        for di in range(len(dists)):
+            for j, o in enumerate(origins):
+                if o is not None:
+                    at_ = slice(di * per + offs[j], di * per + offs[j + 1])
+                    OXs[at_], OZs[at_] = o[0], o[1]
 
     def moved(T):
         """How far he has moved at real frame(s) `T`, (x, z) arrays (..., `per`): every move's, side
         by side. A defender's frame of his move is read off his dodge start alone, and every move and
-        distance has the same starts: read once per start, then laid out per move (each distance's
-        are the same). Before his start he has not moved (frame -1 of `PX1`, `PZ1`); from it he is
-        at its frame, his last after his clip."""
-        u = np.asarray(T, float)[..., None] - starts
-        k = np.minimum(np.maximum(np.floor(u).astype(int), -1), m - 1) + 1
-        x, z = np.empty(u.shape[:-1] + (per,)), np.empty(u.shape[:-1] + (per,))
+        distance has the same starts (unless each move has its own): read once per start, then laid
+        out per move (each distance's are the same). Before his start he has not moved (frame -1 of
+        `PX1`, `PZ1`); from it he is at its frame, his last after his clip. A carried move: from its
+        origin, on its track before."""
+        x, z = None, None
         for j in range(len(moves)):
-            at_j = slice(j * s, (j + 1) * s)
-            x[..., at_j], z[..., at_j] = PX1[j][k], PZ1[j][k]
+            u = np.asarray(T, float)[..., None] - mstarts[j]
+            k = np.minimum(np.maximum(np.floor(u).astype(int), -1), m - 1) + 1
+            if x is None:
+                x, z = np.empty(u.shape[:-1] + (per,)), np.empty(u.shape[:-1] + (per,))
+            at_j = slice(offs[j], offs[j + 1])
+            if tracks[j]:
+                tx, tz, _ = track_at(tracks[j], np.asarray(T, float)[..., None])
+                on = u >= 0
+                x[..., at_j] = np.where(on, origins[j][0] + PX1[j][k], tx)
+                z[..., at_j] = np.where(on, origins[j][1] + PZ1[j][k], tz)
+            else:
+                x[..., at_j], z[..., at_j] = PX1[j][k], PZ1[j][k]
         return x, z
 
     def where(T):
@@ -6241,12 +7615,25 @@ def _homing_entries(part, reg, dist, moves, air, starts):
         k = row[who] + np.minimum(np.maximum(np.floor(u).astype(int), 0), m - 1)
         moving = (u >= 0) & ~still[who]
         vuln = ~(moving & (u < iframes[who]) & immune[who])
-        return (np.where(moving, PXf[k], 0.0),
-                (ahead if len(dists) == 1 else ahead[who]) + np.where(moving, PZf[k], 0.0), vuln)
+        if not any(tracks):
+            return (np.where(moving, PXf[k], 0.0),
+                    (ahead if len(dists) == 1 else ahead[who]) + np.where(moving, PZf[k], 0.0), vuln)
+        x = np.where(moving, OXs[who] + PXf[k], 0.0)
+        z = np.where(moving, OZs[who] + PZf[k], 0.0)
+        Tb = np.broadcast_to(np.asarray(T, float), u.shape)
+        for j, trk in enumerate(tracks):
+            if not trk:
+                continue
+            sel = (mi[who] == j) & ~moving
+            if sel.any():
+                tx, tz, ti = track_at(trk, Tb[sel], air)
+                x[sel], z[sel], vuln[sel] = tx, tz, ~ti
+        return x, (ahead if len(dists) == 1 else ahead[who]) + z, vuln
     # The most he moves in one bullet step: his position changes once per real frame, by one step
-    # of his root motion (or onto its first frame when the move starts).
+    # of his root motion (or onto its first frame when the move starts); a carried move's track too.
+    seg_paths = [np.asarray(sm['path'], float) for trk in tracks if trk for _, _, _, sm in trk]
     jump = max([0.0] + [float(np.hypot(*p[0])) for p in paths]
-               + [float(np.hypot(*np.diff(p, axis=0).T).max()) for p in paths if len(p) > 1])
+               + [float(np.hypot(*np.diff(p, axis=0).T).max()) for p in paths + seg_paths if len(p) > 1])
     margin = jump * math.ceil(TAE_FPS / BULLET_FPS) + 1e-6
     t = _HOMING_TABLES.get(reg) or AshTables(reg)
     launch, fire = part['launch'], part['fire']
@@ -6255,26 +7642,35 @@ def _homing_entries(part, reg, dist, moves, air, starts):
         held = np.maximum(0.0, launch['peak'] - (where(fire)[1] - 2 * _pose()[1].PUSH_CAPSULE_RADIUS))
     outs = [[{} for _ in moves] for _ in dists]
     added = 0
+    # Each defender's earliest counted touch so far (`least`), which `fly_members` reads before it
+    # makes a child.
+    bound = np.full(n, math.inf) if least and not keep else None
     # An aimed part's shots are aimed at where he is on the frame each one is created, his roll
     # included (FUN_140390c20 reads the target's position then); one left unaimed keeps its launch
     # heading. Each entry is read as it is flown and let go, so one shot's paths are held at a time.
-    for e in fly_members(t, part['bt'], n, fire, launch, at_each, part['aim'], held, margin=margin):
+    for e in fly_members(t, part['bt'], n, fire, launch, at_each, part['aim'], held, margin=margin, bound=bound):
         if e['node']['bullet'] not in part['dmg']:
             continue
         tt = np.full(n, math.inf)
         tt[e['who']] = _entry_first_touch(e, fire, at_each, margin)[e['inv']]
+        if bound is not None and _part_keys(part, {e['key']: None}):
+            np.minimum(bound, tt, out=bound)
         kept = False
         for di, out in enumerate(outs):
             for j, o in enumerate(out):
-                v = tt[di * per + j * s:di * per + (j + 1) * s]
+                v = tt[di * per + offs[j]:di * per + offs[j + 1]]
                 # A shot that touches none of one move's defenders is left out: `_homing_touch` takes
                 # the least of the shots' touches, which an inf never moves, so a missing key reads
                 # as it would. Founding Rain of Stars' flights are 90% such answers (2026-11-13).
                 if not np.isposinf(v).all():
-                    o[e['key']] = v
+                    # Flights whose interval children differ yield one key apiece (`fly_members`),
+                    # each inf off its own members.
+                    o[e['key']] = v if e['key'] not in o else np.minimum(o[e['key']], v)
                     kept = True
         if kept:
             added += tt.nbytes
+    if not keep:
+        return outs[0]
     # Each kept answer is a view of its flight's `tt`, so the bytes held are the flights' kept.
     if len(_HOMING_TOUCH) > HOMING_TOUCH_CACHE or _HOMING_HELD[0] + added > HOMING_TOUCH_BYTES:
         _HOMING_TOUCH.clear()
@@ -6297,8 +7693,22 @@ def _homing_batch(sig, dist, moves, air, s, keys_at):
     them. A defender who stands is asked for at every distance; a dodging one only where a shot of
     the part touches him standing (his moves are read where the attack reaches him standing,
     `reaction_outcome`), which its flights standing tell (`_HOMING_REACH`). Those not flown yet, up
-    to `HOMING_BATCH_MEMBERS` defenders in all."""
-    if dist not in HOMING_DISTS:
+    to `HOMING_BATCH_MEMBERS` defenders in all.
+
+    None for a move carried out of an earlier roll (`carried`, version 26): its track was laid at
+    `dist` (each roll turned to face the attacker from there, `oriented`), so the same move is
+    seldom asked for at another distance (only a track that left him on the axis, which `oriented`
+    does not turn, reads the same at every distance) and its flights there are thrown away. From
+    version 27, when a `_TouchTable` began flying every homing geometry against every carried move,
+    each such flight took about 26 distances with it. Golden Land on a Large Club then R2 at frame
+    68 flew 7,919 extra distances for its first 228 carried tables; of the 8,157 batched keys its
+    first 6.5 min held, 94 were ever read, all of them by 30 s: 1.7 s a table, 15 times the 0.12 s
+    each takes alone, and the set stood unfinished after 3.5 h in the kit run of 11-17 (2026-11-18,
+    target/wf/blowup/diag.py, digA and fix2). Each member flies alone, so the numbers are the same:
+    on 48 homing trees with interval children, a carried move's flight batched with 3 to 7 other
+    distances and flown alone gave the same bytes at 2, 3 and 8 m (2026-11-18,
+    target/wf/verify-blowup/batchexact.py with draws=1, batchexact3.py)."""
+    if dist not in HOMING_DISTS or any(mv is not None and mv.get('track') for mv in moves):
         return []
     room = HOMING_BATCH_MEMBERS // (s * len(moves)) - 1
     standing = all(mv is None for mv in moves)
@@ -6312,6 +7722,108 @@ def _homing_batch(sig, dist, moves, air, s, keys_at):
         if not all(k in _HOMING_TOUCH for k in keys_at(d)):
             out.append(d)
     return out
+
+
+#: {(id(geometry), distance, `_move_key`, dodge starts' bytes): (the geometry, `_homing_touch`'s
+#: answer)}: answers flown ahead of the read that asks for them (`_homing_ready`), each taken by it.
+_HOMING_READY = {}
+#: Defenders (moves x starts) `_homing_many` flies in one call at most.
+HOMING_MANY_MEMBERS = 3000
+
+
+def _homing_many(g, dist, reqs):
+    """Per (move, starts) of `reqs`: `_homing_touch(g, dist, move, starts)`, every move flown in as
+    few calls as `HOMING_MANY_MEMBERS` lets (`_homing_entries` with `keep` False and `least`, each
+    move from its own lattice starts), each answer read off its own defender's flights. The same numbers as
+    `_homing_touch`: per part the same shift, the same shifted move and fire, a start's flight is
+    its own (`_homing_entries`; its interval children too since 2026-11-18, `fly_members`), and its
+    touches are the least over the same shots plus the same shift.
+
+    Why: the follow-up read each carried move alone (the four moves of each burst table, each
+    press delay's roll, each one-start standing table), and a flight call costs more than its
+    defenders. Flown together, Golden Land on a Large Club then R2 at frame 68 reached 929 of its
+    first form's stages in 140 CPU s where reading them alone took 304 (2026-11-18,
+    target/wf/goldenland run3 against run2; with neither this nor `_RowsTable`, run1 made 335 in
+    140)."""
+    import numpy as np
+    spec = g['HOMING']
+    air = bool(g.get('AIR'))
+    reqs = [(mv, np.asarray(s, float).ravel()) for mv, s in reqs]
+    out = [np.full(len(s), math.inf) for _, s in reqs]
+    for part in spec['parts']:
+        shift = math.floor(part['fire'] / DODGE_STEP) * DODGE_STEP
+        lat = []
+        for r, (mv, s) in enumerate(reqs):
+            ii = np.round((s - shift) / DODGE_STEP).astype(int)
+            if len(s) and np.array_equal(ii * DODGE_STEP + shift, s):
+                lat.append((r, ii))
+                continue
+            # Off the lattice: flown as `_homing_touch` flies it.
+            tts = _homing_entries(part, spec['reg'], dist, [mv], air, s)[0]
+            for k in _part_keys(part, tts):
+                out[r] = np.minimum(out[r], tts[k][slice(None)] + 0.0)
+        # Chunks of up to `HOMING_MANY_MEMBERS` defenders, each move flown from its own starts
+        # (`_homing_entries` with a start list per move). Until 2026-11-19 a chunk flew every move on
+        # its starts' union: Golden Land then R2 at 1.5 m flew 110,178 defenders for 79,711 asked in
+        # its first 90 s (.worktrees/gl-stall prof2).
+        lat.sort(key=lambda e: (int(e[1].min()), int(e[1].max())))
+        chunks, cur, size = [], [], 0
+        for e in lat:
+            if cur and size + len(e[1]) > HOMING_MANY_MEMBERS:
+                chunks.append(cur)
+                cur, size = [], 0
+            cur.append(e)
+            size += len(e[1])
+        if cur:
+            chunks.append(cur)
+        fire = {**part, 'fire': part['fire'] - shift}
+        for ch in chunks:
+            mv_ = [_shift_move(reqs[r][0], -shift) for r, _ in ch]
+            res = _homing_entries(fire, spec['reg'], dist, mv_, air, [ii * DODGE_STEP for _, ii in ch], keep=False,
+                                  least=True)
+            for (r, ii), tts in zip(ch, res):
+                for k in _part_keys(part, tts):
+                    out[r] = np.minimum(out[r], tts[k] + shift)
+    return out
+
+
+def _homing_ready(dist, reqs):
+    """Fly ahead, together (`_homing_many`), the homing shots that `_homing_touch` will be asked
+    to fly against carried moves: `reqs` [(geometries, move, dodge starts)], each answer kept until
+    that read takes it (`_HOMING_READY`). Returns the keys it set, for `_homing_forget`. A read that
+    asks for other starts than were flown ahead flies as before."""
+    import numpy as np
+    by = {}
+    for geoms, mv, s in reqs:
+        if mv is None or not mv.get('track'):
+            continue
+        s = np.asarray(s, float).ravel()
+        if not len(s):
+            continue
+        mk = _move_key(mv)
+        for g in geoms:
+            if g is None or 'HOMING' not in g:
+                continue
+            k = (id(g), float(dist), mk, s.tobytes())
+            if k in _HOMING_READY:
+                continue
+            got = by.setdefault(id(g), (g, {}))[1]
+            if k not in got:
+                got[k] = (mv, s)
+    keys = []
+    for g, todo in by.values():
+        if len(todo) < 2:
+            continue
+        for k, b in zip(todo, _homing_many(g, dist, list(todo.values()))):
+            _HOMING_READY[k] = (g, b)
+            keys.append(k)
+    return keys
+
+
+def _homing_forget(keys):
+    """Drop the answers `_homing_ready` set that no read took."""
+    for k in keys:
+        _HOMING_READY.pop(k, None)
 
 
 def _homing_touch(g, dist, move, starts):
@@ -6335,6 +7847,11 @@ def _homing_touch(g, dist, move, starts):
     import numpy as np
     spec = g['HOMING']
     starts = np.asarray(starts, float).ravel()
+    if _HOMING_READY and move is not None and move.get('track'):
+        # Flown ahead with other carried moves (`_homing_ready`).
+        got = _HOMING_READY.pop((id(g), float(dist), _move_key(move), starts.tobytes()), None)
+        if got is not None and got[0] is g:
+            return got[1]
     n = len(starts)
     family = roll_motion() if move is not None else []
     moves = family if any(mv is move for mv in family) else [move]
@@ -6345,18 +7862,29 @@ def _homing_touch(g, dist, move, starts):
         lattice = (starts - shift) / DODGE_STEP
         ii = np.round(lattice).astype(int) if n else np.zeros(0, int)
         if n and np.array_equal(ii * DODGE_STEP + shift, starts):
-            lo = (ii.min() // HOMING_START_BUCKET) * HOMING_START_BUCKET
-            hi = (ii.max() // HOMING_START_BUCKET + 1) * HOMING_START_BUCKET
-            flown = np.arange(lo, hi) * DODGE_STEP
-            tts = _homing_entries({**part, 'fire': part['fire'] - shift}, spec['reg'], dist, moves,
-                                  bool(g.get('AIR')), flown)[j]
+            bucket = ((ii.min() // HOMING_START_BUCKET) * HOMING_START_BUCKET,
+                      (ii.max() // HOMING_START_BUCKET + 1) * HOMING_START_BUCKET)
+            # A carried move's track moves back with the starts (the same flight that much earlier).
+            mv_ = [_shift_move(mv, -shift) for mv in moves]
+            fire_ = {**part, 'fire': part['fire'] - shift}
+            if move is not None and move.get('track'):
+                # A carried move (`carried`) is flown on the starts asked for alone: its track is its
+                # own, so no other grid reads the bucket's other starts (`_homing_batch` flies it at
+                # no other distance either), and each start flies on its own, so the numbers are the
+                # same (2026-11-18, target/wf/goldenland chkG and chkG2: 948 such answers, flown
+                # alone or together by `_homing_many`, against the bucketed flights, every byte equal;
+                # interval children included since 2026-11-18, `fly_members`).
+                lo, hi = ii.min(), ii.max() + 1
+            else:
+                lo, hi = bucket
+            tts = _homing_entries(fire_, spec['reg'], dist, mv_, bool(g.get('AIR')),
+                                  np.arange(lo, hi) * DODGE_STEP)[j]
             pick = ii - lo
         else:
             shift, pick = 0.0, slice(None)
             tts = _homing_entries(part, spec['reg'], dist, moves, bool(g.get('AIR')), starts)[j]
-        for k in (tts if part['index'] is None else part['index']):
-            if k in tts:
-                best = np.minimum(best, tts[k][pick] + shift)
+        for k in _part_keys(part, tts):
+            best = np.minimum(best, tts[k][pick] + shift)
     return best
 
 
@@ -6372,7 +7900,12 @@ def _held(g, dist, move, u, starts, n, pz, radius):
         dl = np.full(ul.shape, float(dist))
     else:
         kl = np.clip(np.floor(ul).astype(int), 0, n - 1)
-        dl = dist + np.where(ul >= 0, pz[kl], 0.0)
+        o = _origins(move, starts)
+        if o is None:
+            dl = dist + np.where(ul >= 0, pz[kl], 0.0)
+        else:
+            # Carried (`carried`): from where the track has him, and on it before the start.
+            dl = dist + np.where(ul >= 0, o[1] + pz[kl], track_at(move['track'], g['TL'][None, :])[1])
     return np.maximum(0.0, g['PK'][None, :] - (dl - 2 * radius))
 
 
@@ -6409,6 +7942,15 @@ def _geo_reads(g):
     digest = None
     if 'HOMING' not in g:
         h = hashlib.blake2b(repr(bool(g.get('AIR'))).encode(), digest_size=16)
+        if g.get('CHAIN') is not None:
+            # A chain part's shared frame goes to the later part (`_catches_read`).
+            h.update(repr(('chain',) + tuple(float(x) for x in g['CHAIN'])).encode())
+        if g.get('HPR') is not None:
+            # A tie in one hit priority record goes by its priority (`_catches_read`).
+            h.update(repr(('hpr', g['HPR'])).encode())
+        if g.get('TURN') is not None:
+            # The attacker's facing is read from the clip's turn rules (`_facing`, version 27).
+            h.update(repr(('turn', g['TURN']['sig'], float(g['TURN']['t0']), g.get('T0'))).encode())
         for k, a in zip(('T', 'X', 'Z', 'R', 'PK', 'TL'), arrs):
             if a is not None:
                 a = np.ascontiguousarray(a)
@@ -6440,14 +7982,25 @@ def _geo_first_touch(g, dist, move, starts, px, pz, n, radius, bound=None):
     import numpy as np
     T, X, Z, R, PK, TL = g['T'], g['X'], g['Z'], g['R'], g['PK'], g.get('TL')
     found = np.full(starts.shape[0], math.inf)
+    # The attacker's facing as he tracks this defender (version 27, `_facing`), None when it is his
+    # start's throughout.
+    turn = g.get('TURN')
+    rot = _facing(turn, dist, move, starts[:, 0], float(np.nanmax(TL if TL is not None else T))) \
+        if turn is not None else None
     order = _geo_reads(g)[0]
     whole = order is None
-    cols = np.arange(len(T)) if whole else order[_may_touch(g, dist, move)[order]]
+    cols = np.arange(len(T)) if whole else order[_may_touch(g, dist, move, _drift_max(rot))[order]]
     if not len(cols):
         return found
     lim = found if bound is None else np.asarray(bound, float)
     immune = not move.get('air') or bool(g.get('AIR'))
     iframes = move['iframes']
+    # A move out of an earlier one (`carried`, version 26): before its start he is on the track, and
+    # it starts from where the track has him then.
+    trk = move.get('track')
+    if trk:
+        OX, OZ, _ = track_at(trk, starts)
+        air = bool(g.get('AIR'))
     pos, size = 0, len(cols) if whole else FIRST_TOUCH_BLOCK
     while pos < len(cols):
         J = cols[pos:pos + size]
@@ -6459,13 +8012,34 @@ def _geo_first_touch(g, dist, move, starts, px, pz, n, radius, bound=None):
         u = TJ - st
         k = np.clip(np.floor(u).astype(int), 0, n - 1)
         moving = u >= 0
-        xr = np.where(moving, px[k], 0.0)
-        d = dist + np.where(moving, pz[k], 0.0)
-        vuln = ~(moving & (u < iframes) & immune)
+        if trk:
+            tx, tz, ti = track_at(trk, TJ, air)
+            xr = np.where(moving, OX[act] + px[k], tx)
+            d = dist + np.where(moving, OZ[act] + pz[k], tz)
+            vuln = ~((moving & (u < iframes) & immune) | (~moving & ti))
+        else:
+            xr = np.where(moving, px[k], 0.0)
+            d = dist + np.where(moving, pz[k], 0.0)
+            vuln = ~(moving & (u < iframes) & immune)
         if TL is not None:
             ul = TL[J][None, :] - st
             kl = np.clip(np.floor(ul).astype(int), 0, n - 1)
-            dl = dist + np.where(ul >= 0, pz[kl], 0.0)
+            if trk:
+                tl_ = track_at(trk, TL[J][None, :])
+                xl = np.where(ul >= 0, OX[act] + px[kl], tl_[0])
+                dl = dist + np.where(ul >= 0, OZ[act] + pz[kl], tl_[1])
+            else:
+                xl = np.where(ul >= 0, px[kl], 0.0)
+                dl = dist + np.where(ul >= 0, pz[kl], 0.0)
+        if rot is not None:
+            # Each sample read in the facing it was made in, about his root where his turning has
+            # moved it (`_turn_apply`).
+            ji = _turn_index(turn, _turn_when(g, J), rot[0].shape[1])
+            th, ddx, ddz = rot[0][act][:, ji], rot[1][act][:, ji], rot[2][act][:, ji]
+            xr, d = _turn_apply(xr, d, th, PK[J][None, :], ddx, ddz)
+            if TL is not None:
+                xl, dl = _turn_apply(xl, dl, th, PK[J][None, :], ddx, ddz)
+        if TL is not None:
             held = np.maximum(0.0, PK[J][None, :] - (dl - 2 * radius))
         else:
             held = np.maximum(0.0, PK[J][None, :] - (d - 2 * radius))
@@ -6514,19 +8088,46 @@ def _catches_read(geoms, dist, move, starts, radius):
     if move is not None:
         path = np.array(move['path'], float)
         px, pz, n = path[:, 0], path[:, 1], len(path)
+    # Each chain part's last frame, the one it shares with the next part (`split_chains`).
+    ends = np.array([g['CHAIN'][3] if g is not None and g.get('CHAIN') is not None else math.nan
+                     for g in geoms] + [math.nan], float)
+
+    # Each geometry's hit priority record (`HPR`: (key, priority, created)) or None, as arrays with
+    # a last entry for best_h -1: the record's index among those here (-1 none), priority, created.
+    hprs = [None if g is None else g.get('HPR') for g in geoms]
+    rkeys = {}
+    rec_i = np.array([-1 if r is None else rkeys.setdefault(r[0], len(rkeys)) for r in hprs] + [-2], int)
+    rec_p = np.array([(0.0, 0.0) if r is None else (float(r[1]), float(r[2])) for r in hprs] + [(0.0, 0.0)], float)
+
+    def take(h, tt):
+        better = tt < best_t
+        ch = geoms[h].get('CHAIN')
+        if ch is not None and ch[0] > 0:
+            # The frame a chain part shares with the part before it is this one's: a tie there goes
+            # to it (`_live`'s reading, `split_chains`).
+            better |= (tt == best_t) & np.isfinite(tt) & (tt == ch[2]) & (ends[best_h] == tt)
+        r = hprs[h]
+        if r is not None:
+            # One frame's tie in one record goes to the lower priority, then to the attack created
+            # first, as `CaughtModel._play` breaks it (DmgMan's list, FUN_140527d40; version 21:
+            # until then the earlier geometry in the list took it, and the play could land both).
+            bp = rec_p[best_h]
+            wins = (rec_i[best_h] == rec_i[h]) & ((rec_p[h, 0] < bp[:, 0])
+                                                  | ((rec_p[h, 0] == bp[:, 0]) & (rec_p[h, 1] < bp[:, 1])))
+            better |= (tt == best_t) & np.isfinite(tt) & wins
+        best_t[better], best_h[better] = tt[better], h
     for h, g in enumerate(geoms):
         if g is None:
             continue
         if 'HOMING' in g:
-            tt = _homing_touch(g, dist, move, starts[:, 0])
-            better = tt < best_t
-            best_t[better], best_h[better] = tt[better], h
+            take(h, _homing_touch(g, dist, move, starts[:, 0]))
             continue
         if move is not None:
-            # Only a first touch below the best so far is taken (`_geo_first_touch` `bound`).
-            tt = _geo_first_touch(g, dist, move, starts, px, pz, n, radius, best_t)
-            better = tt < best_t
-            best_t[better], best_h[better] = tt[better], h
+            # Only a first touch below the best so far is taken (`_geo_first_touch` `bound`); a
+            # chain part's tie, and a tie a hit priority record can win, is read with a bound a
+            # hair later.
+            bound = best_t if g.get('CHAIN') is None and g.get('HPR') is None else np.nextafter(best_t, math.inf)
+            take(h, _geo_first_touch(g, dist, move, starts, px, pz, n, radius, bound))
             continue
         u = g['T'][None, :] - starts
         xr, d, vuln = 0.0, np.full(u.shape, float(dist)), np.ones(u.shape, bool)
@@ -6534,9 +8135,7 @@ def _catches_read(geoms, dist, move, starts, radius):
         if held is None:
             held = np.maximum(0.0, g['PK'][None, :] - (d - 2 * radius))
         touch = vuln & (np.hypot(g['X'][None, :] - xr, g['Z'][None, :] + held + d) < g['R'][None, :])
-        tt = np.where(touch, g['T'][None, :], math.inf).min(axis=1)
-        better = tt < best_t
-        best_t[better], best_h[better] = tt[better], h
+        take(h, np.where(touch, g['T'][None, :], math.inf).min(axis=1))
     return best_h, best_t
 
 
@@ -6584,23 +8183,41 @@ def _press_reads(presses, keep=False):
     return got[1], got[2], got[3]
 
 
-def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, advance=0.0,
-                     strikes=None, floor=0.0, run=False, catches=None, plan=None):
+def _punish_ctx(ordered, my_roll, run):
+    """What a plan needs to make each lookalike's `PressGain` (`lookalike_plan` `gains`): (the
+    pool's strikes sorted, `run`), or None when no punish is counted (no strikes, no roll frame)."""
+    if ordered is None or my_roll is None or not len(ordered):
+        return None
+    return ordered, run
+
+
+def _plan_call(plan, moves, oks, cue, floor, gains=None, punish=None):
+    """`plan(moves, oks, cue, floor)`, with `gains` and `punish` as keywords when a punish is
+    counted (a plan made before version 25, a selftest's, takes the four alone)."""
+    if punish is None:
+        return plan(moves, oks, cue, floor)
+    return plan(moves, oks, cue, floor, gains=gains, punish=punish)
+
+
+def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, advance=None,
+                     strikes=None, floor=0.0, run=False, catches=None, plan=None, aim_punish=True):
     """A defender `dist` m ahead who waits for this attack and dodges on reaction (section 16).
 
     `geoms` is one `contact_geometry` per hit (None where a hit has no shapes), `hit_value[h]` what
     the attack is worth when hit h is the first to catch him (for a slot 1.0, for a skill the
     damage of that hit and of every later one that lands). `cue` is the real frame the attack
     becomes readable: its clip's start, or for a hit whose timing the attacker picks (an R2's
-    release, a skill follow-up, a stance) the start of that part. Each of the medium roll's four
-    directions (`roll_motion`) is taken equally (`INFERRED`, as section 14a), and for each the
-    dodge starts where `dodge_presses` puts it, no earlier than `floor`.
+    release, a skill follow-up, a stance) the start of that part. Each move of `moves` is taken
+    equally, and for each the dodge starts where `dodge_presses` puts it, no earlier than `floor`;
+    with `moves` None he takes the medium roll's direction that leaves the attacker least
+    (`dodge_families`; until version 22 the four were taken equally, `INFERRED`).
 
     Returns `value` (expected worth when he reacts), `p_evade`, and, when `strikes` (the pool's
     R1 strike frames) and `my_roll` (the attacker's first roll frame from the same clip start)
     are given, `p_punish` and `punish_hp`: an evading dodger punishes when his R1 cancel plus his
     strike comes before the attacker can roll, and he ends within `PUNISH_REACH_M` of where the
-    attacker's root motion (`advance` m forward) left him. With `run`, a dodger who ends further
+    attacker's root motion left him (`advance`, `attack_advance`; None: `geoms`' own, the caller
+    of one burst of a longer attack passing the whole attack's). With `run`, a dodger who ends further
     away runs the rest in at run speed before he strikes (`er-mechanics-neutral.frames_per_metre`,
     as `Opponents.dodge_value` does): an attacker who stays at range is punished when his roll
     comes late enough.
@@ -6613,9 +8230,27 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
     `plan(moves, oks, cue, floor)`, when given, times the dodge instead of `dodge_presses`: it is
     handed each move's escaping starts and returns each move's presses (`lookalike_plan`: what a
     defender who cannot tell this attack from others presses). It is called only when the attack
-    reaches him standing."""
+    reaches him standing; with `aim_punish`, also with `gains` (his per move `PressGain`) and
+    `punish` (the strikes and `run`, `_punish_ctx`) as keywords. A burst every geometry of which a
+    search launches (`CUE`) is read from that launch instead, when it is later than `cue`
+    (`burst_cue`).
+
+    `aim_punish` (version 25): this burst's punish is his to take (it is the last of the attack that
+    reaches him), so he aims his dodge for it too (`dodge_presses` `gain`); False, at escaping
+    alone (a later burst decides his punish: `sequence_outcome`)."""
     import numpy as np
-    moves = moves if moves is not None else roll_motion()
+    advance = attack_advance(geoms) if advance is None else advance
+    if moves is None:
+        # No family named: he picks his roll's direction knowing the attack (`dodge_families`).
+        best = None
+        for fi, fam in enumerate(dodge_families()):
+            o = reaction_outcome(geoms, hit_value, dist, cue, fam, my_roll, advance, strikes, floor, run,
+                                 None if catches is None else catches.setdefault(('family', fi), {}), plan,
+                                 aim_punish)
+            if best is None or o['value'] - o['punish_hp'] < best['value'] - best['punish_hp']:
+                best = o
+        return best
+    cue = burst_cue(geoms, cue)
 
     def caught(key, move, starts):
         # `starts` a list, or a function that makes it: the dodge grid is made only for a read the
@@ -6637,8 +8272,15 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
     ordered = None if strikes is None else _ordered(strikes)
     value = p_evade = p_punish = 0.0
     hs = [caught((dist, k), m, grid)[0] for k, m in enumerate(moves)]
-    planned = plan(moves, [h < 0 for h in hs], cue, floor) if plan is not None else None
+    # What an escaping press gains him beyond escaping, per move: this burst's punish, when it is his
+    # to take (`aim_punish`; `dodge_presses`).
+    punish = _punish_ctx(ordered, my_roll, run) if aim_punish else None
+    gains = [PressGain.of(m, dist, advance, run, ordered, my_roll) for m in moves] if punish else [None] * len(moves)
+    planned = _plan_call(plan, moves, [h < 0 for h in hs], cue, floor, gains, punish) if plan is not None else None
     bh, nm = int(base_h[0]), len(moves)
+    # A catch in his own dodge is played from it when `hit_value` can (`_LazyWorth.mid`, a
+    # `CaughtModel`'s worths, version 25): from the dodge's start on the grid, at the catch frame.
+    mid = getattr(hit_value, 'mid', None)
     for k, m in enumerate(moves):
         h = hs[k]
         # The catches read as a list (kept beside them in `catches`), the punish counts too
@@ -6648,17 +8290,21 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
             hl = h.tolist()
             if catches is not None:
                 catches[('list', dist, k)] = hl
+        tl = None
+        if mid is not None:
+            tl = None if catches is None else catches.get(('times', dist, k))
+            if tl is None:
+                tl = caught((dist, k), m, grid)[1].tolist()
+                if catches is not None:
+                    catches[('times', dist, k)] = tl
         nh = len(h)
-        ready = m['ready'] if m['ready'] is not None else len(m['path'])
-        x, z = m['path'][min(int(ready), len(m['path']) - 1)]
-        gap = math.hypot(x, dist + z - advance)
-        near = run or gap <= PUNISH_REACH_M
-        close = max(0.0, gap - PUNISH_REACH_M) * _neutral().frames_per_metre() if run else 0.0
+        # His strike's press: the R1 cancel in reach, else the move cancel plus his run in.
+        ready, close, near = punish_lead(m, dist, advance, run)
         punishes = ordered is not None and my_roll is not None and near and len(ordered)
         # The share of strikes + close below a bound: a binary search counts what the mean of the
         # comparison counted, the same number, without a pass over the strikes per press.
         arrive = ordered + close if punishes else None
-        presses = planned[k] if planned is not None else dodge_presses(h < 0, cue, floor=floor)
+        presses = planned[k] if planned is not None else dodge_presses(h < 0, cue, floor=floor, gain=gains[k])
         # Each press's grid index, weight and start (`_press_reads`, kept per plan's list).
         idx, ws, starts = _press_reads(presses, planned is not None)
         # Every press's count of strikes in time at once (the same numbers one search per press
@@ -6668,10 +8314,15 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
         na = len(arrive) if punishes else None
         for j in range(len(idx)):
             i = idx[j]
-            hit = hl[i] if 0 <= i < nh else bh
+            inside = 0 <= i < nh
+            hit = hl[i] if inside else bh
             w = ws[j] / nm
             if hit >= 0:
-                value += w * hit_value[hit]
+                # Caught in his dodge (the catch at or after its start), or before it, standing.
+                if inside and tl is not None and tl[i] >= i * DODGE_STEP - 1e-9:
+                    value += w * mid(hit, m, i * DODGE_STEP, tl[i])
+                else:
+                    value += w * hit_value[hit]
                 continue
             p_evade += w
             if punishes:
@@ -6681,62 +8332,320 @@ def reaction_outcome(geoms, hit_value, dist, cue=0.0, moves=None, my_roll=None, 
 
 
 def sequence_outcome(bursts, dist, cue=0.0, floor=0.0, families=None, my_roll=None, strikes=None,
-                     run=False, catches=None, caught=None, hp=None, plan=None):
+                     run=False, catches=None, caught=None, hp=None, plan=None, run_floor=None,
+                     advance=None):
     """`reaction_outcome` for an attack whose hits come in separate bursts (`bursts`: [(geoms,
-    hit_value)] in time order), each dodged on its own. Caught by a burst he takes what its
-    `hit_value` says; evading it he meets the next one, no earlier than the end of the last burst
-    he dodged plus his move's recovery past its invincibility (`INFERRED`: he timed that dodge to
-    cover the burst's end; a burst that does not reach him standing is not dodged and holds
-    nothing back). He keeps to one family of moves (`families`: the roll's four directions, and the
-    jump when a hit is `AIR`) and, knowing the attack, takes the one that leaves the attacker least
-    (`value` - `punish_hp`). The punish is the last burst's that reaches him, when he evaded every
-    one before it. `catches`, a dict, hands `reaction_outcome` one memo per (family index, burst
-    index).
+    hit_value)] in time order), each dodged on its own (`dodge_chain`, version 26). Caught by a
+    burst he takes what its `hit_value` says; evading it he meets the next one on the roll that
+    evaded it: from where it carries him, no sooner than its start plus its dodge cancel, and caught
+    in it when the next burst touches him outside its invincibility before he can dodge again (a
+    burst that does not touch him where he is is not dodged and changes nothing). Until version 26
+    each later burst put him back at the distance, free from the end of the last burst he dodged
+    plus his move's recovery past its invincibility (`INFERRED` then). He keeps to one family of
+    moves (`families`, default `dodge_families`: each roll direction, and the jump when a hit is
+    `AIR`) and, knowing the attack, takes the one that leaves the attacker least (`value` -
+    `punish_hp`), or stands when that leaves less still (`stand_or`). The punish is the last
+    escaping press's, from where it started, against the whole attack's root motion (`advance`,
+    None: `attack_advance` of every burst's geometries). `catches`, a dict, hands `dodge_chain` one
+    memo per (family index, burst index).
 
     `hit_value` credits a caught defender with every later hit, as he never left. With `caught`
     (a `CaughtModel` over the same geometries and the worth they carry: `caught.worth(dist)`, one
     number per geometry in burst order) each later hit and tick is worth what lands on him while
-    he takes his hit reactions and then leaves (`CaughtModel`). `hp` caps what one caught defender
-    takes at his health (the punish is not capped).
+    he takes his hit reactions and then leaves (`CaughtModel`), his whiff's recovery holding him to
+    `floor` for a roll and `run_floor` (his move cancel; None: `floor`) for a run, and a catch in a
+    dodge of his (or in the roll he is still on) played from that dodge (`_LazyWorth.mid`). `hp`
+    caps what one caught defender takes at his health (the punish is not capped).
 
     `plan` (`reaction_outcome`'s) times his dodge of the first burst that reaches him standing, in
     each family; every later burst is dodged as before."""
     if families is None:
-        families = [roll_motion()]
-        if any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs):
-            families.append([jump_motion()])
+        families = dodge_families(any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs))
+    if advance is None:
+        advance = attack_advance([g for gs, _ in bursts for g in gs])
     if caught is not None or hp is not None:
         out, at = [], 0
         for geoms, hit_value in bursts:
             if caught is not None:
-                # Each catch is played only when `reaction_outcome` reads it.
-                hv = caught.lazy(dist, at, len(geoms), hp)
+                # Each catch is played only when it is read, held by the situation's floors (a
+                # catch after a dodge of his is played from that dodge, `mid`).
+                hv = caught.lazy(dist, at, len(geoms), hp, (floor, floor if run_floor is None else run_floor))
             else:
-                hv = [min(v, hp) for v in hit_value]
+                hv = [hp_cap(v, hp) for v in hit_value]
             at += len(geoms)
             out.append((geoms, hv))
         bursts = out
+    last = last_reaching(bursts, dist, catches)
+    geoms_only = [gs for gs, _ in bursts]
     best = None
     for fi, moves in enumerate(families):
-        rec = max(max(0.0, (m['dodge'] or len(m['path'])) - m['iframes']) for m in moves)
-        alive, value, punish, base, t = 1.0, 0.0, 0.0, None, floor
-        for bi, (geoms, hit_value) in enumerate(bursts):
-            o = reaction_outcome(geoms, hit_value, dist, cue, moves, my_roll=my_roll, strikes=strikes, floor=t,
-                                 run=run, catches=None if catches is None else catches.setdefault((fi, bi), {}),
-                                 plan=plan if base is None else None)
-            if o['base'] > 0:
-                base = o['base'] if base is None else base
-                value += alive * o['value']
-                punish = alive * o['p_punish']
-                alive *= o['p_evade']
-                # Only a burst he dodged holds back his next dodge: one that does not reach him
-                # standing is not dodged (`reaction_outcome` returns at once).
-                t = max([t] + [g['T'].max() + rec for g in geoms if g is not None])
-        out = {'value': value, 'base': base or 0.0, 'p_evade': alive if base else 0.0, 'p_punish': punish,
+        memo = None
+        if catches is not None:
+            # One memo per (family, burst), as `reaction_outcome` kept them (`last_reaching` reads
+            # family 0's standing reads).
+            memo = _ChainMemo(catches, fi)
+        ch = dodge_chain(geoms_only, dist, moves, floor, cue, my_roll, strikes, run, advance, memo, plan, last)
+        value = 0.0
+        for bi, h, play, wt in ch['events']:
+            hv = bursts[bi][1]
+            mid = getattr(hv, 'mid', None)
+            if play is None or mid is None:
+                value += wt * hv[h]
+            else:
+                value += wt * mid(h, *play)
+        base = bursts[ch['first']][1][ch['first_h']] if ch['first'] is not None else 0.0
+        punish = ch['p_punish']
+        out = {'value': value, 'base': base, 'p_evade': ch['p_evade'] if base else 0.0, 'p_punish': punish,
                'punish_hp': punish * PUNISH_HP, 'moves': moves[0]['anim']}
         if best is None or out['value'] - out['punish_hp'] < best['value'] - best['punish_hp']:
             best = out
+    return stand_or(best)
+
+
+class _ChainMemo(dict):
+    """`dodge_chain`'s per-burst memos ({burst index: memo}) kept in a caller's dict of
+    (family index, burst index) memos (`sequence_outcome`'s `catches`, the layout
+    `reaction_outcome` and `net_parts`' first touch read)."""
+
+    def __init__(self, catches, fi):
+        super().__init__()
+        self.catches, self.fi = catches, fi
+
+    def setdefault(self, bi, default=None):
+        return self.catches.setdefault((self.fi, bi), {} if default is None else default)
+
+
+def last_reaching(bursts, dist, catches=None):
+    """The index in `bursts` ([(geoms, hit_value)]) of the last burst that reaches a defender
+    standing at `dist` (its first catch worth above 0, `reaction_outcome`'s `base`), None for none:
+    the burst whose dodge decides his punish (`sequence_outcome` keeps the last reaching burst's),
+    so the only one he aims for it (`reaction_outcome` `aim_punish`, version 25). `catches` as
+    `sequence_outcome`'s: the standing read is kept under family 0's memo, which every family reads."""
+    out = None
+    for bi, (geoms, hit_value) in enumerate(bursts):
+        if all(g is None for g in geoms):
+            continue
+        memo = None if catches is None else catches.setdefault((0, bi), {})
+        if memo is not None and ('base', dist) in memo:
+            got = memo[('base', dist)]
+        else:
+            got = _catches(geoms, dist, None, [0.0])
+            if memo is not None:
+                memo[('base', dist)] = got
+        bh = int(got[0][0])
+        if bh >= 0 and hit_value[bh] > 0:
+            out = bi
+    return out
+
+
+def stand_or(best):
+    """`best` (an outcome dict: the evasion family the defender picks), or standing where that
+    leaves the attacker less: he takes the attack as one who never dodges does (`base`: the first
+    reaching catch, played out by `CaughtModel` when there is one) and is never punished. The same
+    choice `er-mechanics-spells.CastThreats.dynamic_outcome`, `volley_outcome`,
+    `FollowupModel.mixup`'s 'stand' row and `er-mechanics-attack-similarity.OutcomeForm` give him
+    (version 23; `sequence_outcome` and `volley_outcome` had no stand). A tie keeps the evasion."""
+    if best is not None and best['value'] - best['punish_hp'] > best['base']:
+        return {'value': best['base'], 'base': best['base'], 'p_evade': 0.0, 'p_punish': 0.0, 'punish_hp': 0.0,
+                'moves': None}
     return best
+
+
+def burst_after(bursts, bi, cue=0.0, floor=-math.inf):
+    """The earliest real frame burst `bi` of `bursts` ([geoms]) reads where a defender free from
+    `floor` is: its first sample, or launch (`TL`), or his first press, no sooner than his reaction to
+    its cue (`burst_cue` plus his shortest reaction and earliest timing error, `_SOONEST_PRESS`) nor
+    than `floor`. A track
+    whose clips are over by then reads as one segment (`collapse_track`)."""
+    gs = [g for g in bursts[bi] if g is not None]
+    # His first press, read where the outcomes read a press: on the update grid (`round(s / step)`).
+    lo = _grid(max(burst_cue(gs, cue) + _SOONEST_PRESS, floor))
+    for g in gs:
+        lo = min(lo, float(g['T'].min()))
+        if 'TL' in g:
+            lo = min(lo, float(g['TL'].min()))
+    return lo
+
+
+class _Ahead:
+    """Where the attacker's root is up the axis at a real frame, against a defender whose place
+    along it is `dist` + z: his root motion so far over `geoms` (`attack_advance` up to then),
+    stopped by the defender's body (`advance_at`); what `oriented` turns a roll out of a track to
+    face. Kept per frame."""
+
+    def __init__(self, geoms, dist):
+        self.geoms, self.dist, self.kept = [g for g in geoms if g is not None], float(dist), {}
+
+    def __call__(self, t, z):
+        k = float(t)
+        if k not in self.kept:
+            self.kept[k] = attack_advance(self.geoms, upto=k)
+        return advance_at(self.kept[k], self.dist, float(z))
+
+
+def dodge_chain(bursts, dist, moves, floor=0.0, cue=0.0, my_roll=None, strikes=None, run=False, advance=None,
+                catches=None, plan=None, aim=None, units=None):
+    """The worth-free reads of a defender who dodges every burst of `bursts` ([geoms] in time order,
+    a geometry None where it has no samples) with the moves `moves` (one family, each taken
+    equally), version 26 (the comment above `STILL`).
+
+    He starts standing at `dist`, free from `floor`. Each burst that touches him where he is, if he
+    does not dodge it (his track continued), he dodges as `reaction_outcome` does: his presses from
+    `burst_cue` plus his reaction, no sooner than his floor, aimed by `dodge_presses` for escaping
+    (and, on burst `aim`, for his punish, `press_gain`), or `plan`'s for his first dodge
+    (`reaction_outcome` `plan`; `gains` and `punish` with it when that burst is `aim`). A press that
+    escapes leaves him on that roll from its start on the update grid, from where his track had him
+    then, free again from its start plus its dodge cancel (`dodge_end`), on its whole root motion
+    until he next presses (version 27, `track_extend`); one that is caught ends him there. A burst
+    that does not touch him where he is is not dodged and changes nothing. A roll out of a track is
+    taken facing the attacker (`oriented`), and every sample is read in the facing the attacker had
+    when he made it, tracking the defender under his clip's turn rules (`_facing`, version 27:
+    until then the attacker turned fully to face him before each later burst and not within one).
+    His punish is the last escaping press's, from where it started (`punish_lead` `origin`), against
+    the attacker carried `advance` forward ((peak, end), `attack_advance` of the whole attack; None:
+    these bursts'), with `run` as `reaction_outcome`'s.
+
+    Returns {'events': [(burst index, geometry index, play, weight)], 'p_evade': the chance he is
+    never caught, 'p_punish', 'first': the first burst that touches him standing, 'first_h' its
+    catching geometry}. A play is None for a catch before any dodge of his (he stands where he
+    started, held by the situation's floors, as `reaction_outcome`'s plain `hit_value`), else (move,
+    its start, the catch frame): caught in his own dodge of that move, carried (`carried`), or in the
+    track he is still on (`still_move`), `CaughtModel.worth_of` `dodge`. A defender who never left
+    the spot he started from reads every burst exactly as `reaction_outcome` reads it.
+
+    `catches`, a dict per burst index ({bi: memo}), keeps the reads: the root's under
+    `reaction_outcome`'s keys, a carried state's under its move's `anim`.
+
+    `units` (version 27: `volley_outcome` on this chain), per burst the threat each geometry belongs
+    to: then `_volley_chain`'s states are returned instead of events."""
+    import numpy as np
+    if advance is None:
+        advance = attack_advance([g for gs in bursts for g in gs])
+    if units is not None:
+        return _volley_chain(bursts, units, dist, moves, floor, cue, my_roll, strikes, run, advance, catches, plan,
+                             aim)
+    ordered = None if strikes is None else _ordered(strikes)
+    punish_on = _punish_ctx(ordered, my_roll, run)
+    nm = len(moves)
+    ahead = _Ahead([g for gs in bursts for g in gs], dist)
+    # States: track key -> [track, floor, mass, punish mass]. The root has the empty track.
+    states = {(): [(), float(floor), 1.0, 0.0]}
+    events, first, first_h = [], None, -1
+    for bi, gs in enumerate(bursts):
+        if all(g is None for g in gs):
+            continue
+        memo = None if catches is None else catches.setdefault(bi, {})
+        if len(states) > 1 or () not in states:
+            # Tracks whose clips are over by the time this burst reads him are where they left him.
+            merged = {}
+            for tk, (trk, fl, ms, pm) in states.items():
+                at = burst_after(bursts, bi, cue, fl)
+                trk2 = collapse_track(trk, at) if at >= fl else trk
+                k2 = track_key(trk2)
+                if k2 in merged:
+                    merged[k2][2] += ms
+                    merged[k2][3] += pm
+                else:
+                    merged[k2] = [trk2, fl, ms, pm]
+            states = merged
+
+        def read(key, move, starts):
+            if memo is None:
+                return _catches(gs, dist, move, starts() if callable(starts) else starts)
+            if key not in memo:
+                memo[key] = _catches(gs, dist, move, starts() if callable(starts) else starts)
+            return memo[key]
+
+        def grid():
+            return np.arange(0.0, max(g['T'].max() for g in gs if g is not None) + 1.0, DODGE_STEP)
+        cue_b = burst_cue(gs, cue)
+        nxt = {}
+
+        def put(trk, fl, ms, pm):
+            k = track_key(trk)
+            if k in nxt:
+                nxt[k][2] += ms
+                nxt[k][3] += pm
+            else:
+                nxt[k] = [trk, fl, ms, pm]
+        for tk, (trk, fl, mass, pmass) in states.items():
+            root = not trk
+            if root:
+                sh, st = read(('base', dist), None, [0.0])
+                smove, sstart = None, 0.0
+            else:
+                smove, sstart = still_move(trk)
+                sh, st = read(('base', dist, smove['anim']), smove, [sstart])
+            bh, btc = int(sh[0]), float(st[0])
+            if bh < 0:
+                put(trk, fl, mass, pmass)
+                continue
+            if root and first is None:
+                first, first_h = bi, bh
+            # Each roll out of the track taken facing the attacker (`oriented`, version 27).
+            oms = [oriented(m, trk, dist, ahead) for m in moves]
+            mvs = [carried(m, trk) for m in oms]
+            keys = [(dist, k) if root else (dist, k, mv['anim']) for k, mv in enumerate(mvs)]
+            got = [read(keys[k], mv, grid) for k, mv in enumerate(mvs)]
+            gains = [press_gain(m, trk, dist, advance, run, ordered, my_roll) for m in oms] \
+                if punish_on and bi == aim else [None] * nm
+            planned = None
+            if plan is not None and root:
+                planned = _plan_call(plan, moves, [h < 0 for h, _ in got], cue_b, fl, gains,
+                                     punish_on if bi == aim else None)
+            for k, m in enumerate(oms):
+                h, tt = got[k]
+                hl = None if memo is None else memo.get(('list',) + keys[k])
+                if hl is None:
+                    hl = (h.tolist(), tt.tolist())
+                    if memo is not None:
+                        memo[('list',) + keys[k]] = hl
+                hl, tl = hl
+                nh = len(hl)
+                presses = planned[k] if planned is not None else dodge_presses(h < 0, cue_b, floor=fl, gain=gains[k])
+                idx, ws, starts = _press_reads(presses, planned is not None)
+                # His punish from each escaping press (the gain he aimed by on burst `aim`, read
+                # alike on every burst: only the last escaping press's is kept).
+                share = gains[k] if gains[k] is not None else \
+                    (press_gain(m, trk, dist, advance, run, ordered, my_roll) if punish_on else None)
+                # Each escaping press's share read in one call (a gain is elementwise in its
+                # starts, so the same numbers as one call per press), and the track a press from
+                # grid start i extends to read once per i (the same tuple of the same floats).
+                shares, ext = None, {}
+                if share is not None:
+                    esc = [j for j in range(len(idx))
+                           if (hl[idx[j]] if 0 <= idx[j] < nh else bh) < 0]
+                    if esc:
+                        shares = dict(zip(esc, share(starts[esc]).tolist()))
+                for j in range(len(idx)):
+                    i = idx[j]
+                    inside = 0 <= i < nh
+                    hit = hl[i] if inside else bh
+                    wt = mass * ws[j] / nm
+                    if hit >= 0:
+                        if inside and tl[i] >= i * DODGE_STEP - 1e-9:
+                            play = (mvs[k], i * DODGE_STEP, tl[i])
+                        elif root:
+                            play = None
+                        else:
+                            play = (smove, sstart, tl[i] if inside else btc)
+                        events.append((bi, hit, play, wt))
+                        continue
+                    p = shares[j] if share is not None else 0.0
+                    got_i = ext.get(i)
+                    if got_i is None:
+                        s0 = i * DODGE_STEP
+                        trk2 = track_extend(trk, m, s0)
+                        got_i = ext[i] = (trk2, track_key(trk2), s0 + dodge_end(m))
+                    trk2, k2, fl2 = got_i
+                    if k2 in nxt:
+                        nxt[k2][2] += wt
+                        nxt[k2][3] += wt * p
+                    else:
+                        nxt[k2] = [trk2, fl2, wt, wt * p]
+        states = nxt
+    return {'events': events, 'p_evade': float(sum(s[2] for s in states.values())),
+            'p_punish': float(sum(s[3] for s in states.values())), 'first': first, 'first_h': first_h}
 
 
 def _catches_each(geoms, dist, move, starts):
@@ -6768,110 +8677,190 @@ def _catches_each(geoms, dist, move, starts):
     return out
 
 
-def _volley_burst(geoms, units, dist, cue, moves, my_roll, strikes, floor, run, memo, plan=None):
-    """One burst of `volley_outcome`: None when no hit of it touches a defender who stands still,
-    else {'p': {unit: chance a hit of it touches him}, 'p_clear': chance none does, 'p_punish':
-    chance he evades it and punishes, 'still': the units that touch him standing still}. He picks
-    his dodge as `reaction_outcome` does, to escape every hit of the burst (`dodge_presses`, or
-    `plan` as `reaction_outcome` takes it)."""
+def _volley_chain(bursts, units, dist, moves, floor, cue, my_roll, strikes, run, advance, catches, plan, aim):
+    """`dodge_chain` for a volley (`units[bi][j]` the threat geometry j of burst bi belongs to;
+    version 27): the same chain of rolls, read per threat. A state is where his rolls carried him
+    (track, floor) and which threats have landed so far; a threat lands once (its own hit list), so
+    a threat that has landed is no longer dodged, and only a burst whose threats still to land touch
+    him where he is is dodged. He presses as `dodge_chain` has him press, to escape every threat of
+    the burst still to land (`dodge_presses` from `burst_cue` and his floor, aimed for his punish
+    on burst `aim`; `plan` for his first dodge); a press caught by some of them adds them to what
+    landed and carries him on as one that escapes does (a threat that lands neither stops him nor
+    makes the others land, `INFERRED` as before). His punish is the last escaping press's, lost when
+    a later press is caught, and counted only where nothing landed. Returns {'states': [(landed
+    threats as a frozenset, mass)], 'p_evade': the mass none landed on, 'p_punish', 'first' (the
+    first burst that touches him standing, None for none)}. Until version 27 `volley_outcome`
+    summed each burst's chances over his states and chained the bursts as independent (`INFERRED`
+    then), which is no longer read. `catches` as `dodge_chain`'s ({bi: memo}), the keys prefixed
+    'each' (the reads are `_catches_each`')."""
     import numpy as np
+    ordered = None if strikes is None else _ordered(strikes)
+    punish_on = _punish_ctx(ordered, my_roll, run)
+    nm = len(moves)
+    ahead = _Ahead([g for gs in bursts for g in gs], dist)
+    # States: (track key, landed) -> [track, floor, mass, punish mass, landed].
+    states = {((), frozenset()): [(), float(floor), 1.0, 0.0, frozenset()]}
+    first = None
+    for bi, gs in enumerate(bursts):
+        if all(g is None for g in gs):
+            continue
+        memo = None if catches is None else catches.setdefault(bi, {})
+        us = units[bi]
+        if any(s_[0] for s_ in states.values()):
+            merged = {}
+            for trk, fl, ms, pm, ld in states.values():
+                at = burst_after(bursts, bi, cue, fl)
+                trk2 = collapse_track(trk, at) if at >= fl else trk
+                k2 = (track_key(trk2), ld)
+                if k2 in merged:
+                    merged[k2][2] += ms
+                    merged[k2][3] += pm
+                else:
+                    merged[k2] = [trk2, fl, ms, pm, ld]
+            states = merged
 
-    def each(key, move, starts):
-        if memo is None:
-            return _catches_each(geoms, dist, move, starts)
-        if key not in memo:
-            memo[key] = _catches_each(geoms, dist, move, starts)
-        return memo[key]
-    still = np.isfinite(each(('base', dist), None, [0.0])[0])
-    if not still.any():
-        return None
-    live = [g['T'].max() for g in geoms if g is not None]
-    grid = np.arange(0.0, max(live) + 1.0, DODGE_STEP)
-    strikes = None if strikes is None else np.asarray(strikes, float)
-    p = {u: 0.0 for u in units}
-    clear = p_punish = 0.0
-    reads = [np.isfinite(each((dist, k), m, grid)) for k, m in enumerate(moves)]
-    planned = plan(moves, [~c.any(axis=1) for c in reads], cue, floor) if plan is not None else None
-    for k, m in enumerate(moves):
-        caught = reads[k]
-        hit_any = caught.any(axis=1)
-        ok = ~hit_any
-        ready = m['ready'] if m['ready'] is not None else len(m['path'])
-        x, z = m['path'][min(int(ready), len(m['path']) - 1)]
-        gap = math.hypot(x, dist + z)
-        near = run or gap <= PUNISH_REACH_M
-        close = max(0.0, gap - PUNISH_REACH_M) * _neutral().frames_per_metre() if run else 0.0
-        punishes = strikes is not None and my_roll is not None and near and len(strikes)
-        # The share of strikes + close below a bound, by binary search (the same count as the mean
-        # of the comparison `reaction_outcome` takes).
-        arrive = np.sort(strikes + close) if punishes else None
-        who = {}
-        for s, w in (planned[k] if planned is not None else dodge_presses(ok, cue, floor=floor)):
-            i = int(round(s / DODGE_STEP))
-            i = i if 0 <= i < len(caught) else -1
-            w /= len(moves)
-            if hit_any[i] if i >= 0 else True:
-                if i not in who:
-                    who[i] = {units[j] for j in np.nonzero(caught[i] if i >= 0 else still)[0]}
-                for u in who[i]:
-                    p[u] += w
+        def each(key, move, starts):
+            if memo is None:
+                return _catches_each(gs, dist, move, starts() if callable(starts) else starts)
+            if ('each',) + key not in memo:
+                memo[('each',) + key] = _catches_each(gs, dist, move, starts() if callable(starts) else starts)
+            return memo[('each',) + key]
+
+        def grid():
+            return np.arange(0.0, max(g['T'].max() for g in gs if g is not None) + 1.0, DODGE_STEP)
+        cue_b = burst_cue(gs, cue)
+        nxt = {}
+
+        def put(trk, fl, ms, pm, ld):
+            k_ = (track_key(trk), ld)
+            if k_ in nxt:
+                nxt[k_][2] += ms
+                nxt[k_][3] += pm
+            else:
+                nxt[k_] = [trk, fl, ms, pm, ld]
+        for trk, fl, mass, pmass, ld in states.values():
+            root = not trk
+            # The threats of this burst still to land, per geometry.
+            live = np.array([g is not None and us[j] not in ld for j, g in enumerate(gs)], bool)
+            if root:
+                still = np.isfinite(each(('base', dist), None, [0.0])[0])
+            else:
+                smove, sstart = still_move(trk)
+                still = np.isfinite(each(('base', dist, smove['anim']), smove, [sstart])[0])
+            still = still & live
+            if not still.any():
+                put(trk, fl, mass, pmass, ld)
                 continue
-            clear += w
-            if punishes:
-                p_punish += w * (int(np.searchsorted(arrive, my_roll - s - ready, side='left')) / len(arrive))
-    return {'p': p, 'p_clear': clear, 'p_punish': p_punish, 'still': {units[j] for j in np.nonzero(still)[0]}}
+            if root and first is None:
+                first = bi
+            oms = [oriented(m, trk, dist, ahead) for m in moves]
+            mvs = [carried(m, trk) for m in oms]
+            reads = [np.isfinite(each((dist, k) if root else (dist, k, mv['anim']), mv, grid)) & live[None, :]
+                     for k, mv in enumerate(mvs)]
+            gains = [press_gain(m, trk, dist, advance, run, ordered, my_roll) for m in oms] \
+                if punish_on and bi == aim else [None] * nm
+            planned = None
+            if plan is not None and root:
+                planned = _plan_call(plan, moves, [~c.any(axis=1) for c in reads], cue_b, fl, gains,
+                                     punish_on if bi == aim else None)
+            for k, m in enumerate(oms):
+                caught = reads[k]
+                hit_any = caught.any(axis=1)
+                share = gains[k] if gains[k] is not None else \
+                    (press_gain(m, trk, dist, advance, run, ordered, my_roll) if punish_on else None)
+                who = {}
+                presses = planned[k] if planned is not None else dodge_presses(~hit_any, cue_b, floor=fl,
+                                                                               gain=gains[k])
+                for s, w in presses:
+                    i0 = int(round(s / DODGE_STEP))
+                    i = i0 if 0 <= i0 < len(caught) else -1
+                    wt = mass * w / nm
+                    s0 = i0 * DODGE_STEP
+                    t2, f2 = track_extend(trk, m, s0), s0 + dodge_end(m)
+                    if hit_any[i] if i >= 0 else True:
+                        if i not in who:
+                            who[i] = frozenset(us[j] for j in np.nonzero(caught[i] if i >= 0 else still)[0])
+                        put(t2, f2, wt, 0.0, ld | who[i])
+                        continue
+                    sh = float(share(np.array([s]))[0]) if share is not None else 0.0
+                    put(t2, f2, wt, wt * sh, ld)
+        states = nxt
+    return {'states': [(s_[4], s_[2]) for s_ in states.values()],
+            'p_evade': float(sum(s_[2] for s_ in states.values() if not s_[4])),
+            'p_punish': float(sum(s_[3] for s_ in states.values() if not s_[4])), 'first': first}
 
 
 def volley_outcome(bursts, worth, dist, cue=0.0, floor=0.0, families=None, my_roll=None, strikes=None,
-                   run=False, catches=None, hp=None, plan=None):
+                   run=False, catches=None, hp=None, plan=None, advance=None):
     """`sequence_outcome` for an attack made of independent threats: the shots of a fan that keep
     their own hit lists (Glintblade Phalanx's blades, Ancient Death Rancor's skulls). `bursts` is
     [(geoms, units)] in time order, `units[i]` the threat `geoms[i]` belongs to (one threat can fly
-    in several bursts, one leg in each), `worth[unit]` what it lands, once. Each burst is dodged on its own as
-    in `sequence_outcome`, no earlier than the end of the last one he dodged plus his move's
-    recovery past its invincibility, and only a burst that touches him standing still is dodged. A
-    threat lands the first time one of its legs touches him; being caught by one threat neither
-    makes the others land nor stops him dodging them (`INFERRED`), and each burst places him back
-    at `dist`, as `sequence_outcome` does, which suits shots fixed when the cast fires and not a
-    chain that re-aims after his roll (the spell kit flies those against the roll,
-    `fly_dynamic`). `value` sums each threat's worth times the chance it lands; `base` is what lands
-    on a defender who never dodges; `p_evade` is the chance nothing lands, and the punish is the
-    last reaching burst's, when nothing landed before it, so it is paid once per cast. Knowing the
-    attack he keeps to the family of moves that leaves the attacker least. `catches`, a dict,
-    memoises one `_catches_each` read per (family, burst, dodge). `hp` caps `value` and `base` at
-    the defender's health: exact when the threats' worths sum to no more than it, else a bound
-    (the chance of each set of threats landing together is not carried). `plan` as
-    `sequence_outcome`'s: it times the dodge of the first burst that reaches him standing."""
+    in several bursts, one leg in each), `worth[unit]` what it lands, once. The bursts are chained as
+    `dodge_chain` chains them (version 27, `_volley_chain`): each press carries him on its roll, a
+    burst whose threats still to land touch him where he is is dodged (no sooner than his last
+    roll's start plus its dodge cancel), and a threat lands the first time one of its legs touches
+    him; being caught by one threat neither makes the others land nor stops him dodging them, so
+    every press carries him on, caught or not (`INFERRED`). A shot is flown again at where his roll
+    has him when it homes or is aimed (`_homing_touch`); the stored samples of one that is neither
+    keep its aim at where he stood, read in the facing the attacker had at its launch (`_facing`;
+    the chain that re-aims after his roll is the spell kit's `fly_dynamic`). The chain carries which
+    threats landed together, so `value` is each such set's worth times its chance, and `hp` caps
+    each set at the defender's health exactly (until version 27 the bursts' chances were chained as
+    independent and the cap was a bound when the worths summed past his health). `base` is what
+    lands on a defender who never dodges; `p_evade` is the chance nothing lands, and the punish is
+    the last escaping press's where nothing landed, so it is paid once per cast. Knowing the attack
+    he keeps to the family of moves that leaves the attacker least, or stands when that leaves less
+    still (`stand_or`). `catches`, a dict, memoises one `_catches_each` read per (family, burst,
+    dodge). `plan` and `advance` as `sequence_outcome`'s: `plan` times the dodge of the first burst
+    that reaches him standing."""
+    import numpy as np
     if families is None:
-        families = [roll_motion()]
-        if any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs):
-            families.append([jump_motion()])
+        families = dodge_families(any(g is not None and g.get('AIR') for gs, _ in bursts for g in gs))
+    if advance is None:
+        advance = attack_advance([g for gs, _ in bursts for g in gs])
+    # The last burst that touches him standing decides his punish, so it is the one he aims for it
+    # (`dodge_chain` `aim`, version 25); the standing read is family 0's memo's.
+    last = None
+    # What lands on a defender who never dodges: every threat a burst touches him with standing
+    # where he started (version 26: read here, since the carried states leave that spot).
+    base, reached = 0.0, set()
+    for bi, (geoms, units) in enumerate(bursts):
+        if all(g is None for g in geoms):
+            continue
+        memo = None if catches is None else catches.setdefault((0, bi), {})
+        if memo is not None and ('each', 'base', dist) in memo:
+            got = memo[('each', 'base', dist)]
+        else:
+            got = _catches_each(geoms, dist, None, [0.0])
+            if memo is not None:
+                memo[('each', 'base', dist)] = got
+        if np.isfinite(got[0]).any():
+            last = bi
+            for u in sorted({units[j] for j in np.nonzero(np.isfinite(got[0]))[0]} - reached):
+                reached.add(u)
+                base += worth[u]
     best = None
+    gbursts = [gs for gs, _ in bursts]
+    ubursts = [us for _, us in bursts]
+    base_f = base if hp is None else hp_cap(base, hp)
     for fi, moves in enumerate(families):
-        rec = max(max(0.0, (m['dodge'] or len(m['path'])) - m['iframes']) for m in moves)
-        alive = {u: 1.0 for u in worth}
-        clear, value, punish, base, reached, t = 1.0, 0.0, 0.0, 0.0, set(), floor
-        for bi, (geoms, units) in enumerate(bursts):
-            memo = None if catches is None else catches.setdefault((fi, bi), {})
-            o = _volley_burst(geoms, units, dist, cue, moves, my_roll, strikes, t, run, memo,
-                              plan if not reached else None)
-            if o is not None:
-                for u in sorted(o['still'] - reached):
-                    reached.add(u)
-                    base += worth[u]
-                for u, pu in o['p'].items():
-                    value += alive[u] * pu * worth[u]
-                    alive[u] *= 1.0 - pu
-                punish = clear * o['p_punish']
-                clear *= o['p_clear']
-                t = max([t] + [g['T'].max() + rec for g in geoms if g is not None])
-        if hp is not None:
-            value, base = min(value, hp), min(base, hp)
-        out = {'value': value, 'base': base, 'p_evade': clear if base else 0.0, 'p_punish': punish,
+        ch = dodge_chain(gbursts, dist, moves, floor, cue, my_roll, strikes, run, advance,
+                         None if catches is None else _ChainMemo(catches, fi), plan, last, units=ubursts)
+        # Each set of threats that landed together, its worth capped at his health (`hp_cap`).
+        sets = {}
+        for ld, ms in ch['states']:
+            sets[ld] = sets.get(ld, 0.0) + ms
+        value = 0.0
+        for ld in sorted(sets, key=lambda s_: sorted(map(repr, s_))):
+            if ld:
+                v = sum(worth[u] for u in sorted(ld, key=repr))
+                value += sets[ld] * (v if hp is None else hp_cap(v, hp))
+        punish = ch['p_punish']
+        out = {'value': value, 'base': base_f, 'p_evade': ch['p_evade'] if base_f else 0.0, 'p_punish': punish,
                'punish_hp': punish * PUNISH_HP, 'moves': moves[0]['anim']}
         if best is None or out['value'] - out['punish_hp'] < best['value'] - best['punish_hp']:
             best = out
-    return best
+    return stand_or(best)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -6894,9 +8883,9 @@ def volley_outcome(bursts, worth, dist, cue=0.0, floor=0.0, families=None, my_ro
 #     alone). A press of his on the last opening burst that reaches him standing leaves him
 #     rolling from that start: the follow-up catches him when it touches him outside that roll's
 #     invincibility before its dodge cancel (`_catches` on the roll's path); otherwise he is free
-#     from the dodge cancel, placed back at the distance (as every burst places him), and none of
-#     the follow-up's samples before then count again (the roll judged them). His floor is taken
-#     on the 60 Hz update grid (`DODGE_STEP`).
+#     from the dodge cancel, where it had carried him (version 26, `track_extend`; until then
+#     placed back at the distance), and none of the follow-up's samples before then count again
+#     (the roll judged them). His floor is taken on the 60 Hz update grid (`DODGE_STEP`).
 #   * his plan. He knows the attack as pressed at once, as `sequence_outcome`'s defender knows
 #     every attack (cue 0), and from that floor dodges the follow-up's bursts as it does. A press
 #     made late meets his planned dodge of the follow-up's first burst that reaches him, which now
@@ -6927,42 +8916,191 @@ def attacker_reactions():
     return out
 
 
-def _burst_presses(geoms, dist, moves, cue, floor, memo):
+def _burst_presses(geoms, dist, moves, cue, floor, memo, plan=None, gains=None, punish=None, vals=None, track=()):
     """`reaction_outcome`'s reads of one burst without its worth: (index in `geoms` of the geometry
-    that catches a defender standing at `dist`, or -1; [(move index, dodge start, weight, index of
-    the geometry that catches that dodge or -1)]). `memo` as `reaction_outcome`'s `catches`.
-    `geoms` may hold None (no samples), which keeps the others' indices."""
+    that catches a defender at `dist` who does not dodge, or -1; [(move index, dodge start, weight,
+    index of the geometry that catches that dodge or -1, play)]). `memo` as `reaction_outcome`'s
+    `catches`. `geoms` may hold None (no samples), which keeps the others' indices. The presses are
+    read from `burst_cue`, or are `plan`'s (`reaction_outcome`'s: a lookalike group's) when given; a
+    caught press's play is (move, the dodge's start on the grid, the catch frame) when it is caught
+    in that dodge (version 25), which `FollowupModel` plays from that dodge (`reaction_outcome`'s
+    `mid`), else None. `gains` (per move a `PressGain`) and `punish` (`_punish_ctx`) when this burst
+    decides his punish, as `reaction_outcome` hands them with `aim_punish`. `vals(k, grid,
+    escaping)` (None: 1 each) gives, on move k, (the starts where a gain is counted, what escaping
+    from each start leaves him, the gain): `dodge_presses`' `ok`, `val` and `gain`; a plan, which
+    reads no follow-up, ignores it.
+
+    `track` (version 26, `dodge_chain`'s rule): where earlier rolls carried him. He does not dodge
+    is that track continued (`still_move`), each dodge starts from where it has him (`carried`;
+    the plays then name the carried move), and a press caught before its dodge starts is caught in
+    the track: its play is (the still move, its start, the catch frame). The reads are kept under
+    the moves' `anim`s (`memo` keys ('base', dist, anim) and (dist, k, anim))."""
     import numpy as np
+    cue = burst_cue(geoms, cue)
 
     def caught(key, move, starts):
         if key not in memo:
             memo[key] = _catches(geoms, dist, move, starts)
         return memo[key]
-    base_h = int(caught(('base', dist), None, [0.0])[0][0])
+    if track:
+        smove, sstart = still_move(track)
+        sh, st = caught(('base', dist, smove['anim']), smove, [sstart])
+    else:
+        smove, sstart = None, 0.0
+        sh, st = caught(('base', dist), None, [0.0])
+    base_h, btc = int(sh[0]), float(st[0])
     live = [g['T'].max() for g in geoms if g is not None]
     if not live or base_h < 0:
         return base_h, []
     grid = np.arange(0.0, max(live) + 1.0, DODGE_STEP)
+    mvs = [carried(m, track) for m in moves]
+    keys = [(dist, k) if not track else (dist, k, mv['anim']) for k, mv in enumerate(mvs)]
+    # A carried move's homing shots, every move's flown together (`_homing_ready`).
+    ready = _homing_ready(dist, [(geoms, mv, grid) for k, mv in enumerate(mvs) if keys[k] not in memo]) \
+        if track else []
+    hs = [caught(keys[k], mv, grid)[0] for k, mv in enumerate(mvs)]
+    _homing_forget(ready)
+    gains = [None] * len(moves) if gains is None else gains
+    planned = _plan_call(plan, moves, [h < 0 for h in hs], cue, floor, gains if punish is not None else None,
+                         punish) if plan is not None else None
     out = []
     for k, m in enumerate(moves):
-        h, _ = caught((dist, k), m, grid)
-        for s, w in dodge_presses(h < 0, cue, floor=floor):
+        h = hs[k]
+        if planned is None:
+            if vals is not None:
+                okg, val, gk = vals(k, grid, h < 0)
+                presses = dodge_presses(okg, cue, floor=floor, gain=gk, val=val)
+            else:
+                presses = dodge_presses(h < 0, cue, floor=floor, gain=gains[k] if punish is not None else None)
+        else:
+            presses = planned[k]
+        tk = caught(keys[k], mvs[k], grid)[1]
+        for s, w in presses:
             i = int(round(s / DODGE_STEP))
-            out.append((k, s, w / len(moves), int(h[i]) if 0 <= i < len(h) else base_h))
+            inside = 0 <= i < len(h)
+            hit = int(h[i]) if inside else base_h
+            play = None
+            if hit >= 0:
+                if inside and tk[i] >= i * DODGE_STEP - 1e-9:
+                    # A catch at or after the dodge's start is made in it.
+                    play = (mvs[k], i * DODGE_STEP, float(tk[i]))
+                elif track:
+                    # Before it, in the track he is still on.
+                    play = (smove, sstart, float(tk[i]) if inside else btc)
+            out.append((k, s, w / len(moves), hit, play))
     return base_h, out
 
 
-def _punish_arrivals(m, dist, strikes, run):
-    """(move `m`'s R1 ready frame, the sorted frames the pool's strikes take to land from it, or
-    None when he does not punish from there): `reaction_outcome`'s rule, `advance` 0."""
+#: {(category, anim): (peak, end)} of `clip_advance`.
+_CLIP_ADVANCE = {}
+
+
+def clip_advance(category, anim):
+    """(peak, end) metres of the attacker's forward root motion (-Z) over the whole HKX clip TAE
+    entry (`category`, `anim`) plays: its largest at any 1/60 s sample, and where it is at the
+    clip's end; None when the clip is not read. What a geometry of that clip carries as `ADV`
+    (`_hit_contacts`), the root motion past its last hit sample that `PK` does not see. Cached."""
+    key = (category, anim)
+    if key not in _CLIP_ADVANCE:
+        got = None
+        try:
+            clip = _pose()[0].load_animation(category, anim)
+            n = max(1, math.ceil(clip.duration * 60))
+            fwd = [-clip.root_motion(clip.duration * k / n)[2] for k in range(n + 1)]
+            got = (max(0.0, max(fwd)), fwd[-1])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            got = None
+        _CLIP_ADVANCE[key] = got
+    return _CLIP_ADVANCE[key]
+
+
+def attack_advance(geoms, upto=None):
+    """(peak, end) metres the attacker's root motion carries him forward over an attack of
+    contact geometries `geoms`, before the defender's body stops it (`advance_at`): `peak` the
+    largest of its samples' `PK` (his forward root motion so far at each hit sample) and of its
+    clips' `ADV` peaks (the whole clip, `clip_advance`), `end` where the last clip played leaves
+    him (its `ADV` end; `peak` when no geometry carries one). With `upto` (a real frame), only the
+    samples at or before it, `PK` alone (where he is by then). (0, 0) when nothing says he moves:
+    a bullet's samples carry no `PK` unless its launch does. The one rule every punish path reads
+    (`punish_lead`, `strike_segments`)."""
     import numpy as np
-    ready = m['ready'] if m['ready'] is not None else len(m['path'])
-    x, z = m['path'][min(int(ready), len(m['path']) - 1)]
-    gap = math.hypot(x, dist + z)
-    if strikes is None or not len(strikes) or not (run or gap <= PUNISH_REACH_M):
-        return ready, None
-    close = max(0.0, gap - PUNISH_REACH_M) * _neutral().frames_per_metre() if run else 0.0
-    return ready, np.sort(np.asarray(strikes, float) + close)
+    peak, end, last = 0.0, None, -math.inf
+    for g in geoms or ():
+        if g is None:
+            continue
+        pk = g['PK'] if upto is None else g['PK'][g['T'] <= upto]
+        pk = pk[np.isfinite(pk)]
+        if len(pk):
+            peak = max(peak, float(pk.max()))
+        adv = g.get('ADV') if upto is None else None
+        if adv is not None:
+            peak = max(peak, float(adv[0]))
+            if float(g['T'].max()) >= last:
+                last, end = float(g['T'].max()), float(adv[1])
+    return peak, (peak if end is None else min(end, peak))
+
+
+def advance_at(advance, dist, z=0.0):
+    """How far forward the attacker's root ends, his `advance` ((peak, end), `attack_advance`, or
+    one number for both) stopped by the defender's body as every hit is (`_held`): the two push
+    capsules keep his root `2 * PUSH_CAPSULE_RADIUS` short of the defender's place on his axis,
+    `dist + z` (`z` the dodge's travel along it), and what the clip would carry him past that is
+    taken off for good, so a clip that steps back steps back from there. The axis alone, as the
+    hits' hold-back reads it: a defender who rolled aside does not stop him (`INFERRED`, as there)."""
+    peak, end = (advance, advance) if not isinstance(advance, tuple) else advance
+    if peak <= 0.0:
+        return end
+    lim = max(0.0, dist + z - 2 * _pose()[1].PUSH_CAPSULE_RADIUS)
+    return end - max(0.0, peak - lim)
+
+
+def punish_lead(m, dist, advance=0.0, run=True, origin=None):
+    """(frame of dodge `m` he presses his strike from, the real frames his run in adds, whether he
+    strikes at all), for a dodger who evaded an attacker `dist` m ahead whose root motion carried
+    him `advance` forward ((peak, end) m, `attack_advance`, or one number; stopped by the
+    defender's body where he is then, `advance_at`). `origin` (x, z), version 26: the dodge starts
+    that far sideways and back from where he first stood (`track_at`, an earlier roll carried him
+    there), and both his place and the attacker's advance stopped by his body are read from there
+    on the attack's axis. Within `PUNISH_REACH_M` of the attacker at the dodge's R1 cancel
+    (`ready`) he presses there. Farther, with `run`, he runs the rest in at run speed
+    (`er-mechanics-neutral.frames_per_metre`) from where the dodge has put him at its move cancel
+    (`move`): no sooner, since the behavior script starts a walk or a run only through the
+    move-cancel check (env 2000, `VERIFIED`); the medium roll's is f22 in all four directions
+    against its R1 at f20, Bloodhound's Step's f29 against f17 (`MEASURED` from the clips' TAE,
+    `ATK.recovery_windows`). A dodge that carries him into reach on a frame between the two
+    presses there, the dodge's own travel (`MEASURED` root motion: the step goes on 1.2 m after
+    its R1 opens). Without `run` he strikes only from in reach at the R1 cancel. A dodge that names
+    no move cancel (the jump, `jump_motion`) runs from its R1 frame."""
+    n = len(m['path'])
+    ox, oz = (0.0, 0.0) if origin is None else (float(origin[0]), float(origin[1]))
+
+    def gap_at(f):
+        x, z = m['path'][min(int(f), n - 1)]
+        x, z = ox + x, oz + z
+        return math.hypot(x, dist + z - advance_at(advance, dist, z))
+    ready = m['ready'] if m['ready'] is not None else n
+    if gap_at(ready) <= PUNISH_REACH_M:
+        return ready, 0.0, True
+    if not run:
+        return ready, 0.0, False
+    move = m.get('move')
+    move = ready if move is None else max(float(move), ready)
+    for f in range(int(ready) + 1, int(move)):
+        if gap_at(f) <= PUNISH_REACH_M:
+            return float(f), 0.0, True
+    return move, max(0.0, gap_at(move) - PUNISH_REACH_M) * _neutral().frames_per_metre(), True
+
+
+def _punish_arrivals(m, dist, strikes, run, advance=0.0, origin=None):
+    """(the frame of move `m` his strike is pressed from, the sorted frames the pool's strikes take
+    to land from it, or None when he does not punish from there): `reaction_outcome`'s rule
+    (`punish_lead`, from `origin` when earlier rolls carried him), the attacker carried `advance`
+    forward (`attack_advance`)."""
+    import numpy as np
+    lead, close, near = punish_lead(m, dist, advance, run, origin)
+    if strikes is None or not len(strikes) or not near:
+        return lead, None
+    return lead, np.sort(np.asarray(strikes, float) + close)
 
 
 def _first_touch(geoms, dist, move, starts, after):
@@ -6971,40 +9109,35 @@ def _first_touch(geoms, dist, move, starts, after):
     invincibility, its time) per start, -1 / inf when none does. The reference `_TouchTable` is
     checked against (selftest)."""
     import numpy as np
-    radius = _pose()[1].PUSH_CAPSULE_RADIUS
-    starts = np.asarray(starts, float)[:, None]
+    starts = np.asarray(starts, float)
     after = np.asarray(after, float)[:, None]
     best_t = np.full(starts.shape[0], math.inf)
     best_h = np.full(starts.shape[0], -1)
-    path = np.array(move['path'], float)
-    px, pz, n = path[:, 0], path[:, 1], len(path)
     for h, g in enumerate(geoms):
         if g is None:
             continue
-        u = g['T'][None, :] - starts
-        k = np.clip(np.floor(u).astype(int), 0, n - 1)
-        moving = u >= 0
-        xr = np.where(moving, px[k], 0.0)
-        d = dist + np.where(moving, pz[k], 0.0)
-        immune = not move.get('air') or bool(g.get('AIR'))
-        vuln = ~(moving & (u < move['iframes']) & immune) & (g['T'][None, :] >= after - 1e-9)
-        held = _held(g, dist, move, u, starts, n, pz, radius)
-        if held is None:
-            held = np.maximum(0.0, g['PK'][None, :] - (d - 2 * radius))
-        touch = vuln & (np.hypot(g['X'][None, :] - xr, g['Z'][None, :] + held + d) < g['R'][None, :])
+        # `_touch_rows`' test (the attacker's facing included, version 27), the samples before
+        # `after` left out.
+        touch = _touch_rows(g, dist, move, starts) & (g['T'][None, :] >= after - 1e-9)
         tt = np.where(touch, g['T'][None, :], math.inf).min(axis=1)
         better = tt < best_t
         best_t[better], best_h[better] = tt[better], h
     return best_h, best_t
 
 
-def _touch_rows(g, dist, move, starts):
+def _touch_rows(g, dist, move, starts, ref=False):
     """[dodge start, sample]: whether sample of `g` touches him on `move` (None: standing) started at
-    each of `starts`, as `_catches` tests it, element by element."""
+    each of `starts`, as `_catches` tests it, element by element. With a move, `_touch_turned` reads
+    it; `ref` reads every pair here instead, as until 2026-11-19 (the selftest's reference)."""
     import numpy as np
     radius = _pose()[1].PUSH_CAPSULE_RADIUS
     starts = np.asarray(starts, float)[:, None]
+    if not ref and move is not None and len(g['T']):
+        rot = _facing(g['TURN'], dist, move, starts[:, 0], float(np.nanmax(g['TL'] if 'TL' in g else g['T']))) \
+            if g.get('TURN') is not None else None
+        return _touch_turned(g, dist, move, starts[:, 0], rot, radius)
     u = g['T'][None, :] - starts
+    rot = None
     if move is None:
         xr, d, vuln, n, pz = 0.0, np.full(u.shape, float(dist)), np.ones(u.shape, bool), 1, None
     else:
@@ -7012,28 +9145,181 @@ def _touch_rows(g, dist, move, starts):
         px, pz, n = path[:, 0], path[:, 1], len(path)
         k = np.clip(np.floor(u).astype(int), 0, n - 1)
         moving = u >= 0
-        xr = np.where(moving, px[k], 0.0)
-        d = dist + np.where(moving, pz[k], 0.0)
         immune = not move.get('air') or bool(g.get('AIR'))
-        vuln = ~(moving & (u < move['iframes']) & immune)
-    held = _held(g, dist, move, u, starts, n, pz, radius)
-    if held is None:
-        held = np.maximum(0.0, g['PK'][None, :] - (d - 2 * radius))
+        o = _origins(move, starts)
+        if o is None:
+            xr = np.where(moving, px[k], 0.0)
+            d = dist + np.where(moving, pz[k], 0.0)
+            vuln = ~(moving & (u < move['iframes']) & immune)
+        else:
+            # Carried (`carried`, version 26): on the track before the start.
+            tx, tz, ti = track_at(move['track'], g['T'][None, :], bool(g.get('AIR')))
+            xr = np.where(moving, o[0] + px[k], tx)
+            d = dist + np.where(moving, o[1] + pz[k], tz)
+            vuln = ~((moving & (u < move['iframes']) & immune) | (~moving & ti))
+        turn = g.get('TURN')
+        if turn is not None and len(g['T']):
+            rot = _facing(turn, dist, move, starts[:, 0], float(np.nanmax(g['TL'] if 'TL' in g else g['T'])))
+    if rot is None:
+        held = _held(g, dist, move, u, starts, n, pz, radius)
+        if held is None:
+            held = np.maximum(0.0, g['PK'][None, :] - (d - 2 * radius))
+        return vuln & (np.hypot(g['X'][None, :] - xr, g['Z'][None, :] + held + d) < g['R'][None, :])
+    # The attacker's facing (version 27): each sample read in the facing it was made in, the
+    # hold-back read from where it turns him at the launch (`_geo_first_touch`'s rule).
+    ji = _turn_index(g['TURN'], _turn_when(g, np.arange(len(g['T']))), rot[0].shape[1])
+    th, ddx, ddz = rot[0][:, ji], rot[1][:, ji], rot[2][:, ji]
+    PK = g['PK'][None, :]
+    xr, d = _turn_apply(xr, d, th, PK, ddx, ddz)
+    if 'TL' in g:
+        ul = g['TL'][None, :] - starts
+        kl = np.clip(np.floor(ul).astype(int), 0, n - 1)
+        o = _origins(move, starts)
+        if o is None:
+            xl, dl = np.where(ul >= 0, px[kl], 0.0), dist + np.where(ul >= 0, pz[kl], 0.0)
+        else:
+            tl_ = track_at(move['track'], g['TL'][None, :])
+            xl, dl = np.where(ul >= 0, o[0] + px[kl], tl_[0]), dist + np.where(ul >= 0, o[1] + pz[kl], tl_[1])
+        dl = _turn_apply(xl, dl, th, PK, ddx, ddz)[1]
+    else:
+        dl = d
+    held = np.maximum(0.0, PK - (dl - 2 * radius))
     return vuln & (np.hypot(g['X'][None, :] - xr, g['Z'][None, :] + held + d) < g['R'][None, :])
 
 
-def _may_touch(g, dist, move):
+def _touch_turned(g, dist, move, s, rot, radius):
+    """`_touch_rows` of `g` against `move` from each start of `s` (1-D), with the attacker's facing
+    `rot` (`_facing`'s; None when none is read: each sample read in the facing it was made in, the
+    hold-back read from where it turns him at the launch, `_geo_first_touch`'s rule):
+    `_touch_rows`' table (`ref`), read once per start and group of samples that read the defender
+    alike instead of once per pair.
+
+    A pair reads of the defender only what its sample's time (`T`), launch time (`TL`), facing
+    update (`_turn_index` of `_turn_when`) and `PK` give: his place and invincibility at the time,
+    his place at the launch, the facing and drift at the update, all turned about the attacker's root
+    `PK` up the axis (`_turn_apply`), and the hold-back from those. Samples whose four are equal (to
+    the bit) are one group, read with `_touch_rows`' own operations on the group's values; each
+    sample then tests its own disc (`X`, `Z`, `R`) against its group's read, the same last
+    operations in the same order. numpy's elementwise functions give an element the same bits
+    wherever it sits in an array (`MEASURED` 2026-11-19 for cos, sin and hypot, target/wf/blowup2),
+    so every pair's answer is the one `ref` gives.
+
+    Why (2026-11-19, target/wf/blowup2): Ghostflame Ignition then R1's set reads, for every roll
+    track of its follow-up stages, a table of the R1's ghostflame (3,001 samples over f72-267, all
+    launched at one frame with one `PK`, so 824 groups) over 200-500 starts; `_turn_apply` (two
+    cosines and two sines a pair) was 53% of its time and the tables 90% (py-spy, p1)."""
+    import numpy as np
+    T, TL = g['T'], g.get('TL')
+    S, N = len(s), len(T)
+    if not S:
+        return np.zeros((0, N), bool)
+    path = np.array(move['path'], float)
+    px, pz, n = path[:, 0], path[:, 1], len(path)
+    ji = _turn_index(g['TURN'], _turn_when(g, np.arange(N)), rot[0].shape[1]) if rot is not None \
+        else np.zeros(N, np.int64)
+    PKs = g['PK']
+    # The groups: samples whose time, launch time, facing update and `PK` are equal to the bit.
+    key = np.ascontiguousarray(np.stack([T, T if TL is None else TL, ji.astype(float), PKs], axis=1))
+    _, first, gi = np.unique(key.view(np.dtype((np.void, key.dtype.itemsize * 4))).ravel(),
+                             return_index=True, return_inverse=True)
+    gi = np.asarray(gi).ravel()
+    Tg, jg = T[first], ji[first]
+    starts = s[:, None]
+    # `_touch_rows` (`ref`) on each group's values: the same operations in the same order.
+    u = Tg[None, :] - starts
+    k = np.clip(np.floor(u).astype(int), 0, n - 1)
+    moving = u >= 0
+    immune = not move.get('air') or bool(g.get('AIR'))
+    o = _origins(move, starts)
+    if o is None:
+        xr = np.where(moving, px[k], 0.0)
+        d = dist + np.where(moving, pz[k], 0.0)
+        vuln = ~(moving & (u < move['iframes']) & immune)
+    else:
+        # Carried (`carried`, version 26): on the track before the start.
+        tx, tz, ti = track_at(move['track'], Tg[None, :], bool(g.get('AIR')))
+        xr = np.where(moving, o[0] + px[k], tx)
+        d = dist + np.where(moving, o[1] + pz[k], tz)
+        vuln = ~((moving & (u < move['iframes']) & immune) | (~moving & ti))
+    PK = PKs[first][None, :]
+    if rot is None:
+        # No facing read (none given, or he never leaves the axis): `_touch_rows`' hold-back,
+        # `_held` at the launch or his own place.
+        if TL is not None:
+            ul = TL[first][None, :] - starts
+            kl = np.clip(np.floor(ul).astype(int), 0, n - 1)
+            if o is None:
+                dl = dist + np.where(ul >= 0, pz[kl], 0.0)
+            else:
+                dl = dist + np.where(ul >= 0, o[1] + pz[kl], track_at(move['track'], TL[first][None, :])[1])
+            held = np.maximum(0.0, PK - (dl - 2 * radius))
+        else:
+            held = np.maximum(0.0, PK - (d - 2 * radius))
+        return vuln[:, gi] & (np.hypot(g['X'][None, :] - xr[:, gi], g['Z'][None, :] + held[:, gi] + d[:, gi])
+                              < g['R'][None, :])
+    # `_turn_apply`'s cosine less 1 and sine, once per start and distinct update.
+    uj, jinv = np.unique(jg, return_inverse=True)
+    jinv = np.asarray(jinv).ravel()
+    tu = rot[0][:, uj]
+    c1u, snu = np.cos(tu) - 1.0, np.sin(tu)
+    ddx, ddz = rot[1][:, jg], rot[2][:, jg]
+    # `_turn_apply` of his place, the same operations in the same order.
+    p = np.where(np.isfinite(PK), PK, 0.0)
+    c1, sn = c1u[:, jinv], snu[:, jinv]
+    vx, vz = xr - ddx, d - p - ddz
+    xr, d = xr + (c1 * vx - sn * vz - ddx), d + (sn * vx + c1 * vz - ddz)
+    if TL is not None:
+        # His place at the launch, once per start and distinct (launch time, update, `PK`) of the
+        # groups, then `_turn_apply`'s D.
+        lk = np.ascontiguousarray(np.stack([TL[first], jg.astype(float), PKs[first]], axis=1))
+        _, lf, li = np.unique(lk.view(np.dtype((np.void, lk.dtype.itemsize * 3))).ravel(),
+                              return_index=True, return_inverse=True)
+        li = np.asarray(li).ravel()
+        TLl, jl, PKl = TL[first][lf], jg[lf], PKs[first][lf][None, :]
+        ul = TLl[None, :] - starts
+        kl = np.clip(np.floor(ul).astype(int), 0, n - 1)
+        if o is None:
+            xl, dl = np.where(ul >= 0, px[kl], 0.0), dist + np.where(ul >= 0, pz[kl], 0.0)
+        else:
+            tl_ = track_at(move['track'], TLl[None, :])
+            xl, dl = np.where(ul >= 0, o[0] + px[kl], tl_[0]), dist + np.where(ul >= 0, o[1] + pz[kl], tl_[1])
+        dxl, dzl = rot[1][:, jl], rot[2][:, jl]
+        pl = np.where(np.isfinite(PKl), PKl, 0.0)
+        c1l, snl = c1u[:, jinv[lf]], snu[:, jinv[lf]]
+        wx, wz = xl - dxl, dl - pl - dzl
+        dl = (dl + (snl * wx + c1l * wz - dzl))[:, li]
+    else:
+        dl = d
+    held = np.maximum(0.0, PK - (dl - 2 * radius))
+    # Each sample's own disc against its group's read.
+    return vuln[:, gi] & (np.hypot(g['X'][None, :] - xr[:, gi], g['Z'][None, :] + held[:, gi] + d[:, gi])
+                          < g['R'][None, :])
+
+
+def _may_touch(g, dist, move, turned=None):
     """Per sample of `g`: False where no dodge start on `move` (None: standing) can make it touch
     him at `dist` in `_catches`' test. A bound: his root keeps to the box of the move's path and
     the standing spot, and his body's hold-back is at most what his nearest place in it gives, so
-    a sample whose disc misses that box by its radius never touches; only those are left out."""
+    a sample whose disc misses that box by its radius never touches; only those are left out.
+    `turned` (version 27): None, or the farthest the attacker's turning moves his root
+    (`_drift_max`) when his facing is read (`_facing`), which turns the defender's place about that
+    root (`_turn_apply`) and keeps only his distance from it: a sample is then left out when its
+    distance from the root misses every distance the box gives by its radius and that drift."""
     import numpy as np
+    if turned is not None and turned is not False and move is not None:
+        return _may_touch_turned(g, dist, move, float(turned))
     radius = _pose()[1].PUSH_CAPSULE_RADIUS
     if move is None:
         xs, zs = np.zeros(1), np.zeros(1)
     else:
         path = np.array(move['path'], float)
         xs, zs = np.append(path[:, 0], 0.0), np.append(path[:, 1], 0.0)
+        if move.get('track'):
+            # Carried (version 26): anywhere on the track, and the move from anywhere on it.
+            tx = np.concatenate([[0.0]] + [ox + _path_arrays(m)[0] for _, ox, _, m in move['track']])
+            tz = np.concatenate([[0.0]] + [oz + _path_arrays(m)[1] for _, _, oz, m in move['track']])
+            xs = np.array([tx.min() + min(0.0, xs.min()), tx.max() + max(0.0, xs.max())])
+            zs = np.array([tz.min() + min(0.0, zs.min()), tz.max() + max(0.0, zs.max())])
     dlo, dhi = dist + zs.min(), dist + zs.max()
     hmax = np.maximum(0.0, g['PK'] - (dlo - 2 * radius))
     dx = np.maximum(0.0, np.maximum(xs.min() - g['X'], g['X'] - xs.max()))
@@ -7042,26 +9328,99 @@ def _may_touch(g, dist, move):
     return np.hypot(dx, dz) < g['R'] * (1.0 + 1e-9) + 1e-9
 
 
+def _box(move):
+    """(x range, z range) his root keeps to on `move` (and its track) and the spot he started from."""
+    import numpy as np
+    path = np.array(move['path'], float)
+    xs, zs = np.append(path[:, 0], 0.0), np.append(path[:, 1], 0.0)
+    if move.get('track'):
+        tx = np.concatenate([[0.0]] + [ox + _path_arrays(m)[0] for _, ox, _, m in move['track']])
+        tz = np.concatenate([[0.0]] + [oz + _path_arrays(m)[1] for _, _, oz, m in move['track']])
+        return ((tx.min() + min(0.0, xs.min()), tx.max() + max(0.0, xs.max())),
+                (tz.min() + min(0.0, zs.min()), tz.max() + max(0.0, zs.max())))
+    return (xs.min(), xs.max()), (zs.min(), zs.max())
+
+
+def _may_touch_turned(g, dist, move, drift=0.0):
+    """`_may_touch` when the facing is read: per sample, his distance from the attacker's root (`PK`
+    up the axis, finite, else his start, moved at most `drift` by the attacker's turning) over the
+    box, against the sample's own distance from it under every hold-back his body can give
+    (`_turn_apply` keeps the first; the hold-back moves the sample along the facing by at most his
+    distance from the root plus the two push radii)."""
+    import numpy as np
+    radius = _pose()[1].PUSH_CAPSULE_RADIUS
+    (xlo, xhi), (zlo, zhi) = _box(move)
+    p = np.where(np.isfinite(g['PK']), g['PK'], 0.0)
+    dlo, dhi = dist + zlo - p, dist + zhi - p
+    ax = 0.0 if xlo <= 0.0 <= xhi else min(abs(xlo), abs(xhi))
+    az = np.where((dlo <= 0) & (dhi >= 0), 0.0, np.minimum(np.abs(dlo), np.abs(dhi)))
+    rmin = np.maximum(0.0, np.hypot(ax, az) - drift)
+    rmax = np.hypot(max(abs(xlo), abs(xhi)), np.maximum(np.abs(dlo), np.abs(dhi))) + drift
+    # The sample's point in his coordinates is (X, -(Z + held)); from the root, (X, -(Z + held) - p).
+    hmax = np.where(np.isfinite(g['PK']), rmax + 2 * radius, 0.0)
+    a0, a1 = g['Z'] + p, g['Z'] + p + hmax
+    qz_lo = np.where((a0 <= 0) & (a1 >= 0), 0.0, np.minimum(np.abs(a0), np.abs(a1)))
+    qz_hi = np.maximum(np.abs(a0), np.abs(a1))
+    qmin, qmax = np.hypot(g['X'], qz_lo), np.hypot(g['X'], qz_hi)
+    tol = g['R'] * (1.0 + 1e-9) + 1e-9
+    return (qmin < rmax + tol) & (qmax > rmin - tol)
+
+
 class _TouchTable:
     """Every `_catches` read of geometries `geoms` at `dist` on `move` (None: standing, which no
     start changes) for dodge starts on the update grid from `lo` to `hi`: per start, the first
     sample that touches him at or after any cut, in time order with ties to the lower geometry
     index (what `_catches` returns). Samples `_may_touch` rules out are left out. Starts past `hi`
-    see every sample before them, so they read the standing table `stand`."""
+    see every sample before them, so they read the standing table `stand`. `starts` (a move's
+    only): the table's rows are those dodge starts instead of the grid from `lo` to `hi`, read by
+    row (`first_at`; `_RowsTable`)."""
 
-    def __init__(self, geoms, dist, move, lo=0.0, hi=0.0, stand=None):
+    def __init__(self, geoms, dist, move, lo=0.0, hi=0.0, stand=None, starts=None):
         import numpy as np
+        if starts is not None:
+            starts = np.asarray(starts, float)
+            lo = hi = float(starts[0])
         self.lo, self.move, self.stand = float(lo), move, stand
         rows = int(round((hi - lo) / DODGE_STEP)) + 1 if move is not None else 1
+        if starts is not None:
+            rows = len(starts)
+        if rows <= 0:
+            # A grid that starts past its end (a burst whose last sample is over before he can press
+            # out of the roll he is in, `_tab`): every start he can make is past it and reads `stand`
+            # (`first`). Until 2026-11-17 this built a table of negative rows and stopped the run.
+            self.T, self.gid, self.n = np.array([math.inf]), np.array([-1]), 0
+            self.nxt = np.zeros((0, 1), np.int32)
+            return
         grid = self.lo + DODGE_STEP * np.arange(rows) if move is not None else np.zeros(1)
+        if starts is not None:
+            grid = starts
         Ts, gids, touches = [], [], []
         for h, g in enumerate(geoms):
             if g is None:
                 continue
-            keep = _may_touch(g, dist, move)
+            if 'HOMING' in g:
+                # A geometry with a homing record is flown again after him from every start, as
+                # `_catches` reads it (`_homing_touch`; version 27: until then the table read its
+                # stored samples). Its first touch per start is one sample of the table there, so a
+                # cut past it finds none of it (a touch before the cut was judged by the roll he is
+                # coming out of, which read the same flight).
+                tt = np.asarray(_homing_touch(g, dist, move, grid), float)
+                vals = np.unique(tt[np.isfinite(tt)])
+                if not len(vals):
+                    continue
+                touches.append(tt[:, None] == vals[None, :])
+                Ts.append(vals)
+                gids.append(np.full(len(vals), h))
+                continue
+            turned = _drift_max(_facing(g['TURN'], dist, move, grid, float(np.nanmax(g['TL'] if 'TL' in g else g['T'])))) \
+                if move is not None and g.get('TURN') is not None and len(g['T']) else None
+            keep = _may_touch(g, dist, move, turned)
             if not keep.any():
                 continue
             sub = {k: (v[keep] if k in ('T', 'X', 'Z', 'R', 'PK', 'TL') else v) for k, v in g.items()}
+            # The facing a shot with no launch read takes is its geometry's first sample's
+            # (`_turn_when`), whichever samples are kept.
+            sub['T0'] = float(np.nanmin(g['T']))
             touches.append(_touch_rows(sub, dist, move, grid))
             Ts.append(sub['T'])
             gids.append(np.full(int(keep.sum()), h))
@@ -7090,6 +9449,8 @@ class _TouchTable:
             if len(r) and r.min() < 0:
                 raise ValueError(f'_TouchTable: a dodge start {starts.min()} before the grid at {self.lo}')
             past = r >= self.nxt.shape[0]
+            if not self.nxt.shape[0]:
+                return self.stand.first(starts, cuts)
             j = self.nxt[np.minimum(r, self.nxt.shape[0] - 1), c]
             if past.any():
                 h, t = self.stand.first(starts[past], cuts[past])
@@ -7097,6 +9458,136 @@ class _TouchTable:
                 out_h[past], out_t[past] = h, t
                 return out_h, out_t
         return self.gid[j], self.T[j]
+
+    def first_at(self, rows, cuts):
+        """`first` of the starts in rows `rows` of the table (a table of `starts`, `_RowsTable`)."""
+        import numpy as np
+        rows = np.asarray(rows, int)
+        cuts = np.broadcast_to(np.asarray(cuts, float), rows.shape)
+        c = np.searchsorted(self.T[:-1], cuts - 1e-9, side='left')
+        j = self.nxt[rows, c]
+        return self.gid[j], self.T[j]
+
+
+class _RowsTable:
+    """A `_TouchTable` of geometries `geoms` at `dist` on `move` over the grid `lo` .. `hi`, whose
+    rows are read only when `first` asks for them: the rows one `first` asks for and are not read
+    yet are read as one `_TouchTable` of those starts (`starts`; at least two rows, so the
+    attacker's facing takes the many-defender path of `_turn_track` as the whole grid does).
+    Until 2026-11-19 each run of consecutive rows was a table of its own, so a read of starts a
+    frame or more apart (every other row) made one two-row table per start, each turning the
+    attacker over the whole follow-up on its own (`_facing`, a loop over updates); Golden Land then
+    R2 at frame 68 asks for 3.1 starts a read (5,404 in 1,737 reads, .worktrees/gl-stall chkrows).
+
+    Exact: a row of a `_TouchTable` reads only its own start (every touch test, the facing and a
+    homing shot's flight are per start; a flight is flown per start on its own, `_homing_entries`,
+    its interval children included since 2026-11-18, `fly_members`), and `first` answers a row with the first of its own touches, in (time, geometry) order, at or
+    after the cut. The samples `_may_touch` leaves out are those that touch on no row it reads, so
+    a table over fewer rows may leave out more of them, none that a row of it touches.
+
+    Why: the whole follow-up's table of a carried move (`FollowupModel._tab` with `bi` None) is read
+    by `_rolled` alone, at the few starts of one roll on each press delay's clock, while the whole
+    table read every start from before the longest delay to past the follow-up's last frame: in
+    Ghostflame Ignition then R2's set, 176,368 rows read for 7,042 asked (2026-11-18,
+    target/wf/goldenland/ghostBase)."""
+
+    def __init__(self, geoms, dist, move, lo, hi, stand):
+        self.geoms, self.dist, self.lo, self.move, self.stand = geoms, dist, float(lo), move, stand
+        self.rows = int(round((hi - lo) / DODGE_STEP)) + 1
+        #: {row: (the `_TouchTable` that read it, its row there)}.
+        self.at = {}
+
+    def _rows_read(self, need):
+        """The rows a read of rows `need` (sorted) reads: those, two at least (the facing's
+        one-defender path is another sum of the same steps)."""
+        if len(need) > 1:
+            return list(need)
+        a = need[0]
+        return [a, a + 1] if a + 1 < self.rows else [a - 1, a]
+
+    def _starts_of(self, rows):
+        """The dodge starts of grid rows `rows`."""
+        import numpy as np
+        return self.lo + DODGE_STEP * np.asarray(rows, float)
+
+    def _need(self, starts):
+        """The rows of `starts` on the grid not read yet, sorted, and which starts are past it."""
+        import numpy as np
+        r = np.rint((np.asarray(starts, float) - self.lo) / DODGE_STEP).astype(int)
+        past = r >= self.rows
+        return sorted({int(x) for x in r[~past].tolist()} - self.at.keys()), r, past
+
+    def plan(self, starts):
+        """The grids of the `_TouchTable`s `first(starts)` would read (`_homing_ready` flies their
+        homing shots ahead)."""
+        import numpy as np
+        if self.rows <= 0 or not len(np.atleast_1d(starts)):
+            return []
+        need = self._need(starts)[0]
+        return [self._starts_of(self._rows_read(need))] if need else []
+
+    def _read(self, need):
+        """Read rows `need` (sorted, none read yet), one `_TouchTable` of their starts."""
+        rows = self._rows_read(need)
+        # Every row asked of it is one of its starts, so it reads no standing table.
+        tab = _TouchTable(self.geoms, self.dist, self.move, stand=None, starts=self._starts_of(rows))
+        want = set(need)
+        for i, r in enumerate(rows):
+            if r in want:
+                self.at[r] = (tab, i)
+
+    def _stand(self):
+        """The standing table, made when a start past the grid first asks for it (`stand` may be a
+        function that makes it: a carried move's is a flight of its own, `_stand_tab`)."""
+        if callable(self.stand):
+            self.stand = self.stand()
+        return self.stand
+
+    def first(self, starts, cuts):
+        """`_TouchTable.first`."""
+        import numpy as np
+        starts = np.asarray(starts, float)
+        cuts = np.broadcast_to(np.asarray(cuts, float), starts.shape)
+        r = np.rint((starts - self.lo) / DODGE_STEP).astype(int)
+        if len(r) and r.min() < 0:
+            raise ValueError(f'_TouchTable: a dodge start {starts.min()} before the grid at {self.lo}')
+        if self.rows <= 0:
+            return self._stand().first(starts, cuts)
+        past = r >= self.rows
+        need = sorted({int(x) for x in r[~past].tolist()} - self.at.keys())
+        if need:
+            self._read(need)
+        out_h = np.full(len(r), -1, np.int64)
+        out_t = np.full(len(r), math.inf)
+        by = {}
+        for i, x in enumerate(r.tolist()):
+            if x < self.rows:
+                tab, rr = self.at[x]
+                got = by.setdefault(id(tab), (tab, [], []))
+                got[1].append(i)
+                got[2].append(rr)
+        for tab, idx, rows in by.values():
+            idx = np.array(idx, int)
+            h, t = tab.first_at(rows, cuts[idx])
+            out_h[idx], out_t[idx] = h, t
+        if past.any():
+            h, t = self._stand().first(starts[past], cuts[past])
+            out_h[past], out_t[past] = h, t
+        return out_h, out_t
+
+
+class _StillTable:
+    """A `_TouchTable` of a defender who does not dodge again, carried on a track (`still_move`,
+    version 26): read at the still move's own start whatever start is asked (it is the stand of a
+    carried move's table, read for starts past that table's grid: he never starts that move)."""
+
+    def __init__(self, table, start):
+        self.table, self.start = table, float(start)
+
+    def first(self, starts, cuts):
+        import numpy as np
+        n = len(np.atleast_1d(np.asarray(starts, float)))
+        return self.table.first(np.full(n, self.start), np.broadcast_to(np.asarray(cuts, float), (n,)))
 
 
 def _grid(x):
@@ -7110,10 +9601,13 @@ class FollowupModel:
     place in the whole attack's time order (`CaughtModel`, `_bursts`). `delays` are the press
     delays the attacker may take (real frames, the first 0), `my_roll` his first roll frame at the
     earliest press, `strikes` the pool's punish strike frames. `outcome` scores one (distance,
-    floor) for given worths; one model serves every build that flies the same shapes."""
+    floor) for given worths; one model serves every build that flies the same shapes. `look` (an
+    `er-mechanics-spells.Lookalikes` member, the opening's group: until the press the attack is its
+    opening) times his first dodge of the opening; None, he knows it from its first frame."""
 
-    def __init__(self, opening, follow, press, delays, my_roll, strikes=None, run=True):
+    def __init__(self, opening, follow, press, delays, my_roll, strikes=None, run=True, look=None):
         import numpy as np
+        self.look = look
         self.open_bursts = self._bursts(opening)
         self.follow_bursts = self._bursts(follow)
         self.follow = [g for g, _ in follow]
@@ -7127,27 +9621,209 @@ class FollowupModel:
         self.my_roll = my_roll
         self.strikes = None if strikes is None else np.asarray(strikes, float)
         self.run = run
-        self.families = [roll_motion()]
-        if any(g is not None and g.get('AIR') for g, _ in list(opening) + list(follow)):
-            self.families.append([jump_motion()])
+        self.families = dodge_families(any(g is not None and g.get('AIR') for g, _ in list(opening) + list(follow)))
+        # Where the whole attack's root motion leaves the attacker for the punish (`attack_advance`).
+        self.all_geoms = [g for g, _ in list(opening) + list(follow)]
+        self.advance = attack_advance(self.all_geoms)
         self.react = attacker_reactions()
         self._memo, self._rolls, self._stages, self._shapes, self._arrive = {}, {}, {}, {}, {}
         self._tabs = {}
+        # `_stand_values`' answers, kept per the escape tables they read (`_stand_values`).
+        self._svals = {}
+        # The catches made in his own dodge (version 25, `_mid`): each a column past `size` of the
+        # worth tables `outcome` and `mixup` read, (kind, whole-attack index, move, start, catch
+        # frame, delay).
+        self.plays, self._play_ids = [], {}
+        self.open_end = max([float(g['T'].max()) for g, _ in opening if g is not None] + [-math.inf])
+
+    def _mid(self, kind, h, move, start, catch, d=None):
+        """The column of a catch by geometry `h` (whole-attack index) in his dodge of `move` started at
+        `start`, made at `catch` (version 25; `CaughtModel.worth_of` `dodge`). 'open': an opening
+        geometry catches his roll of it, on the attack's clock at every press delay. 'follow': the
+        follow-up pressed `delays[d]` late catches his roll of the opening; `start` and `catch` are on
+        the earliest-press timeline (`_rolled`'s). When every opening sample is over before that
+        catch, nothing of the opening can touch him after it and the play is the earliest press's
+        with the dodge started `delays[d]` earlier, one column for every delay alike (kept as delay
+        None); else the play is that delay's own, on its clock."""
+        if kind == 'follow':
+            if self.open_end < catch - 1e-9:
+                key = ('follow', h, move['anim'], float(start), float(catch), None)
+            else:
+                dl = float(self.delays[d])
+                # A carried move's track moves to that delay's clock with it (version 26).
+                move = _shift_move(move, dl)
+                key = ('follow', h, move['anim'], float(start) + dl, float(catch) + dl, int(d))
+        else:
+            key = ('open', h, move['anim'], float(start), float(catch), None)
+        if key not in self._play_ids:
+            self._play_ids[key] = self.size + len(self.plays)
+            self.plays.append((key[0], h, move, key[3], key[4], key[5]))
+        return self._play_ids[key]
+
+    @staticmethod
+    def _stage_values(sh, WF, WD):
+        """[stage, delay] of what lands on him in each stage of `_shape` `sh`: its per-geometry
+        weights on the follow-up's worths `WF`, plus its catches in his own dodge (`MID`) on their
+        columns of `WD` (version 25)."""
+        SV = sh['C'] @ WF.T
+        for si, mid in enumerate(sh['MID']):
+            for pid, x in mid.items():
+                SV[si] = SV[si] + x * WD[:, pid]
+        return SV
+
+    def _worth_table(self, need, worth, mid_worth, D):
+        """[delay, column] of what lands per column asked for in `need[d]`: `worth(d, indices)` for
+        the attack's geometries, and for a catch in his dodge (`_mid`) `mid_worth(d, h, move, start,
+        catch)` on that delay's clock ('follow' plays of every delay alike on the earliest press's,
+        d = 0; one of a single delay only there, 0 elsewhere); without `mid_worth`, the geometry's own
+        worth, as before version 25."""
+        import numpy as np
+        WD = np.zeros((D, self.size + len(self.plays)))
+        for d in range(D):
+            std = sorted(x for x in need[d] if x < self.size)
+            if std:
+                idx = np.array(std, int)
+                WD[d, idx] = worth(d, idx)
+            for x in sorted(x for x in need[d] if x >= self.size):
+                kind, h, move, s, tc, dd = self.plays[x - self.size]
+                if mid_worth is None:
+                    WD[d, x] = float(worth(d, np.array([h], int))[0])
+                elif kind == 'follow' and dd is None:
+                    WD[d, x] = float(mid_worth(0, h, move, s, tc))
+                elif kind == 'follow' and dd != d:
+                    WD[d, x] = 0.0
+                else:
+                    WD[d, x] = float(mid_worth(d, h, move, s, tc))
+        return WD
 
     def _tab(self, dist, move, bi=None):
         """The `_TouchTable` of the whole follow-up (`bi` None) or of its burst `bi` at `dist` on
         `move` (None: standing), kept until `release(dist)`. The whole follow-up's grid reaches back
         past the longest delay, since a late press is read as his dodge started that much early."""
-        key = (round(dist, 2), None if move is None else id(move), bi)
+        key = (round(dist, 2), None if move is None else move['anim'], bi)
         if key not in self._tabs:
-            gs = self.follow if bi is None else self.follow_bursts[bi][0]
             if move is None:
+                gs = self.follow if bi is None else self.follow_bursts[bi][0]
                 self._tabs[key] = _TouchTable(gs, dist, None)
             else:
-                top = max(g['T'].max() for g in gs) + 1.0
-                lo = 0.0 if bi is not None else -(math.ceil(float(self.delays[-1])) + 1.0)
-                self._tabs[key] = _TouchTable(gs, dist, move, lo, _grid(top + 0.5), self._tab(dist, None, bi))
+                gs, lo, hi = self._tab_grid(dist, move, bi)
+                # A move carried out of an earlier roll (version 26): past the grid he never starts it,
+                # so those starts read the track he is on (`_stand_tab`). The whole follow-up's table
+                # is read by `_rolled` alone, at a few starts: its rows are read as asked, and the
+                # standing table only when a start past its grid is (`_RowsTable`).
+                trk_ = move.get('track') or ()
+                if bi is None:
+                    self._tabs[key] = _RowsTable(gs, dist, move, lo, hi, lambda: self._stand_tab(dist, trk_, None))
+                else:
+                    self._tabs[key] = _TouchTable(gs, dist, move, lo, hi, self._stand_tab(dist, trk_, bi))
         return self._tabs[key]
+
+    def _tab_grid(self, dist, move, bi=None):
+        """(geometries, first start, last start) of `_tab`'s table of `move` (not None)."""
+        gs = self.follow if bi is None else self.follow_bursts[bi][0]
+        top = max(g['T'].max() for g in gs) + 1.0
+        lo = 0.0 if bi is not None else -(math.ceil(float(self.delays[-1])) + 1.0)
+        trk = move.get('track')
+        if bi is not None and trk and trk[-1][0] > TRACK_EVER:
+            # A burst's table of a move out of a roll: he presses no sooner than that roll's
+            # start plus its dodge cancel, so no earlier start is read (`_burst_starts`).
+            lo = max(lo, math.floor((trk[-1][0] + dodge_end(trk[-1][3])) / DODGE_STEP) * DODGE_STEP)
+        return gs, lo, _grid(top + 0.5)
+
+    # -- flying ahead (`_homing_ready`) ------------------------------------------------------------
+    # The reads below name the touch tables a later read will build, so that their homing shots are
+    # flown together beforehand: each `_ahead_*` adds (geometries, move, dodge starts) to `reqs` for a
+    # table not built yet. A wrong guess costs a flight and moves no number (`_homing_ready`).
+
+    def _ahead_tab(self, dist, move, bi, reqs):
+        """`_tab(dist, move, bi)`'s burst table (`bi` not None) and its standing table."""
+        import numpy as np
+        if (round(dist, 2), move['anim'], bi) in self._tabs:
+            return
+        gs, lo, hi = self._tab_grid(dist, move, bi)
+        rows = int(round((hi - lo) / DODGE_STEP)) + 1
+        if rows > 0:
+            reqs.append((gs, move, float(lo) + DODGE_STEP * np.arange(rows)))
+        self._ahead_still(dist, move.get('track') or (), bi, reqs)
+
+    def _ahead_still(self, dist, track, bi, reqs):
+        """`_stand_tab(dist, track, bi)`."""
+        import numpy as np
+        if not track:
+            return
+        smove, s0 = still_move(track)
+        if (round(dist, 2), smove['anim'], bi, 'still') not in self._tabs:
+            gs = self.follow if bi is None else self.follow_bursts[bi][0]
+            reqs.append((gs, smove, float(s0) + DODGE_STEP * np.arange(1)))
+
+    def _ahead_rolled(self, dist, move, starts, afters, reqs):
+        """`_rolled(dist, k, move, starts, afters)`'s reads of the whole follow-up's table."""
+        afters = [-math.inf] * len(starts) if afters is None else list(afters)
+        memo = self._rolls.get((round(dist, 2), move['anim']), {})
+        need = sorted({q for q in zip(starts, afters) if q not in memo})
+        if not need or not move.get('track'):
+            return
+        tab = self._tab(dist, move)
+        if isinstance(tab, _RowsTable):
+            for grid in tab.plan([s for s, _ in need]):
+                reqs.append((self.follow, move, grid))
+
+    def _ahead_stage(self, fi, dist, floor, cut, cue, track, reqs):
+        """`_stage(fi, dist, floor, cut, cue, track)`'s first reads: every burst's standing table
+        out of `track` (`_last_follow`), and the first burst's tables as it meets him."""
+        if not track or ('stage', fi, round(dist, 2), floor, cut, cue, track_key(track)) in self._stages:
+            return
+        for bi in range(len(self.follow_bursts)):
+            self._ahead_still(dist, track, bi, reqs)
+        if not self.follow_bursts:
+            return
+        at = burst_after([g for g, _ in self.follow_bursts], 0, cue, floor)
+        trk = collapse_track(track, at) if at >= floor else track
+        self._ahead_still(dist, trk, 0, reqs)
+        if not trk:
+            return
+        for m in self._moves(fi, dist, trk):
+            self._ahead_tab(dist, carried(m, trk), 0, reqs)
+
+    def _ahead_late(self, fi, dist, floor, cut, track, reqs):
+        """`_late(fi, dist, floor, cut, track)`'s first reads (its stage at cue 0)."""
+        if ('late', fi, round(dist, 2), floor, cut, track_key(track)) not in self._stages:
+            self._ahead_stage(fi, dist, floor, cut, 0.0, track, reqs)
+
+    @staticmethod
+    def _burst_starts(tab, grid, at):
+        """`tab.first` over `grid` (cut at `at`), the starts before the table's grid read as not
+        caught: a move out of a roll is never pressed before that roll's start plus its dodge cancel
+        (`_tab`), so `dodge_presses` reads none of them (its presses start at his floor)."""
+        import numpy as np
+        grid = np.asarray(grid, float)
+        h, t = np.full(len(grid), -1, int), np.full(len(grid), math.inf)
+        sel = grid >= tab.lo - 1e-9
+        if sel.any():
+            h[sel], t[sel] = tab.first(grid[sel], np.full(int(sel.sum()), at))
+        return h, t
+
+    def _stand_tab(self, dist, track, bi=None):
+        """The table of a defender at `dist` who does not dodge: standing where he started (`_tab`
+        with no move), or carried on `track` (version 26), read at the still move's start
+        (`still_move`; `_follow_still`)."""
+        if not track:
+            return self._tab(dist, None, bi)
+        smove, s0 = still_move(track)
+        key = (round(dist, 2), smove['anim'], bi, 'still')
+        if key not in self._tabs:
+            gs = self.follow if bi is None else self.follow_bursts[bi][0]
+            self._tabs[key] = _StillTable(_TouchTable(gs, dist, smove, s0, s0, None), s0)
+        return self._tabs[key]
+
+    def _follow_still(self, dist, bi, cut_at, track=()):
+        """(index of the follow-up burst `bi`'s geometry that first touches a defender at `dist` who
+        does not dodge, its frame) with the samples before `cut_at` left out: standing where he
+        started, or on `track`."""
+        if not track:
+            return self._tab(dist, None, bi).first([0.0], [cut_at])
+        _, s0 = still_move(track)
+        return self._stand_tab(dist, track, bi).first([s0], [cut_at])
 
     def release(self, dist):
         """Drop the touch tables at `dist` (the shapes and stages read from them stay)."""
@@ -7155,13 +9831,14 @@ class FollowupModel:
         for key in [k for k in self._tabs if k[0] == d]:
             del self._tabs[key]
 
-    def _shares(self, m, s, dist, rolls):
+    def _shares(self, m, s, dist, rolls, origin=None):
         """The share of the pool's strikes that punish a dodge of move `m` started at `s` when the
-        attacker can roll at `rolls` (`_punish_arrivals`); `s` and `rolls` broadcast."""
+        attacker can roll at `rolls` (`_punish_arrivals`); `s` and `rolls` broadcast. `origin`
+        (version 26): where earlier rolls had carried him when it started (`punish_lead`)."""
         import numpy as np
-        key = (id(m), round(dist, 2))
+        key = (id(m), round(dist, 2), None if origin is None else (round(origin[0], 9), round(origin[1], 9)))
         if key not in self._arrive:
-            self._arrive[key] = _punish_arrivals(m, dist, self.strikes, self.run)
+            self._arrive[key] = _punish_arrivals(m, dist, self.strikes, self.run, self.advance, origin)
         ready, arrive = self._arrive[key]
         q = np.asarray(rolls, float) - np.asarray(s, float) - ready
         if arrive is None:
@@ -7180,13 +9857,14 @@ class FollowupModel:
                 out.append([[g], [i], g['T'].max()])
         return [(gs, ix) for gs, ix, _ in out]
 
-    def _rolled(self, dist, k, move, starts, afters=None):
+    def _rolled(self, dist, k, move, starts, afters=None, times=False):
         """Per dodge start in `starts` (the earliest-press timeline): (follow-up index that catches
         him on move `move` before its dodge cancel, or -1), the follow-up's samples before the
         matching `afters` entry left out (an earlier dodge judged them). One vectorized read for
-        every start not seen before."""
+        every start not seen before. With `times`, (those indices, the catch frames on the same
+        timeline, inf for none)."""
         import numpy as np
-        memo = self._rolls.setdefault((round(dist, 2), id(move)), {})
+        memo = self._rolls.setdefault((round(dist, 2), move['anim']), {})
         afters = [-math.inf] * len(starts) if afters is None else list(afters)
         keys = list(zip(starts, afters))
         need = sorted({q for q in keys if q not in memo})
@@ -7194,13 +9872,67 @@ class FollowupModel:
             h, t = self._tab(dist, move).first([s for s, _ in need], [a for _, a in need])
             end = move['dodge'] if move['dodge'] is not None else len(move['path'])
             for (s, a), hh, tt in zip(need, h, t):
-                memo[(s, a)] = int(hh) if hh >= 0 and tt < s + end else -1
-        return np.array([memo[q] for q in keys], int)
+                memo[(s, a)] = (int(hh), float(tt)) if hh >= 0 and tt < s + end else (-1, math.inf)
+        hs = np.array([memo[q][0] for q in keys], int)
+        return (hs, np.array([memo[q][1] for q in keys], float)) if times else hs
 
-    def _follow_presses(self, fi, dist, bi, floor, cut, cue, t):
+    def _follow_reaches(self, dist, bi, floor, cut, track=()):
+        """Whether follow-up burst `bi`, its samples before `floor` left out with `cut`, touches a
+        defender at `dist` who does not dodge it, standing where he started or carried on `track`
+        (version 26; `_follow_presses`' base read; it reads no family)."""
+        gs, _ = self.follow_bursts[bi]
+        if all(cut and g['T'].max() < floor - 1e-9 for g in gs):
+            return False
+        trimmed = bool(cut) and any(g['T'].min() < floor - 1e-9 for g in gs)
+        return int(self._follow_still(dist, bi, floor if trimmed else -math.inf, track)[0][0]) >= 0
+
+    def _last_follow(self, dist, floor, cut, track=()):
+        """The last follow-up burst that reaches him where he is (`_follow_reaches`), None for none:
+        the one whose dodge decides his punish (`last_reaching`)."""
+        return max((bi for bi in range(len(self.follow_bursts))
+                    if self._follow_reaches(dist, bi, floor, cut, track)), default=None)
+
+    def _ahead(self, t, dist, z):
+        """Where the attacker's root is along the axis at real frame `t` (the whole attack's `PK` up
+        to then, stopped by the defender's body `z` from his start, `advance_at`)."""
+        return advance_at(attack_advance(self.all_geoms, upto=t), dist, z)
+
+    def _moves(self, fi, dist, track=()):
+        """Family `fi`'s moves as he starts them out of `track`: facing the attacker (`oriented`,
+        version 27; until then the track was turned to face him, `face_track`)."""
+        if not track:
+            return self.families[fi]
+        key = ('moves', fi, round(dist, 2), track_key(track))
+        if key not in self._stages:
+            self._stages[key] = [oriented(m, track, dist, lambda t, z: self._ahead(t, dist, z))
+                                 for m in self.families[fi]]
+        return self._stages[key]
+
+    def _from_track(self, dist, fi, k, track=()):
+        """(move k of family `fi` oriented out of `track`, that move carried on it): his roll of the
+        opening as the follow-up reads it (`_rolled`)."""
+        m = self._moves(fi, dist, track)[k]
+        return m, carried(m, track)
+
+    def _gains(self, fi, dist, track=()):
+        """(per move of family `fi` its gain, `press_gain` out of `track`, the `_punish_ctx`) at
+        `dist`: what aiming for his punish reads (`reaction_outcome` `aim_punish`), the same count as
+        `_shares` at the earliest press's roll frame."""
+        import numpy as np
+        key = ('gains', fi, round(dist, 2), track_key(track))
+        if key not in self._stages:
+            ordered = None if self.strikes is None else np.sort(self.strikes)
+            punish = _punish_ctx(ordered, self.my_roll, self.run)
+            self._stages[key] = ([press_gain(m, track, dist, self.advance, self.run, ordered, self.my_roll)
+                                  for m in self._moves(fi, dist, track)] if punish else None, punish)
+        return self._stages[key]
+
+    def _follow_presses(self, fi, dist, bi, floor, cut, cue, t, aim=False, track=()):
         """`_burst_presses` of follow-up burst `bi` met from `t`, its samples before `floor` left
-        out with `cut`: (its geometries as met, their indices, base index, presses), or None when
-        none of it is left."""
+        out with `cut`, for a defender carried on `track` (version 26; empty: standing where he
+        started): (its geometries as met, their indices, base index, presses), or None when none of
+        it is left. With `aim` the burst decides his punish and he aims for it too
+        (`reaction_outcome` `aim_punish`)."""
         import numpy as np
         gs, ix = self.follow_bursts[bi]
         # A geometry is left whole by the cut or loses its samples before it (`_trim`); only which
@@ -7211,114 +9943,266 @@ class FollowupModel:
         trimmed = bool(cut) and any(g['T'].min() < floor - 1e-9 for g in gs)
         at = floor if trimmed else -math.inf
         # The reads `_burst_presses` makes, from the burst's touch tables; a trimmed one is used once.
-        memo = {} if trimmed else self._memo.setdefault(('follow', fi, bi, None), {})
-        if ('base', dist) not in memo:
-            memo[('base', dist)] = self._tab(dist, None, bi).first([0.0], [at])
+        memo = {} if trimmed else self._memo.setdefault(('follow', fi, bi, None, track_key(track)), {})
+        oms = self._moves(fi, dist, track)
+        mvs = [carried(m, track) for m in oms]
+        if track:
+            smove, _ = still_move(track)
+            bkey = ('base', dist, smove['anim'])
+        else:
+            bkey = ('base', dist)
+        if bkey not in memo:
+            memo[bkey] = self._follow_still(dist, bi, at, track)
         grid = np.arange(0.0, max(g['T'].max() for g in gt if g is not None) + 1.0, DODGE_STEP)
-        for k, m in enumerate(self.families[fi]):
-            if (dist, k) not in memo:
-                memo[(dist, k)] = self._tab(dist, m, bi).first(grid, np.full(len(grid), at))
-        base_h, presses = _burst_presses(gt, dist, self.families[fi], cue, t, memo)
+        for k, mv in enumerate(mvs):
+            key = (dist, k) if not track else (dist, k, mv['anim'])
+            if key not in memo:
+                memo[key] = self._burst_starts(self._tab(dist, mv, bi), grid, at)
+        gains, punish = self._gains(fi, dist, track) if aim else (None, None)
+        base_h, presses = _burst_presses(gt, dist, oms, cue, t, memo, gains=gains, punish=punish, track=track)
         return gt, ix, base_h, presses
 
-    def _stage(self, fi, dist, floor, cut, cue):
+    def _stage(self, fi, dist, floor, cut, cue, track=()):
         """The follow-up (earliest-press timeline) met from `floor`, its dodges timed from `cue` (0:
         he knows its timing, as `sequence_outcome`'s defender does; `press`: he reacts to the
-        press): (per follow-up geometry, the weight of his being caught first by it; the chance he
-        evades it all; the chance he then punishes; whether any of it reaches him standing). With
-        `cut` its samples before `floor` are left out (the roll he is coming out of judged them)."""
+        press), by a defender standing where he started or carried on `track` (version 26: where
+        the roll he escaped the opening with left him, `dodge_chain`'s rule, each follow-up burst
+        dodged on the roll that met the burst before): (per follow-up geometry, the weight of his
+        being caught first by it standing where he started; the chance he evades it all; the chance
+        he then punishes; whether any of it reaches him; {(follow-up index, move anim, start, catch
+        frame): [move, weight]} of the catches in a dodge of his or in the roll he is still on, raw
+        until the delay is known (`_resolve`); the share no burst reached, whose punish is the
+        caller's own; the presses of his first dodge of it and the track he made them from, None
+        when nothing reaches him). With `cut` its samples before `floor` are left out (the roll he
+        is coming out of judged them, `_rolled`). Every catch in a dodge of his is a play
+        (`_mid` 'follow'), at any delay alike when the opening is over by then, else on that delay's
+        clock (version 26: until then one made before the opening was over was weighed on its
+        geometry)."""
         import numpy as np
-        key = ('stage', fi, round(dist, 2), floor, cut, cue)
+        key = ('stage', fi, round(dist, 2), floor, cut, cue, track_key(track))
         if key in self._stages:
             return self._stages[key]
-        moves = self.families[fi]
-        rec = max(max(0.0, (m['dodge'] or len(m['path'])) - m['iframes']) for m in moves)
         coef = np.zeros(len(self.follow))
-        alive, pp, reached, t = 1.0, 0.0, False, floor
-        for bi in range(len(self.follow_bursts)):
-            got = self._follow_presses(fi, dist, bi, floor, cut, cue, t)
-            if got is None or got[2] < 0:
-                continue
-            gt, ix, _, presses = got
-            reached = True
-            ks, ss, ws, hits = (np.array([p[j] for p in presses]) for j in range(4))
-            for j in np.nonzero(hits >= 0)[0]:
-                coef[self.where[ix[hits[j]]]] += alive * ws[j]
-            free = hits < 0
-            ev, pb = float(ws[free].sum()), 0.0
-            if self.my_roll is not None:
-                for k in np.unique(ks[free]):
-                    sel = free & (ks == k)
-                    pb += float(ws[sel] @ self._shares(moves[int(k)], ss[sel], dist, self.my_roll))
-            pp = alive * pb
-            alive *= ev
-            t = max([t] + [g['T'].max() + rec for g in gt if g is not None])
-        out = (coef, alive if reached else 1.0, pp, reached)
+        raw = {}
+        # Where his rolls carry him (version 26, `dodge_chain`'s rule): track key -> [track, floor,
+        # mass, punish mass, untouched (no follow-up burst has reached him yet)].
+        states = {track_key(track): [track, floor, 1.0, 0.0, True]}
+        reached, first = False, None
+        last = self._last_follow(dist, floor, cut, track)
+        nb = len(self.follow_bursts)
+        for bi in range(nb):
+            if any(s[0] for s in states.values()):
+                # Tracks whose clips are over by the time this burst reads him stand where they left
+                # him (`collapse_track`).
+                merged = {}
+                for trk, fl, ms, pm, un in states.values():
+                    at = burst_after([g for g, _ in self.follow_bursts], bi, cue, fl)
+                    trk2 = collapse_track(trk, at) if at >= fl else trk
+                    k2 = (track_key(trk2), un)
+                    if k2 in merged:
+                        merged[k2][2] += ms
+                        merged[k2][3] += pm
+                    else:
+                        merged[k2] = [trk2, fl, ms, pm, un]
+                states = merged
+            nxt = {}
+
+            def put(trk, fl, ms, pm, un):
+                k_ = (track_key(trk), un)
+                if k_ in nxt:
+                    nxt[k_][2] += ms
+                    nxt[k_][3] += pm
+                else:
+                    nxt[k_] = [trk, fl, ms, pm, un]
+            for trk, fl, mass, pmass, un in states.values():
+                got = self._follow_presses(fi, dist, bi, floor, cut, cue, fl, aim=bi == last, track=trk)
+                if got is None or got[2] < 0:
+                    put(trk, fl, mass, pmass, un)
+                    continue
+                gt, ix, _, presses = got
+                reached = True
+                if un and first is None:
+                    first = (presses, trk)
+                for k, s, w, hit, play in presses:
+                    wt = mass * w
+                    if hit >= 0:
+                        if play is None:
+                            coef[self.where[ix[hit]]] += wt
+                        else:
+                            # A catch in a dodge of his, or in the roll he is still on: a play, kept
+                            # raw until the delay it is read at is known (`_resolve`; version 26:
+                            # until then one made while an opening sample could still touch him was
+                            # weighed on its geometry, as a catch of a defender standing).
+                            rk = (int(ix[hit]),) + (play[0]['anim'], float(play[1]), float(play[2]))
+                            if rk not in raw:
+                                raw[rk] = [play[0], 0.0]
+                            raw[rk][1] += wt
+                        continue
+                    m = self._moves(fi, dist, trk)[k]
+                    s0 = _grid(s)
+                    o = track_at(trk, [s0]) if trk else None
+                    share = 0.0
+                    if self.my_roll is not None:
+                        share = float(self._shares(m, s, dist, self.my_roll,
+                                                   None if o is None else (float(o[0][0]), float(o[1][0]))))
+                    put(track_extend(trk, m, s0), s0 + dodge_end(m), wt, wt * share, False)
+            states = nxt
+        pe = float(sum(s_[2] for s_ in states.values()))
+        pp = float(sum(s_[3] for s_ in states.values()))
+        untouched = float(sum(s_[2] for s_ in states.values() if s_[4]))
+        out = (coef, pe if reached else 1.0, pp, reached, raw, untouched if reached else 1.0, first)
         self._stages[key] = out
         return out
 
-    def _late(self, fi, dist, floor, cut):
-        """[per press delay: (as `_stage`)], the follow-up pressed that late against a defender free
+    def _resolve(self, raw, d):
+        """{column: weight} of a stage's raw plays (`_stage`) read with the follow-up pressed
+        `delays[d]` late (`_mid` 'follow')."""
+        out = {}
+        for (h, _, s, tc), (move, w) in raw.items():
+            pid = self._mid('follow', h, move, s, tc, d)
+            out[pid] = out.get(pid, 0.0) + w
+        return out
+
+    def _resolved(self, st, d):
+        """`_stage` output `st` as `_late` hands it on: (coef, evade, punish, reached, {column: weight}
+        at delay `d`, the untouched share)."""
+        return st[0], st[1], st[2], st[3], self._resolve(st[4], d), st[5]
+
+    def _late_ahead(self, fi, dist, floor, cut, moves, merged, ptracks):
+        """The homing shots `_late`'s loop flies against carried moves, flown together first
+        (`_homing_ready`): his planned dodge on each delay's clock, read here as the loop reads it
+        (`_rolled`, kept), then the stages he meets where it does not catch him. Returns the keys
+        set, for `_homing_forget`."""
+        import numpy as np
+        D = len(self.delays)
+        late = self.delays[1:]
+        per = []
+        reqs = []
+        for k in sorted({k for k, _ in merged}):
+            m = moves[k]
+            mvs = [carried(m, pt) for pt in ptracks]
+            items = [(s, w) for (kk, s), w in merged.items() if kk == k]
+            groups = {}
+            for d in range(1, D):
+                groups.setdefault(mvs[d - 1]['anim'], []).append(d)
+            calls = []
+            for ds in groups.values():
+                starts = [_grid(s) - float(late[d - 1]) for s, _ in items for d in ds]
+                afters = [float(floor - late[d - 1]) if cut else -math.inf for _ in items for d in ds]
+                self._ahead_rolled(dist, mvs[ds[0] - 1], starts, afters, reqs)
+                calls.append((ds, starts, afters))
+            per.append((k, m, mvs, items, calls))
+        ready = _homing_ready(dist, reqs)
+        reqs = []
+        for k, m, mvs, items, calls in per:
+            end = dodge_end(m)
+            for ds, starts, afters in calls:
+                h_ = self._rolled(dist, k, mvs[ds[0] - 1], starts, afters).reshape(len(items), len(ds))
+                for j, (s, _) in enumerate(items):
+                    floors = (np.round((s + end - late) / DODGE_STEP) * DODGE_STEP).tolist()
+                    for c_, d in enumerate(ds):
+                        if h_[j, c_] < 0:
+                            self._ahead_stage(fi, dist, floors[d - 1], True, self.press,
+                                              track_extend(ptracks[d - 1], m, _grid(s) - float(late[d - 1])), reqs)
+        return ready + _homing_ready(dist, reqs)
+
+    def _late(self, fi, dist, floor, cut, track=()):
+        """[per press delay: (coef, evade, punish, reached, {column: weight}, the untouched share
+        whose punish is the caller's own)], the follow-up pressed that late against a defender free
         from `floor` (earliest-press timeline, samples before it left out with `cut`) who planned
-        for the press at once. At no delay he meets it as planned (`_stage` from the attack's
-        start). Late, his planned dodge of its first burst that reaches him (the same presses)
-        meets the follow-up that much later: it catches him when it touches him outside that
-        dodge's invincibility before its dodge cancel; else he is free from there and reacts to the
+        for the press at once, standing where he started or carried on `track` (the roll he escaped
+        the opening with, on the attack's clock: pressed `d` late, every frame of his is `d` earlier on
+        the follow-up's clock, his track's too, `_shift_track`; version 27, since his roll's slide past
+        its dodge cancel is carried, version 26's settled track moved with no delay). At no delay he
+        meets it as planned (`_stage` from the attack's start).
+        Late, his planned dodge of its first burst that reaches him (the same presses, from where
+        that burst found him) meets the follow-up that much later: it catches him when it touches
+        him outside that dodge's invincibility before its dodge cancel (a play from that dodge at
+        any delay, `_mid`; version 26: until then one made before the opening was over was weighed
+        on its geometry); else he is free from there, where that dodge left him, and reacts to the
         press (`_stage` from `press`, `INFERRED`: he reads no delay ahead). If nothing reaches him
         after that dodge, it is his last, and his punish is read from it against the attacker's
         later roll."""
         import numpy as np
-        key = ('late', fi, round(dist, 2), floor, cut)
+        key = ('late', fi, round(dist, 2), floor, cut, track_key(track))
         if key in self._stages:
             return self._stages[key]
         D = len(self.delays)
-        out = [self._stage(fi, dist, floor, cut, 0.0)]
-        plan = None
-        for bi in range(len(self.follow_bursts)):
-            got = self._follow_presses(fi, dist, bi, floor, cut, 0.0, floor)
-            if got is not None and got[2] >= 0:
-                plan = got[3]
-                break
-        if plan is None:
+        st0 = self._stage(fi, dist, floor, cut, 0.0, track)
+        out = [self._resolved(st0, 0)]
+        if st0[6] is None:
             # Nothing of it is left to plan for (his roll judged it all): pressed late it may reach
             # him after his floor, and he reacts to the press.
-            out += [self._stage(fi, dist, _grid(floor - d), cut, self.press) for d in self.delays[1:]]
+            reqs = []
+            for d in self.delays[1:]:
+                self._ahead_stage(fi, dist, _grid(floor - d), cut, self.press, _shift_track(track, -float(d)), reqs)
+            ready = _homing_ready(dist, reqs)
+            out += [self._resolved(self._stage(fi, dist, _grid(floor - d), cut, self.press,
+                                               _shift_track(track, -float(d))), di)
+                    for di, d in enumerate(self.delays[1:], 1)]
+            _homing_forget(ready)
             self._stages[key] = out
             return out
-        moves = self.families[fi]
+        plan, ptrack = st0[6]
+        moves = self._moves(fi, dist, ptrack)
         merged = {}
-        for k, s, w, _ in plan:
+        for k, s, w, *_ in plan:
             merged[(k, round(s, 6))] = merged.get((k, round(s, 6)), 0.0) + w
         coef, pe, pp = np.zeros((D, len(self.follow))), np.zeros(D), np.zeros(D)
+        mids = [{} for _ in range(D)]
         late = self.delays[1:]
         stage = {}
+        # Per delay, where the plan found him on the follow-up's clock (`_shift_track`: the same
+        # track for all when it is settled or empty).
+        ptracks = [_shift_track(ptrack, -float(d)) for d in late]
+        ready = self._late_ahead(fi, dist, floor, cut, moves, merged, ptracks)
         for k in sorted({k for k, _ in merged}):
             m = moves[k]
-            end = m['dodge'] if m['dodge'] is not None else len(m['path'])
+            # His planned dodge, out of where the plan found him, on each delay's clock.
+            mvs = [carried(m, pt) for pt in ptracks]
+            end = dodge_end(m)
             items = [(s, w) for (kk, s), w in merged.items() if kk == k]
-            starts = np.concatenate([_grid(s) - late for s, _ in items]).tolist()
-            afters = np.tile(floor - late if cut else np.full(D - 1, -math.inf), len(items)).tolist()
-            hs = self._rolled(dist, k, m, starts, afters).reshape(len(items), D - 1)
+            hs = np.full((len(items), D - 1), -1, int)
+            ts = np.full((len(items), D - 1), math.inf)
+            groups = {}
+            for d in range(1, D):
+                groups.setdefault(mvs[d - 1]['anim'], []).append(d)
+            for ds in groups.values():
+                mv_ = mvs[ds[0] - 1]
+                starts = [_grid(s) - float(late[d - 1]) for s, _ in items for d in ds]
+                afters = [float(floor - late[d - 1]) if cut else -math.inf for _ in items for d in ds]
+                h_, t_ = self._rolled(dist, k, mv_, starts, afters, times=True)
+                h_, t_ = h_.reshape(len(items), len(ds)), t_.reshape(len(items), len(ds))
+                for c_, d in enumerate(ds):
+                    hs[:, d - 1], ts[:, d - 1] = h_[:, c_], t_[:, c_]
             for j, (s, w) in enumerate(items):
                 floors = (np.round((s + end - late) / DODGE_STEP) * DODGE_STEP).tolist()
-                own = self._shares(m, s, dist, self.my_roll + late) if self.my_roll is not None else np.zeros(D - 1)
+                o = track_at(ptrack, [_grid(s)]) if ptrack else None
+                origin = None if o is None else (float(o[0][0]), float(o[1][0]))
+                own = self._shares(m, s, dist, self.my_roll + late, origin) if self.my_roll is not None \
+                    else np.zeros(D - 1)
                 for d in range(1, D):
                     h = hs[j, d - 1]
                     if h >= 0:
-                        coef[d, h] += w
+                        # The late press catches him in his planned dodge: that play.
+                        pid = self._mid('follow', int(self.follow_index[h]), mvs[d - 1], _grid(s) - float(late[d - 1]),
+                                        float(ts[j, d - 1]), d)
+                        mids[d][pid] = mids[d].get(pid, 0.0) + w
                         continue
                     fl = floors[d - 1]
-                    if fl not in stage:
-                        stage[fl] = self._stage(fi, dist, fl, True, self.press)
-                    st = stage[fl]
-                    if st[3]:
-                        coef[d] += w * st[0]
-                        pe[d] += w * st[1]
-                        pp[d] += w * st[2]
-                    else:
-                        pe[d] += w
-                        pp[d] += w * own[d - 1]
-        out += [(coef[d], float(pe[d]), float(pp[d]), True) for d in range(1, D)]
+                    # Free from its dodge cancel, on its whole root motion (version 27).
+                    after = track_extend(ptracks[d - 1], m, _grid(s) - float(late[d - 1]))
+                    sk = (fl, track_key(after))
+                    if sk not in stage:
+                        stage[sk] = self._stage(fi, dist, fl, True, self.press, after)
+                    st = stage[sk]
+                    coef[d] += w * st[0]
+                    pe[d] += w * st[1]
+                    pp[d] += w * (st[2] + st[5] * own[d - 1])
+                    for pid, x in self._resolve(st[4], d).items():
+                        mids[d][pid] = mids[d].get(pid, 0.0) + w * x
+        _homing_forget(ready)
+        out += [(coef[d], float(pe[d]), float(pp[d]), True, mids[d], 0.0) for d in range(1, D)]
         self._stages[key] = out
         return out
 
@@ -7330,6 +10214,61 @@ class FollowupModel:
             memo[('base', dist)] = self._tab(dist, None, bi).first([0.0], [-math.inf]) if part == 'follow' \
                 else _catches(gs, dist, None, [0.0])
         return int(memo[('base', dist)][0][0])
+
+    def _open_vals(self, fi, dist, track=()):
+        """`_burst_presses`' `vals` for his roll of the last opening burst that reaches him, on family
+        `fi` at `dist` (version 25), out of `track` (version 26: where earlier opening rolls carried
+        him): he aims it, as `dodge_presses` aims every dodge, for what it is worth to him, here
+        against the follow-up pressed at once, which he plans for (the comment above
+        `attacker_reactions`). From an escaping start s: 0 when the follow-up catches him on that
+        roll (`_rolled`); else, free from its dodge cancel where it left him, what its stage leaves
+        him (`_stage` at cue 0: the chance he escapes it plus his punish share, plus his own punish
+        from the roll on the share none of it reaches) when any of it reaches him then, or 1 plus
+        his own punish (`_shares` at the earliest press's roll frame, the gain counted on those
+        starts alone). Until version 25 he aimed at the middle of the opening's escaping run and met
+        the follow-up as that left him. Kept per (move, grid, track)."""
+        import numpy as np
+
+        def vals(k, grid, escaping):
+            key = ('open vals', fi, round(dist, 2), k, len(grid), track_key(track))
+            if key not in self._stages:
+                # His roll out of where earlier opening rolls carried him, facing the attacker
+                # (`_from_track`, version 27: that track is no longer taken as settled).
+                m, mv = self._from_track(dist, fi, k, track)
+                end = dodge_end(m)
+                gains = self._gains(fi, dist, track)[0]
+                gk = None if gains is None else gains[k]
+                val = np.zeros(len(grid))
+                own = np.zeros(len(grid), bool)
+                idx = np.nonzero(np.asarray(escaping, bool))[0]
+                if len(idx):
+                    starts = [_grid(float(grid[i])) for i in idx]
+                    # Flown together first (`_homing_ready`): the roll, then the stages it frees him to.
+                    reqs = []
+                    self._ahead_rolled(dist, mv, starts, None, reqs)
+                    ready = _homing_ready(dist, reqs)
+                    fh = self._rolled(dist, k, mv, starts)
+                    reqs = []
+                    for s, h in zip(starts, fh.tolist()):
+                        if h < 0:
+                            self._ahead_stage(fi, dist, _grid(s + end), True, 0.0, track_extend(track, m, s), reqs)
+                    ready += _homing_ready(dist, reqs)
+                    for i, s, h in zip(idx.tolist(), starts, fh.tolist()):
+                        if h >= 0:
+                            continue
+                        # Free from its dodge cancel, on its whole root motion (version 27).
+                        after = track_extend(track, m, s)
+                        st = self._stage(fi, dist, _grid(s + end), True, 0.0, after)
+                        if not st[3]:
+                            val[i], own[i] = 1.0, True
+                        elif st[5] > 0 and gk is not None:
+                            val[i] = st[1] + st[2] + st[5] * float(gk(np.array([s]))[0])
+                        else:
+                            val[i] = st[1] + st[2]
+                    _homing_forget(ready)
+                self._stages[key] = (own, val, gk)
+            return self._stages[key]
+        return vals
 
     def _shape(self, dist, floor, fi):
         """What `outcome` reads of family `fi` at one (distance, floor), worth left open: the
@@ -7343,93 +10282,232 @@ class FollowupModel:
         if key in self._shapes:
             return self._shapes[key]
         moves = self.families[fi]
-        rec = max(max(0.0, (m['dodge'] or len(m['path'])) - m['iframes']) for m in moves)
         D = len(self.delays)
         reach = [bi for bi, (gs, _) in enumerate(self.open_bursts) if self._base('open', fi, bi, gs, dist) >= 0]
-        early, alive, t, base, last = [], 1.0, floor, None, None
-        for bi in reach:
-            gs, ix = self.open_bursts[bi]
-            base_h, presses = _burst_presses(gs, dist, moves, 0.0, t, self._memo[('open', fi, bi)])
-            base = ix[base_h] if base is None else base
-            if bi == reach[-1]:
-                last = presses
-                break
-            ev = 0.0
-            for k, s, w, hit in presses:
-                if hit >= 0:
-                    early.append((ix[hit], alive * w))
-                else:
-                    ev += w
-            alive *= ev
-            t = max([t] + [g['T'].max() + rec for g in gs])
+        early, base = [], None
+        # The opening's bursts up to its last that reaches him standing, each dodged on the roll that
+        # met the burst before (version 26, `dodge_chain`'s rule): track key -> [track, floor, mass].
+        # `last` collects, per carried state, its presses on that last burst; `free` the states it
+        # does not reach.
+        last, free = [], []
+        if reach:
+            states = {(): [(), float(floor), 1.0]}
+            gbursts = [gs for gs, _ in self.open_bursts]
+            for bi in range(reach[-1] + 1):
+                gs, ix = self.open_bursts[bi]
+                if any(s_[0] for s_ in states.values()):
+                    merged = {}
+                    for trk, fl, ms in states.values():
+                        at = burst_after(gbursts, bi, 0.0, fl)
+                        trk2 = collapse_track(trk, at) if at >= fl else trk
+                        k2 = track_key(trk2)
+                        if k2 in merged:
+                            merged[k2][2] += ms
+                        else:
+                            merged[k2] = [trk2, fl, ms]
+                    states = merged
+                nxt = {}
+                for trk, fl, mass in states.values():
+                    root = not trk
+                    # His first dodge, of the first opening burst that reaches him standing, is timed
+                    # by the opening's lookalike group (`look`), as `sequence_outcome`'s `plan` times it.
+                    plan = self.look.plan(dist) if self.look is not None and root and bi == reach[0] else None
+                    # His roll of the last one, knowing the attack, is aimed for what it leaves him
+                    # against the follow-up pressed at once, as he plans it (`_open_vals`, version 25).
+                    vals = self._open_vals(fi, dist, trk) if bi == reach[-1] and plan is None else None
+                    # His rolls out of the track facing the attacker (`_moves`, version 27).
+                    oms = self._moves(fi, dist, trk)
+                    base_h, presses = _burst_presses(gs, dist, oms, 0.0, fl, self._memo.setdefault(('open', fi, bi), {}),
+                                                     plan, vals=vals, track=trk)
+                    if root and base is None and base_h >= 0:
+                        base = ix[base_h]
+                    if base_h < 0:
+                        k_ = track_key(trk)
+                        if k_ in nxt:
+                            nxt[k_][2] += mass
+                        else:
+                            nxt[k_] = [trk, fl, mass]
+                        continue
+                    if bi == reach[-1]:
+                        last.append((trk, mass, presses))
+                        continue
+                    for k, s, w, hit, play in presses:
+                        if hit >= 0:
+                            early.append((ix[hit] if play is None else self._mid('open', ix[hit], *play), mass * w))
+                        else:
+                            s0 = _grid(s)
+                            t2 = track_extend(trk, oms[k], s0)
+                            k_ = track_key(t2)
+                            if k_ in nxt:
+                                nxt[k_][2] += mass * w
+                            else:
+                                nxt[k_] = [t2, s0 + dodge_end(oms[k]), mass * w]
+                states = nxt
+            free = list(states.values())
+        # Version 27: an opening burst after the last that reaches him standing can still touch him
+        # where a roll carried him (until then it was never read). Each such burst is met as the last
+        # one is (his press there aimed for what it leaves him against the follow-up, `_open_vals`),
+        # and the press that meets the follow-up is then that burst's. `pend` holds the states still
+        # free: (track, floor, mass, (the track he pressed out of, move index, start) of the press
+        # that put him there, None for none); `finals` the presses an opening burst caught.
+        pend, finals = [], []
+        if reach:
+            gs_l, ix_l = self.open_bursts[reach[-1]]
+            for trk, mass, presses in last:
+                oms = self._moves(fi, dist, trk)
+                for k, s, wt, hit, play in presses:
+                    if hit >= 0:
+                        # Caught in his roll of the opening, or in the track he was still on: that
+                        # play (`_mid`, version 25), else the index.
+                        hid = ix_l[hit] if play is None else self._mid('open', ix_l[hit], *play)
+                        finals.append((mass * wt, s, k, hid, trk))
+                    else:
+                        s0 = _grid(s)
+                        pend.append((track_extend(trk, oms[k], s0), s0 + dodge_end(oms[k]), mass * wt, (trk, k, s)))
+            pend += [(trk, fl, mass, None) for trk, fl, mass in free]
+            gbursts = [gs for gs, _ in self.open_bursts]
+            for bi in range(reach[-1] + 1, len(self.open_bursts)):
+                gs, ix = self.open_bursts[bi]
+                nxt_p = []
+                for trk, fl, mass, info in pend:
+                    at = burst_after(gbursts, bi, 0.0, fl)
+                    tr = collapse_track(trk, at) if at >= fl else trk
+                    oms = self._moves(fi, dist, tr)
+                    base_h, presses = _burst_presses(gs, dist, oms, 0.0, fl, self._memo.setdefault(('open', fi, bi), {}),
+                                                     None, vals=self._open_vals(fi, dist, tr), track=tr)
+                    if base_h < 0:
+                        nxt_p.append((tr, fl, mass, info))
+                        continue
+                    for k, s, wt, hit, play in presses:
+                        if hit >= 0:
+                            hid = ix[hit] if play is None else self._mid('open', ix[hit], *play)
+                            finals.append((mass * wt, s, k, hid, tr))
+                        else:
+                            s0 = _grid(s)
+                            nxt_p.append((track_extend(tr, oms[k], s0), s0 + dodge_end(oms[k]), mass * wt, (tr, k, s)))
+                pend = nxt_p
         stages, sids = [], {}
 
-        def sid_of(fl, cut):
-            """The index in `stages` of `_late(fl, cut)`'s first delay; the others follow it."""
-            if (fl, cut) not in sids:
-                sids[(fl, cut)] = len(stages)
-                stages.extend(self._late(fi, dist, fl, cut))
-            return sids[(fl, cut)]
-        out = {'early': early, 'alive': alive, 'base': base}
-        if last is None:
+        def sid_of(fl, cut, trk=()):
+            """The index in `stages` of `_late(fl, cut, trk)`'s first delay; the others follow it."""
+            k_ = (fl, cut, track_key(trk))
+            if k_ not in sids:
+                sids[k_] = len(stages)
+                stages.extend(self._late(fi, dist, fl, cut, trk))
+            return sids[k_]
+        out = {'early': early, 'alive': 1.0, 'base': base}
+        rows = []                               # (weight, start, move index, open hit, track, floor)
+        if not reach:
             # No opening burst reaches him standing: no roll to see, the press at once, met from his
             # own floor.
-            if base is None:
-                for bi, (gs, ix) in enumerate(self.follow_bursts):
-                    b = self._base('follow', fi, bi, gs, dist)
-                    if b >= 0:
-                        base = ix[b]
-                        break
+            for bi, (gs, ix) in enumerate(self.follow_bursts):
+                b = self._base('follow', fi, bi, gs, dist)
+                if b >= 0:
+                    base = ix[b]
+                    break
             out['base'] = base
-            caught = np.full((1, D), -1, int)
-            sid = (sid_of(_grid(t), False) + np.arange(D))[None, :]
-            own = np.zeros((1, D))
-            w, starts = np.ones(1), np.full(1, math.inf)
+            rows.append((1.0, math.inf, -1, -1, (), _grid(floor)))
         else:
-            gs, ix = self.open_bursts[reach[-1]]
             merged = {}
-            for k, s, wt, hit in last:
-                mk = (k, round(s, 6), ix[hit] if hit >= 0 else -1)
-                merged[mk] = merged.get(mk, 0.0) + wt
-            n = len(merged)
-            caught = np.full((n, D), -1, int)
-            sid = np.full((n, D), -1, int)
-            own = np.zeros((n, D))
-            w, starts = np.zeros(n), np.zeros(n)
-            rolled = {}
-            for i, ((k, s, hit), wt) in enumerate(merged.items()):
-                w[i], starts[i] = wt, s
-                if hit >= 0:
-                    caught[i, :] = hit
-                else:
-                    rolled.setdefault(k, []).append(i)
-            items = list(merged)
-            for k, rows_k in rolled.items():
-                m = moves[k]
-                end = m['dodge'] if m['dodge'] is not None else len(m['path'])
-                fh = self._rolled(dist, k, m, np.concatenate([_grid(items[i][1]) - self.delays for i in rows_k]).tolist())
-                fh = fh.reshape(len(rows_k), D)
-                for r_, i in enumerate(rows_k):
-                    hit = fh[r_] >= 0
-                    caught[i, hit] = self.follow_index[fh[r_, hit]]
-                    sid[i, ~hit] = sid_of(_grid(_grid(items[i][1]) + end), True) + np.nonzero(~hit)[0]
-                    if self.my_roll is not None:
-                        own[i] = self._shares(m, items[i][1], dist, self.my_roll + self.delays)
+            for trk, fl, mass, info in pend:
+                if info is None:
+                    # Carried out of every later opening burst's reach (version 26): no roll of it to
+                    # see, the press at once, met from his own floor where his track has him.
+                    rows.append((mass, math.inf, -1, -1, trk, _grid(fl)))
+                    continue
+                mk = (track_key(info[0]), info[1], round(info[2], 6), -1)
+                if mk not in merged:
+                    merged[mk] = [info[0], 0.0]
+                merged[mk][1] += mass
+            for wt, s, k, hid, trk in finals:
+                mk = (track_key(trk), k, round(s, 6), hid)
+                if mk not in merged:
+                    merged[mk] = [trk, 0.0]
+                merged[mk][1] += wt
+            for (tk, k, s, hid), (trk, wt) in merged.items():
+                rows.append((wt, s, k, hid, trk, None))
+        n = len(rows)
+        caught = np.full((n, D), -1, int)
+        sid = np.full((n, D), -1, int)
+        own = np.zeros((n, D))
+        w = np.array([r[0] for r in rows], float)
+        starts = np.array([r[1] for r in rows], float)
+        ks = np.array([r[2] for r in rows], int)
+        oh = np.array([r[3] for r in rows], int)
+        rolls = [None] * n
+        # The homing shots the rows below fly against carried moves, flown together first
+        # (`_homing_ready`): each roll on each delay's clock, and the stage it meets.
+        reqs = []
+        for wt, s, k, hid, trk, fl in rows:
+            if k < 0:
+                self._ahead_late(fi, dist, fl, False, trk, reqs)
+            elif hid < 0:
+                s0 = _grid(s)
+                tc_ = collapse_track(trk, s0) if trk else trk
+                m, _ = self._from_track(dist, fi, k, tc_)
+                groups = {}
+                for d in range(D):
+                    mv_ = carried(m, _shift_track(tc_, -float(self.delays[d])))
+                    groups.setdefault(mv_['anim'], (mv_, []))[1].append(d)
+                for mv_, ds in groups.values():
+                    self._ahead_rolled(dist, mv_, [s0 - float(self.delays[d]) for d in ds], None, reqs)
+                self._ahead_late(fi, dist, _grid(s0 + dodge_end(m)), True, track_extend(tc_, m, s0), reqs)
+        ready = _homing_ready(dist, reqs)
+        for i, (wt, s, k, hid, trk, fl) in enumerate(rows):
+            if k < 0:
+                sid[i, :] = sid_of(fl, False, trk) + np.arange(D)
+            elif hid >= 0:
+                caught[i, :] = hid
+            else:
+                s0 = _grid(s)
+                # The track he pressed out of, collapsed when its clips are over by then.
+                tc_ = collapse_track(trk, s0) if trk else trk
+                # His roll facing the attacker (`_from_track`, version 27), on each delay's clock: a
+                # track still moving at the press moves `d` earlier with it (`_shift_track`).
+                m, _ = self._from_track(dist, fi, k, tc_)
+                end = dodge_end(m)
+                mvd = [carried(m, _shift_track(tc_, -float(d))) for d in self.delays]
+                fh = np.full(D, -1, int)
+                ft = np.full(D, math.inf)
+                groups = {}
+                for d in range(D):
+                    groups.setdefault(mvd[d]['anim'], []).append(d)
+                for ds in groups.values():
+                    h_, t_ = self._rolled(dist, k, mvd[ds[0]], [s0 - float(self.delays[d]) for d in ds], times=True)
+                    fh[ds], ft[ds] = h_, t_
+                hit = fh >= 0
+                # The follow-up catches him in his roll of the opening: that play, from the roll
+                # (version 25; `_mid` 'follow').
+                for d in np.nonzero(hit)[0].tolist():
+                    caught[i, d] = self._mid('follow', int(self.follow_index[fh[d]]), mvd[d], s0 - float(self.delays[d]),
+                                             float(ft[d]), d)
+                # Free from its dodge cancel, on its whole root motion (version 27; version 26 stood
+                # him where its dodge cancel had carried him).
+                after = track_extend(tc_, m, s0)
+                sid[i, ~hit] = sid_of(_grid(s0 + end), True, after) + np.nonzero(~hit)[0]
+                # The roll and where it started, his punish's (`_shares`; `mixup`'s 'none' column).
+                o = track_at(tc_, [s0]) if tc_ else None
+                rolls[i] = (m, None if o is None else (float(o[0][0]), float(o[1][0])))
+                if self.my_roll is not None:
+                    own[i] = self._shares(m, s, dist, self.my_roll + self.delays, rolls[i][1])
+        _homing_forget(ready)
         if not stages:
-            stages.append((np.zeros(len(self.follow)), 1.0, 0.0, False))
+            stages.append((np.zeros(len(self.follow)), 1.0, 0.0, False, {}, 1.0))
         # Per press and attacker reaction: the first delay he can press at having seen it, or -1
         # when it shows only after the window closes (`outcome`).
         R = np.array([r for r, _ in self.react], float)
         seen_at = starts[:, None] + R[None, :] - self.press
         lo = np.searchsorted(self.delays, seen_at - 1e-9, side='left')
         lo = np.where(lo < D, lo, -1)
-        out.update(w=w, starts=starts, seen_at=seen_at, lo=lo, caught=caught, sid=sid, own=own,
+        out.update(w=w, starts=starts, ks=ks, open_hit=oh, seen_at=seen_at, lo=lo, caught=caught, sid=sid, own=own, rolls=rolls,
                    C=np.array([s_[0] for s_ in stages], float).reshape(len(stages), len(self.follow)),
                    PE=np.array([s_[1] for s_ in stages], float), PP=np.array([s_[2] for s_ in stages], float),
-                   R=np.array([s_[3] for s_ in stages], bool))
+                   R=np.array([s_[3] for s_ in stages], bool), MID=[s_[4] for s_ in stages],
+                   U=np.array([s_[5] for s_ in stages], float))
         # The worths `outcome` can read, per delay: what catches him there, and the follow-up
-        # geometries a stage met there weighs; the others are multiplied by 0 or not read.
-        supp = [set(self.follow_index[np.nonzero(row)[0]].tolist()) for row in out['C']]
+        # geometries a stage met there weighs, its catches in his dodge too; the others are
+        # multiplied by 0 or not read.
+        supp = [set(self.follow_index[np.nonzero(row)[0]].tolist()) | set(mid) for row, mid in zip(out['C'], out['MID'])]
         need = []
         for d in range(D):
             s_ = set(caught[:, d][caught[:, d] >= 0].tolist())
@@ -7442,7 +10520,12 @@ class FollowupModel:
         self._shapes[key] = out
         return out
 
-    def outcome(self, dist, floor, worth, see=True, read=False):
+    def _caught_rows(self, catch_escapes):
+        """The roll rows' catches by the opening priced for the attacker who sees the caught defender
+        leave (`_CaughtRows`)."""
+        return _CaughtRows(self, catch_escapes)
+
+    def outcome(self, dist, floor, worth, see=True, read=False, mid_worth=None, catch_escapes=None):
         """The attack at `dist` m against a defender whose recovery ends at `floor`: `value`,
         `base`, `p_evade`, `p_punish`, `punish_hp` and `moves` as `sequence_outcome` gives them,
         `delayed` (the share of defenders the attacker presses late on) and `default` (the delay
@@ -7455,10 +10538,18 @@ class FollowupModel:
         picks the default delay itself, per family (a read made before any roll shows: the user's
         "if you think your opponent will attempt to roll"), still reacting to a roll that shows
         before it; a defender he has not seen roll then meets that delay. `see` False presses
-        every follow-up at once (only `worth(0)` is read)."""
+        every follow-up at once (only `worth(0)` is read). `mid_worth(d, h, move, start, catch)`
+        prices a catch made in his own dodge (`_worth_table`, version 25).
+
+        `catch_escapes(column)` (version 26), when given: for a catch by the opening (a whole-attack
+        index, or an 'open' play of `_mid`), `CaughtModel.escape_table` of it per delay (None where
+        it gives none): the attacker who sees that caught defender leave presses for it as the stand
+        row's attacker does (`_stand_values`), at the column's delay unless he saw the escape in
+        time. Until version 26 a press caught by the opening was priced at the column's delay."""
         import numpy as np
         D = len(self.delays) if see else 1
         shapes = [self._shape(dist, floor, fi) for fi in range(len(self.families))]
+        stand_of = self._caught_rows(catch_escapes if see else None)
         # Only the worths a shape can read are asked for (`_shape` 'need'); the rest stay 0, which
         # nothing reads or which a weight of 0 multiplies.
         need = [set() for _ in range(D)]
@@ -7467,11 +10558,7 @@ class FollowupModel:
                 need[d] |= sh['need'][d]
             for d in (range(D) if read and see else (0,)):
                 need[d] |= sh['fixed']
-        WD = np.zeros((D, self.size))                                             # [delay, index]
-        for d in range(D):
-            if need[d]:
-                idx = np.array(sorted(need[d]), int)
-                WD[d, idx] = worth(d, idx)
+        WD = self._worth_table(need, worth, mid_worth, D)                        # [delay, column]
         WF = WD[:, self.follow_index]
         cols = np.arange(D)[None, :]
         wq = np.array([w for _, w in self.react], float)
@@ -7481,11 +10568,14 @@ class FollowupModel:
             caught, sid = sh['caught'][:, :D], sh['sid'][:, :D]
             sidc = np.maximum(sid, 0)
             reached = (sid >= 0) & sh['R'][sidc]
-            SV = sh['C'] @ WF.T                                                  # [stage, delay]
+            SV = self._stage_values(sh, WF, WD)                                  # [stage, delay]
             val = np.where(caught >= 0, WD[cols, np.maximum(caught, 0)],
                            np.where(reached, SV[sidc, cols], 0.0))
-            pun = np.where(caught >= 0, 0.0, np.where(reached, sh['PP'][sidc], sh['own'][:, :D]))
-            eva = np.where(caught >= 0, 0.0, np.where(reached, sh['PE'][sidc], 1.0))
+            # His own punish from the opening roll on the share no follow-up burst reaches (`U`, version
+            # 26: a carried defender can be out of one burst's reach and in another's).
+            pun = np.where(caught >= 0, 0.0, np.where(sid >= 0, sh['PP'][sidc] + sh['U'][sidc] * sh['own'][:, :D],
+                                                      sh['own'][:, :D]))
+            eva = np.where(caught >= 0, 0.0, np.where(sid >= 0, sh['PE'][sidc], 1.0))
             net = val - pun * PUNISH_HP
             n = len(net)
             rows = np.arange(n)
@@ -7503,8 +10593,11 @@ class FollowupModel:
                 seen = (lo >= 0) & (sh['seen_at'] <= self.delays[dr] + 1e-9)
                 idx = np.where(seen, suf[pick_rows, np.maximum(lo, 0)], dr)       # [press, reaction]
                 fv, fp, fe = ((m_[pick_rows, idx] * wq).sum(axis=1) for m_ in (val, pun, eva))
+                # A press the opening caught: the attacker presses for the caught defender's escape
+                # (`_caught_rows`, version 26).
+                fv = stand_of.rows(sh, fv, dr)
                 base = float(WD[dr, sh['base']]) if sh['base'] is not None else 0.0
-                out = {'value': sum(x * WD[dr, h] for h, x in sh['early']) + a * float(sh['w'] @ fv), 'base': base,
+                out = {'value': stand_of.early(sh, WD, dr) + a * float(sh['w'] @ fv), 'base': base,
                        'p_evade': a * float(sh['w'] @ fe) if base else 0.0, 'p_punish': a * float(sh['w'] @ fp),
                        'delayed': a * float(sh['w'] @ ((idx > 0) * wq).sum(axis=1)), 'default': float(self.delays[dr])}
                 out.update(punish_hp=out['p_punish'] * PUNISH_HP, moves=moves[0]['anim'])
@@ -7513,6 +10606,368 @@ class FollowupModel:
             if best is None or fam['value'] - fam['punish_hp'] < best['value'] - best['punish_hp']:
                 best = fam
         return best
+
+    def strafe_escape(self, dist, run_floor, speed=None):
+        """The share of a strafing defender's starts that no opening geometry touches at `dist`
+        (`mixup`'s strafe row): he walks sideways at `speed` (default `STRAFE_SPEED_MPS`, either
+        side, the better one) from his reaction to the attack's start, no earlier than his move
+        cancel `run_floor`. His reaction is a dodge's (`reaction_delays`: the reaction time and two
+        network legs, he sees the attack one leg late and his walk reaches the attacker's machine
+        one leg late), as every reaction of his is (version 23; it was `attacker_reactions`, no
+        network leg, which no game reason set apart), with a dodge's timing error (`pressed`,
+        version 28: every press of his carries it). It runs from the attack's start, not from
+        `burst_cue`: a walk needs no timing read, only that an attack is coming, as his strike
+        (`er-mechanics-spells.strike_segments`). The flight of a homing shot is flown again
+        against his path (`_catches`, `HOMING`)."""
+        import numpy as np
+        key = ('strafe', round(dist, 2), round(run_floor * 2) / 2, speed)
+        if key in self._stages:
+            return self._stages[key]
+        gs = [g for gs_, _ in self.open_bursts for g in gs_]
+        # His reaction plus each timing error, no sooner than his move cancel (`pressed`, version 28).
+        delays = [p for r, w in reaction_delays() for p in pressed(r, run_floor, w)]
+        starts = np.array([s for s, _ in delays], float)
+        wq = np.array([w for _, w in delays], float)
+        best = 0.0
+        for side in (1.0, -1.0):
+            h, _ = _catches(gs, dist, strafe_motion(side, speed), starts)
+            best = max(best, float(wq[h < 0].sum()))
+        self._stages[key] = best
+        return best
+
+    def strafe_ok(self):
+        """Whether `mixup` offers the strafe row: only against an opening whose shots are aimed when
+        created. A shot a search launches (`CUE`, `search_cues`) is aimed at its launch, which the
+        caster times to his facing (`VERIFIED` above `SEARCH_ARM_S`), so a defender walking
+        `STRAFE_FRAMES` from the cast is found wherever the caster then faces him; `strafe_escape`
+        flies the shots as aimed at creation and cannot say where that leaves him."""
+        return not any(g is not None and g.get('CUE') is not None for gs, _ in self.open_bursts for g in gs)
+
+    def _stand_values(self, stand_escapes, cols_d):
+        """The stand row's worths per column `delays[dr]` of `cols_d` (`mixup`), version 25.
+        `stand_escapes(d)` is `CaughtModel.escape_table` of the opening's standing catch with the
+        follow-up pressed `delays[d]` late: per pool poise and escape, when he leaves, his score
+        and what lands. The attacker applies the roll rows' rule to the caught defender's escape: he
+        presses at `delays[dr]` unless the escape showed his reaction (`attacker_reactions`) before
+        then, and from the first delay he can press at having seen it he takes the one that lands
+        most against that escape (the earliest of equals). Knowing that, per poise the defender
+        takes the escape whose score, so pressed, is least (the first of equals within 1e-12, as
+        `CaughtModel._best_at`), and the row is what lands then, summed over the poises. Until
+        version 25 the press came at the column's delay whatever he did.
+
+        Kept per the tables read (`STAND_VALUES_KEPT`; 2026-11-18). The answer reads nothing but
+        the tables, `cols_d` and this model's `delays`, `react` and `press`, which are set once, and
+        the tables are never written (`CaughtModel.escape_table`), so the same table objects give
+        the same answer to the bit. Each `outcome` call builds its own `_CaughtRows`, which read every
+        catch of the opening again, and `FollowupForm._worths` hands every situation key of a
+        distance the same tables: Waves of Darkness then R2 f68 made 7,330 calls in its first 396 s
+        of CPU, 6,802 of them on table objects an earlier call had read, 16 distinct in content, and
+        spent 27% of its sampled time here (`MEASURED` 2026-11-18, `target/wf/waves/p2`, py-spy). A
+        table is named by its arrays' ids, each held by a weak reference: an entry whose arrays have
+        gone is never read."""
+        import numpy as np
+        import weakref
+        D = len(self.delays)
+        tabs = [stand_escapes(d) for d in range(D)]
+        arrs = [a for t in tabs for a in t[:3]]
+        key = (tuple(map(id, arrs)), tuple(cols_d))
+        got = self._svals.get(key)
+        if got is not None and all(r() is a for r, a in zip(got[0], arrs)):
+            return list(got[1])
+        TE = np.stack([t[0] for t in tabs], axis=2)                    # [poise, escape, delay]
+        S = np.stack([t[1] for t in tabs], axis=2)
+        C = np.stack([t[2] for t in tabs], axis=2)
+        P, E, _ = C.shape
+        # suf[p, e, j]: the delay from j on that lands most against escape e (the earliest of equals).
+        suf = np.empty((P, E, D), int)
+        suf[..., D - 1] = D - 1
+        for j in range(D - 2, -1, -1):
+            nxt = suf[..., j + 1]
+            suf[..., j] = np.where(C[..., j] >= np.take_along_axis(C, nxt[..., None], 2)[..., 0], j, nxt)
+        R = np.array([r for r, _ in self.react], float)
+        wq = np.array([w for _, w in self.react], float)
+        pi, ei = np.arange(P)[:, None, None], np.arange(E)[None, :, None]
+        rp = np.arange(P)
+        out = []
+        for dr in cols_d:
+            seen_at = TE[:, :, dr][..., None] + R[None, None, :] - self.press        # [poise, escape, reaction]
+            lo = np.searchsorted(self.delays, seen_at - 1e-9, side='left')
+            seen = (lo < D) & (seen_at <= self.delays[dr] + 1e-9)
+            idx = np.where(seen, suf[pi, ei, np.minimum(lo, D - 1)], dr)
+            sc = (S[pi, ei, idx] * wq).sum(axis=2)                                    # [poise, escape]
+            cv = (C[pi, ei, idx] * wq).sum(axis=2)
+            # Per poise the first escape whose score is under the best so far by more than 1e-12,
+            # escape by escape (every poise at once: the same comparisons), then the poises' worths
+            # added in poise order.
+            best = np.zeros(P, np.int64)
+            for e in range(1, E):
+                best = np.where(sc[:, e] < sc[rp, best] - 1e-12, e, best)
+            tot = 0.0
+            for x in cv[rp, best].tolist():
+                tot += x
+            out.append(tot)
+        if len(self._svals) >= STAND_VALUES_KEPT:
+            self._svals.clear()
+        self._svals[key] = (tuple(weakref.ref(a) for a in arrs), tuple(out))
+        return out
+
+    def mixup(self, dist, floor, worth, open_worth=None, open_roll=None, run_floor=None, strafe_share=1.0,
+              blind=True, stand_escapes=None, mid_worth=None, open_mid=None, catch_escapes=None):
+        """The attack at (`dist`, `floor`) as the two-sided choice it is (bd er-effects-rs-me5p; the
+        user, 2026-11-16: "I think the pebble/R2 interaction is what is called a 50/50"): a
+        zero-sum game of the attacker's net, solved for its mixed-strategy value (`zero_sum_game`).
+
+        The defender's pure strategies (rows):
+        - 'roll' per move family: he dodges the opening as `outcome` has him do, then the follow-up
+          as planned for the press at once, reacting to a later press (`outcome`'s rule); a press
+          the opening catches meets the stand row's rule with `catch_escapes` (`outcome`'s, version
+          26);
+        - 'stand': he takes the opening's first catch standing (`base`, the opening's own hit) and
+          is played out of the rest by `CaughtModel` (`worth`), so a follow-up lands only where it
+          catches him while he takes his hit reaction and leaves; offered when the opening reaches
+          him standing. With `stand_escapes(d)` (`CaughtModel.escape_table` of that catch, the
+          follow-up `delays[d]` late) the attacker reacts to the caught defender's escape as he
+          reacts to a roll (`_stand_values`, version 25); without it he presses at the column's
+          delay whatever the defender does, as before;
+        - 'strafe' (with `run_floor`): he walks sideways from his move cancel (`strafe_escape`, on a
+          dodge's reaction and network delay); a start that escapes the opening leaves him free, and he meets the
+          follow-up reacting to its press as a free defender does (`_stage` from the press), and one
+          that does not is caught as 'stand' is. `strafe_share` (`INFERRED`, default 1.0: the
+          geometry as flown) scales the escaping share: desync and execution, which no
+          param establishes. Offered only against an opening aimed at its shots' creation
+          (`strafe_ok`): never against a search launch.
+        The attacker's (columns): 'none' (no follow-up, his roll at `open_roll`; offered with
+        `open_worth`, the worth of a catch by the opening alone, and `open_roll`), and per default
+        delay `delays[dr]` (all of them with `blind`, else the press at once only) the press policy
+        `outcome` scores: at `delays[dr]` unless a roll showed before the window opened, then the
+        delay that leaves him most against it.
+
+        Returns {'value', 'rows', 'cols', 'M' (rows x cols, attacker net), 'x' (the defender's mix),
+        'y' (the attacker's), 'fixed' (`outcome`'s scored net: the roll rows against the press
+        policy at once)}. `worth` and `open_worth` as `outcome`'s `worth`, `open_worth(indices)`
+        indexed as the whole attack is; `mid_worth` as `outcome`'s, and `open_mid(h, move, start,
+        catch)` a catch in his roll of the opening priced by the opening alone (version 25)."""
+        import numpy as np
+        D = len(self.delays)
+        cols_d = list(range(D)) if blind else [0]
+        # The roll rows' catches by the opening, priced for the attacker who sees the caught defender
+        # leave (`catch_escapes`, `outcome`'s; version 26).
+        stand_of = self._caught_rows(catch_escapes)
+        shapes = [self._shape(dist, floor, fi) for fi in range(len(self.families))]
+        stand = shapes[0]['base']
+        if stand is not None and stand in set(self.follow_index.tolist()):
+            stand = None
+        need = [set() for _ in range(D)]
+        for sh in shapes:
+            for d in range(D):
+                need[d] |= sh['need'][d] | sh['fixed']
+        if stand is not None:
+            for d in range(D):
+                need[d].add(stand)
+            if run_floor is not None and strafe_share > 0 and self.strafe_ok():
+                # The strafe row's stages read their catches in his dodge too (`_stage` 'mids').
+                for dr in cols_d:
+                    need[dr] |= set(self._resolve(self._stage(0, dist, _grid(floor - self.delays[dr]), False,
+                                                              self.press)[4], dr))
+        WD = self._worth_table(need, worth, mid_worth, D)
+        WF = WD[:, self.follow_index]
+        cols = np.arange(D)[None, :]
+        wq = np.array([w for _, w in self.react], float)
+        none = open_worth is not None and open_roll is not None
+
+        def open_of(hs):
+            # `open_worth` of whole-attack indices, and of a catch in his roll of the opening by the
+            # opening alone (`_mid` 'open': `open_mid`, else that geometry's own, as before version 25).
+            out = {}
+            std = [h for h in hs if h < self.size]
+            if std:
+                out.update(zip(std, np.atleast_1d(open_worth(np.array(std, int))).tolist()))
+            for h in (h for h in hs if h >= self.size):
+                _, g, move, s, tc, _ = self.plays[h - self.size]
+                out[h] = float(open_mid(g, move, s, tc)) if open_mid is not None else \
+                    float(np.atleast_1d(open_worth(np.array([g], int)))[0])
+            return out
+        rows, M = [], []
+        for fi, moves in enumerate(self.families):
+            sh = shapes[fi]
+            caught, sid = sh['caught'], sh['sid']
+            sidc = np.maximum(sid, 0)
+            reached = (sid >= 0) & sh['R'][sidc]
+            SV = self._stage_values(sh, WF, WD)
+            val = np.where(caught >= 0, WD[cols, np.maximum(caught, 0)], np.where(reached, SV[sidc, cols], 0.0))
+            pun = np.where(caught >= 0, 0.0, np.where(sid >= 0, sh['PP'][sidc] + sh['U'][sidc] * sh['own'],
+                                                      sh['own']))
+            net = val - pun * PUNISH_HP
+            n = len(net)
+            prow = np.arange(n)
+            suf = np.empty((n, D), int)
+            suf[:, D - 1] = D - 1
+            for j in range(D - 2, -1, -1):
+                suf[:, j] = np.where(net[:, j] >= net[prow, suf[:, j + 1]], j, suf[:, j + 1])
+            lo, a = sh['lo'], sh['alive']
+            row = []
+            if none:
+                oh = sh['open_hit']
+                hs = sorted({h for h, _ in sh['early']} | set(oh[oh >= 0].tolist()))
+                omap = open_of(hs) if hs else {}
+                v = sum(x * omap[h] for h, x in sh['early'])
+                vi = np.array([omap[h] if h >= 0 else 0.0 for h in oh.tolist()])
+                pi = np.zeros(n)
+                for i in range(n):
+                    if oh[i] < 0 and sh['ks'][i] >= 0 and math.isfinite(sh['starts'][i]):
+                        # His roll as he made it, from where it started (`_shape` 'rolls', version 27).
+                        rm, ro = sh['rolls'][i] if sh['rolls'][i] is not None else (moves[int(sh['ks'][i])], None)
+                        pi[i] = float(self._shares(rm, sh['starts'][i], dist, open_roll, ro))
+                row.append(v + a * float(sh['w'] @ vi) - a * float(sh['w'] @ pi) * PUNISH_HP)
+            for dr in cols_d:
+                seen = (lo >= 0) & (sh['seen_at'] <= self.delays[dr] + 1e-9)
+                idx = np.where(seen, suf[prow[:, None], np.maximum(lo, 0)], dr)
+                fv = (val[prow[:, None], idx] * wq).sum(axis=1)
+                fp = (pun[prow[:, None], idx] * wq).sum(axis=1)
+                # A press the opening caught: the attacker presses for that caught defender's escape,
+                # as in the stand row (`_CaughtRows`, version 26).
+                fv = stand_of.rows(sh, fv, dr)
+                row.append(stand_of.early(sh, WD, dr) + a * float(sh['w'] @ fv)
+                           - a * float(sh['w'] @ fp) * PUNISH_HP)
+            rows.append(f"roll:{moves[0]['anim']}")
+            M.append(row)
+        if stand is not None:
+            # What lands on him caught standing, per column: the attacker presses at its delay unless
+            # he saw the caught defender leave before then (`_stand_values`, version 25).
+            sv = self._stand_values(stand_escapes, cols_d) if stand_escapes is not None \
+                else [float(WD[dr, stand]) for dr in cols_d]
+            row = [float(open_worth(np.array([stand]))[0])] if none else []
+            row += sv
+            rows.append('stand')
+            M.append(row)
+            if run_floor is not None and strafe_share > 0 and self.strafe_ok():
+                e = strafe_share * self.strafe_escape(dist, run_floor)
+                srow = [(1 - e) * row[0]] if none else []
+                for ci, dr in enumerate(cols_d):
+                    # Free and unhurt, he meets the follow-up as `_late` meets a press nothing of his
+                    # plan covers: pressed `d` late it is his floor `d` earlier, read from the press.
+                    st = self._stage(0, dist, _grid(floor - self.delays[dr]), False, self.press)
+                    free = float(st[0] @ WF[dr]) + sum(x * WD[dr, pid] for pid, x in self._resolve(st[4], dr).items()) \
+                        - st[2] * PUNISH_HP if st[3] else 0.0
+                    srow.append(e * free + (1 - e) * sv[ci])
+                rows.append('strafe')
+                M.append(srow)
+        M = np.array(M, float)
+        value, x, y = zero_sum_game(M)
+        fixed = min(M[i][1 if none else 0] for i, r in enumerate(rows) if r.startswith('roll:'))
+        return {'value': value, 'rows': rows, 'cols': (['none'] if none else []) + [float(self.delays[d]) for d in cols_d],
+                'M': M, 'x': x, 'y': y, 'fixed': fixed}
+
+
+class _CaughtRows:
+    """A follow-up's roll rows' catches by the opening (`FollowupModel.outcome` and `mixup`, version
+    26): the stand row's rule (`FollowupModel._stand_values`) applied to every catch of the opening,
+    the attacker pressing at the column's delay unless he saw that caught defender's escape in time,
+    then at the delay that lands most against it. `catch_escapes(column)` gives, per catch column (a
+    whole-attack index or an 'open' play), `CaughtModel.escape_table` of it at each delay, or None
+    (then the column's worth stands, as before). Kept per column."""
+
+    def __init__(self, model, catch_escapes):
+        self.model, self.ce, self.kept = model, catch_escapes, {}
+
+    def values(self, col):
+        """Per default delay, what lands on the defender that catch holds, so pressed; None when
+        `catch_escapes` gives no table."""
+        if self.ce is None:
+            return None
+        if col not in self.kept:
+            f = self.ce(col)
+            self.kept[col] = None if f is None else self.model._stand_values(f, list(range(len(self.model.delays))))
+        return self.kept[col]
+
+    def rows(self, sh, fv, dr):
+        """`fv` (per press, what lands at default delay `delays[dr]`) with each press the opening's last
+        burst caught priced so."""
+        import numpy as np
+        if self.ce is None:
+            return fv
+        out = fv
+        for i in np.nonzero(sh['open_hit'] >= 0)[0].tolist():
+            sv = self.values(int(sh['open_hit'][i]))
+            if sv is not None:
+                if out is fv:
+                    out = np.array(fv, float)
+                out[i] = sv[dr]
+        return out
+
+    def early(self, sh, WD, dr):
+        """What the opening's catches before its last reaching burst land at default delay `delays[dr]`
+        (`_shape` 'early'), each priced so."""
+        tot = 0.0
+        for h, x in sh['early']:
+            sv = self.values(h)
+            tot += x * (sv[dr] if sv is not None else WD[dr, h])
+        return tot
+
+
+#: A strafing defender's speed (`FollowupModel.strafe_escape`): the run clip's root motion, 4.01 m/s
+#: (`MEASURED`, `er-mechanics-neutral` selftest: walk 1.50, run 4.01, sprint 6.04). That a locked-on
+#: defender strafes at the run clip's speed is `INFERRED` (the lock-on directional clips are not read).
+STRAFE_SPEED_MPS = 4.01
+#: Real frames a strafe path covers (`strafe_motion`); past it he stands, as after a dodge clip.
+STRAFE_FRAMES = 150
+
+
+def strafe_motion(side=1.0, speed=None):
+    """A sideways walk as an evasion move (`evasion_motion`'s keys): `path` straight to his right
+    (`side` 1) or left at `speed` m/s from his first frame, no invincibility, and every cancel at
+    once (he is walking, not committed to a clip). Cached per side and speed."""
+    v = STRAFE_SPEED_MPS if speed is None else float(speed)
+    key = ('strafe', float(side), v)
+    if key not in _MOTION:
+        path = [(side * v * f / TAE_FPS, 0.0) for f in range(STRAFE_FRAMES)]
+        _MOTION[key] = {'anim': f'strafe{"+" if side > 0 else "-"}{v:g}', 'iframes': 0.0, 'ready': 0.0, 'dodge': 0.0,
+                        'move': 0.0, 'path': path, 'distance': round(v * STRAFE_FRAMES / TAE_FPS, 2)}
+    return _MOTION[key]
+
+
+def zero_sum_game(M):
+    """(value, row mix, column mix) of the zero-sum game whose column player wins `M[r, c]` and
+    whose row player loses it: the column player maximises, the row player minimises. Solved
+    exactly as the row player's linear programme max sum(z) s.t. Q^T z <= 1, z >= 0 on Q = M
+    shifted above 0 (z = his mix over the value), by the simplex method with Bland's rule (no
+    cycling); the column mix is its dual."""
+    import numpy as np
+    M = np.asarray(M, float)
+    m, n = M.shape
+    shift = float(M.min()) - 1.0
+    T = np.zeros((n + 1, m + n + 1))
+    T[:n, :m] = (M - shift).T
+    T[:n, m:m + n] = np.eye(n)
+    T[:n, -1] = 1.0
+    T[n, :m] = -1.0
+    basis = list(range(m, m + n))
+    eps = 1e-12
+    for _ in range(100 * (n + m)):
+        neg = np.nonzero(T[n, :-1] < -eps)[0]
+        if not len(neg):
+            break
+        j = int(neg[0])
+        col = T[:n, j]
+        pos = col > eps
+        if not pos.any():
+            raise ValueError('zero_sum_game: unbounded programme')
+        ratio = np.where(pos, T[:n, -1] / np.where(pos, col, 1.0), np.inf)
+        cand = np.nonzero(ratio <= ratio.min() + 1e-12)[0]
+        i = int(min(cand, key=lambda r: basis[r]))
+        T[i] /= T[i, j]
+        for r in range(n + 1):
+            if r != i and T[r, j] != 0.0:
+                T[r] -= T[r, j] * T[i]
+        basis[i] = j
+    total = T[n, -1]
+    x = np.zeros(m)
+    for r, b in enumerate(basis):
+        if b < m:
+            x[b] = T[r, -1]
+    y = T[n, m:m + n].copy()
+    vq = 1.0 / total
+    return vq + shift, x * vq, y * vq
 
 
 # ---------------------------------------------------------------------------------------------
@@ -7525,25 +10980,69 @@ class FollowupModel:
 #   * he stands at the situation's distance when the catching hit first touches a defender who
 #     stands there (`INFERRED`: a defender caught mid-roll is placed so too);
 #   * each hit that lands applies its poise (`poise`, cumulative, refilled on a break, against the
-#     defender's own) and plays its damage level's reaction (`caught_branch`: the poise-break
+#     defender's own: since version 21 each pool build's own, `computed.poise.altered` (Bull-Goat's
+#     Talisman) else `original`, the plays mixed by the builds' shares, where until then every
+#     defender held with the median `original`, 62 at RL 150; the pool's own median is 68, and 14.3%
+#     of it holds above Savage Claws' 108-poise first claw, `MEASURED` 2026-11-16) and it breaks
+#     him when it takes him to 0 or below (`>=`, `FUN_140486bf0`), and plays its damage level's reaction (`caught_branch`: the poise-break
 #     level, or SpEffect 6352's while poise holds, `er-mechanics-frame-advantage.reaction_level`);
 #     a reaction that locks carries him back by `displacement_fn` (knockback, `VERIFIED`, plus the
 #     damage clip's root motion, `MEASURED`) and holds him until its roll cancel (DamageCount
 #     chaining included) or its move cancel (`TAE` damage clips, `reaction`); level 0 (the
 #     additive flinch) neither holds nor moves him and leaves a running reaction running. Two hits
 #     in one update are one reaction (`_update`);
-#   * when the reaction lets him he leaves straight away from the attacker: by the medium roll
-#     that carries him furthest back (`roll_motion`, its invincibility included) from its roll
-#     cancel and then at run speed, or at run speed (`er-mechanics-neutral.frames_per_metre`) from
-#     its move cancel, whichever lands the smaller share of the attack's hits;
+#   * when the reaction lets him he leaves: by a medium roll (`roll_motion`, its invincibility
+#     included) from its roll cancel and then, from the roll's move cancel (f22; its dodge cancel,
+#     f21, until version 21), at run speed the way it carried him, or at run speed
+#     (`er-mechanics-neutral.frames_per_metre`) from its move cancel, straight back or straight to
+#     a side (`_escapes`: the roll that ends furthest back, each roll that ends more to a side than
+#     back, and the three runs), whichever lands the smaller share of the attack's hits. Until
+#     2026-11-14 he left straight back only, which kept him inside a lingering line laid along the
+#     attack axis for as long as it lasted (Ghostflame Ignition's R1 trail, `_escapes`);
 #   * a later hit lands only where its own geometry touches him on that path (held back by his
 #     body as `_catches` holds it); a hit list that re-hits every `dmgHitRecordLifeTime`
 #     (`CAUGHT` `lists`, the `full` rule's ticks) lands each tick only while a sample of its
-#     geometry within one update of the tick touches him.
-# `INFERRED`: a geometry with several hit lists starts them all at its first touch and reacts as
-# its list with the most poise; the instances of one list (a fan, interval children) tick
-# together; he leaves along the attack's axis, not to the side; the knockback left when he cancels
-# into his escape is dropped.
+#     geometry within one update of the tick touches him;
+#   * a list whose bullets are its own (`rows`, over the geometry's `B`: a bullet tree is one
+#     geometry) starts at the first touch of its own samples, not of the geometry's: when the
+#     geometry catches him only the lists live at that frame land, a list whose bullets have
+#     all ended by then never lands, and one whose bullets come later lands where they touch him
+#     on his path, its own poise and reaction applied then (2026-11-16, the user: "I'm quite
+#     curious if the ranking for rosus summons model correctly accomodates for the projectiles
+#     since they hit at different times". Rosus's Summons' three 2 m bursts, Bullet 2872 ->
+#     2873 -> 2874, each `life` 0.23 s and `isPenetrateChr` 1 with no shared record, landed all
+#     three on the frame the first touched him, with one burst's poise and one reaction);
+#   * his own whiff's recovery holds him (2026-11-16, version 21; the user: "So you're saying that
+#     the opponent has to swing, and wiff before your first claw attack lands, and all the other 5
+#     will also land?"). The punish situation's two floors (`er-mechanics-spells.punish_situations`:
+#     the real frames from the end of his whiff's last hit window, which is the punish's frame 0,
+#     to the whiff's dodge cancel, and to its move cancel or the dodge cancel, whichever is later)
+#     are the same floors `dodge_presses` keeps his dodge behind. A catch before a floor finds him
+#     still in that recovery: he leaves by a roll no sooner than the dodge floor and by a run no
+#     sooner than the move floor (the behavior script starts a walk or a run only through the
+#     move-cancel check, env 2000, `VERIFIED` per `punish_lead`), standing where he is until then,
+#     and the hits that come meanwhile land where their geometry touches him there. Level 0 leaves
+#     it running: `ExecAddDamage` returns false and the caller's state is not changed
+#     (frame-advantage.md section 1, `COMMUNITY`). A reaction that locks him starts a damage state
+#     (`W_DamageLv<n>`, the same source), which ends the recovery: from then on its own cancels
+#     release him, the floors no longer. The floors are the caller's, after the attacker's run in has
+#     used them up (`net_parts`' `choose`); None (the strike's pricing, the selftests' plays) holds
+#     him to nothing, as before. Until version 21 a flinch freed him on the catching frame, so a
+#     defender caught at f17 by Savage Claws' first claw with 41 frames of recovery left rolled out
+#     at f17;
+#   * he may jump out when a hit is `AIR` (version 21), as a dodger may (`sequence_outcome`'s
+#     families): the jump in place (`jump_motion`), its invincibility only against `AIR` samples
+#     (`_catches`' rule), through the roll's gate (`INFERRED`), then running back from its landing;
+#   * what one catch lands is capped at that defender's own health (`worth_of` `hp`: each pool
+#     build's health with its poise, per run of poises that play alike, version 21);
+# `INFERRED`: lists of one geometry live at the same frame start together and react as the one
+# with the most poise; a list without `rows` (a melee window, a list of a record shared down the
+# lineage, a list whose bullets home or are aimed at him and move after they are made, which
+# follow him where the stored samples, the flight against him standing, do not: Stars of Ruin's
+# stars) is read on every sample of its geometry, as before (Ghostflame Ignition's hop explosion
+# with its trail);
+# the instances of one list (a fan, interval children) tick together; the knockback left when he
+# cancels into his escape is dropped; the knockback itself is straight back.
 #: Real frames of a hit's displacement track (`caught_branch`); every track is flat well before.
 CAUGHT_FRAMES = 150
 #: Half-width, in real frames, of the window a tick looks for a touching sample in: one update.
@@ -7575,77 +11074,338 @@ def caught_branch(t, atk_row, broken):
     return _BRANCH[key]
 
 
-def caught_list(t, atk_row, poise, n=1, rec_s=0.0, weight=1.0):
+def stun_branch():
+    """What a bleed or frost proc makes a caught defender play on a hit whose own reaction is level
+    0 (poise held, hyperarmor included): HKS `ExecDamage` raises the hit to `DAMAGE_LEVEL_SMALL` when
+    the bleed or frost clear-flag bit is set (`COMMUNITY`, the constants in the installed
+    `c0000.hks`; `er-mechanics-proc-opening.proc_reaction`, which decides when, docs/er-mechanics/
+    status.md section 11). In `caught_branch`'s shape, level 1: the `a000_0051xx` clips' cancels
+    (`er-mechanics-frame-advantage.reaction(1)`: roll at 10 / 7 / 4 / 0 for the 1st to 4th stagger
+    in a row, move 15, length 34, `MEASURED` from the TAE), counted toward DamageCount as every
+    level-1 stagger is. The track is the clip's root motion alone: the knockback is the engine's,
+    read from the hit's own damage level (`ChrIns::GetDamageLevel`, level 0, none), not the clip the
+    script promotes it to (`INFERRED`). None when the level's clips are missing."""
+    key = 'stun'
+    if key not in _BRANCH:
+        r = _reaction(1)
+        root = _clip_root_back(1)
+        track = [round(root(k / TAE_FPS), 4) if root else 0.0 for k in range(CAUGHT_FRAMES + 1)]
+        _BRANCH[key] = None if r is None or not r.get('locks') else {
+            'level': 1, 'locks': True, 'counts': bool(r['counts']), 'move': r['move'],
+            'roll': tuple(r['roll'].get(c) for c in (1, 2, 3, 4)), 'len': r.get('len'), 'track': track}
+    return _BRANCH[key]
+
+
+def caught_list(t, atk_row, poise, n=1, rec_s=0.0, weight=1.0, rows=None):
     """One hit list of a geometry's `CAUGHT` record: `n` hits (the `full` count of one instance),
     `rec` real frames apart (`dmgHitRecordLifeTime`), `w` the share of the geometry's worth one of
     its hits carries (a geometry's lists sum n x w to 1), `poise` per hit (menu units x
-    `saRate`), and its two reaction branches (`caught_branch`)."""
+    `saRate`), and its two reaction branches (`caught_branch`). `rows`: the Bullet rows whose
+    samples are this list's (the geometry's `B`, `er-mechanics-spells.SpellModel.flight`), so
+    `CaughtModel` lands it when its own bullets touch him; None: every sample of the geometry."""
     return {'n': int(max(1, n)), 'rec': float(rec_s) * TAE_FPS, 'w': float(weight), 'poise': float(poise or 0.0),
-            'atk': atk_row, 'react': {True: caught_branch(t, atk_row, True), False: caught_branch(t, atk_row, False)}}
+            'atk': atk_row, 'react': {True: caught_branch(t, atk_row, True), False: caught_branch(t, atk_row, False)},
+            'rows': None if not rows else tuple(sorted(int(b) for b in rows))}
 
 
 def caught_shape(g):
     """What `CaughtModel` reads of a geometry besides its arrays and its worth weights: one tuple
-    per list (`n`, `rec`, `poise`, `atk`), None without a `CAUGHT` record."""
+    per list (`n`, `rec`, `poise`, `atk`, and its `rows` when it has them), None without a `CAUGHT`
+    record."""
     c = g.get('CAUGHT') if g is not None else None
-    return None if c is None else [(l['n'], round(l['rec'], 4), round(l['poise'], 4), l['atk']) for l in c['lists']]
+    return None if c is None else [(l['n'], round(l['rec'], 4), round(l['poise'], 4), l['atk'])
+                                   + ((l['rows'],) if l.get('rows') and 'B' in g else ()) for l in c['lists']]
+
+
+# A bullet chain split per list (bd er-effects-rs-fse5). The outcomes price a catch by the geometry
+# that makes it (`reaction_outcome`'s `hit_value[h]`, attack-similarity's `OutcomeForm` per
+# geometry), and `CaughtModel` plays geometry h's catch from its first touch on a defender who
+# stands. One geometry holding a chain of lists, each list's bullets made on the frame the last
+# one's end (Rosus's Summons: Bullet 2872 -> 2873 -> 2874, `HitBulletID` at expiry, 0.25 s apart at
+# one spot), so credited a dodge that escapes the first burst and is first touched by a later one
+# with the play from the first burst's standing touch: all three bursts (`MEASURED` 2026-11-16, the
+# issue: a quarter of the dodge presses at floor 50, 4.5-5.5 m, are first touched by burst 2 or 3).
+# `split_chains` makes such a geometry one geometry per list, so which burst first touches him is
+# the catching geometry, in `reaction_outcome` and `OutcomeForm` alike, with no change to either:
+#   * a chain is every list with its own `rows` over the geometry's `B`, each sample one list's,
+#     and in time order each list's last sample on the frame of the next one's first (`_live`'s
+#     reading: the frame a bullet ends on is its child's first). Lists live together, a list without
+#     `rows` (a melee window, a record's, a list whose bullets home or are aimed at him after they are
+#     made: Stars of Ruin's) or a gap between two lists keep the geometry whole, as before. A gap
+#     would make the parts separate bursts (`er-mechanics-spells._bursts`), each dodged on its own,
+#     which the whole geometry never was;
+#   * each part keeps its frame, its `wf` and its list's `w`, so the worth weights sum as before
+#     (`CaughtModel.weights`), and every other key of the geometry (`HPR`, `AIR`, `TOUGHNESS`,
+#     `GUARD`, `EVENT`); a `HOMING` record keeps the shots of its own rows (its part's `rows`,
+#     `_part_keys`: each flight's shots of those rows, whatever slots its interval children take),
+#     so the flight again is one flight for all of them (`_homing_entries` keys it with no `index`
+#     or `rows`); a part none of whose shots in the flight with no target is flown again keeps its
+#     stored samples. Until 2026-11-19 the part kept the lineage keys of the flight with no target
+#     (`fly_shots`), which name every shot of a flight against a dodge only while its interval rows
+#     make no more children than that flight's and, past `BULLET_INTERVAL_CAP`, the same number;
+#   * `CHAIN` (i, n, first frame, the next part's first frame or inf) marks a part. The frame two
+#     parts share belongs to the later (`_catches_read` gives it a tie there; a part that has not
+#     caught him does not catch on it in `CaughtModel._play`), and the escape a caught defender takes
+#     weighs the parts of one chain as the lists of the one geometry were (`CaughtModel._best`).
+# `INFERRED`: the parts keep the whole geometry's `AIR` (all its AtkParams' mark; the jump family
+# stays as it was).
+
+
+def _index_flown(t, bt, dmg, index):
+    """Whether a `homing_part` of tree `bt` holding the shots `index` (lineage keys) is flown again:
+    `homing_part`'s rule on its `dmg` (the hitting Bullet ids)."""
+    for key in index:
+        nodes = _key_nodes(bt, key)
+        if nodes and nodes[-1]['bullet'] in dmg and any(
+                homes(t.bullet.get(n['bullet']) or {}) or carrier(t, n) for n in nodes):
+            return True
+    return False
+
+
+def _chain_parts(t, g):
+    """`g` split into one geometry per list when its `CAUGHT` lists are a chain (above), else None."""
+    import numpy as np
+    c = g.get('CAUGHT') if g is not None else None
+    if c is None or len(c['lists']) < 2 or 'CHAIN' in g or 'B' not in g:
+        return None
+    ls = c['lists']
+    T = np.asarray(g['T'], float)
+    B = np.asarray(g['B'])
+    if len(B) != len(T) or np.isnan(T).any() or not all(l.get('rows') for l in ls):
+        return None
+    masks = [np.isin(B, l['rows']) for l in ls]
+    if any(not m.any() for m in masks) or not (np.sum(masks, axis=0) == 1).all():
+        return None
+    order = sorted(range(len(ls)), key=lambda i: (float(T[masks[i]].min()), i))
+    lo = [float(T[masks[i]].min()) for i in order]
+    hi = [float(T[masks[i]].max()) for i in order]
+    if any(abs(hi[k] - lo[k + 1]) > 1e-6 for k in range(len(order) - 1)):
+        return None
+    spec = g.get('HOMING')
+    if spec is not None and len(spec['parts']) != 1:
+        return None
+    entries = None
+    if spec is not None:
+        p = spec['parts'][0]
+        entries = fly_shots(t, p['bt'], None, p['launch'])
+    n = len(order)
+    arrays = [k for k, v in g.items() if isinstance(v, np.ndarray) and v.shape[:1] == T.shape]
+    out = []
+    for k, i in enumerate(order):
+        m = masks[i]
+        sub = {**g, **{a: np.asarray(g[a])[m] for a in arrays}}
+        sub['CAUGHT'] = {'lists': [ls[i]], 'wf': c['wf']}
+        sub['CHAIN'] = (k, n, lo[k], lo[k + 1] if k + 1 < n else math.inf)
+        if spec is not None:
+            p = spec['parts'][0]
+            rows = set(ls[i]['rows'])
+            index = [key for e, key in zip(entries, entries.keys) if e[0]['bullet'] in rows]
+            if p['index'] is not None:
+                index = [key for key in index if key in set(p['index'])]
+            sub.pop('HOMING')
+            if index and _index_flown(t, p['bt'], p['dmg'], index):
+                # Named by its rows (`_part_keys`): the keys read here are the no-target flight's,
+                # and a flight against a dodge keys its interval children by its own count.
+                sub['HOMING'] = homing_record(t, [{**p, 'rows': tuple(sorted(rows))}])
+        out.append(sub)
+    return out
+
+
+def split_chains(t, geo):
+    """`geo` ([(contact geometry, frame)], None) with every geometry whose `CAUGHT` lists are a
+    bullet chain split into one geometry per list (the comment above), each at the whole one's
+    frame; the others as they were. A list given is changed in place (the callers keep it) and
+    returned."""
+    if not geo:
+        return geo
+    out = []
+    for g, fr in geo:
+        parts = _chain_parts(t, g)
+        out += [(p, fr) for p in parts] if parts else [(g, fr)]
+    if isinstance(geo, list):
+        geo[:] = out
+        return geo
+    return out
+
+
+def hp_cap(x, hp):
+    """What a catch worth `x` leaves on a defender of health `hp`: `x` for None, min(x, hp) for a
+    number, and for a pool [(health, share)] the shares' mean of each build's min (version 21: the
+    cap is not linear, so the median health's cap is not the pool's)."""
+    if hp is None:
+        return x
+    if not isinstance(hp, (list, tuple)):
+        return min(x, hp)
+    return sum(w * min(x, c) for c, w in hp)
+
+
+#: Directions a caught defender runs off in (`_escapes`), (x, z) per metre, +z away from the
+#: attacker: straight back, then straight to either side.
+ESCAPE_RUNS = ((0.0, 1.0), (1.0, 0.0), (-1.0, 0.0))
 
 
 def _escapes():
-    """The two ways a caught defender leaves (`CaughtModel`): ('roll', the medium roll that ends
-    furthest back), ('run', None)."""
+    """The ways a caught defender leaves (`CaughtModel`), (name, roll motion or None, the (x, z)
+    he runs on in after it): ('roll', the medium roll that ends furthest back, back), ('run',
+    None, back), then each other medium roll that ends further to a side than back, running on
+    the way it carried him, and ('run', None, each side). The sides are 2026-11-14: with only the
+    two back escapes a defender caught in a lingering line laid along the attack axis stayed in it
+    while he left, as far as it reached. Ghostflame Ignition's R1 follow-up lays its 5 s ghostflame
+    trail (Bullet 2294) 2.8 to 19.7 m ahead, and a defender caught 2.6 m out took 9 of its 10 ticks
+    (`MEASURED`). The four medium-roll root motions are `roll_motion`'s (`TAE`): the back roll ends
+    3.6 m back with no sideways travel, the side rolls 3.3 and 3.4 m to the sides. That he takes
+    whichever lands the least is this model's rule for the back roll and the run already
+    (`INFERRED`)."""
     rolls = roll_motion()
-    back = max(rolls, key=lambda m: m['path'][min(len(m['path']) - 1, int(m['dodge'] or len(m['path'])))][1]) \
-        if rolls else None
-    return ([('roll', back)] if back else []) + [('run', None)]
+
+    def end(m):
+        return m['path'][min(len(m['path']) - 1, int(m['dodge'] or len(m['path'])))]
+    back = max(rolls, key=lambda m: end(m)[1]) if rolls else None
+    out = ([('roll', back, ESCAPE_RUNS[0])] if back else []) + [('run', None, ESCAPE_RUNS[0])]
+    for m in rolls:
+        x, z = end(m)
+        if m is not back and abs(x) > abs(z):
+            out.append(('roll', m, (x / math.hypot(x, z), z / math.hypot(x, z))))
+    return out + [('run', None, u) for u in ESCAPE_RUNS[1:]]
+
+
+#: What a `CaughtModel` keeps of its `escape_table`s, {(id(value), id(geo)): (value, geo, {(dist, h,
+#: held, the cap's key): the tables})} (the value and geometries kept so their ids name them): at
+#: most `ESCAPE_VALUES` values (a shifted value holds its shifted geometries alive) and
+#: `ESCAPE_TABLES` tables each; and of its capped sums (`_cap_sum`). Each emptied when full.
+#: `ESCAPE_TABLES` was 4096 until 2026-11-18: a follow-up form keeps one model per press delay, and
+#: Waves of Darkness then R2 f68's 28 models held 1,507 MB of tables after 218 of the 3,483
+#: situations (`MEASURED`, `target/wf/waves/exact.py` with `EXACT_SIZES`, every 16th situation),
+#: on the way to a bound of 28 x 2 x 4096 tables of 23 KB, 5.3 GB; the full set's run reached its
+#: 10 GiB cap after 2,848 s of CPU with two of its six forms read (`target/wf/waves/a1`; a form
+#: holds its models until its key's last line that reads it). A table is asked for again only
+#: within one distance (`dist` is in its key and `FollowupForm` walks the distances once per pass);
+#: the set's second mixup pass read 41,262 tables in its last 4,781 of 5,514 situation keys, over 94
+#: distances and 28 models: under 20 per model and distance. A table read again after the memo was
+#: emptied is the same table read afresh.
+ESCAPE_VALUES = 2
+ESCAPE_TABLES = 512
+CAP_SUMS = 200000
+#: `FollowupModel._stand_values`' answers a model keeps (emptied when full); an entry is its tables'
+#: ids, weak references and the answer, a few kilobytes.
+STAND_VALUES_KEPT = 4096
 
 
 class CaughtModel:
     """A defender caught by one geometry of an attack, played out (the rules above). `geo` is
     [(contact geometry, frame)], every geometry with a `CAUGHT` record ({'lists': [`caught_list`],
-    'wf': its share of its frame's worth}); `poise` is the defender's. `landed(dist)` is, per
+    'wf': its share of its frame's worth}); `poise` is the defender's, or the pool's [(poise,
+    share)], each played and the plays mixed by share (`_best`). `landed(dist)` is, per
     catching geometry h (in `_bursts` order), the share of each list's hits that land [h][g][l];
     `worth(dist, value)` what that leaves on him per catching geometry, from {frame: worth} (default
-    the `value` given here) and each geometry's weights (`weights`, default this `geo`'s). Cached per
-    distance."""
+    the `value` given here) and each geometry's weights (`weights`, default this `geo`'s). Each
+    takes `floors`, (his dodge floor, his move floor) on the attack's clock or None (the rules
+    above: his whiff's recovery). Cached per distance and the floors that hold him (`held`)."""
 
     def __init__(self, geo, poise, value=None):
         import numpy as np
         order = sorted(geo, key=lambda e: e[0]['T'].min())
         self.geoms = [g for g, _ in order]
         self.frames = [fr for _, fr in order]
-        self.poise = float(poise)
+        # The poises he holds with, [(poise, share)] ascending (version 21: each pool build's own,
+        # `er-mechanics-spells.SpellModel.defender` `poise_pool`); a number is one at share 1.
+        # An entry (poise, share, health) carries that build's health too (`SpellModel.defender`
+        # `pool`): a cap on what one catch takes (`worth_of` `hp`) is then each build's own.
+        if isinstance(poise, (int, float)):
+            poise = [(float(poise), 1.0)]
+        total = float(sum(e[1] for e in poise))
+        merged, self.pool_hp = {}, {}
+        for e in poise:
+            if e[1] <= 0:
+                continue
+            p, w = float(e[0]), float(e[1]) / total
+            merged[p] = merged.get(p, 0.0) + w
+            if len(e) > 2 and e[2] is not None:
+                self.pool_hp.setdefault(p, []).append((float(e[2]), w))
+        self.pool = sorted(merged.items())
+        if self.pool_hp and len(self.pool_hp) != len(self.pool):
+            raise ValueError('CaughtModel: a pool gives the health of some builds only')
+        self.poise = self.pool[0][0] if len(self.pool) == 1 else None
         self.value = value
         self.lists = [g['CAUGHT']['lists'] for g in self.geoms]
         # Each geometry's hit priority record (`HPR`: (key, priority, created)) or None.
         self.hpr = [g.get('HPR') for g in self.geoms]
+        # A chain part (`split_chains`): the frame it shares with the next part, which is the next
+        # part's (inf for none), and its share of the escape's score (the whole geometry's lists'
+        # mean, `_best`): 1 / its chain's parts.
+        self.ends = [g['CHAIN'][3] if g.get('CHAIN') is not None else math.inf for g in self.geoms]
+        self.share = [1.0 / g['CHAIN'][1] if g.get('CHAIN') is not None else 1.0 for g in self.geoms]
         # Every geometry's samples, each sorted by time, end to end: one touch test serves them all.
         cols = {k: [] for k in ('T', 'X', 'Z', 'R', 'PK', 'TL')}
         self.bounds, at = [], 0
-        for g in self.geoms:
+        # Per geometry, per list: which of its time-sorted samples are the list's own (`rows` over
+        # the geometry's `B`), None for all of them, and the span of real frames they cover.
+        self.masks, self.spans = [], []
+        for g, ls in zip(self.geoms, self.lists):
             o = np.argsort(g['T'], kind='stable')
             for k in ('T', 'X', 'Z', 'R', 'PK'):
                 cols[k].append(np.asarray(g[k], float)[o])
             cols['TL'].append(np.asarray(g['TL'] if 'TL' in g else g['T'], float)[o])
             self.bounds.append((at, at + len(o)))
             at += len(o)
+            B = np.asarray(g['B'])[o] if 'B' in g and len(g['B']) == len(o) else None
+            T = np.asarray(g['T'], float)[o]
+            ms = [None if B is None or not l.get('rows') else np.isin(B, l['rows']) for l in ls]
+            ms = [None if m is None or m.all() or not m.any() else m for m in ms]
+            self.masks.append(ms)
+            self.spans.append(None if all(m is None for m in ms) else
+                              [(float(T[0]), float(T[-1])) if m is None else (float(T[m][0]), float(T[m][-1]))
+                               for m in ms])
         for k, v in cols.items():
             setattr(self, k, np.concatenate(v) if v else np.zeros(0))
         self.any_tl = any('TL' in g for g in self.geoms)
+        # The attacker's facing as he tracks the caught defender (version 27, `_facing`'s rule): per
+        # clip turn profile, the samples that read it and the frame each takes its facing from
+        # (`_turn_when`); a geometry with no profile reads none.
+        self.turns = []
+        groups = {}
+        for gi, g in enumerate(self.geoms):
+            tr = g.get('TURN')
+            if tr is None:
+                continue
+            k = (tr['sig'], float(tr['t0']))
+            if k not in groups:
+                groups[k] = len(self.turns)
+                self.turns.append((tr, [], []))
+            a, b = self.bounds[gi]
+            o = np.argsort(g['T'], kind='stable')
+            self.turns[groups[k]][1].append(np.arange(a, b))
+            self.turns[groups[k]][2].append(np.asarray(_turn_when(g, o), float))
+        self.turns = [(tr, np.concatenate(ix), np.concatenate(tq)) for tr, ix, tq in self.turns]
         self.push = _pose()[1].PUSH_CAPSULE_RADIUS
         self.mps = 1.0 / _neutral().frames_per_metre()
         self.escapes = _escapes()
+        # Per sample, whether its geometry is `AIR` (a jump's invincibility holds only against such
+        # a hit, `_catches`). With one, the jump is an escape too, as it is a dodge
+        # (`sequence_outcome`'s families): in place, then running back from its landing (version 21).
+        self.AIRS = np.concatenate([np.full(len(g['T']), bool(g.get('AIR'))) for g in self.geoms]) \
+            if self.geoms else np.zeros(0, bool)
+        if self.AIRS.any():
+            self.escapes = self.escapes + [('jump', jump_motion(), ESCAPE_RUNS[0])]
         self._roll = {}
-        for _, roll in self.escapes:
+        for _, roll, _ in self.escapes:
             if roll is not None:
-                path = np.array([p[1] for p in roll['path']], float)
-                self._roll[id(roll)] = (path, np.arange(len(path), dtype=float),
-                                        min(float(roll['dodge'] or len(path) - 1), len(path) - 1))
+                path = np.array(roll['path'], float)
+                # He runs on from the roll's move cancel (f22 against its dodge cancel f21): the
+                # behavior script starts a run only through the move-cancel check (env 2000,
+                # `VERIFIED`, `punish_lead`); until version 21 he ran from the dodge cancel.
+                go = max(float(roll['move']), float(roll['dodge'] or 0.0)) if roll.get('move') is not None \
+                    else float(roll['dodge'] or len(path) - 1)
+                self._roll[id(roll)] = (path[:, 0], path[:, 1], np.arange(len(path), dtype=float),
+                                        min(go, len(path) - 1))
         # One geometry whose every list hits once: whoever it catches takes it all, nothing later.
-        self.trivial = len(self.geoms) == 1 and all(l['n'] == 1 for l in self.lists[0])
+        self.trivial = len(self.geoms) == 1 and all(l['n'] == 1 for l in self.lists[0]) and self.spans[0] is None
         self._landed = {}
+        self._mixed = {}
         self._weights = {}
         self._wmemo = {}
+        self._tc = {}                         # (dist, h) -> the frame geometry h catches him standing
+        self._dodges = {}                     # anim -> the dodge move a `dodge_key` names
 
     @staticmethod
     def of(geo, poise, value=None):
@@ -7674,124 +11434,498 @@ class CaughtModel:
                                         for g in gs])
         return self._weights[key][1]
 
-    def worth_of(self, dist, h, value=None, geo=None):
-        """What lands on him when geometry `h` catches him at `dist`, from {frame: worth}. Kept
-        for this model's own `value` and `geo` (`with_value` gives a copy its own)."""
+    def worth_of(self, dist, h, value=None, geo=None, floors=None, hp=None, dodge=None):
+        """What lands on him when geometry `h` catches him at `dist`, from {frame: worth}, held by
+        `floors` (`held`), capped at his health when `hp` is given: each pool build's own when the
+        pool carries it (version 21), else `hp` (`hp_cap`: a number, or [(health, share)]). The cap
+        is taken per run of pool poises that play alike, before they are mixed: one defender takes
+        at most his own health. Kept for this model's own `value` and `geo` (`with_value` gives a
+        copy its own). `dodge` (move, its start, the catch frame), version 25: `h` catches him in
+        that dodge, which holds him in place of `floors` (`dodge_key`)."""
         own = value is None and geo is None
-        key = (round(dist, 2), h)
+        held = self.dodge_key(*dodge) if dodge is not None else self.held(dist, h, floors)
+        capk = None if hp is None else ('pool' if self.pool_hp else
+                                        (tuple(map(tuple, hp)) if isinstance(hp, (list, tuple)) else float(hp)))
+        key = (round(dist, 2), h, held, capk)
         if own and key in self._wmemo:
             return self._wmemo[key]
         value = self.value if value is None else value
-        row = self.row(dist, h)
+        weights = self.weights(geo)
         s = 0.0
-        for g, ws in enumerate(self.weights(geo)):
-            v = value.get(self.frames[g], 0.0)
-            for li, w in enumerate(ws):
-                s += row[g][li] * w * v
+        for rows, w_run, ps, _ in self.runs(dist, h, held):
+            x = 0.0
+            for g, ws in enumerate(weights):
+                v = value.get(self.frames[g], 0.0)
+                for li, w in enumerate(ws):
+                    x += rows[g][li] * w * v
+            if hp is None:
+                s += w_run * x
+            elif self.pool_hp:
+                s += sum(w * min(x, c) for p in ps for c, w in self.pool_hp[p])
+            else:
+                s += w_run * hp_cap(x, hp)
         if own:
             self._wmemo[key] = s
         return s
 
-    def worth(self, dist, value=None, geo=None):
-        """`worth_of` for every catching geometry, in `_bursts` order."""
-        return [self.worth_of(dist, h, value, geo) for h in range(len(self.geoms))]
+    def escape_table(self, dist, h, value=None, geo=None, floors=None, hp=None, dodge=None):
+        """Per pool poise (`pool` order) and escape (`escapes` order) when geometry `h` catches him
+        at `dist` held by `floors`, as arrays [poise, escape]: the frame that escape first starts
+        (`_play` 'te', inf when he never leaves), its score (the share of the hits that land, which
+        he takes the least of), and what lands, times that poise's share and capped as `worth_of`
+        caps it. Summing, per poise, the entry of the escape `worth_of` takes (the least score, the
+        first of equals) gives `worth_of`. What an attacker who sees him leave reads
+        (`FollowupModel.mixup`'s stand row, version 25; its roll rows' catches by the opening,
+        version 26). `dodge` as `worth_of`'s: the catch is in that dodge of his."""
+        import numpy as np
+        held = self.dodge_key(*dodge) if dodge is not None else self.held(dist, h, floors)
+        value = self.value if value is None else value
+        # Kept per what it reads (`ESCAPE_TABLES`): the stand row asks again for every situation
+        # whose floors hold him alike. The tables are read, never written, by their callers.
+        capk = None if hp is None else ('pool' if self.pool_hp else
+                                        (tuple(map(tuple, hp)) if isinstance(hp, (list, tuple)) else float(hp)))
+        memos = self.__dict__.setdefault('_escapes', {})
+        vk = (id(value), id(geo))
+        held_vg = memos.get(vk)
+        if held_vg is None or held_vg[0] is not value or held_vg[1] is not geo:
+            if len(memos) >= ESCAPE_VALUES:
+                memos.clear()
+            held_vg = memos[vk] = (value, geo, {})
+        memo = held_vg[2]
+        mk = (dist, h, held, capk)
+        got = memo.get(mk)
+        if got is None:
+            if len(memo) >= ESCAPE_TABLES:
+                memo.clear()
+            got = memo[mk] = self._escape_table(dist, h, value, geo, held, hp)
+        return got
 
-    def lazy(self, dist, start, count, cap=None):
+    def _cap_sum(self, p, x):
+        """`sum(w * min(x, c) for c, w in self.pool_hp[p])`, kept per (p, x, the type of x): the same
+        sum of the same terms in the same order (`_caps`). The type is in the key because `sum` adds
+        Python floats compensated and a float subclass (numpy's) plainly, so equal values of the two
+        types may sum to different bits."""
+        caps = self.__dict__.setdefault('_caps', {})
+        k = (p, x, type(x))
+        got = caps.get(k)
+        if got is None:
+            if len(caps) >= CAP_SUMS:
+                caps.clear()
+            got = caps[k] = sum(w * min(x, c) for c, w in self.pool_hp[p])
+        return got
+
+    def _escape_table(self, dist, h, value, geo, held, hp):
+        """`escape_table` read afresh."""
+        import numpy as np
+        weights = self.weights(geo)
+        runs = self.runs(dist, h, held)
+        E = len(runs[0][3])
+        P = len(self.pool)
+        TE, S, C = np.full((P, E), math.inf), np.zeros((P, E)), np.zeros((P, E))
+        at = {p: i for i, (p, _) in enumerate(self.pool)}
+        for _, _, ps, alls in runs:
+            for e, (te, score, rows) in enumerate(alls):
+                x = 0.0
+                for g, ws in enumerate(weights):
+                    v = value.get(self.frames[g], 0.0)
+                    for li, w in enumerate(ws):
+                        x += rows[g][li] * w * v
+                for p in ps:
+                    i = at[p]
+                    wp = self.pool[i][1]
+                    TE[i, e], S[i, e] = te, score
+                    if hp is None:
+                        C[i, e] = wp * x
+                    elif self.pool_hp:
+                        C[i, e] = self._cap_sum(p, x)
+                    else:
+                        C[i, e] = wp * hp_cap(x, hp)
+        return TE, S, C
+
+    def worth(self, dist, value=None, geo=None, floors=None):
+        """`worth_of` for every catching geometry, in `_bursts` order."""
+        return [self.worth_of(dist, h, value, geo, floors) for h in range(len(self.geoms))]
+
+    def lazy(self, dist, start, count, cap=None, floors=None):
         """`worth_of` for geometries `start` .. `start + count - 1` as a sequence that plays each
         catch only when it is read (what `reaction_outcome` reads of a burst's `hit_value`), each
-        capped at `cap`."""
-        return _LazyWorth(self, dist, start, count, cap)
+        capped at `cap`, held by `floors`."""
+        return _LazyWorth(self, dist, start, count, cap, floors)
+
+    # -- his whiff's recovery ----------------------------------------------------------------
+
+    def catch_at(self, dist, h):
+        """The real frame geometry `h` first touches him standing at `dist` (rounded to 0.01 m),
+        where `_play` starts his catch: its first sample's frame when it never touches him there."""
+        key = (round(dist, 2), h)
+        if key not in self._tc:
+            first = _catches_each([self.geoms[h]], key[0], None, [0.0])[0][0]
+            self._tc[key] = float(first) if math.isfinite(first) else float(self.geoms[h]['T'].min())
+        return self._tc[key]
+
+    def held(self, dist, h, floors):
+        """(dodge floor, move floor) of `floors` (the situation's, on the attack's clock: None for
+        none) that hold him when geometry `h` catches him at `dist`, each rounded to half a frame as
+        the situations are, and None where it comes no later than the catch (every escape starts
+        there or after, so it binds nothing); None when neither holds him. Plays and worths are kept
+        under it, so every pair of floors that holds him alike shares one play."""
+        if not floors or self.trivial:
+            return None
+        tc = self.catch_at(dist, h)
+        out = tuple(None if f is None or round(f * 2) / 2 <= tc + 1e-9 else round(f * 2) / 2 for f in floors)
+        return None if out == (None, None) else out
+
+    def dodge_key(self, move, start, catch):
+        """The `held` of a defender caught in his own dodge (version 25; the comment above
+        `CaughtModel`): ('dodge', the move's anim, its start, the catch frame), the move kept so the
+        play can read it. A start on the update grid and a catch on a sample's frame name one play."""
+        self._dodges[move['anim']] = move
+        return ('dodge', move['anim'], float(start), float(catch))
+
+    def held_run(self, dist, run):
+        """`run` (his move floor) rounded to half a frame where it can hold him at `dist`: after the
+        frame some geometry catches him standing there (`held`); else None, which plays as any
+        move floor at or before every catch. An outcome that reads no other move floor keys on it."""
+        if run is None or self.trivial:
+            return None
+        r = round(run * 2) / 2
+        return r if any(r > self.catch_at(dist, h) + 1e-9 for h in range(len(self.geoms))) else None
 
     # -- the play ----------------------------------------------------------------------------
 
-    def row(self, dist, h):
+    def row(self, dist, h, held=None):
         """[per geometry: [per list: share of its hits that land]] when geometry `h` catches him at
-        `dist` (rounded to 0.01 m), the better of his two escapes. Cached."""
+        `dist` (rounded to 0.01 m), held by `held` (`held`'s output), the best of his escapes
+        (`_escapes`). Cached."""
         key = round(dist, 2)
-        rows = self._landed.setdefault(key, {})
+        rows = self._mixed.setdefault((key, held), {})
         if h not in rows:
-            rows[h] = [[1.0] * len(self.lists[0])] if self.trivial else self._best(h, key)
+            out = None
+            for got, w, _, _ in self.runs(key, h, held):
+                out = [[w * x for x in r] for r in got] if out is None else \
+                    [[a + w * x for a, x in zip(ra, r)] for ra, r in zip(out, got)]
+            rows[h] = out
         return rows[h]
 
-    def landed(self, dist):
-        """`row` of every catching geometry."""
-        return [self.row(dist, h) for h in range(len(self.geoms))]
+    def runs(self, dist, h, held=None):
+        """[(`row` at one run of pool poises that play alike, its share, its poises, every escape's
+        (first escape start, score, row) there)] (`_best`). Cached."""
+        key = round(dist, 2)
+        rows = self._landed.setdefault((key, held), {})
+        if h not in rows:
+            one = [[1.0] * len(self.lists[0])]
+            rows[h] = [(one, 1.0, [p for p, _ in self.pool], [(math.inf, 1.0, one)])] if self.trivial \
+                else self._best(h, key, held)
+        return rows[h]
 
-    def _best(self, h, dist):
-        best = None
-        for name, roll in self.escapes:
-            got = self._play(h, dist, name, roll)
-            score = sum(sum(x) / len(x) for x in got if x)
+    def landed(self, dist, floors=None):
+        """`row` of every catching geometry, held by `floors`."""
+        return [self.row(dist, h, self.held(dist, h, floors)) for h in range(len(self.geoms))]
+
+    def _best(self, h, dist, held=None):
+        """`runs`' plays: per poise of the pool, the best of his escapes, as [(row, share, poises,
+        every escape's (first escape start, score, row))]. Exact with one play per run of pool poises
+        that play alike: a play compares only the poise damage it has dealt (`_play`'s `bounds`), so
+        every poise in (the largest it dealt that did not break him, the smallest that did] plays
+        the same, every escape's play included, and the next play starts at the first poise of the
+        pool past it.
+
+        Its plays share their touch tests (`_drawn`): every escape and every poise of one catch
+        starts on the same path, and a poise that breaks him no sooner than another plays the same
+        path as far as it does."""
+        self._drawn = {}
+        try:
+            if len(self.pool) == 1:
+                got, _, _, alls = self._best_at(h, dist, held, self.pool[0][0])
+                return [(got, 1.0, [self.pool[0][0]], alls)]
+            out, i, P = [], 0, self.pool
+            while i < len(P):
+                got, _, hi, alls = self._best_at(h, dist, held, P[i][0])
+                w, ps = 0.0, []
+                while i < len(P) and P[i][0] <= hi:
+                    w += P[i][1]
+                    ps.append(P[i][0])
+                    i += 1
+                out.append((got, w, ps, alls))
+            return out
+        finally:
+            self._drawn = None
+
+    def _touch_drawn(self, segs, lo=None):
+        """`_touch_all(segs, lo)`, kept for the plays of one `_best` call (`_drawn`): a path is named
+        by what `_pos` and `_touch_all` read of each segment (its start, place, kind and motion; the
+        run it is taken on only for a run or a roll, the kinds whose motion reads it). Read, never
+        written, by `_play`. 2026-11-18: one catch of Golden Land then R2 at frame 68 was played 4
+        times per pool poise run, each play's first path the same."""
+        drawn = self.__dict__.get('_drawn')
+        if drawn is None:
+            return self._touch_all(segs, lo)
+        key = (lo,) + tuple((s[0], s[1], s[2], s[3], id(s[4]), s[5] if s[3] in ('run', 'roll') else None)
+                            for s in segs)
+        got = drawn.get(key)
+        if got is None:
+            got = drawn[key] = self._touch_all(segs, lo)
+        return got
+
+    def _best_at(self, h, dist, held, poise, stun=None):
+        """(the best of his escapes holding with `poise`, and the span of poises every escape's play
+        is the same at: (lo, hi], and per escape of `escapes` (the frame it first starts, its score,
+        its row)). An escape's score is the share of the attack's hits that land, the parts of one
+        chain weighed as one geometry: he takes the least (`INFERRED`). `stun` as `_play`'s."""
+        best, bounds, alls = None, [-math.inf, math.inf], []
+        rows = self.__dict__.setdefault('_rows', {})
+        for name, roll, run in self.escapes:
+            info = {}
+            got = self._play(h, dist, name, roll, run, held, poise, bounds, info, stun)
+            score = sum(sum(x) / len(x) * s for x, s in zip(got, self.share) if x)
+            # Kept as one tuple per distinct row (`_rows`): `runs` keeps every play's rows, and the
+            # plays of one attack land a few shares in many ways alike. Read, never written.
+            got = tuple(tuple(r) for r in got)
+            got = rows.setdefault(got, got)
+            alls.append((info.get('te', math.inf), score, got))
             if best is None or score < best[0] - 1e-12:
                 best = (score, got)
-        return best[1]
+        return best[1], bounds[0], bounds[1], alls
 
-    def _pos(self, segs, T):
-        """(his distance ahead of the attacker's start, immune) at real frames `T` (an array) on
-        trajectory `segs` [(t0, base, kind, data)], `kind` 'stand', 'hold' (data: the track),
-        'run' or 'roll' (data: the roll motion)."""
+    def _pos(self, segs, T, air=None):
+        """(his distance ahead of the attacker's start, his offset to the side, immune) at real
+        frames `T` (an array) on trajectory `segs` [(t0, base x, base z, kind, data, run)], `kind`
+        'stand', 'hold' (data: the track, straight back), 'run' or 'roll' (data: the roll or jump
+        motion), `run` the (x, z) he runs on in. A jump's invincibility (`air`) holds only where
+        `air` (per element of `T`: its geometry is `AIR`) says so, `_catches`' rule."""
         import numpy as np
         T = np.asarray(T, float)
         starts = np.array([s[0] for s in segs], float)
         idx = np.clip(np.searchsorted(starts, T, side='right') - 1, 0, len(segs) - 1)
-        z = np.zeros(T.shape)
+        z, x = np.zeros(T.shape), np.zeros(T.shape)
         immune = np.zeros(T.shape, bool)
-        for j, (t0, base, kind, data) in enumerate(segs):
+        for j, (t0, bx, bz, kind, data, run) in enumerate(segs):
             m = idx == j
             if not m.any():
                 continue
             u = np.maximum(T[m] - t0, 0.0)
-            z[m] = base + self._along(kind, data, u)
-            if kind == 'roll':
-                immune[m] = u < data['iframes']
-        return z, immune
+            dx, dz = self._along(kind, data, u, run)
+            z[m], x[m] = bz + dz, bx + dx
+            if kind in ('roll', 'dodge'):
+                im = u < data['iframes']
+                if data.get('air'):
+                    im = im & (np.asarray(air, bool)[m] if air is not None else False)
+                immune[m] = im
+        return z, x, immune
 
-    def _along(self, kind, data, u):
+    def _t_lists(self):
+        """Each geometry's sample times (`bounds` slices of `T`, in time order) as a list of floats,
+        made once: what `_play` bisects."""
+        got = self.__dict__.get('_tl')
+        if got is None:
+            got = self._tl = [self.T[a:b].tolist() for a, b in self.bounds]
+        return got
+
+    def _at1(self, segs, T):
+        """(his offset to the side, his distance ahead) at one real frame `T` on `segs`, as floats:
+        `_pos(segs, [T])`'s, each step the same operation on the one element. The segment is
+        `searchsorted`'s (`bisect_right` is its binary search, step for step), `np.maximum` and
+        `np.minimum` keep the first of equals as Python's `max` and `min` do (and a NaN, which no
+        frame here is), and an interpolation is `np.interp` itself. Why (2026-11-21,
+        .worktrees/haima): the play of a caught defender (`_play`) reads where he is at each hit
+        that lands, one frame at a time, and those one-element `_pos` calls were 31% of Crystal
+        Barrage's set (py-spy, target/haima/prof-cb.txt)."""
+        import bisect
+        import numpy as np
+        T = float(T)
+        j = min(max(bisect.bisect_right([s[0] for s in segs], T) - 1, 0), len(segs) - 1)
+        t0, bx, bz, kind, data, run = segs[j]
+        u = T - t0
+        if not (u >= 0.0 or u != u):
+            u = 0.0
+        if kind == 'stand':
+            dx = dz = 0.0
+        elif kind == 'hold':
+            dx, dz = 0.0, np.interp(u, np.arange(len(data)), data)
+        elif kind == 'run':
+            dx, dz = u * self.mps * run[0], u * self.mps * run[1]
+        elif kind == 'dodge':
+            path = np.asarray(data['path'], float)
+            k = min(max(int(np.floor(u)), 0), len(path) - 1)
+            dx, dz = path[k, 0], path[k, 1]
+        else:
+            px, pz, frames, end = self._roll[id(data)]
+            on = u - end
+            if not (on >= 0.0 or on != on):
+                on = 0.0
+            on = on * self.mps
+            ue = u if (u <= end or u != u) else end
+            dx, dz = np.interp(ue, frames, px) + on * run[0], np.interp(ue, frames, pz) + on * run[1]
+        return float(bx + dx), float(bz + dz)
+
+    def _along(self, kind, data, u, run):
+        """(sideways, back) metres moved `u` real frames into a segment of `kind`."""
         import numpy as np
         if kind == 'stand':
-            return np.zeros(u.shape)
+            return np.zeros(u.shape), np.zeros(u.shape)
         if kind == 'hold':
-            return np.interp(u, np.arange(len(data)), data)
+            return np.zeros(u.shape), np.interp(u, np.arange(len(data)), data)
         if kind == 'run':
-            return u * self.mps
-        path, frames, end = self._roll[id(data)]
-        rolled = np.interp(np.minimum(u, end), frames, path)
-        return rolled + np.maximum(u - end, 0.0) * self.mps
+            return u * self.mps * run[0], u * self.mps * run[1]
+        if kind == 'dodge':
+            # The dodge he was caught in (version 25): its root motion read per real frame as
+            # `_catches` read it when it found the catch (`path[floor(u)]`), still at its last
+            # frame; his escape replaces it from its cancels (`_play`).
+            path = np.asarray(data['path'], float)
+            k = np.clip(np.floor(u).astype(int), 0, len(path) - 1)
+            return path[k, 0], path[k, 1]
+        px, pz, frames, end = self._roll[id(data)]
+        on = np.maximum(u - end, 0.0) * self.mps
+        return (np.interp(np.minimum(u, end), frames, px) + on * run[0],
+                np.interp(np.minimum(u, end), frames, pz) + on * run[1])
 
-    def _touch_all(self, segs):
+    def _touch_all(self, segs, lo=None):
         """Per sample of every geometry (`bounds` slices, each sorted by time): whether it touches
-        him on `segs`, held back by his body as `_catches` holds it."""
+        him on `segs`, held back by his body as `_catches` holds it. With `lo`, only the samples at
+        or after real frame `lo` are tested, the others read False (`_play` reads none before its
+        catch less `CAUGHT_TICK_TOL`): every test is the sample's own, so those tested read the same."""
         import numpy as np
-        z, immune = self._pos(segs, self.T)
-        zl = self._pos(segs, self.TL)[0] if self.any_tl else z
-        held = np.maximum(0.0, self.PK - (zl - 2 * self.push))
-        return ~immune & (np.hypot(self.X, self.Z + held + z) < self.R)
+        if lo is None:
+            sel, T, AIRS, TL, PK, X, Z, R = None, self.T, self.AIRS, self.TL, self.PK, self.X, self.Z, self.R
+        else:
+            sel = np.nonzero(self.T >= lo)[0]
+            T, AIRS, TL, PK, X, Z, R = (a[sel] for a in (self.T, self.AIRS, self.TL, self.PK, self.X, self.Z, self.R))
+        z, x, immune = self._pos(segs, T, AIRS)
+        if self.any_tl:
+            zl, xl, _ = self._pos(segs, TL)
+        else:
+            zl, xl = z, x
+        if self.turns and any(s[1] != 0.0 or s[3] not in ('stand', 'hold') for s in segs):
+            # Each sample read in the facing the attacker had when he made it, tracking him along
+            # this path (version 27; until then a caught defender's later bursts were read on the
+            # catching burst's line).
+            x, z, xl, zl = x.copy(), z.copy(), xl.copy(), zl.copy()
+            if sel is not None:
+                at = np.full(len(self.T), -1, np.int64)
+                at[sel] = np.arange(len(sel))
+            for tr, ix, tq in self.turns:
+                n = int(math.ceil(max(0.0, float(tq.max()) - float(tr['t0'])) / DODGE_STEP)) + 1
+                tg = float(tr['t0']) + DODGE_STEP * np.arange(n)
+                pz, px, _ = self._pos(segs, tg)
+                if not px.any():
+                    continue
+                ft = _turn_track(tr, px[None, :], pz[None, :], n)
+                ji = _turn_index(tr, tq, n)
+                th, ddx, ddz = ft[0][0][ji], ft[1][0][ji], ft[2][0][ji]
+                if not (th.any() or ddx.any() or ddz.any()):
+                    continue
+                if sel is None:
+                    jx = ix
+                else:
+                    keep = at[ix] >= 0
+                    jx, th, ddx, ddz = at[ix][keep], th[keep], ddx[keep], ddz[keep]
+                x[jx], z[jx] = _turn_apply(x[jx], z[jx], th, PK[jx], ddx, ddz)
+                xl[jx], zl[jx] = _turn_apply(xl[jx], zl[jx], th, PK[jx], ddx, ddz)
+        held = np.maximum(0.0, PK - (zl - 2 * self.push))
+        got = ~immune & (np.hypot(X - x, Z + held + z) < R)
+        if sel is None:
+            return got
+        out = np.zeros(len(self.T), bool)
+        out[sel] = got
+        return out
 
     @staticmethod
     def _escape_at(br, count, name):
         roll = br['roll'][max(1, min(count, 4)) - 1] if br['roll'] else None
         move = br['move']
-        first, second = (roll, move) if name == 'roll' else (move, roll)
+        # A jump leaves through the roll's gate (`INFERRED`: `ExecEvasion` takes the jump with the
+        # roll and the backstep, which all clear DamageCount, frame-advantage.md section 3).
+        first, second = (roll, move) if name in ('roll', 'jump') else (move, roll)
         for v in (first, second, br.get('len')):
             if v is not None:
                 return float(v)
         return float(CAUGHT_FRAMES)
 
-    def _play(self, h, dist, name, roll):
+    def _live(self, g, tc):
+        """(the lists of geometry `g` that land when it catches him at real frame `tc`, those whose
+        own bullets have all ended by then and so never land). A list's bullets are live when
+        their span holds `tc` (the frame a bullet ends on is its child's first, so the later one
+        is taken there); none such, the ones within `CAUGHT_TICK_TOL` of it, else the nearest (a
+        homing tree flown again after him can catch a few frames off its stored samples, whose
+        times are the flight against him standing). Every list when they have no `rows`."""
+        spans = self.spans[g]
+        every = list(range(len(self.lists[g])))
+        if spans is None:
+            return every, []
+        live = [li for li in every if spans[li][0] - 1e-9 <= tc < spans[li][1]]
+        if not live:
+            live = [li for li in every if spans[li][0] - CAUGHT_TICK_TOL <= tc <= spans[li][1] + CAUGHT_TICK_TOL]
+        if not live:
+            gap = [max(spans[li][0] - tc, tc - spans[li][1], 0.0) for li in every]
+            live = [li for li in every if gap[li] <= min(gap) + 1e-9]
+        gone = [li for li in every if li not in live and spans[li][1] < tc - CAUGHT_TICK_TOL]
+        return live, gone
+
+    def _play(self, h, dist, name, roll, run=ESCAPE_RUNS[0], held=None, poise=None, bounds=None, info=None,
+              stun=None):
         """[per geometry: [per list: share of its hits that land]] when geometry `h` catches him at
-        `dist` and he leaves by escape `name` (rules above)."""
+        `dist` and he leaves by escape `name` (rules above), `roll` its roll motion, running on
+        along `run` (`_escapes`), his whiff's recovery holding him to `held` (`held`: its dodge
+        floor for a roll, its move floor for a run; None, nothing holds him), his poise `poise`
+        (None: the pool's one). `bounds` [lo, hi], when given, is narrowed to the poises this play
+        takes alike: above every cumulative poise damage it dealt that did not break him, and at or
+        below every one that did. `info`, a dict, is given 'te': the frame his escape first starts
+        (the attacker can see it: `FollowupModel.mixup`'s stand row).
+
+        `held` a `dodge_key` (version 25): `h` catches him at that frame in his own dodge of that
+        move from that start, so he is where its root motion has carried him and moves on with it
+        until he escapes; its dodge cancel holds a roll (or jump) out and its move cancel a run out,
+        as the whiff's floors do (the behavior script starts a walk or a run only through the
+        move-cancel check, `punish_lead`), and a reaction that locks him ends the dodge as it ends a
+        whiff's recovery. Until then a defender caught mid-roll was played as one who stood at the
+        distance (`INFERRED` there).
+
+        `stun` (version 32), when given: {'land': f(gauges, g, lis, T, br, l)} that takes every
+        landing (its geometry, lists, frame, its own reaction branch and the list it reads poise
+        from) and gives the branch to play, `gauges` a dict kept for this play
+        (`er-mechanics-spells.StatusCaught`: a bleed or frost proc raises a held hit to
+        `stun_branch`). None plays as before."""
+        import bisect
         import numpy as np
+        poise = self.poise if poise is None else poise
+        gauges = {} if stun is not None else None
         G = len(self.geoms)
+        Tl = self._t_lists()
         got = [[0] * len(ls) for ls in self.lists]
-        first = _catches_each([self.geoms[h]], dist, None, [0.0])[0][0]
-        tc = float(first) if math.isfinite(first) else float(self.geoms[h]['T'].min())
-        segs = [(-math.inf, float(dist), 'stand', None)]
-        state = {'cum': 0.0, 'count': 0, 'hold_t0': None, 'hold_update': None}
+        segs = [(-math.inf, 0.0, float(dist), 'stand', None, run)]
+        if held is not None and isinstance(held[0], str):
+            m = self._dodges[held[1]]
+            s0, tc = held[2], held[3]
+            trk = m.get('track')
+            if trk:
+                # A dodge out of an earlier one (`carried`, version 26): the track he was carried
+                # on, then this dodge from where it had him at its start.
+                for t0, ox, oz, sm in trk:
+                    segs.append((t0, ox, float(dist) + oz, 'stand' if sm is STILL else 'dodge',
+                                 None if sm is STILL else sm, run))
+                x0, z0, _ = track_at(trk, [float(s0)])
+                segs.append((s0, float(x0[0]), float(dist) + float(z0[0]), 'dodge', m['base'], run))
+            else:
+                segs.append((s0, 0.0, float(dist), 'dodge', m, run))
+            end = float(m['dodge']) if m['dodge'] is not None else float(len(m['path']))
+            go = max(float(m['move']), end) if m.get('move') is not None else end
+            floor = s0 + (end if name in ('roll', 'jump') else go)
+        else:
+            tc = self.catch_at(dist, h)
+            # The real frame his whiff's recovery lets this escape start (None: it does not hold
+            # him); a reaction that locks him ends the recovery (rules above).
+            floor = None if held is None else held[0 if name in ('roll', 'jump') else 1]
+        state = {'cum': 0.0, 'count': 0, 'hold_t0': None, 'hold_update': None, 'floor': floor}
         started = {}                          # geometry -> its first hit's real frame
         nxt = {}                              # (geometry, list) -> next tick index
 
+        def at_(path, T):
+            return self._at1(path, T)
+
         def esc_seg(t0, base):
-            return (t0, base, 'roll', roll) if name == 'roll' else (t0, base, 'run', None)
+            if info is not None and 'te' not in info:
+                info['te'] = float(t0)
+            return (t0, *base, 'roll', roll, run) if name in ('roll', 'jump') else (t0, *base, 'run', None, run)
 
         def land(g, lis, T):
             nonlocal segs
@@ -7799,24 +11933,39 @@ class CaughtModel:
                 got[g][li] += 1
             l = max((self.lists[g][li] for li in lis), key=lambda l: l['poise'])
             state['cum'] += l['poise']
-            broken = state['cum'] > self.poise
+            # A hit that takes his toughness to 0 or below breaks it (`FUN_140486bf0`, `VERIFIED`,
+            # frame-advantage.md section 1; `er-mechanics-interrupt` reads `dealt >= poise` too).
+            # Until version 21 this was `>`, which kept a poise equal to the damage standing.
+            broken = state['cum'] >= poise
+            if bounds is not None:
+                if broken:
+                    bounds[1] = min(bounds[1], state['cum'])
+                else:
+                    bounds[0] = max(bounds[0], state['cum'])
             if broken:
                 state['cum'] = 0.0
             br = l['react'][broken]
-            at = self._pos(segs, [T])[0][0]
+            if stun is not None:
+                br = stun['land'](gauges, g, lis, T, br, l)
+            at = at_(segs, T)
             if br['locks']:
+                # A damage state: his whiff's recovery is over, its cancels release him now.
+                state['floor'] = None
                 again = state['hold_update'] is not None and _update(T / TAE_FPS) == state['hold_update']
                 if not again:
                     state['count'] = min(state['count'] + 1, 4) if br['counts'] else 1
                     state['hold_t0'], state['hold_update'] = T, _update(T / TAE_FPS)
                 t0 = state['hold_t0']
-                base = self._pos([s for s in segs if s[0] < t0] or segs[:1], [t0])[0][0] if again else at
-                segs = [s for s in segs if s[0] < t0] + [(t0, base, 'hold', br['track'])]
+                base = at_([s for s in segs if s[0] < t0] or segs[:1], t0) if again else at
+                segs = [s for s in segs if s[0] < t0] + [(t0, *base, 'hold', br['track'], run)]
                 te = T + self._escape_at(br, state['count'], name)
-                segs.append(esc_seg(te, float(self._pos(segs, [te])[0][0])))
-            elif segs[-1][2] == 'stand':
-                # Free at once: a flinch with nothing running leaves him to go.
-                segs = segs + [esc_seg(T, float(at))]
+                segs.append(esc_seg(te, at_(segs, te)))
+            elif segs[-1][3] in ('stand', 'dodge'):
+                # A flinch with nothing running leaves him to go: at once, or when his whiff's
+                # recovery (or the dodge he was caught in) lets this escape start, where it has
+                # left him by then.
+                t0 = T if state['floor'] is None else max(T, state['floor'])
+                segs = segs + [esc_seg(t0, at if segs[-1][3] == 'stand' else at_(segs, t0))]
 
         # Hit priority records (bd er-effects-rs-dnok, er-effects-rs-xb3i): record key -> (the
         # entry's priority, the launch holding it: `HPR`'s third field, shared by the geometries of
@@ -7838,28 +11987,54 @@ class CaughtModel:
             if r is not None and (r[0] not in owner or r[1] < owner[r[0]][0]):
                 owner[r[0]] = (r[1], r[2])
 
-        take(h)
-        land(h, list(range(len(self.lists[h]))), tc)
-        started[h] = tc
-        for li in range(len(self.lists[h])):
-            nxt[(h, li)] = 1
+        lstart = {}                           # (geometry, list) -> its first hit's real frame
+
+        def catch(g, c):
+            # Geometry `g` catches him at `c`: the lists whose bullets are live then land; those
+            # whose bullets have all ended never do; the rest wait for their own bullets (`_live`).
+            started[g] = c
+            take(g)
+            live, gone = self._live(g, c)
+            for li in range(len(self.lists[g])):
+                nxt[(g, li)] = 1 if li in live else self.lists[g][li]['n'] if li in gone else 0
+            for li in live:
+                lstart[(g, li)] = c
+            land(g, live, c)
+
+        catch(h, tc)
         now = tc
         tch, drawn = None, None
         for _ in range(sum(l['n'] for ls in self.lists for l in ls) + G + 1):
             if drawn is not segs:
                 # The path changed (a hit held or freed him): test every sample on the new one.
-                tch, drawn = self._touch_all(segs), segs
+                # Every read below is of a sample at or after `now` less `CAUGHT_TICK_TOL` (and 1e-9),
+                # and `now` never falls more than 1e-9 a step below the catch: the samples a frame
+                # and more before that are not tested.
+                tch, drawn = self._touch_drawn(segs, tc - CAUGHT_TICK_TOL - 1.0), segs
                 cs = np.concatenate([[0], np.cumsum(tch)])
+                own = {}
+                # Per sample, the first touching sample at or after it (`_next_true`), made when a
+                # read first asks for it; per (geometry, list) with own bullets, the same of those.
+                ntl, own_n = None, {}
             best = None
             for g in range(G):
                 a, b = self.bounds[g]
-                T = self.T[a:b]
                 if g not in started:
-                    if b == a or T[-1] < now - 1e-9 or blocked(g):
+                    if b == a or Tl[g][-1] < now - 1e-9 or blocked(g):
                         continue
-                    ok = tch[a:b] & (T >= now - 1e-9)
-                    if ok.any():
-                        c = float(T[np.argmax(ok)])
+                    # The first sample of `g` at or after `now` less 1e-9 that touches him: its
+                    # samples are in time order, so those at or after it start at `bisect_left`, and
+                    # the first touching one from there is `ntl`'s (until 2026-11-21 a mask of every
+                    # sample of `g` and its `argmax`, per geometry and per hit: 29% of Crystal
+                    # Barrage's set, py-spy, target/haima/prof-cb.txt). A chain part's later samples
+                    # are all past its end once one is.
+                    if ntl is None:
+                        ntl = _next_true(tch)
+                    j = int(ntl[a + bisect.bisect_left(Tl[g], now - 1e-9)])
+                    if j < b and (not self.ends[g] < math.inf or Tl[g][j - a] < self.ends[g] - 1e-9):
+                        # A chain part catches no later than the frame before the next part's first:
+                        # that frame is the next part's (`split_chains`).
+                        c = Tl[g][j - a]
                         # One frame's tie in one record: the lower priority, then the attack
                         # created first (DmgMan's list, reversed by each FUN_140527d40 pass).
                         r = self.hpr[g]
@@ -7872,15 +12047,40 @@ class CaughtModel:
                     continue
                 if not holds(g):
                     continue
+                T = self.T[a:b]
                 for li, l in enumerate(self.lists[g]):
                     k = nxt[(g, li)]
+                    m = self.masks[g][li]
+                    if k == 0:
+                        # Its own bullets come later: the first of them to touch him on his path (the
+                        # first at or after `now` less 1e-9, as above).
+                        i = bisect.bisect_left(Tl[g], now - 1e-9)
+                        if m is None:
+                            if ntl is None:
+                                ntl = _next_true(tch)
+                            j = int(ntl[a + i]) - a
+                        else:
+                            if (g, li) not in own_n:
+                                own_n[(g, li)] = _next_true(tch[a:b] & m)
+                            j = int(own_n[(g, li)][i])
+                        if j < b - a:
+                            c = Tl[g][j]
+                            if best is None or c < best[0] - 1e-9:
+                                best = (c, g, [li], 0)
+                        continue
                     if k >= l['n'] or l['rec'] <= 0:
                         continue
-                    taus = started[g] + l['rec'] * np.arange(k, l['n'])
+                    if m is None:
+                        cl = cs[a:b + 1] - cs[a]
+                    else:
+                        if (g, li) not in own:
+                            own[(g, li)] = np.concatenate([[0], np.cumsum(tch[a:b] & m)])
+                        cl = own[(g, li)]
+                    taus = lstart[(g, li)] + l['rec'] * np.arange(k, l['n'])
                     keep = taus >= now - 1e-9
-                    lo = a + np.searchsorted(T, taus - CAUGHT_TICK_TOL, side='left')
-                    hi = a + np.searchsorted(T, taus + CAUGHT_TICK_TOL, side='right')
-                    inside = keep & ((cs[hi] - cs[lo]) > 0)
+                    lo = np.searchsorted(T, taus - CAUGHT_TICK_TOL, side='left')
+                    hi = np.searchsorted(T, taus + CAUGHT_TICK_TOL, side='right')
+                    inside = keep & ((cl[hi] - cl[lo]) > 0)
                     if inside.any():
                         j = int(np.argmax(inside))
                         c = float(taus[j])
@@ -7890,25 +12090,37 @@ class CaughtModel:
                 break
             c, g = best[0], best[1]
             if g not in started:
-                started[g] = c
-                take(g)
-                for li in range(len(self.lists[g])):
-                    nxt[(g, li)] = 1
+                catch(g, c)
             else:
-                nxt[(g, best[2][0])] = best[3] + 1
-            # Ticks of other lists that fell before this one and were not inside are lost.
-            land(g, best[2], c)
+                li = best[2][0]
+                if nxt[(g, li)] == 0:
+                    lstart[(g, li)] = c
+                nxt[(g, li)] = best[3] + 1
+                # Ticks of other lists that fell before this one and were not inside are lost.
+                land(g, best[2], c)
             now = c
         return [[x / l['n'] for x, l in zip(row, ls)] for row, ls in zip(got, self.lists)]
+
+
+def _next_true(mask):
+    """Per index i of bool array `mask`, the first index at or after i where it holds (its length
+    where none does), plus one entry for i = its length: an int array one longer than `mask`."""
+    import numpy as np
+    n = len(mask)
+    idx = np.where(mask, np.arange(n), n)
+    return np.concatenate([np.minimum.accumulate(idx[::-1])[::-1], [n]]).astype(np.int64)
 
 
 class _LazyWorth:
     """`CaughtModel.lazy`: a burst's `hit_value`, each catch played and priced when first read."""
 
-    __slots__ = ('model', 'dist', 'start', 'count', 'cap', 'seen')
+    __slots__ = ('model', 'dist', 'start', 'count', 'cap', 'floors', 'seen')
+    #: It plays a catch made in his own dodge (`mid`): `reaction_outcome` asks for those.
+    plays_dodges = True
 
-    def __init__(self, model, dist, start, count, cap):
+    def __init__(self, model, dist, start, count, cap, floors=None):
         self.model, self.dist, self.start, self.count, self.cap = model, dist, start, count, cap
+        self.floors = floors
         self.seen = {}
 
     def __len__(self):
@@ -7920,9 +12132,18 @@ class _LazyWorth:
             raise IndexError(i)
         i %= self.count
         if i not in self.seen:
-            v = self.model.worth_of(self.dist, self.start + i)
-            self.seen[i] = v if self.cap is None else min(v, self.cap)
+            self.seen[i] = self.model.worth_of(self.dist, self.start + i, floors=self.floors, hp=self.cap)
         return self.seen[i]
+
+    def mid(self, i, move, start, catch):
+        """What lands when geometry `i` of the burst catches him at real frame `catch` in his own
+        dodge of `move` started at `start` (`CaughtModel.worth_of` `dodge`, version 25), capped
+        as the rest; played when first read."""
+        k = ('mid', int(i), move['anim'], float(start), float(catch))
+        if k not in self.seen:
+            self.seen[k] = self.model.worth_of(self.dist, self.start + int(i), hp=self.cap,
+                                               dodge=(move, start, catch))
+        return self.seen[k]
 
     def __iter__(self):
         return (self[i] for i in range(self.count))
@@ -7952,8 +12173,7 @@ def slot_reaction(contacts, distances, cue=0.0, my_roll=None, strikes=None, fall
     import numpy as np
     geoms = [contact_geometry(entries) for entries in (contacts or {}).values()]
     geoms = [g for g in geoms if g is not None]
-    advance = max((float(g['PK'][np.isfinite(g['PK'])].max()) for g in geoms
-                   if np.isfinite(g['PK']).any()), default=0.0)
+    advance = attack_advance(geoms)
     if not geoms and fallback and fallback[0] is not None:
         t0, active = fallback
         n = max(1, int(math.ceil((active or 1.0) / DODGE_STEP)))
@@ -9228,12 +13448,33 @@ def selftest():
               [m['iframes'] for m in rolls], [13.0] * 4, 'TAE a000 027110-027113 JumpTable 8')
         check('medium roll: R1 from frame 20, forward 3.65 m', (round(rolls[0]['ready']), rolls[0]['distance']),
               (20, 3.65), 'TAE a000 027110 + hkx root motion')
+        # He walks or runs no sooner than the move cancel (`punish_lead`): f22 in every direction.
+        # Forward at 9 m he still has 1.99 m to run at f22 (old rule: from f20, 2.08 m: 35.59); back
+        # at 3.5 m he presses at f22 + 26.60 (old 20 + 25.78); forward at 6 m he is in reach at f20.
+        kf = _neutral().frames_per_metre()
+        fwd9, back35, fwd6 = punish_lead(rolls[0], 9.0, 0.0, True), punish_lead(rolls[1], 3.5), punish_lead(rolls[0], 6.0)
+        x22, z22 = rolls[0]['path'][22]
+        check('medium roll: move cancel f22 in all four directions; a punish that has to run starts there, one in '
+              'reach at the R1 cancel f20, and without run he does not strike from out of reach',
+              ([round(m['move']) for m in rolls], fwd9[0], round(fwd9[1], 6), round(fwd9[0] + fwd9[1], 2),
+               round(back35[0] + back35[1], 2), fwd6, punish_lead(rolls[1], 3.5, 0.0, False)[2]),
+              ([22] * 4, rolls[0]['move'], round((math.hypot(x22, 9.0 + z22) - PUNISH_REACH_M) * kf, 6), 36.91, 48.6,
+               (rolls[0]['ready'], 0.0, True), False), 'TAE a000 027110-027113 (move JumpTable 11/78) + hkx')
         steps = skill_evasion(t, bstep, claymore)
         check("Bloodhound's Step: 040080-040083, i-frames f0-10, R1 from 16-17, 4.5-5.2 m",
               ([m['anim'] for m in steps], [m['iframes'] for m in steps], [round(m['ready']) for m in steps],
                [m['distance'] for m in steps]),
               ([f'a756_{a:06d}' for a in (40080, 40081, 40082, 40083)], [10.0] * 4, [17, 16, 16, 16],
                [5.24, 4.72, 4.49, 4.58]), 'TAE a756 + hkx root motion')
+        # The step travels on after its R1 opens: a punish it carries into reach before its move
+        # cancel is pressed on that frame, never at the move cancel (`punish_lead`).
+        sp = steps[0]
+        sp_frames = [f for f in range(int(sp['ready']) + 1, int(sp['move']))
+                     if math.hypot(sp['path'][f][0], 7.5 + sp['path'][f][1]) <= PUNISH_REACH_M]
+        check("Bloodhound's Step forward: move cancel f29 (R1 f17); at 7.5 m it carries him into reach on a frame "
+              "between, and he presses there",
+              (round(sp['move']), punish_lead(sp, 7.5)), (29, (float(sp_frames[0]), 0.0, True)) if sp_frames else None,
+              'TAE a756 040080 + hkx root motion')
         check('Quickstep: i-frames f0-9', [m['iframes'] for m in skill_evasion(t, t.find_arts('Quickstep'), claymore)],
               [9.0] * 4, 'TAE a755')
         dend = defensive_buff(t, endure, longsword)
@@ -9342,6 +13583,85 @@ def selftest():
               (homes({'homingAngle': 90, 'FollowType': 1}), homes({'homingAngle': 90, 'FollowType': 4}),
                homes({'homingAngle': -1, 'FollowType': 0})), (False, True, False),
               'OnUpdate 0x1403939d0: FollowType & 3 (BulletParam +0x9a) picks FUN_14039afc0')
+        # The Phalanx roots hover until their own search launches them (`SEARCH_ARM_S`), no sooner
+        # than 2.0 s; their blades and the rows without a search keep the old rules.
+        ph = [t.bullet.get(b) or {} for b in (10430000, 2300, 10430001, 2301)]
+        check('search_launched: the Glintblade Phalanx roots (spell 10430000, ash 2300: life -1, FollowType 1, '
+              'autoSearchNPCThinkID 1000100 / 1000102) hover 2.0 s (121 moves at 60 fps), their blades '
+              '(10430001, 2301: life 1 s, no search) fly their own life',
+              ([search_launched(r) for r in ph], [r.get('autoSearchNPCThinkID') for r in ph],
+               [flight_moves(r) for r in ph]),
+              ([True, True, False, False], [1000100, 1000102, 0, 0], [121, 121, 61, 61]),
+              'REGULATION Bullet; FUN_14039ee00 state list 0x142a25838, timer .data 0x143b15c20 = 2.0')
+        # The defender reads a search launch's timing from the launch, not the cast (`search_cues`,
+        # `burst_cue`): the caster picks it. Each tree's blades are read from the root's last move
+        # (121 moves at 60 fps), the roots from the cast.
+        sc_ = []
+        for root_ in (10430000, 2300):
+            ent_ = fly_shots(t, bullet_tree(t, root_))
+            sc_.append(sorted({(e[0]['bullet'], round(q, 6)) for e, q in zip(ent_, search_cues(t, ent_))}))
+        check('search_cues: the Glintblade Phalanx blades (10430001, 2301) are read from their root\'s search '
+              'launch, 121 / 60 s after the event; the roots from the cast',
+              sc_, [[(10430000, 0.0), (10430001, round(121 / BULLET_FPS, 6))],
+                    [(2300, 0.0), (2301, round(121 / BULLET_FPS, 6))]],
+              'fly_shots lineage; FUN_14039ee00 hover state, HitBulletID at its end')
+        import numpy as np
+        g0_ = {'T': np.arange(130.0, 140.0), 'X': np.zeros(10), 'Z': np.full(10, -2.5), 'R': np.full(10, 1.0),
+               'PK': np.full(10, -math.inf)}
+        gc_ = {**g0_, 'CUE': 121.0}
+        ro_ = [reaction_outcome(gs_, [1.0] * len(gs_), 2.5, cue=q) for gs_, q in
+               (([gc_], 0.0), ([g0_], 121.0), ([g0_], 0.0), ([gc_, g0_], 0.0))]
+        check('burst_cue: a burst every geometry of which carries a search launch is read from it (never before '
+              'the part\'s own cue), one that does not from the cue; reaction_outcome on a CUE 121 burst is the '
+              'plain burst read from cue 121, and lands more than read from the cast',
+              (burst_cue([gc_]), burst_cue([gc_], 150.0), burst_cue([gc_, g0_]), burst_cue([None, gc_]),
+               shift_geometry(gc_, 10.0)['CUE'], ro_[0] == ro_[1], ro_[0]['value'] > ro_[2]['value'], ro_[3] == ro_[2]),
+              (121.0, 150.0, 0.0, 121.0, 131.0, True, True, True), 'burst_cue, reaction_outcome, shift_geometry')
+        # Version 23: a skill's timed press (`PRESS_CUE`, `skill_commit` 'cue') is read by every dodge
+        # through `burst_cue`, as `skill_reaction` reads part 0's cue; a search launch after it is
+        # read from the launch.
+        gp_ = {**g0_, 'PRESS_CUE': 40.0}
+        check('burst_cue: a burst every geometry of which carries a timed press is read from it, the later of '
+              'a press and a search launch per geometry, the earliest geometry; shift_geometry moves the press; '
+              'reaction_outcome on a PRESS_CUE 40 burst is the plain burst read from cue 40',
+              (burst_cue([gp_]), burst_cue([gp_, g0_]), burst_cue([{**gc_, 'PRESS_CUE': 40.0}]),
+               burst_cue([{**g0_, 'PRESS_CUE': 140.0}, {**gc_, 'PRESS_CUE': 140.0}]), burst_cue([gp_], 60.0),
+               shift_geometry(gp_, 10.0)['PRESS_CUE'],
+               reaction_outcome([gp_], [1.0], 2.5) == reaction_outcome([g0_], [1.0], 2.5, cue=40.0)),
+              (40.0, 0.0, 121.0, 140.0, 60.0, 50.0, True), 'burst_cue, shift_geometry (version 23)')
+        # Version 23: standing is an option wherever rolling is (`stand_or`). A first burst worth 10 he
+        # can roll, then a lingering one worth 1000 that finds every roll after its i-frames: rolling
+        # the first only meets the second, so he stands and takes the 10 (a defender who stands is
+        # caught by the first and played out by its own worth here, `hit_value`).
+        g1_ = {'T': np.arange(20.0, 23.0), 'X': np.zeros(3), 'Z': np.full(3, -2.5), 'R': np.full(3, 1.0),
+               'PK': np.full(3, -math.inf)}
+        g2_ = {'T': np.arange(40.0, 140.0), 'X': np.zeros(100), 'Z': np.full(100, -2.5), 'R': np.full(100, 12.0),
+               'PK': np.full(100, -math.inf)}
+        st_ = sequence_outcome([([g1_], [10.0]), ([g2_], [1000.0])], 2.5)
+        st2_ = sequence_outcome([([g1_], [10.0]), ([g2_], [1.0])], 2.5)
+        vo_ = volley_outcome([([g1_], ['a']), ([g2_], ['b'])], {'a': 10.0, 'b': 1000.0}, 2.5)
+        check('stand_or: a roll that only meets a dearer burst is not taken, he stands and takes the first catch '
+              '(value, punish, moves); worth 1 behind it he rolls; a volley whose standing take is every threat '
+              'never stands for less; stand_or keeps a tie on the evasion',
+              ((st_['value'], st_['p_punish'], st_['p_evade'], st_['moves']), st2_['moves'] is not None,
+               st2_['value'] < 10.0, vo_['value'] - vo_['punish_hp'] <= vo_['base'],
+               stand_or({'value': 5.0, 'punish_hp': 0.0, 'base': 5.0, 'moves': 'x'})['moves']),
+              ((10.0, 0.0, 0.0, None), True, True, True, 'x'), 'stand_or, sequence_outcome, volley_outcome')
+        # Version 23: the strafe reacts as a dodge does, reaction plus both network legs; version 28,
+        # with a dodge's timing error on each (63 starts: 9 reactions x 7 errors, the move cancel at f5
+        # under none of them). A walk started by about f11.6 leaves g1_ (f20-22) in time. Version 27 read
+        # the 9 reactions alone (f8.45 to f13.31): the first 7 walked out, 49 of 63. With the errors
+        # (-2.20 to +2.20 f) the reactions f10.09 to f11.44 lose 1, 1, 2 and 2 late presses and
+        # f12.10 and f13.31 gain 3 and 1 early ones: 7 + 7 + 7 + 6 + 6 + 5 + 5 + 3 + 1 = 47.
+        fm_ = FollowupModel([(g1_, 0)], [(g2_, 1)], 30.0, [0.0], None)
+        rd_ = [p for r, w in reaction_delays() for p in pressed(r, 5.0, w)]
+        sv_ = max(float(sum(w for (_, w), h in zip(rd_, _catches([g1_], 2.5, strafe_motion(side), [s for s, _ in rd_])[0])
+                            if h < 0)) for side in (1.0, -1.0))
+        check('strafe_escape: the walk starts at each reaction_delays quantile (reaction + 2 network legs, '
+              f'median {reaction_delays()[REACTION_POINTS // 2][0]:.1f} f) plus each timing error (version 28), no '
+              'sooner than the move cancel: 47 of 63 starts walk out',
+              (round(fm_.strafe_escape(2.5, 5.0), 9), round(sv_ * 63, 9), len(rd_)), (round(47 / 63, 9), 47.0, 63),
+              'FollowupModel.strafe_escape (version 23), pressed (version 28)')
         # Launch frames in 3D (bd er-effects-rs-7bye, round 3).
         hd = lambda fr: tuple(round(x, 6) + 0.0 for x in frame_heading(fr))  # noqa: E731
         up = look_frame(_unit(0.0, 89.0))
@@ -9403,9 +13723,12 @@ def selftest():
         # flown as alone. Carian Phalanx (attached blades), Rancorcall (homing skulls), Glintstone
         # Stars (homing stars that die on him), Cannon of Haima (a falling homing carrier) and Light
         # of Miquella (a carrier at 999 m/s): three defenders 3, 6 and 10 m out, against
-        # `fly_shots` at each.
+        # `fly_shots` at each. Elden Stars (10672000) and its row 10672005 make interval children
+        # whose number and draws depend on the flight's own length: until 2026-11-18 they were taken
+        # from the longest flight of the call, and these two failed this check
+        # (target/wf/interval/batchsolo.py, bs-trial.jsonl).
         alone = []
-        for root in (10430100, 10500000, 10404000, 10408000, 210670000):
+        for root in (10430100, 10500000, 10404000, 10408000, 210670000, 10672000, 10672005):
             fan = bullet_tree(t, root)
             if fan is None:
                 alone.append(None)
@@ -9425,8 +13748,9 @@ def selftest():
                     for k, e in zip(one.keys, one))
             alone.append(same)
         check("a flight against several defenders at once is each one's flight alone, shot for shot "
-              "(Carian Phalanx, Rancorcall, Glintstone Stars, Cannon of Haima, Light of Miquella)",
-              alone, [True] * 5, 'fly_members: every member flies on its own; fly_shots is fly_members with one')
+              "(Carian Phalanx, Rancorcall, Glintstone Stars, Cannon of Haima, Light of Miquella, Elden "
+              "Stars and its interval row 10672005: each flight's interval children its own)",
+              alone, [True] * 7, 'fly_members: every member flies on its own; fly_shots is fly_members with one')
         # Interval children: none when the parent is made, then one an interval after the wait
         # while it has life left. Stars of Ruin chains twelve stationary 0.1 s timers at 0.05 s.
         sor_timers = [t.bullet[b]['intervalCreateBulletId'] for b in range(10422000, 10422012)]
@@ -9615,6 +13939,15 @@ def selftest():
         check('damage clips: small blow carries its target 4 m+ back, large none',
               (root is not None and root(2.0) > 4.0, _clip_root_back(3) is None), (True, True),
               'a000_005400 / 005300 root motion (MEASURED)')
+        # The Glintblade Phalanx ash's blades are read from their search launch (`tree_cue`): its
+        # bullet hits' geometries carry `CUE`, 121 / 60 s after their event.
+        gp_sid = t.find_arts('Glintblade Phalanx')
+        gp_hits = [h for h in skill_hits(t, claymore, gp_sid, ctx, 25) if h['kind'] == 'bullet']
+        gp_con = _hit_contacts(t, claymore, gp_sid, gp_hits)
+        check('the Glintblade Phalanx ash\'s bullet hits are read from the search launch: CUE = event + 121 / 60 s',
+              (bool(gp_con), all(c[3] is not None and abs(c[3]['CUE'] - (c[0] + 121 / BULLET_FPS) * TAE_FPS) < 1e-6
+                                 for c in gp_con)),
+              (True, True), '_hit_contacts, tree_cue')
         bolt = skill_profile(t, t.find_arts('Thunderbolt'), claymore)
         bolt_hits = skill_hits(t, claymore, t.find_arts('Thunderbolt'), ctx, 25)
         con = _hit_contacts(t, claymore, t.find_arts('Thunderbolt'), bolt_hits[:1])
@@ -9642,9 +13975,15 @@ def selftest():
         ok = np.zeros(200, bool)
         ok[60:81] = True                          # dodge starts f30-40 escape
         presses = dodge_presses(ok, 0.0)
-        check('a run the defender reaches in time: he aims at its middle (f35) with the timing error',
-              (round(sum(s * w for s, w in presses), 3), round(sum(w for _, w in presses), 6)), (35.0, 1.0),
-              'dodge_presses')
+        # The run's first start is f30, read as `round(s / 0.5)`, so a press escapes from f29.75 on;
+        # the earliest timing error is -1.4652 sd x 1.5 = -2.198 frames.
+        e_lo = -_timing_errors(DODGE_TIMING_SD_S * TAE_FPS)[0]
+        check('a run the defender reaches in time: he aims as early as every press of his timing error still '
+              'escapes (f29.75 + 2.198 = f31.948; version 25: until then at its middle, f35, which no gain '
+              'of his asks for)',
+              (round(sum(s * w for s, w in presses), 3), round(sum(w for _, w in presses), 6),
+               round(_escape(ok, presses), 6)), (round(29.75 + e_lo + EDGE_EPS, 3), 1.0, 1.0),
+              'dodge_presses, _AimTable')
         late = dodge_presses(ok, 35.0)
         check('a run that closes before he can react: he dodges at the reaction, too late',
               all(s > 40.0 for s, _ in late), True, 'dodge_presses')
@@ -9657,13 +13996,134 @@ def selftest():
               group_presses([ok], [1.0], 0.0, floor=12.0) == dodge_presses(ok, 0.0, floor=12.0), True,
               'group_presses')
         check('two attacks whose runs do not meet, alike to him: one timing, the first run on a tie, the '
-              'heavier one when weighted (aims f35, f65)',
+              'heavier one when weighted (aims f31.948, f61.948: each run entered with every press)',
               tuple(round(sum(s * w for s, w in group_presses([a_, b_], ws, 0.0)), 3) for ws in ([1, 1], [1, 3])),
-              (35.0, 65.0), 'group_presses')
+              (round(29.75 + e_lo + EDGE_EPS, 3), round(59.75 + e_lo + EDGE_EPS, 3)), 'group_presses')
         a_c = group_presses([a_, c_], [1, 1], 0.0)
-        check('two attacks whose runs overlap: he aims at the middle of the starts that escape both (f38)',
+        check('two attacks whose runs overlap: he aims where every press escapes both (f35.75 + 2.198, inside '
+              'the starts f36-40 that escape both)',
               (round(sum(s * w for s, w in a_c), 3), round(_escape(a_, a_c), 6), round(_escape(c_, a_c), 6)),
-              (38.0, 1.0, 1.0), 'group_presses: stretch f36-40')
+              (round(35.75 + e_lo + EDGE_EPS, 3), 1.0, 1.0), 'group_presses: stretch f36-40')
+        # Version 25: he aims for his punish too. The pool's strikes land f10 / f15 / f20 after his
+        # R1 cancel, which a roll reaches 20 frames in, against an attacker who can roll at f60: a
+        # press at s punishes with every strike that lands before f60, (60 - s) - 20 > strike. A run
+        # f20-23, too short for every press of his timing error, and a run f30-50 he can enter
+        # whole: escaping alone takes the long run (escape 1.0, no strike in time from it); aiming
+        # for his punish he takes the short one, 6 presses of 7 escaping with two strikes of three
+        # in time, worth 1.48 hits to him against 1.05.
+        pgain = PressGain(np.array([10.0, 15.0, 20.0]), 0.0, 60.0, 20.0, True)
+        okg = np.zeros(200, bool)
+        okg[40:47] = True                          # f20-23
+        okg[60:101] = True                         # f30-50
+        plain_ = dodge_presses(okg, 0.0)
+        aimed_ = dodge_presses(okg, 0.0, gain=pgain)
+
+        def worth_(ps):
+            return sum(w * (1.0 + float(pgain(np.array([s]))[0])) for s, w in ps
+                       if 0 <= int(round(s / DODGE_STEP)) < len(okg) and okg[int(round(s / DODGE_STEP))])
+        # Every aim tried, by brute force on a 0.01-frame grid from the reaction: none is worth more to
+        # him than the one taken (`_AimTable`'s claim that only the run entries need trying).
+        brute_ = True
+        for delay_, _ in reaction_delays():
+            tab_ = _AimTable([okg], [1.0], DODGE_STEP, [pgain])
+            got_ = tab_.presses(delay_, 1.0)
+            # Version 28: he means to press no sooner than his reaction, and each press is that
+            # plus his error (`pressed`).
+            for a_try in np.arange(delay_, 60.0, 0.01):
+                if worth_(pressed(a_try, None, 1.0)) > worth_(got_) + 1e-9:
+                    brute_ = False
+        check('aiming for his punish: against runs f20-23 and f30-50 and strikes that punish a press before f30, '
+              'escaping alone takes the long run and aiming for the punish the short one, worth more to him; no '
+              'aim on a 0.01-frame grid from each reaction is worth more to him than the one taken',
+              (round(_escape(okg, plain_), 4), round(worth_(plain_), 4), round(_escape(okg, aimed_), 4),
+               round(worth_(aimed_), 4), brute_), (1.0, 1.0476, 0.8571, 1.4762, True), '_AimTable, PressGain')
+        # A table's worths at a floor (`_floor_worths`): each aim with every press past the floor
+        # read off the worths at no floor, the others at the floor, against `_worth` at the floor of
+        # every aim at once, bit for bit; a group of members with gains of their own roll frames, a
+        # member with none, and floors under, inside and past the candidates.
+        okf_ = [okg, np.roll(okg, 9), np.roll(okg, -13)]
+        gf_ = [PressGain(np.array([10.0, 15.0, 20.0]), 0.0, 60.0 + 3 * j_, 20.0, True) for j_ in range(2)] + [None]
+        fl_n = fl_bad = fl_free = fl_moved = 0
+        for floor_ in (-5.0, 8.0, 19.3, 31.0, 47.75, 120.0):
+            tabf_ = _AimTable(okf_, [1.0, 0.5, 2.0], DODGE_STEP, gf_)
+            vf_, _ = tabf_._cands()
+            for j0_ in (0, len(vf_) // 3):
+                # The no-floor worths read first from a later candidate, so `_none_worths` extends them.
+                ws_ = {}
+                tabf_._none_worths(vf_, j0_ + 5, ws_)
+                got_ = tabf_._floor_worths(vf_, j0_, len(vf_), floor_, ws_)
+                want_ = tabf_._worth(vf_[j0_:], floor_)
+                moved_ = ~(vf_[j0_:, None] + tabf_.errors[None, :] > floor_).all(axis=1)
+                fl_n += 1
+                fl_free += int((~moved_).sum())
+                fl_moved += int(moved_.sum())
+                fl_bad += int(np.asarray(got_, float).tobytes() != np.asarray(want_, float).tobytes())
+        check('a table\'s worths at a floor read off its worths at no floor where no press of an aim meets the '
+              'floor (_floor_worths) are _worth at the floor of every aim, bit for bit',
+              (fl_n, fl_free > 0, fl_moved > 0, fl_bad), (12, True, True, 0),
+              '_AimTable._floor_worths, _none_worths')
+        # And the aims themselves: each reaction's aim read by `_aims` (the worths at the candidates
+        # and at the reactions kept per floor, shared by every table of one content), from a table
+        # that reads them first and from a second of the same content that finds them kept, is the
+        # aim of every candidate and the reaction read in one `_worth` batch.
+
+        def aim_ref(tab, t_, floor_):
+            v_, th_ = tab._cands()
+            j_ = int(v_.searchsorted(t_, 'right'))
+            sel_ = th_[j_:] > t_ + tab.errors[0]
+            if not sel_.any():
+                return None
+            A_ = np.concatenate([[t_], v_[j_:][sel_]])
+            U_ = tab._worth(A_, floor_)
+            top_ = float(U_.max())
+            b_ = int(np.argmax(U_ >= top_ - 1e-12 * max(1.0, abs(top_))))
+            return None if b_ == 0 else float(A_[b_])
+        forget_aim_worths()
+        aim_n = aim_bad = aim_set = 0
+        for floor_ in (None, -5.0, 8.0, 19.3, 31.0, 47.75):
+            for rep_ in range(2):
+                tabs_ = _AimTable(okf_, [1.0, 0.5, 2.0], DODGE_STEP, gf_)
+                ts_ = [float(x) for x in np.arange(-3.0, 60.0, 1.7)]
+                aims_ = tabs_._aims(ts_[::-1] if rep_ else ts_, floor_)
+                aims_ = aims_[::-1] if rep_ else aims_
+                for tr_, ar_ in zip(ts_, aims_):
+                    aim_n += 1
+                    aim_set += ar_ is not None
+                    aim_bad += int(ar_ != aim_ref(tabs_, tr_, floor_))
+        check('a table\'s aims read with the worths kept per floor and reaction (_aims, shared by every table of one '
+              'content) are those of reading every candidate and the reaction in one batch, read first and read again',
+              (aim_n, aim_set > 0, aim_bad), (6 * 2 * 38, True, 0), '_AimTable._aims, _floor_worths, _AIM_WORTHS')
+        # Version 28: every press carries his timing error, one he means at his reaction included. The
+        # 7 errors are 1.5 frames x the normal quantiles at (k + 0.5) / 7: +-2.198, +-1.187, +-0.549, 0.
+        check('v28 pressed: a press meant at f20 lands at f17.802, 18.813, 19.451, 20, 20.549, 21.187, 22.198, '
+              'a seventh each; a floor at f19 puts the first two there (2/7); a floor at f23 all of them',
+              ([round(s, 3) for s, _ in pressed(20.0, None, 1.0)],
+               [(round(s, 3), round(w * 7, 9)) for s, w in pressed(20.0, 19.0, 1.0)], pressed(20.0, 23.0, 1.0)),
+              ([17.802, 18.813, 19.451, 20.0, 20.549, 21.187, 22.198],
+               [(19.0, 2.0), (19.451, 1.0), (20.0, 1.0), (20.549, 1.0), (21.187, 1.0), (22.198, 1.0)], [(23.0, 1.0)]),
+              'pressed, press_errors (DODGE_TIMING_SD_S, TIMING_POINTS)')
+        # A run of 3 grid starts, f30-31 (a press escapes from f29.75 to f31.25, the grid's rounding):
+        # at most 3 of his 7 errors fit in it (-0.549, 0, +0.549 span 1.098 frames; any 4 span 1.736).
+        # Knowing the attack from the cue (his reactions f8.45-13.31) he aims each reaction at it: 3/7
+        # each, 27/63. Reacting from f20.1 instead (a split: the earliest he can mean to press is
+        # f28.55, 29.28, 29.77, 30.19, 30.60, 31.04, 31.54, 32.20, 33.41) the last three can no
+        # longer aim all three in: 3 x 6 + 2 + 2 + 1 = 23 of 63. Version 27 clamped the errors at the
+        # reaction, so the four reactions f29.77-31.04 inside the run pressed there exactly and
+        # escaped whole: 3 + 3 + 4 x 7 = 34 of 63, more than knowing it from the cue.
+        okn_ = np.zeros(200, bool)
+        okn_[60:63] = True
+        tabn_ = _aim_table(okn_, DODGE_STEP)
+        per_n = [round(_escape(okn_, tabn_.presses(20.1 + d, 1.0)) * 7, 9) for d, _ in reaction_delays()]
+        later_ = [round(_escape(okn_, dodge_presses(okn_, f_)), 9) for f_ in np.arange(0.0, 30.0, 0.1)]
+        laterg_ = [round(worth_(dodge_presses(okg, f_, gain=pgain)), 9) for f_ in np.arange(0.0, 30.0, 0.1)]
+        check('v28: a defender who reacts to a later event never does better than one who knows the attack from '
+              'its cue: a 1.5-frame run escaped 27/63 from the cue and 23/63 from f20.1 (version 27: 34/63, the '
+              'reactions inside the run pressing with no error), and from every decision time f0-29.9 (0.1 apart) '
+              'neither the escape nor, aiming for his punish, his worth is above the cue\'s',
+              (round(_escape(okn_, dodge_presses(okn_, 0.0)), 6), round(_escape(okn_, dodge_presses(okn_, 20.1)), 6),
+               per_n, max(later_) <= later_[0] + 1e-9, max(laterg_) <= laterg_[0] + 1e-9),
+              (round(27 / 63, 6), round(23 / 63, 6), [3.0] * 6 + [2.0, 2.0, 1.0], True, True),
+              '_AimTable.presses, pressed (version 28)')
         early = lookalike_plan([[a_], [b_]], [1, 1], [[math.inf, 10.0], [10.0, math.inf]], 0)
         check('a split at f10, before either run: he waits for it and reacts as dodge_presses from f10 '
               '(escape 1.0 against 0.5 committing)',
@@ -9712,6 +14172,44 @@ def selftest():
         check('the lookalike plans\' memos emptied before every call give every plan a kept memo gives, and '
               'count what they gain', (emptied_ == kept_, held_ > 100, len(kept_)), (True, True, 48),
               'LOOKALIKE_MEMO_ENTRIES')
+        # Version 28: knowing is never worse. Every plan above, and the same group with gains (a punish
+        # counted on some members' moves), against the defender who knows the member he faces from
+        # the cue (`dodge_presses` on its own starts, cue, floor and gain): his worth by the plan's own
+        # measure (per press 1 + its gain where it escapes, averaged over the moves) is never less.
+        # Version 27's clamp broke it. The second group pairs the toy's 1.5-frame run with a run at
+        # f60-70 the same timing cannot meet, split at f20.1: the plan waits for the split and reacts
+        # to it, which the clamp made worth 34/63 against the short run where knowing it gave 27/63
+        # (`MEASURED` 2026-11-16 with the clamp put back in the process: 32 of the second group's 128
+        # member moves worse off knowing, 0.4286 against 0.5397; none of the first group's 192).
+        groups_ = [([[a_, b_], [b_, c_], [d_, a_]], [0.5, 0.5, 1.0], rs, [[pgain, None], [None, pgain], [pgain, pgain]],
+                    [10.0, 45.0, None]),
+                   ([[okn_, okn_], [b_, b_]], [1.0, 1.0], [[math.inf, 20.1], [20.1, math.inf]],
+                    [[None, pgain], [pgain, None]], [None, 20.1])]
+
+        def wpl_(ok_, ps_, g_):
+            return sum(w * (1.0 + (float(g_(np.array([s]))[0]) if g_ is not None else 0.0)) for s, w in ps_
+                       if 0 <= int(round(s / DODGE_STEP)) < len(ok_) and ok_[int(round(s / DODGE_STEP))])
+        worse_, n_ = [], 0
+        for gi_, (grp_, gw_, gs_, gns_, gev_) in enumerate(groups_):
+            for gains_ in (None, gns_):
+                for ev_ in (None, gev_):
+                    for me_ in range(len(grp_)):
+                        for cue_ in (0.0, 5.0):
+                            for fl_ in (0.0, 12.0, 30.0, 50.0):
+                                p_ = lookalike_plan(grp_, gw_, gs_, me_, cue_, fl_, events=ev_, gains=gains_)
+                                for k_ in range(2):
+                                    g_ = None if gains_ is None else gains_[me_][k_]
+                                    ok_ = grp_[me_][k_]
+                                    know_ = wpl_(ok_, dodge_presses(ok_, cue_, floor=fl_, gain=g_), g_)
+                                    plan_ = wpl_(ok_, p_['presses'][k_], g_)
+                                    n_ += 1
+                                    if know_ < plan_ - 1e-9:
+                                        worse_.append((gi_, gains_ is not None, ev_ is not None, me_, cue_, fl_, k_,
+                                                       round(know_, 4), round(plan_, 4)))
+        check('v28: in every plan of a three-member group and of a two-member group split at f20.1 (with and '
+              'without seen releases, and with gains), the defender who knows the member he faces is never worse '
+              'off by the plan\'s own measure than the plan (320 member moves; the cases where he would be)',
+              (n_, worse_), (320, []), 'lookalike_plan, dodge_presses, pressed (version 28)')
         check('release_frames: every real frame of the window, the end left out, weighed alike (13 for f13-26, '
               '81 for Gelmir\'s Fury\'s f34.3-115); one frame, or no window, the first alone',
               ([round(r, 6) for r, _ in release_frames(13.0, 26.0)][:3], len(release_frames(13.0, 26.0)),
@@ -9759,10 +14257,13 @@ def selftest():
                round(reaction_outcome([brief], [1.0], 2.5)['p_evade'], 3)), (0.0, 1.0),
               'reaction_outcome + _catches (i-frames 13, medium roll)')
         check('an evading dodger punishes when his R1 cancel + strike beats the attacker\'s roll and he '
-              'ends within 3.69 m: only the forward roll (back 5.7 m, sideways 5.1 m away)',
+              'ends within 3.69 m: only the forward roll does (back 5.7 m, sideways 5.1 m away), and every '
+              'direction escapes, so he takes it (dodge_families; a quarter of the presses before version 22)',
               (round(reaction_outcome([brief], [1.0], 2.5, my_roll=90.0, strikes=[15.0])['p_punish'], 3),
-               round(reaction_outcome([brief], [1.0], 2.5, my_roll=40.0, strikes=[15.0])['p_punish'], 3)),
-              (0.25, 0.0), 'reaction_outcome: press ~f25 + ready 20 + strike 15 = 60; roll root motion')
+               round(reaction_outcome([brief], [1.0], 2.5, my_roll=40.0, strikes=[15.0])['p_punish'], 3),
+               round(reaction_outcome([brief], [1.0], 2.5, moves=roll_motion(), my_roll=90.0,
+                                      strikes=[15.0])['p_punish'], 3)),
+              (1.0, 0.0, 0.25), 'reaction_outcome: press ~f25 + ready 20 + strike 15 = 60; roll root motion')
         check('with run, the back and side rolls run the last ~2 m in and punish a late roll too',
               (round(reaction_outcome([brief], [1.0], 2.5, my_roll=90.0, strikes=[15.0], run=True)['p_punish'], 3),
                round(reaction_outcome([brief], [1.0], 2.5, my_roll=40.0, strikes=[15.0], run=True)['p_punish'], 3)),
@@ -9850,23 +14351,44 @@ def selftest():
         kterm = skill_term(t, kris, [(dart, 1.0)], kctx, 10, 0.0, damage_fn=kdmg, react=True, strikes=[15.0, 20.0])
         kh = next(v for v in kterm['available'] if len(v.get('parts') or []) == 1)
         keys_ = ('dmg', 'p_evade', 'p_punish')
+
+        def knet(o):
+            # What the attacker nets: what lands less the punish (`react_factors`).
+            return o['dmg'] - o['whiff_hp']
         check(f"the Glintstone Dart cast as it opens: its early release (SpEffect {RELEASE_EARLY_SPEFFECT}) is let go "
               f"at f{krel and krel[0]['first']}, its part's press; the PvP ranking's waiting defender cannot tell the "
-              "hold from it before then, so against the release at that frame alone he reacts from it, exactly the "
-              f"hold read from that frame: he still escapes the bolt ({knows['p_evade']:.3f} -> {sees1['p_evade']:.3f}) "
-              f"but rolls later, so he punishes less ({knows['p_punish']:.4f} -> {sees1['p_punish']:.4f}); one release "
-              "at 0 is the pair without releases, bit for bit; a lookalike told apart from the cue changes nothing",
+              "hold from it before then. Since version 22 he picks the roll direction (dodge_families), and one "
+              "escapes both from the cue. He escapes the bolt "
+              f"({knows['p_evade']:.3f} -> {sees1['p_evade']:.3f}) and punishes {knows['p_punish']:.4f} -> "
+              f"{sees1['p_punish']:.4f} (all releases {sees['p_punish']:.4f}; the hold read from the release "
+              f"{late['p_punish']:.4f}). Version 25: he aims for his punish too, so knowing the attack is never worse "
+              f"for him than not telling it from its release (attacker net {knet(knows):.2f} against "
+              f"{knet(sees1):.2f} / {knet(sees):.2f}; in version 24 he punished 0.3294 knowing it and 0.5000 not, "
+              "aiming at the middle of the escaping run, MEASURED); one release at 0 is the pair without releases, "
+              "bit for bit; a "
+              "lookalike told apart from the cue changes nothing. Knowing it is never worse for him against the "
+              "release at its first frame or let go on any frame of its window, by his own measure (escape plus "
+              "punish) and by the attacker's net. Version 28 restores the second: version 27's selftest runs at "
+              "20:52-21:06 that day measured him escaping 0.929 and punishing 0.125 knowing the hold, 0.968 and "
+              "0.139 against all the releases (its final run, 21:59, 1.000 and 0 either way), and its check was "
+              "weakened to the first release alone, because a press clamped at his reaction to a release carried "
+              "no timing error while his own aim did; every press carries it now (`pressed`)",
               (len(krel), kpart is not None and kpart['offset'] == float(krel[0]['first']) + (ko['first_offset'] or 0.0),
-               all(abs(sees1[x] - late[x]) < 1e-9 for x in keys_), all(sees1[x] == nolist[x] for x in keys_),
-               all(at0[x] == knows[x] for x in keys_), sees1['p_punish'] < knows['p_punish']),
-              (1, True, True, True, True, True),
-              'c0000.hks SwordArtsOneShot_onUpdate (L2 up in 100285); lookalike_plan')
+               round(sees1['p_evade'], 6) == round(knows['p_evade'], 6), all(sees1[x] == nolist[x] for x in keys_),
+               all(at0[x] == knows[x] for x in keys_),
+               knet(knows) <= knet(sees1) + 1e-9, knet(knows) <= knet(sees) + 1e-9,
+               all(knows['p_evade'] + knows['p_punish'] >= o['p_evade'] + o['p_punish'] - 1e-9 for o in (sees1, sees))),
+              (1, True, True, True, True, True, True, True),
+              'c0000.hks SwordArtsOneShot_onUpdate (L2 up in 100285); lookalike_plan (MEASURED 2026-11-16)')
         kth = [skill_release_visible(t, dart, krel[0]['anim'], krel[0]['first'], threshold=x) for x in (0, 0.05, 0.20)]
         check(f"the Dart's release at f{krel[0]['first']} shows {kpart['shows'][0]} real frames after its switch (the "
               f"blend into 040001 over its type-16 end, a bone 10 cm off the hold, release_visible; 3 in the "
               f"2026-11-11 survey, and {kth[1]} / {kth[2]} at 5 / 20 cm as there; 0 cm is the switch frame): against "
-              f"it alone the hold is read from there, exactly ({svis['p_punish']:.4f})",
-              (kpart['shows'][0], kth, all(abs(svis[x] - lvis[x]) < 1e-9 for x in keys_)), (3, [0, 2, 4], True),
+              f"it alone he still escapes ({svis['p_evade']:.3f}; read from there {lvis['p_evade']:.3f}, punish "
+              f"{lvis['p_punish']:.4f} -> {svis['p_punish']:.4f}: a roll direction escapes both before it shows; "
+              f"0.929 since version 27, the attacker tracking a side roll)",
+              (kpart['shows'][0], kth, round(svis['p_evade'], 6) == round(lvis['p_evade'], 6) == round(knows['p_evade'], 6)),
+              (3, [0, 2, 4], True),
               'release_visible; c0000.hks SwordArtsOneShot_onUpdate')
         check(f"the Dart's window f{krel[0]['first']}-{krel[0]['last']} gives a release on each of its "
               f"{len(kpart['releases'])} real frames (release_frames): the hold read against all of them, escape "
@@ -9886,11 +14408,21 @@ def selftest():
         fk, fs1 = skill_reaction(*fargs), skill_reaction(*fargs, look={**fpart, 'releases': [(0.0, 1.0)], 'shows': None})
         fs = skill_reaction(*fargs, look=fpart)
         check(f"Revenger's Blade on the Falx cast as it opens: released early at f{fpart and fpart['offset']} alone, "
-              f"the hold is escaped every time by a defender who knows it ({fk['p_evade']:.3f}) and half the time by "
-              f"one who cannot tell it from the release before then ({fs1['p_evade']:.3f}), as before releases were "
-              f"spread; let go on any of its window's {len(fpart['releases'])} frames {fs['p_evade']:.3f}: its land "
-              f"share {fk['dmg'] / fland['dmg']:.3f} -> {fs1['dmg'] / fland['dmg']:.3f} -> {fs['dmg'] / fland['dmg']:.3f}",
-              (round(fk['p_evade'], 3), round(fs1['p_evade'], 3)), (1.0, 0.5), 'lookalike_pair, 2026-11-10 survey')
+              f"the hold is escaped every time by a defender who knows it ({fk['p_evade']:.3f}) and, since version 22 "
+              f"picks a roll direction that escapes both (dodge_families; half the time before, pressing the four "
+              f"a quarter each), by one who cannot tell it from the release before then ({fs1['p_evade']:.3f}); let "
+              f"go on any of its window's {len(fpart['releases'])} frames {fs['p_evade']:.3f}: its land "
+              f"share {fk['dmg'] / fland['dmg']:.3f} -> {fs1['dmg'] / fland['dmg']:.3f} -> {fs['dmg'] / fland['dmg']:.3f}. "
+              "Version 27: the attacker tracks a side roll until his JumpTable 7, so no direction escapes every "
+              "time: 0.929 known, 0.929 not told from the release, 0.929 over all its frames (MEASURED 2026-11-16; "
+              "1.0 each in version 26); knowing it is never less. Version 28: not told from the release it was "
+              "0.679, as at 3 m (and 2.5 m rolling forward or back) his plan waited for the release, to react to it "
+              "with no timing error, and met the hold too late (escape 0); with the error on that reaction too "
+              "waiting is worth less to him, and he commits from the cue and escapes the hold",
+              (round(fk['p_evade'], 3), round(fs1['p_evade'], 3), round(fs['p_evade'], 3),
+               all(fk['p_evade'] + fk['p_punish'] >= o['p_evade'] + o['p_punish'] - 1e-9 for o in (fs1, fs))),
+              (0.929, 0.929, 0.929, True),
+              'lookalike_pair, 2026-11-10 survey; MEASURED 2026-11-16')
         # A stance: L2 into 040050 (no hit, no FP), then R1 -> 040060 or R2 -> 040070.
         uchi, unsh = t.find_weapon('Uchigatana'), t.find_arts('Unsheathe')
         uctx = WeaponContext('Uchigatana', 'Keen', 25, {'str': 20, 'dex': 60}, False)
@@ -10051,7 +14583,32 @@ def selftest():
               ([301217912, 301217914], 1, True, [2373, 2374], [2373, 2373]),
               'FUN_14039bba0 -> FUN_14038b740 copies BulletAttackInfo +0x640 / +0x648 / +0x658; '
               'FUN_14051b870 0x14051b8c9 passes the entry\'s own id (1.16.2)')
-        pcw, pcs = t.find_weapon("Prelate's Inferno Crozier"), t.find_arts("Prelate's Charge")
+        # The bullet hit lists (`HIT_LIST_NOTE`) on top of the records: every 237x flame row has
+        # `isUseSharedHitList` and leaves 2375 in the same list, so each launch lands once.
+        check('Surge of Faith lands 6 of its 22 rows on one defender: the f24 swing, the f62 pillar 2370 '
+              '(no list; its record\'s other launches are priority 1), and one flame of each later record, '
+              'its child 2375 held off by the flame\'s list: 600 at 100 a row, not 2,200',
+              ([(h['frame'], h['bullet'] if h['kind'] == 'bullet' else 'melee', h['lands'])
+                for h in cvo['hit_rows'] if h['lands']], len(cvo['hit_rows']),
+               sorted({h['hit_list'][2] for h in cvo['hit_rows'] if h['kind'] == 'bullet' and h['hit_list']}),
+               cvo['dmg']),
+              ([(24, 'melee', True), (62, 2370, True), (77, 2371, True), (88, 2373, True), (99, 2372, True),
+                (110, 2373, True)], 22, [2371, 2372, 2373, 2374], 600.0),
+              'Bullet 2370 isUseSharedHitList 0, 2371-2375 1, HitBulletID 2375; skill TAE 040000 events 2 / '
+              '341; FUN_14038fe80, FUN_14039bba0 -> FUN_14038b740 +0x638 (1.16.2)')
+        srs, wog = t.find_weapon('Sacred Relic Sword'), t.find_arts('Wave of Gold')
+        wgo = skill_option(t, srs, wog, WeaponContext('Sacred Relic Sword', 'Standard', 10,
+                                                      {'str': 15, 'dex': 24, 'fai': 67}, False), 10,
+                           damage_fn=lambda a, p, f: 100.0)
+        check('Wave of Gold is one hit: its wave 4000 -> ... -> 4045 changes AtkParam row as it travels '
+              '(905, 907, 906, 908) inside the one 4 s list the 17-shot launch makes, so one row lands',
+              ([(h['bullet'], h['atk_row'], h['hit_list']) for h in wgo['hit_rows']],
+               [h['bullet'] for h in wgo['hit_rows'] if h['lands']], wgo['dmg']),
+              ([(4000, 300310905, (40000, 0, 4000)), (4024, 300310907, (40000, 0, 4000)),
+                (4036, 300310906, (40000, 0, 4000)), (4045, 300310908, (40000, 0, 4000))], [4000], 100.0),
+              'Bullet 4000 numShoot 17 isUseSharedHitList 1 dmgHitRecordLifeTime 4, HitBulletID chain to '
+              '4045; FinalDamageRateParam 30000-30003; FUN_14038fe80 (1.16.2)')
+        pcw, pcs =t.find_weapon("Prelate's Inferno Crozier"), t.find_arts("Prelate's Charge")
         pco = skill_option(t, pcw, pcs, WeaponContext("Prelate's Inferno Crozier", 'Standard', 10,
                                                       {'str': 50, 'fai': 30}, False), 10,
                            damage_fn=lambda a, p, f: 100.0)
@@ -10161,6 +14718,308 @@ def selftest():
           'tick), not 13',
           (shares[600000074], shares[600000070]), ((1.0, 100.0), (2.0, 200.0)),
           'frame-advantage reaction (TAE damage clips), displacement_fn, roll_motion')
+    # A lingering line laid along the attack axis, as Ghostflame Ignition's R1 follow-up lays its
+    # trail (Bullet 2294: hitRadius 1.0, life 5.0 s, record 0.5 s, AtkParam_Pc 303401305 with
+    # dmgLevel 0 and no poise damage, `REGULATION`; flown 2.8 to 19.7 m ahead with a contact disc of
+    # about 1.4 m, `MEASURED` 2026-11-14), 10 ticks. Its ticks flinch him (level 0), so he leaves at
+    # once: straight back he stays in it for 8 (rolling) or 9 (running) of them, to a side 1
+    # (`_escapes`, 2026-11-14).
+    zs, tt = np.arange(2.8, 19.7, 0.25), np.arange(72.0, 222.0, 0.5)
+    n = len(tt) * len(zs)
+    line = {'T': np.repeat(tt, len(zs)), 'X': np.zeros(n), 'Z': -np.tile(zs, len(tt)), 'R': np.full(n, 1.4),
+            'PK': np.full(n, -math.inf), 'CAUGHT': {'lists': [caught_list(t, 303401305, 0.0, 10, 0.5, 0.1)], 'wf': 1.0}}
+    cm = CaughtModel.of([(line, 72.0)], 62.0, {72.0: 1273.0})
+    back = [cm._play(0, 4.3, nm, roll, run)[0][0] * 10 for nm, roll, run in cm.escapes if run == ESCAPE_RUNS[0]]
+    check('a caught defender leaves a lingering line laid along the attack axis to the side: 1 of its 10 ticks '
+          '(127.3 of 1273 HP) 4.3 m out, where leaving straight back (the only way out until 2026-11-14) took 8 '
+          'rolling or 9 running',
+          ([round(x, 3) for x in back], round(cm.landed(4.3)[0][0][0] * 10, 3), round(cm.worth(4.3)[0], 1)),
+          ([8.0, 9.0], 1.0, 127.3), '_escapes: roll_motion side rolls (TAE), run speed; Bullet 2294')
+    # Bullets of one tree that hit at different times (2026-11-16, the user: "I'm quite curious if
+    # the ranking for rosus summons model correctly accomodates for the projectiles since they hit
+    # at different times"). Rosus's Summons' three bursts, Bullet 2872 -> 2873 -> 2874 (`HitBulletID`
+    # at expiry, each `life` 0.23 s, `hitRadius` 2.0, `isPenetrateChr` 1, no shared record,
+    # AtkParam_Pc 301412902-904 dmgLevel 2, `REGULATION`), stand 4.5 m ahead 7.5 real frames apart
+    # (`MEASURED` fly_tree, 2026-11-16). One geometry, a list per burst with its own rows: until
+    # 2026-11-16 all three landed on the frame the first touched him, with one burst's poise.
+    T3 = np.arange(52.0, 74.5, 0.5)
+    B3 = np.where(T3 < 59.5, 2872, np.where(T3 < 67.0, 2873, 2874))
+    spot = {'T': T3, 'X': np.zeros(len(T3)), 'Z': np.full(len(T3), -4.5), 'R': np.full(len(T3), 2.4),
+            'PK': np.full(len(T3), -math.inf), 'B': B3}
+
+    def bursts(rows):
+        return {**spot, 'CAUGHT': {'lists': [caught_list(t, 301412902 + k, 202.5, 1, 0.0, 1 / 3,
+                                                         (2872 + k,) if rows else None) for k in range(3)],
+                                   'wf': 1.0}}
+    per = {(rows, p): [round(x, 3) for x in CaughtModel.of([(bursts(rows), 52.0)], p, {52.0: 939.3}).row(4.5, 0)[0]]
+           for rows in (True, False) for p in (62.0, 700.0)}
+    cm = CaughtModel.of([(bursts(True), 52.0)], 62.0, {52.0: 939.3})
+    check('bullets of one tree land when each touches him: Rosus\'s Summons\' three bursts all land on a defender '
+          'whose poise each breaks (202.5 > 62: its stagger holds him in the 2 m burst), only the first on one whose '
+          'poise holds (he leaves at once); without rows all three land at the first touch either way (the old '
+          'rule); caught at f60 the first burst has ended and never lands',
+          (per[(True, 62.0)], per[(True, 700.0)], per[(False, 700.0)], cm._live(0, 60.0)),
+          ([1.0, 1.0, 1.0], [1.0, 0.0, 0.0], [1.0, 1.0, 1.0], ([1], [0])),
+          'Bullet 2872-2874, AtkParam_Pc 301412902-904 (REGULATION); caught_branch (TAE damage clips)')
+    # His whiff's recovery holds him (version 21): three hits at f30, f40 and f50 on a 1 m disc around
+    # him 2.5 m out, each Swift Slash's burst row (level 0 even when it breaks him). Free at once he
+    # rolls out under the first; still in his recovery to f45 he stands and takes the second too,
+    # and a run out waits for the move floor (f55) and takes all three. A middle stagger at f30
+    # (Swift Slash's blade row) ends the recovery: its DamageCount 1 roll cancel (25 frames) lets him
+    # roll at f55 whatever the floor, so the f70 hit misses with floors at f80.
+    def disc(frame, row, poise):
+        T = np.array([frame, frame + 0.5])
+        return ({'T': T, 'X': np.zeros(2), 'Z': np.full(2, -2.5), 'R': np.full(2, 1.0), 'PK': np.full(2, -math.inf),
+                 'CAUGHT': {'lists': [caught_list(t, row, poise)], 'wf': 1.0}}, frame)
+    flin = CaughtModel.of([disc(30.0, 600000074, 405.0), disc(40.0, 600000074, 405.0), disc(50.0, 600000074, 405.0)],
+                          62.0, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0})
+    roll_esc = next(e for e in flin.escapes if e[0] == 'roll')
+    run_esc = next(e for e in flin.escapes if e[0] == 'run')
+    held = flin.held(2.5, 0, (45.0, 55.0))
+    stag = CaughtModel.of([disc(30.0, 600000070, 405.0), disc(40.0, 600000074, 405.0),
+                           disc(50.0, 600000074, 405.0), disc(70.0, 600000074, 405.0)],
+                          62.0, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0, 70.0: 100.0})
+    check('a caught defender in his whiff\'s recovery: free at once he takes 1 of 3 flinching hits; held to a f45 '
+          'dodge floor he takes 2 rolling out and 3 running out (move floor f55); a floor at or before the catch '
+          'holds nothing; a middle stagger ends the recovery, so the f70 hit misses with both floors at f80',
+          ([x[0] for x in flin.landed(2.5)[0]], [x[0] for x in flin._play(0, 2.5, 'roll', roll_esc[1], roll_esc[2], held)],
+           [x[0] for x in flin._play(0, 2.5, 'run', None, run_esc[2], held)], held, flin.held(2.5, 0, (30.0, 12.0)),
+           [x[0] for x in stag.landed(2.5, (80.0, 80.0))[0]]),
+          ([1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], (45.0, 55.0), None, [1.0, 1.0, 1.0, 0.0]),
+          'punish_situations (dodge and move floors); frame-advantage.md section 1 (ExecAddDamage keeps the '
+          'state, W_DamageLv<n> replaces it, COMMUNITY); the TAE damage clips')
+    # Caught in his own dodge (version 25): three flinching hits at f30, f42 and f45 that touch him
+    # anywhere (radius 1000 m). Back-rolling from f25 (13 frames of invincibility) he is caught at f42
+    # by the second, still in that roll: its dodge cancel (f21 into it, f46) holds a roll out, so the
+    # f45 hit lands too (200), where the play from a standing catch at f42 rolled out at once and
+    # took the second alone (100). Rolling from f16 he is caught at f30 by the first; his roll out at
+    # f37 then covers f42 and f45 (100), where standing at f30 he rolled out at once and the f45 hit
+    # found him past that roll's invincibility (200). `reaction_outcome` prices each catch made in
+    # a dodge so (`_LazyWorth.mid`).
+    def wide(frame):
+        T = np.array([frame, frame + 0.5])
+        return ({'T': T, 'X': np.zeros(2), 'Z': np.full(2, -2.5), 'R': np.full(2, 1000.0), 'PK': np.full(2, -math.inf),
+                 'CAUGHT': {'lists': [caught_list(t, 600000074, 405.0)], 'wf': 1.0}}, frame)
+    mgeo = [wide(30.0), wide(42.0), wide(45.0)]
+    mcm = CaughtModel.of(mgeo, 62.0, {30.0: 100.0, 42.0: 100.0, 45.0: 100.0})
+    mback = max(roll_motion(), key=lambda m: m['path'][min(len(m['path']) - 1, int(m['dodge']))][1])
+    mgs = [g for g, _ in mgeo]
+    mc25, mc16 = _catches(mgs, 2.5, mback, [25.0]), _catches(mgs, 2.5, mback, [16.0])
+    mid_r = reaction_outcome(mgs, mcm.lazy(2.5, 0, 3), 2.5, moves=[mback])
+    std_r = reaction_outcome(mgs, [mcm.worth_of(2.5, h) for h in range(3)], 2.5, moves=[mback])
+    check('caught in his own dodge (version 25): back-rolling from f25 the f42 hit catches him in the roll and its '
+          'dodge cancel holds him for the f45 hit (200, standing 100); rolling from f16 the f30 hit catches him and '
+          'his roll out from that roll\'s cancel covers the rest (100, standing 200); reaction_outcome prices its '
+          'catches so',
+          ((int(mc25[0][0]), float(mc25[1][0])), (int(mc16[0][0]), float(mc16[1][0])),
+           mcm.worth_of(2.5, 1), mcm.worth_of(2.5, 1, dodge=(mback, 25.0, 42.0)),
+           mcm.worth_of(2.5, 0), mcm.worth_of(2.5, 0, dodge=(mback, 16.0, 30.0)),
+           round(mid_r['value'], 3) != round(std_r['value'], 3)),
+          ((1, 42.0), (0, 30.0), 100.0, 200.0, 200.0, 100.0, True),
+          'CaughtModel dodge_key / _play; roll_motion (TAE: invincible f0-13, dodge cancel f21, move cancel f22)')
+    # The pool's poises (version 21): a mix of plays, one per run of poises that play alike, the same
+    # numbers as playing each poise and weighting it.
+    two = [disc(30.0, 600000070, 50.0), disc(40.0, 600000070, 50.0), disc(50.0, 600000074, 405.0)]
+    ppool = ((20.0, 1.0), (45.0, 2.0), (49.0, 1.0), (50.0, 1.0), (60.0, 3.0), (120.0, 3.0))
+    mixed = CaughtModel.of(two, ppool, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0})
+    each = {p: [x[0] for x in CaughtModel.of(two, p, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0}).landed(2.5)[0]]
+            for p, _ in ppool}
+    want = [sum(w / 11.0 * each[p][g] for p, w in ppool) for g in range(3)]
+    check('a caught defender over a pool of poises lands each pool poise\'s play at its share (a poise at or '
+          'under the hits\' 50 is broken, staggered and takes the second: 5 of 11; over it he leaves after the first)',
+          ([round(x[0], 9) for x in mixed.landed(2.5)[0]], [round(x, 9) for x in want]),
+          ([1.0, 0.454545455, 0.0], [1.0, 0.454545455, 0.0]), 'CaughtModel._best; FUN_140486bf0 (0 or below breaks)')
+    # Each pool build's own health caps what its own play lands (version 21): a 20-poise build of
+    # 150 HP is staggered and takes both 100 HP hits, a 120-poise one of 1000 HP takes the first:
+    # 0.5 x 150 + 0.5 x 100, where the median's cap on the mixed worth (150) took 150.
+    hpm = CaughtModel.of(two, [(20.0, 1.0, 150.0), (120.0, 1.0, 1000.0)], {30.0: 100.0, 40.0: 100.0, 50.0: 100.0})
+    check('a caught defender\'s health caps each pool build\'s own play: 125 HP, not min(150, 150)',
+          (round(hpm.worth_of(2.5, 0), 6), round(hpm.worth_of(2.5, 0, hp=150.0), 6),
+           round(hp_cap(150.0, [(150.0, 0.5), (1000.0, 0.5)]), 6)),
+          (150.0, 125.0, 150.0), 'CaughtModel.worth_of, hp_cap')
+    # The jump (version 21): a caught defender may jump when a hit is `AIR`, and its invincibility
+    # holds only against `AIR` samples (`_catches`' rule): one air and one plain sample on him at
+    # f35, he jumped at f30.
+    def low(frame, air):
+        g, fr = disc(frame, 600000074, 405.0)
+        return ({**g, 'AIR': True} if air else g), fr
+    jm = CaughtModel.of([low(30.0, True), low(35.0, False)], 62.0, {30.0: 100.0, 35.0: 100.0})
+    jseg = [(-math.inf, 0.0, 2.5, 'stand', None, ESCAPE_RUNS[0]), (30.0, 0.0, 2.5, 'roll', jump_motion(), ESCAPE_RUNS[0])]
+    jt = jm._touch_all(jseg)
+    check('a caught defender jumps only when a hit is AIR, immune in the air to AIR samples alone (the AIR one '
+          'at his take-off misses, the plain one 5 frames later lands)',
+          ([e[0] for e in jm.escapes].count('jump'), [e[0] for e in flin.escapes].count('jump'),
+           bool(jt[jm.bounds[0][0]]), bool(jt[jm.bounds[1][0]]), jump_motion()['iframes'] > 5.0),
+          (1, 0, False, True, True), '_catches: immune = not move air or geometry AIR; jump_motion')
+    # Where a caught defender is at one frame (`_at1`, what `_play` reads at each hit) is `_pos` of
+    # that one frame, bit for bit, on every path the plays above take (standing, held, running,
+    # rolling, jumping, caught in his own dodge), each model played afresh.
+    at1_, kinds_, at1_bad = CaughtModel._at1, set(), [0, 0]
+
+    def at1_check(self, segs, T_):
+        got_ = at1_(self, segs, T_)
+        z_, x_, _ = self._pos(segs, [T_])
+        at1_bad[0] += 1
+        at1_bad[1] += int((float(x_[0]), float(z_[0])) != got_ or np.float64(got_[0]).tobytes()
+                          != x_[:1].tobytes() or np.float64(got_[1]).tobytes() != z_[:1].tobytes())
+        kinds_.add(segs[min(max(int(np.searchsorted(np.array([s[0] for s in segs], float), T_, side='right')) - 1, 0),
+                            len(segs) - 1)][3])
+        return got_
+    CaughtModel._at1 = at1_check
+    try:
+        fresh_ = [CaughtModel.of([disc(30.0, 600000074, 405.0), disc(40.0, 600000074, 405.0),
+                                  disc(50.0, 600000074, 405.0)], 62.0, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0}),
+                  CaughtModel.of([disc(30.0, 600000070, 405.0), disc(40.0, 600000074, 405.0), disc(50.0, 600000074, 405.0),
+                                  disc(70.0, 600000074, 405.0)], 62.0,
+                                 {30.0: 100.0, 40.0: 100.0, 50.0: 100.0, 70.0: 100.0}),
+                  CaughtModel.of(two, ppool, {30.0: 100.0, 40.0: 100.0, 50.0: 100.0}),
+                  CaughtModel.of([low(30.0, True), low(35.0, False)], 62.0, {30.0: 100.0, 35.0: 100.0})]
+        for cm_ in fresh_:
+            for fl_ in (None, (45.0, 55.0), (80.0, 80.0)):
+                cm_.landed(2.5, fl_)
+        mfresh_ = CaughtModel.of(mgeo, 62.0, {30.0: 100.0, 42.0: 100.0, 45.0: 100.0})
+        mfresh_.worth_of(2.5, 1, dodge=(mback, 25.0, 42.0))
+        mfresh_.worth_of(2.5, 0, dodge=(mback, 16.0, 30.0))
+    finally:
+        CaughtModel._at1 = at1_
+    check('where a caught defender is at one frame (_at1) is _pos of that frame, bit for bit, on every kind of path '
+          'his plays take',
+          (at1_bad[0] > 0, at1_bad[1], sorted(kinds_)), (True, 0, ['dodge', 'hold', 'roll', 'run', 'stand']),
+          'CaughtModel._at1, _pos')
+    # One frame's tie in one hit priority record goes to the lower priority, then the attack made
+    # first, in `_catches` as in `CaughtModel._play` (version 21: the list order took it).
+    def tied(prio, created):
+        return {'T': np.array([30.0]), 'X': np.zeros(1), 'Z': np.full(1, -2.5), 'R': np.full(1, 1.0),
+                'PK': np.full(1, -math.inf), 'HPR': (('rec', 0, 0), prio, created)}
+    check('a same-frame tie in one hit priority record: the lower priority catches, then the attack created first',
+          (int(_catches([tied(1, 0), tied(0, 1)], 2.5, None, [0.0])[0][0]),
+           int(_catches([tied(0, 1), tied(0, 0)], 2.5, None, [0.0])[0][0]),
+           int(_catches([tied(0, 0), {**tied(0, 1), 'HPR': (('other', 0, 0), 0, 1)}], 2.5, None, [0.0])[0][0])),
+          (1, 1, 0), 'FUN_14051b210, DmgMan list order (FUN_140527d40)')
+    # The worth of a catch depends on when it is made (bd er-effects-rs-fse5): the same three bursts
+    # as a chain, each burst's samples starting on the frame the last one's end (as fly_tree flies
+    # Bullet 2872 -> 2873 -> 2874, `MEASURED` 2026-11-16: f52.83-60.33, 60.33-67.83, 67.83-75.33), in
+    # a 4 m spot so a medium roll (13 frames of invincibility) ends inside it. A roll whose
+    # invincibility covers burst 1 is first touched by burst 2; the whole geometry priced that catch
+    # as burst 1's standing catch, all three bursts.
+    T3c = np.concatenate([np.arange(52.0 + 7.5 * k, 59.75 + 7.5 * k, 0.5) for k in range(3)])
+    nc = len(T3c)
+    wide = {'T': T3c, 'X': np.zeros(nc), 'Z': np.full(nc, -4.5), 'R': np.full(nc, 4.0), 'PK': np.full(nc, -math.inf),
+            'B': np.repeat([2872, 2873, 2874], nc // 3),
+            'CAUGHT': {'lists': [caught_list(t, 301412902 + k, 202.5, 1, 0.0, 1 / 3, (2872 + k,)) for k in range(3)],
+                       'wf': 1.0}}
+    chain = split_chains(t, [(wide, 52.0)])
+    cw = CaughtModel.of([(wide, 52.0)], 62.0, {52.0: 939.3})
+    cs = CaughtModel.of(chain, 62.0, {52.0: 939.3})
+    sgrid = np.arange(0.0, 76.0, DODGE_STEP)
+    by2, same = [], True
+    for mv in roll_motion():
+        hs, ts = _catches([g for g, _ in chain], 4.5, mv, sgrid)
+        _, tw = _catches([wide], 4.5, mv, sgrid)
+        same = same and bool(np.array_equal(ts, tw))
+        by2.append((int((hs == 1).sum()), float(sgrid[hs == 1].min()), float(ts[hs == 1].min())))
+    check('a bullet chain is one geometry per list (split_chains): Rosus\'s Summons\' bursts as three parts at one '
+          'frame; a defender who stands is played as before (all three land, 939.3); every dodge start is touched '
+          'on the frame it was; in each medium roll the starts f46.5-52 escape burst 1 and are first touched by '
+          'burst 2 (the f59.5 the bursts share is burst 2\'s) and are credited bursts 2-3 (626.2), where the whole '
+          'geometry credited all three',
+          ([(g['CHAIN'][:3], len(g['T']), g['CAUGHT']['wf']) for g, _ in chain], cs.row(4.5, 0),
+           round(cs.worth_of(4.5, 0), 1), same, by2, cs.row(4.5, 1), round(cs.worth_of(4.5, 1), 1),
+           round(cw.worth_of(4.5, 0), 1)),
+          ([((0, 3, 52.0), 16, 1.0), ((1, 3, 59.5), 16, 1.0), ((2, 3, 67.0), 16, 1.0)], [[1.0], [1.0], [1.0]],
+           939.3, True, [(12, 46.5, 59.5)] * 4, [[0.0], [1.0], [1.0]], 626.2, 939.3),
+          'Bullet 2872-2874 HitBulletID at expiry (REGULATION); roll_motion (TAE); bd er-effects-rs-fse5')
+    # A chain part's homing shots are every shot of its rows in each flight (2026-11-19, `_part_keys`),
+    # not the lineage keys of the flight with no target: each flight's interval children are its own
+    # (`fly_members`), and past `BULLET_INTERVAL_CAP` a flight that makes another number of them takes
+    # other slots. No tree of the regulation reaches it today (no chain-split list set with a `HOMING`
+    # record has an interval row over the cap, `MEASURED` 2026-11-19, target/wf/splitcap/reach.py and
+    # reach2.py), so the tree is made here: Bullet 4980812 (a carrier: it dies on him and makes its
+    # child there) with its 0.11-0.25 s timer set to 0.03 s and one shot, its children 4980813 and
+    # their 4980814, under ids of their own. With no one there it flies its whole second and makes
+    # 32 children (`interval_frames`: the k-th on move ceil(1.8 k), while that is under its 60), of
+    # which 12 are flown; against a roll it dies on him sooner or later and makes
+    # another number, so 12 other slots.
+    class _OwnRows:
+        """`t` with Bullet rows of its own, under a regulation of its own (`_homing_entries` finds
+        the tables by it)."""
+
+        def __init__(self, base, bullet):
+            self._base, self.bullet, self.regulation = base, bullet, ('selftest chain cap', base.regulation)
+
+        def __getattr__(self, k):
+            return getattr(self._base, k)
+    syn = {4980812: 990000012, 4980813: 990000013, 4980814: 990000014}
+    srows = dict(t.bullet)
+    for old, new in syn.items():
+        r = dict(t.bullet[old])
+        for f in ('HitBulletID', 'intervalCreateBulletId'):
+            r[f] = syn.get(r[f], r[f])
+        if old == 4980812:
+            r.update(intervalCreateTimeMin=0.03, intervalCreateTimeMax=0.03, numShoot=1)
+        srows[new] = r
+    ts = _OwnRows(t, srows)
+    sbt = bullet_tree(ts, 990000012)
+    sspec = homing_spec(ts, sbt, 0.0, None, lambda nd: nd['bullet'] in (990000013, 990000014))
+    nt = [e['key'] for e in fly_members(ts, sbt, 1, 0.0, None, None, cap=None) if e['key'][-1][1] == 'i']
+    T2 = np.concatenate([np.arange(20.0, 30.5, 0.5), np.arange(30.0, 40.5, 0.5)])
+    n21 = 21
+    sg = {'T': T2, 'X': np.zeros(len(T2)), 'Z': np.full(len(T2), -3.0), 'R': np.full(len(T2), 0.5),
+          'PK': np.full(len(T2), -math.inf), 'B': np.array([990000013] * n21 + [990000014] * (len(T2) - n21)),
+          'HOMING': sspec,
+          'CAUGHT': {'lists': [caught_list(t, 4980630, 10.0, 1, 0.0, 0.5, (b,)) for b in (990000013, 990000014)],
+                     'wf': 1.0}}
+    sparts = split_chains(ts, [(sg, 20.0)])
+    whole = sspec['parts'][0] if sspec else None
+    noaim = fly_shots(ts, sbt)
+    sstarts = np.arange(0.0, 60.0, DODGE_STEP)
+    by_index = by_part = finite = 0
+    for dist in (3.07, 4.57) if whole is not None else ():
+        for j, mv in enumerate(roll_motion()):
+            tts = _homing_entries(whole, sspec['reg'], dist, roll_motion(), False, sstarts)[j]
+            for (p, _), b in zip(sparts, (990000013, 990000014)):
+                want = np.full(len(sstarts), math.inf)
+                old = np.full(len(sstarts), math.inf)
+                keys = {k for e, k in zip(noaim, noaim.keys) if e[0]['bullet'] == b}
+                for k, v in tts.items():
+                    if k[-1][0] == b:
+                        want = np.minimum(want, v)
+                        if k in keys:
+                            old = np.minimum(old, v)
+                finite += int(np.isfinite(want).sum())
+                by_index += int((old != want).sum())
+                by_part += int(('HOMING' in p) and not np.array_equal(_homing_touch(p, dist, mv, sstarts), want))
+    check('a chain part flown again after a dodge takes every shot of its rows that flight makes: a carrier '
+          f'with a 0.03 s timer makes 32 children with no one there, and against a roll another number, so '
+          f'the no-target flight\'s keys miss children a dodge flight makes (the old reading: {by_index} of '
+          f'{2 * 4 * 2 * len(sstarts)} dodge starts read another touch) and the parts read the whole flight\'s '
+          f'touches by their rows',
+          (sbt is not None and t.bullet.get(990000012) is None, len(nt), [('HOMING' in p, p.get('CHAIN', (0, 0))[:2])
+                                                                       for p, _ in sparts],
+           finite > 0, by_index > 0, by_part),
+          (True, 32, [(True, (0, 2)), (True, (1, 2))], True, True, 0),
+          'fly_members (each flight\'s interval children its own, BULLET_INTERVAL_CAP); _chain_parts, _part_keys')
+    # `_homing_many` (each move flown from its own starts, no shot made for a defender already
+    # touched: `least`) against `_homing_touch` of each read alone, on the chain's parts, moves
+    # carried on a roll (each start set its own) and one not.
+    trk_ = track_extend((), roll_motion()[1], 8.0)
+    reqs_ = [(carried(mv, trk_), np.arange(18.0, 40.0, DODGE_STEP)) for mv in roll_motion()] + \
+        [(carried(roll_motion()[0], trk_), np.arange(30.0, 52.0, DODGE_STEP)),
+         (roll_motion()[2], np.arange(10.0, 20.0, DODGE_STEP))]
+    many_n = many_bad = many_fin = 0
+    for dist in (3.07, 4.57):
+        for p, _ in sparts:
+            if 'HOMING' not in p:
+                continue
+            for (mv, s_), gv in zip(reqs_, _homing_many(p, dist, reqs_)):
+                wv = _homing_touch(p, dist, mv, s_)
+                many_n += 1
+                many_fin += int(np.isfinite(wv).sum())
+                many_bad += int(np.asarray(gv, float).tobytes() != np.asarray(wv, float).tobytes())
+    check('the homing shots flown ahead together (_homing_many: each move from its own starts, no child '
+          'made for a defender a counted shot touched before it) give every read\'s touches as it flies alone',
+          (many_n, many_fin > 0, many_bad), (2 * 2 * len(reqs_), True, 0),
+          '_homing_many, _homing_entries (least, starts per move), fly_members bound')
     # A follow-up pressed late (bd er-effects-rs-me5p). Samples that touch wherever he is (radius
     # 1000 m): the opening at f40-41, which he rolls from about f34 (the middle of the starts
     # f28-40 that escape it); the follow-up 1-2 frames after a press whose window opens at f43.
@@ -10184,6 +15043,20 @@ def selftest():
           (early['value'] < 0.25, late['value'] > early['value'] + 0.4, late['delayed'] > 0.4,
            late['value'] - late['punish_hp'] >= early['value'] - early['punish_hp'], late['base'] == early['base'] == 2.0),
           (True, True, True, True, True), 'FollowupModel.outcome, attacker_reactions')
+    # A follow-up that catches him in his roll of the opening is its own play (version 25, `_mid`):
+    # priced by `mid_worth`; one column per (start, catch) on the earliest press's timeline when the
+    # opening is over by then (here every such catch is, the opening ending at f41); priced as the
+    # geometry's own worth it gives the outcome without plays exactly.
+    fmm = FollowupModel([(opening, 0)], [(follow, 1)], 43.0, delays, my_roll=80.0)
+    mo0 = fmm.outcome(2.5, 0.0, worth)
+    mo1 = fmm.outcome(2.5, 0.0, worth, mid_worth=lambda d, h, mv, s, tc: float(worth(d, [h])[0]))
+    mo7 = fmm.outcome(2.5, 0.0, worth, mid_worth=lambda d, h, mv, s, tc: 7.0)
+    check('a follow-up that catches him in his roll of the opening is a play of its own: every one a column kept '
+          'once for every delay (the opening is over first), priced by mid_worth, and the outcome without them '
+          'when priced as the follow-up geometry\'s own worth',
+          (len(fmm.plays) > 0, all(p[0] == 'follow' and p[5] is None for p in fmm.plays),
+           round(mo1['value'] - mo0['value'], 12), mo7['value'] > mo0['value']), (True, True, 0.0, True),
+          'FollowupModel._mid, _worth_table')
     blind = FollowupModel([(opening, 0)], [(follow, 1)], 35.0, delays, my_roll=80.0)
     away = FollowupModel([(touch([40.0, 40.5, 41.0], 1.0), 0)], [(follow, 1)], 43.0, delays, my_roll=80.0)
     check('no roll seen before the window opens (it opens at f35, his roll shows from about f37), or no '
@@ -10191,6 +15064,36 @@ def selftest():
           tuple(round(m.outcome(2.5, 0.0, worth)['value'] - m.outcome(2.5, 0.0, worth, see=False)['value'], 12)
                 for m in (blind, away)) + (round(away.outcome(2.5, 0.0, worth)['delayed'], 12),),
           (0.0, 0.0, 0.0), 'FollowupModel: attacker_reactions, no opening burst reaching him')
+    # The stand row sees the caught defender leave (version 25). An opening flinch at f20 and a
+    # follow-up 1 frame after a press whose window opens at f43, both touching him anywhere; his
+    # whiff's recovery holds him to f40. Caught standing he rolls out at f40 (invincible to f53):
+    # pressed 0-8 frames late the follow-up finds him invincible, from 9 on it catches him. An
+    # attacker whose column is a delay of 3 to 8 sees the roll start about 5-10 frames after f40 and
+    # presses late enough for it on the share of his reactions that see it in time; column 0 cannot
+    # wait, and from 9 the column's own press already catches him.
+    def wide_(frames):
+        T_ = np.array(frames, float)
+        return {'T': T_, 'X': np.zeros(len(T_)), 'Z': np.full(len(T_), -2.5), 'R': np.full(len(T_), 1000.0),
+                'PK': np.full(len(T_), -math.inf), 'CAUGHT': {'lists': [caught_list(t, 600000074, 405.0)], 'wf': 1.0}}
+    sop, sfo = wide_([20.0, 20.5]), wide_([44.0, 44.5])
+    sfm = FollowupModel([(sop, 0)], [(sfo, 1)], 43.0, delays, my_roll=80.0)
+    scm = {d: CaughtModel.of([(sop, 20.0), (shift_geometry(sfo, float(d)), 44.0 + d)], 62.0,
+                             {20.0: 100.0, 44.0 + d: 100.0}) for d in range(len(delays))}
+
+    def sworth(d, idx):
+        return np.array([scm[d].worth_of(2.5, int(h), floors=(40.0, 40.0)) for h in idx])
+    sm0 = sfm.mixup(2.5, 0.0, sworth)
+    sm1 = sfm.mixup(2.5, 0.0, sworth, stand_escapes=lambda d: scm[d].escape_table(2.5, 0, floors=(40.0, 40.0)))
+    srow0, srow1 = sm0['M'][sm0['rows'].index('stand')], sm1['M'][sm1['rows'].index('stand')]
+    TE_, S_, C_ = scm[0].escape_table(2.5, 0, floors=(40.0, 40.0))
+    check('the stand row\'s attacker sees the caught defender roll out (f40) as he sees a roll: at columns 3-8 he '
+          'presses late enough on the reactions that see it in time, so more lands than at the column\'s own delay; '
+          'column 0 cannot wait and from 9 the column already catches him; with no reaction in time the row is '
+          'worth_of exactly (escape_table)',
+          ([round(x, 1) for x in srow0], [round(x, 1) for x in srow1],
+           float(C_[0, int(np.argmin(S_[0]))]) == sworth(0, [0])[0]),
+          ([100.0] * 9 + [200.0] * 7, [100.0, 100.0, 100.0, 111.1, 133.3, 166.7, 177.8, 188.9, 200.0] + [200.0] * 7,
+           True), 'FollowupModel._stand_values, CaughtModel.escape_table, attacker_reactions')
     # The touch table (`_TouchTable`) gives `_first_touch`'s reads exactly: two geometries, one with
     # launch times and a hold-back peak, the other melee-held, most samples out of reach.
     rng = np.random.default_rng(7)
@@ -10214,6 +15117,20 @@ def selftest():
                                                                                    [0.0])[0])
     check('the touch table reads what _first_touch reads, start by start (cuts, starts before and past its grid, '
           'samples out of reach left out)', (same, touched > 100), (True, True), '_TouchTable against _first_touch')
+    # A table whose rows are read as asked (`_RowsTable`) answers as the whole table: lone rows,
+    # runs, the grid's last row, starts past it (the standing table) and every start at once.
+    same_r, made = True, []
+    for dist_ in (2.0, 4.5):
+        stand_ = _TouchTable([gA, None, gB], dist_, None)
+        for mv in roll_motion():
+            whole_ = _TouchTable([gA, None, gB], dist_, mv, -10.0, 61.0, stand_)
+            rows_ = _RowsTable([gA, None, gB], dist_, mv, -10.0, 61.0, lambda s=stand_: made.append(1) or s)
+            for pick in (np.arange(0, len(starts), 17), np.arange(5, 9), np.array([142]), np.array([150, 3]),
+                         np.arange(len(starts))):
+                a_, b_ = rows_.first(starts[pick], cuts[pick]), whole_.first(starts[pick], cuts[pick])
+                same_r = same_r and np.array_equal(a_[0], b_[0]) and np.array_equal(a_[1], b_[1])
+    check('a touch table read row by row as asked (_RowsTable) answers as the whole table',
+          (same_r, len(made)), (True, 8), '_RowsTable against _TouchTable')
     # With no follow-up the model is `sequence_outcome` on the opening, punish included.
     two = [(touch([40.0, 40.5, 41.0]), 0), (touch(np.arange(70.0, 86.0, 0.5)), 1)]
     alone = FollowupModel(two, [], 100.0, [0.0], my_roll=90.0, strikes=[15.0])
@@ -10222,8 +15139,435 @@ def selftest():
     check('an opening with no follow-up scores as sequence_outcome does (value, evade, punish)',
           tuple(round(got[k] - seq[k], 9) for k in ('value', 'p_evade', 'p_punish', 'base')), (0.0, 0.0, 0.0, 0.0),
           'FollowupModel against sequence_outcome')
+    # The mixup (bd er-effects-rs-me5p; the user, 2026-11-16, "what is called a 50/50"): the game's
+    # value, solved exactly. Known games first, then the equilibrium conditions on a random one: the
+    # attacker's mix earns at least the value against every row, the defender's concedes at most
+    # the value to every column.
+    games = [(np.array([[1.0, -1.0], [-1.0, 1.0]]), 0.0), (np.array([[0, 1, -1], [-1, 0, 1], [1, -1, 0]], float), 0.0),
+             (np.array([[3.0, 1.0], [2.0, 0.0]]), 2.0)]
+    solved = [zero_sum_game(M_) for M_, _ in games]
+    R_ = np.random.default_rng(11).normal(size=(4, 9))
+    v_, x_, y_ = zero_sum_game(R_)
+    check('zero_sum_game: matching pennies 0 at (1/2, 1/2), rock-paper-scissors 0 uniform, a dominated row '
+          'and column 2 in pure strategies; on a random 4 x 9 game each mix holds the value against every '
+          'pure reply and both mixes are distributions',
+          ([round(v, 9) for v, _, _ in solved], [round(float(z), 9) for z in solved[0][1]],
+           [round(float(z), 9) for z in solved[1][2]], [round(float(z), 9) for z in solved[2][1]],
+           bool((R_ @ y_ >= v_ - 1e-9).all() and (x_ @ R_ <= v_ + 1e-9).all()),
+           round(float(x_.sum()), 9), round(float(y_.sum()), 9), bool((x_ >= -1e-12).all() and (y_ >= -1e-12).all())),
+          ([0.0, 0.0, 2.0], [0.5, 0.5], [round(1 / 3, 9)] * 3, [0.0, 1.0], True, 1.0, 1.0,
+           True), 'zero_sum_game: LP duality')
+
+    def worth2(d, idx):
+        return np.array([0.5, 1.0])[idx]
+    mix = fm.mixup(2.5, 0.0, worth2, open_worth=lambda idx: np.array([0.3, 0.0])[idx], open_roll=60.0)
+    once = fm.outcome(2.5, 0.0, worth2)
+    M_ = mix['M']
+    check('FollowupModel.mixup: its fixed sequence is outcome\'s scored net; the rows are the roll and standing '
+          'to take the opening, the columns no follow-up and the press policy at every default delay; the '
+          'solution holds its value against every pure reply',
+          (round(mix['fixed'] - (once['value'] - once['punish_hp']), 9), mix['rows'][-1], mix['cols'][:2], len(mix['cols']),
+           bool((M_ @ mix['y'] >= mix['value'] - 1e-9).all() and (mix['x'] @ M_ <= mix['value'] + 1e-9).all())),
+          (0.0, 'stand', ['none', 0.0], 1 + len(delays), True), 'FollowupModel.mixup, zero_sum_game')
+
+    # Version 22: the defender picks his roll's direction (`dodge_families`). A long live line
+    # straight down his axis (late, so no i-frames cover it) catches a forward or back roll and
+    # misses a side roll: knowing the attack he rolls aside and evades it all, where the four
+    # directions pressed a quarter each evaded half.
+    fams = dodge_families()
+    TT, ZZ = np.meshgrid(np.arange(20.0, 110.0, 1.0), np.arange(-9.0, 0.01, 0.25), indexing='ij')
+    line = {'T': TT.ravel(), 'X': np.zeros(TT.size), 'Z': ZZ.ravel(), 'R': np.full(TT.size, 0.5),
+            'PK': np.full(TT.size, -math.inf)}
+    picked = sequence_outcome([([line], [1.0])], 2.5)
+    blend = sequence_outcome([([line], [1.0])], 2.5, families=[roll_motion()])
+    check('dodge_families: each roll direction its own family (four), the jump a fifth with AIR; against a '
+          'line down his axis he rolls aside and evades it all, the old blend of the four evaded half',
+          (len(fams), [len(f) for f in fams], len(dodge_families(True)), round(picked['p_evade'], 3),
+           round(blend['p_evade'], 3), picked['moves'] in {m['anim'] for m in roll_motion()}),
+          (4, [1, 1, 1, 1], 5, 1.0, 0.5, True), 'dodge_families, sequence_outcome (MEASURED 2026-11-16)')
+    # Version 22: one rule for where the attacker ends (`attack_advance`, `advance_at`): his root
+    # motion, stopped 2 x PUSH_CAPSULE_RADIUS short of the defender as every hit is held back.
+    push2 = 2 * _pose()[1].PUSH_CAPSULE_RADIUS
+    adv_g = {'T': np.array([30.0, 40.0]), 'X': np.zeros(2), 'Z': np.full(2, -99.0), 'R': np.full(2, 0.1),
+             'PK': np.array([2.0, 5.0]), 'ADV': (6.0, 4.0)}
+    back = next(m for m in roll_motion() if m['path'][-1][1] > 1.0)
+    check('attack_advance / advance_at: the larger of PK and the clip\'s ADV peak, ending where the last clip '
+          'ends; up to a frame, PK alone; stopped 2 x push short of him (Savage Claws\' 8.93 m at 2 m is 1.2 m, '
+          'not past him); a back roll at 6 m is in R1 reach of an attacker carried 7 m and must run in to one '
+          'who stood',
+          (attack_advance([adv_g, None]), attack_advance([adv_g], upto=35.0),
+           round(advance_at((8.93, 8.93), 2.0), 6), round(advance_at((6.0, 4.0), 10.0), 6),
+           round(advance_at((6.0, 4.0), 3.0), 6), punish_lead(back, 6.0, (7.0, 7.0))[1] == 0.0,
+           punish_lead(back, 6.0, 0.0)[1] > 0.0),
+          ((6.0, 4.0), (2.0, 2.0), round(2.0 - push2, 6), 4.0, round(4.0 - (6.0 - (3.0 - push2)), 6), True, True),
+          'attack_advance, advance_at, punish_lead (er-mechanics-reach.front_contact_times rule)')
+    _selftest_v26(check, t)
     print(f'{passed} passed, {failed} failed, {skipped} skipped')
     return 1 if failed else 0
+
+
+def _selftest_v26(check, t):
+    """Version 26's checks: the roll he escaped with carries him into the next burst (place, floor,
+    facing), in `sequence_outcome`, `volley_outcome` and `FollowupModel`; a follow-up catch made
+    while the opening could still touch him is a play; a roll row's press the opening caught meets
+    the stand row's rule; the exchange model's dodge aims for the punish. Bursts are bullet-style
+    samples (the defender at Z = -distance, `contact_geometry`), PK -inf (no hold-back)."""
+    import numpy as np
+
+    def disc_(frames, x, z, r):
+        T_ = np.asarray(frames, float)
+        return {'T': T_, 'X': np.full(len(T_), float(x)), 'Z': np.full(len(T_), -float(z)), 'R': np.full(len(T_), float(r)),
+                'PK': np.full(len(T_), -math.inf)}
+    rolls = roll_motion()
+    back = next(m for m in rolls if m['path'][-1][1] > 1.0)
+    side = next(m for m in rolls if m['path'][-1][0] > 1.0)
+    bz21, sx21 = back['path'][21][1], side['path'][21][0]
+    # Place. A 3-frame burst over everything at f40-42 he can only roll through (presses f29.5-40:
+    # i-frames f0-13), then a 60-frame burst of radius 0.5 on the spot he started from. A back roll
+    # leaves him bz21 = 3.709 m back on the first whole frame of its dodge cancel (f21; the cancel
+    # opens at f20.99999): 3.709 > 0.5, so the second burst never touches him and nothing lands; on the
+    # spot (version 25 put him back there) it touches at f100.
+    b1 = disc_([40.0, 41.0, 42.0], 0.0, 2.5, 1e3)
+    b2 = disc_(np.arange(100.0, 160.0, 1.0), 0.0, 2.5, 0.5)
+    pa = sequence_outcome([([b1], [10.0]), ([b2], [100.0])], 2.5, families=[[back]])
+    spot = _catches([b2], 2.5, None, [0.0])
+    check('v26 place: a back roll through a burst leaves him 3.709 m back (its dodge cancel, f21); a 0.5 m burst on '
+          'the spot he started from then never touches him (version 25 put him back on it, touched at f100)',
+          (round(bz21, 3), round(pa['value'], 6), round(pa['p_evade'], 6), int(spot[0][0]), float(spot[1][0])),
+          (3.709, 0.0, 1.0, 0, 100.0), 'dodge_chain, track_extend, roll_motion (TAE)')
+    # Floor. The first press pinned at f30 (a plan): i-frames to f43 cover f40-42; his next dodge comes no
+    # sooner than f30 + 21 = f51 (its dodge cancel, 20.99999 read on the 0.5 grid). A burst over everything
+    # at f50.5-52 finds him in that roll (vulnerable from f43) at f50.5: caught in his roll, never pressed.
+    # Version 25 freed him at the burst's end plus his recovery past the i-frames, f42 + 8 = f50, and he
+    # rolled through it.
+    def pin(moves, oks, cue, floor, **_kw):
+        return [[(30.0, 1.0)] for _ in moves]
+    bf = disc_([50.5, 51.0, 51.5, 52.0], 0.0, 2.5, 1e3)
+    chf = dodge_chain([[b1], [bf]], 2.5, [back], plan=pin)
+    ev = chf['events']
+    check('v26 floor: escaping f40-42 with a roll from f30, his next dodge waits for f51 (start + dodge cancel); a '
+          'burst at f50.5 catches him in that roll (version 25 freed him at f50 and he rolled it)',
+          (round(sum(w for *_, w in ev), 6), sorted({(bi, h, p[0]['anim'], p[1], p[2]) for bi, h, p, _ in ev}),
+           round(chf['p_evade'], 6), round(30.0 + dodge_end(back), 4)),
+          (1.0, [(1, 0, back['anim'], 30.0, 50.5)], 0.0, 51.0),
+          'dodge_chain: floor = start + dodge_end; still_move; dodge_end f20.99999 (TAE)')
+    _selftest_v27(check, t, disc_, b1)
+    # Volley. The same place rule: threat 'a' over everything at f40-42, threat 'b' the 0.5 m burst on the
+    # spot; a back roll escapes 'a' and is 3.709 m from 'b': nothing lands; both land on a defender who
+    # never dodges (base 101).
+    vo2 = volley_outcome([([b1], ['a']), ([b2], ['b'])], {'a': 1.0, 'b': 100.0}, 2.5, families=[[back]])
+    check('v26 volley: the back roll that escapes threat a carries him 3.709 m from threat b on the spot: nothing '
+          'lands; standing he takes both',
+          (round(vo2['value'], 6), round(vo2['base'], 6), round(vo2['p_evade'], 6)), (0.0, 101.0, 1.0),
+          'volley_outcome, _volley_burst track')
+    # Follow-up. The opening over everything at f40-41 (rolled through), the follow-up a 0.5 m burst on the
+    # spot from f70 to f130, pressed at f43, delay 0 only: every roll direction leaves him off that spot
+    # (version 27, the whole clip: back 3.71 m sliding to 3.17, forward 3.27 sliding to 3.65, aside 3.42
+    # sliding to 4.41), so nothing of it lands; version 25 met it back on the spot (60 frames he cannot
+    # roll), where it lands.
+    fo = disc_(np.arange(70.0, 130.0, 1.0), 0.0, 2.5, 0.5)
+    op = disc_([40.0, 40.5, 41.0], 0.0, 2.5, 1e3)
+    fmv = FollowupModel([(op, 0)], [(fo, 1)], 43.0, [0.0], my_roll=200.0)
+
+    def worth2(d, idx):
+        return np.array([2.0, 1.0])[idx]
+    fov = fmv.outcome(2.5, 0.0, worth2)
+    check('v26 follow-up: the roll that escapes the opening carries him off the spot the follow-up lays (0.5 m, '
+          'f70-130); nothing of it lands where version 25 put him back on it',
+          (round(fov['value'], 6), round(fov['p_evade'], 6), fov['base'], int(_catches([fo], 2.5, None, [0.0])[0][0])),
+          (0.0, 1.0, 2.0, 0), 'FollowupModel._shape / _stage / _late with the settled track')
+    # A carried move's touch table read for a start past its grid reads him still on his track (he
+    # never starts that move; `_StillTable`): settled 0.2 m behind the spot, inside the 0.5 m follow-up
+    # from f70, both reads give (0, f70).
+    trk_r = ((TRACK_EVER, 0.0, 0.2, STILL),)
+    far_ = fmv._tab(2.5, carried(back, trk_r)).first([500.0], [-math.inf])
+    still_ = fmv._follow_still(2.5, 0, -math.inf, trk_r)
+    check('v26: a carried move\'s table past its grid reads the still track (0.2 m behind the spot: caught at f70)',
+          ((int(far_[0][0]), float(far_[1][0])), (int(still_[0][0]), float(still_[1][0]))), ((0, 70.0), (0, 70.0)),
+          'FollowupModel._tab / _stand_tab / _StillTable')
+    # A follow-up catch while the opening could still touch him is a play (version 26). The opening never
+    # reaches him (a sample 1000 m aside at f40 and f200: it is not over until f200); the follow-up touches
+    # everywhere at f44 and again at f70 (one burst): he rolls through f44 and f70 catches him in that roll,
+    # before f200. Version 25 weighed it on the follow-up geometry (it was not over); now it is a play of
+    # that delay (`_mid` 'follow', delay 0), priced by mid_worth: 7 a unit of weight against the geometry's 1.
+    opf = disc_([40.0, 200.0], 1000.0, 2.5, 0.5)
+    fof = disc_([44.0, 70.0], 0.0, 2.5, 1e3)
+    fmp = FollowupModel([(opf, 0)], [(fof, 1)], 43.0, [0.0], my_roll=200.0)
+    pv1 = fmp.outcome(2.5, 0.0, worth2, mid_worth=lambda d, h, mv, s, tc: 1.0)
+    pv7 = fmp.outcome(2.5, 0.0, worth2, mid_worth=lambda d, h, mv, s, tc: 7.0)
+    plays_f = [p for p in fmp.plays if p[0] == 'follow']
+    check('v26 item 2: a follow-up catch made before the opening is over is a play of that delay (here f70 < f200), '
+          'priced by mid_worth (7 against 1 a unit of weight), not the geometry\'s worth',
+          (len(plays_f) > 0, all(p[5] == 0 for p in plays_f), pv1['value'] > 0, round(pv7['value'] / pv1['value'], 9)),
+          (True, True, True, 7.0), 'FollowupModel._stage raw plays, _resolve, _mid')
+    # A roll row's press the opening caught (version 26). The stand row's setup: an opening flinch at
+    # f20-20.5 over everything, the follow-up at f44 a frame after a press whose window opens at f43, his
+    # whiff's recovery holding a caught defender to f40 (he rolls out there). With his dodge floor at f30
+    # every roll press (at f30) comes after the opening caught him: every roll row is the stand row's
+    # catch, so with the caught defender's escape (`catch_escapes`) each roll row is the stand row (100
+    # to f2, 111.1, 133.3, 166.7, 177.8, 188.9, then 200). Version 25 had the attacker read the press at
+    # f30 as a roll he saw before the window opened (f30 + his reaction < f43) and press at f9, where
+    # the follow-up catches the roll-out at f40: 200 at every column, for a roll that never happened.
+    def wide2(frames):
+        T_ = np.array(frames, float)
+        return {'T': T_, 'X': np.zeros(len(T_)), 'Z': np.full(len(T_), -2.5), 'R': np.full(len(T_), 1000.0),
+                'PK': np.full(len(T_), -math.inf), 'CAUGHT': {'lists': [caught_list(t, 600000074, 405.0)], 'wf': 1.0}}
+    delays = [float(d) for d in range(16)]
+    sop, sfo = wide2([20.0, 20.5]), wide2([44.0, 44.5])
+    sfm = FollowupModel([(sop, 0)], [(sfo, 1)], 43.0, delays, my_roll=80.0)
+    scm = {d: CaughtModel.of([(sop, 20.0), (shift_geometry(sfo, float(d)), 44.0 + d)], 62.0,
+                             {20.0: 100.0, 44.0 + d: 100.0}) for d in range(len(delays))}
+
+    def sworth(d, idx):
+        return np.array([scm[d].worth_of(2.5, int(h), floors=(40.0, 40.0)) for h in idx])
+
+    def esc(col):
+        return (lambda d: scm[d].escape_table(2.5, 0, floors=(40.0, 40.0))) if col == 0 else None
+    rm0 = sfm.mixup(2.5, 30.0, sworth, stand_escapes=esc(0))
+    rm1 = sfm.mixup(2.5, 30.0, sworth, stand_escapes=esc(0), catch_escapes=esc)
+    rows0 = {r: [round(x, 1) for x in rm0['M'][i]] for i, r in enumerate(rm0['rows'])}
+    rows1 = {r: [round(x, 1) for x in rm1['M'][i]] for i, r in enumerate(rm1['rows'])}
+    stand_row = [100.0, 100.0, 100.0, 111.1, 133.3, 166.7, 177.8, 188.9, 200.0] + [200.0] * 7
+    check('v26 item 3: a roll row whose press the opening caught meets the stand row\'s rule (the attacker presses '
+          'for the caught defender\'s escape): each roll row is the stand row; version 25 priced it at the column\'s '
+          'delay',
+          (rows1['stand'], sorted({tuple(v) for r, v in rows1.items() if r.startswith('roll:')}),
+           sorted({tuple(v) for r, v in rows0.items() if r.startswith('roll:')})),
+          (stand_row, [tuple(stand_row)], [tuple([200.0] * 16)]),
+          'FollowupModel._CaughtRows, _stand_values, CaughtModel.escape_table')
+    # The exchange model's dodge aims for its punish (version 26). An opener at f40-42 and a chained hit at
+    # f49 (gap 9), both in reach everywhere: a roll escapes the opener from f29.5 to f40 (i-frames 13) and
+    # both only from f36.5 (36.5 + 13 > 49), and his punish (R1 at f20, strike 18, the string ends at f200)
+    # needs both missed. Aimed for escape alone (version 25) he presses at the earliest aim that escapes
+    # the opener every time, f29.5-33.6, and never punishes; aimed for what each press is worth (1 for the
+    # opener, 1 for the punish) he presses where that is most, which a scan of every aim 0.01 frame apart
+    # confirms is the table's.
+    opp = Opponents([{'w': 1, 'active': 3, 'reach': 99.0, 'hp': 300.0, 'startup': 40.0, 'gap2': 9.0, 'active2': 1,
+                      'reach2': 99.0, 'hp2': 100.0, 'end': 200.0}])
+    plain = opp._table(rolls, 'v25')
+    aimed = opp._table(rolls, 'v26', 18, 99.0)
+    dv = opp.dodge_value(rolls, 'v26', 18, 99.0, 500.0)
+    m0 = rolls[0]
+    dist0 = np.array([math.hypot(x, ENGAGE_DISTANCE_M + z) for x, z in m0['path']])
+    errs = np.array(_timing_errors(DODGE_TIMING_SD_S * TAE_FPS), float)
+    gain0 = _ExchangeGain(opp, 0, m0, dist0, 18, 99.0)
+    grid0 = np.arange(0.0, 44.0, DODGE_STEP)
+    ok0 = opp._escapes(dist0, m0['iframes'], 40.0, 3, 99.0, grid0)
+
+    def worth_at(a, t0):
+        # What his 7 presses aimed at `a` are worth to him, each read at its start on the grid.
+        S_ = np.maximum(t0, a + errs)
+        i_ = np.round(S_ / DODGE_STEP).astype(int)
+        inside = (i_ >= 0) & (i_ < len(ok0))
+        okv = np.where(inside, ok0[np.clip(i_, 0, len(ok0) - 1)], False)
+        return float((okv * (1.0 + gain0(i_ * DODGE_STEP))).sum())
+    t0 = max(opp.cue[0] + d for d, _ in reaction_delays())
+    scan = max(worth_at(a, t0) for a in np.arange(t0, 44.0, 0.01))
+    S_aim = aimed['S'][aimed['ROW'] == 0][:len(errs)]
+    i_aim = np.round(S_aim / DODGE_STEP).astype(int)
+    got_best = float((ok0[i_aim] * (1.0 + gain0(i_aim * DODGE_STEP))).sum())
+    check('v26 item 4: the exchange model\'s dodge aims for its punish: aimed for escape alone it never punishes '
+          '(presses f29.5-33.6, before the f36.5 both hits need); aimed for escape and punish it punishes, at the '
+          'best aim a scan of every aim 0.01 frame apart finds',
+          (round(float((plain['W'] * plain['FIRST'] * plain['SECOND']).sum()), 6), dv['p_punish'] > 0.5,
+           round(got_best, 6) == round(scan, 6), round(float(plain['S'].min()), 1) >= 29.0),
+          (0.0, True, True, True), 'Opponents._table, _ExchangeGain, dodge_presses (version 25 aim rule)')
+
+
+def _selftest_v27(check, t, disc_, b1):
+    """Version 27's checks: the roll's whole slide, the attacker's facing from the clip's turn rules,
+    a roll out of a track facing the attacker, the volley on the shared chain, a caught defender's
+    play in the attacker's facing, a homing geometry in the follow-up's tables, and an opening
+    burst after the last that reaches him standing."""
+    import numpy as np
+    rolls = roll_motion()
+    back = next(m for m in rolls if m['path'][-1][1] > 1.0)
+    fwd = next(m for m in rolls if m['path'][-1][1] < -1.0)
+    side = next(m for m in rolls if m['path'][-1][0] > 1.0)
+    # The clip's turn rules (`clip_turn`): Savage Claws' opening (a6xx 040000) sets TAE 224 300 deg/s
+    # f0-15, 600 deg/s f15-53 and f53-63, none f63-70 (720 deg/s), and JumpTable 7 f70-150. An update is
+    # half a real frame at 30 fps: 300 x 0.5 / 30 = 5 deg, 600 -> 10, 720 -> 12, 0 under JumpTable 7; 300
+    # updates to f150.
+    claws = clip_turn(SKILL_TAE_BASE + t.arts[4070]['swordArtsTypeNew'], 40000)
+    check('v27 clip_turn: Savage Claws turns 5 / 10 / 10 / 12 / 0 deg an update at f5 / f20 / f60 / f65 / f75 '
+          '(TAE 224 300 and 600 deg/s, none, JumpTable 7 from f70), 300 updates to f150',
+          ([round(math.degrees(claws['rate'][int(f * 2)]), 6) for f in (5, 20, 60, 65, 75)], len(claws['rate'])),
+          ([5.0, 10.0, 10.0, 12.0, 0.0], 300), 'TAE a6xx 040000 224 / JumpTable 7; er-mechanics-reach.turn_rate_at')
+    # The facing (`_turn_track`): a defender at (0, 3) who is at (1, 3) from the next update on, a turn of
+    # 0.1 rad an update: 0, 0.1, 0.2, 0.3, then his bearing atan2(1, 3) = 0.32175. With no turn on updates
+    # 1 and 2 (JumpTable 7): 0, 0.1, 0.1, 0.1, 0.2, 0.3, 0.32175.
+    toy = {'t0': 0.0, 'rate': np.full(10, 0.1), 'fwd': None, 'sig': ('toy',)}
+    xs, ds = np.array([[0.0] + [1.0] * 6]), np.full((1, 7), 3.0)
+    th1 = _turn_track(toy, xs, ds, 7)[0][0]
+    th2 = _turn_track({**toy, 'rate': np.array([0.1, 0.0, 0.0, 0.1, 0.1, 0.1, 0.1])}, xs, ds, 7)[0][0]
+    # His root goes his clip's forward root motion along his facing: locked (no turn) at the bearing of a
+    # defender at (1, 3), atan2(1, 3), a 2 m lunge (0.1 m an update) ends 2 x (sin, cos - 1) = (0.632456,
+    # -0.102633) off the straight path.
+    lunge = {'t0': 0.0, 'rate': np.zeros(21), 'fwd': np.arange(21) * 0.1, 'sig': ('lunge',)}
+    _, ldx, ldz = _turn_track(lunge, np.full((1, 21), 1.0), np.full((1, 21), 3.0), 21)
+    check('v27 _turn_track: he faces the defender at the clip\'s start, then turns toward him by at most the '
+          'update\'s rate: 0, 0.1, 0.2, 0.3, 0.32175 (his bearing); none while turning is off; a lunge made '
+          'facing him bends his root toward him (2 m at 18.43 deg: 0.632456 aside, 0.102633 short)',
+          ([round(x, 5) for x in th1], [round(x, 5) for x in th2], round(float(ldx[0, -1]), 6), round(float(ldz[0, -1]), 6)),
+          ([0.0, 0.1, 0.2, 0.3, 0.32175, 0.32175, 0.32175], [0.0, 0.1, 0.1, 0.1, 0.2, 0.3, 0.32175], 0.632456, -0.102633),
+          '_turn_track (clip_turn rule)')
+    # A sample read in the facing it was made in: a 0.5 m disc 3 m down the axis at f10 (a shot with no
+    # launch read: its facing is its first sample's, f10). A defender who steps 1 m aside from f2 stands at
+    # (1, 3), 1 m from the disc: no touch with no turn rules (version 26) or with turning off throughout;
+    # at 720 deg/s the attacker faces him by f3 (18.43 deg, 12 an update), which puts him at (0, 3.1623),
+    # 0.162 m from the disc: caught at f10.
+    step = {'anim': 'step', 'iframes': 0.0, 'ready': None, 'dodge': None, 'move': None, 'path': [(1.0, 0.0)],
+            'distance': 1.0}
+    dg = {'T': np.array([10.0]), 'X': np.zeros(1), 'Z': np.array([-3.0]), 'R': np.array([0.5]), 'PK': np.array([-math.inf])}
+    free_ = int(_catches([{**dg, 'TURN': {'t0': 0.0, 'rate': np.zeros(0), 'fwd': None, 'sig': ('free',)}}], 3.0, step,
+                         [2.0])[0][0])
+    off_ = int(_catches([{**dg, 'TURN': {'t0': 0.0, 'rate': np.zeros(40), 'fwd': None, 'sig': ('off',)}}], 3.0, step,
+                        [2.0])[0][0])
+    none_ = int(_catches([dg], 3.0, step, [2.0])[0][0])
+    xx, dd = np.array([0.0, 1.5, -2.25, 1e-300]), np.array([3.0, 2.5, 7.0, 1e300])
+    same = all(np.array_equal(a, b) for a, b in zip(_turn_apply(xx, dd, np.zeros(4), np.array([1.0, -math.inf, 0.3, 2.0])),
+                                                     (xx, dd)))
+    check('v27 facing: a disc 3 m down the axis at f10 misses a defender stepped 1 m aside with no turn rules or '
+          'turning off, and catches him once the attacker has turned to face him (720 deg/s); a facing of 0 reads '
+          'every place unchanged to the bit',
+          (free_, off_, none_, same), (0, -1, -1, True), '_facing, _turn_apply, _geo_first_touch')
+    # A turned table read once per group of shots that read the defender alike (`_touch_turned`,
+    # 2026-11-19) against every pair read whole (`_touch_rows` `ref`): 400 shots over f40-270 (half
+    # on whole frames, launched at one of two frames with one of three `PK`s or none finite, so
+    # groups hold several), 0.2-1.4 m discs scattered 0-12 m down the axis, with and without launch
+    # reads, turning 720 deg/s with a 2.4 m lunge and with no turn read, 2.5 m out, against a back roll
+    # carried out of a side roll from f30, a back roll alone (on the axis: no facing read) and a side
+    # roll alone, from every start f20-300 in order and shuffled.
+    rs_ = np.random.default_rng(1119)
+    nt_ = 400
+    tt_ = np.sort(rs_.uniform(40.0, 270.0, nt_))
+    tt_ = np.where(rs_.random(nt_) < 0.5, np.floor(tt_), tt_)
+    tg_ = {'T': tt_, 'X': rs_.normal(0.0, 2.5, nt_), 'Z': -rs_.uniform(0.0, 12.0, nt_), 'R': rs_.uniform(0.2, 1.4, nt_),
+           'PK': rs_.choice(np.array([0.4, 1.3, 2.2, np.nan]), nt_),
+           'TL': np.where(rs_.random(nt_) < 0.5, 38.0, np.minimum(tt_, 75.0)),
+           'TURN': {'t0': 0.0, 'rate': np.full(600, math.radians(720.0) * DODGE_STEP / TAE_FPS),
+                    'fwd': np.linspace(0.0, 2.4, 120), 'sig': ('selftest turned table',)}}
+    tg2_ = {k: v for k, v in tg_.items() if k != 'TL'}
+    tg3_ = {k: v for k, v in tg_.items() if k != 'TURN'}
+    ts_ = np.arange(20.0, 300.5, DODGE_STEP)
+    same_t, touched_t = True, 0
+    for tgv in (tg_, tg2_, tg3_):
+        for tmv in (carried(back, track_extend((), side, 30.0)), back, side):
+            for tsv in (ts_, rs_.permutation(ts_)):
+                tp_, tf_ = _touch_rows(tgv, 2.5, tmv, tsv), _touch_rows(tgv, 2.5, tmv, tsv, ref=True)
+                same_t = same_t and tp_.dtype == tf_.dtype and np.array_equal(tp_, tf_)
+                touched_t += int(tf_.sum())
+    check('turned table: read once per group of shots that read the defender alike, it is the table every pair '
+          'read whole gives (carried and plain rolls, with and without launch reads and turns, starts in '
+          'order and shuffled; some pairs touch)',
+          (same_t, touched_t > 0), (True, True), '_touch_turned against _touch_rows ref')
+    # The slide (version 27): a back roll from f30 is 3.7094 m back at f51 (its f21), 3.1699 m at its clip's
+    # end (f49) and after; version 26 stood him at 3.7094 throughout. A 0.3 m disc 5.6699 m out at f100
+    # touches him there and missed the f21 place (0.539 m off).
+    trb = track_extend((), back, 30.0)
+    zb = track_at(trb, [51.0, 79.0, 200.0])[1]
+    b3 = disc_([100.0], 0.0, 2.5 + float(back['path'][-1][1]), 0.3)
+    sm3, ss3 = still_move(trb)
+    caught3 = _catches([b3], 2.5, sm3, [ss3])
+    check('v27 slide: a back roll from f30 is 3.7094 m back at its dodge cancel and 3.1699 m from its clip\'s end '
+          'on; a 0.3 m disc at the end place catches him at f100 (version 26 stood him 0.539 m off it)',
+          ([round(float(z), 4) for z in zb], int(caught3[0][0]), float(caught3[1][0])),
+          ([3.7094, 3.1699, 3.1699], 0, 100.0), 'track_extend (whole clip), track_at, roll_motion (TAE)')
+    # A roll out of a track faces the attacker (`oriented`): from a side roll's end (4.4068 m aside, 2.5 m
+    # out, attacker root at his start) a forward roll's end (0, -3.6486) turns by c = 2.5 / 5.0666 = 0.49343,
+    # s = -4.4068 / 5.0666 = -0.86977: (c x - s z, s x + c z) = (-3.1735, -1.8004), toward the attacker.
+    ofw = oriented(fwd, track_extend((), side, 30.0), 2.5, 0.0)
+    check('v27 oriented: a forward roll out of a side roll\'s end runs toward the attacker: (-3.1735, -1.8004), '
+          'not straight down the axis',
+          tuple(round(float(v), 4) for v in ofw['path'][-1]), (-3.1735, -1.8004), 'oriented, _turned')
+    # The volley on the chain (item 3): threat a over everything at f5-6 (before any press: it lands on
+    # every defender), threat b a 5 m disc 5.67 m out from f100 to f200; the family takes the back and the
+    # forward roll a half each. The back roller is in b (3.17 m back) and every roll from there keeps him
+    # in it; the forward roller, 1.15 m behind the attacker's start, is 6.8 m from it. a and b worth 1000
+    # each, health 1500: half the defenders take both (capped 1500), half a alone (1000): 1250. Chained as
+    # independent (version 26) a landed 1.0 and b 0.5, 1500 capped once: 1500.
+    va = disc_([5.0, 6.0], 0.0, 2.5, 1e3)
+    vb = disc_(np.arange(100.0, 201.0, 1.0), 0.0, 5.67, 5.0)
+    vo3 = volley_outcome([([va], ['a']), ([vb], ['b'])], {'a': 1000.0, 'b': 1000.0}, 2.5, families=[[back, fwd]],
+                         hp=1500.0)
+    check('v27 volley: the chain carries which threats landed together, so the cap at his health is exact: half '
+          'take both (1500), half one (1000): 1250 (independent chances gave 1500); standing he takes both',
+          (round(vo3['value'], 6), round(vo3['base'], 6), round(vo3['p_evade'], 6)), (1250.0, 1500.0, 0.0),
+          'volley_outcome on dodge_chain (_volley_chain)')
+    # A caught defender's play in the attacker's facing (item 4): a caught defender standing 1 m aside at
+    # 3 m (on his escape path) against a 0.1 m disc 3.1623 m down the axis at f10 (his distance from the
+    # attacker): faced (720 deg/s, rotated onto the axis) he is on it; read on the attack's line, 1.01 m off.
+    cg = {'T': np.array([10.0]), 'X': np.zeros(1), 'Z': np.array([-math.hypot(1.0, 3.0)]), 'R': np.array([0.1]),
+          'PK': np.array([-math.inf]), 'CAUGHT': {'lists': [caught_list(t, 600000074, 405.0)], 'wf': 1.0}}
+    segs_ = [(-math.inf, 1.0, 3.0, 'stand', None, ESCAPE_RUNS[0])]
+    cm_t = CaughtModel([({**cg, 'TURN': {'t0': 0.0, 'rate': np.zeros(0), 'fwd': None, 'sig': ('free',)}}, 10.0)], 62.0)
+    cm_n = CaughtModel([(cg, 10.0)], 62.0)
+    check('v27 caught play: a caught defender 1 m aside is read in the attacker\'s facing (on a 0.1 m disc at his '
+          'distance down the axis); read on the attack\'s line (version 26) he is 1.01 m off it',
+          (bool(cm_t._touch_all(segs_)[0]), bool(cm_n._touch_all(segs_)[0])), (True, False),
+          'CaughtModel._touch_all with turns')
+    # A homing geometry in the follow-up's tables (item 5): Rancorcall's skulls (Bullet 10500000, flown
+    # again after him) fired at f15, against a back roll 3 m out from every start f0-120: the table's
+    # first touch is `_catches`' flown one at every start, and against a defender standing f37 where its
+    # stored samples (a 1 cm disc on him at f15, version 26's read) said f15.
+    rec = homing_spec(t, bullet_tree(t, 10500000), 0.5, None, _bullet_damages_self)
+    hg = {'T': np.array([15.0, 120.0]), 'X': np.zeros(2), 'Z': np.full(2, -3.0), 'R': np.full(2, 0.01),
+          'PK': np.full(2, -math.inf), 'HOMING': rec}
+    hgrid = np.arange(0.0, 121.0, DODGE_STEP)
+    href = _catches([hg], 3.0, back, hgrid)
+    htab = _TouchTable([hg], 3.0, back, 0.0, 120.0, _TouchTable([hg], 3.0, None)).first(hgrid, np.full(len(hgrid), -math.inf))
+    hst = _TouchTable([hg], 3.0, None).first([0.0], [-math.inf])
+    hstored = {k: v for k, v in hg.items() if k != 'HOMING'}
+    check('v27 homing table: a homing geometry\'s table reads are its flights after him (equal to _catches at every '
+          'start), standing f37 where its stored samples gave f15',
+          (np.array_equal(href[0], htab[0]) and np.array_equal(href[1], htab[1]), int(np.isfinite(href[1]).sum()) > 0,
+           float(hst[1][0]), float(_TouchTable([hstored], 3.0, None).first([0.0], [-math.inf])[1][0])),
+          (True, True, 37.0, 15.0), '_TouchTable HOMING (_homing_touch)')
+    # An opening burst after the last that reaches him standing (item 6): A over everything at f40-41,
+    # rolled through with a back roll; B a 3.6 m disc 6.5 m out from f60 to f140, 4 m from him standing
+    # (never reaches him there) but around the back roller (6.0-6.2 m) and every back roll he can make from
+    # there (to 9.9 m at most): caught by B, worth 5. Version 26 never read B: nothing lands.
+    oa = disc_([40.0, 40.5, 41.0], 0.0, 2.5, 1e3)
+    ob = disc_(np.arange(60.0, 141.0, 1.0), 0.0, 6.5, 3.6)
+    fo6 = disc_([70.0], 1000.0, 2.5, 0.5)
+    fm6 = FollowupModel([(oa, 0), (ob, 1)], [(fo6, 2)], 43.0, [0.0], my_roll=300.0)
+    fm6.families = [[back]]
+
+    def worth6(d, idx):
+        return np.array([2.0, 5.0, 1.0])[idx]
+    o6 = fm6.outcome(2.5, 0.0, worth6)
+    check('v27 opening burst past the last that reaches him standing: it catches the back roller where his roll '
+          'carried him (worth 5); version 26 never read it',
+          (round(o6['value'], 6), round(o6['p_evade'], 6), o6['base'], int(_catches([ob], 2.5, None, [0.0])[0][0])),
+          (5.0, 0.0, 2.0, -1), 'FollowupModel._shape pend / finals')
+    # The exchange model picks his direction (item 8). An opener 3 m long from f40 for 30 frames: a forward
+    # roll ends 1.15 m from the attacker and escapes none of it; the back and side rolls end 5.7 and 5.1 m
+    # away. The four taken equally (version 26) escape at most three quarters; picked per opener, he is worth
+    # what his best direction alone is.
+    opp8 = Opponents([{'w': 1, 'active': 30, 'reach': 3.0, 'hp': 300.0, 'startup': 40.0, 'end': 200.0}])
+    alone = [opp8.dodge_value([m], ('v27 alone', k), 18, 0.1, 500.0) for k, m in enumerate(rolls)]
+    picked8 = opp8.dodge_value(rolls, 'v27 picked', 18, 0.1, 500.0)
+    t8 = opp8._table(rolls, 'v27 picked', 18, 0.1)
+    even8 = float((t8['W'] * t8['FIRST']).sum())
+    check('v27 exchange direction: per opener he takes his best direction (worth its own value), a forward roll '
+          'escaping none of a long 3 m opener; taken equally (version 26) the four escape at most 3/4',
+          (round(picked8['hp'], 6) == round(max(a['hp'] for a in alone), 6),
+           round(alone[[m['anim'] for m in rolls].index(fwd['anim'])]['p_evade'], 6), even8 <= 0.75 + 1e-9,
+           round(picked8['p_evade'], 6) > round(even8, 6)),
+          (True, 0.0, True, True), 'Opponents.dodge_value (MI), _table')
+    # His second roll at the chained hit (item 8): the opener at f40-42 escaped by a back roll from f30
+    # (invincible to f43), a chained hit over everything 1 frame long. At f50 (gap 10) his next roll comes
+    # no sooner than f51 (f30 + its dodge cancel): it cannot escape, 0.0. At f90 (gap 50) any roll from
+    # f77.5 to f90 holds its invincibility over it and he presses there: 1.0. Version 26 gave both the
+    # opener's single-hit evade share.
+    o50 = Opponents([{'w': 1, 'active': 3, 'reach': 99.0, 'hp': 300.0, 'startup': 40.0, 'gap2': 10.0, 'active2': 1,
+                      'reach2': 99.0, 'hp2': 100.0, 'end': 200.0}])
+    o90 = Opponents([{'w': 1, 'active': 3, 'reach': 99.0, 'hp': 300.0, 'startup': 40.0, 'gap2': 50.0, 'active2': 1,
+                      'reach2': 99.0, 'hp2': 100.0, 'end': 200.0}])
+    check('v27 exchange second roll: out of a back roll from f30 he rolls again no sooner than f51, so a chained hit '
+          'at f50 lands (0.0) and one at f90 is escaped (1.0); version 26 read both at the single-hit share',
+          (round(o50._second_roll(0, back, 30.0)[0], 9), round(o90._second_roll(0, back, 30.0)[0], 9)), (0.0, 1.0),
+          'Opponents._second_roll (dodge_chain rule)')
 
 
 def main():
