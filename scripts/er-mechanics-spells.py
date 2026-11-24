@@ -86,6 +86,30 @@ the two are equal on every chargeable spell in the list above). Frames run from 
 cast event (bullet travel is not counted, it depends on distance), and `act` is the hand-off plus
 the release clip's first R1 or roll gate (`er-mechanics-disengage.clip`).
 
+# The kit: how many spells (`--kit`)
+
+One damage number per cast always picks one spell. A second spell earns its slots only where the
+first does not reach, and the situations that decide it here are punishes:
+
+- Each build of the RL window's opponent pool (`er-mechanics-exchange.opponent_pool`) throws its R1
+  #1 and misses at its own world reach (`er-mechanics-neutral.pool_reaches`). The caster presses at
+  the end of its last hit window (`INFERRED`: a whiff he spaced and planned to punish). The defender
+  stands at that distance and cannot roll before his swing's dodge cancel (`TAE`); one situation per
+  distinct (reach, recovery), weighted by the builds that throw it.
+- From then on he rolls on reaction to the cast: the ash model's `reaction_outcome`
+  (ashes-of-war.md section 16a: reaction lognormal around 0.25 s plus two 0.05 s network legs, the
+  medium roll's four directions, `INFERRED` constants), held back to that dodge cancel.
+- The cast's bullets fly straight ahead under the ash model's flight rules (`fly_tree`, section 15:
+  homing off, the emit point 1 m ahead and 1 m up, `INFERRED`). A cast event that catches him first
+  is worth its own hits and every later event's, at the `full` count.
+- Kit value: the weighted mean over situations of the best member's landed damage. The search is
+  the pouch's greedy: add the spell that raises it most while its `slotLength` fits the memory
+  slots, stop when nothing raises it by more than `KIT_EPS`.
+
+The rounds show where the gain flattens. A slot's real price is the buff it displaces, which only
+`er-mechanics-pouch` weighs, so the count is not final until the kit is scored there. A spell that
+hits an AtkParam directly (Carian Slicer) has no flight and is left out.
+
 # Not established
 
 - The writer of `AttackInfo+0xf4` for a local spell's bullet (above).
@@ -95,6 +119,9 @@ the release clip's first R1 or roll gate (`er-mechanics-disengage.clip`).
   for the AtkParam's `spEffectAtkPowerCorrectRate_by*` (grease.md section 2): no row is applied
   beyond what `CastModel` applies.
 - Whether a tap of a chargeable spell hands off at the same JumpTable 93 opening as the charge.
+- For the kit: homing (the flight has no target), the caster's own reaction to the whiff, and every
+  punish other than a whiffed R1 #1 (a blocked string, a roll read at range, a defender who
+  commits instead of rolling).
 """
 from __future__ import annotations
 
@@ -187,6 +214,7 @@ class SpellModel:
         for mid, nm in sorted(self.names.items()):
             self.by_name.setdefault(T._norm(nm), mid)
         self._defender = {}
+        self._ash = None
 
     # -- the catalyst ------------------------------------------------------------------------
 
@@ -464,6 +492,175 @@ class SpellModel:
                 rows.append(({'id': mid, 'name': nm, 'catalyst': cat['name'], 'slots': m['slotLength']}, v))
         return rows, skipped
 
+    # -- the kit -----------------------------------------------------------------------------
+
+    def ash(self):
+        if self._ash is None:
+            self._ash = (_mod('er_mechanics_ashes', 'er-mechanics-ashes.py'),)
+            self._ash += (self._ash[0].AshTables(),)
+        return self._ash
+
+    def geometry(self, mid, variant):
+        """(per damaging cast event in frame order: `contact_geometry` of its bullet tree flown
+        straight ahead from the press, its real frame), or None when an event has no flight (a
+        direct AtkParam hit, whose reach is not modelled here)."""
+        A, t = self.ash()
+        reach_mod = A._pose()[1]
+        profile = reach_mod.defender_profile('idle')
+        m = self.magic[mid]
+        out = []
+        for frame, n in variant['events']:
+            if m[f'refCategory{n}'] != REF_BULLET:
+                return None
+            bt = A.bullet_tree(t, m[f'refId{n}'])
+            if bt is None:
+                return None
+            pts = []
+            start = (variant['hand'] + frame) / FPS
+            for node, path, t0, _ in A.fly_tree(t, bt):
+                if not A._bullet_damages_self(node):
+                    continue
+                # The segment to the next frame sampled every `CONTACT_STEP_M`, as a skill's is.
+                for k, q in enumerate(path):
+                    nxt = path[k + 1] if k + 1 < len(path) else q
+                    steps = max(1, math.ceil(math.dist(q, nxt) / A.CONTACT_STEP_M))
+                    for j in range(steps if k + 1 < len(path) else 1):
+                        u = j / steps
+                        p3 = [q[i] + (nxt[i] - q[i]) * u for i in range(3)]
+                        d = reach_mod.contact_disc_radius(p3[1], node['radius_m'], profile)
+                        if d is not None:
+                            pts.append((start + t0 + (k + u) / A.BULLET_FPS, p3[0], p3[2], d))
+            geom = A.contact_geometry(bullet_points=sorted(pts))
+            if geom is not None:
+                out.append((geom, frame))
+        return out or None
+
+    def punish_values(self, mid, cat, stats, situations, talismans=(), left=None, defender=None,
+                      two_handed=False, pvp=True):
+        """Per situation: the damage one cast lands on a defender caught in his recovery at the
+        situation's distance (`kit` in the module doc), the best of the spell's variants; with the
+        variant each one came from. None when no variant has a flight."""
+        A, _ = self.ash()
+        got = self.evaluate(mid, cat, stats, talismans, left, defender, two_handed, pvp)
+        best, label = None, None
+        for v in got:
+            events = sorted({(h['frame'], h['ref']) for h in v['hits']})
+            value = {f: sum(h['damage'] * h['count'] for h in v['hits'] if h['frame'] == f) for f, _ in events}
+            geo = self.geometry(mid, {'events': events, 'hand': v['startup'] - min(f for f, _ in events)})
+            if geo is None:
+                continue
+            geoms = [g for g, _ in geo]
+            # Hit h first to catch him is worth itself and every later cast event.
+            worth = [sum(value[f] for f in value if f >= fr) for _, fr in geo]
+            vals = []
+            for dist, floor in situations:
+                o = A.reaction_outcome(geoms, worth, dist, cue=0.0, floor=floor)
+                vals.append(o['value'])
+            if best is None or sum(vals) > sum(best):
+                best, label = vals, v['variant']
+        return (best, label) if best is not None else None
+
+    def kit(self, cats, stats, talismans=(), left=None, rl=150, two_handed=False, pvp=True, slots=None):
+        """The greedy attack-spell kit by punish coverage (module doc): rounds of (spell, its
+        slots, kit value after it, gain), and the spells left out with why."""
+        slots = MEMORY_SLOTS if slots is None else slots
+        sit = punish_situations(rl)
+        pairs = [(s['reach'], s['recovery']) for s in sit]
+        weight = [s['weight'] for s in sit]
+        total = sum(weight)
+        dfn = self.defender(rl)
+        values, skipped = {}, {}
+        rows, why = self.table(cats, stats, talismans, left, rl, two_handed, pvp)
+        skipped.update(why)
+        for mid in sorted({r[0]['id'] for r in rows}):
+            cat = next(c for c in cats if self.can_cast(mid, c))
+            got = self.punish_values(mid, cat, stats, pairs, talismans, left, dfn, two_handed, pvp)
+            if got is None:
+                skipped[self.names[mid]] = 'no bullet flight (reach not modelled)'
+                continue
+            values[mid] = got
+        return greedy_kit({mid: v for mid, (v, _) in values.items()}, weight, total,
+                          {mid: self.magic[mid]['slotLength'] for mid in values}, slots,
+                          {mid: lab for mid, (_, lab) in values.items()}, self.names), skipped
+
+
+#: Memory slots: `er-mechanics-pouch.MEMORY_SLOTS` (eight Memory Stones and Moon of Nokstella).
+MEMORY_SLOTS = 10
+#: Relative gain below which the kit search stops: `er-mechanics-pouch.EPS`.
+KIT_EPS = 1e-6
+#: Bump when `punish_situations` changes what it caches.
+SITUATIONS_VERSION = 1
+
+
+def greedy_kit(values, weight, total, slot_cost, slots, labels=None, names=None):
+    """Add spells one at a time, each round the one that raises the kit value most, while it fits
+    the memory slots and raises it by more than `KIT_EPS`. `values[spell]` lists its landed damage
+    per situation, `weight` the situations' weights. Kit value: the weighted mean over situations
+    of the best member's damage there."""
+    best = [0.0] * len(weight)
+    used, rounds, cur = 0, [], 0.0
+    left = dict(values)
+    while left:
+        pick = None
+        for s, v in left.items():
+            if used + slot_cost[s] > slots:
+                continue
+            val = sum(w * max(b, x) for w, b, x in zip(weight, best, v)) / total
+            if pick is None or val > pick[1] + 1e-12:
+                pick = (s, val)
+        if pick is None or pick[1] <= cur * (1.0 + KIT_EPS) + 1e-12:
+            break
+        s, val = pick
+        v = left.pop(s)
+        covers = sum(w for w, b, x in zip(weight, best, v) if x > b) / total
+        best = [max(b, x) for b, x in zip(best, v)]
+        used += slot_cost[s]
+        rounds.append({'id': s, 'name': (names or {}).get(s, s), 'variant': (labels or {}).get(s),
+                       'slots': slot_cost[s], 'value': round(val, 1), 'gain': round(val - cur, 1),
+                       'best_share': round(covers, 3)})
+        cur = val
+    return rounds
+
+
+def punish_situations(rl):
+    """[{'reach', 'recovery', 'weight'}]: one per distinct (reach, recovery) of the RL window's
+    opponent pool (`er-mechanics-exchange.opponent_pool`): his R1 #1 world reach
+    (`er-mechanics-neutral.pool_reaches`) and the real frames from the end of its last hit window to
+    its dodge cancel, weighted by the builds that throw it. Cached beside the pool."""
+    EX = _mod('er_mechanics_exchange', 'er-mechanics-exchange.py')
+    NEU = _mod('er_mechanics_neutral', 'er-mechanics-neutral.py')
+    reg = ATK.Regulation(None)
+    raw = EX.opponent_pool(reg, EX.CACHE / 'builds.jsonl', rl - WINDOW, rl + WINDOW)
+    stamp = [SITUATIONS_VERSION] + list(raw['stamp'])
+    path = EX.CACHE / f"spell-punish-{rl - WINDOW}-{rl + WINDOW}-{raw['stamp'][-1]}.json"
+    if path.exists():
+        got = json.loads(path.read_text())
+        if got.get('stamp') == stamp:
+            return got['situations']
+    reaches = NEU.pool_reaches(raw)
+    ids = EX.weapon_ids()
+    count = {}
+    for key, _ in raw['builds']:
+        count[key] = count.get(key, 0) + 1
+    merged = {}
+    for key, n in sorted(count.items()):
+        name, grip = key.rsplit('|', 1)
+        two = grip == '2h'
+        rows = ATK.weapon_attacks(reg, ids[name], 'both' if two else 'one')
+        atk = next((r for r in rows if r['slot'] == ('2h_' if two else '') + EX.OPPONENT_SLOT), None)
+        reach = (reaches.get(key) or {}).get('reach')
+        if atk is None or not atk.get('hit_windows') or reach is None:
+            continue
+        end = max(w[1] for w in atk['hit_windows'])
+        gate = atk['cancel_frame'].get('dodge')
+        if gate is None:
+            continue
+        k = (round(reach, 1), round(max(gate - end, 0.0) * 2) / 2)
+        merged[k] = merged.get(k, 0) + n
+    out = [{'reach': r, 'recovery': f, 'weight': n} for (r, f), n in sorted(merged.items())]
+    path.write_text(json.dumps({'stamp': stamp, 'situations': out}))
+    return out
+
 
 def parse_stats(text):
     out = {}
@@ -529,6 +726,21 @@ def selftest():
     check('charged Comet passes through once', [c for _, _, c in m.ref_hits(comet, 2)] == [1.0])
     still = dict(m.bullet[10403001])
     check('a standing bullet touches for its life', m.contact(still) == still['life'] and still['initVellocity'] == 0)
+    # The kit: the greedy, the flight, and the recovery that holds the roll back.
+    rounds = greedy_kit({'a': [10, 0], 'b': [0, 8], 'c': [5, 5]}, [1, 1], 2, {'a': 1, 'b': 1, 'c': 1}, 3)
+    check('greedy: the second pick covers what the first misses, then it stops',
+          [r['id'] for r in rounds] == ['a', 'b'] and rounds[-1]['value'] == 9.0)
+    check('greedy: the slots cap the kit',
+          [r['id'] for r in greedy_kit({'a': [10, 0], 'b': [0, 8]}, [1, 1], 2, {'a': 1, 'b': 2}, 2)] == ['a'])
+    check('Carian Slicer has no flight', m.geometry(slicer, {'events': [(0.0, 1)], 'hand': 0.0}) is None)
+    geo = m.geometry(pebble, {'events': m.release_events(pebble, RELEASE)[1], 'hand': 20.0})
+    check('Pebble flies', geo is not None and len(geo) == 1)
+    A, _ = m.ash()
+    geoms = [g for g, _ in geo]
+    free = A.reaction_outcome(geoms, [100.0], 6.0)
+    held = A.reaction_outcome(geoms, [100.0], 6.0, floor=float(geoms[0]['T'].max()) + 1.0)
+    check('a defender locked past the flight takes the cast', round(held['value'], 6) == held['base'] == 100.0)
+    check('a free defender rolls some of it away', free['value'] < held['value'])
     print(f'selftest ok ({n[0]} checks)')
 
 
@@ -547,6 +759,8 @@ def main():
     ap.add_argument('--sort', default='one_hit', choices=('one_hit', 'full', 'full_per_fp', 'full_per_s', 'startup'),
                     help='default one_hit: the only column no hit-count rule moves')
     ap.add_argument('--top', type=int, default=40)
+    ap.add_argument('--kit', action='store_true', help='the greedy kit by punish coverage, spell by spell')
+    ap.add_argument('--slots', type=int, default=MEMORY_SLOTS, help='memory slots the kit may fill')
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
@@ -558,6 +772,18 @@ def main():
     stats = parse_stats(a.stats)
     cats = [m.catalyst(c) for c in a.catalyst]
     tals = [x.strip() for x in a.talismans.split(',') if x.strip()]
+    if a.kit:
+        rounds, skipped = m.kit(cats, stats, tals, a.left, a.rl, a.two_handed, not a.pve, a.slots)
+        if a.json:
+            print(json.dumps({'rounds': rounds, 'skipped': skipped}, indent=1))
+            return 0
+        print(f"punish kit vs the RL {a.rl - WINDOW}-{a.rl + WINDOW} pool's R1 whiffs"
+              f"{'' if a.pve else ', PvP rates'}; value = mean damage landed per punish")
+        print(f"{'#':>2s} {'spell':34s} {'variant':8s} {'slots':>5s} {'value':>7s} {'gain':>7s} {'best':>6s}")
+        for i, r in enumerate(rounds, 1):
+            print(f"{i:>2d} {r['name'][:34]:34s} {r['variant'] or '':8s} {r['slots']:>5d} {r['value']:>7.1f} "
+                  f"{r['gain']:>7.1f} {100 * r['best_share']:>5.1f}%")
+        return 0
     only = {T._norm(s) for s in a.show} or None
     rows, skipped = m.table(cats, stats, tals, a.left, a.rl, a.two_handed, not a.pve, only)
     rev = a.sort != 'startup'
