@@ -91,8 +91,12 @@ EARLY_CASTING_SPEED = 5
 TAE_CAST = 64
 #: `Magic.spEffectCategory` -> the SpEffect flag that context needs (`IsApplicableForCategory`).
 SPELL_CONTEXT_FLAG = {3: 'magParamChange', 4: 'miracleParamChange', 10: 'shamanParamChange'}
-#: `Magic.spEffectCategory` -> the `EquipParamWeapon` flag a catalyst needs to cast it.
+#: `Magic.spEffectCategory` -> the `EquipParamWeapon` flag of the catalysts that cast most spells of
+#: that context. Not the rule: 3 incantations have context 3 and 5 sorceries 4 (Briars of
+#: Punishment, Death Lightning), so `can_cast` reads the school from the row name (`SCHOOL_FLAG`).
 CATALYST_FLAG = {3: 'enableMagic', 4: 'enableMiracle'}
+#: The `EquipParamWeapon` flag a catalyst needs, by the Magic row name's school.
+SCHOOL_FLAG = {'[Sorcery]': 'enableMagic', '[Incantation]': 'enableMiracle'}
 AFFIX = {'physical': 'atkPhys', 'magic': 'atkMag', 'fire': 'atkFire', 'lightning': 'atkThun', 'holy': 'atkDark'}
 REQUIRE = {'str': 'properStrength', 'dex': 'properAgility', 'int': 'properMagic', 'fth': 'properFaith',
            'arc': 'properLuck'}
@@ -154,8 +158,10 @@ class CastModel:
         if mid is None or mid not in self.magic:
             raise KeyError(f'no player spell named {name!r}')
         m = self.magic[mid]
-        nm = PR.row_names('Magic').get(mid, str(mid)).split('] ', 1)[-1]
+        full = PR.row_names('Magic').get(mid, str(mid))
+        nm = full.split('] ', 1)[-1]
         return {'id': mid, 'name': nm, 'context': m['spEffectCategory'], 'lo': m['analogDexterityMin'],
+                'school': SCHOOL_FLAG.get(full.split('] ', 1)[0] + ']'),
                 'hi': m['analogDexterityMax'], 'tae': 400 + m['refType'],
                 'subcats': {m[f'subCategory{i}'] for i in (1, 2)} - {0},
                 'elements': self._elements(m), 'clips': self._clips(400 + m['refType']),
@@ -297,7 +303,7 @@ class CastModel:
         return all(stats.get(k, 0) >= w[f] for k, f in REQUIRE.items())
 
     def can_cast(self, spell, w):
-        flag = CATALYST_FLAG.get(spell['context'])
+        flag = spell.get('school')
         return bool(flag and self.weapons[self.weapon_id(w)][flag])
 
     def _relevant_rows(self, spell, rows):
