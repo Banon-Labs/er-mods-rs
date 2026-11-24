@@ -36,7 +36,8 @@ env:
   # which game builds `instance_ptr()` resolves on, and it is unchanged. The
   # current pin, `4612952`, is likewise on the fork and not on upstream `main`.
   FROMSOFTWARE_RS_REMOTE: https://github.com/chozandrias76/fromsoftware-rs.git
-  CARGO_XWIN_VERSION: 0.23.0
+  # Keep equal to check.yml's pin, which says why it is 0.23.1 and not 0.23.0.
+  CARGO_XWIN_VERSION: 0.23.1
 
 jobs:
   release-please:
