@@ -42,8 +42,8 @@ tool_command := object.get(input.tool_input, "command", "")
 # `no_whole_check_sh` records at length: matching the whole command string asks whether
 # two tokens are CO-PRESENT, not whether either one runs.
 #
-# That is not a theoretical distinction here. Measured 2026-09-21 (bd er-effects-rs-ak3q,
-# bd er-effects-rs-if5l): `git commit -F - <<EOF ... EOF` was refused because the commit
+# That is not a theoretical distinction here. Measured 2026-09-21:
+# `git commit -F - <<EOF ... EOF` was refused because the commit
 # message described this guard and named the script, and `bd create --description "..."`
 # was refused because the issue text did. The issue reporting the second one had to be
 # filed through a body file written by a separate command in order to exist at all, and the

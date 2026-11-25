@@ -7,7 +7,7 @@
 
 use crate::prelude::*;
 
-// Loading-screen portrait armor oracle -- Layer 1 of bd er-effects-rs-91l5.
+// Loading-screen portrait armor oracle -- Layer 1.
 //
 // Why the previous oracle is gone rather than tuned. `oracle_portrait_equip_slot_resolved` reported a
 // clean 4/4 pass on the 2026-07-31 run the user saw render entirely nude. It was structurally
@@ -27,7 +27,7 @@ use crate::prelude::*;
 //
 // This is a RAM oracle over the game's own memory. It proves which `EquipParamProtector` rows the
 // engine asked for; it does not prove pixels. Layers 2 (per-part `CSPartsModelIns` binding) and 3
-// (torso pixel check on the captured RT) remain open on er-effects-rs-91l5.
+// (torso pixel check on the captured RT) remain open.
 
 pub use crate::portrait_equip::{
     PORTRAIT_EQUIP_CAPTURE_BAD, PORTRAIT_EQUIP_CAPTURE_CLEAN, PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED,

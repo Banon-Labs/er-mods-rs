@@ -329,7 +329,7 @@ test_append_mode_is_a_write if {
 
 # --- a payload that QUOTES a python command is not one ---------------------
 #
-# Measured in production 2026-09-21 (bd er-effects-rs-ak3q). The invoked binary is `bd`
+# Measured in production 2026-09-21. The invoked binary is `bd`
 # and `git`; the python is a quotation inside the memory or the commit message being
 # recorded. The old anchor was "start, or after whitespace or a quote", which every
 # quoted argument satisfies, and the ellipsis in the prose then broke the

@@ -135,7 +135,7 @@ struct TaskState {
     entity: Option<u32>,
     /// The current duel NPC's `FieldInsHandle`, the key its liveness is judged by. An entity
     /// lookup is not: on 2026-10-06 every summon-path character carried entity 35000, and the
-    /// lookup found a live Mimic companion in the duel NPC's place (bd `er-effects-rs-gqu9`).
+    /// lookup found a live Mimic companion in the duel NPC's place.
     handle: Option<u64>,
     /// The roster name of the NPC being spawned, from the pick.
     picked_name: Option<String>,

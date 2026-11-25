@@ -29,7 +29,7 @@ import data.cupcake.system.commands
 # not a main commit and is allowed. Anything unparsed, unregistered, detached, or
 # bare (`git commit` without -C) keeps the deny (fail closed).
 #
-# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e): this guard
+# Shell-wrapper decomposition (2026-08-26): this guard
 # carried the same anchor construction as ER-EFFECTS-BLOCK-MAIN-PUSH and the same
 # double defect. `bash -c 'git commit -m x'` from a main session produced ZERO
 # denials, because the character before the verb is a quote and a quote is not in

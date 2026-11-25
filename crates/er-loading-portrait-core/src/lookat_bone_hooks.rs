@@ -422,7 +422,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // whose work is gated on it) becomes a cheap passthrough. Per-epoch stop (BOOT_VIEW_EPOCH_WORLD_LIVE
     // == cur), not the stale one-shot IN_WORLD_REACHED latch that never fires for load2.
     //
-    // Boot-epoch exemption (bd er-effects-rs-io53, `cur != 0` -- the same exemption
+    // Boot-epoch exemption (`cur != 0` -- the same exemption
     // composite_on_game_swapchain already carries): epoch 0 spans DLL attach -> title -> the boot
     // loading screen, and the world clock can genuinely go live mid boot screen (the loading-screen
     // playtime stat ticks while the cover is still up), which stopped this tick ~2s into the boot
@@ -596,7 +596,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
             // not in multi-model (menu) churn; the task bodies self-guard on model/X, so ticking
             // any state is engine-normal. Readback/publish/bind keep the stricter gates below.
             //
-            // Freeze-after-capture relaxed (bug #1 fix, er-effects-rs-l1x 2026-07-03). The old
+            // Freeze-after-capture relaxed (bug #1 fix, 2026-07-03). The old
             // per-window latch stopped this drive after the first keyed+clean publish because the
             // per-frame deep GX deref could race a game-thread renderer teardown: a renderer freed
             // between our vtable check and the deep deref (TOCTOU) surfaced as three crash flavors

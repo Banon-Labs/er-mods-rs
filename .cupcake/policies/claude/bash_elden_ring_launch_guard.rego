@@ -365,7 +365,7 @@ ersc_naming_statement_tokens contains tokens if {
 # ---------------------------------------------------------------------------
 # User game-install restore rename exemption.
 #
-# False positive fixed 2026-07-30 (bd er-effects-rs-gkqa): restoring the
+# False positive fixed 2026-07-30: restoring the
 # user's own game-installed Seamless Co-op module -- renaming the
 # `.er-quickload-staged` file back to its normal name -- was denied by the
 # file-moving arms, which match the verb + DLL name with no destination
@@ -490,7 +490,7 @@ ersc_restore_quote_normalized := replace(proc_scan_norm_command, `"`, "'")
 # ---------------------------------------------------------------------------
 # Read-only interpreter scan of the game-installed DLL.
 #
-# False positive fixed 2026-07-30 (bd er-effects-rs-gkqa): a read-only
+# False positive fixed 2026-07-30: a read-only
 # interpreter scan passing the installed DLL path as an UNQUOTED operand,
 #
 #   python3 scripts/pe_export_dump.py /mnt/c/SteamLibrary/steamapps/common/ELDEN\ RING/Game/SeamlessCoop/ersc.dll

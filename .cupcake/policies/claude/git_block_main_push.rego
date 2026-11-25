@@ -62,7 +62,7 @@ import data.cupcake.system.commands
 # and it is written in tokens rather than in a pattern: see the note above it for
 # why a regex here is a hazard to every policy in the rulebook, not just this one.
 #
-# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e): every pattern
+# Shell-wrapper decomposition (2026-08-26): every pattern
 # below used to run against the raw command string, which asks about lexical
 # position rather than about what runs. `bash -c 'git push origin main'` produced
 # ZERO denials -- the character before the verb is a quote, and a quote is not in

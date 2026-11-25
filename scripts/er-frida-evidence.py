@@ -291,7 +291,7 @@ def conflict_operation(target: pathlib.Path) -> str | None:
     this very file. Resolving that conflict combines changes that are each already committed, so
     there is no new behaviour for an instrument to measure.
 
-    Measured 2026-10-07: `git rebase --onto feat/npc-summons-lab-facts d23bb905 HEAD` in the
+    Measured 2026-10-07: `git rebase --onto <branch> <base> HEAD` in the
     worktree `.worktrees/ledge-reveal-check` stopped on `crates/er-npc-summons/src/addr.rs`, and
     the Edit that removed the conflict markers was refused with `UNPROVEN spent-by-commit`.
 

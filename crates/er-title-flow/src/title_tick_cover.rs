@@ -4,7 +4,7 @@
 /// `refresh_direct_source_profile_summary` is idempotent and self-throttling, and on the settled
 /// path it is no longer free: it watches the target slot's record for drift, because the game's own
 /// boot `CS::ProfileSummary::Deserialize` can overwrite the body-derived records after we write
-/// them and put another character on the loading screen (bd er-effects-rs-ccud). That watch is two
+/// them and put another character on the loading screen. That watch is two
 /// guarded reads and a hash of at most seventeen UTF-16 units per tick; the correction behind it is
 /// bounded. The decision itself is still the pure
 /// [`crate::autoload_route::title_autoload_route`], which carries the reasoning and the tests.
@@ -485,7 +485,7 @@ pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutol
     // oracle_title_logo_gfx_hide_last_requested_visible=1 recording that the game was asking for the
     // title to be visible while we answered by hiding it. With PressStart hidden the title cannot be
     // advanced by any accept signal -- not the product's accept byte, not the harness, not a human --
-    // which is a black screen with no way out (bd er-effects-rs-tkfb).
+    // which is a black screen with no way out.
     if !er_telemetry_core::counters::title_visual_suppression_active() {
         return;
     }
@@ -1819,7 +1819,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         };
         SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
         let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-        // Early b73 hold -- the post-warp revert root fix (RE er-effects-rs-9fmm). GameMan+0xb73 is the
+        // Early b73 hold -- the post-warp revert root fix (RE). GameMan+0xb73 is the
         // quit-save return-title latch our System->Quit sets (1.16.1 dump FUN_14067a490); it persists
         // into the reload's world, and the MoveMapStep ending evaluator 0x140afbeb0 -> 1.16.1 dump
         // FUN_140679460
@@ -1843,7 +1843,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             }
-            // Ending-latch residual clear (corrected, RE er-effects-rs-9fmm run 1650; re-grounded on
+            // Ending-latch residual clear (corrected, RE run 1650; re-grounded on
             // 1.17 2026-09-04). menuData+0x5e is not a pure return-title flag: the MoveMapStep ending
             // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what drives the MoveMap
             // finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and consumes warpRequested). So
@@ -1981,7 +1981,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // latches ~immediately after the finalize completes, before the ~1.4s post-finish revert -- Or
         // the legacy 30 stable frames as a fallback. Latch is per-reload-epoch (not FRESH_DESER_DONE,
         // which own_load consumes at commit -- that consumption is exactly why this block never fired
-        // and the world reverted after finish). bd er-effects-rs-9fmm.
+        // and the world reverted after finish).
         let reload_epoch_now =
             SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let can_move_for_reload = reload_epoch_now > 0
@@ -2001,8 +2001,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         {
             SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
             // Do not clear GameMan+0xb78 here. RE-confirmed (InGameStep::STEP_MoveMap_Update
-            // @0x140aec810 + orchestrator FUN_140afb970, both 1.16.1 dump names, bd
-            // er-effects-rs-9fmm): b78
+            // @0x140aec810 + orchestrator FUN_140afb970, both 1.16.1 dump names):
+            // b78
             // (requestedSaveSlotLoad) is the MoveMap warp target the finalize (case 8) consumes to load
             // the destination block and rebuild the player; STEP_MoveMap_Update skips the map load when
             // the destination BlockId is 0xffffffff, which is what happens if b78 was cleared to -1
@@ -2154,7 +2154,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
     // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
     // genuine pick when the arm clears the latch.
-    // Phase upper bound (bd er-effects-rs-af3a; ported from branch commit c1b2dccd, which shipped it
+    // Phase upper bound (ported from commit c1b2dccd, which shipped it
     // as "b78 guard phase-windowing" and never reached main). The window is [RETURN_TITLE_REQUESTED,
     // AUTOLOAD_HANDOFF) == phases 2..3, not [2, inf).
     //
@@ -2169,7 +2169,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // the SetState5/handoff owns b78, so both of this block's branches (force -1, and re-arm = slot)
     // are wrong there regardless of what the latch says.
     //
-    // What this does *not* fix, stated so nobody re-derives it. It would not have prevented the PR-117
+    // What this does *not* fix, stated so nobody re-derives it. It would not have prevented the original
     // black screen: that write happened at quickload phase 3, which is inside this window. Only the
     // fd4io commit stand-down below covers that. The two conditions guard different failures and
     // neither subsumes the other.
@@ -2187,7 +2187,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO;
     // FD4IO ownership stand-down (black-screen fix, user eval run 20260731-user-eval-pr117
-    // switch #2 / cross-save Banon; bd er-effects-rs-9jbe). Once the switch-reload fd4io machine
+    // switch #2 / cross-save Banon). Once the switch-reload fd4io machine
     // has left idle it owns GameMan+0xb78 as the warp target ("b78 kept armed (warp target)
     // through finalize" at submit->drain->commit); this guard's force-(-1) below raced that
     // finalize when the quickload phase lagged at 3 (+95422ms: "kept gm_b78=-1" 650ms after the
@@ -2213,7 +2213,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     //            == 0, bd CASE7-gate-DECOMPILED-...-2026-07-21) never opens, STEP_MoveMap self-
     //            loops at 18, the cover FPS-bails and the vanilla loading screen reaches the user.
     // So the drain-window clears are load-bearing: they retire the load request before the finalize
-    // needs the SL slot for its save. The PR-117 black screen was never a drain-window write -- its
+    // needs the SL slot for its save. The original black screen was never a drain-window write -- its
     // evidence is a "kept gm_b78=-1" 650ms after the fd4io commit. Commit is therefore the exact
     // and only window where the finalize owns b78 as the warp target and this guard must not touch
     // it; Drain keeps the pre-existing behavior.
@@ -2230,12 +2230,12 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // FRESH_DESER_DONE=1 (own_load/loaders.rs), and that is one of `b78_guard_window_open`'s
         // conditions -- so on a run whose deserialize completes normally the window shuts the
         // instant commit starts and this branch is unreachable. It becomes reachable only in the
-        // PR-117 failure timing, where the deserialize has not completed and the window is still
+        // original failure timing, where the deserialize has not completed and the window is still
         // open 650ms past commit. That is the intended shape (a guard that is inert until the
         // thing it guards against is actually happening), but it means a clean run can never
         // prove this engaged: healthy runs are non-regression evidence only, and `> 0` will only
         // ever be seen on a run that was heading for the black screen. Do not read 0 as broken,
-        // and do not read a clean run as proof. bd er-effects-rs-9jbe.
+        // and do not read a clean run as proof.
         let n = er_telemetry_core::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
             .fetch_add(1, Ordering::SeqCst)
             + 1;
@@ -2868,7 +2868,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         //
         // The interval sample below cannot answer which of the eleven terms holds the autoload up,
         // because it fires four seconds apart and the whole wait is a handful of seconds. Measured
-        // on the boot-timing baseline (bd er-effects-rs-uxct): the gate printed at tick 60 and
+        // on the boot-timing baseline: the gate printed at tick 60 and
         // tick 120, the full read submitted somewhere between tick 120 and tick 180, and the two
         // samples straddle the transition without naming it. A transition record answers it
         // directly and costs a line per change -- around ten a boot, against a sample every four
@@ -3049,7 +3049,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // The three CSGaitemImp hook-disable calls that used to live here are gone with the hooks
             // themselves: install_system_quit_gaitem_{finalize,lookup,deserialize}_hook had no callers,
             // so rustc never codegen'd them, the installed latches were never set, and each disable was
-            // an unconditional early return. bd er-effects-rs-57fw.
+            // an unconditional early return.
         }
         // Direct-file save source: the "native Continue row" product_continue waits for can be stale
         // or backed by an empty ProfileSummary. Picker path already used this bypass; explicit loose

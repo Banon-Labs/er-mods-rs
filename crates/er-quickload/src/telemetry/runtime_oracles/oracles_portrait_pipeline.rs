@@ -34,7 +34,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_foreign_models",
         PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
     );
-    // NUDE-portrait armor oracle (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
+    // NUDE-portrait armor oracle.
     // Sampled every game tick off the profile renderer's live stage-0 ChrAsm (+0x130 -- Not the
     // +0x548 inbox), replicating 1.16.2 FUN_1409e6fb0's override arithmetic, so these are the
     // EquipParamProtector rows the model build actually requests.
@@ -768,7 +768,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_face_identity_mismatches",
         PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
     );
-    // Published-vs-loaded identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
+    // Published-vs-loaded identity.
     // Asserted at every loading-window close. The face-identity pair above catches a record
     // whose face was rewritten under a slot; these catch the portrait being built for the
     // wrong slot entirely -- the class that put slot 9's head on screen for 29.7s while slot 5

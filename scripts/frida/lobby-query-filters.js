@@ -2,7 +2,7 @@
 //
 // # The question
 //
-// `er-effects-rs-0wej`: the nearby sweep counted hosts Seamless's own search can never return,
+// The nearby sweep counted hosts Seamless's own search can never return,
 // because Seamless filters its invasion search on `lobby_key` -- a SHA-256 over the loaded param
 // tables, compared for equality -- and the sweep did not. A fix is in the tree
 // (`lobby_preflight.rs` `send_query` pushes that filter), and it is SILENTLY OPTIONAL: the key

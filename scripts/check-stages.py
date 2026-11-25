@@ -20,7 +20,7 @@ hand-copied list of gate names falling behind the suite it was copied from:
   - `.github/workflows/check.yml` named 9 gates while check.sh ran 224, so ~215 gates were
     invisible to CI and nothing said so.
   - `scripts/ci-local-check.sh` named 13 while check.sh referenced 153, which is how a
-    `check-fnv1a-owner.py` violation reached origin through the pre-push hook (PR #398).
+    `check-fnv1a-owner.py` violation reached origin through the pre-push hook.
   - check.sh's own shellcheck coverage is a hand list and had silently dropped
     `scripts/opa-query.sh`.
 
@@ -181,6 +181,24 @@ STAGES: tuple[Stage, ...] = (
             "crates/er-overlay-theme/**/*",
             "scripts/overlay-theme.baseline.json",
             "scripts/frida/ai-lua/**/*",
+            # `check-no-tracker-refs.py` reads the comments of these as well: the comment-bearing
+            # types the globs above do not already name, and the extensionless shell hooks.
+            "**/*.yml",
+            "**/*.yaml",
+            "**/*.java",
+            "**/*.typ",
+            "**/*.wgsl",
+            "**/*.c",
+            "**/*.h",
+            "**/*.cpp",
+            "**/*.ts",
+            "**/*.mjs",
+            "**/*.cjs",
+            "**/*.jsonc",
+            "**/*.frag",
+            ".githooks/*",
+            "scripts/hooks/*",
+            "scripts/hooks-fallback-shim",
         ),
     ),
     Stage(

@@ -31,7 +31,7 @@
 # and on nothing else.
 #
 # A third incident, the same day, and the reason this script now refuses some pushes outright. An
-# orchestrator pushed `worktree-agent-<id>` to PR #448's branch, and that local branch had never
+# orchestrator pushed `worktree-agent-<id>` to an open pull request's branch, and that local branch had never
 # moved: the agent's brief had deliberately broken the session's pattern and sent it to commit on
 # the PR branch instead, so its worktree branch still pointed at the main it was created from. The
 # push therefore sent main's commit to the PR branch and took two commits off it, and getting them

@@ -12,7 +12,7 @@
 //! Measured 2026-08-25, live, on the user's own session: `er-build-watermark` logged
 //! `first render display_width=3840 rows=14` while `er-net-effects` logged
 //! `hudhook dx12 overlay installed` and then `hudhook_render_count = 0` -- installed, never
-//! rendered, no error anywhere. The interactive bar had been invisible since #336 added the
+//! rendered, no error anywhere. The interactive bar had been invisible since the change that added the
 //! watermark shell, because me3 loads `er_build_watermark.dll` before `er_net_effects.dll` and
 //! alphabetical order is not a design.
 //!

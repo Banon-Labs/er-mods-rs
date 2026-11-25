@@ -97,7 +97,7 @@ test_allow_git_push_dry_run_short if {
 	count(guard.deny) == 0 with input as bash_event("git push -n origin feat/x")
 }
 
-# --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ---------------
+# --- Shell-wrapper payloads (2026-08-26) ---------------
 #
 # This policy recognises its verbs through commands.has_verb, whose
 # `(^|\s)verb(\s|$)` boundary a quote does not satisfy -- so a hook bypass
@@ -272,7 +272,7 @@ test_allow_git_config_env_mismatched_indices if {
 }
 
 # --- hook removal: the verb and the hook directory must be ONE statement -------
-#   (2026-08-31, bd er-effects-rs-c0t9)
+#   (2026-08-31)
 #
 # Three arms of contains_hook_disable used to AND a verb test with
 # `contains(cmd, "<hooks dir>")` over the WHOLE command string -- the same
@@ -319,7 +319,7 @@ test_deny_rm_behind_an_env_assignment if {
 	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
 }
 
-# The verb reached by absolute/relative path (2026-08-31, bd er-effects-rs-5z75):
+# The verb reached by absolute/relative path (2026-08-31):
 # a leading path component is none of command_position_prefix_pattern's anchor
 # characters, so `/bin/rm -rf <hooks dir>` was measured ALLOWED before the fix.
 test_deny_rm_behind_bin_absolute_path if {

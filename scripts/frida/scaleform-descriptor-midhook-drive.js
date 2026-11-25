@@ -1,4 +1,4 @@
-// Drive both branches of er-scaleform-hooks' descriptor-ring mid hook (er-effects-rs-7xbs.1) on
+// Drive both branches of er-scaleform-hooks' descriptor-ring mid hook on
 // the game's own render thread, from inside the descriptor-ring advance `advance(ring, count)`.
 //
 // The hook replaces an entry guard that skipped the whole function while the ring's current page

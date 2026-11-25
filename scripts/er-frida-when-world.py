@@ -325,7 +325,7 @@ def selftest() -> int:
             # Both files, because the walk lives in one and the wait in the other. Assembled from
             # pieces so the assertion does not match its own source text. An age fallback passes a
             # process that has been up five minutes, which a crashed modal satisfies as readily as
-            # a world does, and bd er-effects-rs-y53v rejected that shape outright.
+            # a world does, and that shape was rejected outright.
             ("/proc/" + "uptime") not in source + shared
             and ("BOOT_" + "SETTLE_SECONDS") not in source + shared,
         ),

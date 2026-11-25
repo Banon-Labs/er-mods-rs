@@ -739,7 +739,7 @@ test_allow_proc_comm_scan_python_c_naming_eac_launcher if {
 	count(denials) == 0
 }
 
-# Regression for er-effects-rs-9iz: exact /proc process teardown for stale
+# Regression: exact /proc process teardown for stale
 # Elden Ring/EAC launcher processes is allowed. It reads /proc, matches only
 # exact comm names, and sends SIGTERM/SIGKILL to those pids; it never launches
 # the named executable.
@@ -1517,7 +1517,7 @@ test_deny_bd_home_var_substitution_ersc_copy if {
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
 
-# --- user game-install RESTORE rename is ALLOWED (bd er-effects-rs-gkqa) -----
+# --- user game-install RESTORE rename is ALLOWED -----
 #
 # Re-validated 2026-07-30 via opa eval before fixing: this exact command was
 # denied by the file-moving arms even though the destination is the same
@@ -1572,7 +1572,7 @@ test_deny_mv_ersc_dll_to_staged_name if {
 
 # --- read-only interpreter scans of the INSTALLED DLL are ALLOWED ------------
 #
-# Re-validated 2026-07-30 via opa eval before fixing (bd er-effects-rs-gkqa):
+# Re-validated 2026-07-30 via opa eval before fixing:
 # arm (a) counted python/bash as bundling verbs, so a read-only scan passing
 # the game-install DLL path as an unquoted operand was denied.
 

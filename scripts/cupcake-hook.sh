@@ -23,7 +23,7 @@
 #    user's own global config already passes `--log-level error`; the repo's hooks did not.
 #
 # 3. The engine ERASES UNQUOTED NEWLINES, so line 2 of a Bash command has no separator in
-#    front of it (bd er-effects-rs-5eah). Measured, not inferred: `cupcake eval` replaces
+#    front of it. Measured, not inferred: `cupcake eval` replaces
 #    UNQUOTED newlines with spaces before any policy runs, while newlines inside quotes
 #    survive. Every git guard anchors command position on `(^|[;&|(\n])`, so
 #
@@ -48,7 +48,7 @@
 #    fallback), transcribed below and mirrored deliberately. A newline inside a quoted span
 #    is left alone: a `bd remember` body, a commit message or a doc that merely quotes a
 #    guarded command must stay allowed, and turning those into `;` would manufacture exactly
-#    the false positive bd er-effects-rs-dt2e removed. Where this shim and the policies
+#    the false positive the executed-text decomposition removed. Where this shim and the policies
 #    disagree about what is quoted, one of them is wrong; keeping them the same rule is the
 #    point.
 #
@@ -94,7 +94,7 @@
 #    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
 #    present but empty still contributes nothing and still reports success here.
 #
-# 6. A cupcake that cannot run is invisible to the agent (bd er-effects-rs-rafi). The engine
+# 6. A cupcake that cannot run is invisible to the agent. The engine
 #    exits 1 with an empty stdout when it cannot start -- a full /tmp on 2026-10-16 -- and
 #    Claude Code shows a hook's non-0, non-2 exit to the user alone. Every guard was off and
 #    the agent was not told. run_cupcake now answers such a run through the channel each event
@@ -417,7 +417,7 @@ fi
 # `cat > doc.md <<'EOF' ... EOF` artifact write: the first command that aborts is 11,103
 # bytes at the default, and 127,735 bytes at the ceiling. Ten kilobytes is an ordinary
 # handoff document, a `bd create --description`, a long commit message; a hundred and
-# thirty-five is not a command anyone writes. bd er-effects-rs-xktj recorded four of
+# thirty-five is not a command anyone writes. One investigation recorded four of
 # these aborts in one child session, each one classified by the agent that hit it as a
 # guard blocking artifact writes, when what had actually happened is that every guard
 # stopped answering.
@@ -435,7 +435,7 @@ evaluation_aborted() {
 abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is not an allow -- every guard was silent. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
 
 # A cupcake run with no verdict is answered in a form the agent receives, not the exit status
-# Claude Code only shows the user (bd er-effects-rs-rafi). Without the library the old pass-through
+# Claude Code only shows the user. Without the library the old pass-through
 # stands, which is no worse than before it existed.
 if [ -r "$repo_root/scripts/lib/cupcake-non-verdict.sh" ]; then
 	# shellcheck source=lib/cupcake-non-verdict.sh

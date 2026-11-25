@@ -712,8 +712,8 @@ protected_is_child_of_affected(protected_path, affected_dir) if {
 # A reported parent directory with the shell separator welded onto its tail.
 #
 # scripts/cupcake-hook.sh rewrites an unquoted newline to `; ` so line 2 of a
-# multi-line command is visible to anchored patterns at all (bd
-# er-effects-rs-5eah).  The Rust preprocessor then tokenises `rm -rf /;` and
+# multi-line command is visible to anchored patterns at all.
+# The Rust preprocessor then tokenises `rm -rf /;` and
 # reports the affected directory as `/;`, which is a child of nothing and a
 # parent of nothing: `rm -rf /` ALONE was denied while the same delete followed
 # by a second line was ALLOWED (measured 2026-08-31, both before and after the

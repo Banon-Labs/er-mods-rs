@@ -57,7 +57,7 @@ pushed=$(cat)
 # it blocked nothing. Measured 2026-08-31; the guard now also tolerates the unterminated shape, and
 # both halves are covered by scripts/test-git-pre-push-block-main.sh. The here-string adds it.
 #
-# A here-string and not `printf '%s\n' "$pushed" | bash ...` (bd er-effects-rs-5hyb). A pipe races
+# A here-string and not `printf '%s\n' "$pushed" | bash ...`. A pipe races
 # the writer against the reader: a guard that exits without reading its stdin -- the fixtures'
 # stubs do, and so would a guard that stopped reading early -- can close the read end before the
 # forked printf writes, and under `set -o pipefail` that failure ends this hook. The suite's gates
@@ -106,9 +106,9 @@ refund_authorization() { # refund_authorization <one-token reason>
 # pushing checkout. `check-stages.py --stages-for-diff` with no `--rev` falls back to the working
 # tree against origin/main, and `check-runtime-evidence.sh` with no tip falls back to
 # `git rev-parse --short HEAD`. Measured 2026-09-14: `git push origin --delete
-# refactor/experiments-split`, run from a checkout sitting on an unrelated fix branch, selected
+# <branch>`, run from a checkout sitting on an unrelated fix branch, selected
 # seven of eleven stages from six changed paths that all belonged to that branch's own commits,
-# and the deletion never completed. That is the shape PR #434 named -- a guard judging the
+# and the deletion never completed. That is the shape of a guard judging the
 # checked-out HEAD instead of the ref being sent -- in its purest form, because here there is no
 # ref being sent for it to judge.
 #
@@ -222,7 +222,7 @@ fi
 # scripts/check.sh -- the file CI's `check` job runs -- referenced 153. Nothing compared the two,
 # so a gate appended to check.sh became push-invisible the instant it was written, and the first
 # place it ever ran was a red CI job twelve minutes after the push. That is exactly how a
-# check-fnv1a-owner.py violation reached origin on PR #398: the hook ran, passed its 13 gates, and
+# check-fnv1a-owner.py violation reached origin on a pull request: the hook ran, passed its 13 gates, and
 # let through a commit the full suite rejects in five minutes.
 #
 # The subset was justified as speed. It is not faster: it saves a few minutes per push and costs a
@@ -266,8 +266,7 @@ fi
 # AN AGENT WORKTREE CANNOT RUN check.sh, SO IT MUST NOT BE ASKED TO.
 #
 # Two guards landed a day apart and neither was compared to the other, which between them made the
-# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout
-# (bd er-effects-rs-7jzv):
+# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout:
 #
 #   8f16e831, 2026-09-02 -- scripts/check.sh refuses in an agent worktree, because three subagents
 #     once spent 2003s and 1330s sleep-polling their own full-suite runs.
@@ -350,10 +349,10 @@ fi
 # empty below only when git sent no ref list at all, and the whole suite in this checkout is the
 # right answer to that.
 #
-# WHICH TREE THE SUITE READS (bd er-effects-rs-xe0r). check.sh reads the working tree it is run in,
+# WHICH TREE THE SUITE READS. check.sh reads the working tree it is run in,
 # and until 2026-10-05 that was always the checkout `git push` was typed in -- whatever branch it
-# had out. Measured that day: `git -C <main checkout> push -u origin feat/ai-simulated-player`, run
-# from a checkout on feat/er-r3-view-rest-of-catalog while the pushed branch lived in
+# had out. Measured that day: `git -C <main checkout> push -u origin <branch>`, run
+# from a checkout on another branch while the pushed branch lived in
 # .worktrees/ai-sim-player. Stage selection diffed the pushed ref correctly; check.sh then went red
 # on `check-test-target-coverage.py` for a crate the pushed branch does not contain, and it would
 # just as readily have passed code the pushed branch breaks.

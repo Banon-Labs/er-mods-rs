@@ -842,7 +842,7 @@ def main():
     # byte of it. Rule 3 in the header ("the loaded-DLL set cannot be determined -> fallback:
     # tear down") is right for a profile that cannot be read, and this is the opposite case.
     #
-    # Measured 2026-09-21 (bd er-effects-rs-kvqp): two runs of ~/Elden/vanilla-nomods.me3 were
+    # Measured 2026-09-21: two runs of ~/Elden/vanilla-nomods.me3 were
     # torn down under `fallback-no-workspace-dll-loaded` with an empty DLL list, and the empty
     # list is what gave the verdict away -- `loads no DLL this workspace builds: ` with nothing
     # after the colon reads as indeterminate and was in fact fully determined.
@@ -1304,7 +1304,7 @@ TOML
   # reading crate is found and judged, rather than the directory being waved through.
   expect_branch "$REPO_ROOT/scripts/test-er-duel-rules-bans.json" build-input-of-unloaded-crate \
     "scripts/ fixture a crate embeds, that crate not loaded"
-  # bd er-effects-rs-kvqp, both halves, measured on this machine 2026-09-21.
+  # Both halves measured on this machine 2026-09-21.
   #
   # A profile that parses and lists zero natives is determined, and determined to be safe: the
   # run loads nothing this workspace builds, so no edit here can stale a byte of it. Two runs

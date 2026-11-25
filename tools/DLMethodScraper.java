@@ -53,7 +53,7 @@ public class DLMethodScraper extends GhidraScript {
             var fnPointerPointer = instancePtr.add(8);
             var fnPointerData = getDataAt(fnPointerPointer);
             if (fnPointerData == null) {
-                // Tracked in bd er-effects-rs-gf74: clarify whether this script-created pointer
+                // Open question: whether this script-created pointer
                 // definition should also be commented in the listing.
                 createData(fnPointerPointer, new PointerDataType());
                 println(
@@ -84,7 +84,7 @@ public class DLMethodScraper extends GhidraScript {
                 println("Could not find classname for vmt: " + vmtPointer);
                 //continue;
             } else {
-                // Tracked in bd er-effects-rs-gf74: investigate a more ergonomic Ghidra API for
+                // TODO: investigate a more ergonomic Ghidra API for
                 // recovering this signature instead of regexing the plate comment.
                 var matcher = typeDataRegex.matcher(className);
                 if (matcher.find()) {

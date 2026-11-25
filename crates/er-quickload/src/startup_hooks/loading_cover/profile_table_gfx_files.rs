@@ -867,7 +867,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.store(ret_vtable, Ordering::SeqCst);
 
     // Capture the game's menu font (font:/<locale>/font.gfx) for our loading-screen stats text (read-only
-    // copy of the file's own GFX payload; er-effects-rs-jsm). Observe-only, one-shot.
+    // copy of the file's own GFX payload). Observe-only, one-shot.
     if base != null
         && (unsafe { bounded_ascii_contains(url, b"font.gfx") }
             || unsafe { bounded_ascii_contains(url, b"font.swf") })

@@ -7,7 +7,8 @@
 #
 # Why this exists
 #
-# 2026-09-11. A turn closed "PR #426 is **MERGEABLE** now -- the conflicts are gone." while the
+# 2026-09-11. A turn closed calling a pull request "**MERGEABLE** now -- the conflicts are gone."
+# while the
 # `check` job was `in_progress` and had never passed on that branch. `gh pr view` had also printed
 # `mergeStateStatus = BLOCKED` in the same command's output -- GitHub saying the merge button is
 # disabled -- and that was read past. The user's words: "gh cli says its mergable. That doesn't

@@ -449,8 +449,8 @@ test_allow_other_events if {
 
 # --- a payload that NAMES the script is not an invocation of it ---------------
 #
-# Both shapes below were refused in production on 2026-09-21 (bd er-effects-rs-ak3q,
-# bd er-effects-rs-if5l). The invoked binary is `git` and `bd`; the script appears in a
+# Both shapes below were refused in production on 2026-09-21.
+# The invoked binary is `git` and `bd`; the script appears in a
 # commit message and an issue body, where it is prose. The cost was not the block: the
 # commit message had to be reworded to say "a repo-relative teardown command" rather than
 # name the file, and the issue reporting it had to be filed through a body file written by

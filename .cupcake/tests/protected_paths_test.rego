@@ -338,7 +338,7 @@ test_deny_env_assignment_prefixed_root_delete if {
 	"BUILTIN-PROTECTED-PATHS-PARENT" in rule_ids(denials)
 }
 
-# Absolute/relative path invocation (2026-08-31, bd er-effects-rs-5z75): the verb
+# Absolute/relative path invocation (2026-08-31): the verb
 # was invisible to command position when reached through a leading path component,
 # so `/bin/rm -rf /` and `/usr/bin/rm -rf /` were allowed outright. Measured
 # against this exact policy before the fix.
@@ -729,8 +729,8 @@ delivered_cases := [
 	},
 	# Written to `build-support/`, not `crates/`, since 2026-09-22. It is still a Rust file
 	# authored through a heredoc, which is the whole of what this case is about, and the Frida
-	# gate now sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it (bd
-	# er-effects-rs-wuij). Keeping the old path would have made this case assert that guard
+	# gate now sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it.
+	# Keeping the old path would have made this case assert that guard
 	# instead of this one, and would have tied its verdict to whether this checkout happens to
 	# carry a measurement.
 	{

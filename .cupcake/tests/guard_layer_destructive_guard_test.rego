@@ -63,7 +63,7 @@ test_deny_delete_by_absolute_path if {
 	denied_bash(concat(" ", [rm_rf, concat("/", [repo, cup])]))
 }
 
-# THE VERB reached by absolute/relative path (2026-08-31, bd er-effects-rs-5z75),
+# THE VERB reached by absolute/relative path (2026-08-31),
 # distinct from the operand-side case above: `/bin/rm`, `/usr/bin/rm` and `./rm`
 # were all measured ALLOWED before the fix, because a leading path component is
 # none of command_position_prefix_pattern's anchor characters and the byte

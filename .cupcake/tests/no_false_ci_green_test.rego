@@ -1,6 +1,6 @@
 # OPA unit tests for no_false_ci_green.
 #
-# The case that created the policy is `test_pending_forbids_the_word`: an answer called PR #384
+# The case that created the policy is `test_pending_forbids_the_word`: an answer called a pull request
 # "green" while `gh pr checks` read `check pending`, on the strength of a local check.sh exit 0.
 #
 # Run with:

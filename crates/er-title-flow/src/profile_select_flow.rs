@@ -734,7 +734,7 @@ pub fn apply_online_disable() {
     // game's own ctx-init (1.16.2 0x14082d0d0) writes notReleaseFlag55=1 each time, the title-flow
     // offline step (1.16.2 0x14082fda0) takes the clean no-popup branch, and the Continue/Load/NewGame rows build with zero
     // MessageBoxDialog builds. Race-free + offline-gated (Seamless online unaffected). bd
-    // menu-open-3rd-popup-offline-mode-notice-2026-06-23 / er-effects-rs-yvf.
+    // menu-open-3rd-popup-offline-mode-notice-2026-06-23.
     let menu_online_off = er_hook::patch_3byte_stub(
         base,
         MENU_ONLINE_MODE_DISABLE_RVA,

@@ -45,7 +45,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32,
         "Scaleform resource-ctor",
     );
-    // Per-hook outcomes, not one shared flag (bd er-effects-rs-55y6, 2026-08-31).
+    // Per-hook outcomes, not one shared flag (2026-08-31).
     //
     // These three observers are INDEPENDENT: AcquireMenuResource drives the loading bar's
     // acquiring assets phase, the Scaleform file-open counter drives opening / building menu UI,
@@ -490,7 +490,7 @@ const MAX_SCENE_OBJ_NAME_LEN: usize = 255;
 /// Read a Scaleform scene-object name that the game handed us, without trusting the pointer.
 ///
 /// Every `name_ptr` in this file arrives as a detour argument, so it is foreign in exactly the
-/// sense that killed two testers' games on 2026-08-23 (bd `er-effects-rs-uuly`): `CStr::from_ptr`
+/// sense that killed two testers' games on 2026-08-23: `CStr::from_ptr`
 /// calls `strlen`, `strlen` dereferences, and a non-null-but-garbage pointer takes the process
 /// down. The `name_ptr == 0` guard these call sites used to carry is the same null-only guard that
 /// did not help there, and `TITLE_OWNER_SCAN_START_ADDRESS` is `usize::MIN`, so it was that guard
@@ -792,7 +792,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
 }
 
 /// The eight attributes of the character in save `slot`, or `None` when the slot is empty or the save
-/// is unreadable. This is the per-slot source (bd er-effects-rs-l90): the attributes exist in no live
+/// is unreadable. This is the per-slot source: the attributes exist in no live
 /// struct at ProfileSelect time, so they are read straight from the on-disk `.sl2` (see
 /// [`ensure_profile_slot_stats_cached`]).
 pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
@@ -1084,7 +1084,7 @@ fn scaleform_html_size_existing_font_tags(body: &str, size: i32) -> String {
 /// [`profile_slot_attributes`]; the values are the save's serialized `MaxHealth`/`MaxFP`/
 /// `MaxSP` (== runtime `current_max_hp/fp/stamina`, effective incl. talisman/buff mods),
 /// read -- never derived -- so the boot loading screen can render the same five-line stats
-/// panel as subsequent live loads (bd er-effects-rs-qic7).
+/// panel as subsequent live loads.
 pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
         return None;
@@ -1628,7 +1628,7 @@ pub(crate) use er_loading_portrait_core::profile_row_model::{
 /// original resolves the native fields and then destroys the row proxy's embedded `CSScaleformValue` at
 /// its end, so a post-call resolve of `ErStats` would operate on a released value. Our push resolves a
 /// separate child proxy (`ErStats`) and releases only that child's value, leaving the native fields and
-/// the row proxy untouched for the original. bd er-effects-rs-l90.
+/// the row proxy untouched for the original.
 unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
     let base = game_module_base().ok()?;
     let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };

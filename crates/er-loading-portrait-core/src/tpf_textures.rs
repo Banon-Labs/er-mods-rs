@@ -53,9 +53,9 @@ pub const ER_TPF_COVER_SYSTEX_KEY: &str = "SYSTEX_ErTpf_Cover00";
 pub const ER_TPF_COVER_TEX_DIM: u32 = 256;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub const ER_TPF_COVER_TEX_CELL: u32 = 32;
-// ER_TPF_COVER_ERR_* removed 2026-07-31 (er-effects-rs-56fx) with ER_TPF_COVER_LAST_ERROR: every
+// ER_TPF_COVER_ERR_* removed 2026-07-31 with ER_TPF_COVER_LAST_ERROR: every
 // code had exactly one reference -- its own definition -- because nothing ever recorded one.
-// ER_TPF_COVER_REGISTERED / _LAST_RESCAP / _BOUND / _FAILURES / _LAST_ERROR removed 2026-07-31
-// (er-effects-rs-56fx): all five were read once each to emit an oracle and written nowhere, so the
+// ER_TPF_COVER_REGISTERED / _LAST_RESCAP / _BOUND / _FAILURES / _LAST_ERROR removed 2026-07-31:
+// all five were read once each to emit an oracle and written nowhere, so the
 // TPF cover texture path reported registered=false, bound=0, failures=0, err=none on every run
 // whether or not it ever ran. Re-add with writers at the register/bind sites if that path is built.

@@ -1,5 +1,5 @@
 // TpfLiveTexRE.java
-// One batched dig for the live-portrait-inside-GFx question (bd er-effects-rs-jsm).
+// One batched dig for the live-portrait-inside-GFx question.
 // Answers, against the persistent 'ermaporch' dump (DUMP VAs -- translate to deobf via
 // scripts/dump-deobf-shift.py before any CALL/PATCH use):
 //   A. CreateTpfResCap chain down to the GPU texture build (heap/state semantics).

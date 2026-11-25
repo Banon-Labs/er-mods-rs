@@ -85,7 +85,7 @@ path_prefix_pattern := `([^ \t;&|()'"]*/)?`
 # has_command_verb answers "is this word the program a shell would run", which
 # command_position_prefix_pattern alone gets right for a BARE verb (`rm -rf x`)
 # but not for one invoked by absolute or relative PATH (`/bin/rm -rf x`,
-# `./rm -rf x`) -- measured 2026-08-31 (bd er-effects-rs-5z75): a leading path
+# `./rm -rf x`) -- measured 2026-08-31: a leading path
 # component is none of the anchor's separator characters, and the character
 # immediately before the verb is `/`, so the anchor never lined up and
 # `/bin/rm -rf .cupcake` / `/usr/bin/rm -rf .cupcake` were allowed outright by
@@ -103,7 +103,7 @@ has_command_verb(command, verb) if {
 }
 
 # ---------------------------------------------------------------------------
-# SHELL SEGMENTS (2026-08-31, bd er-effects-rs-c0t9)
+# SHELL SEGMENTS (2026-08-31)
 #
 # Moved here from guard_layer_destructive_guard.rego, which had the only copy.
 # The move is the point: a SECOND segmenter written for the next policy that
@@ -205,7 +205,7 @@ has_output_redirect(command) if {
 }
 
 # ---------------------------------------------------------------------------
-# EXECUTED-TEXT DECOMPOSITION (2026-08-26, bd er-effects-rs-dt2e)
+# EXECUTED-TEXT DECOMPOSITION (2026-08-26)
 #
 # A guard that anchors its command pattern on `(^|[;&|(\n])` is asking about
 # LEXICAL POSITION in the raw command string. That is not the question it means
@@ -317,7 +317,7 @@ odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 # The leading path_prefix_pattern is what admits `/bin/bash`, and it REQUIRES a
 # trailing slash, so a longer word that merely ends in one of these names (`mycsh`,
 # `wifish`) cannot match: the alternation has to consume the token whole from its
-# boundary. Shared with has_command_verb above (2026-08-31, bd er-effects-rs-5z75)
+# boundary. Shared with has_command_verb above (2026-08-31)
 # rather than re-spelled, so the two cannot drift apart.
 shell_name_pattern := concat("", [path_prefix_pattern, `(ba|z|k|da|a|fi|c|tc)?sh`])
 
@@ -461,7 +461,7 @@ opener_line_feeds_a_shell(opener) if {
 # quote that makes the body literal (empty for a bare tag), and the tag. One regex per
 # text, the same one `heredoc_tag` used to run. No copy of the text after the token is
 # taken here: on a long body every copy is linear memory the wasm module never frees
-# within an evaluation, which is how a long command runs it out (bd er-effects-rs-xktj).
+# within an evaluation, which is how a long command runs it out.
 heredoc_opener(after_marker) := opener if {
 	matched := regex.find_all_string_submatch_n(`^-?[ \t]*(["']|\\)?([A-Za-z_][A-Za-z0-9_]*)["']?`, after_marker, 1)
 	m := matched[0]
@@ -822,7 +822,7 @@ unparsed_shell_payload(command) if {
 }
 
 # ---------------------------------------------------------------------------
-# COMMAND SLOT, AS TOKENS (2026-09-22, bd er-effects-rs-ak3q / er-effects-rs-if5l)
+# COMMAND SLOT, AS TOKENS (2026-09-22)
 #
 # `has_command_verb` above answers the same question with a regex, and it is the
 # right tool when the program name is a fixed word. It is the wrong one when the
@@ -901,8 +901,7 @@ command_slot_wrapper("uv")
 # already in `command_position_prefix_pattern` above, and the loop body is where they
 # matter: `for c in ...; do sed -i ... crates/$c/src/config.rs; done` splits into a
 # statement whose first word is `do`, and reading `do` as the program hides the `sed`
-# behind it. That exact loop rewrote four crate sources past the Frida gate on 2026-09-21
-# (bd er-effects-rs-wuij).
+# behind it. That exact loop rewrote four crate sources past the Frida gate on 2026-09-21.
 command_slot_wrapper(word) if word in {"do", "then", "else"}
 
 # The rest of the words the shell reads before a command without running them: the
@@ -1469,7 +1468,7 @@ plain_words_stand_aside(prefix, plain) if {
 }
 
 # ---------------------------------------------------------------------------
-# THIS EVENT'S DECOMPOSITION, COMPUTED ONCE (2026-09-22, bd er-effects-rs-xktj)
+# THIS EVENT'S DECOMPOSITION, COMPUTED ONCE (2026-09-22)
 #
 # Nine policies called `executed_texts(input.tool_input.command)` with the same
 # argument, and the compiled wasm module re-ran the decomposition for each one:

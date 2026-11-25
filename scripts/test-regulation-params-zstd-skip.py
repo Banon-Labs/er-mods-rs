@@ -4,7 +4,7 @@
 Why this exists as a gate rather than a comment. `compression.zstd` is stdlib only from
 Python 3.14 (PEP 784). This machine runs 3.14, GitHub's ubuntu-latest does not, and the
 import in regulation-params.py used to be bare -- so the failure was invisible to every
-local run by construction and only ever appeared in CI. Measured on PR #388, run
+local run by construction and only ever appeared in CI. Measured in CI run
 33793058851: `ModuleNotFoundError: No module named 'compression'` took down
 check-moveset-table.py and its own `--selftest`, through the import chain
 check-moveset-table -> er-moveset-table-gen -> er-param-read:16 -> regulation-params:25.

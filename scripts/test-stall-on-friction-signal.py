@@ -266,7 +266,7 @@ def main() -> int:
     if got.get("friction") != "" or got.get("blame") in ("", None):
         raise AssertionError(f"blame-without-friction: expected blame with empty friction, got {out!r}")
 
-    # bd er-effects-rs-454a: the phrase travels with the sentence before it and its own sentence up
+    # The phrase travels with the sentence before it and its own sentence up
     # to the phrase, so the policy can see a first-person cause that precedes the mechanism.
     expect_facts(
         "blamectx-carries-previous-sentence",

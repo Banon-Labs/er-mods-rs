@@ -1,7 +1,7 @@
 //! The Wwise bank that makes `Play_VoiceChat` play the Audio Input source plugin at a game object,
 //! with the falloff, bus and environment sends of the game's own NPC dialogue.
 //!
-//! This is `scripts/er-voice-bank.py` revision 2 (branch `feat/voice-audio-probes`), the bank the
+//! This is `scripts/er-voice-bank.py` revision 2, the bank the
 //! Cheat Engine table loaded in the sessions where positional voice was heard. [`build`] writes
 //! the same 479 bytes; the test pins their length and FNV-1a 64.
 //!

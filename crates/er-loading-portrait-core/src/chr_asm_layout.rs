@@ -105,7 +105,7 @@ const _: () = assert!(CHR_ASM_UNKD8_OFFSET == 0xd8);
 ///
 /// A zero-initialised image therefore renders param ids 0/100/200/300 -- rows that do not exist -- so
 /// nothing resolves, not even the bare-body defaults the native profile feed equips into hands and
-/// legs. That is the entirely-nude portrait (bd er-effects-rs-wncc). The ctor
+/// legs. That is the entirely-nude portrait. The ctor
 /// `CS::ChrAsm::ChrAsm` (0x1403be1c0) sets all three to -1, which is why a ctor-built ChrAsm
 /// never hits the override path and our hand-built image must match it.
 pub const CHR_ASM_OVERRIDE_ABSENT: i32 = crate::portrait_equip::PORTRAIT_EQUIP_OVERRIDE_ABSENT;
@@ -116,8 +116,8 @@ pub const CHR_ASM_OVERRIDE_ABSENT: i32 = crate::portrait_equip::PORTRAIT_EQUIP_O
 /// (0x140bbb880) snapshots the inbox into +0x33c exactly once and never dereferences it again, while
 /// `STEP_Wait_Play` (0x140bbbc60) re-runs the model-resource request `FUN_1409e86f0` against +0x130
 /// every frame a model instance exists. An oracle reading +0x548 therefore reports what we handed the
-/// renderer, not what it is rendering -- which is precisely how the PR #128 oracle passed a run the
-/// user saw as nude (bd er-effects-rs-91l5).
+/// renderer, not what it is rendering -- which is precisely how an earlier oracle passed a run the
+/// user saw as nude.
 pub const PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET: usize = 0x130;
 
 /// `CSMenuProfModelRend` -> the inbox `ChrAsm`, the one `set_model_source` writes and mutilates.

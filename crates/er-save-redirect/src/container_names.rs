@@ -82,7 +82,7 @@ pub fn active_save_container_names_for(seamless: bool, seamless_name: &str) -> V
 /// `.sl2` fallback under Seamless is correct wherever a redirect will normalise the name: a save
 /// the user picks is staged under every container name
 /// ([`staged_save_container_names_for`]), so picking a vanilla `.sl2` on a Seamless launch works
-/// and must keep working (bd `er-effects-rs-h6sh` -- refusing it there softlocked the loading
+/// and must keep working (refusing it there softlocked the loading
 /// screen on 2026-08-02).
 ///
 /// The boot default-save check is the one place where that fallback is wrong, because it accepts a
@@ -306,7 +306,7 @@ mod tests {
         );
 
         // The picked-save path keeps its `.sl2` fallback: staging rewrites the name, so a picked
-        // vanilla container on a Seamless launch still loads (bd er-effects-rs-h6sh).
+        // vanilla container on a Seamless launch still loads.
         assert_eq!(
             active_save_container_names_for(true, "ER0000.co2"),
             vec!["ER0000.co2", "ER0000.sl2"]

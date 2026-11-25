@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Prove scripts/hooks/pre-push runs the suite on the commit being pushed, not on the checkout `git
-# push` was typed in (bd er-effects-rs-xe0r).
+# push` was typed in.
 #
 # The defect this pins, measured 2026-10-05: `git -C <main checkout> push -u origin
-# feat/ai-simulated-player`, from a checkout that had feat/er-r3-view-rest-of-catalog out. The
+# <branch>`, from a checkout that had another branch out. The
 # stage selection diffed the pushed ref; check.sh then read the main checkout's working tree, went
 # red on a crate the pushed branch does not contain, and would equally have passed code the pushed
 # branch breaks.

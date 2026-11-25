@@ -1,6 +1,6 @@
 // How much D3D12 command-list work does Elden Ring record per frame, and on how many threads?
 //
-// Sizes the per-draw hooks the shader editor would add (er-effects-rs-zxlx): a detour on every
+// Sizes the per-draw hooks the shader editor would add: a detour on every
 // draw pays a trampoline and a lookup, so the count per frame decides whether that is free or a
 // frame-time problem. Counted, per second and per frame:
 //

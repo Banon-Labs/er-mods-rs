@@ -11,7 +11,7 @@
 //!    so any area >= 0x80 reads negative and silently switched the map comparison off.
 //! 2. **Did the portrait we published match the character that actually loaded**
 //!    ([`published_identity_verdict`])? This is the comparison the loading screen's pixels
-//!    depend on, and nothing asserted it before (bd er-effects-rs-qoqc / er-effects-rs-91zb: a
+//!    depend on, and nothing asserted it before (a
 //!    wrong face was on screen for 29.7s with every existing oracle reporting ok).
 
 /// New-game / not-yet-resolved saved-map sentinel (`m10_01_00_00`). Excluded from every map
@@ -178,7 +178,7 @@ pub struct LiveRecordScan {
 }
 
 /// Sweep the live record table: which slots are marked occupied while holding something that is not
-/// a character -- the durable RAM signature of `er-effects-rs-fmy6`.
+/// a character -- the durable RAM signature of the stale-record wrong-face defect.
 ///
 /// The defect this names. The in-game save picker renders its browse rows by writing them into
 /// these records: `save_picker_write_row_records` zeroes each `0x2a0`-byte record, copies the row
@@ -286,7 +286,7 @@ pub fn published_identity_verdict(
 ///    definition.
 /// 3. `save_slot` — `GameMan.save_slot` (ac0). Last resort: both the game's own selector and our
 ///    own `set_save_slot` write it for reasons unrelated to "which character is loading", so it
-///    is the weakest of the three (bd er-effects-rs-91zb).
+///    is the weakest of the three.
 ///
 /// `None` when no source names a valid slot — callers must not collapse that to slot 0.
 #[must_use]
@@ -307,7 +307,7 @@ pub fn portrait_target_slot_from_sources(
 /// game's own selector and our loader write for reasons unrelated to "which character is
 /// loading" — was indistinguishable from one the user explicitly clicked. The window latch then
 /// defended both equally, and a stale `save_slot` outranked the load request that superseded it
-/// for the whole window (bd `er-effects-rs-fmy6`: latched slot 0 from `ac0=0` at +56125ms, `b78`
+/// for the whole window (latched slot 0 from `ac0=0` at +56125ms, `b78`
 /// and `ac0` both read the real slot 1 at +60296ms, retarget suppressed, wrong face on screen).
 ///
 /// A configured hint is deliberately not a variant here. The autoload's `slot=` setting is not a
@@ -563,7 +563,7 @@ pub fn portrait_window_target_slot_authoritative(
 /// slot 0, `save_slot` later read 9, window retargeted at +20998ms) is still impossible — a pick
 /// is the top rank and nothing outranks it.
 ///
-/// What the boolean form could not express, and what this fixes (bd `er-effects-rs-fmy6`): on a
+/// What the boolean form could not express, and what this fixes: on a
 /// System->Quit->Load switch across save files the redirect swap leaves the slot registers
 /// momentarily stale, so the window latched slot 0 off `ac0=0` — a real read, just an obsolete
 /// one. 4.2s later the load-request register named the real slot 1 and the retarget was refused,

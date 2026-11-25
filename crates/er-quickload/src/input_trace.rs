@@ -508,7 +508,7 @@ fn input_trace_semaphores() -> TraceSem {
         } else {
             (0, 0)
         };
-    // RE-verified reload-retention semaphores (bd er-effects-rs-9fmm): world-stable oracle + the
+    // RE-verified reload-retention semaphores: world-stable oracle + the
     // MoveMap destination BlockId the InGameStep loads after requestCode=2 (0xffffffff = skip -> revert).
     let world_stable = world_chr_man != 0
         && unsafe { safe_read_i32(world_chr_man + WORLD_CHR_MAN_WORLD_STABLE_1E524_OFFSET) }

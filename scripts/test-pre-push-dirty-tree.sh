@@ -132,7 +132,7 @@ fi
 
 # --- a main-push guard that leaves its stdin unread cannot end the hook ---------------------
 #
-# The flake this pins, bd er-effects-rs-5hyb. The hook replayed the ref list to the main-push
+# The flake this pins: the hook replayed the ref list to the main-push
 # guard through a pipe, and the guard stub above exits without reading it. That is a race the
 # forked printf nearly always wins, so the case above it passed on every standalone run; inside a
 # real push this suite runs at SCHED_IDLE beside the cargo stages, the printf lost one race in a

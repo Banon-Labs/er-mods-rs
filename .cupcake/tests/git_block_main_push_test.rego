@@ -360,7 +360,7 @@ test_deny_two_operand_push_without_colon if {
 	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
 }
 
-# --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ---------------
+# --- Shell-wrapper payloads (2026-08-26) ---------------
 #
 # Every case below produced ZERO denials before the executed-text decomposition
 # landed: the character in front of the verb is a quote, and a quote was not in

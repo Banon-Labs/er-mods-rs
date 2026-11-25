@@ -31,7 +31,7 @@ Three things are deliberately left alone, because each carries something the use
   * Naming what is unpushed and on which branch. Same paragraph of `AGENTS.md`: that is a fact
     about the tree, not a recital of the rule.
 
-So the line this draws is between the fact and the rule. `PR #481: <url>` is a fact. "It stays
+So the line this draws is between the fact and the rule. `PR #<n>: <url>` is a fact. "It stays
 draft because undrafting is yours" is a rule the user is being read their own copy of.
 
 Quoted spans are stripped before matching, so a report about this guard -- this docstring, the

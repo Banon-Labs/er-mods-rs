@@ -11,7 +11,7 @@
 //!
 //! The one-byte code patch that used to live here, `freelist_shutdown_assert` (the `INT3` in
 //! `CS::CSFreeListMemorySystem`'s shutdown), moved to `er-crash-logging` on 2026-10-26. It fires
-//! on vanilla 2.7.2.0 with no Seamless loaded (bd `er-effects-rs-843o`), so it is not a Seamless
+//! on vanilla 2.7.2.0 with no Seamless loaded, so it is not a Seamless
 //! bug, and players who never loaded this DLL crashed on every quit. It must not come back here:
 //! two DLLs writing the same byte means the second finds it already changed.
 //!

@@ -259,7 +259,7 @@ unsafe extern "system" fn present1_hook(
 pub(crate) use er_telemetry_core::counters::PRESENT_COMPOSITE_EARLY_SKIPS;
 
 /// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
-/// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the game's shared D3D12
+/// 17 native-Windows runs (2026-07-15): compositing on the game's shared D3D12
 /// device -- creating resources + submitting command lists -- crashes the strict native AMD driver at
 /// every phase (early-boot D3D12 init: RIP-outside AV; the game's own now-loading screen: Write AV), while
 /// composite-off is 60s clean and reaches gameplay. vkd3d/Proton isolates the shared-device work; native
@@ -275,7 +275,7 @@ fn composite_suppressed_on_native() -> bool {
 /// runs, the loading-screen portrait), then the in-world effect-selector HUD, then service overlay input.
 /// Runs on the game render thread; never panics.
 ///
-/// Native-Windows split (2026-07-15, bd er-effects-rs-n4x). The strict native D3D12 driver crashes on the
+/// Native-Windows split (2026-07-15). The strict native D3D12 driver crashes on the
 /// character-profile render-drive (proven: drive off => 60s stable + reaches gameplay), so on native
 /// Windows the drive is gated off and the animated portrait cannot render. But the loading bar + save
 /// PICKER are pure display (a CopyTextureRegion of our own CPU-rasterized pixels onto the backbuffer
@@ -286,7 +286,7 @@ fn composite_suppressed_on_native() -> bool {
 /// Run the per-frame cover composite and report which gate decided this frame, as a
 /// `er_telemetry_core::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
 /// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
-/// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
+/// live but our cover did not draw -- the vanilla flash-through.
 ///
 /// `base` is passed through for the same function's post-release mirror path (2026-08-22): on the
 /// frames where the native loading screen is stale, and the exposure judgement therefore does not
@@ -337,7 +337,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
     // profile_lookat_realtime_draw_tick (a draw-phase CSTaskImp task, live recording frame). This hook
     // only does the static composite of an already-captured RGBA.
     //
-    // Native-Windows display-window gate (2026-07-15, bd er-effects-rs-n4x). Compositing during the fragile
+    // Native-Windows display-window gate (2026-07-15). Compositing during the fragile
     // early-boot D3D12 init / title crashes the strict driver even with the render-drive off (RIP-outside
     // AV ~+8s; composite-off is 60s clean). So on native Windows, do no GPU work until the game's own
     // now-loading screen is live (LOADING_SCREEN_UPDATE_HITS > 0, set by the native CS::LoadingScreen hook
@@ -517,7 +517,7 @@ fn boot_present_pump() {
             }
             let found_ms = start.elapsed().as_millis().min(usize::MAX as u128) as usize;
             BOOT_VIEW_SWAPCHAIN_FOUND_MS.store(found_ms, Ordering::SeqCst);
-            // Native-Windows SAFETY (2026-07-15, bd er-effects-rs-n4x). The boot pump self-presents by
+            // Native-Windows SAFETY (2026-07-15). The boot pump self-presents by
             // drawing on the game swapchain's backbuffer with our own present<->COPY_DEST transitions at an
             // arbitrary time (our thread, not synchronized with the game's frame). That barrier assumes the
             // backbuffer is in present state; on a real D3D12 driver it usually is not (the game may be
@@ -550,8 +550,8 @@ fn boot_present_pump() {
         }
         // Hold the first pixel off the screen until the startup window geometry is final (the
         // winreconfig early-apply latched a result): presenting before the early MoveWindow lands
-        // would re-introduce a visible black flash when XWayland services the resize
-        // (bd er-effects-rs-rzow). Bounded: after BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS the pump
+        // would re-introduce a visible black flash when XWayland services the resize.
+        // Bounded: after BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS the pump
         // presents anyway (a late flash beats an invisible boot).
         if BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) == 0
             && WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst) == 0

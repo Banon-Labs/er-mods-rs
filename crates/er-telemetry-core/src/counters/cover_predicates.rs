@@ -45,7 +45,7 @@ use super::{
 /// `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` is documented as the authoritative total-load witness
 /// -- exactly one increment per forwarded `continue_confirm`, boot included -- and a warp does not
 /// forward one. It bumps at the confirm, i.e. before the character load's screen appears, so the
-/// er-effects-rs-q6vk shape (a switch whose cover released early during the return-to-title
+/// early-release shape (a switch whose cover released early during the return-to-title
 /// teardown, leaving the character load bare) still answers true here and stays filed as gate 4.
 pub fn cover_owns_current_loading_screen() -> bool {
     // Armed: either the boot window, or a switch that re-armed it. `BOOT_VIEW_STOPPED` is cleared
@@ -113,7 +113,7 @@ pub fn title_visual_suppression_active() -> bool {
     // `oracle_title_logo_gfx_hide_last_requested_visible = 1` says the game was asking for the title
     // to be visible while we answered by hiding it. Press button was among the hidden components, so
     // the title could not be advanced by any accept signal, from the product, the harness, or a
-    // human. That is the stall that blocked every agent-driven route (bd er-effects-rs-tkfb).
+    // human. That is the stall that blocked every agent-driven route.
     //
     // So: suppression requires a cover that has actually put pixels up for the current epoch. Zero
     // draws in this epoch means there is nothing to protect and the title must be left alone.

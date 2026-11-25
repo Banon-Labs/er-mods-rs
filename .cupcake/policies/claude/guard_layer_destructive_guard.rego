@@ -174,8 +174,8 @@ destructive_segment(segment) if {
 	commands.creates_symlink(segment)
 }
 
-# The segmenter this rule used to define lives in commands.rego as of 2026-08-31
-# (bd er-effects-rs-c0t9), because the vendored git_block_no_verify builtin needed
+# The segmenter this rule used to define lives in commands.rego as of 2026-08-31,
+# because the vendored git_block_no_verify builtin needed
 # the same machinery to close the same defect and two copies of a security
 # predicate diverge. Its input contract -- feed it executed_texts output, never
 # the raw command -- is documented there and is satisfied above.

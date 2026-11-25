@@ -1,5 +1,5 @@
 //! In-DLL D3D12 GPU-timestamp oracle -- the goal-doc §3.3 `gpu_frame_us` semaphore
-//! (`docs/goals/switch-reload-framerate-parity-acceptance.md`; bd er-effects-rs-03ma).
+//! (`docs/goals/switch-reload-framerate-parity-acceptance.md`).
 //!
 //! What it measures. Per-frame GPU-busy time in microseconds, obtained by injecting two D3D12
 //! TIMESTAMP queries onto the game's own render `ID3D12CommandQueue`: a start stamp on the first

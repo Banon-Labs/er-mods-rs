@@ -14,7 +14,7 @@ import rego.v1
 
 import data.cupcake.system.commands
 
-# Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e). This policy
+# Shell-wrapper decomposition (2026-08-26). This policy
 # recognises its verbs through commands.has_verb, whose `(^|\s)verb(\s|$)`
 # boundary a quote does not satisfy -- so a hook bypass wrapped as
 # `bash -c 'git commit --no-verify -m x'` produced ZERO denials, measured.
@@ -237,7 +237,7 @@ contains_hook_disable(cmd) if {
 
 # ---------------------------------------------------------------------------
 # HOOK REMOVAL: THE VERB AND THE HOOK DIRECTORY MUST BE THE SAME COMMAND
-# (2026-08-31, bd er-effects-rs-c0t9)
+# (2026-08-31)
 #
 # Three arms used to live in contains_hook_disable, each ANDing a verb test with
 # `contains(cmd, ".git/hooks")` over the WHOLE command string. Co-presence, not

@@ -44,6 +44,16 @@
     allowlist of technical vocabulary was rejected on purpose: registers, mnemonics, param names,
     FromSoft types and `FUN_<addr>` symbols are an open set that grows every session, so an
     allowlist would reject new correct writing every week. English is the closed set.
+- **Comments carry no beads ids, pull request numbers or branch names** (user request
+  2026-11-24). A comment says what the code does and why; which issue asked for it, which pull
+  request landed it and which branch it was written on is history, and that lives in git and bd.
+  A measurement keeps its date and the command, log or CI run that produced it. A branch name the
+  code uses (a fixture's branch, a ref a script pushes) goes in a string, which is not a comment.
+  `scripts/check-no-tracker-refs.py` (check.sh, lint stage) holds every tracked file at zero, with
+  no baseline, over `//`, `/* */`, `#`, `--` comments and Python docstrings; its docstring lists
+  the shapes it reads and the false positives it leaves alone (paths that share a branch prefix,
+  one-word slugs, ordinals and counters). `.cupcake/policies/claude/edit_no_tracker_refs_guard.rego`
+  refuses a Write or Edit that adds one to a whole-line comment.
 - **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
 - **Every in-game overlay draws with `crates/er-overlay-theme`** (user directive 2026-10-16: one
   look across every hudhook DLL, now and for every new one). A crate that draws with imgui --

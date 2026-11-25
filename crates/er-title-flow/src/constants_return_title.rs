@@ -89,8 +89,8 @@ pub fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
 pub use er_telemetry_core::counters::SWITCH_ORACLE_MMS_STEP;
-/// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
-/// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` (1.16.1 dump @0x140aec810) loads the
+/// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19).
+/// `InGameStep::STEP_MoveMap_Update` (1.16.1 dump @0x140aec810) loads the
 /// destination block
 /// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
 /// `CSSessionManager.protocol_state == WaitReload(4)`, else `GameMan+0x14` (moveMapStepBlockId), and
@@ -184,13 +184,13 @@ pub const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
 /// entering world phase (`MAP STEP DONE` -> `WORLD HANDOFF` -> `PLAYER IN WORLD` -> `CAN MOVE`), not
 /// main phases: promoting them to main steps gave the bar a second, longer `N/M` denominator that
 /// swapped in mid-load and let a stale previous-epoch request code read as near-complete progress the
-/// instant a reload armed (bd er-effects-rs-ok8d).
+/// instant a reload armed.
 pub const INGAMESTEP_REQUEST_CODE_MAP_FINISH: i32 = 1;
 pub const INGAMESTEP_REQUEST_CODE_IN_WORLD: i32 = 2;
 
 /// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer 0x140afbeb0
 /// (1.16.1 dump FUN_140afa7c0). Grounded in the decompiled `switch(field25_0x12a)` cases
-/// (2026-07-19, bd er-effects-rs-9fmm; the `FUN_` names below are the 1.16.1 dump's):
+/// (2026-07-19; the `FUN_` names below are the 1.16.1 dump's):
 ///   0 idle/done; 1 fade-out wait; 2 death/retry check; 3 retry-menu + map-block setup;
 ///   4 map-block/session wait; 5/6 fade-in wait (+sfx); 7 remo/save-drain wait; 8 warp/server
 ///   finalize; 9 post-finalize. The warm reload parks at 7 (its 7->8 gate --

@@ -17,7 +17,7 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-// ===== save-safe verify-only own-load buffer-feed probe (bd er-effects-rs-lds) ===============
+// ===== save-safe verify-only own-load buffer-feed probe ===============
 //
 // Mechanism (static-validated 2026-06-22 on 1.16.2; 2.7.2.0 addresses below): hook the FSM-gated
 // save read 0x67c400(rcx=out_buf,
@@ -558,7 +558,7 @@ pub(crate) fn install_common_finalize_hook() -> bool {
     }
 }
 
-// ===== RequestMoveMap BlockId fix (render-handoff freeze root fix, bd er-effects-rs-um9g) ==========
+// ===== RequestMoveMap BlockId fix (render-handoff freeze root fix) ==========
 //
 // Root (RE render-handoff-freeze-worldreswait-loadlist-root-2026-07-18): our in-memory redirect load
 // reaches STEP_PlayGame with a stale/`-1` target BlockId (GameMan+0xc30 was set too late for the

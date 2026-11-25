@@ -292,8 +292,7 @@ fn row_text_hooks() -> RowTextHooks {
 /// virtual dispatch on the linked component. On the first in-world ProfileSelect open the component
 /// linked for the injected `ErStats` field was a stale menu-arena object with a garbage heap
 /// vtable, and that dispatch jumped into `.rdata`. So component, vtable and slot target are all
-/// checked game-image-plausible, `_purecall` included, before the wrapper is allowed to dispatch
-/// (er-effects-rs-7e7).
+/// checked game-image-plausible, `_purecall` included, before the wrapper is allowed to dispatch.
 ///
 /// And the component checks cannot answer whether the name resolved at all: on a miss the
 /// named-child ctor leaves the out proxy's component slot pointing at itself, so the component is

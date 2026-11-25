@@ -1,5 +1,5 @@
 // Sets and locks the time of day and the weather through the game's own calls, and reports the
-// clock and weather state twice a second, as the prototype for the Sky tab (er-effects-rs-pjyh).
+// clock and weather state twice a second, as the prototype for the Sky tab.
 //
 // Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give and written old -> new
 // below. Each function's bytes match the

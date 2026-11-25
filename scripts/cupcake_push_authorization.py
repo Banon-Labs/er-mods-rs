@@ -389,8 +389,8 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
             raise Refused(NO_PROMPT)
         return found
     # In the main session the line is not on disk at all while PreToolUse hooks run: Claude Code
-    # writes it after they return (bd er-effects-rs-hu4w; on 2026-10-22, session e75d8996, two
-    # authorized pushes of `feat/asset-geometry-tooling` were refused here after the full wait).
+    # writes it after they return (on 2026-10-22, session e75d8996, two
+    # authorized pushes of one branch were refused here after the full wait).
     # What is on disk then is the conversation up to this call, which descends from its newest
     # entry, so the chain is walked back from there -- the same fallback
     # `cupcake_commit_authorization.locate` takes. An entry whose parent is not written yet is

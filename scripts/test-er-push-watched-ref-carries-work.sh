@@ -2,8 +2,8 @@
 # Prove `scripts/er-push-watched.sh` refuses to push a local ref that carries no commit main does
 # not already have, before it runs the push or anything the push would trigger.
 #
-# The defect this pins, measured 2026-09-14. An orchestrator pushed `worktree-agent-<id>` to PR
-# #448's branch and overwrote it with main. That local branch had never moved: three earlier pushes
+# The defect this pins, measured 2026-09-14. An orchestrator pushed `worktree-agent-<id>` to an
+# open pull request's branch and overwrote it with main. That local branch had never moved: three earlier pushes
 # in the session had correctly used the `worktree-agent-<id>` pattern, and the fourth agent's brief
 # had deliberately broken it by sending the agent to commit on the PR branch instead. So the ref
 # that was pushed still pointed at the main its worktree was created from, the PR branch lost two

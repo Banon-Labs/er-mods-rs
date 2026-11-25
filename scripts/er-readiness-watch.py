@@ -690,8 +690,8 @@ def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | 
     """
     if telemetry is None:
         return False
-    # Path-B CPU cover (the only portrait path since the path-A forge/Present-composite deletion,
-    # bd er-effects-rs-f9mq): the portrait is composited into the shared boot/loading frame by
+    # Path-B CPU cover (the only portrait path since the path-A forge/Present-composite deletion):
+    # the portrait is composited into the shared boot/loading frame by
     # portrait_onto, counted by oracle_portrait_onto_draw_hits. The frame worth capturing is when that
     # composite is actually drawing and there is a real portrait behind it -- Either our own
     # post-Continue renderer table was built (oracle_loadscreen_table_builds > 0) or the menu's
@@ -1303,8 +1303,8 @@ def telemetry_loading_portrait_stopped(telemetry: dict[str, Any] | None) -> bool
     """True once the loading portrait feature hit its product stop.
 
     The native LoadingScreen close/result handoff (close_sent_hits > 0) is the product stop for the
-    loading cover. (The old path-A overlay stop-reason oracle died with the path-A deletion,
-    bd er-effects-rs-f9mq.) Feature-specific probes should tear down here instead of waiting for
+    loading cover. (The old path-A overlay stop-reason oracle died with the path-A deletion.)
+    Feature-specific probes should tear down here instead of waiting for
     world-stable.
     """
     if not isinstance(telemetry, dict):

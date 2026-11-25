@@ -39,8 +39,8 @@ executed_texts := commands.input_executed_texts
 # A python interpreter in COMMAND POSITION, not merely a `python` somewhere in the text.
 #
 # The pattern this replaces anchored on "start, or after whitespace or a quote", which is
-# the thing every quoted argument in the world satisfies. Measured 2026-09-21 (bd
-# er-effects-rs-ak3q): `bd remember --key ... "measured with python3 scripts/er-fd-trace.py
+# the thing every quoted argument in the world satisfies. Measured 2026-09-21:
+# `bd remember --key ... "measured with python3 scripts/er-fd-trace.py
 # --tsv ..."` was refused as an inline python file write. The invoked binary was `bd`, the
 # python was a quotation inside the memory being recorded, and the way past the guard was
 # to reword the memory -- degrading the record rather than the command.

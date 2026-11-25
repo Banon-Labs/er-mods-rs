@@ -11,8 +11,8 @@ Each case writes a transcript fixture with the `Chain` builder from
 `scripts/test-push-authorization-signal.py` (the same entry shapes, measured on this project's
 transcripts) and hands the signal a PreToolUse event on stdin the way cupcake does. Most fixtures
 hold the pending call's own `tool_use` line; the cases under "the call's own line is not on disk
-yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs
-(bd er-effects-rs-hu4w). The reader, the push reader it shares the transcript helpers with, and the
+yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs.
+The reader, the push reader it shares the transcript helpers with, and the
 signal are copied into a temporary root so the spent-authorization record lands there, not in this
 checkout's `.cupcake/state`.
 

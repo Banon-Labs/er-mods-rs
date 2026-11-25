@@ -72,7 +72,7 @@ pub const FULLREAD_PHASE_DRAIN: usize = 1;
 pub const FULLREAD_PHASE_DESER: usize = 2;
 pub const FULLREAD_PHASE_DONE: usize = 4;
 pub use er_telemetry_core::counters::FULLREAD_DRAIN_WAITS;
-/// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). Submit arms
+/// Terminal non-commit disarm counters for the full-read chain. Submit arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
 /// save manager services any >=0 request on the first frames after world arrival, running a second
 /// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 1.16.2
@@ -84,7 +84,7 @@ pub use er_telemetry_core::counters::FULLREAD_REQ_DISARM_LAST_PREV_SLOT;
 pub use er_telemetry_core::counters::LOADED_PEAK_C30;
 pub use er_telemetry_core::counters::LOADED_PEAK_LEVEL;
 pub use er_telemetry_core::counters::LOADED_PEAK_NAME_LEN;
-/// LATCHED peak-load semaphore (bd er-effects-rs-ns4n follow-up). The live `oracle_char_*` fields read
+/// LATCHED peak-load semaphore. The live `oracle_char_*` fields read
 /// PlayerGameData directly, so a quit-to-title tears the character down and a final telemetry snapshot
 /// reads them empty even on a fully-successful run -- the load proof lived only in the mid-run
 /// `LOAD-CORRECTNESS` log line. These latch the highest-level real character ever confirmed in-world
@@ -401,7 +401,7 @@ pub use er_telemetry_core::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
 /// switch, so it cannot stop the readback in-world (bd
 /// fps-killer-rootcaused-per-frame-gpu-readback-boot-view-not-stopping-inworld-load2). `usize::MAX` = none.
 pub use er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
-// BOOT_VIEW_EPOCH_BAIL_PERMILLE removed 2026-07-31 (er-effects-rs-drb7) along with the FPS bail's
+// BOOT_VIEW_EPOCH_BAIL_PERMILLE removed 2026-07-31 along with the FPS bail's
 // permille arm: "the bar reads ~full" is a progress reading, not the freeze predicate the bail
 // needs, and it fired ~1.3s into every healthy switch. BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS is now the
 // bail's only trigger.
@@ -556,7 +556,7 @@ pub static POLICY_TOS_FLAG_SETTER_LAST_AFTER: AtomicUsize =
 pub static POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
-/// Observe-only user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
+/// Observe-only user32 window-reconfiguration hooks.
 pub static START_WINDOW_RECONFIG_OBSERVER: Once = Once::new();
 /// Native server/login status-text formatter. Static asset/native scan (see
 /// `target/autoresearch/server-semaphore-assets/server-semaphore-static-summary.json`) maps
@@ -1205,7 +1205,7 @@ pub use er_telemetry_core::counters::SCALEFORM_HANDLER_DOUBLE_FREES;
 pub use er_telemetry_core::counters::SCALEFORM_HANDLER_DTORS;
 pub use er_telemetry_core::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 
-/// ~MenuWindowJob doomed-window guard (er-effects-rs-j74t, return-to-title crash rva 0x7ada87 and
+/// ~MenuWindowJob doomed-window guard (return-to-title crash rva 0x7ada87 and
 /// 0x7adb28, 1.16.2). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (2.7.2.0
 /// 0x1407ada50; 1.16.2 deobf 0x1407ac720) calls the finalize (2.7.2.0 0x1407aed70; 1.16.2 deobf
 /// 0x1407ada40), whose `if (owningMenuWindow != 0)` block virtual-calls the window
