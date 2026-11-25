@@ -127,9 +127,8 @@ members = [
   # which differed from it only in the `RowSet` they passed and were a declared conflict with it
   # and with each other for exactly that reason.
   "crates/er-quit-menu",
-  # World-map invasion-spawn warp targets
-  # (docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
-  # split as er-loading-portrait-core / er-loading-portrait.
+  # World-map invasion-spawn warp targets (docs/plans/world-map-invasion-warp.md). Feature
+  # crate + thin ME3-loadable shell, same split as er-loading-portrait-core / er-loading-portrait.
   # The build watermark every profile draws in the top-right: which mods are loaded, and whether
   # any of them is an older PUBLISHED release than main's tip.
   "crates/er-build-watermark-core",

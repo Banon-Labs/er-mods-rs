@@ -463,10 +463,10 @@ def main() -> int:
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument(
         "--refresh",
-        # `--write` is the name a parallel change gave this mode while the ratchet was being built on an
-        # older copy of this file; the merge of the two kept `--refresh` as canonical. The alias
-        # costs one line and means a command someone already has in their shell history does not
-        # silently become an argparse error.
+        # `--write` is the name a parallel change gave this mode while the ratchet was being built
+        # on an older copy of this file; the merge of the two kept `--refresh` as canonical. The
+        # alias costs one line and means a command someone already has in their shell history does
+        # not silently become an argparse error.
         "--write",
         action="store_true",
         dest="refresh",

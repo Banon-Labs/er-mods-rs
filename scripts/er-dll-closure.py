@@ -374,11 +374,11 @@ def compute(
             "no changed file feeds any cdylib; falling back to the product DLL as the baseline"
         )
     elif PRODUCT_PACKAGE not in candidates:
-        # The product is never optional (fixed 2026-09-04). `--with X` on a
-        # tree whose changes feed no cdylib used to produce a closure of exactly X: naming any
-        # package made `candidates` non-empty, which skipped the fallback above, and the product
-        # left the profile without a word. That run is not merely surprising, it is unreadable --
-        # the staged sidecar is still `er-quickload.toml` and the launcher's testimony step still
+        # The product is never optional (fixed 2026-09-04). `--with X` on a tree whose changes
+        # feed no cdylib used to produce a closure of exactly X: naming any package made
+        # `candidates` non-empty, which skipped the fallback above, and the product left the
+        # profile without a word. That run is not merely surprising, it is unreadable -- the
+        # staged sidecar is still `er-quickload.toml` and the launcher's testimony step still
         # waits for the product's own `runtime-config: loaded` line, so the run either hangs at
         # testimony or prints a block crediting the product for a load that was not its.
         #

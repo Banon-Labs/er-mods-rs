@@ -131,8 +131,8 @@ def analyze(path: Path, settle: int) -> None:
             qpc_s = f"{qpc['median']:.0f}us" if qpc else "n/a"
             print(f"   --- present cadence ---")
             print(f"   sync_interval(requested)={dict(si)}  refresh/present(observed)={rpp_s}  qpc_delta={qpc_s}")
-        # GPU-busy per frame (goal §3.3 gpu_frame_us): injected D3D12 timestamp
-        # pair on the game queue, excluding the vsync/present-wait. Splits the residual(flip/gpu) bucket:
+        # GPU-busy per frame (goal §3.3 gpu_frame_us): injected D3D12 timestamp pair on the game
+        # queue, excluding the vsync/present-wait. Splits the residual(flip/gpu) bucket:
         # gpu_frame ~= residual => render-bound; gpu_frame << residual => the residual is present-wait.
         # Drop 0s (pre-production frames). samples/state make an empty window attributable.
         gpu = _stats([_f(r.get("oracle_gpu_frame_us")) for r in settled if _f(r.get("oracle_gpu_frame_us"))])

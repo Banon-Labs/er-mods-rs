@@ -1095,10 +1095,9 @@ def main() -> int:
         # rule anything that actually runs.
         # Written to `build-support/`, not `crates/`, since 2026-09-22: it is still a Rust file
         # authored through a heredoc, which is what this case is about, and the Frida gate now
-        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it.
-        # Keeping the old path would have tested that guard instead of
-        # this one, and would have made the case's verdict depend on whether this checkout
-        # happens to carry a measurement.
+        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it. Keeping
+        # the old path would have tested that guard instead of this one, and would have made
+        # the case's verdict depend on whether this checkout happens to carry a measurement.
         PolicyCase(
             "allow-rust-doc-comment-heredoc-with-prose-verb",
             "cat > build-support/demo.rs <<'EOF'\n"
@@ -1124,8 +1123,8 @@ def main() -> int:
         ),
         # The separator is written out rather than left to a newline: this runner
         # calls `cupcake eval` directly, so scripts/cupcake-hook.sh is not in the
-        # path to rewrite an unquoted newline to "; " and
-        # line 2 would arrive with no boundary in front of it.
+        # path to rewrite an unquoted newline to "; " and line 2 would arrive
+        # with no boundary in front of it.
         PolicyCase(
             "deny-root-delete-after-heredoc-terminator",
             "git commit -q -F - <<'EOF'\n"
@@ -1893,8 +1892,8 @@ def main() -> int:
         ),
         # bd only records text: a single, non-chained bd invocation whose pgrep
         # token sits entirely inside quoted issue-tracker text is exempt
-        # (2026-07-29 false positive: a bd close --reason
-        # describing launch-guard allow-tests was denied).
+        # (2026-07-29 false positive: a bd close --reason describing
+        # launch-guard allow-tests was denied).
         PolicyCase(
             "allow-bd-close-reason-mentioning-pgrep",
             '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard'
@@ -2396,8 +2395,8 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # A read-only interpreter scan of the installed DLL with the path as an
-        # unquoted operand is allowed (arm (a) counted
-        # python/bash as bundling verbs).
+        # unquoted operand is allowed (arm (a) counted python/bash as bundling
+        # verbs).
         PolicyCase(
             "allow-python-scan-gameinstall-ersc-dll-unquoted-operand",
             "python3 scripts/pe_export_dump.py"

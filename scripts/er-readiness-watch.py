@@ -691,13 +691,13 @@ def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | 
     if telemetry is None:
         return False
     # Path-B CPU cover (the only portrait path since the path-A forge/Present-composite deletion):
-    # the portrait is composited into the shared boot/loading frame by
-    # portrait_onto, counted by oracle_portrait_onto_draw_hits. The frame worth capturing is when that
-    # composite is actually drawing and there is a real portrait behind it -- Either our own
-    # post-Continue renderer table was built (oracle_loadscreen_table_builds > 0) or the menu's
-    # still-live table yielded a non-black captured portrait (oracle_loading_bg_portrait_gx_nonblack);
-    # the immediate-build-kick path captures via the menu table without our builder ever running
-    # (builds stays 0), so requiring builds>0 alone misses the exact frame worth seeing.
+    # the portrait is composited into the shared boot/loading frame by portrait_onto, counted by
+    # oracle_portrait_onto_draw_hits. The frame worth capturing is when that composite is actually
+    # drawing and there is a real portrait behind it -- Either our own post-Continue renderer table
+    # was built (oracle_loadscreen_table_builds > 0) or the menu's still-live table yielded a
+    # non-black captured portrait (oracle_loading_bg_portrait_gx_nonblack); the immediate-build-kick
+    # path captures via the menu table without our builder ever running (builds stays 0), so
+    # requiring builds>0 alone misses the exact frame worth seeing.
     global _LOGO_FIRST_COMMIT_MONOTONIC
     portrait_hits = as_int(telemetry.get("oracle_portrait_onto_draw_hits"), 0)
     builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)

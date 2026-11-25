@@ -467,8 +467,8 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 # WHAT IS STILL DIFFERENT, and it is a behaviour limit rather than a co-load hazard: the shell's
 # Load Character opens `05_010_ProfileSelect` and a pick runs the game's own in-world load. Gear and
 # level change in place; the world is never torn down and no character is loaded through the title.
-# The product's save-safe switch is not in a shared crate yet -- the extraction
-# is still open, and until it lands a shell row is a native load wearing the product's label.
+# The product's save-safe switch is not in a shared crate yet -- the extraction is still open, and
+# until it lands a shell row is a native load wearing the product's label.
 #
 # WHAT BRINGS THE CONFLICT BACK. Naming `quit-rows` in a build of `er-quickload`. `check.sh`
 # compiles that configuration; nothing in this table can see a feature flag.

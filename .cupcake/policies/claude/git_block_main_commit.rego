@@ -29,15 +29,15 @@ import data.cupcake.system.commands
 # not a main commit and is allowed. Anything unparsed, unregistered, detached, or
 # bare (`git commit` without -C) keeps the deny (fail closed).
 #
-# Shell-wrapper decomposition (2026-08-26): this guard
-# carried the same anchor construction as ER-EFFECTS-BLOCK-MAIN-PUSH and the same
-# double defect. `bash -c 'git commit -m x'` from a main session produced ZERO
-# denials, because the character before the verb is a quote and a quote is not in
-# `(^|[;&|(\n])`; meanwhile a newline IS, so quoted prose that named the command
-# on its own line was denied though nothing would run. The pattern is unchanged;
-# it now runs over commands.executed_texts, which neutralises the anchors inside
-# quoted operand spans and hands back every shell-wrapper payload as its own
-# text. See the header of .cupcake/system/commands.rego.
+# Shell-wrapper decomposition (2026-08-26): this guard carried the same anchor
+# construction as ER-EFFECTS-BLOCK-MAIN-PUSH and the same double defect.
+# `bash -c 'git commit -m x'` from a main session produced ZERO denials, because
+# the character before the verb is a quote and a quote is not in `(^|[;&|(\n])`;
+# meanwhile a newline IS, so quoted prose that named the command on its own line
+# was denied though nothing would run. The pattern is unchanged; it now runs over
+# commands.executed_texts, which neutralises the anchors inside quoted operand
+# spans and hands back every shell-wrapper payload as its own text. See the header
+# of .cupcake/system/commands.rego.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"

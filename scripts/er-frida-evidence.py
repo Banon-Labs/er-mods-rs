@@ -465,8 +465,17 @@ def record_waiver(repo: pathlib.Path, crate: str, reason: str) -> int:
     return 0
 
 
-def newest_record(path: pathlib.Path) -> dict | None:
-    """The last well-formed record, or `None`.
+PER_CRATE_KINDS = ("telemetry", "waiver")
+
+
+def newest_record(path: pathlib.Path, crates: set[str] | None = None) -> dict | None:
+    """The last well-formed record that can license `crates`, or `None`.
+
+    A telemetry record or a waiver opens one crate, so with `crates` given, one for another crate is
+    passed over rather than allowed to hide an older record for these: two waivers recorded in one
+    go used to leave only the second crate open. A Frida session opens every crate and always counts.
+    When nothing matches, the newest record of any kind is returned, and its verdict names a crate
+    the policy then refuses.
 
     Read from the end rather than parsed whole: this runs in front of every edit and the log grows
     without bound. A malformed trailing line is skipped rather than fatal -- a broken log must not
@@ -476,6 +485,7 @@ def newest_record(path: pathlib.Path) -> dict | None:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
+    newest = None
     for line in reversed(lines):
         line = line.strip()
         if not line:
@@ -484,9 +494,13 @@ def newest_record(path: pathlib.Path) -> dict | None:
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and "at" in row:
+        if not (isinstance(row, dict) and "at" in row):
+            continue
+        if not crates or row.get("kind") not in PER_CRATE_KINDS or row.get("crate") in crates:
             return row
-    return None
+        if newest is None:
+            newest = row
+    return newest
 
 
 SPENT_VERDICT = (
@@ -501,7 +515,12 @@ def check(repo: pathlib.Path, targets: list[str] | None = None) -> int:
     `targets` are the files the pending edit touches; only a commit to their crates spends the
     measurement. Without them every committed Rust change does.
     """
-    row = newest_record(log_path())
+    crates = {
+        crate.rsplit("/", 1)[-1]
+        for crate in (crate_dir_of(target, repo) for target in targets or [])
+        if crate is not None
+    }
+    row = newest_record(log_path(), crates or None)
     if row is None:
         print("UNPROVEN no-frida-evidence nothing has attached to the game and reported back")
         return 1
@@ -640,6 +659,27 @@ def selftest() -> int:
         ok(
             "the waiver verdict opens with the field the policy anchors on",
             verdict.getvalue().strip().startswith("PROVEN waiver crate=demo-crate "),
+        )
+        (fake_repo / "crates" / "other-crate").mkdir()
+        ok(
+            "a second waiver, for another crate, is recorded",
+            record_waiver(fake_repo, "other-crate", "comment-only, names what a comment refers to")
+            == 0,
+        )
+        for crate in ("demo-crate", "other-crate"):
+            verdict = io.StringIO()
+            with contextlib.redirect_stdout(verdict):
+                code = check(fake_repo, [f"crates/{crate}/src/lib.rs"])
+            ok(
+                f"each of two waivers recorded together still opens its own crate ({crate})",
+                code == 0 and verdict.getvalue().strip().startswith(f"PROVEN waiver crate={crate} "),
+            )
+        verdict = io.StringIO()
+        with contextlib.redirect_stdout(verdict):
+            check(fake_repo, ["crates/third-crate/src/lib.rs"])
+        ok(
+            "a newer waiver for another crate no longer hides an older Frida session",
+            verdict.getvalue().strip().startswith("PROVEN agent=scripts/frida/x.js "),
         )
 
         # --- a commit spends evidence only for the crates it touched ---------------------

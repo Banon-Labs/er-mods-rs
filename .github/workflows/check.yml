@@ -52,12 +52,11 @@ env:
   # as SUPPORTED_FILE_VERSION.
   #
   # `4612952` ("feat(eldenring): RVAs for game version 2.7.2.0", on the fork)
-  # lists 2.7.2.0 (`rva_ww.rs`), 2.7.1.0
-  # (`rva_ww_2710.rs`) and JP 2.7.1.1 (`rva_jp.rs`). The two older arms are
-  # not supported builds: on them `instance_ptr()` would resolve while
-  # er-game-base refuses every other game address. Upstream also has 2.7.2.0,
-  # but after a licence change the fork does not take, so do not advance this
-  # to upstream `main`.
+  # lists 2.7.2.0 (`rva_ww.rs`), 2.7.1.0 (`rva_ww_2710.rs`) and JP 2.7.1.1
+  # (`rva_jp.rs`). The two older arms are not supported builds: on them
+  # `instance_ptr()` would resolve while er-game-base refuses every other game
+  # address. Upstream also has 2.7.2.0, but after a licence change the fork does
+  # not take, so do not advance this to upstream `main`.
   FROMSOFTWARE_RS_REV: 4612952a71bfbd123445c805c0c7145e66e80229
   # WHICH REMOTE THE PIN ABOVE ACTUALLY EXISTS ON. This step used to clone
   # vswarte/fromsoftware-rs unconditionally, and from 2026-08-30 18:31 that made
@@ -210,12 +209,12 @@ jobs:
   # comment was first typed and 299 by the time anyone read it again, and a stale number in a
   # sentence about anti-drift is the joke writing itself. `--counts` prints the live figure.
   #
-  # SCOPING, added after the pre-push hook got the same. A pull request that adds a rego
-  # policy does not need a Windows cross-compile, and running one costs a runner minute that buys
-  # no information. `--stages-for-diff` matches the pull request's own changed paths against each
-  # stage's declared `inputs` and names only the stages those paths can reach; measured against
-  # a pull request of two rego files, a cupcake signal, the ledger and three shell scripts, that is 6 of 11,
-  # dropping `cargo-build`, `cargo-test`, `product`, `source` and `moveset`.
+  # SCOPING, added after the pre-push hook got the same. A pull request that adds a rego policy does
+  # not need a Windows cross-compile, and running one costs a runner minute that buys no
+  # information. `--stages-for-diff` matches the pull request's own changed paths against each
+  # stage's declared `inputs` and names only the stages those paths can reach; measured against a
+  # pull request of two rego files, a cupcake signal, the ledger and three shell scripts, that is
+  # 6 of 11, dropping `cargo-build`, `cargo-test`, `product`, `source` and `moveset`.
   #
   # Scoping applies to `pull_request` only. A push to `main` and a manual dispatch both run every
   # stage, because main's verdict is the one every branch is measured against and a scoped verdict

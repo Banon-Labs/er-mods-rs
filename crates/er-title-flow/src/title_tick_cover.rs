@@ -1819,10 +1819,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         };
         SWITCH_ORACLE_B80.store(b80_now, Ordering::SeqCst);
         let finalize_now = SWITCH_ORACLE_FINALIZE_12A.load(Ordering::SeqCst);
-        // Early b73 hold -- the post-warp revert root fix (RE). GameMan+0xb73 is the
-        // quit-save return-title latch our System->Quit sets (1.16.1 dump FUN_14067a490); it persists
-        // into the reload's world, and the MoveMapStep ending evaluator 0x140afbeb0 -> 1.16.1 dump
-        // FUN_140679460
+        // Early b73 hold -- the root fix, found by RE, for the native revert to title after the
+        // MoveMap finish. GameMan+0xb73 is the quit-save return-title latch our System->Quit sets
+        // (1.16.1 dump FUN_14067a490); it persists into the reload's world, and the MoveMapStep
+        // ending evaluator 0x140afbeb0 -> 1.16.1 dump FUN_140679460
         // (= b73 && !savePopup && bc4!=3) latches session-end into CSMenuMan.menuData+0x5e at load2's
         // MoveMap entry -> STEP_EndFlow -> SetState 6->2 revert. The case-7 drain below also clears b73
         // but only at finalize (mms18) -- Too late, the evaluator already latched. Clear it continuously
@@ -1843,8 +1843,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             }
-            // Ending-latch residual clear (corrected, RE run 1650; re-grounded on
-            // 1.17 2026-09-04). menuData+0x5e is not a pure return-title flag: the MoveMapStep ending
+            // Ending-latch residual clear (corrected by the RE in run 1650; re-grounded on 1.17
+            // 2026-09-04). menuData+0x5e is not a pure return-title flag: the MoveMapStep ending
             // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what drives the MoveMap
             // finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and consumes warpRequested). So
             // while warpRequested==1 md5e=1 is the finalize driver -- clearing it then SABOTAGES the

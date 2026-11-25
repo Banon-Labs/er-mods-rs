@@ -23,9 +23,9 @@
 #    user's own global config already passes `--log-level error`; the repo's hooks did not.
 #
 # 3. The engine ERASES UNQUOTED NEWLINES, so line 2 of a Bash command has no separator in
-#    front of it. Measured, not inferred: `cupcake eval` replaces
-#    UNQUOTED newlines with spaces before any policy runs, while newlines inside quotes
-#    survive. Every git guard anchors command position on `(^|[;&|(\n])`, so
+#    front of it. Measured, not inferred: `cupcake eval` replaces UNQUOTED newlines with
+#    spaces before any policy runs, while newlines inside quotes survive. Every git guard
+#    anchors command position on `(^|[;&|(\n])`, so
 #
 #        echo hi
 #        git push origin main
@@ -94,11 +94,11 @@
 #    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
 #    present but empty still contributes nothing and still reports success here.
 #
-# 6. A cupcake that cannot run is invisible to the agent. The engine
-#    exits 1 with an empty stdout when it cannot start -- a full /tmp on 2026-10-16 -- and
-#    Claude Code shows a hook's non-0, non-2 exit to the user alone. Every guard was off and
-#    the agent was not told. run_cupcake now answers such a run through the channel each event
-#    delivers to the agent; scripts/lib/cupcake-non-verdict.sh holds the rule.
+# 6. A cupcake that cannot run is invisible to the agent. The engine exits 1 with an empty
+#    stdout when it cannot start -- a full /tmp on 2026-10-16 -- and Claude Code shows a hook's
+#    non-0, non-2 exit to the user alone. Every guard was off and the agent was not told.
+#    run_cupcake now answers such a run through the channel each event delivers to the agent;
+#    scripts/lib/cupcake-non-verdict.sh holds the rule.
 #
 # stdin is passed through untouched, and so are a verdict's stdout and exit code: cupcake denies
 # through JSON on stdout at exit 0, so swallowing it would disable the guards as thoroughly as
@@ -435,8 +435,8 @@ evaluation_aborted() {
 abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is not an allow -- every guard was silent. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
 
 # A cupcake run with no verdict is answered in a form the agent receives, not the exit status
-# Claude Code only shows the user. Without the library the old pass-through
-# stands, which is no worse than before it existed.
+# Claude Code only shows the user. Without the library the old pass-through stands, which is
+# no worse than before it existed.
 if [ -r "$repo_root/scripts/lib/cupcake-non-verdict.sh" ]; then
 	# shellcheck source=lib/cupcake-non-verdict.sh
 	# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.

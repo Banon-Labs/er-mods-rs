@@ -4281,8 +4281,8 @@ def selftest():
           'EXE 0x140675270')
     check('wepType->flag: Greatsword is colossal', WEP_TYPE_MOUNT_FLAG[t.reg.weapon[greatsword]['wepType']],
           'SwordGigantic', 'EXE 0x140d2cc70 + COMMUNITY class')
-    # The jump family's opener is synthesized, so the stored slots alone drop
-    # it; the shares that remain are renormalised, and a supplied jump opener starts at its
+    # The jump family's opener is synthesized, so the stored slots alone drop it; the
+    # shares that remain are renormalised, and a supplied jump opener starts at its
     # `neutral_in` strike from the jump input, not the landed clip's 2.5 m contact.
     fam_row = {'weapon': 'A', 'two': False,
                'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 0.4},

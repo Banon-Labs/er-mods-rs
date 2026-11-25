@@ -155,7 +155,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "lint",
         "formatting and text shape: cargo fmt, rustfmt, shellcheck, comment capitals, "
-        "color spelling, lossy utf-8, markdown, file sizes",
+        "color spelling, lossy utf-8, markdown, file sizes, tracker references",
         (
             "**/*.rs",
             "**/*.sh",

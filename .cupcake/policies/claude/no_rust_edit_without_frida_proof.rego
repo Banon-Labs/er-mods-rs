@@ -49,8 +49,8 @@
 #     A THIRD INSTRUMENT is not what arrived 2026-09-22 -- the Bash tool did. The rule
 #     routed on the write TOOLS and denied on `tool_input.file_path`, and a Bash call
 #     carries no such key, so the rule was undefined for it and the gate never saw the
-#     edit. Measured: a `for c in ...; do sed -i ... crates/$c/src/config.rs;
-#     done` rewrote four crate sources with no measurement behind it, and the very next
+#     edit. Measured: a `for c in ...; do sed -i ... crates/$c/src/config.rs; done`
+#     rewrote four crate sources with no measurement behind it, and the very next
 #     Edit-tool call adding a `pub fn` to the four `lib.rs` files beside them was refused.
 #     Same change, same files, two different answers, decided by which tool typed it. The
 #     description above says every carve-out is a door and the failure it exists to stop

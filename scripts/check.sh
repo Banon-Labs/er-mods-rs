@@ -882,9 +882,9 @@ trap _check_summary EXIT
 # fixture would fail all sixteen of its cases for reasons unrelated to accumulation.
 # That file was the pre-push hook's own 13-gate list while this file held 153, so a gate added
 # here became push-invisible the moment it was written and CI was the first place it ever ran.
-# One violation reached origin that way (check-fnv1a-owner.py). The hook now runs this
-# file, which makes the two sets the same set by construction rather than by anyone maintaining a
-# list. Two things it carried had to survive the deletion, and they are both preambles, not gates.
+# One violation reached origin that way (check-fnv1a-owner.py). The hook now runs this file, which
+# makes the two sets the same set by construction rather than by anyone maintaining a list. Two
+# things it carried had to survive the deletion, and they are both preambles, not gates.
 
 # 1. MINHOOK, because a `git worktree` checkout starts without it. `vendor/` is gitignored, so an
 #    agent sandbox under `.claude/worktrees/` or a `.worktrees/` lab has no MinHook while the main
@@ -1339,8 +1339,7 @@ bash "$repo_root/scripts/test-pre-push-authorized-teardown.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
 # branch that had never moved was pushed over an open pull request's branch and took two commits
-# off it. See the header
-# of scripts/test-er-push-watched-ref-carries-work.sh.
+# off it. See the header of scripts/test-er-push-watched-ref-carries-work.sh.
 bash "$repo_root/scripts/test-er-push-watched-ref-carries-work.sh"
 # The build gates must yield to the person at the keyboard, and three of the four levers that
 # make that true are invisible from the process that sets them. See the header of
@@ -1665,8 +1664,8 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # minutes of gate work went with it. A tool every monitor depends on belongs on main.
 python3 "$repo_root/scripts/monitor-throttle.py" --selftest
 # The shared executed-text decomposition every git guard now reads. It is the one
-# place that decides what counts as executed
-# rather than quoted, so a regression here silently re-opens four guards at once.
+# place that decides what counts as executed rather than quoted, so a regression
+# here silently re-opens four guards at once.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/tests/commands_test.rego"
 # Four suites, 89 assertions, written and committed and never executed once (wired 2026-08-31).
 # Among them is every test of the two rules standing between an agent and a root delete. They had
@@ -1784,21 +1783,20 @@ python3 "$repo_root/scripts/check-overlay-theme.py"
 python3 "$repo_root/scripts/check-ai-lua-dialect.py" --selftest
 python3 "$repo_root/scripts/check-ai-lua-dialect.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
-# 2026-08-23: `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null
-# `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
-# shape were still live when that crash's own fix was reviewed, so the invariant is a gate rather
-# than a habit. Selftest first, so the gate is never trusted on its own say-so.
+# 2026-08-23: `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null `key` from Steam/Seamless,
+# past a guard that only checked for null. Four more sites of the same shape were still live when
+# that crash's own fix was reviewed, so the invariant is a gate rather than a habit. Selftest
+# first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py" --selftest
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
 # Two thread suspenders that do not know about each other is how three boots of the 21-DLL profile
-# wedged during hook installation: an ungated er-cpu-sampler calling
-# `SuspendThread` on the game thread about once a millisecond, against twenty-one MinHook
-# `Freeze()` calls doing the same thing to it. Nothing can catch this at runtime -- er-hook's
-# freeze lock covers only MinHook's own entry points, and its 5s timeout is measured inside a
-# thread that a foreign freeze has already suspended, so it can never fire. So the enforcement is
-# static: a suspension primitive must be behind an opt-in, under the freeze lock, or in
-# scripts/thread-suspension.baseline.json with a reason. Selftest first, so the gate is never
-# trusted on its own say-so.
+# wedged during hook installation: an ungated er-cpu-sampler calling `SuspendThread` on the game
+# thread about once a millisecond, against twenty-one MinHook `Freeze()` calls doing the same
+# thing to it. Nothing can catch this at runtime -- er-hook's freeze lock covers only MinHook's
+# own entry points, and its 5s timeout is measured inside a thread that a foreign freeze has
+# already suspended, so it can never fire. So the enforcement is static: a suspension primitive
+# must be behind an opt-in, under the freeze lock, or in scripts/thread-suspension.baseline.json
+# with a reason. Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-thread-suspension.py" --selftest
 python3 "$repo_root/scripts/check-no-thread-suspension.py"
 # The pre-push refusal that stops a push of game code nothing has run. Wired here so its own
@@ -1886,8 +1884,8 @@ python3 "$repo_root/scripts/check-rust-file-sizes.py"
 # shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
 # a freeze: edits are free, only net growth is refused, and `--refresh` accepts growth in one
 # command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
-# the invisible default. Measured over one four-commit change, 62% of 1,553 added lines already landed in
-# extracted crates with no enforcement, pulled there by the host-seam pattern; what that
+# the invisible default. Measured over one four-commit change, 62% of 1,553 added lines already
+# landed in extracted crates with no enforcement, pulled there by the host-seam pattern; what that
 # pattern does not catch is a new module born inside the shim, which is what this refuses.
 # Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
@@ -2013,11 +2011,11 @@ python3 "$repo_root/scripts/verify-aob-patterns.py"
 # `--section coverage` specifically, measured: 4.1s. The tool's other section measures pattern
 # uniqueness in the image and is reporting-only -- it never affects the exit code -- so wiring the
 # whole tool would buy that fixed cost for output nothing gates on.
-# Wired 2026-09-01. The selftest was left out when the gate above it
-# went in, and audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest line in
-# this file is one the vacuity auditor never judges, so the gate that catches an unswept
-# build.rs had nothing checking that it still catches anything. Measured with an audit hook:
-# 690 files opened, every one a tracked repo source -- no image, no subprocess, no uv.
+# Wired 2026-09-01. The selftest was left out when the gate above it went in, and
+# audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest line in this file is one
+# the vacuity auditor never judges, so the gate that catches an unswept build.rs had nothing
+# checking that it still catches anything. Measured with an audit hook: 690 files opened, every
+# one a tracked repo source -- no image, no subprocess, no uv.
 python3 "$repo_root/scripts/verify-prologue-coverage.py" --selftest
 python3 "$repo_root/scripts/verify-prologue-coverage.py" --section coverage
 # The mid-function gate. An address with no `.pdata` record of its own is two things wearing one
@@ -2316,8 +2314,8 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
 # er-loading-portrait-core's host-portable stats-line layer: proves the unified loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live
-# PlayerGameData). The bitmap-geometry test is corpus-gated on the
-# extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
+# PlayerGameData). The bitmap-geometry test is corpus-gated on the extracted menu font
+# (ER_FONT_GFX_PATH overridable) and skips when absent.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 
 # The save-picker crate split (docs/plans/save-picker-crate-extraction.md). The row model
@@ -2486,9 +2484,9 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 # Two gates the repo had no equivalent of, both reading the installed regulation.bin. 1.17 added
 # CharaInitParam rows 3010/3011 -- two new starting classes -- and nothing in Rust could notice:
 # STARTING_CLASSES was a [&str; 10], so build export answered None for an Idus Knight and import
-# never set the class. The effects.json check replaces `er-param-inspect
-# validate`, which needs a Smithbox checkout and a dotnet bridge to reach a verdict that needs
-# neither. Both are dependency-free and sub-second.
+# never set the class. The effects.json check replaces `er-param-inspect validate`, which needs
+# a Smithbox checkout and a dotnet bridge to reach a verdict that needs neither. Both are
+# dependency-free and sub-second.
 #
 # They run here and nowhere else on purpose. Their authority is the regulation.bin of the game
 # installed on this machine, so a missing regulation is exit 2 rather than a pass -- "could not

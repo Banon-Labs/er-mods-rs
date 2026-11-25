@@ -11,25 +11,29 @@ instead of telling them.
 What counts
 ===========
 Only comments: `//`, `///`, `//!` and `/* */` in Rust, JavaScript, C and the shader languages; `#`
-in Python, shell, rego, YAML and TOML; `--` in Lua; and Python docstrings, which are documentation
-to everyone but the interpreter. String literals are code, and so is a branch name a test fixture
-pushes; neither is read. Markdown is out of scope.
+in Python, shell, rego, YAML and TOML; whole `#` lines in the `.txt` allowlists and baselines; `--`
+in Lua; and Python docstrings, which are documentation to everyone but the interpreter. String
+literals are code, and so is a branch name a test fixture pushes; neither is read. Markdown is out
+of scope.
 
 In a comment, three shapes are a mention:
 
   * a beads id: this repo's prefix (or its old one) plus a 3-5 character hash, with an optional
-    `.N` child suffix, and the 3-character ids of backseat-gamer's tracker;
+    `.N` child suffix, and the 3-character ids of backseat-gamer's tracker, also when it runs on
+    into a hyphenated word (`<id>-style`);
   * a pull request: `PR` and a number, `pull request` and a number, the `(#<n>)` suffix GitHub puts
     on a squash merge, a `/pull/<n>` link, and a bare three-digit `#<n>`, which is how this tree
     wrote pull request numbers when it left the `PR` off;
-  * a branch: a conventional prefix this repo's branches use, a slash, and a hyphenated slug, plus
-    release-please's own branch.
+  * a branch: a conventional prefix this repo's branches use, a slash, and a hyphenated slug, also
+    after `origin/` or `refs/heads/`, plus release-please's own branch.
 
 What does not, measured over the tree on 2026-11-24 (the false positives the first draft found):
 
   * `docs/...`, `research/...`, `triage/...`, `test/...` and `build/...` are directories here, so
     those prefixes are never read as branches, and a slug that ends in a file extension or carries
     on into another path segment is a path, not a branch;
+  * an id-shaped word that runs on into a path segment is a file or directory named after the
+    repo: `/tmp/<prefix>-check-sh.lock`, `<prefix>-check-stages/`;
   * a prefix and a one-word slug is prose, not a branch: "a fix/instrument run", "the refactor/move
     gate", "cleanup/destructor". Every branch this repo has pushed has a hyphenated slug;
   * a bare `#<n>` of one, two, four or more digits is an ordinal or a counter -- "R1 #1", "run #14",
@@ -86,9 +90,14 @@ CC = _load_comment_caps()
 
 # The prefixes are assembled so this file's own comments and docstring carry none of what it reads.
 BD_PREFIXES = ("er-effects" + "-rs", "er-mods" + "-rs")
-BEADS = re.compile(r"\b(?:" + "|".join(map(re.escape, BD_PREFIXES)) + r")-[a-z0-9]{3,5}(?:\.\d+)*(?![\w-])")
+# An id may run on into a hyphenated word (`<id>-style`); group 1 holds that run-on, which counts
+# unless the whole word is a path segment (see `mentions`).
+BEADS = re.compile(r"\b(?:" + "|".join(map(re.escape, BD_PREFIXES)) + r")-[a-z0-9]{3,5}(?:\.\d+)*(?!\w)(-[\w-]*)?")
 # backseat-gamer's ids are three characters; `bsg-check` and `bsg-work` are words, not ids.
-BEADS_BSG = re.compile(r"\bbsg-[a-z0-9]{3}(?![\w-])")
+BEADS_BSG = re.compile(r"\bbsg-[a-z0-9]{3}(?!\w)(-[\w-]*)?")
+# Before or after a run-on word, these make it a path segment: `/tmp/<prefix>-check-sh.lock`.
+PATH_NEIGHBOURS_BEFORE = "/.~"
+PATH_NEIGHBOURS_AFTER = "./"
 
 # `PR` in capitals only: a lowercase `pr109-...` is a run id or a profile file name, not prose.
 PR_WORD = re.compile(r"\bPRs?[\s-]*#?\d+|(?i:\bpull[\s-]+requests?)[\s-]*#?\d+")
@@ -103,12 +112,19 @@ COUNTING_WORD = re.compile(
     re.IGNORECASE,
 )
 
-# The prefixes of every branch this repo has pushed, less the ones that are also directories here.
+# The prefixes of every branch this repo has pushed (the remote's branches and the merge history,
+# `git log --merges --format=%s origin/main`, measured 2026-11-24), less the ones that are also
+# directories here (`docs`, `research`, `tools`).
 BRANCH_PREFIXES = (
-    "feat", "fix", "chore", "refactor", "perf", "revert", "style", "cleanup", "merge", "diag",
-    "roadmap", "wip", "spike", "investigation", "guard", "ci", "backup", "autoresearch",
+    "feat", "feature", "fix", "chore", "refactor", "perf", "revert", "style", "cleanup", "merge",
+    "diag", "roadmap", "wip", "spike", "investigation", "guard", "ci", "backup", "autoresearch",
+    "split", "promote", "stack", "rename", "crate", "tooling", "salvage", "recreate", "gate",
 )
-BRANCH = re.compile(r"(?<![\w/.-])(?:" + "|".join(BRANCH_PREFIXES) + r")/([A-Za-z0-9][\w.-]*)")
+# A prefix after a slash is a path segment, except after a remote or a ref: `origin/<prefix>/<slug>`
+# and `refs/heads/<prefix>/<slug>` are branches.
+BRANCH = re.compile(
+    r"(?:(?<=origin/)|(?<=refs/heads/)|(?<![\w/.-]))(?:" + "|".join(BRANCH_PREFIXES) + r")/([A-Za-z0-9][\w.-]*)"
+)
 FILE_EXTENSION = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,5}$")
 RELEASE_PLEASE = re.compile(r"\brelease-please--branches--[\w./-]+")
 
@@ -117,7 +133,13 @@ def mentions(comment: str) -> list[tuple[str, str]]:
     """Every (kind, text) mention in one line of comment text."""
     found: list[tuple[str, str]] = []
     for pattern in (BEADS, BEADS_BSG):
-        found += [("beads", m.group(0)) for m in pattern.finditer(comment)]
+        for m in pattern.finditer(comment):
+            if m.group(1):
+                before = comment[m.start() - 1 : m.start()]
+                after = comment[m.end() : m.end() + 1]
+                if (before and before in PATH_NEIGHBOURS_BEFORE) or (after and after in PATH_NEIGHBOURS_AFTER):
+                    continue
+            found.append(("beads", comment[m.start() : m.start(1) if m.group(1) else m.end()]))
     taken: list[tuple[int, int]] = []
     for pattern in (PR_WORD, PR_SUFFIX, PR_URL):
         for m in pattern.finditer(comment):
@@ -155,9 +177,13 @@ C_LIKE = {".js", ".mjs", ".cjs", ".ts", ".c", ".h", ".cc", ".cpp", ".hpp", ".hls
 DIALECTS = {
     ".rs": "rust", ".py": "python", ".sh": "hash", ".bash": "hash",
     ".yml": "hash", ".yaml": "hash", ".toml": "python",
-    ".rego": "rego", ".lua": "lua", ".typ": "typ",
+    ".rego": "rego", ".lua": "lua", ".typ": "typ", ".txt": "txt",
     **{ext: "c" for ext in C_LIKE},
 }
+# A `.txt` here is an allowlist, a baseline or a word list, and every script that loads one skips a
+# line that starts with `#` (some also cut a `#` tail, which a data field could contain), so only
+# whole `#` lines are read as comments.
+WHOLE_LINE_HASH = re.compile(r"^\s*#")
 # Generic tokeniser settings: line-comment markers, block-comment pairs, and string delimiters as
 # (open, close, has escapes, may span lines).
 GENERIC = {
@@ -234,6 +260,8 @@ def comment_spans(rel: str, text: str) -> list[tuple[int, str]]:
     dialect = dialect_of(rel, text)
     if dialect is None:
         return []
+    if dialect == "txt":
+        return [(i, line) for i, line in enumerate(text.split("\n"), 1) if WHOLE_LINE_HASH.match(line)]
     if dialect in GENERIC:
         return generic_comment_spans(text, dialect)
     spans = CC.comment_spans(text, dialect)
@@ -351,6 +379,15 @@ def selftest() -> int:
     check("a fix branch", kinds("# pushed fi" + "x/harness-repl-reach today"), ["branch"])
     check("a branch then a full stop", mentions(f"# publishes {br}/load-x.")[0][1], f"{br}/load-x")
     check("release-please's branch", kinds("# release-please--branches--" + "main"), ["branch"])
+    check("a beads id run on into a word", mentions(f"// the {bd}-j3r-style guard"), [("beads", f"{bd}-j3r")])
+    check("a backseat-gamer id run on into a word", kinds("# the bsg-" + "chy-era limit"), ["beads"])
+    check("a branch after origin/", mentions(f"# on `origin/{br}/build-kit-crit-row` only"),
+          [("branch", f"{br}/build-kit-crit-row")])
+    check("both sides of a refspec", kinds(f"#  git push origin origin/re{'factor'}/drop-x:refs/heads/split/drop-x"),
+          ["branch", "branch"])
+    for prefix in ("feature", "split", "promote", "stack", "rename", "crate", "tooling", "salvage",
+                   "recreate", "gate"):
+        check(f"the {prefix}/ prefix", kinds(f"// landed from {prefix}/some-work-here"), ["branch"])
 
     # False positives the corpus showed, which must stay quiet.
     check("a docs path", kinds("// see docs/agents/runtime-evidence.md"), [])
@@ -379,6 +416,12 @@ def selftest() -> int:
     check("a run id", kinds("// run pr" + "109-boot-oscancel-20260730"), [])
     check("a profile file name", kinds("# /home/u/Elden/pr" + "190-invasion-warp.me3"), [])
     check("PR glued with a hyphen is still one", kinds("// the PR-" + "117 black screen"), ["pr"])
+    check("a run-on word that is a path segment",
+          kinds(f"# holds /run/user/1000/{bd}-check-sh.lock and ~/{bd}-main-compare"), [])
+    check("a run-on word that is a file or directory name",
+          kinds(f"# writes {bd}-check-stages/x.log and {bd}-build-out.txt"), [])
+    check("a slash path that only contains origin", kinds(f"// crates/origin/{br}.rs"), [])
+    check("a gate file", kinds("# gate/stray-from-a-previous-run.txt"), [])
 
     # Only comments: the tokenisers must not read inside strings.
     rs = f'let s = "PR #{3}98 {bd}-a1b2";\n// see PR #' + "398\n"
@@ -403,6 +446,9 @@ def selftest() -> int:
     check("yaml", [h[0] for h in scan_text("a.yml", yml)], [2])
     hook = "#!/usr/bin/env bash\n# landed in PR #" + "398\n"
     check("an extensionless shell hook", [h[0] for h in scan_text("pre-push", hook)], [2])
+    txt = f"# known debt, tracked by {bd}-56fx\nNAME_{bd}-56fx\n  # indented {bd}-mtq\nX  # tail {bd}-ejfl\n"
+    check("txt: whole `#` lines are comments, data and tails are not",
+          [h[0] for h in scan_text("scripts/x-allowlist.txt", txt)], [1, 3])
     check("markdown is out of scope", dialect_of("README.md", "# PR"), None)
     check("a data file has no comments", dialect_of("data/x.json", "{}"), None)
 

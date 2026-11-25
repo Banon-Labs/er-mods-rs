@@ -319,9 +319,9 @@ test_deny_rm_behind_an_env_assignment if {
 	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)
 }
 
-# The verb reached by absolute/relative path (2026-08-31):
-# a leading path component is none of command_position_prefix_pattern's anchor
-# characters, so `/bin/rm -rf <hooks dir>` was measured ALLOWED before the fix.
+# The verb reached by absolute/relative path (2026-08-31): a leading path
+# component is none of command_position_prefix_pattern's anchor characters, so
+# `/bin/rm -rf <hooks dir>` was measured ALLOWED before the fix.
 test_deny_rm_behind_bin_absolute_path if {
 	denials := guard.deny with input as bash_event(concat("", ["/bin/rm -rf ", hooks_dir]))
 	"BUILTIN-GIT-BLOCK-NO-VERIFY" in rule_ids(denials)

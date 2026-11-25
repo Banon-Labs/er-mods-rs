@@ -449,12 +449,12 @@ test_allow_other_events if {
 
 # --- a payload that NAMES the script is not an invocation of it ---------------
 #
-# Both shapes below were refused in production on 2026-09-21.
-# The invoked binary is `git` and `bd`; the script appears in a
-# commit message and an issue body, where it is prose. The cost was not the block: the
-# commit message had to be reworded to say "a repo-relative teardown command" rather than
-# name the file, and the issue reporting it had to be filed through a body file written by
-# a separate command, so the record this guard is not there to police came out degraded.
+# Both shapes below were refused in production on 2026-09-21. The invoked binary is `git`
+# and `bd`; the script appears in a commit message and an issue body, where it is prose.
+# The cost was not the block: the commit message had to be reworded to say "a
+# repo-relative teardown command" rather than name the file, and the issue reporting it
+# had to be filed through a body file written by a separate command, so the record this
+# guard is not there to police came out degraded.
 
 test_allow_commit_message_naming_the_script if {
 	not denied(`git commit -m "fix(guard): teardown_must_relaunch fires on scripts/er-teardown.py in prose"`)

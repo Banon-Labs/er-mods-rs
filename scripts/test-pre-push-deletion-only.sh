@@ -2,15 +2,14 @@
 # Prove scripts/hooks/pre-push runs no gate on a push that only deletes refs, and every gate on
 # one that does not.
 #
-# The defect this pins, measured 2026-09-14. `git push origin --delete <branch>`
-# from a checkout sitting on an unrelated fix branch printed
+# The defect this pins, measured 2026-09-14. `git push origin --delete <branch>` from a checkout
+# sitting on an unrelated fix branch printed
 #     check-stages: 7 of 11 stage(s) selected from 6 changed path(s).
 # and the deletion never completed. Those six paths were the checked-out branch's own commits:
 # with no `--rev` the stage selector falls back to the working tree against origin/main, and
 # `check-runtime-evidence.sh` with no tip falls back to `git rev-parse --short HEAD`. Both gated a
 # tree the push was not sending -- a guard judging the checked-out `HEAD` instead of the ref
-# being sent, in its purest form, because a deletion
-# sends no commit for a content gate to read.
+# being sent, in its purest form, because a deletion sends no commit for a content gate to read.
 #
 # Why the fixture is built rather than the ref lists typed. The whole decision turns on bytes this
 # repo does not author: git writes `(delete)` in field 1 and forty zeros in field 2 for a deleted

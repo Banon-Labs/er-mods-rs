@@ -712,15 +712,15 @@ protected_is_child_of_affected(protected_path, affected_dir) if {
 # A reported parent directory with the shell separator welded onto its tail.
 #
 # scripts/cupcake-hook.sh rewrites an unquoted newline to `; ` so line 2 of a
-# multi-line command is visible to anchored patterns at all.
-# The Rust preprocessor then tokenises `rm -rf /;` and
-# reports the affected directory as `/;`, which is a child of nothing and a
-# parent of nothing: `rm -rf /` ALONE was denied while the same delete followed
-# by a second line was ALLOWED (measured 2026-08-31, both before and after the
-# command-position change, so this is an independent hole rather than a
-# regression from it).  Trimming the separator can only make the rule fire on
-# MORE commands, never fewer.  An entry that trims away to nothing is dropped
-# instead: an empty prefix would make every protected path look like a child.
+# multi-line command is visible to anchored patterns at all. The Rust
+# preprocessor then tokenises `rm -rf /;` and reports the affected directory as
+# `/;`, which is a child of nothing and a parent of nothing: `rm -rf /` ALONE
+# was denied while the same delete followed by a second line was ALLOWED
+# (measured 2026-08-31, both before and after the command-position change, so
+# this is an independent hole rather than a regression from it).  Trimming the
+# separator can only make the rule fire on MORE commands, never fewer.  An entry
+# that trims away to nothing is dropped instead: an empty prefix would make
+# every protected path look like a child.
 #
 # `(` and `)` were added 2026-08-31 for the same reason, and they closed a hole
 # the OPA suite claimed was already shut. `test_deny_root_delete_inside_command_

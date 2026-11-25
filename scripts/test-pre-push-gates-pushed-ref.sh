@@ -2,11 +2,10 @@
 # Prove scripts/hooks/pre-push runs the suite on the commit being pushed, not on the checkout `git
 # push` was typed in.
 #
-# The defect this pins, measured 2026-10-05: `git -C <main checkout> push -u origin
-# <branch>`, from a checkout that had another branch out. The
-# stage selection diffed the pushed ref; check.sh then read the main checkout's working tree, went
-# red on a crate the pushed branch does not contain, and would equally have passed code the pushed
-# branch breaks.
+# The defect this pins, measured 2026-10-05: `git -C <main checkout> push -u origin <branch>`,
+# from a checkout that had another branch out. The stage selection diffed the pushed ref; check.sh
+# then read the main checkout's working tree, went red on a crate the pushed branch does not
+# contain, and would equally have passed code the pushed branch breaks.
 #
 # How it is measured. A fixture repository carries two commits whose stub scripts/check.sh differ:
 # each records which commit it is and in which directory it ran, and exits with that commit's own

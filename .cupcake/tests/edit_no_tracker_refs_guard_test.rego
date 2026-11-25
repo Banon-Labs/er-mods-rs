@@ -110,6 +110,59 @@ test_deny_one_more_than_the_edit_removed if {
 	denied(edit_event("crates/x/src/lib.rs", old, concat("", [old, "// and PR #399\n"])))
 }
 
+test_deny_an_edit_that_swaps_one_mention_for_another if {
+	denied(edit_event("crates/x/src/lib.rs", "// PR #398\n", "// PR #399\n"))
+}
+
+test_deny_a_swap_reason_names_only_the_new_one if {
+	denials := guard.deny with input as edit_event("scripts/x.py", "# PR #398\n", "# PR #399\n")
+	some d in denials
+	contains(d.reason, "adds 1")
+	contains(d.reason, "`PR #399`")
+	not contains(d.reason, "`PR #398`")
+}
+
+test_deny_a_beads_swap_of_equal_count if {
+	old := concat("", ["// ", bd, "-a1b2 and fix/load-x-y\n"])
+	new := concat("", ["// ", bd, "-c3d4 and fix/load-x-y\n"])
+	denied(edit_event("crates/x/src/lib.rs", old, new))
+}
+
+test_deny_a_beads_id_run_on_into_a_word if {
+	denied(added("crates/x/src/lib.rs", concat("", ["// the ", bd, "-j3r-style table guard"])))
+}
+
+test_deny_a_backseat_gamer_id_run_on_into_a_word if {
+	denied(added("scripts/x.py", "# the bsg-chy-era limit"))
+}
+
+test_deny_a_branch_after_origin if {
+	denied(added("scripts/x.py", "# on `origin/feat/build-kit-consumables-crit-row` and not on main"))
+}
+
+test_deny_a_branch_after_refs_heads if {
+	denied(added(".cupcake/policies/claude/x.rego", "#     git push origin origin/x:refs/heads/split/drop-dead-gates"))
+}
+
+test_deny_the_merge_history_prefixes if {
+	every prefix in ["feature", "split", "promote", "stack", "rename", "crate", "tooling", "salvage", "recreate", "gate"] {
+		denied(added("crates/x/src/lib.rs", concat("", ["// landed from ", prefix, "/some-work-here"])))
+	}
+}
+
+test_deny_a_hash_comment_in_a_txt_allowlist if {
+	denied(added("scripts/oracle-writers-allowlist.txt", concat("", ["# known debt, tracked by ", bd, "-56fx"])))
+}
+
+test_allow_a_txt_data_line if {
+	not denied(added("scripts/oracle-writers-allowlist.txt", concat("", ["NAME_", bd, "-56fx"])))
+}
+
+test_allow_an_edit_that_repeats_a_mention_it_keeps_no_more_often if {
+	old := "// PR #398\n// PR #398\n"
+	not denied(edit_event("crates/x/src/lib.rs", old, "// PR #398\nfn f() {}\n// PR #398\n"))
+}
+
 test_deny_multiedit_when_any_edit_adds_one if {
 	denied(multiedit_event("crates/x/src/lib.rs", [["a", "b"], ["c", "c\n// PR #398"]]))
 }
@@ -159,7 +212,15 @@ test_allow_run_ids_and_profile_names if {
 }
 
 test_allow_words_that_are_not_ids if {
-	not denied(added("scripts/x.py", concat("", ["# bsg-check, bsg-work, frida-up, ai-lab, ", bd, "-toolong, ", bd, "-abc-def"])))
+	not denied(added("scripts/x.py", concat("", ["# bsg-check, bsg-work, frida-up, ai-lab, ", bd, "-toolong"])))
+}
+
+test_allow_a_run_on_word_that_is_a_path_segment if {
+	not denied(added("scripts/x.py", concat("", ["# holds /run/user/1000/", bd, "-check-sh.lock and ~/", bd, "-main-compare"])))
+}
+
+test_allow_a_run_on_word_that_is_a_file_name if {
+	not denied(added("scripts/x.py", concat("", ["# writes ", bd, "-check-stages/x.log and ", bd, "-build-out.txt"])))
 }
 
 test_allow_an_upstream_issue_link if {

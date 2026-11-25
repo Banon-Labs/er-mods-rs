@@ -39,7 +39,7 @@ import data.cupcake.system.commands
 # already-pushed remote branch has no sanctioned form. From a session whose
 # primary checkout sits on main, this was denied:
 #
-#     git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates
+#     git push origin origin/refactor/<slug>:refs/heads/split/<slug>
 #
 # Neither side of that refspec is main, so the command cannot update remote main,
 # yet it matched neither existing exception: `pushes_target_only_nonmain_worktrees`
@@ -62,16 +62,16 @@ import data.cupcake.system.commands
 # and it is written in tokens rather than in a pattern: see the note above it for
 # why a regex here is a hazard to every policy in the rulebook, not just this one.
 #
-# Shell-wrapper decomposition (2026-08-26): every pattern
-# below used to run against the raw command string, which asks about lexical
-# position rather than about what runs. `bash -c 'git push origin main'` produced
-# ZERO denials -- the character before the verb is a quote, and a quote is not in
-# the anchor class -- while a `bd remember` body or a doc that merely QUOTED the
-# command on its own line WAS denied, because a newline is. The patterns are
-# unchanged; what changed is the text they see. They now run over
-# commands.executed_texts, which returns the command with quoted operand spans
-# anchor-neutralised plus every shell-wrapper payload as its own text. See the
-# header of .cupcake/system/commands.rego for the decomposition and its limits.
+# Shell-wrapper decomposition (2026-08-26): every pattern below used to run
+# against the raw command string, which asks about lexical position rather than
+# about what runs. `bash -c 'git push origin main'` produced ZERO denials -- the
+# character before the verb is a quote, and a quote is not in the anchor class --
+# while a `bd remember` body or a doc that merely QUOTED the command on its own
+# line WAS denied, because a newline is. The patterns are unchanged; what changed
+# is the text they see. They now run over commands.executed_texts, which returns
+# the command with quoted operand spans anchor-neutralised plus every
+# shell-wrapper payload as its own text. See the header of
+# .cupcake/system/commands.rego for the decomposition and its limits.
 #
 # Both the deny trigger and the three exceptions read that same set, so a wrapper
 # cannot hide a push AND cannot borrow another push's exception: the count-match

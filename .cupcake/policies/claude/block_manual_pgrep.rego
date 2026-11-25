@@ -18,8 +18,8 @@
 #     any other process check must use tasklist.exe / a WSL-aware path. The
 #     narrow non-executing exemptions cover TEXT positions only: a single,
 #     non-chained bd issue-tracker command whose pgrep token sits entirely
-#     inside quoted text (bd only records text), and
-#     a single git commit whose token sits in the recorded MESSAGE (2026-08-12).
+#     inside quoted text (bd only records text), and a single git commit whose
+#     token sits in the recorded MESSAGE (2026-08-12).
 #     The guard applies only where its premise can hold: it stands down when the
 #     host_platform signal positively reports native Linux, where pgrep sees
 #     Steam, Proton and every other process directly (2026-09-26). WSL, and any
@@ -97,9 +97,9 @@ manual_pgrep_detected if {
 # bd issue-tracker text exemption (mirrors bash_elden_ring_launch_guard's
 # bd_text_command).
 #
-# False positive fixed 2026-07-30: a `bd close` whose
-# quoted --reason described launch-guard allow-tests was denied because the
-# reason text mentioned the tool by name, e.g.
+# False positive fixed 2026-07-30: a `bd close` whose quoted --reason described
+# launch-guard allow-tests was denied because the reason text mentioned the tool
+# by name, e.g.
 #
 #   $HOME/.local/bin/bd close <id> --reason "launch-guard
 #   allow-test keeps pgrep -x start_protected_game.exe detection green"

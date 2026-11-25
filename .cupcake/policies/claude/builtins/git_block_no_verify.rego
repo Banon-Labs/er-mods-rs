@@ -14,10 +14,10 @@ import rego.v1
 
 import data.cupcake.system.commands
 
-# Shell-wrapper decomposition (2026-08-26). This policy
-# recognises its verbs through commands.has_verb, whose `(^|\s)verb(\s|$)`
-# boundary a quote does not satisfy -- so a hook bypass wrapped as
-# `bash -c 'git commit --no-verify -m x'` produced ZERO denials, measured.
+# Shell-wrapper decomposition (2026-08-26). This policy recognises its verbs
+# through commands.has_verb, whose `(^|\s)verb(\s|$)` boundary a quote does not
+# satisfy -- so a hook bypass wrapped as `bash -c 'git commit --no-verify -m x'`
+# produced ZERO denials, measured.
 #
 # The scan set below is STRICTLY ADDITIVE on purpose: it is the executed-text
 # decomposition (which makes wrapper payloads visible) UNION the raw command

@@ -1,10 +1,10 @@
 // Forces Elden Ring's own dynamic resolution to a fixed scene scale while the UI stays native.
 //
-// The chain is in bd `er-dynamic-resolution-chain-static-2026-10-15`.
-// Addresses are 2.7.2.0, carried from 1.17.1: the update
-// and its caller (the view setup, which loads the config from GXRenderingSystem+0x13a70 and reads
-// +0x13a78) match the 1.17.1 functions once rip-relative and branch operands are masked, and every
-// masked target carries to the new operand, the two globals below included.
+// The chain is in bd `er-dynamic-resolution-chain-static-2026-10-15`. Addresses are 2.7.2.0,
+// carried from 1.17.1: the update and its caller (the view setup, which loads the config from
+// GXRenderingSystem+0x13a70 and reads +0x13a78) match the 1.17.1 functions once rip-relative and
+// branch operands are masked, and every masked target carries to the new operand, the two globals
+// below included.
 //
 // The per-frame update at 0x141b2e9b0 -> 0x141b300a0 takes the controller config in rcx: it
 // returns the current scale unchanged when the enable byte (+0x00) is 0, and otherwise clamps it

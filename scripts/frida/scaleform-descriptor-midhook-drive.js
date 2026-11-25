@@ -1,5 +1,5 @@
-// Drive both branches of er-scaleform-hooks' descriptor-ring mid hook on
-// the game's own render thread, from inside the descriptor-ring advance `advance(ring, count)`.
+// Drive both branches of er-scaleform-hooks' descriptor-ring mid hook on the game's own render
+// thread, from inside the descriptor-ring advance `advance(ring, count)`.
 //
 // The hook replaces an entry guard that skipped the whole function while the ring's current page
 // `ring+0x38` was null. It now diverts only the page-roll branch (advance+0x8c -> +0x157). This

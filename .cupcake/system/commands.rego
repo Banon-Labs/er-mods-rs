@@ -85,18 +85,18 @@ path_prefix_pattern := `([^ \t;&|()'"]*/)?`
 # has_command_verb answers "is this word the program a shell would run", which
 # command_position_prefix_pattern alone gets right for a BARE verb (`rm -rf x`)
 # but not for one invoked by absolute or relative PATH (`/bin/rm -rf x`,
-# `./rm -rf x`) -- measured 2026-08-31: a leading path
-# component is none of the anchor's separator characters, and the character
-# immediately before the verb is `/`, so the anchor never lined up and
-# `/bin/rm -rf .cupcake` / `/usr/bin/rm -rf .cupcake` were allowed outright by
-# every guard that reads this function. NOT a regression: has_verb's
-# `(^|\s)verb(\s|$)` boundary missed it identically, so this predates both the
-# command-position work and the segmentation work that came before it -- it was
-# simply never covered. Splicing path_prefix_pattern in between the
-# command-position prefix and the verb closes it: the prefix must still resolve
-# back to a real anchor (string start, a separator, or consumed wrapper words),
-# so a slash deep inside an unrelated operand still cannot manufacture a match
-# (see commands_test.rego for the negative cases this reasoning predicts).
+# `./rm -rf x`) -- measured 2026-08-31: a leading path component is none of the
+# anchor's separator characters, and the character immediately before the verb
+# is `/`, so the anchor never lined up and `/bin/rm -rf .cupcake` /
+# `/usr/bin/rm -rf .cupcake` were allowed outright by every guard that reads
+# this function. NOT a regression: has_verb's `(^|\s)verb(\s|$)` boundary missed
+# it identically, so this predates both the command-position work and the
+# segmentation work that came before it -- it was simply never covered. Splicing
+# path_prefix_pattern in between the command-position prefix and the verb closes
+# it: the prefix must still resolve back to a real anchor (string start, a
+# separator, or consumed wrapper words), so a slash deep inside an unrelated
+# operand still cannot manufacture a match (see commands_test.rego for the
+# negative cases this reasoning predicts).
 has_command_verb(command, verb) if {
 	pattern := concat("", [command_position_prefix_pattern, path_prefix_pattern, verb, `([ \t\n;&|(){}]|$)`])
 	regex.match(pattern, command)
@@ -317,8 +317,8 @@ odd_span_blanked(index, text) := replace(blanked_anchors(text), "`", " ") if {
 # The leading path_prefix_pattern is what admits `/bin/bash`, and it REQUIRES a
 # trailing slash, so a longer word that merely ends in one of these names (`mycsh`,
 # `wifish`) cannot match: the alternation has to consume the token whole from its
-# boundary. Shared with has_command_verb above (2026-08-31)
-# rather than re-spelled, so the two cannot drift apart.
+# boundary. Shared with has_command_verb above (2026-08-31) rather than re-spelled,
+# so the two cannot drift apart.
 shell_name_pattern := concat("", [path_prefix_pattern, `(ba|z|k|da|a|fi|c|tc)?sh`])
 
 # A shell wrapper whose program text is the NEXT argument: `bash -c`, `sh -c`,

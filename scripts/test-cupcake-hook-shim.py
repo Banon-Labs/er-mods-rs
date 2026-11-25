@@ -841,10 +841,10 @@ def check_abort_is_not_an_allow() -> list[str]:
     return failures
 
 
-# An engine that cannot start is the case Claude Code hides from the agent:
-# cupcake exits 1 with nothing on stdout, and a hook's exit other than 0 or 2 reaches the user
-# alone. A TMPDIR that does not exist stops the engine before any policy loads, the same way the
-# full /tmp of 2026-10-16 did, and its stderr names that cause:
+# An engine that cannot start is the case Claude Code hides from the agent: cupcake exits 1 with
+# nothing on stdout, and a hook's exit other than 0 or 2 reaches the user alone. A TMPDIR that
+# does not exist stops the engine before any policy loads, the same way the full /tmp of
+# 2026-10-16 did, and its stderr names that cause:
 #
 #     Fatal: Cupcake engine failed to initialize: Failed to create temp directory for OPA ...
 #

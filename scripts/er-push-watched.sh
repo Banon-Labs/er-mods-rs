@@ -31,13 +31,13 @@
 # and on nothing else.
 #
 # A third incident, the same day, and the reason this script now refuses some pushes outright. An
-# orchestrator pushed `worktree-agent-<id>` to an open pull request's branch, and that local branch had never
-# moved: the agent's brief had deliberately broken the session's pattern and sent it to commit on
-# the PR branch instead, so its worktree branch still pointed at the main it was created from. The
-# push therefore sent main's commit to the PR branch and took two commits off it, and getting them
-# back needed a `--force-with-lease` pinned to the exact sha that had just been overwritten. Three
-# correct pushes earlier in the same session are what made it easy: the fourth was typed from the
-# pattern rather than from the brief that had changed it.
+# orchestrator pushed `worktree-agent-<id>` to an open pull request's branch, and that local
+# branch had never moved: the agent's brief had deliberately broken the session's pattern and sent
+# it to commit on the PR branch instead, so its worktree branch still pointed at the main it was
+# created from. The push therefore sent main's commit to the PR branch and took two commits off it,
+# and getting them back needed a `--force-with-lease` pinned to the exact sha that had just been
+# overwritten. Three correct pushes earlier in the same session are what made it easy: the fourth
+# was typed from the pattern rather than from the brief that had changed it.
 #
 # The tell was one command away and free -- `git log --oneline -2 <ref>` would have shown main's
 # commit sitting on top -- so it is run here rather than remembered. Before the push, and before
