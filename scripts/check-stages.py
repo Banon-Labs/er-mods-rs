@@ -190,6 +190,9 @@ STAGES: tuple[Stage, ...] = (
             ".cupcake/**/*",
             ".auto/*",
             ".claude/settings.json",
+            # `scripts/cupcake_markdown_rule.py` names the agent notes it judges a closing message
+            # against, so a push that changes one can change that signal's verdict.
+            "docs/agents/**/*",
             "crates/**/*.rs",
             "crates/**/Cargo.toml",
             "scripts/*.py",
