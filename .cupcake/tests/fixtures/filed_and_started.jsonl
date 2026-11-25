@@ -1,0 +1,6 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "you can delay your followup slightly if you think your opponent will attempt to roll a projectile from the first part"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "$HOME/.local/bin/bd create --title \"Follow-ups: delay the press inside its window\" --type feature"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "Created issue: er-effects-rs-me5p"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "Agent", "input": {"description": "x", "prompt": "x"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "launched"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The delayed press is being built in its own worktree (bd er-effects-rs-me5p)."}]}}

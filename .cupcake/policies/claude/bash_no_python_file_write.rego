@@ -54,9 +54,14 @@ python_word(word) if startswith(word, "python")
 
 python_word(word) if contains(word, "/python")
 
+# Exec launchers in front of python are followed (`chrt --idle 0 python3 x.py`,
+# `taskset -c 0-3`, `timeout 30s`, `systemd-run --user --scope`, a script's `-- python3 ...`):
+# measured 2026-11-19, each ran an uncommitted script this guard denies bare, because the
+# narrower `word_in_command_slot` read the launcher as the program. See "EXEC LAUNCHERS" in
+# `.cupcake/system/commands.rego`.
 python_invocation(words, index) if {
 	python_word(words[index])
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 invokes_python if {
@@ -173,19 +178,45 @@ python_file_write_detected if {
 # them, so `python3 "/tmp/patch.py"` ended in a quote, failed the suffix test, and ran
 # uninspected exactly as the subshell form had. The path tests below and the signal's
 # verdicts are both written against the unquoted path.
+#
+# Cost, 2026-11-19. The operand is a `.py` word with only options between it and python, so
+# it lies at or before the first word after python that is not an option. This used to try
+# every later word of the whole command as the operand and list the words between for each,
+# quadratic in the command, and once exec launchers put python in a command slot behind
+# `chrt`/`ionice`, a 3.7 KB chain of `ionice -c 3 python3 scripts/a.py -- python3
+# scripts/b.py;` statements aborted the hook's 100MB wasm module here (measured with
+# `cupcake eval --wasm-max-memory 100MB`; the same chain behind no launcher had never reached
+# this rule). The answers are the same: the words from python up to that first non-option.
 script_operand(words, index) := operand if {
 	python_invocation(words, index)
-	some j
-	j > index
-	j < count(words)
-	operand := unquoted(trim_right(words[j], ")"))
+	j := first_non_option_after(words, index)
+	some raw in array.slice(words, index + 1, j + 1)
+	operand := unquoted(trim_right(raw, ")"))
 	endswith(operand, ".py")
-	count([p |
-		some p, _ in words
-		p > index
-		p < j
-		not startswith(words[p], "-")
+}
+
+# The first word after `index` that does not start with `-`, or the last word when there is
+# none. The next few words are read first, so a statement's own script is found without a
+# pass over the rest of the command.
+first_non_option_after(words, index) := index + 1 + min(near) if {
+	near := [k |
+		some k, word in array.slice(words, index + 1, index + 9)
+		not startswith(word, "-")
+	]
+	count(near) > 0
+}
+
+first_non_option_after(words, index) := j if {
+	count([k |
+		some k, word in array.slice(words, index + 1, index + 9)
+		not startswith(word, "-")
 	]) == 0
+	far := [p |
+		some p, word in words
+		p > index + 8
+		not startswith(word, "-")
+	]
+	j := min(array.concat(far, [count(words) - 1]))
 }
 
 runs_a_python_script_file if {
@@ -262,9 +293,17 @@ committed_script_path(path) if {
 # rules above ask about the path rather than about the command, and it needs no
 # regex in a rule that runs once per operand of every command.
 #
-# The intermediate components are unconstrained so that a worktree checkout of
-# this repo (`.../er-mods-rs/.worktrees/<name>/scripts/...`) is the same tree
-# under a different prefix, which is what it is.
+# Between `er-mods-rs` and `scripts` only checkout hops may stand: `.worktrees/<name>` and
+# `.claude/worktrees/<name>` (the Agent tool's isolation worktrees), nested as `git worktree
+# list` shows them (`.claude/worktrees/<agent>/.worktrees/<name>`). A worktree checkout is
+# the same tree under a different prefix, which is what it is.
+#
+# Until 2026-11-19 those components were unconstrained, so any directory named `scripts`
+# anywhere under the repo was "committed": `python3 /home/banon/projects/er-mods-rs/target/
+# scratch/scripts/patch.py` was allowed, and so was a modified copy of the tool tree an agent
+# made at `.worktrees/r21/target/wf/splitcap/scripts/` and ran with `--selftest` (both
+# measured with `opa eval` that day). The repo-relative spelling of the same copy was
+# already refused by the rules above, so the two spellings disagreed.
 committed_script_path(path) if {
 	startswith(path, "/")
 	not contains(path, "..")
@@ -275,6 +314,41 @@ committed_script_path(path) if {
 	scripts_index > repo_index
 	segments[scripts_index] == "scripts"
 	scripts_index < count(segments) - 1
+	checkout_hops(array.slice(segments, repo_index + 1, scripts_index))
+}
+
+# `hops` is nothing, or `.worktrees/<name>` / `.claude/worktrees/<name>` repeated: each
+# component is a hop's opening word, the `worktrees` after `.claude`, or a checkout name
+# right after `worktrees`/`.worktrees`, and the last one is a name.
+checkout_hops(hops) if count(hops) == 0
+
+checkout_hops(hops) if {
+	count(hops) > 0
+	checkout_name_at(hops, count(hops) - 1)
+	count([p |
+		some p, _ in hops
+		not checkout_hop_word(hops, p)
+	]) == 0
+}
+
+checkout_hop_word(hops, p) if hops[p] == ".worktrees"
+
+checkout_hop_word(hops, p) if {
+	hops[p] == ".claude"
+	hops[p + 1] == "worktrees"
+}
+
+checkout_hop_word(hops, p) if {
+	hops[p] == "worktrees"
+	hops[p - 1] == ".claude"
+}
+
+checkout_hop_word(hops, p) if checkout_name_at(hops, p)
+
+checkout_name_at(hops, p) if {
+	p > 0
+	hops[p - 1] in {".worktrees", "worktrees"}
+	not hops[p] in {"", "."}
 }
 
 runs_only_admitted_scripts if {
@@ -302,6 +376,8 @@ script_operand_admitted(words, index, path) if committed_script_path(variable_re
 
 script_operand_admitted(_, _, path) if vetted_read_only(path)
 
+script_operand_admitted(_, _, path) if committed_guard_test(path)
+
 # ---------------------------------------------------------------------------
 # A committed script reached through a variable, added 2026-10-13.
 #
@@ -325,28 +401,13 @@ script_operand_admitted(_, _, path) if vetted_read_only(path)
 # the signal, this is a guard against a habit, and getting past it that way takes intent.
 # ---------------------------------------------------------------------------
 
+# `commands.variable_reference` and `commands.literal_shell_value` were written here first and
+# moved to the shared package on 2026-11-19, when `edit_no_tmp_scripts_guard` needed them too.
 variable_resolved(words, index, path) := concat("/", [trim_right(value, "/"), rest]) if {
-	reference := variable_reference(path)
+	reference := commands.variable_reference(path)
 	rest := reference[1]
 	not contains(rest, "$")
 	value := bound_literal(words, index, reference[0])
-}
-
-variable_reference(path) := [name, rest] if {
-	startswith(path, "${")
-	close := indexof(path, "}/")
-	close > 2
-	name := substring(path, 2, close - 2)
-	rest := substring(path, close + 2, (count(path) - close) - 2)
-}
-
-variable_reference(path) := [name, rest] if {
-	startswith(path, "$")
-	not startswith(path, "${")
-	slash := indexof(path, "/")
-	slash > 1
-	name := substring(path, 1, slash - 1)
-	rest := substring(path, slash + 1, (count(path) - slash) - 1)
 }
 
 bound_literal(words, index, name) := value if {
@@ -362,7 +423,7 @@ bound_literal(words, index, name) := value if {
 	startswith(words[position], prefix)
 	assignment_statement(words, position)
 	value := substring(words[position], count(prefix), count(words[position]) - count(prefix))
-	literal_value(value)
+	commands.literal_shell_value(value)
 }
 
 binds_name(word, name) if word == name
@@ -411,14 +472,6 @@ name_character(c) if contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVW
 
 digit(c) if contains("0123456789", c)
 
-literal_value(value) if {
-	value != ""
-	count([c |
-		some c in ["$", "`", "\\", "'", `"`, "~", "*", "?", "[", "(", ")", "<", ">", "\t", "\n", "\r"]
-		contains(value, c)
-	]) == 0
-}
-
 # ---------------------------------------------------------------------------
 # A scratch script that only reads, added 2026-09-29.
 #
@@ -465,9 +518,111 @@ unquoted(word) := trim(word, "\"'")
 
 vetted_read_only(path) if unquoted(path) in vetted_read_only_operands
 
+# ---------------------------------------------------------------------------
+# A committed test suite of the user's guard repos, added 2026-11-16.
+#
+# Refused that day: `python3 /home/banon/.config/cupcake/tests/check_background_tails.py`, the
+# test suite of the user's global cupcake guards, because it runs subprocesses and writes temp
+# files and it does not live under this repo's `scripts/`. This guard exists to stop an edit
+# composed as a python program; a guard repo's committed test is the opposite, written once,
+# reviewed, re-runnable, exactly what the `scripts/` exemption admits here.
+#
+# The policy cannot ask git, so the signal decides: it prints `GUARDTEST <operand>` when the
+# file's real path is a `.py` file directly in a guard repo's test directory
+# (`~/.config/cupcake/tests`; not a subdirectory, where fixtures live) AND that path exists in
+# the repo's HEAD commit. A file dropped there and never committed is scanned like any other
+# script, so this opens no directory to new programs. Fail-closed the same way as READONLY: only that exact line admits the operand.
+# ---------------------------------------------------------------------------
+
+guard_test_operands contains operand if {
+	some line in split(python_script_writes_signal, "\n")
+	trimmed := trim(line, " \t\r")
+	startswith(trimmed, "GUARDTEST ")
+	operand := trim_prefix(trimmed, "GUARDTEST ")
+	operand != ""
+}
+
+committed_guard_test(path) if unquoted(path) in guard_test_operands
+
+# ---------------------------------------------------------------------------
+# A python program run by name, added 2026-11-16.
+#
+# Measured that day: `kitty-tail-bg --selftest` ran unchecked. `~/.local/bin/kitty-tail-bg` is
+# a python program with a `#!/usr/bin/env python3` line that writes temp files, and every rule
+# above looks only at `python3 <file>.py`, `-c` and heredocs, so any python executable on PATH,
+# or run as `./x`, or handed to python without a `.py` suffix (`python3 ~/.local/bin/x`), was
+# an unread script. The policy cannot read files, so the signal resolves each word the way the
+# shell would (PATH for a bare name, the working directory for a relative path) and prints
+#
+#   EXEC-<verdict> TAB <word> TAB <real path> TAB <why>
+#
+# for each one that is a python program the current user could have written. This policy then
+# asks only what it can answer itself: whether that word stands in a command slot. A WRITES or
+# UNKNOWN verdict there is refused unless the word or its real path is a committed script by the
+# same tests as above (this repo's `scripts/`, a `.worktrees/<name>/scripts/` checkout).
+# READONLY and GUARDTEST pass.
+#
+# Residue, stated: this half fails OPEN. With no signal output (opa test, a crash, a timeout) a
+# bare name cannot be known to be python, and refusing every unknown program would refuse every
+# command. The `python3 <file>.py` half above still fails closed.
+# ---------------------------------------------------------------------------
+
+exec_verdicts contains verdict if {
+	some line in split(python_script_writes_signal, "\n")
+	parts := split(trim_right(line, "\r"), "\t")
+	count(parts) >= 3
+	startswith(parts[0], "EXEC-")
+	verdict := {
+		"kind": parts[0],
+		"word": parts[1],
+		"path": parts[2],
+		"why": concat(" ", array.slice(parts, 3, count(parts))),
+	}
+}
+
+flagged_exec contains verdict if {
+	some verdict in exec_verdicts
+	verdict.kind in {"EXEC-WRITES", "EXEC-UNKNOWN"}
+}
+
+flagged_exec_words := {verdict.word | some verdict in flagged_exec}
+
+exec_admitted(_, _, word, _) if committed_script_path(word)
+
+exec_admitted(_, _, _, path) if committed_script_path(path)
+
+exec_admitted(words, index, word, _) if committed_script_path(variable_resolved(words, index, word))
+
+python_exec_detected contains verdict if {
+	count(flagged_exec_words) > 0
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, raw in words
+	word := unquoted(trim_right(raw, ")"))
+	word in flagged_exec_words
+	commands.launched_word_in_command_slot(words, index)
+	some verdict in flagged_exec
+	verdict.word == word
+	not exec_admitted(words, index, word, verdict.path)
+}
+
+exec_block_reason(verdict) := concat("", [
+	"🧁 Cupcake blocked a python program run by name from Bash: `", verdict.word, "` is ",
+	verdict.path, ", a python program (", verdict.kind, ": ", verdict.why, "). ",
+	"It gets the same reading as `python3 <file>.py`, because running a python file by its name ",
+	"is the same act. Admitted: a committed script under this repo's `scripts/` or a ",
+	"`.worktrees/<name>/scripts/` checkout, a test suite committed in a guard repo's tests/ ",
+	"directory (`~/.config/cupcake/tests`), and a program the ",
+	"`python_script_writes` signal reads and finds no write in. To change a file use the Edit or ",
+	"Write tool. To tail a background task from this repo, use the committed helper, which the ",
+	"global background-task Stop guard suggests here: `python3 ",
+	"/home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py --split --title '<title>' --file ",
+	"<task .output file>` (a split that follows the file's writer and closes itself).",
+])
+
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"
 
-block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py` -- and so is the same file in a local checkout, `.worktrees/<name>/scripts/<file>.py`, written out or reached through a `$VAR` assigned a literal by its own statement earlier in the same command. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
+block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py` -- and so is the same file in a local checkout, `.worktrees/<name>/scripts/<file>.py`, written out or reached through a `$VAR` assigned a literal by its own statement earlier in the same command. A test suite committed in a guard repo's tests directory (`~/.config/cupcake/tests/<name>.py`) is allowed as well; the `python_script_writes` signal checks the path is in that repo's HEAD. A python program run by its name or path (`kitty-tail-bg`, `./x`, `python3 ~/.local/bin/x`) gets the same reading as a script file. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
@@ -478,5 +633,18 @@ deny contains decision if {
 		"rule_id": "ER-EFFECTS-BASH-NO-PYTHON-FILE-WRITE",
 		"severity": "HIGH",
 		"reason": concat("", [block_reason, "\n\nSource: ", command]),
+	}
+}
+
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	input.tool_name == "Bash"
+	not python_file_write_detected
+	some verdict in python_exec_detected
+
+	decision := {
+		"rule_id": "ER-EFFECTS-BASH-NO-PYTHON-FILE-WRITE",
+		"severity": "HIGH",
+		"reason": concat("", [exec_block_reason(verdict), "\n\nSource: ", command]),
 	}
 }

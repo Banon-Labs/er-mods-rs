@@ -1,0 +1,2 @@
+{"type": "user", "origin": {"kind": "human"}, "promptSource": "typed", "message": {"role": "user", "content": "Didn't ask"}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "No guard can see this because the choice was made in the game's own menu, outside any transcript a signal reads."}]}}

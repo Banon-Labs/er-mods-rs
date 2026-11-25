@@ -9,7 +9,7 @@
   banned, and so is a whole shouted sentence used as a heading. Emphasis-caps are not a style
   preference: these comments carry the reverse engineering, and when a third of the words shout,
   the shouting marks nothing. Put the load-bearing fact in the first sentence instead, or make it
-  a `#` heading in a module doc comment. The rule covers every line of prose in the source --
+  a `#` heading in a module doc comment. The convention covers every line of prose in the source --
   `//`, `///`, `//!`, `/* */`, `#`, and Python docstrings, which are documentation the moment
   anyone reads them and were carrying 6,886 shouted words of their own.
   - The escape hatch is backticks, and it is also better writing: the gate does not read inside
@@ -55,5 +55,27 @@
   host's default face is whatever the hosting DLL built. `scripts/check-overlay-theme.py` in
   `check.sh` enforces it; `scripts/overlay-theme.baseline.json` records what was not yet ported
   and may only shrink, so a new crate starts at zero.
+- **A long run shows its pace and its stage times in the output the user watches** (user
+  directive 2026-11-11: "update this output ... so I could see progression and we actually knew
+  how long stages took"). Timing asked for "by default" means on the run's own stderr, which the
+  kitty tail tab shows, as well as in any log written for later comparison: the attack-similarity
+  timing went only to `attack-similarity-timing.jsonl` and the tab showed bare `11/944 attack sets`
+  for hours. Every progress counter in `scripts/` prints through
+  `er-mechanics-progress.Count`, whose line carries the elapsed time, the seconds per item and an
+  ETA; a pipeline with stages prints each stage's duration when it ends (attack similarity:
+  `Timing.lap`). `python3 scripts/er-mechanics-progress.py --selftest` checks the counter line,
+  and the attack-similarity `--selftest` checks the stage lines.
+  - An ETA over items of unequal cost is a projection, and says what it projects from. A
+    count-linear one assumes every item costs the same; a weighted one (`Count(weight=...)`)
+    assumes its weight predicts time, and neither assumption holds by default. r11 of attack
+    similarity showed "~212h12m left" after 2 of 944 sets (user, 2026-11-11: "212 hours left HOLY
+    SHIT"). Version 8's r9 timings had the 2 dearest of 1,285 items at 7.6% of all the work, so the
+    agent called that figure an order of magnitude too long. Then r11's next sets ran longer, not
+    shorter (user: "Ah yes, it readjusted to even longer time"). Its 4th set took about 52 min for
+    7.2% of the geometric `cost` estimate, while its 2nd took 11 min for 12.1%: that is 433 s
+    against 55 s per 1% of the estimate. Another version's distribution is no measurement of this
+    one. Fit a weight (a fixed part per item plus a part per unit of cost) from the same code's
+    recorded per-item seconds (`attack_cost` beside `items` in the timing log) before an ETA leans
+    on it, and until then say the ETA is count-linear.
 - Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
 - The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.

@@ -29,9 +29,10 @@
 #
 # What counts as a PARAGRAPH: `scripts/cupcake_turn_scan.prose_paragraphs` owns that, so the signal,
 # its regression test and the false-positive audit cannot drift into three different answers. Fenced
-# code (closed or left open), tables, list items and their continuations, headings, rules, and a
-# caption line introducing structure are all structure, not prose: the objection is to reading, and
-# those are scanned.
+# code (closed or left open), tables, list items and their continuations, headings, rules, a
+# caption line introducing structure, and a line holding only a handed reply phrase
+# (`cupcake_turn_scan.HANDED_REPLY_LINE_RE`, since 2026-11-11) are all structure, not prose: the
+# objection is to reading, and those are scanned.
 #
 # What is MEASURED: the longest contiguous run of prose -- text blocks with no tool call between them
 # -- not the turn's prose summed together. Summing was the guard's worst false positive: a tool-heavy

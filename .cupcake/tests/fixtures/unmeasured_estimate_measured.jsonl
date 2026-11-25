@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "How long does r10 have left?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "r10 has finished 38 of 944 sets, and its pace over the last 28 minutes was 17 sets, about 99 s per set. If r10's sets are spread the same way, its 38 sets are about half the stage, which leaves roughly 2 to 2.5 hours."}]}}

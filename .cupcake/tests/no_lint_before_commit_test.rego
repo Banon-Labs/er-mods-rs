@@ -180,3 +180,21 @@ test_executing_lint_script_denies if {
 		denies(command)
 	}
 }
+
+# --- exec launchers in front of a lint (2026-11-19) ---------------------------
+# Allowed with no authorization until this date, measured with `opa eval`: the launcher was
+# read as the program.
+test_deny_lint_behind_a_launcher_unauthorized if {
+	denies("chrt --idle 0 cargo fmt")
+	denies("taskset -c 0-3 cargo clippy -p x")
+	denies("taskset -c 0-3 ruff check x")
+	denies("ionice -c idle python3 scripts/check-comment-caps.py --fix")
+}
+
+test_allow_lint_behind_a_launcher_when_live if {
+	allows_live("chrt --idle 0 cargo fmt")
+}
+
+test_allow_launched_lint_named_in_an_operand if {
+	allows_unauthorized("echo taskset -c 0-3 ruff check x")
+}

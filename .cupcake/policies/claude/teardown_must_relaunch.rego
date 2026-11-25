@@ -134,7 +134,9 @@ killing_teardown if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_teardown(word)
-	commands.word_in_command_slot(words, index)
+	# Behind an exec launcher too: `chrt --idle 0 python3 scripts/er-teardown.py` killed the
+	# game unexamined until 2026-11-19. See "EXEC LAUNCHERS" in `.cupcake/system/commands.rego`.
+	commands.launched_word_in_command_slot(words, index)
 	not next_word(words, index) in read_only_flags
 }
 
@@ -157,7 +159,7 @@ runs_teardown if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_teardown(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 invokes_run_branch if {
@@ -165,7 +167,7 @@ invokes_run_branch if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_run_branch(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 invokes_user_launcher if {
@@ -173,7 +175,7 @@ invokes_user_launcher if {
 	words := commands.command_slot_words(text)
 	some index, word in words
 	token_names_user_launcher(word)
-	commands.word_in_command_slot(words, index)
+	commands.launched_word_in_command_slot(words, index)
 }
 
 # The relaunch that has to ride along. `er-run-branch.py` is the sanctioned

@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "What does this mean to me?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Nothing in the game changed. The model credited hits the game never lets land."}]}}
+{"type": "user", "isMeta": true, "message": {"role": "user", "content": "Stop hook feedback:\nThe user asked 'What does this mean to me?' and your reply opens with something that did not happen: 'Nothing in the game changed.'."}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Nothing changes for your spell kit, and Dryleaf Arts and Swift Slash rank lower."}]}}

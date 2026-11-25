@@ -12,7 +12,8 @@ gone, and kitty closes a window whose program exits, and a tab with it when it w
 window. `--pid` names the process; otherwise every `--match` substring must appear in its command
 line, and exactly one live process may match. The window opens with `--keep-focus`, so it does not
 take the keyboard from whatever the user is doing. When several processes match, the one working
-in this checkout (`--cwd` names another) is kept.
+in this checkout (`--cwd` names another) is kept. A task and the pool workers it forks are one
+match, the task.
 
     python3 scripts/kitty-tail-task.py --boards --title boards [--file <task output file>]
 
@@ -25,6 +26,21 @@ last step's age and a red stall mark, as the duel build's view draws them
 The guard `.cupcake/policies/claude/no_untailed_long_run.rego` asks for this form.
 
     python3 scripts/kitty-tail-task.py --boards-view --once [--file <task output file>]   # one frame
+
+    python3 /home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py --split \\
+        --title 'tail: <what> (<task id>)' --file <task .output file> [--file <other file> ...]
+
+is the form the global Stop guard `~/.config/cupcake/policies/claude/background_task_needs_tail.rego`
+suggests for a background task started in this repo (2026-11-16). `--split` names the default, a
+split next to `$KITTY_WINDOW_ID`, as the user's "open a kitty split tailing it, always" asks; it is
+kept so that suggestion, and the guards that quote it, stay valid, and `--tab` still wins over it.
+With `--file` and no `--pid` or `--match`, the task is every live process holding the first file
+open for writing (`/proc/<pid>/fd` plus the `fdinfo` flags, so a reader such as another tail does
+not count), the topmost of each tree, which is the shell a background task runs in. That is the
+lookup `~/.local/bin/kitty-tail-bg` does; the global guard suggests that helper elsewhere, but this
+repo's `bash_no_python_file_write.rego` refuses it because it is a python program committed nowhere
+here. When no writer turns up within two seconds the task has ended: the window prints the files
+once and closes.
 
 This is the watcher counterpart of `kitty-user-command.py`, which hands the user a command to
 run; this one runs nothing for the user to approve. It reuses that helper's listener lookup
@@ -39,6 +55,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -47,6 +64,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 #: Seconds the window stays open after the task's process exits (user, 2026-10-19).
 LINGER_S = 5
+#: The programs that launch a task by running its command line as a string. One of these that
+#: matches and is an ancestor of a match with another command line is the launcher, not the task.
+SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "mksh", "fish"})
 
 
 def _kuc():
@@ -56,17 +76,107 @@ def _kuc():
     return mod
 
 
-def tail_argv(path: str | list[str], pid: int, linger: int = LINGER_S) -> list[str]:
+def tail_argv(path: str | list[str], pid: int | list[int], linger: int = LINGER_S) -> list[str]:
     """The program the window runs.
 
     Several paths are for a run whose real progress is spread over worker logs: the board
     generator's wrapper prints four setup lines, and every line after that goes to one
     `shard-<n>.log` per worker in its cache directory (2026-10-19). `tail` heads each file's
     lines with its name, so the shards stay apart in one window.
+
+    Several pids follow until every one is gone. No pid is a task that already ended: the files
+    are printed once and the window closes after the linger.
     """
     paths = [path] if isinstance(path, str) else list(path)
-    script = f"tail -n +1 -F --pid={pid} {' '.join(shlex.quote(p) for p in paths)}; sleep {linger}"
+    pids = [pid] if isinstance(pid, int) else list(pid)
+    quoted = " ".join(shlex.quote(p) for p in paths)
+    if pids:
+        follow = " ".join(f"--pid={p}" for p in pids)
+        script = f"tail -n +1 -F {follow} {quoted}; sleep {linger}"
+    else:
+        script = (f"tail -n +1 {quoted}; echo '[task already ended; closing in {linger} s]'; "
+                  f"sleep {linger}")
     return ["bash", "-c", script]
+
+
+def _parent(pid: int, proc: Path = Path("/proc")) -> int | None:
+    try:
+        return int((proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _ancestors(pid: int, proc: Path = Path("/proc")) -> set[int]:
+    seen: set[int] = set()
+    p = _parent(pid, proc)
+    while p and p > 1 and p not in seen:
+        seen.add(p)
+        p = _parent(p, proc)
+    return seen
+
+
+def opened_for_write(pid: str, fd: str, proc: Path = Path("/proc")) -> bool:
+    """Whether fd `fd` of `pid` is open O_WRONLY or O_RDWR (fdinfo `flags:` is octal)."""
+    try:
+        for line in (proc / pid / "fdinfo" / fd).read_text(errors="replace").splitlines():
+            if line.startswith("flags:"):
+                return int(line.split()[1], 8) & 0o3 in (0o1, 0o2)
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
+
+
+def writers(path: str, proc: Path = Path("/proc"), me: int | None = None) -> list[int]:
+    """The topmost live processes holding `path` open for writing, this process and its ancestors
+    left out (Claude Code itself may hold a task's output file, and it is this process's ancestor).
+    Ported from `~/.local/bin/kitty-tail-bg` on 2026-11-16."""
+    target = os.path.realpath(path)
+    me = os.getpid() if me is None else me
+    skip = {me} | _ancestors(me, proc)
+    found: set[int] = set()
+    for entry in proc.iterdir():
+        if not entry.name.isdigit() or int(entry.name) in skip:
+            continue
+        try:
+            fds = os.listdir(entry / "fd")
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                link = os.readlink(entry / "fd" / fd)
+            except OSError:
+                continue
+            if link == target and opened_for_write(entry.name, fd, proc):
+                found.add(int(entry.name))
+                break
+    return sorted(p for p in found if _ancestors(p, proc).isdisjoint(found))
+
+
+#: inotify(7)'s "file was opened" event, from <sys/inotify.h>.
+IN_OPEN = 0x00000020
+#: Seconds to look for a writer of `--file` before treating the task as ended. A tail sent in the
+#: same message as the task can run before the task's shell has the file open.
+WRITER_WAIT_S = 2.0
+
+
+def wait_for_writers(path: str, wait: float = WRITER_WAIT_S) -> list[int]:
+    """The writers of `path`, looked for again each time inotify reports the file opened or written,
+    until `wait` runs out. A file that does not exist yet, or no inotify, gets one look."""
+    sys.path.insert(0, str(HERE))
+    from cupcake_push_authorization import IN_MODIFY, FileEvents
+
+    deadline = time.monotonic() + wait
+    try:
+        events = FileEvents(path, IN_MODIFY | IN_OPEN)
+    except OSError:
+        return writers(path)
+    with events:
+        while True:
+            pids = writers(path)
+            remaining = deadline - time.monotonic()
+            if pids or remaining <= 0:
+                return pids
+            events.wait(remaining)
 
 
 def repo_root(path: str | Path) -> Path | None:
@@ -82,7 +192,8 @@ def repo_root(path: str | Path) -> Path | None:
 def find_pid(needles: list[str], proc: Path = Path("/proc"), me: int | None = None,
              exclude: tuple[str, ...] = (), root: Path | None = None, stdout: str | None = None) -> int:
     """The one live process whose command line holds every needle and none of `exclude` (this
-    process excluded).
+    process excluded). A match that descends from another match is part of that one, so a task
+    and the pool workers it forks are the task.
 
     When several match, `stdout` breaks the tie first -- the process whose standard output is that
     file, which for a background task is the harness's output file -- and then `root`: only the
@@ -90,7 +201,7 @@ def find_pid(needles: list[str], proc: Path = Path("/proc"), me: int | None = No
     matched together on 2026-10-19, and the tab was refused.
     """
     me = os.getpid() if me is None else me
-    hits = []
+    hits: dict[int, tuple[str, str]] = {}  # pid -> (program name, command line)
     for entry in proc.iterdir():
         if not entry.name.isdigit() or int(entry.name) == me:
             continue
@@ -101,10 +212,8 @@ def find_pid(needles: list[str], proc: Path = Path("/proc"), me: int | None = No
         line = " ".join(a.decode("utf-8", "replace") for a in argv if a)  # UTF-8 Lossy: a command line is only matched, never written back
         if (line and all(n in line for n in needles) and not any(x in line for x in exclude)
                 and "kitty-tail-task.py" not in line):
-            hits.append((int(entry.name), line))
-    # A shell that launched the task (`zsh -c '... er-weapon-build.py ...'`) matches as well:
-    # keep only matches that are not an ancestor of another match.
-    pids = {p for p, _ in hits}
+            program = os.path.basename(argv[0].decode("utf-8", "replace")).lstrip("-")  # UTF-8 Lossy: compared with shell names, never written back
+            hits[int(entry.name)] = (program, line)
 
     def ancestors(pid):
         seen = set()
@@ -116,30 +225,42 @@ def find_pid(needles: list[str], proc: Path = Path("/proc"), me: int | None = No
                 break
             yield pid
 
-    outer = {a for p in pids for a in ancestors(p)}
-    hits = [h for h in hits if h[0] not in outer]
-    if len(hits) > 1 and stdout:
+    lineage = {p: set(ancestors(p)) for p in hits}
+    # A shell that launched the task (`zsh -c '... er-weapon-build.py ...'`) matches as well, and
+    # its command line is not the task's: drop it. A shell whose matching descendant carries its
+    # own command line is a script and its forked subshell, and stays.
+    launchers = {a for p in hits for a in lineage[p]
+                 if a in hits and hits[a][0] in SHELLS and hits[a][1] != hits[p][1]}
+    for a in launchers:
+        del hits[a]
+    # A match below another match is part of it: a pool's workers carry their task's command line
+    # and standard output, so a task that forks them matches once per process (2118456/7/8 on
+    # 2026-11-11, where the refusal named three). Each tree of matches is its topmost process,
+    # which outlives the rest. On 2026-11-12 the committed form, which dropped every match that
+    # had a matching descendant, threw away a `--jobs 6` cache build and kept its six workers.
+    pids = sorted(p for p in hits if lineage[p].isdisjoint(hits))
+    if len(pids) > 1 and stdout:
         def writes_to(pid):
             try:
                 return os.path.realpath(os.readlink(proc / str(pid) / "fd" / "1")) == os.path.realpath(stdout)
             except OSError:
                 return False
-        mine = [h for h in hits if writes_to(h[0])]
+        mine = [p for p in pids if writes_to(p)]
         if len(mine) == 1:
-            hits = mine
-    if len(hits) > 1 and root is not None:
+            pids = mine
+    if len(pids) > 1 and root is not None:
         def in_root(pid):
             try:
                 return repo_root(os.readlink(proc / str(pid) / "cwd")) == Path(root)
             except OSError:
                 return False
-        mine = [h for h in hits if in_root(h[0])]
+        mine = [p for p in pids if in_root(p)]
         if len(mine) == 1:
-            hits = mine
-    if len(hits) != 1:
-        found = "; ".join(f"{p} {l[:100]}" for p, l in hits) or "none"
-        raise SystemExit(f"--match must name exactly one live process, found {len(hits)}: {found}")
-    return hits[0][0]
+            pids = mine
+    if len(pids) != 1:
+        found = "; ".join(f"{p} {hits[p][1][:100]}" for p in pids) or "none"
+        raise SystemExit(f"--match must name exactly one live process, found {len(pids)}: {found}")
+    return pids[0]
 
 
 #: The board generator. Its wrapper prints a few setup lines, and every progress line after them
@@ -430,15 +551,16 @@ def boards_argv(wrapper_out: str, pid: int, jobs: int) -> list[str]:
             "--pid", str(pid), "--jobs", str(jobs)]
 
 
-def launch_argv(title: str, path: str | list[str], pid: int, program: list[str] | None,
+def launch_argv(title: str, path: str | list[str], pid: int | list[int], program: list[str] | None,
                 kind: str) -> tuple[list[str], str]:
     """The `kitty @ launch` arguments, and where the window lands in words. `program` replaces the
-    `tail` the window runs otherwise (the board view)."""
+    `tail` the window runs otherwise (the board view). Never `--hold`: the window closes when its
+    program ends."""
     where_argv, where = _kuc().placement(kind, title)
     return ["launch", *where_argv, "--keep-focus", *(program or tail_argv(path, pid))], where
 
 
-def open_window(title: str, path: str | list[str], pid: int, dry_run: bool,
+def open_window(title: str, path: str | list[str], pid: int | list[int], dry_run: bool,
                 program: list[str] | None = None, kind: str = "split") -> int:
     argv, where = launch_argv(title, path, pid, program, kind)
     if dry_run:
@@ -449,9 +571,166 @@ def open_window(title: str, path: str | list[str], pid: int, dry_run: bool,
     if not window_id.isdigit():
         raise SystemExit(f"kitty @ launch did not return a window id: {window_id!r}")
     what = f"shows the board progress of {path}" if program else f"tails {path}"
-    print(f"{kind} {title!r} (window {window_id}, in {where}) {what} until pid {pid} exits, "
+    pids = [pid] if isinstance(pid, int) else list(pid)
+    until = (f"until pid {', '.join(map(str, pids))} exits" if pids
+             else "once (no live writer: the task already ended)")
+    print(f"{kind} {title!r} (window {window_id}, in {where}) {what} {until}, "
           f"then closes after {LINGER_S} s")
+    for old in superseded(kitty_windows(k), title, int(window_id)):
+        k.kitty(k.listener_or_exit(), "close-window", f"--match=id:{old}")
+        print(f"closed window {old}, an earlier view of {title!r}")
     return 0
+
+
+def superseded(windows: list[dict], title: str, new_id: int) -> list[int]:
+    """The windows a view just opened as `new_id` replaces: every other window titled exactly
+    `title`. Reopening a task's view with other files is how its view changes, and the earlier one
+    would otherwise stay open until the task ends (2026-11-17: a run's split carried the agent's
+    memory sampler beside its progress for hours). So is every window whose title names the same
+    background task id: a task has one view, and an agent's view of a queue that followed only its
+    first log stayed open beside the one reopened to add the second (2026-11-17)."""
+    task = TASK_ID_RE.search(title)
+    return [w["id"] for w in windows if w["id"] != new_id
+            and (w.get("title") == title or (task and task.group(0) in w.get("title", "")))]
+
+
+#: Seconds a held tail's files must have gone unwritten before `--reap` closes its split.
+REAP_QUIET_S = 5.0
+#: A background task id in a split's title, as the Stop guards ask titles to carry one.
+TASK_ID_RE = re.compile(r"\((b[a-z0-9]{8})\)")
+
+
+def held_tail_files(win: dict) -> list[str] | None:
+    """The files a split of the old form (`kitty @ launch --hold tail -F <files>`, no `--pid`)
+    follows, or None for any other window: that tail never exits, so the split never closes on its
+    own (2026-11-16). A split this helper opened runs `bash -c 'tail ... --pid=...'` and is None."""
+    cmd = win.get("cmdline") or []
+    at = next((i for i, a in enumerate(cmd) if os.path.basename(a) == "tail"), None)
+    if at is None:
+        return None
+    args = cmd[at + 1:]
+    if any(a.startswith("--pid") for a in args):
+        return None
+    return [a for a in args if a.startswith("/")] or None
+
+
+def task_outputs(title: str, roots=(Path("/tmp/claude-1000"),)) -> list[str]:
+    """The `<project>/<session>/tasks/<id>.output` files of the task id a split's title names."""
+    m = TASK_ID_RE.search(title or "")
+    if not m:
+        return []
+    return [str(p) for root in roots if root.is_dir() for p in root.glob(f"*/*/tasks/{m.group(1)}.output")]
+
+
+def running_task_ids() -> set[str]:
+    """The background shells of this Claude Code session and its subagents that are still alive
+    (`cupcake_session_tasks.py --json`, which reads the process table). A task whose output the
+    harness writes itself has no writer of its own the fd lookup can see (2026-11-16, bydijwr4b)."""
+    import json
+    out = subprocess.run([sys.executable, str(HERE / "cupcake_session_tasks.py"), "--json"],
+                         capture_output=True, text=True, timeout=30).stdout
+    try:
+        return {s["task_id"] for s in json.loads(out).get("shells", []) if s.get("task_id")}
+    except (ValueError, AttributeError):
+        raise SystemExit("cupcake_session_tasks.py --json gave no report: not reaping blind")
+
+
+def reapable(win: dict, writers_fn=writers, mtime_fn=_mtime, outputs_fn=task_outputs,
+             now: float | None = None, quiet: float = REAP_QUIET_S, running: set[str] = frozenset()) -> bool:
+    """Whether `--reap` closes `win`: a held tail whose title's task is not in `running`, none of
+    whose files (nor that task's output) a live process holds open for writing, and none written
+    in the last `quiet` seconds."""
+    files = held_tail_files(win)
+    if not files:
+        return False
+    m = TASK_ID_RE.search(win.get("title") or "")
+    if m and m.group(1) in running:
+        return False
+    now = time.time() if now is None else now
+    for f in files + outputs_fn(win.get("title", "")):
+        if writers_fn(f):
+            return False
+        m = mtime_fn(f)
+        if m is not None and now - m < quiet:
+            return False
+    return True
+
+
+def kitty_windows(k) -> list[dict]:
+    import json
+    return [w for o in json.loads(k.kitty(k.listener_or_exit(), "ls")) for t in o["tabs"] for w in t["windows"]]
+
+
+def reap(dry_run: bool, title_prefix: str | None = None, quiet: float = REAP_QUIET_S) -> list[int]:
+    """Close every finished held tail split (`reapable`); `title_prefix` limits it to splits whose
+    title starts so. Only those splits are printed, never the user's other windows."""
+    k = _kuc()
+    running = running_task_ids()
+    closed = []
+    for w in kitty_windows(k):
+        if title_prefix and not (w.get("title") or "").startswith(title_prefix):
+            continue
+        if not reapable(w, quiet=quiet, running=running):
+            continue
+        print(f"{'would close' if dry_run else 'closing'} window {w['id']}: {w.get('title', '')}")
+        if not dry_run:
+            k.kitty(k.listener_or_exit(), "close-window", f"--match=id:{w['id']}")
+        closed.append(w["id"])
+    print(f"{len(closed)} finished tail split(s) {'to close' if dry_run else 'closed'}")
+    return closed
+
+
+def reap_selftest() -> int:
+    """Live: two held tail splits like the old form opens, one on a writer that ends and one on a
+    writer that stays; `reap` must close the first and keep the second, then close the second once
+    its writer is gone. Only splits titled `REAP_TEST` are ever touched."""
+    import tempfile
+    k = _kuc()
+    listener = k.listener_or_exit()
+    window_id = os.environ.get("KITTY_WINDOW_ID", "").strip() or None
+    prefix = f"tail: reap-selftest {os.getpid()}"
+    bad = []
+
+    def check(name, ok):
+        print(f"{'ok' if ok else 'FAIL'}: {name}")
+        if not ok:
+            bad.append(name)
+
+    with tempfile.TemporaryDirectory() as d:
+        done, live = Path(d, "done.log"), Path(d, "live.log")
+        quick = subprocess.Popen(["bash", "-c", f"echo started > {shlex.quote(str(done))}; sleep 1"])
+        stay = subprocess.Popen(["bash", "-c", f"echo started > {shlex.quote(str(live))}; exec sleep 120"],
+                                stdout=open(live, "a"))
+        ids = {}
+        for name, path in (("done", done), ("live", live)):
+            argv = ["launch", "--type=window"]
+            if window_id:
+                argv += [f"--match=window_id:{window_id}", f"--next-to=id:{window_id}"]
+            argv += ["--location=split", "--keep-focus", "--hold", f"--title={prefix} {name}",
+                     "tail", "-n", "+1", "-F", str(path)]
+            ids[name] = int(k.kitty(listener, *argv).strip())
+        try:
+            # `quiet=0`: the writers' exits are what these checks are about, not the files' age.
+            quick.wait()
+            closed = reap(False, prefix, quiet=0.0)
+            present = {w["id"] for w in kitty_windows(k)}
+            check("the split of a finished writer is closed", ids["done"] in closed and ids["done"] not in present)
+            check("the split of a live writer stays open", ids["live"] not in closed and ids["live"] in present)
+            stay.terminate()
+            stay.wait()
+            closed = reap(False, prefix, quiet=0.0)
+            present = {w["id"] for w in kitty_windows(k)}
+            check("it closes once its writer is gone", ids["live"] in closed and ids["live"] not in present)
+        finally:
+            for p in (quick, stay):
+                if p.poll() is None:
+                    p.kill()
+            present = {w["id"] for w in kitty_windows(k)}
+            for wid in ids.values():
+                if wid in present:
+                    k.kitty(listener, "close-window", f"--match=id:{wid}")
+    print("reap selftest ok" if not bad else "reap selftest FAILED")
+    return 1 if bad else 0
 
 
 def boards_view_selftest(check) -> None:
@@ -512,6 +791,184 @@ def boards_view_selftest(check) -> None:
               boards_argv(out, 42, 3)[2:], ["--boards-view", "--file", out, "--pid", "42", "--jobs", "3"])
 
 
+def stop_session(*procs: subprocess.Popen) -> None:
+    """Kill each selftest process started with `start_new_session=True`, with everything it forked.
+    Killing the shell alone left its `sleep 30` holding the selftest's stdout for half a minute."""
+    for p in procs:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.wait()
+
+
+def pool_selftest(check) -> None:
+    """A task and the workers it forks are one match; two unrelated tasks are still refused."""
+    def matching(marker: str) -> int:
+        n = 0
+        for entry in Path("/proc").iterdir():
+            try:
+                n += entry.name.isdigit() and marker.encode() in (entry / "cmdline").read_bytes()
+            except OSError:
+                pass
+        return n
+
+    def started(argv: list[str], marker: str, count: int, stdout=subprocess.DEVNULL,
+                cwd: str | None = None) -> subprocess.Popen:
+        """`argv` in a session of its own, once `count` processes carry `marker`. Each look is a
+        walk of /proc, which paces the loop; stdin is a pipe a Python task can block on."""
+        p = subprocess.Popen(argv, start_new_session=True, stdin=subprocess.PIPE, stdout=stdout,
+                             stderr=subprocess.DEVNULL, cwd=cwd)
+        deadline = time.monotonic() + 10
+        while matching(marker) < count and time.monotonic() < deadline:
+            pass
+        return p
+
+    # The workers carry the task's command line: `fork` makes them the task's children, and
+    # `forkserver` (Python 3.14's default) the children of a server the task starts, whose own
+    # command line ends in the task's arguments. argv: method, worker count, marker.
+    pool = ("import multiprocessing as m, sys, time\n"
+            "p = m.get_context(sys.argv[1]).Pool(int(sys.argv[2]))\n"
+            "p.map(time.sleep, [0] * int(sys.argv[2]))\n"
+            "sys.stdin.read()\n")
+    # (method, workers, processes carrying the marker); fork with six is the 2026-11-12 shape, a
+    # `--jobs 6` cache build that was refused as its six workers.
+    for method, workers, count in (("fork", 2, 3), ("forkserver", 2, 4), ("fork", 6, 7)):
+        marker = f"kitty-tail-pool-{method}-{workers}-marker"
+        task = started([sys.executable, "-c", pool, method, str(workers), marker], marker, count)
+        try:
+            check(f"a {method} pool of {workers}: its workers match too", matching(marker) >= count, True)
+            check(f"a {method} pool of {workers} is its task, not a worker", find_pid([marker]), task.pid)
+        finally:
+            stop_session(task)
+    # Two pools in different checkouts, each writing its own output: a tie between the two tasks,
+    # never their workers, which the stdout and checkout tie-breaks then settle.
+    marker = "kitty-tail-pool-twin-marker"
+    import tempfile
+    with tempfile.TemporaryDirectory() as a_dir, tempfile.TemporaryDirectory() as b_dir:
+        dirs = (a_dir, b_dir)
+        outs = [os.path.join(d, "task.out") for d in dirs]
+        for d in dirs:
+            os.mkdir(os.path.join(d, ".git"))
+        handles = [open(o, "w") for o in outs]
+        tasks = [started([sys.executable, "-c", pool, "fork", "3", marker], marker, 4 * (n + 1),
+                         stdout=handles[n], cwd=dirs[n]) for n in range(2)]
+        try:
+            try:
+                find_pid([marker])
+                named = "found nothing"
+            except SystemExit as e:
+                msg = str(e)
+                head = "--match must name exactly one live process, found 2: "
+                named = ({int(s.split(" ", 1)[0]) for s in msg[len(head):].split("; ")}
+                         if msg.startswith(head) else msg)
+            check("two unrelated pools are refused, naming the two tasks only", named,
+                  {t.pid for t in tasks})
+            check("stdout picks the pool writing to that file", find_pid([marker], stdout=outs[1]),
+                  tasks[1].pid)
+            check("root picks the pool working in that checkout", find_pid([marker], root=Path(a_dir)),
+                  tasks[0].pid)
+        finally:
+            stop_session(*tasks)
+            for h in handles:
+                h.close()
+    # A script's forked subshell carries the script's command line: the script is the task.
+    marker = "kitty-tail-subshell-marker"
+    script = started(["bash", "-c", "( sleep 30; true ); true", marker], marker, 2)
+    try:
+        check("a script's forked subshell is the script", find_pid([marker]), script.pid)
+    finally:
+        stop_session(script)
+
+
+def writers_selftest(check) -> None:
+    """`--file` alone: the task is the writer of the file; the split never runs `--hold`."""
+    import tempfile
+    import threading
+
+    def until(cond, limit=5.0):
+        """Ask `cond` until it holds; each condition here walks /proc, which paces the loop."""
+        deadline = time.monotonic() + limit
+        while not cond() and time.monotonic() < deadline:
+            pass
+
+    def holds_open(pid: int, path: str) -> bool:
+        target = os.path.realpath(path)
+        try:
+            fds = os.listdir(f"/proc/{pid}/fd")
+        except OSError:
+            return False
+        for fd in fds:
+            try:
+                if os.path.realpath(f"/proc/{pid}/fd/{fd}") == target:
+                    return True
+            except OSError:
+                pass
+        return False
+
+    check("tail argv, several pids", tail_argv(["/tmp/a", "/tmp/b c"], [41, 42]),
+          ["bash", "-c", "tail -n +1 -F --pid=41 --pid=42 /tmp/a '/tmp/b c'; sleep 5"])
+    check("tail argv, no pid prints once", tail_argv("/tmp/x", [])[2].startswith("tail -n +1 /tmp/x; echo "), True)
+    saved = os.environ.get("KITTY_WINDOW_ID")
+    os.environ["KITTY_WINDOW_ID"] = "7"
+    try:
+        argv, _ = launch_argv("tail: x (b1)", "/tmp/x", 1, ["bash", "-c", "true"], "split")
+        check("split: next to this window, keep focus, no --hold",
+              (argv[:7], any(a.startswith("--hold") for a in argv)),
+              (["launch", "--type=window", "--location=split", "--window-title=tail: x (b1)",
+                "--match=window_id:7", "--next-to=id:7", "--keep-focus"], False))
+    finally:
+        if saved is None:
+            os.environ.pop("KITTY_WINDOW_ID", None)
+        else:
+            os.environ["KITTY_WINDOW_ID"] = saved
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "task one.output")
+        # A background task as Claude Code runs it: a shell whose stdout and stderr are the output
+        # file, with a child that inherits them. The shell is the one to watch.
+        with open(out, "w") as fh:
+            task = subprocess.Popen(["bash", "-c", "echo started; sleep 30; true"], stdout=fh,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            until(lambda: len(writers(out)) > 0 and os.path.getsize(out) > 0)
+            check("the task's shell is the writer, not its child", writers(out), [task.pid])
+            reader = subprocess.Popen(["tail", "-F", out], stdout=subprocess.DEVNULL, start_new_session=True)
+            try:
+                until(lambda: holds_open(reader.pid, out))
+                check("a reader is not a writer", (holds_open(reader.pid, out), writers(out)),
+                      (True, [task.pid]))
+            finally:
+                stop_session(reader)
+            env = dict(os.environ, KITTY_WINDOW_ID="7")
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--dry-run", "--split",
+                                "--title", "tail: t (b1)", "--file", out], capture_output=True, text=True,
+                               timeout=20, env=env)
+            check("--split --file alone: a split following the writer's pid",
+                  (r.returncode, f"--pid={task.pid}" in r.stdout, "--location=split" in r.stdout,
+                   "--hold" in r.stdout), (0, True, True, False))
+            # The split's shell starts in kitty's directory, not this one (2026-11-19: a relative
+            # target/v29-kit/kit.out tailed "No such file or directory" for three hours).
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--dry-run", "--split",
+                                "--title", "tail: t (b1)", "--file", os.path.basename(out)],
+                               capture_output=True, text=True, timeout=20, env=env,
+                               cwd=os.path.dirname(out))
+            check("a relative --file reaches the split as an absolute path",
+                  (r.returncode, shlex.quote(os.path.realpath(out)) in r.stdout), (0, True))
+        finally:
+            stop_session(task)
+        check("no writer once the task ended", writers(out), [])
+        # The program ends after the task and the linger: a 1 s writer, 1 s linger.
+        with open(out, "w") as fh:
+            short = subprocess.Popen(["bash", "-c", "echo line one; sleep 1; true"], stdout=fh)
+        threading.Thread(target=short.wait, daemon=True).start()  # reaped: a zombie still counts
+        until(lambda: os.path.getsize(out) > 0)
+        t0 = time.monotonic()
+        r = subprocess.run(tail_argv(out, writers(out) or [short.pid], linger=1), capture_output=True,
+                           text=True, timeout=20)
+        check("the split's tail ends after the writer and the linger (0.8 to 6 s)",
+              ("line one" in r.stdout, 0.8 <= time.monotonic() - t0 <= 6.0), (True, True))
+
+
 def launch_selftest(check) -> None:
     """A split goes in the tab of the window named by `$KITTY_WINDOW_ID`; `--tab` opens a tab."""
     saved = os.environ.get("KITTY_WINDOW_ID")
@@ -565,12 +1022,13 @@ def selftest() -> int:
     check("tail ended after the process and the linger (1.5 to 6 s)", 1.5 <= dt <= 6.0, True)
     # find_pid: exactly one match or a refusal.
     # Two commands, so bash stays the process instead of exec'ing sleep and dropping the marker.
-    sleeper = subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-selftest-marker"])
+    sleeper = subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-selftest-marker"],
+                               start_new_session=True)
     try:
         check("find_pid finds the one process", find_pid(["kitty-tail-selftest-marker"]), sleeper.pid)
         # A wrapping shell whose command line also holds the marker is its ancestor, so dropped.
         wrap = subprocess.Popen(["bash", "-c", "bash -c 'sleep 30; true' kitty-tail-nested-marker; true",
-                                 "kitty-tail-nested-marker"])
+                                 "kitty-tail-nested-marker"], start_new_session=True)
         try:
             deadline = time.monotonic() + 5
             got = None
@@ -583,23 +1041,21 @@ def selftest() -> int:
             check("find_pid keeps the inner process, not its wrapping shell",
                   got is not None and got != wrap.pid, True)
         finally:
-            subprocess.run(["pkill", "-P", str(wrap.pid)], check=False, timeout=10)
-            wrap.kill()
-            wrap.wait()
+            stop_session(wrap)
         try:
             find_pid(["no-such-process-anywhere-xyz"])
             check("find_pid refuses no match", False, True)
         except SystemExit:
             check("find_pid refuses no match", True, True)
     finally:
-        sleeper.kill()
-        sleeper.wait()
+        stop_session(sleeper)
     # root: of two matching processes, the one working in the named checkout.
     with tempfile.TemporaryDirectory() as a_dir, tempfile.TemporaryDirectory() as b_dir:
         for d in (a_dir, b_dir):
             os.mkdir(os.path.join(d, ".git"))
         os.mkdir(os.path.join(b_dir, "sub"))
-        twins = [subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-twin-marker"], cwd=cwd)
+        twins = [subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-twin-marker"], cwd=cwd,
+                                  start_new_session=True)
                  for cwd in (a_dir, os.path.join(b_dir, "sub"))]
         try:
             try:
@@ -612,31 +1068,29 @@ def selftest() -> int:
             check("and the other checkout picks the other one",
                   find_pid(["kitty-tail-twin-marker"], root=Path(a_dir)), twins[0].pid)
         finally:
-            for t in twins:
-                t.kill()
-                t.wait()
+            stop_session(*twins)
         # stdout: of two matching processes, the one writing to the named file.
         outs = [os.path.join(a_dir, "one.out"), os.path.join(b_dir, "two.out")]
         handles = [open(o, "w") for o in outs]
-        twins = [subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-out-marker"], stdout=h)
+        twins = [subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-out-marker"], stdout=h,
+                                  start_new_session=True)
                  for h in handles]
         try:
             check("stdout picks the process writing to that file",
                   find_pid(["kitty-tail-out-marker"], stdout=outs[1]), twins[1].pid)
         finally:
-            for t in twins:
-                t.kill()
-                t.wait()
+            stop_session(*twins)
             for h in handles:
                 h.close()
-    excluded =subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-excl-marker", "--shard"])
-    kept = subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-excl-marker"])
+    excluded =subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-excl-marker", "--shard"],
+                               start_new_session=True)
+    kept = subprocess.Popen(["bash", "-c", "sleep 30; true", "kitty-tail-excl-marker"], start_new_session=True)
     try:
         check("exclude drops a match", find_pid(["kitty-tail-excl-marker"], exclude=("--shard",)), kept.pid)
     finally:
-        for t in (excluded, kept):
-            t.kill()
-            t.wait()
+        stop_session(excluded, kept)
+    pool_selftest(check)
+    writers_selftest(check)
     # boards: the wrapper's `cache` line names the directory, `--jobs` the shard count.
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "task.output")
@@ -653,6 +1107,14 @@ def selftest() -> int:
         except SystemExit:
             check("boards refuses an output with no cache line", True, True)
     boards_view_selftest(check)
+    wins = [{"id": 5, "title": "tail: run (b1234abcd)"}, {"id": 6, "title": "tail: run (b1234abcd)"},
+            {"id": 7, "title": "tail: run (b1234abcd) 2"}, {"id": 8, "title": "editor"}]
+    check("a reopened view replaces every view of its task", superseded(wins, "tail: run (b1234abcd)", 6), [5, 7])
+    check("a first view replaces nothing", superseded(wins[3:], "tail: run (b1234abcd)", 9), [])
+    check("a view under another title of the same task is replaced",
+          superseded(wins, "tail: queue again (b1234abcd)", 9), [5, 6, 7])
+    check("a title with no task id replaces only its exact title",
+          superseded(wins + [{"id": 10, "title": "editor"}], "editor", 10), [8])
     launch_selftest(check)
     print("selftest ok" if not bad else "selftest FAILED")
     return 1 if bad else 0
@@ -682,11 +1144,26 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--cwd", type=Path,
                     help="when several processes match, keep the one working in this checkout "
                          "(default: the checkout this command runs in)")
+    ap.add_argument("--split", action="store_true",
+                    help="open a split next to $KITTY_WINDOW_ID, the default; kept because the "
+                         "global background-task Stop guard suggests it (--tab wins over it)")
+    ap.add_argument("--reap", action="store_true",
+                    help="close every split of the old --hold tail -F form whose task has finished "
+                         "(no live writer, files quiet); with --dry-run, list them")
+    ap.add_argument("--reap-selftest", action="store_true",
+                    help="prove --reap on two test splits of its own before it is run on real ones")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args(argv)
+    # The split's shell starts in kitty's directory, so a relative path names nothing there.
+    a.file = [os.path.realpath(f) for f in a.file]
     if a.selftest:
         return selftest()
+    if a.reap_selftest:
+        return reap_selftest()
+    if a.reap:
+        reap(a.dry_run)
+        return 0
     root = repo_root(a.cwd if a.cwd else os.getcwd())
     if a.boards_view:
         try:
@@ -702,9 +1179,15 @@ def main(argv: list[str]) -> int:
         pid, out, jobs = boards_target(a.pid, a.file, root)
         boards_cache(out)  # refuse now, not inside the window, an output that is not a board run's
         return open_window(a.title, out, pid, a.dry_run, program=boards_argv(out, pid, jobs), kind=kind)
-    if not a.file or not (a.pid or a.match):
-        ap.error("--file and one of --pid / --match are required")
-    pid = a.pid or find_pid(a.match, root=root, stdout=a.file[0])
+    if not a.file:
+        ap.error("--file is required")
+    if a.pid:
+        pid: int | list[int] = a.pid
+    elif a.match:
+        pid = find_pid(a.match, root=root, stdout=a.file[0])
+    else:
+        # No --pid or --match: the task is whatever holds the first file open for writing.
+        pid = wait_for_writers(a.file[0])
     return open_window(a.title, a.file[0] if len(a.file) == 1 else a.file, pid, a.dry_run, kind=kind)
 
 
