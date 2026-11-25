@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "where is CI on the PR?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "toolu_checks1", "input": {"command": "gh pr checks 630", "description": "Read the PR checks"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_checks1", "content": "compiles\tpass\t4m\ncargo-test\tfail\t9m\nlint\tpass\t2m"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "CI on PR #630 finished: `cargo-test` failed and every other job passed."}]}}

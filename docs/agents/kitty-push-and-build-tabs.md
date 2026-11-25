@@ -67,3 +67,28 @@ boards --file <task output file>`, which follows those. The Stop guard
 `.cupcake/policies/claude/no_untailed_long_run.rego` halts a turn that backgrounded a run from its
 signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
 such a split or tab.
+
+## "CI is still running" needs a watcher of those checks (user correction 2026-11-25)
+
+The `CI STATE (measured, not remembered)` line that each prompt injects is one read of
+`gh pr checks`, and so is a `gh pr checks <n>` call. Neither one follows CI. A closing message may
+say that CI is running, pending or queued, or that a CI job has not finished, only while a
+background task of the session is watching that pull request's checks. The watcher's output is
+tailed in a split, and its task id is named in the closing message:
+
+```bash
+gh pr checks <n> --watch --interval 30 > <log> 2>&1      # run_in_background; or: gh run watch <run-id>
+python3 scripts/kitty-tail-task.py --title 'CI: PR #<n>' --file <log> --match 'gh pr checks'
+```
+
+This came from a session that closed with "CI on GitHub is still running; `compiles` and
+`cargo-test` hadn't finished at last check." after one read of that line. Nothing was watching the
+checks, and no split was open. The user's reply: "I don't believe you because your rego policy that
+told you to open a kitty tab/split to tail the output didn't run". Remote CI is not a local task, so
+none of the background-task guards had anything to check. The Stop guard
+`.cupcake/policies/claude/no_unwatched_ci_claim.rego` now halts such a claim when no live
+`gh pr checks --watch`, `gh run watch` or until/while polling loop is following it. Its signal is
+`.cupcake/signals/last_assistant_ci_running_claim.sh`, and the classifier lives in
+`scripts/cupcake_ci_running_claim.py` (`--selftest`). Quoted text is skipped, and so is a report
+that CI finished, passing or failing. `no_untailed_long_run` counts both watchers as long runs, so
+a watcher without its split halts as well.

@@ -638,6 +638,48 @@ CASES = [
         "logs where its progress goes -- must NOT halt",
     ),
     Case(
+        "ci_running_unwatched.jsonl",
+        "says CI is still running, and nothing in this session is following it",
+        "the 2026-11-25 shape, verbatim: 'CI on GitHub is still running; `compiles` and "
+        "`cargo-test` hadn't finished at last check.' from one read of the CI STATE injection, with "
+        "no background watcher and no tail split",
+    ),
+    Case(
+        "ci_running_watched.jsonl",
+        None,
+        "the same claim while a backgrounded `gh pr checks 630 --watch` still runs, tailed in a "
+        "split and named by task id in the closer -- must NOT halt",
+    ),
+    Case(
+        "ci_running_watcher_other_pr.jsonl",
+        "says CI is still running, and nothing in this session is following it",
+        "the claim is about PR #630 and the only live watcher follows #631 -- must halt",
+    ),
+    Case(
+        "ci_running_watcher_finished.jsonl",
+        "says CI is still running, and nothing in this session is following it",
+        "the watcher's completion notification arrived, then the closer still says CI is "
+        "running -- nothing follows it any more, must halt",
+    ),
+    Case(
+        "ci_running_watched_untailed.jsonl",
+        "opened no kitty split tailing its real output",
+        "a live `gh pr checks 630 --watch` backs the claim but no split tails it -- "
+        "no_untailed_long_run halts for the missing split",
+    ),
+    Case(
+        "ci_finished_report.jsonl",
+        None,
+        "a report that CI finished, one job failing, with no watcher -- not a running claim, must "
+        "NOT halt",
+    ),
+    Case(
+        "ci_injection_quoted.jsonl",
+        None,
+        "the CI STATE injection and the earlier claim quoted as the subject of an explanation -- "
+        "quoted text is not a claim, must NOT halt",
+    ),
+    Case(
         "inline_user_command.jsonl",
         "hands the user a command as an inline shell block",
         "the 2026-10-13 shape: a commit, then the push the agent may not run handed over as a "
