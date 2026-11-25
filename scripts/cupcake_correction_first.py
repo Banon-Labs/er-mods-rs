@@ -32,8 +32,8 @@ Two halves live here so the UserPromptSubmit reminder and the Stop guard cannot 
                            Stop guard halts on, or None. The turn's tool calls are sorted into
                              enforcement -- an Edit/Write to .cupcake/**, AGENTS.md, docs/agents/**,
                                             scripts/cupcake_*.py, scripts/test-cupcake-*.py or
-                                            scripts/test-*-signal.py, or an Agent launch whose prompt
-                                            names one of those paths or says guard/policy/Stop hook;
+                                            scripts/test-*-signal.py, or an Agent launch whose brief
+                                            names one of those paths;
                              instance    -- any other Edit/Write, a Bash that is not read-only,
                                             SendMessage, TaskStop, or any other Agent launch;
                              neutral     -- reads (Read, Grep, ListAgents, ToolSearch, read-only Bash).
@@ -276,13 +276,14 @@ ENFORCEMENT_PATH_RE = re.compile(
     r"|(?:^|/)scripts/test-[^/]*-signal\.py$"
 )
 
-# An agent launch counts as enforcement when its brief names an enforcement path or the machinery. A
-# guard counter, a guard boost and guard damage are Elden Ring mechanics, not this repo's guards.
+# An agent launch counts as enforcement when its brief names an enforcement path, the same set
+# ENFORCEMENT_PATH_RE accepts for an edit: AGENTS.md says "made directly or by an agent whose brief
+# names those paths". A bare "guard", "policy", "rego", "cupcake" or "Stop hook" is not a path: a
+# brief that says only those can leave every file under .cupcake/ untouched, and "guard" is also an
+# Elden Ring mechanic (a guard counter, guard damage).
 ENFORCEMENT_BRIEF_RE = re.compile(
-    r"\.cupcake\b|\bAGENTS\.md\b|\bdocs/agents/|\bscripts/cupcake_|\bscripts/test-cupcake-"
-    r"|\btest-[\w-]+-signal\.py\b|\bstop[\s-]hook\b|\bcupcake\b|\brego\b|\bpolic(?:y|ies)\b"
-    r"|\bguards?\b(?!\s*-?\s*(?:counter|boost|break|damage|negation|point|stat|stance|up\b|down\b))",
-    re.IGNORECASE,
+    r"\.cupcake/|\bAGENTS\.md\b|\bdocs/agents/|\bscripts/cupcake_|\bscripts/test-cupcake-"
+    r"|\btest-[\w-]+-signal\.py\b"
 )
 
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -1187,8 +1188,15 @@ def selftest() -> int:
         ("instance first", [tool("TaskStop", task_id="a1"), say("Closed.")], "instance_first"),
         ("enforcement first", [tool("Edit", file_path="/r/.cupcake/policies/claude/x.rego"),
                                tool("TaskStop", task_id="a1"), say("Done.")], None),
-        ("guard agent first", [tool("ListAgents"), tool("Agent", prompt="Add a Cupcake Stop guard that ..."),
+        ("guard agent first", [tool("ListAgents"),
+                               tool("Agent", prompt="Add a Stop guard under .cupcake/policies/claude/ that ..."),
                                say("Launched.")], None),
+        ("an agent briefed on a guard by name, with no path, is not enforcement",
+         [tool("Agent", prompt="Add a Cupcake Stop guard with a rego policy that ..."), say("Launched.")],
+         "instance_first"),
+        ("an agent briefed with AGENTS.md is enforcement",
+         [tool("Agent", prompt="Add a note to AGENTS.md that ..."), tool("TaskStop", task_id="a1"),
+          say("Launched.")], None),
         ("guard-counter agent is not enforcement",
          [tool("Agent", prompt="Rank guard counter damage for every weapon"), say("Launched.")], "instance_first"),
         ("nested read, then AGENTS.md, then the instance",

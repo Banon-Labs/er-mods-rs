@@ -1611,6 +1611,11 @@ python3 "$repo_root/scripts/cupcake_unmeasured_estimate.py" --selftest
 python3 "$repo_root/scripts/test-unmeasured-estimate-signal.py"
 python3 "$repo_root/scripts/cupcake_markdown_rule.py" --selftest
 python3 "$repo_root/scripts/test-markdown-rule-signal.py"
+python3 "$repo_root/scripts/cupcake_correction_first.py" --selftest
+python3 "$repo_root/scripts/test-correction-first-signal.py"
+python3 "$repo_root/scripts/test-cupcake-correction-classifier.py"
+python3 "$repo_root/scripts/cupcake_filed_not_started.py" --selftest
+python3 "$repo_root/scripts/cupcake_negated_opener.py" --selftest
 python3 "$repo_root/scripts/cupcake_task_stop_waiting_agent.py" --selftest
 python3 "$repo_root/scripts/test-task-stop-waiting-agent-signal.py"
 python3 "$repo_root/scripts/cupcake_rego_compile_check.py" --selftest

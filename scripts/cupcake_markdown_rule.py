@@ -57,7 +57,6 @@ would halt; `--all` also prints every allowed sentence that says "rule".
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import re
 import sys
@@ -379,52 +378,31 @@ def markdown_rule(closing: str) -> tuple[str, str] | None:
 
 # --- replay ---------------------------------------------------------------------------------------
 
-def closing_messages(path: str):
-    """(turn index, timestamp, closing message) for every turn of `path` that ended on prose, chosen
-    the way the signal chooses the turn it judges."""
+def _scan():
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
-    import cupcake_turn_scan as scan
+    import cupcake_turn_scan
 
-    turns, stamps = [scan.Turn()], [""]
-    for ev in scan.load_events(path):
-        if scan.is_real_user_prompt(ev):
-            turns.append(scan.Turn())
-            stamps.append("")
-            continue
-        if ev.get("type") != "assistant":
-            continue
-        for block in ev.get("message", {}).get("content", []) or []:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "text" and block.get("text"):
-                turns[-1].blocks.append(("text", block["text"]))
-                stamps[-1] = ev.get("timestamp", stamps[-1])
-            elif block.get("type") == "tool_use":
-                turns[-1].blocks.append(("tool", block))
-    for i, turn in enumerate(turns):
-        if not turn.texts or turn.last_text_index < 0 or turn.tool_after(turn.last_text_index):
-            continue
-        yield i, stamps[i], turn.text_runs[-1]
+    return cupcake_turn_scan
 
 
 def replay(limit: int, tdir: str, show_all: bool = False) -> int:
-    files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:limit]
-    judged = halted = 0
-    for path in files:
-        sid = os.path.basename(path)[:8]
-        for i, stamp, closing in closing_messages(path):
-            judged += 1
-            found = verdicts(closing)
-            if any(ref for _, ref in found):
-                halted += 1
-            for text, ref in found:
-                if ref:
-                    print(f"HALT  {sid} turn {i} {stamp[:16]} [{ref[:60]}]: {text[:280]}")
-                elif show_all:
-                    print(f"allow {sid} turn {i} {stamp[:16]}: {text[:260]}")
-    print(f"replay: {len(files)} transcripts, {judged} closing messages, {halted} halted")
+    halted = 0
+
+    def judge(sid, i, stamp, closing):
+        nonlocal halted
+        found = verdicts(closing)
+        if any(ref for _, ref in found):
+            halted += 1
+        for text, ref in found:
+            if ref:
+                print(f"HALT  {sid} turn {i} {stamp[:16]} [{ref[:60]}]: {text[:280]}")
+            elif show_all:
+                print(f"allow {sid} turn {i} {stamp[:16]}: {text[:260]}")
+
+    files, judged = _scan().replay_closings(limit, tdir, judge)
+    print(f"replay: {files} transcripts, {judged} closing messages, {halted} halted")
     return 0
 
 
@@ -540,13 +518,9 @@ def main() -> int:
     ap.add_argument("--replay", action="store_true", help="judge the closing messages of recent transcripts")
     ap.add_argument("--limit", type=int, default=40, help="newest transcripts to replay (default 40)")
     ap.add_argument("--all", action="store_true", help="with --replay, also print allowed sentences that say rule")
-    # Claude Code names a project's transcript directory after its path with every character that is
-    # not a letter or digit turned into "-"; a worktree's own directory holds only its own sessions.
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    main_repo = repo.split("/.worktrees/")[0]
     ap.add_argument(
         "--dir",
-        default=os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", main_repo)),
+        default=_scan().default_transcript_dir(),
         help="transcript directory (default: the main checkout's Claude Code project directory)",
     )
     args = ap.parse_args()

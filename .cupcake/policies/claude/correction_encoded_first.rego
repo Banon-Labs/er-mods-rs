@@ -22,7 +22,8 @@
 #     no such action at all and its closing message gives no reason enforcement is impossible.
 #     Encoding is an Edit/Write to .cupcake/**, AGENTS.md, docs/agents/**, scripts/cupcake_*.py,
 #     scripts/test-cupcake-*.py or scripts/test-*-signal.py, or an agent launch whose brief names
-#     those paths or the guard machinery. Reads do not count either way. Once this guard has halted
+#     one of those paths (a bare "guard" or "policy" with no path does not count). Reads do not
+#     count either way. Once this guard has halted
 #     a turn and the turn has encoded the correction, it may end: the order cannot be undone.
 #     The classifier, the split and the replay of the measured turns are in
 #     scripts/cupcake_correction_first.py (--selftest), scripts/test-correction-first-signal.py and

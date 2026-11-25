@@ -317,6 +317,11 @@ portable	-	test-untailed-agent-signal.py	drives the signal script over transcrip
 portable	-	kitty-tail-agent.py --selftest	a fake session in a temp dir; checks the kitty launch argv without sending it (measured with an empty HOME and no kitty, 4 s)	policy
 portable	-	cupcake_markdown_rule.py --selftest	classifier cases held in the script; source/text only (--replay, which reads ~/.claude, is not run here)	policy
 portable	-	test-markdown-rule-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
+portable	-	cupcake_correction_first.py --selftest	classifier and turn cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
+portable	-	test-correction-first-signal.py	drives the Stop and UserPromptSubmit signal scripts over transcripts and hook events it writes to a temp dir; source/text only (measured with an empty HOME, 2 s)	policy
+portable	-	test-cupcake-correction-classifier.py	scores the classifier on the committed corpus .cupcake/tests/corpus/correction_prompts.jsonl; never reads ~/.claude (measured with an empty HOME, under 1 s)	policy
+portable	-	cupcake_filed_not_started.py --selftest	classifier cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
+portable	-	cupcake_negated_opener.py --selftest	classifier cases held in the script; source/text only (measured with an empty HOME, under 1 s)	policy
 portable	-	test-inline-user-command-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-authorize-run-stamp-signal.py	a throwaway git repo with fixture run-root and game-dir logs, plus this checkout's own HEAD and worktree list; no game, no network	policy
 portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy

@@ -614,11 +614,22 @@ def held_tail_files(win: dict) -> list[str] | None:
     return [a for a in args if a.startswith("/")] or None
 
 
-def task_outputs(title: str, roots=(Path("/tmp/claude-1000"),)) -> list[str]:
+def claude_tmp_root(env=None, uid: int | None = None) -> Path:
+    """Claude Code's per-user temp root, where its task outputs live: `claude-<uid>` under
+    `$CLAUDE_CODE_TMPDIR`, else under the OS temp dir node's `os.tmpdir()` reads (`$TMPDIR`,
+    `$TMP`, `$TEMP`, then `/tmp`). Read from the Claude Code binary, which builds it as
+    `join(env.CLAUDE_CODE_TMPDIR || os.tmpdir(), "claude-" + process.getuid())`."""
+    env = os.environ if env is None else env
+    base = next((env[k] for k in ("CLAUDE_CODE_TMPDIR", "TMPDIR", "TMP", "TEMP") if env.get(k)), "/tmp")
+    return Path(base.rstrip("/") or "/") / f"claude-{os.getuid() if uid is None else uid}"
+
+
+def task_outputs(title: str, roots=None) -> list[str]:
     """The `<project>/<session>/tasks/<id>.output` files of the task id a split's title names."""
     m = TASK_ID_RE.search(title or "")
     if not m:
         return []
+    roots = (claude_tmp_root(),) if roots is None else roots
     return [str(p) for root in roots if root.is_dir() for p in root.glob(f"*/*/tasks/{m.group(1)}.output")]
 
 
@@ -1115,6 +1126,17 @@ def selftest() -> int:
           superseded(wins, "tail: queue again (b1234abcd)", 9), [5, 6, 7])
     check("a title with no task id replaces only its exact title",
           superseded(wins + [{"id": 10, "title": "editor"}], "editor", 10), [8])
+    check("tmp root: CLAUDE_CODE_TMPDIR wins",
+          claude_tmp_root({"CLAUDE_CODE_TMPDIR": "/x/", "TMPDIR": "/y"}, uid=7), Path("/x/claude-7"))
+    check("tmp root: TMPDIR next", claude_tmp_root({"TMPDIR": "/y"}, uid=7), Path("/y/claude-7"))
+    check("tmp root: /tmp by default", claude_tmp_root({}, uid=7), Path("/tmp/claude-7"))
+    check("tmp root: the running user's uid", claude_tmp_root({}).name, f"claude-{os.getuid()}")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d, "-proj", "sess", "tasks", "b1234abcd.output")
+        out.parent.mkdir(parents=True)
+        out.write_text("x\n")
+        check("task_outputs finds the titled task's output under a root",
+              task_outputs("tail: run (b1234abcd)", roots=(Path(d),)), [str(out)])
     launch_selftest(check)
     print("selftest ok" if not bad else "selftest FAILED")
     return 1 if bad else 0

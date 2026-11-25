@@ -23,6 +23,9 @@ What lives here (and nowhere else):
                                     state, waiting ones included, is `subagent_states`
   * where a paragraph starts     -- `prose_paragraphs`, and `Turn.text_runs`, the contiguous prose
                                     runs a length rule must measure instead of the whole turn
+  * replay of past transcripts   -- `closing_messages`, `replay_closings`: every closing message a
+                                    Stop classifier's `--replay` judges, chosen the way its signal
+                                    chooses the turn
 
 Signal-specific prose classification (which phrases are banned, how long is too long) stays in the
 individual signal: that is the part each guard genuinely owns.
@@ -279,6 +282,62 @@ def last_text_turn(turns: list[Turn]) -> Turn | None:
         if turn.texts:
             return turn
     return None
+
+
+# --- replay over past transcripts -------------------------------------------------------------
+#
+# A Stop classifier's `--replay` judges every closing message of the newest transcripts, to find
+# the false positives and misses its cases do not hold. The turn it judges is chosen here, once,
+# so every classifier replays the same turns its signal would have judged.
+
+def closing_messages(path: str):
+    """(turn index, timestamp, closing message) for every turn of `path` that ended on prose, chosen
+    the way the signal chooses the turn it judges."""
+    turns, stamps = [Turn()], [""]
+    for ev in load_events(path):
+        if is_real_user_prompt(ev):
+            turns.append(Turn())
+            stamps.append("")
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        for block in ev.get("message", {}).get("content", []) or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                turns[-1].blocks.append(("text", block["text"]))
+                stamps[-1] = ev.get("timestamp", stamps[-1])
+            elif block.get("type") == "tool_use":
+                turns[-1].blocks.append(("tool", block))
+    for i, turn in enumerate(turns):
+        if not turn.texts or turn.last_text_index < 0 or turn.tool_after(turn.last_text_index):
+            continue
+        yield i, stamps[i], turn.text_runs[-1]
+
+
+def default_transcript_dir() -> str:
+    """The main checkout's Claude Code project directory. Claude Code names it after the project's
+    path with every character that is not a letter or digit turned into "-"; a worktree's own
+    directory holds only its own sessions, so a worktree replays the main checkout's."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    main_repo = repo.split("/.worktrees/")[0]
+    return os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", main_repo))
+
+
+def replay_closings(limit: int, tdir: str, judge) -> tuple[int, int]:
+    """Call `judge(session, turn_index, timestamp, closing)` for every closing message of the
+    `limit` newest transcripts in `tdir`; `session` is the transcript's first 8 characters. Returns
+    (transcripts read, closing messages judged)."""
+    import glob
+
+    files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:limit]
+    judged = 0
+    for path in files:
+        sid = os.path.basename(path)[:8]
+        for i, stamp, closing in closing_messages(path):
+            judged += 1
+            judge(sid, i, stamp, closing)
+    return len(files), judged
 
 
 # --- prose segmentation -----------------------------------------------------------------------

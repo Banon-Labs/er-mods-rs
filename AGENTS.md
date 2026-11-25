@@ -299,6 +299,18 @@ closed until it finishes: a TaskStop on it kills that work (2026-11-11, a waitin
 the agent or asks to stop it (`.cupcake/signals/task_stop_waiting_agent.sh`,
 `scripts/cupcake_task_stop_waiting_agent.py`, tested by `scripts/test-task-stop-waiting-agent-signal.py`).
 
+A subagent never arms a `Monitor`. Every Monitor event wakes the subagent, and each turn it ends
+after one sends the main session a task notification that has to be answered. A subagent waiting
+on its own long work runs one `run_in_background` Bash command whose exit is the event it needs
+(an until-loop on the run's done marker or its pid), reads the log when that exits, and reports
+progress only in its final result. The main session keeps Monitor, under
+`.cupcake/policies/claude/monitor_rate_limit.rego`. Enforced by
+`.cupcake/policies/claude/no_subagent_monitor.rego` (ER-EFFECTS-NO-SUBAGENT-MONITOR), a PreToolUse
+deny on `Monitor`, over `.cupcake/signals/subagent_id.sh`, which prints the hook event's `agent_id`:
+Claude Code sets it only on a subagent's events, and cupcake leaves it out of the policy's `input`.
+Tested by `.cupcake/tests/no_subagent_monitor_test.rego` and `scripts/test-cupcake-policies.py`,
+whose cases run the real signal.
+
 A forecast of time or effort cites a measured number, or is not made (user correction 2026-11-11:
 "You also estimated yesterday over 24 hours ago after I started this project that generating
 similiarity scores woudln't be a big lift", and "Should an LLM be prohibited from making non-cited
@@ -339,6 +351,21 @@ guard `.cupcake/policies/claude/correction_encoded_first.rego` (signal
 `scripts/cupcake_correction_first.py` (`--selftest`); tested by
 `scripts/test-correction-first-signal.py`, `scripts/test-cupcake-correction-classifier.py` (corpus
 `.cupcake/tests/corpus/correction_prompts.jsonl`) and `scripts/test-cupcake-stop-guards.py`.
+
+Every single write to a policy file leaves the policy set compiling. Cupcake compiles every policy
+before it runs any, so one that does not compile refuses every tool call in every session on that
+checkout, the edit that would repair it included, and only the user can undo that. Write a whole
+policy with one Write, or define a new function in the same Edit as its first call, or in an
+earlier one. The PreToolUse guard `.cupcake/policies/claude/rego_must_compile.rego`
+(ER-EFFECTS-REGO-MUST-COMPILE) denies a Write, Edit, MultiEdit or Bash write that would leave a
+`.rego` under a `.cupcake` directory failing to compile, and quotes opa. Its signal builds the
+content the write would leave, puts it in a copy of that `.cupcake` directory, lets cupcake pick
+the files it would compile, and runs `opa check` on exactly that set. A file the engine does not
+load (`tests/`, `signals/`, a policy with no METADATA block) is not judged, and the write is allowed
+when the check cannot run (no opa or cupcake, a timeout). Enforced by
+`.cupcake/policies/claude/rego_must_compile.rego` over `.cupcake/signals/rego_compile_check.sh`
+(`scripts/cupcake_rego_compile_check.py --selftest`), tested by
+`.cupcake/tests/rego_must_compile_test.rego` and `scripts/test-rego-compile-check-signal.py`.
 
 When the user is waiting on a run's result, the job is to get that run done and hand over the
 result (user correction 2026-11-12: "You're telling me lots of stuff that has nothing to do with
@@ -441,6 +468,19 @@ it only as far as it needs an answer, and add no explanation, background or side
 not request. A fact the agent tripped over while working (a lookup that missed, a format it had to
 discover) belongs in the repo or in a memory if a future agent needs it, never in the reply. No
 guard carries this: whether a sentence was asked for is a judgement a signal script cannot make.
+
+A reply to a what, how, why or which question opens with the answer, not with something that did
+not happen. The Stop guard `.cupcake/policies/claude/no_negated_opener.rego`
+(ER-EFFECTS-NO-NEGATED-OPENER) halts a turn when the user's prompt holds a question sentence
+starting with what, how, why or which (after filler such as "OK, so"), the question does not
+itself ask about change or absence ("what changed?", "what's left?", "which failed?"), and the
+closing message's first prose sentence starts with Nothing or None. Who and when questions are
+left out, since "Nobody" or "Not before 3" can be their answer. A rewrite after a halt is judged
+against the Stop hook's own feedback, which holds no such question, so it is never halted twice.
+Enforced by `.cupcake/policies/claude/no_negated_opener.rego` over
+`.cupcake/signals/last_assistant_negated_opener.sh` (`scripts/cupcake_negated_opener.py
+--selftest`), tested by `.cupcake/tests/no_negated_opener_test.rego` and the `negated_opener*.jsonl`
+fixtures in `scripts/test-cupcake-stop-guards.py`.
 
 A question the user asks about a game cost the model leaves out is pointing at the model, not
 asking to be taught (user correction 2026-11-12: "this information wasn't for me; I already had

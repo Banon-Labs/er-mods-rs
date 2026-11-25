@@ -104,13 +104,15 @@ BETWEEN = [
           "Async agent launched successfully."),
 ]
 
-# Turn 3: the queued correction, then the Stop guard agent before anything else.
+# Turn 3: the queued correction, then the Stop guard agent before anything else. The measured brief
+# named the guard but no path; a brief counts as encoding only when it names one, so this one does.
+GUARD_AGENT_PROMPT = ("Add a Cupcake Stop guard under .cupcake/policies/claude/ that halts a turn when a "
+                      "subagent has finished and the main session has not closed it.")
 NEXT_TURN = [
     typed(CORRECTION_2, "queued"),
     *call("ListAgents", {}, "This session is er-mods-rs-f2 ..."),
     *call("Agent", {"description": "Stop guard: close finished subagents", "run_in_background": True,
-                    "prompt": "Add a Cupcake Stop guard that halts a turn when a subagent has finished and the "
-                              "main session has not closed it."},
+                    "prompt": GUARD_AGENT_PROMPT},
           "Async agent launched successfully."),
     say("I'm turning that concern into a Stop guard."),
 ]
@@ -186,6 +188,13 @@ CASES = [
      [typed(CORRECTION_1),
       *call("Agent", {"description": "rank guard counters", "prompt": "Rank guard counter damage per weapon."},
             "Async agent launched successfully."), say("Launched.")], HALT, "first_instance=Agent rank guard counters"),
+    ("an agent briefed on a guard with no path is not enforcement",
+     [typed(CORRECTION_1),
+      *call("Agent", {"description": "Stop guard: close finished subagents",
+                      "prompt": "Add a Cupcake Stop guard with a rego policy that halts a turn when a subagent "
+                                "has finished and the main session has not closed it."},
+            "Async agent launched successfully."), say("Launched.")], HALT,
+     "first_instance=Agent Stop guard: close finished subagents"),
     ("a prompt the harness did not mark as typed is never judged",
      [untagged(CORRECTION_1), *SOURCE_EDIT, say("Fixed.")], ALLOW, None),
     ("a later task prompt ends the correction's turn",
