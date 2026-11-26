@@ -14,7 +14,7 @@
 # is the hook's own test for an agent worktree, and carries this repository's real check.sh, real
 # ledger and the real three gate scripts, copied in. Every script the hook calls before that branch
 # is stubbed to pass. Then the same e98bb2a4 edit is committed in the fixture and pushed through the
-# real hook, both as the checkout's HEAD and as another branch's tip, which the hook reads out of
+# real hook, both as the checkout's `HEAD` and as another branch's tip, which the hook reads out of
 # the commit rather than off the working tree.
 #
 # Nothing here touches the repository it lives in: every git command names a fixture under a temp
@@ -93,7 +93,7 @@ run_hook() { # run_hook <ref line> -- one push through the hook, as git drives i
 }
 red_gates() { grep -o 'RED python3 [^ ]* [^ ]*' "$tmp/err" | sed 's/^RED python3 //' | sort | tr '\n' ' '; }
 
-# --- the defect, pushed as this checkout's HEAD ---------------------------------------------
+# --- the defect, pushed as this checkout's `HEAD` -------------------------------------------
 run_hook "refs/heads/work $sha_defect refs/heads/work $zero"
 if [[ $status -eq 1 ]] && grep -q 'REFUSED -- a check.sh/ledger consistency gate is red' "$tmp/err"; then
 	ok "a check.sh step with no ledger row refuses the push from an agent worktree"
@@ -132,7 +132,7 @@ else
 	bad "a defective non-HEAD tip was judged by the clean working tree (exit $status): $(tail -20 "$tmp/err")"
 fi
 
-# --- a consistent tip passes, HEAD or not -----------------------------------------------------
+# --- a consistent tip passes, `HEAD` or not ---------------------------------------------------
 run_hook "refs/heads/work $sha_clean refs/heads/work $zero"
 if [[ $status -eq 0 ]] && grep -q 'ok  python3 scripts/check-stages.py --audit-inputs' "$tmp/err"; then
 	ok "a consistent HEAD passes, every gate run including --audit-inputs"
