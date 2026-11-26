@@ -55,6 +55,14 @@ The Stop hook refuses a closing message that carries a shell code block.
 
 A push and a long background build each also get a kitty split: `docs/agents/kitty-push-and-build-tabs.md`.
 
+A background push or check suite also gets a `Monitor` that wakes the agent on a red stage, and a
+red stage is read and fixed while the other stages still run (user, 2026-11-25: "It would be wise,
+and prudent, to not wait until all checks pass before addressing any one of the failing reds in
+each future case"). `scripts/kitty-tail-push.py` prints the Monitor command after it opens the
+split. Enforced by `.cupcake/policies/claude/no_unwatched_red_stage.rego` over
+`.cupcake/signals/last_assistant_unwatched_red_stage.sh` (`scripts/cupcake_red_stage_watch.py
+--selftest`, fixtures `unwatched_red_stage*.jsonl` in `scripts/test-cupcake-stop-guards.py`).
+
 ## A command written for the user is spelled absolutely
 
 Every command example in this file, and in every Cupcake block message, is written
