@@ -108,13 +108,21 @@ watched_helper_word(word) if {
 	parts[count(parts) - 1] == "er-push-watched.sh"
 }
 
+# A run names the script, so a command without its name skips the decomposition, which
+# is slow on long commands. Measured 2026-11-26: with every command decomposed here,
+# `check_abort_is_not_an_allow` in `scripts/test-cupcake-hook-shim.py` (a 3600-line
+# heredoc) ran past its 25 s window, in CI and locally; gated, it ends in 2.3 s.
+watched_helper_named if contains(lower(input.tool_input.command), "er-push-watched")
+
 watched_helper_runs if {
+	watched_helper_named
 	some text in executed_texts
 	watched_helper_runs_in(commands.command_slot_words(text))
 }
 
 # A newline ends a statement as `;` does, as in `no_whole_check_sh`.
 watched_helper_runs if {
+	watched_helper_named
 	some text in executed_texts
 	watched_helper_runs_in(commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; ")))
 }
