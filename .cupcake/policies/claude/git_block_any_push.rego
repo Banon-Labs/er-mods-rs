@@ -62,20 +62,92 @@ deny contains decision if {
 }
 
 # The watched-push helper is the same act wearing a script name, and the user
-# named it when they gave the directive. Matched as a plain substring because the
-# script is invoked by path and there is nothing to parse. No authorization
-# lifts this one: the authorizable shape is a plain `git push`.
+# named it when they gave the directive. No authorization lifts this one: the
+# authorizable shape is a plain `git push`.
+#
+# Refused when it RUNS, not when it is named. Until 2026-11-24 this matched the
+# substring `er-push-watched` anywhere in the command, and the same day refused two
+# read-only commands that only carried the path as an operand: a python printer
+# handed `scripts/er-push-watched.sh:34`, and `sed -n '<range>p'` over the helper's
+# own test script. The run is now read the way `no_whole_check_sh` and
+# `require_jobs_er_builds_pvp` read theirs, from the shared decomposition in
+# `.cupcake/system/commands.rego`: the script's word must stand in a command slot,
+# first in its statement or behind nothing but wrappers (`bash`, `sh`, `source`,
+# `.`, `env`, `timeout`, `nohup`, `setsid`, assignments), in any text the shell
+# executes, `bash -c '...'` payloads included.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
+	watched_helper_runs
+
+	decision := watched_helper_decision
+}
+
+# A shell payload this guard cannot read that names the helper still fails closed,
+# as the substring match did for it.
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	input.tool_name == "Bash"
+	commands.input_unparsed_shell_payload
 	contains(lower(input.tool_input.command), "er-push-watched")
 
-	decision := {
-		"rule_id": "ER-EFFECTS-BLOCK-ANY-PUSH",
-		"reason": "`scripts/er-push-watched.sh` pushes, so the agent does not run it. Leave the commits local and say which ones are unpushed; with the user's `authorize <sha>` reply, push with a plain `git push <remote> <branch>`.",
-		"severity": "CRITICAL",
-	}
+	decision := watched_helper_decision
 }
+
+watched_helper_decision := {
+	"rule_id": "ER-EFFECTS-BLOCK-ANY-PUSH",
+	"reason": "`scripts/er-push-watched.sh` pushes, so the agent does not run it. Leave the commits local and say which ones are unpushed; with the user's `authorize <sha>` reply, push with a plain `git push <remote> <branch>`. Reading or printing the file is not refused.",
+	"severity": "CRITICAL",
+}
+
+# The script's own word, by its last path part, so `scripts/...`, `./scripts/...`
+# and an absolute path all match while `scripts/test-er-push-watched-*.sh` and
+# `scripts/er-push-watched.sh:34` do not.
+watched_helper_word(word) if {
+	parts := split(lower(trim(word, "\"'")), "/")
+	parts[count(parts) - 1] == "er-push-watched.sh"
+}
+
+watched_helper_runs if {
+	some text in executed_texts
+	watched_helper_runs_in(commands.command_slot_words(text))
+}
+
+# A newline ends a statement as `;` does, as in `no_whole_check_sh`.
+watched_helper_runs if {
+	some text in executed_texts
+	watched_helper_runs_in(commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; ")))
+}
+
+watched_helper_runs_in(words) if {
+	spans := commands.data_heredoc_spans(words)
+	some index, word in words
+	watched_helper_word(word)
+	not commands.index_inside(spans, index)
+	not commands.operand_shaped(words, index)
+	watched_helper_in_slot(words, index)
+}
+
+# The shared slot test, plus words it does not list that may run the program after
+# them: `time`, `xargs` with its options, and a program named by a variable
+# (`$SHELL x`, `"$CMD x"`), which may be a shell. Kept local so the shared wrapper
+# set, which every command-slot guard reads, is not widened from here.
+watched_helper_in_slot(words, index) if commands.word_in_command_slot(words, index)
+
+watched_helper_in_slot(words, index) if {
+	start := commands.command_slot_start(words, index)
+	count([position |
+		some position, _ in words
+		position >= start
+		position < index
+		not commands.command_slot_wrapper_at(words, position)
+		not watched_helper_extra_wrapper(words[position])
+	]) == 0
+}
+
+watched_helper_extra_wrapper(word) if word in {"time", "xargs"}
+
+watched_helper_extra_wrapper(word) if startswith(trim_left(word, "\"'"), "$")
 
 # Fail closed on a payload this guard cannot read. `bash -c $CMD` hands a shell a
 # program that is not in the command text, so nothing can rule out a push. Gated
