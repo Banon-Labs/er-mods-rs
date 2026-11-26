@@ -30,11 +30,24 @@ signals:
     command: 'cat >/dev/null; printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
     timeout_seconds: 2
   
+  # WHERE EVERY `.cupcake/signals/<name>.sh` ENTRY BELOW RUNS FROM (2026-10-28). Each one takes
+  # `$CLAUDE_PROJECT_DIR` only when that directory holds the script, and otherwise the top of the
+  # checkout cupcake runs in. The two choices mirror the hook's: the global wrapper passes
+  # `--policy-dir $CLAUDE_PROJECT_DIR/.cupcake` when that exists, and otherwise cupcake reads this
+  # rulebook from the cwd. A session started in /home/banon has `CLAUDE_PROJECT_DIR=/home/banon`,
+  # which is set, so the old `${CLAUDE_PROJECT_DIR:-...}` fallback never fired and every entry ran
+  # `/home/banon/.cupcake/signals/<name>.sh`: exit 127, no output. That denied
+  # `er-teardown.py --reason=stamped-a5a9a5f8` and `--reason=push-a5a9a5f8` with no signal answer
+  # quoted, and silently dropped `runtime_evidence_for_head` and `live_er_run`, which fail open.
+  # Neither directory having the script still prints nothing, so each policy keeps the direction it
+  # fails in. `scripts/test-cupcake-policies.py` runs the stamped and push forms under a project
+  # dir with no `.cupcake`.
+  #
   # Is an Elden Ring run live? Read by no_source_edit_during_live_run, which refuses a
   # source edit that the PostToolUse stale-run sentinel would then tear that run down for.
   # The script fails open (prints nothing) so a broken signal leaves editing permissive.
   live_er_run:
-    command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/live_er_run.sh"'
+    command: 'bash "$(d="${CLAUDE_PROJECT_DIR:-}"; [ -f "$d/.cupcake/signals/live_er_run.sh" ] || d="$(git rev-parse --show-toplevel 2>/dev/null)"; printf "%s" "$d")/.cupcake/signals/live_er_run.sh"'
     timeout_seconds: 8
 
   # Does the closing message ask for `authorize <sha>` on a commit the runtime-evidence gate will
@@ -46,7 +59,7 @@ signals:
   # signals/ replaces the discovered one and carries this timeout, and signals run concurrently,
   # so only a turn whose closer names `authorize <sha>` waits for it.
   last_assistant_authorize_without_run_stamp:
-    command: 'bash "$CLAUDE_PROJECT_DIR/.cupcake/signals/last_assistant_authorize_without_run_stamp.sh"'
+    command: 'bash "$(d="${CLAUDE_PROJECT_DIR:-}"; [ -f "$d/.cupcake/signals/last_assistant_authorize_without_run_stamp.sh" ] || d="$(git rev-parse --show-toplevel 2>/dev/null)"; printf "%s" "$d")/.cupcake/signals/last_assistant_authorize_without_run_stamp.sh"'
     timeout_seconds: 30
 
   # The verdict behind ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE. On a push it runs
@@ -57,7 +70,7 @@ signals:
   # `cupcake eval` outside a Claude hook (scripts/test-cupcake-policies.py), where
   # CLAUDE_PROJECT_DIR is unset and the bare spelling names `/.cupcake/...`, a failed signal.
   runtime_evidence_for_head:
-    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/runtime_evidence_for_head.sh"'
+    command: 'bash "$(d="${CLAUDE_PROJECT_DIR:-}"; [ -f "$d/.cupcake/signals/runtime_evidence_for_head.sh" ] || d="$(git rev-parse --show-toplevel 2>/dev/null)"; printf "%s" "$d")/.cupcake/signals/runtime_evidence_for_head.sh"'
     timeout_seconds: 30
 
   # Has the run that is up stamped the commit its branch will push? Read by teardown_must_relaunch,
@@ -68,7 +81,7 @@ signals:
   # script answers nothing, at once, for every command that does not name that form, and caps its
   # evidence run at 22 s.
   stamped_run:
-    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/stamped_run.sh"'
+    command: 'bash "$(d="${CLAUDE_PROJECT_DIR:-}"; [ -f "$d/.cupcake/signals/stamped_run.sh" ] || d="$(git rev-parse --show-toplevel 2>/dev/null)"; printf "%s" "$d")/.cupcake/signals/stamped_run.sh"'
     timeout_seconds: 30
 
   # Is the user's last message an `authorize <sha>` that still has a push waiting on it? Read by
@@ -77,7 +90,7 @@ signals:
   # teardown"). Registered so it gets 8 s rather than a discovered signal's 5: the reader waits up
   # to 3 s for the tool call's own transcript line, as the push guard's reader does.
   push_teardown:
-    command: 'bash "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.cupcake/signals/push_teardown.sh"'
+    command: 'bash "$(d="${CLAUDE_PROJECT_DIR:-}"; [ -f "$d/.cupcake/signals/push_teardown.sh" ] || d="$(git rev-parse --show-toplevel 2>/dev/null)"; printf "%s" "$d")/.cupcake/signals/push_teardown.sh"'
     timeout_seconds: 8
 
   origin_main_oids:

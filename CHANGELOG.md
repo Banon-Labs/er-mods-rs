@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.2.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.1.0...1.2.0) (2026-11-24)
+
+
+### Features
+
+* **frida:** a lab for the GPU artifacting under stacked point lights ([b34cb2b](https://github.com/Banon-Labs/er-mods-rs/commit/b34cb2b1bd4ab8acf561acfbb787dc2ddd483a11))
+* **frida:** a lab for the GPU artifacting under stacked point lights ([#623](https://github.com/Banon-Labs/er-mods-rs/issues/623)) ([26797c3](https://github.com/Banon-Labs/er-mods-rs/commit/26797c3ecc1dcf722d92ef298ad3bf899b3d8b67))
+* **frida:** raise a stack overflow on a deep stack to test the crash log ([ed0ab99](https://github.com/Banon-Labs/er-mods-rs/commit/ed0ab99f9cabacfb24473901bd60273b362d8e99))
+* **frida:** raise a stack overflow on a deep stack to test the crash log ([#626](https://github.com/Banon-Labs/er-mods-rs/issues/626)) ([d8b5015](https://github.com/Banon-Labs/er-mods-rs/commit/d8b5015a8fdb3ad7a062656a046a54834b437d87))
+* **kitty:** open handed-over commands and tails as a split in the agent's tab ([bd7bd1e](https://github.com/Banon-Labs/er-mods-rs/commit/bd7bd1eb7cd8c6b88c53a94a7b09476f46e2abef))
+* **kitty:** open handed-over commands and tails as a split in the agent's tab ([#617](https://github.com/Banon-Labs/er-mods-rs/issues/617)) ([a887846](https://github.com/Banon-Labs/er-mods-rs/commit/a8878469a5ae736cecccafc602ab6c7bbb189632))
+* **mechanics:** pick an attack-spell kit by punish coverage ([ad40f66](https://github.com/Banon-Labs/er-mods-rs/commit/ad40f663a41c8b269e8691564977c0df0bf3c3c6))
+* **mechanics:** pick an attack-spell kit by punish coverage ([#627](https://github.com/Banon-Labs/er-mods-rs/issues/627)) ([428c139](https://github.com/Banon-Labs/er-mods-rs/commit/428c139e5761f9826ad8c7a466b70eaefcab3eee))
+* **mechanics:** rank attack spells by damage per cast on a player ([0a4f5e3](https://github.com/Banon-Labs/er-mods-rs/commit/0a4f5e35b25c9107143f8c88776e5d5c7a0df1d4))
+* **mechanics:** rank attack spells by damage per cast on a player ([#621](https://github.com/Banon-Labs/er-mods-rs/issues/621)) ([74e562e](https://github.com/Banon-Labs/er-mods-rs/commit/74e562e222d228a7922936b360bacb888c848ff7))
+* **planner:** account-wide item sync and equip-load report for planner builds ([8bf1941](https://github.com/Banon-Labs/er-mods-rs/commit/8bf1941e446728848493b446a53d560bc9e73ec0))
+* **planner:** account-wide item sync and equip-load report for planner builds ([#618](https://github.com/Banon-Labs/er-mods-rs/issues/618)) ([6f04578](https://github.com/Banon-Labs/er-mods-rs/commit/6f045783d6762dfb447fa580d0c5e17037cd7859))
+* **planner:** give each armament in a planner build its hardest-hitting affinity ([1f61b0c](https://github.com/Banon-Labs/er-mods-rs/commit/1f61b0c12b096b05dd8d4e0e5aac57aace97a6f5))
+* **planner:** give each armament in a planner build its hardest-hitting affinity ([#620](https://github.com/Banon-Labs/er-mods-rs/issues/620)) ([9024166](https://github.com/Banon-Labs/er-mods-rs/commit/9024166ab37b9d57534f9186334f95f90f7e7293))
+* **re:** list a DLL's key-state reads, and grep a decompile in context ([64b51fb](https://github.com/Banon-Labs/er-mods-rs/commit/64b51fb861b6979c8fdf1ce9a9edd12a555886a7))
+* **re:** list a DLL's key-state reads, and grep a decompile in context ([#624](https://github.com/Banon-Labs/er-mods-rs/issues/624)) ([76f5d2d](https://github.com/Banon-Labs/er-mods-rs/commit/76f5d2d760c84d1d848631212bc1c997b0a9ff83))
+* **save:** put five talismans in a save slot, the hidden fifth included ([b25d8a9](https://github.com/Banon-Labs/er-mods-rs/commit/b25d8a9145e3875277923e6837a09146ed5d4508))
+* **save:** put five talismans in a save slot, the hidden fifth included ([#622](https://github.com/Banon-Labs/er-mods-rs/issues/622)) ([ecfb6ba](https://github.com/Banon-Labs/er-mods-rs/commit/ecfb6ba97567e27aac5656c4f421212e0616da07))
+
+
+### Bug Fixes
+
+* **ci:** keep the sentinel's comm-truncation stand-in alive on ubuntu-26.04 ([04b8543](https://github.com/Banon-Labs/er-mods-rs/commit/04b85431e67e7397d450d8c562bb6cd300a1e663))
+* **ci:** pin cargo-xwin 0.23.1 so a fresh SDK download finds its headers ([b1309fe](https://github.com/Banon-Labs/er-mods-rs/commit/b1309fe1e67f8a7b88e3bcf3af0ccd02297d47af))
+* **ci:** pin the Rust toolchain to 1.99.1 instead of the stable channel ([0255297](https://github.com/Banon-Labs/er-mods-rs/commit/02552971ed2e010f10980669f2cc05c178d28221))
+* **cupcake:** count a reply typed mid-turn as the user's latest prompt ([6cafebd](https://github.com/Banon-Labs/er-mods-rs/commit/6cafebd51b3a81f1b5adc579411aa6c1f1655166))
+* **cupcake:** count a reply typed mid-turn as the user's latest prompt ([#619](https://github.com/Banon-Labs/er-mods-rs/issues/619)) ([19754e8](https://github.com/Banon-Labs/er-mods-rs/commit/19754e87d934cd5f0b995991b569f56e5fa4dba8))
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([a5a9a5f](https://github.com/Banon-Labs/er-mods-rs/commit/a5a9a5f8f0d5d67e0a5359815abab775d6d913a9))
+* **invasion-warp:** learn Seamless's band and availability keys from ersc.dll ([#614](https://github.com/Banon-Labs/er-mods-rs/issues/614)) ([c107d31](https://github.com/Banon-Labs/er-mods-rs/commit/c107d3132230926191a25fb29fc4605d2fdad793))
+* **invasion-warp:** re-pin ersc to Seamless Co-op v2.0.3 ([b296bdf](https://github.com/Banon-Labs/er-mods-rs/commit/b296bdf8b37e4ba1bf15f33b0f586168f148d8d6))
+* **invasion-warp:** re-pin ersc to Seamless Co-op v2.0.3, and unblock CI ([#628](https://github.com/Banon-Labs/er-mods-rs/issues/628)) ([976f189](https://github.com/Banon-Labs/er-mods-rs/commit/976f189b9f498f1d6861ddc9959cb4f5fd96ce04))
+* **tooling:** stamp-only runs, Steam sign-in preflight, and four guard false positives ([c9161f5](https://github.com/Banon-Labs/er-mods-rs/commit/c9161f57d0294c2147dff144fe0337a9b2ef7faf))
+* **tooling:** stamp-only runs, Steam sign-in preflight, and four guard false positives ([#616](https://github.com/Banon-Labs/er-mods-rs/issues/616)) ([91dc218](https://github.com/Banon-Labs/er-mods-rs/commit/91dc218e43e2feaf25b86e73a5d6ed64d59edb91))
+
 ## [1.1.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.0.0...1.1.0) (2026-10-28)
 
 

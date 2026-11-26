@@ -46,7 +46,7 @@ fi
 # shellcheck source=scripts/steam-running.sh
 # shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/steam-running.sh"
-steam_running || fail "Steam is not running. Start Steam (interactive login) first."
+steam_running || fail "Steam is not running. Start Steam first."
 # Freshness, not existence. This loop asserted only that three files exist, and the profile
 # below points me3 straight at target/.../release -- so the badge oracle could be scored against
 # a badge DLL from last week and report "0 DRAWN" for code that has since been fixed. The
