@@ -71,6 +71,7 @@ from __future__ import annotations
 import ctypes
 import fcntl
 import json
+import mmap
 import os
 import re
 import select
@@ -78,6 +79,7 @@ import shlex
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +100,9 @@ SHELL_META = set(";&|<>()`$\n\r\\*?[]{}~!#")
 # when cupcake gives up is never left to record a spend for a push cupcake has already denied. A 3 s
 # wait leaves 1.5 s of that 4.5 s for the rest. The whole decision on the 18 MB transcript that was
 # refused takes 0.25-0.3 s, most of it the first whole read, which comes before the wait; once the
-# line lands there is one read of the appended bytes, the chain walk and the spend.
+# line lands there is one read of the appended bytes, the chain walk and the spend. (On the 184 MB
+# transcript of 2026-11-26 the decision took 0.24 s idle, against 1.40 s when every line was
+# parsed; `TranscriptIndex` says what is read.)
 #
 # Against the lag it has to cover: in a subagent transcript every tool_use line landed 0.10-0.11 s
 # after its own `timestamp` (14 calls), while in the busy main session that was refused it had not
@@ -215,6 +219,347 @@ class Transcript:
     def entries(self) -> list[dict]:
         last = parse_line(self.tail)
         return self.complete + ([last] if last is not None else [])
+
+
+# --- reading a large transcript without parsing all of it -------------------------------------
+#
+# The readers used to parse every line of the transcript, and that is what timed out: on
+# 2026-11-26 the main session's transcript was 183,567,159 bytes, the lint guard refused twice
+# with "the authorization reader gave no answer" under a load average of 25, and the same reader
+# measured on that file at load 5.7 took 1.40 s of wall at 99% CPU, 0.90 s of it `json.loads` over
+# 73,403 lines and 0.19 s splitting them. Byte scans of the same file cost 0.02-0.12 s each.
+#
+# So the file is read (or mapped) once as bytes, and only the lines the decision needs are parsed:
+# the lines that can hold the pending tool call, the lines on the chain, and the newest few. Three
+# byte scans cover the whole file: `\r` (0.03 s on that file), the literal tool call id (0.02 s)
+# and `UUID_KEY_RE` (0.09 s). The scan for `\u` escapes (0.07-0.15 s over the whole file) covers
+# only the tail that holds the chain. Every check the whole parse made still holds against an
+# appended line, because:
+#
+# * Claude Code writes a uuid and a tool call id literally: they are ASCII letters, digits, `-`
+#   and `_`, which JSON never escapes. The only other spelling that decodes to one of them uses
+#   `\uXXXX`, which only a line holding the two bytes `\u` can carry (741 of the 73,403 lines
+#   measured). A short escape such as `\/` or `\"` decodes to none of those characters.
+# * A `"uuid"` key match in a line that is valid JSON is always a real key, because a quote
+#   inside a string is always escaped. So every line Claude Code wrote with uuid X is among the
+#   `UUID_KEY_RE` matches with value X (measured on the same file: 40,922 matches, 40,922 entries
+#   with a uuid, no line with two), and a copy anyone else wrote is either a match too or a `\u`
+#   line.
+# * A copy of an entry, or of the pending tool call, can only be appended after the original:
+#   both ids are random, and nobody knows one before Claude Code has written it. So a copy of an
+#   entry the walk used is either a literal match (seen wherever it is) or a `\u` line after that
+#   entry, and the `\u` scan covers everything from the oldest entry the walk used to the end
+#   (`TranscriptIndex.covers`). A uuid with two owners refuses, as before. What the narrower scan
+#   no longer sees is a `\u`-spelled line older than every entry the walk used. It cannot be a
+#   copy of one of them (a copy comes after its original), so it changes no walk; the one thing
+#   it could have done is stand in for a parent Claude Code has not written yet, which a whole
+#   parse would have followed and this walk stops at instead.
+UUID_KEY_RE = re.compile(rb'"uuid"[ \t]*:[ \t]*"([^"\\\n]*(?:\\.[^"\\\n]*)*)"')
+ESCAPE = b"\\u"
+TOOL_USE_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+REPEATED_UUID = "the transcript repeats an entry uuid, so it cannot be trusted"
+
+# How much of the transcript's end the `\u` scan covers before any walk: the chain the readers
+# walk is the conversation since the user's last message, and in the 183 MB transcript of
+# 2026-11-26 that was the last 174 entries. A walk that reaches further back extends it.
+TAIL_BYTES = 16 * 1024 * 1024
+
+
+def map_file(path: str):
+    """The file's bytes, mapped rather than copied (an empty file is `b""`).
+
+    For a reader that looks once. A mapping keeps the file open until it is closed, so a reader
+    that waits for inotify close events on its own reads (`prompt_and_chain`) reads instead.
+    """
+    with open(path, "rb") as fh:
+        try:
+            return mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        except ValueError:  # an empty file cannot be mapped
+            return b""
+
+
+def plain_tool_use_id(tool_use_id: str) -> bytes:
+    if not TOOL_USE_ID_RE.fullmatch(tool_use_id):
+        raise Refused("the event's tool call id is not one Claude Code writes")
+    return tool_use_id.encode("ascii")
+
+
+def _json_string(raw: bytes) -> str | None:
+    text = raw.decode("utf-8", errors="replace")
+    if "\\" not in text:
+        return text
+    try:
+        value = json.loads('"' + text + '"')
+    except ValueError:
+        return None  # only an invalid line holds an undecodable string, and it is no entry
+    return value if isinstance(value, str) else None
+
+
+class TranscriptIndex:
+    """One snapshot of the transcript that parses a line only when a question needs it.
+
+    The entries it gives are the ones `Transcript.entries()` gives for the same bytes: a line is a
+    run between `\\n`s of the normalized bytes, and the last one counts when it parses. The `\\u`
+    lines are known from `self.region` to the end; a caller calls `check_unique_uuids`, takes the
+    holders, walks with `get`, then asks `covers(chain)`, and walks again when that says so (the
+    comment above `UUID_KEY_RE` says why that is enough).
+    """
+
+    def __init__(self, data, tail_bytes: int = TAIL_BYTES, carriage: bool | None = None,
+                 plain_hits: dict[str, list[int]] | None = None) -> None:
+        """`carriage` and `plain_hits` pass on what a `Snapshot` already knows about `data`:
+        whether it holds a `\\r`, and where each tool call id it looked for occurs."""
+        if carriage is None:
+            carriage = data.find(b"\r") >= 0
+        if carriage:
+            data = bytes(data).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            plain_hits = None  # positions in the bytes before the line endings changed
+        self.plain_hits = plain_hits or {}
+        self.data = data
+        self.size = len(data)
+        self.parsed: dict[int, dict | None] = {}
+        self.start_of: dict[int, int] = {}  # id(entry) -> its line's start
+        self.region = self.size
+        self.escaped: list[int] = []
+        self.escaped_owners: dict[str, list[int]] = {}
+        self.asked: dict[str, int | None] = {}  # uuid `get` was asked for -> the line it gave
+        self.asked_tools: dict[str, set[int]] = {}  # tool call id -> the lines `holders` read
+        self.stale = False  # `extend` found a line one of those lookups did not see
+        self.keys: set[str] | None = None  # the value of every plain `"uuid"` key in the file
+        self.repeated: set[str] = set()  # values found under more than one such key
+        self.spelled: dict[str, list[bytes]] = {}  # raw spellings of values that are not plain
+        self.extend(max(0, self.size - tail_bytes))
+
+    def bounds(self, pos: int) -> tuple[int, int]:
+        start = self.data.rfind(b"\n", 0, pos) + 1
+        end = self.data.find(b"\n", pos)
+        return start, self.size if end < 0 else end
+
+    def entry(self, start: int) -> dict | None:
+        if start not in self.parsed:
+            _, end = self.bounds(start)
+            entry = parse_line(self.data[start:end])
+            self.parsed[start] = entry
+            if entry is not None:
+                self.start_of[id(entry)] = start
+        return self.parsed[start]
+
+    def extend(self, pos: int) -> None:
+        """Scan for `\\u` lines from the line holding `pos` up to where the scan already reached."""
+        start = self.bounds(pos)[0] if pos < self.size else self.size
+        if start >= self.region:
+            return
+        found, at = [], start
+        while (i := self.data.find(ESCAPE, at, self.region)) >= 0:
+            line, end = self.bounds(i)
+            found.append(line)
+            at = end + 1
+        for line in found:
+            e = self.entry(line)
+            if e is None:
+                continue
+            uid = e.get("uuid")
+            if isinstance(uid, str):
+                self.escaped_owners.setdefault(uid, []).append(line)
+                if uid in self.asked and self.asked[uid] != line:
+                    self.stale = True
+            if any(line not in seen and holds_tool_use(e, t)
+                   for t, seen in self.asked_tools.items()):
+                self.stale = True
+        self.escaped = found + self.escaped
+        self.region = start
+
+    def covers(self, chain: list[dict]) -> bool:
+        """Whether the answer walked to `chain` stands.
+
+        True when every entry of `chain` lies in the scanned region. Otherwise the region is
+        extended back to the oldest of them; True again when that found no line any lookup made
+        so far would have used (the uuid check is run once more over what it did find), and False
+        when it found one, so that the caller walks again.
+        """
+        oldest = min(self.start_of[id(e)] for e in chain)
+        if oldest >= self.region:
+            return True
+        self.stale = False
+        self.extend(oldest)
+        if self.stale:
+            return False
+        self.check_unique_uuids()
+        return True
+
+    def holders(self, tool_use_id: str) -> list[dict]:
+        """Every entry holding that tool call, in file order."""
+        needle, starts = plain_tool_use_id(tool_use_id), set(self.escaped)
+        if tool_use_id in self.plain_hits:
+            starts.update(self.bounds(i)[0] for i in self.plain_hits[tool_use_id])
+        else:
+            pos = 0
+            while (i := self.data.find(needle, pos)) >= 0:
+                start, end = self.bounds(i)
+                starts.add(start)
+                pos = end + 1
+        self.asked_tools[tool_use_id] = starts
+        return [e for s in sorted(starts)
+                if (e := self.entry(s)) is not None and holds_tool_use(e, tool_use_id)]
+
+    def _index_keys(self) -> set[str]:
+        """Every plain `"uuid"` key's value, from one C-level scan (no per-match Python)."""
+        if self.keys is None:
+            raws = UUID_KEY_RE.findall(self.data)
+            joined = b"".join(raws)
+            if joined.isascii() and b"\\" not in joined:
+                values = [r.decode("ascii") for r in raws]
+            else:
+                values = []
+                for raw in raws:
+                    value = _json_string(raw)
+                    if value is None:
+                        continue
+                    values.append(value)
+                    if raw != value.encode("utf-8", "surrogatepass"):
+                        self.spelled.setdefault(value, []).append(raw)
+            self.keys = set(values)
+            if len(self.keys) != len(values):
+                self.repeated = {v for v, n in Counter(values).items() if n > 1}
+        return self.keys
+
+    def _owns(self, start: int, uid: str) -> bool:
+        e = self.entry(start)
+        return e is not None and e.get("uuid") == uid
+
+    def _needles(self, uid: str) -> list[bytes]:
+        try:
+            plain = [uid.encode("utf-8")]
+        except UnicodeEncodeError:
+            plain = []
+        return plain + [r for r in dict.fromkeys(self.spelled.get(uid, ())) if r not in plain]
+
+    def _plain_owner(self, uid: str, near: int, skip: int | None = None) -> int | None:
+        """A line other than `skip` whose entry has uuid `uid`, looked for among the lines that
+        spell it, back from `near` and then forward from it. None when there is none.
+
+        Claude Code writes a parent before its child (no entry of the 2026-11-26 file came before
+        its parent, and the furthest parent was 355,302 bytes back), so from the child's line
+        this reads a few lines, not the file.
+        """
+        for needle in self._needles(uid):
+            end = near
+            while (i := self.data.rfind(needle, 0, end)) >= 0:
+                start = self.bounds(i)[0]
+                if start != skip and self._owns(start, uid):
+                    return start
+                end = start
+            pos = near
+            while (i := self.data.find(needle, pos)) >= 0:
+                start, stop = self.bounds(i)
+                if start != skip and self._owns(start, uid):
+                    return start
+                pos = stop + 1
+        return None
+
+    def _owners_of(self, uids: set[str]) -> dict[str, set[int]]:
+        """Every owner line of each of `uids`: one more scan, made only when a key repeats."""
+        out = {u: set(self.escaped_owners.get(u, ())) for u in uids}
+        for m in UUID_KEY_RE.finditer(self.data):
+            value = _json_string(m.group(1))
+            if value in out:
+                out[value].add(self.bounds(m.start())[0])
+        return {u: {s for s in starts if self._owns(s, u)} for u, starts in out.items()}
+
+    def check_unique_uuids(self) -> None:
+        """Refuse a transcript in which an entry uuid occurs twice."""
+        keys = self._index_keys()
+        if self.repeated and any(len(o) > 1 for o in self._owners_of(self.repeated).values()):
+            raise Refused(REPEATED_UUID)
+        for uid, lines in self.escaped_owners.items():
+            if len(lines) > 1:
+                raise Refused(REPEATED_UUID)
+            if uid not in keys or uid in self.repeated:
+                continue
+            # The file spells this uuid's key plainly exactly once. When that is not in this line,
+            # the line holding it may be a second owner.
+            line = lines[0]
+            text = self.data[line:self.bounds(line)[1]]
+            here = {_json_string(r) for r in UUID_KEY_RE.findall(text)}
+            if uid not in here and self._plain_owner(uid, line, skip=line) is not None:
+                raise Refused(REPEATED_UUID)
+
+    def get(self, uid: object, child: dict | None = None) -> dict | None:
+        """The entry with that uuid, looked for near `child`'s line; `check_unique_uuids` first."""
+        if not isinstance(uid, str):
+            return None
+        if uid in self.escaped_owners:
+            start = self.escaped_owners[uid][0]
+        elif uid in self._index_keys():
+            near = self.start_of.get(id(child), self.size) if child is not None else self.size
+            start = self._plain_owner(uid, near)
+        else:
+            start = None
+        self.asked[uid] = start
+        return self.entry(start) if start is not None else None
+
+    def newest(self, count: int) -> list[dict]:
+        """The newest `count` entries with a uuid that are not on a sidechain, newest first."""
+        out, end = [], len(self.data)
+        while len(out) < count:
+            start = self.data.rfind(b"\n", 0, end) + 1
+            e = self.entry(start)
+            if e is not None and isinstance(e.get("uuid"), str) and not e.get("isSidechain"):
+                out.append(e)
+            if start == 0:
+                break
+            end = start - 1
+        return out
+
+
+class Snapshot:
+    """The transcript's bytes, kept current by reading only what was appended since last time.
+
+    One `refresh` is one open and close of the file, as `Transcript.refresh` was. A file that
+    shrank or was replaced is read again from its start.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.identity: tuple[int, int] | None = None
+        self.data = b""
+        self.carriage = False
+        self.scanned = 0
+        self.hits: list[int] = []
+
+    def refresh(self) -> None:
+        with open(self.path, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            identity = (st.st_dev, st.st_ino)
+            if identity != self.identity or st.st_size < len(self.data):
+                self.identity, self.data, self.carriage = identity, b"", False
+                self.scanned, self.hits = 0, []
+            fh.seek(len(self.data))
+            more = fh.read()
+        if more:
+            self.data += more
+            self.carriage = self.carriage or b"\r" in more
+
+    def line(self, pos: int) -> bytes:
+        """The line holding byte `pos`, with `\\r` ending a line too when the file has one."""
+        ends = (b"\n", b"\r") if self.carriage else (b"\n",)
+        start = max(self.data.rfind(e, 0, pos) for e in ends) + 1
+        stops = [i for i in (self.data.find(e, pos) for e in ends) if i >= 0]
+        return self.data[start:min(stops) if stops else len(self.data)]
+
+    def holds(self, tool_use_id: str) -> bool:
+        """Whether a line holding that tool call, spelled plainly, is on disk now."""
+        needle = plain_tool_use_id(tool_use_id)
+        pos = max(0, self.scanned - len(needle) + 1)
+        while (i := self.data.find(needle, pos)) >= 0:
+            self.hits.append(i)
+            pos = i + 1
+        self.scanned = len(self.data)
+        for i in self.hits:
+            entry = parse_line(self.line(i))
+            if entry is not None and holds_tool_use(entry, tool_use_id):
+                return True
+        return False
 
 
 class FileEvents:
@@ -354,35 +699,41 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
     # write, until `deadline`. Without inotify there is one read and no wait, as before. Waiting
     # changes nothing else: the chain is still walked from the line Claude Code wrote, and a line
     # that never arrives still denies.
+    #
+    # The wait looks for the id spelled plainly, which is how Claude Code writes it; it only
+    # decides when to stop waiting. Whatever the wait saw, the holders are then counted over the
+    # whole snapshot, every spelling included (`TranscriptIndex.holders`).
+    plain_tool_use_id(tool_use_id)
     try:
         writes: FileEvents | None = FileEvents(path, IN_MODIFY)
     except OSError:
         writes = None
     try:
-        transcript = Transcript(path)
-        transcript.refresh()
-        entries = transcript.entries()
-        holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
-        while (not holders and writes is not None and time.monotonic() < deadline
-               and writes.wait(deadline - time.monotonic())):
-            transcript.refresh()
-            entries = transcript.entries()
-            holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
+        snapshot = Snapshot(path)
+        snapshot.refresh()
+        while (not snapshot.holds(tool_use_id) and writes is not None
+               and time.monotonic() < deadline and writes.wait(deadline - time.monotonic())):
+            snapshot.refresh()
     finally:
         if writes is not None:
             writes.close()
+    index = TranscriptIndex(snapshot.data, carriage=snapshot.carriage,
+                            plain_hits={tool_use_id: snapshot.hits})
+    while True:
+        found = chain_in(index, tool_use_id)
+        if index.covers(found[2]):
+            return found
+
+
+def chain_in(by_uuid: TranscriptIndex, tool_use_id: str) -> tuple[str, str, list[dict]]:
+    """`prompt_and_chain`'s answer from one snapshot, read as far as the index has scanned."""
+    holders = by_uuid.holders(tool_use_id)
     # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
     # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
     # were taken as the start it would carry its own forged parent onto the chain.
     if len(holders) > 1:
         raise Refused("the transcript holds this tool call more than once, so it cannot be trusted")
-    by_uuid: dict[str, dict] = {}
-    for e in entries:
-        uid = e.get("uuid")
-        if isinstance(uid, str):
-            if uid in by_uuid:
-                raise Refused("the transcript repeats an entry uuid, so it cannot be trusted")
-            by_uuid[uid] = e
+    by_uuid.check_unique_uuids()
     if holders:
         found = walk_back(holders[0], by_uuid)
         if found is None:
@@ -395,9 +746,7 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
     # entry, so the chain is walked back from there -- the same fallback
     # `cupcake_commit_authorization.locate` takes. An entry whose parent is not written yet is
     # stepped over, up to `HEAD_CANDIDATES` of them.
-    heads = [e for e in reversed(entries)
-             if isinstance(e.get("uuid"), str) and not e.get("isSidechain")]
-    for head in heads[:HEAD_CANDIDATES]:
+    for head in by_uuid.newest(HEAD_CANDIDATES):
         found = walk_back(head, by_uuid)
         if found is not None:
             return found
@@ -412,7 +761,7 @@ NO_PROMPT = "no message typed by the user precedes this tool call"
 HEAD_CANDIDATES = 16
 
 
-def walk_back(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] | None:
+def walk_back(start: dict, by_uuid) -> tuple[str, str, list[dict]] | None:
     """(uuid, text, chain) of the first genuine prompt back from `start`, the chain newest first.
 
     None when the walk reaches a parent the transcript does not hold yet. Raises Refused at a root,
@@ -433,7 +782,7 @@ def walk_back(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dic
         parent = node.get("parentUuid")
         if not isinstance(parent, str):
             raise Refused(NO_PROMPT)
-        node = by_uuid.get(parent)
+        node = by_uuid.get(parent, node)
         if node is None:
             return None
 

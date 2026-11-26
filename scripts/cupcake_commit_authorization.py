@@ -277,7 +277,7 @@ def message_text(entry: dict) -> str | None:
 NO_PROMPT = "no message typed by the user precedes this tool call"
 
 
-def walk(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] | None:
+def walk(start: dict, by_uuid) -> tuple[str, str, list[dict]] | None:
     """(uuid, text, chain) of the first genuine prompt back from `start`, the chain newest first.
 
     None when the walk reaches a parent the transcript does not hold yet. Raises Refused at a root
@@ -298,24 +298,30 @@ def walk(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] |
         parent = node.get("parentUuid")
         if not isinstance(parent, str):
             raise Refused(NO_PROMPT)
-        node = by_uuid.get(parent)
+        node = by_uuid.get(parent, node)
         if node is None:
             return None
 
 
 def locate(path: str, tool_use_id: str) -> tuple[str, str, list[dict]]:
-    """(uuid, text, chain) of the last prompt the user typed before this tool call."""
-    transcript = shared.Transcript(path)
-    transcript.refresh()
-    entries = transcript.entries()
-    by_uuid: dict[str, dict] = {}
-    for e in entries:
-        uid = e.get("uuid")
-        if isinstance(uid, str):
-            if uid in by_uuid:
-                raise Refused("the transcript repeats an entry uuid, so it cannot be trusted")
-            by_uuid[uid] = e
-    holders = [e for e in entries if shared.holds_tool_use(e, tool_use_id)]
+    """(uuid, text, chain) of the last prompt the user typed before this tool call.
+
+    The file is mapped once and only the lines the answer needs are parsed
+    (`cupcake_push_authorization.TranscriptIndex`): parsing all of a 183 MB transcript is what ran
+    past the signal's 4.5 s under load on 2026-11-26. The walk is repeated when the index had to
+    scan further back to cover the chain it found (`TranscriptIndex.covers`).
+    """
+    index = shared.TranscriptIndex(shared.map_file(path))
+    while True:
+        found = chain_in(index, tool_use_id)
+        if index.covers(found[2]):
+            return found
+
+
+def chain_in(by_uuid, tool_use_id: str) -> tuple[str, str, list[dict]]:
+    """`locate`'s answer from the index, read as far as it has scanned."""
+    by_uuid.check_unique_uuids()
+    holders = by_uuid.holders(tool_use_id)
     if len(holders) > 1:
         raise Refused("the transcript holds this tool call more than once, so it cannot be trusted")
     if holders:
@@ -323,9 +329,7 @@ def locate(path: str, tool_use_id: str) -> tuple[str, str, list[dict]]:
         if found is None:
             raise Refused(NO_PROMPT)
         return found
-    heads = [e for e in reversed(entries)
-             if isinstance(e.get("uuid"), str) and not e.get("isSidechain")]
-    for head in heads[:HEAD_CANDIDATES]:
+    for head in by_uuid.newest(HEAD_CANDIDATES):
         found = walk(head, by_uuid)
         if found is not None:
             return found
