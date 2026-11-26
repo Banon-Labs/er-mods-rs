@@ -3,8 +3,8 @@
 wakes the agent on when one of their stages goes red.
 
 The user's words (2026-11-25), verbatim: "It would be wise, and prudent, to not wait until all
-checks pass before addressing any one of the failing reds in each future case >>> stage policy
-RED (exit 1)   1702s   /run/user/1000/er-mods-rs-pre-push/6abca54e80d19a080c8579b188175fa73d210e01/policy.log"
+checks pass before addressing any one of the failing reds in each future case
+`>>> stage policy RED (exit 1)   1702s   /run/user/1000/er-mods-rs-pre-push/6abca54e80d19a080c8579b188175fa73d210e01/policy.log`"
 
 What happened: the main session ran `git -C /home/banon/projects/er-mods-rs push -u origin
 chore/no-tracker-refs` in the background and opened a kitty split on its output with
@@ -25,7 +25,7 @@ The shape the report names (`monitor_command`) is the one the main session armed
 correction, with the end of the stream tied to the push when its pid is known:
 
     tail -n +1 [--pid=<git push pid>] -F <output> \\
-        | grep --line-buffered -E 'RED|FAIL|error|REFUSED|rejected|exited with code' \\
+        | grep --line-buffered -E <MONITOR_FILTER> \\
         | python3 <repo>/scripts/monitor-throttle.py 10
 
 `tail -n +1` replays a red that landed before the Monitor was armed. `--pid` ends `tail`, and so
@@ -131,7 +131,7 @@ def watch_targets(task: scan.RunningTask) -> list[str]:
 
 
 def watches(monitor_cmd: str, task: scan.RunningTask) -> bool:
-    """True when the Monitor command follows the suite's output and its filter passes RED."""
+    """True when the Monitor command follows the suite's output and its filter passes `RED`."""
     if not WATCH_WORD_RE.search(monitor_cmd or ""):
         return False
     return any(t and t in monitor_cmd for t in watch_targets(task))

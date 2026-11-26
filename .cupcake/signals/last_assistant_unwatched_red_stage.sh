@@ -8,8 +8,8 @@
 # (fail-open).
 #
 # User words 2026-11-25: "It would be wise, and prudent, to not wait until all checks pass before
-# addressing any one of the failing reds in each future case >>> stage policy RED (exit 1) 1702s
-# /run/user/1000/er-mods-rs-pre-push/6abca54e80d19a080c8579b188175fa73d210e01/policy.log". The push
+# addressing any one of the failing reds in each future case
+# `>>> stage policy RED (exit 1) 1702s /run/user/1000/er-mods-rs-pre-push/6abca54e80d19a080c8579b188175fa73d210e01/policy.log`". The push
 # had a kitty split tailing it and nothing that woke the agent, so the red waited for the push's
 # completion notification, after every other stage.
 #
