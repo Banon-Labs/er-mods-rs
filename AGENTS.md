@@ -466,8 +466,13 @@ absorption; the same day, of "The tag is 1.2.0 with no leading v" tacked onto a 
 this information for me? Or for you in future releases?"). A statement is not a question: answer
 it only as far as it needs an answer, and add no explanation, background or side fact the user did
 not request. A fact the agent tripped over while working (a lookup that missed, a format it had to
-discover) belongs in the repo or in a memory if a future agent needs it, never in the reply. No
-guard carries this: whether a sentence was asked for is a judgement a signal script cannot make.
+discover) belongs in the repo or in a memory if a future agent needs it, never in the reply. A
+pause while a check suite runs is the same (user, 2026-11-25: "Is there a reason why you're
+reporting on which number passed? Is nine relevant?", of "Nine of the pre-push stages for #630
+have passed"): a tally of what passed so far changes nothing the user would do. The pause names the
+task id it is blocked on and, if one exists, the red stage and its fix; nothing else. No guard
+carries this: whether a sentence was asked for is a judgement a signal script cannot make, and a
+count of passed stages is also what an evidence line rightly carries.
 
 A reply to a what, how, why or which question opens with the answer, not with something that did
 not happen. The Stop guard `.cupcake/policies/claude/no_negated_opener.rego`
