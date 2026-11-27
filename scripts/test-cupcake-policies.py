@@ -2922,6 +2922,28 @@ def main() -> int:
             'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
             True,
         ),
+        # `git_block_any_push` on the watched-push helper, live for the same reason. It refused the
+        # helper on the substring alone until 2026-11-24, so a read-only printer handed
+        # `scripts/er-push-watched.sh:34` and a `sed -n` print of the helper's test script were
+        # both refused as pushes. A run, chained or behind an assignment, still denies. The
+        # printer here is a committed script because `bash_no_python_file_write` refuses a python
+        # file it cannot read, which is a different guard's verdict.
+        PolicyCase(
+            "any-push-guard-denies-the-watched-helper-run",
+            "git fetch origin && FOO=1 bash scripts/er-push-watched.sh feat/x",
+            False,
+            "pushes, so the agent does not run it",
+        ),
+        PolicyCase(
+            "allow-printer-handed-the-watched-helper-path",
+            "python3 scripts/dll-code-fingerprint.py scripts/er-push-watched.sh:34",
+            True,
+        ),
+        PolicyCase(
+            "allow-sed-print-of-the-watched-helper-test",
+            "sed -n '20,60p' scripts/test-er-push-watched-ref-carries-work.sh",
+            True,
+        ),
         # The script is `check.sh` as a whole path component (2026-11-11): the rulebook's own
         # compile signal was refused as a run of the suite for ending in the same letters, while
         # `env -C` into `scripts/` ran the suite past the guard because the directory was read as
