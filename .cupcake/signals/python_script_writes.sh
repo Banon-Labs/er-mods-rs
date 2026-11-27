@@ -10,7 +10,8 @@
 #   `READONLY <operand>`        nothing in the file writes
 #   `WRITES <operand> <why>`    something in it writes, or could
 #   `UNKNOWN <operand> <why>`   the file could not be pinned down or read
-#   `GUARDTEST <operand>`       a test suite committed in one of the user's guard repos
+#   `GUARDTEST <operand>`       a test suite committed in one of the user's guard repos, or in
+#                               a `git worktree add` checkout of one (2026-11-26)
 #   `EXEC-<verdict>\t<word>\t<path>\t<why>`   a python program run by name or path (2026-11-16)
 #
 # The judgement and its selftest live in `scripts/cupcake_python_script_writes.py`; read its

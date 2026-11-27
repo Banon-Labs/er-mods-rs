@@ -3282,6 +3282,30 @@ def main() -> int:
             f"| gawk -f {REPO_ROOT}/target/stamp_live.awk; }} > wrap.stamped.log",
             True,
         ),
+        # A `git` that only prints beside a read-only script (2026-11-26:
+        # `cd <guard worktree> && git rev-parse HEAD && python3 tests/<x>.py` was refused,
+        # the signal marking any `git`). One that can run another program keeps the refusal. (A `git checkout` of the
+        # fixture is refused earlier by the guard-layer policy, since the fixture is under
+        # `.cupcake/`, so it would not reach this one.)
+        PolicyCase(
+            "allow-read-only-script-beside-git-rev-parse",
+            f"cd {REPO_ROOT} && git rev-parse HEAD && timeout 25 python3 {READ_ONLY_PY_FIXTURE} "
+            "2>&1 | tail -3",
+            True,
+        ),
+        # `git status` runs `core.fsmonitor` by config alone; only `rev-parse` is exempt.
+        PolicyCase(
+            "deny-read-only-script-beside-git-status",
+            f"git status && python3 {READ_ONLY_PY_FIXTURE}",
+            False,
+            "python file write from Bash",
+        ),
+        PolicyCase(
+            "deny-read-only-script-beside-git-with-a-pager",
+            f"git -c core.pager=cat log -1; python3 {READ_ONLY_PY_FIXTURE}",
+            False,
+            "python file write from Bash",
+        ),
         PolicyCase(
             "deny-read-only-script-beside-sed-in-place",
             f"sed -i 's/a/b/' {READ_ONLY_PY_FIXTURE}; python3 {READ_ONLY_PY_FIXTURE}",

@@ -532,6 +532,13 @@ vetted_read_only(path) if unquoted(path) in vetted_read_only_operands
 # (`~/.config/cupcake/tests`; not a subdirectory, where fixtures live) AND that path exists in
 # the repo's HEAD commit. A file dropped there and never committed is scanned like any other
 # script, so this opens no directory to new programs. Fail-closed the same way as READONLY: only that exact line admits the operand.
+#
+# Since 2026-11-26 the same `tests/` of a `git worktree add` checkout of a guard repo counts too,
+# checked against that checkout's HEAD. Refused that day: `cd
+# /home/banon/.config/cupcake-wt-no-cleanup-handoff && git rev-parse HEAD && timeout 25 python3
+# tests/check_cleanup_handoff.py`, a suite committed on the worktree's branch. The signal decides
+# which checkouts are the guard repo's (they share its `git rev-parse --git-common-dir`); this
+# policy still only matches the operand on the line.
 # ---------------------------------------------------------------------------
 
 guard_test_operands contains operand if {
@@ -612,7 +619,8 @@ exec_block_reason(verdict) := concat("", [
 	"It gets the same reading as `python3 <file>.py`, because running a python file by its name ",
 	"is the same act. Admitted: a committed script under this repo's `scripts/` or a ",
 	"`.worktrees/<name>/scripts/` checkout, a test suite committed in a guard repo's tests/ ",
-	"directory (`~/.config/cupcake/tests`), and a program the ",
+	"directory (`~/.config/cupcake/tests`, or `tests/` of a git worktree of that repo, in that ",
+	"checkout's HEAD), and a program the ",
 	"`python_script_writes` signal reads and finds no write in. To change a file use the Edit or ",
 	"Write tool. To tail a background task from this repo, use the committed helper, which the ",
 	"global background-task Stop guard suggests here: `python3 ",
@@ -622,7 +630,7 @@ exec_block_reason(verdict) := concat("", [
 
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"
 
-block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py` -- and so is the same file in a local checkout, `.worktrees/<name>/scripts/<file>.py`, written out or reached through a `$VAR` assigned a literal by its own statement earlier in the same command. A test suite committed in a guard repo's tests directory (`~/.config/cupcake/tests/<name>.py`) is allowed as well; the `python_script_writes` signal checks the path is in that repo's HEAD. A python program run by its name or path (`kitty-tail-bg`, `./x`, `python3 ~/.local/bin/x`) gets the same reading as a script file. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
+block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py` -- and so is the same file in a local checkout, `.worktrees/<name>/scripts/<file>.py`, written out or reached through a `$VAR` assigned a literal by its own statement earlier in the same command. A test suite committed in a guard repo's tests directory (`~/.config/cupcake/tests/<name>.py`, or `tests/<name>.py` in a `git worktree add` checkout of that repo) is allowed as well; the `python_script_writes` signal checks the path is in that checkout's HEAD. A python program run by its name or path (`kitty-tail-bg`, `./x`, `python3 ~/.local/bin/x`) gets the same reading as a script file. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"

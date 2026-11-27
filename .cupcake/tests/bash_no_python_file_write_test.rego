@@ -601,6 +601,31 @@ test_guard_test_suite_without_a_guardtest_verdict_is_denied if {
 	count(bash_no_python_file_write.deny) == 1 with input as bash(guard_suite_cmd)
 }
 
+# The same suite committed in a `git worktree add` checkout of the guard repo (2026-11-26). The
+# signal says which checkouts count (`--selftest` checks a real worktree, a worktree of another
+# repo and an uncommitted file); the policy admits the operand its line names, relative or not.
+guard_wt := "/home/banon/.config/cupcake-wt-no-cleanup-handoff"
+
+test_worktree_guard_test_suite_is_allowed if {
+	rel_cmd := concat("", ["cd ", guard_wt, " && git rev-parse HEAD && timeout 25 python3 tests/check_cleanup_handoff.py 2>&1 | tail -3"])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(rel_cmd, "GUARDTEST tests/check_cleanup_handoff.py\n")
+	abs_suite := concat("", [guard_wt, "/tests/check_cleanup_handoff.py"])
+	abs_cmd := concat("", ["python3 ", abs_suite])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(abs_cmd, concat("", ["GUARDTEST ", abs_suite, "\n"]))
+}
+
+test_worktree_guard_test_suite_without_a_guardtest_verdict_is_denied if {
+	rel_cmd := concat("", ["cd ", guard_wt, " && timeout 25 python3 tests/check_cleanup_handoff.py"])
+	every signal in [
+		"",
+		"WRITES tests/check_cleanup_handoff.py imports shutil",
+		"UNKNOWN tests/check_cleanup_handoff.py a write-capable tool in the same command",
+		"GUARDTEST tests/other.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(rel_cmd, signal)
+	}
+}
+
 # The admission is for that operand: an inline write, or a second unvetted script, beside it
 # keeps the refusal.
 test_guard_test_suite_beside_other_writes_is_denied if {
