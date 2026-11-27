@@ -257,6 +257,47 @@ test_watched_helper_mentions_are_allowed if {
 	not watched_denied("rg -n 'er-push-watched' scripts/")
 }
 
+# --- the review of 2026-11-26: runs the wrapper list missed -------------------------
+#
+# Each of these ran the helper and was allowed while the guard listed the wrappers a
+# run may hide behind. The guard now lists the readers instead.
+
+test_watched_helper_word_spellings_deny if {
+	watched_denied("bash scripts/er-push-watched.sh>log")
+	watched_denied("bash scripts/'er-push-watched.sh' feat/x")
+	watched_denied("{ bash scripts/er-push-watched.sh feat/x; }")
+	watched_denied("! bash scripts/er-push-watched.sh feat/x")
+	watched_denied("echo `scripts/er-push-watched.sh feat/x`")
+}
+
+test_watched_helper_fed_to_a_shell_denies if {
+	watched_denied("bash < scripts/er-push-watched.sh")
+	watched_denied("bash -s feat/x < scripts/er-push-watched.sh")
+	watched_denied("cat scripts/er-push-watched.sh | bash -s feat/x")
+	watched_denied("sed -n '1,$p' scripts/er-push-watched.sh | sh")
+}
+
+test_watched_helper_behind_unlisted_wrappers_denies if {
+	watched_denied("xargs -a list bash scripts/er-push-watched.sh")
+	watched_denied("ionice -c3 bash scripts/er-push-watched.sh feat/x")
+	watched_denied("taskset -c 0 bash scripts/er-push-watched.sh feat/x")
+	watched_denied("watch -n 5 bash scripts/er-push-watched.sh feat/x")
+	watched_denied("systemd-run --user bash scripts/er-push-watched.sh feat/x")
+	watched_denied("parallel bash scripts/er-push-watched.sh ::: feat/x")
+	watched_denied("script -qc 'bash scripts/er-push-watched.sh feat/x' /dev/null")
+	watched_denied("find scripts -name er-push-watched.sh -exec bash {} feat/x \\;")
+}
+
+# Reads through the shapes the new rule had to learn stay allowed.
+test_watched_helper_reader_shapes_are_allowed if {
+	not watched_denied("cat < scripts/er-push-watched.sh")
+	not watched_denied("cat scripts/er-push-watched.sh | tee /tmp/copy.sh")
+	not watched_denied("bash -c 'cat scripts/er-push-watched.sh'")
+	not watched_denied("find scripts -name er-push-watched.sh")
+	not watched_denied("nice -n 19 sed -n '1,40p' scripts/er-push-watched.sh")
+	not watched_denied("python3 -c \"print(open('scripts/er-push-watched.sh').read())\"")
+}
+
 # --- not a push -------------------------------------------------------------------
 
 test_non_push_command_is_untouched if {
