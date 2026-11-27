@@ -141,7 +141,10 @@ killing_teardown if {
 
 # Flags that make the script kill nothing. `--status` reports; `--help`/`-h` are argparse's,
 # which prints usage and exits inside `parse_args()` before any teardown code runs.
-read_only_flags := {"--status", "--help", "-h"}
+# `--selftest` returns from `main()` before the status and teardown branches, and the selftest
+# signals only children it spawned itself; it was refused on 2026-11-23 while proving a change
+# to `survivors`, which left the script's own test unrunnable.
+read_only_flags := {"--status", "--help", "-h", "--selftest"}
 
 # The word after `index`, or the empty string when the invocation ends the text. Spelled
 # with `else` because a bare `words[index + 1]` is undefined past the end, and an undefined
