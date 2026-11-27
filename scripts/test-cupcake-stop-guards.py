@@ -680,6 +680,20 @@ CASES = [
         "quoted text is not a claim, must NOT halt",
     ),
     Case(
+        "ci_running_pr_work_pending.jsonl",
+        None,
+        "PR numbers beside 'in progress' / 'pending' work that is not CI, a negation three words "
+        "before 'still running', and 'Nothing is pushed, so CI has not started' -- none is a "
+        "running-CI claim, must NOT halt",
+    ),
+    Case(
+        "ci_running_watched_redirect.jsonl",
+        None,
+        "the claim names PR #630 and one background command runs `gh pr checks 630 "
+        "--watch>/tmp/...` (no space before the redirection) then the same for #631, tailed in a "
+        "split -- every watched PR counts, must NOT halt",
+    ),
+    Case(
         "inline_user_command.jsonl",
         "hands the user a command as an inline shell block",
         "the 2026-10-13 shape: a commit, then the push the agent may not run handed over as a "
