@@ -12,6 +12,14 @@
 # the version. rustup will not update an already-installed stable on its own, so a local
 # toolchain can sit months behind the one CI installs and every lint gate here will agree with
 # itself while disagreeing with CI. Run `rustup update stable` before believing a clean sweep.
+#
+# So the version is now pinned, not the channel (2026-11-23). CI's `stable` moved from rustc
+# 1.99.1 (run on 2026-11-09) to 1.100.0, which fails `stage / cargo-build` on code that has
+# not changed: `clippy::needless_range_loop` now fires in er-npc-possess, er-shader-viewer and
+# mushroom-man-builder, and cargo's new `unused_dependencies` and `missing_lints_inheritance`
+# warnings (iced-x86 in er-quickload; the fromsoftware-rs fork's crates) trip
+# check-save-disable-warnings.py (run 45325811130). Move to a newer version in a change of
+# its own that fixes what it reports, and bump CI and local together by editing this line.
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]

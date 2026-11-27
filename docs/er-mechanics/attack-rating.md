@@ -203,10 +203,18 @@ M = any(m_s < 1) ? min(1, m_s...)                                       0x140690
   `correctType_Dark`. An unmet requirement on an enabled stat gives 60.
 - Glintstone Staff +25 at INT 80 gives 329.5, and Finger Seal +25 at FTH 60 gives 286.75, both
   equal to COMMUNITY.
-- **How a spell hit uses the buff (SITE + COMMUNITY, not traced).** The SITE's `spellAR` gives
-  `flat * sum(spellBuff terms)`, and COMMUNITY gives `100 * totalScaling`. The spell's
-  `AtkParam.atk<e>` is taken as the flat value, multiplied by `buff/100` (INFERRED). The
-  MagicParam -> Bullet -> AtkParam chain was not traced.
+- **How a spell hit uses the buff (VERIFIED formula, INFERRED branch choice).** `FUN_1406832a0`
+  has a branch on `AttackInfo+0xf4` (`attackNotFromWeapon` in the dump) that computes
+  `AR[e] = AtkParam.atk<e> x FUN_140690390(weaponParamId1, e) x durability x ctx-rate[e] + ctx-add[e]`,
+  reading no AtkParam correction field. `FUN_140690390` is the catalyst's own element multiplier
+  (its AECP row, or the AtkParam's `overwriteAttackElementCorrectId`; that element's
+  `correctType_*` graph; the two-handing STR x1.5; the 0.6 penalty), which is
+  `element_multiplier` here, so the buff above is `100 x` that multiplier for the magic or holy row
+  and a fire incantation scales on the seal's fire row. A bullet's `weaponParamId1` is the
+  casting hand's equipment (`FUN_14038e380`). The writer of `+0xf4` for a local spell bullet was not
+  found; the other branch would put no fire or lightning on any spell, since no catalyst has a fire
+  or lightning `attackBase`. `scripts/er-mechanics-spells.py` carries the chain from a spell to
+  its damage on a player.
 
 ## 5. PvP
 
@@ -305,7 +313,8 @@ off-hand path folds a left roar's add into that option's `pre` on the left weapo
 - Who applies the unnamed rate-add rows 120000 and 120500..120511 (section 7). The named ones are
   the roars and War Cry.
 - The bow/arrow combination (`weaponCategory == 13` branch) and arrow `attackBase`.
-- How a spell's damage uses the catalyst buff (MagicParam / Bullet / AtkParam chain).
+- Who sets `AttackInfo+0xf4` for a local spell's bullet (section 4). The formula of that branch
+  is read; the bullet builders `FUN_14038b9a0` / `FUN_14038e380` / `FUN_14038e540` do not store it.
 - The reader of `EquipParamWeapon.vsPlayerDmgCorrectRate_*` (all 1.0 today, so it has no effect on
   current numbers).
 - The clamp at the end of `PerformCalcCorrection`. The shape is read, but the in-range return is
