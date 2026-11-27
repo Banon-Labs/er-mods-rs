@@ -329,11 +329,11 @@ test_append_mode_is_a_write if {
 
 # --- a payload that QUOTES a python command is not one ---------------------
 #
-# Measured in production 2026-09-21 (bd er-effects-rs-ak3q). The invoked binary is `bd`
-# and `git`; the python is a quotation inside the memory or the commit message being
-# recorded. The old anchor was "start, or after whitespace or a quote", which every
-# quoted argument satisfies, and the ellipsis in the prose then broke the
-# committed-script exemption on top of it.
+# Measured in production 2026-09-21. The invoked binary is `bd` and `git`; the
+# python is a quotation inside the memory or the commit message being recorded. The
+# old anchor was "start, or after whitespace or a quote", which every quoted
+# argument satisfies, and the ellipsis in the prose then broke the committed-script
+# exemption on top of it.
 
 test_bd_memory_quoting_a_python_command_is_allowed if {
 	cmd := `bd remember --key trace-tsv "measured with python3 scripts/er-fd-trace.py --tsv ... which printed 12 rows"`
@@ -463,6 +463,54 @@ test_read_only_script_plus_inline_write_is_denied if {
 	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
 }
 
+# --- a read-only script beside a `sed -n` or a `$(...)` (2026-11-19/20) -------
+#
+# Both were refused in production while running a script the signal reads as READONLY on its
+# own: the signal marked every command naming `sed`, and every command holding `$(`. It now
+# judges sed by its arguments and reads a substitution's words like any others, so it prints
+# READONLY for these, and these cases pin that the policy admits on that line. The `sed -i` and
+# `s///w` shapes still get UNKNOWN from the signal (its `--selftest` checks both), and the
+# policy keeps the refusal on that line and on no line at all.
+
+stamp_script := "/home/banon/projects/er-mods-rs/.worktrees/r21/target/v28-mem/stamp_log.py"
+
+sed_pipe_cmd := concat("", [
+	"cd /home/banon/projects/er-mods-rs/.worktrees/r21 && python3 ", stamp_script,
+	` target/v30-spells/wrap.log 400 /home/banon/.cache/er-build-planner/attack-similarity-140-160-6ac1ef7f362bdefb.only-sets '2026-11-19 18:52:05'`,
+	` | grep -E 'attack sets|since the start' | sed -n '1,3p;8,10p;$p' | cut -c1-190`,
+])
+
+substitution_cmd := concat("", [
+	"cd /home/banon/projects/er-mods-rs/.worktrees/r21/target/v30-spells && n=$(wc -l < wrap.log); { python3 ",
+	stamp_script, ` wrap.log $n /home/banon/.cache/er-build-planner/x.only-sets '2026-11-19 18:52:05';`,
+	" tail -n +$((n+1)) -F --pid=2514771 wrap.log | gawk -f ",
+	"/home/banon/projects/er-mods-rs/.worktrees/r21/target/v28-mem/stamp_live.awk; } > wrap.stamped.log",
+])
+
+test_read_only_script_beside_sed_n_or_a_substitution_is_allowed if {
+	every cmd in [sed_pipe_cmd, substitution_cmd] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, concat("", ["READONLY ", stamp_script]))
+	}
+}
+
+test_read_only_script_beside_sed_n_or_a_substitution_without_a_verdict_is_denied if {
+	every cmd in [sed_pipe_cmd, substitution_cmd] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, concat("", ["UNKNOWN ", stamp_script, " command substitution"]))
+	}
+}
+
+test_script_beside_a_sed_that_writes_is_denied if {
+	every pair in [
+		[concat("", ["sed -i 's/a/b/' ", stamp_script, "; python3 ", stamp_script]), "sed -i writes the file in place"],
+		[concat("", ["python3 ", stamp_script, " | sed 's/a/b/w out'"]), "sed s///w flag writes a file"],
+	] {
+		signal := concat("", ["UNKNOWN ", stamp_script, " a write-capable tool in the same command (", pair[1], ")"])
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(pair[0], signal)
+		count(bash_no_python_file_write.deny) == 1 with input as bash(pair[0])
+	}
+}
+
 # --- two ways a scratch script used to run uninspected (2026-10-13) ---------
 #
 # Every command in the two deny tests below was allowed by this policy before that date,
@@ -515,4 +563,293 @@ test_inline_program_marker_beside_admitted_scripts_is_allowed if {
 	cmd := concat("", [`python3 -c "print(1)"; python3 "`, scratch, `/analyse.py"`])
 	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
 	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, signal)
+}
+
+# --- a committed test suite of the user's guard repos (2026-11-16) ------------
+#
+# Refused in production that day: the global cupcake guards' own test suite. It runs
+# subprocesses and writes temp files, and it lives outside this repo's `scripts/`. The signal
+# prints `GUARDTEST <operand>` only for a file under a guard repo's tests directory that is in
+# that repo's HEAD (`scripts/cupcake_python_script_writes.py --selftest` checks that half
+# against the real repo); each case here supplies the line it would print.
+
+guard_suite := "/home/banon/.config/cupcake/tests/check_background_tails.py"
+
+guard_suite_cmd := concat("", ["python3 ", guard_suite])
+
+test_committed_guard_test_suite_is_allowed if {
+	every cmd in [
+		guard_suite_cmd,
+		concat("", [guard_suite_cmd, " --replay /tmp/claude-1000/x/t.jsonl 2>&1 | tail -40"]),
+		concat("", ["timeout 28 python3 \"", guard_suite, "\""]),
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, concat("", ["GUARDTEST ", guard_suite, "\n"]))
+	}
+}
+
+test_guard_test_suite_without_a_guardtest_verdict_is_denied if {
+	every signal in [
+		"",
+		concat("", ["WRITES ", guard_suite, " imports subprocess"]),
+		concat("", ["UNKNOWN ", guard_suite, " a write-capable tool in the same command"]),
+		"GUARDTEST /home/banon/.config/cupcake/tests/other.py",
+		concat("", ["READONLY ", guard_suite, "x"]),
+		{"error": "signal exited 1"},
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(guard_suite_cmd, signal)
+	}
+	count(bash_no_python_file_write.deny) == 1 with input as bash(guard_suite_cmd)
+}
+
+# The admission is for that operand: an inline write, or a second unvetted script, beside it
+# keeps the refusal.
+test_guard_test_suite_beside_other_writes_is_denied if {
+	signal := concat("", ["GUARDTEST ", guard_suite])
+	every cmd in [
+		concat("", [guard_suite_cmd, " && python3 -c \"open('a','w').write('x')\""]),
+		concat("", [guard_suite_cmd, "; python3 /tmp/patch.py"]),
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
+	}
+}
+
+# --- a python program run by name (2026-11-16) ---------------------------------
+#
+# `kitty-tail-bg --selftest` ran unchecked that day: a python program on PATH carries neither
+# `python` nor `.py` on the command line. The signal resolves each word to a file and prints
+# `EXEC-<verdict> TAB <word> TAB <real path> TAB <why>`; the policy refuses a WRITES or UNKNOWN
+# verdict for a word in command position.
+
+tail_bg := "/home/banon/.local/bin/kitty-tail-bg"
+
+exec_line(kind, word, path, why) := concat("\t", [kind, word, path, why])
+
+tail_bg_writes := exec_line("EXEC-WRITES", "kitty-tail-bg", tail_bg, "imports subprocess")
+
+test_python_program_run_by_name_is_denied if {
+	every cmd in [
+		"kitty-tail-bg --selftest",
+		"timeout 9 kitty-tail-bg --dry-run --title t /tmp/x.output",
+		`bash -c "kitty-tail-bg --selftest"`,
+		"(kitty-tail-bg --selftest)",
+		"cd /tmp && kitty-tail-bg --selftest; echo done",
+		"FOO=1 kitty-tail-bg --selftest",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, tail_bg_writes)
+	}
+	decision := bash_no_python_file_write.deny with input as bash_with_signal("kitty-tail-bg --selftest", tail_bg_writes)
+	some d in decision
+	contains(d.reason, "`kitty-tail-bg` is /home/banon/.local/bin/kitty-tail-bg")
+
+	# The refusal names the form that works here, the one the global Stop guard suggests.
+	contains(d.reason, "/home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py --split --title")
+}
+
+# The global background-task Stop guard's suggestion in this repo (2026-11-16) is admitted, with
+# the signal's verdict for it as the real signal prints it.
+test_global_tail_suggestion_is_allowed if {
+	helper := "/home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py"
+	cmd := concat("", ["python3 ", helper, " --split --title 'tail: build (b1x2y3z4w)' --file /tmp/c/tasks/b1x2y3z4w.output --file /tmp/w/build.log"])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, concat(" ", ["WRITES", helper, "imports subprocess"]))
+}
+
+# The same file by path, by a relative path, and handed to python without a `.py` suffix.
+test_python_program_run_by_path_is_denied if {
+	every pair in [
+		[tail_bg, exec_line("EXEC-WRITES", tail_bg, tail_bg, "imports subprocess")],
+		[concat("", ["python3 ", tail_bg, " --title t /tmp/x"]), exec_line("EXEC-WRITES", tail_bg, tail_bg, "imports subprocess")],
+		["./patch", exec_line("EXEC-WRITES", "./patch", "/tmp/s/patch", "open() mode 'w'")],
+		["./patch.py", exec_line("EXEC-UNKNOWN", "./patch.py", "-", "relative path, working directory unknown")],
+		["S=/tmp/s; $S/patch", exec_line("EXEC-WRITES", "$S/patch", "/tmp/s/patch", "open() mode 'w'")],
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(pair[0], pair[1])
+	}
+}
+
+test_read_only_or_guard_test_program_run_by_name_is_allowed if {
+	every signal in [
+		exec_line("EXEC-READONLY", "kitty-tail-bg", tail_bg, ""),
+		exec_line("EXEC-GUARDTEST", "kitty-tail-bg", tail_bg, ""),
+		"",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal("kitty-tail-bg --selftest", signal)
+	}
+}
+
+# The signal names every word that resolves to a python program, wherever it stands; only one
+# in command position is refused.
+test_python_program_named_as_an_operand_is_allowed if {
+	every cmd in [
+		"echo kitty-tail-bg",
+		"git log --oneline -- kitty-tail-bg",
+		`bd remember --key k "run kitty-tail-bg --selftest after editing it"`,
+		"cat /home/banon/.local/bin/kitty-tail-bg | head",
+		"echo hi > kitty-tail-bg",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, tail_bg_writes)
+	}
+}
+
+# This repo's committed scripts stay admitted when run directly, by either spelling or path.
+test_committed_script_run_directly_is_allowed if {
+	every pair in [
+		["./scripts/kitty-tail-task.py --title t --file /tmp/x", exec_line("EXEC-WRITES", "./scripts/kitty-tail-task.py", "/home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py", "imports subprocess")],
+		["/home/banon/projects/er-mods-rs/scripts/er-teardown.py --status", exec_line("EXEC-WRITES", "/home/banon/projects/er-mods-rs/scripts/er-teardown.py", "/home/banon/projects/er-mods-rs/scripts/er-teardown.py", "imports subprocess")],
+		["cd /x && .worktrees/lab/scripts/check-stages.py --selftest", exec_line("EXEC-UNKNOWN", ".worktrees/lab/scripts/check-stages.py", "-", "relative path, working directory unknown")],
+		["W=.worktrees; $W/lab/scripts/check-stages.py", exec_line("EXEC-UNKNOWN", "$W/lab/scripts/check-stages.py", "-", "relative path, working directory unknown")],
+		["er-tool --x", exec_line("EXEC-WRITES", "er-tool", "/home/banon/projects/er-mods-rs/scripts/er-tool", "imports subprocess")],
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(pair[0], pair[1])
+	}
+}
+
+# A lookalike path is not admitted by the committed-script tests.
+test_lookalike_program_path_is_denied if {
+	every pair in [
+		["/tmp/x/scripts/patch", exec_line("EXEC-WRITES", "/tmp/x/scripts/patch", "/tmp/x/scripts/patch", "open() mode 'w'")],
+		["tool", exec_line("EXEC-WRITES", "tool", "/tmp/claude-1000/-home-banon-projects-er-mods-rs/scripts/tool", "open() mode 'w'")],
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(pair[0], pair[1])
+	}
+}
+
+# One refusal per command: the `python3 <file>.py` rule answers first when both fire.
+test_script_and_program_in_one_command_deny_once if {
+	cmd := "python3 /tmp/patch.py; kitty-tail-bg --selftest"
+	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, tail_bg_writes)
+}
+
+# --- exec launchers in front of python (2026-11-19) ------------------------
+#
+# Measured 2026-11-19 with `opa eval` on this policy: `python3 /tmp/x/patch.py` was denied and
+# each of these ran the same uncommitted script allowed, because the launcher was read as the
+# program and `python3` as its operand. An agent session ran a scratch script with a computed
+# `spec_from_file_location` path through `chrt --idle 0` that way. "EXEC LAUNCHERS" in
+# `.cupcake/system/commands.rego` has the grammar.
+
+launched_uncommitted := [
+	"chrt --idle 0 python3 /tmp/x/patch.py",
+	"chrt -i python3 /tmp/x/patch.py",
+	"ionice -c 3 python3 /tmp/x/patch.py",
+	"ionice -c idle python3 /tmp/x/patch.py",
+	"taskset -c 0-3 python3 /tmp/x/patch.py",
+	"taskset 0x3 python3 /tmp/x/patch.py",
+	"timeout 30s python3 /tmp/x/patch.py",
+	"timeout -s KILL 30 python3 /tmp/x/patch.py",
+	"systemd-run --user --scope python3 /tmp/x/patch.py",
+	"systemd-run --user --scope -u job python3 /tmp/x/patch.py",
+	"systemd-run --user --scope -p MemoryMax=8G timeout 3h python3 /tmp/x/patch.py",
+	"stdbuf -o L python3 /tmp/x/patch.py",
+	"time python3 /tmp/x/patch.py",
+	"/usr/bin/time -v python3 /tmp/x/patch.py",
+	"sudo -u root python3 /tmp/x/patch.py",
+	"flock -w 5 /tmp/lk python3 /tmp/x/patch.py",
+	"numactl -C 0-3 python3 /tmp/x/patch.py",
+	"strace -f -o /tmp/t python3 /tmp/x/patch.py",
+	"cd /x && chrt --idle 0 python3 target/wf/splitcap/reach.py",
+	"bash -c \"chrt --idle 0 python3 /tmp/x/patch.py\"",
+	"python3 scripts/er-mechanics-resume.py --log /tmp/l -- python3 /tmp/x/patch.py",
+	"python3 scripts/er-weapon-build.py --supervise --unit u -- chrt --idle 0 python3 /tmp/x/patch.py",
+	"py-spy record -o /tmp/o -- python3 /tmp/x/patch.py",
+]
+
+test_launched_uncommitted_script_is_denied if {
+	every cmd in launched_uncommitted {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# The signal's verdict is what decides, wrapped or not: a script it found read-only is let
+# through behind a launcher exactly as it is bare.
+test_launched_read_only_script_is_allowed if {
+	cmd := "chrt --idle 0 python3 /tmp/x/analyse.py"
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, "READONLY /tmp/x/analyse.py")
+	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, "WRITES /tmp/x/analyse.py importlib.spec_from_file_location outside this repo's scripts/")
+}
+
+test_launched_committed_script_is_allowed if {
+	every cmd in [
+		"chrt --idle 0 python3 scripts/er-mechanics-ashes.py --selftest",
+		"taskset -c 0-3 python3 /home/banon/projects/er-mods-rs/scripts/er-mechanics-ashes.py",
+		"systemd-run --user --scope -p MemoryMax=8G timeout 3h python3 scripts/er-mechanics-attack-similarity.py --only x",
+		"python3 scripts/er-mechanics-resume.py --log /tmp/l -- chrt --idle 0 python3 scripts/er-mechanics-attack-similarity.py --only x",
+		"ionice -c idle nice -n 19 python3 .worktrees/r21/scripts/er-mechanics-ashes.py",
+		"bash -c \"chrt --idle 0 python3 scripts/foo.py\"",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+# Launchers do not turn quoted text or another program's operands into a python run.
+test_python_named_as_an_operand_behind_a_launcher_is_allowed if {
+	every cmd in [
+		"chrt --idle 0 bd remember 'measured with python3 /tmp/x/patch.py'",
+		"bash x.sh \"timeout 3 python3 /tmp/x/patch.py\"",
+		"bash x.sh 'chrt -i 0 python3 /tmp/x/patch.py'",
+		"git log -- python3 /tmp/x/patch.py",
+		"time cargo test -p x",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+# Absolute paths: only checkout hops may stand between `er-mods-rs` and `scripts`. A copy of
+# the tool tree under `target/` (measured 2026-11-19: an agent's modified copy at
+# `.worktrees/r21/target/wf/splitcap/scripts/` ran with `--selftest`) is not committed.
+test_scripts_dir_copy_under_the_repo_is_not_committed if {
+	every cmd in [
+		"python3 /home/banon/projects/er-mods-rs/target/scratch/scripts/patch.py",
+		"python3 /home/banon/projects/er-mods-rs/.worktrees/r21/target/wf/splitcap/scripts/er-mechanics-ashes.py --selftest",
+		"chrt --idle 0 python3 /home/banon/projects/er-mods-rs/.worktrees/r21/target/wf/splitcap/scripts/er-mechanics-ashes.py --selftest",
+		"python3 /home/banon/projects/er-mods-rs/crates/x/scripts/patch.py",
+		"python3 /home/banon/projects/er-mods-rs/worktrees/x/scripts/patch.py",
+		"python3 /home/banon/projects/er-mods-rs/.claude/x/scripts/patch.py",
+		"python3 /home/banon/projects/er-mods-rs/.worktrees/scripts/patch.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+test_checkout_spellings_of_scripts_are_committed if {
+	every cmd in [
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py",
+		"python3 /home/banon/projects/er-mods-rs/scripts/sub/x.py",
+		"python3 /home/banon/projects/er-mods-rs/.worktrees/r21/scripts/er-mechanics-ashes.py",
+		"python3 /home/banon/projects/er-mods-rs/.worktrees/a/.worktrees/b/scripts/x.py",
+		"python3 /home/banon/projects/er-mods-rs/.claude/worktrees/agent-a1/scripts/x.py",
+		"python3 /home/banon/projects/er-mods-rs/.claude/worktrees/agent-a1/.worktrees/committed-compiles/scripts/x.py",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+# A python program run by name behind a launcher gets the same reading as bare.
+test_launched_python_program_by_name_is_denied if {
+	every cmd in ["chrt --idle 0 kitty-tail-bg --selftest", "taskset -c 0 kitty-tail-bg --selftest"] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, tail_bg_writes)
+	}
+}
+
+# --- the script operand, found without a pass over the command (2026-11-19) ---
+# `script_operand` reads the words after python up to the first that is not an option. Past
+# the first eight words it falls back to the rest of the command, which finds the same word.
+test_script_after_many_options_is_denied if {
+	every cmd in [
+		"python3 -u -B -O -E -s -S -I -P -q /tmp/x/patch.py",
+		"python3 -u /tmp/x/patch.py",
+		"ionice -c 3 python3 -u -B /tmp/x/patch.py; true",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# A `.py` word after the script is the script's argument, not a second script, and a script
+# after a non-option word (`-m mod`) is the module's.
+test_operand_is_the_first_non_option_word if {
+	every cmd in [
+		"python3 scripts/er-teardown.py /tmp/x/patch.py",
+		"python3 -m pytest /tmp/x/test_patch.py",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
 }

@@ -69,7 +69,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
     ));
     write_title_load_route_oracles(body);
-    // Switch pipeline oracle (goal 2026-07-21, bd er-effects-rs-tx9n +
+    // Switch pipeline oracle (goal 2026-07-21, bd
     // user-oracle-must-emit-teardown-and-noload-cause): make a no-load explain itself instead of
     // degrading to CAP_REACHED. These already-tracked counters expose the FD4-IO reload phase the
     // switch load walks, so the capture script can say why a load did or did not fire.
@@ -87,7 +87,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             swctr::SWITCH_RELOAD_FD4IO_PHASE.load(SwOrd::SeqCst),
             swctr::SWITCH_RELOAD_FD4IO_DRAIN_WAITS.load(SwOrd::SeqCst),
             swctr::SWITCH_RELOAD_FD4IO_COMMITTED.load(SwOrd::SeqCst),
-            // b78 guard engagement oracle (bd er-effects-rs-9jbe): frames the guard stood down
+            // b78 guard engagement oracle: frames the guard stood down
             // because reload_phase was non-idle and fd4io owned GameMan+0xb78 as the warp
             // target. 0 on a run means the black-screen race never presented, so that run is
             // non-regression evidence only; > 0 means the stand-down actually fired.
@@ -263,7 +263,7 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         let qpc_delta_us = er_telemetry_core::counters::PRESENT_QPC_DELTA_US.load(PcOrd::SeqCst);
         // gpu_frame_us (goal §3.3): per-frame GPU-busy time from the injected D3D12 timestamp pair on
         // the game queue. Large => render-bound; small with a big qpc_delta_us => present/vblank wait.
-        // samples/state make a 0 attributable (oracle not live vs GPU instant). bd er-effects-rs-03ma.
+        // samples/state make a 0 attributable (oracle not live vs GPU instant).
         let gpu_frame_us = er_telemetry_core::counters::GPU_FRAME_US_LAST.load(PcOrd::SeqCst);
         let gpu_frame_samples =
             er_telemetry_core::counters::GPU_FRAME_ORACLE_SAMPLES.load(PcOrd::SeqCst);

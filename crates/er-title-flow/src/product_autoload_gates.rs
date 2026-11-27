@@ -538,7 +538,7 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
     // open_menu with
     // the byte left stale may route the registrar into an error-modal branch. Replicate the press-accept
     // set (subagent-C static RE: product native-open with this byte set reached the menu with 0 msgbox).
-    // Null-/readability-guarded; no save write, no input. bd er-effects-rs-0ye + title-accept-to-registrar-narrow-path-143d5dea8.
+    // Null-/readability-guarded; no save write, no input. bd title-accept-to-registrar-narrow-path-143d5dea8.
     let transition_singleton = unsafe {
         safe_read_usize(er_game_base::mem::game_data_addr(
             base,
@@ -886,7 +886,7 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
 /// does not cover), so the patch alone does not gate them. Forcing both bytes to 0 each title frame
 /// short-circuits the whole connection-loss family at the source (the guard fails -> no popup is ever
 /// enqueued -- not suppressed, not dismissed). Pure offline state, no save write, no input. Readable-
-/// guarded so a not-yet-initialized GameMan can never fault the game thread. bd er-effects-rs-0ye
+/// guarded so a not-yet-initialized GameMan can never fault the game thread.
 /// (subagent-D GR_System_Message gate, subagent-B premise: modals are network notices not SaveRetry).
 pub unsafe fn force_offline_connection_bytes(base: usize) {
     const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;

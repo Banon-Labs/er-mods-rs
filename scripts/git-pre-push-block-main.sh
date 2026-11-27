@@ -51,8 +51,8 @@ done
 #
 # This used to be an unconditional refusal at the top of the file: if the checkout was on main, the
 # push was blocked whatever the ref list said. That is wrong in the one direction a guard must never
-# be wrong in -- it refused safe work. `git push -u origin fix/some-branch` from a main checkout
-# cannot update remote main, and git says so on stdin (`refs/heads/fix/some-branch` on both sides),
+# be wrong in -- it refused safe work. `git push -u origin <branch>` from a main checkout
+# cannot update remote main, and git says so on stdin (`refs/heads/<branch>` on both sides),
 # yet the guard answered `reason: current checkout is local main` and named `refs/heads/main` as the
 # local ref, which git had never mentioned. Measured 2026-09-13 while pushing a fix branch from the
 # primary checkout; the agent's next move was to reach for a workaround, which is what an

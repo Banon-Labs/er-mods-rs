@@ -177,8 +177,8 @@ jobs:
           # The package set was frozen from the HEAD commit, so a PR that ADDS a shipped cdylib
           # names a package this older tree does not contain, and cargo exits 101 with
           # `package ID specification ... did not match any packages` before compiling anything.
-          # That made the gate unpassable for every crate-adding PR -- measured on #435, which
-          # adds er-save-game-row. Drop the absent ones here rather than unfreezing the list:
+          # That made the gate unpassable for every crate-adding PR -- measured on the one that
+          # added er-save-game-row. Drop the absent ones here rather than unfreezing the list:
           # the comparison still needs one set, and a package that does not exist at the base
           # has no base artifact to diff against anyway. The artifact loop below already
           # tolerates a missing DLL the same way.

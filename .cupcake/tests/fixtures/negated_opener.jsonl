@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "What does this mean to me?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Nothing in the game changed. The model credited hits the game never lets land, so Dryleaf Arts ranks lower now."}]}}

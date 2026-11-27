@@ -48,8 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // the raw answer for every window. Without it, run br-20260831-160354-2513 scored 2 of its 4
 // windows as portrait failures when both were fast travels and both real load windows were ok-full.
 
-/// Published-vs-loaded identity check for one closed window (bd er-effects-rs-qoqc defect 6 /
-/// er-effects-rs-91zb). Implemented but UNPROVEN -- it changes no rendering, but nothing has yet
+/// Published-vs-loaded identity check for one closed window. Implemented but UNPROVEN -- it changes no rendering, but nothing has yet
 /// observed it fire on a live run.
 ///
 /// Every pre-existing portrait oracle compared our target slot against the currently-resident
@@ -265,8 +264,8 @@ fn portrait_loadwin_tick() {
             er_telemetry_core::counters::cover_owns_current_loading_screen() as usize,
             Ordering::SeqCst,
         );
-        // Reject-attribution baseline for windows that are not profile switches
-        // (er-effects-rs-k979). `loading_portrait_window_reset_for_switch` -- which sets it at the
+        // Reject-attribution baseline for windows that are not profile switches.
+        // `loading_portrait_window_reset_for_switch` -- which sets it at the
         // exact instant a switch arms -- has only one caller, the own-menu switch arm. Boot is fine
         // because the baseline starts at 0, but a death or fast-travel window would inherit the
         // stale baseline from the last switch and misfile its warm-up reject as a post-publish
@@ -373,8 +372,8 @@ fn portrait_loadwin_close(close_ms: usize) {
     let pub_side = LOADWIN_MAX_PUB_SIDE.load(Ordering::SeqCst);
     let slot_tag = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
     let identity = portrait_published_identity_check(slot_tag);
-    // Frames of this window where the game's own loading screen reached the screen uncovered
-    // (er-effects-rs-wmw defect #1). Orthogonal to the portrait verdict: a window can publish a
+    // Frames of this window where the game's own loading screen reached the screen uncovered.
+    // Orthogonal to the portrait verdict: a window can publish a
     // perfect 1542 head and still have flashed vanilla for a frame.
     let exposure = er_telemetry_core::counters::NATIVE_LS_EXPOSURE_FRAMES
         .load(Ordering::SeqCst)

@@ -173,10 +173,9 @@ fn show_os_reject_message(_cover: Option<&PickerCover>, _message: &PickerStatusM
 /// A `bool`/`Option` return conflates all three, and two different consumers were burnt by two
 /// different halves of that conflation:
 ///
-///  * conflating "a dialog RAN and answered" with "no dialog ran" is the reopen loop PR #107 had to
-///    unpick one level up (a `bool` that meant both "the picker ran" and "the picker is still up",
-///    so the menu pump re-armed a cancelled dialog every ~57 ms, forever -- bd
-///    `er-effects-rs-rsxi`). That is `Cancelled`/`Failed` vs `NotOpened`.
+///  * conflating "a dialog RAN and answered" with "no dialog ran" is the reopen loop that had to be
+///    unpicked one level up (a `bool` that meant both "the picker ran" and "the picker is still
+///    up", so the menu pump re-armed a cancelled dialog every ~57 ms, forever). That is `Cancelled`/`Failed` vs `NotOpened`.
 ///  * conflating "the user decided" with "we could not ask" is what would let the boot arm quit a
 ///    user's game over a defect in comdlg32, because at a missing-save boot a Cancel is
 ///    `ExitProcess(0)`. That is `Cancelled` vs `Failed`.
@@ -204,7 +203,7 @@ pub enum OsPickAbort {
 /// nothing staged.
 ///
 /// The `Err` half used to be a single `None`, and collapsing it is what let a user's Cancel be
-/// retried as though the dialog had never opened (bd `er-effects-rs-rsxi`). Those are opposite
+/// retried as though the dialog had never opened. Those are opposite
 /// facts: a dismissal means a dialog ran and was answered, so the request that asked for it is
 /// finished; a `NotOpened` means no dialog ran at all, so the request still stands.
 pub type OsPickResult<T> = Result<T, OsPickAbort>;

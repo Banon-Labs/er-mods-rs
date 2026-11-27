@@ -18,7 +18,7 @@ er-telemetry-core = { path = "../er-telemetry-core" }
 # GFX (Scaleform SWF-variant) parser + glyph raster (pure-Rust, host-testable): the
 # stats text renders with the game's own menu font captured at runtime from the
 # Scaleform file-open. Cross-platform so the unified stats-line layout + raster
-# (`stats_lines`) is provable by host tests (bd er-effects-rs-qic7).
+# (`stats_lines`) is provable by host tests.
 er-gfx = { path = "../er-gfx" }
 # Tier A is host-safe and keeps shared RVA constants available to host-tested layout code;
 # `game-types` only pulls typed game bindings on Windows because er-game-base gates them there.

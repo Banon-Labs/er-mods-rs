@@ -61,8 +61,8 @@
 //! # Why it lives in the crash logger
 //!
 //! It is a vanilla bug. On 2026-10-26 the same `INT3` at `eldenring.exe+0xc59276` was reproduced
-//! on 2.7.2.0 with no Seamless Co-op loaded and `er_crash_logging.dll` as the only DLL (bd
-//! `er-effects-rs-843o`). It used to live in `er-seamless-bugfixes`, so every user who did not
+//! on 2.7.2.0 with no Seamless Co-op loaded and `er_crash_logging.dll` as the only DLL.
+//! It used to live in `er-seamless-bugfixes`, so every user who did not
 //! load that DLL crashed on every quit. The crash logger loads on its own, with or without Seamless, and it is
 //! a shell over `er-crash-logging-core`: the product `er-quickload` links the core, not this
 //! shell, so the byte is written by exactly one DLL.

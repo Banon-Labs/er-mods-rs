@@ -13,7 +13,7 @@
 //! * `dialog_handlers` -- `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` (1601): the
 //!   AddCancelButton row CLONER, the row router (which is also what suppresses the native
 //!   Return-to-Desktop action), the Save Game label substitution and its save calls, the
-//!   ProfileSelect submit, and the PR-#103 Scaleform ctor/dtor double-free skip.
+//!   ProfileSelect submit, and the Scaleform ctor/dtor double-free skip.
 //! * `browse` -- `startup_hooks/quit_menu/save_picker_menu.rs` (944): the in-game
 //!   `05_010_ProfileSelect` browse surface (row staging, activation, menu-pump rebuild and
 //!   resubmit, browse stats lines, the list-builder re-stage hook).

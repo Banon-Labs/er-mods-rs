@@ -66,7 +66,7 @@ settle for an entry guard that skips the whole function: use **`ilhook`'s jmp-re
 
 #### Offline Python decoding (`capstone`)
 
-The above `iced-x86`-only rule is about **in-process Rust**. For **offline,
+The `iced-x86`-only guidance above is about **in-process Rust**. For **offline,
 agent-facing Python tooling** (the `scripts/*.py` helpers), `capstone` is the
 sanctioned x86-64 decoder and is **kept available on purpose** -- it exposes
 per-instruction operand byte offsets (`insn.encoding.disp_offset/disp_size`,

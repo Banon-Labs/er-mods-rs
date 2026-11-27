@@ -1,4 +1,4 @@
-// Read-only check of er-npc-summons' companion tag hooks (bd er-effects-rs-7xbs.3, 2026-10-19).
+// Read-only check of er-npc-summons' companion tag hooks (2026-10-19).
 //
 // The DLL's three ilhook mid hooks put each live Mimic Tear companion in the per-player friendly
 // tag list (CSFeManImp +0x5c60, 7 x 0xb0), give its row roleNameColor 1, and keep it out of the

@@ -28,7 +28,7 @@ import tempfile
 # ubuntu-latest ships an older 3.x, where the same line raises
 # `ModuleNotFoundError: No module named 'compression'` -- at import time, before any argument
 # parsing, so it took down every consumer that merely imports this module for its PARAM
-# readers and never decompresses anything. Measured on PR #388, run 33793058851: it reached
+# readers and never decompresses anything. Measured in CI run 33793058851: it reached
 # check.sh through check-moveset-table.py -> er-moveset-table-gen.py -> er-param-read.py:16
 # -> here, and both the gate and its own `--selftest` died with a raw traceback that reads
 # like a real failure rather than a missing interpreter feature.

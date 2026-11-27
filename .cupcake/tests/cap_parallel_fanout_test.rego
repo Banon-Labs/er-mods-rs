@@ -236,3 +236,32 @@ test_allow_heredoc_script_body if {
 test_allow_unrelated_command if {
 	allowed("cargo test -p er-soulsformats")
 }
+
+# --- launchers in front of the fan-out (2026-11-19) ---------------------------
+# The local copy of the slot test stepped over `chrt`, `ionice`, `time` and `systemd-run`
+# and any number after them, so a launcher's non-numeric operand ended it: the first two
+# below were allowed, measured with `opa eval`. The rest pin what the copy already denied,
+# now through the shared test.
+test_deny_fanout_behind_a_launcher if {
+	every command in [
+		"taskset -c 0-3 xargs -P 16 python3 x.py",
+		"ionice -c idle xargs -P 16 python3 x.py",
+		"chrt --idle 0 xargs -P 16 python3 x.py",
+		"ionice -c 3 xargs -P 16 python3 x.py",
+		"time xargs -P 16 python3 x.py",
+		"\\time xargs -P 16 python3 x.py",
+		"{ xargs -P 16 python3 x.py; }",
+		"systemd-run --user --scope -u fanout xargs -P 16 python3 x.py",
+		"chrt -i 0 parallel -j 16 python3 x.py ::: a b",
+	] {
+		denied(command)
+	}
+}
+
+test_allow_launcher_fanout_named_in_an_operand if {
+	allowed("echo chrt --idle 0 xargs -P 16 python3 x.py")
+}
+
+test_allow_launched_fanout_inside_a_capped_scope if {
+	allowed("ls | chrt --idle 0 systemd-run --user --scope -p MemoryMax=8G xargs -P 12 python3 x.py")
+}

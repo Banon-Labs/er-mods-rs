@@ -13,7 +13,7 @@
 
 use std::sync::atomic::AtomicUsize;
 
-// Loading-screen portrait armor oracle (bd er-effects-rs-91l5 Layer 1). Written every game tick by
+// Loading-screen portrait armor oracle. Written every game tick by
 // `portrait_equip_oracle_sample` off the profile renderer's live stage-0 `ChrAsm` (+0x130). These
 // replace `PORTRAIT_EQUIP_SLOT_RESOLVED_MASK` / `_UNRESOLVED_TOTAL` / `_PROTECTOR_REFEEDS`, which
 // sampled the wrong stage, once, through a bare `.store()`, on a field the renderer overrides -- and
@@ -26,7 +26,7 @@ pub static PORTRAIT_EQUIP_ORACLE_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_EQUIP_ORACLE_SLOT: AtomicUsize = AtomicUsize::new(0);
 
 /// The `CS::ModelIns` the current portrait-equip window opened against, latched on its first
-/// sample. Diagnostic only -- nothing classifies on it. It exists to answer bd er-effects-rs-7m5y:
+/// sample. Diagnostic only -- nothing classifies on it. It exists to answer this:
 /// a run measured 40 bad HEAD/CHEST frames out of 235 while every capture frame was clean, and the
 /// suspicion is that they are all sampled before the model is rebuilt for the incoming character.
 /// Comparing each failing frame's `model_ins` against this settles that from one run instead of

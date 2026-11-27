@@ -188,6 +188,13 @@ in_command_slot(words, index) if {
 	]) == 0
 }
 
+# The exec launchers the shared test follows: `chrt --idle 0 cargo fmt` and
+# `taskset -c 0-3 ruff check x` ran a lint with no authorization until 2026-11-19. See
+# "EXEC LAUNCHERS" in `.cupcake/system/commands.rego`. A launcher in front of a package
+# runner (`chrt -i 0 npx prettier`) is still read as the program: the runners above are
+# this guard's own extras, which the shared test does not know.
+in_command_slot(words, index) if commands.launched_word_in_command_slot(words, index)
+
 # The words after the program up to the end of its statement, cut at a bare `--`.
 invocation_args(words, index) := args if {
 	ends := [position |

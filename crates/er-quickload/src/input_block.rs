@@ -841,7 +841,7 @@ unsafe fn install_xinput_block() {
         b"xinput1_1.dll\0",
     ];
     const XINPUT_GET_STATE_EX_ORDINAL: usize = 100;
-    // The module, not the hook, is what the RETRY is for (bd er-effects-rs-ka44). A pad plugged in
+    // The module, not the hook, is what the RETRY is for. A pad plugged in
     // mid-session brings an xinput DLL in late, so retrying until one appears is real work. Retrying
     // because the registration did not land is not: that outcome cannot change between frames, so it
     // retried forever. Measured 2026-09-05 with er-hotkey-conflicts co-loaded -- it claims this same

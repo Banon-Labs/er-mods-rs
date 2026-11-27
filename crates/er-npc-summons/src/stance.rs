@@ -1,8 +1,7 @@
 //! The player's stance and who the enemies have picked: `LAB_WORLD.tt_crouch`, `tt_veil` and
 //! `tt_targeted_p`. All three replan the brain's AIs when they change, as in the lab.
 //!
-//! Ports of the lab's `crouchCheck`, `veilCheck` and `targetedCheck` (`scripts/frida/spawn-npc.js`
-//! on `feat/ai-lab-turtles`):
+//! Ports of the lab's `crouchCheck`, `veilCheck` and `targetedCheck` (`scripts/frida/spawn-npc.js`):
 //!
 //! - crouching: SpEffect [`STEALTH`] 8001 "[HKS] Is Stealth", measured 2026-10-06 to appear with
 //!   the crouch animations 10390000 / 10300000 and leave with the stand-up 10390001. Alone it

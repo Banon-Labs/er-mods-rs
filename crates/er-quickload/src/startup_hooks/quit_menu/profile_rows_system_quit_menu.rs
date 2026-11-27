@@ -712,14 +712,14 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
         return;
     }
     // Always the binder itself, never a stored trampoline. This used to prefer
-    // `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`, which stopped holding the binder when PR #475
+    // `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`, which stopped holding the binder when a change
     // moved the loading_cover detour onto the fixed-arity `CS::SceneObjProxy::SceneObjProxy`: it
     // holds that constructor's trampoline, four parameters with the first two the other way round,
     // so the three-argument transmute below resolved a name that was not a string. Opening System
     // then died at `0xc0000005` reading `0xffffffffffffffff`, `er_quickload.dll+0xc359c` ->
     // `eldenring.exe+0x74b66a` (1.17.1) -> the game's `strchr(text, '/')` (run
     // br-20260924-005955-a1fb, 2026-09-23; er-quit-menu-core's `scaleform_proxy.rs` lost its slot in
-    // #475 and this site was missed). `gated_game_fn` refuses on a build other than 2.7.2.0 rather
+    // that change and this site was missed). `gated_game_fn` refuses on a build other than 2.7.2.0 rather
     // than guessing, so there this oracle does not sample -- a bare `base + RVA` on another build
     // points into unrelated code, which is what 1.16.2's binder rva did on 1.17.
     let assign_addr = match crate::gated_game_fn(
@@ -1295,7 +1295,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // an open that never happened -- a MenuJob the dialog's queue deferred. A picker that ran and
     // came back with no destination has answered this request, and re-arming it re-asks a question
     // the user just declined: with the OS surface that reopened comdlg32 ~57 ms after every Cancel,
-    // forever, with no way out of the flow (bd `er-effects-rs-rsxi`). The tick's OpenTimeout could
+    // forever, with no way out of the flow. The tick's OpenTimeout could
     // not save it either, because each reopen blocks the whole frame, so the budget never accrued.
     // The browser open and the save-picker maintenance that used to sit here now run from
     // `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, which the stepper calls on every
@@ -1310,7 +1310,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // window cleared) during the return-title teardown window only; after AUTOLOAD_HANDOFF the picked
     // slot's SetState5/MoveMap stream owns the session and a second return-title request would leave
     // GameMan+0xbc4=3 stale, blocking the incoming world's MoveMap(18) finalize.
-    // See bd system-quit-return-title-scaleform-race-2026-07-01 and er-effects-rs-um9g.
+    // See bd system-quit-return-title-scaleform-race-2026-07-01.
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     if (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
         ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)

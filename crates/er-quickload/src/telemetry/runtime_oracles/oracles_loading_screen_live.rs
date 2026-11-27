@@ -132,7 +132,7 @@ fn write_loading_screen_live_oracles(
         "oracle_loading_screen_close_sent_first_ms",
         LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst),
     );
-    // Pivot (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
+    // Pivot: player-stats loading text. `stats_text_built` = cumulative count of
     // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
     // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
     push_json_usize(
@@ -177,7 +177,7 @@ fn write_loading_screen_live_oracles(
     // `scaleform_desc_provider_null_hits` = page rolls it diverted because the ring had no current
     // page (the exact condition that AVs at 1.16.2 deobf 0x140ec95d1 / rva 0xec95d1). Fast-path advances
     // are not counted: they never read the page and run unchanged. A non-zero count is direct
-    // evidence the hook caught the crash condition. (er-effects-rs-y22i, er-effects-rs-7xbs.1.)
+    // evidence the hook caught the crash condition.
     push_json_usize(
         body,
         "oracle_scaleform_desc_guard_installed",

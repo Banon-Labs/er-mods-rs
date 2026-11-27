@@ -1,8 +1,7 @@
 //! The companions' consumables: heals refilled, and food, greases, throwables and boluses kept in
 //! their quick slots and pouch for the turtles' brain to use.
 //!
-//! A port of the lab's `setHeals` / `addHeals` / `stockFood` (`scripts/frida/spawn-npc.js` on
-//! `feat/ai-lab-turtles`):
+//! A port of the lab's `setHeals` / `addHeals` / `stockFood` (`scripts/frida/spawn-npc.js`):
 //!
 //! - heals are goods 50201 (`CharaInitParam` item; SpEffect 19391 heals 30% of max HP), set to
 //!   [`HEALS`] when a companion is adopted and whenever the player rests at a grace. A rest is the

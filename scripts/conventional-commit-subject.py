@@ -13,7 +13,7 @@ rather than loudly. Measured on this repo, 2026-09-03: `POST /repos/{r}/rulesets
 and returns 201 listing it, and with that rule active on a probe branch requiring
 `^(feat|fix|chore|...): `, both of these still succeeded --
 
-    Post /repos/{r}/merges   commit_message="Merge pull request #999 from ..."   -> 201, sha 0f61506
+    Post /repos/{r}/merges   commit_message="Merge pull request #<n> from ..."   -> 201, sha 0f61506
     put  /repos/{r}/contents message="junk message that violates the rule"       -> 201
 
 -- so GitHub does not apply metadata rules to commits it creates server-side, which is every commit
@@ -63,7 +63,7 @@ TYPES = (
 
 # type(optional scope)optional-! : space description
 #
-# The trailing description is `.+` deliberately: GitHub appends " (#123)" to a merge subject built
+# The trailing description is `.+` deliberately: GitHub appends " (#<n>)" to a merge subject built
 # from a PR title, so the description must stay free-form for the same string to pass both as a PR
 # title and as the merge commit it becomes.
 SUBJECT_RE = re.compile(

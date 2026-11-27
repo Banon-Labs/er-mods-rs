@@ -1,5 +1,5 @@
 // SoundFuncSweep: list functions whose demangled/plain name suggests sound/SE playback
-// (er-effects-rs-7qp: find the menu-SE play helper the title decide/OK handlers call).
+// (to find the menu-SE play helper the title decide/OK handlers call).
 // Run: bash scripts/ghidra-query.sh scripts/ghidra/SoundFuncSweep.java [extraPatternCsv]
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.listing.Function;

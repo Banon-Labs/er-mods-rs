@@ -105,14 +105,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_veh_reentrant_refusals\": {},\n",
         VEH_REENTRANT_REFUSALS.load(Ordering::SeqCst)
     ));
-    // Loading-screen portrait fail-fast semaphore state (er-effects-rs-j3r): 0 = healthy / never
+    // Loading-screen portrait fail-fast semaphore state: 0 = healthy / never
     // tripped; nonzero packs (loaded_slot<<16)|(render_target_slot<<8)|cond (cond bit0=wrong-slot,
     // bit1=null loaded renderer). On diagnostic runs a violation also crashes the run (crash log).
     body.push_str(&format!(
         "  \"oracle_portrait_render_semaphore\": {},\n",
         PORTRAIT_RENDER_SEMAPHORE_STATE.load(Ordering::SeqCst)
     ));
-    // In-world ProfileSelect table guard (er-effects-rs-j3r): repairs = native-setup rebuilds of a
+    // In-world ProfileSelect table guard: repairs = native-setup rebuilds of a
     // fully-empty renderer table at builder entry; guard_skips = native builder calls dropped
     // because a slot would still null-deref at [entry+0x754].
     body.push_str(&format!(
@@ -264,7 +264,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         ),
         crate::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
     ));
-    // RequestMoveMap BlockId fix (bd er-effects-rs-um9g): fixups>=1 == the render-handoff fix fired on
+    // RequestMoveMap BlockId fix: fixups>=1 == the render-handoff fix fired on
     // this load (substituted last_c30 for the invalid last_before target BlockId).
     body.push_str(&format!(
         "  \"oracle_request_move_map_hook_calls\": {},\n  \"oracle_request_move_map_hook_fixups\": {},\n  \"oracle_request_move_map_last_before\": \"0x{:x}\",\n  \"oracle_request_move_map_last_c30\": \"0x{:x}\",\n",
@@ -818,7 +818,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
         er_telemetry_core::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
     ));
-    // The Z-order verdict, and it is two VERDICTS, not one (er-effects-rs-mc1d). These replace the
+    // The Z-order verdict, and it is two VERDICTS, not one. These replace the
     // single fused `oracle_save_picker_dim_z_violations`, which scored "the cover is behind the
     // game" and "the cover is over the dialog" into the same atomic even though they are opposite
     // failures. A run came back with 130 of them across 424 dim frames and could therefore neither
@@ -1032,7 +1032,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             witnesses.signature()
         ));
     }
-    // Full-read chain terminal disarm (bd er-effects-rs-ns4n): count > 0 proves a non-commit exit
+    // Full-read chain terminal disarm: count > 0 proves a non-commit exit
     // cleared the pending native slot request, so the in-game save manager cannot service a stale
     // request into the live world (the gaitem free-queue AV at 1.16.2 0x67141a). `_last_prev_slot` is the
     // i32 slot value the last clear removed, u32-packed (0xffffffff == the no-request sentinel, i.e.
@@ -1066,7 +1066,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // `target_source` is that same question at full resolution -- 0 = uncommitted, 1 = ac0, 2 = the
     // b78 load-request register, 3 = the user's pick -- and it is the value the yield rule actually
     // compares. The boolean cannot distinguish a latch taken off a stale ac0 from one the user
-    // clicked, which is how bd er-effects-rs-fmy6 stayed open: across save files the window latched
+    // clicked, which is how a wrong-face bug stayed open: across save files the window latched
     // slot 0 off an obsolete ac0 and then refused the b78 that named the real slot 1. A window that
     // ends a load at 1 has never seen anything better than ac0 about the face it showed.
     body.push_str(&format!(
@@ -1077,7 +1077,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PORTRAIT_WINDOW_TARGET_SOURCE.load(Ordering::SeqCst),
         PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS.load(Ordering::SeqCst)
     ));
-    // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
+    // Missing-save picker menu-open hold: count > 0 proves the native
     // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
     // with the save present. On a fast/early pick this stays 0 (nothing to suppress).
     //
@@ -1628,7 +1628,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // redirect leaked and the loaded save was overwritten anyway, and `live_overwrite_count` names
     // the opposite case: a commit that was supposed to rewrite the loaded save.
     //
-    // `picker_open_retry_count` is the reopen-loop oracle (bd `er-effects-rs-rsxi`): opens where no
+    // `picker_open_retry_count` is the reopen-loop oracle: opens where no
     // picker ran and the menu pump kept the request armed. A deferred in-game MenuJob submit is the
     // only legitimate source, so with the OS surface active this must read 0 -- a positive value
     // there means a terminal outcome (a Cancel) was retried, which reopens comdlg32 forever.

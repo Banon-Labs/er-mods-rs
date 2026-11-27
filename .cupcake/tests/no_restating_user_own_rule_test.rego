@@ -16,7 +16,7 @@ import rego.v1
 import data.cupcake.policies.claude.no_restating_user_own_rule as guard
 
 # The clause the signal lifts out of the verbatim turn that prompted this guard (2026-09-23,
-# closing a turn that had just opened draft pull request #481).
+# closing a turn that had just opened a draft pull request).
 verbatim := "undrafting is yours"
 
 facts(clause, command, guardevent) := concat("", [

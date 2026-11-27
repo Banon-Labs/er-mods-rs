@@ -4,8 +4,8 @@
 //! submit helper.
 //!
 //! Moved verbatim from er-quickload `experiments/gpu_readback/gpu_draw_shared.rs` with the
-//! loading-cover crate extraction (bd er-effects-rs-f9mq had relocated it out of the deleted
-//! path-A overlay composite before that). The only edit is visibility: the helpers were
+//! loading-cover crate extraction (it had been relocated out of the deleted path-A overlay
+//! composite before that). The only edit is visibility: the helpers were
 //! `pub(super)` inside the root's flat `gpu_readback` namespace and are `pub` here, because
 //! their callers now sit on the other side of a crate boundary.
 

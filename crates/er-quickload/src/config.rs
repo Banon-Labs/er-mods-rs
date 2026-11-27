@@ -509,7 +509,7 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
                     // state: a DLL-adjacent file staged for one run silently became the
                     // game-wide default for every later launch, including the user's own.
                     // Sixteen such stale files exist under target/ and .worktrees/ in this
-                    // tree alone -- one of them pins a PR #116 repro save and an OS-picker
+                    // tree alone -- one of them pins a repro save and an OS-picker
                     // flag from 2026-08-01.
                     append_autoload_debug(format_args!(
                         "runtime-config: read legacy DLL-adjacent config '{}' because game-directory config '{}' does not exist; NOT copying it there",

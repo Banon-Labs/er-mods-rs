@@ -36,8 +36,8 @@ pub(crate) fn profile_select_load_flow_enabled() -> bool {
 /// `autoload_disabled()`; telemetry-only runs stay off; env/file remain force-on overrides.
 /// True on native Windows (not Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
 /// never does. Cached. Used to disable the character-profile render-drive on native Windows, where
-/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
-/// er-effects-rs-n4x, 2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
+/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver
+/// (2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
 pub(crate) fn is_native_windows() -> bool {
     use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
@@ -341,7 +341,7 @@ pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
 // corresponding `TitleFlowHost` fields to `|| false` closures instead, so the seam keeps its shape
 // without this crate carrying a function whose only possible answer is `false`.
 //
-// Four more went the same way (2026-08-26, PR #362 review -- the user refused to approve a change
+// Four more went the same way (2026-08-26, in review -- the user refused to approve a change
 // that added permanently-false gates: "we cannot rely on env gating for product stability"):
 //
 //   * `native_profile_capture_enabled` -- a diagnostic native ProfileSelect/portrait-capture mode.

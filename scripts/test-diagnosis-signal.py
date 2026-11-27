@@ -206,6 +206,18 @@ def main() -> int:
         handback=False,
     )
 
+    # A commit reply handed on its own line does not block fixing what the message diagnosed: the
+    # idle-hold signal reads that line as a wait on the user, the shared blocked-on-user test does
+    # not (2026-11-11).
+    expect_facts(
+        "diagnosis-with-a-handed-commit-reply",
+        [user("it was working for me"),
+         assistant_text("The real defect is that the counter is a lifetime total.\n\nauthorize commit")],
+        diagnosis=True,
+        fixed="0",
+        blocked="0",
+    )
+
     # --- the promissory closer --------------------------------------------------------------------
 
     # 1. The verbatim failure: announced, and nothing written.

@@ -36,7 +36,7 @@ pub use er_telemetry_core::counters::LS_PORTRAIT_LAST_W;
 /// detection (0 == never seen).
 pub use er_telemetry_core::counters::LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION;
 /// Identity tag of the currently-published head: slot+1 and the FNV-1a64 name hash, written next to the
-/// bridge on every publish, cleared with the bridge (bd er-effects-rs-dpf6 Phase 1). Exposed as
+/// bridge on every publish, cleared with the bridge. Exposed as
 /// `oracle_ls_portrait_slot` / `oracle_ls_portrait_name_hash`.
 pub use er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH;
 pub use er_telemetry_core::counters::LS_PORTRAIT_PUBLISHED_SLOT;
@@ -47,7 +47,7 @@ pub use er_telemetry_core::counters::LS_PORTRAIT_REJECTED_PUBLISHES;
 /// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
 /// `LOADING_BG_PORTRAIT_RGBA_VERSION` at first detection (0 == never seen).
 pub use er_telemetry_core::counters::LS_PORTRAIT_TOO_SMALL_SEEN_VERSION;
-/// Same-identity bridge holds across own-menu-switch rearms (bd er-effects-rs-dpf6 Phase 3), and
+/// Same-identity bridge holds across own-menu-switch rearms, and
 /// what became of them: the outstanding provisional hold (slot+1, 0 = none), holds revoked by the
 /// record-vs-preview face fingerprint, and holds that rode a whole window with neither outcome.
 /// Exposed as `oracle_portrait_bridge_hold_*`.
@@ -55,7 +55,7 @@ pub use er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_PROVISIONAL;
 pub use er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_REVOCATIONS;
 pub use er_telemetry_core::counters::PORTRAIT_BRIDGE_HOLD_UNPROVEN;
 pub use er_telemetry_core::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS;
-/// Confirm (RETARGET) timestamp + measured confirm->publish latency (bd er-effects-rs-dpf6 Phase 1).
+/// Confirm (RETARGET) timestamp + measured confirm->publish latency.
 pub use er_telemetry_core::counters::PORTRAIT_CONFIRM_MS;
 pub use er_telemetry_core::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST;
 /// Name-hash of the pipeline's current target slot, stamped at the game-thread build kick.
@@ -243,7 +243,7 @@ pub use er_telemetry_core::counters::PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED;
 /// Diagnostic + repair hook on the native profile-portrait builder (`PROFILE_RENDERER_REFRESH_RVA`
 /// = `FUN_1409abcd0`). The builder walks all 10 `DAT_143d74960` entries and derefs
 /// `table[slot]+0x754` with no null check for every slot whose profile record exists -- the
-/// er-effects-rs-j3r AV. Its table setup (`PROFILE_TABLE_BUILDER_RVA`) is called from exactly one
+/// null-slot AV. Its table setup (`PROFILE_TABLE_BUILDER_RVA`) is called from exactly one
 /// native site, the TitleTopDialog constructor (Ghidra xref), so our cloned in-world ProfileSelect
 /// reopens run the builder against whatever the last teardown left; by the 3rd in-session open the
 /// table is fully empty. The detour logs degraded tables, REBUILDS a fully-empty one via the native
@@ -269,7 +269,7 @@ pub use er_telemetry_core::counters::PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT;
 /// Distinct-state latch for the guard-skip log line (same keying idea as the diag latch).
 pub use er_telemetry_core::counters::PROFILE_SELECT_TABLE_GUARD_SKIP_LAST;
 /// Count of in-world profile-renderer table REPAIRS: the builder detour found the 10-slot table
-/// fully empty (er-effects-rs-j3r: nothing repopulates it on our in-world ProfileSelect reopens) and
+/// fully empty (nothing repopulates it on our in-world ProfileSelect reopens) and
 /// re-ran the native table setup to satisfy the native invariant. Exposed as
 /// `oracle_profileselect_table_repairs`.
 pub use er_telemetry_core::counters::PROFILE_SELECT_TABLE_REPAIR_COUNT;
@@ -281,7 +281,7 @@ pub const PORTRAIT_HOLD_MAX_TICKS: usize = 240;
 pub const PROFILE_RENDERER_REFRESH_RVA: usize = 0x9abcd0;
 /// One-shot log latch so the semaphore's crash-log/debug line prints exactly once before the fault.
 pub use er_telemetry_core::counters::PORTRAIT_RENDER_SEMAPHORE_LOGGED;
-/// Loading-screen portrait fail-fast SEMAPHORE (er-effects-rs-j3r; user directive 2026-07-02: "it
+/// Loading-screen portrait fail-fast SEMAPHORE (user directive 2026-07-02: "it
 /// should crash, with our harness so we know early if we introduce a regression"). Our portrait
 /// renderer must build the same slot the game actually loaded (`GameMan.save_slot`/ac0 -- the load
 /// itself is correct; only our custom renderer picks the wrong slot). Packed state on a violation:

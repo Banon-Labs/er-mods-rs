@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Make filing a fix without starting it stop the turn."}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I tested it end to end: filed-and-dropped halts, filed-then-started passes, filed-and-blocked passes. AGENTS.md now carries the same rule."}]}}

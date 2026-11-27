@@ -348,7 +348,7 @@ ENRICHMENT_CASES = [
 def check_enrichment_contract() -> list[str]:
     """The ENRICHMENT_CASES loop runs concurrently for the same reason as
     check_case_table below: independent measurements, one process each, and no
-    reason to pay for them one at a time (bd er-effects-rs-5z75).
+    reason to pay for them one at a time.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -461,8 +461,8 @@ def rebase_fixture_paths(affected: object) -> object:
 
 def check_case_table() -> list[str]:
     """Run concurrently: one `cupcake eval` process per case, and this table has
-    grown to 12 entries since the sequential-loop version was measured (bd
-    er-effects-rs-5z75) -- combined with the other sections below, that pushed
+    grown to 12 entries since the sequential-loop version was measured
+    -- combined with the other sections below, that pushed
     the whole gate from ~13s to ~47s, over the caller's 30s subprocess cap.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -710,8 +710,8 @@ SHIM_LOAD_BEARING_CASES = [
 
 
 def check_shim_is_load_bearing() -> list[str]:
-    """Two `cupcake eval` processes per case, run concurrently (bd
-    er-effects-rs-5z75) -- same reasoning as check_case_table below.
+    """Two `cupcake eval` processes per case, run concurrently
+    -- same reasoning as check_case_table below.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -741,8 +741,8 @@ def check_shim_is_load_bearing() -> list[str]:
 
 
 def check_production_path() -> list[str]:
-    """One `cupcake-hook.sh` process per case, run concurrently (bd
-    er-effects-rs-5z75) -- same reasoning as check_case_table below.
+    """One `cupcake-hook.sh` process per case, run concurrently
+    -- same reasoning as check_case_table below.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -1195,7 +1195,7 @@ def check_guard_layer_forms() -> list[str]:
 # `contains(cmd, "<hooks dir>")` over the whole command string. So a command that
 # removed an unrelated directory and then installed a hook was denied with
 # "Disabling git hooks is not permitted" -- and so was the bug report about it,
-# for quoting both tokens. bd er-effects-rs-c0t9, measured live 2026-08-31.
+# for quoting both tokens. Measured live 2026-08-31.
 #
 # Why these cases are here and not only in `opa test`. Two reasons, and the
 # second is the one that would otherwise go unnoticed:

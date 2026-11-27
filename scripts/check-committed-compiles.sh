@@ -50,7 +50,7 @@
 #     scripts/hooks/pre-push, the pre-push gate suite and this file -- while the workspace root
 #     sets `[workspace.lints.clippy]` to deny. So every lint denial in this repo was enforced
 #     exclusively by CI, and `cargo check` is happy with code `cargo clippy` rejects. Measured on
-#     PR #388, run 33793058851: `clippy::manual_is_multiple_of` at
+#     CI run 33793058851: `clippy::manual_is_multiple_of` at
 #     crates/er-npc-possess/src/possess/fall.rs:206 reached origin, went red in CI, and no local
 #     gate had anything to say about it -- not because anyone bypassed the hook, but because the
 #     hook ran and did not ask the question. rustc was 1.98.0 on both sides; this was never a

@@ -76,9 +76,9 @@ _FIX_CLAIM = re.compile(
 
 # The stems that are names rather than claims. `\b` already excludes `prefix`, `suffix`, `bugfix`
 # and `hotfix`, because a word character sits in front of the stem in each; these are the ones it
-# does not exclude on its own. A branch (`fix/harness-repl-reach`), a slug (`fix-the-loader`), a
-# file (`fix.md`) and `fixture` all read as "fix" to a word-boundary match and none of them is a
-# claim about anything.
+# does not exclude on its own. A branch (`fix/<topic>`), a slug (`fix-the-loader`), a file
+# (`fix.md`) and `fixture` all read as "fix" to a word-boundary match and none of them is a claim
+# about anything.
 _NAME_STEM = re.compile(r"\bfix(?:ture|/|-[A-Za-z0-9]|\.[A-Za-z0-9])")
 
 # An honest hedge suppresses the hit outright, and that is the whole point: saying a change is

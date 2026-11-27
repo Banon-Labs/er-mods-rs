@@ -17,7 +17,7 @@
 # redirect. Run that way, the DLL logs land in the game directory, which the push gate does not
 # read, so a run that really did execute the pushed commit leaves no evidence the gate can find.
 # That is the whole gap this closes: same launch, artifacts somewhere both the user and the gate
-# can see (bd er-effects-rs-rhqv).
+# can see.
 #
 # What it does not do, on purpose: pick or stage a save, write the game-directory
 # `er-quickload.toml`, or reap anything. The save is the game's and stays the game's.

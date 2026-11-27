@@ -114,7 +114,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# never invokes the linker, so a shell that cannot link -- a missing `#[no_mangle]`
 	# DllMain, a bad crate-type, an unresolved import from a `cfg(windows)` block -- passed
 	# every gate above while being unloadable. Found when the DLL had to be built by hand
-	# with an ad-hoc `-p` invocation to run it at all (bd er-effects-rs-5es review).
+	# with an ad-hoc `-p` invocation to run it at all.
 	# `er-invasion-warp` is not a default-member and nothing depends on it, so this is
 	# the only step in any gate that produces the artifact a profile can load.
 	# Every ME3-LOADABLE shell must link. `cargo xwin check` stops at metadata and never
@@ -124,7 +124,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# product itself -- were never linked by any gate. A shell that cannot link (missing
 	# `#[no_mangle] DllMain`, wrong crate-type, an unresolved import inside a `cfg(windows)`
 	# block) passed the whole suite while being unloadable. Found when er-invasion-warp
-	# had to be built by hand with an ad-hoc `-p` to run it at all (bd er-effects-rs-5es).
+	# had to be built by hand with an ad-hoc `-p` to run it at all.
 	#
 	# Keep this list in sync with the cdylibs that define `DllMain`. Measured cost: well under
 	# a second per shell incrementally, which is cheap enough to run unconditionally. (The

@@ -323,8 +323,8 @@ pub(crate) mod physics {
 pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize =
     er_game_base::rva::CS_WORLD_GEOM_MAN_GLOBAL_RVA;
 
-/// The rest of the character layout the lab's producers read (`scripts/frida/spawn-npc.js` on
-/// `feat/ai-lab-turtles`, each read live on 1.17.1; the lab names the source of every one).
+/// The rest of the character layout the lab's producers read (`scripts/frida/spawn-npc.js`,
+/// each read live on 1.17.1; the lab names the source of every one).
 pub(crate) mod lab {
     /// `ChrIns+0x60`: the `NpcParam` id, 0 or below for a real player.
     pub(crate) const NPC_PARAM: usize = 0x60;

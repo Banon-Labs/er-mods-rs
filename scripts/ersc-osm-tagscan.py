@@ -9,8 +9,7 @@ writable sections and testing each qword as a pointer. On 2026-09-08 that scan w
 crossing all of it still finds no global whose `+0x58` is a session -- so the OSM, the object every
 ERSC option action takes as its first argument, is not parked in an `ersc.dll` global at all. The
 static picture agrees: `ersc+0x258d0` has zero direct callers, no vtable holds it, and the
-registrar at `ersc+0x2a1e0` jumps straight into the mutated `ERSC` section. Open issue
-er-effects-rs-9i0g.
+registrar at `ersc+0x2a1e0` jumps straight into the mutated `ERSC` section.
 
 What is left is to look for the OSM by what it contains rather than by who points at it. It carries
 the ASCII tag `seamless` at `+0x68` (measured live 2026-08-04) and the session at `+0x58`. That

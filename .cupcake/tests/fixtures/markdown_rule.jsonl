@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Should an LLM be prohibited from making non-cited claims about timelines?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Yes, for a forecast that cites nothing measured. A projection from a measured pace or a timed sample is useful, because it decides whether to wait for a run or stop it. The rule is now in `docs/agents/runtime-evidence.md`."}]}}

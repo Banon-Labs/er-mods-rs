@@ -460,12 +460,17 @@ ORPHANED_REGO_SUITES = [
         ".cupcake/tests/guard_layer_destructive_guard_test.rego",
     ],
     [
+        ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/edit_no_tmp_scripts_guard.rego",
         ".cupcake/tests/edit_no_tmp_scripts_guard_test.rego",
     ],
     [
         ".cupcake/policies/claude/monitor_rate_limit.rego",
         ".cupcake/tests/monitor_rate_limit_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_subagent_monitor.rego",
+        ".cupcake/tests/no_subagent_monitor_test.rego",
     ],
     [
         # `commands.rego` is listed because the policy reads the shared command-slot
@@ -879,6 +884,30 @@ FOREGROUND_CAP_NOTICE = (
 )
 
 
+PYTHON_EXEC_FIXTURE_DIR = REPO_ROOT / ".cupcake" / "tests" / "fixtures" / "python_exec"
+PYTHON_EXEC_FIXTURE_ENV = (("CUPCAKE_PYTHON_EXEC_PATH", str(PYTHON_EXEC_FIXTURE_DIR)),)
+READ_ONLY_PY_FIXTURE = PYTHON_EXEC_FIXTURE_DIR / "fixture_reads_stdout.py"
+GUARD_TEST_SUITE = Path.home() / ".config" / "cupcake" / "tests" / "check_background_tails.py"
+
+
+def guard_test_suite_cases() -> list[PolicyCase]:
+    """The global guards' test suite refused on 2026-11-16, run through the real signal. It is
+    admitted only because it is committed in that repo's `HEAD`, so these cases need the repo."""
+    if not GUARD_TEST_SUITE.is_file():
+        print(f"skip: committed guard test suite cases ({GUARD_TEST_SUITE} absent)")
+        return []
+    return [
+        PolicyCase("allow-committed-guard-test-suite", f"python3 {GUARD_TEST_SUITE}", True),
+        # The same file is scanned like any other script when the command could rewrite it.
+        PolicyCase(
+            "deny-guard-test-suite-beside-a-write-tool",
+            f"cp /tmp/p.py /tmp/q.py; python3 {GUARD_TEST_SUITE}",
+            False,
+            "python file write from Bash",
+        ),
+    ]
+
+
 def main() -> int:
     # Flushed, and first: buffered output does not survive SIGKILL, and this notice is worth
     # nothing if the cap eats it.
@@ -1066,10 +1095,9 @@ def main() -> int:
         # rule anything that actually runs.
         # Written to `build-support/`, not `crates/`, since 2026-09-22: it is still a Rust file
         # authored through a heredoc, which is what this case is about, and the Frida gate now
-        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it (bd
-        # er-effects-rs-wuij). Keeping the old path would have tested that guard instead of
-        # this one, and would have made the case's verdict depend on whether this checkout
-        # happens to carry a measurement.
+        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it. Keeping
+        # the old path would have tested that guard instead of this one, and would have made
+        # the case's verdict depend on whether this checkout happens to carry a measurement.
         PolicyCase(
             "allow-rust-doc-comment-heredoc-with-prose-verb",
             "cat > build-support/demo.rs <<'EOF'\n"
@@ -1095,8 +1123,8 @@ def main() -> int:
         ),
         # The separator is written out rather than left to a newline: this runner
         # calls `cupcake eval` directly, so scripts/cupcake-hook.sh is not in the
-        # path to rewrite an unquoted newline to "; " (bd er-effects-rs-5eah) and
-        # line 2 would arrive with no boundary in front of it.
+        # path to rewrite an unquoted newline to "; " and line 2 would arrive
+        # with no boundary in front of it.
         PolicyCase(
             "deny-root-delete-after-heredoc-terminator",
             "git commit -q -F - <<'EOF'\n"
@@ -1486,7 +1514,7 @@ def main() -> int:
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
-        # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ------
+        # --- Shell-wrapper payloads (2026-08-26) ------
         #
         # Measured against this same live engine before the fix: every one of the
         # deny cases below came back allow with zero denials. The four git guards
@@ -1864,8 +1892,8 @@ def main() -> int:
         ),
         # bd only records text: a single, non-chained bd invocation whose pgrep
         # token sits entirely inside quoted issue-tracker text is exempt
-        # (2026-07-29 false positive, bd er-effects-rs-uxyz: a bd close --reason
-        # describing launch-guard allow-tests was denied).
+        # (2026-07-29 false positive: a bd close --reason describing
+        # launch-guard allow-tests was denied).
         PolicyCase(
             "allow-bd-close-reason-mentioning-pgrep",
             '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard'
@@ -2161,7 +2189,7 @@ def main() -> int:
         # Exact /proc cleanup/teardown for stale Elden Ring/EAC launcher
         # processes is allowed: it names the protected launcher only as data,
         # reads /proc, and sends signals to exact matching pids without
-        # launching the named executable (er-effects-rs-9iz).
+        # launching the named executable.
         PolicyCase(
             "allow-proc-comm-scan-sigterm-sigkill-cleanup-naming-eac-launcher",
             "python3 - <<'PY'\n"
@@ -2351,7 +2379,7 @@ def main() -> int:
         ),
         # Restoring the user's game-installed co-op DLL (same-path rename that
         # only strips the repo's .er-quickload-staged suffix) is the opposite of
-        # bundling and is allowed (bd er-effects-rs-gkqa).
+        # bundling and is allowed.
         PolicyCase(
             "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
             "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
@@ -2367,8 +2395,8 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # A read-only interpreter scan of the installed DLL with the path as an
-        # unquoted operand is allowed (bd er-effects-rs-gkqa: arm (a) counted
-        # python/bash as bundling verbs).
+        # unquoted operand is allowed (arm (a) counted python/bash as bundling
+        # verbs).
         PolicyCase(
             "allow-python-scan-gameinstall-ersc-dll-unquoted-operand",
             "python3 scripts/pe_export_dump.py"
@@ -2561,10 +2589,66 @@ def main() -> int:
             False,
             "authoring a script into /tmp",
         ),
+        # C a decompiler wrote is data (2026-11-10). The measured subagent redirect and the `cd` +
+        # relative spelling of the same dump are both admitted through the whole rulebook, while a
+        # script or hand-written C authored after `cd` into the scratchpad is refused the way its
+        # absolute spelling is, and hand-written C is refused from a Write too.
+        PolicyCase(
+            "allow-decompile-redirect-into-scratchpad-c",
+            "python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{\"address\":\"1404275e0\"}'"
+            " | jq -r .result > /tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad/"
+            "chractionflag-1162.c",
+            True,
+        ),
+        PolicyCase(
+            "allow-cd-scratchpad-relative-decompile-c",
+            "cd /tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad"
+            " && jq -r .result hksenv-1162.json > hksenv-1162.c && wc -l hksenv-1162.c",
+            True,
+        ),
+        PolicyCase(
+            "deny-cd-scratchpad-relative-heredoc-py",
+            "cd /tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad"
+            " && cat > probe.py <<'EOF'\nprint(1)\nEOF",
+            False,
+            "authoring a script into /tmp",
+        ),
+        PolicyCase(
+            "deny-cd-scratchpad-relative-echo-c",
+            "cd /tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad"
+            " && echo 'int main(void) { return 0; }' > probe.c",
+            False,
+            "authoring a script into /tmp",
+        ),
+        PolicyCase(
+            "allow-write-decompiler-output-c-into-scratchpad",
+            "",
+            True,
+            None,
+            {
+                "file_path": "/tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad/f1406832a0.c",
+                "content": "/* WARNING: Unknown calling convention */\n\nvoid FUN_1406832a0(longlong param_1)\n\n"
+                "{\n  undefined4 uVar1;\n\n  uVar1 = *(undefined4 *)(param_1 + 0xf4);\n  return;\n}\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "deny-write-hand-written-c-into-scratchpad",
+            "",
+            False,
+            "authoring a script into /tmp",
+            {
+                "file_path": "/tmp/claude-1000/-home-banon-projects-er-mods-rs/session/scratchpad/probe.c",
+                "content": "#include <stdio.h>\n\nint main(void) { return 0; }\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
         # A write target spelled through a variable bound to /tmp earlier in the command
         # (2026-11-07): the measured escape, minus its `python3 $S/...` run for the reason given
-        # above. Driven through the engine because the resolution rests on unmatched regex groups
-        # reading as "" and on `split`/`array.slice`, which is where the wasm runtime and
+        # above. Driven through the engine because the variable resolution rests on token
+        # arithmetic and `commands.variable_reference`, which is where the wasm runtime and
         # `opa test` can disagree.
         PolicyCase(
             "deny-heredoc-script-into-scratchpad-through-variable",
@@ -2716,6 +2800,34 @@ def main() -> int:
             include_timeout=False,
             tool_name="Edit",
         ),
+        # `ER-EFFECTS-NO-TRACKER-REFS-GUARD`, live, for the same reason as the caps pair above: an
+        # opa-green policy that cupcake's WASM runtime cannot execute returns nothing and reads as
+        # an allow. Aimed at a `.py` file for the reason given above the caps deny case. The
+        # allow case is the load-bearing one: the same branch name in a string is code.
+        PolicyCase(
+            "deny-write-pull-request-number-into-a-comment",
+            "",
+            False,
+            "Comments carry no beads ids, PR numbers or branch names",
+            {
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# landed in PR #398, on fix/harness-repl-reach\ndef f():\n    pass\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-branch-name-in-a-string",
+            "",
+            True,
+            None,
+            {
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# the fixture's branch\nBRANCH = \"fix/harness-repl-reach\"\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
         # AskUserQuestion (the multiple-choice questionnaire tool). Corrected 2026-08-15: the prior
         # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
         # design-interview question from the `grilling` skill was blocked while not in any /goal work.
@@ -2832,6 +2944,21 @@ def main() -> int:
             "sed -n '20,60p' scripts/test-er-push-watched-ref-carries-work.sh",
             True,
         ),
+        # The script is `check.sh` as a whole path component (2026-11-11): the rulebook's own
+        # compile signal was refused as a run of the suite for ending in the same letters, while
+        # `env -C` into `scripts/` ran the suite past the guard because the directory was read as
+        # the program.
+        PolicyCase(
+            "allow-a-script-whose-name-only-ends-in-check-sh",
+            "bash .cupcake/signals/rego_compile_check.sh < /dev/null",
+            True,
+        ),
+        PolicyCase(
+            "check-sh-guard-denies-a-run-behind-env-chdir",
+            "env -C scripts ./check.sh",
+            False,
+            "The agent does not run scripts/check.sh",
+        ),
         # `me3_launch_needs_windows_binaries_dir`, live for the reason above: its opa suite runs in
         # the interpreter, and the rulebook runs it as wasm. The first case is the launch that hung
         # on 2026-10-22 (me3 took the repo's target/ dir for its Windows binaries); the second is
@@ -2863,9 +2990,12 @@ def main() -> int:
             False,
             "fan-out of more than 4 parallel workers",
         ),
+        # The worker is a committed script: since 2026-11-19 `bash_no_python_file_write` follows
+        # `xargs` to the program it runs, so the uncommitted `python3 x.py` this case used to name
+        # is refused by that guard, as it is when run bare.
         PolicyCase(
             "fanout-guard-allows-a-memory-capped-scope",
-            'systemd-run --user --scope -p MemoryMax=8G -- bash -c "ls work/*/orig.ll | xargs -n 200 -P 12 python3 x.py"',
+            'systemd-run --user --scope -p MemoryMax=8G -- bash -c "ls work/*/orig.ll | xargs -n 200 -P 12 python3 scripts/x.py"',
             True,
         ),
         PolicyCase(
@@ -2875,7 +3005,7 @@ def main() -> int:
         ),
     ])
 
-    # --- payload versus command (bd er-effects-rs-ak3q, bd er-effects-rs-if5l) -------------
+    # --- payload versus command -------------
     #
     # Three guards matched the whole command string, so any tool taking prose that quotes
     # another command's name tripped them. All three blocks below happened in production on
@@ -3104,9 +3234,93 @@ def main() -> int:
             False,
             "python file write from Bash",
         ),
+        # A python program run by its name (2026-11-16): `kitty-tail-bg --selftest` ran
+        # unchecked. The real signal resolves the name through `CUPCAKE_PYTHON_EXEC_PATH`, which
+        # points at two committed fixtures, so these cases do not depend on what is on `PATH`.
+        PolicyCase(
+            "deny-python-program-run-by-name",
+            "fixture-python-writes --selftest",
+            False,
+            "python program run by name",
+            extra_env=PYTHON_EXEC_FIXTURE_ENV,
+        ),
+        PolicyCase(
+            "deny-python-program-run-by-name-inside-bash-c",
+            'timeout 9 bash -c "fixture-python-writes --selftest"',
+            False,
+            "python program run by name",
+            extra_env=PYTHON_EXEC_FIXTURE_ENV,
+        ),
+        PolicyCase(
+            "deny-python-program-handed-to-python-without-suffix",
+            f"python3 {PYTHON_EXEC_FIXTURE_DIR}/fixture-python-writes",
+            False,
+            "python program run by name",
+            extra_env=PYTHON_EXEC_FIXTURE_ENV,
+        ),
+        PolicyCase(
+            "allow-read-only-python-program-run-by-name",
+            "fixture-python-reads a b",
+            True,
+            extra_env=PYTHON_EXEC_FIXTURE_ENV,
+        ),
+        # A read-only script beside a `sed -n`, and beside a `$(...)` and `$((...))`: the two
+        # shapes refused on 2026-11-19/20 (the signal marked any `sed` and any `$(`). The real
+        # signal reads the committed fixture, so the allows prove the whole path. A `sed` that
+        # can write keeps the refusal.
+        PolicyCase(
+            "allow-read-only-script-beside-sed-n",
+            f"cd {REPO_ROOT} && python3 {READ_ONLY_PY_FIXTURE} target/wrap.log 400 "
+            "'2026-11-19 18:52:05' | grep -E 'attack sets|since the start' "
+            "| sed -n '1,3p;8,10p;$p' | cut -c1-190",
+            True,
+        ),
+        PolicyCase(
+            "allow-read-only-script-beside-a-substitution",
+            f"cd {REPO_ROOT}/target && n=$(wc -l < wrap.log); {{ python3 {READ_ONLY_PY_FIXTURE} "
+            "wrap.log $n /x '2026-11-19 18:52:05'; tail -n +$((n+1)) -F --pid=2514771 wrap.log "
+            f"| gawk -f {REPO_ROOT}/target/stamp_live.awk; }} > wrap.stamped.log",
+            True,
+        ),
+        PolicyCase(
+            "deny-read-only-script-beside-sed-in-place",
+            f"sed -i 's/a/b/' {READ_ONLY_PY_FIXTURE}; python3 {READ_ONLY_PY_FIXTURE}",
+            False,
+            "python file write from Bash",
+        ),
+        PolicyCase(
+            "deny-read-only-script-beside-sed-w-flag",
+            f"python3 {READ_ONLY_PY_FIXTURE} | sed 's/a/b/w out'",
+            False,
+            "python file write from Bash",
+        ),
+        PolicyCase(
+            "allow-python-program-named-as-an-operand",
+            "echo fixture-python-writes",
+            True,
+            extra_env=PYTHON_EXEC_FIXTURE_ENV,
+        ),
+        PolicyCase(
+            "allow-committed-script-run-directly",
+            "./scripts/cupcake_python_script_writes.py --selftest",
+            True,
+        ),
+        # The tail the global Stop guard background_task_needs_tail.rego suggests for a background
+        # task started in this repo (2026-11-16). It used to suggest `kitty-tail-bg`, which this
+        # guard refuses; the signal now names this repo's committed helper by absolute path when
+        # the session's checkout ships it with `--split`, and that spelling must stay admitted.
+        PolicyCase(
+            "allow-global-tail-suggestion-for-this-repo",
+            f"python3 {REPO_ROOT}/scripts/kitty-tail-task.py --split "
+            "--title 'tail: cargo build (b1x2y3z4w)' "
+            "--file /tmp/claude-1000/-home-banon-projects-er-mods-rs/s/tasks/b1x2y3z4w.output "
+            "--file /tmp/w/build.log",
+            True,
+        ),
+        *guard_test_suite_cases(),
     ])
 
-    # --- the Bash spelling of a Rust edit (bd er-effects-rs-wuij) --------------------------
+    # --- the Bash spelling of a Rust edit --------------------------
     #
     # The Frida gate routed on the write tools and denied on `tool_input.file_path`, which a
     # Bash call does not have, so the rule was undefined for every shell spelling of the edit.
@@ -3222,6 +3436,75 @@ def main() -> int:
             "title : bad",
         ),
     ])
+
+    # --- a TaskStop on a subagent still waiting on its own background work (2026-11-11) -----------
+    #
+    # A TaskStop on agent abce87a3bda959d98, whose latest notification said it "is waiting on its
+    # own background work", killed its running selftest. Each case hands the real signal a fixture
+    # transcript; the TaskStop's own line is not in it, as in the main session while hooks run.
+    taskstop_fixtures = REPO_ROOT / ".cupcake" / "tests" / "fixtures"
+    for name, fixture, allow, text in (
+        ("deny-taskstop-on-agent-waiting-on-its-own-background-work", "taskstop_waiting_agent.jsonl",
+         False, "is waiting on its own background work"),
+        ("allow-taskstop-on-waiting-agent-the-user-said-to-stop", "taskstop_waiting_agent_user_says_stop.jsonl",
+         True, None),
+        ("allow-taskstop-on-agent-that-finished", "taskstop_finished_agent.jsonl", True, None),
+    ):
+        cases.append(PolicyCase(
+            name, "", allow, text,
+            extra_tool_input={"task_id": "abce87a3bda959d98"},
+            extra_event={"transcript_path": str(taskstop_fixtures / fixture),
+                         "tool_use_id": f"toolu_regression_{name}"},
+            include_timeout=False,
+            tool_name="TaskStop",
+        ))
+
+    # --- a Monitor armed by a subagent (2026-11-14) ---------------------------------------------------
+    #
+    # Each Monitor event woke the agent "Build v12 run tree with speed-up", and each turn it ended then
+    # notified the main session: more than a dozen notifications in under an hour. `agent_id` reaches
+    # the policy only through the `subagent_id` signal, so these run the real signal.
+    throttled_monitor = {"command": "tail -F /x/run.log | python3 scripts/monitor-throttle.py 10",
+                         "description": "regression case"}
+    for name, event, allow, text in (
+        ("deny-monitor-armed-by-a-subagent", {"agent_id": "a8748dea441b1674d"}, False,
+         "Monitor in a subagent"),
+        ("allow-throttled-monitor-in-the-main-session", {}, True, None),
+    ):
+        cases.append(PolicyCase(
+            name, "", allow, text,
+            extra_tool_input=throttled_monitor,
+            extra_event=event or None,
+            include_timeout=False,
+            tool_name="Monitor",
+        ))
+
+    # --- a write that leaves the engine's policy set uncompiled (2026-11-11) ------------------------
+    #
+    # An Edit made a policy call `value_of` one Edit before anything defined it; cupcake could not
+    # compile, every tool call in every session was refused, and the user deleted the file by hand.
+    # The probe path below is never written: the eval only judges the Write. The signal checks it
+    # against a copy of this checkout's .cupcake.
+    probe = REPO_ROOT / ".cupcake" / "policies" / "claude" / "zz_policy_regression_compile_probe.rego"
+    probe_head = ("# METADATA\n# scope: package\n# custom:\n#   routing:\n"
+                  "#     required_events: [\"PreToolUse\"]\n#     required_tools: [\"Bash\"]\n"
+                  "package cupcake.policies.claude.zz_policy_regression_compile_probe\n\nimport rego.v1\n\n")
+    for name, path, body, allow, text in (
+        ("deny-write-of-a-policy-calling-an-undefined-function", probe,
+         'deny contains value_of("x") if input.hook_event_name == "PreToolUse"\n', False,
+         "undefined function value_of"),
+        ("allow-write-of-a-policy-that-compiles", probe,
+         'deny contains value_of("x") if input.hook_event_name == "PreToolUse"\n\n'
+         'value_of(name) := name\n', True, None),
+        ("allow-write-of-a-broken-rego-under-tests", REPO_ROOT / ".cupcake" / "tests" / "zz_probe_test.rego",
+         'deny contains value_of("x") if input.hook_event_name == "PreToolUse"\n', True, None),
+    ):
+        cases.append(PolicyCase(
+            name, "", allow, text,
+            extra_tool_input={"file_path": str(path), "content": probe_head + body},
+            include_timeout=False,
+            tool_name="Write",
+        ))
 
     # The GitHub attribution guard is machine-global (XDG config, Banon-Labs/cupcake-config), not
     # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed

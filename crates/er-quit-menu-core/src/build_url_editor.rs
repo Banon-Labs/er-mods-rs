@@ -25,7 +25,7 @@
 //! lets a player out -- it is what stops a submit that fails for a reason validation cannot see
 //! (a queue that never becomes ready, a recipe that stops resolving) from re-arming forever. The
 //! save picker learned this the expensive way: an OS dialog that reopened ~57 ms after every cancel,
-//! with no way out of the flow (bd `er-effects-rs-rsxi`).
+//! with no way out of the flow.
 //!
 //! # Why the clipboard is read while the field is open and not only when it opens
 //!

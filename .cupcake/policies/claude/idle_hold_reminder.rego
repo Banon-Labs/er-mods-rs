@@ -55,21 +55,26 @@ verbose_interlock_for(c) := msg if {
 # Parse a VERBOSEPAUSE:<n-chars> tag into the char count. Undefined when the signal is not a
 # VERBOSEPAUSE hit -> verbose interlock undefined -> none.
 verbose_chars := c if {
-	startswith(raw, "VERBOSEPAUSE:")
-	c := trim(trim_prefix(raw, "VERBOSEPAUSE:"), " \t\r\n")
+	startswith(head, "VERBOSEPAUSE:")
+	c := trim(trim_prefix(head, "VERBOSEPAUSE:"), " \t\r\n")
 }
 
 # Parse the tagged signal into the matched phrase. Untagged-but-non-empty falls back to the raw value
 # so a bare/crafted signal still trips the interlock; a VERBOSEPAUSE tag is excluded from the fallback
-# so it trips only the verbose interlock. Empty -> phrase undefined -> none.
+# so it trips only the verbose interlock. Empty -> phrase undefined -> none. UNNAMEDPAUSE, and the
+# `UNNAMED:` line that can follow another tag, are Stop-only (the signal emits them only on Stop, and
+# session_tasks_context.rego shows the live report on this event), so neither trips an interlock here.
 phrase := p if {
-	startswith(raw, "IDLEHOLD:")
-	p := trim(trim_prefix(raw, "IDLEHOLD:"), " \t\r\n")
+	startswith(head, "IDLEHOLD:")
+	p := trim(trim_prefix(head, "IDLEHOLD:"), " \t\r\n")
 } else := p if {
-	raw != ""
-	not startswith(raw, "VERBOSEPAUSE:")
-	p := raw
+	head != ""
+	not startswith(head, "VERBOSEPAUSE:")
+	not startswith(head, "UNNAMEDPAUSE:")
+	p := head
 }
+
+head := split(raw, "\n")[0]
 
 raw := trim(matched_phrase, " \t\r\n")
 

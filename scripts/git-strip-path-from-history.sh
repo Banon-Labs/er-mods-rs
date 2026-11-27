@@ -4,7 +4,7 @@
 #
 # Why this exists rather than `git filter-branch`/`git filter-repo`: the case this
 # repo keeps hitting is a large binary committed by accident a few commits ago --
-# 35 MB of `vendor-archive/seamless/ersc-*.dll` in #385, against a `.gitignore`
+# 35 MB of `vendor-archive/seamless/ersc-*.dll` in one pull request, against a `.gitignore`
 # rule that already covered them. filter-repo is not installed here and
 # filter-branch rewrites whole refs; both are the wrong size of hammer for three
 # commits at the tip, and filter-branch's own manual now tells you not to use it.

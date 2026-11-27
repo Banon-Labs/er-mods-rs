@@ -20,11 +20,16 @@ has to be searched for -- do not go looking for tools, rows, harness drives or s
 ## The base save must be base level
 
 The import levels a character up to the build; it cannot level one down. So the character it lands
-on must be a fresh, base-level one. Use slot 0 of any one of these (user directive 2026-10-07):
+on must be a fresh, base-level one. Use slot 0 of this save (user directive 2026-10-07; on
+2026-11-19 the user named it "my backup base level save", and the `25r` and `2` folders this list
+also held are gone from the mount):
 
-- `/mnt/net/librus-home/Code Projects/Elden Ring Save Manager/data/save-files/25r`
-- `/mnt/net/librus-home/Code Projects/Elden Ring Save Manager/data/save-files/2`
-- `/mnt/net/librus-home/Code Projects/Elden Ring Save Manager/data/save-files/0`
+- `/mnt/net/librus-home/Code Projects/Elden Ring Save Manager/data/save-files/0/ER0000.sl2`
+  (slot 0 = 'Vagabond' RL9)
+
+"Backup base", "base save" or "backup base level save" means this file. It does NOT mean
+`~/Elden/save-baseline/ER0000.sl2`: that is a copy of the boot-timing container ('Lil Chud'), and on
+2026-11-19 an agent picked it because a config comment called it a "pristine copy".
 
 Never the save already in the config, never the default APPDATA save, never a named character
 (Leo, Banon BigD, ...): those are levelled, and a levelled base is the wrong character with the

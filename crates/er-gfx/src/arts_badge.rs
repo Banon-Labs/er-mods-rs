@@ -2,7 +2,7 @@
 //!
 //! This does **not** ship a game-derived GFx file. The DLL reads the game's own Scaleform
 //! MemoryFile for each menu movie, applies the structural edit below in memory, and serves
-//! the derived movie for that process (bd er-effects-rs-pe98 / er-effects-rs-jogu).
+//! the derived movie for that process.
 //!
 //! # Which movies
 //!

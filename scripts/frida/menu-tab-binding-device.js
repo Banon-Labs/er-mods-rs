@@ -5,7 +5,7 @@
 //
 // # The question
 //
-// `er-input-harness`'s `TabToQuit` phase derails on every run, and bd `er-effects-rs-9vyy` read
+// `er-input-harness`'s `TabToQuit` phase derails on every run, and an earlier investigation read
 // the cause out of a `DumpMenuBindings` dump as "menu code `0x30` has no pad button bound". That
 // reading came from `game_mem::menu_code_pad_binding`, which reads the row at `+0x0c`/`+0x10`.
 //
