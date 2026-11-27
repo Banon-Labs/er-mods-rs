@@ -18,6 +18,32 @@ The split follows the log with `tail --pid` on the newest `git push` process (or
 lasts exactly as long as the push. It then prints `PUSH SUCCEEDED` or `PUSH FAILED` from git's own
 output, waits 5 seconds, and closes. `--selftest` covers the verdict, the window script's quoting
 and the split and tab launch options.
+
+## A red stage is fixed while the rest of the suite runs (user directive 2026-11-25)
+
+The split is the user's view; it wakes nobody. The suite prints `>>> stage <name> RED (exit <n>)
+<secs>s <log>` the moment a stage fails, and the other stages can run for another hour. On
+2026-11-25 the policy stage of a push went red at 1702 s and sat there until the push's completion
+notification, after every other stage. The user's words: "It would be wise, and prudent, to not
+wait until all checks pass before addressing any one of the failing reds in each future case". So
+every background `git push`, hand-run pre-push hook or full `check.sh` also gets a `Monitor`, armed
+in the same turn, with `timeout_ms` 1800000:
+
+```bash
+tail -n +1 --pid=<git push pid> -F <the push task's output file> \
+    | grep --line-buffered -E 'RED|FAIL|error|REFUSED|rejected|exited with code' \
+    | python3 /home/banon/projects/er-mods-rs/scripts/monitor-throttle.py 10
+```
+
+`kitty-tail-push.py` prints this exact command, with the pid filled in, after it opens the split
+(`--monitor-command` prints only the command). `--pid` ends the Monitor when the push ends; without
+it, stop the Monitor with TaskStop once the push is over. A Monitor lasts 30 minutes at most, so
+re-arm it on its expiry notice while the suite still runs. When it reports a red stage, read that
+stage's log (the path on the line) and start the fix at once. The Stop guard
+`.cupcake/policies/claude/no_unwatched_red_stage.rego` (signal
+`.cupcake/signals/last_assistant_unwatched_red_stage.sh`, logic and `--selftest` in
+`scripts/cupcake_red_stage_watch.py`) halts a turn while such a task runs with no running Monitor
+that follows its output file and passes `RED`, and names the command to arm.
 Close Elden Ring before pushing: check.sh refuses while it runs. When the game up is the run that
 stamped the tip, close it with `python3 scripts/er-teardown.py --reason=stamped-<one-token-why>` as
 the whole command (a trailing `| tail -<n>` is allowed), which the teardown guard admits only while

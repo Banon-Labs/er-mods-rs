@@ -764,12 +764,20 @@ RUNNING_TASK_LAUNCH_RE = re.compile(
 MONITOR_END_EVENT_RE = re.compile(r"<event>\s*\[Monitor (?:expired|timed out)\b", re.IGNORECASE)
 
 
+# Where the harness writes a background task's output, as its launch acknowledgement names it:
+# "Output is being written to: /tmp/claude-1000/<project>/<session>/tasks/bx1.output."
+TASK_OUTPUT_FILE_RE = re.compile(r"Output is being written to:\s*(\S+)")
+
+
 @dataclass
 class RunningTask:
     task_id: str
     kind: str        # "bash" or "monitor"
     command: str
     launched_at: int  # event index
+    # The task's output file from its launch acknowledgement, "" when the result named none (a
+    # Monitor's acknowledgement does not).
+    output: str = ""
 
 
 def running_background_tasks(events: list[dict]) -> list[RunningTask]:
@@ -839,7 +847,9 @@ def running_background_tasks(events: list[dict]) -> list[RunningTask]:
                 if not m:
                     continue  # a foreground Bash that finished, or a Monitor that never started
                 task_id = m.group(1) or m.group(2)
-                running[task_id] = RunningTask(task_id, kind, cmd, at)
+                out = TASK_OUTPUT_FILE_RE.search(_result_text(block))
+                output = out.group(1).rstrip(".") if out else ""
+                running[task_id] = RunningTask(task_id, kind, cmd, at, output)
                 tool_to_task[uid] = task_id
     return sorted(running.values(), key=lambda t: t.launched_at)
 
