@@ -1336,6 +1336,11 @@ bash "$repo_root/scripts/test-pre-push-green-cache.sh"
 # 2026-10-27 check.sh refused an authorized push on the agent's own stamping run and the reply was
 # spent for nothing. See the header of scripts/test-pre-push-authorized-teardown.sh.
 bash "$repo_root/scripts/test-pre-push-authorized-teardown.sh"
+# An agent worktree skips this suite at push time but still runs the gates that hold this file and
+# its ledger in step, and refuses the push when one is red. On 2026-11-25 a check.sh step with no
+# ledger row was pushed from an agent worktree and the first gate to notice was CI's suite stage.
+# See the header of scripts/test-pre-push-agent-worktree-ledger.sh.
+bash "$repo_root/scripts/test-pre-push-agent-worktree-ledger.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
 # branch that had never moved was pushed over PR #448 and took two commits off it. See the header
@@ -2233,6 +2238,7 @@ shellcheck "$repo_root/scripts/lib/pinned-worktree.sh"
 shellcheck "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
 shellcheck "$repo_root/scripts/test-pre-push-green-cache.sh"
 shellcheck "$repo_root/scripts/test-pre-push-authorized-teardown.sh"
+shellcheck "$repo_root/scripts/test-pre-push-agent-worktree-ledger.sh"
 shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"

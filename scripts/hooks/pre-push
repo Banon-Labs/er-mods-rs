@@ -281,10 +281,90 @@ fi
 # scoped gates its edit touches, the runtime-evidence check above has already run, and the
 # whole-workspace verdict belongs to the orchestrator, once, in the main checkout at integration.
 # The branch is not reachable by anyone else until that merge, so nothing ships unchecked.
+#
+# EXCEPT THE GATES THAT HOLD check.sh AND ITS LEDGER IN STEP, WHICH STILL RUN HERE. "Nothing ships
+# unchecked" did not hold for them. Measured 2026-11-25: commit e98bb2a4 was pushed from an agent
+# worktree with a new check.sh line, `python3
+# "$repo_root/scripts/cupcake_ci_running_claim.py" --selftest`, and no row for it in
+# docs/ci-gate-portability.tsv. No agent is briefed to run a ledger gate for an edit that "only adds
+# a selftest line", the suite was skipped here, and the first place the bijection was asked about
+# was CI's suite stage, red on three gates at once: ci-gate-portability.py --check, check-stages.py
+# --check, and check-stage-report.py --selftest. Adding the row turned all three green.
+#
+# They are run here because they are the opposite of what the skip exists to avoid: they read
+# check.sh, the ledger and the stage table, run no cargo and no game, and finish in well under a
+# second each (measured 2026-11-25 in an agent worktree: 0.05s, 0.07s, 0.09s; --audit-inputs
+# 1.66s). check-stage-report.py --selftest is kept although its failure was downstream of the
+# missing row: it builds its fixture from the real stage table, so a step with no stage makes its
+# first case red, and any other way a step loses its stage does the same.
+#
+# Which tree they read. A tip equal to this checkout's HEAD is read here: the dirty-tree refusal
+# above has already shown the working tree is that commit. Any other tip has the five files the
+# three --check gates read copied out of that commit into a temporary directory, and they run there;
+# --audit-inputs reads every gate script and `git ls-files`, so it runs only on HEAD and says so for
+# the other tips. A gate missing from the tree being read (an older commit) is reported as not run.
+# A red gate refuses the push with its own output. The authorization is not refunded: the defect is
+# in the pushed commit, and the commit that fixes it has a new sha.
+#
+# Proven by scripts/test-pre-push-agent-worktree-ledger.sh.
+agent_ledger_files=(scripts/check.sh scripts/ci-gate-portability.py scripts/check-stages.py
+	scripts/check-stage-report.py docs/ci-gate-portability.tsv)
+agent_ledger_gates=("scripts/ci-gate-portability.py --check" "scripts/check-stages.py --check"
+	"scripts/check-stage-report.py --selftest")
+agent_ledger_head_only=("scripts/check-stages.py --audit-inputs")
+
+run_agent_ledger_gates() { # run_agent_ledger_gates <tree> <label> <gate>...; returns 1 if any gate was red
+	local tree=$1 label=$2 gate out rc red=0
+	shift 2
+	for gate in "$@"; do
+		if [[ ! -f $tree/${gate%% *} ]]; then
+			printf 'pre-push:   %s: %s is not in this commit -- NOT run, not a pass.\n' "$label" "${gate%% *}" >&2
+			continue
+		fi
+		rc=0
+		# Word-split on purpose: each entry is a script path and its fixed arguments.
+		# shellcheck disable=SC2086
+		out=$(cd "$tree" && python3 $gate 2>&1) || rc=$?
+		if [[ $rc -eq 0 ]]; then
+			printf 'pre-push:   %s: ok  python3 %s\n' "$label" "$gate" >&2
+		else
+			printf 'pre-push:   %s: RED python3 %s (exit %d):\n' "$label" "$gate" "$rc" >&2
+			printf '%s\n' "$out" | sed 's/^/      /' >&2
+			red=1
+		fi
+	done
+	return "$red"
+}
+
 if [[ "$repo_root" == */.claude/worktrees/agent-* ]]; then
 	printf 'pre-push: agent worktree -- skipping scripts/check.sh (it refuses here by design).\n' >&2
 	printf '  The whole-workspace verdict is the orchestrator'"'"'s, run once in the main checkout.\n' >&2
 	printf '  Run the gates your edit touches: cargo test -p <crate>, scripts/<gate>.py.\n' >&2
+	printf 'pre-push: running the check.sh <-> ledger consistency gates, which do run here:\n' >&2
+	ledger_red=0
+	for sha in "${pushed_shas[@]:-}"; do
+		if [[ -z $sha || $sha == "$head_sha" ]]; then
+			label=${sha:0:12}
+			run_agent_ledger_gates "$repo_root" "${label:-working tree}" \
+				"${agent_ledger_gates[@]}" "${agent_ledger_head_only[@]}" || ledger_red=1
+			continue
+		fi
+		ledger_tree=$(mktemp -d)
+		mkdir -p "$ledger_tree/scripts" "$ledger_tree/docs"
+		for rel in "${agent_ledger_files[@]}"; do
+			git show "$sha:$rel" >"$ledger_tree/$rel" 2>/dev/null || rm -f "$ledger_tree/$rel"
+		done
+		run_agent_ledger_gates "$ledger_tree" "${sha:0:12}" "${agent_ledger_gates[@]}" || ledger_red=1
+		printf 'pre-push:   %s: %s NOT run -- this tip is not HEAD, and it reads the whole tree.\n' \
+			"${sha:0:12}" "${agent_ledger_head_only[*]}" >&2
+		rm -rf "$ledger_tree"
+	done
+	if [[ $ledger_red -ne 0 ]]; then
+		printf 'pre-push: REFUSED -- a check.sh/ledger consistency gate is red (its output is above).\n' >&2
+		printf '  CI'"'"'s suite stage runs the same gates and would fail on them. A new check.sh step\n' >&2
+		printf '  needs its row in docs/ci-gate-portability.tsv, with a stage in the fifth column.\n' >&2
+		exit 1
+	fi
 	exit 0
 fi
 
