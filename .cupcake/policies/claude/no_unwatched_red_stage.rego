@@ -38,7 +38,8 @@ reason_for(s) := msg if {
 		"A check suite is running in the background and nothing will wake you when one of its stages goes red: ", s,
 		". Arm the Monitor named after each one now (or the --pid form scripts/kitty-tail-push.py printed, which ends with the push). ",
 		"When it reports a `>>> stage <name> RED` line, read that stage's log and start the fix at once; do not wait for the other stages. ",
-		"Re-arm it when it expires while the suite still runs. If the task has already ended, TaskStop its id.",
+		"Re-arm it when it expires while the suite still runs. Where an entry says a pipe holds the stage lines until the task ends, no Monitor can wake on it: do what that entry says. ",
+		"If the task has already ended, TaskStop its id.",
 	])
 }
 

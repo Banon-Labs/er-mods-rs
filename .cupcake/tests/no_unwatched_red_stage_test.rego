@@ -30,6 +30,16 @@ test_reason_names_task_and_monitor if {
 	contains(d.reason, "read that stage's log")
 }
 
+held := "UNWATCHEDRED:bpush1 (git push: git push -u origin chore/x 2>&1 | tail -20) => its stage lines are piped through `tail -20`, which holds them until the task ends, so no Monitor can wake on a red stage: TaskStop it and run it again without that pipe"
+
+test_reason_names_holding_pipe if {
+	halts := guard.halt with input as stop_event(held)
+	some d in halts
+	contains(d.reason, "`tail -20`")
+	contains(d.reason, "TaskStop it and run it again without that pipe")
+	contains(d.reason, "no Monitor can wake on it")
+}
+
 test_halt_on_object_signal if {
 	halts := guard.halt with input as {
 		"hook_event_name": "Stop",
