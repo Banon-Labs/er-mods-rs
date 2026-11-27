@@ -256,7 +256,7 @@ pub fn install_movemap_advancer_probe() -> bool {
                     // MinHook has owned the detour since `MH_ApplyQueued`, and `MhHook` is
                     // three raw pointers with no `Drop`, so letting the handle fall out of
                     // scope uninstalls nothing. `drop(hook)` says that but is
-                    // `clippy::drop_non_drop` (it broke CI on PR #406); `mem::forget` would be
+                    // `clippy::drop_non_drop` (it broke CI once); `mem::forget` would be
                     // `forget_non_drop`. The shim states the intent once in
                     // `crate::mh::leak_installed_hook`, which does not cross this seam.
                     let _installed_and_owned_by_minhook = hook;

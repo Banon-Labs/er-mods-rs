@@ -71,7 +71,7 @@ pub mod settings_panel;
 // live `Abi` by `the_state_codes_match_the_supported_abi`. `TIMED_STATES` has been deliberately
 // empty since 2026-09-13 -- every entry it held was v1.9.9 numbering and two of them are not
 // statically recoverable -- so nothing in this DLL reads the constants today, and a private module
-// makes that safety decision look like dead code. See bd `er-effects-rs-zoft`.
+// makes that safety decision look like dead code.
 pub mod stall_watchdog;
 pub mod vanilla_invasion_items;
 

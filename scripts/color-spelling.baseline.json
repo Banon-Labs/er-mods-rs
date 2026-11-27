@@ -2,6 +2,7 @@
   "_reasons": {
     ".agents/skills/improve-codebase-architecture/HTML-REPORT.md": "Vendored skill: skills-lock.json:94 pins it to mattpocock/skills, so its prose belongs to that repo and a local respelling is overwritten by the next skill update.",
     ".agents/skills/prototype/UI.md": "Vendored skill: skills-lock.json:118 pins it to mattpocock/skills, so its prose belongs to that repo and a local respelling is overwritten by the next skill update.",
+    ".cupcake/tests/corpus/correction_prompts.jsonl": "A corpus of the user's typed prompts, kept verbatim because the correction classifier is tested on exactly what was typed.",
     "AGENTS.md": "Both name the rule this gate enforces, in its Conventions & Patterns entry: the banned spelling itself, and the `colour_levels` key the entry lists as a contract.",
     "crates/er-build-import-core/build.rs": "1 of 3 is a contract: the `\"colour\"` match arm at build.rs:60 is the planner's own layout `type` string, read from data/planner-sliders-layout.json at build.rs:22. The `Colour` variant name (build.rs:60, :66) is ours and deprecable.",
     "crates/er-build-import-core/data/planner-sliders-layout.json": "All 75 are the build planner's: build.rs:3 records this file as the planner's own `q9` table copied from its page, and keys such as `skinColour` and the `type` value are the field names of its share-link documents, which the planner itself parses.",
@@ -17,6 +18,7 @@
     ".agents/skills/improve-codebase-architecture/HTML-REPORT.md": 2,
     ".agents/skills/prototype/UI.md": 2,
     ".claude/skills/tail-build-task/SKILL.md": 2,
+    ".cupcake/tests/corpus/correction_prompts.jsonl": 1,
     ".cupcake/policies/claude/no_future_tense_commitment.rego": 1,
     ".cupcake/tests/no_grep_for_build_errors_test.rego": 1,
     "AGENTS.md": 2,

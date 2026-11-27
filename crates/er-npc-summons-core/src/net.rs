@@ -18,7 +18,7 @@
 //!
 //! The packet carries the body, never the dressing: the gear comes from the peer's own
 //! `CharaInitParam` row and the name from its own `NpcParam`, so every Mimic companion arrives as
-//! whatever character its body row belongs to (bd `er-effects-rs-1zhn`: three dressed companions
+//! whatever character its body row belongs to (three dressed companions
 //! all reached the host as Moongrum). The fix is for the summoner to say what each companion is,
 //! on a channel of its own, and for the peer to dress it through the same `CreateSummonChr`
 //! detour the summoner's own companions go through.

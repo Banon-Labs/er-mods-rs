@@ -57,12 +57,12 @@ pushed=$(cat)
 # it blocked nothing. Measured 2026-08-31; the guard now also tolerates the unterminated shape, and
 # both halves are covered by scripts/test-git-pre-push-block-main.sh. The here-string adds it.
 #
-# A here-string and not `printf '%s\n' "$pushed" | bash ...` (bd er-effects-rs-5hyb). A pipe races
-# the writer against the reader: a guard that exits without reading its stdin -- the fixtures'
-# stubs do, and so would a guard that stopped reading early -- can close the read end before the
-# forked printf writes, and under `set -o pipefail` that failure ends this hook. The suite's gates
-# run at SCHED_IDLE, where the order flips often enough to see, so it surfaced only inside real
-# pushes: test-pre-push-gates-pushed-ref.sh and test-pre-push-dirty-tree.sh went red on
+# A here-string and not `printf '%s\n' "$pushed" | bash ...`. A pipe races the writer against the
+# reader: a guard that exits without reading its stdin -- the fixtures' stubs do, and so would a
+# guard that stopped reading early -- can close the read end before the forked printf writes, and
+# under `set -o pipefail` that failure ends this hook. The suite's gates run at SCHED_IDLE, where
+# the order flips often enough to see, so it surfaced only inside real pushes:
+# test-pre-push-gates-pushed-ref.sh and test-pre-push-dirty-tree.sh went red on
 #     scripts/hooks/pre-push: line 56: printf: write error: Broken pipe
 # (exit 1 with SIGPIPE inherited ignored, 141 without) -- measured 2026-10-13 at SCHED_IDLE beside
 # a SCHED_IDLE load on the same cores: pushed-ref 3 of 20 runs, dirty-tree 4 of 100, while every
@@ -105,12 +105,11 @@ refund_authorization() { # refund_authorization <one-token reason>
 # no object, so there is nothing for any of them to read -- and what they read instead was the
 # pushing checkout. `check-stages.py --stages-for-diff` with no `--rev` falls back to the working
 # tree against origin/main, and `check-runtime-evidence.sh` with no tip falls back to
-# `git rev-parse --short HEAD`. Measured 2026-09-14: `git push origin --delete
-# refactor/experiments-split`, run from a checkout sitting on an unrelated fix branch, selected
-# seven of eleven stages from six changed paths that all belonged to that branch's own commits,
-# and the deletion never completed. That is the shape PR #434 named -- a guard judging the
-# checked-out HEAD instead of the ref being sent -- in its purest form, because here there is no
-# ref being sent for it to judge.
+# `git rev-parse --short HEAD`. Measured 2026-09-14: `git push origin --delete <branch>`, run
+# from a checkout sitting on an unrelated fix branch, selected seven of eleven stages from six
+# changed paths that all belonged to that branch's own commits, and the deletion never completed.
+# That is the shape of a guard judging the checked-out HEAD instead of the ref being sent -- in
+# its purest form, because here there is no ref being sent for it to judge.
 #
 # The one rule a deletion can break is the main-push guard above, which is why this skip sits
 # below it rather than above: `git push origin --delete main` reaches that guard as
@@ -222,8 +221,8 @@ fi
 # scripts/check.sh -- the file CI's `check` job runs -- referenced 153. Nothing compared the two,
 # so a gate appended to check.sh became push-invisible the instant it was written, and the first
 # place it ever ran was a red CI job twelve minutes after the push. That is exactly how a
-# check-fnv1a-owner.py violation reached origin on PR #398: the hook ran, passed its 13 gates, and
-# let through a commit the full suite rejects in five minutes.
+# check-fnv1a-owner.py violation reached origin on a pull request: the hook ran, passed its 13
+# gates, and let through a commit the full suite rejects in five minutes.
 #
 # The subset was justified as speed. It is not faster: it saves a few minutes per push and costs a
 # 12-minute CI round trip, a red PR and a second push whenever it is wrong -- and nothing measured
@@ -266,8 +265,7 @@ fi
 # AN AGENT WORKTREE CANNOT RUN check.sh, SO IT MUST NOT BE ASKED TO.
 #
 # Two guards landed a day apart and neither was compared to the other, which between them made the
-# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout
-# (bd er-effects-rs-7jzv):
+# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout:
 #
 #   8f16e831, 2026-09-02 -- scripts/check.sh refuses in an agent worktree, because three subagents
 #     once spent 2003s and 1330s sleep-polling their own full-suite runs.
@@ -281,10 +279,90 @@ fi
 # scoped gates its edit touches, the runtime-evidence check above has already run, and the
 # whole-workspace verdict belongs to the orchestrator, once, in the main checkout at integration.
 # The branch is not reachable by anyone else until that merge, so nothing ships unchecked.
+#
+# EXCEPT THE GATES THAT HOLD check.sh AND ITS LEDGER IN STEP, WHICH STILL RUN HERE. "Nothing ships
+# unchecked" did not hold for them. Measured 2026-11-25: commit e98bb2a4 was pushed from an agent
+# worktree with a new check.sh line, `python3
+# "$repo_root/scripts/cupcake_ci_running_claim.py" --selftest`, and no row for it in
+# docs/ci-gate-portability.tsv. No agent is briefed to run a ledger gate for an edit that "only adds
+# a selftest line", the suite was skipped here, and the first place the bijection was asked about
+# was CI's suite stage, red on three gates at once: ci-gate-portability.py --check, check-stages.py
+# --check, and check-stage-report.py --selftest. Adding the row turned all three green.
+#
+# They are run here because they are the opposite of what the skip exists to avoid: they read
+# check.sh, the ledger and the stage table, run no cargo and no game, and finish in well under a
+# second each (measured 2026-11-25 in an agent worktree: 0.05s, 0.07s, 0.09s; --audit-inputs
+# 1.66s). check-stage-report.py --selftest is kept although its failure was downstream of the
+# missing row: it builds its fixture from the real stage table, so a step with no stage makes its
+# first case red, and any other way a step loses its stage does the same.
+#
+# Which tree they read. A tip equal to this checkout's HEAD is read here: the dirty-tree refusal
+# above has already shown the working tree is that commit. Any other tip has the five files the
+# three --check gates read copied out of that commit into a temporary directory, and they run there;
+# --audit-inputs reads every gate script and `git ls-files`, so it runs only on HEAD and says so for
+# the other tips. A gate missing from the tree being read (an older commit) is reported as not run.
+# A red gate refuses the push with its own output. The authorization is not refunded: the defect is
+# in the pushed commit, and the commit that fixes it has a new sha.
+#
+# Proven by scripts/test-pre-push-agent-worktree-ledger.sh.
+agent_ledger_files=(scripts/check.sh scripts/ci-gate-portability.py scripts/check-stages.py
+	scripts/check-stage-report.py docs/ci-gate-portability.tsv)
+agent_ledger_gates=("scripts/ci-gate-portability.py --check" "scripts/check-stages.py --check"
+	"scripts/check-stage-report.py --selftest")
+agent_ledger_head_only=("scripts/check-stages.py --audit-inputs")
+
+run_agent_ledger_gates() { # run_agent_ledger_gates <tree> <label> <gate>...; returns 1 if any gate was red
+	local tree=$1 label=$2 gate out rc red=0
+	shift 2
+	for gate in "$@"; do
+		if [[ ! -f $tree/${gate%% *} ]]; then
+			printf 'pre-push:   %s: %s is not in this commit -- NOT run, not a pass.\n' "$label" "${gate%% *}" >&2
+			continue
+		fi
+		rc=0
+		# Word-split on purpose: each entry is a script path and its fixed arguments.
+		# shellcheck disable=SC2086
+		out=$(cd "$tree" && python3 $gate 2>&1) || rc=$?
+		if [[ $rc -eq 0 ]]; then
+			printf 'pre-push:   %s: ok  python3 %s\n' "$label" "$gate" >&2
+		else
+			printf 'pre-push:   %s: RED python3 %s (exit %d):\n' "$label" "$gate" "$rc" >&2
+			printf '%s\n' "$out" | sed 's/^/      /' >&2
+			red=1
+		fi
+	done
+	return "$red"
+}
+
 if [[ "$repo_root" == */.claude/worktrees/agent-* ]]; then
 	printf 'pre-push: agent worktree -- skipping scripts/check.sh (it refuses here by design).\n' >&2
 	printf '  The whole-workspace verdict is the orchestrator'"'"'s, run once in the main checkout.\n' >&2
 	printf '  Run the gates your edit touches: cargo test -p <crate>, scripts/<gate>.py.\n' >&2
+	printf 'pre-push: running the check.sh <-> ledger consistency gates, which do run here:\n' >&2
+	ledger_red=0
+	for sha in "${pushed_shas[@]:-}"; do
+		if [[ -z $sha || $sha == "$head_sha" ]]; then
+			label=${sha:0:12}
+			run_agent_ledger_gates "$repo_root" "${label:-working tree}" \
+				"${agent_ledger_gates[@]}" "${agent_ledger_head_only[@]}" || ledger_red=1
+			continue
+		fi
+		ledger_tree=$(mktemp -d)
+		mkdir -p "$ledger_tree/scripts" "$ledger_tree/docs"
+		for rel in "${agent_ledger_files[@]}"; do
+			git show "$sha:$rel" >"$ledger_tree/$rel" 2>/dev/null || rm -f "$ledger_tree/$rel"
+		done
+		run_agent_ledger_gates "$ledger_tree" "${sha:0:12}" "${agent_ledger_gates[@]}" || ledger_red=1
+		printf 'pre-push:   %s: %s NOT run -- this tip is not HEAD, and it reads the whole tree.\n' \
+			"${sha:0:12}" "${agent_ledger_head_only[*]}" >&2
+		rm -rf "$ledger_tree"
+	done
+	if [[ $ledger_red -ne 0 ]]; then
+		printf 'pre-push: REFUSED -- a check.sh/ledger consistency gate is red (its output is above).\n' >&2
+		printf '  CI'"'"'s suite stage runs the same gates and would fail on them. A new check.sh step\n' >&2
+		printf '  needs its row in docs/ci-gate-portability.tsv, with a stage in the fifth column.\n' >&2
+		exit 1
+	fi
 	exit 0
 fi
 
@@ -350,13 +428,12 @@ fi
 # empty below only when git sent no ref list at all, and the whole suite in this checkout is the
 # right answer to that.
 #
-# WHICH TREE THE SUITE READS (bd er-effects-rs-xe0r). check.sh reads the working tree it is run in,
-# and until 2026-10-05 that was always the checkout `git push` was typed in -- whatever branch it
-# had out. Measured that day: `git -C <main checkout> push -u origin feat/ai-simulated-player`, run
-# from a checkout on feat/er-r3-view-rest-of-catalog while the pushed branch lived in
-# .worktrees/ai-sim-player. Stage selection diffed the pushed ref correctly; check.sh then went red
-# on `check-test-target-coverage.py` for a crate the pushed branch does not contain, and it would
-# just as readily have passed code the pushed branch breaks.
+# WHICH TREE THE SUITE READS. check.sh reads the working tree it is run in, and until 2026-10-05
+# that was always the checkout `git push` was typed in -- whatever branch it had out. Measured that
+# day: `git -C <main checkout> push -u origin <branch>`, run from a checkout on another branch
+# while the pushed branch lived in .worktrees/ai-sim-player. Stage selection diffed the pushed ref
+# correctly; check.sh then went red on `check-test-target-coverage.py` for a crate the pushed
+# branch does not contain, and it would just as readily have passed code the pushed branch breaks.
 #
 # So the suite runs on the commit being pushed:
 #

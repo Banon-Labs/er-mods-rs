@@ -8,7 +8,7 @@ publish = false
 name = "er_armament_icons"
 crate-type = ["cdylib"]
 
-# Standalone armament tile Ash-of-War badge DLL (bd er-effects-rs-pe98). Loaded as its
+# Standalone armament tile Ash-of-War badge DLL. Loaded as its
 # own [[natives]] entry; feature toggles by profile inclusion. Intentionally isolated
 # from the product DLL crate: no save/autoload/render product dependencies.
 # er-hook provides the shared MinHook FFI for the tile-populate post-hook.

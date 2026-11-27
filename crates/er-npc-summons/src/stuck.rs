@@ -1,7 +1,7 @@
 //! A companion that cannot get back to the player, or to its enemy: `LAB_WORLD.tt_stuck_p` and
 //! `LAB_WORLD.tt_stuck_e`, read by the turtles' brain to jump instead of walking.
 //!
-//! A port of the lab's `stuckCheck` (`scripts/frida/spawn-npc.js` on `feat/ai-lab-turtles`). It
+//! A port of the lab's `stuckCheck` (`scripts/frida/spawn-npc.js`). It
 //! judges each companion by its own movement over the last [`STUCK_MS`], which a distance alone
 //! cannot: measured 2026-10-06, one stood about 66 m away for minutes while its approach goal kept
 //! running, and on 2026-10-07 the brain's own distance-only fallback fired unstick jumps at 6-10 m

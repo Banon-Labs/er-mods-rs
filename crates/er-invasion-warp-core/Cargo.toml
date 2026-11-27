@@ -1,4 +1,4 @@
-# World-map invasion-spawn WARP-TARGET feature crate (bd er-effects-rs-5es).
+# World-map invasion-spawn WARP-TARGET feature crate.
 #
 # A LOCAL exploration surface: the fixed auto-invasion spawn points the engine already loads
 # from `other:/AutoInvadePoint.aipbnd` become selectable world-map warp targets, warped to by

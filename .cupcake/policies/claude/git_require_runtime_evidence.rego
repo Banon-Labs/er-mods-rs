@@ -39,9 +39,9 @@ import data.cupcake.system.commands
 # both: `enable_toggle_key` on F3, a key that had never been pressed in the game, and a
 # stall-watchdog fix whose code had never executed, because the DLL in the running process had been
 # built two commits earlier. The user stopped the push and asked for this guard in the same breath.
-# AGENTS.md already carried the rule -- commit after a runtime validation run completes, and only
+# AGENTS.md already said it -- commit after a runtime validation run completes, and only
 # if the run showed the change is worth keeping -- as prose. Prose did not stop it, twice in one
-# evening, and the standing repo rule is that a correction which must survive the turn belongs in
+# evening, and the standing repo guidance is that a correction which must survive the turn belongs in
 # executable enforcement rather than in a note.
 #
 # Which repository the verdict is about is decided by the signal as well, and it is not always the

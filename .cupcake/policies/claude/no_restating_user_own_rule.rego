@@ -10,7 +10,7 @@
 #     agent, on the strength of a standing rule the USER authored -- "undrafting is yours", "I don't
 #     push", "leaving it draft for you".
 #
-#     MEASURED 2026-09-23. A turn that had just opened draft pull request #481 closed with "It stays
+#     MEASURED 2026-09-23. A turn that had just opened a draft pull request closed with "It stays
 #     draft -- undrafting is yours." The user owns that rule: it lives in one of their memories and
 #     in the global policy that denies `gh pr ready`. Their reply is this policy's specification --
 #     "If undrafting is mine, because I told you it was mine, does it need to be stated? Is there a

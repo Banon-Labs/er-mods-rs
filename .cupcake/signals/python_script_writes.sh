@@ -10,6 +10,8 @@
 #   `READONLY <operand>`        nothing in the file writes
 #   `WRITES <operand> <why>`    something in it writes, or could
 #   `UNKNOWN <operand> <why>`   the file could not be pinned down or read
+#   `GUARDTEST <operand>`       a test suite committed in one of the user's guard repos
+#   `EXEC-<verdict>\t<word>\t<path>\t<why>`   a python program run by name or path (2026-11-16)
 #
 # The judgement and its selftest live in `scripts/cupcake_python_script_writes.py`; read its
 # docstring for what counts as a write and which command shapes fail closed.
@@ -35,11 +37,9 @@ reader="$repo_root/scripts/cupcake_python_script_writes.py"
 [ -t 0 ] && exit 0
 event="$(cat)"
 
-# Nearly every Bash call names no `.py` file; skip the python start for those.
-case "$event" in
-*python*.py*) ;;
-*) exit 0 ;;
-esac
-
+# No prefilter on the text since 2026-11-16: a python program run by its name
+# (`kitty-tail-bg --selftest`) carries neither `python` nor `.py`, and only reading the file a
+# word resolves to can tell. The reader also prints `GUARDTEST` for a committed guard test suite
+# and `EXEC-<verdict>` lines for such programs; its docstring has the protocol.
 printf '%s' "$event" | timeout 5 python3 "$reader" 2>/dev/null || true
 exit 0

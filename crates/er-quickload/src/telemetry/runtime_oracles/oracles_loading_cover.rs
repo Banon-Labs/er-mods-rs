@@ -23,7 +23,7 @@ fn boot_view_present_cover_failed(
 }
 
 fn write_loading_cover_oracles(body: &mut String) {
-    // Removed 2026-07-31 (er-effects-rs-56fx): oracle_tpf_texture_registered / _last_rescap /
+    // Removed 2026-07-31: oracle_tpf_texture_registered / _last_rescap /
     // _bound / _failures / _last_error. All five counters had zero writers -- the TPF cover
     // texture path never reports through them -- and three carried sentinel initialisers
     // (ER_TPF_COVER_ERR_NONE and friends), so they emitted a plausible-looking value forever
@@ -120,7 +120,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_stats_text_push_stale_last_vt",
         PROFILE_STATS_PUSH_STALE_LAST_VT.load(Ordering::SeqCst),
     );
-    // Per-slot save-stats cache (bd er-effects-rs-l90): cache_state 1 == the live `.sl2` was read
+    // Per-slot save-stats cache: cache_state 1 == the live `.sl2` was read
     // and parsed (each row shows its own character's attributes); 2 == read failed (fell back to
     // the loaded character). decoded == how many of the 10 save slots held a real character.
     push_json_usize(
@@ -151,7 +151,7 @@ fn write_loading_cover_oracles(body: &mut String) {
     );
     // Bit N set == live `CS::ProfileSummary` slot N was marked occupied while holding something
     // that is not a character, sampled at a moment when no save picker owned the rows. That is the
-    // RAM signature of `er-effects-rs-fmy6`: the in-game picker renders by writing its browse-row
+    // RAM signature of the stale-picker-rows defect: the in-game picker renders by writing its browse-row
     // labels into these game-owned records, and a restore that does not run leaves `[..] EldenRing`
     // / `[ new ]` where a character name belongs -- which the user then reads off a loading screen.
     // Non-zero is a defect, not a state, and it is sticky (`fetch_or`) because the per-frame sweep
@@ -309,13 +309,13 @@ fn write_loading_cover_oracles(body: &mut String) {
     );
     // Presents where we skipped all compositing because the now-loading display window had not opened
     // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
-    // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
+    // window on native Windows. High during boot, stops once now-loading opens.
     push_json_usize(
         body,
         "oracle_present_composite_early_skips",
         PRESENT_COMPOSITE_EARLY_SKIPS.load(Ordering::SeqCst),
     );
-    // Native-Windows loading overlay (separate window + own D3D12 device, er-effects-rs-8jz):
+    // Native-Windows loading overlay (separate window + own D3D12 device):
     // stage = how far init got (10 = render loop live); frames = frames presented on our swapchain
     // (proof the isolated overlay is rendering); show = current visibility request from loading state.
     push_json_usize(
@@ -376,7 +376,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_milestone_idx",
         BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
     );
-    // Load epoch identity (bd er-effects-rs-ok8d): seq increments on every bar rearm, kind selects
+    // Load epoch identity: seq increments on every bar rearm, kind selects
     // which phase sequence the bar publishes (0 = process boot, 1 = character reload). Together
     // they make "did the bar actually start a fresh epoch, with the right phase set?" a RAM oracle
     // instead of something only inferable from the debug log.
@@ -429,7 +429,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_dark_gap_last_native_hits",
         BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
     );
-    // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): why the cover last stopped
+    // Cover-window measurability (Phase 1): why the cover last stopped
     // (0 armed/none, 1 release-fade, 2 fps-bail, 3 can-move world handoff, 4 absolute
     // BACKSTOP), the last window's rearm->stop duration, and how many times the fps-bail was
     // resumed by a fresh publish. Reason 4 is the cover having failed, not having worked.
@@ -458,7 +458,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_backstop_trigger",
         er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_TRIGGER.load(Ordering::SeqCst),
     );
-    // Cover end-condition health (er-effects-rs-drb7). semantic_releases should equal the load
+    // Cover end-condition health. semantic_releases should equal the load
     // window count; the two latches say which half is missing when it does not.
     push_json_usize(
         body,
@@ -540,7 +540,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_boot_view_missed_handoff_failures",
         boot_view_missed_handoff,
     );
-    // Window-reconfiguration timeline semaphores (bd er-effects-rs-rzow): user32 call counts
+    // Window-reconfiguration timeline semaphores: user32 call counts
     // from the observe-only hooks, plus the early final-geometry apply result (1 = applied,
     // 2 = skipped WINDOWED, 3 = no window, 4 = no monitor, 5 = no config, 6 = already final).
     push_json_usize(
@@ -772,7 +772,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_ls_portrait_rejected_publishes",
         LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
     );
-    // Reject attribution (er-effects-rs-k979). The bare count above cannot say whether the
+    // Reject attribution. The bare count above cannot say whether the
     // neutral gate was doing its job or the pipeline broke. `_after_window_publish` is the one
     // a proof should gate on; `_before_window_publish` is warm-up and expected. Both are scoped
     // to the current window -- the version counter they derive from is process-cumulative.
@@ -798,7 +798,7 @@ fn write_loading_cover_oracles(body: &mut String) {
         "oracle_ls_portrait_reject_last_neutral_pct",
         er_telemetry_core::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
     );
-    // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
+    // Publish identity + race measurability (Phase 1): which character the
     // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
     // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds
     // (with their outcomes, in `portrait_bridge_hold_oracles.rs`).

@@ -492,7 +492,7 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let publishable = !is_neutral;
     if !publishable {
         LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
-        // Attribution (er-effects-rs-k979). A bare reject count cannot distinguish the gate doing
+        // Attribution. A bare reject count cannot distinguish the gate doing
         // its job from the pipeline breaking, so a proof gating on "zero rejects" failed healthy
         // runs. Stamp why (the neutral share that tripped it) and when (this capture's version),
         // and split on whether anything has ever published cleanly: before the first clean publish
@@ -516,7 +516,7 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     publishable
 }
 
-/// Is a rejected capture pipeline warm-up rather than a fault? (er-effects-rs-k979)
+/// Is a rejected capture pipeline warm-up rather than a fault?
 ///
 /// Split on whether this window has published cleanly yet. Before its first clean publish the
 /// offscreen RT is still the blank background, so a >=90%-neutral frame is expected and refusing it

@@ -294,7 +294,7 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
 }
 
 /// Before-original defer detour for `CS::InGameStep::STEP_MoveMap_Update` (0x140aedef0). Root fix
-/// for the warm-reload revert (bd er-effects-rs-9fmm): the parent reports the ending child finished
+/// for the warm-reload revert: the parent reports the ending child finished
 /// (`0x140eb8a90`, 1.16.1 dump `FUN_140eb5550`, an outer-stepper vtable done-query decoupled from the
 /// MoveMapStep finalize substate) while the ending advancer is still at substate 8, then sets
 /// requestCode `+0xd8=2` and tears the child down (`0x140eb8a20`, 1.16.1 dump `FUN_140eb54e0`)
@@ -694,7 +694,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(
         let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
         let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-        // Ending-condition snapshot at the exact SetState frame (bd er-effects-rs-9fmm).
+        // Ending-condition snapshot at the exact SetState frame.
         //
         // This snapshot used to log the wrong function'S inputs, and that is how we MISDIAGNOSED the
         // revert (2026-09-04). It sampled the MoveMapStep *ending evaluator*'s cVar10 inputs -- warp,

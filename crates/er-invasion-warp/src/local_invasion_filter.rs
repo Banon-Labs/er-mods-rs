@@ -1505,7 +1505,7 @@ fn plausible_session_pointer(candidate: usize) -> bool {
 /// refusal and a good one -- and it used to be folded into the same `bool` as the sentinel under
 /// the name `session_guard_poisoned`, so a refusal reported a poisoned mutex when what had actually
 /// happened was that the pointer was stale. Each condition now names itself, and the caller prints
-/// what it was told. Tracked as bd er-effects-rs-s1v4.
+/// what it was told.
 fn session_guard_refuses(abi: &ersc::Abi, session: usize) -> Option<&'static str> {
     match unsafe { er_game_base::mem::safe_read_i32(session + abi.session_guard_offset) } {
         None => Some("the session pointer did not read, so it is stale or was never a session"),
@@ -2316,7 +2316,7 @@ fn publish_invasion_attempt_state(session: SeamlessSession) {
     // `state_cancelling` the player has already asked for this to stop, and Seamless then spends
     // its own `joinCheck` countdown -- 30.0 s, an f32 inside a virtualised module we cannot reach
     // -- walking back out. Reporting an attempt in flight for those 30 s is the complaint; still
-    // refusing the warp for them is the safety that bd `er-effects-rs-uob3` records, because ersc
+    // refusing the warp for them is the safety, because ersc
     // is unwinding a join and the player must not be moved through it.
     let cancelling = state.is_some_and(|state| {
         state == session.abi.state_cancelling || state == CANCEL_SETTLING_STATE
@@ -2564,7 +2564,7 @@ fn ersc_module_base() -> Option<usize> {
 /// bytes do not match, they do not match on the next tick either. It was logged unconditionally
 /// from a per-tick caller, and run br-20260909-005147-56c1 came back with 6061 identical copies of
 /// it -- half of a 12826-line log. A message that repeats six thousand times is not a diagnostic,
-/// it is what buries one. Tracked as bd er-effects-rs-m86t.
+/// it is what buries one.
 ///
 /// Keyed by rva so a second action refusing for a different reason still gets its own line, and
 /// cleared when the bytes read correctly again so a recovery is reported once too.

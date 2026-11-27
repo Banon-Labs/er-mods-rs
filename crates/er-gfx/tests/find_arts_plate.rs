@@ -1,4 +1,4 @@
-//! THROWAWAY structural query (bd er-effects-rs-pe98): find how the game itself draws
+//! THROWAWAY structural query: find how the game itself draws
 //! the Ash-of-War backing plate so the armament badge can mirror it instead of inventing
 //! one.
 //!

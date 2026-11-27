@@ -428,8 +428,8 @@ let trainee = null;
 let traineeModule = null;
 let traineeCtrl = null;
 let playerCtrl = null;
-// Turning, for bd er-effects-rs-p4mr: LOCK_TURN calls for the partner and for the player with the
-// dead zones (degrees, +0x18/+0x1c) each held before the hook wrote anything, and the last
+// Turning: LOCK_TURN calls for the partner and for the player with the dead zones
+// (degrees, +0x18/+0x1c) each held before the hook wrote anything, and the last
 // TURN_TRACE_FRAMES partner frames of facing against the bearing to the other character.
 const TURN_TRACE_FRAMES = 240;
 const TURN_ZONE_KEYS = 16;

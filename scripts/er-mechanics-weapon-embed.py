@@ -109,8 +109,8 @@ def _intr():
 
 
 def trade_fields(hits, windows):
-    """The per-hit fields `er-mechanics-ash-interrupt.chain_cast` reads off a slot (issue
-    er-effects-rs-q0r9): `hit_at` each hit's first frame, `hit_poise` its PvP poise damage in menu
+    """The per-hit fields `er-mechanics-ash-interrupt.chain_cast` reads off a slot:
+    `hit_at` each hit's first frame, `hit_poise` its PvP poise damage in menu
     units (`poise_damage x 10 x FinalDamageRateParam.saRate`, `er-mechanics-interrupt._slot_member`),
     and `ha` the slot's TAE 795 windows [start, end, bonus (menu), poise-taken multiplier, floor
     share, HP-taken multiplier] (`er-mechanics-interrupt._window` plus ToughnessParam `unk2`, the

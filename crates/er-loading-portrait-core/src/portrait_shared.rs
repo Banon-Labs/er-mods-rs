@@ -3,11 +3,11 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_extend};
 
 // Shared portrait helpers used by the capture pipeline and its hosts: the per-window reset,
 // the depth-mask invalidation, and the publish-acceptance classifiers. Relocated out of the
-// path-A overlay composite (bd er-effects-rs-f9mq) because path B and the shared capture
+// path-A overlay composite because path B and the shared capture
 // pipeline depend on them.
 
 /// FNV-1a 64 over a character name's UTF-16 units (le bytes), truncated to usize. The portrait
-/// identity tag (bd er-effects-rs-dpf6 Phase 1): stamped at the game-thread build kick, copied next to
+/// identity tag (Phase 1): stamped at the game-thread build kick, copied next to
 /// the bridge at publish, compared at the own-menu-switch rearm. 0 is reserved for "unknown/empty".
 pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
     if units.is_empty() {
@@ -114,7 +114,7 @@ pub fn loading_portrait_window_reset(reason: &str) {
     loading_portrait_window_reset_inner(reason, hold_bridge)
 }
 
-/// Own-menu-switch variant (bd er-effects-rs-dpf6 Phase 3): if the incoming target identity
+/// Own-menu-switch variant (Phase 3): if the incoming target identity
 /// (slot + ProfileSummary name-hash) matches the currently-published head's identity tag, keep the
 /// bridge and the frozen crop envelope across the rearm -- a same-character reload's cover shows the
 /// held head from frame one instead of clearing it 0.1ms after RETARGET's make-before-break claimed it
@@ -130,7 +130,7 @@ pub fn loading_portrait_window_reset(reason: &str) {
 /// Game thread only: this decides whether the published portrait survives the switch, and
 /// it is ordered against the publish path by being on the same thread, not by a lock.
 pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reason: &str) {
-    // Reject attribution baseline (er-effects-rs-k979). LOADING_BG_PORTRAIT_RGBA_VERSION is
+    // Reject attribution baseline. LOADING_BG_PORTRAIT_RGBA_VERSION is
     // cumulative for the whole process -- it ends a 3-window run in the 1500s and never resets --
     // so "has anything published yet" is only meaningful against the current window. Snapshot it
     // here, at the one place a new portrait window begins, or every warm-up reject from switch 2
@@ -313,7 +313,7 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // and shows the new character's first keyed frame. Costs a brief head-less loading screen
     // (~0.5s after the window's table build in both measured runs) -- preferred over a wrong head.
     //
-    // Same-identity hold (bd er-effects-rs-dpf6 Phase 3): when the caller proved the incoming target
+    // Same-identity hold (Phase 3): when the caller proved the incoming target
     // is the same character as the published head (slot + name-hash tag match), keeping the bridge
     // cannot show a wrong head -- it shows the right head a full publish-latency (~4s from confirm on
     // the measured machine) earlier. Only the bridge, its identity tag, and the frozen crop envelope

@@ -1,4 +1,4 @@
-//! World-map invasion-spawn warp targets (bd `er-effects-rs-5es`).
+//! World-map invasion-spawn warp targets.
 //!
 //! The feature is a local exploration surface. Elden Ring already ships a table of fixed
 //! auto-invasion spawn coordinates (`other:/AutoInvadePoint.aipbnd`, loaded into the

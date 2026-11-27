@@ -187,7 +187,7 @@ fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> 
 /// functions, nothing but a box with a session pointer at `+0x58`. Whose box it is has no bearing
 /// on what they do.
 ///
-/// That dissolves open issue er-effects-rs-9i0g rather than solving it. Finding Seamless's own
+/// That dissolves the missing-owner problem rather than solving it. Finding Seamless's own
 /// menu object was never the requirement; it was an assumption, and it cost four false-positive
 /// identifications, a wedged main thread, two killed processes, a sweep of the whole address space
 /// that turned up fifteen candidates, and a discriminator that then found none of the fifteen was

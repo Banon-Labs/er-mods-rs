@@ -7,7 +7,7 @@ apart from "the feature ran and did nothing", so the oracle does not merely fail
 actively misinforms. That is not hypothetical: on 2026-07-31 an agent cited
 `oracle_title_overlay_cover_render_calls=0` as proof the title cover painted no pixels during a
 loading-screen gap and mis-framed a defect around it. Six counters behind that family had no
-writers at all; a further 13 with the same shape were found by audit (er-effects-rs-56fx).
+writers at all; a further 13 with the same shape were found by audit.
 
 A `bd` note cannot prevent the next one. This can.
 

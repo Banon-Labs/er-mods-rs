@@ -261,8 +261,8 @@ impl Sem {
     /// A character's world is actually coming up: the loading screen latched, `GameMan::savedMap`
     /// names a real map, or the world is already simulating.
     ///
-    /// `save_state > 0` used to be the fourth clause and is deliberately gone (bd
-    /// er-effects-rs-9gxt). That field is the shared save/load device, and the title's own profile
+    /// `save_state > 0` used to be the fourth clause and is deliberately gone.
+    /// That field is the shared save/load device, and the title's own profile
     /// list reads the save through it, so it reaches 2 at a title where nothing is loading -- which
     /// made `Phase::Continue` report a press that had not taken. `save_state` is still carried on
     /// `Sem` because `Phase::QuitTeardown` wants exactly its real meaning, "the device is idle", and
@@ -395,7 +395,7 @@ impl Phase {
                 // Write the accept byte only into a title that can consume it, and refuse to call
                 // the result an effect until at least one write has been made.
                 //
-                // Both halves are the same defect seen from two sides (bd er-effects-rs-9gxt). The
+                // Both halves are the same defect seen from two sides. The
                 // body this replaced wrote the byte unconditionally and advanced on `a40 == 1`, so
                 // a title whose menu was already open -- or one whose a40 latch was transiently set
                 // during a teardown -- satisfied the check on the phase's first frame, before the
@@ -435,8 +435,8 @@ impl Phase {
                 // derail there would break the reload and full modes over a title that is in
                 // exactly the state the next phase wants. The product takes the same shortcut for
                 // the same case and with the same precondition -- settled in `Loop`, menu genuinely
-                // open, which is what separates this from the stale-latch pass that bd
-                // er-effects-rs-9gxt is about (`maybe_set_title_accept_byte` marks its one-shot
+                // open, which is what separates this from the stale-latch pass
+                // (`maybe_set_title_accept_byte` marks its one-shot
                 // fired and returns). The log line is the difference: a run can tell a press from a
                 // window that was already there.
                 if frame == 0
@@ -455,7 +455,7 @@ impl Phase {
             }
             Phase::Continue => {
                 // Continue is two writes, not one, and its effect is the world -- not the save
-                // device (bd er-effects-rs-9gxt, recipe from bd
+                // device (recipe from bd
                 // `TITLE-CONTINUE-is-accept-byte-not-keystate-...-2026-07-22`).
                 //
                 // The recipe that phase reverses is: at the open menu, write the row cursor
@@ -569,8 +569,8 @@ impl Phase {
                 // pause menu, while the one native request opened it in a single frame. That is the
                 // same shape as the title, where the accept byte works and both input channels do
                 // not. This phase spent its whole 480-frame budget pressing into that, on every run
-                // since 2026-09-05, and derailed with `effect not seen within 480f` -- which bd
-                // er-effects-rs-h09b recorded as a `top_window()` defect and which is in fact two
+                // since 2026-09-05, and derailed with `effect not seen within 480f` -- which was
+                // recorded as a `top_window()` defect and which is in fact two
                 // defects, the resolver and this press, either of which alone is enough to derail.
                 //
                 // What replaces it is the route `Phase::OpenEquipMenu` already proves for
@@ -1071,7 +1071,7 @@ enum DriveMode {
     /// harness-gated behavior is enabled without the standalone drive fighting it.
     Passive,
     /// Boot to in-world, open the pause menu, Confirm into the Equipment menu, then dwell so the
-    /// armament tiles populate (er-armament-icons badge oracle run, bd er-effects-rs-pe98).
+    /// armament tiles populate (er-armament-icons badge oracle run).
     EquipMenu,
     /// Boot to in-world, open the pause menu, native-open the Inventory menu (02_020_Inventory --
     /// the Melee/Ranged/Shields tabs with bottom-left ArtsIcon cells), then dwell.
@@ -1269,7 +1269,7 @@ impl DriveMode {
             Phase::ProbeMenu,
         ];
         // equip: reach in-world, open the pause menu, Confirm into Equipment, dwell for the
-        // armament-tile badge oracle (bd er-effects-rs-pe98).
+        // armament-tile badge oracle.
         const EQUIP: &[Phase] = &[
             Phase::Startup,
             Phase::PressAnyButton,
@@ -1390,7 +1390,7 @@ static PHASE_PAUSE_LOGGED: AtomicBool = AtomicBool::new(false);
 /// `Phase::ActivateLoadFromFile` starts. Its replacement is that phase's effect.
 /// How many accept-byte writes this visit to `Phase::PressAnyButton` / `Phase::Continue` has
 /// actually made. Both phases refuse to report an effect until it is non-zero, which is the whole
-/// of bd er-effects-rs-9gxt: a check that can pass before the input could have landed is not an
+/// point: a check that can pass before the input could have landed is not an
 /// effect check, and these two were passing on frame 1 and frame 39 of a title that never loaded.
 static ACCEPT_BYTE_WRITES: AtomicU64 = AtomicU64::new(0);
 /// Set when `Phase::PressAnyButton` is entered on a title whose menu is already open and settled,
@@ -1545,7 +1545,7 @@ fn emit_phase_telemetry(
     let duration_ms = end_tick.saturating_sub(start_tick);
     let title_state = title_scan::title_state(base);
     let a40 = title_scan::title_dialog_a40(base);
-    // The three fields that name the title half of a phase, added with bd er-effects-rs-9gxt: a run
+    // The three fields that name the title half of a phase: a run
     // whose Continue did nothing used to be indistinguishable from one that never pressed, because
     // the line carried neither the press count nor the row it would have activated.
     let in_loop = title_scan::title_dialog_in_loop(base) as u8;
@@ -1591,7 +1591,7 @@ pub fn on_frame(base: usize) {
         // autoload waits there for the title to advance; a human presses a button and the load
         // proceeds. With no human, the title sits parked forever, the picked-slot load never
         // starts, and every agent-driven validation of the switch feature stalls at exactly that
-        // point (bd er-effects-rs-tkfb -- measured stalls of 154s and 185s with the product
+        // point (measured stalls of 154s and 185s with the product
         // retrying its accept byte the whole time).
         //
         // It does not fight the product: `advance_press_any_button` writes the same title global

@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "how is the kit run going?"}]}}
+
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The patch is applied to the scripts. This waits on your `authorize commit`."}]}}

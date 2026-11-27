@@ -238,7 +238,7 @@ pub static SAVE_PICKER_DIM_FOREIGN_FG_HWND: AtomicUsize = AtomicUsize::new(0);
 /// is the real proof the stacking held for the whole dialog, not just at the end.
 ///
 /// They are two fields because they mean opposite things and carry opposite SEVERITIES (split
-/// 2026-08-01, er-effects-rs-mc1d). The fused predecessor `SAVE_PICKER_DIM_Z_VIOLATIONS` scored
+/// 2026-08-01). The fused predecessor `SAVE_PICKER_DIM_Z_VIOLATIONS` scored
 /// `behind_game || covering_dialog` into one atomic, and the live run that was supposed to prove
 /// the ownership fix came back with 130 of them across 424 dim frames -- a number from which
 /// neither failure could be confirmed nor excluded. The oracle could not answer the single question

@@ -20,7 +20,7 @@
 //       a held head was dropped because the record it was about to be rebuilt from disagreed with
 //       the fingerprint taken from the picked save's own bytes. That is a defect signal about the
 //       record, not a safety check doing its job on a healthy run: an intact record cannot produce
-//       one. Do not build a gate that requires this to be non-zero (bd k979) -- gate on `unproven`.
+//       one. Do not build a gate that requires this to be non-zero -- gate on `unproven`.
 //   unproven > 0
 //       a hold rode an entire loading window without publishing anything and without being
 //       refuted. This is the check firing when it should not have to: the window displayed a head

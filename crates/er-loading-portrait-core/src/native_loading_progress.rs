@@ -35,7 +35,7 @@
 //! It does not touch `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS` (900 ms), the gate that actually held
 //! the fade. That gate was correct: `CS::LoadingScreen::Update` really was ticking every frame,
 //! because the screen really was still loading, and fading out over it is the vanilla flash-through
-//! (er-effects-rs-wmw defect #1). The same run also proves the 900 ms is reachable -- the boot
+//! The same run also proves the 900 ms is reachable -- the boot
 //! window cleared it (`update_quiet` 2 ms -> 287 ms, then `native loading fade/quiet hold complete`
 //! at +34384 ms and `release fade complete -> stop cover (... reason=1)`). Lowering it would have
 //! released the cover onto a loading screen reading 39 %.
@@ -76,7 +76,7 @@ pub const NATIVE_BAR_TERMINAL_PERMILLE: usize = 998;
 ///
 /// The single definition. Both callers that need it -- the entering world phase predicate and the
 /// cover's release predicate -- go through this function, so the two can never drift apart again.
-/// They drifted once already, which is the whole of bd er-effects-rs-t7q2.
+/// They drifted once already.
 pub fn gauge_done(cur_frame: usize, max_frame: usize) -> bool {
     max_frame == 0 || cur_frame >= max_frame
 }
@@ -113,7 +113,7 @@ pub fn switch_cover_may_release(completed_closes: usize) -> bool {
 
 /// Has the game's own loading screen finished -- the release predicate's "native done" half.
 ///
-/// # Why the `gauge_done` conjunct is not optional (bd er-effects-rs-t7q2)
+/// # Why the `gauge_done` conjunct is not optional
 ///
 /// The predicate used to read `close_hits != 0 || permille >= 998`, and the bare `close_hits`
 /// arm is wrong for the same reason it is wrong one phase earlier: a reload's transient loading
@@ -125,7 +125,7 @@ pub fn switch_cover_may_release(completed_closes: usize) -> bool {
 /// That is not merely 17 s of early release. `boot_view_absolute_backstop` refuses to fire while
 /// the release is reachable, so a premature latch DISARMS the cover's 120 s lifetime bound, and on
 /// the boot epoch -- which has no composite cap at all -- that leaves the window with no bound of
-/// any kind. The same "no reachable exit" failure as er-effects-rs-55y6, entered from the far side.
+/// any kind. The same "no reachable exit" failure as before, entered from the far side.
 ///
 /// The permille arm keeps its own independent path to true and is left alone: it is a reading of
 /// the gauge's own fill, not of an unrelated screen's teardown, and it is what released the healthy
@@ -528,7 +528,7 @@ mod tests {
         tracker::reset();
     }
 
-    // ---- er-effects-rs-t7q2: the release predicate's native-done half ----
+    // ---- the release predicate's native-done half ----
 
     /// The measured defect. Reload epoch of run br-20260831-160354-2513: close #1 arrives with the
     /// gauge at frame 1 of 500 and permille well under 998. That is a transient screen closing, not

@@ -307,7 +307,7 @@ pub use er_telemetry_core::counters::PROFILE_PUBLISH_CLEAN_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK;
-/// Cross-thread teardown fence (freeze-after-capture relaxation, er-effects-rs-l1x 2026-07-03). The
+/// Cross-thread teardown fence (freeze-after-capture relaxation, 2026-07-03). The
 /// game-thread profile-renderer teardown (`profile_renderer_teardown_spare_hook`) raises this before any
 /// delete-enqueue runs (orphan reclaim + native table teardown) and lowers it after the native original
 /// returns; the render-thread pump sets `PROFILE_IN_OUR_DRIVE` first and then skips its drive while the

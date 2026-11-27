@@ -7,7 +7,7 @@
 //!
 //! Members are copyrighted game bytecode, so nothing is committed; point this at
 //! a local extraction dir (e.g. target/er-shaderbridge/disasm-tmp). Produces the
-//! evidence behind the viewer-feasibility determination (er-effects-rs-hoz).
+//! evidence behind the viewer-feasibility determination.
 
 use std::{collections::BTreeMap, fs, path::PathBuf};
 

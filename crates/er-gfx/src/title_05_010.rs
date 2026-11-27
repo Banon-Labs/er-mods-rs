@@ -3,8 +3,8 @@
 //! Derives the "stats-panel v1" ProfileSelect movie from the **vanilla** movie
 //! by applying [`TITLE_05_010_STATS_EDITS`]: Hides the 128x128 face box
 //! (`Icon_0`) via an alpha-0 color transform -- kept placed so the native
-//! row-populate can still resolve/release it (unplacing it crashes,
-//! er-effects-rs-7e7) -- repurposes the icon-frame deco (char 67, placed
+//! row-populate can still resolve/release it (unplacing it crashes)
+//! -- repurposes the icon-frame deco (char 67, placed
 //! nowhere else) as a left-aligned `MenuFont_01` `DefineEditText`, placed once
 //! as one merged lower-row stat line between the Level cluster and PlayTime, and
 //! shifts PlayerName / the Level FMG caption / the Level value field left into

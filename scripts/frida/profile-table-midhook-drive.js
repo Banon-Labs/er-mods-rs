@@ -1,5 +1,5 @@
-// Drive er-quit-menu-core's profile-renderer refresh mid hook (er-effects-rs-7xbs.2) from inside
-// the refresh itself, on the game's own thread.
+// Drive er-quit-menu-core's profile-renderer refresh mid hook from inside the refresh itself, on
+// the game's own thread.
 //
 // The refresh (1.17.1 0x1409ab820 -> 2.7.2.0 0x1409abcd0) walks the ten-slot renderer table at
 // 1.17.1 0x143d71940 -> 2.7.2.0 0x143d74960. The mid hook

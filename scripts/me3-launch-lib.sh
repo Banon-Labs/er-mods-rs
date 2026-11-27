@@ -6,9 +6,9 @@
 # audits individually. Do not add a redirect list here -- it would silently override theirs.
 # Shared me3 launch helpers. me3 is the only supported loader for er_quickload.dll:
 # the LazyLoader dinput8 proxy + lazyLoad.ini chainload delivery was removed 2026-07-04
-# (branch feat/me3-launch-smoketest) after the me3 production smoke passed end-to-end
-# (run me3-product-smoke-20260704-110507: DLL attach, env propagation, flag files,
-# zero-input autoload to world-stable all proven through me3).
+# after the me3 production smoke passed end-to-end (run me3-product-smoke-20260704-110507:
+# DLL attach, env propagation, flag files, zero-input autoload to world-stable all proven
+# through me3).
 #
 # Source this file; do not execute it. Callers own artifact dirs, env, backgrounding,
 # and teardown. me3 launches Game/eldenring.exe directly through the Steam compat tool

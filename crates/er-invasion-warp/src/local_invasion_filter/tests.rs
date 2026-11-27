@@ -1516,7 +1516,7 @@ fn the_game_thread_reads_the_cache_and_never_sweeps() {
 /// A session found without an owner is provisional, and the sweeper keeps looking.
 ///
 /// `owner == 0` is the shape that lets the filter judge and log while `ersc_owner_or_refuse`
-/// declines every cancel -- open issue er-effects-rs-9i0g, and the state every live run has ended
+/// declines every cancel -- the state every live run has ended
 /// in so far. Settling for it permanently would stop the search that is meant to end it.
 #[test]
 fn a_session_found_without_an_owner_keeps_the_sweeper_looking() {

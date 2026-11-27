@@ -98,6 +98,21 @@ test_no_interlock_on_whitespace_signal if {
 	not has_interlock(ctxs)
 }
 
+# UNNAMEDPAUSE is a Stop-only tag: it trips no interlock here, and its report text is never read as
+# an idle phrase.
+test_no_interlock_on_unnamedpause if {
+	ctxs := guard.add_context with input as ups_event("UNNAMEDPAUSE:Shells running: bx12 (main session: board run; up 3m02s).")
+	not has_interlock(ctxs)
+	has_standing_reminder(ctxs)
+}
+
+# A report line after IDLEHOLD leaves the phrase the first line's.
+test_interlock_phrase_ignores_report_line if {
+	ctxs := guard.add_context with input as ups_event("IDLEHOLD:standing by\nUNNAMED:Shells running: bx12.")
+	some c in ctxs
+	contains(c, "('standing by')")
+}
+
 # The interlock only applies to UserPromptSubmit, not other events carrying the signal.
 test_no_interlock_on_non_ups_event if {
 	ctxs := guard.add_context with input as {

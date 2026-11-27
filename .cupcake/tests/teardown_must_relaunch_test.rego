@@ -449,12 +449,12 @@ test_allow_other_events if {
 
 # --- a payload that NAMES the script is not an invocation of it ---------------
 #
-# Both shapes below were refused in production on 2026-09-21 (bd er-effects-rs-ak3q,
-# bd er-effects-rs-if5l). The invoked binary is `git` and `bd`; the script appears in a
-# commit message and an issue body, where it is prose. The cost was not the block: the
-# commit message had to be reworded to say "a repo-relative teardown command" rather than
-# name the file, and the issue reporting it had to be filed through a body file written by
-# a separate command, so the record this guard is not there to police came out degraded.
+# Both shapes below were refused in production on 2026-09-21. The invoked binary is `git`
+# and `bd`; the script appears in a commit message and an issue body, where it is prose.
+# The cost was not the block: the commit message had to be reworded to say "a
+# repo-relative teardown command" rather than name the file, and the issue reporting it
+# had to be filed through a body file written by a separate command, so the record this
+# guard is not there to police came out degraded.
 
 test_allow_commit_message_naming_the_script if {
 	not denied(`git commit -m "fix(guard): teardown_must_relaunch fires on scripts/er-teardown.py in prose"`)
@@ -563,4 +563,22 @@ test_deny_push_teardown_and_then_build if {
 
 test_deny_push_multi_word_reason if {
 	denied_with_push_auth(`python3 scripts/er-teardown.py --reason="push the guard"`, AUTHORIZED_PUSH)
+}
+
+# --- exec launchers in front of the teardown (2026-11-19) ---------------------
+# Allowed until this date, measured with `opa eval`: the launcher was read as the program,
+# so a teardown with no relaunch went unexamined.
+test_deny_teardown_behind_a_launcher if {
+	denied("chrt --idle 0 python3 scripts/er-teardown.py")
+	denied("taskset -c 0-3 python3 scripts/er-teardown.py")
+	denied("ionice -c 3 python3 scripts/er-teardown.py")
+}
+
+# A relaunch behind a launcher is a relaunch.
+test_allow_launched_teardown_with_launched_relaunch if {
+	not denied("chrt --idle 0 python3 scripts/er-teardown.py; chrt --idle 0 python3 scripts/er-run-branch.py --with er-save-game-row")
+}
+
+test_allow_launched_teardown_status if {
+	not denied("chrt --idle 0 python3 scripts/er-teardown.py --status")
 }

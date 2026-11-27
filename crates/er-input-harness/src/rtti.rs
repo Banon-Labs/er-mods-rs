@@ -4,7 +4,7 @@
 //! bigger than `0x10000`" -- and that test is satisfied by text. `currentTopMenuJob+0x130` read
 //! `0x2f003a00320063` on 1.17.1, the UTF-16 for `c2:/aet/aet050/A...`, and the harness handed that
 //! asset path to `top_menu_id`, to the `GridControl` scan and to the `OptionSetting` tab chain as
-//! though it were a `CS::MenuWindow` (bd er-effects-rs-h09b). The offset was not wrong; the object
+//! though it were a `CS::MenuWindow`. The offset was not wrong; the object
 //! was. `+0x130` is `owningMenuWindow`, the last field of a `CS::MenuWindowJob`, and
 //! `CSPopupMenu::StartTopMenuJob` never puts a `MenuWindowJob` at `currentTopMenuJob` -- it puts a
 //! `0x58`-byte wrapper job there, so the read was `0xd8` bytes past the end of the object.

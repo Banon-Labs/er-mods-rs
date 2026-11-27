@@ -259,6 +259,275 @@ test_deny_bash_echo_of_git_show_text_into_tmp_script if {
 }
 
 # ---------------------------------------------------------------------------
+# C is what Ghidra's decompiler writes (2026-11-10). A dump is data, so a C file
+# in /tmp is refused only when the agent typed bytes that are not decompiler
+# output. The first three cases are the measured commands of this session's
+# subagents, with its scratchpad path: the first two were refused, the third was
+# let through only because its target was relative.
+# ---------------------------------------------------------------------------
+
+repo := "/home/banon/projects/er-mods-rs"
+
+session_scratchpad := "/tmp/claude-1000/-home-banon-projects-er-mods-rs/5ec7b779-1950-45a6-84dd-ef5b2c3e9082/scratchpad"
+
+bash_event_in(cwd, command) := object.union(bash_event(command), {"cwd": cwd})
+
+write_with(tool, path, text) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": tool,
+	"cwd": repo,
+	"tool_input": {"file_path": path, "content": text},
+}
+
+edit_with(path, text) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Edit",
+	"cwd": repo,
+	"tool_input": {"file_path": path, "old_string": "x", "new_string": text},
+}
+
+ghidra_dump := concat("\n", [
+	"/* WARNING: Unknown calling convention -- yet parameter storage is locked */",
+	"",
+	"int HksEnv(ChrIns **chrInsHolder,HksEnvId envId,hks_lua_State *hksState)",
+	"",
+	"{",
+	"  CSChrEventModule *pCVar1;",
+	"  undefined4 uVar2;",
+	"",
+	"  pCVar1 = (*chrInsHolder)->modules->event;",
+	"  uVar2 = FUN_1406832a0(pCVar1,envId);",
+	"  return uVar2;",
+	"}",
+])
+
+hand_written_c := concat("\n", [
+	"#include <stdio.h>",
+	"",
+	"int main(void) {",
+	"  printf(\"hi\\n\");",
+	"  return 0;",
+	"}",
+])
+
+test_allow_bash_decompile_redirect_into_scratchpad_c if {
+	not denied(bash_event_in(repo, concat("", [
+		"timeout 28 python3 scripts/ghidra/mcp_query.py getDecompiledCode --params '{\"address\":\"1406832a0\"}' 2>&1",
+		" | python3 -c \"import json,sys; d=json.load(sys.stdin); r=d.get('result'); print(r)\" > ",
+		session_scratchpad, "/f1406832a0.c; wc -l ", session_scratchpad, "/f1406832a0.c",
+	])))
+}
+
+test_allow_bash_cd_repo_then_decompile_redirect_into_scratchpad_c if {
+	not denied(bash_event_in(repo, concat("", [
+		"cd /home/banon/projects/er-mods-rs && python3 scripts/ghidra/mcp_query.py getDecompiledCode",
+		" --params '{\"address\":\"1404275e0\"}' | jq -r .result > ",
+		session_scratchpad, "/chractionflag-1162.c; wc -l ", session_scratchpad, "/chractionflag-1162.c",
+	])))
+}
+
+test_allow_bash_cd_scratchpad_then_relative_decompile_c if {
+	not denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad,
+		" && jq -r .result hksenv-1162.json > hksenv-1162.c && wc -l hksenv-1162.c",
+		" && python3 -I -c \"\nimport re\nlines=open('hksenv-1162.c').read().split(chr(10))\n\" | head -150",
+	])))
+}
+
+test_allow_write_decompiler_output_c_into_scratchpad if {
+	not denied(write_with("Write", concat("", [session_scratchpad, "/f1406832a0.c"]), ghidra_dump))
+}
+
+test_allow_bash_heredoc_of_decompiler_text_into_tmp_c if {
+	not denied(bash_event_in(repo, concat("", [
+		"cat > ", session_scratchpad, "/f1406832a0.c <<'EOF'\n", ghidra_dump, "\nEOF",
+	])))
+}
+
+# A `<<` inside a quoted program is an operator in that program, not a heredoc.
+test_allow_bash_shift_operator_inside_quotes_is_not_a_heredoc if {
+	not denied(bash_event_in(repo, concat("", [
+		"jq -r .flags dump.json | python3 -c \"import sys; print(int(sys.stdin.read()) << 3)\" > ",
+		session_scratchpad, "/flags.c",
+	])))
+}
+
+# A copy puts no agent-written bytes there: the source stays versioned where it was.
+test_allow_bash_copy_versioned_cpp_into_tmp if {
+	not denied(bash_event_in(repo, "cp scripts/vs-patch/dxa_lite.cpp /tmp/dxa-build/dxa_lite.cpp"))
+}
+
+test_deny_write_hand_written_c_into_tmp if {
+	denied(write_with("Write", concat("", [session_scratchpad, "/probe.c"]), hand_written_c))
+}
+
+test_deny_write_c_without_decompiler_markers if {
+	denied(claude_write_event("/tmp/probe.c"))
+}
+
+test_deny_edit_hand_written_c_into_tmp if {
+	denied(edit_with(concat("", [session_scratchpad, "/f1406832a0.c"]), hand_written_c))
+}
+
+test_deny_bash_heredoc_hand_written_c_into_tmp if {
+	denied(bash_event_in(repo, concat("", [
+		"cat > ", session_scratchpad, "/probe.c <<'EOF'\n", hand_written_c, "\nEOF",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_heredoc_hand_written_relative_c if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && cat > probe.c <<'EOF'\n", hand_written_c, "\nEOF",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_echo_relative_c if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && echo 'int main(void) { return 0; }' > probe.c",
+	])))
+}
+
+# ---------------------------------------------------------------------------
+# A relative target after `cd` gets the verdict its absolute spelling gets.
+# ---------------------------------------------------------------------------
+
+test_deny_bash_cd_scratchpad_heredoc_relative_py if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && cat > probe.py <<'EOF'\nprint(1)\nEOF",
+	])))
+}
+
+test_deny_bash_cd_quoted_scratchpad_heredoc_relative_py if {
+	denied(bash_event_in(repo, concat("", [
+		"cd \"", session_scratchpad, "\" && cat > probe.py <<'EOF'\nprint(1)\nEOF",
+	])))
+}
+
+test_deny_bash_cd_then_relative_cd_redirect_py if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && mkdir -p hks && cd hks && echo 'print(1)' > walk.py",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_relative_tee_py if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, "; echo 'print(1)' | tee probe.py",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_relative_curl_output_js if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && curl -sL https://example.invalid/x.js -o x.js",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_relative_cp_destination_py if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && cp ", repo, "/scripts/probe.py probe.py",
+	])))
+}
+
+test_deny_bash_wget_output_document_long_flag_tmp_js if {
+	denied(bash_event("wget --output-document=/tmp/planner/x.js https://example.invalid/x.js"))
+}
+
+test_deny_bash_subshell_cd_scratchpad_relative_py if {
+	denied(bash_event_in(repo, concat("", [
+		"(cd ", session_scratchpad, " && echo 'print(1)' > a.py)",
+	])))
+}
+
+test_deny_bash_subshell_redirect_tmp_py if {
+	denied(bash_event("(echo 'print(1)' > /tmp/a.py)"))
+}
+
+# A relative target resolves against the hook's cwd when no `cd` came before it.
+test_allow_bash_relative_script_write_in_repo_cwd if {
+	not denied(bash_event_in(repo, "cat > scripts/probe.py <<'EOF'\nprint(1)\nEOF"))
+}
+
+test_allow_bash_relative_write_before_cd_into_scratchpad if {
+	not denied(bash_event_in(repo, concat("", [
+		"echo 'print(1)' > scripts/probe.py && cd ", session_scratchpad, " && ls",
+	])))
+}
+
+# `-O` is python's optimize flag here, not a download's output file.
+test_allow_bash_python_optimize_flag_runs_tmp_script if {
+	not denied(bash_event_in(repo, "python3 -O /tmp/x.py"))
+}
+
+test_allow_bash_cd_scratchpad_python_optimize_flag_runs_relative_script if {
+	not denied(bash_event_in(repo, concat("", ["cd ", session_scratchpad, " && python3 -O x.py"])))
+}
+
+test_allow_bash_cd_scratchpad_git_show_relative_target if {
+	not denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && git show main:.cupcake/tests/teardown_must_relaunch_test.rego > old_test.rego",
+	])))
+}
+
+test_deny_bash_cd_scratchpad_git_show_then_run if {
+	denied(bash_event_in(repo, concat("", [
+		"cd ", session_scratchpad, " && git show main:scripts/x.py > x.py && python3 x.py",
+	])))
+}
+
+# The `scratchpad/hks/*.py` refusal of this session stands: a Python file authored
+# in /tmp is what this guard exists to stop, nested directory or not.
+test_deny_write_python_into_scratchpad_subdir if {
+	denied(write_with("Write", concat("", [session_scratchpad, "/hks/spell_charge_windows.py"]), "print(1)"))
+}
+
+# --- a /tmp target through a variable or in quotes (2026-11-19) ---------------
+# The first is the command a subagent ran that day, which authored `repro.sh` into the
+# scratchpad and was allowed while a Write of the same file was refused. Each of these was
+# allowed, measured with `opa eval`: `$S/...` was neither absolute nor a plain relative path,
+# and a quoted target captured nothing.
+tmp_writes_through_a_variable := [
+	concat("", ["cd /home/banon/projects/er-mods-rs && S=", session_scratchpad, "; rm -f $S/repro.py; cat > $S/repro.sh <<'EOF'\n#!/usr/bin/env bash\nrepo=$1\nEOF"]),
+	concat("", ["S=", session_scratchpad, "; cat > $S/repro.sh <<'EOF'\necho hi\nEOF"]),
+	concat("", ["S=", session_scratchpad, " && cat > ${S}/repro.sh <<'EOF'\necho hi\nEOF"]),
+	concat("", ["S=", session_scratchpad, "; cat > \"$S/repro.sh\" <<'EOF'\necho hi\nEOF"]),
+	concat("", ["S=\"", session_scratchpad, "\"; cat > $S/repro.sh <<'EOF'\necho hi\nEOF"]),
+	concat("", ["export S=", session_scratchpad, "; cat > $S/repro.py <<'EOF'\nprint(1)\nEOF"]),
+	concat("", ["S=", session_scratchpad, "; echo 'echo hi' | tee $S/repro.sh"]),
+	concat("", ["S=", session_scratchpad, "; cp scripts/a.py $S/b.py"]),
+	concat("", ["S=", session_scratchpad, "; cp scripts/a.py \"$S/b.py\""]),
+	concat("", ["S=", session_scratchpad, "/; printf 'x' > $S/a.sh"]),
+	concat("", ["cat > \"", session_scratchpad, "/repro.sh\" <<'EOF'\necho hi\nEOF"]),
+	concat("", ["echo hi > '", session_scratchpad, "/repro.sh'"]),
+	# A relative value is resolved from the directory the write runs in.
+	concat("", ["D=probe; cd ", session_scratchpad, " && cat > $D/x.sh <<'EOF'\necho hi\nEOF"]),
+]
+
+test_deny_tmp_script_write_through_a_variable_or_quotes if {
+	every command in tmp_writes_through_a_variable {
+		denied(bash_event_in(repo, command))
+	}
+}
+
+# Data through the same variable is still allowed, and so is a script into the repo.
+test_allow_tmp_data_and_repo_script_through_a_variable if {
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, "; cat > $S/out.json <<'EOF'\n{}\nEOF"])))
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, "; cat $S/a.sh > out.txt"])))
+	not denied(bash_event_in(repo, "S=/home/banon/projects/er-mods-rs/target/x; cat > $S/repro.sh <<'EOF'\necho hi\nEOF"))
+	not denied(bash_event_in(repo, "S=target/x; cat > $S/repro.sh <<'EOF'\necho hi\nEOF"))
+}
+
+# Only the last binding before the write counts, and only a literal one: a later binding out of
+# /tmp, a binding that is a prefix to the writing command itself (bash expands `$S` before it
+# takes effect), a value the shell expands, or a name last bound by `read`/`for` leaves the
+# write allowed, as before.
+test_allow_unresolved_variable_targets if {
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, "; S=target; cat > $S/a.sh < /dev/null"])))
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, " cat > $S/a.sh < /dev/null"])))
+	not denied(bash_event_in(repo, "S=$HOME/x; cat > $S/a.sh < /dev/null"))
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, "; read S; cat > $S/a.sh < /dev/null"])))
+	not denied(bash_event_in(repo, concat("", ["S=", session_scratchpad, "; cat > $S/$N.sh < /dev/null"])))
+}
+
+# ---------------------------------------------------------------------------
 # A write reached through a variable bound to a /tmp path earlier in the same
 # command (2026-11-07). The first case is the measured escape: the literal
 # spelling of the same command was refused, and this one wrote probe_ash.py
@@ -290,6 +559,15 @@ test_deny_bash_redirect_through_variable_with_quoted_value if {
 
 test_deny_bash_redirect_through_variable_naming_whole_file if {
 	denied(bash_event("F=/tmp/probe.sh && printf 'set -e\\n' > $F"))
+}
+
+test_deny_bash_redirect_through_braced_quoted_variable_naming_whole_file if {
+	denied(bash_event("export F=\"/tmp/work/probe.py\"; echo 'print(1)' > \"${F}\""))
+}
+
+# A whole-file variable bound to a data file is still a data file.
+test_allow_bash_redirect_through_variable_naming_data_file if {
+	not denied(bash_event("F=/tmp/work/out.log; cargo test -p er-gfx > $F 2>&1"))
 }
 
 test_deny_bash_tee_through_variable if {

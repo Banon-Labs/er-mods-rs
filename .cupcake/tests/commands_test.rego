@@ -1,5 +1,5 @@
 # OPA unit tests for the shared command helpers, and in particular for the
-# executed-text decomposition every git guard now reads (bd er-effects-rs-dt2e).
+# executed-text decomposition every git guard now reads.
 #
 # Run with:
 #   opa test .cupcake/system/commands.rego .cupcake/tests/commands_test.rego
@@ -404,7 +404,7 @@ test_has_verb_still_matches_prose_so_the_two_are_not_interchangeable if {
 	commands.has_verb("echo the installer will install things", "install")
 }
 
-# --- ABSOLUTE/RELATIVE PATH INVOCATION (2026-08-31, bd er-effects-rs-5z75) ----
+# --- ABSOLUTE/RELATIVE PATH INVOCATION (2026-08-31) ----
 #
 # command_position_prefix_pattern's anchor class is `(^|[;&|(){}\n])` -- a
 # leading path component (`/bin/`, `/usr/bin/`, `./`) is none of those
@@ -465,7 +465,7 @@ test_path_operand_mid_command_is_not_a_command_verb if {
 	not commands.has_command_verb("chmod +x /path/to/rm", "rm")
 }
 
-# --- shell segmentation (2026-08-31, bd er-effects-rs-c0t9) -------------------
+# --- shell segmentation (2026-08-31) -------------------
 #
 # shell_segments moved here from guard_layer_destructive_guard.rego so the
 # vendored git_block_no_verify builtin could close the same co-presence defect
@@ -595,6 +595,25 @@ test_operand_after_assigned_program_is_not_in_the_command_slot if {
 test_program_behind_non_name_assignment_is_an_operand if {
 	words := commands.command_slot_words("dir/a=b /home/u/Elden/launch.sh")
 	not commands.word_in_command_slot(words, 1)
+}
+
+# `env -C DIR prog`: the directory is the option's value and `prog` is what runs.
+test_program_behind_env_chdir_is_in_the_command_slot if {
+	words := commands.command_slot_words("env -C /home/u/repo/scripts ./check.sh --stage lint")
+	words[3] == "./check.sh"
+	commands.word_in_command_slot(words, 3)
+}
+
+test_program_behind_env_options_and_assignments_is_in_the_command_slot if {
+	words := commands.command_slot_words("env -i -u HOME X=1 --chdir /tmp/x bash run.sh")
+	words[8] == "run.sh"
+	commands.word_in_command_slot(words, 8)
+}
+
+# The `-C` of a program `env` runs is that program's option, and its value is not stepped over.
+test_value_of_another_programs_chdir_is_not_stepped_over if {
+	words := commands.command_slot_words("env git -C /tmp/x status")
+	not commands.word_in_command_slot(words, 4)
 }
 
 test_executed_texts_see_one_line_across_a_continuation if {
@@ -788,4 +807,83 @@ test_heredoc_with_backtick_keeps_raw_text if {
 test_ansi_c_quote_with_backtick_keeps_raw_text if {
 	text := "echo $'a' `x; y`"
 	commands.executed_texts(text) == {text}
+}
+
+# --- launched_word_in_command_slot (2026-11-19) -----------------------------
+
+# The program behind an exec launcher and its own words is in the launched slot, and the
+# narrower `word_in_command_slot` keeps its answer.
+test_program_behind_exec_launchers_is_in_the_launched_slot if {
+	every pair in [
+		["chrt --idle 0 prog x", 3],
+		["ionice -c idle prog", 3],
+		["taskset -c 0-3 prog", 3],
+		["taskset 0x3 prog", 2],
+		["timeout 30s prog", 2],
+		["timeout -s KILL -k 5 30 prog", 6],
+		["systemd-run --user --scope -u job prog", 5],
+		["stdbuf -o L prog", 3],
+		["/usr/bin/time -o /tmp/t -v prog", 4],
+		["sudo -u root prog", 3],
+		["flock -w 5 /tmp/lk prog", 4],
+		["ionice -c 3 nice -n 19 chrt -i 0 prog", 9],
+		["runner.py --log /tmp/l -- prog", 4],
+		["py-spy record -o o -- prog", 5],
+	] {
+		words := commands.command_slot_words(pair[0])
+		words[pair[1]] == "prog"
+		commands.launched_word_in_command_slot(words, pair[1])
+	}
+	not commands.word_in_command_slot(commands.command_slot_words("chrt --idle 0 prog"), 3)
+}
+
+# Operands stay operands: a program's arguments, a quoted argument's words, and what follows
+# the first `--` of a launcher that is not the program run after it.
+test_operands_behind_exec_launchers_are_not_in_the_launched_slot if {
+	every pair in [
+		["chrt --idle 0 bd remember prog", 4],
+		["bash x.sh \"timeout 3 prog\"", 4],
+		["git log -- prog", 3],
+		["timeout 30 prog x y", 3],
+		["runner.py -- a -- prog", 4],
+	] {
+		words := commands.command_slot_words(pair[0])
+		not commands.launched_word_in_command_slot(words, pair[1])
+	}
+}
+
+# Every word `word_in_command_slot` admits, the launched form admits too.
+test_launched_slot_keeps_every_plain_slot if {
+	every text in ["prog", "A=1 prog", "env -C /x prog", "nohup setsid prog", "python3 prog"] {
+		words := commands.command_slot_words(text)
+		i := count(words) - 1
+		commands.word_in_command_slot(words, i)
+		commands.launched_word_in_command_slot(words, i)
+	}
+}
+
+# The shell's own keywords in front of a command stand aside in both slot tests (2026-11-19).
+test_shell_keywords_stand_before_the_program if {
+	every text in ["{ prog", "! prog", "if prog", "elif prog", "while prog", "until prog", "if ! prog"] {
+		words := commands.command_slot_words(text)
+		i := count(words) - 1
+		commands.word_in_command_slot(words, i)
+		commands.launched_word_in_command_slot(words, i)
+	}
+	not commands.word_in_command_slot(commands.command_slot_words("echo if prog"), 2)
+}
+
+# The first eight words are read before the rest: a launcher further in than that is still
+# followed, and a plain word among them that is not a launcher ends the question there.
+test_launcher_past_the_first_eight_words if {
+	words := commands.command_slot_words("A=1 B=2 C=3 D=4 E=5 F=6 G=7 H=8 J=9 chrt -i 0 prog")
+	words[12] == "prog"
+	commands.launched_word_in_command_slot(words, 12)
+	not commands.launched_word_in_command_slot(commands.command_slot_words("git log chrt -i 0 prog"), 5)
+}
+
+# A leading backslash skips an alias and still runs the launcher.
+test_backslashed_launcher_is_followed if {
+	words := commands.command_slot_words("\\time -v prog")
+	commands.launched_word_in_command_slot(words, 2)
 }

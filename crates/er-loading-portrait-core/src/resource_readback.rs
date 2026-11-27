@@ -528,7 +528,7 @@ pub unsafe fn find_d3d12_resource_ex(
     // Once the current fresh_deser epoch is genuinely in-world (world-clock live), there is no loading RT
     // to find, so skip the scan -- the same per-epoch gate the composite (present_overlay.rs:277) and the
     // lookat draw-tick (lookat_bone_hooks.rs:366) already use. Loading-time scans (world not yet live)
-    // still run. Boot-epoch exemption (bd er-effects-rs-io53): `cur != 0`, matching the composite and
+    // still run. Boot-epoch exemption: `cur != 0`, matching the composite and
     // the draw tick -- on epoch 0 the world clock can go live mid boot loading screen, and this gate
     // then starved the staged readback (gx samples 0 all cover). Boot in-world stays cheap because the
     // draw-tick callers idle via portrait_pipeline_idle_in_gameplay (load1 in-world measured 8 scans,
@@ -568,7 +568,7 @@ pub unsafe fn find_d3d12_resource_ex(
     }
     let in_ranges = |v: usize, r: &[(usize, usize)]| r.iter().any(|&(lo, hi)| lo <= v && v < hi);
     // VTABLE HARDENING (crash root fix 2026-07-03, runs +154662ms/+170480ms, previously
-    // misattributed to er-effects-rs-az9). A real COM vtable lies past the PE header page of its
+    // misattributed to another crash). A real COM vtable lies past the PE header page of its
     // module (.rdata), and its slot 0 (QueryInterface) points back into a d3d module's code. The
     // plain `in_ranges(vt, &d3d)` check also accepted vt == module BASE: a freed heap chunk reused
     // to store a d3d module handle (a base address) passed it, and the QI vcall then executed the

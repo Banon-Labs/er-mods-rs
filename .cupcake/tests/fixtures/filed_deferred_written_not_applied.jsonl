@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "how is the kit run going?"}]}}
+
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "I've written the change but not applied it. ... I'll apply it when the kit run (b3fgttzcf) finishes. Changing the scripts now would invalidate its 207 saved sets if it had to resume."}]}}

@@ -37,8 +37,8 @@ const HEAP_LO: usize = 0x10000;
 /// Added because `HEAP_LO` alone is a floor, and the value that broke `top_window` came in from
 /// above it. `currentTopMenuJob+0x130` read `0x2f003a00320063` on 1.17.1 -- the UTF-16 for
 /// `c2:/aet/aet050/A...` -- which is `1.3e16`, two orders of magnitude past the last address any
-/// process on this target can map, and it sailed through a floor-only filter into every caller (bd
-/// er-effects-rs-h09b). A ceiling costs one comparison and rejects text, floats and packed field
+/// process on this target can map, and it sailed through a floor-only filter into every caller.
+/// A ceiling costs one comparison and rejects text, floats and packed field
 /// pairs that a floor cannot.
 const HEAP_HI: usize = 1usize << 47;
 
@@ -218,7 +218,7 @@ pub fn saved_map() -> i32 {
 
 /// True once `GameMan::stayInMultipleAreaBlockId` names a real map, i.e. a character's world is being mounted.
 ///
-/// The semaphore that replaced `save_state > 0` as the Continue effect check (bd er-effects-rs-9gxt).
+/// The semaphore that replaced `save_state > 0` as the Continue effect check.
 /// `save_state` is the shared save/load device, and the title builds its own profile list by reading
 /// the save through that device -- measured on the 2026-09-11 18:13 run, where `save_state` reached 2
 /// at the title, `Phase::Continue` scored itself advanced 39 frames in, and the session then sat on
@@ -310,7 +310,7 @@ const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
 ///
 /// Correction, 2026-09-12. This block used to say the offset had drifted on 1.17, on the evidence
 /// that `top_menu_id()` answered 53724, 25445 and -1 while `pause_menu_open()` was correctly true.
-/// The offset had not drifted: the static RE behind bd er-effects-rs-h09b shows `+0x180` is where
+/// The offset had not drifted: static RE shows `+0x180` is where
 /// the engine itself reads a `CS::MenuWindow`'s menu id on both builds, and `er-quit-rows` reads it
 /// there on 1.17.1 every frame. What was wrong was the pointer those reads were made through --
 /// `top_window()` was handing them a UTF-16 asset path -- so `top_menu_id()` was reading two bytes
@@ -428,7 +428,7 @@ const JOB_GRAPH_REPORT_LIMIT: usize = 4;
 
 /// The top menu window, resolved through the job graph the engine itself builds, or 0.
 ///
-/// What was wrong, and it was not the offset (bd er-effects-rs-h09b, static RE 2026-09-12).
+/// What was wrong, and it was not the offset (static RE 2026-09-12).
 /// `+0x130` is `CS::MenuWindowJob::owningMenuWindow` -- the engine reads it at `0x1407ae96c` inside
 /// `CS::MenuWindowJob::Run`, and the product's own Quit-rows hook reads it every frame on the job
 /// that `Run` hands it. But `popupMenu->currentTopMenuJob` is not that job.
@@ -718,7 +718,7 @@ fn menu_code_row_in(code: u32, table_offset: usize) -> Option<[u32; 5]> {
 /// It used to read `+0x0c`/`+0x10` and return them as a pad pair. Those are `mouseKeyId` and
 /// `mouseModify`. The pad is one field at `+0x00` and has no modifier, so the pair was wrong in
 /// shape as well as in offset, and `Phase::DumpMenuBindings` logged every action's mouse button
-/// under the name `pad`. bd `er-effects-rs-9vyy` then read `tab_left` as having no pad binding and
+/// under the name `pad`. An earlier investigation then read `tab_left` as having no pad binding and
 /// prescribed a hunt for one.
 ///
 /// Measured live 2026-09-20 on the running game through `scripts/frida/menu-tab-binding-device.js`,

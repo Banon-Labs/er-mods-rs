@@ -19,6 +19,9 @@ what it found, all of it.
 The image is flat (file offset == RVA, base 0x140000000). It defaults to
 `eldenring-deobf-1.17.2.bin`, the installed 2.7.2.0 build; override it with `ER_DEOBF_BIN` or
 `--image` to read another (`ER_DEOBF_BIN=eldenring-deobf.bin` is 1.16.2, the named dump's build).
+A relative name that does not exist from the current directory is looked up beside the repo root,
+then beside the main checkout, as `find-deobf-bytes.resolve_image` does, since a linked worktree
+has no copy of the gitignored images.
 
 **A displacement is not a struct.** Every hit is "some instruction uses displacement N off some
 register", and most large structs have something at any given offset -- a 0x1a0 scan finds
@@ -30,13 +33,22 @@ tool bounds the search; it does not conclude it.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 
-DEFAULT_IMG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf-1.17.2.bin"
-)
+DEFAULT_IMG = "eldenring-deobf-1.17.2.bin"
 BASE = 0x140000000
+
+
+def resolve_image(name: str) -> str:
+    """`find-deobf-bytes.resolve_image` of `name`: as given if it exists, else beside the repo
+    root, else beside the main checkout."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "find-deobf-bytes.py")
+    spec = importlib.util.spec_from_file_location("find_deobf_bytes", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.resolve_image(name)
 
 # Opcodes that reach memory through a ModRM byte, as (opcode bytes, mnemonic, writes-memory).
 # Deliberately not exhaustive over the whole ISA: this is the set that moves a struct field --
@@ -170,6 +182,7 @@ def main() -> int:
     )
     parser.add_argument("--image", default=os.environ.get("ER_DEOBF_BIN", DEFAULT_IMG))
     args = parser.parse_args()
+    args.image = resolve_image(args.image)
 
     disp = int(args.displacement, 0)
     low, high = BASE, BASE + (1 << 32)

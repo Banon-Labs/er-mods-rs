@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Where is r10?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "r10 is running from sim-release (bdj5lkbhk, about 7 hours, tailed in a kitty tab). The negative controls get re-picked from it, and the v9 selftest reruns after that."}]}}

@@ -1632,11 +1632,11 @@ mod save_flow_deadline_tests {
     }
 
     /// Game-task ticks that accrue between one destination dialog closing and the menu pump opening
-    /// the next. Measured from the loop in bd `er-effects-rs-rsxi`: Closed -> opened was 55-85 ms,
+    /// the next. Measured from the reopen loop: Closed -> opened was 55-85 ms,
     /// and `SAVE_FLOW_STAGE_TICKS` is frozen for the dialog's own lifetime, so only that gap counts.
     const REOPEN_GAP_TICKS: usize = 3;
 
-    /// The reopen loop, reproduced (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
+    /// The reopen loop, reproduced (measured 2026-07-30 on
     /// `surface=save-as`: Opened -> `result=cancelled` -> opened again 57 ms later, over and over,
     /// each cancel logging "nothing staged" while the next pump re-asked).
     ///

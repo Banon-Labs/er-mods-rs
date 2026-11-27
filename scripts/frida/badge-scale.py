@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live scaler for the armament Ash-of-War badge (bd er-effects-rs-pe98).
+"""Live scaler for the armament Ash-of-War badge.
 
 `SetIcon` scales its drawn quad by the target clip's local rect, so inflating that rect
 inflates the rendered badge. This hooks the local-rect getter and grows only the badge's

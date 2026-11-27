@@ -1,6 +1,6 @@
 ---
 name: tail-build-task
-description: Show the user a long-running background task in a kitty split (a new window in the agent's own tab) that tails its real output until the task finishes and closes itself 5 seconds later -- a board regeneration (gen-r3-weapon-boards.py, whose progress is in per-shard logs), a duel or invasion build from er-weapon-build.py, er-build-dlls.sh, er-builds-pvp.py, the check suite, or any other build/pipeline run. Use right after starting such a task in the background, and whenever the user asks to watch, follow or tail one. The Stop guard no_untailed_long_run halts a turn that skips it.
+description: Show the user a long-running background task in a kitty split (a new window in the agent's own tab) that tails its real output until the task finishes and closes itself 5 seconds later -- a board regeneration (gen-r3-weapon-boards.py, whose progress is in per-shard logs), a duel or invasion build from er-weapon-build.py, er-build-dlls.sh, er-builds-pvp.py, the check suite, or any other build/pipeline run, and a background subagent (Agent tool) through kitty-tail-agent.py. Use right after starting such a task or agent in the background, and whenever the user asks to watch, follow or tail one. The Stop guards no_untailed_long_run and no_untailed_agent halt a turn that skips it.
 ---
 
 # Tail a background task in a kitty split
@@ -49,13 +49,35 @@ up when the shard opens it.
   `kitty @ launch` it would send, and `--selftest` checks the tail, the tie-breaks, `--boards` and
   the split and tab launch options.
 
-## The guard
+## A background subagent: follow its transcript
+
+An Agent launched in the background (or woken again by SendMessage) writes every message, tool call
+and result to `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`, and its launch
+result names the id (`agentId: <id>`). Right after the launch or the resume:
+
+```bash
+python3 scripts/kitty-tail-agent.py <agent id> [<agent id> ...]
+```
+
+One tab per id, opened with `--keep-focus`, running `scripts/watch-workflow.py --agent <transcript>
+--full`: the agent's work in color as it happens. It closes 5 seconds after the main session's
+transcript carries the agent's "finished" or "was stopped" notification (or a TaskStop naming it);
+"is waiting on its own background work" keeps it open. `--dry-run` shows the `kitty @ launch`,
+`--selftest` checks the lookup and the view's end offline, `--live-selftest` opens a real tab on a
+made-up agent and checks it closes itself.
+
+## The guards
 
 `.cupcake/policies/claude/no_untailed_long_run.rego` (signal
 `.cupcake/signals/last_assistant_untailed_long_run.sh`) halts a turn that backgrounded a run from
 its `LONG_RUNS` list and opened no split (or tab) following that run's real output after it. The
 halt names the command to run. If the tail command itself fails, say so in the closing message with
 its error.
+
+`.cupcake/policies/claude/no_untailed_agent.rego` (signal
+`.cupcake/signals/last_assistant_untailed_agent.sh`, logic in `scripts/cupcake_untailed_agent.py`)
+does the same for a background subagent still working with no `kitty-tail-agent.py <id>` call after
+its launch or resume; the halt names the command with the id.
 
 Open the split after the task is running (the match needs the live process). A split is the user's
 view only: the agent still learns the outcome from the task's completion notification and the

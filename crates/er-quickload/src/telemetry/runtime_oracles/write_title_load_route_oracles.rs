@@ -20,7 +20,7 @@
 ///     tried.
 ///   * `oracle_picked_summary_slot_mask` is which slots the re-read rewrote (bit N = slot N).
 ///
-/// The drift pair is the loading-screen identity oracle (bd er-effects-rs-ccud):
+/// The drift pair is the loading-screen identity oracle:
 ///   * `oracle_picked_summary_record_drifts` must be 0 for a run whose records were never
 ///     overwritten after we wrote them. Non-zero means something -- the game's own boot
 ///     `CS::ProfileSummary::Deserialize` is the known one -- replaced the body-derived records with

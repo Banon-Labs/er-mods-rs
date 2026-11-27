@@ -22,7 +22,7 @@ test_deny_missing_signal if { blocked("git rebase origin/main", "") }
 test_allow_fresh_guarded_commands if { allowed("git rebase origin/main", same); allowed("git push --force origin feature/x", same) }
 test_allow_unrelated_commands_when_stale if { allowed("git rebase origin/release", stale); allowed("git push origin feature/x", stale); allowed("printf 'git push --force'", stale) }
 
-# --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ---------------
+# --- Shell-wrapper payloads (2026-08-26) ---------------
 #
 # This guard's three patterns anchor on `(^|[;&|][[:space:]]*|\n)`, which no more
 # admits a quote than the main-push guard's class did, so every case below ran

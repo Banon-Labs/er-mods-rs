@@ -108,7 +108,7 @@ fn with_no_completed_load_there_is_nothing_to_compare() {
     assert!(!published_identity_verdict(5, None).is_mismatch());
 }
 
-/// The precedence change (bd er-effects-rs-91zb): the user's on-screen pick outranks the
+/// The precedence change: the user's on-screen pick outranks the
 /// request register, which outranks the stale `save_slot`.
 #[test]
 fn the_users_pick_outranks_every_inferred_slot() {
@@ -333,7 +333,7 @@ fn a_window_with_no_measured_source_commits_to_nothing() {
     assert_eq!(committed.source, Some(PortraitSlotSource::SaveSlot));
 }
 
-/// bd `er-effects-rs-fmy6`, replayed: a latch taken off a stale `ac0` yields to the load
+/// The stale-latch case, replayed: a latch taken off a stale `ac0` yields to the load
 /// request register, which by definition describes the load in flight.
 ///
 /// Across save files the redirect swap leaves the slot registers momentarily stale, so at

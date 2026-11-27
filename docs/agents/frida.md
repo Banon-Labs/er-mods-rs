@@ -108,7 +108,7 @@ away the entire time, and the section above already said so.
   - **Give the watcher its own background task. Never chain it after anything.** The hard kill does
     not only arrive as an explicit `timeout`: a command that waits for something and THEN starts the
     watcher is one command, so the harness's own cap applies to the whole chain and lands on the
-    watcher at the end of it. Measured 2026-09-19, minutes after the rule above was written: an
+    watcher at the end of it. Measured 2026-09-19, minutes after the paragraph above was written: an
     `until` loop waiting for `oracle_player_present` followed by `er-frida-up.py` followed by
     `er-frida-watch.py` was killed with `SIGTERM` at the two-minute cap, seconds after the probe
     attached. That game survived only because the watchpoint had not armed yet -- it arms on the

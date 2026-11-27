@@ -164,7 +164,7 @@ const _: () = assert!(core::mem::offset_of!(PlayerGameData, face_data) == 0x760)
 // which is what it was written for.
 //
 // The sibling binding was a 1.16.2 model. It was refreshed to the 1.17 layout by
-// `fromsoftware-rs` a5f0e1f ("More of quickmatch stuff", merged as #308): `unkaa4: i32` became
+// `fromsoftware-rs` a5f0e1f ("More of quickmatch stuff"):`unkaa4: i32` became
 // `quick_match_spawn_slot_fraction: f32`, `quick_match_desired_team` became an enum, two bools
 // were named out of `unkaa9`/`unkb2`, and the tail filler `unkab4` gave up two bytes to
 // `host_scadutree_blessing` and `host_scaling_applied`. Every one of those edits is at or above

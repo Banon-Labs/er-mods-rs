@@ -1204,7 +1204,7 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
             // Readiness gate: hold back neutral/too-small transient captures (Bug A/B).
             if masked && note_ls_portrait_capture(w, h, &px) {
                 publish_portrait_rgba(w, h, px);
-                // Identity tag rides with every bridge write (bd er-effects-rs-dpf6 Phase 1). This
+                // Identity tag rides with every bridge write. This
                 // diagnostic-gated path runs on the game thread, so hash the slot record directly.
                 LS_PORTRAIT_PUBLISHED_SLOT.store(
                     if slot >= 0 { (slot + 1) as usize } else { 0 },

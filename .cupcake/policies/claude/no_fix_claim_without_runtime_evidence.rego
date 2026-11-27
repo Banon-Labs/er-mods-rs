@@ -24,10 +24,10 @@
 #                     spans and outside a table row. An explicit alternation, not the bare stem:
 #                     "the real fix", "this is the fix", "this fixes it", "the fix works", "I fixed
 #                     x", "x is fixed", a bare "Fixed.". A path or identifier carrying the stem
-#                     (fix/harness-repl-reach, prefix, suffix, fixture, fix-slug, fix.md) is a name
-#                     and never a claim. The present participle "fixing" is deliberately absent: it
-#                     belongs to ER-EFFECTS-NO-PROMISSORY-CLOSER, and charging one sentence twice
-#                     with two different corrections is how a guard layer becomes noise.
+#                     (fix/<topic>, prefix, suffix, fixture, fix-slug, fix.md) is a name and never
+#                     a claim. The present participle "fixing" is deliberately absent: it belongs
+#                     to ER-EFFECTS-NO-PROMISSORY-CLOSER, and charging one sentence twice with two
+#                     different corrections is how a guard layer becomes noise.
 #       changed    -- a tool call in the turn wrote a source file under a crate that can reach a
 #                     DLL the game loads. Measured from the workspace manifests (a `cdylib`
 #                     artifact, or a path dependency of one) rather than listed by hand, so the

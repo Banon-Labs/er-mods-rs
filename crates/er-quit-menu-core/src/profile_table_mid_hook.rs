@@ -10,7 +10,7 @@
 //! +0x30: MOV RDI, qword ptr [RSI]              ; table[slot]
 //! +0x38: CALL <profile record>                  ; JE +0xce if none
 //! +0x4b: CALL <slot is shown>                   ; JE +0xce if not
-//! +0x54: CMP byte ptr [RDI + 0x754], 0          ; RDI is null -> er-effects-rs-j3r
+//! +0x54: CMP byte ptr [RDI + 0x754], 0          ; RDI is null -> AV
 //! +0x5b: JNE +0xce
 //! +0x5d: CMP byte ptr [RDI + 0x755], 0
 //! ...    the per-slot draw requests on RDI

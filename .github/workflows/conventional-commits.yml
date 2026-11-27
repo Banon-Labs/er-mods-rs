@@ -7,7 +7,7 @@ name: conventional-commits
 # exactly where a required status check can stand.
 #
 # A GITHUB RULESET CANNOT DO THIS. Measured on this repo, 2026-09-03: a ruleset with an active
-# `commit_message_pattern` rule let both `POST /merges` (subject `Merge pull request #999 from ...`)
+# `commit_message_pattern` rule let both `POST /merges` (subject `Merge pull request #<n> from ...`)
 # and a violating `PUT /contents` through. GitHub does not apply metadata rules to commits it
 # creates server-side, which is every commit the merge button makes. The full measurement is in the
 # header of scripts/conventional-commit-subject.py.

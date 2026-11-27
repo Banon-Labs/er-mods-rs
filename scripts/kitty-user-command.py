@@ -6,9 +6,9 @@ inline bash block. It goes into its own kitty window, focused, typed in but not 
 `#` comment block that says why it should be run. One window per command block.
 
     python3 scripts/kitty-user-command.py --title "push loading PR" \
-        --why "The agent may not push; this publishes fix/load-character-from-file." \
-        --why "Review the branch first: git log origin/main..fix/load-character-from-file" \
-        -- 'git -C /abs/worktree push -u origin fix/load-character-from-file'
+        --why "The agent may not push; this publishes <branch>." \
+        --why "Review the branch first: git log origin/main..<branch>" \
+        -- 'git -C /abs/worktree push -u origin <branch>'
 
 The window is a split: a new kitty window in the tab the agent session runs in (user request
 2026-11-07: "Can we do kitty split instead of tab by default?"). `--tab` opens a new tab instead,
@@ -118,6 +118,16 @@ SELFTEST_COMMANDS = (
 def wrap(command: str, raw: bool) -> str:
     """The text left at the prompt."""
     return command if raw else f"bash -c {shlex.quote(command)}"
+
+
+def with_status(command: str, status_file: str) -> str:
+    """`command` reporting to `status_file`: a `started` line when the user presses enter, the
+    command's own output, then `exit=<code>`, whether it succeeds or fails, so a watcher on the file
+    sees the start and every end. Watching only what a command writes on success missed both
+    (2026-11-17)."""
+    p = shlex.quote(status_file)
+    return (f'echo "started $(date +%T)" >> {p}; ( {command} ) 2>&1 | tee -a {p}; '
+            f'echo "exit=${{PIPESTATUS[0]}} $(date +%T)" >> {p}')
 
 
 def comment_lines(why: list[str]) -> list[str]:
@@ -246,6 +256,24 @@ def open_window(title: str, cwd: str, comments: list[str], prompt_text: str, kin
     return 0
 
 
+def consume(window_id: int) -> int:
+    """Print everything handed-over window `window_id` shows, scrollback included, then close it;
+    refuse while its command still runs (no prompt). Reading and closing are one step so a closed
+    hand-over is one whose output the agent has read: on 2026-11-17 a py-spy tab stayed open with
+    "Errors: 22708" on screen that the agent never saw, and the user read the open tab as proof."""
+    listener = listener_or_exit()
+    match = f"id:{window_id}"
+    if not json.loads(kitty(listener, "ls", f"--match={match}")):
+        raise SystemExit(f"window {window_id} is not open")
+    if not at_prompt(listener, match):
+        print(f"window {window_id} is still running its command; read it again when it ends")
+        return 2
+    print(kitty(listener, "get-text", f"--match={match}", "--extent=all").rstrip())
+    kitty(listener, "close-window", f"--match={match}")
+    print(f"--- closed window {window_id} after printing it")
+    return 0
+
+
 def placement_check(listener: str, new_id: int, kind: str) -> tuple[bool | None, str]:
     """Whether the new window is where `kind` puts it: a split in the agent window's tab, a tab
     anywhere else. None when there is no agent window to compare with."""
@@ -332,9 +360,46 @@ def selftest() -> int:
     ok = lines == ["# first reason", "# two", "# lines"]
     failures += not ok
     print(f"{'ok  ' if ok else 'FAIL'} comment lines {lines!r}")
+    home = os.path.expanduser("~")
+    fake = {"py-spy": f"{home}/.local/bin/py-spy", "pacman": "/usr/bin/pacman"}.get
+    for command, want in (("sudo py-spy record --pid 1", [("py-spy", f"{home}/.local/bin/py-spy")]),
+                          ("sudo -E py-spy dump", [("py-spy", f"{home}/.local/bin/py-spy")]),
+                          (f"sudo {home}/.local/bin/py-spy dump", []),
+                          ("sudo pacman -Syu", []), ("py-spy dump", [])):
+        got = sudo_home_programs(command, which=fake)
+        ok = got == want
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} sudo of a home program {command!r} -> {got!r}")
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        for command, code in (("echo out", 0), ("echo err >&2; exit 3", 3)):
+            status = os.path.join(d, f"s{code}")
+            for shell in ("bash", "fish"):
+                if os.path.exists(status):
+                    os.remove(status)
+                subprocess.run([shell, "-c", wrap(with_status(command, status), raw=False)],
+                               capture_output=True, text=True, timeout=10, check=False)
+                lines = open(status).read().splitlines() if os.path.exists(status) else []
+                ok = (len(lines) == 3 and lines[0].startswith("started ") and lines[1] in ("out", "err")
+                      and lines[2].startswith(f"exit={code} "))
+                failures += not ok
+                print(f"{'ok  ' if ok else 'FAIL'} {shell:4} status file of {command!r} -> {lines!r}")
     failures += placement_selftest()
     print("selftest:", "PASS" if failures == 0 else f"{failures} FAILED")
     return 0 if failures == 0 else 1
+
+
+def sudo_home_programs(command: str, which=shutil.which) -> list[tuple[str, str]]:
+    """(name, path) of each program `command` runs under `sudo` by a bare name that resolves only
+    under the home directory: sudo runs with its own secure_path, which holds no `~/.local/bin`, so
+    the user's tab answers "command not found" after the password (2026-11-17, `sudo py-spy`)."""
+    home = os.path.expanduser("~") + os.sep
+    out = []
+    for name in re.findall(r"\bsudo\s+(?:-\S+\s+)*([^\s/'\"=;&|]+)", command):
+        path = which(name)
+        if path and path.startswith(home):
+            out.append((name, path))
+    return out
 
 
 def placement_selftest() -> int:
@@ -387,6 +452,11 @@ def main(argv: list[str]) -> int:
         help="read the command from this file instead of after --; for commands long enough that "
         "the policy engine runs out of memory evaluating the call that carries them",
     )
+    parser.add_argument(
+        "--status-file",
+        help="append a 'started' line, the command's output and an 'exit=<code>' line to this file, "
+        "for a Monitor to follow from the moment the user presses enter",
+    )
     parser.add_argument("--raw", action="store_true", help="paste the command as is, without bash -c")
     parser.add_argument("--dry-run", action="store_true", help="print what would be sent and exit")
     parser.add_argument("--selftest", action="store_true", help="check the quoting in bash and fish")
@@ -396,10 +466,18 @@ def main(argv: list[str]) -> int:
         help="open a real fish window the way a handed-over one is opened, and check what fish ran "
         "and which tab it landed in",
     )
+    parser.add_argument(
+        "--consume",
+        type=int,
+        metavar="WINDOW_ID",
+        help="print all a handed-over window shows, then close it; refuses while its command runs",
+    )
     parser.add_argument("command", nargs="*", help="the command, after --")
     args = parser.parse_args(argv)
     kind = TAB if args.tab else SPLIT
 
+    if args.consume is not None:
+        return consume(args.consume)
     if args.selftest:
         return selftest()
     if args.live_selftest:
@@ -417,7 +495,14 @@ def main(argv: list[str]) -> int:
         parser.error("--why is required: the window must say why the command should be run")
     if not args.title:
         parser.error("--title is required")
+    for name, path in sudo_home_programs(command):
+        parser.error(f"sudo runs {name!r} with its own PATH, which holds no {os.path.dirname(path)}: "
+                     f"spell it {path}")
 
+    if args.status_file:
+        if args.raw:
+            parser.error("--status-file needs the bash -c wrapping; drop --raw")
+        command = with_status(command, os.path.abspath(args.status_file))
     comments = comment_lines(args.why)
     prompt_text = wrap(command, args.raw)
     if args.dry_run:
