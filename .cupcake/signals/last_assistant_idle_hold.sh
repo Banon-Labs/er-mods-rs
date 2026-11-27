@@ -24,7 +24,9 @@
 #
 # One further carve-out inside the phrase match: a wait that is legitimately blocked on the user
 # ("waiting for user confirmation", "holding for the user to drive", "I'll wait for you") is not
-# idling -- the agent genuinely cannot proceed -- so those are excluded from the phrase hit.
+# idling -- the agent genuinely cannot proceed -- so those are excluded from the phrase hit. A message
+# that hands a reply phrase on a line of its own (`authorize commit`, `authorize <sha>`) is blocked on
+# the user as a whole and emits neither tag (2026-11-11; the argument is at the VERBOSEPAUSE gate).
 #
 # Tightened rule (persistent user directive 2026-07-17): a blocked-pause message must be TERSE. When a
 # turn ends as a pure pause (no substantive tool_use) that is not blocked on the user, and its message
@@ -35,6 +37,12 @@
 # next-step narration. VERBOSEPAUSE takes precedence over IDLEHOLD and fires even when justification
 # prose is present (that verbose justified hold is exactly what the new rule bans). A turn that did
 # substantive work, or one genuinely blocked on the user, is exempt.
+#
+# On Stop, a pause must also name what it is blocked on (user directive 2026-11-11): when
+# scripts/cupcake_session_tasks.py measures shells or agents of this session running and the closing
+# message names none of them, the signal adds a second line `UNNAMED:<report>` after VERBOSEPAUSE or
+# IDLEHOLD, or emits `UNNAMEDPAUSE:<report>` alone. idle_hold.rego halts on it under
+# `ER-EFFECTS-PAUSE-NAMES-BLOCKER` and quotes the report. The argument is at the end of the program.
 #
 # Why a whole-turn scan + both EVENTS: mirrors last_assistant_authority_agreement -- an early-message
 # slip must not be masked by a later clean block (whole-turn scan), and an interrupted turn fires no
@@ -61,7 +69,7 @@ if [ ! -t 0 ]; then
 fi
 export CUPCAKE_SIGNAL_EVENT
 python3 - <<'PY' 2>/dev/null || true
-import os, re, sys
+import json, os, re, sys
 
 sys.path.insert(0, os.path.join(os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", "."), "scripts"))
 try:
@@ -80,12 +88,11 @@ if turn is None:
     sys.exit(0)
 
 
-def prompt_text_for(turn_index):
-    """The real user prompt that opened turns[turn_index] (turns[0] precedes any prompt)."""
-    prompts = [ev for ev in events if scan.is_real_user_prompt(ev)]
-    if turn_index < 1 or turn_index > len(prompts):
-        return ""
-    content = prompts[turn_index - 1].get("message", {}).get("content")
+prompts = [ev for ev in events if scan.is_real_user_prompt(ev)]
+
+
+def prompt_text(ev):
+    content = ev.get("message", {}).get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -95,7 +102,8 @@ def prompt_text_for(turn_index):
     return ""
 
 
-turn_prompt = prompt_text_for(next((i for i, t in enumerate(turns) if t is turn), -1))
+# turns[0] precedes any prompt, so turns[k] was opened by prompts[k - 1].
+turn_index = next((i for i, t in enumerate(turns) if t is turn), -1)
 last_turn = turn.text
 turn_has_work = turn.work
 
@@ -148,7 +156,9 @@ def find_idle_phrase(text):
 # guidance is the more specific correction, and it must fire even when a justification paragraph is
 # present -- that is exactly the long "justified" hold the new rule bans).
 #
-# The blocked-on-user phrasing (USER_WAIT_RE) is shared: scan.blocked_on_user.
+# The blocked-on-user test is shared: scan.blocked_on_user reads USER_WAIT_RE's phrasings. A reply
+# phrase handed on a line of its own (scan.hands_reply_phrase) is read here only, not in the shared
+# test, which also excuses a diagnosis with no fix and an unexecuted promise.
 
 # Long / multi-topic heuristic: a blocked-pause note should be one or two short sentences. Flag when the
 # message is >450 chars, or has >3 sentences, or contains any heading/bullet/numbered line, or spans
@@ -199,57 +209,247 @@ phrase = find_idle_phrase(scrubbed)
 # opens "Still running". Measured 2026-10-19: a closing report describing a fixed bug -- "booked as
 # a job still running", "look like a job still running" -- halted as a verbose pause with nothing
 # live, because the bare phrase matched inside a description of what the scanner used to get wrong.
-PENDING_WORK_RE = re.compile(
+#
+# The pattern is two halves. The first states that something is still running; the second defers
+# work behind it ("once it lands", "in the meantime"). Only the first can be a sentence that accounts
+# for a running task, which matters below.
+STILL_RUNNING_PATTERN = (
     r"(?:(?:\b(?:is|are)|['’](?:s|re))\s+still|(?:^|[.!?]\s+)still)\s+"
     r"(?:running|compiling|building|going|underway|in flight)\b"
-    r"|\b(?:while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"
+)
+DEFERRAL_PATTERN = (
+    r"\b(?:while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"
     r"|once (?:it|that|they|the \w+) (?:lands|land|finishes|finish|completes|complete|returns|return|is done|are done)"
     r"|when (?:it|that|they) (?:lands|land|finishes|finish|completes|complete|returns|return)"
     r"|pick (?:this|it) back up"
-    r"|in the meantime)\b",
-    re.IGNORECASE,
+    r"|in the meantime)\b"
 )
+PENDING_WORK_RE = re.compile(STILL_RUNNING_PATTERN + "|" + DEFERRAL_PATTERN, re.IGNORECASE)
+STILL_RUNNING_RE = re.compile(STILL_RUNNING_PATTERN, re.IGNORECASE)
+DEFERRAL_RE = re.compile(DEFERRAL_PATTERN, re.IGNORECASE)
 
-# Live background work alone does not make a reply to the user's question a pause. Measured
-# 2026-10-04: the user asked whether Eruption plus a greased weapon swap applies the buff through
-# Eruption's damage, the closing message was the one-paragraph answer (735 chars), and a
-# board-generation run unrelated to the question was still live -- so this rule halted the answer as
-# a verbose blocked pause. When the turn was opened by a user question (not a task-notification),
-# the live job makes it a pause only if the closing message itself says it is blocked on or waiting
-# for something; "Blocked on X ... <long recap>" still trips.
+# Live background work alone does not make a reply to the user a pause. Measured 2026-10-04: the
+# user asked whether Eruption plus a greased weapon swap applies the buff through Eruption's damage,
+# the closing message was the one-paragraph answer (735 chars), and a board-generation run unrelated
+# to the question was still live -- so this rule halted the answer as a verbose blocked pause. When
+# the closing message answers a prompt the user typed, the live job makes it a pause only if the
+# message itself says it is blocked on or waiting for something; "Blocked on X ... <long recap>"
+# still trips.
+#
+# Widened 2026-11-11 from "a typed question" to "the prompt the user typed". Measured in session
+# 5ec7b779: the user asked "should I ever listen to you for timelines? ...", the answer ended
+# without naming r10, and no_unexplained_running_tasks halted it until the message
+# named the task "in a sentence that says what it is still waiting for or doing". The rewrite added
+# "r10 (bdj5lkbhk) is still running because it gives the v9 timing baseline the speed-up will be
+# measured against." and this rule halted it as a 735-char blocked pause. Three things made it a
+# pause: the turn being judged was opened by the Stop-hook feedback, which has no question mark and
+# says "still running", so the answer no longer counted as answering the user; the very sentence the
+# other guard demands matched PENDING_WORK_RE; and the answer's own "it decides whether to wait for a
+# run" read as announcing a wait (ANNOUNCES_BLOCK_RE, below). Between the two guards an answer of
+# normal length had no way through while anything ran. So the prompt a closing message answers is
+# found by walking back over Stop-hook feedback to the one before it, a sentence that only says some
+# work is still running is not counted as pending work in a reply to the user, a typed request counts
+# as well as a question, and a wait is read only where the message says the turn is waiting. Replayed
+# over every Stop boundary of the 40 newest transcripts in this project (960 boundaries, worktree
+# replay): 15 of 28 halts were answers like this one (to "Is it reasonable to build similarity
+# matrixies?", "When did we crash?", "how is the item 0? lol. That bad?", "steam did not start",
+# "startup the game with ...", "She's a dummy. You're going to have to give me something she can put
+# in her File Explorer bar") and now pass. The other 13 still halt: every one that said it was
+# waiting ("Two background runs are still going, and I'm waiting on both:", "I'm holding them so
+# ...", "Blocked until the two background agents report back:") and every one opened by a task
+# notification or a /loop wake-up rather than by the user. No boundary halts that did not before.
 TASK_NOTIFICATION_PROMPT_RE = re.compile(r"<task-notification>", re.IGNORECASE)
+# "Blocked on" or "waiting for" said of the turn: at the head of a sentence or clause ("Blocked until
+# the two background agents report back:", "the fix is in, waiting on the gate"), or after a subject
+# and copula ("I'm waiting on both", "the merge is blocked on r9"). A bare "wait for" is left out:
+# in a reply it is the topic far more often than the turn's state. Measured 2026-11-11, the two
+# replies it halted on the replay: "it decides whether to wait for a run or stop it" (the timelines
+# answer above) and "Steam is fine now, so nothing was left for it to wait on" (session 965886fc).
+# ^ is per line because `pause_text` puts each sentence on its own line.
 ANNOUNCES_BLOCK_RE = re.compile(
-    r"\b(?:blocked\s+(?:on|by|until)|waiting\s+(?:for|on|until)|wait\s+(?:for|on|until)"
-    r"|until\s+(?:it|that|they|the\s+\w+)\s+(?:finishes|finish|lands|land|completes|complete))\b",
-    re.IGNORECASE,
+    r"(?:^\s*|[;:,—–]\s*|--\s*"
+    r"|\b(?:and|but|so|still|now|currently|i'?m|i\s+am|we'?re|we\s+are|is|are)\s+|['’](?:s|re)\s+)"
+    r"(?:blocked\s+(?:on|by|until)|waiting\s+(?:for|on|until))\b"
+    r"|^\s*wait\s+(?:for|on|until)\b"
+    r"|\buntil\s+(?:it|that|they|the\s+\w+)\s+(?:finishes|finish|lands|land|completes|complete)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 # A question about the background work itself ("Anything yet?", "How is it going?") is answered
-# from the job's state, so it does not exempt the reply.
+# from the job's state, so it does not exempt the reply. Nor does a prompt that names a running
+# task's id ("Check the board regeneration (task babz84j4f); when it finishes, ...").
+# The forms ending in "?" sit outside the closing \b: a \b after "?" needs a word character next, so
+# until 2026-11-11 "Is it done yet?" and "finished?" at the end of a prompt never matched.
 STATUS_PROMPT_RE = re.compile(
-    r"\b(?:anything\s+yet|\w+\s+yet\s*\?|how(?:'s|\s+is|\s+are)\s+(?:it|that|they|things)\s+going"
-    r"|status|progress|still\s+running|done\s*\?|finished\s*\?|eta)\b",
+    r"\b(?:anything\s+yet|how(?:'s|\s+is|\s+are)\s+(?:it|that|they|things)\s+going"
+    r"|status|progress|still\s+running|eta)\b"
+    r"|\b(?:\w+\s+yet|done|finished)\s*\?",
     re.IGNORECASE,
 )
-answers_user_question = (
-    "?" in turn_prompt
-    and not TASK_NOTIFICATION_PROMPT_RE.search(turn_prompt)
-    and not STATUS_PROMPT_RE.search(turn_prompt)
-)
-live_bg_is_pause = bool(scan.live_background_work(events)) and (
-    not answers_user_question or bool(ANNOUNCES_BLOCK_RE.search(scrubbed))
+# The harness writes a Stop hook's verdict back as a user event (`isMeta`, no `origin`) that opens
+# the turn holding the rewrite; the rewrite still answers the prompt before it.
+STOP_FEEDBACK_RE = re.compile(r"\A\s*Stop hook feedback:")
+# User events no one typed: command and caveat markup (`<command-name>`, `<local-command-stdout>`,
+# `<bash-input>`), a task notification, and the interruption marker.
+NOT_TYPED_RE = re.compile(r"\A\s*(?:<|\[Request interrupted)")
+
+
+def answered_prompt(index):
+    j = index - 1
+    while 0 <= j < len(prompts) and STOP_FEEDBACK_RE.match(prompt_text(prompts[j])):
+        j -= 1
+    return prompts[j] if 0 <= j < len(prompts) else None
+
+
+def typed_by_user(ev):
+    """A prompt the user wrote. In a live transcript that is `origin.kind == "human"`; an SDK prompt
+    and a fixture carry no `origin`, so a missing one is accepted. A /loop wake-up, a skill's text, a
+    local-command caveat and a compaction summary are `isMeta` or `isCompactSummary`."""
+    if ev is None or ev.get("isMeta") or ev.get("isCompactSummary"):
+        return False
+    origin = ev.get("origin")
+    if isinstance(origin, dict) and origin.get("kind") not in (None, "human"):
+        return False
+    text = prompt_text(ev)
+    return not NOT_TYPED_RE.match(text) and not TASK_NOTIFICATION_PROMPT_RE.search(text)
+
+
+def names_running_task(text):
+    return any(
+        re.search(r"(?<![A-Za-z0-9_-])" + re.escape(t.task_id) + r"(?![A-Za-z0-9_-])", text)
+        for t in scan.running_background_tasks(events)
+    )
+
+
+answered = answered_prompt(turn_index)
+answered_text = prompt_text(answered) if answered is not None else ""
+answers_user_prompt = (
+    typed_by_user(answered)
+    and not STATUS_PROMPT_RE.search(answered_text)
+    and not names_running_task(answered_text)
 )
 
+# A sentence that says some work is still running, and neither defers anything behind it nor says the
+# turn is waiting or holding, accounts for that work; no_unexplained_running_tasks requires one for
+# every task left running. In a reply to the user it is not the reply pausing, so it is left out of
+# the pending-work test. Split the way no_unexplained_running_tasks splits sentences.
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def accounts_for_running_work(sentence):
+    return (
+        bool(STILL_RUNNING_RE.search(sentence))
+        and not DEFERRAL_RE.search(sentence)
+        and not ANNOUNCES_BLOCK_RE.search(sentence)
+        and not IDLE_RE.search(sentence)
+    )
+
+
+pause_text = scrubbed
+if answers_user_prompt:
+    pause_text = "\n".join(
+        s for s in SENTENCE_SPLIT_RE.split(scrubbed) if not accounts_for_running_work(s)
+    )
+
+live_bg_is_pause = bool(scan.live_background_work(events)) and (
+    not answers_user_prompt or bool(ANNOUNCES_BLOCK_RE.search(pause_text))
+)
+
+# A message that hands a reply phrase on a line of its own -- `authorize commit` or `authorize <sha>`,
+# scan.HANDED_REPLY_LINE_RE -- is blocked on the user, and the exemption is total: the phrase line is
+# not merely left out of the length and paragraph count. Measured 2026-11-11, in one turn with r9
+# (task b2dpglvu7) and a release-model subagent live: a 113-char note -- "Blocked on r9 (task
+# b2dpglvu7) and the release-model agent; the guards commit needs your reply:", a blank line, and
+# `authorize commit` alone on its line -- halted because PARAGRAPH_BREAK_RE read the blank line as a
+# second paragraph, so any blocked note handing a phrase was verbose at any length; and the turn's
+# earlier 966-char closing message, a finished survey ending on the same phrase line, halted on its
+# length. Leaving the phrase line out of the count clears the first and still halts the second, and
+# the second is the report the user reads to decide whether to send the phrase, since it says what
+# the commit holds. A turn that ends on the user's typed reply is not paused on a background task,
+# the same as one that says "I need you to"; how long its report runs is the wall_of_text
+# correction's business, as for any answer. What still halts: a blocked note with a recap and no
+# phrase line, and a phrase named inside a sentence ("the commit needs the authorize commit reply")
+# or a table row, neither of which is a line of its own.
 verbose_n = None
 turn_is_pause = (
     bool(phrase)
     or live_bg_is_pause
-    or bool(PENDING_WORK_RE.search(scrubbed))
+    or bool(PENDING_WORK_RE.search(pause_text))
 )
-if turn_is_pause and not turn_has_work and not scan.blocked_on_user(scrubbed):
+if (
+    turn_is_pause
+    and not turn_has_work
+    and not scan.blocked_on_user(scrubbed)
+    and not scan.hands_reply_phrase(scrubbed)
+):
     verbose_n = verbose_char_count(last_turn)
 
+# --- a pause names what it is blocked on (user directive 2026-11-11) -----------------------------
+# User words, verbatim: "So next time, how are you going to monitor your own shells and understand
+# when they are running so you can communicate clearly to the user why you're paused (blocked because
+# X shell is running) or whatever you're doing". The user's view showed shells and agents the main
+# session could not account for: they were a subagent's, and a subagent's shells never reach the main
+# transcript. So at Stop, a turn that pauses (the same test as VERBOSEPAUSE: a pause, no substantive
+# work, not waiting on the user) is checked against what scripts/cupcake_session_tasks.py measures
+# running now from the process table: every shell of the session or of its subagents, every agent
+# still working. When anything runs and the closing message names none of it -- a shell's task id, an
+# agent's id or description, or a Monitor the transcript shows running (a Monitor writes no task
+# output file, so the process table cannot list it) -- the report rides along on a second line,
+# `UNNAMED:<report>`, after VERBOSEPAUSE or IDLEHOLD, or alone as `UNNAMEDPAUSE:<report>`. idle_hold.rego
+# halts on it and quotes the report, so the rewrite can name what it is blocked on.
+#
+# Only on Stop: the UserPromptSubmit interlock reads this signal too, and at that point what runs is
+# no longer what ran when the turn ended; session_tasks_context.rego shows the live report there
+# instead. Nothing running, or a report that cannot be measured (no Claude Code process above this
+# one, no transcript), asks nothing: a pause with nothing measured running is judged as before.
+#
+# A pause that says it waits on the user is not asked either, in USER_WAIT_RE's phrasings or as
+# "waiting on you", "blocked until you", "waiting for the user". Measured on the replay
+# (scripts/audit-idle-hold-replay.py, 40 newest transcripts, 973 Stop boundaries): "Waiting on you to
+# say whether to relaunch Elden Ring." was the one closing message it asked to name an agent that was
+# not waiting on that agent.
+WAITS_ON_USER_RE = re.compile(
+    r"\b(?:blocked|waiting|wait)\s+(?:on|for|until)\s+(?:you|your|the\s+user)\b", re.IGNORECASE)
+try:
+    hook_event = json.loads(os.environ.get("CUPCAKE_SIGNAL_EVENT") or "{}")
+except ValueError:
+    hook_event = {}
+unnamed = ""
+if (
+    isinstance(hook_event, dict)
+    and hook_event.get("hook_event_name") == "Stop"
+    and turn_is_pause
+    and not turn_has_work
+    and not scan.blocked_on_user(scrubbed)
+    and not scan.hands_reply_phrase(scrubbed)
+    and not WAITS_ON_USER_RE.search(scrubbed)
+):
+    try:
+        import cupcake_session_tasks as tasks
+
+        report = tasks.hook_report(hook_event, main_events=events)
+        if tasks.live(report):
+            runs = turn.text_runs
+            closing = runs[-1] if runs else last_turn
+            monitors = [t.task_id for t in scan.running_background_tasks(events) if t.kind == "monitor"]
+            if not tasks.named_blocker(closing, report, monitors):
+                unnamed = tasks.brief(report)
+    except Exception:
+        unnamed = ""  # fail open: an unmeasurable report never halts a turn
+suffix = "\nUNNAMED:" + unnamed if unnamed else ""
+
+# IDLEHOLD takes only the handed line, not USER_WAIT_RE: a "need you to" in some
+# other sentence never excused an idle phrase, which find_idle_phrase ties to the user only within 48
+# characters of the phrase, and that stays. A line that is nothing but the reply phrase cannot be
+# incidental the way a "you" in another sentence can; it is the ask the turn ends on.
 if verbose_n is not None:
-    sys.stdout.write("VERBOSEPAUSE:" + str(verbose_n))
-elif phrase and not turn_has_work and not JUSTIFY_RE.search(scrubbed):
-    sys.stdout.write("IDLEHOLD:" + phrase)
+    sys.stdout.write("VERBOSEPAUSE:" + str(verbose_n) + suffix)
+elif (
+    phrase
+    and not turn_has_work
+    and not JUSTIFY_RE.search(scrubbed)
+    and not scan.hands_reply_phrase(scrubbed)
+):
+    sys.stdout.write("IDLEHOLD:" + phrase + suffix)
+elif unnamed:
+    sys.stdout.write("UNNAMEDPAUSE:" + unnamed)
 PY

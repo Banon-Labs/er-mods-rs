@@ -70,7 +70,8 @@ pvp_runs_in(words) if {
 	pvp_script_word(word)
 	not commands.index_inside(spans, index)
 	not commands.operand_shaped(words, index)
-	commands.word_in_command_slot(words, index)
+	# Behind `chrt --idle 0` or `taskset -c 0-3` too (allowed until 2026-11-19).
+	commands.launched_word_in_command_slot(words, index)
 }
 
 # `--jobs N` or `--jobs=N` with a positive integer. Argparse also accepts the unambiguous

@@ -1,0 +1,3 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "how is the kit run going?"}]}}
+
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "| Built-in clock times and finish times on every line | the patch I'm applying once this run (b4pvxbpqy) ends |"}]}}

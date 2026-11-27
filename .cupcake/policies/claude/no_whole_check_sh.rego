@@ -67,7 +67,28 @@ executed_texts := commands.input_executed_texts
 # modules, and a regex in a rule crashed every policy at once on 2026-09-14 (bd
 # `a-regex-in-a-rego-rule-can-crash-opa-wasm-and-silence-every-policy-2026-09-14`);
 # `teardown_must_relaunch` was rewritten off regexes for the same reason.
-check_script_word(word) if endswith(word, "check.sh")
+#
+# The file is `check.sh` as a whole path component, not any name that ends in those
+# letters. The suffix test this replaced refused `.cupcake/signals/rego_compile_check.sh`
+# on 2026-11-11 as a run of the suite, and with it `scripts/act-check.sh` and
+# `scripts/run-save-oracle-check.sh`. A bare `check.sh` is still the suite once a `cd` or
+# an `env -C` has put the shell in `scripts/`, so the bare name stays denied.
+check_script_word(word) if check_script_path(word)
+
+# A word quoted whole, `bash "scripts/check.sh"`, is the same path. Only a balanced pair is
+# taken off: the raw text of `bash -c 'bash -n scripts/check.sh'` ends a word in a lone
+# quote, and reading that word as the script would skip the syntax-check exemption.
+check_script_word(word) if {
+	count(word) > 2
+	some quote in {"\"", "'"}
+	startswith(word, quote)
+	endswith(word, quote)
+	check_script_path(substring(word, 1, count(word) - 2))
+}
+
+check_script_path(path) if path == "check.sh"
+
+check_script_path(path) if endswith(path, "/check.sh")
 
 # The word split and the command-slot test were written here first and now live in
 # `.cupcake/system/commands.rego`, because the next two policies that needed them were
@@ -99,7 +120,10 @@ runs_check_sh_in(words) if {
 	# for that walk once per mention.
 	not commands.index_inside(spans, index)
 	not commands.operand_shaped(words, index)
-	commands.word_in_command_slot(words, index)
+	# `launched_`: `chrt --idle 0 bash scripts/check.sh` and `taskset -c 0-3 bash
+	# scripts/check.sh` ran the suite and were allowed until 2026-11-19, the launcher read as
+	# the program. See "EXEC LAUNCHERS" in `.cupcake/system/commands.rego`.
+	commands.launched_word_in_command_slot(words, index)
 	not read_without_executing(words, index)
 }
 

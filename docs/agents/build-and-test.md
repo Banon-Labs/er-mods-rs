@@ -93,6 +93,13 @@ launch an artifact it cannot tie to this tree. A DLL produced by a bare `cargo x
 no such record, so those scripts will refuse it -- correctly, since nothing proves what it is.
 `scripts/check-rust-build.sh` re-attests all 26 shells after its own relink for the same reason.
 
+**A run that must not slow another one goes in the idle scheduling class (`chrt --idle 0 <cmd>`), not
+`nice`.** This kernel groups processes by session (autogroup, `/proc/<pid>/autogroup`), and nice
+only orders processes inside one group. On 2026-11-17 four `nice -n 19` comparison dumps an agent
+started took about 2.5 of the machine's 4 cores from a 3-worker model run in another group, because
+across groups each one gets an even share. `chrt --idle -p 0 <pid>` moves a process that is already
+running; SCHED_IDLE runs only when nothing else wants the core, whatever the group.
+
 ## Architecture Overview
 
 - `crates/er-quickload/src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, runtime probes, and native title/load instrumentation.

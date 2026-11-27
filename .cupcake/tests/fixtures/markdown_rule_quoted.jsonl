@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "What does the new guard do?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "It halts a closing message that calls markdown text a \"rule\", and AGENTS.md describes it beside the other closing-message guards."}]}}

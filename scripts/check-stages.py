@@ -190,6 +190,9 @@ STAGES: tuple[Stage, ...] = (
             ".cupcake/**/*",
             ".auto/*",
             ".claude/settings.json",
+            # `scripts/cupcake_markdown_rule.py` names the agent notes it judges a closing message
+            # against, so a push that changes one can change that signal's verdict.
+            "docs/agents/**/*",
             "crates/**/*.rs",
             "crates/**/Cargo.toml",
             "scripts/*.py",
@@ -200,6 +203,10 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.html",
             "scripts/hooks/*",
             "scripts/lib/*.sh",
+            # `test-cupcake-policies.py` replays the measured `mcp_query.py getDecompiledCode`
+            # redirect through the rulebook, so the guards are held to the Ghidra helper's real
+            # path; a push that moves or renames it has to rerun those cases.
+            "scripts/ghidra/mcp_query.py",
         ),
     ),
     Stage(

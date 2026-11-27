@@ -564,3 +564,21 @@ test_deny_push_teardown_and_then_build if {
 test_deny_push_multi_word_reason if {
 	denied_with_push_auth(`python3 scripts/er-teardown.py --reason="push the guard"`, AUTHORIZED_PUSH)
 }
+
+# --- exec launchers in front of the teardown (2026-11-19) ---------------------
+# Allowed until this date, measured with `opa eval`: the launcher was read as the program,
+# so a teardown with no relaunch went unexamined.
+test_deny_teardown_behind_a_launcher if {
+	denied("chrt --idle 0 python3 scripts/er-teardown.py")
+	denied("taskset -c 0-3 python3 scripts/er-teardown.py")
+	denied("ionice -c 3 python3 scripts/er-teardown.py")
+}
+
+# A relaunch behind a launcher is a relaunch.
+test_allow_launched_teardown_with_launched_relaunch if {
+	not denied("chrt --idle 0 python3 scripts/er-teardown.py; chrt --idle 0 python3 scripts/er-run-branch.py --with er-save-game-row")
+}
+
+test_allow_launched_teardown_status if {
+	not denied("chrt --idle 0 python3 scripts/er-teardown.py --status")
+}

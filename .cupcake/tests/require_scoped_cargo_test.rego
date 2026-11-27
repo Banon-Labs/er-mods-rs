@@ -293,3 +293,35 @@ test_deny_escaped_backslash_is_not_a_continuation if {
 test_deny_plain_newline_is_still_a_boundary if {
 	denied_cargo("cargo build --release\n-p er-quickload")
 }
+
+# --- exec launchers in front of cargo (2026-11-19) ----------------------------
+# The local copy of the slot test knew `{`, `!`, `time` and `xargs`; the first four
+# spellings below built the workspace unscoped and were allowed, measured with `opa eval`.
+# The rest pin what the copy already denied, now through the shared test.
+test_deny_unscoped_cargo_behind_a_launcher if {
+	every command in [
+		"chrt --idle 0 cargo build",
+		"taskset -c 0-3 cargo build",
+		"ionice -c 3 cargo check",
+		"ionice -c idle cargo clippy",
+		"chrt -i 0 cargo test",
+		"systemd-run --user --scope -p MemoryMax=8G cargo build",
+		"timeout -s KILL 600 cargo build",
+		"xargs -n 1 cargo build",
+		"time cargo build",
+		"{ cargo build; }",
+		"! cargo build",
+		"if cargo build; then :; fi",
+	] {
+		denied_cargo(command)
+	}
+}
+
+test_allow_scoped_cargo_behind_a_launcher if {
+	allowed("chrt --idle 0 cargo build -p er-quickload")
+	allowed("taskset -c 0-3 cargo test -p er-quickload")
+}
+
+test_allow_launched_cargo_named_in_a_message if {
+	allowed(`git commit -m "chrt -i 0 cargo build"`)
+}

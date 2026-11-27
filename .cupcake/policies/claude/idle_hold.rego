@@ -21,6 +21,13 @@
 #     genuinely blocked pause must be ONLY a short, precise statement of what it is blocked on; a long
 #     "justified" hold is NOT acceptable. VERBOSEPAUSE halts under rule ER-EFFECTS-NO-VERBOSE-PAUSE
 #     with a "be terse" correction, distinct from the IDLEHOLD "do work / justify" halt.
+#     NAMED 2026-11-11 (user words: "communicate clearly to the user why you're paused (blocked
+#     because X shell is running) or whatever you're doing"): on Stop, when a paused turn's closing
+#     message names nothing that scripts/cupcake_session_tasks.py measures running in the session
+#     (a shell's task id, a working agent's id or description), the signal emits
+#     UNNAMEDPAUSE:<report>, or adds a line UNNAMED:<report> after VERBOSEPAUSE or IDLEHOLD. The
+#     first halts under ER-EFFECTS-PAUSE-NAMES-BLOCKER; with the second, the other halt's reason
+#     carries the report. Either way the rewrite gets the list to name what it is blocked on from.
 #   routing:
 #     required_events: ["Stop"]
 #     required_signals: ["last_assistant_idle_hold"]
@@ -52,33 +59,72 @@ halt contains decision if {
 	}
 }
 
+# Enforcement (UNNAMEDPAUSE, 2026-11-11): block turn-end when a paused closing message names nothing
+# the session has running. Only the bare tag: a report riding after VERBOSEPAUSE or IDLEHOLD goes into
+# that halt's reason instead, so one rewrite answers both.
+halt contains decision if {
+	input.hook_event_name == "Stop"
+	startswith(head, "UNNAMEDPAUSE:")
+	unnamed_report != ""
+	decision := {
+		"rule_id": "ER-EFFECTS-PAUSE-NAMES-BLOCKER",
+		"reason": concat("", [
+			"Your closing message pauses but names nothing this session has running, so the user cannot tell what you are blocked on. Running now, measured from the process table by python3 scripts/cupcake_session_tasks.py: ",
+			unnamed_report,
+			" Name the shell's task id or the agent (its id or description) you are blocked on. If none of these is what you wait for, you are not blocked: keep working.",
+		]),
+		"severity": "HIGH",
+	}
+}
+
 reason_for(p) := msg if {
-	msg := concat("", ["You announced holding/idling ('", p, "') while a background task runs. Do productive NON-OVERLAPPING work now (RE a different function, prep the next fix, analyze prior logs, clean a gate) OR state explicitly 'I would normally have done <X> while waiting but didn't because <reason>'. Don't just wait."])
+	msg := concat("", ["You announced holding/idling ('", p, "') while a background task runs. Do productive NON-OVERLAPPING work now (RE a different function, prep the next fix, analyze prior logs, clean a gate) OR state explicitly 'I would normally have done <X> while waiting but didn't because <reason>'. Don't just wait.", name_suffix])
 }
 
 verbose_reason := msg if {
 	some c in [verbose_chars]
-	msg := concat("", ["You paused while blocked on a background task but wrote a long message (", c, " chars). When blocked, reply with ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. A long 'justified' hold is not acceptable."])
+	msg := concat("", ["You paused while blocked on a background task but wrote a long message (", c, " chars). When blocked, reply with ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. A long 'justified' hold is not acceptable.", name_suffix])
 }
+
+# The report riding after VERBOSEPAUSE or IDLEHOLD, as the tail of that halt's reason.
+name_suffix := s if {
+	not startswith(head, "UNNAMEDPAUSE:")
+	unnamed_report != ""
+	s := concat("", [" The message also names nothing this session has running. Running now, measured by python3 scripts/cupcake_session_tasks.py: ", unnamed_report, " Name the shell's task id or the agent you are blocked on."])
+} else := ""
 
 # Parse a VERBOSEPAUSE:<n-chars> tag into the char count. Undefined when the signal is not a
 # VERBOSEPAUSE hit -> verbose_reason undefined -> no verbose halt.
 verbose_chars := c if {
-	startswith(raw, "VERBOSEPAUSE:")
-	c := trim(trim_prefix(raw, "VERBOSEPAUSE:"), " \t\r\n")
+	startswith(head, "VERBOSEPAUSE:")
+	c := trim(trim_prefix(head, "VERBOSEPAUSE:"), " \t\r\n")
 }
 
 # Parse the tagged signal into the matched phrase. Untagged-but-non-empty falls back to the raw value
-# so a bare/crafted signal still halts; a VERBOSEPAUSE tag is excluded from the fallback so it does not
-# ALSO trip the idle-hold halt. Empty -> phrase undefined -> no halt.
+# so a bare/crafted signal still halts; a VERBOSEPAUSE or UNNAMEDPAUSE tag is excluded from the
+# fallback so it does not ALSO trip the idle-hold halt. Empty -> phrase undefined -> no halt.
 phrase := p if {
-	startswith(raw, "IDLEHOLD:")
-	p := trim(trim_prefix(raw, "IDLEHOLD:"), " \t\r\n")
+	startswith(head, "IDLEHOLD:")
+	p := trim(trim_prefix(head, "IDLEHOLD:"), " \t\r\n")
 } else := p if {
-	raw != ""
-	not startswith(raw, "VERBOSEPAUSE:")
-	p := raw
+	head != ""
+	not startswith(head, "VERBOSEPAUSE:")
+	not startswith(head, "UNNAMEDPAUSE:")
+	p := head
 }
+
+# The tag is the first line. The report is what follows `UNNAMEDPAUSE:` (it may span lines), or the
+# second line's `UNNAMED:` after another tag.
+head := split(raw, "\n")[0]
+
+unnamed_report := r if {
+	startswith(raw, "UNNAMEDPAUSE:")
+	r := trim(trim_prefix(raw, "UNNAMEDPAUSE:"), " \t\r\n")
+} else := r if {
+	i := indexof(raw, "\nUNNAMED:")
+	i >= 0
+	r := trim(substring(raw, i + count("\nUNNAMED:"), -1), " \t\r\n")
+} else := ""
 
 raw := trim(matched_phrase, " \t\r\n")
 
