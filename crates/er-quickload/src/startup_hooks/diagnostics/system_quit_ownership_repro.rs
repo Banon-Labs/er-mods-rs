@@ -516,8 +516,8 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
 /// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (2.7.2.0 0x1407ada50). Prevents both observed
 /// return-to-title crashes (rva 0x7ada87 and 0x7adb28 on 1.16.2; 0x7aedb7 and 0x7aee58 on 2.7.2.0)
 /// at their common root: the finalize's whole `if (owningMenuWindow != 0)` block runs on a doomed
-/// title window during return-to-title. See `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis
-/// (er-effects-rs-j74t). rcx = the job; the native dtor passes rdx/r8/r9 to the finalize
+/// title window during return-to-title. See `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis.
+/// rcx = the job; the native dtor passes rdx/r8/r9 to the finalize
 /// untouched, so we forward all four verbatim.
 ///
 /// We reproduce the exact call the finalize makes -- `owningMenuWindow->vfptr[3](window, &scratch)` --
@@ -533,7 +533,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
     r9: usize,
 ) {
     if job != 0 {
-        // Identity first (er-effects-rs-j74t identity layer): if our masquerade preserved this job,
+        // Identity first (identity layer): if our masquerade preserved this job,
         // take it out of the set unconditionally -- this destructor is the job's lifecycle end --
         // and apply the strict lifetime predicate below instead of the legacy state heuristic.
         let preserved_stale = masquerade_preserved_job_take(job);
@@ -642,7 +642,7 @@ pub(crate) unsafe fn menu_window_doomed_event_index(
 }
 
 /// OWNERSHIP: record a `MenuWindowJob*` our title-cover masquerade preserved past its native
-/// replacement point (er-effects-rs-j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). Called by
+/// replacement point (identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). Called by
 /// the part-a latches. Idempotent per pointer; on a full set the job just falls back to the legacy
 /// state heuristic at `~MenuWindowJob` (logged so the fallback is visible in the run evidence).
 pub(crate) fn masquerade_preserved_job_note(job: usize) {
@@ -730,7 +730,7 @@ pub(crate) unsafe fn menu_window_remove_from_push_target(
     true
 }
 
-/// Install the ~MenuWindowJob doomed-window guard (er-effects-rs-j74t). Idempotent.
+/// Install the ~MenuWindowJob doomed-window guard. Idempotent.
 /// `MenuWindowJob` FINALIZE hook (2.7.2.0 0x1407aed70) -- the call-path-complete counterpart to
 /// `menu_window_job_dtor_hook`.
 ///
@@ -994,7 +994,7 @@ pub(crate) unsafe extern "system" fn menu_offscr_rend_param_lookup_hook(out: usi
     unsafe { f(out, row) };
 }
 
-/// Install the quit-to-desktop clean-kill guard (er-effects-rs-j74t follow-up). Idempotent.
+/// Install the quit-to-desktop clean-kill guard. Idempotent.
 pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
     if MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;

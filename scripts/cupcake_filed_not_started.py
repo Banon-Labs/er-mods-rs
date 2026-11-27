@@ -3,7 +3,7 @@
 ended without starting it.
 
 The turn it was written from, 2026-11-10. The user described a mechanic the model lacked (delaying
-an ash's follow-up press to catch a roll); the agent filed it as bd er-effects-rs-me5p and closed
+an ash's follow-up press to catch a roll); the agent filed it as a beads issue and closed
 with "It waits for the homing and requirement-line changes, which edit the same files." Nothing
 blocked it: a separate worktree takes it, which is what the next turn did. The user's words: "The
 only time I would want you to mention a fix and not work on it is if you're blocked when it relates

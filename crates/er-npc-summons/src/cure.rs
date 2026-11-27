@@ -1,6 +1,6 @@
 //! Which companion needs a bolus: `LAB_WORLD.tt_cure`, read by the turtles' brain.
 //!
-//! A port of the lab's `statusCheck` (`scripts/frida/spawn-npc.js` on `feat/ai-lab-turtles`).
+//! A port of the lab's `statusCheck` (`scripts/frida/spawn-npc.js`).
 //! Every [`CHECK_MS`], a companion with poison or rot running (status category 10004 / 10005) is
 //! cured of it; otherwise one whose poison, rot or bleed gauge is at least [`STATUS_FILL`] full is
 //! dosed against the fullest. The gauges are `CSChrResistModule` (modules `+0x20`): each counts

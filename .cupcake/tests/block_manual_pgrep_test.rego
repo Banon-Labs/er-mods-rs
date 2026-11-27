@@ -159,7 +159,7 @@ test_deny_python_subprocess_pgrep_quoted_arg if {
 	denied(cmd)
 }
 
-# --- (c) bd issue-tracker text mentions (bd er-effects-rs-uxyz) --------------
+# --- (c) bd issue-tracker text mentions --------------
 #
 # False positive re-validated 2026-07-30 via opa eval before fixing: a bd
 # close whose quoted --reason described launch-guard allow-tests was denied

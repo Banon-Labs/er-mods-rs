@@ -430,7 +430,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // display never freezes on an opaque IBL box -- and the make-before-break
         // bridge keeps the prior masked head (PROFILE_HAVE_KEYED_FRAME) on screen
         // until this model produces its own masked frame, which then replaces it.
-        // Mask-fraction floor (er-effects-rs-hi2, user saw a displayed head
+        // Mask-fraction floor (user saw a displayed head
         // with no mask): "any transparent pixel" let a partial mask through
         // -- a frame that is 99% opaque IBL box with a few cut pixels passed
         // keyed and displayed as unmasked. A real portrait mask cuts a
@@ -507,7 +507,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 crate::host::boot_view_epoch_ms().max(1) as usize,
                 Ordering::SeqCst,
             );
-            // First-keyed latency (er-effects-rs-hi2): stamp the display-frame
+            // First-keyed latency: stamp the display-frame
             // index of this window's first published frame -- how long the
             // bridge held the prior head before the new one took over.
             let _ = PROFILE_WINDOW_FIRST_KEYED_DISPLAY.compare_exchange(
@@ -521,7 +521,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             // reach the loading screen.
             if note_ls_portrait_capture(cw, ch, &cpx) {
                 publish_portrait_rgba(cw, ch, cpx);
-                // Publish identity tag (bd er-effects-rs-dpf6 Phase 1): record which character this
+                // Publish identity tag: record which character this
                 // head belongs to next to the bridge. The worker may not read game memory, so it
                 // copies the atomics the game thread stamped at the build kick (slot+1 key + the
                 // ProfileSummary name hash); the pipeline-gen guard above keeps them window-coherent.

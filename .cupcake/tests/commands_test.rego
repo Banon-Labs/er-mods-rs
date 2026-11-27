@@ -1,5 +1,5 @@
 # OPA unit tests for the shared command helpers, and in particular for the
-# executed-text decomposition every git guard now reads (bd er-effects-rs-dt2e).
+# executed-text decomposition every git guard now reads.
 #
 # Run with:
 #   opa test .cupcake/system/commands.rego .cupcake/tests/commands_test.rego
@@ -404,7 +404,7 @@ test_has_verb_still_matches_prose_so_the_two_are_not_interchangeable if {
 	commands.has_verb("echo the installer will install things", "install")
 }
 
-# --- ABSOLUTE/RELATIVE PATH INVOCATION (2026-08-31, bd er-effects-rs-5z75) ----
+# --- ABSOLUTE/RELATIVE PATH INVOCATION (2026-08-31) ----
 #
 # command_position_prefix_pattern's anchor class is `(^|[;&|(){}\n])` -- a
 # leading path component (`/bin/`, `/usr/bin/`, `./`) is none of those
@@ -465,7 +465,7 @@ test_path_operand_mid_command_is_not_a_command_verb if {
 	not commands.has_command_verb("chmod +x /path/to/rm", "rm")
 }
 
-# --- shell segmentation (2026-08-31, bd er-effects-rs-c0t9) -------------------
+# --- shell segmentation (2026-08-31) -------------------
 #
 # shell_segments moved here from guard_layer_destructive_guard.rego so the
 # vendored git_block_no_verify builtin could close the same co-presence defect

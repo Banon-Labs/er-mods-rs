@@ -141,7 +141,7 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
         // copied and reduced to the System>Quit rows (commit 28ca8f89), carrying the same direct
         // reads of the `05_000` and `05_010` edits. It was a second consumer of the codec rather
         // than a new coupling shape, and it went when the fork was deleted -- so the edge closed
-        // by deletion rather than by the extraction bd er-effects-rs-ejfl measures, which is still
+        // by deletion rather than by the extraction, which is still
         // undone and is still what a second product-shaped shell would need.
         // `er-r3-view` was an entry from 2026-10-02 to 2026-10-16, for its R3 weapon board's menu
         // font (`er_gfx::ttf::menu_font_ttf`); it left when the board moved to the shared overlay

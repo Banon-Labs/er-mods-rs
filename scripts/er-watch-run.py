@@ -7,7 +7,7 @@ Why this exists. A run's evidence is spread across three files that answer diffe
 `er-quickload-telemetry.json` (the RAM oracles: which character, which map, is the player up).
 Tailing any one of them alone has repeatedly produced a wrong reading of a run.
 
-It also ends. A boot deadlock (bd er-effects-rs-1742) leaves the process alive, 60+ threads,
+It also ends. A boot deadlock leaves the process alive, 60+ threads,
 ~0 CPU, and the DLL log simply stops -- indistinguishable from "still loading" unless something
 watches for the silence. `--stall-seconds` of no growth prints `WEDGED` and exits, so a hung run
 ends the wait instead of consuming it.

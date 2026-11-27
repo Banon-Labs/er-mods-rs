@@ -119,7 +119,7 @@ er-save-suppress = { path = "../er-save-suppress" }
 er-tpf = { path = "../er-tpf" }
 # GFX (Scaleform SWF-variant) codec + content-addressed tag edits: derives the stripped
 # 05_000_title movie at runtime from the game's own in-memory vanilla bytes instead of embedding
-# the full asset (er-effects-rs-h7x). Pure-Rust, std-only.
+# the full asset. Pure-Rust, std-only.
 er-gfx = { path = "../er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
 # portrait/debug proof tooling writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.

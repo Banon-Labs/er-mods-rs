@@ -6,9 +6,9 @@ inline bash block. It goes into its own kitty window, focused, typed in but not 
 `#` comment block that says why it should be run. One window per command block.
 
     python3 scripts/kitty-user-command.py --title "push loading PR" \
-        --why "The agent may not push; this publishes fix/load-character-from-file." \
-        --why "Review the branch first: git log origin/main..fix/load-character-from-file" \
-        -- 'git -C /abs/worktree push -u origin fix/load-character-from-file'
+        --why "The agent may not push; this publishes <branch>." \
+        --why "Review the branch first: git log origin/main..<branch>" \
+        -- 'git -C /abs/worktree push -u origin <branch>'
 
 The window is a split: a new kitty window in the tab the agent session runs in (user request
 2026-11-07: "Can we do kitty split instead of tab by default?"). `--tab` opens a new tab instead,

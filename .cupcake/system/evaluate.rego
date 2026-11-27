@@ -76,6 +76,7 @@ all_denials contains decision if some decision in data.cupcake.policies.builtins
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_color_spelling_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_comment_caps_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tmp_scripts_guard.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tracker_refs_guard.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.gh_pr_title_conventional.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_any_push.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_detached_push.deny

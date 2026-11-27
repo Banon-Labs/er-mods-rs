@@ -396,8 +396,8 @@ def prose_paragraphs(text: str) -> list[str]:
     text = _OPEN_FENCE_RE.sub("\n", text)
     # A line that is only `authorize commit` or `authorize <sha>` is the reply the commit and push
     # guards wait for, and AGENTS.md puts it on a line of its own, so the shape the rules require
-    # must not cost a paragraph. Measured 2026-11-11: an answer of one paragraph beginning "The guards
-    # branch `fix/cupcake-stop-guards-1111` (35 paths i", a blank line, then a line holding only
+    # must not cost a paragraph. Measured 2026-11-11: an answer of one paragraph beginning "The
+    # guards branch `<branch>` (35 paths i", a blank line, then a line holding only
     # `authorize commit`, was reported to the next turn as 2 paragraphs of prose; so was an earlier
     # one beginning "The guard work is merged onto origin/main and passes every g" that ended the
     # same way. The line goes with its newline, so prose above and below it in one block stays one

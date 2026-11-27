@@ -13,7 +13,7 @@
 #   FILEDFACTS|kind=deferred|closing=<the clause that defers it>
 #
 # A clean turn emits nothing (fail-open, like every neighbouring signal). Written from 2026-11-10:
-# a mechanic the model lacked was filed as bd er-effects-rs-me5p and the turn closed on "It waits
+# a mechanic the model lacked was filed as a beads issue and the turn closed on "It waits
 # for the homing and requirement-line changes", which blocked nothing. The classification and its
 # history live in `scripts/cupcake_filed_not_started.py` (`--selftest`); transcript discovery and
 # turn bucketing come from `scripts/cupcake_turn_scan.py`, as for the other Stop signals.

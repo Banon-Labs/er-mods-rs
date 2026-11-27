@@ -12,7 +12,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
         "system-quit-dup: component-index patch disabled; preserving native Quit Game GFx component"
     ));
     install_scaleform_handler_lifecycle_guard();
-    // Return-to-title crash fix (er-effects-rs-j74t): the ~MenuWindowJob finalize runs its whole
+    // Return-to-title crash fix: the ~MenuWindowJob finalize runs its whole
     // owningMenuWindow block on a doomed title window during return-to-title, dereferencing wild
     // memory (crashes rva 0x7aedb7 and 0x7aee58). At the destructor we reproduce the finalize's
     // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
@@ -68,7 +68,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_profile_load_confirmed_hook();
     #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_job_run_hook();
-    // Save-picker browse-row integrity (er-effects-rs-xlqh): re-stage the picker's browse rows at
+    // Save-picker browse-row integrity: re-stage the picker's browse rows at
     // the entry of the native ProfileSelect list builder, so an in-world game save that rewrote the
     // active slot's ProfileSummary record (MarkProfileIndexAsUsed + 0x140262280, 1.16.2 FUN_140262270, stomping the
     // loaded character's name over a staged row) can never leak a stray character-name row into the

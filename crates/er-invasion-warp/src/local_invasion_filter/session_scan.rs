@@ -65,7 +65,7 @@ const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
 /// 10.94 MB -- which is 1,438,740 qwords. The previous `1 << 18` was 262,144 of them: 18.2% of the
 /// image, and it said nothing when it ran out, so a scan that stopped 8.9 MB early was reported as
 /// a scan that found nothing. An owner-bearing global past that cut could not be reached at all,
-/// which is the standing cause of `owner 0x0` in open issue er-effects-rs-9i0g.
+/// which is the standing cause of `owner 0x0`.
 ///
 /// `1 << 22` is 4.2 million qwords, near three times what this build needs, so the next Seamless
 /// can grow without silently truncating the scan again -- and it is still a bound, which is what
@@ -253,7 +253,7 @@ pub(super) fn cached_scan_for_session(
         .then(|| (CACHED_SLOT.load(Ordering::SeqCst), session, owner));
     // An owner is a complete answer. A session with no owner is not: it is the shape that lets the
     // filter judge and log while `ersc_owner_or_refuse` declines every cancel, which is the whole
-    // of open issue er-effects-rs-9i0g. So a bare hit stays usable and stays provisional -- it is
+    // of the missing-owner problem. So a bare hit stays usable and stays provisional -- it is
     // returned meanwhile, and the sweeper keeps looking for the owner behind it.
     if cached.is_none() || owner == 0 {
         request_sweep(base, abi);

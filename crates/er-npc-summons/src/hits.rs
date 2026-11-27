@@ -1,7 +1,7 @@
 //! Hits on the squad and by the player: `LAB_WORLD.tt_ally_hit`, `tt_ally_victim` and
 //! `tt_player_hit`, which provoke the turtles' brain.
 //!
-//! A port of the lab's `squadHit` (`scripts/frida/spawn-npc.js` on `feat/ai-lab-turtles`), driven
+//! A port of the lab's `squadHit` (`scripts/frida/spawn-npc.js`), driven
 //! by a detour on `CalculateDamage2`, which runs once per landed hit (attacker argument 1, victim
 //! `[argument 0 + 0x8]`; measured live by the lab's `chainsaw-driver.js` and `damageHook`).
 //!

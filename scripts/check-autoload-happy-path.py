@@ -36,7 +36,7 @@ DIRECT_PROBE = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
 # This file used to assert that `.auto/measure.sh` scored the autoload happy path -- that it
 # exposed `readiness_gate_failures`, read the er-title-flow sources, penalised
 # Seamless-contaminated artifacts, and so on. Commit 40ed6c5a ("Add the crate-extraction plans
-# of record for experiments/", #193) deleted 1573 lines of that file and replaced them with a
+# of record for experiments/") deleted 1573 lines of that file and replaced them with a
 # 119-line crate-extraction roadmap progress measurer. The autoload measure did not move: a
 # tree-wide search for `readiness_gate_failures` finds this checker and nothing else.
 #
@@ -50,7 +50,7 @@ DIRECT_PROBE = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
 #
 # The 69 remaining assertions check the product source and are untouched -- they are what
 # actually guards autoload behaviour. If a scored autoload measure is ever rebuilt, re-add its
-# contract here deliberately, against the file that then implements it. See bd er-effects-rs-ni41.
+# contract here deliberately, against the file that then implements it.
 
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",

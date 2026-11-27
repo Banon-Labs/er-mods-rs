@@ -329,11 +329,11 @@ test_append_mode_is_a_write if {
 
 # --- a payload that QUOTES a python command is not one ---------------------
 #
-# Measured in production 2026-09-21 (bd er-effects-rs-ak3q). The invoked binary is `bd`
-# and `git`; the python is a quotation inside the memory or the commit message being
-# recorded. The old anchor was "start, or after whitespace or a quote", which every
-# quoted argument satisfies, and the ellipsis in the prose then broke the
-# committed-script exemption on top of it.
+# Measured in production 2026-09-21. The invoked binary is `bd` and `git`; the
+# python is a quotation inside the memory or the commit message being recorded. The
+# old anchor was "start, or after whitespace or a quote", which every quoted
+# argument satisfies, and the ellipsis in the prose then broke the committed-script
+# exemption on top of it.
 
 test_bd_memory_quoting_a_python_command_is_allowed if {
 	cmd := `bd remember --key trace-tsv "measured with python3 scripts/er-fd-trace.py --tsv ... which printed 12 rows"`

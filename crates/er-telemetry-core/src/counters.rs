@@ -76,7 +76,7 @@ pub static PRESENT_QPC_DELTA_US: AtomicUsize = AtomicUsize::new(0);
 /// vsync/flip present-wait (that happens inside the original Present, after the end stamp), so a large
 /// value == render-bound (GPU genuinely busy ~50ms) while a small value with a 50ms frame == a
 /// present/vblank throttle. This is the goal-doc §3.3 `gpu_frame_us` oracle, splitting the reload-20fps
-/// residual into GPU-render vs present-wait. bd er-effects-rs-03ma /
+/// residual into GPU-render vs present-wait. See
 /// switch-reload-framerate-parity-acceptance.md.
 pub static GPU_FRAME_US_LAST: AtomicUsize = AtomicUsize::new(0);
 /// Count of successful GPU-timestamp readbacks (each = one resolved START/END pair). Emitted as
@@ -193,7 +193,7 @@ pub static PORTRAIT_WINDOW_TARGET_FROM_PICK: AtomicUsize = AtomicUsize::new(0);
 /// explicit pick. Reset with `PORTRAIT_WINDOW_TARGET_SLOT` on window close.
 ///
 /// `PORTRAIT_WINDOW_TARGET_FROM_PICK` is the top rank collapsed to a bit, and that collapse is
-/// what hid bd `er-effects-rs-fmy6`: a latch taken off a stale `ac0` and a latch taken off the
+/// what hid the wrong-face defect: a latch taken off a stale `ac0` and a latch taken off the
 /// user's pick were the same value, so the window refused the load request that superseded it.
 /// The rank is what the yield rule compares; the boolean is kept because it is a published oracle.
 pub static PORTRAIT_WINDOW_TARGET_SOURCE: AtomicUsize = AtomicUsize::new(0);
@@ -335,12 +335,12 @@ pub static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_TOO_SMALL_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
-/// Identity tag of the currently-published loading-portrait head (bd er-effects-rs-dpf6 Phase 1):
+/// Identity tag of the currently-published loading-portrait head:
 /// slot+1 (0 = no published head) and the FNV-1a64 hash of the slot's ProfileSummary character name
 /// UTF-16 units (0 = unknown). Written next to the bridge on every publish; cleared with the bridge.
 pub static LS_PORTRAIT_PUBLISHED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_PUBLISHED_NAME_HASH: AtomicUsize = AtomicUsize::new(0);
-/// Published-vs-loaded semaphore (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb). The
+/// Published-vs-loaded semaphore. The
 /// pre-existing identity semaphore compared our target slot against the currently-resident
 /// character, which is silent about the failure that actually reached the screen: on 2026-08-02
 /// slot 9's face was published and displayed for 29.7s while slot 5 loaded, and every oracle said
@@ -366,7 +366,7 @@ pub static PORTRAIT_CONFIRM_MS: AtomicUsize = AtomicUsize::new(0);
 /// ms from the last switch confirm (RETARGET) to the next portrait publish (version bump); keeps the
 /// last measured value (oracle_portrait_confirm_to_publish_ms). 0 = never measured.
 pub static PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST: AtomicUsize = AtomicUsize::new(0);
-/// Same-identity bridge holds across an own-menu-switch rearm (bd er-effects-rs-dpf6 Phase 3): the
+/// Same-identity bridge holds across an own-menu-switch rearm: the
 /// incoming slot+name-hash matched the published head, so the window reset kept the bridge.
 pub static PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS: AtomicUsize = AtomicUsize::new(0);
 /// The outstanding provisional bridge hold, as slot+1 (0 = none). A hold is taken at the switch
@@ -381,7 +381,7 @@ pub static PORTRAIT_BRIDGE_HOLD_PROVISIONAL: AtomicUsize = AtomicUsize::new(0);
 /// signal that compares the record against a source outside itself. A revocation drops the held head
 /// and the frozen crop envelope, so the window shows no portrait rather than the previous
 /// character's. `> 0` is a defect signal about the record, not a healthy safety check firing: an
-/// intact record cannot produce one (bd k979 -- do not gate on this being non-zero).
+/// intact record cannot produce one (do not gate on this being non-zero).
 pub static PORTRAIT_BRIDGE_HOLD_REVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 /// Provisional holds that reached the next switch rearm having neither published nor been revoked:
 /// a whole loading window rode a held head that nothing ever confirmed. That is the shape of the
@@ -514,7 +514,7 @@ pub static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
 // removed with it rather than left emitting a permanent `false`.
 pub static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
 // TITLE_OVERLAY_COVER_* removed 2026-07-31: six counters with zero writers, read once each to emit
-// oracles for the unbuilt custom title render surface (er-effects-rs-trp). A permanently-0 counter
+// oracles for the unbuilt custom title render surface. A permanently-0 counter
 // cannot be distinguished from a feature that ran and did nothing, so they reported an absent
 // feature as a failing one. Re-add with writers at the real render site when trp lands.
 // Loading-screen observer install state (2026-08-30). These are not booleans any more: 0 = not
@@ -677,7 +677,7 @@ pub static PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK: AtomicUsize = AtomicUsiz
 /// Bitmask (bit N = save slot N) of live `CS::ProfileSummary` slots found marked occupied while
 /// holding something that is not a character, at a moment when no save picker owned the rows.
 ///
-/// This is the RAM signature of `er-effects-rs-fmy6`. The in-game picker renders its browse rows by
+/// This is the RAM signature of the wrong-face defect. The in-game picker renders its browse rows by
 /// writing them into these game-owned records, and every exit is supposed to put the real ones
 /// back; when one did not (the sticky-`committed` defect, 2026-08-29) the labels stayed, and the
 /// user's next loading screens showed `[..] EldenRing` and `[ new ]` as character names beside
@@ -1765,7 +1765,7 @@ pub const SWITCH_RELOAD_FD4IO_IDLE: usize = 0;
 pub const SWITCH_RELOAD_FD4IO_DRAIN: usize = 1;
 pub const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
 /// Frames the b78 guard stood down because the fd4io reload machine was non-idle, i.e. frames on
-/// which the guard would have forced `GameMan+0xb78 = -1` and no longer does (bd er-effects-rs-9jbe).
+/// which the guard would have forced `GameMan+0xb78 = -1` and no longer does.
 /// This is the engagement oracle for that stand-down: a clean switch run proves only that nothing
 /// regressed, whereas `> 0` proves the new condition actually fired against a live fd4io overlap --
 /// the exact race (fd4io non-idle inside the guard's active window) that produced the black-screen

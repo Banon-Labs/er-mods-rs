@@ -4,10 +4,10 @@
 //
 // A wedged boot on 2026-09-08 held 7,178 ntsync file descriptors out of 7,723 total, and the main
 // thread sat in `WaitForSingleObject(fd 7725, INFINITE)` -- the single newest object in the whole
-// process, with no other waiter and no owner. Two open issues meet at that number:
-// `er-effects-rs-0xv6` (about 28 ntsync fds created per second and none closed) and
-// `er-effects-rs-1742` (the boot deadlock itself). A leak that large means handles are created in
-// a loop somewhere, and the deadlock is the process finally waiting on one nobody signals.
+// process, with no other waiter and no owner. Two open problems meet at that number: about 28
+// ntsync fds created per second and none closed, and the boot deadlock itself. A leak that large
+// means handles are created in a loop somewhere, and the deadlock is the process finally waiting on
+// one nobody signals.
 //
 // `/proc` can count the descriptors but cannot say who made them. This can: every creation is
 // attributed to the module its return address falls in, so "the game does this normally" and "one

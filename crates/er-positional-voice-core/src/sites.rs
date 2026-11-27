@@ -3,7 +3,7 @@
 //! all of them before it calls any, and does nothing on a mismatch or on any other build.
 //!
 //! The offsets and bytes are 2.7.2.0's, read out of `eldenring-deobf-1.17.2.bin`. They were first
-//! measured on 1.17.1 (bd er-effects-rs-gpkk). Two kinds of site deserve a note:
+//! measured on 1.17.1. Two kinds of site deserve a note:
 //!
 //! - `audio manager` is `lea rcx,[rip+disp]`, reaching the global at `0x48543e0`.
 //! - the four `AK` sites are a `jmp` into an Arxan stub, and the stub is regenerated per build.

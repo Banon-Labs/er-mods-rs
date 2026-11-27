@@ -48,7 +48,7 @@ alignment, so it lands at 0xa80 rather than 0xa7c. Hence:
     [0xa78, 0xae8)   +8          e.g. scadutree override 0xab4 -> 0xabc
 
 What the new field at 0x960 is was established independently, from the other end: 1.17 also adds
-`CS::MoveMapStep::_UpdateHorseType` (commit "The insertion was benign", bd er-effects-rs-xci9),
+`CS::MoveMapStep::_UpdateHorseType` (commit "The insertion was benign"),
 which re-applies the mount after a map move and reads `PlayerGameData+0x960` to make that
 idempotent. Two derivations that share no evidence -- a constructor alignment here, a new callee
 read there -- land on the same byte.

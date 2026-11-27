@@ -43,7 +43,7 @@
 //! * our rewrite is not necessarily the last write. The game's boot ProfileSummary read landed
 //!   617ms after ours in run br-20260903-204517-82d2 and replaced every record, and the loading
 //!   screen then showed `Vagabond`'s face, name and level under `Hero`'s load. See
-//!   [`crate::reassert_policy`] for the bounded drift watch that answers it (bd er-effects-rs-ccud).
+//!   [`crate::reassert_policy`] for the bounded drift watch that answers it.
 //!
 //! It deliberately does not call the profile-renderer refresh: that AVs when the renderer table has
 //! not been built yet (`0x9abd24`, observed), and at the boot title it has not.
@@ -165,7 +165,7 @@ fn refresh_active_container_profile_summary() -> bool {
         // Not done -- Watching. The refresh used to return here and never look again, which is
         // what let the game's own boot ProfileSummary read overwrite our body-derived records
         // 617ms later and put another character's face and stats on the loading screen (run
-        // br-20260903-204517-82d2, bd er-effects-rs-ccud).
+        // br-20260903-204517-82d2).
         unsafe { watch_target_record_for_drift() };
         return true;
     }

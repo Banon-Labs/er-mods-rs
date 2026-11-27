@@ -2,14 +2,14 @@
 //
 // # The question
 //
-// `er-effects-rs-0wej`: the nearby sweep counted hosts Seamless's own search can never return,
-// because Seamless filters its invasion search on `lobby_key` -- a SHA-256 over the loaded param
-// tables, compared for equality -- and the sweep did not. A fix is in the tree
-// (`lobby_preflight.rs` `send_query` pushes that filter), and it is SILENTLY OPTIONAL: the key
-// comes from `lobby_publish::seamless_match_key`, which answers nothing until Seamless has handed
-// the key to Steam, and a query missing the filter looks exactly like the unfixed one. No run has
-// ever distinguished the two -- no sweep has yet found a host, so the reachable/unreachable lines
-// that would have shown it have never printed.
+// The nearby sweep counted hosts Seamless's own search can never return, because Seamless filters
+// its invasion search on `lobby_key` -- a SHA-256 over the loaded param tables, compared for
+// equality -- and the sweep did not. A fix is in the tree (`lobby_preflight.rs` `send_query`
+// pushes that filter), and it is SILENTLY OPTIONAL: the key comes from
+// `lobby_publish::seamless_match_key`, which answers nothing until Seamless has handed the key to
+// Steam, and a query missing the filter looks exactly like the unfixed one. No run has ever
+// distinguished the two -- no sweep has yet found a host, so the reachable/unreachable lines that
+// would have shown it have never printed.
 //
 // So: watch the wire. Every `(key, value, comparison)` written onto the matchmaking interface,
 // grouped by the `RequestLobbyList` that consumes them. A group carrying

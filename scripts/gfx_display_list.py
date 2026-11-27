@@ -2,7 +2,7 @@
 """Full structural dump of an uncompressed GFX movie (Elden Ring Scaleform).
 
 Purpose: prove display-list z-order (PlaceObject2/3 depth ordering) and extract
-text-field / sprite geometry for the now-loading movies (bd er-effects-rs-jsm).
+text-field / sprite geometry for the now-loading movies.
 
 Parses header RECT, and all tags relevant to display-list z-order analysis:
 PlaceObject2/3 (depth/char/name/matrix), DefineSprite (recursing), DefineEditText

@@ -1095,10 +1095,9 @@ def main() -> int:
         # rule anything that actually runs.
         # Written to `build-support/`, not `crates/`, since 2026-09-22: it is still a Rust file
         # authored through a heredoc, which is what this case is about, and the Frida gate now
-        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it (bd
-        # er-effects-rs-wuij). Keeping the old path would have tested that guard instead of
-        # this one, and would have made the case's verdict depend on whether this checkout
-        # happens to carry a measurement.
+        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it. Keeping
+        # the old path would have tested that guard instead of this one, and would have made
+        # the case's verdict depend on whether this checkout happens to carry a measurement.
         PolicyCase(
             "allow-rust-doc-comment-heredoc-with-prose-verb",
             "cat > build-support/demo.rs <<'EOF'\n"
@@ -1124,8 +1123,8 @@ def main() -> int:
         ),
         # The separator is written out rather than left to a newline: this runner
         # calls `cupcake eval` directly, so scripts/cupcake-hook.sh is not in the
-        # path to rewrite an unquoted newline to "; " (bd er-effects-rs-5eah) and
-        # line 2 would arrive with no boundary in front of it.
+        # path to rewrite an unquoted newline to "; " and line 2 would arrive
+        # with no boundary in front of it.
         PolicyCase(
             "deny-root-delete-after-heredoc-terminator",
             "git commit -q -F - <<'EOF'\n"
@@ -1515,7 +1514,7 @@ def main() -> int:
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
-        # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ------
+        # --- Shell-wrapper payloads (2026-08-26) ------
         #
         # Measured against this same live engine before the fix: every one of the
         # deny cases below came back allow with zero denials. The four git guards
@@ -1893,8 +1892,8 @@ def main() -> int:
         ),
         # bd only records text: a single, non-chained bd invocation whose pgrep
         # token sits entirely inside quoted issue-tracker text is exempt
-        # (2026-07-29 false positive, bd er-effects-rs-uxyz: a bd close --reason
-        # describing launch-guard allow-tests was denied).
+        # (2026-07-29 false positive: a bd close --reason describing
+        # launch-guard allow-tests was denied).
         PolicyCase(
             "allow-bd-close-reason-mentioning-pgrep",
             '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard'
@@ -2190,7 +2189,7 @@ def main() -> int:
         # Exact /proc cleanup/teardown for stale Elden Ring/EAC launcher
         # processes is allowed: it names the protected launcher only as data,
         # reads /proc, and sends signals to exact matching pids without
-        # launching the named executable (er-effects-rs-9iz).
+        # launching the named executable.
         PolicyCase(
             "allow-proc-comm-scan-sigterm-sigkill-cleanup-naming-eac-launcher",
             "python3 - <<'PY'\n"
@@ -2380,7 +2379,7 @@ def main() -> int:
         ),
         # Restoring the user's game-installed co-op DLL (same-path rename that
         # only strips the repo's .er-quickload-staged suffix) is the opposite of
-        # bundling and is allowed (bd er-effects-rs-gkqa).
+        # bundling and is allowed.
         PolicyCase(
             "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
             "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
@@ -2396,8 +2395,8 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # A read-only interpreter scan of the installed DLL with the path as an
-        # unquoted operand is allowed (bd er-effects-rs-gkqa: arm (a) counted
-        # python/bash as bundling verbs).
+        # unquoted operand is allowed (arm (a) counted python/bash as bundling
+        # verbs).
         PolicyCase(
             "allow-python-scan-gameinstall-ersc-dll-unquoted-operand",
             "python3 scripts/pe_export_dump.py"
@@ -2801,6 +2800,34 @@ def main() -> int:
             include_timeout=False,
             tool_name="Edit",
         ),
+        # `ER-EFFECTS-NO-TRACKER-REFS-GUARD`, live, for the same reason as the caps pair above: an
+        # opa-green policy that cupcake's WASM runtime cannot execute returns nothing and reads as
+        # an allow. Aimed at a `.py` file for the reason given above the caps deny case. The
+        # allow case is the load-bearing one: the same branch name in a string is code.
+        PolicyCase(
+            "deny-write-pull-request-number-into-a-comment",
+            "",
+            False,
+            "Comments carry no beads ids, PR numbers or branch names",
+            {
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# landed in PR #398, on fix/harness-repl-reach\ndef f():\n    pass\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-branch-name-in-a-string",
+            "",
+            True,
+            None,
+            {
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# the fixture's branch\nBRANCH = \"fix/harness-repl-reach\"\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
         # AskUserQuestion (the multiple-choice questionnaire tool). Corrected 2026-08-15: the prior
         # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
         # design-interview question from the `grilling` skill was blocked while not in any /goal work.
@@ -2956,7 +2983,7 @@ def main() -> int:
         ),
     ])
 
-    # --- payload versus command (bd er-effects-rs-ak3q, bd er-effects-rs-if5l) -------------
+    # --- payload versus command -------------
     #
     # Three guards matched the whole command string, so any tool taking prose that quotes
     # another command's name tripped them. All three blocks below happened in production on
@@ -3271,7 +3298,7 @@ def main() -> int:
         *guard_test_suite_cases(),
     ])
 
-    # --- the Bash spelling of a Rust edit (bd er-effects-rs-wuij) --------------------------
+    # --- the Bash spelling of a Rust edit --------------------------
     #
     # The Frida gate routed on the write tools and denied on `tool_input.file_path`, which a
     # Bash call does not have, so the rule was undefined for every shell spelling of the edit.

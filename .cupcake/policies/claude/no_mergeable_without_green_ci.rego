@@ -15,11 +15,11 @@
 #     whether a required check has even started. Reporting it as "MERGEABLE now" answers a question
 #     the user did not ask with a word they read as "ready to merge".
 #
-#     THE INSTANCE. Moments before this directive, a turn closed: "PR #426 is **MERGEABLE** now --
-#     the conflicts are gone." At that moment the `check` job was `in_progress` and had never once
-#     passed on that branch in the whole session. The same turn's own output carried
-#     `mergeStateStatus = BLOCKED`, which is GitHub saying the merge button is disabled -- printed,
-#     read past, and reported as the good news.
+#     THE INSTANCE. Moments before this directive, a turn closed calling a pull request
+#     "**MERGEABLE** now -- the conflicts are gone." At that moment the `check` job was
+#     `in_progress` and had never once passed on that branch in the whole session. The same turn's
+#     own output carried `mergeStateStatus = BLOCKED`, which is GitHub saying the merge button is
+#     disabled -- printed, read past, and reported as the good news.
 #
 #     WHY THE DIRECTIVE'S "and you haven't checked CI" CLAUSE IS NOT A SEPARATE FACT. Having looked
 #     at CI is no defence when CI is not green: a turn that measured `check=in_progress` and then

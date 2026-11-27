@@ -32,7 +32,7 @@ so a crash, a timeout or empty output keeps both denied.
 
 The transcript is read once, with no waiting. In the main session the pending tool call's own
 `tool_use` line is not on disk while PreToolUse hooks run: Claude Code writes it after they return
-(measured 2026-10-17 and 2026-10-18, bd er-effects-rs-hu4w; a reader that waited 3 s for it refused
+(measured 2026-10-17 and 2026-10-18; a reader that waited 3 s for it refused
 commits that way in sessions a66cf759, 7d2f4a9b and e75d8996). So:
 
 1. When the call's line is there, the conversation chain is walked back from it through

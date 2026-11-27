@@ -527,7 +527,7 @@ def main() -> int:
                "DENIED", "more than once")
 
         # The main session's case: the call's own line is not written until the hooks return, so
-        # the chain is read back from the newest entry instead (bd er-effects-rs-hu4w).
+        # the chain is read back from the newest entry instead.
         c = Chain()
         c.human(f"authorize {sb.tip}")
         c.say("pushing")

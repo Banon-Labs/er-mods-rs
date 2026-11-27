@@ -3,7 +3,7 @@
 
 Why this gate exists, measured
 ------------------------------
-Three boots of the 21-DLL profile wedged (bd `er-effects-rs-1742`), each with the last log
+Three boots of the 21-DLL profile wedged, each with the last log
 line being er-hook's `HOOK TRANSLATED` -- the statement immediately before `MH_CreateHook`.
 Diagnosed 2026-09-08: `crates/er-telemetry-core/src/lib.rs` spawned an ungated
 `er-cpu-sampler` thread out of `profiler::note_frame` that called `SuspendThread` plus

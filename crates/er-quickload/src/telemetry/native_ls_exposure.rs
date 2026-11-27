@@ -1,4 +1,4 @@
-// Native loading-screen exposure SEMAPHORE (er-effects-rs-wmw defect #1, user report 2026-07-30:
+// Native loading-screen exposure SEMAPHORE (user report 2026-07-30:
 // "the custom loading screen disappeared for about one frame and the vanilla loading screen flashed
 // through").
 //

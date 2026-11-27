@@ -659,7 +659,7 @@ pub const PLAY_REGION_POINT_MAN_MAP_OFFSET: usize = 0x8;
 /// here must skip it too.
 pub const PLAY_REGION_POINT_NODE_POINT_OFFSET: usize = 0x28;
 
-// ---- Centralised by the #362 merge (move-vs-move) ------------------------------------------
+// ---- Centralised (move-vs-move) -----------------------------------------------------------
 // These seven addresses were each declared as a literal in two crates at once, because two
 // branches independently moved the same constants into two different new crates: er-title-flow
 // (the autoload/title-flow slice) and er-diag-harness / er-quit-menu-core (already on main).

@@ -1505,7 +1505,7 @@ def multiplier(r: dict, value: float) -> float:
 
 
 # --------------------------------------------------------------------------------------------
-# attack strings: R1, L1 and powerstance chains (er-effects-rs-q0r9)
+# attack strings: R1, L1 and powerstance chains
 #
 # The R1, L1 and dual strings are valued as the casts above are: the pool answers the string, a
 # hit that breaks the other side cancels its later hits, and `multiplier` is the share of the

@@ -17,7 +17,7 @@ because the default has to stay usable on a branch where the finding is expected
 
 It must not be wired into `scripts/check.sh` on an address-migration branch. Its
 premise is "a refactor must not change the numeric contract"; the premise of
-`fix/repoint-rvas-to-1170` is that every game address changes. All six mismatches
+the 1.17 address repoint is that every game address changes. All six mismatches
 it reported there were the intentional 1.16.2 -> 1.17 repoints, four of them
 verbatim rows of the 1.16.2 -> 1.17 address ledgers (deleted with the carry on
 2026-10-23) and the fifth (`0x14067a99a -> 0x14067b7ea`) an entry+0x1a callsite

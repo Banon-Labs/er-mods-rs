@@ -264,7 +264,7 @@ pub(crate) use er_telemetry_core::counters::NETWORK_CHECK_SHORTCIRCUIT_INSTALLED
 /// with exactly that clean leaf, skipping the entire tree, so zero modals are ever enqueued regardless
 /// of CSNetMan/CSCheatEOS readiness. The original is never called (its only outputs are the result +
 /// the FD4Time vtable, both replicated). No input, no save write; only armed when offline is forced,
-/// so it never alters an online (Seamless Co-op) network check. bd er-effects-rs-0ye.
+/// so it never alters an online (Seamless Co-op) network check.
 pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     rcx: usize,
     rdx: usize,
@@ -409,7 +409,7 @@ pub(crate) use er_telemetry_core::counters::SHOW_PROGRESS_TYPE_LOGGED;
 /// Run with a passing-check exit: result = {state=Success, field1=0} (exactly what 1.16.1 dump FUN_1407a7340's
 /// SetResult(Success) clean leaf yields) + the FD4Time vtable, skipping the delegate -> the job
 /// completes successfully, the flow advances, and zero modals are enqueued. One hook covers all the
-/// check steps. Offline-gated (no effect on an online Seamless Co-op check). bd er-effects-rs-0ye.
+/// check steps. Offline-gated (no effect on an online Seamless Co-op check).
 /// Deterministic clean-title active-save-slot override for the System-Quit->Load-Profile switch.
 ///
 /// The clean-title reload is the game's native most-recent Continue: the ShowProgressJob save-data
@@ -662,8 +662,8 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
 // The native title auto-opens its menu ~25-38s into a parked press-any-button boot (the online->
 // offline sign-in flow timing out chains the menu-open check steps). If that happens before the user
 // picks a save, the Continue/Load rows build against an empty ProfileSummary (no save yet) -> disabled
-// rows -> no character ever loads and the boot idles forever on a null pump (softlock on a late pick;
-// bd er-effects-rs-ns4n follow-up). The save-check ShowProgressJob hold is too late -- it holds the
+// rows -> no character ever loads and the boot idles forever on a null pump (softlock on a late
+// pick). The save-check ShowProgressJob hold is too late -- it holds the
 // bar after menu-open. This detour suppresses `TitleTopDialog::open_menu` while the picker is pending,
 // so the menu is only ever built after the pick installs the redirect (save present -> rows enabled),
 // where the normal post-pick accept-byte flow opens it fresh -- identical to the working early-pick
@@ -701,7 +701,7 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     // dropping a request is a deferral rather than a loss.
     let suppressed = TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst);
     let n = TITLE_OPEN_MENU_PASSTHROUGH_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    // Observe the a40 edge as an event, not by sampling (bd er-effects-rs-1742).
+    // Observe the a40 edge as an event, not by sampling.
     //
     // `OWN_STEPPER_MENU_OPENED` used to be latched in one place: `product_core_autoload_tick`, which
     // sets it only on a tick that happens to read `dialog+0xa40 == 1`. But a40 is set inside
@@ -969,7 +969,7 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.store(native_job, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.store(native_window, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
-    // Identity layer (er-effects-rs-j74t): this job is now masquerade-preserved; its destructor
+    // Identity layer: this job is now masquerade-preserved; its destructor
     // must apply the strict owningMenuWindow lifetime predicate instead of the state heuristic.
     masquerade_preserved_job_note(native_job);
     append_autoload_debug(format_args!(
@@ -1028,7 +1028,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
-    // Identity layer (er-effects-rs-j74t): this job is now masquerade-preserved; its destructor
+    // Identity layer: this job is now masquerade-preserved; its destructor
     // must apply the strict owningMenuWindow lifetime predicate instead of the state heuristic.
     // (On the return-to-title rebuild this latch is overwritten with the new job ~1ms before the
     // stale job's ~MenuWindowJob runs, so the single-latch atomics cannot identify the stale job --

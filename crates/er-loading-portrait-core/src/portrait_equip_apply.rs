@@ -12,7 +12,7 @@
 //! A failed write is not a silent one. Every read is fault-guarded and a failure at any point bumps
 //! `PORTRAIT_EQUIP_RESTORE_FAILURES` and returns `None`, so a run whose portrait was built from the
 //! mutilated array says so in telemetry instead of looking like a run where the repair simply had
-//! nothing to do -- the exact false negative that let PR #128 report a pass over a nude character.
+//! nothing to do -- the exact false negative that once reported a pass over a nude character.
 
 use core::sync::atomic::Ordering;
 

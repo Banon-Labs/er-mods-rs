@@ -19,13 +19,12 @@ changed and the regeneration command, and exit 0.
 Which paths count. The paths changed by the commits no remote has yet: the union of each
 commit's diff against its first parent over `git rev-list <rev> --not --remotes`, plus the working
 tree when the subject is `HEAD`. A commit already on a remote branch already passed this gate
-there, and branches stacked on an unmerged board regeneration (cabbf277, on
-`origin/feat/build-kit-consumables-crit-row` and not on main) would otherwise carry that
-regeneration's `weapon_boards.rs` in every merge-base diff and block forever. When no commit is
-unpushed (CI, where the pull request is already on the remote) or there are more than
-`MAX_UNPUSHED` of them (no remote-tracking refs at all), the paths are the diff against
-`merge-base(origin/main, <rev>)` instead, the same diff `check-stages.py`'s stage selection reads.
-A diff that cannot be resolved blocks, the safe direction for a gate.
+there, and branches stacked on an unmerged board regeneration (cabbf277, on a remote branch and
+not on main) would otherwise carry that regeneration's `weapon_boards.rs` in every merge-base diff
+and block forever. When no commit is unpushed (CI, where the pull request is already on the
+remote) or there are more than `MAX_UNPUSHED` of them (no remote-tracking refs at all), the paths
+are the diff against `merge-base(origin/main, <rev>)` instead, the same diff `check-stages.py`'s
+stage selection reads. A diff that cannot be resolved blocks, the safe direction for a gate.
 """
 
 from __future__ import annotations
