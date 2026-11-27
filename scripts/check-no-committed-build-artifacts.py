@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if any build output is tracked in git.
+"""Fail if any build output is tracked in git, or untracked and not ignored (the next `git add -A`).
 
 Why this exists. `.gitignore` opened with a root-anchored `/target`, which ignores
 only the workspace's own build directory. A cargo project nested anywhere else --
@@ -60,8 +60,12 @@ def _is_cargo_build_path(parts: list[str]) -> bool:
 
 
 def tracked_files(repo_root: Path) -> list[str]:
+    """Tracked paths plus untracked ones git does not ignore -- what `git add -A` would sweep in.
+
+    The index alone let a new, unstaged file pass locally and fail CI once committed (measured
+    2026-11-25 on the comment-caps gate, which selected its files the same way)."""
     out = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z"],
+        ["git", "-C", str(repo_root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         capture_output=True,
         text=True,
         check=True,
@@ -69,7 +73,8 @@ def tracked_files(repo_root: Path) -> list[str]:
         # bound <= 30s so a mistake fails fast instead of hanging the gate.
         timeout=30,
     ).stdout
-    return [p for p in out.split("\0") if p]
+    # An unmerged path is listed once per stage; the dict keeps the first and the order.
+    return [p for p in dict.fromkeys(out.split("\0")) if p]
 
 
 def violations(paths: list[str]) -> tuple[list[str], list[str]]:
@@ -109,9 +114,27 @@ def selftest() -> None:
     # `crates/target/` is a crate named target whose child is `src` -- source, not a
     # build directory. Both were live false positives in this checker's first draft.
     assert binary == ["tools/prebuilt/helper.pdb"], binary
+
+    # An untracked build output git does not ignore is what `git add -A` sweeps in next, so it is
+    # reported; an ignored one is not.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        git = ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["init", "-q"], check=True, timeout=30)
+        (root / ".gitignore").write_text("ignored.dll\n", encoding="utf-8")
+        (root / "src.rs").write_text("fn main() {}\n", encoding="utf-8")
+        subprocess.run(git + ["add", ".gitignore", "src.rs"], check=True, timeout=30)
+        (root / "stray.exe").write_bytes(b"MZ")
+        (root / "ignored.dll").write_bytes(b"MZ")
+        build, binary = violations(tracked_files(root))
+        assert (build, binary) == ([], ["stray.exe"]), (build, binary)
+
     print(
         "[check-no-committed-build-artifacts] selftest ok "
-        "(8 cases: profile dir, CACHEDIR, triple dir, source, doc, stray binary, substring, crate-named-target)"
+        "(9 cases: profile dir, CACHEDIR, triple dir, source, doc, stray binary, substring, crate-named-target, "
+        "untracked binary)"
     )
 
 
@@ -125,7 +148,10 @@ def main() -> int:
     if not build and not binary:
         return 0
 
-    print("[check-no-committed-build-artifacts] FAIL: build output is tracked in git.")
+    print(
+        "[check-no-committed-build-artifacts] FAIL: build output is tracked in git, "
+        "or untracked and not ignored."
+    )
     if build:
         print(f"\n  {len(build)} file(s) under a `target/` directory:")
         for path in build[:20]:
@@ -137,8 +163,9 @@ def main() -> int:
         for path in binary[:20]:
             print(f"    {path}")
     print(
-        "\nUntrack them (this keeps your local copy):\n"
+        "\nUntrack a tracked one (this keeps your local copy):\n"
         "    git rm -r --cached <path>\n"
+        "and delete or ignore an untracked one.\n"
         "and make sure .gitignore has an UNANCHORED rule -- `target/`, not `/target` --\n"
         "or a nested cargo project's build dir stays unignored."
     )
