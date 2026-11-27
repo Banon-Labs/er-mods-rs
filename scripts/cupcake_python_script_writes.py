@@ -70,9 +70,9 @@ Fail-closed choices on the command, each of which makes every operand `UNKNOWN`:
 
 * a backtick or a process substitution (`<(...)`, `>(...)`);
 * a write-capable tool anywhere in the command (`cp`, `mv`, `tee`, ...), since it could
-  replace the script between this read and python's. A `git` running only a subcommand that
-  prints (`GIT_READ_ONLY_SUBCOMMANDS`, e.g. `git rev-parse HEAD`) does not count, since
-  2026-11-26; see `git_reads_only` for what still marks it;
+  replace the script between this read and python's. A plain `git rev-parse` does not count,
+  since 2026-11-26: it is the one subcommand measured to run no program named in repo config
+  (`GIT_READ_ONLY_SUBCOMMANDS`); see `git_reads_only` for what still marks it;
 * a `sed` that can write: `-i`/`--in-place`, a script read from a file (`-f`), a script that
   is not a literal (any part outside single quotes holding `$`, a backtick or a glob), or a
   literal script with a `w`/`W`/`e` command, an `s///w` or `s///e` flag, or anything the
@@ -116,16 +116,36 @@ WRITE_TOOLS = {
     "curl", "wget", "tar", "unzip", "git", "scp", "ruby", "node",
 }
 
-# `git` stays a write tool except for these subcommands, which print and change no file in the
-# work tree (2026-11-26: `cd <guard worktree> && git rev-parse HEAD && python3 tests/<x>.py`
-# was refused for the `git rev-parse`). Global options other than these mark the command, since
-# `-c core.pager=...` or `--exec-path` can run anything; so does a `--output` diff option.
-GIT_READ_ONLY_SUBCOMMANDS = {
-    "rev-parse", "status", "log", "show", "diff", "ls-files", "ls-tree", "cat-file",
-    "merge-base", "describe", "rev-list", "blame",
-}
+# `git` stays a write tool except for these subcommands, which run no program that repo config
+# or attributes name (2026-11-26:
+# `cd <guard worktree> && git rev-parse HEAD && python3 tests/<x>.py`
+# was refused for the `git rev-parse`). Only `rev-parse` qualifies. Measured the
+# same day with git 2.56.1 under a tty, in a clone with `core.fsmonitor`, `core.pager`,
+# `pager.<cmd>`, `diff.external`, `gpg.program`, `log.showSignature` and `core.hooksPath` hooks
+# each set to a command that touches a marker: `git rev-parse HEAD`,
+# `--show-toplevel --git-common-dir --abbrev-ref HEAD`,
+# `--verify` and `--is-inside-work-tree --show-prefix` ran
+# none of them, `git ls-files` ran `core.fsmonitor` and `pager.ls-files`, and `git merge-base`
+# ran `pager.merge-base`. `status`, `diff`, `show`, `log`, `cat-file --filters` and `blame` run
+# fsmonitor, `diff.external`, textconv or filter drivers, or `gpg.program` by config alone.
+# Global options other than these mark the command, since `-c core.pager=...` or `--exec-path`
+# can run anything.
+GIT_READ_ONLY_SUBCOMMANDS = {"rev-parse"}
 GIT_SAFE_GLOBAL_FLAGS = {"--no-pager", "-P", "--no-optional-locks"}
-GIT_PROGRAM_VARS = {"PAGER", "EDITOR", "VISUAL", "LESSOPEN"}
+# A name git reads from its environment (`GIT_TRACE=<file>` writes a file, `GIT_CONFIG_*` adds
+# config), or one that picks which git or which code runs. It marks every `git` when it appears
+# as a word anywhere in the command, quoted or under `bash -c`, other than read as `$NAME`.
+GIT_ENV_NAME_RE = re.compile(
+    r"(?<![\w$])(?:GIT_\w*|PAGER|EDITOR|VISUAL|LESS\w*|PATH|HOME|XDG_CONFIG_HOME|LD_\w+)(?!\w)"
+)
+# Commands that can set or export a variable whose name the command never spells out
+# (`export $n=...`, `read`, `source env.sh`), or run a string as a command (`eval`). Any of them
+# in command position marks every `git`.
+GIT_ENV_COMMANDS = {
+    "export", "declare", "typeset", "readonly", "local", "env", "read", "mapfile", "readarray",
+    "printf", "source", ".", "eval", "exec", "set", "let", "alias", "enable", "builtin",
+    "command",
+}
 
 # `sed` is judged by its arguments instead (`sed_reason`): `sed -n '1,3p'` writes nothing.
 SED_NAMES = {"sed", "gsed"}
@@ -1040,46 +1060,69 @@ def sed_script_writes(script: str) -> str | None:
         return f"sed command {command!r} not known here"
 
 
-def git_reads_only(tokens: list[str], index: int) -> bool:
-    """The `git` at `tokens[index]` runs a subcommand that only prints: `-C <dir>` and the
-    flags in `GIT_SAFE_GLOBAL_FLAGS` before it, a subcommand in `GIT_READ_ONLY_SUBCOMMANDS`,
-    and no `--output` (or an abbreviation of it), `--ext-diff` or `--textconv` up to the end of
-    the command it stands in. A `GIT_*`, `PAGER` or `EDITOR` assignment anywhere in the command
-    can point git at another program, so it marks every `git`."""
-    for word in tokens:
-        match = ASSIGN_RE.match(word)
-        if match and (match.group(1).startswith("GIT_") or match.group(1) in GIT_PROGRAM_VARS):
-            return False
-    j = index + 1
-    while j < len(tokens):
-        word = tokens[j]
-        if word == "-C" and j + 1 < len(tokens):
-            j += 2
-            continue
-        if word in GIT_SAFE_GLOBAL_FLAGS:
-            j += 1
-            continue
-        break
-    if j >= len(tokens) or tokens[j] not in GIT_READ_ONLY_SUBCOMMANDS:
+def ends_command(word: str) -> bool:
+    """`word` ends a simple command: a separator, or punctuation run together (`)&&`) that is
+    not a redirect."""
+    return word in SEPARATORS or (
+        bool(word) and set(word) <= set("<>&|;()") and word not in REDIRECTS
+    )
+
+
+def command_position(tokens: list[str], index: int) -> bool:
+    """`tokens[index]` is the first word of a simple command, with nothing before it: no
+    assignment, no `env`, `eval`, `xargs`, `timeout` or `-exec` that would run it."""
+    return index == 0 or ends_command(tokens[index - 1])
+
+
+def git_env_changed(command: str, lists: list[list[str]]) -> bool:
+    """Something in the command can change git's environment: a name from `GIT_ENV_NAME_RE`
+    anywhere in its text, or a command from `GIT_ENV_COMMANDS` in command position. Until
+    2026-11-26 only an assignment in the git's own word list counted, so `export
+    GIT_EXTERNAL_DIFF=/x; bash -c "git diff"` passed."""
+    if GIT_ENV_NAME_RE.search(command):
+        return True
+    return any(
+        word in GIT_ENV_COMMANDS and command_position(toks, i)
+        for toks in lists
+        for i, word in enumerate(toks)
+    )
+
+
+def git_reads_only(tokens: list[str], index: int, nested: bool, env_changed: bool) -> bool:
+    """The `git` at `tokens[index]` runs only `git rev-parse`: the word is exactly `git` (found
+    on `PATH`, not `./git`), in command position of the command line itself (`nested` is a
+    word list read out of a `bash -c`, `sh -c`, `eval` or quoted string, which counts as not),
+    nothing in the command changes git's environment (`env_changed`), only `-C <dir>` and the
+    flags in `GIT_SAFE_GLOBAL_FLAGS` come before the subcommand, and no word of the git command
+    holds `$` or a backtick, whose value this cannot see (2026-11-26: `o=--output=R/reader.py;
+    git diff $o` passed while `diff` was exempt)."""
+    if nested or env_changed or tokens[index] != "git" or not command_position(tokens, index):
         return False
-    for word in tokens[j + 1 :]:
-        if word in SEPARATORS or (word and set(word) <= set("<>&|;()")):
+    end = index + 1
+    while end < len(tokens) and not ends_command(tokens[end]):
+        end += 1
+    words = tokens[index + 1 : end]
+    if any("$" in word or "`" in word for word in words):
+        return False
+    j = 0
+    while j < len(words):
+        if words[j] == "-C" and j + 1 < len(words):
+            j += 2
+        elif words[j] in GIT_SAFE_GLOBAL_FLAGS:
+            j += 1
+        else:
             break
-        name = word[2:].split("=", 1)[0] if word.startswith("--") else ""
-        if len(name) >= 2 and ("output".startswith(name) or name.startswith("output")):
-            return False
-        if name in {"ext-diff", "textconv"}:
-            return False
-    return True
+    return j < len(words) and words[j] in GIT_READ_ONLY_SUBCOMMANDS
 
 
-def write_tool_reason(lists: list[list[str]]) -> str | None:
-    for toks in lists:
+def write_tool_reason(command: str, lists: list[list[str]]) -> str | None:
+    env_changed = git_env_changed(command, lists)
+    for depth_index, toks in enumerate(lists):
         for index, word in enumerate(toks):
             name = word.rsplit("/", 1)[-1]
             if name not in WRITE_TOOLS:
                 continue
-            if name == "git" and git_reads_only(toks, index):
+            if name == "git" and git_reads_only(toks, index, depth_index > 0, env_changed):
                 continue
             return "a write-capable tool in the same command"
     return None
@@ -1094,7 +1137,7 @@ def judge(command: str, cwd: str | None = None) -> list[str]:
     command_reason = None
     if "`" in command or "<(" in command or ">(" in command:
         command_reason = "command substitution"
-    elif write_tool_reason(lists):
+    elif write_tool_reason(command, lists):
         command_reason = "a write-capable tool in the same command"
     else:
         sed_why = sed_reason(command)
@@ -1491,10 +1534,38 @@ def selftest() -> int:
             (f"python3 $(echo {reader})", None),
             (f"x=$(echo > {reader}); python3 {reader}", f"UNKNOWN {reader} script path appears twice"),
             (f"cd {tmp}; x=$(echo > analyse.py); python3 {reader}", f"UNKNOWN {reader} the script is a redirect target"),
-            # A git that only prints does not mark the command (2026-11-26); one that can
-            # write, or run another program, does.
+            # A plain `git rev-parse` does not mark the command (2026-11-26); a git that can
+            # write, or run a program set in config, attributes or the environment, does.
             (f"git rev-parse HEAD && python3 {reader}", f"READONLY {reader}"),
-            (f"git -C {tmp} --no-pager log --oneline -1; python3 {reader}", f"READONLY {reader}"),
+            (f"git -C {tmp} --no-pager -P --no-optional-locks rev-parse --show-toplevel; python3 {reader}",
+             f"READONLY {reader}"),
+            (f"cd {tmp} && git rev-parse HEAD 2>&1 | head -1 && python3 {reader}", f"READONLY {reader}"),
+            # The review of 2026-11-26: config runs `diff.external`, textconv, fsmonitor,
+            # filter drivers and `gpg.program` with no flag on the command line.
+            (f"cd {tmp} && git diff; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git status && python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git -C {tmp} --no-pager log --oneline -1; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git ls-files; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git cat-file --filters HEAD:x; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git log --show-signature -1; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            # The environment, set anywhere in the command or under another shell.
+            (f"export GIT_EXTERNAL_DIFF=/x; bash -c \"git diff\"; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"export GIT_TRACE={reader}; git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader}"),
+            (f"n=GI; export ${{n}}T_TRACE=/x; git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader}"),
+            (f"env X=1 git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"PATH=/x:/usr/bin; git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"source {tmp}/env.sh; git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"bash -c \"git rev-parse HEAD\"; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"sh -c 'git rev-parse HEAD' && python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"eval git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"timeout 5 git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"./git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git() {{ true; }}; git rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            # A word whose value the command computes.
+            (f"o=--output={reader}; git diff $o; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"o=HEAD; git rev-parse $o; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"d={tmp}; git -C \"$d\" rev-parse HEAD; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
+            (f"git rev-parse \"$(echo HEAD)\"; python3 {reader}", f"UNKNOWN {reader}"),
             (f"git checkout -- {reader}; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
             (f"git -c core.pager=cat log; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),
             (f"git diff --output=/x; python3 {reader}", f"UNKNOWN {reader} a write-capable tool"),

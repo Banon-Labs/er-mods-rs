@@ -3271,6 +3271,13 @@ def main() -> int:
             "2>&1 | tail -3",
             True,
         ),
+        # `git status` runs `core.fsmonitor` by config alone; only `rev-parse` is exempt.
+        PolicyCase(
+            "deny-read-only-script-beside-git-status",
+            f"git status && python3 {READ_ONLY_PY_FIXTURE}",
+            False,
+            "python file write from Bash",
+        ),
         PolicyCase(
             "deny-read-only-script-beside-git-with-a-pager",
             f"git -c core.pager=cat log -1; python3 {READ_ONLY_PY_FIXTURE}",
