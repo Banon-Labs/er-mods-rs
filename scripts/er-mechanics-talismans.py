@@ -728,6 +728,52 @@ def blue_dancer_factor(t, rate, stateinfo, weight):
     return 1 + (rate - 1) * g(min(weight, 100.0) / 100.0)
 
 
+#: The SpEffect field `PlayerIns::GetStaminaRecoverySpeed` 0x1406579b0 adds to its 45.0 base, summed
+#: over the owner's SpEffects (`VERIFIED`, er-mechanics-exchange `STAMINA_REGEN_PER_S`).
+STAMINA_REGEN_FIELD = 'staminaRecoverChangeSpeed'
+
+
+def stamina_regen_add(t, talismans):
+    """Stamina per second the worn `talismans` (names, ids or `Talisman`s; unknown names are skipped)
+    add to the 45/s base: `staminaRecoverChangeSpeed` summed over each talisman's resident
+    SpEffects (`refId`, `residentSpEffectId1-4`), which hold for as long as it is worn. Green Turtle
+    Talisman 8 (SpEffect 311500), Two-Headed Turtle Talisman 10 (20370300), every other talisman 0
+    (`REGULATION`). A name worn twice counts once, as the game equips it once."""
+    total, seen = 0.0, set()
+    for name in talismans or ():
+        tal = t.get(name)
+        if tal is None or tal.id in seen:
+            continue
+        seen.add(tal.id)
+        total += sum(float(s.get(STAMINA_REGEN_FIELD, 0) or 0) for s in tal.resident)
+    return total
+
+
+_EQUIP_REGEN = {}
+#: The resident SpEffect columns of the equipment params a held or worn piece applies.
+RESIDENT_FIELDS = {'EquipParamWeapon': ('residentSpEffectId', 'residentSpEffectId1', 'residentSpEffectId2'),
+                   'EquipParamProtector': ('residentSpEffectId', 'residentSpEffectId2', 'residentSpEffectId3')}
+
+
+def equipment_regen_adds(regulation=None):
+    """{'weapon': {id: add}, 'protector': {id: add}}: `staminaRecoverChangeSpeed` summed over each
+    `EquipParamWeapon` / `EquipParamProtector` row's resident SpEffects, rows that add nothing left
+    out. `REGULATION` 2026-11-13: the Great Turtle Shell in every affinity (31140000..31141200,
+    SpEffect 5311400 '[Weapon] Great Turtle Shell - Boost Stamina Recovery', +3), one unnamed weapon
+    row (99060000, SpEffect 6990, -10), and no armor row. Read once per regulation."""
+    if regulation not in _EQUIP_REGEN:
+        files = PR.load(regulation)
+        sp = {r['id']: float(r[STAMINA_REGEN_FIELD]) for r in
+              PR.rows(PR.param_bytes(files, 'SpEffectParam'), [STAMINA_REGEN_FIELD])[0] if r[STAMINA_REGEN_FIELD]}
+        out = {}
+        for stem, kind in (('EquipParamWeapon', 'weapon'), ('EquipParamProtector', 'protector')):
+            rows = PR.rows(PR.param_bytes(files, stem), list(RESIDENT_FIELDS[stem]))[0]
+            out[kind] = {r['id']: sum(sp.get(r[f], 0.0) for f in RESIDENT_FIELDS[stem]) for r in rows
+                         if any(r[f] in sp for f in RESIDENT_FIELDS[stem])}
+        _EQUIP_REGEN[regulation] = out
+    return _EQUIP_REGEN[regulation]
+
+
 def multipliers(t, talismans, ctx=None):
     """Attack-side multipliers of the equipped talismans for one attack context (see module doc)."""
     ctx = dict(ctx or {})
@@ -1009,6 +1055,18 @@ def selftest():
     check('Crucible Knot', defender_modifiers(t, ['Crucible Knot Talisman'], {})['headshot_bonus_removed'], True)
     d = defender_modifiers(t, ["Talisman of Lord's Bestowal"], {'active': {'lords_bestowal'}})
     check("Lord's Bestowal while drinking", d['poise_mult'], 1 / 0.65)
+    # Stamina regeneration adds (talismans.md section 4): only the two turtles carry one.
+    check('Green Turtle adds 8 stamina/s', stamina_regen_add(t, ['Green Turtle Talisman']), 8.0)
+    check('Two-Headed Turtle adds 10 stamina/s', stamina_regen_add(t, ['Two-Headed Turtle Talisman']), 10.0)
+    check('Green Turtle worn twice counts once, Hammer adds none',
+          stamina_regen_add(t, ['Green Turtle Talisman', 'Green Turtle Talisman', 'Hammer Talisman', 'nope']), 8.0)
+    check('only the turtles add stamina regeneration',
+          sorted(x.name for x in t if stamina_regen_add(t, [x])),
+          ['Green Turtle Talisman', 'Two-Headed Turtle Talisman'])
+    eq = equipment_regen_adds()
+    check('the Great Turtle Shell adds 3 stamina/s in every affinity, and no armor adds any',
+          (sorted(set(v for k, v in eq['weapon'].items() if 31140000 <= k <= 31141200)),
+           len([k for k in eq['weapon'] if 31140000 <= k <= 31141200]), eq['protector']), ([3.0], 13, {}))
     # Independent grounding: the slot table against a fresh survey of every weapon.
     stats = slot_survey(t)
     for slot, want in SLOT_SUBCATS.items():

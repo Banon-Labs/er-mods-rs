@@ -123,10 +123,15 @@ def tool_from_motion(m: dict, sign: float = 1.0) -> dict:
     animation (its -Z path is toward the other player), -1 for a backward one."""
     ready = m["ready"] if m["ready"] is not None else len(m["path"]) - 1
     k = min(int(math.floor(ready)), len(m["path"]) - 1)
+    # The first frame he can walk or run (`er-mechanics-ashes.punish_lead`): the move cancel, never
+    # before the R1 frame; a dodge without one runs from its R1 frame.
+    move = ready if m.get("move") is None else max(float(m["move"]), ready)
+    j = min(int(math.floor(move)), len(m["path"]) - 1)
     # Forward is -Z in the clip; `along` is the distance toward the other player.
     along = [sign * -z for _, z in m["path"]]
     return {"anim": m["anim"], "iframes": m["iframes"], "ready": round(ready, 1), "dodge": m["dodge"],
-            "along": along, "at_ready": round(along[k], 3), "distance": m["distance"]}
+            "move": round(move, 1), "along": along, "at_ready": round(along[k], 3),
+            "at_move": round(along[j], 3), "distance": m["distance"]}
 
 
 def dodge_tools(kind: str) -> dict:
@@ -142,9 +147,12 @@ def dodge_tools(kind: str) -> dict:
 def arrival(gap: np.ndarray, tools=DEFAULT_TOOLS, k: float | None = None) -> tuple:
     """Per gap (metres to close before the attack can start): (frames until the attack starts,
     i-frames of the dodge used, from the start of the approach; 0 when running). Running costs
-    `gap x k`; a forward dodge costs its first R1 frame plus running whatever its path to that
-    frame leaves (`INFERRED`: one dodge, then running; it moves him up to that frame and no
-    farther)."""
+    `gap x k`. A forward dodge whose path has closed the gap by its first R1 frame costs that
+    frame, or by a later frame before its move cancel that frame; otherwise it costs its move
+    cancel plus running whatever its path to that frame leaves (`er-mechanics-ashes.punish_lead`:
+    no walk or run starts before the move cancel, env 2000, `VERIFIED`; the medium roll's R1 f20,
+    move f22, Bloodhound's Step's f17 and f29, `MEASURED`). One dodge, then running
+    (`INFERRED`)."""
     k = frames_per_metre() if k is None else k
     gap = np.maximum(np.asarray(gap, float), 0.0)
     best = gap * k
@@ -153,7 +161,12 @@ def arrival(gap: np.ndarray, tools=DEFAULT_TOOLS, k: float | None = None) -> tup
         m = kind if isinstance(kind, dict) else dodge_tools(kind)["fwd"]
         if not m:
             continue
-        t = m["ready"] + np.maximum(0.0, gap - m["at_ready"]) * k
+        move, at_move = m.get("move", m["ready"]), m.get("at_move", m["at_ready"])
+        t = move + np.maximum(0.0, gap - at_move) * k
+        # The first frame between the R1 and the move cancel whose path has closed the gap.
+        for f in reversed(range(int(math.floor(m["ready"])) + 1, int(math.floor(move)))):
+            t = np.where(gap <= m["along"][min(f, len(m["along"]) - 1)], float(f), t)
+        t = np.where(gap <= m["at_ready"], m["ready"], t)
         better = (t < best) & (gap > 0)
         best = np.where(better, t, best)
         ifr = np.where(better, m["iframes"], ifr)
@@ -400,6 +413,29 @@ def slot_neutral(npool: NeutralPool, slot: dict, atk: dict | None, entry: float 
 
 
 # --------------------------------------------------------------------------------------------
+# spacing: backing away from a committed opener
+
+
+def backoff_whiffs(reach: float, live: tuple, cue: float = 0.0, speed: float | None = None) -> list:
+    """[(weight, whiffed, metres between them when its live window closes)] per reaction quantile:
+    a defender who meets an opener thrown from its own `reach` (the race's rule: the attacker
+    stands at his reach and strikes) by running back on reaction instead of rolling. He starts at
+    `cue` plus his reaction (`er-mechanics-ashes.reaction_delays`: the reaction time and two network
+    legs) and runs straight back at `speed` (locked-on run, `locomotion`). `live` is the opener's
+    first and last live frame, counted like `cue` from its start. At its reach the opener just
+    touches him, so any distance gained by its first live frame is a whiff (`INFERRED`: the reach
+    is where every live frame's contact ends, as the race treats it)."""
+    speed = locomotion()["run"] if speed is None else speed
+    out = []
+    for delay, w in _mod("er-mechanics-ashes").reaction_delays():
+        press = cue + delay
+        whiff = press < live[0]
+        gap = reach + speed * max(0.0, live[1] - press) / TAE_FPS
+        out.append((w, whiff, gap))
+    return out
+
+
+# --------------------------------------------------------------------------------------------
 # self test
 
 
@@ -427,6 +463,19 @@ def selftest() -> int:
           f"arrival: nothing to close costs nothing, 1 m is run ({t[1]:.1f} f), 5 m is rolled ({t[2]:.1f} f)")
     t2, _ = arrival(np.array([5.0]), ("roll", "step"), k)
     check(t2[0] < t[2], "the step closes 5 m sooner than the roll")
+    # No run before the move cancel (env 2000): the roll's f22, the step's f29. A gap the roll's path
+    # closes by f20 costs f20; 5 m costs f22 plus the run from where the roll is at f22 (from f20
+    # it was 33.27); a gap the step's path closes after its R1 at f17 and before f29 costs the
+    # first frame it is closed on.
+    rf, sf = roll["fwd"], step["fwd"]
+    t3, _ = arrival(np.array([3.0, 5.0]), (rf,), k)
+    mid = round((sf["at_ready"] + sf["at_move"]) / 2, 3)
+    first = next(f for f in range(18, 29) if sf["along"][f] >= mid)
+    t4, _ = arrival(np.array([mid]), (sf,), 1e9)
+    check(rf["move"] == 22 and sf["move"] == 29 and t3[0] == 20 and abs(t3[1] - (22 + (5.0 - rf["at_move"]) * k)) < 1e-9
+          and round(float(t3[1]), 2) == 34.59 and t4[0] == first,
+          f"arrival from the move cancel: roll move f{rf['move']:g} (5 m: f{t3[1]:.2f}), step move f{sf['move']:g}; "
+          f"the step closes {mid} m on f{t4[0]:g}")
 
     # A synthetic pool: two profiles at the same strike frame, one short (2.5 m) and one long (5 m).
     class P:
@@ -505,6 +554,16 @@ def selftest() -> int:
           and neutral_exchange(npool, 16.0, 4.0, 100.0, [])["f_neutral"] == 1.0,
           f"priced trades: net 1/3 with an 800 hit ({pr['net_hp']:.4f}); no damage given, unpriced")
     p.trade_clamp = None
+    # Spacing: a slow opener is backed out of at every reaction, a fast one at none, and the gap
+    # at the whiff grows by the run over the frames between his start and the window's close.
+    slow, quick = backoff_whiffs(3.0, (60.0, 63.0)), backoff_whiffs(3.0, (5.0, 8.0))
+    check(all(wf for _, wf, _ in slow) and not any(wf for _, wf, _ in quick)
+          and abs(sum(w for w, _, _ in slow) - 1.0) < 1e-9,
+          "spacing: an opener live from f60 is backed out of at every reaction, one live from f5 at none")
+    gaps = [g for _, _, g in slow]
+    first = _mod("er-mechanics-ashes").reaction_delays()[0][0]
+    check(gaps == sorted(gaps, reverse=True) and abs(gaps[0] - (3.0 + loco["run"] * (63.0 - first) / TAE_FPS)) < 1e-9,
+          f"spacing: the quickest reaction gains the most ground ({gaps[0]:.2f} m at f63)")
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 

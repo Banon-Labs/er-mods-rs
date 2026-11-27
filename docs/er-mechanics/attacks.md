@@ -273,11 +273,44 @@ So a target can be hit once per hit record, and a new record starts when:
 
 Two back-to-back events with the same judge on the same index are one record, one hit.
 
+**Hit priority records** (bd er-effects-rs-dnok, VERIFIED in the named 1.16.2 dump; the addresses
+of this paragraph are 1.16.2 ones). On top of the per-index records, TAE event 341 (FUN_1404298d0)
+keeps one shared `DmgHitRecord` per `HitPriorityRecord` slot (Args byte 0, at TAE content version
+0x25, which every player TAE carries) for as long as the event runs without a gap. A swing whose
+signed Args byte 0xc is not negative takes slot 0's record covering it (`xor edx,edx` at
+0x140442d61; retried every frame while the attack has none); a skill bullet (event 2) takes the
+record of slot Args byte 0x10 covering its spawn when Args byte 0x12 is not negative; a cast
+(event 64) takes slot 0's when its Args byte 0xc is not negative (0x1403c14fd); a bullet's
+children copy it, its priority byte and its launch id (FUN_14039bba0 -> FUN_14038b740,
+`BulletAttackInfo` +0x640 / +0x648 / +0x658). Every DmgMan frame (FUN_140527c10) registers each
+attack's contacts in its record first (FUN_140521bf0, which tests no team and no damage ->
+FUN_14051b210: per victim the first registrant at the lowest priority and its id; a strictly
+lower one replaces both and clears the landed flag) and then resolves them in the same list
+order (FUN_140523710 -> FUN_14051b870): the entry's own id passes even after it has landed
+(0x14051b8c9, unless the id is -1); any other attack passes only while the flag is clear at the
+entry's priority; a refused one does no damage and puts him in its own lists. A swing's id is
+-1, so it never passes as the entry's own; a bullet's is its launch's, so a launch's copies and
+children are one attack. A pass sets the flag (FUN_14051b370) before the hit is applied, so a
+hit the team gate refuses still spends the record (bd er-effects-rs-xb3i). So the attacks of one
+record land one hit per victim between them, plus one for each later one with a strictly lower
+priority; equal priorities on one frame go to the attack created first (FUN_140525ef0
+head-inserts, each FUN_140527d40 pass reverses the list). The slot's per-frame
+cleanup (FUN_1404a4cb0, from `ChrIns::PrePhysicsSafe1`, task group 81) runs after both TAE passes
+(74, 76) and before DmgMan (120-122). Scope: 1461 player animations carry event 341 (slot 0
+1606 times, 1 44 times, 2 42 times), regular movesets included; 5026 swing events carry priority
+-1 (no record), 3904 carry 0-2; 2009 swings and 829 skill bullets start inside a matching window.
+
 The tool walks each animation at 60 Hz, clip time, and reports per hitbox `attack_index`,
 `hit_records` (records the event opens), `follows_judge` (the different judge it took the index
-from) and `hits` (`hit_records`, or 0 when the row cannot damage an opponent). Per slot,
-`max_hits` sums them: the ceiling, VERIFIED. Whether each record lands is geometry, which the
-tool does not model.
+from), `priority_record` and `priority` (the hit priority record it takes, `event_record`) and
+`hits` (`hit_records`, or 0 when the row cannot damage an opponent; for a hitbox in a hit priority
+record, 1 when it lands under the rule above with every hitbox touching, else 0). Per slot,
+`max_hits` sums them: the ceiling, VERIFIED. Milady's running R1 went from 2 to 1 (judges 123 and
+120 share the f16-19 record at priority 0); a powerstanced Dryleaf Arts L1 #2 from 4 to 2 (both
+fists of each strike share one record; the fist created first, 810 then 815, lands); the
+Greatsword's L1 #1 keeps 2 (judge 800, priority 0, re-opens the record judge 805 took at
+priority 1). Not modelled: a row that cannot damage an opponent still spends the record when it
+registers first. Whether each record lands is geometry, which the tool does not model.
 
 `sweep_hits` (and `sweep_hit` per hitbox, `own_sweep_hits` for the slot's own judge) leaves out
 records with `follows_judge` set. INFERRED: such an event is the next segment of the same blade

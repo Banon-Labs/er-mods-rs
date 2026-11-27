@@ -375,7 +375,22 @@ def seq_cache_path() -> Path:
     return CACHE / "interrupt-members.json"
 
 
-def build_cache(jobs: int, sweep: Path, rl: int = 150, window: int = 10) -> dict:
+def build_lock(jobs: int, wait: bool = True, log=None):
+    """The context `build_cache` runs its workers in: `er-mechanics-pool-lock` held for `jobs` above
+    1 (waiting for, or with `wait` False exiting 3 on, another pooled run, named to `log`), nothing
+    for one core."""
+    import contextlib
+    if jobs <= 1:
+        return contextlib.nullcontext()
+    return _mod("er-mechanics-pool-lock").held(f"interrupt --build-cache --jobs {jobs}", wait=wait, log=log)
+
+
+def build_cache(jobs: int, sweep: Path, rl: int = 150, window: int = 10, wait: bool = True) -> dict:
+    """Extract every target weapon-grip's sequences into `seq_cache_path`. With `jobs` above 1 the
+    workers run under `er-mechanics-pool-lock` (one pooled run at a time across every checkout,
+    shared with `er-mechanics-attack-similarity.py`'s pooled compute): another run holding it is
+    waited for, named by pid and working directory, or with `wait` False the call exits 3
+    (`build_lock`)."""
     import multiprocessing as mp
     reg = ATK.Regulation(None)
     pool_raw = EXCH.opponent_pool(reg, CACHE / "builds.jsonl", rl - window, rl + window)
@@ -387,7 +402,7 @@ def build_cache(jobs: int, sweep: Path, rl: int = 150, window: int = 10) -> dict
     todo = [t for t in targets if f"{t[0]}|{t[1]}" not in have]
     print(f"{len(targets)} weapon-grips, {len(todo)} to extract", flush=True)
     if todo:
-        with mp.get_context("fork").Pool(jobs, initializer=_worker_init) as p:
+        with build_lock(jobs, wait), mp.get_context("fork").Pool(jobs, initializer=_worker_init) as p:
             for i, (job, res) in enumerate(p.imap_unordered(_worker_members, todo, chunksize=2)):
                 have[f"{job[0]}|{job[1]}"] = res
                 if i % 50 == 0:
@@ -1070,6 +1085,14 @@ def selftest() -> int:
     roll = seqs.get("roll_r1")
     check(roll is not None and roll["invuln"] == [(0.0, 13.0)] and roll["strike"] > 20.0,
           "rolling R1 starts after the 20-frame roll entry and carries its 13 i-frames")
+    # One pooled run at a time (2026-11-16, a pooled run started while another was going): with
+    # another process holding the shared lock, --build-cache's pooled lock (`build_lock`, --jobs 2)
+    # under --no-wait exits 3 naming that process, and one core takes no lock.
+    LOCK = _mod("er-mechanics-pool-lock")
+    lok, ldetail = LOCK.exclusive_check(lambda w, log: build_lock(2, w, log))
+    import contextlib
+    check(lok and isinstance(build_lock(1, False), contextlib.nullcontext),
+          f"--build-cache --jobs 2 --no-wait meets a held er-mechanics-pool-lock: {ldetail}; --jobs 1 takes none")
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -1089,6 +1112,8 @@ def main() -> int:
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--no-sa-rate", action="store_true")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    ap.add_argument("--no-wait", action="store_true",
+                    help="with --build-cache: exit 3 when another pooled run holds er-mechanics-pool-lock")
     ap.add_argument("--out", type=Path)
     ap.add_argument("--top", type=int, default=20)
     # `er-builds-optimize.sweep_cache("grease", "dlc-drawstring", 150, 200)`.
@@ -1098,7 +1123,7 @@ def main() -> int:
     if a.selftest:
         return selftest()
     if a.build_cache:
-        build_cache(a.jobs, a.sweep, a.rl)
+        build_cache(a.jobs, a.sweep, a.rl, wait=not a.no_wait)
         return 0
     if a.run:
         out = a.out or Path(f"interrupt-{a.rl}.json")

@@ -502,8 +502,8 @@ STAMP_DEPS: dict[str, tuple[str, ...]] = {
         'ash_ban', 'ids', 'table'
     ),
     'er-builds-optimize.py': (
-        'Scorer.__init__', '_sibling', '_weights', 'archetype', 'bracket_defender', 'corpus_rows', 'is_pvp',
-        'load_profile', 'other_load', 'stat_caps'
+        'Scorer.__init__', '_self_damage', '_sibling', '_weights', 'archetype', 'bracket_defender',
+        'corpus_rows', 'is_pvp', 'load_profile', 'other_load', 'skill_cast_hits', 'skill_levers', 'stat_caps'
     ),
     'er-hks-weapon-category-table.py': (
         'Reader.__init__', 'Reader.i32', 'Reader.take', 'Reader.u32', 'Reader.u64', 'Reader.u8',
@@ -547,31 +547,42 @@ STAMP_DEPS: dict[str, tuple[str, ...]] = {
         'Levers.__init__', 'Levers.cast', '_load'
     ),
     'er-mechanics-ash-stats.py': (
-        'AshScorer.__init__', 'AshScorer.hits', '_mod'
+        '<class>Conflict', 'AshScorer.__init__', 'AshScorer.hits', '_mod'
     ),
     'er-mechanics-ash-table.py': (
         'Table.__init__', 'Table._armor', 'Table.set_weapon', 'Table.travel', '_disengage', '_sibling',
         'window_defender'
     ),
     'er-mechanics-ashes.py': (
-        '<class>Opponents', 'AshTables.__init__', 'AshTables._mode', 'AshTables.arts_name',
-        'AshTables.effect_kind', 'AshTables.find_arts', 'AshTables.find_weapon', 'AshTables.fp_cost',
-        'AshTables.is_buff', 'AshTables.marker_ids', 'AshTables.speffect_summary', 'WeaponContext.__init__',
-        'WeaponContext.multiplier', '_bullet_damages_self', '_frames', '_hit_contacts', '_hit_contacts_raw',
-        '_jt8_unconditional', '_load', '_opening', '_pose', '_skill_profile', '_unit', 'anim_actions',
-        'anim_recovery', 'bullet_buffs', 'bullet_damages', 'bullet_flight', 'bullet_harms', 'bullet_tree',
-        'contact_geometry', 'ctx_grip', 'diff_category', 'evasion_motion', 'fly_tree', 'hit_attack',
-        'improves', 'is_two_handed', 'lead_in', 'lead_in_hyperarmor', 'main_anim', 'no_fp_twins', 'phys_type',
-        'plain', 'pvp_damage', 'resolve_judge', 'roll_motion', 'skill_hits', 'skill_profile', 'skill_tae',
-        'stance_buttons', 'stance_windup', 'sword_arts_categories', 'weapon_diff_category'
+        '<class>CaughtModel', '<class>FollowupModel', '<class>Opponents', '<class>_GroupAims',
+        '<class>_LazyWorth', '<class>_PoseClip', '<class>_TouchTable', 'AshTables.__init__',
+        'AshTables._mode', 'AshTables.arts_name', 'AshTables.effect_kind', 'AshTables.find_arts',
+        'AshTables.find_weapon', 'AshTables.fp_cost', 'AshTables.is_buff', 'AshTables.marker_ids',
+        'AshTables.speffect_summary', 'WeaponContext.__init__', 'WeaponContext.multiplier',
+        '_Entries.__init__', '_ar_module', '_baim', '_bchild_frame', '_bcross', '_bdot', '_blevel', '_blook',
+        '_bmix', '_bnorm', '_brotate', '_bshot', '_bspread', '_bullet_damages_self', '_carrier_touch',
+        '_dedup_weights', '_dummy_axes', '_first_axes', '_flight_frame', '_fly_loop', '_fly_loop_one',
+        '_fly_rows', '_frames', '_frames_at', '_hit_contacts', '_hit_contacts_raw', '_jt8_unconditional',
+        '_launch_key', '_launch_start', '_lay_rows', '_load', '_lock_at', '_opening', '_place_dummy',
+        '_plain_cdf', '_pose', '_profile', '_skill_profile', '_speed_profile', '_standing', '_touch_samples',
+        '_unit', '_vcross', '_vdot', '_vnorm', '_vscale', 'anim_actions', 'anim_recovery', 'bullet_buffs',
+        'bullet_damages', 'bullet_harms', 'bullet_launch', 'bullet_tree', 'carrier', 'cast_mask',
+        'contact_geometry', 'ctx_grip', 'diff_category', 'disc_radii', 'draw_quantile', 'evasion_motion',
+        'flight_moves', 'fly_members', 'fly_shots', 'fly_tree', 'held_models', 'hit_attack', 'homes',
+        'improves', 'interval_frames', 'is_two_handed', 'launches', 'lead_in', 'lead_in_hyperarmor',
+        'lock_point', 'look_frame', 'main_anim', 'no_fp_twins', 'phys_type', 'plain', 'pvp_damage',
+        'reaction_delays', 'record_mask', 'record_time', 'resolve_judge', 'roll_motion', 'root_offset',
+        'row_shots', 'shot_draws', 'skill_bullet_launch', 'skill_hits', 'skill_profile', 'skill_tae',
+        'stance_buttons', 'stance_windup', 'sword_arts_categories', 'weapon_diff_category', 'yaw_frame'
     ),
     'er-mechanics-attacks.py': (
         'Regulation.__init__', 'Regulation.find_weapon', 'Regulation.resolve_behavior_id', '_bound',
-        '_early_interval', '_first_open', '_load', '_reach', '_tidy', 'attack_numbers', 'clip_frame',
-        'clip_length', 'clip_to_real', 'hit_records', 'hkx_duration', 'hkx_path', 'motion_category',
-        'real_frame', 'recovery_details', 'recovery_windows', 'release_lead_in', 'resolve_events',
-        'resolve_phys_type', 'slot_animation', 'tae_animations', 'tae_details', 'uses_stealth_attack',
-        'weapon_attacks'
+        '_early_interval', '_find_image', '_first_open', '_load', '_reach', '_s8', '_tidy', 'attack_numbers',
+        'clip_frame', 'clip_length', 'clip_to_real', 'event_record', 'hit_records', 'hkx_duration',
+        'hkx_path', 'motion_category', 'priority_records', 'real_frame', 'record_attach_time', 'record_contact',
+        'recovery_details', 'recovery_windows', 'release_lead_in', 'resolve_events', 'resolve_phys_type',
+        'shared_landings', 'slot_animation', 'tae_animations', 'tae_content_version', 'tae_details',
+        'uses_stealth_attack', 'weapon_attacks'
     ),
     'er-mechanics-backstab.py': (
         '_mod', 'skill_blocks_backstab', 'throw_limits'
@@ -623,17 +634,19 @@ STAMP_DEPS: dict[str, tuple[str, ...]] = {
         'pool_reaches', 'tool_from_motion'
     ),
     'er-mechanics-reach.py': (
-        'Reach.__init__', '_anibnd_file', '_azimuth', '_body_frame', '_capsule_points', '_carry', '_clip',
-        '_clip_time_before', '_flver_string', '_frame', '_hkx_bind', '_load', '_merge', '_meridional_moment',
-        '_pose_module', '_qconj', '_qrot', '_root_peak_forward', '_rot_axis', '_shape_left',
-        '_shape_world_points', '_turn_integral', '_turn_lockin', 'attached_dummies', 'attack_reach',
-        'blade_sweep', 'body_dummies', 'body_shape_points', 'contact_centre_distance', 'contact_disc_radius',
-        'coverage_factor', 'defender_capsules', 'defender_hurtbox', 'defender_profile', 'dummy_positions',
-        'flver_bone_to_model', 'footprint', 'front_contact_times', 'hit_shapes', 'hkx_source', 'read_flver',
-        'real_seconds', 'resolve_clip', 'rigged_shape_points', 'shape_extent', 'skill_reach', 'speed_at',
-        'speed_windows', 'sweep_coverage', 'swing_shape', 'tae_imports', 'turn_details', 'turn_rate_at',
-        'turn_windows', 'weapon_anibnd_dirs', 'weapon_attached', 'weapon_clip', 'weapon_dummies',
-        'weapon_flver_path', 'weapon_rig', 'weapon_rig_pose', 'window_points', 'world_reach'
+        'Reach.__init__', '_anibnd_file', '_azimuth', '_body_frame', '_capsule_points', '_carry', '_children',
+        '_clip', '_clip_time_before', '_contacts_real', '_flver_string', '_frame', '_hkx_bind', '_load',
+        '_merge', '_meridional_moment', '_own_or_node', '_pose_module', '_qconj', '_qmul', '_qrot',
+        '_root_peak_forward', '_rot_axis', '_shape_left', '_shape_world_points', '_subtree', '_turn_integral',
+        '_turn_lockin', 'aim_candidates', 'attached_dummies', 'attack_reach', 'blade_sweep', 'body_dummies',
+        'body_shape_points', 'contact_centre_distance', 'contact_disc_radius', 'coverage_factor',
+        'defender_capsules', 'defender_hurtbox', 'defender_profile', 'dummy_positions', 'flver_bone_to_model',
+        'footprint', 'free_aim_pick', 'free_aim_twist', 'front_contact_times', 'hit_shapes', 'hkx_source',
+        'pitch_pose', 'pitch_series', 'read_flver', 'real_seconds', 'resolve_clip', 'rigged_shape_points',
+        'shape_extent', 'skill_reach', 'speed_at', 'speed_windows', 'sweep_coverage', 'swing_shape',
+        'tae_imports', 'turn_details', 'turn_rate_at', 'turn_windows', 'twist_engaged', 'twist_nodes',
+        'twist_requests', 'twist_step', 'weapon_anibnd_dirs', 'weapon_attached', 'weapon_clip',
+        'weapon_dummies', 'weapon_flver_path', 'weapon_rig', 'weapon_rig_pose', 'window_points', 'world_reach'
     ),
     'er-mechanics-resources.py': (
         'Model.__init__', 'Model._by_name', 'Model.burden', 'Model.rate', 'Model.speffects_for', 'f32'
@@ -651,6 +664,11 @@ STAMP_DEPS: dict[str, tuple[str, ...]] = {
     'er_corpus.py': (
         'iter_rows', 'kept'
     ),
+    'hkx-tagfile.py': (
+        'Tagfile.__init__', 'Tagfile._items', 'Tagfile._patches', 'Tagfile._strs', 'Tagfile._types',
+        'Tagfile._walk', 'Tagfile.cstr', 'Tagfile.find_items', 'Tagfile.member_map', 'Tagfile.tname',
+        'Type.__init__', 'Type.all_members', '_packed'
+    ),
     'regulation-params.py': (
         '<class>ZstdUnavailable', 'bnd4_entries', 'dcx_unpack', 'decrypt', 'require_zstd'
     ),
@@ -662,7 +680,7 @@ STAMP_SIM_DEPS: dict[str, tuple[str, ...]] = {
         '_stagger_of', '_window_step', 'carried_states', 'poise_carries', 'sim_key', 'simulate'
     ),
     'er-mechanics-attacks.py': (
-        '_load',
+        '_find_image', '_load'
     ),
     'er-mechanics-exchange.py': (
         '_sibling',

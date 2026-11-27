@@ -192,13 +192,26 @@ chip       CalculateGuardDamage 0x140689460, per element e
    info+0x5c = (1 + weapon.guardCutCancelRate/100) * (1 + atk.guardCutCancelRate/100)
               (FUN_140652610; 1.0 when AttackInfo+0xf4 is set, which is not identified)
    HP(e)   = CalculateDefense(e) * pass(e)                     CalculateDamageBasic 0x1406849d0
-poise      poise damage *= (1 - saGuardCutRate/100) while guarded   FUN_14047f260
+poise      ApplySuperArmorDamage 0x14047dea0: damage = info+0x244 * info+0x100 * ... * (1 - f)
+           * SpEffect rate, f = the module's vtable slot 4 called with info+0x258 (0x14047e0b5).
+           CSPlayerSuperArmorModule's (vtable 0x142a3af68) is FUN_14047f260: the guard hand's
+           EquipParamWeapon.saGuardCutRate (+0x280) x 0.01 when info+0x258 is set, else 0.
+           CalculateDamage sets info+0x258 when the hit meets a raised guard (VERIFIED; 2.7.2.0:
+           call 0x14047e6f5, vtable 0x142a3ff98 slot 4 = 0x14047f8a0). saGuardCutRate is 0 on
+           every named weapon row but Unarmed (10); the other 20 nonzero rows have no name
+           (11000-13000, 100000-101000, 98990000-99060000) (REGULATION, all 3,636 rows).
 reaction   GUARD_REACTION_TABLE[guardLevel][damage level], 5x12 ints at 0x143b340b0
            (1.17.1 0x143b380c0): 1 small, 3 middle, 4 large (HKS COMMUNITY). The damage level
            is dmgLevel, or REMAP[dmgLevel_vsPlayer] when that is nonzero (frame-advantage.md 1).
-regen      FUN_1404016d0: 45/s x TAE 225 SetSPRegenRatePercent / 100. Every GuardOn/GuardStart
-           clip holds 20 for its whole length (TAE), and the guard reactions hold 0 for their
-           first 10 / 27 / 49 frames (small / middle / large).
+regen      FUN_1404016d0: (45 + SpEffect staminaRecoverChangeSpeed sum)/s x TAE 225
+           SetSPRegenRatePercent / 100 x staminaRecoveryModifier (the sum: Green Turtle 8,
+           Two-Headed Turtle 10, talismans.md section 4; a held Great Turtle Shell 3, REGULATION;
+           the modifier 0.8 at heavy load, 0.7 overloaded, else 1.0, section 8). Every
+           GuardOn/GuardStart clip holds 20 for its whole length (TAE). A guard reaction
+           regenerates nothing until the guard comes back: its HKS state calls act(110) every
+           update, and a blocker holding L1 returns to the guard on the clip's first TAE
+           JumpTable 22 frame, f16 / f32 / f53 (small / middle / large), after the clip's own
+           TAE 225 0% span (f0-10 / f0-27 / f0-49) (VERIFIED code, TAE frames; section 7).
 ```
 
 Hammer Talisman (320700 `staminaAttackRate` 1.4) therefore scales a blocked hit's stamina cost
@@ -308,6 +321,76 @@ Two-handed blocking: a shield held two-handed takes 0.7x stamina damage, any oth
 (VERIFIED multiply). That `weaponCategory` 12 is the shield set is VERIFIED from the regulation:
 every Buckler, Kite and greatshield row reads 12.
 
+### 3a. Attacking with the guard up (2026-11-13)
+
+The user's ground truth: thrusting shields can block and attack at the same time. How:
+
+**The guard is TAE JumpTable 3 in the attack clip itself** (**TAE**, every player TAE of the
+1.17.2 extract scanned; the same event and judge a raised guard sets, section 3). Its span is
+when the guard is up, whatever the buttons do. The attack clips that carry one:
+
+| clip | what reaches it | guard (judge, clip frames) | hit |
+|---|---|---|---|
+| a057_030000 / 030010 / 030020 / 030030 | thrusting shield R1 #1-#4 | 461 f14-45 / f0-7, f16-49 / f16-45 / f0-8, f18-55 | f13-16 / f15-19 / f14-18 / f16-20 |
+| a057_030200 / 030300 / 030400 / 030700 | its running, rolling, backstep R1, guard counter | 461 f18-48 / f14-41 / f0-16, f22-59 / f22-55 | f17-20 / f14-16 / f22-25 / f20-24 |
+| a057_032000 .. 032030, 032200 .. 032700 | the same, two-handed | 471 R1 #1 f14-55 (hit f13-17), ... | |
+| a057_031030 .. 031272, 033030 .. 033282 | its jump attacks, both grips | 461 / 471 from the hit (f13-16) to the landing | |
+| a057_032900 | `AttackBothLightGuard`: R1 with the thrusting shield two-handed, guarding, L1 held | **470 f0-42** | judge 200 (the 2H R1 #1's) f15-19 |
+| a027 / a036 / a037 / a039 / a207 _030900 | `AttackRightWhileGuard`: R1 with a rapier, spear, great spear or heavy thrusting sword, guarding with the left weapon, L1 held | **460 f0-60 / f0-65 / f0-60 / f0-37 / f0-60** | judge 170 f11-14 / f12-16 / f16-19 / f13-16 / f16-19 |
+| a057_030500, 030510, 032500, 032510 | its charged R2s | 460 / 470 f10-37 .. f10-41 | f47-53 |
+| a113_030500 / 030510 (and 2H 032500 / 032510) | another category's charged R2s | 460 / 470 f0-45 / f0-31 | f52-55 / f38-41 |
+| a690 / a959 (Shield Bash, Roaring Bash) | skill | 460 f10-55 | f34-42 / f34-45 |
+| a698 / a924 (Shield Crash, Moore's Charge) | skill | 460 f25-105 | five hits f41-83 |
+| a796 (Golden Retaliation), a952 (Revenge of the Night) | skill | 470/460 f5-36; f24-43 | bullets f5-8, f12-15; f24-30 |
+| a801 / a802 (Flame Spit, Tongues of Fire) | skill | 461 f0-4; f0-35 | breath f4-7; f0-30 |
+| a047 / a048 / a049 030200, 030400 (and 2H) | a shield's own running and backstep R1 | 460 / 470 within f0-18 | f15-23 |
+
+So a thrusting shield's ordinary attacks guard from the hit frame through the recovery, not in
+the windup: R1 #1 hits f13-16 and guards f14-45, past its roll cancel (f27). Only two states hold
+the guard over the windup, and they are the ones the behavior script names for it.
+
+**Reaching them** (**VERIFIED**, c0000.hks 1.17.2 decompile `GetAttackRequest` / `ExecAttack`,
+behavior graph 1.17.1 via `er-behbnd-attack-map.py`):
+
+- `AttackBothLightGuard` (032900): `ATTACK_REQUEST_BOTH_LIGHT` while `is_guard`, `env(1108,
+  ACTION_ARM_L1) > 0` and `env(225, atk_hand) == WEAPON_CATEGORY_DUELING_SHIELD` (57). A
+  two-handed thrusting shield guards on L1 (`WeaponCategoryID` {57, TRUE, TRUE}), so R1 while
+  holding L1 is this poke.
+- `AttackRightWhileGuard` (030900, 030901, 030904 by `IndexAttackWhileGuard`: 3 for a thrusting
+  shield in the left hand, 2 for a torch, else the left weapon's guard style):
+  `ATTACK_REQUEST_ATTACK_WHILE_GUARD`, returned for R1 while `is_guard` and L1 held when the
+  right weapon is `WEAPON_CATEGORY_SPEAR` (36), `RAPIER` (27), `LARGE_SPEAR` (37) or
+  `LARGE_RAPIER` (39). Its `_Activate` sets the attack hand right and the guard hand left.
+
+**Which guard blocks.** `ExecAttack` sets the guard hand: the attacking hand by default (a
+thrusting shield's R1 guards with itself), the attacking hand two-handed, the left hand for
+`AttackRightWhileGuard`, the skill's hand for a skill (**VERIFIED**). A thrusting shield guards
+like a medium shield (`guardLevel` 3, `guardBaseRepel` 10): Carian Thrusting Shield +25 cuts
+physical 94, magic 64, fire 36, lightning 34, holy 35, guard boost 75.0 at 461 (its
+`guardStaminaCutRate` +5) and 71.4 at 460/470; Dueling Shield 88/44/39/55/53; Ritual 82/42/35/52/50
+(**REGULATION**, `shield_guard`).
+
+**What a guarded hit does to the attack** (**VERIFIED**, `ExecDamage` / `ExecPassiveAction` /
+`AttackCommonFunction` / `ArtsCommonFunction`): it takes the guard branch (`DAMAGE_TYPE_GUARD`),
+never a stagger. From a state whose passive action passes `is_attackwhileguard` FALSE (every R1
+state, every skill state) it plays `W_GuardDamageSmall` / `Middle` / `Large` (all body, by the
+table above), which ends the attack. `AttackCommonFunction` passes TRUE only for `TO_GUARDON`,
+which only `AttackRightWhileGuard_onUpdate` and `AttackBothLightGuard_onUpdate` pass: then
+`ExecDamage` returns with no reaction and the attack goes on. A guard break plays `W_GuardBreak`
+from any state. The guarded hit's poise damage is multiplied by `1 - saGuardCutRate / 100` of
+the guarding weapon (`ApplySuperArmorDamage`, **VERIFIED**, section 3's poise row), and
+`saGuardCutRate` is 0 on every thrusting shield, so it still builds in full.
+
+**Against the RL 150 pool's R1s** (**MEASURED** 2026-11-13, `er-mechanics-spells.guard_block`, the
+pool's 300 R1 #1 profiles read as their base weapons): through the Carian Thrusting Shield +25
+two-handed (470) a pool R1 passes a median 6% of its raw damage (p90 31%, the elemental ones),
+takes 7 / 15 / 24 stamina (p10 / 50 / 90, at most 35) of the pool's 146-stamina bar, and draws a
+small or middle guard reaction. One R1 never breaks it.
+
+Where the models read it: the punish model's strike (`er-mechanics-spells.strike_guard`,
+attack-similarity.md section 2e, ashes-of-war.md section 16a) and the exchange
+(`er-mechanics-exchange.exchange` `guard`, exchange.md section 2b).
+
 ## 4. Adoption in the planner corpus (MEASURED)
 
 Setup:
@@ -412,6 +495,10 @@ them in the background.
 | 88 weapon rows at guardCutCancelRate -50, 168 nonzero attack rows; Shotel R1 into Brass passes 50% (gcc 0.5); repel chip 0.5 | regulation |
 | guard reaction table at 0x143b3b0d0 (2.7.2.0, the target of the `LEA RAX` at 0x14068821a; 1.16.2 had it at 0x143b340b0); `DAMAGE_LEVEL_REMAP` equals frame-advantage's | EXE image (`ER_DEOBF_BIN`, default `eldenring-deobf-1.17.2.bin`), `er-mechanics-frame-advantage.py` |
 | no regen inside a short cycle, less drain over a long one; a punishable repel raises own guard; x4 drains more than x1 | definition / sanity only |
+| equip load: Longsword + Brass Shield burden in single precision; 50% / 80% / 120% of max load give medium / heavy / overloaded and 1.0 / 0.8 / 0.7; no max load or an unknown armor name give -1 and 1.0; a heavy blocker regenerates 0.8 of a medium one; `equip_load`'s burden less the heaviest right weapon equals `er-builds-optimize.other_load` on every RL 140-160 row both read | REGULATION, resources.md section 5, `er-builds-optimize.py` |
+| guard-reaction clips 019200/019210/019220 in a000, a002, a003, a010, a012, a013, a015: JumpTable 22 from f16 / f32 / f53, TAE 225 0% to f10 / f27 / f49; `GUARD_REACTION_REGEN_PAUSE` is the later of the two | TAE |
+| `GuardDamage{Small,Middle,Large}_onUpdate` call `act(110)` then `DamageCommonFunction(TO_GUARDON, ...)`; it calls `ExecGuardOnCancelTiming`, whose first call is `env(243)`; the full list of `act(110)` callers | compiled 1.17.2 `c0000.hks` (`ER_HKS_FILE`), `er-hks-disasm.py` |
+| the tick's bit-0x40 test and `mulss [rdi+0xe8]`; `Reset` zeroes `actionFlags`; the modifier writer's calls and its 3 -> 0.8, 4 -> 0.7, else 1.0; env 243 -> `GUARD` cancel bit + L1 held; JumpTable 22 sets bit 0x18 | EXE `eldenring-deobf-1.17.2.bin` |
 | synthetic carry rates: the pooled share skips two-handers, 2 of 2 shrinks to 7/12 and 0 of 2 to 5/12 with a 0.5 pool, an unseen class gets the pool, carried own guard = best shield's x p | definition |
 | RL 140-160 pooled shield-carry rate inside 12.9-17.8% | MEASURED corpus (calibration, 121 of 797) |
 
@@ -422,7 +509,62 @@ Settled since the first write-up (guard dig, 2026-10-01, static 1.16.2, key site
 thrusting-shield attacks and two skills, 480 the parry skills); info+0x5c is the guard-cut
 cancel; info+0x28 is the stamina damage with the attacker's `staminaAttackRate` in; the repel's
 HP cut (0.5) and that a repel still charges stamina; the +0x25a override does not exist for
-players (slot 6 returns 0); guard regeneration is 20%.
+players (slot 6 returns 0); guard regeneration is 20%, per second of game time (exchange.md
+section 3b); the guarded poise factor, `1 - saGuardCutRate / 100` (section 3, 2026-11-13); the
+equip-load factor on a blocker's regeneration and how long a guard reaction stops it (both
+2026-11-13, the next paragraphs).
+
+**Equip load (VERIFIED 2.7.2.0, `eldenring-deobf-1.17.2.bin`; the 1.16.2 named dump has the same
+block in `FUN_140660120`).** The regeneration tick (`FUN_140401ac0`) multiplies its rate by
+`staminaRecoveryModifier` (`ChrIns+0xe8`): `mulss xmm6, [rdi+0xe8]` at 0x140401b81, xmm6 holding
+`SPRegenRatePercent` / 100, and the product times `GetStaminaRecoverySpeed` (vtable +0x330, 45 + the
+SpEffect sum) at 0x140401b95. So the factor scales the turtle adds too. The `PlayerIns` update
+writes it every 1.0 s (timer `ChrIns+0x5d4`) for the main player or an NPC: burden
+`CalculateEquipmentWeight` 0x140247b80 (called at 0x140661956), max load 0x14065ed20
+(0x140661961), weight type 0x14068d8f0 (0x140661979: `CalculatePlayerWeight` 0x14068d0a0 and a
+tail jump to `GetWeightType` 0x14068d930). Then `sub r15d, 3` at 0x1406619eb picks 0.8 (0x1429ccbc8)
+for type 3 (heavy), 0.7 (0x1432a3bec) for 4 (overloaded) and 1.0 (0x1432a3bf8) for any other, and
+0x140661a2d stores it. The selftest reads each of these sites. A blocker's stamina is taken to run on
+its own client, where it is the main player (INFERRED). How the model reads each blocker's tier is
+in section 8.
+
+**The guard reaction's regeneration stop (VERIFIED code, TAE frames).**
+- Every update of `GuardDamageSmall` / `Middle` / `Large` calls `act(110)` first (pc 3 of each
+  `_onUpdate`, the 1.17.2 compiled `c0000.hks`, `er-hks-disasm.py --calls-to act`; its other
+  callers are `AddStamina`, the three `_JustGuard` updates, `SpeedUpdate` and
+  `RideMoveStaminaConsume`, and no `GuardOn` / `GuardStart` state).
+- `act(110)` sets `actionFlags` bit 0x40, which the tick tests before it adds anything (0x140401b66),
+  and `ChrCtrlModifierData::Reset` zeroes `actionFlags` every frame (0x1403c3ba2). So a guard
+  reaction regenerates nothing for as long as its state lasts, whatever its clip's TAE 225 says.
+- The state then calls `DamageCommonFunction(TO_GUARDON, ...)`, which ends in
+  `ExecGuardOnCancelTiming`. Its first test is `env(243)` (pc 3).
+- `HksEnv` sends 243 through byte table 0x140413964 (index 243 - 0xdf) and dword table 0x140413728
+  to 0x14041151d. That case is true when bit 0x18 (`GUARD`) of the action-request module's
+  `possibleActionCancels` (+0xa0) is set (0x140407c20, `bt` at 0x140407c47) and
+  `GetActionDuration(ACTION_ARM_L1 = 2)` (0x140407840) is above 0, that is while L1 is held.
+- TAE JumpTable 22 sets that bit: `_ChrActionFlag` case 22 (0x14042810c) passes `edx = 0x18` to
+  `SetAllowedCancelToActionState` 0x1404080b0, which ORs it into +0xa0. `ExecGuard` then plays
+  `W_GuardOn` while L1 is held and stamina is above 0.
+- The 1.16.2 named dump has the same code (`HksEnv` 0x140410820 inner case 0xb,
+  `_ChrActionFlag` 0x1404275e0 case 0x16, `FUN_140407660`, `GetActionDuration` 0x140407280).
+
+So a blocker holding L1 regenerates nothing until its reaction clip's first JumpTable 22 frame.
+Every guard style that has the clips (a000, a002, a003, a010, a012, a013, a015) has the same
+frames, no 608 play speed and no early (300) event on id 22 (TAE, `guard_reaction_windows`,
+selftest):
+
+| reaction | clip | TAE 225 0% | JumpTable 22 from | pause before / now |
+|---|---|---|---|---|
+| small | 019200 | f0-10 | f16 | 10 / 16 |
+| middle | 019210 | f0-27 | f32 | 27 / 32 |
+| large | 019220 | f0-49 | f53 | 49 / 53 |
+
+The cancel comes after the 0% span in all three, so the pause is the cancel frame whether or not
+the reaction clip's own TAE 225 would still apply after the change of state. Taking the transition on
+the window's first frame is INFERRED, as attacks.md section 4 takes every cancel: the HKS update that
+sees the bit calls `act(110)` first, so regeneration may start one frame later. A guard break is
+different: no `act(110)` in its state, so its pause is its TAE 225 0% span f0-50, then 100% until the
+guard is raised again (`GUARD_BREAK_REGEN_PAUSE`, not used by `slot_pressure`).
 
 - `info+0x1fc` (multiplies info+0x28 before the guard). Its only store found is 1.0 in
   `InitDamageStruct` 0x140528200; a writer through `memcpy` or another base cannot be ruled out,
@@ -438,8 +580,6 @@ players (slot 6 returns 0); guard regeneration is 20%.
   hit in them was not measured.
 - A guard's own time to become effective after the L1 press (combo.md).
 - Guarded status build-up (`poisonGuardResist` etc.): not traced.
-- `ApplySuperArmorDamage`'s factor while guarded (`1 - saGuardCutRate/100` is INFERRED;
-  `saGuardCutRate` is 0 on every row read anyway).
 - Stamina cost per powerstance swing. The tool sums every distinct (AttackIndex, judge). That
   `FUN_1404428f0` charges each event is VERIFIED; that its early return never suppresses a
   charge here is INFERRED.
@@ -455,10 +595,12 @@ players (slot 6 returns 0); guard regeneration is 20%.
   VERIFIED).
 - Mounted attacks (600-7xx) are placed but not tabled.
 - "Hits to break" in section 3 assumes no regeneration between hits. The rate is 20% of 45/s
-  while guarding, 0% through each guard reaction's first 10/27/49 frames; a Greatsword R1 chain
-  (about 38 frames per swing, small reaction) gives back about 8 stamina per gap, which does not
-  change its 4 hits into Brass. That the rate is per second is INFERRED, and talisman regen adds
-  are not read for blockers.
+  while guarding, x 0.8 at heavy load and x 0.7 overloaded, and nothing through a guard reaction
+  until the guard comes back (f16 / f32 / f53, above). A Greatsword R1 chain (about 38 frames per
+  swing, small reaction) gives back about 6.6 stamina per 22-frame gap at medium load (7.8 for a
+  Green Turtle blocker's 20% of 53/s), which does not change its 4 hits into Brass. A blocker's own
+  regen items are read (talismans, a held Great Turtle Shell; section 8, `drain`); a buff's
+  (Braggart's Roar) is not.
 - Everything section 8 lists as INFERRED.
 
 ## 8. Corpus blockers and guard pressure
@@ -534,7 +676,95 @@ armor absorption, the counter rate and the damage-cut SpEffects (VERIFIED), so c
 Per blocker:
 - `drain` = (stamina lost - regeneration over the slot's cycle) / max stamina, capped at 1. The
   cycle is the slot's same-button recovery frame (the ranking passes it); the guard regenerates
-  20% of 45/s over the frames of it past its guard reaction's 0% window. Without a cycle, none.
+  20% of (45 + its own add)/s x its own `staminaRecoveryModifier` over the frames of it past the
+  frame its guard comes back out of the reaction, 16 / 32 / 53 (`guard_regen_per_frame`,
+  `Blockers.regen_add`, `Blockers.recovery`, `GUARD_REACTION_REGEN_PAUSE`; section 7 has the code
+  for both). The add is read off each corpus build's own
+  equipment (`Blockers.equipment_regen_add`): its active talisman set (`worn_talismans`,
+  `er-mechanics-talismans.stamina_regen_add`: Green Turtle 8, Two-Headed Turtle 10) and the two
+  weapons it holds (`equipment_regen_adds`: the Great Turtle Shell, every affinity, resident SpEffect
+  5311400, +3). Which weapons apply their resident SpEffects is VERIFIED on 2.7.2.0
+  (`eldenring-deobf-1.17.2.bin`, names from the 1.16.2 dump): only the selected slot of each hand,
+  whatever the grip. `PlayerIns::InitializeSpEffects` builds a `WepSpEffectEquipCtrl` on the
+  player's ChrAsm with 4 entries (size call 0x140502450). The table at vtable 0x142a4f8b8 + 0x70
+  maps them to ChrAsm special indices {-2, -1, -2, -1}; the last two are the Ash of War on each
+  weapon. `GetParamId` 0x1405027c0 resolves each one with `ChrAsm::GetBySpecialIndex`
+  0x1403be440: -2 gives the left hand's selected index x 2 and -1 gives the right hand's x 2 + 1.
+  The selected index comes from `getSelectedWeaponSlotIndex` 0x1404c55c0, which returns
+  `equipment[n + 1]` and never reads `equipment[0]`, the arm style. Other ChrAsm readers do check
+  the arm style (the 1.16.2 `isDarkHand` getter `FUN_1403bfbc0`), so this path ignores grip on
+  purpose. Two-handing therefore keeps the other hand's effect, a shield on the back included,
+  and the other two slots of a hand apply nothing. The 1.16.2 scan of all 205 functions that call
+  `EquipParamWeapon::GetEntry` found the resident fields (row +0x50/+0x54/+0x58) read only by this
+  control and by the equip menu's status preview (`FUN_1407cac70`). The preview uses the same
+  `GetBySpecialIndex(-2/-1)` test. The planner stores no drawn slot per hand, so the model reads
+  positions 0 and 3, each hand's first slot (an INFERRED assumption about which slot the build
+  fights with). No armor row carries one (REGULATION scan), and no buff is applied to a blocker (Braggart's
+  Roar +10, Flame, Grant Me Strength +5 and the physick's Greenburst +15 are not read). A build
+  with none of these regenerates 45/s: a regen item is a choice, never a default. Without a cycle,
+  none.
+
+  MEASURED 2026-11-13 (RL 140-160 corpus, 1,008 builds, 371 can raise a guard), a usage fact about
+  the pool and no reason for anything: 114 builds (11.3%) carry a regen item, 91 the Two-Headed
+  Turtle, 22 the Green Turtle and 1 the Great Turtle Shell; of the 371 that can guard, 46 (12.4%),
+  37 at +10 and 9 at +8 (the shell's holder cannot). `slot_pressure` with the CLI's cycle (the
+  same-button recovery), attacker +25 Standard STR 66 DEX 18 FTH 14, before (45/s for every blocker,
+  `.worktrees/sim-interrupt`'s code) and after (each blocker's own add):
+
+  | attack | cycle | regen before / after | drain before / after | factor before / after |
+  |---|---|---|---|---|
+  | Greatsword 2H R1 | 32.7 | 2.205 / 2.267 | 0.70335 / 0.70295 | 0.98458 / 0.98455 |
+  | Greatsword 2H charged R2 | 70.2 | 13.455 / 13.814 | 0.93715 / 0.93640 | 0.99497 / 0.99490 |
+  | Giant-Crusher 2H R1 | 30.3 | 1.485 / 1.528 | 0.87387 / 0.87364 | 0.99196 / 0.99194 |
+  | Dagger R1 | 14 | 1.200 / 1.232 | 0.23647 / 0.23626 | 0.94726 / 0.94724 |
+  | Carian Thrusting Shield R1 | 22 | 3.600 / 3.695 | 0.57980 / 0.57915 | 0.97430 / 0.97425 |
+  | Longsword R1 #1 | 17 | 2.100 / 2.156 | 0.35400 / 0.35362 | 0.96134 / 0.96131 |
+
+  The add moves the mean regeneration by 2-3% (an eighth of the blockers regenerating 18-22%
+  faster) and the factor in the fifth decimal: the guard reaction's 0% pause leaves few frames of
+  each cycle to regenerate in. (These "after" numbers predate the equip-load factor and the
+  guard-return pause below.)
+
+  **Equip load (2026-11-13).** Each blocker's tier is read off what its row holds
+  (`Blockers.equip_load`, `load_type`): burden = `er-mechanics-resources.Model.burden`
+  (`CalculateEquipmentWeight`, single precision) of every weapon in the active set's six positions
+  (`EquipParamWeapon.weight` of the name's base row), the active armor set (`worn_protectors`) and
+  the active talisman set; max load = the planner's `computed.maxEquipLoad`, which the game model
+  reproduces on 99.45% of the corpus (resources.md section 8); the tier is `Model.weight_type`
+  (`GetWeightType`, strict at 0.3, 0.7 and 1.0, resources.md section 5). The burden reads the same
+  slots `er-builds-optimize.other_load` reads (the selftest checks they agree on every row both read).
+  `Blockers.recovery` is then 0.8 at heavy, 0.7 overloaded, else 1.0. A row the model cannot read
+  keeps 1.0, the value every blocker had before.
+
+  MEASURED 2026-11-13, RL 140-160 corpus, a usage fact about the pool and no reason for anything:
+
+  | tier | all 1,008 builds | the 371 that can guard |
+  |---|---|---|
+  | light (1) | 100 | 19 |
+  | medium (2) | 856 | 329 |
+  | heavy (3), x0.8 | 37 | 17 |
+  | overloaded (4), x0.7 | 6 | 4 |
+  | not read, x1.0 | 9 | 2 |
+
+  The 9 unread rows: 8 store two weapons at one position of the active set, which no character can
+  hold, so the six weapons the game would sum cannot be told apart; 1 names a talisman the
+  regulation does not resolve. The blockers' mean modifier is 0.988.
+
+  **Before / after both changes** (`slot_pressure` with the CLI's cycle, attacker +25 Standard STR
+  66 DEX 18 FTH 14; before = this file's previous code, every blocker x1.0 and paused 10 / 27 / 49;
+  each change alone in the middle columns):
+
+  | attack | cycle | reaction over the 371 | regen before / load only / pause only / after | drain before / after | factor before / after |
+  |---|---|---|---|---|---|
+  | Greatsword 2H R1 | 32.7 | 335 middle, 36 small | 2.267 / 2.227 / 0.697 / 0.677 | 0.70294 / 0.71159 | 0.98455 / 0.98502 |
+  | Carian Thrusting Shield R1 | 22 | 371 small | 3.695 / 3.650 / 1.848 / 1.825 | 0.57915 / 0.59101 | 0.97425 / 0.97497 |
+  | Dagger R1 | 14 | 371 small | 1.232 / 1.217 / 0 / 0 | 0.23626 / 0.24480 | 0.94724 / 0.94794 |
+
+  The pause is the change that matters: it cuts the mean regeneration by half (the thrusting shield)
+  to 70% (the 2H Greatsword, whose middle reaction now leaves 0.7 of its 32.7-frame cycle) to all of
+  it (a Dagger R1 recycles at f14, before the guard comes back at f16). The load factor alone takes
+  1-2% off. Drain rises 0.85 to 1.19 points; stamina charged and break share are unchanged, since
+  neither depends on regeneration; the factor moves in the fourth decimal.
 - `broken` when one attack from full stamina reaches max stamina. A repel still charges its
   stamina, so a repelled hit can break.
 - `value` of the blocked hit against a landed one: min(1, chip / unguarded + drain), minus
@@ -626,5 +856,6 @@ dagger guards slightly less than the average one-hander.
 - What a guard break is worth beyond one landed hit. The guard-break clip's gates are known
   (roll f43, R1 f55); its punish was not measured.
 - The guard counter (an R2 out of a small or middle guard reaction) and an exchange where the
-  defender blocks are not scored.
+  defender raises a guard are not scored. An attacker's own guard during his attack is
+  (section 3a): in the punish model's strike and in the exchange.
 - Categories 54 and 59 have no `WeaponCategoryID` row, so they would guard (nil is not `FALSE`).

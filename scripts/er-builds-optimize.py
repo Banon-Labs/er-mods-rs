@@ -35,6 +35,15 @@ What "best" means here, stated so it can be argued with:
     the planner's computed values for those builds, which agree with the game model on 99% and
     92% of builds.
   - `ar`: the attack-rating total, which overvalues splitting damage across elements.
+  - `hit_skill`: the normal hit and one cast of the weapon's skill together, each at its share
+    (`--skill-weight`, default `SKILL_SHARE`): `(1 - w) x` the `damage` hit `+ w x` the cast's
+    damage on the same defender (`skill_damage`: every hit `er-mechanics-ashes.skill_hits` lists,
+    with the weapon's vsPlayer rates and each hit's FinalDamageRateParam row), less the HP the cast
+    takes from its user (`Scorer.skill_hp_cost`: Bloody Slash's 5% of max HP + 50 at the build's
+    VIG, `er-mechanics-self-damage`). The skill is the
+    weapon's own unless `--skill` names an ash it can mount; a skill with no damaging hit (a buff,
+    a step) is no attack, and the objective is then the hit alone. Death's Poker shows why it
+    matters: the hit wants STR and DEX, its Ghostflame Ignition wants INT.
 * Every starting class and every affinity the weapon has is tried; the level is the weapon's max.
 * A physical build on a greasable affinity is scored with its best DLC grease element. Physical
   means most infusable weapons the stats can wield do best (by AR, ungreased) on Standard, Heavy,
@@ -119,6 +128,15 @@ LEVEL_OFFSET = 79
 STAT_CAP = 99
 LOOKAHEAD = 10
 ELEMENTS = ("physical", "magic", "fire", "lightning", "holy")
+OBJECTIVES = ("damage", "ar", "hit_skill")
+#: The skill's share of the `hit_skill` objective. No measurement says how often a player casts
+#: the skill against how often they swing (`INFERRED`); half each is the repo's convention for two
+#: attacks a line mixes: line-fit's kit deals "their share-weighted mean", and a split line gives
+#: its spell and its weapon's R1 half each (`er-mechanics-line-fit.py`,
+#: `er-mechanics-attack-similarity.SPLIT_MELEE_SHARE` 0.5, attack-similarity.md section 1, "The
+#: split lines"). Like that kit, the two are added as damage, so a cast that deals more than one
+#: hit weighs more.
+SKILL_SHARE = 0.5
 ABSORB_KEY = {"physical": "physical", "magic": "magic", "fire": "fire", "lightning": "lightning", "holy": "holy"}
 
 
@@ -250,10 +268,16 @@ def floors(rows: list[dict], weapon: str, min_peers: int, source: str = "all",
     return {k: int(statistics.median(r["stats"][k] for r in src)) for k in SURVIVAL}, len(peers), scope
 
 
-def sweep_cache(kind: str, grease: str | None, lo: int, hi: int, every_class: bool = False) -> Path:
-    """Where a `--grease-sweep` or `--quality-sweep` is cached, tagged with `FLOOR_MODEL`."""
+def sweep_cache(kind: str, grease: str | None, lo: int, hi: int, every_class: bool = False,
+                objective: str = "damage", skill_weight: float | None = None) -> Path:
+    """Where a `--grease-sweep` or `--quality-sweep` is cached, tagged with `FLOOR_MODEL`. A sweep
+    on another objective than `damage` is tagged with it (and a `hit_skill` one with its skill
+    weight when that is not `SKILL_SHARE`), so it never replaces the file the boards read."""
     tier = f"-{grease}" if grease else ""
-    return CACHE / f"{kind}-sweep{tier}-{lo}-{hi}{'-every-class' if every_class else ''}-{FLOOR_MODEL}.jsonl"
+    obj = "" if objective == "damage" else f"-{objective}"
+    if objective == "hit_skill" and skill_weight is not None and abs(skill_weight - SKILL_SHARE) > 1e-9:
+        obj += f"{skill_weight:g}"
+    return CACHE / f"{kind}-sweep{tier}-{lo}-{hi}{'-every-class' if every_class else ''}{obj}-{FLOOR_MODEL}.jsonl"
 
 
 _CLASS_BASES: dict = {}
@@ -500,8 +524,80 @@ def stat_caps(tables, weapon, affinity, level=None) -> dict:
     return _CAPS[key]
 
 
+_LEVERS: list = []
+
+
+def skill_levers(levers=None):
+    """The skill tables (`er-mechanics-ash-levers.Levers`), built once per process: about 7 s.
+    A caller that already holds a `Levers` passes it the first time, so the tables are not decoded
+    twice. `optimize` builds them before it forks, so its workers share them."""
+    if not _LEVERS:
+        if levers is None:
+            lev = sys.modules.get("er_mechanics_ash_levers")
+            if lev is None:
+                lev = _sibling("er-mechanics-ash-levers")
+                sys.modules["er_mechanics_ash_levers"] = lev
+            levers = lev.Levers()
+        _LEVERS.append(levers)
+    return _LEVERS[0]
+
+
+def _self_damage():
+    """`er-mechanics-self-damage`, one copy per process under its module name, so its cost memo
+    and its `er_mechanics_ashes` are the ones the levers already loaded."""
+    m = sys.modules.get("er_mechanics_self_damage")
+    if m is None:
+        spec = importlib.util.spec_from_file_location("er_mechanics_self_damage", HERE / "er-mechanics-self-damage.py")
+        m = importlib.util.module_from_spec(spec)
+        sys.modules["er_mechanics_self_damage"] = m
+        spec.loader.exec_module(m)
+    return m
+
+
+_MAX_HP: dict = {}
+
+
+def _max_hp(st: dict) -> float:
+    """Max HP of a build of stats `st`, no talismans (`er-mechanics-resources.Model.resources`;
+    it reads VIG alone, CalcCorrectGraph 100), memoised per VIG."""
+    v = st["vig"]
+    if v not in _MAX_HP:
+        if "model" not in _MAX_HP:
+            _MAX_HP["model"] = RES.Model()
+        _MAX_HP[v] = float(_MAX_HP["model"].resources({**{k: 10 for k in STATS}, "vig": v})["max_hp"])
+    return _MAX_HP[v]
+
+
+def skill_cast_hits(levers, weapon, affinity, sid, st, two_handed, grease=None, stance=None) -> list:
+    """The hits of one cast of skill `sid` at damage stats `st` (`er-mechanics-ashes.skill_hits`,
+    at the weapon's max level), with `grease` (element, flat) added to its melee hits that come
+    from the weapon, times each hit's `spEffectAtkPowerCorrectRate_byPoint` (grease.md section 1).
+    Skill bullets get none: a right-hand grease row is `wepParamChange 1`, and category 0 (skill
+    bullets) accepts only the 0/5/6 group (ashes-of-war.md section 4). `stance` is the button a
+    stance skill hands over on."""
+    _, hits, _ = levers.cast(weapon, affinity, sid, {k: st[k] for k in DAMAGE_STATS}, two_handed, stance)
+    if grease:
+        el, flat = grease
+        for h in hits:
+            if h["kind"] == "melee" and h["from_weapon"]:
+                by_point = levers.t.atk_extra.get(h["atk_row"], {}).get(
+                    "spEffectAtkPowerCorrectRate_byPoint", 100) / 100.0
+                h["attack"] = dict(h["attack"], **{el: h["attack"].get(el, 0.0) + flat * by_point})
+    return hits
+
+
+def skill_damage(levers, weapon, affinity, sid, st, two_handed, defender, grease=None, stance=None) -> float:
+    """One cast of skill `sid` on `defender` after PvP defense: `skill_cast_hits` through
+    `er-mechanics-ashes.pvp_damage` (the weapon's vsPlayer rates, each hit's FinalDamageRateParam
+    row)."""
+    hits = skill_cast_hits(levers, weapon, affinity, sid, st, two_handed, grease, stance)
+    ash = sys.modules[type(levers.t).__module__]
+    return ash.pvp_damage(levers.t, levers.t.find_weapon(weapon), hits, defender, DEF)
+
+
 class Scorer:
-    def __init__(self, tables, weapon, affinity, level, two_handed, objective, defender, grease=None):
+    def __init__(self, tables, weapon, affinity, level, two_handed, objective, defender, grease=None,
+                 skill=None, skill_weight=SKILL_SHARE, stance=None):
         self.args = (tables, weapon, affinity, level)
         self.two_handed, self.objective, self.defender = two_handed, objective, defender
         self.grease = grease  # (element, flat attack) or None
@@ -510,6 +606,52 @@ class Scorer:
         # 2026-10-04: a build past it is one nobody makes). A requirement above the cap still
         # holds, through the floor `spend` starts from.
         self.cap = stat_caps(tables, weapon, affinity, level)
+        # `hit_skill`: the skill (a SwordArtsParam id or name, the weapon's own when None), its
+        # share, and the stance button a stance skill is cast through.
+        self.skill_weight, self.stance, self.skill_cache = skill_weight, stance, {}
+        self.skill = None
+        self.skill_cost = None
+        #: False when the skill has no damaging hit (a buff, a step): it is then no attack, and the
+        #: objective is the hit alone, as line-fit's kit holds attacks only (`INFERRED`: what a
+        #: buff adds is the ash table's `buff_gain`, not priced here).
+        self.skill_attacks = False
+        if objective == "hit_skill":
+            lv = skill_levers()
+            if skill is None:
+                self.skill = lv.t.reg.weapon[lv.t.find_weapon(weapon)]["swordArtsParamId"]
+            else:
+                self.skill = skill if isinstance(skill, int) else lv.t.find_arts(skill)
+            self.skill_attacks = bool(skill_cast_hits(lv, weapon, affinity, self.skill, dict.fromkeys(DAMAGE_STATS, 99),
+                                                      two_handed, None, stance))
+            # What one cast takes from its own user: `changeHpRate` percent of max HP plus
+            # `changeHpPoint` (`er-mechanics-self-damage.skill_cost`, `VERIFIED` 2.7.2.0 there),
+            # charged against the cast whether or not it hits.
+            self.skill_cost = _self_damage().skill_cost(lv.t, self.skill, lv.t.find_weapon(weapon), level,
+                                                        two_handed, stance)
+
+    def skill_hp_cost(self, st: dict) -> float:
+        """HP one cast of the skill takes from a build of stats `st`: its `skill_cost` at the build's
+        max HP (`er-mechanics-resources.Model.resources`, no talismans), 0 for a skill that takes
+        none. A cost row that needs the caster's own status resistance is not priced
+        (`er-mechanics-self-damage.status_cost`)."""
+        if not self.skill_cost or not (self.skill_cost["pct"] or self.skill_cost["flat"]):
+            return 0.0
+        return _self_damage().cost_at(self.skill_cost, _max_hp(st))
+
+    def skill_score(self, st: dict) -> float:
+        """One cast of the skill on the defender (`skill_damage`, cached by the damage stats), less
+        the HP it takes from its user (`skill_hp_cost`): the net is HP dealt less HP paid, the
+        punish model's currency (`er-mechanics-attack-similarity`)."""
+        key = tuple(st[k] for k in DAMAGE_STATS)
+        if key not in self.skill_cache:
+            _, w, a, _ = self.args
+            self.skill_cache[key] = skill_damage(skill_levers(), w, a, self.skill, st, self.two_handed,
+                                                 self.defender, self.grease, self.stance)
+        return self.skill_cache[key] - self.skill_hp_cost(st)
+
+    def hit_score(self, st: dict) -> float:
+        """The `damage` objective: one motion-value-100 hit on the defender."""
+        return DEF.damage(self.by_element(st), 100.0, self.defender)["total"]
 
     def ar(self, st: dict) -> dict:
         key = tuple(st[k] for k in DAMAGE_STATS)
@@ -529,6 +671,10 @@ class Scorer:
         if self.objective == "spell_buff":
             # A catalyst's sorcery or incantation scaling; one that does both counts its better.
             return max(self.ar(st)["spell_buff"].values(), default=0.0)
+        if self.objective == "hit_skill":
+            if not self.skill_attacks:
+                return self.hit_score(st)
+            return (1.0 - self.skill_weight) * self.hit_score(st) + self.skill_weight * self.skill_score(st)
         by = self.by_element(st)
         if self.objective == "ar":
             return sum(by.values())
@@ -655,14 +801,17 @@ def grease_options(tables, weapon, affinity, tier):
 
 
 def optimize(tables, model, weapon, rl, two_handed, objective, floor, defender, affinities,
-             grease_tier=None, keep=10, pool=None, pinned=()):
+             grease_tier=None, keep=10, pool=None, pinned=(), skill=None, skill_weight=SKILL_SHARE):
     """Every class and affinity; a greasable affinity is also tried with each grease element of
     `grease_tier`. Greased results are kept only when the spread they land on is a physical build
     (`physical_build`); that check costs about a second, so it runs on results in score order and
     stops once enough have passed. With `pool` (`conditioning_pool`), each spread's Mind and
     Endurance floors follow it (`spend_floored`) and `floor` is only a minimum; each result's
-    `floors` is what it was spent from."""
+    `floors` is what it was spent from. `skill` and `skill_weight` are the `hit_skill`
+    objective's (`Scorer`)."""
     import multiprocessing as mp
+    if objective == "hit_skill":
+        skill_levers()  # decoded once here, so the forked workers inherit it
     jobs = []
     for aff in affinities:
         try:
@@ -679,7 +828,7 @@ def optimize(tables, model, weapon, rl, two_handed, objective, floor, defender, 
                     continue
                 jobs.append((cls, aff, level, grease, st))
     _OPT.update(tables=tables, weapon=weapon, rl=rl, two=two_handed, objective=objective, defender=defender,
-                pool=pool, pinned=frozenset(pinned))
+                pool=pool, pinned=frozenset(pinned), skill=skill, skill_weight=skill_weight)
     with mp.get_context("fork").Pool() as pool:
         results = [r for r in pool.map(_optimize_one, jobs) if r]
     results.sort(key=lambda r: -r["score"])
@@ -694,12 +843,14 @@ def optimize(tables, model, weapon, rl, two_handed, objective, floor, defender, 
 
 
 def weapon_best(tables, rows, weapon, rl, two_handed=False, objective="damage", pins=None, affinity=None,
-                min_peers=15, source="pvp", roll="medium", grease_tier="dlc-drawstring", keep=10) -> dict:
+                min_peers=15, source="pvp", roll="medium", grease_tier="dlc-drawstring", keep=10,
+                skill=None, skill_weight=SKILL_SHARE) -> dict:
     """The single-weapon search the CLI runs, as a call over corpus `rows` (`corpus_rows` of the RL
     window): Vigor floored from the weapon's archetype pool, Mind and Endurance following the
     spread with Endurance at least the medium-roll requirement under `roll` "medium", `pins`
     ({stat: value}) fixed, and `optimize` over every class and `affinity` (all the weapon has by
-    default). Returns the results, best first, with what they were floored from."""
+    default). Returns the results, best first, with what they were floored from. `skill` and
+    `skill_weight` are the `hit_skill` objective's (`Scorer`)."""
     base_id = tables.find_weapon(weapon)
     # The archetype of the first affinity asked for (Standard by default) picks the floor pool.
     aff0 = (affinity or ["Standard"])[0]
@@ -717,7 +868,8 @@ def weapon_best(tables, rows, weapon, rl, two_handed=False, objective="damage", 
     fl.update(pins or {})
     dfn = bracket_defender(rows)
     res = optimize(tables, RES.Model(), weapon, rl, two_handed, objective, fl, dfn,
-                   affinity or affinities(tables, base_id), grease_tier, keep, pool=pool, pinned=set(pins or ()))
+                   affinity or affinities(tables, base_id), grease_tier, keep, pool=pool, pinned=set(pins or ()),
+                   skill=skill, skill_weight=skill_weight)
     return {"results": res, "floors": fl, "defender": dfn, "scope": scope, "pool": pool, "pool_scope": pool_scope,
             "n_peers": n_peers, "roll_end": roll_end}
 
@@ -728,13 +880,17 @@ _OPT: dict = {}
 def _optimize_one(job):
     cls, aff, level, grease, st = job
     o = _OPT
-    scorer = Scorer(o["tables"], o["weapon"], aff, level, o["two"], o["objective"], o["defender"], grease)
+    scorer = Scorer(o["tables"], o["weapon"], aff, level, o["two"], o["objective"], o["defender"], grease,
+                    o.get("skill"), o.get("skill_weight", SKILL_SHARE))
     spent = spend_floored(st, o["rl"], scorer, o.get("pool"), o.get("pinned", ()))
     if spent is None:
         return None
     st, fl = spent
-    return {"class": cls, "affinity": aff, "level": level, "stats": st, "grease": grease, "floors": fl,
-            "score": scorer.score(st), "ar": scorer.ar(st), "by_element": scorer.by_element(st)}
+    out = {"class": cls, "affinity": aff, "level": level, "stats": st, "grease": grease, "floors": fl,
+           "score": scorer.score(st), "ar": scorer.ar(st), "by_element": scorer.by_element(st)}
+    if scorer.skill is not None:
+        out.update(hit=scorer.hit_score(st), skill_damage=scorer.skill_score(st), skill_id=scorer.skill)
+    return out
 
 
 # --------------------------------------------------------------------------------------------
@@ -756,7 +912,9 @@ def affinities(tables, base_id: int) -> list[str]:
 
 
 def weapons_for(tables, stats: dict, objective: str, defender: dict, catalog: Path,
-                grease_tier=None) -> list[dict]:
+                grease_tier=None, skill_weight: float = SKILL_SHARE) -> list[dict]:
+    """Every weapon's best affinity, grip and grease at `stats`, ranked by `objective`; under
+    `hit_skill` each weapon counts its own skill (`Scorer`)."""
     greased = grease_tier is not None and physical_build(tables, stats, defender)[0]
     names = json.loads(catalog.read_text())["armament"] if catalog.exists() else {}
     real = set(names.values())
@@ -782,8 +940,16 @@ def weapons_for(tables, stats: dict, objective: str, defender: dict, catalog: Pa
                     if g:
                         by[g[0]] += g[1]
                     score = sum(by.values()) if objective == "ar" else DEF.damage(by, 100.0, defender)["total"]
-                    out.append({"name": name, "affinity": aff, "level": level, "two": two,
-                                "score": score, "ar": r, "grease": g, "total_ar": sum(by.values())})
+                    row = {"name": name, "affinity": aff, "level": level, "two": two,
+                           "score": score, "ar": r, "grease": g, "total_ar": sum(by.values())}
+                    if objective == "hit_skill":
+                        lv = skill_levers()
+                        sid = lv.t.reg.weapon[base_id]["swordArtsParamId"]
+                        sk = skill_damage(lv, base_id, aff, sid, stats, two, defender, g)
+                        # A skill with no damaging hit is no attack: the hit alone (`Scorer`).
+                        row.update(hit=score, skill_damage=sk,
+                                   score=(1.0 - skill_weight) * score + skill_weight * sk if sk > 0 else score)
+                    out.append(row)
     # One row per weapon: its best affinity and grip.
     best: dict[str, dict] = {}
     for r in out:
@@ -834,8 +1000,10 @@ def _snapshots(tables, weapon_id, aff, level, two, floor, need, rls, defender,
 
 def _walk_snapshots(tables, weapon_id, aff, level, two, floor, need, rls, defender,
                     objective="ar", grease=None, base=None) -> dict:
-    """`_snapshots`' greedy walk, without the conditioned floors."""
-    scorer = Scorer(tables, weapon_id, aff, level, two, objective, defender, grease)
+    """`_snapshots`' greedy walk, without the conditioned floors. A `hit_skill` walk counts the
+    weapon's own skill at `_SWEEP["skill_weight"]`."""
+    scorer = Scorer(tables, weapon_id, aff, level, two, objective, defender, grease,
+                    skill_weight=_SWEEP.get("skill_weight", SKILL_SHARE))
     start = {k: max((base or {}).get(k, 10), floor.get(k, 0), need.get(k, 0)) for k in STATS}
     scorer.floor = dict(start)
     used = sum(start.values()) - LEVEL_OFFSET
@@ -989,8 +1157,8 @@ def _grease_one(job):
         for floor_key, group in by_floor.items():
             for g in greases:
                 for cls, base in classes:
-                    snaps = _snapshots(t, weapon_id, aff, level, two, dict(floor_key), need, group, dfn, "damage", g,
-                                       base)
+                    snaps = _snapshots(t, weapon_id, aff, level, two, dict(floor_key), need, group, dfn,
+                                       _SWEEP.get("objective", "damage"), g, base)
                     for rl, (st, dmg) in snaps.items():
                         cand.setdefault(rl, []).append((dmg, aff, g[0] if g else None, st, cls))
     for rl, cs in sorted(cand.items()):
@@ -1023,8 +1191,8 @@ def _row_weight_charge(t, weapon_id, aff, level, two, need, rl, dfn, grease, end
 
     def dmg_at(e):
         # Endurance is the variable here, so only Mind follows the spread.
-        snap = _snapshots(t, weapon_id, aff, level, two, dict(base, end=e), need, [rl], dfn, "damage", grease,
-                          pinned=("end",))
+        snap = _snapshots(t, weapon_id, aff, level, two, dict(base, end=e), need, [rl], dfn,
+                          _SWEEP.get("objective", "damage"), grease, pinned=("end",))
         return snap[rl][1] if rl in snap else None
 
     wc = weight_charge(weight, pool, base["end"], dmg_at, end_row)
@@ -1034,16 +1202,22 @@ def _row_weight_charge(t, weapon_id, aff, level, two, need, rl, dfn, grease, end
 
 
 def grease_sweep(tables, rows_by_rl, rls, grips, jobs, amount, defender, out_path, min_peers,
-                 source: str = "pvp", roll: str = "medium", charge: bool = True, every_class: bool = False):
+                 source: str = "pvp", roll: str = "medium", charge: bool = True, every_class: bool = False,
+                 objective: str = "damage", skill_weight: float = SKILL_SHARE):
+    """`objective` is what every row's `dmg` is: `damage` (the board ranking's), or `hit_skill`
+    with each weapon's own skill at `skill_weight`."""
     import multiprocessing as mp
     fl, load = sweep_corpus_stats(rows_by_rl, rls, min_peers, source)
     classes = None
     if every_class:
         model = RES.Model()
         classes = [(cls, model.class_base(cls)[1]) for cls in RES.CLASS_ROWS]
+    if objective == "hit_skill":
+        skill_levers()  # decoded once here, so the forked workers inherit it
     _SWEEP.update(tables=tables, rls=rls, defender=defender, amount=amount, floors=fl, other_load=load,
                   roll=roll, real=_real_weapon_ids(), weight_charge=charge, classes=classes,
-                  pools={rl: conditioning_pool(rows_by_rl[rl], source)[0] for rl in rls})
+                  pools={rl: conditioning_pool(rows_by_rl[rl], source)[0] for rl in rls},
+                  objective=objective, skill_weight=skill_weight)
     weapon_ids = sorted(i for i in tables.weapons if i % 10000 == 0 and tables.names.get(i))
     work = [(w, two) for w in weapon_ids for two in grips]
     with mp.get_context("fork").Pool(jobs) as pool:
@@ -1198,6 +1372,37 @@ def selftest() -> int:
               and got[1]["mnd"] == hk["mnd"] and got[1]["end"] > hk["end"],
               f"spend_floored: a Heavy Claymore at RL 150 meets the floors it reports, Mind at the class "
               f"base and Endurance raised ({got[1] if got else None})")
+        # `hit_skill`: Death's Poker's hit scales with STR and DEX, its own skill (Ghostflame
+        # Ignition) with its magic, so counting the skill moves points into INT.
+        dp = "Death's Poker"
+        dlvl = tables.max_level(tables.weapons[tables.find_weapon(dp)]["reinforceTypeId"])
+        dneed = requirements(tables, dp, "Standard", dlvl, False)
+        dfl = sweep_floor(tables.find_weapon(dp), "Standard", dlvl, False, dneed, 150)
+        dstart = {k: max(hk[k], dfl.get(k, 0), dneed.get(k, 0)) for k in STATS}
+        t0 = time.time()
+        by_obj = {}
+        for obj in ("damage", "hit_skill"):
+            sc = Scorer(tables, dp, "Standard", dlvl, False, obj, dfn)
+            st_o, _ = spend_floored(dict(dstart), 150, sc, cpool)
+            hs = Scorer(tables, dp, "Standard", dlvl, False, "hit_skill", dfn)
+            by_obj[obj] = (st_o, hs.hit_score(st_o), hs.skill_score(st_o), hs.skill)
+        (sd, hd, kd, sid), (ss, hh, kh, _) = by_obj["damage"], by_obj["hit_skill"]
+        check(ss["int"] > sd["int"] and kh > kd and hh < hd and sid == skill_levers().t.find_arts("Ghostflame Ignition"),
+              f"hit_skill raises Death's Poker's INT ({sd['int']} -> {ss['int']}) from a Heavy Knight start: hit "
+              f"{hd:.0f} -> {hh:.0f}, Ghostflame Ignition {kd:.0f} -> {kh:.0f} ({time.time() - t0:.1f}s)")
+        # The skill's own HP cost: Bloody Slash's 1763 takes 5% of max HP + 50 at f15, hit or not.
+        ulvl = tables.max_level(tables.weapons[tables.find_weapon("Uchigatana", "Keen")]["reinforceTypeId"])
+        bs = Scorer(tables, "Uchigatana", "Keen", ulvl, False, "hit_skill", dfn, skill="Bloody Slash")
+        ust = {**{k: 10 for k in STATS}, "vig": 40, "str": 16, "dex": 60}
+        hp40 = float(RES.Model().resources(dict(ust))["max_hp"])
+        raw = skill_damage(skill_levers(), "Uchigatana", "Keen", bs.skill, ust, False, dfn)
+        check(abs(bs.skill_hp_cost(ust) - (0.05 * hp40 + 50)) < 1e-9 and abs(bs.skill_score(ust) - (raw - 0.05 * hp40 - 50)) < 1e-9,
+              f"hit_skill: Bloody Slash nets its cast ({raw:.1f}) less 5% of max HP + 50 at VIG 40 "
+              f"({hp40:.0f} HP: {bs.skill_hp_cost(ust):.1f})")
+        gi = Scorer(tables, dp, "Standard", dlvl, False, "hit_skill", dfn)
+        check(gi.skill_hp_cost(dstart) == 0.0 and gi.skill_score(dstart) == skill_damage(
+            skill_levers(), dp, "Standard", gi.skill, dstart, False, dfn),
+              "hit_skill: Ghostflame Ignition, which takes no HP, is its cast's damage unchanged")
         check(bool(r.get("greased")) == greasable(tables, "Bloodhound's Fang", "Standard"),
               "a unique weapon is greased exactly when its row has isEnhance")
         wc = r.get("weight") or {}
@@ -1225,7 +1430,12 @@ def main() -> int:
     ap.add_argument("--rl", type=int, default=150)
     ap.add_argument("--two-handed", action="store_true")
     ap.add_argument("--affinity", action="append", help="limit to these affinities (repeatable)")
-    ap.add_argument("--objective", choices=["damage", "ar"], default="damage")
+    ap.add_argument("--objective", choices=list(OBJECTIVES), default="damage",
+                    help="damage: one hit; ar: the AR total; hit_skill: the hit and one cast of the skill, "
+                         "--skill-weight the skill's share (also what --grease-sweep rows rank by)")
+    ap.add_argument("--skill", help="hit_skill: the skill counted (default the weapon's own)")
+    ap.add_argument("--skill-weight", type=float, default=SKILL_SHARE,
+                    help=f"hit_skill: the skill's share (default {SKILL_SHARE:g}, the split line's half each)")
     ap.add_argument("--floor", action="append", default=[], help="vig=60 / mnd=15 / end=30 (repeatable)")
     ap.add_argument("--window", type=int, default=10, help="corpus RL window is rl +- this")
     ap.add_argument("--min-peers", type=int, default=15)
@@ -1259,9 +1469,13 @@ def main() -> int:
         dfn = bracket_defender(corpus_rows(a.mirror, lo - a.window, hi + a.window))
         grips = {"1h": [False], "2h": [True], "both": [False, True]}[a.grip]
         amount = GREASES.get(a.grease)  # None for `none`: every affinity ungreased (`_grease_one`)
-        out = a.out or sweep_cache("grease", a.grease, lo, hi, a.every_class)
+        if a.objective == "ar":
+            ap.error("--grease-sweep ranks by damage or hit_skill")
+        if a.skill:
+            ap.error("--grease-sweep counts each weapon's own skill; --skill names one weapon's")
+        out = a.out or sweep_cache("grease", a.grease, lo, hi, a.every_class, a.objective, a.skill_weight)
         res = grease_sweep(tables, rows_by_rl, rls, grips, a.jobs, amount, dfn, out, a.min_peers,
-                           a.floors, a.roll, not a.no_weight_charge, a.every_class)
+                           a.floors, a.roll, not a.no_weight_charge, a.every_class, a.objective, a.skill_weight)
         if amount is None:
             print(f"grease sweep RL {lo}-{hi}, grips {a.grip}, no grease: {len(res)} rows "
                   f"({len({r['weapon'] for r in res})} weapons) in {out}")
@@ -1328,9 +1542,11 @@ def main() -> int:
         stats.update({k: int(v) for k, v in (kv.split("=") for kv in a.weapons_for.split(",") if kv)})
         dfn = bracket_defender(rows)
         tier = None if a.grease == "none" else a.grease
-        ranked = weapons_for(tables, stats, a.objective, dfn, CACHE / "catalog.json", tier)
+        ranked = weapons_for(tables, stats, a.objective, dfn, CACHE / "catalog.json", tier, a.skill_weight)
         print(f"weapons for {', '.join(f'{k.upper()} {stats[k]}' for k in DAMAGE_STATS)}, objective {a.objective}"
               + (f" (one hit on the median RL {a.rl - a.window}-{a.rl + a.window} defender)" if a.objective == "damage" else "")
+              + (f" (one hit and one cast of the weapon's own skill, skill share {a.skill_weight:g}, on the median "
+                 f"RL {a.rl - a.window}-{a.rl + a.window} defender)" if a.objective == "hit_skill" else "")
               + (f", greasable affinities scored with {a.grease} grease" if tier and physical_build(tables, stats, dfn)[0] else ""))
         ph, pv, nv = physical_build(tables, stats, dfn)
         print(f"physical build: {'yes' if ph else 'no'} ({pv} of {nv} wieldable infusable weapons do best on "
@@ -1350,7 +1566,7 @@ def main() -> int:
         pins[{"vit": "end", "endurance": "end", "vigor": "vig", "mind": "mnd"}.get(k, k)] = int(v)
     tier = None if a.grease == "none" else a.grease
     wb = weapon_best(tables, rows, a.weapon, a.rl, a.two_handed, a.objective, pins, a.affinity, a.min_peers,
-                     a.floors, a.roll, tier)
+                     a.floors, a.roll, tier, skill=a.skill, skill_weight=a.skill_weight)
     model, res, dfn, pinned = RES.Model(), wb["results"], wb["defender"], set(pins)
     scope, pool_scope, n_peers = wb["scope"], wb["pool_scope"], wb["n_peers"]
     roll_note = f", at least {wb['roll_end']} for medium roll" if wb["roll_end"] else ""
@@ -1385,6 +1601,10 @@ def main() -> int:
         print("  spell buff " + ", ".join(f"{k} {v:.0f}" for k, v in ar["spell_buff"].items()))
     if a.objective == "damage":
         print(f"  one motion-value-100 hit on the median defender: {best['score']:.0f}")
+    if a.objective == "hit_skill":
+        name = skill_levers().t.arts_name(best["skill_id"])
+        print(f"  {1 - a.skill_weight:g} x one motion-value-100 hit ({best['hit']:.0f}) + {a.skill_weight:g} x one "
+              f"cast of {name} ({best['skill_damage']:.0f}) on the median defender: {best['score']:.0f}")
     r = model.resources(dict(st))
     print(f"  HP {r['max_hp']}, FP {r['max_fp']}, stamina {r['max_stamina']}, "
           f"equip load {r['max_equip_load']:.1f}")

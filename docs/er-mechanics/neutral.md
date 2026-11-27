@@ -69,13 +69,20 @@ build `b`:
     my start = arrival(D - R)                       frames before my attack can start
     b start  = arrival(D - R_b)
     arrival(g) = min(g x k,                          running, k = 30 / 4.01 frames a metre
-                     R1 frame of a dodge + max(0, g - its distance at that frame) x k)
+                     a dodge: its R1 frame when its path has closed g by then, else the first
+                     frame before its move cancel that has, else its move cancel
+                     + max(0, g - its distance at the move cancel) x k)
     my hit   = my start + s,   b's hit = b start + s_b
 
 - **Both commit, both run (INFERRED).** Starting farther out adds the same running time to both
   while both run toward each other, so it cancels: only the difference in reach is run. A player
-  who dodges in instead pays the dodge's R1 frame; the medium roll pays off above 2.67 m, the step
-  above 2.27 m. Every player carries the medium roll (the sweep builds are at medium load); the
+  who dodges in instead pays the dodge's R1 frame, and where its path leaves him short, its move
+  cancel: no walk or run starts before it (the behavior script starts one only through the
+  move-cancel check, env 2000, **VERIFIED**; the medium roll's is f22 against its R1 at f20,
+  Bloodhound's Step's f29 against f17, **MEASURED** from the clips' TAE). So 5 m rolled in costs
+  f34.59, where running from the R1 frame cost f33.27. The medium roll pays off above 2.67 m, the
+  step above 2.27 m (both inside the distance its path covers by its R1 frame, so the move cancel
+  does not move them). Every player carries the medium roll (the sweep builds are at medium load); the
   step only when the ash is Bloodhound's Step (section 5).
 - **i-frames.** A hit whose whole live window falls inside the other's dodge i-frames misses him
   (the rule `er-mechanics-ashes.Opponents._escapes` uses, without the distance part: he is
@@ -204,10 +211,25 @@ prior ranking (a second pass). The flag is the more faithful model of what the p
 it when that matters more than comparability with earlier runs. A full RL 150 run with it and
 `--trades priced` together is in exchange.md section 2a.
 
-## 7. Not established
+## 7. Spacing: running back from a committed opener (`backoff_whiffs`)
 
-- Feints, spacing inside the other's reach, chasing a retreating player (equal run speeds cancel),
-  more than one engagement.
+The race has the attacker stand at his reach and strike. A defender who sees it coming can run
+back instead of rolling. At its reach the opener only just touches him, so any ground he gains
+before its first live frame makes it whiff. He starts at its cue plus his reaction (ashes-of-war.md
+section 16a: lognormal around 0.25 s plus two 0.05 s network legs, `INFERRED` constants) and runs
+straight back at the locked-on run, 4.01 m/s (`INFERRED` for the back direction, section 1). Per
+reaction quantile the function returns whether the opener whiffs and the gap when its live window
+closes. The attacker is then in his recovery until his dodge cancel, out of the defender's melee
+reach, which is the punish `er-mechanics-spells.py --kit` scores for spells.
+
+The attacker's distance is the race's rule, not an observation: a player who closes inside his
+reach before committing is not modelled, so the whiff share is an upper bound on how often a
+back-off works.
+
+## 8. Not established
+
+- Feints, the attacker closing inside his own reach before he commits, chasing a retreating player
+  (equal run speeds cancel), more than one engagement.
 - That locked-on back and side movement is at run speed (no clip).
 - What a corpus player actually throws: the family pool takes the ranking's own use shares, not
   recorded button use. Skills and powerstance openers are not in it (the corpus records neither

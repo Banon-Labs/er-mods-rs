@@ -69,8 +69,9 @@ Blocking (`VERIFIED` unless marked):
   cancel `(1 + weapon guardCutCancelRate / 100) (1 + attack guardCutCancelRate / 100)`
   (`FUN_140653910`): -50 on 88 weapon rows (shotels, scythes, sickles), nonzero on 168 attack rows.
 * Guard reaction: `GUARD_REACTION_TABLE[guardLevel][damage level]`, small / middle / large, with
-  the blocker's R1 at f5 / f10 / f50 and its 20% guard regeneration paused for 10 / 27 / 49
-  frames. A repelled attacker can roll at f22 (small repel), which is the blocker's punish window.
+  the blocker's R1 at f5 / f10 / f50 and its 20% guard regeneration stopped until the guard comes
+  back, f16 / f32 / f53 (`GUARD_REACTION_REGEN_PAUSE`). A repelled attacker can roll at f22
+  (small repel), which is the blocker's punish window.
 * Every stat bonus above goes through CalcCorrectGraph 160/161/163, which are flat 0 in the
   1.17.1 regulation, so the bonuses are 0 (`VERIFIED` regulation).
 
@@ -119,6 +120,10 @@ CACHE = os.path.expanduser('~/.cache/er-build-planner')
 HKS_DECOMPILE = os.environ.get('ER_C0000_HKS', os.path.expanduser(
     '~/projects/er-effects-rs-main-compare/.worktrees/no-death-loss-body/.deps/Smithbox/'
     'Documentation/ER/c0000.hks'))
+#: The installed build's compiled player behavior script (1.17.2 extract), which the selftest reads
+#: for the guard reaction's regeneration stop (`GUARD_REACTION_REGEN_PAUSE`).
+HKS_COMPILED = os.environ.get('ER_HKS_FILE', os.path.expanduser(
+    '~/er-extract/1172-20261021/action/script/c0000.hks'))
 
 
 def _load(name, filename):
@@ -231,23 +236,85 @@ GUARD_REACTION_TABLE = (
 )
 GUARD_REACTION_TABLE_VA = 0x143b3b0d0
 GUARD_REACTION_NAME = {0: 'none', 1: 'small', 3: 'middle', 4: 'large'}
-#: Per guard reaction, the first frame the blocker can R1 out of it, and the frames its stamina
-#: regeneration stays at 0% (clips 19200/19210/19220, TAE 225 = 0 over that span; disengage.md
-#: section 2, `TAE`). A guard break (19500): roll f43, R1 f55, regen 0% for f0-50.
+#: Per guard reaction, the first frame the blocker can R1 out of it (clips 19200/19210/19220;
+#: disengage.md section 2, `TAE`).
 GUARD_REACTION_R1 = {'none': 0, 'small': 5, 'middle': 10, 'large': 50}
-GUARD_REACTION_REGEN_PAUSE = {'none': 0, 'small': 10, 'middle': 27, 'large': 49}
+#: Per guard reaction, the frames a blocker that keeps L1 held regenerates nothing: from the hit to
+#: the frame the guard comes back (2026-11-13, `VERIFIED` code, `TAE` frames).
+#: - Every update of a `GuardDamageSmall/Middle/Large` state calls HKS `act(110)` first (pc 3 of
+#:   each `_onUpdate`, 1.17.2 `c0000.hks`, `er-hks-disasm.py --calls-to act`), which sets
+#:   `ChrCtrlModifier` `actionFlags` bit 0x40; the regeneration tick skips that frame when the bit
+#:   is set (`test` at 0x140401b66), and `ChrCtrlModifierData::Reset` clears `actionFlags` every
+#:   frame (0x1403c3ba2). So no regeneration happens in the state, whatever its clip's TAE 225 says.
+#: - The state leaves for the guard through `DamageCommonFunction` -> `ExecGuardOnCancelTiming`,
+#:   whose first test is `env(243)` (pc 3). `HksEnv` sends 243 (byte table 0x140413964 at index
+#:   243 - 0xdf, dword table 0x140413728) to 0x14041151d: action-request bit 0x18 (`GUARD`) of
+#:   `possibleActionCancels` (+0xa0, tested by 0x140407c20) and `GetActionDuration` of
+#:   `ACTION_ARM_L1` (index 2, 0x140407840) above 0. TAE JumpTable 22 is what sets that bit
+#:   (`_ChrActionFlag` case 22 at 0x14042810c: `mov edx, 0x18` into `SetAllowedCancelToActionState`
+#:   0x1404080b0, `or [rax+0xa0]`). `ExecGuard` then raises the guard while L1 is held and stamina
+#:   is above 0. All addresses 2.7.2.0 (`eldenring-deobf-1.17.2.bin`); the 1.16.2 named dump has
+#:   the same code (`HksEnv` 0x140410820, `_ChrActionFlag` 0x1404275e0, `FUN_140407660`).
+#: - The guard-reaction clips' first JumpTable 22 frame is 16 / 32 / 53, after their TAE 225 0%
+#:   spans (f0-10 / f0-27 / f0-49). Identical in every guard style that has the clips (a000, a002,
+#:   a003, a010, a012, a013, a015) and no 608 play speed (`guard_reaction_windows`, selftest). Once
+#:   back in `GuardOn` the guard clip's 20% applies.
+#: The transition is taken on the first frame of the JumpTable 22 window, as attacks.md section 4
+#: takes every cancel (`INFERRED`: the HKS update that sees the bit also calls `act(110)` first, so
+#: regeneration may start one frame later). A guard break (19500): roll f43, R1 f55, regen 0% for
+#: f0-50 from its TAE 225 (no `act(110)` in that state), not used by `slot_pressure`.
+GUARD_REACTION_REGEN_PAUSE = {'none': 0, 'small': 16, 'middle': 32, 'large': 53}
 GUARD_BREAK_R1, GUARD_BREAK_REGEN_PAUSE = 55, 50
+#: The guard-reaction clips per reaction, and the TAE JumpTable id whose window lets the guard back.
+GUARD_REACTION_CLIPS = {'small': 19200, 'middle': 19210, 'large': 19220}
+JUMP_TABLE_GUARD_CANCEL = 22
+#: Guard styles with their own guard-reaction clips (a0xx), read by the selftest.
+GUARD_STYLE_CATEGORIES = (0, 2, 3, 10, 12, 13, 15)
 #: `FUN_140d25cc0` (table 0x142bb5028): a player defender reacts to `dmgLevel_vsPlayer` through
 #: this remap when it is nonzero, else to `dmgLevel`; a guarded hit keeps that level
 #: (`FUN_140691550`). Same table as `er-mechanics-frame-advantage.REMAP` (the selftest compares).
 DAMAGE_LEVEL_REMAP = (0, 0, 8, 1, 2, 3, 7, 4, 6, 9, 5, 10, 11)
-#: Stamina regeneration while guarding (`FUN_140401ac0`): `GetStaminaRecoverySpeed` (45 + talisman
-#: adds) x `ctrlModifier+0x14` / 100 per second. Every `GuardOn`/`GuardStart` clip carries TAE 225
-#: (`SetSPRegenRatePercent`) = 20 for its whole length (`TAE`), so a raised guard regenerates 20%.
-#: Per second is `INFERRED`; talisman adds are not read for blockers.
+#: Stamina regeneration while guarding (`FUN_140401ac0`): `GetStaminaRecoverySpeed` (45 + the
+#: SpEffect `staminaRecoverChangeSpeed` sum) x `ctrlModifier+0x14` / 100 per second. Every
+#: `GuardOn`/`GuardStart` clip carries TAE 225 (`SetSPRegenRatePercent`) = 20 for its whole length
+#: (`TAE`), so a raised guard regenerates 20%; HKS stops it outright (`act(110)`) only in the
+#: `GuardDamage*` updates, never in a `GuardOn`/`GuardStart` state (c0000.hks, `er-hks-disasm.py
+#: --calls-to act`). Per second of game time: the tick's `FD4Time` is the frame's seconds
+#: (`er-mechanics-exchange.STAMINA_REGEN_PER_S`, `VERIFIED` and byte-checked there). The tick
+#: multiplies by each blocker's `staminaRecoveryModifier` too (`RECOVERY_MODIFIER`, from the equip
+#: load its corpus row holds, `Blockers.recovery`). Each blocker's sum is read
+#: off its own equipment (`Blockers.regen_add`, `equipment_regen_add`): its worn talismans
+#: (`worn_talismans`, `er-mechanics-talismans.stamina_regen_add`: Green Turtle 8, Two-Headed Turtle
+#: 10) and the weapons it holds (`er-mechanics-talismans.equipment_regen_adds`: the Great Turtle
+#: Shell, +3); no armor row carries one, and no buff is applied to a blocker. A build holding none
+#: regenerates the 45/s base (`GUARD_REGEN_PER_FRAME`): a regen item is a choice, never a default.
 BASE_STAMINA_REGEN_PER_S = 45.0
 GUARD_REGEN_RATE = 0.20
 GUARD_REGEN_PER_FRAME = BASE_STAMINA_REGEN_PER_S * GUARD_REGEN_RATE / 30.0
+#: `staminaRecoveryModifier` (`ChrIns+0xe8`) by `GetWeightType` result, 1.0 for any other (`VERIFIED`
+#: 2.7.2.0, `eldenring-deobf-1.17.2.bin`; the 1.16.2 named dump has the same block in `FUN_140660120`,
+#: the `PlayerIns` update). The regeneration tick multiplies its rate by it: `mulss xmm6,
+#: [rdi+0xe8]` at 0x140401b81, xmm6 = `SPRegenRatePercent` / 100, times `GetStaminaRecoverySpeed`
+#: (vtable +0x330, 45 + the SpEffect sum) at 0x140401b95. Its writer runs every 1.0 s (timer
+#: `ChrIns+0x5d4`) for the main player or an NPC: burden `CalculateEquipmentWeight` 0x140247b80
+#: (called at 0x140661956), max load 0x14065ed20 (0x140661961), weight type 0x14068d8f0
+#: (0x140661979: `CalculatePlayerWeight` 0x14068d0a0, then a tail jump to `GetWeightType`
+#: 0x14068d930), then type 3 loads 0.8 (0x1429ccbc8), 4 loads 0.7 (0x1432a3bec), any other 1.0
+#: (0x1432a3bf8), stored at 0x140661a2d. A blocker's stamina is taken to run on its own client,
+#: where it is the main player (`INFERRED`).
+RECOVERY_MODIFIER = {3: 0.8, 4: 0.7}
+
+
+def recovery_modifier(weight_type):
+    """`staminaRecoveryModifier` for a `GetWeightType` result (None or unknown: 1.0)."""
+    return RECOVERY_MODIFIER.get(weight_type, 1.0)
+
+
+def guard_regen_per_frame(add=0.0, modifier=1.0):
+    """Stamina a raised guard regenerates per real frame: (45 + `add`) x 20% x `modifier` / 30;
+    `add` is the blocker's `staminaRecoverChangeSpeed` sum and `modifier` its
+    `staminaRecoveryModifier` (scalars or per-build arrays)."""
+    return (BASE_STAMINA_REGEN_PER_S + add) * GUARD_REGEN_RATE * modifier / 30.0
 #: A repelled attacker plays `W_Repelled_Small` (31910/33910/35910) or `W_Repelled_Large`
 #: (31920/...), picked by a damage level not traced here. Small allows roll and R1 at f22, large
 #: roll f27, R1 f30 (`TAE`, categories 20/23/31 identical). The small one is used: it is the
@@ -266,7 +333,7 @@ GUARD_FIELDS = ['guardBaseRepel', 'attackBaseRepel', 'staminaGuardDef', 'physGua
                 'wepmotionCategory', 'spAtkcategory', 'overStrength', 'saGuardCutRate',
                 'properStrength', 'properAgility', 'properMagic', 'properFaith', 'properLuck',
                 'slashGuardCutRate', 'blowGuardCutRate', 'thrustGuardCutRate',
-                'guardCutCancelRate']
+                'guardCutCancelRate', 'weight']
 REINFORCE_GUARD_FIELDS = ['staminaGuardDefRate', 'physicsGuardCutRate', 'magicGuardCutRate',
                           'fireGuardCutRate', 'thunderGuardCutRate', 'darkGuardCutRate']
 GUARD_ATK_FIELDS = ['guardBreakCorrection', 'guardStaminaCutRate', 'guardRate',
@@ -575,6 +642,36 @@ def block_hit(reg, hit, ar, guard, strength=0, pvp=True, stamina_rate=1.0):
     }
 
 
+def guard_reaction_windows(category=0):
+    """{reaction: (first real frame of a JumpTable 22 window, end of the TAE 225 0% span from frame
+    0)} of the `GUARD_REACTION_CLIPS` in a<category>.tae, None for a clip the TAE lacks. Ungated
+    type-0 events and type-0-weight early events (300) count, as `er-mechanics-disengage.windows`
+    reads cancels."""
+    anims = ATK.tae_animations(category) or {}
+    out = {}
+    for name, anim in GUARD_REACTION_CLIPS.items():
+        events = anims.get(anim)
+        if not events:
+            out[name] = None
+            continue
+        to_real = ATK.clip_to_real(events)
+        starts, zero = [], 0.0
+        for e in events:
+            if e.type == 0:
+                jid = struct.unpack_from('<i', e.params, 0)[0]
+                if jid == JUMP_TABLE_GUARD_CANCEL and not struct.unpack_from('<H', e.params, 0xE)[0]:
+                    starts.append(to_real(e.start) * 30.0)
+            elif e.type == 300:
+                jid, kind = struct.unpack_from('<hh', e.params, 0)
+                w = ATK._early_interval(e, 0.0) if jid == JUMP_TABLE_GUARD_CANCEL and kind == 0 else None
+                if w:
+                    starts.append(to_real(w[0]) * 30.0)
+            elif e.type == 225 and e.params[0] == 0 and e.start <= 1e-6:
+                zero = max(zero, to_real(min(e.end, 1e3)) * 30.0)
+        out[name] = (round(min(starts), 3) if starts else None, round(zero, 3))
+    return out
+
+
 def blocker_ready(reaction, broken=False):
     """(R1 frame, regen-pause frames) of the blocker after a guard reaction or a guard break."""
     if broken:
@@ -717,6 +814,85 @@ def blocker_corpus(mirror=None, rl_lo=140, rl_hi=160):
     return out
 
 
+def worn_talismans(build):
+    """The talisman names `build` wears in its active talisman set, read as
+    `er-builds-embed.equipped` reads them (`equipSet[active]`, else `equipIndex`)."""
+    sets = (build.get('sets') or {}).get('talismans') or []
+    active = next((i for i, s in enumerate(sets) if s.get('active')), 0)
+    out = []
+    for s in (build.get('talismans') or {}).get('slots') or []:
+        es = s.get('equipSet')
+        pos = (es[active] if active < len(es) else None) if isinstance(es, list) else s.get('equipIndex')
+        if pos is not None and s.get('name'):
+            out.append(s['name'])
+    return out
+
+
+ARMOR_PARTS = ('head', 'body', 'arms', 'legs')
+
+
+def worn_protectors(build):
+    """The armor names `build` wears in its active protector set, read as `er-builds-optimize.other_load`
+    reads them (`er-builds-embed.equipped` per part)."""
+    sets = (build.get('sets') or {}).get('protectors') or []
+    active = next((i for i, s in enumerate(sets) if s.get('active')), 0)
+    out = []
+    for part in ARMOR_PARTS:
+        for s in ((build.get('protectors') or {}).get(part) or {}).get('slots') or []:
+            es = s.get('equipSet')
+            pos = (es[active] if active < len(es) else None) if isinstance(es, list) else s.get('equipIndex')
+            if pos is not None and s.get('name'):
+                out.append(s['name'])
+    return out
+
+
+def _res_model():
+    """`er-mechanics-resources.Model`, read once: armor and talisman weights, `burden`, `weight_type`."""
+    if 'res' not in _MODS:
+        _MODS['res'] = _load('er_mechanics_resources', 'er-mechanics-resources.py').Model()
+    return _MODS['res']
+
+
+_TALISMANS = []
+
+
+def _talisman_module():
+    if not _TALISMANS:
+        _TALISMANS.append(_load('er_mechanics_talismans', 'er-mechanics-talismans.py'))
+        _TALISMANS.append(None)
+    return _TALISMANS[0]
+
+
+def stamina_regen_add(names):
+    """`er-mechanics-talismans.stamina_regen_add` of `names` (0.0 for none), the tables read once."""
+    names = [n for n in names or () if n]
+    if not names:
+        return 0.0
+    tm = _talisman_module()
+    if _TALISMANS[1] is None:
+        _TALISMANS[1] = tm.Talismans()
+    return tm.stamina_regen_add(_TALISMANS[1], names)
+
+
+def weapon_regen_add(wid, base=None):
+    """The `staminaRecoverChangeSpeed` weapon `wid` (else its `base` row) adds while held
+    (`er-mechanics-talismans.equipment_regen_adds`).
+
+    Which weapons count is `VERIFIED` from the binary (2.7.2.0 `eldenring-deobf-1.17.2.bin`, names
+    from the 1.16.2 dump): only the selected slot of each hand, whatever the grip.
+    `PlayerIns::InitializeSpEffects` builds a `WepSpEffectEquipCtrl` on the player's ChrAsm, and
+    its size call (0x140502450) sets 4 entries. The vtable is 0x142a4f8b8, and its table at +0x70
+    maps the entries to ChrAsm special indices {-2, -1, -2, -1}; entries 2 and 3 take that
+    weapon's Ash of War. `GetParamId` 0x1405027c0 resolves each index with
+    `ChrAsm::GetBySpecialIndex` 0x1403be440: -2 is the left hand's selected index x 2
+    (WeaponLeft1-3) and -1 is the right hand's x 2 + 1 (WeaponRight1-3). Both read it through
+    `getSelectedWeaponSlotIndex` 0x1404c55c0, which returns `equipment[n + 1]` and never reads
+    `equipment[0]`, the arm style. So the other two slots of each hand apply nothing. A weapon
+    carried on the back while the other one is two-handed still applies its effect."""
+    adds = _talisman_module().equipment_regen_adds()['weapon']
+    return adds.get(wid, adds.get(base, 0.0)) if wid is not None else 0.0
+
+
 def _active_slots(build):
     """{equip position: slot} worn in the build's active weapon set (`er-builds-embed.equipped`)."""
     sets = (build.get('sets') or {}).get('weapons') or []
@@ -743,7 +919,9 @@ class Blockers:
 
     Per build: the guard weapon (left hand one-handed, right hand two-handed), its affinity row
     and level, whether the build meets its stat requirements (`FUN_14068d6c0` and `FUN_140685840`
-    drop repel and guard boost to 0 otherwise), max stamina, flat defense and absorption.
+    drop repel and guard boost to 0 otherwise), max stamina, its talismans' stamina regeneration add
+    (`regen_add`, `worn_talismans`; no buff of the build is applied), its equip-load tier and the
+    `staminaRecoveryModifier` that follows (`load_type`, `recovery`), flat defense and absorption.
     `curve(attack, defenses)` is the defense curve over an array; the ranking passes its own
     `er-builds-pvp.defense_curve` (the default vectorises the scalar one and is slow).
     """
@@ -765,6 +943,11 @@ class Blockers:
             if n and wid % 10000 == 0 and n not in self._by_name:
                 self._by_name[n] = wid
         self.stamina = np.array([float((b.get('computed') or {}).get('maxStamina') or 0) for b in builds])
+        self.regen_add = np.array([self.equipment_regen_add(b) for b in builds], float)
+        # `GetWeightType` of each build's own load (`equip_load`), -1 where the row cannot give it,
+        # and the `staminaRecoveryModifier` that follows (1.0 for those).
+        self.load_type = np.array([self.equip_load(b)[0] for b in builds], int)
+        self.recovery = np.array([recovery_modifier(int(t)) for t in self.load_type], float)
         comp = [b['computed'] for b in builds]
         self.defense = {el: np.array([c['defenses'][el] for c in comp], float) for el in ELEMENTS}
         self.mult = {t: 1.0 - np.array([c['absorption'][k] for c in comp], float) / 100.0
@@ -847,6 +1030,73 @@ class Blockers:
         have = {k: float(stats.get(k) or 0) * (TWO_HAND_STR if k == 'str' and two else 1.0) for k in need}
         return all(have[k] >= need[k] for k in need)
 
+    def equipment_regen_add(self, build):
+        """The build's own `staminaRecoverChangeSpeed` sum: its worn talismans' and the two weapons
+        it holds (`_active_slots` positions 0 and 3, the ones `guard_of` reads). 0.0 when it wears
+        and holds none of the items that add one.
+
+        The game applies a weapon's resident SpEffects from each hand's selected slot, and from no
+        other slot, whatever the grip (`VERIFIED`, `weapon_regen_add`). So both positions are read
+        when `is2h` is set: the hand that is not two-handed still applies its weapon's effect.
+        The planner numbers a set's armaments 0-2 for the right hand and 3-5 for the left
+        (`er-builds-embed.RIGHT_PRIMARY` / `LEFT_PRIMARY`). It stores which planner set is active,
+        but not which of a hand's three slots the player has drawn in game. Positions 0 and 3 are
+        each hand's first slot, and reading them assumes the build fights with its first slots
+        drawn (`INFERRED`, the same assumption `guard_of` and `er-builds-embed.loadout` make).
+        A Great Turtle Shell at position 4 or 5 applies in game only while the player has switched
+        the left hand to that slot. The planner cannot record that, so it is not counted (11
+        active-set holders of the 5,699-build corpus, `MEASURED` 2026-11-13)."""
+        pos = _active_slots(build)
+        held = 0.0
+        for p in (0, 3):
+            slot = pos.get(p)
+            base = self._by_name.get(plain_name(slot['name'])) if slot is not None else None
+            if base is not None:
+                # `_weapon_id`'s resolution, without counting an unmatched name a second time.
+                wid = base + 100 * self._aff.get((slot.get('infusion') or 'Standard').lower(), 0)
+                held += weapon_regen_add(wid, base)
+        return stamina_regen_add(worn_talismans(build)) + held
+
+    def equip_load(self, build):
+        """(`GetWeightType`, burden, max load) of the build as its row holds it; type -1 when the row
+        lacks a piece of that (`burden` None: a weapon, armor or talisman name the regulation does
+        not resolve, or two weapons stored at one position of the active set, which no character
+        can hold; max load None: no `computed.maxEquipLoad`).
+
+        Burden is `er-mechanics-resources.Model.burden` (`CalculateEquipmentWeight` 0x140247b80, the
+        sum the game's `staminaRecoveryModifier` writer reads): every weapon of the active set's six
+        positions (`EquipParamWeapon.weight` of the name's base row, as `er-builds-optimize.other_load`
+        reads it), the active armor (`worn_protectors`) and talisman set (`worn_talismans`). Max
+        load is the planner's `computed.maxEquipLoad`, which the game model reproduces on 99.45% of
+        the corpus (resources.md section 8). The tier is `Model.weight_type` (`GetWeightType`
+        0x14068d930, strict comparisons with 0.3, 0.7 and 1.0, resources.md section 5)."""
+        res = _res_model()
+        active = _active_slots(build)
+        sets = (build.get('sets') or {}).get('weapons') or []
+        act = next((i for i, s in enumerate(sets) if s.get('active')), 0)
+        held = 0
+        for s in (build.get('inventory') or {}).get('slots') or []:
+            es = s.get('equipSet')
+            pos = (es[act] if act < len(es) else None) if isinstance(es, list) else s.get('equipIndex')
+            held += pos is not None and bool(s.get('name'))
+        if held != len(active):
+            return -1, None, None
+        weapons = []
+        for slot in active.values():
+            base = self._by_name.get(plain_name(slot['name']))
+            if base is None:
+                return -1, None, None
+            weapons.append(float(self.reg.weapon[base]['weight']))
+        armor, tal = worn_protectors(build), worn_talismans(build)
+        if any(n not in res.protector_by_name for n in armor) or \
+                any(n not in res.accessory_by_name for n in tal):
+            return -1, None, None
+        burden = res.burden(weapons, armor, tal)
+        top = float((build.get('computed') or {}).get('maxEquipLoad') or 0.0)
+        if top <= 0.0:
+            return -1, burden, None
+        return res.weight_type(burden, top), burden, top
+
     # -- the distribution ----------------------------------------------------------------------
 
     def distribution(self):
@@ -870,6 +1120,12 @@ class Blockers:
                 'repel': spread([self.guards[i]['repel_value'] for i in idx]),
                 'stats_unmet': int(sum(not self.guards[i]['stats_met'] for i in idx)),
                 'stamina': spread(self.stamina[self.can]),
+                # Blockers whose talismans add stamina regeneration (`regen_add`), and how much.
+                'regen_add_share': float((self.regen_add[self.can] > 0).mean()) if self.can.any() else 0.0,
+                'regen_add': dict(collections.Counter(float(x) for x in self.regen_add[self.can] if x > 0)),
+                # Equip-load tiers of the blockers (`equip_load`; -1 = the row cannot give one).
+                'load_types': dict(sorted(collections.Counter(int(t) for t in self.load_type[self.can]).items())),
+                'load_types_all': dict(sorted(collections.Counter(int(t) for t in self.load_type).items())),
                 'unmatched_names': self.unmatched.most_common(5)}
 
     # -- one attack slot against the distribution -----------------------------------------------
@@ -908,8 +1164,10 @@ class Blockers:
         unguarded damage x the share the guard passes with the attacker's guard-cut cancel in
         (`CalculateDamageBasic` 0x140685cd0 multiplies `victimGuardDefRate` into the same product
         as armor absorption, `VERIFIED`), times `Tables.repel_chip` on a repelled hit.
-        With `cycle`, the guard regenerates `GUARD_REGEN_PER_FRAME` over the frames between two
-        throws that are past its guard reaction's 0% window (`blocker_ready`), and `drain` is the
+        With `cycle`, the guard regenerates `guard_regen_per_frame` of the blocker's own add
+        (`regen_add`) and equip-load modifier (`recovery`) over the frames between two throws that
+        are past its guard reaction's pause (`blocker_ready`: the guard comes back on the reaction
+        clip's JumpTable 22 frame, `GUARD_REACTION_REGEN_PAUSE`), and `drain` is the
         stamina net of that / max stamina, capped at 1; without it, no regeneration.
         The blocked hit is worth `value` = min(1, chip / unguarded + drain) of a landed one
         (`INFERRED`: a full drain is a guard break, taken as one landed hit's worth), minus
@@ -961,7 +1219,7 @@ class Blockers:
         st_b = stam[safe]
         regen = np.zeros(self.n)
         if cycle:
-            regen = GUARD_REGEN_PER_FRAME * np.maximum(0.0, cycle - pause[safe])
+            regen = guard_regen_per_frame(self.regen_add, self.recovery) * np.maximum(0.0, cycle - pause[safe])
         with np.errstate(divide='ignore', invalid='ignore'):
             drain = np.where(self.stamina > 0,
                              np.minimum(1.0, np.maximum(0.0, st_b - regen) / self.stamina), 1.0)
@@ -1619,12 +1877,13 @@ def selftest():
         skips.append('planner corpus absent: ' + mirror)
 
     #    c. Synthetic blockers: slot_pressure reuses block_hit, so its stamina equals block_matrix's.
-    def build(left, two=False, stamina=150.0, right='Longsword', stats=None):
+    def build(left, two=False, stamina=150.0, right='Longsword', stats=None, talismans=()):
         slots = [{'name': right, 'equipIndex': 0, 'infusion': 'Standard', 'upgrade': 25}]
         if left:
             slots.append({'name': left, 'equipIndex': 3, 'infusion': 'Standard', 'upgrade': 25})
         return {'stats': stats or {'str': 40, 'dex': 20, 'int': 9, 'fth': 9}, 'is2h': two,
                 'weaponUpgrade': 25, 'inventory': {'slots': slots},
+                'talismans': {'slots': [{'name': n, 'equipIndex': i} for i, n in enumerate(talismans)]},
                 'computed': {'maxStamina': stamina,
                              'defenses': {k: 100 for k in ABSORB_KEY.values()},
                              'absorption': {k: 20.0 for k in ABSORB_KEY.values()}}}
@@ -1678,6 +1937,150 @@ def selftest():
     check('a 2H Greatsword R1 drains more than a Dagger R1', p['drain'] > pd['drain'], True, src)
     check('guard pressure favours the Greatsword R1', p['factor'] > pd['factor'], True, src)
     check('a Dagger R1 bounces off the Brass Shield (40 <= 50)', pd['repel_share'], 0.5, src)
+    # The blocker's own talismans in its guard regeneration (Green Turtle +8: 53 x 20% a second, against
+    # 45 x 20%), over the frames of a 60-frame cycle past its guard reaction's 0% pause; the talisman
+    # set read is the active one (`worn_talismans`, as `er-builds-embed.equipped` reads it).
+    tsrc = 'talismans.md section 4 (Green Turtle staminaRecoverChangeSpeed 8) / FUN_140401ac0'
+    tb = Blockers(reg, [build('Brass Shield', talismans=['Green Turtle Talisman']), build('Brass Shield')])
+    pt = tb.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}], cycle=60.0)
+    gpause = blocker_ready(block_hit(reg, gs2, {}, tb.guards[tb.index[0]], pvp=True)['reaction'])[1]
+    check('a Green Turtle blocker regenerates 53 x 20% a second on guard, a bare one 45 x 20%',
+          (tuple(tb.regen_add), round(pt['regen'], 9)),
+          ((8.0, 0.0), round((guard_regen_per_frame(8.0) + guard_regen_per_frame(0.0)) / 2 * (60.0 - gpause), 9)), tsrc)
+    sets = {'sets': {'talismans': [{'active': False}, {'active': True}]},
+            'talismans': {'slots': [{'name': 'Green Turtle Talisman', 'equipSet': [0, None]},
+                                    {'name': 'Two-Headed Turtle Talisman', 'equipSet': [None, 2]}]}}
+    check('worn_talismans reads the active set only', worn_talismans(sets), ['Two-Headed Turtle Talisman'], tsrc)
+    hb = Blockers(reg, [build('Great Turtle Shell'), build('Great Turtle Shell', talismans=['Green Turtle Talisman']),
+                        build('Brass Shield', talismans=['Hammer Talisman'])])
+    check('a held Great Turtle Shell adds 3 (+8 with Green Turtle); a build with neither adds none',
+          tuple(float(x) for x in hb.regen_add), (3.0, 11.0, 0.0),
+          'REGULATION EquipParamWeapon 31140000 residentSpEffectId 5311400 (+3)')
+    # Resident SpEffects come from each hand's selected slot, whatever the grip (`weapon_regen_add`).
+    # A build two-handing its right weapon keeps the left shell's +3. A shell in the left hand's
+    # second slot (position 4) is not the first slot this model reads, so it adds nothing.
+    second = build('Brass Shield')
+    second['inventory']['slots'].append({'name': 'Great Turtle Shell', 'equipIndex': 4,
+                                         'infusion': 'Standard', 'upgrade': 25})
+    gb = Blockers(reg, [build('Great Turtle Shell', two=True), second])
+    check('a two-handed build keeps its left Great Turtle Shell (+3); one in the second left slot adds none',
+          tuple(float(x) for x in gb.regen_add), (3.0, 0.0),
+          'WepSpEffectEquipCtrl {-2,-1} -> ChrAsm::GetBySpecialIndex 0x1403be440 (2.7.2.0), no armStyle read')
+
+    #    e. Equip load: each blocker's `staminaRecoveryModifier` from the load its row holds.
+    lsrc = 'GetWeightType 0x14068d930 (resources.md section 5) / staminaRecoveryModifier writer 0x1406619eb'
+    loads = [build('Brass Shield') for _ in range(5)]
+    f32_sum = 0.0
+    for wname in ('Longsword', 'Brass Shield'):
+        f32_sum = struct.unpack('<f', struct.pack('<f', f32_sum + float(reg.weapon[reg.find_weapon(wname)]['weight'])))[0]
+    burden = Blockers(reg, loads[:1]).equip_load(loads[0])[1]
+    check('burden = Longsword + Brass Shield weights in single precision, no armor or talisman',
+          burden, f32_sum, 'REGULATION EquipParamWeapon.weight / CalculateEquipmentWeight 0x140247b80')
+    for b, ratio in zip(loads, (0.5, 0.8, 1.2)):
+        b['computed']['maxEquipLoad'] = burden / ratio
+    loads[4]['computed']['maxEquipLoad'] = burden / 0.5
+    loads[4]['protectors'] = {'head': {'slots': [{'name': 'No Such Helm', 'equipIndex': 0}]}}
+    lb = Blockers(reg, loads)
+    check('load 50% medium, 80% heavy, 120% overloaded; no max load and an unknown armor name give -1',
+          (lb.load_type.tolist(), lb.recovery.tolist()), ([2, 3, 4, -1, -1], [1.0, 0.8, 0.7, 1.0, 1.0]), lsrc)
+    hl = Blockers(reg, loads[:2])
+    phl = hl.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}], cycle=60.0)
+    hpause = blocker_ready(block_hit(reg, gs2, {}, hl.guards[hl.index[0]], pvp=True)['reaction'])[1]
+    check('a heavy-load blocker regenerates 0.8 of a medium one\'s 45 x 20% a second on guard',
+          round(phl['regen'], 9), round((1.0 + 0.8) / 2 * guard_regen_per_frame(0.0) * (60.0 - hpause), 9), lsrc)
+    if os.path.exists(mirror):
+        # The burden reads the same slots `er-builds-optimize.other_load` reads: its burden less
+        # the heaviest right-hand weapon equals that function's, build for build.
+        opt = _load('er_builds_optimize_for_selftest', 'er-builds-optimize.py')
+        same = compared = 0
+        for b in corpus_bl._builds:
+            _, own, _ = corpus_bl.equip_load(b)
+            other = opt.other_load(b)
+            if own is None or other is None:
+                continue
+            right = [float(reg.weapon[corpus_bl._by_name[plain_name(s['name'])]]['weight'])
+                     for p, s in _active_slots(b).items() if p in (0, 1, 2)]
+            compared += 1
+            same += abs(own - max(right, default=0.0) - other) < 1e-3
+        check('equip_load burden less the heaviest right weapon = er-builds-optimize.other_load (RL 140-160)',
+              (same == compared, compared > 0), (True, True), 'er-builds-optimize.py')
+
+    #    f. The guard reaction's regeneration pause: no regeneration in a GuardDamage state, which a
+    #       blocker holding L1 leaves on its clip's first JumpTable 22 frame.
+    src = 'TAE a0xx.tae guard-reaction clips 019200 / 019210 / 019220'
+    want = {'small': (16.0, 10.0), 'middle': (32.0, 27.0), 'large': (53.0, 49.0)}
+    for cat in GUARD_STYLE_CATEGORIES:
+        w = guard_reaction_windows(cat)
+        if all(v is None for v in w.values()):
+            skips.append(f'a{cat:03d}.tae: no guard-reaction clips')
+            continue
+        check(f'a{cat:03d} guard reactions: (JumpTable 22 from, TAE 225 0% to)', w, want, src)
+    check('GUARD_REACTION_REGEN_PAUSE = the later of the JumpTable 22 frame and the 0% span',
+          {k: GUARD_REACTION_REGEN_PAUSE[k] for k in want}, {k: max(v) for k, v in want.items()}, src)
+    if os.path.exists(HKS_COMPILED):
+        dis = _load('er_hks_disasm', 'er-hks-disasm.py')
+        main_f = dis.parse_file(HKS_COMPILED)[3]
+        dis.name_functions(main_f)
+        fs = {f.name: f for f in dis.walk(main_f) if f.name}
+        src = f'VERIFIED compiled {HKS_COMPILED}'
+        names = [f'GuardDamage{k}_onUpdate' for k in ('Small', 'Middle', 'Large')]
+        check('GuardDamageSmall/Middle/Large_onUpdate: act(110), then DamageCommonFunction(TO_GUARDON, ...)',
+              [[(c, a[:1]) for _, c, a in list(dis.calls(fs[n]))[:2]] for n in names],
+              [[('act', ['110']), ('DamageCommonFunction', ['TO_GUARDON'])]] * 3, src)
+        check('DamageCommonFunction calls ExecGuardOnCancelTiming',
+              any(c == 'ExecGuardOnCancelTiming' for _, c, _ in dis.calls(fs['DamageCommonFunction'])), True, src)
+        check('ExecGuardOnCancelTiming first tests env(243)',
+              tuple(next(dis.calls(fs['ExecGuardOnCancelTiming']))[1:]), ('env', ['243']), src)
+        check('act(110) callers: no GuardOn / GuardStart state stops regeneration',
+              sorted({f.name for f in dis.walk(main_f) for _, c, a in dis.calls(f) if c == 'act' and a[:1] == ['110']}),
+              ['AddStamina', 'GuardDamageLarge_JustGuard_onUpdate', 'GuardDamageLarge_onUpdate',
+               'GuardDamageMiddle_JustGuard_onUpdate', 'GuardDamageMiddle_onUpdate',
+               'GuardDamageSmall_JustGuard_onUpdate', 'GuardDamageSmall_onUpdate',
+               'RideMoveStaminaConsume', 'SpeedUpdate'], src)
+    else:
+        skips.append('compiled c0000.hks absent: ' + HKS_COMPILED)
+    path = ATK.DEOBF
+    if os.path.exists(path):
+        src = f'EXE {os.path.basename(path)} (2.7.2.0)'
+
+        def at(va, hexs):
+            return ATK._image_read(path, va, len(hexs) // 2).hex() == hexs
+
+        def jump(va, length=5):
+            return va + length + struct.unpack('<i', ATK._image_read(path, va + length - 4, 4))[0]
+
+        def short(va):
+            return va + 2 + struct.unpack('<b', ATK._image_read(path, va + 1, 1))[0]
+        check('the tick skips a frame with actionFlags bit 0x40 and multiplies by ChrIns+0xe8 '
+              '(0x140401b60, 0x140401b81, GetStaminaRecoverySpeed vtable +0x330 at 0x140401b8f)',
+              (at(0x140401B60, '8b4118c1e806a801'), at(0x140401B81, 'f30f59b7e8000000'),
+               at(0x140401B8F, 'ff9030030000'), at(0x140401B95, 'f30f59c6')), (True,) * 4, src)
+        check('ChrCtrlModifierData::Reset zeroes actionFlags every frame (0x1403c3ba2)',
+              (at(0x1403C3B73, '4533c0'), at(0x1403C3BA2, '44894110')), (True, True), src)
+        check('the modifier writer: CalculateEquipmentWeight, max load, CalculatePlayerWeight -> GetWeightType',
+              (jump(0x140661956), jump(0x140661961), jump(0x140661979), at(0x14066197E, '448bf8'),
+               jump(0x14068D907), jump(0x14068D923)),
+              (0x140247B80, 0x14065ED20, 0x14068D8F0, True, 0x14068D0A0, 0x14068D930), src)
+        je3, je4 = short(0x1406619EF), short(0x1406619F5)
+        picked = {t: round(ATK._read_f32(path, jump(va, 8)), 6) for t, va in ((3, je3), (4, je4), (2, 0x1406619F7))}
+        check('weight type 3 -> 0.8, 4 -> 0.7, others 1.0, stored at ChrIns+0xe8 (0x140661a2d)',
+              (at(0x1406619EB, '4183ef03'), at(0x1406619F1, '4183ff01'), picked, at(0x140661A2D, 'f30f1186e8000000')),
+              (True, True, {t: recovery_modifier(t) for t in (3, 4, 2)}, True), src)
+        idx = ATK._image_read(path, 0x140413964 + 243 - 0xDF, 1)[0]
+        env243 = ATK.IMAGE_BASE + struct.unpack('<I', ATK._image_read(path, 0x140413728 + 4 * idx, 4))[0]
+        check('HksEnv 243: GUARD (0x18) cancel bit of possibleActionCancels (+0xa0) and L1 (2) held',
+              (env243, at(0x140411267, '81c221ffffff'), at(env243 + 0xA, '41b818000000'),
+               at(env243 + 0x10, '41bf01000000'), jump(env243 + 0x20), at(0x140411556, '418d5701'),
+               jump(0x14041155A), at(0x140407C3D, '498b81a0000000'), at(0x140407C47, '480fa3c8'),
+               at(0x140407848, 'f30f108481b0000000')),
+              (0x14041151D, True, True, True, 0x140407C20, True, 0x140407840, True, True, True), src)
+        jt22 = ATK.IMAGE_BASE + struct.unpack('<I', ATK._image_read(path, ATK.JT_TABLE + 4 * (JUMP_TABLE_GUARD_CANCEL - 1), 4))[0]
+        check('_ChrActionFlag JumpTable 22 sets that bit: edx 0x18 into SetAllowedCancelToActionState',
+              (jt22, at(jt22 + 0x1B, 'ba18000000'), jump(jt22 + 0x20), jump(0x140427DC2),
+               at(ATK.SET_ALLOWED_CANCEL + 0x13, '4c0988a0000000')),
+              (0x14042810C, True, 0x140427DBC, ATK.SET_ALLOWED_CANCEL, True), src)
+    else:
+        skips.append(f'regeneration code: {path} absent')
     gs_guard = shield_guard(reg, 4000000, 25, two_handed=True)
     dg_guard = shield_guard(reg, 1000000, 25, two_handed=True)
     check('a 2H Greatsword guard stops more than a 2H Dagger guard',

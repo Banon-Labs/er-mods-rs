@@ -244,6 +244,13 @@ def proc_reaction(status, hit_level=0, exempt=False):
     return None
 
 
+def promotion_exempt(speffects=(), sword_arts_id=None):
+    """Whether `ExecDamage` skips the bleed/frost promotion for a victim with the SpEffects
+    `speffects` on, or playing the one-shot skill `sword_arts_id` (`COMMUNITY`, the constants
+    `PROMOTE_EXEMPT_SPEFFECTS` and `PROMOTE_EXEMPT_ART_TYPE`): `proc_reaction`'s `exempt`."""
+    return bool(set(speffects) & set(PROMOTE_EXEMPT_SPEFFECTS)) or sword_arts_id == PROMOTE_EXEMPT_ART_TYPE
+
+
 def escape(react, count=1, delay=0):
     """Earliest frame the victim leaves `react` by rolling or guarding, plus `delay`."""
     if react is None or not react['locks']:
