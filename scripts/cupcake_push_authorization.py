@@ -389,12 +389,11 @@ def prompt_and_chain(path: str, tool_use_id: str, deadline: float) -> tuple[str,
             raise Refused(NO_PROMPT)
         return found
     # In the main session the line is not on disk at all while PreToolUse hooks run: Claude Code
-    # writes it after they return (bd er-effects-rs-hu4w; on 2026-10-22, session e75d8996, two
-    # authorized pushes of `feat/asset-geometry-tooling` were refused here after the full wait).
-    # What is on disk then is the conversation up to this call, which descends from its newest
-    # entry, so the chain is walked back from there -- the same fallback
-    # `cupcake_commit_authorization.locate` takes. An entry whose parent is not written yet is
-    # stepped over, up to `HEAD_CANDIDATES` of them.
+    # writes it after they return (on 2026-10-22, session e75d8996, two authorized pushes of one
+    # branch were refused here after the full wait). What is on disk then is the conversation up
+    # to this call, which descends from its newest entry, so the chain is walked back from there,
+    # the same fallback `cupcake_commit_authorization.locate` takes. An entry whose parent is not
+    # written yet is stepped over, up to `HEAD_CANDIDATES` of them.
     heads = [e for e in reversed(entries)
              if isinstance(e.get("uuid"), str) and not e.get("isSidechain")]
     for head in heads[:HEAD_CANDIDATES]:
@@ -416,7 +415,8 @@ def walk_back(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dic
     """(uuid, text, chain) of the first genuine prompt back from `start`, the chain newest first.
 
     None when the walk reaches a parent the transcript does not hold yet. Raises Refused at a root,
-    a loop or a compaction summary, where the conversation ends without one.
+    a loop or a compaction summary, where the conversation ends without one; at a root or a summary
+    the refusal names an accepted `authorize <sha>` suggestion the walk passed (`suggestion_reason`).
     """
     node, seen, chain = start, set(), []
     while True:
@@ -429,13 +429,37 @@ def walk_back(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dic
         if text is not None and isinstance(uid, str):
             return uid, text, chain
         if node.get("type") == "user" and node.get("isCompactSummary"):
-            raise Refused(NO_PROMPT)
+            raise Refused(suggestion_reason(chain) or NO_PROMPT)
         parent = node.get("parentUuid")
         if not isinstance(parent, str):
-            raise Refused(NO_PROMPT)
+            raise Refused(suggestion_reason(chain) or NO_PROMPT)
         node = by_uuid.get(parent)
         if node is None:
             return None
+
+
+def suggestion_reason(chain: list[dict]) -> str | None:
+    """The refusal naming an accepted `authorize <sha>` suggestion on `chain`, or None.
+
+    `suggestion_accepted` is refused on purpose (point 2 of the module docstring), but a refusal
+    that does not say so leaves the user unable to tell that typing the same phrase would have
+    worked. The commit reader names its suggestion the same way (session 5ec7b779, 2026-11-11, where
+    a refusal after a compaction said only that nothing had been typed).
+    """
+    for e in chain:
+        origin = e.get("origin")
+        if (e.get("type") == "user" and isinstance(origin, dict) and origin.get("kind") == "human"
+                and e.get("promptSource") == "suggestion_accepted"):
+            content = (e.get("message") or {}).get("content") if isinstance(e.get("message"), dict) else None
+            if isinstance(content, list) and content and all(
+                    isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+                    for b in content):
+                content = "".join(b["text"] for b in content)
+            text = content.strip() if isinstance(content, str) else ""
+            if AUTH_RE.fullmatch(text):
+                return (f"the user's `{text}` was an accepted prompt suggestion, text the model wrote "
+                        "and the user only sent, and only a reply the user typed counts")
+    return None
 
 
 # --- one push per authorization ----------------------------------------------------------------
@@ -568,7 +592,8 @@ def decide(event: dict, started: float) -> None:
         raise Refused(f"no local branch `{branch}` in {repo}", branch)
     m = AUTH_RE.fullmatch(text.strip())
     if m is None:
-        raise Refused("the user's last message is not an authorization", branch, tip)
+        raise Refused(suggestion_reason(chain) or "the user's last message is not an authorization",
+                      branch, tip)
     if not tip.startswith(m.group(1).lower()):
         raise Refused(f"the user authorized {m.group(1)}, which is not the tip of `{branch}`",
                       branch, tip)

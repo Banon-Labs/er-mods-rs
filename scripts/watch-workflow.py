@@ -16,10 +16,20 @@ Usage:
     latest   newest wf_* run dir under the project (default)
     --follow tail live (default); --no-follow render current content and exit
     --full   include assistant reasoning text (default: tool calls + results + results only-ish)
+
+  watch-workflow.py --agent <agent id|/abs/agent-<id>.jsonl> [--full] [--linger S] [--no-follow]
+    One background subagent: its transcript
+    ~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl, rendered the same way and
+    followed until the main session's transcript (<project>/<session>.jsonl) carries the agent's
+    "finished" or "was stopped" task notification, or a TaskStop naming it. The view then prints
+    that end, waits --linger seconds (default 5) and exits, so a kitty window running it closes.
+    "Is waiting on its own background work" is not an end. scripts/kitty-tail-agent.py opens it.
 """
 import glob
 import json
 import os
+import re
+import select
 import shutil
 import sys
 import textwrap
@@ -33,6 +43,10 @@ DEFAULT_RESULT_LINES = 24
 MAX_TEXT_LINES = 10
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
+HERE = os.path.dirname(os.path.abspath(__file__))
+#: Seconds an agent view stays open after the agent ends, so its last lines can be read.
+AGENT_LINGER_S = 5
+AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 # --- ANSI ---
 RESET = "\033[0m"
@@ -182,8 +196,273 @@ def render_agent_line(o, tag, color, w, full, result_lines):
     return out
 
 
+# --- one background subagent ---------------------------------------------------------------------
+
+def agent_transcript(spec, root=None):
+    """One subagent's transcript: `spec` is its path, or the agent id the main session's Agent
+    result names (`agentId: <id>`), found as `<root>/<project>/<session>/subagents/agent-<id>.jsonl`
+    -- the current project's sessions first, then every project's. None when there is none (yet)."""
+    if spec and os.path.isfile(spec):
+        return os.path.abspath(spec)
+    if not spec or not AGENT_ID_RE.fullmatch(spec):
+        return None
+    root = root or PROJECTS_ROOT
+    name = f"agent-{spec}.jsonl"
+    here = glob.escape(os.path.join(root, "-" + os.getcwd().strip("/").replace("/", "-")))
+    for proj in (here, os.path.join(glob.escape(root), "*")):
+        hits = [p for p in glob.glob(os.path.join(proj, "*", "subagents", name)) if os.path.isfile(p)]
+        if hits:
+            return max(hits, key=os.path.getmtime)
+    return None
+
+
+def parent_transcript(path):
+    """The main session's transcript for an agent transcript: `<project>/<session>.jsonl`, beside
+    `<project>/<session>/subagents/agent-<id>.jsonl`. The agent's launch, its resumes and the task
+    notifications that say it ended are written there, never in its own transcript."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(path))) + ".jsonl"
+
+
+def agent_description(path):
+    """The description the main session gave the agent, from `agent-<id>.meta.json`, or ""."""
+    try:
+        with open(path[: -len(".jsonl")] + ".meta.json", encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    return str(meta.get("description") or "") if isinstance(meta, dict) else ""
+
+
+def _turn_scan():
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    import cupcake_turn_scan
+    return cupcake_turn_scan
+
+
+class AgentStatus:
+    """Whether one agent is still working, read from the main session's transcript as it grows.
+
+    The agent's own transcript has no end marker: it stops at its last message whether the agent
+    finished or parked on background jobs of its own. The main session's transcript says which, in
+    the task notification the harness delivers there (the three summaries
+    `cupcake_turn_scan.subagent_states` documents, surveyed over 1,942 notifications on 2026-11-11):
+      `Agent "<description>" finished`                               -> finished
+      `Agent "<description>" is waiting on its own background work`  -> waiting, not an end
+      `Agent "<description>" was stopped by Claude`                  -> stopped
+    A TaskStop naming the agent stops it as well, and a SendMessage answered `resumedAgentId` starts
+    it again. Only lines that carry the agent id are parsed, in file order, so the latest one wins.
+    """
+
+    def __init__(self, main_path, agent_id):
+        self.path = main_path
+        self.agent_id = agent_id
+        self.needle = agent_id.encode()
+        self.offset = 0
+        self.partial = b""
+        self.state = "running"
+        self.summary = ""
+        self.scan = _turn_scan()
+
+    def refresh(self):
+        """Read what was appended since the last call; True when the state changed."""
+        try:
+            with open(self.path, "rb") as f:
+                if os.fstat(f.fileno()).st_size < self.offset:
+                    self.offset, self.partial = 0, b""
+                f.seek(self.offset)
+                data = f.read()
+        except OSError:
+            return False
+        self.offset += len(data)
+        *lines, self.partial = (self.partial + data).split(b"\n")
+        before = self.state
+        for raw in lines:
+            if self.needle in raw:
+                self._line(raw)
+        return self.state != before
+
+    def _line(self, raw):
+        s = self.scan
+        try:
+            ev = json.loads(raw)
+        except ValueError:
+            return
+        if not isinstance(ev, dict) or ev.get("isSidechain") or ev.get("type") in s.REPLAY_EVENT_TYPES:
+            return
+        if ev.get("type") != "assistant":
+            for text in s._notification_carriers(ev):
+                for m in s.TASK_NOTIFICATION_BLOCK_RE.finditer(text):
+                    body = m.group(1)
+                    task_id = s.TASK_ID_RE.search(body)
+                    if not task_id or task_id.group(1) != self.agent_id:
+                        continue
+                    summary = s.TASK_SUMMARY_RE.search(body)
+                    parsed = s.AGENT_SUMMARY_RE.match(summary.group(1)) if summary else None
+                    if parsed is None:
+                        continue
+                    verb = parsed.group(2).lower()
+                    if verb == "finished":
+                        state = "finished"
+                    elif verb.startswith("is waiting on its own background work"):
+                        state = "waiting"
+                    elif verb.startswith("was stopped"):
+                        state = "stopped"
+                    else:
+                        continue
+                    self.state, self.summary = state, " ".join(summary.group(1).split())
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            return
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use" and b.get("name") in s.STOP_TOOLS:
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                if str(inp.get("task_id") or inp.get("shell_id") or "") == self.agent_id:
+                    self.state, self.summary = "stopped", f"{b.get('name')} named it"
+            elif b.get("type") == "tool_result" and not b.get("is_error"):
+                resumed = s.RESUMED_AGENT_RE.search(s._result_text(b))
+                if resumed and resumed.group(1) == self.agent_id:
+                    self.state, self.summary = "running", "resumed by SendMessage"
+
+
+class Writes:
+    """Wakes on a write to any of `paths` (inotify through cupcake_push_authorization.FileEvents),
+    with `seconds` as the longest wait; a bounded poll where inotify is unavailable."""
+
+    def __init__(self, paths):
+        self.watches = []
+        try:
+            if HERE not in sys.path:
+                sys.path.insert(0, HERE)
+            from cupcake_push_authorization import IN_MODIFY, FileEvents
+            for p in paths:
+                if os.path.exists(p):
+                    self.watches.append(FileEvents(p, IN_MODIFY))
+        except Exception:
+            self.close()
+
+    def wait(self, seconds):
+        if not self.watches:
+            bounded_poll_wait(min(seconds, 0.6))
+            return
+        ready, _, _ = select.select([w.fd for w in self.watches], [], [], seconds)
+        for fd in ready:
+            try:
+                os.read(fd, 65536)
+            except BlockingIOError:
+                pass
+
+    def close(self):
+        for w in self.watches:
+            w.close()
+        self.watches = []
+
+
+def watch_agent(spec, follow, full, result_lines, linger):
+    path = agent_transcript(spec)
+    if not path:
+        print(f"no transcript for agent {spec!r}: looked for "
+              f"{PROJECTS_ROOT}/*/*/subagents/agent-{spec}.jsonl", file=sys.stderr)
+        return 1
+    agent_id = os.path.basename(path)[len("agent-"):-len(".jsonl")]
+    desc = agent_description(path)
+    main_path = parent_transcript(path)
+    w = term_width()
+    tag = f"[{agent_id[:6]}]"
+    color = agent_color(agent_id)
+    sys.stdout.write(f"\033]2;agent {clip(desc or agent_id, 40)}\007")
+    print(f"{BOLD}{CYAN}▶ watching agent {agent_id}{RESET} {color}{desc}{RESET}")
+    print(f"{DIM}{path}{RESET}")
+    hint = task_hint(path)
+    if hint:
+        print(f"{color}{BOLD}▂ {tag} {RESET}{color}{hint}{RESET}")
+    status = AgentStatus(main_path, agent_id) if os.path.isfile(main_path) else None
+    if status is None:
+        print(f"{YELLOW}no main-session transcript at {main_path}, so this view cannot see the agent "
+              f"end; close it with Ctrl-C{RESET}")
+    cap_desc = "uncapped" if result_lines <= 0 else f"{result_lines} lines/result"
+    print(f"{DIM}{'follows until the agent ends' if follow else 'snapshot'} · "
+          f"{'full' if full else 'tools+results'} · {cap_desc}{RESET}\n")
+
+    offset = 0
+    partial = b""
+
+    def render():
+        nonlocal offset, partial
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read()
+        except OSError:
+            return
+        offset += len(data)
+        *lines, partial = (partial + data).split(b"\n")
+        for raw in lines:
+            try:
+                o = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(o, dict):
+                for out in render_agent_line(o, tag, color, w, full, result_lines):
+                    print(out)
+        sys.stdout.flush()
+
+    def ended():
+        return status is not None and status.state in ("finished", "stopped")
+
+    writes = Writes([path, main_path]) if follow else None
+    try:
+        render()
+        if status is not None:
+            status.refresh()
+        noted = None
+        while follow and not ended():
+            if status is not None and status.state != noted:
+                if status.state == "waiting":
+                    print(f"{YELLOW}… {status.summary}; still following{RESET}")
+                elif status.state == "running" and noted is not None:
+                    print(f"{GREEN}▶ {status.summary}{RESET}")
+                sys.stdout.flush()
+                noted = status.state
+            writes.wait(2.0)
+            render()
+            if status is not None:
+                status.refresh()
+        render()
+        if ended():
+            mark = GREEN if status.state == "finished" else RED
+            print(f"\n{BOLD}{mark}═══ agent {agent_id} {status.state}: {status.summary} ═══{RESET}")
+            if follow and linger > 0:
+                print(f"{DIM}closing in {linger} s{RESET}")
+                sys.stdout.flush()
+                bounded_poll_wait(linger)
+        elif status is not None:
+            print(f"\n{DIM}agent {agent_id} is {status.state}{RESET}")
+    except KeyboardInterrupt:
+        print(f"\n{DIM}(detached; the agent keeps going){RESET}")
+    finally:
+        if writes is not None:
+            writes.close()
+    return 0
+
+
+def take_option(argv, flag):
+    """Remove `flag VALUE` from argv and return `VALUE`; None when the flag is absent."""
+    if flag not in argv:
+        return None
+    i = argv.index(flag)
+    value = argv[i + 1] if i + 1 < len(argv) else None
+    del argv[i:i + 2]
+    return value
+
+
 def main():
     argv = sys.argv[1:]
+    agent = take_option(argv, "--agent")
+    linger = take_option(argv, "--linger")
     follow = "--no-follow" not in argv
     full = "--full" in argv
     result_lines = DEFAULT_RESULT_LINES
@@ -192,6 +471,12 @@ def main():
             result_lines = int(argv[argv.index("--result-lines") + 1])
         except (ValueError, IndexError):
             pass
+    if agent is not None:
+        try:
+            linger_s = int(linger) if linger is not None else AGENT_LINGER_S
+        except ValueError:
+            linger_s = AGENT_LINGER_S
+        return watch_agent(agent, follow, full, result_lines, linger_s)
     positional = [a for a in argv if not a.startswith("--")]
     # Drop the value that follows --result-lines from positionals.
     if "--result-lines" in argv:

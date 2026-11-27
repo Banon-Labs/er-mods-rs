@@ -151,7 +151,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
     // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
     // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
-    // Stale-dialog UAF guard (er-effects-rs-3pc, root fix 2026-07-03). `title_logo_gfx_current_frame`
+    // Stale-dialog UAF guard (root fix 2026-07-03). `title_logo_gfx_current_frame`
     // calls a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
     // the title screen; once we have loaded into a world that stored dialog is freed (and, on every
     // character switch, freed+rebuilt). A freed object keeps its vtable, and worse, its reused
@@ -278,8 +278,8 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // Removed (2026-07-31): the `oracle_title_overlay_cover_*` family and
     // `oracle_title_profile_cover_bound_to_logo_surface`. All six backing counters had zero
     // writers anywhere in the tree and the bound-to-logo-surface value was a hard-coded
-    // `false` -- they were placeholders for the unbuilt custom title render surface
-    // (er-effects-rs-trp). Emitting them made an absent feature look like a failing one: a
+    // `false` -- they were placeholders for the unbuilt custom title render surface.
+    // Emitting them made an absent feature look like a failing one: a
     // reader could not tell "the title cover rendered nothing" from "nothing was ever wired to
     // count", and that is exactly how they misread -- an agent cited render_calls=0 as proof
     // the title cover painted no pixels during a loading-screen gap. When trp lands its real
@@ -308,7 +308,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     }
     .is_some();
     let title_profile_face_bind_hits = TITLE_PROFILE_FACE_BIND_HITS.load(Ordering::SeqCst);
-    // Pinned to their shipped values (bd er-effects-rs-57fw). The only writer of
+    // Pinned to their shipped values. The only writer of
     // TITLE_PROFILE_FACE_TRANSFORM_APPLIED / TITLE_PROFILE_FACE_OTHER_HIDDEN was
     // title_custom_cover_menu_window_run_hook, whose only address-taker
     // (install_title_custom_cover_run_hook) had no callers -- so rustc never codegen'd either and

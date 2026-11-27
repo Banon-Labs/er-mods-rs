@@ -20,7 +20,7 @@ hand-copied list of gate names falling behind the suite it was copied from:
   - `.github/workflows/check.yml` named 9 gates while check.sh ran 224, so ~215 gates were
     invisible to CI and nothing said so.
   - `scripts/ci-local-check.sh` named 13 while check.sh referenced 153, which is how a
-    `check-fnv1a-owner.py` violation reached origin through the pre-push hook (PR #398).
+    `check-fnv1a-owner.py` violation reached origin through the pre-push hook.
   - check.sh's own shellcheck coverage is a hand list and had silently dropped
     `scripts/opa-query.sh`.
 
@@ -155,7 +155,7 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "lint",
         "formatting and text shape: cargo fmt, rustfmt, shellcheck, comment capitals, "
-        "color spelling, lossy utf-8, markdown, file sizes",
+        "color spelling, lossy utf-8, markdown, file sizes, tracker references",
         (
             "**/*.rs",
             "**/*.sh",
@@ -181,6 +181,24 @@ STAGES: tuple[Stage, ...] = (
             "crates/er-overlay-theme/**/*",
             "scripts/overlay-theme.baseline.json",
             "scripts/frida/ai-lua/**/*",
+            # `check-no-tracker-refs.py` reads the comments of these as well: the comment-bearing
+            # types the globs above do not already name, and the extensionless shell hooks.
+            "**/*.yml",
+            "**/*.yaml",
+            "**/*.java",
+            "**/*.typ",
+            "**/*.wgsl",
+            "**/*.c",
+            "**/*.h",
+            "**/*.cpp",
+            "**/*.ts",
+            "**/*.mjs",
+            "**/*.cjs",
+            "**/*.jsonc",
+            "**/*.frag",
+            ".githooks/*",
+            "scripts/hooks/*",
+            "scripts/hooks-fallback-shim",
         ),
     ),
     Stage(
@@ -190,6 +208,9 @@ STAGES: tuple[Stage, ...] = (
             ".cupcake/**/*",
             ".auto/*",
             ".claude/settings.json",
+            # `scripts/cupcake_markdown_rule.py` names the agent notes it judges a closing message
+            # against, so a push that changes one can change that signal's verdict.
+            "docs/agents/**/*",
             "crates/**/*.rs",
             "crates/**/Cargo.toml",
             "scripts/*.py",
@@ -200,6 +221,10 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.html",
             "scripts/hooks/*",
             "scripts/lib/*.sh",
+            # `test-cupcake-policies.py` replays the measured `mcp_query.py getDecompiledCode`
+            # redirect through the rulebook, so the guards are held to the Ghidra helper's real
+            # path; a push that moves or renames it has to rerun those cases.
+            "scripts/ghidra/mcp_query.py",
         ),
     ),
     Stage(

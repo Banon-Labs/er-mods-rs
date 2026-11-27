@@ -64,6 +64,10 @@ class Case:
     # A second session's transcript, written beside the hook's own and made newer than it. The
     # hook event names only the fixture, so nothing in the decoy may reach a verdict.
     decoy: str | None = None
+    # Task ids to run as real processes while the hook runs, each started the way the harness starts
+    # a Bash call (stdout on `<tasks dir>/<id>.output`) under this test's pid, which every hook is
+    # pinned to as CLAUDE_PID. For the guards that read scripts/cupcake_session_tasks.py.
+    live: tuple[str, ...] = ()
 
 
 CASES = [
@@ -122,9 +126,219 @@ CASES = [
         "generation run.' plus a long recap is still a verbose blocked pause and must halt",
     ),
     Case(
+        "idle_hold_handed_reply_line.jsonl",
+        None,
+        "the 2026-11-11 false positive, verbatim: a 113-char note blocked on r9 (task b2dpglvu7) and "
+        "a release-model agent, a blank line, then `authorize commit` alone on its line. Handing the "
+        "reply phrase on its own line is blocked on the user, so it must NOT halt as a verbose pause",
+    ),
+    Case(
+        "idle_hold_blocked_recap_no_phrase_line.jsonl",
+        "paused while blocked on a background task",
+        "the same blocked opener with a 600-char recap and no phrase line is still a verbose pause "
+        "and must halt",
+    ),
+    Case(
+        "idle_hold_phrase_mid_sentence_recap.jsonl",
+        "paused while blocked on a background task",
+        "'the guards commit needs the authorize commit reply' names the phrase inside a sentence and "
+        "hands nothing, so the long recap after it must still halt",
+    ),
+    Case(
+        "idle_hold_answer_accounting_running_task.jsonl",
+        None,
+        "the 2026-11-11 false positive, verbatim but for one sentence: the 735-char answer to the "
+        "user's typed timelines question, rewritten after no_unexplained_running_tasks asked for 'r10 "
+        "(bdj5lkbhk) is still running because ...'. Its only task reference is that sentence and the "
+        "turn holding it was opened by the Stop-hook feedback, so it must NOT halt as a verbose "
+        "blocked pause. 'The rule is now in `docs/agents/runtime-evidence.md`' reads "
+        "'`docs/agents/runtime-evidence.md` describes it now', because no_markdown_rule rightly halts "
+        "the original",
+    ),
+    Case(
+        "idle_hold_waiting_on_both_after_feedback.jsonl",
+        "paused while blocked on a background task",
+        "the real hold from the same session, verbatim: after the same Stop-hook feedback, 'Two "
+        "background runs are still going, and I'm waiting on both:' plus a table answers no one and "
+        "must still halt",
+    ),
+    Case(
         "authority_agreement.jsonl",
         "authority-coded agreement",
         "turn opens with \"You're right\" -- banned agreement phrasing (2026-07-17 directive)",
+    ),
+    Case(
+        "filed_not_started.jsonl",
+        "You filed work this turn",
+        "a mechanic filed as bd er-effects-rs-me5p and the turn closed on 'It waits for the homing and "
+        "requirement-line changes' with nothing started and no blocker (2026-11-10 directive)",
+    ),
+    Case(
+        "filed_and_started.jsonl",
+        None,
+        "the same filing followed by an Agent launch that starts it must NOT halt",
+    ),
+    Case(
+        "filed_blocked.jsonl",
+        None,
+        "the same filing closed on 'blocked on task bpll5d7de' -- a running task it depends on -- must "
+        "NOT halt",
+    ),
+    # 2026-11-20: five closing messages of 2026-11-19/20, verbatim, that parked a written fix behind
+    # a running job. None ran `bd create`, so the filing shape let all of them through. User: "yes,
+    # your quoted message and my last message are consistent, but inconsistent with yoru actions".
+    Case(
+        "filed_deferred_written_not_applied.jsonl",
+        "parks a fix behind a running job",
+        "'I've written the change but not applied it. ... I'll apply it when the kit run (b3fgttzcf) "
+        "finishes', with saved sets as the excuse",
+    ),
+    Case(
+        "filed_deferred_written_and_tested.jsonl",
+        "parks a fix behind a running job",
+        "'The fix for the time-left estimate is written and tested, and I'll apply it when the kit "
+        "run (b3fgttzcf) ends'",
+    ),
+    Case(
+        "filed_deferred_holding_patches.jsonl",
+        "parks a fix behind a running job",
+        "'I'm holding the timestamp, time-estimate and Golden Land patches until the read-back "
+        "finishes'",
+    ),
+    Case(
+        "filed_deferred_holding_saved_sets.jsonl",
+        "parks a fix behind a running job",
+        "'I'm holding it until the all-spells run (b4pvxbpqy) finishes, because changing the scripts "
+        "mid-run would throw away that run's saved sets'",
+    ),
+    Case(
+        "filed_deferred_table_cell.jsonl",
+        "parks a fix behind a running job",
+        "a table cell: 'the patch I'm applying once this run (b4pvxbpqy) ends'",
+    ),
+    Case(
+        "filed_deferred_applied.jsonl",
+        None,
+        "'Applied the patch; the running job keeps its loaded code' reports the fix applied and must "
+        "NOT halt",
+    ),
+    Case(
+        "filed_deferred_authorize_commit.jsonl",
+        None,
+        "'This waits on your `authorize commit`' waits on the user's reply, not a job, and must NOT "
+        "halt",
+    ),
+    Case(
+        "filed_deferred_still_loading.jsonl",
+        None,
+        "'The read-back (b849hq3rz) is still loading' reports a job and parks no fix, and must NOT halt",
+    ),
+    Case(
+        "negated_opener.jsonl",
+        "something that did not happen",
+        "'What does this mean to me?' answered by 'Nothing in the game changed.' -- a non-event "
+        "nobody asked about ahead of the answer (2026-11-10 correction)",
+    ),
+    Case(
+        "negated_opener_absence_asked.jsonl",
+        None,
+        "'What changed?' answered by 'Nothing changed in your spell kit' -- the question is about "
+        "change, so the negation is the answer and must NOT halt",
+    ),
+    Case(
+        "negated_opener_after_halt.jsonl",
+        None,
+        "the rewrite after a no_negated_opener halt: the newest prompt is the Stop hook's own "
+        "feedback, no wh-question, so the guard cannot halt the same turn twice",
+    ),
+    Case(
+        "unmeasured_estimate.jsonl",
+        "sizes development work",
+        "the 2026-11-09 21:16Z closer, verbatim: 'it's nearly free ... a few seconds on top of a kit "
+        "run ... roughly 20 to 30 minutes', with nothing timed; the full runs then took 6,863 to "
+        "12,716 s (2026-11-11 correction)",
+    ),
+    Case(
+        "unmeasured_estimate_runtime.jsonl",
+        "states no measured number",
+        "the 2026-11-11 17:57Z closer: 'r10 is running ... (bdj5lkbhk, about 7 hours, ...)' -- a "
+        "run-time forecast with no measured timing in the message",
+    ),
+    Case(
+        "unmeasured_estimate_measured.jsonl",
+        None,
+        "'which leaves roughly 2 to 2.5 hours' beside the pace it projects from ('over the last 28 "
+        "minutes ... about 99 s per set') -- a cited forecast must NOT halt",
+    ),
+    Case(
+        "unmeasured_estimate_reported.jsonl",
+        None,
+        "the old forecast reported in quotes beside the measured run times -- reporting a forecast "
+        "is not making one, and must NOT halt",
+    ),
+    Case(
+        "markdown_rule.jsonl",
+        "calls text in a markdown file",
+        "the 2026-11-11 21:15Z closer: 'The rule is now in `docs/agents/runtime-evidence.md`.' -- a "
+        "markdown entry called a rule (2026-11-11 correction: 'its logically inconsistent to use the "
+        "word rule in reference to markdown files')",
+    ),
+    Case(
+        "markdown_rule_carries.jsonl",
+        "calls text in a markdown file (AGENTS.md)",
+        "the 2026-11-10 22:11Z closer, verbatim: 'AGENTS.md now carries the same rule.'",
+    ),
+    Case(
+        "markdown_rule_executable.jsonl",
+        None,
+        "a rego rule named by its file and a game's stacking rule, with AGENTS.md and a mechanics doc "
+        "describing them -- must NOT halt",
+    ),
+    Case(
+        "markdown_rule_quoted.jsonl",
+        None,
+        "the word itself in quotes ('calls markdown text a \"rule\"') beside 'AGENTS.md describes it' "
+        "-- must NOT halt",
+    ),
+    Case(
+        "correction_instance_first.jsonl",
+        "Correction not encoded first",
+        "the 2026-11-11 turn in session 5ec7b779: 'If I ever see a subagent that is finished but "
+        "hasn't been closed ...' answered with ListAgents, a read-only check, a TaskStop and a "
+        "SendMessage, and nothing that encodes the correction for future agents",
+    ),
+    Case(
+        "correction_guard_agent_first.jsonl",
+        None,
+        "the next turn: 'I was not concerned about you closing that specific agent whatsoever' "
+        "answered by launching the Stop-guard agent before any other action -- must NOT halt",
+    ),
+    Case(
+        "correction_guard_edit_first.jsonl",
+        None,
+        "'Why did you stash them?' answered by a .cupcake edit first and the instance fix after it "
+        "-- must NOT halt",
+    ),
+    Case(
+        "correction_impossible.jsonl",
+        None,
+        "a correction whose closing message says why no guard can carry it -- must NOT halt",
+    ),
+    Case(
+        "correction_nested_read_first.jsonl",
+        None,
+        "2026-11-16: a `sed -n \"$(python3 -c ...)\" | python3 -c ...` read, then the AGENTS.md entry, "
+        "then the TaskStop -- the nested read only reads, so must NOT halt",
+    ),
+    Case(
+        "correction_sed_in_place_first.jsonl",
+        "Correction not encoded first",
+        "`sed -i` on a repo script before the AGENTS.md entry acts on the instance first",
+    ),
+    Case(
+        "correction_task_prompt.jsonl",
+        None,
+        "'run r10' is a task, not a correction, so an instance edit with no guard change must NOT halt",
     ),
     Case(
         "wall_of_text.jsonl",
@@ -608,6 +822,63 @@ CASES = [
         "request to the user -- must NOT halt",
     ),
     Case(
+        "ask_authorize_commit_reply.jsonl",
+        None,
+        "the 2026-10-26 false positive, verbatim: 'I need your `authorize commit` reply before I "
+        "can fix either PR'. The only answer is the user's typed reply phrase, so no instrument is "
+        "needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_need_it_authorize_reply.jsonl",
+        None,
+        "the 2026-11-10 replay false positive (transcript 9538a842, boundary 102), with the "
+        "sentences other guards judge cut: 'each reply pays for one commit, so I need it twice, "
+        "once per branch:' over a line holding only 'authorize commit'. 'It' is that typed reply, "
+        "so no instrument is needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_past_tense_report.jsonl",
+        None,
+        "the 2026-10-28 false positive, verbatim: 'As soon as you opened your world, Seamless "
+        "created your advertisement lobby, ...'. A bare simple-past verb after the temporal 'you' "
+        "narrates what the user already did -- a report, not an ask, so it must NOT halt",
+    ),
+    Case(
+        "ask_as_soon_as_you_open.jsonl",
+        "You asked the user for something you have no receiver for",
+        "the same clause in the present tense, 'As soon as you open your world, the probe records "
+        "the lobby key', with nothing armed -- must still halt",
+    ),
+    Case(
+        "ask_game_mechanic_when_you.jsonl",
+        None,
+        "the 2026-11-10 false positive, verbatim: 'When you summon, the game sends peers just the "
+        "three Moongrum IDs ...'. The main clause is the game doing something for any player, with "
+        "no first person and no instrument -- a mechanic, not an ask, so it must NOT halt",
+    ),
+    Case(
+        "ask_generic_you_conditional.jsonl",
+        None,
+        "the 2026-11-10 false positive, verbatim: a report opening 'Once you count what each one "
+        "costs a real melee build, three spells are strictly worse ...'. That 'you' is anyone "
+        "following the argument, and the main clause is a statement, not a request -- must NOT halt",
+    ),
+    Case(
+        "ask_knowledge_question.jsonl",
+        None,
+        "the 2026-11-10 false positive, verbatim: a closer asking 'can you tell it apart from a "
+        "Comet, Shard Spiral or Night Comet, and a tap from a charge?'. It asks what the user can "
+        "perceive, and their typed reply is the answer, so no receiver is needed -- must NOT halt",
+    ),
+    Case(
+        "ask_task_output_need.jsonl",
+        None,
+        "the 2026-11-10 false positive, verbatim: a status report whose r8 bullet names task "
+        "b2mrgwhrl, still running, and says 'I need its numbers to recheck the four control pairs'. "
+        "The agent is naming what it awaits from its own task, whose finished notification wakes "
+        "it, and asks the user for nothing -- must NOT halt",
+    ),
+    Case(
         "running_task_unexplained.jsonl",
         "Background tasks you started are still running",
         "the 2026-10-07 shape: a stage-log copier loop backgrounded for a push and still running "
@@ -623,6 +894,32 @@ CASES = [
         None,
         "the same copier still running, and the closing message names b31ydejza with the reason "
         "it is still needed -- must NOT halt",
+    ),
+    Case(
+        "unclosed_finished_agent.jsonl",
+        "Subagents you launched have finished and you have not closed them: a4d14f2d4d71a5ba0",
+        "the 2026-11-11 shape: a background agent notified 'finished', the turn read its diff and "
+        "closed on a report without a TaskStop naming a4d14f2d4d71a5ba0. The user: 'If I ever see a "
+        "subagent that is finished but hasn't been closed, I always have VERY HIGH concerns that you "
+        "consumed its results'",
+    ),
+    Case(
+        "closed_finished_agent.jsonl",
+        None,
+        "the same agent closed with TaskStop after its diff was read; the stop is refused as 'not "
+        "running (status: completed)', which is still the close -- must NOT halt",
+    ),
+    Case(
+        "waiting_agent_not_closed.jsonl",
+        None,
+        "the agent's notification says it 'is waiting on its own background work': parked with jobs "
+        "of its own, not finished -- must NOT halt",
+    ),
+    Case(
+        "resumed_agent_running.jsonl",
+        None,
+        "the agent finished, its diff was read, and a SendMessage answered 'Resuming agent': it is "
+        "running again until it next notifies -- must NOT halt",
     ),
     Case(
         "untailed_long_run.jsonl",
@@ -694,6 +991,19 @@ CASES = [
         "split -- every watched PR counts, must NOT halt",
     ),
     Case(
+        "untailed_agent.jsonl",
+        "opened no kitty tab following its transcript: a505613c401ed9d43",
+        "the 2026-11-11 shape: 'Speed up attack sets, round 2' launched in the background and no "
+        "kitty-tail-agent.py call after it. The user: 'I don't understand how you could have a round "
+        "running without me being able to see the output'",
+    ),
+    Case(
+        "untailed_agent_tailed.jsonl",
+        None,
+        "the same launch followed by `kitty-tail-agent.py a505613c401ed9d43`, which opens a tab on "
+        "the agent's transcript -- must NOT halt",
+    ),
+    Case(
         "inline_user_command.jsonl",
         "hands the user a command as an inline shell block",
         "the 2026-10-13 shape: a commit, then the push the agent may not run handed over as a "
@@ -751,6 +1061,27 @@ CASES = [
         "the signals read the newest transcript in the directory instead of the hook event's",
         decoy="unexecuted_promise.jsonl",
     ),
+    Case(
+        "pause_names_blocker_unnamed.jsonl",
+        "names nothing this session has running",
+        "the 2026-11-11 directive ('communicate clearly to the user why you're paused (blocked because "
+        "X shell is running)'): 'Blocked until the agent reports back.' while agent a5eed0011223344aa "
+        "works names neither its id nor its description, so it halts and the reason lists the agent",
+    ),
+    Case(
+        "pause_names_blocker_unnamed.jsonl",
+        "bsub7 (owner unknown",
+        "the same pause while a real process writes tasks/bsub7.output under the Claude Code pid: the "
+        "process table half of the report reaches the halt reason through the real hook",
+        live=("bsub7",),
+    ),
+    Case(
+        "pause_names_blocker_named.jsonl",
+        None,
+        "the rewrite that names the agent ('the Speed up attack-set stage agent (a5eed00)') is a "
+        "pause that says what it is blocked on, and must NOT halt",
+        live=("bsub7",),
+    ),
 ]
 
 
@@ -763,9 +1094,51 @@ class ContextCase:
     # Distinctive substring the injected context must contain, or None when it must be absent.
     expect_context: str | None
     why: str
+    # The prompt being submitted. A signal that classifies the prompt itself reads it from here.
+    prompt: str = "next question"
+    # A substring the injected context must not contain, for a case whose point is that one policy
+    # stays quiet while the standing rules still arrive.
+    forbid_context: str | None = None
+    # Task ids to run as real processes while the hook runs (see Case.live).
+    live: tuple[str, ...] = ()
 
 
 UPS_CASES = [
+    ContextCase(
+        "pause_names_blocker_unnamed.jsonl",
+        "bsub7 (owner unknown",
+        "the 2026-11-11 directive ('find a way to self discover what shells you kick off'): with a real "
+        "process writing tasks/bsub7.output under the Claude Code pid and agent a5eed0011223344aa "
+        "working, the next turn is told both, measured, before it writes",
+        live=("bsub7",),
+    ),
+    ContextCase(
+        "pause_names_blocker_unnamed.jsonl",
+        "a5eed0011223344aa 'Speed up attack-set stage' (running)",
+        "the working agent alone, with no live shell, is still reported",
+    ),
+    ContextCase(
+        "clean.jsonl",
+        None,
+        "nothing running: no report is injected",
+        forbid_context="RUNNING NOW",
+    ),
+    ContextCase(
+        "clean.jsonl",
+        "CORRECTION FIRST: this message reads as a correction",
+        "the 2026-11-11 directive: a prompt that reads as a correction ('every time I correct you, you "
+        "fix the issue instead of fix it for future agents first') is told, before the turn starts, "
+        "that its first change encodes the correction for future agents",
+        prompt="My largest concern is that every time I correct you, you fix the issue instead of fix "
+               "it for future agents first",
+    ),
+    ContextCase(
+        "clean.jsonl",
+        None,
+        "a task prompt ('run r10') is not a correction and gets no correction-first line",
+        prompt="run r10",
+        forbid_context="CORRECTION FIRST:",
+    ),
     ContextCase(
         "wall_of_text.jsonl",
         "MEASURED: your PREVIOUS answer ran to 4 paragraphs",
@@ -904,6 +1277,8 @@ def run_hook(
     argv: list[str],
     extra_env: tuple[tuple[str, str], ...] = (),
     decoy: str | None = None,
+    prompt: str = "next question",
+    live: tuple[str, ...] = (),
 ) -> HookResult | str:
     """Drive one fixture through the real hook until an evaluation runs every signal it asked for.
 
@@ -912,7 +1287,7 @@ def run_hook(
     cupcake's deadline still fails this test -- as itself, not disguised as an inert guard."""
     last: HookResult | str = "no attempt ran"
     for attempt in range(1, ATTEMPTS + 1):
-        last = run_hook_once(fixture_name, event_name, argv, extra_env, decoy)
+        last = run_hook_once(fixture_name, event_name, argv, extra_env, decoy, prompt, live)
         if isinstance(last, str) or not last.dropped:
             return last
         print(
@@ -934,6 +1309,8 @@ def run_hook_once(
     argv: list[str],
     extra_env: tuple[tuple[str, str], ...] = (),
     decoy: str | None = None,
+    prompt: str = "next question",
+    live: tuple[str, ...] = (),
 ) -> HookResult | str:
     """One real cupcake hook invocation. Returns a HookResult, or a failure message string."""
     fixture = FIXTURES / fixture_name
@@ -961,7 +1338,10 @@ def run_hook_once(
             later = (tdir / "session.jsonl").stat().st_mtime + 60
             os.utime(other, (later, later))
 
-        env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
+        # CLAUDE_PID is this test's own pid: scripts/cupcake_session_tasks.py reports the processes
+        # under it, so a Claude Code session this test runs under never reaches a verdict, and a
+        # case's `live` processes, started here, are the only ones it sees.
+        env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT), "CLAUDE_PID": str(os.getpid())}
         # The repo's guards are under test, not the user's global ones. The throwaway home was
         # meant to keep ~/.config/cupcake out too, but the hook resolves the global root as
         # ${CUPCAKE_GLOBAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cupcake}, and a desktop session
@@ -976,7 +1356,22 @@ def run_hook_once(
         # A stub left in the caller's environment would decide the authorize-run-stamp verdict
         # for every case; only a case that names one gets one.
         env.pop("CUPCAKE_AUTHORIZE_EVIDENCE_CHECK", None)
+        # Before the empty global root above, the hook also evaluated the global tree
+        # (~/.config/cupcake), and its background_task_needs_tail halts only when KITTY_WINDOW_ID
+        # is set, so a suite started
+        # from a kitty shell got a different verdict from the same suite run anywhere else: seven
+        # cases failed on 2026-11-16 in kitty and passed outside it. Every fixture here is judged
+        # as a turn outside kitty, and no hook reaches the user's terminal. A case that needs
+        # kitty names KITTY_WINDOW_ID in its `env`.
+        for name in [n for n in env if n.startswith("KITTY_")]:
+            del env[name]
         env.update(dict(extra_env))
+        tasks = Path(tmp) / "tasks"
+        tasks.mkdir()
+        live_procs = []
+        for tid in live:
+            with (tasks / f"{tid}.output").open("w") as out:
+                live_procs.append(subprocess.Popen(["sleep", "60"], stdout=out, stderr=out))
         payload = {
             "session_id": f"stop-guard-{fixture_name}",
             "transcript_path": str(tdir / "session.jsonl"),
@@ -986,7 +1381,7 @@ def run_hook_once(
         if event_name == "Stop":
             payload["stop_hook_active"] = False
         else:
-            payload["prompt"] = "next question"
+            payload["prompt"] = prompt
         try:
             proc = subprocess.run(
                 argv, input=json.dumps(payload), capture_output=True, text=True, env=env,
@@ -995,6 +1390,10 @@ def run_hook_once(
         except subprocess.TimeoutExpired as exc:
             err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
             return HookResult({}, "", err, [f"<whole hook, {HOOK_TIMEOUT_SECONDS}s>"])
+        finally:
+            for p in live_procs:
+                p.kill()
+                p.wait()
 
     raw = proc.stdout.strip()
     try:
@@ -1007,7 +1406,7 @@ def run_hook_once(
 
 def run_case(case: Case, argv: list[str]) -> str | None:
     """Returns None on pass, or a failure message."""
-    outcome = run_hook(case.fixture, "Stop", argv, case.env, case.decoy)
+    outcome = run_hook(case.fixture, "Stop", argv, case.env, case.decoy, live=case.live)
     if isinstance(outcome, str):
         return outcome
     decision, raw, err = outcome.decision, outcome.raw, stderr_tail(outcome.stderr)
@@ -1041,7 +1440,7 @@ def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
     it. A correction that came back as a `reason` instead would be printed to the user, so the shape
     of the output is as load-bearing as its content.
     """
-    outcome = run_hook(case.fixture, "UserPromptSubmit", argv)
+    outcome = run_hook(case.fixture, "UserPromptSubmit", argv, prompt=case.prompt, live=case.live)
     if isinstance(outcome, str):
         return outcome
     decision, raw = outcome.decision, outcome.raw
@@ -1055,6 +1454,9 @@ def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
             f"the standing one-paragraph rule is missing from additionalContext -- the policy is not\n"
             f"      routed or is inert. Got: {context[:200]!r}{stderr_tail(outcome.stderr)}"
         )
+
+    if case.forbid_context is not None and case.forbid_context in context:
+        return f"context must not carry {case.forbid_context!r}: {context[:400]!r}"
 
     if case.expect_context is None:
         if "MEASURED:" in context:

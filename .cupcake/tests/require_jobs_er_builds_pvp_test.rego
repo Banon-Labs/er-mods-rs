@@ -175,3 +175,15 @@ test_deny_run_on_next_line if {
 test_deny_behind_timeout if {
 	denied("timeout 120 python3 scripts/er-builds-pvp.py --rl 150")
 }
+
+# --- exec launchers in front of the ranking (2026-11-19) ----------------------
+# Allowed until this date, measured with `opa eval`: the launcher was read as the program.
+test_deny_ranking_behind_a_launcher if {
+	denied("chrt --idle 0 python3 scripts/er-builds-pvp.py --rl 150 --json")
+	denied("taskset -c 0-3 python3 scripts/er-builds-pvp.py --rl 150 --json")
+	denied("ionice -c 3 python3 scripts/er-builds-pvp.py --rl 150 --json")
+}
+
+test_allow_launched_ranking_with_jobs if {
+	allowed("chrt --idle 0 python3 scripts/er-builds-pvp.py --rl 150 --jobs 4 --json")
+}

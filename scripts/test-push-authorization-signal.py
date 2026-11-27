@@ -481,7 +481,8 @@ def main() -> int:
         expect("authorization in a task notification denies", sb.run(c, "toolu_s6", PUSH), "DENIED")
 
         _, out = ask_then_push(sb, f"authorize {sb.tip}", "toolu_s7", source="suggestion_accepted")
-        expect("an accepted prompt suggestion (model-written) denies", out, "DENIED")
+        expect("an accepted prompt suggestion (model-written) denies, and says why", out, "DENIED",
+               "accepted prompt suggestion")
 
         c = Chain()
         c.human(f"authorize {sb.tip}")
@@ -496,6 +497,7 @@ def main() -> int:
         c.use("toolu_s9", PUSH)
         expect("a compaction summary ends the search", sb.run(c, "toolu_s9", PUSH), "DENIED")
 
+        suggestion_at_the_end_of_the_walk(sb)
         queued_replies(sb)
 
         # --- forgery ----------------------------------------------------------------------------
@@ -525,7 +527,7 @@ def main() -> int:
                "DENIED", "more than once")
 
         # The main session's case: the call's own line is not written until the hooks return, so
-        # the chain is read back from the newest entry instead (bd er-effects-rs-hu4w).
+        # the chain is read back from the newest entry instead.
         c = Chain()
         c.human(f"authorize {sb.tip}")
         c.say("pushing")
@@ -608,6 +610,55 @@ def main() -> int:
         sb.close()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all push-authorization cases passed'}")
     return 1 if FAILURES else 0
+
+
+def compacted(c: Chain) -> None:
+    """A compaction: a root boundary, then the summary entry hanging off it."""
+    boundary = c._add({"type": "system", "subtype": "compact_boundary"})
+    boundary["parentUuid"] = None
+    c._add({"type": "user", "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+            "message": {"role": "user", "content": "This session is being continued from a "
+                        "previous conversation that ran out of context."}})
+
+
+def suggestion_at_the_end_of_the_walk(sb: Sandbox) -> None:
+    """An accepted `authorize <sha>` with nothing typed between it and a compaction summary or the
+    chain's root. The commit reader refused that shape as "no message typed by the user since the
+    conversation was last compacted" (session 5ec7b779, 2026-11-11), and this reader as
+    "no message typed by the user precedes this tool call"; neither said the reply had to be typed."""
+    def after_summary(reply: str) -> Chain:
+        c = Chain()
+        c.human("go on")
+        compacted(c)
+        c.attachment()
+        c.human(reply, source="suggestion_accepted")
+        c.attachment()
+        return c
+
+    c = after_summary(f"authorize {sb.tip}")
+    c.use("toolu_v1", PUSH)
+    expect("an accepted suggestion after a compaction denies, and says why (line present)",
+           sb.run(c, "toolu_v1", PUSH), "DENIED", "accepted prompt suggestion")
+    expect("an accepted suggestion after a compaction denies, and says why (line absent)",
+           sb.run(after_summary(f"authorize {sb.tip}"), "toolu_v2", PUSH), "DENIED",
+           "accepted prompt suggestion")
+
+    c = after_summary(f"authorize {sb.tip}")
+    c.human(f"authorize {sb.tip}")
+    c.use("toolu_v3", PUSH)
+    expect("`authorize <sha>` typed after the compaction and the suggestion authorizes",
+           sb.run(c, "toolu_v3", PUSH), "AUTHORIZED")
+
+    c = Chain()
+    c.human(f"authorize {sb.tip}", source="suggestion_accepted")
+    c.use("toolu_v4", PUSH)
+    expect("an accepted suggestion with nothing typed back to the root says why",
+           sb.run(c, "toolu_v4", PUSH), "DENIED", "accepted prompt suggestion")
+
+    c = after_summary("go on")
+    c.use("toolu_v5", PUSH)
+    expect("an accepted suggestion that is no authorization keeps the plain reason",
+           sb.run(c, "toolu_v5", PUSH), "DENIED", "no message typed by the user precedes")
 
 
 def mid_turn(c: Chain, reply, tool_use_id: str) -> dict:
@@ -787,6 +838,13 @@ def end_to_end(sb: Sandbox) -> None:
     rc, out = verdict(unauthorized, "toolu_e2")
     check("cupcake denies an unauthorized push and names the phrase",
           f"authorize {sb.tip}" in out and "feat/x" in out, f"rc={rc} {out[:400]}")
+    suggested = Chain()
+    suggested.human("go on")
+    compacted(suggested)
+    suggested.human(f"authorize {sb.tip}", source="suggestion_accepted")
+    rc, out = verdict(suggested, "toolu_e7")
+    check("cupcake's push refusal after a compaction names the accepted suggestion",
+          "accepted prompt suggestion" in out and f"authorize {sb.tip}" in out, f"rc={rc} {out[:400]}")
     queued = Chain()
     queued.human(f"authorize {sb.other_tip}")
     mid_turn(queued, f"authorize {sb.tip}", "toolu_e6q")

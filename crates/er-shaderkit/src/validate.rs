@@ -229,7 +229,7 @@ mod tests {
         }
     }
 
-    // Foreign SPIR-V oracle (er-effects-rs-xkz): a fixture compiled by the system
+    // Foreign SPIR-V oracle: a fixture compiled by the system
     // glslangValidator from `tests/fixtures/triangle.frag` — a non-naga toolchain,
     // the same shape dxil-spirv emits. Proves er-shaderkit ingests external SPIR-V,
     // recovers the entry point, and surfaces the uniform binding the shader needs.
@@ -270,7 +270,7 @@ mod tests {
     // Self-contained SPIR-V oracle: round-trip our validated WGSL through naga's
     // SPIR-V backend and confirm `validate_spirv` accepts the result and recovers
     // the same entry points. Proves the SPIR-V *ingestion* path with zero external
-    // fixtures (independent glslang/dxil-spirv SPIR-V is covered by er-effects-rs-xkz).
+    // fixtures (independent glslang/dxil-spirv SPIR-V is covered by the foreign SPIR-V oracle).
     #[test]
     fn spirv_roundtrip_validates_and_recovers_entry_points() {
         use naga::back::spv;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pixel-diff oracle for the armament-icons badge (bd er-effects-rs-pe98).
+"""Pixel-diff oracle for the armament-icons badge.
 
 Two subcommands:
 

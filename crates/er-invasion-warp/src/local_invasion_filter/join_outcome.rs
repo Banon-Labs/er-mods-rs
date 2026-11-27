@@ -104,7 +104,7 @@ fn drop_a_match_the_engine_has_already_failed(
     // with `lobby=0 proto=6 rpc=0`. The same signature the searching carve-out above was written
     // from, one state later. The hunt therefore never got past the handshake in a run where
     // `RequestLobbyList reached our detour` and Seamless was answering -- so "Seamless's networking
-    // is dormant" (bd er-effects-rs-bfln) was this code cancelling, not Seamless declining.
+    // is dormant" was this code cancelling, not Seamless declining.
     //
     // `lobbyState == None` cannot mean the attempt is dead here, because in a Seamless invasion it
     // is `None` at every point: Seamless owns the session and the engine's lobby is never used.

@@ -32,7 +32,7 @@ so a crash, a timeout or empty output keeps both denied.
 
 The transcript is read once, with no waiting. In the main session the pending tool call's own
 `tool_use` line is not on disk while PreToolUse hooks run: Claude Code writes it after they return
-(measured 2026-10-17 and 2026-10-18, bd er-effects-rs-hu4w; a reader that waited 3 s for it refused
+(measured 2026-10-17 and 2026-10-18; a reader that waited 3 s for it refused
 commits that way in sessions a66cf759, 7d2f4a9b and e75d8996). So:
 
 1. When the call's line is there, the conversation chain is walked back from it through
@@ -281,7 +281,11 @@ def walk(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] |
     """(uuid, text, chain) of the first genuine prompt back from `start`, the chain newest first.
 
     None when the walk reaches a parent the transcript does not hold yet. Raises Refused at a root
-    or a compaction summary, where the conversation legitimately ends without one.
+    or a compaction summary, where the conversation legitimately ends without one; when the walk
+    passed an accepted `authorize commit` suggestion on the way, the refusal says so, since that is
+    the reply the user will think they gave (session 5ec7b779, 2026-11-11: a lint after a compaction
+    was refused as "no message typed by the user since the conversation was last compacted", and the
+    accepted suggestion right after the summary went unmentioned).
     """
     node, seen, chain = start, set(), []
     while True:
@@ -294,10 +298,11 @@ def walk(start: dict, by_uuid: dict[str, dict]) -> tuple[str, str, list[dict]] |
         if text is not None and isinstance(uid, str):
             return uid, text, chain
         if node.get("type") == "user" and node.get("isCompactSummary"):
-            raise Refused("no message typed by the user since the conversation was last compacted")
+            raise Refused(suggestion_reason(chain)
+                          or "no message typed by the user since the conversation was last compacted")
         parent = node.get("parentUuid")
         if not isinstance(parent, str):
-            raise Refused(NO_PROMPT)
+            raise Refused(suggestion_reason(chain) or NO_PROMPT)
         node = by_uuid.get(parent)
         if node is None:
             return None
@@ -332,7 +337,8 @@ def locate(path: str, tool_use_id: str) -> tuple[str, str, list[dict]]:
     raise Refused("the newest transcript entries do not link back to a message the user typed")
 
 
-def not_phrase_reason(chain: list[dict]) -> str:
+def suggestion_reason(chain: list[dict]) -> str | None:
+    """The refusal naming an accepted `authorize commit` suggestion on `chain`, or None."""
     for e in chain:
         origin = e.get("origin")
         if (e.get("type") == "user" and isinstance(origin, dict) and origin.get("kind") == "human"
@@ -340,7 +346,11 @@ def not_phrase_reason(chain: list[dict]) -> str:
                 and (message_text(e) or "").strip() == AUTH_PHRASE):
             return ("the user's `authorize commit` was an accepted prompt suggestion, text the "
                     "model wrote and the user only sent, and only a reply the user typed counts")
-    return "the user's last message is not `authorize commit`"
+    return None
+
+
+def not_phrase_reason(chain: list[dict]) -> str:
+    return suggestion_reason(chain) or "the user's last message is not `authorize commit`"
 
 
 def result_entry(chain: list[dict], tool_use_id: str) -> tuple[int, dict, dict] | None:

@@ -126,7 +126,7 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
             }
         }
     }
-    // Confirm TIMESTAMP (bd er-effects-rs-dpf6 Phase 1): the first portrait publish after this confirm
+    // Confirm TIMESTAMP: the first portrait publish after this confirm
     // consumes it to measure oracle_portrait_confirm_to_publish_ms (the publish-race latency).
     PORTRAIT_CONFIRM_MS.store(
         crate::boot_view_epoch_ms().max(1) as usize,
@@ -263,8 +263,8 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
     // session would skip the native return-title request (`== 0` gate, sets saveRequested+bc4=1) and
     // the final-functor submit (compare_exchange 0->1 gate), leaving the second switch stuck in-world.
-    // Resetting them here (the per-switch arm point) is the durable fix for repeatable switching
-    // (er-effects-rs-qwj). SUBMIT_COUNT is intentionally not reset: title.rs uses it as a `> 0` enable
+    // Resetting them here (the per-switch arm point) is the durable fix for repeatable switching.
+    // SUBMIT_COUNT is intentionally not reset: title.rs uses it as a `> 0` enable
     // and it re-increments before the final functor needs it.
     // BISECT 2026-07-02: these two resets regressed even the single-switch reload (base f59b2af
     // passes, adding them causes a second title bounce after the load / new-game flash). Disabled
@@ -559,7 +559,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     c: usize,
     d: usize,
 ) -> usize {
-    // Render-HANDOFF fix arm (bd er-effects-rs-um9g): this Continue/Load confirm is the common trigger
+    // Render-HANDOFF fix arm: this Continue/Load confirm is the common trigger
     // for both the boot autoload and the in-world reload; it captures GameMan+0xc30 into the TitleStep,
     // then forwards to SetState5 -> STEP_PlayGame -> InGameStep::RequestMoveMap. On our redirect load the
     // captured BlockId can be stale/-1, which makes RequestMoveMap skip building the world-res loadlist
@@ -661,7 +661,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // earlier single-switch milestone missed -- it tore down before the bounce). Idle also
                 // makes the in-world load guards inert (they gate on [confirmed, AUTOLOAD_HANDOFF)), so
                 // the native world stream is unobstructed, and leaves the session clean for the next
-                // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
+                // switch (also the durable fix for the post-switch hygiene issue).
                 SYSTEM_QUIT_QUICKLOAD_PHASE.store(
                     SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
                     Ordering::SeqCst,
@@ -712,7 +712,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
                 }
-                // REPEATABLE-switch state restore (er-effects-rs-qwj). The switch-#1 works but
+                // REPEATABLE-switch state restore. The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
                 // one-shots are consumed by this switch's teardown and gate the next switch --
                 // RETURN_TITLE_REQUEST_COUNT (native return-title request fires only when ==0,

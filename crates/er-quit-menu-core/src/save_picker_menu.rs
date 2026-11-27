@@ -409,7 +409,7 @@ pub unsafe fn save_picker_stage_row_records(
     if let Ok(base) = game_module_base() {
         // `PROFILE_RENDERER_REFRESH_RVA` walks the profile model renderer table without checking
         // it, so calling it on a null table reads `[null + 0x754]` and the process dies -- the
-        // access violation bd `er-effects-rs-p88u` measured three times at `eldenring.exe+0x9ab874`
+        // access violation measured three times at `eldenring.exe+0x9ab874`
         // on 1.17.1 (2.7.2.0 `+0x9abd24`).
         // `system_quit_open_profile_load_dialog_on` guards its own submit the same way; this call
         // site had no guard, and run br-20260912-200740-d5e1 died here, between the line saying the
@@ -1124,7 +1124,7 @@ const SAVE_PICKER_ORPHAN_SCAN_INTERVAL_TICKS: usize = 30;
 
 /// Publish which live `CS::ProfileSummary` slots are marked occupied while holding something that
 /// is not a character, at a moment when no picker owns the rows -- the RAM oracle for
-/// `er-effects-rs-fmy6`.
+/// a stale latch.
 ///
 /// Why this exists rather than a count of restores. `SAVE_PICKER_ROW_RECORDS_RESTORED` says we ran
 /// the restore; it cannot say the records are actually the game's. Three separate defects have left
@@ -2674,7 +2674,7 @@ pub use text::*;
 /// `0x140876a30`): while the browse picker owns the `05_010` rows, RE-stage the browse-row records
 /// immediately before the native builder turns ProfileSummary records into visible list rows.
 ///
-/// Root cause of the stray current-character row (er-effects-rs-xlqh): the ProfileSummary records
+/// Root cause of the stray current-character row: the ProfileSummary records
 /// are game-owned and volatile in-world. Every save the game performs runs the save-write path
 /// `0x14067cc40`, which calls `CS::ProfileSummary::MarkProfileIndexAsUsed(summary, saveSlot)`
 /// and then `0x140262280(summary, saveSlot)` -- and `0x140262280` rewrites the active slot's
@@ -2865,7 +2865,7 @@ pub fn save_picker_title_start_dir() -> PathBuf {
 ///
 /// What clears the latch is that a picker ran, not that one is up. Re-arming on a picker that came
 /// back empty re-asks a question the user just declined -- with the operating system surface that
-/// reopened the dialog about 57 ms after every cancel, forever (bd `er-effects-rs-rsxi`).
+/// reopened the dialog about 57 ms after every cancel, forever.
 ///
 /// # Safety
 ///
@@ -2968,14 +2968,14 @@ static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 ///
 /// The product does not hit this because `system_quit_arm_quickload_autoload` returns to the title
 /// and tears the world down before it reloads, gaitem reset included. A standalone shell has none
-/// of that (bd er-effects-rs-ejfl), so its pick reaches the native in-world load unguarded.
+/// of that, so its pick reaches the native in-world load unguarded.
 ///
 /// # Why refusing, and not something cleverer
 ///
 /// This crate already states the rule: a host must not offer a press that reaches a flow it cannot
 /// carry out. The row may open the window -- browsing characters is useful and safe -- but the
 /// activation behind it belongs to a switch machine that is not here yet. Giving the shell that
-/// machine is bd er-effects-rs-ye3q and phase 4 of
+/// machine is phase 4 of
 /// `docs/plans/menus-and-saves-consolidation.md`; until it lands, a press that does nothing and
 /// says so is the only honest answer, because the alternative is measured to kill the process.
 ///

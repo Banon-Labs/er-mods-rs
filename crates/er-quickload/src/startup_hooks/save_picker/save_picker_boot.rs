@@ -50,7 +50,7 @@ use super::*;
 // ============================================================================================
 //
 // A cancelled System>Quit picker discharges its open request and returns to the System menu (the
-// #107 fix). A cancelled boot picker quits the game. That is not a new invention: it is the
+// reopen-loop fix). A cancelled boot picker quits the game. That is not a new invention: it is the
 // contract `path_hooks.rs` has documented since before the in-game browser existed -- "OK ->
 // choose a save, Cancel -> exit" -- and at a missing-save boot it is the only bounded terminal
 // outcome available. There is no menu to fall back to, and `missing_save_selection_pending()`
@@ -60,7 +60,7 @@ use super::*;
 // THE ARMS DISAGREE, AND THIS IS THE LOUD PART OF SAYING SO. The in-game overlay browser has no
 // cancel at all and this change does not give it one: its `PICKER_ACT_BACK` is `go_up()`, which is
 // a no-op at a drive root, so a user on that surface has no exit but killing the process. That is
-// pre-existing (bd `er-effects-rs-mb0y` tracks it), it is the default surface, and it is the one
+// pre-existing, it is the default surface, and it is the one
 // place "world entry denied forever with no way out" still exists. comdlg32 draws a Cancel button
 // whether we want one or not, so the OS arm cannot decline to have the outcome; what it can do is
 // make it a designed, bounded, telemetry-visible quit rather than an unhandled dismissal, which is

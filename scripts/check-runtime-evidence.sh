@@ -521,11 +521,11 @@ selftest() {
 # The sha is the one being pushed, which is not always the one checked out. `scripts/hooks/pre-push`
 # reads git's stdin for the local sha of every pushed ref and passes them here; before 2026-09-13
 # this function ignored its arguments and read `git rev-parse HEAD` instead, so the gate judged
-# whatever the pushing worktree happened to have checked out. Measured that day: pushing
-# `fix/cupcake-watch-is-not-a-run`, a single commit touching only `scripts/` and `.cupcake/`, was
-# refused for unproven code under `crates/` belonging to the unrelated branch in the worktree. A
-# gate that answers about the wrong commit is worse than no gate -- it refuses proven pushes and
-# would pass unproven ones pushed from a clean checkout.
+# whatever the pushing worktree happened to have checked out. Measured that day: pushing a branch of
+# a single commit touching only `scripts/` and `.cupcake/`, was refused for unproven code under
+# `crates/` belonging to the unrelated branch in the worktree. A gate that answers about the wrong
+# commit is worse than no gate -- it refuses proven pushes and would pass unproven ones pushed from
+# a clean checkout.
 judge_tip() {
 	local tip="$1"
 	[ -n "$tip" ] || return 0
@@ -534,10 +534,10 @@ judge_tip() {
 	#
 	# `--diff-filter=d` (lowercase, an exclusion) drops deleted paths. A deletion cannot be proven
 	# by a run, because the thing a run would exercise is the code being removed: asking for one
-	# means asking for the DLL under deletion to be built and launched. Measured 2026-09-11 on
-	# chore/remove-er-lockon-filter, which deletes crates/er-lockon-filter entirely -- every path
-	# came back as a `D`, this gate demanded runtime evidence for it, and the only way past was the
-	# override, which is meant for an unproven change rather than an unprovable one.
+	# means asking for the DLL under deletion to be built and launched. Measured 2026-09-11 on a
+	# branch that deletes crates/er-lockon-filter entirely -- every path came back as a `D`, this
+	# gate demanded runtime evidence for it, and the only way past was the override, which is meant
+	# for an unproven change rather than an unprovable one.
 	local changed
 	if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
 		changed="$(git diff --name-only --diff-filter=d "refs/remotes/origin/main...$tip" 2>/dev/null)"

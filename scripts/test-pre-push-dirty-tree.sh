@@ -132,12 +132,12 @@ fi
 
 # --- a main-push guard that leaves its stdin unread cannot end the hook ---------------------
 #
-# The flake this pins, bd er-effects-rs-5hyb. The hook replayed the ref list to the main-push
-# guard through a pipe, and the guard stub above exits without reading it. That is a race the
-# forked printf nearly always wins, so the case above it passed on every standalone run; inside a
-# real push this suite runs at SCHED_IDLE beside the cargo stages, the printf lost one race in a
-# few dozen, and `set -o pipefail` turned its `write error: Broken pipe` into the hook's exit
-# before the refusal ever printed -- "an edited tracked file was allowed through (exit 1)".
+# The flake this pins: the hook replayed the ref list to the main-push guard through a pipe, and
+# the guard stub above exits without reading it. That is a race the forked printf nearly always
+# wins, so the case above it passed on every standalone run; inside a real push this suite runs
+# at SCHED_IDLE beside the cargo stages, the printf lost one race in a few dozen, and
+# `set -o pipefail` turned its `write error: Broken pipe` into the hook's exit before the refusal
+# ever printed -- "an edited tracked file was allowed through (exit 1)".
 #
 # A ref list larger than the pipe buffer makes that loss certain instead of rare: the writer
 # fills the buffer, the stub exits with bytes still unwritten, and the next write fails. So the

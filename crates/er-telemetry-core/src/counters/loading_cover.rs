@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 
 pub static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_STOPPED: AtomicUsize = AtomicUsize::new(0);
-/// Why the boot-view cover last stopped (bd er-effects-rs-dpf6 Phase 1; 0 = armed/none,
+/// Why the boot-view cover last stopped (Phase 1; 0 = armed/none,
 /// 1 = release-fade after render-release, 2 = FPS bail, 3 = release-fade after can-move world proof).
 /// Values are the `BOOT_VIEW_STOP_REASON_*` consts in boot_progress.rs. Reset to 0 on every rearm.
 pub static BOOT_VIEW_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
@@ -26,7 +26,7 @@ pub static BOOT_VIEW_WINDOW_ARM_MS: AtomicUsize = AtomicUsize::new(0);
 /// Rearm -> stop duration (ms) of the last completed cover window (oracle_boot_view_cover_window_ms).
 pub static BOOT_VIEW_COVER_WINDOW_MS_LAST: AtomicUsize = AtomicUsize::new(0);
 /// `LOADING_BG_PORTRAIT_RGBA_VERSION` snapshotted at the FPS-bail stop; a later version bump while the
-/// native loading screen is still active is the Phase-2 resume trigger (bd er-effects-rs-dpf6).
+/// native loading screen is still active is the Phase-2 resume trigger.
 pub static BOOT_VIEW_FPS_BAIL_PUBLISH_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// `BOOT_VIEW_OWN_MENU_LOAD_ACTIVE` slot key at the FPS-bail stop (the bail clears the live one; the
 /// resume restores it so the own-menu stop semantics survive the resume).
@@ -56,7 +56,7 @@ pub static BOOT_VIEW_MONO_LABEL_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_MONO_LABEL_LEN: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_REACHED_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_MILESTONE_IDX: AtomicUsize = AtomicUsize::new(0);
-/// Load epoch identity (bd er-effects-rs-ok8d). One epoch = one arm-to-teardown lifetime of the bar.
+/// Load epoch identity. One epoch = one arm-to-teardown lifetime of the bar.
 /// `SEQ` increments on every epoch reset and is the key every per-epoch high-water latch is stamped
 /// with, so a new epoch invalidates them all at once. It deliberately does not reuse the fresh-deser
 /// counter, which only bumps at the reload's DESERIALIZE -- far too late to bound the epoch, and the
@@ -66,7 +66,7 @@ pub static BOOT_VIEW_EPOCH_SEQ: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_EPOCH_KIND: AtomicUsize = AtomicUsize::new(0);
 /// Per-epoch baselines for counters that are sticky for the whole process. A reload epoch must
 /// assert its phases from what happened since the rearm, never from `!= 0` on a counter that a
-/// previous load already moved (bd er-effects-rs-ok8d: load 2's mask opened at 0x9f because
+/// previous load already moved (load 2's mask opened at 0x9f because
 /// `boot_milestone_reached` re-latched five boot phases from sticky counters the instant it ran).
 pub static BOOT_VIEW_CONTINUE_ALLOW_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_TFC_CONTINUE_BASELINE: AtomicUsize = AtomicUsize::new(0);
@@ -160,8 +160,8 @@ pub static BOOT_VIEW_FADE_HOLD_REASSERTS_FIRST_MS: AtomicUsize = AtomicUsize::ne
 /// `BOOT_VIEW_NONFADE_DRAW_DURING_FADE == 0` is the defect being caught and refused.
 pub static BOOT_VIEW_FADE_HOLD_REFUSED: AtomicUsize = AtomicUsize::new(0);
 /// Re-asserts HONORED: the game's own loading screen really did tick again mid-fade, so the fade
-/// paused at its current alpha rather than completing over live loading art (er-effects-rs-wmw
-/// defect #1, the vanilla flash-through, is what that pause protects).
+/// paused at its current alpha rather than completing over live loading art (the vanilla
+/// flash-through is what that pause protects).
 pub static BOOT_VIEW_FADE_HOLD_HONORED: AtomicUsize = AtomicUsize::new(0);
 /// Total ms this cover window's release fade spent paused by honored holds. The fade clock
 /// subtracts it, so the visible fade is always the full `BOOT_VIEW_RELEASE_FADE_MS` of ramp however
@@ -184,7 +184,7 @@ pub static BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0
 // skipped on the exact frame the native loading screen first appears.
 pub static BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
-// Native loading-screen exposure (er-effects-rs-wmw defect #1: "the custom loading screen
+// Native loading-screen exposure ("the custom loading screen
 // disappeared for about one frame and the vanilla loading screen flashed through"). One Present
 // frame is an exposure frame when the game's own CS::LoadingScreen is live but our cover did not
 // draw over the backbuffer -- exactly the frame the user sees vanilla. Counted in the Present
@@ -232,7 +232,7 @@ pub static NATIVE_LS_EXPOSURE_BY_GATE: [AtomicUsize; NATIVE_LS_GATE_COUNT] =
 /// Frames on which the boot-view compositor incremented a draw/fade counter while
 /// `BOOT_VIEW_STOPPED` was already set. Per cover window (cleared at every rearm).
 ///
-/// Gate on this being NONZERO -- it is the check firing when it should not (bd k979). A nonzero
+/// Gate on this being NONZERO -- it is the check firing when it should not. A nonzero
 /// value means the 2026-08-22 diagnosis is wrong and our own compositor is drawing after release.
 pub static BOOT_VIEW_DRAW_AFTER_STOP: AtomicUsize = AtomicUsize::new(0);
 /// Session-cumulative twin of `BOOT_VIEW_DRAW_AFTER_STOP`, never cleared. The per-window counter
@@ -359,7 +359,7 @@ pub static LOG_EPOCH_OFFSET_MS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch for the clock-map log line, so it is stated once per process and not per frame.
 pub static LOG_EPOCH_OFFSET_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
-// Cover release LATCHES (er-effects-rs-drb7). The cover's release needs the player to be
+// Cover release LATCHES. The cover's release needs the player to be
 // render-ready and the native loading screen to be finishing. Both happen in a normal session but
 // not at the same instant (measured: render-ready at +27491ms, native close much later), and the
 // predicate required them simultaneously, so it never fired in product. Latch each per cover
@@ -375,7 +375,7 @@ pub static BOOT_VIEW_RELEASE_READY_MS: AtomicUsize = AtomicUsize::new(0);
 /// switches) -- Not the number of native loading screens, of which a switch shows two.
 pub static BOOT_VIEW_SEMANTIC_RELEASES: AtomicUsize = AtomicUsize::new(0);
 
-// Portrait reject attribution (er-effects-rs-k979). `LS_PORTRAIT_REJECTED_PUBLISHES` is a bare
+// Portrait reject attribution. `LS_PORTRAIT_REJECTED_PUBLISHES` is a bare
 // count with no reason and no ordering, so a proof could only ask "were there any rejects", and
 // answering yes failed the run. But refusing a blank frame is the neutral gate WORKING: measured in
 // run slot-portrait-proof-20260731-130803, the neutral leak was first seen at capture version 1 --
@@ -399,7 +399,7 @@ pub static LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH: AtomicUsize = AtomicUsize:
 /// on: the pipeline began emitting blanks mid-window.
 pub static LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH: AtomicUsize = AtomicUsize::new(0);
 
-// Character-load release gate (er-effects-rs-q6vk). A profile switch presents two native loading
+// Character-load release gate. A profile switch presents two native loading
 // screens: the return-to-title teardown, then the character load after continue_confirm. Both
 // satisfy "player render-ready + native screen finishing", so the cover released on the first and
 // left the character load bare. These hold the release until this switch's character load has

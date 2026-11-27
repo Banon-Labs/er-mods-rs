@@ -14,7 +14,7 @@
 //!   2026-07-04: omit the boxes for more text area). It stays placed so the
 //!   native row-populate FUN_1408758d0 can still resolve `Icon_0` /
 //!   `Icon_0/m_trialFaceIcon` and release their CSScaleformValue -- UNPLACING it
-//!   crashes (er-effects-rs-7e7: AV in ~CSScaleformValue at the first in-world
+//!   crashes (AV in ~CSScaleformValue at the first in-world
 //!   ProfileSelect open); the earlier "setters are dataType-guarded, so unplaced
 //!   is a safe no-op" claim was runtime-falsified.
 //! - REPURPOSE char 67 (the icon frame deco sprite, only placed here) as a new
@@ -376,7 +376,7 @@ fn main() {
     // FUN_1408758d0 unconditionally resolves `Icon_0` and `Icon_0/m_trialFaceIcon`,
     // drives their setters, and releases the resulting CSScaleformValue -- an UNPLACED
     // Icon_0 makes that release operate on an invalid value and hard-crashes
-    // (er-effects-rs-7e7, runtime-confirmed: removing Icon_0 -> AV in ~CSScaleformValue
+    // (runtime-confirmed: removing Icon_0 -> AV in ~CSScaleformValue
     // at the first in-world ProfileSelect open; keeping it vanilla-placed -> clean).
     // So Icon_0 stays a resolvable placed instance, but an alpha-0 CXFORMWITHALPHA on
     // its placement makes the box and its bound face texture render nothing, freeing

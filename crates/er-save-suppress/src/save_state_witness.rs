@@ -233,7 +233,7 @@ unsafe fn witness_call(
     let before_state = read_save_state();
     let original: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(raw) };
     let answer = unsafe { original(a, b, c, d) };
-    // Which answer the load poll gave, once per distinct value (bd er-effects-rs-1742). The whole
+    // Which answer the load poll gave, once per distinct value. The whole
     // ProfileSummary boot fill hangs off this number: `STEP_LoadSaveData_Wait` (0x140af3200)
     // fills the summary only when this returns 3. Return 0 is the "done" path and advances without
     // filling; 2 falls through to state 3 without filling; 4..9 are errors. The call count was

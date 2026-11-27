@@ -390,7 +390,7 @@ fi
 # dependency closure of the diff -- the same walk scripts/er-dll-closure.py performs. So a
 # cargo step added below is classified the moment it is written, with nothing to remember to
 # update. That is the property the pre-push hook's deleted 13-gate list did not have, and one
-# violation reached origin because of it (check-fnv1a-owner.py, PR #398).
+# violation reached origin because of it (check-fnv1a-owner.py).
 #
 # What it will never SKIP: anything that is not cargo-shaped. Every repo-wide invariant, every
 # address-map and prologue gate, the portability ledger, shellcheck, the policy suites and
@@ -882,9 +882,9 @@ trap _check_summary EXIT
 # fixture would fail all sixteen of its cases for reasons unrelated to accumulation.
 # That file was the pre-push hook's own 13-gate list while this file held 153, so a gate added
 # here became push-invisible the moment it was written and CI was the first place it ever ran.
-# One violation reached origin that way (check-fnv1a-owner.py, PR #398). The hook now runs this
-# file, which makes the two sets the same set by construction rather than by anyone maintaining a
-# list. Two things it carried had to survive the deletion, and they are both preambles, not gates.
+# One violation reached origin that way (check-fnv1a-owner.py). The hook now runs this file, which
+# makes the two sets the same set by construction rather than by anyone maintaining a list. Two
+# things it carried had to survive the deletion, and they are both preambles, not gates.
 
 # 1. MINHOOK, because a `git worktree` checkout starts without it. `vendor/` is gitignored, so an
 #    agent sandbox under `.claude/worktrees/` or a `.worktrees/` lab has no MinHook while the main
@@ -1336,17 +1336,22 @@ bash "$repo_root/scripts/test-pre-push-green-cache.sh"
 # 2026-10-27 check.sh refused an authorized push on the agent's own stamping run and the reply was
 # spent for nothing. See the header of scripts/test-pre-push-authorized-teardown.sh.
 bash "$repo_root/scripts/test-pre-push-authorized-teardown.sh"
+# An agent worktree skips this suite at push time but still runs the gates that hold this file and
+# its ledger in step, and refuses the push when one is red. On 2026-11-25 a check.sh step with no
+# ledger row was pushed from an agent worktree and the first gate to notice was CI's suite stage.
+# See the header of scripts/test-pre-push-agent-worktree-ledger.sh.
+bash "$repo_root/scripts/test-pre-push-agent-worktree-ledger.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
-# branch that had never moved was pushed over PR #448 and took two commits off it. See the header
-# of scripts/test-er-push-watched-ref-carries-work.sh.
+# branch that had never moved was pushed over an open pull request's branch and took two commits
+# off it. See the header of scripts/test-er-push-watched-ref-carries-work.sh.
 bash "$repo_root/scripts/test-er-push-watched-ref-carries-work.sh"
 # The build gates must yield to the person at the keyboard, and three of the four levers that
 # make that true are invisible from the process that sets them. See the header of
 # scripts/test-cpu-courtesy.sh.
 bash "$repo_root/scripts/test-cpu-courtesy.sh"
 # Telemetry honesty: no counter may be read to emit an oracle while written nowhere. Selftest first,
-# so the gate is never trusted on its own say-so (er-effects-rs-56fx).
+# so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
 python3 "$repo_root/scripts/check-oracle-writers.py"
 # ...and the SUPERSET the gate above is blind to by construction. It fires only on
@@ -1392,7 +1397,7 @@ python3 "$repo_root/scripts/er-character-type-tables.py" --selftest
 # The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 # pinned revision while a developer's is whatever they have checked out -- often a fork carrying
 # types upstream does not have. Everything below compiles against the developer's copy, so it
-# cannot see the divergence: PRs #322/#323 were green here and failed CI outright on
+# cannot see the divergence: two pull requests were green here and failed CI outright on
 # `unresolved import eldenring::cs::MsgRepositoryImp`. This is the cheap text check for that.
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py" --selftest
 python3 "$repo_root/scripts/check-fromsoftware-symbols.py"
@@ -1604,7 +1609,25 @@ python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
 python3 "$repo_root/scripts/test-unbacked-claim-signal.py"
 python3 "$repo_root/scripts/test-tool-miss-report-signal.py"
 python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
+python3 "$repo_root/scripts/test-unclosed-finished-agents-signal.py"
+python3 "$repo_root/scripts/cupcake_session_tasks.py" --selftest
+python3 "$repo_root/scripts/test-session-tasks-signal.py"
+python3 "$repo_root/scripts/cupcake_unmeasured_estimate.py" --selftest
+python3 "$repo_root/scripts/test-unmeasured-estimate-signal.py"
+python3 "$repo_root/scripts/cupcake_markdown_rule.py" --selftest
+python3 "$repo_root/scripts/test-markdown-rule-signal.py"
+python3 "$repo_root/scripts/cupcake_correction_first.py" --selftest
+python3 "$repo_root/scripts/test-correction-first-signal.py"
+python3 "$repo_root/scripts/test-cupcake-correction-classifier.py"
+python3 "$repo_root/scripts/cupcake_filed_not_started.py" --selftest
+python3 "$repo_root/scripts/cupcake_negated_opener.py" --selftest
+python3 "$repo_root/scripts/cupcake_task_stop_waiting_agent.py" --selftest
+python3 "$repo_root/scripts/test-task-stop-waiting-agent-signal.py"
+python3 "$repo_root/scripts/cupcake_rego_compile_check.py" --selftest
+python3 "$repo_root/scripts/test-rego-compile-check-signal.py"
 python3 "$repo_root/scripts/test-untailed-long-run-signal.py"
+python3 "$repo_root/scripts/test-untailed-agent-signal.py"
+python3 "$repo_root/scripts/kitty-tail-agent.py" --selftest
 python3 "$repo_root/scripts/test-inline-user-command-signal.py"
 python3 "$repo_root/scripts/test-authorize-run-stamp-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
@@ -1620,9 +1643,16 @@ python3 "$repo_root/scripts/test-commit-authorization-signal.py"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_commit_authorization.rego" "$repo_root/.cupcake/tests/git_commit_authorization_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_lint_before_commit.rego" "$repo_root/.cupcake/tests/no_lint_before_commit_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_unclosed_finished_agents.rego" "$repo_root/.cupcake/tests/no_unclosed_finished_agents_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/session_tasks_context.rego" "$repo_root/.cupcake/tests/session_tasks_context_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_unmeasured_estimate.rego" "$repo_root/.cupcake/tests/no_unmeasured_estimate_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_markdown_rule.rego" "$repo_root/.cupcake/tests/no_markdown_rule_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/no_stop_waiting_agent.rego" "$repo_root/.cupcake/tests/no_stop_waiting_agent_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/rego_must_compile.rego" "$repo_root/.cupcake/tests/rego_must_compile_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unwatched_ci_claim.rego" "$repo_root/.cupcake/tests/no_unwatched_ci_claim_test.rego"
 python3 "$repo_root/scripts/cupcake_ci_running_claim.py" --selftest
+opa test "$repo_root/.cupcake/policies/claude/no_untailed_agent.rego" "$repo_root/.cupcake/tests/no_untailed_agent_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
@@ -1640,9 +1670,9 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # under a running monitor: python3 exited 2, the SIGPIPE killed the push it was watching, and six
 # minutes of gate work went with it. A tool every monitor depends on belongs on main.
 python3 "$repo_root/scripts/monitor-throttle.py" --selftest
-# The shared executed-text decomposition every git guard now reads (bd
-# er-effects-rs-dt2e). It is the one place that decides what counts as executed
-# rather than quoted, so a regression here silently re-opens four guards at once.
+# The shared executed-text decomposition every git guard now reads. It is the one
+# place that decides what counts as executed rather than quoted, so a regression
+# here silently re-opens four guards at once.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/tests/commands_test.rego"
 # Four suites, 89 assertions, written and committed and never executed once (wired 2026-08-31).
 # Among them is every test of the two rules standing between an agent and a root delete. They had
@@ -1671,6 +1701,9 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 # The write-time half of the color-spelling ratchet: it refuses an Edit that adds the British
 # spelling outside a quoted span, and never judges a Write, whose previous count it cannot see.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_color_spelling_guard.rego" "$repo_root/.cupcake/tests/edit_color_spelling_guard_test.rego"
+# The write-time half of check-no-tracker-refs.py: it refuses a Write or Edit that adds a beads id,
+# pull request number or branch name to a whole-line comment, and reads less than the gate.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_tracker_refs_guard.rego" "$repo_root/.cupcake/tests/edit_no_tracker_refs_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_described_next_step.rego" "$repo_root/.cupcake/tests/no_described_next_step_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_require_runtime_evidence.rego" "$repo_root/.cupcake/tests/git_require_runtime_evidence_test.rego"
@@ -1717,7 +1750,7 @@ opa test "$repo_root/.cupcake/"
 # What a local run of this file cannot see by construction. `compression.zstd` is stdlib only
 # from Python 3.14 (PEP 784); the dev box has it, GitHub's ubuntu-latest does not, and
 # scripts/regulation-params.py imported it bare -- so the import blew up at CI and nowhere else,
-# taking down consumers that never decompress anything (measured: PR #388, run 33793058851).
+# taking down consumers that never decompress anything (measured: CI run 33793058851).
 # This blinds the interpreter with a sys.meta_path finder instead of hoping someone runs an old
 # python, so the regression is catchable here. See scripts/test-regulation-params-zstd-skip.py.
 python3 "$repo_root/scripts/test-regulation-params-zstd-skip.py"
@@ -1739,6 +1772,11 @@ python3 "$repo_root/scripts/check-comment-caps.py"
 # the half that proves a growth, a new file and a silent improvement each still go red.
 python3 "$repo_root/scripts/check-color-spelling.py" --selftest
 python3 "$repo_root/scripts/check-color-spelling.py"
+# Comments carry no beads ids, pull request numbers or branch names (user request 2026-11-24):
+# the history lives in git and bd. No baseline: every tracked file is held at zero. Selftest
+# first, because it holds the path, ordinal and fixture-string cases that must stay quiet.
+python3 "$repo_root/scripts/check-no-tracker-refs.py" --selftest
+python3 "$repo_root/scripts/check-no-tracker-refs.py"
 
 # Every in-game overlay draws with crates/er-overlay-theme: a crate that uses imgui depends on it
 # and writes no color, font size or style push of its own. scripts/overlay-theme.baseline.json
@@ -1752,21 +1790,20 @@ python3 "$repo_root/scripts/check-overlay-theme.py"
 python3 "$repo_root/scripts/check-ai-lua-dialect.py" --selftest
 python3 "$repo_root/scripts/check-ai-lua-dialect.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
-# 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null
-# `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
-# shape were still live when that crash's own fix was reviewed, so the invariant is a gate rather
-# than a habit. Selftest first, so the gate is never trusted on its own say-so.
+# 2026-08-23: `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null `key` from Steam/Seamless,
+# past a guard that only checked for null. Four more sites of the same shape were still live when
+# that crash's own fix was reviewed, so the invariant is a gate rather than a habit. Selftest
+# first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py" --selftest
 python3 "$repo_root/scripts/check-no-unguarded-cstr-from-ptr.py"
 # Two thread suspenders that do not know about each other is how three boots of the 21-DLL profile
-# wedged during hook installation (bd er-effects-rs-1742): an ungated er-cpu-sampler calling
-# `SuspendThread` on the game thread about once a millisecond, against twenty-one MinHook
-# `Freeze()` calls doing the same thing to it. Nothing can catch this at runtime -- er-hook's
-# freeze lock covers only MinHook's own entry points, and its 5s timeout is measured inside a
-# thread that a foreign freeze has already suspended, so it can never fire. So the enforcement is
-# static: a suspension primitive must be behind an opt-in, under the freeze lock, or in
-# scripts/thread-suspension.baseline.json with a reason. Selftest first, so the gate is never
-# trusted on its own say-so.
+# wedged during hook installation: an ungated er-cpu-sampler calling `SuspendThread` on the game
+# thread about once a millisecond, against twenty-one MinHook `Freeze()` calls doing the same
+# thing to it. Nothing can catch this at runtime -- er-hook's freeze lock covers only MinHook's
+# own entry points, and its 5s timeout is measured inside a thread that a foreign freeze has
+# already suspended, so it can never fire. So the enforcement is static: a suspension primitive
+# must be behind an opt-in, under the freeze lock, or in scripts/thread-suspension.baseline.json
+# with a reason. Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-no-thread-suspension.py" --selftest
 python3 "$repo_root/scripts/check-no-thread-suspension.py"
 # The pre-push refusal that stops a push of game code nothing has run. Wired here so its own
@@ -1854,8 +1891,8 @@ python3 "$repo_root/scripts/check-rust-file-sizes.py"
 # shrink but never grow; the roadmap's ledger row is the high-water mark. It is a ratchet, not
 # a freeze: edits are free, only net growth is refused, and `--refresh` accepts growth in one
 # command -- the value is that accepting it becomes a reviewable diff to the ledger instead of
-# the invisible default. Measured on PR #367, 62% of 1,553 added lines already landed in
-# extracted crates with no enforcement, pulled there by the host-seam pattern; what that
+# the invisible default. Measured over one four-commit change, 62% of 1,553 added lines already
+# landed in extracted crates with no enforcement, pulled there by the host-seam pattern; what that
 # pattern does not catch is a new module born inside the shim, which is what this refuses.
 # Selftest first, so the gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
@@ -1972,7 +2009,7 @@ python3 "$repo_root/scripts/verify-aob-patterns.py"
 # directory level deep, so a spec declared in `crates/foo/dll/build.rs` is invisible to it and its
 # verdict silently covers fewer pins than it appears to -- while still printing `verdict: ok`.
 # Sibling worktrees are renaming crates to `*-dll` right now, which is one directory move away from
-# exactly that. Proven red against a real plant (bd er-effects-rs-zivc): with a planted
+# exactly that. Proven red against a real plant: with a planted
 # `crates/er-planted-probe/dll/build.rs` carrying one spec, this gate exits 1 (`UNSWEPT ... 6
 # file(s) declare 43 spec(s); the sweep enumerated 42`) while the sweep above exits 0 on the
 # identical tree. A check that reports success over work it never looked at is the defect this
@@ -1981,11 +2018,11 @@ python3 "$repo_root/scripts/verify-aob-patterns.py"
 # `--section coverage` specifically, measured: 4.1s. The tool's other section measures pattern
 # uniqueness in the image and is reporting-only -- it never affects the exit code -- so wiring the
 # whole tool would buy that fixed cost for output nothing gates on.
-# Wired 2026-09-01 (bd er-effects-rs-zivc). The selftest was left out when the gate above it
-# went in, and audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest line in
-# this file is one the vacuity auditor never judges, so the gate that catches an unswept
-# build.rs had nothing checking that it still catches anything. Measured with an audit hook:
-# 690 files opened, every one a tracked repo source -- no image, no subprocess, no uv.
+# Wired 2026-09-01. The selftest was left out when the gate above it went in, and
+# audit-selftest-vacuity.py sweeps check.sh: a gate with no --selftest line in this file is one
+# the vacuity auditor never judges, so the gate that catches an unswept build.rs had nothing
+# checking that it still catches anything. Measured with an audit hook: 690 files opened, every
+# one a tracked repo source -- no image, no subprocess, no uv.
 python3 "$repo_root/scripts/verify-prologue-coverage.py" --selftest
 python3 "$repo_root/scripts/verify-prologue-coverage.py" --section coverage
 # The mid-function gate. An address with no `.pdata` record of its own is two things wearing one
@@ -2210,6 +2247,7 @@ shellcheck "$repo_root/scripts/lib/pinned-worktree.sh"
 shellcheck "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
 shellcheck "$repo_root/scripts/test-pre-push-green-cache.sh"
 shellcheck "$repo_root/scripts/test-pre-push-authorized-teardown.sh"
+shellcheck "$repo_root/scripts/test-pre-push-agent-worktree-ledger.sh"
 shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
@@ -2284,8 +2322,8 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
 # er-loading-portrait-core's host-portable stats-line layer: proves the unified loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live
-# PlayerGameData, bd er-effects-rs-qic7). The bitmap-geometry test is corpus-gated on the
-# extracted menu font (ER_FONT_GFX_PATH overridable) and skips when absent.
+# PlayerGameData). The bitmap-geometry test is corpus-gated on the extracted menu font
+# (ER_FONT_GFX_PATH overridable) and skips when absent.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-loading-portrait-core
 
 # The save-picker crate split (docs/plans/save-picker-crate-extraction.md). The row model
@@ -2454,9 +2492,9 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-import-core
 # Two gates the repo had no equivalent of, both reading the installed regulation.bin. 1.17 added
 # CharaInitParam rows 3010/3011 -- two new starting classes -- and nothing in Rust could notice:
 # STARTING_CLASSES was a [&str; 10], so build export answered None for an Idus Knight and import
-# never set the class (er-effects-rs-d3jz). The effects.json check replaces `er-param-inspect
-# validate`, which needs a Smithbox checkout and a dotnet bridge to reach a verdict that needs
-# neither (er-effects-rs-7ics). Both are dependency-free and sub-second.
+# never set the class. The effects.json check replaces `er-param-inspect validate`, which needs
+# a Smithbox checkout and a dotnet bridge to reach a verdict that needs neither. Both are
+# dependency-free and sub-second.
 #
 # They run here and nowhere else on purpose. Their authority is the regulation.bin of the game
 # installed on this machine, so a missing regulation is exit 2 rather than a pass -- "could not
@@ -3048,7 +3086,7 @@ bash "$repo_root/scripts/test-check-config-guard.sh"
 #
 # The audit's own cargo call is capped at 25s, which a warm tree meets in about 2s and a cold one
 # does not: on a 4-core runner with no cache the cross-compile of these two crates and their path
-# dependencies ran past the cap (PR #485, run 37249825276). That is a deadlock rather than a slow
+# dependencies ran past the cap (CI run 37249825276). That is a deadlock rather than a slow
 # job, because rust-cache saves only on a green stage, so a stage that is red for want of a cache
 # never writes one. So the compile happens here first, uncapped like every other toolchain step,
 # and the audit then re-lints only the crate it is auditing. Check mode, because the audit runs

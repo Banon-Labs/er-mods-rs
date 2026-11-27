@@ -1,6 +1,6 @@
 //! Pure (host-testable) loading-screen stats layer: the line format and the CPU text
-//! raster, split out of the windows-only `stats_loading_text` module (bd
-//! er-effects-rs-qic7) so the one unified layout is provable off-target.
+//! raster, split out of the windows-only `stats_loading_text` module
+//! so the one unified layout is provable off-target.
 //!
 //! Unified layout (user decision 2026-07-30): the boot/autoload loading screen and every
 //! subsequent load screen render the same five-line panel -- name; RL+WL;
@@ -16,7 +16,7 @@
 //! the content key, rebuilt the bitmap, and re-uploaded the screen-scale texture for a
 //! number nobody reads mid-load.
 
-/// The local character's loading-screen stats (er-effects-rs-jsm). Read from the
+/// The local character's loading-screen stats. Read from the
 /// loading-screen-safe ProfileSummary record (name/level) + live PlayerGameData when up
 /// (attributes, HP/FP/Stamina, weapon level), falling back to the `.sl2` slot cache
 /// (attributes, stored max vitals and weapon level) pre-load.
@@ -70,7 +70,7 @@ fn fmt_vital(v: u32) -> String {
 
 /// Lay the stats out as display lines -- the one layout used on every loading screen
 /// (boot/autoload and subsequent loads): name; RL+WL; HP/FP/Stamina; the 8 attributes
-/// over two lines. The HP line is unconditional (bd er-effects-rs-qic7): the line count
+/// over two lines. The HP line is unconditional: the line count
 /// (and so the bitmap height) is identical whether the vitals came from the save slot,
 /// live PlayerGameData, or are still unknown (`--`).
 pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
@@ -292,7 +292,7 @@ mod tests {
     }
 
     /// The unified layout: both data sources produce the identical five-line structure
-    /// (bd er-effects-rs-qic7 -- the old live=false variant dropped the HP line).
+    /// (the old live=false variant dropped the HP line).
     #[test]
     fn both_sources_produce_identical_line_structure() {
         let live = format_stats_lines(&live_stats());

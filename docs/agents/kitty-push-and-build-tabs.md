@@ -68,6 +68,50 @@ boards --file <task output file>`, which follows those. The Stop guard
 signal's `LONG_RUNS` list (boards, weapon and DLL builds, the check suite, `git push`, ...) without
 such a split or tab.
 
+Any other background task gets a split, which the global Stop guard
+`~/.config/cupcake/policies/claude/background_task_needs_tail.rego` asks for. In this repo it
+suggests `python3 /home/banon/projects/er-mods-rs/scripts/kitty-tail-task.py --split --title
+'tail: <what> (<task id>)' --file <task output file>`: with `--file` and no `--pid` or `--match`,
+the helper follows whatever holds the first file open for writing, and the split closes 5 s after
+it exits. The global `kitty-tail-bg` it suggests elsewhere is refused here by
+`bash_no_python_file_write.rego`, since it is a python program this repo has not committed.
+
+A tail split whose task has finished is closed by the self-closer, never by hand (user, 2026-11-16:
+"this is not permission to close them, its permission to ensure the self closer self closes before
+re-running it"). Splits opened the old way (`--hold tail -F`, no `--pid`) never exit on their own;
+`kitty-tail-task.py --reap` closes each one whose followed files no live process holds open for
+writing and that have been quiet for its grace period. Before running it on the user's windows,
+prove it on a test split (`--reap-selftest`): it must close the split of a finished writer and
+leave the split of a live one open.
+
+A tail split is for the user, so it follows the files that say how far the run is and how long it
+has left. It does not follow the agent's own instruments: a memory sampler, a trace, a probe log
+(user, 2026-11-17: "the memory information is for you probably, whereas the progress information
+and duration is for me", of a split that interleaved a 15-second memory sampler with the run's
+progress lines). Those files are read by the agent, which reports only what they conclude. Pass
+`--file` for the progress output alone.
+
+A queue that runs several steps one after another writes one log per step, and its split follows
+every one of them from the start, with `--pid` on the queue's shell: `tail -F` picks up a log that
+does not exist yet. On 2026-11-17 an agent's queue split followed only its first step's log, so it
+sat on that step's `exit 0` line for the whole second step, and the user asked why it had not
+closed. Reopening a view (same task id in the title) closes the earlier ones.
+
+## A draft PR the session opened gets an undraft split, and is watched (user request 2026-11-23)
+
+The global draft guard refuses `gh pr ready` for the agent, so the user takes a PR out of draft
+(user, 2026-11-23: "for each draft just in this session, open kitty splits to undraft when needed,
+and monitor them"). For every draft PR the session opens, once it is the one to merge next, open
+the command for them instead of asking in prose:
+
+```bash
+python3 scripts/kitty-user-command.py --title 'undraft #<n>' --why '<why it is ready>' \
+    --status-file <scratchpad>/undraft-<n>.status -- 'gh pr ready <n> --repo Banon-Labs/er-mods-rs'
+```
+
+Then arm a run_in_background until-loop on that status file's `exit=` line (tailed like any other
+background task), keep its CI under `gh pr checks <n> --watch` in the background, and merge it with
+a merge commit (the repo allows no squash) once both are done and its checks pass.
 ## "CI is still running" needs a watcher of those checks (user correction 2026-11-25)
 
 The `CI STATE (measured, not remembered)` line that each prompt injects is one read of

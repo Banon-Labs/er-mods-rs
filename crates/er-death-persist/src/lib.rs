@@ -48,7 +48,7 @@
 //!   update calls it and hands `out` to the dead-character visibility check, the only reader of
 //!   `isVisibleDeadChr`.
 //!
-//! The static reading behind both is recorded in bd `er-effects-rs-711x`. Copies are leaked on
+//! Copies are leaked on
 //! purpose: a live `SpecialEffectEntry` keeps the pointer it was given, so a copy must outlive
 //! every entry that could hold it, which is the process.
 

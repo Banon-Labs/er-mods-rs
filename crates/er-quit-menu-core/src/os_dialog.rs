@@ -103,7 +103,7 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
     // The one collapse this arm is ALLOWED: the System>Quit load surface treats a user's Cancel and
     // an unusable comdlg32 identically, because both leave the System menu alone and the row press
     // that asked for the dialog is spent either way. It does not collapse either of them into
-    // `NotOpened` -- that collapse is the reopen loop (bd `er-effects-rs-rsxi`).
+    // `NotOpened` -- that collapse is the reopen loop.
     let staged = os_pick_validated(
         false,
         start_dir,
@@ -179,14 +179,13 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
 ///    `PropertyEditDialog` -- the exact mistake `system_quit_dialog_handlers` warns about. It stages
 ///    `SAVE_DEST_COMMIT_PENDING` and stops; stage 3 then sees no picker window and proceeds.
 ///  * it never writes `SAVE_FLOW_STAGE`. The in-game arm does, from the menu thread, bypassing
-///    `save_flow_enter_stage` -- a filed defect (bd `er-effects-rs-8tq4` item 15). Adding a second
+///    `save_flow_enter_stage` -- a known defect. Adding a second
 ///    instance of a known defect is not "keeping the modes symmetric". It sets
 ///    `SAVE_DEST_CONFIRM_PENDING` and the tick performs the transition.
 ///  * it stages nothing at all on cancel. Dropping the dialog claim with no latch set is precisely
 ///    what stage 3 reads as "the user abandoned the save". That was true of the latches and false
 ///    of the request: the menu pump's `SAVE_DEST_OPEN_PICKER_PENDING` stayed armed through the
-///    cancel and reopened the dialog on the next pump, ~57 ms later, forever (bd
-///    `er-effects-rs-rsxi`). The cancel path still needs no latch of its own -- what it needs is to
+///    cancel and reopened the dialog on the next pump, ~57 ms later, forever. The cancel path still needs no latch of its own -- what it needs is to
 ///    say `Dismissed` rather than "the open failed", which is what discharges that request.
 ///
 /// # Safety

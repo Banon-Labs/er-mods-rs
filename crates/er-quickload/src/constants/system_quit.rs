@@ -191,10 +191,10 @@ pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new()
 pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
-/// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
+/// One-shot install of the loading-tip suppression detour. Installed at DLL attach,
 /// before the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
 pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();
-/// One-shot install of the always-on Scaleform descriptor-heap null guard (er-effects-rs-y22i).
+/// One-shot install of the always-on Scaleform descriptor-heap null guard.
 /// Installed unconditionally at DLL attach -- it is a crash guard, not a feature.
 pub(crate) static START_SCALEFORM_GUARD: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).

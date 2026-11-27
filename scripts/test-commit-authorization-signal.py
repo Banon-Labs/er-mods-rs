@@ -11,8 +11,8 @@ Each case writes a transcript fixture with the `Chain` builder from
 `scripts/test-push-authorization-signal.py` (the same entry shapes, measured on this project's
 transcripts) and hands the signal a PreToolUse event on stdin the way cupcake does. Most fixtures
 hold the pending call's own `tool_use` line; the cases under "the call's own line is not on disk
-yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs
-(bd er-effects-rs-hu4w). The reader, the push reader it shares the transcript helpers with, and the
+yet" leave it out, which is what the main session's transcript looks like while PreToolUse runs.
+The reader, the push reader it shares the transcript helpers with, and the
 signal are copied into a temporary root so the spent-authorization record lands there, not in this
 checkout's `.cupcake/state`.
 
@@ -186,6 +186,7 @@ def main() -> int:
         one_landed_commit(sb)
         line_not_on_disk(sb)
         not_the_phrase(sb)
+        suggestion_at_the_end_of_the_walk(sb)
         refused_shapes(sb)
         forgery_and_subagents(sb)
         queued_replies(sb)
@@ -465,6 +466,56 @@ def not_the_phrase(sb: Sandbox) -> None:
            sb.run(c, "toolu_n7", COMMIT), "DENIED", "DENIED")
 
 
+def suggestion_at_the_end_of_the_walk(sb: Sandbox) -> None:
+    """An accepted `authorize commit` with nothing typed between it and a compaction summary or
+    the chain's root. Session 5ec7b779, 2026-11-11: the summary, hook attachments, the accepted
+    suggestion, then a `check-comment-caps.py` run that was refused with "no message typed by the
+    user since the conversation was last compacted", which never said the reply had to be typed."""
+    def after_summary() -> Chain:
+        c = Chain()
+        c.human("go on")
+        compacted(c)
+        c.attachment()
+        c.human(AUTH, source="suggestion_accepted")
+        c.attachment()
+        return c
+
+    expect("an accepted suggestion after a compaction denies a lint, and says why (line absent)",
+           sb.run(after_summary(), "toolu_v1", "python3 scripts/check-comment-caps.py"), "-", "DENIED",
+           "accepted prompt suggestion")
+    expect("an accepted suggestion after a compaction denies a commit, and says why (line absent)",
+           sb.run(after_summary(), "toolu_v2", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+    c = after_summary()
+    c.use("toolu_v3", COMMIT)
+    expect("an accepted suggestion after a compaction denies a commit, and says why (line present)",
+           sb.run(c, "toolu_v3", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+
+    c = after_summary()
+    c.human(AUTH)
+    expect("`authorize commit` typed after the compaction and the suggestion authorizes",
+           sb.run(c, "toolu_v4", COMMIT), "AUTHORIZED", None)
+
+    c = Chain()
+    c.human(AUTH, source="suggestion_accepted")
+    c.use("toolu_v5", COMMIT)
+    expect("an accepted suggestion with nothing typed back to the root says why",
+           sb.run(c, "toolu_v5", COMMIT), "DENIED", "DENIED", "accepted prompt suggestion")
+
+    c = Chain()
+    c.say("Starting.")
+    c.use("toolu_v6", COMMIT)
+    expect("a root with no suggestion keeps the plain reason",
+           sb.run(c, "toolu_v6", COMMIT), "DENIED", "DENIED", "no message typed by the user precedes")
+
+    c = Chain()
+    c.human(AUTH, source="suggestion_accepted")
+    compacted(c)
+    c.attachment()
+    c.use("toolu_v7", COMMIT)
+    expect("a suggestion from before the compaction is not named; the summary's reason stands",
+           sb.run(c, "toolu_v7", COMMIT), "DENIED", "DENIED", "compacted")
+
+
 def refused_shapes(sb: Sandbox) -> None:
     for i, cmd in enumerate(["git add -A && git commit -m x", "git commit -m x; echo ok",
                              "git commit -m x | cat", "git commit -m x > /dev/null",
@@ -658,6 +709,14 @@ def end_to_end(sb: Sandbox) -> None:
     c.human(AUTH)
     rc, out = verdict(c, "toolu_e7", "git add -A && git commit -m x")
     check("cupcake denies a chained commit even when authorized", rc == 1, f"rc={rc} {out[:400]}")
+
+    c = Chain()
+    c.human("go on")
+    compacted(c)
+    c.human(AUTH, source="suggestion_accepted")
+    rc, out = verdict(c, "toolu_e8", "python3 scripts/check-comment-caps.py", own_line=False)
+    check("cupcake's lint refusal after a compaction names the accepted suggestion",
+          rc == 1 and "accepted prompt suggestion" in out, f"rc={rc} {out[:400]}")
 
 
 if __name__ == "__main__":

@@ -95,3 +95,55 @@ test_no_halt_on_non_stop_event if {
 	}
 	count(halts) == 0
 }
+
+# --- a pause names what it is blocked on (2026-11-11) -------------------------------------------
+
+live_report := "Shells running: bx12 (agent a740eb3 (Speed up): Rerun the selftest; up 3m02s). Agents working: a740eb3 'Speed up' (running)."
+
+# UNNAMEDPAUSE halts under its own rule and quotes the report, so the rewrite can name an item.
+test_halt_on_unnamedpause if {
+	halts := guard.halt with input as stop_event(concat("", ["UNNAMEDPAUSE:", live_report]))
+	rule_ids(halts) == {"ER-EFFECTS-PAUSE-NAMES-BLOCKER"}
+	some d in halts
+	contains(d.reason, "bx12")
+	contains(d.reason, "Speed up")
+	contains(d.reason, "cupcake_session_tasks.py")
+}
+
+# The object-shaped signal halts the same way.
+test_halt_on_unnamedpause_object_signal if {
+	halts := guard.halt with input as stop_event_object_signal(concat("", ["UNNAMEDPAUSE:", live_report]))
+	rule_ids(halts) == {"ER-EFFECTS-PAUSE-NAMES-BLOCKER"}
+}
+
+# A tag with nothing after it is not a report: no halt.
+test_no_halt_on_empty_unnamedpause if {
+	halts := guard.halt with input as stop_event("UNNAMEDPAUSE:  ")
+	count(halts) == 0
+}
+
+# A report riding after VERBOSEPAUSE: one halt, the verbose one, whose reason carries the report;
+# the char count is still read from the first line alone.
+test_verbosepause_with_report_is_one_halt_quoting_it if {
+	halts := guard.halt with input as stop_event(concat("", ["VERBOSEPAUSE:612\nUNNAMED:", live_report]))
+	rule_ids(halts) == {"ER-EFFECTS-NO-VERBOSE-PAUSE"}
+	some d in halts
+	contains(d.reason, "(612 chars)")
+	contains(d.reason, "bx12")
+}
+
+# A report riding after IDLEHOLD: one halt, the idle one, with the phrase read from the first line.
+test_idlehold_with_report_is_one_halt_quoting_it if {
+	halts := guard.halt with input as stop_event(concat("", ["IDLEHOLD:standing by\nUNNAMED:", live_report]))
+	rule_ids(halts) == {"ER-EFFECTS-NO-IDLE-HOLD"}
+	some d in halts
+	contains(d.reason, "('standing by')")
+	contains(d.reason, "a740eb3 'Speed up'")
+}
+
+# Without a report the existing reasons carry no naming tail.
+test_no_name_tail_without_report if {
+	halts := guard.halt with input as stop_event("VERBOSEPAUSE:612")
+	some d in halts
+	not contains(d.reason, "names nothing")
+}

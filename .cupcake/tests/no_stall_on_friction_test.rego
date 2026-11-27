@@ -131,7 +131,7 @@ test_deny_blame_deflection_guard_blocked_without_ownership if {
 	})
 }
 
-# bd er-effects-rs-454a: a bare mechanism-as-actor sentence still halts with its context attached.
+# A bare mechanism-as-actor sentence still halts with its context attached.
 test_deny_bare_guard_refused_with_context if {
 	"ER-EFFECTS-NO-BLAME-DEFLECTION" in halted_on_ctx(
 		{"blame": "The guard refused"},
@@ -157,7 +157,7 @@ test_deny_first_person_without_causal_verb if {
 
 # --- (b) MUST ALLOW: the shapes this guard must never gag ---------------------------------------
 
-# bd er-effects-rs-454a, first hit: the cause is the previous sentence, first person.
+# First hit: the cause is the previous sentence, first person.
 test_allow_cause_in_previous_sentence if {
 	count(halted_on_ctx(
 		{"blame": "The guard refused"},
@@ -165,7 +165,7 @@ test_allow_cause_in_previous_sentence if {
 	)) == 0
 }
 
-# bd er-effects-rs-454a, second hit: the cause opens the same sentence.
+# Second hit: the cause opens the same sentence.
 test_allow_cause_earlier_in_same_sentence if {
 	count(halted_on_ctx(
 		{"blame": "the hook refused"},

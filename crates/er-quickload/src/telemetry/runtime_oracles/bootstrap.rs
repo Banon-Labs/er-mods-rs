@@ -144,8 +144,8 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     // image. Transmuting `*(vtable+8)` from such a vtable and calling it dispatches through a data
     // address -> access violation (observed: handle vt=0x7ffe96aa4238, call target 0x7ffe977c61b0, both
     // outside [game_base, +SizeOfImage); crash self+0x317bd `call *rdx`). Reject any vtable / resolved
-    // call target that is not inside the game module image before the transmute+call. See bd
-    // er-effects-rs-3pc (post-switch reload crash).
+    // call target that is not inside the game module image before the transmute+call
+    // (post-switch reload crash).
     if !crate::vtable_in_game_image(vtable, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }

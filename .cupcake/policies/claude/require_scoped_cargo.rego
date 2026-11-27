@@ -98,23 +98,15 @@ cargo_word(word) if endswith(bare_word(word), "/cargo")
 
 bare_word(word) := trim(word, "\"'`(){}")
 
-# Words that stand before a program without being one and that the shared slot
-# test does not know: a brace group, a negation, `time`, and `xargs`, whose next
-# word is the program it runs. Kept here rather than added to
-# `commands.command_slot_wrapper`, which every command-slot guard reads.
-extra_slot_prefix(word) if word in {"{", "!", "time", "xargs"}
-
-# The word at `index` is the program its statement runs.
-in_command_slot(words, index) if {
-	start := commands.command_slot_start(words, index)
-	count([position |
-		some position, _ in words
-		position >= start
-		position < index
-		not commands.command_slot_wrapper_at(words, position)
-		not extra_slot_prefix(words[position])
-	]) == 0
-}
+# The word at `index` is the program its statement runs, read by the shared test.
+#
+# This guard used to carry its own copy of that test with four extra prefixes: a brace
+# group's `{`, a negation's `!`, `time` and `xargs`. The first two are shared wrappers now
+# and the last two are exec launchers there, and the shared test also follows the launchers
+# this copy did not know: `chrt --idle 0 cargo build`, `taskset -c 0-3 cargo build` and
+# `ionice -c 3 cargo build` built the whole workspace and were allowed until 2026-11-19. See
+# "EXEC LAUNCHERS" in `.cupcake/system/commands.rego`.
+in_command_slot(words, index) if commands.launched_word_in_command_slot(words, index)
 
 # A backtick opening the word is a command substitution, which runs whatever
 # precedes it in the text.

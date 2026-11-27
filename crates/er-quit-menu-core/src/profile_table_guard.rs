@@ -4,7 +4,7 @@
 //! native refresh that draws them ([`er_loading_portrait_core::PROFILE_RENDERER_REFRESH_RVA`],
 //! 2.7.2.0 `0x1409abcd0`) walks all ten entries of the renderer table and dereferences
 //! `table[slot] + 0x754` for every slot whose profile record exists -- with no null check. That is
-//! the `er-effects-rs-j3r` access violation.
+//! the null-slot access violation.
 //!
 //! The table is set up by exactly one native site, the `TitleTopDialog` constructor, so an in-world
 //! ProfileSelect opened by this crate runs the refresh against whatever the last teardown left
@@ -223,7 +223,7 @@ pub unsafe fn profile_table_guard_body() -> bool {
     // not fix it. Re-issuing the game's own refresh through Frida armed all ten renderers and
     // still drew nothing, which is what ruled out the request and pointed here.
     //
-    // Nothing is lost by not building. The skip below is what stops `er-effects-rs-j3r` from
+    // Nothing is lost by not building. The skip below is what stops the native builder from
     // dereferencing `[null + 0x754]`, and it stops it on its own; a portrait the builder makes in
     // this state was never going to appear either.
     if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK {

@@ -1,5 +1,5 @@
 // Overrides the sun's light after the game blends its lighting parameters each frame, and reports
-// the blended values, as the prototype for the Sky tab's Sun section (er-effects-rs-pjyh).
+// the blended values, as the prototype for the Sky tab's Sun section.
 //
 // Addresses are 2.7.2.0, carried from the 1.17.1 ones the bd notes give. Each code address is the
 // entry of a function whose bytes match

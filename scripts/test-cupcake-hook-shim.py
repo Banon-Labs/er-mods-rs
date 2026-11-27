@@ -18,7 +18,7 @@ exactly like a guard that allowed you -- so both are asserted here rather than t
    unrecognised permission mode must degrade to "evaluate anyway", never to "evaluate
    nothing".
 
-2. UNQUOTED NEWLINES (bd er-effects-rs-5eah). `cupcake eval` replaces unquoted newlines with
+2. UNQUOTED NEWLINES. `cupcake eval` replaces unquoted newlines with
    spaces before any policy runs, so the second and later lines of a Bash command arrive with
    no separator in front of them and are invisible to every guard that anchors on a shell
    separator class. A two-line command whose first line was harmless and whose second pushed
@@ -798,7 +798,7 @@ def check_decision(case: DecisionCase, extra_event: dict | None, env: dict[str, 
 #
 # The failure it pins is the worst one this file exists for: an evaluation that runs out of
 # memory prints `{}` at exit 0, which is indistinguishable from "every policy allowed you" --
-# so the engine going down reads as permission. bd er-effects-rs-xktj recorded four of these in
+# so the engine going down reads as permission. One investigation recorded four of these in
 # one child session, each classified by the agent that hit it as a guard blocking artifact
 # writes, when what had actually happened is that no guard answered at all.
 #
@@ -841,10 +841,10 @@ def check_abort_is_not_an_allow() -> list[str]:
     return failures
 
 
-# An engine that cannot start is the case Claude Code hides from the agent (bd er-effects-rs-rafi):
-# cupcake exits 1 with nothing on stdout, and a hook's exit other than 0 or 2 reaches the user
-# alone. A TMPDIR that does not exist stops the engine before any policy loads, the same way the
-# full /tmp of 2026-10-16 did, and its stderr names that cause:
+# An engine that cannot start is the case Claude Code hides from the agent: cupcake exits 1 with
+# nothing on stdout, and a hook's exit other than 0 or 2 reaches the user alone. A TMPDIR that
+# does not exist stops the engine before any policy loads, the same way the full /tmp of
+# 2026-10-16 did, and its stderr names that cause:
 #
 #     Fatal: Cupcake engine failed to initialize: Failed to create temp directory for OPA ...
 #

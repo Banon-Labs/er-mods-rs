@@ -391,7 +391,7 @@ This entry became true on 2026-09-11, when `er-quit-menu` stopped being a harnes
 evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/game_task.rs"
 
 # THE FORK'S FOUR ROWS, DELETED 2026-09-20 WITH THE PACKAGE (phase 3 of
-# `docs/plans/menus-and-saves-consolidation.md`, bd er-effects-rs-8rho).
+# `docs/plans/menus-and-saves-consolidation.md`).
 #
 # `er-quit-rows` held four rows here -- `duplicate-owner` against `er-quickload`, `diagnostic-drive`
 # against `er-reload-trace`, `drives-input` against `er-input-harness`, and a `[[shared]]` union row
@@ -434,7 +434,7 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 #     MinHook instance per DLL. Two companions on one prologue is then the 2026-08-23 collision
 #     again, and no row here can say so, because the pair is only unsafe when the product is
 #     ABSENT and this table's rows fire on presence.
-#   * bd er-effects-rs-whbn's outstanding runtime proof named a profile that no longer exists
+#   * The outstanding runtime proof for the election named a profile that no longer exists
 #     ("`er_quit_rows.dll` + `er_armament_icons.dll` and no product, companion logs
 #     `HookRoute::ProductUnion`"). The election itself is unaffected and stays host-tested at
 #     `er_hook::elect_union_host`; what is gone is the second hub it had to choose between.
@@ -467,8 +467,8 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 # WHAT IS STILL DIFFERENT, and it is a behaviour limit rather than a co-load hazard: the shell's
 # Load Character opens `05_010_ProfileSelect` and a pick runs the game's own in-world load. Gear and
 # level change in place; the world is never torn down and no character is loaded through the title.
-# The product's save-safe switch is not in a shared crate yet -- bd er-effects-rs-ye3q (P0) carries
-# the extraction, and until it lands a shell row is a native load wearing the product's label.
+# The product's save-safe switch is not in a shared crate yet -- the extraction is still open, and
+# until it lands a shell row is a native load wearing the product's label.
 #
 # WHAT BRINGS THE CONFLICT BACK. Naming `quit-rows` in a build of `er-quickload`. `check.sh`
 # compiles that configuration; nothing in this table can see a feature flag.
@@ -1861,7 +1861,7 @@ detours nothing and is `compatible` against every entry in this table."""
 # itself, and each crate is read as its default feature closure. The merged shell makes the same
 # question harder rather than easier -- its flows are chosen at runtime, so source text reads as
 # though every flow is supplied, which is the safe direction for this rule and the wrong direction
-# for a table that wants to say "only in this configuration" (bd er-effects-rs-38gi).
+# for a table that wants to say "only in this configuration".
 #
 # Every pair already declared shares at least one flow, and every pair that shares a flow is
 # declared. Two pairs among the row shells shared none -- disjoint rows, disjoint flows -- and were

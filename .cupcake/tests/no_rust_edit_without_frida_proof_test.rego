@@ -448,7 +448,7 @@ test_a_frida_verdict_still_opens_any_crate if {
 	count(guard.deny) == 0 with input as edit_event("crates/er-quickload/src/lib.rs", PROVEN)
 }
 
-# --- the same edit, typed into the Bash tool (bd er-effects-rs-wuij) ----------
+# --- the same edit, typed into the Bash tool ----------
 #
 # The rule routed on the write TOOLS and denied on `tool_input.file_path`; a Bash call has
 # no such key, so the whole rule was undefined for it and every shell spelling of the edit

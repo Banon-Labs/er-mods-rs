@@ -21,7 +21,7 @@ import data.cupcake.system.commands
 
 # A commit subject is gated locally by a hook; the PR title was not gated anywhere.
 #
-# 2026-09-09: PR #421 opened with the title "Cancel a local invasion that lands in the wrong
+# 2026-09-09: a pull request opened with the title "Cancel a local invasion that lands in the wrong
 # place" and the `pr-title` job failed five seconds later --
 # `scripts/conventional-commit-subject.py --subject "$PR_TITLE"` refusing it for having no type.
 # The identical rule already fires on every commit through

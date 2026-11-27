@@ -68,7 +68,7 @@ pub(crate) fn native_fullread_slot() -> i32 {
     }
     FULLREAD_DEFAULT_SLOT
 }
-/// Terminal non-commit disarm for the full-read chain (bd er-effects-rs-ns4n). Submit arms the
+/// Terminal non-commit disarm for the full-read chain. Submit arms the
 /// native slot-request register (`GameMan::requestedSaveSlotLoadIndex`) so the native chain resolves
 /// our slot. On every done exit, including the commit handoff, the register must be
 /// returned to the no-request sentinel: the in-game save manager services any >=0 request on the

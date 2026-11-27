@@ -3,7 +3,7 @@ use crate::loading_cover_host::{
 };
 use crate::prelude::*;
 
-// Observe-only user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
+// Observe-only user32 window-reconfiguration hooks.
 //
 // The 60fps boot videos proved the mid-boot black flashes are the game's own startup
 // display-mode application: the boot window is created small/windowed and jumps to borderless

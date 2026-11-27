@@ -1,4 +1,4 @@
-//! er-armament-icons -- armament tile Ash-of-War badge (bd er-effects-rs-pe98).
+//! er-armament-icons -- armament tile Ash-of-War badge.
 //!
 //! GOAL: every non-empty highlightable armament/ranged/catalyst/shield tile, in every
 //! menu that renders the shared tile widget, gets the weapon's skill (Ash of War) icon
@@ -6,7 +6,7 @@
 //! no regulation.bin changes, no loose packed files; icons resolve by Scaleform symbol
 //! name from the game's own texture repositories at runtime.
 //!
-//! Mechanism (static RE 2026-07-23, bd er-effects-rs-pe98 comments): the game populates
+//! Mechanism (static RE 2026-07-23): the game populates
 //! each tile natively -- `TilePopulate(SceneObjProxy* tile, MenuGaitem*)` (1.16.1 dump
 //! FUN_1408ff560) fills the tile's named child proxies and pushes icons through the
 //! universal icon setter (1.16.1 dump FUN_14074bdb0), which draws a bitmap-fill quad via the
@@ -459,7 +459,7 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
 }
 
 /// Resolve the tile's weapon skill and drive the dormant `ArtsIcon/IconImage` child
-/// with the game's own icon primitives (bd er-effects-rs-pe98 RE #2/#3).
+/// with the game's own icon primitives.
 /// Resolve the Ash-of-War icon for a resolved swordArtsParamId via the gem that carries it.
 /// The ash's item icon = the crescent icon the detail panel shows. Verified offline (WitchyBND
 /// regulation extract): the primary gem for an ash sits at EquipParamGem id = arts_id * 100

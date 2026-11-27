@@ -1,4 +1,4 @@
-//! THROWAWAY structural enumeration (bd er-effects-rs-jogu): the armament badge needs the
+//! THROWAWAY structural enumeration: the armament badge needs the
 //! GRID/SLOT tile sprite in each menu movie, not just any sprite that places `ItemIcon`.
 //! The runtime child probe shows the equip menu's tile has `ArtsIcon` while the inventory
 //! grid tile binds `ItemIcon/AttributeIcon/inadequacy/StockNum` and no `ArtsIcon`, so this

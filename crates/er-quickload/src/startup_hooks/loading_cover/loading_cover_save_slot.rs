@@ -295,7 +295,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-    // Boot-epoch publish-latency anchor (bd er-effects-rs-io53): the switch path stamps
+    // Boot-epoch publish-latency anchor: the switch path stamps
     // PORTRAIT_CONFIRM_MS at the switch confirm, so PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST never measured
     // the boot window. Stamp the boot anchor here -- the loading-owned table build, observed ~90ms
     // after the boot loading screen opens -- so the boot window's first publish computes the same
@@ -550,7 +550,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(renderer, Ordering::SeqCst);
-    // Kick identity (bd er-effects-rs-dpf6 Phase 1): stamp the target's name hash on the game thread
+    // Kick identity (Phase 1): stamp the target's name hash on the game thread
     // (from the same summary record the kick configures) so the consume worker -- which may not read
     // game memory -- can copy it next to the bridge at publish. `record` == summary record base
     // (name UTF-16 units at +0; verified: kick log record=0x92041c98 == summary 0x92041c80 + 0x18).
@@ -569,13 +569,13 @@ pub(crate) unsafe fn kick_target_profile_slot(
 
 /// [`portrait_loaded_slot_confirmed`] collapsed to a bare slot index, with `0` standing in for
 /// "nothing named a slot". Routing every portrait site through one loaded-character source is the
-/// er-effects-rs-j3r correlation fix; this form exists only for display-side readers where a wrong
+/// portrait correlation fix; this form exists only for display-side readers where a wrong
 /// slot reads inert (no model is built for it, so it draws nothing).
 ///
 /// Prefer [`portrait_loaded_slot_confirmed`] and handle `None`. The `unwrap_or(0)` here is a lie by
 /// omission -- it reports slot 0 with the same confidence as a real answer. Anything that builds,
 /// captures or publishes must not use it: the publish gate did, and with no confirmed slot it
-/// published slot 0's head as though that were the loaded character (bd er-effects-rs-91zb).
+/// published slot 0's head as though that were the loaded character.
 pub(crate) fn portrait_loaded_slot() -> i32 {
     portrait_loaded_slot_confirmed().unwrap_or(0)
 }
@@ -588,7 +588,7 @@ pub(crate) fn portrait_loaded_slot() -> i32 {
 /// pipeline for the rest of the load (1 motion sample all window). Display-side readers may still
 /// use the collapsed `portrait_loaded_slot()` form (with no model built, a wrong slot reads inert).
 ///
-/// Implemented but UNPROVEN (bd er-effects-rs-91zb; needs one live run -- build success and kick
+/// Implemented but UNPROVEN (needs one live run -- build success and kick
 /// counters prove nothing about which face reached the screen). `GameMan.save_slot` (ac0) is not
 /// authoritative for "which character is loading": both the game's own selector and our own
 /// `set_save_slot(picked)` (own_load/loaders.rs, ~5s before the deserialize) write it for reasons
@@ -662,7 +662,7 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     // request register and to a pick, a pick yields to nothing. The old boolean form could only
     // say "pick or not pick", which filed a stale ac0 read and the user's own click under one
     // word -- so the across-save-files switch latched slot 0 off an obsolete ac0 and then refused
-    // the b78 that named the real slot 1 (bd er-effects-rs-fmy6).
+    // the b78 that named the real slot 1.
     let latched_source = er_loading_portrait_core::PortraitSlotSource::from_rank(
         PORTRAIT_WINDOW_TARGET_SOURCE.load(Ordering::SeqCst),
     );
@@ -771,7 +771,7 @@ pub(crate) fn portrait_target_slot() -> i32 {
     portrait_loaded_slot()
 }
 
-/// Fail-fast character-identity semaphore for the loading-screen portrait (er-effects-rs-j3r; user
+/// Fail-fast character-identity semaphore for the loading-screen portrait (user
 /// directive 2026-07-02: verify in-game, from RAM identity -- Not rendered pixels -- that the
 /// character our portrait code renders is the one the game actually loaded). Two independent sources:
 ///   Our side  = the ProfileSummary save record of the slot our portrait targets (`render_target_slot`
@@ -978,7 +978,7 @@ pub(crate) struct SystemQuitSaveSwapState {
     /// The `PROFILE_SUMMARY_TOTAL_BYTES` image of that allocation as it looked before the first
     /// staging of the current picker session. Re-taken per session (the latch is cleared by every
     /// restore), never a process-lifetime latch -- a stale one would resurrect a previous save
-    /// container's records, which is the other half of `er-effects-rs-fmy6`.
+    /// container's records, which is the other half of the stale-picker-rows defect.
     pub(crate) rows_snapshot: Vec<u8>,
 }
 
