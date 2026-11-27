@@ -630,7 +630,13 @@ def line_hp(c, line=None, build=None):
 #: whole similarity output of those three, Bloody Slash, Stars of Ruin and Carian Slicer is bit-
 #: identical to version 31's (perf-similarity-dump.py, 120 arrays), at 1.5x to 2.5x the CPU on the
 #: stun attacks (Freezing Mist tap 2,377 -> 3,818 s, two dumps run side by side).
-SIMILARITY_VERSION = 32
+#: 33: a stun play's bleed and frost proc HP is counted on the same gauge walk the stun plays
+#: (`er-mechanics-spells.gauge_procs` over the play's landings, `StunRun.proc_hp`): refill between
+#: every two landings, the lock, a proc emptying the gauge, a geometry not launched adding nothing.
+#: Until then the HP read the whole play (`play_buildup`: refill over the longest list alone, one more
+#: proc per full resistance left), so a play could stun with no proc HP or price procs the walk does
+#: not make (check 38c: 4 against the walk's 2). The nets are not measured on this version.
+SIMILARITY_VERSION = 33
 #: The distance basis: every damage stat 99, so every attack is wieldable and castable. No
 #: character at the RL window has it (with 10 `VIG`, `MND` and `END` it is RL 446), so nothing that
 #: compares damage or FP is read on it: dominance is read per attacker build (`attacker_builds`).
@@ -4622,7 +4628,7 @@ def _fresh_child(fn, item, core, conn, ppid=None):
 
 
 def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=None, running=None,
-                quiet_s=None, every_s=None, started=None):
+                quiet_s=None, every_s=None, started=None, clock=None):
     """`_timed(fn, x)` of each of `rest` ([(index, item)]), each in a process forked from this one for
     it alone and pinned to the core of `cores` fewest of them hold, at most `jobs` at once; results as
     they end. Every process is forked from this thread with no other thread running, so none starts
@@ -4635,7 +4641,9 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
     has ended for `quiet_s` (default `RUNNING_QUIET_S`), and every `every_s` (`RUNNING_EVERY_S`)
     after that while none does, `running(item, seconds it has run)` for each item in flight, the
     oldest first (`pooled` prints them under its counter). With `started`, `started(item)` as each
-    item's process starts (again, when it is dealt again)."""
+    item's process starts (again, when it is dealt again). `clock` (default `time.monotonic`) is
+    what the seconds since an item started or last ended are read on: check 31e passes its own, so
+    its still-running lines come at the same reads however loaded the machine is."""
     import multiprocessing as mp
     from collections import deque
     from multiprocessing.connection import wait
@@ -4647,9 +4655,10 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
     lost, held = Counter(), Counter()
     quiet_s = RUNNING_QUIET_S if quiet_s is None else quiet_s
     every_s = RUNNING_EVERY_S if every_s is None else every_s
+    clock = time.monotonic if clock is None else clock
     # When an item last ended (the pool's start before any), and when the items in flight were last
     # told since then (None: not yet).
-    ended, told = time.monotonic(), None
+    ended, told = clock(), None
 
     def due():
         return ended + quiet_s if told is None else told + every_s
@@ -4671,7 +4680,7 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
                 p.start()
                 w.close()
                 use[core] += 1
-                run[r] = {'p': p, 'item': item, 'core': core, 't': time.monotonic(), 'stopped': False,
+                run[r] = {'p': p, 'item': item, 'core': core, 't': clock(), 'stopped': False,
                           'alone': held[item[0]] >= 2}
                 if started is not None:
                     started(item)
@@ -4681,7 +4690,7 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
             timeout = guard.poll_s if guard is not None else None
             if running is not None:
                 # Woken in time to tell the items in flight, which no result may come to do.
-                soon = max(0.0, due() - time.monotonic())
+                soon = max(0.0, due() - clock())
                 timeout = soon if timeout is None else min(timeout, soon)
             wait(list(run) + [x['p'].sentinel for x in run.values()], timeout=timeout)
             for conn in list(run):
@@ -4705,7 +4714,7 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
                 del run[conn]
                 use[x['core']] -= 1
                 if got is not None and got[0] == 'ok':
-                    ended, told = time.monotonic(), None
+                    ended, told = clock(), None
                     yield got[1]
                     continue
                 if got is not None:
@@ -4721,7 +4730,7 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
                     log(f'attack similarity: item {i} died without a result (exit code {x["p"].exitcode}); '
                         f'dealing it again ({lost[i]} of {retries})')
                 todo.appendleft(x['item'])
-            now = time.monotonic()
+            now = clock()
             if running is not None and run and now >= due():
                 for x in sorted(run.values(), key=lambda x: x['t']):
                     if not x['stopped']:
@@ -4735,7 +4744,7 @@ def _fresh_pool(fn, rest, jobs, cores, guard=None, retries=FRESH_RETRIES, log=No
                     x = run[v]
                     x['stopped'] = True
                     log(f'memory guard: {guard._now() / 2**30:.1f} GiB available, under {guard.stop / 2**30:g}; '
-                        f'stopping item {x["item"][0]} (pid {x["p"].pid}, {time.monotonic() - x["t"]:.0f} s in) '
+                        f'stopping item {x["item"][0]} (pid {x["p"].pid}, {clock() - x["t"]:.0f} s in) '
                         f'to deal it again')
                     x['p'].kill()
     finally:
@@ -4757,7 +4766,7 @@ def _timed(fn, item):
 
 
 def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None, fresh=False, guard=None,
-           expect=None, source='measurement', older=None, older_expect=None):
+           expect=None, source='measurement', older=None, older_expect=None, clock=None):
     """`fn` over `items`, results as they finish: the first in this process (what it reads first the
     workers inherit), the rest on `jobs` forked workers each on a core of its own
     (`er-mechanics-ash-interrupt` throttle); `jobs` 1 runs here. Counts `  i/N <unit>`, its time
@@ -4772,7 +4781,8 @@ def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None, fresh=Fal
     time left the counter names. With a `weight` the time left is wall-clock (`PROG.Count` `jobs`,
     `sizes`): each item's own seconds, at most `jobs` items at once (`_fresh_pool`, the pool's size),
     the ones in flight from when they started; in a pool of long-lived workers (not `fresh`), whose
-    items' starts this process does not see, the items not ended count whole."""
+    items' starts this process does not see, the items not ended count whole. `clock` is
+    `_fresh_pool`'s."""
     items = list(items)
     if not items:
         return
@@ -4814,7 +4824,7 @@ def pooled(fn, items, jobs, unit, timing=None, label=str, weight=None, fresh=Fal
                 tick.running(label(x), ran, e, source,
                              older=None if e is not None or older_expect is None else older_expect(x))
             for got in _fresh_pool(fn, rest, jobs, workers, guard, running=running,
-                                   started=lambda item: tick.started(item[0])):
+                                   started=lambda item: tick.started(item[0]), clock=clock):
                 yield note(got, False)
             return
         # The workers fork as the pool starts, and the parent stays frozen while they run (`gc_frozen`).
@@ -8937,6 +8947,18 @@ def selftest_status_stun(check, c):
     check(f"38b. robustness 100 procs on the first hit's 100 and 101 does not: two plays "
           f"({[(round(w, 3), [two.spool.classes('robustness')[k][1] for k in run.ks], [round(x[0], 3) for x in got]) for got, w, run, _ in runs]})",
           len(runs) == 2 and sum(x[0] for x in runs[0][0]) > sum(x[0] for x in runs[1][0]))
+    # 38c (version 33): the proc HP counts the procs the stun's own gauge walk makes. Held by the
+    # first proc, he takes f30 and f38: each 100 empties the robustness of 50 again (lock 0), so 2
+    # procs of 325 HP (1500 x 15 / 100 + 100). The old reading of the whole play (`play_buildup`:
+    # 200 taken, one more proc per full 50 left) priced 4.
+    (rows_, _, run_, _), = stun.runs(2.5, 0)
+    walk_ = S_.gauge_procs(run_.logs[run_.best], 50.0)
+    built_ = S_.play_buildup(rows_, stun.status_lists(), stun.spool.floor)
+    old_ = int(round(float(S_.StatusPool.procs(run_.C, run_.R, built_)[0]) / 325.0))
+    x_ = sum(rows_[g][0] * value[fr] for g, fr in enumerate(stun.frames))
+    check(f"38c. the proc HP counts the stun walk's procs: {walk_} on hits {[round(r_[0], 3) for r_ in rows_]} "
+          f"(the whole-play reading priced {old_}), worth {stun.worth_of(2.5, 0):g} = {x_:g} + 2 x 325",
+          walk_ == {'bleed': 2} and old_ == 4 and abs(stun.worth_of(2.5, 0) - (x_ + 2 * 325.0)) < 1e-9)
 
 
 def selftest_status(check, c):
@@ -8968,12 +8990,20 @@ def selftest_status(check, c):
         sc = S.status_caught(r['geo'], c.dfn['pool'], r['value'], c.dfn)
         pc = A.CaughtModel.of(r['geo'], c.dfn['pool'], r['value'])
         lists = sc.status_lists()
+        consts = S.status_consts(lists)
+        live = [f in sc.value for f in sc.frames]
+
+        def proc_on(rows, ps):
+            # A stun play's bleed and frost are counted on its own gauge walk (`StunRun.proc_hp`,
+            # version 33), the rest by `play_buildup`, as `worth_of` prices them.
+            b = S.play_buildup(rows, lists, sc.spool.floor, live)
+            if isinstance(ps, S.StunRun):
+                return bool(ps.proc_hp(b, ps.logs[ps.best], live, consts).any())
+            return b is not None and any(S.StatusPool.procs(C, R, b).any() for C, _, R in sc.spool.by.values())
         crossed = agree = n = 0
         for d in sorted({p[0] for p in pairs})[:12]:
             for h in range(len(sc.geoms)):
-                built = [S.play_buildup(rows, lists, sc.spool.floor) for rows, _, _, _ in sc.runs(d, h, None)]
-                procs = any(b is not None and any(S.StatusPool.procs(C, R, b).any() for C, _, R in sc.spool.by.values())
-                            for b in built)
+                procs = any(proc_on(rows, ps) for rows, _, ps, _ in sc.runs(d, h, None))
                 # The plain model prices a catch of no damage at 0, the status model at its floor.
                 gain = sc.worth_of(d, h) - max(pc.worth_of(d, h), S.STATUS_WORTH_FLOOR)
                 crossed += procs
@@ -9295,25 +9325,68 @@ def selftest_estimate(check):
     # While no set ends, a line per set still running, under the counter and never read as one; it
     # names the set, how long it has run, and its expected seconds or that there are none. A pool
     # whose sets end within the quiet time prints none.
+    # The pool reads a clock of the check's own (`_fresh_pool` `clock`), which steps 0.1 s at every
+    # read, and the three slow sets wait on `go_` instead of sleeping: the pool's reads per wake are
+    # fixed while none ends, so the lines come at the same seconds however loaded the machine is.
+    # Each round of still-running lines is 0.4 s on that clock (2 reads a wake, a round every other
+    # wake): the sets have run 0.4 / 0.8 / 1.2 s ('slow', started first), 0.3 / 0.7 / 1.1 ('blind')
+    # and 0.2 / 0.6 / 1.0 ('aged') at the three rounds. After the third round the clock stops and the
+    # sets are let go, so none is told again while they end. Until 2026-11-26 the sets slept 1.4 s
+    # against the machine's clock, and the check failed at load 30 on 4 CPUs (a first line already
+    # past its 0.7 s).
     global RUNNING_QUIET_S, RUNNING_EVERY_S
     quiet0_ = (RUNNING_QUIET_S, RUNNING_EVERY_S)
+    import multiprocessing as mp_
+    go_ = mp_.get_context('fork').Event()
+    vt_ = {'t': 0, 'step': 1, 'told': 0}
+
+    def clock_():
+        vt_['t'] += vt_['step']
+        return vt_['t'] / 10.0
+
+    class Counted_:
+        """`PROG.Count` on `buf_`, its still-running lines counted: the ninth (three rounds of
+        three) stops the clock and lets the sets go."""
+
+        def __init__(self, *a_, **k_):
+            self.c = orig_(*a_, **{**k_, 'out': buf_})
+
+        def __getattr__(self, name):
+            return getattr(self.c, name)
+
+        def __call__(self, *a_, **k_):
+            return self.c(*a_, **k_)
+
+        def running(self, *a_, **k_):
+            self.c.running(*a_, **k_)
+            vt_['told'] += 1
+            if vt_['told'] == 9:
+                vt_['step'] = 0
+                go_.set()
     buf_ = io.StringIO()
-    PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'out': buf_})
+    PROG.Count = Counted_
 
     def nap_(x):
-        time.sleep(x[1])
+        if x[1]:
+            # At most a minute: a check gone wrong fails on its lines rather than hanging.
+            go_.wait(60.0)
         return x[0]
     try:
         RUNNING_QUIET_S, RUNNING_EVERY_S = 0.3, 0.3
-        got_ = sorted(pooled(nap_, [('first', 0.0), ('slow', 1.4), ('blind', 1.4), ('aged', 1.4)], 3, 'sets',
-                             label=lambda x: x[0], fresh=True, expect=lambda x: 0.7 if x[0] == 'slow' else None,
-                             source='same-code measurement',
-                             older_expect=lambda x: None if x[0] == 'blind' else (0.4, 0.8)))
+        got_ = sorted(pooled(nap_, [('first', False), ('slow', True), ('blind', True), ('aged', True)], 3,
+                             'sets', label=lambda x: x[0], fresh=True,
+                             expect=lambda x: 0.7 if x[0] == 'slow' else None, source='same-code measurement',
+                             older_expect=lambda x: None if x[0] == 'blind' else (0.4, 0.8), clock=clock_))
         lines_ = buf_.getvalue().splitlines()
+        told_ = vt_['told']
         buf_ = io.StringIO()
+        PROG.Count = lambda *a_, **k_: orig_(*a_, **{**k_, 'out': buf_})
+        # The quick sets end at once; a clock of 0.001 s a read reaches the 5 s quiet time only after
+        # 5,000 reads, which a pool of three ends takes nowhere near.
+        vt_.update(t=0, step=1)
         RUNNING_QUIET_S, RUNNING_EVERY_S = 5.0, 5.0
-        quick_ = list(pooled(nap_, [('first', 0.0), ('a', 0.05), ('b', 0.05), ('c', 0.05)], 2, 'sets',
-                             label=lambda x: x[0], fresh=True))
+        quick_ = list(pooled(nap_, [('first', False), ('a', False), ('b', False), ('c', False)], 2, 'sets',
+                             label=lambda x: x[0], fresh=True, clock=lambda: clock_() / 100.0))
         quick_lines_ = buf_.getvalue().splitlines()
     finally:
         RUNNING_QUIET_S, RUNNING_EVERY_S = quiet0_
@@ -9324,7 +9397,7 @@ def selftest_estimate(check):
     heads_ = [x for x in lines_ if pw.COUNTER.match(x)]
     check(f'31e. while no set ends, a line per set still running under the counter, never read as a counter line; '
           f'a set with no same-code seconds but older code\'s says what older code took, scaled ({lines_})',
-          got_ == ['aged', 'blind', 'first', 'slow'] and len(slow_) >= 2 and len(blind_) == len(slow_) == len(aged_)
+          got_ == ['aged', 'blind', 'first', 'slow'] and told_ == 9 and len(blind_) == len(slow_) == len(aged_) == 3
           and ' of ~1s expected (same-code measurement)  [' in slow_[0]
           and ', past the ~1s expected (same-code measurement)  [' in slow_[-1]
           and all(', no same-code measurement  [' in x for x in blind_)

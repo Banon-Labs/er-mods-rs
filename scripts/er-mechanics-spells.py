@@ -3285,11 +3285,15 @@ class CastThreats:
         return out
 
     def outcome(self, A, dist, floor, my_roll, strikes, catches=None, hp=None, poise=None, plan=None,
-                run_floor=None):
+                run_floor=None, defender=None):
         """`volley_outcome`, `sequence_outcome` or `dynamic_outcome` at `dist` (`net_parts`' `at`),
         what one cast lands capped at `hp`; an 'aimed' cast's caught defender is played out with
         `poise` (`er-mechanics-ashes.CaughtModel`) when the geometries carry their `CAUGHT`
-        records, his whiff's recovery holding him to `floor` and `run_floor` (`sequence_outcome`).
+        records, his whiff's recovery holding him to `floor` and `run_floor` (`sequence_outcome`),
+        each play's status build-up priced over `defender`'s pool as a static cast's is
+        (`status_caught`, the model `net_parts` plays a static cast with). A 'volley' or 'dynamic'
+        cast plays no caught defender (its geometries carry no `CAUGHT` record: each threat lands
+        whole or not at all), so neither its hits' reactions nor a proc's are read there.
         `plan` times his first dodge (`er-mechanics-ashes.lookalike_plan`, `Lookalikes`)."""
         if self.mode == 'dynamic':
             return self.dynamic_outcome(A, dist, floor, my_roll, strikes, hp, plan=plan)
@@ -3299,7 +3303,7 @@ class CastThreats:
                                     catches=catches, hp=hp, plan=plan)
         key = round(dist, 2)
         if key not in self._caught:
-            self._caught[key] = A.CaughtModel.of(self._geo.get(key), poise, self.value)
+            self._caught[key] = status_caught(self._geo.get(key), poise, self.value, defender)
         return A.sequence_outcome(b, dist, floor=floor, my_roll=my_roll, strikes=strikes, run=True, catches=catches,
                                   caught=self._caught[key], hp=hp, plan=plan, run_floor=run_floor)
 
@@ -3545,7 +3549,7 @@ class CastThreats:
         return min((float(A._catches([g], dist, None, [0.0])[1][0]) for g in self.geometries(dist)),
                    default=math.inf)
 
-    def strike_reach(self, A, dist, hp=None, poise=None):
+    def strike_reach(self, A, dist, hp=None, poise=None, defender=None):
         """(cuts, touch, kept, base): what the defender's strike reads of this cast at `dist`
         (`net_parts`, `StrikeReach` for a plain geometry list): the launches in order between which
         a strike can stop it, its first touch on him standing there or where his run in to
@@ -3554,8 +3558,8 @@ class CastThreats:
         `cuts[cut - 1]` fly, and `base` what lands with none stopped, each capped at `hp`. A
         'dynamic' or 'volley' threat lands once, alone, as `dynamic_outcome` and `volley_outcome`
         count it, launched at its event's fire frame or its shot's launch; an 'aimed' or 'static'
-        cast is read as a plain list of this distance's geometries (`poise`: the defender's, its
-        caught defender's, as `outcome` takes it)."""
+        cast is read as a plain list of this distance's geometries (`poise` and `defender`: its
+        caught defender's, as `outcome` takes them)."""
         cap = (lambda v: A.hp_cap(v, hp)) if hp is not None else (lambda v: v)
         near = round(min(dist, A.PUNISH_REACH_M), 2)
         far, close = self.first_touch(A, dist), self.first_touch(A, near)
@@ -3601,7 +3605,7 @@ class CastThreats:
         if not geo:
             return [], touch, lambda cut: 0.0, 0.0
         if key not in self._caught:
-            self._caught[key] = A.CaughtModel.of(geo, poise, self.value)
+            self._caught[key] = status_caught(geo, poise, self.value, defender)
         cm = self._caught[key]
         reach = StrikeReach(A, geo)
         price = (lambda h, vk, cap_: cm.worth_of(key, h, vk, hp=cap_)) if cm is not None else \
@@ -3630,6 +3634,26 @@ KIT_EPS = 1e-6
 #: frames to the whiff's move cancel. 5: and 'sprint_wait', the frames a sprint cast still waits
 #: on the dodge-button hold when the window opens (`sprint_situations`).
 SITUATIONS_VERSION = 5
+#: Modules whose code `punish_situations`' cache holds beyond the pool's own (`er-mechanics-exchange`
+#: `POOL_SOURCES`, already in the pool's stamp): a change to any of them names a new file.
+#: `er-mechanics-neutral` (`backoff_whiffs`, `locomotion`, `frames_per_metre`), `er-hkx-pose` (the run
+#: clip `locomotion` measures), `er-mechanics-ashes` (`reaction_delays`) and `er-mechanics-armor-targets`
+#: (`FAMILY_JUDGES`). This module's own code is `SITUATIONS_VERSION`'s to name.
+SITUATIONS_SOURCES = ('er-mechanics-neutral.py', 'er-hkx-pose.py', 'er-mechanics-ashes.py',
+                      'er-mechanics-armor-targets.py')
+
+
+def situations_source_stamp():
+    """sha256 of `SITUATIONS_SOURCES`' bytes, 16 hex digits (`er-mechanics-exchange._source_stamp`'s
+    form)."""
+    import hashlib
+    h = hashlib.sha256()
+    for name in SITUATIONS_SOURCES:
+        with open(os.path.join(HERE, name), 'rb') as f:
+            h.update(f.read())
+    return h.hexdigest()[:16]
+
+
 #: Gaps an attacker may run in to before he presses (`net_values`; `INFERRED`: a 1 m grid from
 #: about body contact out to the pool's mean reach).
 APPROACH_GAPS_M = (1.5, 2.5, 3.5, 4.5)
@@ -3690,9 +3714,10 @@ def punish_situations(rl):
     AT = _mod('er_mechanics_armor_targets', 'er-mechanics-armor-targets.py')
     reg = ATK.Regulation(None)
     raw = EX.opponent_pool(reg, EX.CACHE / 'builds.jsonl', rl - WINDOW, rl + WINDOW)
-    stamp = [SITUATIONS_VERSION] + list(raw['stamp'])
-    # Named by the version too, so a checkout on another version keeps its own file.
-    path = EX.CACHE / f"spell-punish-v{SITUATIONS_VERSION}-{rl - WINDOW}-{rl + WINDOW}-{raw['stamp'][-1]}.json"
+    src = situations_source_stamp()
+    stamp = [SITUATIONS_VERSION] + list(raw['stamp']) + [src]
+    # Named by the version and both source stamps too, so a checkout on other code keeps its own file.
+    path = EX.CACHE / f"spell-punish-v{SITUATIONS_VERSION}-{rl - WINDOW}-{rl + WINDOW}-{raw['stamp'][-1]}-{src}.json"
     if path.exists():
         got = json.loads(path.read_text())
         if got.get('stamp') == stamp:
@@ -4167,9 +4192,16 @@ def spell_lookalikes(sm, A, casts):
 # moment is the running gauge (`er-mechanics-proc-opening.first_proc`'s rule, `FUN_14043de90`): each
 # landed tick takes its build-up, the gauge refilling `recover` a second since the last tick of that
 # status (`FUN_14043ea30`), and it procs when what is taken reaches his resistance less 1; a proc
-# refills the gauge, and while one is live (`lock` seconds) the status builds nothing. The HP above
-# keeps its own reading of the whole play, so the two can differ near a threshold (`INFERRED`: the HP
-# formula is the older one, kept). A play therefore depends on his resistance as well as his poise:
+# refills the gauge, and while one is live (`lock` seconds) the status builds nothing (`gauge_land`).
+# Where a play is read with the stun, the proc HP of bleed and frost is counted on that same walk
+# (version 33, `gauge_procs` over the landings the play logged): one proc per time the gauge empties,
+# so the HP and the stun agree on every proc, and a geometry the attack never launches
+# (`StrikeReach.kept`) adds nothing to the gauge. Until then the HP kept the reading of the whole play
+# above (`play_buildup`), which takes the refill over the longest list alone and ignores the lock
+# window and the gaps between geometries, so a play could stun with no proc HP or the reverse near a
+# threshold. The reading above still prices a status the stun does not read (poison, rot, sleep,
+# madness, death blight) and a model with no stun play (`stun_sig` None), where no stun can disagree
+# with it (`INFERRED`, as before). A play therefore depends on his resistance as well as his poise:
 # per pool build of (poise, robustness) the play is read once per box of poises and resistances that
 # play alike (`StatusCaught._stun_best`). Bleed and frost share the robustness gauge's starting value
 # (`er-mechanics-status.STATUSES`), each with its own gauge.
@@ -4235,6 +4267,57 @@ def play_buildup(rows, lists, floor=None, live=None):
     out = {s: (tot[s] - const[s]['recover'] * span[s] / FPS, span[s] / FPS, const[s]) for s in tot}
     if floor is not None and all(b <= floor[d['group']] - 1.0 for b, _, d in out.values()):
         return None
+    return out
+
+
+def gauge_land(gauges, add, T, r):
+    """One landing of the running gauge (the comment above `STATUS_WORTH_FLOOR`) on a defender of
+    resistance `r`: `add` {status: (build-up the landing takes, `recover` per s, `lock` s)} at real
+    frame `T`, `gauges` {status: (taken, frame of its last landing, frame of its live proc or None)}
+    kept for one play, updated in place. [(status, taken after this landing or None while a proc
+    of it is live, whether it procs)], by status name. What `StatusCaught._stun_spec` plays and
+    `gauge_procs` counts, so the stun and the proc HP read one walk."""
+    out = []
+    for s, (b, rec, lock) in sorted(add.items()):
+        dep, last, at = gauges.get(s, (0.0, T, None))
+        dep = max(0.0, dep - rec * (T - last) / FPS)
+        if at is not None and T - at < lock * FPS:
+            # A proc of this status is live: the gauge takes nothing (`INFERRED`).
+            gauges[s] = (dep, T, at)
+            out.append((s, None, False))
+            continue
+        taken = dep + b
+        if r < taken + 1.0:
+            gauges[s] = (0.0, T, T)
+            out.append((s, taken, True))
+        else:
+            gauges[s] = (taken, T, at)
+            out.append((s, taken, False))
+    return out
+
+
+def gauge_procs(log, r, live=None):
+    """{status: procs} of `gauge_land` walked over `log` [(geometry, frame, `add`)], the landings
+    of one play in order, for a defender of resistance `r`; a geometry `live` says is not launched
+    (per geometry, None: all) adds nothing."""
+    gauges, n = {}, {}
+    for g, T, add in log:
+        if live is not None and not live[g]:
+            continue
+        for s, _, proc in gauge_land(gauges, add, T, r):
+            if proc:
+                n[s] = n.get(s, 0) + 1
+    return n
+
+
+def status_consts(lists):
+    """{status: the first list's constants} over `lists` (`status_lists`): the proc row's 'rate',
+    'point' and 'ticks' a proc is priced by, as `play_buildup` takes them."""
+    out = {}
+    for ls in lists:
+        for _, _, _, st in ls:
+            for s, d in st.items():
+                out.setdefault(s, d)
     return out
 
 
@@ -4305,20 +4388,52 @@ class StatusPool:
 class StunRun:
     """The pool builds one stun play holds (`StatusCaught._stun_best`): `ks` their classes
     (`StatusPool.classes` indices), and per build its max HP `C`, share of the whole pool `W`,
-    resistances `R` ({group: array}) and class `cls`."""
+    resistances `R` ({group: array}) and class `cls`. `group` and `walked` are the stun's resistance
+    group and the statuses its gauge walk reads (`StatusCaught.stun_sig`), `logs` per escape of
+    `alls` the landings that play logged (`StatusCaught._stun_spec`), `best` the index of the escape
+    the run's row is."""
 
-    def __init__(self, pool, classes, ks):
+    def __init__(self, pool, classes, ks, group=None, walked=(), logs=(), best=None):
         parts = [(classes[k][0], classes[k][2], k) for k in ks]
         self.ks = list(ks)
         self.C = np.concatenate([pool.by[p][0][ix] for p, ix, _ in parts])
         self.W = np.concatenate([pool.by[p][1][ix] for p, ix, _ in parts])
         self.R = {g: np.concatenate([pool.by[p][2][g][ix] for p, ix, _ in parts]) for g in STATUS_GROUPS}
         self.cls = np.concatenate([np.full(len(ix), k) for _, ix, k in parts])
+        self.group, self.walked, self.logs, self.best = group, frozenset(walked), list(logs), best
+        self._walk = {}
 
-    def values(self, x, built, hp=None, pooled=False):
-        """Per build, its share times what a catch landing `x` and the build-up `built` leaves on it:
-        `StatusPool.worth`'s terms."""
-        got = x + StatusPool.procs(self.C, self.R, built) if built is not None else np.full(len(self.C), float(x))
+    def proc_hp(self, built, log=None, live=None, consts=None):
+        """Per build, the proc HP of a play: the statuses of `walked` counted on its gauge walk
+        (`gauge_procs` over `log`, per resistance; the comment above `STATUS_WORTH_FLOOR`), each
+        proc priced by `consts` (`status_consts`), and the others by `built` (`play_buildup`,
+        `StatusPool.procs`)."""
+        out = np.zeros(len(self.C))
+        rest = built if built is None or not self.walked else \
+            ({s: v for s, v in built.items() if s not in self.walked} or None)
+        if rest is not None:
+            out += StatusPool.procs(self.C, self.R, rest)
+        if log is None or not self.walked:
+            return out
+        R = self.R[self.group]
+        lk = None if live is None else tuple(live)
+        for u in np.unique(R):
+            key = (id(log), float(u), lk)
+            n = self._walk.get(key)
+            if n is None:
+                n = self._walk[key] = gauge_procs(log, float(u), live)
+            if not n:
+                continue
+            m = R == u
+            for s, k in n.items():
+                d = consts[s]
+                out[m] += k * (self.C[m] * d['rate'] / 100.0 + d['point']) * d['ticks']
+        return out
+
+    def values(self, x, built, hp=None, pooled=False, log=None, live=None, consts=None):
+        """Per build, its share times what a catch landing `x` and the play's proc HP (`proc_hp` of
+        `built`, `log`, `live` and `consts`) leave on it: `StatusPool.worth`'s terms."""
+        got = x + self.proc_hp(built, log, live, consts)
         if pooled:
             v = np.minimum(got, self.C)
         elif hp is None:
@@ -4345,6 +4460,8 @@ def status_pool_of(status_pool):
 _STATUS_CAUGHT = {}
 #: `StatusCaught.runs`' default: the model's own geometries' stun.
 _OWN_STUN = object()
+#: The key of a play's landing log in its `gauges` (`StatusCaught._stun_spec`): no status's name.
+_PLAY_LOG = '#log'
 
 
 def proc_opening():
@@ -4442,12 +4559,22 @@ def _status_caught_class(A):
                     else:
                         spec = self._stun_spec(sig, r)
                         got, lo, hi, alls = self._best_at(h, dist, held, p, spec)
-                        boxes.append([lo, hi, spec['rb'][0], spec['rb'][1], (got, alls), [k]])
+                        # One log per play, in `escapes` order as `alls` (`_best_at` plays each once,
+                        # and every play lands its catch first).
+                        if len(spec['logs']) != len(alls):
+                            raise RuntimeError(f"stun walk: {len(spec['logs'])} play logs for {len(alls)} escapes")
+                        boxes.append([lo, hi, spec['rb'][0], spec['rb'][1], (got, alls, spec['logs']), [k]])
             finally:
                 self._drawn = None
+            walked = {s for row in sig for e in row for s, _, _, _ in e}
             out = []
-            for _, _, _, _, (got, alls), ks in boxes:
-                run = StunRun(self.spool, classes, ks)
+            for _, _, _, _, (got, alls, logs), ks in boxes:
+                # The escape `_best_at` picked: the first of the least score.
+                best = None
+                for e, (_, score, _) in enumerate(alls):
+                    if best is None or score < alls[best][1] - 1e-12:
+                        best = e
+                run = StunRun(self.spool, classes, ks, group, walked, logs, best)
                 out.append((got, float(run.W.sum()), run, alls))
             return out
 
@@ -4456,11 +4583,14 @@ def _status_caught_class(A):
             `STATUS_WORTH_FLOOR`): per landing, each bleed and frost gauge takes the ticks' build-up,
             and a proc on a hit whose own branch is level 0 plays `er-mechanics-ashes.stun_branch`.
             'rb' [lo, hi) is narrowed to the resistances every proc and no-proc of the play holds
-            for (a proc at taken D: r < D + 1)."""
+            for (a proc at taken D: r < D + 1). 'logs' gets one list per play, its landings'
+            (geometry, frame, build-up taken) in order, which `StunRun.proc_hp` walks again for the
+            proc HP (`gauge_procs`)."""
             PO = proc_opening()
             branch = A.stun_branch()
             exempt = PO.promotion_exempt(self.speffects)
             rb = [-math.inf, math.inf]
+            logs = []
 
             def land(gauges, g, lis, T, br, l):
                 add = {}
@@ -4468,25 +4598,26 @@ def _status_caught_class(A):
                     for s, b, rec, lock in sig[g][li]:
                         x = add.get(s)
                         add[s] = (b, rec, lock) if x is None else (x[0] + b, rec, lock)
+                # A play's `gauges` is new to it (`er-mechanics-ashes.CaughtModel._play`), and its
+                # catch is its first landing: the play's log is made there.
+                log = gauges.get(_PLAY_LOG)
+                if log is None:
+                    log = gauges[_PLAY_LOG] = []
+                    logs.append(log)
+                if add:
+                    log.append((g, T, add))
                 stun = False
-                for s, (b, rec, lock) in sorted(add.items()):
-                    dep, last, at = gauges.get(s, (0.0, T, None))
-                    dep = max(0.0, dep - rec * (T - last) / FPS)
-                    if at is not None and T - at < lock * FPS:
-                        # A proc of this status is live: the gauge takes nothing (`INFERRED`, as the HP).
-                        gauges[s] = (dep, T, at)
+                for s, taken, proc in gauge_land(gauges, add, T, r):
+                    if taken is None:
                         continue
-                    taken = dep + b
-                    if r < taken + 1.0:
+                    if proc:
                         rb[1] = min(rb[1], taken + 1.0)
-                        gauges[s] = (0.0, T, T)
                         stun = stun or (not br['locks'] and br['level'] == 0
                                         and PO.proc_reaction(s, 0, exempt) is not None)
                     else:
                         rb[0] = max(rb[0], taken + 1.0)
-                        gauges[s] = (taken, T, at)
                 return branch if stun else br
-            return {'land': land, 'rb': rb}
+            return {'land': land, 'rb': rb, 'logs': logs}
 
         def status_lists(self, geo=None):
             """`status_lists` of `geo` (another build's geometries on the same shapes) or this one's,
@@ -4512,6 +4643,7 @@ def _status_caught_class(A):
             # A geometry whose frame `value` leaves out is not launched (`StrikeReach.kept`).
             live = [f in value for f in self.frames]
             stun = self.stun_sig(geo)
+            consts = status_consts(lists) if stun else None
             s = 0.0
             for rows, w_run, ps, _ in self.runs(dist, h, held, stun):
                 x = 0.0
@@ -4521,7 +4653,9 @@ def _status_caught_class(A):
                         x += rows[g][li] * w * v
                 built = play_buildup(rows, lists, self.spool.floor, live)
                 if stun:
-                    s += float(ps.values(x, built, hp, bool(self.pool_hp) and hp is not None).sum())
+                    # Bleed and frost priced on the walk the run's own play made (`StunRun.proc_hp`).
+                    s += float(ps.values(x, built, hp, bool(self.pool_hp) and hp is not None,
+                                         ps.logs[ps.best], live, consts).sum())
                 elif built is not None:
                     s += self.spool.worth(x, built, ps, hp, bool(self.pool_hp) and hp is not None)
                 elif hp is None:
@@ -4584,6 +4718,7 @@ def _status_caught_class(A):
             TE, S_, C = np.full((K, E), math.inf), np.zeros((K, E)), np.zeros((K, E))
             live = [f in value for f in self.frames]
             pooled = bool(self.pool_hp) and hp is not None
+            consts = status_consts(lists)
             for _, _, run, alls in runs:
                 ks = run.ks
                 for e, (te, score, rows) in enumerate(alls):
@@ -4594,7 +4729,8 @@ def _status_caught_class(A):
                             x += rows[g][li] * w * v
                     built = play_buildup(rows, lists, self.spool.floor, live)
                     TE[ks, e], S_[ks, e] = te, score
-                    C[ks, e] = np.bincount(run.cls, run.values(x, built, hp, pooled), minlength=K)[ks]
+                    C[ks, e] = np.bincount(run.cls, run.values(x, built, hp, pooled, run.logs[e], live, consts),
+                                           minlength=K)[ks]
             return TE, S_, C
 
     _STATUS_CAUGHT[id(A)] = StatusCaught
@@ -5259,7 +5395,8 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
     # A caught defender holds with each pool build's own poise and health together (`pool`, version
     # 21), else its own poise (`poise_pool`), else the one `poise` given.
     cpoise = (defender or {}).get('pool') or (defender or {}).get('poise_pool') or poise
-    # Its status build-up priced per play when the attack builds any (`status_caught`, version 30).
+    # Its status build-up priced per play when the attack builds any (`status_caught`, version 30);
+    # a `CastThreats` makes the same model per distance (`CastThreats.outcome`, `strike_reach`).
     caught = status_caught(geo, cpoise, value, defender) if threats is None else None
     caught1 = caught.with_value(value_one) if caught is not None and value_one is not None else None
     per_m = A._neutral().frames_per_metre()
@@ -5289,7 +5426,7 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
         dist, floor, run = key
         if threats is not None:
             if dist not in reached:
-                reached[dist] = threats.strike_reach(A, dist, hp, cpoise)
+                reached[dist] = threats.strike_reach(A, dist, hp, cpoise, defender)
             cuts, touch, keep, _ = reached[dist]
         else:
             cuts = reach.cuts
@@ -5335,7 +5472,7 @@ def net_parts(A, geo, value, situations, my_roll, strikes=None, value_one=None, 
                 plan = look.plan(key[0]) if look is not None else None
                 if threats is not None:
                     o = threats.outcome(A, key[0], key[1], my_roll, strikes, cat, hp=hp, poise=cpoise, plan=plan,
-                                        run_floor=rkey[2])
+                                        run_floor=rkey[2], defender=defender)
                 else:
                     o = A.sequence_outcome(bursts1 if which else bursts, key[0], floor=key[1], my_roll=my_roll,
                                            strikes=strikes, run=True, catches=cat,
