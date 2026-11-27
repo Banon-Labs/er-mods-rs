@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.3.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.2.0...1.3.0) (2026-11-27)
+
+
+### Features
+
+* **cupcake:** a "CI is running" claim needs a watcher of those checks ([e98bb2a](https://github.com/Banon-Labs/er-mods-rs/commit/e98bb2a49fb3d9b2407da7dcc9c0d956186ee39a))
+* **cupcake:** a "CI is running" claim needs a watcher of those checks ([#632](https://github.com/Banon-Labs/er-mods-rs/issues/632)) ([3f9f626](https://github.com/Banon-Labs/er-mods-rs/commit/3f9f6268d30da0cd7beb5cb190744d8f830ed51c))
+* **cupcake:** a running check suite needs a Monitor that wakes on red ([d8659bb](https://github.com/Banon-Labs/er-mods-rs/commit/d8659bbf3ddc7193501d87037b9e1992c37dac08))
+* **cupcake:** a running check suite needs a Monitor that wakes on red ([#633](https://github.com/Banon-Labs/er-mods-rs/issues/633)) ([3b5a4c8](https://github.com/Banon-Labs/er-mods-rs/commit/3b5a4c84ee0907db97c4c19c04bff7cad931153b))
+* **cupcake:** stop guards for corrections, agents, estimates and wording ([d551c1b](https://github.com/Banon-Labs/er-mods-rs/commit/d551c1bcb6cc990099bdb902de859efcc4e1bbe0))
+* **cupcake:** stop guards for corrections, agents, estimates and wording ([#629](https://github.com/Banon-Labs/er-mods-rs/issues/629)) ([f7d8903](https://github.com/Banon-Labs/er-mods-rs/commit/f7d8903dda8996e9f0caaa85226fa5ae0565f4e1))
+* **mechanics:** attack similarity punish model through version 33 ([#638](https://github.com/Banon-Labs/er-mods-rs/issues/638)) ([72de5ae](https://github.com/Banon-Labs/er-mods-rs/commit/72de5aed9deadab00f14efc1c42053599aa88b7e))
+
+
+### Bug Fixes
+
+* **check:** baseline writers record tracked files only ([3af7f50](https://github.com/Banon-Labs/er-mods-rs/commit/3af7f50f9b66e94833b419aa06a6dd9d5fb8efd7))
+* **check:** declare docs/agents as an input of the policy stage ([a58a585](https://github.com/Banon-Labs/er-mods-rs/commit/a58a585ce37a68b5b5328aed62cfdd7d9643714f))
+* **check:** ledger row for the CI-claim guard's selftest ([0e54778](https://github.com/Banon-Labs/er-mods-rs/commit/0e547782695fc4aa193568d62d2652ec33965ffc))
+* **check:** probe sum against cupcake's wasm runtime ([3e3b032](https://github.com/Banon-Labs/er-mods-rs/commit/3e3b03260be726eeb1392ab47e6d00418b556ed5))
+* **check:** review findings on the tracker-ref sweep ([629557f](https://github.com/Banon-Labs/er-mods-rs/commit/629557f8eddb859173988adb458a79eef51295e3))
+* **check:** scan untracked, not ignored files in the file-list lints ([c49ea6b](https://github.com/Banon-Labs/er-mods-rs/commit/c49ea6b9314b66b0551c56773852ee119e0b8764))
+* **check:** scan untracked, not ignored files in the file-list lints ([#634](https://github.com/Banon-Labs/er-mods-rs/issues/634)) ([b6ee2c8](https://github.com/Banon-Labs/er-mods-rs/commit/b6ee2c863deb05cb9a179d7a651d8861b93cff57))
+* **cupcake:** allow a committed guard-repo test suite in a worktree ([75aee04](https://github.com/Banon-Labs/er-mods-rs/commit/75aee0453bd44c75e47ff36f604251cd5cab4de1))
+* **cupcake:** allow a committed guard-repo test suite in a worktree ([#639](https://github.com/Banon-Labs/er-mods-rs/issues/639)) ([776a34c](https://github.com/Banon-Labs/er-mods-rs/commit/776a34c169a086adc190754bbd88386fed91c8f8))
+* **cupcake:** authorization readers parse only the lines they need ([4e96bbb](https://github.com/Banon-Labs/er-mods-rs/commit/4e96bbbc25fa03ff7e339d13f765f4d0822df856))
+* **cupcake:** authorization readers parse only the lines they need ([#637](https://github.com/Banon-Labs/er-mods-rs/issues/637)) ([0567440](https://github.com/Banon-Labs/er-mods-rs/commit/056744041ea4a1eb1370431945a5e5d15f036963))
+* **cupcake:** CI-claim guard halts only claims about CI ([2cf9265](https://github.com/Banon-Labs/er-mods-rs/commit/2cf92656163809a49f16cc8a944ec0edea9d1dff))
+* **cupcake:** comment caps in the red-stage guard ([9a6def6](https://github.com/Banon-Labs/er-mods-rs/commit/9a6def6d63b8e3914e1ff86a21d5f39df0e98eaf))
+* **cupcake:** decompose a command for the watched-push helper only when it names it ([9dcabc1](https://github.com/Banon-Labs/er-mods-rs/commit/9dcabc116c8fa8f7e8e7741445dc930d0a75248d))
+* **cupcake:** exempt only git rev-parse from the script-swap check ([ea027e9](https://github.com/Banon-Labs/er-mods-rs/commit/ea027e9fdb1c97af0a27134e38f102fa69271371))
+* **cupcake:** push guard refuses every run of the watched-push helper ([29e503d](https://github.com/Banon-Labs/er-mods-rs/commit/29e503d5b89ca3dee1bb2c6b6830eec89653c79e))
+* **cupcake:** red-stage guard counts only pushes that run this suite ([134a7f4](https://github.com/Banon-Labs/er-mods-rs/commit/134a7f4e3c3e06eda7b37e1f7e3f804102e2a453))
+* **cupcake:** refuse er-push-watched.sh when it runs, not when it is named ([ba133db](https://github.com/Banon-Labs/er-mods-rs/commit/ba133db1aae8da8736eb0338805a96beea2c404c))
+* **cupcake:** refuse the watched-push helper only when it runs ([#636](https://github.com/Banon-Labs/er-mods-rs/issues/636)) ([6de3eba](https://github.com/Banon-Labs/er-mods-rs/commit/6de3eba73d1392ccbafd0c3c083a91d48aec5c28))
+* **cupcake:** review findings on the stop guards ([4fa4db6](https://github.com/Banon-Labs/er-mods-rs/commit/4fa4db6968bfda693001c83543167f7c48cc3901))
+* **hooks:** comment caps in the pre-push ledger test ([0eeaf0b](https://github.com/Banon-Labs/er-mods-rs/commit/0eeaf0ba4a5df8994a0cb6db8a4ddd10df2f9652))
+* **hooks:** run the check.sh/ledger gates on agent-worktree pushes ([40c9ff3](https://github.com/Banon-Labs/er-mods-rs/commit/40c9ff3465e60ec79e3d151e9ca33fc6ab48f722))
+* **hooks:** run the check.sh/ledger gates on agent-worktree pushes ([#635](https://github.com/Banon-Labs/er-mods-rs/issues/635)) ([75e3d45](https://github.com/Banon-Labs/er-mods-rs/commit/75e3d45913e9f8324387367ee08370701c35a958))
+* **mechanics:** one gauge walk for proc HP and stun, stamped situations ([48bfb13](https://github.com/Banon-Labs/er-mods-rs/commit/48bfb138e4f57956736668486908c79fab666f49))
+* **runtime:** count only ESRCH as exited in still_running ([b006bc1](https://github.com/Banon-Labs/er-mods-rs/commit/b006bc1ce0b27fbf66195096f78e1dd79e5b90aa))
+* **runtime:** stop --stamp-only counting its own exited launcher as a survivor ([#640](https://github.com/Banon-Labs/er-mods-rs/issues/640)) ([1c22d07](https://github.com/Banon-Labs/er-mods-rs/commit/1c22d07af8f9af28547e1dcf38abbc7a530f0eb7))
+
 ## [1.2.0](https://github.com/Banon-Labs/er-mods-rs/compare/1.1.0...1.2.0) (2026-11-24)
 
 
