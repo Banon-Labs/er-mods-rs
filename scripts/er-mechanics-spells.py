@@ -145,7 +145,7 @@ player:
   `initVellocity` / `maxVellocity`. A bullet that stands still or follows its owner (`FollowType`)
   touches it for its whole `life`. A trail child adds its life to its parent's pass. A list is a
   DmgHitRecord, handed down the bullet lineage (`VERIFIED` 2026-11-12, 1.16.2 named dump; bd
-  dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12, er-effects-rs-7bye). A launch makes
+  dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12). A launch makes
   one record, which its whole `numShoot` volley shares, when its row has `isUseSharedHitList` or
   `attachEffectType` and it inherited none (FUN_14038fe80, for each shot entry FUN_1403a5a10
   makes). A child (hit, expiry or interval: `KillBullet`, FUN_14039baf0 and FUN_14039ab10, each
@@ -171,7 +171,7 @@ player:
   timer chain makes one star per timer, so Stars of Ruin fires twelve, Glintstone Stars three and
   Star Shower six, the counts their own `GoodsInfo` text gives (it used to count one more at the
   creation and three for Stars of Ruin's 0.1 s timers). Whether a `HitBulletID` child is made at
-  all is `er-mechanics-ashes.launches` (`VERIFIED` FUN_14039da40, bd er-effects-rs-rggx): on a hit
+  all is `er-mechanics-ashes.launches` (`VERIFIED` FUN_14039da40): on a hit
   the parent's own `launchConditionType` decides, on expiry the child's. A child no ending makes
   on dry ground is not counted. Below a non-penetrating damaging bullet, a child its parent's
   value refuses on a hit continues a shot that missed. With no record inherited it joins that
@@ -214,7 +214,7 @@ player:
     (`RECORD_BEARINGS_DEG`), the caster keeping his facing; the best spot is taken, the same
     "in its path" choice as the distance. No damaging record keeps the formula any more
     (2026-11-12, every spell's bullet refs).
-  - What closed the old flight gaps (bd er-effects-rs-7bye, round 3; `er-mechanics-ashes`,
+  - What closed the old flight gaps (`er-mechanics-ashes`,
     "Launch frames"): the shoot angles turn in the parent's 3D frame, so Meteorite of Astel's
     sideways leg under its rising marker goes sideways, not up; `isOwnerOverrideInitAngle`
     gives Meteorite's meteor and Crystal Release's shards the caster's level frame instead of
@@ -4755,7 +4755,7 @@ def record_landings(geo):
     """Per entry of `geo` ([(contact geometry, frame)]): whether it lands on a defender every
     geometry touches at its own frame, under the hit priority records the geometries carry (`HPR`:
     (key, priority, created), the rule `er-mechanics-ashes.CaughtModel` plays, `ATK.shared_landings`;
-    bd er-effects-rs-dnok, er-effects-rs-xb3i, `VERIFIED` 1.16.2): of one record's geometries the
+    `VERIFIED` 1.16.2): of one record's geometries the
     first to touch lands with every geometry of its launch (`created`), a later one only at a
     strictly lower priority; one frame's ties go to the lower priority, then to the one created
     first. A geometry with no record always lands. A chain's parts (`er-mechanics-ashes.split_chains`)
@@ -5766,7 +5766,7 @@ def selftest():
           == ([(210450000, 210450000, 1.0)], [(210451000, 210451000, 6.0)]))
     # A stationary timer chain drops one star per timer (`er-mechanics-ashes.interval_frames`), the
     # count each spell's GoodsInfo text gives. A star's first leg has launchConditionType 4, so on a
-    # hit (where the gate reads the hitting leg's own value, bd er-effects-rs-rggx) it makes no
+    # hit (where the gate reads the hitting leg's own value) it makes no
     # second leg; the second leg (0) comes only when the first expires, so it only continues a star
     # that missed: one list a star.
     legs = {r['intervalCreateBulletId'] for r in m.bullet.values() if r['intervalCreateBulletId'] > 0}
@@ -5783,7 +5783,7 @@ def selftest():
           (A.launches(m.ash()[1], 10422017, 10422032, 'hit'), A.launches(m.ash()[1], 10422017, 10422032, 'expire'),
            A.launches(m.ash()[1], 10422032, 10422017, 'hit'))
           == (False, True, True))
-    # The DmgHitRecord lineage (bd er-effects-rs-7bye): a child joins its parent's record whatever its
+    # The DmgHitRecord lineage: a child joins its parent's record whatever its
     # own flag, a child with the flag under a parent that has none starts a record of its own, and a
     # parent whose row has `attachEffectType` hands none down.
     check("hit lists follow the record lineage: Honed Bolt one list of one hit (was two: the unflagged "
@@ -5834,7 +5834,7 @@ def selftest():
                                             (300200867, 2301, 4, 1)]
           and len(gp['hits']) == 1 and gp['hits'][0]['count'] == 5.0
           and abs(gp['full'] - 5 * gp['hits'][0]['damage']) < 0.15)
-    # The flight gaps closed (bd er-effects-rs-7bye, round 3): every record is flown in 3D, none
+    # The flight gaps closed: every record is flown in 3D, none
     # keeps the formula. Founding Rain's cloud levels (sfxPostureType 1) and rains on him; the aimed
     # meteor (Meteorite ref 2) comes down at him once its marker hands it the caster's frame
     # (isOwnerOverrideInitAngle), the unaimed one (ref 1) meets him off the axis; Light of Miquella's
@@ -6025,7 +6025,7 @@ def selftest():
     check('net_values of the Nails threats is net_parts without the catches memo, exactly',
           net_values(A, ct, None, grid2, nv['roll'], [15.0]) == [p['net'] for p in net_parts(
               A, ct, None, grid2, nv['roll'], [15.0], memo=False)])
-    # bd er-effects-rs-doax / er-effects-rs-n7dd: a cast leaves its DummyPoly where the clips have
+    # A cast leaves its DummyPoly where the clips have
     # carried the caster; a caught defender walks out of a lingering area; one cast lands at most the
     # defender's health.
     dfn = m.defender(150)
@@ -6111,7 +6111,7 @@ def selftest():
     check(f"the RL 150 pool's own poises: {len(pp)} values, median {pmed} against the median original "
           f"{dfn['poise']}", abs(sum(w for _, w in pp) - 1.0) < 1e-9 and pmed >= dfn['poise']
           and pp == sorted(pp))
-    # bd er-effects-rs-dnok: a two-cast hit priority record. a415_045010 runs event 341 slot 0 over
+    # A two-cast hit priority record. a415_045010 runs event 341 slot 0 over
     # its f6 (Args 0xc 0) and f11 (1) casts; the f15 one is outside it.
     ast_ = m.by_name['meteorite of astel']
     av = next(v for v in m.evaluate(ast_, staff, {'int': 80, 'dex': 10}, defender=m.defender(150)) if v['anim'] == 45010)
@@ -6132,8 +6132,7 @@ def selftest():
     # drawn life, 0.35 s, and its meteor no longer meets him on the axis at any distance 0.5-14 m
     # (`MEASURED`; that the longer rise is why is `INFERRED`). Until then it landed after the f6
     # catch at 2 m without the record and nothing with it; now the record has nothing to hold back
-    # here, and this spell no longer exercises the caught model's record (open, bd
-    # er-effects-rs-7bye round 4).
+    # here, and this spell no longer exercises the caught model's record (still open).
     check(f"Meteorite of Astel at 2 m: caught by the f6 meteor; the f11 one of its record misses him on the axis, "
           f"record or not ({acm.row(2.0, 0)[1]}; without the record {aplain.row(2.0, 0)[1]}), {acm.worth_of(2.0, 0):.0f} "
           f"lands either way",
@@ -6141,7 +6140,7 @@ def selftest():
           and acm.worth_of(2.0, 0) == aplain.worth_of(2.0, 0)
           and all(not math.isfinite(float(A._catches([ageo[1][0]], dd, None, [0.0])[1][0]))
                   for dd in (2.0, 4.0, 6.0)))
-    # bd er-effects-rs-xb3i: an event's shots and their children are one launch with one id
+    # An event's shots and their children are one launch with one id
     # (BulletAttackInfo +0x658, copied by FUN_14038b740; FUN_14051b870 0x14051b8c9 passes the
     # entry's own id, 1.16.2), so its record holds none of them back; another event of the record
     # is another launch.
@@ -6151,7 +6150,7 @@ def selftest():
                         [(6, 1, 0), (6, 1, 1), (11, 1, None), (20, 1, None)])
     check(f"a record's events land one between them, each with every shot it fired: the f6 event's two shots "
           f"(10 + 10) over the f11 one's 15, plus 5 outside the record ({shared})", shared == 25.0)
-    # In-flight homing (bd er-effects-rs-rw25): a defender 8 m ahead who rolls sideways, each cast
+    # In-flight homing: a defender 8 m ahead who rolls sideways, each cast
     # read with and without its geometry's `HOMING` record. Without it the stored samples are the
     # shot aimed where he stood; with it each shot is aimed where he is when it is created and turns
     # after him (FUN_140390c20, FUN_140398270).
@@ -6178,7 +6177,7 @@ def selftest():
         return 'HOMING' in g, counts, late, new, freed, float(g['TL'].min() if 'TL' in g else g['T'].min())
     ch, cc, cl, cn, cf, cborn = rolled('glintstone cometshard')
     iframes = sideways[0]['iframes']
-    # The pin of the aim at creation (bd er-effects-rs-rw25): a roll begun on reaction to the cast
+    # The pin of the aim at creation: a roll begun on reaction to the cast
     # start is over before the bolt exists, so the bolt is aimed where it took him.
     check(f"Glintstone Cometshard at 8 m: a sideways roll whose {iframes:.0f} i-frames end before the "
           f"bolt exists (f{cborn:.1f}) no longer clears it, the bolt being aimed where the roll took him "
@@ -6193,7 +6192,7 @@ def selftest():
           f"newly lands on is touched after his {sideways[0]['iframes']:.0f} i-frames ({len(gl)} starts, the "
           f"earliest {min(gl, default=0):.1f} frames in)",
           gh and len(gc) == 2 and all(0 < h < s for s, h in gc) and bool(gl) and min(gl) >= sideways[0]['iframes'])
-    # Free aim at the ground (bd er-effects-rs-rw25): Great Oracular Bubble's damage is its burst,
+    # Free aim at the ground: Great Oracular Bubble's damage is its burst,
     # made where the bubble meets the ground; aimed at him it flies level and never lands near him.
     gob = m.by_name['great oracular bubble']
     bv = next(v for v in m.evaluate(gob, staff, {'int': 65, 'dex': 18}, defender=m.defender(150)) if v['variant'] == 'tap')

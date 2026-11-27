@@ -221,7 +221,7 @@ HIT_RECORD_NOTE = 'VERIFIED: FUN_140442ee0, FUN_1405247b0, FUN_1405259b0, FUN_14
 #: type-1 event in the player TAEs starts and ends on a 1/30 s boundary (counted 2026-09-29).
 HIT_RECORD_STEP = 1 / 60
 
-#: Hit priority records (bd er-effects-rs-dnok; `VERIFIED` in the named 1.16.2 dump, so the
+#: Hit priority records (`VERIFIED` in the named 1.16.2 dump, so the
 #: addresses of this block are 1.16.2 ones, not 2.7.2.0 ones):
 #:
 #: - TAE event 341 (FUN_1404298d0, run by `ExecuteThreadOne`) keeps one `DmgHitRecord`
@@ -271,7 +271,7 @@ HIT_RECORD_STEP = 1 / 60
 #: contact with a strictly lower priority, and a bullet launch counts as one attack: all its
 #: copies and descendants land through their own lists once one of them holds the entry. Not
 #: modelled: a hitbox that deals nothing to the victim (team gate, zero damage) never appears as
-#: a hit, so it never spends the record here (bd er-effects-rs-xb3i: none of the skills' such
+#: a hit, so it never spends the record here (none of the skills' such
 #: hitboxes can pre-empt a damaging one; Night-and-Flame Stance's judge 3920 is dropped by the
 #: attack index claim, 0x14044299d).
 TAE_HIT_PRIORITY_RECORD = 341
@@ -1710,7 +1710,7 @@ def selftest():
         check('Milady running R1 extras (judge, index, can hit enemy, hits)',
               [(o['judge'], o['attack_index'], o['can_hit_enemy'], o['hits'])
                for o in run['other_hitboxes']], [(998, 1, False, 0), (123, 0, True, 1)], src)
-        # Judge 120 opens a new hit record on index 0 (1 before bd er-effects-rs-dnok), but both
+        # Judge 120 opens a new hit record on index 0 (1 before the record rule), but both
         # judges sit in the a060_030200 event 341 record f16-19 at priority 0: it lands nothing on
         # a target judge 123 has hit, so max_hits went from 2 to 1 (measured 2026-11-10).
         check('Milady running R1 judge 120 replaces 123 on index 0 inside 123\'s priority record',
@@ -1723,7 +1723,7 @@ def selftest():
               + [judge for d in run['hit_window_detail'] if d['sweep_hit']
                  for judge in (run['judge'],)], [123], src)
 
-    # Hit priority records (bd er-effects-rs-dnok, the `HIT_RECORD` block).
+    # Hit priority records (the `HIT_RECORD` block).
     src = 'hit priority record rule (FUN_14051b210 / FUN_14051b870, 1.16.2), synthetic attacks'
     check('one record: the first to touch lands, an equal or higher priority later lands nothing',
           shared_landings([(0.1, 0, 0, 0), (0.2, 0, 0, 1), (0.3, 0, 1, 2)]), [True, False, False], src)

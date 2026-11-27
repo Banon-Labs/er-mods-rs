@@ -140,7 +140,7 @@ and adds nothing to any other attack: an item that buys an effect is a choice, p
 A skill's status-only bullet (no damage) and a catch by the old rule (no `CAUGHT` record) build
 none, `INFERRED` as unpriced, and the one-hit nets (`net_one`) carry the whole status as `net` does.
 
-A follow-up (bd er-effects-rs-me5p) is scored by `FollowupForm` instead, on the same situations,
+A follow-up is scored by `FollowupForm` instead, on the same situations,
 run-in options and caught defender: its opening is dodged as `sequence_outcome` dodges it, and the
 follow-up meets the roll the defender made of it (`er-mechanics-ashes.FollowupModel`: it catches
 him outside that roll's invincibility before its dodge cancel; else he dodges it from there as
@@ -561,8 +561,8 @@ def line_hp(c, line=None, build=None):
 #: with its own poise and reaction (`er-mechanics-ashes.CaughtModel`): Rosus's Summons' three bursts,
 #: 0.25 s apart at one spot, were all landed at once on any catch; now each breaks the pool's 62
 #: poise (202.5 PvP) and holds him for the next, and a 700-poise defender leaves after the first.
-#: Such a bullet chain is also one geometry per list (`er-mechanics-ashes.split_chains`, bd
-#: er-effects-rs-fse5), so a dodger first touched by burst 2 is credited bursts 2-3, not all three.
+#: Such a bullet chain is also one geometry per list (`er-mechanics-ashes.split_chains`), so a
+#: dodger first touched by burst 2 is credited bursts 2-3, not all three.
 #: 19: an attacker build or objective line rides the group weapon it can wield whose skill damage
 #: (opening and follow-ups summed, `carrier_damage`) is largest, not the one of least requirement:
 #: Glintstone Pebble then R2 on Intelligence + melee 964.2 on the Dagger -> 1245.1 on the Omen
@@ -2639,8 +2639,8 @@ def never_made(c, mid, cat, events, have=()):
     that sit on a bullet dry ground never makes (`SpellModel.launch_gaps` names it with a condition
     in `NEVER_ON_LAND`: on water, or never) and that `evaluate` no longer prices, so that the record
     still says what was dropped. `evaluate` stopped pricing them when `bullet_lists` began skipping
-    a child neither ending makes on dry ground (`er-mechanics-ashes.launches`, bd
-    er-effects-rs-rggx): Honed Bolt's 10693006 (condition 2) left its hits and with them the
+    a child neither ending makes on dry ground (`er-mechanics-ashes.launches`):
+    Honed Bolt's 10693006 (condition 2) left its hits and with them the
     record's `dropped`. The subtree under the topmost such node is grouped into hit lists by
     `bullet_lists`' record rule (a flagged or attach row starts a record its volley and its
     children share, unless a row's `attachEffectType` drops it; an unflagged row a list per
@@ -3433,7 +3433,7 @@ def form_error(got, want):
 
 
 def followup_delays(follow):
-    """The press delays a follow-up's window offers (bd er-effects-rs-me5p): every real frame from
+    """The press delays a follow-up's window offers: every real frame from
     its first frame up to, not including, its last (`skill_followups` window, `INFERRED` TAE end
     exclusive): Glintblade Phalanx's f45-62 gives 0 to 16."""
     span = float(follow['last']) - float(follow['first'])
@@ -3706,7 +3706,7 @@ def look_group(c, spec, store):
 
 class FollowupForm:
     """`net_parts` for a follow-up entity (`x['press']` set) under the press the attacker picks
-    (`er-mechanics-ashes.FollowupModel`, bd er-effects-rs-me5p): per situation, the opening is
+    (`er-mechanics-ashes.FollowupModel`): per situation, the opening is
     dodged as `sequence_outcome` dodges it, the follow-up meets the defender's own roll, and the
     attacker presses later in the window only on a roll he saw before it opened. The run-in
     choice, the family choice and the worth of a caught defender (`CaughtModel`, capped at his
@@ -8161,9 +8161,9 @@ NEGATIVE_CONTROLS = ((('Familial Rancor', 'Family Heads', None), ('Rain of Fire'
                      (('Familial Rancor', 'Family Heads', None), ('Cannon of Haima', 'charged')),
                      (('Devourer of Worlds', "Devourer's Scepter", None), ('Great Oracular Bubble', 'tap')))
 #: The round-2 controls (each within D_rel 0.1 in the round-2 full run). Since the launches are
-#: placed and the caught defender walks out (bd er-effects-rs-doax / er-effects-rs-n7dd,
-#: 2026-11-10) none of them is within --twin on D_rel (0.14-0.73), so they no longer test that
-#: D_idle keeps a D_rel-close pair apart; they are still checked to stay apart.
+#: placed and the caught defender walks out (2026-11-10) none of them is within --twin on D_rel
+#: (0.14-0.73), so they no longer test that D_idle keeps a D_rel-close pair apart; they are still
+#: checked to stay apart.
 APART_CONTROLS = ((('Roaring Bash', 'Golden Lion Shield', None), ('Glintblade Phalanx', 'cast')),
                   (('Sword Dance', 'Hefty Scimitar', None), ("Radagon's Rings of Light", 'charged')),
                   (('Spinning Guillotine', 'Putrescence Cleaver', 'r2'), ('Triple Rings of Light', 'cast')),
@@ -9063,8 +9063,8 @@ STATUS_GROUP_NAMES = ('Zamor Ice Storm', 'Bloody Slash', 'Starcaller Cry')
 def selftest_one_record_worth(check, c, res, sc):
     """39 (version 31): Starcaller Cry's opening counts its hit priority record once in the full
     worth. Its five nested spheres (AtkParam_Pc 300405900-300405904, 2 to 10 m) are five launches of
-    one record, of which one lands per victim (bd er-effects-rs-dnok, er-effects-rs-xb3i;
-    `er-mechanics-spells.record_landings`). The record's `worth` is `full_worth` of its
+    one record, of which one lands per victim
+    (`er-mechanics-spells.record_landings`). The record's `worth` is `full_worth` of its
     geometries, the plain sum less the four spheres held back; every land share is at most 1."""
     SM = c.SM
     main = min(sc, key=lambda r: len(r['key']), default=None)
@@ -10192,7 +10192,7 @@ def selftest(timing_log=None, keep_going=False):
           bool(cs_) and all(r['status'] == 'scored' and not r['missing'] and r.get('delivery') == ['melee']
                             for r in cs_) and S.MISS_DIRECT not in reasons('Carian Slicer'))
     # Rykard's Rancor reported 'never reaches hurtbox height' while the flight aimed level and low:
-    # aimed at the lock point (Spine2 dummy 220, 1.243 m, `VERIFIED` bd er-effects-rs-7bye round 3)
+    # aimed at the lock point (Spine2 dummy 220, 1.243 m, `VERIFIED`)
     # its homing skulls reach him, as they do in the game, so it is scored. `MEASURED` 2026-11-12
     # (er-mechanics-ashes sha256 0783e76a..., er-mechanics-spells 3d7c46f3...): one list on bullet
     # 10483005, 4 hits of 285.1 a cast. The height reason is still given (Magic Downpour and Ancient
@@ -10204,7 +10204,7 @@ def selftest(timing_log=None, keep_going=False):
           bool(rr) and all(r['status'] == 'scored' for r in rr) and S.MISS_HEIGHT not in rr_why)
     # The flight of `er-mechanics-ashes.fly_members` (2026-11-13) touches him, and a touch makes the
     # launchConditionType 5 child, as the game does on a hit (`er-mechanics-ashes.launches`, `VERIFIED`
-    # FUN_14039da40, bd er-effects-rs-rggx); it also follows a caster-attached root, so its interval
+    # FUN_14039da40); it also follows a caster-attached root, so its interval
     # child spawns. Death Lightning, Watchful Spirit and Roiling Magma, which those two gaps kept
     # excluded or partial, are scored with every hit in their worth (`MEASURED` 2026-11-13, ashes
     # 0babd02a..., spells b491d417...: Death Lightning 1246 tap / 1370 charged and Watchful Spirit 743
@@ -10242,10 +10242,10 @@ def selftest(timing_log=None, keep_going=False):
                                                                                     (), None, c.dfn, False, True)
                                       if v['variant'] == r['variant'] for h in v['hits'])) < 0.5 for r in rm))
     hb = R.get(f"spell:{SM.by_name['honed bolt']}:cast")
-    # `evaluate` no longer prices the water branch (bd er-effects-rs-rggx: `bullet_lists` skips a
+    # `evaluate` no longer prices the water branch (`bullet_lists` skips a
     # child neither ending makes on dry ground), so `never_made` names it. 68.3 HP, `MEASURED`
     # 2026-11-12 (ashes 0783e76a..., spells 3d7c46f3...): one list, the flagged 10693005 starting a
-    # record that 10693006's 16 shots and their children share (bd er-effects-rs-7bye's rule); 136.7
+    # record that 10693006's 16 shots and their children share (the record lineage rule); 136.7
     # was the same hit counted twice by the lists before that rule.
     check(f"7. Honed Bolt: its water-only bullet 10693006 (launchConditionType 2) is dropped from the worth, not "
           f"missing (dropped {hb and hb['dropped']}, {hb and hb['dropped_hp']} HP, status {hb and hb['status']})",
@@ -10408,7 +10408,7 @@ def selftest(timing_log=None, keep_going=False):
         drel = float(d_rel_rows(rel_profile(zc1r, 0), rel_profile(zt1r, 0), res.w)[0, 0])
         dland_s = float(d_rel_rows(rel_profile(res.C, ci, LAND_CHANNELS), rel_profile(zt1, 0, LAND_CHANNELS), res.w)[0, 0])
         dgrp = float(d_rel_rows(rel_profile(res.C, ci, LAND_CHANNELS), rel_profile(res.A, i_t, LAND_CHANNELS), res.w)[0, 0])
-    # Since the caught defender walks out (bd er-effects-rs-n7dd) he takes one tick of either storm,
+    # Since the caught defender walks out, he takes one tick of either storm,
     # 1 of the tap's 5 and 1 of the skill's 4 (`SpellModel.bullet_lists`), so their land shares part
     # by that much (D_land about 0.2) where the full count made them equal.
     check(f'9. the Zamor skill storm component ({late}, made from the skill\'s inputs: the run\'s {same}) lands, to the '
@@ -10417,7 +10417,7 @@ def selftest(timing_log=None, keep_going=False):
           f'chance (D_rel {drel}): it rides the skill\'s recovery. The strike, which reads the skill\'s clip, parts them '
           f'(D_land {dland_s}); the run\'s tap, read with its charged cast (version 8), is D_land {dgrp} from it',
           dl is not None and same and dl <= 0.01 and dland <= 0.25 and drel > dland + 0.01 and dland_s > dland)
-    # A caught defender takes one tick of either storm and walks out (bd er-effects-rs-n7dd): one of the
+    # A caught defender takes one tick of either storm and walks out: one of the
     # tap's ticks and one of the skill storm's (`SpellModel.bullet_lists`). Land shares are shares of
     # the full count, so the two storms are alike only when those counts are equal.
     def storm_ticks(rec, frame=None):
@@ -10440,7 +10440,7 @@ def selftest(timing_log=None, keep_going=False):
           f"and they are twins and a cross-type match through the storm component ({zkind}) exactly when its "
           f"storm ticks as often as the tap's", Dam[i_t, i_s] > a.twin and through == alike)
     # Over 0.2 while a caught defender took every tick; with him walking out of both storms after
-    # one (bd er-effects-rs-n7dd) they part by less, still past the twin cut.
+    # one they part by less, still past the twin cut.
     check(f'9. D_now(Zamor charged, skill) > --twin {a.twin} (got {Dn[i_c, i_s]:.4f}): not alike pressed at once',
           Dn[i_c, i_s] > a.twin)
     zb = [b for b in an['builds'] if ztap['key'] in b['population'] and zch['key'] in b['population']]
@@ -10519,7 +10519,7 @@ def selftest(timing_log=None, keep_going=False):
                              for r in gfol)
           and not [x for x in an['contains'] + an['component_twins']
                    if res.comps[x['component']]['frame'] in set(R[x['x']].get('inherited_frames') or [])])
-    # The mixup (bd er-effects-rs-me5p; the user, 2026-11-16: "what is called a 50/50"): on a
+    # The mixup (the user, 2026-11-16:"what is called a 50/50"): on a
     # Glintblade Phalanx R2 follow-up its fixed sequence is the net `parts` gives with `mix` False,
     # the scored net (version 20) is the game's value, which adds the defender's stand and the
     # attacker's default delays (no opening roll given, so no 'none' column), and the game is a
@@ -10572,7 +10572,7 @@ def selftest(timing_log=None, keep_going=False):
             else:
                 apart_read += 1
             # A control that no longer lands --live on a side is no control: since the launches are
-            # placed (bd er-effects-rs-doax) Magic Glintblade's blade forms 0.2 m ahead, not 1 m, and
+            # placed, Magic Glintblade's blade forms 0.2 m ahead, not 1 m, and
             # a reacting defender rolls every press (its run-in to 1.5 m nets nothing).
             ok = not alive or (Dam[i, j] > a.twin and (sk['key'], sp['key']) not in twins
                                and (sp['key'], sk['key']) not in matched and (sk['key'], sp['key']) not in contained
@@ -10593,7 +10593,7 @@ def selftest(timing_log=None, keep_going=False):
     # Painful Strike's f34 whip frame against a glintblade volley: within --twin by D_contain on the
     # profiles alone, kept apart only by how each delivers its worth. Round 3 measured it against
     # Carian Phalanx (D_contain 0.056); since the launches are placed and the caught defender walks
-    # out (bd er-effects-rs-doax / er-effects-rs-n7dd) that pair is 0.51 apart, and the 2026-11-10
+    # out, that pair is 0.51 apart, and the 2026-11-10
     # full run puts the Glintblade Phalanx cast nearest, at 0.089 (Troll's Roar's f43 against the
     # charged Wrath of Gold, 0.082, is the only nearer melee frame). Since the defender's strike
     # (version 11) the pair is 0.76 to 0.93 apart, and the 2026-11-15 full run (stamp
@@ -10850,7 +10850,7 @@ def selftest(timing_log=None, keep_going=False):
           rtm is not None and any(nf == 2 for *_, nf, _ in errs_) and any(nb >= 2 for _, _, nb, _, _ in errs_)
           and all(e <= 1e-6 for *_, e in errs_))
     check('29. the inputs re-read for those entities are the run\'s', all(x['value'] == R[r['key']]['value'] for r, x in probes_))
-    # 30. A follow-up is scored under the press the attacker picks (bd er-effects-rs-me5p): the
+    # 30. A follow-up is scored under the press the attacker picks: the
     # run's profile is `FollowupForm`'s (version 20: the mixup's value, check 10), its fixed
     # sequence never below the press at once in any situation, and a defender who does not dodge
     # meets the press at once.
@@ -11120,7 +11120,7 @@ def selftest(timing_log=None, keep_going=False):
     print_summary(res, an, buf)
     # The attacks whose rows are shown: a contains row's skill and a cross-type match's spell of this
     # subset (Zamor Ice Storm and Glintblade Phalanx until 2026-11-10, when the placed launches and the
-    # caught defender moved those two pairs apart in this subset, bd er-effects-rs-doax / n7dd).
+    # caught defender moved those two pairs apart in this subset).
     cname = R[an['contains'][0]['x']]['name'] if an['contains'] else 'Zamor Ice Storm'
     mname = R[an['matches'][0]['spell']]['name'] if an['matches'] else 'Glintblade Phalanx'
     rc = print_show(res, an, cname, buf)

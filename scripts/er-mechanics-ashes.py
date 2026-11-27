@@ -647,7 +647,7 @@ def bullet_tree(t, bid, depth=0, path=()):
 
     Followed to any depth (Phantom Slash's damaging 2663 is five links down). A row two parents
     name hangs under both, as the game makes it under both: Stars of Ruin's 40 m/s legs
-    10422032-10422035 are each the `HitBulletID` of two stars (bd er-effects-rs-vkuf; one `seen`
+    10422032-10422035 are each the `HitBulletID` of two stars (one `seen`
     set for the whole walk used to give them to the first star only, 32 shots flown, not 36). A
     row is not followed again below itself (`path`): no Bullet row reaches itself through
     another, and the two that name themselves (20002202, 200002827) stop at the
@@ -1221,7 +1221,7 @@ def record_mask(hits):
 
 
 #: The bullet's own hit list (`VERIFIED` 1.16.2 named dump, ashes-of-war.md "`isUseSharedHitList`";
-#: bd dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12, er-effects-rs-7bye): a launch
+#: bd dmghitrecord-inherited-down-bullet-lineage-1162-2026-11-12): a launch
 #: whose Bullet row has `isUseSharedHitList` or `attachEffectType` makes one DmgHitRecord
 #: (FUN_14038fe80) that its whole `numShoot` volley shares, and every child it makes on hit, expiry
 #: or interval copies it with the attack info (FUN_14039bba0 -> FUN_14038b740, +0x638) unless the
@@ -2141,7 +2141,7 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
         buffs += [s['id'] for s in skill_buffs(t, prof, anim=follow['anim'])
                   if s.get('effect') == 'buff' and s['id'] not in buffs]
     # Hits that share a hit priority record land once between them, a bullet launch's rows
-    # together (bd er-effects-rs-dnok, er-effects-rs-xb3i), and one row per bullet hit list
+    # together, and one row per bullet hit list
     # (`HIT_LIST_NOTE`): `pvp_damage` sums what `cast_mask` lands.
     dmg = pvp_damage(t, weapon_id, hits, defender, def_module, damage_fn) if hits else 0.0
     stagger = None
@@ -2208,7 +2208,7 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
 # The aim point is his position, not a lead: `predictionShootObserveTime` (+0xb8), which would lead
 # it, is 0 on every player bullet (below).
 #
-# `predictionShootObserveTime` (bd er-effects-rs-7bye, round 4; `VERIFIED` 1.16.2 named dump and
+# `predictionShootObserveTime` (`VERIFIED` 1.16.2 named dump and
 # objdump of `eldenring-deobf.bin`). FUN_140390c20 reads it right after the aim point (0x140390f32
 # `ucomiss xmm12, [rdi+0xb8]`): when it is not 0 the point becomes FUN_1403adff0's. That one asks the
 # target's `CSTargetVelocityRecorder` (FUN_1403940e0 -> FUN_1403e9340 -> FUN_1402dbb80) for his mean
@@ -2249,8 +2249,8 @@ GATE_KEEPS_PARENT = (4, 5, 6)
 
 def launches(t, parent, child, ending):
     """Whether Bullet row `parent` makes its `HitBulletID` child `child` when it ends by `ending`
-    ('hit': on a character or the map; 'expire'). `VERIFIED` 2026-11-12, 1.16.2 named dump (bd
-    er-effects-rs-rggx): FUN_14039da40 reads `launchConditionType` on the row of the state at
+    ('hit': on a character or the map; 'expire'). `VERIFIED` 2026-11-12, 1.16.2 named dump:
+    FUN_14039da40 reads `launchConditionType` on the row of the state at
     CSBulletIns +0x4a0, the state index. A hit (FUN_14039dcc0 -> FUN_14039baf0) leaves the index
     on the fly or wait state, whose row is the parent's own (FUN_14039ee00); `KillBullet` moves it
     to the explosion state, whose row is the child's, before the expiry gate. It takes the row of
@@ -2396,7 +2396,7 @@ def interval_frames(r, frames=None, interval=None, first=None, life=None):
 BULLET_REACH_CAP_M = 25.0
 _FLIGHT = {}
 
-# Launch point of a root shot (bd er-effects-rs-doax). `VERIFIED`: a root shot's base matrix is
+# Launch point of a root shot. `VERIFIED`: a root shot's base matrix is
 # the caster's live DummyPoly matrix (FUN_140390c20 -> FUN_140391850 -> FUN_1403f13c0, bd
 # bullet-launch-geometry-for-skill-reach-2026-09-29). `TAE`: the bullet event (2) and the cast
 # event (64) name that DummyPoly in their first int: 9 on all four Swift Slash bursts
@@ -2473,7 +2473,7 @@ _FLIGHT = {}
 # each later contact with a strictly lower priority; one frame's tie goes to the attack created
 # first (DmgMan's list, reversed by each FUN_140527d40 pass). Swift Slash (a877 040000): the four
 # bursts take slot 1's record (event 341 f27-34), both blades slot 0's (f28-38), all priority 0, so
-# one burst and one blade reach a defender (four and two before bd er-effects-rs-dnok). Thread one
+# one burst and one blade reach a defender (four and two before the record rule). Thread one
 # runs before thread two each frame (HavokBehavior task, group 74, then ChrIns_BehaviorSafe, 76,
 # whose first call is `RunTaeMulthreadThread2`) while `Behavior.EnableMultiThread` holds (default
 # true in `CSHkBehManager`), and the slot's per-frame cleanup FUN_1404a4cb0 runs after both, in
@@ -2731,7 +2731,7 @@ def _unit(yaw_deg, pitch_deg):
     return (math.cos(p) * math.sin(y), math.sin(p), math.cos(p) * math.cos(y))
 
 
-# Launch frames in 3D (bd er-effects-rs-7bye, round 3). `VERIFIED` 2026-11-12 on the 1.16.2 named
+# Launch frames in 3D. `VERIFIED` 2026-11-12 on the 1.16.2 named
 # dump (:8765) and `eldenring-deobf.bin` (objdump); addresses are 1.16.2. A frame is its three
 # rows (right, up, forward), +z forward and +y up as in `_unit`; the bullet flies along its
 # normalised forward row (FUN_14039e8a0: v0 = initVellocity x normalise(row 3)).
@@ -2936,7 +2936,7 @@ def lock_point(dist, bearing_deg=0.0):
     return (cx + ox * c + oz * s, oy, cz - ox * s + oz * c)
 
 
-# Random draws (bd er-effects-rs-7bye, round 4). `VERIFIED` 2026-11-12, 1.16.2 named dump (:8765)
+# Random draws. `VERIFIED` 2026-11-12, 1.16.2 named dump (:8765)
 # and `eldenring-deobf.bin`; addresses are 1.16.2.
 #   * The spread, FUN_140390210, which FUN_140390c20 calls for every `EmittePosType` once the aim
 #     and the shoot angles are applied (LAB_140391367) and before `sfxPostureType` 1's levelling,
@@ -3554,7 +3554,7 @@ def _flight(r, pos, heading, speed=None):
     return np.array(path, float), ending, d, s
 
 
-# In-flight homing (bd er-effects-rs-rw25). `VERIFIED` 2026-11-10 on the 1.16.2 named dump (:8765
+# In-flight homing. `VERIFIED` 2026-11-10 on the 1.16.2 named dump (:8765
 # decompiles) and `eldenring-deobf.bin` (objdump); the addresses are 1.16.2 and have not been
 # found on the 2.7.2.0 image. `CSBulletFlyState::OnUpdate` 0x1403939d0 runs once a frame with the
 # frame time in XMM2 (kept in XMM6 and handed on to each call):
@@ -3853,7 +3853,7 @@ def fly_members(t, bt, n=1, fire=0.0, launch=None, defender=None, aim=True, held
     spawn place, frame, speed and time, and where the member is and whether he can be hit over its
     flight) share one flight: it is theirs, and so is what it touches.
 
-    The rules, `VERIFIED` unless marked (bd er-effects-rs-7bye; "Launch frames in 3D" above):
+    The rules, `VERIFIED` unless marked ("Launch frames in 3D" above):
     - each shot leaves its spawn frame as FUN_140390c20 builds it (`row_shots`: shoot angles in the
       frame, the drawn spread, `sfxPostureType` 1, `EmittePosType` 1's ground point toward the
       member, aimed at his lock-on point plus `targetYOffsetRange` within `lockShootLimitAng` when
@@ -4190,7 +4190,7 @@ def fly_tree(t, bt, target=None, launch=None):
     return _TREE[key]
 
 
-# Map contact and the child it creates (bd er-effects-rs-rw25; `VERIFIED` 2026-11-10, 1.16.2 named
+# Map contact and the child it creates (`VERIFIED` 2026-11-10, 1.16.2 named
 # dump :8765, addresses 1.16.2). A bullet's hit record goes through FUN_140399e50, which picks the
 # handler by the hit handle's type (bits 28-31): 1 a character (FUN_140398ba0), 6 an object
 # (FUN_140398da0), 8 or none (0, the map) FUN_140398f90, the force-erase flag 0x10 FUN_140399130.
@@ -4664,8 +4664,7 @@ def skill_landing(t, weapon_id, sword_arts_id, hits, poises, distances=LANDING_D
             if x['list'] is not None and x['list'] in lists:
                 continue
             # A hit whose priority record another attack holds on him at an equal or lower
-            # priority does nothing; a row of the holding launch lands (bd er-effects-rs-dnok,
-            # er-effects-rs-xb3i).
+            # priority does nothing; a row of the holding launch lands.
             if x['rec'] is not None and not ATK.record_contact(held, x['rec'], x['prio'], x['created']):
                 continue
             if last is not None and _update(tc) != _update(last) and (
@@ -6834,7 +6833,7 @@ def shift_geometry(g, frames):
     return out
 
 
-# A geometry flown again after each dodge (bd er-effects-rs-rw25; round 4, bd er-effects-rs-7bye).
+# A geometry flown again after each dodge.
 # A contact geometry is one fixed set of samples, read against wherever the defender is. A shot
 # whose path depends on where he goes is flown again: a geometry with a damaging shot that homes or
 # is created by a shot that does, or that is made, or created by a shot made, by a `carrier` (which
@@ -8864,7 +8863,7 @@ def volley_outcome(bursts, worth, dist, cue=0.0, floor=0.0, families=None, my_ro
 
 
 # ---------------------------------------------------------------------------------------------
-# a follow-up pressed late (bd er-effects-rs-me5p)
+# a follow-up pressed late
 #
 # User, 2026-11-10: "you can delay your followup slightly if you think your opponent will attempt
 # to roll a projectile from the first part". `sequence_outcome` cannot show that: a burst the
@@ -10713,7 +10712,7 @@ class FollowupModel:
 
     def mixup(self, dist, floor, worth, open_worth=None, open_roll=None, run_floor=None, strafe_share=1.0,
               blind=True, stand_escapes=None, mid_worth=None, open_mid=None, catch_escapes=None):
-        """The attack at (`dist`, `floor`) as the two-sided choice it is (bd er-effects-rs-me5p; the
+        """The attack at (`dist`, `floor`) as the two-sided choice it is (the
         user, 2026-11-16: "I think the pebble/R2 interaction is what is called a 50/50"): a
         zero-sum game of the attacker's net, solved for its mixed-strategy value (`zero_sum_game`).
 
@@ -10971,7 +10970,7 @@ def zero_sum_game(M):
 
 
 # ---------------------------------------------------------------------------------------------
-# a caught defender (bd er-effects-rs-doax, er-effects-rs-n7dd)
+# a caught defender
 #
 # `sequence_outcome`'s `hit_value` credits a defender caught by one hit with every later hit: he
 # never leaves and every later burst reaches him wherever it lands. `CaughtModel` plays him out
@@ -11117,7 +11116,7 @@ def caught_shape(g):
                                    + ((l['rows'],) if l.get('rows') and 'B' in g else ()) for l in c['lists']]
 
 
-# A bullet chain split per list (bd er-effects-rs-fse5). The outcomes price a catch by the geometry
+# A bullet chain split per list. The outcomes price a catch by the geometry
 # that makes it (`reaction_outcome`'s `hit_value[h]`, attack-similarity's `OutcomeForm` per
 # geometry), and `CaughtModel` plays geometry h's catch from its first touch on a defender who
 # stands. One geometry holding a chain of lists, each list's bullets made on the frame the last
@@ -11967,7 +11966,7 @@ class CaughtModel:
                 t0 = T if state['floor'] is None else max(T, state['floor'])
                 segs = segs + [esc_seg(t0, at if segs[-1][3] == 'stand' else at_(segs, t0))]
 
-        # Hit priority records (bd er-effects-rs-dnok, er-effects-rs-xb3i): record key -> (the
+        # Hit priority records: record key -> (the
         # entry's priority, the launch holding it: `HPR`'s third field, shared by the geometries of
         # one bullet launch, `ATK.record_contact`). A geometry of a record another launch holds
         # lands only with a strictly lower priority; the holding launch's geometries land and keep
@@ -13551,7 +13550,7 @@ def selftest():
         check('with gravity 20 it lands before its life ends (hit at height <= radius)',
               (ending, path[-1][1] <= 0.1, 2.5 < path[-1][2] < 3.5), ('hit', True, True),
               'FUN_14039f860; flat ground (INFERRED)')
-        # In-flight homing (bd er-effects-rs-rw25): a target 100 m to the side of a 10 m/s shot.
+        # In-flight homing: a target 100 m to the side of a 10 m/s shot.
         hom = {**level, 'life': 1.0, 'minVellocity': 0.0, 'dist': 100.0, 'homingAngle': 60,
                'homingBeginDist': 0.0, 'hormingStopRange': 0.0}
         aside = lambda k: (100.0, 1.0, 0.0)  # noqa: E731
@@ -13662,7 +13661,7 @@ def selftest():
               'sooner than the move cancel: 47 of 63 starts walk out',
               (round(fm_.strafe_escape(2.5, 5.0), 9), round(sv_ * 63, 9), len(rd_)), (round(47 / 63, 9), 47.0, 63),
               'FollowupModel.strafe_escape (version 23), pressed (version 28)')
-        # Launch frames in 3D (bd er-effects-rs-7bye, round 3).
+        # Launch frames in 3D.
         hd = lambda fr: tuple(round(x, 6) + 0.0 for x in frame_heading(fr))  # noqa: E731
         up = look_frame(_unit(0.0, 89.0))
         check('shoot angles on a level frame add to its yaw and pitch; on a frame climbing 89 deg a yaw of 90 '
@@ -13767,7 +13766,7 @@ def selftest():
               ([2], [4], [5, 11, 17, 23, 29, 35, 41, 47, 53], True, True),
               'FUN_14039e8a0 sets the timer to rand[min, max]; UpdateBullet 0x14039a100 takes dt off the '
               'life first; FUN_14039ab10; GoodsInfo 4220 "Fires twelve dark shooting stars"')
-        # A row two parents name hangs under both (bd er-effects-rs-vkuf): Stars of Ruin's 40 m/s
+        # A row two parents name hangs under both: Stars of Ruin's 40 m/s
         # legs 10422032-10422035 are each the HitBulletID of two stars' first legs. And a chain deeper than the
         # old cap of 32 is followed to its end: Wave of Gold's 4000 is 60 legs.
         def tree_count(root):
@@ -13792,7 +13791,7 @@ def selftest():
               (36, [10422032, 10422033, 10422034, 10422035], 33, 9, [10422016, 10422018, 10422021], 60),
               'bullet_tree: the ancestor-path guard; HitBulletID of 10422017/19, 18/20, 21/23, 22/24 (REGULATION); '
               'launches')
-        # Map contact and free aim (bd er-effects-rs-rw25): Great Oracular Bubble's bubble does no
+        # Map contact and free aim: Great Oracular Bubble's bubble does no
         # damage, stops on the map and bursts into its 3 m child where it lands.
         gob = bullet_tree(t, 10511000)
         put = {g: floor_launch(t, gob, None, g) for g in (4.0, 8.0)}
@@ -13923,7 +13922,7 @@ def selftest():
         held = skill_landing(t, claymore, caller, storm_hits, None, distances=(ENGAGE_DISTANCE_M,))
         # Each swing (priority 0) and its bullet (priority 1) take one a623_040000 event 341 record
         # (f24-29, f47-52, f72-76): the swing reaches him first or on the same update, so its
-        # bullet lands nothing (bd er-effects-rs-dnok). Both bullets landed before (1.0 at
+        # bullet lands nothing. Both bullets landed before the record rule (1.0 at
         # positions 1 and 3, measured 2026-11-10).
         check('Stormcaller at 2.5 m, poise 72: swing 1 reaches him first (one large stagger, roll at '
               '35) and its bullet, in its record, lands nothing; swing 2 lands 18.7 frames on and '
@@ -13952,7 +13951,7 @@ def selftest():
         bolt_hits = skill_hits(t, claymore, t.find_arts('Thunderbolt'), ctx, 25)
         con = _hit_contacts(t, claymore, t.find_arts('Thunderbolt'), bolt_hits[:1])
         # The bolt leaves DummyPoly 1 on the raised right hand, whose own height (2.0 m) the launch
-        # keeps aside (`bullet_launch`: the shot's pitch is not decoded, bd er-effects-rs-doax).
+        # keeps aside (`bullet_launch`: the shot's pitch is not decoded).
         h0 = bolt_hits[0]
         launch = skill_bullet_launch(t, claymore, t.find_arts('Thunderbolt'), h0['anim'], h0['frame'], h0['root_bullet'])
         path = fly_tree(t, bullet_tree(t, h0['root_bullet']), launch=launch)[0][1]
@@ -14502,7 +14501,7 @@ def selftest():
         check('its contest inputs: first contact 2.5 m ahead at or after the f28 swing, no hyperarmor, '
               '50 stamina (the right blade\'s row; the left blade\'s charges 0)',
               (ci['strike'] >= 28, ci['hyper'], ci['stamina']), (True, [], 50), 'TAE a877 040000; AtkParam')
-        # bd er-effects-rs-doax: each burst leaves DummyPoly 9 where the dash has carried the caster.
+        # Each burst leaves DummyPoly 9 where the dash has carried the caster.
         bursts = [h for h in so['hit_rows'] if h['kind'] == 'bullet']
         launches = [skill_bullet_launch(t, bb, swift, h['anim'], h['frame'], h['root_bullet']) for h in bursts]
         check('Swift Slash: the four bursts (f27/29/30/33) leave c0000 DummyPoly 9 (TAE event 2 +0), which rides the '
@@ -14549,7 +14548,7 @@ def selftest():
               ([x['orient'] for x in skill_profile(t, swift, bb)['anims'][40000] if x['kind'] == 'bullet'],
                [(round(x['yaw'], 3), round(x['pitch'], 3)) for x in launches]), ([0] * 4, [(0.0, 0.0)] * 4),
               'TAE a877_040000 event 2 Args byte 0xc')
-        # bd er-effects-rs-dnok: hit priority records (`HIT_RECORD` in er-mechanics-attacks).
+        # Hit priority records (`HIT_RECORD` in er-mechanics-attacks).
         check('Swift Slash: the four bursts take slot 1\'s record (event 341 f27-34), both blades slot '
               '0\'s (f28-38), all priority 0, so one burst and one blade land: 200 of 600',
               (sorted({(h['kind'], h['record'], h['priority']) for h in so['hit_rows']}),
@@ -14691,7 +14690,7 @@ def selftest():
            len(ring) == 8 and max(y for _, _, y, _ in ring) - min(y for _, _, y, _ in ring) > 90.0
            and all(p < -30.0 for *_, p in ring)),
           (True, True, True), 'c0000.flver dummy forward +0x10; HKX pose; TAE event 2 byte 0xc')
-    # The HP cap (bd er-effects-rs-doax): what one caught defender takes stops at his health; the
+    # The HP cap: what one caught defender takes stops at his health; the
     # punish does not.
     import numpy as np
     every = {'T': np.arange(40.0, 56.0, 0.5), 'X': np.zeros(32), 'Z': np.full(32, -99.0), 'R': np.full(32, 1e3),
@@ -14702,7 +14701,7 @@ def selftest():
           (round(capped['base'], 1), capped['value'] <= 1900.0 + 1e-9, round(capped['value'] / plain['value'], 4),
            capped['punish_hp'] == plain['punish_hp']),
           (1900.0, True, 0.38, True), 'SpellModel.defender hp: CalcCorrectGraph 100 at the median Vigor')
-    # The caught defender (bd er-effects-rs-n7dd): a lingering area of 13 half-second ticks around
+    # The caught defender: a lingering area of 13 half-second ticks around
     # him. A flinch (level 0, Swift Slash's burst row) lets him go at once; a middle stagger (its
     # blade row, poise 405 against 62) holds him one tick more, then DamageCount lets him roll out.
     n = 400
@@ -14896,7 +14895,7 @@ def selftest():
            int(_catches([tied(0, 1), tied(0, 0)], 2.5, None, [0.0])[0][0]),
            int(_catches([tied(0, 0), {**tied(0, 1), 'HPR': (('other', 0, 0), 0, 1)}], 2.5, None, [0.0])[0][0])),
           (1, 1, 0), 'FUN_14051b210, DmgMan list order (FUN_140527d40)')
-    # The worth of a catch depends on when it is made (bd er-effects-rs-fse5): the same three bursts
+    # The worth of a catch depends on when it is made: the same three bursts
     # as a chain, each burst's samples starting on the frame the last one's end (as fly_tree flies
     # Bullet 2872 -> 2873 -> 2874, `MEASURED` 2026-11-16: f52.83-60.33, 60.33-67.83, 67.83-75.33), in
     # a 4 m spot so a medium roll (13 frames of invincibility) ends inside it. A roll whose
@@ -15020,7 +15019,7 @@ def selftest():
           'made for a defender a counted shot touched before it) give every read\'s touches as it flies alone',
           (many_n, many_fin > 0, many_bad), (2 * 2 * len(reqs_), True, 0),
           '_homing_many, _homing_entries (least, starts per move), fly_members bound')
-    # A follow-up pressed late (bd er-effects-rs-me5p). Samples that touch wherever he is (radius
+    # A follow-up pressed late. Samples that touch wherever he is (radius
     # 1000 m): the opening at f40-41, which he rolls from about f34 (the middle of the starts
     # f28-40 that escape it); the follow-up 1-2 frames after a press whose window opens at f43.
     def touch(frames, radius=1e3):
@@ -15139,7 +15138,7 @@ def selftest():
     check('an opening with no follow-up scores as sequence_outcome does (value, evade, punish)',
           tuple(round(got[k] - seq[k], 9) for k in ('value', 'p_evade', 'p_punish', 'base')), (0.0, 0.0, 0.0, 0.0),
           'FollowupModel against sequence_outcome')
-    # The mixup (bd er-effects-rs-me5p; the user, 2026-11-16, "what is called a 50/50"): the game's
+    # The mixup (the user, 2026-11-16,"what is called a 50/50"): the game's
     # value, solved exactly. Known games first, then the equilibrium conditions on a random one: the
     # attacker's mix earns at least the value against every row, the defender's concedes at most
     # the value to every column.
