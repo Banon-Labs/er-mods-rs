@@ -935,6 +935,25 @@ CASES = [
         "logs where its progress goes -- must NOT halt",
     ),
     Case(
+        "unwatched_red_stage.jsonl",
+        "nothing will wake you when one of its stages goes red",
+        "the 2026-11-25 shape: `git push` backgrounded with a kitty split tailing it and no "
+        "Monitor, so the policy stage's `RED (exit 1)` waited for the push to finish (user: 'not "
+        "wait until all checks pass before addressing any one of the failing reds')",
+    ),
+    Case(
+        "unwatched_red_stage_monitored.jsonl",
+        None,
+        "the same push with a Monitor following its output file through a filter that passes RED "
+        "-- must NOT halt",
+    ),
+    Case(
+        "unwatched_red_stage_finished.jsonl",
+        None,
+        "the same push after its completion notification, with no Monitor -- nothing left to "
+        "watch, must NOT halt",
+    ),
+    Case(
         "untailed_agent.jsonl",
         "opened no kitty tab following its transcript: a505613c401ed9d43",
         "the 2026-11-11 shape: 'Speed up attack sets, round 2' launched in the background and no "

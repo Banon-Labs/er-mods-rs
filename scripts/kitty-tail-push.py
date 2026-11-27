@@ -10,7 +10,12 @@ agent session's own tab; `--tab` opens a new tab as before.
     python3 scripts/kitty-tail-push.py --log <the background task's output file>
     python3 scripts/kitty-tail-push.py --log <file> --pid <git push pid>
     python3 scripts/kitty-tail-push.py --verdict <file>     # what the window prints at the end
+    python3 scripts/kitty-tail-push.py --log <file> --monitor-command   # the Monitor to arm, only
     python3 scripts/kitty-tail-push.py --selftest
+
+After opening the window it also prints the Monitor command that wakes the agent on a red stage
+(`tail -n +1 --pid=<pid> -F <log> | grep ... RED ... | python3 .../monitor-throttle.py 10`): the
+split is the user's view and wakes nobody. See `monitor_command` below.
 
 Without `--pid`, the newest `git ... push` process this user owns is the one followed, found by
 reading `/proc` (raw `pgrep` is guard-denied here). The window runs `tail --pid`, so it follows the
@@ -148,7 +153,29 @@ def open_window(log: Path, pid: int | None, title: str, focus: bool, kind: str) 
         f"opened kitty {kind} {title!r} (window {result.stdout.strip()}, in {where}), "
         f"following {log} ({following})"
     )
+    print(monitor_hint(log, pid))
     return 0
+
+
+def monitor_command(log: Path, pid: int | None) -> str:
+    """The Monitor command that wakes the agent on a red stage of this push (user, 2026-11-25:
+    "not wait until all checks pass before addressing any one of the failing reds"). The split
+    above is the user's view and wakes nobody. The command is built by
+    scripts/cupcake_red_stage_watch.py, the module behind the Stop guard
+    `no_unwatched_red_stage.rego` that asks for it, so the two cannot disagree; with the push's
+    pid, `tail --pid` ends the Monitor when the push ends."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cupcake_red_stage_watch as watch
+
+    return watch.monitor_command(str(log), pid)
+
+
+def monitor_hint(log: Path, pid: int | None) -> str:
+    return (
+        "arm this Monitor (timeout_ms 1800000) so a red stage wakes you while the other stages "
+        f"still run; on a `>>> stage <name> RED` line, read that stage's log and start the fix:\n"
+        f"    {monitor_command(log, pid)}"
+    )
 
 
 def selftest() -> int:
@@ -193,6 +220,13 @@ def selftest() -> int:
     if "'/tmp/a log with spaces.txt'" not in script or "--pid=7" not in script:
         failures.append(("quoting", "quoted", script))
         print(f"FAIL the log path is not quoted or the pid is missing:\n{script}")
+    monitor = monitor_command(Path("/tmp/a log.txt"), 7)
+    if not monitor.startswith("tail -n +1 --pid=7 -F '/tmp/a log.txt' | grep --line-buffered -E ") \
+            or "RED" not in monitor or not monitor.endswith("/scripts/monitor-throttle.py 10"):
+        failures.append(("monitor", "command", monitor))
+        print(f"FAIL the Monitor command does not follow the log with --pid through RED and the throttle:\n{monitor}")
+    else:
+        print(f"ok   monitor command: {monitor}")
     failures += launch_selftest()
     print("selftest:", "FAIL" if failures else "ok")
     return 1 if failures else 0
@@ -238,10 +272,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--tab", action="store_true", help="open a new tab instead of a split in the agent's own tab")
     parser.add_argument("--verdict", type=Path, metavar="LOG", help="print PUSH SUCCEEDED/FAILED for a log and exit")
     parser.add_argument("--paint", action="store_true", help="colour stdin's verdict words onto stdout (the tab's filter)")
+    parser.add_argument("--monitor-command", action="store_true",
+                        help="print only the Monitor command for --log (with the push's pid) and open no window")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
+    if args.monitor_command:
+        if not args.log:
+            parser.error("--monitor-command needs --log")
+        print(monitor_command(args.log, args.pid or newest_push_pid()))
+        return 0
     if args.paint:
         for line in sys.stdin:
             sys.stdout.write(paint(line.rstrip("\n")) + "\n")

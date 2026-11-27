@@ -80,6 +80,13 @@ and closes 5 s after the main transcript says the agent finished or was stopped.
 (`scripts/cupcake_untailed_agent.py`; `--replay` judges recent transcripts), tested by
 `scripts/test-untailed-agent-signal.py`, `scripts/kitty-tail-agent.py --selftest` (`--live-selftest`
 against a real tab) and the `untailed_agent*.jsonl` fixtures in `scripts/test-cupcake-stop-guards.py`.
+A background push or check suite also gets a `Monitor` that wakes the agent on a red stage, and a
+red stage is read and fixed while the other stages still run (user, 2026-11-25: "It would be wise,
+and prudent, to not wait until all checks pass before addressing any one of the failing reds in
+each future case"). `scripts/kitty-tail-push.py` prints the Monitor command after it opens the
+split. Enforced by `.cupcake/policies/claude/no_unwatched_red_stage.rego` over
+`.cupcake/signals/last_assistant_unwatched_red_stage.sh` (`scripts/cupcake_red_stage_watch.py
+--selftest`, fixtures `unwatched_red_stage*.jsonl` in `scripts/test-cupcake-stop-guards.py`).
 
 ## A command written for the user is spelled absolutely
 

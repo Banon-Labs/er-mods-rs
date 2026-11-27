@@ -307,6 +307,7 @@ portable	-	test-push-authorization-signal.py	fixture transcripts and a throwaway
 portable	-	test-commit-authorization-signal.py	fixture transcripts in a temp dir; the cupcake end-to-end cases skip when cupcake is absent	policy
 portable	-	test-unexplained-running-tasks-signal.py	source/AST/text analysis only	policy
 portable	-	test-untailed-long-run-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
+portable	-	cupcake_red_stage_watch.py --selftest	transcript events built in memory; no game image, no network	policy
 portable	-	test-unclosed-finished-agents-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 5 s)	policy
 portable	-	cupcake_session_tasks.py --selftest	a fake process table and session transcripts in a temp dir; never reads /proc or ~/.claude (measured with an empty HOME, 4 s)	policy
 portable	-	test-session-tasks-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only (measured with an empty HOME, 8 s)	policy

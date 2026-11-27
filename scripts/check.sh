@@ -1650,6 +1650,10 @@ opa test "$repo_root/.cupcake/policies/claude/no_markdown_rule.rego" "$repo_root
 opa test "$repo_root/.cupcake/policies/claude/no_stop_waiting_agent.rego" "$repo_root/.cupcake/tests/no_stop_waiting_agent_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/rego_must_compile.rego" "$repo_root/.cupcake/tests/rego_must_compile_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_untailed_long_run.rego" "$repo_root/.cupcake/tests/no_untailed_long_run_test.rego"
+# A background push or check suite with no Monitor that wakes the agent on a red stage (user
+# 2026-11-25: "not wait until all checks pass before addressing any one of the failing reds").
+python3 "$repo_root/scripts/cupcake_red_stage_watch.py" --selftest
+opa test "$repo_root/.cupcake/policies/claude/no_unwatched_red_stage.rego" "$repo_root/.cupcake/tests/no_unwatched_red_stage_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_untailed_agent.rego" "$repo_root/.cupcake/tests/no_untailed_agent_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_authorize_without_run_stamp.rego" "$repo_root/.cupcake/tests/no_authorize_without_run_stamp_test.rego"
