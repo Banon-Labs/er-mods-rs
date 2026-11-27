@@ -66,11 +66,17 @@ printf 'import sys\nsys.exit(3 if "--rust-touched" in sys.argv else 0)\n' >"$fix
 "${git_clean[@]}" -C "$fixture" commit -q -m 'consistent: check.sh and its ledger agree'
 sha_clean=$("${git_clean[@]}" -C "$fixture" rev-parse HEAD)
 
-# The e98bb2a4 edit: one new check.sh step, no ledger row.
+# The e98bb2a4 edit: one new check.sh step, no ledger row. The step is named for this fixture only:
+# e98bb2a4's own step, cupcake_ci_running_claim.py --selftest, now has its row in the real ledger,
+# so planting it again planted no defect and every gate stayed green (CI suite stage, 2026-11-27).
 # shellcheck disable=SC2016  # literal check.sh source text
 anchor='python3 "$repo_root/scripts/test-cupcake-stop-guards.py"'
+step_key='ledger-fixture-unledgered-step.py --selftest'
 # shellcheck disable=SC2016
-new_step='python3 "$repo_root/scripts/cupcake_ci_running_claim.py" --selftest'
+new_step='python3 "$repo_root/scripts/ledger-fixture-unledgered-step.py" --selftest'
+if grep -qF "$step_key" "$repo_root/scripts/check.sh" "$repo_root/docs/ci-gate-portability.tsv"; then
+	bad "the planted step '$step_key' already exists in this checkout; rename it"
+fi
 if ! ANCHOR=$anchor NEW=$new_step awk '
 	{ print }
 	$0 == ENVIRON["ANCHOR"] { print ENVIRON["NEW"]; n++ }
@@ -100,7 +106,7 @@ if [[ $status -eq 1 ]] && grep -q 'REFUSED -- a check.sh/ledger consistency gate
 else
 	bad "the e98bb2a4 defect was let through (exit $status): $(tail -20 "$tmp/err")"
 fi
-if grep -q "no ledger row for 'cupcake_ci_running_claim.py --selftest'" "$tmp/err"; then
+if grep -q "no ledger row for '$step_key'" "$tmp/err"; then
 	ok "the refusal carries the gate's own message, naming the step"
 else
 	bad "the gate's own message is not in the hook's output: $(tail -20 "$tmp/err")"
@@ -126,7 +132,7 @@ done
 "${git_clean[@]}" -C "$fixture" branch -q defect "$sha_defect"
 "${git_clean[@]}" -C "$fixture" checkout -q --detach "$sha_clean"
 run_hook "refs/heads/defect $sha_defect refs/heads/defect $zero"
-if [[ $status -eq 1 ]] && grep -q "no ledger row for 'cupcake_ci_running_claim.py --selftest'" "$tmp/err"; then
+if [[ $status -eq 1 ]] && grep -q "no ledger row for '$step_key'" "$tmp/err"; then
 	ok "a defective tip that is not HEAD is refused too, though the working tree is consistent"
 else
 	bad "a defective non-HEAD tip was judged by the clean working tree (exit $status): $(tail -20 "$tmp/err")"
@@ -142,7 +148,7 @@ fi
 "${git_clean[@]}" -C "$fixture" checkout -q work
 
 # --- the fix: the ledger row, committed, turns every gate green -----------------------------
-printf 'portable\t-\tcupcake_ci_running_claim.py --selftest\tsource/text only\tpolicy\n' \
+printf 'portable\t-\t%s\tsource/text only\tpolicy\n' "$step_key" \
 	>>"$fixture/docs/ci-gate-portability.tsv"
 "${git_clean[@]}" -C "$fixture" commit -q -am 'the fix: its ledger row'
 sha_fixed=$("${git_clean[@]}" -C "$fixture" rev-parse HEAD)

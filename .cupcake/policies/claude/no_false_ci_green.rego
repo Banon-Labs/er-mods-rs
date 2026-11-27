@@ -52,7 +52,7 @@ context_for(s) := msg if {
 
 context_for(s) := msg if {
 	s.verdict == "PENDING"
-	msg := concat("", ["CI STATE (measured, not remembered): PR #", s.number, " on `", s.branch, "` is PENDING -- ", s.summary, ". DO NOT write \"green\", \"passing\", \"CI is clean\" or any equivalent: nothing has finished. A local `scripts/check.sh` exit 0 is NOT this measurement -- different job set, and a fresh push often has nothing run against it yet. Say \"CI is still running\" and name the job."])
+	msg := concat("", ["CI STATE (measured, not remembered): PR #", s.number, " on `", s.branch, "` is PENDING -- ", s.summary, ". DO NOT write \"green\", \"passing\", \"CI is clean\" or any equivalent: nothing has finished. A local `scripts/check.sh` exit 0 is NOT this measurement -- different job set, and a fresh push often has nothing run against it yet. Say \"CI is still running\" and name the job only while a background `gh pr checks ", s.number, " --watch` follows it, tailed in a kitty split (`scripts/kitty-tail-task.py --match 'gh pr checks'`): this line is one read, not a watch, and ER-EFFECTS-NO-UNWATCHED-CI-CLAIM halts the claim without one."])
 }
 
 context_for(s) := msg if {
