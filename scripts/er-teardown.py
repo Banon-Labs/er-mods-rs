@@ -179,15 +179,21 @@ def still_running(pids: list[int], timeout_ms: int) -> set[int]:
     zombie) is readable at once, so a zombie counts as exited here, while a leader in state `Z`
     whose other threads still run (the 127-thread one `is_zombie` describes) does not.
 
-    A pid that is already gone, or that we may not open, is treated as exited -- both mean there
-    is nothing left to wait for. A `timeout_ms` of 0 polls once without blocking.
+    A pid that is already gone (ESRCH) is treated as exited. A pid whose pidfd cannot be opened
+    for any other reason (EMFILE, EPERM, no pidfd support) is returned as still running: nothing
+    here can tell whether it exited, and calling it exited would skip its SIGKILL and report a
+    live game as closed. A `timeout_ms` of 0 polls once without blocking.
     """
     poller = select.poll()
     fds: dict[int, int] = {}
+    unknown: set[int] = set()
     for pid in pids:
         try:
             fd = os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            continue
         except (OSError, AttributeError):
+            unknown.add(pid)
             continue
         fds[fd] = pid
         poller.register(fd, select.POLLIN)
@@ -209,7 +215,7 @@ def still_running(pids: list[int], timeout_ms: int) -> set[int]:
             # would need a clock, and the caller's contract is an upper bound on the wait, which
             # a re-entered poll with the same bound still satisfies for a set that is strictly
             # shrinking.
-        return set(fds.values())
+        return set(fds.values()) | unknown
     finally:
         for fd in fds:
             try:
@@ -767,6 +773,20 @@ def selftest() -> int:
     check(
         "a zero budget polls once and still reports a live pid as running",
         still_running([os.getpid()], 0) == {os.getpid()},
+    )
+    real_pidfd_open = os.pidfd_open
+
+    def refused_pidfd_open(pid: int, flags: int = 0) -> int:
+        raise PermissionError(1, "Operation not permitted")
+
+    os.pidfd_open = refused_pidfd_open
+    try:
+        refused = still_running([os.getpid()], 0)
+    finally:
+        os.pidfd_open = real_pidfd_open
+    check(
+        "a pid whose pidfd cannot be opened (EPERM) is still running, not exited",
+        refused == {os.getpid()},
     )
     # The `--stamp-only` false survivor of 2026-11-23, reproduced with real processes. Each child
     # is this interpreter run under the name `me3`, so its comm is `me3` and the `LAUNCHER_COMMS`
