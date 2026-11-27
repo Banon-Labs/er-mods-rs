@@ -79,14 +79,19 @@ def count_in(data: bytes) -> int:
     return len(PATTERN.findall(data))
 
 
-def tracked_paths(root: Path) -> list[str]:
+def tracked_paths(root: Path, *, untracked: bool = True) -> list[str]:
     """Tracked files plus untracked ones git does not ignore: everything the next commit could carry.
 
     Tracked alone let a new, unstaged file pass locally and fail CI once committed (measured
     2026-11-25 on the comment-caps gate, which selected its files the same way). An untracked file
-    has no baseline entry, so `judge` holds it to zero."""
+    has no baseline entry, so `judge` holds it to zero.
+
+    `untracked=False` is the index alone, staged files included, and is what `--write-baseline`
+    records: an untracked file's count in a baseline committed without that file reads 0 in CI,
+    below its number, and fails as a fall."""
+    others = ["--others", "--exclude-standard"] if untracked else []
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", *others],
         capture_output=True,
         check=True,
         timeout=GIT_TIMEOUT_SECONDS,
@@ -106,9 +111,9 @@ def read_tracked(root: Path, rel: str) -> bytes | None:
     return None if is_binary(data) else data
 
 
-def tree_counts(root: Path) -> dict[str, int]:
+def tree_counts(root: Path, *, untracked: bool = True) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for rel in tracked_paths(root):
+    for rel in tracked_paths(root, untracked=untracked):
         data = read_tracked(root, rel)
         if data is None:
             continue
@@ -217,7 +222,11 @@ def main() -> int:
         return 0
 
     if args.write_baseline:
-        counts = tree_counts(REPO_ROOT)
+        # The index only: the scan covers untracked files, the baseline never records them.
+        counts = tree_counts(REPO_ROOT, untracked=False)
+        for path, n in tree_counts(REPO_ROOT).items():
+            if path not in counts:
+                print(f"not recorded: {path} ({n}) is untracked, so the gate holds it to zero")
         reasons = load_baseline(baseline_path)[1] if baseline_path.exists() else {}
         dropped = sorted(set(reasons) - set(counts))
         baseline_path.write_text(render_baseline(counts, reasons), encoding="utf-8")
@@ -303,6 +312,13 @@ def selftest() -> int:
         # Measured 2026-11-25 on the comment-caps gate: a new file nobody had staged passed a local
         # run and failed CI once committed. It has no baseline entry, so it is held to zero.
         check("the gate fails on an untracked file that has one", run_gate(root, baseline, quiet, quiet), 1)
+        # The baseline writer records the index (a.rs is staged, never committed) and never an
+        # untracked file: CI checks out the commit without it and would fail its entry as a fall.
+        check(
+            "the baseline writer records staged files and leaves untracked ones out",
+            tree_counts(root, untracked=False),
+            {"a.rs": 2},
+        )
         (root / "untracked.rs").unlink()
         check("the gate passes at the recorded number", run_gate(root, baseline, quiet, quiet), 0)
         (root / "a.rs").write_text(f"// {word} {word}\nlet {word.title()}Table = 1;\n", encoding="utf-8")

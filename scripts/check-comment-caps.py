@@ -468,15 +468,19 @@ def newly_shouted(now: list[Finding], head: list[Finding] | None) -> list[Findin
 VENDORED = ("third_party/",)
 
 
-def scanned_files(root: Path) -> list[Path]:
+def scanned_files(root: Path, *, untracked: bool = True) -> list[Path]:
     """Every file the next commit could carry: tracked ones, and untracked ones git does not ignore.
 
     Tracked alone was a blind spot. Measured 2026-11-25: a worktree holding two new, not yet staged
     files passed a local run, and once they were committed CI's lint stage failed on them with six
     shouted words against a baseline of 0. An untracked file has no baseline entry, so it is held
-    to zero like any other new file."""
+    to zero like any other new file.
+
+    `untracked=False` is the index alone, staged files included, and is what `--update-baseline`
+    records (see `recordable`)."""
+    others = ["--others", "--exclude-standard"] if untracked else []
     out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", *others],
         capture_output=True,
         text=True,
         check=True,
@@ -491,6 +495,15 @@ def scanned_files(root: Path) -> list[Path]:
         and not p.startswith(VENDORED)
         and (root / p).is_file()
     ]
+
+
+def recordable(counts: dict[str, int], root: Path) -> dict[str, int]:
+    """The counts of files in the index, staged ones included: what the baseline may record.
+
+    An untracked file's count in a baseline committed without that file reads 0 in CI, below its
+    number, and the gate fails it as a fall. The scan still covers untracked files."""
+    indexed = {str(p.relative_to(root)) for p in scanned_files(root, untracked=False)}
+    return {p: n for p, n in counts.items() if p in indexed}
 
 
 def ratchet(counts: dict[str, int], baseline: dict[str, int]) -> tuple[dict, dict]:
@@ -656,6 +669,10 @@ def main() -> int:
         return 0
 
     if args.update_baseline:
+        recorded = recordable(counts, REPO_ROOT)
+        for path in sorted(set(counts) - set(recorded)):
+            print(f"not recorded: {path} ({counts[path]}) is untracked, so the gate holds it to zero")
+        counts = recorded
         BASELINE_PATH.write_text(
             json.dumps({"files": dict(sorted(counts.items()))}, indent=2) + "\n",
             encoding="utf-8",
@@ -953,6 +970,16 @@ def selftest() -> int:
         findings = [f for p in scanned_files(root) for f in scan_file(p, words, p.name)]
         rose, _ = ratchet(counts_by_file(findings), {"tracked.py": 0})
         check("an untracked file with no baseline entry is judged against 0", rose, {"untracked.py": (2, 0)})
+        # The baseline writer records the index, staged files included, and never an untracked file:
+        # CI checks out the commit without it and would fail its entry as a fall.
+        (root / "staged.py").write_text("# RED is NOT a name\n", encoding="utf-8")
+        subprocess.run(git + ["add", "staged.py"], check=True, timeout=GIT_TIMEOUT_SECONDS)
+        findings = [f for p in scanned_files(root) for f in scan_file(p, words, p.name)]
+        check(
+            "the baseline writer records staged files and leaves untracked ones out",
+            recordable(counts_by_file(findings), root),
+            {"staged.py": 2},
+        )
 
     for f in failures:
         print(f"selftest FAILURE {f}", file=sys.stderr)
